@@ -1,14 +1,18 @@
 # Fuzzing and regression testing
 
-PhotoCraft already has `cargo-fuzz` workspaces next to its primary untrusted-format crates:
+PhotoCraft has `cargo-fuzz` workspaces next to its primary untrusted-format crates:
 
 | Crate | Targets |
 |---|---|
-| `crates/psd` | `parse`, `descriptor` |
-| `crates/codecs` | `decode_any`, `decode_png`, `decode_jpeg`, `decode_tiff`, `decode_exr` |
+| `crates/psd` | `parse`, `descriptor`, `image_source_data`, `grd`, `ase`, `aco`, `patterns`, `filter_effects`, `metadata`, `tagged`, `resources`, `asl`, `abr`, `atn` |
+| `crates/codecs` | `decode_any`, `decode_png`, `decode_jpeg`, `decode_tiff`, `decode_exr`, `decode_heif`, `decode_gif`, `decode_webp` |
+| `crates/raw` | `develop`, `ljpeg` |
+| `crates/affinity` | `preview`, `import_preview` (`--features io`), `stream` |
 | `crates/format` | `load` |
+| `crates/io` | `import_xcf` (raw and gzipped), `import_pdn`, `import_kra`, `import_ora`, `import_svg` (through `photocraft_io::import`, the File › Open path) |
+| `crates/cms` | `icc_profile` (parse, then transforms to and from sRGB in every intent), `lut_file` (.cube, .3dl, .look) |
 
-The main CI workflow can run these targets through a manually dispatched fuzz job. It is not currently scheduled continuous fuzzing.
+The `Fuzz (nightly)` workflow (`.github/workflows/fuzz-nightly.yml`) runs every target for five minutes each night, thirty minutes on Sundays, and on demand (with a chosen duration). Each target's corpus is kept in the Actions cache between runs and minimised with `cargo fuzz cmin`, so coverage builds up over nights; `import_kra` and `import_ora`, whose ZIP containers libFuzzer seldom builds from nothing, also start from small valid archives that `crates/io/fuzz/seeds.py` writes. A crash fails that target's leg and uploads the input as an artifact kept for three days; report it as `SECURITY.md` describes. The run's log (which includes libFuzzer's base64 copy of a small crashing input and the stack trace) and the artifact are as public as the repository. A new target must be added to that workflow's matrix.
 
 Run a target from its crate directory with nightly Rust and `cargo-fuzz` installed:
 
@@ -40,4 +44,4 @@ A regression entry should record the affected parser, expected error class, reso
 
 ## Future program
 
-Priority additions are PSB-specific structures, WebP, native directory bundles, ICC/LUT/pattern parsers, and embedded smart objects. Continuous scheduled fuzzing and artifact triage remain future work.
+Priority additions are PSB-specific structures, XMP and the other XML inputs (`.kys`, camera-raw XMP), preferences and plug-in manifests, native directory bundles, pattern parsers, embedded smart objects, the JSON control protocol, and a seed corpus with a dictionary per text format. A fast replay of each stored corpus on pull requests remains future work.

@@ -2,7 +2,7 @@ name: CI
 
 # Quality gates for every push to main and every pull request. The Linux gate runs through the
 # suite's shared gate workflow in craft-common-actions (`cargo xtask ci`); the Windows legs, the
-# test variant and the corpus, web and fuzz jobs are PhotoCraft's own.
+# test variant and the corpus and web jobs are PhotoCraft's own.
 on:
   push:
     branches: [main]
@@ -15,13 +15,6 @@ on:
         description: "Compare selection morphology on 36 MP (Linux, exact outputs)"
         type: boolean
         default: false
-      fuzz:
-        description: "Run the fuzz job"
-        type: boolean
-        default: false
-      fuzz_seconds:
-        description: "Seconds per fuzz target"
-        default: "600"
 
 # The token is only used to check out the code: no job writes to the repository.
 permissions:
@@ -370,59 +363,6 @@ jobs:
             largest=$(find target/web-package -type f -printf '%s %f\n' | sort -n | tail -1)
             row "largest file in the site: ${largest#* }" "${largest%% *}" "24 MiB"
           } >> "$GITHUB_STEP_SUMMARY"
-
-  fuzz:
-    timeout-minutes: 60
-    name: fuzz (${{ matrix.target.crate }}/${{ matrix.target.name }})
-    # Placeholder: manual trigger only until a nightly schedule is enabled.
-    if: github.event_name == 'workflow_dispatch' && inputs.fuzz
-    runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        target:
-          - { crate: psd, name: parse }
-          - { crate: psd, name: descriptor }
-          - { crate: psd, name: image_source_data }
-          - { crate: psd, name: grd }
-          - { crate: psd, name: ase }
-          - { crate: psd, name: aco }
-          - { crate: psd, name: patterns }
-          - { crate: psd, name: filter_effects }
-          - { crate: psd, name: metadata }
-          - { crate: psd, name: tagged }
-          - { crate: psd, name: resources }
-          - { crate: psd, name: asl }
-          - { crate: codecs, name: decode_any }
-          - { crate: codecs, name: decode_png }
-          - { crate: codecs, name: decode_jpeg }
-          - { crate: codecs, name: decode_tiff }
-          - { crate: codecs, name: decode_exr }
-          - { crate: codecs, name: decode_heif }
-          - { crate: affinity, name: preview }
-          - { crate: affinity, name: import_preview, args: "--features io" }
-          - { crate: format, name: load }
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # nightly
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-        with:
-          workspaces: crates/${{ matrix.target.crate }}/fuzz
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz --locked
-      - name: Fuzz
-        working-directory: crates/${{ matrix.target.crate }}
-        env:
-          FUZZ_SECONDS: ${{ inputs.fuzz_seconds }}
-        run: cargo fuzz run ${{ matrix.target.name }} ${{ matrix.target.args }} -- -max_total_time="$FUZZ_SECONDS"
-      - name: Upload crash artifacts
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: fuzz-${{ matrix.target.crate }}-${{ matrix.target.name }}
-          path: crates/${{ matrix.target.crate }}/fuzz/artifacts
 
   selection-morphology:
     if: inputs.selection_morphology == true

@@ -1,0 +1,156 @@
+name: Fuzz (nightly)
+
+# Every fuzz target (cargo-fuzz / libFuzzer) for five minutes each night, thirty on Sundays, and
+# on demand, so a parser regression is caught within a day instead of waiting for someone to
+# start a run by hand. It never runs on pull requests, so it can't block one. Each target keeps
+# its corpus in the Actions cache between runs, so coverage grows night by night instead of
+# starting over.
+#
+# A crash fails that target's leg. The crashing input is uploaded as an artifact kept for three
+# days: reproduce it with `cargo fuzz run <target> <file>` in the crate, minimise it with
+# `cargo fuzz tmin`, and report it as SECURITY.md describes. On a public repository the job log
+# (with libFuzzer's base64 of small inputs and the stack trace) and the artifact are public too.
+
+on:
+  schedule:
+    # Monday to Saturday: a short run per target.
+    - cron: "11 1 * * 1-6"
+    # Sunday: a long run per target (the FUZZ_SECONDS expression in `settings` matches this string).
+    - cron: "11 1 * * 0"
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: "Seconds per fuzz target (at most 2400: the leg also builds and minimises)"
+        default: "600"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # No fuzz run may print a page (see ci.yml).
+  PHOTOCRAFT_NO_PRINT: "1"
+  LPDEST: photocraft-no-such-printer
+
+jobs:
+  # The leg's 75-minute timeout only fits a fuzz run of at most 2400 seconds plus the build and
+  # minimisation, and a cancelled leg skips saving its corpus, so a manual run asking for more (or
+  # for something that isn't a number) fails here before any leg starts.
+  settings:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      fuzz_seconds: ${{ steps.seconds.outputs.fuzz_seconds }}
+    steps:
+      - id: seconds
+        env:
+          FUZZ_SECONDS: ${{ inputs.fuzz_seconds || (github.event.schedule == '11 1 * * 0' && '1800') || '300' }}
+        run: |
+          case "$FUZZ_SECONDS" in
+            '' | *[!0-9]* | ?????*) echo "::error::fuzz_seconds must be a whole number of seconds up to 2400, got '$FUZZ_SECONDS'"; exit 1 ;;
+          esac
+          if [ "$FUZZ_SECONDS" -lt 1 ] || [ "$FUZZ_SECONDS" -gt 2400 ]; then
+            echo "::error::fuzz_seconds must be 1 to 2400, got $FUZZ_SECONDS"; exit 1
+          fi
+          echo "fuzz_seconds=$FUZZ_SECONDS" >> "$GITHUB_OUTPUT"
+
+  fuzz:
+    needs: settings
+    timeout-minutes: 75
+    name: fuzz (${{ matrix.target.crate }}/${{ matrix.target.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      # Leaves runners free for pull-request CI while the run lasts.
+      max-parallel: 10
+      matrix:
+        target:
+          - { crate: psd, name: parse }
+          - { crate: psd, name: descriptor }
+          - { crate: psd, name: image_source_data }
+          - { crate: psd, name: grd }
+          - { crate: psd, name: ase }
+          - { crate: psd, name: aco }
+          - { crate: psd, name: patterns }
+          - { crate: psd, name: filter_effects }
+          - { crate: psd, name: metadata }
+          - { crate: psd, name: tagged }
+          - { crate: psd, name: resources }
+          - { crate: psd, name: asl }
+          - { crate: psd, name: abr }
+          - { crate: psd, name: atn }
+          - { crate: codecs, name: decode_any }
+          - { crate: codecs, name: decode_png }
+          - { crate: codecs, name: decode_jpeg }
+          - { crate: codecs, name: decode_tiff }
+          - { crate: codecs, name: decode_exr }
+          - { crate: codecs, name: decode_heif }
+          - { crate: codecs, name: decode_gif }
+          - { crate: codecs, name: decode_webp }
+          - { crate: raw, name: develop }
+          - { crate: raw, name: ljpeg }
+          - { crate: affinity, name: preview }
+          - { crate: affinity, name: import_preview, args: "--features io" }
+          - { crate: affinity, name: stream }
+          - { crate: format, name: load }
+          - { crate: io, name: import_xcf }
+          - { crate: io, name: import_pdn }
+          - { crate: io, name: import_kra }
+          - { crate: io, name: import_ora }
+          - { crate: io, name: import_svg }
+          - { crate: cms, name: icc_profile }
+          - { crate: cms, name: lut_file }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # nightly
+      # No rust-cache: the unpinned nightly changes the key every day, so each night would save
+      # several GB of sanitizer builds that the next night can't use, and push the gate's caches
+      # out of the repository's 10 GB.
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Restore corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/${{ matrix.target.crate }}/fuzz/corpus/${{ matrix.target.name }}
+          key: fuzz-corpus-${{ matrix.target.crate }}-${{ matrix.target.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ matrix.target.crate }}-${{ matrix.target.name }}-
+      # libFuzzer seldom builds a ZIP with valid CRCs and the XML Krita or OpenRaster need from
+      # nothing, so those targets also start from small valid files (a no-op for the others).
+      - name: Seed corpus
+        if: matrix.target.crate == 'io'
+        working-directory: crates/io/fuzz
+        run: python3 seeds.py ${{ matrix.target.name }}
+      - name: Fuzz
+        working-directory: crates/${{ matrix.target.crate }}
+        env:
+          FUZZ_SECONDS: ${{ needs.settings.outputs.fuzz_seconds }}
+        # The decoders may ask for one buffer of up to 8 GiB (`photocraft_codecs::Limits::default`
+        # `max_alloc`), and a few header bytes are enough to declare that, so libFuzzer's malloc
+        # limit sits just above it: only an allocation past the budget counts as a crash. The
+        # runner has 16 GB.
+        run: cargo fuzz run ${{ matrix.target.name }} ${{ matrix.target.args }} -- -max_total_time="$FUZZ_SECONDS" -malloc_limit_mb=9216 -rss_limit_mb=12288 -timeout=30
+      - name: Minimise corpus
+        if: success()
+        working-directory: crates/${{ matrix.target.crate }}
+        run: cargo fuzz cmin ${{ matrix.target.name }} ${{ matrix.target.args }} -- -malloc_limit_mb=9216 -rss_limit_mb=12288 -timeout=30
+      # Also after a crash (the input is in artifacts/, not the corpus), so the coverage that run
+      # found isn't lost; the corpus then stays unminimised until the next green night.
+      - name: Save corpus
+        if: ${{ !cancelled() && hashFiles(format('crates/{0}/fuzz/corpus/{1}/**', matrix.target.crate, matrix.target.name)) != '' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/${{ matrix.target.crate }}/fuzz/corpus/${{ matrix.target.name }}
+          key: fuzz-corpus-${{ matrix.target.crate }}-${{ matrix.target.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Upload crash input
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target.crate }}-${{ matrix.target.name }}
+          path: crates/${{ matrix.target.crate }}/fuzz/artifacts
+          retention-days: 3

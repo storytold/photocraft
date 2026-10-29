@@ -1,0 +1,29 @@
+[package]
+name = "photocraft-cms-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+photocraft-cms = { path = ".." }
+
+[[bin]]
+name = "icc_profile"
+path = "fuzz_targets/icc_profile.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "lut_file"
+path = "fuzz_targets/lut_file.rs"
+test = false
+doc = false
+bench = false

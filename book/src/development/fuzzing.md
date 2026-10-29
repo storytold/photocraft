@@ -13,4 +13,4 @@ cargo +nightly fuzz run decode_any
 
 Reproduce a crash, minimize it, add a deterministic regression test, and then fix it. A time-limited fuzz run with no findings is evidence of that run only; it is not proof that a parser is secure.
 
-The main GitHub Actions workflow currently runs fuzzing only when manually dispatched with the `fuzz` input. Scheduled or hosted continuous fuzzing remains future work.
+The `Fuzz (nightly)` GitHub Actions workflow runs every target each night and can be started by hand with a chosen duration; see [Fuzzing and regression testing](../security/fuzzing.md) for the schedule and how a crash is reported.
