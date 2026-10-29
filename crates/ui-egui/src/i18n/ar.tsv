@@ -3534,3 +3534,7 @@ curves	Smooth	تنعيم
 	Update and Restart	التحديث وإعادة التشغيل
 	X	X
 	Y	Y
+
+# Select and Mask workspace closure reasons
+	Select and Mask was closed: its document is no longer the active one	أُغلقت مساحة التحديد والقناع: لم يعد المستند الخاص بها نشطًا
+	Select and Mask was closed: another layer was selected	أُغلقت مساحة التحديد والقناع: تم تحديد طبقة أخرى
