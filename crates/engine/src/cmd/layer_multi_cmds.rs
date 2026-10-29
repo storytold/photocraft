@@ -21,8 +21,7 @@ mod structure;
 
 use align::{align, distribute};
 #[cfg(any(test, debug_assertions))]
-pub(crate) use damage::hint_misses;
-pub(crate) use damage::note_insert;
+pub(crate) use damage::{hint_misses, small_change_pct};
 pub use damage::{layer_bounds, same_pixels, selection_only_change, step_damage};
 use moves::link_groups;
 pub(crate) use moves::shift_surface;

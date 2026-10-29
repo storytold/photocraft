@@ -1374,4 +1374,76 @@ fn redraw_area_scenarios(b: &mut Bench, sz: &Sizes) {
             }
         }
     }
+
+    let paste = "app frame after Paste Into on 24 MP (CPU canvas)";
+    if b.wanted(paste) {
+        let (w, h) = sz.big_photo;
+        paste_into_frame_scenario(b, paste, w, h);
+    }
+}
+
+/// #9329 PR C: the whole app (kittest harness, CPU canvas) with a 24 MP photo. Each sample runs
+/// Paste Into a 5 % selection (untimed, after a frame that shows the selection), then times the
+/// next frame. Paste Into is a compound command (several revisions), so the frame's refresh goes
+/// through the real `damage_since` path.
+fn paste_into_frame_scenario(b: &mut Bench, name: &str, w: u32, h: u32) {
+    // 0.224² ≈ 5 % of the canvas.
+    let sel = json!({"x": w / 2, "y": h / 2, "width": w * 224 / 1000, "height": h * 224 / 1000});
+    let built = open_photo(w, h).and_then(|mut s| {
+        exec(&mut s, "select.rect", json!({"x": w / 10, "y": h / 10, "width": w / 5, "height": h / 5}))?;
+        exec(&mut s, "edit.copy", json!({}))?;
+        Ok(s)
+    });
+    let mut s = match built {
+        Ok(s) => s,
+        Err(e) => return b.errors.push((name.into(), e)),
+    };
+    let doc = std::mem::take(&mut s);
+    let mut harness = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_max_steps(4).build_eframe(move |cc| {
+        photocraft_ui_egui::PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        photocraft_ui_egui::PhotocraftApp::new(doc, photocraft_ui_egui::Services::default())
+    });
+    // Warm up: first frames build the canvas cache of the 24 MP document.
+    harness.run_steps(6);
+    b.current = Some(name.to_string());
+    b.sampler.reset();
+    b.px.borrow_mut().clear();
+    let mut samples = Vec::new();
+    let run = (|| -> Res<()> {
+        for i in 0..=b.reps.max(1) {
+            let rev = |h: &egui_kittest::Harness<'_, photocraft_ui_egui::PhotocraftApp>| h.state().session.active().map(|d| d.revision);
+            // Untimed: Paste Into turns the selection into the pasted layer's
+            // mask, so each sample re-creates the same ~5 % selection (the
+            // clipboard is not consumed), and shows it for a frame, as the app
+            // does between a selection and the next command. Without that frame
+            // the canvas would last have shown the revision before `select.rect`,
+            // two commands back, and redraw everything whatever Paste Into reports.
+            harness.state_mut().run("select.rect", sel.clone())?;
+            harness.step();
+            let before = rev(&harness).ok_or("no document")?;
+            harness.state_mut().run("edit.pasteSpecial.pasteInto", json!({}))?;
+            let after = rev(&harness).ok_or("no document")?;
+            // The path claim: a multi-revision command.
+            if after < before + 2 {
+                return Err(format!("path check: Paste Into moved revision by {}, not >= 2", after - before));
+            }
+            harness.state_mut().perf.last_refresh_px = 0;
+            let t = Instant::now();
+            harness.step();
+            let took = ms(t);
+            let px = harness.state().perf.last_refresh_px;
+            if px == 0 {
+                return Err("path check: the frame after Paste Into recorded no refresh".into());
+            }
+            // Sample 0 is the warm-up.
+            if i > 0 {
+                samples.push(took);
+                b.px.borrow_mut().push(px);
+            }
+        }
+        Ok(())
+    })();
+    // The rows' document handle: the harness's session.
+    let st = std::mem::take(&mut harness.state_mut().session);
+    b.record(name, &st, &samples, run);
 }

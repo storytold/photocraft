@@ -781,3 +781,11 @@ issue = 9329
 bench = "perf_scenarios"
 row = "fill a 2 % selection on a full-canvas 24 MP layer + refresh"
 enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P85"
+title = "App frame after Paste Into on 24 MP (CPU canvas)"
+issue = 9329
+bench = "perf_scenarios"
+row = "app frame after Paste Into on 24 MP (CPU canvas)"
+enforce = false  # new; no baseline yet

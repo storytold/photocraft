@@ -845,7 +845,7 @@ impl Session {
         // action it plays (a script step) must not flush the steps it ran so far into the action
         // being recorded, nor move the recording mark past the entries it is about to replace.
         let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.recording.take() } else { None };
-        let before = self.active().map(|st| st.doc.clone());
+        let before = self.active().map(|st| (st.doc.clone(), st.revision));
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
@@ -865,6 +865,11 @@ impl Session {
             self.hint_before = None;
         }
         let pending = self.jobs.pending.take();
+        if pending.is_none()
+            && let Some((doc, revision)) = &before
+        {
+            self.note_command_damage(id, doc, *revision);
+        }
         match (r, pending) {
             (Err(e), Some(job)) => {
                 job.ctx.cancel();
@@ -882,7 +887,7 @@ impl Session {
                 Ok(Started::Job(jid))
             }
             (Ok(v), None) => {
-                if let Some(before) = before {
+                if let Some((before, _)) = before {
                     self.add_relayout_damage(&before);
                 }
                 if let Some((doc_id, layer_id)) = new_fx_target
@@ -900,6 +905,29 @@ impl Session {
                 Ok(Started::Done(v))
             }
         }
+    }
+
+    /// The one place a command's redraw area spans more than one revision. A command that moved
+    /// the active document's revision more than once (Paste Into, Stroke Path, a compound, a
+    /// script) reports what changed since it began, [`layer_multi_cmds::step_damage`] of the
+    /// document before and after, measured from the revision before it. A single-revision command
+    /// keeps the damage it reported. Debug and test builds also count a whole-document redraw of
+    /// a small change ([`Session::whole_redraws`]).
+    pub(crate) fn note_command_damage(&mut self, id: &str, before: &Arc<Document>, from: u64) {
+        let Some(st) = self.active_mut().filter(|st| st.doc.id == before.id && st.revision > from) else { return };
+        if st.revision - from > 1 {
+            st.last_damage = crate::layer_multi_cmds::step_damage(before, &st.doc);
+            st.damage_span = Some((from, st.revision));
+        }
+        #[cfg(any(test, debug_assertions))]
+        if st.last_damage.is_none()
+            && let Some(pct) = crate::layer_multi_cmds::small_change_pct(before, &st.doc)
+        {
+            eprintln!("warning: {id}: redraws the whole document but changed {pct}% of it");
+            self.whole_redraws += 1;
+        }
+        #[cfg(not(any(test, debug_assertions)))]
+        let _ = id;
     }
 
     /// Grows the damage a command reported for the pixels it changed by what effects laid out

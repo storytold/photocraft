@@ -1,4 +1,4 @@
-use super::{Document, Layer, LayerContent, Rect, Session, VideoData};
+use super::{Document, Layer, LayerContent, Rect, VideoData};
 
 /// Calls `f` with the rect of every tile that differs between two surfaces of the same format and
 /// default pixel: a tile only one side has, or a different copy-on-write tile pointer at the same
@@ -233,7 +233,8 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         clipping_path: _,
         quick_mask,
         quick_mask_unselected: _,
-        patterns,
+        // Compared by `patterns_pixels_equal`.
+        patterns: _,
         color_table,
         duotone,
         layer_comps: _,
@@ -260,9 +261,54 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
             (Some(x), Some(y)) => alpha_channels_equal(x, y),
             _ => false,
         }
-        && *patterns == b.patterns
+        && patterns_pixels_equal(a, b)
         && *color_table == b.color_table
         && *duotone == b.duotone
+}
+
+/// Whether `a`'s and `b`'s pattern libraries composite the same. Layers draw a pattern only
+/// through a reference that `photocraft_doc::pattern::find` resolves (fill and shape layers,
+/// Pattern Overlay, pattern strokes and glows, Bevel textures), so patterns appended after an
+/// unchanged prefix change nothing unless some reference could resolve to one of them: by id,
+/// stored name, or display name (any match counts, which is conservative). Pattern Stamp copies
+/// its pattern into the document this way on first use; the pixels it paints are a raster
+/// change, diffed by tile like any other.
+fn patterns_pixels_equal(a: &Document, b: &Document) -> bool {
+    use photocraft_doc::effects::{Effect, FxPaint};
+    use photocraft_doc::{Fill, pattern::display_name};
+    if a.patterns == b.patterns {
+        return true;
+    }
+    let Some(added) = b.patterns.strip_prefix(a.patterns.as_slice()).filter(|_| a.patterns.len() < b.patterns.len()) else {
+        return false;
+    };
+    let hits = |id: &str, name: &str| {
+        added
+            .iter()
+            .any(|q| (!id.is_empty() && q.id == id) || (!name.is_empty() && (q.name == name || q.display_name().eq_ignore_ascii_case(display_name(name)))))
+    };
+    let fill = |f: &Fill| matches!(f, Fill::Pattern { id, name, .. } if hits(id, name));
+    let paint = |p: &FxPaint| matches!(p, FxPaint::Pattern { id, name, .. } if hits(id, name));
+    fn any_layer(layers: &[Layer], refers: &dyn Fn(&Layer) -> bool) -> bool {
+        layers.iter().any(|l| refers(l) || matches!(&l.content, LayerContent::Group(g) if any_layer(&g.children, refers)))
+    }
+    let refers = |l: &Layer| {
+        let effect = l.effects.items.iter().any(|e| match e {
+            Effect::OuterGlow(g) | Effect::InnerGlow(g) => paint(&g.paint),
+            Effect::Stroke(s) => paint(&s.paint),
+            Effect::PatternOverlay { id, name, .. } => hits(id, name),
+            Effect::BevelEmboss(b) => b.texture.as_ref().is_some_and(|t| hits(&t.id, &t.name)),
+            Effect::DropShadow(_) | Effect::InnerShadow(_) | Effect::ColorOverlay { .. } | Effect::GradientOverlay { .. } | Effect::Satin(_) => false,
+        });
+        effect
+            || match &l.content {
+                LayerContent::Fill(f) => fill(f),
+                LayerContent::Shape(s) => s.fill.as_ref().is_some_and(fill) || s.stroke.as_ref().is_some_and(|st| fill(&st.paint)),
+                // A smart object draws its cache; its own document holds its own patterns.
+                LayerContent::Raster(_) | LayerContent::Group(_) | LayerContent::Adjustment(_) | LayerContent::Text(_) | LayerContent::Smart(_) => false,
+            }
+    };
+    !any_layer(&b.layers, &refers)
 }
 
 /// Whether `a` and `b` composite to the same pixels: they differ at most in fields the
@@ -572,12 +618,18 @@ fn inert_at(layers: &[Layer], k: usize) -> bool {
         && (l.clipped || layers.get(k + 1).is_none_or(|above| !above.clipped))
 }
 
-/// Report the pixels a command made of more than one edit changed since `before` ([`step_damage`]),
-/// so the canvas recomposites only where its new layers draw instead of the whole document.
-/// A single [`Session::edit`] already reports its own damage: don't call this after one (#5695).
-pub(crate) fn note_insert(s: &mut Session, before: &Document) {
-    let Some(st) = s.active_mut() else { return };
-    st.last_damage = step_damage(before, &st.doc);
+/// How much of the document (percent, rounded down) changed between `a` and `b`, when that is
+/// some but under 25 %: what [`step_damage`] finds, which a command that reported "redraw
+/// everything" (`None`) should have reported instead. `None` when nothing changed (a view-only
+/// change), when it's 25 % or more, or when `step_damage` can't bound it (a canvas-size change).
+#[cfg(any(test, debug_assertions))]
+pub(crate) fn small_change_pct(a: &Document, b: &Document) -> Option<u64> {
+    let d = step_damage(a, b).filter(|d| !d.is_empty())?;
+    let doc = b.bounds();
+    let whole = u64::from(doc.width()) * u64::from(doc.height());
+    let changed = d.intersect(&doc);
+    let pct = u64::from(changed.width()) * u64::from(changed.height()) * 100 / whole.max(1);
+    (pct < 25).then_some(pct)
 }
 
 /// Content bounds used by Align/Distribute: the layer's pixels (type and shape layers use their

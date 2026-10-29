@@ -24,8 +24,13 @@ pub struct DocState {
     pub pcraft_cache: photocraft_io::PcraftExportCache,
     /// How much of `revision` came from view-only changes (channel eyes, targeting): pixel caches can ignore those.
     pub view_revision: u64,
-    /// Area changed by the latest revision (None = assume everything changed).
+    /// Area changed since revision [`DocState::damage_from`] (None = assume everything changed):
+    /// the latest revision's, or a whole command's when it made several.
     pub last_damage: Option<photocraft_geom::Rect>,
+    /// `(from, to)`: the command that moved `revision` from `from` to `to` in more than one step,
+    /// whose whole span `last_damage` covers. Written only by `Session::dispatch`; any later
+    /// revision makes it stale, so [`DocState::damage_from`] falls back to one revision.
+    pub(crate) damage_span: Option<(u64, u64)>,
     /// Coalescing key of the latest history step (see [`Session::execute`]'s `coalesce` param).
     pub coalesce: Option<String>,
     /// Channels panel: targeted channel and eye toggles (view state, not history).
@@ -95,6 +100,7 @@ impl DocState {
             pcraft_cache: Default::default(),
             view_revision: 0,
             last_damage: None,
+            damage_span: None,
             coalesce: None,
             channel_view: Default::default(),
             isolated_layers: Vec::new(),
@@ -128,6 +134,15 @@ impl DocState {
     /// not an edit, so it neither marks the file modified nor makes closing ask to save.
     pub(crate) fn keeps_clean(&self, before: &Document) -> bool {
         self.saved_revision == self.revision && layer_multi_cmds::selection_only_change(before, &self.doc)
+    }
+    /// The revision [`DocState::last_damage`] is measured from: the revision before the command
+    /// that made it, or the previous revision. A canvas that showed any revision from this one
+    /// up to (not including) `revision` needs only `last_damage` redrawn.
+    pub fn damage_from(&self) -> u64 {
+        match self.damage_span {
+            Some((from, to)) if to == self.revision => from,
+            _ => self.revision.saturating_sub(1),
+        }
     }
     /// Move to the next revision; `keep_clean` (from [`Self::keeps_clean`]) moves the saved
     /// revision with it.

@@ -204,7 +204,7 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             Ok(v)
         }
         Err(e) => {
-            st.doc = before;
+            let failed = std::mem::replace(&mut st.doc, before);
             st.active_layer = prior.active;
             st.selected_layers = prior.selected;
             st.layer_anchor = anchor;
@@ -216,7 +216,9 @@ pub(crate) fn compound<R>(s: &mut Session, label: &str, f: impl FnOnce(&mut Sess
             if was_clean {
                 st.saved_revision = st.revision;
             }
-            st.last_damage = None;
+            // This revision's damage; `Session::dispatch` reports the command's whole span (nothing,
+            // when the inner commands had changed pixels and the restore took them back).
+            st.last_damage = crate::layer_multi_cmds::step_damage(&failed, &st.doc);
             Err(e)
         }
     };

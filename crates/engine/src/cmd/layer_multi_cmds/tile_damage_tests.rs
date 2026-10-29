@@ -319,3 +319,175 @@ fn painting_command_hints_cover_their_changed_tiles() {
         assert!(unchanged_outside(&before, &doc(&s), d), "{cmd}: pixels changed outside {d:?}");
     }
 }
+
+// PR C (#9329): damage spans a command, not a revision.
+
+/// The damage since the command began: measured from the revision before it, bounded, and
+/// covering every pixel the command changed.
+fn command_damage(s: &mut Session, cmd: &str, p: serde_json::Value) -> (std::sync::Arc<Document>, Rect) {
+    let (before, rev) = (doc(s), s.active().unwrap().revision);
+    s.execute(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+    let st = s.active().unwrap();
+    assert!(st.revision - rev >= 2, "{cmd}: several revisions ({} → {})", rev, st.revision);
+    assert_eq!(st.damage_from(), rev, "{cmd}: measured from before the command");
+    let d = st.last_damage.unwrap_or_else(|| panic!("{cmd}: bounded damage"));
+    assert!(unchanged_outside(&before, &st.doc, d), "{cmd}: pixels changed outside {d:?}");
+    (before, d)
+}
+
+#[test]
+fn paste_into_reports_damage_since_the_command_began() {
+    let mut s = session(1024, 768);
+    layer_with(&mut s, &[(Rect::new(0, 0, 1024, 768), [0.2, 0.4, 0.6, 1.0]), (Rect::new(40, 40, 120, 120), [0.9, 0.1, 0.1, 1.0])]);
+    s.execute("select.rect", json!({"x": 40, "y": 40, "width": 100, "height": 100})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 700, "y": 500, "width": 120, "height": 90})).unwrap();
+    let (_, d) = command_damage(&mut s, "edit.pasteSpecial.pasteInto", json!({}));
+    assert!(!d.intersect(&Rect::new(700, 500, 820, 590)).is_empty(), "the pasted area: {d:?}");
+    assert!(u64::from(d.width()) * u64::from(d.height()) * 4 < 1024 * 768, "the pasted area, not the canvas: {d:?}");
+}
+
+#[test]
+fn stroke_path_damage_spans_every_subpath() {
+    let mut s = session(1024, 768);
+    layer_with(&mut s, &[(Rect::new(0, 0, 1024, 768), [0.5, 0.5, 0.5, 1.0])]);
+    let path = json!({"subpaths": [{"knots": [[20, 20], [80, 20], [80, 80]]}, {"knots": [[800, 600], [900, 600], [900, 700]]}]});
+    s.execute("path.set", json!({ "path": path })).unwrap();
+    // A tool with its own `paint.*` command runs once per subpath, one revision each.
+    let (_, d) = command_damage(&mut s, "path.stroke", json!({"tool": "burn", "size": 16}));
+    assert!(d.contains(50, 20) && d.contains(850, 600), "both subpaths: {d:?}");
+    assert_eq!(s.whole_redraws, 0);
+}
+
+/// Pattern Stamp copies its pattern into the document on first use: a pattern no layer
+/// refers to draws nothing, so a multi-subpath Stroke Path stays bounded.
+#[test]
+fn a_new_unreferenced_pattern_keeps_stroke_path_bounded() {
+    let mut s = session(1024, 768);
+    layer_with(&mut s, &[(Rect::new(0, 0, 1024, 768), [0.5, 0.5, 0.5, 1.0])]);
+    let path = json!({"subpaths": [{"knots": [[20, 20], [80, 20], [80, 80]]}, {"knots": [[800, 600], [900, 600], [900, 700]]}]});
+    s.execute("path.set", json!({ "path": path })).unwrap();
+    let n = doc(&s).patterns.len();
+    let p = json!({"tool": "patternStamp", "size": 16, "hardness": 100, "pattern": "Checkerboard", "scale": 100, "aligned": true});
+    let (_, d) = command_damage(&mut s, "path.stroke", p);
+    assert!(doc(&s).patterns.len() > n, "the stamp added its pattern");
+    assert!(d.contains(50, 20) && d.contains(850, 600), "both subpaths: {d:?}");
+    assert_eq!(s.whole_redraws, 0);
+}
+
+/// A pattern that an existing layer refers to (here a fill layer whose pattern was missing)
+/// changes that layer's pixels when it is added: not bounded by the tile diff.
+#[test]
+fn a_new_pattern_a_layer_refers_to_is_unbounded() {
+    let mut s = session(400, 300);
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Checkerboard"})).unwrap();
+    // Without its pixel cache, so both sides render the fill from the library.
+    let mut with = (*doc(&s)).clone();
+    with.layers.iter_mut().for_each(|l| l.fill_cache = None);
+    let mut without = with.clone();
+    without.patterns.clear();
+    assert!(!same_pixels(&without, &with), "the fill layer draws only with its pattern");
+    assert_eq!(step_damage(&without, &with), None);
+    // Unchanged libraries, and an unreferenced addition, stay pixel-equal.
+    assert_eq!(step_damage(&with, &with), Some(Rect::EMPTY));
+    let plain = doc(&session(400, 300));
+    let mut more = (*plain).clone();
+    more.patterns = with.patterns.clone();
+    assert_eq!(step_damage(&plain, &more), Some(Rect::EMPTY));
+    assert!(unchanged_outside(&plain, &more, Rect::EMPTY));
+}
+
+#[test]
+fn a_failed_compound_reports_no_change() {
+    let mut s = session(600, 400);
+    let id = layer_with(&mut s, &[(Rect::new(0, 0, 50, 50), [1.0, 0.0, 0.0, 1.0])]);
+    let (before, rev) = (doc(&s), s.active().unwrap().revision);
+    let r: Result<()> = crate::analysis_cmds::compound(&mut s, "Both", |s| {
+        paint(s, id, Rect::new(300, 200, 340, 240), [0.0, 1.0, 0.0, 1.0]);
+        paint(s, id, Rect::new(10, 300, 40, 340), [0.0, 0.0, 1.0, 1.0]);
+        Err(EngineError::Other("the second step failed".into()))
+    });
+    assert!(r.is_err());
+    // What `Session::dispatch` does after any inline command.
+    s.note_command_damage("test.compound", &before, rev);
+    let st = s.active().unwrap();
+    assert!(same_pixels(&before, &st.doc), "rolled back");
+    assert_eq!((st.damage_from(), st.last_damage), (rev, Some(Rect::EMPTY)), "nothing changed since it began");
+    assert_eq!(s.whole_redraws, 0);
+}
+
+#[test]
+fn select_then_edit_in_one_command_is_bounded() {
+    let mut s = session(1024, 768);
+    let id = layer_with(&mut s, &[(Rect::new(0, 0, 1024, 768), [0.2, 0.4, 0.6, 1.0])]);
+    let steps = vec![
+        ("layer.select".to_string(), json!({"layer": id.0})),
+        ("select.rect".to_string(), json!({"x": 300, "y": 300, "width": 50, "height": 40})),
+        ("edit.fill".to_string(), json!({"color": "#ff0000"})),
+        ("select.deselect".to_string(), json!({})),
+    ];
+    s.actions.list.push(crate::actions_cmds::Action::new("A", steps));
+    let (_, d) = command_damage(&mut s, "actions.play", json!({"action": "A"}));
+    assert!(d.contains(300, 300) && d.contains(349, 339), "{d:?}");
+    assert!(u64::from(d.width()) * u64::from(d.height()) * 4 < 1024 * 768, "the filled tiles, not the canvas: {d:?}");
+    assert_eq!(s.whole_redraws, 0);
+}
+
+#[test]
+fn whole_document_redraws_of_small_edits_are_counted() {
+    let mut s = session(1000, 1000);
+    let id = layer_with(&mut s, &[(Rect::new(0, 0, 1000, 1000), [0.2, 0.4, 0.6, 1.0])]);
+    // A synthetic command that paints 1 % and reports "everything".
+    let rev = s.active().unwrap().revision;
+    let (before, _) = paint(&mut s, id, Rect::new(10, 10, 110, 110), [1.0, 0.0, 0.0, 1.0]);
+    s.active_mut().unwrap().last_damage = None;
+    s.note_command_damage("test.wholeRedraw", &before, rev);
+    assert_eq!(s.whole_redraws, 1);
+    // A canvas-size change really does redraw everything: not counted.
+    s.execute("image.canvasSize", json!({"width": 1200, "height": 900})).unwrap();
+    assert_eq!(s.active().unwrap().last_damage, None);
+    assert_eq!(s.whole_redraws, 1);
+}
+
+#[test]
+fn no_command_redraws_the_whole_document_for_a_small_edit() {
+    let mut s = session(1024, 768);
+    let base = layer_with(&mut s, &[(Rect::new(0, 0, 1024, 768), [0.2, 0.4, 0.6, 1.0])]);
+    let small = layer_with(&mut s, &[(Rect::new(100, 100, 160, 160), [0.9, 0.1, 0.1, 1.0])]);
+    let other = layer_with(&mut s, &[(Rect::new(130, 130, 190, 190), [0.1, 0.9, 0.1, 1.0])]);
+    let path = json!({"subpaths": [{"knots": [[20, 20], [80, 20]]}, {"knots": [[800, 600], [900, 600]]}]});
+    let steps: Vec<(&str, serde_json::Value)> = vec![
+        ("layer.select", json!({"layer": base.0})),
+        ("select.rect", json!({"x": 300, "y": 300, "width": 50, "height": 40})),
+        ("edit.fill", json!({"color": "#ff0000"})),
+        ("filter.blur.gaussianBlur", json!({"radius": 2})),
+        ("edit.copy", json!({})),
+        ("select.rect", json!({"x": 600, "y": 400, "width": 80, "height": 60})),
+        ("edit.pasteSpecial.pasteInto", json!({})),
+        ("edit.undo", json!({})),
+        ("edit.redo", json!({})),
+        ("layer.select", json!({"layer": base.0})),
+        ("paint.stroke", json!({"points": [[100, 400], [200, 420]], "size": 20, "color": "#2040ff"})),
+        ("edit.undo", json!({})),
+        ("edit.redo", json!({})),
+        ("path.set", json!({ "path": path })),
+        ("path.stroke", json!({"tool": "pencil", "size": 4, "color": "#0000ff", "opacity": 100})),
+        ("path.stroke", json!({"tool": "burn", "size": 16})),
+        ("layer.select", json!({"layer": small.0})),
+        ("layer.setProps", json!({"layer": small.0, "opacity": 0.5})),
+        ("layer.setProps", json!({"layer": small.0, "visible": false})),
+        ("layer.setProps", json!({"layer": small.0, "visible": true})),
+        ("layer.translate", json!({"layer": small.0, "dx": 20, "dy": 10})),
+        // Show Only hides the full-canvas base: a large change, so not counted either way.
+        ("layer.showOnly", json!({"layer": small.0})),
+        ("layer.showOnly", json!({"layer": small.0})),
+        ("layer.arrange.bringForward", json!({})),
+        ("layer.arrange.sendBackward", json!({})),
+        ("layer.setProps", json!({"layer": other.0, "clipped": true})),
+        ("layer.new.layer", json!({})),
+    ];
+    for (cmd, p) in steps {
+        s.execute(cmd, p).unwrap_or_else(|e| panic!("{cmd}: {e}"));
+        assert_eq!(s.whole_redraws, 0, "{cmd}: redrew the whole document for a small edit");
+    }
+}
