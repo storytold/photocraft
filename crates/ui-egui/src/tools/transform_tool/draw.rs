@@ -567,13 +567,10 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
             })
             .collect()
     };
-    // A cylinder is its two curves and a centre line, as the reference draws it, not a grid
-    // (#4112); its handles sit on them. It has no split guide.
+    // A cylinder is outlined and cut into a 3 × 2 grid, as the reference draws it, with its own
+    // handles on the lines (#4112, cylinder.rs). It has no split guide.
     if w.style == WarpStyle::Cylinder {
-        for pts in [curve(None, Some(0.0)), curve(None, Some(1.0)), curve(Some(0.5), None)] {
-            painter.add(egui::Shape::line(pts, line));
-        }
-        draw_cylinder(painter, w, scr, pv, line);
+        draw_cylinder(painter, w, curve, scr, pv, line);
         return;
     }
     // Patch boundaries are the grid. Only Default (one patch) draws the rule-of-thirds guides;
