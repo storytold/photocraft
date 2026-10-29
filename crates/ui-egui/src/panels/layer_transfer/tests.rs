@@ -73,6 +73,68 @@ fn source_square(h: &Harness<'_, PhotocraftApp>, paint: LayerId) -> photocraft_g
 }
 
 #[test]
+fn move_selection_across_tab_copies_only_selected_pixels_and_keeps_source_history() {
+    let (mut h, paint) = harness();
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().run("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
+    h.run_steps(2);
+    let before = h.state().session.documents()[0].doc.clone();
+    let history = h.state().session.documents()[0].history.entries().len();
+    let grab = ViewXform::active(h.state()).unwrap().to_screen(8.0, 10.0);
+    let over_tab = tab(&h, "dest-doc");
+    let drop = h.state().last_canvas_rect.center();
+    drag_along(&mut h, &[grab, over_tab, drop], Modifiers::NONE);
+    let (_, r) = copy(&h);
+    assert_eq!(r.size(), vec2(3.0, 4.0));
+    let at = ViewXform::active(h.state()).unwrap().to_doc(drop);
+    assert!((r.min.x - (7.0 + at[0] - 8.0) as f32).abs() <= 1.0);
+    assert_eq!(*h.state().session.documents()[0].doc, *before);
+    assert_eq!(h.state().session.documents()[0].history.entries().len(), history);
+    assert_eq!(source_square(&h, paint), photocraft_geom::Rect::new(4, 6, 14, 16));
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 1);
+}
+
+#[test]
+fn a_selection_dropped_outside_documents_copies_nothing() {
+    let (mut h, _) = harness();
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().run("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
+    h.run_steps(2);
+    let before = h.state().session.documents()[0].doc.clone();
+    let grab = ViewXform::active(h.state()).unwrap().to_screen(8.0, 10.0);
+    let dest = tab(&h, "dest-doc");
+    drag_along(&mut h, &[grab, dest, Pos2::new(-10.0, -10.0)], Modifiers::NONE);
+    assert_eq!(*h.state().session.documents()[0].doc, *before);
+    assert_eq!(h.state().session.documents()[1].doc.layers.len(), 1);
+}
+
+#[test]
+fn a_selection_can_be_dragged_directly_between_tiled_canvases() {
+    let (mut h, _) = harness();
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().ui.view.arrange = "twoUpVertical".into();
+    h.state_mut().run("select.rect", json!({"x": 7, "y": 8, "width": 3, "height": 4})).unwrap();
+    h.run_steps(3);
+    let before = h.state().session.documents()[0].doc.clone();
+    let cells = crate::canvas::arranged_cells(h.state(), h.state().last_canvas_rect).unwrap();
+    let view = &h.state().ui.views[0];
+    let xf = ViewXform {
+        rect: crate::rulers::content_rect(h.state(), cells[0].1.shrink(1.0)),
+        zoom: view.zoom / h.state().ppp,
+        center: view.center,
+        flip: false,
+        rotation: view.rotation,
+        aspect: 1.0,
+    };
+    let grab = xf.to_screen(8.0, 10.0);
+    let drop = cells[1].1.center();
+    drag_along(&mut h, &[grab, drop], Modifiers::NONE);
+    assert_eq!(copy(&h).1.size(), vec2(3.0, 4.0));
+    assert_eq!(*h.state().session.documents()[0].doc, *before);
+}
+
+#[test]
 fn a_layers_panel_drag_onto_a_tab_drops_the_layer_where_it_is_released() {
     let (mut h, _) = harness();
     let row = h.get_by_role_and_label(Role::Button, "paint").rect().center();
