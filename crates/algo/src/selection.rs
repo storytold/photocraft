@@ -941,9 +941,6 @@ impl ColorBvh {
                 best_axis = c;
             }
         }
-        if max_spread <= 1e-6 {
-            return ColorBvh::Leaf(points);
-        }
         let mid = points.len() / 2;
         points.select_nth_unstable_by(mid, |a, b| a[best_axis].total_cmp(&b[best_axis]));
         let right_pts = points.split_off(mid);

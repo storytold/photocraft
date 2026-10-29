@@ -55,6 +55,24 @@ fn color_matcher_coalesces_exact_repeated_colors() {
 }
 
 #[test]
+fn color_matcher_splits_colors_that_are_all_nearly_equal() {
+    // Distinct colours a few ulps apart: no spread to split on usefully, but still no leaf past 16.
+    let mut c = 0.5f32;
+    let selected: Vec<[f32; 4]> = (0..200)
+        .map(|_| {
+            c = c.next_up();
+            [c, 0.25, 0.75, 1.0]
+        })
+        .collect();
+    let matcher = ColorMatcher::new(selected.iter().copied(), 0.0);
+    assert!(matches!(matcher.tree, ColorBvh::Node { .. }), "more than 16 colours must not share one leaf");
+    for p in &selected {
+        assert!(matcher.matches(*p));
+    }
+    assert!(!matcher.matches([0.6, 0.25, 0.75, 1.0]));
+}
+
+#[test]
 fn color_matcher_tree_matches_brute_force() {
     // More than 16 distinct colors, so the tree has nodes and not just one leaf.
     let selected: Vec<[f32; 4]> = (0..200)
