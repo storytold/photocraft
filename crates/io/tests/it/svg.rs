@@ -190,6 +190,31 @@ fn png_data_url() -> String {
     out
 }
 
+/// A small valid PNG whose IHDR claims `w`x`h`, far larger than its actual (tiny) image data.
+/// The header alone must be enough to reject it before any decode is attempted.
+fn png_data_url_with_claimed_size(w: u32, h: u32) -> String {
+    let img = photocraft_codecs::Image::from_u8(2, 2, photocraft_codecs::ChannelLayout::Rgb, vec![255, 0, 0, 0, 255, 0, 0, 0, 255, 255, 255, 255]).unwrap();
+    let mut bytes = photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap();
+    // IHDR starts right after the 8-byte signature and 8-byte chunk length/type: width at 16,
+    // height at 20 (big-endian u32 each).
+    bytes[16..20].copy_from_slice(&w.to_be_bytes());
+    bytes[20..24].copy_from_slice(&h.to_be_bytes());
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::from("data:image/png;base64,");
+    for chunk in bytes.chunks(3) {
+        let n = chunk.len();
+        let v = (u32::from(chunk[0]) << 16) | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8) | u32::from(*chunk.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= n {
+                out.push(T[((v >> (18 - 6 * i)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
 #[test]
 fn embedded_raster_images_become_pixel_layers() {
     let r = open(&format!(
@@ -202,6 +227,18 @@ fn embedded_raster_images_become_pixel_layers() {
     assert!(matches!(d.layers[0].content, LayerContent::Raster(_)));
     assert!(close(px(d, 3, 3), [1.0, 0.0, 0.0, 1.0]), "{:?}", px(d, 3, 3));
     assert!(close(px(d, 16, 16), [1.0, 1.0, 1.0, 1.0]), "{:?}", px(d, 16, 16));
+}
+
+#[test]
+fn embedded_png_with_a_huge_claimed_size_is_not_decoded() {
+    // The IHDR claims 40000x40000 (6.4 GB RGBA decoded) but the display size is tiny; the
+    // header-only check must reject it before resvg ever decodes the actual (2x2) image data.
+    let r = open(&format!(
+        "<svg {NS} width=\"20\" height=\"20\"><image id=\"photo\" x=\"0\" y=\"0\" width=\"20\" height=\"20\" href=\"{}\"/></svg>",
+        png_data_url_with_claimed_size(40_000, 40_000)
+    ));
+    // Rejected at the resolver: no image layer is produced (resvg treats it as a missing image).
+    assert!(r.document.layers.is_empty() || !matches!(r.document.layers[0].content, LayerContent::Raster(_)), "{:?}", r.document.layers);
 }
 
 #[test]
@@ -243,6 +280,112 @@ fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut e = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     e.write_all(bytes).unwrap();
     e.finish().unwrap()
+}
+
+/// A `data:` URL of `bytes` under `mime`, base64-encoded.
+fn base64_data_url(mime: &str, bytes: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = format!("data:{mime};base64,");
+    for chunk in bytes.chunks(3) {
+        let n = chunk.len();
+        let v = (u32::from(chunk[0]) << 16) | (u32::from(*chunk.get(1).unwrap_or(&0)) << 8) | u32::from(*chunk.get(2).unwrap_or(&0));
+        for i in 0..4 {
+            if i <= n {
+                out.push(T[((v >> (18 - 6 * i)) & 63) as usize] as char);
+            } else {
+                out.push('=');
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn gzip_compressed_embedded_svg_decompresses_once_with_a_size_cap() {
+    // A small gzip-compressed SVG embedded via data URL (SVGZ-in-data-URL) must still import.
+    let inner = format!("<svg {NS} width=\"4\" height=\"4\"><rect width=\"4\" height=\"4\" fill=\"#00ff00\"/></svg>");
+    let url = base64_data_url("image/svg+xml", &gzip(inner.as_bytes()));
+    let r = open(&format!("<svg {NS} width=\"10\" height=\"10\"><image x=\"0\" y=\"0\" width=\"10\" height=\"10\" href=\"{url}\"/></svg>"));
+    assert!(
+        r.document.layers.iter().any(|l| matches!(l.content, LayerContent::Raster(_))),
+        "valid embedded gzip SVG must decode into a raster layer: {:?}",
+        r.document.layers
+    );
+
+    // A gzip-compressed embedded SVG whose decompressed size exceeds the cap must be rejected
+    // by our bounded inflate, not silently decompressed again without a limit by usvg.
+    let mut bomb = format!("<svg {NS} width=\"4\" height=\"4\">").into_bytes();
+    bomb.resize(usize::try_from(svg::MAX_INFLATED_BYTES).unwrap() + 1024, b' ');
+    bomb.extend_from_slice(b"</svg>");
+    let gz = gzip(&bomb);
+    assert!(gz.len() < 2 << 20, "{} bytes compressed", gz.len());
+    let url = base64_data_url("image/svg+xml", &gz);
+    let start = std::time::Instant::now();
+    let r = open(&format!("<svg {NS} width=\"10\" height=\"10\"><image x=\"0\" y=\"0\" width=\"10\" height=\"10\" href=\"{url}\"/></svg>"));
+    assert!(start.elapsed() < std::time::Duration::from_secs(5), "took {:?}", start.elapsed());
+    // The embedded bomb is rejected; the outer drawing may still open (e.g. with a missing
+    // image), but must not have decoded the bomb into a raster layer.
+    assert!(r.document.layers.iter().all(|l| !matches!(l.content, LayerContent::Raster(_))), "{:?}", r.document.layers);
+}
+
+/// usvg parses an SVG embedded as a `data:` image on its own, past the drawing's depth check:
+/// 20 000 nested groups in it overflowed a 2 MB thread stack, an abort nothing can catch. The
+/// embedded SVG gets the same check now, so the image is dropped and the drawing opens.
+#[test]
+fn deeply_nested_embedded_svg_is_dropped_not_a_stack_overflow() {
+    let deep = nested(20_000);
+    let percent: String = deep.bytes().map(|b| if b.is_ascii_alphanumeric() { char::from(b).to_string() } else { format!("%{b:02X}") }).collect();
+    let urls = [
+        format!("data:image/svg+xml,{percent}"),
+        base64_data_url("image/svg+xml", deep.as_bytes()),
+        base64_data_url("text/plain", deep.as_bytes()),
+        base64_data_url("image/svg+xml", &gzip(deep.as_bytes())),
+        base64_data_url("text/plain", &gzip(deep.as_bytes())),
+    ];
+    let embed = |url: &str| format!("<svg {NS} width=\"8\" height=\"8\"><image width=\"8\" height=\"8\" href=\"{url}\"/></svg>");
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(move || {
+            for url in &urls {
+                let r = open(&embed(url));
+                assert!(r.document.layers.iter().all(|l| !matches!(l.content, LayerContent::Raster(_))), "{}: {:?}", &url[..20], r.document.layers);
+            }
+            // Just inside the limit (the drawing's own `<svg>` takes one level) the embedded
+            // drawing still renders (its rect is black).
+            let r = open(&embed(&base64_data_url("image/svg+xml", nested(svg::MAX_XML_DEPTH - 2).as_bytes())));
+            assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&r.document, 4, 4));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+    // A PNG sent as `text/plain` is still an image, not markup to count.
+    let r = open(&format!(
+        "<svg {NS} width=\"8\" height=\"8\"><image width=\"8\" height=\"8\" image-rendering=\"pixelated\" href=\"{}\"/></svg>",
+        png_data_url().replace("image/png", "text/plain")
+    ));
+    assert!(close(px(&r.document, 1, 1), [1.0, 0.0, 0.0, 1.0]), "{:?}", px(&r.document, 1, 1));
+}
+
+/// The embedded SVG is parsed on top of the drawing's own recursion, so the two depths share
+/// [`svg::MAX_XML_DEPTH`]: 511 + 511 groups, each fine alone, overflowed a 1 MB thread stack.
+#[test]
+fn an_embedded_svg_gets_only_the_nesting_depth_the_drawing_left() {
+    let embed = |outer: usize, inner: usize| {
+        let url = base64_data_url("image/svg+xml", nested(inner).as_bytes());
+        format!("<svg {NS} width=\"8\" height=\"8\">{}<image width=\"8\" height=\"8\" href=\"{url}\"/>{}</svg>", "<g>".repeat(outer), "</g>".repeat(outer))
+    };
+    std::thread::Builder::new()
+        .stack_size(1 << 20)
+        .spawn(move || {
+            let r = open(&embed(svg::MAX_XML_DEPTH - 1, svg::MAX_XML_DEPTH - 1));
+            assert!(px(&r.document, 4, 4)[3] < 0.01, "{:?}", px(&r.document, 4, 4));
+            // Within the shared budget the embedded drawing renders (its rect is black).
+            let r = open(&embed(250, 250));
+            assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 0.0, 1.0]), "{:?}", px(&r.document, 4, 4));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
 }
 
 /// 8 000 nested groups (70 KB) overflowed the XML parser's recursion on a 2 MB thread stack, an
@@ -289,6 +432,9 @@ fn svgz_is_inflated_with_a_size_cap() {
     let r = import("drawing.svgz", &gzip(plain.as_bytes())).unwrap();
     assert_eq!(r.document.layers.len(), 1);
     assert!(close(px(&r.document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
+    let split = plain.len() / 2;
+    let members = [gzip(&plain.as_bytes()[..split]), gzip(&plain.as_bytes()[split..])].concat();
+    assert!(close(px(&import("members.svgz", &members).unwrap().document, 4, 4), [0.0, 0.0, 1.0, 1.0]));
     // A bomb: a few hundred KB of gzip holding more than the cap of whitespace.
     let mut bomb = format!("<svg {NS} width=\"8\" height=\"8\">").into_bytes();
     bomb.resize(usize::try_from(svg::MAX_INFLATED_BYTES).unwrap() + 1024, b' ');

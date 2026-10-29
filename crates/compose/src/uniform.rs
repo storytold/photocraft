@@ -32,7 +32,8 @@ impl<'a> UniformAreas<'a> {
             return None;
         }
         let mut surfaces = Vec::new();
-        for (_, _, l) in doc.walk() {
+        // Hidden layers are not composited: one with an effect must not rule the shortcut out.
+        for l in crate::visible_layers(&doc.layers) {
             let effects = l.effects.enabled && !l.effects.items.is_empty();
             if effects || l.vector_mask.is_some() || l.video.is_some() || l.blend == BlendMode::Dissolve {
                 return None;

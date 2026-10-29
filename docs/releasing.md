@@ -9,6 +9,23 @@ This is PhotoCraft's implementation of the shared
 [release playbook](release-playbook.md). User-facing names say **PhotoCraft**. Files, binaries
 and ids stay lowercase (`photocraft-<version>-<platform>-<arch>.<ext>`, `ai.storyteller.photocraft`).
 
+## In-app update checks
+
+The native desktop app checks the public GitHub latest-release endpoint in a background
+thread once at launch, with no periodic checks or automatic retries. Preferences › General › Automatically
+Check for Updates disables the startup check; Help › Check for Updates runs one manually.
+Checks use a 15-second timeout and a 1 MiB response limit, need no GitHub token, and send
+no document or personal data. Network failures are quiet during automatic checks and visible
+in the manual check window. Concurrent requests share one check.
+HTTPS validates certificates and host names against the operating system's trust store.
+
+Tags must be semantic versions (`v0.8.0` or `0.8.0`); only published stable versions newer
+than the installed workspace version trigger a notice. The notice opens the official release
+page to choose an installer; installation remains a user action. Drafts and prereleases do
+not trigger it. Web/headless frontends and the Flatpak (no network in its sandbox; `flatpak update`
+owns updates there) have no update transport. No release-workflow changes
+are required: publishing a newer stable GitHub Release makes it discoverable.
+
 ## Cutting a release
 
 1. **Bump the version** on `main`. The only place it lives is `[workspace.package] version`
@@ -136,18 +153,31 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   not panic.
 - Release builds use the GUI subsystem, so Start Menu launches don't open a console window.
   The CLI stays console subsystem 3 so its output reaches the terminal.
-- `photocraft.wxs` (WiX v5) is a per-machine install into Program Files with an advertised
-  Start Menu shortcut. PhotoCraft becomes the default app for `.pcraft` and is listed under
-  "Open with" for PSD/PSB and image files. It also registers App Paths (Win+R `photocraft`).
+- `photocraft.wxs` (WiX v5) is a dual-scope package (Microsoft "Single Package Authoring"):
+  it installs per-user by default, without a UAC prompt, into `%LOCALAPPDATA%\Programs\ArtCraft\PhotoCraft`
+  (Windows Installer redirects the ProgramFiles folder in a per-user install); the setup
+  wizard's "Everyone on this computer" option, or `msiexec ... ALLUSERS=1`, installs per-machine into
+  `Program Files\ArtCraft\PhotoCraft` (`Program Files (x86)` for the 32-bit build). It installs an advertised Start Menu shortcut associated with the
+  `PhotocraftExe` file component. PhotoCraft
+  becomes the default app for `.pcraft` and is listed under "Open with" for PSD/PSB and image
+  files (in a per-user install those registrations and the `InstallDir` record live under
+  HKCU instead of HKLM; the package's registry roots follow the context automatically). It also
+  registers App Paths (Win+R `photocraft`). An install updates the copy registered in its own
+  context; installing in the other context while a copy already exists is stopped with a
+  message, not a silent duplicate (a scope change needs an explicit uninstall first).
   The MSI version is the numeric `X.Y.Z`, because MSI has no pre-release field. Same-version
   upgrades are allowed so that release candidates replace each other.
-- Double-clicking the MSI opens a setup wizard (WixUI_InstallDir without the licence page):
-  Welcome, install folder (remembered for upgrades in `HKLM\Software\PhotoCraft\InstallDir`),
+- Double-clicking the MSI opens a setup wizard (WixUI_InstallDir without the licence page; the scope page appears only for a new full-UI install, not for
+  maintenance, uninstall or reduced and silent runs):
+  a scope page ("Only for me" or "Everyone on this computer"), Welcome, the install folder
+  (remembered for upgrades in `HKLM` or `HKCU\Software\PhotoCraft\InstallDir` according to context),
   Ready, a progress page, and a Finish page that says where to find the app, with a ticked "Launch
   PhotoCraft" box. The pages name the full version (`photocraft.en-us.wxl`). `package.ps1` draws
   the wizard's banner and side bitmaps from the app icon, so no WiX stock art ships. `msiexec /qn`
-  still installs silently. Building needs the WiX UI and Util extensions:
-  `wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2`.
+  installs a new product silently per-user unless `ALLUSERS=1` is passed. Maintenance keeps the
+  existing installation context, and a major upgrade of an existing per-machine installation without
+  `ALLUSERS=1` is rejected rather than installed per-user. Building needs the WiX UI
+  and Util extensions: `wix extension add -g WixToolset.UI.wixext/5.0.2 WixToolset.Util.wixext/5.0.2`.
 - Shortcut icon identifiers keep the executable's `.exe` extension: MSI uses the identifier
   as the cached icon filename, and an extensionless filename can render as a blank document
   icon. `packaging/windows/check-icons.ps1` checks the references and extensions in CI;
@@ -163,7 +193,9 @@ goes in `CARGO_TARGET_<TRIPLE>_RUSTFLAGS`, so host build scripts aren't affected
   1. a `.pfx` file (`WINDOWS_CERTIFICATE`, `WINDOWS_CERTIFICATE_PASSWORD`), timestamped by
      DigiCert, or
   2. Azure Trusted Signing (`AZURE_*`): the script downloads the
-     `Microsoft.Trusted.Signing.Client` dlib and timestamps with Microsoft's server.
+     `Microsoft.Trusted.Signing.Client` dlib and timestamps with Microsoft's server. The package
+     is pinned to a version and SHA-256 at the top of `sign.ps1` and refused on a mismatch, so an
+     upgrade is a deliberate change to both.
 
   The script is the single place to change when the Windows signing setup changes.
 
@@ -175,8 +207,12 @@ Locally on Windows: `dotnet tool install -g wix --version 5.0.2`,
 
 `packaging/linux/package.sh` stages one FHS tree and makes every format from it. The tree
 holds both binaries, `ai.storyteller.photocraft.desktop`, hicolor icons from 16 px to 512 px
-plus a scalable SVG, AppStream metainfo, and a shared-mime-info file for `.pcraft`, `.psb` and
-`.qoi`.
+plus a scalable SVG, AppStream metainfo, a shared-mime-info file for `.pcraft`, `.psb` and
+`.qoi`, and `photocraft-cli`'s man pages and bash, zsh and fish completions. The
+`man-and-completions` example, built with the binaries, writes those; a cross build runs it
+through `EMULATOR` and leaves them out without one. The zsh completion is in
+`/usr/share/zsh/site-functions`, which Fedora's and openSUSE's zsh read; the `.deb` also links it
+from `/usr/share/zsh/vendor-completions`, which Debian's zsh reads instead.
 
 Why these formats:
 
@@ -264,7 +300,9 @@ binaries with `CARGO_BUILD_JOBS=4` (more runs the 12 GB VM out of memory) and wr
 `x86_64` like the other artifacts. The tarball is a `/usr/local`-style tree: `bin/photocraft`,
 `bin/photocraft-cli`, and under `share/` the same desktop entry, MIME type, AppStream metainfo
 and hicolor icons as Linux, plus the licences, `NOTICE` and `ATTRIBUTION.md` in
-`share/doc/photocraft/`. Users install it with:
+`share/doc/photocraft/`, and `photocraft-cli`'s man pages (`man/man1/`) and bash, zsh and fish
+completions (`share/bash-completion`, `share/zsh/site-functions`, `share/fish`), written by the
+`man-and-completions` example built with the binaries. Users install it with:
 
 ```sh
 pkg install libxkbcommon wayland libX11 libXcursor libXrandr libXi libxcb mesa-libs vulkan-loader gtk3 fontconfig freetype2 alsa-lib

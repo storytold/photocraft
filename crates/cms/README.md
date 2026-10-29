@@ -27,7 +27,8 @@ t.eval(&[1.0, 0.0, 0.0], &mut out);                        // exact single colou
 * `Profile::to_bytes()`: original bytes of parsed profiles (byte-exact), or an ICC v4.3 encoding.
 * `Profile::same_colors(&other)`: the same colour space whatever the encoding (every sample of
   a device grid within ΔE 0.5 through both), e.g. Photoshop's sRGB IEC61966-2.1 and the built-in
-  sRGB. `content_hash()` compares bytes and suits cache keys only.
+  sRGB. `same_bytes(&other)` compares the ICC bytes. `content_hash()` is a 64-bit hash of them
+  that another profile can share: a cache key, confirmed with `same_bytes`.
 
 ### Evaluation
 

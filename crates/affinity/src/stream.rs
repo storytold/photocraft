@@ -332,7 +332,8 @@ impl Parser<'_> {
             0x2c => {
                 let n = usize::try_from(self.c.u32()?).map_err(|_| Error::Malformed("array length"))?;
                 let size = usize::from(self.c.u16()?);
-                if n.checked_mul(size).is_none_or(|b| b > self.c.remaining()) {
+                // A zero width passes the length check for any count, then costs a Value per record.
+                if size == 0 || n.checked_mul(size).is_none_or(|b| b > self.c.remaining()) {
                     return Err(Error::Malformed("array longer than its data"));
                 }
                 let mut v = self.vec(n)?;
