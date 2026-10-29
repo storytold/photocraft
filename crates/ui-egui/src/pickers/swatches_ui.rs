@@ -16,7 +16,8 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::pickers::asset_browser::{
-    BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemView, standard_group_context_menu, standard_item_context_menu,
+    BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, standard_group_context_menu,
+    standard_item_context_menu,
 };
 use crate::pickers::picker_footer::FooterOptions;
 use crate::pickers::picker_shell::{ShellOptions, picker_shell};
@@ -104,9 +105,9 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         group_context_menu: Some(standard_group_context_menu),
         folder_context_menu: None,
         paint_group: None,
-        paint_item: &mut |ui, r: Rect, gi, ii| {
-            let c = table.get(gi).and_then(|items| items.get(ii)).copied().unwrap_or(Color32::GRAY);
-            ui.painter().rect_filled(r, CornerRadius::ZERO, c);
+        paint_item: &mut |ui, rect: Rect, group_index, item_index, _paint_state: ItemPaintState| {
+            let color = table.get(group_index).and_then(|items| items.get(item_index)).copied().unwrap_or(Color32::GRAY);
+            ui.painter().rect_filled(rect, CornerRadius::ZERO, color);
         },
         paint_list_item: None,
     };

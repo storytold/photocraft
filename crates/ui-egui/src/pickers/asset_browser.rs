@@ -182,6 +182,12 @@ impl Default for BrowserCapabilities {
 /// Optional consumer-provided painter for a group row: UI, row rectangle, group, open, hovered, opacity.
 pub(crate) type PaintGroup = dyn FnMut(&egui::Ui, Rect, &GroupView, bool, bool, f32);
 pub(crate) type PaintListItem<'a> = dyn FnMut(&egui::Ui, Rect, usize, usize, bool) + 'a;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ItemPaintState {
+    Item { selected: bool },
+    DragGhost,
+}
+pub(crate) type PaintItem<'a> = dyn FnMut(&egui::Ui, Rect, usize, usize, ItemPaintState) + 'a;
 
 /// Consumer adapter for the generic browser. Each asset library projects its own identity and
 /// labels into `GroupView`/`ItemView`, paints its own preview, and handles returned `BrowserAction` values with
@@ -204,8 +210,8 @@ pub(crate) struct BrowserAdapter<'a> {
     pub(crate) folder_context_menu: Option<FolderContextMenu>,
     /// Optional override for group-row visuals; the default is a folder row with disclosure.
     pub(crate) paint_group: Option<&'a mut PaintGroup>,
-    /// Consumer-specific item preview painter, given the UI, target rectangle, group index and item index.
-    pub(crate) paint_item: &'a mut dyn FnMut(&egui::Ui, Rect, usize, usize),
+    /// Consumer-specific item painter. The state distinguishes regular selection styling from a drag ghost.
+    pub(crate) paint_item: &'a mut PaintItem<'a>,
     /// Optional specialised list-row painter. It paints the full row; shared code retains all hit targets.
     pub(crate) paint_list_item: Option<&'a mut PaintListItem<'a>>,
 }
@@ -598,7 +604,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                     } else {
                                         asset_browser_list_row(ui, &resp, r, &it.name, is_sel);
                                         let tr = Rect::from_min_size(r.min + vec2(24.0, 2.0), vec2(20.0, 20.0));
-                                        paint_item(ui, tr, gi, ii);
+                                        paint_item(ui, tr, gi, ii, ItemPaintState::Item { selected: is_sel });
                                         ui.painter().text(
                                             pos2(tr.right() + 8.0, r.center().y),
                                             Align2::LEFT_CENTER,
@@ -609,7 +615,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                     }
                                 } else {
                                     asset_browser_item_info(&resp, &it.name, is_sel);
-                                    paint_item(ui, r, gi, ii);
+                                    paint_item(ui, r, gi, ii, ItemPaintState::Item { selected: is_sel });
                                     // Only selected cards are outlined; centring the stroke on the inset
                                     // card edge leaves one pixel of it on either side.
                                     if is_sel {
@@ -666,12 +672,21 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                     && resp.dragged()
                                     && let Some(pp) = ui.ctx().pointer_interact_pos()
                                 {
-                                    // A ghost of the swatch follows the pointer.
-                                    let lp = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("preset-drag")));
-                                    let gr = Rect::from_center_size(pp, vec2(28.0, 28.0));
-                                    lp.rect_filled(gr, 3.0, t.card.gamma_multiply(0.8));
-                                    lp.rect_stroke(gr, 3.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Outside);
-                                    lp.text(gr.center(), Align2::CENTER_CENTER, "+", FontId::proportional(16.0), t.accent);
+                                    // Keep the source card's size and preview, floating above the
+                                    // browser content while the shared hit targets continue working.
+                                    let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("preset-drag", panel)));
+                                    let grab_offset = ui
+                                        .input(|input| input.pointer.press_origin())
+                                        .filter(|origin| r.contains(*origin))
+                                        .map(|origin| origin - r.min)
+                                        .unwrap_or_else(|| r.size() * 0.5);
+                                    let ghost_rect = Rect::from_min_size(pp - grab_offset, r.size());
+                                    // Extend the child clip by half the selection stroke so the outer
+                                    // half is not clipped at the card's bounds.
+                                    let mut ghost_ui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(ghost_rect.expand(1.0)));
+                                    ghost_ui.set_opacity(0.4);
+                                    paint_item(&ghost_ui, ghost_rect, gi, ii, ItemPaintState::DragGhost);
+                                    ghost_ui.painter().rect_stroke(ghost_rect, CornerRadius::ZERO, Stroke::new(2.0, t.accent), egui::StrokeKind::Middle);
                                 }
                                 if capabilities.item_drag
                                     && resp.drag_stopped()

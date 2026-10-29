@@ -18,7 +18,7 @@ use crate::pickers::asset_browser::browser;
 use crate::pickers::asset_browser::last_browser_rect;
 #[cfg(test)]
 use crate::pickers::asset_browser::last_group_headers;
-use crate::pickers::asset_browser::{BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemView};
+use crate::pickers::asset_browser::{BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView};
 use crate::pickers::asset_browser::{standard_group_context_menu, standard_item_context_menu};
 #[cfg(test)]
 use crate::pickers::asset_browser_hierarchy::hierarchy_tree;
@@ -137,9 +137,9 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         group_context_menu: Some(standard_group_context_menu),
         folder_context_menu: None,
         paint_group: None,
-        paint_item: &mut |ui, r, gi, ii| {
-            ui.painter().rect_filled(r, 2.0, t.field);
-            ui.painter().image(texes[gi][ii].id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+        paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
+            ui.painter().rect_filled(rect, 2.0, t.field);
+            ui.painter().image(texes[group_index][item_index].id(), rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
         },
         paint_list_item: None,
     };
@@ -206,9 +206,9 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         group_context_menu: Some(standard_group_context_menu),
         folder_context_menu: None,
         paint_group: None,
-        paint_item: &mut |ui, r, gi, ii| {
-            let tex = shape_texture(&ctx, &src[gi].items[ii]);
-            ui.painter().image(tex.id(), r.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), t.text);
+        paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
+            let texture = shape_texture(&ctx, &src[group_index].items[item_index]);
+            ui.painter().image(texture.id(), rect.shrink(2.0), Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), t.text);
         },
         paint_list_item: None,
     };
@@ -847,7 +847,7 @@ mod tests {
             group_context_menu: Some(standard_group_context_menu),
             folder_context_menu: None,
             paint_group: None,
-            paint_item: &mut |_, _, _, _| {},
+            paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
         };
         let mut h = Harness::builder().with_size(vec2(320.0, 300.0)).build_ui_state(
@@ -890,7 +890,7 @@ mod tests {
             group_context_menu: Some(standard_group_context_menu),
             folder_context_menu: None,
             paint_group: None,
-            paint_item: &mut |_, _, _, _| {},
+            paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
         };
         let content_bottom = Rc::new(Cell::new(0.0_f32));
@@ -986,7 +986,7 @@ mod tests {
             group_context_menu: None,
             folder_context_menu: None,
             paint_group: None,
-            paint_item: &mut |_, _, _, _| {},
+            paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
         };
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -1203,7 +1203,7 @@ mod tests {
             group_context_menu: Some(consumer_group_menu),
             folder_context_menu: None,
             paint_group: None,
-            paint_item: &mut |_, _, _, _| {},
+            paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
         };
         let mut h = Harness::builder().with_size(vec2(320.0, 240.0)).build_ui_state(

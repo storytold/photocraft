@@ -5,7 +5,8 @@ use serde_json::json;
 
 use crate::PhotocraftApp;
 use crate::pickers::asset_browser::{
-    BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemView, standard_group_context_menu, standard_item_context_menu,
+    BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, standard_group_context_menu,
+    standard_item_context_menu,
 };
 use crate::pickers::asset_browser_interaction::canvas_drop_rect;
 use crate::pickers::picker_footer::FooterOptions;
@@ -75,7 +76,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         group_context_menu: Some(standard_group_context_menu),
         folder_context_menu: None,
         paint_group: None,
-        paint_item: &mut |ui, rect, group_index, item_index| {
+        paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
             let group = &groups[group_index];
             let key = &group.items[item_index].key;
             let stops = library

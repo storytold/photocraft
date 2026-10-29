@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
 use crate::brush_preview;
-use crate::pickers::asset_browser::{self, BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemView};
+use crate::pickers::asset_browser::{self, BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView};
 use crate::pickers::asset_browser_hierarchy::{HierarchyFolder, HierarchyNode, hierarchy_tree};
 pub(crate) use crate::pickers::asset_browser_interaction::AssetDrag as BrushDrag;
 use crate::pickers::asset_browser_interaction::{ContextMenuAction, HierarchyDrop, draw_group_context_menu, draw_item_context_menu, hierarchy_folder_drop};
@@ -271,7 +271,6 @@ pub(crate) fn picker_browser(
     let scale_max = max_picker_card_scale(ui.available_width(), show_parts(brush_state));
     let scale = brush_state.scale.clamp(*SCALE_RANGE.start(), scale_max);
     brush_state.scale = scale;
-    let selected_key = preset_ui.selected.get(PANEL).cloned();
     let scale_h = scale.max(CARD_MIN_H_SCALE);
     let show = (brush_state.show_name, brush_state.show_stroke, brush_state.show_tip);
     let (card_w, card_h) = if tip_only(show) {
@@ -282,14 +281,13 @@ pub(crate) fn picker_browser(
         (CARD_MAX_W * scale, (CARD_MAX_H - if brush_state.show_name { 0.0 } else { CARD_NAME_H }) * scale_h)
     };
 
-    let mut paint_item = |ui: &egui::Ui, rect: egui::Rect, gi: usize, ii: usize| {
-        let Some(preset) = group_views.get(gi).and_then(|group| group.presets.get(ii)).copied() else { return };
-        let identity = preview_identity(preset);
-        let selected = selected_key.as_deref() == Some(identity.as_str());
+    let mut paint_item = |ui: &egui::Ui, rect: egui::Rect, group_index: usize, item_index: usize, state: ItemPaintState| {
+        let Some(preset) = group_views.get(group_index).and_then(|group| group.presets.get(item_index)).copied() else { return };
+        let selected = matches!(state, ItemPaintState::Item { selected: true });
         paint_picker_card(ui, rect, preset, selected, false, show, scale);
     };
-    let mut paint_list_item = |ui: &egui::Ui, rect: egui::Rect, gi: usize, ii: usize, selected: bool| {
-        let Some(preset) = group_views.get(gi).and_then(|group| group.presets.get(ii)).copied() else { return };
+    let mut paint_list_item = |ui: &egui::Ui, rect: egui::Rect, group_index: usize, item_index: usize, selected: bool| {
+        let Some(preset) = group_views.get(group_index).and_then(|group| group.presets.get(item_index)).copied() else { return };
         paint_brush_list_row(ui, rect, preset, selected);
     };
     let mut adapter = BrowserAdapter {
@@ -317,7 +315,7 @@ pub(crate) fn picker_browser(
         paint_list_item: Some(&mut paint_list_item),
     };
     let browser_actions = asset_browser::browser(ui, preset_ui, &mut adapter, allocated_height);
-    paint_brush_drag_ghost(ui, presets, PANEL, egui::Id::new(("brush-drag-label", PANEL)));
+    paint_brush_hierarchy_drag_label(ui, PANEL, egui::Id::new(("brush-drag-label", PANEL)));
 
     browser_actions_to_actions(presets, browser_actions)
 }
@@ -941,15 +939,18 @@ pub fn preset_list(
             items: group.view.items.iter().map(|item| ItemView { key: item.key.clone(), name: item.name.clone(), folder: item.folder.clone() }).collect(),
         })
         .collect();
-    let selected = preset_ui.selected.get(PANEL).cloned();
     let list = st.view == BrushesView::List;
-    let mut paint_item = |ui: &egui::Ui, rect: egui::Rect, gi: usize, ii: usize| {
-        let Some(preset) = group_views.get(gi).and_then(|group| group.presets.get(ii)).copied() else { return };
-        let is_selected = selected.as_deref() == Some(preview_identity(preset).as_str());
-        paint_brush_grid_item(ui, rect, preset, is_selected);
+    let mut paint_item = |ui: &egui::Ui, rect: egui::Rect, group_index: usize, item_index: usize, state: ItemPaintState| {
+        let Some(preset) = group_views.get(group_index).and_then(|group| group.presets.get(item_index)).copied() else { return };
+        let selected = matches!(state, ItemPaintState::Item { selected: true });
+        if list {
+            paint_brush_list_row(ui, rect, preset, false);
+        } else {
+            paint_brush_grid_item(ui, rect, preset, selected);
+        }
     };
-    let mut paint_list_item = |ui: &egui::Ui, rect: egui::Rect, gi: usize, ii: usize, selected: bool| {
-        if let Some(preset) = group_views.get(gi).and_then(|group| group.presets.get(ii)).copied() {
+    let mut paint_list_item = |ui: &egui::Ui, rect: egui::Rect, group_index: usize, item_index: usize, selected: bool| {
+        if let Some(preset) = group_views.get(group_index).and_then(|group| group.presets.get(item_index)).copied() {
             paint_brush_list_row(ui, rect, preset, selected);
         }
     };
@@ -977,7 +978,7 @@ pub fn preset_list(
     };
     let browser_actions = asset_browser::browser(ui, preset_ui, &mut adapter, layout.max_height);
     sync_browser_state_to_brush_state(st, preset_ui, presets, PANEL);
-    paint_brush_drag_ghost(ui, presets, PANEL, egui::Id::new(("brush-drag-label", layout.id)));
+    paint_brush_hierarchy_drag_label(ui, PANEL, egui::Id::new(("brush-drag-label", layout.id)));
     browser_actions_to_actions(presets, browser_actions)
 }
 
@@ -1062,54 +1063,22 @@ fn sync_browser_state_to_brush_state(st: &mut BrushesPanelState, browser: &Prese
     };
 }
 
-/// Show the dragged brush occurrence (including its own tip) or hierarchy label at the pointer.
-/// The scope is different for the shared picker and the Brushes tab, but the occurrence key is the
-/// same opaque identity in both surfaces.
-fn paint_brush_drag_ghost(ui: &egui::Ui, presets: &[BrushPreset], scope: &str, id: egui::Id) {
-    let Some(d) = egui::DragAndDrop::payload::<BrushDrag>(ui.ctx()) else { return };
-    if !matches!(&*d, BrushDrag::Preset { scope: drag_scope, .. } | BrushDrag::Group { scope: drag_scope, .. } | BrushDrag::Folder { scope: drag_scope, .. } if drag_scope.as_str() == scope)
-    {
+/// Keep brush group/folder labels visible while dragging hierarchy nodes. Item artwork is painted
+/// by the shared browser so its ghost stays identical to the source card.
+fn paint_brush_hierarchy_drag_label(ui: &egui::Ui, scope: &str, id: egui::Id) {
+    let Some(drag) = egui::DragAndDrop::payload::<BrushDrag>(ui.ctx()) else { return };
+    let (drag_scope, name) = match &*drag {
+        BrushDrag::Group { scope, name, .. } => (scope.as_str(), if name.is_empty() { UNGROUPED.to_string() } else { name.clone() }),
+        BrushDrag::Folder { scope, folder, .. } => (scope.as_str(), folder.last().cloned().unwrap_or_default()),
+        BrushDrag::Preset { .. } => return,
+    };
+    if drag_scope != scope {
         return;
     }
     let Some(pointer) = ui.ctx().pointer_interact_pos() else { return };
     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
-    let preset = match &*d {
-        BrushDrag::Preset { key, .. } => preset_by_identity(presets, key),
-        _ => None,
-    };
-    let name = match &*d {
-        BrushDrag::Preset { key, .. } => preset.map_or_else(|| key.clone(), |preset| preset.name.clone()),
-        BrushDrag::Group { name, .. } => {
-            if name.is_empty() {
-                UNGROUPED.to_string()
-            } else {
-                name.clone()
-            }
-        }
-        BrushDrag::Folder { folder, .. } => folder.last().cloned().unwrap_or_default(),
-    };
     egui::Area::new(id).order(egui::Order::Tooltip).fixed_pos(pointer + vec2(12.0, 8.0)).interactable(false).show(ui.ctx(), |ui| {
-        if matches!(&*d, BrushDrag::Preset { .. }) {
-            ui.set_opacity(0.8);
-        }
-        egui::Frame::popup(ui.style()).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                if let Some(preset) = preset {
-                    let brush = &preset.brush;
-                    let identity = preview_identity(preset);
-                    let tip = brush_preview::tip_texture(
-                        ui.ctx(),
-                        &format!("brush-drag-tip:{identity}"),
-                        &brush.tip,
-                        (brush.hardness, brush.angle, brush.roundness),
-                        36,
-                        Tokens::get(ui.ctx()).text,
-                    );
-                    ui.add(egui::Image::new(&tip).fit_to_exact_size(vec2(36.0, 36.0)).alt_text(&preset.name));
-                }
-                ui.label(name);
-            });
-        });
+        egui::Frame::popup(ui.style()).show(ui, |ui| ui.label(name));
     });
 }
 

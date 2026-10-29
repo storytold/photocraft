@@ -6,7 +6,7 @@ use egui::{Color32, ColorImage, Pos2, Rect, Sense, Stroke, TextureHandle, pos2, 
 use serde_json::json;
 
 use crate::PhotocraftApp;
-use crate::pickers::asset_browser::{BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemView, browser};
+use crate::pickers::asset_browser::{BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, ItemPaintState, ItemView, browser};
 use crate::pickers::asset_browser_interaction::canvas_drop_rect;
 use crate::pickers::picker_footer::FooterOptions;
 use crate::pickers::picker_shell::{MIN_THUMB, ShellOptions, picker_menu_button, picker_shell};
@@ -136,10 +136,14 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         group_context_menu: Some(crate::pickers::asset_browser::standard_group_context_menu),
         folder_context_menu: None,
         paint_group: None,
-        paint_item: &mut |ui, r, gi, ii| {
-            if let Some(pattern) = groups.get(gi).and_then(|g| g.items.get(ii)).and_then(|item| lib.iter().find(|p| p.id == item.key)) {
-                let tex = pattern_texture(&ctx, pattern);
-                ui.painter().image(tex.id(), r, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
+        paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
+            if let Some(pattern) = groups
+                .get(group_index)
+                .and_then(|group| group.items.get(item_index))
+                .and_then(|item| lib.iter().find(|pattern| pattern.id == item.key))
+            {
+                let texture = pattern_texture(&ctx, pattern);
+                ui.painter().image(texture.id(), rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
             }
         },
         paint_list_item: None,
@@ -303,16 +307,21 @@ pub(crate) fn compact_pattern_browser(
         group_context_menu: Some(compact_group_context_menu),
         folder_context_menu: None,
         paint_group: None,
-        paint_item: &mut |ui, r, gi, ii| {
-            if let Some(p) = groups.get(gi).and_then(|g| g.items.get(ii)).and_then(|i| pats.iter().find(|p| p.id == i.key)) {
-                ui.painter().image(pattern_texture(&ctx, p).id(), r, uv, Color32::WHITE);
-                let on = p.id == selected;
-                ui.painter().rect_stroke(
-                    r,
-                    0.0,
-                    Stroke::new(if on { 2.0 } else { 1.0 }, if on { t.accent } else { t.field_border }),
-                    egui::StrokeKind::Outside,
-                );
+        paint_item: &mut |ui, rect, group_index, item_index, paint_state: ItemPaintState| {
+            if let Some(pattern) = groups
+                .get(group_index)
+                .and_then(|group| group.items.get(item_index))
+                .and_then(|item| pats.iter().find(|pattern| pattern.id == item.key))
+            {
+                ui.painter().image(pattern_texture(&ctx, pattern).id(), rect, uv, Color32::WHITE);
+                if let ItemPaintState::Item { selected } = paint_state {
+                    ui.painter().rect_stroke(
+                        rect,
+                        0.0,
+                        Stroke::new(if selected { 2.0 } else { 1.0 }, if selected { t.accent } else { t.field_border }),
+                        egui::StrokeKind::Outside,
+                    );
+                }
             }
         },
         paint_list_item: None,
