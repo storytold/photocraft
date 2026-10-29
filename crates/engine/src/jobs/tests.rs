@@ -860,7 +860,7 @@ fn a_cooperative_job_gets_one_slice_per_poll_on_the_calling_thread() {
     assert_eq!(*probe.thread.lock().unwrap(), Some(std::thread::current().id()), "no worker thread");
     // Each slice was given about a frame's budget: no more than 8 ms from the poll.
     let ahead = probe.ahead.lock().unwrap().clone();
-    assert!(ahead.iter().all(|d| *d <= Duration::from_millis(8)), "{ahead:?}");
+    assert!(ahead.iter().all(|d| *d <= STEP_BUDGET), "{ahead:?}");
     assert!(ahead.iter().any(|d| *d > Duration::ZERO), "{ahead:?}");
     assert!(probe.dropped.load(Ordering::Relaxed), "the finished work is let go");
     s.execute("layer.new.layer", json!({})).unwrap();
