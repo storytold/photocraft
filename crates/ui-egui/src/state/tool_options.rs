@@ -111,6 +111,18 @@ pub struct ToolOptions {
     /// on one of its anchors deletes it (#4144).
     #[serde(default = "yes")]
     pub pen_auto_add_delete: bool,
+    /// Path Options (the gear in the Pen and shape tools' options bars, #9713): how paths are
+    /// drawn on the canvas. The colour is a `vector_ui::PATH_COLORS` id ("default" = the theme
+    /// accent), the thickness the outline's width in screen px.
+    #[serde(default = "default_path_color")]
+    pub path_color: String,
+    #[serde(default = "one")]
+    pub path_thickness: f32,
+    /// Path Options › Anchor Size, 1–7 (3 = the 6 px squares), as VectorCraft's.
+    #[serde(default = "default_anchor_size")]
+    pub anchor_size: u32,
+    /// Path Options › Highlight Start Point: ring the first anchor of open subpaths.
+    pub path_mark_start: bool,
     /// Marquee options bar: "normal" | "fixedRatio" | "fixedSize", with the ratio or size.
     #[serde(default = "default_marquee_style")]
     pub marquee_style: String,
@@ -266,6 +278,14 @@ fn default_curve_fit() -> f32 {
     2.0
 }
 
+fn default_path_color() -> String {
+    "default".into()
+}
+
+fn default_anchor_size() -> u32 {
+    3
+}
+
 fn default_eraser_mode() -> String {
     "brush".into()
 }
@@ -412,6 +432,10 @@ impl Default for ToolOptions {
             line_weight: 3.0,
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
+            path_color: default_path_color(),
+            path_thickness: 1.0,
+            anchor_size: default_anchor_size(),
+            path_mark_start: false,
             marquee_style: default_marquee_style(),
             marquee_width: 1.0,
             marquee_height: 1.0,

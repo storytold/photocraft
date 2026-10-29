@@ -272,6 +272,10 @@ struct ToolSet {
     cam_transform_on_drop: Option<bool>,
     tile_grid: Option<bool>,
     layer_filter: Option<crate::layer_filter_ui::Filter>,
+    path_color: Option<String>,
+    path_thickness: Option<f32>,
+    anchor_size: Option<u32>,
+    path_mark_start: Option<bool>,
 }
 
 impl ToolSet {
@@ -291,10 +295,28 @@ impl ToolSet {
             // Developer overlay of the active layer's storage tiles (tile_overlay.rs).
             tile_grid: bool_field(p, "tileGrid")?,
             layer_filter: p.get("layerFilter").map(|v| crate::layer_filter_ui::patched(&app.ui, v)).transpose()?,
+            // The Pen and shape tools' Path Options (#9713).
+            path_color: path_color_param(p)?,
+            path_thickness: path_thickness_param(p)?,
+            anchor_size: anchor_size_param(p)?,
+            path_mark_start: bool_field(p, "pathMarkStart")?,
         })
     }
 
     fn apply(self, app: &mut PhotocraftApp) {
+        let o = &mut app.ui.tool_options;
+        if let Some(id) = self.path_color.clone() {
+            o.path_color = id;
+        }
+        if let Some(px) = self.path_thickness {
+            o.path_thickness = px;
+        }
+        if let Some(size) = self.anchor_size {
+            o.anchor_size = size;
+        }
+        if let Some(on) = self.path_mark_start {
+            o.path_mark_start = on;
+        }
         if let Some(stroke) = &self.shape_stroke {
             if let Some(stroke) = stroke {
                 app.ui.tool_options.stroke_width = stroke.width;
@@ -397,6 +419,30 @@ fn eyedropper_size_param(p: &Value) -> std::result::Result<Option<u32>, String> 
     photocraft_engine::sample_cmds::size_param("ui.set", &json!({"size": v}))
         .map(Some)
         .map_err(|_| format!("eyedropperSampleSize must be \"point\" or one of {:?}", photocraft_engine::sample_cmds::SAMPLE_SIZES))
+}
+
+fn path_color_param(p: &Value) -> std::result::Result<Option<String>, String> {
+    let Some(v) = p.get("pathColor") else { return Ok(None) };
+    let ids: Vec<&str> = crate::vector_ui::PATH_COLORS.iter().map(|c| c.0).collect();
+    let id = v.as_str().filter(|id| ids.contains(id)).ok_or_else(|| format!("pathColor must be one of {}", ids.join(", ")))?;
+    Ok(Some(id.to_string()))
+}
+
+fn path_thickness_param(p: &Value) -> std::result::Result<Option<f32>, String> {
+    let range = crate::vector_ui::PATH_THICKNESS;
+    let Some(px) = num_field(p, "pathThickness")? else { return Ok(None) };
+    let px = px as f32;
+    range.contains(&px).then_some(Some(px)).ok_or_else(|| format!("pathThickness must be {}..={} px", range.start(), range.end()))
+}
+
+fn anchor_size_param(p: &Value) -> std::result::Result<Option<u32>, String> {
+    let range = crate::vector_ui::ANCHOR_SIZES;
+    let Some(size) = uint_field(p, "anchorSize")? else { return Ok(None) };
+    u32::try_from(size)
+        .ok()
+        .filter(|s| range.contains(s))
+        .map(Some)
+        .ok_or_else(|| format!("anchorSize must be a whole number {}..={}", range.start(), range.end()))
 }
 
 fn eyedropper_sample_param(p: &Value) -> std::result::Result<Option<String>, String> {

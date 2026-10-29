@@ -317,7 +317,7 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, to_scr: &dyn Fn([f64; 
         let now = drag.and_then(|d| d.targets.iter().position(|g| g.layer == t.layer).and_then(|i| d.now.get(i)));
         let radii = now.copied().unwrap_or(t.radii);
         if now.is_some() {
-            crate::vector_ui::draw_outline(painter, &t.path(radii), to_scr, accent);
+            crate::vector_ui::draw_outline(painter, &t.path(radii), to_scr, &crate::vector_ui::PathLook::of(app, accent));
         }
         for i in 0..t.corners() {
             if let Some(w) = t.widget(radii, i, z) {

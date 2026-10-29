@@ -817,6 +817,37 @@ fn ui_set_drives_the_eyedropper_options() {
     assert_eq!(app.ui.tool_options.eyedropper_size, 1);
 }
 
+/// #9713: the Pen and shape tools' Path Options over the control channel, reported by `ui.inspect`.
+#[test]
+fn ui_set_drives_the_path_options() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let good = call(&mut app, &ctx, "ui.set", json!({"pathColor": "red", "pathThickness": 2.5, "anchorSize": 7, "pathMarkStart": true}));
+    assert_eq!(good["ok"], true, "{good}");
+    let o = &app.ui.tool_options;
+    assert_eq!((o.path_color.as_str(), o.path_thickness, o.anchor_size, o.path_mark_start), ("red", 2.5, 7, true));
+    let shown = &call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["toolOptions"];
+    assert_eq!((shown["path_color"].as_str(), shown["anchor_size"].as_u64()), (Some("red"), Some(7)));
+    for bad in [
+        json!({"pathColor": "plaid"}),
+        json!({"pathColor": 3}),
+        json!({"pathThickness": 0.1}),
+        json!({"pathThickness": 9}),
+        json!({"pathThickness": "thin"}),
+        json!({"anchorSize": 0}),
+        json!({"anchorSize": 8}),
+        json!({"anchorSize": 2.5}),
+        json!({"pathMarkStart": "yes"}),
+    ] {
+        let r = call(&mut app, &ctx, "ui.set", bad.clone());
+        assert_eq!(r["ok"], false, "{bad}: {r}");
+    }
+    // A rejected call applies none of its fields.
+    let r = call(&mut app, &ctx, "ui.set", json!({"pathColor": "black", "anchorSize": 99}));
+    assert_eq!(r["ok"], false, "{r}");
+    assert_eq!(app.ui.tool_options.path_color, "red");
+}
+
 /// #1046: the Color Sampler tool is selectable over the control channel and reported as active.
 #[test]
 fn ui_set_selects_the_color_sampler_tool() {

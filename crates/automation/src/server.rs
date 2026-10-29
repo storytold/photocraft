@@ -337,7 +337,10 @@ pub struct UiSetParams {
     /// brushSize, gradientBlendMode
     /// (a blend mode name, for the Gradient tool), gradientClassic (bool), eyedropperSampleSize
     /// ("point" or 1, 3, 5, 11, 31, 51, 101), eyedropperSample (current, currentAndBelow, all,
-    /// allNoAdjustments, currentAndBelowNoAdjustments), eyedropperRing (bool), cropOverlay (thirds,
+    /// allNoAdjustments, currentAndBelowNoAdjustments), eyedropperRing (bool), pathColor (the
+    /// Pen and shape tools' Path Options: default, lightBlue, red, green, mediumBlue, yellow,
+    /// magenta, cyan, lightGray, black), pathThickness (0.5..3 px), anchorSize (1..7),
+    /// pathMarkStart (bool), cropOverlay (thirds,
     /// grid, diagonal, triangle, goldenRatio, goldenSpiral), cropOverlayShow (auto, always, never),
     /// cropOverlayOrientation (0..3), cropShield (an object patching show_cropped_area, enabled,
     /// color ("matchCanvas" or "custom"), custom_color ([r, g, b]), opacity (0..100),

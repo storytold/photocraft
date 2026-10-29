@@ -182,7 +182,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 let (x, y) = h.apply(q[0], q[1]);
                 xf.to_screen(x as f32, y as f32)
             },
-            accent,
+            &crate::vector_ui::PathLook::plain(accent),
         );
     }
     let pts: Vec<Pos2> = t.quad.iter().map(|q| scr(*q)).collect();
@@ -526,7 +526,7 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
                 let (x, y) = w.map(q[0], q[1]);
                 xf.to_screen(x as f32, y as f32)
             },
-            accent,
+            &crate::vector_ui::PathLook::plain(accent),
         );
     }
     let line = Stroke::new(1.0, accent);

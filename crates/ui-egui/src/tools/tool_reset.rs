@@ -208,11 +208,25 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::Dodge | Tool::Burn => reset!(tone_range, exposure, protect_tones),
         Tool::Sponge => reset!(sponge_mode, vibrance),
         Tool::Slice => reset!(slice_style, slice_width, slice_height),
-        Tool::Pen => reset!(vector_mode, pen_auto_add_delete),
-        Tool::CurvaturePen => reset!(vector_mode),
-        Tool::FreeformPen => reset!(vector_mode, curve_fit),
+        Tool::Pen => reset!(vector_mode, pen_auto_add_delete, path_color, path_thickness, anchor_size, path_mark_start),
+        Tool::CurvaturePen => reset!(vector_mode, path_color, path_thickness, anchor_size, path_mark_start),
+        Tool::FreeformPen => reset!(vector_mode, curve_fit, path_color, path_thickness, anchor_size, path_mark_start),
         Tool::Rectangle | Tool::EllipseShape | Tool::Triangle | Tool::Polygon | Tool::Line | Tool::CustomShape => {
-            reset!(vector_mode, shape_fill, stroke_width, shape_stroke, shape_fill_gradient, shape_stroke_gradient, corner_radius, polygon_sides, line_weight)
+            reset!(
+                vector_mode,
+                shape_fill,
+                stroke_width,
+                shape_stroke,
+                shape_fill_gradient,
+                shape_stroke_gradient,
+                corner_radius,
+                polygon_sides,
+                line_weight,
+                path_color,
+                path_thickness,
+                anchor_size,
+                path_mark_start
+            )
         }
         Tool::ColorSampler
         | Tool::Ruler

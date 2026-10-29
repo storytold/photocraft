@@ -298,8 +298,8 @@ pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) {
     }
     if edit.is_some() {
         let center = screen(p.center);
-        crate::vector_ui::draw_anchor(&painter, center, true, t.accent);
-        crate::vector_ui::draw_handle(&painter, center, screen(rotation_handle(p, size)), t.accent);
+        crate::vector_ui::draw_anchor(&painter, center, true, &crate::vector_ui::PathLook::plain(t.accent));
+        crate::vector_ui::draw_handle(&painter, center, screen(rotation_handle(p, size)), &crate::vector_ui::PathLook::plain(t.accent));
     }
 }
 

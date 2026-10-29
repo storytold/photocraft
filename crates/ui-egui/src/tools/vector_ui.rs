@@ -33,11 +33,11 @@ use options::{corner_radii_patch, solid_paint};
 pub(crate) use options::{enabled_stroke_width, paint_gesture};
 pub use options::{options_bar, shape_properties};
 pub use overlay::draw_overlay;
+pub(crate) use overlay::{ANCHOR_SIZES, PATH_COLORS, PATH_THICKNESS, PathLook, draw_anchor, draw_handle, draw_outline, draw_start_marks};
 #[cfg(test)]
 use overlay::{MAX_CURVE_PIECES, bezier};
 #[cfg(test)]
 pub(crate) use overlay::{curve_points, path_lines, selected_saved_path, shows_anchors};
-pub(crate) use overlay::{draw_anchor, draw_handle, draw_outline};
 #[cfg(test)]
 use path_ops::target_path;
 pub use path_ops::{active_path_name, path_selection_finish, path_to_selection, pick_shape_at, selected_document_path, takes_path_mask, with_active_path};
@@ -111,6 +111,9 @@ mod path_selection_tests;
 
 #[cfg(test)]
 mod pen_draw_tests;
+
+#[cfg(test)]
+mod path_options_tests;
 
 #[cfg(test)]
 mod paint_tests;

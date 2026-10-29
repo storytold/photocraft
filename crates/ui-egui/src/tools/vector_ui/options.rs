@@ -60,6 +60,8 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 o.stroke_width = enabled_stroke_width(o.stroke_width);
             }
         }
+        crate::widgets::vline(ui, 22.0);
+        path_options(ui, o);
         if tool == Tool::Pen {
             crate::widgets::vline(ui, 22.0);
             crate::widgets::checkbox(ui, &mut o.pen_auto_add_delete, tl!("Auto Add/Delete"));
@@ -106,7 +108,36 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     crate::widgets::dropdown(ui, "shape-mode", tl!("Mode"), &mut mode, &[("shape".to_string(), tl!("Shape"))], 80.0);
     crate::widgets::vline(ui, 22.0);
     crate::shape_options::options_bar(app, ui, tool);
+    crate::widgets::vline(ui, 22.0);
+    path_options(ui, &mut app.ui.tool_options);
     true
+}
+
+/// The options-bar gear of the Pen and shape tools: Photoshop's Path Options (the outline's
+/// Thickness and Color), plus the Anchor Size and a start-point highlight, so anchors and the
+/// end a path began at are easy to find on any image (#9713). One setting for every path tool.
+pub(crate) fn path_options(ui: &mut egui::Ui, o: &mut crate::state::ToolOptions) {
+    let resp = crate::icons::button(ui, "settings", 24.0, false, tl!("Path Options"));
+    let resp = crate::brush_picker::named(resp, "Path Options");
+    egui::Popup::from_toggle_button_response(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        egui::Grid::new("path-options").num_columns(2).spacing([8.0, 6.0]).show(ui, |ui| {
+            ui.label(tl!("Thickness:"));
+            crate::widgets::value_field(ui, &mut o.path_thickness, super::PATH_THICKNESS, "px", 58.0).accessible_name(tl!("Thickness:"));
+            ui.end_row();
+            ui.label(tl!("Color:"));
+            let colors: Vec<(String, &str)> = super::PATH_COLORS.iter().map(|c| (c.0.to_string(), tl!(c.1))).collect();
+            crate::widgets::dropdown(ui, "path-color", tl!("Color:"), &mut o.path_color, &colors, 120.0);
+            ui.end_row();
+            ui.label(tl!("Anchor Size:"));
+            // A list of the whole sizes: a value field's arrow and wheel steps are fractions.
+            let sizes: Vec<String> = super::ANCHOR_SIZES.map(|n| n.to_string()).collect();
+            let sizes: Vec<(u32, &str)> = super::ANCHOR_SIZES.zip(sizes.iter().map(String::as_str)).collect();
+            o.anchor_size = o.anchor_size.clamp(*super::ANCHOR_SIZES.start(), *super::ANCHOR_SIZES.end());
+            crate::widgets::dropdown(ui, "path-anchor-size", tl!("Anchor Size:"), &mut o.anchor_size, &sizes, 58.0);
+            ui.end_row();
+        });
+        crate::widgets::checkbox(ui, &mut o.path_mark_start, tl!("Highlight Start Point"));
+    });
 }
 
 /// Whether the active layer supplies the selected-shape options.

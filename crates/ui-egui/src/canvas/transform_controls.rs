@@ -136,7 +136,7 @@ pub(super) fn draw_transform_controls(app: &mut PhotocraftApp, painter: &egui::P
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     for l in transform_controls_layers(app) {
         if let LayerContent::Shape(sh) = &l.content {
-            crate::vector_ui::draw_outline(painter, &sh.path, &to_scr, accent);
+            crate::vector_ui::draw_outline(painter, &sh.path, &to_scr, &crate::vector_ui::PathLook::of(app, accent));
         }
     }
     painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Middle);

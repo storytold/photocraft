@@ -81,28 +81,95 @@ pub(crate) fn path_lines(path: &Path, xf: &dyn Fn([f64; 2]) -> Pos2) -> Vec<(Vec
         .collect()
 }
 
-/// A path's outline in the accent colour.
-pub(crate) fn draw_outline(painter: &egui::Painter, p: &Path, to_scr: &dyn Fn([f64; 2]) -> Pos2, accent: Color32) {
+/// Path Options › Color: the colours a path can be drawn in, by id. "default" is the theme's
+/// accent (#9713).
+pub(crate) const PATH_COLORS: &[(&str, &str, Option<[u8; 3]>)] = &[
+    ("default", "Default", None),
+    ("lightBlue", "Light Blue", Some([0x4c, 0xb4, 0xff])),
+    ("red", "Red", Some([0xff, 0x2a, 0x2a])),
+    ("green", "Green", Some([0x22, 0xc5, 0x3a])),
+    ("mediumBlue", "Medium Blue", Some([0x1f, 0x4f, 0xe0])),
+    ("yellow", "Yellow", Some([0xff, 0xd8, 0x00])),
+    ("magenta", "Magenta", Some([0xf0, 0x1e, 0xd2])),
+    ("cyan", "Cyan", Some([0x00, 0xe0, 0xe0])),
+    ("lightGray", "Light Gray", Some([0xc0, 0xc0, 0xc0])),
+    ("black", "Black", Some([0x00, 0x00, 0x00])),
+];
+
+/// Path Options › Thickness range (screen px).
+pub(crate) const PATH_THICKNESS: std::ops::RangeInclusive<f32> = 0.5..=3.0;
+/// Path Options › Anchor Size range; 3 draws the 6 px squares, a pixel more or less per step.
+pub(crate) const ANCHOR_SIZES: std::ops::RangeInclusive<u32> = 1..=7;
+
+/// How paths, their anchors and direction handles are drawn: the Pen options' Path Options
+/// (#9713). The default look is a 1 px accent line with 6 px anchor squares.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PathLook {
+    pub color: Color32,
+    /// The outline's width (screen px).
+    pub width: f32,
+    /// An anchor square's side (screen px).
+    pub anchor: f32,
+    /// Ring the first anchor of each open subpath, where the path begins.
+    pub mark_start: bool,
+}
+
+impl PathLook {
+    /// The default look in `accent`, for overlays Path Options doesn't style.
+    pub(crate) fn plain(accent: Color32) -> Self {
+        Self { color: accent, width: 1.0, anchor: 6.0, mark_start: false }
+    }
+
+    /// The look Path Options sets; its Default colour is `accent`. Out-of-range or non-finite
+    /// settings (a hand-edited settings file) fall back to the nearest valid ones.
+    pub(crate) fn of(app: &PhotocraftApp, accent: Color32) -> Self {
+        let o = &app.ui.tool_options;
+        let color = PATH_COLORS.iter().find(|c| c.0 == o.path_color).and_then(|c| c.2).map_or(accent, |[r, g, b]| Color32::from_rgb(r, g, b));
+        let width = if o.path_thickness.is_finite() { o.path_thickness.clamp(*PATH_THICKNESS.start(), *PATH_THICKNESS.end()) } else { 1.0 };
+        let size = o.anchor_size.clamp(*ANCHOR_SIZES.start(), *ANCHOR_SIZES.end());
+        Self { color, width, anchor: 6.0 + size as f32 - 3.0, mark_start: o.path_mark_start }
+    }
+}
+
+/// A path's outline in the look's colour and width.
+pub(crate) fn draw_outline(painter: &egui::Painter, p: &Path, to_scr: &dyn Fn([f64; 2]) -> Pos2, look: &PathLook) {
     for (pts, closed) in path_lines(p, to_scr) {
         if closed {
-            painter.add(egui::Shape::closed_line(pts, Stroke::new(1.0, accent)));
+            painter.add(egui::Shape::closed_line(pts, Stroke::new(look.width, look.color)));
         } else {
-            painter.add(egui::Shape::line(pts, Stroke::new(1.0, accent)));
+            painter.add(egui::Shape::line(pts, Stroke::new(look.width, look.color)));
         }
     }
 }
 
-/// An anchor point's square: filled with the accent when selected, else hollow (white).
-pub(crate) fn draw_anchor(painter: &egui::Painter, c: Pos2, selected: bool, accent: Color32) {
-    let r = Rect::from_center_size(c, vec2(6.0, 6.0));
-    painter.rect_filled(r, 0.0, if selected { accent } else { Color32::WHITE });
-    painter.rect_stroke(r, 0.0, Stroke::new(1.0, accent), egui::StrokeKind::Inside);
+/// An anchor point's square: filled with the path colour when selected, else hollow (white).
+pub(crate) fn draw_anchor(painter: &egui::Painter, c: Pos2, selected: bool, look: &PathLook) {
+    let r = Rect::from_center_size(c, vec2(look.anchor, look.anchor));
+    painter.rect_filled(r, 0.0, if selected { look.color } else { Color32::WHITE });
+    painter.rect_stroke(r, 0.0, Stroke::new(1.0, look.color), egui::StrokeKind::Inside);
 }
 
 /// A direction handle: the line from its anchor and the round handle end.
-pub(crate) fn draw_handle(painter: &egui::Painter, anchor: Pos2, handle: Pos2, accent: Color32) {
-    painter.line_segment([anchor, handle], Stroke::new(1.0, accent));
-    painter.circle_filled(handle, 3.0, accent);
+pub(crate) fn draw_handle(painter: &egui::Painter, anchor: Pos2, handle: Pos2, look: &PathLook) {
+    painter.line_segment([anchor, handle], Stroke::new(1.0, look.color));
+    painter.circle_filled(handle, look.anchor / 2.0, look.color);
+}
+
+/// Path Options › Highlight Start Point: a ring around the first anchor of each open subpath, so
+/// the end a path was begun at can be told from the one it was finished at (#9713). Closed
+/// subpaths have no start to find.
+pub(crate) fn draw_start_marks(painter: &egui::Painter, p: &Path, to_scr: &dyn Fn([f64; 2]) -> Pos2, look: &PathLook) {
+    if !look.mark_start {
+        return;
+    }
+    for k in p.subpaths.iter().filter(|s| !s.closed && s.knots.len() > 1).filter_map(|s| s.knots.first()) {
+        draw_start_ring(painter, to_scr([k.anchor.x, k.anchor.y]), look);
+    }
+}
+
+/// The ring [`draw_start_marks`] draws around a start anchor at `c`.
+fn draw_start_ring(painter: &egui::Painter, c: Pos2, look: &PathLook) {
+    painter.circle_stroke(c, look.anchor * 0.5 + 3.5, Stroke::new(1.5, look.color));
 }
 
 /// Does `tool` draw the anchor squares of the paths it can edit? Path Selection does, and so do
@@ -125,27 +192,30 @@ pub(crate) fn selected_saved_path(app: &PhotocraftApp) -> Option<&Path> {
 pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
     let tool = app.ui.tool;
     let accent = Tokens::get(painter.ctx()).accent;
+    let look = PathLook::of(app, accent);
     let to_scr = |q: [f64; 2]| xf.to_screen(q[0] as f32, q[1] as f32);
     let draw_path = |p: &Path, anchors: bool| {
-        draw_outline(painter, p, &to_scr, accent);
+        draw_outline(painter, p, &to_scr, &look);
         if anchors {
             for k in p.subpaths.iter().flat_map(|s| &s.knots) {
-                draw_anchor(painter, to_scr([k.anchor.x, k.anchor.y]), false, accent);
+                draw_anchor(painter, to_scr([k.anchor.x, k.anchor.y]), false, &look);
             }
         }
+        // The start ring shows on an outline without anchor squares too (a shape tool's path).
+        draw_start_marks(painter, p, &to_scr, &look);
     };
     // View › Show › Target Path (under Extras) hides the paths; the Pen's path in progress stays.
     // Free Transform Path draws the path through its box instead (transform_tool).
     let paths = app.ui.view.shows(app.ui.view.show.target_path) && app.ui.transform.as_ref().is_none_or(|t| t.path.is_none());
     if app.session.active().is_some_and(|st| st.doc.id == doc.id) && crate::direct_select::shows(app, painter.ctx().input(|i| i.modifiers)) {
         // Direct Selection (or the Pen with ⌘/Ctrl held) draws the paths it edits (#790).
-        crate::direct_select::draw_overlay(app, painter, &to_scr, accent, paths);
+        crate::direct_select::draw_overlay(app, painter, &to_scr, &look, paths);
         if paths {
             // The selected saved path shows too, though Direct Selection doesn't edit it yet.
             if let Some(p) = selected_saved_path(app) {
                 draw_path(p, true);
             }
-            crate::anchor_tools::draw_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
+            crate::anchor_tools::draw_hover(app, painter, &to_scr, &look, painter.ctx().input(|i| i.modifiers));
         }
     } else if paths {
         // The shape's or vector mask's path stays visible as an outline with any tool. Path
@@ -197,7 +267,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         for w in knots.windows(2) {
             pts.extend(curve_points(w[0][0], w[0][2], w[1][1], w[1][0], &to_scr));
         }
-        painter.add(egui::Shape::line(pts, Stroke::new(1.5, accent)));
+        painter.add(egui::Shape::line(pts, Stroke::new(look.width + 0.5, look.color)));
         // No rubber band where a click adds or deletes an anchor of this path instead (#6140).
         let auto = app.hover_doc.is_some_and(|h| crate::anchor_tools::pen_auto(app, tool, painter.ctx().input(|i| i.modifiers), h).is_some());
         if let (Some(last), Some(h)) = (pen.knots.last(), app.hover_doc)
@@ -212,13 +282,13 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 curvature_refresh(&mut next, false);
                 if let [.., a, b] = next.knots.as_slice() {
                     let pts = curve_points(a[0], a[2], b[1], b[0], &to_scr);
-                    painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, accent), 4.0, 3.0));
+                    painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, look.color), 4.0, 3.0));
                 }
             } else {
                 // The rubber band ends where a ⇧-click would put the next anchor.
                 let shift = painter.ctx().input(|i| i.modifiers.shift);
                 let h = if pen.curvature { h } else { shift_45(last[0], h, shift) };
-                painter.add(egui::Shape::dashed_line(&[to_scr(last[0]), to_scr(h)], Stroke::new(1.0, accent), 4.0, 3.0));
+                painter.add(egui::Shape::dashed_line(&[to_scr(last[0]), to_scr(h)], Stroke::new(1.0, look.color), 4.0, 3.0));
             }
         }
         for (i, k) in pen.knots.iter().enumerate() {
@@ -226,10 +296,16 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             let last = i + 1 == pen.knots.len();
             if last && k[2] != k[0] && !pen.curvature {
                 for hnd in [k[1], k[2]] {
-                    draw_handle(painter, c, to_scr(hnd), accent);
+                    draw_handle(painter, c, to_scr(hnd), &look);
                 }
             }
-            draw_anchor(painter, c, last, accent);
+            draw_anchor(painter, c, last, &look);
+        }
+        if look.mark_start
+            && pen.knots.len() > 1
+            && let Some(first) = pen.knots.first()
+        {
+            draw_start_ring(painter, to_scr(first[0]), &look);
         }
         // Hovering the first anchor: Photoshop's close cue, a small ring beside the pointer.
         let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
@@ -238,13 +314,13 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
             && let Some(first) = pen.knots.first()
         {
             let c = to_scr(first[0]);
-            painter.rect_filled(Rect::from_center_size(c, vec2(8.0, 8.0)), 0.0, accent);
-            painter.circle_stroke(c + vec2(11.0, 11.0), 3.5, Stroke::new(1.5, accent));
+            painter.rect_filled(Rect::from_center_size(c, vec2(look.anchor + 2.0, look.anchor + 2.0)), 0.0, look.color);
+            painter.circle_stroke(c + vec2(11.0, 11.0), 3.5, Stroke::new(1.5, look.color));
         }
     }
     // The segment the Pen's Auto Add/Delete would add an anchor to, or the anchor it would delete,
     // over the path being drawn. While drawing, the other paths can be hidden: it edits none of them.
     if paths || app.ui.pen.is_some() {
-        crate::anchor_tools::draw_pen_hover(app, painter, &to_scr, accent, painter.ctx().input(|i| i.modifiers));
+        crate::anchor_tools::draw_pen_hover(app, painter, &to_scr, &look, painter.ctx().input(|i| i.modifiers));
     }
 }
