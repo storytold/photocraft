@@ -9,6 +9,18 @@ use photocraft_paint::brush::{BrushSettings, TipShape};
 /// Below this on-screen radius an outline is unreadable: show the crosshair instead.
 const MIN_RADIUS: f32 = 3.0;
 
+/// Pencil shares the tip-shaped, continuously positioned OS cursor with Brush.
+/// Its actual dabs still snap to whole pixels. Tiny computed Pencil tips fill
+/// whole square pixels; sampled tips must keep their own silhouette at any size.
+pub(crate) fn pencil_outline_brush(brush: &BrushSettings) -> BrushSettings {
+    let mut b = brush.clone();
+    b.hardness = 1.0;
+    if matches!(b.tip, TipShape::Round) && !crate::canvas::pencil_tip_is_round(b.size) {
+        b.tip = TipShape::Sampled(photocraft_paint::GrayTile::from_fn(1, 1, |_, _| 1.0));
+    }
+    b
+}
+
 #[derive(Clone)]
 struct Cached {
     key: Key,
@@ -33,6 +45,9 @@ impl Key {
     }
     fn matches(&self, b: &BrushSettings, full: bool) -> bool {
         self.tip == b.tip
+            // Stored tips compare by store key, even when their preview is
+            // replaced by the full bitmap. That replacement needs a new trace.
+            && self.tip.bitmap() == b.tip.bitmap()
             && self.angle == b.angle
             && self.roundness == b.roundness
             && self.hardness == b.hardness
@@ -176,6 +191,44 @@ mod tests {
     use super::*;
     use crate::canvas::ViewXform;
     use egui::{Rect, pos2};
+
+    #[test]
+    fn pencil_cursor_keeps_sampled_tip_and_does_not_snap_to_document_pixels() {
+        let brush = BrushSettings { size: 20.0, tip: TipShape::Sampled(photocraft_paint::GrayTile::from_fn(8, 8, |_, _| 1.0)), ..Default::default() };
+        let b = pencil_outline_brush(&brush);
+        assert_eq!(b.tip, brush.tip);
+        let ctx = egui::Context::default();
+        let rings = rings(&ctx, &b, true).unwrap();
+        let square = on_screen(&rings, tip_axes(&view(0.0, false, 1.0), b.size));
+        assert!(square[0].iter().any(|p| p.x.abs() > 15.0 && p.y.abs() > 15.0), "a square reaches outside the round-tip circle");
+        let mut images = Vec::new();
+        for x in [100.0, 100.2] {
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                cursor(ui.painter(), pos2(x, 100.0), &b, 20.0, tip_axes(&view(0.0, false, 1.0), b.size), false, false);
+            });
+            out.textures_delta.clear();
+            images.push(out.platform_output.cursor_image.unwrap());
+        }
+        assert_eq!(images[0], images[1], "the same OS cursor follows fractional pointer moves without a document-grid offset");
+    }
+
+    #[test]
+    fn stored_tip_outline_refreshes_when_the_full_bitmap_replaces_its_preview() {
+        let ctx = egui::Context::default();
+        let mut stored = photocraft_paint::StoredTile {
+            key: "cursor-regression".into(),
+            width: 8,
+            height: 8,
+            preview: Arc::new(photocraft_paint::GrayTile::from_fn(2, 2, |_, _| 0.0)),
+            full: None,
+        };
+        let mut b = BrushSettings { size: 40.0, tip: TipShape::Stored(stored.clone()), ..Default::default() };
+        assert!(rings(&ctx, &b, true).is_none(), "a blank preview initially falls back");
+        stored.full = Some(Arc::new(photocraft_paint::GrayTile::from_fn(8, 8, |_, _| 1.0)));
+        b.tip = TipShape::Stored(stored);
+        let outline = rings(&ctx, &b, true).expect("loading the full tip must replace the cached fallback");
+        assert_eq!(outline[0], vec![[-1.0, -1.0], [1.0, -1.0], [1.0, 1.0], [-1.0, 1.0]]);
+    }
 
     fn view(rotation: f32, flip: bool, aspect: f32) -> ViewXform {
         ViewXform { rect: Rect::from_min_size(pos2(0.0, 0.0), egui::vec2(400.0, 300.0)), zoom: 2.0, center: [50.0, 40.0], flip, rotation, aspect }

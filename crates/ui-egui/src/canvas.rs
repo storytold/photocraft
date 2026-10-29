@@ -1472,25 +1472,16 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                     PaintingCursor::Standard => egui::CursorIcon::Default,
                     PaintingCursor::Precise => crate::tool_cursor::crosshair(painter, p, 6.0, 0.0),
                     _ if painting && cur.show_only_crosshair_while_painting => crate::tool_cursor::crosshair(painter, p, 5.0, 0.0),
-                    // The Pencil (and the Eraser in Pencil mode): the outline of the
-                    // whole pixels its dab fills, on the pixel grid. A round tip is a
-                    // disc, a tiny one the whole square (#2662). The Block-mode Eraser:
-                    // its square, 16 screen pixels at any zoom (#2770).
-                    _ if tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool) || crate::eraser_ui::block_mode(app, tool) => {
-                        let block = crate::eraser_ui::block_mode(app, tool);
-                        let size = if block { crate::eraser_ui::block_size(app) } else { brush.size };
+                    // Block-mode Eraser keeps its grid-aligned square. Pencil's
+                    // shaped OS cursor below moves continuously; only paint snaps.
+                    _ if crate::eraser_ui::block_mode(app, tool) => {
+                        let size = crate::eraser_ui::block_size(app);
                         let ppp = painter.ctx().pixels_per_point();
                         let sq = pencil_cursor_rect(xf, xf.to_doc(p), size, ppp);
                         let px = 1.0 / ppp;
                         let (dark, light) = (Stroke::new(px, Color32::from_black_alpha(160)), Stroke::new(px, Color32::from_white_alpha(230)));
-                        if !block && pencil_tip_is_round(size) {
-                            let r = sq.width() / 2.0;
-                            painter.circle_stroke(sq.center(), r + px / 2.0, dark);
-                            painter.circle_stroke(sq.center(), (r - px / 2.0).max(0.0), light);
-                        } else {
-                            painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
-                            painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
-                        }
+                        painter.rect_stroke(sq, 0.0, dark, egui::StrokeKind::Outside);
+                        painter.rect_stroke(sq, 0.0, light, egui::StrokeKind::Inside);
                         // Too small to see where it is: the hotspot as well.
                         if cur.show_crosshair_in_brush_tip || sq.width() < 6.0 {
                             crate::tool_cursor::crosshair(painter, p, 4.0, 0.0);
@@ -1502,8 +1493,11 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                     // tip keeps the circle.
                     _ => {
                         let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
+                        let pencil = tool == Tool::Pencil || crate::eraser_ui::pencil_mode(app, tool);
+                        let pencil_brush = pencil.then(|| crate::brush_cursor::pencil_outline_brush(brush));
+                        let brush = pencil_brush.as_ref().unwrap_or(brush);
                         let axes = crate::brush_cursor::pen_axes(xf, brush, app.stylus.sample());
-                        crate::brush_cursor::cursor(painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
+                        crate::brush_cursor::cursor(painter, p, brush, full, axes, pencil || cur.painting == PaintingCursor::NormalTip, centre)
                     }
                 }
             }

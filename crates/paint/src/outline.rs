@@ -56,6 +56,16 @@ fn trace(t: &GrayTile, thr: f32, xf: (f32, f32, f32, f32, f32)) -> Option<Vec<Ve
     let (sn, cs, fx, fy, ro) = xf;
     let (tw, th) = (t.width as f32, t.height as f32);
     let big = tw.max(th);
+    let map_pixel = |px: f32, py: f32| {
+        let (u, v) = ((px - tw / 2.0) * (2.0 / big) * fx, -(py - th / 2.0) * (2.0 / big) * ro * fy);
+        [u * cs - v * sn, -(u * sn + v * cs)]
+    };
+    // Cropped solid tips (including a single black source pixel) have exact
+    // rectangular support. Marching squares would bevel their corners, and its
+    // transparent padding would inflate a full-tip cursor when enlarged.
+    if t.data.iter().all(|&v| f32::from(v) / 65535.0 >= thr) {
+        return Some(vec![vec![map_pixel(0.0, 0.0), map_pixel(tw, 0.0), map_pixel(tw, th), map_pixel(0.0, th)]]);
+    }
     let f = if big <= 160.0 { 2.0 } else { 160.0 / big };
     let (gw, gh) = (((tw * f).ceil() as usize).max(1), ((th * f).ceil() as usize).max(1));
     let mut vals = vec![0.0f32; gw * gh];
@@ -90,23 +100,22 @@ fn trace(t: &GrayTile, thr: f32, xf: (f32, f32, f32, f32, f32)) -> Option<Vec<Ve
     if thin.is_empty() {
         return None;
     }
-    let s = 2.0 / big;
     let map = |[gx, gy]: [f32; 2]| {
-        let (px, py) = ((gx + 0.5) / f - 0.5, (gy + 0.5) / f - 0.5);
-        let (u, v) = ((px - tw / 2.0) * s * fx, -(py - th / 2.0) * s * ro * fy);
-        let (ux, uy) = (u * cs - v * sn, u * sn + v * cs);
-        [ux, -uy]
+        // The sampled grid uses texel-center coordinates; physical tip edges
+        // are at 0 and width/height, without another half-texel subtraction.
+        map_pixel(((gx + 0.5) / f).clamp(0.0, tw), ((gy + 0.5) / f).clamp(0.0, th))
     };
     let rings: Vec<Vec<[f32; 2]>> = thin.into_iter().map(|r| r.into_iter().map(map).collect()).collect();
     rings.iter().flatten().all(|p| p[0].is_finite() && p[1].is_finite()).then_some(rings)
 }
 
-/// Bilinear sample with zero outside (tips fade to nothing at their edges).
+/// Match the renderer's extended edge texels; the contour is clipped to the
+/// bitmap's physical support when mapped above.
 fn sample(t: &GrayTile, x: f32, y: f32) -> f32 {
     let (x0, y0) = (x.floor(), y.floor());
     let (tx, ty) = (x - x0, y - y0);
     let (x0, y0) = (x0 as i64, y0 as i64);
-    let get = |x: i64, y: i64| if x < 0 || y < 0 || x >= t.width as i64 || y >= t.height as i64 { 0.0 } else { t.get(x as u32, y as u32) };
+    let get = |x: i64, y: i64| t.get(x.clamp(0, i64::from(t.width) - 1) as u32, y.clamp(0, i64::from(t.height) - 1) as u32);
     let a = get(x0, y0) + (get(x0 + 1, y0) - get(x0, y0)) * tx;
     let b = get(x0, y0 + 1) + (get(x0 + 1, y0 + 1) - get(x0, y0 + 1)) * tx;
     a + (b - a) * ty
@@ -275,6 +284,37 @@ fn seg_dist2(p: [f32; 2], a: [f32; 2], b: [f32; 2]) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn solid_sampled_cursor_is_centered_on_the_exact_bitmap_corners() {
+        for (w, h) in [(1, 1), (2, 2), (8, 8), (16, 8)] {
+            let b = BrushSettings { size: 80.0, tip: TipShape::Sampled(GrayTile::from_fn(w, h, |_, _| 1.0)), ..Default::default() };
+            let x = w as f32 / w.max(h) as f32;
+            let y = h as f32 / w.max(h) as f32;
+            for full in [false, true] {
+                let rings = tip_outline(&b, full).unwrap();
+                assert_eq!(rings, vec![vec![[-x, -y], [x, -y], [x, y], [-x, y]]]);
+            }
+        }
+    }
+
+    #[test]
+    fn symmetric_sampled_contour_has_no_half_texel_offset() {
+        let tip = GrayTile::from_fn(16, 16, |x, y| {
+            let d = (x as f32 - 7.5).hypot(y as f32 - 7.5);
+            (1.0 - d / 8.0).clamp(0.0, 1.0)
+        });
+        let b = BrushSettings { size: 80.0, tip: TipShape::Sampled(tip), ..Default::default() };
+        for full in [false, true] {
+            let rings = tip_outline(&b, full).unwrap();
+            let points = &rings[0];
+            for axis in [0, 1] {
+                let lo = points.iter().map(|p| p[axis]).fold(f32::INFINITY, f32::min);
+                let hi = points.iter().map(|p| p[axis]).fold(f32::NEG_INFINITY, f32::max);
+                assert!((lo + hi).abs() < 1e-4, "off-center contour: {lo}..{hi}");
+            }
+        }
+    }
 
     fn max_radius(rings: &[Vec<[f32; 2]>]) -> f32 {
         rings.iter().flatten().fold(0.0f32, |m, p| m.max(p[0].hypot(p[1])))
