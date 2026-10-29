@@ -261,10 +261,11 @@ fn resample_off_physical_width_changes_the_resolution() {
 
 /// #6979: with Resample on, a new Resolution keeps the print size in a physical unit and
 /// resamples the pixels (Photoshop): 720 x 576 px at 72 ppi is 10 x 8 in, so 300 ppi is
-/// 3000 x 2400 px. In pixels the pixel count stays.
+/// 3000 x 2400 px, independently of the displayed dimension unit.
 #[test]
 fn resample_on_resolution_keeps_the_physical_size() {
-    for (unit, size) in [("in", (3000.0, 2400.0)), ("cm", (3000.0, 2400.0)), ("px", (720.0, 576.0))] {
+    use egui_kittest::kittest::Queryable;
+    for (unit, size) in [("in", (3000.0, 2400.0)), ("cm", (3000.0, 2400.0)), ("px", (3000.0, 2400.0)), ("percent", (3000.0, 2400.0))] {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.session.execute("file.new", json!({"width": 720, "height": 576, "resolution": 72})).unwrap();
         let mut h = egui_kittest::Harness::builder()
@@ -279,6 +280,10 @@ fn resample_on_resolution_keeps_the_physical_size() {
         type_into(&mut h, 2, "300");
         let f = fields(&h);
         assert_eq!((num(&f, "width"), num(&f, "height"), num(&f, "resolution")), (size.0, size.1, 300.0), "{unit}: {f:?}");
+        type_into(&mut h, 2, "144");
+        assert!(h.query_by_label("1440 px × 1152 px").is_some(), "{unit}: decreasing Resolution keeps the print size");
+        type_into(&mut h, 2, "300");
+        assert!(h.query_by_label("3000 px × 2400 px").is_some(), "{unit}: repeated edits use the current resolution");
         crate::dialogs::confirm(h.state_mut(), id).unwrap();
         let doc = &h.state().session.active().unwrap().doc;
         assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(size.0 as u32, size.1 as u32), 300.0), "{unit}");
@@ -333,5 +338,18 @@ fn sizing_dialogs_open_on_width_selected() {
         h.run_steps(3);
         assert!(h.state().ui.dialogs.is_empty(), "{command}: Enter is OK");
         assert_eq!(h.state().session.active().unwrap().doc.size.width, 50, "{command}");
+    }
+}
+
+#[test]
+fn resolution_edit_without_resampling_keeps_pixels_in_every_unit() {
+    for unit in ["px", "percent", "in"] {
+        let (mut h, id) = resample_off_dialog(unit);
+        type_into(&mut h, 2, "300");
+        let f = fields(&h);
+        assert_eq!((num(&f, "width"), num(&f, "height"), num(&f, "resolution")), (100.0, 50.0, 300.0), "{unit}");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let doc = &h.state().session.active().unwrap().doc;
+        assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(100, 50), 300.0), "{unit}");
     }
 }

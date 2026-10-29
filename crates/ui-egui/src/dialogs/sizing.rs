@@ -298,9 +298,9 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 // Without resampling the pixel count is fixed: physical size follows resolution.
                 f.insert("width".into(), json!(ow));
                 f.insert("height".into(), json!(oh));
-            } else if !matches!(unit.as_str(), "px" | "percent") {
-                // Resampling in a physical unit keeps the print size: the pixels follow the
-                // resolution (Photoshop). In pixels or percent the pixel count stays.
+            } else {
+                // Resampling keeps the print size: pixels follow resolution regardless of the
+                // unit used to display dimensions.
                 let old = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
                 if old > 0.0 && old.is_finite() {
                     for key in ["width", "height"] {
