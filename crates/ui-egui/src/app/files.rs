@@ -402,15 +402,14 @@ impl PhotocraftApp {
     /// `None` when the save went to a background job (#2017), which finishes it in
     /// [`jobs_ui::tick`].
     pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
-        if let Some(st) = self.session.active() {
-            ensure_memory_to_save(&st.doc, &path)?;
-        }
         if self.background_jobs
             && let Some(save) = self.services.save_file.clone()
         {
+            // `start_save` checks the memory itself: other callers reach it directly.
             return jobs_ui::start_save(self, path, settings.clone(), copy, save, false);
         }
         let st = self.session.active().ok_or("no document")?;
+        ensure_memory_to_save(&st.doc, &path)?;
         let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&st.doc, &path, settings)?;
