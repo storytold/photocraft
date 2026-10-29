@@ -4417,6 +4417,20 @@ navigator	Zoom	Zoom
 	Not rendered: this adjustment ({key}) is kept as imported.	No se renderiza: este ajuste ({key}) se conserva tal como se importó.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Según color
+	Decontaminate Colors	Descontaminar colores
+	Edge Detection	Detección de bordes
+	Global Refinements	Perfeccionamientos globales
+	High Quality Preview	Previsualización de alta calidad
+	Object Aware	Según objeto
+	Real-Time Refinement	Perfeccionamiento en tiempo real
+	Refine Edge Brush Tool	Herramienta Pincel para perfeccionar bordes
+	Refine Hair	Perfeccionar pelo
+	Refine Mode	Modo de perfeccionamiento
+	Remember Settings	Recordar ajustes
+	View Mode	Modo de visualización
+	Object Aware needs a segmentation model, which isn't available yet	Según objeto necesita un modelo de segmentación que aún no está disponible
+	Refine Hair needs hair detection, which isn't available yet	Perfeccionar pelo necesita detección de pelo, que aún no está disponible
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Cubo de tono
 	Brightness Cube	Cubo de brillo
@@ -4433,6 +4447,8 @@ navigator	Zoom	Zoom
 	Grayscale Ramp	Rampa de escala de grises
 	Current Colors	Colores actuales
 	Make Ramp Web Safe	Hacer rampa segura para web
+	Select and Mask was closed: its document is no longer the active one	Se cerró Seleccionar y aplicar máscara: su documento ya no es el activo
+	Select and Mask was closed: another layer was selected	Se cerró Seleccionar y aplicar máscara: se seleccionó otra capa
 # Art History Brush (#213).
 	Art History Brush Tool	Herramienta Pincel histórico artístico
 	Tight Short	Corto apretado

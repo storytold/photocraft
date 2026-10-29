@@ -4215,6 +4215,20 @@ curves	Smooth	Vloeiend maken
 	Not rendered: this adjustment ({key}) is kept as imported.	Niet weergegeven: deze aanpassing ({key}) blijft behouden zoals geïmporteerd.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Kleurbewust
+	Decontaminate Colors	Kleuren zuiveren
+	Edge Detection	Randdetectie
+	Global Refinements	Globale verfijningen
+	High Quality Preview	Voorvertoning in hoge kwaliteit
+	Object Aware	Objectbewust
+	Real-Time Refinement	Verfijning in realtime
+	Refine Edge Brush Tool	Gereedschap Penseel Rand verfijnen
+	Refine Hair	Haar verfijnen
+	Refine Mode	Verfijningsmodus
+	Remember Settings	Instellingen onthouden
+	View Mode	Weergavemodus
+	Object Aware needs a segmentation model, which isn't available yet	Objectbewust vereist een segmentatiemodel dat nog niet beschikbaar is
+	Refine Hair needs hair detection, which isn't available yet	Haar verfijnen vereist haardetectie die nog niet beschikbaar is
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Kleurtoonkubus
 	Brightness Cube	Helderheidskubus
@@ -4231,6 +4245,8 @@ curves	Smooth	Vloeiend maken
 	Grayscale Ramp	Grijswaardenbalk
 	Current Colors	Huidige kleuren
 	Make Ramp Web Safe	Balk beperken tot webkleuren
+	Select and Mask was closed: its document is no longer the active one	Selecteren en maskeren is gesloten: het document is niet meer het actieve document
+	Select and Mask was closed: another layer was selected	Selecteren en maskeren is gesloten: er is een andere laag geselecteerd
 # Art History Brush (#213).
 	Art History Brush Tool	Artistiek historiepenseel
 	Tight Short	Strak kort

@@ -746,9 +746,10 @@ fn toggle_last_state(s: &mut Session) -> Result<Value> {
     Ok(json!(if redo { s.redo() } else { s.undo() }))
 }
 
-/// Edit › Transform › Again: replay the last `edit.transform` on the active layer.
+/// Edit › Transform › Again: replay the last `edit.transform` on the selected layers (#6501).
 fn transform_again(s: &mut Session) -> Result<Value> {
-    let p = transform_again_params(s)?;
+    let ids = s.active().map(crate::transform_cmds::selection_targets).unwrap_or_default();
+    let p = transform_again_params(s, &ids)?;
     s.execute("edit.transform", p)
 }
 
@@ -756,8 +757,8 @@ fn transform_again(s: &mut Session) -> Result<Value> {
 /// last transform on the copy, as one history step, so pressing it again steps and repeats
 /// (#352). The transform is worked out before anything changes, so a refusal leaves no copy.
 fn transform_again_copy(s: &mut Session) -> Result<Value> {
-    let p = transform_again_params(s)?;
     let id = active_id(s)?;
+    let p = transform_again_params(s, &[id])?;
     let journal = s.journal.len();
     // The steps are recorded (Again on a Copy is not replayable itself): with one layer selected,
     // "duplicate the current layer" plays back on any document, a layer id only on this one.
@@ -780,8 +781,9 @@ fn transform_again_copy(s: &mut Session) -> Result<Value> {
     }
 }
 
-/// The `edit.transform` params that repeat the last transform on the active layer.
-fn transform_again_params(s: &Session) -> Result<Value> {
+/// The `edit.transform` params that repeat the last transform on the layers `ids` (their frame
+/// together is the box it starts from).
+fn transform_again_params(s: &Session, ids: &[LayerId]) -> Result<Value> {
     let (_, last) =
         s.journal.iter().rev().find(|(id, _)| id == "edit.transform").cloned().ok_or(EngineError::Other("there is no transform to repeat".into()))?;
     let (rect, quad) = (last.get("rect").cloned(), last.get("quad").cloned());
@@ -800,8 +802,8 @@ fn transform_again_params(s: &Session) -> Result<Value> {
             )
             .ok_or(EngineError::Other("the last transform can't be repeated".into()))?;
             let d = s.active().ok_or(EngineError::NoDocument)?;
-            let l = d.doc.layer(active_id(s)?).ok_or(EngineError::Other("no active layer".into()))?;
-            let b = crate::transform_cmds::transform_bounds(&d.doc, l);
+            d.doc.layer(active_id(s)?).ok_or(EngineError::Other("no active layer".into()))?;
+            let b = crate::transform_cmds::transform_bounds_of(&d.doc, ids);
             if b.is_empty() {
                 return Err(EngineError::Other("nothing to transform".into()));
             }

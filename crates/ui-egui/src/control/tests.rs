@@ -167,7 +167,7 @@ fn full_window_workspaces_are_modal_for_menu_invocations() {
     app.run("layer.new.layer", json!({})).unwrap();
     app.run("edit.fill", json!({"color":"#808080"})).unwrap();
     app.run("select.rect", json!({"x":8,"y":8,"width":8,"height":8})).unwrap();
-    for workspace in ["filter.liquify", "edit.contentAwareFill", "filter.filterGallery", "filter.adaptiveWideAngle"] {
+    for workspace in ["filter.liquify", "edit.contentAwareFill", "filter.filterGallery", "filter.adaptiveWideAngle", "select.selectAndMask"] {
         let opened = call(&mut app, &ctx, "ui.menu.invoke", json!({"id":workspace}));
         assert_eq!(opened["ok"], true, "{workspace}: {opened}");
         assert_eq!(crate::distort_ui::modal_workspace(&app), Some(workspace));
@@ -177,6 +177,7 @@ fn full_window_workspaces_are_modal_for_menu_invocations() {
             json!({"id":"select.all"}),
             json!({"id":"view.zoomIn"}),
             json!({"id":"filter.cameraRaw"}),
+            json!({"id":"filter.liquify"}),
             json!({"id":workspace,"params":{"ui":null}}),
         ] {
             let blocked = call(&mut app, &ctx, "ui.menu.invoke", request.clone());

@@ -367,9 +367,18 @@ fn stop(s: &mut Session, _p: &Value) -> Result<Value> {
 }
 
 /// A step Photoshop plays as a silent no-op although its menu item is greyed: Deselect with an
-/// open document and nothing selected (actions often start with it to clear any selection, #6744).
-fn noop_step(s: &Session, id: &str) -> bool {
-    id == "select.deselect" && s.active().is_some_and(|d| d.doc.selection.is_none())
+/// open document and nothing selected (actions often start with it to clear any selection, #6744),
+/// and an Arrange that can't move the layer, such as Bring to Front on a new adjustment layer that
+/// is already on top (#8453).
+fn noop_step(s: &Session, id: &str, params: &Value) -> bool {
+    let Some(d) = s.active() else { return false };
+    let dir = match id {
+        "select.deselect" => return d.doc.selection.is_none(),
+        "layer.arrange.bringForward" | "layer.arrange.bringToFront" => 1,
+        "layer.arrange.sendBackward" | "layer.arrange.sendToBack" => -1,
+        _ => return false,
+    };
+    crate::commands::layer_param(s, params).is_ok_and(|layer| super::ops::arrange_at_end(&d.doc, layer, dir))
 }
 
 fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<Value>) {
@@ -386,7 +395,7 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
             failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
             break;
         }
-        if noop_step(s, id) {
+        if noop_step(s, id, params) {
             ran += 1;
             continue;
         }

@@ -3666,6 +3666,21 @@ curves	Smooth	매끄럽게
 	Not rendered: this adjustment ({key}) is kept as imported.	렌더링되지 않음: 이 조정({key})은 가져온 상태 그대로 유지됩니다.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	선택 영역 지우기
+	Color Aware	색상 인식
+	Decontaminate Colors	색상 정화
+	Edge Detection	가장자리 감지
+	Global Refinements	전역 다듬기
+	High Quality Preview	고품질 미리 보기
+	Object Aware	개체 인식
+	Real-Time Refinement	실시간 다듬기
+	Refine Edge Brush Tool	가장자리 다듬기 브러시 도구
+	Refine Hair	머리카락 다듬기
+	Refine Mode	다듬기 모드
+	Remember Settings	설정 기억
+	View Mode	보기 모드
+	Object Aware needs a segmentation model, which isn't available yet	개체 인식에는 분할 모델이 필요하지만 아직 사용할 수 없습니다
+	Refine Hair needs hair detection, which isn't available yet	머리카락 다듬기에는 머리카락 감지가 필요하지만 아직 사용할 수 없습니다
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	색조 큐브
 	Brightness Cube	밝기 큐브
@@ -3683,6 +3698,8 @@ curves	Smooth	매끄럽게
 	Grayscale Ramp	회색 음영 램프
 	Current Colors	현재 색상
 	Make Ramp Web Safe	램프를 웹 안전 색상으로 만들기
+	Select and Mask was closed: its document is no longer the active one	선택 및 마스크가 닫혔습니다: 해당 문서가 더 이상 활성 문서가 아닙니다
+	Select and Mask was closed: another layer was selected	선택 및 마스크가 닫혔습니다: 다른 레이어가 선택되었습니다
 # Art History Brush (#213).
 	Art History Brush	아트 히스토리 브러시
 	Art History Brush Tool	아트 히스토리 브러시 도구

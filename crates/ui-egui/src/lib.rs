@@ -149,6 +149,7 @@ pub use dialogs::rasterize_prompt;
 pub use dialogs::replace_prompt;
 use dialogs::rgb_histogram;
 pub use dialogs::screen_picker;
+pub use dialogs::select_mask_ui;
 pub use dialogs::shape_dialog;
 pub(crate) use dialogs::shape_fill_ui;
 use dialogs::sizing;
@@ -747,6 +748,9 @@ mod transform_undo_tests;
 
 #[cfg(test)]
 mod transform_type_tests;
+
+#[cfg(test)]
+mod transform_several_tests;
 
 #[cfg(test)]
 mod psd_open_tests;

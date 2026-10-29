@@ -3117,6 +3117,21 @@ curves	Smooth	平滑
 	Not rendered: this adjustment ({key}) is kept as imported.	未渲染：此调整（{key}）按导入时的原样保留。
 # Print preview image (#8236)
 	Print preview image	打印预览图像
+	Clear Selection	清除选区
+	Color Aware	颜色识别
+	Decontaminate Colors	净化颜色
+	Edge Detection	边缘检测
+	Global Refinements	全局调整
+	High Quality Preview	高品质预览
+	Object Aware	对象识别
+	Real-Time Refinement	实时调整
+	Refine Edge Brush Tool	调整边缘画笔工具
+	Refine Hair	调整细线
+	Refine Mode	调整模式
+	Remember Settings	记住设置
+	View Mode	视图模式
+	Object Aware needs a segmentation model, which isn't available yet	对象识别需要分割模型，目前尚不可用
+	Refine Hair needs hair detection, which isn't available yet	调整细线需要毛发检测，目前尚不可用
 
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	色相立方体
@@ -3142,6 +3157,8 @@ curves	Smooth	平滑
 	Exported {path}	已导出 {path}
 	Exported {n} files	已导出 {n} 个文件
 	Driver: {driver}	驱动程序：{driver}
+	Select and Mask was closed: its document is no longer the active one	已关闭“选择与蒙版”：其文档不再是当前文档
+	Select and Mask was closed: another layer was selected	已关闭“选择与蒙版”：已选择另一个图层
 # Art History Brush (#213).
 	Art History Brush	艺术历史画笔
 	Art History Brush Tool	艺术历史画笔工具
