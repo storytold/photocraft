@@ -74,6 +74,7 @@ mod text_import;
 pub mod text_styles_map;
 pub mod tiff_layers;
 pub mod vector_map;
+pub mod vector_preview;
 mod xcf;
 pub mod xml;
 

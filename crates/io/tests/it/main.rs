@@ -38,6 +38,7 @@ mod layer_labels;
 mod layer_xmp;
 mod modes;
 mod multichannel;
+mod native_vector_preview;
 mod orientation;
 mod pattern_fill_psd;
 mod pcraft_manifest_name;

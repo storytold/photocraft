@@ -250,6 +250,53 @@ pub type ClipboardGetFn = Box<dyn FnMut() -> Result<Option<(u32, u32, Vec<u8>)>,
 /// Whether the last clipboard read found no way to reach the OS clipboard at all.
 pub type ClipboardUnreadableFn = Box<dyn Fn() -> bool>;
 
+/// An editor selected by the user, never an executable supplied by document metadata.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExternalSvgEditor {
+    /// A known VectorCraft installation, found by the desktop shell.
+    VectorCraft,
+    /// A known Adobe Illustrator installation (offered where the shell can discover one).
+    Illustrator,
+    /// The absolute path the user chose with "Other application": an executable, or on macOS
+    /// an application bundle. The shell validates it before starting anything.
+    Program(String),
+}
+
+/// An immutable saved source and optional display-only preview of those exact bytes.
+#[derive(Debug)]
+pub struct ExternalVectorSave {
+    /// The saved file in its original format (SVG, AI, PDF or EPS).
+    pub bytes: Vec<u8>,
+    /// For AI/PDF/EPS, an SVG rendering of `bytes` used only for display; `None` for SVG.
+    pub preview_svg: Option<Vec<u8>>,
+}
+
+/// A native editing session supplies stable saved source snapshots without blocking the UI.
+pub trait ExternalSvgSession {
+    /// Take the next settled save (its bytes) or error, if one is ready; never blocks.
+    fn poll(&mut self) -> Option<Result<Vec<u8>, String>>;
+    /// SVG-only services remain compatible; native services return source and preview together.
+    fn poll_vector(&mut self) -> Option<Result<ExternalVectorSave, String>> {
+        self.poll().map(|result| result.map(|bytes| ExternalVectorSave { bytes, preview_svg: None }))
+    }
+    /// No more snapshots can arrive, for example after the desktop chooser was cancelled.
+    fn finished(&self) -> bool {
+        false
+    }
+}
+
+/// An immutable embedded source. The shell keeps the original format in its owned working directory.
+#[derive(Clone)]
+pub struct ExternalVectorSource {
+    /// The embedded file, shared rather than copied.
+    pub bytes: std::sync::Arc<Vec<u8>>,
+    /// Its whitelisted format: `svg`, `ai`, `pdf` or `eps`.
+    pub extension: String,
+    /// The placed object's source-pixel frame, which a converted preview is fitted to.
+    pub size: Option<(f64, f64)>,
+}
+
+pub type OpenExternalSvgFn = Box<dyn FnMut(ExternalSvgEditor, ExternalVectorSource) -> Result<Box<dyn ExternalSvgSession>, String>>;
 /// Shared queue of (file name, bytes) delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
@@ -323,6 +370,8 @@ pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 /// I/O dependencies.
 #[derive(Default)]
 pub struct Services {
+    /// Explicit interactive SVG smart-object editing; unavailable in browser and automation.
+    pub open_external_svg: Option<OpenExternalSvgFn>,
     /// User-initiated desktop/browser pixel sampling.
     pub screen_pick: Option<screen_picker::Service>,
     /// Decode a file's bytes into a document (PSD, PNG, JPEG, …).

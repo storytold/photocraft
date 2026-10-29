@@ -1,6 +1,6 @@
 use super::{
-    DocId, PhotocraftApp, Tool, Value, actions, canvas, delete_layer_prompt, dock, gpu_canvas, jobs_ui, json, mask_trash_prompt, notices, panel_docking, state,
-    transform_tool, type_transform, vector_ui,
+    DocId, PhotocraftApp, Tool, Value, actions, canvas, delete_layer_prompt, dock, gpu_canvas, jobs_ui, json, mask_trash_prompt, notices, panel_docking,
+    smart_svg_ui, state, transform_tool, type_transform, vector_ui,
 };
 
 impl PhotocraftApp {
@@ -71,6 +71,9 @@ impl PhotocraftApp {
         }
         actions::suspended_guard(self, id)?;
         if let Some(result) = panel_docking::command(self, id, &params) {
+            return result;
+        }
+        if let Some(result) = smart_svg_ui::intercept(self, id, &params) {
             return result;
         }
         if let Some(r) = transform_tool::intercept(self, id) {

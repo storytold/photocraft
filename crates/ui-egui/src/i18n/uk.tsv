@@ -4141,6 +4141,7 @@ curves	Smooth	Згладити
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	Адаптер GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Вміст AI/PDF/EPS редагуватиметься як SVG. Збереження замінить вбудоване джерело; властивості початкового формату можуть змінитися.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Імпортувати стилі…

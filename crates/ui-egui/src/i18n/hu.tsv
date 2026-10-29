@@ -4347,6 +4347,16 @@ cameraRaw	Yellow	Sárga
 
 # Graphics Adapter preference (#1885)
 	GPU adapter	GPU-adapter
+smartSvg	Choose executable…	Futtatható fájl kiválasztása…
+smartSvg	Choose the application used to edit this SVG:	Válassza ki az SVG szerkesztésére használt alkalmazást:
+smartSvg	Edit SVG Smart Object	SVG intelligens objektum szerkesztése
+smartSvg	Other application	Másik alkalmazás
+smartSvg	PhotoCraft (internal editor)	PhotoCraft (belső szerkesztő)
+smartSvg	SVG editor opened. Save the SVG to update this Smart Object.	Az SVG-szerkesztő megnyílt. Mentse az SVG-t az intelligens objektum frissítéséhez.
+smartSvg	Save to the opened SVG file. Each saved change becomes one undo step in PhotoCraft.	Mentse a megnyitott SVG-fájlba. Minden mentett módosítás külön visszavonási lépés lesz a PhotoCraftban.
+smartSvg	Stop syncing this Smart Object	Az intelligens objektum szinkronizálásának leállítása
+smartSvg	Updates wait while another document or an editing dialog is active.	A frissítések várakoznak, amíg másik dokumentum vagy szerkesztési párbeszédablak aktív.
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Az AI/PDF/EPS tartalom SVG-ként szerkeszthető. A mentés lecseréli a beágyazott forrást; a formátumspecifikus tulajdonságok megváltozhatnak.
 
 # Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Stílusok importálása…

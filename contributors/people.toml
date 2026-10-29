@@ -205,6 +205,9 @@ sync_github_name = true
 [people.fjamesprice]
 sync_github_name = true
 
+[people.mockydevs]
+real_name = "Don Omondi"
+
 [people.ha1des]
 sync_github_name = true
 
