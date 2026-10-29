@@ -487,17 +487,24 @@ pub fn remap_surface(s: &Surface, map: impl Fn(i32, i32) -> (i32, i32)) -> Surfa
 /// Merge `upper` onto `lower` producing a raster layer (Layer → Merge Down).
 pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
     let format = doc.pixel_format();
-    let stack = vec![lower.clone(), upper.clone()];
-    let mut tmp = Document::new("merge", doc.size, format.mode, format.sample);
-    // The pair is read (and a CMYK one separated again) through the document's own profile.
-    tmp.icc_profile = doc.icc_profile.clone();
-    tmp.layers = stack;
+    // Photoshop keeps the lower layer's layer style live on the merged layer, where it
+    // re-applies to the merged pixels: bake the pair without it so it is not applied twice.
+    let mut bare_lower = lower.clone();
+    let style = std::mem::take(&mut bare_lower.effects);
+    // The pair is rendered with the document's own Global Light, patterns and colour profile,
+    // and read (and a CMYK one separated again) through that profile.
+    let mut tmp = doc.clone();
+    tmp.layers = vec![bare_lower, upper.clone()];
     // A Background stays canvas-sized; any other layer keeps the pixels outside the canvas (#5067).
     let s = if doc.is_background(lower.id) { composite_layers(&tmp, format, None) } else { composite_layers_uncropped(&tmp, format) };
     let mut merged = Layer::new(lower.name.clone(), LayerContent::Raster(s));
     merged.id = lower.id;
     merged.blend = lower.blend;
     merged.opacity = 1.0;
+    // And the fill: Photoshop inherits the lower layer's fill opacity onto the merged layer,
+    // so a zero-fill layer keeps its ink in the pixels but invisible, with only its style
+    // visible — instead of resetting the property (observed in the PR fixtures).
+    merged.fill_opacity = lower.fill_opacity;
     // Merge Down replaces the lower layer, so keep its editing restrictions.
     // In particular, a merged Background must remain opaque and position-locked.
     merged.locks = lower.locks;
@@ -506,5 +513,8 @@ pub fn merge_down(doc: &Document, lower: &Layer, upper: &Layer) -> Layer {
     merged.clipped = lower.clipped && upper.clipped;
     merged.label = lower.label;
     merged.link_group = lower.link_group;
+    // The fill opacity and the masks are in the pixels now; the layer style is kept, live, and
+    // recomposes over the union of both layers' content.
+    merged.effects = style;
     merged
 }
