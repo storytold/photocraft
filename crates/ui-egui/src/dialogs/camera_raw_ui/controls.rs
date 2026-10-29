@@ -350,7 +350,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 ("portrait".into(), tl!("PhotoCraft Portrait")),
                 ("monochrome".into(), tl!("PhotoCraft Monochrome")),
             ];
-            if widgets::dropdown(ui, "cr-color-profile", &mut profile, &profiles, 260.0)
+            if widgets::dropdown(ui, "cr-color-profile", tl!("Profile"), &mut profile, &profiles, 260.0)
                 && let Some(selected) = ColorProfile::from_id(&profile)
             {
                 p.profile = selected;
@@ -386,7 +386,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                         ("flash".into(), tl!("Flash")),
                     ];
                     ui.add_enabled_ui(!balance_busy, |ui| {
-                        if widgets::dropdown(ui, "cr-white-balance", &mut selected, &options, 260.0) {
+                        if widgets::dropdown(ui, "cr-white-balance", tl!("White Balance"), &mut selected, &options, 260.0) {
                             balance_change = RawWhiteBalance::from_id(&selected);
                         }
                     });

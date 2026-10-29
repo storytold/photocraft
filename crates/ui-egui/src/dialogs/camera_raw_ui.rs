@@ -43,14 +43,14 @@ pub use controls::show;
 use convert::open_pixels;
 pub use menu::menu;
 #[cfg(test)]
-use open::change_balance;
-#[cfg(test)]
 use open::{Coverage, commit_open_raw, document_index, finish_redevelop, open_raw, replace_raw_document};
 pub use open::{
     REDEVELOP_JOB, RawOpen, Redevelop, on_redevelop_event, open, open_smart_filter, opened_without_dialog, queue_open_dialog, wants_open_dialog,
     without_develop_note,
 };
 use open::{Target, non_defaults};
+#[cfg(test)]
+use open::{cancel, change_balance};
 use proxy::{ProxyFrame, ProxyJob};
 pub use sidecar::sidecar_path;
 #[cfg(test)]
