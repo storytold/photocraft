@@ -398,7 +398,10 @@ fn channel_readouts_read_ink_and_masked_percent() {
     let inside = channel_readouts(doc, 15, 15);
     assert_eq!(
         inside,
-        vec![ChannelReadout { name: "Ink Red".into(), spot: true, percent: 100 }, ChannelReadout { name: "Alpha 1".into(), spot: false, percent: 0 },]
+        vec![
+            ChannelReadout { name: "Ink Red".into(), spot: true, percent: 100, total_ink: true },
+            ChannelReadout { name: "Alpha 1".into(), spot: false, percent: 0, total_ink: true },
+        ]
     );
     let outside = channel_readouts(doc, 50, 50);
     assert_eq!(outside.iter().map(|c| c.percent).collect::<Vec<_>>(), vec![0, 100]);
@@ -416,7 +419,7 @@ fn sample_channels_command() {
     s.execute("select.rect", json!({"x": 0, "y": 0, "width": 50, "height": 80})).unwrap();
     s.execute("channel.newSpot", json!({"name": "Ink Blue", "color": "#0000ff"})).unwrap();
     let r = s.execute("document.sampleChannels", json!({"x": 10.7, "y": 3})).unwrap();
-    assert_eq!(r, json!([{"name": "Ink Blue", "spot": true, "percent": 100}]));
+    assert_eq!(r, json!([{"name": "Ink Blue", "spot": true, "percent": 100, "totalInk": true}]));
     let r = s.execute("document.sampleChannels", json!({"x": 60, "y": 3})).unwrap();
     assert_eq!(r[0]["percent"], 0);
     assert_eq!(s.execute("document.sampleChannels", json!({"x": 500, "y": 3})).unwrap(), json!([]), "off the canvas");
@@ -445,7 +448,7 @@ fn list_reports_every_readout_and_the_channels() {
     assert_eq!(p[0]["opacity"], 100);
     assert_eq!(p[0]["totalInk"], p[0]["cmyk"].as_array().unwrap().iter().map(|v| v.as_i64().unwrap()).sum::<i64>());
     assert_eq!(p[0]["lab"][0], 54);
-    assert_eq!(p[0]["channels"], json!([{"name": "Ink Red", "spot": true, "percent": 100}]));
+    assert_eq!(p[0]["channels"], json!([{"name": "Ink Red", "spot": true, "percent": 100, "totalInk": true}]));
     assert_eq!(p[1]["channels"][0]["percent"], 0);
     assert_eq!((p[0]["totalSpotInk"].as_i64(), p[1]["totalSpotInk"].as_i64()), (Some(100), Some(0)), "Total Spot Ink per point");
 }
@@ -468,4 +471,29 @@ fn lab_readout_follows_the_document_profile() {
     assert_eq!(readouts(&s.active().unwrap().doc, [1.0, 1.0, 1.0, 1.0]).lab, [100, 0, 0], "white is white in any RGB profile");
     s.execute("view.colorSamplers.add", json!({"x": 1, "y": 1})).unwrap();
     assert_eq!(points(&mut s)[0]["lab"], json!([100, 0, 0]), "points read the same way");
+}
+
+/// A spot channel taken out of Total Spot Ink in Channel Options (a substrate such as the shirt)
+/// still reads its own percentage but no longer adds to the total, on the pointer and the points.
+#[test]
+fn channel_options_total_ink_flag_excludes_a_substrate_from_total_spot_ink() {
+    let mut s = session();
+    s.execute("select.all", json!({})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Shirt", "color": "#202020"})).unwrap();
+    s.execute("channel.newSpot", json!({"name": "Flame", "color": "#ff4000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("view.colorSamplers.add", json!({"x": 5, "y": 5})).unwrap();
+    assert_eq!(points(&mut s)[0]["totalSpotInk"], 200, "both inks solid");
+    s.execute("channel.options", json!({"channel": "Shirt", "totalInk": false})).unwrap();
+    let p = points(&mut s);
+    assert_eq!(p[0]["totalSpotInk"], 100, "the shirt no longer counts");
+    assert_eq!(p[0]["channels"][0], json!({"name": "Shirt", "spot": true, "percent": 100, "totalInk": false}), "but still reads");
+    let doc = &s.active().unwrap().doc;
+    assert!(!doc.channels[0].total_ink && doc.channels[1].total_ink);
+    assert_eq!(total_spot_ink(&channel_readouts(doc, 5, 5)), 100);
+    assert_eq!(s.execute("channel.list", json!({})).unwrap()["alpha"].as_array().map(|c| c.iter().filter(|c| c["totalInk"] == false).count()), Some(1));
+    // Undo brings it back; a non-boolean is an error.
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(s.active().unwrap().doc.channels[0].total_ink, "undone");
+    assert!(s.execute("channel.options", json!({"channel": "Shirt", "totalInk": "no"})).is_err());
 }

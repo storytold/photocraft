@@ -77,6 +77,7 @@ pub fn channels_json(st: &DocState) -> Value {
             "name": c.name,
             "visible": v.alpha_shown(i),
             "spot": c.spot.map(|(col, sol)| json!({ "color": col.to_rgb(), "solidity": sol })),
+            "totalInk": c.total_ink,
             "color": c.color.to_rgb(),
             "opacity": c.opacity,
             "indicates": c.indicates,
@@ -224,7 +225,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Channel Options…",
             [],
             None,
-            r##"{"channel":index|name|"quickMask"|"mask","name":str?,"indicates":"masked|selected|spot"?,"color":"#rrggbb"?,"opacity":0..100?,"solidity":0..100?} ("mask": Layer Mask Display Options, the rubylith's color and opacity for every layer mask, kept in the preferences as layerMaskOverlay; not an undo step; returns them as layerMaskOverlay)"##,
+            r##"{"channel":index|name|"quickMask"|"mask","name":str?,"indicates":"masked|selected|spot"?,"color":"#rrggbb"?,"opacity":0..100?,"solidity":0..100?,"totalInk":bool?} (`totalInk`: Include in Total Spot Ink, the Info panel readout; off for a substrate such as a shirt; "mask": Layer Mask Display Options, the rubylith's color and opacity for every layer mask, kept in the preferences as layerMaskOverlay; not an undo step; returns them as layerMaskOverlay)"##,
             has_doc,
             options
         ),
