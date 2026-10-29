@@ -17,6 +17,8 @@ use crate::tone::{self, HistSource};
 const PREFIX: &str = "image.adjustments.";
 const CURVE_PICKER: &str = "__curvePicker";
 const CURVE_PICKER_BASE: &str = "__curvePickerBase";
+/// Set once a Photo Filter dialog has drawn: its editor memory was refreshed for this opening.
+const PHOTO_FILTER_FRESH: &str = "__photoFilterFresh";
 
 fn picker(value: Option<&Value>) -> Option<photocraft_engine::adjust_params::CurvesEyedropper> {
     use photocraft_engine::adjust_params::CurvesEyedropper;
@@ -261,8 +263,19 @@ pub fn reset(app: &PhotocraftApp, ctx: &egui::Context, fields: &mut Map<String, 
     }
 }
 
-/// Opens the dialog for `command` with the kind's neutral settings.
+/// Adjustments whose dialog opens at the settings last confirmed in it, as Photoshop's Photo
+/// Filter keeps its filter and density from one use to the next (#9879). The others open at their
+/// neutral settings, and ⌥ reopens them at the last ones ([`open_last`]).
+const REMEMBERS_LAST: &[&str] = &["photoFilter"];
+
+/// Opens the dialog for `command`: at its last confirmed settings for the [`REMEMBERS_LAST`]
+/// kinds, else at the kind's neutral ones.
 pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
+    if command.strip_prefix(PREFIX).is_some_and(|kind| REMEMBERS_LAST.contains(&kind)) { open_last(app, command) } else { open_neutral(app, command) }
+}
+
+/// Opens the dialog for `command` with the kind's neutral settings.
+pub fn open_neutral(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     let kind = command.strip_prefix(PREFIX).filter(|k| adjust_editors::has_editor(k))?;
     let spec = photocraft_engine::commands::find(command)?;
     let mode = curve_mode(app, kind);
@@ -283,7 +296,7 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
 /// adjustment's shortcut, ⌥⌘L / ⌥⌘M, #8900), or at the neutral ones when there are none or they
 /// don't fit the current colour mode.
 pub fn open_last(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
-    let id = open(app, command)?;
+    let id = open_neutral(app, command)?;
     let kind = command.strip_prefix(PREFIX).unwrap_or_default();
     let mode = curve_mode(app, kind);
     let Some(last) = app.session.prefs().dialogs.get(command).cloned() else { return Some(id) };
@@ -293,6 +306,22 @@ pub fn open_last(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         dialog.fields.extend(values);
     }
     Some(id)
+}
+
+/// `params` of the adjustment `command` with the keys the dialog would otherwise fill in wrongly:
+/// a recorded Photo Filter that names only its `filter` gets that preset's `color`, not the
+/// dialog's neutral one. Every recorded value is kept as it was (a round trip through the engine
+/// would rewrite them: float colours as hex, a pencil curve smoothed again). `None` when nothing
+/// needs adding, or for params the engine rejects.
+pub(crate) fn complete_params(app: &PhotocraftApp, command: &str, params: &Value) -> Option<Value> {
+    let kind = command.strip_prefix(PREFIX).filter(|k| *k == "photoFilter")?;
+    // A `null` colour reads as none, as the engine reads it.
+    let recorded = params.as_object().filter(|p| p.contains_key("filter") && p.get("color").is_none_or(Value::is_null))?;
+    let adjustment = photocraft_engine::adjust_params::from_params(kind, params, None, curve_mode(app, kind)).ok()?;
+    let color = photocraft_engine::adjust_params::to_params(&adjustment).get("color").cloned()?;
+    let mut done = recorded.clone();
+    done.insert("color".into(), color);
+    Some(Value::Object(done))
 }
 
 /// Remember an adjustment dialog's settings after a successful OK, for [`open_last`]. Editing a
@@ -329,6 +358,12 @@ fn curve_mode(app: &PhotocraftApp, kind: &str) -> photocraft_doc::ColorMode {
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let kind = fields.get("__adjust").and_then(Value::as_str).unwrap_or_default().to_string();
     let mode = curve_mode(app, &kind);
+    // Each opening starts from the settings it opened at: Photo Filter's Filter / Color choice
+    // follows its colour, whatever a cancelled opening left in the editor memory.
+    if kind == "photoFilter" && !fields.contains_key(PHOTO_FILTER_FRESH) {
+        adjust_editors::forget_photo_filter_mode(ui.ctx(), dialog_mem(&kind));
+        fields.insert(PHOTO_FILTER_FRESH.into(), json!(false));
+    }
     if matches!(kind.as_str(), "levels" | "curves") {
         picker_controls(ui, fields, mode);
         ui.add_space(4.0);

@@ -483,7 +483,8 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
             return;
         }
     };
-    let Some(id) = crate::adjust_dialog::open(app, &f.command).or_else(|| {
+    // A smart filter's dialog shows the filter's own settings, never the last-used ones.
+    let Some(id) = crate::adjust_dialog::open_neutral(app, &f.command).or_else(|| {
         let id = crate::filter_dialog::has_dialog(&f.command).then(|| crate::filter_dialog::open(app, &f.command)).flatten()?;
         // The filter dialog opens on the user's last-used values; a recorded filter that lacks a
         // key must show (and save) the schema default instead.
@@ -494,9 +495,12 @@ pub fn open_editor(app: &mut PhotocraftApp, ctx: &egui::Context, layer: u64, sm:
     }) else {
         return;
     };
+    // A recorded Photo Filter that names only its preset gets the preset's colour, which the
+    // dialog would otherwise fill in with its neutral one; recorded values stay as they were.
+    let params = crate::adjust_dialog::complete_params(app, &f.command, &f.params).unwrap_or_else(|| f.params.clone());
     if let Some(d) = app.ui.dialog_mut(id) {
         d.fields.insert("__smartFilter".into(), target);
-        if let Value::Object(p) = &f.params {
+        if let Value::Object(p) = &params {
             for (k, v) in p {
                 if !k.starts_with("__") {
                     d.fields.insert(k.clone(), v.clone());
