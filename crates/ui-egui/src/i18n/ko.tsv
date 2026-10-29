@@ -4228,3 +4228,4 @@ shape	Appearance	화면 모양
 	Content-aware fill	내용 기반 채우기
 	Sample content from part of the image and use it to fill a small area	이미지의 일부에서 내용을 샘플링하여 작은 영역 채우기
 	Reset the crop box, image rotation, and aspect ratio settings	자르기 프레임, 이미지 회전 및 종횡비 재설정
+	Include in Total Spot Ink	총 별색 잉크에 포함

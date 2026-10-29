@@ -4319,3 +4319,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Content-aware fill	コンテンツに応じた塗りつぶし
 	Sample content from part of the image and use it to fill a small area	画像の一部から内容をサンプリングして小さな領域を塗りつぶす
 	Reset the crop box, image rotation, and aspect ratio settings	切り抜き枠、画像の回転、アスペクト比をリセット
+	Include in Total Spot Ink	スポットインク総量に含める

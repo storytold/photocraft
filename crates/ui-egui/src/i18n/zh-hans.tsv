@@ -3350,3 +3350,4 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Content-aware fill	内容识别填充
 	Sample content from part of the image and use it to fill a small area	从图像的一部分取样内容来填充小区域
 	Reset the crop box, image rotation, and aspect ratio settings	重置裁剪框、图像旋转和宽高比
+	Include in Total Spot Ink	计入专色油墨总量

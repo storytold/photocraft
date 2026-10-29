@@ -4669,3 +4669,4 @@ shape	Appearance	Apparence
 	Content-aware fill	Remplissage basé sur le contenu
 	Sample content from part of the image and use it to fill a small area	Prélever le contenu d'une partie de l'image pour remplir une petite zone
 	Reset the crop box, image rotation, and aspect ratio settings	Réinitialiser le cadre de recadrage, la rotation de l'image et le format
+	Include in Total Spot Ink	Inclure dans l'encrage total des tons directs

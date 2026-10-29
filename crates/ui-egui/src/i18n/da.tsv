@@ -4850,3 +4850,4 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Content-aware fill	Indholdsbaseret udfyldning
 	Sample content from part of the image and use it to fill a small area	Hent indhold fra en del af billedet for at fylde et lille område
 	Reset the crop box, image rotation, and aspect ratio settings	Nulstil beskæringsrammen, billedrotationen og billedformatet
+	Include in Total Spot Ink	Medtag i samlet spotfarve
