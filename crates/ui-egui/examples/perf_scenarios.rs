@@ -1306,8 +1306,78 @@ fn full_layer_doc(w: u32, h: u32, depth: u32) -> Res<(Session, u64)> {
     Ok((s, layer))
 }
 
-/// #9329 PR A: the redraw area of edits on a full-canvas layer, where redrawing the whole
-/// document is the expensive cliff. Each row checks it hits that path and prints `refresh px`.
+/// The index of `layer` among the document's top-level layers (bottom first).
+fn top_index(s: &Session, layer: u64) -> Res<usize> {
+    let doc = &s.active().ok_or("no document")?.doc;
+    doc.layers.iter().position(|l| l.id.0 == layer).ok_or_else(|| "layer is not top-level".to_string())
+}
+
+/// The composite pixel at (`x`, `y`).
+fn composite_px(s: &Session, x: i32, y: i32) -> Res<Vec<f32>> {
+    let doc = &s.active().ok_or("no document")?.doc;
+    Ok(photocraft_compose::render(doc, Rect::new(x, y, x + 1, y + 1)).px.first().ok_or("empty render")?.to_vec())
+}
+
+/// #9329 PR B: the layered document with a Curves above panel 2, masked to a small rect inside
+/// the panel. Returns the session, the Curves and a probe point inside the mask.
+fn masked_curves_doc(w: u32, h: u32) -> Res<(Session, u64, (i32, i32))> {
+    let (mut s, _) = layered_doc(w, h)?;
+    let panel = s.active().ok_or("no document")?.doc.layers.iter().find(|l| l.name == "panel 2").map(|l| l.id.0).ok_or("no panel 2")?;
+    exec(&mut s, "layer.select", json!({"layer": panel}))?;
+    let (x, y, mw, mh) = (2 * w / 3 + w / 12, h / 8, w / 10, h / 10);
+    exec(&mut s, "select.rect", json!({"x": x, "y": y, "width": mw, "height": mh}))?;
+    let curves =
+        exec(&mut s, "layer.newAdjustmentLayer.curves", json!({"points": [[0, 0], [90, 170], [255, 255]]}))?["layer"].as_u64().ok_or("no curves id")?;
+    exec(&mut s, "select.deselect", json!({}))?;
+    let doc = s.active().ok_or("no document")?.doc.clone();
+    let above = doc.layers.len() - 1 - top_index(&s, curves)?;
+    if above < 4 {
+        return Err(format!("path check: {above} layers above the Curves, not >= 4 (the prefix cache would cover it)"));
+    }
+    let mask = doc.layer(photocraft_doc::LayerId(curves)).and_then(|l| l.mask.as_ref()).ok_or("path check: the Curves has no mask")?;
+    let share = coverage(&doc, mask.surface.content_bounds());
+    if mask.value(0, 0) != 0.0 || share > 0.05 {
+        return Err(format!("path check: the mask reveals {:.2} % of the canvas, not <= 5 %", share * 100.0));
+    }
+    let probe = ((x + mw / 2) as i32, (y + mh / 2) as i32);
+    let shown = composite_px(&s, probe.0, probe.1)?;
+    exec(&mut s, "layer.setProps", json!({"layer": curves, "visible": false}))?;
+    let hidden = composite_px(&s, probe.0, probe.1)?;
+    exec(&mut s, "layer.setProps", json!({"layer": curves, "visible": true}))?;
+    if shown == hidden {
+        return Err("path check: toggling the Curves changes no pixel inside its mask".into());
+    }
+    Ok((s, curves, probe))
+}
+
+/// #9329 PR B: the many-layer document with a small layer added directly above `mid`,
+/// overlapping it. Returns the session, `mid` and the neighbour.
+fn reorder_doc(w: u32, h: u32, n: usize) -> Res<(Session, u64, u64)> {
+    let (mut s, mid) = many_layers_doc(w, h, n)?;
+    let mb = layer_bounds(&s, mid)?;
+    exec(&mut s, "layer.select", json!({"layer": mid}))?;
+    exec(&mut s, "layer.new.layer", json!({"name": "neighbour"}))?;
+    let next = active_layer(&s)?;
+    exec(&mut s, "select.rect", json!({"x": mb.x0 + mb.size().width as i32 / 3, "y": mb.y0 + mb.size().height as i32 / 3, "width": w / 10, "height": h / 10}))?;
+    exec(&mut s, "edit.fill", json!({"color": "#3050d0"}))?;
+    exec(&mut s, "select.deselect", json!({}))?;
+    exec(&mut s, "layer.select", json!({"layer": mid}))?;
+    let doc = s.active().ok_or("no document")?.doc.clone();
+    let share = coverage(&doc, mb);
+    if share > 0.02 {
+        return Err(format!("path check: the layer covers {:.2} % of the canvas, not <= 2 %", share * 100.0));
+    }
+    if top_index(&s, next)? != top_index(&s, mid)? + 1 {
+        return Err("path check: the neighbour is not directly above the layer".into());
+    }
+    if layer_bounds(&s, next)?.intersect(&mb).is_empty() {
+        return Err("path check: the layer does not overlap the neighbour it passes".into());
+    }
+    Ok((s, mid, next))
+}
+
+/// #9329: the redraw area of edits where redrawing the whole document is the expensive cliff
+/// (PR A: full-canvas layers; PR B: a masked adjustment mid-stack and a reorder). Each row checks it hits that path and prints `refresh px`.
 fn redraw_area_scenarios(b: &mut Bench, sz: &Sizes) {
     let undo = "undo a brush dab on a full-canvas 16-bit 15000x10000 layer + refresh";
     if b.wanted(undo) {
@@ -1368,6 +1438,51 @@ fn redraw_area_scenarios(b: &mut Bench, sz: &Sizes) {
                     let after = s.active().ok_or("no document")?.doc.clone();
                     if photocraft_engine::layer_multi_cmds::step_damage(&before, &after).is_some_and(|r| r.is_empty()) {
                         return Err("path check: the fill changed no pixels".into());
+                    }
+                    Ok(took)
+                });
+            }
+        }
+    }
+
+    let toggle = "toggle a masked adjustment mid-stack in the layered document + refresh";
+    if b.wanted(toggle) {
+        b.current = Some(toggle.to_string());
+        let (w, h) = sz.layered;
+        match masked_curves_doc(w, h) {
+            Err(e) => b.errors.push((toggle.to_string(), e)),
+            Ok((mut s, curves, _)) => {
+                let _ = b.refresh(&s, true);
+                let reps = b.reps;
+                b.time(toggle, &mut s, reps, true, |b, s, i| {
+                    let t = Instant::now();
+                    exec(s, "layer.setProps", json!({"layer": curves, "visible": i % 2 == 1}))?;
+                    let took = ms(t) + b.refresh(s, false)?;
+                    b.px.borrow_mut().push(b.last_px.get());
+                    Ok(took)
+                });
+            }
+        }
+    }
+
+    let reorder = "bring forward / send backward a small layer in the many-layer document + refresh";
+    if b.wanted(reorder) {
+        b.current = Some(reorder.to_string());
+        let (w, h) = sz.layered;
+        match reorder_doc(w, h, sz.many_layers) {
+            Err(e) => b.errors.push((reorder.to_string(), e)),
+            Ok((mut s, mid, _)) => {
+                let _ = b.refresh(&s, true);
+                let reps = b.reps;
+                b.time(reorder, &mut s, reps, true, |b, s, i| {
+                    let before = top_index(s, mid)?;
+                    let cmd = if i % 2 == 0 { "layer.arrange.bringForward" } else { "layer.arrange.sendBackward" };
+                    let t = Instant::now();
+                    exec(s, cmd, json!({"layer": mid}))?;
+                    let took = ms(t) + b.refresh(s, false)?;
+                    b.px.borrow_mut().push(b.last_px.get());
+                    if top_index(s, mid)? == before {
+                        return Err("path check: the layer's index did not change".into());
                     }
                     Ok(took)
                 });

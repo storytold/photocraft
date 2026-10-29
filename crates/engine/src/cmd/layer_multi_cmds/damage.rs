@@ -1,4 +1,5 @@
-use super::{Document, Layer, LayerContent, Rect, Session, VideoData};
+use super::{Document, Layer, LayerContent, LayerId, Rect, Session, VideoData};
+use photocraft_compose::Ancestors;
 
 /// Calls `f` with the rect of every tile that differs between two surfaces of the same format and
 /// default pixel: a tile only one side has, or a different copy-on-write tile pointer at the same
@@ -380,9 +381,9 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
 /// [`one_sided_bounds`]); one that draws nothing ([`inert_at`]) changes nothing. `None`
 /// (composite everything) when the step touched anything the layer walk cannot bound:
 /// document-level fields the compositor reads (canvas size, mode, depth, profile, global light,
-/// patterns, channels, palettes), layer order and kind changes, layers added or removed that
-/// reach outside their own bounds, layer properties that do (clipping, excluded channels —
-/// what `layer.setProps` already reports as unbounded), and video layers. Inserting a copy of a
+/// patterns, channels, palettes), kind changes, reorders of clipped layers, layers added or
+/// removed that reach outside their own bounds, clipping or channel exclusion on a group, and
+/// video layers. A reorder damages the moved layers at both ends ([`moved_ids`]). Inserting a copy of a
 /// 12 MP layer used to recomposite every layer of the document (#2883, P8/P9 in
 /// `perf/budgets.toml`).
 ///
@@ -393,8 +394,6 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
     if !doc_pixels_equal(a, b) {
         return None;
     }
-    /// The list holding a sibling list's parent group, and the group's index there.
-    type Outer<'d> = Option<(&'d [Layer], usize)>;
     /// What the groups around a sibling list add to a change inside it: the summed reach of
     /// their effects, and whether any lays effects out over its frame.
     #[derive(Clone, Copy)]
@@ -402,21 +401,63 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
         reach: i32,
         spans_frame: bool,
     }
-    fn walk(xs: &[Layer], ys: &[Layer], (ox, oy): (Outer, Outer), around: Around, a: &Document, b: &Document, out: &mut Rect) -> bool {
+    fn add(out: &mut Rect, r: Rect) {
+        if !r.is_empty() {
+            *out = if out.is_empty() { r } else { out.union(&r) };
+        }
+    }
+    fn walk<'d>(
+        xs: &'d [Layer],
+        ys: &'d [Layer],
+        (px, py): (&Ancestors<'d>, &Ancestors<'d>),
+        around: Around,
+        a: &Document,
+        b: &Document,
+        out: &mut Rect,
+    ) -> bool {
+        let depth = b.depth;
+        // The effects of the groups around reach past a change inside them (a parent's drop shadow).
+        let grow = |r: Rect, canvas: Rect| if r.is_empty() { r } else { r.inflate(around.reach).intersect(&canvas) };
         // Pair the layers by id, stepping over layers only one side has: one that draws nothing
         // changes no pixels (a new empty layer or group, #1771), any other only where it draws.
-        let one_sided = |layers: &[Layer], k: usize, outer: Outer, canvas: Rect, out: &mut Rect| {
-            let Some(r) = one_sided_bounds(layers, k, outer, canvas) else { return false };
-            if !r.is_empty() {
-                *out = if out.is_empty() { r } else { out.union(&r) };
-            }
+        let one_sided = |layers: &[Layer], k: usize, path: &Ancestors, canvas: Rect, out: &mut Rect| {
+            let Some(r) = one_sided_bounds(layers, k, path, depth, canvas) else { return false };
+            add(out, grow(r, canvas));
             true
         };
+        // A reorder: the layers that moved change pixels only where they draw (or, for an
+        // adjustment, reach) at each end, as hiding them there and showing them here would.
+        let Some(moved) = moved_ids(xs, ys) else { return false };
+        for &id in &moved {
+            let (Some(xk), Some(yk)) = (xs.iter().position(|l| l.id == id), ys.iter().position(|l| l.id == id)) else { return false };
+            let (x, y) = (&xs[xk], &ys[yk]);
+            // A clipped layer changes base when it moves, and a layer moving to or from below
+            // clipped layers changes theirs.
+            let clips = |ls: &[Layer], k: usize| ls[k].clipped || ls.get(k + 1).is_some_and(|above| above.clipped);
+            if clips(xs, xk) || clips(ys, yk) || !contained(x, 0) || !contained(y, 0) {
+                return false;
+            }
+            let (Some(bx), Some(by)) =
+                (photocraft_compose::change_bounds_in(xs, xk, px, depth, a.bounds()), photocraft_compose::change_bounds_in(ys, yk, py, depth, b.bounds()))
+            else {
+                return false;
+            };
+            add(out, grow(bx, a.bounds()));
+            add(out, grow(by, b.bounds()));
+        }
         let (mut i, mut j) = (0, 0);
         loop {
             let (x, y) = match (xs.get(i), ys.get(j)) {
                 (None, None) => return true,
                 (Some(x), Some(y)) if x.id == y.id => (x, y),
+                (Some(x), _) if moved.contains(&x.id) => {
+                    i += 1;
+                    continue;
+                }
+                (_, Some(y)) if moved.contains(&y.id) => {
+                    j += 1;
+                    continue;
+                }
                 _ if inert_at(ys, j) => {
                     j += 1;
                     continue;
@@ -426,20 +467,20 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
                     continue;
                 }
                 (_, Some(y)) if xs.iter().all(|x| x.id != y.id) => {
-                    if !one_sided(ys, j, oy, b.bounds(), out) {
+                    if !one_sided(ys, j, py, b.bounds(), out) {
                         return false;
                     }
                     j += 1;
                     continue;
                 }
                 (Some(x), _) if ys.iter().all(|y| y.id != x.id) => {
-                    if !one_sided(xs, i, ox, a.bounds(), out) {
+                    if !one_sided(xs, i, px, a.bounds(), out) {
                         return false;
                     }
                     i += 1;
                     continue;
                 }
-                // Both sides have the layer, in another order.
+                // Both sides have the layer, in another order (`moved_ids` pairs the rest).
                 _ => return false,
             };
             let (xk, yk) = (i, j);
@@ -448,17 +489,33 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
             if x.video.is_some() || y.video.is_some() {
                 return false;
             }
-            // Clipping and channel exclusion change how *other* layers render, outside this
-            // layer's own bounds; they have no bounded damage.
-            if x.clipped != y.clipped || x.excluded_channels != y.excluded_channels {
+            // Clipping and channel exclusion on a group change how it composites its children;
+            // they have no bounded damage. Channel exclusion on any other layer is per pixel where
+            // it draws, which its change bounds below cover.
+            if (x.clipped != y.clipped || x.excluded_channels != y.excluded_channels) && (x.children().is_some() || y.children().is_some()) {
                 return false;
+            }
+            if x.clipped != y.clipped {
+                // The clipped layers directly above change base too (from this layer to the one
+                // beneath it, or back). A group base composites differently with clipped layers
+                // (a pass-through one holding an adjustment then renders isolated), so not that.
+                let base_is_group = |ls: &[Layer], k: usize| ls[..k].iter().rev().find(|l| !l.clipped).is_some_and(|l| l.children().is_some());
+                if base_is_group(xs, xk) || base_is_group(ys, yk) {
+                    return false;
+                }
+                for (ls, k, path, d) in [(xs, xk, px, a), (ys, yk, py, b)] {
+                    for c in (k + 1..ls.len()).take_while(|&c| ls[c].clipped) {
+                        let Some(r) = photocraft_compose::change_bounds_in(ls, c, path, depth, d.bounds()) else { return false };
+                        add(out, r);
+                    }
+                }
             }
             let tiles = tile_damage(x, y);
             if tiles != Some(Rect::EMPTY) {
                 // Both sides' extents: a move changes pixels where it left and where it landed.
                 // A clipped adjustment reaches as far as its base (#6535).
                 let (Some(bx), Some(by)) =
-                    (photocraft_compose::change_bounds_in(xs, xk, ox, a.bounds()), photocraft_compose::change_bounds_in(ys, yk, oy, b.bounds()))
+                    (photocraft_compose::change_bounds_in(xs, xk, px, depth, a.bounds()), photocraft_compose::change_bounds_in(ys, yk, py, depth, b.bounds()))
                 else {
                     return false;
                 };
@@ -482,7 +539,8 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
                         reach: around.reach.saturating_add(reach(x).max(reach(y))),
                         spans_frame: around.spans_frame || photocraft_compose::effects::spans_frame(x) || photocraft_compose::effects::spans_frame(y),
                     };
-                    if !walk(xc, yc, (Some((xs, xk)), Some((ys, yk))), inner, a, b, out) {
+                    let (qx, qy): (Vec<_>, Vec<_>) = (px.iter().copied().chain([(xs, xk)]).collect(), py.iter().copied().chain([(ys, yk)]).collect());
+                    if !walk(xc, yc, (&qx, &qy), inner, a, b, out) {
                         return false;
                     }
                 }
@@ -492,7 +550,49 @@ pub fn step_damage(a: &Document, b: &Document) -> Option<Rect> {
         }
     }
     let mut out = Rect::EMPTY;
-    if walk(&a.layers, &b.layers, (None, None), Around { reach: 0, spans_frame: false }, a, b, &mut out) { Some(out) } else { None }
+    if walk(&a.layers, &b.layers, (&[], &[]), Around { reach: 0, spans_frame: false }, a, b, &mut out) { Some(out) } else { None }
+}
+
+/// The layers both sibling lists hold that changed places (`None` when the lists are too long to
+/// compare): those outside a longest common subsequence of the ids both sides have, so a bring
+/// forward moves one layer, not every layer it passes.
+fn moved_ids(xs: &[Layer], ys: &[Layer]) -> Option<Vec<LayerId>> {
+    use std::collections::HashSet;
+    if xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| x.id == y.id) {
+        return Some(Vec::new());
+    }
+    let in_y: HashSet<LayerId> = ys.iter().map(|l| l.id).collect();
+    let cx: Vec<LayerId> = xs.iter().map(|l| l.id).filter(|id| in_y.contains(id)).collect();
+    let in_x: HashSet<LayerId> = cx.iter().copied().collect();
+    let cy: Vec<LayerId> = ys.iter().map(|l| l.id).filter(|id| in_x.contains(id)).collect();
+    if cx == cy {
+        return Some(Vec::new());
+    }
+    let (n, m) = (cx.len(), cy.len());
+    // An O(n·m) table: past a few million cells, call it unbounded instead.
+    if n.saturating_mul(m) > 4_000_000 {
+        return None;
+    }
+    let w = m + 1;
+    let mut t = vec![0u32; (n + 1) * w];
+    for i in (0..n).rev() {
+        for j in (0..m).rev() {
+            t[i * w + j] = if cx[i] == cy[j] { t[(i + 1) * w + j + 1] + 1 } else { t[(i + 1) * w + j].max(t[i * w + j + 1]) };
+        }
+    }
+    let (mut i, mut j, mut kept) = (0, 0, HashSet::new());
+    while i < n && j < m {
+        if cx[i] == cy[j] {
+            kept.insert(cx[i]);
+            i += 1;
+            j += 1;
+        } else if t[(i + 1) * w + j] >= t[i * w + j + 1] {
+            i += 1;
+        } else {
+            j += 1;
+        }
+    }
+    Some(cx.into_iter().filter(|id| !kept.contains(id)).collect())
 }
 
 /// How many tiles that differ between `before` and `after` (in the surfaces of layers both have)
@@ -532,22 +632,26 @@ fn tile_damage(a: &Layer, b: &Layer) -> Option<Rect> {
     Some(if tiles.is_empty() || margin == 0 { tiles } else { tiles.inflate(margin) })
 }
 
+/// Neither `l` nor anything inside it is a video layer or excludes channels.
+fn contained(l: &Layer, depth: usize) -> bool {
+    depth < 256 && l.video.is_none() && l.excluded_channels == 0 && l.children().is_none_or(|c| c.iter().all(|c| contained(c, depth + 1)))
+}
+
 /// The pixels adding or removing `layers[k]` can change, when that is bounded: its change bounds
-/// (`photocraft_compose::change_bounds_in`: not for an unclipped adjustment, or a pass-through
-/// group holding one; a clipped adjustment's are its base's), provided it isn't the clipping base
+/// (`photocraft_compose::change_bounds_in`: an unclipped adjustment's cover the layers beneath it
+/// in its isolation scope; a clipped adjustment's are its base's), provided it isn't the clipping base
 /// of clipped layers above it (they would change base), and neither it nor anything inside it is
-/// a video layer or excludes channels (both reach outside the layer's bounds, see
-/// [`step_damage`]).
-fn one_sided_bounds(layers: &[Layer], k: usize, outer: Option<(&[Layer], usize)>, canvas: Rect) -> Option<Rect> {
-    fn contained(l: &Layer, depth: usize) -> bool {
-        depth < 256 && l.video.is_none() && l.excluded_channels == 0 && l.children().is_none_or(|c| c.iter().all(|c| contained(c, depth + 1)))
-    }
+/// a video layer (it reaches outside the layer's bounds, see [`step_damage`]) or excludes
+/// channels. Channel exclusion is per pixel where the layer draws, so it doesn't actually reach
+/// further (`step_damage` bounds a property change of it that way); here it stays unbounded only
+/// to be conservative.
+fn one_sided_bounds(layers: &[Layer], k: usize, ancestors: &Ancestors, depth: photocraft_color::SampleType, canvas: Rect) -> Option<Rect> {
     let l = layers.get(k)?;
     let new_base = !l.clipped && layers.get(k + 1).is_some_and(|above| above.clipped);
     if new_base || !contained(l, 0) {
         return None;
     }
-    photocraft_compose::change_bounds_in(layers, k, outer, canvas)
+    photocraft_compose::change_bounds_in(layers, k, ancestors, depth, canvas)
 }
 
 /// Whether `layers[k]` draws nothing wherever it sits, so adding or removing it leaves the
