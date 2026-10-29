@@ -400,3 +400,100 @@ fn nearest_neighbor_reduction_does_not_average() {
         }
     }
 }
+
+/// A pseudo-random surface of `w`×`h` in a format of `mode`, `sample` and `alpha`.
+fn noisy(w: i32, h: i32, mode: ColorMode, sample: SampleType, alpha: bool) -> Surface {
+    let fmt = PixelFormat::new(mode, sample, alpha);
+    let n = fmt.channels();
+    let mut seed = 0x2545_f491u32;
+    let v: Vec<f32> = (0..w as usize * h as usize * n)
+        .map(|_| {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32
+        })
+        .collect();
+    let mut s = Surface::new(fmt);
+    s.write_region(Rect::new(0, 0, w, h), &v);
+    s
+}
+
+/// Drives `steps` to the end, `per_call` units of work at a time (0: unlimited); returns the
+/// surface and how many calls it took.
+fn drive(mut steps: ResizeSteps, per_call: usize) -> (Surface, usize) {
+    let mut calls = 0;
+    loop {
+        calls += 1;
+        let mut left = per_call;
+        let mut more = || {
+            left = left.wrapping_sub(1);
+            per_call == 0 || left > 0
+        };
+        if let Some(s) = steps.step(&mut more) {
+            return (s, calls);
+        }
+        assert!(calls < 10_000, "the resize never finished");
+    }
+}
+
+#[test]
+fn steps_equal_resize_surface() {
+    let cases = [
+        (SampleType::U8, ColorMode::Rgb, true),
+        (SampleType::U16, ColorMode::Rgb, false),
+        (SampleType::F32, ColorMode::Rgb, true),
+        (SampleType::U8, ColorMode::Grayscale, true),
+    ];
+    for (sample, mode, alpha) in cases {
+        let src = noisy(150, 130, mode, sample, alpha);
+        // Up, down, one axis each way, and enough output rows for several bands.
+        for (sx, sy) in [(0.6, 0.6), (1.7, 1.7), (0.4, 2.2), (1.0, 0.5)] {
+            for filter in [Resample::Bicubic, Resample::Lanczos, Resample::BicubicAutomatic, Resample::Nearest] {
+                let expected = resize_surface(&src, sx, sy, filter);
+                for per_call in [0, 1, 7] {
+                    let (got, _) = drive(ResizeSteps::new(src.clone(), sx, sy, filter, None), per_call);
+                    assert!(got == expected, "{sample:?} {mode:?} alpha={alpha} scale=({sx}, {sy}) {filter:?} per_call={per_call}");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn steps_equal_resize_surface_in_canvas() {
+    let src = noisy(90, 70, ColorMode::Rgb, SampleType::U8, true);
+    let canvas = Rect::new(0, 0, 90, 70);
+    for (sx, sy) in [(0.7, 0.7), (1.9, 1.3)] {
+        let expected = resize_surface_in_canvas(&src, sx, sy, Resample::Bicubic, canvas);
+        let (got, _) = drive(ResizeSteps::new(src.clone(), sx, sy, Resample::Bicubic, Some(canvas)), 1);
+        assert!(got == expected, "scale=({sx}, {sy})");
+    }
+}
+
+#[test]
+fn steps_take_several_calls_and_report_progress() {
+    let src = noisy(120, 300, ColorMode::Rgb, SampleType::U8, true);
+    let mut steps = ResizeSteps::new(src, 0.9, 0.9, Resample::Bicubic, None);
+    assert_eq!(steps.progress(), 0.0);
+    let mut seen = Vec::new();
+    let mut calls = 0;
+    let out = loop {
+        calls += 1;
+        if let Some(s) = steps.step(&mut || false) {
+            break s;
+        }
+        seen.push(steps.progress());
+    };
+    // Planning, one call per 64-row band (270 rows: five), and the closing call.
+    assert!(calls >= 6, "{calls}");
+    assert!(seen.windows(2).all(|w| w[0] <= w[1]), "progress goes back: {seen:?}");
+    assert!(seen.iter().all(|p| (0.0..=1.0).contains(p)));
+    assert_eq!(out.content_bounds(), Rect::new(0, 0, 108, 270));
+}
+
+#[test]
+fn steps_of_an_empty_surface_are_empty() {
+    let src = Surface::new(PixelFormat::new(ColorMode::Rgb, SampleType::U8, true));
+    let expected = resize_surface(&src, 0.5, 0.5, Resample::Bicubic);
+    let (got, _) = drive(ResizeSteps::new(src, 0.5, 0.5, Resample::Bicubic, None), 1);
+    assert!(got == expected);
+}
