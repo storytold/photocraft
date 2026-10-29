@@ -26,6 +26,12 @@ pub(crate) fn header_drop_before(rect: Rect, pointer: Pos2) -> bool {
     pointer.y < rect.top() + rect.height() / 3.0
 }
 
+/// Whether an item drop resolves after the hovered card in its row.
+/// Use the same decision for the preview marker and the committed insertion index.
+pub(crate) fn item_drop_after(rect: Rect, pointer: Pos2, grid: bool) -> bool {
+    if grid { pointer.x > rect.center().x } else { pointer.y > rect.center().y }
+}
+
 /// Empty space at the sides of a grid row remains a valid insertion target. This makes the
 /// beginning/end of a row reachable without aiming at the one-pixel gap beside a card.
 pub(crate) fn item_row_edge_targets(area: Rect, item_rect: Rect, first: bool, last: bool) -> (Option<Rect>, Option<Rect>) {
@@ -228,7 +234,7 @@ pub(crate) fn asset_browser_item_target(
     response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string() });
     let hovered = response.dnd_hover_payload::<AssetDrag>().map(|payload| payload.as_ref().clone());
     if matches!(&hovered, Some(AssetDrag::Preset { scope: drag_scope, key: dragged }) if drag_scope.as_str() == scope && dragged.as_str() != key) {
-        let after = ui.ctx().pointer_interact_pos().is_some_and(|p| if grid { p.x > rect.center().x } else { p.y > rect.center().y });
+        let after = ui.ctx().pointer_interact_pos().is_some_and(|p| item_drop_after(rect, p, grid));
         // Across a row break, use the edge of the card under the pointer rather than
         // jumping to the other row. This keeps exactly one marker visible at a time.
         if after {

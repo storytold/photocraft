@@ -12,6 +12,7 @@ const DARK_SURFACE_CONTRAST: f32 = 1.13;
 const LIGHT_SURFACE_CONTRAST: f32 = 1.12;
 const DARK_TEXT_CONTRAST: f32 = 7.11;
 const LIGHT_TEXT_CONTRAST: f32 = 10.5;
+pub(crate) const ROW_INDENT: f32 = 20.0;
 
 /// Initial expansion policy for a browser group, with explicit user toggles overriding the default.
 pub(crate) fn group_open(st: &PresetUi, panel: &str, index: usize, name: &str, all_groups_open: bool) -> bool {
@@ -20,7 +21,8 @@ pub(crate) fn group_open(st: &PresetUi, panel: &str, index: usize, name: &str, a
 
 /// Shared collapsible group/folder row. The caller owns toggle state and context actions.
 pub(crate) fn header(ui: &mut egui::Ui, name: &str, open: bool, depth: usize, count: Option<usize>, height: f32) -> (Rect, egui::Response) {
-    let (rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
     let response = ui.interact(inset_row_rect(rect, depth), allocated.id, Sense::click_and_drag());
     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
     paint(ui, rect, open, name, depth, false, count);
@@ -71,7 +73,7 @@ pub(crate) fn paint_with_opacity(ui: &egui::Ui, rect: Rect, open: bool, name: &s
 }
 
 pub(crate) fn row_indent(depth: usize) -> f32 {
-    (14.0 * depth.min(4) as f32 - 7.0).max(0.0)
+    ROW_INDENT * depth.min(4) as f32
 }
 
 /// Inset both the painted row and its interactive target; preserve the right edge and height.
@@ -89,7 +91,8 @@ mod tests {
         let rect = Rect::from_min_max(pos2(10.0, 20.0), pos2(210.0, 50.0));
 
         assert_eq!(row_indent(0), 0.0);
-        assert_eq!(row_indent(1), 7.0);
-        assert_eq!(inset_row_rect(rect, 1), Rect::from_min_max(pos2(17.0, 20.0), pos2(210.0, 50.0)));
+        assert_eq!(row_indent(1), 20.0);
+        assert_eq!(row_indent(2), 40.0);
+        assert_eq!(inset_row_rect(rect, 1), Rect::from_min_max(pos2(30.0, 20.0), pos2(210.0, 50.0)));
     }
 }

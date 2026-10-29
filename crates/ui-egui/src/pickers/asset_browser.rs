@@ -7,12 +7,12 @@ use std::collections::BTreeSet;
 
 use egui::{Align2, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, pos2, vec2};
 
-use crate::pickers::asset_browser_groups::group_open;
+use crate::pickers::asset_browser_groups::{ROW_INDENT, group_open, row_indent};
 use crate::pickers::asset_browser_hierarchy::{HierarchyFolder, draw_hierarchy, hierarchy_tree};
 use crate::pickers::asset_browser_interaction::{
     AssetDrag, ContextMenuAction, HeaderDropCapabilities, HierarchyDrop, asset_browser_header_target_with_capabilities, asset_browser_item_gesture,
     asset_browser_item_target, context_menu_target, draw_group_context_menu, draw_item_context_menu, header_drop_before, hierarchy_folder_drop,
-    item_row_edge_targets, paint_group_insertion_line,
+    item_drop_after, item_row_edge_targets, paint_group_insertion_line,
 };
 use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, list_row as asset_browser_list_row};
 use crate::pickers::picker_state::PresetUi;
@@ -406,6 +406,10 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     let rename_row_height = if has_rename_row { (ui.cursor().top() - rename_row_top).max(0.0) } else { 0.0 };
     let scroll_height = (max_h - rename_row_height).max(0.0);
     let mut headers: Vec<(usize, Rect, String)> = Vec::new();
+    let mut indent_drop_targets: Vec<(String, egui::Response)> = Vec::new();
+    let mut indent_release: Option<(String, String)> = None;
+    let mut group_content_areas: Vec<(String, Rect)> = Vec::new();
+    let mut expanded_groups = BTreeSet::new();
     let mut dropped: Option<(String, Pos2)> = None;
     let mut browser_item_drop = false;
     // Folder drag (#3658): the order the folders are drawn in, and what the pointer is doing this
@@ -452,9 +456,12 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 let open = !query.is_empty() || group_open(st, panel, gi, &g.name, all_groups_open);
                 if !open {
                     hidden_groups.insert(g.name.clone());
+                } else {
+                    expanded_groups.insert(g.name.clone());
                 }
                 let (hr, hresp) = if let Some(paint) = paint_group.as_deref_mut() {
-                    let (r, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
+                    let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
+                    let r = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
                     let response = ui.interact(inset_row_rect(r, depth), allocated.id, Sense::click_and_drag());
                     paint(ui, r, g, open, response.hovered() || response.dragged(), 1.0);
                     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -560,7 +567,8 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                         let st_cell = std::cell::RefCell::new(&mut *st);
                         let ev_cell = std::cell::RefCell::new(&mut ev);
                         let mut draw_folder = |ui: &mut egui::Ui, folder: &HierarchyFolder<'_, ItemView>, folder_open: bool, folder_depth: usize| {
-                            let (fr, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+                            let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+                            let fr = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
                             let row_depth = folder_depth + 1 + depth;
                             let fresp = ui.interact(inset_row_rect(fr, row_depth), allocated.id, Sense::click_and_drag());
                             fresp.widget_info(|| {
@@ -611,13 +619,16 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                         };
                         let mut draw_items = |ui: &mut egui::Ui, items: &[&ItemView], folder_depth: usize| {
                             let w = ui.available_width();
-                            let group_indent = depth as f32 * 14.0;
-                            let indent = folder_depth as f32 * 14.0;
-                            let pad = group_indent + (if list { 0.0 } else { grid_indent }) + indent;
+                            // Cards and hierarchy rows share the same 20px-per-level visual
+                            // coordinate. Grid-only padding is accounted for inside that amount,
+                            // rather than being added on top of the hierarchy indentation.
+                            let visual_indent = row_indent(depth + folder_depth + 1);
+                            let content_indent = if list { visual_indent } else { (visual_indent - grid_indent).max(0.0) };
+                            let pad = content_indent + (if list { 0.0 } else { grid_indent });
                             let gap = if list || flush { 0.0 } else { GRID_GAP };
                             let (cell, cols) = if list {
                                 let row_h = list_item_height.unwrap_or(24.0).max(1.0);
-                                (vec2((w - group_indent - indent).max(0.0), row_h), 1)
+                                (vec2((w - content_indent).max(0.0), row_h), 1)
                             } else {
                                 let cell = item_size.unwrap_or(vec2(size, size));
                                 let cols = ((w - pad + gap) / (cell.x + gap)).floor().max(1.0) as usize;
@@ -630,6 +641,9 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                             // accumulate with row spacing and leave uneven vertical gaps.
                             let grid_height = if rows == 0 { 0.0 } else { rows as f32 * cell.y + rows.saturating_sub(1) as f32 * gap };
                             let (area, _) = ui.allocate_exact_size(vec2(w, grid_height), Sense::hover());
+                            if grid_height > 0.0 {
+                                group_content_areas.push((g.name.clone(), area));
+                            }
                             let mut insertion_markers = Vec::new();
                             for (run_i, it) in items.iter().enumerate() {
                                 let ii = g.items.iter().position(|original| std::ptr::eq(original, *it)).unwrap_or(run_i);
@@ -703,7 +717,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                     && key.as_str() != it.key.as_str()
                                 {
                                     browser_item_drop = true;
-                                    let after = ui.ctx().pointer_interact_pos().is_some_and(|p| if list { p.y > r.center().y } else { p.x > r.center().x });
+                                    let after = ui.ctx().pointer_interact_pos().is_some_and(|p| item_drop_after(r, p, !list));
                                     let mut index = ii + usize::from(after);
                                     if let Some((source_group, source_index)) = item_occurrence_position(groups, &key)
                                         && source_group == gi
@@ -819,27 +833,119 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     }
                 }
             }
-            // Give the same before-vs-into feedback as the Brushes hierarchy while dragging a
-            // group. The target is resolved after all header rectangles have been collected.
-            if let Some((from, p)) = drag {
+            // Each expanded group owns a drop area spanning its full header width. Its vertical
+            // span covers the group's complete visible subtree and ends before the next sibling.
+            if capabilities.group_drag {
+                for (_, header, group_name) in &headers {
+                    if !expanded_groups.contains(group_name) {
+                        continue;
+                    }
+                    let bottom = headers
+                        .iter()
+                        .filter(|(_, _, name)| name == group_name || group_is_descendant(st, panel, group_name, name))
+                        .map(|(_, rect, _)| rect.bottom())
+                        .chain(
+                            group_content_areas
+                                .iter()
+                                .filter(|(name, _)| name == group_name || group_is_descendant(st, panel, group_name, name))
+                                .map(|(_, rect)| rect.bottom()),
+                        )
+                        .max_by(f32::total_cmp);
+                    if let Some(bottom) = bottom {
+                        let column = Rect::from_min_max(pos2(header.left(), header.bottom()), pos2(header.left() + ROW_INDENT, bottom));
+                        if column.is_positive() {
+                            let response = ui.interact(
+                                column,
+                                ui.id().with(("group-indent-column", panel, group_name)),
+                                Sense::hover(),
+                            );
+                            if let Some(AssetDrag::Group { scope, name }) = response.dnd_release_payload::<AssetDrag>().map(|payload| payload.as_ref().clone())
+                                && scope == panel
+                                && name != *group_name
+                            {
+                                indent_release = Some((name, group_name.clone()));
+                            }
+                            indent_drop_targets.push((group_name.clone(), response));
+                            // Temporary visual debugging: blue marks the indentation drop target.
+                            let color = egui::Color32::from_rgba_unmultiplied(40, 130, 255, 76);
+                            ui.painter().rect_filled(column, egui::CornerRadius::ZERO, color);
+                            ui.painter().rect_stroke(
+                                column,
+                                egui::CornerRadius::ZERO,
+                                egui::Stroke::new(1.0, color.gamma_multiply(2.0)),
+                                egui::StrokeKind::Inside,
+                            );
+                        }
+                    }
+                }
+            }
+            // Paint the append-into-parent marker below the parent's complete visible subtree.
+            // The debug overlay above visualizes the full-height, 20px-wide drop columns.
+            let indent_target_hovered = indent_drop_targets.iter().any(|(parent, response)| {
+                response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                    matches!(payload.as_ref(), AssetDrag::Group { scope, name } if scope == panel && name != parent && !group_is_descendant(st, panel, name, parent))
+                })
+            });
+            if indent_target_hovered {
+                if let Some((parent, _)) = indent_drop_targets.iter().rev().find(|(parent, response)| {
+                    response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                        matches!(payload.as_ref(), AssetDrag::Group { scope, name } if scope == panel && name != parent && !group_is_descendant(st, panel, name, parent))
+                    })
+                }) {
+                    let end = headers
+                        .iter()
+                        .filter(|(_, _, name)| name == parent || group_is_descendant(st, panel, parent, name))
+                        .map(|(_, rect, _)| *rect)
+                        .chain(
+                            group_content_areas
+                                .iter()
+                                .filter(|(name, _)| name == parent || group_is_descendant(st, panel, parent, name))
+                                .map(|(_, rect)| *rect),
+                        )
+                        .max_by(|a, b| a.bottom().total_cmp(&b.bottom()));
+                    if let (Some(anchor), Some((_, header, _))) = (
+                        end,
+                        headers.iter().find(|(_, _, name)| name == parent),
+                    ) {
+                        // Keep the user-facing append marker aligned to the destination header,
+                        // not to the narrower indentation hit target or full-width content area.
+                        let marker_anchor = Rect::from_min_max(
+                            pos2(header.left(), anchor.bottom() - header.height()),
+                            pos2(header.right(), anchor.bottom()),
+                        );
+                        paint_group_insertion_line(ui, marker_anchor, false, t.accent);
+                    }
+                }
+            }
+            // The regular group drag marker handles between-header reordering.
+            if !indent_target_hovered && let Some((from, p)) = drag {
                 // Header targets already paint their feedback through the shared interaction
                 // helper. Only draw the between-groups insertion marker when the pointer is in a
                 // gap/outside a target header.
                 if !headers.iter().any(|(i, r, _)| *i != from && r.contains(p)) {
                     let before = group_drop_before(&headers, from, p.y);
-                    let anchor = match before {
-                        Some(i) => headers.iter().find(|(x, _, _)| *x == i).map(|(_, r, _)| *r),
-                        None => headers.last().map(|(_, r, _)| *r),
-                    };
-                    if let Some(r) = anchor {
-                        paint_group_insertion_line(ui, r, before.is_some(), t.accent);
+                    // The source header resolves to a no-op on release; never show a marker
+                    // suggesting that dropping it there would move it.
+                    if before != Some(from) {
+                        let anchor = match before {
+                            Some(i) => headers.iter().find(|(x, _, _)| *x == i).map(|(_, r, _)| *r),
+                            None => headers.last().map(|(_, r, _)| *r),
+                        };
+                        if let Some(r) = anchor {
+                            paint_group_insertion_line(ui, r, before.is_some(), t.accent);
+                        }
                     }
                 }
             }
         });
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("preset-browser-rect", panel)), scroll.inner_rect));
     // Apply the drop now every header rect is known; the next frame draws the new order.
-    if let Some((from, p)) = released {
+    if let Some((from_name, parent)) = indent_release {
+        if !group_is_descendant(st, panel, &from_name, &parent) {
+            st.nest_group(panel, &group_names, &from_name, Some(&parent));
+            st.move_group(panel, &group_names, &from_name, None);
+        }
+    } else if let Some((from, p)) = released {
         let from_name = groups.get(from).map(|g| g.name.clone());
         if let Some(from_name) = from_name {
             if let Some((_, rect, target)) = headers.iter().find(|(i, rect, _)| *i != from && rect.contains(p)) {
