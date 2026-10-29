@@ -7,7 +7,9 @@
 //! selection stay as they were) and says what the user can do. Off the web every check passes.
 //!
 //! The estimates are deliberately rough and err high: they count the big buffers an operation
-//! holds at once, not every temporary. Each function says what it counts.
+//! holds at once, not every temporary. Each function says what it counts. In particular, PSD/PSB
+//! source estimates use canvas dimensions and do not bound the retained surfaces of many layers;
+//! passing the gate does not prevent an allocation trap while decoding such a file.
 
 use photocraft_doc::{Document, LayerContent, SmartSource};
 use photocraft_geom::TILE_SIZE;

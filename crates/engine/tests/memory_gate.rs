@@ -115,6 +115,47 @@ fn smart_object_render_that_does_not_fit_is_refused_by_name() {
 }
 
 #[test]
+fn layered_psd_can_exceed_the_canvas_based_preflight() {
+    use photocraft_psd::{Compression, LayerSpec, PixelData, PsdBuilder};
+
+    let room = Room::new(None);
+    const SIDE: u32 = 256;
+    const LAYERS: usize = 24;
+    let pixels = u64::from(SIDE) * u64::from(SIDE);
+    let mut builder = PsdBuilder::new(SIDE, SIDE).compression(Compression::Rle);
+    for layer in 0..LAYERS {
+        // Nonuniform, opaque pixels populate each full-canvas surface while remaining compressible.
+        let rgba: Vec<u8> = (0..SIDE * SIDE).flat_map(|i| [((i / SIDE + layer as u32) % 256) as u8, 80, 160, 255]).collect();
+        builder.push_layer(LayerSpec::new(format!("layer {layer}"), 0, 0, SIDE, SIDE, PixelData::Rgba8(rgba)));
+    }
+    let bytes = builder.to_bytes().unwrap();
+    let imported = photocraft_io::import("layers.psd", &bytes).unwrap();
+    let retained: u64 = imported.document.walk().filter_map(|(_, _, layer)| layer.surface()).map(|surface| surface.tile_count() as u64 * pixels * 4).sum();
+    let budget = pixels * photocraft_engine::memory_gate::SMART_RENDER_BYTES_PER_PX + bytes.len() as u64;
+    assert!(retained > budget, "retained {retained}, budget {budget}");
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("layers.psd");
+    std::fs::write(&path, &bytes).unwrap();
+    let mut s = new_doc();
+    let before = state(&s);
+    room.set(Some(headroom::RESERVE));
+    for cmd in ["file.placeEmbedded", "file.placeLinked"] {
+        assert!(s.execute(cmd, json!({"path": path})).unwrap_err().to_string().contains("Not enough memory"));
+        assert_eq!(state(&s), before);
+    }
+    let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
+    assert!(photocraft_engine::smart_cmds::source_image("layers.psd", &bytes, fmt).is_err());
+
+    // Simulation affects only the gate, not the allocator: this is evidence of the estimate's
+    // blind spot, not a reproduction of an actual browser OOM or proof that a trap occurs.
+    room.set(Some(headroom::RESERVE + budget));
+    s.execute("file.placeEmbedded", json!({"path": path})).unwrap();
+    assert_eq!(state(&s).2, before.2 + 1);
+    assert!(photocraft_engine::smart_cmds::source_image("layers.psd", &bytes, fmt).is_ok());
+}
+
+#[test]
 fn a_smart_object_edit_under_low_memory_keeps_its_appearance() {
     let room = Room::new(None);
     let dir = tempfile::tempdir().unwrap();
