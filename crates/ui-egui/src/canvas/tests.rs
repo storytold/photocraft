@@ -175,15 +175,15 @@ fn inline_filter_preview_is_composited_and_recorded_once() {
     app.background_jobs = false;
     app.run("file.new", json!({"width": 320, "height": 240})).unwrap();
     crate::filter_dialog::open(&mut app, "filter.stylize.solarize").unwrap();
-    app.perf.frame_refresh_ms = 0.0;
+    app.perf.stage = Default::default();
     let (_, _, size) = ensure_filter_preview(&mut app, 0, &egui::Context::default()).expect("a preview");
     assert_eq!(size, [320, 240]);
     assert_eq!(app.perf.last_refresh, "filter-preview");
     assert_eq!(app.perf.last_refresh_px, 320 * 240);
-    assert_eq!(app.perf.frame_refresh_ms, app.perf.composite_ms + app.perf.upload_ms, "one record per preview");
+    assert_eq!(app.perf.stage.composite_ms + app.perf.stage.upload_ms, app.perf.composite_ms + app.perf.upload_ms, "one record per preview");
     // Unchanged request: nothing is recomputed or recorded again.
     ensure_filter_preview(&mut app, 0, &egui::Context::default()).expect("the same preview");
-    assert_eq!(app.perf.frame_refresh_ms, app.perf.composite_ms + app.perf.upload_ms);
+    assert_eq!(app.perf.stage.composite_ms + app.perf.stage.upload_ms, app.perf.composite_ms + app.perf.upload_ms);
 }
 
 /// #6326: a filter's live preview is never coarser than the screen. On a document big enough
@@ -285,7 +285,7 @@ fn every_filter_previews_off_the_ui_thread_and_a_newer_value_cancels_the_old() {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
             let _ = told.send(job.cancelled());
-            crate::filter_preview_worker::Computed { result: None, ms: 0.0 }
+            crate::dialogs::filter_preview_worker::Computed { result: None, ms: 0.0 }
         })
         .unwrap();
     // The slider moves on and stops: once the value settles, the stale preview is cancelled
@@ -352,7 +352,7 @@ fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::syn
                 let buffer = photocraft_compose::flatten(&d);
                 (std::sync::Arc::new(d), buffer)
             });
-            crate::filter_preview_worker::Computed { result, ms: 0.0 }
+            crate::dialogs::filter_preview_worker::Computed { result, ms: 0.0 }
         })
         .expect("the worker starts");
     (release, radius)
@@ -482,7 +482,7 @@ fn a_mid_drag_empty_result_leaves_the_preview_alone() {
     app.filter_preview_worker
         .start(key, ctx.clone(), move |_| {
             wait.recv_timeout(std::time::Duration::from_secs(60)).expect("released");
-            crate::filter_preview_worker::Computed { result: None, ms: 0.0 }
+            crate::dialogs::filter_preview_worker::Computed { result: None, ms: 0.0 }
         })
         .expect("the worker starts");
     app.ui.dialogs[0].fields.insert("radius".into(), json!(moved + 4.0));
@@ -1679,12 +1679,20 @@ fn mask_view_uploads_each_live_stroke_before_release() {
                 assert_eq!(app.session.documents()[0].doc.layer(layer).unwrap(), &original);
                 crate::channel_view::ensure(&mut app, &ctx, 0);
                 let mut delta = ctx.tex_manager().write().take_delta();
-                let egui::ImageData::Color(image) = &delta.set.get(&tex).unwrap()[0].image;
+                let upload = &delta.set.get(&tex).unwrap()[0];
+                let egui::ImageData::Color(image) = &upload.image;
                 let st = &app.session.documents()[0];
+                // Undo redraws only the tiles the stroke changed (#9329): a partial upload of them.
+                let f = factor as i32;
+                let pos = upload.pos.expect("undo uploads only the changed tiles, not the whole mask");
+                let r = DRect::new(pos[0] as i32 * f, pos[1] as i32 * f, (pos[0] + image.size[0]) as i32 * f, (pos[1] + image.size[1]) as i32 * f)
+                    .intersect(&st.doc.bounds());
+                // It covers the stroke's span (x 10..70 along y 30, size 12), so it
+                // proves coverage and not only values.
+                assert!(r.contains_rect(&DRect::new(10, 26, 70, 34)), "undo covers the stroke: {r:?}");
                 assert_eq!(
                     image.pixels,
-                    crate::channel_view::render(&st.doc, &st.channel_view, st.doc.bounds(), factor, crate::channel_view::Look::default(), st.active_layer)
-                        .unwrap(),
+                    crate::channel_view::render(&st.doc, &st.channel_view, r, factor, crate::channel_view::Look::default(), st.active_layer).unwrap(),
                     "undo restores the shown mask"
                 );
                 delta.clear();
@@ -2639,43 +2647,48 @@ fn smoothed_brush_drag_draws_the_string_from_brush_to_pointer() {
 #[test]
 fn retouch_drags_show_the_footprint_without_wedges() {
     // The retouching tools' trail was the same brush-wide polyline (#189): now a mask of the
-    // footprint, with nothing outside the brush radius of the path, however small the steps.
-    let ctx = egui::Context::default();
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
-    app.run("tools.setBrush", json!({"brush": {"size": 30}})).unwrap();
-    // Remove: the dab tools draw their stroke live instead of a trail, and Spot Healing's
-    // trail is its dabs' coverage.
-    app.ui.tool = Tool::Remove;
-    tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
-    let mut pts = vec![[20.0, 30.0]];
-    for i in 1..80 {
-        let t = f64::from(i) * 0.5;
-        let p = [20.0 + t, 30.0 + (t / 2.0).sin() * 3.0];
-        tool_event(&mut app, ToolEvent::Move { x: p[0], y: p[1], pressure: 1.0 }, egui::Modifiers::NONE);
-        pts.push(p);
-        if i % 20 == 0 {
-            // One mesh for the trail, however long the drag.
-            let shapes = drag_preview_shapes(&mut app, &ctx, 12.0);
-            assert!(!shapes.iter().any(|s| matches!(s.shape, egui::Shape::Path(_))), "no polyline");
-        }
-    }
-    drag_preview_shapes(&mut app, &ctx, 12.0);
-    let trail = app.trail.as_ref().unwrap();
-    assert_eq!(trail.scale(), 1.0);
-    for y in 0..60 {
-        for x in 0..120 {
-            let d = pts.iter().map(|p| (x as f64 + 0.5 - p[0]).hypot(y as f64 + 0.5 - p[1])).fold(f64::MAX, f64::min);
-            if d < 14.0 {
-                assert_eq!(trail.coverage(x, y), 255, "({x}, {y}) inside the footprint");
-            } else if d > 16.0 {
-                assert_eq!(trail.coverage(x, y), 0, "({x}, {y}) outside the footprint");
+    // footprint, with nothing outside it, however small the steps. The Remove Tool's is where
+    // the stroke's dabs reach at all, which is what it removes, so a soft tip's whole reach
+    // past the radius is tinted.
+    for hardness in [1.0, 0.0] {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 120, "height": 60})).unwrap();
+        app.run("tools.setBrush", json!({"brush": {"size": 30, "hardness": hardness}})).unwrap();
+        app.ui.tool = Tool::Remove;
+        tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        for i in 1..80 {
+            let t = f64::from(i) * 0.5;
+            tool_event(&mut app, ToolEvent::Move { x: 20.0 + t, y: 30.0 + (t / 2.0).sin() * 3.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            if i % 20 == 0 {
+                // One mesh for the trail, however long the drag.
+                let shapes = drag_preview_shapes(&mut app, &ctx, 12.0);
+                assert!(!shapes.iter().any(|s| matches!(s.shape, egui::Shape::Path(_))), "no polyline");
             }
         }
+        drag_preview_shapes(&mut app, &ctx, 12.0);
+        // The stroke the removal gets on release, and the pixels its hole takes.
+        let points = app.drag.as_ref().unwrap().points.iter().map(|p| photocraft_paint::StrokePoint::new(p[0], p[1], p[2] as f32)).collect();
+        let brush = photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
+        let (b, cov) = photocraft_paint::retouch::stroke_coverage(&photocraft_paint::Stroke { brush, points });
+        let trail = app.trail.as_ref().unwrap();
+        assert_eq!(trail.scale(), 1.0);
+        let mut beyond = 0;
+        for y in 0..60 {
+            for x in 0..120 {
+                let removed = b.contains(x, y) && cov[(y - b.y0) as usize * b.width() as usize + (x - b.x0) as usize] > 0.0;
+                assert_eq!(trail.coverage(x as usize, y as usize), if removed { 255 } else { 0 }, "hardness {hardness}: ({x}, {y})");
+                // Past the 15 px radius of the path's ends and sides (y 27..33).
+                beyond += usize::from(removed && !(12..=48).contains(&y));
+            }
+        }
+        if hardness == 0.0 {
+            assert!(beyond > 100, "a soft tip's removal reaches past its radius: {beyond} px");
+        }
+        tool_event(&mut app, ToolEvent::Up { x: 59.5, y: 30.0 }, egui::Modifiers::NONE);
+        drag_preview_shapes(&mut app, &ctx, 12.0);
+        assert!(app.trail.is_none(), "the trail ends with the drag");
     }
-    tool_event(&mut app, ToolEvent::Up { x: 59.5, y: 30.0 }, egui::Modifiers::NONE);
-    drag_preview_shapes(&mut app, &ctx, 12.0);
-    assert!(app.trail.is_none(), "the trail ends with the drag");
 }
 
 #[test]

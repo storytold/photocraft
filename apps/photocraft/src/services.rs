@@ -18,10 +18,10 @@ mod recovery_tests;
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
-    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "tga", "ico",
-    "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3", "iff", "lbm",
-    "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz", "aco", "act",
-    "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
+    "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
+    "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz",
+    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -54,14 +54,14 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("TIFF", &["tif", "tiff"]),
     ("WebP", &["webp"]),
     ("GIF", &["gif"]),
-    ("BMP", &["bmp"]),
+    ("BMP", &["bmp", "dib"]),
     ("Targa", &["tga"]),
     ("ICO", &["ico"]),
     ("QOI", &["qoi"]),
     ("PCX", &["pcx"]),
     ("DDS", &["dds"]),
     ("XPM", &["xpm"]),
-    ("Portable Bitmap", &["pbm", "pgm", "ppm", "pam", "pfm"]),
+    ("Portable Bitmap", &["pbm", "pgm", "ppm", "pnm", "pam", "pfm"]),
     ("OpenEXR", &["exr"]),
     ("Radiance HDR", &["hdr"]),
     ("FITS", &["fits", "fit", "fts"]),
@@ -91,15 +91,19 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("PhotoCraft", &["pcraft"]),
     ("OpenRaster", &["ora"]),
     ("PNG", &["png"]),
-    ("JPEG", &["jpg"]),
+    ("JPEG", &["jpg", "jpeg"]),
     ("WebP", &["webp"]),
-    ("TIFF", &["tif"]),
+    ("TIFF", &["tif", "tiff"]),
     ("Targa", &["tga"]),
     // Also in Photoshop's Save As list; ICO is PhotoCraft's own (#4357): up to 256×256, with alpha.
-    ("BMP", &["bmp"]),
+    ("BMP", &["bmp", "dib"]),
     ("GIF", &["gif"]),
     ("ICO", &["ico"]),
     ("OpenEXR", &["exr"]),
+    // The encoder picks P5, P6, P7 or PFM from the image, not from the name, so only the neutral
+    // .pnm is offered: a .pbm or .pgm name would hold pixmap data (CodeRabbit on #9775).
+    ("Netpbm", &["pnm"]),
+    ("Radiance HDR", &["hdr"]),
     ("FITS", &["fits", "fit"]),
     ("DPX", &["dpx"]),
     // Game and 3D textures; DDS Options asks for the compression and mipmaps (#1327).
@@ -112,9 +116,21 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
 /// never swaps their extension for a document format's.
 const OTHER_SAVE_FILTERS: &[(&str, &[&str])] = &[("Color Swatches", &["aco"]), ("Color Table", &["act"]), ("Swatch Exchange", &["ase"])];
 
+/// `suggested` with a Netpbm subtype's extension (an opened .pgm) as the neutral .pnm, the name
+/// every save dialog starts from: the encoder picks P5, P6, P7 or PFM from the image, so the old
+/// suffix could name other data, and macOS and rfd keep the suggested name as it is.
+fn netpbm_as_pnm(suggested: &str) -> String {
+    let path = Path::new(suggested);
+    let subtype = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).is_some_and(|e| ["pbm", "pgm", "ppm", "pam", "pfm"].contains(&e.as_str()));
+    if subtype { path.with_extension("pnm").to_string_lossy().into_owned() } else { suggested.to_string() }
+}
+
 /// Lists the save dialog's file types with the `suggested` type first (added if unlisted), so the dialog keeps that extension instead of .psd.
 fn save_filters(suggested: &str) -> Vec<(String, Vec<String>)> {
     let ext = Path::new(suggested).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    // A Netpbm subtype's name (an opened .pgm) starts on the Netpbm type as .pnm: the encoder picks
+    // the subtype from the image, so the old name could describe other data (CodeRabbit on #9775).
+    let ext = if ["pbm", "pgm", "ppm", "pam", "pfm"].contains(&ext.as_str()) { "pnm".to_string() } else { ext };
     if let Some((name, exts)) = OTHER_SAVE_FILTERS.iter().find(|(_, exts)| exts.contains(&ext.as_str())) {
         return vec![(name.to_string(), exts.iter().map(|e| e.to_string()).collect())];
     }
@@ -216,6 +232,7 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
             Box::pin(async move { picked.await.map(|folder| answer_one(folder.path(), true, FileDialogAnswer::FolderTo)) })
         }
         FileDialogRequest::Save { suggested } => {
+            let suggested = netpbm_as_pnm(&suggested);
             let filters = save_filters(&suggested);
             let name = dialog_file_name(&suggested, cfg!(windows));
             let dir = Path::new(&suggested).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf);
@@ -617,8 +634,8 @@ fn shell_word(s: &str) -> String {
     if s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-+:,@".contains(&b)) { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
 }
 
-/// The release-check transport, or `None` inside Flatpak: the sandbox has no network (see the
-/// manifest's finish-args) and `flatpak update` owns updates there.
+/// The release-check transport, or `None` inside Flatpak: `flatpak update` owns updates there.
+/// The sandbox has network (for the `--control` server), which does not change this.
 fn update_transport(flatpak_id: Option<&std::ffi::OsStr>) -> Option<photocraft_engine::updates_cmds::CheckFn> {
     flatpak_id.is_none().then(crate::updates::service)
 }

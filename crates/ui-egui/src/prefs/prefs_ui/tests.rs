@@ -2017,3 +2017,25 @@ fn edit_dialogs_open() {
     let d = crate::menus::invoke(&mut app, &ctx, "edit.presets.presetManager", json!({})).unwrap()["dialog"].as_u64().unwrap();
     assert!(crate::dialogs::confirm(&mut app, d).is_ok());
 }
+#[test]
+fn reset_section_on_type_keeps_the_favourite_fonts() {
+    // The favourites are the font menu's library, not a Type setting.
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, store) = app_with_store();
+    app.run("prefs.set", json!({"values": {"interface.language": "en", "type.smartQuotes": false}})).unwrap();
+    app.run("type.font.favorite", json!({"family": "Bebas Neue"})).unwrap();
+    open_preferences(&mut app, "type");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Reset Section").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(4);
+    let prefs = h.state().session.prefs().type_.clone();
+    assert!(prefs.smart_quotes, "the Type settings are reset");
+    assert_eq!(prefs.favorite_fonts, ["Bebas Neue"], "the favourites are kept");
+    assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
+}

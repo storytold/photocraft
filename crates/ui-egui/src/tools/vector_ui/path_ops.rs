@@ -1,6 +1,6 @@
 use super::paths_panel::{PathEntry, PathRow, path_rows};
 use super::pen::pen_commit;
-use super::*;
+use super::{Affine, Document, LayerContent, Path, PhotocraftApp, Tool, Value, json};
 
 /// The path that path commands act on without a name: the one selected in the Paths panel, else
 /// the work path while it is shown (not after Make Selection hid it, #6079), else the selected
@@ -125,6 +125,16 @@ pub(crate) fn targeted_vector_mask(app: &PhotocraftApp) -> Option<(u64, Path)> {
     let targeted = app.ui.vector_mask_target || st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::VectorMask;
     (targeted && !matches!(l.content, LayerContent::Shape(_))).then_some(())?;
     l.vector_mask.as_ref().map(|m| (l.id.0, m.path.clone()))
+}
+
+/// The active type layer's path in document space, if it is type on a path (#9114).
+pub(crate) fn active_type_path(app: &PhotocraftApp) -> Option<(u64, Path)> {
+    let st = app.session.active()?;
+    let l = st.active_layer.and_then(|id| st.doc.layer(id))?;
+    match &l.content {
+        LayerContent::Text(t) => photocraft_engine::type_extra_cmds::type_path(t).map(|p| (l.id.0, p)),
+        _ => None,
+    }
 }
 
 /// The active shape layer's path, if the active layer is a shape layer.

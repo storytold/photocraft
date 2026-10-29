@@ -109,7 +109,7 @@ impl Model {
 }
 
 /// The colour the panel edits.
-fn active(app: &PhotocraftApp) -> [f32; 3] {
+pub(crate) fn active(app: &PhotocraftApp) -> [f32; 3] {
     let c = if app.ui.color_panel.background { app.session.tools.background } else { app.session.tools.foreground };
     [c[0], c[1], c[2]].map(|x| x.clamp(0.0, 1.0))
 }
@@ -347,7 +347,7 @@ fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, mode: ColorPanelMode) {
 
 /// Photoshop's alerts under the chips: ⚠ when the colour can't print (click: the nearest CMYK
 /// colour) and, for Web Color sliders, the cube when it isn't a web colour (click: the nearest).
-fn alerts(app: &mut PhotocraftApp, ui: &mut egui::Ui, col: Rect, rgb: [f32; 3], web: bool) {
+pub(crate) fn alerts(app: &mut PhotocraftApp, ui: &mut egui::Ui, col: Rect, rgb: [f32; 3], web: bool) {
     let t = Tokens::get(ui.ctx());
     let background = app.ui.color_panel.background;
     let mut y = col.top() + CHIPS_W + 2.0;

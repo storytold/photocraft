@@ -657,6 +657,11 @@ mod tests {
 
     #[test]
     fn tool_names_parse() {
+        basic_and_retouch_tool_names_parse();
+        vector_tool_names_parse();
+    }
+
+    fn basic_and_retouch_tool_names_parse() {
         assert_eq!(Tool::from_name("brush"), Some(Tool::Brush));
         assert_eq!(Tool::from_name("Rect"), Some(Tool::RectMarquee));
         assert_eq!(Tool::from_name("RectMarquee"), Some(Tool::RectMarquee));
@@ -675,6 +680,9 @@ mod tests {
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
         assert_eq!(Tool::ALL.len(), 68);
+    }
+
+    fn vector_tool_names_parse() {
         assert_eq!(Tool::from_name("Vertical Type Mask Tool"), Some(Tool::VerticalTypeMask));
         assert_eq!(Tool::from_name("addAnchorPoint"), Some(Tool::AddAnchorPoint));
         assert_eq!(Tool::from_name("Delete Anchor Point Tool"), Some(Tool::DeleteAnchorPoint));

@@ -5,7 +5,7 @@ use super::descriptors::{
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
 use super::tables::{CHANNELS, INTERPOLATION, RADIAL_METHOD, RADIAL_QUALITY, channel_of, lookup, lookup_back};
-use super::*;
+use super::{D, Descriptor, Map, ReferenceItem, UnicodeString, Value, json};
 
 /// `transform`: Photoshop records a Free Transform relative to the frame (offset of its centre,
 /// width/height in percent, angle). A layer moved only becomes `layer.translate`; anything

@@ -285,6 +285,19 @@ fn an_unselected_work_path_is_not_drawn_over_the_canvas() {
     }
 }
 
+/// #9114: the active type layer's Type Path shows with the Pen, whose Auto Add/Delete edits it.
+#[test]
+fn the_type_path_of_type_on_a_path_is_drawn_with_the_pen() {
+    let ctx = egui::Context::default();
+    let mut app = app();
+    app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": false, "knots": [[100, 20], [100, 180]]}]}})).unwrap();
+    app.run("type.create", json!({"x": 20, "y": 70, "text": "On a path", "size": 24})).unwrap();
+    app.run("type.attachToPath", json!({})).unwrap();
+    app.run("path.delete", json!({"name": "work"})).unwrap();
+    app.ui.tool = Tool::Pen;
+    assert!(overlay_shapes(&app, &ctx) > 0, "the Type Path is drawn");
+}
+
 #[test]
 fn show_target_path_and_extras_hide_the_path_outlines() {
     // #1119: View › Show › Target Path only flipped its checkmark; the canvas kept drawing the

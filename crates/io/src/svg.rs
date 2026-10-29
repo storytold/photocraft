@@ -376,7 +376,7 @@ fn inflate(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
         return Ok(std::borrow::Cow::Borrowed(bytes));
     }
     let mut out = Vec::new();
-    let mut reader = flate2::read::MultiGzDecoder::new(bytes).take(MAX_INFLATED_BYTES.saturating_add(1));
+    let mut reader = flate2::bufread::MultiGzDecoder::new(bytes).take(MAX_INFLATED_BYTES.saturating_add(1));
     reader.read_to_end(&mut out).map_err(|e| IoError::Svg(format!("the compressed SVG couldn't be inflated: {e}")))?;
     if u64::try_from(out.len()).unwrap_or(u64::MAX) > MAX_INFLATED_BYTES {
         return Err(IoError::Svg(format!("the compressed SVG inflates past {} MB", MAX_INFLATED_BYTES >> 20)));

@@ -338,6 +338,10 @@ fn filesystem_commands_fail_closed() {
     for id in ["layer.smartObjects.editContents", "layer.smartObjects.convertToLayers"] {
         assert!(authorize_engine_command(id, &serde_json::json!({"path": "/outside/source.psb"})).is_err(), "{id}");
     }
+}
+
+#[test]
+fn filesystem_command_paths_and_profiles_fail_closed() {
     // The UI-level examples in docs/control-protocol.md.
     for id in ["view.zoomIn", "window.theme.pro", "edit.search"] {
         assert!(authorize_desktop_engine_command(id, &serde_json::json!({})).is_ok(), "{id}");

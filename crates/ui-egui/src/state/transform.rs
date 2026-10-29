@@ -1,4 +1,4 @@
-use super::*;
+use super::{Deserialize, Serialize};
 
 /// Edit › Transform's mode: what a handle drag does with no modifier keys held.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -71,6 +71,12 @@ pub struct TransformSession {
     /// skew and rotation with any vertical skew, so the bar keeps showing the typed one.
     #[serde(default)]
     pub skew_v: f64,
+    /// Free Transform of several selected layers (#6501): every layer the box moves, in
+    /// `edit.transform`'s `layers` order. Empty when it moves `layer` alone. `layer` stays the
+    /// active layer, which need not be one of them (the Background is left out, a selected group
+    /// carries its selected children).
+    #[serde(default)]
+    pub layers: Vec<u64>,
 }
 
 /// Content-Aware Scale's options bar: Amount, Protect and Protect Skin Tones.
