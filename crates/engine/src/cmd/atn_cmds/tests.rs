@@ -790,6 +790,17 @@ fn bucket_round_trip(params: Value) -> Option<Value> {
     }
 }
 
+#[test]
+fn pixel_bucket_antialias_default_survives_action_export() {
+    let back = bucket_round_trip(json!({"x": 2, "y": 2})).unwrap();
+    assert_eq!(back["antiAlias"], false);
+    let back = bucket_round_trip(json!({"x": 2, "y": 2, "antiAlias": true})).unwrap();
+    assert_eq!(back["antiAlias"], true);
+    let d = desc("null").with("From", D::Descriptor(desc("Pnt ").with("Hrzn", px(2.0)).with("Vrtc", px(2.0))));
+    let Mapped::Steps(steps) = steps_layer::fill_from(&d) else { panic!("legacy bucket action imports") };
+    assert_eq!(steps[0].1["antiAlias"], true, "an older action with no AntA keeps its former behavior");
+}
+
 /// A Paint Bucket step with an explicit colour keeps it through .atn (#7199): replayed on a fresh
 /// document, whose foreground is black, it still fills red. A colour .atn can't hold makes the
 /// step not export rather than fill with the foreground.
@@ -1481,7 +1492,7 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     assert!(more.unsupported.is_empty());
     assert_eq!(rest_steps[0].1, json!({"if": "hasLayers", "then": "FS8-Layers", "else": "FS8-No-Layers"}));
     assert_eq!(rest_steps[1].1, json!({"percent": 200, "resample": "bicubicAutomatic"}));
-    assert_eq!(rest_steps[2].1, json!({"x": 0, "y": 0, "tolerance": 32, "contiguous": false}));
+    assert_eq!(rest_steps[2].1, json!({"x": 0, "y": 0, "tolerance": 32, "contiguous": false, "antiAlias": true}));
     assert_eq!(rest_steps[4].1, json!({"path": "/Users/me/logo.png", "scale": 50}));
     assert_eq!(rest_steps[5].1, json!({"path": "/Users/me/in.psd"}));
 
@@ -2608,7 +2619,7 @@ fn apply_image_numeric_source_selectors_are_refused() {
 fn defaults_photoshop_plays_differently_are_written() {
     let exported = |id: &str, p: Value| export_item(id, &p, "S").and_then(|i| i.descriptor).unwrap_or_else(|| panic!("{id} does not export"));
     let bucket = exported("paint.bucket", json!({"x": 1, "y": 2}));
-    assert_eq!((get_num(&bucket, "Tlrn"), get_bool(&bucket, "AntA")), (Some(32.0), Some(true)));
+    assert_eq!((get_num(&bucket, "Tlrn"), get_bool(&bucket, "AntA")), (Some(32.0), Some(false)));
     let canvas = exported("image.canvasSize", json!({"width": 10, "height": 10}));
     assert_eq!((get_enum(&canvas, "Hrzn").as_deref(), get_enum(&canvas, "Vrtc").as_deref()), (Some("Cntr"), Some("Cntr")));
     let apply = exported("image.applyImage", json!({}));

@@ -285,6 +285,54 @@ mod tests {
     use super::*;
 
     #[test]
+    fn crisp_wand_and_bucket_defaults_are_independent_and_roundtrip() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert!(!app.ui.tool_options.wand_anti_alias && !app.ui.tool_options.bucket_anti_alias);
+        assert!(app.ui.tool_options.anti_alias, "other tools retain their default");
+        assert_eq!(app.ui.tool_options.feather, 0.0);
+        app.session.prefs.edit(|p| p.tool_options = json!({"anti_alias": true}));
+        restore(&mut app);
+        assert!(!app.ui.tool_options.wand_anti_alias && !app.ui.tool_options.bucket_anti_alias, "legacy lasso setting must not soften pixel tools");
+        for (wand, bucket) in [(true, false), (false, true), (true, true)] {
+            app.ui.tool_options.wand_anti_alias = wand;
+            app.ui.tool_options.bucket_anti_alias = bucket;
+            persist(&mut app, &egui::Context::default());
+            let saved = app.session.prefs().tool_options.clone();
+            let mut fresh = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            fresh.session.prefs.edit(|p| p.tool_options = saved);
+            restore(&mut fresh);
+            assert_eq!((fresh.ui.tool_options.wand_anti_alias, fresh.ui.tool_options.bucket_anti_alias), (wand, bucket));
+            assert!(fresh.ui.tool_options.anti_alias);
+        }
+    }
+
+    #[test]
+    fn crisp_pixel_tool_input_uses_its_own_antialias_choice() {
+        use crate::canvas::{ToolEvent, tool_event};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 12, "height": 12})).unwrap();
+        app.sync_views();
+        for (tool, command, aa) in [
+            (Tool::MagicWand, "select.magicWand", false),
+            (Tool::MagicWand, "select.magicWand", true),
+            (Tool::PaintBucket, "paint.bucket", false),
+            (Tool::PaintBucket, "paint.bucket", true),
+        ] {
+            app.ui.tool = tool;
+            if tool == Tool::MagicWand {
+                app.ui.tool_options.wand_anti_alias = aa;
+            } else {
+                app.ui.tool_options.bucket_anti_alias = aa;
+            }
+            tool_event(&mut app, ToolEvent::Down { x: 3.0, y: 3.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            let (id, params) = app.session.journal.last().unwrap();
+            assert_eq!(id, command);
+            assert_eq!(params["antiAlias"], json!(aa));
+            assert!(app.ui.tool_options.anti_alias, "other tools' smoothing is independent");
+        }
+    }
+
+    #[test]
     fn selected_tool_and_non_default_options_roundtrip() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.ui.tool = Tool::Move;

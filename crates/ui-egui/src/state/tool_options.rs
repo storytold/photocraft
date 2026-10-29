@@ -8,6 +8,10 @@ pub struct ToolOptions {
     pub tolerance: f32,
     pub contiguous: bool,
     pub anti_alias: bool,
+    /// Pixel-region tools default to exact coverage. Their smoothing choices
+    /// are independent of the lasso/ellipse/eraser Anti-alias setting.
+    pub wand_anti_alias: bool,
+    pub bucket_anti_alias: bool,
     /// Sample All Layers, kept per tool as in Photoshop (#5524). Stored under a new key, so the
     /// single shared `sample_all_layers` of older preferences is ignored on load.
     pub sample_all: SampleAllLayers,
@@ -356,6 +360,8 @@ impl Default for ToolOptions {
             tolerance: 32.0,
             contiguous: true,
             anti_alias: true,
+            wand_anti_alias: false,
+            bucket_anti_alias: false,
             sample_all: SampleAllLayers::default(),
             object_finder: true,
             remove_new_layer: false,

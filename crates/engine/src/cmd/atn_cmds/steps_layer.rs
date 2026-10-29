@@ -349,7 +349,9 @@ pub(super) fn fill_from(d: &Descriptor) -> Mapped {
         if !in_px("Hrzn") || !in_px("Vrtc") {
             return Mapped::Unsupported { harmless: false };
         }
-        let mut p = json!({"x": x.round(), "y": y.round()});
+        // Imported actions previously inherited smoothing=true when AntA was
+        // absent. Preserve their behavior independently of our pixel-art default.
+        let mut p = json!({"x": x.round(), "y": y.round(), "antiAlias": true});
         match get_enum(d, "Usng").as_deref() {
             Some("FrgC") | None => {}
             Some("Pttn") => p["contents"] = json!("pattern"),
@@ -402,7 +404,7 @@ pub(super) fn fill_from(d: &Descriptor) -> Mapped {
 pub(super) fn fill_to(id: &str, p: &Value) -> Option<Descriptor> {
     if id == "paint.bucket" {
         let mut d = desc("null").with("From", D::Descriptor(desc("Pnt ").with("Hrzn", px(jnum(p, "x")?)).with("Vrtc", px(jnum(p, "y")?))));
-        d = d.with("Tlrn", long(jnum(p, "tolerance").unwrap_or(32.0))).with("AntA", D::Boolean(jbool(p, "antiAlias").unwrap_or(true)));
+        d = d.with("Tlrn", long(jnum(p, "tolerance").unwrap_or(32.0))).with("AntA", D::Boolean(jbool(p, "antiAlias").unwrap_or(false)));
         // `source` is the command's older name for `contents`.
         d = if p.get("contents").or_else(|| p.get("source")).and_then(Value::as_str) == Some("pattern") {
             // `Pttn` names no pattern and holds no placement: a chosen pattern, a scale, an angle

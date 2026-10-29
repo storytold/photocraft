@@ -109,6 +109,43 @@ fn mean(r: &[i32]) -> f32 {
     r.iter().sum::<i32>() as f32 / r.len() as f32
 }
 
+#[test]
+fn magic_wand_fill_edges_are_crisp_by_default_on_the_rendered_canvas() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    for smooth in [true, false] {
+        let Some(mut h) = harness() else { return };
+        let mut doc = Document::with_background("wand-edge-check", Size::new(32, 32), ColorMode::Rgb, SampleType::U8, Color::rgba(0.06, 0.18, 0.28, 1.0));
+        let pixels = doc.layers[0].surface_mut().unwrap();
+        pixels.fill_rect(Rect::new(1, 10, 18, 31), &[0.15, 0.1, 0.2, 1.0]);
+        pixels.fill_rect(Rect::new(18, 10, 22, 14), &[0.15, 0.1, 0.2, 1.0]);
+        h.state_mut().session.add_document(doc, None);
+        h.state_mut().sync_views();
+        control(&mut h, "ui.set", json!({"zoom": 12.0, "center": [16, 16]}));
+        h.state_mut().ui.tool = photocraft_ui_egui::state::Tool::MagicWand;
+        h.state_mut().ui.tool_options.tolerance = 0.0;
+        assert!(!h.state().ui.tool_options.wand_anti_alias);
+        if smooth {
+            h.state_mut().ui.tool_options.wand_anti_alias = true;
+        }
+        photocraft_ui_egui::canvas::tool_event(
+            h.state_mut(),
+            photocraft_ui_egui::canvas::ToolEvent::Down { x: 3.0, y: 15.0, pressure: 1.0 },
+            egui::Modifiers::NONE,
+        );
+        let before = h.state().session.active().unwrap().doc.layers[0].surface().unwrap().rgba(0, 20);
+        h.state_mut().run("edit.fill", json!({"color": "#ffffff"})).unwrap();
+        h.run_steps(4);
+        let after = h.state().session.active().unwrap().doc.layers[0].surface().unwrap().rgba(0, 20);
+        assert_eq!(before == after, !smooth, "the hard default preserves pixels outside the selected region");
+        let image = h.render().expect("selection-edge canvas render");
+        if let Some(dir) = std::env::var_os("PHOTOCRAFT_BATCH_SNAPSHOTS") {
+            let dir = std::path::PathBuf::from(dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            image.save(dir.join(if smooth { "wand-explicit-smoothing.png" } else { "wand-default-crisp.png" })).unwrap();
+        }
+    }
+}
+
 /// Dragging an adjustment layer's control (Properties panel) previews through the reduced copy
 /// only as coarse as the screen (#5764): at 100 % every column shows even with low-resolution
 /// previews on; zoomed out to 50 % the default drag runs on the reduced copy (only the black columns, inverted), and with
