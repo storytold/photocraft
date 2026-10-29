@@ -182,6 +182,7 @@
 	Group…	Група…
 	Ungroup Layers	Розгрупувати шари
 	Group from Layers…	Група із шарів…
+	New Group from Layers…	Нова група із шарів…
 	Hide Layers	Приховати шари
 	Arrange	Упорядкувати
 	Bring to Front	На передній план
@@ -426,6 +427,10 @@
 	Zoom Out	Зменшити
 	Fit on Screen	Умістити на екрані
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -2343,7 +2348,7 @@
 	Gamut warning color	Колір попередження про колірне охоплення
 	Gamut warning opacity	Непрозорість попередження про колірне охоплення
 	General	Загальні
-	Generator enabled	Генератор увімкнено
+	Enable Generator	Увімкнути генератор
 	Gif	GIF
 	Glossy	Глянцевий
 	Grid color	Колір сітки
@@ -2760,6 +2765,9 @@ fontWeight	Italic	Курсивний
 	Create new document from current state	Створити новий документ із поточного стану
 	Create new fill or adjustment layer	Створити новий шар заливки або корекції
 	Create new snapshot	Створити новий знімок стану
+	From:	З:
+	Full Document	Увесь документ
+	Merged Layers	Об'єднані шари
 	Delete Cropped Pixels	Видаляти обрізані пікселі
 	Delete current state	Видалити поточний стан
 
@@ -3815,6 +3823,8 @@ curves	Smooth	Згладити
 	Vanishing Point is not active	Точка сходження не активна
 	Apply Vanishing Point ({key})	Застосувати точку сходження ({key})
 	Fix the red plane first: its corners must form a convex quad	Спершу виправте червону площину: її кути мають утворювати опуклий чотирикутник
+	Alt-click a plane to set the clone source	Клацніть площину з Alt, щоб задати джерело клонування
+	Too many clone strokes: apply Vanishing Point first	Забагато мазків клонування: спочатку застосуйте «Точку сходження»
 # Select and Mask view modes (#1754)
 	Onion Skin	Калька
 	Marching Ants	Мурашки
@@ -3853,6 +3863,9 @@ curves	Smooth	Згладити
 # History panel menu (#2966)
 	New Snapshot…	Новий знімок стану…
 	History Options…	Параметри історії…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Дозволити нелінійну історію
+	Make Layer Visibility Changes Undoable	Дозволити скасування змін видимості шарів
 # Print dialog (#2697)
 	Emulsion Down	Емульсією донизу
 	Functions	Функції
@@ -3939,6 +3952,44 @@ curves	Smooth	Згладити
 	Sent to {printer}	Надіслано на {printer}
 	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
+	Show Favorite Fonts	Показати вибрані шрифти
+	No favorite fonts yet: click the star beside a font to add it.	Вибраних шрифтів ще немає: натисніть зірочку біля шрифту, щоб додати його.
+	Favorite fonts	Вибрані шрифти
+	Add to Favorites	Додати до вибраного
+	Remove from Favorites	Видалити з вибраного
+	Show All Fonts	Показати всі шрифти
+	All Classes	Усі класи
+	Blackletter	Готичні
+	Decorative	Декоративні
+	Font preview:	Попередній перегляд шрифту:
+	Handwritten	Рукописні
+	Hide Font Classes	Сховати класи шрифтів
+	Hide Styles	Сховати накреслення
+	Monospace	Моноширинні
+	No fonts match these filters.	Жоден шрифт не відповідає цим фільтрам.
+	No similar fonts: the current font doesn't say what it looks like.	Немає схожих шрифтів: поточний шрифт не описує свій вигляд.
+	OpenType font	Шрифт OpenType
+	Sans Serif	Без засічок
+	Script	Каліграфічні
+	Serif	Із засічками
+	Show Font Classes	Показати класи шрифтів
+	Show Similar Fonts	Показати схожі шрифти
+	Show Styles	Показати накреслення
+	Show Variable Fonts	Показати варіативні шрифти
+	Slab Serif	Із брускуватими засічками
+	TrueType font	Шрифт TrueType
+	Variable font	Варіативний шрифт
+	Calibration	Калібрування
+	Red Primary	Червоний основний
+	Green Primary	Зелений основний
+	Blue Primary	Синій основний
+	Write xmp sidecars	Записувати супутні файли XMP
+	Set the tone sliders from the image	Встановити повзунки тону за зображенням
+	Settings from {name}	Налаштування з {name}
+	Settings from {name}; {count} not supported: {names}	Налаштування з {name}; не підтримується: {count}: {names}
+	Could not write {name}: {error}	Не вдалося записати {name}: {error}
+	Kept {name}: written by another application	{name} залишено без змін: записаний іншою програмою
+	Shadow Tint	Відтінок тіней
 # PhotoCraft release checks.
 	Check for Updates…	Перевірити оновлення…
 	PhotoCraft Updates	Оновлення PhotoCraft
@@ -4130,3 +4181,20 @@ curves	Smooth	Згладити
 	Grayscale Ramp	Шкала градацій сірого
 	Current Colors	Поточні кольори
 	Make Ramp Web Safe	Зробити шкалу безпечною для вебу
+# Art History Brush (#213).
+	Art History Brush Tool	Інструмент «Художній пензель історії»
+	Tight Short	Щільний короткий
+	Tight Medium	Щільний середній
+	Tight Long	Щільний довгий
+	Loose Medium	Вільний середній
+	Loose Long	Вільний довгий
+	Dab	Мазок
+	Tight Curl	Щільний завиток
+	Loose Curl	Вільний завиток
+	Stylized dabs from a history state	Стилізовані мазки зі стану історії
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Target	Ціль
+	Font size presets	Набори розмірів шрифту
+	Leading presets	Набори інтерліньяжу
+	Tracking presets	Набори трекінгу

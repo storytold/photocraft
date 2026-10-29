@@ -26,7 +26,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
-          ref: camera-raw-white-balance
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec
         with:
           toolchain: 1.95.0
@@ -79,7 +78,7 @@ jobs:
             New-Item -ItemType Directory -Force (Split-Path $destination) | Out-Null
             Copy-Item $_.FullName $destination
           }
-          Set-Content -Encoding utf8 PhotoCraft-Bilanciamento/PhotoCraftData/portable.txt 'Impostazioni della versione di prova.'
+          Set-Content -Encoding utf8 PhotoCraft-Bilanciamento/portable.txt 'Impostazioni della versione di prova.'
           git rev-parse HEAD | Set-Content PhotoCraft-Bilanciamento/COMMIT.txt
       - name: Upload Windows app
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9

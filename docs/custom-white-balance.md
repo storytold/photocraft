@@ -71,12 +71,15 @@ resta selezionata cambiando bilanciamento del bianco ed è disponibile anche nel
 filtro Camera Raw sulle immagini già aperte. Per ripartire dalla resa precedente
 scegli Standard.
 
-Il profilo viene salvato nei documenti `.pcraft` e nelle impostazioni XMP di
-PhotoCraft tramite `pcraft:ColorProfile` nello spazio dei nomi
+Aprendo un RAW, il profilo viene applicato ai pixel del livello raster. Il salvataggio
+in `.pcraft` conserva quei pixel, ma non una selezione del profilo ancora modificabile.
+Per riutilizzare le regolazioni, salva le impostazioni XMP prima di chiudere il dialogo RAW.
+I parametri del profilo restano modificabili quando Camera Raw è un filtro avanzato
+salvato in `.pcraft`. Le impostazioni XMP di PhotoCraft conservano il profilo tramite `pcraft:ColorProfile` nello spazio dei nomi
 `urn:photocraft:camera-raw:1.0`. Photoshop ignora questa estensione. I risultati
 applicati a un livello raster si salvano normalmente in PSD o nei formati immagine;
 un filtro avanzato con un look PhotoCraft non ha una mappatura Adobe verificata
-e l'esportazione PSD lo segnala. Per conservare l'editabilità usa `.pcraft`.
+e l'esportazione PSD lo segnala. Per conservare l'editabilità del filtro avanzato usa `.pcraft`.
 
 Il controllo del dialogo accetta `{"ui":{"set":{"profile":"landscape"}}}`.
 Gli ID sono `standard`, `color`, `vivid`, `landscape`, `portrait`, `monochrome`.

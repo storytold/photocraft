@@ -715,7 +715,7 @@ fn lookup(n: usize, tetrahedral: bool, dither: bool) -> Adjustment {
             }
         }
     }
-    Adjustment::ColorLookup { name: "test".into(), lut: Some(std::sync::Arc::new(t)), size: n as u32, tetrahedral, dither }
+    Adjustment::ColorLookup { name: "test".into(), lut: Some(std::sync::Arc::new(t)), size: n as u32, tetrahedral, dither, source: None }
 }
 
 /// 32-bit Hue/Saturation on colours at and above HSL lightness 1 and with a negative channel,
@@ -2482,6 +2482,36 @@ fn stroked_shapes_with_clipped_layers() {
     }
 }
 
+/// A Photoshop Frame's stroke (#4381): along the group's vector mask, above its masked content,
+/// for an empty frame and one holding a layer, pass-through and isolated.
+#[test]
+fn frame_strokes() {
+    let Some(mut g) = gpu() else { return };
+    use photocraft_doc::vector::{Path, ShapeStroke, StrokeAlign, Subpath, VectorMask};
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (blend, align, content) in [
+            (BlendMode::PassThrough, StrokeAlign::Inside, false),
+            (BlendMode::PassThrough, StrokeAlign::Outside, true),
+            (BlendMode::Multiply, StrokeAlign::Center, true),
+        ] {
+            let mut d = Document::new("t", Size::new(80, 64), ColorMode::Rgb, depth);
+            d.layers.push(noise_layer("bg", d.pixel_format(), Rect::from_xywh(0, 0, 80, 64), 1, 0.3));
+            let kids = if content { vec![noise_layer("c", d.pixel_format(), Rect::from_xywh(0, 0, 80, 64), 7, 0.4)] } else { vec![] };
+            let mut l = Layer::group("Frame 1", kids);
+            l.blend = blend;
+            l.opacity = 0.8;
+            l.vector_mask = Some(VectorMask::new(Path::new(vec![Subpath::polygon(&[(10.3, 8.6), (66.2, 12.1), (58.7, 54.4), (16.9, 48.2)])])));
+            if let LayerContent::Group(gr) = &mut l.content {
+                gr.frame_stroke = Some(ShapeStroke { width: 5.0, align, paint: Fill::Solid(Color::rgb(0.9, 0.1, 0.1)), ..Default::default() });
+            }
+            d.layers.push(l);
+            let st = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds());
+            assert!(st.is_ok(), "planned on the GPU");
+            check(&mut g, &d, &format!("{depth:?} frame stroke {blend:?} {align:?} content {content}"));
+        }
+    }
+}
+
 #[test]
 fn artboards() {
     let Some(mut g) = gpu() else { return };
@@ -2915,6 +2945,59 @@ fn layer_pages_are_admitted_under_a_zero_budget_and_stay_on_the_gpu() {
     check(&mut g, &d, "after zero-budget renders");
 }
 
+/// A layer page texture the device has no memory for (#6563): the compositor drops the pages
+/// this cell doesn't use and tries again, then submits, waits and runs the cell once more, and
+/// only then ends this refresh on the CPU. The device stays healthy and the next refresh is back
+/// on the GPU. The test hook makes the next `n` page textures fail as out of memory.
+#[test]
+fn a_layer_page_out_of_memory_retries_then_ends_only_that_refresh_on_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = base_doc(600, 500);
+    d.layers.push(noise_layer("mid", PixelFormat::RGBA8, Rect::new(-20, 10, 590, 480), 71, 0.0));
+    let mut top = noise_layer("top", PixelFormat::RGBA8, Rect::new(30, -15, 620, 510), 72, 0.2);
+    top.blend = BlendMode::Multiply;
+    d.layers.push(top);
+    g.paged.set_composite_cache_budget(0);
+    let cpu = photocraft_compose::flatten(&d);
+    let encode = |g: &mut Gpu, d: &Document| {
+        let mut encoder = g.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        g.paged.encode(&g.device, &g.queue, &mut encoder, d, d.bounds(), &mut |_, _| {})
+    };
+    let render = |g: &mut Gpu, d: &Document| photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, d, d.bounds());
+    let matches = |out: &[[f32; 4]], what: &str| {
+        let worst = worst_diff(&cpu.px, out);
+        assert!(worst.0 <= TOL, "{what}: max diff {:.2}/255 at {}", worst.0 * 255.0, worst.1);
+    };
+    // Every case starts with no pages, so the first page texture is the one that fails.
+    let fresh = |g: &mut Gpu, d: &Document, n: u32| {
+        g.paged.forget_doc(d.id);
+        g.paged.fail_layer_allocs(n);
+    };
+
+    // One failure: the second try right away succeeds (`encode` can't submit, so this is the
+    // only retry it has).
+    fresh(&mut g, &d, 1);
+    encode(&mut g, &d).unwrap_or_else(|e| panic!("one failed page texture is retried at once: {}", e.0));
+    // Two: both tries fail, and `encode` gives the refresh to the CPU.
+    fresh(&mut g, &d, 2);
+    let e = encode(&mut g, &d).expect_err("encode can't submit to free memory");
+    assert_eq!(e.0, photocraft_gpu::OVER_BUDGET);
+    assert!(g.paged.fault().is_none(), "out of memory for a page doesn't lose the device");
+    // `render` submits, waits and runs the cell once more, which then succeeds.
+    fresh(&mut g, &d, 2);
+    let (out, s) = render(&mut g, &d).unwrap_or_else(|e| panic!("render retries after submitting: {}", e.0));
+    assert!(s.flushes > 0, "{s:?}");
+    matches(&out, "after the submit-and-retry");
+    // Four: the retry after the submit fails as well, so this refresh goes to the CPU...
+    fresh(&mut g, &d, 4);
+    let e = render(&mut g, &d).expect_err("every try failed");
+    assert_eq!(e.0, photocraft_gpu::OVER_BUDGET);
+    assert!(g.paged.fault().is_none(), "out of memory for a page doesn't lose the device");
+    // ...and the next one is back on the GPU.
+    let (out, _) = render(&mut g, &d).unwrap_or_else(|e| panic!("the refresh after an out-of-memory one is on the GPU: {}", e.0));
+    matches(&out, "the refresh after the CPU one");
+}
+
 #[test]
 fn the_focused_view_stays_resident_after_a_full_refresh() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
@@ -3000,6 +3083,25 @@ fn pass_through_clipping_base_with_an_adjustment() {
     clip.clipped = true;
     d.layers.push(clip);
     check(&mut g, &d, "pass-through clipping base with an adjustment");
+}
+
+/// Transparency Shapes Layer off changes the special eight's blend (the layer's alpha blends as
+/// Fill, #5692); the GPU has no pass for it and leaves such documents to the CPU. Other modes look
+/// the same either way and stay on the GPU.
+#[test]
+fn transparency_shapes_off_special_blend_falls_back_to_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = base_doc(64, 48);
+    let mut l = noise_layer("top", PixelFormat::RGBA8, Rect::new(4, 3, 60, 45), 2, 0.0);
+    l.blend = BlendMode::ColorDodge;
+    l.opacity = 0.53;
+    l.advanced.transparency_shapes = false;
+    d.layers.push(l);
+    assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).is_err(), "Color Dodge with Transparency Shapes Layer off");
+    if let Some(l) = d.layers.last_mut() {
+        l.blend = BlendMode::Multiply;
+    }
+    check(&mut g, &d, "Multiply with Transparency Shapes Layer off");
 }
 
 /// #5846: a shape's Density and Feather soften its fill (its own rendered pixels), with and

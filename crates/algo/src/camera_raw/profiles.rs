@@ -4,6 +4,7 @@
 use super::{band_weights, luma, rgb_to_hsv};
 use serde::{Deserialize, Serialize};
 
+/// Original artistic rendering applied before the editable color controls.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ColorProfile {
@@ -96,6 +97,15 @@ mod tests {
             }
         }
     }
+    /// GPU stages have no artistic-profile operation and must fall back to the CPU.
+    #[test]
+    fn artistic_profiles_require_the_cpu_development_path() {
+        for profile in ColorProfile::ALL {
+            let p = CameraRaw { profile, ..Default::default() };
+            assert_eq!(super::super::per_pixel(&p, 3, 1, true, None).is_some(), profile == ColorProfile::Standard);
+        }
+    }
+
     #[test]
     fn old_settings_keep_standard_and_unknown_profiles_are_rejected() {
         let old: CameraRaw = serde_json::from_str("{\"exposure\":0.5}").unwrap();

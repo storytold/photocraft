@@ -224,6 +224,7 @@
 	Tools…	Εργαλεία…
 	History Log…	Καταγραφή ιστορικού…
 	Group from Layers…	Ομαδοποίηση από επίπεδα…
+	New Group from Layers…	Νέα ομάδα από επίπεδα…
 	Artboard from Layers…	Πίνακας σχεδίασης από επίπεδα…
 	Delete Filter Mask	Διαγραφή μάσκας φίλτρου
 	Disable Filter Mask	Απενεργοποίηση μάσκας φίλτρου
@@ -761,6 +762,9 @@
 	Create new pattern from the selection	Δημιουργία μοτίβου από την επιλογή
 	Create new shape from the current path	Δημιουργία σχήματος από την τρέχουσα διαδρομή
 	Create new snapshot	Δημιουργία νέου στιγμιότυπου
+	From:	Από:
+	Full Document	Ολόκληρο έγγραφο
+	Merged Layers	Συγχωνευμένα επίπεδα
 	Create new style (from the selected type)	Δημιουργία στυλ από τον επιλεγμένο τύπο
 	Create new style from the selected layer	Δημιουργία στυλ από το επιλεγμένο επίπεδο
 	Current & Below	Τρέχον και υποκείμενα
@@ -1711,7 +1715,7 @@
 	Full size tip	Άκρη πλήρους μεγέθους
 	Gamut warning color	Χρώμα προειδοποίησης χρωματικής γκάμας
 	Gamut warning opacity	Αδιαφάνεια προειδοποίησης χρωματικής γκάμας
-	Generator enabled	Ενεργοποίηση γεννήτριας
+	Enable Generator	Ενεργοποίηση γεννήτριας
 	Click the first point or press ↵ to close · Esc cancels	Κάντε κλικ στο πρώτο σημείο ή πατήστε ↵ για κλείσιμο · Esc για ακύρωση
 	Click to add a point · drag off or ⌘/Ctrl-click or Delete to remove	Κλικ για προσθήκη σημείου · σύρσιμο εκτός ή ⌘/Ctrl-κλικ ή Delete για αφαίρεση
 	Click to apply, ⌥-click to clear overrides, double-click for Style Options	Κλικ για εφαρμογή, ⌥-κλικ για εκκαθάριση παρακάμψεων, διπλό κλικ για επιλογές στυλ
@@ -3430,6 +3434,10 @@ cameraRaw	Yellow	Κίτρινο
 
 # Labels added on main since the first batch
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	180°	180°
 	200%	200%
 	3 x 3	3 x 3
@@ -3826,6 +3834,8 @@ curves	Smooth	Εξομάλυνση
 	Vanishing Point is not active	Το Σημείο φυγής δεν είναι ενεργό
 	Apply Vanishing Point ({key})	Εφαρμογή σημείου φυγής ({key})
 	Fix the red plane first: its corners must form a convex quad	Διορθώστε πρώτα το κόκκινο επίπεδο: οι γωνίες του πρέπει να σχηματίζουν κυρτό τετράπλευρο
+	Alt-click a plane to set the clone source	Alt-κλικ σε ένα επίπεδο για να ορίσετε την πηγή κλωνοποίησης
+	Too many clone strokes: apply Vanishing Point first	Πάρα πολλές πινελιές κλωνοποίησης: εφαρμόστε πρώτα το Σημείο φυγής
 # Select and Mask view modes (#1754)
 	Onion Skin	Φλούδα κρεμμυδιού
 	Marching Ants	Κινούμενο περίγραμμα
@@ -3851,6 +3861,9 @@ curves	Smooth	Εξομάλυνση
 # History panel menu (#2966)
 	New Snapshot…	Νέο στιγμιότυπο…
 	History Options…	Επιλογές ιστορικού…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Να επιτρέπεται μη γραμμικό ιστορικό
+	Make Layer Visibility Changes Undoable	Οι αλλαγές ορατότητας επιπέδων να αναιρούνται
 # Print dialog (#2697)
 	Emulsion Down	Γαλάκτωμα προς τα κάτω
 	Functions	Λειτουργίες
@@ -3937,6 +3950,44 @@ curves	Smooth	Εξομάλυνση
 	Sent to {printer}	Στάλθηκε στον {printer}
 	set in Print Settings…	ορίζεται στις ρυθμίσεις εκτύπωσης…
 	ICO is limited to 256 × 256 pixels	Το ICO περιορίζεται σε 256 × 256 εικονοστοιχεία
+	Show Favorite Fonts	Εμφάνιση αγαπημένων γραμματοσειρών
+	No favorite fonts yet: click the star beside a font to add it.	Δεν υπάρχουν ακόμη αγαπημένες γραμματοσειρές: κάντε κλικ στο αστέρι δίπλα σε μια γραμματοσειρά για να την προσθέσετε.
+	Favorite fonts	Αγαπημένες γραμματοσειρές
+	Add to Favorites	Προσθήκη στα αγαπημένα
+	Remove from Favorites	Αφαίρεση από τα αγαπημένα
+	Show All Fonts	Εμφάνιση όλων των γραμματοσειρών
+	All Classes	Όλες οι κατηγορίες
+	Blackletter	Γοτθικές
+	Decorative	Διακοσμητικές
+	Font preview:	Προεπισκόπηση γραμματοσειράς:
+	Handwritten	Χειρόγραφες
+	Hide Font Classes	Απόκρυψη κατηγοριών γραμματοσειρών
+	Hide Styles	Απόκρυψη στυλ
+	Monospace	Σταθερού πλάτους
+	No fonts match these filters.	Καμία γραμματοσειρά δεν ταιριάζει με αυτά τα φίλτρα.
+	No similar fonts: the current font doesn't say what it looks like.	Καμία παρόμοια γραμματοσειρά: η τρέχουσα γραμματοσειρά δεν περιγράφει την εμφάνισή της.
+	OpenType font	Γραμματοσειρά OpenType
+	Sans Serif	Χωρίς πατούρες
+	Script	Καλλιγραφικές
+	Serif	Με πατούρες
+	Show Font Classes	Εμφάνιση κατηγοριών γραμματοσειρών
+	Show Similar Fonts	Εμφάνιση παρόμοιων γραμματοσειρών
+	Show Styles	Εμφάνιση στυλ
+	Show Variable Fonts	Εμφάνιση μεταβλητών γραμματοσειρών
+	Slab Serif	Με πλακοειδείς πατούρες
+	TrueType font	Γραμματοσειρά TrueType
+	Variable font	Μεταβλητή γραμματοσειρά
+	Calibration	Βαθμονόμηση
+	Red Primary	Κόκκινο πρωτεύον
+	Green Primary	Πράσινο πρωτεύον
+	Blue Primary	Μπλε πρωτεύον
+	Write xmp sidecars	Εγγραφή συνοδευτικών αρχείων XMP
+	Set the tone sliders from the image	Ορισμός των ρυθμιστικών τόνων από την εικόνα
+	Settings from {name}	Ρυθμίσεις από {name}
+	Settings from {name}; {count} not supported: {names}	Ρυθμίσεις από {name}· {count} δεν υποστηρίζονται: {names}
+	Could not write {name}: {error}	Αδυναμία εγγραφής του {name}: {error}
+	Kept {name}: written by another application	Το {name} διατηρήθηκε: γράφτηκε από άλλη εφαρμογή
+	Shadow Tint	Χροιά σκιών
 # PhotoCraft release checks.
 	Check for Updates…	Έλεγχος ενημερώσεων…
 	PhotoCraft Updates	Ενημερώσεις PhotoCraft
@@ -4120,3 +4171,20 @@ curves	Smooth	Εξομάλυνση
 	Grayscale Ramp	Διαβάθμιση του γκρι
 	Current Colors	Τρέχοντα χρώματα
 	Make Ramp Web Safe	Μόνο χρώματα ιστού στη διαβάθμιση
+# Art History Brush (#213).
+	Art History Brush Tool	Πινέλο ιστορικού τέχνης (Art History Brush Tool)
+	Tight Short	Σφιχτό κοντό
+	Tight Medium	Σφιχτό μεσαίο
+	Tight Long	Σφιχτό μακρύ
+	Loose Medium	Χαλαρό μεσαίο
+	Loose Long	Χαλαρό μακρύ
+	Dab	Πινελιά
+	Tight Curl	Σφιχτή μπούκλα
+	Loose Curl	Χαλαρή μπούκλα
+	Stylized dabs from a history state	Στυλιζαρισμένες πινελιές από μια κατάσταση ιστορικού
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Target	Στόχος
+	Font size presets	Προεπιλογές μεγέθους γραμματοσειράς
+	Leading presets	Προεπιλογές διάστιχου
+	Tracking presets	Προεπιλογές διαστήματος χαρακτήρων

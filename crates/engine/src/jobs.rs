@@ -229,6 +229,7 @@ struct Running {
     started_ms: f64,
     coalesce: Option<String>,
     color_restrict: Option<usize>,
+    filter_mask_layer: Option<LayerId>,
     /// The document's layer selection when the job started: applying targets it, not whatever
     /// got selected meanwhile (a Type click does that without editing the document, #7366).
     layers: Option<LayerSelection>,
@@ -330,14 +331,25 @@ fn independent_of_document(id: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_path(path: &str) -> Result<Vec<u8>> {
-    // Bounded reads, and a clear error for a file larger than memory (#375).
-    photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+fn import_path(
+    name: &str,
+    path: &str,
+    opts: &photocraft_io::ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
+    // Bounded reads, and a clear error for a file larger than memory (#375); a PSD/PSB is
+    // parsed from the open file instead of being read whole.
+    photocraft_io::import_file_for_open_with(name, std::path::Path::new(path), opts, ctl)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_path(path: &str) -> Result<Vec<u8>> {
-    Err(EngineError::Other(format!("cannot open paths on the web: {path}")))
+fn import_path(
+    _: &str,
+    path: &str,
+    _: &photocraft_io::ImportOptions,
+    _: &photocraft_raster::Interrupt,
+) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
+    Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
 }
 
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
@@ -418,6 +430,7 @@ pub fn run<T: Send + 'static>(
         started_ms: now_ms(),
         coalesce: s.coalesce_request.clone(),
         color_restrict: s.color_restrict,
+        filter_mask_layer: s.filter_mask_layer,
         layers,
         rx,
         apply: Some(erased),
@@ -553,17 +566,19 @@ impl Session {
             false,
             move |ctx| {
                 ctx.progress(0.0, "Reading");
-                let bytes = match source {
-                    OpenSource::Bytes(b) => b,
-                    OpenSource::Path(p) => Arc::new(read_path(&p)?),
-                };
-                ctx.check()?;
-                ctx.progress(0.02, "Decoding");
-                let imported =
-                    ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl)).map_err(|e| match e {
-                        photocraft_io::IoError::Cancelled => EngineError::Cancelled,
-                        e => EngineError::Other(e.to_string()),
-                    })?;
+                let imported = match source {
+                    OpenSource::Bytes(bytes) => {
+                        ctx.check()?;
+                        ctx.progress(0.02, "Decoding");
+                        ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl))
+                    }
+                    // A PSD/PSB is decoded straight from the file, which is never read whole.
+                    OpenSource::Path(p) => ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, ctl)),
+                }
+                .map_err(|e| match e {
+                    photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+                    e => EngineError::Other(e.to_string()),
+                })?;
                 ctx.progress(0.95, "Preparing layers");
                 warm_layer_bounds(&imported.0.document, || ctx.check())?;
                 // Type layers need the shared text engine, whose first use waits for the
@@ -762,6 +777,9 @@ impl Session {
 
     /// Run the command `id`: inline, or (with `background`) as a job when it is one.
     pub(crate) fn dispatch(&mut self, id: &str, params: Value, background: bool) -> Result<Started> {
+        // The offer belongs to this one dispatch. Early errors drop it locally, including
+        // authorization, validation, floating-selection and admission failures.
+        let live_commit = self.live_commit.take();
         let spec = crate::commands::find(id).ok_or_else(|| EngineError::UnknownCommand(id.to_string()))?;
         // Params are named fields: anything but an object (or null, meaning none) is a caller
         // mistake, not "use every default".
@@ -818,6 +836,7 @@ impl Session {
         let expand_new_fx = crate::commands::layer_panel_option(self, "expandNewEffects", true);
         self.coalesce_request = params.get("coalesce").and_then(Value::as_str).map(str::to_string);
         self.color_restrict = crate::channel_cmds::color_restriction(self, id, &run_params);
+        self.filter_mask_layer = crate::channel_cmds::filter_mask_layer(self, id, &run_params);
         self.jobs.spawn = background;
         // Commands this one runs on its own behalf journal after this mark (#3067).
         let nested_from = self.journal.len();
@@ -830,14 +849,21 @@ impl Session {
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
+        self.live_commit = live_commit.filter(|live| live.cmd == id);
         let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| (spec.run)(self, &run_params)))
             .unwrap_or_else(|_| Err(EngineError::Other(format!("`{id}` failed with an internal error (logged); the document is unchanged"))));
+        self.live_commit = None;
         if self.actions.recording.is_none() {
             self.actions.recording = recording;
         }
         self.jobs.spawn = false;
         self.coalesce_request = None;
         self.color_restrict = None;
+        self.filter_mask_layer = None;
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.hint_before = None;
+        }
         let pending = self.jobs.pending.take();
         match (r, pending) {
             (Err(e), Some(job)) => {
@@ -950,7 +976,8 @@ impl Session {
     }
 
     fn apply_job(&mut self, job: &Running, apply: Option<Apply>, payload: Payload) -> Result<Value> {
-        let Running { label, doc, snapshot, coalesce, color_restrict, layers, command, params, journal, recorded_by, pre_selected, .. } = job;
+        let Running { label, doc, snapshot, coalesce, color_restrict, filter_mask_layer, layers, command, params, journal, recorded_by, pre_selected, .. } =
+            job;
         // A recording started after the job (#7289) keeps what it has so far, and the job's step
         // goes into the journal past its start, so that recording doesn't get it.
         let foreign = self.actions.recording.is_some() && *recorded_by != Some(self.actions.take);
@@ -967,6 +994,7 @@ impl Session {
                     return Err(EngineError::Other(format!("`{label}`: the document changed while it ran; the result was discarded")));
                 }
                 self.active = Some(i);
+                self.note_active_change();
                 Some(i)
             }
             None => None,
@@ -986,6 +1014,7 @@ impl Session {
         };
         self.coalesce_request = coalesce.clone();
         self.color_restrict = *color_restrict;
+        self.filter_mask_layer = *filter_mask_layer;
         // Apply-time hooks can dispatch commands too. Keep the same single-step recording
         // contract as synchronous dispatch without truncating work done while the worker ran.
         let nested_from = self.journal.len();
@@ -1000,6 +1029,7 @@ impl Session {
         }
         self.coalesce_request = None;
         self.color_restrict = None;
+        self.filter_mask_layer = None;
         // Finish successful command bookkeeping on the document the job edited.
         // Restoring the viewed document first would attribute Fade and slice updates
         // to that document instead, when the user switched tabs mid-job.
@@ -1022,11 +1052,15 @@ impl Session {
         // This also restores the selection when the apply step returned an error.
         if target.is_some() && self.active == target {
             self.active = prev_active.filter(|i| *i < self.docs.len()).or(self.active);
+            self.note_active_change();
         }
         r
     }
 
     fn end_job(&mut self, job: &Running, outcome: JobOutcome) {
+        // Every terminal path invalidates a preview, including worker errors, cancellation
+        // and discarded results whose document was closed or changed.
+        self.live_commit = None;
         let (state, result, error) = match &outcome {
             JobOutcome::Done(v) => ("done", Some(v.clone()), None),
             JobOutcome::Failed(e) => ("failed", None, Some(e.clone())),
@@ -1092,7 +1126,6 @@ pub fn specs() -> Vec<crate::commands::CommandSpec> {
 }
 
 #[cfg(test)]
-#[path = "jobs_tests.rs"]
 mod tests;
 
 #[cfg(test)]
