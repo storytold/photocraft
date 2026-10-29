@@ -280,6 +280,9 @@ struct Sizes {
     first_document: (u32, u32),
 }
 
+/// The most `--reps` a run takes: each sample is kept, and a mistyped count must not allocate for them all.
+const MAX_REPS: usize = 10_000;
+
 const FULL: Sizes = Sizes {
     layered: (5472, 3648),
     big_layer: (4243, 2828),
@@ -374,7 +377,7 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let quick = args.iter().any(|a| a == "--quick");
     let sz = if quick { &QUICK } else { &FULL };
-    let reps: usize = arg(&args, "--reps").and_then(|v| v.parse().ok()).unwrap_or(if quick { 7 } else { 15 }).max(1);
+    let reps: usize = arg(&args, "--reps").and_then(|v| v.parse().ok()).unwrap_or(if quick { 7 } else { 15 }).clamp(1, MAX_REPS);
     let gpu = if args.iter().any(|a| a == "--cpu") { None } else { canvas() };
     let no_reuse = args.iter().any(|a| a == "--no-composite-reuse");
     if no_reuse && let Some((canvas, _)) = &gpu {

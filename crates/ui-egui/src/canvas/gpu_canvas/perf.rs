@@ -221,6 +221,9 @@ impl Perf {
         self.last_refresh_px = px;
         self.composite_ms = composite_ms;
         self.upload_ms = upload_ms;
+        // A refresh that didn't come through `record_refresh` or `record_gpu_attempt` had no failed
+        // GPU attempt: the last one's time would be read as this refresh's.
+        self.gpu_attempt_ms = 0.0;
         if !kind.starts_with("gpu") {
             self.gpu_uploads = 0;
             // The CPU compositor did this one: there is no GPU time, and the last GPU
@@ -232,12 +235,18 @@ impl Perf {
 
     /// Record a canvas refresh and any GPU measurement that came back with it.
     pub fn record_refresh(&mut self, r: &Refresh) {
-        self.gpu_attempt_ms = r.gpu_attempt_ms;
         self.record(r.kind, r.px, r.composite_ms, r.upload_ms);
-        self.stage.composite_ms += r.gpu_attempt_ms;
+        self.record_gpu_attempt(r.gpu_attempt_ms);
         if let Some(t) = r.gpu {
             self.record_gpu(t);
         }
+    }
+
+    /// Record the time a failed GPU composite attempt took before the CPU did the refresh just
+    /// recorded, apart from that refresh's own CPU time.
+    pub fn record_gpu_attempt(&mut self, ms: f64) {
+        self.gpu_attempt_ms = ms;
+        self.stage.composite_ms += ms;
     }
 
     /// Record a GPU composite measurement that came back (see [`photocraft_gpu::GpuTiming`]).
