@@ -3721,3 +3721,9 @@ curves	Smooth	매끄럽게
 	Font size presets	글꼴 크기 사전 설정
 	Leading presets	행간 사전 설정
 	Tracking presets	자간 사전 설정
+
+# Startup splash screen
+	Initializing graphics & engine…	그래픽 및 엔진 초기화 중…
+	Loading workspace & font assets…	작업 영역 및 글꼴 준비 중…
+	Ready	준비 완료
+	Click anywhere to skip	아무 곳이나 클릭하여 건너뛰기

@@ -282,3 +282,8 @@ sync_github_name = false
 [people.jasallen]
 real_name = "Jason DeBoever"
 sync_github_name = true
+
+[people.sbjwin]
+real_name = "Baekjin Sung"
+display_name = "Baekjin"
+
