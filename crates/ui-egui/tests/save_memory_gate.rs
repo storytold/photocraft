@@ -51,7 +51,8 @@ fn a_save_that_does_not_fit_fails_and_leaves_the_document_unsaved() {
     let err = refused.unwrap_err();
     assert!(err.contains("Not enough memory to save \u{201c}big.psd\u{201d}"), "{err}");
     assert!(err.contains("Edit \u{203a} Purge \u{203a} All"), "{err}");
-    assert!(refused_automation.is_err());
+    let automation_err = refused_automation.unwrap_err();
+    assert!(automation_err.contains("Not enough memory to save \u{201c}auto.psd\u{201d}"), "{automation_err}");
     assert_eq!(*writes.borrow(), 0, "nothing was encoded or written");
     assert_eq!(identity(&app), before, "the document is unsaved and unchanged");
     app.save_as(Some("big.psd".into())).unwrap();

@@ -2,10 +2,11 @@
 //!
 //! On the web a failed allocation aborts the module and the page freezes without a message. The
 //! big operations refuse up front when they won't fit (`photocraft_engine::memory_gate`); this
-//! tells the user earlier, while there is still room to save: when less than [`WARN_BELOW`] can
-//! be allocated in one piece, a notice that stays until dismissed asks them to save and free
-//! memory. The answer comes from [`photocraft_raster::headroom`], which asks the allocator
-//! itself, so it follows this browser's and device's real ceiling. It is always "plenty" on
+//! tells the user earlier, while there is still room to save: when the module's memory is within
+//! [`WARN_BELOW`] of the wasm32 ceiling, a notice that stays until dismissed asks them to save and
+//! free memory. The answer comes from [`photocraft_raster::headroom::below`], which reads the
+//! size of linear memory and allocates nothing. Linear memory never shrinks, so on the web the
+//! warning doesn't re-arm once shown (only `?free-mb` or a test can make memory recover). It is always "plenty" on
 //! the desktop, so the warning never shows there.
 
 use photocraft_raster::headroom;
@@ -19,7 +20,7 @@ pub const WARN_BELOW: u64 = 512 << 20;
 /// the threshold doesn't flicker the notice on and off.
 pub const REARM_ABOVE: u64 = 768 << 20;
 
-/// Seconds between checks. A check reserves and frees a block, which is cheap but not free.
+/// Seconds between checks.
 const CHECK_EVERY: f64 = 2.0;
 
 /// The notice's title (an English source string, translated when drawn).
@@ -82,7 +83,6 @@ pub fn tick(app: &mut PhotocraftApp, now: f64) {
     if app.session.active().is_none() || !app.low_memory.due(now) {
         return;
     }
-    // Look at the larger threshold only when it matters: a check is a trial reservation.
     let below_warn = headroom::below(WARN_BELOW);
     let below_rearm = if app.low_memory.warned() { headroom::below(REARM_ABOVE) } else { below_warn };
     match app.low_memory.step(below_warn, below_rearm) {

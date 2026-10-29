@@ -41,16 +41,23 @@ pub fn is_trap(name: &str, message: &str) -> bool {
             .any(|m| message.contains(m))
 }
 
+/// Trap messages that mean an allocation failed: `unreachable` with no panic before it is the
+/// allocation-failure abort (the only one that runs no Rust), the others are the browser
+/// refusing to grow the memory. `memory access out of bounds` is not among them: it is a bug.
+const OUT_OF_MEMORY: [&str; 3] = ["unreachable", "could not allocate memory", "Out of memory"];
+
 /// The line under "PhotoCraft stopped": a captured panic means an internal error; a trap with no
-/// panic before it is the allocation-failure path (the only abort that runs no Rust), unless the
-/// trap says otherwise.
+/// panic before it is out of memory when its message says so (or says nothing), and otherwise
+/// unexpected.
 pub fn detail(panic: Option<&str>, trap_message: &str) -> String {
     if let Some(p) = panic {
         return format!("It hit an internal error: {p}");
     }
-    let unexplained =
-        !trap_message.is_empty() && !trap_message.contains("unreachable") && !trap_message.contains("memory") && !trap_message.contains("Out of memory");
-    if unexplained { format!("It stopped unexpectedly: {}", truncate(trap_message)) } else { "It ran out of memory.".to_owned() }
+    if trap_message.is_empty() || OUT_OF_MEMORY.iter().any(|m| trap_message.contains(m)) {
+        "It ran out of memory.".to_owned()
+    } else {
+        format!("It stopped unexpectedly: {}", truncate(trap_message))
+    }
 }
 
 /// `?free-mb=N` from a URL query (`?cpu&free-mb=300`): pretend only N MiB can be allocated, so
@@ -85,6 +92,9 @@ mod tests {
     fn another_kind_of_trap_is_not_blamed_on_memory() {
         let text = detail(None, "divide by zero");
         assert!(text.starts_with("It stopped unexpectedly: divide by zero"), "{text}");
+        // A bad memory access is a bug, not memory running out.
+        let text = detail(None, "memory access out of bounds");
+        assert!(text.starts_with("It stopped unexpectedly: memory access out of bounds"), "{text}");
     }
 
     #[test]

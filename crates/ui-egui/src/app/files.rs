@@ -614,6 +614,7 @@ impl PhotocraftApp {
             };
         }
         let state = self.session.active().ok_or("no document")?;
+        ensure_memory_to_save(&state.doc, &target)?;
         let (doc, revision) = (state.doc.id, state.revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
         let (bytes, warnings) = export(&state.doc, &target, &settings)?;

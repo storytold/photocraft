@@ -14,6 +14,10 @@
 //! freed block returns to the allocator's free list, so the operation reuses it. A reservation
 //! is not written to, so the browser commits no physical pages for it.
 //!
+//! [`below`], which the low-memory warning asks every few seconds, does not reserve anything:
+//! wasm linear memory never shrinks, so a periodic trial would raise the module's high-water
+//! mark by the amount it asks about, for nothing. It reads the size of linear memory instead.
+//!
 //! Native targets overcommit, so the question has no useful answer there: every check passes and
 //! desktop behaviour is unchanged.
 
@@ -44,6 +48,10 @@ fn simulated() -> Option<u64> {
     }
 }
 
+/// The most linear memory a wasm32 module can address.
+#[cfg(target_arch = "wasm32")]
+const WASM32_CEILING: u64 = 4 << 30;
+
 /// `true` when `bytes` can be allocated in one piece right now. Always `true` off the web.
 fn can_allocate(bytes: u64) -> bool {
     if let Some(available) = simulated() {
@@ -73,10 +81,27 @@ pub fn ensure(need: u64) -> Result<(), AllocationError> {
     if can_allocate(total) { Ok(()) } else { Err(AllocationError::NotEnoughMemory { bytes }) }
 }
 
-/// `true` while less than `bytes` can be allocated in one piece (web only; always `false`
-/// elsewhere unless a simulation is set).
+/// `true` while the module's linear memory is within `bytes` of the 4 GiB wasm32 ceiling (web
+/// only; always `false` elsewhere unless a simulation is set). Allocates nothing, unlike
+/// [`ensure`]. Linear memory is a high-water mark, so this errs towards `true`: room freed inside
+/// the allocator after a peak doesn't count. A browser that stops growing memory below 4 GiB isn't
+/// seen either; the operation checks still are.
 pub fn below(bytes: u64) -> bool {
-    !can_allocate(bytes)
+    if let Some(available) = simulated() {
+        return bytes > available;
+    }
+    linear_memory_left().is_some_and(|left| left < bytes)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn linear_memory_left() -> Option<u64> {
+    let used = (core::arch::wasm32::memory_size::<0>() as u64).saturating_mul(64 << 10);
+    Some(WASM32_CEILING.saturating_sub(used))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn linear_memory_left() -> Option<u64> {
+    None
 }
 
 #[cfg(test)]

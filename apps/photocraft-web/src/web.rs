@@ -85,6 +85,8 @@ pub fn start() {
         // After the runner's own panic handler, so the message is kept and the runner's handler
         // still runs (a panic aborts the module).
         keep_panic_message();
+        // Before the app is built: a trap while building it shows the stopped message too.
+        listen_for_trap();
         let result = runner
             .start(
                 canvas,
@@ -117,9 +119,6 @@ pub fn start() {
                 }),
             )
             .await;
-        if result.is_ok() {
-            listen_for_trap();
-        }
         if let Some(el) = document.get_element_by_id("photocraft_loading") {
             match result {
                 Ok(()) => el.remove(),
