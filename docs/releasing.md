@@ -20,11 +20,10 @@ in the manual check window. Concurrent requests share one check.
 HTTPS validates certificates and host names against the operating system's trust store.
 
 Tags must be semantic versions (`v0.8.0` or `0.8.0`); only published stable versions newer
-than the installed workspace version trigger a notice. The notice opens the official release
-page to choose an installer; installation remains a user action. Drafts and prereleases do
-not trigger it. Web/headless frontends and the Flatpak (no network in its sandbox; `flatpak update`
-owns updates there) have no update transport. No release-workflow changes
-are required: publishing a newer stable GitHub Release makes it discoverable.
+than the installed workspace version trigger a notice. Drafts and prereleases do not trigger it.
+Flatpak builds also check for releases; repository-managed installations are updated through
+their package manager. Web/headless frontends have no update transport. No release-workflow
+changes are required: publishing a newer stable GitHub Release makes it discoverable.
 
 ## Cutting a release
 
@@ -265,10 +264,9 @@ Why these formats:
 
   Sandbox permissions (justified in the manifest): Wayland with X11 fallback, IPC (X11
   shared memory), `dri` for the GPU, and read/write access to Pictures and Documents. Every
-  other file goes through the file-chooser and document portals. There's no network, so the
-  `--control` server is only reachable from inside the sandbox until the user runs
-  `flatpak override --user --share=network ai.storyteller.photocraft`. Host fonts are read from
-  `/run/host/fonts` and `/run/host/user-fonts`. Locally (on Linux, with `flatpak` and
+  other file goes through the file-chooser and document portals. Network access enables update
+  checks and makes the optional loopback `--control` server reachable from the host. Host fonts
+  are read from `/run/host/fonts` and `/run/host/user-fonts`. Locally (on Linux, with `flatpak` and
   `flatpak-builder`): `packaging/linux/package.sh --formats tar && packaging/linux/flatpak-bundle.sh`.
 - **Flathub**: `packaging/linux/flatpak/ai.storyteller.photocraft.yml` builds from source and
   is ready for a Flathub submission (it keeps the same runtime and `finish-args` as the bundle

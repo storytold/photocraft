@@ -23,9 +23,8 @@ finish-args:
   - --socket=fallback-x11
   # X11 shared memory (MIT-SHM). Without it the X11 fallback is slow or fails.
   - --share=ipc
-  # Network for the optional --control server: it listens on 127.0.0.1 in the sandbox, which with
-  # network shared is also reachable from the host's network namespace. The in-app update check
-  # is disabled under Flatpak (flatpak update owns updates), so this does not enable it.
+  # Network for update checks and the optional --control server. The server listens on 127.0.0.1,
+  # which with network shared is also reachable from the host's network namespace.
   - --share=network
   # GPU access for the wgpu compositor (Vulkan, or GL as a fallback).
   - --device=dri
