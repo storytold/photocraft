@@ -541,11 +541,9 @@ fn crop_mask(m: &[f32], pw: usize, pad: usize, w: usize, h: usize) -> Vec<f32> {
     out
 }
 
-/// `Vec::push` that reports an allocation failure instead of aborting.
+/// Pushes a pixel onto the grow frontier, reporting an allocation failure instead of aborting.
 fn try_push(stack: &mut Vec<usize>, i: usize) -> Result<()> {
-    stack.try_reserve(1).map_err(|_| crate::allocation::error("growing a selection", "the pixel stack could not grow"))?;
-    stack.push(i);
-    Ok(())
+    crate::allocation::try_push(stack, i, "growing a selection")
 }
 
 /// Grow (contiguous) / Similar (anywhere): pixels whose colour lies within

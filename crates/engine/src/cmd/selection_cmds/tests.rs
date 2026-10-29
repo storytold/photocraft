@@ -690,6 +690,21 @@ fn grow_and_similar_report_a_failed_mask_allocation_and_keep_the_selection() {
 }
 
 #[test]
+fn grow_reports_a_failed_frontier_push_mid_traversal_and_keeps_the_selection() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
+    s.execute("select.rect", json!({"x": 6, "y": 6, "width": 4, "height": 4})).unwrap();
+    // Two buffer allocations (sample, result), then the 12 ring pixels of the 4x4 selection seed the
+    // frontier; three more clean pushes happen while flood-filling outwards before the next one fails.
+    crate::allocation::fail_after_for_test(2 + 12 + 3);
+    let err = s.execute("select.grow", json!({"tolerance": 5})).unwrap_err().to_string();
+    assert!(err.contains("not enough memory for growing a selection"), "{err}");
+    assert_eq!(coverage(&s, 7, 7), 1.0, "the selection must be untouched");
+    assert_eq!(coverage(&s, 20, 20), 0.0, "the flood fill must not have been committed");
+    assert_eq!(coverage(&s, 11, 7), 0.0, "the flood fill must not have been committed");
+}
+
+#[test]
 fn lasso_polygon() {
     let mut s = session();
     s.execute("select.lasso", json!({"points": [[0, 0], [20, 0], [0, 20]]})).unwrap();
