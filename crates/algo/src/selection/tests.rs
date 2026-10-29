@@ -64,7 +64,7 @@ fn color_matcher_splits_colors_that_are_all_nearly_equal() {
             [c, 0.25, 0.75, 1.0]
         })
         .collect();
-    let matcher = ColorMatcher::new(selected.iter().copied(), 0.0);
+    let matcher = ColorMatcher::new(selected.iter().copied(), 0.0).unwrap();
     assert!(matches!(matcher.tree, ColorBvh::Node { .. }), "more than 16 colours must not share one leaf");
     for p in &selected {
         assert!(matcher.matches(*p));
