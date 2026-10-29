@@ -104,28 +104,7 @@ pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat, pdf_import: Option<super
     hash.update(bytes);
     if let Some(options) = pdf_import.filter(|options| *options != super::PdfImportOptions::default()) {
         hash.update(b"\0pdf-import\0");
-        hash.update(&[options.mode as u8, options.crop_box as u8, options.color_mode as u8, options.depth as u8, u8::from(options.anti_alias)]);
-        hash.update(&options.page.to_le_bytes());
-        hash.update(&options.dpi.to_bits().to_le_bytes());
-        match options.pixel_size {
-            Some((width, height)) => {
-                hash.update(&[1]);
-                hash.update(&width.to_le_bytes());
-                hash.update(&height.to_le_bytes());
-            }
-            None => {
-                hash.update(&[0]);
-            }
-        }
-        match options.image {
-            Some(image) => {
-                hash.update(&[1]);
-                hash.update(&image.to_le_bytes());
-            }
-            None => {
-                hash.update(&[0]);
-            }
-        }
+        hash.update(&options.key_bytes());
     }
     (*hash.finalize().as_bytes(), fmt)
 }

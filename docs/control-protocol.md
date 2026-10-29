@@ -115,9 +115,13 @@ The transport is `apps/photocraft/src/control_server.rs`, and the handlers are i
 
 ## PDF import
 
-`file.openAs`, `file.placeEmbedded` and `file.placeLinked` accept
-`"layers":"auto|layers|render"`. This is independent of `"mode"`, which remains the raster
-colour model (`rgb`, `gray`, `cmyk`, `lab`). CLI `convert` and `info` expose `--layers`.
+The capability-scoped open and place methods take the PDF fields: `app.open` on the desktop
+control channel, and `doc.open` and `doc.place` on the headless JSON server (MCP `doc_open` and
+`doc_place`). The engine commands `file.openAs`, `file.placeEmbedded` and `file.placeLinked`
+take the same fields, but they read ambient paths, so the control channel refuses them (see
+[Engine commands](#engine-commands)). `"layers":"auto|layers|render"` is independent of
+`"mode"`, which remains the raster colour model (`rgb`, `gray`, `cmyk`, `lab`). CLI `convert`
+and `info` expose `--layers`.
 
 - `auto` (default): recover Photoshop-preserved editing data, or use the existing page renderer
   when no Photoshop data exists.
@@ -127,7 +131,12 @@ colour model (`rgb`, `gray`, `cmyk`, `lab`). CLI `convert` and `info` expose `--
 The existing `page`, `resolution`, `crop`, `mode`, `depth`, `antiAlias`, `name`, `password`,
 `image` and `suppressWarnings` fields remain available. Explicit `image` extraction takes the
 Images path, not the layer path. Raster size/colour choices do not reinterpret preserved layers.
-For example: `file.openAs {"path":"label.pdf","layers":"render","page":2,"resolution":144,"crop":"cropBox"}`.
+For example: `app.open {"path":"label.pdf","layers":"render","page":2,"resolution":144,"crop":"cropBox"}`.
+
+A one-page PDF whose page is nothing but one image opens as that image, as in Photoshop: its own
+pixels and resolution, named like an image file (`scan.pdf`). `crop`, `resolution`, `mode` and
+`depth` don't apply to it, and neither does `"layers":"render"`. Preserved Photoshop layers are
+still checked first in `auto` and `layers` modes. Pass `image` to pick an image explicitly.
 
 PDF sources never become the document's Save target, including one-image shortcuts.
 Batch same-file exports are refused even for a disguised extension or hard-link alias.

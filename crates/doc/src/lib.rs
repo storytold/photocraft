@@ -571,6 +571,33 @@ impl Default for PdfImportOptions {
     }
 }
 
+impl PdfImportOptions {
+    /// Stable bytes for the render, stage and PSD-export cache keys. The destructuring names every
+    /// field, so a new field fails to compile here instead of sharing a stale cache entry.
+    pub fn key_bytes(&self) -> Vec<u8> {
+        let Self { mode, page, dpi, crop_box, color_mode, depth, anti_alias, pixel_size, image } = *self;
+        let mut out = vec![mode as u8, crop_box as u8, color_mode as u8, depth as u8, u8::from(anti_alias)];
+        out.extend(page.to_le_bytes());
+        out.extend(dpi.to_bits().to_le_bytes());
+        match pixel_size {
+            Some((width, height)) => {
+                out.push(1);
+                out.extend(width.to_le_bytes());
+                out.extend(height.to_le_bytes());
+            }
+            None => out.push(0),
+        }
+        match image {
+            Some(image) => {
+                out.push(1);
+                out.extend(image.to_le_bytes());
+            }
+            None => out.push(0),
+        }
+        out
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct SmartObject {
     /// Ordinary layer duplicates share this identity; independent contents receive a fresh one.
@@ -1398,6 +1425,26 @@ impl Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_pdf_import_field_changes_its_key() {
+        let base = PdfImportOptions::default();
+        let variants = [
+            base,
+            PdfImportOptions { mode: PdfImportMode::Render, ..base },
+            PdfImportOptions { page: 2, ..base },
+            PdfImportOptions { dpi: 72.0, ..base },
+            PdfImportOptions { crop_box: PdfBox::Media, ..base },
+            PdfImportOptions { color_mode: ColorMode::Cmyk, ..base },
+            PdfImportOptions { depth: SampleType::U16, ..base },
+            PdfImportOptions { anti_alias: false, ..base },
+            PdfImportOptions { pixel_size: Some((1, 2)), ..base },
+            PdfImportOptions { pixel_size: Some((2, 1)), ..base },
+            PdfImportOptions { image: Some(1), ..base },
+        ];
+        let keys: std::collections::HashSet<_> = variants.iter().map(PdfImportOptions::key_bytes).collect();
+        assert_eq!(keys.len(), variants.len());
+    }
 
     fn doc() -> Document {
         Document::with_background("t", Size::new(100, 50), ColorMode::Rgb, SampleType::U8, Color::WHITE)

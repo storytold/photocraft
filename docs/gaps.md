@@ -448,6 +448,7 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-05 | minor | G10: Photoshop-preserved PDF layers integrated with maintained Import PDF #11414; source protection and native/PSD smart projections retained; estimates unchanged. |
 | 2026-11-02 | minor | G11: Batch Esc Continue/Stop, one plan and error log across interruptions, and read-only input previews without a progress bar (#4579); live tab parity remains open, AUTO-219-5 partial; readiness and estimate unchanged |
 | 2026-11-02 | minor | Action recording folds Move-tool nudge runs, records keyboard document switches by opening-order offset and places point text by canvas percentage; paragraph boxes remain absolute (AUTO-219-1, #4514); parity percentages unchanged |
 | 2026-11-01 | minor | Action recording stores portable layer targets and whole-text Type steps where unambiguous (AUTO-219-1, #4514); duplicate names remain ambiguous; parity percentages unchanged |

@@ -1703,6 +1703,13 @@ impl Session {
         if let Some(from) = nested_from.filter(|_| crate::actions_cmds::replayable(id)) {
             self.journal.truncate(from);
         }
+        let mut params = params;
+        // PDF passwords authorize this import only, never journal or record them in an action.
+        if matches!(id, "file.openAs" | "file.placeEmbedded" | "file.placeLinked")
+            && let Some(fields) = params.as_object_mut()
+        {
+            fields.remove("password");
+        }
         let typed = crate::actions_record::typed_layer(self, id, &params);
         let params = match id {
             _ if self.actions.recording.is_none() => params,

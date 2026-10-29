@@ -410,7 +410,8 @@ fn import_pdf_inner(name: &str, bytes: &[u8], opts: &PdfOpenOptions, ctl: &Inter
     let count = pdf.pages().len();
     let page = page_of(&pdf, opts.page)?;
     if opts.layer_mode != photocraft_doc::PdfImportMode::Render {
-        match crate::pdf_layers::import_page(name, page, ctl) {
+        // Named like a rendered page: the chosen name or the file's stem, `-N.pdf` on a multi-page file.
+        match crate::pdf_layers::import_page(&page_name(name, opts.name.as_deref(), opts.page, count), page, ctl) {
             Ok(result) => return Ok(result),
             Err(crate::pdf_layers::LayeredPdfError::Absent) if opts.layer_mode == photocraft_doc::PdfImportMode::Auto => {}
             Err(error) => return Err(error.into_io()),

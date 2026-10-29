@@ -197,3 +197,10 @@ fn input_page_and_size_errors_are_not_preservation_corruption() {
     assert!(matches!(validate_pdf_size_len(MAX_PDF_BYTES + 1), Err(LayeredPdfError::Pdf(_))));
     assert!(matches!(layered_result("cancelled.pdf", &bytes, 1, None, &Interrupt::new(&|| true, &|_| {})), Err(LayeredPdfError::Cancelled)));
 }
+
+#[test]
+fn preserved_layers_are_named_like_a_rendered_page() {
+    let bytes = preserved(&blocks(&source(SampleType::U8)), 8, None, "", "");
+    let imported = crate::import_with_options("/home/me/scans/layers.pdf", &bytes, &options(PdfImportMode::Layers)).unwrap();
+    assert_eq!(imported.document.name, "layers", "the file stem, as page_name gives an ordinary page");
+}

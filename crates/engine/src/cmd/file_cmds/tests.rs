@@ -3320,3 +3320,17 @@ fn password_supplied_pdf_is_native_embedded_and_linking_is_refused() {
     assert!(matches!(&smart.source, SmartSource::Embedded { file_name, .. } if file_name.ends_with(".pcraft")));
     assert_eq!(smart.pdf_import, None);
 }
+
+#[test]
+fn pdf_password_is_not_journaled() {
+    let mut s = session(40, 24, 8);
+    let dir = tmp("journal-password");
+    let path = format!("{dir}/pages.pdf");
+    std::fs::write(&path, smart_pdf_pages()).unwrap();
+    s.execute("file.placeEmbedded", json!({"path": path, "password": "secret"})).unwrap();
+    let (id, params) = s.journal.last().unwrap();
+    assert_eq!(id, "file.placeEmbedded");
+    assert!(params.get("password").is_none(), "{params}");
+    assert_eq!(params["path"], json!(path));
+    let _ = std::fs::remove_dir_all(dir);
+}
