@@ -22,6 +22,10 @@ finish-args:
   - --socket=fallback-x11
   # X11 shared memory (MIT-SHM). Without it the X11 fallback is slow or fails.
   - --share=ipc
+  # Network for the optional --control server: it listens on 127.0.0.1 in the sandbox, which with
+  # network shared is also reachable from the host's network namespace. The in-app update check
+  # is disabled under Flatpak (flatpak update owns updates), so this does not enable it.
+  - --share=network
   # GPU access for the wgpu compositor (Vulkan, or GL as a fallback).
   - --device=dri
   # Printing: the host's CUPS socket, so File › Print reaches the print server directly (IPP,
@@ -33,9 +37,7 @@ finish-args:
   # line, Open Recent, "Save" next to the original) work in the usual places.
   - --filesystem=xdg-pictures
   - --filesystem=xdg-documents
-  # Deliberately not granted: network (the optional --control server listens on 127.0.0.1 in
-  # the sandbox; `flatpak override --user --share=network ai.storyteller.photocraft` exposes it to
-  # host agents) and home/host filesystem access.
+  # Deliberately not granted: home/host filesystem access.
 modules:
   - name: photocraft
     buildsystem: simple

@@ -41,7 +41,7 @@ thiserror = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
 rfd = { workspace = true }
-arboard = { version = "3.6", features = ["wayland-data-control"] }
+arboard = { version = "3.7", features = ["wayland-data-control"] }
 open = "5"
 # Reads the saved window layout (eframe persistence) to drop values that would abort startup.
 ron = "0.12"
@@ -59,12 +59,12 @@ fmv-macos-events = "=0.1.0"
 # pointer is when files are dropped (cursor.rs; winit 0.30 drops carry no position), and play the
 # system alert sound for Beep When Done (services.rs, NSBeep). Already in
 # Cargo.lock (winit, photocraft-tablet); pinned exactly to the same versions.
-objc2 = "=0.6.4"
+objc2 = "=0.6.5"
 objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSArray", "NSEnumerator", "NSGeometry"] }
 objc2-app-kit = { version = "=0.3.2", default-features = false, features = ["std", "NSApplication", "NSApplicationScripting", "NSEvent", "NSGraphics", "NSResponder", "NSView", "NSWindow"] }
 # The macOS menu bar (mac_menu.rs): a standalone native menu crate (from the tauri-apps org, but
 # not Tauri: no webview, no JS), AppKit menus behind a safe API (no GTK with default features off). Pinned exactly: review the diff before bumping.
-muda = { version = "=0.21.1", default-features = false }
+muda = { version = "=0.21.2", default-features = false }
 # Quit with `terminate:` from the main queue, outside winit's event handler (mac_window.rs).
 # Already in Cargo.lock (winit, objc2-app-kit); pinned exactly to the same version.
 dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }

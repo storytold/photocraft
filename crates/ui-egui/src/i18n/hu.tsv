@@ -423,6 +423,10 @@
 # Menus: Type, Filter, View, Window; UI and engine commands
 	(coming soon)	(hamarosan)
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	2-up Horizontal	2 nézet vízszintesen
 	2-up Vertical	2 nézet függőlegesen
 	200%	200%
@@ -607,6 +611,8 @@
 	High Pass…	Felüláteresztő…
 	Histogram	Hisztogram
 	History	Előzmények
+	Allow Non-Linear History	Nem lineáris előzmények engedélyezése
+	Make Layer Visibility Changes Undoable	A rétegláthatósági változások visszavonhatók
 	Horizontal	Vízszintes
 	HSB/HSL	HSB/HSL
 	Huge	Óriási
@@ -3274,7 +3280,7 @@ cameraRaw	Yellow	Sárga
 	Full size tip	Teljes méretű hegy
 	Fullscreen	Teljes képernyő
 	General…	Általános…
-	Generator enabled	Generátor bekapcsolva
+	Enable Generator	Generátor bekapcsolása
 	Generators	Generátorok
 	Generic	Általános
 	GitHub	GitHub
@@ -3413,6 +3419,7 @@ cameraRaw	Yellow	Sárga
 	New Document With Mask	Új dokumentum maszkkal
 	New document…	Új dokumentum…
 	New Group	Új csoport
+	New Group from Layers…	Új csoport rétegekből…
 	New Guide	Új segédvonal
 	New Layer	Új réteg
 	New Layer Comp	Új rétegkompozíció
@@ -3897,6 +3904,9 @@ cameraRaw	Yellow	Sárga
 	New document…     ⌘N	Új dokumentum…     ⌘N
 	New Layer from Brush	Új réteg ecsetből
 	New Path	Új útvonal
+	From:	Forrás:
+	Full Document	Teljes dokumentum
+	Merged Layers	Egyesített rétegek
 	New Snapshot	Új pillanatkép
 	New Snapshot…	Új pillanatkép…
 	History Options…	Előzménybeállítások…
@@ -4029,6 +4039,8 @@ cameraRaw	Yellow	Sárga
 	Amount:	Mérték:
 	Apply Vanishing Point ({key})	Enyészpont alkalmazása ({key})
 	Apply the removal ({key})	Eltávolítás alkalmazása ({key})
+	Alt-click a plane to set the clone source	Alt-kattintás egy síkra a klónforrás beállításához
+	Too many clone strokes: apply Vanishing Point first	Túl sok klónvonás: először alkalmazza az Enyészpontot
 	Drag to draw the curve · {key}-click draws a straight line	Húzással rajzold meg a görbét · {key}+kattintás: egyenes vonal
 	Draw to modify the curve	Rajzolj a görbe módosításához
 	Edit points to modify the curve	Szerkeszd a pontokat a görbe módosításához
@@ -4133,7 +4145,45 @@ cameraRaw	Yellow	Sárga
 	Color Indicates:	A szín jelzése:
 	Ink Characteristics	Festék jellemzői
 	Solidity:	Fedőképesség:
+	Calibration	Kalibrálás
+	Red Primary	Vörös alapszín
+	Green Primary	Zöld alapszín
+	Blue Primary	Kék alapszín
+	Write xmp sidecars	XMP kísérőfájlok írása
+	Set the tone sliders from the image	Tónuscsúszkák beállítása a kép alapján
+	Settings from {name}	Beállítások innen: {name}
+	Settings from {name}; {count} not supported: {names}	Beállítások innen: {name}; {count} nem támogatott: {names}
+	Could not write {name}: {error}	Nem sikerült írni: {name}: {error}
+	Kept {name}: written by another application	{name} megtartva: egy másik alkalmazás írta
+	Shadow Tint	Árnyék színezet
 	Redrawing	Újrarajzolás
+	Show Favorite Fonts	Kedvenc betűtípusok megjelenítése
+	No favorite fonts yet: click the star beside a font to add it.	Még nincsenek kedvenc betűtípusok: kattintson a betűtípus melletti csillagra a hozzáadáshoz.
+	Favorite fonts	Kedvenc betűtípusok
+	Add to Favorites	Hozzáadás a kedvencekhez
+	Remove from Favorites	Eltávolítás a kedvencek közül
+	Show All Fonts	Összes betűtípus megjelenítése
+	All Classes	Összes osztály
+	Blackletter	Gót betűs
+	Decorative	Díszítő
+	Font preview:	Betűtípus előnézete:
+	Handwritten	Kézírásos
+	Hide Font Classes	Betűtípus-osztályok elrejtése
+	Hide Styles	Stílusok elrejtése
+	Monospace	Fix szélességű
+	No fonts match these filters.	Egy betűtípus sem felel meg ezeknek a szűrőknek.
+	No similar fonts: the current font doesn't say what it looks like.	Nincsenek hasonló betűtípusok: a jelenlegi betűtípus nem írja le a megjelenését.
+	OpenType font	OpenType betűtípus
+	Sans Serif	Talpatlan
+	Script	Írott
+	Serif	Talpas
+	Show Font Classes	Betűtípus-osztályok megjelenítése
+	Show Similar Fonts	Hasonló betűtípusok megjelenítése
+	Show Styles	Stílusok megjelenítése
+	Show Variable Fonts	Változó betűtípusok megjelenítése
+	Slab Serif	Talpas (szögletes)
+	TrueType font	TrueType betűtípus
+	Variable font	Változó betűtípus
 # Bevel & Emboss shading controls.
 	Highlight Mode	Csúcsfény módja
 	Highlight Color	Csúcsfény színe
@@ -4319,6 +4369,20 @@ cameraRaw	Yellow	Sárga
 	Not rendered: this adjustment ({key}) is kept as imported.	Nem jelenik meg: ez a korrekció ({key}) importált állapotában marad.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Színalapú
+	Decontaminate Colors	Színek fertőtlenítése
+	Edge Detection	Élészlelés
+	Global Refinements	Globális finomítások
+	High Quality Preview	Kiváló minőségű előnézet
+	Object Aware	Objektumalapú
+	Real-Time Refinement	Valós idejű finomítás
+	Refine Edge Brush Tool	Élfinomító ecset eszköz
+	Refine Hair	Haj finomítása
+	Refine Mode	Finomítási mód
+	Remember Settings	Beállítások megjegyzése
+	View Mode	Nézetmód
+	Object Aware needs a segmentation model, which isn't available yet	Az Objektumalapú módhoz szegmentálási modell kell, amely még nem érhető el
+	Refine Hair needs hair detection, which isn't available yet	A Haj finomításához hajfelismerés kell, amely még nem érhető el
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Színárnyalat-kocka
 	Brightness Cube	Fényerő-kocka
@@ -4335,3 +4399,19 @@ cameraRaw	Yellow	Sárga
 	Grayscale Ramp	Szürkeárnyalatos sáv
 	Current Colors	Aktuális színek
 	Make Ramp Web Safe	Sáv korlátozása webes színekre
+	Select and Mask was closed: its document is no longer the active one	A Kijelölés és maszk bezárult: a dokumentuma már nem az aktív
+	Select and Mask was closed: another layer was selected	A Kijelölés és maszk bezárult: másik réteg lett kijelölve
+# Art History Brush (#213).
+	Art History Brush Tool	Művészi előzményecset eszköz
+	Tight Short	Szoros, rövid
+	Tight Medium	Szoros, közepes
+	Tight Long	Szoros, hosszú
+	Loose Medium	Laza, közepes
+	Loose Long	Laza, hosszú
+	Dab	Pötty
+	Tight Curl	Szoros göndör
+	Loose Curl	Laza göndör
+	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
+	Font size presets	Betűméret-előbeállítások
+	Leading presets	Sorköz-előbeállítások
+	Tracking presets	Betűköz-előbeállítások

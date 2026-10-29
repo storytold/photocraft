@@ -9,7 +9,7 @@ id = "TYPE-218-1"
 target = "Type on a path: path shape, glyphs along the curve, caret follows, PSD round trip"
 status = "partial"
 issue = 218
-note = "TextShape::Path (doc text.rs) with glyphs placed rigidly along the curve by arc length (text warp.rs PathFrame), type.attachToPath and type.detachFromPath (#4365), .pcraft round trip; a Type tool click on the work path or the active shape layer's path starts path type at the point clicked (type_tool.rs path_target, shared with area type, #6230; type.attachToPath at; path-type pointer over a path). Missing: vertical type on a path, dragging the start/flip, the caret and selection following the curve, and PSD path text (it saves as point text)"
+note = "TextShape::Path (doc text.rs) with glyphs placed rigidly along the curve by arc length (text warp.rs PathFrame), type.attachToPath and type.detachFromPath (#4365), .pcraft round trip; a Type tool click on the work path or the active shape layer's path starts path type at the point clicked (type_tool.rs path_target, shared with area type, #6230; type.attachToPath at; path-type pointer over a path); PSD path text opens on its path from its Txt2 frame and saves back into the file's Txt2 object (#7962). Missing: vertical type on a path, dragging the start/flip, the caret and selection following the curve, and PSD path text in a file without Photoshop's Txt2 object for the layer (a new document saves it as point text)"
 
 [[item]]
 id = "TYPE-218-2"

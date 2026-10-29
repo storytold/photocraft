@@ -629,6 +629,10 @@
 	Fit Layer(s) on Screen	Uklopi sloj(eve) u ekran
 	Fit Artboard on Screen	Uklopi radnu tablu u ekran
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -1891,7 +1895,7 @@
 	Full size tip	Vrh pune veličine
 	Gamut warning color	Boja upozorenja o gamutu
 	Gamut warning opacity	Neprozirnost upozorenja o gamutu
-	Generator enabled	Generator je omogućen
+	Enable Generator	Omogući generator
 	Gif	GIF
 	Glossy	Sjajno
 	Grid color	Boja mreže
@@ -2234,6 +2238,7 @@
 	Create new set	Napravi novi skup
 	Technology Previews	Probne tehnologije
 	New Group	Nova grupa
+	New Group from Layers…	Nova grupa od slojeva…
 	Layer Comp	Kompozicija slojeva
 	Create new layer	Napravi novi sloj
 	Group · {n} layer	Grupa · slojeva: {n}
@@ -2286,6 +2291,9 @@
 	Create Snapshot	Napravi snimak stanja
 	Delete Snapshot	Obriši snimak stanja
 	New Snapshot	Novi snimak stanja
+	From:	Od:
+	Full Document	Ceo dokument
+	Merged Layers	Spojeni slojevi
 	New Snapshot…	Novi snimak stanja…
 	History Options…	Opcije istorije…
 	Snapshot 1	Snimak stanja 1
@@ -2297,6 +2305,8 @@
 	Automatically Create New Snapshot When Saving	Automatski napravi novi snimak stanja pri čuvanju
 	Show New Snapshot Dialog by Default	Podrazumevano prikaži dijalog za novi snimak stanja
 	Clear History	Obriši istoriju
+	Allow Non-Linear History	Dozvoli nelinearnu istoriju
+	Make Layer Visibility Changes Undoable	Omogući opozivanje promena vidljivosti slojeva
 	Panel Options…	Opcije panela…
 	View menu	Meni prikaza
 	Keep view in sync	Drži prikaz usklađenim
@@ -3078,6 +3088,8 @@ curves	Smooth	Izgladi
 	Vanishing Point is not active	Tačka nestajanja nije aktivna
 	Apply Vanishing Point ({key})	Primeni tačku nestajanja ({key})
 	Fix the red plane first: its corners must form a convex quad	Prvo ispravite crvenu ravan: njeni uglovi moraju činiti konveksan četvorougao
+	Alt-click a plane to set the clone source	Alt-kliknite ravan da postavite izvor kloniranja
+	Too many clone strokes: apply Vanishing Point first	Previše poteza kloniranja: prvo primenite tačku nestajanja
 # Select and Mask view modes (#1754)
 	Onion Skin	Prozirni prikaz
 	Marching Ants	Pokretne crtice
@@ -4267,7 +4279,45 @@ shape	Appearance	Izgled
 	Color Indicates:	Boja označava:
 	Ink Characteristics	Karakteristike mastila
 	Solidity:	Punoća:
+	Calibration	Kalibracija
+	Red Primary	Crvena primarna
+	Green Primary	Zelena primarna
+	Blue Primary	Plava primarna
+	Write xmp sidecars	Upisuj prateće XMP datoteke
+	Set the tone sliders from the image	Postavi klizače tona prema slici
+	Settings from {name}	Podešavanja iz {name}
+	Settings from {name}; {count} not supported: {names}	Podešavanja iz {name}; {count} nije podržano: {names}
+	Could not write {name}: {error}	Nije moguće upisati {name}: {error}
+	Kept {name}: written by another application	{name} je zadržan: upisala ga je druga aplikacija
+	Shadow Tint	Nijansa senki
 	Redrawing	Ponovno iscrtavanje
+	Show Favorite Fonts	Прикажи омиљене фонтове
+	No favorite fonts yet: click the star beside a font to add it.	Још нема омиљених фонтова: кликните на звездицу поред фонта да бисте га додали.
+	Favorite fonts	Омиљени фонтови
+	Add to Favorites	Додај у омиљене
+	Remove from Favorites	Уклони из омиљених
+	Show All Fonts	Прикажи све фонтове
+	All Classes	Све класе
+	Blackletter	Готица
+	Decorative	Декоративни
+	Font preview:	Преглед фонта:
+	Handwritten	Рукописни
+	Hide Font Classes	Сакриј класе фонтова
+	Hide Styles	Сакриј стилове
+	Monospace	Фиксне ширине
+	No fonts match these filters.	Ниједан фонт не одговара овим филтерима.
+	No similar fonts: the current font doesn't say what it looks like.	Нема сличних фонтова: тренутни фонт не описује свој изглед.
+	OpenType font	OpenType фонт
+	Sans Serif	Без серифа
+	Script	Скрипт
+	Serif	Са серифима
+	Show Font Classes	Прикажи класе фонтова
+	Show Similar Fonts	Прикажи сличне фонтове
+	Show Styles	Прикажи стилове
+	Show Variable Fonts	Прикажи варијабилне фонтове
+	Slab Serif	Плочасти серифи
+	TrueType font	TrueType фонт
+	Variable font	Варијабилни фонт
 
 # Bevel & Emboss shading controls.
 	Highlight Mode	Режим осветљења
@@ -4464,6 +4514,20 @@ shape	Appearance	Izgled
 	Not rendered: this adjustment ({key}) is kept as imported.	Није приказано: ово прилагођавање ({key}) је задржано онако како је увезено.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Prema boji
+	Decontaminate Colors	Dekontaminiraj boje
+	Edge Detection	Detekcija ivice
+	Global Refinements	Globalna doterivanja
+	High Quality Preview	Pregled visokog kvaliteta
+	Object Aware	Prema objektu
+	Real-Time Refinement	Doterivanje u realnom vremenu
+	Refine Edge Brush Tool	Alatka četkica za doterivanje ivice
+	Refine Hair	Doteraj kosu
+	Refine Mode	Režim doterivanja
+	Remember Settings	Zapamti podešavanja
+	View Mode	Režim prikaza
+	Object Aware needs a segmentation model, which isn't available yet	Režim Prema objektu zahteva model segmentacije, koji još nije dostupan
+	Refine Hair needs hair detection, which isn't available yet	Doterivanje kose zahteva detekciju kose, koja još nije dostupna
 # PhotoCraft release checks.
 	Check for Updates…	Proveri ažuriranja…
 	PhotoCraft Updates	Ažuriranja za PhotoCraft
@@ -4493,3 +4557,19 @@ shape	Appearance	Izgled
 	Grayscale Ramp	Skala nijansi sive
 	Current Colors	Trenutne boje
 	Make Ramp Web Safe	Učini skalu bezbednom za veb
+	Select and Mask was closed: its document is no longer the active one	Izaberi i maskiraj je zatvoren: njegov dokument više nije aktivan
+	Select and Mask was closed: another layer was selected	Izaberi i maskiraj je zatvoren: izabran je drugi sloj
+# Art History Brush (#213).
+	Art History Brush Tool	Alatka umetnička četkica istorije
+	Tight Short	Usko kratko
+	Tight Medium	Usko srednje
+	Tight Long	Usko dugo
+	Loose Medium	Labavo srednje
+	Loose Long	Labavo dugo
+	Dab	Mrlja
+	Tight Curl	Usko uvijeno
+	Loose Curl	Labavo uvijeno
+	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
+	Font size presets	Unapred podešene veličine fonta
+	Leading presets	Unapred podešeni proredi
+	Tracking presets	Unapred podešeni razmaci slova

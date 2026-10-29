@@ -308,6 +308,7 @@
 	Layer…	Capa…
 	Group…	Grupo…
 	Group from Layers…	Grupo a partir de capas…
+	New Group from Layers…	Nuevo grupo a partir de capas…
 	Artboard…	Mesa de trabajo…
 	Artboard from Group…	Mesa de trabajo a partir de grupo…
 	Artboard from Layers…	Mesa de trabajo a partir de capas…
@@ -658,6 +659,10 @@
 	Fit Layer(s) on Screen	Encajar capas en pantalla
 	Fit Artboard on Screen	Encajar mesa de trabajo en pantalla
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -1023,6 +1028,9 @@
 	Create new pattern from the selection	Crear un motivo nuevo a partir de la selección
 	Create new shape from the current path	Crear una forma nueva a partir del trazado actual
 	Create new snapshot	Crear una instantánea nueva
+	From:	De:
+	Full Document	Documento completo
+	Merged Layers	Capas combinadas
 	Create new tool preset	Crear un ajuste preestablecido de herramienta nuevo
 	Crop Factor	Factor de recorte
 	Ctrl	Ctrl
@@ -1947,7 +1955,7 @@
 	Full size tip	Punta a tamaño real
 	Gamut warning color	Color de advertencia de gama
 	Gamut warning opacity	Opacidad de advertencia de gama
-	Generator enabled	Generador activado
+	Enable Generator	Activar generador
 	Gif	GIF
 	Glossy	Brillante
 	Grid color	Color de la cuadrícula
@@ -2813,6 +2821,8 @@ curves	Smooth	Suavizar
 	Vanishing Point is not active	Punto de fuga no está activo
 	Apply Vanishing Point ({key})	Aplicar punto de fuga ({key})
 	Fix the red plane first: its corners must form a convex quad	Corrija primero el plano rojo: sus esquinas deben formar un cuadrilátero convexo
+	Alt-click a plane to set the clone source	Haga Alt-clic en un plano para definir el origen de clonación
+	Too many clone strokes: apply Vanishing Point first	Demasiados trazos de clonación: aplique primero Punto de fuga
 # Select and Mask view modes (#1754)
 	Onion Skin	Papel cebolla
 	Marching Ants	Hormigas en marcha
@@ -2839,6 +2849,9 @@ curves	Smooth	Suavizar
 # History panel menu (#2966)
 	New Snapshot…	Nueva instantánea…
 	History Options…	Opciones de historial…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Permitir historia no lineal
+	Make Layer Visibility Changes Undoable	Permitir deshacer los cambios de visibilidad de capas
 # Print dialog (#2697)
 	Emulsion Down	Emulsión hacia abajo
 	Functions	Funciones
@@ -4200,6 +4213,44 @@ navigator	Zoom	Zoom
 	Sent to {printer}	Enviado a {printer}
 	set in Print Settings…	se establece en Ajustes de impresión…
 	ICO is limited to 256 × 256 pixels	ICO está limitado a 256 × 256 píxeles
+	Show Favorite Fonts	Mostrar fuentes favoritas
+	No favorite fonts yet: click the star beside a font to add it.	Aún no hay fuentes favoritas: haz clic en la estrella junto a una fuente para añadirla.
+	Favorite fonts	Fuentes favoritas
+	Add to Favorites	Añadir a favoritos
+	Remove from Favorites	Quitar de favoritos
+	Show All Fonts	Mostrar todas las fuentes
+	All Classes	Todas las clases
+	Blackletter	Gótica
+	Decorative	Decorativa
+	Font preview:	Vista previa de fuente:
+	Handwritten	Manuscrita
+	Hide Font Classes	Ocultar clases de fuente
+	Hide Styles	Ocultar estilos
+	Monospace	Monoespaciada
+	No fonts match these filters.	Ninguna fuente coincide con estos filtros.
+	No similar fonts: the current font doesn't say what it looks like.	No hay fuentes similares: la fuente actual no describe su aspecto.
+	OpenType font	Fuente OpenType
+	Sans Serif	Sans serif
+	Script	Caligráfica
+	Serif	Serif
+	Show Font Classes	Mostrar clases de fuente
+	Show Similar Fonts	Mostrar fuentes similares
+	Show Styles	Mostrar estilos
+	Show Variable Fonts	Mostrar fuentes variables
+	Slab Serif	Serif egipcia
+	TrueType font	Fuente TrueType
+	Variable font	Fuente variable
+	Calibration	Calibración
+	Red Primary	Primario rojo
+	Green Primary	Primario verde
+	Blue Primary	Primario azul
+	Write xmp sidecars	Escribir archivos XMP auxiliares
+	Set the tone sliders from the image	Ajustar los controles de tono a partir de la imagen
+	Settings from {name}	Ajustes de {name}
+	Settings from {name}; {count} not supported: {names}	Ajustes de {name}; {count} no compatibles: {names}
+	Could not write {name}: {error}	No se pudo escribir {name}: {error}
+	Kept {name}: written by another application	Se conservó {name}: lo escribió otra aplicación
+	Shadow Tint	Tinte de sombras
 # PhotoCraft release checks.
 	Check for Updates…	Buscar actualizaciones…
 	PhotoCraft Updates	Actualizaciones de PhotoCraft
@@ -4366,6 +4417,20 @@ navigator	Zoom	Zoom
 	Not rendered: this adjustment ({key}) is kept as imported.	No se renderiza: este ajuste ({key}) se conserva tal como se importó.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Según color
+	Decontaminate Colors	Descontaminar colores
+	Edge Detection	Detección de bordes
+	Global Refinements	Perfeccionamientos globales
+	High Quality Preview	Previsualización de alta calidad
+	Object Aware	Según objeto
+	Real-Time Refinement	Perfeccionamiento en tiempo real
+	Refine Edge Brush Tool	Herramienta Pincel para perfeccionar bordes
+	Refine Hair	Perfeccionar pelo
+	Refine Mode	Modo de perfeccionamiento
+	Remember Settings	Recordar ajustes
+	View Mode	Modo de visualización
+	Object Aware needs a segmentation model, which isn't available yet	Según objeto necesita un modelo de segmentación que aún no está disponible
+	Refine Hair needs hair detection, which isn't available yet	Perfeccionar pelo necesita detección de pelo, que aún no está disponible
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Cubo de tono
 	Brightness Cube	Cubo de brillo
@@ -4382,3 +4447,19 @@ navigator	Zoom	Zoom
 	Grayscale Ramp	Rampa de escala de grises
 	Current Colors	Colores actuales
 	Make Ramp Web Safe	Hacer rampa segura para web
+	Select and Mask was closed: its document is no longer the active one	Se cerró Seleccionar y aplicar máscara: su documento ya no es el activo
+	Select and Mask was closed: another layer was selected	Se cerró Seleccionar y aplicar máscara: se seleccionó otra capa
+# Art History Brush (#213).
+	Art History Brush Tool	Herramienta Pincel histórico artístico
+	Tight Short	Corto apretado
+	Tight Medium	Medio apretado
+	Tight Long	Largo apretado
+	Loose Medium	Medio suelto
+	Loose Long	Largo suelto
+	Dab	Toque
+	Tight Curl	Rizo apretado
+	Loose Curl	Rizo suelto
+	Stylized dabs from a history state	Toques estilizados desde un estado del historial
+	Font size presets	Valores predefinidos de tamaño de fuente
+	Leading presets	Valores predefinidos de interlineado
+	Tracking presets	Valores predefinidos de tracking

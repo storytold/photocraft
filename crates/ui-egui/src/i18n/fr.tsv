@@ -304,6 +304,7 @@
 	Layer…	Calque…
 	Group…	Groupe…
 	Group from Layers…	Groupe d'après des calques…
+	New Group from Layers…	Nouveau groupe d'après des calques…
 	Artboard…	Plan de travail…
 	Artboard from Group…	Plan de travail d'après un groupe…
 	Artboard from Layers…	Plan de travail d'après des calques…
@@ -645,6 +646,10 @@
 	Fit Layer(s) on Screen	Adapter le(s) calque(s) à l'écran
 	Fit Artboard on Screen	Adapter le plan de travail à l'écran
 	100%	100 %
+	105%	105 %
+	110%	110 %
+	115%	115 %
+	120%	120 %
 	200%	200 %
 	75%	75 %
 	80%	80 %
@@ -1008,6 +1013,9 @@
 	Create new pattern from the selection	Créer un nouveau motif à partir de la sélection
 	Create new shape from the current path	Créer une nouvelle forme à partir du tracé actif
 	Create new snapshot	Créer un nouvel instantané
+	From:	À partir de :
+	Full Document	Document entier
+	Merged Layers	Calques fusionnés
 	Create new tool preset	Créer un nouveau préréglage d'outil
 	Crop Factor	Facteur de recadrage
 	Ctrl	Ctrl
@@ -1915,7 +1923,7 @@
 	Full size tip	Pointe en taille réelle
 	Gamut warning color	Couleur de l'alerte de gamut
 	Gamut warning opacity	Opacité de l'alerte de gamut
-	Generator enabled	Générateur activé
+	Enable Generator	Activer le générateur
 	Gif	GIF
 	Glossy	Brillant
 	Grid color	Couleur de la grille
@@ -3149,6 +3157,8 @@ curves	Smooth	Lisser
 	Vanishing Point is not active	Point de fuite n’est pas actif
 	Apply Vanishing Point ({key})	Appliquer le point de fuite ({key})
 	Fix the red plane first: its corners must form a convex quad	Corrigez d’abord le plan rouge : ses coins doivent former un quadrilatère convexe
+	Alt-click a plane to set the clone source	Alt-clic sur un plan pour définir la source de duplication
+	Too many clone strokes: apply Vanishing Point first	Trop de traits de duplication : appliquez d’abord Point de fuite
 # Select and Mask view modes (#1754)
 	Onion Skin	Pelure d'oignon
 	Marching Ants	Fourmis en marche
@@ -3175,6 +3185,9 @@ curves	Smooth	Lisser
 # History panel menu (#2966)
 	New Snapshot…	Nouvel instantané…
 	History Options…	Options d'historique…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Autoriser l'historique non linéaire
+	Make Layer Visibility Changes Undoable	Permettre d'annuler les changements de visibilité des calques
 # Print dialog (#2697)
 	Emulsion Down	Émulsion verso
 	Functions	Fonctions
@@ -3247,6 +3260,44 @@ curves	Smooth	Lisser
 	Sent to {printer}	Envoyé à {printer}
 	set in Print Settings…	défini dans les paramètres d’impression…
 	ICO is limited to 256 × 256 pixels	Le format ICO est limité à 256 × 256 pixels
+	Show Favorite Fonts	Afficher les polices favorites
+	No favorite fonts yet: click the star beside a font to add it.	Aucune police favorite pour l’instant : cliquez sur l’étoile à côté d’une police pour l’ajouter.
+	Favorite fonts	Polices favorites
+	Add to Favorites	Ajouter aux favoris
+	Remove from Favorites	Retirer des favoris
+	Show All Fonts	Afficher toutes les polices
+	All Classes	Toutes les classes
+	Blackletter	Gothique
+	Decorative	Décorative
+	Font preview:	Aperçu de la police :
+	Handwritten	Manuscrite
+	Hide Font Classes	Masquer les classes de polices
+	Hide Styles	Masquer les styles
+	Monospace	Chasse fixe
+	No fonts match these filters.	Aucune police ne correspond à ces filtres.
+	No similar fonts: the current font doesn't say what it looks like.	Aucune police similaire : la police actuelle ne décrit pas son apparence.
+	OpenType font	Police OpenType
+	Sans Serif	Sans empattement
+	Script	Scripte
+	Serif	Avec empattement
+	Show Font Classes	Afficher les classes de polices
+	Show Similar Fonts	Afficher les polices similaires
+	Show Styles	Afficher les styles
+	Show Variable Fonts	Afficher les polices variables
+	Slab Serif	Égyptienne
+	TrueType font	Police TrueType
+	Variable font	Police variable
+	Calibration	Étalonnage
+	Red Primary	Primaire rouge
+	Green Primary	Primaire verte
+	Blue Primary	Primaire bleue
+	Write xmp sidecars	Écrire les fichiers annexes XMP
+	Set the tone sliders from the image	Régler les curseurs de tonalité d’après l’image
+	Settings from {name}	Réglages de {name}
+	Settings from {name}; {count} not supported: {names}	Réglages de {name} ; {count} non pris en charge : {names}
+	Could not write {name}: {error}	Impossible d’écrire {name} : {error}
+	Kept {name}: written by another application	{name} conservé : écrit par une autre application
+	Shadow Tint	Teinte des ombres
 # PhotoCraft release checks.
 	Check for Updates…	Rechercher des mises à jour…
 	PhotoCraft Updates	Mises à jour de PhotoCraft
@@ -4446,6 +4497,20 @@ shape	Appearance	Apparence
 	Not rendered: this adjustment ({key}) is kept as imported.	Non rendu : ce réglage ({key}) est conservé tel qu'importé.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Selon la couleur
+	Decontaminate Colors	Décontaminer les couleurs
+	Edge Detection	Détection des contours
+	Global Refinements	Améliorations globales
+	High Quality Preview	Aperçu haute qualité
+	Object Aware	Selon l'objet
+	Real-Time Refinement	Amélioration en temps réel
+	Refine Edge Brush Tool	Outil Pinceau d'amélioration du contour
+	Refine Hair	Améliorer les cheveux
+	Refine Mode	Mode d'amélioration
+	Remember Settings	Mémoriser les paramètres
+	View Mode	Mode d'affichage
+	Object Aware needs a segmentation model, which isn't available yet	Selon l'objet nécessite un modèle de segmentation, pas encore disponible
+	Refine Hair needs hair detection, which isn't available yet	Améliorer les cheveux nécessite une détection des cheveux, pas encore disponible
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Cube de teinte
 	Brightness Cube	Cube de luminosité
@@ -4462,3 +4527,19 @@ shape	Appearance	Apparence
 	Grayscale Ramp	Barre de niveaux de gris
 	Current Colors	Couleurs actuelles
 	Make Ramp Web Safe	Limiter la barre aux couleurs Web
+	Select and Mask was closed: its document is no longer the active one	Sélectionner et masquer a été fermé : son document n’est plus le document actif
+	Select and Mask was closed: another layer was selected	Sélectionner et masquer a été fermé : un autre calque a été sélectionné
+# Art History Brush (#213).
+	Art History Brush Tool	Outil Pinceau d'historique artistique
+	Tight Short	Serré court
+	Tight Medium	Serré moyen
+	Tight Long	Serré long
+	Loose Medium	Lâche moyen
+	Loose Long	Lâche long
+	Dab	Touche
+	Tight Curl	Boucle serrée
+	Loose Curl	Boucle lâche
+	Stylized dabs from a history state	Touches stylisées depuis un état d'historique
+	Font size presets	Tailles de police prédéfinies
+	Leading presets	Interlignages prédéfinis
+	Tracking presets	Approches prédéfinies
