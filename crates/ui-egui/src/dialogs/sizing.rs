@@ -189,10 +189,9 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
         // Blurring an unedited rounded field must not overwrite fractional resampling state.
         v = crate::widgets::fmt_num_prec(f64::from(v), crate::widgets::unit_decimals(&unit)).parse().unwrap_or(v);
     }
-    // The engine's 300000 px limit in this unit (never below 30000), so a large document's size
-    // isn't clamped when the field is drawn: egui clamps the shown value to the range, and the
-    // field reports that as an edit (#4162).
-    let lim = if unit == "px" { MAX_PIXEL_DIMENSION as f32 } else { to_unit(MAX_PIXEL_DIMENSION, &unit, orig, res, ppi).max(30000.0) as f32 };
+    let converted_limit = to_unit(MAX_PIXEL_DIMENSION, &unit, orig, res, ppi);
+    let resampling = f.get("resample").and_then(Value::as_str) != Some("none");
+    let lim = if image_size && resampling { converted_limit } else { converted_limit.max(30000.0) } as f32;
     let range = -lim..=lim;
     // Each unit keeps its own precision: whole pixels, 3 places for inches, 2 for cm/mm/picas (#2434).
     // A typed unit (`2in` while in pixels) converts at the dialog's resolution.
@@ -201,7 +200,7 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
         .accessible_name(if key == "width" { tl!("Width") } else { tl!("Height") })
         .changed();
     if changed {
-        let px = from_unit(v as f64, &unit, orig, res, ppi);
+        let px = if image_size && resampling && v == lim { MAX_PIXEL_DIMENSION } else { from_unit(v as f64, &unit, orig, res, ppi) };
         f.insert(key.into(), json!(if unit == "px" { px.round() } else { px }));
     }
     let _ = id;
@@ -295,6 +294,15 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert("height".into(), json!((num(f, "width") * oh / ow.max(1.0)).round().max(1.0)));
         } else if h_changed {
             f.insert("width".into(), json!((num(f, "height") * ow / oh.max(1.0)).round().max(1.0)));
+        }
+    }
+    if resampling && (w_changed || h_changed) {
+        let longest = num(f, "width").max(num(f, "height"));
+        if longest > MAX_PIXEL_DIMENSION && longest.is_finite() {
+            let scale = MAX_PIXEL_DIMENSION / longest;
+            for key in ["width", "height"] {
+                f.insert(key.into(), json!(num(f, key) * scale));
+            }
         }
     }
     ui.horizontal(|ui| {

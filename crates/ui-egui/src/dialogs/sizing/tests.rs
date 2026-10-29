@@ -449,3 +449,50 @@ fn resolution_without_resampling_is_not_limited_by_pixel_size() {
     let doc = &h.state().session.active().unwrap().doc;
     assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(200_000, 1), 144.0));
 }
+
+#[test]
+fn non_pixel_dimension_edits_respect_the_pixel_limit() {
+    use egui_kittest::kittest::Queryable;
+    for (unit, text) in [("percent", "200"), ("in", "5555.556"), ("cm", "14111.11"), ("mm", "141111.11"), ("pt", "400000"), ("pica", "33333.33")] {
+        let (mut h, id) = resolution_dialog((200_000, 1), 72.0, unit, "nearest");
+        type_width(&mut h, text);
+        let f = fields(&h);
+        assert!(num(&f, "width") <= MAX_PIXEL_DIMENSION, "{unit}: {f:?}");
+        assert!(h.query_by_label("300000 px × 2 px").is_some(), "{unit}: {f:?}");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        assert_eq!(h.state().session.active().unwrap().doc.size, photocraft_doc::Size::new(300_000, 2), "{unit}");
+    }
+}
+
+#[test]
+fn linked_dimension_edits_bound_both_axes_proportionally() {
+    for (size, field) in [((200_000, 100), 1), ((100, 200_000), 0)] {
+        let (mut h, id) = resolution_dialog(size, 72.0, "px", "nearest");
+        type_into(&mut h, field, "200");
+        let f = fields(&h);
+        let expected = if field == 1 { (300_000.0, 150.0) } else { (150.0, 300_000.0) };
+        assert_eq!((num(&f, "width"), num(&f, "height"), num(&f, "resolution")), (expected.0, expected.1, 72.0));
+        type_into(&mut h, 2, "144");
+        assert_eq!(num(&fields(&h), "resolution"), 72.0);
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        assert_eq!(h.state().session.active().unwrap().doc.size, photocraft_doc::Size::new(expected.0 as u32, expected.1 as u32));
+    }
+}
+
+#[test]
+fn linked_dimension_bound_keeps_fractional_edits_below_the_limit() {
+    let (mut h, _) = resolution_dialog((200_000, 100), 72.0, "percent", "nearest");
+    type_into(&mut h, 1, "100.25");
+    let f = fields(&h);
+    assert_eq!((num(&f, "width"), num(&f, "height")), (200_500.0, 100.25));
+}
+
+#[test]
+fn physical_size_without_resampling_keeps_its_existing_range() {
+    let (mut h, id) = resolution_dialog((200_000, 1), 72.0, "in", "none");
+    type_width(&mut h, "5000");
+    assert_eq!(num(&fields(&h), "resolution"), 40.0);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let doc = &h.state().session.active().unwrap().doc;
+    assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(200_000, 1), 40.0));
+}
