@@ -29,7 +29,7 @@ pub mod web;
 pub use crate::cicp::Cicp;
 pub use crate::codecs::exr_cryptomatte::{cryptomatte_id, cryptomatte_key, cryptomatte_preview_color};
 pub use crate::codecs::gif_frames::{AnimationFrame, MAX_GIF_FRAMES};
-pub use crate::codecs::png::{PngPalette, encode_indexed as encode_png_indexed, palette as png_palette, stereo as png_stereo};
+pub use crate::codecs::png::{PngPalette, PngRows, SharedBytes, encode_indexed as encode_png_indexed, palette as png_palette, stereo as png_stereo};
 pub use crate::codecs::tiff::{PhotoshopTags as TiffPhotoshopTags, photoshop_tags as tiff_photoshop_tags, writes_little_endian as tiff_writes_little_endian};
 pub use crate::codecs::tiff_ifd::{TiffInfo, TiffPage, TiffPageKind};
 pub use crate::error::CodecError;
@@ -91,10 +91,21 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
         Format::Heif => heif::decode(bytes, l, opts.keep_orientation),
         Format::Gif | Format::Bmp | Format::Tga | Format::Ico | Format::Qoi | Format::Hdr | Format::Avif => via_image::decode(format, bytes, l),
     }?;
+    finish_format(format, bytes, img, opts)
+}
+
+/// What [`decode_as_with`] does with a PNG decoded in steps by [`PngRows`] (`img` is its output):
+/// the resolution from the metadata, the upright orientation and the final limit check, so the
+/// result equals [`decode_as_with`]'s on the same file.
+pub fn finish_png_decode(img: Image, opts: &DecodeOptions) -> Result<Image, CodecError> {
+    finish_format(Format::Png, &[], img, opts)
+}
+
+/// The steps after a decoder of `format` has produced `img` from `bytes`.
+fn finish_format(format: Format, bytes: &[u8], mut img: Image, opts: &DecodeOptions) -> Result<Image, CodecError> {
     // Without a resolution of the format's own (PNG pHYs, TIFF tags, JPEG's metadata), the
     // XMP or EXIF one counts, like Photoshop: a WebP, HEIF or PNG from a camera or phone
     // opens at its recorded resolution, not at the 72 ppi default.
-    let mut img = img;
     if img.meta.dpi.is_none() && format != Format::Tiff {
         img.meta.dpi = resolution::from_metadata(img.meta.exif.as_deref(), img.meta.xmp.as_deref());
     }

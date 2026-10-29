@@ -294,7 +294,10 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 app.refocus(doc)?;
                 let linked = linked.then(|| name.clone());
                 let result = app.place_bytes(&name, bytes, linked)?;
-                crate::transform_tool::begin_placed(app, &ctx)?;
+                // In the background, Free Transform starts when the layer has landed.
+                if !crate::jobs_ui::track_place(app, &name, &result) {
+                    crate::transform_tool::begin_placed(app, &ctx)?;
+                }
                 Ok(result)
             }))
         }
