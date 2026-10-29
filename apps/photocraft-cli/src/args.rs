@@ -37,6 +37,128 @@ pub(crate) enum Command {
     Commands(CommandsArgs),
     Mcp(McpArgs),
     Serve(ServeArgs),
+    StoreWrite(StoreWriteArgs),
+    StoreRead(StoreReadArgs),
+    StoreStat(StorePathArgs),
+    StoreList(StoreListArgs),
+    StoreRemove(StorePathArgs),
+    StoreProbe(StoreOnlyArgs),
+    StoreRecover(StoreOnlyArgs),
+}
+
+/// Where storage paths live, for the `store-*` subcommands and for `convert`, `info`, `run` and
+/// `batch` (wordcraft#518). Without any of these flags, `convert`, `info`, `run` and `batch` work
+/// on local files as before; with them, their file arguments are storage paths, downloaded to a
+/// scratch folder, processed, and uploaded.
+#[derive(Args, Default)]
+#[command(next_help_heading = "Storage")]
+pub(crate) struct StoreArgs {
+    /// The backend: local (a local, NAS or synced folder) or webdav [default: webdav with
+    /// --store-url, else local]
+    #[arg(long, value_name = "local|webdav", value_parser = ["local", "webdav"])]
+    pub(crate) store: Option<String>,
+    /// The folder of a local backend
+    #[arg(long, value_name = "DIR")]
+    pub(crate) store_root: Option<PathBuf>,
+    /// The WebDAV collection, e.g. http://nas.lan/remote.php/dav/files/alice/Pictures/ (plain
+    /// http only: LAN, VPN or SSH tunnel; https is refused)
+    #[arg(long, value_name = "URL")]
+    pub(crate) store_url: Option<String>,
+    /// WebDAV Basic auth user
+    #[arg(long, value_name = "USER")]
+    pub(crate) store_user: Option<String>,
+    /// WebDAV Basic auth password
+    #[arg(long, value_name = "PASSWORD")]
+    pub(crate) store_password: Option<String>,
+    /// WebDAV Bearer token, instead of Basic auth; $CRAFT_DAV_TOKEN is read when this is not given
+    #[arg(long, value_name = "TOKEN")]
+    pub(crate) store_token: Option<String>,
+    /// Send WebDAV credentials over plain http to a host that is not loopback (a trusted LAN or
+    /// VPN only: anyone on the path can read them)
+    #[arg(long)]
+    pub(crate) store_insecure_http: bool,
+}
+
+impl StoreArgs {
+    /// Whether any storage flag was given: then file arguments are storage paths.
+    pub(crate) fn requested(&self) -> bool {
+        self.store.is_some()
+            || self.store_root.is_some()
+            || self.store_url.is_some()
+            || self.store_user.is_some()
+            || self.store_password.is_some()
+            || self.store_token.is_some()
+            || self.store_insecure_http
+    }
+}
+
+/// How an upload replaces what is stored.
+#[derive(Args, Default)]
+#[command(next_help_heading = "Storage")]
+pub(crate) struct StoreWriteFlags {
+    /// Write only if the stored file still carries this ETag, so a newer save is never overwritten
+    #[arg(long, value_name = "TAG")]
+    pub(crate) etag: Option<String>,
+    /// Stage the upload beside the target and move it into place
+    #[arg(long)]
+    pub(crate) atomic: bool,
+}
+
+/// Upload a local file to storage and print its size and ETag as JSON
+#[derive(Args)]
+pub(crate) struct StoreWriteArgs {
+    /// The storage path to write
+    #[arg(value_name = "PATH")]
+    pub(crate) path: String,
+    /// The local file to upload
+    #[arg(value_name = "FILE")]
+    pub(crate) file: PathBuf,
+    #[command(flatten)]
+    pub(crate) write: StoreWriteFlags,
+    #[command(flatten)]
+    pub(crate) store: StoreArgs,
+}
+
+/// Download a file from storage
+#[derive(Args)]
+pub(crate) struct StoreReadArgs {
+    /// The storage path to read
+    #[arg(value_name = "PATH")]
+    pub(crate) path: String,
+    /// The local file to write
+    #[arg(value_name = "OUT")]
+    pub(crate) out: PathBuf,
+    #[command(flatten)]
+    pub(crate) store: StoreArgs,
+}
+
+/// One stored file: `store-stat` prints its size, ETag and modification time as JSON;
+/// `store-remove` deletes it (a missing file is not an error)
+#[derive(Args)]
+pub(crate) struct StorePathArgs {
+    #[arg(value_name = "PATH")]
+    pub(crate) path: String,
+    #[command(flatten)]
+    pub(crate) store: StoreArgs,
+}
+
+/// List a storage folder's direct children as JSON; the backend's own temporary and lock files
+/// are left out
+#[derive(Args)]
+pub(crate) struct StoreListArgs {
+    /// The folder to list, the root by default
+    #[arg(value_name = "PREFIX")]
+    pub(crate) prefix: Option<String>,
+    #[command(flatten)]
+    pub(crate) store: StoreArgs,
+}
+
+/// A whole backend: `store-probe` prints what it supports as JSON; `store-recover` finishes or
+/// drops the writes a crash interrupted
+#[derive(Args)]
+pub(crate) struct StoreOnlyArgs {
+    #[command(flatten)]
+    pub(crate) store: StoreArgs,
 }
 
 // How an image is written: shared by `convert`, `run` and `batch`.
@@ -93,6 +215,10 @@ pub(crate) struct ConvertArgs {
     pub(crate) in_place: bool,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
+    #[command(flatten)]
+    pub(crate) store: StoreArgs,
+    #[command(flatten)]
+    pub(crate) write: StoreWriteFlags,
 }
 
 /// Print the document as JSON (size, mode, depth, layer tree)
@@ -102,6 +228,8 @@ pub(crate) struct InfoArgs {
     /// One line of JSON instead of pretty-printed
     #[arg(long)]
     pub(crate) compact: bool,
+    #[command(flatten)]
+    pub(crate) store: StoreArgs,
 }
 
 /// Open a file (or start a new document), run engine commands in order, save the result
@@ -132,6 +260,10 @@ pub(crate) struct RunArgs {
     pub(crate) in_place: bool,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
+    #[command(flatten)]
+    pub(crate) store: StoreArgs,
+    #[command(flatten)]
+    pub(crate) write: StoreWriteFlags,
     /// `--cmd` and `--params` values in command-line order, set by [`parse`].
     #[arg(skip)]
     pub(crate) steps: Vec<Step>,
@@ -171,6 +303,9 @@ pub(crate) struct BatchArgs {
     pub(crate) in_place: bool,
     #[command(flatten)]
     pub(crate) export: ExportArgs,
+    /// With storage flags, --in and --out are storage folders; --actions stays a local file
+    #[command(flatten)]
+    pub(crate) store: StoreArgs,
 }
 
 /// Run a droplet (File › Automate › Create Droplet) on images and folders

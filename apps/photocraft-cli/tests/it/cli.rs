@@ -65,7 +65,23 @@ fn usage_and_unknown_command() {
 #[test]
 fn every_subcommand_answers_help() {
     let d = tmp("help");
-    for sub in ["convert", "info", "run", "batch", "droplet", "commands", "mcp", "serve"] {
+    for sub in [
+        "convert",
+        "info",
+        "run",
+        "batch",
+        "droplet",
+        "commands",
+        "mcp",
+        "serve",
+        "store-write",
+        "store-read",
+        "store-stat",
+        "store-list",
+        "store-remove",
+        "store-probe",
+        "store-recover",
+    ] {
         for help in ["--help", "-h"] {
             let o = bin().current_dir(&d).arg(sub).arg(help).arg("--out").arg("x.png").stdin(Stdio::null()).output().unwrap();
             let out = String::from_utf8_lossy(&o.stdout);
@@ -1103,7 +1119,23 @@ fn invoke(args: &[&str]) -> Invoke {
     Invoke { code, stdout: String::from_utf8(stdout).unwrap(), stderr: String::from_utf8(stderr).unwrap() }
 }
 
-const SUBCOMMANDS: [&str; 8] = ["convert", "info", "run", "batch", "droplet", "commands", "mcp", "serve"];
+const SUBCOMMANDS: [&str; 15] = [
+    "convert",
+    "info",
+    "run",
+    "batch",
+    "droplet",
+    "commands",
+    "mcp",
+    "serve",
+    "store-write",
+    "store-read",
+    "store-stat",
+    "store-list",
+    "store-remove",
+    "store-probe",
+    "store-recover",
+];
 
 /// Pins top-level dispatch: help and the version go to stdout (exit 0), no arguments is a usage
 /// error on stderr. There is no `version` subcommand.

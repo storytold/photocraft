@@ -11,6 +11,7 @@ use crate::{
     CliError, Result,
     args::{ConvertArgs, InfoArgs, RunArgs, Step},
     output::{JsonStyle, print_json, warn_all},
+    store::{Staging, check_write_flags, key, write_options},
 };
 
 /// An output that is the input file itself, however it is spelt (relative, with `./`, through a
@@ -26,10 +27,30 @@ fn refuse_overwriting_input(in_place: bool, input: &Path, output: &Path) -> Resu
     Ok(())
 }
 
+/// With storage flags, the same storage path in and out would replace the original too.
+fn refuse_overwriting_stored_input(in_place: bool, input: &str, output: &str) -> Result {
+    if !in_place && input == output {
+        return Err(CliError::OutIsInput(output.into()));
+    }
+    Ok(())
+}
+
 pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write) -> Result {
-    let (input, output) = (&a.input, &a.output);
+    check_write_flags(&a.store, &a.write)?;
+    let Some(stage) = Staging::open("convert", &a.store)? else {
+        refuse_overwriting_input(a.in_place, &a.input, &a.output)?;
+        return convert_file(a, &a.input, &a.output, err);
+    };
+    let (input, output) = (key(&a.input)?, key(&a.output)?);
+    refuse_overwriting_stored_input(a.in_place, input, output)?;
+    let local_in = stage.fetch(input, "in")?;
+    let local_out = stage.local_out(output, None)?;
+    convert_file(a, &local_in, &local_out, err)?;
+    stage.deposit(&local_out, output, &write_options(&a.write))
+}
+
+fn convert_file(a: &ConvertArgs, input: &Path, output: &Path, err: &mut dyn Write) -> Result {
     let opts = ExportOptions::from(&a.export);
-    refuse_overwriting_input(a.in_place, input, output)?;
     let mut o = files::open(input)?;
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
     photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);
@@ -41,7 +62,18 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
 }
 
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
-    let file = &a.file;
+    match Staging::open("info", &a.store)? {
+        Some(stage) => {
+            let path = key(&a.file)?;
+            let local = stage.fetch(path, "in")?;
+            info_file(a, &local, path, out)
+        }
+        None => info_file(a, &a.file, &a.file.to_string_lossy(), out),
+    }
+}
+
+/// `info` on the local file `file`, reported as `label` (the storage path when staged).
+fn info_file(a: &InfoArgs, file: &Path, label: &str, out: &mut dyn Write) -> Result {
     let mut h = Headless::trusted_local();
     let opened = h.open(file)?;
     let mut doc = h.inspect(None)?;
@@ -50,7 +82,7 @@ pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
         warnings.extend(missing_font_warnings(&st.doc).into_iter().map(Value::String));
     }
     doc["warnings"] = Value::Array(warnings);
-    doc["file"] = json!(file.to_string_lossy());
+    doc["file"] = json!(label);
     // Drop per-session noise.
     if let Value::Object(m) = &mut doc {
         for k in ["history", "canUndo", "canRedo", "revision"] {
@@ -73,6 +105,9 @@ fn command_list(a: &RunArgs) -> Result<Vec<(String, Value)>> {
 }
 
 pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
+    check_write_flags(&a.store, &a.write)?;
+    // With storage flags <FILE> and --out are storage paths, staged through a scratch folder.
+    let stage = Staging::open("run", &a.store)?;
     let opts = ExportOptions::from(&a.export);
     let mut h = Headless::trusted_local();
     // Opening, running commands and exporting can all notice the same missing font:
@@ -84,9 +119,16 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
     } else if let Some(file) = &a.file {
         // Refused before the file is read or any command runs.
         if let Some(out) = &a.out {
-            refuse_overwriting_input(a.in_place, file, out)?;
+            match &stage {
+                Some(_) => refuse_overwriting_stored_input(a.in_place, key(file)?, key(out)?)?,
+                None => refuse_overwriting_input(a.in_place, file, out)?,
+            }
         }
-        let o = h.open(file)?;
+        let local = match &stage {
+            Some(stage) => stage.fetch(key(file)?, "in")?,
+            None => file.clone(),
+        };
+        let o = h.open(&local)?;
         let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
         warn_all(err, &ws);
         reported_fonts.extend(ws);
@@ -111,10 +153,17 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         h.session.active().map(|st| missing_font_warnings(&st.doc)).unwrap_or_default().into_iter().filter(|w| reported_fonts.insert(w.clone())).collect();
     warn_all(err, &remaining);
     if let Some(o) = a.out.as_deref() {
-        let r = h.save(None, Some(o), a.export.format.as_deref(), &opts)?;
+        let local = match &stage {
+            Some(stage) => stage.local_out(key(o)?, None)?,
+            None => o.to_path_buf(),
+        };
+        let r = h.save(None, Some(&local), a.export.format.as_deref(), &opts)?;
         let ws: Vec<String> = serde_json::from_value(r["warnings"].clone()).unwrap_or_default();
         let ws: Vec<String> = ws.into_iter().filter(|w| reported_fonts.insert(w.clone())).collect();
         warn_all(err, &ws);
+        if let Some(stage) = &stage {
+            stage.deposit(&local, key(o)?, &write_options(&a.write))?;
+        }
     }
     Ok(())
 }

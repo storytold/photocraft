@@ -8,9 +8,10 @@ use serde_json::json;
 
 use crate::{
     CliError, Result,
-    actions::load_actions_file,
+    actions::{Steps, load_actions_file},
     args::{BatchArgs, DropletArgs},
     output::warn_all,
+    store::{Staging, is_input_key, key},
 };
 
 /// Whether `a` and `b` name the same existing folder, however they are spelt (relative, with a
@@ -19,12 +20,36 @@ fn same_dir(a: &Path, b: &Path) -> bool {
     matches!((std::fs::canonicalize(a), std::fs::canonicalize(b)), (Ok(a), Ok(b)) if a == b)
 }
 
+/// Whether a lower-case extension names a format `batch` can open.
+pub(crate) fn known_extension(e: &str) -> bool {
+    matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
+        || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
+}
+
 pub(crate) fn is_input(p: &Path) -> bool {
-    let known = |e: &str| {
-        matches!(e, "pcraft" | "psd" | "psb" | "pdn" | "ora" | "kra" | "krz" | "af" | "afdesign" | "afphoto" | "afpub")
-            || photocraft_codecs::from_extension(e).is_some_and(|f| photocraft_codecs::caps(f).read)
-    };
-    p.is_file() && p.extension().is_some_and(|e| known(&e.to_string_lossy().to_ascii_lowercase()))
+    p.is_file() && p.extension().is_some_and(|e| known_extension(&e.to_string_lossy().to_ascii_lowercase()))
+}
+
+/// Open `input`, play `actions` with `set` loaded, and save the result to `target` as `ext`.
+/// Returns the save's warnings.
+fn apply_actions(input: &Path, target: &Path, ext: &str, actions: &Steps, set: &[Action], opts: &ExportOptions) -> Result<Vec<String>> {
+    let mut h = Headless::trusted_local();
+    // Steps that play another action find it in the set; the session's playback stack
+    // stops an action that calls itself.
+    h.session.actions.list = set.to_vec();
+    h.open(input)?;
+    for (id, p) in actions {
+        if photocraft_engine::actions_cmds::shell_view_command(id) || photocraft_engine::actions_cmds::shell_save_command(id) {
+            continue;
+        }
+        let r = h.command_run(id, p.clone()).map_err(|source| CliError::Command { id: id.clone(), source })?;
+        // A failed step inside a called action makes this file an error, not a saved result.
+        if let Some(message) = photocraft_engine::actions_cmds::nested_failure(id, &r) {
+            return Err(CliError::NestedFailure { id: id.clone(), message });
+        }
+    }
+    let r = h.save(None, Some(target), Some(ext), opts)?;
+    Ok(serde_json::from_value(r["warnings"].clone()).unwrap_or_default())
 }
 
 /// Drops the Save and view steps the desktop records from `action` (Batch saves each result
@@ -53,6 +78,9 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
     set.iter_mut().for_each(strip_shell_steps);
     warn_all(err, &warnings);
     let opts = ExportOptions::from(&a.export);
+    if let Some(stage) = Staging::open("batch", &a.store)? {
+        return batch_stored(a, &stage, &actions, &set, &opts, out, err);
+    }
     // Results are saved as `<out>/<stem>.<ext>`, so an `--out` that is the `--in` folder would
     // replace the originals (#492).
     if !a.in_place && same_dir(in_dir, out_dir) {
@@ -75,26 +103,7 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
         let stem = input.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let target = out_dir.join(format!("{stem}.{ext}"));
         let target_text = target.to_string_lossy();
-        let r = (|| -> Result<Vec<String>> {
-            written.check(&target_text).map_err(CliError::OutputClaimed)?;
-            let mut h = Headless::trusted_local();
-            // Steps that play another action find it in the set; the session's playback stack
-            // stops an action that calls itself.
-            h.session.actions.list = set.clone();
-            h.open(input)?;
-            for (id, p) in &actions {
-                if photocraft_engine::actions_cmds::shell_view_command(id) || photocraft_engine::actions_cmds::shell_save_command(id) {
-                    continue;
-                }
-                let r = h.command_run(id, p.clone()).map_err(|source| CliError::Command { id: id.clone(), source })?;
-                // A failed step inside a called action makes this file an error, not a saved result.
-                if let Some(message) = photocraft_engine::actions_cmds::nested_failure(id, &r) {
-                    return Err(CliError::NestedFailure { id: id.clone(), message });
-                }
-            }
-            let r = h.save(None, Some(&target), Some(&ext), &opts)?;
-            Ok(serde_json::from_value(r["warnings"].clone()).unwrap_or_default())
-        })();
+        let r = written.check(&target_text).map_err(CliError::OutputClaimed).and_then(|()| apply_actions(input, &target, &ext, &actions, &set, &opts));
         match r {
             Ok(ws) => {
                 ok += 1;
@@ -105,6 +114,50 @@ pub(crate) fn batch(a: &BatchArgs, out: &mut dyn Write, err: &mut dyn Write) -> 
             Err(e) => {
                 failed += 1;
                 let _ = writeln!(err, "FAIL  {}: {e}", input.display());
+            }
+        }
+    }
+    let _ = writeln!(out, "{ok} succeeded, {failed} failed");
+    if failed > 0 { Err(CliError::FilesFailed(failed)) } else { Ok(()) }
+}
+
+/// `batch` with storage flags: `--in` and `--out` are storage folders. Each image is downloaded,
+/// processed and uploaded in turn; `--actions` stays a local file.
+fn batch_stored(a: &BatchArgs, stage: &Staging, actions: &Steps, set: &[Action], opts: &ExportOptions, out: &mut dyn Write, err: &mut dyn Write) -> Result {
+    let (in_prefix, out_prefix) = (key(&a.in_dir)?.trim_end_matches('/'), key(&a.out)?.trim_end_matches('/'));
+    if !a.in_place && in_prefix == out_prefix {
+        return Err(CliError::OutIsIn(a.out.clone()));
+    }
+    let entries = stage.backend.list(in_prefix).map_err(|e| CliError::Store(format!("{in_prefix}: {e}")))?;
+    let mut inputs: Vec<String> = entries.into_iter().filter(|e| !e.meta.is_dir && is_input_key(&e.path)).map(|e| e.path).collect();
+    inputs.sort();
+    let (mut ok, mut failed) = (0, 0);
+    let mut written = photocraft_engine::file_cmds::OutputClaims::default();
+    let format = a.export.format.as_deref().map(|f| f.strip_prefix('.').unwrap_or(f));
+    for (i, input) in inputs.iter().enumerate() {
+        let name = Path::new(input.rsplit('/').next().unwrap_or(input));
+        let ext = format.map(str::to_owned).or_else(|| name.extension().map(|e| e.to_string_lossy().into_owned())).unwrap_or_else(|| "png".into());
+        let stem = name.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let target = if out_prefix.is_empty() { format!("{stem}.{ext}") } else { format!("{out_prefix}/{stem}.{ext}") };
+        let r = (|| -> Result<Vec<String>> {
+            written.check(&target).map_err(CliError::OutputClaimed)?;
+            let local_in = stage.fetch(input, &format!("in-{i}"))?;
+            // A staging name per file, so two inputs with one stem never share a scratch file.
+            let local_out = stage.local_out(&target, Some(&format!("{i:06}-{stem}.{ext}")))?;
+            let ws = apply_actions(&local_in, &local_out, &ext, actions, set, opts)?;
+            stage.deposit(&local_out, &target, &photocraft_storage::WriteOptions::default())?;
+            Ok(ws)
+        })();
+        match r {
+            Ok(ws) => {
+                ok += 1;
+                written.record(&target, input);
+                let _ = writeln!(out, "ok    {input} -> {target}");
+                warn_all(err, &ws);
+            }
+            Err(e) => {
+                failed += 1;
+                let _ = writeln!(err, "FAIL  {input}: {e}");
             }
         }
     }

@@ -15,6 +15,7 @@ mod batch;
 mod document;
 mod error;
 mod output;
+mod store;
 
 pub use actions::{ActionsError, Steps, load_actions, load_actions_file, parse_actions};
 use args::{Command, parse};
@@ -58,6 +59,13 @@ where
         Command::Commands(a) => commands(a, out),
         Command::Mcp(a) => mcp(a, err),
         Command::Serve(a) => serve(a, err),
+        Command::StoreWrite(a) => store::write(a, out, err),
+        Command::StoreRead(a) => store::read(a, err),
+        Command::StoreStat(a) => store::stat(a, out),
+        Command::StoreList(a) => store::list(a, out),
+        Command::StoreRemove(a) => store::remove(a, err),
+        Command::StoreProbe(a) => store::probe(a, out),
+        Command::StoreRecover(a) => store::recover(a, out),
     };
     match result {
         Ok(()) => 0,

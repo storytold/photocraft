@@ -37,6 +37,11 @@ pub(crate) enum CliError {
     OutputClaimed(String),
     #[error("{0} file(s) failed")]
     FilesFailed(usize),
+    /// A storage backend refused or failed (wordcraft#518); the message names the path.
+    #[error("{0}")]
+    Store(String),
+    #[error("--etag and --atomic are for uploads: give the storage flags (--store, --store-root or --store-url) too")]
+    WriteFlagsWithoutStore,
 }
 
 pub(crate) type Result<T = (), E = CliError> = std::result::Result<T, E>;
