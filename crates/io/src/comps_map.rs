@@ -14,7 +14,7 @@
 
 use std::collections::HashMap;
 
-use photocraft_doc::comps::layer_position;
+use photocraft_doc::comps::{layer_position, text_position};
 use photocraft_doc::{Artboard, ArtboardBackground, CompLayerState, Document, Guides, Layer, LayerComp};
 use photocraft_geom::Rect;
 use photocraft_psd::descriptor::{Descriptor, UnicodeString, Value, VersionedDescriptor};
@@ -248,6 +248,10 @@ pub(crate) fn decode_comps(resource: Option<&[u8]>, doc: &Document) -> (Vec<Laye
                 }
                 _ => None,
             };
+            let text_position = match (text_position(l), s.offset) {
+                (Some(h), Some(o)) => offset_position(h, o),
+                _ => None,
+            };
             for id in &s.comps {
                 let target = if *id == 0 { Some(&mut last) } else { id_to_index.get(id).map(|&i| &mut comps[i]) };
                 let Some(c) = target else { continue };
@@ -255,7 +259,7 @@ pub(crate) fn decode_comps(resource: Option<&[u8]>, doc: &Document) -> (Vec<Laye
                 if visible.is_none() && s.offset.is_none() {
                     continue;
                 }
-                c.states.push(CompLayerState { layer: l.id, visible, position, appearance: None });
+                c.states.push(CompLayerState { layer: l.id, visible, position, text_position, appearance: None });
             }
         }
     }
@@ -286,7 +290,7 @@ pub fn write_comps_resource(doc: &Document) -> Option<Vec<u8>> {
     Some(VersionedDescriptor::new(d).to_bytes())
 }
 
-fn setting_value(ids: &[u32], st: Option<&CompLayerState>, here: Option<(i32, i32)>) -> Value {
+fn setting_value(ids: &[u32], st: Option<&CompLayerState>, bounds: Option<(i32, i32)>, text: Option<(i32, i32)>) -> Value {
     let mut s = obj("null");
     if let Some(st) = st {
         if let Some(v) = st.visible {
@@ -294,9 +298,7 @@ fn setting_value(ids: &[u32], st: Option<&CompLayerState>, here: Option<(i32, i3
         }
         // A position whose offset from the layer does not fit an `i32` (e.g. from a `.pcraft`
         // file) is left out rather than wrapped: the comp then records no position (#1017).
-        if let (Some((x, y)), Some((hx, hy))) = (st.position, here)
-            && let (Some(dx), Some(dy)) = (x.checked_sub(hx), y.checked_sub(hy))
-        {
+        if let Some((dx, dy)) = st.position_delta(bounds, text) {
             s = s.with("Ofst", Value::Descriptor(obj("null").with("Hrzn", Value::Integer(dx)).with("Vrtc", Value::Integer(dy))));
         }
     }
@@ -308,9 +310,10 @@ pub fn write_cmls(comps: &[LayerComp], last: Option<&LayerComp>, l: &Layer, psd_
     if comps.is_empty() {
         return None;
     }
-    let here = layer_position(l);
-    let mut settings: Vec<Value> = comps.iter().map(|c| setting_value(&[c.id], c.state(l.id), here)).collect();
-    settings.push(setting_value(&[0], last.and_then(|c| c.state(l.id)), here));
+    let bounds = layer_position(l);
+    let text = text_position(l);
+    let mut settings: Vec<Value> = comps.iter().map(|c| setting_value(&[c.id], c.state(l.id), bounds, text)).collect();
+    settings.push(setting_value(&[0], last.and_then(|c| c.state(l.id)), bounds, text));
     let origin = obj("null").with("Hrzn", Value::Double(0.0)).with("Vrtc", Value::Double(0.0));
     let d = Descriptor::new("null")
         .with("origFXRefPoint", Value::Descriptor(origin))
@@ -386,7 +389,7 @@ mod tests {
             apply_visibility: true,
             apply_position: true,
             apply_appearance: false,
-            states: vec![CompLayerState { layer: lid, visible: Some(false), position: Some((10, 1)), appearance: None }],
+            states: vec![CompLayerState { layer: lid, visible: Some(false), position: Some((10, 1)), text_position: None, appearance: None }],
         });
         d.last_applied_comp = Some(7);
         let res = write_comps_resource(&d).unwrap();
@@ -545,7 +548,7 @@ mod tests {
             apply_visibility: true,
             apply_position: true,
             apply_appearance: false,
-            states: vec![CompLayerState { layer: l.id, visible: Some(false), position, appearance: None }],
+            states: vec![CompLayerState { layer: l.id, visible: Some(false), position, text_position: None, appearance: None }],
         };
         for p in [(i32::MIN, 0), (0, i32::MIN)] {
             let cm = write_cmls(&[comp(Some(p))], None, &l, 1).unwrap();

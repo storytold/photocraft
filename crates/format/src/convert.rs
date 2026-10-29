@@ -291,11 +291,12 @@ fn comp_m(c: &LayerComp, sink: &mut dyn Sink) -> LayerCompM {
         states: states
             .iter()
             .map(|s| {
-                let CompLayerState { layer, visible, position, appearance } = s;
+                let CompLayerState { layer, visible, position, text_position, appearance } = s;
                 CompStateM {
                     layer: layer.0,
                     visible: *visible,
                     position: *position,
+                    text_position: *text_position,
                     appearance: appearance.as_ref().map(|a| {
                         let CompAppearance { blend, opacity, fill_opacity, effects } = a;
                         CompAppearanceM { blend: *blend, opacity: *opacity, fill_opacity: *fill_opacity, effects: effects_m(effects, sink) }
@@ -421,7 +422,7 @@ impl Loader<'_> {
             // States of layers deleted before the save keep their (now dangling) id, which
             // `layerComp.updateWarnings` reports; it must not collide with a live layer.
             let layer = self.id_map.get(&s.layer).copied().unwrap_or(LayerId(u64::MAX - s.layer.min(u64::MAX / 2)));
-            states.push(CompLayerState { layer, visible: s.visible, position: s.position, appearance });
+            states.push(CompLayerState { layer, visible: s.visible, position: s.position, text_position: s.text_position, appearance });
         }
         Ok(LayerComp {
             id: m.id,

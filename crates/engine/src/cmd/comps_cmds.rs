@@ -6,7 +6,7 @@
 //! so every change here is one undoable history step. Commands that act on "the" comp take
 //! `"comp": id | name` and default to the comp applied (or created) last.
 
-use photocraft_doc::comps::{capture_states, layer_position, next_comp_id};
+use photocraft_doc::comps::{capture_states, layer_position, next_comp_id, text_position};
 use photocraft_doc::{CompLayerState, Document, LayerComp, LayerId};
 use serde_json::{Value, json};
 
@@ -75,12 +75,8 @@ pub fn apply_comp(doc: &mut Document, comp: &LayerComp, all: bool) {
     for id in order {
         let Some(st) = comp.state(id) else { continue };
         if pos
-            && let Some((x, y)) = st.position
-            && let Some((cx, cy)) = doc.layer(id).and_then(layer_position)
-            && (x, y) != (cx, cy)
-            // Recorded positions can come from files; a move that does not fit an `i32` is
-            // skipped rather than wrapped onto some other position (#1017).
-            && let (Some(dx), Some(dy)) = (x.checked_sub(cx), y.checked_sub(cy))
+            && let Some((dx, dy)) = doc.layer(id).and_then(|layer| st.position_delta(layer_position(layer), text_position(layer)))
+            && (dx, dy) != (0, 0)
         {
             let snapshot = doc.clone();
             if let Some(l) = doc.layer_mut(id) {
@@ -146,10 +142,19 @@ fn update_comp(s: &mut Session, p: &Value) -> Result<Value> {
             // One property: refresh it on every live layer, keep the others as recorded.
             let mut states: Vec<CompLayerState> = Vec::with_capacity(now.len());
             for n in &now {
-                let mut st = c.state(n.layer).cloned().unwrap_or(CompLayerState { layer: n.layer, visible: None, position: None, appearance: None });
+                let mut st = c.state(n.layer).cloned().unwrap_or(CompLayerState {
+                    layer: n.layer,
+                    visible: None,
+                    position: None,
+                    text_position: None,
+                    appearance: None,
+                });
                 match what {
                     "visibility" => st.visible = n.visible,
-                    "position" => st.position = n.position,
+                    "position" => {
+                        st.position = n.position;
+                        st.text_position = n.text_position;
+                    }
                     _ => st.appearance = n.appearance.clone(),
                 }
                 states.push(st);
@@ -170,7 +175,7 @@ fn matches_last_comp(doc: &Document, now: &[CompLayerState]) -> bool {
         && now.iter().all(|live| {
             saved.get(&live.layer).is_some_and(|saved| {
                 (!comp.apply_visibility || saved.visible.is_none() || saved.visible == live.visible)
-                    && (!comp.apply_position || saved.position.is_none() || saved.position == live.position)
+                    && (!comp.apply_position || saved.matches_position(live))
                     && (!comp.apply_appearance || saved.appearance.is_none() || saved.appearance == live.appearance)
             })
         })

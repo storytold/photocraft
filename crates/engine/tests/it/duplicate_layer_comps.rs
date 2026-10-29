@@ -83,7 +83,7 @@ fn nested_group_states_are_remapped_but_genuinely_missing_layers_stay_missing() 
     let missing = LayerId(u64::MAX);
     s.edit("Record deleted layer", |doc, _| {
         let comp = doc.layer_comps.iter_mut().find(|c| c.name == "Nested").unwrap();
-        comp.states.push(CompLayerState { layer: missing, visible: Some(false), position: None, appearance: None });
+        comp.states.push(CompLayerState { layer: missing, visible: Some(false), position: None, text_position: None, appearance: None });
         Ok(())
     })
     .unwrap();

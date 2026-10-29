@@ -296,7 +296,7 @@ fn out_of_range_comp_offsets_import_and_export_without_panic() {
     let mut d = Document::new("s", Size::new(32, 32), ColorMode::Rgb, SampleType::U8);
     let mut l = Layer::raster("A", PixelFormat::RGBA8);
     l.surface_mut().unwrap().fill_rect(Rect::new(4, 4, 8, 8), &[1.0, 0.0, 0.0, 1.0]);
-    let st = photocraft_doc::CompLayerState { layer: l.id, visible: Some(false), position: Some((i32::MIN, 0)), appearance: None };
+    let st = photocraft_doc::CompLayerState { layer: l.id, visible: Some(false), position: Some((i32::MIN, 0)), text_position: None, appearance: None };
     d.layers.push(l);
     d.layer_comps.push(LayerComp {
         id: 1,

@@ -289,9 +289,9 @@ fn unreachable_comp_positions_leave_the_layer_in_place() {
             apply_position: true,
             apply_appearance: false,
             states: vec![
-                CompLayerState { layer: a, visible: Some(false), position: Some(target), appearance: None },
+                CompLayerState { layer: a, visible: Some(false), position: Some(target), text_position: None, appearance: None },
                 // Control: an ordinary position on another layer still moves it.
-                CompLayerState { layer: b, visible: None, position: Some((31, 22)), appearance: None },
+                CompLayerState { layer: b, visible: None, position: Some((31, 22)), text_position: None, appearance: None },
             ],
         };
         s.edit("far", |d, _| {

@@ -3,9 +3,9 @@
 //!
 //! A layer comp records, per layer, its visibility, position and appearance (blend mode, opacity,
 //! fill opacity, layer style). Three flags choose which of those [`apply`](LayerComp) restores,
-//! like the checkboxes of Photoshop's Layer Comp Options. Position is the top-left of the layer's
-//! content bounds (artboards: of the board), so applying a comp moves a layer by the difference
-//! between that and where it is now.
+//! like the checkboxes of Photoshop's Layer Comp Options. Positions are whole-pixel coordinates:
+//! content bounds for pixel layers, board bounds for artboards, and the transform origin for Type.
+//! Type's ink bounds can change with its content or style without changing its placement.
 
 use photocraft_color::{BlendMode, Color};
 use photocraft_geom::Rect;
@@ -22,7 +22,43 @@ pub struct CompLayerState {
     /// Top-left of the content bounds (or artboard rect). None for layers without a position
     /// (adjustment and fill layers, empty layers, plain groups).
     pub position: Option<(i32, i32)>,
+    /// Whole-pixel transform origin for editable Type, independent of its current ink bounds.
+    /// `None` in older native files: their `position` retains its content-bounds meaning.
+    pub text_position: Option<(i32, i32)>,
     pub appearance: Option<CompAppearance>,
+}
+
+impl CompLayerState {
+    /// Move from the layer's current placement to its captured placement. PSD offsets use the
+    /// same displacement. Checked subtraction also rejects unreachable positions from files.
+    pub fn position_delta(&self, bounds: Option<(i32, i32)>, text: Option<(i32, i32)>) -> Option<(i32, i32)> {
+        let (saved, current) = match (self.text_position, text) {
+            (Some(saved), Some(current)) => (saved, current),
+            _ => (self.position?, bounds?),
+        };
+        Some((saved.0.checked_sub(current.0)?, saved.1.checked_sub(current.1)?))
+    }
+
+    /// Compare the position using the same anchor as application, including the legacy fallback.
+    pub fn matches_position(&self, live: &Self) -> bool {
+        match (self.text_position, live.text_position) {
+            (Some(saved), Some(current)) => saved == current,
+            _ => self.position.is_none() || self.position == live.position,
+        }
+    }
+}
+
+/// Type's whole-pixel placement, without consulting its rendered cache. Flooring retains a
+/// fractional origin through integer translations, including moves across zero. Comps and PSD
+/// offsets have always moved by whole pixels; do not quantize the Type transform itself.
+pub fn text_position(layer: &Layer) -> Option<(i32, i32)> {
+    let LayerContent::Text(t) = &layer.content else { return None };
+    let [_, _, _, _, x, y] = t.transform.m;
+    let whole = |v: f64| {
+        let v = v.floor();
+        (v.is_finite() && v >= f64::from(i32::MIN) && v <= f64::from(i32::MAX)).then_some(v as i32)
+    };
+    Some((whole(x)?, whole(y)?))
 }
 
 /// Layer › Layer Style state captured by "Appearance".
@@ -91,6 +127,7 @@ pub fn capture_states(doc: &Document) -> Vec<CompLayerState> {
             layer: l.id,
             visible: Some(l.visible),
             position: layer_position(l),
+            text_position: text_position(l),
             appearance: Some(CompAppearance { blend: l.blend, opacity: l.opacity, fill_opacity: l.fill_opacity, effects: l.effects.clone() }),
         })
         .collect()
@@ -211,6 +248,39 @@ impl Layer {
 mod tests {
     use super::*;
     use crate::{ColorMode, PixelFormat, SampleType, Size};
+
+    #[test]
+    fn type_position_uses_placement_even_without_ink_and_retains_legacy_fallback() {
+        let mut layer =
+            Layer::new("Type", LayerContent::Text(crate::TextLayer { transform: photocraft_geom::Affine::translate(-0.5, 12.75), ..Default::default() }));
+        let mut doc = doc();
+        doc.layers.push(layer.clone());
+        let saved = capture_states(&doc).pop().unwrap();
+        assert_eq!(saved.position, None, "empty Type has no ink bounds");
+        assert_eq!(saved.text_position, Some((-1, 12)));
+        assert_eq!(saved.position_delta(layer_position(&layer), text_position(&layer)), Some((0, 0)));
+        let LayerContent::Text(t) = &mut layer.content else { panic!("type") };
+        t.transform = photocraft_geom::Affine::translate(39.5, -7.25);
+        assert_eq!(saved.position_delta(layer_position(&layer), text_position(&layer)), Some((-40, 20)));
+        let mut cache = photocraft_raster::Surface::new(PixelFormat::RGBA8);
+        cache.fill_rect(Rect::new(4, 6, 8, 10), &[1.0, 0.0, 0.0, 1.0]);
+        let LayerContent::Text(t) = &mut layer.content else { panic!("type") };
+        t.cache = Some(cache);
+        let legacy = CompLayerState { position: Some((10, 20)), text_position: None, ..saved.clone() };
+        assert_eq!(legacy.position_delta(layer_position(&layer), text_position(&layer)), Some((6, 14)), "older native comps still refer to bounds");
+        let unreachable = CompLayerState { text_position: Some((i32::MIN, 0)), ..saved };
+        assert_eq!(unreachable.position_delta(layer_position(&layer), text_position(&layer)), None);
+    }
+
+    #[test]
+    fn malformed_type_transform_does_not_create_a_saturated_position() {
+        for value in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, f64::MAX, f64::from(i32::MAX) + 1.0] {
+            for transform in [photocraft_geom::Affine::translate(value, 0.0), photocraft_geom::Affine::translate(0.0, value)] {
+                let layer = Layer::new("Type", LayerContent::Text(crate::TextLayer { transform, ..Default::default() }));
+                assert_eq!(text_position(&layer), None);
+            }
+        }
+    }
 
     fn doc() -> Document {
         let mut d = Document::with_background("t", Size::new(64, 64), ColorMode::Rgb, SampleType::U8, Color::WHITE);
