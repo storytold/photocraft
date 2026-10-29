@@ -291,6 +291,62 @@ fn help_search_finds_commands_by_any_word() {
     assert!(ids("zzzzqqq").is_empty());
 }
 
+fn brush_menu_harness() -> egui_kittest::Harness<'static, PhotocraftApp> {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 10, "height": 10, "background": "#000000"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 800.0)).build_ui_state(
+        |ui, app| {
+            menu_bar(app, ui);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(3);
+    h
+}
+
+fn cached_define_brush(app: &PhotocraftApp) -> Option<bool> {
+    app.menu_cache.as_ref()?.items.iter().find(|item| item.id == "edit.defineBrushPreset").map(|item| item.enabled)
+}
+
+#[test]
+fn define_brush_menu_accepts_select_all_and_a_rectangular_marquee() {
+    use egui_kittest::kittest::Queryable;
+    for (command, params) in [("select.all", json!({})), ("select.rect", json!({"x": 1, "y": 1, "width": 8, "height": 8}))] {
+        let mut h = brush_menu_harness();
+        h.get_by_label("Edit").click();
+        h.run_steps(3);
+        assert_eq!(cached_define_brush(h.state()), Some(false));
+        h.state_mut().run(command, params).unwrap();
+        h.run_steps(2);
+        assert_eq!(cached_define_brush(h.state()), Some(true), "{command}: no extra canvas click needed");
+        h.state_mut().run("edit.defineBrushPreset", json!({"name": "Menu selection tip"})).unwrap();
+        assert!(h.state().session.tools.presets.iter().any(|preset| preset.name == "Menu selection tip"));
+    }
+}
+
+#[test]
+fn define_brush_menu_refreshes_when_selection_changes_without_a_new_revision() {
+    use egui_kittest::kittest::Queryable;
+    let mut h = brush_menu_harness();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    let selection = h.state().session.active().unwrap().doc.selection.clone();
+    h.state_mut().run("select.deselect", json!({})).unwrap();
+    h.get_by_label("Edit").click();
+    h.run_steps(3);
+    assert_eq!(cached_define_brush(h.state()), Some(false));
+    let revision = h.state().session.active().unwrap().revision;
+    // Preview state can replace a selection independently of a recorded document edit.
+    std::sync::Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).selection = selection;
+    assert!(h.state().session.is_enabled("edit.defineBrushPreset"));
+    h.run_steps(2);
+    assert_eq!(cached_define_brush(h.state()), Some(true), "visible selection must enable Define Brush without a right-click");
+    std::sync::Arc::make_mut(&mut h.state_mut().session.active_mut().unwrap().doc).selection = None;
+    h.run_steps(2);
+    assert_eq!(cached_define_brush(h.state()), Some(false), "removing the selection must disable it again");
+    assert_eq!(h.state().session.active().unwrap().revision, revision);
+}
+
 /// In another UI language both the translated and the English names match.
 #[test]
 fn help_search_matches_the_ui_language_and_english() {
