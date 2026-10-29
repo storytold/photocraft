@@ -1366,12 +1366,13 @@ fn pending_scan_recovers_through_real_layout_and_the_lazy_reload() {
     PENDING_READY.store(false, std::sync::atomic::Ordering::Relaxed);
 }
 
+/// Under the panicking missing-glyph policy, the first frame after a finished scan draws a
+/// Traditional Chinese label from the system face alone: the eager provider is installed and
+/// serves it even with no embedded craft fonts.
 #[test]
 fn strict_policy_first_frame_after_the_scan_is_accepted() {
-    if craft_fonts::CRAFT_FONTS.is_empty() {
-        eprintln!("skipping: the eager provider is only installed with craft-fonts");
-        return;
-    }
+    // No craft-font skip: the sources embed nothing, and the provider must serve the system face
+    // alone, with or without craft-fonts in the build.
     let ctx = egui::Context::default();
     ctx.set_missing_glyph_policy(egui::MissingGlyphPolicy::Panic);
     let sources = Sources {

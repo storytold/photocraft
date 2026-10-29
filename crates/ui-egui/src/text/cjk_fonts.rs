@@ -30,12 +30,13 @@
 //! Builds made with the optional craft-fonts input (`CRAFT_FONTS_DIR`,
 //! [`photocraft_text::craft_fonts`]) carry Japanese, Chinese, Korean and other faces. A
 //! per-character [`FontProvider`] serves them, and the system font a locale defers to, in the
-//! first frame; the lazy loader remains the later fallback. The provider has no lifetime read
-//! cap. It retains at most [`MAX_SYSTEM_CACHE_BYTES`] of unique font-file blobs, charging a
-//! collection (TTC) once however many faces it selects; a face that cannot be retained is
-//! returned transiently for the current request, so a later Fontconfig candidate is never
-//! skipped merely because earlier characters read other fonts.
-//! Without craft-fonts (and on the web, which never embeds them) nothing changes.
+//! first frame; the lazy loader remains the later fallback. Without craft-fonts the same
+//! provider serves the system fonts alone, so the first frame needs no embedded face either.
+//! The provider has no lifetime read cap. It retains at most [`MAX_SYSTEM_CACHE_BYTES`] of
+//! unique font-file blobs, charging a collection (TTC) once however many faces it selects; a
+//! face that cannot be retained is returned transiently for the current request, so a later
+//! Fontconfig candidate is never skipped merely because earlier characters read other fonts.
+//! The web, which never embeds craft-fonts and has no system font files, installs no provider.
 
 use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
 use egui::{FallbackRequest, FontData, FontFamily, FontId, FontProvider, Shape};
@@ -81,10 +82,11 @@ pub struct Sources {
     /// provider and lazy loader both use this injection (tests can therefore pin craft-font
     /// selection without depending on the build input).
     pub embedded: fn(&'static str) -> Vec<&'static CraftFont>,
-    /// Install the per-character craft-font provider, so a headless first frame can shape CJK
-    /// and other scripts before the lazy loader gets a second pass (tests panic on a missing
-    /// glyph). It selects a face for the character's script instead of putting a broad face into
-    /// the family stack up front for every later character.
+    /// Install the per-character provider (craft faces when the build has them, then system
+    /// faces), so a headless first frame can shape CJK and other scripts before the lazy loader
+    /// gets a second pass (tests panic on a missing glyph). It selects a face for the
+    /// character's script instead of putting a broad face into the family stack up front for
+    /// every later character.
     pub eager_craft_fonts: bool,
 }
 
@@ -977,6 +979,10 @@ pub fn install(ctx: &egui::Context) {
     install_with(ctx, Sources::system());
 }
 
+/// [`install`] with injected [`Sources`]: (re)installs the lazy fallback loader plugin, resetting
+/// one already present, and, when `sources.eager_craft_fonts` is set, the per-character provider
+/// that serves craft faces (if the build has them) and system faces in the first frame. Tests use
+/// it to pin locale, files and coverage without depending on the machine's fonts.
 pub fn install_with(ctx: &egui::Context, sources: Sources) {
     // egui keeps the first plugin of a type. set_fonts removes loaded fallbacks, so reset the
     // existing loader too; otherwise its tried/loaded sets prevent fonts being added again.
@@ -991,9 +997,11 @@ pub fn install_with(ctx: &egui::Context, sources: Sources) {
     {
         ctx.add_plugin(CjkFontPlugin(fallback));
     }
-    // The provider resolves a craft face for each missing character in the first frame, before the
-    // lazy loader's next-pass system fallback. Without it a headless frame panics on CJK text.
-    if sources.eager_craft_fonts && !craft_fonts::CRAFT_FONTS.is_empty() {
+    // The provider resolves a face for each missing character in the first frame, before the lazy
+    // loader's next-pass system fallback. Without it a headless frame panics on CJK text. It is
+    // installed without craft-fonts too: it then serves the system faces alone, exactly the files
+    // the lazy loader would read one frame later, so a strict first frame needs no embedded fonts.
+    if sources.eager_craft_fonts {
         let provider = std::sync::Arc::new(CraftFontProvider::new(&sources, crate::theme::ui_font_scale(ctx)));
         let as_provider: std::sync::Arc<dyn FontProvider> = provider.clone();
         ctx.data_mut(|d| d.insert_temp(craft_provider_id(), provider));

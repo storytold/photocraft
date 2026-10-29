@@ -478,6 +478,7 @@ fn empty_font_list_ignores_navigation() {
 
 #[test]
 fn font_cycle_in_options_bar_edits_the_layer_and_can_be_undone() {
+    let _catalog = super::served_catalog_steady();
     use crate::{PhotocraftApp, Services};
     use serde_json::json;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
@@ -560,6 +561,7 @@ fn hovering_a_font_does_not_pollute_history_and_clears_on_close() {
 
 #[test]
 fn options_bar_hover_previews_on_canvas_without_committing() {
+    let _catalog = super::served_catalog_steady();
     use crate::{PhotocraftApp, Services};
     use photocraft_doc::LayerContent;
     use serde_json::json;
@@ -984,6 +986,7 @@ fn open_menu_without_the_current_family_never_jumps_later() {
 /// The same through the real options bar, where the pick itself records the recent family.
 #[test]
 fn options_bar_menu_arrows_walk_on_while_recording_recent_fonts() {
+    let _catalog = super::served_catalog_steady();
     use crate::{PhotocraftApp, Services};
     use serde_json::json;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());

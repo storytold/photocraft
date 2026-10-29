@@ -126,6 +126,27 @@ fn byte_range(text: &str, a: usize, b: usize) -> (usize, usize) {
     (at(a.min(b)), at(a.max(b)))
 }
 
+/// Tests only: the served font catalog (`photocraft_text::served`) is process-wide, and every
+/// family added to it while the real font menu is open is a new row, which egui styles on the
+/// following pass. A test that grows the catalog on every pass kept a parallel test's open menu
+/// from settling (`Harness::run exceeded max_steps`). Tests that grow the catalog hold
+/// [`served_catalog_change`]; tests that wait for the real font menu to settle hold
+/// [`served_catalog_steady`].
+#[cfg(test)]
+static SERVED_CATALOG: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+/// Held by a test that waits for a font menu listing [`fonts::families`] to settle.
+#[cfg(test)]
+fn served_catalog_steady() -> std::sync::RwLockReadGuard<'static, ()> {
+    SERVED_CATALOG.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Held by a test that adds families to the process-wide served catalog.
+#[cfg(test)]
+fn served_catalog_change() -> std::sync::RwLockWriteGuard<'static, ()> {
+    SERVED_CATALOG.write().unwrap_or_else(PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod canvas_tests;
 

@@ -17,7 +17,7 @@ use std::time::Instant;
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{Document, Layer, Size};
 use photocraft_geom::Rect;
-use photocraft_gpu::{Compositor, DeviceHealth, GpuTiming, timing};
+use photocraft_gpu::{Compositor, DeviceHealth, GpuTiming, Stats, timing};
 
 /// Pixels in `r`, as the compositor counts them.
 fn area(r: Rect) -> u64 {
@@ -92,8 +92,14 @@ fn document(size: Size) -> Document {
 
 /// Render `region` and return (submit ms, waited-for wall ms, the measurement).
 fn measure(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, doc: &Document, region: Rect) -> (f64, f64, Option<GpuTiming>) {
+    let (submit_ms, wall_ms, timing, _) = measure_with_stats(device, queue, comp, doc, region);
+    (submit_ms, wall_ms, timing)
+}
+
+/// [`measure`], plus the refresh's own statistics (how often it submitted, what it uploaded).
+fn measure_with_stats(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, doc: &Document, region: Rect) -> (f64, f64, Option<GpuTiming>, Stats) {
     let t0 = Instant::now();
-    comp.render(device, queue, doc, region, |_, _| {}).expect("the document composites on the GPU");
+    let stats = comp.render(device, queue, doc, region, |_, _| {}).expect("the document composites on the GPU");
     let submit_ms = t0.elapsed().as_secs_f64() * 1000.0;
     let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     let wall_ms = t0.elapsed().as_secs_f64() * 1000.0;
@@ -106,9 +112,12 @@ fn measure(device: &wgpu::Device, queue: &wgpu::Queue, comp: &mut Compositor, do
         }
         let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
     }
-    (submit_ms, wall_ms, timing)
+    (submit_ms, wall_ms, timing, stats)
 }
 
+/// The reported GPU time of a GPU-bound 6 MP refresh is its execution, not its encode-and-submit:
+/// several times the submit time, within the waited-for wall clock and most of it, and scaling
+/// with the pixels refreshed (a quarter of the canvas costs well under the whole).
 #[test]
 fn gpu_time_tracks_execution_not_submission() {
     let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -120,19 +129,21 @@ fn gpu_time_tracks_execution_not_submission() {
     // Warm the residency and pipelines: the first refresh uploads every layer.
     let _ = measure(&device, &queue, &mut comp, &doc, full);
 
-    // Best of three, by the smallest encode. Everything below is a ratio against `submit_ms`,
-    // and CPU contention on a shared machine only ever inflates it — one run that happened to
-    // encode behind a busy scheduler (8.2 ms against a typical 1.0 ms) failed the comparison
-    // while the measurement itself was right. The GPU side is unaffected by that contention,
-    // so taking the least-disturbed encode tests the same property without the false failure.
+    // Best of five, by the shortest waited-for refresh. Everything below compares the GPU span
+    // with `submit_ms` and `wall_ms`, and contention on a shared machine only ever inflates those
+    // two: one run that happened to encode behind a busy scheduler (8.2 ms against a typical
+    // 1.0 ms) failed the comparison, and on an RX 5700 XT about one wait in five took ~11 ms
+    // against a typical 1.3 ms while the GPU span stayed at 1.1 ms. The span is unaffected by
+    // that contention, so taking the least-disturbed refresh (whose wall clock includes its
+    // encode) tests the same property without the false failure.
     let mut best: Option<(f64, f64, Option<GpuTiming>)> = None;
-    for _ in 0..3 {
+    for _ in 0..5 {
         let run = measure(&device, &queue, &mut comp, &doc, full);
-        if run.2.is_some() && best.as_ref().is_none_or(|b| run.0 < b.0) {
+        if run.2.is_some() && best.as_ref().is_none_or(|b| run.1 < b.1) {
             best = Some(run);
         }
     }
-    let (submit_ms, wall_ms, timing) = best.expect("at least one of three refreshes reports a GPU time");
+    let (submit_ms, wall_ms, timing) = best.expect("at least one of five refreshes reports a GPU time");
     let t = timing.expect("a hardware device with timestamp queries must report a GPU time");
     eprintln!("full {}x{}: submit {submit_ms:.1} ms, waited wall {wall_ms:.1} ms, gpu {:.1} ms", size.width, size.height, t.ms);
 
@@ -177,38 +188,181 @@ fn an_unmeasured_compositor_reports_nothing() {
     assert_eq!(comp.take_gpu_timing(), None, "no measurement is reported rather than a wrong one");
 }
 
+/// A refresh that flushes several command buffers under a tight memory budget reports one
+/// measurement with a span per command buffer. Its summed time stays within the waited-for wall
+/// clock and reaches at least 60% of the same composite's time in a single command buffer, which
+/// timing only the last command buffer would miss.
 #[test]
 fn a_refresh_that_submits_several_times_is_one_measurement() {
     let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let Some((device, queue, mut comp)) = gpu() else { return };
+    let Some((device, queue, mut batched)) = gpu() else { return };
     // A budget far below the document's layer pages makes the refresh evict as it goes, which is
     // what makes it submit in batches: the measurement must span all of them, not just the last.
-    comp.set_memory_budget(24 << 20);
+    batched.set_memory_budget(24 << 20);
+    // The same composite with every page resident, in one command buffer: the reference for the
+    // GPU work the batched refresh's spans must add up to.
+    let mut whole = Compositor::new(&device);
+    assert!(whole.measure_gpu_time(&device, &queue), "the device has the features, so the timer must build");
+    // Both draw every pass: a reused lower-stack composite would make either do less work.
+    batched.set_composite_cache_budget(0);
+    whole.set_composite_cache_budget(0);
     let size = Size::new(3000, 2000);
     let doc = document(size);
     let full = Rect::from_xywh(0, 0, size.width, size.height);
 
-    let _ = measure(&device, &queue, &mut comp, &doc, full);
-    let (submit_ms, wall_ms, timing) = measure(&device, &queue, &mut comp, &doc, full);
-    let t = timing.expect("a batched refresh is measured like any other");
-    eprintln!("batched: {} command buffers, gpu {:.1} ms, submit {submit_ms:.1} ms, waited wall {wall_ms:.1} ms", t.spans, t.ms);
-    assert_eq!(t.px, area(full));
+    let _ = measure(&device, &queue, &mut whole, &doc, full);
+    let _ = measure(&device, &queue, &mut batched, &doc, full);
+    // Interleaved, best of six each: GPU clocks ramp and settle between refreshes, and the
+    // fastest run of each is the one at full clock, so the two are compared like for like. The
+    // order alternates by sample, so neither side always runs on clocks and caches the other has
+    // just warmed; an even count gives each order three samples.
+    let (mut one, mut sum) = (f64::INFINITY, None::<(GpuTiming, f64, f64)>);
+    for sample in 0..6 {
+        let resident_first = sample % 2 == 0;
+        let mut resident = if resident_first { measure(&device, &queue, &mut whole, &doc, full).2 } else { None };
+        let (submit_ms, wall_ms, timing, stats) = measure_with_stats(&device, &queue, &mut batched, &doc, full);
+        if !resident_first {
+            resident = measure(&device, &queue, &mut whole, &doc, full).2;
+        }
+        if let Some(r) = &resident {
+            assert_eq!(r.spans, 1, "a resident refresh of this size submits once");
+            one = one.min(r.ms);
+        }
+        let t = timing.expect("a batched refresh is measured like any other");
+        assert_eq!(t.px, area(full));
+        // Structure: every command buffer the refresh submitted is one span of the measurement.
+        assert_eq!(t.spans as usize, stats.flushes + 1, "{} flushes but {} timed command buffers", stats.flushes, t.spans);
+        // Upper bound: the spans run inside the refresh, so they can't exceed its waited-for
+        // wall clock.
+        assert!(t.ms <= wall_ms * 1.25, "summed gpu time {:.1} ms exceeds the whole waited-for refresh {wall_ms:.1} ms", t.ms);
+        eprintln!(
+            "sample {sample} ({} first): resident {}; batched {} command buffers, gpu {:.3} ms, submit {submit_ms:.1} ms, waited wall {wall_ms:.1} ms, {} MB uploaded",
+            if resident_first { "resident" } else { "batched" },
+            resident.as_ref().map_or("not reported".to_owned(), |r| format!("gpu {:.3} ms", r.ms)),
+            t.spans,
+            t.ms,
+            stats.bytes_uploaded >> 20
+        );
+        if sum.as_ref().is_none_or(|(b, ..)| t.ms < b.ms) {
+            sum = Some((t, submit_ms, wall_ms));
+        }
+    }
+    let (t, submit_ms, wall_ms) = sum.expect("six batched refreshes were measured");
+    assert!(one.is_finite(), "the resident refresh reports a GPU time");
+    eprintln!("best: batched {:.2} ms in {} command buffers, resident {one:.2} ms in one", t.ms, t.spans);
     if t.spans < 2 {
         eprintln!("SKIP the sum: this refresh still fit one command buffer");
         return;
     }
-    assert!(t.ms <= wall_ms * 1.25, "summed gpu time {:.1} ms exceeds the whole waited-for refresh {wall_ms:.1} ms", t.ms);
-    // What this bound excludes is summing only the last command buffer. A correct sum measures
-    // ~85 % of the waited-for GPU time here; the flush thresholds split on accumulated work, so
-    // no single buffer of the several carries much over half of it, and timing only the last
-    // would land near 40 %. 0.6 sits between the two with room on both sides for a machine
-    // whose split is less even than this one's.
+    // Lower bound. The batched refresh draws the same passes over the same pixels as the
+    // resident one, so its spans together carry at least that GPU work; timing only the last
+    // command buffer would report a fraction of it. (`a_split_measurement_sums_every_command_buffer`
+    // proves the sum itself with equal, known batches.)
+    //
+    // Not against the wall clock: a batched refresh evicts and re-uploads its pages, and
+    // `Queue::write_texture` uploads run in wgpu's own command buffer outside the spans by design
+    // (see `timing.rs`). On an integrated GPU the composite dominates the wait, but on a discrete
+    // one (RX 5700 XT) the composite took ~2 ms of a ~25 ms wait that was PCIe uploads and fence
+    // latency, so a `wall - submit` bound fails a correct sum there.
     assert!(
-        t.ms >= (wall_ms - submit_ms) * 0.6,
-        "summed gpu time {:.1} ms is far below the {:.1} ms the refresh waited: is only the last command buffer timed?",
+        t.ms >= one * 0.6,
+        "summed gpu time {:.2} ms over {} command buffers is well below the {one:.2} ms the same composite takes in one: is only the last command buffer timed? ({submit_ms:.1} ms submit, {wall_ms:.1} ms wall)",
         t.ms,
-        wall_ms - submit_ms
+        t.spans
     );
+}
+
+/// The sum itself, with known work: the same GPU work recorded into one command buffer, or split
+/// over several that are submitted one after the other (as a flushing refresh does), measures
+/// the same. Timing only the first or the last of four equal batches would report a quarter.
+#[test]
+fn a_split_measurement_sums_every_command_buffer() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Some((device, queue, _)) = gpu() else { return };
+    const BATCHES: usize = 4;
+    // One batch: a 64 MiB buffer copied four times (well inside every adapter's default limits),
+    // a few milliseconds on an integrated GPU and about one on a discrete one.
+    const BYTES: u64 = 64 << 20;
+    let buffer = |usage| device.create_buffer(&wgpu::BufferDescriptor { label: None, size: BYTES, usage, mapped_at_creation: false });
+    let (src, dst) = (buffer(wgpu::BufferUsages::COPY_SRC), buffer(wgpu::BufferUsages::COPY_DST));
+    let batch = |encoder: &mut wgpu::CommandEncoder| {
+        for _ in 0..4 {
+            encoder.copy_buffer_to_buffer(&src, 0, &dst, 0, BYTES);
+        }
+    };
+    let mut timer = timing::GpuTimer::new(&device, &queue).expect("the device has timestamp queries");
+    let new_encoder = || device.create_command_encoder(&Default::default());
+    let land = |timer: &mut timing::GpuTimer| {
+        let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        (0..8)
+            .find_map(|_| {
+                let t = timer.take();
+                if t.is_none() {
+                    let _ = device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+                }
+                t
+            })
+            .expect("the measurement lands")
+    };
+    let one_buffer = |timer: &mut timing::GpuTimer| {
+        let mut encoder = new_encoder();
+        timer.start(&mut encoder, 1);
+        for _ in 0..BATCHES {
+            batch(&mut encoder);
+        }
+        timer.finish(&mut encoder);
+        queue.submit([encoder.finish()]);
+        timer.submitted();
+        land(timer)
+    };
+    let split = |timer: &mut timing::GpuTimer| {
+        let mut encoder = new_encoder();
+        timer.start(&mut encoder, 1);
+        for i in 0..BATCHES {
+            batch(&mut encoder);
+            if i + 1 < BATCHES {
+                let mut next = new_encoder();
+                timer.split(&mut encoder, &mut next);
+                queue.submit([std::mem::replace(&mut encoder, next).finish()]);
+            }
+        }
+        timer.finish(&mut encoder);
+        queue.submit([encoder.finish()]);
+        timer.submitted();
+        land(timer)
+    };
+
+    let _ = one_buffer(&mut timer);
+    let _ = split(&mut timer);
+    // Interleaved, best of six each, alternating which runs first by sample: neither side always
+    // runs on clocks and caches the other has just warmed, and each order gets three samples.
+    let (mut one, mut sum) = (f64::INFINITY, f64::INFINITY);
+    for sample in 0..6 {
+        let one_first = sample % 2 == 0;
+        let (one_ms, t) = if one_first {
+            let one_ms = one_buffer(&mut timer).ms;
+            (one_ms, split(&mut timer))
+        } else {
+            let t = split(&mut timer);
+            (one_buffer(&mut timer).ms, t)
+        };
+        eprintln!(
+            "sample {sample} ({} first): one command buffer {one_ms:.3} ms, split over {} {:.3} ms",
+            if one_first { "one buffer" } else { "split" },
+            t.spans,
+            t.ms
+        );
+        assert_eq!(t.spans as usize, BATCHES, "every command buffer is one span");
+        one = one.min(one_ms);
+        sum = sum.min(t.ms);
+    }
+    eprintln!("{BATCHES} batches: one command buffer {one:.2} ms, split over {BATCHES} {sum:.2} ms");
+    assert!(one > 0.0, "the copies took measurable GPU time");
+    // Equal batches: losing one of four spans reports about 75% of the work even when the
+    // span count is still four. Keep the lower bound above that failure, with 15% room for
+    // clock variation between the interleaved single-buffer and split measurements.
+    assert!(sum >= one * 0.85, "split over {BATCHES} command buffers measured {sum:.2} ms against {one:.2} ms in one: not every span is summed");
+    assert!(sum <= one * 1.5, "split over {BATCHES} command buffers measured {sum:.2} ms against {one:.2} ms in one: spans counted twice?");
 }
 
 #[test]

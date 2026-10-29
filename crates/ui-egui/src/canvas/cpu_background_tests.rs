@@ -67,6 +67,9 @@ type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
 /// The CPU-canvas fixture on the offscreen software adapter, or `None` when this machine has no
 /// graphics adapter. Only creating the renderer may be skipped: a failing fixture command or a
 /// panic in the first frames must fail the test, not pass it as "no adapter".
+///
+/// Callers hold [`photocraft_testkit::gpu_lock`] for the whole test, like every other GPU harness:
+/// building wgpu devices on parallel test threads segfaults on some drivers (testkit `gpu.rs`).
 fn harness(size: [u32; 2], background: &str) -> Option<Harness> {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     // app.gpu remains None: compose on the CPU, use the harness's software window adapter.
@@ -117,8 +120,12 @@ fn fixture_failures_are_not_skipped_as_a_missing_adapter() {
     let _ = harness([0, 0], "white");
 }
 
+/// Skipping the transparency checker behind an opaque CPU canvas renders the same pixels as
+/// drawing it, across rotation, horizontal flip and pattern preview. Set
+/// `PHOTOCRAFT_CPU_PIXEL_OUTPUT` to a directory to save both frames and a difference report.
 #[test]
 fn omitting_an_occluded_checker_preserves_cpu_canvas_pixels() {
+    let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness([320, 240], "white") else {
         eprintln!("skipping: no offscreen graphics adapter");
         return;
@@ -157,8 +164,12 @@ fn omitting_an_occluded_checker_preserves_cpu_canvas_pixels() {
     }
 }
 
+/// With pattern preview on, the opaque CPU canvas still submits the same checker meshes as the
+/// reference path for the document and each visible tiled copy, rotated or flipped; with it off,
+/// the hidden checker is omitted.
 #[test]
 fn pattern_preview_keeps_the_legacy_checker_for_every_copy() {
+    let _gpu = photocraft_testkit::gpu_lock();
     let Some(mut h) = harness([320, 240], "white") else {
         eprintln!("skipping: no offscreen graphics adapter");
         return;
@@ -195,10 +206,15 @@ fn pattern_preview_keeps_the_legacy_checker_for_every_copy() {
     assert!(checker_meshes(&h).is_empty(), "ordinary opaque CPU canvases still omit the hidden checker");
 }
 
+/// Frame time of a 24 MP CPU canvas with and without the occluded checker, for an opaque and a
+/// transparent document: 24 alternating-order samples per path, reported as p50/p95 JSON on
+/// stdout (and in `PHOTOCRAFT_CPU_BENCH_OUTPUT`, with before/after frames, when set). Run in
+/// release with `--ignored`; it also asserts both paths render the same pixels.
 #[test]
 #[ignore = "manual release benchmark: 24 MP CPU canvas on the offscreen software adapter"]
 fn cpu_canvas_background_benchmark() {
     use std::time::Instant;
+    let _gpu = photocraft_testkit::gpu_lock();
     let mut results = Vec::new();
     let output = std::env::var_os("PHOTOCRAFT_CPU_BENCH_OUTPUT").map(std::path::PathBuf::from);
     for background in ["white", "transparent"] {

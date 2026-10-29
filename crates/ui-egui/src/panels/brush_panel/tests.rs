@@ -1338,7 +1338,16 @@ fn app_harness() -> Harness<'static, PhotocraftApp> {
     app_harness_with_language(crate::i18n::Lang::EN)
 }
 
+/// [`app_harness`] with its UI drawn in `lang`, under kittest's strict missing-glyph policy, so
+/// every label of the Brush tool's options bar, settings window and preset picker must shape in
+/// that language from the first frame.
 fn app_harness_with_language(lang: crate::i18n::Lang) -> Harness<'static, PhotocraftApp> {
+    // Kittest's strict missing-glyph policy panics in the first frame that draws a CJK label. The
+    // font provider serves it then, but on Linux it may wait for the background Fontconfig lookup
+    // when no known font path has the script, so let that finish first (as the other strict
+    // all-language tests do).
+    #[cfg(target_os = "linux")]
+    assert!(crate::cjk_fonts::wait_for_fontconfig_cjk_scan(), "Fontconfig CJK lookup did not finish within 10 seconds");
     let mut app = app();
     app.ui.tool = crate::state::Tool::Brush;
     let mut h = Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
