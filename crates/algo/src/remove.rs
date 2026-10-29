@@ -54,7 +54,7 @@ pub fn close_loops(w: usize, h: usize, mask: &[bool]) -> Vec<bool> {
     outside.iter().map(|o| !*o).collect()
 }
 
-/// `mask` grown by `r` cells (a square structuring element), in two separable passes.
+/// `mask` grown by `r` cells (a square structuring element, clipped to the grid).
 pub fn dilate(w: usize, h: usize, mask: &[bool], r: usize) -> Vec<bool> {
     crate::square_dilate::dilate_square(w, h, mask, r)
 }
