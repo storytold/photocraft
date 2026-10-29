@@ -118,6 +118,9 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     if let Some(r) = crate::timeline_ui::menu(app, id, params) {
         return Some(r);
     }
+    if let Some(r) = crate::design_timeline_ui::menu(app, id, params) {
+        return Some(r);
+    }
     // Filter › Plug-ins (installed WebAssembly plug-ins, Install Plug-in…).
     if let Some(r) = crate::plugin_ui::menu(app, id, params) {
         return Some(r);

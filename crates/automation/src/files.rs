@@ -19,8 +19,9 @@ pub struct Opened {
 /// Decode a document that was read through a filesystem capability.
 pub fn open_bytes(name: &str, bytes: &[u8]) -> Result<Opened, AutomationError> {
     if Path::new(name).extension().is_some_and(|extension| extension.eq_ignore_ascii_case(photocraft_format::EXTENSION)) {
-        let document = photocraft_format::load_from_bytes(bytes)?;
-        return Ok(Opened { warnings: photocraft_io::open_warnings(&document), document, source_read_only: false });
+        let (document, mut warnings) = photocraft_format::load_from_bytes_reporting(bytes, &Default::default())?;
+        warnings.extend(photocraft_io::open_warnings(&document));
+        return Ok(Opened { warnings, document, source_read_only: false });
     }
     let r = photocraft_io::import(name, bytes)?;
     Ok(Opened { document: r.document, warnings: r.warnings, source_read_only: r.source_read_only })

@@ -844,6 +844,17 @@ fn the_dock_can_be_as_wide_as_the_window_allows() {
     }
 }
 
+#[test]
+fn design_timeline_menu_toggles_the_strip_in_a_custom_layout() {
+    let mut app = app();
+    app.run("window.panel.move", json!({"panel":"swatches", "anchor":"layers", "zone":"top"})).unwrap();
+    assert!(app.ui.docking.is_some());
+    let id = crate::design_timeline_ui::ID;
+    assert!(crate::menus::invoke(&mut app, &egui::Context::default(), id, json!({})).is_ok());
+    assert!(app.ui.design_timeline.open, "the docked History tab must not take the strip's command");
+    assert!(!app.ui.docking.as_ref().unwrap().layout.contains(&"designTimelineList".into()));
+}
+
 /// A workspace file written by main: a bare `docking` layout with `dockingHidden` and
 /// `dockingCollapsed` beside the native keys. It loads as the default built from the native
 /// keys, and the first change saves a versioned workspace.
@@ -858,7 +869,7 @@ fn main_workspace_file_loads_as_the_default_and_saves_as_a_workspace() {
     let layout = &workspace.layout;
     assert_eq!(
         root_groups(layout),
-        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["history", "actions"], vec!["layers", "channels"]]
+        [vec!["color", "swatches", "gradients", "patterns"], vec!["properties", "adjustments"], vec!["history", "actions", "designTimelineList"], vec!["layers", "channels"]]
     );
     assert!(in_dock_column(layout, "layers") && panel_active(layout, "actions"));
     for (panel, _, _) in PANELS {

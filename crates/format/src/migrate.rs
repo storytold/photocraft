@@ -8,9 +8,11 @@ use crate::{FormatError, Result};
 
 pub(crate) type Step = fn(&mut Value) -> Result<()>;
 
-/// `STEPS[i]` upgrades version `i + 1` to `i + 2`. Empty while version 1 is
-/// the only version.
-pub(crate) const STEPS: &[Step] = &[];
+/// `STEPS[i]` upgrades version `i + 1` to `i + 2`.
+pub(crate) const STEPS: &[Step] = &[
+    // 2 adds the optional `design_timeline`; a version 1 manifest just has none.
+    |_| Ok(()),
+];
 
 /// Upgrade `v` in place to `target` using `steps`.
 pub(crate) fn migrate_with(v: &mut Value, steps: &[Step], target: u32) -> Result<u32> {

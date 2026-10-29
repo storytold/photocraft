@@ -14,6 +14,7 @@ mod canvas_geom;
 mod channel_clip;
 mod clip_group;
 mod crop_fill;
+pub mod design_cmds;
 pub mod display_color;
 pub mod doc_path;
 pub mod filters;
@@ -39,6 +40,8 @@ pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
+mod timeline;
+pub mod untrusted;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
@@ -286,6 +289,11 @@ pub struct Session {
     /// command reporting too narrow a redraw area (#4053). Counted in debug and test builds only;
     /// tests read it.
     pub damage_misses: usize,
+    /// The step id the next command mints layer and smart-contents ids under. Session-wide, so
+    /// a layer copied into another document never collides with that document's ids.
+    pub(crate) next_step: u64,
+    /// Tool-state commands since the last design-timeline step, replayed ahead of the next one.
+    pub(crate) timeline_prelude: Vec<photocraft_doc::design::Prelude>,
 }
 
 #[cfg(test)]
