@@ -405,6 +405,54 @@ fn contact_sheet_places_thumbnails_with_captions() {
 }
 
 #[test]
+fn contact_sheet_accepts_selected_image_files_and_sheet_layout_options() {
+    let dir = tmp("contact-selected");
+    let files = images(&dir, 2, 60, 30);
+    let mut s = Session::new();
+    let r = s
+        .execute(
+            "file.automate.contactSheetII",
+            json!({
+                "input": dir,
+                "selectedFiles": [files[1].clone()],
+                "layout": "native",
+                "sheetPreset": "custom",
+                "units": "pixels",
+                "width": 100,
+                "height": 80,
+                "resolution": 72,
+                "margin": 10,
+                "gap": 2,
+                "columns": 1,
+                "rows": 1,
+                "centerLayers": true,
+                "caption": false
+            }),
+        )
+        .unwrap();
+    assert_eq!(r["images"], 1, "the selected files take precedence over the folder");
+    assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(100), Some(80)));
+    let d = &s.documents()[r["documents"][0].as_u64().unwrap() as usize].doc;
+    assert_eq!(d.layers.len(), 1);
+    assert_eq!(d.layers[0].name, "img1");
+    let bounds = d.layers[0].surface().unwrap().content_bounds();
+    assert!(bounds.x0 >= 10 && bounds.y0 >= 10, "the image respects the margin: {bounds:?}");
+    assert!(bounds.x1 <= 90 && bounds.y1 <= 70, "the image stays inside the margin: {bounds:?}");
+    assert_eq!((bounds.x0 + bounds.x1, bounds.y0 + bounds.y1), (100, 80), "the selected image is centered at native size");
+
+    let r = s
+        .execute(
+            "file.automate.contactSheetII",
+            json!({"input": [files[0].clone()], "sheetPreset": "a4", "caption": false}),
+        )
+        .unwrap();
+    assert_eq!((r["width"].as_u64(), r["height"].as_u64()), (Some(2480), Some(3508)));
+
+    assert!(s.execute("file.automate.contactSheetII", json!({"input": [files[0].clone()], "margin": -1})).is_err());
+    assert!(s.execute("file.automate.contactSheetII", json!({"input": [files[0].clone()], "gap": -1})).is_err());
+}
+
+#[test]
 fn a_failed_step_inside_a_called_action_fails_scripts_and_batch() {
     use crate::actions_cmds::Action;
     let dir = tmp("nested-failure");
