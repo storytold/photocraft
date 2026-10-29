@@ -737,6 +737,8 @@ GPL and ACT imports remain bounded, preserve opaque-entry order and duplicates, 
 channel/count limits before use. An extended ACT's declared transparent slot is omitted from an
 opaque mapping palette; a transparent-only ACT is rejected. Classic 768-byte ACT files retain all
 256 entries. Import format support does not imply licensing rights over imported files.
+An out-of-range ACT transparency index means no transparency, including the `01 01`
+encoding used by 256-color tables; all used colors remain available.
 
 Engine adapters expose shared `Palette`/`Settings` resolution and legacy `dither`, `amount`,
 `ditherAmount`, `paletteId` and `paletteSnapshot` spellings in `crates/engine/src/palette_cmds.rs`.

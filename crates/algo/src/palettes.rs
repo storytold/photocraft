@@ -137,10 +137,10 @@ pub fn parse_gpl(bytes: &[u8]) -> Result<Palette, String> {
 /// Parse an Adobe Color Table (`.act`) file.
 ///
 /// The classic 768-byte form contains 256 RGB entries. The extended 772-byte form appends a
-/// big-endian entry count (zero means 256) and a big-endian transparency index (`0xffff` means no
-/// transparency index). [`Palette`] has no indexed transparency metadata, so a declared
-/// transparent entry is omitted from the returned non-index-preserving palette; all remaining
-/// entries retain their ACT order.
+/// big-endian entry count (zero means 256) and a big-endian transparency index. An index
+/// outside the used colors (including `0xffff`) means no transparency, matching the PSD ACT
+/// reader. [`Palette`] has no indexed transparency metadata, so an in-range transparent entry
+/// is omitted; all remaining entries retain their ACT order.
 pub fn parse_act(bytes: &[u8]) -> Result<Palette, String> {
     if bytes.len() > MAX_INPUT_BYTES {
         return Err(format!("ACT input exceeds {MAX_INPUT_BYTES} bytes"));
@@ -154,11 +154,8 @@ pub fn parse_act(bytes: &[u8]) -> Result<Palette, String> {
                 return Err("ACT color count is outside 1..=256".to_owned());
             }
             let declared_transparent = u16::from_be_bytes([bytes[ACT_TABLE_BYTES + 2], bytes[ACT_TABLE_BYTES + 3]]);
-            let transparent = if declared_transparent == u16::MAX { None } else { Some(usize::from(declared_transparent)) };
-            if transparent.is_some_and(|index| index >= count) {
-                return Err("ACT transparency index is outside the declared palette".to_owned());
-            }
-            (count, transparent)
+            let transparent = usize::from(declared_transparent);
+            (count, (transparent < count).then_some(transparent))
         }
         actual => {
             return Err(format!("ACT input must be exactly {ACT_TABLE_BYTES} or {ACT_EXTENDED_BYTES} bytes (got {actual})"));
@@ -304,10 +301,20 @@ mod tests {
         let mut bad_count = vec![0u8; 772];
         bad_count[768..770].copy_from_slice(&257u16.to_be_bytes());
         assert!(parse_act(&bad_count).is_err());
-        let mut bad_transparency = vec![0u8; 772];
-        bad_transparency[768..770].copy_from_slice(&2u16.to_be_bytes());
-        bad_transparency[770..772].copy_from_slice(&2u16.to_be_bytes());
-        assert!(parse_act(&bad_transparency).is_err());
+    }
+
+    #[test]
+    fn act_out_of_range_transparency_preserves_all_used_colors() {
+        for (count, transparency) in [(256u16, 257u16), (2, 2)] {
+            let mut bytes = [0u8; 772];
+            for (index, color) in bytes[..768].chunks_exact_mut(3).enumerate() {
+                color.copy_from_slice(&[index as u8, (255 - index) as u8, 17]);
+            }
+            bytes[768..770].copy_from_slice(&count.to_be_bytes());
+            bytes[770..772].copy_from_slice(&transparency.to_be_bytes());
+            let expected = (0..count).map(|i| [f32::from(i) / 255.0, f32::from(255 - i) / 255.0, 17.0 / 255.0]).collect::<Vec<_>>();
+            assert_eq!(parse_act(&bytes).map(|palette| palette.colors), Ok(expected));
+        }
     }
 
     #[test]
