@@ -1810,6 +1810,7 @@
 	Soften	Verzachten
 	Source	Bron
 	Source: set	Bron: ingesteld
+	Source: {name}	Bron: {name}
 	Sponge Tool	Sponsgereedschap
 	Spot Healing Brush Tool	Snel herstelpenseel
 	Spread	Spreiden
@@ -4066,6 +4067,7 @@ curves	Smooth	Vloeiend maken
 # History panel › History Brush source (#2966)
 	Paints from the History panel's source state	Schildert vanuit de bronstatus van het deelvenster Geschiedenis
 	Sets the source for the history brush	Stelt de bron voor het historiepenseel in
+	The History Brush source was deleted: set a new source in the History panel	De bron voor het historiepenseel is verwijderd: stel een nieuwe bron in het deelvenster Geschiedenis in
 # Bevel & Emboss shading controls.
 	Highlight Mode	Hooglichtmodus
 	Highlight Color	Hooglichtkleur
