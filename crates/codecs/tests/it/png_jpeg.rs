@@ -221,7 +221,10 @@ fn decode_in_steps(bytes: &[u8], per_call: usize) -> Result<(Image, usize), Code
 fn assert_steps_equal_decode(bytes: &[u8], what: &str) {
     let whole = decode(bytes);
     for per_call in [1, 7, 0] {
-        match (&whole, decode_in_steps(bytes, per_call)) {
+        // `decode` also takes the resolution from EXIF or XMP and turns the image upright;
+        // `finish_png_decode` does that for a stepped decode, as the stepped import does.
+        let stepped = decode_in_steps(bytes, per_call).and_then(|(img, calls)| Ok((finish_png_decode(img, &DecodeOptions::default())?, calls)));
+        match (&whole, stepped) {
             (Ok(a), Ok((b, _))) => assert_eq!(a, &b, "{what}, {per_call} rows per call"),
             (Err(_), Err(_)) => {}
             (a, b) => panic!("{what}, {per_call} rows per call: decode {:?}, steps {:?}", a.as_ref().map(|_| ()), b.map(|_| ())),
