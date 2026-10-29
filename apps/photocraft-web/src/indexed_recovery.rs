@@ -18,6 +18,8 @@ use photocraft_ui_egui::Services;
 
 const DATABASE: &str = "photocraft.recovery";
 const PREFS_KEY: &str = "photocraft.preferences";
+/// All the per-record reads together may not hold up startup longer than this, whatever the count.
+const SCAN_MS: f64 = 15_000.0;
 
 /// Open the recovery database, take this page's lock and read what earlier page loads left.
 /// Storage the browser denies (private windows, blocked site data) returns the error; the app
@@ -72,11 +74,11 @@ async fn hold(name: &str, if_available: bool) -> Result<bool, String> {
 
 /// One record, read in its own transaction (and under its own deadline) so one slow record
 /// cannot take the others, or the database, down with it.
-async fn get_blob(db: &IdbDatabase, name: &str) -> Result<Option<Blob>, String> {
+async fn get_blob(db: &IdbDatabase, name: &str, scan_end: f64) -> Result<Option<Blob>, String> {
     let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readonly).map_err(js)?;
     let req = tx.object_store(FILES).map_err(js)?.get(&JsValue::from_str(name)).map_err(js)?;
     let pending = request(&req);
-    Ok(before(&pending.promise, js_sys::Date::now() + TIMEOUT_MS).await?.dyn_into::<Blob>().ok())
+    Ok(before(&pending.promise, (js_sys::Date::now() + TIMEOUT_MS).min(scan_end)).await?.dyn_into::<Blob>().ok())
 }
 
 async fn read(db: &IdbDatabase, recovery: &Recovery, deadline: f64) -> Result<(), String> {
@@ -104,7 +106,12 @@ async fn read(db: &IdbDatabase, recovery: &Recovery, deadline: f64) -> Result<()
             }
         }
     }
+    let scan_end = js_sys::Date::now() + SCAN_MS;
     for name in names.iter().take(MAX_ENTRIES * 2) {
+        if js_sys::Date::now() >= scan_end {
+            log::warn!("Crash recovery stopped reading records: the scan took too long");
+            break;
+        }
         let mine = session_of(name).is_some_and(|s| claimed.contains(&s));
         let bundle = name.ends_with(".pcraft");
         // Only a claimed page's sidecars and bundles are read; other bundles are only measured
@@ -112,7 +119,7 @@ async fn read(db: &IdbDatabase, recovery: &Recovery, deadline: f64) -> Result<()
         if !(bundle || (mine && name.ends_with(".json"))) {
             continue;
         }
-        let blob = match get_blob(db, name).await {
+        let blob = match get_blob(db, name, scan_end).await {
             Ok(Some(blob)) => blob,
             Ok(None) => continue,
             Err(e) => {
@@ -125,7 +132,7 @@ async fn read(db: &IdbDatabase, recovery: &Recovery, deadline: f64) -> Result<()
         } else if !mine {
             recovery.note_size(name, blob.size() as u64);
         } else {
-            match before(&blob.array_buffer(), js_sys::Date::now() + TIMEOUT_MS).await {
+            match before(&blob.array_buffer(), (js_sys::Date::now() + TIMEOUT_MS).min(scan_end)).await {
                 Ok(buffer) => recovery.load(name, Uint8Array::new(&buffer).to_vec()),
                 Err(e) => log::warn!("Skipping recovery record {name}: {e}"),
             }
