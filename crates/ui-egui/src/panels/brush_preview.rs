@@ -122,6 +122,12 @@ pub fn preview_pixels(b: &BrushSettings, w: u32, h: u32, color: [f32; 4]) -> Vec
     brush.build_up = false;
     let mut points: Vec<StrokePoint> = shape.samples().into_iter().map(|s| StrokePoint::new(s.x, s.y, s.pressure)).collect();
     if !brush.spacing_enabled {
+        // Smoothed here rather than in the stroke, so the timing follows the path the dabs take:
+        // the smoother moves points and can give several the same time.
+        if brush.smoothing.enabled && brush.smoothing.amount > 0.0 {
+            points = paint::dynamics::smooth_points(&brush.smoothing, 1.0, &points);
+            brush.smoothing.enabled = false;
+        }
         accelerate(&mut points, f64::from(brush.size));
     }
     let fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, true);
@@ -262,6 +268,18 @@ mod tests {
         let fast = covered(&b, right);
         assert!(slow > 0.95, "slow start: overlapping dabs ({slow})");
         assert!(fast > 0.1 && fast < 0.6, "fast end: separate dabs ({fast})");
+        // Smoothing doesn't undo the spread: the preview is timed after it smooths. Heavy smoothing
+        // lags the path short of the strip's end, so its two ends are measured where it lies.
+        for amount in [0.5, 0.95] {
+            let smoothed = BrushSettings { smoothing: paint::Smoothing { amount, ..Default::default() }, ..off.clone() };
+            let px = preview_pixels(&smoothed, w, h, [1.0; 4]);
+            let painted: Vec<u32> = (0..w).filter(|&x| (0..h).any(|y| px[((y * w + x) * 4 + 3) as usize] > 32)).collect();
+            let (Some(&first), Some(&last)) = (painted.first(), painted.last()) else { panic!("smoothing {amount}: nothing painted") };
+            assert!(last - first > 200, "smoothing {amount}: a stroke, not a dot ({first}..{last})");
+            let (slow, fast) = (covered(&px, first + 16..first + 86), covered(&px, last - 86..last - 16));
+            // Separate dabs: well short of a solid stroke's cover (over 0.95, as Spacing on gives).
+            assert!(slow > 0.95 && fast > 0.1 && fast < 0.8, "smoothing {amount}: slow {slow}, fast {fast}");
+        }
     }
 
     #[test]
