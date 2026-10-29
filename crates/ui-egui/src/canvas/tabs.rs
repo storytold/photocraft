@@ -436,9 +436,13 @@ fn fit_doc_tabs(natural: &[f32], selected: usize, avail: f32) -> crate::tab_stri
 /// Photoshop's tab title: "name @ 50% (Layer 1, RGB/8)", "(Layer 1, Layer Mask/8)" when the mask
 /// is targeted, "(Quick Mask/8)" in Quick Mask mode; the Background layer's name is omitted.
 pub(super) fn pro_tab_title(app: &PhotocraftApp, i: usize) -> String {
+    tab_title_at(app, i, app.ui.views.get(i).map_or(100.0, |v| v.zoom * 100.0))
+}
+
+/// [`pro_tab_title`] at `zoom` percent (a workspace with its own view, such as Select and Mask).
+pub(crate) fn tab_title_at(app: &PhotocraftApp, i: usize, zoom: f32) -> String {
     use photocraft_engine::channel_cmds::ChannelTarget;
     let Some(st) = app.session.documents().get(i) else { return String::new() };
-    let zoom = app.ui.views.get(i).map_or(100.0, |v| v.zoom * 100.0);
     // Quick Mask mode targets the mask, not the layer (see `paint_target`): painting and Free
     // Transform change the red overlay, so the tab says so, as Photoshop's does.
     let quick_mask = st.doc.quick_mask.is_some() && st.channel_view.target == ChannelTarget::Composite;

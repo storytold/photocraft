@@ -256,6 +256,16 @@ fn save_for_web_dialog_runs_the_command() {
     let d = app.ui.dialog_mut(r["dialog"].as_u64().unwrap()).unwrap();
     assert_eq!(d.fields["format"], "gif");
     assert!(!d.fields.contains_key("path"));
+    // WebP, with the dialog's own defaults (lossy at quality 60).
+    let id = r["dialog"].as_u64().unwrap();
+    let d = app.ui.dialog_mut(id).unwrap();
+    let path = dir.join("web.webp").to_string_lossy().into_owned();
+    d.fields.insert("format".into(), json!("webp"));
+    d.fields.insert("path".into(), json!(path));
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let bytes = std::fs::read(&path).unwrap();
+    assert_eq!(&bytes[8..12], b"WEBP");
+    assert!(bytes.windows(4).any(|w| w == b"VP8 "), "lossy by default");
 }
 
 /// A fresh session's dialog seeds from the preferences: the last export before a restart is

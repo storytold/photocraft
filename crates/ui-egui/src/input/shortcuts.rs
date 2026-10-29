@@ -552,6 +552,10 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.distort.caf.is_some() && !ctx.text_edit_focused() {
         crate::caf_ui::keys(app, ctx);
     }
+    // And Select and Mask's tools, views and brush size.
+    if app.distort.select_mask.is_some() && !ctx.text_edit_focused() {
+        crate::select_mask_ui::keys(app, ctx);
+    }
     true
 }
 
@@ -559,7 +563,7 @@ fn handle_modal_canvas_keys(app: &mut PhotocraftApp, ctx: &egui::Context, focus:
     use crate::shortcut_dispatch::{Focus, dispatch_pressed};
     // Dialogs (and Liquify's panel while one of its controls has focus) keep canvas zoom; a
     // focused text field keeps its keys.
-    let liquify_focus = (app.distort.liquify.is_some() || app.distort.caf.is_some()) && focus != Focus::None;
+    let liquify_focus = (app.distort.liquify.is_some() || app.distort.caf.is_some() || app.distort.select_mask.is_some()) && focus != Focus::None;
     if liquify_focus || !app.ui.dialogs.is_empty() || app.discard.is_some() {
         if focus != Focus::Text {
             nav_keys(app, ctx);

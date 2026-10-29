@@ -546,6 +546,22 @@
 	Decontaminate	إزالة التلوث اللوني
 	Output	الإخراج
 	Refine Edge	تحسين الحافة
+	Clear Selection	مسح التحديد
+	Color Aware	مراعٍ للألوان
+	Decontaminate Colors	إزالة تلوث الألوان
+	Edge Detection	اكتشاف الحواف
+	Global Refinements	تحسينات عامة
+	High Quality Preview	معاينة عالية الجودة
+	Object Aware	مراعٍ للكائنات
+	Object Aware needs a segmentation model, which isn't available yet	يتطلب «مراعٍ للكائنات» نموذج تجزئة، وهو غير متوفر بعد
+	Real-Time Refinement	تحسين في الوقت الفعلي
+	Refine Edge Brush Tool	أداة فرشاة تحسين الحافة
+	Refine Hair	تحسين الشعر
+	Refine Hair needs hair detection, which isn't available yet	يتطلب «تحسين الشعر» اكتشاف الشعر، وهو غير متوفر بعد
+	Refine Mode	وضع التحسين
+	Select and Mask was closed: another layer was selected	تم إغلاق «تحديد وقناع»: حُدِّدت طبقة أخرى
+	Select and Mask was closed: its document is no longer the active one	تم إغلاق «تحديد وقناع»: لم يعد مستنده هو المستند النشط
+	View Mode	وضع العرض
 	Modify	تعديل
 	Border…	حدود التحديد…
 	Smooth…	تنعيم…

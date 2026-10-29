@@ -253,7 +253,7 @@ fn every_save_dialog_leads_with_its_own_extension() {
         app.run("prefs.set", json!({"path": "export.quickExportFormat", "value": format})).unwrap();
         let _ = invoke(&mut app, "file.export.quickExportAsPng");
     }
-    for format in ["gif", "png8", "png24", "jpeg", "wbmp"] {
+    for format in ["gif", "png8", "png24", "jpeg", "webp", "wbmp"] {
         dialog(&mut app, "file.export.saveForWebLegacy", json!({"format": format}));
     }
     app.run("slice.new", json!({"x": 0, "y": 0, "width": 2, "height": 2})).unwrap();
@@ -266,13 +266,13 @@ fn every_save_dialog_leads_with_its_own_extension() {
     let exts: Vec<&str> = asked.iter().filter_map(|s| s.rsplit_once('.').map(|(_, e)| e)).collect();
     // The extension each save above should suggest, in order.
     let want = [
-        "psd",                       // Save As untitled
-        "pcraft jpeg gif bmp psd",   // Save As opened .pcraft .jpeg .gif .bmp .dng
-        "psd",                       // Save a Copy
-        "png jpg webp tif tga",      // Export As
-        "png jpg gif webp",          // Quick Export
-        "gif png png jpg wbmp html", // Save for Web: gif png8 png24 jpeg wbmp, then with slices
-        "csv pcpresets",             // Measurement Log, Export Presets
+        "psd",                            // Save As untitled
+        "pcraft jpeg gif bmp psd",        // Save As opened .pcraft .jpeg .gif .bmp .dng
+        "psd",                            // Save a Copy
+        "png jpg webp tif tga",           // Export As
+        "png jpg gif webp",               // Quick Export
+        "gif png png jpg webp wbmp html", // Save for Web: gif png8 png24 jpeg webp wbmp, then with slices
+        "csv pcpresets",                  // Measurement Log, Export Presets
     ]
     .join(" ");
     assert_eq!(exts, want.split(' ').collect::<Vec<_>>());

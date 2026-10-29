@@ -73,8 +73,10 @@ what an agent can't finish alone.
 - **Estimate:** 60–100 h (2–9 h each, per the calibration).
 
 ### G7. Workspaces shown as parameter dialogs
-- **Missing:** Select and Mask workspace layout
-  (TOOL-214-1, Refine Hair #2671; its view modes preview live since #1754, Refine Edge Brush #2972); Content-Aware Fill workspace with a paintable sampling area
+- **Missing:** Select and Mask's Refine Hair (#2671), Object Aware refine mode (#2788) and Presets
+  (TOOL-214-1; the workspace landed 2026-10-23, #7069, #8148: Photoshop's layout with its own
+  Quick Selection, Refine Edge Brush, Brush, Object Selection, Lasso and Polygonal Lasso, Hand and
+  Zoom, the view modes since #1754, Real-Time Refinement and High Quality Preview); Content-Aware Fill workspace with a paintable sampling area
   (TOOL-214-15); Vanishing Point plane editor (TOOL-214-14). Content-Aware Move's live preview
   of the result is done (TOOL-213-4, 2026-10-16, #6680: every selection the command takes, coarse
   first for large ones, then the exact result), as are Transform On Drop and Content-Aware Scale
@@ -268,7 +270,9 @@ what an agent can't finish alone.
   snapping (#2681, #2684); Auto-Select box follows the picked layer (#2666, #2675); ⌘-arrow
   layer nudge (#2474, #2556); polygonal lasso Shift angles (#2352, #2396); double-click Zoom tool
   to 100% (#2508, #2527); tool-key memory in a group (#2608, #2625); hold-a-key spring-loaded
-  tools (#2672); H/V skew fields in the Free Transform options bar.
+  tools (#2672); H/V skew fields in the Free Transform options bar; Free Transform of several
+  selected layers, ⌘T and the Move tool's shared frame (#6501, #3384, #6096; Warp stays one
+  layer).
 - **Detail:** [`ui-parity.md`](ui-parity.md).
 - **Estimate:** 60–110 h.
 
@@ -398,6 +402,7 @@ what an agent can't finish alone.
 |---|---|---|
 | 2026-10-27 | minor | G9: 12 of 181 preferences do nothing, the scorecard's count with integration batch 9 (#9775) on main; no estimate changed |
 | 2026-10-26 | minor | Expand/Contract/Border distance work, mask reads and replacement cropped to nonzero bounds; bounded distances for radii ≤5; 36 MP exact-output comparisons improve 1.54–37.82× across eight cases; percentages, estimates and scorecard budgets unchanged |
+| 2026-10-23 | minor | G7: Select and Mask workspace (Photoshop's layout, its tools as `select.refineEdge` edits, Real-Time Refinement, High Quality Preview), #7069, #8148; Refine Hair, Object Aware and Presets remain; no estimate changed |
 | 2026-10-25 | minor | G9: the count of preferences that do nothing is the scorecard's again, 12 of 178 (it still said 24 of 171, from 2026-10-15); no estimate changed |
 | 2026-10-25 | minor | G6: Art History Brush landed as partial (TOOL-213-20, #1610), so no toolbar tool is missing; no percentage or estimate changed |
 | 2026-10-23 | minor | G4: hard-round built-in presets use 5% spacing (#8842), guarded by large-stroke outline and pressure-opacity pixel regressions at 8/16/32-bit; percentages and estimates unchanged |
@@ -406,6 +411,7 @@ what an agent can't finish alone.
 | 2026-10-23 | minor | G10: Amiga IFF write landed (24-plane ILBM, Save As `.iff`) and 24-plane ILBMs open |
 | 2026-10-23 | minor | #8940: Filter Gallery Halftone Pattern maps size, contrast and dot/circle/line both ways with the reference application's descriptor keys (`HlSz`, `Cntr`, `ScrT`); PSD/PSB round trips at 8/16/32 bits, malformed descriptors preserved verbatim. Other gallery effects remain partial; no floor or estimate changed. |
 | 2026-10-22 | minor | G17: Help › Check for Updates and an opt-out check once per launch (#5485), DIST-220-1 partial; estimate unchanged |
+| 2026-10-19 | minor | G5: Free Transform of several selected layers (#6501): one box moves them all; no estimate changed |
 | 2026-10-22 | minor | G1: 32-bit Hue/Saturation unclipped with Photoshop's saturation factor, bright colours keep their hue, Colorize's saturation scaled by 1 − \|Lightness\|; photoshop rgb32 hue-saturation and hue-saturation-colorize pass; Photoshop-oracle floor 188 → 190 of 258 (#5781) |
 | 2026-10-21 | minor | G9: adjustment clipping remains visible in compact Properties (#5231); no readiness percentage or estimate changed |
 | 2026-10-21 | minor | #8304: compound layer properties export as separate Set events, rename last; independent Photoshop replay pending; percentages and estimates unchanged |
