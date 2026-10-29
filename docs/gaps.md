@@ -317,10 +317,11 @@ what an agent can't finish alone.
   tools (#2672); H/V skew fields in the Free Transform options bar; Free Transform of several
   selected layers, ⌘T and the Move tool's shared frame (#6501, #3384, #6096; Warp stays one
   layer); Warp mode's Cylinder
-  (#4112, 2026-10-27): listed in the Warp menu after the presets, with the reference's five
-  handles (two corners, the front of each curve, the wrap) for its silhouettes, edges, ellipse
-  depths and wrap, a surface drag moving it, Bend, H and V greyed in the bar, and a smart
-  object's stored cylinder opening as one (vertical cylinders
+  (#4112, 2026-10-27): listed in the Warp menu after the presets, outlined and cut into the
+  reference's 3 × 2 grid, with its five handles (two corners, the bend in the middle of the
+  upper arc, the lower edge in the middle of the lower arc, the wrap at the grid's centre), a
+  surface drag moving it, Bend, H and V greyed in the bar, and a smart object's stored cylinder
+  opening as one, previewed from its unwarped source (vertical cylinders
   and ones in perspective stay out, as G1's PSD reader has no measurements for them).
 - **Detail:** [`ui-parity.md`](ui-parity.md).
 - **Estimate:** 60–110 h.
