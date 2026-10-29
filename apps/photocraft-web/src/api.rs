@@ -52,9 +52,10 @@ fn to_js(v: &Value) -> JsValue {
 }
 
 /// The params a page passed: `{}` for none (`undefined` or `null`), else their JSON. Params that
-/// are not an object (a number, `NaN`, a string, a function) or have no JSON (a cyclic object, a
-/// throwing `toJSON`) are an error, never `{}`: a command run without its params would act with its
-/// defaults, and `NaN` stringifies to `null`.
+/// are not an object (a number, `NaN`, a string, a function), or whose JSON is not an object (a
+/// cyclic object, a throwing `toJSON`, an invalid `Date`), are an error, never `{}`: a command run
+/// without its params would act with its defaults, and `NaN` and an invalid `Date` stringify to
+/// `null`.
 fn from_js(v: &JsValue) -> Result<Value, String> {
     if v.is_undefined() || v.is_null() {
         return Ok(json!({}));
@@ -63,7 +64,11 @@ fn from_js(v: &JsValue) -> Result<Value, String> {
         return Err("params must be an object".to_string());
     }
     let text = js_sys::JSON::stringify(v).ok().and_then(|s| s.as_string()).ok_or("params are not JSON (a cyclic object or a function?)")?;
-    serde_json::from_str(&text).map_err(|e| format!("params are not JSON: {e}"))
+    match serde_json::from_str::<Value>(&text) {
+        Ok(v @ Value::Object(_)) => Ok(v),
+        Ok(v) => Err(format!("params must be a JSON object, not {v}")),
+        Err(e) => Err(format!("params are not JSON: {e}")),
+    }
 }
 
 /// Settle the promises of answered requests (called every frame).
