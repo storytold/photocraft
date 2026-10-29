@@ -213,9 +213,13 @@ impl Bench {
     }
 
     fn record(&mut self, name: &str, s: &Session, samples: &[f64], result: Res<()>) {
+        self.record_with_gpu_bytes(name, samples, result, self.gpu_bytes(s));
+    }
+
+    fn record_with_gpu_bytes(&mut self, name: &str, samples: &[f64], result: Res<()>, gpu_bytes: Option<u64>) {
         match result {
             Ok(()) => {
-                let r = row(name, samples, self.sampler.peak(), self.gpu_bytes(s));
+                let r = row(name, samples, self.sampler.peak(), gpu_bytes);
                 println!(
                     "{name:<52} p50 {:>9.2} ms  p95 {:>9.2} ms  max {:>9.2} ms  (n {}, peak RSS {} MB)",
                     r["p50_ms"].as_f64().unwrap_or(f64::NAN),
@@ -520,7 +524,8 @@ fn first_document_scenarios(b: &mut Bench, sz: &Sizes) {
             b.errors.push((name.into(), error));
             break;
         } else {
-            b.record(name, &Session::new(), &samples, Ok(()));
+            // Each sample owns a separate canvas that has already been dropped.
+            b.record_with_gpu_bytes(name, &samples, Ok(()), None);
         }
     }
 }

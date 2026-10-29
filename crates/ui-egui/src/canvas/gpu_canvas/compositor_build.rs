@@ -44,14 +44,15 @@ pub(super) fn start(device: &eframe::wgpu::Device, format: eframe::wgpu::Texture
         ctx.request_repaint();
     });
     if let Err(error) = spawned {
-        record_spawn_failure(completion, &error);
-        *state = BuildState::NotStarted;
+        record_spawn_failure(&mut state, completion, &error);
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn record_spawn_failure(completion: &Completion, error: &std::io::Error) {
-    *completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Err((format!("failed to spawn GPU compositor build thread: {error}"), false)));
+fn record_spawn_failure(state: &mut BuildState, completion: &Completion, error: &std::io::Error) {
+    let message = format!("failed to spawn GPU compositor build thread: {error}");
+    *state = BuildState::Failed(photocraft_gpu::Unsupported(message.clone()));
+    *completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Err((message, false)));
 }
 
 #[cfg(test)]
@@ -60,7 +61,9 @@ mod tests {
     #[test]
     fn spawn_failure_is_reported_as_retryable() {
         let completion = super::Completion::default();
-        super::record_spawn_failure(&completion, &std::io::Error::other("resource exhausted"));
+        let mut state = super::BuildState::Building;
+        super::record_spawn_failure(&mut state, &completion, &std::io::Error::other("resource exhausted"));
+        assert!(matches!(state, super::BuildState::Failed(_)));
         let outcome = completion.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
         assert_eq!(outcome, Some(Err(("failed to spawn GPU compositor build thread: resource exhausted".into(), false))));
     }
