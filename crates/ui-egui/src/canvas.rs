@@ -304,6 +304,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
             }
             app.perf.span("outline", crate::gpu_canvas::now_ms() - t0);
             app.outline_cache = Some((input.doc.id, key, std::sync::Arc::new(segs)));
+            app.outline_cache_source = Some(sel.clone());
         }
         // Under Content-Aware Move's Transform On Drop box the ants are drawn where it puts them.
         if let Some((_, _, segs)) = app.outline_cache.as_ref().filter(|_| !crate::cam_transform::active(app)) {

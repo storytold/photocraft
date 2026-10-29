@@ -108,6 +108,7 @@ impl PhotocraftApp {
             proxy: None,
             proxy_uploaded: None,
             outline_cache: None,
+            outline_cache_source: None,
             filter_preview: None,
             smart_filter_targets: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]

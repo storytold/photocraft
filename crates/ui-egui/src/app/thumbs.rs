@@ -183,7 +183,7 @@ impl PhotocraftApp {
     /// Cached `Surface::content_bounds` keyed by an id and the surface's tile identity.
     pub fn cached_bounds(&mut self, key: u64, surface: &photocraft_raster::Surface) -> photocraft_geom::Rect {
         let rev = surface_fingerprint(surface);
-        if let Some((r, b)) = self.bounds_cache.get(&key)
+        if let Some((r, b, _)) = self.bounds_cache.get(&key)
             && *r == rev
         {
             return *b;
@@ -192,7 +192,9 @@ impl PhotocraftApp {
         if self.bounds_cache.len() > 256 {
             self.bounds_cache.clear();
         }
-        self.bounds_cache.insert(key, (rev, b));
+        // A pointer-only fingerprint is stable only while its tiles stay alive.
+        // Retention also makes a later in-place edit COW, changing its identity.
+        self.bounds_cache.insert(key, (rev, b, surface.clone()));
         b
     }
 
@@ -204,7 +206,7 @@ impl PhotocraftApp {
             photocraft_doc::LayerContent::Shape(sh) if sh.has_soft_mask() => {
                 // Cached per rendering, like the pixel bounds: the frame renders strips of the shape.
                 let (key, rev) = (layer.id.0 | 1 << 63, surface_fingerprint(surface));
-                if let Some((r, b)) = self.bounds_cache.get(&key)
+                if let Some((r, b, _)) = self.bounds_cache.get(&key)
                     && *r == rev
                 {
                     return *b;
@@ -214,7 +216,7 @@ impl PhotocraftApp {
                 if self.bounds_cache.len() > 256 {
                     self.bounds_cache.clear();
                 }
-                self.bounds_cache.insert(key, (rev, b));
+                self.bounds_cache.insert(key, (rev, b, surface.clone()));
                 b
             }
             _ => self.cached_bounds(layer.id.0, surface),
@@ -349,6 +351,19 @@ mod channel_tint_tests {
     use super::channel_tint;
     use egui::Color32;
     use photocraft_doc::ColorMode::{Cmyk, Grayscale, Rgb};
+
+    #[test]
+    fn cached_bounds_keep_identity_valid_across_in_place_mask_edits() {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut mask = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+        // Allocate a zero tile: bounds are initially empty, as during selection setup.
+        mask.write_pixel(10, 10, &[0.0]);
+        assert!(app.cached_bounds(7, &mask).is_empty());
+        mask.write_pixel(10, 10, &[1.0]);
+        assert_eq!(app.cached_bounds(7, &mask), photocraft_geom::Rect::new(10, 10, 11, 11));
+        mask.write_pixel(30, 40, &[1.0]);
+        assert_eq!(app.cached_bounds(7, &mask), photocraft_geom::Rect::new(10, 10, 31, 41));
+    }
 
     #[test]
     fn channels_in_color_tint_rgb_from_black_and_cmyk_inks_from_white() {
