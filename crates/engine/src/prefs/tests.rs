@@ -1033,3 +1033,20 @@ fn a_wrongly_typed_section_or_colour_setting_resets_only_that_part() {
     assert!(s.load_prefs_json(&deep).is_ok());
     assert!(s.load_prefs_json(r#"{"interface": {"theme": 3, "uiScale": [1]}, "workspaces": {"x": 1}, "menus": 1}"#).is_ok());
 }
+
+// #8922: Quick save option for flat files
+#[test]
+fn quick_save_flat_file_preference_updates_and_persists() {
+    let mut s = Session::new();
+    let pref = "fileHandling.quickSaveFlatFile";
+
+    assert_eq!(s.prefs().file_handling.quick_save_flat_file, false);
+
+    s.execute("prefs.set", json!({"path": pref, "value": true})).unwrap();
+    assert_eq!(s.prefs().file_handling.quick_save_flat_file, true);
+
+    let text = s.prefs_to_json();
+    let mut t = Session::new();
+    t.load_prefs_json(&text).unwrap();
+    assert_eq!(t.prefs().file_handling.quick_save_flat_file, true);
+}

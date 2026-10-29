@@ -479,6 +479,8 @@ pub struct FileHandling {
     /// Saves run in the background while you keep working (on), or in the foreground under a
     /// modal progress dialog that blocks the app until the file is written (off).
     pub save_in_background: bool,
+    /// Quick save the current file if it's a flat file
+    pub quick_save_flat_file: bool,
     /// Save recovery information (crash recovery autosave).
     pub autosave: bool,
     /// Minutes between autosaves of documents with unsaved changes.
@@ -517,6 +519,7 @@ impl Default for FileHandling {
             lowercase_extension: true,
             do_not_append_copy: false,
             save_in_background: true,
+            quick_save_flat_file: false,
             autosave: true,
             autosave_minutes: 10,
             recover_on_launch: true,

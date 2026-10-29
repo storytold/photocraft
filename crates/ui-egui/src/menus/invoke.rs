@@ -239,6 +239,10 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                             crate::notices::post(app, title, lines, false, None);
                             app.save_as_with(None, choices)
                         }
+                        Some((_, path, d)) if app.session.prefs().file_handling.quick_save_flat_file => {
+                            let doc = d.doc.id;
+                            crate::disk_change_prompt::intercept(app, doc, &path, true, choices).unwrap_or_else(|| app.save_in_place(path, choices))
+                        }
                         // A flat file asks for its name; confirming its own file records a
                         // plain Save that writes the file an action is played on (#3531).
                         _ => app.save_dialog_flow(None, choices, true),
