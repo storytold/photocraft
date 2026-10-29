@@ -1261,10 +1261,11 @@ fn tail_preview_shows_the_stroke_as_finishing_it_would() {
 }
 
 #[test]
-fn live_union_of_passes_matches_merging_the_finished_passes_after_every_chunk() {
+fn live_union_of_passes_matches_merging_the_passes_after_every_chunk_and_at_the_end() {
     // Symmetric painting previews the stroke and its mirrors with `composite_union_live`, which
-    // redraws only changed tiles; after every chunk the target must be exactly what finishing
-    // every pass and merging them with `composite_union_many` gives (the commit takes these pixels).
+    // redraws only changed tiles; after every chunk, and once the passes finish, the target must
+    // be exactly what merging the passes with `composite_union_many` gives (at the end the commit
+    // takes these pixels).
     let base = BrushSettings { size: 14.0, hardness: 0.6, opacity: 0.6, ..brush() };
     let mut brushes = vec![base.clone()];
     brushes.push(BrushSettings { smoothing: Smoothing { amount: 0.7, ..Default::default() }, ..base.clone() });
@@ -1310,34 +1311,29 @@ fn live_union_of_passes_matches_merging_the_finished_passes_after_every_chunk() 
                 let mut live = crate::render::UnionLive::default();
                 let mut target = pre.clone();
                 let (mut at, mut chunk, mut merged) = (0, 1, 0);
-                while at < stroke.len() {
+                while at <= stroke.len() {
                     let end = (at + chunk).min(stroke.len());
                     for (r, path) in renderers.iter_mut().zip(&paths) {
-                        r.push(&path[at..end]);
+                        if at == stroke.len() {
+                            r.finish();
+                        } else {
+                            r.push(&path[at..end]);
+                        }
                     }
                     let count = if four && at >= 12 { 4 } else { 2 };
                     let full = merged != count;
                     merged = count;
                     let mut passes: Vec<&mut StrokeRenderer> = renderers.iter_mut().take(count).collect();
                     StrokeRenderer::composite_union_live(&mut passes, &mut live, full, &pre, &mut target, selection, false);
-                    let finished: Vec<StrokeRenderer> = renderers
-                        .iter()
-                        .take(count)
-                        .map(|r| {
-                            let mut r = r.clone();
-                            r.finish();
-                            r
-                        })
-                        .collect();
                     let mut expected = pre.clone();
-                    finished[0].composite_union_many(&finished[1..], &pre, &mut expected, selection, false);
+                    renderers[0].composite_union_many(&renderers[1..count], &pre, &mut expected, selection, false);
                     assert!(
                         target.read_region(area) == expected.read_region(area),
                         "{sample:?}, brush {bi}, four {four}, selection {}, points ..{end}",
                         selection.is_some()
                     );
-                    assert_eq!(live.bounds(), finished.iter().fold(Rect::EMPTY, |r, f| r.union(&f.bounds())));
-                    at = end;
+                    assert_eq!(live.bounds(), renderers[..count].iter().fold(Rect::EMPTY, |r, f| r.union(&f.bounds())));
+                    at = if at == stroke.len() { at + 1 } else { end };
                     chunk = chunk % 3 + 1;
                 }
             }

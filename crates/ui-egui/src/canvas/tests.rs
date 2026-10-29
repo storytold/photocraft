@@ -2126,15 +2126,20 @@ fn navigator_keeps_its_image_during_a_live_brush_stroke() {
 }
 
 #[test]
-fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
-    // #73: with smoothing the brush lags behind the pointer and catches up at the end; the
-    // preview draws that tail live, so no frame after release is missing the end.
+fn smoothed_stroke_lags_while_drawing_and_release_adds_the_catch_up() {
+    // With smoothing the brush lags behind the pointer (the canvas draws the smoothing string over
+    // the gap) and catches up when the stroke ends, as in Photoshop: the preview doesn't redraw
+    // that tail every step, which cost big brushes half their frame. Release draws it, and the
+    // canvas refreshes it as part of the stroke.
     let xs = [30.0, 50.0, 70.0, 90.0, 110.0, 130.0, 150.0, 170.0];
-    let (live, done, partial, _) = drag_frames(0.5, &xs);
-    assert!(same_pixels(&live, &done), "preview at the last move = committed stroke, tail included");
-    assert!(partial);
+    let (live, done, partial, app) = drag_frames(0.5, &xs);
     let end = |d: &Document| (0..200).rev().find(|&x| (0..80).any(|y| d.layers[0].surface().unwrap().rgba(x, y)[3] > 0.0)).unwrap();
-    assert!(end(&live) >= 170, "the end reaches the pointer while drawing ({})", end(&live));
+    assert!(end(&live) < 170, "the brush lags behind the pointer while drawing ({})", end(&live));
+    assert!(end(&done) >= 170, "release catches up to the pointer ({})", end(&done));
+    assert!(partial, "the handover refreshes only the stroke");
+    let committed = app.committed_stroke.as_ref().expect("the commit took the live stroke's pixels");
+    let shown = committed.since(committed.last_key() - 1).expect("the step before release");
+    assert!(shown.x1 >= 170, "the catch-up is refreshed on release: {shown:?}");
     // The options-bar value reaches the stroke: 50 % smooths the wiggle, 0 % doesn't.
     let (_, rough, _, _) = drag_frames(0.0, &xs);
     assert!(!same_pixels(&rough, &done), "smoothing changes the stroke");
@@ -2147,26 +2152,6 @@ fn smoothed_stroke_shows_its_catch_up_tail_while_drawing() {
     // (Round tips without dynamics draw the same for any seed.)
     s.execute("paint.stroke", json!({"points": pts, "seed": 0})).unwrap();
     assert!(same_pixels(&s.active().unwrap().doc, &done));
-}
-
-#[test]
-fn smoothing_preview_redraws_the_tail_each_step() {
-    // The tail drawn at one step must not linger once the brush moves on: a sharp turn would
-    // leave a stale tail behind if it weren't restored.
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-    app.run("file.new", json!({"width": 200, "height": 120, "background": "transparent"})).unwrap();
-    app.run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0, "smoothing": {"amount": 0.6}}})).unwrap();
-    app.ui.tool = Tool::Brush;
-    let m = egui::Modifiers::NONE;
-    tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 20.0, pressure: 1.0 }, m);
-    for (x, y) in [(60.0, 20.0), (110.0, 20.0), (110.0, 70.0), (110.0, 110.0), (60.0, 110.0)] {
-        tool_event(&mut app, ToolEvent::Move { x, y, pressure: 1.0 }, m);
-    }
-    let live = display_doc(&mut app, 0).0;
-    tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 110.0 }, m);
-    let done = app.session.documents()[0].doc.clone();
-    let (a, b) = (live.layers[0].surface().unwrap(), done.layers[0].surface().unwrap());
-    assert!((0..120).all(|y| (0..200).all(|x| a.rgba(x, y) == b.rgba(x, y))), "no stale tails in the preview");
 }
 
 /// Shapes the drag preview paints for `app` this frame.

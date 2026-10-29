@@ -581,11 +581,14 @@ impl CoverageMap {
         v
     }
 
-    /// The finished coverage over the tiles `keys`: `tail`'s copy of a tile where finishing the
-    /// stroke changes it (see [`StrokeRenderer::tail_preview`]), else this map's own.
-    fn finished_subset(&self, tail: Option<&Self>, keys: &HashSet<(i32, i32)>) -> Self {
-        let tile = |k: &(i32, i32)| tail.and_then(|t| t.tiles.get(k)).or_else(|| self.tiles.get(k)).map(|t| (*k, t.clone()));
-        Self { tiles: keys.iter().filter_map(tile).collect(), nc: self.nc, bounds: tail.map_or(self.bounds, |t| t.bounds), dirty: HashSet::new() }
+    /// A copy of the tiles `keys`.
+    fn subset(&self, keys: &HashSet<(i32, i32)>) -> Self {
+        Self {
+            tiles: keys.iter().filter_map(|k| self.tiles.get(k).map(|t| (*k, t.clone()))).collect(),
+            nc: self.nc,
+            bounds: self.bounds,
+            dirty: HashSet::new(),
+        }
     }
 
     /// Union two passes of the same brush stroke without applying opacity twice where they
@@ -624,16 +627,14 @@ impl CoverageMap {
 // Stroke renderer
 // ---------------------------------------------------------------------------
 
-/// What [`StrokeRenderer::composite_union_live`] drew last: the coverage tiles of the passes'
-/// smoothing tails (redrawn without them next time) and the merged bounds.
+/// What [`StrokeRenderer::composite_union_live`] drew last: the merged bounds.
 #[derive(Clone, Debug, Default)]
 pub struct UnionLive {
-    tail_keys: HashSet<(i32, i32)>,
     bounds: Rect,
 }
 
 impl UnionLive {
-    /// The merged bounds of the finished passes, as last drawn.
+    /// The merged bounds of the passes, as last drawn.
     pub fn bounds(&self) -> Rect {
         self.bounds
     }
@@ -763,10 +764,10 @@ impl StrokeRenderer {
     }
 
     /// Live preview of a stroke painted as several passes (the stroke, then its symmetry
-    /// mirrors): leaves `target` as finishing every pass now and compositing them with
-    /// [`composite_union_many`](Self::composite_union_many) over `pre` would, but redraws only the
-    /// coverage tiles that changed since the previous call (new dabs, and the smoothing tail now
-    /// and before). `full` redraws every tile: on the first call, or when a pass joins. Returns
+    /// mirrors): leaves `target` as compositing the passes as they are now with
+    /// [`composite_union_many`](Self::composite_union_many) over `pre` would (finish them first
+    /// for the finished stroke), but redraws only the coverage tiles that changed since the
+    /// previous call. `full` redraws every tile: on the first call, or when a pass joins. Returns
     /// the damaged rectangle.
     pub fn composite_union_live(
         passes: &mut [&mut Self],
@@ -777,23 +778,17 @@ impl StrokeRenderer {
         selection: Option<&Surface>,
         lock_transparency: bool,
     ) -> Rect {
-        let mut keys = std::mem::take(&mut live.tail_keys);
+        let mut keys = HashSet::new();
         for p in passes.iter_mut() {
             p.drain_dirty_into(&mut keys);
             if full {
                 p.keys_into(&mut keys);
             }
         }
-        let tails: Vec<_> = passes.iter().map(|p| p.tail_preview()).collect();
-        let mut tail_keys = HashSet::new();
-        for t in tails.iter().flatten() {
-            t.keys_into(&mut tail_keys);
-        }
-        keys.extend(&tail_keys);
         let mut merged: Option<Self> = None;
-        for (p, t) in passes.iter().zip(&tails) {
-            let cov = p.cov.finished_subset(t.as_ref().map(|t| &t.cov), &keys);
-            let dual = p.dual.as_ref().map(|d| d.finished_subset(t.as_ref().and_then(|t| t.dual.as_ref()), &keys));
+        for p in passes.iter() {
+            let cov = p.cov.subset(&keys);
+            let dual = p.dual.as_ref().map(|d| d.subset(&keys));
             match merged.as_mut() {
                 None => {
                     merged = Some(Self {
@@ -840,7 +835,6 @@ impl StrokeRenderer {
             }
         }
         merged.composite(pre, target, selection, lock_transparency, true);
-        live.tail_keys = tail_keys;
         live.bounds = after;
         dmg
     }

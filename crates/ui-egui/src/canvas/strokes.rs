@@ -594,6 +594,16 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
             }
         }
     }
+    // Pen up: the smoothing catch-up the live stroke held back.
+    if let EngineStroke::Brush(stroke) = &mut l.stroke {
+        match stroke.finish() {
+            Ok(r) => l.damage.push(r),
+            Err(_) => {
+                let _ = app.run(stroke_command(app, d.tool), p);
+                return;
+            }
+        }
+    }
     let LiveStroke { stroke, doc, key, damage, .. } = l;
     let before = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| st.doc.clone());
     if let EngineStroke::Brush(stroke) = stroke
