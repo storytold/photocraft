@@ -471,6 +471,7 @@
 	Layers	Livelli
 	All Layers	Tutti i livelli
 	Hidden Layers	Livelli nascosti
+	Delete Hidden Layers	Elimina livelli nascosti
 	Mask All Objects	Maschera tutti gli oggetti
 	Subject	Soggetto
 	Sky	Cielo
@@ -1502,7 +1503,7 @@
 	Create warped text	Crea testo deformato
 	Shadows	Ombre
 	Shape:	Forma:
-	Sharpening	Contrasto
+	Sharpening	Nitidezza
 	Shift	Maiusc
 	Shortcut removed.	Scorciatoia rimossa.
 	Show All Menu Items	Mostra tutte le voci menu
@@ -4399,7 +4400,7 @@ navigator	Zoom	Zoom
 	Next Brush	Pennello successivo
 	First Brush	Primo pennello
 	Last Brush	Ultimo pennello
-	Preview size	Preview size
+	Preview size	Dimensione anteprima
 	Space	Barra spaziatrice
 	Hand Tool (hold)	Strumento Mano (tieni premuto)
 	Zoom In (hold, drag to scrub)	Ingrandisci (tieni premuto, trascina per lo zoom continuo)
@@ -4411,6 +4412,11 @@ navigator	Zoom	Zoom
 	Working-cmyk	CMYK di lavoro
 	Simulate Paper	Simula carta
 	Warming Filter (85)	Filtro caldo (85)
+	Warming Filter (LBA)	Filtro caldo (LBA)
+	Warming Filter (81)	Filtro caldo (81)
+	Cooling Filter (80)	Filtro freddo (80)
+	Cooling Filter (LBB)	Filtro freddo (LBB)
+	Cooling Filter (82)	Filtro freddo (82)
 	Cw	Orario
 	Ccw	Antiorario
 	Nearest	Vicino più prossimo
@@ -4571,7 +4577,7 @@ shape	Appearance	Aspetto
 	Right-to-left paragraph direction	Direzione del paragrafo da destra a sinistra
 	Not rendered: this adjustment ({key}) is kept as imported.	Non renderizzato: questa regolazione ({key}) viene conservata come importata.
 # Print preview image (#8236)
-	Print preview image	Print preview image
+	Print preview image	Immagine di anteprima di stampa
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Cubo tonalità
 	Brightness Cube	Cubo luminosità
