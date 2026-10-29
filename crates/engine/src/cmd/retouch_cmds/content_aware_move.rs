@@ -34,7 +34,10 @@ use photocraft_algo::content_aware::{FillOptions, color_amount, color_level, fil
 use photocraft_algo::transform::{Homography, Interp};
 
 use super::patch::{coverage, offset, selection_area, target_layer};
-use super::*;
+use super::{
+    Document, EngineError, LayerContent, LayerId, Rect, Region, Result, SampleLayers, Session, Surface, Value, alpha_index, bad, clamp_samples,
+    composite_region, damage_json, flag, has_pixel_layer, json, string, targets_pixels,
+};
 
 const CMD: &str = "paint.contentAwareMove";
 
@@ -526,9 +529,7 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 Ok(())
             })?;
-            if let Some(st) = s.active_mut() {
-                st.last_damage = Some(damage);
-            }
+            s.hint_damage(damage);
             let mode = if plan.mode == Mode::Move { "move" } else { "extend" };
             let mut out = json!({ "damage": damage_json(damage), "offset": [dx, dy], "mode": mode });
             if plan.map.is_some() {

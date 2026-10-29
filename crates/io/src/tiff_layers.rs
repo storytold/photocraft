@@ -118,7 +118,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     }
     let channels = u16::try_from(img.layout().channels().saturating_add(added)).map_err(|_| IoError::Unsupported("too many channels".into()))?;
     let header = Header::new(isd.version, w, h, channels, depth, mode);
-    let image_data = ImageData { compression: Compression::Raw, data };
+    let image_data = ImageData::new(Compression::Raw, data);
     let mut file = isd.into_psd(header, resources, image_data);
     // Empty `Patt` and the default filter mask are written so Photoshop's block list matches
     // a file it saved. They carry nothing the document stores, so they are not kept: a

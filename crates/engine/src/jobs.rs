@@ -341,14 +341,44 @@ fn independent_of_document(id: &str) -> bool {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn read_path(path: &str) -> Result<Vec<u8>> {
-    // Bounded reads, and a clear error for a file larger than memory (#375).
-    photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+fn import_path(
+    name: &str,
+    path: &str,
+    opts: &photocraft_io::ImportOptions,
+    ctl: &photocraft_raster::Interrupt,
+) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
+    // Bounded reads, and a clear error for a file larger than memory (#375); a PSD/PSB is
+    // parsed from the open file instead of being read whole.
+    photocraft_io::import_file_for_open_with(name, std::path::Path::new(path), opts, ctl)
 }
 
 #[cfg(target_arch = "wasm32")]
-fn read_path(path: &str) -> Result<Vec<u8>> {
-    Err(EngineError::Other(format!("cannot open paths on the web: {path}")))
+fn import_path(
+    _: &str,
+    path: &str,
+    _: &photocraft_io::ImportOptions,
+    _: &photocraft_raster::Interrupt,
+) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
+    Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
+}
+
+/// Reads a file whole unless it is a PSD/PSB, which the importer parses from the open file
+/// instead (`None`). A read error stays an error.
+#[cfg(not(target_arch = "wasm32"))]
+fn read_unless_psd(path: &str) -> std::result::Result<Option<Vec<u8>>, photocraft_io::IoError> {
+    use std::io::Read;
+    let read_failed = |e: std::io::Error| photocraft_io::IoError::Read(format!("{path}: {e}"));
+    let mut magic = [0u8; 4];
+    let n = std::fs::File::open(path).map_err(read_failed)?.take(4).read(&mut magic).map_err(read_failed)?;
+    if photocraft_io::is_psd(&magic[..n]) {
+        return Ok(None);
+    }
+    photocraft_format::read_file(std::path::Path::new(path)).map(Some).map_err(read_failed)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_unless_psd(path: &str) -> std::result::Result<Option<Vec<u8>>, photocraft_io::IoError> {
+    Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
 }
 
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
@@ -569,24 +599,36 @@ impl Session {
             false,
             move |ctx| {
                 ctx.progress(0.0, "Reading");
-                let bytes = match source {
-                    OpenSource::Bytes(b) => b,
-                    OpenSource::Path(p) => Arc::new(read_path(&p)?),
+                // A PSD/PSB is decoded straight from the file, which is never read whole; every other
+                // format is read whole first.
+                let (bytes, path) = match source {
+                    OpenSource::Bytes(b) => (Some(b), None),
+                    OpenSource::Path(p) => match read_unless_psd(&p) {
+                        Ok(Some(b)) => (Some(Arc::new(b)), None),
+                        Ok(None) => (None, Some(p)),
+                        Err(e) => return Err(EngineError::Other(e.to_string())),
+                    },
                 };
                 ctx.check()?;
-                // Interactive raw opens show the camera's JPEG and a half-size develop while the
-                // full develop runs (the UI takes them with `take_published`).
-                if progressive && !cfg!(target_arch = "wasm32") && photocraft_io::raw::is_raw(&bytes) {
-                    ctx.progress(0.01, "Previewing");
-                    photocraft_io::raw::publish_previews(&name_w, &bytes, opts.demosaic, &mut |r| ctx.publish(r), &|| ctx.cancelled());
-                    ctx.check()?;
+                let imported = match (bytes, path) {
+                    (Some(bytes), _) => {
+                        // Interactive raw opens show the camera's JPEG and a half-size develop while
+                        // the full develop runs (the UI takes them with `take_published`).
+                        if progressive && !cfg!(target_arch = "wasm32") && photocraft_io::raw::is_raw(&bytes) {
+                            ctx.progress(0.01, "Previewing");
+                            photocraft_io::raw::publish_previews(&name_w, &bytes, opts.demosaic, &mut |r| ctx.publish(r), &|| ctx.cancelled());
+                            ctx.check()?;
+                        }
+                        ctx.progress(0.02, "Decoding");
+                        ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl))
+                    }
+                    (None, Some(p)) => ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, ctl)),
+                    (None, None) => unreachable!("an open source is bytes or a path"),
                 }
-                ctx.progress(0.02, "Decoding");
-                let imported =
-                    ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl)).map_err(|e| match e {
-                        photocraft_io::IoError::Cancelled => EngineError::Cancelled,
-                        e => EngineError::Other(e.to_string()),
-                    })?;
+                .map_err(|e| match e {
+                    photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+                    e => EngineError::Other(e.to_string()),
+                })?;
                 ctx.progress(0.95, "Preparing layers");
                 warm_layer_bounds(&imported.0.document, || ctx.check())?;
                 // Type layers need the shared text engine, whose first use waits for the
@@ -887,6 +929,10 @@ impl Session {
         self.coalesce_request = None;
         self.color_restrict = None;
         self.filter_mask_layer = None;
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.hint_before = None;
+        }
         let pending = self.jobs.pending.take();
         match (r, pending) {
             (Err(e), Some(job)) => {

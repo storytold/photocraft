@@ -96,9 +96,7 @@ pub(super) fn run(s: &mut Session, p: &Value) -> Result<Value> {
             paint_aligned(surf, &st.stroke, sel, lock, &st.tile, st.placement(), st.mode, CMD)
         }
     })?;
-    if let Some(state) = s.active_mut() {
-        state.last_damage = Some(dmg);
-    }
+    s.hint_damage(dmg);
     Ok(json!({
         "damage": damage_json(dmg),
         "phase": [st.phase.0, st.phase.1],

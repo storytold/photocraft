@@ -403,7 +403,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     let id = s.edit("Paste", |doc, active| {
         let mut l = Layer::raster(doc.next_layer_name("Layer"), target);
         *crate::pixels_mut(&mut l)? = surf;
-        let id = doc.insert_above(*active, l);
+        let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::AutoEditable);
         *active = Some(id);
         doc.selection = None;
         Ok(id)
@@ -445,9 +445,13 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
     let id = s.edit("Paste", |doc, active| {
         doc.patterns.extend(patterns);
         doc.metadata.psd_global_blocks.extend(linked);
+        // The first pasted layer goes where a new layer would; the rest stack above it.
+        let mut place = crate::layer_place::Place::AutoEditable;
         for l in copies.layers {
-            *active = Some(doc.insert_above(*active, l));
+            *active = Some(crate::layer_place::insert_new(doc, *active, l, place));
+            place = crate::layer_place::Place::Above;
         }
+        crate::cmd::layer_multi_cmds::check_group_depth(doc, "Paste")?;
         doc.selection = None;
         active.ok_or(EngineError::Other("nothing to paste".into()))
     })?;
@@ -587,7 +591,7 @@ fn layer_via(s: &mut Session, cut: bool) -> Result<Value> {
         }
         let mut l = Layer::raster(doc.next_layer_name("Layer"), clip.surface.format());
         *crate::pixels_mut(&mut l)? = clip.surface;
-        let nid = doc.insert_above(Some(id), l);
+        let nid = crate::layer_place::insert_new(doc, Some(id), l, crate::layer_place::Place::Above);
         *active = Some(nid);
         // Photoshop deselects: a following Free Transform moves the whole new layer (#1096).
         doc.selection = None;
@@ -742,9 +746,10 @@ fn toggle_last_state(s: &mut Session) -> Result<Value> {
     Ok(json!(if redo { s.redo() } else { s.undo() }))
 }
 
-/// Edit › Transform › Again: replay the last `edit.transform` on the active layer.
+/// Edit › Transform › Again: replay the last `edit.transform` on the selected layers (#6501).
 fn transform_again(s: &mut Session) -> Result<Value> {
-    let p = transform_again_params(s)?;
+    let ids = s.active().map(crate::transform_cmds::selection_targets).unwrap_or_default();
+    let p = transform_again_params(s, &ids)?;
     s.execute("edit.transform", p)
 }
 
@@ -752,8 +757,8 @@ fn transform_again(s: &mut Session) -> Result<Value> {
 /// last transform on the copy, as one history step, so pressing it again steps and repeats
 /// (#352). The transform is worked out before anything changes, so a refusal leaves no copy.
 fn transform_again_copy(s: &mut Session) -> Result<Value> {
-    let p = transform_again_params(s)?;
     let id = active_id(s)?;
+    let p = transform_again_params(s, &[id])?;
     let journal = s.journal.len();
     // The steps are recorded (Again on a Copy is not replayable itself): with one layer selected,
     // "duplicate the current layer" plays back on any document, a layer id only on this one.
@@ -776,8 +781,9 @@ fn transform_again_copy(s: &mut Session) -> Result<Value> {
     }
 }
 
-/// The `edit.transform` params that repeat the last transform on the active layer.
-fn transform_again_params(s: &Session) -> Result<Value> {
+/// The `edit.transform` params that repeat the last transform on the layers `ids` (their frame
+/// together is the box it starts from).
+fn transform_again_params(s: &Session, ids: &[LayerId]) -> Result<Value> {
     let (_, last) =
         s.journal.iter().rev().find(|(id, _)| id == "edit.transform").cloned().ok_or(EngineError::Other("there is no transform to repeat".into()))?;
     let (rect, quad) = (last.get("rect").cloned(), last.get("quad").cloned());
@@ -796,8 +802,8 @@ fn transform_again_params(s: &Session) -> Result<Value> {
             )
             .ok_or(EngineError::Other("the last transform can't be repeated".into()))?;
             let d = s.active().ok_or(EngineError::NoDocument)?;
-            let l = d.doc.layer(active_id(s)?).ok_or(EngineError::Other("no active layer".into()))?;
-            let b = crate::transform_cmds::transform_bounds(&d.doc, l);
+            d.doc.layer(active_id(s)?).ok_or(EngineError::Other("no active layer".into()))?;
+            let b = crate::transform_cmds::transform_bounds_of(&d.doc, ids);
             if b.is_empty() {
                 return Err(EngineError::Other("nothing to transform".into()));
             }

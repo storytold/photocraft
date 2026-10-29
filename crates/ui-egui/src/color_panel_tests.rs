@@ -227,6 +227,38 @@ fn web_sliders_snap_and_take_hex() {
 }
 
 #[test]
+fn cube_modes_warn_when_the_colour_cannot_print() {
+    // #8672: Photoshop's Hue and Brightness Cube show the ⚠ and the nearest printable colour under
+    // the chips, as the slider modes do; a click takes that colour.
+    const GAMUT: &str = "Out of gamut for printing: click for the nearest printable colour";
+    for mode in [ColorPanelMode::HueCube, ColorPanelMode::BrightnessCube] {
+        let mut h = color_tab(ThemeKind::Classic, mode, [0.0, 1.0, 0.0, 1.0]);
+        let near = crate::color_picker_ui::out_of_gamut([0.0, 1.0, 0.0]).expect("pure green can't print");
+        let alert = h.get_by_label(GAMUT).rect().center();
+        press(&mut h, alert, Modifiers::NONE);
+        let fg = h.state().session.tools.foreground;
+        assert_eq!(bytes(fg), bytes([near[0], near[1], near[2], 1.0]), "{mode:?}");
+        h.run_steps(2);
+        assert!(h.query_by_label(GAMUT).is_none(), "{mode:?}: the printable colour still warns");
+        // A printable colour shows no alert.
+        let h = color_tab(ThemeKind::Classic, mode, [0.5, 0.5, 0.5, 1.0]);
+        assert!(h.query_by_label(GAMUT).is_none(), "{mode:?}");
+        // CodeRabbit on #9154: with the background chip active, the click sets the background.
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.tools.foreground = [0.5, 0.5, 0.5, 1.0];
+        app.session.tools.background = [0.0, 1.0, 0.0, 1.0];
+        app.ui.color_panel.mode = mode;
+        app.ui.color_panel.background = true;
+        let mut h = color_tab_of(ThemeKind::Classic, app);
+        let alert = h.get_by_label(GAMUT).rect().center();
+        press(&mut h, alert, Modifiers::NONE);
+        let tools = &h.state().session.tools;
+        assert_eq!(bytes(tools.background), bytes([near[0], near[1], near[2], 1.0]), "{mode:?}: background");
+        assert_eq!(bytes(tools.foreground), bytes([0.5, 0.5, 0.5, 1.0]), "{mode:?}: the foreground is left alone");
+    }
+}
+
+#[test]
 fn ramp_picks_and_shift_click_cycles_and_alt_picks_the_other_colour() {
     let mut h = color_tab(ThemeKind::BreezeDark, ColorPanelMode::RgbSliders, [0.0, 0.0, 0.0, 1.0]);
     let ramp: Rect = h.get_by_label("Color Ramp").rect();

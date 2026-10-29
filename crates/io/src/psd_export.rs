@@ -188,7 +188,7 @@ impl Ex {
         let compression = if w == 0 || h == 0 { Compression::Raw } else { self.compression() };
         ChannelData::encode(id, compression, plane, w, h, depth, self.version)
             .or_else(|_| ChannelData::encode(id, Compression::Raw, plane, w, h, depth, self.version))
-            .unwrap_or(ChannelData { id, compression: Some(Compression::Raw), data: plane.to_vec() })
+            .unwrap_or(ChannelData::new(id, Some(Compression::Raw), plane.to_vec()))
     }
 
     fn empty_channels(&self) -> Vec<ChannelData> {

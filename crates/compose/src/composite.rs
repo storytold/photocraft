@@ -2,7 +2,7 @@ use super::content::{channel_weights, empty_in, recycle_buffer, render_content, 
 use super::ctx::Ctx;
 use super::extents::{effects_frame, mask_k, mask_vals, shapeless_stroke_bounds};
 use super::fx_cache::effect_maps;
-use super::*;
+use super::{BlendMode, Buffer, Fill, Layer, LayerContent, Rect, Surface, advanced, blend, effects, psblend, shape_split};
 
 /// Composite an isolated group's sibling list (bottom→top) onto `backdrop` (its own buffer).
 pub(crate) fn composite_stack(layers: &[Layer], backdrop: &mut Buffer, cx: &Ctx) {

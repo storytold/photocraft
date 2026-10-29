@@ -1,7 +1,7 @@
 use super::curvature::{curvature_hit, curvature_refresh};
-use super::path_ops::targeted_vector_mask;
+use super::path_ops::{targeted_vector_mask, work_path_shown};
 use super::shapes::{fill_param, stroke_param};
-use super::*;
+use super::{Document, Path, PenPath, PhotocraftApp, Resumed, Tool, Value, json};
 
 // ---------------------------------------------------------------------------------------------
 // Pen
