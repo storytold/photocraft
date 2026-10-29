@@ -755,7 +755,7 @@ fn color_matcher_budget_fires_at_the_distinct_color_it_is_sized_for() {
     }
     // A budget short of one colour's charge admits none, and duplicates are never charged.
     assert!(ColorMatcher::with_budget([colors[0]], 0.0, COLOR_INDEX_BYTES - 1).is_err());
-    let repeated = std::iter::repeat(colors[0]).take(1000);
+    let repeated = std::iter::repeat_n(colors[0], 1000);
     assert!(ColorMatcher::with_budget(repeated, 0.0, COLOR_INDEX_BYTES).is_ok());
 }
 
