@@ -69,7 +69,7 @@ mod paths;
 mod shape;
 mod vector_mask;
 
-pub(crate) use params::{layer_id, nums, pt};
+pub(crate) use params::{layer_id, nums, op_from, pt};
 pub use params::{parse_path, parse_stroke, path_json};
 pub use paths::STROKE_PATH_TOOLS;
 use paths::{

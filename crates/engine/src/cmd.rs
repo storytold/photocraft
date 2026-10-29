@@ -114,6 +114,7 @@ pub mod notes_cmds;
 mod ops;
 pub mod paint_cmds;
 mod params;
+pub(super) mod path_clip_cmds;
 pub(super) mod path_edit_cmds;
 pub mod pattern_cmds;
 pub mod pattern_fill_cmds;
@@ -1226,6 +1227,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::float_cmds::specs());
     v.extend(crate::vector_cmds::specs());
     v.extend(crate::path_edit_cmds::specs());
+    v.extend(crate::path_clip_cmds::specs());
     v.extend(crate::smartselect_cmds::specs());
     v.extend(crate::cutout_cmds::specs());
     v.extend(crate::symmetry_cmds::specs());

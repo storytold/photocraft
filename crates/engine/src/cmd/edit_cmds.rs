@@ -303,6 +303,8 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     }
     let b = clip.bounds;
     let clip = Clip { resolution: Some(d.doc.resolution_dpi), source: Some(d.doc.id), ..clip };
+    // One clipboard: a pixel clip replaces a path clip, as a path clip replaces it.
+    s.path_clipboard = None;
     s.clipboard = Some(clip);
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
 }
@@ -349,6 +351,7 @@ fn copy_mask(s: &mut Session, filter: bool) -> Result<Value> {
     }
     let b = bounds;
     let (resolution, source) = (Some(d.doc.resolution_dpi), Some(d.doc.id));
+    s.path_clipboard = None;
     s.clipboard = Some(Clip { surface, bounds: b, layers: None, resolution, source });
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": if filter { "filterMask" } else { "mask" }}))
 }
