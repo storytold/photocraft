@@ -82,7 +82,7 @@ pub(crate) struct ExportArgs {
 /// --in-place allows it.
 #[derive(Args)]
 pub(crate) struct ConvertArgs {
-    /// The file to read
+    /// The file to read, or `-` for an image piped on standard input
     #[arg(value_name = "IN")]
     pub(crate) input: PathBuf,
     /// The file to write; its extension picks the format unless --format is given
@@ -98,6 +98,7 @@ pub(crate) struct ConvertArgs {
 /// Print the document as JSON (size, mode, depth, layer tree)
 #[derive(Args)]
 pub(crate) struct InfoArgs {
+    /// The file to read, or `-` for an image piped on standard input
     pub(crate) file: PathBuf,
     /// One line of JSON instead of pretty-printed
     #[arg(long)]
@@ -113,7 +114,7 @@ pub(crate) struct InfoArgs {
 #[command(group(ArgGroup::new("source").args(["file", "new"]).required(true)))]
 #[command(group(ArgGroup::new("work").args(["cmd", "out"]).required(true).multiple(true)))]
 pub(crate) struct RunArgs {
-    /// The document to open
+    /// The document to open, or `-` for an image piped on standard input
     pub(crate) file: Option<PathBuf>,
     /// Start from a new document with these JSON parameters instead of opening a file
     #[arg(long, value_name = "JSON", value_parser = json)]

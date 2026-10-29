@@ -19,6 +19,9 @@ pub(crate) enum CliError {
     Actions(#[from] ActionsError),
     #[error("{}: {source}", path.display())]
     ReadDir { path: PathBuf, source: std::io::Error },
+    /// `-` as the input: reading or decoding what was piped in failed.
+    #[error("standard input: {0}")]
+    Stdin(String),
     #[error("--params must follow a --cmd")]
     ParamsBeforeCmd,
     #[error("--new: {0}")]

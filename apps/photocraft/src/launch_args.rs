@@ -4,7 +4,8 @@
 //! fail to open the flag as a file (#6431); so is a flag without its value, rather than a silent
 //! fall back to a generated token or to no root (#6429), a repeated flag, and a bad
 //! `--present-mode` or `--frame-latency`. A value never starts with `-` (write `--opt=-value`),
-//! except for negative numbers, and a file whose name starts with `-` goes after `--`.
+//! except for negative numbers, and a file whose name starts with `-` goes after `--`. A lone `-`
+//! is the image piped on standard input (#9468), after `--` too; a file called `-` is `./-`.
 //!
 //! The control and automation flags are `photocraft-automation`'s, shared with `photocraft-cli`.
 //! Only the desktop app reads the automation roots from `PHOTOCRAFT_AUTOMATION_*_ROOT` (#1551).
@@ -26,6 +27,7 @@ use crate::presentation;
 #[command(name = "photocraft", version = photocraft_engine::build_info::long_version_static(), after_help = ENVIRONMENT)]
 pub(crate) struct LaunchArgs {
     /// Files to open. On Windows and Linux they open as new tabs in the PhotoCraft already running.
+    /// `-` opens the image piped on standard input, in a new PhotoCraft (a file called `-` is `./-`).
     /// Put `--` before a name that starts with `-`
     pub(crate) files: Vec<PathBuf>,
     /// Start with the CPU renderer for this launch (after a graphics driver crash)
@@ -126,15 +128,20 @@ pub(crate) struct FileNames {
     pub(crate) openable: Vec<String>,
     /// Names that are not valid Unicode, shown lossily: reported, not opened.
     pub(crate) unreadable: Vec<String>,
+    /// `-` was given: open the image piped on standard input (`piped_image`), once however many
+    /// times it is given. Standard input is never read without it: a launcher or desktop shortcut
+    /// can hand the app a pipe that never closes.
+    pub(crate) stdin: bool,
 }
 
 impl LaunchArgs {
     /// The files to open, and those whose names are not valid Unicode (#1108): a file manager can
     /// hand over a Latin-1 name on Linux. Those are reported in a notice once the app is up.
     pub(crate) fn file_names(&self) -> FileNames {
-        let mut names = FileNames { openable: Vec::new(), unreadable: Vec::new() };
+        let mut names = FileNames { openable: Vec::new(), unreadable: Vec::new(), stdin: false };
         for f in &self.files {
             match f.to_str() {
+                Some("-") => names.stdin = true,
                 Some(s) => names.openable.push(s.to_owned()),
                 None => names.unreadable.push(f.to_string_lossy().into_owned()),
             }
@@ -294,7 +301,7 @@ mod tests {
         assert_eq!(parsed.stroke_trace.as_deref(), Some("stderr"));
         // In a fixed order: `single_instance` only lists them in a log line.
         assert_eq!(parsed.launch_options, PerProcess::FLAGS);
-        assert_eq!(parsed.file_names(), FileNames { openable: vec!["photo.psd".to_string()], unreadable: vec![] });
+        assert_eq!(parsed.file_names(), FileNames { openable: vec!["photo.psd".to_string()], unreadable: vec![], stdin: false });
 
         let parsed = parse_args(&["--control-token-file", "/tmp/token", "--new-instance"]).unwrap();
         assert_eq!(parsed.auth.control_token_file.as_deref(), Some(std::path::Path::new("/tmp/token")));
@@ -326,6 +333,21 @@ mod tests {
         assert_eq!(parsed.file_names().openable, ["-psn_x.psd"]);
     }
 
+    /// #9468: a lone `-` (also after `--`, and however often) asks for the image piped on standard
+    /// input; without it standard input is left alone, and `./-` is a file.
+    #[test]
+    fn a_dash_is_the_image_on_standard_input() {
+        let names = |args: &[&str]| parse_args(args).unwrap().file_names();
+        assert_eq!(names(&["-"]), FileNames { openable: vec![], unreadable: vec![], stdin: true });
+        assert_eq!(names(&["a.psd", "-", "b.png", "-"]), FileNames { openable: vec!["a.psd".into(), "b.png".into()], unreadable: vec![], stdin: true });
+        assert_eq!(names(&["--", "-", "--help"]), FileNames { openable: vec!["--help".into()], unreadable: vec![], stdin: true });
+        assert!(!names(&[]).stdin && !names(&["a.psd"]).stdin);
+        assert_eq!(names(&["./-", "--", "-.png"]), FileNames { openable: vec!["./-".into(), "-.png".into()], unreadable: vec![], stdin: false });
+        // `-` is a file, not an option, so it doesn't keep its own process by itself here: the
+        // single-instance check sees it as `LaunchContext::stdin`.
+        assert!(parse_args(&["-"]).unwrap().launch_options.is_empty());
+    }
+
     /// #1108: a name that isn't valid Unicode is reported, not opened; a token must be text.
     #[cfg(unix)]
     #[test]
@@ -333,7 +355,7 @@ mod tests {
         use std::os::unix::ffi::OsStringExt as _;
         let latin1 = OsString::from_vec(b"caf\xe9.psd".to_vec());
         let parsed = parse(command().mut_args(|a| a.env(None::<&str>)), [latin1.clone()]).unwrap();
-        assert_eq!(parsed.file_names(), FileNames { openable: vec![], unreadable: vec!["caf\u{fffd}.psd".to_string()] });
+        assert_eq!(parsed.file_names(), FileNames { openable: vec![], unreadable: vec!["caf\u{fffd}.psd".to_string()], stdin: false });
         let e = parse(command().mut_args(|a| a.env(None::<&str>)), [OsString::from("--control-token"), latin1]).err().unwrap();
         assert_eq!((e.kind(), e.exit_code()), (ErrorKind::InvalidUtf8, 2));
     }

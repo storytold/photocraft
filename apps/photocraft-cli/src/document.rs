@@ -13,6 +13,48 @@ use crate::{
     output::{JsonStyle, print_json, warn_all},
 };
 
+/// `-` as the input of `convert`, `info` or `run`: the image piped on standard input (#9468). A
+/// file called `-` is written `./-`.
+fn is_stdin(path: &Path) -> bool {
+    path.as_os_str() == "-"
+}
+
+/// Read the image piped on standard input and decode it ([`open_piped`]). A terminal is refused
+/// rather than waited on: nothing was piped in.
+fn open_stdin(taken: impl Fn(&str) -> bool) -> Result<files::Opened> {
+    use std::io::IsTerminal as _;
+    let stdin = std::io::stdin();
+    if stdin.is_terminal() {
+        return Err(CliError::Stdin("it is a terminal; pipe an image in, as in `photocraft-cli info - < image.png`".into()));
+    }
+    let bytes = photocraft_format::read::read_pipe(&mut stdin.lock(), photocraft_format::read::PIPE_LIMIT).map_err(|e| CliError::Stdin(e.to_string()))?;
+    open_piped(&bytes, taken)
+}
+
+/// Decode `bytes` read from standard input. The format comes from the bytes alone, and the
+/// document is named as File › New names one: the first "Untitled-N" that `taken` leaves free.
+fn open_piped(bytes: &[u8], taken: impl Fn(&str) -> bool) -> Result<files::Opened> {
+    let name = photocraft_engine::file_cmds::untitled_name("Untitled", taken);
+    files::open_bytes(&name, bytes).map_err(|e| CliError::Stdin(e.to_string()))
+}
+
+/// [`Headless::open`] for the image piped on standard input: the document is added untitled and
+/// without a path, as a new one is. Returns the open's warnings, missing fonts included.
+fn open_stdin_in(h: &mut Headless) -> Result<Vec<String>> {
+    let mut o = open_stdin(|n| h.session.documents().iter().any(|d| d.doc.name == n))?;
+    // Preferences › Raw Defaults › Resolution, as `Headless::open` applies it.
+    photocraft_engine::file_cmds::raw_defaults(&h.session, &o.warnings, &mut o.document);
+    let index = h.session.add_document(o.document, None);
+    if let Some(st) = h.session.active_mut() {
+        st.source_read_only = o.source_read_only;
+    }
+    let mut warnings = o.warnings;
+    if let Some(d) = h.session.documents().get(index) {
+        warnings.extend(missing_font_warnings(&d.doc));
+    }
+    Ok(warnings)
+}
+
 /// An output that is the input file itself, however it is spelt (relative, with `./`, through a
 /// hard or symbolic link), would replace the original, and a lossy re-encode can't be undone: it
 /// is refused unless `--in-place` asks for it, as `batch` refuses an `--out` that is its `--in`
@@ -29,8 +71,12 @@ fn refuse_overwriting_input(in_place: bool, input: &Path, output: &Path) -> Resu
 pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
-    refuse_overwriting_input(a.in_place, input, output)?;
-    let mut o = files::open(input)?;
+    let mut o = if is_stdin(input) {
+        open_stdin(|_| false)?
+    } else {
+        refuse_overwriting_input(a.in_place, input, output)?;
+        files::open(input)?
+    };
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
     photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);
     warn_all(err, &o.warnings);
@@ -43,12 +89,13 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
-    let opened = h.open(file)?;
+    // Both opens already list the missing fonts, so each warning is reported once.
+    let warnings: Vec<Value> = if is_stdin(file) {
+        open_stdin_in(&mut h)?.into_iter().map(Value::String).collect()
+    } else {
+        h.open(file)?["warnings"].as_array().cloned().unwrap_or_default()
+    };
     let mut doc = h.inspect(None)?;
-    let mut warnings = opened["warnings"].as_array().cloned().unwrap_or_default();
-    if let Some(st) = h.session.active() {
-        warnings.extend(missing_font_warnings(&st.doc).into_iter().map(Value::String));
-    }
     doc["warnings"] = Value::Array(warnings);
     doc["file"] = json!(file.to_string_lossy());
     // Drop per-session noise.
@@ -82,12 +129,16 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
     if let Some(new) = &a.new {
         h.command_run("file.new", new.clone()).map_err(CliError::New)?;
     } else if let Some(file) = &a.file {
-        // Refused before the file is read or any command runs.
-        if let Some(out) = &a.out {
-            refuse_overwriting_input(a.in_place, file, out)?;
-        }
-        let o = h.open(file)?;
-        let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
+        let ws: Vec<String> = if is_stdin(file) {
+            open_stdin_in(&mut h)?
+        } else {
+            // Refused before the file is read or any command runs.
+            if let Some(out) = &a.out {
+                refuse_overwriting_input(a.in_place, file, out)?;
+            }
+            let o = h.open(file)?;
+            serde_json::from_value(o["warnings"].clone()).unwrap_or_default()
+        };
         warn_all(err, &ws);
         reported_fonts.extend(ws);
     }
@@ -161,7 +212,8 @@ mod missing_font_warning_tests {
         let Invoke { code, stdout, stderr } = invoke(&["info", &native_str, "--compact"]);
         assert_eq!(code, 0, "{stderr}");
         let info: Value = serde_json::from_str(&stdout).unwrap();
-        assert!(info["warnings"].as_array().unwrap().iter().any(|w| w.as_str().is_some_and(|s| s.contains(family))));
+        let mentions = |info: &Value| info["warnings"].as_array().unwrap().iter().filter(|w| w.as_str().is_some_and(|s| s.contains(family))).count();
+        assert_eq!(mentions(&info), 1, "each missing font once: {info}");
         assert!(stderr.is_empty(), "info puts warnings in JSON, not stderr");
 
         let Invoke { code, stderr, .. } = invoke(&["convert", &native_str, &png_str]);
@@ -222,5 +274,39 @@ mod missing_font_warning_tests {
         assert_eq!(code, 0, "{stderr}");
         assert!(!stderr.contains("font '"), "{stderr}");
         let _ = std::fs::remove_dir_all(&folder);
+    }
+}
+
+#[cfg(test)]
+mod stdin_tests {
+    use super::*;
+
+    fn png(w: u32, h: u32) -> Vec<u8> {
+        let img = photocraft_codecs::Image::from_u8(w, h, photocraft_codecs::ChannelLayout::Rgba, vec![200; (w * h * 4) as usize]).unwrap();
+        photocraft_codecs::encode(&img, photocraft_codecs::Format::Png, &Default::default()).unwrap()
+    }
+
+    /// #9468: only a bare `-` is standard input; `./-` is a file called `-`.
+    #[test]
+    fn only_a_bare_dash_is_standard_input() {
+        assert!(is_stdin(Path::new("-")));
+        for path in ["./-", "-.png", "--", "a/-", ""] {
+            assert!(!is_stdin(Path::new(path)), "{path}");
+        }
+    }
+
+    /// #9468: piped bytes open by their content, untitled; bytes that aren't an image are an error
+    /// naming standard input, not a panic.
+    #[test]
+    fn piped_bytes_open_by_their_content_as_an_untitled_document() {
+        let o = open_piped(&png(5, 3), |_| false).unwrap();
+        assert_eq!((o.document.size.width, o.document.size.height, o.document.name.as_str()), (5, 3, "Untitled-1"));
+        let o = open_piped(&png(2, 2), |n| n == "Untitled-1").unwrap();
+        assert_eq!(o.document.name, "Untitled-2");
+
+        for garbage in [&b"not an image at all"[..], &[0u8; 64], &png(5, 3)[..20]] {
+            let e = open_piped(garbage, |_| false).err().unwrap().to_string();
+            assert!(e.starts_with("standard input: "), "{e}");
+        }
     }
 }

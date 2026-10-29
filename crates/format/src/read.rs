@@ -63,6 +63,29 @@ fn read_all_with(reader: &mut impl Read, size_hint: u64, chunk: usize) -> io::Re
     Ok(buf)
 }
 
+/// The most [`read_pipe`] takes from standard input (`photocraft -`, `photocraft-cli convert -
+/// out.png`, #9468). A pipe has no length to check first, so a stream that never ends (a mistaken
+/// `/dev/zero`) stops here instead of filling memory; a bigger image opens from a file.
+pub const PIPE_LIMIT: u64 = 4_000_000_000;
+
+/// Read an image piped in on `reader` (standard input) to its end. More than `limit` bytes is a
+/// `FileTooLarge` error and nothing at all an `UnexpectedEof` one, so an empty pipe says so
+/// rather than failing to decode. The buffer grows as data arrives, and a growth the memory can't
+/// hold is an `OutOfMemory` error, not an abort.
+pub fn read_pipe(reader: &mut impl Read, limit: u64) -> io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    // One byte past the limit tells an input of exactly `limit` bytes from a longer one.
+    reader.take(limit.saturating_add(1)).read_to_end(&mut buf)?;
+    if buf.is_empty() {
+        return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "nothing was piped in"));
+    }
+    if u64::try_from(buf.len()).unwrap_or(u64::MAX) > limit {
+        let message = format!("more than {} was piped in; save the image to a file and open that", size_text(limit));
+        return Err(io::Error::new(io::ErrorKind::FileTooLarge, message));
+    }
+    Ok(buf)
+}
+
 /// An empty buffer with room for `len` bytes, or an `OutOfMemory` error saying how much was needed.
 pub fn buffer_for(len: u64) -> io::Result<Vec<u8>> {
     let mut buf = Vec::new();
@@ -131,6 +154,38 @@ mod tests {
         let e = buffer_for(1 << 62).unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::OutOfMemory);
         assert_eq!(buffer_for(1024).unwrap().capacity(), 1024);
+    }
+
+    /// #9468: a piped image is read whole up to the limit; an empty pipe, one past the limit, one
+    /// that never ends and one that fails are errors, not panics or an endless read.
+    #[test]
+    fn piped_input_is_read_to_its_end_within_the_limit() {
+        let png = b"\x89PNG\r\n\x1a\n rest of the image";
+        assert_eq!(read_pipe(&mut &png[..], 1000).unwrap(), png);
+        assert_eq!(read_pipe(&mut &png[..], png.len() as u64).unwrap(), png, "exactly the limit");
+
+        let e = read_pipe(&mut io::empty(), 1000).unwrap_err();
+        assert_eq!((e.kind(), e.to_string()), (io::ErrorKind::UnexpectedEof, "nothing was piped in".to_string()));
+
+        let e = read_pipe(&mut &png[..], png.len() as u64 - 1).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::FileTooLarge);
+        assert!(e.to_string().starts_with("more than 25 bytes was piped in;"), "{e}");
+        // An endless stream stops one byte past the limit.
+        let e = read_pipe(&mut io::repeat(0), 1 << 20).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::FileTooLarge);
+        assert!(e.to_string().contains("more than 1.05 MB"), "{e}");
+        assert!(read_pipe(&mut io::repeat(0), 0).is_err(), "a zero limit takes nothing");
+        assert_eq!(size_text(PIPE_LIMIT), "4.00 GB");
+
+        struct Broken;
+        impl Read for Broken {
+            fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::BrokenPipe, "pipe closed"))
+            }
+        }
+        assert_eq!(read_pipe(&mut Broken, 1000).unwrap_err().kind(), io::ErrorKind::BrokenPipe);
+        // Bytes that aren't an image are read like any others: the importer turns them down.
+        assert_eq!(read_pipe(&mut &b"not an image"[..], 1000).unwrap(), b"not an image");
     }
 
     #[test]
