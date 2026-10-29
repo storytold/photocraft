@@ -44,6 +44,11 @@ pub struct CutParts {
 }
 
 impl CutParts {
+    /// Selected pixels in source-document coordinates, including soft coverage.
+    pub(crate) fn selected_pixels(&self) -> &Surface {
+        &self.piece
+    }
+
     /// Split `layer` of `doc` by its selection. With `copy` the selected pixels stay in the layer
     /// too (the piece is a duplicate). Without, they leave a transparent hole, or on the Background,
     /// which can't hold transparency, one filled with `background` (Photoshop). Errors without a
