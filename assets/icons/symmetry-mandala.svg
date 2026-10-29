@@ -1,0 +1,15 @@
+<svg
+  xmlns="http://www.w3.org/2000/svg"
+  width="24"
+  height="24"
+  viewBox="0 0 30.81 30.81"
+  fill="none"
+  stroke="currentColor"
+  stroke-width="2.41"
+  stroke-linecap="round"
+  stroke-linejoin="round"
+>
+  <line x1="15.405" y1="29.510" x2="15.405" y2="1.300" />
+  <line x1="27.620" y1="22.457" x2="3.190" y2="8.352" />
+  <line x1="3.190" y1="22.457" x2="27.620" y2="8.352" />
+</svg>

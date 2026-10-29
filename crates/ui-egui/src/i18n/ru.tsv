@@ -2769,6 +2769,8 @@ fontWeight	Italic	Курсив
 
 # Painting symmetry presets.
 	Dual Axis	Две оси
+	Mandala	Мандала
+	Segment Count	Количество сегментов
 	Diagonal	Диагональная
 	Transform Symmetry	Трансформировать симметрию
 	Set painting symmetry options	Настроить параметры симметричного рисования

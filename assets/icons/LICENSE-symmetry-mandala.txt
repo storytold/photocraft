@@ -1,0 +1,6 @@
+Original mandala and radial painting symmetry icons by PhotoCraft contributors (2026).
+Files: symmetry-mandala.svg, symmetry-radial.svg.
+SPDX-License-Identifier: MIT OR Apache-2.0
+
+Available under either licence at your option; the full texts are LICENSE-MIT and
+LICENSE-APACHE at the root of this repository.

@@ -151,6 +151,8 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("symmetry-diagonal", include_bytes!("../../../assets/icons/symmetry-diagonal.svg")),
     ("symmetry-dual", include_bytes!("../../../assets/icons/symmetry-dual.svg")),
     ("symmetry-horizontal", include_bytes!("../../../assets/icons/symmetry-horizontal.svg")),
+    ("symmetry-mandala", include_bytes!("../../../assets/icons/symmetry-mandala.svg")),
+    ("symmetry-radial", include_bytes!("../../../assets/icons/symmetry-radial.svg")),
     ("symmetry-vertical", include_bytes!("../../../assets/icons/symmetry-vertical.svg")),
     ("swatch-book", include_bytes!("../../../assets/icons/swatch-book.svg")),
     ("text-cursor", include_bytes!("../../../assets/icons/text-cursor.svg")),

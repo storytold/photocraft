@@ -422,7 +422,7 @@ mod tests {
     fn symmetry_axes_rasterize_centred_with_matching_line_weight_at_both_dpis() {
         for size in [14_u32, 28] {
             let mut coverage = Vec::new();
-            for name in ["symmetry-vertical", "symmetry-horizontal", "symmetry-diagonal", "symmetry-dual"] {
+            for name in ["symmetry-vertical", "symmetry-horizontal", "symmetry-diagonal", "symmetry-dual", "symmetry-mandala", "symmetry-radial"] {
                 assert!(white_icons().contains(name));
                 let egui::ImageSource::Bytes { bytes, .. } = white_icons().source(name) else { panic!("icon source must be embedded bytes") };
                 let image = egui_extras::image::load_svg_bytes_with_size(
@@ -450,6 +450,8 @@ mod tests {
                 assert!((single - vertical).abs() / vertical < tolerance, "inconsistent axis stroke weight at {size}px: {coverage:?}");
             }
             assert!(coverage[3] > vertical * 1.7 && coverage[3] < vertical * 2.1);
+            assert!(coverage[4] > vertical * 2.4 && coverage[4] < vertical * 3.1, "mandala draws three axes: {coverage:?}");
+            assert!(coverage[5] > vertical * 1.4 && coverage[5] < vertical * 2.4, "radial draws three spokes: {coverage:?}");
         }
     }
 }

@@ -238,3 +238,37 @@ fn transform_has_commit_and_cancel_buttons_and_its_own_cursors() {
     let done = preset(h.state()).unwrap();
     assert_eq!((done.center, done.rotation), ([120.0, 90.0], 30.0), "commit applies the preview");
 }
+#[test]
+fn mandala_transform_keeps_its_axes_and_menu_offers_segment_count_only_for_counted_modes() {
+    let mut app = app();
+    app.run("paint.setSymmetry", json!({"mode":"mandala","axes":7})).unwrap();
+    begin(&mut app).unwrap();
+    let handle = rotation_handle(app.ui.symmetry_transform.as_ref().unwrap().preview, [100.0, 80.0]);
+    down(&mut app, handle);
+    move_to(&mut app, [80.0, 40.0], Modifiers::NONE);
+    up(&mut app, [80.0, 40.0]);
+    key(&mut app, Key::Enter);
+    let p = preset(&app).unwrap();
+    assert_eq!((p.mode, p.axes), (SymmetryMode::Mandala, 7));
+    assert!(p.rotation > 0.0, "the drag turned the axes: {p:?}");
+    assert_eq!(p.segments([100.0, 80.0]).len(), 7, "every axis is drawn");
+    app.session.edit_prefs(|p| p.interface.language = "en".into());
+    let mut h = Harness::builder().with_size(vec2(500.0, 600.0)).build_ui_state(
+        |ctx, app| {
+            crate::i18n::with_language(crate::i18n::Lang::EN, || menu(app, ctx));
+        },
+        app,
+    );
+    h.get_by_label("Set painting symmetry options").click();
+    h.run_steps(3);
+    assert!(h.query_all_by_label("Segment Count").next().is_some());
+    assert!(h.query_all_by_label("Rotation").next().is_some());
+    let width = h.get_by_label(label(SymmetryMode::Mandala)).rect().width();
+    assert!(width < 260.0, "the sliders must not widen the menu: {width}");
+    h.get_by_label(label(SymmetryMode::Dual)).click();
+    h.run_steps(3);
+    h.get_by_label("Set painting symmetry options").click();
+    h.run_steps(3);
+    assert!(h.query_all_by_label("Segment Count").next().is_none());
+    assert!(h.query_all_by_label("Rotation").next().is_some());
+}

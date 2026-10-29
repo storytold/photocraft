@@ -49,6 +49,8 @@ fn label(mode: SymmetryMode) -> &'static str {
         SymmetryMode::Horizontal => tl!("Horizontal"),
         SymmetryMode::Dual => tl!("Dual Axis"),
         SymmetryMode::Diagonal => tl!("Diagonal"),
+        SymmetryMode::Mandala => tl!("Mandala"),
+        SymmetryMode::Radial => tl!("Radial"),
     }
 }
 fn preset(app: &PhotocraftApp) -> Option<PresetSymmetry> {
@@ -80,8 +82,35 @@ pub fn begin(app: &mut PhotocraftApp) -> Result<(), String> {
 }
 pub fn commit(app: &mut PhotocraftApp) {
     if let Some(t) = app.ui.symmetry_transform.take() {
-        let _ = app.run("paint.setSymmetry", json!({"mode":t.preview.mode.id(), "center":t.preview.center,"rotation":t.preview.rotation}));
+        let _ = app.run("paint.setSymmetry", params(t.preview));
     }
+}
+/// `paint.setSymmetry` params that recreate `p` exactly, including the Mandala/Radial count.
+fn params(p: PresetSymmetry) -> serde_json::Value {
+    let mut v = json!({"mode":p.mode.id(), "center":p.center, "rotation":p.rotation});
+    if p.has_axes() {
+        v["axes"] = json!(p.axes);
+    }
+    v
+}
+/// Mandala line count, Radial segment count and rotation of the active preset, editable from the symmetry menu.
+fn preset_fields(app: &PhotocraftApp, ui: &mut egui::Ui) -> Option<serde_json::Value> {
+    let p = preset(app).filter(|_| crate::menus::is_enabled(app, "paint.setSymmetry"))?;
+    let mut next = p;
+    if let Some(range) = p.mode.axes_range() {
+        let (min, max) = (f32::from(*range.start()), f32::from(*range.end()));
+        let mut axes = f32::from(p.axes);
+        // Photoshop names both counts "Segment Count".
+        if widgets::slider_row(ui, "Segment Count", &mut axes, min..=max, "", None).changed() {
+            // The range keeps the rounded value inside u8 and the mode's accepted counts.
+            next = next.with_axes(axes.round().clamp(min, max) as u8).unwrap_or(next);
+        }
+    }
+    let mut rotation = p.rotation as f32;
+    if widgets::slider_row(ui, "Rotation", &mut rotation, 0.0..=360.0, "°", None).changed() {
+        next = PresetSymmetry::new(next.mode, next.center, f64::from(rotation)).and_then(|n| n.with_axes(next.axes)).unwrap_or(next);
+    }
+    (next != p).then(|| params(next))
 }
 /// While the symmetry is being transformed, the options bar names the edit and gives it ✓ and ⊘
 /// buttons, as Free Transform's bar does: Enter and Esc aren't the only ways out, which a pen or
@@ -159,6 +188,8 @@ fn mode_button(ui: &mut egui::Ui, mode: SymmetryMode, checked: bool) -> egui::Re
             SymmetryMode::Horizontal => "symmetry-horizontal",
             SymmetryMode::Dual => "symmetry-dual",
             SymmetryMode::Diagonal => "symmetry-diagonal",
+            SymmetryMode::Mandala => "symmetry-mandala",
+            SymmetryMode::Radial => "symmetry-radial",
         };
         icons::paint(ui, r, glyph, 14.0, tint);
     }
@@ -170,7 +201,9 @@ pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let resp = icons::button_with_icon_size(ui, "painting-symmetry", 24.0, 14.0, current.is_some(), tl!("Set painting symmetry options"));
     let resp = crate::brush_picker::named(resp, "Set painting symmetry options");
     egui::Popup::menu(&resp).show(|ui| {
+        // Sliders take the width they are given: cap it so they don't stretch the menu.
         ui.set_min_width(220.0);
+        ui.set_max_width(220.0);
         widgets::menu_scroll(ui, |ui| {
             let mut run = None;
             if ui
@@ -189,6 +222,12 @@ pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 if ui.add_enabled_ui(crate::menus::is_enabled(app, "paint.setSymmetry"), |ui| mode_button(ui, mode, checked)).inner.clicked() {
                     run = Some(("paint.setSymmetry", json!({"mode":mode.id()})));
                     ui.close();
+                }
+            }
+            if preset(app).is_some() {
+                ui.separator();
+                if let Some(params) = preset_fields(app, ui) {
+                    run = Some(("paint.setSymmetry", params));
                 }
             }
             if let Some(st) = app.session.active() {
@@ -269,7 +308,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 }
                 None => return true,
             };
-            if let Some(p) = PresetSymmetry::new(t.preview.mode, center, rotation) {
+            if let Some(p) = PresetSymmetry::new(t.preview.mode, center, rotation).and_then(|p| p.with_axes(t.preview.axes)) {
                 t.preview = p;
             }
         }
