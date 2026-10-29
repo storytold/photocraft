@@ -26,6 +26,18 @@ pub(crate) fn header_drop_before(rect: Rect, pointer: Pos2) -> bool {
     pointer.y < rect.top() + rect.height() / 3.0
 }
 
+/// Empty space at the sides of a grid row remains a valid insertion target. This makes the
+/// beginning/end of a row reachable without aiming at the one-pixel gap beside a card.
+pub(crate) fn item_row_edge_targets(area: Rect, item_rect: Rect, first: bool, last: bool) -> (Option<Rect>, Option<Rect>) {
+    let left = first
+        .then(|| Rect::from_min_max(Pos2::new(area.left(), item_rect.top()), Pos2::new(item_rect.left(), item_rect.bottom())))
+        .filter(|rect| rect.is_positive());
+    let right = last
+        .then(|| Rect::from_min_max(Pos2::new(item_rect.right(), item_rect.top()), Pos2::new(area.right(), item_rect.bottom())))
+        .filter(|rect| rect.is_positive());
+    (left, right)
+}
+
 /// Semantic destination for dragging a group or nested folder onto a hierarchy header.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum HierarchyDrop {
@@ -176,6 +188,28 @@ pub(crate) fn asset_browser_item_gesture(response: &egui::Response, selection: b
     let activated = activation && response.double_clicked();
     let selected = selection && !activated && response.clicked();
     (selected, activated)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn grid_row_edge_targets_cover_only_the_empty_sides_of_first_and_last_cards() {
+        let area = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(310.0, 70.0));
+        let first = Rect::from_min_max(Pos2::new(30.0, 25.0), Pos2::new(80.0, 65.0));
+        let last = Rect::from_min_max(Pos2::new(210.0, 25.0), Pos2::new(260.0, 65.0));
+
+        let (left, _) = item_row_edge_targets(area, first, true, false);
+        let (no_left, _) = item_row_edge_targets(area, first, false, false);
+        let (_, right) = item_row_edge_targets(area, last, false, true);
+        let (_, no_right) = item_row_edge_targets(area, last, false, false);
+
+        assert_eq!(left, Some(Rect::from_min_max(Pos2::new(10.0, 25.0), Pos2::new(30.0, 65.0))));
+        assert_eq!(no_left, None);
+        assert_eq!(right, Some(Rect::from_min_max(Pos2::new(260.0, 25.0), Pos2::new(310.0, 65.0))));
+        assert_eq!(no_right, None);
+    }
 }
 
 /// Generic actions returned by shared item and group context menus.

@@ -12,6 +12,7 @@ use crate::pickers::asset_browser_hierarchy::{HierarchyFolder, draw_hierarchy, h
 use crate::pickers::asset_browser_interaction::{
     AssetDrag, ContextMenuAction, HeaderDropCapabilities, HierarchyDrop, asset_browser_header_target_with_capabilities, asset_browser_item_gesture,
     asset_browser_item_target, context_menu_target, draw_group_context_menu, draw_item_context_menu, header_drop_before, hierarchy_folder_drop,
+    item_row_edge_targets,
 };
 use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, list_row as asset_browser_list_row};
 use crate::pickers::picker_state::PresetUi;
@@ -622,11 +623,29 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                         ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(2.0, t.accent), egui::StrokeKind::Middle);
                                     }
                                 }
-                                let released_drag = if capabilities.item_drag {
+                                let mut released_drag = if capabilities.item_drag {
                                     asset_browser_item_target(ui, &resp, r, next_rect, &mut insertion_markers, panel, &it.key, !list)
                                 } else {
                                     None
                                 };
+                                // On grid rows, the unused space before the first card and after
+                                // the last card is also a drop target. In particular, this lets an
+                                // incomplete row accept a drop at the panel's right edge.
+                                if capabilities.item_drag && !list && released_drag.is_none() {
+                                    let first_in_row = run_i % cols == 0;
+                                    let last_in_row = run_i + 1 == items.len() || (run_i + 1) % cols == 0;
+                                    let (left_edge, right_edge) = item_row_edge_targets(area, r, first_in_row, last_in_row);
+                                    let pointer = ui.ctx().pointer_interact_pos();
+                                    let edge_target =
+                                        left_edge.filter(|rect| pointer.is_some_and(|pointer| rect.contains(pointer))).map(|rect| ("left", rect)).or_else(
+                                            || right_edge.filter(|rect| pointer.is_some_and(|pointer| rect.contains(pointer))).map(|rect| ("right", rect)),
+                                        );
+                                    if let Some((side, edge_rect)) = edge_target {
+                                        let edge_response = ui.interact(edge_rect, ui.id().with((panel, gi, ii, side)), Sense::hover());
+                                        released_drag =
+                                            asset_browser_item_target(ui, &edge_response, r, next_rect, &mut insertion_markers, panel, &it.key, true);
+                                    }
+                                }
                                 if let Some(AssetDrag::Preset { scope, key }) = released_drag
                                     && scope.as_str() == panel
                                     && key.as_str() != it.key.as_str()
