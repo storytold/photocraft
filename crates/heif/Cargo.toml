@@ -9,11 +9,14 @@ rust-version.workspace = true
 [dependencies]
 # Pure Rust, no unsafe. Pinned exactly: a young, single-owner crate that parses untrusted files;
 # moving the pin is a reviewed change (re-run the fuzz target and the heif corpus tests).
-heic-rs = { version = "=0.1.4", default-features = false, features = ["std"] }
+# 0.1.4 with three fixes still open upstream (tbraun96/heic-rs#7, #10 and #11: the bitstream's
+# colour range when an item has no `colr`, a grid's `colr` from its tiles, and 4:2:2 chroma), at an
+# immutable revision of a fork until a release has them (#5994, #7575).
+heic-rs = { git = "https://github.com/ArintonAkos/heic-rs", rev = "e973faab5ea9e431e9a6654824a67b7c9687ac44", default-features = false, features = ["std"] }
 
 # The tiles of a HEIC photo decode in parallel on native; wasm stays single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-heic-rs = { version = "=0.1.4", default-features = false, features = ["std", "parallel"] }
+heic-rs = { git = "https://github.com/ArintonAkos/heic-rs", rev = "e973faab5ea9e431e9a6654824a67b7c9687ac44", default-features = false, features = ["std", "parallel"] }
 
 [lints]
 workspace = true

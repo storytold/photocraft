@@ -2,6 +2,10 @@ f24a3b6ae495605e179bd34ae282047dcc4581819eb53041db34c9fdb66648cd  heic-rs/checke
 26b302d18d5c0e932a69092dafe4ac25d63814514c63718a08325fd84b38d5d4  heic-rs/checker-1024.ref.png
 772a9b8fab3022ea95eb0b1d069053448f9602fad7829b33506877039a6af2c5  heic-rs/checker-64.heic
 aa89bda71d2359691d32362923967ff4839e8a4f7d54641b10c647c9fbf9aa2c  heic-rs/checker-64.ref.png
+cbec3229889595a1e86cf92cecea661969f046ecdd1a93bdfaefb612ff8ab65c  heic-rs/full-range-no-colr.heic
+e86a17beb381a8fd1a05ce6fbf163c3d5beb2eb8f33f74268cd4a1476866d903  heic-rs/full-range-no-colr.ref.png
+b5b89e4439c238aa959a066ad5bbd6c8d858bc0ace3b14f2f00b97884202dd54  heic-rs/grid-422-10bit.heic
+7366bdae4c4163c56d6d70bc1f28325ba5156ac438fe84d31c4e54e2f6887d30  heic-rs/grid-422-10bit.ref.png
 6e65bccd51ff2effdfce99ac4275b9f79c85bba51b5875d7fa455e1412821c25  heic-rs/rgb-strips-96.heic
 b3a619b185d4cdfb1aafb419fec4f054d86853bb6a65e5d044527e84579407bb  heic-rs/rgb-strips-96.ref.png
 9ad0c62a8e044f0ce0a342153a6da3f360c688b88bd5287a2c8fbdba3055fbcb  heic-rs/with-exif.heic

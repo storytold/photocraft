@@ -101,6 +101,62 @@ fn grid_tiled_photo_matches_apple_decode() {
     assert!(max_abs_diff(&img, &want) <= 3.0 / 255.0);
 }
 
+/// Mean absolute difference of two images of one size over every sample, in 0..1.
+fn mean_abs_diff(a: &Image, b: &Image) -> f32 {
+    let ((w, h), n) = (a.dimensions(), 3);
+    let mut sum = 0.0f64;
+    for y in 0..h {
+        for x in 0..w {
+            for c in 0..n {
+                sum += f64::from((a.get(x, y, c) - b.get(x, y, c)).abs());
+            }
+        }
+    }
+    (sum / (f64::from(w) * f64::from(h) * n as f64)) as f32
+}
+
+/// The mean of every sample of the 64 x 64 square at (`x0`, `y0`), in 0..1.
+fn square_mean(img: &Image, x0: u32, y0: u32) -> f32 {
+    let mut sum = 0.0f64;
+    for y in y0..y0 + 64 {
+        for x in x0..x0 + 64 {
+            for c in 0..3 {
+                sum += f64::from(img.get(x, y, c));
+            }
+        }
+    }
+    (sum / (64.0 * 64.0 * 3.0)) as f32
+}
+
+#[test]
+fn a_4_2_2_grid_matches_apple_decode() {
+    // Canon and Sony `.HIF` photos are grids of 4:2:2 10-bit tiles (#7575), here 3 x 2 of 64.
+    // Before heic-rs's Table 8-3 fix (tbraun96/heic-rs#10) a Sony file failed with "picture is
+    // not fully covered by slices", and this one came out 17.7 code values off Apple's decode on
+    // average (18.8 dB). The tile seams differ most: Apple upsamples each tile's chroma alone.
+    let img = decode(&corpus("heic-rs/grid-422-10bit.heic")).unwrap();
+    let want = reference(&corpus("heic-rs/grid-422-10bit.ref.png"));
+    assert_eq!((img.dimensions(), img.sample_type()), ((192, 128), SampleType::U16));
+    assert!(mean_abs_diff(&img, &want) < 1.5 / 255.0, "mean diff {}", mean_abs_diff(&img, &want) * 255.0);
+    assert!(psnr(&img, &want) > 42.0, "{} dB", psnr(&img, &want));
+}
+
+#[test]
+fn full_range_said_only_in_the_bitstream_stays_full_range() {
+    // Some phones (a OnePlus 11, #5994) write no `colr`: full range is said only in the VUI of the
+    // tiles' bitstream. Read as limited range (heic-rs before tbraun96/heic-rs#7 and #11), the
+    // near-black quarter (8/255) came out at 0 and the near-white one (248/255) at 255.
+    let img = decode(&corpus("heic-rs/full-range-no-colr.heic")).unwrap();
+    let want = reference(&corpus("heic-rs/full-range-no-colr.ref.png"));
+    assert_eq!((img.dimensions(), img.sample_type()), ((128, 128), SampleType::U16));
+    for (x0, what) in [(0, "near black"), (64, "near white")] {
+        let (got, apple) = (square_mean(&img, x0, 0), square_mean(&want, x0, 0));
+        assert!((got - apple).abs() < 0.5 / 255.0, "{what}: {} against Apple's {}", got * 255.0, apple * 255.0);
+    }
+    assert!(mean_abs_diff(&img, &want) < 1.5 / 255.0, "mean diff {}", mean_abs_diff(&img, &want) * 255.0);
+    assert!(psnr(&img, &want) > 36.0, "{} dB", psnr(&img, &want));
+}
+
 #[test]
 fn rgb_strips_keep_their_colours() {
     // Three vertical strips, pure red, green and blue: catches swapped channels or matrices.
