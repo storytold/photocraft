@@ -184,6 +184,8 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
+    /// Admitted document identities in opening order, independent of visual-tab reordering.
+    open_document_order: Vec<photocraft_doc::DocId>,
     active: Option<usize>,
     /// Monotonic counter, bumped whenever a different document becomes active (including a
     /// switch away and back inside one pass). UI work that must not cross documents (control
