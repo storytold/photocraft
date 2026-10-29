@@ -142,6 +142,14 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
+            // Photoshop greys these out for Destination Save and Close; hide them so OK writes
+            // over the source files instead of asking for a destination folder.
+            if f.get("__command").and_then(Value::as_str) == Some("file.automate.batch")
+                && f.get("destination").and_then(Value::as_str) == Some("saveAndClose")
+                && matches!(k.as_str(), "output" | "naming" | "startingSerial" | "format" | "quality")
+            {
+                continue;
+            }
             if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
                 let label = ui.label(tl!("File Naming"));
                 let mut naming = v.as_str().unwrap_or_default().to_owned();
@@ -208,6 +216,14 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     }
                 }
             };
+            // Choosing another action in Batch must take that action's steps, not the ones
+            // snapshotted when the dialog opened.
+            if k == "action"
+                && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch")
+                && let Some(steps) = new.as_str().and_then(|name| f.get("__actions").and_then(|m| m.get(name)).cloned())
+            {
+                f.insert("steps".into(), steps);
+            }
             f.insert(k, new);
             ui.end_row();
         }
@@ -216,6 +232,21 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(key));
     }
     camera_data(ui, f);
+}
+
+/// File › Automate › Batch: the Action dropdown names the recorded action whose steps run.
+/// `ui.dialog.set` of `action` then confirm must use that action, not the steps from open.
+pub(crate) fn resolve_batch_action(app: &PhotocraftApp, mut params: Value) -> Value {
+    let Some(name) = params.get("action").and_then(Value::as_str).map(str::to_string) else {
+        return params;
+    };
+    let Some(action) = app.session.actions.list.iter().find(|a| a.name == name) else {
+        return params;
+    };
+    if let Some(obj) = params.as_object_mut() {
+        obj.insert("steps".into(), json!(crate::actions::action_steps(action)));
+    }
+    params
 }
 
 /// File Info's read-only Camera Data section (`__camera`, from the document's EXIF/XMP).
@@ -463,15 +494,40 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             json!({"format": ["jpg", "png", "psd", "tiff", "webp"]}),
         ),
         "file.automate.batch" => {
-            let Some(action) = crate::actions::selected_action(app) else {
-                return Some(Err("record an action in the Actions panel first".into()));
+            let (name, steps) = match crate::actions::selected_action(app) {
+                Some(action) => (action.name.clone(), crate::actions::action_steps(action)),
+                None => return Some(Err("record an action in the Actions panel first".into())),
             };
-            let steps = crate::actions::action_steps(action);
-            let name = action.name.clone();
+            let names: Vec<String> = app.session.actions.list.iter().map(|a| a.name.clone()).collect();
+            let actions: Map<String, Value> = app.session.actions.list.iter().map(|a| (a.name.clone(), json!(crate::actions::action_steps(a)))).collect();
+            let mut labels = subfolders_label().as_object().cloned().unwrap_or_default();
+            labels.insert("destination".into(), json!(tl!("Destination")));
+            labels.insert("saveAndClose".into(), json!(tl!("Save and Close")));
+            labels.insert("folder".into(), json!(tl!("Folder")));
+            labels.insert("overrideOpen".into(), json!(tl!("Override Action \"Open\" Commands")));
+            for a in &app.session.actions.list {
+                labels.insert(a.name.clone(), json!(a.name));
+            }
             dialog(
                 app,
-                json!({"action": name, "steps": steps, "input": dir, "includeSubfolders": false, "__labels": subfolders_label(), "output": format!("{dir}/batch"), "format": "same", "quality": null, "__batchQuality": 8, "naming": "", "startingSerial": 1}),
-                json!({"format": ["same", "png", "jpg", "psd", "tiff", "webp"]}),
+                json!({
+                    "action": name,
+                    "steps": steps,
+                    "input": dir,
+                    "includeSubfolders": false,
+                    "destination": "saveAndClose",
+                    "overrideOpen": true,
+                    "__labels": labels,
+                    "output": format!("{dir}/batch"),
+                    "format": "same",
+                    "quality": null,
+                    "__batchQuality": 8,
+                    "naming": "",
+                    "startingSerial": 1,
+                    "__order": ["action", "input", "includeSubfolders", "destination", "overrideOpen", "output", "format", "quality", "naming", "startingSerial"],
+                    "__actions": actions
+                }),
+                json!({"format": ["same", "png", "jpg", "psd", "tiff", "webp"], "action": names, "destination": ["saveAndClose", "folder"]}),
             )
         }
         // Channel workflow dialogs (see channels_panel.rs for the channel references).

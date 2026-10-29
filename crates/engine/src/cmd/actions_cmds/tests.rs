@@ -435,6 +435,18 @@ fn recorded_layer_selection_replays_by_name_on_another_document() {
     }
 }
 
+/// A Properties-panel blend records `layer.setProps` with the source document's layer id.
+/// Playback on another document retargets a missing id to the active layer.
+#[test]
+fn play_retargets_a_missing_layer_id_to_the_active_layer() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    s.actions.list.push(Action::new("SoftLight", vec![("layer.setProps".into(), json!({"layer": 3, "blend": "Soft Light"}))]));
+    let r = s.execute("actions.play", json!({"action": 0})).unwrap();
+    assert!(r.get("failed").is_none(), "{r}");
+    assert_eq!(s.active().unwrap().doc.layers[0].blend, photocraft_color::BlendMode::SoftLight);
+}
+
 /// #7845: dragging a layer in the Layers panel while recording keeps the drop target by name,
 /// so the action plays on another document (whose layer ids differ) instead of failing with
 /// "no such layer". The reporter's steps, replayed on a new document.

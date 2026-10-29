@@ -1595,6 +1595,19 @@ fn batch_include_all_subfolders() {
     assert!(s.execute("file.automate.batch", json!({"steps": [], "input": join(&dir, "nope"), "includeSubfolders": true, "output": out})).is_err());
 }
 
+/// An empty source folder is an error, not a successful run of zero files: File › Automate ›
+/// Batch would otherwise close and look like it never started.
+#[test]
+fn batch_and_image_processor_reject_an_empty_folder() {
+    let dir = tmp("batch-empty-folder");
+    let out = join(&dir, "out");
+    for cmd in ["file.automate.batch", "file.scripts.imageProcessor"] {
+        let e = Session::new().execute(cmd, json!({"steps": [], "input": dir, "output": out})).unwrap_err();
+        assert!(matches!(e, EngineError::BadParams { .. }), "{cmd}: {e}");
+        assert!(e.to_string().contains("no input images"), "{cmd}: {e}");
+    }
+}
+
 /// The subfolder walk stops at `MAX_SUBFOLDER_DEPTH` levels.
 #[test]
 fn batch_subfolder_walk_is_depth_limited() {
@@ -1933,4 +1946,101 @@ fn sanitize_keeps_windows_device_names_off_the_disk() {
     for name in ["console", "normal", "com10", "lpt0", "nullify", "con_", "com⁴", "com¹¹"] {
         assert_eq!(sanitize(name), name);
     }
+}
+
+/// A recorded action that names a layer id from another document (the user's Highpass action
+/// used `layer: 3`) still runs: missing ids play as the active layer.
+#[test]
+fn batch_plays_a_recorded_layer_id_as_the_active_layer() {
+    let dir = tmp("batch-retarget-layer");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let green = png(&dir, "green.png", 8, 8, "#00ff00");
+    let steps = json!([
+        ["layer.duplicate", {"name": "Layer 0 copy"}],
+        ["layer.setProps", {"layer": 3, "blend": "Soft Light"}],
+        ["layer.select", {"layer": 3}],
+        ["layer.mergeVisible", {}]
+    ]);
+    let r = Session::new().execute("file.automate.batch", json!({"input": [red, green], "destination": "saveAndClose", "steps": steps})).unwrap();
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(r["files"].as_array().map(Vec::len), Some(2), "{r}");
+}
+
+fn batch_pixel(path: &str) -> [f32; 4] {
+    let saved = photocraft_io::import("a.png", &std::fs::read(path).unwrap()).unwrap().document;
+    photocraft_compose::render(&saved, Rect::new(1, 1, 2, 2)).px[0]
+}
+
+/// Photoshop Destination Save and Close writes each result over its source and continues to the
+/// next file. Recorded Open / Save / Close are skipped, so a typical action does not stop after
+/// the first image.
+#[test]
+fn batch_save_and_close_overwrites_each_source_and_skips_open_save_close() {
+    let dir = tmp("batch-save-and-close");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let green = png(&dir, "green.png", 8, 8, "#00ff00");
+    let before_red = std::fs::read(&red).unwrap();
+    let before_green = std::fs::read(&green).unwrap();
+    let elsewhere = png(&dir, "recorded-open.png", 8, 8, "#0000ff");
+    let steps = json!([
+        ["file.open", {"path": elsewhere}],
+        ["file.openAs", {"path": elsewhere}],
+        ["image.adjustments.invert", {}],
+        ["file.saveAs", {"path": join(&dir, "action-save.png")}],
+        ["file.close", {}]
+    ]);
+    let r = Session::new().execute("file.automate.batch", json!({"input": [red, green], "destination": "saveAndClose", "steps": steps})).unwrap();
+    assert_eq!(r["errors"], json!([]), "{r}");
+    assert_eq!(r["files"], json!([red, green]), "{r}");
+    assert_ne!(std::fs::read(&red).unwrap(), before_red, "red was overwritten");
+    assert_ne!(std::fs::read(&green).unwrap(), before_green, "green was overwritten");
+    assert_eq!(batch_pixel(&red), [0.0, 1.0, 1.0, 1.0], "inverted red");
+    assert_eq!(batch_pixel(&green), [1.0, 0.0, 1.0, 1.0], "inverted green");
+    assert_eq!(batch_pixel(&elsewhere), [0.0, 0.0, 1.0, 1.0], "the recorded Open path was not the result");
+    assert!(!std::path::Path::new(&join(&dir, "action-save.png")).exists(), "recorded Save As was not replayed");
+    let e = Session::new()
+        .execute("file.automate.batch", json!({"input": [red], "destination": "nowhere", "steps": [["image.adjustments.invert", {}]]}))
+        .unwrap_err();
+    assert!(e.to_string().contains("destination"), "{e}");
+}
+
+/// Desktop Batch is a background job so the UI can show per-file progress. `execute` still runs
+/// inline; `start` + `wait_job` is the desktop path and must write the same results.
+#[test]
+fn batch_start_waits_for_the_folder_job() {
+    let dir = tmp("batch-job");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let green = png(&dir, "green.png", 8, 8, "#00ff00");
+    let steps = json!([["image.adjustments.invert", {}]]);
+    let params = json!({"input": [red.clone(), green.clone()], "destination": "saveAndClose", "steps": steps});
+    let mut s = Session::new();
+    let v = match s.start("file.automate.batch", params).unwrap() {
+        crate::jobs::Started::Done(v) => v,
+        crate::jobs::Started::Job(id) => s.wait_job(id).unwrap(),
+    };
+    assert_eq!(v["errors"], json!([]), "{v}");
+    assert_eq!(v["files"].as_array().map(Vec::len), Some(2), "{v}");
+    assert_eq!(batch_pixel(&red), [0.0, 1.0, 1.0, 1.0], "inverted red");
+    assert_eq!(batch_pixel(&green), [1.0, 0.0, 1.0, 1.0], "inverted green");
+}
+
+/// Folder destination still writes copies; Save and Close does not need an output folder.
+#[test]
+fn batch_folder_destination_still_needs_output() {
+    let dir = tmp("batch-folder-dest");
+    let red = png(&dir, "red.png", 8, 8, "#ff0000");
+    let out = join(&dir, "out");
+    let r = Session::new()
+        .execute(
+            "file.automate.batch",
+            json!({"input": [red], "destination": "folder", "output": out, "format": "png", "steps": [["image.adjustments.invert", {}]]}),
+        )
+        .unwrap();
+    assert_eq!(r["files"], json!([join(&out, "red.png")]));
+    assert_eq!(batch_pixel(&join(&out, "red.png")), [0.0, 1.0, 1.0, 1.0]);
+    assert_eq!(batch_pixel(&red), [1.0, 0.0, 0.0, 1.0], "the source is left as it was");
+    let e = Session::new()
+        .execute("file.automate.batch", json!({"input": [red], "destination": "folder", "steps": [["image.adjustments.invert", {}]]}))
+        .unwrap_err();
+    assert!(e.to_string().contains("output"), "{e}");
 }

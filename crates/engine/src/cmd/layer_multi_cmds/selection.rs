@@ -159,6 +159,26 @@ pub(crate) fn recorded_step(s: &Session, id: &str, p: Value, pre_selected: Optio
         }
         return p;
     }
+    // Leave a non-selected id as-is. `name` is a rename on `layer.setProps`, not a target, so
+    // converting the id would rename on playback. Missing ids are mapped in `playback_retarget`.
+    p
+}
+
+/// Action playback and Batch: a recorded numeric layer id is from the document the action was
+/// recorded on. If that id isn't in this document, use the active layer (Photoshop's current
+/// layer) so a High Pass / blend action still runs on a folder of images.
+pub fn playback_retarget(s: &Session, mut p: Value) -> Value {
+    let Some(id) = p.get("layer").and_then(Value::as_u64).map(LayerId) else {
+        return p;
+    };
+    if s.active().is_some_and(|st| st.doc.layer(id).is_some()) {
+        return p;
+    }
+    if let Some(active) = s.active().and_then(|st| st.active_layer)
+        && let Some(fields) = p.as_object_mut()
+    {
+        fields.insert("layer".into(), json!(active.0));
+    }
     p
 }
 

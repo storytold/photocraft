@@ -11,7 +11,7 @@ use std::sync::Arc;
 type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
 
 fn harness() -> Harness {
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 760.0)).with_max_steps(64).wgpu().build_eframe(|cc| {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1100.0, 900.0)).with_max_steps(64).wgpu().build_eframe(|cc| {
         PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.session.prefs.edit(|p| p.interface.language = "en".into());
@@ -39,6 +39,14 @@ fn evidence(h: &mut Harness, name: &str) {
         std::fs::create_dir_all(&dir).unwrap();
         h.render().expect("offscreen UI render").save(Path::new(&dir).join(format!("{name}.png"))).unwrap();
     }
+}
+
+/// Destination Save and Close hides Format / Output / File Naming; Folder shows them again.
+fn choose_folder_destination(h: &mut Harness) {
+    if let Some(d) = h.state_mut().ui.dialogs.last_mut() {
+        d.fields.insert("destination".into(), json!("folder"));
+    }
+    h.run_steps(3);
 }
 
 fn open_format_choices(h: &mut Harness) {
@@ -84,6 +92,7 @@ fn batch_menu_offers_webp() {
     let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.automate.batch");
+    choose_folder_destination(&mut h);
     open_format_choices(&mut h);
     evidence(&mut h, "batch-formats");
     assert!(h.query_by_label("WebP").or_else(|| h.query_by_label("Webp")).is_some(), "Batch must offer the supported WebP output format");
@@ -94,6 +103,7 @@ fn batch_menu_offers_quality() {
     let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.automate.batch");
+    choose_folder_destination(&mut h);
     evidence(&mut h, "batch-quality");
     assert!(h.query_by_role_and_label(egui::accesskit::Role::SpinButton, "Quality").is_some(), "Batch must expose its supported output quality");
 }
@@ -184,6 +194,7 @@ fn batch_custom_quality_is_bounded_dialog_local_and_reversible() {
     let _gpu = photocraft_testkit::gpu_lock();
     let mut h = harness();
     open(&mut h, "file.automate.batch");
+    choose_folder_destination(&mut h);
     assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null(), "default command quality remains unset");
     h.get_by_label("Custom").click();
     h.run_steps(3);
@@ -224,6 +235,7 @@ fn batch_and_processor_real_controls_write_the_chosen_webp_quality() {
             let output = dir.0.join(format!("{prefix}-{quality}"));
             open(&mut h, command);
             if prefix == "batch" {
+                choose_folder_destination(&mut h);
                 assert!(h.state().ui.dialogs.last().unwrap().fields["quality"].is_null());
                 h.get_by_label("Custom").click();
                 h.run_steps(3);
@@ -276,6 +288,7 @@ fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
     }
     let mut h = harness();
     open(&mut h, "file.automate.batch");
+    choose_folder_destination(&mut h);
     h.get_by_role_and_label(egui::accesskit::Role::TextInput, "File Naming").click();
     h.run_steps(2);
     replace_text(&mut h, "cancelled_{serial}");
@@ -283,6 +296,7 @@ fn batch_naming_controls_export_the_requested_names_and_reset_on_cancel() {
     h.run_steps(3);
     assert!(!output.exists());
     open(&mut h, "file.automate.batch");
+    choose_folder_destination(&mut h);
     let fields = &h.state().ui.dialogs.last().unwrap().fields;
     assert_eq!(fields["naming"], "");
     assert_eq!(fields["startingSerial"], 1);
@@ -325,6 +339,7 @@ fn batch_default_quality_keeps_lossless_webp_and_existing_jpeg_bytes() {
         let output = dir.0.join(format!("ui-default-{format}"));
         let reference = dir.0.join(format!("engine-existing-default-{format}"));
         open(&mut h, "file.automate.batch");
+        choose_folder_destination(&mut h);
         if format == "webp" {
             choose_webp(&mut h);
         } else {

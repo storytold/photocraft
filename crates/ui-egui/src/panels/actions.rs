@@ -168,7 +168,8 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             app.sync_views();
             app.run(id, p.clone())
         } else {
-            app.session.execute(id, p.clone()).map_err(|e| e.to_string())
+            let p = photocraft_engine::layer_multi_cmds::playback_retarget(&app.session, p.clone());
+            app.session.execute(id, p).map_err(|e| e.to_string())
         };
         match result {
             Ok(value) => {

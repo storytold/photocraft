@@ -349,7 +349,7 @@ fn create_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let name = p.get("name").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| stem(&path));
     let steps_json: Vec<Value> = steps.iter().map(|(id, pr)| json!([id, pr])).collect();
     let mut options = serde_json::Map::new();
-    for k in ["output", "format", "quality", "suffix", "overrideOpen"] {
+    for k in ["output", "format", "quality", "suffix", "overrideOpen", "destination"] {
         if let Some(v) = p.get(k) {
             options.insert(k.into(), v.clone());
         }
@@ -421,6 +421,12 @@ fn run_droplet(s: &mut Session, p: &Value) -> Result<Value> {
     let mut bp = json!({"steps": steps, "input": inputs, "output": output, "format": opts.get("format").cloned().unwrap_or(json!("same"))});
     if let Some(q) = opts.get("quality") {
         bp["quality"] = q.clone();
+    }
+    if let Some(v) = opts.get("overrideOpen") {
+        bp["overrideOpen"] = v.clone();
+    }
+    if let Some(v) = opts.get("destination") {
+        bp["destination"] = v.clone();
     }
     if let Some(called) = v.get("calledActions") {
         bp["calledActions"] = called.clone();

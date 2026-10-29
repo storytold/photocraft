@@ -128,6 +128,45 @@ fn the_frame_loop_keeps_running_during_a_slow_job_and_esc_cancels_it() {
     assert!(h.query_by_label("Esc to cancel").is_none(), "the dialog closed");
 }
 
+/// Batch does not lock the open document, but it still needs the progress dialog (Save and Close
+/// otherwise looks like it did nothing).
+#[test]
+fn batch_shows_progress_without_locking_the_open_document() {
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let wait = gate.clone();
+    let started = h
+        .state_mut()
+        .session
+        .start_job(
+            "file.automate.batch",
+            json!({}),
+            "Batch",
+            false,
+            move |ctx| {
+                ctx.progress(0.5, "red.png (1/2)");
+                while !wait.load(Ordering::Relaxed) {
+                    ctx.check()?;
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                Ok(json!({"files": ["red.png", "green.png"], "errors": []}))
+            },
+            |_, v| Ok(v),
+        )
+        .unwrap();
+    let job = match started {
+        Started::Job(id) => id,
+        Started::Done(v) => panic!("ran inline: {v}"),
+    };
+    frames_until(&mut h, 10, |h| h.query_by_label("red.png (1/2)").is_some());
+    assert!(h.query_all_by_label("Batch").count() >= 2, "job label in the status bar and the dialog title");
+    assert!(h.query_by_label("Cancel").is_some(), "Cancel is on the progress dialog");
+    assert!(h.state().session.is_enabled("layer.new.layer"), "the open document stays editable");
+    gate.store(true, Ordering::Relaxed);
+    frames_until(&mut h, 5, |h| h.state().session.job(job).is_none());
+    assert!(h.state().ui.status.contains("Processed"), "{}", h.state().ui.status);
+}
+
 #[test]
 fn a_job_started_while_drawing_requests_the_follow_up_poll() {
     let mut h = app_harness();
