@@ -986,13 +986,17 @@ fn open_menu_without_the_current_family_never_jumps_later() {
 fn options_bar_menu_arrows_walk_on_while_recording_recent_fonts() {
     use crate::{PhotocraftApp, Services};
     use serde_json::json;
+    use std::sync::Arc;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
     app.run("file.new", json!({"width": 200, "height": 100})).unwrap();
-    app.run("type.create", json!({"text": "Sample", "font": "Inter", "size": 18})).unwrap();
+    app.run("type.create", json!({"text": "Sample", "font": "Family 00", "size": 18})).unwrap();
+    app.ui.tool_options.type_font = "Family 00".into();
+    // Keep enough rows after the initial family even when no system fonts are installed (#9492).
+    let families = Arc::new((0..10).map(|i| format!("Family {i:02}")).collect());
     let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).with_max_steps(SETTLE_STEPS).build_ui_state(
-        |ui, app| {
+        move |ui, app| {
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                ui.horizontal(|ui| crate::type_tool::options_bar(app, ui));
+                ui.horizontal(|ui| crate::type_tool::options_bar_with_families(app, ui, || Arc::clone(&families)));
             }
         },
         app,
@@ -1012,6 +1016,7 @@ fn options_bar_menu_arrows_walk_on_while_recording_recent_fonts() {
     once.sort();
     once.dedup();
     assert_eq!(once.len(), seen.len(), "each ↓ reaches a new family: {seen:?}");
+    assert_eq!(seen, ["Family 00", "Family 01", "Family 02", "Family 03", "Family 04"], "arrows keep walking alphabetically");
     assert_eq!(h.state().ui.recent_fonts.first(), seen.last(), "the picks are recorded");
 }
 

@@ -1,11 +1,16 @@
 use super::defaults::{apply, formatting_params, open_color_picker, shown_scale, target, target_doc, type_unit};
 use super::editing::{cancel, commit_with};
-use super::fonts::{font_picker, fonts_ready, selected_style, style_label, styles};
+use super::fonts::{families, font_picker_from, fonts_ready, selected_style, style_label, styles};
 use super::keys::is_vertical;
-use super::{Color32, LayerId, PhotocraftApp, Stroke, byte_of, json, text_layer};
+use super::{Arc, Color32, LayerId, PhotocraftApp, Stroke, byte_of, json, text_layer};
 
 /// Photoshop's Type options bar.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    options_bar_with_families(app, ui, families);
+}
+
+// Keep discovery lazy until fonts_ready; tests inject a catalog without changing shared font state.
+pub(super) fn options_bar_with_families(app: &mut PhotocraftApp, ui: &mut egui::Ui, families: impl FnOnce() -> Arc<Vec<String>>) {
     let t = crate::theme::Tokens::get(ui.ctx());
     // Show the target layer's (first-run) style, else the tool defaults.
     let shown = target(app).and_then(|(id, _)| {
@@ -33,7 +38,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     // Font family and style menus (one placeholder in their place while the fonts load).
     if fonts_ready(ui, 170.0 + ui.spacing().item_spacing.x + 110.0) {
-        if let Some(picked) = font_picker(app, ui, &mut fam, 170.0) {
+        if let Some(picked) = font_picker_from(app, ui, &mut fam, 170.0, families) {
             app.ui.tool_options.type_font = fam.clone();
             let st = styles(&fam);
             let picked = picked.filter(|s| st.contains(s));

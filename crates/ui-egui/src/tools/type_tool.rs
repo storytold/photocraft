@@ -61,6 +61,8 @@ pub(crate) use layout::{hit_layer, offset_at, shows_own_layout};
 #[cfg(test)]
 use options_bar::num_field;
 pub use options_bar::options_bar;
+#[cfg(test)]
+use options_bar::options_bar_with_families;
 pub(crate) use options_bar::styles_at;
 #[cfg(test)]
 pub(crate) use options_bar::{kerning_label, parse_kerning};

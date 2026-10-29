@@ -325,6 +325,18 @@ impl FontLibrary {
 /// Searchable font-family combo box, with the recent and favourite fonts of `app`. `Some` when a
 /// family was picked, holding the style when it was picked from the family's expanded styles.
 pub(super) fn font_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui, current: &mut String, width: f32) -> Option<Option<String>> {
+    font_picker_from(app, ui, current, width, families)
+}
+
+/// [`font_picker`] over the list `families` gives, asked for only when the menu is drawn (the
+/// options bar tests pass their own).
+pub(super) fn font_picker_from(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    current: &mut String,
+    width: f32,
+    families: impl FnOnce() -> Arc<Vec<String>>,
+) -> Option<Option<String>> {
     let preview = app.session.prefs().type_.font_preview;
     let mut library = FontLibrary { preview_text: preview_text(app), ..FontLibrary::of(app) };
     let changed = family_picker_in(ui, "type-font", current, width, &families(), preview, &mut library);
