@@ -165,6 +165,21 @@ fn normalize(n: [f64; 3]) -> Option<[f64; 3]> {
     (m > 0.0 && n.iter().all(|v| v.is_finite() && *v > 1e-4)).then(|| n.map(|v| v / m))
 }
 
+/// Resolves recorded DNG or camera metadata with the same precedence and validation as development.
+fn as_shot_neutral(s: &Sensor) -> Option<[f64; 3]> {
+    s.color
+        .as_shot_neutral
+        .or_else(|| s.color.as_shot_white_xy.and_then(|xy| s.color.xy_to_neutral(xy)))
+        .or_else(|| s.camera_wb.map(|m| m.map(|v| 1.0 / v)))
+        .and_then(normalize)
+}
+
+/// Recorded as-shot sensor gains, including DNG AsShotNeutral and AsShotWhiteXY.
+/// Returns `None` for missing or invalid metadata instead of estimating a balance.
+pub fn as_shot_white_balance_multipliers(s: &Sensor) -> Option<[f64; 3]> {
+    as_shot_neutral(s).map(|n| n.map(|v| 1.0 / v))
+}
+
 /// The camera-space neutral (max component 1) for `opts.white_balance`, as
 /// [`develop_sensor`] uses it (the same white balance [`crate::fit_look`] balances with).
 pub(crate) fn resolve_neutral(s: &Sensor, opts: &DevelopOptions, sc: &Scale, warnings: &mut Vec<String>) -> Result<[f64; 3]> {
@@ -173,14 +188,8 @@ pub(crate) fn resolve_neutral(s: &Sensor, opts: &DevelopOptions, sc: &Scale, war
         return Ok([1.0; 3]);
     }
     // White balance: camera-space neutral, max component 1.
-    let as_shot = s
-        .color
-        .as_shot_neutral
-        .or_else(|| s.color.as_shot_white_xy.and_then(|xy| s.color.xy_to_neutral(xy)))
-        .or_else(|| s.camera_wb.map(|m| m.map(|v| 1.0 / v)))
-        .and_then(normalize);
     Ok(match opts.white_balance {
-        WhiteBalance::AsShot => match as_shot {
+        WhiteBalance::AsShot => match as_shot_neutral(s) {
             Some(n) => n,
             None => {
                 warnings.push("no as-shot white balance in the file; estimated automatically (grey world)".into());

@@ -167,13 +167,14 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
     // without colour calibration), so re-developing changes only what the sliders change.
     let camera_look = default_look(bytes, &sensor);
     let mut opts = DevelopOptions { limits: limits(), exposure, demosaic: tuning.demosaic, tone, camera_look, ..Default::default() };
+    let as_shot_wb = photocraft_raw::as_shot_white_balance_multipliers(&sensor);
     let (base_wb, balance_warnings) = if tuning.white_balance != RawWhiteBalance::AsShot {
         let (m, warnings) = photocraft_raw::white_balance_multipliers(&sensor, tuning.white_balance.choice_from_file(bytes)).map_err(IoError::Raw)?;
         (Some(m), warnings)
     } else {
-        (sensor.camera_wb, Vec::new())
+        (as_shot_wb, Vec::new())
     };
-    let wb_applied = match (base_wb, sensor.camera_wb.is_some()) {
+    let wb_applied = match (base_wb, as_shot_wb.is_some()) {
         (Some(m), true) => {
             let g = wb_gains(tuning.temperature, tuning.tint);
             opts.white_balance = WhiteBalance::Multipliers([m[0] * g[0], m[1] * g[1], m[2] * g[2]]);
@@ -467,6 +468,60 @@ mod tests {
                     }
                 } else {
                     assert_ne!(pixels.data(), adjusted_pixels.data(), "{preset:?}: sensor gains must still apply");
+                }
+            }
+        }
+    }
+
+    /// DNG as-shot tags must enable sensor-stage sliders for every preset; missing or invalid tags must not.
+    #[test]
+    fn dng_as_shot_balance_applies_relative_sliders_at_the_sensor_stage() {
+        use photocraft_raw::testgen::{DngSpec, Val, mosaic, scene};
+        let (w, h) = (16, 16);
+        for metadata in ["neutral", "white_xy", "missing", "invalid"] {
+            let mut spec = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 12000));
+            spec.color_matrix1 = Some((21, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
+            match metadata {
+                "neutral" => spec.as_shot_neutral = Some([0.5, 1.0, 0.75]),
+                "white_xy" => spec.ifd0_extra.push((50729, Val::Rational(vec![(31271, 100000), (32902, 100000)]))),
+                "invalid" => spec.as_shot_neutral = Some([0.0, 1.0, 0.75]),
+                _ => {}
+            }
+            let bytes = spec.build();
+            let sensor = photocraft_raw::decode(&bytes, &limits()).unwrap();
+            assert!(sensor.camera_wb.is_none());
+            let valid = matches!(metadata, "neutral" | "white_xy");
+            assert_eq!(photocraft_raw::as_shot_white_balance_multipliers(&sensor).is_some(), valid);
+            for preset in RawWhiteBalance::ALL {
+                let base = RawTuning { white_balance: preset, ..Default::default() };
+                let (normal, applied) = import_raw_tuned("balance.dng", &bytes, &base).unwrap();
+                let adjusted_tuning = RawTuning { temperature: 25.0, tint: -15.0, ..base };
+                let (adjusted, adjusted_applied) = import_raw_tuned("balance.dng", &bytes, &adjusted_tuning).unwrap();
+                assert_eq!(applied, valid, "{metadata}: {preset:?}");
+                assert_eq!(adjusted_applied, valid);
+                let normal_pixels = crate::document_to_image(&normal.document, &mut Vec::new()).unwrap();
+                let adjusted_pixels = crate::document_to_image(&adjusted.document, &mut Vec::new()).unwrap();
+                if valid {
+                    assert_ne!(normal_pixels.data(), adjusted_pixels.data(), "{metadata}: {preset:?}");
+                    // Compare against development using the selected, resolved baseline with sensor gains.
+                    let (baseline, _) = photocraft_raw::white_balance_multipliers(&sensor, preset.choice()).unwrap();
+                    let gains = wb_gains(adjusted_tuning.temperature, adjusted_tuning.tint);
+                    let expected = photocraft_raw::develop_sensor(
+                        &sensor,
+                        &DevelopOptions { white_balance: WhiteBalance::Multipliers(std::array::from_fn(|c| baseline[c] * gains[c])), ..Default::default() },
+                    )
+                    .unwrap();
+                    let expected = developed_document("balance.dng", &bytes, "DNG", expected, "test").unwrap();
+                    let expected_pixels = crate::document_to_image(&expected.document, &mut Vec::new()).unwrap();
+                    assert_eq!(adjusted_pixels.data(), expected_pixels.data(), "{metadata}: {preset:?}");
+                    if preset == RawWhiteBalance::AsShot {
+                        let expected = photocraft_raw::develop_sensor(&sensor, &DevelopOptions::default()).unwrap();
+                        let expected = developed_document("balance.dng", &bytes, "DNG", expected, "test").unwrap();
+                        let expected_pixels = crate::document_to_image(&expected.document, &mut Vec::new()).unwrap();
+                        assert_eq!(normal_pixels.data(), expected_pixels.data(), "neutral sliders preserve the default rendering");
+                    }
+                } else {
+                    assert_eq!(normal_pixels.data(), adjusted_pixels.data(), "{metadata}: {preset:?}: defer relative sliders");
                 }
             }
         }
