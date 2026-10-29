@@ -1,0 +1,188 @@
+name: Fuzz (nightly)
+
+# Every fuzz target (cargo-fuzz / libFuzzer) for five minutes each night, thirty on Sundays, and
+# on demand, so a parser regression is caught within a day instead of waiting for someone to
+# start a run by hand. It never runs on pull requests, so it can't block one. Each target keeps
+# its corpus in the Actions cache between runs, so coverage grows night by night instead of
+# starting over.
+#
+# A crash fails that target's leg. The crashing input is uploaded as an artifact kept for three
+# days: reproduce it with `cargo fuzz run <target> <file>` in the crate, minimise it with
+# `cargo fuzz tmin`, and report it as SECURITY.md describes. On a public repository the job log
+# (with libFuzzer's base64 of small inputs and the stack trace) and the artifact are public too.
+
+on:
+  schedule:
+    # Monday to Saturday: a short run per target.
+    - cron: "11 1 * * 1-6"
+    # Sunday: a long run per target (the FUZZ_SECONDS expression below matches this string).
+    - cron: "11 1 * * 0"
+  workflow_dispatch:
+    inputs:
+      fuzz_seconds:
+        description: "Seconds per fuzz target (at most 2400: the leg also builds and minimises)"
+        default: "600"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fuzz-nightly
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  # No fuzz run may print a page (see ci.yml).
+  PHOTOCRAFT_NO_PRINT: "1"
+  LPDEST: photocraft-no-such-printer
+  # Type is drawn with the bundled fonts only: the same input then takes the same path on every
+  # runner, and no run starts with a scan of the installed fonts.
+  PHOTOCRAFT_NO_SYSTEM_FONTS: "1"
+
+jobs:
+  fuzz:
+    # The engine targets build most of the app with sanitizers (about 14 minutes on a 32-core
+    # machine, so several times that on a 4-core runner), a first or Sunday run also builds the
+    # seed generator, and Sunday fuzzes for 30 minutes.
+    timeout-minutes: 120
+    name: fuzz (${{ matrix.target.crate }}/${{ matrix.target.name }})
+    runs-on: ubuntu-latest
+    env:
+        FUZZ_SECONDS: ${{ inputs.fuzz_seconds || (github.event.schedule == '11 1 * * 0' && '1800') || '300' }}
+    strategy:
+      fail-fast: false
+      # Leaves runners free for pull-request CI while the run lasts.
+      max-parallel: 10
+      matrix:
+        target:
+          - { crate: psd, name: parse, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: descriptor, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: image_source_data, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: grd, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: ase }
+          - { crate: psd, name: aco }
+          - { crate: psd, name: patterns, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: filter_effects, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: metadata, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: tagged, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: resources, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: asl, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: abr, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: psd, name: atn, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: codecs, name: decode_any }
+          - { crate: codecs, name: decode_png }
+          - { crate: codecs, name: decode_jpeg }
+          - { crate: codecs, name: decode_tiff }
+          - { crate: codecs, name: decode_exr }
+          - { crate: codecs, name: decode_heif }
+          - { crate: codecs, name: decode_gif }
+          - { crate: codecs, name: decode_webp }
+          - { crate: codecs, name: decode_dds }
+          - { crate: codecs, name: decode_dicom }
+          - { crate: codecs, name: decode_dpx }
+          - { crate: codecs, name: decode_fits }
+          - { crate: codecs, name: decode_iff }
+          - { crate: codecs, name: decode_pcx }
+          - { crate: codecs, name: decode_pnm }
+          - { crate: codecs, name: decode_tga }
+          - { crate: codecs, name: decode_xpm }
+          - { crate: raw, name: develop }
+          - { crate: raw, name: ljpeg }
+          - { crate: affinity, name: preview }
+          - { crate: affinity, name: import_preview, args: "--features io" }
+          - { crate: affinity, name: stream }
+          - { crate: format, name: load }
+          - { crate: io, name: import_xcf }
+          - { crate: io, name: import_pdn }
+          - { crate: io, name: import_kra, dict: crates/io/fuzz/dicts/xml.dict }
+          - { crate: io, name: import_ora, dict: crates/io/fuzz/dicts/xml.dict }
+          - { crate: io, name: import_svg, dict: crates/io/fuzz/dicts/xml.dict }
+          - { crate: io, name: camera_raw_xmp, dict: crates/io/fuzz/dicts/xml.dict }
+          - { crate: io, name: export_roundtrip, dict: crates/psd/fuzz/dicts/psd.dict }
+          - { crate: cms, name: icc_profile, dict: crates/cms/fuzz/dicts/icc.dict }
+          - { crate: cms, name: lut_file, dict: crates/cms/fuzz/dicts/lut.dict }
+          - { crate: engine, name: kys, dict: crates/engine/fuzz/dicts/xml.dict }
+          - { crate: engine, name: prefs, dict: crates/engine/fuzz/dicts/json.dict }
+          - { crate: engine, name: file_info, dict: crates/engine/fuzz/dicts/xml.dict }
+          - { crate: engine, name: layer_xmp, dict: crates/engine/fuzz/dicts/xml.dict }
+          - { crate: plugins, name: manifest, dict: crates/plugins/fuzz/dicts/plugin.dict }
+          - { crate: plugins, name: module, dict: crates/plugins/fuzz/dicts/plugin.dict }
+          - { crate: text, name: font_bytes }
+          - { crate: text, name: type_layer }
+    steps:
+      # libFuzzer reads -max_total_time=0 as "no limit": the leg would run into the job timeout and
+      # lose its corpus. Refuse anything but 1..2400 seconds before building.
+      - name: Check the fuzz duration
+        run: |
+          case "$FUZZ_SECONDS" in
+            '' | *[!0-9]* | ?????*) ok=no ;;
+            *) if [ "$((10#$FUZZ_SECONDS))" -ge 1 ] && [ "$((10#$FUZZ_SECONDS))" -le 2400 ]; then ok=yes; else ok=no; fi ;;
+          esac
+          if [ "$ok" != yes ]; then
+            echo "::error::fuzz_seconds must be a whole number from 1 to 2400, got '$FUZZ_SECONDS'"
+            exit 1
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # nightly
+      # No rust-cache: the unpinned nightly changes the key every day, so each night would save
+      # several GB of sanitizer builds that the next night can't use, and push the gate's caches
+      # out of the repository's 10 GB.
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+      - name: Restore corpus
+        id: corpus
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/${{ matrix.target.crate }}/fuzz/corpus/${{ matrix.target.name }}
+          key: fuzz-corpus-${{ matrix.target.crate }}-${{ matrix.target.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: fuzz-corpus-${{ matrix.target.crate }}-${{ matrix.target.name }}-
+      # libFuzzer seldom builds a ZIP with valid CRCs and the XML Krita or OpenRaster need from
+      # nothing, so those targets also start from small valid files (a no-op for the others).
+      - name: Seed corpus
+        if: matrix.target.crate == 'io'
+        working-directory: crates/io/fuzz
+        run: python3 seeds.py ${{ matrix.target.name }}
+      # A target with no corpus yet, and every target on Sundays, also adds the small valid files
+      # its crate's seed generator builds in code (`fuzz/examples/seeds.rs`; the repository
+      # commits no binary seeds), so libFuzzer starts from real structure instead of guessing a
+      # header.
+      - name: Seed corpus (generated)
+        if: steps.corpus.outputs.cache-matched-key == '' || github.event.schedule == '11 1 * * 0'
+        working-directory: crates/${{ matrix.target.crate }}/fuzz
+        env:
+          TARGET: ${{ matrix.target.name }}
+        run: if [ -f examples/seeds.rs ]; then cargo run --example seeds -- "$TARGET"; fi
+      - name: Fuzz
+        working-directory: crates/${{ matrix.target.crate }}
+        env:
+          # Tokens of the format (signatures, tag and key names) that libFuzzer splices into inputs.
+          DICT: ${{ matrix.target.dict }}
+        # The decoders may ask for one buffer of up to 8 GiB (`photocraft_codecs::Limits::default`
+        # `max_alloc`), and a few header bytes are enough to declare that, so libFuzzer's malloc
+        # limit sits just above it: only an allocation past the budget counts as a crash. The
+        # runner has 16 GB.
+        run: |
+          dict=()
+          if [ -n "$DICT" ]; then dict=("-dict=$GITHUB_WORKSPACE/$DICT"); fi
+          cargo fuzz run ${{ matrix.target.name }} ${{ matrix.target.args }} -- "${dict[@]}" -max_total_time="$FUZZ_SECONDS" -malloc_limit_mb=9216 -rss_limit_mb=12288 -timeout=30
+      - name: Minimise corpus
+        if: success()
+        working-directory: crates/${{ matrix.target.crate }}
+        run: cargo fuzz cmin ${{ matrix.target.name }} ${{ matrix.target.args }} -- -malloc_limit_mb=9216 -rss_limit_mb=12288 -timeout=30
+      # Also after a crash (the input is in artifacts/, not the corpus), so the coverage that run
+      # found isn't lost; the corpus then stays unminimised until the next green night.
+      - name: Save corpus
+        if: ${{ !cancelled() && hashFiles(format('crates/{0}/fuzz/corpus/{1}/**', matrix.target.crate, matrix.target.name)) != '' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: crates/${{ matrix.target.crate }}/fuzz/corpus/${{ matrix.target.name }}
+          key: fuzz-corpus-${{ matrix.target.crate }}-${{ matrix.target.name }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Upload crash input
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: fuzz-${{ matrix.target.crate }}-${{ matrix.target.name }}
+          path: crates/${{ matrix.target.crate }}/fuzz/artifacts
+          retention-days: 3

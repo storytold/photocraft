@@ -1,0 +1,33 @@
+[package]
+name = "photocraft-text-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+# Standalone workspace so the main workspace's `crates/*` glob and lints do not apply (cargo-fuzz
+# needs nightly + sanitizer flags).
+[workspace]
+
+[dependencies]
+libfuzzer-sys = "0.4"
+photocraft-text = { path = ".." }
+photocraft-color = { path = "../../color" }
+photocraft-doc = { path = "../../doc" }
+
+[[bin]]
+name = "font_bytes"
+path = "fuzz_targets/font_bytes.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "type_layer"
+path = "fuzz_targets/type_layer.rs"
+test = false
+doc = false
+bench = false

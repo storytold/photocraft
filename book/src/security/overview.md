@@ -7,7 +7,7 @@ PhotoCraft processes complex attacker-controlled files and exposes automation th
 | Area | Implemented protections | Known limitations / future work |
 |---|---|---|
 | PSD/PSB | Header, channel, decoded-byte, nesting, and pattern limits; malformed/property tests; fuzz targets | Broader hostile corpus, aggregate work budgets, embedded-object coverage |
-| Raster codecs | Default dimension/pixel/allocation limits; decoder-specific budgets; malformed/property tests; fuzz targets | Continuous fuzzing and more format-specific semantic cases |
+| Raster codecs | Default dimension/pixel/allocation limits; decoder-specific budgets; malformed/property tests; fuzz targets | More format-specific semantic cases |
 | `.pcraft` | Manifest/blob/total-byte limits; bounded decompression; CRC/hash and version checks; fuzz target | Tighter complexity/entry limits and directory-bundle path-race analysis |
 | Engine commands | Error-return contract, focused bad-parameter tests, adversarial `panic_hunt` test | Continue eliminating input-derived panic and exhaustion paths |
 | Control TCP | Loopback binding; bearer-token authentication; rooted read/write authority; 1 MiB request lines; 8 MiB replies; 16 active connections; I/O timeouts | No general method capabilities, encryption, client identity, explicit JSON-depth policy, aggregate session-memory/command-duration budgets, or audit trail |
