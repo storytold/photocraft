@@ -493,7 +493,7 @@ a host app showing it in an `<iframe>`, uses the commands it would send to the d
 `request`, `execute`, `commands`, `inspect` and `screenshot` return promises. `openFile` returns at once:
 `true` when the file is queued to open on the next frame, `false` when the app isn't running yet.
 
-Errors reject with an `Error` carrying the method's message, and params that have no JSON (a cyclic object, a function) reject without running anything. Requests run on the UI's next frame, so a
+Errors reject with an `Error` carrying the method's message, and params that are not an object (a number, `NaN`, a string, a function) or have no JSON (a cyclic object) reject without running anything. Requests run on the UI's next frame, so a
 hidden tab (whose frames the browser pauses) answers when it is shown again.
 
 ## Transport limits
