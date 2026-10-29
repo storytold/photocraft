@@ -3,7 +3,7 @@
 //! This module owns the egui interaction contract only: consumers translate the resulting
 //! gestures and drag payloads into their own state changes or domain commands.
 
-use egui::{Pos2, Rect, Stroke};
+use egui::{Pos2, Rect};
 
 use crate::PhotocraftApp;
 use crate::theme::Tokens;
@@ -50,6 +50,67 @@ pub(crate) enum HierarchyDrop {
 pub(crate) struct HeaderDropCapabilities {
     pub(crate) item_drop: bool,
     pub(crate) group_drag: bool,
+    /// The target is inside the source group's own descendant hierarchy.
+    pub(crate) reject_group_drop: bool,
+}
+
+fn paint_group_drop_outline(ui: &egui::Ui, rect: Rect, color: egui::Color32) {
+    if !rect.is_positive() {
+        return;
+    }
+    let painter = ui.painter();
+    // Paint the border inward from the target's actual bounds: no outer inset or rounded corners.
+    for border in group_drop_outline_rects(rect) {
+        painter.rect_filled(border, egui::CornerRadius::ZERO, color);
+    }
+}
+
+fn group_drop_outline_rects(rect: Rect) -> [Rect; 4] {
+    [
+        Rect::from_min_max(rect.min, Pos2::new(rect.right(), (rect.top() + 4.0).min(rect.bottom()))),
+        Rect::from_min_max(Pos2::new(rect.left(), (rect.bottom() - 4.0).max(rect.top())), rect.max),
+        Rect::from_min_max(rect.min, Pos2::new((rect.left() + 4.0).min(rect.right()), rect.bottom())),
+        Rect::from_min_max(Pos2::new((rect.right() - 4.0).max(rect.left()), rect.top()), rect.max),
+    ]
+}
+
+pub(crate) fn paint_group_insertion_line(ui: &egui::Ui, rect: Rect, before: bool, color: egui::Color32) {
+    ui.painter().rect_filled(group_insertion_marker_rect(rect, before), egui::CornerRadius::ZERO, color);
+}
+
+fn group_insertion_marker_rect(rect: Rect, before: bool) -> Rect {
+    let center_y = if before { rect.top() - 1.0 } else { rect.bottom() + 1.0 };
+    Rect::from_min_max(Pos2::new(rect.left(), center_y - 2.0), Pos2::new(rect.right(), center_y + 2.0))
+}
+
+#[cfg(test)]
+mod insertion_marker_tests {
+    use super::{group_drop_outline_rects, group_insertion_marker_rect};
+    use egui::{Pos2, Rect};
+
+    #[test]
+    fn group_insertion_marker_is_four_pixels_tall_and_centered_in_the_gap() {
+        let row = Rect::from_min_max(Pos2::new(10.0, 30.0), Pos2::new(210.0, 60.0));
+
+        let marker = group_insertion_marker_rect(row, true);
+
+        assert_eq!(marker.height(), 4.0);
+        assert_eq!(marker.center().y, row.top() - 1.0);
+    }
+
+    #[test]
+    fn group_drop_outline_is_four_pixels_thick_on_all_sides() {
+        let target = Rect::from_min_max(Pos2::new(10.0, 30.0), Pos2::new(210.0, 90.0));
+
+        let [top, bottom, left, right] = group_drop_outline_rects(target);
+
+        assert_eq!(top.height(), 4.0);
+        assert_eq!(bottom.height(), 4.0);
+        assert_eq!(left.width(), 4.0);
+        assert_eq!(right.width(), 4.0);
+        assert_eq!(left.left(), target.left());
+        assert_eq!(right.right(), target.right());
+    }
 }
 
 /// Resolve a hierarchy-header drop without coupling to a consumer's command type.
@@ -99,7 +160,7 @@ pub(crate) fn asset_browser_header_target_with_capabilities(
     folder: &[String],
     capabilities: HeaderDropCapabilities,
 ) -> Option<AssetDrag> {
-    let HeaderDropCapabilities { item_drop, group_drag } = capabilities;
+    let HeaderDropCapabilities { item_drop, group_drag, reject_group_drop } = capabilities;
     if !item_drop && !group_drag {
         return None;
     }
@@ -117,18 +178,21 @@ pub(crate) fn asset_browser_header_target_with_capabilities(
             }
             _ => None,
         };
-        let hierarchy_drop = source.and_then(|(source_group, source_folder)| hierarchy_folder_drop(source_group, source_folder, group, folder, edge));
+        let hierarchy_drop = (!reject_group_drop)
+            .then_some(())
+            .and_then(|()| source)
+            .and_then(|(source_group, source_folder)| hierarchy_folder_drop(source_group, source_folder, group, folder, edge));
         match dragged {
             AssetDrag::Preset { scope: drag_scope, .. } if item_drop && drag_scope == scope => {
                 let t = Tokens::get(ui.ctx());
-                ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+                paint_group_drop_outline(ui, rect, t.accent);
             }
             AssetDrag::Group { .. } | AssetDrag::Folder { .. } if group_drag && hierarchy_drop.is_some() => {
                 if matches!(hierarchy_drop, Some(HierarchyDrop::MoveInto { before: None, .. })) {
                     let t = Tokens::get(ui.ctx());
-                    ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
+                    paint_group_drop_outline(ui, rect, t.accent);
                 } else {
-                    crate::widgets::drop_line(ui, rect, false, false, &Tokens::get(ui.ctx()));
+                    paint_group_insertion_line(ui, rect, true, Tokens::get(ui.ctx()).accent);
                 }
             }
             _ => {}
@@ -136,12 +200,12 @@ pub(crate) fn asset_browser_header_target_with_capabilities(
     }
     response.dnd_release_payload::<AssetDrag>().map(|payload| payload.as_ref().clone()).filter(|drag| match drag {
         AssetDrag::Preset { scope: drag_scope, .. } => item_drop && drag_scope == scope,
-        AssetDrag::Group { scope: drag_scope, name } if group_drag && drag_scope == scope => {
+        AssetDrag::Group { scope: drag_scope, name } if group_drag && drag_scope == scope && !reject_group_drop => {
             let pointer = ui.ctx().pointer_interact_pos();
             let edge = pointer.is_some_and(|p| header_drop_before(rect, p));
             hierarchy_folder_drop(name, &[], group, folder, edge).is_some()
         }
-        AssetDrag::Folder { scope: drag_scope, group: source_group, folder: source_folder } if group_drag && drag_scope == scope => {
+        AssetDrag::Folder { scope: drag_scope, group: source_group, folder: source_folder } if group_drag && drag_scope == scope && !reject_group_drop => {
             let pointer = ui.ctx().pointer_interact_pos();
             let edge = pointer.is_some_and(|p| header_drop_before(rect, p));
             hierarchy_folder_drop(source_group, source_folder, group, folder, edge).is_some()

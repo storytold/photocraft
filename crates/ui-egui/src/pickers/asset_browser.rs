@@ -12,7 +12,7 @@ use crate::pickers::asset_browser_hierarchy::{HierarchyFolder, draw_hierarchy, h
 use crate::pickers::asset_browser_interaction::{
     AssetDrag, ContextMenuAction, HeaderDropCapabilities, HierarchyDrop, asset_browser_header_target_with_capabilities, asset_browser_item_gesture,
     asset_browser_item_target, context_menu_target, draw_group_context_menu, draw_item_context_menu, header_drop_before, hierarchy_folder_drop,
-    item_row_edge_targets,
+    item_row_edge_targets, paint_group_insertion_line,
 };
 use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, list_row as asset_browser_list_row};
 use crate::pickers::picker_state::PresetUi;
@@ -21,7 +21,7 @@ use crate::theme::Tokens;
 
 pub(crate) const MIN_THUMB: f32 = 20.0;
 const GROUP_HEADER_HEIGHT: f32 = 30.0;
-const GROUP_DRAG_GHOST_OPACITY: f32 = 0.6;
+const GROUP_DRAG_GHOST_OPACITY: f32 = 0.4;
 
 /// Asset-neutral item identity and label consumed by the shared picker browser.
 pub(crate) struct ItemView {
@@ -131,7 +131,45 @@ fn hierarchy_action(drop: HierarchyDrop) -> BrowserAction {
     }
 }
 
-use crate::pickers::asset_browser_groups::{header as asset_browser_header, paint as paint_asset_browser_header};
+fn group_is_descendant(st: &PresetUi, panel: &str, source: &str, target: &str) -> bool {
+    let Some(parents) = st.group_parent.get(panel) else { return false };
+    is_group_descendant(parents, source, target)
+}
+
+fn is_group_descendant(parents: &std::collections::BTreeMap<String, String>, source: &str, target: &str) -> bool {
+    let mut current = target;
+    let mut seen = BTreeSet::new();
+    while seen.insert(current.to_string()) {
+        let Some(parent) = parents.get(current) else { return false };
+        if parent == source {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
+#[cfg(test)]
+mod group_drop_tests {
+    use super::is_group_descendant;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn rejects_dropping_a_group_into_any_descendant() {
+        let parents = BTreeMap::from([
+            ("Child".to_string(), "Parent".to_string()),
+            ("Grandchild".to_string(), "Child".to_string()),
+            ("Other".to_string(), "Elsewhere".to_string()),
+        ]);
+
+        assert!(is_group_descendant(&parents, "Parent", "Child"));
+        assert!(is_group_descendant(&parents, "Parent", "Grandchild"));
+        assert!(!is_group_descendant(&parents, "Parent", "Other"));
+        assert!(!is_group_descendant(&parents, "Parent", "Parent"));
+    }
+}
+
+use crate::pickers::asset_browser_groups::{header as asset_browser_header, inset_row_rect, paint as paint_asset_browser_header};
 
 /// Browser-specific layout and presentation, supplied by each asset consumer.
 /// `flush` lays the grid out as Photoshop's Swatches panel: the cells touch, square-cornered and
@@ -386,7 +424,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
         .min_scrolled_height(scroll_height)
         .auto_shrink([false, false])
         .show(ui, |ui| {
-            ui.spacing_mut().item_spacing = vec2(0.0, 1.0);
+            ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
             // Keep drag targets reachable when a preset or hierarchy node is dragged beyond the
             // current viewport. This behavior belongs to the shared scrollable browser, not to a
             // particular asset consumer.
@@ -416,7 +454,8 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     hidden_groups.insert(g.name.clone());
                 }
                 let (hr, hresp) = if let Some(paint) = paint_group.as_deref_mut() {
-                    let (r, response) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::click_and_drag());
+                    let (r, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
+                    let response = ui.interact(inset_row_rect(r, depth), allocated.id, Sense::click_and_drag());
                     paint(ui, r, g, open, response.hovered() || response.dragged(), 1.0);
                     let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
                     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, &g.name));
@@ -432,11 +471,17 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 let header_released = asset_browser_header_target_with_capabilities(
                     ui,
                     &hresp,
-                    hr,
+                    inset_row_rect(hr, depth),
                     panel,
                     &g.name,
                     &[],
-                    HeaderDropCapabilities { item_drop: capabilities.item_drop, group_drag: capabilities.group_drag },
+                    HeaderDropCapabilities {
+                        item_drop: capabilities.item_drop,
+                        group_drag: capabilities.group_drag,
+                        reject_group_drop: hresp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                            matches!(payload.as_ref(), AssetDrag::Group { scope, name } if scope == panel && group_is_descendant(st, panel, name, &g.name))
+                        }),
+                    },
                 );
                 if hresp.clicked() {
                     let k = format!("{panel}/{}", escape_hierarchy_key_part(&g.name));
@@ -476,7 +521,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     drag = Some((gi, p));
                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                     // Reuse the actual header painter on a tooltip layer so the drag ghost stays
-                    // visually identical to the row, including its background and spacing.
+                    // visually identical to the painted row, including consumer-specific styling.
                     let layer = egui::LayerId::new(egui::Order::Tooltip, egui::Id::new(("preset-group-drag", panel)));
                     let gr = Rect::from_center_size(p, vec2(hr.width(), hr.height()));
                     let ghost_ui = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(gr));
@@ -485,7 +530,6 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     } else {
                         crate::pickers::asset_browser_groups::paint_with_opacity(&ghost_ui, gr, open, &g.name, depth, None, GROUP_DRAG_GHOST_OPACITY);
                     }
-                    ghost_ui.painter().rect_stroke(gr, CornerRadius::ZERO, Stroke::new(1.0, t.accent), egui::StrokeKind::Outside);
                 }
                 if capabilities.group_drag
                     && hresp.drag_stopped()
@@ -493,7 +537,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 {
                     released = Some((gi, p));
                 }
-                headers.push((gi, hr, g.name.clone()));
+                headers.push((gi, inset_row_rect(hr, depth), g.name.clone()));
                 // Keep each group's assets directly beneath its header. The previous separate
                 // content pass placed every swatch after every group header, so expanding a group
                 // could not reveal its assets in the expected place.
@@ -516,7 +560,9 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                         let st_cell = std::cell::RefCell::new(&mut *st);
                         let ev_cell = std::cell::RefCell::new(&mut ev);
                         let mut draw_folder = |ui: &mut egui::Ui, folder: &HierarchyFolder<'_, ItemView>, folder_open: bool, folder_depth: usize| {
-                            let (fr, fresp) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::click_and_drag());
+                            let (fr, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
+                            let row_depth = folder_depth + 1 + depth;
+                            let fresp = ui.interact(inset_row_rect(fr, row_depth), allocated.id, Sense::click_and_drag());
                             fresp.widget_info(|| {
                                 egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, folder.path.last().map(String::as_str).unwrap_or(""))
                             });
@@ -525,18 +571,24 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 fr,
                                 folder_open,
                                 folder.path.last().map(String::as_str).unwrap_or(""),
-                                folder_depth + 1 + depth,
+                                row_depth,
                                 fresp.hovered(),
                                 Some(folder.count),
                             );
                             if let Some(dragged) = asset_browser_header_target_with_capabilities(
                                 ui,
                                 &fresp,
-                                fr,
+                                inset_row_rect(fr, row_depth),
                                 panel,
                                 &g.name,
                                 &folder.path,
-                                HeaderDropCapabilities { item_drop: capabilities.item_drop, group_drag: capabilities.group_drag },
+                                HeaderDropCapabilities {
+                                    item_drop: capabilities.item_drop,
+                                    group_drag: capabilities.group_drag,
+                                    reject_group_drop: fresp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                                        matches!(payload.as_ref(), AssetDrag::Group { scope, name } if scope == panel && group_is_descendant(&**st_cell.borrow(), panel, name, &g.name))
+                                    }),
+                                },
                             ) {
                                 let edge = ui.ctx().pointer_interact_pos().is_some_and(|p| header_drop_before(fr, p));
                                 folder_releases.push((dragged, g.name.clone(), folder.path.clone(), edge));
@@ -780,8 +832,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                         None => headers.last().map(|(_, r, _)| *r),
                     };
                     if let Some(r) = anchor {
-                        let y = if before.is_some() { r.top() - 1.0 } else { r.bottom() + 1.0 };
-                        ui.painter().line_segment([pos2(r.left(), y), pos2(r.right(), y)], Stroke::new(2.0, t.accent));
+                        paint_group_insertion_line(ui, r, before.is_some(), t.accent);
                     }
                 }
             }
@@ -792,7 +843,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
         let from_name = groups.get(from).map(|g| g.name.clone());
         if let Some(from_name) = from_name {
             if let Some((_, rect, target)) = headers.iter().find(|(i, rect, _)| *i != from && rect.contains(p)) {
-                if domain_hierarchy_actions {
+                if domain_hierarchy_actions && !group_is_descendant(st, panel, &from_name, target) {
                     let edge = header_drop_before(*rect, p);
                     if let Some(action) = hierarchy_folder_drop(&from_name, &[], target, &[], edge) {
                         ev.push(hierarchy_action(action));
