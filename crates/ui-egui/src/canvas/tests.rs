@@ -2235,6 +2235,39 @@ fn a_one_pixel_selection_traces_at_hundred_percent_on_a_scaled_display() {
 }
 
 #[test]
+fn marquee_outline_survives_new_opened_and_switched_canvases() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
+    // File import also enters through add_document, with its own id and view.
+    let imported = photocraft_doc::Document::new("opened", photocraft_doc::Size::new(80, 60), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+    app.session.add_document(imported, None);
+    app.sync_views();
+    for idx in [0, 1, 0, 1] {
+        app.session.set_active(idx);
+        for x in [4, 20, 8] {
+            app.run("select.rect", json!({"x": x, "y": 6, "width": 12, "height": 15})).unwrap();
+            let view = app.ui.views[idx].clone();
+            let mut out = ctx.run_ui(Default::default(), |ui| {
+                canvas_view(&mut app, ui, idx, Rect::from_min_size(Pos2::ZERO, vec2(320.0, 240.0)), view.clone(), true);
+            });
+            out.textures_delta.clear();
+            let (id, _, segments) = app.outline_cache.as_ref().unwrap();
+            assert_eq!(*id, app.session.documents()[idx].doc.id);
+            assert!(!segments.is_empty(), "canvas {idx}, marquee x={x}");
+        }
+    }
+    app.ui.view.show.selection_edges = false;
+    app.outline_cache = None;
+    let view = app.ui.views[1].clone();
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        canvas_view(&mut app, ui, 1, Rect::from_min_size(Pos2::ZERO, vec2(320.0, 240.0)), view.clone(), true);
+    });
+    out.textures_delta.clear();
+    assert!(app.outline_cache.is_none(), "intentional hiding remains respected");
+}
+
+#[test]
 fn a_secondary_canvas_does_not_overwrite_the_main_canvas_scale() {
     // #1943 review: a document window can sit on a display with another scale; only the
     // primary canvas records `app.ppp`, so the main mapping doesn't change under it.
