@@ -180,7 +180,13 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
     let orig = num(f, orig_key);
     let px = num(f, key);
     let ppi = pt_per_in(f);
-    let mut v = to_unit(px, &unit, orig, res, ppi) as f32;
+    let image_size = f.get("__command").and_then(Value::as_str) == Some("image.imageSize");
+    let shown_px = if image_size && unit == "px" { px.round().max(1.0) } else { px };
+    let mut v = to_unit(shown_px, &unit, orig, res, ppi) as f32;
+    if image_size {
+        // Blurring an unedited rounded field must not overwrite fractional resampling state.
+        v = crate::widgets::fmt_num_prec(f64::from(v), crate::widgets::unit_decimals(&unit)).parse().unwrap_or(v);
+    }
     // The engine's 300000 px limit in this unit (never below 30000), so a large document's size
     // isn't clamped when the field is drawn: egui clamps the shown value to the range, and the
     // field reports that as an edit (#4162).
@@ -220,7 +226,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert("width".into(), json!(ow));
         f.insert("height".into(), json!(oh));
     }
-    let (w, h) = (num(f, "width").round(), num(f, "height").round());
+    let (w, h) = (num(f, "width").round().max(1.0), num(f, "height").round().max(1.0));
     info_row(ui, tl!("Image Size:"), crate::i18n::fmt(tl!("{size} (was {old})"), &[("size", &human_bytes(w * h * bpp)), ("old", &human_bytes(ow * oh * bpp))]));
     info_row(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64));
     ui.add_space(6.0);
@@ -304,7 +310,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let old = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
                 if old > 0.0 && old.is_finite() {
                     for key in ["width", "height"] {
-                        f.insert(key.into(), json!((num(f, key) * r / old).max(1.0)));
+                        f.insert(key.into(), json!(num(f, key) * r / old));
                     }
                 }
             }

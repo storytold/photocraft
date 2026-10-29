@@ -160,15 +160,19 @@ fn typed_zero_width_shows_the_applied_size() {
 
 /// An Image Size dialog for a 100 x 50 px, 72 ppi document with Resample off, shown in `unit`.
 fn resample_off_dialog(unit: &str) -> (egui_kittest::Harness<'static, PhotocraftApp>, u64) {
+    resolution_dialog((100, 50), 72.0, unit, "none")
+}
+
+fn resolution_dialog(size: (u32, u32), resolution: f64, unit: &str, resample: &str) -> (egui_kittest::Harness<'static, PhotocraftApp>, u64) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.session.execute("file.new", json!({"width": 100, "height": 50, "resolution": 72})).unwrap();
+    app.session.execute("file.new", json!({"width": size.0, "height": size.1, "resolution": resolution})).unwrap();
     let mut h = egui_kittest::Harness::builder()
         .with_size(egui::vec2(1400.0, 900.0))
         .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::show(app, ui.ctx()), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     let id = open(h.state_mut(), "image.imageSize").unwrap();
     let d = h.state_mut().ui.dialog_mut(id).unwrap();
-    d.fields.insert("resample".into(), json!("none"));
+    d.fields.insert("resample".into(), json!(resample));
     d.fields.insert("__unit".into(), json!(unit));
     h.run_steps(3);
     (h, id)
@@ -352,4 +356,46 @@ fn resolution_edit_without_resampling_keeps_pixels_in_every_unit() {
         let doc = &h.state().session.active().unwrap().doc;
         assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(100, 50), 300.0), "{unit}");
     }
+}
+
+#[test]
+fn tiny_resolution_round_trip_preserves_dimensions() {
+    use egui_kittest::kittest::Queryable;
+    for unit in ["px", "percent", "in"] {
+        let (mut h, id) = resolution_dialog((16, 8), 300.0, unit, "nearest");
+        type_into(&mut h, 2, "30");
+        assert!(h.query_by_label("2 px × 1 px").is_some(), "{unit}: valid preview dimensions");
+        type_into(&mut h, 2, "300");
+        assert!(h.query_by_label("16 px × 8 px").is_some(), "{unit}: round trip must retain the original print size: {:?}", fields(&h));
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let doc = &h.state().session.active().unwrap().doc;
+        assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(16, 8), 300.0), "{unit}");
+    }
+}
+
+#[test]
+fn tiny_resolution_preview_matches_confirmed_minimum_size() {
+    use egui_kittest::kittest::Queryable;
+    for unit in ["px", "percent", "in"] {
+        let (mut h, id) = resolution_dialog((4, 2), 300.0, unit, "nearest");
+        type_into(&mut h, 2, "1");
+        assert!(h.query_by_label("1 px × 1 px").is_some(), "{unit}");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let doc = &h.state().session.active().unwrap().doc;
+        assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(1, 1), 1.0), "{unit}");
+    }
+}
+
+#[test]
+fn dimension_edit_between_resolution_edits_sets_a_new_print_size() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, id) = resolution_dialog((16, 8), 300.0, "px", "nearest");
+    type_into(&mut h, 2, "30");
+    type_into(&mut h, 0, "4");
+    assert!(h.query_by_label("4 px × 2 px").is_some());
+    type_into(&mut h, 2, "300");
+    assert!(h.query_by_label("40 px × 20 px").is_some());
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let doc = &h.state().session.active().unwrap().doc;
+    assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(40, 20), 300.0));
 }
