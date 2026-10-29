@@ -34,6 +34,8 @@ pub(super) fn humanize(key: &str) -> String {
         "darkTheme" => return "Dark Theme".into(),
         "lightTheme" => return "Light Theme".into(),
         "automaticallyCheckUpdates" => return "Automatically Check for Updates".into(),
+        // Units & Rulers › Column Size (in points), as translated for New Guide Layout.
+        "columnWidth" => return "Column width".into(),
         _ => {}
     }
     // These controls appear only for WebP, so reuse the existing translated labels.
@@ -476,7 +478,9 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                     }
                 } else {
                     let mut x = n.as_f64().unwrap_or(0.0);
-                    ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num))
+                    // Column Size is stored in points (Image Size's Columns unit, #6214).
+                    let suffix = if matches!(path.as_str(), "unitsAndRulers.columnWidth" | "unitsAndRulers.gutter") { " pt" } else { "" };
+                    ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).suffix(suffix).custom_parser(crate::widgets::parse_num))
                         .labelled_by(value_label.id);
                     obj.insert(k, json!(x));
                 }
