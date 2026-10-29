@@ -53,7 +53,10 @@ what an agent can't finish alone.
   re-saved unmodified would not reopen (#2374, closed 2026-10-10), Photoshop 26.6 cannot reopen our files (#1281), "PSD not
   opening in Photoshop" (#2469), a CS2-era smart object unavailable (#2465, fixed 2026-10-12), PSB smart object
   blank (#1764), perspective placed layers flattened (#579, fixed by #426), PSB > 4 GB fails on Windows (#375; a generated 4.38 GB PSB opens, saves and re-opens
-  through io on Windows, io tests/it/large_files.rs, 2026-10-13).
+  through io on Windows, io tests/it/large_files.rs, 2026-10-13), a 117,504 × 22,464 px print TIFF
+  refused at 2^30 px (#8456, #8169; opens since 2026-10-22, decoded a group of rows at a time into
+  the layer, refused with an error when it doesn't fit in free memory; a single-strip file is still
+  decoded whole beside the layer; layered TIFFs over the limit and huge PSBs still decode whole).
   No test opens our exports in a third-party editor (FILE-216-4). Mockups whose smart object
   uses Transform Warp's Cylinder re-rendered flat after Replace Contents (#4112, fixed 2026-10-14;
   vertical cylinders and ones with perspective are still unread).
@@ -403,6 +406,7 @@ what an agent can't finish alone.
 | 2026-10-27 | minor | G9: 12 of 181 preferences do nothing, the scorecard's count with integration batch 9 (#9775) on main; no estimate changed |
 | 2026-10-26 | minor | Expand/Contract/Border distance work, mask reads and replacement cropped to nonzero bounds; bounded distances for radii ≤5; 36 MP exact-output comparisons improve 1.54–37.82× across eight cases; percentages, estimates and scorecard budgets unchanged |
 | 2026-10-23 | minor | G7: Select and Mask workspace (Photoshop's layout, its tools as `select.refineEdge` edits, Real-Time Refinement, High Quality Preview), #7069, #8148; Refine Hair, Object Aware and Presets remain; no estimate changed |
+| 2026-10-22 | minor | G1: flat TIFFs up to 300,000 px a side open (was 2^30 px); the #8456 banner (117,504 × 22,464 px) opens in 3.3 s; 30,000² opens in 1.1 s at 3.86 GB peak (was 6.8 s, 6.43 GB); #8169; no estimate changed |
 | 2026-10-25 | minor | G9: the count of preferences that do nothing is the scorecard's again, 12 of 178 (it still said 24 of 171, from 2026-10-15); no estimate changed |
 | 2026-10-25 | minor | G6: Art History Brush landed as partial (TOOL-213-20, #1610), so no toolbar tool is missing; no percentage or estimate changed |
 | 2026-10-23 | minor | G4: hard-round built-in presets use 5% spacing (#8842), guarded by large-stroke outline and pressure-opacity pixel regressions at 8/16/32-bit; percentages and estimates unchanged |
