@@ -4,7 +4,7 @@
 //! `cargo xtask corpus --pixls` fetches, `cargo xtask test-corpus` runs.
 #![cfg(feature = "corpus")]
 
-use photocraft_raw::{Limits, RawError, RawFormat};
+use photocraft_raw::{Limits, RawFormat};
 use std::path::PathBuf;
 
 fn pixls(name: &str) -> PathBuf {
@@ -116,6 +116,51 @@ fn decode_matches_the_measured_oracles() {
 }
 
 #[test]
+fn automatic_backend_preserves_existing_sensor_samples() {
+    use photocraft_raw::{DecodeBackend, decode_with_backend};
+    let files = WANTS.iter().map(|w| w.file).chain(["DSC_0750.NEF", "DSC_0751.NEF", "DSC_0753.NEF", "DSC_0754.NEF"]);
+    for file in files {
+        let bytes = std::fs::read(pixls(file)).unwrap();
+        let old = decode_with_backend(&bytes, &Limits::default(), DecodeBackend::Builtin).unwrap();
+        let new = photocraft_raw::decode(&bytes, &Limits::default()).unwrap();
+        assert_eq!(old.data.len(), new.data.len(), "{file}");
+        let mismatch = old.data.iter().zip(&new.data).position(|(a, b)| a != b);
+        assert!(mismatch.is_none(), "{file}: first sensor difference at {mismatch:?}");
+        assert_eq!(old.black, new.black, "{file}");
+        assert_eq!(old.white, new.white, "{file}");
+        assert_eq!((old.active, old.crop, old.orientation), (new.active, new.crop, new.orientation), "{file}");
+        assert_eq!(old.cfa, new.cfa, "{file}");
+        assert_eq!(old.color, new.color, "{file}");
+        assert_eq!(old.camera_wb, new.camera_wb, "{file}");
+    }
+}
+
+#[cfg(feature = "flashraw")]
+#[test]
+fn cr3_raw_craw_and_compressed_xtrans_decode_sensor_data() {
+    use photocraft_raw::{DecodeBackend, decode_with_backend};
+    for (file, format, crop) in [
+        ("Canon_EOS_R5_RAW_ISO_100_nocrop_nodual.CR3", RawFormat::Cr3, (8192, 5464)),
+        ("Canon_EOS_R5_CRAW_ISO_100_nocrop_nodual.CR3", RawFormat::Cr3, (8192, 5464)),
+        ("DSCF0021.RAF", RawFormat::Raf, (7728, 5152)),
+    ] {
+        let bytes = std::fs::read(pixls(file)).unwrap();
+        let s = decode_with_backend(&bytes, &Limits::default(), DecodeBackend::FlashRaw).unwrap_or_else(|e| panic!("{file}: {e}"));
+        assert_eq!(s.format, format);
+        assert_eq!((s.crop.width, s.crop.height), crop, "{file}");
+        assert_eq!(s.samples, 1);
+        assert_eq!(s.data.len(), s.width * s.height);
+        assert!(s.camera_wb.is_some(), "{file}");
+        assert!(s.color.calibrations.is_empty(), "PhotoCraft's preview fit, not FlashRaw's camera DB");
+        let mut window = s;
+        window.crop.width = 128;
+        window.crop.height = 96;
+        let dev = photocraft_raw::develop_sensor(&window, &Default::default()).unwrap();
+        assert_eq!(dev.rgb.len(), 128 * 96 * 3);
+    }
+}
+
+#[test]
 fn developing_produces_the_crop_in_16bit_rgb() {
     for w in WANTS {
         let bytes = std::fs::read(pixls(w.file)).unwrap_or_else(|e| panic!("{}: {e}", w.file));
@@ -179,12 +224,24 @@ fn packed_nef_opens_full_sensor_and_metadata_crop_at_both_depths() {
     }
 }
 
-/// The E-5 file is the documented known-unsupported case: later Olympus bodies store packed
-/// (compressed) sensor data. The error must say so, never panic, and the file still previews.
+/// Packed ORF now uses a full FlashRaw sensor plane; feature-disabled builds
+/// retain the documented unsupported result and both builds expose the preview.
 #[test]
-fn packed_orf_reports_the_documented_gap() {
+fn packed_orf_sensor_decodes_with_flashraw() {
     let bytes = std::fs::read(pixls("_7061961_copy.ORF")).unwrap();
-    let err = photocraft_raw::decode(&bytes, &Limits::default()).unwrap_err();
-    assert!(matches!(err, RawError::Unsupported(ref m) if m.contains("Olympus compressed")), "{err}");
+    #[cfg(feature = "flashraw")]
+    {
+        let (sensor, backend) = photocraft_raw::decode_with_backend_traced(&bytes, &Limits::default(), photocraft_raw::DecodeBackend::Auto).unwrap();
+        assert_eq!(backend, photocraft_raw::DecodeBackend::FlashRaw);
+        assert_eq!((sensor.width, sensor.height, sensor.samples), (4100, 3084, 1));
+        assert_eq!(sensor.data.len(), 4100 * 3084);
+        assert!(sensor.data.iter().any(|v| *v > 0));
+        assert!(sensor.cfa.is_some());
+    }
+    #[cfg(not(feature = "flashraw"))]
+    {
+        let err = photocraft_raw::decode(&bytes, &Limits::default()).unwrap_err();
+        assert!(matches!(err, photocraft_raw::RawError::Unsupported(ref m) if m.contains("Olympus compressed")), "{err}");
+    }
     assert!(photocraft_raw::embedded_preview(&bytes).is_some(), "the camera's JPEG preview is still reachable");
 }

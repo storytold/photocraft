@@ -95,11 +95,15 @@ fn to_srgb(rgb: &[u16]) -> Vec<f32> {
     out.iter().map(|v| f32::from(*v) / 65535.0).collect()
 }
 
-fn write_png(path: &str, px: &[f32], w: usize, h: usize) {
+fn write_png(path: &str, px: &[f32], w: usize, h: usize) -> Result<(), Box<dyn std::error::Error>> {
     let (s, sw, sh) = shrink(px, w, h, 1200);
     let bytes: Vec<u8> = s.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8).collect();
-    let img = Image::from_u8(sw as u32, sh as u32, ChannelLayout::Rgb, bytes).expect("image");
-    std::fs::write(path, codecs::encode(&img, Format::Png, &EncodeOptions::default()).expect("png")).expect("write");
+    let img = Image::from_u8(sw as u32, sh as u32, ChannelLayout::Rgb, bytes)?;
+    if let Some(parent) = std::path::Path::new(path).parent().filter(|p| !p.as_os_str().is_empty()) {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, codecs::encode(&img, Format::Png, &EncodeOptions::default())?)?;
+    Ok(())
 }
 
 /// Times the fit on a synthetic 6034×4012 NEF-like raw with a 1632×1086 camera-style preview.
@@ -204,7 +208,15 @@ fn main() {
         };
         let dev_ms = t.elapsed().as_secs_f64() * 1e3;
         // Independent check against the largest preview.
-        let p = photocraft_raw::embedded_preview(&bytes).expect("preview");
+        let Some(p) = photocraft_raw::embedded_preview(&bytes) else {
+            eprintln!("{name}: sensor decoded/developed; no JPEG reference for colour comparison");
+            if let Some(dir) = &png
+                && let Err(error) = write_png(&format!("{dir}/{name}-before.png"), &to_srgb(&before.rgb), before.width as usize, before.height as usize)
+            {
+                eprintln!("{name}: {error}");
+            }
+            continue;
+        };
         let raw_jpeg = codecs::decode_as_with(Format::Jpeg, p.jpeg, &codecs::DecodeOptions { keep_orientation: true, ..Default::default() }).expect("jpeg");
         let own = raw_jpeg.meta.exif.as_deref().map_or(1, codecs::exif_orientation);
         let o = if own != 1 { own } else { codecs::exif_orientation(&bytes) };
@@ -227,11 +239,32 @@ fn main() {
             eprintln!("{name}: to_xyz {:?}\n  tone {:?}", l.to_xyz, l.tone.as_ref().map(|t| t.knots()));
         }
         if let Some(dir) = &png {
-            write_png(&format!("{dir}/{name}-before.png"), &b, dw, dh);
-            if let Some(a) = &a {
-                write_png(&format!("{dir}/{name}-after.png"), a, dw, dh);
+            if let Err(error) = write_png(&format!("{dir}/{name}-before.png"), &b, dw, dh) {
+                eprintln!("{name}: {error}");
             }
-            write_png(&format!("{dir}/{name}-camera-jpeg.png"), &jpx, jw, jh);
+            if let Some(a) = &a
+                && let Err(error) = write_png(&format!("{dir}/{name}-after.png"), a, dw, dh)
+            {
+                eprintln!("{name}: {error}");
+            }
+            if let Err(error) = write_png(&format!("{dir}/{name}-camera-jpeg.png"), &jpx, jw, jh) {
+                eprintln!("{name}: {error}");
+            }
         }
+    }
+}
+
+#[cfg(test)]
+mod output_tests {
+    #[test]
+    fn missing_output_directory_is_created_and_a_file_parent_is_an_error() {
+        let root = std::env::temp_dir().join(format!("photocraft-rawlook-output-{}", std::process::id()));
+        let path = root.join("nested/out.png");
+        super::write_png(path.to_str().unwrap(), &[0.2, 0.4, 0.6], 1, 1).unwrap();
+        assert!(path.is_file());
+        let blocked = root.join("blocked");
+        std::fs::write(&blocked, b"file").unwrap();
+        assert!(super::write_png(blocked.join("out.png").to_str().unwrap(), &[0.2, 0.4, 0.6], 1, 1).is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

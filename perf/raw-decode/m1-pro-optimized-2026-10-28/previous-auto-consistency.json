@@ -1,0 +1,6 @@
+{
+  "method": "Rust DefaultHasher 64-bit fingerprints over full Vec<u16> and Debug Sensor with empty data; same toolchain; consistency check, not cryptographic proof.",
+  "unchanged_previously_supported": 68,
+  "changed": [],
+  "new_successes": 20
+}

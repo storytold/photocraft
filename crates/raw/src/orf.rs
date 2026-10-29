@@ -68,6 +68,11 @@ pub(crate) fn preview_range(t: &Tiff) -> Option<(usize, usize)> {
 }
 
 pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
+    decode_with_plane(t, limits, None)
+}
+
+/// Builds PhotoCraft metadata around either decoder's sensor-domain samples.
+pub(crate) fn decode_with_plane(t: &Tiff, limits: &Limits, plane: Option<crate::sensor::Plane>) -> Result<Sensor> {
     let ifds = t.all_ifds();
     let raw = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("ORF has no IFD0"))?;
     let width = u64::from(t.tag_uint(&raw, tag::IMAGE_WIDTH).unwrap_or(0));
@@ -80,10 +85,16 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         return Err(RawError::malformed("ORF IFD0 has no readable strip byte counts"));
     }
     let stored: u64 = counts.iter().map(|&c| u64::from(c)).sum();
-    if t.tag_uint(&raw, tag::COMPRESSION).unwrap_or(1) != 1 || stored < width.saturating_mul(height).saturating_mul(2) {
+    if plane.is_none() && (t.tag_uint(&raw, tag::COMPRESSION).unwrap_or(1) != 1 || stored < width.saturating_mul(height).saturating_mul(2)) {
         return Err(RawError::unsupported("Olympus compressed (or packed) ORF is not decoded"));
     }
-    let plane = read_plane(t, &raw, limits, JpegLayout::Flat)?;
+    let plane = match plane {
+        Some(p) => {
+            p.validate_geometry(width as usize, height as usize, 1, limits)?;
+            p
+        }
+        None => read_plane(t, &raw, limits, JpegLayout::Flat)?,
+    };
     if plane.samples != 1 {
         return Err(RawError::unsupported(format!("ORF with {} samples per pixel", plane.samples)));
     }

@@ -28,7 +28,7 @@ const NIKON_BLACK_LEVEL: u16 = 0x003D;
 const SONY_BLACK_LEVEL: u16 = 0x7310;
 const SONY_WB_RGGB_LEVELS: u16 = 0x7313;
 
-fn raw_ifd(t: &Tiff, ifds: &[Ifd]) -> Option<Ifd> {
+pub(crate) fn raw_ifd(t: &Tiff, ifds: &[Ifd]) -> Option<Ifd> {
     ifds.iter()
         .filter(|i| t.tag_uint(i, tag::PHOTOMETRIC) == Some(PHOTOMETRIC_CFA))
         .max_by_key(|i| u64::from(t.tag_uint(i, tag::IMAGE_WIDTH).unwrap_or(0)) * u64::from(t.tag_uint(i, tag::IMAGE_LENGTH).unwrap_or(0)))
@@ -129,7 +129,42 @@ pub(crate) fn padded_width(data: &[u16], w: usize, h: usize, bits: u32) -> usize
     aw & !1
 }
 
+#[cfg(feature = "flashraw")]
+pub(crate) fn flashraw_preflight(t: &Tiff, format: RawFormat) -> Result<()> {
+    let ifds = t.all_ifds();
+    let raw = raw_ifd(t, &ifds).ok_or_else(|| RawError::unsupported("TIFF/EP raw IFD"))?;
+    if format == RawFormat::Arw && sony::is_craw(t, &raw) {
+        return Err(RawError::unsupported("Sony cRAW tone-curve compatibility"));
+    }
+    if t.tag_uint(&raw, tag::IMAGE_WIDTH).unwrap_or(0) < 64 || t.tag_uint(&raw, tag::IMAGE_LENGTH).unwrap_or(0) < 64 {
+        return Err(RawError::unsupported("small TIFF/EP sensor"));
+    }
+    if format == RawFormat::Nef {
+        let compression = t.tag_uint(&raw, tag::COMPRESSION).unwrap_or(1);
+        let bits = t.tag_uint(&raw, tag::BITS_PER_SAMPLE).unwrap_or(16);
+        let pixels = u64::from(t.tag_uint(&raw, tag::IMAGE_WIDTH).unwrap_or(0)) * u64::from(t.tag_uint(&raw, tag::IMAGE_LENGTH).unwrap_or(0));
+        let stored: u64 = t.tag_uints(&raw, tag::STRIP_BYTE_COUNTS).iter().map(|v| u64::from(*v)).sum();
+        if compression == 1 && bits < 16 && stored >= pixels.saturating_mul(2) {
+            return Err(RawError::unsupported("NEF samples in 16-bit containers"));
+        }
+        if compression == nefc::NIKON_COMPRESSION {
+            let note = nikon_maker_note(t, &ifds);
+            if !matches!(nikon_compression(note.as_ref()), Some(6 | 10)) {
+                let (n, m) = note.as_ref().ok_or_else(|| RawError::unsupported("Nikon compressed NEF without a maker note"))?;
+                let table = m.get(0x0096).and_then(|e| n.raw(e)).ok_or_else(|| RawError::unsupported("Nikon compressed NEF without a linearization table"))?;
+                crate::nefc::parse_table(table, n.le, bits)?;
+            }
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sensor> {
+    decode_with_plane(t, format, limits, None)
+}
+
+/// Builds PhotoCraft metadata around either decoder's sensor-domain samples.
+pub(crate) fn decode_with_plane(t: &Tiff, format: RawFormat, limits: &Limits, plane: Option<crate::sensor::Plane>) -> Result<Sensor> {
     let ifds = t.all_ifds();
     let Some(raw) = raw_ifd(t, &ifds) else {
         if is_sony_non_cfa(t, &ifds) {
@@ -139,7 +174,10 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
     };
     let nikon = if format == RawFormat::Nef { nikon_maker_note(t, &ifds) } else { None };
     let craw = format == RawFormat::Arw && sony::is_craw(t, &raw);
-    let plane = if craw {
+    let plane = if let Some(p) = plane {
+        p.validate_geometry(t.tag_uint(&raw, tag::IMAGE_WIDTH).unwrap_or(0) as usize, t.tag_uint(&raw, tag::IMAGE_LENGTH).unwrap_or(0) as usize, 1, limits)?;
+        p
+    } else if craw {
         sony::read_craw(t, &raw, limits)?
     } else if format == RawFormat::Nef && t.tag_uint(&raw, tag::COMPRESSION) == Some(nefc::NIKON_COMPRESSION) {
         match nikon_compression(nikon.as_ref()) {
@@ -151,6 +189,7 @@ pub(crate) fn decode(t: &Tiff, format: RawFormat, limits: &Limits) -> Result<Sen
     } else {
         read_plane(t, &raw, limits, JpegLayout::Quads)?
     };
+    plane.validate(limits)?;
     if plane.samples != 1 {
         return Err(RawError::unsupported(format!("CFA data with {} samples per pixel", plane.samples)));
     }

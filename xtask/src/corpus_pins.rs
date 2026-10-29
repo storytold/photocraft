@@ -339,12 +339,15 @@ pub const ALL: &[&PinnedCorpus] = &[&PSD_MIXED, &PSD_TOOLS, &PHOTOSHOP, &GIMP, &
 
 /// `corpus/pixls`: real camera raws from <https://raw.pixls.us> (released into the public
 /// domain / CC0 by their photographers; see ATTRIBUTION.md). One file per decode path
-/// `photocraft-raw` supports, plus the packed-ORF known-unsupported oracle. Fetched as single
+/// `photocraft-raw` supports, plus a compressed-ORF oracle (FlashRaw supported, Builtin unsupported). Fetched as single
 /// files (the server 301-redirects `/data/` to `/download/`), verified against
 /// `xtask/pixls.sha256`.
 pub const PIXLS_BASE: &str = "https://raw.pixls.us/data/";
 /// (url path, file name in `corpus/pixls`)
 pub const PIXLS_FILES: &[(&str, &str)] = &[
+    ("Canon/EOS%20R5/Canon_EOS_R5_RAW_ISO_100_nocrop_nodual.CR3", "Canon_EOS_R5_RAW_ISO_100_nocrop_nodual.CR3"),
+    ("Canon/EOS%20R5/Canon_EOS_R5_CRAW_ISO_100_nocrop_nodual.CR3", "Canon_EOS_R5_CRAW_ISO_100_nocrop_nodual.CR3"),
+    ("Fujifilm/X-T5/DSCF0021.RAF", "DSCF0021.RAF"),
     ("Canon/PowerShot%20SX50%20HS/IMG_4059.CR2", "IMG_4059.CR2"),
     ("Canon/PowerShot%20SX50%20HS/CRW_4061.DNG", "CRW_4061.DNG"),
     ("Nikon/D3/JD1_8203.NEF", "JD1_8203.NEF"),

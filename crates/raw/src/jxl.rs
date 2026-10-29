@@ -22,6 +22,32 @@ pub(crate) fn decode(_src: &[u8], _w: usize, _h: usize, _samples: usize, _bits: 
     Err(RawError::unsupported("JPEG XL-compressed DNG (DNG 1.7) can't be opened in the browser version of PhotoCraft; open it in the desktop app"))
 }
 
+/// Validate the encoded header before an external decoder can pad/crop a bad
+/// codestream to TIFF geometry. Parsing is bounded; pixels are decoded only once.
+#[cfg(all(feature = "flashraw", not(target_arch = "wasm32")))]
+pub(crate) fn check_header(src: &[u8], w: usize, h: usize, samples: usize, limits: &Limits) -> Result<()> {
+    limits.check(w as u64, h as u64, samples as u64 * 2)?;
+    guarded(|| {
+        let budget = limits.max_alloc.min((w as u64).saturating_mul(h as u64).saturating_mul(samples as u64).saturating_mul(16));
+        let image = JxlImage::builder()
+            .alloc_tracker(AllocTracker::with_limit(usize::try_from(budget).unwrap_or(usize::MAX)))
+            .read(src)
+            .map_err(|e| RawError::malformed(format!("JPEG XL raw header: {e}")))?;
+        if (image.width() as usize, image.height() as usize) != (w, h) {
+            return Err(RawError::malformed("JPEG XL codestream dimensions differ from the TIFF segment"));
+        }
+        if !image.is_loading_done() {
+            return Err(RawError::malformed("JPEG XL codestream is truncated"));
+        }
+        let channels = image.pixel_format().channels();
+        let colors = if channels <= 2 { 1 } else { 3 };
+        if colors != samples {
+            return Err(RawError::unsupported("JPEG XL channel count differs from TIFF samples"));
+        }
+        Ok(())
+    })
+}
+
 /// Decodes one segment into `w * h * samples` interleaved samples at `bits` per sample (the
 /// TIFF BitsPerSample, which DNG requires the codestream's bit depth to match). Floating-point
 /// samples (SampleFormat 3) come back multiplied by `float_scale`, clipped to 0..=65535.

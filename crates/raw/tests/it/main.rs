@@ -1,5 +1,6 @@
 //! The crate's integration tests, linked into one test binary.
 
+mod backends;
 mod cr3;
 mod development_limits;
 mod dng;
@@ -10,3 +11,5 @@ mod raf;
 mod raw_corpus;
 mod vendor_codecs;
 mod vendors;
+
+mod performance_matrix;

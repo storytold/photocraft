@@ -29,13 +29,85 @@ const NEAR_WHITE: f32 = 0.03;
 /// How far below the plateau the "average value just below it" reaches.
 const NEIGHBOURHOOD: usize = 64;
 
+type Histogram = (Vec<[u32; 3]>, [u64; 3]);
+
+// CFA lookup is periodic. Resolve its origin/phase once rather than dividing and
+// taking a modulus twice for every pixel in a 24–150 MP sensor. Keep the generic
+// path for arbitrary public Sensor patterns. Native jobs each own bounded scratch.
+fn histogram(sensor: &Sensor, low_bin: usize) -> Histogram {
+    let a = sensor.active;
+    let Some(cfa) = &sensor.cfa else { return (vec![[0; 3]; 65536], [0; 3]) };
+    let patterns = (cfa.width <= 16 && cfa.height <= 16 && cfa.width > 0 && cfa.height > 0).then(|| {
+        (0..cfa.height)
+            .map(|y| (0..cfa.width).map(|x| usize::from(cfa.color(a.x.saturating_add(x), a.y.saturating_add(y))).min(2)).collect::<Vec<_>>())
+            .collect::<Vec<_>>()
+    });
+    let jobs = if a.width.saturating_mul(a.height) >= 1_000_000 { crate::par::workers().min(8).min(a.height).max(1) } else { 1 };
+    let rows = a.height.div_ceil(jobs);
+    let parts = crate::par::map(jobs, |job| {
+        let mut hist = vec![[0u32; 3]; 65536];
+        let mut total = [0u64; 3];
+        let start = job.saturating_mul(rows);
+        for (y, row) in sensor.data.chunks_exact(sensor.width.max(1)).enumerate().skip(a.y + start).take(rows.min(a.height.saturating_sub(start))) {
+            let Some(data) = row.get(a.x..a.x.saturating_add(a.width)) else { continue };
+            let pattern = patterns.as_ref().and_then(|p| p.get((y - a.y) % p.len().max(1)));
+            let mut add = |value: u16, color: usize| {
+                // The detector only examines the upper half and its 64-bin
+                // neighbourhood. Dark samples still count toward the population
+                // but never need random histogram writes.
+                if usize::from(value) >= low_bin
+                    && let Some(bin) = hist.get_mut(usize::from(value)).and_then(|h| h.get_mut(color))
+                {
+                    *bin = bin.saturating_add(1);
+                }
+            };
+            if let Some(pattern) = pattern {
+                let cycles = data.len() / pattern.len();
+                let remainder = data.len() % pattern.len();
+                for (index, &color) in pattern.iter().enumerate() {
+                    if let Some(n) = total.get_mut(color) {
+                        *n = n.saturating_add((cycles + usize::from(index < remainder)) as u64);
+                    }
+                }
+                for (&value, &color) in data.iter().zip(pattern.iter().cycle()) {
+                    add(value, color);
+                }
+            } else {
+                for (x, &value) in data.iter().enumerate() {
+                    let color = usize::from(cfa.color(a.x.saturating_add(x), y)).min(2);
+                    add(value, color);
+                    if let Some(n) = total.get_mut(color) {
+                        *n = n.saturating_add(1);
+                    }
+                }
+            }
+        }
+        (hist, total)
+    });
+    let mut parts = parts.into_iter();
+    let (mut hist, mut total) = parts.next().unwrap_or_else(|| (vec![[0; 3]; 65536], [0; 3]));
+    for (next, counts) in parts {
+        for (out, input) in hist.iter_mut().zip(next) {
+            for (a, b) in out.iter_mut().zip(input) {
+                *a = a.saturating_add(b);
+            }
+        }
+        for (a, b) in total.iter_mut().zip(counts) {
+            *a = a.saturating_add(b);
+        }
+    }
+    (hist, total)
+}
+
 impl Sensor {
     /// The value each colour's samples saturate at, when that is clearly below the stated white level
     /// (see the module docs). Only CFA data without a linearization table is examined: with a table the
     /// stored values are not on the white level's scale.
     pub(crate) fn saturation_points(&self) -> [Option<u16>; 3] {
         let none = [None; 3];
-        let Some(cfa) = &self.cfa else { return none };
+        if self.cfa.is_none() {
+            return none;
+        }
         if self.samples != 1 || self.linearization.is_some() || self.width.checked_mul(self.height) != Some(self.data.len()) {
             return none;
         }
@@ -55,16 +127,7 @@ impl Sensor {
         if lo + NEIGHBOURHOOD >= hi {
             return none;
         }
-        let mut hist = vec![[0u32; 3]; 65536];
-        let mut total = [0u64; 3];
-        for y in a.y..a.y + a.height {
-            let row = &self.data[y * self.width + a.x..][..a.width];
-            for (x, &v) in (a.x..).zip(row) {
-                let c = usize::from(cfa.color(x, y)).min(2);
-                total[c] += 1;
-                hist[usize::from(v)][c] += 1;
-            }
-        }
+        let (hist, total) = histogram(self, lo.saturating_sub(NEIGHBOURHOOD));
         let mut out = none;
         for c in 0..3 {
             // the most populated value of the upper half of the range
@@ -74,7 +137,7 @@ impl Sensor {
                 continue;
             }
             // a colour whose samples all sit on one value is a flat field, not a scene that clipped
-            let darker: u64 = hist[..v].iter().map(|h| u64::from(h[c])).sum();
+            let darker = total[c].saturating_sub(hist[v..].iter().map(|h| u64::from(h[c])).sum::<u64>());
             if (darker as f64) < min_n {
                 continue;
             }
@@ -120,6 +183,39 @@ impl Sensor {
 #[cfg(test)]
 mod tests {
     use crate::*;
+
+    #[test]
+    fn parallel_periodic_histogram_preserves_every_bin_at_crop_and_band_boundaries() {
+        for (width, height, phase) in [(67, 71, (3, 5)), (1153, 1091, (5, 1))] {
+            let mut sensor = sensor_with(None, 4095.0);
+            sensor.width = width;
+            sensor.height = height;
+            sensor.data = (0..width * height).map(|i| ((i * 997 + i / width * 31) & 65535) as u16).collect();
+            sensor.active = Rect::new(3, 7, width - 8, height - 12);
+            for period in [0, 2, 6, 17] {
+                let cfa =
+                    Cfa { width: period, height: period, colors: (0..period * period).map(|i| (i % 3) as u8).collect(), origin_x: phase.0, origin_y: phase.1 };
+                sensor.cfa = Some(cfa.clone());
+                let mut want = vec![[0u32; 3]; 65536];
+                let mut totals = [0u64; 3];
+                let a = sensor.active;
+                for y in a.y..a.y + a.height {
+                    for x in a.x..a.x + a.width {
+                        let c = usize::from(cfa.color(x, y)).min(2);
+                        want[usize::from(sensor.data[y * width + x])][c] += 1;
+                        totals[c] += 1;
+                    }
+                }
+                let (got, counts) = super::histogram(&sensor, 0);
+                assert_eq!(got, want, "period={period}");
+                assert_eq!(counts, totals);
+                let (upper, counts) = super::histogram(&sensor, 20000);
+                assert_eq!(counts, totals);
+                assert_eq!(&upper[20000..], &want[20000..]);
+                assert!(upper[..20000].iter().all(|v| *v == [0; 3]));
+            }
+        }
+    }
 
     /// A 64 x 64 RGGB mosaic with a gradient, black 528, white `white`, whose samples above `clip` (when
     /// given) are stuck at `clip` like a sensor that saturates early.

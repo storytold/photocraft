@@ -209,11 +209,93 @@ fn map_polynomial(p: &[u8]) -> Option<MapPolynomial> {
     Some(MapPolynomial { top, left, bottom, right, plane, planes, row_pitch, col_pitch, coefficients })
 }
 
+pub(crate) struct PolynomialScale<'a> {
+    pub black: &'a BlackLevels,
+    pub white: [f32; 3],
+    pub bits: u32,
+    pub max_alloc: u64,
+}
+
+// Cache the complete integer domain, composing each opcode in its original
+// order with the same rounding after every step. This is exact, not a sampled
+// approximation of the polynomial. Spatially varying levels/coverage keep the
+// scalar oracle below; hostile input cannot allocate an unbounded table.
+fn polynomial_lookup(data: &mut [u16], width: usize, samples: usize, active: Rect, polys: &[MapPolynomial], scale: &PolynomialScale<'_>) -> bool {
+    if samples > 3
+        || scale.black.rows > 1
+        || scale.black.cols > 1
+        || scale.black.delta_h.iter().chain(&scale.black.delta_v).any(|v| *v != 0.0)
+        || polys.iter().any(|p| p.top != 0 || p.left != 0 || p.bottom < active.height || p.right < active.width || p.row_pitch != 1 || p.col_pitch != 1)
+    {
+        return false;
+    }
+    let bins = 1usize << scale.bits.min(16);
+    let bytes = (bins as u64).saturating_mul(samples as u64).saturating_mul(2);
+    if bytes > scale.max_alloc || data.len() < bins.saturating_mul(samples).saturating_mul(2) {
+        return false;
+    }
+    let mut tables = Vec::with_capacity(samples);
+    for channel in 0..samples {
+        let black = scale.black.at(0, 0, channel, samples);
+        let range = scale.white[channel.min(2)] - black;
+        if !black.is_finite() || !range.is_finite() || range < 1.0 {
+            return false;
+        }
+        let table = (0..bins)
+            .map(|value| {
+                let mut v = value as u16;
+                for p in polys.iter().filter(|p| p.covers(0, 0, channel)) {
+                    let n = (f64::from(v) - f64::from(black)) / f64::from(range);
+                    v = (f64::from(black) + p.eval(n) * f64::from(range)).round().clamp(0.0, 65535.0) as u16;
+                }
+                v
+            })
+            .collect::<Vec<_>>();
+        tables.push(table);
+    }
+    let row_len = width.saturating_mul(samples);
+    let band_rows = par::band_rows(row_len);
+    par::chunks_mut(data, row_len.saturating_mul(band_rows), |band, part| {
+        for (local, row) in part.chunks_mut(row_len).enumerate() {
+            let y = band.saturating_mul(band_rows).saturating_add(local);
+            if y < active.y || y - active.y >= active.height {
+                continue;
+            }
+            let start = active.x.saturating_mul(samples);
+            let end = active.x.saturating_add(active.width).saturating_mul(samples);
+            let Some(row) = row.get_mut(start..end) else { continue };
+            for pixel in row.chunks_exact_mut(samples) {
+                for (channel, (v, table)) in pixel.iter_mut().zip(&tables).enumerate() {
+                    if let Some(&mapped) = table.get(usize::from(*v)) {
+                        *v = mapped;
+                    } else {
+                        let black = scale.black.at(0, 0, channel, samples);
+                        let range = scale.white[channel.min(2)] - black;
+                        for p in polys.iter().filter(|p| p.covers(0, 0, channel)) {
+                            let n = (f64::from(*v) - f64::from(black)) / f64::from(range);
+                            *v = (f64::from(black) + p.eval(n) * f64::from(range)).round().clamp(0.0, 65535.0) as u16;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    true
+}
+
 /// Applies `polys` in order to `data` (`width × height` pixels of `samples` interleaved u16
 /// samples), in the sensor's own units: each covered sample is taken to its linear reference value
 /// with `black` and `white`, mapped, and brought back.
-pub(crate) fn apply_polynomials(data: &mut [u16], width: usize, samples: usize, active: Rect, polys: &[MapPolynomial], black: &BlackLevels, white: [f32; 3]) {
+pub(crate) fn apply_polynomials(data: &mut [u16], width: usize, samples: usize, active: Rect, polys: &[MapPolynomial], scale: PolynomialScale<'_>) {
+    let (black, white) = (scale.black, scale.white);
     if polys.is_empty() || width == 0 || samples == 0 {
+        return;
+    }
+    let Some(row_len) = width.checked_mul(samples) else { return };
+    if active.x.checked_add(active.width).is_none_or(|n| n > width) || active.y.checked_add(active.height).is_none_or(|n| n > data.len() / row_len) {
+        return;
+    }
+    if polynomial_lookup(data, width, samples, active, polys, &scale) {
         return;
     }
     par::chunks_mut(data, width * samples, |y, row| {
@@ -277,6 +359,40 @@ pub(crate) fn parse(list: &[u8]) -> Opcodes {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn integer_lookup_matches_general_polynomials_including_composition_and_crop() {
+        for bits in [8, 16] {
+            let (w, h, spp) = (257, 769, 3);
+            let active = Rect::new(1, 2, w - 3, h - 4);
+            let black = BlackLevels { rows: 1, cols: 1, values: vec![1.0, 2.0, 3.0], delta_h: vec![], delta_v: vec![] };
+            let white = [65535.0, 62000.0, 64000.0];
+            let all = MapPolynomial {
+                top: 0,
+                left: 0,
+                bottom: active.height,
+                right: active.width,
+                plane: 0,
+                planes: 3,
+                row_pitch: 1,
+                col_pitch: 1,
+                coefficients: vec![0.01, 0.8, 0.2],
+            };
+            let mut second = all.clone();
+            second.plane = 1;
+            second.planes = 1;
+            second.coefficients = vec![0.04, 0.95];
+            let polys = vec![all, second];
+            let mut got: Vec<_> = (0..w * h * spp).map(|i| (i & ((1usize << bits) - 1)) as u16).collect();
+            let mut want = got.clone();
+            apply_polynomials(&mut want, w, spp, active, &polys, PolynomialScale { black: &black, white, bits, max_alloc: 0 });
+            assert!(polynomial_lookup(&mut got, w, spp, active, &polys, &PolynomialScale { black: &black, white, bits, max_alloc: 2 << 20 }));
+            assert_eq!(got, want, "bits={bits}");
+            let mut spatial = black.clone();
+            spatial.delta_h = vec![0.0, 1.0];
+            assert!(!polynomial_lookup(&mut got, w, spp, active, &polys, &PolynomialScale { black: &spatial, white, bits, max_alloc: 2 << 20 }));
+        }
+    }
 
     fn list(ops: &[(u32, Vec<u8>)]) -> Vec<u8> {
         let mut b = (ops.len() as u32).to_be_bytes().to_vec();

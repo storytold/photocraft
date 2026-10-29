@@ -81,3 +81,5 @@ mod tiff_type_geometry;
 mod vector;
 mod xcf;
 mod xmp_export;
+
+mod raw_performance;

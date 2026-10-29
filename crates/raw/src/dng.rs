@@ -12,12 +12,67 @@ const PHOTOMETRIC_CFA: u32 = 32803;
 const PHOTOMETRIC_LINEAR_RAW: u32 = 34892;
 
 /// The main raw image: NewSubFileType 0 with CFA or LinearRaw data, largest first.
-fn raw_ifd(t: &Tiff, ifds: &[Ifd]) -> Option<Ifd> {
+pub(crate) fn raw_ifd(t: &Tiff, ifds: &[Ifd]) -> Option<Ifd> {
     ifds.iter()
         .filter(|i| t.tag_uint(i, tag::NEW_SUBFILE_TYPE).unwrap_or(0) == 0)
         .filter(|i| matches!(t.tag_uint(i, tag::PHOTOMETRIC), Some(PHOTOMETRIC_CFA | PHOTOMETRIC_LINEAR_RAW)))
         .max_by_key(|i| u64::from(t.tag_uint(i, tag::IMAGE_WIDTH).unwrap_or(0)) * u64::from(t.tag_uint(i, tag::IMAGE_LENGTH).unwrap_or(0)))
         .cloned()
+}
+
+#[cfg(feature = "flashraw")]
+pub(crate) fn flashraw_preflight(t: &Tiff, limits: &Limits) -> Result<()> {
+    preflight(t, limits, false)
+}
+
+#[cfg(feature = "flashraw")]
+pub(crate) fn flashraw_stored(t: &Tiff) -> bool {
+    let ifds = t.all_ifds();
+    // DNG 1.0 uses the historical category-16 convention. Keep its container
+    // decoder responsible for that variant; the stored codec uses modern T.81.
+    if ifds.iter().any(|i| t.tag_uints(i, tag::DNG_VERSION).starts_with(&[1, 0])) {
+        return false;
+    }
+    raw_ifd(t, &ifds).is_some_and(|raw| t.tag_uint(&raw, tag::COMPRESSION) == Some(7) && t.tag_uint(&raw, tag::SAMPLE_FORMAT) != Some(3))
+}
+
+#[cfg(feature = "flashraw")]
+pub(crate) fn decode_flashraw_stored(t: &Tiff, limits: &Limits) -> Result<Sensor> {
+    preflight(t, limits, true)?;
+    let raw = raw_ifd(t, &t.all_ifds()).ok_or_else(|| RawError::unsupported("DNG raw IFD"))?;
+    // Decode the entropy stream before container linearization. This retains
+    // even non-injective tables and their exact public stored-sample semantics.
+    let plane = crate::sensor::read_plane_flashraw_jpeg(t, &raw, limits)?;
+    decode_with_plane(t, limits, Some(plane)).map(crate::lift_clipped)
+}
+
+#[cfg(feature = "flashraw")]
+fn preflight(t: &Tiff, limits: &Limits, stored: bool) -> Result<()> {
+    let raw = raw_ifd(t, &t.all_ifds()).ok_or_else(|| RawError::unsupported("DNG raw IFD"))?;
+    crate::sensor::check_external_segments(t, &raw, limits)?;
+    for tg in [tag::DEFAULT_CROP_ORIGIN, tag::DEFAULT_CROP_SIZE] {
+        for v in t.tag_floats(&raw, tg) {
+            crop_value(v, "crop")?;
+            // FlashRaw 0.1.1 adds rounded u32 crop values to the active origin
+            // before clipping. Keep out-of-image crops on our checked path,
+            // where they produce the existing warning rather than overflowing.
+            let edge = t.tag_uint(&raw, tag::IMAGE_WIDTH).unwrap_or(0).max(t.tag_uint(&raw, tag::IMAGE_LENGTH).unwrap_or(0));
+            if v > f64::from(edge) || v > f64::from(u32::MAX / 2) {
+                return Err(RawError::unsupported("DNG out-of-image crop uses checked built-in metadata"));
+            }
+        }
+    }
+    let compression = t.tag_uint(&raw, tag::COMPRESSION).unwrap_or(1);
+    if compression == 34892 || (compression == 8 && t.tag_uint(&raw, tag::BITS_PER_SAMPLE).unwrap_or(16) < 16) {
+        return Err(RawError::unsupported("DNG lossy JPEG or sub-16-bit horizontal predictor"));
+    }
+
+    // Sensor is public: callers rely on stored samples plus their deferred table.
+    // FlashRaw's RawU16 irreversibly applies that table during unpacking.
+    if (raw.has(tag::LINEARIZATION_TABLE) && !stored) || t.tag_uint(&raw, tag::SAMPLE_FORMAT) == Some(3) {
+        return Err(RawError::unsupported("DNG deferred linearization or floating-point samples"));
+    }
+    Ok(())
 }
 
 fn matrix(t: &Tiff, ifd: &Ifd, tg: u16) -> Option<color::Mat3> {
@@ -127,12 +182,28 @@ fn crop_value(value: f64, name: &str) -> Result<usize> {
 
 /// Decodes a DNG file's raw image and metadata.
 pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
+    decode_with_plane(t, limits, None)
+}
+
+/// Builds PhotoCraft metadata around either decoder's sensor-domain samples.
+pub(crate) fn decode_with_plane(t: &Tiff, limits: &Limits, plane: Option<crate::sensor::Plane>) -> Result<Sensor> {
     let ifds = t.all_ifds();
     let ifd0 = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("DNG has no IFD0"))?;
     let raw = raw_ifd(t, &ifds).ok_or_else(|| RawError::malformed("DNG has no raw image"))?;
     let mut warnings = Vec::new();
     let photometric = t.tag_uint(&raw, tag::PHOTOMETRIC).unwrap_or(0);
-    let plane = read_plane(t, &raw, limits, JpegLayout::Flat)?;
+    let plane = match plane {
+        Some(p) => {
+            p.validate_geometry(
+                t.tag_uint(&raw, tag::IMAGE_WIDTH).unwrap_or(0) as usize,
+                t.tag_uint(&raw, tag::IMAGE_LENGTH).unwrap_or(0) as usize,
+                t.tag_uint(&raw, tag::SAMPLES_PER_PIXEL).unwrap_or(1) as usize,
+                limits,
+            )?;
+            p
+        }
+        None => read_plane(t, &raw, limits, JpegLayout::Flat)?,
+    };
     let samples = plane.samples;
     let is_cfa = photometric == PHOTOMETRIC_CFA;
     if is_cfa && samples != 1 {
@@ -255,6 +326,12 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         black.delta_v = dv.iter().map(|v| *v as f32 * unit).collect();
     }
 
+    // FlashRaw applies the file's linearization during unpacking. Keep its range
+    // for default white above, but never transform the decoded values twice.
+    if plane.linearized {
+        linearization = None;
+    }
+
     // MapPolynomial maps linear reference values: linearize the samples first (the table is then
     // done with), and map them in place.
     let mut data = plane.data;
@@ -264,7 +341,14 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
                 *v = l.get(usize::from(*v)).or_else(|| l.last()).copied().unwrap_or(*v);
             }
         }
-        opcodes::apply_polynomials(&mut data, plane.width, samples, active, &polynomials, &black, white);
+        opcodes::apply_polynomials(
+            &mut data,
+            plane.width,
+            samples,
+            active,
+            &polynomials,
+            opcodes::PolynomialScale { black: &black, white, bits: plane.bits, max_alloc: limits.max_alloc },
+        );
     }
 
     let color = color_info(t, &ifd0);

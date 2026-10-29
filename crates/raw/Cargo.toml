@@ -7,14 +7,21 @@ license.workspace = true
 rust-version.workspace = true
 
 [features]
-default = []
+default = ["flashraw"]
+# Fast sensor decoding; PhotoCraft still owns metadata and development.
+flashraw = ["dep:flashraw"]
 # Synthetic raw-file generators (DNG / CR2 / TIFF-EP writers and a lossless-JPEG
 # encoder) for tests and fuzz seeds.
 testgen = ["dep:image"]
 # Real-file corpus tests (opt-in; `cargo xtask test-corpus`). Fail when the corpus is missing.
 corpus = []
+# Opt-in 88-camera performance/compatibility corpus (fetched by perf/raw-decode/run.py).
+performance-corpus = []
 
 [dependencies]
+log = "0.4"
+# External decoder; exact pin because it parses untrusted files. No mmap, ICC or GPU.
+flashraw = { version = "=0.1.1", default-features = false, features = ["simd"], optional = true }
 # Adobe DNG compression 8: zlib (RFC 1950) with the TIFF predictor (pure-Rust backend).
 flate2 = { workspace = true }
 # Adobe DNG compression 34892: baseline JPEG tiles (lossy), decoded by zune-jpeg.
@@ -26,6 +33,7 @@ zune-core = { workspace = true }
 # Parallel bands on native; wasm builds stay single-threaded.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
+flashraw = { version = "=0.1.1", default-features = false, features = ["rayon", "simd", "jpegxl"], optional = true }
 # JPEG XL-compressed DNG (DNG 1.7, e.g. Samsung Expert RAW). Pure Rust, MIT OR Apache-2.0. Pinned
 # exactly: it parses untrusted files; moving the pin is a reviewed change (re-run the raw fuzz target).
 # Native only: it added 0.88 MB to the browser build's wasm, which has a hard size cap
@@ -33,7 +41,9 @@ rayon = { workspace = true }
 jxl-oxide = { version = "=0.12.6", default-features = false, features = ["rayon"] }
 
 [dev-dependencies]
-photocraft-raw = { path = ".", features = ["testgen"] }
+# Machine-readable decode benchmark results (examples only).
+serde_json = { workspace = true }
+photocraft-raw = { path = ".", default-features = false, features = ["testgen"] }
 # Writes sRGB PNG previews in the `rawinfo` example.
 png = "0.18"
 # Lossless JPEG XL encoder for the JPEG XL DNG tests (tests only).

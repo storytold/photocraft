@@ -195,7 +195,25 @@ fn header_model(bytes: &[u8]) -> Option<String> {
     (!s.is_empty()).then_some(s)
 }
 
+#[cfg(feature = "flashraw")]
+pub(crate) fn flashraw_preflight(bytes: &[u8]) -> Result<()> {
+    let offset = be32(bytes, 100).ok_or_else(|| RawError::malformed("RAF header is truncated"))?;
+    let region = bytes.get(offset..).ok_or_else(|| RawError::malformed("RAF CFA region lies outside the file"))?;
+    let t = Tiff::new(region).ok_or_else(|| RawError::unsupported("RAF without a CFA TIFF"))?;
+    let ifd0 = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("RAF CFA IFD is unreadable"))?;
+    let raw = t.tag_uint(&ifd0, FUJI_IFD).and_then(|at| t.ifd_at(at as usize, 0)).ok_or_else(|| RawError::unsupported("RAF without a Fuji raw IFD"))?;
+    if t.tag_uint(&raw, RAW_WIDTH).unwrap_or(0) < 64 || t.tag_uint(&raw, RAW_HEIGHT).unwrap_or(0) < 64 {
+        return Err(RawError::unsupported("small RAF sensor"));
+    }
+    Ok(())
+}
+
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor> {
+    decode_with_plane(bytes, limits, None)
+}
+
+/// Builds PhotoCraft metadata around either decoder's sensor-domain samples.
+pub(crate) fn decode_with_plane(bytes: &[u8], limits: &Limits, plane: Option<crate::sensor::Plane>) -> Result<Sensor> {
     let cfa_at = be32(bytes, 100).ok_or_else(|| RawError::malformed("RAF header is truncated"))?;
     let cfa_len = be32(bytes, 104).unwrap_or(0);
     let region = bytes.get(cfa_at..).ok_or_else(|| RawError::malformed("RAF CFA region lies outside the file"))?;
@@ -218,24 +236,29 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor> {
     let count = t.tag_uint(&fuji, STRIP_BYTE_COUNT).unwrap_or(0) as usize;
     let src = region.get(offset..).ok_or_else(|| RawError::malformed("RAF raw data lies outside the file"))?;
     let src = if count > 0 { src.get(..count).unwrap_or(src) } else { src };
-    let pixels = width * height;
-    let packed = pixels.saturating_mul(bits as usize).div_ceil(8);
-    let packing = if count >= pixels * 2 {
-        Packing::U16 { le: t.le }
-    } else if count >= packed && bits == 12 {
-        Packing::LsbFirst
-    } else if count >= packed && bits == 14 {
-        Packing::Words32MsbFirst
-    } else if count >= packed {
-        return Err(RawError::unsupported(format!("Fujifilm RAF with packed {bits}-bit samples")));
+    let data = if let Some(p) = plane {
+        p.validate_geometry(width, height, 1, limits)?;
+        p.data
     } else {
-        return Err(RawError::unsupported("Fujifilm compressed RAF is not decoded (no public description of the format)"));
+        let pixels = width * height;
+        let packed = pixels.saturating_mul(bits as usize).div_ceil(8);
+        let packing = if count >= pixels * 2 {
+            Packing::U16 { le: t.le }
+        } else if count >= packed && bits == 12 {
+            Packing::LsbFirst
+        } else if count >= packed && bits == 14 {
+            Packing::Words32MsbFirst
+        } else if count >= packed {
+            return Err(RawError::unsupported(format!("Fujifilm RAF with packed {bits}-bit samples")));
+        } else {
+            return Err(RawError::unsupported("Fujifilm compressed RAF is not decoded (no public description of the format)"));
+        };
+        let need = if matches!(packing, Packing::U16 { .. }) { pixels * 2 } else { packed };
+        if src.len() < need {
+            return Err(RawError::malformed("RAF raw data is truncated"));
+        }
+        unpack(src, width, height, bits, packing)
     };
-    let need = if matches!(packing, Packing::U16 { .. }) { pixels * 2 } else { packed };
-    if src.len() < need {
-        return Err(RawError::malformed("RAF raw data is truncated"));
-    }
-    let data = unpack(src, width, height, bits, packing);
 
     let recs = records(bytes);
     let cfa = layout_cfa(&recs).ok_or_else(|| RawError::unsupported("Fujifilm RAF without a recognised CFA layout"))?;

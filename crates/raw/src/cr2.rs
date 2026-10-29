@@ -181,7 +181,29 @@ pub(crate) fn masked_black(data: &[u16], width: usize, area: Rect) -> Option<[f3
     Some([0, 1, 2, 3].map(|k| sum[k] as f32 / n[k] as f32))
 }
 
+#[cfg(feature = "flashraw")]
+pub(crate) fn flashraw_preflight(bytes: &[u8]) -> Result<()> {
+    let t = Tiff::new(bytes).ok_or(RawError::NotRaw)?;
+    let raw = t.ifd_at(t.u32_at(12).unwrap_or(0) as usize, 0).ok_or_else(|| RawError::malformed("CR2 raw IFD is missing"))?;
+    let off = t.tag_uint(&raw, tag::STRIP_OFFSETS).unwrap_or(0) as usize;
+    let len = t.tag_uint(&raw, tag::STRIP_BYTE_COUNTS).unwrap_or(0) as usize;
+    let src = t.bytes(off, len).ok_or_else(|| RawError::malformed("CR2 raw data lies outside the file"))?;
+    let frame = ljpeg::frame(src).map_err(|e| match e {
+        RawError::Unsupported(_) => RawError::unsupported("Canon sRAW / mRAW"),
+        e => e,
+    })?;
+    if frame.samples().is_none_or(|n| n < 4096) {
+        return Err(RawError::unsupported("small CR2 sensor"));
+    }
+    Ok(())
+}
+
 pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
+    decode_with_plane(t, limits, None)
+}
+
+/// Builds PhotoCraft metadata around either decoder's sensor-domain samples.
+pub(crate) fn decode_with_plane(t: &Tiff, limits: &Limits, plane: Option<crate::sensor::Plane>) -> Result<Sensor> {
     let ifds = t.all_ifds();
     let ifd0 = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("CR2 has no IFD0"))?;
     let raw_off = t.u32_at(12).unwrap_or(0) as usize;
@@ -213,20 +235,26 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
     }
     let height = total / width;
     limits.check(width as u64, height as u64, 2)?;
-    let (_, samples) = ljpeg::decode(src, total)?;
+    let data = if let Some(p) = plane {
+        p.validate_geometry(width, height, 1, limits)?;
+        p.data
+    } else {
+        let (_, samples) = ljpeg::decode(src, total)?;
 
-    // De-slice.
-    let mut data = vec![0u16; width * height];
-    let mut pos = 0usize;
-    let mut x0 = 0usize;
-    for sw in widths {
-        for y in 0..height {
-            let src = samples.get(pos..pos + sw).ok_or_else(|| RawError::malformed("CR2 slice data is short"))?;
-            data[y * width + x0..y * width + x0 + sw].copy_from_slice(src);
-            pos += sw;
+        // De-slice.
+        let mut data = vec![0u16; width * height];
+        let mut pos = 0usize;
+        let mut x0 = 0usize;
+        for sw in widths {
+            for y in 0..height {
+                let src = samples.get(pos..pos + sw).ok_or_else(|| RawError::malformed("CR2 slice data is short"))?;
+                data[y * width + x0..y * width + x0 + sw].copy_from_slice(src);
+                pos += sw;
+            }
+            x0 += sw;
         }
-        x0 += sw;
-    }
+        data
+    };
 
     let mut warnings = Vec::new();
     let mn = maker_note(t, &ifds);

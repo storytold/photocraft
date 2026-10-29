@@ -1,0 +1,132 @@
+{
+  "rawpy_version": "0.27.1",
+  "libraw_version": [
+    0,
+    22,
+    1
+  ],
+  "numpy_version": "2.5.4",
+  "method": "Compare every u16 sample, full raw_image including margins, before normalization or demosaicing. PhotoCraft planes decoded using the same raw rlib as rawdecodebench. No LibRaw decode timing is compared.",
+  "results": [
+    {
+      "file": "corpus/raw-performance/cc427f638345.rwl",
+      "shape": [
+        3568,
+        4816
+      ],
+      "samples": 17183488,
+      "white_level": 4095,
+      "black_levels": [
+        143,
+        143,
+        143,
+        143
+      ],
+      "checks": {
+        "builtin": {
+          "geometry_equal": true,
+          "different_samples": 3066,
+          "max_abs_difference": 2560,
+          "photocraft_plane_sha256_u16le": "08fc13383260898563373f05316ced49bc8410b8e166ec4acf460f3bc5ba3ec2"
+        },
+        "auto": {
+          "geometry_equal": true,
+          "different_samples": 0,
+          "max_abs_difference": 0,
+          "photocraft_plane_sha256_u16le": "6610b49c6f4054ce7d4430458e0a6a255eb563ce9bd5cd73b9e6117affc7d91c"
+        }
+      },
+      "libraw_plane_sha256_u16le": "6610b49c6f4054ce7d4430458e0a6a255eb563ce9bd5cd73b9e6117affc7d91c"
+    },
+    {
+      "file": "corpus/raw-performance/48de19eb4aaa.nrw",
+      "shape": [
+        2742,
+        3664
+      ],
+      "samples": 10046688,
+      "white_level": 4095,
+      "black_levels": [
+        0,
+        0,
+        0,
+        0
+      ],
+      "checks": {
+        "builtin": {
+          "geometry_equal": true,
+          "different_samples": 9899495,
+          "max_abs_difference": 4065,
+          "photocraft_plane_sha256_u16le": "59585d416b7224c332703b0fd33c2f23391385ea045767699eaf81db344ae40d"
+        },
+        "auto": {
+          "geometry_equal": true,
+          "different_samples": 0,
+          "max_abs_difference": 0,
+          "photocraft_plane_sha256_u16le": "71ad193ff91b3a0bad45bf65a026781734f87f189b8b6f88b2bfd3595cb9be00"
+        }
+      },
+      "libraw_plane_sha256_u16le": "71ad193ff91b3a0bad45bf65a026781734f87f189b8b6f88b2bfd3595cb9be00"
+    },
+    {
+      "file": "corpus/raw-performance/747180b47e53.rw2",
+      "shape": [
+        3904,
+        5264
+      ],
+      "samples": 20550656,
+      "white_level": 4095,
+      "black_levels": [
+        144,
+        143,
+        144,
+        143
+      ],
+      "checks": {
+        "builtin": {
+          "geometry_equal": true,
+          "different_samples": 4397,
+          "max_abs_difference": 2048,
+          "photocraft_plane_sha256_u16le": "8439c6116405e833e95f5a26a2b209cc58495d3024e6abebcfb425c26f74cdc8"
+        },
+        "auto": {
+          "geometry_equal": true,
+          "different_samples": 0,
+          "max_abs_difference": 0,
+          "photocraft_plane_sha256_u16le": "64dc7152e29a6bab38cfe28614ffe16c0725d433dcae4878ae6fffad389bf756"
+        }
+      },
+      "libraw_plane_sha256_u16le": "64dc7152e29a6bab38cfe28614ffe16c0725d433dcae4878ae6fffad389bf756"
+    },
+    {
+      "file": "corpus/raw-performance/bd77354b5f56.sr2",
+      "shape": [
+        2608,
+        3984
+      ],
+      "samples": 10390272,
+      "white_level": 16383,
+      "black_levels": [
+        514,
+        511,
+        512,
+        513
+      ],
+      "checks": {
+        "builtin": {
+          "geometry_equal": true,
+          "different_samples": 10343026,
+          "max_abs_difference": 64770,
+          "photocraft_plane_sha256_u16le": "58ba606d6a50d13ec69fe99e399766f7f21c4892493da6db0e04d5bb71ea8561"
+        },
+        "auto": {
+          "geometry_equal": true,
+          "different_samples": 0,
+          "max_abs_difference": 0,
+          "photocraft_plane_sha256_u16le": "a20eb3e8c43b2bb6452642c420306c91c09e264ea4fd2b8be9ce6b9172bcde72"
+        }
+      },
+      "libraw_plane_sha256_u16le": "a20eb3e8c43b2bb6452642c420306c91c09e264ea4fd2b8be9ce6b9172bcde72"
+    }
+  ]
+}

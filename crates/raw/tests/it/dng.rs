@@ -910,7 +910,8 @@ fn jpeg_xl_mismatches_are_errors() {
     spec.storage = DngStorage::JxlStrips { rows: h };
     // Codestream smaller than the strip.
     spec.jxl_segments = vec![jxl(&data[..w * 4 * 3], w, 4, 3, 16)];
-    assert!(matches!(decode(&spec.build(), &Limits::default()), Err(RawError::Malformed(_))));
+    let result = decode(&spec.build(), &Limits::default());
+    assert!(matches!(result, Err(RawError::Malformed(_))), "{result:?}");
     // Grey codestream for RGB samples.
     spec.jxl_segments = vec![jxl(&data[..w * h], w, h, 1, 16)];
     assert!(matches!(decode(&spec.build(), &Limits::default()), Err(RawError::Unsupported(_))));

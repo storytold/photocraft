@@ -882,3 +882,12 @@ fn a_panicking_clipboard_read_is_reported_not_a_crash() {
     let mut set = guarded_clipboard_set(|_: u32, _: u32, _: &[u8]| panic!("clipboard writer bug"));
     assert!(set(1, 1, &[0; 4]).unwrap_err().contains("Copy failed"));
 }
+
+#[test]
+fn camera_raw_picker_covers_the_decoder_extensions() {
+    let (_, extensions) = OPEN_FILTERS.iter().find(|(label, _)| *label == "Camera Raw").unwrap();
+    assert_eq!(*extensions, photocraft_io::raw::EXTENSIONS);
+    for extension in photocraft_io::raw::EXTENSIONS {
+        assert!(OPEN_EXTS.contains(extension), "{extension}");
+    }
+}

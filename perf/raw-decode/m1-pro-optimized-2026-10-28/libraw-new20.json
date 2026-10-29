@@ -1,0 +1,997 @@
+{
+  "rawpy_version": "0.27.1",
+  "libraw_version": [
+    0,
+    22,
+    1
+  ],
+  "numpy_version": "2.5.4",
+  "method": "Compare Auto u16 planes against independent LibRaw raw_image before normalization/demosaicing. Domains and channel exclusions recorded per file. Different layouts/representations are not asserted equivalent. LibRaw is diagnostic tooling only; no speed comparison.",
+  "results": [
+    {
+      "file": "corpus/raw-performance/01cc475347c2.crw",
+      "photocraft_shape": [
+        2344,
+        3160
+      ],
+      "active": [
+        44,
+        12,
+        3112,
+        2328
+      ],
+      "crop": [
+        64,
+        24,
+        3072,
+        2304
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "17804ed2ff64873e7d24ca06c58a4c8d095aad1907affb938ebcd12b618fa7ac",
+      "libraw_shape": [
+        2344,
+        3160
+      ],
+      "libraw_visible_shape": [
+        2328,
+        3112
+      ],
+      "libraw_margins": [
+        44,
+        12
+      ],
+      "libraw_sha256_u16le": "17804ed2ff64873e7d24ca06c58a4c8d095aad1907affb938ebcd12b618fa7ac",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          2344,
+          3160
+        ],
+        [
+          2344,
+          3160
+        ]
+      ],
+      "compared_samples": 7407040,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/166e19850bbf.3fr",
+      "photocraft_shape": [
+        6304,
+        8374
+      ],
+      "active": [
+        52,
+        100,
+        8272,
+        6200
+      ],
+      "crop": [
+        52,
+        100,
+        8272,
+        6200
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "5e999d13f6726c7db381886248c811b9cdb704a85333e2054f753c8525387e88",
+      "libraw_shape": [
+        6304,
+        8374
+      ],
+      "libraw_visible_shape": [
+        6200,
+        8272
+      ],
+      "libraw_margins": [
+        52,
+        100
+      ],
+      "libraw_sha256_u16le": "5e999d13f6726c7db381886248c811b9cdb704a85333e2054f753c8525387e88",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          6304,
+          8374
+        ],
+        [
+          6304,
+          8374
+        ]
+      ],
+      "compared_samples": 52789696,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/1415e8e162c9.fff",
+      "photocraft_shape": [
+        8842,
+        11904
+      ],
+      "active": [
+        124,
+        92,
+        11664,
+        8750
+      ],
+      "crop": [
+        124,
+        92,
+        11664,
+        8750
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "4d8ce9954deab46cc26518fecf5fb18f703740eb77f1e034bb0b11d0e74ece97",
+      "libraw_shape": [
+        8842,
+        11904
+      ],
+      "libraw_visible_shape": [
+        8750,
+        11664
+      ],
+      "libraw_margins": [
+        124,
+        92
+      ],
+      "libraw_sha256_u16le": "4d8ce9954deab46cc26518fecf5fb18f703740eb77f1e034bb0b11d0e74ece97",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          8842,
+          11904
+        ],
+        [
+          8842,
+          11904
+        ]
+      ],
+      "compared_samples": 105255168,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/35c99339957a.kdc",
+      "photocraft_shape": [
+        512,
+        768
+      ],
+      "active": [
+        0,
+        0,
+        768,
+        512
+      ],
+      "crop": [
+        0,
+        0,
+        768,
+        512
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "8e4db900465dd22b3ee51975bc4d5eaf65ba70835b3566cb2f8cdc7654ba6e22",
+      "libraw_shape": [
+        512,
+        768
+      ],
+      "libraw_visible_shape": [
+        512,
+        768
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "8e4db900465dd22b3ee51975bc4d5eaf65ba70835b3566cb2f8cdc7654ba6e22",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          512,
+          768
+        ],
+        [
+          512,
+          768
+        ]
+      ],
+      "compared_samples": 393216,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/bc6d86951c67.mrw",
+      "photocraft_shape": [
+        2008,
+        3016
+      ],
+      "active": [
+        0,
+        0,
+        3016,
+        2008
+      ],
+      "crop": [
+        4,
+        4,
+        3008,
+        2000
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "298e41b6e446b984dffcf2e8006d1991f5f7720c66a3b2059752c0dff78cdb10",
+      "libraw_shape": [
+        2008,
+        3016
+      ],
+      "libraw_visible_shape": [
+        2008,
+        3016
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "298e41b6e446b984dffcf2e8006d1991f5f7720c66a3b2059752c0dff78cdb10",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          2008,
+          3016
+        ],
+        [
+          2008,
+          3016
+        ]
+      ],
+      "compared_samples": 6056128,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/pixls/_7061961_copy.ORF",
+      "photocraft_shape": [
+        3084,
+        4100
+      ],
+      "active": [
+        0,
+        0,
+        4096,
+        3084
+      ],
+      "crop": [
+        42,
+        24,
+        4032,
+        3024
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "abc829af9f5cfafb6313751dac024b057cbcc7dc4d992dbbd59310c8a289dd8d",
+      "libraw_shape": [
+        3084,
+        4100
+      ],
+      "libraw_visible_shape": [
+        3084,
+        4096
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "abc829af9f5cfafb6313751dac024b057cbcc7dc4d992dbbd59310c8a289dd8d",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          3084,
+          4100
+        ],
+        [
+          3084,
+          4100
+        ]
+      ],
+      "compared_samples": 12644400,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/ecc2d5c4d709.orf",
+      "photocraft_shape": [
+        3912,
+        5240
+      ],
+      "active": [
+        0,
+        0,
+        5240,
+        3912
+      ],
+      "crop": [
+        12,
+        12,
+        5184,
+        3888
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "ddb9d5d34e8db9393d5d455a6242b10d81db097a05be6b397b6601b4bb59d19f",
+      "libraw_shape": [
+        3912,
+        5240
+      ],
+      "libraw_visible_shape": [
+        3912,
+        5240
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "ddb9d5d34e8db9393d5d455a6242b10d81db097a05be6b397b6601b4bb59d19f",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          3912,
+          5240
+        ],
+        [
+          3912,
+          5240
+        ]
+      ],
+      "compared_samples": 20498880,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/ad25ef89c1ff.orf",
+      "photocraft_shape": [
+        3912,
+        5220
+      ],
+      "active": [
+        0,
+        0,
+        5220,
+        3912
+      ],
+      "crop": [
+        12,
+        12,
+        5184,
+        3888
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "c833242a92839771353e70a0f11620ce14f9b02f7c373f1217c2aa9c0845280c",
+      "libraw_shape": [
+        3912,
+        5220
+      ],
+      "libraw_visible_shape": [
+        3912,
+        5220
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "c833242a92839771353e70a0f11620ce14f9b02f7c373f1217c2aa9c0845280c",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          3912,
+          5220
+        ],
+        [
+          3912,
+          5220
+        ]
+      ],
+      "compared_samples": 20420640,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/6655cd154298.orf",
+      "photocraft_shape": [
+        3912,
+        5240
+      ],
+      "active": [
+        0,
+        0,
+        5240,
+        3912
+      ],
+      "crop": [
+        12,
+        12,
+        5184,
+        3888
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "c1b90d64d0cf5ea8c2fb0b50e09bef375bfffcb99117533030d5e4fecbfe7947",
+      "libraw_shape": [
+        3912,
+        5240
+      ],
+      "libraw_visible_shape": [
+        3912,
+        5240
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "c1b90d64d0cf5ea8c2fb0b50e09bef375bfffcb99117533030d5e4fecbfe7947",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          3912,
+          5240
+        ],
+        [
+          3912,
+          5240
+        ]
+      ],
+      "compared_samples": 20498880,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/9037155290ed.rw2",
+      "photocraft_shape": [
+        4344,
+        5784
+      ],
+      "active": [
+        0,
+        0,
+        5784,
+        4344
+      ],
+      "crop": [
+        4,
+        4,
+        5776,
+        4336
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "df074c6aff53a07e25890ce5822b94faa2ab7243657fef3e29c2dab31aa876a0",
+      "libraw_shape": [
+        4344,
+        5784
+      ],
+      "libraw_visible_shape": [
+        4344,
+        5784
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "df074c6aff53a07e25890ce5822b94faa2ab7243657fef3e29c2dab31aa876a0",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          4344,
+          5784
+        ],
+        [
+          4344,
+          5784
+        ]
+      ],
+      "compared_samples": 25125696,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/d338b479d220.rw2",
+      "photocraft_shape": [
+        4352,
+        5792
+      ],
+      "active": [
+        0,
+        0,
+        5792,
+        4352
+      ],
+      "crop": [
+        8,
+        8,
+        5776,
+        4336
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "6a6e6455b0006d3ee03ca88f429ed2bf94659b00d99217b70418eb69d6a30296",
+      "libraw_shape": [
+        4352,
+        5792
+      ],
+      "libraw_visible_shape": [
+        4352,
+        5792
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "6a6e6455b0006d3ee03ca88f429ed2bf94659b00d99217b70418eb69d6a30296",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          4352,
+          5792
+        ],
+        [
+          4352,
+          5792
+        ]
+      ],
+      "compared_samples": 25206784,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/036d15936fe3.rw2",
+      "photocraft_shape": [
+        5632,
+        8448
+      ],
+      "active": [
+        0,
+        0,
+        8392,
+        5620
+      ],
+      "crop": [
+        12,
+        24,
+        8368,
+        5584
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "46fae10dbe19118bcb44e9892159f3a9abdfa2113b3ef58b8bfc7e1d19908981",
+      "libraw_shape": [
+        5632,
+        8448
+      ],
+      "libraw_visible_shape": [
+        5620,
+        8392
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "46fae10dbe19118bcb44e9892159f3a9abdfa2113b3ef58b8bfc7e1d19908981",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          5632,
+          8448
+        ],
+        [
+          5632,
+          8448
+        ]
+      ],
+      "compared_samples": 47579136,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/2d12edad2a22.rw2",
+      "photocraft_shape": [
+        4016,
+        6048
+      ],
+      "active": [
+        0,
+        0,
+        6024,
+        4016
+      ],
+      "crop": [
+        12,
+        8,
+        6000,
+        4000
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "88b28ad4e9708eda5bb2aa0df1bd9f6713593b73b1e4042d3f37d398195828d0",
+      "libraw_shape": [
+        4016,
+        6048
+      ],
+      "libraw_visible_shape": [
+        4016,
+        6024
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "88b28ad4e9708eda5bb2aa0df1bd9f6713593b73b1e4042d3f37d398195828d0",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          4016,
+          6048
+        ],
+        [
+          4016,
+          6048
+        ]
+      ],
+      "compared_samples": 24288768,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/ebf84792fc82.rw2",
+      "photocraft_shape": [
+        4008,
+        6008
+      ],
+      "active": [
+        0,
+        0,
+        6008,
+        4008
+      ],
+      "crop": [
+        4,
+        4,
+        6000,
+        4000
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "6ca284cd9f495292cdbe66755f910ae0ec39dab9de1d17937b0c0e8a4d40223f",
+      "libraw_shape": [
+        4008,
+        6008
+      ],
+      "libraw_visible_shape": [
+        4008,
+        6008
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "6ca284cd9f495292cdbe66755f910ae0ec39dab9de1d17937b0c0e8a4d40223f",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          4008,
+          6008
+        ],
+        [
+          4008,
+          6008
+        ]
+      ],
+      "compared_samples": 24080064,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/ee333784a4c9.pef",
+      "photocraft_shape": [
+        4950,
+        7392
+      ],
+      "active": [
+        6,
+        18,
+        7376,
+        4932
+      ],
+      "crop": [
+        14,
+        28,
+        7360,
+        4912
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "c53b71a73709205ee787aee8adb558f7b7553c6ffa2e1c28305f8f12bbc52b40",
+      "libraw_shape": [
+        4950,
+        7392
+      ],
+      "libraw_visible_shape": [
+        4932,
+        7376
+      ],
+      "libraw_margins": [
+        6,
+        18
+      ],
+      "libraw_sha256_u16le": "c53b71a73709205ee787aee8adb558f7b7553c6ffa2e1c28305f8f12bbc52b40",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          4950,
+          7392
+        ],
+        [
+          4950,
+          7392
+        ]
+      ],
+      "compared_samples": 36590400,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/d0e9637bf77e.pef",
+      "photocraft_shape": [
+        4224,
+        6304
+      ],
+      "active": [
+        26,
+        34,
+        6224,
+        4160
+      ],
+      "crop": [
+        54,
+        58,
+        6192,
+        4128
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "beb99a863ba1b1483c1fa0308f3e4ee56826f694d3809d75f48a4391e520a7c9",
+      "libraw_shape": [
+        4224,
+        6304
+      ],
+      "libraw_visible_shape": [
+        4160,
+        6224
+      ],
+      "libraw_margins": [
+        26,
+        34
+      ],
+      "libraw_sha256_u16le": "beb99a863ba1b1483c1fa0308f3e4ee56826f694d3809d75f48a4391e520a7c9",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          4224,
+          6304
+        ],
+        [
+          4224,
+          6304
+        ]
+      ],
+      "compared_samples": 26628096,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/0880ec05da49.iiq",
+      "photocraft_shape": [
+        10760,
+        14308
+      ],
+      "active": [
+        102,
+        106,
+        14204,
+        10652
+      ],
+      "crop": [
+        102,
+        106,
+        14204,
+        10652
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "fd8231a378aac96a5d971a8675d01bf5948955e8c17bccc9b20678014fe19ca8",
+      "libraw_shape": [
+        10760,
+        14308
+      ],
+      "libraw_visible_shape": [
+        10652,
+        14204
+      ],
+      "libraw_margins": [
+        102,
+        106
+      ],
+      "libraw_sha256_u16le": "fd8231a378aac96a5d971a8675d01bf5948955e8c17bccc9b20678014fe19ca8",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          10760,
+          14308
+        ],
+        [
+          10760,
+          14308
+        ]
+      ],
+      "compared_samples": 153954080,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/e427f75ab121.srw",
+      "photocraft_shape": [
+        4336,
+        6496
+      ],
+      "active": [
+        0,
+        0,
+        6496,
+        4336
+      ],
+      "crop": [
+        8,
+        8,
+        6480,
+        4320
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "9e5281dfcd34c3adb8a2628509de622209471f1d765328c286758b97c93955c1",
+      "libraw_shape": [
+        4336,
+        6496
+      ],
+      "libraw_visible_shape": [
+        4336,
+        6496
+      ],
+      "libraw_margins": [
+        0,
+        0
+      ],
+      "libraw_sha256_u16le": "9e5281dfcd34c3adb8a2628509de622209471f1d765328c286758b97c93955c1",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          4336,
+          6496
+        ],
+        [
+          4336,
+          6496
+        ]
+      ],
+      "compared_samples": 28166656,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/0edc87d4f233.x3f",
+      "photocraft_shape": [
+        3264,
+        4928,
+        3
+      ],
+      "active": [
+        12,
+        0,
+        4807,
+        3205
+      ],
+      "crop": [
+        64,
+        36,
+        4704,
+        3136
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "4fb5b42ec6ed636cd53df0d187ad9e0a3b03c9461695d0d577b47ad3c7dd38fd",
+      "libraw_shape": [
+        3264,
+        4928,
+        3
+      ],
+      "libraw_visible_shape": [
+        3205,
+        4807,
+        3
+      ],
+      "libraw_margins": [
+        12,
+        0
+      ],
+      "libraw_sha256_u16le": "4fb5b42ec6ed636cd53df0d187ad9e0a3b03c9461695d0d577b47ad3c7dd38fd",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          3264,
+          4928,
+          3
+        ],
+        [
+          3264,
+          4928,
+          3
+        ]
+      ],
+      "compared_samples": 48254976,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    },
+    {
+      "file": "corpus/raw-performance/02aeb1bea751.srf",
+      "photocraft_shape": [
+        2460,
+        3360
+      ],
+      "active": [
+        6,
+        0,
+        3287,
+        2460
+      ],
+      "crop": [
+        6,
+        0,
+        3287,
+        2460
+      ],
+      "orientation": 1,
+      "photocraft_sha256_u16le": "b3fc3d395950407a35d33392a97181fa51aac1afb0aa6b96d94a7eba00e95d42",
+      "libraw_shape": [
+        2460,
+        3360
+      ],
+      "libraw_visible_shape": [
+        2460,
+        3287
+      ],
+      "libraw_margins": [
+        6,
+        0
+      ],
+      "libraw_sha256_u16le": "b3fc3d395950407a35d33392a97181fa51aac1afb0aa6b96d94a7eba00e95d42",
+      "comparison_domain": "full sensor including margins",
+      "compared_shapes": [
+        [
+          2460,
+          3360
+        ],
+        [
+          2460,
+          3360
+        ]
+      ],
+      "compared_samples": 8265600,
+      "different_samples": 0,
+      "max_abs_difference": 0,
+      "mean_abs_difference": 0.0
+    }
+  ]
+}

@@ -33,7 +33,7 @@ impl Rect {
     }
 }
 
-/// Colour of one CFA cell: 0 = red, 1 = green, 2 = blue.
+/// Colour of one CFA cell: 0 = red, 1 = green, 2 = blue, 3 = emerald (RGBE).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cfa {
     pub width: usize,
@@ -62,7 +62,7 @@ impl Cfa {
 
     /// Colour at data coordinates.
     #[inline]
-    pub fn color(&self, x: usize, y: usize) -> u8 {
+    pub fn sensor_color(&self, x: usize, y: usize) -> u8 {
         fn relative(v: usize, origin: usize, period: usize) -> Option<usize> {
             if period == 0 {
                 return None;
@@ -74,6 +74,17 @@ impl Cfa {
             return 1;
         };
         cy.checked_mul(self.width).and_then(|i| i.checked_add(cx)).and_then(|i| self.colors.get(i)).copied().unwrap_or(1)
+    }
+
+    /// RGB reconstruction channel. RGBE keeps its original colour codes in
+    /// `colors` / `sensor_color`; the current RGB developer projects emerald
+    /// onto green and explicitly labels that colour approximation.
+    #[inline]
+    pub fn color(&self, x: usize, y: usize) -> u8 {
+        match self.sensor_color(x, y) {
+            3 => 1,
+            color => color,
+        }
     }
 
     /// The 2×2 colours seen from data coordinates (`x0`, `y0`), row-major.
@@ -192,6 +203,31 @@ pub(crate) struct Plane {
     /// For floating-point samples, the factor they were multiplied by (their white level becomes
     /// 65535, `bits` is then 16): the file's black and white levels are scaled by it too.
     pub float_scale: Option<f32>,
+    /// The decoder has already applied DNG LinearizationTable.
+    pub linearized: bool,
+}
+
+impl Plane {
+    pub(crate) fn validate(&self, limits: &Limits) -> Result<()> {
+        if !(1..=16).contains(&self.bits) || !matches!(self.samples, 1 | 3) {
+            return Err(RawError::unsupported("sensor sample layout"));
+        }
+        let bytes = (self.samples as u64).checked_mul(2).ok_or_else(|| RawError::malformed("sample size overflow"))?;
+        limits.check(self.width as u64, self.height as u64, bytes)?;
+        let n = self.width.checked_mul(self.height).and_then(|n| n.checked_mul(self.samples));
+        if n != Some(self.data.len()) {
+            return Err(RawError::malformed("decoded sensor length does not match its dimensions"));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn validate_geometry(&self, width: usize, height: usize, samples: usize, limits: &Limits) -> Result<()> {
+        self.validate(limits)?;
+        if (self.width, self.height, self.samples) != (width, height, samples) {
+            return Err(RawError::unsupported("decoder sensor geometry differs from PhotoCraft metadata"));
+        }
+        Ok(())
+    }
 }
 
 pub(crate) struct Segment {
@@ -232,6 +268,15 @@ fn inflate_tile(src: &[u8], need: usize) -> Result<Vec<u8>> {
 
 /// Reads the (uncompressed, deflate, lossless-JPEG, lossy-JPEG or JPEG XL) image of a raw IFD.
 pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayout) -> Result<Plane> {
+    read_plane_with_jpeg(t, ifd, limits, layout, false)
+}
+
+#[cfg(feature = "flashraw")]
+pub(crate) fn read_plane_flashraw_jpeg(t: &Tiff, ifd: &Ifd, limits: &Limits) -> Result<Plane> {
+    read_plane_with_jpeg(t, ifd, limits, JpegLayout::Flat, true)
+}
+
+fn read_plane_with_jpeg(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayout, external: bool) -> Result<Plane> {
     let width = t.tag_uint(ifd, tag::IMAGE_WIDTH).ok_or_else(|| RawError::malformed("raw image has no width"))? as usize;
     let height = t.tag_uint(ifd, tag::IMAGE_LENGTH).ok_or_else(|| RawError::malformed("raw image has no height"))? as usize;
     let samples = t.tag_uint(ifd, tag::SAMPLES_PER_PIXEL).unwrap_or(1) as usize;
@@ -316,7 +361,7 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
             }
             34892 => lossy_jpeg(src, s, rows, samples, bits, tiled, limits),
             // Compression 7 (lossless JPEG).
-            _ => lossless_jpeg(src, s, rows, samples, layout, limits),
+            _ => lossless_jpeg(src, s, rows, samples, layout, limits, external),
         }
     });
     // One segment holding the whole image row for row (a single strip): its buffer is the plane, no
@@ -344,7 +389,7 @@ pub(crate) fn read_plane(t: &Tiff, ifd: &Ifd, limits: &Limits, layout: JpegLayou
             data[at..at + cols * samples].copy_from_slice(src);
         }
     }
-    Ok(Plane { width, height, samples, bits, data, float_scale })
+    Ok(Plane { width, height, samples, bits, data, float_scale, linearized: false })
 }
 
 /// Bytes of decoded samples the segments hold at once.
@@ -368,6 +413,32 @@ fn retained_segment_bytes(segments: &[Segment], samples: usize, limits: &Limits)
         }
     }
     Ok(total)
+}
+
+/// Apply PhotoCraft's tile/strip allocation policy before an external decoder runs.
+#[cfg(feature = "flashraw")]
+pub(crate) fn check_external_segments(t: &Tiff, ifd: &Ifd, limits: &Limits) -> Result<()> {
+    let width = t.tag_uint(ifd, tag::IMAGE_WIDTH).unwrap_or(0) as usize;
+    let height = t.tag_uint(ifd, tag::IMAGE_LENGTH).unwrap_or(0) as usize;
+    let samples = t.tag_uint(ifd, tag::SAMPLES_PER_PIXEL).unwrap_or(1) as usize;
+    limits.check(width as u64, height as u64, (samples as u64).saturating_mul(2))?;
+    let segments = segments(t, ifd, width, height)?;
+    retained_segment_bytes(&segments, samples, limits)?;
+    for s in &segments {
+        limits.check(s.w as u64, s.h as u64, (samples as u64).saturating_mul(2))?;
+        #[cfg(not(target_arch = "wasm32"))]
+        if t.tag_uint(ifd, tag::COMPRESSION) == Some(JPEG_XL) {
+            let src = t.bytes(s.offset, s.len).ok_or_else(|| RawError::malformed("raw segment lies outside the file"))?;
+            let rows = if ifd.has(tag::TILE_WIDTH) { s.h } else { s.h.min(height.saturating_sub(s.y)) };
+            crate::jxl::check_header(src, s.w, rows, samples, limits)?;
+        }
+        if t.tag_uint(ifd, tag::COMPRESSION) == Some(7) {
+            let src = t.bytes(s.offset, s.len).ok_or_else(|| RawError::malformed("raw segment lies outside the file"))?;
+            let frame = ljpeg::frame(src)?;
+            limits.check(frame.width as u64, frame.height as u64, (frame.components as u64).saturating_mul(2))?;
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn segments(t: &Tiff, ifd: &Ifd, width: usize, height: usize) -> Result<Vec<Segment>> {
@@ -417,7 +488,13 @@ pub(crate) fn segments(t: &Tiff, ifd: &Ifd, width: usize, height: usize) -> Resu
 ///
 /// The frame the entropy stream declares is capped by the budget, not only by the segment, and
 /// the `Quads` scatter buffer comes out of the same budget. `max_alloc` counts bytes, a sample is two.
-fn lossless_jpeg(src: &[u8], s: &Segment, rows: usize, samples: usize, layout: JpegLayout, limits: &Limits) -> Result<Vec<u16>> {
+fn lossless_jpeg(src: &[u8], s: &Segment, rows: usize, samples: usize, layout: JpegLayout, limits: &Limits, external: bool) -> Result<Vec<u16>> {
+    #[cfg(feature = "flashraw")]
+    if external && layout == JpegLayout::Flat {
+        return crate::flashraw_backend::decode_stored_jpeg(src, s.w, rows, samples, limits);
+    }
+    #[cfg(not(feature = "flashraw"))]
+    let _ = external;
     let need = s.w * rows * samples;
     let scatter = if layout == JpegLayout::Quads && samples == 1 { s.w.saturating_mul(s.h).saturating_mul(2) as u64 } else { 0 };
     let budget = usize::try_from(limits.max_alloc.saturating_sub(scatter) / 2).unwrap_or(usize::MAX);
@@ -458,6 +535,11 @@ fn lossless_jpeg(src: &[u8], s: &Segment, rows: usize, samples: usize, layout: J
 /// hostile SOF cannot size a buffer larger than the tile the IFD declares (which `limits` has
 /// already charged).
 fn lossy_jpeg(src: &[u8], s: &Segment, rows: usize, samples: usize, bits: u32, tiled: bool, limits: &Limits) -> Result<Vec<u16>> {
+    std::panic::catch_unwind(|| lossy_jpeg_inner(src, s, rows, samples, bits, tiled, limits))
+        .unwrap_or_else(|_| Err(RawError::malformed("JPEG tile decoder failed")))
+}
+
+fn lossy_jpeg_inner(src: &[u8], s: &Segment, rows: usize, samples: usize, bits: u32, tiled: bool, limits: &Limits) -> Result<Vec<u16>> {
     use zune_core::{bytestream::ZCursor, colorspace::ColorSpace, options::DecoderOptions};
     if bits != 8 {
         return Err(RawError::unsupported(format!("lossy DNG with {bits}-bit samples (lossy JPEG tiles are 8-bit)")));
@@ -682,12 +764,12 @@ mod tests {
         let frame: Vec<u16> = (0..64 * 64).map(|i| (i % 4096) as u16).collect();
         let src = crate::testgen::lj92_encode(&frame, 64, 64, 1, 12, 1, None);
         let s = Segment { x: 0, y: 0, w: 32, h: 32, offset: 0, len: src.len() };
-        let v = lossless_jpeg(&src, &s, 32, 1, JpegLayout::Flat, &Limits::default()).unwrap();
+        let v = lossless_jpeg(&src, &s, 32, 1, JpegLayout::Flat, &Limits::default(), false).unwrap();
         assert_eq!(v.len(), 32 * 32, "only the segment's samples are retained");
         assert!(v.capacity() < 64 * 64, "the frame's spare capacity is released");
         assert_eq!(v[..32], frame[..32], "the first row is the frame's first row");
         // An edge strip keeps only the rows inside the image.
-        let v = lossless_jpeg(&src, &s, 20, 1, JpegLayout::Flat, &Limits::default()).unwrap();
+        let v = lossless_jpeg(&src, &s, 20, 1, JpegLayout::Flat, &Limits::default(), false).unwrap();
         assert_eq!(v.len(), 32 * 20);
     }
 

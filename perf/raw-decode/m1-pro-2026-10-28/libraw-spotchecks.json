@@ -1,0 +1,393 @@
+{
+  "method": "Only the first eight differing full-sensor coordinates per case; no demosaicing/normalization; this is not full-frame validation.",
+  "results": [
+    {
+      "file": "corpus/raw-performance/cc427f638345.rwl",
+      "rawpy_version": "0.27.1",
+      "libraw_version": [
+        0,
+        22,
+        1
+      ],
+      "numpy_version": "2.5.4",
+      "shape": [
+        3568,
+        4816
+      ],
+      "white_level": 4095,
+      "checks": [
+        {
+          "auto": 293,
+          "builtin": 309,
+          "channel": 0,
+          "x": 2022,
+          "y": 10,
+          "libraw": 293,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 287,
+          "builtin": 303,
+          "channel": 0,
+          "x": 2024,
+          "y": 10,
+          "libraw": 287,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 290,
+          "builtin": 306,
+          "channel": 0,
+          "x": 2026,
+          "y": 10,
+          "libraw": 290,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 283,
+          "builtin": 299,
+          "channel": 0,
+          "x": 2028,
+          "y": 10,
+          "libraw": 283,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 353,
+          "builtin": 337,
+          "channel": 0,
+          "x": 1910,
+          "y": 13,
+          "libraw": 353,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 339,
+          "builtin": 323,
+          "channel": 0,
+          "x": 1912,
+          "y": 13,
+          "libraw": 339,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 338,
+          "builtin": 322,
+          "channel": 0,
+          "x": 1914,
+          "y": 13,
+          "libraw": 338,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 328,
+          "builtin": 312,
+          "channel": 0,
+          "x": 1916,
+          "y": 13,
+          "libraw": 328,
+          "matches_auto": true,
+          "matches_builtin": false
+        }
+      ]
+    },
+    {
+      "file": "corpus/raw-performance/48de19eb4aaa.nrw",
+      "rawpy_version": "0.27.1",
+      "libraw_version": [
+        0,
+        22,
+        1
+      ],
+      "numpy_version": "2.5.4",
+      "shape": [
+        2742,
+        3664
+      ],
+      "white_level": 4095,
+      "checks": [
+        {
+          "auto": 20,
+          "builtin": 35,
+          "channel": 0,
+          "x": 0,
+          "y": 0,
+          "libraw": 20,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 59,
+          "builtin": 2880,
+          "channel": 0,
+          "x": 1,
+          "y": 0,
+          "libraw": 59,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 35,
+          "builtin": 28,
+          "channel": 0,
+          "x": 2,
+          "y": 0,
+          "libraw": 35,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 62,
+          "builtin": 1,
+          "channel": 0,
+          "x": 3,
+          "y": 0,
+          "libraw": 62,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 28,
+          "builtin": 995,
+          "channel": 0,
+          "x": 4,
+          "y": 0,
+          "libraw": 28,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 58,
+          "builtin": 34,
+          "channel": 0,
+          "x": 5,
+          "y": 0,
+          "libraw": 58,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 34,
+          "builtin": 58,
+          "channel": 0,
+          "x": 7,
+          "y": 0,
+          "libraw": 34,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 17,
+          "builtin": 18,
+          "channel": 0,
+          "x": 8,
+          "y": 0,
+          "libraw": 17,
+          "matches_auto": true,
+          "matches_builtin": false
+        }
+      ]
+    },
+    {
+      "file": "corpus/raw-performance/747180b47e53.rw2",
+      "rawpy_version": "0.27.1",
+      "libraw_version": [
+        0,
+        22,
+        1
+      ],
+      "numpy_version": "2.5.4",
+      "shape": [
+        3904,
+        5264
+      ],
+      "white_level": 4095,
+      "checks": [
+        {
+          "auto": 273,
+          "builtin": 225,
+          "channel": 0,
+          "x": 454,
+          "y": 4,
+          "libraw": 273,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 271,
+          "builtin": 223,
+          "channel": 0,
+          "x": 456,
+          "y": 4,
+          "libraw": 271,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 255,
+          "builtin": 207,
+          "channel": 0,
+          "x": 458,
+          "y": 4,
+          "libraw": 255,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 254,
+          "builtin": 206,
+          "channel": 0,
+          "x": 460,
+          "y": 4,
+          "libraw": 254,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 267,
+          "builtin": 299,
+          "channel": 0,
+          "x": 1350,
+          "y": 12,
+          "libraw": 267,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 305,
+          "builtin": 337,
+          "channel": 0,
+          "x": 1352,
+          "y": 12,
+          "libraw": 305,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 271,
+          "builtin": 303,
+          "channel": 0,
+          "x": 1354,
+          "y": 12,
+          "libraw": 271,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 272,
+          "builtin": 304,
+          "channel": 0,
+          "x": 1356,
+          "y": 12,
+          "libraw": 272,
+          "matches_auto": true,
+          "matches_builtin": false
+        }
+      ]
+    },
+    {
+      "file": "corpus/raw-performance/bd77354b5f56.sr2",
+      "rawpy_version": "0.27.1",
+      "libraw_version": [
+        0,
+        22,
+        1
+      ],
+      "numpy_version": "2.5.4",
+      "shape": [
+        2608,
+        3984
+      ],
+      "white_level": 16383,
+      "checks": [
+        {
+          "auto": 882,
+          "builtin": 29187,
+          "channel": 0,
+          "x": 1,
+          "y": 0,
+          "libraw": 882,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 1401,
+          "builtin": 30981,
+          "channel": 0,
+          "x": 2,
+          "y": 0,
+          "libraw": 1401,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 899,
+          "builtin": 33539,
+          "channel": 0,
+          "x": 3,
+          "y": 0,
+          "libraw": 899,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 1402,
+          "builtin": 31237,
+          "channel": 0,
+          "x": 4,
+          "y": 0,
+          "libraw": 1402,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 921,
+          "builtin": 39171,
+          "channel": 0,
+          "x": 5,
+          "y": 0,
+          "libraw": 921,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 1415,
+          "builtin": 34565,
+          "channel": 0,
+          "x": 6,
+          "y": 0,
+          "libraw": 1415,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 927,
+          "builtin": 40707,
+          "channel": 0,
+          "x": 7,
+          "y": 0,
+          "libraw": 927,
+          "matches_auto": true,
+          "matches_builtin": false
+        },
+        {
+          "auto": 1366,
+          "builtin": 22021,
+          "channel": 0,
+          "x": 8,
+          "y": 0,
+          "libraw": 1366,
+          "matches_auto": true,
+          "matches_builtin": false
+        }
+      ]
+    }
+  ]
+}

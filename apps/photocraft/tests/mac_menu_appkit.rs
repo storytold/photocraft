@@ -13,6 +13,15 @@
 mod mac_menu;
 
 #[cfg(target_os = "macos")]
+fn take_native_input(app: &mut photocraft_ui_egui::PhotocraftApp) -> egui::RawInput {
+    let mut raw = egui::RawInput::default();
+    if let Some(menu) = app.services.native_menu.as_mut() {
+        menu.raw_input(&mut raw);
+    }
+    raw
+}
+
+#[cfg(target_os = "macos")]
 fn main() {
     use objc2::MainThreadMarker;
     use objc2::rc::Retained;
@@ -137,10 +146,7 @@ fn main() {
     let rulers = app.ui.extras.rulers;
     let press = dequeue(&key_down("r", 15, NSEventModifierFlags::Command));
     assert!(main_menu().performKeyEquivalent(&press), "⌘R is View › Rulers' key equivalent");
-    let mut raw = egui::RawInput::default();
-    if let Some(m) = app.services.native_menu.as_mut() {
-        m.raw_input(&mut raw);
-    }
+    let raw = take_native_input(&mut app);
     let keys: Vec<_> = raw
         .events
         .iter()
@@ -158,10 +164,7 @@ fn main() {
     let at = index(&view, "Rulers");
     dequeue(&other());
     view.performActionForItemAtIndex(at);
-    let mut raw = egui::RawInput::default();
-    if let Some(m) = app.services.native_menu.as_mut() {
-        m.raw_input(&mut raw);
-    }
+    let raw = take_native_input(&mut app);
     assert!(raw.events.is_empty(), "a click is no key press: {:?}", raw.events);
     frame(&mut app, raw);
     assert_eq!(app.ui.extras.rulers, rulers, "the click toggled Rulers back");
@@ -169,10 +172,7 @@ fn main() {
     // ↩ inside the open menu is a key-down without ⌘: still a click.
     dequeue(&key_down("\r", 36, NSEventModifierFlags::empty()));
     view.performActionForItemAtIndex(at);
-    let mut raw = egui::RawInput::default();
-    if let Some(m) = app.services.native_menu.as_mut() {
-        m.raw_input(&mut raw);
-    }
+    let raw = take_native_input(&mut app);
     assert!(raw.events.is_empty(), "↩ in the menu is a click: {:?}", raw.events);
     frame(&mut app, raw);
     assert_eq!(app.ui.extras.rulers, !rulers, "↩ on Rulers toggled it");
@@ -193,10 +193,7 @@ fn main() {
     assert!(!checked(&window, rows[0]) && checked(&window, rows[1]), "the active document is checked");
     dequeue(&other());
     window.performActionForItemAtIndex(rows[0]);
-    let mut raw = egui::RawInput::default();
-    if let Some(m) = app.services.native_menu.as_mut() {
-        m.raw_input(&mut raw);
-    }
+    let raw = take_native_input(&mut app);
     frame(&mut app, raw);
     assert_eq!(app.session.active_index(), Some(0), "choosing the first row brought it forward");
     let window = submenu(&main_menu(), "Window");

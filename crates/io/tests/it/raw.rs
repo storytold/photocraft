@@ -531,3 +531,28 @@ fn a_re_develop_keeps_the_fitted_look() {
     let mid = curve.iter().find(|k| k[0] >= 0.18).unwrap();
     assert!(mid[1] > mid[0], "{mid:?}");
 }
+
+/// Real files must reach the same default import and Camera Raw re-develop path.
+#[cfg(feature = "corpus")]
+#[test]
+fn flashraw_camera_originals_import_and_redevelop() {
+    use photocraft_io::raw::{DEVELOPED_NOTE, RawTuning, import_raw_tuned};
+    for (file, size) in [
+        ("Canon_EOS_R5_RAW_ISO_100_nocrop_nodual.CR3", (8192, 5464)),
+        ("Canon_EOS_R5_CRAW_ISO_100_nocrop_nodual.CR3", (8192, 5464)),
+        ("DSCF0021.RAF", (7728, 5152)),
+    ] {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../corpus/pixls").join(file);
+        let bytes = std::fs::read(path).expect("run cargo xtask corpus --pixls");
+        let original = import(file, &bytes).unwrap();
+        assert_eq!((original.document.size.width, original.document.size.height), size);
+        assert_eq!(original.document.depth, SampleType::U16);
+        assert!(original.warnings.iter().any(|w| w.contains(DEVELOPED_NOTE)));
+        assert!(original.warnings.iter().all(|w| !w.contains("preview instead")));
+        let (tuned, applied) = import_raw_tuned(file, &bytes, &RawTuning { exposure: 0.5, temperature: 10.0, ..Default::default() }).unwrap();
+        assert!(applied, "as-shot white balance: {file}");
+        assert_eq!((tuned.document.size.width, tuned.document.size.height), size);
+        assert_eq!(tuned.document.depth, SampleType::U16);
+        assert_eq!(original.document.icc_profile, tuned.document.icc_profile);
+    }
+}
