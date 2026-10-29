@@ -36,6 +36,11 @@ impl PhotocraftApp {
             self.fonts_ready = true;
         }
         self.frame += 1;
+        // Liveness for `health` and the transport's stall fallback (#2493): a logic pass ran,
+        // so the loop is alive even when the compositor withholds frame callbacks.
+        if let Some(w) = self.watch.as_ref() {
+            w.note_logic();
+        }
         let now = ctx.input(|i| i.time);
         let dt = (now - self.last_frame_time) as f32;
         if dt > 0.0 {
@@ -194,6 +199,11 @@ impl PhotocraftApp {
         self.finish_frame(ui_ms);
         if !drawn {
             return;
+        }
+        // A frame was drawn (#2493): the drawn counter stalls while the window is hidden or
+        // occluded, which is exactly what `health` and `frameStalled` report.
+        if let Some(w) = self.watch.as_ref() {
+            w.note_drawn();
         }
         // This pass handled its input: the in-flight synthetic batch is delivered once and the
         // next step may be injected on the next frame.

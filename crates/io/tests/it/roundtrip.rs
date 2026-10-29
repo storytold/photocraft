@@ -120,6 +120,7 @@ fn text_shape_smart_raw_blocks_survive() {
             transform: photocraft_geom::Affine::IDENTITY,
             smart_filters: vec![],
             cache: Some(cache.clone()),
+            raster_filters_input: None,
             psd_raw: Some(placed.clone()),
             filters_enabled: true,
             filter_mask: None,

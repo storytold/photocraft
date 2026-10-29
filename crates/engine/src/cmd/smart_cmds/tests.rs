@@ -1149,7 +1149,10 @@ fn automation_smart_contents_malformed_embedded_sources_leave_documents_unchange
         paint(&mut s);
         let id = convert(&mut s);
         s.edit("bad source", |doc, _| {
-            smart_mut(doc, LayerId(id))?.source = SmartSource::Embedded { file_name: "broken.psd".into(), bytes: Arc::new(b"8BPS".to_vec()) };
+            let sm = smart_mut(doc, LayerId(id))?;
+            sm.source = SmartSource::Embedded { file_name: "broken.psd".into(), bytes: Arc::new(b"8BPS".to_vec()) };
+            // No placed pixels either: #4085's fallback has nothing to open.
+            sm.cache = None;
             Ok(())
         })
         .unwrap();
@@ -1310,4 +1313,247 @@ fn clouds_and_fibers_move_with_the_smart_object() {
             }
         }
     }
+}
+
+/// A smart object whose embedded source is present but undecodable — what PSD import produces for
+/// an Illustrator `.ai` placed layer (#4085). `cache` keeps or clears the placed pixels.
+fn with_undecodable_contents(cache: bool) -> (Session, u64, Vec<u8>) {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    let bytes = b"an Illustrator file PhotoCraft cannot decode".to_vec();
+    s.edit("undecodable contents", |doc, _| {
+        let sm = smart_mut(doc, LayerId(id))?;
+        sm.source = SmartSource::Embedded { file_name: "Vector Smart Object.ai".into(), bytes: Arc::new(bytes.clone()) };
+        if !cache {
+            sm.cache = None;
+        }
+        Ok(())
+    })
+    .unwrap();
+    (s, id, bytes)
+}
+
+fn embedded_source_bytes(sm: &SmartObject) -> Vec<u8> {
+    match &sm.source {
+        SmartSource::Embedded { bytes, .. } => bytes.to_vec(),
+        _ => panic!("not embedded"),
+    }
+}
+
+/// #4085: contents whose bytes exist but can't be decoded open as their placed pixels (one
+/// raster layer, named after the source file); opening does not touch the stored source bytes.
+#[test]
+fn edit_contents_opens_undecodable_sources_rasterized_from_the_cache() {
+    let (mut s, id, bytes) = with_undecodable_contents(true);
+    let cache = active_smart(&s).cache.unwrap();
+    let (b, pixel) = (cache.content_bounds(), cache.rgba(10, 10));
+    assert_eq!(embedded_source_bytes(&active_smart(&s)), bytes);
+    let r = s.execute("layer.smartObjects.editContents", json!({})).unwrap();
+    let child = r["document"].as_u64().unwrap() as usize;
+    // The rasterized contents are a read-only copy: no link back to the parent.
+    assert!(s.smart_links.is_empty());
+    let d = s.active().unwrap();
+    assert_eq!(d.doc.name, "Vector Smart Object.ai (rasterized)");
+    assert_eq!((d.doc.size.width, d.doc.size.height), (b.width(), b.height()), "sized to the placed pixels");
+    assert_eq!(d.doc.layers.len(), 1);
+    let LayerContent::Raster(px) = &d.doc.layers[0].content else { panic!("not raster") };
+    assert_eq!(px.rgba(10 - b.x0, 10 - b.y0), pixel, "the placed pixels are the contents");
+    // Closing the untouched contents leaves the source bytes exactly as they were.
+    s.close(child).unwrap();
+    assert!(s.smart_links.is_empty());
+    s.set_active(0);
+    let d = s.active().unwrap();
+    assert!(matches!(d.doc.layer(LayerId(id)).unwrap().content, LayerContent::Smart(_)));
+    assert_eq!(embedded_source_bytes(&active_smart(&s)), bytes, "the source bytes are untouched");
+}
+
+/// #4085: with undecodable contents and no cache there is nothing to open, and the error names
+/// the format kind instead of a bare codec message.
+#[test]
+fn edit_contents_without_a_cache_names_the_undecodable_format() {
+    let (mut s, _, _) = with_undecodable_contents(false);
+    let e = s.execute("layer.smartObjects.editContents", json!({})).unwrap_err().to_string();
+    assert!(e.contains("Illustrator"), "{e}");
+    assert!(!e.contains("unrecognized image format"), "{e}");
+    assert_eq!(s.documents().len(), 1, "no contents document opened");
+}
+
+/// #4085: a smart filter on such a layer applies to the cached placed pixels instead of failing
+/// to re-render the undecodable source.
+#[test]
+fn smart_filters_apply_to_the_cached_pixels_of_undecodable_contents() {
+    let (mut s, _, _) = with_undecodable_contents(true);
+    let before = active_smart(&s).cache.unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
+    let sm = active_smart(&s);
+    assert_eq!(sm.smart_filters.len(), 1);
+    assert_eq!(sm.smart_filters[0].command, "filter.blur.gaussianBlur");
+    let b = before.content_bounds();
+    assert_ne!(sm.cache.as_ref().unwrap().read_region(b), before.read_region(b), "the cache is filtered");
+}
+
+/// A filter baked into the cache of an undecodable source stays editable: its params change
+/// replays the recorded stack from the kept pre-filter pixels instead of failing to re-render
+/// the source. The kept input is the placed pixels, so a fully disabled stack renders them.
+#[test]
+fn smart_filter_edits_replay_from_the_kept_input_of_undecodable_contents() {
+    let (mut s, _, bytes) = with_undecodable_contents(true);
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
+    let r3 = active_smart(&s).cache.clone().unwrap();
+    let input = active_smart(&s).raster_filters_input.clone().expect("the pre-filter pixels are kept for replay");
+    assert_ne!(r3.read_region(input.content_bounds()), input.read_region(input.content_bounds()), "the cache is the filtered input");
+
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"radius": 8}})).unwrap();
+    let sm = active_smart(&s);
+    assert_eq!(sm.smart_filters[0].params["radius"], 8);
+    assert_eq!(embedded_source_bytes(&sm), bytes, "the source bytes are untouched");
+    assert_eq!(
+        sm.raster_filters_input.as_ref().unwrap().read_region(input.content_bounds()),
+        input.read_region(input.content_bounds()),
+        "the kept input is untouched"
+    );
+    assert_ne!(sm.cache.as_ref().unwrap().read_region(r3.content_bounds()), r3.read_region(r3.content_bounds()), "the edit re-rendered from the input");
+
+    // Hiding the filter replays to the plain placed pixels.
+    s.execute("layer.smartFilter.setVisible", json!({"index": 0})).unwrap();
+    let sm = active_smart(&s);
+    assert_eq!(
+        sm.cache.as_ref().unwrap().read_region(input.content_bounds()),
+        input.read_region(input.content_bounds()),
+        "no visible filter: the placed pixels show"
+    );
+}
+
+/// A filter added under a selection bakes only the selected pixels, and the selection is kept
+/// as the filter mask — the replay honours it, so pixels outside the selection stay the
+/// placed ones while the params edit re-renders inside it.
+#[test]
+fn smart_filter_replay_honours_the_selection_of_undecodable_contents() {
+    let (mut s, _, _) = with_undecodable_contents(true);
+    let input = active_smart(&s).cache.clone().unwrap();
+    let (inside, outside) = (Rect::new(0, 0, 20, 20), Rect::new(24, 0, 64, 48));
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 4})).unwrap();
+    let sm = active_smart(&s);
+    assert!(sm.filter_mask.is_some(), "the selection is kept as the replay mask");
+    let baked = sm.cache.clone().unwrap();
+    assert_ne!(baked.read_region(inside), input.read_region(inside), "the filter bakes inside the selection");
+    assert_eq!(baked.read_region(outside), input.read_region(outside), "pixels outside the selection stay the placed ones");
+
+    s.execute("layer.smartFilter.setParams", json!({"index": 0, "params": {"radius": 12}})).unwrap();
+    let replayed = active_smart(&s).cache.clone().unwrap();
+    assert_ne!(replayed.read_region(inside), baked.read_region(inside), "the edit re-renders inside the mask");
+    assert_eq!(replayed.read_region(outside), input.read_region(outside), "the replay keeps outside the selection unchanged");
+}
+
+/// A second filter added to a cache-only object keeps the first one: the whole recorded stack
+/// re-runs from the replay input, so the baked pixels are exactly what a later edit reproduces.
+#[test]
+fn every_added_smart_filter_stays_in_the_baked_pixels() {
+    let (mut s, _, _) = with_undecodable_contents(true);
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+    s.execute("filter.noise.addNoise", json!({"amount": 20, "seed": 3})).unwrap();
+    let sm = active_smart(&s);
+    assert_eq!(sm.smart_filters.len(), 2);
+    let input = sm.raster_filters_input.clone().expect("the pre-filter pixels are kept");
+    let canvas = s.active().unwrap().doc.bounds();
+    let expected = super::rendering::apply_smart_filters(&input, &sm, canvas).unwrap();
+    let b = input.content_bounds();
+    assert_eq!(sm.cache.as_ref().unwrap().read_region(b), expected.read_region(b), "two adds bake exactly the replay of both filters");
+}
+
+/// Replace Contents drops the replay input of the old contents: a relink must never replay the
+/// stack over the previous file's pixels.
+#[test]
+fn replacing_contents_drops_the_old_replay_input() {
+    let (mut s, id, _) = with_undecodable_contents(true);
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 2})).unwrap();
+    assert!(active_smart(&s).raster_filters_input.is_some(), "the placed pixels are the replay input");
+    let path = std::env::temp_dir().join(format!("pcraft-replace-{}-{id}.png", std::process::id()));
+    let small = Document::new("replacement", Size::new(8, 8), ColorMode::Rgb, SampleType::U8);
+    let r = photocraft_io::export(&small, "replacement.png", &Default::default()).unwrap();
+    std::fs::write(&path, &r.bytes).unwrap();
+    s.execute("layer.smartObjects.replaceContents", json!({"path": path.to_str().unwrap()})).unwrap();
+    let sm = active_smart(&s);
+    assert!(sm.raster_filters_input.is_none(), "the old contents' input is dropped");
+    assert_eq!(sm.smart_filters.len(), 1, "the filter stack is kept across the replace");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// An imported filter stack is already baked into the cache (Photoshop applied it): the replay
+/// input is never taken from those pixels, so a new filter lands on them once, and an edit
+/// fails to re-render instead of double-applying the imported filters.
+#[test]
+fn imported_filters_are_not_replayed_from_their_own_pixels() {
+    let (mut s, id, _) = with_undecodable_contents(true);
+    // Model the import: the stack is recorded and its effect is baked into the cache.
+    s.edit("imported stack", |doc, _| {
+        let canvas = doc.bounds();
+        let sm = smart_mut(doc, LayerId(id))?;
+        let cache = sm.cache.as_ref().ok_or_else(|| EngineError::Other("no cache".into()))?;
+        let out =
+            crate::filters::apply_filter_to_surface("filter.blur.gaussianBlur", &json!({"radius": 2}), cache, canvas, None, canvas)?.expect("known filter");
+        sm.cache = Some(out);
+        sm.smart_filters.push(SmartFilter {
+            command: "filter.blur.gaussianBlur".into(),
+            params: json!({"radius": 2}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        Ok(())
+    })
+    .unwrap();
+    let imported = active_smart(&s).cache.clone().unwrap();
+    s.execute("filter.blur.gaussianBlur", json!({"radius": 8})).unwrap();
+    let sm = active_smart(&s);
+    assert_eq!(sm.smart_filters.len(), 2);
+    assert!(sm.raster_filters_input.is_none(), "the filtered cache never becomes the replay input");
+    let baked = sm.cache.clone().unwrap();
+    let b = imported.content_bounds();
+    assert_ne!(baked.read_region(b), imported.read_region(b), "the new filter lands on the imported pixels");
+    // Editing any filter would replay the whole stack on the input — refused instead.
+    assert!(
+        s.execute("layer.smartFilter.setParams", json!({"index": 1, "params": {"radius": 16}})).is_err(),
+        "no replay input: the edit fails instead of double-applying"
+    );
+}
+
+/// #4085 (review): the rasterized fallback is a read-only copy — no link back to the parent — so
+/// editing and saving (or closing) it never rewrites the layer: committing the cache would
+/// re-render the already-placed, already-filtered pixels through the layer's transform and smart
+/// filters a second time. The object is placed at 2× first, so a double transform would show.
+#[test]
+fn rasterized_contents_save_never_rewrites_the_parent() {
+    let mut s = session(8);
+    paint(&mut s);
+    let id = convert(&mut s);
+    s.execute("edit.transform", json!({"layer": id, "matrix": [2, 0, 0, 2, 0, 0]})).unwrap();
+    let bytes = b"an Illustrator file PhotoCraft cannot decode".to_vec();
+    s.edit("undecodable contents", |doc, _| {
+        let sm = smart_mut(doc, LayerId(id))?;
+        sm.source = SmartSource::Embedded { file_name: "Vector Smart Object.ai".into(), bytes: Arc::new(bytes.clone()) };
+        Ok(())
+    })
+    .unwrap();
+    let (before, transform, cache) = (flat(&s), active_smart(&s).transform, active_smart(&s).cache.unwrap());
+    let placed = cache.read_region(cache.content_bounds());
+    let child = s.execute("layer.smartObjects.editContents", json!({})).unwrap()["document"].as_u64().unwrap() as usize;
+    assert!(s.smart_links.is_empty(), "no link back to the parent");
+    assert!(!s.is_enabled("layer.smartObjects.saveContents"), "not an Edit Contents document");
+    // Edit the placed pixels and save: committing finds no link, so nothing updates the parent.
+    s.execute("image.adjustments.invert", json!({})).unwrap();
+    assert!(!commit_child(&mut s, child).unwrap());
+    // Closing the edited copy commits nothing either.
+    s.close(child).unwrap();
+    s.set_active(0);
+    let d = s.active().unwrap();
+    assert!(matches!(d.doc.layer(LayerId(id)).unwrap().content, LayerContent::Smart(_)));
+    let sm = active_smart(&s);
+    assert_eq!(embedded_source_bytes(&sm), bytes, "the .ai source is untouched");
+    assert_eq!(sm.transform, transform, "the placement is untouched");
+    assert!(sm.smart_filters.is_empty(), "the cache is unfiltered");
+    assert_eq!(sm.cache.as_ref().unwrap().read_region(sm.cache.as_ref().unwrap().content_bounds()), placed, "the placed pixels are untouched");
+    assert_eq!(flat(&s), before, "the parent's composite is untouched");
 }

@@ -98,6 +98,7 @@ async fn lists_expected_tools() {
         "ui_pointer",
         "ui_menu_invoke",
         "ui_set",
+        "health",
         "control_call",
     ] {
         assert!(names.contains(&n.to_string()), "missing tool {n}: {names:?}");
@@ -316,6 +317,9 @@ async fn errors_are_tool_errors_not_crashes() {
     let r = call(&client, "doc_open", json!({"path": "/definitely/missing.png"})).await;
     assert_eq!(r.is_error, Some(true));
     let r = call(&client, "ui_inspect", json!({})).await;
+    assert_eq!(r.is_error, Some(true));
+    assert!(text(&r).contains("bridge"));
+    let r = call(&client, "health", json!({})).await;
     assert_eq!(r.is_error, Some(true));
     assert!(text(&r).contains("bridge"));
     let r = call(&client, "doc_export", json!({})).await;
@@ -940,6 +944,9 @@ async fn fake_app_with_screenshot(screenshot_png: Option<Vec<u8>>) -> (String, t
                     json!({"id": id, "ok": true, "result": [{"id": "file.new", "label": "New…", "enabled": true}]})
                 }
                 "ui.pointer" => json!({"id": id, "ok": true, "result": req["params"]}),
+                "health" => {
+                    json!({"id": id, "ok": true, "result": {"logicCount": 42, "lastLogicAgoMs": 5, "drawnCount": 41, "lastDrawnAgoMs": 5}})
+                }
                 "ui.screenshot" => {
                     let bytes = screenshot_png.clone().unwrap_or_else(|| {
                         let img = photocraft_codecs::Image::from_u8(40, 20, photocraft_codecs::ChannelLayout::Rgba, vec![9; 3200]).unwrap();
@@ -967,6 +974,9 @@ async fn bridge_forwards_to_control_protocol() {
 
     let ui = json_of(&call(&client, "ui_inspect", json!({})).await);
     assert_eq!(ui["tool"], "brush");
+    let h = json_of(&call(&client, "health", json!({})).await);
+    assert_eq!(h["logicCount"], 42);
+    assert_eq!(h["drawnCount"], 41);
     let r = json_of(&call(&client, "command_run", json!({"id": "layer.new.layer", "params": {"name": "X"}})).await);
     assert_eq!(r["ran"], "layer.new.layer");
     let inspected = json_of(&call(&client, "doc_inspect", json!({"index": 1})).await);

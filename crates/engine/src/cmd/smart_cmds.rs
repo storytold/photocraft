@@ -19,7 +19,9 @@
 //! Converting a layer embeds it as an in-memory `.pcraft` bundle of a nested document (exactly
 //! lossless, layered, any depth/model). PSD placed layers keep their source in the preserved
 //! global `lnk2` block (found by uuid), and keep Photoshop's rendering until something changes,
-//! so an unedited PSD still round-trips byte for byte. PSD export (`photocraft_io::smart_map`)
+//! so an unedited PSD still round-trips byte for byte. Contents whose bytes can't be decoded
+//! (Illustrator/PDF sources, #4085) open for editing as their placed pixels instead of failing:
+//! a read-only copy, so saving it never rewrites the layer. PSD export (`photocraft_io::smart_map`)
 //! writes every smart object back as one: its source embedded in `lnk2` (a `.pcraft` source as a
 //! PSB), its smart filters in `filterFX` and its filter mask in `FEid`.
 
@@ -180,7 +182,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "layer.smartObjects.editContents",
             "Edit Contents",
             SO,
-            r##"{"layer":id?} → opens the contents as a new document; saving (layer.smartObjects.saveContents) or closing it updates the smart object"##,
+            r##"{"layer":id?} → opens the contents as a new document; saving (layer.smartObjects.saveContents) or closing it updates the smart object; undecodable contents (Illustrator/PDF, #4085) open as a read-only copy of their placed pixels"##,
             has_smart,
             edit_contents
         ),

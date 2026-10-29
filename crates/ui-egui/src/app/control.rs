@@ -1,9 +1,15 @@
-use super::{ControlRequest, PhotocraftApp, Receiver, gpu_canvas};
+use super::{ControlRequest, PhotocraftApp, Receiver, Value, gpu_canvas};
 
 impl PhotocraftApp {
     /// Attach a control channel (requests arrive from a transport thread: TCP, stdin, tests).
     pub fn with_control(mut self, rx: Receiver<ControlRequest>) -> Self {
         self.control_rx = Some(rx);
+        self
+    }
+
+    /// Attach the liveness/snapshot watch the transport threads read.
+    pub fn with_watch(mut self, watch: std::sync::Arc<crate::control::ControlWatch>) -> Self {
+        self.watch = Some(watch);
         self
     }
 
@@ -30,6 +36,15 @@ impl PhotocraftApp {
             }
             match crate::control::handle(self, ctx, &req) {
                 crate::control::Outcome::Done(v) => {
+                    // Keep the last reply of a snapshot getter for serving while wedged (#2493): the
+                    // transport serves it when the frame loop stops drawing frames, so a probe of
+                    // unchanged state still answers.
+                    if let Some(key) = crate::control::snapshot_key(&req.method, &req.params)
+                        && v.get("ok").and_then(Value::as_bool) == Some(true)
+                        && let Some(w) = self.watch.as_ref()
+                    {
+                        w.note_snapshot(&key, &v);
+                    }
                     let _ = reply.send(v);
                 }
                 crate::control::Outcome::AfterInput => self.input_waiters.push(reply),

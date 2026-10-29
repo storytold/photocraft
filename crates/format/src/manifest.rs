@@ -315,6 +315,9 @@ pub enum ContentM {
         transform: Affine,
         smart_filters: Vec<SmartFilter>,
         cache: Option<SurfaceM>,
+        /// Placed pixels a cache-only filter stack replays from; absent otherwise.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        raster_filters_input: Option<SurfaceM>,
         psd_raw: Option<Hash>,
         #[serde(default = "yes")]
         filters_enabled: bool,

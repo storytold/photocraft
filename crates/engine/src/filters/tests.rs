@@ -362,6 +362,7 @@ fn smart_object_records_smart_filter() {
                 transform: photocraft_geom::Affine::IDENTITY,
                 smart_filters: vec![],
                 cache: Some(cache),
+                raster_filters_input: None,
                 psd_raw: None,
                 filters_enabled: true,
                 filter_mask: None,

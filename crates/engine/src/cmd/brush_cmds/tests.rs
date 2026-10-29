@@ -139,6 +139,32 @@ fn stroke_accepts_full_points_brush_and_preset() {
 }
 
 #[test]
+fn stroke_spacing_is_a_diameter_fraction() {
+    // The documented contract: `spacing` multiplies the diameter (Photoshop's percent), so
+    // a size-50 spacing-5 stroke stamps dabs 250px apart — two bands on a 320px path. Each
+    // band spans the diameter plus the tip's ~1px anti-aliased shoulder, so only the dab
+    // centres and the pitch are pinned, not the exact alpha>0 rows.
+    let mut s = session(400, 400);
+    s.execute("paint.stroke", json!({"points": [[200, 40], [200, 360]], "size": 50, "spacing": 5, "color": "#ff0000"})).unwrap();
+    let painted: Vec<i32> = (0..400).filter(|&y| rgba(&s, 200, y)[3] > 0.0).collect();
+    let mut bands: Vec<(i32, i32)> = Vec::new();
+    for y in painted {
+        match bands.last_mut() {
+            Some(b) if y == b.1 + 1 => b.1 = y,
+            _ => bands.push((y, y)),
+        }
+    }
+    assert_eq!(bands.len(), 2, "spacing 5 → dabs every 250px: two bands on a 320px path, got {bands:?}");
+    let center = |b: &(i32, i32)| f64::from(b.0 + b.1) / 2.0;
+    assert!((center(&bands[0]) - 40.0).abs() <= 1.0, "the first dab stamps at the path start, band {:?}", bands[0]);
+    assert!((center(&bands[1]) - center(&bands[0]) - 250.0).abs() <= 1.0, "pitch = size × spacing = 250px, bands {bands:?}");
+    for b in &bands {
+        let width = b.1 - b.0 + 1;
+        assert!((48..=56).contains(&width), "a size-50 dab spans ~50px plus the AA shoulder, band {b:?}");
+    }
+}
+
+#[test]
 fn paint_commands_bound_hostile_time_and_reject_oversized_brushes() {
     let mut s = session(32, 32);
     let timed = s.execute(
@@ -1423,4 +1449,65 @@ fn brush_and_pencil_paint_a_cmyk_pick_with_the_picked_inks() {
         let got: Vec<f32> = surf.read_region(Rect::new(8, 8, 9, 9)).into_iter().take(4).collect();
         assert!(got.iter().zip(cyan).all(|(a, b)| (a - b).abs() < 0.02), "{cmd}: {got:?}");
     }
+}
+
+/// The brush object's schema traps are honest: `color` takes the top-level command's hex string, a
+/// scalar is accepted where a dynamic (jitter) is wanted, and a misplaced or unknown key is refused
+/// naming where it belongs instead of being merged away silently.
+#[test]
+fn brush_patch_takes_friendly_forms_and_refuses_misplaced_keys() {
+    let base = BrushSettings::default();
+    let cmd = "paint.stroke";
+    // A hex color, as the top-level `color` takes it.
+    let b = merge_brush(&base, &json!({"color": "#ff0000"}), cmd).unwrap();
+    assert_eq!(b.color, [1.0, 0.0, 0.0, 1.0]);
+    let b = merge_brush(&base, &json!({"color": "#80c0ff00"}), cmd).unwrap();
+    assert!((b.color[0] - 128.0 / 255.0).abs() < 1e-6 && (b.color[2] - 1.0).abs() < 1e-6 && b.color[3] == 0.0);
+    let e = merge_brush(&base, &json!({"color": "red"}), cmd).unwrap_err();
+    assert!(e.to_string().contains("#rrggbb"), "{e}");
+    // A scalar where a dynamic is wanted.
+    let b = merge_brush(&base, &json!({"scattering": {"enabled": true, "count": 3, "countJitter": 2}}), cmd).unwrap();
+    assert_eq!((b.scattering.count, b.scattering.count_jitter.jitter), (3, 2.0));
+    assert_eq!(b.scattering.count_jitter.control, photocraft_paint::Control::Off);
+    let e = merge_brush(&base, &json!({"scattering": {"countJitter": true}}), cmd).unwrap_err();
+    assert!(e.to_string().contains("jitter"), "{e}");
+    // A misplaced key names the right path; an unknown key is refused.
+    let e = merge_brush(&base, &json!({"countJitter": 2}), cmd).unwrap_err();
+    assert!(e.to_string().contains("scattering.countJitter"), "{e}");
+    assert!(merge_brush(&base, &json!({"colour": "#ff0000"}), cmd).is_err());
+    assert!(merge_brush(&base, &json!({"scattering": {"count": 3, "unknownKey": 1}}), cmd).is_err());
+    // A nested implicit key is refused too: implicit keys are root-only (the review fix), so
+    // `scattering.square` names no setting there instead of being silently accepted.
+    assert!(merge_brush(&base, &json!({"scattering": {"square": true}}), cmd).is_err());
+    // The documented object forms still work, and a legacy alias stays accepted.
+    let b = merge_brush(
+        &base,
+        &json!({"pressure_size": true, "square": true, "scattering": {"scatter": {"jitter": 1.0}, "countJitter": {"jitter": 0.5, "minimum": 0.2}}}),
+        cmd,
+    )
+    .unwrap();
+    assert!(b.pressure_size && b.square);
+    assert_eq!((b.scattering.scatter.jitter, b.scattering.count_jitter.minimum), (1.0, 0.2));
+    // A section key renamed since older files wrote it keeps loading (the serde alias on the
+    // field intends it), so a persisted brush from before the rename is never refused.
+    let b = merge_brush(&base, &json!({"mixer": {"reloadAfterStroke": false}}), cmd).unwrap();
+    assert!(!b.mixer.load_after_stroke, "the legacy name lands on the current field");
+    // Both spellings of one field in one patch would merge with the last value winning
+    // silently: refused, in either order.
+    let e = merge_brush(&base, &json!({"mixer": {"loadAfterStroke": true, "reloadAfterStroke": false}}), cmd).unwrap_err();
+    assert!(e.to_string().contains("same setting"), "{e}");
+    let e = merge_brush(&base, &json!({"pressure_size": true, "pressureSize": false}), cmd).unwrap_err();
+    assert!(e.to_string().contains("same setting"), "{e}");
+    let e = merge_brush(&base, &json!({"pressureSize": false, "pressure_size": true}), cmd).unwrap_err();
+    assert!(e.to_string().contains("same setting"), "{e}");
+    // A rejected patch leaves the brush alone.
+    let mut s = session(40, 40);
+    s.execute("paint.stroke", json!({"points": [[4, 20], [36, 20]], "size": 8, "brush": {"color": "#ff0000"}})).unwrap();
+    // A stroke paints the foreground unless its own `color` param says otherwise, so the hex form's
+    // proof is that the patch is accepted and the stroke paints, not the colour that lands.
+    assert!(rgba(&s, 20, 20)[3] > 0.9, "the hex brush colour is accepted and the stroke paints");
+    let before = s.tools.brush.clone();
+    let e = s.execute("paint.stroke", json!({"points": [[4, 20], [36, 20]], "brush": {"countJitter": 2}})).unwrap_err();
+    assert!(e.to_string().contains("scattering.countJitter"), "{e}");
+    assert_eq!(s.tools.brush, before);
 }

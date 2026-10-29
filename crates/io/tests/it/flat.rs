@@ -915,6 +915,136 @@ fn tga_transparency_reopens_as_alpha_1() {
     }
 }
 
+/// The pixel data of a single-level DXT5 (BC3) DDS: `alpha` is the 8-byte alpha block (a0, a1 and
+/// sixteen 3-bit indices), `colour` the 8-byte BC1 block that follows it.
+fn dds_dxt5(width: u32, height: u32, alpha: &[u8; 8], colour: &[u8; 8]) -> Vec<u8> {
+    let mut b = vec![0u8; 128];
+    b[0..4].copy_from_slice(b"DDS ");
+    let mut put = |at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    put(4, 124);
+    put(8, 0x1007); // CAPS | HEIGHT | WIDTH | PIXELFORMAT
+    put(12, height);
+    put(16, width);
+    put(76, 32);
+    put(80, 0x4); // DDPF_FOURCC
+    put(108, 0x1000); // DDSCAPS_TEXTURE
+    b[84..88].copy_from_slice(b"DXT5");
+    b.extend_from_slice(alpha);
+    b.extend_from_slice(colour);
+    b
+}
+
+/// A BC1 colour block: two RGB565 endpoints, then one 2-bit index per pixel, row by row.
+fn bc1_block(c0: u16, c1: u16, rows: [u8; 4]) -> [u8; 8] {
+    let mut b = [0; 8];
+    b[0..2].copy_from_slice(&c0.to_le_bytes());
+    b[2..4].copy_from_slice(&c1.to_le_bytes());
+    b[4..8].copy_from_slice(&rows);
+    b
+}
+
+/// #5696: a DXT5 DDS opens as Photoshop opens it, an opaque, locked "Background" whose colours
+/// show even where the alpha is 0 (the reported AO map is zero everywhere), plus an "Alpha 1"
+/// channel holding the alpha.
+#[test]
+fn dds_with_alpha_opens_as_background_plus_alpha_1() {
+    // a0 = a1 = 0: every alpha value of the block is 0.
+    let b = dds_dxt5(4, 4, &[0; 8], &bc1_block(0xf800, 0x001f, [0x04, 0x0e, 0, 0]));
+    let d = import("a.dds", &b).unwrap().document;
+    let [bg] = &d.layers[..] else { panic!("one layer") };
+    assert_eq!(bg.name, "Background");
+    assert!(bg.locks.transparency && bg.locks.position);
+    let px = bg.surface().unwrap().read_region(d.bounds());
+    for p in px.as_chunks::<4>().0 {
+        assert_eq!(p[3], 1.0, "the Background stays opaque");
+    }
+    // The block's colours: red, blue, then the two thirds between them, the rest red.
+    assert_eq!(&px[..8], &[1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0][..]);
+    assert_eq!(&px[16..24], &[170.0 / 255.0, 0.0, 85.0 / 255.0, 1.0, 85.0 / 255.0, 0.0, 170.0 / 255.0, 1.0][..]);
+    assert!(px[8..16].as_chunks::<4>().0.iter().chain(px[24..].as_chunks::<4>().0.iter()).all(|p| *p == [1.0, 0.0, 0.0, 1.0]));
+    let [ch] = &d.channels[..] else { panic!("one channel, got {}", d.channels.len()) };
+    assert_eq!((ch.name.as_str(), ch.spot), ("Alpha 1", None));
+    assert!(ch.surface.read_region(d.bounds()).iter().all(|&a| a == 0.0), "the original zero alpha");
+}
+
+/// A DXT5 DDS with nonzero alpha keeps those values in the "Alpha 1" channel.
+#[test]
+fn dds_alpha_channel_keeps_the_original_values() {
+    // a0 > a1, the six values between at sevenths; texels 0, 1, 4, 5 carry indices 0, 1, 2, 7:
+    // alphas 255, 0, 219, 36.
+    let alpha = [255, 0, 0x08, 0xa0, 0x03, 0, 0, 0];
+    let b = dds_dxt5(2, 2, &alpha, &bc1_block(0x0000, 0xffff, [0x04, 0x0b, 0, 0]));
+    let d = import("a.dds", &b).unwrap().document;
+    assert_eq!(d.layers[0].name, "Background");
+    let [ch] = &d.channels[..] else { panic!("one channel, got {}", d.channels.len()) };
+    assert_eq!(ch.surface.read_region(d.bounds()), [1.0, 0.0, 219.0 / 255.0, 36.0 / 255.0].as_slice());
+}
+
+/// A DDS without an alpha channel opens as before: a locked Background and no channel.
+#[test]
+fn dds_without_alpha_opens_unchanged() {
+    let mut b = vec![0u8; 128];
+    b[0..4].copy_from_slice(b"DDS ");
+    let mut put = |at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    put(4, 124);
+    put(8, 0x1007); // CAPS | HEIGHT | WIDTH | PIXELFORMAT
+    put(12, 1);
+    put(16, 2);
+    put(76, 32);
+    put(80, 0x40); // DDPF_RGB
+    put(88, 32);
+    for (i, m) in [0xff, 0xff00, 0xff_0000, 0].into_iter().enumerate() {
+        put(92 + 4 * i, m);
+    }
+    put(108, 0x1000); // DDSCAPS_TEXTURE
+    b.extend_from_slice(&[1, 2, 3, 0, 250, 251, 252, 0]);
+    let d = import("a.dds", &b).unwrap().document;
+    assert!(d.channels.is_empty());
+    assert_eq!(d.layers[0].name, "Background");
+    assert!(d.layers[0].locks.transparency && d.layers[0].locks.position);
+    let px = d.layers[0].surface().unwrap().read_region(d.bounds());
+    assert_eq!(&px[..4], &[1.0 / 255.0, 2.0 / 255.0, 3.0 / 255.0, 1.0][..]);
+}
+
+/// The pixel data of a single-level DXT1 (BC1) DDS: just the 8-byte BC1 block, for DXT1 has no
+/// separate alpha block.
+fn dds_dxt1(width: u32, height: u32, block: &[u8; 8]) -> Vec<u8> {
+    let mut b = vec![0u8; 128];
+    b[0..4].copy_from_slice(b"DDS ");
+    let mut put = |at: usize, v: u32| b[at..at + 4].copy_from_slice(&v.to_le_bytes());
+    put(4, 124);
+    put(8, 0x1007); // CAPS | HEIGHT | WIDTH | PIXELFORMAT
+    put(12, height);
+    put(16, width);
+    put(76, 32);
+    put(80, 0x4); // DDPF_FOURCC
+    put(108, 0x1000); // DDSCAPS_TEXTURE
+    b[84..88].copy_from_slice(b"DXT1");
+    b.extend_from_slice(block);
+    b
+}
+
+/// Review on #6307: a fully opaque DXT1 gets no all-white "Alpha 1" — every BC texture decodes
+/// with an alpha channel, so the channel is only made when some texel really is translucent. The
+/// texture still opens with its colours, as the plain, unlocked "Layer 0" of any image that
+/// carries an alpha channel (an opaque 32-bit PNG opens the same way), just without a channel.
+#[test]
+fn opaque_dxt1_opens_without_an_alpha_channel() {
+    // c0 > c1 keeps BC1 in its four-colour mode, so no texel is punch-through transparent; each
+    // row byte 0xE4 holds the indices 0, 1, 2, 3.
+    let b = dds_dxt1(4, 4, &bc1_block(0xf800, 0x001f, [0xE4, 0xE4, 0xE4, 0xE4]));
+    let d = import("a.dds", &b).unwrap().document;
+    assert!(d.channels.is_empty(), "no all-white Alpha 1, got {} channels", d.channels.len());
+    assert_eq!(d.layers[0].name, "Layer 0");
+    assert!(!d.layers[0].locks.transparency && !d.layers[0].locks.position);
+    let px = d.layers[0].surface().unwrap().read_region(d.bounds());
+    // The block's colours on every row: red, blue, then the two thirds between them.
+    assert_eq!(&px[..16], &[1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 1.0, 170.0 / 255.0, 0.0, 85.0 / 255.0, 1.0, 85.0 / 255.0, 0.0, 170.0 / 255.0, 1.0][..]);
+    for (row, chunk) in px.chunks(16).enumerate() {
+        assert_eq!(chunk, &px[..16], "row {row}");
+    }
+}
+
 /// #2124: as in Photoshop, the alpha channel (not layer transparency) is the alpha; transparent
 /// pixels are composited over white. Spot channels are not alpha channels.
 #[test]

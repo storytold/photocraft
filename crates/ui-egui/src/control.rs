@@ -33,8 +33,12 @@
 //! - `jobs.list` / `jobs.cancel {job?}`: background jobs (#210) with progress; cancel one (or all).
 //!   `engine.execute`, `ui.menu.invoke` and `ui.dialog.confirm` wait for a command that runs as a
 //!   job unless `wait: false` (then the reply is `{job, pending: true}`)
+//! - `health`: liveness counters and ages, answered by the transport without the frame loop
 
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::Sender;
+use std::sync::{Arc, Mutex};
 
 use base64::Engine as _;
 use serde_json::{Value, json};
@@ -67,6 +71,11 @@ pub fn timeout_error() -> String {
         "timeout: no reply in {}s — the command may still be running and may still apply, or the app was not drawing frames (display asleep, window fully occluded, or a long operation blocked the frame loop)",
         REPLY_DEADLINE.as_secs()
     )
+}
+
+/// The reply a request gets when its [`REPLY_DEADLINE`] passes.
+pub fn timeout_reply() -> Value {
+    json!({"ok": false, "error": timeout_error()})
 }
 
 /// The error for a request still queued when its deadline passed, from the UI thread or the
@@ -123,6 +132,157 @@ impl Dispatch {
     fn settle(&self, to: u8) -> u8 {
         use std::sync::atomic::Ordering;
         self.0.compare_exchange(QUEUED, to, Ordering::AcqRel, Ordering::Acquire).map_or_else(|state| state, |_| to)
+    }
+}
+
+/// How long the transport waits after requesting a repaint before deciding the frame loop
+/// did not service it: a wedged compositor sends no frame callbacks at all.
+pub const STALL_CHECK: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// The error a read-only getter fails fast with when the frame loop is wedged and no
+/// snapshot of its reply exists yet. Built from [`STALL_CHECK`], so the text cannot drift.
+pub fn not_drawing_frames_error() -> String {
+    format!(
+        "not drawing frames: no frame update ran within {}s of the request (display asleep, window fully occluded, or a blocked frame loop); call `health` for liveness and retry when frames resume",
+        STALL_CHECK.as_secs()
+    )
+}
+
+/// The read-only getters whose last reply is kept for serving while the frame loop is
+/// wedged: the methods an agent probes state with. `document.inspect` is keyed per
+/// document (the `document` param inside `params`, which is what `engine.execute`
+/// dispatches), since each document has its own reply; no param means the active document.
+pub fn snapshot_key(method: &str, params: &Value) -> Option<String> {
+    match method {
+        "ui.inspect" => Some("ui.inspect".into()),
+        "engine.commands" => Some("engine.commands".into()),
+        "jobs.list" => Some("jobs.list".into()),
+        "engine.execute" => {
+            // `dispatch` accepts the command id as `command` or `id`; both spellings key alike.
+            let command = params.get("command").or_else(|| params.get("id")).and_then(Value::as_str)?;
+            match command {
+                "document.inspect" => {
+                    let index = params.get("params").and_then(|p| p.get("document"));
+                    Some(match index {
+                        Some(index) => format!("engine.execute:document.inspect:{}", index_key(index)),
+                        None => "engine.execute:document.inspect".into(),
+                    })
+                }
+                "session.inspect" => Some("engine.execute:session.inspect".into()),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
+}
+
+/// A `document` index rendered into a snapshot key.
+fn index_key(value: &Value) -> String {
+    if let Some(n) = value.as_u64() {
+        n.to_string()
+    } else if let Some(n) = value.as_i64() {
+        n.to_string()
+    } else if let Some(n) = value.as_f64() {
+        n.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+/// Liveness counters and the last snapshot-getter replies, shared between the UI thread
+/// (which updates them) and the transport threads (which read them while the frame loop
+/// is wedged). `health` is answered from these alone, so it works even when
+/// no frame ever runs.
+#[derive(Default)]
+pub struct ControlWatch {
+    logic_count: AtomicU64,
+    last_logic_ms: AtomicU64,
+    drawn_count: AtomicU64,
+    last_drawn_ms: AtomicU64,
+    snapshots: Mutex<HashMap<String, (u64, Arc<Value>)>>,
+}
+
+impl ControlWatch {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Stamp a `logic` pass (runs even for hidden windows when a repaint was requested).
+    pub fn note_logic(&self) {
+        self.note(&self.logic_count, &self.last_logic_ms);
+    }
+
+    /// Stamp a rendered frame; stalls while the window is hidden or occluded.
+    pub fn note_drawn(&self) {
+        self.note(&self.drawn_count, &self.last_drawn_ms);
+    }
+
+    fn note(&self, count: &AtomicU64, at: &AtomicU64) {
+        count.fetch_add(1, Ordering::Relaxed);
+        at.store(crate::gpu_canvas::now_ms().max(0.0) as u64, Ordering::Relaxed);
+    }
+
+    pub fn logic_count(&self) -> u64 {
+        self.logic_count.load(Ordering::Relaxed)
+    }
+
+    pub fn drawn_count(&self) -> u64 {
+        self.drawn_count.load(Ordering::Relaxed)
+    }
+
+    /// Remember a snapshot getter's reply, so a wedged frame loop can still serve it.
+    pub fn note_snapshot(&self, key: &str, reply: &Value) {
+        let value = Arc::new(reply.clone());
+        let mut map = self.snapshots.lock().unwrap_or_else(|e| e.into_inner());
+        map.insert(key.to_string(), ((crate::gpu_canvas::now_ms().max(0.0)) as u64, value));
+    }
+
+    /// The last snapshot-getter reply and its age in milliseconds.
+    pub fn snapshot_with_age(&self, key: &str) -> Option<(u64, Arc<Value>)> {
+        let map = self.snapshots.lock().unwrap_or_else(|e| e.into_inner());
+        let (built, value) = map.get(key)?;
+        let now = (crate::gpu_canvas::now_ms().max(0.0)) as u64;
+        Some((now.saturating_sub(*built), Arc::clone(value)))
+    }
+
+    /// The `health` result: factual counters and ages only, answerable from a transport
+    /// thread. An idle-but-healthy app legitimately shows stale ages; a counter at
+    /// zero reports its age as null, since no pass has ever run.
+    pub fn health(&self) -> Value {
+        let now = (crate::gpu_canvas::now_ms().max(0.0)) as u64;
+        let ago = |count: u64, last: u64| if count == 0 { Value::Null } else { json!(now.saturating_sub(last)) };
+        json!({
+            "lastLogicAgoMs": ago(self.logic_count(), self.last_logic_ms.load(Ordering::Relaxed)),
+            "lastDrawnAgoMs": ago(self.drawn_count(), self.last_drawn_ms.load(Ordering::Relaxed)),
+            "logicCount": self.logic_count.load(Ordering::Relaxed),
+            "drawnCount": self.drawn_count.load(Ordering::Relaxed),
+        })
+    }
+}
+
+/// What a transport thread does for a request whose [`STALL_CHECK`] elapsed without a
+/// reply: the frame loop either serviced the repaint (alive, maybe slow) or never ran
+/// (wedged: serve the getter's snapshot, or fail fast).
+pub enum Stalled {
+    /// The frame loop ran after the request; wait for its reply as before.
+    KeepWaiting,
+    /// Serve the getter's last reply, stamped with its age; the frame thread's eventual
+    /// reply lands on a dropped receiver.
+    Snapshot { age_ms: u64, value: Arc<Value> },
+    /// The frame loop is wedged and no snapshot of this getter exists yet.
+    NotDrawingFrames,
+}
+
+pub fn stalled_action(watch: &ControlWatch, method: &str, params: &Value, logic_before: u64) -> Stalled {
+    if watch.logic_count() != logic_before {
+        return Stalled::KeepWaiting;
+    }
+    match snapshot_key(method, params) {
+        Some(key) => match watch.snapshot_with_age(&key) {
+            Some((age_ms, value)) => Stalled::Snapshot { age_ms, value },
+            None => Stalled::NotDrawingFrames,
+        },
+        None => Stalled::KeepWaiting,
     }
 }
 

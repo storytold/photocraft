@@ -513,6 +513,10 @@ pub struct SmartObject {
     pub smart_filters: Vec<SmartFilter>,
     /// Rendered appearance.
     pub cache: Option<Surface>,
+    /// The placed pixels `cache` was filtered from, when a smart filter was baked into
+    /// the cache of a source PhotoCraft can't decode (its stack then can't re-render from
+    /// the source): smart-filter edits replay the recorded stack from this input instead.
+    pub raster_filters_input: Option<Surface>,
     /// Data of the PSD placed-layer block (`SoLd`, `PlLd` or `SoLE`). On export
     /// it replaces that entry in [`Layer::psd_blocks`].
     pub psd_raw: Option<Arc<Vec<u8>>>,
@@ -543,6 +547,7 @@ impl SmartObject {
             transform,
             smart_filters: Vec::new(),
             cache,
+            raster_filters_input: None,
             psd_raw: None,
             filters_enabled: true,
             filter_mask: None,

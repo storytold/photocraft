@@ -1,5 +1,7 @@
 use super::filters::smart;
-use super::source::{SourceImage, cache_get, cache_key, cache_put, source_bytes, source_image, source_surface, svg_source_image, vector_scale};
+use super::source::{
+    SourceImage, cache_get, cache_key, cache_put, renderable_source, source_bytes, source_image, source_surface, svg_source_image, vector_scale,
+};
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
     SmartSource, Stage, StageKey, Surface, Value, decode_source, other, stack_cache,
@@ -302,6 +304,16 @@ pub(super) fn unapplied_filters(sm: &SmartObject) -> Vec<String> {
 
 fn refresh_layer_in(doc: &Document, l: &mut Layer, ctx: &JobCtx) -> Result<bool> {
     let LayerContent::Smart(sm) = &mut l.content else { return Ok(false) };
+    // A source PhotoCraft can't decode never re-renders; a filter stack baked into its cache
+    // replays from the kept pre-filter pixels (`raster_filters_input`) instead.
+    let replayed = match sm.raster_filters_input.as_ref() {
+        Some(input) if !renderable_source(doc, sm) => Some(apply_smart_filters(input, sm, doc.bounds())?),
+        _ => None,
+    };
+    if let Some(px) = replayed {
+        sm.cache = Some(px);
+        return Ok(true);
+    }
     match render_in(doc, sm, ctx)? {
         Some(px) => {
             sm.cache = Some(px);

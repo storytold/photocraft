@@ -3,8 +3,8 @@ use super::placing::detach_psd;
 use super::rendering::{refresh, refresh_or_fail, unapplied_filters};
 use super::source::{authorized_source_bytes, source_bytes};
 use super::{
-    Arc, DocId, Document, EngineError, LayerContent, LayerId, Metadata, Result, Session, SmartContentsId, SmartLink, SmartSource, Value, bad, base_name,
-    decode_source, encode_source, json, layer_param, other,
+    Arc, DocId, Document, EngineError, Layer, LayerContent, LayerId, Metadata, Result, Session, Size, SmartContentsId, SmartLink, SmartSource, Value, bad,
+    base_name, decode_source, encode_source, json, layer_param, other, translate_surface,
 };
 
 pub(super) fn path_param<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
@@ -38,6 +38,9 @@ fn set_shared_source(s: &mut Session, id: LayerId, label: &str, keep_psd: bool, 
         let mut warnings = std::collections::BTreeSet::new();
         for &instance in &changed {
             smart_mut(doc, instance)?.source = new.clone();
+            // The old input belongs to the old contents: kept, a relink to another undecodable
+            // file would replay the stack over the previous contents' pixels.
+            smart_mut(doc, instance)?.raster_filters_input = None;
             if !keep_psd {
                 detach_psd(doc.layer_mut(instance).ok_or(EngineError::NoLayer(instance))?);
             }
@@ -104,6 +107,40 @@ pub(super) fn export_contents(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"path": path, "fileName": name, "bytes": r.bytes.len(), "converted": true, "warnings": r.warnings}))
 }
 
+/// The placed pixels of a smart object whose source can't be decoded, as an editable document of
+/// one raster layer: the Edit Contents fallback for Illustrator/PDF contents (#4085). The source
+/// bytes are never touched.
+fn rasterized_contents(doc: &Document, id: LayerId, file_name: &str) -> Result<Document> {
+    let l = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let LayerContent::Smart(sm) = &l.content else { return Err(other("the layer is not a smart object")) };
+    let cache = sm.cache.as_ref().ok_or_else(|| other("the smart object has no cached pixels to open"))?;
+    let b = cache.content_bounds();
+    if b.is_empty() {
+        return Err(other("the smart object has no cached pixels to open"));
+    }
+    let mut child = Document::new(format!("{file_name} (rasterized)"), Size::new(b.width(), b.height()), doc.mode, doc.depth);
+    child.resolution_dpi = doc.resolution_dpi;
+    child.icc_profile = doc.icc_profile.clone();
+    let px = translate_surface(cache, -b.x0, -b.y0);
+    child.layers.push(Layer::new(l.name.as_str(), LayerContent::Raster(px)));
+    Ok(child)
+}
+
+/// The error for contents PhotoCraft can't decode: name the format kind and the way out, instead
+/// of a bare codec message (#4085).
+fn undecodable_contents(file_name: &str, e: EngineError) -> EngineError {
+    let ext = std::path::Path::new(file_name).extension().and_then(|x| x.to_str()).map(|x| x.to_ascii_lowercase());
+    let kind = match ext.as_deref() {
+        Some("ai") => "an Illustrator",
+        Some("pdf") => "a PDF",
+        Some("eps") => "an EPS",
+        _ => return e,
+    };
+    other(format!(
+        "PhotoCraft can't edit {kind} smart object ({file_name}) yet. Export its contents unchanged (the same file type: the original bytes), convert them to a format PhotoCraft reads in another application, and use Replace Contents"
+    ))
+}
+
 pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let id = layer_param(s, p)?;
     let st = s.active().ok_or(EngineError::NoDocument)?;
@@ -119,16 +156,36 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
     let source = &smart(&st.doc, id)?.source;
     let (name, bytes) = authorized_source_bytes(s, "layer.smartObjects.editContents", &st.doc.metadata, source)?
         .ok_or_else(|| other("the smart object's contents are unavailable"))?;
-    let mut child = decode_source(&name, &bytes)?;
+    let mut rasterized = false;
+    let mut child = match decode_source(&name, &bytes) {
+        Ok(mut child) => {
+            child.name = name.clone();
+            child
+        }
+        // Undecodable contents (Illustrator/PDF, #4085): open the placed pixels instead, so the
+        // user can still edit what is on the canvas. The stored source bytes stay untouched.
+        Err(e) => match rasterized_contents(&st.doc, id, &name) {
+            Ok(child) => {
+                rasterized = true;
+                child
+            }
+            Err(_) => return Err(undecodable_contents(&name, e)),
+        },
+    };
     // Bundles keep their document id; each open copy needs its own.
     child.id = DocId::fresh();
-    child.name = name;
     let index = s.add_document(child, None);
     // Admission may replace an ID already owned by another open document.
     let child_id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
     s.smart_links.retain(|l| l.child != child_id);
-    s.smart_links.push(SmartLink { child: child_id, parent, layer: id, contents_id });
-    Ok(json!({"document": index, "parentLayer": id.0}))
+    // The rasterized fallback is a read-only copy of the placed pixels (already transformed and
+    // filtered canvas-space pixels): no link back to the parent, so saving or closing it never
+    // rewrites the layer — committing it would render the cache through the layer's transform and
+    // filters a second time (scaled twice, blurred twice).
+    if !rasterized {
+        s.smart_links.push(SmartLink { child: child_id, parent, layer: id, contents_id });
+    }
+    Ok(json!({"document": index, "parentLayer": id.0, "rasterized": rasterized}))
 }
 
 /// Writes an Edit Contents document back into all its parent instances (one undoable step in the

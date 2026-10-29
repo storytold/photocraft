@@ -184,6 +184,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
                 visible: true,
             }],
             cache: Some(cache),
+            raster_filters_input: None,
             psd_raw: None,
             filters_enabled: false,
             filter_mask: Some(LayerMask {
@@ -207,6 +208,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
             transform: Affine::IDENTITY,
             smart_filters: vec![],
             cache: None,
+            raster_filters_input: None,
             psd_raw: Some(blob(12, 8)),
             filters_enabled: true,
             filter_mask: None,

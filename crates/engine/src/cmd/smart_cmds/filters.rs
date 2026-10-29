@@ -1,5 +1,5 @@
-use super::rendering::{refresh_or_fail, refresh_or_fail_in};
-use super::source::source_bytes;
+use super::rendering::{apply_smart_filters, refresh_or_fail, refresh_or_fail_in};
+use super::source::renderable_source;
 use super::{
     BlendMode, Document, EngineError, Layer, LayerContent, LayerId, LayerMask, Result, Session, SmartObject, Surface, Value, bad, blend_from_str, json,
     layer_param, other,
@@ -59,10 +59,11 @@ fn mask_from_selection(sel: &Surface) -> LayerMask {
 
 /// Appends a smart filter (from a `filter.*` command) and re-renders. A selection becomes the
 /// filter mask, as in Photoshop. Without a renderable source the filter is applied to the cached
-/// pixels (and still recorded).
+/// pixels (and still recorded): the pre-filter pixels move into `raster_filters_input`, so the
+/// recorded stack stays editable by replay (`refresh_layer_in`).
 pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_doc::SmartFilter, selection: Option<&Surface>) -> Result<()> {
     let canvas = doc.bounds();
-    let renderable = source_bytes(&doc.metadata, &smart(doc, id)?.source).is_some();
+    let renderable = renderable_source(doc, smart(doc, id)?);
     let sm = smart_mut(doc, id)?;
     if renderable {
         if let Some(sel) = selection
@@ -74,9 +75,38 @@ pub(crate) fn add_smart_filter(doc: &mut Document, id: LayerId, sf: photocraft_d
         return refresh_or_fail(doc, id);
     }
     let bounds = selection.map(Surface::content_bounds).filter(|b| !b.is_empty()).unwrap_or(canvas);
+    // An imported stack's filters are already baked into the cache (Photoshop applied them);
+    // replaying the stack on it would apply them twice, so the replay input is only kept for
+    // a filter-free cache. Without one, a later edit fails to re-render instead of
+    // double-applying, while the new filter itself still lands on the cached pixels.
+    if sm.raster_filters_input.is_none() && sm.smart_filters.is_empty() {
+        let cache = sm.cache.take().ok_or_else(|| other("smart object has no pixels"))?;
+        sm.raster_filters_input = Some(cache);
+    }
+    // The selection limits the baked pixels the same way it does on the renderable path, so
+    // the replay honours it (outside it the input shows unchanged).
+    if let Some(sel) = selection
+        && sm.filter_mask.is_none()
+    {
+        sm.filter_mask = Some(mask_from_selection(sel));
+    }
+    // With a replay input, the whole recorded stack (this filter included) re-runs from it, so
+    // the baked pixels are exactly what a later edit of any filter reproduces — a second add
+    // must not bake onto the raw input and drop the recorded ones. Without an input, the
+    // recorded stack is baked into the cache: the new filter lands on it alone, and not at all
+    // while the stack is off, which no re-render from here could reproduce.
+    if let Some(input) = sm.raster_filters_input.clone() {
+        sm.smart_filters.push(sf);
+        sm.cache = Some(apply_smart_filters(&input, sm, canvas)?);
+        return Ok(());
+    }
     let cache = sm.cache.as_ref().ok_or_else(|| other("smart object has no pixels"))?;
-    let out = crate::filters::apply_filter_to_surface(&sf.command, &sf.params, cache, bounds, selection, canvas)?
-        .ok_or_else(|| other(format!("unknown filter {}", sf.command)))?;
+    let out = if sm.filters_enabled && sf.visible {
+        crate::filters::apply_filter_to_surface(&sf.command, &sf.params, cache, bounds, selection, canvas)?
+            .ok_or_else(|| other(format!("unknown filter {}", sf.command)))?
+    } else {
+        cache.clone()
+    };
     sm.cache = Some(out);
     sm.smart_filters.push(sf);
     Ok(())

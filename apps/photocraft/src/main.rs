@@ -600,8 +600,8 @@ fn main() -> eframe::Result {
                 }
             });
             if let Some((port, token, _)) = control {
-                let rx = control_server::start(port, token, cc.egui_ctx.clone());
-                app = app.with_control(rx);
+                let (rx, watch) = control_server::start(port, token, cc.egui_ctx.clone());
+                app = app.with_control(rx).with_watch(watch);
             }
             #[cfg(target_os = "macos")]
             {

@@ -86,7 +86,7 @@ fn show_snap_extras_and_screen_modes_are_state() {
 }
 
 #[test]
-fn full_screen_and_maximized_never_overlap_on_windows() {
+fn full_screen_and_maximized_never_overlap_on_windows_and_linux() {
     use egui::ViewportCommand::{Fullscreen, Maximized};
     // Maximized → full screen: un-maximize first, and remember it.
     let (cmds, remember) = screen_mode_commands(true, false, true, false, "fullScreenWithMenuBar");
@@ -108,9 +108,36 @@ fn full_screen_and_maximized_never_overlap_on_windows() {
     // Standard while already standard never maximizes.
     let (cmds, _) = screen_mode_commands(true, false, false, true, "standard");
     assert_eq!(cmds, vec![Fullscreen(false)]);
-    // Elsewhere the commands are as before.
-    let (cmds, remember) = screen_mode_commands(false, false, true, false, "fullScreen");
-    assert_eq!((cmds, remember), (vec![Fullscreen(true)], false));
+    // Linux dispatches with keep_apart too (#5531); the exits are covered by
+    // `full_screen_exit_on_linux_restores_the_window`.
+    let (cmds, remember) = screen_mode_commands(true, false, true, false, "fullScreen");
+    assert_eq!(cmds, vec![Maximized(false), Fullscreen(true)]);
+    assert!(remember);
+}
+
+/// #5531: on Linux a full screen window could not be restored (the exit was a bare
+/// `Fullscreen(false)`, which can be dropped while the maximized state from before the entry is
+/// still set). The app now dispatches `screen_mode_commands` with `keep_apart` on Linux too, so
+/// the exit re-asserts the window state like on Windows.
+#[test]
+fn full_screen_exit_on_linux_restores_the_window() {
+    use egui::ViewportCommand::{Fullscreen, Maximized};
+    // Full screen entered from a maximized window: the exit re-maximizes after leaving.
+    let (cmds, remember) = screen_mode_commands(true, true, false, true, "standard");
+    assert_eq!(cmds, vec![Fullscreen(false), Maximized(true)]);
+    assert!(!remember);
+    // Full screen entered from a normal window: the exit stays the plain Fullscreen(false).
+    let (cmds, remember) = screen_mode_commands(true, true, false, false, "standard");
+    assert_eq!(cmds, vec![Fullscreen(false)]);
+    assert!(!remember);
+    // Leaving via the other full-screen mode keeps remembering the maximized state for the
+    // final exit.
+    let (cmds, remember) = screen_mode_commands(true, true, false, true, "fullScreenWithMenuBar");
+    assert_eq!(cmds, vec![Fullscreen(true)]);
+    assert!(remember);
+    let (cmds, remember) = screen_mode_commands(true, true, false, true, "standard");
+    assert_eq!(cmds, vec![Fullscreen(false), Maximized(true)]);
+    assert!(!remember);
 }
 
 #[test]

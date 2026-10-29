@@ -2086,3 +2086,169 @@ fn ui_set_mask_target_ends_a_filter_mask_view() {
     let photocraft_doc::LayerContent::Smart(sm) = &l.content else { panic!("smart object") };
     assert_eq!(sm.filter_mask.as_ref().unwrap().value(20, 20), 1.0, "not into the filter mask");
 }
+
+#[test]
+fn snapshot_key_covers_only_the_read_only_getters_agents_probe_with() {
+    assert_eq!(snapshot_key("ui.inspect", &json!({})).as_deref(), Some("ui.inspect"));
+    assert_eq!(snapshot_key("engine.commands", &json!({})).as_deref(), Some("engine.commands"));
+    assert_eq!(snapshot_key("jobs.list", &json!({})).as_deref(), Some("jobs.list"));
+    assert_eq!(
+        snapshot_key("engine.execute", &json!({"command": "document.inspect"})).as_deref(),
+        Some("engine.execute:document.inspect"),
+        "no `document` param: the active document"
+    );
+    assert_eq!(
+        snapshot_key("engine.execute", &json!({"command": "document.inspect", "params": {"document": 3}})).as_deref(),
+        Some("engine.execute:document.inspect:3"),
+        "the spelling `engine.execute` dispatch reads"
+    );
+    assert_eq!(
+        snapshot_key("engine.execute", &json!({"command": "document.inspect", "document": 3})).as_deref(),
+        Some("engine.execute:document.inspect"),
+        "a top-level `document` is ignored, as by dispatch: the active document's snapshot"
+    );
+    assert_ne!(
+        snapshot_key("engine.execute", &json!({"command": "document.inspect", "params": {"document": 1}})),
+        snapshot_key("engine.execute", &json!({"command": "document.inspect", "params": {"document": 2}})),
+        "different indexes get different snapshots"
+    );
+    // `dispatch` accepts the command id as `command` or `id`; both spellings key alike.
+    assert_eq!(
+        snapshot_key("engine.execute", &json!({"id": "document.inspect", "params": {"document": 1}})).as_deref(),
+        Some("engine.execute:document.inspect:1")
+    );
+    assert_eq!(snapshot_key("engine.execute", &json!({"id": "document.inspect"})).as_deref(), Some("engine.execute:document.inspect"));
+    assert_eq!(snapshot_key("engine.execute", &json!({"command": "session.inspect"})).as_deref(), Some("engine.execute:session.inspect"));
+    // Only those two engine commands read state; everything else changes it.
+    assert_eq!(snapshot_key("engine.execute", &json!({"command": "layer.new.layer"})), None);
+    assert_eq!(snapshot_key("engine.execute", &json!({})), None, "a missing command");
+    assert_eq!(snapshot_key("engine.execute", &json!({"command": 7})), None, "a non-string command");
+    assert_eq!(snapshot_key("ui.set", &json!({"tool": "Brush"})), None);
+    assert_eq!(snapshot_key("ui.pointer", &json!({})), None);
+    assert_eq!(snapshot_key("app.quit", &json!({})), None);
+}
+
+#[test]
+fn control_watch_counts_logic_and_drawn_passes_and_reports_them_as_health() {
+    let watch = ControlWatch::new();
+    let health = watch.health();
+    assert_eq!(watch.logic_count(), 0);
+    assert!(health["lastLogicAgoMs"].is_null(), "no logic pass ran yet: {health}");
+    assert!(health["lastDrawnAgoMs"].is_null(), "no frame drawn yet: {health}");
+    assert_eq!(health["logicCount"], json!(0));
+    assert_eq!(health["drawnCount"], json!(0));
+    watch.note_logic();
+    watch.note_logic();
+    watch.note_drawn();
+    assert_eq!(watch.logic_count(), 2, "only logic passes feed the stall check");
+    let health = watch.health();
+    for key in ["lastLogicAgoMs", "lastDrawnAgoMs", "logicCount", "drawnCount"] {
+        assert!(health.get(key).and_then(Value::as_u64).is_some(), "health reports {key}: {health}");
+    }
+    assert_eq!(health["logicCount"], json!(2));
+    assert_eq!(health["drawnCount"], json!(1));
+}
+
+#[test]
+fn control_watch_serves_the_last_snapshot_young_and_returns_none_for_unknown_keys() {
+    let watch = ControlWatch::new();
+    assert!(watch.snapshot_with_age("ui.inspect").is_none(), "nothing was stored yet");
+    watch.note_snapshot("ui.inspect", &json!({"ok": true, "tool": "Brush"}));
+    let (age_ms, value) = watch.snapshot_with_age("ui.inspect").expect("the stored snapshot");
+    assert_eq!(*value, json!({"ok": true, "tool": "Brush"}));
+    assert!(age_ms < 10_000, "a snapshot stored now is young: {age_ms}ms");
+    watch.note_snapshot("ui.inspect", &json!({"ok": true, "tool": "Eraser"}));
+    assert_eq!(watch.snapshot_with_age("ui.inspect").expect("the latest reply wins").1["tool"], json!("Eraser"), "a newer snapshot replaces the older one");
+    assert!(watch.snapshot_with_age("engine.commands").is_none(), "only requested getters are stored");
+}
+
+#[test]
+fn stalled_action_waits_while_logic_runs_serves_a_snapshot_or_fails_fast() {
+    // The frame loop ran after the request: wait for its reply, snapshot or not.
+    let watch = ControlWatch::new();
+    watch.note_snapshot("ui.inspect", &json!({"ok": true}));
+    let before = watch.logic_count();
+    watch.note_logic();
+    assert!(matches!(stalled_action(&watch, "ui.inspect", &json!({}), before), Stalled::KeepWaiting));
+
+    // Wedged, but this getter's last reply exists: serve it, stamped with its age.
+    let watch = ControlWatch::new();
+    watch.note_snapshot("ui.inspect", &json!({"ok": true}));
+    let before = watch.logic_count();
+    let Stalled::Snapshot { age_ms, value } = stalled_action(&watch, "ui.inspect", &json!({}), before) else {
+        panic!("a stored snapshot must be served");
+    };
+    assert_eq!(*value, json!({"ok": true}));
+    assert!(age_ms < 10_000, "a snapshot stored now is young: {age_ms}ms");
+
+    // Wedged and no snapshot of this getter yet: fail fast, naming the machine state.
+    let watch = ControlWatch::new();
+    let before = watch.logic_count();
+    assert!(matches!(stalled_action(&watch, "ui.inspect", &json!({}), before), Stalled::NotDrawingFrames));
+
+    // Not a read-only getter: there is nothing to serve, so keep waiting either way.
+    let watch = ControlWatch::new();
+    let before = watch.logic_count();
+    assert!(matches!(stalled_action(&watch, "ui.set", &json!({"tool": "Brush"}), before), Stalled::KeepWaiting));
+}
+
+#[test]
+fn drain_control_snapshots_getter_replies_but_not_mutating_ones() {
+    use std::sync::Arc;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let layers = app.session.active().unwrap().doc.layers.len();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let watch = Arc::new(ControlWatch::new());
+    let mut app = app.with_control(rx).with_watch(Arc::clone(&watch));
+    let (inspect, reply) = ControlRequest::new("ui.inspect", json!({}));
+    tx.send(inspect).unwrap();
+    let (edit, edit_reply) = ControlRequest::new("engine.execute", json!({"command": "layer.new.layer"}));
+    tx.send(edit).unwrap();
+    app.drain_control(&egui::Context::default());
+    let inspected = reply.try_recv().unwrap();
+    assert_eq!(inspected["ok"], true, "{inspected}");
+    let (age_ms, snapshot) = watch.snapshot_with_age("ui.inspect").expect("the getter's reply was kept");
+    assert_eq!(*snapshot, inspected, "the snapshot is the reply the frame loop sent");
+    assert!(age_ms < 10_000, "a snapshot taken now is young: {age_ms}ms");
+    let edited = edit_reply.try_recv().unwrap();
+    assert_eq!(edited["ok"], true, "{edited}");
+    assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1, "the edit still ran");
+    for key in ["engine.commands", "jobs.list", "engine.execute:document.inspect", "engine.execute:session.inspect"] {
+        assert!(watch.snapshot_with_age(key).is_none(), "a mutating request stores no snapshot");
+    }
+    // A failed getter call is never cached: only successful replies are served while wedged.
+    let failing = json!({"command": "document.inspect", "params": {"document": 99}});
+    let (req, failing_reply) = ControlRequest::new("engine.execute", failing.clone());
+    tx.send(req).unwrap();
+    app.drain_control(&egui::Context::default());
+    let failed = failing_reply.try_recv().unwrap();
+    assert_eq!(failed["ok"], false, "{failed}");
+    let key = snapshot_key("engine.execute", &failing).expect("a keyed getter");
+    assert_eq!(key, "engine.execute:document.inspect:99");
+    assert!(watch.snapshot_with_age(&key).is_none(), "a failed getter stores no snapshot");
+    assert!(watch.snapshot_with_age("ui.inspect").is_some(), "the earlier good snapshot is untouched");
+}
+
+#[test]
+fn not_drawing_frames_error_names_the_stall_and_the_liveness_probe() {
+    // The fast-fail must tell "wedged" from "slow", point at `health`, and its
+    // number must come from the stall check it reports.
+    let error = not_drawing_frames_error();
+    assert!(error.contains("not drawing frames"), "machines match on the phrase: {error}");
+    assert!(error.contains(&format!("{}s", STALL_CHECK.as_secs())), "the text matches the stall check: {error}");
+    assert!(error.contains("health"), "the probe to call: {error}");
+    assert!(error.contains("display asleep"), "the check-the-display cause: {error}");
+}
+
+#[test]
+fn fresh_watch_never_panics_and_fails_fast_on_a_wedged_getter() {
+    let watch = ControlWatch::default();
+    let health = watch.health();
+    assert!(health["lastLogicAgoMs"].is_null(), "no logic pass ran yet: {health}");
+    assert!(health["lastDrawnAgoMs"].is_null(), "no frame drawn yet: {health}");
+    assert_eq!(health["logicCount"], json!(0), "no logic pass ran yet");
+    assert_eq!(health["drawnCount"], json!(0), "no frame drawn yet");
+    assert!(watch.snapshot_with_age("ui.inspect").is_none(), "the empty map answers None, not an error");
+    assert!(matches!(stalled_action(&watch, "ui.inspect", &json!({}), 0), Stalled::NotDrawingFrames), "no logic pass, no snapshot: fail fast");
+}

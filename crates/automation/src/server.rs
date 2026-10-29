@@ -1012,6 +1012,16 @@ impl PhotocraftMcp {
         }
     }
 
+    #[tool(
+        description = "Bridge mode: liveness of the live app's frame loop (logic/drawn counters and ages), answered by the transport even when no frames are drawn — the probe to call when other tools time out."
+    )]
+    async fn health(&self) -> Result<CallToolResult, McpError> {
+        match self.bridge_client() {
+            Some(b) => to_result(b.call_read("health", json!({})).await),
+            None => bridge_only("health"),
+        }
+    }
+
     #[tool(description = "Bridge mode: call any control-protocol method (docs/control-protocol.md) with raw params.")]
     async fn control_call(&self, Parameters(p): Parameters<ControlParams>) -> Result<CallToolResult, McpError> {
         match self.bridge_client() {

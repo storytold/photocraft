@@ -218,3 +218,10 @@ pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<S
     cache_put(key, img.clone());
     Ok(img)
 }
+
+/// Whether the smart object re-renders from its source: bytes present **and** decodable.
+/// Undecodable contents (Illustrator/PDF sources PhotoCraft can't read yet) are not renderable:
+/// callers fall back to the cached placed pixels instead of failing to refresh (#4085).
+pub(super) fn renderable_source(doc: &Document, sm: &SmartObject) -> bool {
+    source_bytes(&doc.metadata, &sm.source).is_some_and(|(name, bytes)| source_image(&name, &bytes, doc.pixel_format()).is_ok())
+}

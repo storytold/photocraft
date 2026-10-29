@@ -330,7 +330,10 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
         // Both full-screen modes take the whole display; the menu bar stays in the first.
         let (full_screen, maximized) = ctx.input(|i| (i.viewport().fullscreen.unwrap_or(false), i.viewport().maximized.unwrap_or(false)));
         let was_maximized = ctx.data(|d| d.get_temp::<bool>(was_maximized_id())).unwrap_or(false);
-        let (commands, was_maximized) = screen_mode_commands(cfg!(target_os = "windows"), full_screen, maximized, was_maximized, next);
+        // Un-maximizing first keeps full screen and maximized apart wherever their overlap jams
+        // the window: Windows (taskbar, #3550) and Linux (no way out of full screen, #5531).
+        let (commands, was_maximized) =
+            screen_mode_commands(cfg!(target_os = "windows") || cfg!(target_os = "linux"), full_screen, maximized, was_maximized, next);
         ctx.data_mut(|d| d.insert_temp(was_maximized_id(), was_maximized));
         for command in commands {
             ctx.send_viewport_cmd(command);
