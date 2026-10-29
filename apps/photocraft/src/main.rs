@@ -476,11 +476,28 @@ fn main() -> eframe::Result {
     let app_created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let created_in_callback = app_created.clone();
     let started_sentinel = sentinel.clone();
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    let context_cell = std::sync::Arc::new(std::sync::OnceLock::<egui::Context>::new());
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    let watcher_start = std::time::Instant::now();
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    let portal_theme = appearance::start_watcher(context_cell.clone()).map(|watcher| std::sync::Arc::new(appearance::PortalTheme::new(watcher)));
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    if let Some(portal) = &portal_theme {
+        options.viewport_hooks = Some(portal.clone());
+    }
     let result = eframe::run_native(
         "PhotoCraft",
         options,
         Box::new(move |cc| {
             created_in_callback.store(true, std::sync::atomic::Ordering::Relaxed);
+            #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+            {
+                let _ = context_cell.set(cc.egui_ctx.clone());
+                if let Some(portal) = &portal_theme {
+                    portal.wait_first(std::time::Duration::from_millis(250).saturating_sub(watcher_start.elapsed()));
+                }
+            }
             let automation = control.as_ref().map(|(_, _, workspace)| workspace.clone());
             let mut services = services::native(automation);
             services.preset_store = presets;

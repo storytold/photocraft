@@ -31,32 +31,45 @@ pub fn pasteboard_color(app: &PhotocraftApp) -> Option<Color32> {
     })
 }
 
+/// The themes for egui's Light and Dark style slots. A fixed mode puts its theme in both, so the
+/// OS appearance cannot change what is drawn.
+pub(super) fn slot_themes(interface: &prefs::Interface) -> (ThemeKind, ThemeKind) {
+    let light = light_kind(interface.light_theme);
+    let dark = dark_kind(interface.dark_theme);
+    match interface.appearance_mode {
+        AppearanceMode::Light => (light, light),
+        AppearanceMode::Dark => (dark, dark),
+        AppearanceMode::Auto => (light, dark),
+    }
+}
+
+/// The theme on screen when the OS reports `system`.
 pub(super) fn selected_theme(interface: &prefs::Interface, system: Option<egui::Theme>) -> ThemeKind {
-    let light = match interface.appearance_mode {
-        AppearanceMode::Light => true,
-        AppearanceMode::Dark => false,
-        AppearanceMode::Auto => system == Some(egui::Theme::Light),
-    };
-    if light {
-        match interface.light_theme {
-            LightTheme::StudioLight => ThemeKind::StudioLight,
-            LightTheme::ProLightGray => ThemeKind::ProLightGray,
-            LightTheme::ProLight => ThemeKind::ProLight,
-            LightTheme::Classic => ThemeKind::Classic,
-            LightTheme::Adwaita => ThemeKind::Adwaita,
-            LightTheme::BreezeLight => ThemeKind::BreezeLight,
-            LightTheme::SoftLight => ThemeKind::SoftLight,
-        }
-    } else {
-        match interface.dark_theme {
-            DarkTheme::Pro => ThemeKind::Pro,
-            DarkTheme::ProMedium => ThemeKind::ProMedium,
-            DarkTheme::Studio => ThemeKind::Studio,
-            DarkTheme::SolarizedDark => ThemeKind::SolarizedDark,
-            DarkTheme::AdwaitaDark => ThemeKind::AdwaitaDark,
-            DarkTheme::BreezeDark => ThemeKind::BreezeDark,
-            DarkTheme::SoftDark => ThemeKind::SoftDark,
-        }
+    let (light, dark) = slot_themes(interface);
+    if system == Some(egui::Theme::Light) { light } else { dark }
+}
+
+fn light_kind(theme: LightTheme) -> ThemeKind {
+    match theme {
+        LightTheme::StudioLight => ThemeKind::StudioLight,
+        LightTheme::ProLightGray => ThemeKind::ProLightGray,
+        LightTheme::ProLight => ThemeKind::ProLight,
+        LightTheme::Classic => ThemeKind::Classic,
+        LightTheme::Adwaita => ThemeKind::Adwaita,
+        LightTheme::BreezeLight => ThemeKind::BreezeLight,
+        LightTheme::SoftLight => ThemeKind::SoftLight,
+    }
+}
+
+fn dark_kind(theme: DarkTheme) -> ThemeKind {
+    match theme {
+        DarkTheme::Pro => ThemeKind::Pro,
+        DarkTheme::ProMedium => ThemeKind::ProMedium,
+        DarkTheme::Studio => ThemeKind::Studio,
+        DarkTheme::SolarizedDark => ThemeKind::SolarizedDark,
+        DarkTheme::AdwaitaDark => ThemeKind::AdwaitaDark,
+        DarkTheme::BreezeDark => ThemeKind::BreezeDark,
+        DarkTheme::SoftDark => ThemeKind::SoftDark,
     }
 }
 
@@ -70,10 +83,7 @@ pub(crate) fn cycle_appearance(app: &mut PhotocraftApp, ctx: &egui::Context) {
         app.ui.status = e;
         return;
     }
-    let selected = selected_theme(&app.session.prefs().interface, system_theme(app, ctx));
-    if app.ui.theme != selected {
-        app.apply_theme(ctx, selected);
-    }
+    sync_appearance(app, ctx);
 }
 
 /// Photoshop's four interface brightnesses, darkest first.
@@ -151,10 +161,6 @@ pub(crate) fn appearance_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui
     }
 }
 
-pub(super) fn system_theme(app: &PhotocraftApp, ctx: &egui::Context) -> Option<egui::Theme> {
-    app.services.system_theme.as_ref().and_then(|read| read(ctx)).or_else(|| ctx.system_theme())
-}
-
 /// Resolve an absolute pixels-per-point preference without multiplying the OS DPI twice.
 /// Monitor dimensions are physical pixels, independent of window size and UI zoom.
 pub(super) fn display_scale(pref: prefs::UiScale, native: Option<f32>) -> f32 {
@@ -181,7 +187,7 @@ pub(super) fn sync_tooltips(app: &PhotocraftApp, ctx: &egui::Context) {
     let p = app.session.prefs();
     let delay = if p.interface.show_tooltips && p.tools.show_tooltips { crate::theme::TOOLTIP_DELAY } else { f32::INFINITY };
     if ctx.global_style().interaction.tooltip_delay != delay {
-        ctx.global_style_mut(|s| s.interaction.tooltip_delay = delay);
+        ctx.all_styles_mut(|s| s.interaction.tooltip_delay = delay);
     }
 }
 
@@ -200,14 +206,21 @@ pub(super) fn sync_animations(app: &PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// Resolve the saved appearance mode without changing it or either theme slot.
+/// Resolve the saved appearance mode without changing it or either theme slot. The styles are
+/// rebuilt only when a slot's theme changed; an OS appearance change only moves the layout to the
+/// theme of the slot egui now draws.
 pub(crate) fn sync_appearance(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // A restored or embedding-supplied pin must not suppress native appearance events.
     ctx.set_theme(egui::ThemePreference::System);
-    // The native service also covers Wayland sessions where winit has no system theme.
-    let selected = selected_theme(&app.session.prefs().interface, system_theme(app, ctx));
+    let interface = &app.session.prefs().interface;
+    let (light, dark) = slot_themes(interface);
+    let selected = selected_theme(interface, Some(ctx.theme()));
+    if crate::theme::installed(ctx) != Some((light, dark)) {
+        crate::theme::install(ctx, light, dark);
+        app.checker = None;
+    }
     if app.ui.theme != selected {
-        app.apply_theme(ctx, selected);
+        app.sync_layout_theme(selected);
     }
 }
 

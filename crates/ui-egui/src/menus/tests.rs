@@ -26,16 +26,21 @@ fn sync_with_system_menu_keeps_saved_slots_and_its_checkmark_across_palettes() {
     use photocraft_engine::prefs::{AppearanceMode, DarkTheme, LightTheme};
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     let ctx = egui::Context::default();
-    app.services.system_theme = Some(Box::new(|_| Some(egui::Theme::Light)));
+    let light = egui::RawInput { system_theme: Some(egui::Theme::Light), ..Default::default() };
     app.run("prefs.set", json!({"values": {"interface.darkTheme": "studio", "interface.lightTheme": "classic"}})).unwrap();
-    invoke(&mut app, &ctx, "window.theme.system", json!({})).unwrap();
+    ctx.run_ui(light, |ui| {
+        invoke(&mut app, ui.ctx(), "window.theme.system", json!({})).unwrap();
+    })
+    .textures_delta
+    .clear();
     assert_eq!(app.session.prefs().interface.appearance_mode, AppearanceMode::Auto);
     assert_eq!(app.session.prefs().interface.dark_theme, DarkTheme::Studio);
     assert_eq!(app.session.prefs().interface.light_theme, LightTheme::Classic);
     assert_eq!(app.ui.theme, crate::theme::ThemeKind::Classic);
     for appearance in [egui::Theme::Dark, egui::Theme::Light] {
-        app.services.system_theme = Some(Box::new(move |_| Some(appearance)));
-        crate::prefs_ui::tick(&mut app, &ctx);
+        ctx.run_ui(egui::RawInput { system_theme: Some(appearance), ..Default::default() }, |ui| crate::prefs_ui::tick(&mut app, ui.ctx()))
+            .textures_delta
+            .clear();
         let items = menu_items(&app);
         let item = items.iter().find(|i| i.id == "window.theme.system").unwrap();
         assert_eq!(item.label, "Sync with system");

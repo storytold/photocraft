@@ -259,9 +259,6 @@ pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
 /// Persist the preferences text.
 pub type SaveTextFn = Box<dyn FnMut(&str) -> Result<(), String>>;
 
-/// Platform appearance when egui cannot detect it (for example, Wayland without a theme event).
-pub type SystemThemeFn = Box<dyn Fn(&egui::Context) -> Option<egui::Theme>>;
-
 /// Autosave a document snapshot for crash recovery: (snapshot, revision, original path).
 pub type AutosaveFn = Box<dyn FnMut(&std::sync::Arc<Document>, u64, Option<&str>) -> Result<(), String>>;
 
@@ -389,7 +386,6 @@ pub struct Services {
     pub save_prefs: Option<SaveTextFn>,
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
-    pub system_theme: Option<SystemThemeFn>,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file

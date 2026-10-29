@@ -1,4 +1,4 @@
-use super::appearance::{AppearanceRows, appearance_rows, system_theme};
+use super::appearance::{AppearanceRows, appearance_rows};
 use super::dialogs::{mismatch_body, presets_body, presets_io_body, settings_height};
 use super::graphics::{gpu_memory_lines, gpu_status_rows, memory_usage_row, read_at_launch, rendering_mode_row};
 use super::shortcuts::shortcuts_body;
@@ -14,7 +14,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             info.extend(gpu_memory_lines(app));
             f.insert("__gpuInfo".into(), json!(info));
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
-            let system = system_theme(app, ui.ctx());
+            let system = Some(ui.ctx().theme());
             prefs_body(ui, f, system);
         }
         "shortcuts" => shortcuts_body(app, ui, f),

@@ -27,11 +27,13 @@ impl PhotocraftApp {
         if let Err(e) = self.run("prefs.set", serde_json::json!({"path": "interface.theme", "value": kind.id()})) {
             self.ui.status = e;
         } else {
-            self.apply_theme(ctx, kind);
+            crate::prefs_ui::sync_appearance(self, ctx);
         }
     }
 
-    pub(crate) fn apply_theme(&mut self, ctx: &egui::Context, kind: theme::ThemeKind) {
+    /// Follow `kind` with the state that depends on the interface layout: the dock's Color tab,
+    /// panel visibility and the cached checkerboard. The egui styles are installed separately.
+    pub(crate) fn sync_layout_theme(&mut self, kind: theme::ThemeKind) {
         // Color and Swatches trade indices between Pro and Studio layouts.
         if let Some(selected) = dock::Group::Color.tabs(theme::Tokens::for_kind(self.ui.theme).pro).get(self.ui.dock_tabs.color)
             && let Some(tab) = dock::Group::Color.tabs(theme::Tokens::for_kind(kind).pro).iter().position(|name| name == selected)
@@ -40,7 +42,6 @@ impl PhotocraftApp {
         }
         self.ui.theme = kind;
         panel_docking::sync_visibility(self);
-        theme::apply(ctx, kind);
         self.checker = None;
     }
 }
@@ -57,6 +58,8 @@ impl PhotocraftApp {
         theme::install_fonts(ctx);
         egui_extras::install_image_loaders(ctx);
         theme::apply(ctx, kind);
+        // The Dark slot answers for an OS that reports no appearance (Wayland without a portal).
+        ctx.options_mut(|o| o.fallback_theme = egui::Theme::Dark);
         // Right-click in any text field: its Cut / Copy / Paste menu (text_field_menu.rs).
         ctx.add_plugin(text_field_menu::TextFieldMenu);
         // egui's own ⌘+ / ⌘- / ⌘0 scale the whole interface; PhotoCraft zooms the canvas instead

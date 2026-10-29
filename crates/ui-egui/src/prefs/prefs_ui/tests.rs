@@ -210,17 +210,6 @@ fn breeze_themes_are_chosen_by_preference_and_fix_the_matching_mode() {
 }
 
 #[test]
-fn auto_uses_native_system_theme_when_egui_does_not_report_one() {
-    let (mut app, _) = app_with_store();
-    app.services.system_theme = Some(Box::new(|_| Some(egui::Theme::Light)));
-    app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"})).unwrap();
-    app.run("prefs.set", json!({"path": "interface.appearanceMode", "value": "auto"})).unwrap();
-    let ctx = egui::Context::default();
-    tick(&mut app, &ctx);
-    assert_eq!(app.ui.theme, ThemeKind::ProLight);
-}
-
-#[test]
 fn appearance_button_cycles_modes_without_losing_theme_choices() {
     let ctx = egui::Context::default();
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -300,7 +289,7 @@ fn appearance_frame(app: &mut PhotocraftApp, ctx: &egui::Context, appearance: Op
 fn assert_palette(ctx: &egui::Context, kind: ThemeKind) {
     let t = Tokens::get(ctx);
     assert_eq!(t.kind, kind);
-    for style in [ctx.global_style(), ctx.style_of(egui::Theme::Light), ctx.style_of(egui::Theme::Dark)] {
+    for style in [ctx.global_style(), ctx.style_of(ctx.theme())] {
         assert_eq!(style.visuals.panel_fill, t.chrome);
         assert_eq!(style.visuals.window_fill, t.card);
         assert_eq!(style.visuals.override_text_color, Some(t.text));
@@ -309,6 +298,18 @@ fn assert_palette(ctx: &egui::Context, kind: ThemeKind) {
         assert_eq!(style.text_styles[&egui::TextStyle::Body].size, if t.pro { 12.0 } else { 12.5 });
     }
     assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+}
+
+/// Each style slot carries its own theme: the Light one `light`, the Dark one `dark`.
+fn assert_slots(ctx: &egui::Context, light: ThemeKind, dark: ThemeKind) {
+    for (slot, kind) in [(egui::Theme::Light, light), (egui::Theme::Dark, dark)] {
+        let t = Tokens::for_kind(kind);
+        let style = ctx.style_of(slot);
+        assert_eq!(style.visuals.panel_fill, t.chrome, "{slot:?} slot");
+        assert_eq!(style.visuals.window_fill, t.card, "{slot:?} slot");
+        assert_eq!(style.visuals.dark_mode, t.dark(), "{slot:?} slot");
+    }
+    assert_eq!(crate::theme::installed(ctx), Some((light, dark)));
 }
 
 #[test]
@@ -320,13 +321,20 @@ fn auto_appearance_follows_live_changes_without_saving_resolved_palettes() {
         app.run("prefs.set", json!({"values": {"interface.appearanceMode": "auto", "interface.darkTheme": dark.id(), "interface.lightTheme": light.id()}}))
             .unwrap();
         appearance_frame(&mut app, &ctx, Some(egui::Theme::Light));
+        assert_slots(&ctx, light, dark);
         let revision = app.session.prefs.rev();
         let interface = app.session.prefs().interface.clone();
         let saved = store.lock().unwrap().clone().unwrap();
         assert_eq!(stored(&store)["interface"]["appearanceMode"], "auto");
         let gpu_style = canvas_style(&app);
         for (appearance, expected) in [(Some(egui::Theme::Light), light), (Some(egui::Theme::Dark), dark), (Some(egui::Theme::Light), light), (None, dark)] {
+            // A rebuilt style would lose this mark.
+            ctx.all_styles_mut(|s| s.spacing.slider_width = 77.0);
             appearance_frame(&mut app, &ctx, appearance);
+            for slot in [egui::Theme::Light, egui::Theme::Dark] {
+                assert_eq!(ctx.style_of(slot).spacing.slider_width, 77.0, "an OS change rebuilds no style");
+            }
+            assert_slots(&ctx, light, dark);
             assert_palette(&ctx, expected);
             assert_eq!(app.ui.theme, expected);
             assert_eq!(app.session.prefs().interface, interface);
@@ -376,6 +384,23 @@ fn manual_theme_tokens_and_global_styles_stay_fixed_across_os_changes() {
             assert_eq!(app.session.prefs.rev(), revision);
             assert_eq!(store.lock().unwrap().as_ref(), Some(&saved));
         }
+    }
+}
+
+#[test]
+fn fixed_dark_draws_dark_under_a_light_os_and_fixed_light_under_a_dark_one() {
+    for (mode, os, kind) in [("dark", egui::Theme::Light, ThemeKind::ProMedium), ("light", egui::Theme::Dark, ThemeKind::ProLight)] {
+        let (mut app, _) = app_with_store();
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        app.run("prefs.set", json!({"values": {"interface.appearanceMode": mode, "interface.darkTheme": "proMedium", "interface.lightTheme": "proLight"}}))
+            .unwrap();
+        appearance_frame(&mut app, &ctx, Some(os));
+        assert_slots(&ctx, kind, kind);
+        assert_palette(&ctx, kind);
+        assert_eq!(ctx.global_style().visuals.dark_mode, mode == "dark");
+        assert_eq!(Tokens::get(&ctx).dark(), mode == "dark");
+        assert_eq!(app.ui.theme, kind);
     }
 }
 
@@ -1420,7 +1445,7 @@ fn enable_animations_off_stops_fades_and_scroll_glides_and_is_remembered() {
     assert_eq!(both(&ctx), [0.0, 0.0]);
     assert_eq!(ctx.global_style().scroll_animation.duration.max, 0.0);
     // A theme change rebuilds the style; the next frame turns animations off again.
-    app.apply_theme(&ctx, crate::theme::ThemeKind::StudioLight);
+    crate::theme::apply(&ctx, crate::theme::ThemeKind::StudioLight);
     tick(&mut app, &ctx);
     assert_eq!(both(&ctx), [0.0, 0.0]);
     app.run("prefs.set", json!({"values": {"interface.enableAnimations": true}})).unwrap();

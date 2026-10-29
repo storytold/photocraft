@@ -764,7 +764,7 @@ impl Tokens {
 
     /// Tokens for the active theme (stored in egui's context data by [`apply`]).
     pub fn get(ctx: &egui::Context) -> Tokens {
-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::unique("photocraft-theme"))).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
+        ctx.data(|d| d.get_temp::<Tokens>(tokens_id(ctx.theme()))).unwrap_or_else(|| Tokens::for_kind(ThemeKind::Studio))
     }
 
     /// Thin RGB outlines; the filled bands use the same hues with subdued coverage.
@@ -1013,13 +1013,43 @@ pub fn mono(size: f32) -> FontId {
     FontId::monospace(size)
 }
 
-/// Apply a theme to egui's global style and publish its tokens.
+fn tokens_id(theme: egui::Theme) -> egui::Id {
+    egui::Id::unique(match theme {
+        egui::Theme::Light => "photocraft-theme-light",
+        egui::Theme::Dark => "photocraft-theme-dark",
+    })
+}
+
+/// Replace the tokens one style slot reads through [`Tokens::get`].
+pub(crate) fn store_tokens(ctx: &egui::Context, theme: egui::Theme, tokens: Tokens) {
+    ctx.data_mut(|d| d.insert_temp(tokens_id(theme), tokens));
+}
+
+/// The themes in egui's Light and Dark style slots, if [`install`] ran on this context.
+pub fn installed(ctx: &egui::Context) -> Option<(ThemeKind, ThemeKind)> {
+    let kind = |theme| ctx.data(|d| d.get_temp::<Tokens>(tokens_id(theme))).map(|t| t.kind);
+    Some((kind(egui::Theme::Light)?, kind(egui::Theme::Dark)?))
+}
+
+/// Apply one theme to both of egui's style slots and publish its tokens.
 pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
+    install(ctx, kind, kind);
+}
+
+/// Put `light` in egui's Light style slot and `dark` in its Dark slot, and publish both token
+/// sets. egui picks the slot from the OS appearance, so a system change needs no rebuild.
+pub fn install(ctx: &egui::Context, light: ThemeKind, dark: ThemeKind) {
     // Keep native windows at SystemDefault so macOS continues reporting OS appearance changes,
     // including when an integration or restored egui state pinned its own theme preference.
     ctx.set_theme(egui::ThemePreference::System);
-    let t = Tokens::for_kind(kind);
-    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-theme"), t));
+    for (slot, kind) in [(egui::Theme::Light, light), (egui::Theme::Dark, dark)] {
+        let t = Tokens::for_kind(kind);
+        store_tokens(ctx, slot, t);
+        ctx.set_style_of(slot, style_for(&t, (*ctx.style_of(slot)).clone()));
+    }
+}
+
+fn style_for(t: &Tokens, mut s: egui::Style) -> egui::Style {
     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
     v.panel_fill = t.chrome;
     v.window_fill = t.card;
@@ -1060,43 +1090,37 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         wv.corner_radius = r;
         wv.expansion = 0.0;
     }
-    ctx.set_visuals(v);
-    ctx.global_style_mut(|s| {
-        s.text_styles = [
-            (TextStyle::Small, FontId::proportional(10.5)),
-            (TextStyle::Body, FontId::proportional(if t.pro { 12.0 } else { 12.5 })),
-            (TextStyle::Button, FontId::proportional(if t.pro { 12.0 } else { 12.5 })),
-            (TextStyle::Heading, semibold(15.0)),
-            (TextStyle::Monospace, FontId::monospace(12.0)),
-        ]
-        .into();
-        s.spacing.item_spacing = egui::vec2(8.0, 6.0);
-        s.spacing.button_padding = egui::vec2(10.0, 4.0);
-        s.spacing.interact_size = egui::vec2(24.0, 24.0);
-        s.spacing.slider_width = 150.0;
-        s.spacing.combo_width = 120.0;
-        s.spacing.menu_margin = egui::Margin::same(6);
-        s.spacing.window_margin = egui::Margin::same(16);
-        s.spacing.icon_width = 14.0;
-        s.visuals.indent_has_left_vline = false;
-        s.interaction.tooltip_delay = TOOLTIP_DELAY;
-        // Thin overlay scrollbars that appear on hover (Photoshop/macOS style).
-        // Thin bars stay visible, including while the pointer is on them. The stock thin
-        // style fades the handle to the same opacity as the track, so the thumb disappears (#4611).
-        let mut scroll = if t.bevel { egui::style::ScrollStyle::solid() } else { egui::style::ScrollStyle::thin() };
-        if scroll.floating {
-            scroll.interact_handle_opacity = 1.0;
-            scroll.interact_background_opacity = 0.4;
-            scroll.floating_width = 4.0;
-        }
-        s.spacing.scroll = scroll;
-        s.spacing.tooltip_width = 280.0;
-    });
-    // egui selects its style branch using OS appearance, independently of PhotoCraft's fixed
-    // Dark/Light mode or platform appearance service. Both branches need the selected palette.
-    let style = ctx.global_style();
-    ctx.set_style_of(egui::Theme::Light, Arc::clone(&style));
-    ctx.set_style_of(egui::Theme::Dark, style);
+    s.visuals = v;
+    s.text_styles = [
+        (TextStyle::Small, FontId::proportional(10.5)),
+        (TextStyle::Body, FontId::proportional(if t.pro { 12.0 } else { 12.5 })),
+        (TextStyle::Button, FontId::proportional(if t.pro { 12.0 } else { 12.5 })),
+        (TextStyle::Heading, semibold(15.0)),
+        (TextStyle::Monospace, FontId::monospace(12.0)),
+    ]
+    .into();
+    s.spacing.item_spacing = egui::vec2(8.0, 6.0);
+    s.spacing.button_padding = egui::vec2(10.0, 4.0);
+    s.spacing.interact_size = egui::vec2(24.0, 24.0);
+    s.spacing.slider_width = 150.0;
+    s.spacing.combo_width = 120.0;
+    s.spacing.menu_margin = egui::Margin::same(6);
+    s.spacing.window_margin = egui::Margin::same(16);
+    s.spacing.icon_width = 14.0;
+    s.visuals.indent_has_left_vline = false;
+    s.interaction.tooltip_delay = TOOLTIP_DELAY;
+    // Thin overlay scrollbars that appear on hover (Photoshop/macOS style).
+    // Thin bars stay visible, including while the pointer is on them. The stock thin
+    // style fades the handle to the same opacity as the track, so the thumb disappears (#4611).
+    let mut scroll = if t.bevel { egui::style::ScrollStyle::solid() } else { egui::style::ScrollStyle::thin() };
+    if scroll.floating {
+        scroll.interact_handle_opacity = 1.0;
+        scroll.interact_background_opacity = 0.4;
+        scroll.floating_width = 4.0;
+    }
+    s.spacing.scroll = scroll;
+    s.spacing.tooltip_width = 280.0;
+    s
 }
 
 /// Seconds the pointer rests on a control before its tooltip shows.
@@ -1110,6 +1134,8 @@ pub fn canvas_bg(t: &Tokens) -> Color32 {
     t.canvas
 }
 
+#[cfg(test)]
+mod golden_tests;
 #[cfg(test)]
 mod tests;
 
@@ -1137,7 +1163,7 @@ pub mod live {
         }
 
         /// Re-apply overrides if the file changed. Returns true when tokens were updated.
-        pub fn poll(&mut self, ctx: &egui::Context, kind: super::ThemeKind) -> bool {
+        pub fn poll(&mut self, ctx: &egui::Context) -> bool {
             let Some(path) = &self.path else { return false };
             let now = ctx.input(|i| i.time);
             if now - self.last_check < 0.4 {
@@ -1155,10 +1181,14 @@ pub mod live {
             let Ok(text) = std::fs::read_to_string(path) else { return false };
             match serde_json::from_str::<serde_json::Value>(&text) {
                 Ok(v) => {
-                    super::apply(ctx, kind);
-                    let mut t = Tokens::get(ctx);
-                    let unknown = apply_overrides(&mut t, &v);
-                    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("photocraft-theme"), t));
+                    let (light, dark) = super::installed(ctx).unwrap_or_default();
+                    super::install(ctx, light, dark);
+                    let mut unknown = Vec::new();
+                    for slot in [egui::Theme::Light, egui::Theme::Dark] {
+                        let mut t = Tokens::for_kind(if slot == egui::Theme::Light { light } else { dark });
+                        unknown = apply_overrides(&mut t, &v);
+                        super::store_tokens(ctx, slot, t);
+                    }
                     if !unknown.is_empty() {
                         log::warn!("unknown token keys: {unknown:?}");
                     }

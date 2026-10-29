@@ -167,16 +167,24 @@ fn theme_names_parse() {
 
 #[test]
 fn every_palette_keeps_complete_egui_styles_when_the_os_changes() {
-    for kind in ThemeKind::ALL {
+    for (light, dark) in ThemeKind::ALL.into_iter().zip(ThemeKind::ALL.into_iter().rev()) {
+        // `Style`'s equality compares its number formatter by pointer, so compare the dumps.
+        let styled = |kind| {
+            let ctx = egui::Context::default();
+            apply(&ctx, kind);
+            format!("{:?}", ctx.style_of(egui::Theme::Dark))
+        };
+        let dump = |style: Arc<egui::Style>| format!("{style:?}");
         let ctx = egui::Context::default();
-        ctx.run_ui(egui::RawInput { system_theme: Some(egui::Theme::Dark), ..Default::default() }, |ui| apply(ui.ctx(), kind)).textures_delta.clear();
-        let expected = ctx.global_style();
+        ctx.run_ui(egui::RawInput { system_theme: Some(egui::Theme::Dark), ..Default::default() }, |ui| install(ui.ctx(), light, dark)).textures_delta.clear();
+        assert_eq!(installed(&ctx), Some((light, dark)));
         for appearance in [Some(egui::Theme::Light), Some(egui::Theme::Dark), None] {
             ctx.run_ui(egui::RawInput { system_theme: appearance, ..Default::default() }, |_| {}).textures_delta.clear();
-            assert_eq!(Tokens::get(&ctx), Tokens::for_kind(kind));
-            assert_eq!(ctx.global_style(), expected, "{kind:?} changed with {appearance:?}");
-            assert_eq!(ctx.style_of(egui::Theme::Light), expected);
-            assert_eq!(ctx.style_of(egui::Theme::Dark), expected);
+            let shown = if appearance == Some(egui::Theme::Light) { light } else { dark };
+            assert_eq!(Tokens::get(&ctx), Tokens::for_kind(shown), "{light:?}/{dark:?} with {appearance:?}");
+            assert_eq!(dump(ctx.global_style()), styled(shown), "{light:?}/{dark:?} with {appearance:?}");
+            assert_eq!(dump(ctx.style_of(egui::Theme::Light)), styled(light), "{light:?} slot with {appearance:?}");
+            assert_eq!(dump(ctx.style_of(egui::Theme::Dark)), styled(dark), "{dark:?} slot with {appearance:?}");
         }
     }
 }
@@ -188,6 +196,14 @@ fn applying_a_palette_clears_a_pinned_native_appearance_preference() {
         ctx.set_theme(pinned);
         apply(&ctx, ThemeKind::ProMedium);
         assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+        for slot in [egui::Theme::Light, egui::Theme::Dark] {
+            assert_eq!(ctx.style_of(slot).visuals.panel_fill, Tokens::for_kind(ThemeKind::ProMedium).chrome);
+        }
+        ctx.set_theme(pinned);
+        install(&ctx, ThemeKind::ProLight, ThemeKind::Studio);
+        assert_eq!(ctx.options(|o| o.theme_preference), egui::ThemePreference::System);
+        assert_eq!(ctx.style_of(egui::Theme::Light).visuals.panel_fill, Tokens::for_kind(ThemeKind::ProLight).chrome);
+        assert_eq!(ctx.style_of(egui::Theme::Dark).visuals.panel_fill, Tokens::for_kind(ThemeKind::Studio).chrome);
     }
 }
 
