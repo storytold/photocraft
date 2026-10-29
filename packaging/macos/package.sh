@@ -106,7 +106,7 @@ staple() {
     if xcrun stapler staple "$file" && xcrun stapler validate "$file"; then
       return
     fi
-    if [ "$attempt" = 5 ]; then
+    if [[ "$attempt" = 5 ]]; then
       echo "error: stapling $(basename "$file") failed after $attempt attempts" >&2
       exit 1
     fi
