@@ -4200,6 +4200,20 @@ cameraRaw	Dehaze	Odstranění oparu
 	Not rendered: this adjustment ({key}) is kept as imported.	Nevykresleno: tato úprava ({key}) je ponechána tak, jak byla importována.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Podle barev
+	Decontaminate Colors	Dekontaminovat barvy
+	Edge Detection	Detekce okraje
+	Global Refinements	Globální upřesnění
+	High Quality Preview	Náhled ve vysoké kvalitě
+	Object Aware	Podle objektů
+	Real-Time Refinement	Upřesnění v reálném čase
+	Refine Edge Brush Tool	Nástroj štětec pro upřesnění okraje
+	Refine Hair	Upřesnit vlasy
+	Refine Mode	Režim upřesnění
+	Remember Settings	Zapamatovat nastavení
+	View Mode	Režim zobrazení
+	Object Aware needs a segmentation model, which isn't available yet	Režim Podle objektů vyžaduje segmentační model, který zatím není k dispozici
+	Refine Hair needs hair detection, which isn't available yet	Upřesnit vlasy vyžaduje detekci vlasů, která zatím není k dispozici
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Krychle odstínu
 	Brightness Cube	Krychle jasu
@@ -4217,6 +4231,8 @@ cameraRaw	Dehaze	Odstranění oparu
 	Grayscale Ramp	Přechod stupňů šedi
 	Current Colors	Aktuální barvy
 	Make Ramp Web Safe	Omezit pruh na webové barvy
+	Select and Mask was closed: its document is no longer the active one	Vybrat a maskovat bylo zavřeno: jeho dokument již není aktivní
+	Select and Mask was closed: another layer was selected	Vybrat a maskovat bylo zavřeno: byla vybrána jiná vrstva
 # Art History Brush (#213).
 	Art History Brush	Štětec umělecké historie
 	Art History Brush Tool	Nástroj štětec umělecké historie

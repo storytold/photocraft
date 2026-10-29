@@ -634,8 +634,8 @@ fn shell_word(s: &str) -> String {
     if s.bytes().all(|b| b.is_ascii_alphanumeric() || b"/._-+:,@".contains(&b)) { s.to_string() } else { format!("'{}'", s.replace('\'', r"'\''")) }
 }
 
-/// The release-check transport, or `None` inside Flatpak: the sandbox has no network (see the
-/// manifest's finish-args) and `flatpak update` owns updates there.
+/// The release-check transport, or `None` inside Flatpak: `flatpak update` owns updates there.
+/// The sandbox has network (for the `--control` server), which does not change this.
 fn update_transport(flatpak_id: Option<&std::ffi::OsStr>) -> Option<photocraft_engine::updates_cmds::CheckFn> {
     flatpak_id.is_none().then(crate::updates::service)
 }

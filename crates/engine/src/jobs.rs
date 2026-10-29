@@ -860,6 +860,10 @@ impl Session {
         self.coalesce_request = None;
         self.color_restrict = None;
         self.filter_mask_layer = None;
+        #[cfg(any(test, debug_assertions))]
+        {
+            self.hint_before = None;
+        }
         let pending = self.jobs.pending.take();
         match (r, pending) {
             (Err(e), Some(job)) => {

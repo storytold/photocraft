@@ -101,6 +101,7 @@ use strokes::{HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, pointer_butt
 #[cfg(test)]
 pub(crate) use strokes::{SPOT_HEALING_TRAIL, live_retouch_points};
 pub(crate) use tabs::arranged_cells;
+pub(crate) use tabs::tab_title_at;
 #[cfg(test)]
 use tabs::{TEAR_OFF, pro_tab_title, tab_context_items, tab_drop_index, tab_move_target, tabs, torn_off};
 pub use tabs::{TabStrip, document_area, extra_windows};
@@ -115,10 +116,7 @@ use textures::{ensure_gpu, redraw_focus, visible_doc_rect};
 pub use tool_input::{ToolEvent, selection_drag_kind, tool_event};
 pub(crate) use tool_input::{command_guide_at, command_moves_layer, event_tool};
 pub(crate) use transform_controls::{LAYER_EDGES, layer_edges_rect};
-use transform_controls::{
-    begin_transform_controls_at, draw_transform_controls, transform_controls_cursor, transform_controls_rect, transform_controls_several,
-    transform_controls_turn,
-};
+use transform_controls::{begin_transform_controls_at, draw_transform_controls, transform_controls_cursor, transform_controls_rect, transform_controls_turn};
 #[cfg(test)]
 use transform_controls::{transform_controls_hit, transform_controls_layers};
 pub use view_xform::{ViewXform, doc_point_at, fill_view, fit_view};
@@ -365,6 +363,13 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
     // A flipped or pixel-aspect-corrected view draws through the CPU path (the GPU canvas shader
     // has no mirroring or non-square pixels). Rotation stays on the GPU: it is a view uniform.
     let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
+    if app.gpu.is_some() {
+        if gpu_ok {
+            crate::render_path::view_ok(app, doc.id.0);
+        } else {
+            crate::render_path::view_cpu(app, doc.id.0);
+        }
+    }
     if app.gpu.is_some()
         && gpu_ok
         && let Some((k, key, preview_size)) =
@@ -1353,10 +1358,8 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         // corner badge, as Photoshop's corner radius cursor.
         ui.ctx().set_cursor_icon(egui::CursorIcon::Default);
         crate::icons::cursor_badge(ctx, "scan", p);
-    } else if let Some((r, p, c)) = response
-        .hover_pos()
-        .filter(|_| !transform_controls_several(app))
-        .and_then(|p| transform_controls_rect(app, xf).and_then(|r| transform_controls_cursor(r, p).map(|c| (r, p, c))))
+    } else if let Some((r, p, c)) =
+        response.hover_pos().and_then(|p| transform_controls_rect(app, xf).and_then(|r| transform_controls_cursor(r, p).map(|c| (r, p, c))))
     {
         // The Move tool draws handles without opening a Free Transform session.
         // Give them their resize/rotate cursors before the first pointer press (#2871).

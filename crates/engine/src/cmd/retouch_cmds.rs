@@ -193,9 +193,7 @@ fn run_stroke(
         // large layer would dominate the cost of a dab.
         f(&pre, surf, pre.selection.as_ref(), lock)
     })?;
-    if let Some(st) = s.active_mut() {
-        st.last_damage = Some(dmg);
-    }
+    s.hint_damage(dmg);
     Ok(dmg)
 }
 
@@ -222,6 +220,8 @@ mod sampling;
 pub use clone::{LiveRetouch, clone_preview, clone_preview_periodic};
 use clone::{blend_param, clamp_samples, clone_stamp};
 pub(crate) use dab::DabEffect;
+#[cfg(test)]
+use dab::DabTool;
 pub use dab::LiveDab;
 use dab::dab_cmd;
 #[cfg(test)]

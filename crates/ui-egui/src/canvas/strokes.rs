@@ -115,8 +115,8 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
 /// Healing Brush and History Brush composite their source.
 pub(super) enum EngineStroke {
     Brush(Box<photocraft_engine::brush_cmds::LiveStroke>),
-    Retouch(photocraft_engine::retouch_cmds::LiveRetouch),
-    Dab(photocraft_engine::retouch_cmds::LiveDab),
+    Retouch(Box<photocraft_engine::retouch_cmds::LiveRetouch>),
+    Dab(Box<photocraft_engine::retouch_cmds::LiveDab>),
     Mixer(Box<photocraft_engine::brush_cmds::mixer_live::LiveMixer>),
 }
 
@@ -304,32 +304,32 @@ pub(super) fn begin_live_stroke(app: &PhotocraftApp) -> Option<LiveStroke> {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::color_replacement_params(app);
         p["points"] = json!(d.points);
-        EngineStroke::Dab(photocraft_engine::brush_cmds::live_color_replacement(&app.session, &p).ok()?)
+        EngineStroke::Dab(Box::new(photocraft_engine::brush_cmds::live_color_replacement(&app.session, &p).ok()?))
     } else if let Some((cmd, mut p)) = crate::retouch_ui::dab_params(app, d.tool) {
         // The params `retouch_ui::finish_stroke` commits; Sample All Layers isn't previewed.
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
-        EngineStroke::Dab(photocraft_engine::retouch_cmds::LiveDab::begin(&app.session, cmd, &p).ok()?)
+        EngineStroke::Dab(Box::new(photocraft_engine::retouch_cmds::LiveDab::begin(&app.session, cmd, &p).ok()?))
     } else if d.tool == Tool::PatternStamp {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = crate::retouch_ui::pattern_stamp_params(app, &d.points);
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
         if app.ui.tool_options.pattern_stamp_impressionist {
-            EngineStroke::Dab(photocraft_engine::retouch_cmds::live_pattern_impressionist(&app.session, &p).ok()?)
+            EngineStroke::Dab(Box::new(photocraft_engine::retouch_cmds::live_pattern_impressionist(&app.session, &p).ok()?))
         } else {
-            EngineStroke::Retouch(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, "paint.patternStamp", &p).ok()?)
+            EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, "paint.patternStamp", &p).ok()?))
         }
     } else if d.tool == Tool::BackgroundEraser {
         // The params `eraser_ui::finish_stroke` commits (layer pixels only).
         let p = crate::eraser_ui::background_eraser_params(app, &d.points);
-        EngineStroke::Dab(photocraft_engine::eraser_cmds::live_background_eraser(&app.session, &p).ok()?)
+        EngineStroke::Dab(Box::new(photocraft_engine::eraser_cmds::live_background_eraser(&app.session, &p).ok()?))
     } else if let Some(cmd) = live_retouch_command(d.tool) {
         // The params `retouch_ui::finish_stroke` commits.
         let mut p = if d.tool == Tool::HistoryBrush { crate::retouch_ui::history_brush_params(app) } else { crate::retouch_ui::clone_params(app)? };
         p["points"] = json!(d.points);
         p["target"] = paint_target(app);
-        EngineStroke::Retouch(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?)
+        EngineStroke::Retouch(Box::new(photocraft_engine::retouch_cmds::LiveRetouch::begin(&app.session, cmd, &p).ok()?))
     } else {
         let p = stroke_params(app, d, &app.stylus.stroke_points(&d.points));
         EngineStroke::Brush(Box::new(photocraft_engine::brush_cmds::LiveStroke::begin_with(&app.session, stroke_command(app, d.tool), &p).ok()?))
@@ -406,7 +406,7 @@ pub(super) fn feed_live_stroke(app: &mut PhotocraftApp) {
             }
         }
     }
-    app.stroke_trace.stroke(crate::gpu_canvas::now_ms() - started);
+    app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;
 }
 
 /// The points the live retouching stroke has rendered.
@@ -433,12 +433,12 @@ pub(super) fn offer_live_retouch(app: &mut PhotocraftApp, d: &Drag) {
     match stroke {
         EngineStroke::Retouch(mut live) if !dab => {
             if rest.is_empty() || live.push(&rest).is_ok() {
-                let _ = app.session.offer_live_retouch(live);
+                let _ = app.session.offer_live_retouch(*live);
             }
         }
         EngineStroke::Dab(mut live) if dab => {
             if rest.is_empty() || live.push(&rest).is_ok() {
-                let _ = app.session.offer_live_dab(live);
+                let _ = app.session.offer_live_dab(*live);
             }
         }
         _ => {}
@@ -603,7 +603,7 @@ pub(super) fn commit_brush_stroke(app: &mut PhotocraftApp, d: &Drag) {
     }
     let started = crate::gpu_canvas::now_ms();
     let result = app.run(stroke_command(app, d.tool), p);
-    app.stroke_trace.stroke(crate::gpu_canvas::now_ms() - started);
+    app.perf.stage.stroke_ms += crate::gpu_canvas::now_ms() - started;
     app.session.clear_live_stroke();
     let Ok(r) = result else { return };
     let after = app.session.documents().iter().find(|st| st.doc.id == doc).map(|st| (st.revision, st.doc.clone()));

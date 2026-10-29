@@ -529,9 +529,7 @@ pub(super) fn content_aware_move(s: &mut Session, p: &Value) -> Result<Value> {
                 }
                 Ok(())
             })?;
-            if let Some(st) = s.active_mut() {
-                st.last_damage = Some(damage);
-            }
+            s.hint_damage(damage);
             let mode = if plan.mode == Mode::Move { "move" } else { "extend" };
             let mut out = json!({ "damage": damage_json(damage), "offset": [dx, dy], "mode": mode });
             if plan.map.is_some() {

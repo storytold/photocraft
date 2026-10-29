@@ -243,9 +243,7 @@ fn layer_id(s: &Session, p: &Value) -> Result<photocraft_doc::LayerId> {
 }
 
 fn damage_json(s: &mut Session, dmg: Rect) -> Value {
-    if let Some(st) = s.active_mut() {
-        st.last_damage = Some(dmg);
-    }
+    s.hint_damage(dmg);
     json!({ "damage": [dmg.x0, dmg.y0, dmg.width(), dmg.height()] })
 }
 

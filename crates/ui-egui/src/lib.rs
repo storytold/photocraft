@@ -19,6 +19,7 @@ pub mod dialogs;
 pub mod dock;
 pub mod file_dialog;
 pub mod file_open;
+pub mod frame_stages;
 pub mod gpu_status;
 pub mod i18n;
 mod icon_data;
@@ -33,6 +34,7 @@ pub mod notices;
 pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
+pub mod render_path;
 pub mod screenshot;
 pub mod state;
 pub mod texel_guard;
@@ -147,6 +149,7 @@ pub use dialogs::rasterize_prompt;
 pub use dialogs::replace_prompt;
 use dialogs::rgb_histogram;
 pub use dialogs::screen_picker;
+pub use dialogs::select_mask_ui;
 pub use dialogs::shape_dialog;
 pub(crate) use dialogs::shape_fill_ui;
 use dialogs::sizing;
@@ -503,6 +506,10 @@ pub struct PhotocraftApp {
     /// makes shortcut- and dialog-triggered commands pass the same policy as
     /// direct control calls.
     pub(crate) automation_input: bool,
+    /// How many `run_command` calls are on the stack. Only the outermost one writes the frame's
+    /// command stage: a nested run (`file.save` → `layer.smartObjects.saveContents`,
+    /// `actions.play` → its steps) is already inside the outer call's time.
+    run_depth: u32,
     /// Action playbacks paused at a step dialog, by the token in that dialog's fields
     /// ([`actions::RESUME`]): what to play next and the automation gate it paused under.
     pub(crate) paused_playbacks: actions::PausedPlaybacks,
@@ -615,6 +622,10 @@ pub struct PhotocraftApp {
     pub perf: gpu_canvas::Perf,
     /// Per-frame stroke timings for latency reports (`PHOTOCRAFT_STROKE_TRACE`, see `stroke_trace`).
     pub stroke_trace: stroke_trace::StrokeTrace,
+    /// Why each document's view is drawn on the CPU, and the history of changes (`render_path`).
+    pub render_path: render_path::RenderPath,
+    /// The last slow frames and their stages (`perf.slowFrames`, see `frame_stages`).
+    pub slow_frames: frame_stages::SlowFrames,
     /// Preferences, autosave and snapping runtime state (see `prefs_ui`, `snap_ui`).
     pub(crate) prefs_rt: prefs_ui::Runtime,
     pub(crate) updates_rt: updates_ui::Runtime,
@@ -737,6 +748,9 @@ mod transform_undo_tests;
 
 #[cfg(test)]
 mod transform_type_tests;
+
+#[cfg(test)]
+mod transform_several_tests;
 
 #[cfg(test)]
 mod psd_open_tests;

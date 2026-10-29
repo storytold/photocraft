@@ -4385,6 +4385,20 @@ layerLabel	No Color	Sem cor
 	Not rendered: this adjustment ({key}) is kept as imported.	Não renderizado: este ajuste ({key}) é mantido como foi importado.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Com reconhecimento de cor
+	Decontaminate Colors	Descontaminar cores
+	Edge Detection	Detecção de borda
+	Global Refinements	Refinamentos globais
+	High Quality Preview	Visualização de alta qualidade
+	Object Aware	Com reconhecimento de objeto
+	Real-Time Refinement	Refinamento em tempo real
+	Refine Edge Brush Tool	Ferramenta Pincel de refinamento de borda
+	Refine Hair	Refinar cabelo
+	Refine Mode	Modo de refinamento
+	Remember Settings	Lembrar configurações
+	View Mode	Modo de exibição
+	Object Aware needs a segmentation model, which isn't available yet	Com reconhecimento de objeto requer um modelo de segmentação, ainda não disponível
+	Refine Hair needs hair detection, which isn't available yet	Refinar cabelo requer detecção de cabelo, ainda não disponível
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Cubo de matiz
 	Brightness Cube	Cubo de brilho
@@ -4401,6 +4415,8 @@ layerLabel	No Color	Sem cor
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+	Select and Mask was closed: its document is no longer the active one	Selecionar e mascarar foi fechado: o documento dele não está mais ativo
+	Select and Mask was closed: another layer was selected	Selecionar e mascarar foi fechado: outra camada foi selecionada
 # Art History Brush (#213).
 	Art History Brush Tool	Ferramenta Pincel do histórico da arte
 	Tight Short	Curto cerrado

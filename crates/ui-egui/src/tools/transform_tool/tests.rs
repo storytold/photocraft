@@ -16,6 +16,7 @@ fn session() -> TransformSession {
         mode: Default::default(),
         content_aware: None,
         skew_v: 0.0,
+        layers: Vec::new(),
     }
 }
 
@@ -2141,6 +2142,28 @@ fn nested_group_preview_detaches_every_clipped_ancestor() {
 
     let (image, _) = preview_image(&st.doc, target_id, None, photocraft_geom::Rect::new(8, 8, 24, 24), 4096, false);
     assert_eq!(image.pixels[8 * image.size[0] + 8], Color32::from_rgb(255, 0, 0), "hidden clipping bases must not make a nested target disappear");
+}
+
+#[test]
+fn several_preview_detaches_clipped_ancestors() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::Layer;
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    let st = app.session.active_mut().unwrap();
+    let doc = Arc::make_mut(&mut st.doc);
+    let first = doc.layers.pop().unwrap();
+    let first_id = first.id;
+    let mut second = Layer::raster("second", PixelFormat::RGBA8);
+    second.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(32, 8, 48, 24), &[0., 1., 0., 1.]);
+    let second_id = second.id;
+    let mut group = Layer::group("clipped", vec![first, second]);
+    group.clipped = true;
+    doc.layers.push(Layer::raster("hidden base", PixelFormat::RGBA8));
+    doc.layers.push(group);
+    let shown = Several::shown(doc, &[first_id, second_id], &[]);
+    let (image, _) = composite_image(&shown, photocraft_geom::Rect::new(0, 0, 64, 64), 4096);
+    assert_eq!(image.pixels[16 * image.size[0] + 16], Color32::from_rgb(255, 0, 0));
+    assert_eq!(image.pixels[16 * image.size[0] + 40], Color32::from_rgb(0, 255, 0));
 }
 
 #[test]
