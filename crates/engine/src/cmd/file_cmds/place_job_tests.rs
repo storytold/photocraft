@@ -81,7 +81,7 @@ fn a_place_job_equals_the_inline_place() {
             let JobOutcome::Done(got) = &e.outcome else { panic!("{depth} {smart}: {e:?}") };
             assert_eq!(e.command, "file.placeEmbedded");
             assert_eq!(e.label, "Placing grad.png");
-            assert_eq!(*got, want, "{depth} {smart}");
+            same_but_layer(got, &want);
             assert_eq!(steps(&s), before + 1, "one undo step");
             assert_eq!(s.active().unwrap().history.undo_label(), Some(PLACE_EMBEDDED));
             assert_eq!(layer_pixels(&s), layer_pixels(&inline), "layer pixels at {depth}-bit, smart {smart}");
@@ -124,9 +124,22 @@ fn start_place_bytes_matches_place_bytes() {
     let e = wait_event(&mut s, id);
     assert_eq!(e.command, "file.placeEmbedded");
     let JobOutcome::Done(got) = &e.outcome else { panic!("{e:?}") };
-    assert_eq!(*got, want);
+    same_but_layer(got, &want);
+    assert_eq!(got["layer"], json!(s.active().unwrap().active_layer.unwrap().0), "the result names the placed layer");
     assert_eq!(layer_pixels(&s), layer_pixels(&inline));
     assert_eq!(steps(&s), steps(&inline));
+}
+
+/// Assert a place result equals `want` except for its `layer`: layer ids come from a counter
+/// shared by every session, so two sessions never hand out the same one.
+fn same_but_layer(got: &Value, want: &Value) {
+    let strip = |v: &Value| {
+        let mut v = v.clone();
+        v.as_object_mut().map(|o| o.remove("layer"));
+        v
+    };
+    assert!(got["layer"].is_u64(), "{got}");
+    assert_eq!(strip(got), strip(want));
 }
 
 /// Cancelling stops the place: nothing is inserted and the document is the very same one.

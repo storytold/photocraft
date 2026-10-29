@@ -83,7 +83,10 @@ fn an_svg_placed_as_a_job_is_as_sharp_as_the_inline_place() {
 
     let mut s = new_doc();
     let Started::Job(id) = s.start("file.placeEmbedded", params).unwrap() else { panic!("expected a background job") };
-    let got = s.wait_job(id).unwrap();
+    let mut got = s.wait_job(id).unwrap();
+    // Layer ids come from a counter shared by every session: the rest of the result must match.
+    let mut want = want;
+    assert!(got.as_object_mut().and_then(|o| o.remove("layer")).is_some() && want.as_object_mut().and_then(|o| o.remove("layer")).is_some());
     assert_eq!(got, want);
     assert_eq!(got["bounds"], json!([100.0, 150.0, 300.0, 250.0]), "{got}");
     let doc = s.active().unwrap().doc.clone();
