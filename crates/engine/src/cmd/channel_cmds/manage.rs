@@ -283,10 +283,18 @@ pub(super) fn options(s: &mut Session, p: &Value) -> Result<Value> {
     let opacity = p.get("opacity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
     let solidity = p.get("solidity").and_then(Value::as_f64).map(|v| (v as f32 / 100.0).clamp(0.0, 1.0));
     let kind = p.get("indicates").and_then(Value::as_str).map(str::to_string);
-    let display_only = name.is_none() && kind.is_none() && solidity.is_none();
+    let total_ink = match p.get("totalInk") {
+        None | Some(Value::Null) => None,
+        Some(Value::Bool(b)) => Some(*b),
+        Some(v) => return Err(bad(cmd, format!("`totalInk` = {v} must be a boolean"))),
+    };
+    let display_only = name.is_none() && kind.is_none() && solidity.is_none() && total_ink.is_none();
     let apply = move |ch: &mut AlphaChannel| -> Result<()> {
         if let Some(n) = &name {
             ch.name = n.clone();
+        }
+        if let Some(t) = total_ink {
+            ch.total_ink = t;
         }
         match kind.as_deref() {
             Some("spot") => {
