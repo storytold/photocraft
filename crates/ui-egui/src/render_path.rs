@@ -141,6 +141,9 @@ pub struct RenderPath {
 }
 
 impl RenderPath {
+    pub(crate) fn compositor_building_docs(&self) -> Vec<u64> {
+        self.docs.iter().filter_map(|(&doc, reason)| matches!(reason, CpuReason::CompositorBuilding).then_some(doc)).collect()
+    }
     /// Why document `doc` is drawn on the CPU now, or None on the GPU: the window's reason, else
     /// the view's, else the canvas's, else the adjustment preview's. A software adapter still runs
     /// the GPU canvas, so a document that left even that names its own reason first.

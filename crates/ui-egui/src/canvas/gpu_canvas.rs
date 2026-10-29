@@ -435,6 +435,28 @@ impl GpuCanvas {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn simulate_compositor_build(&self) {
+        *self.compositor_build.lock().unwrap() = compositor_build::BuildState::Building;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn simulate_compositor_completion(&self, success: bool) -> bool {
+        let (state, outcome) = if success {
+            let Ok(comp) = photocraft_gpu::Compositor::try_new_with_format(&self.rs.device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter))
+            else {
+                return false;
+            };
+            (compositor_build::BuildState::Ready(Box::new(comp)), Ok(()))
+        } else {
+            let message = "simulated build failure".to_string();
+            (compositor_build::BuildState::Failed(photocraft_gpu::Unsupported(message.clone())), Err((message, false)))
+        };
+        *self.compositor_build.lock().unwrap() = state;
+        *self.compositor_completion.lock().unwrap() = Some(outcome);
+        true
+    }
+
     /// Why the compositor couldn't be built, once it couldn't (see [`GpuCanvas::composite`]).
     fn compositor_failed(&self) -> Option<String> {
         let r = self.rs.renderer.read();

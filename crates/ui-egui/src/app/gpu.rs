@@ -82,6 +82,14 @@ impl PhotocraftApp {
     fn record_compositor_completion(&mut self) {
         let Some(gpu) = self.gpu.clone() else { return };
         let Some(result) = gpu.take_compositor_completion() else { return };
+        // A completed CPU redraw can leave a current texture and a temporary build reason.
+        // Recompute those documents on their next repaint, including any hidden documents.
+        for id in self.render_path.compositor_building_docs() {
+            if let Some(doc) = self.session.documents().iter().find(|st| st.doc.id.0 == id).map(|st| st.doc.id) {
+                crate::canvas::background_redraw::cancel(self, doc);
+                self.canvases.remove(&(doc, crate::canvas::GPU_OUTPUT));
+            }
+        }
         let compiler = self.services.shader_compiler.as_deref().unwrap_or("");
         let key = gpu.compositor_memo_key(compiler);
         let mut memo = self.load_gpu_memo();
