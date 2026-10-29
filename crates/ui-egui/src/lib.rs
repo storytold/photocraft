@@ -334,6 +334,7 @@ pub struct PhotocraftApp {
     /// A Move-tool press landed on a locked layer: the first pointer move shows Photoshop's
     /// message (`move_lock`), a plain click shows nothing.
     pub(crate) move_blocked: bool,
+    pub(crate) move_lock_until: Option<f64>,
     /// The tool pointer events go to this frame when it isn't the selected one: the Move tool
     /// while ⌘ is held (`hold_keys::cmd_moves`). Set by the canvas for its gestures, never saved.
     pub(crate) tool_override: Option<state::Tool>,

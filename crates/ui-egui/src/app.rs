@@ -48,6 +48,7 @@ impl PhotocraftApp {
             checker: None,
             drag: None,
             move_blocked: false,
+            move_lock_until: None,
             tool_override: None,
             live_stroke: None,
             committed_stroke: None,
