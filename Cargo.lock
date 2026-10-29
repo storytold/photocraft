@@ -5601,7 +5601,6 @@ dependencies = [
  "photocraft-vector",
  "rayon",
  "same-file",
- "semver",
  "serde",
  "serde_json",
  "tempfile",
