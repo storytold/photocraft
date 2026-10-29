@@ -101,7 +101,8 @@ impl BrushContext {
                             continue;
                         }
                         let s = m.sample_clamped(level, px / tw, py / th);
-                        let val = if aliased { if s >= 0.5 { 1.0 } else { 0.0 } } else { s };
+                        let edge = px.min(tw - px).min(py.min(th - py) * ro) / inv_scale;
+                        let val = if aliased { if edge >= 0.0 && s >= 0.5 { 1.0 } else { 0.0 } } else { s * (edge + 0.5).clamp(0.0, 1.0) };
                         (val, 1.0 - s)
                     }
                 };

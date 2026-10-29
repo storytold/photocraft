@@ -134,6 +134,27 @@ fn sampled_tip_is_scaled_and_oriented() {
 }
 
 #[test]
+fn enlarged_solid_sampled_tip_preserves_corners_and_a_one_pixel_edge() {
+    // Define Brush crops away the white border: even a 1px solid tip must scale
+    // to a square, without interpolating an imaginary transparent source border.
+    for side in [1, 2, 8] {
+        for size in [8.0, 24.0, 80.0] {
+            for aliased in [false, true] {
+                let b = BrushSettings { tip: TipShape::Sampled(GrayTile::from_fn(side, side, |_, _| 1.0)), aliased, ..brush() };
+                let r = raster(&b, &Dab::round(Point::new(50.0, 50.0), size / 2.0, 1.0));
+                let lo = (50.0 - size / 2.0) as i32;
+                let hi = (50.0 + size / 2.0) as i32 - 1;
+                for (x, y) in [(lo, lo), (hi, lo), (lo, hi), (hi, hi)] {
+                    assert!(at(&r, x, y) > 0.99, "{side}px tip at size {size}, aliased={aliased}: corner ({x},{y})");
+                }
+                assert_eq!(at(&r, lo - 1, 50), 0.0, "no expanding fringe");
+                assert_eq!(at(&r, hi + 1, 50), 0.0, "no expanding fringe");
+            }
+        }
+    }
+}
+
+#[test]
 fn pencil_is_aliased() {
     let b = BrushSettings { aliased: true, hardness: 0.0, size: 9.0, ..brush() };
     let s = paint(&b, &line(10.0, 50.0, 20.5), 64, 40);
