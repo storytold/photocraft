@@ -458,3 +458,175 @@ fn targeting_a_mask_swaps_to_its_own_colour_pair() {
     app.run("layer.layerMask.delete", json!({})).unwrap();
     assert_eq!(pair(&app), (GREEN, BLUE), "deleting the targeted mask goes back to the pixels");
 }
+
+/// Changed pixels must win even when dimensions and all formerly sampled bytes match.
+#[test]
+fn changed_os_clipboard_pixels_reach_every_paste_route() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mut fixtures = vec![(10, 10, [0u8, 255, 0, 255].repeat(100), [0u8, 0, 255, 255].repeat(100))];
+    for channel in 1..4 {
+        let before = vec![0, 128, 128, 255];
+        let mut after = before.clone();
+        after[channel] -= 64;
+        fixtures.push((1, 1, before, after));
+    }
+    let before = [0u8, 255, 0, 255].repeat(400);
+    let mut after = before.clone();
+    after[1598] = 255; // beyond the first sample, between the old 997-byte samples
+    fixtures.push((20, 20, before, after));
+    let mut stale = Vec::new();
+    for (w, h, before, after) in fixtures {
+        for mirrored in [false, true] {
+            for route in ["run", "menu", "inPlace", "new"] {
+                let os = OsClip::default();
+                let reads = Arc::new(AtomicUsize::new(0));
+                let (write, read, count) = (os.clone(), os.clone(), reads.clone());
+                let services = Services {
+                    clipboard_set_image: Some(Box::new(move |w, h, bytes| {
+                        *write.lock().unwrap() = Some((w, h, bytes.to_vec()));
+                        Ok(())
+                    })),
+                    clipboard_get_image: Some(Box::new(move || {
+                        count.fetch_add(1, Ordering::SeqCst);
+                        Ok(read.lock().unwrap().clone())
+                    })),
+                    ..Default::default()
+                };
+                let mut app = PhotocraftApp::new(Session::new(), services);
+                app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+                if mirrored {
+                    let bounds = photocraft_geom::Rect::new(7, 9, 7 + w as i32, 9 + h as i32);
+                    let surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, bounds, &before);
+                    app.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds, layers: None, resolution: None, source: None });
+                    app.export_os_clipboard();
+                    assert!(!app.clip_external && !app.clip_unmirrored);
+                } else {
+                    *os.lock().unwrap() = Some((w, h, before.clone()));
+                    assert!(app.import_os_clipboard().unwrap());
+                }
+                *os.lock().unwrap() = Some((w, h, after.clone()));
+                reads.store(0, Ordering::SeqCst);
+                let old_history = app.session.active().unwrap().history.past_len();
+                let old_layers = app.session.active().unwrap().doc.layer_count();
+                let id = match route {
+                    "inPlace" => "edit.pasteSpecial.pasteInPlace",
+                    "new" => "file.newFromClipboard",
+                    _ => "edit.paste",
+                };
+                if route == "run" {
+                    app.run(id, serde_json::json!({})).unwrap();
+                } else {
+                    crate::menus::invoke(&mut app, &egui::Context::default(), id, serde_json::json!({})).unwrap();
+                }
+                assert_eq!(reads.load(Ordering::SeqCst), 1, "one read for {route}");
+                assert_eq!(app.session.documents().len(), if route == "new" { 2 } else { 1 });
+                let state = app.session.active().unwrap();
+                assert!(state.is_dirty());
+                if route != "new" {
+                    assert_eq!(state.history.past_len(), old_history + 1);
+                    assert_eq!(state.doc.layer_count(), old_layers + 1);
+                } else {
+                    assert_eq!((state.doc.size.width, state.doc.size.height), (w, h));
+                    assert_eq!(state.doc.layer_count(), 1);
+                }
+                let layer = state.doc.layer(state.active_layer.unwrap()).unwrap();
+                let surface = layer.surface().unwrap();
+                let bounds = surface.content_bounds();
+                let mut pixels = vec![[0u8; 4]; (w * h) as usize];
+                surface.read_rgba8_into(photocraft_geom::Rect::new(bounds.x0, bounds.y0, bounds.x0 + w as i32, bounds.y0 + h as i32), &mut pixels);
+                let clip = app.session.clipboard.as_ref().unwrap();
+                if pixels.into_iter().flatten().collect::<Vec<_>>() != after
+                    || !app.clip_external
+                    || clip.bounds != photocraft_geom::Rect::new(0, 0, w as i32, h as i32)
+                    || clip.layers.is_some()
+                    || clip.source.is_some()
+                    || clip.resolution.is_some()
+                {
+                    stale.push(format!("{w}x{h} mirrored={mirrored} route={route} external={}", app.clip_external));
+                }
+                // Repeated unchanged probes are no-ops, while an explicit paste still adds a layer.
+                assert!(!app.import_os_clipboard().unwrap());
+                let layers = app.session.active().unwrap().doc.layer_count();
+                app.run("edit.pasteSpecial.pasteInPlace", serde_json::json!({})).unwrap();
+                assert_eq!(app.session.active().unwrap().doc.layer_count(), layers + 1);
+                app.run("edit.undo", serde_json::json!({})).unwrap();
+                assert_eq!(app.session.active().unwrap().doc.layer_count(), layers);
+            }
+        }
+    }
+    assert!(stale.is_empty(), "stale pasted pixels or classification: {stale:?}");
+}
+
+#[test]
+fn unchanged_os_mirrors_preserve_rich_high_depth_copies() {
+    for depth in [16, 32] {
+        let os = OsClip::default();
+        let (write, read) = (os.clone(), os.clone());
+        let mut app = PhotocraftApp::new(
+            Session::new(),
+            Services {
+                clipboard_set_image: Some(Box::new(move |w, h, bytes| {
+                    *write.lock().unwrap() = Some((w, h, bytes.to_vec()));
+                    Ok(())
+                })),
+                clipboard_get_image: Some(Box::new(move || Ok(read.lock().unwrap().clone()))),
+                ..Default::default()
+            },
+        );
+        app.run("file.new", serde_json::json!({"width": 80, "height": 60, "depth": depth, "resolution": 240})).unwrap();
+        app.run("shape.create", serde_json::json!({"kind": "rect", "rect": [10, 12, 20, 16], "fill": "#00ff00"})).unwrap();
+        app.run("edit.copy", serde_json::json!({})).unwrap();
+        let copied = app.session.clipboard.clone().unwrap();
+        assert!(copied.layers.is_some() && copied.source.is_some() && copied.resolution.is_some());
+        assert_ne!(copied.surface.format(), photocraft_color::PixelFormat::RGBA8);
+        for _ in 0..2 {
+            assert!(!app.import_os_clipboard().unwrap());
+            assert!(!app.clip_external && !app.clip_unmirrored);
+            let clip = app.session.clipboard.as_ref().unwrap();
+            assert_eq!(clip.bounds, copied.bounds);
+            assert_eq!(clip.surface.format(), copied.surface.format());
+            assert_eq!(clip.surface.rgba(15, 15), copied.surface.rgba(15, 15));
+            assert_eq!(clip.source, copied.source);
+            assert_eq!(clip.resolution, copied.resolution);
+            assert!(clip.layers.is_some());
+            let steps = app.session.active().unwrap().history.past_len();
+            app.run("edit.pasteSpecial.pasteInPlace", serde_json::json!({})).unwrap();
+            let state = app.session.active().unwrap();
+            assert_eq!(state.history.past_len(), steps + 1);
+            let pasted = state.doc.layer(state.active_layer.unwrap()).unwrap();
+            assert!(matches!(pasted.content, photocraft_doc::LayerContent::Shape(_)));
+            assert_eq!(pasted.surface().unwrap().content_bounds(), copied.bounds);
+        }
+        app.run("file.newFromClipboard", serde_json::json!({})).unwrap();
+        let doc = &app.session.active().unwrap().doc;
+        assert_eq!(doc.resolution_dpi, copied.resolution.unwrap());
+        assert_eq!(doc.depth, copied.surface.format().sample);
+        assert_eq!((doc.size.width, doc.size.height), (copied.bounds.width(), copied.bounds.height()));
+        assert!(app.session.clipboard.as_ref().unwrap().layers.is_some());
+    }
+}
+
+#[test]
+fn clipboard_dimensions_and_invalid_images_keep_existing_paste_policy() {
+    let (os, reads) = (OsClip::default(), Arc::default());
+    let mut app = app_with_os_clipboard(&os, &reads);
+    *os.lock().unwrap() = Some((1, 2, [0u8, 255, 0, 255].repeat(2)));
+    assert!(app.import_os_clipboard().unwrap());
+    // The same bytes with a different shape are a different external image.
+    *os.lock().unwrap() = Some((2, 1, [0u8, 255, 0, 255].repeat(2)));
+    app.run("file.newFromClipboard", serde_json::json!({})).unwrap();
+    let state = app.session.active().unwrap();
+    assert_eq!((state.doc.size.width, state.doc.size.height), (2, 1));
+    assert!(app.clip_external);
+    for image in [(0, 1, vec![]), (1, 0, vec![]), (1, 1, vec![0; 3])] {
+        *os.lock().unwrap() = Some((1, 1, vec![0, 255, 0, 255]));
+        assert!(app.import_os_clipboard().unwrap());
+        *os.lock().unwrap() = Some(image);
+        let before = app.session.active().unwrap().history.past_len();
+        let result = app.run("edit.paste", serde_json::json!({})).unwrap();
+        assert_eq!(result["pasted"], false);
+        assert!(app.session.clipboard.is_none() && app.os_clip_sig.is_none());
+        assert!(!app.clip_external && !app.ui.status_error);
+        assert_eq!(app.session.active().unwrap().history.past_len(), before);
+    }
+}
