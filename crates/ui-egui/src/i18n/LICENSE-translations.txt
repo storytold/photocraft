@@ -1,5 +1,5 @@
 PhotoCraft's Korean, German, Spanish, Brazilian Portuguese, Italian, Ukrainian, Dutch, Czech,
-Turkish, Hungarian, Serbian and Russian UI translation catalogs are licensed under MIT OR
+Turkish, Hungarian, Serbian, Russian and Finnish UI translation catalogs are licensed under MIT OR
 Apache-2.0, at your option.
 The full license texts are in ../../../../LICENSE-MIT and ../../../../LICENSE-APACHE.
 
@@ -45,3 +45,6 @@ Arabic translations: PhotoCraft contributors, combined from the catalogs contrib
 @hicbest, @hasan-sdaif, @NibrasAz7, @vfggf95565, @syrrevshin4202-prog and @test-bit-sys and
 reviewed with Claude (Anthropic) as an AI contributor; original translations of PhotoCraft's
 English labels, and no proprietary translation resources were used.
+
+Finnish translations: PhotoCraft contributors, original AI-assisted (Claude Code) translations of
+PhotoCraft's English labels; no proprietary translation resources were used.

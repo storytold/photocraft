@@ -227,6 +227,32 @@ fn arabic_preset_import_results_are_translated() {
 }
 
 #[test]
+fn finnish_resolves_locales_and_reads_as_finnish() {
+    let fi = Lang::from_code("fi").expect("fi registered");
+    assert_eq!(fi.name(), "Suomi");
+    assert!(fi.complete_menus());
+    for tag in ["fi", "FI", "fi-FI", "fi_FI", "fi_FI.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(fi), "{tag}");
+        assert_eq!(Lang::from_pref(tag), fi, "{tag}");
+    }
+    // Filipino (`fil`) and Swedish in Finland (`sv-FI`) don't pick Finnish.
+    assert_ne!(lang_from_tag("fil"), Some(fi));
+    assert_ne!(lang_from_tag("sv-FI"), Some(fi));
+    assert_eq!(tr(fi, "File"), "Tiedosto");
+    assert_eq!(tr(fi, "Layer"), "Taso");
+    assert_eq!(tr(fi, "New document…"), "Uusi asiakirja…");
+    assert_eq!(tr_id(fi, "select.all", "All"), "Valitse kaikki", "an id override wins over the plain label");
+    assert_eq!(tr(fi, "All"), "Kaikki");
+    assert_eq!(tr_ctx(fi, "cameraRaw", "Light"), "Valo");
+    assert_eq!(tr_ctx(fi, "fontWeight", "Light"), "Kevyt");
+    // The partitive singular follows any number but 1.
+    for (n, layer) in [(0, "tasoa"), (1, "taso"), (2, "tasoa"), (21, "tasoa"), (u64::MAX, "tasoa")] {
+        assert_eq!(trn(fi, n, "{n} layer", "{n} layers"), format!("{n} {layer}"));
+        assert_eq!(trn(fi, n, "Group · {n} layer", "Group · {n} layers"), format!("Ryhmä · {n} {layer}"));
+    }
+}
+
+#[test]
 fn serbian_resolves_locales_and_preferences() {
     let sr = Lang::from_code("sr").expect("sr registered");
     assert_eq!(sr.name(), "Srpski");
