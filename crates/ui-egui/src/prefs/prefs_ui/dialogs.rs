@@ -361,7 +361,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                     continue;
                 }
                 for (other, _, _, def) in &items {
-                    if *other == id {
+                    if *other == id || super::shortcuts::shares_tool_key(&id, other, &norm) {
                         continue;
                     }
                     let held = match ov.get(other) {

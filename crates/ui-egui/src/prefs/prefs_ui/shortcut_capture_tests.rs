@@ -425,3 +425,65 @@ fn accept_takes_the_key_from_every_command_holding_it() {
     let o = field(&h, id, "overrides");
     assert_eq!((o["edit.cut"].clone(), o["edit.copy"].clone(), o["edit.paste"].clone()), (json!(""), json!(""), json!("Cmd+X")), "{o}");
 }
+
+/// One tap of `key` with `modifiers` through the shell's shortcut handling.
+fn tap(app: &mut PhotocraftApp, ctx: &egui::Context, key: Key, modifiers: Modifiers) {
+    ctx.begin_pass(egui::RawInput {
+        events: vec![
+            Event::ModifiersChanged(modifiers),
+            Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
+            Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
+        ],
+        ..Default::default()
+    });
+    crate::shortcuts::handle(app, ctx);
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
+fn a_tool_given_another_tools_key_shares_it_on_ok() {
+    // Photoshop lets tools share a key and cycles them with Shift: B given to the Move Tool
+    // joins the Brush group instead of being taken from it.
+    let (mut h, id) = dialog(1.0, "tools.select.move", "Move Tool");
+    capture_key(&mut h, id, Key::B, Modifiers::NONE);
+    assert_eq!(field(&h, id, "overrides")["tools.select.move"], json!("B"));
+    assert_ne!(field(&h, id, "messageWarning"), json!(true), "{}", field(&h, id, "message"));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    let app = h.state();
+    for tool in ["brush", "pencil", "colorReplacement", "mixerBrush"] {
+        assert_eq!(app.session.prefs().shortcuts.get(&format!("tools.select.{tool}")).map(String::as_str), None, "{tool} keeps B");
+    }
+    assert_eq!(crate::tool_shortcuts::shortcut(app, crate::state::Tool::Move).as_deref(), Some("B"));
+}
+
+#[test]
+fn tools_sharing_a_changed_key_cycle_with_shift() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": "B"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    let mut seen = vec![];
+    for _ in 0..6 {
+        tap(&mut app, &ctx, Key::B, Modifiers::SHIFT);
+        seen.push(app.ui.tool);
+    }
+    assert!(seen.contains(&Tool::Move), "Shift+B reaches the Move Tool: {seen:?}");
+    assert!(seen.contains(&Tool::Brush) && seen.contains(&Tool::Pencil), "and still the Brush group: {seen:?}");
+
+    // Two tools moved onto one new key share it too. (⇧F6 is Feather, so the plain key cycles here.)
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": "F6", "tools.select.hand": "F6"}, "allowUnknown": true})).unwrap();
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    app.ui.tool = Tool::Zoom;
+    let mut seen = vec![];
+    for _ in 0..3 {
+        tap(&mut app, &ctx, Key::F6, Modifiers::NONE);
+        seen.push(app.ui.tool);
+    }
+    assert!(seen.contains(&Tool::Move) && seen.contains(&Tool::Hand), "F6 cycles both: {seen:?}");
+    // A key with modifiers still selects its one tool.
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "Ctrl+Alt+F6"}, "allowUnknown": true})).unwrap();
+    tap(&mut app, &ctx, Key::F6, crate::shortcuts::parse("Ctrl+Alt+F6").unwrap().modifiers);
+    assert_eq!(app.ui.tool, Tool::Hand);
+}

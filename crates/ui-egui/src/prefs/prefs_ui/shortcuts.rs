@@ -49,6 +49,12 @@ pub fn shortcut_items(app: &PhotocraftApp) -> Vec<(String, String, Vec<String>, 
     out
 }
 
+/// Two toolbar tools may both hold `shortcut` when it is a plain key: they cycle with Shift, as
+/// Photoshop's tool groups do, so neither takes it from the other.
+pub(crate) fn shares_tool_key(a: &str, b: &str, shortcut: &str) -> bool {
+    crate::tool_shortcuts::tool(a).is_some() && crate::tool_shortcuts::tool(b).is_some() && crate::tool_shortcuts::plain(shortcut).is_some()
+}
+
 /// A fingerprint of the bindings a shortcut conflict describes.
 fn conflict_state(overrides: &BTreeMap<String, String>, alternates: &BTreeMap<String, Vec<String>>, selected: &str, set: Option<&Value>) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -269,11 +275,14 @@ pub(super) fn shortcuts_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut
                 message_warning = true;
                 capture = false;
             } else if let Some(sc) = shortcut_text(key, m) {
+                // Tools share a plain key and cycle with Shift, as in Photoshop: no clash.
+                let shared = |id: &str| shares_tool_key(&selected, id, &sc);
                 let clash_ids: Vec<&str> = items
                     .iter()
                     .filter(|(id, _, _, def)| {
                         let cur = eff(&overrides, id, def);
                         *id != selected
+                            && !shared(id)
                             && (cur.as_deref().and_then(prefs::normalize_shortcut) == Some(sc.clone())
                                 || eff_alts(&alt_overrides, id, cur.as_deref()).contains(&sc))
                     })
