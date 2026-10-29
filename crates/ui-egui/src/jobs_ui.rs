@@ -195,7 +195,10 @@ pub struct JobsUi {
 /// (the result is then `{"job": id, "pending": true}` and the edit lands when [`tick`] applies
 /// it), else synchronously like [`photocraft_engine::Session::execute`].
 pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, String> {
-    if !app.background_jobs {
+    // A place is also a job where there are no threads (the web build): the session steps it a
+    // slice per frame, and every other command stays synchronous there.
+    let place = matches!(id, "file.placeEmbedded" | "file.placeLinked") && place_in_background(app);
+    if !app.background_jobs && !place {
         return app.session.execute(id, params).map_err(|e| e.to_string());
     }
     match app.session.start(id, params).map_err(|e| e.to_string())? {
@@ -208,6 +211,13 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
             Ok(json!({"job": job.0, "pending": true}))
         }
     }
+}
+
+/// Is a place a job? With worker threads (`background_jobs`), or where the session has none and
+/// steps the place itself a slice per frame (`cooperative_jobs`, the web build). Every other
+/// command goes by `background_jobs` alone: threads are what save, print and the rest need.
+pub(crate) fn place_in_background(app: &PhotocraftApp) -> bool {
+    app.background_jobs || app.session.cooperative_jobs()
 }
 
 /// Place a file's bytes in the background (File › Place for a file with no path to read, a dropped
