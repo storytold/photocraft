@@ -18,27 +18,37 @@ fn per_dab(e: f32, spacing: f32) -> f32 {
 
 /// Apply an RGB colour transform `f(rgb, strength)` to each covered pixel of a dab (through straight
 /// RGBA, so it works for Gray/CMYK/Lab too; untouched pixels are never round-tripped).
-fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32, spacing: f32, f: impl Fn([f32; 3], f32) -> [f32; 3]) {
+fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32, spacing: f32, f: impl Fn([f32; 3], f32) -> [f32; 3] + Sync) {
     let r = fp.rect.intersect(&work.rect);
-    let n = fmt.channels();
-    let mut enc = [0.0f32; 8];
-    for y in r.y0..r.y1 {
+    if r.is_empty() {
+        return;
+    }
+    let (n, a) = (fmt.channels(), alpha_index(fmt));
+    let (ww, x0) = (work.width() * n, work.rect.x0);
+    let row = |y: i32, line: &mut [f32]| {
+        let mut enc = [0.0f32; 8];
         for x in r.x0..r.x1 {
             let k = per_dab(fp.at(x, y) * strength, spacing);
             if k <= 0.0 {
                 continue;
             }
-            let px = work.px_mut(x, y);
+            let px = &mut line[(x - x0) as usize * n..][..n];
             let rgba = to_rgba(fmt, px);
             let o = f([rgba[0], rgba[1], rgba[2]], k);
             from_rgba_into(fmt, [o[0], o[1], o[2], rgba[3]], &mut enc);
-            let a = alpha_index(fmt);
             for c in 0..n {
                 if Some(c) != a {
                     px[c] = enc[c];
                 }
             }
         }
+    };
+    let rows = &mut work.data[(r.y0 - work.rect.y0) as usize * ww..(r.y1 - work.rect.y0) as usize * ww];
+    // Each pixel is toned on its own, so a big dab's rows run in parallel.
+    if r.width() as usize * r.height() as usize >= PARALLEL_DAB_PIXELS {
+        rows.par_chunks_mut(ww).enumerate().for_each(|(i, line)| row(r.y0 + i as i32, line));
+    } else {
+        rows.chunks_mut(ww).enumerate().for_each(|(i, line)| row(r.y0 + i as i32, line));
     }
 }
 
@@ -47,7 +57,7 @@ fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32
 /// brush stroke, capped at full coverage, so Exposure caps a stroke the way Opacity caps a paint
 /// stroke: overlapping dabs and passes within one stroke don't compound the tone curve, and a
 /// new stroke builds on the last.
-fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static) -> DabEffect {
+fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + Sync + 'static) -> DabEffect {
     /// Side of the cells that remember, per touched pixel, the coverage applied so far and the
     /// original pixel (copied from the working pixels the first time a dab reaches it). Dense
     /// cells rather than a map per pixel: a map lookup per covered pixel made long strokes with
@@ -65,17 +75,28 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
         if r.is_empty() {
             return;
         }
-        let mut enc = [0.0f32; 8];
-        for cy in r.y0.div_euclid(CELL)..=(r.y1 - 1).div_euclid(CELL) {
-            for cx in r.x0.div_euclid(CELL)..=(r.x1 - 1).div_euclid(CELL) {
-                let cr = Rect::new(cx * CELL, cy * CELL, cx * CELL + CELL, cy * CELL + CELL);
-                let part = r.intersect(&cr);
-                if part.is_empty() {
-                    continue;
-                }
-                let len = (CELL * CELL) as usize;
+        let (cx0, cx1) = (r.x0.div_euclid(CELL), (r.x1 - 1).div_euclid(CELL));
+        let len = (CELL * CELL) as usize;
+        // A band of cells and the working rows it covers per task: a pixel only reads and writes
+        // its own cell entries, so the bands of a big dab run in parallel. The cells are taken out
+        // of the map meanwhile and put back after.
+        let (ww, wx0) = (work.width() * n, work.rect.x0);
+        let rows = &mut work.data[(r.y0 - work.rect.y0) as usize * ww..(r.y1 - work.rect.y0) as usize * ww];
+        let mut bands: Vec<_> = row_bands(rows, r, CELL, ww)
+            .into_iter()
+            .map(|(by0, band)| {
+                let cy = by0.div_euclid(CELL);
                 // Coverage -1: not touched yet, so `orig` isn't filled in for that pixel.
-                let cell = cells.entry((cx, cy)).or_insert_with(|| Cell { cov: vec![-1.0; len], orig: vec![0.0; len * n] });
+                let row: Vec<_> =
+                    (cx0..=cx1).map(|cx| (cx, cells.remove(&(cx, cy)).unwrap_or_else(|| Cell { cov: vec![-1.0; len], orig: vec![0.0; len * n] }))).collect();
+                (cy, row, by0, band)
+            })
+            .collect();
+        let run = |(cy, row, by0, band): &mut (i32, Vec<(i32, Cell)>, i32, &mut [f32])| {
+            let (mut enc, by0) = ([0.0f32; 8], *by0);
+            for (cx, cell) in row.iter_mut() {
+                let cr = Rect::new(*cx * CELL, *cy * CELL, *cx * CELL + CELL, *cy * CELL + CELL);
+                let part = r.intersect(&cr);
                 for y in part.y0..part.y1 {
                     for x in part.x0..part.x1 {
                         let k = fp.at(x, y).clamp(0.0, 1.0);
@@ -84,9 +105,10 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
                         }
                         let i = ((y - cr.y0) * CELL + (x - cr.x0)) as usize;
                         let (Some(prev), Some(src)) = (cell.cov.get_mut(i), cell.orig.get_mut(i * n..i * n + n)) else { continue };
+                        let px = &mut band[(y - by0) as usize * ww + (x - wx0) as usize * n..][..n];
                         if *prev < 0.0 {
                             // First touch: the working pixel is still the original.
-                            src.copy_from_slice(work.px(x, y));
+                            src.copy_from_slice(px);
                             *prev = 0.0;
                         }
                         // Dabs build up the stroke's coverage as a brush stroke's do (flow), up
@@ -100,7 +122,6 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
                         let t = toned([o[0], o[1], o[2]]);
                         let m = [o[0] + (t[0] - o[0]) * k, o[1] + (t[1] - o[1]) * k, o[2] + (t[2] - o[2]) * k];
                         from_rgba_into(&fmt, [m[0], m[1], m[2], o[3]], &mut enc);
-                        let px = work.px_mut(x, y);
                         for c in 0..n {
                             if Some(c) != a {
                                 px[c] = enc[c];
@@ -109,6 +130,14 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
                     }
                 }
             }
+        };
+        if r.width() as usize * r.height() as usize >= PARALLEL_DAB_PIXELS {
+            bands.par_iter_mut().for_each(run);
+        } else {
+            bands.iter_mut().for_each(run);
+        }
+        for (cy, row, ..) in bands {
+            cells.extend(row.into_iter().map(|(cx, cell)| ((cx, cy), cell)));
         }
     })
 }
@@ -295,6 +324,20 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     Ok(r)
 }
 
+/// The rows `r.y0..r.y1` held in `data` (`stride` floats a row), split where `y` is a multiple of
+/// `side`: each band's first row and its rows, to work a grid row of cells or tiles per task.
+fn row_bands(data: &mut [f32], r: Rect, side: i32, stride: usize) -> Vec<(i32, &mut [f32])> {
+    let (mut rest, mut y, mut out) = (data, r.y0, Vec::new());
+    while y < r.y1 {
+        let next = ((y.div_euclid(side) + 1) * side).min(r.y1);
+        let len = ((next - y) as usize * stride).min(rest.len());
+        let (band, tail) = std::mem::take(&mut rest).split_at_mut(len);
+        out.push((y, band));
+        (rest, y) = (tail, next);
+    }
+    out
+}
+
 /// Side of the tiles a live sequential-dab stroke keeps its working pixels in ([`WorkTiles`]).
 const WORK_TILE: i32 = 128;
 
@@ -327,36 +370,47 @@ impl WorkTiles {
     /// The working pixels of `r`: the pre-stroke pixels `pre` where no dab has written yet.
     fn read(&self, pre: &Surface, r: Rect) -> Region {
         let mut out = Region::new(r, self.ch);
-        let n = self.ch;
-        let mut buf = Vec::new();
-        for c in Self::coords(r) {
-            let tr = Self::tile_rect(c);
-            let part = r.intersect(&tr);
-            let w = part.width() as usize * n;
-            let tile = self.tiles.get(&c);
-            if tile.is_none() {
-                pre.read_region_into(part, &mut buf);
-            }
-            for y in part.y0..part.y1 {
-                let src = match tile {
-                    Some(t) => t.get(((y - tr.y0) * WORK_TILE + (part.x0 - tr.x0)) as usize * n..).and_then(|s| s.get(..w)),
-                    None => buf.get((y - part.y0) as usize * w..).and_then(|s| s.get(..w)),
-                };
-                let dst = out.index(part.x0, y) * n;
-                if let (Some(s), Some(d)) = (src, out.data.get_mut(dst..dst + w)) {
-                    d.copy_from_slice(s);
+        let (n, stride) = (self.ch, r.width() as usize * self.ch);
+        // A row of tiles per task: each fills only its own rows of `out`.
+        let band = |(by0, rows): (i32, &mut [f32])| {
+            let mut buf = Vec::new();
+            for c in Self::coords(Rect::new(r.x0, by0, r.x1, by0 + (rows.len() / stride) as i32)) {
+                let tr = Self::tile_rect(c);
+                let part = r.intersect(&tr);
+                let w = part.width() as usize * n;
+                let tile = self.tiles.get(&c);
+                if tile.is_none() {
+                    pre.read_region_into(part, &mut buf);
+                }
+                for y in part.y0..part.y1 {
+                    let src = match tile {
+                        Some(t) => t.get(((y - tr.y0) * WORK_TILE + (part.x0 - tr.x0)) as usize * n..).and_then(|s| s.get(..w)),
+                        None => buf.get((y - part.y0) as usize * w..).and_then(|s| s.get(..w)),
+                    };
+                    let dst = (y - by0) as usize * stride + (part.x0 - r.x0) as usize * n;
+                    if let (Some(s), Some(d)) = (src, rows.get_mut(dst..dst + w)) {
+                        d.copy_from_slice(s);
+                    }
                 }
             }
+        };
+        let bands = row_bands(&mut out.data, r, WORK_TILE, stride);
+        if r.width() as usize * r.height() as usize >= PARALLEL_COPY_PIXELS {
+            bands.into_par_iter().for_each(band);
+        } else {
+            bands.into_iter().for_each(band);
         }
         out
     }
 
-    /// Store `region` as the working pixels of its rectangle.
-    fn write(&mut self, pre: &Surface, region: &Region) {
-        let (r, n) = (region.rect, self.ch);
-        for c in Self::coords(r) {
-            let tr = Self::tile_rect(c);
-            let tile = self.tiles.entry(c).or_insert_with(|| pre.read_region(tr));
+    /// Store `region`'s pixels in `r` (inside it) as the working pixels there.
+    fn write(&mut self, pre: &Surface, region: &Region, r: Rect) {
+        let n = self.ch;
+        // Out of the map while written, so a big area's tiles are filled in parallel.
+        let mut tiles: Vec<_> = Self::coords(r).map(|c| (c, self.tiles.remove(&c))).collect();
+        let fill = |(c, tile): &mut ((i32, i32), Option<Vec<f32>>)| {
+            let tr = Self::tile_rect(*c);
+            let tile = tile.get_or_insert_with(|| pre.read_region(tr));
             let part = r.intersect(&tr);
             let w = part.width() as usize * n;
             for y in part.y0..part.y1 {
@@ -366,7 +420,13 @@ impl WorkTiles {
                     d.copy_from_slice(s);
                 }
             }
+        };
+        if r.width() as usize * r.height() as usize >= PARALLEL_COPY_PIXELS {
+            tiles.par_iter_mut().for_each(fill);
+        } else {
+            tiles.iter_mut().for_each(fill);
         }
+        self.tiles.extend(tiles.into_iter().filter_map(|(c, t)| Some((c, t?))));
     }
 }
 
@@ -380,7 +440,11 @@ pub struct LiveDab {
     /// The active document with the stroke so far.
     pub doc: std::sync::Arc<Document>,
     cmd: String,
-    renderer: photocraft_paint::StrokeRenderer,
+    /// The stroke's dabs as points arrive, as `apply_dab_stroke` generates them. Each dab's
+    /// footprint is rasterised where it runs; a `StrokeRenderer` would also accumulate the
+    /// whole stroke's coverage, which nothing here reads.
+    generator: photocraft_paint::dynamics::DabGenerator,
+    ctx: photocraft_paint::BrushContext,
     done: usize,
     effect: DabEffect,
     neighborhood: DabNeighborhood,
@@ -485,11 +549,12 @@ impl LiveDab {
         let pre_surf = surf.clone();
         let effect = effect(&pre_surf);
         // `apply_dab_stroke` generates the same dabs (`dabs`: zoom 1, no smoothing scale).
-        let renderer = photocraft_paint::StrokeRenderer::new(&stroke.brush, None, 1.0).record_dabs();
+        let generator = photocraft_paint::dynamics::DabGenerator::new(&stroke.brush, 1.0);
         let mut live = Self {
             doc: std::sync::Arc::new(doc),
             cmd: cmd.into(),
-            renderer,
+            generator,
+            ctx: photocraft_paint::BrushContext::new(&stroke.brush),
             done: 0,
             effect,
             neighborhood,
@@ -523,11 +588,9 @@ impl LiveDab {
         self.bounds
     }
 
-    /// Run the dabs the renderer has generated since the last call on the working copy; returns
-    /// the rectangle they changed.
-    fn run_new_dabs(&mut self) -> Rect {
-        let ctx = self.renderer.ctx.clone();
-        let new: Vec<_> = self.renderer.dabs().get(self.done..).unwrap_or_default().to_vec();
+    /// Run the stroke's next dabs `new` on the working copy; returns the rectangle they changed.
+    fn run_dabs(&mut self, new: &[photocraft_paint::Dab]) -> Rect {
+        let ctx = &self.ctx;
         let mut dmg = Rect::EMPTY;
         for (k, d) in new.iter().enumerate() {
             let r = ctx.dab_rect(d, false);
@@ -536,7 +599,7 @@ impl LiveDab {
             }
             let mut region = self.work.read(&self.pre_surf, self.neighborhood.read_rect(r, d));
             (self.effect)(&mut region, &ctx.footprint(d, self.done + k));
-            self.work.write(&self.pre_surf, &region.crop(r));
+            self.work.write(&self.pre_surf, &region, r);
             dmg = dmg.union(&r);
         }
         self.done += new.len();
@@ -557,13 +620,15 @@ impl LiveDab {
         crate::brush_cmds::check_coords(pts, &self.cmd)?;
         let pts: Vec<_> = pts.iter().map(|q| StrokePoint::new(q.x, q.y, q.pressure)).collect();
         self.points.extend_from_slice(&pts);
-        self.renderer.push(&pts);
-        let dmg = self.run_new_dabs();
-        let ctx = self.renderer.ctx.clone();
+        let (mut new, mut dual) = (Vec::new(), Vec::new());
+        self.generator.push(&pts, &mut new, &mut dual);
+        let dmg = self.run_dabs(&new);
+        let ctx = &self.ctx;
         // The finishing dabs, run on a scratch copy of the working pixels.
         let mut tail = None;
         if self.preview_tail {
-            let ds = self.renderer.tail_dabs();
+            let (mut ds, mut dual) = (Vec::new(), Vec::new());
+            self.generator.clone().finish(&mut ds, &mut dual);
             let r = ds.iter().fold(Rect::EMPTY, |a, d| a.union(&ctx.dab_rect(d, false)));
             if !r.is_empty() {
                 let mut region = self.work.read(&self.pre_surf, r.inflate(self.neighborhood.halo()));
@@ -605,8 +670,9 @@ impl LiveDab {
         if now != tool || stroke.brush != *brush || id != self.id {
             return Err(bad(&self.cmd, "the brush, tool options or layer changed during the stroke"));
         }
-        self.renderer.finish();
-        let dmg = self.run_new_dabs();
+        let (mut tail, mut dual) = (Vec::new(), Vec::new());
+        self.generator.finish(&mut tail, &mut dual);
+        let dmg = self.run_dabs(&tail);
         let shown = dmg.union(&self.tail);
         if !shown.is_empty() {
             let work = self.work.read(&self.pre_surf, shown);

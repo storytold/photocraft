@@ -13,6 +13,7 @@ use std::sync::Arc;
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
+use rayon::prelude::*;
 
 use crate::brush::{BrushSettings, MaskMode, Pattern, TipShape};
 use crate::dynamics::{DabGenerator, grid_cell};
@@ -355,10 +356,10 @@ impl BrushContext {
             rasterize_round(d, rect, out, hardness, aliased);
             return;
         }
-        for yy in 0..h {
+        let row = |yy: usize, out: &mut [f32], mut depth: Option<&mut [f32]>| {
             let y = rect.y0 + yy as i32;
             let dy = y as f32 + 0.5 - cy;
-            for xx in 0..w {
+            for (xx, o) in out.iter_mut().enumerate() {
                 let x = rect.x0 + xx as i32;
                 let dx = x as f32 + 0.5 - cx;
                 let (u, v) = to_tip(dx, dy);
@@ -420,11 +421,24 @@ impl BrushContext {
                 if wet {
                     val *= wet_factor(rn);
                 }
-                if let Some(slot) = depth.as_deref_mut().and_then(|dp| dp.get_mut(yy * w + xx)) {
+                if let Some(slot) = depth.as_deref_mut().and_then(|dp| dp.get_mut(xx)) {
                     *slot = (1.0 - rn).clamp(0.0, 1.0);
                 }
-                out[yy * w + xx] = val * d.alpha;
+                *o = val * d.alpha;
             }
+        };
+        if w == 0 {
+            return;
+        }
+        // A big dab's rows in parallel (a large sampled tip at a small spacing is most of a
+        // Smudge stroke's time).
+        match depth {
+            Some(dp) if w * h >= crate::retouch::PARALLEL_DAB_PIXELS => {
+                out.par_chunks_mut(w).zip(dp.par_chunks_mut(w)).enumerate().for_each(|(yy, (o, dr))| row(yy, o, Some(dr)))
+            }
+            None if w * h >= crate::retouch::PARALLEL_DAB_PIXELS => out.par_chunks_mut(w).enumerate().for_each(|(yy, o)| row(yy, o, None)),
+            Some(dp) => out.chunks_mut(w).zip(dp.chunks_mut(w)).enumerate().for_each(|(yy, (o, dr))| row(yy, o, Some(dr))),
+            None => out.chunks_mut(w).enumerate().for_each(|(yy, o)| row(yy, o, None)),
         }
     }
 
