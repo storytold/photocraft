@@ -878,6 +878,13 @@ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
     // family stack ahead of the Japanese or Korean face, and a locale without a Traditional Chinese
     // craft face leaves Han to the system font. (A single linear per-family chain still decides a
     // glyph once a broad face is discovered; see `cjk_fonts`.)
+    // Served script fallbacks the web build has received (Arabic, Japanese…), after everything else.
+    for (name, data) in crate::served_fonts::ui_faces() {
+        fonts.font_data.insert(name.clone(), data);
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push(name.clone());
+        }
+    }
     // Named weights fall back to the default stack for missing glyphs.
     let fallback: Vec<String> = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
     for (fam, primary) in [("medium", medium), ("semibold", semibold)] {

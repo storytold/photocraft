@@ -200,6 +200,8 @@ stroke trace: 62 frames on vulkan NVIDIA GeForce RTX 5090 (p50/p95 ms): interval
 
 What the app can't time is the rest of input-to-photon: the OS input queue before a frame starts (up to one `interval`), frames queued for the display (the surface keeps up to two; the GL backend ignores that setting), and the compositor. So the first line names the backend and how frames are presented. To compare presentation settings without rebuilding, launch with `PHOTOCRAFT_PRESENT_MODE` and `PHOTOCRAFT_FRAME_LATENCY` (see [Environment variables](#environment-variables)): with `novsync` the app no longer waits on vsync (`wait` near 0): each refresh shows the newest frame, and where the driver only offers Immediate, the screen may tear. The last summary is also in the control channel's `perf.strokeTrace` (`ui.inspect`). The code is `crates/ui-egui/src/stroke_trace.rs`.
 
+The trace has no clock of its own: it reads the per-frame stage record the app gathers every frame (`crates/ui-egui/src/frame_stages.rs`). The same record feeds the slow-frame ring: any frame over 50 ms is kept (the last 64, in `perf.slowFrames`) and logged at `info`, at most one line a second with a count of the slow frames in between, naming its input, command, damage, composite, upload, GPU and present times and the canvas redraw's kind and pixels.
+
 ## Driving the app programmatically
 
 Start the app with a private token file. It then accepts authenticated JSON lines on `127.0.0.1:7878`:

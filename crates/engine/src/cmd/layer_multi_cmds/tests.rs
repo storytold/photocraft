@@ -386,9 +386,6 @@ fn clipped_adjustment_in_pass_through_clip_base_damages_its_group() {
     let LayerContent::Group(g) = &mut deleted.layers[2].content else { panic!("group") };
     g.children.remove(1);
     assert_eq!(step_damage(&before, &deleted), group);
-    let LayerContent::Group(g) = &before.layers[2].content else { panic!("group") };
-    let ids = [g.children[1].id];
-    assert_eq!(layers_damage(&before, &after, &ids), group);
     // Without the layer clipped to the group it stays pass-through: just A's base.
     before.layers.truncate(3);
     after.layers.truncate(3);

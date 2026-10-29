@@ -19,6 +19,7 @@ pub mod dialogs;
 pub mod dock;
 pub mod file_dialog;
 pub mod file_open;
+pub mod frame_stages;
 pub mod gpu_memo;
 pub mod gpu_status;
 pub mod i18n;
@@ -505,6 +506,10 @@ pub struct PhotocraftApp {
     /// makes shortcut- and dialog-triggered commands pass the same policy as
     /// direct control calls.
     pub(crate) automation_input: bool,
+    /// How many `run_command` calls are on the stack. Only the outermost one writes the frame's
+    /// command stage: a nested run (`file.save` → `layer.smartObjects.saveContents`,
+    /// `actions.play` → its steps) is already inside the outer call's time.
+    run_depth: u32,
     /// Action playbacks paused at a step dialog, by the token in that dialog's fields
     /// ([`actions::RESUME`]): what to play next and the automation gate it paused under.
     pub(crate) paused_playbacks: actions::PausedPlaybacks,
@@ -619,6 +624,8 @@ pub struct PhotocraftApp {
     pub stroke_trace: stroke_trace::StrokeTrace,
     /// Why each document's view is drawn on the CPU, and the history of changes (`render_path`).
     pub render_path: render_path::RenderPath,
+    /// The last slow frames and their stages (`perf.slowFrames`, see `frame_stages`).
+    pub slow_frames: frame_stages::SlowFrames,
     /// Preferences, autosave and snapping runtime state (see `prefs_ui`, `snap_ui`).
     pub(crate) prefs_rt: prefs_ui::Runtime,
     pub(crate) updates_rt: updates_ui::Runtime,

@@ -29,6 +29,39 @@ fn ui_set_turns_the_stroke_trace_on_and_off_at_runtime() {
 }
 
 #[test]
+fn perf_output_includes_slow_frames() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"], json!([]));
+    app.slow_frames.set_threshold_ms(0.0);
+    app.run("file.new", json!({"width": 64, "height": 32})).unwrap();
+    app.finish_frame(1.0);
+    let frames = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"].clone();
+    let last = frames.as_array().and_then(|f| f.last()).expect("a slow frame").clone();
+    assert_eq!(last["command"], "file.new", "{last}");
+    for key in ["t", "frameMs", "inputMs", "commandMs", "damageMs", "compositeMs", "uploadMs", "gpuMs", "presentMs", "refresh", "refreshPx", "path"] {
+        assert!(last.get(key).is_some(), "{key} in {last}");
+    }
+    // A nested run (`actions.play` → its view steps through `App::run`) is inside the outer
+    // call's time: the frame counts the outer command once, not the steps again.
+    app.session.actions.list.push(photocraft_engine::actions_cmds::Action {
+        name: "Zoom".into(),
+        steps: vec![("view.zoomIn".into(), json!({})), ("view.zoomOut".into(), json!({}))],
+        disabled: Default::default(),
+        ..Default::default()
+    });
+    let played = app.run("actions.play", json!({"action": "Zoom"})).unwrap();
+    assert_eq!(played["ran"], 2, "{played}");
+    let outer_ms = app.perf.command_ms;
+    app.finish_frame(1.0);
+    let frames = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"].clone();
+    let last = frames.as_array().and_then(|f| f.last()).expect("a slow frame").clone();
+    assert_eq!(last["command"], "actions.play", "{last}");
+    let command_ms = last["commandMs"].as_f64().unwrap();
+    assert!((command_ms - outer_ms).abs() < 1e-9, "the outer run's {outer_ms} ms, once: {last}");
+}
+
+#[test]
 fn camera_raw_control_updates_and_commits_or_cancels_an_open_raw() {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
     let (w, h) = (48, 32);

@@ -193,9 +193,7 @@ fn run_stroke(
         // large layer would dominate the cost of a dab.
         f(&pre, surf, pre.selection.as_ref(), lock)
     })?;
-    if let Some(st) = s.active_mut() {
-        st.last_damage = Some(dmg);
-    }
+    s.hint_damage(dmg);
     Ok(dmg)
 }
 

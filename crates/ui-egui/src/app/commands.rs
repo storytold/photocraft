@@ -35,6 +35,13 @@ impl PhotocraftApp {
     }
 
     pub(crate) fn run_command(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        self.run_depth += 1;
+        let r = self.run_command_at_depth(id, params);
+        self.run_depth -= 1;
+        r
+    }
+
+    fn run_command_at_depth(&mut self, id: &str, params: Value) -> Result<Value, String> {
         if !vector_ui::cancel_stale(self) {
             return Err(self.ui.status.clone());
         }
@@ -121,6 +128,9 @@ impl PhotocraftApp {
         self.sync_command_side_effects(id, &r, creates_active_mask, creates_active_vector_mask, creates_adjustment_or_fill, path_mask);
         self.perf.last_command = id.to_string();
         self.perf.command_ms = gpu_canvas::now_ms() - t0;
+        if self.run_depth == 1 {
+            self.perf.stage.command(id, self.perf.command_ms);
+        }
         match &r {
             Ok(_) => {
                 if self.ui.status_error {
