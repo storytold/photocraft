@@ -757,6 +757,9 @@ pub(crate) fn state_hash(app: &PhotocraftApp, input: Option<u64>) -> u64 {
     s.has_jobs().hash(&mut h);
     if let Some(d) = s.active() {
         (d.doc.id.0, d.revision, d.active_layer.map(|l| l.0), d.selected_layers.len(), d.isolated_layers.len()).hash(&mut h);
+        // Preview selection changes need not create a recorded document revision. Rows such
+        // as Define Brush Preset must still follow the current pixel selection immediately.
+        d.doc.selection.is_some().hash(&mut h);
     }
     let ui = &app.ui;
     (&ui.recent_files, &ui.workspace, ui.palette_open, ui.transform.is_some(), ui.text_edit.is_some(), ui.dialogs.len()).hash(&mut h);
