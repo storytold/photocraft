@@ -567,6 +567,15 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
             })
             .collect()
     };
+    // A cylinder is its two curves and a centre line, as the reference draws it, not a grid
+    // (#4112); its handles sit on them. It has no split guide.
+    if w.style == WarpStyle::Cylinder {
+        for pts in [curve(None, Some(0.0)), curve(None, Some(1.0)), curve(Some(0.5), None)] {
+            painter.add(egui::Shape::line(pts, line));
+        }
+        draw_cylinder(painter, w, scr, pv, line);
+        return;
+    }
     // Patch boundaries are the grid. Only Default (one patch) draws the rule-of-thirds guides;
     // a 3×3 preset is three even cells, not those guides repeated inside every cell.
     let thirds = single_patch(&m);
@@ -594,21 +603,6 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
     }
     if w.style == WarpStyle::Custom {
         draw_warp_points(painter, &m, scr, pv, line);
-    }
-    if w.style == WarpStyle::Cylinder {
-        // The grid's columns collapse onto the silhouettes (the back of the cylinder): a few
-        // lines of longitude across the front, and of latitude, show its roundness.
-        if let Some(&ul) = m.us.get(1) {
-            for k in [1.0, 2.0] {
-                let s = ul + (0.5 - ul) * k / 3.0;
-                painter.add(egui::Shape::line(curve(Some(s), None), thin));
-                painter.add(egui::Shape::line(curve(Some(1.0 - s), None), thin));
-            }
-        }
-        for t in [1.0 / 3.0, 2.0 / 3.0] {
-            painter.add(egui::Shape::line(curve(None, Some(t)), thin));
-        }
-        draw_cylinder(painter, w, scr, pv, line);
     }
     if let Some((tool, p)) = guide {
         let (s, t) = m.param_at(p);
