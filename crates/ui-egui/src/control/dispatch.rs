@@ -618,7 +618,7 @@ fn check_filter_mask_target(app: &PhotocraftApp) -> std::result::Result<(), Stri
         return Err("filterMaskTarget needs an active smart object with smart filters".into());
     }
     let composite = matches!(st.channel_view.target, ChannelTarget::Composite | ChannelTarget::LayerMask | ChannelTarget::VectorMask);
-    if !composite || st.doc.quick_mask.is_some() {
+    if !composite || (st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden) {
         return Err("filterMaskTarget can't be set while a single channel or Quick Mask is targeted".into());
     }
     Ok(())

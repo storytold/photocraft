@@ -39,7 +39,8 @@ impl PhotocraftApp {
     pub fn filter_mask_targeted(&self) -> bool {
         let Some(st) = self.session.active() else { return false };
         let Some(id) = st.active_layer.filter(|id| self.ui.filter_mask_target == Some(id.0)) else { return false };
-        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
+        let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite
+            && (st.doc.quick_mask.is_none() || st.channel_view.quick_mask_hidden);
         composite && st.doc.layer(id).is_some_and(|l| matches!(&l.content, photocraft_doc::LayerContent::Smart(sm) if !sm.smart_filters.is_empty()))
     }
 
@@ -49,7 +50,8 @@ impl PhotocraftApp {
     pub fn layer_mask_targeted(&self) -> bool {
         let Some(st) = self.session.active() else { return false };
         let layer_mask = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask;
-        let composite = (st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite || layer_mask) && st.doc.quick_mask.is_none();
+        let composite = (st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite || layer_mask)
+            && (st.doc.quick_mask.is_none() || st.channel_view.quick_mask_hidden);
         let has_mask = st.active_layer.and_then(|id| st.doc.layer(id)).is_some_and(|l| l.mask.is_some());
         if !composite || !has_mask {
             return false;

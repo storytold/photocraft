@@ -2282,6 +2282,39 @@ mod rotation_preview_isolation_tests {
         }
     }
 
+    #[test]
+    fn quick_mask_opens_hidden_and_layer_controls_transform_layer() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("select.rect", json!({"x": 10, "y": 10, "width": 50, "height": 50})).unwrap();
+        app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        app.run("select.editInQuickMaskMode", json!({"on": true})).unwrap();
+        let doc = app.session.active().unwrap().doc.as_ref().clone();
+
+        let mut reopened = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        reopened.session.add_document(doc, None);
+        reopened.sync_views();
+        assert_eq!(paint_target(&reopened), json!("pixels"));
+        reopened.ui.tool = Tool::Move;
+        reopened.ui.tool_options.move_show_transform = true;
+        reopened.ui.view.extras = true;
+        let ctx = egui::Context::default();
+        let xf = ViewXform {
+            rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)),
+            zoom: 1.0,
+            center: [100.0, 100.0],
+            flip: false,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
+        let bounds = transform_controls_rect(&reopened, &xf).expect("hidden Quick Mask leaves layer controls available");
+        assert!(begin_transform_controls_at(&mut reopened, &ctx, &xf, bounds.right_bottom()));
+        let transform = reopened.ui.transform.as_ref().expect("layer transform started");
+        assert_eq!(transform.target, None);
+        assert!(!transform.selection);
+    }
+
     /// Assign and Convert to Profile have Photoshop's Preview. Assign changes only the profile, so
     /// its preview must be shown through the profile it assigns (through the document's own it
     /// looked unchanged); Convert keeps the look of in-gamut colours. Their `working` is the

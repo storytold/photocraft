@@ -63,7 +63,7 @@ pub fn isolated_curve_channel_for(st: &DocState, layers_panel_mask: bool) -> Opt
             translate: false,
             gray: Some(GraySurface::Alpha(i)),
         }),
-        ChannelTarget::Composite if doc.quick_mask.is_some() => {
+        ChannelTarget::Composite if doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => {
             Some(IsolatedCurveChannel { name: "Quick Mask".into(), key: "", hist: 0, tint: false, translate: true, gray: Some(GraySurface::QuickMask) })
         }
         ChannelTarget::LayerMask => layer_mask_curve_channel(st),

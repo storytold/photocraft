@@ -377,7 +377,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             let mask = app.layer_mask_targeted();
             let st = app.session.active().ok_or("no document is open")?;
             let channel = match st.channel_view.target {
-                _ if st.doc.quick_mask.is_some() => json!("quickMask"),
+                _ if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => json!("quickMask"),
                 photocraft_engine::channel_cmds::ChannelTarget::Alpha(i) => json!(i),
                 _ if mask => json!("mask"),
                 _ => return Err("target an alpha or spot channel, or a layer mask, first".into()),

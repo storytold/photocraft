@@ -32,6 +32,7 @@ mod preview;
 mod warp;
 
 pub(crate) use begin::begin_content_aware;
+pub(crate) use begin::begin_layer;
 pub use begin::{begin, begin_copy, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_type};
 pub(crate) use commit::{SAVE_FOR_WEB, committing, nudge};
 pub use commit::{cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event, track_steps};

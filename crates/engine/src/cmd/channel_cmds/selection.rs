@@ -144,7 +144,8 @@ fn selection_from(doc: &Document, ch: &AlphaChannel) -> Option<Surface> {
 }
 
 pub(super) fn quick_mask(s: &mut Session, p: &Value) -> Result<Value> {
-    let on = s.active().ok_or(EngineError::NoDocument)?.doc.quick_mask.is_some();
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let on = st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden;
     let want = p.get("on").and_then(Value::as_bool).unwrap_or(!on);
     if want == on {
         return Ok(json!({ "quickMask": on }));

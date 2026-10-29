@@ -639,7 +639,7 @@ pub fn paint_target(app: &PhotocraftApp) -> serde_json::Value {
     // A targeted alpha channel (Channels panel) or Quick Mask mode wins over the layer.
     match st.channel_view.target {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => return json!({ "channel": i }),
-        ChannelTarget::Composite if st.doc.quick_mask.is_some() => return json!("quickMask"),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => return json!("quickMask"),
         ChannelTarget::LayerMask => return json!("mask"),
         _ => {}
     }

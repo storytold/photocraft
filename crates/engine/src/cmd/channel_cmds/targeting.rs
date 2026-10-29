@@ -222,7 +222,7 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
     let Some(st) = s.active() else { return params };
     let t = match st.channel_view.target {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
-        ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => json!("quickMask"),
         ChannelTarget::LayerMask => json!("mask"),
         // Viewing the active layer's mask (⌥-click): pixel commands edit the mask.
         // A shown filter mask takes only the commands that edit it; the rest act on the smart object.
@@ -338,7 +338,7 @@ pub(crate) fn targeted_channel(s: &Session) -> Option<Value> {
     let st = s.active()?;
     let t = match st.channel_view.target {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
-        ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => json!("quickMask"),
         _ => return None,
     };
     Some(json!({ "target": t }))
@@ -362,7 +362,7 @@ pub(crate) fn clear_channel(doc: &mut Document, target: &Value, background: [f32
 /// work without a pixel layer.
 pub(crate) fn edits_channel(s: &Session) -> bool {
     s.active().is_some_and(|st| {
-        st.doc.quick_mask.is_some() && st.channel_view.target == ChannelTarget::Composite
+        st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden && st.channel_view.target == ChannelTarget::Composite
             || matches!(st.channel_view.target, ChannelTarget::Alpha(i) if i < st.doc.channels.len())
     })
 }

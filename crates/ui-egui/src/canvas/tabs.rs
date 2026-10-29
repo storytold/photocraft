@@ -441,7 +441,7 @@ pub(super) fn pro_tab_title(app: &PhotocraftApp, i: usize) -> String {
     let zoom = app.ui.views.get(i).map_or(100.0, |v| v.zoom * 100.0);
     // Quick Mask mode targets the mask, not the layer (see `paint_target`): painting and Free
     // Transform change the red overlay, so the tab says so, as Photoshop's does.
-    let quick_mask = st.doc.quick_mask.is_some() && st.channel_view.target == ChannelTarget::Composite;
+    let quick_mask = st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden && st.channel_view.target == ChannelTarget::Composite;
     let active_layer = st.active_layer.and_then(|id| st.doc.layer(id)).filter(|l| !quick_mask && !st.doc.is_background(l.id));
     let mask = app.session.active_index() == Some(i) && app.ui.mask_target && active_layer.is_some_and(|l| l.mask.is_some());
     let model = if quick_mask {

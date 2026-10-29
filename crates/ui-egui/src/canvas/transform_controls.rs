@@ -37,6 +37,9 @@ pub(super) fn transform_controls_layers(app: &PhotocraftApp) -> Vec<&photocraft_
         return Vec::new();
     }
     let Some(st) = app.session.active() else { return Vec::new() };
+    if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden {
+        return Vec::new();
+    }
     st.selected_layers().into_iter().filter_map(|id| st.doc.layer(id)).filter(|l| !crate::doc_props_ui::is_background(&st.doc, l)).collect()
 }
 
@@ -119,7 +122,7 @@ pub(super) fn begin_transform_controls_at(app: &mut PhotocraftApp, ctx: &egui::C
     if !transform_controls_hit(r, p) {
         return false;
     }
-    match crate::transform_tool::begin(app, ctx) {
+    match crate::transform_tool::begin_layer(app, ctx) {
         Ok(()) => true,
         Err(e) => {
             app.ui.status = e;

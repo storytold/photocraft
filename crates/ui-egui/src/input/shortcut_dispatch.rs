@@ -293,11 +293,12 @@ pub(crate) fn delete_key_command(app: &PhotocraftApp, id: String) -> String {
     if app.filter_mask_targeted() && st.doc.selection.is_some() {
         return "edit.fillBackground".into();
     }
-    let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite && st.doc.quick_mask.is_none();
+    let composite = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite
+        && (st.doc.quick_mask.is_none() || st.channel_view.quick_mask_hidden);
     let has_mask = st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some());
     let colors_off = st.channel_view.visible_colors(photocraft_engine::channel_cmds::color_count(&st.doc)) == 0;
     let alpha_on = (0..st.doc.channels.len()).any(|i| st.channel_view.alpha_shown(i));
-    let solo_mask = colors_off && has_mask && !alpha_on && st.doc.quick_mask.is_none();
+    let solo_mask = colors_off && has_mask && !alpha_on && (st.doc.quick_mask.is_none() || st.channel_view.quick_mask_hidden);
     let layer_mask = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask;
     let mask = (app.ui.mask_target || solo_mask || layer_mask) && has_mask;
     // Several selected layers outrank the active one's targeted mask (#4025): a new adjustment
