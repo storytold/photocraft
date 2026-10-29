@@ -93,7 +93,8 @@ fn prefs_reset(s: &mut Session, p: &Value) -> Result<Value> {
 fn preferences_section(s: &mut Session, p: &Value) -> Result<Value> {
     let section = p.get("__section").and_then(Value::as_str).unwrap_or("general").to_string();
     let title = SECTIONS.iter().find(|(id, _)| *id == section).map_or("General", |(_, t)| *t);
-    let values = s.prefs().get(&section).unwrap_or(Value::Null);
+    let mut values = s.prefs().get(&section).unwrap_or(Value::Null);
+    photocraft_ai::secret::redact(&mut values);
     Ok(json!({"section": section, "title": title, "values": values}))
 }
 

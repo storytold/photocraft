@@ -234,7 +234,20 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
                     ui.add_space(4.0);
                     ui.label(RichText::new(tl!("These settings aren't available in PhotoCraft yet.")).color(t.text_faint));
                 } else if let Some(obj) = values.get_mut(&section).and_then(Value::as_object_mut) {
-                    section_fields(ui, &section, obj, &order, lang, system, filter);
+                    if section == "integrations" {
+                        // Agent control keeps its generic rows; the AI provider has its own.
+                        let mut agent: Map<String, Value> = obj
+                            .iter()
+                            .filter(|(k, _)| matches!(k.as_str(), "allowAgentControl" | "controlPort"))
+                            .map(|(k, v)| (k.clone(), v.clone()))
+                            .collect();
+                        section_fields(ui, &section, &mut agent, &order, lang, system, filter);
+                        obj.extend(agent);
+                        ui.add_space(8.0);
+                        super::integrations::integrations_fields(ui, obj);
+                    } else {
+                        section_fields(ui, &section, obj, &order, lang, system, filter);
+                    }
                     if section == "fileHandling" {
                         ui.label(
                             RichText::new(tl!("0 turns this threshold off; SVG groups nested deeper than 100 levels are always rasterized."))

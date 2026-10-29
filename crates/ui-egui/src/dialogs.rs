@@ -274,6 +274,7 @@ pub(crate) fn close_box(ui: &mut egui::Ui, rect: egui::Rect) -> bool {
 fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id, interactive: bool) -> Option<bool> {
     let mut outcome: Option<bool> = None;
     match d.kind {
+        _ if crate::ai_ui::owns(fields) => crate::ai_ui::body(app, ui, fields),
         _ if crate::open_prompt::owns_damage(fields) => crate::open_prompt::damage_body(ui, fields),
         _ if crate::guide_layout_ui::owns(fields) => outcome = crate::guide_layout_ui::body(app, ui, fields, interactive),
         _ if crate::brush_preset_dialog::owns(fields) => outcome = crate::brush_preset_dialog::body(app, ui, fields, interactive),
@@ -419,7 +420,11 @@ fn button_row(
 ) -> (Option<bool>, bool) {
     let mut outcome: Option<bool> = None;
     let mut apply_requested = false;
-    if matches!(d.kind, DialogKind::About | DialogKind::Error) {
+    if crate::ai_ui::owns(fields) && fields.get("__ai").and_then(Value::as_str) == Some("results") {
+        if dialog_buttons(ui, &[DialogButton::new(ButtonRole::Default, tl!("Close"), 84.0)]).is_some() {
+            outcome = Some(false);
+        }
+    } else if matches!(d.kind, DialogKind::About | DialogKind::Error) {
         // ↩ is OK too, as on every other dialog (#4872), from the frame after the
         // alert appeared: the ↩ that raised it (committing a locked layer's Free
         // Transform, say) must not close it again at once.
@@ -434,7 +439,7 @@ fn button_row(
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
         let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields);
-        let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
+        let ok = DialogButton::new(ButtonRole::Default, ok_label, if crate::ai_ui::owns(fields) { 150.0 } else { 84.0 }).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
         let reset = ui.input(|i| i.modifiers.alt) && crate::dialog_alt_reset::supported(fields);
@@ -496,6 +501,8 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Create")
     } else if crate::open_prompt::owns_damage(&d.fields) {
         tl!("Continue")
+    } else if crate::ai_ui::owns(&d.fields) {
+        tl!("Create Preview")
     } else if crate::delete_layer_prompt::owns(&d.fields) {
         tl!("Delete")
     } else if crate::disk_change_prompt::owns(&d.fields) || crate::replace_prompt::owns(&d.fields) {
@@ -996,6 +1003,18 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
 
 pub fn confirm(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     confirm_preflight(app, id)?;
+    if let Some(fields) = app.ui.dialogs.iter().find(|d| d.id == id && crate::ai_ui::owns(&d.fields)).map(|d| d.fields.clone()) {
+        let result = crate::ai_ui::confirm(app, &fields)?;
+        app.ui.close_dialog(id);
+        return Ok(result);
+    }
+    // Preferences validate before closing, so a rejected draft remains editable with OK as
+    // well as Apply. Both the button and the control channel use this path.
+    if app.ui.dialogs.iter().any(|d| d.id == id && d.kind == DialogKind::Command && crate::prefs_ui::is_preferences(&d.fields)) {
+        let result = crate::prefs_ui::apply(app, id)?;
+        app.ui.close_dialog(id);
+        return Ok(result);
+    }
     let d = app.ui.close_dialog(id).ok_or_else(|| format!("no dialog {id}"))?;
     match d.kind {
         DialogKind::NewDocument => {

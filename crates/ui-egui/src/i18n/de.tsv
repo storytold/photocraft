@@ -3485,6 +3485,53 @@ curves	Smooth	Glätten
 	Grayscale Ramp	Graustufenbalken
 	Current Colors	Aktuelle Farben
 	Make Ramp Web Safe	Farbbalken auf Webfarben beschränken
+
+# AI image provider (Preferences › AI and the AI forms)
+	AI Integrations	KI-Integrationen
+	Choose an OpenAI-compatible image provider. Nothing is sent until you run an AI command.	Einen OpenAI-kompatiblen Bildanbieter wählen. Gesendet wird erst, wenn ein KI-Befehl ausgeführt wird.
+	Image provider	Bildanbieter
+	Turn on AI and send my prompts and images to this provider	KI aktivieren und meine Prompts und Bilder an diesen Anbieter senden
+	When you run an AI command, PhotoCraft sends your prompt and, for edits, a working copy of the image or selection (at most 3840 px) with its selection mask to	Bei einem KI-Befehl sendet PhotoCraft den Prompt und, bei Bearbeitungen, eine Arbeitskopie des Bildes bzw. der Auswahl (höchstens 3840 px) samt Auswahlmaske an
+	Changing the API base URL turns AI off until you agree again. Automation and MCP cannot run AI commands unless the operator allows it.	Wird die API-Basisadresse geändert, ist KI so lange aus, bis erneut zugestimmt wird. Automatisierung und MCP können KI-Befehle nur ausführen, wenn der Betreiber es erlaubt.
+	Sends your prompt to	Sendet den Prompt an
+	Sends your prompt, a working copy of the image and the selection mask to	Sendet den Prompt, eine Arbeitskopie des Bildes und die Auswahlmaske an
+	AI Settings…	KI-Einstellungen…
+	The result must fit the selected model's limits (up to 4K for GPT Image 2/2.5). API usage is billed by your provider.	Das Ergebnis muss in die Grenzen des gewählten Modells passen (bis 4K bei GPT Image 2/2.5). Die API-Nutzung wird vom Anbieter abgerechnet.
+	API base URL	API-Basisadresse
+	API key environment variable	Umgebungsvariable für API-Schlüssel
+	Direct image generation and editing using the Images API.	Direkte Bildgenerierung und Bearbeitung über die Images API.
+	AI creates a preview. Apply it as a new layer after reviewing the result.	Die KI erstellt eine Vorschau. Nach der Prüfung als neue Ebene übernehmen.
+	No AI results yet.	Noch keine KI-Ergebnisse.
+	AI Result	KI-Ergebnis
+	AI Results	KI-Ergebnisse
+	List AI Results	KI-Ergebnisse anzeigen
+	The document changed. Generate a new result before applying.	Das Dokument wurde geändert. Vor der Übernahme ein neues Ergebnis erstellen.
+	Apply as New Layer	Als neue Ebene übernehmen
+	Generate Image…	Bild generieren…
+	Edit Image with AI…	Bild mit KI bearbeiten…
+	Generative Fill…	Generatives Füllen…
+	Generative Remove…	Generatives Entfernen…
+	Prompt	Prompt
+	Image model	Bildmodell
+	Context margin	Kontextrand
+	Create Preview	Vorschau erstellen
+	Discard	Verwerfen
+	Output size	Ausgabegröße
+	Current document	Aktuelles Dokument
+	Image quality	Bildqualität
+	AI working size	KI-Arbeitsauflösung
+	The canvas size changes only when you apply the result.	Die Arbeitsfläche ändert sich erst bei der Übernahme des Ergebnisses.
+	Open as New Document	Als neues Dokument öffnen
+	API key	API-Schlüssel
+	Enter or replace API key	API-Schlüssel eingeben oder ersetzen
+	Clear API key	API-Schlüssel löschen
+	Optional environment variable	Optionale Umgebungsvariable
+	API keys stay in memory for this session and are never written to your preferences. To keep a key between sessions, name an environment variable instead; a key entered here takes precedence over it.	API-Schlüssel bleiben nur für diese Sitzung im Arbeitsspeicher und werden nie in die Einstellungen geschrieben. Um einen Schlüssel dauerhaft zu nutzen, gib stattdessen eine Umgebungsvariable an; ein hier eingegebener Schlüssel hat Vorrang.
+
+# AI additions: English defaults where translation is pending.
+	Analyze image	Bild analysieren
+	Use prompt for generation	Prompt zur Generierung verwenden
+	AI	KI
 # Art History Brush (#213).
 	Art History Brush	Künstlerischer Protokollpinsel
 	Art History Brush Tool	Künstlerischer-Protokollpinsel-Werkzeug

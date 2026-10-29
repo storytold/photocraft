@@ -2946,6 +2946,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -3941,6 +3942,16 @@ name = "mime"
 version = "0.3.17"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
+
+[[package]]
+name = "mime_guess"
+version = "2.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f7c44f8e672c00fe5308fa235f821cb4198414e1c77935c1ab6948d3fd78550e"
+dependencies = [
+ "mime",
+ "unicase",
+]
 
 [[package]]
 name = "minimal-lexical"
@@ -5020,6 +5031,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "photocraft-ai"
+version = "0.16.0"
+dependencies = [
+ "base64 0.22.1",
+ "image",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+ "uuid",
+]
+
+[[package]]
 name = "photocraft-algo"
 version = "0.17.0"
 dependencies = [
@@ -5152,6 +5178,7 @@ dependencies = [
  "exr",
  "flate2",
  "photocraft-affinity",
+ "photocraft-ai",
  "photocraft-algo",
  "photocraft-cms",
  "photocraft-codecs",
@@ -5402,6 +5429,7 @@ dependencies = [
  "epaint_default_fonts",
  "flate2",
  "log",
+ "photocraft-ai",
  "photocraft-algo",
  "photocraft-cms",
  "photocraft-codecs",
@@ -6196,6 +6224,46 @@ checksum = "19b30a45b0cd0bcca8037f3d0dc3421eaf95327a17cad11964fb8179b4fc4832"
 
 [[package]]
 name = "reqwest"
+version = "0.12.28"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eddd3ca559203180a307f12d114c268abf583f59b03cb906fd0b3ff8646c1147"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures-core",
+ "futures-util",
+ "http",
+ "http-body",
+ "http-body-util",
+ "hyper",
+ "hyper-rustls",
+ "hyper-util",
+ "js-sys",
+ "log",
+ "mime_guess",
+ "percent-encoding",
+ "pin-project-lite",
+ "quinn",
+ "rustls",
+ "rustls-pki-types",
+ "serde",
+ "serde_json",
+ "serde_urlencoded",
+ "sync_wrapper",
+ "tokio",
+ "tokio-rustls",
+ "tower",
+ "tower-http",
+ "tower-service",
+ "url",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "webpki-roots",
+]
+
+[[package]]
+name = "reqwest"
 version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "16a1cfa75cc186dd73d5818e510e042e40927bccc9c236b061cea97e1eb08029"
@@ -6893,7 +6961,7 @@ checksum = "641fdaaa40d0cd6e249cf1671c2240beff1a3ece578062cf43e750779e8db2b3"
 dependencies = [
  "base64 0.22.1",
  "hex",
- "reqwest",
+ "reqwest 0.13.5",
  "serde",
  "serde_json",
  "sigstore-crypto",
@@ -6936,7 +7004,7 @@ dependencies = [
  "der",
  "hex",
  "rand 0.10.3",
- "reqwest",
+ "reqwest 0.13.5",
  "rustls-pki-types",
  "rustls-webpki",
  "sigstore-crypto",
@@ -7830,6 +7898,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eaea85b334db583fe3274d12b4cd1880032beab409c0d774be044d4480ab9a94"
 
 [[package]]
+name = "unicase"
+version = "2.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "357cc3acc6a036009fd6c973ed009037c732d60d0b4f6c673e9041497482a28f"
+
+[[package]]
 name = "unicode-bidi"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8437,6 +8511,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-roots"
+version = "1.0.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5f280bbb2b287bc8e7de7e3852945a0ff50d1bbcb5ed42b6c7a568c546df171"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "weezl"
 version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -8940,7 +9023,7 @@ source = "git+https://github.com/storytold/winprint.rs?rev=5f80b9baf6b58937c4016
 dependencies = [
  "flate2",
  "fmt-derive",
- "reqwest",
+ "reqwest 0.13.5",
  "scopeguard",
  "sigstore-trust-root",
  "sigstore-types",

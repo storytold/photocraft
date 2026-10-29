@@ -53,6 +53,8 @@ pub mod actions_cmds;
 pub mod actions_edit_cmds;
 pub mod adjust_cmds;
 mod adjust_params;
+pub mod ai_cmds;
+pub mod ai_runtime_cmds;
 pub mod align_cmds;
 pub mod analysis_cmds;
 pub mod artboard_cmds;
@@ -1323,6 +1325,8 @@ fn build() -> Vec<CommandSpec> {
     // The dispatch guard's unit test needs a command that panics on purpose (REL-3).
     #[cfg(test)]
     v.push(test_panic_command());
+    v.extend(ai_cmds::specs());
+    v.extend(ai_runtime_cmds::specs());
     v
 }
 

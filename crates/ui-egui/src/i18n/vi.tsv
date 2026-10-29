@@ -3965,6 +3965,50 @@ curves	Smooth	Làm mượt
 	Grayscale Ramp	Dải thang xám
 	Current Colors	Màu hiện tại
 	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+
+# AI additions: English defaults where translation is pending.
+	Choose an OpenAI-compatible image provider. Nothing is sent until you run an AI command.	Choose an OpenAI-compatible image provider. Nothing is sent until you run an AI command.
+	Image provider	Image provider
+	Turn on AI and send my prompts and images to this provider	Turn on AI and send my prompts and images to this provider
+	When you run an AI command, PhotoCraft sends your prompt and, for edits, a working copy of the image or selection (at most 3840 px) with its selection mask to	When you run an AI command, PhotoCraft sends your prompt and, for edits, a working copy of the image or selection (at most 3840 px) with its selection mask to
+	Changing the API base URL turns AI off until you agree again. Automation and MCP cannot run AI commands unless the operator allows it.	Changing the API base URL turns AI off until you agree again. Automation and MCP cannot run AI commands unless the operator allows it.
+	Sends your prompt to	Sends your prompt to
+	Sends your prompt, a working copy of the image and the selection mask to	Sends your prompt, a working copy of the image and the selection mask to
+	AI Settings…	AI Settings…
+	The result must fit the selected model's limits (up to 4K for GPT Image 2/2.5). API usage is billed by your provider.	The result must fit the selected model's limits (up to 4K for GPT Image 2/2.5). API usage is billed by your provider.
+	AI Integrations	AI Integrations
+	AI Result	AI Result
+	AI Results	AI Results
+	AI creates a preview. Apply it as a new layer after reviewing the result.	AI creates a preview. Apply it as a new layer after reviewing the result.
+	AI working size	AI working size
+	API base URL	API base URL
+	API key	API key
+	API key environment variable	API key environment variable
+	Analyze image	Analyze image
+	Apply as New Layer	Apply as New Layer
+	Clear API key	Clear API key
+	Context margin	Context margin
+	Create Preview	Create Preview
+	Current document	Current document
+	Direct image generation and editing using the Images API.	Direct image generation and editing using the Images API.
+	Discard	Discard
+	Edit Image with AI…	Edit Image with AI…
+	Enter or replace API key	Enter or replace API key
+	Generate Image…	Generate Image…
+	Generative Fill…	Generative Fill…
+	Generative Remove…	Generative Remove…
+	Image model	Image model
+	Image quality	Image quality
+	List AI Results	List AI Results
+	No AI results yet.	No AI results yet.
+	Open as New Document	Open as New Document
+	Optional environment variable	Optional environment variable
+	Output size	Output size
+	Prompt	Prompt
+	The canvas size changes only when you apply the result.	The canvas size changes only when you apply the result.
+	The document changed. Generate a new result before applying.	The document changed. Generate a new result before applying.
+	Use prompt for generation	Use prompt for generation
+	AI	AI
 # Art History Brush (#213).
 	Art History Brush	Cọ lịch sử nghệ thuật
 	Art History Brush Tool	Công cụ Cọ lịch sử nghệ thuật

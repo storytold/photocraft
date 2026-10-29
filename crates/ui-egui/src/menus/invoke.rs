@@ -65,6 +65,9 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     if id == "help.checkForUpdates" {
         return Some(crate::updates_ui::check(app, ctx, params.clone()));
     }
+    if let Some(result) = crate::ai_ui::menu(app, id, params) {
+        return Some(result);
+    }
     if id == "ui.symmetryTransform" {
         return Some(crate::symmetry_ui::begin(app).map(|_| Value::Null));
     }

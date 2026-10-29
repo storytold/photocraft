@@ -3683,6 +3683,53 @@ curves	Smooth	매끄럽게
 	Grayscale Ramp	회색 음영 램프
 	Current Colors	현재 색상
 	Make Ramp Web Safe	램프를 웹 안전 색상으로 만들기
+
+# AI image provider (Preferences › AI and the AI forms)
+	Choose an OpenAI-compatible image provider. Nothing is sent until you run an AI command.	Choose an OpenAI-compatible image provider. Nothing is sent until you run an AI command.
+	Image provider	Image provider
+	Turn on AI and send my prompts and images to this provider	Turn on AI and send my prompts and images to this provider
+	When you run an AI command, PhotoCraft sends your prompt and, for edits, a working copy of the image or selection (at most 3840 px) with its selection mask to	When you run an AI command, PhotoCraft sends your prompt and, for edits, a working copy of the image or selection (at most 3840 px) with its selection mask to
+	Changing the API base URL turns AI off until you agree again. Automation and MCP cannot run AI commands unless the operator allows it.	Changing the API base URL turns AI off until you agree again. Automation and MCP cannot run AI commands unless the operator allows it.
+	Sends your prompt to	Sends your prompt to
+	Sends your prompt, a working copy of the image and the selection mask to	Sends your prompt, a working copy of the image and the selection mask to
+	AI Settings…	AI Settings…
+	The result must fit the selected model's limits (up to 4K for GPT Image 2/2.5). API usage is billed by your provider.	The result must fit the selected model's limits (up to 4K for GPT Image 2/2.5). API usage is billed by your provider.
+	Grid view	격자 보기
+	List view	목록 보기
+	API base URL	API 기본 URL
+	API key environment variable	API 키 환경 변수
+	Direct image generation and editing using the Images API.	Images API로 이미지를 직접 생성하고 편집합니다.
+	AI creates a preview. Apply it as a new layer after reviewing the result.	AI creates a preview. Apply it as a new layer after reviewing the result.
+	No AI results yet.	No AI results yet.
+	AI Result	AI Result
+	AI Results	AI Results
+	List AI Results	List AI Results
+	The document changed. Generate a new result before applying.	The document changed. Generate a new result before applying.
+	Apply as New Layer	Apply as New Layer
+	Generate Image…	Generate Image…
+	Edit Image with AI…	Edit Image with AI…
+	Generative Fill…	Generative Fill…
+	Generative Remove…	Generative Remove…
+	Prompt	Prompt
+	Image model	Image model
+	Context margin	Context margin
+	Create Preview	Create Preview
+	Discard	Discard
+	Output size	Output size
+	Current document	Current document
+	Image quality	Image quality
+	AI working size	AI working size
+	The canvas size changes only when you apply the result.	The canvas size changes only when you apply the result.
+	Open as New Document	Open as New Document
+	API key	API 키
+	Enter or replace API key	API 키 입력 또는 교체
+	Clear API key	API 키 삭제
+	Optional environment variable	선택적 환경 변수
+
+# AI additions: English defaults where translation is pending.
+	Analyze image	Analyze image
+	Use prompt for generation	Use prompt for generation
+	AI	AI
 # Art History Brush (#213).
 	Art History Brush	아트 히스토리 브러시
 	Art History Brush Tool	아트 히스토리 브러시 도구

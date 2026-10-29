@@ -995,11 +995,60 @@ pub struct Integrations {
     pub allow_agent_control: bool,
     /// Default control port (0 = only when `--control` is given).
     pub control_port: u32,
+    // Keep the two fields above first: a hand-edited file may hold the section as a list.
+    /// The endpoint the user agreed to send images and prompts to (Preferences › AI). Empty
+    /// means AI is off: nothing is contacted and no AI command is enabled. Changing
+    /// `openai_image_endpoint` withdraws the agreement until the user accepts the new one.
+    pub ai_consented_endpoint: String,
+    /// Session-only: never written to the preferences file, see `SESSION_CREDENTIALS`.
+    pub openai_image_api_key: Option<photocraft_ai::secret::Secret>,
+    /// OpenAI-compatible base URL for image generation and editing.
+    pub openai_image_endpoint: String,
+    /// Optional environment-variable name; never the API key itself.
+    pub openai_image_api_key_env: String,
 }
 
 impl Default for Integrations {
     fn default() -> Self {
-        Self { allow_agent_control: true, control_port: 0 }
+        Self {
+            allow_agent_control: true,
+            control_port: 0,
+            ai_consented_endpoint: String::new(),
+            openai_image_api_key: None,
+            openai_image_endpoint: "https://api.openai.com/v1".into(),
+            openai_image_api_key_env: String::new(),
+        }
+    }
+}
+
+/// JSON names of the credentials that are never written to the preferences file.
+const SESSION_CREDENTIALS: [&str; 1] = ["openaiImageApiKey"];
+
+fn strip_session_credentials(v: &mut Value) {
+    if let Some(integrations) = v.get_mut("integrations").and_then(Value::as_object_mut) {
+        for name in SESSION_CREDENTIALS {
+            integrations.remove(name);
+        }
+    }
+}
+
+impl Integrations {
+    /// Whether the user has agreed to send images and prompts to the configured endpoint.
+    pub fn ai_ready(&self) -> bool {
+        !self.ai_consented_endpoint.is_empty() && self.ai_consented_endpoint.trim_end_matches('/') == self.openai_image_endpoint.trim_end_matches('/')
+    }
+
+    /// Used for both command updates and settings loaded from disk, before committing them.
+    pub fn validate(&self) -> std::result::Result<(), String> {
+        if let Some(key) = &self.openai_image_api_key {
+            key.validate().map_err(|e| e.to_string())?;
+        }
+        photocraft_ai::config::validate_endpoint(&self.openai_image_endpoint).map_err(|e| format!("integrations.openaiImageEndpoint: {e}"))?;
+        if !self.ai_consented_endpoint.is_empty() {
+            photocraft_ai::config::validate_endpoint(&self.ai_consented_endpoint).map_err(|e| format!("integrations.aiConsentedEndpoint: {e}"))?;
+        }
+        photocraft_ai::config::validate_key_reference(&self.openai_image_api_key_env, true).map_err(|e| format!("integrations.openaiImageApiKeyEnv: {e}"))?;
+        Ok(())
     }
 }
 
@@ -1201,6 +1250,9 @@ impl Preferences {
             }
             return Ok(());
         }
+        if value.is_null() && ["integrations.openaiImageApiKey"].contains(&path) {
+            return Ok(()); // Public snapshots hide stored keys; null means keep the existing value.
+        }
         let value = match (path.strip_prefix("shortcuts."), &value) {
             // Normalise shortcut spelling so conflicts compare equal.
             (Some(_), Value::String(s)) if !s.is_empty() => Value::String(normalize_shortcut(s).ok_or_else(|| format!("`{s}` is not a valid shortcut"))?),
@@ -1215,7 +1267,9 @@ impl Preferences {
         check_value(path, &value)?;
         let mut root = self.to_json();
         set_path(&mut root, path, value)?;
-        *self = serde_json::from_value(root).map_err(|e| format!("invalid value for `{path}`: {e}"))?;
+        let next: Self = serde_json::from_value(root).map_err(|e| format!("invalid value for `{path}`: {e}"))?;
+        next.integrations.validate()?;
+        *self = next;
         Ok(())
     }
 
@@ -1333,6 +1387,8 @@ impl Session {
             m.insert("version".into(), json!(PREFS_VERSION));
             m.insert("presets".into(), self.presets.to_json(self));
         }
+        // Credentials stay in memory for the session: only environment-variable names persist.
+        strip_session_credentials(&mut v);
         v
     }
 
@@ -1376,8 +1432,15 @@ impl Session {
         }
         let color = v.as_object_mut().and_then(|m| m.remove("colorSettings"));
         let presets = v.as_object_mut().and_then(|m| m.remove("presets"));
+        // Files written by earlier builds may hold plaintext keys; never read them back, so the
+        // next save removes them from disk.
+        strip_session_credentials(&mut v);
         let mut invalid = Vec::new();
-        let prefs: Preferences = read_lenient(v, &[], &mut invalid);
+        let mut prefs: Preferences = read_lenient(v, &[], &mut invalid);
+        prefs.integrations.validate()?;
+        // Keys typed in this session survive a reload of the stored settings.
+        let current = &self.prefs().integrations;
+        prefs.integrations.openai_image_api_key = current.openai_image_api_key.clone();
         if let Some(c) = color {
             self.color.settings = read_lenient(c, &["colorSettings"], &mut invalid);
             photocraft_compose::psblend::set_text_gamma(self.color.settings.blend_text_gamma);
@@ -1396,6 +1459,7 @@ impl Session {
         if let Value::Object(m) = &mut v {
             m.insert("colorSettings".into(), serde_json::to_value(&self.color.settings).unwrap_or(Value::Null));
         }
+        photocraft_ai::secret::redact(&mut v);
         v
     }
 

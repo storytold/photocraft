@@ -2039,3 +2039,94 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
     assert_eq!(prefs.favorite_fonts, ["Bebas Neue"], "the favourites are kept");
     assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
 }
+
+#[test]
+fn preference_labels_are_translated() {
+    let session = photocraft_engine::Session::new();
+    let v: Value = serde_json::from_str(&session.prefs_to_json()).expect("prefs json");
+    for lang in crate::i18n::Lang::all().filter(|l| l.complete_menus()) {
+        let mut missing = Vec::new();
+        for (sec, title) in SECTIONS {
+            if !crate::i18n::has(lang, title) {
+                missing.push(title.to_string());
+            }
+            let Some(obj) = v.get(sec).and_then(Value::as_object) else { continue };
+            for k in obj.keys() {
+                if sec == "integrations" && !prefs::is_hidden(&format!("{sec}.{k}")) {
+                    // AI endpoints use the purpose-labelled rows in integrations_fields,
+                    // not the generic field-name editor.
+                    for label in ["API base URL", "API key environment variable", "Image provider"] {
+                        if !crate::i18n::has(lang, label) {
+                            missing.push(label.to_string());
+                        }
+                    }
+                    continue;
+                }
+                if sec == "interface" && k == "favoriteThemes" {
+                    continue; // Rendered as star controls beside the theme choices.
+                }
+                let mut labels = vec![humanize(k)];
+                labels.extend(prefs::choices(&format!("{sec}.{k}")).into_iter().flatten().map(|c| choice_label(c)));
+                missing.extend(labels.into_iter().filter(|l| !crate::i18n::has(lang, l)));
+            }
+        }
+        missing.sort();
+        missing.dedup();
+        assert!(missing.is_empty(), "{}: untranslated preference labels: {missing:#?}", lang.code());
+    }
+}
+
+#[test]
+fn ai_configuration_menu_applies_persists_and_rejects_invalid_drafts() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let (mut app, store) = app_with_store();
+    app.run("prefs.set", json!({"path": "interface.language", "value": "en"})).unwrap();
+    let ctx = egui::Context::default();
+    let id = crate::menus::invoke(&mut app, &ctx, "edit.preferences.integrations", json!({})).unwrap()["dialog"].as_u64().unwrap();
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Image provider");
+    h.get_by_label("Allow agent control");
+    h.get_by_label("Turn on AI and send my prompts and images to this provider");
+    h.get_by_label("API keys stay in memory for this session and are never written to your preferences. To keep a key between sessions, name an environment variable instead; a key entered here takes precedence over it.");
+    h.get_by_label("Reset Section");
+    // Merely opening and rendering the dialog does not change the preferences.
+    assert_eq!(h.state().session.prefs().integrations, prefs::Integrations::default());
+
+    let values = h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap();
+    values["integrations"]["openaiImageEndpoint"] = json!("https://example.com/images/v1");
+    values["integrations"]["aiConsentedEndpoint"] = json!("https://example.com/images/v1");
+    values["integrations"]["openaiImageApiKey"] = json!("synthetic-prompt-key");
+    values["integrations"]["openaiImageApiKeyEnv"] = json!("IMAGE_API_KEY");
+    h.run_steps(2);
+    h.get_by_label("Apply").click();
+    h.run_steps(4);
+    assert!(h.state().session.prefs().integrations.ai_ready());
+    assert!(h.state().ui.dialogs.iter().any(|d| d.id == id));
+    let saved = store.lock().unwrap().clone().unwrap();
+    let (mut restarted, _) = app_with_saved(Some(saved.clone()));
+    tick(&mut restarted, &egui::Context::default());
+    // Keys last for the session only; the environment-variable name is what persists.
+    assert!(!saved.contains("synthetic-prompt-key"), "a key must not reach the preferences file");
+    assert!(restarted.session.prefs().integrations.openai_image_api_key.is_none());
+    assert!(restarted.session.prefs().integrations.ai_ready(), "the agreement persists with the endpoint");
+    assert_eq!(restarted.session.prefs().integrations.openai_image_api_key_env, "IMAGE_API_KEY");
+    assert_eq!(h.state().session.prefs().integrations.openai_image_api_key.as_ref().unwrap().expose(), "synthetic-prompt-key");
+    assert!(!crate::control::inspect(h.state(), &ctx).to_string().contains("synthetic-prompt-key"));
+
+    // Invalid drafts stay editable, including after an earlier successful Apply.
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.get_mut("values").unwrap()["integrations"]["openaiImageEndpoint"] = json!("invalid");
+    assert!(apply(h.state_mut(), id).is_err());
+    assert!(crate::dialogs::confirm(h.state_mut(), id).is_err());
+    assert!(h.state().ui.dialogs.iter().any(|d| d.id == id));
+    h.get_by_label("Cancel").click();
+    h.run_steps(4);
+    // Cancelling keeps the applied settings; only the session-only key differs from a restart.
+    let mut applied = h.state().session.prefs().integrations.clone();
+    applied.openai_image_api_key = None;
+    assert_eq!(applied, restarted.session.prefs().integrations);
+}

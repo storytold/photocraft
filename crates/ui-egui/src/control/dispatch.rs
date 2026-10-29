@@ -56,6 +56,9 @@ fn context_choose(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Ou
     }
     // A pasteboard row changes a preference: the policy sees the `prefs.set` it runs.
     let (command, params) = crate::canvas_tool_menu::engine_call(app, menu, id);
+    if let Err(error) = photocraft_engine::ai_runtime_cmds::authorize_automation(&command, &params) {
+        return err(error.to_string());
+    }
     if let Some(authorize) = app.services.automation_command.as_ref()
         && let Err(error) = authorize(&command, &params)
     {
@@ -82,6 +85,10 @@ fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRe
         && !crate::crop_ui::blocks(app, id);
     if req.method == "ui.menu.invoke" && !continuation && !crate::menus::modal_allows(app, id) {
         return err("menu command is unavailable while a modal dialog is open");
+    }
+    // Whatever else the policy allows, AI commands upload pixels and need the operator's say-so.
+    if let Err(error) = photocraft_engine::ai_runtime_cmds::authorize_automation(id, &params) {
+        return err(error.to_string());
     }
     if let Some(authorize) = app.services.automation_command.as_ref()
         && let Err(error) = authorize(id, &params)

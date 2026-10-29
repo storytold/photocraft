@@ -135,6 +135,7 @@ photocraft/
 │  │  ── intelligence ──
 │  ├─ ml/                      photocraft-ml        model registry + InferenceBackend trait (ort native / burn|candle web); SAM2, matting, depth, sky
 │  ├─ plugins/                 photocraft-plugins   sandboxed WebAssembly filter plug-ins (wasmi host, limits, ABI v1, registry)
+│  ├─ ai/                      photocraft-ai        image-provider contract (`ImageProvider`), request validation and an OpenAI-compatible Images adapter
 │  │  ── the façade every frontend talks to ──
 │  ├─ tools/                   photocraft-tools     tool state machines (move, marquee, lasso, brush, clone, gradient, crop, transform, pen, text…)
 │  ├─ engine/                  photocraft-engine    Session: open docs, command registry + dispatch, jobs, events, view-models, preferences
@@ -169,7 +170,7 @@ photocraft/
  L7  apps/*                         (binaries: wire everything together)
  L6  ui-egui · automation · platform
  L5  engine
- L4  tools · viewport · io · ml · plugins
+ L4  tools · viewport · io · ml · plugins · ai
  L3  compose · gpu · format
  L2  ops · algo · paint · text · vector
  L1  doc

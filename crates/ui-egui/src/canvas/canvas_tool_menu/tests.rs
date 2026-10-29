@@ -412,6 +412,8 @@ fn selection_menus_follow_photoshop_order() {
             Some("Fill…"),
             Some("Stroke…"),
             Some("Content-Aware Fill…"),
+            Some("Generative Fill…"),
+            Some("Generative Remove…"),
             None,
             Some("Last Filter"),
             None,

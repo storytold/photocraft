@@ -4,6 +4,8 @@ use super::{Arc, Document, History, LayerId, LayerTarget, channel_cmds, float_cm
 #[derive(Clone, Debug)]
 pub struct DocState {
     pub doc: Arc<Document>,
+    /// Runtime identity of this open document, stable across saves/view changes.
+    pub(crate) incarnation: Arc<()>,
     pub history: History,
     /// The primary ("key") layer: what single-layer commands act on. Always a member of
     /// `selected_layers` when set.
@@ -84,6 +86,7 @@ impl DocState {
         let first = history_cmds::Snapshot { id: 0, name: doc.name.clone(), doc: doc.clone(), layers: target };
         Self {
             doc,
+            incarnation: Arc::new(()),
             history,
             active_layer,
             selected_layers: active_layer.into_iter().collect(),

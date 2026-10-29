@@ -139,6 +139,7 @@ impl Session {
         smart_cmds::on_close(self, index);
         if let Some(id) = self.docs.get(index).map(|d| d.doc.id) {
             self.cancel_jobs_on(id);
+            self.ai.forget_document(id);
             self.subject_cache.forget_doc(id);
             self.object_finder.forget_doc(id);
         }

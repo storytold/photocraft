@@ -62,6 +62,8 @@ pub use cmd as commands;
 pub use cmd::actions_cmds;
 pub use cmd::actions_edit_cmds;
 pub use cmd::adjust_cmds;
+pub use cmd::ai_cmds;
+pub use cmd::ai_runtime_cmds;
 pub use cmd::align_cmds;
 pub use cmd::analysis_cmds;
 pub use cmd::artboard_cmds;
@@ -250,6 +252,8 @@ pub struct Session {
     pub printer_source: Option<print_cmds::PrinterSource>,
     /// Background jobs (see [`jobs`]).
     jobs: jobs::Jobs,
+    /// Bounded, session-only AI previews; pixels change only through `ai.result.apply`.
+    ai: ai_cmds::AiState,
     /// Color Sampler points dropped by the last canvas-size change (crop, Canvas Size, Image Size,
     /// rotation), for the status message. Read with [`Session::take_samplers_removed`].
     samplers_removed: usize,

@@ -2085,3 +2085,18 @@ fn ui_set_mask_target_ends_a_filter_mask_view() {
     let photocraft_doc::LayerContent::Smart(sm) = &l.content else { panic!("smart object") };
     assert_eq!(sm.filter_mask.as_ref().unwrap().value(20, 20), 1.0, "not into the filter mask");
 }
+
+#[test]
+fn the_control_channel_cannot_run_ai_commands_unless_the_operator_allows_it() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width":32,"height":32})).unwrap();
+    let ctx = egui::Context::default();
+    for method in ["engine.execute", "ui.menu.invoke"] {
+        for command in photocraft_engine::ai_runtime_cmds::COMMANDS {
+            let reply = call(&mut app, &ctx, method, json!({"command": command, "params": {"prompt": "x"}}));
+            assert_eq!(reply["ok"], false, "{method} {command}");
+            assert!(reply.to_string().contains("PHOTOCRAFT_ALLOW_AUTOMATION_AI_UPLOADS"), "{method} {command}");
+        }
+    }
+    assert!(app.session.jobs().is_empty());
+}

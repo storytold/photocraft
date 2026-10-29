@@ -471,6 +471,10 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
         "fileHandling.lutFolder",
         "fileHandling",
         "scratchDisks.disks",
+        "integrations",
+        "integrations.openaiImageEndpoint",
+        "integrations.openaiImageApiKeyEnv",
+        ".integrations.aiConsentedEndpoint",
         ".",
         "..historyLog.filePath",
     ] {
@@ -648,4 +652,13 @@ fn absolute_paths_are_checked_against_the_authority_s_own_root() {
     assert!(workspace.read(&target.to_string_lossy()).is_err(), "not under the read root");
     let none = AuthorizedWorkspace::default();
     assert!(none.read(&target.to_string_lossy()).is_err());
+}
+
+#[test]
+fn automation_cannot_upload_pixels_to_an_ai_provider_by_default() {
+    for id in photocraft_engine::ai_runtime_cmds::COMMANDS {
+        let error = authorize_engine_command(id, &serde_json::json!({"prompt":"x"})).unwrap_err();
+        assert!(error.to_string().contains(photocraft_engine::ai_runtime_cmds::AI_UPLOADS_ENV), "{id}");
+    }
+    assert!(authorize_engine_command("ai.result.list", &serde_json::json!({})).is_ok());
 }

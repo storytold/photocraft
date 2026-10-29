@@ -65,6 +65,7 @@ mod appearance;
 mod dialogs;
 mod fields;
 mod graphics;
+mod integrations;
 mod save;
 mod shortcuts;
 mod startup;

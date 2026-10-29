@@ -4543,6 +4543,9 @@ shape	Appearance	Izgled
 	Grayscale Ramp	Skala nijansi sive
 	Current Colors	Trenutne boje
 	Make Ramp Web Safe	Učini skalu bezbednom za veb
+
+	API base URL	Osnovna adresa API-ja
+	API key environment variable	Promenljiva okruženja za API ključ
 # Art History Brush (#213).
 	Art History Brush Tool	Alatka umetnička četkica istorije
 	Tight Short	Usko kratko
@@ -4557,3 +4560,4 @@ shape	Appearance	Izgled
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova
+	Image provider	Dobavljač slika

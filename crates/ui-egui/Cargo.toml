@@ -9,6 +9,7 @@ workspace = true
 
 [dependencies]
 craft-print = { workspace = true }
+photocraft-ai = { workspace = true }
 craft-ui = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
@@ -56,6 +57,8 @@ sys-locale = "=0.3.2"
 winsafe = { version = "=0.0.29", default-features = false, features = ["kernel", "dxgi"] }
 
 [dev-dependencies]
+# Synthetic AI artifacts for the result-preview deadlock regression.
+photocraft-ai = { workspace = true }
 # egui's own default fonts in tests: the oracle for egui_fonts.rs, and contexts made with
 # `Context::default()` (no install_fonts) can lay out text.
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
