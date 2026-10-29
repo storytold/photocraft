@@ -975,6 +975,21 @@ fn select_subject_leaves_a_table_along_the_bottom_edge_out() {
 }
 
 #[test]
+fn select_subject_ignores_a_stray_pixel_at_the_edge() {
+    // One white pixel in the corner (a dead pixel, a speck of dust) is not the subject running
+    // out of the picture: it stays unselected and the subject is found as without it.
+    let canvas = Rect::new(0, 0, 200, 160);
+    for seed in 1..=8 {
+        let (mut img, truth) = disc_scene(200, 160, 100.0, 80.0, 45.0, seed);
+        img.px[0] = [1.0, 1.0, 1.0];
+        let reg = subject::select_subject(&ImageSampler { img: &img, origin: (0, 0) }, canvas).unwrap();
+        assert!(reg.at(0, 0) < 0.5, "seed {seed}: the stray pixel is selected");
+        let v = iou(&reg, &truth, 200, 160);
+        assert!(v > 0.9, "seed {seed}: IoU {v}");
+    }
+}
+
+#[test]
 fn select_subject_keeps_a_small_detached_part_next_to_the_subject() {
     // A standing figure whose head is apart from its body (the neck too thin to survive the
     // working resolution): the head is under a fifth of the body's size but part of the subject.

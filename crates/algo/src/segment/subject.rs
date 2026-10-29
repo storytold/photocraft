@@ -188,7 +188,7 @@ fn fit_backdrop(samples: &[[f32; 3]]) -> Option<(Gmm, f32)> {
 /// this, such a part trains the backdrop model and is fixed as background, so a cream shirt on a
 /// near-white wall is lost. A floor or a table runs up the sides too, so the frame off the
 /// bottom knows its colour and it stays backdrop; only a band confined to one side's strip is
-/// released (and is then left to the cut).
+/// released (and is then left to the cut). Patches under half a frame square stay backdrop.
 fn subject_at_edge(img: &super::RgbImage, frame: usize, edge: &dyn Fn(usize) -> bool) -> Vec<bool> {
     let (w, h) = (img.w, img.h);
     // Top, bottom, left, right.
@@ -206,7 +206,10 @@ fn subject_at_edge(img: &super::RgbImage, frame: usize, edge: &dyn Fn(usize) -> 
             }
         }
     }
-    odd
+    // A stray pixel (noise, a dead pixel) is not a subject: only patches of some size count.
+    let (lab, sizes) = super::components(&odd, w, h);
+    let min = (frame * frame / 2).max(4);
+    lab.iter().map(|l| *l != 0 && sizes.get(*l as usize).is_some_and(|n| *n >= min)).collect()
 }
 
 /// Per-pixel saliency in `0..=1` (see the module docs).
