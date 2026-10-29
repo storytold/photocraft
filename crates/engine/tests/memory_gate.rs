@@ -130,7 +130,8 @@ fn layered_psd_can_exceed_the_canvas_based_preflight() {
     }
     let bytes = builder.to_bytes().unwrap();
     let imported = photocraft_io::import("layers.psd", &bytes).unwrap();
-    let retained: u64 = imported.document.walk().filter_map(|(_, _, layer)| layer.surface()).map(|surface| surface.tile_count() as u64 * pixels * 4).sum();
+    let retained: u64 =
+        imported.document.walk().into_iter().filter_map(|(_, _, layer)| layer.surface()).map(|surface| surface.tile_count() as u64 * pixels * 4).sum();
     let budget = pixels * photocraft_engine::memory_gate::SMART_RENDER_BYTES_PER_PX + bytes.len() as u64;
     assert!(retained > budget, "retained {retained}, budget {budget}");
 
