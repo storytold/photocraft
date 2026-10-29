@@ -504,7 +504,7 @@ fn srgb_reference_doc(mode: ColorMode, depth: SampleType, profile: &photocraft_c
     d
 }
 
-/// A non-cached, serial CMS evaluation used as the behavioral reference for the parallel helper.
+/// The pre-parallel serial evaluation, including its production transform-cache policy.
 fn serial_srgb_reference(doc: &Document, opaque: bool) -> Vec<[f32; 4]> {
     let mut pixels = composite(doc, opaque);
     let channels = match doc.mode {
@@ -514,7 +514,7 @@ fn serial_srgb_reference(doc: &Document, opaque: bool) -> Vec<[f32; 4]> {
     };
     let source = crate::color_cmds::document_profile(doc);
     let options = TransformOptions::default();
-    let transform = photocraft_cms::Transform::with_options(&source, Builtin::Srgb.profile(), options).unwrap();
+    let transform = photocraft_cms::cached(&source, Builtin::Srgb.profile(), options).unwrap();
     let mut converted = [0.0f32; 16];
     for pixel in &mut pixels {
         let input = if channels == 1 { &pixel[..1] } else { &pixel[..3] };
