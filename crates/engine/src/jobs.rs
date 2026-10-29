@@ -12,6 +12,10 @@
 //! - [`Session::start`] runs a job-capable command on a worker thread and returns its
 //!   [`JobId`]; [`Session::poll_jobs`] (called every frame by the UI) applies finished jobs.
 //!   On wasm `start` runs inline (same API, written once).
+//! - Work that is written as [`StepWork`] (Place) also runs where there are no threads: with
+//!   [`Session::set_cooperative_jobs`] (the web build's default) [`run_stepped`] registers the job
+//!   without a worker, and [`Session::poll_jobs`] runs one slice of it, about 8 ms, per call. The
+//!   UI stays responsive between slices, and the result is the same as on a worker.
 //! - [`Session::cancel_job`] sets the flag; the algorithms check it per tile, row band or
 //!   iteration, and the result is discarded. The document is never touched by a worker.
 //! - A panic in the worker becomes an error; the document is unchanged.
@@ -197,19 +201,42 @@ pub struct JobInfo {
 type Payload = Box<dyn Any + Send>;
 type Apply = Box<dyn FnOnce(&mut Session, Payload) -> Result<Value> + Send>;
 
-/// Wall-clock milliseconds since some fixed point (0 on wasm, where `Instant` is unavailable and
-/// jobs run inline anyway).
+/// Milliseconds on the monotonic clock since some fixed point (`web_time` reads the browser's on wasm).
 fn now_ms() -> f64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-        START.get_or_init(std::time::Instant::now).elapsed().as_secs_f64() * 1000.0
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        0.0
+    static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(web_time::Instant::now).elapsed().as_secs_f64() * 1000.0
+}
+
+/// How much of a frame [`Session::poll_jobs`] gives a [`StepWork`] job.
+const STEP_BUDGET: std::time::Duration = std::time::Duration::from_millis(8);
+
+/// A deadline no job reaches, for running [`StepWork`] to the end in one go.
+fn no_deadline() -> web_time::Instant {
+    let now = web_time::Instant::now();
+    now.checked_add(std::time::Duration::from_secs(1 << 30)).unwrap_or(now)
+}
+
+/// Work a job does a slice at a time (see [`run_stepped`]).
+pub trait StepWork<T>: Send + 'static {
+    /// Does some of the work and returns `Ok(None)` for "not finished, call again", or the result.
+    /// It should return soon after `deadline` passes (checking it between units of work), but
+    /// always does at least one unit, so that calling it again makes progress. `ctx` reports
+    /// progress and tells of cancellation, as for a worker.
+    fn step(&mut self, ctx: &JobCtx, deadline: web_time::Instant) -> Result<Option<T>>;
+}
+
+/// Runs `work` to the end, as a worker does.
+fn drive<T>(mut work: impl StepWork<T>, ctx: &JobCtx) -> Result<T> {
+    loop {
+        ctx.check()?;
+        if let Some(t) = work.step(ctx, no_deadline())? {
+            return Ok(t);
+        }
     }
 }
+
+/// Runs one slice of a cooperative job: `Ok(None)` when it has more to do.
+type Stepper = Box<dyn FnMut(&JobCtx, web_time::Instant) -> Result<Option<Payload>> + Send>;
 
 struct Running {
     id: JobId,
@@ -233,7 +260,10 @@ struct Running {
     /// The document's layer selection when the job started: applying targets it, not whatever
     /// got selected meanwhile (a Type click does that without editing the document, #7366).
     layers: Option<LayerSelection>,
-    rx: std::sync::mpsc::Receiver<Result<Payload>>,
+    /// Where the worker thread sends its result. A cooperative job has none: [`Session::poll_jobs`]
+    /// runs its `stepper` instead.
+    rx: Option<std::sync::mpsc::Receiver<Result<Payload>>>,
+    stepper: Option<Stepper>,
     apply: Option<Apply>,
     #[cfg(not(target_arch = "wasm32"))]
     handle: Option<std::thread::JoinHandle<()>>,
@@ -261,6 +291,16 @@ impl LayerSelection {
 }
 
 impl Running {
+    /// Runs a slice of a cooperative job until `deadline`: `Ok(None)` when it has more to do.
+    /// A cancelled job ends with `Err(Cancelled)` before doing more.
+    fn step(&mut self, deadline: web_time::Instant) -> Result<Option<Payload>> {
+        self.ctx.check()?;
+        match self.stepper.as_mut() {
+            Some(stepper) => stepper(&self.ctx, deadline),
+            None => Err(EngineError::Other(format!("`{}` has nothing to run", self.label))),
+        }
+    }
+
     fn info(&self) -> JobInfo {
         JobInfo {
             id: self.id,
@@ -278,7 +318,6 @@ impl Running {
 }
 
 /// The session's job table (see the module docs).
-#[derive(Default)]
 pub struct Jobs {
     next: u64,
     /// Set while [`Session::start`] runs a command: [`run`] spawns instead of running inline.
@@ -295,6 +334,35 @@ pub struct Jobs {
     draining: Vec<std::thread::JoinHandle<()>>,
     /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
     inline: Option<JobCtx>,
+    /// No worker threads: [`StepWork`] jobs are stepped by [`Session::poll_jobs`], everything else
+    /// runs inline. On for wasm; see [`Session::set_cooperative_jobs`].
+    cooperative: bool,
+}
+
+// Derivable on a desktop, where `cooperative` starts off; wasm starts it on.
+#[allow(clippy::derivable_impls)]
+impl Default for Jobs {
+    fn default() -> Self {
+        Self {
+            next: 0,
+            spawn: false,
+            pending: None,
+            running: Vec::new(),
+            events: Vec::new(),
+            recent: Vec::new(),
+            #[cfg(not(target_arch = "wasm32"))]
+            draining: Vec::new(),
+            inline: None,
+            cooperative: cfg!(target_arch = "wasm32"),
+        }
+    }
+}
+
+impl Jobs {
+    /// Does a job started now run on a worker thread? (Not inline, and not stepped on this thread.)
+    fn threaded(&self) -> bool {
+        self.spawn && !self.cooperative && !cfg!(target_arch = "wasm32")
+    }
 }
 
 const RECENT: usize = 16;
@@ -372,10 +440,80 @@ pub fn run<T: Send + 'static>(
     // The job's document: stored paths it follows are resolved against it on any thread.
     let document = s.active().and_then(|d| d.path.as_deref()).map(std::path::PathBuf::from);
     let _document = crate::doc_path::scope(document.as_deref());
-    if !s.jobs.spawn || cfg!(target_arch = "wasm32") {
+    if !s.jobs.threaded() {
         let t = work(&s.jobs.inline.clone().unwrap_or_default())?;
         return apply(s, t);
     }
+    let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
+    let (tx, rx) = std::sync::mpsc::channel::<Result<Payload>>();
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let wctx = job.ctx.clone();
+        let label_w = label.to_string();
+        // The work closure is moved into the thread. If spawning fails (thread limits), there is
+        // no way to get it back, so the error is reported instead.
+        let spawned = std::thread::Builder::new().name(format!("photocraft-job-{}", job.id.0)).spawn(move || {
+            let _authorization = AuthorizationScope::enter(authorization);
+            let _document = crate::doc_path::scope(document.as_deref());
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&wctx).map(|t| Box::new(t) as Payload)))
+                .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))));
+            // The receiver is gone when the job was cancelled: nothing to report.
+            let _ = tx.send(r);
+        });
+        job.handle = Some(spawned.map_err(|e| EngineError::Other(format!("could not start a background job: {e}")))?);
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        // Unreachable (wasm runs inline above); keep the types used.
+        drop((work, tx));
+    }
+    job.rx = Some(rx);
+    let id = job.id;
+    s.jobs.pending = Some(job);
+    Ok(json!({"job": id.0}))
+}
+
+/// [`run`] for work done a slice at a time ([`StepWork`]): where the session has no worker threads
+/// ([`Session::set_cooperative_jobs`], the web build) the job runs on the UI thread, a slice of
+/// about 8 ms per [`Session::poll_jobs`], so the window keeps repainting meanwhile. Elsewhere it
+/// is [`run`] with `work` driven to the end: on a worker thread for [`Session::start`], inline for
+/// [`Session::execute`]. The result is the same either way.
+pub fn run_stepped<T: Send + 'static>(
+    s: &mut Session,
+    label: &str,
+    lock_document: bool,
+    work: impl StepWork<T>,
+    apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
+) -> Result<Value> {
+    if !(s.jobs.spawn && s.jobs.cooperative) {
+        return run(s, label, lock_document, move |ctx| drive(work, ctx), apply);
+    }
+    let authorization = s.authorize.or_else(|| RENDER_AUTHORIZATION.with(std::cell::Cell::get));
+    let document = s.active().and_then(|d| d.path.as_deref()).map(std::path::PathBuf::from);
+    let mut job = new_job(s, label, lock_document, authorization, document.clone(), apply)?;
+    let (label_w, mut work) = (label.to_string(), work);
+    // The slices run under the requesting session's authority and document, as a worker would.
+    job.stepper = Some(Box::new(move |ctx, deadline| {
+        let _authorization = AuthorizationScope::enter(authorization);
+        let _document = crate::doc_path::scope(document.as_deref());
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work.step(ctx, deadline)))
+            .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))))
+            .map(|done| done.map(|t| Box::new(t) as Payload))
+    }));
+    let id = job.id;
+    s.jobs.pending = Some(job);
+    Ok(json!({"job": id.0}))
+}
+
+/// A job for [`run`] and [`run_stepped`] to start, without its worker.
+fn new_job<T: Send + 'static>(
+    s: &mut Session,
+    label: &str,
+    lock_document: bool,
+    authorization: Option<Authorization>,
+    document: Option<std::path::PathBuf>,
+    apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
+) -> Result<Running> {
     if s.jobs.pending.is_some() {
         return Err(EngineError::Other(format!("`{label}` started a second background job in one command")));
     }
@@ -384,40 +522,15 @@ pub fn run<T: Send + 'static>(
         (true, None) => return Err(EngineError::NoDocument),
         (false, _) => (None, None, None),
     };
-    let ctx = JobCtx::new();
-    let (tx, rx) = std::sync::mpsc::channel::<Result<Payload>>();
-    let apply_document = document.clone();
     let erased: Apply = Box::new(move |s, any| {
         let _authorization = AuthorizationScope::enter(authorization);
-        let _document = crate::doc_path::scope(apply_document.as_deref());
+        let _document = crate::doc_path::scope(document.as_deref());
         let t = any.downcast::<T>().map_err(|_| EngineError::Other("internal error: job result type mismatch".into()))?;
         apply(s, *t)
     });
     s.jobs.next += 1;
-    let id = JobId(s.jobs.next);
-    #[cfg(not(target_arch = "wasm32"))]
-    let handle = {
-        let wctx = ctx.clone();
-        let label_w = label.to_string();
-        // The work closure is moved into the thread. If spawning fails (thread limits), there is
-        // no way to get it back, so the error is reported instead.
-        let spawned = std::thread::Builder::new().name(format!("photocraft-job-{}", id.0)).spawn(move || {
-            let _authorization = AuthorizationScope::enter(authorization);
-            let _document = crate::doc_path::scope(document.as_deref());
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| work(&wctx).map(|t| Box::new(t) as Payload)))
-                .unwrap_or_else(|_| Err(EngineError::Other(format!("`{label_w}` failed with an internal error (logged); the document is unchanged"))));
-            // The receiver is gone when the job was cancelled: nothing to report.
-            let _ = tx.send(r);
-        });
-        Some(spawned.map_err(|e| EngineError::Other(format!("could not start a background job: {e}")))?)
-    };
-    #[cfg(target_arch = "wasm32")]
-    {
-        // Unreachable (wasm runs inline above); keep the types used.
-        drop((work, tx));
-    }
-    s.jobs.pending = Some(Running {
-        id,
+    Ok(Running {
+        id: JobId(s.jobs.next),
         command: String::new(),
         label: label.to_string(),
         params: Value::Null,
@@ -426,18 +539,18 @@ pub fn run<T: Send + 'static>(
         pre_selected: None,
         doc,
         snapshot,
-        ctx,
+        ctx: JobCtx::new(),
         started_ms: now_ms(),
         coalesce: s.coalesce_request.clone(),
         color_restrict: s.color_restrict,
         filter_mask_layer: s.filter_mask_layer,
         layers,
-        rx,
+        rx: None,
+        stepper: None,
         apply: Some(erased),
         #[cfg(not(target_arch = "wasm32"))]
-        handle,
-    });
-    Ok(json!({"job": id.0}))
+        handle: None,
+    })
 }
 
 /// A document edit whose body is the job: like [`Session::edit`] (one undo step named `label`),
@@ -449,7 +562,7 @@ pub fn edit_job<R: Send + 'static>(
     f: impl FnOnce(&mut Document, &mut Option<LayerId>, &JobCtx) -> Result<R> + Send + 'static,
     finish: impl FnOnce(R) -> Value + Send + 'static,
 ) -> Result<Value> {
-    if !s.jobs.spawn || cfg!(target_arch = "wasm32") {
+    if !s.jobs.threaded() {
         // Inline: exactly `Session::edit`, as before jobs existed.
         let ctx = s.jobs.inline.clone().unwrap_or_default();
         let r = s.edit(label, |doc, active| f(doc, active, &ctx))?;
@@ -647,8 +760,28 @@ impl Session {
         work: impl FnOnce(&JobCtx) -> Result<T> + Send + 'static,
         apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
     ) -> Result<Started> {
+        self.start_registered(command, params, |s| run(s, label, lock_document, work, apply))
+    }
+
+    /// [`Session::start_job`] for [`StepWork`]: on a worker, or where the session is cooperative
+    /// (see [`Session::set_cooperative_jobs`]) a slice per [`Session::poll_jobs`] on this thread.
+    pub fn start_job_stepped<T: Send + 'static>(
+        &mut self,
+        command: &str,
+        params: Value,
+        label: &str,
+        lock_document: bool,
+        work: impl StepWork<T>,
+        apply: impl FnOnce(&mut Session, T) -> Result<Value> + Send + 'static,
+    ) -> Result<Started> {
+        self.start_registered(command, params, |s| run_stepped(s, label, lock_document, work, apply))
+    }
+
+    /// Runs `register` (which calls [`run`] or [`run_stepped`]) with background jobs allowed, and
+    /// files the job it started under `command`.
+    fn start_registered(&mut self, command: &str, params: Value, register: impl FnOnce(&mut Session) -> Result<Value>) -> Result<Started> {
         self.jobs.spawn = true;
-        let r = run(self, label, lock_document, work, apply);
+        let r = register(self);
         self.jobs.spawn = false;
         let pending = self.jobs.pending.take();
         match (r, pending) {
@@ -669,23 +802,48 @@ impl Session {
         }
     }
 
+    /// Whether this session has no worker threads: [`StepWork`] jobs are run a slice at a time by
+    /// [`Session::poll_jobs`] on the UI thread, and every other command runs inline. The web
+    /// build (wasm) is always like this; tests turn it on to run that path on a desktop.
+    pub fn cooperative_jobs(&self) -> bool {
+        self.jobs.cooperative
+    }
+
+    /// Turn [`Session::cooperative_jobs`] on or off. Jobs already running keep running as they
+    /// started.
+    pub fn set_cooperative_jobs(&mut self, on: bool) {
+        self.jobs.cooperative = on;
+    }
+
     /// Apply finished background jobs (on this thread) and return every job that ended since
-    /// the last call. Cheap when nothing runs; the UI calls it every frame.
+    /// the last call. Also runs one slice (about 8 ms) of a cooperative job, if there is one. Cheap
+    /// when nothing runs; the UI calls it every frame.
     pub fn poll_jobs(&mut self) -> Vec<JobEvent> {
         let mut i = 0;
+        let mut stepped = false;
         while i < self.jobs.running.len() {
-            match self.jobs.running.get(i).map(|r| r.rx.try_recv()) {
-                Some(Ok(r)) => {
+            let Some(job) = self.jobs.running.get_mut(i) else { break };
+            let finished = match &job.rx {
+                Some(rx) => match rx.try_recv() {
+                    Ok(r) => Some(r),
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        Some(Err(EngineError::Other(format!("`{}` stopped unexpectedly; the document is unchanged", job.label))))
+                    }
+                },
+                // One cooperative job gets the frame's budget; any others wait for the next poll.
+                None if !stepped => {
+                    stepped = true;
+                    job.step(web_time::Instant::now() + STEP_BUDGET).transpose()
+                }
+                None => None,
+            };
+            match finished {
+                Some(r) => {
                     let job = self.jobs.running.remove(i);
                     self.finish_job(job, r);
                 }
-                Some(Err(std::sync::mpsc::TryRecvError::Empty)) => i += 1,
-                Some(Err(std::sync::mpsc::TryRecvError::Disconnected)) => {
-                    let job = self.jobs.running.remove(i);
-                    let label = job.label.clone();
-                    self.finish_job(job, Err(EngineError::Other(format!("`{label}` stopped unexpectedly; the document is unchanged"))));
-                }
-                None => break,
+                None => i += 1,
             }
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -694,11 +852,19 @@ impl Session {
     }
 
     /// Block until job `id` ends, apply it, and return its result (the control channel's and
-    /// MCP's default `wait`, and the CLI). `Err(Cancelled)` if it was cancelled.
+    /// MCP's default `wait`, and the CLI). `Err(Cancelled)` if it was cancelled. A cooperative job
+    /// is run to the end here.
     pub fn wait_job(&mut self, id: JobId) -> Result<Value> {
         if let Some(i) = self.jobs.running.iter().position(|r| r.id == id) {
-            let job = self.jobs.running.remove(i);
-            let r = job.rx.recv().unwrap_or_else(|_| Err(EngineError::Other(format!("`{}` stopped unexpectedly", job.label))));
+            let mut job = self.jobs.running.remove(i);
+            let r = match &job.rx {
+                Some(rx) => rx.recv().unwrap_or_else(|_| Err(EngineError::Other(format!("`{}` stopped unexpectedly", job.label)))),
+                None => loop {
+                    if let Some(r) = job.step(no_deadline()).transpose() {
+                        break r;
+                    }
+                },
+            };
             self.finish_job(job, r);
         }
         match self.jobs.recent.iter().rev().find(|j| j.id == id) {
