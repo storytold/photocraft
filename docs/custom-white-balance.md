@@ -1,4 +1,4 @@
-# PhotoCraft 0.16.0 — bilanciamento del bianco e look colore
+# PhotoCraft — bilanciamento del bianco e look colore
 
 Questa versione aggiunge, durante l'apertura di un RAW, il menu **Colore → Bilanciamento del bianco**:
 Come scattato, Automatico, Luce diurna, Nuvolo, Ombreggiatura, Tungsteno, Fluorescente e Flash.

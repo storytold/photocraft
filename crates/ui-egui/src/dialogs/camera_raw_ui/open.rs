@@ -362,7 +362,16 @@ pub fn opened_without_dialog(app: &mut PhotocraftApp, index: usize, name: &str, 
     }
     let Some(document) = app.session.documents().get(index).map(|st| st.doc.id) else { return };
     let method = photocraft_io::raw::developed_demosaic(warnings).unwrap_or_else(|| app.session.prefs().raw_defaults.demosaic.method());
-    let raw = RawOpen { document, name: name.to_string(), path: path.map(str::to_string), bytes: None, developed_with: method, demosaic: method };
+    let raw = RawOpen {
+        document,
+        name: name.to_string(),
+        path: path.map(str::to_string),
+        bytes: None,
+        developed_with: method,
+        demosaic: method,
+        balance: RawWhiteBalance::AsShot,
+        settings: None,
+    };
     let mut params = CameraRaw::default();
     let sidecar = path.and_then(read_sidecar).map(|(loaded, _, _)| loaded);
     if let Some(loaded) = &sidecar {

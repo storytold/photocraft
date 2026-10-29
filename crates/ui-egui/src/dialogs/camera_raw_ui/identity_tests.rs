@@ -4,7 +4,7 @@ use std::sync::Arc;
 
 use serde_json::{Value, json};
 
-use super::{CameraRaw, PhotocraftApp, RawOpen, commit_open_raw, finish_redevelop, queue_open_dialog, replace_raw_document};
+use super::{CameraRaw, PhotocraftApp, RawOpen, RawWhiteBalance, commit_open_raw, finish_redevelop, queue_open_dialog, replace_raw_document};
 
 fn synthetic_raw() -> Vec<u8> {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
@@ -30,7 +30,7 @@ impl Control {
     }
 }
 
-fn identity_app() -> (PhotocraftApp, RawOpen, Control) {
+fn identity_app() -> (PhotocraftApp, RawOpen, RawWhiteBalance, Control) {
     let mut session = photocraft_engine::Session::new();
     session.execute("file.new", json!({"width": 8, "height": 6})).unwrap();
     session.execute("layer.new.layer", json!({})).unwrap();
