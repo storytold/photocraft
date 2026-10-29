@@ -124,6 +124,7 @@ pub mod plugin_cmds;
 pub mod preset_import_cmds;
 pub mod print_cmds;
 pub mod rasterize_style_cmds;
+pub mod raw_editor_cmds;
 pub mod redeye_cmds;
 pub mod render_cmds;
 pub mod retouch_cmds;
@@ -1214,6 +1215,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::contour_lib_cmds::specs());
     v.extend(crate::layer_list_cmds::specs());
     v.extend(crate::filters::specs());
+    v.extend(crate::raw_editor_cmds::specs());
     v.extend(crate::filters_ext::specs());
     v.extend(crate::color_to_alpha_cmds::specs());
     v.extend(crate::gallery_cmds::specs());

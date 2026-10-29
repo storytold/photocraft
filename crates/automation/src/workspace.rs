@@ -424,6 +424,9 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
     // File Handling's LUT folder (#6558) is listed from disk; the rest of that section is not.
     matches!(section, "colorSettings" | "scriptEvents" | "historyLog" | "plugIns" | "scratchDisks")
         || (section == "fileHandling" && segments.next().is_none_or(|key| key == "lutFolder"))
+        // Camera Raw's External Editor names a program that Edit/Develop in Raw Editor later runs:
+        // the user's own choice in Preferences, never one automation makes for them.
+        || (section == "rawDefaults" && segments.next().is_none_or(|key| key == "externalEditor"))
 }
 
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
