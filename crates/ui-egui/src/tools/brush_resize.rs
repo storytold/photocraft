@@ -1,6 +1,7 @@
 //! Photoshop's on-canvas brush resize (#231, #297): with a painting tool, Alt+right-drag
-//! (Windows, Linux) or Control+Option+drag (macOS; Control+Alt+drag works everywhere) changes the
-//! brush instead of painting. Left and right
+//! (Windows, Linux; the stylus barrel counts as the right button) or Control+Option+drag
+//! (macOS) changes the brush instead of painting. Off the Mac, Control+Alt on the left button is
+//! Photoshop's duplicate move (the temporary Move with ⌥), not this resize. Left and right
 //! set the diameter (the circle's edge follows the pointer), up and down the hardness (down makes
 //! it harder). The brush circle stays where the drag began, tinted to show the hardness, with a
 //! Diameter/Hardness readout beside the pointer.
@@ -43,9 +44,13 @@ pub fn applies(tool: Tool) -> bool {
     tool.is_brushlike() || tool == Tool::QuickSelection
 }
 
-/// Control+Alt (Control+Option on a Mac): `ctrl` is the Control key on every platform.
+/// Control+Option+drag is the HUD resize on macOS (`ctrl` is the Control key on every platform).
+/// Off the Mac Photoshop gives Control+Alt on the left button to the duplicate move instead —
+/// the temporary Move (`hold_keys`) with ⌥, which `move_mods` duplicates — so the resize there
+/// is the Alt+right-drag (`is_right_gesture`, #297) alone; a ⌘ alongside (Windows' Ctrl also
+/// sets `command`) is that duplicate move, never this gesture.
 pub fn is_gesture(mods: egui::Modifiers) -> bool {
-    mods.ctrl && mods.alt
+    cfg!(target_os = "macos") && mods.ctrl && mods.alt && !mods.command
 }
 
 /// Alt (Option) with the right button: Photoshop's Windows gesture (#297). The left button with
@@ -65,9 +70,9 @@ pub fn resized(start: (f32, f32), dx: f64, dy: f64, zoom: f32) -> (f32, f32) {
     (size, (hardness * 100.0).round() / 100.0)
 }
 
-/// Route a tool event: true when it belongs to a resize drag (begun here with Control+Alt held,
-/// or an Alt+right-drag `armed` for this press, or already in progress), so the tool never sees
-/// it.
+/// Route a tool event: true when it belongs to a resize drag (the Alt+right-drag `armed` for
+/// this press, the Mac's Control+Option+left-drag, or one already in progress), so the tool
+/// never sees it.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers, armed: bool) -> bool {
     static KEY: AtomicU64 = AtomicU64::new(0);
     match ev {

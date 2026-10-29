@@ -124,6 +124,21 @@ pub(super) fn precise_other_cursor(app: &PhotocraftApp) -> bool {
     (app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise) != app.caps_lock
 }
 
+/// Is the Move function in effect this frame: held ⌘ (Ctrl off the Mac, the temporary Move
+/// `hold_keys`), a Move-tool drag running, or the Move tool with ⌥ held (Photoshop's duplicate
+/// hover, #6102)? Photoshop shows that function in the pointer, not just in what a press does.
+pub(crate) fn move_pointer(app: &PhotocraftApp, temporary: Option<crate::hold_keys::Temporary>, held: egui::Modifiers) -> bool {
+    temporary == Some(crate::hold_keys::Temporary::Move)
+        || app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move)
+        || (app.ui.tool == Tool::Move && held.alt)
+}
+
+/// Does the Move-function pointer show Photoshop's white-and-black duplicate pair instead of the
+/// plain move arrows: ⌥ on the drag's press, or held now with the temporary Move?
+pub(crate) fn move_pointer_copy(app: &PhotocraftApp, held: egui::Modifiers) -> bool {
+    app.drag.as_ref().filter(|d| d.tool == Tool::Move).map_or(held.alt, |d| d.modifiers.alt)
+}
+
 /// A pen tool's standard cursor: its toolbar icon with the nib (the Convert Point tool: the
 /// anchor) on `p`. Draws it at `p` and returns the OS cursor to set (hidden).
 pub(crate) fn pen_cursor(ctx: &egui::Context, tool: Tool, p: Pos2) -> egui::CursorIcon {

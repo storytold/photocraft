@@ -1,5 +1,5 @@
 //! The Pencil tool (#213): aliased strokes through the live-stroke path, Auto Erase, the square
-//! pixel-grid cursor, ⇧-click lines, Control+Alt resizing and the B group.
+//! pixel-grid cursor, ⇧-click lines, the armed HUD resize and the B group.
 
 use egui::{Key, Modifiers, Pos2, Rect, vec2};
 use egui_kittest::Harness;
@@ -146,11 +146,12 @@ fn shift_clicked_pencil_does_not_split_a_click_near_a_pixel_boundary() {
 }
 
 #[test]
-fn ctrl_alt_drag_resizes_the_pencil_without_painting() {
+fn the_armed_hud_drag_resizes_the_pencil_without_painting() {
     let mut app = app();
-    let ctrl_alt = Modifiers { alt: true, ctrl: true, ..Default::default() };
     assert!(crate::brush_resize::applies(Tool::Pencil));
-    drag(&mut app, &[(50.0, 40.0), (60.0, 40.0)], ctrl_alt);
+    // The resize is the armed Alt+right-drag (Photoshop's layout off the Mac).
+    app.brush_resize_armed = true;
+    drag(&mut app, &[(50.0, 40.0), (60.0, 40.0)], Modifiers::ALT);
     assert_eq!(app.session.tools.brush.size, 23.0);
     assert_eq!(app.session.active().unwrap().history.past_len(), 0);
 }

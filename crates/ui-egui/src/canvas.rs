@@ -60,7 +60,7 @@ pub mod zoom_window_fit;
 
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
-pub(crate) use cursors::{alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
+pub(crate) use cursors::{alt_samples, composite_color, move_pointer, move_pointer_copy, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
 #[cfg(test)]
 pub(crate) use display::GPU_OUTPUT;
@@ -1241,6 +1241,8 @@ struct CanvasOverlayInput<'a> {
     edge_rect: Rect,
     panning: bool,
     zoom_out: &'a dyn Fn(bool) -> bool,
+    /// The held temporary tool (`hold_keys`) this frame: the Move-function cursor checks it.
+    temporary: Option<crate::hold_keys::Temporary>,
 }
 
 fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut View, input: &CanvasOverlayInput<'_>) {
@@ -1415,6 +1417,35 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     }
 }
 
+/// Photoshop's selection-tool pointers: the lasso family and Object Selection keep the
+/// crosshair and show their glyph beside it; the Magic Wand is its own pointer, the wand tip
+/// on the point (#7209).
+fn draw_tool_glyph_pointer(ctx: &egui::Context, painter: &egui::Painter, tool: Tool, p: Pos2) -> egui::CursorIcon {
+    if tool == Tool::MagicWand {
+        crate::icons::cursor(ctx, "wand-sparkles", p, vec2(3.0, 21.0) / 24.0, 22.0);
+        return egui::CursorIcon::None;
+    }
+    let cross = crate::tool_cursor::crosshair(painter, p, 6.0, 0.0);
+    crate::icons::cursor_badge(ctx, crate::icons::tool_icon(tool), p);
+    cross
+}
+
+/// Photoshop's move-function pointer at the point: the four-arrow move glyph, or with ⌥ in
+/// effect the white-and-black duplicate pair (#6102). Other Cursors: Precise and the Caps Lock
+/// swap take it to the precise crosshair, as for the selection-tool glyphs (#4639). Drawn by
+/// an Area over the OS cursor, which is hidden for the frame (`CursorIcon::None`).
+fn draw_move_pointer(app: &PhotocraftApp, ctx: &egui::Context, p: Pos2, copy: bool) -> egui::CursorIcon {
+    if precise_other_cursor(app) {
+        return egui::CursorIcon::Crosshair;
+    }
+    if copy {
+        crate::icons::cursor_copy_pointer(ctx, p);
+    } else {
+        crate::icons::cursor(ctx, "move", p, vec2(0.5, 0.5), 22.0);
+    }
+    egui::CursorIcon::None
+}
+
 fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool, p: Pos2) {
     let painter = input.painter;
     let xf = input.xf;
@@ -1422,6 +1453,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
     let tool = input.tool;
     let output = input.output;
     let zoom_out = input.zoom_out;
+    let temporary = input.temporary;
 
     let alt = ui.input(|i| i.modifiers.alt);
     if !resizing && !alt && !app.ui.shell.sticky_alt {
@@ -1555,8 +1587,16 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         {
             egui::CursorIcon::Crosshair
         }
-        // Photoshop's Move tool keeps the standard arrow pointer (#5646): the movable
-        // layer under it is marked by the hover outline, not by a different cursor.
+        // Photoshop shows the Move function in the pointer: held ⌘ (Ctrl off the Mac),
+        // a live Move-tool drag, or the Move tool with ⌥ held (#6102) draw the
+        // four-arrow move glyph at the point, and ⌥ on that press (or held now) makes it
+        // the white-and-black duplicate pair; Other Cursors: Precise and the Caps Lock swap
+        // take it to the precise crosshair, as for the selection glyphs. At rest the Move
+        // tool keeps the standard arrow pointer (#5646): the movable layer under it is
+        // marked by the hover outline, not by a different cursor.
+        Tool::Move if move_pointer(app, temporary, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers))) => {
+            draw_move_pointer(app, ui.ctx(), p, move_pointer_copy(app, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers))))
+        }
         Tool::Move => egui::CursorIcon::Default,
         // Dragging is handled with the pan itself, above.
         Tool::Hand => crate::tool_cursor::hand(ui.ctx(), false),
@@ -1579,6 +1619,13 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 painter.line_segment([p - vec2(0.0, 3.0), p + vec2(0.0, 3.0)], Stroke::new(w, c));
             }
             egui::CursorIcon::None
+        }
+        // Photoshop's selection pointers: the lasso family and Object Selection keep the
+        // crosshair and show their glyph beside it; the Magic Wand is its own pointer, the
+        // wand tip on the point. Other Cursors: Precise stays the bare crosshair, as for the
+        // pens and the bucket (#4639's rule).
+        Tool::Lasso | Tool::PolygonLasso | Tool::ObjectSelection | Tool::MagicWand if !precise_other_cursor(app) => {
+            draw_tool_glyph_pointer(ui.ctx(), painter, tool, p)
         }
         _ => egui::CursorIcon::Crosshair,
     };
@@ -2012,6 +2059,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             edge_rect,
             panning,
             zoom_out: &zoom_out,
+            temporary,
         };
         paint_primary_overlays(app, ui, &mut view, &input);
     }

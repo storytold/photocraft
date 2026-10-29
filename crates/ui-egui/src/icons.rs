@@ -61,6 +61,28 @@ pub fn cursor_copy_badge(ctx: &egui::Context, p: egui::Pos2) {
     badge(ctx, "mouse-pointer-2", p, true);
 }
 
+/// The pointer itself is Photoshop's duplicate cursor: the white arrow with a black one behind,
+/// its tip at `p` (what a ⌘⌥ move press would copy).
+pub fn cursor_copy_pointer(ctx: &egui::Context, p: egui::Pos2) {
+    const SIZE: f32 = 18.0;
+    // The arrowhead's tip sits at (4, 4) of the icon's 24-unit box.
+    let rect = Rect::from_min_size(p - egui::vec2(4.0, 4.0) / 24.0 * SIZE, Vec2::splat(SIZE));
+    let area = egui::Area::new(egui::Id::unique("pc-cursor-copy-pointer")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
+    area.show(ctx, |ui| {
+        let halo = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)];
+        let behind = rect.translate(egui::vec2(5.0, 5.0));
+        for (dx, dy) in halo {
+            image("mouse-pointer-2", SIZE, Color32::WHITE).paint_at(ui, behind.translate(egui::vec2(dx, dy)));
+        }
+        image("mouse-pointer-2", SIZE, Color32::BLACK).paint_at(ui, behind);
+        let outline = image("mouse-pointer-2", SIZE, Color32::from_black_alpha(220));
+        for (dx, dy) in halo {
+            outline.paint_at(ui, rect.translate(egui::vec2(dx, dy)));
+        }
+        image("mouse-pointer-2", SIZE, Color32::WHITE).paint_at(ui, rect);
+    });
+}
+
 fn badge(ctx: &egui::Context, name: &str, p: egui::Pos2, doubled: bool) {
     const SIZE: f32 = 12.0;
     let rect = Rect::from_center_size(p + egui::vec2(20.0, 19.0), Vec2::splat(SIZE));
