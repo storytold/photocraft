@@ -3864,6 +3864,9 @@ navigator	Zoom	Zvětšení
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+	Automatically Create First Snapshot	Automaticky vytvořit první snímek
+	Automatically Create New Snapshot When Saving	Automaticky vytvořit nový snímek při ukládání
+	Show New Snapshot Dialog by Default	Ve výchozím nastavení zobrazit dialog Nový snímek
 	Show Favorite Fonts	Zobrazit oblíbená písma
 	No favorite fonts yet: click the star beside a font to add it.	Zatím žádná oblíbená písma: přidejte písmo kliknutím na hvězdičku vedle něj.
 	Favorite fonts	Oblíbená písma

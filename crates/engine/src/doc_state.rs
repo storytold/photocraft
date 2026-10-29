@@ -48,11 +48,15 @@ pub struct DocState {
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
     /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
-    /// the document as opened. Kept for the session only, as in Photoshop: not history states,
+    /// the document as opened (unless History Options › Automatically Create First Snapshot is
+    /// off). Kept for the session only, as in Photoshop: not history states,
     /// and not saved with the document.
     pub snapshots: Vec<history_cmds::Snapshot>,
     /// The id the next snapshot gets; ids are never reused, so deleting one keeps the others.
     pub(crate) next_snapshot: u64,
+    /// The snapshot the latest save added (History Options › Automatically Create New Snapshot
+    /// When Saving), so saving an unchanged document again doesn't add a duplicate row.
+    pub(crate) save_snapshot: Option<u64>,
     /// The snapshot set as the History Brush's source (`history.setSource {snapshot}`); `None`:
     /// the source is a state, kept by the history ([`photocraft_ops::History::brush_source`]).
     pub(crate) source_snapshot: Option<u64>,
@@ -105,6 +109,7 @@ impl DocState {
             color_samplers: Vec::new(),
             snapshots: vec![first],
             next_snapshot: 1,
+            save_snapshot: None,
             source_snapshot: None,
         }
     }

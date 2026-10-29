@@ -2867,6 +2867,9 @@ curves	Smooth	平滑
 	Sent to {printer}	已傳送至 {printer}
 	set in Print Settings…	在列印設定中設定…
 	ICO is limited to 256 × 256 pixels	ICO 最大為 256 × 256 像素
+	Automatically Create First Snapshot	自動建立第一個快照
+	Automatically Create New Snapshot When Saving	儲存時自動建立新快照
+	Show New Snapshot Dialog by Default	預設顯示新增快照對話框
 	Show Favorite Fonts	顯示我的最愛字體
 	No favorite fonts yet: click the star beside a font to add it.	尚無我的最愛字體：按一下字體旁的星號即可加入。
 	Favorite fonts	我的最愛字體

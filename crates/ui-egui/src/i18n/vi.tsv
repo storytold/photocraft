@@ -3716,6 +3716,10 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+# History panel › History Options… (#2966)
+	Automatically Create First Snapshot	Tự động tạo ảnh chụp trạng thái đầu tiên
+	Automatically Create New Snapshot When Saving	Tự động tạo ảnh chụp trạng thái mới khi lưu
+	Show New Snapshot Dialog by Default	Mặc định hiện hộp thoại Ảnh chụp trạng thái mới
 	Show Favorite Fonts	Hiển thị phông chữ yêu thích
 	No favorite fonts yet: click the star beside a font to add it.	Chưa có phông chữ yêu thích: nhấp vào ngôi sao bên cạnh phông chữ để thêm.
 	Favorite fonts	Phông chữ yêu thích

@@ -3268,6 +3268,9 @@ curves	Smooth	Glätten
 	Sent to {printer}	An {printer} gesendet
 	set in Print Settings…	in den Druckeinstellungen festlegen…
 	ICO is limited to 256 × 256 pixels	ICO ist auf 256 × 256 Pixel begrenzt
+	Automatically Create First Snapshot	Ersten Snapshot automatisch erstellen
+	Automatically Create New Snapshot When Saving	Beim Speichern automatisch neuen Snapshot erstellen
+	Show New Snapshot Dialog by Default	Dialogfeld „Neuer Snapshot“ standardmäßig anzeigen
 	Show Favorite Fonts	Favorisierte Schriften anzeigen
 	No favorite fonts yet: click the star beside a font to add it.	Noch keine favorisierten Schriften: Klicken Sie auf den Stern neben einer Schrift, um sie hinzuzufügen.
 	Favorite fonts	Favorisierte Schriften

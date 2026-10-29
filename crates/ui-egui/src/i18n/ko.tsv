@@ -3455,6 +3455,9 @@ curves	Smooth	매끄럽게
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
+	Automatically Create First Snapshot	첫 번째 스냅샷 자동 만들기
+	Automatically Create New Snapshot When Saving	저장할 때 새 스냅샷 자동 만들기
+	Show New Snapshot Dialog by Default	기본적으로 새 스냅샷 대화 상자 표시
 	Show Favorite Fonts	즐겨찾는 글꼴 표시
 	No favorite fonts yet: click the star beside a font to add it.	아직 즐겨찾는 글꼴이 없습니다. 글꼴 옆의 별을 클릭하여 추가하세요.
 	Favorite fonts	즐겨찾는 글꼴

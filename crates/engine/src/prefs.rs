@@ -1003,21 +1003,36 @@ impl Default for Integrations {
     }
 }
 
-/// The History panel's History Options… (not part of Edit › Preferences in Photoshop either).
-/// Photoshop's snapshot options come with #3634.
+/// The History panel's History Options… (not part of Edit › Preferences in Photoshop either),
+/// in the dialog's order.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct HistoryOptions {
+    /// Automatically Create First Snapshot: a new or opened document starts with a snapshot of
+    /// itself, named after it (the History panel's top row).
+    pub automatically_create_first_snapshot: bool,
+    /// Automatically Create New Snapshot When Saving: every save of the document (not a copy)
+    /// adds a snapshot named with the time of the save.
+    pub automatically_create_new_snapshot_when_saving: bool,
     /// Allow Non-Linear History: editing after selecting an earlier state keeps the later
     /// states (the new step is appended at the end), and deleting a state deletes only it.
     pub allow_non_linear_history: bool,
+    /// Show New Snapshot Dialog by Default: a plain click on the History panel's camera button
+    /// opens New Snapshot (otherwise only ⌥-click does).
+    pub show_new_snapshot_dialog_by_default: bool,
     /// Make Layer Visibility Changes Undoable: showing or hiding a layer is a history state.
     pub make_layer_visibility_changes_undoable: bool,
 }
 
 impl Default for HistoryOptions {
     fn default() -> Self {
-        Self { allow_non_linear_history: false, make_layer_visibility_changes_undoable: true }
+        Self {
+            automatically_create_first_snapshot: true,
+            automatically_create_new_snapshot_when_saving: false,
+            allow_non_linear_history: false,
+            show_new_snapshot_dialog_by_default: false,
+            make_layer_visibility_changes_undoable: true,
+        }
     }
 }
 

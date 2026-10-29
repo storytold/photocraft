@@ -110,6 +110,11 @@ impl Session {
         st.history.max_states = self.prefs.get().performance.history_states.max(1) as usize;
         st.history.max_bytes = self.prefs.get().performance.history_budget_bytes();
         st.history.non_linear = self.prefs.get().history_options.allow_non_linear_history;
+        // History Options › Automatically Create First Snapshot off: no snapshot of the document
+        // as opened, so the History panel starts at the opening state (#2966).
+        if !self.prefs.get().history_options.automatically_create_first_snapshot {
+            st.snapshots.clear();
+        }
         self.docs.push(st);
         let i = self.docs.len() - 1;
         self.active = Some(i);
