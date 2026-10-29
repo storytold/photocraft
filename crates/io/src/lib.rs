@@ -49,6 +49,7 @@ pub mod exr_parts;
 mod flat;
 mod gradient_bake;
 pub mod guides_map;
+mod png_steps;
 pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
 mod duotone_map;
 mod kra;
@@ -91,6 +92,7 @@ pub use flat::{
     DEFAULT_LOSSY_WEBP_QUALITY, apply_file_encoding, document_to_image, file_encoding, import_gif_frames, import_tiff_page, import_webp_frames,
     tga_alpha_channel_to_transparency, tga_default_bits,
 };
+pub use png_steps::PngImport;
 pub use psd_export::{PsdExportOptions, document_to_psd, document_to_psd_with};
 pub use psd_import::{psd_to_document, psd_to_document_with};
 
@@ -497,57 +499,91 @@ pub fn import_file(name: &str, path: &std::path::Path, opts: &ImportOptions, ctl
     import_file_for_open_with(name, path, opts, ctl).map(|(result, _)| result)
 }
 
-/// Dispatches format-specific importers and propagates a structured PSD damage
-/// flag alongside the ordinary best-effort import result.
-fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
+/// The importer a file goes to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Route {
+    Pcraft,
+    Psd,
+    Affinity,
+    Ora,
+    Kra,
+    Xcf,
+    GzippedXcf,
+    Pdn,
+    Raw,
+    Svg,
+    /// A `.psd`/`.psb`/`.psdt` with no raster signature.
+    NamedPsd,
+    /// A flat raster format, through the codecs.
+    Flat,
+}
+
+/// Which importer takes the file `name` holding `bytes`. The checks run in this order.
+pub(crate) fn route(name: &str, bytes: &[u8]) -> Route {
     // A declared native extension must reach its loader so malformed bundles retain format errors.
     if has_extension(name, photocraft_format::EXTENSION) || photocraft_format::is_pcraft(bytes) {
-        let document = photocraft_format::load_from_bytes(bytes)?;
-        return Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false });
+        return Route::Pcraft;
     }
     // Magic first: an Affinity file renamed .psd is still Affinity (#5258 corpus
     // preview_never_saves_back_to_its_native_or_renamed_source).
     if is_psd(bytes) {
-        return import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES), |want, recover| {
-            PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)
-        });
+        return Route::Psd;
     }
     if affinity::is_affinity(bytes) || affinity::has_extension(name) {
-        return affinity::import(name, bytes);
+        return Route::Affinity;
     }
     if ora::is_ora(bytes) || has_extension(name, "ora") {
-        return ora::import(name, bytes, ctl);
+        return Route::Ora;
     }
     // Krita files are ZIP containers. A recognized raster signature still wins over a
     // misleading .kra suffix (as with SVG imports).
     if kra::is_kra(bytes) || (kra::EXTENSIONS.iter().any(|e| has_extension(name, e)) && photocraft_codecs::detect(bytes).is_none()) {
-        return kra::import(name, bytes, ctl);
+        return Route::Kra;
     }
     // GIMP files are gzip or raw; as above, a recognized raster signature still wins over a
     // misleading .xcf suffix.
     if xcf::is_xcf(bytes) || (has_extension(name, "xcf") && photocraft_codecs::detect(bytes).is_none()) {
-        return xcf::import(name, bytes, ctl);
+        return Route::Xcf;
     }
     if xcf::is_gzipped_xcf(name, bytes) {
-        return xcf::import(name, &xcf::gunzip(bytes)?, ctl);
+        return Route::GzippedXcf;
     }
     if has_extension(name, "pdn") || bytes.starts_with(b"PDN3") {
-        return pdn::import(name, bytes, ctl);
+        return Route::Pdn;
     }
     if raw::is_raw(bytes) {
-        return raw::import_raw_demosaic(name, bytes, opts.demosaic);
+        return Route::Raw;
     }
     if is_svg_input(name, bytes) {
-        return svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth);
+        return Route::Svg;
     }
     // A `.psd`/`.psb`/`.psdt` with no raster signature keeps the PSD error instead of
     // `codec: unrecognized image format` (#5258). Magic already returned above.
     if is_psd_input(name, bytes) {
-        return import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES), |want, recover| {
-            PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)
-        });
+        return Route::NamedPsd;
     }
-    flat::import_flat_with_limit(name, bytes, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES))
+    Route::Flat
+}
+
+/// Dispatches format-specific importers and propagates a structured PSD damage
+/// flag alongside the ordinary best-effort import result.
+fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, opts: &ImportOptions, damaged: &mut bool) -> Result<ImportResult, IoError> {
+    match route(name, bytes) {
+        Route::Pcraft => {
+            let document = photocraft_format::load_from_bytes(bytes)?;
+            Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
+        }
+        Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES), |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
+        Route::Affinity => affinity::import(name, bytes),
+        Route::Ora => ora::import(name, bytes, ctl),
+        Route::Kra => kra::import(name, bytes, ctl),
+        Route::Xcf => xcf::import(name, bytes, ctl),
+        Route::GzippedXcf => xcf::import(name, &xcf::gunzip(bytes)?, ctl),
+        Route::Pdn => pdn::import(name, bytes, ctl),
+        Route::Raw => raw::import_raw_demosaic(name, bytes, opts.demosaic),
+        Route::Svg => svg::import_svg_with_group_depth(name, bytes, opts.max_group_depth),
+        Route::Flat => flat::import_flat_with_limit(name, bytes, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES)),
+    }
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).

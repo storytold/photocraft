@@ -196,13 +196,13 @@ fn tiff_f32_output_matches_oracle() {
 }
 
 // ---------------------------------------------------------------------------
-// PNG decoded in steps (PngRows)
+// PNG decoded in steps (PngDecodeRows)
 // ---------------------------------------------------------------------------
 
-/// Decodes `bytes` with [`PngRows`], going on for `per_call` rows per call (0: unlimited);
+/// Decodes `bytes` with [`PngDecodeRows`], going on for `per_call` rows per call (0: unlimited);
 /// returns the image and how many calls it took.
 fn decode_in_steps(bytes: &[u8], per_call: usize) -> Result<(Image, usize), CodecError> {
-    let mut rows = PngRows::new(bytes, &Limits::default())?;
+    let mut rows = PngDecodeRows::new(bytes, &Limits::default())?;
     let mut calls = 0;
     loop {
         calls += 1;
@@ -255,7 +255,7 @@ fn png_rows_equal_decode_for_palette_and_transparency() {
 #[test]
 fn png_rows_take_one_call_per_row_and_report_progress() {
     let bytes = encode(&synth(16, 40, ChannelLayout::Rgb, SampleType::U8, 5, 0.2), Format::Png, &EncodeOptions::default()).unwrap();
-    let mut rows = PngRows::new(bytes.as_slice(), &Limits::default()).unwrap();
+    let mut rows = PngDecodeRows::new(bytes.as_slice(), &Limits::default()).unwrap();
     assert_eq!(rows.size(), (16, 40));
     assert_eq!(rows.progress(), 0.0);
     let mut seen = Vec::new();
@@ -276,7 +276,7 @@ fn png_rows_take_one_call_per_row_and_report_progress() {
 #[test]
 fn png_rows_share_their_bytes_without_copying_them() {
     let bytes = std::sync::Arc::new(encode(&synth(20, 20, ChannelLayout::Rgba, SampleType::U8, 3, 0.2), Format::Png, &EncodeOptions::default()).unwrap());
-    let mut rows = PngRows::new(SharedBytes(bytes.clone()), &Limits::default()).unwrap();
+    let mut rows = PngDecodeRows::new(SharedBytes(bytes.clone()), &Limits::default()).unwrap();
     let img = rows.step(&mut || true).unwrap().unwrap();
     assert_eq!(img, decode(&bytes).unwrap());
     drop(rows);
