@@ -402,6 +402,9 @@ impl PhotocraftApp {
     /// `None` when the save went to a background job (#2017), which finishes it in
     /// [`jobs_ui::tick`].
     pub(crate) fn write_document(&mut self, path: String, settings: &ExportSettings, copy: bool) -> Result<Option<(String, Vec<String>)>, String> {
+        if let Some(st) = self.session.active() {
+            ensure_memory_to_save(&st.doc, &path)?;
+        }
         if self.background_jobs
             && let Some(save) = self.services.save_file.clone()
         {
@@ -678,4 +681,13 @@ impl PhotocraftApp {
         }
         f
     }
+}
+
+/// Refuses a save that won't fit in memory, before any encoding starts (#10024): on the web a
+/// failed allocation aborts the module and the unsaved document is lost with it. The document
+/// stays open and unchanged, and the message says how to free memory.
+pub(crate) fn ensure_memory_to_save(doc: &photocraft_engine::doc::Document, path: &str) -> Result<(), String> {
+    let name = file_open::display_name(path);
+    photocraft_engine::memory_gate::ensure_for_save(&format!("save \u{201c}{name}\u{201d}"), photocraft_io::estimate_export_bytes(doc, path))
+        .map_err(|e| e.to_string())
 }

@@ -45,6 +45,7 @@ mod channel_map;
 pub mod comps_map;
 pub mod doc_path;
 pub mod effects_map;
+pub mod export_estimate;
 pub mod exr_parts;
 mod flat;
 mod gradient_bake;
@@ -77,6 +78,7 @@ pub mod vector_map;
 mod xcf;
 pub mod xml;
 
+pub use export_estimate::estimate_export_bytes;
 use photocraft_codecs::{CodecError, EncodeOptions};
 pub use photocraft_codecs::{DdsCompression, DdsOptions, DpxBits};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent};

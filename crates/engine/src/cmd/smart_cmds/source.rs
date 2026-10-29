@@ -212,6 +212,7 @@ pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<S
     if let Some(img) = cache_get(&key) {
         return Ok(img);
     }
+    crate::memory_gate::ensure(&format!("render the smart object \u{201c}{file_name}\u{201d}"), crate::memory_gate::smart_render_need(bytes))?;
     let doc = decode_source(file_name, bytes)?;
     let buf = photocraft_compose::flatten(&doc);
     let img = SourceImage { surface: Arc::new(source_surface(&doc, &buf, fmt)?), bounds: doc.bounds() };
