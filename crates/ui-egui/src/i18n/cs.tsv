@@ -312,6 +312,7 @@
 	Layer…	Vrstva…
 	Group…	Skupina…
 	Group from Layers…	Skupina z vrstev…
+	New Group from Layers…	Nová skupina z vrstev…
 	Artboard…	Kreslicí plocha…
 	Artboard from Group…	Kreslicí plocha ze skupiny…
 	Artboard from Layers…	Kreslicí plocha z vrstev…
@@ -1966,7 +1967,7 @@
 	Full size tip	Hrot v plné velikosti
 	Gamut warning color	Barva upozornění na gamut
 	Gamut warning opacity	Krytí upozornění na gamut
-	Generator enabled	Generátor zapnut
+	Enable Generator	Zapnout generátor
 	Gif	GIF
 	Glossy	Lesklý
 	Grid color	Barva mřížky
@@ -3618,6 +3619,9 @@ curves	Smooth	Vyhladit
 	Clear History	Vymazat historii
 	New Snapshot…	Nový snímek…
 	History Options…	Volby historie…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Povolit nelineární historii
+	Make Layer Visibility Changes Undoable	Umožnit vrácení změn viditelnosti vrstev
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Táhněte (laso) nebo klikejte na body (mnohoúhelník) · {add} přidat · {sub} odečíst
 	The current gradient (pick one in Window › Gradients)	Aktuální přechod (vyberte v Okno › Přechody)
 # Canvas context menus, Channels panel menu, Layer Style blending page (labels rendered through a variable).
@@ -3860,6 +3864,33 @@ navigator	Zoom	Zvětšení
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
+	Show Favorite Fonts	Zobrazit oblíbená písma
+	No favorite fonts yet: click the star beside a font to add it.	Zatím žádná oblíbená písma: přidejte písmo kliknutím na hvězdičku vedle něj.
+	Favorite fonts	Oblíbená písma
+	Add to Favorites	Přidat do oblíbených
+	Remove from Favorites	Odebrat z oblíbených
+	Show All Fonts	Zobrazit všechna písma
+	All Classes	Všechny třídy
+	Blackletter	Lomená písma
+	Decorative	Dekorativní
+	Font preview:	Náhled písma:
+	Handwritten	Ručně psaná
+	Hide Font Classes	Skrýt třídy písem
+	Hide Styles	Skrýt řezy
+	Monospace	Neproporcionální
+	No fonts match these filters.	Filtrům neodpovídají žádná písma.
+	No similar fonts: the current font doesn't say what it looks like.	Žádná podobná písma: u aktuálního písma chybí popis vzhledu.
+	OpenType font	Písmo OpenType
+	Sans Serif	Bezpatková
+	Script	Skriptová
+	Serif	Patková
+	Show Font Classes	Zobrazit třídy písem
+	Show Similar Fonts	Zobrazit podobná písma
+	Show Styles	Zobrazit řezy
+	Show Variable Fonts	Zobrazit variabilní písma
+	Slab Serif	Slabová patková
+	TrueType font	Písmo TrueType
+	Variable font	Variabilní písmo
 	Calibration	Kalibrace
 	Red Primary	Červená základní
 	Green Primary	Zelená základní
@@ -4169,6 +4200,20 @@ cameraRaw	Dehaze	Odstranění oparu
 	Not rendered: this adjustment ({key}) is kept as imported.	Nevykresleno: tato úprava ({key}) je ponechána tak, jak byla importována.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Podle barev
+	Decontaminate Colors	Dekontaminovat barvy
+	Edge Detection	Detekce okraje
+	Global Refinements	Globální upřesnění
+	High Quality Preview	Náhled ve vysoké kvalitě
+	Object Aware	Podle objektů
+	Real-Time Refinement	Upřesnění v reálném čase
+	Refine Edge Brush Tool	Nástroj štětec pro upřesnění okraje
+	Refine Hair	Upřesnit vlasy
+	Refine Mode	Režim upřesnění
+	Remember Settings	Zapamatovat nastavení
+	View Mode	Režim zobrazení
+	Object Aware needs a segmentation model, which isn't available yet	Režim Podle objektů vyžaduje segmentační model, který zatím není k dispozici
+	Refine Hair needs hair detection, which isn't available yet	Upřesnit vlasy vyžaduje detekci vlasů, která zatím není k dispozici
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Krychle odstínu
 	Brightness Cube	Krychle jasu
@@ -4186,6 +4231,8 @@ cameraRaw	Dehaze	Odstranění oparu
 	Grayscale Ramp	Přechod stupňů šedi
 	Current Colors	Aktuální barvy
 	Make Ramp Web Safe	Omezit pruh na webové barvy
+	Select and Mask was closed: its document is no longer the active one	Vybrat a maskovat bylo zavřeno: jeho dokument již není aktivní
+	Select and Mask was closed: another layer was selected	Vybrat a maskovat bylo zavřeno: byla vybrána jiná vrstva
 # Art History Brush (#213).
 	Art History Brush	Štětec umělecké historie
 	Art History Brush Tool	Nástroj štětec umělecké historie
@@ -4201,3 +4248,6 @@ cameraRaw	Dehaze	Odstranění oparu
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Poměr stran
+	Font size presets	Předvolby velikosti písma
+	Leading presets	Předvolby prokladu
+	Tracking presets	Předvolby prostrkání

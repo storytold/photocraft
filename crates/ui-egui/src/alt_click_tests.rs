@@ -112,9 +112,7 @@ fn alt_click_with_the_brush_samples_the_foreground() {
 }
 
 /// Alt-click sampling respects the canvas view transform without changing document pixels.
-
 #[test]
-
 fn mixer_alt_click_samples_the_tip_through_zoomed_rotated_canvas_input() {
     for (zoom, rotation) in [(0.5, 0.0), (1.0, 0.0), (2.0, 30.0)] {
         let mut app = two_colours();
@@ -149,9 +147,7 @@ fn mixer_alt_click_samples_the_tip_through_zoomed_rotated_canvas_input() {
 }
 
 /// Native pointer release commits the shown mixer result before restoring a spring-loaded tool.
-
 #[test]
-
 fn mixer_raw_drag_commits_live_pixels_before_a_spring_tool_returns() {
     for spring in [false, true] {
         let mut app = two_colours();

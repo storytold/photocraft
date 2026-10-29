@@ -73,9 +73,9 @@ assess() {
 # `stapler validate` asks Apple's CloudKit service too, which sometimes drops the connection
 # (error 68) though the ticket is there.
 validate_staple() {
-  local attempt
+  local target="$1" attempt
   for attempt in 1 2 3 4 5; do
-    xcrun stapler validate "$1" && return 0
+    xcrun stapler validate "$target" && return 0
     [[ "$attempt" = 5 ]] || sleep $((attempt * 20))
   done
   return 1

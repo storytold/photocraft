@@ -294,6 +294,7 @@
 	Layer…	레이어…
 	Group…	그룹…
 	Group from Layers…	레이어로 그룹 만들기…
+	New Group from Layers…	레이어에서 새 그룹…
 	Artboard…	아트보드…
 	Artboard from Group…	그룹으로 아트보드 만들기…
 	Artboard from Layers…	레이어로 아트보드 만들기…
@@ -1938,7 +1939,7 @@
 	Full size tip	전체 크기 브러시 끝
 	Gamut warning color	색상 범위 경고 색상
 	Gamut warning opacity	색상 범위 경고 불투명도
-	Generator enabled	생성기 활성화
+	Enable Generator	생성기 활성화
 	Gif	GIF
 	Glossy	광택
 	Grid color	격자 색상
@@ -3379,6 +3380,9 @@ curves	Smooth	매끄럽게
 	Clear History	작업 내역 지우기
 	New Snapshot…	새 스냅샷…
 	History Options…	작업 내역 옵션…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	비선형 작업 내역 허용
+	Make Layer Visibility Changes Undoable	레이어 표시 여부 변경을 실행 취소할 수 있게 하기
 # Print dialog (#2697)
 	Emulsion Down	감광면 아래로
 	Functions	기능
@@ -3451,6 +3455,33 @@ curves	Smooth	매끄럽게
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
+	Show Favorite Fonts	즐겨찾는 글꼴 표시
+	No favorite fonts yet: click the star beside a font to add it.	아직 즐겨찾는 글꼴이 없습니다. 글꼴 옆의 별을 클릭하여 추가하세요.
+	Favorite fonts	즐겨찾는 글꼴
+	Add to Favorites	즐겨찾기에 추가
+	Remove from Favorites	즐겨찾기에서 제거
+	Show All Fonts	모든 글꼴 표시
+	All Classes	모든 분류
+	Blackletter	블랙레터
+	Decorative	장식
+	Font preview:	글꼴 미리 보기:
+	Handwritten	손글씨
+	Hide Font Classes	글꼴 분류 숨기기
+	Hide Styles	스타일 숨기기
+	Monospace	고정폭
+	No fonts match these filters.	이 필터와 일치하는 글꼴이 없습니다.
+	No similar fonts: the current font doesn't say what it looks like.	비슷한 글꼴 없음: 현재 글꼴에 모양 정보가 없습니다.
+	OpenType font	OpenType 글꼴
+	Sans Serif	산세리프
+	Script	스크립트
+	Serif	세리프
+	Show Font Classes	글꼴 분류 표시
+	Show Similar Fonts	비슷한 글꼴 표시
+	Show Styles	스타일 표시
+	Show Variable Fonts	가변 글꼴 표시
+	Slab Serif	슬래브 세리프
+	TrueType font	TrueType 글꼴
+	Variable font	가변 글꼴
 	Calibration	보정
 	Red Primary	빨강 원색
 	Green Primary	녹색 원색
@@ -3635,6 +3666,21 @@ curves	Smooth	매끄럽게
 	Not rendered: this adjustment ({key}) is kept as imported.	렌더링되지 않음: 이 조정({key})은 가져온 상태 그대로 유지됩니다.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	선택 영역 지우기
+	Color Aware	색상 인식
+	Decontaminate Colors	색상 정화
+	Edge Detection	가장자리 감지
+	Global Refinements	전역 다듬기
+	High Quality Preview	고품질 미리 보기
+	Object Aware	개체 인식
+	Real-Time Refinement	실시간 다듬기
+	Refine Edge Brush Tool	가장자리 다듬기 브러시 도구
+	Refine Hair	머리카락 다듬기
+	Refine Mode	다듬기 모드
+	Remember Settings	설정 기억
+	View Mode	보기 모드
+	Object Aware needs a segmentation model, which isn't available yet	개체 인식에는 분할 모델이 필요하지만 아직 사용할 수 없습니다
+	Refine Hair needs hair detection, which isn't available yet	머리카락 다듬기에는 머리카락 감지가 필요하지만 아직 사용할 수 없습니다
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	색조 큐브
 	Brightness Cube	밝기 큐브
@@ -3652,6 +3698,8 @@ curves	Smooth	매끄럽게
 	Grayscale Ramp	회색 음영 램프
 	Current Colors	현재 색상
 	Make Ramp Web Safe	램프를 웹 안전 색상으로 만들기
+	Select and Mask was closed: its document is no longer the active one	선택 및 마스크가 닫혔습니다: 해당 문서가 더 이상 활성 문서가 아닙니다
+	Select and Mask was closed: another layer was selected	선택 및 마스크가 닫혔습니다: 다른 레이어가 선택되었습니다
 # Art History Brush (#213).
 	Art History Brush	아트 히스토리 브러시
 	Art History Brush Tool	아트 히스토리 브러시 도구
@@ -3670,3 +3718,6 @@ curves	Smooth	매끄럽게
 	Category	카테고리
 	Target	대상
 	Units	단위
+	Font size presets	글꼴 크기 사전 설정
+	Leading presets	행간 사전 설정
+	Tracking presets	자간 사전 설정

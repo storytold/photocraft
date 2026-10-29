@@ -424,6 +424,29 @@ mod shapes {
     }
 
     #[test]
+    fn artistic_text_reads_its_characters_runs_and_anchor() {
+        let glyphs = F::Obj(tag(b"Glyp"), vec![(tag(b"Utf8"), F::Str("Hi".into()))]);
+        let run = F::Obj(tag(b"Item"), vec![]);
+        let attributes = F::Obj(tag(b"GAtt"), vec![(tag(b"Runs"), F::Objs(tag(b"Runs"), vec![vec![(tag(b"Indx"), F::I32(2)), (tag(b"Item"), run)]]))]);
+        let block = vec![(tag(b"Glyp"), glyphs), (tag(b"GAtt"), attributes)];
+        let text = F::Def(
+            100,
+            vec![tag(b"TxtA")],
+            vec![
+                (tag(b"TxtH"), F::Obj(tag(b"ArFr"), vec![(tag(b"FrmB"), F::F64s(vec![0.0, 0.0, 100.0, 50.0]))])),
+                (tag(b"StSt"), F::Obj(tag(b"StSt"), vec![(tag(b"Blok"), F::Objs(tag(b"Blok"), vec![block]))])),
+            ],
+        );
+        let document = read(vec![text], 100);
+        let Kind::Text(t) = &document.spreads[0].nodes[0].kind else { panic!("expected text") };
+        assert_eq!(t.runs.len(), 1);
+        assert_eq!(t.runs[0].text, "Hi");
+        assert_eq!(t.align, crate::model::Align::Left);
+        assert_eq!(t.anchor, Point { x: 0.0, y: 0.0 });
+        assert!(t.frame.is_none());
+    }
+
+    #[test]
     fn pie_angles_with_huge_finite_values_do_not_loop_or_emit_nonfinite_points() {
         let document = read(vec![shape(100, b"ShPi", vec![(tag(b"AngS"), F::F64(1.0e308)), (tag(b"AngE"), F::F64(-1.0e308))])], 100);
         for subpath in &path(&document).subpaths {

@@ -307,6 +307,7 @@
 	Layer…	レイヤー…
 	Group…	グループ…
 	Group from Layers…	レイヤーからグループ…
+	New Group from Layers…	レイヤーから新規グループ…
 	Artboard…	アートボード…
 	Artboard from Group…	グループからアートボード…
 	Artboard from Layers…	レイヤーからアートボード…
@@ -1950,7 +1951,7 @@
 	Full size tip	実寸の先端
 	Gamut warning color	色域外警告の色
 	Gamut warning opacity	色域外警告の不透明度
-	Generator enabled	自動生成を有効にする
+	Enable Generator	自動生成を有効にする
 	Gif	GIF
 	Glossy	光沢
 	Grid color	グリッドの色
@@ -3774,6 +3775,9 @@ curves	Smooth	スムーズ
 # History panel menu (#2966)
 	New Snapshot…	新規スナップショット…
 	History Options…	ヒストリーオプション…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	非線形のヒストリーを許可
+	Make Layer Visibility Changes Undoable	レイヤーの表示/非表示の変更を取り消し可能にする
 # Print dialog (#2697)
 	Emulsion Down	乳剤面を下
 	Functions	機能
@@ -3927,6 +3931,33 @@ curves	Smooth	スムーズ
 	Reset All Locked Settings	ロックされた設定をすべて初期化
 	Copy Texture to Other Tools	テクスチャを他のツールにコピー
 	ICO is limited to 256 × 256 pixels	ICO は 256 × 256 ピクセルまでです
+	Show Favorite Fonts	お気に入りのフォントを表示
+	No favorite fonts yet: click the star beside a font to add it.	お気に入りのフォントはまだありません。フォントの横の星をクリックして追加してください。
+	Favorite fonts	お気に入りのフォント
+	Add to Favorites	お気に入りに追加
+	Remove from Favorites	お気に入りから削除
+	Show All Fonts	すべてのフォントを表示
+	All Classes	すべての分類
+	Blackletter	ブラックレター
+	Decorative	装飾
+	Font preview:	フォントのプレビュー:
+	Handwritten	手書き
+	Hide Font Classes	フォントの分類を隠す
+	Hide Styles	スタイルを隠す
+	Monospace	等幅
+	No fonts match these filters.	このフィルターに一致するフォントはありません。
+	No similar fonts: the current font doesn't say what it looks like.	類似フォントはありません。現在のフォントは外観の情報を持っていません。
+	OpenType font	OpenType フォント
+	Sans Serif	サンセリフ
+	Script	スクリプト
+	Serif	セリフ
+	Show Font Classes	フォントの分類を表示
+	Show Similar Fonts	類似フォントを表示
+	Show Styles	スタイルを表示
+	Show Variable Fonts	バリアブルフォントを表示
+	Slab Serif	スラブセリフ
+	TrueType font	TrueType フォント
+	Variable font	バリアブルフォント
 	Calibration	キャリブレーション
 	Red Primary	レッド原色
 	Green Primary	グリーン原色
@@ -4103,6 +4134,21 @@ curves	Smooth	スムーズ
 	Not rendered: this adjustment ({key}) is kept as imported.	レンダリングされません: この調整（{key}）はインポートされたまま保持されます。
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	選択範囲をクリア
+	Color Aware	カラー認識
+	Decontaminate Colors	不要なカラーの除去
+	Edge Detection	エッジの検出
+	Global Refinements	グローバル調整
+	High Quality Preview	高品質プレビュー
+	Object Aware	オブジェクト認識
+	Real-Time Refinement	リアルタイム調整
+	Refine Edge Brush Tool	境界線調整ブラシツール
+	Refine Hair	髪の毛を調整
+	Refine Mode	調整モード
+	Remember Settings	設定を保存
+	View Mode	表示モード
+	Object Aware needs a segmentation model, which isn't available yet	オブジェクト認識にはセグメンテーションモデルが必要ですが、まだ利用できません
+	Refine Hair needs hair detection, which isn't available yet	髪の毛を調整には髪の毛の検出が必要ですが、まだ利用できません
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	色相キューブ
 	Brightness Cube	明るさキューブ
@@ -4119,6 +4165,8 @@ curves	Smooth	スムーズ
 	Grayscale Ramp	グレースケールランプ
 	Current Colors	現在のカラー
 	Make Ramp Web Safe	ランプを Web セーフにする
+	Select and Mask was closed: its document is no longer the active one	「選択とマスク」を閉じました: 対象のドキュメントがアクティブではなくなりました
+	Select and Mask was closed: another layer was selected	「選択とマスク」を閉じました: 別のレイヤーが選択されました
 # Art History Brush (#213).
 	Art History Brush Tool	アートヒストリーブラシツール
 	Tight Short	タイト・ショート
@@ -4130,3 +4178,6 @@ curves	Smooth	スムーズ
 	Tight Curl	タイトカール
 	Loose Curl	ルーズカール
 	Stylized dabs from a history state	履歴状態から様式化したダブを描きます
+	Font size presets	フォントサイズのプリセット
+	Leading presets	行送りのプリセット
+	Tracking presets	トラッキングのプリセット
