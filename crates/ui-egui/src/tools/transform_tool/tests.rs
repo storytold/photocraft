@@ -325,16 +325,11 @@ fn type_into_bar_field(n: usize, text: &str) -> TransformSession {
 /// The transform bar over the test box, after `setup` (e.g. picking the W/H unit). Tall enough
 /// for the fields' unit menu to open below the bar unscrolled.
 fn bar_harness(setup: impl FnOnce(&mut PhotocraftApp)) -> egui_kittest::Harness<'static, PhotocraftApp> {
-    bar_harness_of(setup, 900.0)
-}
-
-/// [`bar_harness`] on a bar `width` points wide.
-fn bar_harness_of(setup: impl FnOnce(&mut PhotocraftApp), width: f32) -> egui_kittest::Harness<'static, PhotocraftApp> {
     use egui_kittest::Harness;
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.ui.transform = Some(session());
     setup(&mut app);
-    let mut h = Harness::builder().with_size(vec2(width, 360.0)).build_ui_state(
+    let mut h = Harness::builder().with_size(vec2(900.0, 360.0)).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
                 return;
@@ -350,13 +345,8 @@ fn bar_harness_of(setup: impl FnOnce(&mut PhotocraftApp), width: f32) -> egui_ki
 
 /// [`type_into_bar_field`] after `setup`.
 fn type_into_bar_field_with(setup: impl FnOnce(&mut PhotocraftApp), n: usize, text: &str) -> TransformSession {
-    type_into_bar_field_in(setup, 900.0, n, text)
-}
-
-/// [`type_into_bar_field_with`] on a bar `width` points wide.
-fn type_into_bar_field_in(setup: impl FnOnce(&mut PhotocraftApp), width: f32, n: usize, text: &str) -> TransformSession {
     use egui_kittest::kittest::Queryable;
-    let mut h = bar_harness_of(setup, width);
+    let mut h = bar_harness(setup);
     h.get_all_by_role(egui::accesskit::Role::SpinButton).nth(n).unwrap().click();
     h.run();
     for c in text.chars() {
@@ -3673,75 +3663,78 @@ fn the_warp_menu_lists_cylinder_after_the_presets_except_on_type() {
     assert!(on_type.contains(&WarpStyle::None) && on_type.contains(&WarpStyle::Arc));
 }
 
-/// The cylinder the menu starts with fits the box: silhouettes on its sides, the top edge on its
-/// top, the front of the lower ellipse at its bottom, half wrapped round.
+/// The cylinder the menu starts with, as the reference starts it: its four corners on the box,
+/// both curves half the half axis deep (a quarter of the width), so the lower one hangs below
+/// the box, and half wrapped round.
 #[test]
-fn the_warp_menus_cylinder_fits_the_box() {
+fn the_warp_menus_cylinder_starts_on_the_box_corners() {
     let b = [8.0, 8.0, 32.0, 32.0];
     let w = cylinder_default(b).unwrap();
     assert_eq!(w.style, WarpStyle::Cylinder);
     let v = cylinder_values(&w).unwrap();
-    assert_eq!([v[0], v[2], v[3]], [8.0, 32.0, 8.0], "silhouettes on the sides, top edge on the top: {v:?}");
-    assert!((v[1] + v[5] * 12.0 - 32.0).abs() < 1e-9, "the lower ellipse's front reaches the bottom: {v:?}");
-    assert_eq!(v[6], 0.5);
+    assert_eq!(v, [8.0, 32.0, 32.0, 8.0, 0.5, 0.5, 0.5]);
     let cb = w.mesh.as_ref().unwrap().control_bounds();
     assert!(cb[0] >= 8.0 - 1e-9 && cb[2] <= 32.0 + 1e-9 && cb[1] >= 8.0 - 1e-9, "{cb:?}");
-    // The mesh's bottom is the lower ellipse's front, a hair past the box (Photoshop's shape).
-    assert!((cb[3] - 32.0).abs() < 0.5, "{cb:?}");
-    // A wide, thin box takes a shallower cylinder: the bulge stays within a quarter of its height.
-    let v = cylinder_values(&cylinder_default([0.0, 0.0, 400.0, 20.0]).unwrap()).unwrap();
-    assert!((v[4] * 200.0 - 5.0).abs() < 1e-9, "{v:?}");
+    assert!(cb[3] > 32.0 + 5.0, "the lower curve's front hangs about 6 px below the box: {cb:?}");
     assert!(cylinder_default([0.0, 0.0, 0.0, 20.0]).is_none() && cylinder_default([0.0, 0.0, 20.0, 0.0]).is_none());
     assert!(cylinder_values(&Warp::preset(WarpStyle::Arc, 50.0, b)).is_none(), "only a cylinder has values");
 }
 
+/// Five handles, as the reference shows: the top-right and bottom-left corners, the front of
+/// each curve, and the wrap handle near the middle, which slides with the wrap.
 #[test]
-fn cylinder_handles_sit_on_its_corners_sides_and_ellipses() {
+fn cylinder_handles_are_two_corners_two_curve_fronts_and_the_wrap() {
     let v = [10.0, 40.0, 60.0, 10.0, 0.3, 0.2, 0.5];
     let h = cylinder_handles(&v);
-    assert_eq!(h[0], ([10.0, 10.0], CylinderHandle::Corner(0)));
-    assert_eq!(h[2], ([60.0, 40.0], CylinderHandle::Corner(2)));
-    assert_eq!(h[4], ([10.0, 25.0], CylinderHandle::Side(0)));
-    assert_eq!(h[6], ([35.0, 10.0 + 0.3 * 25.0], CylinderHandle::Depth(0)));
-    assert_eq!(h[7], ([35.0, 40.0 + 0.2 * 25.0], CylinderHandle::Depth(1)));
-    // The depth handles sit where the mesh puts the front of each ellipse.
+    assert_eq!(h[0], ([60.0, 10.0], CylinderHandle::Corner(1)));
+    assert_eq!(h[1], ([10.0, 40.0], CylinderHandle::Corner(3)));
+    assert_eq!(h[2], ([35.0, 17.5], CylinderHandle::Depth(0)));
+    assert_eq!(h[3], ([35.0, 45.0], CylinderHandle::Depth(1)));
+    assert_eq!(h[4], ([35.0, 31.25], CylinderHandle::Wrap), "between the curves' fronts, centred at wrap 0.5");
+    let wrapped = cylinder_handles(&[10.0, 40.0, 60.0, 10.0, 0.3, 0.2, 1.0]);
+    assert_eq!(wrapped[4].0, [35.0 + 25.0 * 0.25, 31.25], "a quarter of the half axis right at wrap 1");
+    assert!(!h.iter().any(|(_, k)| matches!(k, CylinderHandle::Corner(0 | 2))), "no top-left or bottom-right corner");
+    // The depth handles sit where the mesh puts the front of each curve.
     let w = Warp::cylinder(&v, [10.0, 10.0, 60.0, 40.0]).unwrap();
     let m = w.mesh.clone().unwrap();
     let front_top = m.eval(0.5, 0.0);
-    assert!((front_top[0] - h[6].0[0]).abs() < 1e-9 && (front_top[1] - h[6].0[1]).abs() < 1e-9, "{front_top:?} vs {:?}", h[6].0);
-    let front_bottom = m.eval(0.5, 1.0);
-    assert!((front_bottom[1] - h[7].0[1]).abs() < 1e-9, "{front_bottom:?} vs {:?}", h[7].0);
+    assert!((front_top[0] - 35.0).abs() < 1e-9 && (front_top[1] - 17.5).abs() < 1e-9, "{front_top:?}");
+    assert!((m.eval(0.5, 1.0)[1] - 45.0).abs() < 1e-9);
     // A press: the nearest handle within reach, else the surface, else nothing.
-    assert_eq!(cylinder_hit(&w, [11.0, 11.0], 3.0), Some(CylinderHandle::Corner(0)));
-    assert_eq!(cylinder_hit(&w, [60.5, 25.0], 3.0), Some(CylinderHandle::Side(1)));
+    assert_eq!(cylinder_hit(&w, [60.5, 10.5], 3.0), Some(CylinderHandle::Corner(1)));
+    assert_eq!(cylinder_hit(&w, [10.5, 39.0], 3.0), Some(CylinderHandle::Corner(3)));
     assert_eq!(cylinder_hit(&w, [35.0, 18.0], 3.0), Some(CylinderHandle::Depth(0)));
-    assert_eq!(cylinder_hit(&w, [35.0, 28.0], 3.0), Some(CylinderHandle::Surface));
+    assert_eq!(cylinder_hit(&w, [35.0, 31.0], 3.0), Some(CylinderHandle::Wrap));
+    assert_eq!(cylinder_hit(&w, [11.0, 11.0], 3.0), Some(CylinderHandle::Surface), "the top-left corner is just surface");
+    assert_eq!(cylinder_hit(&w, [20.0, 30.0], 3.0), Some(CylinderHandle::Surface));
     assert_eq!(cylinder_hit(&w, [90.0, 90.0], 3.0), None);
-    assert_eq!(cylinder_hit(&Warp::custom(m, w.bounds), [11.0, 11.0], 3.0), None, "only a cylinder has these handles");
+    assert_eq!(cylinder_hit(&Warp::custom(m, w.bounds), [60.5, 10.5], 3.0), None, "only a cylinder has these handles");
 }
 
 #[test]
 fn cylinder_drags_set_its_values_and_keep_them_sound() {
     let v = [10.0, 40.0, 60.0, 10.0, 0.3, 0.3, 0.5];
-    // A corner takes its silhouette and its edge along; a side only its silhouette.
-    assert_eq!(cylinder_dragged(v, CylinderHandle::Corner(0), [2.0, 3.0]), [12.0, 40.0, 60.0, 13.0, 0.3, 0.3, 0.5]);
-    assert_eq!(cylinder_dragged(v, CylinderHandle::Corner(2), [-2.0, 3.0]), [10.0, 43.0, 58.0, 10.0, 0.3, 0.3, 0.5]);
-    assert_eq!(cylinder_dragged(v, CylinderHandle::Side(1), [5.0, 9.0]), [10.0, 40.0, 65.0, 10.0, 0.3, 0.3, 0.5]);
+    // A corner takes its silhouette and its edge along; the opposite corner stays put.
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Corner(1), [2.0, 3.0]), [10.0, 40.0, 62.0, 13.0, 0.3, 0.3, 0.5]);
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Corner(3), [-2.0, 3.0]), [8.0, 43.0, 60.0, 10.0, 0.3, 0.3, 0.5]);
     // A depth handle follows the pointer: 5 px down on a 25 px half axis is 0.2 deeper.
     let d = cylinder_dragged(v, CylinderHandle::Depth(0), [0.0, 5.0]);
     assert!((d[4] - 0.5).abs() < 1e-9 && d[5] == 0.3, "{d:?}");
     assert_eq!(cylinder_dragged(v, CylinderHandle::Depth(1), [0.0, -100.0])[5], -1.0, "clamped to the half axis");
-    // The surface turns the wrap: the cylinder's width is the whole range, clamped to it.
-    let d = cylinder_dragged(v, CylinderHandle::Surface, [12.5, 0.0]);
+    // The wrap handle follows the pointer over its travel (a quarter of the half axis each way).
+    let d = cylinder_dragged(v, CylinderHandle::Wrap, [3.125, 0.0]);
     assert!((d[6] - 0.75).abs() < 1e-9, "{d:?}");
-    assert_eq!(cylinder_dragged(v, CylinderHandle::Surface, [-80.0, 0.0])[6], 0.0);
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Wrap, [-80.0, 0.0])[6], 0.0);
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Wrap, [80.0, 0.0])[6], 1.0);
+    // The surface moves the whole cylinder.
+    assert_eq!(cylinder_dragged(v, CylinderHandle::Surface, [5.0, -4.0]), [15.0, 36.0, 65.0, 6.0, 0.3, 0.3, 0.5]);
     // The silhouettes never cross: the one dragged stops just short of the other.
-    let d = cylinder_dragged(v, CylinderHandle::Side(0), [70.0, 0.0]);
+    let d = cylinder_dragged(v, CylinderHandle::Corner(3), [70.0, 0.0]);
     assert_eq!([d[0], d[2]], [59.0, 60.0]);
     let d = cylinder_dragged(v, CylinderHandle::Corner(1), [-80.0, 0.0]);
     assert_eq!([d[0], d[2]], [10.0, 11.0]);
     // Whatever the drag, the result is a cylinder the geometry accepts.
-    for h in [CylinderHandle::Corner(3), CylinderHandle::Side(0), CylinderHandle::Depth(1), CylinderHandle::Surface] {
+    for h in [CylinderHandle::Corner(1), CylinderHandle::Corner(3), CylinderHandle::Depth(1), CylinderHandle::Wrap, CylinderHandle::Surface] {
         assert!(Warp::cylinder(&cylinder_dragged(v, h, [-70.0, 30.0]), [10.0, 10.0, 60.0, 40.0]).is_some(), "{h:?}");
     }
 }
@@ -3760,8 +3753,8 @@ fn warp_mode_drags_a_cylinders_handles_and_commits_it_as_a_cylinder() {
     track_steps(&mut app, &ctx);
     let v0 = cylinder_of(&app);
     let mods = egui::Modifiers::NONE;
-    // The upper ellipse's depth handle, dragged 3 px down (a quarter of the 12 px half axis).
-    let top = cylinder_handles(&v0)[6].0;
+    // The upper curve's front handle, dragged 3 px down (a quarter of the 12 px half axis).
+    let top = cylinder_handles(&v0)[2].0;
     warp_pointer(&mut app, ToolEvent::Down { x: top[0], y: top[1], pressure: 1.0 }, 2.0, mods);
     assert!(matches!(app.transform_preview.as_ref().unwrap().warp_drag, Some(WarpDrag::Cylinder { handle: CylinderHandle::Depth(0), .. })));
     warp_pointer(&mut app, ToolEvent::Move { x: top[0], y: top[1] + 3.0, pressure: 1.0 }, 2.0, mods);
@@ -3775,11 +3768,22 @@ fn warp_mode_drags_a_cylinders_handles_and_commits_it_as_a_cylinder() {
     warp_pointer(&mut app, ToolEvent::Up { x: top[0], y: top[1] + 3.0 }, 2.0, mods);
     assert!(app.transform_preview.as_ref().unwrap().warp_drag.is_none());
     track_steps(&mut app, &ctx);
-    // A drag across the surface turns the contents: 6 px of a 24 px wide cylinder is a quarter.
-    warp_pointer(&mut app, ToolEvent::Down { x: 20.0, y: 26.0, pressure: 1.0 }, 2.0, mods);
-    assert!(matches!(app.transform_preview.as_ref().unwrap().warp_drag, Some(WarpDrag::Cylinder { handle: CylinderHandle::Surface, .. })));
-    warp_pointer(&mut app, ToolEvent::Up { x: 26.0, y: 26.0 }, 2.0, mods);
+    // The wrap handle, dragged 1.5 px right: a quarter of its 6 px travel.
+    let wrap = cylinder_handles(&cylinder_of(&app))[4].0;
+    warp_pointer(&mut app, ToolEvent::Down { x: wrap[0], y: wrap[1], pressure: 1.0 }, 2.0, mods);
+    assert!(matches!(app.transform_preview.as_ref().unwrap().warp_drag, Some(WarpDrag::Cylinder { handle: CylinderHandle::Wrap, .. })));
+    warp_pointer(&mut app, ToolEvent::Up { x: wrap[0] + 1.5, y: wrap[1] }, 2.0, mods);
     assert!((cylinder_of(&app)[6] - 0.75).abs() < 1e-9, "{:?}", cylinder_of(&app));
+    assert!((cylinder_handles(&cylinder_of(&app))[4].0[0] - (wrap[0] + 1.5)).abs() < 1e-9, "the wrap handle followed the pointer");
+    track_steps(&mut app, &ctx);
+    // A drag on the surface moves the whole cylinder.
+    let before = cylinder_of(&app);
+    warp_pointer(&mut app, ToolEvent::Down { x: 14.0, y: 20.0, pressure: 1.0 }, 2.0, mods);
+    assert!(matches!(app.transform_preview.as_ref().unwrap().warp_drag, Some(WarpDrag::Cylinder { handle: CylinderHandle::Surface, .. })));
+    warp_pointer(&mut app, ToolEvent::Up { x: 18.0, y: 22.0 }, 2.0, mods);
+    let moved = cylinder_of(&app);
+    assert_eq!([moved[0] - before[0], moved[2] - before[2], moved[1] - before[1], moved[3] - before[3]], [4.0, 4.0, 2.0, 2.0], "{moved:?}");
+    assert_eq!(&moved[4..], &before[4..], "the shape is unchanged");
     track_steps(&mut app, &ctx);
     // A press off the cylinder grabs nothing.
     warp_pointer(&mut app, ToolEvent::Down { x: 60.0, y: 60.0, pressure: 1.0 }, 2.0, mods);
@@ -3787,7 +3791,9 @@ fn warp_mode_drags_a_cylinders_handles_and_commits_it_as_a_cylinder() {
     warp_pointer(&mut app, ToolEvent::Up { x: 50.0, y: 50.0 }, 2.0, mods);
     // Undo and Redo step through the drags inside the session.
     let _ = intercept(&mut app, "edit.undo");
-    assert!((cylinder_of(&app)[6] - 0.5).abs() < 1e-9, "undo: {:?}", cylinder_of(&app));
+    assert_eq!(cylinder_of(&app), before, "undo takes back the move");
+    let _ = intercept(&mut app, "edit.undo");
+    assert!((cylinder_of(&app)[6] - 0.5).abs() < 1e-9, "undo takes back the wrap: {:?}", cylinder_of(&app));
     let _ = intercept(&mut app, "edit.redo");
     assert!((cylinder_of(&app)[6] - 0.75).abs() < 1e-9, "redo: {:?}", cylinder_of(&app));
     let v = cylinder_of(&app);
@@ -3832,7 +3838,7 @@ fn a_cylinder_commits_the_wrapped_pixels() {
     };
     assert!(alpha(20, 20) > 0.99, "the front is covered: {}", alpha(20, 20));
     assert!(alpha(9, 20) < 0.01 && alpha(31, 20) < 0.01, "nothing outside the silhouettes: {} {}", alpha(9, 20), alpha(31, 20));
-    // The upper ellipse's front dips below the top edge at the centre, so the top row there is clear.
+    // The upper curve's front dips below the top edge at the centre, so the top row there is clear.
     assert!(alpha(20, 9) < 0.2, "the top bows down in the middle: {}", alpha(20, 9));
     assert!(alpha(13, 9) > 0.5, "and stays up at the silhouettes: {}", alpha(13, 9));
 }
@@ -3842,55 +3848,42 @@ fn cylinder_cursors_point_along_their_handles() {
     let w = Warp::cylinder(&[10.0, 40.0, 60.0, 10.0, 0.3, 0.3, 0.5], [10.0, 10.0, 60.0, 40.0]).unwrap();
     let screen = egui::Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
     let level = ViewXform { rect: screen, zoom: 1.0, center: [35.0, 25.0], flip: false, rotation: 0.0, aspect: 1.0 };
-    assert_eq!(cylinder_cursor(&w, [10.0, 10.0], 3.0, &level), CursorIcon::ResizeNwSe);
     assert_eq!(cylinder_cursor(&w, [60.0, 10.0], 3.0, &level), CursorIcon::ResizeNeSw);
-    assert_eq!(cylinder_cursor(&w, [10.0, 25.0], 3.0, &level), CursorIcon::ResizeHorizontal);
+    assert_eq!(cylinder_cursor(&w, [10.0, 40.0], 3.0, &level), CursorIcon::ResizeNeSw);
     assert_eq!(cylinder_cursor(&w, [35.0, 17.5], 3.0, &level), CursorIcon::ResizeVertical);
-    assert_eq!(cylinder_cursor(&w, [35.0, 30.0], 3.0, &level), CursorIcon::Grab);
+    let wrap = cylinder_handles(&cylinder_values(&w).unwrap())[4].0;
+    assert_eq!(cylinder_cursor(&w, wrap, 3.0, &level), CursorIcon::ResizeHorizontal);
+    assert_eq!(cylinder_cursor(&w, [20.0, 30.0], 3.0, &level), CursorIcon::Move);
     assert_eq!(cylinder_cursor(&w, [90.0, 90.0], 3.0, &level), CursorIcon::Default);
     // The arrows turn with the view.
     let turned = ViewXform { rotation: 90.0, ..level };
-    assert_eq!(cylinder_cursor(&w, [10.0, 25.0], 3.0, &turned), CursorIcon::ResizeVertical);
+    assert_eq!(cylinder_cursor(&w, wrap, 3.0, &turned), CursorIcon::ResizeVertical);
     assert_eq!(cylinder_cursor(&w, [35.0, 17.5], 3.0, &turned), CursorIcon::ResizeHorizontal);
-    // Through the transform tool's cursor, a cylinder is never a split: its surface is a hand.
+    // Through the transform tool's cursor, a cylinder is never a split: its surface moves it.
     let mut app = app_with_square(128, photocraft_geom::Rect::new(8, 8, 104, 104));
     begin_warp(&mut app, &egui::Context::default()).unwrap();
     let b = app.ui.transform.as_ref().unwrap().rect;
     app.ui.transform.as_mut().unwrap().warp = Some(cylinder_default(b).unwrap());
     app.transform_preview.as_mut().unwrap().split_tool = Some(SplitTool::Cross);
     let xf = ViewXform { center: [56.0, 56.0], ..level };
-    assert_eq!(cursor(&app, &xf, [56.0, 56.0], true), Some(CursorIcon::Grab));
+    assert_eq!(cursor(&app, &xf, [30.0, 56.0], true), Some(CursorIcon::Move));
 }
 
-/// The Warp bar shows a cylinder's fields in place of Bend, H and V, greys Split and Grid, and
-/// typing a field rebuilds the cylinder.
+/// The Warp bar keeps Bend, H and V for a cylinder, greyed like Split, Grid and the orientation
+/// switch: its handles are its only controls, as in the reference.
 #[test]
-fn the_warp_bar_shows_a_cylinders_fields() {
+fn the_warp_bar_greys_its_fields_for_a_cylinder() {
     use egui_kittest::kittest::{NodeT, Queryable};
-    let as_cylinder = |app: &mut PhotocraftApp| {
+    let h = bar_harness(|app| {
         let t = app.ui.transform.as_mut().unwrap();
         t.warp = Some(cylinder_default(t.rect).unwrap());
-    };
-    // The cylinder's fields overrun the 900 px bar of the other tests, whose clipped fields sit
-    // under the action buttons (a click on the third one would press Reset).
-    const WIDE: f32 = 1400.0;
-    let h = bar_harness_of(as_cylinder, WIDE);
-    for name in ["Top depth", "Bottom depth", "Wrap"] {
-        assert!(!h.get_by_label(name).accesskit_node().is_disabled(), "{name} is live");
+    });
+    // A field's caption and the field itself share the label: every match is greyed.
+    for name in ["Bend:", "H:", "V:", "Split Warp Crosswise", "Change warp orientation"] {
+        let nodes: Vec<_> = h.get_all_by_label(name).collect();
+        assert!(!nodes.is_empty() && nodes.iter().all(|n| n.accesskit_node().is_disabled()), "{name} is greyed");
     }
-    assert!(h.query_by_label("Bend:").is_none(), "no bend field");
-    for name in ["Split Warp Crosswise", "Change warp orientation"] {
-        assert!(h.get_by_label(name).accesskit_node().is_disabled(), "{name} is greyed: a cylinder has no splits and is horizontal");
-    }
-    // Wrap is the third numeric field: 80 % wraps the contents further round.
-    let t = type_into_bar_field_in(as_cylinder, WIDE, 2, "80");
-    let v = cylinder_values(t.warp.as_ref().unwrap()).unwrap();
-    assert!((v[6] - 0.8).abs() < 1e-6, "{v:?}");
-    // Top depth is the first: 40 % of the half axis.
-    let t = type_into_bar_field_in(as_cylinder, WIDE, 0, "40");
-    let v = cylinder_values(t.warp.as_ref().unwrap()).unwrap();
-    assert!((v[4] - 0.4).abs() < 1e-6, "{v:?}");
-    assert_eq!(t.warp.as_ref().unwrap().mesh, Warp::cylinder(&v, t.rect).unwrap().mesh, "the mesh follows the typed value");
+    assert!(h.query_by_label("Top depth").is_none() && h.query_by_label("Wrap").is_none(), "no cylinder fields");
 }
 
 #[test]
