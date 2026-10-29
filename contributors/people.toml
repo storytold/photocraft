@@ -315,3 +315,7 @@ sync_github_name = false
 [people.davidvhk]
 real_name = "David Vanhoucke"
 sync_github_name = true
+
+[people.tomgardenart]
+display_name = "Nostella"
+sync_github_name = false
