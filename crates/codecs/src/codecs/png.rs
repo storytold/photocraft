@@ -27,73 +27,219 @@ pub(crate) fn dpi_of_ppm(ppm: u32) -> f32 {
 }
 
 pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Image, CodecError> {
-    let mut input = Cursor::new(bytes);
-    let mut decoder = png::Decoder::new_with_limits(&mut input, png::Limits { bytes: limits.alloc_usize() });
-    decoder.set_transformations(png::Transformations::EXPAND);
-    // png's lazy text get_text() inflates without consulting its allocation limit.
-    // Read text separately below, without retaining compressed copies in the decoder.
-    decoder.set_ignore_text_chunk(true);
-    {
-        let info = decoder.read_header_info().map_err(map_png_err)?;
-        let (w, h) = info.size();
-        // Worst case output: 4 channels x 16 bit.
-        limits.check_bytes(w, h, 8)?;
-        // zlib never beats 1032:1; refuse a file too small for the declared image before the
-        // output buffer exists. Measured on the stored samples (before palette/bit expansion).
-        let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(info.bits_per_pixel() as u64).div_ceil(8);
-        Limits::check_plausible(stored, bytes.len(), 1100)?;
+    PngRows::new(bytes, limits)?.step(&mut || true)?.ok_or_else(|| err("the decoder stopped before the image ended"))
+}
+
+/// PNG bytes shared between the decoder and whoever else keeps them (a placed file's embedded
+/// source): cloning shares the buffer.
+#[derive(Debug, Clone)]
+pub struct SharedBytes(pub std::sync::Arc<Vec<u8>>);
+
+impl AsRef<[u8]> for SharedBytes {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_slice()
     }
-    let mut reader = decoder.read_info().map_err(map_png_err)?;
-    // APNG: the IDAT image is the first frame, or an extra default image when no fcTL precedes it.
-    let images = reader.info().animation_control.map_or(1, |a| u64::from(a.num_frames) + u64::from(reader.info().frame_control.is_none()));
-    let (color, depth) = reader.output_color_type();
-    let layout = match color {
-        png::ColorType::Grayscale => ChannelLayout::Gray,
-        png::ColorType::GrayscaleAlpha => ChannelLayout::GrayA,
-        png::ColorType::Rgb => ChannelLayout::Rgb,
-        png::ColorType::Rgba => ChannelLayout::Rgba,
-        png::ColorType::Indexed => return Err(err("palette was not expanded")),
-    };
-    let sample = match depth {
-        png::BitDepth::Eight => SampleType::U8,
-        png::BitDepth::Sixteen => SampleType::U16,
-        d => return Err(err(format!("unexpected output bit depth {d:?}"))),
-    };
-    let size = reader.output_buffer_size().ok_or_else(|| err("image too large"))?;
-    let mut buf = alloc_zeroed::<u8>(size)?;
-    let out = reader.next_frame(&mut buf).map_err(map_png_err)?;
-    buf.truncate(out.buffer_size());
-    // Collect ancillary chunks after IDAT. Tolerate malformed tails once pixels
-    // are complete, but never swallow an allocation-limit failure.
-    if let Err(e @ png::DecodingError::LimitsExceeded) = reader.finish() {
-        return Err(map_png_err(e));
+}
+
+/// The input of a [`PngRows`] decoder: a cursor that also tells where the reader stopped, which
+/// the text chunks after the image are read up to.
+struct Tracked<B> {
+    cursor: Cursor<B>,
+    at: std::sync::Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl<B: AsRef<[u8]>> Tracked<B> {
+    fn sync(&self) {
+        self.at.store(self.cursor.position(), std::sync::atomic::Ordering::Relaxed);
     }
-    if sample == SampleType::U16 {
-        for c in buf.as_chunks_mut::<2>().0 {
-            let v = u16::from_be_bytes([c[0], c[1]]);
-            c.copy_from_slice(&v.to_ne_bytes());
+}
+
+impl<B: AsRef<[u8]>> std::io::Read for Tracked<B> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let n = self.cursor.read(buf)?;
+        self.sync();
+        Ok(n)
+    }
+}
+
+impl<B: AsRef<[u8]>> std::io::BufRead for Tracked<B> {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.cursor.fill_buf()
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.cursor.consume(amt);
+        self.sync();
+    }
+}
+
+impl<B: AsRef<[u8]>> std::io::Seek for Tracked<B> {
+    fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
+        let at = self.cursor.seek(pos)?;
+        self.sync();
+        Ok(at)
+    }
+}
+
+/// A PNG decoded in resumable steps, for a caller that must not block for the whole image (the
+/// web build, which has no threads): [`PngRows::step`] decodes rows until the caller says to
+/// stop, and returns the [`Image`] once the last row and the chunks after it are read. [`decode`]
+/// drives one to the end, so the two give the same image.
+///
+/// An interlaced (Adam7) PNG decodes in a single step: its passes land at stride positions all
+/// over the image, so no row is final before the last pass.
+pub struct PngRows<B: AsRef<[u8]>> {
+    reader: png::Reader<Tracked<B>>,
+    at: std::sync::Arc<std::sync::atomic::AtomicU64>,
+    bytes: B,
+    limits: Limits,
+    buf: Vec<u8>,
+    layout: ChannelLayout,
+    sample: SampleType,
+    /// The image's size (the first frame's, for an animation) and bytes per output row.
+    width: u32,
+    height: usize,
+    line: usize,
+    rows: usize,
+    interlaced: bool,
+    images: u64,
+    done: bool,
+}
+
+impl<B: AsRef<[u8]> + Clone> PngRows<B> {
+    /// Reads the header and refuses what [`decode`] refuses before any pixel is decoded: sizes
+    /// past `limits`, and a file too small for the image it declares.
+    pub fn new(bytes: B, limits: &Limits) -> Result<Self, CodecError> {
+        let at = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        let input = Tracked { cursor: Cursor::new(bytes.clone()), at: at.clone() };
+        let mut decoder = png::Decoder::new_with_limits(input, png::Limits { bytes: limits.alloc_usize() });
+        decoder.set_transformations(png::Transformations::EXPAND);
+        // png's lazy text get_text() inflates without consulting its allocation limit.
+        // Read text separately below, without retaining compressed copies in the decoder.
+        decoder.set_ignore_text_chunk(true);
+        {
+            let info = decoder.read_header_info().map_err(map_png_err)?;
+            let (w, h) = info.size();
+            // Worst case output: 4 channels x 16 bit.
+            limits.check_bytes(w, h, 8)?;
+            // zlib never beats 1032:1; refuse a file too small for the declared image before the
+            // output buffer exists. Measured on the stored samples (before palette/bit expansion).
+            let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(info.bits_per_pixel() as u64).div_ceil(8);
+            Limits::check_plausible(stored, bytes.as_ref().len(), 1100)?;
         }
+        let reader = decoder.read_info().map_err(map_png_err)?;
+        // APNG: the IDAT image is the first frame, or an extra default image when no fcTL precedes it.
+        let images = reader.info().animation_control.map_or(1, |a| u64::from(a.num_frames) + u64::from(reader.info().frame_control.is_none()));
+        let (color, depth) = reader.output_color_type();
+        let layout = match color {
+            png::ColorType::Grayscale => ChannelLayout::Gray,
+            png::ColorType::GrayscaleAlpha => ChannelLayout::GrayA,
+            png::ColorType::Rgb => ChannelLayout::Rgb,
+            png::ColorType::Rgba => ChannelLayout::Rgba,
+            png::ColorType::Indexed => return Err(err("palette was not expanded")),
+        };
+        let sample = match depth {
+            png::BitDepth::Eight => SampleType::U8,
+            png::BitDepth::Sixteen => SampleType::U16,
+            d => return Err(err(format!("unexpected output bit depth {d:?}"))),
+        };
+        let size = reader.output_buffer_size().ok_or_else(|| err("image too large"))?;
+        let buf = alloc_zeroed::<u8>(size)?;
+        // The frame the pixels are of: an fcTL before the IDAT overrides the header's size.
+        let info = reader.info();
+        let (width, height) = info.frame_control.map_or_else(|| info.size(), |f| (f.width, f.height));
+        let line = reader.output_line_size(width).ok_or_else(|| err("image too large"))?;
+        let height = usize::try_from(height).map_err(|_| err("image too large"))?;
+        if width == 0 || height == 0 {
+            return Err(err("the image is empty"));
+        }
+        let interlaced = info.interlaced;
+        Ok(Self { reader, at, bytes, limits: *limits, buf, layout, sample, width, height, line, rows: 0, interlaced, images, done: false })
     }
-    let info = reader.info();
-    let mut img = Image::from_raw(out.width, out.height, layout, sample, buf)?;
-    img.icc = info.icc_profile.as_ref().map(|c| c.to_vec());
-    let mut meta = Metadata { exif: info.exif_metadata.as_ref().map(|c| c.to_vec()), ..Default::default() };
-    if let Some(d) = info.pixel_dims
-        && d.unit == png::Unit::Meter
-        && d.xppu > 0
-        && d.yppu > 0
-    {
-        meta.dpi = Some((dpi_of_ppm(d.xppu), dpi_of_ppm(d.yppu)));
+
+    /// The image's width and height in pixels.
+    pub fn size(&self) -> (u32, u32) {
+        (self.width, u32::try_from(self.height).unwrap_or(u32::MAX))
     }
-    drop(reader);
-    let end = usize::try_from(input.position()).map_err(|_| err("invalid PNG reader position"))?;
-    let consumed = bytes.get(..end).ok_or_else(|| err("invalid PNG reader position"))?;
-    read_text_metadata(consumed, limits.alloc_usize(), &mut meta)?;
-    img.meta = meta;
-    if images > 1 {
-        img.warnings.push(DecodeWarning::MoreFrames { total: u32::try_from(images).ok() });
+
+    /// How much of the image is decoded, `0.0..=1.0`.
+    pub fn progress(&self) -> f32 {
+        if self.done { 1.0 } else { self.rows as f32 / self.height.max(1) as f32 }
     }
-    Ok(img)
+
+    /// Decodes at least one row (the whole image if it is interlaced), then goes on while `more()`
+    /// returns true. `Some` once the image is complete, after which the decoder is spent.
+    pub fn step(&mut self, more: &mut dyn FnMut() -> bool) -> Result<Option<Image>, CodecError> {
+        if self.done {
+            return Err(err("the image was already decoded"));
+        }
+        if self.interlaced {
+            let out = self.reader.next_frame(&mut self.buf).map_err(map_png_err)?;
+            self.buf.truncate(out.buffer_size());
+            self.rows = self.height;
+            if self.sample == SampleType::U16 {
+                to_native_endian(&mut self.buf);
+            }
+        }
+        while self.rows < self.height {
+            let at = self.rows.checked_mul(self.line).ok_or_else(|| err("image too large"))?;
+            let row = at.checked_add(self.line).and_then(|end| self.buf.get_mut(at..end)).ok_or_else(|| err("the image data is longer than the image"))?;
+            self.reader.read_row(row).map_err(map_png_err)?.ok_or_else(|| err("the image data ended early"))?;
+            if self.sample == SampleType::U16 {
+                to_native_endian(row);
+            }
+            self.rows += 1;
+            if self.rows < self.height && !more() {
+                return Ok(None);
+            }
+        }
+        if !self.interlaced {
+            // No row is left: this reads on to the end of the image data.
+            if self.reader.read_row(&mut []).map_err(map_png_err)?.is_some() {
+                return Err(err("the image has more rows than its header declares"));
+            }
+            self.buf.truncate(self.line.saturating_mul(self.height));
+        }
+        self.done = true;
+        self.finish().map(Some)
+    }
+
+    /// The chunks after the image, and the image itself.
+    fn finish(&mut self) -> Result<Image, CodecError> {
+        // Collect ancillary chunks after IDAT. Tolerate malformed tails once pixels
+        // are complete, but never swallow an allocation-limit failure.
+        if let Err(e @ png::DecodingError::LimitsExceeded) = self.reader.finish() {
+            return Err(map_png_err(e));
+        }
+        let height = u32::try_from(self.height).map_err(|_| err("image too large"))?;
+        let mut img = Image::from_raw(self.width, height, self.layout, self.sample, std::mem::take(&mut self.buf))?;
+        let info = self.reader.info();
+        img.icc = info.icc_profile.as_ref().map(|c| c.to_vec());
+        let mut meta = Metadata { exif: info.exif_metadata.as_ref().map(|c| c.to_vec()), ..Default::default() };
+        if let Some(d) = info.pixel_dims
+            && d.unit == png::Unit::Meter
+            && d.xppu > 0
+            && d.yppu > 0
+        {
+            meta.dpi = Some((dpi_of_ppm(d.xppu), dpi_of_ppm(d.yppu)));
+        }
+        let end = usize::try_from(self.at.load(std::sync::atomic::Ordering::Relaxed)).map_err(|_| err("invalid PNG reader position"))?;
+        let consumed = self.bytes.as_ref().get(..end).ok_or_else(|| err("invalid PNG reader position"))?;
+        read_text_metadata(consumed, self.limits.alloc_usize(), &mut meta)?;
+        img.meta = meta;
+        if self.images > 1 {
+            img.warnings.push(DecodeWarning::MoreFrames { total: u32::try_from(self.images).ok() });
+        }
+        Ok(img)
+    }
+}
+
+/// 16-bit samples from the file's big-endian bytes to the machine's.
+fn to_native_endian(samples: &mut [u8]) {
+    for c in samples.as_chunks_mut::<2>().0 {
+        let v = u16::from_be_bytes([c[0], c[1]]);
+        c.copy_from_slice(&v.to_ne_bytes());
+    }
 }
 
 /// The colour table of a palette PNG (`PLTE`) and the one entry its `tRNS` makes transparent.
@@ -974,6 +1120,65 @@ mod parallel_tests {
                 // The oracle decoder agrees.
                 let o = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).unwrap();
                 assert_eq!((o.width(), o.height()), (w, h));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod rows_tests {
+    use super::*;
+
+    /// The pixels `decode` read before it was built on [`PngRows`]: the whole image in one
+    /// `next_frame` call, then the byte order of 16-bit samples.
+    fn one_call(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), CodecError> {
+        let mut decoder = png::Decoder::new_with_limits(Cursor::new(bytes), png::Limits { bytes: Limits::default().alloc_usize() });
+        decoder.set_transformations(png::Transformations::EXPAND);
+        decoder.set_ignore_text_chunk(true);
+        let mut reader = decoder.read_info().map_err(map_png_err)?;
+        let mut buf = vec![0u8; reader.output_buffer_size().ok_or_else(|| err("image too large"))?];
+        let out = reader.next_frame(&mut buf).map_err(map_png_err)?;
+        buf.truncate(out.buffer_size());
+        if reader.output_color_type().1 == png::BitDepth::Sixteen {
+            to_native_endian(&mut buf);
+        }
+        Ok((out.width, out.height, buf))
+    }
+
+    fn image(w: u32, h: u32, layout: ChannelLayout, sample: SampleType) -> Image {
+        let len = w as usize * h as usize * layout.channels() * sample.bytes();
+        let data: Vec<u8> = (0..len).map(|i| (i.wrapping_mul(2_654_435_761) >> 13) as u8).collect();
+        Image::from_raw(w, h, layout, sample, data).unwrap()
+    }
+
+    #[test]
+    fn rows_give_the_pixels_of_a_single_call() {
+        for layout in [ChannelLayout::Gray, ChannelLayout::GrayA, ChannelLayout::Rgb, ChannelLayout::Rgba] {
+            for sample in [SampleType::U8, SampleType::U16] {
+                for interlaced in [false, true] {
+                    let img = image(33, 21, layout, sample);
+                    let opts = EncodeOptions { png_interlaced: interlaced, ..Default::default() };
+                    let bytes = crate::encode(&img, Format::Png, &opts).unwrap();
+                    let (w, h, pixels) = one_call(&bytes).unwrap();
+                    for per_call in [1usize, 7, usize::MAX] {
+                        let mut rows = PngRows::new(bytes.as_slice(), &Limits::default()).unwrap();
+                        let mut left = per_call;
+                        let got = loop {
+                            left -= 1;
+                            let mut more = || {
+                                left = left.saturating_sub(1);
+                                left > 0
+                            };
+                            if let Some(img) = rows.step(&mut more).unwrap() {
+                                break img;
+                            }
+                            left = per_call;
+                        };
+                        assert_eq!((got.width(), got.height()), (w, h));
+                        assert_eq!(got.data(), pixels.as_slice(), "{layout:?} {sample:?} interlaced={interlaced} per_call={per_call}");
+                        assert_eq!(got.data(), img.data());
+                    }
+                }
             }
         }
     }
