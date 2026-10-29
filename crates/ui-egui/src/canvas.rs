@@ -1691,6 +1691,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
             }
         }
         app.ui.views[idx] = (*view).clone();
+        crate::move_lock::overlay(app, painter, rect);
     }
 }
 

@@ -154,10 +154,10 @@ mod tests {
         assert!(app.layer_box.is_none());
     }
 
-    /// #4058: a drag that starts on the locked Background draws the layer marquee. It does not
-    /// open the move-lock dialog, and releasing selects the unlocked layer the box touches.
+    /// A locked Background hit warns instead of silently changing the drag into
+    /// a layer-selection marquee. Empty-space box selection is tested separately.
     #[test]
-    fn a_drag_on_the_locked_background_selects_instead_of_erroring() {
+    fn a_drag_on_the_locked_background_shows_overlay_instead_of_a_marquee() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 80, "height": 60})).unwrap();
         app.sync_views();
@@ -171,6 +171,8 @@ mod tests {
         drag(&mut app, [8.0, 8.0], [50.0, 20.0], egui::Modifiers::NONE);
         assert!(app.ui.dialogs.iter().all(|d| d.kind != crate::state::DialogKind::Error), "no lock dialog");
         assert!(app.layer_box.is_none());
-        assert_eq!(app.session.active().unwrap().selected_layers(), vec![paint]);
+        assert_ne!(app.session.active().unwrap().selected_layers(), vec![paint]);
+        assert!(app.move_lock_until.is_some());
+        assert!(app.session.active().unwrap().doc.selection.is_none());
     }
 }
