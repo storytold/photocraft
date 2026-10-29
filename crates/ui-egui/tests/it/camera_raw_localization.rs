@@ -4,6 +4,7 @@ use egui_kittest::{Harness, kittest::Queryable};
 use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui, control, i18n, theme::ThemeKind};
 use serde_json::json;
 
+/// Checks profile labels in the plain catalog used by dropdowns, guarding against context-only translations.
 #[test]
 fn raw_balance_menu_in_italian_labels_match_the_plain_ui_catalog() {
     let lang = i18n::Lang::from_code("it").unwrap();
@@ -23,6 +24,8 @@ fn raw_balance_menu_in_italian_labels_match_the_plain_ui_catalog() {
     }
 }
 
+/// Drives the Italian RAW menus through Tungsten and Monochrome selections.
+/// An optional output directory captures each native menu state for visual review.
 #[test]
 fn raw_balance_menu_in_italian() {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};

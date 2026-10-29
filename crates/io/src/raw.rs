@@ -93,6 +93,7 @@ pub enum RawWhiteBalance {
 impl RawWhiteBalance {
     pub const ALL: [Self; 8] = [Self::AsShot, Self::Auto, Self::Daylight, Self::Cloudy, Self::Shade, Self::Tungsten, Self::Fluorescent, Self::Flash];
 
+    /// Stable preset identifier used by the RAW dialog and control channel; UI labels are localized separately.
     pub fn id(self) -> &'static str {
         match self {
             Self::AsShot => "asShot",
@@ -106,10 +107,12 @@ impl RawWhiteBalance {
         }
     }
 
+    /// Parses a registered RAW balance identifier without accepting arbitrary illuminant names.
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|v| v.id() == id)
     }
 
+    /// Maps a preset to a decoder choice, using CIE xy white points for fixed illuminants.
     fn choice(self) -> WhiteBalance {
         match self {
             Self::AsShot => WhiteBalance::AsShot,
@@ -122,6 +125,8 @@ impl RawWhiteBalance {
         }
     }
 
+    /// Prefers supported camera coefficients for fixed presets, falling back to the illuminant choice.
+    /// As Shot and Auto keep their normal decoder behavior.
     fn choice_from_file(self, bytes: &[u8]) -> WhiteBalance {
         use photocraft_raw::CameraWhiteBalance as Camera;
         let preset = match self {
@@ -409,6 +414,7 @@ fn jxl_preview_image(raw: &[u8], p: photocraft_raw::DecodedPreview) -> Result<Im
 mod tests {
     use super::*;
 
+    /// Checks identifier round-trips and physically valid chromaticities for every fixed illuminant.
     #[test]
     fn raw_balance_presets_have_stable_ids_and_physical_illuminants() {
         for preset in RawWhiteBalance::ALL {
@@ -466,6 +472,7 @@ mod tests {
         }
     }
 
+    /// Checks Canon preset precedence and confirms missing metadata, Auto and As Shot retain their fallback choices.
     #[test]
     fn camera_presets_take_precedence_without_changing_auto_or_missing_metadata() {
         use photocraft_raw::testgen::{TiffBuilder, Val};

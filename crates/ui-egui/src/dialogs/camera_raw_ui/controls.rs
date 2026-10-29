@@ -48,6 +48,8 @@ fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
     }
 }
 
+/// Accepts a new filter, an edited smart filter or the open-time RAW development.
+/// Acceptance waits only for background development that can replace this dialog's own RAW source.
 pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
     let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
     if raw_dialog_busy(app) {

@@ -445,6 +445,7 @@ fn lens_batch(s: &mut Session, p: &Value) -> Result<Value> {
 
 const LENS_DOC: &str = r##"{"profile":"none|auto|generic","focalLength":mm=0,"correctDistortion":bool=true,"correctVignette":bool=true,"correctCA":bool=true,"autoScale":bool=false,"distortion":-100..100=0,"redCyan":-100..100=0,"blueYellow":-100..100=0,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vertical":-100..100=0,"horizontal":-100..100=0,"angle":-180..180=0,"scale":50..150=100,"edge":"transparency|edgeExtension|black|white","straighten":[[x,y],[x,y]]?}"##;
 
+/// Registers lens corrections, distortion filters and Camera Raw with their command schemas and handlers.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -670,6 +671,7 @@ mod tests {
         assert!((p[0] - p[2]).abs() < 0.01, "{p:?}");
     }
 
+    /// Checks look rendering at 8-bit, 16-bit and float depths and verifies undo restores the source pixels.
     #[test]
     fn camera_raw_color_profiles_render_at_each_depth_and_undo() {
         use photocraft_algo::camera_raw::ColorProfile;

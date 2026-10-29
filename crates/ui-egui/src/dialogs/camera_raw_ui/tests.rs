@@ -526,6 +526,7 @@ fn a_raw_opens_and_redevelops_at_the_raw_defaults_resolution() {
     assert_eq!(app.session.active().unwrap().doc.resolution_dpi, 240.0, "automation open");
 }
 
+/// Checks Cancel closes an open-time RAW and the open-dialog preference is respected for later imports.
 #[test]
 fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
     let (mut app, dng) = raw_app();
@@ -1025,6 +1026,7 @@ fn save_and_load_settings_round_trip_through_xmp_files() {
     assert_eq!(app.camera_raw.as_ref().unwrap().params.clarity, 25.0);
 }
 
+/// Checks look changes retain slider values, reject unknown names atomically and support undo/redo.
 #[test]
 fn camera_raw_profiles_preserve_sliders_support_undo_and_reject_unknown_values() {
     let (mut app, ctx) = worker_app();
@@ -1044,6 +1046,8 @@ fn camera_raw_profiles_preserve_sliders_support_undo_and_reject_unknown_values()
     assert_eq!(app.camera_raw.as_ref().unwrap().params, kept);
 }
 
+/// Rebuilds presets from the source RAW while retaining controls and the selected look.
+/// Returning to As Shot restores the baseline; accepting an unchanged preset avoids redundant development.
 #[test]
 fn raw_balance_presets_rebuild_the_preview_preserve_sliders_and_commit_the_selected_balance() {
     let (mut app, bytes) = raw_app();
@@ -1089,6 +1093,7 @@ fn raw_balance_presets_rebuild_the_preview_preserve_sliders_and_commit_the_selec
     assert!(change_balance(&mut app, RawWhiteBalance::Auto).is_err(), "RGB filters do not silently approximate RAW presets");
 }
 
+/// Checks edits survive a background balance change and Cancel cannot reopen the closed RAW document.
 #[test]
 fn raw_balance_background_job_keeps_edits_and_can_be_cancelled() {
     let (mut app, bytes) = raw_app();

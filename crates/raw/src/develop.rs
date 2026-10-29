@@ -219,6 +219,7 @@ pub fn white_balance_multipliers(s: &Sensor, choice: WhiteBalance) -> Result<([f
     Ok((neutral.map(|v| 1.0 / v), warnings))
 }
 
+/// Rejects invalid crop bounds, sample counts and CFA layouts before development or white-balance calculations.
 fn validate_sensor(s: &Sensor) -> Result<()> {
     let c = s.crop;
     let samples = s.width.checked_mul(s.height).and_then(|n| n.checked_mul(s.samples));

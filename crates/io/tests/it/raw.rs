@@ -68,6 +68,7 @@ fn cr2_opens() {
     assert_eq!(r.document.depth, SampleType::U16);
 }
 
+/// Compares developed Canon pixels with explicit sensor gains, including relative temperature and tint.
 #[test]
 fn canon_fixed_balance_uses_camera_gains_before_relative_sliders() {
     use photocraft_io::raw::{RawTuning, RawWhiteBalance, import_raw_tuned};

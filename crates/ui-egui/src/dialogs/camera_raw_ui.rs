@@ -124,6 +124,7 @@ pub struct CameraRawDialog {
 }
 
 impl CameraRawDialog {
+    /// Exports dialog, RAW source, preview and histogram state for UI inspection and control-channel clients.
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],

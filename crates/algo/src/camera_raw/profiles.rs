@@ -19,6 +19,7 @@ pub enum ColorProfile {
 
 impl ColorProfile {
     pub const ALL: [Self; 6] = [Self::Standard, Self::Color, Self::Vivid, Self::Landscape, Self::Portrait, Self::Monochrome];
+    /// Stable serialized and control-channel identifier, independent of the localized UI label.
     pub fn id(self) -> &'static str {
         match self {
             Self::Standard => "standard",
@@ -29,9 +30,12 @@ impl ColorProfile {
             Self::Monochrome => "monochrome",
         }
     }
+    /// Parses an exact registered identifier; unknown or Adobe profile names are rejected.
     pub fn from_id(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|p| p.id() == id)
     }
+    /// Applies the original tone/chroma look to one display-encoded RGB pixel.
+    /// Standard is an exact identity; HDR luminance is not clipped by the look stage.
     pub(super) fn apply(self, c: [f32; 3]) -> [f32; 3] {
         if self == Self::Standard {
             return c;
@@ -65,6 +69,7 @@ impl ColorProfile {
 mod tests {
     use super::*;
     use crate::camera_raw::{CameraRaw, develop};
+    /// Exercises every look on normal, HDR and transparent pixels while preserving alpha and user controls.
     #[test]
     fn profiles_render_and_preserve_alpha_and_user_controls() {
         let source = [[0.25, 0.65, 0.85, 0.3], [0.7, 0.4, 0.2, 1.0], [2.0, 2.0, 2.0, 0.0]];
@@ -106,6 +111,7 @@ mod tests {
         }
     }
 
+    /// Older settings default to Standard; unknown profile names fail and explicit settings round-trip.
     #[test]
     fn old_settings_keep_standard_and_unknown_profiles_are_rejected() {
         let old: CameraRaw = serde_json::from_str("{\"exposure\":0.5}").unwrap();

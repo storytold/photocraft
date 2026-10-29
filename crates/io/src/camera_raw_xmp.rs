@@ -346,6 +346,7 @@ pub fn save(params: &CameraRaw) -> String {
 mod tests {
     use super::*;
 
+    /// Round-trips each look in the PhotoCraft XMP namespace and preserves settings when a look is unsupported.
     #[test]
     fn photocraft_profiles_round_trip_without_claiming_an_adobe_camera_profile() {
         for profile in ColorProfile::ALL {

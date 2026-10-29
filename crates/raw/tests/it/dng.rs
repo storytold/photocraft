@@ -29,6 +29,7 @@ fn identifies_dng() {
     assert!(!is_raw(b"\x89PNG\r\n\x1a\n"));
 }
 
+/// Checks calibrated illuminant gains, missing-calibration warnings and rejection of invalid white points.
 #[test]
 fn illuminant_balance_uses_camera_calibration_and_validates_white_points() {
     let bytes = DngSpec::cfa(16, 16, vec![5000; 256]).build();

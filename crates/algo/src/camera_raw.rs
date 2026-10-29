@@ -183,6 +183,7 @@ pub struct CameraRaw {
 }
 
 impl Default for CameraRaw {
+    /// Neutral controls and the Standard look preserve the existing Camera Raw rendering.
     fn default() -> Self {
         CameraRaw {
             profile: ColorProfile::Standard,

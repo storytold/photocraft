@@ -79,6 +79,7 @@ mod tests {
     use super::*;
     use crate::testgen::{TiffBuilder, Val};
 
+    /// Builds a minimal synthetic CR2 MakerNote with a SHORT or UNDEFINED ColorData payload.
     fn fixture(words: Vec<u16>, big_endian: bool, undefined: bool) -> Vec<u8> {
         let mut t = TiffBuilder { big_endian, ..Default::default() };
         let main = t.ifd(vec![]);
@@ -96,6 +97,7 @@ mod tests {
         t.build()
     }
 
+    /// Creates distinct synthetic version-14 RGGB entries so each preset offset can be checked independently.
     fn table() -> Vec<u16> {
         let mut words = vec![0; 168];
         words[0] = 14;
@@ -106,6 +108,7 @@ mod tests {
         words
     }
 
+    /// Checks each fixed Canon preset against its own coefficients across supported byte orders and payload types.
     #[test]
     fn fixed_presets_use_their_own_camera_coefficients() {
         for big_endian in [false, true] {
@@ -131,6 +134,7 @@ mod tests {
         }
     }
 
+    /// Rejects unsupported tables, truncated metadata and invalid gains rather than guessing camera coefficients.
     #[test]
     fn unsupported_and_bad_metadata_fall_back_without_guessing() {
         let preset = CameraWhiteBalance::Daylight;
