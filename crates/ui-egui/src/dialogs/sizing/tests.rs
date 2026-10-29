@@ -399,3 +399,53 @@ fn dimension_edit_between_resolution_edits_sets_a_new_print_size() {
     let doc = &h.state().session.active().unwrap().doc;
     assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(40, 20), 300.0));
 }
+
+#[test]
+fn resolution_edits_respect_the_maximum_pixel_dimension() {
+    use egui_kittest::kittest::Queryable;
+    for (original, expected, label) in [((200_000, 1), (300_000, 2), "300000 px × 2 px"), ((1, 200_000), (2, 300_000), "2 px × 300000 px")] {
+        let (mut h, id) = resolution_dialog(original, 72.0, "px", "nearest");
+        type_into(&mut h, 2, "144");
+        assert_eq!(num(&fields(&h), "resolution"), 108.0, "cap DPI before dimensions are clamped independently");
+        assert!(h.query_by_label(label).is_some());
+        type_into(&mut h, 2, "72");
+        let f = fields(&h);
+        assert_eq!((num(&f, "width").round(), num(&f, "height").round()), (f64::from(original.0), f64::from(original.1)));
+        type_into(&mut h, 2, "144");
+        crate::dialogs::confirm(h.state_mut(), id).unwrap();
+        let doc = &h.state().session.active().unwrap().doc;
+        assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(expected.0, expected.1), 108.0));
+    }
+}
+
+#[test]
+fn fractional_resolution_limit_survives_focus_changes() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, id) = resolution_dialog((200_001, 1), 72.0, "px", "nearest");
+    type_into(&mut h, 2, "144");
+    let limited = num(&fields(&h), "resolution");
+    assert!(limited > 107.99 && limited < 108.0);
+    let field = h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(2).unwrap().rect();
+    h.hover_at(field.center());
+    h.drag_at(field.center());
+    h.drop_at(field.center());
+    h.run_steps(2);
+    h.key_press(egui::Key::Tab);
+    h.run_steps(3);
+    assert!(h.query_by_label("300000 px × 1 px").is_some());
+    assert_eq!(num(&fields(&h), "resolution"), limited);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let doc = &h.state().session.active().unwrap().doc;
+    assert_eq!(doc.size, photocraft_doc::Size::new(300_000, 1));
+    assert_eq!(doc.resolution_dpi, limited as f32);
+}
+
+#[test]
+fn resolution_without_resampling_is_not_limited_by_pixel_size() {
+    let (mut h, id) = resolution_dialog((200_000, 1), 72.0, "px", "none");
+    type_into(&mut h, 2, "144");
+    assert_eq!(num(&fields(&h), "resolution"), 144.0);
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let doc = &h.state().session.active().unwrap().doc;
+    assert_eq!((doc.size, doc.resolution_dpi), (photocraft_doc::Size::new(200_000, 1), 144.0));
+}

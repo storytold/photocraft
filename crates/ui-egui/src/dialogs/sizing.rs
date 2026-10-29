@@ -10,6 +10,8 @@ use crate::PhotocraftApp;
 use crate::state::DialogKind;
 use crate::theme::Tokens;
 
+const MAX_PIXEL_DIMENSION: f64 = 300_000.0;
+
 const UNITS: [(&str, &str); 7] =
     [("px", "Pixels"), ("percent", "Percent"), ("in", "Inches"), ("cm", "Centimeters"), ("mm", "Millimeters"), ("pt", "Points"), ("pica", "Picas")];
 
@@ -190,7 +192,7 @@ fn dim_field(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, orig_key:
     // The engine's 300000 px limit in this unit (never below 30000), so a large document's size
     // isn't clamped when the field is drawn: egui clamps the shown value to the range, and the
     // field reports that as an edit (#4162).
-    let lim = if unit == "px" { 300000.0 } else { to_unit(300000.0, &unit, orig, res, ppi).max(30000.0) as f32 };
+    let lim = if unit == "px" { MAX_PIXEL_DIMENSION as f32 } else { to_unit(MAX_PIXEL_DIMENSION, &unit, orig, res, ppi).max(30000.0) as f32 };
     let range = -lim..=lim;
     // Each unit keeps its own precision: whole pixels, 3 places for inches, 2 for cm/mm/picas (#2434).
     // A typed unit (`2in` while in pixels) converts at the dialog's resolution.
@@ -299,7 +301,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         label(ui, tl!("Resolution:"), 90.0);
         let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
         if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).accessible_name(tl!("Resolution")).changed() {
-            let r = r.max(1.0) as f64;
+            let mut r = r.max(1.0) as f64;
             if !resampling {
                 // Without resampling the pixel count is fixed: physical size follows resolution.
                 f.insert("width".into(), json!(ow));
@@ -309,6 +311,10 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 // unit used to display dimensions.
                 let old = f.get("resolution").and_then(Value::as_f64).unwrap_or(num(f, "__origRes"));
                 if old > 0.0 && old.is_finite() {
+                    let longest = num(f, "width").max(num(f, "height"));
+                    if longest > 0.0 && longest.is_finite() {
+                        r = r.min(old * (MAX_PIXEL_DIMENSION / longest));
+                    }
                     for key in ["width", "height"] {
                         f.insert(key.into(), json!(num(f, key) * r / old));
                     }
