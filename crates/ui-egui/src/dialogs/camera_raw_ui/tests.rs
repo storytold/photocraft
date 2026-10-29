@@ -1134,6 +1134,71 @@ fn raw_balance_background_job_keeps_edits_and_can_be_cancelled() {
     assert!(app.session.documents().is_empty(), "a cancelled opening must stay closed");
 }
 
+/// A balance worker belongs to its RAW source, so closing another active document must not cancel it.
+#[test]
+fn raw_balance_background_job_survives_closing_another_active_document() {
+    let (mut app, bytes) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("balance.dng", &bytes).unwrap();
+    let raw = app.pending_raw_open.take().unwrap();
+    let source = raw.document;
+    open_raw(&mut app, &ctx, raw).unwrap();
+    app.camera_raw.as_mut().unwrap().params.exposure = 0.75;
+    // Another window can activate a document while the RAW dialog stays open.
+    app.session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let other = app.session.active().unwrap().doc.id;
+    let previous_active = app.session.active_index();
+    app.background_jobs = true;
+    let result = change_balance(&mut app, RawWhiteBalance::Cloudy).unwrap();
+    assert_eq!(result["pending"], true);
+    assert_eq!(app.session.active_index(), previous_active, "starting work must restore the active tab");
+    assert_eq!(app.session.active().unwrap().doc.id, other);
+    let job = app.raw_redevelop[0].job;
+    assert_eq!(app.session.job(job).unwrap().document, Some(source));
+    assert!(app.session.job_on(other).is_none());
+    // Do not poll first: closing the active document must leave the queued RAW result intact.
+    app.session.execute("file.close", json!({})).unwrap();
+    assert!(document_index(&app, other).is_none());
+    assert!(document_index(&app, source).is_some());
+    assert_eq!(app.session.job(job).unwrap().state, "running");
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.raw_redevelop.is_empty() && !app.session.has_jobs(), "the balance job never finished");
+    assert_eq!(app.session.jobs_with_recent().into_iter().find(|info| info.id == job).unwrap().state, "done");
+    let raw = app.pending_raw_open.take().unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let dialog = app.camera_raw.as_ref().unwrap();
+    assert_eq!(dialog.raw_open.as_ref().unwrap().balance, RawWhiteBalance::Cloudy);
+    assert_eq!(dialog.params.exposure, 0.75);
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(document_index(&app, source).is_none(), "the RAW baseline was replaced");
+}
+
+/// A stale RAW dialog must neither start a worker on another document nor change its active tab.
+#[test]
+fn raw_balance_background_job_rejects_a_closed_source_document() {
+    let (mut app, bytes) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("balance.dng", &bytes).unwrap();
+    let raw = app.pending_raw_open.take().unwrap();
+    let source = raw.document;
+    open_raw(&mut app, &ctx, raw).unwrap();
+    app.session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let other = app.session.active().unwrap().doc.id;
+    let index = document_index(&app, source).unwrap();
+    app.session.execute("file.close", json!({"document": index})).unwrap();
+    app.background_jobs = true;
+    assert_eq!(change_balance(&mut app, RawWhiteBalance::Cloudy).unwrap_err(), "the raw document was closed");
+    assert_eq!(app.session.active().unwrap().doc.id, other);
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(!app.session.has_jobs() && app.raw_redevelop.is_empty());
+}
+
 /// An unrelated RAW job must not prevent accepting a normal or smart filter.
 #[test]
 fn camera_raw_filter_commit_works_while_another_document_develops() {

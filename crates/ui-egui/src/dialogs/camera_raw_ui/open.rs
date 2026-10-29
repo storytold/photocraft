@@ -473,7 +473,15 @@ pub(super) fn change_balance(app: &mut PhotocraftApp, balance: RawWhiteBalance) 
     };
     let apply = move |s: &mut photocraft_engine::Session, (r, wb)| replace_raw_document(s, doc_id, r, wb);
     let started = if app.background_jobs {
-        app.session.start_job("cameraRaw.whiteBalance", json!({"whiteBalance": balance.id()}), &label, true, work, apply).map_err(|e| e.to_string())?
+        let previous_active = app.session.active_index();
+        let raw_index = document_index(app, doc_id).ok_or("the raw document was closed")?;
+        app.session.set_active(raw_index);
+        let started =
+            app.session.start_job("cameraRaw.whiteBalance", json!({"whiteBalance": balance.id()}), &label, true, work, apply).map_err(|e| e.to_string());
+        if let Some(index) = previous_active {
+            app.session.set_active(index);
+        }
+        started?
     } else {
         let v = work(&photocraft_engine::jobs::JobCtx::new()).and_then(|r| apply(&mut app.session, r)).map_err(|e| e.to_string())?;
         photocraft_engine::jobs::Started::Done(v)
