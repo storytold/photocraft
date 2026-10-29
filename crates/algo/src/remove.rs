@@ -56,32 +56,7 @@ pub fn close_loops(w: usize, h: usize, mask: &[bool]) -> Vec<bool> {
 
 /// `mask` grown by `r` cells (a square structuring element), in two separable passes.
 pub fn dilate(w: usize, h: usize, mask: &[bool], r: usize) -> Vec<bool> {
-    if r == 0 || mask.len() != w.saturating_mul(h) {
-        return mask.to_vec();
-    }
-    // A pass sets each cell when any cell within `r` along one axis is set (a running count).
-    let pass = |src: &[bool], horizontal: bool| -> Vec<bool> {
-        let (lines, len) = if horizontal { (h, w) } else { (w, h) };
-        let at = |line: usize, k: usize| if horizontal { line * w + k } else { k * w + line };
-        let mut out = vec![false; src.len()];
-        for line in 0..lines {
-            let mut count = 0usize;
-            for k in 0..len.min(r) {
-                count += usize::from(src[at(line, k)]);
-            }
-            for k in 0..len {
-                if k + r < len {
-                    count += usize::from(src[at(line, k + r)]);
-                }
-                if k > r {
-                    count -= usize::from(src[at(line, k - r - 1)]);
-                }
-                out[at(line, k)] = count > 0;
-            }
-        }
-        out
-    };
-    pass(&pass(mask, true), false)
+    crate::square_dilate::dilate_square(w, h, mask, r)
 }
 
 /// The largest chessboard distance from a hole cell to the nearest cell outside the hole (cells
