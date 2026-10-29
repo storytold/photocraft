@@ -23,6 +23,68 @@ fn clear_selection(s: &mut Session) {
     }
 }
 
+fn crisp_edge_fixture(selection: &str) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 12, "height": 12})).unwrap();
+    s.edit("pixel art", |doc, _| {
+        let pixels = doc.layers[0].surface_mut().unwrap();
+        pixels.fill_rect(Rect::new(0, 0, 12, 12), &[0.15, 0.1, 0.2, 1.0]);
+        pixels.fill_rect(Rect::new(2, 2, 8, 5), &[0.05, 0.2, 0.3, 1.0]);
+        pixels.fill_rect(Rect::new(2, 5, 5, 9), &[0.05, 0.2, 0.3, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    match selection {
+        "wand" => {
+            s.execute("select.magicWand", json!({"x": 3, "y": 3, "tolerance": 0})).unwrap();
+        }
+        "lasso" => {
+            s.execute("select.lasso", json!({"points": [[2.2, 2.2], [8.2, 2.2], [8.2, 5.2], [5.2, 5.2], [5.2, 9.2], [2.2, 9.2]], "antiAlias": false})).unwrap();
+        }
+        "marquee" => {
+            s.execute("select.rect", json!({"x": 2, "y": 2, "width": 6, "height": 3})).unwrap();
+            s.execute("select.rect", json!({"x": 2, "y": 5, "width": 3, "height": 4, "mode": "add"})).unwrap();
+        }
+        _ => panic!("unknown fixture"),
+    }
+    s
+}
+
+#[test]
+fn default_pixel_selections_and_fill_tools_keep_crisp_edges() {
+    for selection in ["wand", "lasso", "marquee"] {
+        for command in ["edit.fill", "paint.stroke", "paint.bucket"] {
+            let mut s = crisp_edge_fixture(selection);
+            let before = s.active().unwrap().doc.clone();
+            for y in 0..12 {
+                for x in 0..12 {
+                    let inside = (2..8).contains(&x) && (2..5).contains(&y) || (2..5).contains(&x) && (5..9).contains(&y);
+                    assert_eq!(coverage(&s, x, y), if inside { 1.0 } else { 0.0 }, "{selection}: coverage at ({x},{y})");
+                }
+            }
+            s.execute(command, json!({"x": 3, "y": 3, "tolerance": 0, "color": "#ff0000", "points": [[6, 6]], "size": 40, "brush": {"hardness": 1, "pressureSize": false, "pressureOpacity": false}})).unwrap();
+            let after = &s.active().unwrap().doc;
+            for y in 0..12 {
+                for x in 0..12 {
+                    let inside = (2..8).contains(&x) && (2..5).contains(&y) || (2..5).contains(&x) && (5..9).contains(&y);
+                    let want = if inside { [1.0, 0.0, 0.0, 1.0] } else { before.layers[0].surface().unwrap().rgba(x, y) };
+                    assert_eq!(after.layers[0].surface().unwrap().rgba(x, y), want, "{selection} / {command}: ({x},{y})");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn crisp_pixel_selection_smoothing_remains_an_explicit_choice() {
+    let mut s = crisp_edge_fixture("wand");
+    s.execute("select.magicWand", json!({"x": 3, "y": 3, "tolerance": 0, "antiAlias": true})).unwrap();
+    assert!(coverage(&s, 1, 1) > 0.0 && coverage(&s, 1, 1) < 0.5, "explicit smoothing still has its fringe");
+    let mut s = crisp_edge_fixture("marquee");
+    s.execute("select.modify.feather", json!({"radius": 1})).unwrap();
+    assert!(coverage(&s, 1, 2) > 0.0 && coverage(&s, 1, 2) < 1.0, "intentional feathering still works");
+}
+
 #[test]
 fn color_range_skin_tones_selects_skin_not_cream_and_refuses_detect_faces() {
     let mut s = session();

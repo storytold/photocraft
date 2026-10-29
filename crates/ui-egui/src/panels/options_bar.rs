@@ -377,7 +377,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             widgets::vline(ui, 22.0);
             opt_label(ui, tl!("Tolerance"));
             widgets::value_field(ui, &mut app.ui.tool_options.tolerance, 0.0..=255.0, "", 58.0);
-            widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
+            widgets::checkbox(ui, &mut app.ui.tool_options.wand_anti_alias, tl!("Anti-alias"));
             widgets::checkbox(ui, &mut app.ui.tool_options.contiguous, tl!("Contiguous"));
             widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.magic_wand, tl!("Sample All Layers"));
             widgets::vline(ui, 22.0);
@@ -408,7 +408,7 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             widgets::value_field(ui, &mut app.ui.tool_options.fill_opacity, 1.0..=100.0, "%", 62.0);
             opt_label(ui, tl!("Tolerance"));
             widgets::value_field(ui, &mut app.ui.tool_options.tolerance, 0.0..=255.0, "", 58.0);
-            widgets::checkbox(ui, &mut app.ui.tool_options.anti_alias, tl!("Anti-alias"));
+            widgets::checkbox(ui, &mut app.ui.tool_options.bucket_anti_alias, tl!("Anti-alias"));
             widgets::checkbox(ui, &mut app.ui.tool_options.contiguous, tl!("Contiguous"));
             widgets::checkbox(ui, &mut app.ui.tool_options.sample_all.paint_bucket, tl!("All Layers"));
         }
