@@ -1018,14 +1018,25 @@ impl ColorBvh {
     }
 }
 
+/// Bytes of memory the index is charged per distinct colour: the dedupe set entry and its
+/// table slack, the colour in the point list, and its share of the tree nodes, rounded up.
+const COLOR_INDEX_BYTES: usize = 64;
+
+/// The most memory the index may be charged. It scales with the distinct colours rather than the
+/// canvas, so a noisy 24 MP photo, or a float document where every pixel is its own colour,
+/// still builds; it only keeps the index within the sampled pixels' own budget.
+const COLOR_INDEX_BUDGET: usize = if cfg!(target_pointer_width = "64") { 4 << 30 } else { 256 << 20 };
+
 impl ColorMatcher {
     /// Creates a color matcher from selected RGBA colors and an $L_\\infty$ tolerance in $[0, 1]$.
     pub fn new(selected_colors: impl IntoIterator<Item = [f32; 4]>, tol: f32) -> Result<Self, &'static str> {
-        Self::with_limit(selected_colors, tol, 1_000_000)
+        Self::with_budget(selected_colors, tol, COLOR_INDEX_BUDGET)
     }
 
-    // Bound the index independently of the input image and fail without altering the selection.
-    fn with_limit(selected_colors: impl IntoIterator<Item = [f32; 4]>, tol: f32, limit: usize) -> Result<Self, &'static str> {
+    // Bound the index by `budget` bytes, charged at `COLOR_INDEX_BYTES` per distinct colour, and
+    // fail without altering the selection.
+    fn with_budget(selected_colors: impl IntoIterator<Item = [f32; 4]>, tol: f32, budget: usize) -> Result<Self, &'static str> {
+        let limit = budget / COLOR_INDEX_BYTES;
         let mut has_transparent = false;
         let mut seen = std::collections::HashSet::new();
         let mut opaque_or_semi = Vec::new();

@@ -743,11 +743,29 @@ fn color_matcher_bounds_tightly_clustered_leaves() {
 }
 
 #[test]
-fn color_matcher_limits_distinct_colors_but_not_duplicates() {
-    let red = [1.0, 0.0, 0.0, 1.0];
-    let blue = [0.0, 0.0, 1.0, 1.0];
-    assert!(ColorMatcher::with_limit([red, red, blue], 0.0, 2).is_ok());
-    assert!(ColorMatcher::with_limit([red, blue], 0.0, 1).is_err());
+fn color_matcher_budget_fires_at_the_distinct_color_it_is_sized_for() {
+    let colors: Vec<_> = (0..5).map(|i| [i as f32 / 8.0, 0.0, 0.0, 1.0]).collect();
+    // Room for exactly `n` distinct colours: the n-th still fits, the (n + 1)-th does not.
+    for n in 1..=5 {
+        let budget = n * COLOR_INDEX_BYTES;
+        assert!(ColorMatcher::with_budget(colors[..n].iter().copied(), 0.0, budget).is_ok(), "{n} colours in {budget} bytes");
+        if n < 5 {
+            assert!(ColorMatcher::with_budget(colors[..=n].iter().copied(), 0.0, budget).is_err(), "{} colours in {budget} bytes", n + 1);
+        }
+    }
+    // A budget short of one colour's charge admits none, and duplicates are never charged.
+    assert!(ColorMatcher::with_budget([colors[0]], 0.0, COLOR_INDEX_BYTES - 1).is_err());
+    let repeated = std::iter::repeat(colors[0]).take(1000);
+    assert!(ColorMatcher::with_budget(repeated, 0.0, COLOR_INDEX_BYTES).is_ok());
+}
+
+#[test]
+fn color_matcher_default_budget_admits_a_noisy_float_canvas() {
+    // Every pixel of a 2000x1000 float canvas is its own colour: past the old 1M-colour cap.
+    let colors = (0..2_000_000u32).map(|i| [i as f32 * 1e-7, (i % 1013) as f32 * 1e-3, 0.5, 1.0]);
+    let matcher = ColorMatcher::new(colors, 0.0).unwrap();
+    assert!(matcher.matches([1_999_999.0 * 1e-7, (1_999_999 % 1013) as f32 * 1e-3, 0.5, 1.0]));
+    assert!(!matcher.matches([0.9, 0.9, 0.9, 1.0]));
 }
 
 #[test]

@@ -675,6 +675,21 @@ fn grow_and_similar_multi_color_does_not_select_intermediate_hull() {
 }
 
 #[test]
+fn grow_and_similar_report_a_failed_mask_allocation_and_keep_the_selection() {
+    for cmd in ["select.grow", "select.similar"] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 40, "height": 30})).unwrap();
+        s.execute("select.rect", json!({"x": 6, "y": 6, "width": 4, "height": 4})).unwrap();
+        // The first fallible allocation samples the layer; the second is the canvas-sized result.
+        crate::allocation::fail_after_for_test(1);
+        let err = s.execute(cmd, json!({"tolerance": 5})).unwrap_err().to_string();
+        assert!(err.contains("not enough memory for growing a selection"), "{cmd}: {err}");
+        assert_eq!(coverage(&s, 7, 7), 1.0, "{cmd}: the selection must be untouched");
+        assert_eq!(coverage(&s, 20, 20), 0.0, "{cmd}: the selection must be untouched");
+    }
+}
+
+#[test]
 fn lasso_polygon() {
     let mut s = session();
     s.execute("select.lasso", json!({"points": [[0, 0], [20, 0], [0, 20]]})).unwrap();

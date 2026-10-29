@@ -541,6 +541,13 @@ fn crop_mask(m: &[f32], pw: usize, pad: usize, w: usize, h: usize) -> Vec<f32> {
     out
 }
 
+/// `Vec::push` that reports an allocation failure instead of aborting.
+fn try_push(stack: &mut Vec<usize>, i: usize) -> Result<()> {
+    stack.try_reserve(1).map_err(|_| crate::allocation::error("growing a selection", "the pixel stack could not grow"))?;
+    stack.push(i);
+    Ok(())
+}
+
 /// Grow (contiguous) / Similar (anywhere): pixels whose colour lies within
 /// tolerance of any selected pixel (indexed via ColorMatcher BVH).
 fn grow_similar(s: &mut Session, p: &Value, contiguous: bool) -> Result<Value> {
@@ -553,10 +560,14 @@ fn grow_similar(s: &mut Session, p: &Value, contiguous: bool) -> Result<Value> {
         return Err(EngineError::Other("selection is empty".into()));
     }
     let (w, h) = (area.width() as usize, area.height() as usize);
-    let mut out: Vec<f32> = m.iter().map(|v| if *v >= 0.5 { 1.0 } else { 0.0 }).collect();
+    let mut out = crate::allocation::filled(m.len(), 0.0f32, "growing a selection")?;
+    for (o, v) in out.iter_mut().zip(&m) {
+        *o = if *v >= 0.5 { 1.0 } else { 0.0 };
+    }
     if contiguous {
-        // Frontier stack: only push selected pixels adjacent to at least one unselected pixel
-        let mut stack = Vec::new();
+        // Frontier stack: only push selected pixels adjacent to at least one unselected pixel.
+        // Every push goes through `try_push` so a canvas-sized stack fails instead of aborting.
+        let mut stack: Vec<usize> = Vec::new();
         for y in 0..h {
             for x in 0..w {
                 let i = y * w + x;
@@ -566,7 +577,7 @@ fn grow_similar(s: &mut Session, p: &Value, contiguous: bool) -> Result<Value> {
                 let has_unselected_neighbor =
                     (x > 0 && out[i - 1] == 0.0) || (x + 1 < w && out[i + 1] == 0.0) || (y > 0 && out[i - w] == 0.0) || (y + 1 < h && out[i + w] == 0.0);
                 if has_unselected_neighbor {
-                    stack.push(i);
+                    try_push(&mut stack, i)?;
                 }
             }
         }
@@ -576,7 +587,7 @@ fn grow_similar(s: &mut Session, p: &Value, contiguous: bool) -> Result<Value> {
             for j in n.into_iter().flatten() {
                 if out[j] == 0.0 && matcher.matches(px[j]) {
                     out[j] = 1.0;
-                    stack.push(j);
+                    try_push(&mut stack, j)?;
                 }
             }
         }
