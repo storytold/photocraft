@@ -316,8 +316,9 @@ impl PhotocraftApp {
 
     /// Place the next file dropped on the canvas and start Free Transform on it, once no other
     /// transform is in progress (so several files are placed and transformed one after another).
-    /// With background jobs on, a file is placed by a job: the next one waits until that job has
-    /// landed and its Free Transform has been applied (see `jobs_ui::finish_place`).
+    /// With background jobs on (or a session that steps its jobs, as on the web), a file is placed
+    /// by a job: the next one waits until that job has landed and its Free Transform has been
+    /// applied (see `jobs_ui::finish_place`).
     ///
     /// Each file goes into the document it was dropped on, never into whichever one is active now:
     /// files dropped on a document in another tab wait until it is back in view, and are discarded
@@ -385,7 +386,7 @@ impl PhotocraftApp {
     /// path), for files that weren't read from a path the command can read. With background jobs
     /// on it starts a job (`{"job", "pending": true}`; see [`crate::jobs_ui::track_place`]).
     pub(crate) fn place_bytes(&mut self, name: &str, bytes: Vec<u8>, linked: Option<String>) -> Result<serde_json::Value, String> {
-        let r = if self.background_jobs {
+        let r = if crate::jobs_ui::place_in_background(self) {
             crate::jobs_ui::start_place_bytes(self, name, bytes, linked)
         } else {
             photocraft_engine::file_cmds::place_bytes(&mut self.session, name, bytes, linked, &serde_json::json!({})).map_err(|e| e.to_string())

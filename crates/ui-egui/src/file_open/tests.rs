@@ -591,6 +591,89 @@ fn background_drops_are_placed_by_a_job_one_after_another() {
     assert!(app.drop_places.is_empty());
 }
 
+/// #10031: where there are no threads (the web build) a dropped file is placed in slices, a few
+/// milliseconds per frame, with `background_jobs` still off. Free Transform starts when the
+/// layer has landed, and the next file waits for it.
+#[test]
+fn a_dropped_file_is_placed_over_several_frames_without_background_jobs() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    assert!(!app.background_jobs);
+    app.session.set_cooperative_jobs(true);
+    // One unit of work per frame, so the number of frames does not depend on the machine.
+    app.session.set_job_step_budget(std::time::Duration::ZERO);
+    let (layers, steps) = (layer_count(&app), history_steps(&app));
+    app.open_dropped(&ctx, vec![dropped("first.png", Ok(png_bytes(40, 40))), dropped("second.png", Ok(png_bytes(8, 8)))], Some(egui::pos2(400.0, 300.0)));
+    app.place_next_dropped(&ctx);
+    let place = app.jobs.place.clone().expect("the first file is being placed");
+    assert_eq!(place.name, "first.png");
+    assert!(app.session.job(place.job).is_some() && app.session.has_jobs());
+    assert!(crate::jobs_ui::keep_polling(&app, &ctx), "frames keep coming while it runs");
+    assert!(app.ui.transform.is_none(), "Free Transform waits for the layer");
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers, steps));
+    // The status bar shows it, and it can be cancelled like any job.
+    assert_eq!(crate::jobs_ui::job_in_view(&app).map(|j| j.id), Some(place.job));
+
+    let mut frames = 0;
+    while app.jobs.place.is_some() {
+        frames += 1;
+        assert!(frames < 10_000, "the place never landed");
+        assert_eq!(layer_count(&app), layers, "nothing lands before the last frame");
+        crate::jobs_ui::tick(&mut app, &ctx);
+        app.place_next_dropped(&ctx);
+    }
+    assert!(frames > 10, "placed in {frames} frames");
+    assert!(!app.background_jobs);
+    assert_eq!(layer_count(&app), layers + 1);
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "first");
+    // The second file waits for the first transform, then is placed the same way.
+    app.place_next_dropped(&ctx);
+    assert!(app.jobs.place.is_none() && app.drop_places.len() == 1);
+    crate::transform_tool::commit(&mut app);
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.jobs.place.as_ref().map(|p| p.name.as_str()), Some("second.png"));
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    crate::transform_tool::commit(&mut app);
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers + 2, steps + 2));
+    assert!(app.drop_places.is_empty());
+}
+
+/// A file dropped from a path, a damaged file and a cancel all end as they do with worker threads.
+#[test]
+fn stepped_places_from_a_path_fail_and_cancel_like_background_ones() {
+    let dir = std::env::temp_dir().join(format!("photocraft-drop-place-steps-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let good = dir.join("good.png");
+    std::fs::write(&good, png_bytes(30, 30)).unwrap();
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.session.set_cooperative_jobs(true);
+    app.session.set_job_step_budget(std::time::Duration::ZERO);
+    let (layers, steps) = (layer_count(&app), history_steps(&app));
+    app.open_dropped(
+        &ctx,
+        vec![dropped(&good, Ok(Vec::new())), dropped("bad.png", Ok(b"bad".to_vec())), dropped("last.png", Ok(png_bytes(4, 4)))],
+        Some(egui::pos2(400.0, 300.0)),
+    );
+    app.place_next_dropped(&ctx);
+    // The first is a path: the `file.placeEmbedded` job, tracked like the others.
+    let first = app.jobs.place.clone().expect("being placed");
+    assert_eq!(first.name, "good.png");
+    assert!(crate::jobs_ui::cancel(&mut app, first.job));
+    crate::jobs_ui::tick(&mut app, &ctx);
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers, steps), "a cancelled place leaves the document alone");
+    assert!(!app.ui.status_error);
+    // The queue went on to the damaged file, which fails by name.
+    assert_eq!(app.jobs.place.as_ref().map(|p| p.name.as_str()), Some("bad.png"));
+    tick_until(&mut app, &ctx, |app| app.ui.notices.iter().any(|n| n.error && n.title.contains("bad.png")));
+    assert_eq!(app.jobs.place.as_ref().map(|p| p.name.as_str()), Some("last.png"));
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    assert_eq!(layer_count(&app), layers + 1);
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+}
+
 /// A file that can't be decoded is reported by name and the files dropped after it go on.
 #[test]
 fn a_background_place_that_fails_reports_it_and_the_queue_continues() {
