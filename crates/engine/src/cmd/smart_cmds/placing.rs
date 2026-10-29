@@ -1,7 +1,7 @@
 use super::source::{SourceImage, buffer_to_surface, cache_key, cache_put, source_bytes};
 use super::{
-    Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, Rect, Result, Session, Size, SmartContentsId,
-    SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, translate_surface,
+    Affine, Arc, BlendMode, Document, EngineError, Homography, Layer, LayerContent, LayerId, PLACED_KEYS, PixelFormat, Rect, Result, Session, Size,
+    SmartContentsId, SmartObject, SmartSource, Surface, Value, encode_source, json, layer_param, other, translate_surface,
 };
 
 /// Rounds float noise off a composed transform (scale 0.1 then 10 should be exactly 1), so
@@ -105,15 +105,48 @@ pub(super) fn shift_layer(l: &mut Layer, dx: i32, dy: i32) {
 }
 
 fn subtree_bounds(l: &Layer, canvas: Rect) -> Rect {
-    match &l.content {
+    let bounds = match &l.content {
         LayerContent::Group(g) => g.children.iter().map(|c| subtree_bounds(c, canvas)).fold(Rect::EMPTY, |a, b| a.union(&b)),
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => canvas,
-        _ => l.surface().map_or(Rect::EMPTY, Surface::content_bounds),
-    }
+        _ => photocraft_compose::effect_source_bounds(l, canvas),
+    };
+    // Effects become embedded content too. Grow each subtree by the compositor's bounded
+    // reach, including a group's effects after those of its children.
+    if !bounds.is_empty() && photocraft_compose::effects::has_effects(l) { bounds.inflate(photocraft_compose::effects::margin(l)) } else { bounds }
 }
 
 fn any_layer(l: &Layer, f: &dyn Fn(&Layer) -> bool) -> bool {
     f(l) || l.children().is_some_and(|c| c.iter().any(|c| any_layer(c, f)))
+}
+
+// A renderer-sized rectangle can still need many GiB for the composite, float staging data
+// and tiled caches. Bound those dense conversion allocations before invoking the compositor.
+const MAX_CONVERSION_WORK_BYTES: u64 = if cfg!(target_pointer_width = "64") { 1 << 30 } else { 256 << 20 };
+
+fn check_conversion_budget(region: Rect, fmt: PixelFormat) -> Result<()> {
+    let (width, height) = (region.width(), region.height());
+    let pixels = u64::from(width).saturating_mul(u64::from(height));
+    if pixels > photocraft_compose::MAX_RENDER_PIXELS {
+        return Err(other(format!(
+            "Smart Object conversion at {width} x {height} px exceeds the renderer's {} pixel limit. Reduce the canvas or effect extents",
+            photocraft_compose::MAX_RENDER_PIXELS
+        )));
+    }
+    // Keep the RGBA f32 render plus either staging + cache, or cache + cropped copy:
+    // staging is released before cropping, so count the larger of those two phases.
+    // The compositor budgets its effect-map cache separately.
+    let staging = (fmt.channels() as u64).saturating_mul(std::mem::size_of::<f32>() as u64);
+    let surface = fmt.bytes_per_pixel() as u64;
+    let bytes_per_pixel = (std::mem::size_of::<[f32; 4]>() as u64).saturating_add(surface).saturating_add(staging.max(surface));
+    let bytes = pixels.saturating_mul(bytes_per_pixel);
+    if bytes > MAX_CONVERSION_WORK_BYTES {
+        return Err(other(format!(
+            "Smart Object conversion at {width} x {height} px needs about {} MiB for its dense buffers, exceeding the {} MiB working-memory limit. Convert fewer layers or reduce the canvas or effect extents",
+            bytes.div_ceil(1 << 20),
+            MAX_CONVERSION_WORK_BYTES >> 20
+        )));
+    }
+    Ok(())
 }
 
 /// Builds the smart-object layer replacing `l` in `doc`: the layer (with its mask, effects and
@@ -165,8 +198,9 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
         // Nested PSD placed layers find their embedded files here.
         sub.metadata.psd_global_blocks = doc.metadata.psd_global_blocks.clone();
     }
-    let has_fx = layers.iter().any(|l| any_layer(l, &|x| x.effects.enabled && !x.effects.items.is_empty()));
-    let region = layers.iter().map(|l| subtree_bounds(l, canvas)).fold(canvas, |a, b| a.union(&b)).inflate(if has_fx { 256 } else { 0 });
+    let region = layers.iter().map(|l| subtree_bounds(l, canvas)).fold(canvas, |a, b| a.union(&b));
+    let fmt = doc.pixel_format();
+    check_conversion_budget(region, fmt)?;
     sub.layers = layers;
 
     let buf = photocraft_compose::render(&sub, region);
@@ -181,7 +215,6 @@ pub fn layers_to_smart(doc: &Document, name: &str, layers: Vec<Layer>) -> Result
     if b.is_empty() {
         return Err(other("the layer is empty, so there is nothing to convert"));
     }
-    let fmt = doc.pixel_format();
     let mut cache = buffer_to_surface(&buf, fmt);
     cache = photocraft_algo::resample::crop_surface(&cache, b);
     cache.prune();
@@ -269,4 +302,19 @@ pub(super) fn via_copy(s: &mut Session, p: &Value) -> Result<Value> {
         *active = Some(new_id);
         Ok(json!({"layer": new_id.0}))
     })
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+
+    #[test]
+    fn conversion_budget_scales_with_sample_depth_without_allocating_pixels() {
+        let width = if cfg!(target_pointer_width = "64") { 24_000 } else { 6_000 };
+        let region = Rect::new(0, 0, width, 1_000);
+        assert!(check_conversion_budget(region, PixelFormat::RGBA8).is_ok(), "ordinary 8-bit conversions fit the budget");
+        assert!(check_conversion_budget(region, PixelFormat::RGBA16).is_ok(), "ordinary 16-bit conversions fit the budget");
+        assert!(check_conversion_budget(region, PixelFormat::RGBA32F).is_err(), "the same extent needs more storage at 32 bits");
+        assert!(check_conversion_budget(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), PixelFormat::RGBA32F).is_err());
+    }
 }
