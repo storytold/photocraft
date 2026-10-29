@@ -541,6 +541,33 @@ How the web shell (`apps/photocraft-web/src/web.rs`) differs from desktop:
 - **No control server:** browsers can't listen on TCP. To automate the web build, drive headless Chrome with `--remote-debugging-port`. `Page.setInterceptFileChooserDialog` plus `DOM.setFileInputFiles` covers Open, `Input.dispatchDragEvent` with `files` covers drops, and `Browser.setDownloadBehavior` captures downloads.
 - Headless Chrome on macOS (`--headless=new --enable-unsafe-webgpu`) gets a real WebGPU adapter.
 
+### Jobs without threads (Place, #10031)
+
+wasm32-unknown-unknown has no threads, so on the web `Session::start` runs every command inline
+except Place, which is a job that `poll_jobs` steps on the UI thread (a *cooperative* job):
+
+- `jobs::StepWork` is work that runs a slice at a time; `jobs::run_stepped` / `Session::start_job_stepped`
+  register it. With `Session::cooperative_jobs()` (always on for wasm, `set_cooperative_jobs(true)`
+  runs the same path on a desktop, for tests) each `poll_jobs` gives one such job about 8 ms
+  (`set_job_step_budget`; zero means one unit of work per poll, which tests use to count polls
+  without depending on the machine). Elsewhere the same work runs to the end on a worker thread,
+  or inline under `execute`, and gives the same result.
+- `file_cmds::PlaceSteps` cuts a place into units: a plain PNG decodes a row at a time
+  (`photocraft_codecs::PngRows`, through `photocraft_io::PngImport`; an interlaced PNG and any other
+  format decode in one unit), the flatten runs in bands of four tiles
+  (`composite_to_surface`, the tiles moved into the result), the resize in bands of 64 output rows
+  (`photocraft_algo::resample::ResizeSteps`, the code `resize_surface` runs). Without a cooperative
+  session each stage is one unit and a desktop keeps its parallel flatten and resize.
+- The UI places through a job when `background_jobs || session.cooperative_jobs()`
+  (`jobs_ui::place_in_background`); `background_jobs` stays off on the web, since save, print and
+  the other commands gated on it need threads. The status bar shows the progress and Esc cancels.
+- Measure it with `RAYON_NUM_THREADS=1 cargo test --release -p photocraft-engine --test
+  place_steps_measure -- --ignored --nocapture` (a synthetic 4096×4096 RGBA PNG into a
+  3600×4200 document). 2026-10-29, one core: 4096 row units of 0.1 ms, flatten bands 5.3 ms,
+  resize bands 5.8 ms; the units that cannot be cut up are opening the PNG (6 ms), image to document
+  (10 ms) and translate, layer and apply (13 ms, once 23 ms); 95 polls, 950 ms in all, as long as the
+  inline place (1000 ms). Wasm is slower than a desktop core, so check a release web build too.
+
 
 ## Indexed Color timings
 
@@ -561,7 +588,8 @@ On native desktop sessions, Indexed Color live previews calculate and flatten on
 The last preview remains visible while dragging; intermediate settings are coalesced, and only
 a result matching the current document revision, active layer, dialog and parameters is uploaded.
 GPU upload/display conversion still run on the UI thread. Web and `PHOTOCRAFT_INLINE_JOBS=1`
-sessions retain synchronous previews. Closing the dialog invalidates its result; an already
+sessions retain synchronous previews (the web has no threads; only Place is stepped there, see
+Jobs without threads). Closing the dialog invalidates its result; an already
 running calculation finishes without editing the session.
 
 ## Offscreen UI snapshots (no window)

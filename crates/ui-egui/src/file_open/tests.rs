@@ -671,6 +671,7 @@ fn stepped_places_from_a_path_fail_and_cancel_like_background_ones() {
     tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
     assert_eq!(layer_count(&app), layers + 1);
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A file that can't be decoded is reported by name and the files dropped after it go on.

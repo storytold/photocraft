@@ -20,8 +20,8 @@ use super::{
 };
 use crate::jobs::{JobCtx, StepWork};
 
-/// Pixels a flatten band covers at most: eight tiles of a tile row.
-const BAND_PIXELS: i64 = 8 * (TILE_SIZE as i64) * (TILE_SIZE as i64);
+/// Pixels a flatten band covers at most: four tiles of a tile row (about 5 ms on one core).
+const BAND_PIXELS: i64 = 4 * (TILE_SIZE as i64) * (TILE_SIZE as i64);
 
 /// A place as a [`StepWork`]; its result is what [`super::open::apply_place`] inserts.
 pub(crate) struct PlaceSteps {
