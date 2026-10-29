@@ -404,5 +404,5 @@ fn failed_gpu_attempt_is_recorded_separately_and_counted_in_frame_time() {
     perf.record_refresh(&Refresh { kind: "full", composite_ms: 2.0, upload_ms: 3.0, gpu_attempt_ms: 7.0, ..Default::default() });
     assert_eq!(perf.composite_ms, 2.0);
     assert_eq!(perf.gpu_attempt_ms, 7.0);
-    assert_eq!(perf.frame_refresh_ms, 12.0);
+    assert_eq!(perf.stage.composite_ms + perf.stage.upload_ms, 12.0);
 }

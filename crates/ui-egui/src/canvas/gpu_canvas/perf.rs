@@ -234,7 +234,7 @@ impl Perf {
     pub fn record_refresh(&mut self, r: &Refresh) {
         self.gpu_attempt_ms = r.gpu_attempt_ms;
         self.record(r.kind, r.px, r.composite_ms, r.upload_ms);
-        self.frame_refresh_ms += r.gpu_attempt_ms;
+        self.stage.composite_ms += r.gpu_attempt_ms;
         if let Some(t) = r.gpu {
             self.record_gpu(t);
         }
