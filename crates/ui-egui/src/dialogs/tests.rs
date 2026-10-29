@@ -429,3 +429,17 @@ fn fit_image_is_as_narrow_as_its_content() {
         assert!(window.contains_rect(node.rect()), "{label} inside the window");
     }
 }
+
+#[test]
+fn warn_flattened_reports_transparency_loss_in_the_status_bar() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    // A palette operation that flattened 16 clear pixels warns with the count.
+    warn_flattened(&mut app, &json!({"flattened": 16}));
+    assert_eq!(app.ui.status, "16 transparent pixels were made opaque");
+    // No flattened pixels (or no field at all, as in most commands): the status is left alone.
+    let before = app.ui.status.clone();
+    warn_flattened(&mut app, &json!({"flattened": 0}));
+    assert_eq!(app.ui.status, before);
+    warn_flattened(&mut app, &json!({"colors": 4}));
+    assert_eq!(app.ui.status, before);
+}

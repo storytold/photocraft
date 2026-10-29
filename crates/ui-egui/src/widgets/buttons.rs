@@ -47,10 +47,40 @@ pub fn secondary_button(ui: &mut Ui, label: &str, min_width: f32) -> Response {
     button_impl(ui, label, min_width, t.field, t.text, false)
 }
 
+/// A [`secondary_button`] that shows an armed/pressed state (`t.accent_soft` fill,
+/// `t.accent_border` stroke, `t.accent_text` label), matching [`crate::icons::button_chrome`].
+pub fn toggle_button(ui: &mut Ui, label: &str, min_width: f32, selected: bool) -> Response {
+    let t = Tokens::get(ui.ctx());
+    if !selected {
+        // A secondary button that reports its (un)armed state in the widget metadata.
+        return button_impl_h(ui, label, min_width, None, t.field, t.text, false, Some(false));
+    }
+    let (galley, size) = button_layout(ui, label, min_width, None, t.accent_text);
+    let h = size.y;
+    let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
+    resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), true, label));
+    if resp.has_focus() {
+        let r = if t.pro { h / 2.0 } else { t.radius_sm } + 2.0;
+        ui.painter().rect_stroke(rect.expand(2.0), r, Stroke::new(2.0, t.accent), StrokeKind::Outside);
+    }
+    if t.pro {
+        let r = h / 2.0;
+        ui.painter().rect_filled(rect, r, t.accent_soft);
+        ui.painter().rect_stroke(rect, r, Stroke::new(1.5, t.accent_border), StrokeKind::Inside);
+    } else {
+        surface(ui, rect, t.accent_soft, false);
+        if !t.bevel {
+            ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.accent_border), StrokeKind::Inside);
+        }
+    }
+    ui.painter().galley(rect.center() - galley.size() / 2.0, galley, t.accent_text);
+    resp
+}
+
 /// A [`secondary_button`] `height` points tall, for slim bars such as the status bar (#2823).
 pub fn compact_button(ui: &mut Ui, label: &str, height: f32) -> Response {
     let t = Tokens::get(ui.ctx());
-    button_impl_h(ui, label, 0.0, Some(height), t.field, t.text, false)
+    button_impl_h(ui, label, 0.0, Some(height), t.field, t.text, false, None)
 }
 
 /// What a dialog button does, which decides where the platform's button order puts it.
@@ -158,17 +188,23 @@ fn button_layout(ui: &Ui, label: &str, min_width: f32, height: Option<f32>, fg: 
 }
 
 fn button_impl(ui: &mut Ui, label: &str, min_width: f32, bg: Color32, fg: Color32, primary: bool) -> Response {
-    button_impl_h(ui, label, min_width, None, bg, fg, primary)
+    button_impl_h(ui, label, min_width, None, bg, fg, primary, None)
 }
 
-/// [`button_impl`] with an explicit `height` (`None`: the theme's button height).
-fn button_impl_h(ui: &mut Ui, label: &str, min_width: f32, height: Option<f32>, bg: Color32, fg: Color32, primary: bool) -> Response {
+/// [`button_impl`] with an explicit `height` (`None`: the theme's button height). `selected`,
+/// when given, is reported in the widget metadata (a toggle's armed state).
+#[allow(clippy::too_many_arguments)]
+fn button_impl_h(ui: &mut Ui, label: &str, min_width: f32, height: Option<f32>, bg: Color32, fg: Color32, primary: bool, selected: Option<bool>) -> Response {
     let t = Tokens::get(ui.ctx());
     let (galley, size) = button_layout(ui, label, min_width, height, fg);
     let h = size.y;
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     // Painted text: name the button for accessibility (and so tests and agents can find it).
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
+    resp.widget_info(|| match selected {
+        Some(selected) => egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), selected, label),
+        None => egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label),
+    });
+
     if resp.has_focus() {
         // Keyboard focus (Tab); clicks don't focus egui buttons.
         let r = if t.pro { h / 2.0 } else { t.radius_sm } + 2.0;

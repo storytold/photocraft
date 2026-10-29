@@ -4188,3 +4188,13 @@ curves	Smooth	Εξομάλυνση
 	Font size presets	Προεπιλογές μεγέθους γραμματοσειράς
 	Leading presets	Προεπιλογές διάστιχου
 	Tracking presets	Προεπιλογές διαστήματος χαρακτήρων
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Ορισμός διαφάνειας
+	{count} transparent pixels were made opaque	{count} διαφανή εικονοστοιχεία έγιναν αδιαφανή
+	Clear Transparency	Καθαρισμός διαφάνειας
+	Color Picker (First Color)	Επιλογέας χρώματος (Πρώτο χρώμα)
+	Color Picker (Last Color)	Επιλογέας χρώματος (Τελευταίο χρώμα)
+	Pick a Palette Colour From the Image	Επιλέξτε ένα χρώμα παλέτας από την εικόνα
+	Table Color	Χρώμα πίνακα
+	Palette Color	Χρώμα παλέτας

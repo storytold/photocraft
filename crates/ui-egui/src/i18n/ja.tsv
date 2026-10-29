@@ -4164,3 +4164,14 @@ curves	Smooth	スムーズ
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット
 	Tracking presets	トラッキングのプリセット
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	透明に設定
+	{count} transparent pixels were made opaque	{count} 個の透明ピクセルが不透明になりました
+	Clear Transparency	透明を解除
+	Color Picker (First Color)	カラーピッカー（最初の色）
+	Color Picker (Last Color)	カラーピッカー（最後の色）
+	Pick a Palette Colour From the Image	画像からパレットの色を選択
+	Table Color	テーブルの色
+	Palette Color	パレットの色
+	Color Picker	カラーピッカー

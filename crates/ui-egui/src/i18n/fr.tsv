@@ -4527,3 +4527,13 @@ shape	Appearance	Apparence
 	Font size presets	Tailles de police prédéfinies
 	Leading presets	Interlignages prédéfinis
 	Tracking presets	Approches prédéfinies
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Rendre transparent
+	{count} transparent pixels were made opaque	{count} pixels transparents sont devenus opaques
+	Clear Transparency	Supprimer la transparence
+	Color Picker (First Color)	Sélecteur de couleurs (première couleur)
+	Color Picker (Last Color)	Sélecteur de couleurs (dernière couleur)
+	Pick a Palette Colour From the Image	Choisir une couleur de palette dans l'image
+	Table Color	Couleur du tableau
+	Palette Color	Couleur de palette

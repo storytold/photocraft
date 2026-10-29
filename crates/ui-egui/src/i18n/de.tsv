@@ -3509,3 +3509,14 @@ curves	Smooth	Glätten
 	Font size presets	Schriftgrößen-Vorgaben
 	Leading presets	Zeilenabstand-Vorgaben
 	Tracking presets	Laufweiten-Vorgaben
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Als transparent festlegen
+	{count} transparent pixels were made opaque	{count} transparente Pixel wurden undurchsichtig
+	Clear Transparency	Transparenz aufheben
+	Color Picker (First Color)	Farbwähler (Erste Farbe)
+	Color Picker (Last Color)	Farbwähler (Letzte Farbe)
+	Pick a Palette Colour From the Image	Eine Palettefarbe aus dem Bild wählen
+	Table Color	Tabellenfarbe
+	Palette Color	Palettenfarbe
+	Color Picker	Farbwähler

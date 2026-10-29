@@ -4235,3 +4235,13 @@ cameraRaw	Dehaze	Odstranění oparu
 	Font size presets	Předvolby velikosti písma
 	Leading presets	Předvolby prokladu
 	Tracking presets	Předvolby prostrkání
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Nastavit jako průhledné
+	{count} transparent pixels were made opaque	{count} transparentních pixelů bylo zneprůhledněno
+	Clear Transparency	Zrušit průhlednost
+	Color Picker (First Color)	Výběr barvy (první barva)
+	Color Picker (Last Color)	Výběr barvy (poslední barva)
+	Pick a Palette Colour From the Image	Vyberte barvu palety z obrázku
+	Table Color	Barva tabulky
+	Palette Color	Barva palety

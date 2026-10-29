@@ -4245,3 +4245,13 @@ curves	Smooth	Vloeiend maken
 	Font size presets	Voorinstellingen lettergrootte
 	Leading presets	Voorinstellingen interlinie
 	Tracking presets	Voorinstellingen spatiëring
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Als transparant instellen
+	{count} transparent pixels were made opaque	{count} transparante pixels werden ondoorzichtig
+	Clear Transparency	Transparantie opheffen
+	Color Picker (First Color)	Kleurkiezer (eerste kleur)
+	Color Picker (Last Color)	Kleurkiezer (laatste kleur)
+	Pick a Palette Colour From the Image	Een paletkleur uit de afbeelding kiezen
+	Table Color	Tabelkleur
+	Palette Color	Paletkleur

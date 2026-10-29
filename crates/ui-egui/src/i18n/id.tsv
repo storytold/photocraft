@@ -3507,3 +3507,14 @@ curves	Smooth	Haluskan
 	Font size presets	Preset ukuran font
 	Leading presets	Preset leading
 	Tracking presets	Preset tracking
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Jadikan Transparan
+	{count} transparent pixels were made opaque	{count} piksel transparan menjadi tidak transparan
+	Clear Transparency	Hapus Transparansi
+	Color Picker (First Color)	Pemilih Warna (Warna Pertama)
+	Color Picker (Last Color)	Pemilih Warna (Warna Terakhir)
+	Pick a Palette Colour From the Image	Pilih Warna Palet dari Gambar
+	Table Color	Warna Tabel
+	Palette Color	Warna Palet
+	Color Picker	Pemilih Warna

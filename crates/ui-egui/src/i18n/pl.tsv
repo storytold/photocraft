@@ -4105,3 +4105,14 @@ curves	Smooth	Wygładź
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Ustaw jako przezroczyste
+	{count} transparent pixels were made opaque	{count} przezroczystych pikseli stało się nieprzezroczystych
+	Clear Transparency	Usuń przezroczystość
+	Color Picker (First Color)	Próbnik kolorów (pierwszy kolor)
+	Color Picker (Last Color)	Próbnik kolorów (ostatni kolor)
+	Pick a Palette Colour From the Image	Wybierz kolor palety z obrazu
+	Table Color	Kolor tabeli
+	Palette Color	Kolor palety
+	Color Picker	Próbnik kolorów

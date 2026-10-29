@@ -4557,3 +4557,13 @@ shape	Appearance	Izgled
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Postavi kao providno
+	{count} transparent pixels were made opaque	{count} providnih piksela je postalo neprozirno
+	Clear Transparency	Očisti providnost
+	Color Picker (First Color)	Birač boja (prva boja)
+	Color Picker (Last Color)	Birač boja (poslednja boja)
+	Pick a Palette Colour From the Image	Izaberite boju palete sa slike
+	Table Color	Boja tabele
+	Palette Color	Boja palete

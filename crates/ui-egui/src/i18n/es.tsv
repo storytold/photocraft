@@ -4447,3 +4447,13 @@ navigator	Zoom	Zoom
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking
+
+# Palette grid (Color Table / Indexed Color Custom…)
+	Set Transparent	Establecer transparente
+	{count} transparent pixels were made opaque	{count} píxeles transparentes se volvieron opacos
+	Clear Transparency	Quitar transparencia
+	Color Picker (First Color)	Selector de color (primer color)
+	Color Picker (Last Color)	Selector de color (último color)
+	Pick a Palette Colour From the Image	Elegir un color de la paleta de la imagen
+	Table Color	Color de la tabla
+	Palette Color	Color de la paleta
