@@ -21,13 +21,18 @@ use serde_json::json;
 
 const SIZE: u32 = 4096;
 
-/// A 4096×4096 RGBA PNG of smooth colour and some noise (no personal photo).
+/// A 4096×4096 RGBA PNG of smooth colour and four bits of noise a channel, which makes a file of
+/// a few tens of MB as a photo does (no personal photo).
 fn synthetic_png() -> Vec<u8> {
     let mut data = Vec::with_capacity(SIZE as usize * SIZE as usize * 4);
+    let mut r = 0x9E37_79B9u32;
+    let mut noise = || {
+        r = r.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        (r >> 28) as u8
+    };
     for y in 0..SIZE {
         for x in 0..SIZE {
-            let n = (x.wrapping_mul(2_654_435_761) ^ y.wrapping_mul(40_503)) >> 27;
-            data.extend_from_slice(&[(x / 16) as u8, (y / 16) as u8, ((x + y) / 32 + n) as u8, 255 - (n as u8 & 7)]);
+            data.extend_from_slice(&[((x / 24) as u8) << 4 | noise(), ((y / 24) as u8) << 4 | noise(), (((x + y) / 48) as u8) << 4 | noise(), 0xF0 | noise()]);
         }
     }
     let img = Image::from_raw(SIZE, SIZE, ChannelLayout::Rgba, SampleType::U8, data).unwrap();
@@ -74,7 +79,7 @@ fn timed_polls(s: &mut Session, id: photocraft_engine::jobs::JobId) -> (Vec<(Str
 fn stage_of(before: &str, after: &str) -> &'static str {
     match (before, after) {
         ("", "") => "open the PNG (header, buffer)",
-        ("Decoding", "Decoding") => "decode rows",
+        ("" | "Decoding", "Decoding") => "decode rows",
         ("Decoding", "Flattening") => "image to document (one unit)",
         ("Flattening", "Flattening") => "flatten a band",
         ("Flattening", "Resizing") => "resize: plan the first pass",
@@ -92,12 +97,16 @@ fn place_steps_timings() {
     println!("synthetic {SIZE}x{SIZE} RGBA PNG: {:.1} MB, made in {:.0} ms", png.len() as f64 / 1e6, ms(t.elapsed()));
     println!("rayon threads: {}", rayon::current_num_threads());
 
-    // Inline, as one call: no steps.
-    let mut inline = document();
-    let t = Instant::now();
-    let want = file_cmds::place_bytes(&mut inline, "big.png", png.clone(), None, &json!({})).unwrap();
-    let inline_ms = ms(t.elapsed());
-    println!("\ninline place (one call, as a desktop worker does it): {inline_ms:.0} ms");
+    // Inline, as one call: no steps. The first run warms the allocator; the second is the time.
+    let mut want = serde_json::Value::Null;
+    let mut inline_ms = 0.0;
+    for run in 1..=2 {
+        let mut inline = document();
+        let t = Instant::now();
+        want = file_cmds::place_bytes(&mut inline, "big.png", png.clone(), None, &json!({})).unwrap();
+        inline_ms = ms(t.elapsed());
+        println!("\ninline place {run} (one call, as a desktop worker does it): {inline_ms:.0} ms");
+    }
 
     // Cooperative, one unit per poll: the time of every unit of work.
     let mut s = document();
