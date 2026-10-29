@@ -173,8 +173,11 @@ fn to_paragraph(s: &mut Session, p: &Value) -> Result<Value> {
             return Ok(json!([x, y, width, height]));
         }
         let [x0, y0, x1, y1] = l.bounds().unwrap_or([0.0, -t.size_pt, t.size_pt, 0.0]);
+        // Alignment bounds trim trailing whitespace. Reserve each line's full character
+        // advances in the frame so subsequent typing can use that space (#9945).
+        let full_width = l.clusters.chunk_by(|a, b| a.line == b.line).map(|line| line.iter().map(|c| c.advance).sum::<f32>()).fold(0.0, f32::max);
         // A little slack so no line re-wraps; the box keeps the text where it was.
-        let width = (x1 - x0).max(1.0) + indents + (size_px * 0.5).max(4.0);
+        let width = (x1 - x0).max(full_width).max(1.0) + indents + (size_px * 0.5).max(4.0);
         let height = (y1 - y0).max(1.0) + size_px * 0.5;
         let x = match ps.align {
             TextAlign::Center | TextAlign::JustifyCenter => -width / 2.0,
