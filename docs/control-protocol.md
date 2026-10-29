@@ -671,8 +671,10 @@ layer names. Selection is captured before opening the dialog; an unselected laye
 
 Panel arrangements support tab grouping and reordering, horizontal and vertical splits,
 and movable, resizable floating groups. Drag a panel tab or a group's drag bar, or use its
-context menu. On the desktop a floating group opens in its own OS window; on Wayland, in the
-web build and for the Studio Properties card it stays inside the application window.
+context menu. Compact columns and their adjacent editor flyouts stay in the application.
+In an adapted workspace, expanded floating editors also stay embedded unless a separate
+native window is requested. Existing modern workspaces retain upstream native-window
+behaviour. Wayland, the web build and the Studio Properties card retain embedded panels.
 
 The shared layout begins with the existing workspace on the first docking operation.
 Workspace saves keep its groups, active tabs, split sizes, floating geometry, and the
@@ -693,9 +695,8 @@ by ID or label, and `onto` is accepted for `anchor`.
   `window.panel.closeOthers` close its group or the group's other panels.
 - `window.panel.minimize {panel, minimized?}` collapses a floating window to its title bar.
 - `window.panel.window {panel, native?}` floats a docked panel's group and gives its floating
-  window its own OS window. On the desktop every floating window has one, except the Studio
-  themes' Properties card, which stays over the canvas, and on Wayland, where floating windows
-  stay in the main window. The web refuses the command: floating panels stay in the page.
+  window its own OS window. The Studio Properties card and Wayland keep embedded panels.
+  The web refuses separate OS-window requests: floating panels stay in the page.
 - `ui.dock {operation, …}` takes the shared `ui.dock` operations (`open`, `close`, `activate`,
   `float`, `moveFloating`, `move`, `setStackOpen`, `resizeStack`, `resizeSplit`) or `{action}`.
 - `window.workspace.lock {locked?}` sets Lock Workspace; `window.workspace {name}`,
@@ -719,9 +720,18 @@ split paths return an error without changing the workspace.
 The `docking` object in `ui.state` and in saved workspaces is craft-ui's `Workspace`:
 `version` (2), `layout`, `hidden` (each closed panel with its return place), `saved` and
 `locked`. `dockingReturns` holds where each floating panel docks back, and
-`dockingCollapsed` the panels of collapsed custom groups. Any other saved `docking` value,
-such as a bare layout with `dockingHidden`, loads as the default layout, built from the
-saved `panels`, `dockTabs` and `dock`.
+`dockingCollapsed` retains legacy collapsed-group state. `panelPresentation` stores compact
+floating membership, compact widths, total column heights and editor flyout sizes;
+`toolbarFloating` is a logical `[x,y]` position or `null` for docked Tools. These are view
+metadata; `Workspace` remains the owner of panel placement. Flyout visibility and drag/resize
+previews are transient and are never serialized.
+
+Bare layouts bearing the fork's `dockingColumns`, `dockingEdges` or `dockingStripWidths`
+markers migrate to `Workspace`, retaining tab membership, active tabs, column order, row
+weights, attachments and valid hidden return locations. An unmarked legacy layout retains
+upstream's default-layout fallback. Unknown newer workspace/presentation data is preserved
+without applying it. A fresh default layout replaces the six-button launcher with actual
+movable panel groups beside Layers; an existing modern customized layout is respected.
 
 The existing `ui.set` panel visibility, `dockTabs` selection and `dockWidth` controls
 remain available after customization. Width keeps its 250–520 point clamp. Named
@@ -732,13 +742,42 @@ that changes legacy collapse settings is also rejected when a custom root group 
 panels from different native groups; use `window.panel.group` to collapse or expand
 that group. Validation is atomic across mixed `ui.set` requests.
 
-`window.panel.group {panel, operation}` applies `close`, `collapse`, `expand`, `up`,
-or `down` to the panel's entire current group. With `operation:"move"`, provide
-`anchor` and optional `zone`/`before` (as for panel.move), or a serialized `placement`,
-to transfer all members atomically while preserving their order and selecting the
-requested `panel`.
-A floating group's drag bar or title bar also transfers the whole group when dropped on a
-dock target. The panel menu and icon rail remain
-available in custom workspaces. `window.panel.<id> {show:true}` always reveals, selects
-and expands the panel, including when another tab is selected. Workspace snapshots
-retain custom collapse settings and Timeline visibility.
+`window.panel.group {panel, operation}` also provides:
+
+- `collapse` / `expand`: compact or expand the entire owning column/window, preserving rows
+  and tabs. Clicking an icon peeks one editor; the column chevron expands every row.
+- `peek`: open one editor immediately beside its owning icon; right-side columns open left.
+- `strip-width {width}`: compact widths from 44 to 240 logical points. Labels appear only
+  when initial characters plus an ellipsis fit; icons keep a fixed leading anchor.
+- `edge-size {width?,height?,heights?,previousHeight?}`: shared column width (220–520 for
+  full editors, 44–240 for compact strips), optional total height (100–100000), and positive
+  row weights keyed by panel ID. `height:null` restores available-height sizing.
+  `previousHeight` supplies the previous measured height when scaling explicit row heights.
+- `flyout-size {width?,height?}`: editor size (width 220–520, height 120–100000).
+- `tab {anchor}`: combine the panel with the anchor's tabs.
+- `native {enabled,x?,y?,width?,height?}`: request a desktop OS window or return it embedded.
+- `close-row` / `close-window`: close a section or its complete floating window.
+
+Existing `close`, `up`, `down` and `move` group operations remain available. For `move`,
+provide `anchor` and optional `zone`/`before`, or a serialized `placement`.
+
+`window.panel.edge {panel,edge,individual?,collapsed?,stack?,position?,before?,x?,y?,width?,height?}`
+moves an already attached or floating owner directly to `left`, `rightInner`, `rightOuter`,
+`rightRail` or `floating`. Expanded editors remain expanded unless `collapsed:true` is supplied.
+`individual:true` moves only that panel. `stack` names a destination section; `position:"top"`
+inserts above it (otherwise below). `before` inserts a column before its named neighbour.
+The first mouse insertion slot lies below the grip lines, with separate middle/bottom slots.
+
+`window.tools.float {x?,y?}` and `window.tools.dock {}` move Tools as one palette; individual
+tools never detach. Coordinates must be finite. The palette has the same compact header,
+grip and narrow inset scrolling treatment as panel columns.
+
+Lock Workspace cancels unfinished layout gestures. Ctrl/Cmd suppresses docking; Escape,
+focus loss or workspace replacement cancels a drag/resize without saving its preview.
+Workspace Auto-Collapse Iconic Panels applies to flyouts; Auto-Show Hidden Panels reveals
+Tab-hidden chrome temporarily on edge hover. Persistence defers pointer-held previews and
+native movement settling and reuses an unchanged layout snapshot on idle frames.
+
+`window.panel.<id> {show:true}` reveals the requested panel. Snapshots retain Timeline
+visibility, tab order, active tabs and sizes. Creating an adjustment/fill layer still opens
+Properties; ordinary layer selection does not reopen it.

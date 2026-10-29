@@ -11,6 +11,9 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     // Right-click the options bar's tool icon (#2825); `tool.resetAll` asks first.
     ("tool.reset", "Reset Tool", &[], None),
     ("tool.resetAll", "Reset All Tools", &[], None),
+    ("window.tools.float", "Float Tools", &[], None),
+    ("window.tools.dock", "Dock Tools", &[], None),
+    ("window.panel.edge", "Attach Panel Column", &[], None),
     ("window.panel.group", "Change Panel Group", &[], None),
     ("window.panel.layout", "Change Panel Layout", &[], None),
     ("window.panel.move", "Move Panel", &[], None),

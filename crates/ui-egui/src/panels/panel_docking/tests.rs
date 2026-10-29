@@ -3,7 +3,11 @@ use egui::{Event, Modifiers, PointerButton, Pos2, vec2};
 use egui_kittest::{Harness, kittest::Queryable};
 
 fn app() -> PhotocraftApp {
-    PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    // These tests exercise the native groups without the optional replacement launcher.
+    // The launcher's real-panel migration and gestures have their own presentation tests.
+    app.ui.panels.rail = false;
+    app
 }
 
 fn lay(app: &PhotocraftApp) -> &Layout<String> {
@@ -694,6 +698,7 @@ fn custom_group_commands_preserve_members_and_workspace_timeline() {
 #[test]
 fn customized_panel_menus_and_rail_remain_reachable_after_float_and_restore() {
     let mut app = app();
+    app.ui.panels.rail = true;
     app.run("window.panel.float", json!({"panel":"swatches","x":20,"y":40})).unwrap();
     let mut h = harness(app, vec2(1280.0, 800.0));
     assert!(h.query_all_by_label("Panel menu").count() > 0);

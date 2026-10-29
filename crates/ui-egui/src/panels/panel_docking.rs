@@ -20,6 +20,9 @@ use crate::PhotocraftApp;
 /// The saved arrangement: layout, hidden panels with their return places, and the lock.
 pub(crate) type Workspace = craft_ui::docking::Workspace<String>;
 
+pub(crate) mod compat;
+mod presentation;
+
 type Returns = std::collections::BTreeMap<String, Location<String>>;
 
 const PANELS: &[(&str, &str, Group)] = &[
@@ -65,13 +68,11 @@ fn area_id() -> egui::Id {
     egui::Id::unique("photocraft-panel-docking")
 }
 
-#[cfg(test)]
 fn bodies_id() -> egui::Id {
     area_id().with("bodies")
 }
 
 /// The body of each panel drawn last frame, the canvas included (screen points).
-#[cfg(test)]
 pub(crate) fn last_bodies(ctx: &egui::Context) -> Vec<(String, egui::Rect)> {
     ctx.data(|data| data.get_temp::<Vec<(String, egui::Rect)>>(bodies_id())).unwrap_or_default()
 }
@@ -82,7 +83,13 @@ pub(crate) const CANVAS: &str = "canvas";
 
 /// Every other panel may move, float and close; the workspace lock limits them all.
 fn permissions(id: &String) -> Permissions {
-    if id == CANVAS { Permissions { accepts_splits: true, ..Permissions::PROTECTED } } else { Permissions::default() }
+    if id == CANVAS {
+        Permissions { accepts_splits: true, ..Permissions::PROTECTED }
+    } else if presentation::is_spacer(id) {
+        Permissions::PROTECTED
+    } else {
+        Permissions::default()
+    }
 }
 
 /// The width of the dock column in a layout built from the native dock.
@@ -143,7 +150,9 @@ pub(crate) fn valid_workspace(workspace: &Workspace) -> bool {
 /// Read a saved `docking` workspace and where its floating panels dock back. Anything else,
 /// such as the bare layouts written before workspaces, gives `None`: the native dock's default.
 pub(crate) fn load(saved: &Value) -> Option<(Workspace, Returns)> {
-    let docking = saved.get("docking").filter(|v| v.get("layout").is_some())?;
+    let Some(docking) = saved.get("docking").filter(|v| v.get("layout").is_some()) else {
+        return compat::migrate(saved).map(|workspace| (workspace, Default::default()));
+    };
     let mut workspace: Workspace = serde_json::from_value(docking.clone()).ok()?;
     workspace.layout = beside_canvas(workspace.layout);
     workspace.saved = workspace.saved.map(beside_canvas);
@@ -221,6 +230,7 @@ fn workspace_of(app: &PhotocraftApp) -> Result<Workspace, String> {
 
 fn commit(app: &mut PhotocraftApp, workspace: Workspace, mut returns: Returns) {
     returns.retain(|panel, _| floats(&workspace.layout, panel));
+    compat::sync_presentation(&workspace.layout, &mut app.ui.panel_presentation);
     app.ui.docking = Some(workspace);
     app.ui.docking_returns = returns;
     app.ui.panels.dock = true;
@@ -235,6 +245,15 @@ fn floats(layout: &Layout<String>, panel: &str) -> bool {
 // presentation when the workspace first becomes customizable; mixed custom groups are expanded.
 fn collapsed_members(app: &PhotocraftApp, layout: &Layout<String>) -> std::collections::HashSet<String> {
     let mut collapsed: std::collections::HashSet<String> = app.ui.docking_collapsed.iter().cloned().collect();
+    for (_, column) in compat::columns(layout).into_iter().filter(|(_, c)| c.iconic) {
+        collapsed.extend(
+            column
+                .groups
+                .iter()
+                .filter(|g| !g.panels.iter().any(|p| app.ui.docking_reveal.as_ref() == Some(p) || app.ui.docking_flyout.as_ref() == Some(p)))
+                .flat_map(|g| g.panels.iter().cloned()),
+        );
+    }
     for group in layout.root.iter().flat_map(tree_groups).filter(|group| group.minimized) {
         collapsed.extend(group.panels);
     }
@@ -349,6 +368,9 @@ fn closes(command: &DockCommand<String>) -> bool {
 }
 
 pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    if let Some(result) = compat::command(app, id, params) {
+        return Some(result);
+    }
     if id == "window.panel.group" {
         return Some(group_command(app, params));
     }
@@ -552,14 +574,27 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         None => legacy(app),
     };
     let collapsed = collapsed_members(app, &layout);
-    let layout = presented(layout, &collapsed);
+    let canonical = presented(layout, &collapsed);
+    presentation::cancel_resize(app, ui.ctx());
+    let height_preview = presentation::height_preview(ui.ctx());
+    let layout = presentation::rendered_layout(app, &canonical, ui.available_height(), height_preview.as_ref());
     let fillers = fillers(&layout);
     let reveal = app.ui.docking_reveal.take();
     let t = crate::theme::Tokens::get(ui.ctx());
     let locked = app.session.prefs().workspace_locked;
     let mut style = craft_ui::docking::DockStyle::from_ui(ui);
-    style.tab_height = if t.pro { 28.0 } else { 40.0 };
+    style.tab_height = 26.0;
+    style.title_height = 0.0;
+    style.column_bar_height = 0.0;
+    style.close_button = false;
+    style.iconic_width = COMPACT_COLUMN_WIDTH;
+    style.icon_size = 25.0;
+    style.iconic_max_width = 240.0;
+    style.iconic_label_width = 78.0;
+    style.floating_background = t.card;
+    style.floating_stroke = egui::Stroke::new(ui.ctx().pixels_per_point().recip(), t.card_border);
     style.min_pane = 0.0;
+    style.gap = ui.ctx().pixels_per_point().recip();
     style.background = t.card;
     // Studio themes leave the strip transparent over the dock's card; a floating group has no
     // card behind it, so the canvas showed through its titles (#4509).
@@ -567,7 +602,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     style.active_background = t.card;
     style.text = t.text;
     style.inactive_text = t.text_dim;
-    style.border = egui::Stroke::new(1.0, t.card_border);
+    style.border = egui::Stroke::NONE;
     style.accent = t.accent;
     style.right_to_left = crate::direction::is_rtl();
     style.new_dock_zones = true;
@@ -577,17 +612,23 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .auto_collapse_iconic(app.session.prefs().workspace.auto_collapse_icon_panels)
         .input_blocked(modal_open(app, ui.ctx()));
     if let Some(panel) = &reveal {
-        dock = dock.raise_panel(panel.clone());
+        if compat::compact(&canonical, &app.ui.panel_presentation, panel) {
+            app.ui.docking_flyout = Some(panel.clone());
+        } else {
+            dock = dock.raise_panel(panel.clone());
+        }
     }
+    craft_ui::docking::close_flyout::<String>(ui.ctx(), area);
     #[cfg(not(target_arch = "wasm32"))]
     {
         dock = dock.native_input_hook(native_input_hook(ui.ctx()));
     }
     let mut commands = Vec::new();
     let strip = style.tab_height;
+    let bounds = ui.available_rect_before_wrap();
+    presentation::prepare(ui.ctx(), app, &canonical, bounds);
     let card: std::collections::HashSet<String> =
         layout.floating.iter().filter(|window| window.id == PROPERTIES_WINDOW).flat_map(|window| window.panels().cloned()).collect();
-    #[cfg(test)]
     ui.ctx().data_mut(|data| data.insert_temp(bodies_id(), Vec::<(String, egui::Rect)>::new()));
     // The panel windows' passes, inside this call, note their keyboard focus again.
     keyboard_focus(ui.ctx()).lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -600,6 +641,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         |id| {
             if id == CANVAS {
                 craft_ui::docking::PanelLimits { min: egui::vec2(200.0, 120.0), ..Default::default() }
+            } else if presentation::is_spacer(id) {
+                craft_ui::docking::PanelLimits { min: egui::Vec2::ZERO, ..Default::default() }
             } else if collapsed.contains(id) {
                 craft_ui::docking::PanelLimits { min: egui::vec2(220.0, 0.0), max: egui::vec2(1_000_000.0, 0.0) }
             } else {
@@ -618,9 +661,16 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Keys pressed in a floating panel's own OS window run the main window's shortcuts.
     let forwarded = std::mem::take(&mut output.forwarded_events);
     crate::shortcuts::handle_forwarded(app, ui.ctx(), forwarded, output.forwarded_modifiers.unwrap_or_default());
+    presentation::show(app, ui, &canonical, bounds, &mut commands);
     let mut actions = output.actions;
     pin_group_heights(ui.ctx(), &layout, &mut actions);
     for action in actions {
+        if let Some(params) = presentation::bottom_resize(&layout, &action) {
+            if let Err(error) = app.run("window.panel.group", params) {
+                app.ui.status = error;
+            }
+            continue;
+        }
         let result = match action {
             // A dock group minimizes as PhotoCraft's collapsed group, which the native dock's
             // collapse also sets.
@@ -664,7 +714,7 @@ pub(crate) fn native_viewports(app: &PhotocraftApp, ctx: &egui::Context) -> Vec<
             .layout
             .floating
             .iter()
-            .filter(|window| window.id != PROPERTIES_WINDOW)
+            .filter(|window| window.id != PROPERTIES_WINDOW && (!app.ui.panel_presentation.migrated || window.native.is_some()))
             .map(|window| craft_ui::docking::DockArea::<String>::window_viewport(area_id(), window.id))
             .collect();
     }
@@ -1211,9 +1261,24 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
 }
 
 impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
+    fn resolve_drag(
+        &mut self,
+        ctx: &egui::Context,
+        _style: &craft_ui::docking::DockStyle,
+        request: &craft_ui::docking::DropRequest<'_, String>,
+    ) -> Option<craft_ui::docking::DropFeedback> {
+        presentation::resolve_drag(self.app, ctx, request, self.commands)
+    }
+    fn icon(&self, id: &String) -> Option<egui::ImageSource<'static>> {
+        Some(crate::icons::source(panel_icon(id)))
+    }
     fn body(&mut self, ui: &mut egui::Ui, id: &String) {
-        #[cfg(test)]
-        ui.ctx().data_mut(|data| data.get_temp_mut_or_default::<Vec<(String, egui::Rect)>>(bodies_id()).push((id.clone(), ui.max_rect())));
+        if presentation::is_spacer(id) {
+            return;
+        }
+        if ui.ctx().viewport_id() == egui::ViewportId::ROOT {
+            ui.ctx().data_mut(|data| data.get_temp_mut_or_default::<Vec<(String, egui::Rect)>>(bodies_id()).push((id.clone(), ui.max_rect())));
+        }
         if id == CANVAS {
             crate::panels::canvas_panel(self.app, ui);
             return;
@@ -1231,6 +1296,9 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         }
     }
     fn dock_heights(&self, id: &String) -> Option<DockHeights> {
+        if presentation::is_spacer(id) {
+            return Some(DockHeights::new(0.0).compact(0.0).fill(1.0));
+        }
         let group = PANELS.iter().find(|p| p.0 == id)?.2;
         let body = |height: f32| (height - self.strip).max(0.0);
         let fill = if self.fillers.contains(id) { body(group.preferred_fill()).max(1.0) } else { 0.0 };
@@ -1241,14 +1309,60 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
     }
     fn allow_native(&self, id: &String) -> bool {
         !self.card.contains(id)
+            && (!self.app.ui.panel_presentation.migrated
+                || self.app.ui.docking.as_ref().is_some_and(|w| w.layout.floating.iter().any(|w| w.native.is_some() && w.contains(id))))
+    }
+    fn window_drawn(&mut self, ui: &mut egui::Ui) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let viewport = ui.ctx().viewport_id();
+            let panel = self
+                .app
+                .ui
+                .docking
+                .as_ref()
+                .and_then(|workspace| {
+                    workspace.layout.floating.iter().find(|w| craft_ui::docking::DockArea::<String>::window_viewport(area_id(), w.id) == viewport)
+                })
+                .and_then(|w| w.panels().next())
+                .cloned();
+            let Some(panel) = panel else { return };
+            let full = ui.ctx().content_rect();
+            let rect = egui::Rect::from_min_size(egui::pos2(full.right() - 26.0, full.top()), egui::Vec2::splat(20.0));
+            if modal_open(self.app, ui.ctx()) {
+                paint_header_glyph(ui.painter(), rect, "x", crate::theme::Tokens::get(ui.ctx()).text_faint);
+            } else if presentation::button(ui, rect, area_id().with(("native-close", &panel)), "x", tl!("Close Window")).clicked() {
+                self.commands.push(("window.panel.group", json!({"panel":panel,"operation":"close-window"})));
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = ui;
     }
     fn group_header_width(&self, _panels: &[String], _active: &String, _floating: bool, _strip_width: f32) -> f32 {
-        28.0
+        if _floating || self.app.ui.docking.as_ref().is_some_and(|w| floats(&w.layout, _active)) { 60.0 } else { 40.0 }
     }
     fn group_header(&mut self, ui: &mut egui::Ui, panels: &[String], active: &String, floating: bool) {
         let collapsed = panels.iter().all(|id| self.collapsed.contains(id));
+        let attached = self.app.ui.docking.as_ref().is_some_and(|w| in_dock_column(&w.layout, active));
+        let closable = !attached
+            && ui.ctx().viewport_id() == egui::ViewportId::ROOT
+            && (floating || self.app.ui.docking.as_ref().is_some_and(|w| floats(&w.layout, active)));
+        let count = if closable { 3.0 } else { 2.0 };
+        let start = ui.max_rect().right() - 20.0 * count;
+        let top = ui.max_rect().top() + 3.0;
+        let button_rect = |i: f32| egui::Rect::from_min_size(egui::pos2(start + 20.0 * i, top), egui::Vec2::splat(20.0));
+        let arrow = presentation::button(ui, button_rect(0.0), area_id().with(("full-chevron", active)), "chevrons-left", tl!("Collapse Panel Group"));
+        if arrow.clicked() {
+            self.commands.push(("window.panel.group", json!({"panel":active,"operation":"collapse"})));
+        }
+        if closable {
+            let close = presentation::button(ui, button_rect(2.0), area_id().with(("full-close", active)), "x", tl!("Close Window"));
+            if close.clicked() {
+                self.commands.push(("window.panel.group", json!({"panel":active,"operation":"close-window"})));
+            }
+        }
         let locked = self.app.session.prefs().workspace_locked;
-        let resp = crate::icons::button(ui, "ellipsis", ui.available_height().min(28.0), false, tl!("Panel menu"));
+        let resp = presentation::button(ui, button_rect(1.0), area_id().with(("full-menu", active)), "ellipsis", tl!("Panel menu"));
         egui::Popup::menu(&resp).show(|ui| {
             ui.set_min_width(180.0);
             panel_menu(self.app, ui, active);
@@ -1318,4 +1432,68 @@ fn panel_active(layout: &Layout<String>, panel: &str) -> bool {
         .flat_map(tree_groups)
         .find(|group| group.panels.iter().any(|id| id == panel))
         .is_some_and(|group| group.panels.get(group.active).is_some_and(|id| id == panel))
+}
+
+const HEADER_GLYPH_SIZE: f32 = 11.5;
+const HEADER_GLYPH_STROKE: f32 = 1.75;
+const HEADER_DOT_SCALE: f32 = 0.8;
+pub(crate) const COMPACT_COLUMN_WIDTH: f32 = 44.0;
+
+pub(crate) fn compact_grip_width(inner_width: f32) -> f32 {
+    (inner_width - 22.0).max(16.0)
+}
+
+// All header glyphs use the chevron's 24-unit coordinate system and stroke. Painting them
+// together also avoids a rasterized arrow beside independently sized native dots/crosses.
+pub(crate) fn paint_header_glyph(painter: &egui::Painter, rect: egui::Rect, name: &str, tint: egui::Color32) {
+    let scale = HEADER_GLYPH_SIZE / 24.0;
+    let point = |x: f32, y: f32| rect.center() + egui::vec2(x - 12.0, y - 12.0) * scale;
+    let stroke = egui::Stroke::new(HEADER_GLYPH_STROKE * scale, tint);
+    match name {
+        "x" => {
+            let stroke = egui::Stroke::new(stroke.width, tint.gamma_multiply(0.88));
+            // Slightly larger than the original glyph, with unchanged stroke and button size.
+            let half = 5.0 * scale + 0.35;
+            let center = rect.center();
+            painter.line_segment([center - egui::vec2(half, half), center + egui::vec2(half, half)], stroke);
+            painter.line_segment([center + egui::vec2(-half, half), center + egui::vec2(half, -half)], stroke);
+        }
+        "ellipsis" => {
+            let radius = HEADER_GLYPH_STROKE * HEADER_DOT_SCALE;
+            for x in [6.0 + radius - 0.4, 12.0, 18.0 - radius + 0.4] {
+                painter.circle_filled(point(x, 12.0), radius * scale, tint);
+            }
+        }
+        "chevrons-left" | "chevrons-right" => {
+            let mirror = |x| if name == "chevrons-right" { 24.0 - x } else { x };
+            for x in [6.0, 13.0] {
+                painter.add(egui::Shape::line(vec![point(mirror(x + 5.0), 7.0), point(mirror(x), 12.0), point(mirror(x + 5.0), 17.0)], stroke));
+            }
+        }
+        _ => {}
+    }
+}
+
+fn panel_icon(id: &str) -> &'static str {
+    match id {
+        "color" => "palette",
+        "swatches" => "swatch-book",
+        "gradients" => "gradient",
+        "patterns" => "grid-2x2",
+        "properties" => "sliders-horizontal",
+        "adjustments" => "adjustment-layer",
+        "character" => "type",
+        "paragraph" => "align-left",
+        "navigator" => "navigation",
+        "histogram" => "contrast",
+        "info" => "info",
+        "history" => "clock",
+        "actions" => "play",
+        "layerComps" => "app-window",
+        "layers" => "layers",
+        "channels" => "circle-dot",
+        "paths" => "pen-tool",
+        "brushes" => "brush",
+        _ => "app-window",
+    }
 }

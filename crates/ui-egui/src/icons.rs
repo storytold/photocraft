@@ -23,6 +23,11 @@ pub fn exists(name: &str) -> bool {
     white_icons().contains(name)
 }
 
+/// The same SVG source for native panel strips and ordinary buttons.
+pub(crate) fn source(name: &str) -> egui::ImageSource<'static> {
+    white_icons().source(name)
+}
+
 /// An egui image for an icon, tinted.
 pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
     egui::Image::new(white_icons().source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)

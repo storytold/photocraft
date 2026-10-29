@@ -28,6 +28,9 @@ fn bad_stored_values_are_sanitised() {
 
 fn app_with_layers() -> (PhotocraftApp, photocraft_doc::LayerId, photocraft_doc::LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    // Retain coverage of the existing expanded native groups independently of the
+    // replacement compact launcher's migration and gestures (presentation::tests).
+    app.ui.panels.rail = false;
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     let pixel = app.session.active().unwrap().active_layer.unwrap();
@@ -485,6 +488,7 @@ fn app_harness_rows(size: egui::Vec2, theme: ThemeKind, n: usize) -> Harness<'st
         PhotocraftApp::setup_context(&cc.egui_ctx, theme);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.ui.theme = theme;
+        app.ui.panels.rail = false;
         app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
         for i in 0..n {
             app.run("layer.new.layer", json!({"name": format!("Row {i:02}")})).unwrap();
@@ -678,6 +682,8 @@ fn navigator_preview_fills_its_group_and_keeps_aspect() {
                 PhotocraftApp::setup_context(&cc.egui_ctx, theme);
                 let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
                 app.ui.theme = theme;
+                // This preview sizing test uses the expanded native Navigator group.
+                app.ui.panels.rail = false;
                 app.ui.panels.navigator = true;
                 app.ui.dock.heights.insert(Group::Navigator, tall);
                 app.run("file.new", json!({"width": 200, "height": 300})).unwrap();

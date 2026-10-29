@@ -194,6 +194,18 @@ pub struct DocWindow {
     pub position: Option<[f32; 2]>,
 }
 
+/// Application chrome which is not structural docking state. The authoritative
+/// membership, tab order, geometry and hidden return places remain in Workspace.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PanelPresentation {
+    pub compact: Vec<String>,
+    pub widths: std::collections::BTreeMap<String, f32>,
+    pub heights: std::collections::BTreeMap<String, f32>,
+    pub migrated: bool,
+    pub flyouts: std::collections::BTreeMap<String, [f32; 2]>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UiState {
     pub tool: Tool,
@@ -405,6 +417,13 @@ pub struct UiState {
     /// One-frame focus/raise request from an explicit panel reveal.
     #[serde(skip)]
     pub docking_reveal: Option<String>,
+    /// Whole Tools palette position while detached.
+    #[serde(default)]
+    pub toolbar_floating: Option<[f32; 2]>,
+    #[serde(default)]
+    pub panel_presentation: PanelPresentation,
+    #[serde(skip)]
+    pub docking_flyout: Option<String>,
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
@@ -561,6 +580,9 @@ impl Default for UiState {
             docking_generation: 0,
             docking_collapsed: Vec::new(),
             docking_reveal: None,
+            toolbar_floating: None,
+            panel_presentation: Default::default(),
+            docking_flyout: None,
             color_panel: Default::default(),
             brush_section: 0,
             brush_tab: 0,
