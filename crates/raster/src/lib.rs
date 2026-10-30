@@ -60,6 +60,7 @@ pub struct Tile {
 }
 
 impl Tile {
+    /// Fill a new tile with one encoded pixel, reporting size or allocation failures.
     fn try_filled(format: &PixelFormat, pixel: &[u8]) -> Result<Self, AllocationError> {
         let n = (TILE_SIZE * TILE_SIZE) as usize;
         let bytes = n.checked_mul(format.bytes_per_pixel()).ok_or(AllocationError::SizeOverflow)?;

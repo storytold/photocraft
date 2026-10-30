@@ -355,6 +355,7 @@ fn fallible_tile_edits_move_weakly_cached_pixels_and_copy_shared_pixels() {
     }
 }
 
+/// Check encoded defaults across formats and keep cloned tiles isolated during edits.
 #[test]
 fn fallible_default_tiles_preserve_every_encoded_pixel() {
     for mode in [
