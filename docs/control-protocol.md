@@ -773,7 +773,7 @@ provide `anchor` and optional `zone`/`before`, or a serialized `placement`.
 
 `window.panel.edge {panel,edge,individual?,collapsed?,stack?,position?,before?,x?,y?,width?,height?}`
 moves an already attached or floating owner directly to `left`, `rightInner`, `rightOuter`,
-`rightRail`, `top`, `bottom` or `floating`. Top/bottom form expanded horizontal rows.
+`rightRail`, `top`, `bottom` or `floating`. Top/bottom form horizontal groups; `collapsed:true` keeps only their attached tab bar.
 Other expanded editors remain expanded unless `collapsed:true` is supplied.
 `individual:true` moves only that panel. `stack` names a destination section; `position:"top"`
 inserts above it (otherwise below). `before` inserts a column before its named neighbour.

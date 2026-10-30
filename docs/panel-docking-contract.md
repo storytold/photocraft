@@ -128,3 +128,10 @@ Transient drag/resize/animation state is never persistence authority.
 
 Offscreen checks do not replace native window/monitor/IME and physical mixed-DPI
 acceptance. Record these separately when testing the user's own application build.
+
+
+When running these gates with a shared Cargo target directory, build the `xtask`
+helper in a checkout-specific target first. It embeds `CARGO_MANIFEST_DIR`; a
+shared top-level `debug/xtask` alias from another checkout can otherwise validate
+the wrong tree despite the caller's working directory. Check the UI crate's source
+path in the wasm log before accepting the result.
