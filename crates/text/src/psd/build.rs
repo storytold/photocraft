@@ -210,9 +210,9 @@ fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32) ->
         style.set("6", real(s.horizontal_scale));
         style.set("7", real(s.vertical_scale));
         style.set("8", E::Int(s.tracking.round() as i64));
-        // A fresh minimal run has no `/53`; create the paint dict so the fill is written (#10308).
+        // A fresh minimal run has no `/53`; create the SimplePaint dict so the fill is written (#10308).
         if !matches!(style.get("53").and_then(|p| p.get("0")), Some(E::Dict(_))) {
-            style.set("53", E::Dict(vec![("0".into(), E::dict())]));
+            style.set("53", simple_paint_dict());
         }
         if let Some(paint @ E::Dict(_)) = style.get_mut("53").and_then(|p| p.get_mut("0")) {
             let (kind, values) = fill_color(&s.color);
@@ -575,15 +575,16 @@ pub fn needs_txt2(objects: &[(i32, &TextLayer)]) -> bool {
     objects.iter().any(|(_, l)| l.char_runs().iter().any(|r| r.style.kerning == Kerning::Optical || txt2_only_opentype(&r.style)))
 }
 
+/// A `/53` SimplePaint dictionary (`<< /99 /SimplePaint /0 << >> >>`) for a fresh style run.
+fn simple_paint_dict() -> E {
+    E::Dict(vec![("99".into(), E::Name("SimplePaint".into())), ("0".into(), E::dict())])
+}
+
 /// A minimal `Txt2` style run Photoshop will read: the shape [`txt2_style_runs`] fills from a
 /// layer when the file has no template object to copy (a PhotoCraft-native document). Includes an
-/// empty `/53` paint dict so the fill colour can be written.
+/// empty `/53` SimplePaint dict so the fill colour can be written.
 fn minimal_txt2_style_run() -> E {
-    let style = E::Dict(vec![
-        ("0".into(), E::Int(0)),
-        ("11".into(), E::Int(1)),
-        ("53".into(), E::Dict(vec![("0".into(), E::dict())])),
-    ]);
+    let style = E::Dict(vec![("0".into(), E::Int(0)), ("11".into(), E::Int(1)), ("53".into(), simple_paint_dict())]);
     let data = E::Dict(vec![("0".into(), E::String(String::new())), ("6".into(), style)]);
     E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), data)])), ("1".into(), E::Int(1))])
 }
@@ -790,13 +791,22 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
     }
     // The outer dictionary keeps whatever the block held (`/98` version, block extras, …), and
     // `/1` whatever it holds beside the text objects. A PhotoCraft-native block still gets a
-    // frame list (`/0 /8 /0`) so each object's view can name a frame (#10308, #7698).
+    // frame list (`/0 /8 /0`) so each object's view can name a frame (#10308, #7698). A legacy
+    // block with only named resources may lack the numbered `/0` dictionary: create it so
+    // `pad_frames` and the font-list write can run.
     let mut outer = prev.clone().unwrap_or_else(|| {
         E::Dict(vec![
             ("98".into(), E::Dict(vec![("0".into(), E::Int(14))])),
             ("0".into(), E::Dict(vec![("8".into(), E::Dict(vec![("0".into(), E::Array(vec![]))]))])),
         ])
     });
+    if !matches!(outer.get("0"), Some(E::Dict(_))) {
+        outer.set("0", E::Dict(vec![("8".into(), E::Dict(vec![("0".into(), E::Array(vec![]))]))]));
+    } else if outer.path(&["0", "8", "0"]).and_then(E::as_array).is_none()
+        && let Some(doc @ E::Dict(_)) = outer.get_mut("0")
+    {
+        doc.set("8", E::Dict(vec![("0".into(), E::Array(vec![]))]));
+    }
     pad_frames(&mut outer, slots.len().max(frames_needed));
     // A path layer's frame holds its path; a layer taken off its path loses its path frame. An
     // unchanged path leaves the file's frame as it was, and so does a frame the file already had
