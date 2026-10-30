@@ -7,7 +7,7 @@ use super::textures::shown_as_document;
 use super::{PhotocraftApp, Tool, json};
 
 pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
-    if d.tool == Tool::SelectionBrush && app.ui.tool != Tool::SelectionBrush {
+    if d.tool == Tool::SelectionBrush && (app.ui.tool != Tool::SelectionBrush || !d.selection_brush_valid(app)) {
         return;
     }
     // Control can select a different tool and release before the next frame cancels the drag.

@@ -14,6 +14,7 @@ pub struct Options {
 }
 
 impl Default for Options {
+    /// Use the Selection Brush's documented size, hardness, strength and closure defaults.
     fn default() -> Self {
         Self { size: 60.0, hardness: 0.7, opacity: 1.0, fill_closed: true }
     }
@@ -30,6 +31,7 @@ pub struct StrokeMask {
 }
 
 impl StrokeMask {
+    /// Validate brush parameters and start an empty sparse mask bounded by the document.
     pub fn new(options: Options, canvas: Rect) -> Result<Self, &'static str> {
         if !options.size.is_finite()
             || options.size <= 0.0
@@ -44,9 +46,11 @@ impl StrokeMask {
         Ok(Self { options, canvas, points: Vec::new(), length: 0.0, work: 0, mask: Surface::new(PixelFormat::GRAY8) })
     }
 
+    /// Borrow the current stroke coverage without filling its interior.
     pub fn mask(&self) -> &Surface {
         &self.mask
     }
+    /// Return the number of accepted document-coordinate samples.
     pub fn point_count(&self) -> usize {
         self.points.len()
     }
@@ -71,6 +75,7 @@ impl StrokeMask {
         Ok(dirty)
     }
 
+    /// Recognize closure from endpoint distance and path length, independently of viewport zoom.
     pub fn is_closed(&self) -> bool {
         let Some((first, last)) = self.points.first().zip(self.points.last()) else { return false };
         self.options.fill_closed
@@ -102,6 +107,7 @@ impl StrokeMask {
         Ok(combine_sparse(&self.mask, &fill, self.canvas, f32::max))
     }
 
+    /// Union one soft round segment into touched tiles, rejecting excessive raster work.
     fn capsule(&mut self, a: [f64; 2], b: [f64; 2]) -> Result<Rect, &'static str> {
         let radius = f64::from(self.options.size) * 0.5;
         let area = Rect::new(
@@ -168,6 +174,7 @@ mod tests {
     }
 
     #[test]
+    /// Verify even-odd self-intersections and zero-opacity coverage.
     fn selection_brush_self_crossing_uses_even_odd_and_zero_strength_is_empty() {
         let bowtie = [[20., 20.], [100., 100.], [20., 100.], [100., 20.], [20., 20.]];
         let s = mask(&bowtie, Options { size: 2.0, hardness: 1.0, ..Default::default() });
@@ -176,6 +183,7 @@ mod tests {
         assert!(mask(&bowtie, Options { opacity: 0.0, ..Default::default() }).content_bounds().is_empty());
     }
     #[test]
+    /// Verify soft falloff, hardness and non-accumulating repeated samples.
     fn selection_brush_soft_opacity_and_non_accumulating_overlap() {
         let options = Options { size: 40.0, hardness: 0.0, opacity: 0.5, ..Default::default() };
         let s = mask(&[[100., 100.], [100., 100.], [100., 100.]], options);
@@ -186,6 +194,7 @@ mod tests {
         assert!(hard.sample_channel(115, 100, 0) > edge);
     }
     #[test]
+    /// Prove incremental feeding matches batch rasterization and limits damage to new segments.
     fn selection_brush_incremental_matches_batch_and_only_changes_new_segment() {
         let options = Options { size: 10.0, hardness: 1.0, ..Default::default() };
         let points = [[20., 20.], [100., 20.], [100., 100.]];
@@ -198,6 +207,7 @@ mod tests {
         assert_eq!(batch.sample_channel(50, 50, 0), 0.0);
     }
     #[test]
+    /// Check closure and strength without filling an open outline.
     fn selection_brush_closed_fill_respects_opacity_and_open_c_stays_open() {
         let options = Options { size: 10.0, opacity: 0.5, ..Default::default() };
         let open = [[20., 20.], [100., 20.], [100., 100.], [20., 100.]];
@@ -207,6 +217,7 @@ mod tests {
         assert_eq!(mask(&closed, Options { opacity: 0.0, ..options }).tile_count(), 0);
     }
     #[test]
+    /// Check sparse long segments and graceful rejection of non-finite input.
     fn selection_brush_huge_diagonal_is_sparse_and_bad_numbers_are_rejected() {
         let mut s = StrokeMask::new(Options { size: 2.0, ..Default::default() }, Rect::new(0, 0, 50_000, 50_000)).unwrap();
         s.append(&[[0., 0.], [49_999., 49_999.]]).unwrap();

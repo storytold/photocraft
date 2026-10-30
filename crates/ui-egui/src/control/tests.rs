@@ -110,6 +110,7 @@ fn brush_mode_control_routes_modifiers_and_reports_choices_without_history() {
 }
 
 #[test]
+/// Verify valid settings persist and rejected patches leave both tool and selection unchanged.
 fn selection_brush_settings_are_atomic_persistent_and_independent_of_coverage() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     let ctx = egui::Context::default();
@@ -139,6 +140,28 @@ fn selection_brush_settings_are_atomic_persistent_and_independent_of_coverage() 
 }
 
 #[test]
+/// Saved future fields must not discard known settings, while automation remains strict and atomic.
+fn selection_brush_future_settings_restore_but_unknown_patches_fail() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.prefs.edit(|p| {
+        p.tool_options = json!({"selection_brush":{
+            "subtract":true,"overlayColor":[0.25,0.5,1.0],"overlayOpacity":23.0,"fillClosed":false,"futureSetting":7
+        }})
+    });
+    crate::tool_memory::restore(&mut app);
+    let settings = app.ui.tool_options.selection_brush.clone();
+    assert!(settings.subtract && !settings.fill_closed);
+    assert_eq!(settings.overlay_color, [0.25, 0.5, 1.0]);
+    assert_eq!(settings.overlay_opacity, 23.0);
+    let ctx = egui::Context::default();
+    let tool = app.ui.tool;
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"tool":"SelectionBrush","selectionBrush":{"futureSetting":7,"subtract":false}}))["ok"], false);
+    assert_eq!(app.ui.tool, tool);
+    assert_eq!(app.ui.tool_options.selection_brush, settings);
+}
+
+#[test]
+/// Verify automation commits the same closed mask regardless of viewport zoom.
 fn selection_brush_closed_mask_is_identical_at_two_hundred_percent_zoom() {
     let ctx = egui::Context::default();
     let mut masks = Vec::new();

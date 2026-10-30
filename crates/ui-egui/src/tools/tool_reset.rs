@@ -89,6 +89,7 @@ fn reset_all(app: &mut PhotocraftApp) {
     reset_session_brush(app);
 }
 
+/// Restore the active tool's brush defaults and clear its preset gesture bookkeeping.
 fn reset_session_brush(app: &mut PhotocraftApp) {
     app.session.tools.brush = crate::paint_mouse::fresh_brush(&app.session.tools.brush);
     if app.ui.tool == Tool::SelectionBrush {

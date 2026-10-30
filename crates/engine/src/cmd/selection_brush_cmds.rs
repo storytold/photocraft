@@ -7,6 +7,7 @@ use photocraft_algo::selection::{Region, SelectionMode};
 use photocraft_geom::Rect;
 use serde_json::{Value, json};
 
+/// Tag validation failures with the command id used by automation clients.
 fn bad(msg: &str) -> EngineError {
     EngineError::BadParams { cmd: "select.brush".into(), msg: msg.into() }
 }
@@ -14,6 +15,7 @@ fn bad(msg: &str) -> EngineError {
 // Compatibility helper for the original geometric regression tests. Production code uses
 // the sparse L2 stroke directly and never materialises a full stroke bounding box.
 #[cfg(test)]
+/// Materialize small test masks for compatibility with geometric selection assertions.
 fn region(points: &[[f64; 2]], diameter: f32, canvas: Rect) -> Result<Option<Region>> {
     use photocraft_algo::selection::brush::{Options, StrokeMask};
     let mut stroke = StrokeMask::new(Options { size: diameter, hardness: 1.0, ..Default::default() }, canvas).map_err(bad)?;
@@ -26,6 +28,7 @@ fn region(points: &[[f64; 2]], diameter: f32, canvas: Rect) -> Result<Option<Reg
     Ok(Some(Region { bbox, mask: mask.read_region(bbox).iter().map(|v| (v * 255.0).round() as u8).collect() }))
 }
 
+/// Read a finite bounded brush setting, using its default only when the field is absent.
 fn number(p: &Value, key: &str, default: f32, lo: f32, hi: f32) -> Result<f32> {
     let Some(v) = p.get(key) else { return Ok(default) };
     let v = v.as_f64().ok_or_else(|| bad("brush settings must be numbers"))? as f32;
@@ -35,6 +38,7 @@ fn number(p: &Value, key: &str, default: f32, lo: f32, hi: f32) -> Result<f32> {
     Ok(v)
 }
 
+/// Validate and rasterize before atomically composing one undoable selection edit.
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     use photocraft_algo::selection::brush::{Options, StrokeMask};
     use photocraft_color::PixelFormat;
@@ -85,6 +89,7 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"changed":true,"selected":selected}))
 }
 
+/// Expose the same selection operation to the native UI, CLI and automation registry.
 pub fn specs() -> Vec<CommandSpec> {
     vec![CommandSpec {
         id: "select.brush",
@@ -102,6 +107,7 @@ pub fn specs() -> Vec<CommandSpec> {
 mod tests {
     use super::*;
     #[test]
+    /// Verify no-op strength and invalid parameters cannot add history entries.
     fn selection_brush_zero_opacity_and_rejected_options_preserve_history() {
         let mut s = Session::new();
         s.execute("file.new", json!({"width":100,"height":100})).unwrap();
@@ -116,6 +122,7 @@ mod tests {
         assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(10, 10, 0), 1.0);
     }
     #[test]
+    /// Exercise subtraction and undo/redo at all supported document depths.
     fn selection_brush_history_and_depths() {
         for depth in [8, 16, 32] {
             let mut s = Session::new();
@@ -132,6 +139,7 @@ mod tests {
         }
     }
     #[test]
+    /// Check geometric open strokes, closed fill and subtraction composition.
     fn selection_brush_round_strokes_and_closed_interiors() {
         let canvas = Rect::new(0, 0, 100, 100);
         let open = region(&[[20., 20.], [80., 20.], [80., 80.]], 10., canvas).unwrap().unwrap();
@@ -147,6 +155,7 @@ mod tests {
         assert_eq!(erased.sample_channel(50, 20, 0), 0.0);
     }
     #[test]
+    /// Check clipped clicks, empty input and non-finite geometry.
     fn selection_brush_click_clipping_and_invalid_input() {
         let c = Rect::new(0, 0, 100, 100);
         assert!(region(&[[0., 0.]], 10., c).unwrap().unwrap().at(1, 1) > 0.9);

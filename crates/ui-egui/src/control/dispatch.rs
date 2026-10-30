@@ -1414,9 +1414,14 @@ fn open_pcraft_directory(app: &mut PhotocraftApp, path: &str) -> Option<Outcome>
     }
 }
 
+/// Validate a strict automation patch before merging forward-compatible saved settings.
 fn selection_brush_param(app: &PhotocraftApp, p: &Value) -> std::result::Result<Option<crate::state::SelectionBrushOptions>, String> {
     let Some(value) = p.get("selectionBrush").filter(|v| !v.is_null()) else { return Ok(None) };
     let patch = value.as_object().ok_or("selectionBrush must be an object")?;
+    const KEYS: [&str; 4] = ["subtract", "overlayColor", "overlayOpacity", "fillClosed"];
+    if let Some(key) = patch.keys().find(|key| !KEYS.contains(&key.as_str())) {
+        return Err(format!("unknown selectionBrush field `{key}`"));
+    }
     let mut merged = serde_json::to_value(&app.ui.tool_options.selection_brush).map_err(|e| e.to_string())?;
     if let Some(object) = merged.as_object_mut() {
         for (key, value) in patch {

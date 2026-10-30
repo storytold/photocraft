@@ -31,6 +31,9 @@ Layer pixels are unchanged. The selection remains editable with existing selecti
 switching tools restores marching ants. Overlay colour and display opacity affect drawing
 only, never coverage, document revision, or undo history. Selection Opacity is a distinct control.
 
+Changing or closing the source document, or editing its revision before release, invalidates
+the uncommitted stroke. Document object identity is checked as well as its id and revision.
+
 With Fill Closed Strokes enabled, at least four samples, a path length of at least three
 brush diameters, and endpoints within `max(size / 2, 2)` document pixels qualify as closed.
 On release the even-odd polygon interior is unioned with the stroke, at the same selection
@@ -47,6 +50,8 @@ The UI caches a display texture capped at 1024 pixels on its longest side, feeds
 into a full-resolution stroke, and samples that coverage exactly like the committed selection.
 Scaling brush geometry before rasterization would change pixel centres and antialiasing on release.
 The UI uploads changed rectangles. Idle frames and overlay tint changes do not rerasterize it.
+Document-size changes recreate the display texture when its extent changes; full-resolution
+stroke bounds are also refreshed when the document size changes within the same display extent.
 The full-resolution mask is computed by the command at release.
 
 Strokes accept at most 65,536 finite samples, coordinates within ±10,000,000, and bounded
@@ -65,6 +70,9 @@ partial settings object atomically. RGB colour components are in 0–1 and displ
 is in 0–100. `tools.setBrush` controls size and normalized hardness/opacity. `ui.inspect`
 exposes settings under `toolOptions.selection_brush`. Existing selection export and mask
 commands consume the committed selection; this change adds no AI-specific export protocol.
+
+Saved settings ignore unknown future fields, while automation patches reject unknown keys
+before changing any tool or option.
 
 ## Acceptance evidence
 

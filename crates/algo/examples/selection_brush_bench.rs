@@ -6,6 +6,7 @@ use photocraft_testkit::perf::{report, row, write_report};
 use serde_json::json;
 use std::{hint::black_box, time::Instant};
 
+/// Measure incremental samples, prefix replay and closed fill with optional JSON output.
 fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().collect();
     let quick = args.iter().any(|a| a == "--quick");

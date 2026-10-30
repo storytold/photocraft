@@ -485,7 +485,7 @@ impl Default for ToolOptions {
 
 /// Selection Brush view settings. Coverage strength lives in its per-tool brush, not here.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+#[serde(default, rename_all = "camelCase")]
 pub struct SelectionBrushOptions {
     pub subtract: bool,
     pub overlay_color: [f32; 3],
@@ -493,16 +493,19 @@ pub struct SelectionBrushOptions {
     pub fill_closed: bool,
 }
 impl Default for SelectionBrushOptions {
+    /// Start with an additive brush and a red 40% display overlay.
     fn default() -> Self {
         Self { subtract: false, overlay_color: [1.0, 0.0, 0.0], overlay_opacity: 40.0, fill_closed: true }
     }
 }
 impl SelectionBrushOptions {
+    /// Validate persisted display values before using them as painter colours.
     pub fn valid(&self) -> bool {
         self.overlay_color.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
             && self.overlay_opacity.is_finite()
             && (0.0..=100.0).contains(&self.overlay_opacity)
     }
+    /// Alt forces subtraction without reversing an already subtractive mode.
     pub fn subtracts(&self, alt: bool) -> bool {
         self.subtract || alt
     }

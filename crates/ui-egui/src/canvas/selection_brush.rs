@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 #[derive(Clone, PartialEq)]
 struct Key {
     revision: u64,
+    size: [u32; 2],
     factor: u32,
     options: Options,
     subtract: bool,
@@ -25,6 +26,7 @@ struct Cache {
     needs_base: bool,
 }
 
+/// Sample live and committed coverage at identical document coordinates.
 fn image(app: &PhotocraftApp, idx: usize, cache: &Cache, area: Rect) -> ColorImage {
     let Some(st) = app.session.documents().get(idx) else { return ColorImage::new([0, 0], Vec::new()) };
     let mut pixels = Vec::with_capacity(area.size().area() as usize);
@@ -41,6 +43,7 @@ fn image(app: &PhotocraftApp, idx: usize, cache: &Cache, area: Rect) -> ColorIma
     ColorImage::new([area.width() as usize, area.height() as usize], pixels)
 }
 
+/// Maintain the document's display texture and upload damaged coverage rectangles.
 pub(super) fn paint(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Painter, xf: &ViewXform, idx: usize) {
     if app.ui.tool != Tool::SelectionBrush {
         return;
@@ -49,7 +52,7 @@ pub(super) fn paint(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Pa
     let settings = &app.ui.tool_options.selection_brush;
     let fallback = crate::state::SelectionBrushOptions::default();
     let settings = if settings.valid() { settings } else { &fallback };
-    let drag = app.drag.as_ref().filter(|d| d.tool == Tool::SelectionBrush && app.session.active_index() == Some(idx));
+    let drag = app.drag.as_ref().filter(|d| d.tool == Tool::SelectionBrush && d.selection_brush_valid(app) && app.session.active_index() == Some(idx));
     let max_side = ctx.input(|i| i.max_texture_side).clamp(1, 1024) as u32;
     let factor = st.doc.size.width.max(st.doc.size.height).div_ceil(max_side).max(1);
     let (w, h) = (st.doc.size.width.div_ceil(factor).max(1), st.doc.size.height.div_ceil(factor).max(1));
@@ -57,6 +60,7 @@ pub(super) fn paint(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Pa
     let brush = &app.session.tools.brush;
     let key = Key {
         revision: st.revision,
+        size: [st.doc.size.width, st.doc.size.height],
         factor,
         // Rasterize in document coordinates, exactly like the command. Scaling the geometry
         // first also scales antialiasing and pixel centres, changing the outline on release.
@@ -77,6 +81,14 @@ pub(super) fn paint(app: &PhotocraftApp, ctx: &egui::Context, painter: &egui::Pa
         cache
     });
     let mut cache = shared.lock().unwrap_or_else(PoisonError::into_inner);
+    if cache.texture.size() != [w as usize, h as usize] {
+        cache.texture = ctx.load_texture(
+            "Selection Brush coverage",
+            ColorImage::new([w as usize, h as usize], vec![Color32::TRANSPARENT; w as usize * h as usize]),
+            TextureOptions::LINEAR,
+        );
+        cache.needs_base = true;
+    }
     let mut dirty = if cache.needs_base { bounds } else { Rect::EMPTY };
     cache.needs_base = false;
     if cache.key != key {
@@ -142,7 +154,53 @@ mod tests {
     use super::*;
     use crate::canvas::{ToolEvent, tool_event};
     use serde_json::json;
+    /// Resize, rotate and undo/redo must replace the texture rather than upload outside its old extent.
     #[test]
+    fn selection_brush_texture_tracks_document_dimensions() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width":800,"height":600})).unwrap();
+        app.ui.tool = Tool::SelectionBrush;
+        let doc = app.session.active().unwrap().doc.id;
+        let ctx = egui::Context::default();
+        let xf = ViewXform {
+            rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1024.0, 800.0)),
+            zoom: 1.0,
+            center: [400.0, 300.0],
+            flip: false,
+            rotation: 0.0,
+            aspect: 1.0,
+        };
+        let mut previous = None;
+        for command in [
+            None,
+            Some(("image.rotation.arbitrary", json!({"angle":90}))),
+            Some(("image.canvasSize", json!({"width":400,"height":300}))),
+            Some(("edit.undo", json!({}))),
+            Some(("edit.redo", json!({}))),
+            Some(("image.canvasSize", json!({"width":1500,"height":900}))),
+        ] {
+            if let Some((id, p)) = command {
+                app.run(id, p).unwrap();
+            }
+            assert_eq!(app.session.active().unwrap().doc.id, doc);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| paint(&app, ui.ctx(), ui.painter(), &xf, 0));
+            let cache = ctx.data(|d| d.get_temp::<Arc<Mutex<Cache>>>(egui::Id::unique(("selection-brush-overlay", doc.0)))).unwrap();
+            let cache = cache.lock().unwrap();
+            let size = app.session.active().unwrap().doc.size;
+            let factor = size.width.max(size.height).div_ceil(1024).max(1);
+            let expected = [size.width.div_ceil(factor) as usize, size.height.div_ceil(factor) as usize];
+            assert_eq!(cache.texture.size(), expected);
+            if let Some(old) = previous {
+                assert_ne!(old, cache.texture.id());
+            }
+            assert!(output.textures_delta.set.values().flatten().any(|delta| delta.pos.is_none() && delta.image.size() == expected));
+            previous = Some(cache.texture.id());
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    /// Compare live and committed coverage, preserving only the intentional closed interior change.
     fn selection_brush_preview_matches_commit_at_document_and_reduced_scales() {
         for width in [800, 3877] {
             for closed in [false, true] {
@@ -205,6 +263,7 @@ mod tests {
         }
     }
     #[test]
+    /// Ensure new segments use partial uploads and idle or tint-only frames upload nothing.
     fn selection_brush_drag_uploads_only_the_dirty_rectangle_and_idle_frames_upload_nothing() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width":3840,"height":2160})).unwrap();
