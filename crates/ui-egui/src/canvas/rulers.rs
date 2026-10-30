@@ -129,7 +129,13 @@ impl GuideDrag {
 
 /// Canvas area left after the rulers.
 pub fn content_rect(app: &PhotocraftApp, rect: Rect) -> Rect {
-    if app.ui.extras.rulers { Rect::from_min_max(rect.min + vec2(RULER, RULER), rect.max) } else { rect }
+    content_rect_with(app.ui.extras.rulers, rect)
+}
+
+/// [`content_rect`] for a window whose rulers are shown (`rulers`) or not: each document window
+/// has its own.
+pub fn content_rect_with(rulers: bool, rect: Rect) -> Rect {
+    if rulers { Rect::from_min_max(rect.min + vec2(RULER, RULER), rect.max) } else { rect }
 }
 
 /// Whether the screen point `p` is over a ruler, inside the full canvas rect `full`. A guide let go
@@ -211,7 +217,9 @@ pub fn guide_cursor(xf: &ViewXform, vertical: bool) -> egui::CursorIcon {
     crate::tool_cursor::resize(if vertical { [1.0, 0.0] } else { [0.0, 1.0] }, xf)
 }
 
-pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document) {
+/// `doc`'s guides, when its window shows them (`shown`: View › Show › Guides there), and New Guide
+/// Layout's preview and a guide being dragged either way.
+pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform, doc: &Document, shown: bool) {
     let clip = painter.clip_rect();
     let drag = app.guide_drag;
     let g = &app.session.prefs().guides_grid_and_slices;
@@ -231,7 +239,7 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
         }
         guides.color(vertical, p).map_or(guide, |[r, g, b]| Color32::from_rgb(r, g, b))
     };
-    if app.ui.extras.guides || preview.is_some() {
+    if shown || preview.is_some() {
         for (vertical, list) in [(true, &guides.vertical), (false, &guides.horizontal)] {
             for (i, p) in list.iter().enumerate() {
                 if drag.is_some_and(|d| d.vertical == vertical && d.index == Some(i)) {

@@ -249,7 +249,9 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
         Some(Some((proxy, k))) => (proxy.selection.as_ref(), (*k).max(1)),
     };
     // Selection outline: true boundary, animated marching ants (cached per revision).
-    if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app)) {
+    // Extras is per document window: an arranged document's own hides or shows its ants.
+    let extras = app.window_toggles_of(input.idx).extras;
+    if let Some(sel) = outlined.filter(|_| extras && app.ui.view.show.selection_edges && !polygon_replaces_selection(app)) {
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it. The step is in
         // device pixels per document pixel (`View::zoom`, not the point zoom), so a 1 px
@@ -1297,11 +1299,13 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     crate::transform_tool::draw_content(app, painter, xf);
     // So are Puppet Warp's, Perspective Warp's and Vanishing Point's warped pixels (#7781).
     crate::distort_ui::draw_content(app, painter, xf);
-    if app.ui.extras.grid && app.ui.view.extras {
+    // Grid and guides are each document window's own: a tile or an extra window shows its own.
+    let toggles = app.window_toggles_of(idx);
+    if toggles.grid && toggles.extras {
         crate::rulers::draw_grid(app, painter, xf, doc);
     }
-    if app.ui.view.shows(app.ui.view.show.canvas_guides) || crate::guide_layout_ui::preview(app, doc).is_some() {
-        crate::rulers::draw_guides(app, painter, xf, doc);
+    if (toggles.extras && app.ui.view.show.canvas_guides) || crate::guide_layout_ui::preview(app, doc).is_some() {
+        crate::rulers::draw_guides(app, painter, xf, doc, toggles.guides);
     }
     // The selection's ants go over the grid and guides, as in Photoshop (#10671).
     painter.extend(ants);
@@ -1701,14 +1705,17 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
         app.perf.span("scrollbars", crate::gpu_canvas::now_ms() - t0);
         app.hover_doc = response.hover_pos().map(|p| xf.to_doc(p));
     }
-    if primary && app.ui.extras.rulers {
+    // The rulers take guide drags only in the window whose settings are live; any other canvas
+    // draws its own window's rulers.
+    let rulers = app.window_toggles_of(idx).rulers;
+    if primary && rulers && app.session.active_index() == Some(idx) {
         let before = app.guide_drag;
         crate::rulers::draw_rulers(app, ui, full, &xf);
         // A guide dragged out of a ruler moved after this frame drew it: draw it again where it is.
         if app.guide_drag != before {
             ctx.request_repaint();
         }
-    } else if app.ui.extras.rulers {
+    } else if rulers {
         crate::rulers::paint_rulers(app, ui, full, &xf, doc);
     }
     // After the ruler drags above, so the readout shows where the guide is now, and not after a
@@ -1823,7 +1830,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let full = rect;
     // Every document view has its rulers, the tiles of Window › Arrange and floating windows
     // too, as in Photoshop (#6017).
-    let rect = crate::rulers::content_rect(app, rect);
+    // Each document window has its own rulers: an arranged document keeps its own.
+    let rect = crate::rulers::content_rect_with(app.window_toggles_of(idx).rulers, rect);
     // Both wheel reads share one owner so snap-zoom input is accumulated only once per frame.
     let wheel_owner = ui.scope_id().with(("canvas-wheel", idx));
     // Direct navigation starts from the authoritative camera. This also means a click or drag
@@ -1856,7 +1864,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let aspect = sync_view_to_document(app, &ctx, &mut view, &doc, rect, ppp);
     update_polygon_camera(app, &ctx, (idx, primary), rect, &mut view, ppp, aspect);
 
-    let flip = app.ui.view.flip_horizontal;
+    // Flip Horizontal is per window: another arranged document shows its own.
+    let flip = app.window_toggles_of(idx).flip_horizontal;
     // Document rendering follows the target; only shader uniforms and overlay geometry ease.
     let target_xf = ViewXform { rect, zoom: view.zoom / ppp, center: view.center, flip, rotation: view.rotation, aspect };
     let render_zoom = view.zoom;

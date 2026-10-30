@@ -101,6 +101,7 @@ impl PhotocraftApp {
             drop_places: Default::default(),
             view_docs: Vec::new(),
             path_document: None,
+            toggles_doc: None,
             fps: 0.0,
             last_frame_time: 0.0,
             thumbs: HashMap::new(),

@@ -79,6 +79,51 @@ fn pixel_aspect_ratio_is_each_documents_own() {
     assert_eq!(checked(&empty, "view.pixelAspectRatio.square"), Some(false));
 }
 
+/// Flip Horizontal, Extras, Rulers and Show › Grid / Guides belong to each document window, as in
+/// Photoshop: switching documents brings back each one's own, an arranged document is drawn with
+/// its own flip, and a new document starts from the settings in use.
+#[test]
+fn flip_extras_rulers_grid_and_guides_are_per_document_window() {
+    let (mut app, ctx) = app_with(2);
+    let switch = |app: &mut PhotocraftApp, i: usize| {
+        app.session.set_active(i);
+        app.sync_views();
+    };
+    switch(&mut app, 0);
+    let start = app.window_toggles();
+    // Extras last: showing the grid or guides turns Extras back on, as in Photoshop.
+    for id in ["view.flipHorizontal", "view.rulers", "view.show.grid", "view.show.guides", "view.extras"] {
+        menu(&mut app, &ctx, id, json!({})).unwrap();
+    }
+    let changed = app.window_toggles();
+    assert_eq!(
+        changed,
+        crate::state::WindowToggles {
+            flip_horizontal: !start.flip_horizontal,
+            extras: !start.extras,
+            rulers: !start.rulers,
+            grid: !start.grid,
+            guides: !start.guides
+        }
+    );
+    switch(&mut app, 1);
+    assert_eq!(app.window_toggles(), start, "the other document keeps its own");
+    assert_eq!(app.window_toggles_of(0), changed, "an arranged tile draws the first with its own");
+    let full = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 100.0));
+    let inset = |rulers| crate::rulers::content_rect_with(rulers, full);
+    assert_ne!(inset(app.window_toggles_of(0).rulers), inset(app.window_toggles_of(1).rulers), "each tile keeps its own rulers");
+    assert_eq!(checked(&app, "view.flipHorizontal"), Some(start.flip_horizontal));
+    switch(&mut app, 0);
+    assert_eq!(app.window_toggles(), changed, "and coming back restores them");
+    // A new document opens with the settings in use.
+    app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
+    app.sync_views();
+    assert_eq!(app.window_toggles(), changed);
+    // Closing the active document hands the live settings to the one that becomes active.
+    switch(&mut app, 1);
+    assert_eq!(app.window_toggles(), start);
+}
+
 #[test]
 fn show_snap_extras_and_screen_modes_are_state() {
     let (mut app, ctx) = app_with(1);
