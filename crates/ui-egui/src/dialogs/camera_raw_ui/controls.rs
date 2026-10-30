@@ -7,35 +7,58 @@ use super::{
 
 const RAW_UNDO_LIMIT: usize = 40;
 
+/// One dialog undo step: the settings, and what Edit › Auto, B&W and White Balance › Auto
+/// remember about them, so undo and redo bring those back with the settings.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct EditState {
+    params: CameraRaw,
+    auto: Option<(AutoTone, AutoTone)>,
+    black_and_white: Option<(f32, f32)>,
+    white_balance_auto: Option<(f32, f32)>,
+}
+
+impl EditState {
+    fn of(d: &CameraRawDialog) -> Self {
+        Self { params: d.params.clone(), auto: d.auto, black_and_white: d.black_and_white, white_balance_auto: d.white_balance_auto }
+    }
+
+    fn restore(self, d: &mut CameraRawDialog) {
+        if d.params.point_curve != self.params.point_curve {
+            d.curve_state = Default::default();
+        }
+        d.params = self.params;
+        d.auto = self.auto;
+        d.black_and_white = self.black_and_white;
+        d.white_balance_auto = self.white_balance_auto;
+        d.dirty = true;
+        d.edit_origin = None;
+    }
+}
+
 pub(super) fn remember_edit(d: &mut CameraRawDialog) {
+    remember_state(d, EditState::of(d));
+}
+
+/// Records `state`, from before an edit, as the next undo step.
+pub(super) fn remember_state(d: &mut CameraRawDialog, state: EditState) {
     if d.undo.len() == RAW_UNDO_LIMIT {
         d.undo.remove(0);
     }
-    d.undo.push(d.params.clone());
+    d.undo.push(state);
     d.redo.clear();
 }
 
 pub(super) fn undo_edit(d: &mut CameraRawDialog) -> bool {
     let Some(prev) = d.undo.pop() else { return false };
-    d.redo.push(d.params.clone());
-    if d.params.point_curve != prev.point_curve {
-        d.curve_state = Default::default();
-    }
-    d.params = prev;
-    d.dirty = true;
-    d.edit_origin = None;
+    d.redo.push(EditState::of(d));
+    prev.restore(d);
     true
 }
 
 pub(super) fn redo_edit(d: &mut CameraRawDialog) -> bool {
     let Some(next) = d.redo.pop() else { return false };
-    d.undo.push(d.params.clone());
-    if d.params.point_curve != next.point_curve {
-        d.curve_state = Default::default();
-    }
-    d.params = next;
-    d.dirty = true;
-    d.edit_origin = None;
+    d.undo.push(EditState::of(d));
+    next.restore(d);
     true
 }
 
@@ -136,6 +159,46 @@ fn tone_row(ui: &mut egui::Ui, dirty: &mut bool, alt: &mut Option<ToneZone>, zon
     if r.dragged() && ui.input(|i| i.modifiers.alt) {
         *alt = Some(zone);
     }
+}
+
+/// The Edit row above Light, as in Camera Raw: Auto and B&W, each a toggle. The pointer-up
+/// bookkeeping in [`draw`] makes each click one dialog undo step.
+fn edit_header(ui: &mut egui::Ui, d: &mut CameraRawDialog) {
+    let tr = |s| crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", s);
+    let text = Tokens::get(ui.ctx()).text;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(tr("Edit")).font(crate::theme::medium(13.0)).color(text));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if edit_toggle(ui, tr("B&W"), d.black_and_white_on()).on_hover_text(tr("Black & White treatment")).clicked() {
+                d.toggle_black_and_white();
+            }
+            if edit_toggle(ui, tr("Auto"), d.auto_on()).on_hover_text(tr("Automatic Light settings for this image")).clicked() {
+                d.toggle_auto();
+            }
+        });
+    });
+    ui.add_space(4.0);
+}
+
+/// White Balance: As Shot / Auto / Custom, as in Camera Raw. Custom only names moved sliders.
+/// True when the user picked an option.
+fn white_balance_row(ui: &mut egui::Ui, mode: &mut &'static str) -> bool {
+    let tr = |s| crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", s);
+    let mut picked = false;
+    ui.horizontal(|ui| {
+        widgets::section_label(ui, tr("White Balance"));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            let options = [("asShot", tr("As Shot")), ("auto", tr("Auto")), ("custom", tr("Custom"))];
+            picked = widgets::dropdown_literal(ui, "cr-white-balance", tr("White Balance"), mode, &options, 150.0);
+        });
+    });
+    picked
+}
+
+fn edit_toggle(ui: &mut egui::Ui, label: &str, on: bool) -> egui::Response {
+    let r = ui.add(egui::Button::selectable(on, label).min_size(vec2(44.0, 22.0)));
+    r.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
+    r
 }
 
 fn section(ui: &mut egui::Ui, title: &str, open: bool, body: impl FnOnce(&mut egui::Ui)) {
@@ -246,7 +309,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         history_keys(d, ctx);
         let pointer = ctx.input(|i| i.pointer.primary_down());
         if pointer && d.edit_origin.is_none() {
-            d.edit_origin = Some(d.params.clone());
+            d.edit_origin = Some(EditState::of(d));
         }
         if let Some(display) = &current_display
             && display.key != d.display.key
@@ -331,17 +394,13 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let mut dirty = false;
         egui::ScrollArea::vertical().id_salt("camera-raw-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
+            edit_header(ui, d);
+            let mut white_balance = d.white_balance_mode();
+            let mut white_balance_picked = false;
             let p = &mut d.params;
-            let proxy = &d.proxy;
             let alt = &mut d.scope.alt_tone;
             let (ts, tn) = (temp_stops(), tint_stops());
             section(ui, "Light", true, |ui| {
-                // Auto: Camera Raw's one-click tone from the histogram; the sliders show what it
-                // chose, so each can be adjusted afterwards.
-                if ui.button(tl!("Auto")).on_hover_text(tl!("Set the tone sliders from the image")).clicked() {
-                    photocraft_algo::camera_raw::auto_tone(proxy, p);
-                    dirty = true;
-                }
                 tone_row(ui, &mut dirty, alt, ToneZone::Exposure, &mut p.exposure);
                 row(ui, &mut dirty, "Contrast", &mut p.contrast, -100.0..=100.0, None);
                 tone_row(ui, &mut dirty, alt, ToneZone::Highlights, &mut p.highlights);
@@ -350,7 +409,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 tone_row(ui, &mut dirty, alt, ToneZone::Blacks, &mut p.blacks);
             });
             section(ui, "Color", false, |ui| {
-                widgets::section_label(ui, tl!("White Balance: As Shot"));
+                white_balance_picked = white_balance_row(ui, &mut white_balance);
                 row(ui, &mut dirty, "Temperature", &mut p.temperature, -100.0..=100.0, Some(&ts));
                 row(ui, &mut dirty, "Tint", &mut p.tint, -100.0..=100.0, Some(&tn));
                 row(ui, &mut dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, None);
@@ -451,6 +510,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                     });
                 }
             });
+            if white_balance_picked {
+                d.set_white_balance(white_balance);
+            }
         });
         crate::camera_raw_scope_ui::floating(ctx, d, scope, right);
         crate::camera_raw_scope_ui::shortcuts(ctx, scope);
@@ -488,11 +550,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
         if !ctx.input(|i| i.pointer.primary_down())
             && let Some(origin) = d.edit_origin.take()
-            && origin != d.params
+            && origin != EditState::of(d)
         {
-            let edited = std::mem::replace(&mut d.params, origin);
-            remember_edit(d);
-            d.params = edited;
+            remember_state(d, origin);
         }
     });
     crate::camera_raw_scope_ui::persist(app, ctx);

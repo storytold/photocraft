@@ -13,9 +13,12 @@
 //! "commit":true | "cancel":true}}}`; the reply describes the dialog. `{"ui":{"saveSettings":true}}`
 //! and `{"ui":{"loadSettings":true}}` run Save Settings… / Load Settings… (Camera Raw `.xmp`
 //! settings files, see [`photocraft_io::camera_raw_xmp`]) through the file dialog.
+//! `{"ui":{"auto":true}}` and `{"ui":{"blackAndWhite":true}}` turn the Edit row's Auto and B&W
+//! on (`false` turns them off), as their buttons do; `{"ui":{"whiteBalance":"auto"}}` (or
+//! `"asShot"`) picks White Balance.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::camera_raw::{CameraRaw, Wheel, curve_lut};
+use photocraft_algo::camera_raw::{AutoTone, CameraRaw, Wheel, curve_lut};
 use photocraft_algo::histogram::RgbHistogram;
 
 use crate::camera_raw_scope_ui::{MAX_SAMPLERS, ToneZone};
@@ -34,6 +37,8 @@ mod menu;
 mod open;
 mod proxy;
 mod sidecar;
+
+use controls::EditState;
 
 pub use controls::show;
 #[cfg(test)]
@@ -112,10 +117,17 @@ pub struct CameraRawDialog {
     develop_ms: f64,
     pub(crate) develop_backend: &'static str,
     /// Settings before each finished edit, so Ctrl+Z works inside the dialog (#4100).
-    undo: Vec<CameraRaw>,
-    redo: Vec<CameraRaw>,
-    /// Params at pointer-down. One drag is one undo step.
-    edit_origin: Option<CameraRaw>,
+    undo: Vec<EditState>,
+    redo: Vec<EditState>,
+    /// Settings and what Auto, B&W and White Balance remember, at pointer-down. One drag or
+    /// click is one undo step.
+    edit_origin: Option<EditState>,
+    /// Edit › Auto while it is on: the settings it replaced and the ones it set.
+    auto: Option<(AutoTone, AutoTone)>,
+    /// Edit › B&W while it is on: the Saturation and Vibrance it replaced.
+    black_and_white: Option<(f32, f32)>,
+    /// The Temperature and Tint White Balance › Auto last set.
+    white_balance_auto: Option<(f32, f32)>,
 }
 
 impl CameraRawDialog {
@@ -130,6 +142,9 @@ impl CameraRawDialog {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter | Target::OpenRaw => None,
         });
+        result["auto"] = json!(self.auto_on());
+        result["blackAndWhite"] = json!(self.black_and_white_on());
+        result["whiteBalance"] = json!(self.white_balance_mode());
         result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id()})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
@@ -169,6 +184,93 @@ impl CameraRawDialog {
     /// Params for the engine: only the settings that differ from the defaults.
     pub fn command_params(&self) -> Value {
         non_defaults(&self.params)
+    }
+
+    /// Edit › Auto is on: it set the Light settings and they have not been moved since.
+    pub fn auto_on(&self) -> bool {
+        self.auto.is_some_and(|(_, set)| AutoTone::of(&self.params) == set)
+    }
+
+    /// Edit › B&W is on: Saturation is at −100.
+    pub fn black_and_white_on(&self) -> bool {
+        self.params.saturation <= -100.0
+    }
+
+    /// Edit › Auto: fits the Light settings to the image, or puts back the ones it replaced.
+    fn toggle_auto(&mut self) {
+        if self.auto_on()
+            && let Some((before, _)) = self.auto.take()
+        {
+            let black_and_white = self.black_and_white_on();
+            before.apply(&mut self.params);
+            if black_and_white {
+                // B&W stays on; turning it off later brings back the colour from before Auto. If B&W
+                // was already on before Auto, the colour it saved is older than that and stays.
+                self.params.saturation = -100.0;
+                self.params.vibrance = 0.0;
+                if before.saturation > -100.0
+                    && let Some(kept) = &mut self.black_and_white
+                {
+                    *kept = (before.saturation, before.vibrance);
+                }
+            }
+        } else {
+            let before = AutoTone::of(&self.params);
+            let set = photocraft_algo::camera_raw::auto_edit(&self.proxy, self.pw, self.ph, &self.params);
+            set.apply(&mut self.params);
+            self.auto = Some((before, set));
+        }
+        self.dirty = true;
+    }
+
+    /// Edit › B&W: a black-and-white treatment (Saturation −100, no Vibrance), or the colour back.
+    fn toggle_black_and_white(&mut self) {
+        if self.black_and_white_on() {
+            let (saturation, vibrance) = self.black_and_white.take().unwrap_or((0.0, 0.0));
+            self.params.saturation = if saturation <= -100.0 { 0.0 } else { saturation };
+            self.params.vibrance = vibrance;
+        } else {
+            self.black_and_white = Some((self.params.saturation, self.params.vibrance));
+            self.params.saturation = -100.0;
+            self.params.vibrance = 0.0;
+        }
+        if let Some((_, set)) = &mut self.auto {
+            set.vibrance = self.params.vibrance;
+            set.saturation = self.params.saturation;
+        }
+        self.dirty = true;
+    }
+
+    /// White Balance: `asShot`, `auto` (what Auto last set, still unmoved) or `custom`.
+    pub fn white_balance_mode(&self) -> &'static str {
+        let now = (self.params.temperature, self.params.tint);
+        if self.white_balance_auto == Some(now) {
+            "auto"
+        } else if now == (0.0, 0.0) {
+            "asShot"
+        } else {
+            "custom"
+        }
+    }
+
+    /// White Balance › As Shot or Auto; `custom` (or anything else) leaves the sliders.
+    fn set_white_balance(&mut self, mode: &str) {
+        let (temperature, tint) = match mode {
+            "asShot" => {
+                // Forget Auto, or an Auto result of (0, 0) would still read as Auto. Undo puts it back.
+                self.white_balance_auto = None;
+                (0.0, 0.0)
+            }
+            "auto" => {
+                let wb = photocraft_algo::camera_raw::auto_white_balance(&self.proxy, self.pw, self.ph);
+                self.white_balance_auto = Some(wb);
+                wb
+            }
+            _ => return,
+        };
+        self.params.temperature = temperature;
+        self.params.tint = tint;
+        self.dirty = true;
     }
 
     fn image(px: &[[f32; 4]], w: usize, h: usize, display: &photocraft_engine::display_color::CanvasDisplay) -> egui::ColorImage {

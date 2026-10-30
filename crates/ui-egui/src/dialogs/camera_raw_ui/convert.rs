@@ -185,6 +185,9 @@ pub(super) fn open_pixels(
         undo: Vec::new(),
         redo: Vec::new(),
         edit_origin: None,
+        auto: None,
+        black_and_white: None,
+        white_balance_auto: None,
     };
     d.render(ctx);
     app.camera_raw = Some(d);

@@ -55,10 +55,12 @@ pub fn validate_curve(points: &[[f32; 2]]) -> Result<(), String> {
 
 use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
+mod auto;
 mod local_tone;
 mod per_pixel;
 mod whites_blacks;
 
+pub use auto::{AutoTone, auto_tone as auto_edit, auto_white_balance};
 pub use per_pixel::{CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, per_pixel, white_black_points};
 
 /// How the pixels encode light: the sRGB curve (gamma 0) or a pure power law (ProPhoto's 1.8,

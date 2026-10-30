@@ -35,8 +35,10 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" | "demosaic" => {}
-            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" if value.is_boolean() => {}
-            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" => {
+            "whiteBalance" if matches!(value.as_str(), Some("asShot" | "auto")) => {}
+            "whiteBalance" => return Some(Err("Camera Raw whiteBalance must be \"asShot\" or \"auto\"".into())),
+            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "blackAndWhite" if value.is_boolean() => {}
+            "before" | "commit" | "cancel" | "saveSettings" | "loadSettings" | "undo" | "redo" | "auto" | "blackAndWhite" => {
                 return Some(Err(format!("Camera Raw {key} must be a boolean")));
             }
             _ => return Some(Err(format!("unknown Camera Raw ui property {key}"))),
@@ -73,10 +75,6 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
     // occurs until every part of the request has passed validation.
     let d = app.camera_raw.as_ref()?;
     let mut next_params = d.params.clone();
-    // Auto (the Light panel's button): the tone sliders from the image's histogram.
-    if ui.get("auto").and_then(Value::as_bool) == Some(true) {
-        photocraft_algo::camera_raw::auto_tone(&d.proxy, &mut next_params);
-    }
     if let Some(set) = ui.get("set") {
         if !set.is_object() {
             return Some(Err("bad Camera Raw settings: expected an object".into()));
@@ -134,6 +132,26 @@ fn menu_update(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &Value) -> Opti
         remember_edit(d);
         d.dirty = true;
         d.params = next_params;
+    }
+    // Edit › Auto and B&W: `true` turns one on, `false` off; already there is no edit.
+    type Toggle = (&'static str, fn(&CameraRawDialog) -> bool, fn(&mut CameraRawDialog));
+    let toggles: [Toggle; 2] = [
+        ("auto", CameraRawDialog::auto_on, CameraRawDialog::toggle_auto),
+        ("blackAndWhite", CameraRawDialog::black_and_white_on, CameraRawDialog::toggle_black_and_white),
+    ];
+    for (key, is_on, toggle) in toggles {
+        if let Some(want) = ui.get(key).and_then(Value::as_bool)
+            && want != is_on(d)
+        {
+            remember_edit(d);
+            toggle(d);
+        }
+    }
+    if let Some(mode) = ui.get("whiteBalance").and_then(Value::as_str)
+        && mode != d.white_balance_mode()
+    {
+        remember_edit(d);
+        d.set_white_balance(mode);
     }
     if let Some(b) = ui.get("before").and_then(Value::as_bool) {
         d.show_before = b;
