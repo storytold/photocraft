@@ -93,6 +93,26 @@ fn layers_composite_over_white_before_the_page() {
 }
 
 #[test]
+fn topmost_solid_shape_is_exported_as_a_vector_path() {
+    use photocraft_doc::{Fill, Path, ShapeLayer, Subpath};
+    let mut d = doc(ColorMode::Rgb);
+    let shape = ShapeLayer {
+        path: Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (2.0, 0.0), (2.0, 1.0)])]),
+        fill: Some(Fill::Solid(photocraft_color::Color::rgb(1.0, 0.0, 0.0))),
+        ..Default::default()
+    };
+    d.layers.push(Layer::new("Shape", LayerContent::Shape(shape)));
+    let out = export(&d).unwrap();
+    check_structure(&out.bytes);
+    let content = stream_after(&out.bytes, "/Contents 4 0 R");
+    let content = String::from_utf8(content).unwrap();
+    assert!(content.contains("1 0 0 rg\n"));
+    assert!(content.contains("0 0 m\n"));
+    assert!(content.contains("h\nf\n"));
+    assert_eq!(stream_after(&out.bytes, "/Subtype /Image"), vec![255; 4 * 2 * 3]);
+}
+
+#[test]
 fn greyscale_and_cmyk_pages_keep_their_channels() {
     let g = export(&doc(ColorMode::Grayscale)).unwrap();
     assert!(has(&g.bytes, "/ColorSpace /DeviceGray"), "gray is DeviceGray");

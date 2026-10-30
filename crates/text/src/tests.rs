@@ -13,6 +13,22 @@ fn styled(text: &str, style: CharStyle) -> TextLayer {
     TextLayer { text: text.into(), runs: vec![TextRun { len: text.len(), style }], ..Default::default() }
 }
 
+#[test]
+fn glyph_source_ranges_follow_shaped_clusters() {
+    let mut engine = TextEngine::new();
+    for text in ["office", "Aé B", "First\nSecond"] {
+        let layer = point(text, 24.0);
+        let layout = engine.layout(&layer, 72.0);
+        assert!(!layout.glyphs.is_empty());
+        assert_eq!(layout.glyphs.len(), layout.glyph_ranges.len());
+        for range in &layout.glyph_ranges {
+            assert!(range.start < range.end, "empty range in {text:?}");
+            assert!(text.get(range.clone()).is_some(), "invalid range {range:?} in {text:?}");
+            assert!(layout.clusters.iter().any(|cluster| cluster.range == *range), "missing cluster for {range:?}");
+        }
+    }
+}
+
 /// The rasteriser's pixel stages — composing one colour's coverage, unpremultiplying it, and
 /// converting the tiles — are per pixel: no pixel reads a slot another pixel wrote. Spreading them
 /// over threads therefore has to leave every byte as it was, which a one-thread pool checks.
