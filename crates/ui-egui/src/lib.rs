@@ -447,8 +447,12 @@ pub struct PhotocraftApp {
     pub(crate) drop_canvas_rect: Option<egui::Rect>,
     /// The document tab strip last frame: a drop there opens the file at the slot under it.
     pub(crate) tab_strip: Option<canvas::TabStrip>,
-    /// Files dropped on the canvas still to place, one Free Transform at a time.
-    pub(crate) drop_places: std::collections::VecDeque<file_open::DropPlace>,
+    /// Files dropped on the canvas still to place, one Free Transform at a time, each with the
+    /// document it was dropped on.
+    pub(crate) drop_places: std::collections::VecDeque<(DocId, file_open::DropPlace)>,
+    /// The document the latest web drop onto the canvas landed on: its files, read
+    /// asynchronously by the shell, are placed there.
+    pub(crate) canvas_drop_doc: Option<DocId>,
     /// The document each of `ui.views` belongs to, as of the last [`Self::sync_views`].
     view_docs: Vec<DocId>,
     pub fps: f32,

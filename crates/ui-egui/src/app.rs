@@ -97,6 +97,7 @@ impl PhotocraftApp {
             drop_canvas_rect: None,
             tab_strip: None,
             drop_places: Default::default(),
+            canvas_drop_doc: None,
             view_docs: Vec::new(),
             fps: 0.0,
             last_frame_time: 0.0,
