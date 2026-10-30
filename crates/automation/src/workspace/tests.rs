@@ -325,6 +325,72 @@ fn windows_junction_escape_is_rejected_when_supported() {
     let _ = std::fs::remove_dir(link);
 }
 
+/// #10317: below a UNC root (`\\wsl.localhost\...`, any share) `cap-std`'s Windows rename,
+/// remove and mkdir fail with `ERROR_PATH_NOT_FOUND`, so a save left only its `.pcsave.tmp`
+/// behind, an export into a new directory failed, and a cancelled export leaked its frames.
+/// The administrative share of the temp directory's drive stands in for a network share; a
+/// runner without one has nothing to check here.
+#[cfg(windows)]
+#[test]
+fn windows_unc_root_writes_and_exports_when_supported() {
+    let (inside, outside, _) = roots("unc-root");
+    let Some(unc) = loopback_unc(&inside) else { return };
+    if std::fs::metadata(&unc).is_err() {
+        return;
+    }
+    let canonical = std::fs::canonicalize(&unc).unwrap();
+    assert!(matches!(canonical.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::VerbatimUNC(..))), "{}", canonical.display());
+    let workspace = AuthorizedWorkspace::new(Some(&unc), Some(&unc)).unwrap();
+
+    workspace.write("out.png", b"first").unwrap();
+    workspace.write("out.png", b"second").unwrap();
+    std::fs::create_dir(inside.join("sub")).unwrap();
+    workspace.write("sub/nested.png", b"nested").unwrap();
+    assert_eq!(std::fs::read(inside.join("out.png")).unwrap(), b"second");
+    assert_eq!(std::fs::read(inside.join("sub/nested.png")).unwrap(), b"nested");
+    assert!(temp_files(&inside).is_empty());
+    assert!(temp_files(&inside.join("sub")).is_empty());
+    // A missing parent is still an error, with nothing left behind, as on every other root.
+    assert!(workspace.write("missing/out.png", b"no parent").is_err());
+    assert!(!inside.join("missing").exists());
+
+    let mut export = workspace.export_sequence("frames/nested").unwrap();
+    export.write("clip_0000.png", b"frame").unwrap();
+    assert_eq!(std::fs::read(inside.join("frames/nested/clip_0000.png")).unwrap(), b"frame");
+    export.cleanup().unwrap();
+    assert!(!inside.join("frames/nested/clip_0000.png").exists());
+    let mut export = workspace.export_sequence("frames/nested").unwrap();
+    export.write("clip_0001.png", b"kept").unwrap();
+    export.commit();
+    drop(export);
+    assert_eq!(std::fs::read(inside.join("frames/nested/clip_0001.png")).unwrap(), b"kept");
+
+    // The ambient step never follows a link out of the root either.
+    let link = inside.join("junction");
+    if std::process::Command::new("cmd.exe").args(["/D", "/C", "mklink", "/J"]).arg(&link).arg(&outside).status().is_ok_and(|status| status.success()) {
+        assert!(workspace.write("junction/escape.png", b"blocked").is_err());
+        assert!(workspace.export_sequence("junction/frames").is_err());
+        assert!(!outside.join("escape.png").exists());
+        assert!(!outside.join("frames").exists());
+        assert!(temp_files(&outside).is_empty());
+        let _ = std::fs::remove_dir(link);
+    }
+}
+
+/// `\\localhost\C$\...` for a path on drive `C:`; `None` for a path without a drive letter.
+#[cfg(windows)]
+fn loopback_unc(path: &Path) -> Option<PathBuf> {
+    let mut components = path.components();
+    let Some(Component::Prefix(prefix)) = components.next() else { return None };
+    let drive = match prefix.kind() {
+        Prefix::Disk(drive) | Prefix::VerbatimDisk(drive) => char::from(drive),
+        _ => return None,
+    };
+    let mut unc = PathBuf::from(format!(r"\\localhost\{drive}$"));
+    unc.extend(components.filter(|component| matches!(component, Component::Normal(_))));
+    Some(unc)
+}
+
 #[test]
 fn filesystem_commands_fail_closed() {
     for id in [

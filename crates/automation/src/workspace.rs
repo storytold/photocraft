@@ -78,10 +78,15 @@ impl AuthorizedWorkspace {
     ///
     /// Replacing a file carries its extended attributes — macOS Finder tags, Linux `user.*` —
     /// onto the file that takes its place (#7095), through the two open descriptors rather than
-    /// their paths, so nothing here reaches outside the write root to finish a write. The rest
-    /// of what [`photocraft_format::atomic_write`] preserves does not follow: its permission
-    /// step is tracked in #4963, and the Windows `ReplaceFileW` swap is path-based, which this
-    /// path may not use.
+    /// their paths. The rest of what [`photocraft_format::atomic_write`] preserves does not
+    /// follow: its permission step is tracked in #4963, and the Windows `ReplaceFileW` swap is
+    /// path-based, which this path may not use.
+    ///
+    /// Nothing here reaches outside the write root to finish a write, with one exception: below
+    /// a Windows UNC root (`\\wsl.localhost\...`, any network share) the capability's own rename
+    /// and remove cannot reach their target at all (#10317), and that one step goes through the
+    /// canonical root path instead — trusted launch configuration, never the request; see
+    /// [`unc_root`].
     ///
     /// The parent directory must already exist. `cap-std` performs path
     /// resolution and file creation relative to the held directory handle, so
@@ -128,9 +133,13 @@ impl AuthorizedWorkspace {
             // Falls back to a plain fsync on shares that refuse a full flush (#1336).
             photocraft_format::atomic::sync_file(&file)
         });
-        let renamed = written.and_then(|()| photocraft_format::atomic::retry_rename(RenameRetry::platform(), || root.dir.rename(&tmp, &root.dir, &relative)));
+        let renamed = written.and_then(|()| {
+            photocraft_format::atomic::retry_rename(RenameRetry::platform(), || {
+                in_root(root, &parent, || root.dir.rename(&tmp, &root.dir, &relative), |base| std::fs::rename(base.join(&tmp), base.join(&relative)))
+            })
+        });
         if let Err(e) = renamed {
-            let _ = root.dir.remove_file(&tmp);
+            let _ = in_root(root, &parent, || root.dir.remove_file(&tmp), |base| std::fs::remove_file(base.join(&tmp)));
             return Err(file_error("write", path, e));
         }
         // Flush the directory entry (Unix); best effort, the new bytes are already in place.
@@ -208,6 +217,66 @@ fn open_root(path: Option<&Path>, authority: &str) -> Result<Option<RootCapabili
     let dir = Dir::open_ambient_dir(&absolute, ambient_authority())
         .map_err(|e| AutomationError::Io(format!("cannot open automation {authority} root `{}`: {e}", path.display())))?;
     Ok(Some(RootCapability { dir: Arc::new(dir), path: absolute, configured_path }))
+}
+
+/// `cap-std`'s Windows `rename`, `remove_file` and `create_dir` do not run relative to the held
+/// handle: they append the request to the handle's own path and call `std::fs`
+/// (sunfishcode/cap-std#348), and that path is read back without its `\\?\` prefix. Below a
+/// drive root the result still resolves; below a UNC root (`\\?\UNC\wsl.localhost\...`, any
+/// network share) it becomes the relative `UNC\wsl.localhost\...` and each of those steps
+/// fails with `ERROR_PATH_NOT_FOUND`, so a save left only its temporary file behind (#10317).
+///
+/// For a UNC root, and only then, this hands back the canonical root path — trusted launch
+/// configuration, never the request — for the caller to finish that one step ambiently, with a
+/// path that passed [`request_path`] joined onto it. Every component of `below` that exists
+/// must be a plain directory: ambient resolution would follow a link out of the root, which the
+/// capability refuses, so this refuses too. A missing tail is fine; `create_dir_all` makes it.
+#[cfg(windows)]
+fn unc_root<'a>(root: &'a RootCapability, below: &Path) -> Option<&'a Path> {
+    let unc = matches!(root.path.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::VerbatimUNC(..) | Prefix::UNC(..)));
+    if !unc {
+        return None;
+    }
+    let mut ancestor = PathBuf::new();
+    for component in below.components() {
+        ancestor.push(component);
+        match root.dir.symlink_metadata(&ancestor) {
+            Ok(meta) if meta.is_dir() && !meta.is_symlink() => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => break,
+            Ok(_) | Err(_) => return None,
+        }
+    }
+    Some(root.path.as_path())
+}
+
+/// Run `op` through the capability. On Windows, when it reports its target missing below a UNC
+/// root — where the capability cannot reach it at all, see [`unc_root`] — run `ambient` with
+/// the canonical root path instead. `below` is the directory the operation works in.
+#[cfg(windows)]
+fn in_root<T>(
+    root: &RootCapability,
+    below: &Path,
+    op: impl FnOnce() -> std::io::Result<T>,
+    ambient: impl FnOnce(&Path) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    match op() {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => match unc_root(root, below) {
+            Some(base) => ambient(base),
+            None => Err(e),
+        },
+        result => result,
+    }
+}
+
+/// Elsewhere every step stays relative to the held handle; `ambient` is never called.
+#[cfg(not(windows))]
+fn in_root<T>(
+    _root: &RootCapability,
+    _below: &Path,
+    op: impl FnOnce() -> std::io::Result<T>,
+    _ambient: impl FnOnce(&Path) -> std::io::Result<T>,
+) -> std::io::Result<T> {
+    op()
 }
 
 /// Both root spellings refer to the capability opened at startup. Do not resolve an untrusted
@@ -497,15 +566,27 @@ fn command_error(id: &str) -> AutomationError {
 pub(crate) struct ExportSequence {
     dir: Dir,
     created: Vec<String>,
+    /// The directory's canonical path below a Windows UNC root, where the capability's
+    /// `remove_file` cannot reach the files it created (#10317, see [`unc_root`]).
+    #[cfg(windows)]
+    unc_dir: Option<PathBuf>,
 }
 
 impl AuthorizedWorkspace {
     pub(crate) fn export_sequence(&self, path: &str) -> Result<ExportSequence, AutomationError> {
         let relative = request_path(path, self.write.as_ref())?;
         let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
-        root.dir.create_dir_all(&relative).map_err(|e| file_error("mkdir", path, e))?;
+        in_root(root, &relative, || root.dir.create_dir_all(&relative), |base| std::fs::create_dir_all(base.join(&relative)))
+            .map_err(|e| file_error("mkdir", path, e))?;
         let dir = root.dir.open_dir(&relative).map_err(|e| file_error("open export directory", path, e))?;
-        Ok(ExportSequence { dir, created: Vec::new() })
+        #[cfg(windows)]
+        let unc_dir = unc_root(root, &relative).map(|base| base.join(&relative));
+        Ok(ExportSequence {
+            dir,
+            created: Vec::new(),
+            #[cfg(windows)]
+            unc_dir,
+        })
     }
 }
 
@@ -529,12 +610,25 @@ impl ExportSequence {
 
     pub(crate) fn cleanup(&mut self) -> Result<(), AutomationError> {
         let mut failed = Vec::new();
-        self.created.retain(|name| match self.dir.remove_file(name) {
-            Ok(()) => false,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => {
-                failed.push(format!("{name}: {e}"));
-                true
+        let (dir, created) = (&self.dir, &mut self.created);
+        #[cfg(windows)]
+        let unc_dir = self.unc_dir.as_deref();
+        created.retain(|name| {
+            let removed = dir.remove_file(name);
+            #[cfg(windows)]
+            let removed = match (removed, unc_dir) {
+                // Below a UNC root the capability reports every file missing (#10317). `name`
+                // is a single component, checked in `write`, so it cannot leave the directory.
+                (Err(e), Some(unc_dir)) if e.kind() == std::io::ErrorKind::NotFound => std::fs::remove_file(unc_dir.join(name)),
+                (removed, _) => removed,
+            };
+            match removed {
+                Ok(()) => false,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                Err(e) => {
+                    failed.push(format!("{name}: {e}"));
+                    true
+                }
             }
         });
         if failed.is_empty() { Ok(()) } else { Err(AutomationError::Io(format!("export cleanup failed: {}", failed.join("; ")))) }
