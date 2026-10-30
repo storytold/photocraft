@@ -115,7 +115,8 @@ fn transfer_exponent(t: Transfer) -> f32 {
     }
 }
 
-/// Adjustment → (kernel kind, parameters, LUT rows). Kinds are the `switch` in `adjust()`.
+/// Adjustment → (kernel kind, parameters, LUT rows). Kinds are the `switch` in `adjust()`;
+/// Hue/Saturation sets p1.y for the bounded neutral-range RGB/8 integer shader path.
 pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraft_color::SampleType, mode: photocraft_color::ColorMode) -> Program {
     let mut p = [[0.0f32; 4]; 4];
     match adj {
@@ -147,6 +148,11 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
             (4, p, None)
         }
         Adjustment::BrightnessContrast { brightness, contrast, .. } => {
+            // The lookup table covers 0..1; identity must retain the full HDR range.
+            if *brightness == 0.0 && *contrast == 0.0 {
+                p[0] = [1.0, 1.0, 1.0, 0.0];
+                return (7, p, None);
+            }
             // Modern B/C: the CPU's lookup table (compose::adjust::modern_lut) on every channel,
             // through the Levels / Curves kernel.
             let row = to_row(&adjust::modern_lut(*brightness, *contrast));
@@ -183,6 +189,20 @@ pub fn adjustment_program(adj: &Adjustment, transfer: Transfer, depth: photocraf
                 p[1][0] = 1.0;
                 (8, p, Some(adjust::hue_range_tables(ranges).iter().map(|t| to_row(t)).collect()))
             } else {
+                // compose::adjust uses whole RGB/8 channel and hue levels for the neutral-range
+                // master adjustment. p1.y selects the matching shader path.
+                if mode == photocraft_color::ColorMode::Rgb
+                    && depth == photocraft_color::SampleType::U8
+                    && !*colorize
+                    && hue.is_finite()
+                    && (-180.0..=0.0).contains(hue)
+                    && saturation.is_finite()
+                    && (-100.0..=100.0).contains(saturation)
+                    && lightness.is_finite()
+                    && (-100.0..=100.0).contains(lightness)
+                {
+                    p[1][1] = 1.0;
+                }
                 (8, p, None)
             }
         }
