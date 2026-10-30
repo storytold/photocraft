@@ -328,6 +328,8 @@ fn windows_junction_escape_is_rejected_when_supported() {
 /// #10317: below a UNC root (`\\wsl.localhost\...`, any share) `cap-std`'s Windows rename,
 /// remove and mkdir fail with `ERROR_PATH_NOT_FOUND`, so a save left only its `.pcsave.tmp`
 /// behind, an export into a new directory failed, and a cancelled export leaked its frames.
+/// There a save writes in place through the capability, cleanup deletes through handles opened
+/// relative to the export directory, and only directory creation goes through the root path.
 /// The administrative share of the temp directory's drive stands in for a network share; a
 /// runner without one has nothing to check here.
 #[cfg(windows)]
@@ -365,7 +367,7 @@ fn windows_unc_root_writes_and_exports_when_supported() {
     drop(export);
     assert_eq!(std::fs::read(inside.join("frames/nested/clip_0001.png")).unwrap(), b"kept");
 
-    // The ambient step never follows a link out of the root either.
+    // Neither the in-place write nor directory creation follows a link out of the root.
     let link = inside.join("junction");
     if std::process::Command::new("cmd.exe").args(["/D", "/C", "mklink", "/J"]).arg(&link).arg(&outside).status().is_ok_and(|status| status.success()) {
         assert!(workspace.write("junction/escape.png", b"blocked").is_err());
@@ -373,6 +375,54 @@ fn windows_unc_root_writes_and_exports_when_supported() {
         assert!(!outside.join("escape.png").exists());
         assert!(!outside.join("frames").exists());
         assert!(temp_files(&outside).is_empty());
+        let _ = std::fs::remove_dir(link);
+    }
+}
+
+/// The handle-relative helpers that stand in for `cap-std`'s path-concatenating Windows
+/// operations below a UNC root (#10317) behave like the operations they replace, on any root.
+#[cfg(windows)]
+#[test]
+fn windows_handle_relative_helpers_match_the_capability_operations() {
+    let (inside, outside, workspace) = roots("unc-helpers");
+    let root = workspace.write.as_ref().unwrap();
+    assert!(!is_unc_root(root));
+
+    std::fs::write(inside.join("gone.png"), b"x").unwrap();
+    delete_on_close(&root.dir, Path::new("gone.png")).unwrap();
+    assert!(!inside.join("gone.png").exists());
+    std::fs::write(inside.join("gone.png"), b"x").unwrap();
+    remove_file_in(&root.dir, Path::new("gone.png")).unwrap();
+    assert!(!inside.join("gone.png").exists());
+    assert_eq!(delete_on_close(&root.dir, Path::new("missing.png")).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(remove_file_in(&root.dir, Path::new("missing.png")).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    std::fs::create_dir(inside.join("dir")).unwrap();
+    assert!(delete_on_close(&root.dir, Path::new("dir")).is_err());
+    assert!(inside.join("dir").is_dir());
+
+    write_in_place(root, Path::new("plain.png"), b"the longer first version").unwrap();
+    write_in_place(root, Path::new("plain.png"), b"short").unwrap();
+    assert_eq!(std::fs::read(inside.join("plain.png")).unwrap(), b"short");
+    assert!(temp_files(&inside).is_empty());
+
+    create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
+    assert!(inside.join("a/b/c").is_dir());
+    create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
+    plain_directories(root, Path::new("a/b/c"), true).unwrap();
+    plain_directories(root, Path::new("a/b/missing"), false).unwrap();
+    assert_eq!(plain_directories(root, Path::new("a/b/missing"), true).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    std::fs::write(inside.join("a/file"), b"x").unwrap();
+    assert!(plain_directories(root, Path::new("a/file"), false).is_err());
+    assert!(ensure_export_dir(root, Path::new("a/b/d")).is_ok());
+    assert!(inside.join("a/b/d").is_dir());
+
+    let link = inside.join("junction");
+    if std::process::Command::new("cmd.exe").args(["/D", "/C", "mklink", "/J"]).arg(&link).arg(&outside).status().is_ok_and(|status| status.success()) {
+        assert!(plain_directories(root, Path::new("junction/frames"), false).is_err());
+        assert!(create_dir_all_unc(root, Path::new("junction/frames")).is_err());
+        assert!(!outside.join("frames").exists());
+        assert!(write_in_place(root, Path::new("junction/escape.png"), b"blocked").is_err());
+        assert!(!outside.join("escape.png").exists());
         let _ = std::fs::remove_dir(link);
     }
 }
