@@ -595,13 +595,28 @@ fn clipboard_image<C>(
     Ok(text(clipboard)?.and_then(|text| image_from_svg_text(&text)))
 }
 
+/// arboard's X11 backend reports this when the clipboard owner answers a request for a format
+/// it doesn't offer with the type of the content it does hold. xclip, and the Qt owners behind
+/// flameshot, do this for image clipboards (#10231), so the read means "format not offered"
+/// rather than a failure: the next format is tried.
+const X11_WRONG_PROPERTY_TYPE: &str = "incorrect type received from clipboard";
+
+/// Whether `error` only says the clipboard has nothing in the format that was asked for.
+fn no_clipboard_content(error: &arboard::Error) -> bool {
+    match error {
+        arboard::Error::ContentNotAvailable => true,
+        arboard::Error::Unknown { description } => description == X11_WRONG_PROPERTY_TYPE,
+        _ => false,
+    }
+}
+
 /// One OS clipboard read as [`clipboard_image`] takes it: no content in the format asked for is
 /// `None`, and any other failure, such as a busy clipboard or a broken pipe on Wayland, is the
 /// read's error.
 fn clipboard_read<T>(read: Result<T, arboard::Error>) -> Result<Option<T>, String> {
     match read {
         Ok(value) => Ok(Some(value)),
-        Err(arboard::Error::ContentNotAvailable) => Ok(None),
+        Err(error) if no_clipboard_content(&error) => Ok(None),
         Err(error) => Err(error.to_string()),
     }
 }
@@ -736,10 +751,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                             if let Some(image) = wayland_clipboard_image() {
                                 return Ok(Some(image));
                             }
-                            match error {
-                                arboard::Error::ContentNotAvailable => Ok(None),
-                                _ => Err(error.to_string()),
-                            }
+                            clipboard_read::<(u32, u32, Vec<u8>)>(Err(error))
                         }
                     },
                     |cb| clipboard_text(cb.get_text()),
