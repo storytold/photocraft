@@ -1,7 +1,7 @@
 use super::inspect::inspect;
 use super::params::{
-    BUTTONS, KEY_MODIFIERS, MAX_CLICKS, POINTER_MODIFIERS, UI_SET_FIELDS, bool_field, err, f32_field, f32_range, input_choice, input_modifiers, input_number,
-    input_object, merged_object, modifiers_from, num_field, ok, screen_point, uint_field, whole_object,
+    BUTTONS, KEY_MODIFIERS, MAX_CLICKS, MAX_SCREEN_POINT, POINTER_MODIFIERS, UI_SET_FIELDS, bool_field, err, f32_field, f32_range, input_choice,
+    input_modifiers, input_number, input_object, merged_object, modifiers_from, num_field, ok, screen_point, uint_field, whole_object,
 };
 use super::{ControlRequest, DialogKind, Outcome, PhotocraftApp, SHELL_DIALOG, Tool, ToolEvent, Value, json, run_waiting, tool_event, wrap};
 
@@ -1016,8 +1016,9 @@ fn click(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value, click: bool) -
     let parsed = (|| -> std::result::Result<_, String> {
         let p = input_object(p, None, fields)?;
         // Screen coordinates in points (as reported by ui.inspect window size).
-        let x = input_number(&p, "x", "x", None)?.unwrap_or(0.0) as f32;
-        let y = input_number(&p, "y", "y", None)?.unwrap_or(0.0) as f32;
+        let range = Some((-MAX_SCREEN_POINT, MAX_SCREEN_POINT));
+        let x = input_number(&p, "x", "x", range)?.unwrap_or(0.0) as f32;
+        let y = input_number(&p, "y", "y", range)?.unwrap_or(0.0) as f32;
         let button = match input_choice(&p, "button", "button", &BUTTONS)?.unwrap_or("left") {
             "right" | "secondary" => egui::PointerButton::Secondary,
             "middle" => egui::PointerButton::Middle,

@@ -1819,6 +1819,35 @@ fn huge_click_count_is_rejected() {
     }
 }
 
+/// #9137: a coordinate past f32's range became `inf`, and on the next frame egui's pointer
+/// delta `inf - inf` panicked outside the dispatch guard, closing the app.
+#[test]
+fn huge_click_coordinate_is_rejected() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    for method in ["ui.click", "ui.move"] {
+        for (field, v) in [("x", 1e308), ("y", -1e308), ("x", 3.5e38), ("y", 1e7), ("x", -1.5e6)] {
+            let (req, _rx) = ControlRequest::new(method, json!({ field: v }));
+            let Outcome::Done(r) = handle(&mut app, &ctx, &req) else { panic!("{method} {field}={v}: accepted") };
+            assert_eq!(r["ok"], false, "{method} {field}={v}: {r}");
+            assert!(r["error"].as_str().unwrap().starts_with(&format!("{field} must be between")), "{r}");
+            assert!(app.synthetic.is_empty(), "a rejected {method} queues nothing");
+        }
+    }
+    // Points at the edges of the range, off-window included, reach egui and run a frame each.
+    let edge = MAX_SCREEN_POINT;
+    for (method, x, y) in [("ui.move", edge, -edge), ("ui.click", -edge, edge), ("ui.click", -5.0, 20.0)] {
+        let (req, _rx) = ControlRequest::new(method, json!({"x": x, "y": y}));
+        assert!(matches!(handle(&mut app, &ctx, &req), Outcome::AfterInput));
+        while !app.synthetic.is_empty() {
+            let events = app.take_synthetic_step();
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |_| {}).textures_delta.clear();
+        }
+        let pos = ctx.input(|i| i.pointer.latest_pos());
+        assert_eq!(pos, Some(egui::pos2(x as f32, y as f32)), "{method} {x},{y}");
+    }
+}
+
 /// #2449: the error of a rejected synthetic input call, after checking it changed nothing.
 fn rejected(app: &mut PhotocraftApp, ctx: &egui::Context, method: &str, params: Value, names: &str) -> String {
     let (tool, revision) = (app.ui.tool, app.session.active().map(|d| d.revision));
