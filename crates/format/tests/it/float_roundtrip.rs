@@ -18,6 +18,7 @@ fn f64_coordinates_reload_bit_exact() {
     doc.guides.horizontal.push(x);
     doc.guides.vertical.push(y);
     doc.ruler_origin = [x, y];
+    doc.pixel_aspect = x.abs().max(0.1);
     let bytes = photocraft_format::save_to_bytes(&doc, &Default::default()).unwrap();
     let back = photocraft_format::load_from_bytes(&bytes).unwrap();
     assert_eq!(back.guides.horizontal[0].to_bits(), x.to_bits());

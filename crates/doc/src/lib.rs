@@ -892,6 +892,10 @@ pub struct Document {
     /// rulers, the Info panel and other position readouts measure from it; `[0, 0]` (the
     /// image's top-left) is the default.
     pub ruler_origin: [f64; 2],
+    /// View › Pixel Aspect Ratio: the width of a pixel over its height (PSD resource 1064); 1 is
+    /// square. Only the display stretches by it (with Pixel Aspect Ratio Correction on); the
+    /// pixels never change.
+    pub pixel_aspect: f64,
     /// Active selection as a grayscale coverage surface (None = no selection).
     pub selection: Option<Surface>,
     pub metadata: Metadata,
@@ -985,6 +989,7 @@ impl Document {
             channels: Vec::new(),
             guides: Guides::default(),
             ruler_origin: [0.0, 0.0],
+            pixel_aspect: 1.0,
             selection: None,
             metadata: Metadata::default(),
             global_light: GlobalLight::default(),

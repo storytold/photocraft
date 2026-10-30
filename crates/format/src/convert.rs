@@ -250,6 +250,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         channels: d.channels.iter().map(|c| channel_m(c, sink)).collect(),
         guides: d.guides.clone(),
         ruler_origin: d.ruler_origin,
+        pixel_aspect: d.pixel_aspect,
         selection: d.selection.as_ref().map(|s| surface_m(s, sink)),
         metadata: MetadataM {
             xmp: d.metadata.xmp.as_deref().map(str::to_owned),
@@ -682,6 +683,8 @@ impl Loader<'_> {
             channels,
             guides: m.guides.clone(),
             ruler_origin: m.ruler_origin,
+            // A hand-edited or damaged ratio that can't be drawn is square.
+            pixel_aspect: if m.pixel_aspect.is_finite() && m.pixel_aspect > 0.0 { m.pixel_aspect } else { 1.0 },
             selection: self.opt_surface(&m.selection)?,
             metadata: md,
             global_light: m.global_light,
