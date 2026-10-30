@@ -3,11 +3,9 @@
 //! document, its layers merged, or only the current layer). The command stays directly callable
 //! with the same params by agents and Actions.
 
-use egui::{Align2, Sense, pos2, vec2};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
-use crate::theme::Tokens;
 
 pub const COMMAND: &str = "history.newSnapshot";
 const MARK: &str = "__newSnapshot";
@@ -32,14 +30,18 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     app.run(COMMAND, json!({"name": f.get("name"), "from": f.get("from")}))
 }
 
-fn label(ui: &mut egui::Ui, text: &str) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(64.0, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
-}
+/// The label column: 64 pt holds the English labels; a longer translation widens it up to
+/// [`LABEL_MAX_W`] (what the 260 pt name field leaves of the dialog) and elides past that (#9635).
+const LABEL_MIN_W: f32 = 64.0;
+const LABEL_MAX_W: f32 = 160.0;
+const LABELS: [&str; 2] = ["Name:", "From:"];
 
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
+    let label_w = crate::widgets::label_column_width(ui, &LABELS.map(crate::i18n::t), LABEL_MIN_W, LABEL_MAX_W);
+    let label = |ui: &mut egui::Ui, text: &str| {
+        crate::widgets::column_label(ui, text, label_w);
+    };
     ui.horizontal(|ui| {
         label(ui, tl!("Name:"));
         let mut name = f.get("name").and_then(Value::as_str).unwrap_or_default().to_string();

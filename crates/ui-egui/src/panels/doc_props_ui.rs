@@ -88,11 +88,13 @@ fn section(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
     open
 }
 
-/// Right-aligned field label in a fixed-width column.
+/// The Mode and Fill label column: 44 pt (the Canvas rows' indent) holds the English labels; a
+/// longer translation widens it up to [`FIELD_LABEL_MAX_W`] and elides past that (#9635).
+const FIELD_LABEL_MAX_W: f32 = 72.0;
+
+/// Right-aligned field label in a `w`-wide column (see [`widgets::column_label_padded`]).
 fn field_label(ui: &mut egui::Ui, s: &str, w: f32) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 4.0, r.center().y), Align2::RIGHT_CENTER, s, egui::FontId::proportional(12.0), t.text_dim);
+    widgets::column_label_padded(ui, s, w, 4.0);
 }
 
 /// A number field that only reports a committed value (drag released, Enter, focus lost).
@@ -139,6 +141,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     widgets::hairline(ui);
     ui.add_space(2.0);
     let label_w = 44.0;
+    let field_w = widgets::label_column_width(ui, &[tl!("Mode"), tl!("Fill")], label_w, FIELD_LABEL_MAX_W);
     if section(ui, "canvas", tl!("Canvas")) {
         let link_key = egui::Id::unique("doc-props-link");
         let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(false);
@@ -187,7 +190,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
         ui.add_space(2.0);
         ui.horizontal(|ui| {
-            field_label(ui, tl!("Mode"), label_w);
+            field_label(ui, tl!("Mode"), field_w);
             let mut m = mode;
             let opts: Vec<(ColorMode, &str)> = MODES.iter().map(|(m, l, _)| (*m, *l)).collect();
             if widgets::dropdown(ui, "doc-props-mode", tl!("Color Mode"), &mut m, &opts, 150.0)
@@ -197,7 +200,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
         ui.horizontal(|ui| {
-            ui.add_space(label_w + 8.0);
+            ui.add_space(field_w + 8.0);
             let mut d = depth;
             let opts: Vec<(SampleType, &str, &str)> =
                 DEPTHS.iter().map(|(d, l, _)| (*d, *l, if *d == SampleType::F32 { "Floating point" } else { "Integer" })).collect();
@@ -208,7 +211,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
         ui.horizontal(|ui| {
-            field_label(ui, tl!("Fill"), label_w);
+            field_label(ui, tl!("Fill"), field_w);
             let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
             ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
             // The canvas fill is only editable for documents without a Background layer.
