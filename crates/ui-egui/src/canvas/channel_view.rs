@@ -1,9 +1,10 @@
-//! Channel display on the canvas: alpha / spot / Quick Mask colour overlays, single colour
-//! channel views (grayscale) and hidden colour channels.
+//! Channel display on the canvas: alpha / Quick Mask colour overlays, spot inks printed over the
+//! composite, single colour channel views (grayscale) and hidden colour channels.
 //!
 //! The document composite (GPU or CPU) is untouched. When the Channels panel shows anything other
 //! than the plain composite, one extra texture is drawn over it: transparent overlay pixels when
-//! the composite stays visible, an opaque picture otherwise. The texture is keyed by document
+//! the composite stays visible, an opaque picture otherwise (hidden colour channels, or visible
+//! spot channels of an RGB or CMYK document overprinting the sampled composite). The texture is keyed by document
 //! revision and view state and updated per damage rectangle while painting, so nothing is
 //! recomposited per frame.
 
@@ -161,8 +162,21 @@ fn render_with_source(
     let vis = v.visible_colors(colors);
     let (w, h) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
     let n = (w * h) as usize;
-    let mut overlays: Vec<&AlphaChannel> = (0..doc.channels.len()).filter(|i| v.alpha_shown(*i)).map(|i| &doc.channels[i]).collect();
+    let mut overlays: Vec<usize> = (0..doc.channels.len()).filter(|i| v.alpha_shown(*i)).collect();
     let gray = |s: &Surface| sample(s, r, factor).into_iter().map(|g| [g, g, g, 1.0]).collect();
+    // The sampled composite over white: the cached one when it matches, else rendered here (and
+    // handed back to the cache).
+    let mut computed = None;
+    let composite_px = |computed: &mut Option<Vec<[f32; 4]>>| -> Option<Vec<[f32; 4]>> {
+        if let Some(px) = source.cached.filter(|px| px.len() == n) {
+            return Some(px.to_vec());
+        }
+        let px = composite(doc, r, factor);
+        if n <= MAX_COMPOSITE_CACHE_PIXELS {
+            *computed = Some(px.clone());
+        }
+        Some(px)
+    };
     // Premultiplied RGBA accumulator. With no colour channel left, the channel being edited
     // (alpha, Quick Mask, or layer mask) is the picture — grayscale, not a rubylith over nothing.
     let mut solo_quick = false;
@@ -170,7 +184,7 @@ fn render_with_source(
     let mut out: Vec<[f32; 4]> = if vis == 0 {
         if !overlays.is_empty() {
             let first = overlays.remove(0);
-            gray(&first.surface)
+            gray(&doc.channels.get(first)?.surface)
         } else if let Some(q) = doc.quick_mask.as_ref().filter(|_| !v.quick_mask_hidden) {
             solo_quick = true;
             gray(&q.surface)
@@ -186,11 +200,9 @@ fn render_with_source(
         let fmt = doc.pixel_format();
         let mode = fmt.mode;
         let shown: Vec<usize> = (0..colors).filter(|k| v.color_visible(*k)).collect();
-        let computed = if source.cached.is_some_and(|px| px.len() == n) { None } else { Some(composite(doc, r, factor)) };
-        let pixels = source.cached.filter(|px| px.len() == n).or(computed.as_deref())?;
-        let converted = pixels
-            .iter()
-            .copied()
+        let pixels = composite_px(&mut computed)?;
+        pixels
+            .into_iter()
             .map(|rgba| {
                 let mut native = from_rgba(&fmt, rgba);
                 if shown.len() == 1 && !in_color {
@@ -203,21 +215,29 @@ fn render_with_source(
                     if !v.color_visible(k) {
                         // Hidden channels contribute nothing (Lab: neutral a/b, and a neutral
                         // Lightness under Show Channels in Color, so an isolated a/b channel
-                        // tints over mid gray instead of black, as Photoshop does).
+                        // tints over mid gray instead of black, as the reference editor does).
                         *x = if mode == ColorMode::Lab && (k > 0 || in_color) { 0.5 } else { 0.0 };
                     }
                 }
                 let c = to_rgba(&fmt, &native);
                 [c[0], c[1], c[2], 1.0]
             })
-            .collect();
-        if n <= MAX_COMPOSITE_CACHE_PIXELS {
-            *source.fresh = computed;
-        }
-        converted
+            .collect()
+    } else if overlays.iter().any(|&i| photocraft_compose::multichannel::is_overprint_spot(doc, i)) {
+        // Spot inks print over the whole composite (#10249), so it becomes the opaque picture.
+        composite_px(&mut computed)?
     } else {
         vec![[0.0; 4]; n]
     };
+    *source.fresh = computed;
+    // Visible spot channels of an RGB or CMYK document overprint the picture as inks, in panel
+    // order, before the alpha channel and Quick Mask tints.
+    let (spots, overlays): (Vec<usize>, Vec<usize>) = overlays.into_iter().partition(|&i| photocraft_compose::multichannel::is_overprint_spot(doc, i));
+    for i in spots {
+        let Some(ch) = doc.channels.get(i) else { continue };
+        photocraft_compose::multichannel::Ink::of(doc, ch).apply(&mut out, sample(&ch.surface, r, factor));
+    }
+    let overlays: Vec<&AlphaChannel> = overlays.into_iter().filter_map(|i| doc.channels.get(i)).collect();
     // Rubylith: `color` at `opacity` × coverage over the accumulated pixels.
     let mut tint = |values: Vec<f32>, color: photocraft_color::Color, opacity: f32, coverage: &dyn Fn(f32) -> f32| {
         let c = color.to_rgb();
@@ -231,8 +251,9 @@ fn render_with_source(
     };
     let quick = doc.quick_mask.as_ref().filter(|_| !v.quick_mask_hidden && !solo_quick);
     for ch in overlays.into_iter().chain(quick) {
+        // Spot channels reach here only in Multichannel documents, whose composite already prints
+        // them: they show more solid as solidity rises.
         let (color, opacity) = match ch.spot {
-            // Spot inks show more solid as solidity rises.
             Some((ink, solidity)) => (ink, 0.5 + 0.5 * solidity),
             None => (ch.color, ch.opacity),
         };

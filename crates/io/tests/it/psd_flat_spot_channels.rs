@@ -182,3 +182,24 @@ fn corpus_flat_file_with_pascal_names_keeps_every_channel() {
     let flat = photocraft_compose::flatten(&doc);
     assert!(flat.px.iter().all(|p| p[3] == 1.0), "opaque");
 }
+
+/// The canvas preview of the same file: the spot prints over the composite, so its solid ink at
+/// 1348,1492 shows about sRGB (0, 157, 165) over the paper white, and the PSD thumbnail carries it.
+#[cfg(feature = "corpus")]
+#[test]
+fn corpus_spot_overprints_the_cmyk_composite() {
+    let doc = import("cmyk-alpha-spot.psd", &psd_tools("cmyk-alpha-spot.psd")).unwrap().document;
+    let at = Rect::from_xywh(1348, 1492, 1, 1);
+    let mut buf = photocraft_compose::render(&doc, at);
+    for p in &mut buf.px {
+        let a = p[3];
+        *p = [p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a, 1.0];
+    }
+    photocraft_compose::multichannel::overprint(&mut buf, &doc, |i| photocraft_compose::multichannel::is_overprint_spot(&doc, i));
+    let rgb = buf.px[0].map(|v| (v * 255.0).round());
+    assert!(rgb[0] <= 12.0 && (rgb[1] - 157.0).abs() <= 8.0 && (rgb[2] - 165.0).abs() <= 8.0, "{rgb:?}");
+    let t = photocraft_compose::multichannel::thumbnail_with_inks(&doc, 160);
+    let plain = photocraft_compose::thumbnail_buffer(&doc, 160);
+    let changed = t.px.iter().zip(&plain.px).filter(|(a, b)| (a[1] - b[1]).abs() > 0.05 || (a[0] - b[0]).abs() > 0.05).count();
+    assert!(changed > 20, "the spot-only text shows in the thumbnail: {changed} pixels changed");
+}

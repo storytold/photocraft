@@ -349,3 +349,110 @@ fn rgb_off_shows_alpha_quick_mask_or_the_layer_mask() {
     let px = render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).unwrap();
     assert_eq!(px[0], Color32::BLACK, "the hidden mask reads black, not the red layer");
 }
+
+/// A white-backed `mode`/`depth` document, 3×1, with a 0.8/0.4/0.2 picture and two overlapping
+/// spot inks (`a` covers 1, ½, 0 of the pixels; `b` the reverse).
+fn spot_doc(mode: ColorMode, depth: photocraft_color::SampleType, sa: f32, sb: f32) -> Document {
+    use photocraft_color::{Color, PixelFormat};
+    let mut doc = Document::with_background("spots", photocraft_geom::Size::new(3, 1), mode, depth, Color::rgb(0.8, 0.4, 0.2));
+    let fmt = PixelFormat::new(ColorMode::Grayscale, depth, false);
+    for (name, rgb, s, vals) in [("a", [0.0, 0.6, 0.65], sa, [1.0, 0.5, 0.0]), ("b", [0.9, 0.2, 0.5], sb, [0.0, 0.5, 1.0])] {
+        let mut sf = Surface::new(fmt);
+        sf.write_region(Rect::new(0, 0, 3, 1), &vals);
+        doc.channels.push(AlphaChannel { spot: Some((Color::rgb(rgb[0], rgb[1], rgb[2]), s)), ..AlphaChannel::new(name, sf) });
+    }
+    doc
+}
+
+/// Visible spot channels of RGB and CMYK documents print over the composite as inks (#10249),
+/// the same as the compositor's overprint, in panel order; not as a tint.
+#[test]
+fn spot_eyes_overprint_the_composite() {
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk] {
+        for depth in [photocraft_color::SampleType::U8, photocraft_color::SampleType::U16] {
+            for (sa, sb) in [(0.0, 0.0), (0.5, 1.0), (1.0, 0.5)] {
+                for swapped in [false, true] {
+                    let mut doc = spot_doc(mode, depth, sa, sb);
+                    if swapped {
+                        doc.channels.reverse();
+                    }
+                    let mut v = ChannelView::default();
+                    v.set_alpha_visible(0, true);
+                    v.set_alpha_visible(1, true);
+                    let px = render(&doc, &v, doc.bounds(), 1, Look::default(), None).unwrap();
+                    let mut want = photocraft_compose::Buffer { rect: doc.bounds(), px: composite(&doc, doc.bounds(), 1) };
+                    photocraft_compose::multichannel::overprint(&mut want, &doc, |_| true);
+                    for (x, (got, w)) in px.iter().zip(&want.px).enumerate() {
+                        assert_eq!(got.a(), 255, "{mode:?} {depth:?}: opaque");
+                        let w = [q(w[0]), q(w[1]), q(w[2])];
+                        assert_eq!([got.r(), got.g(), got.b()], w, "{mode:?} {depth:?} s {sa}/{sb} swapped {swapped} x {x}");
+                    }
+                    // Only the visible ink prints.
+                    v.set_alpha_visible(1, false);
+                    let one = render(&doc, &v, doc.bounds(), 1, Look::default(), None).unwrap();
+                    let mut want = photocraft_compose::Buffer { rect: doc.bounds(), px: composite(&doc, doc.bounds(), 1) };
+                    photocraft_compose::multichannel::overprint(&mut want, &doc, |i| i == 0);
+                    assert_eq!([one[0].r(), one[0].g(), one[0].b()], [q(want.px[0][0]), q(want.px[0][1]), q(want.px[0][2])]);
+                }
+            }
+        }
+    }
+}
+
+/// Alpha channels and Quick Mask still tint, over the printed inks.
+#[test]
+fn alpha_tint_draws_over_the_inks() {
+    let mut doc = spot_doc(ColorMode::Rgb, photocraft_color::SampleType::U8, 1.0, 1.0);
+    let mut sel = Surface::new(photocraft_color::PixelFormat::new(ColorMode::Grayscale, photocraft_color::SampleType::U8, false));
+    sel.write_region(Rect::new(0, 0, 3, 1), &[0.0, 0.0, 0.0]);
+    doc.channels.push(AlphaChannel::new("Alpha 1", sel));
+    let mut v = ChannelView::default();
+    v.set_alpha_visible(0, true);
+    v.set_alpha_visible(2, true);
+    let px = render(&doc, &v, doc.bounds(), 1, Look::default(), None).unwrap();
+    // Solid opaque teal at x 0, then the default red rubylith at 50 % over it.
+    let teal = [0.0f32, 0.6, 0.65];
+    let red = AlphaChannel::DEFAULT_COLOR.to_rgb();
+    let want: Vec<u8> = (0..3).map(|j| q(red[j] * 0.5 + teal[j] * 0.5)).collect();
+    assert_eq!(vec![px[0].r(), px[0].g(), px[0].b()], want);
+}
+
+/// Editing a spot (colour, solidity, coverage, visibility) refreshes the canvas texture.
+#[test]
+fn spot_edits_refresh_the_overlay() {
+    let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 16, "height": 8, "background": "white"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    let spot = app.run("channel.newSpot", json!({"color": "#00ffff", "solidity": 0})).unwrap()["channel"].as_u64().unwrap();
+    app.sync_views();
+    let ctx = egui::Context::default();
+    let id = app.session.active().unwrap().doc.id.0;
+    let pixel = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).map(|px| px[0])
+    };
+    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert_eq!(pixel(&app), Some(Color32::from_rgb(0, 255, 255)), "solid transparent cyan over white");
+    let edits = [
+        ("channel.options", json!({"channel": spot, "color": "#ff00ff"})),
+        ("channel.options", json!({"channel": spot, "solidity": 100})),
+        ("edit.fill", json!({"color": "#808080"})),
+        ("channel.setVisible", json!({"channel": spot, "visible": false})),
+    ];
+    let mut last = pixel(&app);
+    for (cmd, params) in edits {
+        if cmd == "edit.fill" {
+            app.run("channel.target", json!({"channel": spot})).unwrap();
+        }
+        app.run(cmd, params.clone()).unwrap();
+        let shown = ensure(&mut app, &ctx, 0);
+        let now = pixel(&app);
+        assert_ne!(now, last, "{cmd} {params}");
+        let revision = app.session.active().unwrap().revision;
+        match shown {
+            Some(_) => assert_eq!(app.channel_views.get(&id).unwrap().revision, revision, "{cmd} {params}"),
+            None => assert!(now.is_none(), "a hidden spot leaves the plain composite"),
+        }
+        last = now;
+    }
+}

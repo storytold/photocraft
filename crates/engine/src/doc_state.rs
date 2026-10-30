@@ -78,6 +78,11 @@ impl DocState {
         let mut history = History::default();
         let target = LayerTarget { active: active_layer, selected: active_layer.into_iter().collect() };
         history.set_current_layers(target.clone());
+        // Spot channels open visible, printing over the composite; alpha channels open hidden.
+        let channel_view = channel_cmds::ChannelView {
+            alpha_visible: (0..doc.channels.len()).map(|i| photocraft_compose::multichannel::is_overprint_spot(&doc, i)).collect(),
+            ..Default::default()
+        };
         let doc = Arc::new(doc);
         // Photoshop's first snapshot: the document as opened, named after it, so the History
         // panel's top row can always bring it back (#2966).
@@ -96,7 +101,7 @@ impl DocState {
             view_revision: 0,
             last_damage: None,
             coalesce: None,
-            channel_view: Default::default(),
+            channel_view,
             isolated_layers: Vec::new(),
             symmetry: None,
             fx_collapsed: Vec::new(),
