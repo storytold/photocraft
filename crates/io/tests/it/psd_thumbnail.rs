@@ -164,13 +164,16 @@ fn spot_inks_print_in_the_thumbnail() {
         ink.fill_rect(photocraft_geom::Rect::new(0, 0, 32, 32), &[1.0]);
         let teal = photocraft_color::Color::rgb(0.0, 157.0 / 255.0, 165.0 / 255.0);
         d.channels.push(photocraft_doc::AlphaChannel { spot: Some((teal, 0.0)), ..photocraft_doc::AlphaChannel::new("light teal", ink) });
-        let (w, _, px) = thumbnail(&export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes).unwrap();
+        let bytes = export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes;
+        let (w, _, px) = thumbnail(&bytes).unwrap();
         let (inked, bare) = (px[(16 * w + 8) as usize], px[(16 * w + 56) as usize]);
         assert!(near(inked, [0.0, 157.0 / 255.0, 165.0 / 255.0], 0.06), "{mode:?} {inked:?}");
         assert!(near(bare, [1.0, 1.0, 1.0], 0.04), "{mode:?} {bare:?}");
-        // The merged image stays free of the ink.
-        let back = import("x.psd", &export(&d, "x.psd", &ExportOptions::default()).unwrap().bytes).unwrap().document;
-        let p = photocraft_compose::flatten(&back).px[16 * 64 + 8];
-        assert!(p[..3].iter().all(|v| *v > 0.97), "{mode:?} {p:?}");
+        // The merged process planes stay free of the ink: white (no CMYK ink is stored as 255 too).
+        let merged = PsdFile::from_bytes(&bytes).unwrap().decode_merged().unwrap();
+        let plane = 64 * 32;
+        for c in 0..mode.color_channels() {
+            assert_eq!(merged[c * plane + 16 * 64 + 8], 255, "{mode:?} merged channel {c}");
+        }
     }
 }

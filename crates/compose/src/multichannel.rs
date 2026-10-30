@@ -110,7 +110,8 @@ pub(crate) fn backdrop(doc: &Document, rect: Rect) -> Buffer {
 }
 
 /// [`crate::thumbnail_buffer`] of an RGB or CMYK document with its spot channels printed over it
-/// (matted over white, so opaque): the document's preview, as the reference editor saves it.
+/// (matted over white, so opaque, where there is ink): the document's preview, as the reference
+/// editor saves it.
 /// Unchanged when no spot channel has ink.
 pub fn thumbnail_with_inks(doc: &Document, max_side: u32) -> Buffer {
     let mut buf = crate::thumbnail_buffer(doc, max_side);
@@ -121,14 +122,18 @@ pub fn thumbnail_with_inks(doc: &Document, max_side: u32) -> Buffer {
     if spots.is_empty() || w == 0 || h == 0 || buf.px.len() != w as usize * h as usize {
         return buf;
     }
-    for p in &mut buf.px {
-        let a = if p[3].is_nan() { 0.0 } else { p[3].clamp(0.0, 1.0) };
-        *p = [p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a, 1.0];
+    let inks: Vec<(Ink, Vec<f32>)> =
+        spots.into_iter().filter_map(|i| doc.channels.get(i)).map(|ch| (Ink::of(doc, ch), reduce(&ch.surface, doc.bounds(), w, h))).collect();
+    // Only pixels with ink are matted over white (the inks print on paper); the rest keep their
+    // transparency.
+    for (k, p) in buf.px.iter_mut().enumerate() {
+        if inks.iter().any(|(_, vals)| vals.get(k).is_some_and(|v| *v > 0.0)) {
+            let a = if p[3].is_nan() { 0.0 } else { p[3].clamp(0.0, 1.0) };
+            *p = [p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a, 1.0];
+        }
     }
-    for i in spots {
-        let Some(ch) = doc.channels.get(i) else { continue };
-        let values = reduce(&ch.surface, doc.bounds(), w, h);
-        Ink::of(doc, ch).apply(&mut buf.px, values);
+    for (ink, vals) in inks {
+        ink.apply(&mut buf.px, vals);
     }
     buf
 }
@@ -314,11 +319,12 @@ mod tests {
             doc.channels.push(spot(SampleType::U8, "teal", [0.0, 0.6, 0.65], 0.0, &[1.0, 1.0, 0.0, 0.0]));
             let t = thumbnail_with_inks(&doc, 160);
             assert!(close(t.px[0], [0.0, 0.6, 0.65], 0.003), "{mode:?} {:?}", t.px[0]);
-            assert!(close(t.px[3], [1.0, 1.0, 1.0], 1e-6), "{mode:?} {:?}", t.px[3]);
+            // No ink: the transparent pixel stays transparent (the writer mattes it later).
+            assert_eq!(t.px[3], plain.px[3], "{mode:?}");
             // Halved: each thumbnail pixel averages two document pixels.
             let t = thumbnail_with_inks(&doc, 2);
             assert!(close(t.px[0], print([1.0; 3], [0.0, 0.6, 0.65], 0.0, 1.0), 0.003), "{:?}", t.px);
-            assert!(close(t.px[1], [1.0; 3], 1e-6), "{:?}", t.px);
+            assert_eq!(t.px[1], crate::thumbnail_buffer(&doc, 2).px[1], "no ink: unchanged");
         }
     }
 }
