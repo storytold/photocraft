@@ -4463,3 +4463,26 @@ navigator	Zoom	Zoom
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking
+	Upright	Enderezado
+	Manual Transformations	Transformaciones manuales
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Dibuje dos o más guías en la imagen a lo largo de líneas que deban ser verticales u horizontales (Mayús+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Arrastre el extremo de una guía para moverlo; seleccione una guía y pulse Supr para eliminarla. Hasta cuatro guías.
+cameraRaw	Geometry	Geometría
+cameraRaw	Off	Desactivado
+cameraRaw	Auto	Automático
+cameraRaw	Level	Nivel
+cameraRaw	Vertical	Vertical
+cameraRaw	Full	Completo
+cameraRaw	Guided	Guiado
+cameraRaw	Disable Upright	Desactivar enderezado
+cameraRaw	Auto: apply balanced perspective corrections	Automático: aplicar correcciones de perspectiva equilibradas
+cameraRaw	Level: apply only level correction	Nivel: aplicar solo la corrección de nivel
+cameraRaw	Vertical: apply level and vertical perspective correction	Vertical: aplicar corrección de nivel y de perspectiva vertical
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Completo: aplicar correcciones de nivel y de perspectiva horizontal y vertical
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Guiado: dibujar dos o más guías para personalizar las correcciones de perspectiva
+cameraRaw	Horizontal	Horizontal
+cameraRaw	Rotate	Rotar
+cameraRaw	Aspect	Aspecto
+cameraRaw	Scale	Escalar
+cameraRaw	Offset X	Desplazamiento X
+cameraRaw	Offset Y	Desplazamiento Y

@@ -4618,3 +4618,26 @@ shape	Appearance	Aspetto
 	Font size presets	Predefiniti dimensione font
 	Leading presets	Predefiniti interlinea
 	Tracking presets	Predefiniti spaziatura
+	Upright	Raddrizzamento
+	Manual Transformations	Trasformazioni manuali
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Disegna due o più guide sull'immagine lungo linee che devono essere verticali od orizzontali (Maiusc+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Trascina l'estremità di una guida per spostarla; seleziona una guida e premi Canc per rimuoverla. Fino a quattro guide.
+cameraRaw	Geometry	Geometria
+cameraRaw	Off	Disattivato
+cameraRaw	Auto	Automatico
+cameraRaw	Level	Livello
+cameraRaw	Vertical	Verticale
+cameraRaw	Full	Completa
+cameraRaw	Guided	Guidata
+cameraRaw	Disable Upright	Disattiva raddrizzamento
+cameraRaw	Auto: apply balanced perspective corrections	Automatico: applica correzioni prospettiche bilanciate
+cameraRaw	Level: apply only level correction	Livella: applica solo il livellamento
+cameraRaw	Vertical: apply level and vertical perspective correction	Verticale: applica livellamento e correzione prospettica verticale
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Completo: applica livellamento e correzioni prospettiche orizzontali e verticali
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Guidato: disegna due o più guide per personalizzare le correzioni prospettiche
+cameraRaw	Horizontal	Orizzontale
+cameraRaw	Rotate	Ruota
+cameraRaw	Aspect	Proporzioni
+cameraRaw	Scale	Scala
+cameraRaw	Offset X	Spostamento X
+cameraRaw	Offset Y	Spostamento Y
