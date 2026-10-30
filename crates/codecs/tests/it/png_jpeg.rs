@@ -258,7 +258,7 @@ fn pngsuite_corpus_rows_match_the_whole_decode() {
             &opts,
             &mut |h| {
                 header = Some(*h);
-                Ok(())
+                Ok(true)
             },
             &mut |_, r| {
                 data.extend_from_slice(r);

@@ -125,11 +125,16 @@ fn exif(orientation: u8) -> Vec<u8> {
 }
 
 fn whole(bytes: &[u8]) -> Result<ImportResult, IoError> {
-    import_flat_impl("t", bytes, &Interrupt::NONE, false)
+    import_flat_impl("t", bytes, &Interrupt::NONE, None)
+}
+
+/// `import_flat` with the stream forced on whatever the size.
+fn forced(bytes: &[u8]) -> Result<ImportResult, IoError> {
+    import_flat_impl("t", bytes, &Interrupt::NONE, Some(0))
 }
 
 fn streamed(bytes: &[u8]) -> Result<Option<ImportResult>, IoError> {
-    import_png_streamed("t", bytes, &Interrupt::NONE)
+    import_png_streamed("t", bytes, &Interrupt::NONE, 0)
 }
 
 fn assert_same(a: &ImportResult, b: &ImportResult, what: &str) {
@@ -163,7 +168,7 @@ fn assert_streams(bytes: &[u8], what: &str) {
     // The stream took it (the palette and file encoding are added by `import_flat`), and the
     // document that comes out is the whole-image one.
     assert!(streamed(bytes).unwrap().is_some(), "{what}: did not stream");
-    assert_same(&import_flat("t", bytes).unwrap(), &want, what);
+    assert_same(&forced(bytes).unwrap(), &want, what);
 }
 
 const SIZES: [(u32, u32); 5] = [(1, 1), (1, 300), (255, 3), (257, 257), (513, 520)];
@@ -226,7 +231,7 @@ fn metadata_before_and_after_the_image_data_is_kept() {
         .after(exif(1));
     let bytes = png.bytes();
     assert_streams(&bytes, "metadata");
-    let d = import_flat("t", &bytes).unwrap().document;
+    let d = forced(&bytes).unwrap().document;
     assert!(d.icc_profile.is_some() && d.metadata.exif.is_some() && d.metadata.xmp.is_some());
     assert_eq!(d.metadata.text.len(), 2);
     assert!((d.resolution_dpi - 300.0).abs() < 0.1, "{}", d.resolution_dpi);
@@ -246,7 +251,7 @@ fn rows_arrive_in_tile_row_groups_and_match_the_whole_decode() {
             &codecs::DecodeOptions::default(),
             &mut |h| {
                 assert_eq!((h.width, h.height, h.layout, h.sample), (70, 600, img.layout(), img.sample_type()));
-                Ok(())
+                Ok(true)
             },
             &mut |y0, rows| {
                 starts.push(y0);
@@ -266,7 +271,7 @@ fn interlaced_and_animated_files_do_not_stream_and_open_as_before() {
     let img = Image::from_raw(97, 63, ChannelLayout::Rgb, CSample::U8, (0..97 * 63 * 3).map(|i| (i * 7 % 251) as u8).collect()).unwrap();
     let interlaced = codecs::encode(&img, Format::Png, &codecs::EncodeOptions { png_interlaced: true, ..Default::default() }).unwrap();
     assert!(streamed(&interlaced).unwrap().is_none());
-    assert_same(&import_flat("t", &interlaced).unwrap(), &whole(&interlaced).unwrap(), "interlaced");
+    assert_same(&forced(&interlaced).unwrap(), &whole(&interlaced).unwrap(), "interlaced");
 
     // An acTL before the image data makes it an APNG, whose first frame the whole path reads.
     let bytes = Png::new(40, 40, 2, 8).before(chunk(b"acTL", &[0, 0, 0, 1, 0, 0, 0, 0])).bytes();
@@ -276,7 +281,7 @@ fn interlaced_and_animated_files_do_not_stream_and_open_as_before() {
         &codecs::DecodeOptions::default(),
         &mut |_| {
             called.store(1, Ordering::Relaxed);
-            Ok(())
+            Ok(true)
         },
         &mut |_, _| {
             called.store(2, Ordering::Relaxed);
@@ -284,7 +289,7 @@ fn interlaced_and_animated_files_do_not_stream_and_open_as_before() {
         },
     );
     assert!(matches!(r, Ok(None)) && called.load(Ordering::Relaxed) == 0);
-    assert_same(&import_flat("t", &bytes).unwrap(), &whole(&bytes).unwrap(), "apng");
+    assert_same(&forced(&bytes).unwrap(), &whole(&bytes).unwrap(), "apng");
 }
 
 #[test]
@@ -292,7 +297,7 @@ fn an_orientation_after_the_image_data_falls_back_to_the_upright_whole_image() {
     for o in [3u8, 6, 8] {
         let bytes = Png::new(300, 20, 2, 8).after(exif(o)).bytes();
         assert!(streamed(&bytes).unwrap().is_none(), "orientation {o}");
-        let got = import_flat("t", &bytes).unwrap();
+        let got = forced(&bytes).unwrap();
         assert_same(&got, &whole(&bytes).unwrap(), "oriented");
         let want = if o == 3 { (300, 20) } else { (20, 300) };
         assert_eq!((got.document.size.width, got.document.size.height), want, "orientation {o}");
@@ -334,7 +339,7 @@ fn damaged_files_fail_or_open_exactly_as_with_the_whole_image() {
     files.push(("junk after the image".into(), junk));
     let (mut errors, mut opened) = (0, 0);
     for (what, bytes) in &files {
-        let (w, s, f) = (whole(bytes), streamed(bytes), import_flat("t", bytes));
+        let (w, s, f) = (whole(bytes), streamed(bytes), forced(bytes));
         match (w, s, f) {
             (Err(w), Err(s), Err(f)) => {
                 assert_eq!((w.to_string(), s.to_string()), (f.to_string(), f.to_string()), "{what}");
@@ -359,7 +364,7 @@ fn files_too_small_for_their_size_are_refused_before_any_tile_exists() {
             &codecs::DecodeOptions::default(),
             &mut |_| {
                 called.fetch_add(1, Ordering::Relaxed);
-                Ok(())
+                Ok(true)
             },
             &mut |_, _| Ok(()),
         );
@@ -387,7 +392,7 @@ fn a_cancelled_stream_stops_with_cancelled() {
     for n in [0, 1, 2, 3] {
         let calls = AtomicU32::new(0);
         let cancel = || calls.fetch_add(1, Ordering::Relaxed) >= n;
-        let r = import_flat_with("t", &bytes, &Interrupt::cancel_only(&cancel));
+        let r = import_flat_impl("t", &bytes, &Interrupt::cancel_only(&cancel), Some(0));
         assert!(matches!(r, Err(IoError::Cancelled)), "after {n} checks: {:?}", r.map(|_| ()));
     }
 }
@@ -398,9 +403,24 @@ fn progress_is_monotonic_streamed_and_after_a_fallback() {
         let seen = std::sync::Mutex::new(Vec::new());
         let no = || false;
         let progress = |f: f32| seen.lock().unwrap().push(f);
-        import_flat_with("t", &bytes, &Interrupt::new(&no, &progress)).unwrap();
+        import_flat_impl("t", &bytes, &Interrupt::new(&no, &progress), Some(0)).unwrap();
         let seen = seen.into_inner().unwrap();
         assert!(seen.len() >= 4 && seen.windows(2).all(|w| w[0] <= w[1]), "{seen:?}");
         assert!(seen.last().is_some_and(|&l| l >= 0.95), "{seen:?}");
     }
+}
+
+#[test]
+fn only_images_of_the_minimum_decoded_size_stream() {
+    // 300 x 270 RGB8 decodes to 243000 bytes.
+    let bytes = Png::new(300, 270, 2, 8).bytes();
+    let at = |min| import_png_streamed("t", &bytes, &Interrupt::NONE, min).unwrap().is_some();
+    assert!(at(243_000) && !at(243_001));
+    // The size the importer uses by default: this one is far under it, so `import_flat` opens it whole.
+    assert!(!at(STREAM_MIN_BYTES));
+    assert_same(&import_flat("t", &bytes).unwrap(), &whole(&bytes).unwrap(), "small");
+    // 16-bit RGBA is 8 bytes a pixel.
+    let wide = Png::new(100, 100, 6, 16).bytes();
+    assert!(import_png_streamed("t", &wide, &Interrupt::NONE, 80_000).unwrap().is_some());
+    assert!(import_png_streamed("t", &wide, &Interrupt::NONE, 80_001).unwrap().is_none());
 }

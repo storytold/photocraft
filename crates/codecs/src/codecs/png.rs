@@ -161,7 +161,7 @@ pub type PngRowSink<'a, E> = dyn FnMut(u32, &[u8]) -> Result<(), E> + 'a;
 const ROW_GROUP: u32 = 256;
 
 /// Decodes a PNG a group of rows at a time, so the caller never needs the whole decoded image:
-/// `begin` gets the header once (after the same size and plausibility checks [`decode`] makes),
+/// `begin` gets the header once and says whether to go on (after the same size and plausibility checks [`decode`] makes),
 /// then `rows(y0, data)` gets whole rows `y0..` in final order, as many as one tile row,
 /// native-endian, exactly the samples [`decode`] would return. Returns the extras once the file
 /// has been read to its end, or `None` (having called neither closure) when the rows can't be
@@ -172,7 +172,7 @@ const ROW_GROUP: u32 = 256;
 pub(crate) fn decode_rows<E: From<CodecError>>(
     bytes: &[u8],
     limits: &Limits,
-    begin: &mut dyn FnMut(&PngHeader) -> Result<(), E>,
+    begin: &mut dyn FnMut(&PngHeader) -> Result<bool, E>,
     rows: &mut PngRowSink<'_, E>,
 ) -> Result<Option<PngExtras>, E> {
     let mut input = Cursor::new(bytes);
@@ -185,7 +185,9 @@ pub(crate) fn decode_rows<E: From<CodecError>>(
     // The checks `decode` makes of the buffer it allocates for the whole image.
     reader.output_buffer_size().ok_or_else(|| err("image too large"))?;
     let line = reader.output_line_size(width).ok_or_else(|| err("image too large"))?;
-    begin(&PngHeader { width, height, layout, sample })?;
+    if !begin(&PngHeader { width, height, layout, sample })? {
+        return Ok(None);
+    }
     let mut buf = alloc_zeroed::<u8>(line.checked_mul(ROW_GROUP.min(height) as usize).ok_or_else(|| err("image too large"))?)?;
     let mut y0 = 0;
     while y0 < height {
