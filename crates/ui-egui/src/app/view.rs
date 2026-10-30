@@ -1,5 +1,14 @@
 use super::PhotocraftApp;
 use crate::state::WindowToggles;
+use photocraft_doc::DocId;
+
+/// The window whose View menu settings are the live ones: the main window showing a document,
+/// or an extra window ("New Window for Document"), which keeps its own even for the same document.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToggleOwner {
+    Doc(DocId),
+    Window(u64),
+}
 
 impl PhotocraftApp {
     /// Zoom of the active document's main view: screen (device) pixels per document pixel, the
@@ -45,41 +54,79 @@ impl PhotocraftApp {
         self.ui.extras.guides = t.guides;
     }
 
-    /// The per-window settings document `index` is drawn with: the live ones while it is active,
-    /// else the ones its window kept.
+    /// The per-window settings a canvas of document `index` in `viewport` is drawn with: the
+    /// live ones in the window that owns them, else the ones its window kept (the main window's
+    /// tile of each document, or an extra window).
+    pub(crate) fn window_toggles_in(&self, viewport: egui::ViewportId, index: usize) -> WindowToggles {
+        let live = self.window_toggles();
+        match self.toggle_key(viewport, index) {
+            Some(key) if Some(key) != self.toggles_owner => self.stored_toggles(key).unwrap_or(live),
+            _ => live,
+        }
+    }
+
+    /// Whether the canvas of document `index` in `viewport` belongs to the window whose settings
+    /// are the live ones, so its rulers take guide drags.
+    pub(crate) fn owns_window_toggles(&self, viewport: egui::ViewportId, index: usize) -> bool {
+        let key = self.toggle_key(viewport, index);
+        key.is_none() || key == self.toggles_owner
+    }
+
+    fn toggle_key(&self, viewport: egui::ViewportId, index: usize) -> Option<ToggleOwner> {
+        let window = self.ui.windows.iter().find(|w| crate::canvas::doc_window_viewport(w.id) == viewport).map(|w| ToggleOwner::Window(w.id));
+        window.or_else(|| self.session.documents().get(index).map(|d| ToggleOwner::Doc(d.doc.id)))
+    }
+
+    /// [`Self::window_toggles_in`] for the main window.
     pub(crate) fn window_toggles_of(&self, index: usize) -> WindowToggles {
-        let live = self.window_toggles();
-        if self.session.active_index() == Some(index) {
-            return live;
-        }
-        self.ui.views.get(index).and_then(|v| v.toggles).unwrap_or(live)
+        self.window_toggles_in(egui::ViewportId::ROOT, index)
     }
 
-    /// Part of `sync_views`, before the views follow the documents: the window being left keeps
-    /// the live per-window settings.
-    pub(super) fn store_window_toggles(&mut self) {
-        let active = self.session.active().map(|d| d.doc.id);
-        if active == self.toggles_doc {
+    /// The settings a new window for document `index` starts with: the live ones when the window
+    /// that has them shows that document (the window it was opened from), else the document's
+    /// own main-window ones.
+    pub(crate) fn new_window_toggles(&self, index: usize) -> WindowToggles {
+        let shows = match self.toggles_owner {
+            Some(ToggleOwner::Window(id)) => self.ui.windows.iter().any(|w| w.id == id && w.document == index),
+            Some(ToggleOwner::Doc(id)) => self.session.documents().get(index).is_some_and(|d| d.doc.id == id),
+            None => true,
+        };
+        if shows { self.window_toggles() } else { self.window_toggles_of(index) }
+    }
+
+    fn stored_toggles(&self, key: ToggleOwner) -> Option<WindowToggles> {
+        match key {
+            ToggleOwner::Doc(id) => self.session.documents().iter().position(|d| d.doc.id == id).and_then(|i| self.ui.views.get(i)).and_then(|v| v.toggles),
+            ToggleOwner::Window(id) => self.ui.windows.iter().find(|w| w.id == id).and_then(|w| w.view.toggles),
+        }
+    }
+
+    fn toggles_slot(&mut self, key: ToggleOwner) -> Option<&mut Option<WindowToggles>> {
+        match key {
+            ToggleOwner::Doc(id) => {
+                let i = self.session.documents().iter().position(|d| d.doc.id == id)?;
+                self.ui.views.get_mut(i).map(|v| &mut v.toggles)
+            }
+            ToggleOwner::Window(id) => self.ui.windows.iter_mut().find(|w| w.id == id).map(|w| &mut w.view.toggles),
+        }
+    }
+
+    /// Part of `sync_views`: when another window takes focus (the main window's active document,
+    /// or an extra window), the one left keeps the live per-window settings and the new one
+    /// brings back its own (one that has none yet keeps those in use, as a new document does).
+    pub(super) fn sync_window_toggles(&mut self) {
+        let focused = self.ui.windows.iter().find(|w| w.open && w.focused).map(|w| ToggleOwner::Window(w.id));
+        let owner = focused.or_else(|| self.session.active().map(|d| ToggleOwner::Doc(d.doc.id)));
+        if owner == self.toggles_owner {
             return;
         }
         let live = self.window_toggles();
-        if let Some(i) = self.toggles_doc.and_then(|old| self.view_docs.iter().position(|d| *d == old))
-            && let Some(v) = self.ui.views.get_mut(i)
-        {
-            v.toggles = Some(live);
+        if let Some(slot) = self.toggles_owner.and_then(|o| self.toggles_slot(o)) {
+            *slot = Some(live);
         }
-    }
-
-    /// Part of `sync_views`, after the views follow the documents: a newly active document's
-    /// window brings back its own settings (a new one keeps those in use).
-    pub(super) fn restore_window_toggles(&mut self) {
-        let active = self.session.active().map(|d| d.doc.id);
-        if active == self.toggles_doc {
-            return;
-        }
-        self.toggles_doc = active;
-        if let Some(t) = self.session.active_index().and_then(|i| self.ui.views.get(i)).and_then(|v| v.toggles) {
+        if let Some(t) = owner.and_then(|o| self.stored_toggles(o)) {
             self.set_window_toggles(t);
         }
+        self.toggles_owner = owner;
     }
 }

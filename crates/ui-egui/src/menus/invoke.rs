@@ -661,7 +661,9 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
         "window.newWindowForDocument" => Some((|| {
             let doc = app.session.active_index().ok_or("no document")?;
             let wid = app.ui.alloc_id();
-            let view = app.ui.views[doc].clone();
+            let mut view = app.ui.views[doc].clone();
+            // A new window starts with the View menu settings of the window it came from.
+            view.toggles = Some(app.new_window_toggles(doc));
             app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, floating: false, focused: false, position: None });
             Ok(json!({"window": wid}))
         })()),

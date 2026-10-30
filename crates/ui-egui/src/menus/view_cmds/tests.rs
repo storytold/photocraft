@@ -124,6 +124,68 @@ fn flip_extras_rulers_grid_and_guides_are_per_document_window() {
     assert_eq!(app.window_toggles(), start);
 }
 
+/// Two windows on one document (Window › Arrange › New Window for Document) keep their own View
+/// menu settings, as in Photoshop: a new window starts with its source's, and the settings
+/// changed in one, while it has focus, leave the other alone.
+#[test]
+fn two_windows_of_one_document_keep_their_own_view_settings() {
+    let (mut app, ctx) = app_with(1);
+    app.sync_views();
+    let start = app.window_toggles();
+    let wid = menu(&mut app, &ctx, "window.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+    let extra = crate::canvas::doc_window_viewport(wid);
+    let focus = |app: &mut PhotocraftApp, on: bool| {
+        app.ui.windows.iter_mut().for_each(|w| w.focused = on && w.id == wid);
+        app.sync_views();
+    };
+    focus(&mut app, true);
+    assert_eq!(app.window_toggles(), start, "the new window starts with its source's settings");
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    menu(&mut app, &ctx, "view.rulers", json!({})).unwrap();
+    let flipped = app.window_toggles();
+    assert_ne!(flipped, start);
+    assert_eq!(app.window_toggles_in(egui::ViewportId::ROOT, 0), start, "the main window's canvas keeps its own");
+    assert!(app.owns_window_toggles(extra, 0), "the focused window's rulers take guide drags");
+    assert!(!app.owns_window_toggles(egui::ViewportId::ROOT, 0), "the main window's draw only its own rulers");
+    // The focused extra window's canvas writes its camera back to the document's view, never its
+    // settings over the main window's.
+    let mut camera = app.ui.windows.iter().find(|w| w.id == wid).unwrap().view.clone();
+    camera.zoom = 3.0;
+    // As after leaving it and coming back: the window's own slot holds its settings.
+    camera.toggles = Some(flipped);
+    crate::canvas::store_camera(&mut app, 0, &camera);
+    assert_eq!(app.ui.views[0].zoom, 3.0);
+    assert_eq!(app.ui.views[0].toggles, Some(start), "the main window keeps its settings");
+    focus(&mut app, false);
+    assert_eq!(app.window_toggles(), start, "back in the main window, its settings are live again");
+    assert_eq!(app.window_toggles_in(extra, 0), flipped, "the extra window still draws with its own");
+    focus(&mut app, true);
+    assert_eq!(app.window_toggles(), flipped);
+    // A third window opened from the focused extra window starts with that window's settings.
+    let third = menu(&mut app, &ctx, "window.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+    assert_eq!(app.ui.windows.iter().find(|w| w.id == third).and_then(|w| w.view.toggles), Some(flipped));
+}
+
+/// Float All in Windows gives each document's window that document's own View settings, not
+/// the active one's.
+#[test]
+fn floating_every_document_keeps_each_ones_view_settings() {
+    let (mut app, ctx) = app_with(2);
+    app.session.set_active(0);
+    app.sync_views();
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    let first = app.window_toggles();
+    app.session.set_active(1);
+    app.sync_views();
+    let second = app.window_toggles();
+    assert_ne!(first, second);
+    menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    for (doc, want) in [(0, first), (1, second)] {
+        let w = app.ui.windows.iter().find(|w| w.document == doc).unwrap();
+        assert_eq!(w.view.toggles, Some(want), "document {doc}'s window");
+    }
+}
+
 #[test]
 fn show_snap_extras_and_screen_modes_are_state() {
     let (mut app, ctx) = app_with(1);
