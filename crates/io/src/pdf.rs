@@ -15,6 +15,7 @@ use photocraft_doc::Document;
 use crate::{ExportResult, IoError};
 
 mod shapes;
+mod text;
 
 /// The image placed on a page: 8-bit interleaved samples, 1 (gray), 3 (RGB) or 4 (CMYK,
 /// 1 = full ink), with the profile it was authored in if any.
@@ -44,7 +45,7 @@ pub struct PrintPage {
     pub label: Option<String>,
 }
 
-fn pdf_string(s: &str) -> String {
+pub(super) fn pdf_string(s: &str) -> String {
     let mut o = String::from("(");
     for c in s.chars() {
         match c {
@@ -200,17 +201,16 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
     let fmt = doc.pixel_format();
     let n = fmt.channels().max(1);
     let canvas = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
-    // A simple topmost shape can be drawn over the flattened backdrop without changing
+    // Simple topmost shapes and text layers can be drawn over the flattened backdrop without changing
     // compositing. Stop at the first unsupported visible layer, since it may depend on the
     // backdrop (adjustments, blend modes, masks, effects, or clipping).
     let mut backdrop = doc.clone();
-    let mut shape_ops = Vec::new();
+    let mut vector_ops = Vec::new();
     if doc.icc_profile.is_none() {
         for layer in backdrop.layers.iter_mut().rev() {
             if !layer.visible {
                 continue;
             }
-            let photocraft_doc::LayerContent::Shape(shape) = &layer.content else { break };
             if layer.blend != photocraft_color::BlendMode::Normal
                 || layer.opacity != 1.0
                 || layer.fill_opacity != 1.0
@@ -225,9 +225,14 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
             {
                 break;
             }
-            let Some(ops) = shapes::shape_path(shape, doc.mode) else { break };
+            let ops = match &layer.content {
+                photocraft_doc::LayerContent::Shape(shape) => shapes::shape_path(shape, doc.mode),
+                photocraft_doc::LayerContent::Text(text_layer) => text::text_ops(text_layer, doc.mode, doc.resolution_dpi),
+                _ => break,
+            };
+            let Some(ops) = ops else { break };
             layer.visible = false;
-            shape_ops.push(ops);
+            vector_ops.push(ops);
         }
     }
     let surface = photocraft_compose::flatten_to_surface(&backdrop, PixelFormat::new(fmt.mode, fmt.sample, true), None);
@@ -253,7 +258,7 @@ pub fn export(doc: &Document) -> std::result::Result<ExportResult, IoError> {
     }
     let scale = 72.0 / dpi;
     let mut vectors = format!("q {scale} 0 0 -{scale} 0 {ph} cm\n");
-    for ops in shape_ops.iter().rev() {
+    for ops in vector_ops.iter().rev() {
         vectors.push_str(ops);
     }
     vectors.push_str("Q\n");

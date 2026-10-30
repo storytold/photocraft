@@ -3506,3 +3506,22 @@ fn restyling_the_photoshop_era_objects_keeps_the_raw_strings_of_the_file() {
     let runs = era_runs(&crate::psd::parse_txt2(&out).unwrap());
     assert_eq!(runs.first().and_then(|(_, f)| f.get("FontSize")).and_then(E::as_f64), Some(24.0), "and the legacy copy was restyled");
 }
+
+#[test]
+fn glyph_outlines_preserves_style_indices() {
+    let mut e = TextEngine::new();
+    let t = TextLayer {
+        text: "AB".into(),
+        transform: Affine::translate(10.0, 30.0),
+        runs: vec![
+            photocraft_doc::text::TextRun { len: 1, style: CharStyle { color: Color::rgb(1.0, 0.0, 0.0), ..Default::default() } },
+            photocraft_doc::text::TextRun { len: 1, style: CharStyle { color: Color::rgb(0.0, 1.0, 0.0), ..Default::default() } },
+        ],
+        ..Default::default()
+    };
+    let layout = e.layout(&t, 72.0);
+    let glyphs = crate::render::glyph_outlines(&layout, &t.transform, None);
+    assert!(glyphs.len() >= 2);
+    assert_eq!(glyphs[0].style, 0);
+    assert_eq!(glyphs[1].style, 1);
+}
