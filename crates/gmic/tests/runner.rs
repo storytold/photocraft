@@ -19,10 +19,18 @@ mod fake {
     /// folder (`in.cimg` in, `out.cimg` out).
     fn script(dir: &Path, name: &str, body: &str) -> PathBuf {
         let p = dir.join(name);
-        let text = format!("#!/bin/sh\nif [ \"$3\" = echo ]; then echo 9.9.9 >&2; exit 0; fi\n{body}\n");
-        std::fs::write(&p, text).unwrap();
-        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+        install(&p, &format!("#!/bin/sh\nif [ \"$3\" = echo ]; then echo 9.9.9 >&2; exit 0; fi\n{body}\n"));
         p
+    }
+
+    /// Writes an executable `text` to `path` from a `cp` child, never from this process: a test
+    /// thread that forks while another holds a script open for writing keeps that handle until
+    /// its child execs, and running the script then fails with "Text file busy" (ETXTBSY).
+    fn install(path: &Path, text: &str) {
+        let staged = path.with_extension("staged");
+        std::fs::write(&staged, text).unwrap();
+        std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(std::process::Command::new("cp").arg(&staged).arg(path).status().unwrap().success());
     }
 
     fn dir(tag: &str) -> PathBuf {
@@ -48,7 +56,7 @@ mod fake {
         assert_eq!(runner::locate(Some(g.path().to_str().unwrap())).unwrap(), g.path());
         assert!(matches!(runner::locate(Some("/no/such/gmic")), Err(Error::NotFound(_))));
         let bad = script(&d, "notgmic", "exit 0");
-        std::fs::write(&bad, "#!/bin/sh\nexit 0\n").unwrap();
+        install(&bad, "#!/bin/sh\nexit 0\n");
         assert!(matches!(Gmic::probe(&bad, &RunOptions::default()), Err(Error::NotFound(_))));
     }
 

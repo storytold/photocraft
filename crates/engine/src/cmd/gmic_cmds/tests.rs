@@ -83,9 +83,13 @@ fn runs_pipelines_and_catalogue_filters_through_a_stand_in_gmic() {
     let script = format!(
         "#!/bin/sh\ncase \"$3\" in\n  echo) echo 9.9.9 >&2;;\n  update) ;;\n  parse_gui) cp {d}/catalog.json catalog.json;;\n  *) cp run.gmic {d}/seen.gmic; cp {d}/white.cimg out.cimg;;\nesac\n"
     );
+    // Written by a `cp` child: a handle open for writing in this process could leak into a child
+    // another test thread forks, and running the script would then fail with ETXTBSY.
     let gmic = dir.join("gmic");
-    std::fs::write(&gmic, script).unwrap();
-    std::fs::set_permissions(&gmic, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let staged = dir.join("gmic.staged");
+    std::fs::write(&staged, script).unwrap();
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(std::process::Command::new("cp").arg(&staged).arg(&gmic).status().unwrap().success());
     set_cache_dir(Some(dir.join("cache")));
 
     let mut s = doc();
