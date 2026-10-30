@@ -1484,3 +1484,43 @@ fn import_variable_data_sets_menu_asks_for_a_csv_and_imports_it() {
     app.poll_file_dialog(&ctx, None);
     assert_eq!(app.session.active().map(|d| d.doc.variables.data_sets.len()), Some(2));
 }
+
+/// #8493: with Preferences › File Handling › Save As to Original Folder off, save and export
+/// dialogs start in the folder last saved to from any document (kept in the preferences, so it
+/// survives a restart); on (the default) each document keeps its own folder.
+#[test]
+fn save_as_to_original_folder_off_starts_in_the_last_folder_used() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    let suggested = |open: &Open| match &open.borrow()[0].0 {
+        FileDialogRequest::Save { suggested } => suggested.clone(),
+        other => panic!("save dialog expected, got {other:?}"),
+    };
+    app.session.active_mut().unwrap().path = Some("/a/one.psd".into());
+    app.pick_save("one.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo("/out/one.png".into())));
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(std::path::Path::new(&app.session.prefs().file_handling.last_save_folder), std::path::Path::new("/out"));
+    // Another document from another folder: on (the default) it starts beside itself…
+    app.run("file.new", json!({"width": 4, "height": 4})).unwrap();
+    app.session.active_mut().unwrap().path = Some("/b/two.psd".into());
+    app.pick_save("two.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/b", "two.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    // …off, in the folder the last save went to.
+    app.run("prefs.set", json!({"path": "fileHandling.saveAsToOriginalFolder", "value": false})).unwrap();
+    app.pick_save("two.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/out", "two.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    // An explicit folder is kept as it is.
+    app.pick_save("/elsewhere/x.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), "/elsewhere/x.png");
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+}

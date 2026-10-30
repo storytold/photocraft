@@ -153,9 +153,12 @@ impl PhotocraftApp {
         // Closed documents' folders are no longer needed.
         let open: Vec<_> = self.session.documents().iter().map(|d| d.doc.id).collect();
         self.save_dirs.retain(|id, _| open.contains(id));
+        // Save As to Original Folder off: the folder last saved to from any document first (#8493).
+        let handling = &self.session.prefs().file_handling;
+        let last = Some(std::path::PathBuf::from(&handling.last_save_folder)).filter(|d| !handling.save_as_to_original_folder && !d.as_os_str().is_empty());
         if suggested.parent().is_some_and(|p| p.as_os_str().is_empty())
-            && let Some(dir) = doc
-                .and_then(|d| self.save_dirs.get(&d).cloned())
+            && let Some(dir) = last
+                .or_else(|| doc.and_then(|d| self.save_dirs.get(&d).cloned()))
                 .or_else(|| self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent()).map(Path::to_path_buf))
         {
             suggested = dir.join(suggested);
@@ -169,10 +172,14 @@ impl PhotocraftApp {
             FileDialogAnswer::SaveTo(path) => {
                 let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
-                if let Some(doc) = doc
-                    && let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty())
-                {
-                    app.save_dirs.insert(doc, dir.to_path_buf());
+                if let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()) {
+                    if let Some(doc) = doc {
+                        app.save_dirs.insert(doc, dir.to_path_buf());
+                    }
+                    let dir = dir.to_string_lossy().into_owned();
+                    if app.session.prefs().file_handling.last_save_folder != dir {
+                        app.session.prefs.edit(|p| p.file_handling.last_save_folder = dir);
+                    }
                 }
                 then(app, path)
             }

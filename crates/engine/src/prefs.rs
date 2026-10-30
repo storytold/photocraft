@@ -476,6 +476,13 @@ pub struct FileHandling {
     pub lowercase_extension: bool,
     /// File › Save a Copy suggests the document's own name rather than "<name> copy" (#8080).
     pub do_not_append_copy: bool,
+    /// Save As to Original Folder (#8493): Save As and the export dialogs start in the folder last
+    /// chosen for the document, else beside it (on); or in the folder last saved to from any
+    /// document, kept across sessions (off).
+    pub save_as_to_original_folder: bool,
+    /// The folder the last save or export went to, from any document (see
+    /// `save_as_to_original_folder`). Empty when none is known.
+    pub last_save_folder: String,
     /// Saves run in the background while you keep working (on), or in the foreground under a
     /// modal progress dialog that blocks the app until the file is written (off).
     pub save_in_background: bool,
@@ -516,6 +523,8 @@ impl Default for FileHandling {
             image_previews: Ask::Always,
             lowercase_extension: true,
             do_not_append_copy: false,
+            save_as_to_original_folder: true,
+            last_save_folder: String::new(),
             save_in_background: true,
             autosave: true,
             autosave_minutes: 10,

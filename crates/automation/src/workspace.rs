@@ -451,9 +451,10 @@ fn preference_uses_ambient_filesystem(path: &str) -> bool {
     // judge the first non-empty one; no segment at all is the whole-preferences update.
     let mut segments = path.split('.').filter(|segment| !segment.is_empty());
     let Some(section) = segments.next() else { return true };
-    // File Handling's LUT folder (#6558) is listed from disk; the rest of that section is not.
+    // File Handling's LUT folder (#6558) is listed from disk and its last save folder (#8493)
+    // opens save dialogs there; the rest of that section is not.
     matches!(section, "colorSettings" | "scriptEvents" | "historyLog" | "plugIns" | "scratchDisks")
-        || (section == "fileHandling" && segments.next().is_none_or(|key| key == "lutFolder"))
+        || (section == "fileHandling" && segments.next().is_none_or(|key| matches!(key, "lutFolder" | "lastSaveFolder")))
 }
 
 fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
