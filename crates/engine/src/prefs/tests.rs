@@ -1010,6 +1010,25 @@ fn a_wrongly_typed_value_resets_only_that_field() {
 }
 
 #[test]
+fn the_removed_enable_animations_preference_still_loads_and_is_unknown() {
+    // #9479: Interface › Enable animations is gone (Photoshop has no such setting). Files saved
+    // with it still load whole, without a reported bad value, and the key isn't written back.
+    let mut s = Session::new();
+    let invalid =
+        s.load_prefs_json(r#"{"version": 2, "interface": {"enableAnimations": false, "showTooltips": false}, "performance": {"historyStates": 20}}"#).unwrap();
+    assert!(invalid.is_empty(), "{invalid:?}");
+    assert!(!s.prefs().interface.show_tooltips, "its neighbours load");
+    assert_eq!(s.prefs().performance.history_states, 20);
+    assert!(!s.prefs_to_json().contains("enableAnimations"));
+    for value in [json!(true), json!(false), json!("nope")] {
+        let e = s.execute("prefs.set", json!({"values": {"interface.enableAnimations": value}})).unwrap_err();
+        assert!(e.to_string().contains("unknown preference"), "{e}");
+        assert!(s.execute("prefs.set", json!({"path": "interface.enableAnimations", "value": value})).is_err());
+    }
+    assert!(s.execute("prefs.get", json!({"path": "interface.enableAnimations"})).is_err());
+}
+
+#[test]
 fn a_wrongly_typed_section_or_colour_setting_resets_only_that_part() {
     let mut s = Session::new();
     let invalid = s

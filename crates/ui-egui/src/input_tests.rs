@@ -651,6 +651,31 @@ fn alt_scroll_zooms_when_the_modifier_state_misses_the_held_alt() {
     }
 }
 
+/// #9479: like Photoshop (measured: one notch moves the view in a single frame and nothing
+/// after), a wheel notch pans the canvas the whole step at once, with no glide: plain, and
+/// sideways with ⇧ or ⌘/Ctrl.
+#[test]
+fn a_notch_pans_the_canvas_at_once_without_a_glide() {
+    let ctrl = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+    let cmd = Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE };
+    for (m, axis) in [(Modifiers::NONE, 1), (Modifiers::SHIFT, 0), (ctrl, 0), (cmd, 0)] {
+        let mut h = harness();
+        let p = h.state().last_canvas_rect.center();
+        h.hover_at(p);
+        h.run_steps(2);
+        let notch = h.ctx.options(|o| o.input_options.line_scroll_speed);
+        let (z, c0) = (zoom(&h), h.state().ui.views[0].center);
+        wheel(&h, -1.0, m);
+        h.run_steps(1);
+        let c1 = h.state().ui.views[0].center;
+        assert!(((c1[axis] - c0[axis]) * z - notch).abs() < 0.5, "{m:?}: the whole notch in the first frame: {c0:?} -> {c1:?} at {z}, notch {notch}");
+        assert_eq!(c1[1 - axis], c0[1 - axis], "{m:?}: along one axis");
+        h.run_steps(30);
+        assert_eq!(h.state().ui.views[0].center, c1, "{m:?}: no glide after it");
+        assert_eq!(zoom(&h), z, "{m:?}: never zooms");
+    }
+}
+
 #[test]
 fn type_tool_alt_arrows_kern_the_pair() {
     use photocraft_doc::text::Kerning;
