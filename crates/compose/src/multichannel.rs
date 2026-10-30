@@ -138,34 +138,40 @@ pub fn thumbnail_with_inks(doc: &Document, max_side: u32) -> Buffer {
     buf
 }
 
-/// The first channel of `s` over `area`, area-averaged down to `w`×`h`, one output row at a time.
+/// Samples per side of a thumbnail pixel that [`reduce`] averages at most.
+const REDUCE_SAMPLES: i32 = 4;
+
+/// The first channel of `s` over `area`, averaged down to `w`×`h`, one output row at a time.
+/// A box up to [`REDUCE_SAMPLES`] pixels a side is averaged whole; a bigger one at that many
+/// evenly spaced rows and columns, so a huge document costs about `h × 4` row reads, not a scan.
 fn reduce(s: &photocraft_raster::Surface, area: Rect, w: u32, h: u32) -> Vec<f32> {
     let (sw, sh) = (u64::from(area.width()), u64::from(area.height()));
     let n = s.channels().max(1);
     let edge = |i: u32, out: u32, len: u64| (u64::from(i) * len / u64::from(out.max(1))) as i32;
+    // The offsets from a box's start that are sampled.
+    let picks = |len: i32| -> Vec<i32> {
+        if len <= REDUCE_SAMPLES { (0..len).collect() } else { (0..REDUCE_SAMPLES).map(|j| ((2 * j + 1) * len) / (2 * REDUCE_SAMPLES)).collect() }
+    };
     let mut out = Vec::with_capacity(w as usize * h as usize);
-    let mut vals = Vec::new();
+    let mut row = Vec::new();
+    let mut sums = vec![(0.0f32, 0u32); w as usize];
     for y in 0..h {
         let (y0, y1) = (edge(y, h, sh), edge(y + 1, h, sh));
-        let y1 = y1.max(y0 + 1);
-        s.read_region_into(Rect::new(area.x0, area.y0 + y0, area.x1, area.y0 + y1), &mut vals);
-        let rows = (y1 - y0) as usize;
-        let stride = sw as usize * n;
-        for x in 0..w {
-            let (x0, x1) = (edge(x, w, sw), edge(x + 1, w, sw));
-            let x1 = x1.max(x0 + 1);
-            let mut sum = 0.0f32;
-            let mut count = 0u32;
-            for r in 0..rows {
-                for xi in x0..x1 {
-                    if let Some(v) = vals.get(r * stride + xi as usize * n) {
-                        sum += v;
-                        count += 1;
+        sums.iter_mut().for_each(|t| *t = (0.0, 0));
+        for dy in picks((y1 - y0).max(1)) {
+            let sy = area.y0 + y0 + dy;
+            s.read_region_into(Rect::new(area.x0, sy, area.x1, sy + 1), &mut row);
+            for (x, t) in sums.iter_mut().enumerate() {
+                let (x0, x1) = (edge(x as u32, w, sw), edge(x as u32 + 1, w, sw));
+                for dx in picks((x1 - x0).max(1)) {
+                    if let Some(v) = row.get((x0 + dx) as usize * n) {
+                        t.0 += v;
+                        t.1 += 1;
                     }
                 }
             }
-            out.push(if count > 0 { sum / count as f32 } else { 0.0 });
         }
+        out.extend(sums.iter().map(|&(sum, count)| if count > 0 { sum / count as f32 } else { 0.0 }));
     }
     out
 }
@@ -326,5 +332,19 @@ mod tests {
             assert!(close(t.px[0], print([1.0; 3], [0.0, 0.6, 0.65], 0.0, 1.0), 0.003), "{:?}", t.px);
             assert_eq!(t.px[1], crate::thumbnail_buffer(&doc, 2).px[1], "no ink: unchanged");
         }
+    }
+
+    /// A box bigger than the sample grid averages evenly spaced samples: ink on the left half of
+    /// a 64-pixel box reads half covered.
+    #[test]
+    fn reduce_samples_big_boxes() {
+        let mut sf = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::U8, false));
+        let vals: Vec<f32> = (0..64).map(|x| if x < 32 { 1.0 } else { 0.0 }).collect();
+        sf.write_region(Rect::new(0, 0, 64, 1), &vals);
+        let r = reduce(&sf, Rect::new(0, 0, 64, 1), 1, 1);
+        assert_eq!(r, [0.5]);
+        // Small boxes stay exact.
+        let r = reduce(&sf, Rect::new(0, 0, 64, 1), 16, 1);
+        assert_eq!(r, (0..16).map(|x| if x < 8 { 1.0 } else { 0.0 }).collect::<Vec<f32>>());
     }
 }
