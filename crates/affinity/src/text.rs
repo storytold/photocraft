@@ -4,7 +4,7 @@
 
 use crate::model::{Affine, Align, Point, Reader, Text, TextRun, rect};
 use crate::paint::{self, Paint};
-use crate::stream::{ObjId, Value};
+use crate::stream::{ObjId, Stream, Value};
 
 /// Characters read per text node (stories are split into blocks; this caps hostile ones).
 const MAX_CHARS: usize = 1 << 20;
@@ -21,26 +21,7 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
     let mut placeholders = false;
     for block in s.objs(story, b"Blok") {
         let glyphs = s.obj(block, b"Glyp")?;
-        let chars: Vec<char> = match s.str(glyphs, b"Utf8") {
-            Some(t) => t.chars().collect(),
-            None => {
-                // Inline objects (page numbers, anchors) each take one index before the segment text.
-                let mut v = Vec::new();
-                // One past the allowance is enough to trip the check below; shared segments
-                // repeated by reference must not expand beyond it first.
-                let room = MAX_CHARS.saturating_sub(total).saturating_add(1);
-                for seg in s.objs(glyphs, b"Mixd") {
-                    if v.len() >= room {
-                        break;
-                    }
-                    let inline = s.objs(seg, b"Glys").len();
-                    v.extend(std::iter::repeat_n('\u{FFFC}', inline.min(room - v.len())));
-                    placeholders |= inline > 0;
-                    v.extend(s.str(seg, b"Utf8").unwrap_or_default().chars().take(room.saturating_sub(v.len())));
-                }
-                v
-            }
-        };
+        let chars = block_chars(s, glyphs, total, &mut placeholders);
         total = total.checked_add(chars.len())?;
         if total > MAX_CHARS {
             r.warn("text longer than a million characters (truncated)");
@@ -82,6 +63,32 @@ pub(crate) fn read(r: &mut Reader, id: ObjId, world: Affine) -> Option<Text> {
         }
     }
     Some(Text { runs, align, anchor: Point { x: anchor_x, y: first_baseline }, frame: if artistic { None } else { Some(bounds) }, transform: world })
+}
+
+/// The characters of one text block. A block without a UTF-8 string is a list of segments: each
+/// inline object (page number, anchor) takes one `U+FFFC` before its segment's text. Stops once
+/// `total` plus these characters would pass the cap.
+fn block_chars(s: &Stream, glyphs: ObjId, total: usize, placeholders: &mut bool) -> Vec<char> {
+    // One past the allowance is enough to trip the check in `read`; both arms stop there.
+    let room = MAX_CHARS.saturating_sub(total).saturating_add(1);
+    match s.str(glyphs, b"Utf8") {
+        Some(t) => t.chars().take(room).collect(),
+        None => {
+            // Inline objects (page numbers, anchors) each take one index before the segment text.
+            let mut v = Vec::new();
+            // Shared segments repeated by reference must not expand beyond the allowance first.
+            for seg in s.objs(glyphs, b"Mixd") {
+                if v.len() >= room {
+                    break;
+                }
+                let inline = s.objs(seg, b"Glys").len();
+                v.extend(std::iter::repeat_n('\u{FFFC}', inline.min(room - v.len())));
+                *placeholders |= inline > 0;
+                v.extend(s.str(seg, b"Utf8").unwrap_or_default().chars().take(room.saturating_sub(v.len())));
+            }
+            v
+        }
+    }
 }
 
 fn slot<T: Copy>(v: Option<&Value>, i: usize, f: impl Fn(&Value) -> Option<T>) -> Option<T> {

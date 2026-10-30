@@ -818,6 +818,28 @@ fn natural_order_counts_numbers_by_value() {
     assert_eq!(names, ["A.psd", "b.psd", "file_1.psd", "File_03.psd", "File_9.psd", "File_10.psd", "File_100.psd"]);
 }
 
+/// Files on the command line open before the first frame applies the interface language: their
+/// status line follows the preference, not the English default.
+#[test]
+fn open_paths_reports_in_the_interface_language_before_the_first_frame() {
+    let pattern = |i: u8| {
+        let mut surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+        surface.fill_rect(photocraft_geom::Rect::new(0, 0, 4, 4), &[f32::from(i) / 3.0, 0.5, 0.2, 1.0]);
+        let mut p = photocraft_doc::Pattern::new("Launch", surface, 4, 4);
+        p.id = format!("6f1c2c1e-0000-4000-8000-00000000000{i}");
+        p
+    };
+    let bytes = photocraft_io::pattern_map::write_pat(&[pattern(1), pattern(2), pattern(3)]).unwrap();
+    let (dir, paths) = files("launch-language", &["launch.pat"], &bytes);
+    let (mut app, _) = app_with(Vec::new());
+    app.session.edit_prefs(|p| p.interface.language = "ar".into());
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    assert_eq!(app.open_paths(&paths), 1);
+    assert_eq!(app.ui.status, "تم استيراد 3 نقشات من launch");
+    crate::i18n::set_current(crate::i18n::Lang::EN);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// #3248: several files opened at once (File › Open, the command line, Finder) open in name order.
 #[test]
 fn open_paths_opens_a_set_in_name_order() {

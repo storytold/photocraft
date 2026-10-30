@@ -297,6 +297,7 @@
 	Layer…	Layer…
 	Group…	Grup…
 	Group from Layers…	Grup dari Layer…
+	New Group from Layers…	Grup Baru dari Layer…
 	Artboard…	Artboard…
 	Artboard from Group…	Artboard dari Grup…
 	Artboard from Layers…	Artboard dari Layer…
@@ -638,6 +639,10 @@
 	Fit Layer(s) on Screen	Pas Layer di Layar
 	Fit Artboard on Screen	Pas Artboard di Layar
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -1018,6 +1023,9 @@
 	Create new pattern from the selection	Buat pola baru dari seleksi
 	Create new shape from the current path	Buat bentuk baru dari path saat ini
 	Create new snapshot	Buat snapshot baru
+	From:	Dari:
+	Full Document	Seluruh Dokumen
+	Merged Layers	Layer Gabungan
 	Create new tool preset	Buat preset alat baru
 	Crop Factor	Faktor Crop
 	Ctrl	Ctrl
@@ -1925,7 +1933,7 @@
 	Full size tip	Ujung ukuran penuh
 	Gamut warning color	Warna peringatan gamut
 	Gamut warning opacity	Opasitas peringatan gamut
-	Generator enabled	Generator aktif
+	Enable Generator	Aktifkan Generator
 	Gif	GIF
 	Glossy	Mengilap
 	Grid color	Warna grid
@@ -2249,7 +2257,7 @@
 	Quick Selection	Quick Selection
 	Magnetic Lasso	Magnetic Lasso
 	History Brush	History Brush
-	Art History Brush	Art History Brush
+	Art History Brush	Kuas riwayat artistik
 	Pattern Stamp	Stempel Pola
 	Spot Healing	Spot Healing
 	Red Eye	Red Eye
@@ -3152,6 +3160,8 @@ curves	Smooth	Haluskan
 	Vanishing Point is not active	Vanishing Point tidak aktif
 	Apply Vanishing Point ({key})	Terapkan Vanishing Point ({key})
 	Fix the red plane first: its corners must form a convex quad	Perbaiki bidang merah dulu: sudut-sudutnya harus membentuk segi empat cembung
+	Alt-click a plane to set the clone source	Alt-klik sebuah bidang untuk menetapkan sumber kloning
+	Too many clone strokes: apply Vanishing Point first	Terlalu banyak goresan kloning: terapkan Vanishing Point terlebih dahulu
 # Select and Mask view modes (#1754)
 	Onion Skin	Kulit Bawang
 	Marching Ants	Semut Berbaris
@@ -3178,6 +3188,9 @@ curves	Smooth	Haluskan
 # History panel menu (#2966)
 	New Snapshot…	Snapshot Baru…
 	History Options…	Opsi Riwayat…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Izinkan Riwayat Non-Linier
+	Make Layer Visibility Changes Undoable	Perubahan Visibilitas Layer Dapat Diurungkan
 # Print dialog (#2697)
 	Emulsion Down	Emulsi di Bawah
 	Functions	Fungsi
@@ -3250,6 +3263,44 @@ curves	Smooth	Haluskan
 	Sent to {printer}	Dikirim ke {printer}
 	set in Print Settings…	diatur di Pengaturan Cetak…
 	ICO is limited to 256 × 256 pixels	ICO dibatasi hingga 256 × 256 piksel
+	Show Favorite Fonts	Tampilkan Font Favorit
+	No favorite fonts yet: click the star beside a font to add it.	Belum ada font favorit: klik bintang di samping font untuk menambahkannya.
+	Favorite fonts	Font favorit
+	Add to Favorites	Tambahkan ke Favorit
+	Remove from Favorites	Hapus dari Favorit
+	Show All Fonts	Tampilkan Semua Font
+	All Classes	Semua Kelas
+	Blackletter	Blackletter
+	Decorative	Dekoratif
+	Font preview:	Pratinjau font:
+	Handwritten	Tulisan tangan
+	Hide Font Classes	Sembunyikan Kelas Font
+	Hide Styles	Sembunyikan Gaya
+	Monospace	Monospasi
+	No fonts match these filters.	Tidak ada font yang cocok dengan filter ini.
+	No similar fonts: the current font doesn't say what it looks like.	Tidak ada font serupa: font saat ini tidak menjelaskan tampilannya.
+	OpenType font	Font OpenType
+	Sans Serif	Sans Serif
+	Script	Skrip
+	Serif	Serif
+	Show Font Classes	Tampilkan Kelas Font
+	Show Similar Fonts	Tampilkan Font Serupa
+	Show Styles	Tampilkan Gaya
+	Show Variable Fonts	Tampilkan Font Variabel
+	Slab Serif	Slab Serif
+	TrueType font	Font TrueType
+	Variable font	Font variabel
+	Calibration	Kalibrasi
+	Red Primary	Primer merah
+	Green Primary	Primer hijau
+	Blue Primary	Primer biru
+	Write xmp sidecars	Tulis berkas pendamping XMP
+	Set the tone sliders from the image	Atur penggeser nada dari gambar
+	Settings from {name}	Pengaturan dari {name}
+	Settings from {name}; {count} not supported: {names}	Pengaturan dari {name}; {count} tidak didukung: {names}
+	Could not write {name}: {error}	Tidak dapat menulis {name}: {error}
+	Kept {name}: written by another application	{name} dipertahankan: ditulis oleh aplikasi lain
+	Shadow Tint	Rona bayangan
 # PhotoCraft release checks.
 	Check for Updates…	Periksa Pembaruan…
 	PhotoCraft Updates	Pembaruan PhotoCraft
@@ -3419,6 +3470,21 @@ curves	Smooth	Haluskan
 	Not rendered: this adjustment ({key}) is kept as imported.	Tidak dirender: penyesuaian ini ({key}) disimpan seperti saat diimpor.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	Hapus Seleksi
+	Color Aware	Berbasis Warna
+	Decontaminate Colors	Dekontaminasi Warna
+	Edge Detection	Deteksi Tepi
+	Global Refinements	Penyempurnaan Global
+	High Quality Preview	Pratinjau Kualitas Tinggi
+	Object Aware	Berbasis Objek
+	Real-Time Refinement	Penyempurnaan Waktu Nyata
+	Refine Edge Brush Tool	Alat Kuas Perhalus Tepi
+	Refine Hair	Perhalus Rambut
+	Refine Mode	Mode Penyempurnaan
+	Remember Settings	Ingat Pengaturan
+	View Mode	Mode Tampilan
+	Object Aware needs a segmentation model, which isn't available yet	Berbasis Objek memerlukan model segmentasi, yang belum tersedia
+	Refine Hair needs hair detection, which isn't available yet	Perhalus Rambut memerlukan deteksi rambut, yang belum tersedia
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Kubus Hue
 	Brightness Cube	Kubus Kecerahan
@@ -3435,3 +3501,26 @@ curves	Smooth	Haluskan
 	Grayscale Ramp	Gradasi Grayscale
 	Current Colors	Warna Saat Ini
 	Make Ramp Web Safe	Jadikan Gradasi Aman untuk Web
+	Select and Mask was closed: its document is no longer the active one	Seleksi dan Mask ditutup: dokumennya tidak lagi aktif
+	Select and Mask was closed: another layer was selected	Seleksi dan Mask ditutup: layer lain dipilih
+# Art History Brush (#213).
+	Art History Brush Tool	Alat Kuas riwayat artistik
+	Tight Short	Rapet pendek
+	Tight Medium	Rapet sedang
+	Tight Long	Rapet panjang
+	Loose Medium	Longgar sedang
+	Loose Long	Longgar panjang
+	Dab	Cap
+	Tight Curl	Ikal rapat
+	Loose Curl	Ikal longgar
+	Area	Area
+	Stylized dabs from a history state	Cap bergaya dari sebuah keadaan riwayat
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Color Table	Tabel Warna
+	Gamma	Gamma
+	Profile	Profil
+	Target	Target
+	Font size presets	Preset ukuran font
+	Leading presets	Preset leading
+	Tracking presets	Preset tracking

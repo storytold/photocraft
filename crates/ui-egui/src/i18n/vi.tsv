@@ -290,6 +290,7 @@
 	Gradient…	Chuyển sắc…
 	Grayscale	Thang xám
 	Group from Layers…	Nhóm từ các lớp…
+	New Group from Layers…	Nhóm mới từ các lớp…
 	Group Layers	Nhóm các lớp
 	Group…	Nhóm…
 	HDR Toning…	Tông HDR…
@@ -578,6 +579,10 @@
 
 # Phase 3.5 — View menu
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	32-bit Preview Options…	Tùy chọn xem trước 32-bit…
 	Anamorphic 2:1 (2)	Anamorphic 2:1 (2)
@@ -981,6 +986,10 @@
 	Frame from Layers…	Frame từ các lớp…
 	Create new document from current state	Tạo tài liệu mới từ trạng thái hiện tại
 	Create new snapshot	Tạo ảnh chụp trạng thái mới
+	From:	Từ:
+	Full Document	Toàn bộ tài liệu
+	Merged Layers	Các lớp đã gộp
+	New Snapshot	Ảnh chụp trạng thái mới
 	Delete current state	Xóa trạng thái hiện tại
 	No properties	Không có thuộc tính
 	Hide Properties	Ẩn Thuộc tính
@@ -2454,6 +2463,8 @@ shape	Appearance	Diện mạo
 	Fill with {mode}-neutral color (black)	Tô bằng màu trung tính của {mode} (đen)
 	Fill with {mode}-neutral color (white)	Tô bằng màu trung tính của {mode} (trắng)
 	Fix the red plane first: its corners must form a convex quad	Hãy sửa mặt phẳng đỏ trước: các góc phải tạo thành tứ giác lồi
+	Alt-click a plane to set the clone source	Nhấp Alt vào một mặt phẳng để đặt nguồn sao chép
+	Too many clone strokes: apply Vanishing Point first	Quá nhiều nét sao chép: hãy áp dụng Điểm tụ trước
 	Float Panel	Thả nổi bảng
 	Functions	Hàm
 	Grid Size:	Cỡ lưới:
@@ -2709,7 +2720,7 @@ shape	Appearance	Diện mạo
 	Extra large	Rất lớn
 	Fill new type layers with placeholder	Tô lớp chữ mới bằng nội dung tạm
 	Font preview	Xem trước phông chữ
-	Generator enabled	Đã bật bộ tạo
+	Enable Generator	Bật bộ tạo
 	Glossy	Bóng
 	Gutter	Lề
 	Ignore exif profile tag	Bỏ qua thẻ hồ sơ exif
@@ -3687,6 +3698,9 @@ curves	Smooth	Làm mượt
 	Clear History	Xóa lịch sử
 	History Options…	Tùy chọn lịch sử…
 	Background (Default)	Nền (mặc định)
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Cho phép lịch sử không tuyến tính
+	Make Layer Visibility Changes Undoable	Cho phép hoàn tác thay đổi hiển thị lớp
 	Presentation	Trình bày
 # Batch / Image Processor
 	Include All Subfolders	Bao gồm tất cả thư mục con
@@ -3702,6 +3716,44 @@ curves	Smooth	Làm mượt
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
+	Show Favorite Fonts	Hiển thị phông chữ yêu thích
+	No favorite fonts yet: click the star beside a font to add it.	Chưa có phông chữ yêu thích: nhấp vào ngôi sao bên cạnh phông chữ để thêm.
+	Favorite fonts	Phông chữ yêu thích
+	Add to Favorites	Thêm vào mục yêu thích
+	Remove from Favorites	Xóa khỏi mục yêu thích
+	Show All Fonts	Hiển thị tất cả phông chữ
+	All Classes	Tất cả các lớp
+	Blackletter	Blackletter
+	Decorative	Trang trí
+	Font preview:	Xem trước phông chữ:
+	Handwritten	Viết tay
+	Hide Font Classes	Ẩn lớp phông chữ
+	Hide Styles	Ẩn kiểu
+	Monospace	Đơn cách
+	No fonts match these filters.	Không có phông chữ nào khớp với các bộ lọc này.
+	No similar fonts: the current font doesn't say what it looks like.	Không có phông chữ tương tự: phông chữ hiện tại không mô tả hình dáng của nó.
+	OpenType font	Phông chữ OpenType
+	Sans Serif	Không chân
+	Script	Viết tay nghệ thuật
+	Serif	Có chân
+	Show Font Classes	Hiện lớp phông chữ
+	Show Similar Fonts	Hiện phông chữ tương tự
+	Show Styles	Hiện kiểu
+	Show Variable Fonts	Hiện phông chữ biến thiên
+	Slab Serif	Chân vuông
+	TrueType font	Phông chữ TrueType
+	Variable font	Phông chữ biến thiên
+	Calibration	Hiệu chuẩn
+	Red Primary	Màu đỏ cơ bản
+	Green Primary	Màu lục cơ bản
+	Blue Primary	Màu lam cơ bản
+	Write xmp sidecars	Ghi tệp phụ XMP
+	Set the tone sliders from the image	Đặt các thanh trượt tông từ ảnh
+	Settings from {name}	Thiết lập từ {name}
+	Settings from {name}; {count} not supported: {names}	Thiết lập từ {name}; {count} không được hỗ trợ: {names}
+	Could not write {name}: {error}	Không thể ghi {name}: {error}
+	Kept {name}: written by another application	Đã giữ {name}: do ứng dụng khác ghi
+	Shadow Tint	Sắc độ bóng tối
 	Check for Updates…	Kiểm tra bản cập nhật…
 	PhotoCraft Updates	Bản cập nhật PhotoCraft
 	Checking for updates…	Đang kiểm tra bản cập nhật…
@@ -3896,6 +3948,21 @@ curves	Smooth	Làm mượt
 	Not rendered: this adjustment ({key}) is kept as imported.	Không được kết xuất: điều chỉnh này ({key}) được giữ nguyên như khi nhập.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	Xóa vùng chọn
+	Color Aware	Nhận biết màu
+	Decontaminate Colors	Khử nhiễm màu
+	Edge Detection	Phát hiện cạnh
+	Global Refinements	Tinh chỉnh tổng thể
+	High Quality Preview	Xem trước chất lượng cao
+	Object Aware	Nhận biết đối tượng
+	Real-Time Refinement	Tinh chỉnh theo thời gian thực
+	Refine Edge Brush Tool	Công cụ cọ tinh chỉnh cạnh
+	Refine Hair	Tinh chỉnh tóc
+	Refine Mode	Chế độ tinh chỉnh
+	Remember Settings	Ghi nhớ cài đặt
+	View Mode	Chế độ xem
+	Object Aware needs a segmentation model, which isn't available yet	Nhận biết đối tượng cần mô hình phân đoạn, hiện chưa có
+	Refine Hair needs hair detection, which isn't available yet	Tinh chỉnh tóc cần tính năng phát hiện tóc, hiện chưa có
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Khối sắc màu
 	Brightness Cube	Khối độ sáng
@@ -3913,3 +3980,23 @@ curves	Smooth	Làm mượt
 	Grayscale Ramp	Dải thang xám
 	Current Colors	Màu hiện tại
 	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+	Select and Mask was closed: its document is no longer the active one	Đã đóng Chọn và Mặt nạ: tài liệu của nó không còn là tài liệu đang hoạt động
+	Select and Mask was closed: another layer was selected	Đã đóng Chọn và Mặt nạ: một lớp khác đã được chọn
+# Art History Brush (#213).
+	Art History Brush	Cọ lịch sử nghệ thuật
+	Art History Brush Tool	Công cụ Cọ lịch sử nghệ thuật
+	Tight Short	Chặt ngắn
+	Tight Medium	Chặt vừa
+	Tight Long	Chặt dài
+	Loose Medium	Lỏng vừa
+	Loose Long	Lỏng dài
+	Dab	Chấm
+	Tight Curl	Xoắn chặt
+	Loose Curl	Xoắn lỏng
+	Stylized dabs from a history state	Các chấm cách điệu từ một trạng thái lịch sử
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Aspect Ratio	Tỷ lệ khung hình
+	Font size presets	Cỡ chữ đặt sẵn
+	Leading presets	Giãn dòng đặt sẵn
+	Tracking presets	Khoảng cách chữ đặt sẵn

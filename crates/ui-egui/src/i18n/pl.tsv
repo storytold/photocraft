@@ -305,6 +305,7 @@
 	Layer…	Warstwa…
 	Group…	Grupa…
 	Group from Layers…	Grupa z warstw…
+	New Group from Layers…	Nowa grupa z warstw…
 	Artboard…	Obszar roboczy…
 	Artboard from Group…	Obszar roboczy z grupy…
 	Artboard from Layers…	Obszar roboczy z warstw…
@@ -654,6 +655,10 @@
 	Fit Layer(s) on Screen	Dopasuj warstwy do ekranu
 	Fit Artboard on Screen	Dopasuj obszar roboczy do ekranu
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -1035,6 +1040,9 @@
 	Create new pattern from the selection	Utwórz nowy wzór z zaznaczenia
 	Create new shape from the current path	Utwórz nowy kształt z bieżącej ścieżki
 	Create new snapshot	Utwórz nową migawkę
+	From:	Z:
+	Full Document	Cały dokument
+	Merged Layers	Scalone warstwy
 	Create new style (from the selected type)	Utwórz nowy styl (z zaznaczonego tekstu)
 	Create new style from the selected layer	Utwórz nowy styl z zaznaczonej warstwy
 	Create new tool preset	Utwórz nowe ustawienie wstępne narzędzia
@@ -1953,7 +1961,7 @@
 	Full size tip	Końcówka w pełnym rozmiarze
 	Gamut warning color	Kolor ostrzeżenia o gamucie
 	Gamut warning opacity	Krycie ostrzeżenia o gamucie
-	Generator enabled	Generator włączony
+	Enable Generator	Włącz generator
 	Gif	GIF
 	Glossy	Błyszczący
 	Grid color	Kolor siatki
@@ -3757,6 +3765,8 @@ curves	Smooth	Wygładź
 	Vanishing Point is not active	Punkt zbieżności nie jest aktywny
 	Apply Vanishing Point ({key})	Zastosuj punkt zbieżności ({key})
 	Fix the red plane first: its corners must form a convex quad	Najpierw popraw czerwoną płaszczyznę: jej narożniki muszą tworzyć czworokąt wypukły
+	Alt-click a plane to set the clone source	Kliknij płaszczyznę z Alt, aby ustawić źródło klonowania
+	Too many clone strokes: apply Vanishing Point first	Zbyt wiele pociągnięć klonowania: najpierw zastosuj Punkt zbieżności
 # Select and Mask view modes (#1754)
 	Onion Skin	Skórka cebuli
 	Marching Ants	Maszerujące mrówki
@@ -3783,6 +3793,9 @@ curves	Smooth	Wygładź
 # History panel menu (#2966)
 	New Snapshot…	Nowa migawka…
 	History Options…	Opcje historii…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Zezwalaj na nieliniową historię
+	Make Layer Visibility Changes Undoable	Pozwalaj cofać zmiany widoczności warstw
 # Print dialog (#2697)
 	Emulsion Down	Emulsja w dół
 	Functions	Funkcje
@@ -3854,6 +3867,44 @@ curves	Smooth	Wygładź
 	Sent to {printer}	Wysłano do {printer}
 	set in Print Settings…	ustawiane w ustawieniach druku…
 	ICO is limited to 256 × 256 pixels	ICO jest ograniczony do 256 × 256 pikseli
+	Show Favorite Fonts	Pokaż ulubione czcionki
+	No favorite fonts yet: click the star beside a font to add it.	Brak ulubionych czcionek: kliknij gwiazdkę obok czcionki, aby ją dodać.
+	Favorite fonts	Ulubione czcionki
+	Add to Favorites	Dodaj do ulubionych
+	Remove from Favorites	Usuń z ulubionych
+	Show All Fonts	Pokaż wszystkie czcionki
+	All Classes	Wszystkie klasy
+	Blackletter	Pismo gotyckie
+	Decorative	Ozdobne
+	Font preview:	Podgląd czcionki:
+	Handwritten	Odręczne
+	Hide Font Classes	Ukryj klasy czcionek
+	Hide Styles	Ukryj style
+	Monospace	O stałej szerokości
+	No fonts match these filters.	Żadna czcionka nie pasuje do tych filtrów.
+	No similar fonts: the current font doesn't say what it looks like.	Brak podobnych czcionek: bieżąca czcionka nie opisuje swojego wyglądu.
+	OpenType font	Czcionka OpenType
+	Sans Serif	Bezszeryfowe
+	Script	Pisane
+	Serif	Szeryfowe
+	Show Font Classes	Pokaż klasy czcionek
+	Show Similar Fonts	Pokaż podobne czcionki
+	Show Styles	Pokaż style
+	Show Variable Fonts	Pokaż czcionki zmienne
+	Slab Serif	Szeryfowe prostokątne
+	TrueType font	Czcionka TrueType
+	Variable font	Czcionka zmienna
+	Calibration	Kalibracja
+	Red Primary	Czerwień podstawowa
+	Green Primary	Zieleń podstawowa
+	Blue Primary	Niebieski podstawowy
+	Write xmp sidecars	Zapisuj pliki poboczne XMP
+	Set the tone sliders from the image	Ustaw suwaki tonów na podstawie obrazu
+	Settings from {name}	Ustawienia z {name}
+	Settings from {name}; {count} not supported: {names}	Ustawienia z {name}; nieobsługiwane: {count}: {names}
+	Could not write {name}: {error}	Nie można zapisać {name}: {error}
+	Kept {name}: written by another application	Zachowano {name}: zapisany przez inną aplikację
+	Shadow Tint	Tinta cieni
 # PhotoCraft release checks.
 	Check for Updates…	Sprawdź aktualizacje…
 	PhotoCraft Updates	Aktualizacje PhotoCraft
@@ -4021,6 +4072,21 @@ curves	Smooth	Wygładź
 	Not rendered: this adjustment ({key}) is kept as imported.	Nie jest renderowana: ta korekta ({key}) jest zachowana w postaci zaimportowanej.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	Wyczyść zaznaczenie
+	Color Aware	Według kolorów
+	Decontaminate Colors	Odkażanie kolorów
+	Edge Detection	Wykrywanie krawędzi
+	Global Refinements	Dopracowanie globalne
+	High Quality Preview	Podgląd wysokiej jakości
+	Object Aware	Według obiektów
+	Real-Time Refinement	Dopracowanie w czasie rzeczywistym
+	Refine Edge Brush Tool	Narzędzie Pędzel dopracowania krawędzi
+	Refine Hair	Dopracuj włosy
+	Refine Mode	Tryb dopracowania
+	Remember Settings	Zapamiętaj ustawienia
+	View Mode	Tryb widoku
+	Object Aware needs a segmentation model, which isn't available yet	Tryb Według obiektów wymaga modelu segmentacji, który nie jest jeszcze dostępny
+	Refine Hair needs hair detection, which isn't available yet	Dopracowanie włosów wymaga wykrywania włosów, które nie jest jeszcze dostępne
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Sześcian odcienia
 	Brightness Cube	Sześcian jasności
@@ -4037,3 +4103,22 @@ curves	Smooth	Wygładź
 	Grayscale Ramp	Pasek skali szarości
 	Current Colors	Bieżące kolory
 	Make Ramp Web Safe	Ogranicz pasek do kolorów internetowych
+	Select and Mask was closed: its document is no longer the active one	Zamknięto Zaznacz i maskuj: jego dokument nie jest już aktywny
+	Select and Mask was closed: another layer was selected	Zamknięto Zaznacz i maskuj: wybrano inną warstwę
+# Art History Brush (#213).
+	Art History Brush Tool	Narzędzie Pędzel historii artystycznej
+	Tight Short	Ścisły krótki
+	Tight Medium	Ścisły średni
+	Tight Long	Ścisły długi
+	Loose Medium	Luźny średni
+	Loose Long	Luźny długi
+	Dab	Plama
+	Tight Curl	Ścisły lok
+	Loose Curl	Luźny lok
+	Stylized dabs from a history state	Stylizowane plamy ze stanu historii
+
+# Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
+	Target	Cel
+	Font size presets	Ustawienia wstępne rozmiaru czcionki
+	Leading presets	Ustawienia wstępne interlinii
+	Tracking presets	Ustawienia wstępne światła

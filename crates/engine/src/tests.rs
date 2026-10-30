@@ -1160,7 +1160,8 @@ fn move_selected_layers_keeps_selected_group_children_and_supports_above_below()
     let b = s.execute("layer.new.layer", json!({"name": "B"})).unwrap()["layer"].as_u64().unwrap();
     let c = s.execute("layer.new.layer", json!({"name": "C"})).unwrap()["layer"].as_u64().unwrap();
     let group = s.execute("layer.new.group", json!({"name": "G"})).unwrap()["layer"].as_u64().unwrap();
-    // Made before B moves into G: a new group goes above the active layer, which would then be inside G.
+    // Made from C, not from G: like Photoshop a new group goes inside an open active group.
+    s.execute("layer.select", json!({"layer": c})).unwrap();
     let target = s.execute("layer.new.group", json!({"name": "Target"})).unwrap()["layer"].as_u64().unwrap();
     s.execute("layer.moveTo", json!({"layer": b, "target": group, "position": "into"})).unwrap();
 
@@ -1822,4 +1823,26 @@ fn history_states_share_large_document_payloads() {
         other => panic!("{other:?}"),
     };
     assert!(std::sync::Arc::ptr_eq(&raw(now), &raw(then)), "the adjustment's bytes are shared");
+}
+
+#[test]
+fn the_document_activation_generation_bumps_on_switch_and_back() {
+    let mut s = session_with_doc();
+    let first = s.active().unwrap().doc.id;
+    let g1 = s.active_generation();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let second = s.active().unwrap().doc.id;
+    assert_ne!(second, first);
+    let g2 = s.active_generation();
+    assert!(g2 > g1, "opening a document activates it");
+    let i = s.documents().iter().position(|d| d.doc.id == first).expect("the first document");
+    assert!(s.set_active(i));
+    let g3 = s.active_generation();
+    assert!(g3 > g2, "switching back is a new activation");
+    // Re-selecting the already-active document is not a switch; neither is an edit.
+    assert!(s.set_active(i));
+    assert_eq!(s.active_generation(), g3);
+    s.execute("layer.new.layer", json!({})).unwrap();
+    assert_eq!(s.active_generation(), g3);
+    assert_eq!(s.active().unwrap().doc.id, first);
 }

@@ -299,6 +299,7 @@
 	Layer…	Camada…
 	Group…	Grupo…
 	Group from Layers…	Grupo a partir de camadas…
+	New Group from Layers…	Novo grupo a partir de camadas…
 	Artboard…	Prancheta…
 	Artboard from Group…	Prancheta a partir de grupo…
 	Artboard from Layers…	Prancheta a partir de camadas…
@@ -638,6 +639,10 @@
 	Fit Layer(s) on Screen	Ajustar camada(s) à tela
 	Fit Artboard on Screen	Ajustar prancheta à tela
 	100%	100%
+	105%	105%
+	110%	110%
+	115%	115%
+	120%	120%
 	200%	200%
 	75%	75%
 	80%	80%
@@ -1001,6 +1006,9 @@
 	Create new pattern from the selection	Criar novo padrão a partir da seleção
 	Create new shape from the current path	Criar nova forma a partir do demarcador atual
 	Create new snapshot	Criar novo instantâneo
+	From:	De:
+	Full Document	Documento inteiro
+	Merged Layers	Camadas mescladas
 	Create new style (from the selected type)	Criar novo estilo (a partir do texto selecionado)
 	Create new style from the selected layer	Criar novo estilo a partir da camada selecionada
 	Create new tool preset	Criar nova predefinição de ferramenta
@@ -1909,7 +1917,7 @@
 	Full size tip	Ponta em tamanho real
 	Gamut warning color	Cor do aviso de gama
 	Gamut warning opacity	Opacidade do aviso de gama
-	Generator enabled	Gerador ativado
+	Enable Generator	Ativar gerador
 	Gif	GIF
 	Glossy	Brilhante
 	Grid color	Cor da grade
@@ -3151,6 +3159,8 @@ curves	Smooth	Suavizar
 	Vanishing Point is not active	Ponto de fuga não está ativo
 	Apply Vanishing Point ({key})	Aplicar ponto de fuga ({key})
 	Fix the red plane first: its corners must form a convex quad	Corrija primeiro o plano vermelho: seus cantos devem formar um quadrilátero convexo
+	Alt-click a plane to set the clone source	Clique com Alt em um plano para definir a origem da clonagem
+	Too many clone strokes: apply Vanishing Point first	Traços de clonagem demais: aplique Ponto de fuga primeiro
 # Select and Mask view modes (#1754)
 	Onion Skin	Papel vegetal
 	Marching Ants	Formigas marchando
@@ -3943,6 +3953,9 @@ layerLabel	No Color	Sem cor
 # History panel menu (#2966)
 	New Snapshot…	Novo instantâneo…
 	History Options…	Opções de histórico…
+# History panel › History Options… (#2966)
+	Allow Non-Linear History	Permitir histórico não linear
+	Make Layer Visibility Changes Undoable	Permitir desfazer alterações de visibilidade das camadas
 # Print dialog (#2697)
 	Emulsion Down	Emulsão para baixo
 	Functions	Funções
@@ -4029,6 +4042,44 @@ layerLabel	No Color	Sem cor
 	Sent to {printer}	Enviado para {printer}
 	set in Print Settings…	definido nas configurações de impressão…
 	ICO is limited to 256 × 256 pixels	ICO é limitado a 256 × 256 pixels
+	Show Favorite Fonts	Mostrar fontes favoritas
+	No favorite fonts yet: click the star beside a font to add it.	Ainda não há fontes favoritas: clique na estrela ao lado de uma fonte para adicioná-la.
+	Favorite fonts	Fontes favoritas
+	Add to Favorites	Adicionar aos favoritos
+	Remove from Favorites	Remover dos favoritos
+	Show All Fonts	Mostrar todas as fontes
+	All Classes	Todas as classes
+	Blackletter	Gótica
+	Decorative	Decorativa
+	Font preview:	Visualização da fonte:
+	Handwritten	Manuscrita
+	Hide Font Classes	Ocultar classes de fonte
+	Hide Styles	Ocultar estilos
+	Monospace	Monoespaçada
+	No fonts match these filters.	Nenhuma fonte corresponde a estes filtros.
+	No similar fonts: the current font doesn't say what it looks like.	Nenhuma fonte semelhante: a fonte atual não descreve sua aparência.
+	OpenType font	Fonte OpenType
+	Sans Serif	Sem serifa
+	Script	Cursiva
+	Serif	Com serifa
+	Show Font Classes	Mostrar classes de fonte
+	Show Similar Fonts	Mostrar fontes semelhantes
+	Show Styles	Mostrar estilos
+	Show Variable Fonts	Mostrar fontes variáveis
+	Slab Serif	Serifa egípcia
+	TrueType font	Fonte TrueType
+	Variable font	Fonte variável
+	Calibration	Calibração
+	Red Primary	Primária vermelha
+	Green Primary	Primária verde
+	Blue Primary	Primária azul
+	Write xmp sidecars	Gravar arquivos auxiliares XMP
+	Set the tone sliders from the image	Definir os controles de tom a partir da imagem
+	Settings from {name}	Configurações de {name}
+	Settings from {name}; {count} not supported: {names}	Configurações de {name}; {count} sem suporte: {names}
+	Could not write {name}: {error}	Não foi possível gravar {name}: {error}
+	Kept {name}: written by another application	{name} mantido: gravado por outro aplicativo
+	Shadow Tint	Matiz das sombras
 # PhotoCraft release checks.
 	Check for Updates…	Verificar atualizações…
 	PhotoCraft Updates	Atualizações do PhotoCraft
@@ -4334,6 +4385,20 @@ layerLabel	No Color	Sem cor
 	Not rendered: this adjustment ({key}) is kept as imported.	Não renderizado: este ajuste ({key}) é mantido como foi importado.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	Com reconhecimento de cor
+	Decontaminate Colors	Descontaminar cores
+	Edge Detection	Detecção de borda
+	Global Refinements	Refinamentos globais
+	High Quality Preview	Visualização de alta qualidade
+	Object Aware	Com reconhecimento de objeto
+	Real-Time Refinement	Refinamento em tempo real
+	Refine Edge Brush Tool	Ferramenta Pincel de refinamento de borda
+	Refine Hair	Refinar cabelo
+	Refine Mode	Modo de refinamento
+	Remember Settings	Lembrar configurações
+	View Mode	Modo de exibição
+	Object Aware needs a segmentation model, which isn't available yet	Com reconhecimento de objeto requer um modelo de segmentação, ainda não disponível
+	Refine Hair needs hair detection, which isn't available yet	Refinar cabelo requer detecção de cabelo, ainda não disponível
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Cubo de matiz
 	Brightness Cube	Cubo de brilho
@@ -4350,3 +4415,19 @@ layerLabel	No Color	Sem cor
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+	Select and Mask was closed: its document is no longer the active one	Selecionar e mascarar foi fechado: o documento dele não está mais ativo
+	Select and Mask was closed: another layer was selected	Selecionar e mascarar foi fechado: outra camada foi selecionada
+# Art History Brush (#213).
+	Art History Brush Tool	Ferramenta Pincel do histórico da arte
+	Tight Short	Curto cerrado
+	Tight Medium	Médio cerrado
+	Tight Long	Longo cerrado
+	Loose Medium	Médio solto
+	Loose Long	Longo solto
+	Dab	Toque
+	Tight Curl	Curva cerrada
+	Loose Curl	Curva solta
+	Stylized dabs from a history state	Toques estilizados a partir de um estado do histórico
+	Font size presets	Predefinições de tamanho da fonte
+	Leading presets	Predefinições de entrelinha
+	Tracking presets	Predefinições de tracking
