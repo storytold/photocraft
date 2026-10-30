@@ -3468,6 +3468,21 @@ curves	Smooth	Glätten
 	Not rendered: this adjustment ({key}) is kept as imported.	Nicht dargestellt: Diese Einstellung ({key}) wird wie importiert beibehalten.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	Auswahl löschen
+	Color Aware	Farbbezogen
+	Decontaminate Colors	Farben dekontaminieren
+	Edge Detection	Kantenerkennung
+	Global Refinements	Globale Verbesserungen
+	High Quality Preview	Hochwertige Vorschau
+	Object Aware	Objektbezogen
+	Real-Time Refinement	Verbesserung in Echtzeit
+	Refine Edge Brush Tool	Kante-verbessern-Pinsel-Werkzeug
+	Refine Hair	Haare verbessern
+	Refine Mode	Verbesserungsmodus
+	Remember Settings	Einstellungen merken
+	View Mode	Ansichtsmodus
+	Object Aware needs a segmentation model, which isn't available yet	Objektbezogen benötigt ein Segmentierungsmodell, das noch nicht verfügbar ist
+	Refine Hair needs hair detection, which isn't available yet	Haare verbessern benötigt eine Haarerkennung, die noch nicht verfügbar ist
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Farbtonwürfel
 	Brightness Cube	Helligkeitswürfel
@@ -3485,6 +3500,8 @@ curves	Smooth	Glätten
 	Grayscale Ramp	Graustufenbalken
 	Current Colors	Aktuelle Farben
 	Make Ramp Web Safe	Farbbalken auf Webfarben beschränken
+	Select and Mask was closed: its document is no longer the active one	Auswählen und maskieren wurde geschlossen: Das zugehörige Dokument ist nicht mehr aktiv
+	Select and Mask was closed: another layer was selected	Auswählen und maskieren wurde geschlossen: Es wurde eine andere Ebene ausgewählt
 # Art History Brush (#213).
 	Art History Brush	Künstlerischer Protokollpinsel
 	Art History Brush Tool	Künstlerischer-Protokollpinsel-Werkzeug

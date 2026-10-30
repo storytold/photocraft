@@ -149,7 +149,7 @@ pub(crate) use rendering::source_box;
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 #[cfg(test)]
 use rendering::{blend_surfaces, place, render_in};
-pub use source::{SourceImage, source_bytes, source_decode_count, source_image, svg_source_image};
+pub use source::{SourceImage, purge_source_cache, source_bytes, source_cache_bytes, source_decode_count, source_image, svg_source_image};
 use source::{authorize_source, authorized_source_bytes};
 pub(crate) use source::{restore_unrendered, take_caches};
 

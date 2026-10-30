@@ -137,14 +137,14 @@ fn update(app: &mut PhotocraftApp, r: Resize, x: f64, y: f64) {
 }
 
 /// Draw the resize feedback: the brush circle at the anchor, filled with the brush preview
-/// colour whose solid core shows the hardness (Photoshop's), and the readout beside the pointer.
+/// colour as a dab of the brush's hardness covers (Photoshop's), and the readout beside the pointer.
 /// Returns true while a resize is in progress (the canvas then hides its cursor).
 pub fn draw(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform) -> bool {
     let Some(r) = app.brush_resize else { return false };
     let b = &app.session.tools.brush;
     let c = xf.to_screen(r.anchor[0] as f32, r.anchor[1] as f32);
     let radius = (b.size / 2.0 * xf.zoom).max(1.0);
-    tip_preview(painter, c, radius, b.hardness, preview_tint(app));
+    tip_preview(painter, c, b.size / 2.0, xf.zoom, b.hardness, preview_tint(app));
     painter.circle_stroke(c, radius + 0.5, Stroke::new(1.0, Color32::from_black_alpha(140)));
     painter.circle_stroke(c, radius, Stroke::new(1.0, Color32::from_white_alpha(220)));
     // Photoshop hides the pointer while the circle stays put.
@@ -168,32 +168,44 @@ fn preview_tint(app: &PhotocraftApp) -> Color32 {
     })
 }
 
-/// A round tip of `radius` screen points: solid out to `hardness` of the radius, fading to clear
-/// at the edge. One mesh (two rings and a centre), so its cost doesn't grow with the brush.
-fn tip_preview(painter: &egui::Painter, c: Pos2, radius: f32, hardness: f32, color: Color32) {
+/// The round tip as the brush engine paints it: `radius` document pixels at `zoom` screen points
+/// per document pixel, solid out to its core and then the engine's falloff (`tip_falloff`) out to
+/// its reach, past the radius for a soft tip, so the disc shows what a dab of this hardness covers.
+/// One mesh of rings, so its cost doesn't grow with the brush.
+fn tip_preview(painter: &egui::Painter, c: Pos2, radius: f32, zoom: f32, hardness: f32, color: Color32) {
+    /// Rings across the falloff: the shoulder is smooth, so linear steps between them are close.
+    const RINGS: usize = 16;
+    if !(radius.is_finite() && zoom.is_finite() && radius > 0.0 && zoom > 0.0) {
+        return;
+    }
+    let (core, _) = photocraft_paint::tip_shape(radius, hardness);
+    let reach = photocraft_paint::tip_reach(radius, hardness).max(core);
+    let outer = reach * zoom;
     let clip = painter.clip_rect();
-    if !clip.expand(radius).contains(c) {
+    if !clip.expand(outer).contains(c) {
         return;
     }
     // Enough segments for a smooth edge at any size, capped so huge brushes stay cheap.
-    let n = ((radius * 0.5) as usize).clamp(24, 160);
-    let inner = radius * hardness.clamp(0.0, 1.0);
-    let clear = Color32::TRANSPARENT;
+    let n = ((outer * 0.5) as usize).clamp(24, 160);
     let mut mesh = egui::Mesh::default();
     mesh.colored_vertex(c, color);
-    for k in 0..n {
-        let a = k as f32 / n as f32 * std::f32::consts::TAU;
-        let d = vec2(a.cos(), a.sin());
-        mesh.colored_vertex(c + d * inner, color);
-        mesh.colored_vertex(c + d * radius, clear);
+    for k in 0..=RINGS {
+        let d = core + (reach - core) * k as f32 / RINGS as f32;
+        // The last ring is the reach, where the falloff has run out.
+        let tint = if k == RINGS { Color32::TRANSPARENT } else { color.gamma_multiply(photocraft_paint::tip_falloff(d, radius, hardness)) };
+        for j in 0..n {
+            let a = j as f32 / n as f32 * std::f32::consts::TAU;
+            mesh.colored_vertex(c + vec2(a.cos(), a.sin()) * d * zoom, tint);
+        }
     }
     let n = n as u32;
-    for k in 0..n {
-        let (i0, o0) = (1 + 2 * k, 2 + 2 * k);
-        let (i1, o1) = (1 + 2 * ((k + 1) % n), 2 + 2 * ((k + 1) % n));
-        mesh.add_triangle(0, i0, i1);
-        mesh.add_triangle(i0, o0, o1);
-        mesh.add_triangle(i0, o1, i1);
+    let at = |ring: u32, j: u32| 1 + ring * n + j % n;
+    for j in 0..n {
+        mesh.add_triangle(0, at(0, j), at(0, j + 1));
+        for ring in 0..RINGS as u32 {
+            mesh.add_triangle(at(ring, j), at(ring + 1, j), at(ring + 1, j + 1));
+            mesh.add_triangle(at(ring, j), at(ring + 1, j + 1), at(ring, j + 1));
+        }
     }
     painter.add(mesh);
 }

@@ -835,6 +835,32 @@ fn threshold_posterize_levels_curves() {
 }
 
 #[test]
+fn curve_samples_preserve_spline_and_endpoint_behavior() {
+    use photocraft_doc::adjust::CurvePoint;
+    let points = [CurvePoint { input: 0.0, output: 0.0 }, CurvePoint { input: 0.5, output: 1.0 }, CurvePoint { input: 1.0, output: 0.0 }];
+    // Analytic natural spline: at x=1/4 and 3/4 the output is 11/16.
+    assert_eq!(adjust::curve_samples::<5>(&points), vec![0.0, 0.6875, 1.0, 0.6875, 0.0]);
+    let low = adjust::curve_samples::<256>(&points);
+    let full = adjust::curve_lut(&points);
+    assert_eq!(low.len(), 256);
+    assert_eq!(full.len(), 4096);
+    // Both grids share these inputs exactly (17/255 == 273/4095).
+    for k in 0..=15 {
+        assert_eq!(low[k * 17], full[k * 273]);
+    }
+
+    let unsorted = [CurvePoint { input: 0.75, output: 0.8 }, CurvePoint { input: 0.25, output: 0.2 }];
+    let table = adjust::curve_samples::<5>(&unsorted);
+    for (actual, expected) in table.iter().zip([0.2, 0.2, 0.5, 0.8, 0.8]) {
+        assert!((actual - expected).abs() < 1e-6);
+    }
+    assert_eq!(adjust::curve_samples::<3>(&[]), vec![0.0, 0.5, 1.0]);
+    assert_eq!(adjust::curve_samples::<3>(&points[..1]), vec![0.0, 0.5, 1.0]);
+    assert!(adjust::curve_samples::<0>(&points).is_empty());
+    assert_eq!(adjust::curve_samples::<1>(&points), vec![0.0]);
+}
+
+#[test]
 fn hue_saturation_roundtrips_and_desaturates() {
     let c = [0.8, 0.3, 0.1];
     let (h, s, l) = adjust::rgb_to_hsl(c);

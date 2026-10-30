@@ -69,9 +69,15 @@ const BLEND_LONG_NAMES: [(BlendMode, &str); 17] = [
     (BlendMode::Luminosity, "luminosity"),
 ];
 
-/// A blend-mode enum from either its four-character code or its long string ID.
+/// A blend-mode enum from its four-character code, its long string ID, or the layer record's key:
+/// Photoshop 2026 writes `vLit`, `lddg`, `lbrn`… as an effect's `Md  ` for some modes (#8567).
 pub(crate) fn blend_from_id(v: &[u8]) -> Option<BlendMode> {
-    BLEND_NAMES.iter().chain(&BLEND_LONG_NAMES).find(|(_, n)| n.as_bytes() == v).map(|(m, _)| *m)
+    BLEND_NAMES
+        .iter()
+        .chain(&BLEND_LONG_NAMES)
+        .find(|(_, n)| n.as_bytes() == v)
+        .map(|(m, _)| *m)
+        .or_else(|| <[u8; 4]>::try_from(v).ok().and_then(BlendMode::from_psd_key))
 }
 
 fn blend_of(d: &Descriptor, key: &str, default: BlendMode) -> BlendMode {

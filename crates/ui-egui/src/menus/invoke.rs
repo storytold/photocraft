@@ -214,6 +214,18 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
             app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
         }
+        // File > Import > Variable Data Sets… asks for the CSV (#8816); with a `path` the engine reads it itself.
+        "file.import.variableDataSets" if params.get("path").and_then(Value::as_str).is_none() => {
+            let doc = app.active_doc_id()?;
+            let params = params.clone();
+            app.pick_file_bytes_filtered(&["csv", "txt"], move |app, _name, bytes| {
+                app.refocus(doc)?;
+                let text = data_sets_text(bytes)?;
+                let r = photocraft_engine::import_data_sets_text(&mut app.session, &text, &params).map_err(|e| e.to_string());
+                app.sync_views();
+                r
+            })
+        }
         "file.save" => {
             // Writes back only to a layered file that holds the whole document; anything else
             // goes through Save As, so the original is never overwritten with less (#3806).
@@ -405,7 +417,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             }
             Ok(json!({"dialog": crate::fill_ui::open(app)}))
         }
-        "select.selectAndMask" => Ok(json!({"dialog": crate::filter_dialog::open(app, "select.refineEdge")})),
+        // Photoshop's workspace (select_mask_ui); `distort_ui::menu` routes it first.
+        "select.selectAndMask" => crate::select_mask_ui::open(app).map(|_| json!({"selectAndMask": app.distort.describe()["selectAndMask"]})),
         // Select › Transform Selection from the menu: the interactive box (with params: the engine).
         "select.transformSelection" if params.as_object().is_none_or(|o| o.is_empty()) => {
             crate::transform_tool::begin_selection(app, ctx).map(|_| json!({"transform": app.ui.transform}))
@@ -442,6 +455,13 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
         }
         _ => app.run(id, params),
     }
+}
+
+/// The text of a picked Variable Data Sets file. Invalid UTF-8 is refused, as the engine's
+/// path-based import refuses it, so a failed read never replaces the document's data sets with
+/// U+FFFD-substituted values.
+pub(super) fn data_sets_text(bytes: Vec<u8>) -> Result<String, String> {
+    String::from_utf8(bytes).map_err(|e| format!("the data set file is not valid UTF-8: {e}"))
 }
 
 fn open_path(app: &mut PhotocraftApp, path: &str) -> Result<Value, String> {

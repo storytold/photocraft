@@ -199,6 +199,35 @@ fn blend_names_are_unique() {
 }
 
 #[test]
+fn layer_record_blend_keys_parse() {
+    for (key, mode) in [
+        (b"vLit", BlendMode::VividLight),
+        (b"lLit", BlendMode::LinearLight),
+        (b"pLit", BlendMode::PinLight),
+        (b"hMix", BlendMode::HardMix),
+        (b"lbrn", BlendMode::LinearBurn),
+        (b"lddg", BlendMode::LinearDodge),
+        (b"dkCl", BlendMode::DarkerColor),
+        (b"lgCl", BlendMode::LighterColor),
+        (b"fsub", BlendMode::Subtract),
+        (b"fdiv", BlendMode::Divide),
+    ] {
+        assert_eq!(blend_from_id(key), Some(mode), "{}", String::from_utf8_lossy(key));
+    }
+    assert_eq!(blend_from_id(b"zzzz"), None);
+    // The issue's Color Overlay: Vivid Light stored as `vLit`, not left as Normal.
+    let key = |v: &str| Value::Enumerated { type_id: Id::new("BlnM"), value: Id::new(v) };
+    let d = Descriptor::new("null")
+        .with("masterFXSwitch", Value::Boolean(true))
+        .with("SoFi", Value::Descriptor(Descriptor::new("SoFi").with("enab", Value::Boolean(true)).with("Md  ", key("vLit"))));
+    let mut data = 0u32.to_be_bytes().to_vec();
+    data.extend(VersionedDescriptor { version: 16, descriptor: d }.to_bytes());
+    let (_, fx) = parse_lfx2(&data).unwrap();
+    let modes: Vec<BlendMode> = fx.iter().filter_map(|e| if let Effect::ColorOverlay { common, .. } = e { Some(common.blend) } else { None }).collect();
+    assert_eq!(modes, vec![BlendMode::VividLight]);
+}
+
+#[test]
 fn long_string_blend_ids_parse() {
     // Some writers store effect modes as long string IDs (`BlnM` `multiply`, `colorDodge`)
     // instead of the four-character codes (psd-tools effects/blend-modes.psd).

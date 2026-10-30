@@ -1122,6 +1122,7 @@ fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Do
         ));
     }
     doc.patterns = crate::pattern_map::from_global_blocks(doc);
+    warnings.extend(crate::pattern_map::unpaintable_warnings(&doc.patterns));
     doc.notes = crate::annotations_map::notes_from_blocks(doc);
     if crate::annotations_map::anno_unreadable(doc) {
         warnings.push("the notes (Anno block) could not be read; they are kept unchanged on PSD save unless a note is added".into());

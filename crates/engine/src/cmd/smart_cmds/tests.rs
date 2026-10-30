@@ -2,6 +2,7 @@ use super::*;
 
 mod filter_mask_paint;
 mod selection;
+mod source_flatten;
 mod stack_cache;
 
 const DEPTHS: [u64; 3] = [8, 16, 32];

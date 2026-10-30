@@ -835,7 +835,10 @@ fn open_paths_reports_in_the_interface_language_before_the_first_frame() {
     app.session.edit_prefs(|p| p.interface.language = "ar".into());
     crate::i18n::set_current(crate::i18n::Lang::EN);
     assert_eq!(app.open_paths(&paths), 1);
-    assert_eq!(app.ui.status, "تم استيراد 3 نقشات من launch");
+    let ar = crate::i18n::Lang::from_code("ar").unwrap();
+    let want =
+        crate::i18n::fmt(&crate::i18n::trn(ar, 3, "Imported {n} pattern from {file}", "Imported {n} patterns from {file}"), &[("n", "3"), ("file", "launch")]);
+    assert_eq!(app.ui.status, want);
     crate::i18n::set_current(crate::i18n::Lang::EN);
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -4072,6 +4072,21 @@ curves	Smooth	Wygładź
 	Not rendered: this adjustment ({key}) is kept as imported.	Nie jest renderowana: ta korekta ({key}) jest zachowana w postaci zaimportowanej.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	Wyczyść zaznaczenie
+	Color Aware	Według kolorów
+	Decontaminate Colors	Odkażanie kolorów
+	Edge Detection	Wykrywanie krawędzi
+	Global Refinements	Dopracowanie globalne
+	High Quality Preview	Podgląd wysokiej jakości
+	Object Aware	Według obiektów
+	Real-Time Refinement	Dopracowanie w czasie rzeczywistym
+	Refine Edge Brush Tool	Narzędzie Pędzel dopracowania krawędzi
+	Refine Hair	Dopracuj włosy
+	Refine Mode	Tryb dopracowania
+	Remember Settings	Zapamiętaj ustawienia
+	View Mode	Tryb widoku
+	Object Aware needs a segmentation model, which isn't available yet	Tryb Według obiektów wymaga modelu segmentacji, który nie jest jeszcze dostępny
+	Refine Hair needs hair detection, which isn't available yet	Dopracowanie włosów wymaga wykrywania włosów, które nie jest jeszcze dostępne
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Sześcian odcienia
 	Brightness Cube	Sześcian jasności
@@ -4088,6 +4103,8 @@ curves	Smooth	Wygładź
 	Grayscale Ramp	Pasek skali szarości
 	Current Colors	Bieżące kolory
 	Make Ramp Web Safe	Ogranicz pasek do kolorów internetowych
+	Select and Mask was closed: its document is no longer the active one	Zamknięto Zaznacz i maskuj: jego dokument nie jest już aktywny
+	Select and Mask was closed: another layer was selected	Zamknięto Zaznacz i maskuj: wybrano inną warstwę
 # Art History Brush (#213).
 	Art History Brush Tool	Narzędzie Pędzel historii artystycznej
 	Tight Short	Ścisły krótki

@@ -3470,6 +3470,21 @@ curves	Smooth	Haluskan
 	Not rendered: this adjustment ({key}) is kept as imported.	Tidak dirender: penyesuaian ini ({key}) disimpan seperti saat diimpor.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	Hapus Seleksi
+	Color Aware	Berbasis Warna
+	Decontaminate Colors	Dekontaminasi Warna
+	Edge Detection	Deteksi Tepi
+	Global Refinements	Penyempurnaan Global
+	High Quality Preview	Pratinjau Kualitas Tinggi
+	Object Aware	Berbasis Objek
+	Real-Time Refinement	Penyempurnaan Waktu Nyata
+	Refine Edge Brush Tool	Alat Kuas Perhalus Tepi
+	Refine Hair	Perhalus Rambut
+	Refine Mode	Mode Penyempurnaan
+	Remember Settings	Ingat Pengaturan
+	View Mode	Mode Tampilan
+	Object Aware needs a segmentation model, which isn't available yet	Berbasis Objek memerlukan model segmentasi, yang belum tersedia
+	Refine Hair needs hair detection, which isn't available yet	Perhalus Rambut memerlukan deteksi rambut, yang belum tersedia
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Kubus Hue
 	Brightness Cube	Kubus Kecerahan
@@ -3486,6 +3501,8 @@ curves	Smooth	Haluskan
 	Grayscale Ramp	Gradasi Grayscale
 	Current Colors	Warna Saat Ini
 	Make Ramp Web Safe	Jadikan Gradasi Aman untuk Web
+	Select and Mask was closed: its document is no longer the active one	Seleksi dan Mask ditutup: dokumennya tidak lagi aktif
+	Select and Mask was closed: another layer was selected	Seleksi dan Mask ditutup: layer lain dipilih
 # Art History Brush (#213).
 	Art History Brush Tool	Alat Kuas riwayat artistik
 	Tight Short	Rapet pendek

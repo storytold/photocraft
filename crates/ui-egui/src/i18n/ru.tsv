@@ -4658,6 +4658,20 @@ shape	Appearance	Оформление
 	Not rendered: this adjustment ({key}) is kept as imported.	Не отображается: эта коррекция ({key}) сохранена как при импорте.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	С учетом цвета
+	Decontaminate Colors	Очистить цвета
+	Edge Detection	Обнаружение краев
+	Global Refinements	Глобальное уточнение
+	High Quality Preview	Высококачественный просмотр
+	Object Aware	С учетом объектов
+	Real-Time Refinement	Уточнение в реальном времени
+	Refine Edge Brush Tool	Инструмент «Кисть уточнения края»
+	Refine Hair	Уточнить волосы
+	Refine Mode	Режим уточнения
+	Remember Settings	Запомнить параметры
+	View Mode	Режим просмотра
+	Object Aware needs a segmentation model, which isn't available yet	Для режима «С учетом объектов» нужна модель сегментации, которая пока недоступна
+	Refine Hair needs hair detection, which isn't available yet	Для уточнения волос нужно распознавание волос, которое пока недоступно
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Куб цветового тона
 	Brightness Cube	Куб яркости
@@ -4674,6 +4688,8 @@ shape	Appearance	Оформление
 	Grayscale Ramp	Шкала градаций серого
 	Current Colors	Текущие цвета
 	Make Ramp Web Safe	Сделать шкалу безопасной для web
+	Select and Mask was closed: its document is no longer the active one	Окно «Выделение и маска» закрыто: его документ больше не активен
+	Select and Mask was closed: another layer was selected	Окно «Выделение и маска» закрыто: выбран другой слой
 # Art History Brush (#213).
 	Art History Brush Tool	Инструмент «Кисть истории искусств»
 	Tight Short	Плотный короткий

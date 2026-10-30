@@ -321,6 +321,13 @@ where
     (hex(to_rgb(v)) == hex(rgb)).then_some(v)
 }
 
+/// The CMYK values typed into the picker, while they still match its colour: the inks a command
+/// should keep in a CMYK document (#4196, #8568).
+pub(crate) fn picked_cmyk(f: &Map<String, Value>) -> Option<[f32; 4]> {
+    let rgb = f.get("color").and_then(Value::as_str).and_then(parse_hex)?;
+    kept::<4>(f, "__cmyk", rgb, photocraft_color::convert::cmyk_to_rgb)
+}
+
 /// Current colour, keeping the stored HSB, Lab or CMYK values while they still match `color`.
 pub fn current(f: &Map<String, Value>) -> Components {
     let rgb = f.get("color").and_then(Value::as_str).and_then(parse_hex).unwrap_or([0.0; 3]);

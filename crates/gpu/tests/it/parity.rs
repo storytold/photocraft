@@ -85,6 +85,15 @@ fn hdr_adjustments_preserve_range_and_cpu_parity() {
     }
 }
 
+/// Phase timings for diagnosing expensive parity checks; nextest shows them only for the
+/// selected slow Windows tests, without changing their timeout or pass criteria.
+fn timed<T>(what: &str, run: impl FnOnce() -> T) -> T {
+    let start = std::time::Instant::now();
+    let result = run();
+    eprintln!("parity phase {what}: {:?}", start.elapsed());
+    result
+}
+
 /// The default adapter, or the one wgpu's `WGPU_BACKEND` and `WGPU_DX12_COMPILER` choose: e.g.
 /// `WGPU_BACKEND=dx12 WGPU_DX12_COMPILER=fxc` tests D3D12 with FXC, the app's default on Windows,
 /// where the default adapter may be Vulkan. A backend asked for that can't run the tests fails
@@ -126,8 +135,8 @@ fn gpu() -> Option<Gpu> {
             None
         }
     };
-    let comp = compositor()?;
-    let mut paged = compositor()?;
+    let comp = timed("pipeline creation", compositor)?;
+    let mut paged = comp.sibling();
     paged.set_texture_limit(PAGED_LIMIT);
     Some(Gpu { device, queue, comp, paged, _lock: lock })
 }
@@ -208,10 +217,11 @@ fn worst_diff(cpu: &[[f32; 4]], gpu: &[[f32; 4]]) -> (f32, usize) {
 /// GPU (whole textures, then pages) vs CPU over `rect`: Err with the worst pixel if over the
 /// tolerance, else the stats of the unpaged render.
 fn diff_rect(g: &mut Gpu, doc: &Document, rect: Rect, what: &str) -> Result<photocraft_gpu::Stats, String> {
-    let cpu = photocraft_compose::render(doc, rect);
+    let cpu = timed("CPU reference", || photocraft_compose::render(doc, rect));
     let mut first = None;
     for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
-        let (out, stats) = photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, doc, rect).map_err(|e| format!("{what}{label}: {e}"))?;
+        let (out, stats) = timed(&format!("{what}{label} GPU render/readback"), || photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, doc, rect))
+            .map_err(|e| format!("{what}{label}: {e}"))?;
         let worst = worst_diff(&cpu.px, &out);
         let w = rect.width() as usize;
         let (x, y) = (rect.x0 + (worst.1 % w) as i32, rect.y0 + (worst.1 / w) as i32);
@@ -380,7 +390,7 @@ fn prefix_follows_an_edit_up_the_stack_and_stays_exact() {
 #[test]
 fn chunks_keep_their_own_checkpoint_after_a_partial_refresh() {
     let Some(mut g) = gpu() else { return };
-    let mut uncached = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+    let mut uncached = g.comp.sibling();
     uncached.set_texture_limit(PAGED_LIMIT);
     uncached.set_composite_cache_budget(0);
     let mut doc = base_doc(600, 300);
@@ -1259,7 +1269,7 @@ fn growing_layer_keeps_its_resident_tiles() {
             let what = format!("{fmt:?} dab {i}");
             let s = diff_rect(&mut g, &d, d.bounds(), &what).unwrap_or_else(|e| panic!("{e}"));
             assert!(s.tiles_uploaded <= 2, "{what}: only the dab's tiles upload: {s:?}");
-            let mut fresh = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+            let mut fresh = g.comp.sibling();
             let want = render_to_vec(&mut fresh, &g.device, &g.queue, &d, d.bounds()).unwrap();
             assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).unwrap() == want, "{what}: same pixels as a fresh upload");
         }
@@ -1332,26 +1342,40 @@ fn small_layers_composite_over_their_bounds() {
     check(&mut g, &big, "small layers across chunks");
 }
 
-#[test]
-fn many_layers_submit_inside_one_chunk() {
+fn many_layers_submit_inside_one_chunk_mode(paged: bool) {
     // P12: a refresh recorded every pass of a page cell into one command buffer, and with a few
     // hundred layers Metal ran out of command buffers (device lost, "pc_compose_uniforms is
     // invalid"). 1200 layers need well over 1000 passes in the document's only chunk: each is
     // masked, so it is drawn in a pass of its own rather than batched with its neighbours.
     let Some(mut g) = gpu() else { return };
-    let mut d = base_doc(64, 48);
+    // Submission count, not image area, triggers the command-buffer exhaustion.
+    // Keep all 1200 masked passes and blend modes, with a smaller pixel oracle.
+    let mut d = base_doc(16, 12);
     let modes: Vec<BlendMode> = BlendMode::layer_modes().collect();
     for (i, mode) in modes.iter().copied().cycle().take(1200).enumerate() {
-        let mut l = noise_layer("l", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 500 + i as u32, 0.0);
+        let mut l = noise_layer("l", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 16, 12), 500 + i as u32, 0.0);
         l.blend = mode;
         l.opacity = 0.9;
-        l.mask = Some(mask(Rect::from_xywh(0, 0, 64, 48), 3000 + i as u32, 1.0));
+        l.mask = Some(mask(Rect::from_xywh(0, 0, 16, 12), 3000 + i as u32, 1.0));
         d.layers.push(l);
     }
-    let stats = diff_rect(&mut g, &d, d.bounds(), "1200 layers").unwrap_or_else(|e| panic!("{e}"));
+    let cpu = photocraft_compose::render(&d, d.bounds());
+    let comp = if paged { &mut g.paged } else { &mut g.comp };
+    let (out, stats) = photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, &d, d.bounds()).unwrap();
+    assert!(worst_diff(&cpu.px, &out).0 <= TOL, "1200 layers, paged={paged}");
     assert_eq!(stats.layers_batched, 0, "{stats:?}");
     assert_eq!(stats.chunks, 1);
     assert!(stats.flushes > 0, "{stats:?}");
+}
+
+#[test]
+fn many_layers_submit_inside_one_chunk_whole() {
+    many_layers_submit_inside_one_chunk_mode(false);
+}
+
+#[test]
+fn many_layers_submit_inside_one_chunk_paged() {
+    many_layers_submit_inside_one_chunk_mode(true);
 }
 
 #[test]
@@ -2609,6 +2633,27 @@ fn closed_documents_release_their_pattern_textures() {
     check(&mut g, &a, "the pattern is uploaded again after being forgotten");
 }
 
+/// A pattern whose RGBA32F texture would pass the per-pattern cap (Define Pattern accepts 8-bit
+/// ones up to 8000 x 8000) is declined by the GPU path and painted by the CPU compositor, which
+/// holds a large 8-bit pattern at a quarter of the texture's size.
+#[test]
+fn a_pattern_too_large_for_a_gpu_texture_falls_back_to_the_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let mut d = Document::new("big pattern", Size::new(8, 6), ColorMode::Rgb, SampleType::U8);
+    // 100 MB as RGBA8, 400 MB as an RGBA32F texture.
+    let surface = photocraft_raster::Surface::with_default(PixelFormat::RGBA8, &[1.0, 0.0, 0.0, 1.0]);
+    let pat = Pattern { id: "big".into(), name: "big".into(), width: 5000, height: 5000, surface };
+    assert!(pat.is_paintable());
+    d.layers.push(Layer::new(
+        "pattern",
+        LayerContent::Fill(Fill::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale: 1.0, angle: 0.0, link: true, phase: (0.0, 0.0) }),
+    ));
+    d.patterns.push(pat);
+    assert!(render_to_vec(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).is_err(), "the GPU path declines it");
+    assert_eq!(g.comp.pattern_cache_bytes(), 0, "nothing was uploaded");
+    assert!(photocraft_compose::flatten(&d).px.iter().all(|p| *p == [1.0, 0.0, 0.0, 1.0]), "the CPU compositor paints it");
+}
+
 /// #4971: pattern textures are bounded while their documents stay open, by a byte budget and
 /// by age. What the current frame paints with is never dropped.
 #[test]
@@ -2688,7 +2733,7 @@ fn pattern_cache_tracks_source_format_and_cow_tiles() {
 fn pattern_fill_layers() {
     let Some(mut g) = gpu() else { return };
     let pat = checker_pattern();
-    for (link, scale, angle, masked) in [(true, 1.0, 0.0, false), (false, 0.7, 25.0, true), (true, 1.6, -40.0, false)] {
+    for (link, scale, angle, masked) in [(true, 1.0, 0.0, false), (false, 0.7, 25.0, true), (true, 1.6, -40.0, false), (true, 0.3, 10.0, false)] {
         let mut d = base_doc(70, 50);
         d.patterns.push(pat.clone());
         let fill = Fill::Pattern { name: pat.name.clone(), id: pat.id.clone(), scale, angle, link, phase: (3.0, -2.0) };
@@ -2900,8 +2945,9 @@ fn pages_are_evicted_under_the_budget() {
     let page = u64::from(g.paged.page_size()).pow(2) * 4;
     g.paged.set_resident_budget(page);
     for round in 0..3 {
-        let cpu = photocraft_compose::flatten(&d);
-        let (out, s) = photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds()).unwrap();
+        let cpu = timed("eviction CPU reference", || photocraft_compose::flatten(&d));
+        let (out, s) =
+            timed("eviction GPU render/readback", || photocraft_gpu::render_to_vec_stats(&mut g.paged, &g.device, &g.queue, &d, d.bounds())).unwrap();
         let worst = worst_diff(&cpu.px, &out);
         assert!(worst.0 <= TOL, "round {round}: max diff {:.2}/255 at {}", worst.0 * 255.0, worst.1);
         assert!(s.evicted > 0, "round {round}: {s:?}");
@@ -3003,7 +3049,7 @@ fn the_focused_view_stays_resident_after_a_full_refresh() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
     let Some(g) = gpu() else { return };
     let d = big_doc();
-    let mut comp = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+    let mut comp = g.comp.sibling();
     // Exercise input-page residency itself: prefix hits can legitimately skip those pages.
     comp.set_composite_cache_budget(0);
     comp.set_texture_limit(PAGED_LIMIT);
@@ -3022,7 +3068,7 @@ fn the_focused_view_stays_resident_after_a_full_refresh() {
         assert!(s.evicted > 0, "{s:?}");
         let (out, s) = photocraft_gpu::render_to_vec_stats(&mut comp, &g.device, &g.queue, &d, view).unwrap();
         assert_eq!(s.tiles_uploaded, 0, "{s:?}");
-        let cpu = photocraft_compose::render(&d, view);
+        let cpu = timed("focused-view CPU reference", || photocraft_compose::render(&d, view));
         assert!(worst_diff(&cpu.px, &out).0 <= TOL);
     }
 }
@@ -3032,7 +3078,7 @@ fn layer_pages_that_just_miss_borrow_the_effect_map_share() {
     let _gamma = TEXT_GAMMA.lock().unwrap_or_else(|e| e.into_inner());
     let Some(g) = gpu() else { return };
     let d = big_doc();
-    let mut comp = Compositor::try_new_with_format(&g.device, wgpu::TextureFormat::Rgba32Float).unwrap();
+    let mut comp = g.comp.sibling();
     comp.set_texture_limit(PAGED_LIMIT);
     let need = comp.working_set(&d, d.bounds());
     // Pages get three quarters of the budget and effect maps an eighth: at 5/4 of the need the
@@ -3192,4 +3238,22 @@ fn dissolve_clipped_adjustment_matches_cpu() {
         check(&mut g, &d, &format!("clipped Dissolve adjustment {fmt:?}"));
         diff_rect(&mut g, &d, Rect::new(250, 1, 270, 20), "clipped adjustment offset region").unwrap_or_else(|e| panic!("{e}"));
     }
+}
+
+/// Siblings share only immutable GPU objects, not resident pages or document caches.
+#[test]
+fn sibling_compositors_have_independent_residency_and_configuration() {
+    let Some(mut g) = gpu() else { return };
+    let d = base_doc(300, 300);
+    let mut sibling = g.comp.sibling();
+    assert_eq!(sibling.resident_bytes(), 0);
+    sibling.set_texture_limit(PAGED_LIMIT);
+    sibling.set_resident_budget(0);
+    let (out, _) = photocraft_gpu::render_to_vec_stats(&mut sibling, &g.device, &g.queue, &d, d.bounds()).unwrap();
+    assert!(worst_diff(&photocraft_compose::render(&d, d.bounds()).px, &out).0 <= TOL);
+    assert_eq!(g.comp.resident_bytes(), 0, "the original has not rendered");
+    let (out, _) = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &d, d.bounds()).unwrap();
+    assert!(worst_diff(&photocraft_compose::render(&d, d.bounds()).px, &out).0 <= TOL);
+    assert!(g.comp.resident_bytes() > 0);
+    assert_ne!(g.comp.resident_budget(), sibling.resident_budget());
 }

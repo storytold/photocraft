@@ -1122,6 +1122,7 @@ pub mod rasterize_prompt;
 pub mod replace_prompt;
 pub(super) mod rgb_histogram;
 pub mod screen_picker;
+pub mod select_mask_ui;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
 pub(super) mod sizing;

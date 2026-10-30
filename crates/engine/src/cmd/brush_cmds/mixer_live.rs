@@ -89,7 +89,7 @@ impl Core {
             }
             // Render the visible document including the active layer exactly once, before
             // deposition. Masks, transforms, blend modes and adjustments use the compositor.
-            let sample = self.settings.sample_all_layers.then(|| {
+            let sample = (self.settings.sample_all_layers && self.settings.samples_canvas(dab)).then(|| {
                 let buf = photocraft_compose::render(&self.doc, r);
                 let fmt = self.pre.format();
                 let mut sample = Region::new(r, fmt.channels());

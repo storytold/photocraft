@@ -35,7 +35,7 @@ pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for (cmd, icon, label) in ALIGN {
         let tip = format!("{}: {}", tl!("Align"), tl!(label));
         let on = app.session.is_enabled(cmd);
-        if ui.add_enabled_ui(on, |ui| icons::button(ui, icon, 24.0, false, &tip)).inner.clicked() {
+        if ui.add_enabled_ui(on, |ui| icons::button_with_icon_size(ui, icon, 24.0, 16.0, false, &tip)).inner.clicked() {
             let _ = app.run(cmd, json!({}));
         }
     }

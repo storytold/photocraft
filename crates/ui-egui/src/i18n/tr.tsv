@@ -4183,6 +4183,20 @@ cameraData	Lens	Lens
 	Not rendered: this adjustment ({key}) is kept as imported.	Görüntülenmiyor: bu ayarlama ({key}) içe aktarıldığı gibi korunuyor.
 # Print preview image (#8236)
 	Print preview image	Baskı Önizleme Görüntüsü
+	Color Aware	Renge Duyarlı
+	Decontaminate Colors	Renkleri Arındır
+	Edge Detection	Kenar Algılama
+	Global Refinements	Genel Hassaslaştırmalar
+	High Quality Preview	Yüksek Kaliteli Önizleme
+	Object Aware	Nesneye Duyarlı
+	Real-Time Refinement	Gerçek Zamanlı Hassaslaştırma
+	Refine Edge Brush Tool	Kenarı Hassaslaştırma Fırçası Aracı
+	Refine Hair	Saçı Hassaslaştır
+	Refine Mode	Hassaslaştırma Modu
+	Remember Settings	Ayarları Hatırla
+	View Mode	Görünüm Modu
+	Object Aware needs a segmentation model, which isn't available yet	Nesneye Duyarlı mod henüz kullanılamayan bir bölütleme modeli gerektirir
+	Refine Hair needs hair detection, which isn't available yet	Saçı Hassaslaştır henüz kullanılamayan saç algılama gerektirir
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Renk Tonu Küpü
 	Brightness Cube	Parlaklık Küpü
@@ -4199,6 +4213,8 @@ cameraData	Lens	Lens
 	Grayscale Ramp	Gri Tonlama Şeridi
 	Current Colors	Geçerli Renkler
 	Make Ramp Web Safe	Şeridi Web Renkleriyle Sınırla
+	Select and Mask was closed: its document is no longer the active one	Seç ve Maskele kapatıldı: belgesi artık etkin değil
+	Select and Mask was closed: another layer was selected	Seç ve Maskele kapatıldı: başka bir katman seçildi
 # Art History Brush (#213).
 	Art History Brush Tool	Sanat Tarihi Fırçası Aracı
 	Tight Short	Sıkı Kısa

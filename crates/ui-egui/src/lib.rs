@@ -7,6 +7,15 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// PhotoCraft as craft-update knows it, with its 128 px icon and accent colour: the update
+/// prompt shows both, and an AppImage's menu entry gets the icon.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.photocraft.png")),
+    accent: Some([0x2f, 0x7b, 0xf5]),
+    ..craft_update::suite::PHOTOCRAFT
+};
+
 /// Translate a string literal into the current UI language: `tl!("Image Size…")`.
 macro_rules! tl {
     ($s:expr) => {
@@ -150,6 +159,7 @@ pub use dialogs::rasterize_prompt;
 pub use dialogs::replace_prompt;
 use dialogs::rgb_histogram;
 pub use dialogs::screen_picker;
+pub use dialogs::select_mask_ui;
 pub use dialogs::shape_dialog;
 pub(crate) use dialogs::shape_fill_ui;
 use dialogs::sizing;
@@ -748,6 +758,9 @@ mod transform_undo_tests;
 
 #[cfg(test)]
 mod transform_type_tests;
+
+#[cfg(test)]
+mod transform_several_tests;
 
 #[cfg(test)]
 mod psd_open_tests;

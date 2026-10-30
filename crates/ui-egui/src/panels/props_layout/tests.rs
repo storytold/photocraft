@@ -147,14 +147,22 @@ fn type_controls_fill_the_panel_at_every_width_and_scale() {
             let hs = headers(&h);
             let header = hs.iter().find(|(n, _)| n == "Character").unwrap().1;
             let what = format!("{ppp}x @ {dw}");
-            // Font family and style dropdowns span the section.
+            // The editable family field and the style dropdown span the section.
+            let name = h
+                .query_all_by_role(egui::accesskit::Role::TextInput)
+                .map(|n| n.rect())
+                .find(|r| r.top() >= header.bottom() && r.left() >= header.left() - 1.0)
+                .expect("editable family field");
+            let mut family = name.expand2(egui::vec2(6.0, 2.0));
+            family.max.x += crate::widgets::POPUP_ARROW_W;
+            assert!((family.left() - header.left()).abs() <= 2.0 && (family.right() - header.right()).abs() <= 2.0, "{what}: {family:?} vs {header:?}");
             let combos: Vec<Rect> = h
                 .query_all_by_role(egui::accesskit::Role::ComboBox)
                 .map(|n| n.rect())
                 .filter(|r| r.top() >= header.bottom() && r.left() >= header.left() - 1.0)
                 .collect();
-            assert!(combos.len() >= 2, "{what}: {combos:?}");
-            for r in &combos[..2] {
+            assert!(!combos.is_empty(), "{what}: {combos:?}");
+            for r in &combos[..1] {
                 assert!((r.left() - header.left()).abs() <= 2.0 && (r.right() - header.right()).abs() <= 2.0, "{what}: {r:?} vs {header:?}");
             }
             // Number fields end at the section's right edge (the second column), never past it.

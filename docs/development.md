@@ -64,6 +64,22 @@ cargo test --doc --workspace               # nextest does not run doctests
 
 [cargo-nextest](https://nexte.st) runs each test in its own process. `.config/nextest.toml` puts the GPU tests (`photocraft-gpu`, and ui-egui's integration and canvas/GPU tests) in a group of at most 4 at a time, because each process opens its own wgpu device and the in-process `gpu_lock()` no longer serializes them. On a 32-thread Windows machine the full workspace went from 297 s (`cargo test`) to about 120 s (#2204). Ignored tests run with `cargo nextest run --run-ignored only`. The longest sweeps (`photocraft-testkit`'s `Sweep`) run a quarter of their cases, a different quarter each UTC day; `PHOTOCRAFT_FULL_SWEEP=1` runs all of them, and `PHOTOCRAFT_SWEEP_PART=<n>` replays the part a failing run printed. CI runs it with `--profile ci` (fail-fast, a 10-minute hang timeout), plus `cargo test --doc` for the doctests (#6117); `PHOTOCRAFT_FULL_SWEEP=1 cargo test --workspace` stays the final check before a PR.
 
+### Long matrix tests and CI timings
+
+Nextest's `SLOW` line at 60 seconds is a progress warning, not a sleep or a failed test.
+The existing ten-minute hang limit and all GPU concurrency limits remain in force.
+The PSD file/bytes import equivalence matrix and swept-block reference comparison each expose
+four test functions so nextest can schedule their cases independently. Every formerly selected
+case still runs once, with the same assertions. The extrude matrix retains the existing daily
+sweep selection; splitting it does not sample fewer cases. PSD temporary directories include the
+part number so ordinary `cargo test` can also run the parts concurrently in one process.
+
+For a like-for-like timing comparison, use the CI workflow's `full_sweep` manual input, or set
+`PHOTOCRAFT_FULL_SWEEP=1` locally. Compare the complete nextest summary and runner wall time,
+not only the longest individual test: partitioning adds scheduling opportunities, not less work.
+Keep the same runner, feature set, fonts, and warm/cold build state. No speedup should be claimed
+from changing the 60-second warning threshold or omitting tests.
+
 ### Shortcut capture without a GPU, and native snapshots
 
 The ordinary `shortcut_capture_tests` check modifier capture, conflicts, restored bindings and

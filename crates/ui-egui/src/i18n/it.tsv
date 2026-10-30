@@ -4572,6 +4572,20 @@ shape	Appearance	Aspetto
 	Not rendered: this adjustment ({key}) is kept as imported.	Non renderizzato: questa regolazione ({key}) viene conservata come importata.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Color Aware	In base al colore
+	Decontaminate Colors	Decontamina colori
+	Edge Detection	Rilevamento bordi
+	Global Refinements	Perfezionamenti globali
+	High Quality Preview	Anteprima di alta qualità
+	Object Aware	In base all'oggetto
+	Real-Time Refinement	Perfezionamento in tempo reale
+	Refine Edge Brush Tool	Strumento Pennello per migliorare il bordo
+	Refine Hair	Migliora capelli
+	Refine Mode	Metodo di perfezionamento
+	Remember Settings	Ricorda impostazioni
+	View Mode	Modalità di visualizzazione
+	Object Aware needs a segmentation model, which isn't available yet	In base all'oggetto richiede un modello di segmentazione, non ancora disponibile
+	Refine Hair needs hair detection, which isn't available yet	Migliora capelli richiede il rilevamento dei capelli, non ancora disponibile
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Cubo tonalità
 	Brightness Cube	Cubo luminosità
@@ -4588,6 +4602,8 @@ shape	Appearance	Aspetto
 	Grayscale Ramp	Barra scala di grigio
 	Current Colors	Colori correnti
 	Make Ramp Web Safe	Limita la barra ai colori web
+	Select and Mask was closed: its document is no longer the active one	Seleziona e maschera è stato chiuso: il suo documento non è più quello attivo
+	Select and Mask was closed: another layer was selected	Seleziona e maschera è stato chiuso: è stato selezionato un altro livello
 # Art History Brush (#213).
 	Art History Brush Tool	Strumento Pennello storia artistica
 	Tight Short	Corto stretto

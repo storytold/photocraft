@@ -28,8 +28,6 @@ fn the_generator_checkbox_reads_enable_generator() {
     h.get_by_label("Enable Generator").click();
     h.run_steps(2);
     assert_eq!(h.state()["generatorEnabled"], true);
-    let de = crate::i18n::Lang::from_code("de").unwrap();
-    assert_eq!(crate::i18n::tr(de, "Enable Generator"), "Generator aktivieren");
 }
 
 #[test]

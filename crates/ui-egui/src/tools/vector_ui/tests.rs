@@ -1039,11 +1039,14 @@ fn new_fill_layer_takes_the_selected_path_as_its_vector_mask() {
     // Deselected (or a stale name): the selection is the layer mask, no vector mask.
     for sel in [None, Some("Gone".to_string())] {
         app.ui.selected_path = sel;
+        // The selection goes into the new layer's mask, so each fill layer needs its own (#8801).
+        app.run("select.rect", json!({"x": 150, "y": 150, "width": 20, "height": 20})).unwrap();
         let r = app.run("layer.newFillLayer.solidColor", json!({}));
         let l = layer(&app, r);
-        assert!(l.vector_mask.is_none() && l.mask.is_some());
+        assert!(l.vector_mask.is_none() && l.mask.as_ref().is_some_and(|m| m.value(160, 160) == 1.0 && m.value(5, 5) == 0.0));
     }
     // Make Work Path selects the new work path.
+    app.run("select.rect", json!({"x": 150, "y": 150, "width": 20, "height": 20})).unwrap();
     app.run("select.toWorkPath", json!({"tolerance": 2.0})).unwrap();
     assert_eq!(app.ui.selected_path.as_deref(), Some("work"));
 }

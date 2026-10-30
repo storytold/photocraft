@@ -220,6 +220,8 @@ mod sampling;
 pub use clone::{LiveRetouch, clone_preview, clone_preview_periodic};
 use clone::{blend_param, clamp_samples, clone_stamp};
 pub(crate) use dab::DabEffect;
+#[cfg(test)]
+use dab::DabTool;
 pub use dab::LiveDab;
 use dab::dab_cmd;
 #[cfg(test)]

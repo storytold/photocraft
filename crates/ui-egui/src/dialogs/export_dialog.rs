@@ -90,7 +90,14 @@ fn remember(app: &mut PhotocraftApp, f: &Map<String, Value>) {
 }
 
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
-    let st = app.session.active().ok_or("no document")?;
+    let size = app.session.active().ok_or("no document")?.doc.size;
+    open_sized(app, size.width, size.height)
+}
+
+/// The dialog with its size fields fitted to a `src_w` × `src_h` source: the document, or the
+/// layer Layer › Export As exports. Fitting the document first would replace a remembered pixel
+/// size the document can't take with the percent, even when the layer can take it.
+fn open_sized(app: &mut PhotocraftApp, src_w: u32, src_h: u32) -> Result<u64, String> {
     let mut f = Map::new();
     f.insert("__export".into(), json!(true));
     f.insert("__label".into(), json!("Export As"));
@@ -106,42 +113,54 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     f.insert("lockAspect".into(), json!(true));
     f.insert("profile".into(), json!("document"));
     f.insert("embedProfile".into(), json!(true));
-    f.insert("width".into(), json!(st.doc.size.width));
-    f.insert("height".into(), json!(st.doc.size.height));
-    f.insert("__w".into(), json!(st.doc.size.width));
-    f.insert("__h".into(), json!(st.doc.size.height));
+    f.insert("width".into(), json!(src_w));
+    f.insert("height".into(), json!(src_h));
+    f.insert("__w".into(), json!(src_w));
+    f.insert("__h".into(), json!(src_h));
     seed_remembered(app, &mut f);
-    let explicit = s(&f, "sizing") == "pixels" && f.contains_key("width") && f.contains_key("height");
-    if !explicit && let Ok(size) = resize_from_scale(f64::from(st.doc.size.width), f64::from(st.doc.size.height), n(&f, "scale", 100.0)) {
+    fit_size(&mut f, f64::from(src_w), f64::from(src_h));
+    Ok(app.ui.open_dialog(DialogKind::Command, f))
+}
+
+/// The size fields for exporting a `src_w` × `src_h` source. A remembered percent scales it.
+/// Remembered exact pixels with Constrain proportions keep their width and take the height from
+/// this source, as ticking the checkbox does: the last export's proportions would stretch an
+/// image of another shape (#8738). Unlinked, the exact pixels are the size the user asked for.
+/// A linked width this source can't reach within the Scale field's 1..=1000 % falls back to the
+/// remembered percent.
+fn fit_size(f: &mut Map<String, Value>, src_w: f64, src_h: f64) {
+    if s(f, "sizing") == "pixels" && f.contains_key("width") && f.contains_key("height") {
+        if !f.get("lockAspect").and_then(Value::as_bool).unwrap_or(true) {
+            return;
+        }
+        if let Ok(size) = resize_from_side(src_w, src_h, n(f, "width", src_w.max(1.0)), n(f, "height", src_h.max(1.0)), true, true)
+            && (1.0..=1000.0).contains(&size.scale)
+        {
+            write_size(f, size, "pixels");
+            return;
+        }
+    }
+    if let Ok(size) = resize_from_scale(src_w, src_h, n(f, "scale", 100.0)) {
         f.insert("width".into(), json!(size.width));
         f.insert("height".into(), json!(size.height));
-        if (n(&f, "scale", 100.0) - size.scale).abs() > 1e-9 {
+        if (n(f, "scale", 100.0) - size.scale).abs() > 1e-9 {
             f.insert("scale".into(), json!(size.scale));
         }
         f.insert("sizing".into(), json!("scale"));
     }
-    Ok(app.ui.open_dialog(DialogKind::Command, f))
 }
 
 /// Layer › Export As…: the same dialog for just the active layer (trimmed to its pixels).
 pub fn open_layer(app: &mut PhotocraftApp, layer: photocraft_doc::LayerId) -> Result<u64, String> {
     let st = app.session.active().ok_or("no document")?;
     let ldoc = photocraft_engine::layer_menu_cmds::layer_document(&st.doc, layer).map_err(|e| e.to_string())?;
-    let id = open(app)?;
+    // The size fields follow the layer's trimmed size, so the dialog shows and edits the size
+    // the layer exports at.
+    let id = open_sized(app, ldoc.size.width, ldoc.size.height)?;
     if let Some(d) = app.ui.dialogs.iter_mut().find(|d| d.id == id) {
         let f = &mut d.fields;
         f.insert("__layer".into(), json!(layer.0));
         f.insert("__label".into(), json!(crate::i18n::fmt(crate::i18n::t("Export As: {name}"), &[("name", &ldoc.name)])));
-        f.insert("__w".into(), json!(ldoc.size.width));
-        f.insert("__h".into(), json!(ldoc.size.height));
-        // `open` seeded width and height from the document; in scale mode they follow the layer's
-        // trimmed size, so the dialog shows and edits the size the layer exports at. Exact pixels
-        // (sizing "pixels") are a size the user asked for, so those stay.
-        if s(f, "sizing") != "pixels"
-            && let Ok(size) = resize_from_scale(f64::from(ldoc.size.width), f64::from(ldoc.size.height), n(f, "scale", 100.0))
-        {
-            write_size(f, size, "scale");
-        }
     }
     Ok(id)
 }
@@ -342,17 +361,18 @@ pub(crate) fn resize_from_scale(src_w: f64, src_h: f64, scale: f64) -> Result<Ex
     Ok(ExportSize { width, height, scale })
 }
 
-/// An edited side. With `lock`, the other side keeps the source aspect; otherwise it stays.
+/// An edited side. With `lock`, the other side keeps the source aspect, never below 1 px (as
+/// [`scaled_size`]); otherwise it stays.
 pub(crate) fn resize_from_side(src_w: f64, src_h: f64, width: f64, height: f64, lock: bool, edited_width: bool) -> Result<ExportSize, String> {
     let src_w = src_w.max(1.0);
     let src_h = src_h.max(1.0);
     let (width, height) = if edited_width {
         let width = finite_px(width)?;
-        let height = if lock { finite_px(src_h * width / src_w)? } else { finite_px(height)? };
+        let height = if lock { finite_px((src_h * width / src_w).max(1.0))? } else { finite_px(height)? };
         (width, height)
     } else {
         let height = finite_px(height)?;
-        let width = if lock { finite_px(src_w * height / src_h)? } else { finite_px(width)? };
+        let width = if lock { finite_px((src_w * height / src_h).max(1.0))? } else { finite_px(width)? };
         (width, height)
     };
     let scale = if edited_width { width / src_w * 100.0 } else { height / src_h * 100.0 };

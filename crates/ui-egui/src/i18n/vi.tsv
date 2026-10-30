@@ -9,8 +9,8 @@
 #   escapes  \n  \t  \\  inside a column. `{name}` placeholders must appear in both columns.
 #   lines starting with # and blank lines are ignored.
 #
-# Status: complete. Every source key is translated (`complete_menus`), and the coverage test in
-# xtask/src/i18n_coverage.rs keeps it that way: new `tl!` strings need a Vietnamese row.
+# Status: complete when last measured. `cargo xtask i18n-coverage` lists any `tl!` string without a
+# Vietnamese row; a missing row shows in English.
 #
 # Clean-room: every entry was written from the plain meaning of the English label using ordinary
 # Vietnamese computing and image-editing vocabulary. No proprietary localisation resource, string
@@ -3948,6 +3948,21 @@ curves	Smooth	Làm mượt
 	Not rendered: this adjustment ({key}) is kept as imported.	Không được kết xuất: điều chỉnh này ({key}) được giữ nguyên như khi nhập.
 # Print preview image (#8236)
 	Print preview image	Print preview image
+	Clear Selection	Xóa vùng chọn
+	Color Aware	Nhận biết màu
+	Decontaminate Colors	Khử nhiễm màu
+	Edge Detection	Phát hiện cạnh
+	Global Refinements	Tinh chỉnh tổng thể
+	High Quality Preview	Xem trước chất lượng cao
+	Object Aware	Nhận biết đối tượng
+	Real-Time Refinement	Tinh chỉnh theo thời gian thực
+	Refine Edge Brush Tool	Công cụ cọ tinh chỉnh cạnh
+	Refine Hair	Tinh chỉnh tóc
+	Refine Mode	Chế độ tinh chỉnh
+	Remember Settings	Ghi nhớ cài đặt
+	View Mode	Chế độ xem
+	Object Aware needs a segmentation model, which isn't available yet	Nhận biết đối tượng cần mô hình phân đoạn, hiện chưa có
+	Refine Hair needs hair detection, which isn't available yet	Tinh chỉnh tóc cần tính năng phát hiện tóc, hiện chưa có
 # Color panel menu: modes, copy commands and colour ramps (#6000)
 	Hue Cube	Khối sắc màu
 	Brightness Cube	Khối độ sáng
@@ -3965,6 +3980,8 @@ curves	Smooth	Làm mượt
 	Grayscale Ramp	Dải thang xám
 	Current Colors	Màu hiện tại
 	Make Ramp Web Safe	Giới hạn dải màu ở màu web
+	Select and Mask was closed: its document is no longer the active one	Đã đóng Chọn và Mặt nạ: tài liệu của nó không còn là tài liệu đang hoạt động
+	Select and Mask was closed: another layer was selected	Đã đóng Chọn và Mặt nạ: một lớp khác đã được chọn
 # Art History Brush (#213).
 	Art History Brush	Cọ lịch sử nghệ thuật
 	Art History Brush Tool	Công cụ Cọ lịch sử nghệ thuật

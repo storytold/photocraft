@@ -1,18 +1,5 @@
 use super::{Align2, BlendMode, Color32, PhotocraftApp, Rect, Sense, Stroke, StrokeKind, Tokens, c32, icons, json, pos2, vec2, widgets};
 
-/// Photoshop's brush preset picker chip: a soft/hard round tip preview with the size underneath.
-/// Draw a round brush tip preview (hard core fading to a soft edge).
-fn brush_tip(p: &egui::Painter, c: egui::Pos2, rad: f32, hardness: f32, color: Color32) {
-    let inner = rad * hardness.clamp(0.05, 1.0);
-    let steps = 8;
-    for k in (0..=steps).rev() {
-        let f = k as f32 / steps as f32;
-        let rr = inner + (rad - inner) * f;
-        let a = if hardness >= 0.99 { 1.0 } else { (1.0 - f).powf(1.5) };
-        p.circle_filled(c, rr, color.gamma_multiply(a));
-    }
-}
-
 /// A painting tool's Mode dropdown over `modes` (`None` is Clear); the wheel over it steps the
 /// mode. Returns the mode picked this frame.
 pub(super) fn tool_mode_dropdown(ui: &mut egui::Ui, id: &str, modes: &[Option<BlendMode>], current: Option<BlendMode>) -> Option<Option<BlendMode>> {
@@ -114,7 +101,11 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
     let c = pos2(r.left() + 14.0, r.top() + 11.0);
     // Photoshop's white tip vanishes on light chrome; light themes use their icon colour.
     let tip = if t.dark() { Color32::WHITE } else { t.icon };
-    brush_tip(ui.painter(), c, 7.0, b.hardness, tip);
+    // The brush's own tip, as the Brush Preset picker's thumbnails draw it: the engine's falloff
+    // for its hardness, its angle and roundness, a sampled tip's shape.
+    let tex = crate::brush_preview::tip_texture(ui.ctx(), "options-bar-chip", &b.tip, (b.hardness, b.angle, b.roundness), 32, tip);
+    let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
+    ui.painter().image(tex.id(), Rect::from_center_size(c, vec2(14.0, 14.0)), uv, Color32::WHITE);
     ui.painter().text(pos2(c.x, r.bottom() - 5.0), Align2::CENTER_CENTER, format!("{}", b.size.round() as i64), egui::FontId::proportional(9.5), t.text_dim);
     icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, c.y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Brush Preset picker")));
