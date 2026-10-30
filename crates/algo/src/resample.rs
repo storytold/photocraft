@@ -288,6 +288,21 @@ pub fn scaled_rect(r: Rect, sx: f64, sy: f64) -> Rect {
     Rect::new((r.x0 as f64 * sx).floor() as i32, (r.y0 as f64 * sy).floor() as i32, (r.x1 as f64 * sx).ceil() as i32, (r.y1 as f64 * sy).ceil() as i32)
 }
 
+/// The largest rectangle a resize of content at `r` by `(sx, sy)` with `filter` stores: the
+/// result, or the image between the passes of a two-pass bicubic. That one keeps an axis at its
+/// old size, so when both axes shrink it is larger than the result (#9212).
+pub fn largest_resize_rect(r: Rect, sx: f64, sy: f64, filter: Resample) -> Rect {
+    let area = |r: Rect| u64::from(r.width()) * u64::from(r.height());
+    let (mut cur, mut largest) = (r, Rect::EMPTY);
+    for p in plan(filter, sx, sy) {
+        cur = scaled_rect(cur, p.sx, p.sy);
+        if area(cur) > area(largest) {
+            largest = cur;
+        }
+    }
+    largest
+}
+
 /// Resizes a surface by `(sx, sy)` about the document origin. The surface's
 /// default pixel is kept (masks keep their "reveal all" background).
 pub fn resize_surface(s: &Surface, sx: f64, sy: f64, filter: Resample) -> Surface {
@@ -346,7 +361,8 @@ fn resize(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>)
 
 /// Runs `filter`'s passes. Between two passes the image is stored in its own format, which
 /// clips it (and rounds it at 8 and 16 bits) as Photoshop does; the smaller scale goes first, so
-/// the intermediate image is never larger than the result.
+/// the intermediate image is never larger than the result when an axis grows, but is when both
+/// shrink ([`largest_resize_rect`]).
 fn resize_with_budget(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: Option<Rect>, budget: usize) -> Surface {
     let mut cur: Option<Surface> = None;
     let mut canvas = canvas;
