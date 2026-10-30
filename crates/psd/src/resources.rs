@@ -24,6 +24,8 @@ pub mod ids {
     pub const GLOBAL_ALTITUDE: u16 = 1049;
     /// Version info (has real merged data flag).
     pub const VERSION_INFO: u16 = 1057;
+    /// Pixel aspect ratio (`PixelAspectRatio` structure).
+    pub const PIXEL_ASPECT_RATIO: u16 = 1064;
     /// EXIF data 1.
     pub const EXIF: u16 = 1058;
     /// XMP metadata.
@@ -105,6 +107,38 @@ impl ResolutionInfo {
     }
 }
 
+/// Pixel aspect ratio (resource 1064): the width of a pixel over its height.
+///
+/// Version 2 is current; version 1 files stored NTSC and PAL ratios about 5 % off, but the
+/// number is still the ratio the file asked for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PixelAspectRatio {
+    /// Structure version (1 or 2).
+    pub version: u32,
+    /// Pixel width / height (1 = square).
+    pub ratio: f64,
+}
+
+impl PixelAspectRatio {
+    /// A version 2 record of `ratio`.
+    pub fn new(ratio: f64) -> Self {
+        PixelAspectRatio { version: 2, ratio }
+    }
+    /// Parses 12 bytes.
+    pub fn from_bytes(b: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(b);
+        Ok(PixelAspectRatio { version: r.u32()?, ratio: r.f64()? })
+    }
+    /// Serializes to 12 bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(12);
+        v.put_u32(self.version);
+        v.put_f64(self.ratio);
+        v
+    }
+}
+
 /// Version info (resource 1057).
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -169,6 +203,8 @@ pub enum ResourceData<'a> {
     Exif(&'a [u8]),
     /// 1060: XMP packet (UTF-8).
     Xmp(&'a [u8]),
+    /// 1064
+    PixelAspectRatio(PixelAspectRatio),
 }
 
 impl ImageResource {
@@ -199,6 +235,7 @@ impl ImageResource {
             ids::VERSION_INFO => VersionInfo::from_bytes(d).map(ResourceData::VersionInfo),
             ids::EXIF => Ok(ResourceData::Exif(d)),
             ids::XMP => Ok(ResourceData::Xmp(d)),
+            ids::PIXEL_ASPECT_RATIO => PixelAspectRatio::from_bytes(d).map(ResourceData::PixelAspectRatio),
             _ => return None,
         })
     }
@@ -290,6 +327,20 @@ mod tests {
         let back = read_section(&mut Reader::new(&out)).unwrap();
         assert_eq!(back, res);
         out
+    }
+
+    #[test]
+    fn pixel_aspect_ratio_round_trips_and_short_data_is_an_error() {
+        let r = ImageResource::new(ids::PIXEL_ASPECT_RATIO, PixelAspectRatio::new(2.0).to_bytes());
+        assert_eq!(r.parsed(), Some(Ok(ResourceData::PixelAspectRatio(PixelAspectRatio::new(2.0)))));
+        assert!(matches!(ImageResource::new(ids::PIXEL_ASPECT_RATIO, vec![0]).parsed(), Some(Err(_))));
+        let par = PixelAspectRatio::new(0.9);
+        let bytes = par.to_bytes();
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(&bytes[..4], &[0, 0, 0, 2]);
+        assert_eq!(PixelAspectRatio::from_bytes(&bytes).unwrap(), par);
+        assert!(PixelAspectRatio::from_bytes(&bytes[..11]).is_err());
+        assert!(PixelAspectRatio::from_bytes(&[]).is_err());
     }
 
     #[test]
