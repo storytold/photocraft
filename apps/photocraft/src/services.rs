@@ -523,8 +523,8 @@ fn image_from_files(paths: &[PathBuf]) -> Option<(u32, u32, Vec<u8>)> {
     })
 }
 
-/// Whether the X11 clipboard advertises `text/uri-list`, or `None` on Wayland, with no owner,
-/// or when the owner doesn't answer `TARGETS`. Asking an image-only owner for the file list can
+/// Whether the X11 clipboard advertises `text/uri-list`, or `None` when arboard uses Wayland,
+/// with no owner, or when the owner doesn't answer `TARGETS`. Asking an image-only owner for the file list can
 /// start an INCR transfer that arboard abandons, leaving the owner waiting and the following
 /// image read unable to start (#10231), so the caller skips that request unless the target list
 /// says files may be there.
@@ -535,7 +535,9 @@ fn x11_clipboard_has_uri_list() -> Option<bool> {
     use x11rb::protocol::Event;
     use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, WindowClass};
 
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+    // arboard tries its Wayland backend only when this same check succeeds, and falls back to
+    // X11 when it doesn't, so the X11 target check still applies in that fallback case.
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() && wl_clipboard_rs::utils::is_primary_selection_supported().is_ok() {
         return None;
     }
     let (conn, screen_num) = x11rb::connect(None).ok()?;
