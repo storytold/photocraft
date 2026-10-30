@@ -547,7 +547,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
             PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)
         });
     }
-    flat::import_flat_with_limit(name, bytes, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES))
+    flat::import_flat_with_limit_and_interrupt(name, bytes, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES), ctl)
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).

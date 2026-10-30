@@ -6,7 +6,7 @@ use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType
 use photocraft_color::{BlendMode, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
-use photocraft_raster::Surface;
+use photocraft_raster::{AllocationError, Interrupt, Surface};
 
 use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
 
@@ -21,6 +21,14 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
 
 /// [`import_flat`] with the caller's PSD pixel allowance, which a layered TIFF is held to.
 pub(crate) fn import_flat_with_limit(name: &str, bytes: &[u8], pixel_limit: u64) -> Result<ImportResult, IoError> {
+    import_flat_with_limit_and_interrupt(name, bytes, pixel_limit, &Interrupt::NONE)
+}
+
+pub fn import_flat_with(name: &str, bytes: &[u8], ctl: &Interrupt) -> Result<ImportResult, IoError> {
+    import_flat_with_limit_and_interrupt(name, bytes, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES, ctl)
+}
+
+pub(crate) fn import_flat_with_limit_and_interrupt(name: &str, bytes: &[u8], pixel_limit: u64, ctl: &Interrupt) -> Result<ImportResult, IoError> {
     // Detected once; every step below branches on it.
     let format = codecs::detect(bytes);
     if format == Some(Format::Tiff) {
@@ -35,7 +43,9 @@ pub(crate) fn import_flat_with_limit(name: &str, bytes: &[u8], pixel_limit: u64)
         Some(Format::Gif) => codecs::gif_palette(bytes),
         _ => None,
     };
-    let mut r = image_to_document(name, &img)?;
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    ctl.progress(0.6);
+    let mut r = image_to_document_with(name, &img, ctl)?;
     if let Some((colors, transparent)) = palette.filter(|(c, _)| !c.is_empty())
         && r.document.mode == ColorMode::Rgb
     {
@@ -376,12 +386,19 @@ fn document_format(layout: ChannelLayout, sample: CSample) -> DocumentFormat {
 /// A decoded flat image as a single-layer document: a locked "Background" when it is opaque, a
 /// normal "Layer 0" when it has transparency.
 pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult, IoError> {
+    image_to_document_with(name, img, &Interrupt::NONE)
+}
+
+fn image_to_document_with(name: &str, img: &Image, ctl: &Interrupt) -> Result<ImportResult, IoError> {
     // What the decoder noticed (frames or pages left out, data ending early) comes first.
     let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
     let f = document_format(img.layout(), img.sample_type());
     warnings.extend(f.warning.clone());
+    ctl.check().map_err(|_| IoError::Cancelled)?;
     let mut s = image_surface(img, f.layout, f.sample)?;
-    s.prune();
+    ctl.check().map_err(|_| IoError::Cancelled)?;
+    ctl.progress(0.95);
+    if img.layout().has_alpha() { s.prune(); }
     let mut r = single_layer_document(name, img.dimensions(), f, img.layout().has_alpha(), s, img.icc.clone(), img.meta.clone(), warnings);
     r.warnings.extend(crate::tiff_layers::channels_from_extras(&mut r.document, img));
     Ok(r)
@@ -437,6 +454,9 @@ pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: 
         ChannelLayout::Lab | ChannelLayout::LabA => ColorMode::Lab,
         _ => ColorMode::Rgb,
     };
+    // The surface stores 16-bit float as 32-bit float, so an F16 target converts to F32 (copying
+    // two-byte samples, or a two-byte opaque alpha, into it would be wrong).
+    let csample = if csample == CSample::F16 { CSample::F32 } else { csample };
     let depth = match csample {
         CSample::U8 => SampleType::U8,
         CSample::U16 => SampleType::U16,
@@ -445,19 +465,68 @@ pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: 
     let fmt = PixelFormat::new(mode, depth, true);
     let (w, h) = img.dimensions();
     let mut s = Surface::new(fmt);
-    if img.layout() == target_layout && img.sample_type() == csample {
-        s.write_interleaved(Rect::new(0, 0, w as i32, h as i32), img.data());
-    } else {
-        let row = img.data().len() / (h.max(1) as usize);
-        let band = (BAND_BYTES / row.max(1)).max(1);
-        for (i, rows) in img.data().chunks(row.max(1) * band).enumerate() {
-            let n = (rows.len() / row.max(1)) as u32;
-            let part = Image::from_raw(w, n, img.layout(), img.sample_type(), rows.to_vec())?.convert(target_layout, csample);
-            let y0 = (i * band) as i32;
-            s.write_interleaved(Rect::new(0, y0, w as i32, y0 + n as i32), part.data());
+    let (from, to) = ((img.layout(), img.sample_type()), (target_layout, csample));
+    let (sb, db) = (from.1.bytes(), to.1.bytes());
+    let (src_px, dst_px) = (from.0.channels() * sb, to.0.channels() * db);
+    let data = img.data();
+    // The opaque alpha an image without one gets, when only that differs.
+    let one: Option<([u8; 4], usize)> = (from.1 == to.1 && !from.0.has_alpha() && to.0 == from.0.with_alpha()).then(|| {
+        let mut one = [0u8; 4];
+        match to.1 {
+            CSample::U8 => one[0] = u8::MAX,
+            CSample::U16 => one[..2].copy_from_slice(&u16::MAX.to_ne_bytes()),
+            _ => one.copy_from_slice(&1.0f32.to_ne_bytes()),
         }
+        (one, db)
+    });
+    let failed = std::sync::atomic::AtomicBool::new(false);
+    let (Ok(cw), Ok(ch)) = (i32::try_from(w), i32::try_from(h)) else { return Err(IoError::Unsupported("image too large".into())) };
+    let written = s.try_write_rows_with(Rect::new(0, 0, cw, ch), |y, x0, dst| {
+        let n = dst.len() / dst_px.max(1);
+        let span = usize::try_from(y)
+            .ok()
+            .zip(usize::try_from(x0).ok())
+            .and_then(|(y, x)| (y.checked_mul(w as usize)?.checked_add(x)?).checked_mul(src_px))
+            .and_then(|o| data.get(o..o.checked_add(n.checked_mul(src_px)?)?));
+        let Some(src) = span else { return failed.store(true, std::sync::atomic::Ordering::Relaxed) };
+        if from == to {
+            dst.copy_from_slice(src);
+        } else if let Some((one, bytes)) = one {
+            if (src_px, bytes, one[0]) == (3, 1, u8::MAX) {
+                // RGB8 to RGBA8, what nearly every JPEG and many PNGs are.
+                for (d, p) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src.as_chunks::<3>().0) {
+                    *d = [p[0], p[1], p[2], u8::MAX];
+                }
+            } else {
+                for (d, p) in dst.chunks_exact_mut(dst_px).zip(src.chunks_exact(src_px)) {
+                    if let Some((color, alpha)) = d.split_at_mut_checked(src_px) {
+                        color.copy_from_slice(p);
+                        alpha.copy_from_slice(one.get(..bytes).unwrap_or_default());
+                    }
+                }
+            }
+        } else {
+            // Everything else (16-bit float to 32-bit float): the codec's own conversion of this row span.
+            match codecs::convert_samples(src, n as u32, 1, from, to) {
+                Ok(out) if out.len() == dst.len() => dst.copy_from_slice(&out),
+                _ => failed.store(true, std::sync::atomic::Ordering::Relaxed),
+            }
+        }
+    });
+    written.map_err(alloc_error)?;
+    if failed.load(std::sync::atomic::Ordering::Relaxed) {
+        return Err(IoError::Unsupported("the decoded image does not match its size".into()));
     }
     Ok(s)
+}
+
+/// The error an out-of-memory or oversized surface allocation is reported as.
+fn alloc_error(e: AllocationError) -> IoError {
+    match e {
+        AllocationError::LengthMismatch { .. } => IoError::Unsupported("the decoded image does not match its size".into()),
+        AllocationError::SizeOverflow => IoError::Unsupported("image too large".into()),
+        AllocationError::NotEnoughMemory { .. } => IoError::Unsupported("not enough memory to open this image".into()),
+    }
 }
 
 /// `Some(surface)` when the document is exactly one visible, unmasked,
