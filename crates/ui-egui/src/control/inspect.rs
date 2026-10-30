@@ -41,6 +41,11 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "camTransform": app.ui.cam_transform,
         "layerMenu": app.ui.layer_menu,
         "layerPicker": app.ui.layer_picker,
+        "brushModeMenu": app.ui.brush_mode_menu.map(|pos| json!({
+            "pos": pos,
+            "mode": if app.ui.tool_options.brush_clear { "Clear" } else { app.session.tools.brush.mode.label() },
+            "choices": crate::brush_mode_menu::choices().iter().map(|(_, label)| *label).collect::<Vec<_>>(),
+        })),
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,
             // The picker's content size once its corner grip was dragged (null: the default).

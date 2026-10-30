@@ -498,7 +498,7 @@ impl Ctx<'_> {
             let parsed = (!block.is_foreign_order())
                 .then(|| {
                     photocraft_text::psd::text_layer_from_tysh(&block.data, self.dpi).or_else(|| {
-                        let (text, transform) = blocks::parse_tysh(&block.data).unwrap_or_default();
+                        let (text, transform) = blocks::parse_tysh(&block.data)?;
                         photocraft_text::psd::transform_is_safe(&transform).then(|| TextLayer { text, transform, ..Default::default() })
                     })
                 })
@@ -1122,6 +1122,7 @@ fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Do
         ));
     }
     doc.patterns = crate::pattern_map::from_global_blocks(doc);
+    warnings.extend(crate::pattern_map::unpaintable_warnings(&doc.patterns));
     doc.notes = crate::annotations_map::notes_from_blocks(doc);
     if crate::annotations_map::anno_unreadable(doc) {
         warnings.push("the notes (Anno block) could not be read; they are kept unchanged on PSD save unless a note is added".into());

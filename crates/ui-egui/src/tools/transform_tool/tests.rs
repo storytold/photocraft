@@ -131,6 +131,47 @@ fn transform_bar_pins_warp_cancel_and_commit() {
 }
 
 #[test]
+fn interpolation_selection_is_reused_for_the_next_transform() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    let app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    let mut h = Harness::builder().with_size(vec2(2400.0, 360.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                ui.horizontal_centered(|ui| options_bar(app, ui));
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    let ctx = h.ctx.clone();
+    begin(h.state_mut(), &ctx).unwrap();
+    h.run_steps(6);
+    assert!(h.state().ui.transform.is_some(), "transform stays open while the bar renders");
+
+    h.get_by_role(Role::ComboBox).click();
+    h.run();
+    assert!(h.state().ui.transform.is_some(), "opening interpolation dropdown keeps the transform open");
+    h.key_press(egui::Key::ArrowDown);
+    h.run();
+    assert!(h.state().ui.transform.is_some(), "first interpolation step keeps the transform open");
+    h.key_press(egui::Key::ArrowDown);
+    h.run();
+    assert!(h.state().ui.transform.is_some(), "second interpolation step keeps the transform open");
+    assert_eq!(h.state().ui.transform.as_ref().unwrap().interpolation, "nearest");
+    assert_eq!(h.state().ui.tool_options.transform_interpolation, Some(photocraft_engine::prefs::Interpolation::Nearest));
+    assert_eq!(h.state().session.prefs().general.image_interpolation, photocraft_engine::prefs::Interpolation::BicubicAutomatic);
+
+    let transform = h.state_mut().ui.transform.as_mut().unwrap();
+    transform.quad = transform.quad.map(|[x, y]| [x + 1.0, y]);
+    commit(h.state_mut());
+    assert!(h.state().ui.transform.is_none());
+    begin(h.state_mut(), &ctx).unwrap();
+    assert_eq!(h.state().ui.transform.as_ref().unwrap().interpolation, "nearest");
+}
+
+#[test]
 fn free_transform_bar_buttons_follow_the_fields_on_a_wide_bar() {
     use egui_kittest::Harness;
     use egui_kittest::kittest::Queryable;
@@ -3221,4 +3262,21 @@ fn applying_the_box_hides_no_pointer() {
     // The overlay draws no handles while the box is applied, so no drawn pointer either.
     assert_eq!(cursor(&app, &xf, [32.0, 32.0], cmd()), Some(CursorIcon::ResizeNwSe));
     assert_eq!(cursor(&app, &xf, [96.0, 32.0], cmd()), Some(CursorIcon::ResizeVertical));
+}
+
+#[test]
+fn several_layers_reuse_the_transform_interpolation_preference() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    let st = app.session.active_mut().unwrap();
+    let first = st.active_layer.unwrap();
+    let mut second = photocraft_doc::Layer::raster("second", photocraft_color::PixelFormat::RGBA8);
+    second.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(32, 8, 48, 24), &[0., 1., 0., 1.]);
+    let second_id = second.id;
+    Arc::make_mut(&mut st.doc).layers.push(second);
+    st.selected_layers = vec![first, second_id];
+    app.ui.tool_options.transform_interpolation = Some(photocraft_engine::prefs::Interpolation::Nearest);
+    begin(&mut app, &egui::Context::default()).unwrap();
+    let transform = app.ui.transform.as_ref().unwrap();
+    assert_eq!(transform.layers.len(), 2);
+    assert_eq!(transform.interpolation, "nearest");
 }

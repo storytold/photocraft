@@ -72,7 +72,7 @@ fn hex(c: &Color) -> String {
     if c.alpha < 1.0 { format!("#{:02x}{:02x}{:02x}{:02x}", q(r), q(g), q(b), q(c.alpha)) } else { format!("#{:02x}{:02x}{:02x}", q(r), q(g), q(b)) }
 }
 
-pub(super) fn op_from(s: &str) -> Option<PathOp> {
+pub(crate) fn op_from(s: &str) -> Option<PathOp> {
     Some(match s.to_ascii_lowercase().as_str() {
         "combine" | "add" | "union" => PathOp::Combine,
         "subtract" | "minus" => PathOp::Subtract,
