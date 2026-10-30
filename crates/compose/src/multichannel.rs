@@ -94,7 +94,7 @@ pub fn overprint(buf: &mut Buffer, doc: &Document, visible: impl Fn(usize) -> bo
 
 /// Whether channel `i` of `doc` is a spot ink that prints over an RGB or CMYK composite.
 pub fn is_overprint_spot(doc: &Document, i: usize) -> bool {
-    matches!(doc.mode, ColorMode::Rgb | ColorMode::Cmyk) && doc.channels.get(i).is_some_and(|c| c.spot.is_some())
+    matches!(doc.mode, ColorMode::Rgb | ColorMode::Cmyk | ColorMode::Grayscale | ColorMode::Lab) && doc.channels.get(i).is_some_and(|c| c.spot.is_some())
 }
 
 /// The printed inks of `doc` over `rect` (opaque).
