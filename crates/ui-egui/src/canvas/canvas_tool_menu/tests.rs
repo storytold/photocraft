@@ -418,7 +418,29 @@ fn selection_menus_follow_photoshop_order() {
             Some("Fade…"),
         ]
     );
-    assert_eq!(labels(NO_SELECTION_MENU), vec![Some("Select All"), Some("Reselect"), Some("Color Range…"), None, Some("Load Selection…")]);
+    // Nothing selected (#9152): Photoshop 2025's rows over a pixel layer.
+    assert_eq!(
+        labels(NO_SELECTION_MENU),
+        vec![
+            Some("Blending Options…"),
+            None,
+            Some("Duplicate Layer…"),
+            Some("Delete Layer"),
+            Some("Group from Layers…"),
+            None,
+            Some("Convert to Smart Object"),
+            Some("Convert to Layers"),
+            None,
+            Some("Rasterize Layer"),
+            Some("Rasterize Layer Style"),
+            None,
+            Some("Free Transform"),
+            None,
+            Some("Color Range…"),
+            Some("Load Selection…"),
+            Some("Reselect"),
+        ]
+    );
     // Every row runs a real command: one the menu bar has, or an engine command.
     let app = app();
     let items = crate::menus::menu_items(&app);
@@ -450,9 +472,12 @@ fn selection_menu_routes_actions_through_commands() {
     assert!(app.session.active().unwrap().doc.selection.is_some());
     assert!(app.session.journal.iter().any(|(id, _)| id == "select.reselect"));
     app.run("select.deselect", json!({})).unwrap();
+    // Nothing selected, Photoshop's Free Transform row transforms the active layer (#9152).
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
     assert!(open(&mut app, &Context::default(), Tool::Lasso, [10.0, 10.0]));
-    choose(&mut app, &Context::default(), "select.all");
-    assert!(app.session.active().unwrap().doc.selection.is_some());
+    choose(&mut app, &Context::default(), "edit.freeTransform");
+    assert!(app.ui.transform.is_some(), "Free Transform from the no-selection menu");
 }
 
 #[test]

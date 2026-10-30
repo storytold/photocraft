@@ -402,13 +402,27 @@ pub const SELECTION_MENU: &[Row] = &[
     Some(("Fade…", "edit.fade")),
 ];
 
-/// The selection tools' context menu with nothing selected: making a selection.
+/// Photoshop's selection-tool context menu with nothing selected, in its order: the active
+/// layer's rows, Free Transform, then making a selection (#9152). Rows that don't apply to the
+/// layer stay visible and grey out like their menu-bar twins.
 pub const NO_SELECTION_MENU: &[Row] = &[
-    Some(("Select All", "select.all")),
-    Some(("Reselect", "select.reselect")),
-    Some(("Color Range…", "select.colorRange")),
+    Some(("Blending Options…", "layer.layerStyle.blendingOptions")),
     None,
+    Some(("Duplicate Layer…", "layer.duplicate")),
+    Some(("Delete Layer", "layer.delete")),
+    Some(("Group from Layers…", "layer.new.groupFromLayers")),
+    None,
+    Some(("Convert to Smart Object", "layer.smartObjects.convertToSmartObject")),
+    Some(("Convert to Layers", "layer.smartObjects.convertToLayers")),
+    None,
+    Some(("Rasterize Layer", "layer.rasterize.layer")),
+    Some(("Rasterize Layer Style", "layer.rasterize.layerStyle")),
+    None,
+    Some(("Free Transform", "edit.freeTransform")),
+    None,
+    Some(("Color Range…", "select.colorRange")),
     Some(("Load Selection…", "select.loadSelection")),
+    Some(("Reselect", "select.reselect")),
 ];
 
 /// Photoshop's Pen context menu order. Rows whose operation is not applicable to the current
