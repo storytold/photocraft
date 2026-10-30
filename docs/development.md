@@ -708,7 +708,7 @@ The manifest records the checkout revision, whether tracked files were modified,
 CLI binary hash, recipe hash, corpus revision and candidate hashes. The checkout
 revision does not establish where a supplied binary was built; use a binary built from
 that revision and preserve the CI run's provenance. Missing fonts and other warnings
-are recorded. The checkout and corpus are not written to by the runner.
+are recorded. The runner never overwrites its input PSDs.
 
 Recipes are versioned JSON. A case has a unique `id`, a relative `base` PSD path,
 its `base_sha256`, a `target` with layer `kind` and optional `name`, and `checks`.
