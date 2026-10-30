@@ -35,7 +35,9 @@ pub struct RefineParams {
     pub feather: f32,
     /// 0–100.
     pub contrast: f32,
-    /// −100–100. 100% moves the edge by `max(radius, 4)` pixels. Values between whole
+    /// −100–100. 100% moves the edge by its soft width: `max(radius, feather, 2 × smooth σ)`,
+    /// at least 1 px, so a hard edge moves a pixel (Photoshop's Shift Edge moves soft borders;
+    /// a band of several pixels around hard line art fills it in solid). Values between whole
     /// pixels blend the two neighbouring shifts, so the slider does not jump.
     pub shift_edge: f32,
 }
@@ -60,9 +62,11 @@ impl RefineParams {
     fn feather_sigma(&self) -> f32 {
         self.feather.max(0.0) / 2.0
     }
-    /// Signed shift in pixels, fractional. 100% is `max(radius, 4)` px, clamped to ±64.
+    /// Signed shift in pixels, fractional. 100% is the edge's soft width (at least 1 px),
+    /// clamped to ±64.
     fn shift_amount(&self) -> f32 {
-        let px = self.shift_edge.clamp(-100.0, 100.0) / 100.0 * self.radius.max(4.0);
+        let soft = self.radius.max(self.feather).max(2.0 * self.smooth_sigma()).max(1.0);
+        let px = self.shift_edge.clamp(-100.0, 100.0) / 100.0 * soft;
         if px.is_finite() { px.clamp(-64.0, 64.0) } else { 0.0 }
     }
     /// How many pixels the mask can move: the farther of the two integer radii a fractional
@@ -238,7 +242,7 @@ pub fn morph(src: &[f32], w: usize, h: usize, r: usize, grow: bool) -> Vec<f32> 
 mod brush;
 mod morphology;
 
-pub use brush::{EdgeBrush, EdgeStroke, MAX_SWEPT_AREA, SIZE_RANGE as BRUSH_SIZE_RANGE, swept_area};
+pub use brush::{EdgeBrush, EdgeStroke, MAX_SWEPT_AREA, SIZE_RANGE as BRUSH_SIZE_RANGE, brush_surface, painted_tiles, stroke_area, swept_area};
 
 /// Running max (or min) over a window of radius `r` (edge-clipped), van Herk / Gil–Werman:
 /// three comparisons per sample whatever the radius.
@@ -413,6 +417,22 @@ where
     lo.into_iter().zip(hi).map(|(a, b)| a + (b - a) * frac).collect()
 }
 
+/// Most pixels one refine should cover. Its result is a dense [`Region`] over [`refine_area`]
+/// (about two bytes a pixel while it is assembled), so callers refuse a larger refine up front
+/// rather than allocate it: 2³⁰ pixels, a 32k × 32k selection.
+pub const MAX_REFINE_AREA: u64 = 1 << 30;
+
+/// The area [`refine_mask`] and [`refine_mask_brushed`] compute and allocate their result over:
+/// `content` grown by how far `p` can spread it, plus where `brush` adds, within `canvas`. Empty
+/// when `content` misses the canvas.
+pub fn refine_area(content: Rect, canvas: Rect, p: &RefineParams, brush: Option<&EdgeBrush>) -> Rect {
+    let content = content.intersect(&canvas);
+    if content.is_empty() {
+        return Rect::EMPTY;
+    }
+    content.inflate(p.spread()).union(&brush.map_or(Rect::EMPTY, EdgeBrush::added_bounds)).intersect(&canvas)
+}
+
 /// Refines a selection mask. `mask(r)` returns coverage over `r` (row-major); `content` bounds
 /// its non-zero pixels; the result is clipped to `canvas`. `sampler` supplies the guide image
 /// (only read when `radius > 0`). Returns `None` when nothing remains selected.
@@ -446,11 +466,10 @@ fn refine_mask_with<F>(
 where
     F: Fn(&[f32], usize, usize, usize, bool) -> Vec<f32> + Copy + Sync + Send,
 {
-    let content = content.intersect(&canvas);
-    if content.is_empty() {
+    let bbox = refine_area(content, canvas, p, brush);
+    if bbox.is_empty() {
         return None;
     }
-    let bbox = content.inflate(p.spread()).union(&brush.map_or(Rect::EMPTY, EdgeBrush::added_bounds)).intersect(&canvas);
     let halo = p.halo() + brush.map_or(0, |b| i32::try_from(b.window() * 4).unwrap_or(i32::MAX));
     let mut tiles = Vec::new();
     let mut y = bbox.y0;
@@ -750,22 +769,24 @@ mod tests {
         assert!(f[5 * w + 29] > 0.5 && f[5 * w + 29] < 0.8 && f[5 * w + 31] > 0.1);
         let c = refine_buffer(None, &f, w, h, &RefineParams { contrast: 100.0, ..Default::default() });
         assert!(c[5 * w + 29] == 1.0 && c[5 * w + 31] == 0.0);
+        // A hard edge (no radius, feather or smooth) moves 1 px at 100%, so 50% is half a
+        // pixel. The pixel just outside fades in instead of snapping on.
         let grown = refine_buffer(None, &m, w, h, &RefineParams { shift_edge: 100.0, ..Default::default() });
-        assert_eq!(grown[5 * w + 33], 1.0);
-        assert_eq!(grown[5 * w + 34], 0.0);
-        let shrunk = refine_buffer(None, &m, w, h, &RefineParams { shift_edge: -50.0, ..Default::default() });
-        assert_eq!(shrunk[5 * w + 27], 1.0);
-        assert_eq!(shrunk[5 * w + 28], 0.0);
-        // Radius 0 scales 100% to 4 px, so 12.5% is half a pixel and 25% is one pixel.
-        // The pixel just outside a hard edge fades in instead of snapping on.
-        let half = refine_buffer(None, &m, w, h, &RefineParams { shift_edge: 12.5, ..Default::default() });
-        let one = refine_buffer(None, &m, w, h, &RefineParams { shift_edge: 25.0, ..Default::default() });
         assert_eq!(m[5 * w + 30], 0.0);
+        assert_eq!(grown[5 * w + 30], 1.0);
+        assert_eq!(grown[5 * w + 31], 0.0);
+        let shrunk = refine_buffer(None, &m, w, h, &RefineParams { shift_edge: -100.0, ..Default::default() });
+        assert_eq!(shrunk[5 * w + 28], 1.0);
+        assert_eq!(shrunk[5 * w + 29], 0.0);
+        let half = refine_buffer(None, &m, w, h, &RefineParams { shift_edge: 50.0, ..Default::default() });
         assert!((half[5 * w + 30] - 0.5).abs() < 0.02, "half pixel {}", half[5 * w + 30]);
-        assert_eq!(one[5 * w + 30], 1.0);
         assert_eq!(half[5 * w + 31], 0.0, "the blend must not jump a second pixel");
-        let pulled = refine_buffer(None, &m, w, h, &RefineParams { shift_edge: -12.5, ..Default::default() });
+        let pulled = refine_buffer(None, &m, w, h, &RefineParams { shift_edge: -50.0, ..Default::default() });
         assert!((pulled[5 * w + 29] - 0.5).abs() < 0.02, "half-pixel contract {}", pulled[5 * w + 29]);
+        // A softer edge moves farther: 100% is the feather, here 4 px.
+        let wide = refine_buffer(None, &m, w, h, &RefineParams { feather: 4.0, contrast: 100.0, shift_edge: 100.0, ..Default::default() });
+        assert_eq!(wide[5 * w + 33], 1.0);
+        assert_eq!(wide[5 * w + 34], 0.0);
         let sm = refine_buffer(None, &m, w, h, &RefineParams { smooth: 50.0, ..Default::default() });
         assert!(sm[5 * w + 10] == 1.0 && sm[5 * w + 50] == 0.0);
     }

@@ -67,7 +67,7 @@ id = "BUG-204-3"
 target = "RAW prefs and ask_before_saving_layered_tiff read, or hidden"
 status = "done"
 issue = 204
-note = "ask_before_saving_layered_tiff drives the TIFF Options prompt (ui-egui tiff_options_ui.rs); raw_defaults.open_in_camera_raw drives the Camera Raw dialog (camera_raw_ui.rs); the other raw_defaults fields are in prefs::HIDDEN_UNTIL_IMPLEMENTED"
+note = "ask_before_saving_layered_tiff drives the TIFF Options prompt (ui-egui tiff_options_ui.rs); raw_defaults.open_in_camera_raw drives the Camera Raw dialog (camera_raw_ui.rs); the other raw_defaults fields drive the raw open and Camera Raw (#5128)"
 
 [[item]]
 id = "BUG-204-4"
@@ -88,7 +88,7 @@ id = "BUG-204-6"
 target = "Test: every Prefs field is read somewhere or on a hidden allowlist"
 status = "done"
 issue = 204
-note = "crates/engine/tests/prefs_usage.rs every_preference_is_read_or_hidden: each field is read outside prefs.rs or listed in prefs::HIDDEN_UNTIL_IMPLEMENTED, never both"
+note = "crates/engine/tests/it/prefs_usage.rs every_preference_is_read_or_hidden: each field is read outside prefs.rs or listed in prefs::HIDDEN_UNTIL_IMPLEMENTED, never both"
 
 [[item]]
 id = "BUG-205-1"
@@ -137,14 +137,14 @@ id = "BUG-206-2"
 target = "PSD import keeps Optical and manual Kerning values"
 status = "done"
 issue = 206
-note = "io/tests/psd_kerning.rs manual_and_off_kerning_round_trip_through_psd and optical_kerning_round_trips_through_psd import an exported layer and compare every character's (mode, kern) pair; the optical mode travels in the document Txt2 block (#1348)"
+note = "io/tests/it/psd_kerning.rs manual_and_off_kerning_round_trip_through_psd and optical_kerning_round_trips_through_psd import an exported layer and compare every character's (mode, kern) pair; the optical mode travels in the document Txt2 block (#1348)"
 
 [[item]]
 id = "BUG-206-3"
 target = "PSD export writes the real AutoKerning mode and Kerning values"
 status = "done"
 issue = 206
-note = "manual_and_off_kerning_round_trip_through_psd (io/tests/psd_kerning.rs) reads the AutoKerning flag and Kerning value of every character back out of the written TySh: (false, 100) after A, (true, -50) after T, and automatic kerning off where the style says so"
+note = "manual_and_off_kerning_round_trip_through_psd (io/tests/it/psd_kerning.rs) reads the AutoKerning flag and Kerning value of every character back out of the written TySh: (false, 100) after A, (true, -50) after T, and automatic kerning off where the style says so"
 
 [[item]]
 id = "BUG-206-4"
@@ -158,7 +158,7 @@ id = "BUG-206-5"
 target = "Tests: PSD round trip of manual and Optical kerning, a real file in the oracle corpus"
 status = "partial"
 issue = 206
-note = "Round trips covered by io/tests/psd_kerning.rs (manual, Off and Optical, plus hostile_kerning_values and txt2_extras_survive_a_resave_of_unchanged_text); corpus_text_layers reads real PSDs and applies their Txt2 optical kerning, but no oracle file is dedicated to kerning values"
+note = "Round trips covered by io/tests/it/psd_kerning.rs (manual, Off and Optical, plus hostile_kerning_values and txt2_extras_survive_a_resave_of_unchanged_text); corpus_text_layers reads real PSDs and applies their Txt2 optical kerning, but no oracle file is dedicated to kerning values"
 
 [[item]]
 id = "BUG-207-1"

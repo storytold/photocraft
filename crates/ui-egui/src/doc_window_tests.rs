@@ -26,7 +26,7 @@ fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
     let main = &mut app.ui.views[0];
     (main.zoom, main.center, main.fit_pending) = (0.5, [100.0, 75.0], false);
     let view = View { zoom: 1.0, center: [200.0, 150.0], fit_pending: false, doc_size: [400, 300], ..View::default() };
-    app.ui.windows.push(DocWindow { id: WINDOW, document: 0, view, open: true, position: None });
+    app.ui.windows.push(DocWindow { id: WINDOW, document: 0, view, open: true, floating: false, focused: false, position: None });
     let mut h = Harness::builder().with_size(vec2(1200.0, 800.0)).with_step_dt(1.0 / 60.0).build_ui_state(
         |ui, app: &mut PhotocraftApp| {
             let ctx = ui.ctx().clone();
@@ -44,12 +44,13 @@ fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
 }
 
 /// Where document point `(x, y)` is on screen in the window (100 %, centred on (200, 150) inside
-/// the rulers when they are shown).
+/// the rulers when they are shown). At 100 % the canvas puts the image's corner on a whole pixel
+/// (`ViewXform::pixel_aligned`), so it is rounded here too.
 fn in_window(h: &Harness<'static, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
     let rect = crate::canvas::window_canvas_rect(&h.ctx, WINDOW).expect("the window's canvas was laid out");
     let rect = crate::rulers::content_rect(h.state(), rect);
     assert!(rect.width() > 120.0 && rect.height() > 90.0, "room to draw in: {rect:?}");
-    rect.center() + vec2(x - 200.0, y - 150.0)
+    (rect.center() - vec2(200.0, 150.0)).round() + vec2(x, y)
 }
 
 /// Press or release the left button at `p`.
@@ -350,7 +351,7 @@ fn a_drag_held_still_in_a_window_carries_on() {
 #[test]
 fn a_drag_belongs_to_its_canvas_until_that_canvas_misses_a_pass() {
     use crate::canvas::{drag_is_abandoned, drag_is_foreign};
-    let (a, b) = (egui::Id::new("a"), egui::Id::new("b"));
+    let (a, b) = (egui::Id::unique("a"), egui::Id::unique("b"));
     assert!(!drag_is_foreign(None, a, 10), "a drag no canvas started (the control channel's) is anyone's");
     assert!(!drag_is_foreign(Some((a, 10)), a, 10), "its own canvas carries it on");
     assert!(drag_is_foreign(Some((a, 10)), b, 10), "another canvas leaves it alone");
