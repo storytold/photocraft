@@ -13,10 +13,15 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Blob, IdbDatabase, IdbTransactionMode};
 
 use crate::indexed_presets::{FILES, TIMEOUT_MS, before, js, open, request, write, write_capped};
-use crate::recovery_bridge::{MAX_ENTRIES, MAX_SNAPSHOT_BYTES, MAX_TOTAL_BYTES, Recovery, TOTAL_LIMIT_MSG, recover_on_launch, session_of};
+use crate::recovery_bridge::{MAX_ENTRIES, MAX_SNAPSHOT_BYTES, Recovery, recover_on_launch, session_of};
 use photocraft_ui_egui::Services;
 
 const DATABASE: &str = "photocraft.recovery";
+/// Most recovery data kept at once, across documents and tabs. Enforced inside the write
+/// transaction (`indexed_presets::write_capped`), against what is actually stored.
+const MAX_TOTAL_BYTES: u64 = 768 << 20;
+/// Shown as "Autosave failed" when the total cap stops a write.
+const TOTAL_LIMIT_MSG: &str = "the browser's recovery storage limit is reached; save or close a document";
 const PREFS_KEY: &str = "photocraft.preferences";
 /// All the per-record reads together may not hold up startup longer than this, whatever the count.
 const SCAN_MS: f64 = 15_000.0;
@@ -44,8 +49,9 @@ fn lock_name(session: &str) -> String {
 }
 
 /// Take Web Lock `name` and keep it until the page goes away (the callback's promise never
-/// settles). With `if_available`, `Ok(false)` means another page holds it.
-async fn hold(name: &str, if_available: bool) -> Result<bool, String> {
+/// settles). With `if_available`, `Ok(false)` means another page holds it. The answer is awaited
+/// until the absolute `deadline`, so callers that take several locks can share one.
+async fn hold(name: &str, if_available: bool, deadline: f64) -> Result<bool, String> {
     let navigator = web_sys::window().ok_or("no window")?.navigator();
     let locks = Reflect::get(&navigator, &JsValue::from_str("locks")).map_err(js)?;
     if locks.is_undefined() || locks.is_null() {
@@ -69,7 +75,7 @@ async fn hold(name: &str, if_available: bool) -> Result<bool, String> {
     if let Some(e) = failed {
         return Err(js(e));
     }
-    Ok(before(&granted, js_sys::Date::now() + TIMEOUT_MS).await?.as_bool().unwrap_or(false))
+    Ok(before(&granted, deadline).await?.as_bool().unwrap_or(false))
 }
 
 /// One record, read in its own transaction (and under its own deadline) so one slow record
@@ -89,7 +95,7 @@ async fn read(db: &IdbDatabase, recovery: &Recovery, deadline: f64) -> Result<()
     // This page's lock comes before any write, so no other page can ever see its entries as
     // abandoned. Without locks nothing is claimed.
     let own = recovery.session();
-    let locked = match hold(&lock_name(&own), false).await {
+    let locked = match hold(&lock_name(&own), false, js_sys::Date::now() + TIMEOUT_MS).await {
         Ok(got) => got,
         Err(e) => {
             log::warn!("Crash recovery cannot tell live tabs from closed ones, so earlier entries are not offered: {e}");
@@ -99,8 +105,16 @@ async fn read(db: &IdbDatabase, recovery: &Recovery, deadline: f64) -> Result<()
     let stored = web_sys::window().and_then(|w| w.local_storage().ok().flatten()).and_then(|s| s.get_item(PREFS_KEY).ok().flatten());
     let mut claimed: Vec<&str> = Vec::new();
     if locked && recover_on_launch(stored.as_deref()) {
+        // One deadline for every candidate: if the lock manager stalls, the claims together (not
+        // each in turn) may hold up startup for at most this long. Claims that were granted
+        // promptly are kept.
+        let claim_deadline = js_sys::Date::now() + TIMEOUT_MS;
         for session in names.iter().filter_map(|n| session_of(n)).filter(|s| *s != own) {
-            if claimed.len() < MAX_ENTRIES && !claimed.contains(&session) && hold(&lock_name(session), true).await.unwrap_or(false) {
+            if js_sys::Date::now() >= claim_deadline {
+                log::warn!("Crash recovery stopped claiming earlier sessions: the lock manager is slow");
+                break;
+            }
+            if claimed.len() < MAX_ENTRIES && !claimed.contains(&session) && hold(&lock_name(session), true, claim_deadline).await.unwrap_or(false) {
                 recovery.claim(session);
                 claimed.push(session);
             }
@@ -113,10 +127,9 @@ async fn read(db: &IdbDatabase, recovery: &Recovery, deadline: f64) -> Result<()
             break;
         }
         let mine = session_of(name).is_some_and(|s| claimed.contains(&s));
-        let bundle = name.ends_with(".pcraft");
-        // Only a claimed page's sidecars and bundles are read; other bundles are only measured
-        // (their size still counts against the total cap, their bytes are never copied).
-        if !(bundle || (mine && name.ends_with(".json"))) {
+        // Only a claimed page's sidecars and bundles are read. The total cap is not tracked here:
+        // the write transaction checks it against what is actually stored.
+        if !mine || !(name.ends_with(".pcraft") || name.ends_with(".json")) {
             continue;
         }
         let blob = match get_blob(db, name, scan_end).await {
@@ -129,8 +142,6 @@ async fn read(db: &IdbDatabase, recovery: &Recovery, deadline: f64) -> Result<()
         };
         if blob.size() > MAX_SNAPSHOT_BYTES as f64 + 4096.0 {
             log::warn!("Skipping recovery record {name}: it is larger than the autosave limit");
-        } else if !mine {
-            recovery.note_size(name, blob.size() as u64);
         } else {
             match before(&blob.array_buffer(), (js_sys::Date::now() + TIMEOUT_MS).min(scan_end)).await {
                 Ok(buffer) => recovery.load(name, Uint8Array::new(&buffer).to_vec()),

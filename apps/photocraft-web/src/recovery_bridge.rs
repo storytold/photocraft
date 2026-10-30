@@ -23,10 +23,6 @@ use crate::preset_bridge::Batch;
 /// Largest single snapshot. Bigger documents are not autosaved (with a message) instead of
 /// exhausting the browser's per-origin quota or the tab's memory.
 pub const MAX_SNAPSHOT_BYTES: usize = 256 << 20;
-/// Most recovery data kept at once, across documents.
-pub const MAX_TOTAL_BYTES: u64 = 768 << 20;
-/// Shown as "Autosave failed" when the total cap stops a write.
-pub const TOTAL_LIMIT_MSG: &str = "the browser's recovery storage limit is reached; save or close a document";
 /// Most entries read back at launch.
 pub const MAX_ENTRIES: usize = 64;
 const SIDECAR_MAX: usize = 1 << 20;
@@ -61,15 +57,9 @@ struct State {
     /// overwrite an entry an earlier load left.
     session: String,
     max_snapshot: usize,
-    max_total: u64,
     /// The entry each open document writes to (a recovered document adopts its entry's key).
     keys: HashMap<u64, String>,
     writers: HashMap<u64, PcraftWriter>,
-    /// Stored bytes per entry, for the total cap.
-    sizes: HashMap<String, u64>,
-    /// The size an entry had before each document's write in flight, so a failed write does not
-    /// leave its attempted size counted: document id -> (revision, key, previous size).
-    pending: HashMap<u64, (u64, String, Option<u64>)>,
     /// Sessions of earlier page loads whose entries this page owns: it holds their lock (the
     /// web layer takes it, so only one page wins). Entries of any other session belong to a
     /// page that may still be open and are neither listed nor deleted.
@@ -85,19 +75,16 @@ pub struct Recovery(Rc<RefCell<State>>);
 
 impl Recovery {
     pub fn new(session: String) -> Self {
-        Self::with_limits(session, MAX_SNAPSHOT_BYTES, MAX_TOTAL_BYTES)
+        Self::with_max_snapshot(session, MAX_SNAPSHOT_BYTES)
     }
 
-    pub fn with_limits(session: String, max_snapshot: usize, max_total: u64) -> Self {
+    pub fn with_max_snapshot(session: String, max_snapshot: usize) -> Self {
         let session = session.chars().filter(|c| c.is_ascii_alphanumeric()).take(32).collect();
         Recovery(Rc::new(RefCell::new(State {
             session,
             max_snapshot,
-            max_total,
             keys: HashMap::new(),
             writers: HashMap::new(),
-            sizes: HashMap::new(),
-            pending: HashMap::new(),
             claimed: HashSet::new(),
             loaded: BTreeMap::new(),
             done: Vec::new(),
@@ -126,26 +113,15 @@ impl Recovery {
     pub fn load(&self, name: &str, bytes: Vec<u8>) {
         let _ = self.with(|s| {
             if s.loaded.len() < MAX_ENTRIES * 2 {
-                let key = name.rsplit_once('.').map_or(name, |(k, _)| k).to_string();
-                *s.sizes.entry(key).or_insert(0) += bytes.len() as u64;
                 s.loaded.insert(name.to_string(), bytes);
             }
         });
     }
 
-    /// A record left in storage whose bytes were not read (another page's, or recovery is off):
-    /// it still counts against the total cap.
-    pub fn note_size(&self, name: &str, len: u64) {
-        let _ = self.with(|s| {
-            let key = name.rsplit_once('.').map_or(name, |(k, _)| k).to_string();
-            *s.sizes.entry(key).or_insert(0) += len;
-        });
-    }
-
-    /// Serialise `doc` as the batch that replaces its entry. Errors (too large, over the cap,
-    /// cannot encode) are shown by the UI as "Autosave failed"; nothing is written. The cap
-    /// checked here only knows this tab's view (a cheap early refusal); the authoritative check
-    /// runs inside the write transaction (`indexed_presets::write_capped`).
+    /// Serialise `doc` as the batch that replaces its entry. Errors (too large, cannot encode)
+    /// are shown by the UI as "Autosave failed"; nothing is written. The total cap is not
+    /// checked here: this tab cannot see what other tabs stored or deleted since launch, so
+    /// the only check is the one inside the write transaction (`indexed_presets::write_capped`).
     pub fn snapshot(&self, doc: &Arc<Document>, revision: u64, path: Option<&str>, saved_at: u64) -> Result<Batch, String> {
         self.with(|s| {
             let id = doc.id.0;
@@ -159,14 +135,8 @@ impl Recovery {
                     s.max_snapshot >> 20
                 ));
             }
-            let others: u64 = s.sizes.iter().filter(|(k, _)| **k != key).map(|(_, n)| *n).sum();
-            if others.saturating_add(bytes.len() as u64) > s.max_total {
-                return Err(TOTAL_LIMIT_MSG.into());
-            }
             let info = RecoveryInfo { key: key.clone(), document_name: doc.name.clone(), original_path: path.map(str::to_string), saved_at, revision };
             let info = serde_json::to_vec(&info).map_err(|e| e.to_string())?;
-            let before = s.sizes.insert(key.clone(), bytes.len() as u64);
-            s.pending.insert(id, (revision, key.clone(), before));
             let mut batch = Batch::new();
             batch.insert(bundle_name(&key), Some(bytes.into()));
             batch.insert(info_name(&key), Some(info.into()));
@@ -177,19 +147,7 @@ impl Recovery {
     /// A write for `doc_id`'s `revision` finished (or failed): reported through
     /// `Services::autosave_results`.
     pub fn finish(&self, doc_id: u64, revision: u64, result: Result<(), String>) {
-        let _ = self.with(|s| {
-            if s.pending.get(&doc_id).is_some_and(|(r, ..)| *r == revision)
-                && let Some((_, key, before)) = s.pending.remove(&doc_id)
-                && result.is_err()
-            {
-                // The failed transaction left the old entry in storage.
-                match before {
-                    Some(n) => s.sizes.insert(key, n),
-                    None => s.sizes.remove(&key),
-                };
-            }
-            s.done.push((doc_id, revision, result));
-        });
+        let _ = self.with(|s| s.done.push((doc_id, revision, result)));
     }
 
     pub fn take_completed(&self) -> Vec<(u64, u64, Result<(), String>)> {
@@ -207,13 +165,11 @@ impl Recovery {
     pub fn discard(&self, doc_id: u64) -> Option<Batch> {
         self.with(|s| {
             s.writers.remove(&doc_id);
-            s.pending.remove(&doc_id);
             let key = s.keys.remove(&doc_id)?;
             // Never delete what another page owns.
             if !Self::owns(s, &key) {
                 return None;
             }
-            s.sizes.remove(&key);
             s.loaded.remove(&bundle_name(&key));
             s.loaded.remove(&info_name(&key));
             Some(Batch::from([(bundle_name(&key), None), (info_name(&key), None)]))
@@ -324,53 +280,9 @@ mod tests {
 
     #[test]
     fn oversize_snapshot_is_refused_with_a_message() {
-        let r = Recovery::with_limits("s".into(), 16, MAX_TOTAL_BYTES);
+        let r = Recovery::with_max_snapshot("s".into(), 16);
         let e = r.snapshot(&doc("Big"), 1, None, 1).unwrap_err();
         assert!(e.contains("too large"), "{e}");
-    }
-
-    #[test]
-    fn total_cap_counts_other_documents_but_not_the_one_being_replaced() {
-        let probe = Recovery::new("s".into()).snapshot(&doc("A"), 1, None, 1).unwrap();
-        let size = probe.values().flatten().map(|b| b.len() as u64).max().unwrap_or(1);
-        let r = Recovery::with_limits("s".into(), MAX_SNAPSHOT_BYTES, size + size / 2);
-        let (a, b) = (doc("A"), doc("B"));
-        r.snapshot(&a, 1, None, 1).unwrap();
-        r.snapshot(&a, 2, None, 2).unwrap();
-        assert!(r.snapshot(&b, 1, None, 3).unwrap_err().contains("limit"));
-        r.discard(a.id.0);
-        r.snapshot(&b, 1, None, 4).unwrap();
-    }
-
-    #[test]
-    fn a_failed_write_no_longer_counts_against_the_total_cap() {
-        let probe = Recovery::new("s".into()).snapshot(&doc("A"), 1, None, 1).unwrap();
-        let size = probe.values().flatten().map(|b| b.len() as u64).max().unwrap_or(1);
-        let r = Recovery::with_limits("s".into(), MAX_SNAPSHOT_BYTES, size + size / 2);
-        let (a, b) = (doc("A"), doc("B"));
-        r.snapshot(&a, 1, None, 1).unwrap();
-        assert!(r.snapshot(&b, 1, None, 2).is_err(), "A's attempt fills the cap");
-        // A different revision finishing does not touch A's pending write.
-        r.finish(a.id.0, 0, Err("old".into()));
-        assert!(r.snapshot(&b, 1, None, 2).is_err());
-        r.finish(a.id.0, 1, Err("QuotaExceededError".into()));
-        r.snapshot(&b, 1, None, 3).unwrap();
-    }
-
-    #[test]
-    fn a_failed_replacement_restores_the_previous_size() {
-        let r = Recovery::with_limits("s".into(), MAX_SNAPSHOT_BYTES, MAX_TOTAL_BYTES);
-        let a = doc("A");
-        r.snapshot(&a, 1, None, 1).unwrap();
-        r.finish(a.id.0, 1, Ok(()));
-        let stored = r.with(|s| s.sizes.values().sum::<u64>()).unwrap();
-        r.snapshot(&a, 2, None, 2).unwrap();
-        r.finish(a.id.0, 2, Err("fail".into()));
-        assert_eq!(r.with(|s| s.sizes.values().sum::<u64>()).unwrap(), stored);
-        r.snapshot(&a, 3, None, 3).unwrap();
-        r.discard(a.id.0);
-        r.finish(a.id.0, 3, Err("late".into()));
-        assert_eq!(r.with(|s| s.sizes.len()).unwrap(), 0, "a discarded entry stays uncounted");
     }
 
     #[test]
@@ -397,13 +309,6 @@ mod tests {
         assert_eq!(me.recoverable().len(), 1);
         me.adopt(open.id.0, &key);
         assert!(me.discard(open.id.0).is_some());
-    }
-
-    #[test]
-    fn unread_entries_still_count_against_the_total_cap() {
-        let r = Recovery::with_limits("s".into(), MAX_SNAPSHOT_BYTES, 1000);
-        r.note_size("web-other-1.pcraft", 990);
-        assert!(r.snapshot(&doc("A"), 1, None, 1).unwrap_err().contains("limit"));
     }
 
     #[test]
