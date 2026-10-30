@@ -2,6 +2,7 @@
 //! chroma subsampling, and uncompressed with ReferenceBlackWhite and YCbCrCoefficients (#10316).
 //! Every file here is hand-built by `common::tiffgen`.
 
+use crate::common::sample_icc;
 use crate::common::tiffgen::*;
 use photocraft_codecs::*;
 
@@ -9,6 +10,7 @@ const COMPRESSION: u16 = 259;
 const SUBSAMPLING: u16 = 530;
 const YCBCR_COEFFICIENTS: u16 = 529;
 const REFERENCE_BLACK_WHITE: u16 = 532;
+const ICC_PROFILE: u16 = 34675;
 
 /// A directory whose Compression is `c`.
 fn compressed(mut d: Dir, c: u64) -> Dir {
@@ -132,4 +134,65 @@ fn unsupported_ycbcr_files_fail_cleanly() {
         .tag(REFERENCE_BLACK_WHITE, RATIONAL, &[rational(7, 1); 6]);
     let img = decode(&build(true, false, &[bad], &[0]).bytes).unwrap();
     assert_eq!(&img.to_rgba8()[..3], &[255, 255, 255]);
+}
+
+#[test]
+fn tiled_jpeg_ycbcr_keeps_its_icc_profile() {
+    // Two 16×16 tiles, each its own 4:2:0 JPEG stream, and an embedded profile, like a scanner's
+    // tiled output.
+    let (w, h, t) = (32u32, 16u32, 16u32);
+    let px = card(w, h);
+    let tile = |tx: u32| -> Vec<u8> {
+        (0..t).flat_map(|y| {
+            let at = ((y * w + tx * t) * 3) as usize;
+            px[at..at + (t * 3) as usize].to_vec()
+        })
+        .collect()
+    };
+    let streams = [jpeg(&tile(0), t, t), jpeg(&tile(1), t, t)];
+    let icc = sample_icc(512);
+    let dir = Dir { entries: base(w, h, 8, 3, 6), chunks: streams.to_vec(), tiled: true };
+    let dir = compressed(dir, 7)
+        .tag(322, SHORT, &[u64::from(t)])
+        .tag(323, SHORT, &[u64::from(t)])
+        .tag(SUBSAMPLING, SHORT, &[2, 2])
+        .bytes(ICC_PROFILE, UNDEFINED, &icc);
+    let img = decode(&build(true, false, &[dir], &[0]).bytes).unwrap();
+    assert_eq!((img.width(), img.height(), img.layout()), (w, h, ChannelLayout::Rgb));
+    assert_eq!(img.icc.as_deref(), Some(icc.as_slice()), "the embedded profile is kept");
+    // The oracle: each tile's stream decoded by an independent decoder, placed side by side.
+    let tiles: Vec<Vec<u8>> =
+        streams.iter().map(|s| image::load_from_memory_with_format(s, image::ImageFormat::Jpeg).unwrap().to_rgb8().into_raw()).collect();
+    let row = (t * 3) as usize;
+    let want: Vec<u8> = (0..t as usize).flat_map(|y| [&tiles[0][y * row..(y + 1) * row], &tiles[1][y * row..(y + 1) * row]].concat()).collect();
+    let worst = rgb(&img).iter().zip(&want).map(|(g, o)| g.abs_diff(*o)).max().unwrap();
+    assert!(worst <= 2, "largest difference from the oracle: {worst}");
+}
+
+#[test]
+fn big_endian_sixteen_bit_ycbcr_reads_as_rgb() {
+    // White, black, and red as full-range 16-bit YCbCr (Y 0.299·65535, Cb 32768 − 0.1687·65535, Cr max).
+    let px = [65535u16, 32768, 32768, 0, 32768, 32768, 19595, 21710, 65535];
+    let dir = strips(3, 1, 16, 3, 6, 1, &u16s(&px, false)).tag(SUBSAMPLING, SHORT, &[1, 1]);
+    let file = build(false, false, &[dir], &[0]).bytes;
+    assert_eq!(&file[..2], b"MM");
+    let img = decode(&file).unwrap();
+    assert_eq!((img.layout(), img.sample_type()), (ChannelLayout::Rgb, SampleType::U16));
+    let n = img.to_normalized();
+    let want = [1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    assert!(n.iter().zip(want).all(|(g, w)| (g - w).abs() < 2.0 / 255.0), "{n:?}");
+}
+
+#[test]
+fn planar_ycbcr_reads_as_rgb_in_both_byte_orders() {
+    // The pixels of the default-conversion test, one plane per component.
+    let px = [0u8, 128, 128, 255, 128, 128, 128, 128, 128, 76, 85, 255];
+    for little in [true, false] {
+        let dir = Dir { entries: base(4, 1, 8, 3, 6), chunks: planar_strips(&px, 4, 1, 3, 1, 1), tiled: false }
+            .tag(278, LONG, &[1])
+            .tag(284, SHORT, &[2])
+            .tag(SUBSAMPLING, SHORT, &[1, 1]);
+        let img = decode(&build(little, false, &[dir], &[0]).bytes).unwrap();
+        assert_eq!(rgb(&img), [0, 0, 0, 255, 255, 255, 128, 128, 128, 254, 0, 0], "little endian: {little}");
+    }
 }
