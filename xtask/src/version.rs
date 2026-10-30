@@ -45,7 +45,10 @@ pub fn validate(v: &str) -> Result<(), String> {
         None => (v, None),
     };
     let nums: Vec<&str> = core.split('.').collect();
-    if nums.len() != 3 || nums.iter().any(|n| n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) || (n.len() > 1 && n.starts_with('0'))) {
+    // Cargo stores each core component as u64; reject overflow before rewriting its manifest.
+    if nums.len() != 3
+        || nums.iter().any(|n| n.is_empty() || !n.bytes().all(|b| b.is_ascii_digit()) || (n.len() > 1 && n.starts_with('0')) || n.parse::<u64>().is_err())
+    {
         return bad();
     }
     if let Some(p) = pre
@@ -142,6 +145,16 @@ mod tests {
             assert!(validate(bad).is_err(), "{bad}");
         }
         assert!(replace(MANIFEST, "nope").is_err());
+    }
+
+    #[test]
+    fn rejects_core_components_that_overflow_cargo_versions() {
+        for version in ["18446744073709551616.0.0", "0.18446744073709551616.0", "0.0.18446744073709551616", "18446744073709551616.0.0-rc.1"] {
+            assert!(replace(MANIFEST, version).is_err(), "accepted overflowing version {version}");
+        }
+        for version in ["18446744073709551615.0.0", "0.18446744073709551615.0", "0.0.18446744073709551615", "1.0.0-18446744073709551616"] {
+            assert!(replace(MANIFEST, version).is_ok(), "rejected representable version {version}");
+        }
     }
 
     #[test]
