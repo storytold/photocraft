@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use photocraft_engine::jobs::{JobId, JobOutcome, Started};
 use photocraft_engine::{Session, command_specs, file_cmds};
 use photocraft_format::PcraftWriter;
 use photocraft_io::ExportOptions;
@@ -15,7 +16,7 @@ use crate::{AuthorizedWorkspace, AutomationError, files};
 fn untrusted(filesystem: Filesystem) -> Headless {
     let mut session = Session::new();
     session.authorize = Some(authorize_engine_step);
-    Headless { session, writers: HashMap::new(), filesystem }
+    Headless { session, writers: HashMap::new(), filesystem, waited: HashMap::new() }
 }
 
 enum Filesystem {
@@ -30,6 +31,24 @@ pub struct Headless {
     /// Incremental `.pcraft` writers per document id.
     writers: HashMap<u64, PcraftWriter>,
     filesystem: Filesystem,
+    /// Jobs a caller waits on ([`Headless::command_begin`]), with their outcome once they end.
+    /// Kept here because `jobs.list` holds only the last few jobs that ended.
+    waited: HashMap<JobId, Option<JobOutcome>>,
+}
+
+/// A waited job's state, from [`Headless::job_poll`].
+#[derive(Debug)]
+pub enum JobPoll {
+    /// Still running: progress 0..1 and the job's message.
+    Running(f32, String),
+    /// Ended: the command's result, or why it failed or was cancelled.
+    Ended(Result<Value, AutomationError>),
+}
+
+/// What admission decided: run the command, or Render Video already ran.
+enum Admitted {
+    Run(Value),
+    Done(Value),
 }
 
 impl Default for Headless {
@@ -48,7 +67,7 @@ impl Headless {
     /// not a remote automation client, supplies these host paths. Nested
     /// `actions.play` steps are not re-checked: this caller is already trusted.
     pub fn trusted_local() -> Self {
-        Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::TrustedLocal }
+        Self { session: Session::new(), writers: HashMap::new(), filesystem: Filesystem::TrustedLocal, waited: HashMap::new() }
     }
 
     /// Create an automation session with capability-scoped file access.
@@ -61,7 +80,11 @@ impl Headless {
     /// export, inspect, preview, `session.list`, commands) sees their result. Cheap when no job
     /// runs. The JSON-lines server and the MCP server call it before each request.
     pub fn sync_jobs(&mut self) {
-        self.session.poll_jobs();
+        for event in self.session.poll_jobs() {
+            if let Some(slot) = self.waited.get_mut(&event.id) {
+                *slot = Some(event.outcome);
+            }
+        }
     }
 
     fn doc_index(&self, index: Option<usize>) -> Result<usize, AutomationError> {
@@ -373,22 +396,84 @@ impl Headless {
     /// Photomerge, …) runs in the background and this returns `{"job": id}` at once (poll with
     /// `jobs.list`, stop with `jobs.cancel`). Other commands finish before returning either way.
     pub fn command_start(&mut self, id: &str, params: Value, wait: bool) -> Result<Value, AutomationError> {
+        let params = match self.admit(id, params)? {
+            Admitted::Run(params) => params,
+            Admitted::Done(value) => return Ok(value),
+        };
+        if wait {
+            return Ok(self.session.execute(id, params)?);
+        }
+        Ok(match self.session.start(id, params)? {
+            Started::Done(v) => v,
+            Started::Job(job) => json!({"job": job.0, "pending": true}),
+        })
+    }
+
+    /// Start a command for a caller that waits without holding the session: a job-capable
+    /// command runs in the background and returns its job, to follow with [`Self::job_poll`]
+    /// and stop with [`Self::job_abandon`]. Other commands finish here.
+    pub fn command_begin(&mut self, id: &str, params: Value) -> Result<Started, AutomationError> {
+        let params = match self.admit(id, params)? {
+            Admitted::Run(params) => params,
+            Admitted::Done(value) => return Ok(Started::Done(value)),
+        };
+        let started = self.session.start(id, params)?;
+        if let Started::Job(job) = started {
+            self.waited.insert(job, None);
+        }
+        Ok(started)
+    }
+
+    /// Where a job from [`Self::command_begin`] is. Once it has ended this returns its result
+    /// and forgets the job. Never blocks.
+    pub fn job_poll(&mut self, job: JobId) -> JobPoll {
+        // A finished job stays in the running list until it is applied.
+        self.sync_jobs();
+        if let Some(info) = self.session.job(job) {
+            return JobPoll::Running(info.progress, info.message);
+        }
+        let outcome = self.waited.remove(&job).flatten();
+        JobPoll::Ended(match outcome {
+            Some(JobOutcome::Done(value)) => Ok(value),
+            Some(JobOutcome::Failed(error)) => Err(AutomationError::Other(error)),
+            Some(JobOutcome::Cancelled) => Err(photocraft_engine::EngineError::Cancelled.into()),
+            // Ended without this session seeing it end (not expected): `wait_job` reads the
+            // recent-jobs list and does not block for a job that is no longer running.
+            None => self.session.wait_job(job).map_err(Into::into),
+        })
+    }
+
+    /// Stop waiting on `job`: cancel it if it is still running (the document stays unchanged)
+    /// and forget it. Returns how the job really ended: `Cancelled` only when this call cancelled
+    /// it. A job that ended first (another request applied it) keeps its result, and one that
+    /// cannot be cancelled (printing) is reported as still running.
+    pub fn job_abandon(&mut self, job: JobId) -> Result<Value, AutomationError> {
+        if self.session.cancel_job(job) {
+            self.waited.remove(&job);
+            return Err(photocraft_engine::EngineError::Cancelled.into());
+        }
+        match self.job_poll(job) {
+            JobPoll::Ended(result) => result,
+            JobPoll::Running(..) => {
+                self.waited.remove(&job);
+                Err(AutomationError::Other(format!("job {} cannot be cancelled and is still running; check jobs.list for its outcome", job.0)))
+            }
+        }
+    }
+
+    /// Default the params, authorize an untrusted command and apply finished jobs. Render Video
+    /// runs here for an untrusted session, with its own write capability.
+    fn admit(&mut self, id: &str, params: Value) -> Result<Admitted, AutomationError> {
         let params = if params.is_null() { json!({}) } else { params };
         if !matches!(&self.filesystem, Filesystem::TrustedLocal) {
             if id == "file.export.renderVideo" {
-                return self.render_video(params, |_, _| true);
+                return self.render_video(params, |_, _| true).map(Admitted::Done);
             }
             authorize_engine_command(id, &params)?;
         }
         // Background jobs that finished since the last request (or batch step) are applied first.
         self.sync_jobs();
-        if wait {
-            return Ok(self.session.execute(id, params)?);
-        }
-        Ok(match self.session.start(id, params)? {
-            photocraft_engine::jobs::Started::Done(v) => v,
-            photocraft_engine::jobs::Started::Job(job) => json!({"job": job.0, "pending": true}),
-        })
+        Ok(Admitted::Run(params))
     }
 }
 
