@@ -102,6 +102,12 @@ fn plural_pt(n: u64) -> usize {
     usize::from(n > 1)
 }
 
+/// Persian/Farsi: 0 and 1 take the singular, everything else the plural (CLDR's "one" category
+/// covers i = 0, 1).
+fn plural_fa(n: u64) -> usize {
+    usize::from(n > 1)
+}
+
 /// Polish: 1 → one; 2–4, except 12–14 → few; everything else → many.
 fn plural_polish(n: u64) -> usize {
     let last = n % 10;
@@ -248,7 +254,7 @@ pub static LANGUAGES: [LangInfo; 28] = [
     // resolve here (see `candidates`).
     LangInfo { code: "nb", name: "Norsk bokmål", source: catalog!("nb"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
     // Farsi/Persian; `fa-ir` and `fa_IR` resolve here.
-    LangInfo { code: "fa", name: "فارسی", source: catalog!("fa"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    LangInfo { code: "fa", name: "فارسی", source: catalog!("fa"), plural: plural_fa, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
