@@ -268,6 +268,8 @@ fn merged_surface(doc: &Document) -> Surface {
     photocraft_compose::flatten_to_surface(doc, PixelFormat::new(fmt.mode, fmt.sample, true), None)
 }
 
+/// Edit › Copy of pixels: the merged canvas (`merged`) or the active layer / the selected
+/// layers, honouring the selection and linked layers' sources.
 fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let canvas = d.doc.bounds();

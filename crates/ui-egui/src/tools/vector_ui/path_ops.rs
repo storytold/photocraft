@@ -266,17 +266,23 @@ pub(crate) fn selected_subpaths(app: &PhotocraftApp, doc: &Document, target: Pat
     sel.subpaths.iter().copied().filter(|&i| i < path.subpaths.len()).collect()
 }
 
-/// The subpath of `path` under document point `at`: its outline within `tol`, else its filled
-/// interior. Overlapping components resolve to the topmost (the last subpath folded in).
+/// The subpath of `path` under document point `at`: its outline within `tol` or its filled
+/// interior. Resolved in one topmost-first pass (the last subpath folded in, as compositing
+/// draws it): a lower component's edge or fill hidden under a higher one's fill never wins,
+/// as Photoshop's black arrow picks the visible component.
 fn pick_subpath_at(path: &Path, at: [f64; 2], tol: f64) -> Option<usize> {
-    let outline = path.subpaths.iter().enumerate().find_map(|(i, sp)| {
-        if sp.knots.len() < 2 {
-            return None;
-        }
-        let single = Path { subpaths: vec![sp.clone()], fill_rule: path.fill_rule, inverted: false };
-        photocraft_vector::edit::hit(&single, photocraft_geom::Point::new(at[0], at[1]), tol, &[]).is_some().then_some(i)
-    });
-    outline.or_else(|| path.subpaths.iter().enumerate().rev().find(|(_, sp)| point_in_subpath(sp, at)).map(|(i, _)| i))
+    path.subpaths
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, sp)| {
+            let outline = sp.knots.len() >= 2 && {
+                let single = Path { subpaths: vec![(*sp).clone()], fill_rule: path.fill_rule, inverted: false };
+                photocraft_vector::edit::hit(&single, photocraft_geom::Point::new(at[0], at[1]), tol, &[]).is_some()
+            };
+            outline || point_in_subpath(sp, at)
+        })
+        .map(|(i, _)| i)
 }
 
 /// The topmost visible shape layer under `at` (document coordinates):
@@ -359,6 +365,11 @@ fn move_selected(app: &mut PhotocraftApp, target: PathTarget, path: &Path, subpa
     }
 }
 
+/// The black arrow's press-release: selects the shape layer or path component under `start`
+/// (activating the layer, as in Photoshop), records the component selection, and moves the
+/// selected components by the press-to-release offset. A press on empty canvas clears the
+/// component selection; a drag starting there is a no-op (Photoshop marquee-selects, a
+/// follow-up).
 pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
     let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
     let (dx, dy) = (end[0] - start[0], end[1] - start[1]);

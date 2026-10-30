@@ -81,9 +81,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         "edit.paste" | "select.all" if app.ui.text_edit.is_some() => true,
         // Path Selection's component clipboard: Copy/Cut take the selected subpaths, Paste lays
         // the path clipboard into the panel-selected path (else a new "Pasted Path") —
-        // ahead of the pixel clipboard rules below.
+        // ahead of the pixel clipboard rules below. A path clip needs an open document.
         "edit.cut" | "edit.copy" if crate::vector_ui::live_selection(app).is_some() => true,
-        "edit.paste" if app.session.path_clipboard.is_some() => true,
+        "edit.paste" if app.session.path_clipboard.is_some() && app.session.active().is_some() => true,
         // An image copied in another app can only be seen by reading the OS clipboard, which happens
         // on an explicit paste: with a clipboard service these stay enabled. Paste and New from
         // Clipboard need no document (with none open, Paste makes one); Paste in Place does.

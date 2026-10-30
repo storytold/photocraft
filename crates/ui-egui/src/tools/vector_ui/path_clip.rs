@@ -98,7 +98,9 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Op
             }
             Some(r)
         }
-        "edit.paste" if app.session.path_clipboard.is_some() && params.get("target").is_none() => {
+        // A path clip pastes into the active document only; with none open the OS clipboard
+        // (a new document from its image) is the only route, as usual.
+        "edit.paste" if app.session.path_clipboard.is_some() && app.session.active().is_some() && params.get("target").is_none() => {
             let mut p = view_center(app).map_or_else(|| json!({}), |c| json!({"center": c}));
             // Photoshop pastes into the path selected in the Paths panel; only with nothing
             // selected does the paste become a new saved "Pasted Path" (selected afterwards).

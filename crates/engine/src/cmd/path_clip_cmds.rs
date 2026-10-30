@@ -75,7 +75,8 @@ fn path_copy(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Edit › Cut: like [`path_copy`], and the subpaths come out of the target path in one
-/// undoable step (a shape layer re-renders, a live shape stops being live).
+/// undoable step (a shape layer re-renders, a live shape stops being live). The clipboard
+/// only changes when the cut succeeded: a refused edit leaves the previous clip alone.
 fn path_cut(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "path.cut";
     let path = target_path(s, CMD, p)?;
@@ -84,8 +85,6 @@ fn path_cut(s: &mut Session, p: &Value) -> Result<Value> {
     if subpaths.subpaths.is_empty() {
         return Err(bad(CMD, "no subpaths to cut"));
     }
-    s.path_clipboard = Some(subpaths);
-    s.clipboard = None;
     crate::path_edit_cmds::edit_path(s, CMD, p, "Cut", |path| {
         let mut rm = indices.clone();
         rm.sort_unstable();
@@ -97,6 +96,9 @@ fn path_cut(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(())
     })?;
+    // One clipboard: a path clip replaces the pixel clip (as a pixel clip replaces this).
+    s.path_clipboard = Some(subpaths);
+    s.clipboard = None;
     Ok(json!({ "cut": indices.len() }))
 }
 
@@ -152,6 +154,8 @@ fn path_paste(s: &mut Session, p: &Value) -> Result<Value> {
 
 const TARGET: &str = r#""name":"work"|"layer"="work","layer":id? (with "layer": a shape layer's path or a vector mask),"subpaths":[i,…]"#;
 
+/// The shared shape of the three clipboard commands' specs: id, label, params doc, whether the
+/// command journals a history step, and its engine function.
 fn spec(id: &'static str, label: &'static str, params: &'static str, journal: bool, run: fn(&mut Session, &Value) -> Result<Value>) -> CommandSpec {
     CommandSpec { id, label, menu: &[], shortcut: None, params, enabled: has_doc, run, journal }
 }
@@ -189,6 +193,7 @@ mod tests {
 
     use crate::Session;
 
+    /// A session with a fresh 200×100 white document.
     fn session() -> Session {
         let mut s = Session::new();
         s.execute("file.new", json!({"width": 200, "height": 100, "background": "white"})).unwrap();
@@ -207,6 +212,7 @@ mod tests {
         id
     }
 
+    /// The addressed shape layer's path.
     fn shape_path(s: &Session, id: u64) -> photocraft_doc::Path {
         let l = s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap();
         let LayerContent::Shape(sh) = &l.content else { panic!("not a shape") };
@@ -372,6 +378,21 @@ mod tests {
         s.execute("path.copy", json!({"name": "layer", "layer": id, "subpaths": [0]})).unwrap();
         assert!(s.execute("path.paste", json!({"center": [1e300, 0.0]})).is_err(), "centre out of range");
         assert!(s.execute("path.paste", json!({"center": "here"})).is_err());
+    }
+
+    #[test]
+    fn a_refused_cut_keeps_the_previous_clipboard() {
+        let mut s = session();
+        let id = two_rects(&mut s);
+        s.execute("path.copy", json!({"name": "layer", "layer": id, "subpaths": [0]})).unwrap();
+        let before = s.path_clipboard.clone();
+        assert!(before.is_some() && s.clipboard.is_none());
+        // No such subpath: the cut fails (as does a locked target) and must leave both
+        // clipboards untouched — the clipboard only changes when the cut succeeded.
+        assert!(s.execute("path.cut", json!({"name": "layer", "layer": id, "subpaths": [9]})).is_err());
+        assert_eq!(s.path_clipboard, before, "the refused cut kept the path clipboard");
+        assert!(s.clipboard.is_none());
+        assert_eq!(shape_path(&s, id).subpaths.len(), 2, "the refused cut kept the path");
     }
 
     #[test]

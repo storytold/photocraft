@@ -458,3 +458,25 @@ fn targeting_a_mask_swaps_to_its_own_colour_pair() {
     app.run("layer.layerMask.delete", json!({})).unwrap();
     assert_eq!(pair(&app), (GREEN, BLUE), "deleting the targeted mask goes back to the pixels");
 }
+
+/// One clipboard: importing OS pixels (an app image pasted in) replaces a path clip, like a
+/// path clip replaces the pixel clipboard — Paste must not resurrect the stale path.
+#[test]
+fn os_clipboard_import_replaces_the_path_clipboard() {
+    let os: OsClip = Arc::new(Mutex::new(Some((3, 2, [255u8, 0, 0, 255].repeat(6)))));
+    let (a, b) = (os.clone(), os.clone());
+    let services = Services { clipboard_get_image: Some(Box::new(move || Ok(b.lock().unwrap().clone()))), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
+    // A path component on the path clipboard.
+    app.run("path.set", serde_json::json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[10, 10], [30, 10], [30, 30], [10, 30]]}]}}))
+        .unwrap();
+    app.run("path.copy", serde_json::json!({"name": "work", "subpaths": [0]})).unwrap();
+    assert!(app.session.path_clipboard.is_some());
+    // Another app put an image on the OS clipboard: the import takes the pixel clipboard's
+    // place and the path clip is dropped with it.
+    assert!(app.import_os_clipboard().unwrap());
+    assert!(app.session.clipboard.is_some(), "the OS image is the pixel clipboard");
+    assert!(app.session.path_clipboard.is_none(), "one clipboard: the import replaced the path clip");
+    drop(a);
+}

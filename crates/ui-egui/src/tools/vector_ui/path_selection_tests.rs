@@ -784,3 +784,38 @@ fn path_selection_combine_shapes_applies_to_the_selected_component() {
     assert_eq!(sh.path.subpaths[0].op, photocraft_doc::vector::PathOp::Combine, "the first component stays the base");
     assert_eq!(sh.path.subpaths[1].op, photocraft_doc::vector::PathOp::Exclude, "without a selection every component but the first takes the operation");
 }
+
+/// Overlapping components resolve topmost-first, as compositing draws them: the black arrow
+/// picks the visible component — in the shared fill, on the lower one's edge where the upper
+/// one's fill covers it, and on each component's own area; a press off the path clears.
+#[test]
+fn path_selection_picks_the_topmost_overlapping_component() {
+    let mut h = harness();
+    let layer = h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [20, 20, 40, 40], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    // Two overlapping rectangles: subpath 0 at 20..60, subpath 1 (drawn on top) at 40..80.
+    let k = |x: f64, y: f64| json!({"anchor": [x, y]});
+    h.state_mut()
+        .run(
+            "shape.edit",
+            json!({"layer": layer, "path": {"subpaths": [
+                {"closed": true, "knots": [k(20.0, 20.0), k(60.0, 20.0), k(60.0, 60.0), k(20.0, 60.0)]},
+                {"closed": true, "knots": [k(40.0, 20.0), k(80.0, 20.0), k(80.0, 60.0), k(40.0, 60.0)]},
+            ]}}),
+        )
+        .unwrap();
+    h.state_mut().ui.tool = Tool::PathSelection;
+    h.run_steps(2);
+
+    for (at, want, why) in [
+        ([50.0, 40.0], 1, "inside both: the topmost wins"),
+        ([70.0, 40.0], 1, "inside the top component only"),
+        ([30.0, 40.0], 0, "inside the bottom component only"),
+        ([60.0, 40.0], 1, "on the bottom's edge but inside the top's fill: the visible one wins"),
+    ] {
+        crate::vector_ui::path_selection_finish(h.state_mut(), at, at);
+        assert_eq!(h.state().ui.path_selection.subpaths, vec![want], "{why}");
+    }
+    // A press off the path clears the component selection.
+    crate::vector_ui::path_selection_finish(h.state_mut(), [10.0, 10.0], [10.0, 10.0]);
+    assert!(h.state().ui.path_selection.subpaths.is_empty());
+}
