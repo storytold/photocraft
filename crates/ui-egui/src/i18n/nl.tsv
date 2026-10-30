@@ -152,6 +152,13 @@
 	Fill…	Vullen…
 	Stroke…	Omlijnen…
 	Content-Aware Fill…	Inhoudsbewust vullen…
+	Generative Fill…	Generatief vullen…
+	Generative Remove	Generatief verwijderen
+	(not configured)	(niet ingesteld)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	Stel eerst een ComfyUI- of AUTOMATIC1111-server in via Voorkeuren › Integraties.
+	Refresh	Vernieuwen
+	Automatic (the server's choice)	Automatisch (keuze van de server)
+	Generative Fill needs a selection on a pixel layer	Generatief vullen vereist een selectie op een pixellaag
 	Delete and Fill Selection	Selectie verwijderen en vullen
 	Content-Aware Scale	Inhoudsbewust schalen
 	Puppet Warp	Marionetvervorming
@@ -1893,6 +1900,11 @@
 	Column width	Kolombreedte
 	Concise	Beknopt
 	Control port	Besturingspoort
+	Generative fill backend	Generatief vullen: servertype
+	Generative fill host	Generatief vullen: host
+	Generative fill model	Generatief vullen: model
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	Omzetten naar sRGB
 	Cursors	Aanwijzers
 	Custom dark	Aangepast donker

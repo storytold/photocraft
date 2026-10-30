@@ -15,6 +15,7 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     presets_store(app);
     sync_tooltips(app, ctx);
     sync_animations(app, ctx);
+    super::generative_fill::poll_model_lookups(app, ctx);
     app.sync_recent();
     // Monotonic, not `ctx.input(|i| i.time)`: logic also runs on hidden ticks, where egui's input
     // time is that of the last UI pass.

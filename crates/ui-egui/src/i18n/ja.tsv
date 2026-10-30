@@ -161,6 +161,13 @@
 	Fill…	塗りつぶし…
 	Stroke…	境界線を描く…
 	Content-Aware Fill…	コンテンツに応じた塗りつぶし…
+	Generative Fill…	生成塗りつぶし…
+	Generative Remove	生成削除
+	(not configured)	(未設定)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	まず「環境設定」›「連携」で ComfyUI または AUTOMATIC1111 サーバーを設定してください。
+	Refresh	更新
+	Automatic (the server's choice)	自動（サーバーの選択）
+	Generative Fill needs a selection on a pixel layer	生成塗りつぶしには、ピクセルレイヤー上の選択範囲が必要です
 	Delete and Fill Selection	選択範囲を削除して塗りつぶし
 	Content-Aware Scale	コンテンツに応じた拡大・縮小
 	Puppet Warp	パペットワープ
@@ -1921,6 +1928,11 @@
 	Column width	列の幅
 	Concise	簡潔
 	Control port	制御ポート
+	Generative fill backend	生成塗りつぶし: サーバーの種類
+	Generative fill host	生成塗りつぶし: ホスト
+	Generative fill model	生成塗りつぶし: モデル
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	sRGB に変換
 	Cursors	カーソル
 	Custom dark	カスタム (ダーク)

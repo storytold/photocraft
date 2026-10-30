@@ -153,6 +153,13 @@
 	Fill…	채우기…
 	Stroke…	획…
 	Content-Aware Fill…	내용 인식 채우기…
+	Generative Fill…	생성형 채우기…
+	Generative Remove	생성형 제거
+	(not configured)	(설정되지 않음)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	먼저 환경설정 › 통합에서 ComfyUI 또는 AUTOMATIC1111 서버를 설정하세요.
+	Refresh	새로 고침
+	Automatic (the server's choice)	자동(서버가 선택)
+	Generative Fill needs a selection on a pixel layer	생성형 채우기에는 픽셀 레이어의 선택 영역이 필요합니다
 	Delete and Fill Selection	선택 영역 삭제 및 채우기
 	Content-Aware Scale	내용 인식 비율
 	Puppet Warp	퍼펫 뒤틀기
@@ -1909,6 +1916,11 @@
 	Column width	열 너비
 	Concise	간결하게
 	Control port	제어 포트
+	Generative fill backend	생성형 채우기: 서버 종류
+	Generative fill host	생성형 채우기: 호스트
+	Generative fill model	생성형 채우기: 모델
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	sRGB로 변환
 	Cursors	커서
 	Custom dark	사용자 정의 어두운 색

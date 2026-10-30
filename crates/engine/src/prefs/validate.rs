@@ -1,9 +1,9 @@
 use super::shortcuts::normalize_shortcut;
 use super::{
     AppearanceMode, Ask, CanvasBorder, CanvasColor, CheckerColors, CheckerSize, ColorPicker, DarkTheme, ExportLocation, ExportMetadata, FontPreview,
-    GpuBackend, Interpolation, LightTheme, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor, PointSize, PressureCurve,
-    QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TextEngine, Theme, TypeUnit, UiFontSize, UiScale,
-    Unit, Value,
+    GenerativeBackend, GpuBackend, Interpolation, LightTheme, LineStyle, LinuxDisplayServer, LogDestination, LogDetail, OtherCursor, PaintingCursor, PointSize,
+    PressureCurve, QuickExportFormat, RawColorSpace, RawDemosaic, RawDepth, RawSharpen, RenderingMode, RightClickPaint, TextEngine, Theme, TypeUnit,
+    UiFontSize, UiScale, Unit, Value,
 };
 
 /// Preferences dialog sections in Photoshop's order: (id, title).
@@ -88,6 +88,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "export.metadata" => ExportMetadata::NAMES,
         "cursors.painting" => PaintingCursor::NAMES,
         "cursors.other" => OtherCursor::NAMES,
+        "integrations.generativeFillBackend" => GenerativeBackend::NAMES,
         "tools.rightClickWithPaintingTools" => RightClickPaint::NAMES,
         "transparencyAndGamut.gridSize" => CheckerSize::NAMES,
         "transparencyAndGamut.gridColors" => CheckerColors::NAMES,

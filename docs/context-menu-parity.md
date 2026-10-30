@@ -66,11 +66,11 @@ Right-click with a Marquee, Lasso, Polygonal Lasso, Magic Wand or Object Selecti
 | Store | Save Selection…; Make Work Path… | `select.saveSelection`; `select.toWorkPath` after a Tolerance dialog |
 | Layer | Layer via Copy; Layer via Cut; New Layer… | `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.new.layer` |
 | Transform | Free Transform; Transform Selection; Distort; Perspective | `edit.freeTransform`, `select.transformSelection`, `edit.transform.distort`, `edit.transform.perspective` |
-| Fill | Fill…; Stroke…; Content-Aware Fill… | `edit.fill`, `edit.stroke`, `edit.contentAwareFill` |
+| Fill | Generative Fill…; Generative Remove; Delete and Fill Selection; Fill…; Stroke…; Content-Aware Fill… | `edit.generativeFill`, `edit.generativeRemove`, `edit.deleteAndFillSelection`, `edit.fill`, `edit.stroke`, `edit.contentAwareFill` |
 | Filter | Last Filter | `filter.lastFilter` |
 | Fade | Fade… | `edit.fade` |
 
-Photoshop's Generative Fill and Delete and Fill Selection rows are left out: PhotoCraft has no such commands. With nothing selected the menu offers Select All, Reselect, Color Range… and Load Selection… (`NO_SELECTION_MENU`). Adobe-adjacent sources document Color Range there; the other rows are **inferred** until a dated capture confirms them.
+Generative Fill… runs `edit.generativeFill` (a dialog) and Generative Remove runs `edit.generativeRemove` (one click, no dialog) against a self-hosted inpainting server on this machine or a private network (greyed with "(not configured)" until a host is set in Preferences › Integrations) (loopback, RFC 1918, link-local, unique-local IPv6 or Tailscale addresses only; see `docs/generative-fill.md`). With nothing selected the menu offers Select All, Reselect, Color Range… and Load Selection… (`NO_SELECTION_MENU`). Adobe-adjacent sources document Color Range there; the other rows are **inferred** until a dated capture confirms them.
 
 ## Panel and workspace matrix
 

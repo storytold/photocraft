@@ -21,6 +21,8 @@ photocraft-ops = { workspace = true }
 photocraft-compose = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# Generative Fill (generative_fill_cmds.rs): images travel to the local model server as base64.
+base64 = "0.22"
 thiserror = { workspace = true }
 rayon = { workspace = true }
 photocraft-paint = { workspace = true }

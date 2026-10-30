@@ -66,6 +66,13 @@
 	Conditional Mode Change…	Đổi chế độ có điều kiện…
 	Contact Sheet II…	Contact Sheet II…
 	Content-Aware Fill…	Tô theo nội dung…
+	Generative Fill…	Tô tạo sinh…
+	Generative Remove	Xoá tạo sinh
+	(not configured)	(chưa thiết lập)
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	Hãy thiết lập máy chủ ComfyUI hoặc AUTOMATIC1111 trong Tùy chọn › Tích hợp trước.
+	Refresh	Làm mới
+	Automatic (the server's choice)	Tự động (do máy chủ chọn)
+	Generative Fill needs a selection on a pixel layer	Tô tạo sinh cần một vùng chọn trên lớp điểm ảnh
 	Content-Aware Scale	Co giãn theo nội dung
 	Convert to Profile…	Chuyển sang hồ sơ màu…
 	Copy	Sao chép
@@ -2707,6 +2714,11 @@ shape	Appearance	Diện mạo
 	Color space	Không gian màu
 	Column width	Độ rộng cột
 	Control port	Cổng điều khiển
+	Generative fill backend	Tô tạo sinh: loại máy chủ
+	Generative fill host	Tô tạo sinh: địa chỉ máy chủ
+	Generative fill model	Tô tạo sinh: mô hình
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Disks	Các ổ đĩa
 	Display p3	Display p3
 	Double click layer mask launches select and mask	Nhấp đúp vào mặt nạ lớp để mở Chọn và Mặt nạ

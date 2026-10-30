@@ -162,6 +162,13 @@
 	Fill…	填充…
 	Stroke…	描边…
 	Content-Aware Fill…	内容识别填充…
+	Generative Fill…	生成式填充…
+	Generative Remove	生成式移除
+	(not configured)	（未配置）
+	Set up a ComfyUI or AUTOMATIC1111 server in Preferences › Integrations first.	请先在“首选项 › 集成”中设置 ComfyUI 或 AUTOMATIC1111 服务器。
+	Refresh	刷新
+	Automatic (the server's choice)	自动（由服务器选择）
+	Generative Fill needs a selection on a pixel layer	生成式填充需要在像素图层上建立选区
 	Delete and Fill Selection	删除并填充选区
 	Content-Aware Scale	内容识别缩放
 	Puppet Warp	操控变形
@@ -1963,6 +1970,11 @@
 	Column width	列宽
 	Concise	简洁
 	Control port	控制端口
+	Generative fill backend	生成式填充：服务器类型
+	Generative fill host	生成式填充：主机
+	Generative fill model	生成式填充：模型
+	ComfyUI	ComfyUI
+	AUTOMATIC1111 / Forge / SD.Next	AUTOMATIC1111 / Forge / SD.Next
 	Convert to srgb	转换为 sRGB
 	Cursors	光标
 	Custom dark	自定深色
