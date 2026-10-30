@@ -15,7 +15,7 @@
 //! be stamped on the shortcut, or the taskbar would stop matching the two.
 
 /// Window, taskbar and (when running unbundled) Dock icon. macOS gets the padded 1024 px render
-/// on Apple's icon grid; elsewhere the tighter 256 px hicolor render reads better at small sizes.
+/// on Apple's icon grid; elsewhere the full-tile 256 px hicolor render reads better at small sizes.
 pub fn window_icon() -> egui::IconData {
     match eframe::icon_data::from_png_bytes(PNG) {
         Ok(icon) => icon,
