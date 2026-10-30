@@ -47,6 +47,7 @@ web-time = { workspace = true }
 craft-ui = { workspace = true, features = ["native-windows"] }
 craft-update = { workspace = true }
 rayon = { workspace = true }
+tempfile = "3"
 # Safe native UI-language APIs (Windows/macOS); no subprocess or web dependency.
 sys-locale = "=0.3.2"
 

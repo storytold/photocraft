@@ -4570,6 +4570,42 @@ shape	Appearance	Izgled
 	Tight Curl	Usko uvijeno
 	Loose Curl	Labavo uvijeno
 	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
+	A DeviantArt submit is already running.	Slanje na DeviantArt je već u toku.
+	Also submit when I Export	Pošalji i pri izvozu
+	Also submit when I Save	Pošalji i pri čuvanju
+	Also submit when I Save As	Pošalji i pri „Sačuvaj kao“
+	Also submit when I Save a Copy	Pošalji i pri čuvanju kopije
+	Connect DeviantArt	Poveži DeviantArt
+	Connect DeviantArt first.	Prvo povežite DeviantArt.
+	Connect again	Poveži ponovo
+	Connected	Povezano
+	Copied the redirect address.	Adresa preusmeravanja je kopirana.
+	Could not prepare a file to send: {error}	Datoteka za slanje nije pripremljena: {error}
+	DeviantArt app id	ID aplikacije DeviantArt
+	DeviantArt is connected.	DeviantArt je povezan.
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt je podešen. Sačuvajte ili izvezite datoteku, pa je pošaljite.
+	DeviantArt submitting needs the desktop app.	Slanje na DeviantArt postoji samo u desktop aplikaciji.
+	Disconnect DeviantArt	Prekini vezu sa DeviantArt
+	Letters, numbers and underscores, separated by commas.	Slova, brojevi i donje crte, odvojeni zarezima.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK šalje na Sta.sh. Ništa nije javno dok ne objavite.
+	Open the DeviantArt developer page	Otvori stranicu za programere DeviantArt
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG je slika koju DeviantArt prikazuje. PSD u Sta.sh ostaje samo datoteka.
+	Submit as	Pošalji kao
+	Submitting needs an internet connection.	Za slanje je potrebna veza sa internetom.
+	Submitting {name} to DeviantArt…	Šaljem {name} na DeviantArt…
+	Tags	Oznake
+	That file is larger than DeviantArt accepts (30 MB).	Datoteka je veća nego što DeviantArt prima (30 MB).
+	The DeviantArt app id should be a number.	ID aplikacije DeviantArt treba da bude broj.
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Prijava za DeviantArt ostaje u sistemskom privezku ključeva, ne u datoteci podešavanja PhotoCraft-a.
+	There is no saved file to send. Choose PSD or PNG.	Nema sačuvane datoteke za slanje. Izaberite PSD ili PNG.
+	Title	Naslov
+	Waiting for DeviantArt…	Čekam DeviantArt…
+	Submit to DeviantArt…	Pošalji na DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} je u Sta.sh. Ostaje privatno dok ga ne objavite.
+	Open the Sta.sh page	Otvori stranicu Sta.sh
+	DeviantArt was disconnected.	DeviantArt je isključen.
+	The DeviantArt login expired. Connect again.	DeviantArt prijava je istekla. Povežite se ponovo.
+	Saved file	Sačuvana datoteka
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova

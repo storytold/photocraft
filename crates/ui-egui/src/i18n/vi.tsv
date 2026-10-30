@@ -3997,6 +3997,43 @@ curves	Smooth	Làm mượt
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Tỷ lệ khung hình
+	Could not prepare a file to send: {error}	Không chuẩn bị được tệp để gửi: {error}
+	There is no saved file to send. Choose PSD or PNG.	Không có tệp đã lưu để gửi. Hãy chọn PSD hoặc PNG.
+	Submitting needs an internet connection.	Việc gửi cần kết nối internet.
+	Open the DeviantArt developer page	Mở trang nhà phát triển DeviantArt
+	DeviantArt app id	Id ứng dụng DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Đăng nhập DeviantArt nằm trong móc khóa của hệ thống, không nằm trong tệp cài đặt của PhotoCraft.
+	Connect DeviantArt	Kết nối DeviantArt
+	Title	Tiêu đề
+	Tags	Thẻ
+	Letters, numbers and underscores, separated by commas.	Chữ, số và gạch dưới, cách nhau bằng dấu phẩy.
+	Submit as	Gửi dưới dạng
+	Also submit when I Save	Gửi cả khi Lưu
+	Also submit when I Save As	Gửi cả khi Lưu thành
+	Also submit when I Save a Copy	Gửi cả khi Lưu bản sao
+	Also submit when I Export	Gửi cả khi Xuất
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt đã sẵn sàng. Hãy lưu hoặc xuất một tệp, rồi gửi.
+	Connect DeviantArt first.	Hãy kết nối DeviantArt trước.
+	The DeviantArt app id should be a number.	Id ứng dụng DeviantArt phải là một số.
+	DeviantArt submitting needs the desktop app.	Gửi lên DeviantArt chỉ có trong ứng dụng máy tính.
+	A DeviantArt submit is already running.	Một lượt gửi DeviantArt đang chạy.
+	Waiting for DeviantArt…	Đang đợi DeviantArt…
+	Submitting {name} to DeviantArt…	Đang gửi {name} lên DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Tệp lớn hơn mức DeviantArt nhận (30 MB).
+	DeviantArt is connected.	Đã kết nối DeviantArt.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Tạo một ứng dụng công khai trên DeviantArt, không cần client secret. Sao chép địa chỉ bên dưới vào chuyển hướng, dán id vào đây rồi kết nối.
+	Copied the redirect address.	Đã sao chép địa chỉ chuyển hướng.
+	Connected	Đã kết nối
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG là ảnh DeviantArt hiển thị. PSD chỉ được lưu như một tệp trong Sta.sh.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK tải lên Sta.sh. Chưa công khai cho đến khi bạn đăng.
+	Connect again	Kết nối lại
+	Disconnect DeviantArt	Ngắt kết nối DeviantArt
+	Submit to DeviantArt…	Gửi lên DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} nằm trong Sta.sh. Nó vẫn riêng tư cho đến khi bạn đăng.
+	Open the Sta.sh page	Mở trang Sta.sh
+	DeviantArt was disconnected.	Đã ngắt DeviantArt.
+	The DeviantArt login expired. Connect again.	Đăng nhập DeviantArt đã hết hạn. Hãy kết nối lại.
+	Saved file	Tệp đã lưu
 	Font size presets	Cỡ chữ đặt sẵn
 	Leading presets	Giãn dòng đặt sẵn
 	Tracking presets	Khoảng cách chữ đặt sẵn

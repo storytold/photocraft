@@ -4412,6 +4412,43 @@ cameraRaw	Yellow	Sárga
 	Tight Curl	Szoros göndör
 	Loose Curl	Laza göndör
 	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
+	Could not prepare a file to send: {error}	A küldendő fájl nem készíthető elő: {error}
+	There is no saved file to send. Choose PSD or PNG.	Nincs mentett fájl a küldéshez. Válassz PSD-t vagy PNG-t.
+	Submitting needs an internet connection.	A küldéshez internetkapcsolat kell.
+	Open the DeviantArt developer page	A DeviantArt fejlesztői oldal megnyitása
+	DeviantArt app id	DeviantArt-alkalmazásazonosító
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	A DeviantArt-bejelentkezés a rendszer kulcstartójában marad, nem a PhotoCraft beállításfájljában.
+	Connect DeviantArt	DeviantArt csatlakoztatása
+	Title	Cím
+	Tags	Címkék
+	Letters, numbers and underscores, separated by commas.	Betűk, számok és aláhúzások, vesszővel elválasztva.
+	Submit as	Küldés mint
+	Also submit when I Save	Küldés mentéskor is
+	Also submit when I Save As	Küldés másként mentéskor is
+	Also submit when I Save a Copy	Küldés másolat mentésekor is
+	Also submit when I Export	Küldés exportáláskor is
+	DeviantArt is set up. Save or export a file, then submit it.	A DeviantArt be van állítva. Mentsen vagy exportáljon egy fájlt, majd küldje el.
+	Connect DeviantArt first.	Először csatlakoztassa a DeviantArtot.
+	The DeviantArt app id should be a number.	A DeviantArt-alkalmazásazonosítónak számnak kell lennie.
+	DeviantArt submitting needs the desktop app.	A DeviantArt-küldés csak az asztali alkalmazásban van.
+	A DeviantArt submit is already running.	Egy DeviantArt-küldés már fut.
+	Waiting for DeviantArt…	Várakozás a DeviantArtra…
+	Submitting {name} to DeviantArt…	{name} küldése a DeviantArtra…
+	That file is larger than DeviantArt accepts (30 MB).	A fájl nagyobb, mint amit a DeviantArt elfogad (30 MB).
+	DeviantArt is connected.	A DeviantArt csatlakoztatva.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Hozzon létre egy nyilvános DeviantArt-alkalmazást, client secret nélkül. Másolja az alábbi címet az átirányításba, illessze be ide az azonosítót, majd csatlakozzon.
+	Copied the redirect address.	Az átirányítási cím másolva.
+	Connected	Csatlakoztatva
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	A PNG az, amit a DeviantArt mutat. A PSD a Sta.sh-ban csak fájl.
+	OK uploads to Sta.sh. Nothing is public until you publish.	Az OK a Sta.sh-ba tölt. Csak közzététel után lesz nyilvános.
+	Connect again	Újracsatlakozás
+	Disconnect DeviantArt	DeviantArt leválasztása
+	Submit to DeviantArt…	Küldés a DeviantArtra…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} a Sta.sh-ban van. Közzététel előtt privát marad.
+	Open the Sta.sh page	A Sta.sh-oldal megnyitása
+	DeviantArt was disconnected.	A DeviantArt le lett választva.
+	The DeviantArt login expired. Connect again.	A DeviantArt bejelentkezés lejárt. Csatlakozzon újra.
+	Saved file	Mentett fájl
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások

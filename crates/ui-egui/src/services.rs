@@ -441,4 +441,17 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// File › Submit to DeviantArt. The refresh token is an argument, never a URL.
+    pub load_deviantart: Option<LoadTextFn>,
+    pub save_deviantart: Option<SaveTextFn>,
+    pub deviantart_connect: Option<DeviantArtConnectFn>,
+    pub deviantart_current_refresh: Option<DeviantArtCurrentRefreshFn>,
+    pub deviantart_submit: Option<DeviantArtSubmitFn>,
 }
+
+/// Browser login. Returns the refresh token. Must not log it.
+pub type DeviantArtConnectFn = std::sync::Arc<dyn Fn(&str, &str) -> Result<String, String> + Send + Sync>;
+/// Current refresh token after DeviantArt rotates it. Never log the returned value.
+pub type DeviantArtCurrentRefreshFn = std::sync::Arc<dyn Fn() -> String + Send + Sync>;
+/// Sta.sh submit. Arguments: refresh token, app id, title, comments, tags, file name, bytes.
+pub type DeviantArtSubmitFn = std::sync::Arc<dyn Fn(&str, &str, &str, &str, &[String], &str, &[u8]) -> Result<String, String> + Send + Sync>;

@@ -3521,6 +3521,43 @@ curves	Smooth	Haluskan
 	Gamma	Gamma
 	Profile	Profil
 	Target	Target
+	Could not prepare a file to send: {error}	Tidak dapat menyiapkan berkas untuk dikirim: {error}
+	There is no saved file to send. Choose PSD or PNG.	Tidak ada berkas tersimpan untuk dikirim. Pilih PSD atau PNG.
+	Submitting needs an internet connection.	Mengirim membutuhkan koneksi internet.
+	Open the DeviantArt developer page	Buka halaman pengembang DeviantArt
+	DeviantArt app id	Id aplikasi DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Masuk DeviantArt disimpan di gantungan kunci sistem, bukan di berkas pengaturan PhotoCraft.
+	Connect DeviantArt	Hubungkan DeviantArt
+	Title	Judul
+	Tags	Tagar
+	Letters, numbers and underscores, separated by commas.	Huruf, angka, dan garis bawah, dipisah koma.
+	Submit as	Kirim sebagai
+	Also submit when I Save	Kirim juga saat Menyimpan
+	Also submit when I Save As	Kirim juga saat Simpan Sebagai
+	Also submit when I Save a Copy	Kirim juga saat Simpan Salinan
+	Also submit when I Export	Kirim juga saat Ekspor
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt sudah disiapkan. Simpan atau ekspor berkas, lalu kirim.
+	Connect DeviantArt first.	Hubungkan DeviantArt dahulu.
+	The DeviantArt app id should be a number.	Id aplikasi DeviantArt harus berupa angka.
+	DeviantArt submitting needs the desktop app.	Pengiriman DeviantArt hanya ada di aplikasi desktop.
+	A DeviantArt submit is already running.	Pengiriman DeviantArt sedang berjalan.
+	Waiting for DeviantArt…	Menunggu DeviantArt…
+	Submitting {name} to DeviantArt…	Mengirim {name} ke DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Berkas lebih besar dari yang diterima DeviantArt (30 MB).
+	DeviantArt is connected.	DeviantArt terhubung.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Buat aplikasi publik di DeviantArt, tanpa client secret. Salin alamat di bawah ke pengalihan, tempel id klien di sini, lalu hubungkan.
+	Copied the redirect address.	Alamat pengalihan disalin.
+	Connected	Terhubung
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG adalah gambar yang ditampilkan DeviantArt. PSD hanya tersimpan sebagai berkas di Sta.sh.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK mengunggah ke Sta.sh. Belum publik sampai Anda terbitkan.
+	Connect again	Hubungkan lagi
+	Disconnect DeviantArt	Putuskan DeviantArt
+	Submit to DeviantArt…	Kirim ke DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} ada di Sta.sh. Tetap privat sampai Anda terbitkan.
+	Open the Sta.sh page	Buka halaman Sta.sh
+	DeviantArt was disconnected.	DeviantArt terputus.
+	The DeviantArt login expired. Connect again.	Login DeviantArt kedaluwarsa. Hubungkan lagi.
+	Saved file	Berkas tersimpan
 	Font size presets	Preset ukuran font
 	Leading presets	Preset leading
 	Tracking presets	Preset tracking

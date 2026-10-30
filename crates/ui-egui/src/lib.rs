@@ -24,6 +24,7 @@ macro_rules! tl {
 }
 pub mod canvas;
 pub mod control;
+pub mod deviantart;
 pub mod dialogs;
 pub mod dock;
 pub mod file_dialog;
@@ -244,6 +245,7 @@ pub use services::{
     FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn,
     SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
 };
+pub use services::{DeviantArtConnectFn, DeviantArtCurrentRefreshFn, DeviantArtSubmitFn};
 pub use text::bidi_text;
 pub use text::cjk_fonts;
 pub use text::direction;
@@ -321,6 +323,10 @@ pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// File › Submit to DeviantArt. Not part of [`UiState`]: the control channel must not see the token.
+    pub deviantart: deviantart::Settings,
+    pub(crate) deviantart_job: Option<deviantart::Job>,
+    pub(crate) deviantart_pending: std::collections::VecDeque<String>,
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,

@@ -132,7 +132,7 @@ pub fn guard_window_close(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     // A save or print worker must finish its external side effect before the process exits;
     // `jobs_ui` repeats the close after completion and keeps errors visible.
-    if app.saving() || app.printing() {
+    if app.saving() || app.printing() || crate::deviantart::busy(app) {
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         app.jobs.close_after_saves = true;
         return;

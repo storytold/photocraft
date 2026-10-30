@@ -4701,6 +4701,42 @@ shape	Appearance	Оформление
 	Tight Curl	Плотный завиток
 	Loose Curl	Свободный завиток
 	Stylized dabs from a history state	Стилизованные мазки из состояния истории
+	Could not prepare a file to send: {error}	Не удалось подготовить файл для отправки: {error}
+	There is no saved file to send. Choose PSD or PNG.	Нет сохранённого файла для отправки. Выберите PSD или PNG.
+	Submitting needs an internet connection.	Для отправки нужно подключение к интернету.
+	Open the DeviantArt developer page	Открыть страницу разработчика DeviantArt
+	DeviantArt app id	Id приложения DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Вход DeviantArt хранится в связке ключей системы, не в файле настроек PhotoCraft.
+	Connect DeviantArt	Подключить DeviantArt
+	Tags	Метки
+	Letters, numbers and underscores, separated by commas.	Буквы, цифры и подчёркивания, через запятую.
+	Submit as	Отправить как
+	Also submit when I Save	Отправлять и при сохранении
+	Also submit when I Save As	Отправлять и при «Сохранить как»
+	Also submit when I Save a Copy	Отправлять и при сохранении копии
+	Also submit when I Export	Отправлять и при экспорте
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt настроен. Сохраните или экспортируйте файл, затем отправьте его.
+	Connect DeviantArt first.	Сначала подключите DeviantArt.
+	The DeviantArt app id should be a number.	Id приложения DeviantArt должен быть числом.
+	DeviantArt submitting needs the desktop app.	Отправка на DeviantArt есть только в настольном приложении.
+	A DeviantArt submit is already running.	Отправка на DeviantArt уже идёт.
+	Waiting for DeviantArt…	Ожидание DeviantArt…
+	Submitting {name} to DeviantArt…	Отправка {name} на DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Файл больше, чем принимает DeviantArt (30 МБ).
+	DeviantArt is connected.	DeviantArt подключён.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Создайте публичное приложение на DeviantArt, без client secret. Скопируйте адрес ниже в перенаправление, вставьте сюда id и подключитесь.
+	Copied the redirect address.	Адрес перенаправления скопирован.
+	Connected	Подключено
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG — это то, что показывает DeviantArt. PSD в Sta.sh хранится только как файл.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK загружает в Sta.sh. Публичным это станет только после публикации.
+	Connect again	Подключить снова
+	Disconnect DeviantArt	Отключить DeviantArt
+	Submit to DeviantArt…	Отправить на DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} в Sta.sh. Оно остаётся закрытым, пока вы его не опубликуете.
+	Open the Sta.sh page	Открыть страницу Sta.sh
+	DeviantArt was disconnected.	DeviantArt отключён.
+	The DeviantArt login expired. Connect again.	Вход в DeviantArt истёк. Подключитесь снова.
+	Saved file	Сохранённый файл
 	Font size presets	Наборы размеров шрифта
 	Leading presets	Наборы интерлиньяжа
 	Tracking presets	Наборы трекинга

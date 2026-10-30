@@ -4212,6 +4212,43 @@ curves	Smooth	Згладити
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Ціль
+	Could not prepare a file to send: {error}	Не вдалося підготувати файл для надсилання: {error}
+	There is no saved file to send. Choose PSD or PNG.	Немає збереженого файла для надсилання. Виберіть PSD або PNG.
+	Submitting needs an internet connection.	Для надсилання потрібне з'єднання з інтернетом.
+	Open the DeviantArt developer page	Відкрити сторінку розробника DeviantArt
+	DeviantArt app id	Id застосунку DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Вхід DeviantArt лишається у в'язці ключів системи, не у файлі налаштувань PhotoCraft.
+	Connect DeviantArt	Підключити DeviantArt
+	Title	Назва
+	Tags	Мітки
+	Letters, numbers and underscores, separated by commas.	Літери, цифри й підкреслення, через кому.
+	Submit as	Надіслати як
+	Also submit when I Save	Надсилати і під час збереження
+	Also submit when I Save As	Надсилати і під час «Зберегти як»
+	Also submit when I Save a Copy	Надсилати і під час збереження копії
+	Also submit when I Export	Надсилати і під час експорту
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt налаштовано. Збережіть або експортуйте файл, а потім надішліть його.
+	Connect DeviantArt first.	Спочатку підключіть DeviantArt.
+	The DeviantArt app id should be a number.	Id застосунку DeviantArt має бути числом.
+	DeviantArt submitting needs the desktop app.	Надсилання на DeviantArt є лише в настільній програмі.
+	A DeviantArt submit is already running.	Надсилання на DeviantArt уже триває.
+	Waiting for DeviantArt…	Очікування DeviantArt…
+	Submitting {name} to DeviantArt…	Надсилання {name} на DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Файл більший, ніж приймає DeviantArt (30 МБ).
+	DeviantArt is connected.	DeviantArt підключено.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Створіть публічний застосунок на DeviantArt, без client secret. Скопіюйте адресу нижче в перенаправлення, вставте сюди id і підключіться.
+	Copied the redirect address.	Адресу перенаправлення скопійовано.
+	Connected	Підключено
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG — це те, що показує DeviantArt. PSD у Sta.sh лише файл.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK завантажує в Sta.sh. Публічним це стане лише після публікації.
+	Connect again	Підключити знову
+	Disconnect DeviantArt	Відключити DeviantArt
+	Submit to DeviantArt…	Надіслати на DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} у Sta.sh. Воно лишається приватним, доки ви його не опублікуєте.
+	Open the Sta.sh page	Відкрити сторінку Sta.sh
+	DeviantArt was disconnected.	DeviantArt від'єднано.
+	The DeviantArt login expired. Connect again.	Вхід у DeviantArt закінчився. Підключіться знову.
+	Saved file	Збережений файл
 	Font size presets	Набори розмірів шрифту
 	Leading presets	Набори інтерліньяжу
 	Tracking presets	Набори трекінгу

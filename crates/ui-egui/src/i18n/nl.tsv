@@ -4258,6 +4258,43 @@ curves	Smooth	Vloeiend maken
 	Tight Curl	Strakke krul
 	Loose Curl	Losse krul
 	Stylized dabs from a history state	Gestileerde tikken uit een historiestatus
+	Could not prepare a file to send: {error}	Kon geen bestand klaarmaken om te sturen: {error}
+	There is no saved file to send. Choose PSD or PNG.	Er is geen opgeslagen bestand om te sturen. Kies PSD of PNG.
+	Submitting needs an internet connection.	Verzenden heeft een internetverbinding nodig.
+	Open the DeviantArt developer page	DeviantArt-ontwikkelaarspagina openen
+	DeviantArt app id	DeviantArt-app-id
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	De DeviantArt-aanmelding blijft in de sleutelhanger van het systeem, niet in het instellingenbestand van PhotoCraft.
+	Connect DeviantArt	DeviantArt verbinden
+	Title	Titel
+	Tags	Labels
+	Letters, numbers and underscores, separated by commas.	Letters, cijfers en onderstrepingstekens, gescheiden door komma's.
+	Submit as	Verzenden als
+	Also submit when I Save	Ook verzenden bij Opslaan
+	Also submit when I Save As	Ook verzenden bij Opslaan als
+	Also submit when I Save a Copy	Ook verzenden bij Een kopie opslaan
+	Also submit when I Export	Ook verzenden bij Exporteren
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt is ingesteld. Sla een bestand op of exporteer het, en verzend het daarna.
+	Connect DeviantArt first.	Verbind eerst DeviantArt.
+	The DeviantArt app id should be a number.	Het DeviantArt-app-id hoort een getal te zijn.
+	DeviantArt submitting needs the desktop app.	Verzenden naar DeviantArt kan alleen in de desktop-app.
+	A DeviantArt submit is already running.	Er wordt al naar DeviantArt verzonden.
+	Waiting for DeviantArt…	Wachten op DeviantArt…
+	Submitting {name} to DeviantArt…	{name} naar DeviantArt verzenden…
+	That file is larger than DeviantArt accepts (30 MB).	Het bestand is groter dan DeviantArt aanneemt (30 MB).
+	DeviantArt is connected.	DeviantArt is verbonden.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Maak een openbare app op DeviantArt, zonder client secret. Kopieer het adres hieronder naar de omleiding, plak hier de client-id en verbind.
+	Copied the redirect address.	Omleidingsadres gekopieerd.
+	Connected	Verbonden
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG is het beeld dat DeviantArt toont. Een PSD ligt in Sta.sh alleen als bestand.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK uploadt naar Sta.sh. Openbaar wordt het pas bij publiceren.
+	Connect again	Opnieuw verbinden
+	Disconnect DeviantArt	DeviantArt verbreken
+	Submit to DeviantArt…	Naar DeviantArt sturen…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} staat in Sta.sh. Het blijft privé tot je het publiceert.
+	Open the Sta.sh page	Sta.sh-pagina openen
+	DeviantArt was disconnected.	DeviantArt is verbroken.
+	The DeviantArt login expired. Connect again.	De DeviantArt-login is verlopen. Maak opnieuw verbinding.
+	Saved file	Opgeslagen bestand
 	Font size presets	Voorinstellingen lettergrootte
 	Leading presets	Voorinstellingen interlinie
 	Tracking presets	Voorinstellingen spatiëring

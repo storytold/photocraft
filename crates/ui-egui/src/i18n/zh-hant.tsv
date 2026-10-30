@@ -3138,6 +3138,43 @@ curves	Smooth	平滑
 	Profile	描述檔
 	Target	目標
 	Units	單位
+	Could not prepare a file to send: {error}	無法準備要傳送的檔案：{error}
+	There is no saved file to send. Choose PSD or PNG.	沒有可傳送的已儲存檔案。請選擇 PSD 或 PNG。
+	Submitting needs an internet connection.	提交需要網際網路連線。
+	Open the DeviantArt developer page	開啟 DeviantArt 開發者頁面
+	DeviantArt app id	DeviantArt 應用程式 ID
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	DeviantArt 登入保存在系統鑰匙圈中，不在 PhotoCraft 的設定檔裡。
+	Connect DeviantArt	連接 DeviantArt
+	Title	標題
+	Tags	標籤
+	Letters, numbers and underscores, separated by commas.	字母、數字和底線，以逗號分隔。
+	Submit as	提交為
+	Also submit when I Save	儲存時也提交
+	Also submit when I Save As	另存新檔時也提交
+	Also submit when I Save a Copy	儲存副本時也提交
+	Also submit when I Export	匯出時也提交
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt 已設定。請先儲存或匯出檔案，再提交。
+	Connect DeviantArt first.	請先連接 DeviantArt。
+	The DeviantArt app id should be a number.	DeviantArt 應用程式 ID 應為數字。
+	DeviantArt submitting needs the desktop app.	提交到 DeviantArt 僅在桌面應用程式中可用。
+	A DeviantArt submit is already running.	已有一次 DeviantArt 提交在進行。
+	Waiting for DeviantArt…	正在等待 DeviantArt…
+	Submitting {name} to DeviantArt…	正在將 {name} 提交到 DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	檔案大於 DeviantArt 接受的大小（30 MB）。
+	DeviantArt is connected.	已連接 DeviantArt。
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	在 DeviantArt 上建立一個公開應用程式，不要 client secret。把下面的地址複製到重新導向，把用戶端 ID 貼到這裡，然後連線。
+	Copied the redirect address.	已複製重新導向地址。
+	Connected	已連線
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	DeviantArt 顯示的是 PNG。PSD 在 Sta.sh 裡只是一個檔案。
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK 會上傳到 Sta.sh。發佈之前不會公開。
+	Connect again	重新連線
+	Disconnect DeviantArt	中斷 DeviantArt 連線
+	Submit to DeviantArt…	傳送到 DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} 已在 Sta.sh。發佈之前不會公開。
+	Open the Sta.sh page	開啟 Sta.sh 頁面
+	DeviantArt was disconnected.	已中斷 DeviantArt。
+	The DeviantArt login expired. Connect again.	DeviantArt 登入已過期。請重新連線。
+	Saved file	已儲存的檔案
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設

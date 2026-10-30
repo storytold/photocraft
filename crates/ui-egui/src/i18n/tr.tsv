@@ -4226,6 +4226,43 @@ cameraData	Lens	Lens
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
+	Could not prepare a file to send: {error}	Gönderilecek dosya hazırlanamadı: {error}
+	There is no saved file to send. Choose PSD or PNG.	Gönderilecek kayıtlı dosya yok. PSD veya PNG seçin.
+	Submitting needs an internet connection.	Göndermek için internet bağlantısı gerekir.
+	Open the DeviantArt developer page	DeviantArt geliştirici sayfasını aç
+	DeviantArt app id	DeviantArt uygulama kimliği
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	DeviantArt oturumu PhotoCraft ayar dosyasında değil, sistem anahtarlığında durur.
+	Connect DeviantArt	DeviantArt'ı bağla
+	Title	Başlık
+	Tags	Etiketler
+	Letters, numbers and underscores, separated by commas.	Harfler, rakamlar ve alt çizgiler, virgülle ayrılmış.
+	Submit as	Şu biçimde gönder
+	Also submit when I Save	Kaydedince de gönder
+	Also submit when I Save As	Farklı kaydedince de gönder
+	Also submit when I Save a Copy	Kopya kaydedince de gönder
+	Also submit when I Export	Dışa aktarınca da gönder
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt hazır. Bir dosyayı kaydedin veya dışa aktarın, sonra gönderin.
+	Connect DeviantArt first.	Önce DeviantArt'ı bağlayın.
+	The DeviantArt app id should be a number.	DeviantArt uygulama kimliği bir sayı olmalı.
+	DeviantArt submitting needs the desktop app.	DeviantArt'a gönderme yalnızca masaüstü uygulamada vardır.
+	A DeviantArt submit is already running.	Bir DeviantArt gönderimi zaten sürüyor.
+	Waiting for DeviantArt…	DeviantArt bekleniyor…
+	Submitting {name} to DeviantArt…	{name} DeviantArt'a gönderiliyor…
+	That file is larger than DeviantArt accepts (30 MB).	Dosya, DeviantArt'ın kabul ettiğinden büyük (30 MB).
+	DeviantArt is connected.	DeviantArt bağlandı.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	DeviantArt'ta gizli anahtar olmadan herkese açık bir uygulama oluşturun. Aşağıdaki adresi yönlendirmeye kopyalayın, kimliği buraya yapıştırın ve bağlanın.
+	Copied the redirect address.	Yönlendirme adresi kopyalandı.
+	Connected	Bağlandı
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	DeviantArt'ın gösterdiği PNG'dir. PSD, Sta.sh'ta yalnızca dosya olarak durur.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK, Sta.sh'a yükler. Yayımlayana kadar herkese açık olmaz.
+	Connect again	Yeniden bağlan
+	Disconnect DeviantArt	DeviantArt bağlantısını kes
+	Submit to DeviantArt…	DeviantArt'a gönder…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} Sta.sh'ta. Yayımlayana kadar gizli kalır.
+	Open the Sta.sh page	Sta.sh sayfasını aç
+	DeviantArt was disconnected.	DeviantArt bağlantısı kesildi.
+	The DeviantArt login expired. Connect again.	DeviantArt oturumu sona erdi. Yeniden bağlanın.
+	Saved file	Kayıtlı dosya
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları

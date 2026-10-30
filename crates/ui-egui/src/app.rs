@@ -38,6 +38,9 @@ impl PhotocraftApp {
             session,
             ui: UiState::default(),
             services,
+            deviantart: crate::deviantart::Settings::default(),
+            deviantart_job: None,
+            deviantart_pending: std::collections::VecDeque::new(),
             canvases: HashMap::new(),
             navigator_textures: HashMap::new(),
             display_memo: HashMap::new(),
@@ -200,6 +203,10 @@ impl PhotocraftApp {
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         layers_panel_ui::restore_options(&mut app);
+        if let Some(text) = app.services.load_deviantart.as_mut().and_then(|load| load()) {
+            app.deviantart = crate::deviantart::settings_from_json(&text);
+        }
+        crate::deviantart::configure_engine(&mut app);
         histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);

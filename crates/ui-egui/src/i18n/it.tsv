@@ -4615,6 +4615,42 @@ shape	Appearance	Aspetto
 	Tight Curl	Riccio stretto
 	Loose Curl	Riccio largo
 	Stylized dabs from a history state	Tocchi stilizzati da uno stato della storia
+	Could not prepare a file to send: {error}	Impossibile preparare un file da inviare: {error}
+	There is no saved file to send. Choose PSD or PNG.	Non c'è un file salvato da inviare. Scegli PSD o PNG.
+	Submitting needs an internet connection.	L'invio richiede una connessione a internet.
+	Open the DeviantArt developer page	Apri la pagina sviluppatori di DeviantArt
+	DeviantArt app id	Id app DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	L'accesso a DeviantArt resta nel portachiavi di sistema, non nel file delle impostazioni di PhotoCraft.
+	Connect DeviantArt	Connetti DeviantArt
+	Tags	Etichette
+	Letters, numbers and underscores, separated by commas.	Lettere, numeri e trattini bassi, separati da virgole.
+	Submit as	Invia come
+	Also submit when I Save	Invia anche quando salvo
+	Also submit when I Save As	Invia anche con Salva con nome
+	Also submit when I Save a Copy	Invia anche con Salva una copia
+	Also submit when I Export	Invia anche quando esporto
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt è pronto. Salva o esporta un file, poi invialo.
+	Connect DeviantArt first.	Connetti prima DeviantArt.
+	The DeviantArt app id should be a number.	L'id app DeviantArt deve essere un numero.
+	DeviantArt submitting needs the desktop app.	L'invio a DeviantArt c'è solo nell'app desktop.
+	A DeviantArt submit is already running.	Un invio a DeviantArt è già in corso.
+	Waiting for DeviantArt…	In attesa di DeviantArt…
+	Submitting {name} to DeviantArt…	Invio di {name} a DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Il file è più grande di quanto DeviantArt accetti (30 MB).
+	DeviantArt is connected.	DeviantArt è connesso.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Crea un'app pubblica su DeviantArt, senza client secret. Copia l'indirizzo qui sotto nel reindirizzamento, incolla qui l'id e connetti.
+	Copied the redirect address.	Indirizzo di reindirizzamento copiato.
+	Connected	Connesso
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	Il PNG è l'immagine che DeviantArt mostra. Un PSD resta solo un file in Sta.sh.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK carica su Sta.sh. Non è pubblico finché non pubblichi.
+	Connect again	Connetti di nuovo
+	Disconnect DeviantArt	Disconnetti DeviantArt
+	Submit to DeviantArt…	Invia a DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} è in Sta.sh. Resta privato finché non lo pubblichi.
+	Open the Sta.sh page	Apri la pagina Sta.sh
+	DeviantArt was disconnected.	DeviantArt è stato disconnesso.
+	The DeviantArt login expired. Connect again.	L'accesso a DeviantArt è scaduto. Connettiti di nuovo.
+	Saved file	File salvato
 	Font size presets	Predefiniti dimensione font
 	Leading presets	Predefiniti interlinea
 	Tracking presets	Predefiniti spaziatura

@@ -77,6 +77,7 @@ pub use cmd::color_to_alpha_cmds;
 pub use cmd::comps_cmds;
 pub use cmd::contour_lib_cmds;
 pub use cmd::cutout_cmds;
+pub use cmd::deviantart_cmds;
 pub use cmd::distort_cmds;
 pub use cmd::document_preset_cmds;
 pub use cmd::edit_cmds;
@@ -245,6 +246,8 @@ pub struct Session {
     /// A further route for File › Print when neither `lp` nor a CUPS server over IPP is
     /// reachable (the XDG Print portal in a Flatpak); see `print_cmds::Spooler`.
     pub print_spooler: Option<print_cmds::Spooler>,
+    /// Authenticated private Sta.sh transport supplied by the host; never serialized.
+    pub deviantart_submit: Option<deviantart_cmds::SubmitFn>,
     /// The printers `file.printers`, `file.print.printers` and the Print dialog list in place of
     /// the system's (tests); see `print_cmds::PrinterSource`. `None` asks the spooler.
     pub printer_source: Option<print_cmds::PrinterSource>,

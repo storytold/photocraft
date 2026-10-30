@@ -4248,6 +4248,42 @@ cameraRaw	Dehaze	Odstranění oparu
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Poměr stran
+	Could not prepare a file to send: {error}	Soubor k odeslání se nepodařilo připravit: {error}
+	There is no saved file to send. Choose PSD or PNG.	Není uložený soubor k odeslání. Zvol PSD nebo PNG.
+	Submitting needs an internet connection.	Odesílání potřebuje připojení k internetu.
+	Open the DeviantArt developer page	Otevřít stránku pro vývojáře DeviantArt
+	DeviantArt app id	Id aplikace DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Přihlášení k DeviantArt zůstává ve klíčence systému, ne v souboru nastavení PhotoCraftu.
+	Connect DeviantArt	Připojit DeviantArt
+	Tags	Štítky
+	Letters, numbers and underscores, separated by commas.	Písmena, čísla a podtržítka, oddělená čárkami.
+	Submit as	Odeslat jako
+	Also submit when I Save	Odeslat i při uložení
+	Also submit when I Save As	Odeslat i při Uložit jako
+	Also submit when I Save a Copy	Odeslat i při uložení kopie
+	Also submit when I Export	Odeslat i při exportu
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt je nastaven. Uložte nebo exportujte soubor a pak ho odešlete.
+	Connect DeviantArt first.	Nejprve připojte DeviantArt.
+	The DeviantArt app id should be a number.	Id aplikace DeviantArt má být číslo.
+	DeviantArt submitting needs the desktop app.	Odesílání na DeviantArt je jen v desktopové aplikaci.
+	A DeviantArt submit is already running.	Odesílání na DeviantArt už běží.
+	Waiting for DeviantArt…	Čeká se na DeviantArt…
+	Submitting {name} to DeviantArt…	Odesílání {name} na DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Soubor je větší, než DeviantArt přijme (30 MB).
+	DeviantArt is connected.	DeviantArt je připojen.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Vytvořte veřejnou aplikaci na DeviantArt, bez client secret. Zkopírujte adresu níže do přesměrování, vložte sem client id a připojte se.
+	Copied the redirect address.	Adresa přesměrování zkopírována.
+	Connected	Připojeno
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG je to, co DeviantArt ukazuje. PSD je ve Sta.sh jen soubor.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK nahraje do Sta.sh. Veřejné to není, dokud to nezveřejníte.
+	Connect again	Připojit znovu
+	Disconnect DeviantArt	Odpojit DeviantArt
+	Submit to DeviantArt…	Odeslat na DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} je ve Sta.sh. Veřejné to bude až po zveřejnění.
+	Open the Sta.sh page	Otevřít stránku Sta.sh
+	DeviantArt was disconnected.	DeviantArt byl odpojen.
+	The DeviantArt login expired. Connect again.	Přihlášení k DeviantArt vypršelo. Připojte se znovu.
+	Saved file	Uložený soubor
 	Font size presets	Předvolby velikosti písma
 	Leading presets	Předvolby prokladu
 	Tracking presets	Předvolby prostrkání
