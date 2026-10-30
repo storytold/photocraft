@@ -39,6 +39,22 @@ The toolbar's foreground and background colour chips follow the `Tokens::round_c
   - Toolbar tool groups carry a corner triangle.
 - **Verify every visual change** with `ui.screenshot`, at several window sizes and in every theme.
 
+## New Document preset icons
+
+File › New keeps category labels and preset dimensions alongside the existing tinted SVG
+icons. Photo uses an image, Print a page, Art & Illustration a brush, Web a browser window,
+Mobile a phone, and Film & Video a clapperboard. Explicit built-in laptop, desktop, tablet
+and watch presets use their device symbols. Classification uses the catalog's canonical keys
+before translation, independent of orientation and preferred resolution.
+
+Recent uses a clock, Saved a save symbol, and Clipboard a clipboard. Saved and recent snapshots
+carry no original category metadata, so their icons never infer a category from names or sizes.
+Unknown categories use a plain document. The symbols keep a fixed size even for extreme canvas
+ratios; the dimension line gives the actual canvas size. Icons share their control's hit target;
+category tabs wrap when the translated labels need another row. Selected Classic cards use
+selection ink for the symbol, name and dimensions against their navy fill. This is a visual aid,
+with no change to preset settings or document creation (#9760).
+
 ## Adding icons
 
 ```sh

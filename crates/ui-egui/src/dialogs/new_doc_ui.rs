@@ -305,12 +305,7 @@ fn card_title(painter: &egui::Painter, title: &str, width: f32, color: egui::Col
     painter.layout_job(job)
 }
 
-/// Paint a page thumbnail with the preset's aspect ratio.
-fn page_icon(ui: &egui::Ui, r: Rect, w: u32, h: u32, t: &Tokens) {
-    let s = 30.0 / (w.max(h) as f32);
-    let page = Rect::from_center_size(r.center(), vec2(w as f32 * s, h as f32 * s));
-    ui.painter().rect_stroke(page, 1.0, Stroke::new(1.2, t.text_dim), StrokeKind::Inside);
-}
+mod preset_icons;
 
 /// The Background Contents menu's entry for a colour of the user's own ([`body`]).
 const CUSTOM: &str = "custom";
@@ -387,6 +382,15 @@ enum Card {
 }
 
 impl Card {
+    /// Source category and canonical preset key only: snapshots have no category provenance.
+    fn icon(&self, category: &str) -> &'static str {
+        match self {
+            Self::Recent(_) => preset_icons::category_icon("Recent"),
+            Self::Builtin(p) if p.0 == CLIPBOARD => "clipboard",
+            Self::Builtin(p) => preset_icons::builtin_icon(category, p.0),
+        }
+    }
+
     /// Pixel size and resolution; a built-in preset at the Units & Rulers preset resolutions.
     fn size(&self, units: &UnitsAndRulers) -> (u32, u32, f32) {
         match self {
@@ -449,7 +453,9 @@ fn saved_presets(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<
             ui.push_id(&preset.name, |ui| {
                 ui.horizontal(|ui| {
                     let selected = get_s(f, "__savedPreset", "") == preset.name;
-                    let label = egui::Button::new(&preset.name).selected(selected).truncate();
+                    let t = Tokens::get(ui.ctx());
+                    let tint = if selected { t.accent_text } else { t.text };
+                    let label = egui::Button::new((icons::image("save", 16.0, tint), preset.name.as_str())).selected(selected).truncate();
                     let response = ui.add_sized(vec2(422.0, 32.0), label).on_hover_text(&preset.name);
                     if response.clicked() {
                         apply_saved_preset(f, preset);
@@ -533,17 +539,10 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
     let cat = get_s(f, "__category", "Recent");
     let mut create = false;
     // Category tabs.
-    ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 18.0;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(10.0, 6.0);
         for name in CATEGORIES.iter().map(|c| c.0).chain(["Saved"]) {
-            let on = cat == name;
-            let label = if name == "Saved" { tl!("Saved") } else { tl!(name) };
-            let r = ui
-                .add(egui::Label::new(RichText::new(label).size(13.0).color(if on { t.text } else { t.text_dim })).selectable(false).sense(Sense::click()))
-                .on_hover_cursor(egui::CursorIcon::PointingHand);
-            if on {
-                ui.painter().line_segment([r.rect.left_bottom() + vec2(0.0, 3.0), r.rect.right_bottom() + vec2(0.0, 3.0)], Stroke::new(2.0, t.text));
-            }
+            let r = preset_icons::category_tab(ui, name, cat == name);
             if r.clicked() {
                 f.insert("__category".into(), json!(name));
             }
@@ -584,7 +583,6 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                         for c in row {
                             let (r, resp) = ui.allocate_exact_size(card, Sense::click());
                             let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-                            let (w, h, _) = c.size(&units);
                             let on = match c {
                                 Card::Builtin(p) => chosen == p.0,
                                 Card::Recent(settings) => holds(f, settings),
@@ -603,12 +601,15 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                             if on {
                                 ui.painter().rect_stroke(r, t.radius, Stroke::new(1.5, t.accent), StrokeKind::Inside);
                             }
-                            page_icon(ui, Rect::from_center_size(pos2(r.center().x, r.top() + 34.0), vec2(40.0, 40.0)), w, h, &t);
-                            let title = card_title(ui.painter(), tl!(c.title()), card.x - 12.0, t.text);
+                            // Classic's navy selection needs selection ink for both symbols and labels.
+                            let (text, secondary) = if on && t.bevel { (t.accent_text, t.accent_text) } else { (t.text, t.text_faint) };
+                            let icon_tint = if on { text } else { t.text_dim };
+                            icons::paint(ui, Rect::from_center_size(pos2(r.center().x, r.top() + 34.0), vec2(40.0, 40.0)), c.icon(&cat), 32.0, icon_tint);
+                            let title = card_title(ui.painter(), tl!(c.title()), card.x - 12.0, text);
                             let elided = title.elided;
-                            ui.painter().galley(pos2(r.center().x, r.top() + 70.0 - title.size().y / 2.0), title, t.text);
+                            ui.painter().galley(pos2(r.center().x, r.top() + 70.0 - title.size().y / 2.0), title, text);
                             let size = c.size_line(&units, f);
-                            ui.painter().text(pos2(r.center().x, r.top() + 97.0), Align2::CENTER_CENTER, &size, egui::FontId::proportional(10.5), t.text_faint);
+                            ui.painter().text(pos2(r.center().x, r.top() + 97.0), Align2::CENTER_CENTER, &size, egui::FontId::proportional(10.5), secondary);
                             let resp = match c {
                                 // A recent document's tooltip names everything it restores.
                                 Card::Recent(s) => {

@@ -464,6 +464,58 @@ mod dialog {
         assert_eq!(h.state().session.presets.documents.len(), 1);
     }
 
+    /// #9760: the icon area belongs to the category/card's existing hit target.
+    #[test]
+    fn category_and_preset_icons_select_and_create_the_exact_builtin() {
+        let mut h = harness();
+        let category = h.get_by_label("Mobile").rect();
+        click_at(&mut h, egui::pos2(category.left() + 9.0, category.center().y));
+        h.run_steps(2);
+        assert_eq!(fields(&h)["__category"], "Mobile");
+        let title = preset_title_at(&h, "iPad Pro 13\"");
+        // The icon is centred 36 points above the title in the same 112-point card.
+        click_at(&mut h, title - egui::vec2(0.0, 36.0));
+        h.run_steps(2);
+        let expected = *CATEGORIES.iter().find(|c| c.0 == "Mobile").unwrap().1.iter().find(|p| p.0 == "iPad Pro 13\"").unwrap();
+        let f = fields(&h);
+        assert_eq!(f["__preset"], expected.0);
+        assert_eq!(
+            (f["width"].as_u64(), f["height"].as_u64(), f["resolution"].as_f64()),
+            (Some(expected.1.into()), Some(expected.2.into()), Some(expected.3.into()))
+        );
+        assert!(h.state().session.documents().is_empty());
+        h.get_by_label("Create").click();
+        h.run_steps(3);
+        assert_eq!(created(&h), (expected.1, expected.2, expected.3));
+    }
+
+    /// The navy Classic selection must not hide the chosen preset's name or dimensions.
+    #[test]
+    fn classic_selected_preset_uses_selection_ink_and_other_cards_keep_normal_ink() {
+        fn color(shape: &egui::Shape, title: &str) -> Option<egui::Color32> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text == title => text.galley.job.sections.first().map(|s| s.format.color),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| color(shape, title)),
+                _ => None,
+            }
+        }
+        let mut h = harness();
+        h.state_mut().ui.theme = crate::theme::ThemeKind::Classic;
+        crate::theme::apply(&h.ctx, crate::theme::ThemeKind::Classic);
+        h.run_steps(2);
+        h.get_by_label("Mobile").click();
+        h.run_steps(2);
+        let title = preset_title_at(&h, "iPad Pro 13\"");
+        click_at(&mut h, title - egui::vec2(0.0, 36.0));
+        h.run_steps(2);
+        let t = crate::theme::Tokens::get(&h.ctx);
+        let ink = |title| h.output().shapes.iter().find_map(|s| color(&s.shape, title)).expect("painted card text");
+        assert_eq!(ink("iPad Pro 13\""), t.accent_text);
+        assert_eq!(ink("2064 x 2752 px @ 72 ppi"), t.accent_text);
+        assert_eq!(ink("iPhone 16"), t.text, "unselected titles retain their normal ink");
+        assert_eq!(ink("1179 x 2556 px @ 72 ppi"), t.text_faint, "unselected dimensions retain their normal ink");
+    }
+
     fn harness() -> Harness<'static, PhotocraftApp> {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let mut h =
