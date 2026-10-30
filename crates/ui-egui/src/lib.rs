@@ -848,3 +848,7 @@ mod browse_field_tests;
 mod options_hit_area_tests;
 #[cfg(test)]
 mod select_and_mask_button_tests;
+
+#[cfg(test)]
+#[path = "../build/panel_contract_tests.rs"]
+mod panel_dependency_contract;

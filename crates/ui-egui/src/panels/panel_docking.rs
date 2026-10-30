@@ -21,6 +21,7 @@ use crate::PhotocraftApp;
 pub(crate) type Workspace = craft_ui::docking::Workspace<String>;
 
 pub(crate) mod compat;
+mod contract;
 mod presentation;
 
 type Returns = std::collections::BTreeMap<String, Location<String>>;
@@ -161,9 +162,15 @@ pub(crate) fn load(saved: &Value) -> Option<(Workspace, Returns)> {
     valid_workspace(&workspace).then_some((workspace, returns))
 }
 
-/// The saved `docking` workspace is from a newer version than craft-ui reads.
-pub(crate) fn newer(saved: &Value) -> bool {
-    saved.get("docking").and_then(|docking| docking.get("version")).and_then(Value::as_u64).is_some_and(|version| version > u64::from(Workspace::VERSION))
+/// Keep any unreadable payload, including an unrecognized layout with an old version tag.
+pub(crate) fn retained_payload(saved: &Value) -> Option<Map<String, Value>> {
+    saved.get("docking").filter(|v| !v.is_null())?;
+    Some(
+        ["docking", "dockingReturns", "dockingCollapsed", "panelPresentation", "toolbarFloating"]
+            .into_iter()
+            .filter_map(|key| Some((key.to_owned(), saved.get(key)?.clone())))
+            .collect(),
+    )
 }
 
 fn legacy(app: &PhotocraftApp) -> Layout<String> {
@@ -228,8 +235,9 @@ fn workspace_of(app: &PhotocraftApp) -> Result<Workspace, String> {
     Ok(workspace)
 }
 
-fn commit(app: &mut PhotocraftApp, workspace: Workspace, mut returns: Returns) {
+fn commit(app: &mut PhotocraftApp, mut workspace: Workspace, mut returns: Returns) {
     returns.retain(|panel, _| floats(&workspace.layout, panel));
+    compat::transfer_widths(app.ui.docking.as_ref().map(|w| &w.layout), &mut workspace.layout, &mut app.ui.panel_presentation);
     compat::sync_presentation(&workspace.layout, &mut app.ui.panel_presentation);
     app.ui.docking = Some(workspace);
     app.ui.docking_returns = returns;
@@ -577,36 +585,13 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let canonical = presented(layout, &collapsed);
     presentation::cancel_resize(app, ui.ctx());
     let height_preview = presentation::height_preview(ui.ctx());
-    let layout = presentation::rendered_layout(app, &canonical, ui.available_height(), height_preview.as_ref());
+    let mut layout = presentation::rendered_layout(app, &canonical, ui.available_height(), height_preview.as_ref(), ui.ctx().pixels_per_point().recip());
+    presentation::preview_columns(ui.ctx(), &mut layout);
+    let compact_limits = presentation::embedded_limits(app, ui.ctx(), &canonical);
     let fillers = fillers(&layout);
     let reveal = app.ui.docking_reveal.take();
-    let t = crate::theme::Tokens::get(ui.ctx());
     let locked = app.session.prefs().workspace_locked;
-    let mut style = craft_ui::docking::DockStyle::from_ui(ui);
-    style.tab_height = 26.0;
-    style.title_height = 0.0;
-    style.column_bar_height = 0.0;
-    style.close_button = false;
-    style.iconic_width = COMPACT_COLUMN_WIDTH;
-    style.icon_size = 25.0;
-    style.iconic_max_width = 240.0;
-    style.iconic_label_width = 78.0;
-    style.floating_background = t.card;
-    style.floating_stroke = egui::Stroke::new(ui.ctx().pixels_per_point().recip(), t.card_border);
-    style.min_pane = 0.0;
-    style.gap = ui.ctx().pixels_per_point().recip();
-    style.background = t.card;
-    // Studio themes leave the strip transparent over the dock's card; a floating group has no
-    // card behind it, so the canvas showed through its titles (#4509).
-    style.tab_background = if t.tab_strip.a() == 0 { t.card } else { t.tab_strip };
-    style.active_background = t.card;
-    style.text = t.text;
-    style.inactive_text = t.text_dim;
-    style.border = egui::Stroke::NONE;
-    style.accent = t.accent;
-    style.right_to_left = crate::direction::is_rtl();
-    style.new_dock_zones = true;
-    let style = style.localized(|key| DOCK_LABELS.iter().find(|(k, _)| *k == key).map(|(_, english)| tl!(english).to_string()));
+    let style = contract::style(ui);
     let mut dock = craft_ui::docking::DockArea::new(area)
         .locked(locked)
         .auto_collapse_iconic(app.session.prefs().workspace.auto_collapse_icon_panels)
@@ -626,6 +611,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut commands = Vec::new();
     let strip = style.tab_height;
     let bounds = ui.available_rect_before_wrap();
+    dock = dock.float_bounds(bounds);
     presentation::prepare(ui.ctx(), app, &canonical, bounds);
     let card: std::collections::HashSet<String> =
         layout.floating.iter().filter(|window| window.id == PROPERTIES_WINDOW).flat_map(|window| window.panels().cloned()).collect();
@@ -643,6 +629,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 craft_ui::docking::PanelLimits { min: egui::vec2(200.0, 120.0), ..Default::default() }
             } else if presentation::is_spacer(id) {
                 craft_ui::docking::PanelLimits { min: egui::Vec2::ZERO, ..Default::default() }
+            } else if let Some(&(width, height)) = compact_limits.get(id) {
+                craft_ui::docking::PanelLimits { min: egui::vec2(width, height), max: egui::vec2(width, 1_000_000.0) }
             } else if collapsed.contains(id) {
                 craft_ui::docking::PanelLimits { min: egui::vec2(220.0, 0.0), max: egui::vec2(1_000_000.0, 0.0) }
             } else {
@@ -664,7 +652,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     presentation::show(app, ui, &canonical, bounds, &mut commands);
     let mut actions = output.actions;
     pin_group_heights(ui.ctx(), &layout, &mut actions);
-    for action in actions {
+    for mut action in actions {
+        presentation::restore_detached_rect(app, &canonical, &mut action, bounds, ui.ctx().pointer_interact_pos());
         if let Some(params) = presentation::bottom_resize(&layout, &action) {
             if let Err(error) = app.run("window.panel.group", params) {
                 app.ui.status = error;
@@ -683,7 +672,10 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             app.ui.status = error;
         }
     }
-    for (id, params) in commands {
+    for (id, mut params) in commands {
+        if id == "window.panel.group" {
+            presentation::command_geometry(app, ui.ctx(), &mut params);
+        }
         if let Err(error) = app.run(id, params) {
             app.ui.status = error;
         }
@@ -1261,6 +1253,36 @@ fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui, panel: &str) {
 }
 
 impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
+    fn owns_iconic_column(&self, _first: &String) -> bool {
+        true
+    }
+    fn resize_handle_style(&self, _default: craft_ui::layout::ResizeHandleStyle) -> craft_ui::layout::ResizeHandleStyle {
+        // Presentation paints each final seam once, including keyboard focus.
+        craft_ui::layout::ResizeHandleStyle { hovered: egui::Color32::TRANSPARENT, dragged: egui::Color32::TRANSPARENT, focused: egui::Color32::TRANSPARENT }
+    }
+    fn column_rect(&mut self, ctx: &egui::Context, column: &Column<String>, rect: egui::Rect, side: Side) {
+        presentation::observe_column(ctx, column, rect, side);
+    }
+    fn custom_group(&mut self, ui: &mut egui::Ui, panels: &[String], _active: &String, rect: egui::Rect, floating: bool) -> bool {
+        presentation::observe_group(ui.ctx(), panels, rect);
+        if floating
+            && self
+                .app
+                .ui
+                .docking
+                .as_ref()
+                .is_some_and(|w| w.layout.floating.iter().any(|w| panels.first().is_some_and(|p| w.contains(p)) && compat::independent_window(w)))
+            && panels.iter().all(|p| self.app.ui.panel_presentation.compact.contains(p))
+        {
+            presentation::embedded_group(self.app, ui, panels, rect, self.commands);
+            true
+        } else {
+            false
+        }
+    }
+    fn iconic_column(&mut self, ui: &mut egui::Ui, column: &Column<String>, rect: egui::Rect, side: Side) {
+        presentation::attached_column(self.app, ui, column, rect, side, self.commands);
+    }
     fn resolve_drag(
         &mut self,
         ctx: &egui::Context,
@@ -1339,7 +1361,8 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         let _ = ui;
     }
     fn group_header_width(&self, _panels: &[String], _active: &String, _floating: bool, _strip_width: f32) -> f32 {
-        if _floating || self.app.ui.docking.as_ref().is_some_and(|w| floats(&w.layout, _active)) { 60.0 } else { 40.0 }
+        let count = if _floating || self.app.ui.docking.as_ref().is_some_and(|w| floats(&w.layout, _active)) { 3.0 } else { 2.0 };
+        count * contract::HEADER_CONTROL_SIZE + 2.0 * contract::HEADER_PADDING
     }
     fn group_header(&mut self, ui: &mut egui::Ui, panels: &[String], active: &String, floating: bool) {
         let collapsed = panels.iter().all(|id| self.collapsed.contains(id));
@@ -1348,12 +1371,23 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
             && ui.ctx().viewport_id() == egui::ViewportId::ROOT
             && (floating || self.app.ui.docking.as_ref().is_some_and(|w| floats(&w.layout, active)));
         let count = if closable { 3.0 } else { 2.0 };
-        let start = ui.max_rect().right() - 20.0 * count;
-        let top = ui.max_rect().top() + 3.0;
-        let button_rect = |i: f32| egui::Rect::from_min_size(egui::pos2(start + 20.0 * i, top), egui::Vec2::splat(20.0));
-        let arrow = presentation::button(ui, button_rect(0.0), area_id().with(("full-chevron", active)), "chevrons-left", tl!("Collapse Panel Group"));
+        let start = ui.max_rect().right() - contract::HEADER_PADDING - contract::HEADER_CONTROL_SIZE * count;
+        let top = ui.max_rect().top() + contract::HEADER_PADDING;
+        let button_rect =
+            |i: f32| egui::Rect::from_min_size(egui::pos2(start + contract::HEADER_CONTROL_SIZE * i, top), egui::Vec2::splat(contract::HEADER_CONTROL_SIZE));
+        let left = presentation::collapse_left(self.app, ui.ctx(), active, ui.max_rect());
+        let arrow = presentation::button(
+            ui,
+            button_rect(0.0),
+            area_id().with(("full-chevron", active)),
+            if left != collapsed { "chevrons-left" } else { "chevrons-right" },
+            if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") },
+        );
         if arrow.clicked() {
-            self.commands.push(("window.panel.group", json!({"panel":active,"operation":"collapse"})));
+            self.commands.push((
+                "window.panel.group",
+                json!({"panel":active,"operation":if collapsed {"expand"} else {"collapse"},"x":self.app.last_canvas_rect.left(),"y":ui.max_rect().top()}),
+            ));
         }
         if closable {
             let close = presentation::button(ui, button_rect(2.0), area_id().with(("full-close", active)), "x", tl!("Close Window"));
@@ -1437,7 +1471,7 @@ fn panel_active(layout: &Layout<String>, panel: &str) -> bool {
 const HEADER_GLYPH_SIZE: f32 = 11.5;
 const HEADER_GLYPH_STROKE: f32 = 1.75;
 const HEADER_DOT_SCALE: f32 = 0.8;
-pub(crate) const COMPACT_COLUMN_WIDTH: f32 = 44.0;
+pub(crate) const COMPACT_COLUMN_WIDTH: f32 = 42.0;
 
 pub(crate) fn compact_grip_width(inner_width: f32) -> f32 {
     (inner_width - 22.0).max(16.0)

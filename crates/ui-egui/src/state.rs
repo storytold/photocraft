@@ -196,7 +196,7 @@ pub struct DocWindow {
 
 /// Application chrome which is not structural docking state. The authoritative
 /// membership, tab order, geometry and hidden return places remain in Workspace.
-#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PanelPresentation {
     pub compact: Vec<String>,
@@ -204,6 +204,26 @@ pub struct PanelPresentation {
     pub heights: std::collections::BTreeMap<String, f32>,
     pub migrated: bool,
     pub flyouts: std::collections::BTreeMap<String, [f32; 2]>,
+    /// Normal floating size, preserved while a panel fills a horizontal dock.
+    pub floating_sizes: std::collections::BTreeMap<String, [f32; 2]>,
+    pub tools_size: Option<[f32; 2]>,
+    /// Version 1 narrows the old 44 pt default; later explicit 44 pt sizes remain personal.
+    #[serde(default)]
+    pub metrics_revision: u8,
+}
+impl Default for PanelPresentation {
+    fn default() -> Self {
+        Self {
+            compact: Vec::new(),
+            widths: Default::default(),
+            heights: Default::default(),
+            migrated: false,
+            flyouts: Default::default(),
+            floating_sizes: Default::default(),
+            tools_size: None,
+            metrics_revision: 1,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

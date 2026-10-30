@@ -29,9 +29,24 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Resu
         "window.tools.dock" => None,
         _ => return Err("unknown Tools operation".into()),
     };
+    let mut size = app.ui.panel_presentation.tools_size;
+    if id == "window.tools.float" && (params.get("width").is_some() || params.get("height").is_some()) {
+        let fallback = size.unwrap_or([crate::panel_docking::COMPACT_COLUMN_WIDTH + if app.ui.panels.toolbar_double { 32.0 } else { 0.0 }, 600.0]);
+        let number = |key, default| match params.get(key) {
+            None => Ok(default),
+            Some(v) => v.as_f64().filter(|v| v.is_finite()).map(|v| v as f32).ok_or_else(|| format!("{key} must be finite")),
+        };
+        let width = number("width", fallback[0])?;
+        let height = number("height", fallback[1])?;
+        if !(crate::panel_docking::COMPACT_COLUMN_WIDTH..=240.0).contains(&width) || !(160.0..=100_000.0).contains(&height) {
+            return Err("Tools size must be 42..240 by 160..100000".into());
+        }
+        size = Some([width, height]);
+    }
     app.ui.toolbar_floating = position;
+    app.ui.panel_presentation.tools_size = size;
     app.ui.panels.toolbar = true;
-    Ok(json!({"toolbarFloating":position}))
+    Ok(json!({"toolbarFloating":position,"toolbarSize":size}))
 }
 pub(crate) fn header_drag(app: &PhotocraftApp, ui: &egui::Ui, response: &egui::Response) {
     if !response.dragged() || app.session.prefs().workspace_locked || ui.data(|d| d.get_temp::<bool>(key("suppressed"))).unwrap_or(false) {
@@ -105,24 +120,46 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
                 .frame(egui::Frame::NONE.fill(t.chrome))
                 .show(ui, |_| {});
         }
-        let height = bounds.height().min((ctx.content_rect().bottom() - position.y).max(120.0));
+        let size = app.ui.panel_presentation.tools_size.unwrap_or([width, (bounds.bottom() - position.y).clamp(160.0, bounds.height().max(160.0))]);
+        let width = size[0].max(width).min(240.0).min(bounds.width().max(width));
+        let height = size[1].clamp(160.0, bounds.height().max(160.0));
         let position = egui::pos2(
             position.x.clamp(ctx.content_rect().left(), (ctx.content_rect().right() - width).max(ctx.content_rect().left())),
             position.y.clamp(ctx.content_rect().top(), (ctx.content_rect().bottom() - height).max(ctx.content_rect().top())),
         );
         ctx.data_mut(|d| d.insert_temp(key("origin"), position));
-        egui::Area::new(key("floating")).order(egui::Order::Middle).movable(false).fixed_pos(position).fade_in(false).show(&ctx, |ui| {
-            if drag.is_some() {
-                ui.set_opacity(0.85);
-            }
-            let result = frame.show(ui, |ui| {
-                ui.set_width((width - 2.0 * f32::from(margin)).max(20.0));
-                ui.set_height((height - 16.0).max(100.0));
-                contents(app, ui);
+        let mut chrome = craft_ui::docking::chrome::ChromeStyle::from_ui(ui);
+        chrome.background = t.chrome;
+        chrome.stroke = egui::Stroke::new(ctx.pixels_per_point().recip(), t.card_border);
+        let rect = Rect::from_min_size(position, vec2(width, height));
+        let blocked = crate::panel_docking::modal_open(app, &ctx);
+        let response = craft_ui::docking::chrome::FloatingFrame::new(key("floating"), rect)
+            .bounds(bounds)
+            .limits(craft_ui::docking::PanelLimits {
+                min: vec2(crate::panel_docking::COMPACT_COLUMN_WIDTH + if app.ui.panels.toolbar_double { 32.0 } else { 0.0 }, 160.0),
+                max: vec2(240.0, bounds.height().max(160.0)),
+            })
+            .reserve_top_resize_band(false)
+            .resizable(!app.session.prefs().workspace_locked && !blocked)
+            .opacity(if drag.is_some() { 0.85 } else { 1.0 })
+            .show(&ctx, &chrome, |ui, body| {
+                if blocked {
+                    ui.disable();
+                }
+                let mut child = ui.new_child(egui::UiBuilder::new().max_rect(body));
+                child.set_clip_rect(body.intersect(ui.clip_rect()));
+                frame.show(&mut child, |ui| {
+                    ui.set_width((width - 2.0 * f32::from(margin)).max(20.0));
+                    ui.set_height((height - 6.0).max(100.0));
+                    contents(app, ui);
+                });
+                crate::panel_visibility::chrome(ui.ctx(), "tools", rect);
             });
-            crate::panel_visibility::chrome(ui.ctx(), "tools", result.response.rect);
-            ui.painter().rect_stroke(result.response.rect, 0.0, egui::Stroke::new(1.0, t.card_border), egui::StrokeKind::Inside);
-        });
+        if let Some(resized) = response.resized
+            && let Err(error) = app.run("window.tools.float", json!({"x":resized.left(),"y":resized.top(),"width":resized.width(),"height":resized.height()}))
+        {
+            app.ui.status = error;
+        }
         if let Some(drag) = drag {
             if docking {
                 let rect = Rect::from_min_max(egui::pos2(dock_x - 2.0, bounds.top()), egui::pos2(dock_x + 2.0, bounds.bottom()));

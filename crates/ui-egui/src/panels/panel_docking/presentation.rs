@@ -7,7 +7,7 @@ use super::{
 use craft_ui::docking::{DockArea, DropFeedback, DropRequest, Hit};
 use egui::{Pos2, Rect, Sense, Vec2, pos2, vec2};
 
-const HEADER: f32 = 20.0;
+const HEADER: f32 = super::contract::HEADER_CONTROL_SIZE;
 const GRIP: f32 = 11.0;
 const ROW: f32 = 35.0;
 const INSET: f32 = 3.0;
@@ -18,6 +18,7 @@ struct Strip {
     rows: Vec<Vec<String>>,
     rect: Rect,
     attached: bool,
+    embedded: bool,
     left: bool,
     offset: f32,
 }
@@ -25,8 +26,11 @@ impl Strip {
     fn panels(&self) -> impl Iterator<Item = &String> {
         self.rows.iter().flatten()
     }
+    fn header_inset(&self) -> f32 {
+        if self.attached { INSET } else { 0.0 }
+    }
     fn cells(&self) -> Vec<(String, Rect)> {
-        let mut y = self.rect.top() + INSET + HEADER + GRIP - self.offset;
+        let mut y = self.rect.top() + self.header_inset() + HEADER + GRIP - self.offset;
         let mut out = Vec::new();
         for row in &self.rows {
             for id in row {
@@ -37,10 +41,17 @@ impl Strip {
         out
     }
 }
+#[derive(Clone, Copy)]
+enum DragView {
+    Palette,
+    Editor,
+}
+
 #[derive(Clone)]
 struct Drag {
     panel: String,
     whole: bool,
+    view: DragView,
     press: Pos2,
     source: Rect,
     generation: u64,
@@ -86,6 +97,7 @@ pub(super) fn rendered_layout<'a>(
     canonical: &'a Layout<String>,
     available_height: f32,
     preview: Option<&(String, f32)>,
+    pixel: f32,
 ) -> std::borrow::Cow<'a, Layout<String>> {
     let compact_float = canonical.floating.iter().any(|w| w.native.is_none() && w.panels().all(|p| app.ui.panel_presentation.compact.contains(p)));
     let size_columns = app.ui.panel_presentation.migrated && compat::columns(canonical).iter().any(|(_, c)| !c.iconic);
@@ -93,7 +105,8 @@ pub(super) fn rendered_layout<'a>(
         return std::borrow::Cow::Borrowed(canonical);
     }
     let mut layout = canonical.clone();
-    layout.floating.retain(|w| w.native.is_some() || !w.panels().all(|p| app.ui.panel_presentation.compact.contains(p)));
+    layout.floating.retain(|w| w.native.is_some() || compat::independent_window(w) || !w.panels().all(|p| app.ui.panel_presentation.compact.contains(p)));
+    fit_compact_windows(&mut layout, &app.ui.panel_presentation, pixel);
     if size_columns {
         let mut pending: Vec<_> = layout.root.iter_mut().collect();
         while let Some(node) = pending.pop() {
@@ -147,6 +160,9 @@ pub(super) fn bottom_resize(layout: &Layout<String>, action: &Action<String>) ->
 
 fn resize_preview(ctx: &egui::Context, strip: &mut Strip) {
     let Some(start) = ctx.data(|d| d.get_temp::<Resize>(key("resize"))).filter(|r| r.panel == strip.first) else { return };
+    if start.attached && !start.height {
+        return;
+    }
     if start.height {
         if let Some((_, height)) = height_preview(ctx) {
             strip.rect = Rect::from_min_size(start.rect.min, vec2(start.rect.width(), height));
@@ -157,6 +173,103 @@ fn resize_preview(ctx: &egui::Context, strip: &mut Strip) {
     let width = (start.rect.width() + if start.left { -dx } else { dx }).clamp(COMPACT_COLUMN_WIDTH, 240.0);
     strip.rect =
         Rect::from_min_size(pos2(if start.left { start.rect.right() - width } else { start.rect.left() }, start.rect.top()), vec2(width, start.rect.height()));
+}
+
+/// Apply transient widths before the workspace's fit pass. Nothing is persisted until release.
+pub(super) fn preview_columns(ctx: &egui::Context, view: &mut std::borrow::Cow<'_, Layout<String>>) {
+    let Some(start) = ctx.data(|d| d.get_temp::<Resize>(key("resize"))).filter(|r| r.attached && !r.height) else { return };
+    let dx = ctx.pointer_interact_pos().unwrap_or(start.press).x - start.press.x;
+    let width = (start.rect.width() + if start.left { -dx } else { dx }).clamp(COMPACT_COLUMN_WIDTH, 240.0);
+    let mut pending: Vec<_> = view.to_mut().root.iter_mut().collect();
+    while let Some(node) = pending.pop() {
+        match node {
+            super::Node::Split { first, second, .. } => pending.extend([first.as_mut(), second.as_mut()]),
+            super::Node::Dock { columns, .. } => {
+                for column in columns.iter_mut().filter(|c| c.iconic && c.groups.iter().any(|g| g.panels.contains(&start.panel))) {
+                    column.iconic_width = Some(width);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn attached_strip(app: &PhotocraftApp, ctx: &egui::Context, column: &super::Column<String>, rect: Rect, side: Side) -> Strip {
+    let first = column.groups.first().and_then(|g| g.panels.first()).cloned().unwrap_or_default();
+    let height = app.ui.panel_presentation.heights.get(&first).copied().unwrap_or(rect.height()).min(rect.height()).max(0.0);
+    Strip {
+        first: first.clone(),
+        rows: column.groups.iter().map(|g| g.panels.clone()).collect(),
+        rect: Rect::from_min_size(rect.min, vec2(rect.width(), height)),
+        attached: true,
+        embedded: false,
+        left: (side == Side::Start) != crate::direction::is_rtl(),
+        offset: ctx.data(|d| d.get_temp::<f32>(key("scroll").with(&first))).unwrap_or(0.0),
+    }
+}
+
+pub(super) fn observe_column(ctx: &egui::Context, column: &super::Column<String>, rect: Rect, side: Side) {
+    let Some(first) = column.groups.first().and_then(|g| g.panels.first()) else { return };
+    ctx.data_mut(|d| {
+        let mut columns = d.get_temp::<Vec<(String, Rect, Side)>>(key("columns")).unwrap_or_default();
+        columns.push((first.clone(), rect, side));
+        d.insert_temp(key("columns"), columns);
+    });
+}
+
+pub(super) fn attached_column(
+    app: &mut PhotocraftApp,
+    ui: &mut egui::Ui,
+    column: &super::Column<String>,
+    rect: Rect,
+    side: Side,
+    commands: &mut Vec<(&'static str, Value)>,
+) {
+    let strip = attached_strip(app, ui.ctx(), column, rect, side);
+    ui.ctx().data_mut(|d| {
+        let mut drawn = d.get_temp::<Vec<Strip>>(key("strips")).unwrap_or_default();
+        drawn.push(strip.clone());
+        d.insert_temp(key("strips"), drawn);
+    });
+    paint_strip(app, ui, &strip, commands);
+}
+
+fn paint_strip(app: &mut PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands: &mut Vec<(&'static str, Value)>) {
+    if super::modal_open(app, ui.ctx()) {
+        ui.disable();
+    }
+    let t = crate::theme::Tokens::get(ui.ctx());
+    ui.interact(strip.rect, key("background").with(&strip.first), Sense::click());
+    ui.set_min_size(strip.rect.size());
+    ui.set_max_size(strip.rect.size());
+    ui.painter().rect_filled(strip.rect, if strip.attached { 0.0 } else { t.radius_sm }, t.card);
+    let clip = ui.clip_rect();
+    let pixel = ui.ctx().pixels_per_point().recip();
+    ui.set_clip_rect(clip.intersect(strip.rect));
+    header(app, ui, strip, commands);
+    ui.set_clip_rect(clip.intersect(strip.rect.shrink(pixel)));
+    icon_list(app, ui, strip, commands);
+    ui.set_clip_rect(clip);
+    resize(app, ui, strip, commands);
+    if strip.attached {
+        height_handle(app, ui, &strip.first, strip.rect, 100.0, commands);
+    } else if !strip.embedded {
+        // A standalone palette owns its outline; embedded parts share the parent's outside stroke.
+        ui.painter().rect_stroke(strip.rect, t.radius_sm, egui::Stroke::new(pixel, t.card_border), egui::StrokeKind::Inside);
+        for left in [true, false] {
+            if keyboard_resize_focus(ui.ctx(), &strip.first, left) {
+                let x = if left { strip.rect.left() + pixel * 0.5 } else { strip.rect.right() - pixel * 0.5 };
+                ui.painter().vline(x, (strip.rect.top() + HEADER + GRIP)..=strip.rect.bottom(), egui::Stroke::new(pixel, t.accent));
+            }
+        }
+    }
+}
+
+fn keyboard_resize_focus(ctx: &egui::Context, panel: &str, left: bool) -> bool {
+    keyboard_handle_focus(ctx, key("resize").with((panel, left)))
+}
+fn keyboard_handle_focus(ctx: &egui::Context, id: egui::Id) -> bool {
+    ctx.input(|i| i.focused && !i.pointer.any_down()) && ctx.memory(|m| m.has_focus(id))
 }
 
 pub(super) fn cancel_resize(app: &PhotocraftApp, ctx: &egui::Context) {
@@ -170,7 +283,7 @@ pub(super) fn cancel_resize(app: &PhotocraftApp, ctx: &egui::Context) {
     }
     let Some(start) = ctx.data(|d| d.get_temp::<Resize>(key("resize"))) else { return };
     let cancel = ctx.input(|i| !i.focused || i.key_pressed(egui::Key::Escape) || (!i.pointer.primary_down() && !i.pointer.primary_released()));
-    if cancel || app.session.prefs().workspace_locked || app.ui.docking_generation != start.generation {
+    if cancel || super::modal_open(app, ctx) || app.session.prefs().workspace_locked || app.ui.docking_generation != start.generation {
         ctx.data_mut(|d| {
             d.remove::<Resize>(key("resize"));
             d.insert_temp(key("suppressed"), true);
@@ -179,32 +292,23 @@ pub(super) fn cancel_resize(app: &PhotocraftApp, ctx: &egui::Context) {
 }
 
 fn strips(app: &PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>) -> Vec<Strip> {
-    let hits = DockArea::<String>::hit_rects(ctx, area_id());
     let mut out = Vec::new();
+    let columns = ctx.data(|d| d.get_temp::<Vec<(String, Rect, Side)>>(key("columns"))).unwrap_or_default();
     for (side, column) in compat::columns(layout).into_iter().filter(|(_, c)| c.iconic) {
         let Some(first) = column.groups.first().and_then(|g| g.panels.first()) else { continue };
-        let Some((_, bar)) = hits.iter().find(|(h, _)| matches!(h, Hit::Icon(id) if id == first)) else { continue };
-        let left = (side == Side::Start) != crate::direction::is_rtl();
-        let height = app.ui.panel_presentation.heights.get(first).copied().unwrap_or(ctx.content_rect().bottom() - bar.top());
-        out.push(Strip {
-            first: first.clone(),
-            rows: column.groups.iter().map(|g| g.panels.clone()).collect(),
-            rect: Rect::from_min_size(bar.min, vec2(bar.width(), height)),
-            attached: true,
-            left,
-            offset: ctx.data(|d| d.get_temp::<f32>(key("scroll").with(first))).unwrap_or(0.0),
-        });
+        let Some((_, rect, _)) = columns.iter().find(|(id, _, _)| id == first) else { continue };
+        out.push(attached_strip(app, ctx, column, *rect, side));
     }
     for window in &layout.floating {
-        if window.native.is_some() || !window.panels().all(|p| app.ui.panel_presentation.compact.contains(p)) {
+        if window.native.is_some() || compat::independent_window(window) || !window.panels().all(|p| app.ui.panel_presentation.compact.contains(p)) {
             continue;
         }
         let Some(first) = window.panels().next() else { continue };
         let rows: Vec<_> = tree_groups(&window.root).into_iter().map(|g| g.panels).collect();
         let width = app.ui.panel_presentation.widths.get(first).copied().unwrap_or(COMPACT_COLUMN_WIDTH).clamp(COMPACT_COLUMN_WIDTH, 240.0);
         let count = rows.iter().map(Vec::len).sum::<usize>();
-        let height = HEADER + GRIP + ROW * count as f32 + 2.0 * INSET;
-        let screen = ctx.content_rect();
+        let height = HEADER + GRIP + ROW * count as f32 + 1.5;
+        let screen = ctx.data(|d| d.get_temp::<Rect>(key("bounds"))).unwrap_or_else(|| ctx.content_rect());
         let height = height.min(screen.height().max(HEADER + GRIP + ROW));
         let position = pos2(
             window.rect[0].clamp(screen.left(), (screen.right() - width).max(screen.left())),
@@ -217,59 +321,208 @@ fn strips(app: &PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>) -> 
             rows,
             rect,
             attached: false,
+            embedded: false,
             left,
             offset: ctx.data(|d| d.get_temp::<f32>(key("scroll").with(first))).unwrap_or(0.0),
         });
     }
+    out.extend(ctx.data(|d| d.get_temp::<Vec<Strip>>(key("embedded-strips"))).unwrap_or_default());
     for strip in &mut out {
+        if strip.embedded {
+            continue;
+        }
         resize_preview(ctx, strip);
+        if !strip.attached {
+            let scale = ctx.pixels_per_point();
+            let snap = |p: Pos2| pos2((p.x * scale).round() / scale, (p.y * scale).round() / scale);
+            let size = vec2((strip.rect.width() * scale).ceil() / scale, (strip.rect.height() * scale).ceil() / scale);
+            strip.rect = Rect::from_min_size(snap(strip.rect.min), size);
+        }
     }
     out
 }
 pub(super) fn prepare(ctx: &egui::Context, app: &PhotocraftApp, layout: &Layout<String>, bounds: Rect) {
     cancel_resize(app, ctx);
-    let drawn = strips(app, ctx, layout);
     ctx.data_mut(|d| {
+        d.remove::<Vec<Strip>>(key("embedded-strips"));
+        d.remove::<Vec<(String, Rect)>>(key("group-rects"));
+    });
+    let drawn = strips(app, ctx, layout);
+    let (pointer, keyboard) = ctx.input(|i| (i.pointer.any_pressed(), i.events.iter().any(|e| matches!(e, egui::Event::Key { pressed: true, .. }))));
+    ctx.data_mut(|d| {
+        let focus = if pointer {
+            false
+        } else if keyboard {
+            true
+        } else {
+            d.get_temp::<bool>(key("keyboard-input")).unwrap_or(false)
+        };
+        d.insert_temp(key("keyboard-input"), focus);
         d.insert_temp(key("bounds"), bounds);
-        d.insert_temp(key("strips"), drawn);
+        d.insert_temp(key("strips"), drawn.into_iter().filter(|s| !s.attached).collect::<Vec<_>>());
+        d.insert_temp(key("columns"), Vec::<(String, Rect, Side)>::new());
     });
 }
 
+pub(super) fn embedded_limits(app: &PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>) -> std::collections::HashMap<String, (f32, f32)> {
+    let resize = ctx.data(|d| d.get_temp::<Resize>(key("resize")));
+    let mut out = std::collections::HashMap::new();
+    for window in layout.floating.iter().filter(|w| compat::independent_window(w)) {
+        for group in tree_groups(&window.root).into_iter().filter(|g| g.panels.iter().all(|p| app.ui.panel_presentation.compact.contains(p))) {
+            let Some(first) = group.panels.first() else { continue };
+            let mut width = app.ui.panel_presentation.widths.get(first).copied().unwrap_or(COMPACT_COLUMN_WIDTH);
+            if let Some(start) = resize.as_ref().filter(|r| group.panels.contains(&r.panel) && !r.height) {
+                let dx = ctx.pointer_interact_pos().unwrap_or(start.press).x - start.press.x;
+                width = (start.rect.width() + if start.left { -dx } else { dx }).clamp(COMPACT_COLUMN_WIDTH, 240.0);
+            }
+            let height = HEADER + GRIP + ROW * group.panels.len() as f32 + 1.5 - super::contract::FULL_HEADER_HEIGHT;
+            for id in group.panels {
+                out.insert(id, (width, height));
+            }
+        }
+    }
+    out
+}
+pub(super) fn embedded_group(app: &mut PhotocraftApp, ui: &mut egui::Ui, panels: &[String], rect: Rect, commands: &mut Vec<(&'static str, Value)>) {
+    let Some(first) = panels.first() else { return };
+    let strip = Strip {
+        first: first.clone(),
+        rows: vec![panels.to_vec()],
+        rect,
+        attached: false,
+        embedded: true,
+        left: rect.center().x < ui.ctx().content_rect().center().x,
+        offset: ui.data(|d| d.get_temp::<f32>(key("scroll").with(first))).unwrap_or(0.0),
+    };
+    ui.data_mut(|d| {
+        d.get_temp_mut_or_default::<Vec<Strip>>(key("embedded-strips")).push(strip.clone());
+        d.get_temp_mut_or_default::<Vec<Strip>>(key("strips")).push(strip.clone());
+    });
+    let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("compact-group", first)).max_rect(rect));
+    child.set_clip_rect(rect.intersect(ui.clip_rect()));
+    paint_strip(app, &mut child, &strip, commands);
+    // Adjacent parts meet in a one-physical-pixel gap. Both strokes occupy that same
+    // gap, and an outside edge coincides with the shared floating frame's outline.
+    ui.painter().with_clip_rect(ui.clip_rect().expand(ui.ctx().pixels_per_point().recip()).intersect(ui.ctx().content_rect())).rect_stroke(
+        rect,
+        0.0,
+        egui::Stroke::new(ui.ctx().pixels_per_point().recip(), crate::theme::Tokens::get(ui.ctx()).card_border),
+        egui::StrokeKind::Outside,
+    );
+}
+/// Prefer the exterior of adjacent compact parts; fall back to the side with less overlap.
+fn opens_right(ctx: &egui::Context, strip: &Strip, strips: &[Strip], width: f32, bounds: Rect) -> bool {
+    // Dock side is authoritative: scoring clamped candidates can otherwise put the
+    // editor over its own right-edge icon merely to avoid the Layers body behind it.
+    if strip.attached {
+        return strip.left;
+    }
+    let left_space = strip.rect.left() - bounds.left();
+    let right_space = bounds.right() - strip.rect.right();
+    if (left_space >= width) != (right_space >= width) {
+        return right_space >= width;
+    }
+    let candidates = [
+        Rect::from_min_size(pos2((strip.rect.left() - width).max(bounds.left()), strip.rect.top()), vec2(width, strip.rect.height())),
+        Rect::from_min_size(pos2(strip.rect.right().min((bounds.right() - width).max(bounds.left())), strip.rect.top()), vec2(width, strip.rect.height())),
+    ];
+    let obstacles: Vec<_> = strips
+        .iter()
+        .filter(|s| s.first != strip.first)
+        .map(|s| s.rect)
+        .chain(super::last_bodies(ctx).into_iter().filter(|(id, _)| id != super::CANVAS && !is_spacer(id) && !strip.panels().any(|p| p == id)).map(|(_, r)| r))
+        .collect();
+    let overlap = |rect: Rect| {
+        obstacles
+            .iter()
+            .map(|other| {
+                let r = rect.intersect(*other);
+                if r.is_positive() { r.area() } else { 0.0 }
+            })
+            .sum::<f32>()
+    };
+    let [left, right] = candidates.map(overlap);
+    if (left - right).abs() > 0.1 { right < left } else { strip.left }
+}
+fn expansion(app: &PhotocraftApp, ctx: &egui::Context, strip: &Strip) -> Value {
+    let mut params = json!({"panel":strip.first,"operation":"expand"});
+    if !strip.attached
+        && !strip.embedded
+        && let Some(window) = app.ui.docking.as_ref().and_then(|w| w.layout.floating.iter().find(|w| w.contains(&strip.first)))
+    {
+        let all = strips(app, ctx, &app.ui.docking.as_ref().map_or_else(Layout::default, |w| w.layout.clone()));
+        let bounds = ctx.data(|d| d.get_temp::<Rect>(key("bounds"))).unwrap_or_else(|| ctx.content_rect());
+        let width = window.rect[2];
+        let x = if opens_right(ctx, strip, &all, (width - strip.rect.width()).max(0.0), bounds) { strip.rect.left() } else { strip.rect.right() - width };
+        params["x"] = json!(x.clamp(bounds.left(), (bounds.right() - width).max(bounds.left())));
+        params["y"] = json!(strip.rect.top());
+    }
+    params
+}
+
 pub(super) fn button(ui: &mut egui::Ui, rect: Rect, id: egui::Id, glyph: &str, label: &str) -> egui::Response {
+    rounded_button(ui, rect, id, glyph, label, egui::CornerRadius::same(2))
+}
+fn rounded_button(ui: &mut egui::Ui, rect: Rect, id: egui::Id, glyph: &str, label: &str, corners: egui::CornerRadius) -> egui::Response {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let response = ui.interact(rect, id, Sense::click_and_drag());
+    let response = ui.interact(rect, id, Sense::click());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), label));
     if response.hovered() {
-        ui.painter().rect_filled(rect, 2.0, t.card_border);
+        ui.painter().rect_filled(rect, corners, t.card_border);
     }
     paint_header_glyph(ui.painter(), rect, glyph, t.text_dim);
-    response.on_hover_cursor(egui::CursorIcon::Default).on_hover_text(label)
+    response.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(label)
 }
-pub(super) fn begin(app: &PhotocraftApp, ui: &egui::Ui, response: &egui::Response, panel: &str, whole: bool, source: Rect) {
+fn begin(app: &PhotocraftApp, ui: &egui::Ui, response: &egui::Response, panel: &str, whole: bool, view: DragView, source: Rect) {
     if app.session.prefs().workspace_locked || !response.drag_started() || ui.data(|d| d.get_temp::<bool>(key("suppressed"))).unwrap_or(false) {
         return;
     }
     let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(source.center());
-    ui.data_mut(|d| d.insert_temp(key("drag"), Drag { panel: panel.into(), whole, press, source, generation: app.ui.docking_generation }));
+    ui.data_mut(|d| d.insert_temp(key("drag"), Drag { panel: panel.into(), whole, view, press, source, generation: app.ui.docking_generation }));
 }
+fn header_corners(strip: &Strip, rect: Rect, radius: f32) -> egui::CornerRadius {
+    let mut corners = egui::CornerRadius::same(2);
+    if !strip.attached {
+        let outer = egui::CornerRadius::from(radius);
+        if rect.left() <= strip.rect.left() {
+            corners.nw = outer.nw;
+        }
+        if rect.right() >= strip.rect.right() {
+            corners.ne = outer.ne;
+        }
+    }
+    corners
+}
+
 fn header(app: &PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands: &mut Vec<(&'static str, Value)>) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let top = Rect::from_min_size(strip.rect.min + vec2(0.0, INSET), vec2(strip.rect.width(), HEADER + GRIP));
-    ui.painter().rect_filled(top, 0.0, t.card);
-    let x = if strip.attached { strip.rect.center().x - 10.0 } else { strip.rect.right() - 40.0 - INSET };
-    let arrow = Rect::from_min_size(pos2(x, top.top()), Vec2::splat(20.0));
-    let response = button(ui, arrow, key("expand").with(&strip.first), if strip.left { "chevrons-right" } else { "chevrons-left" }, tl!("Expand Panel Group"));
+    let top = Rect::from_min_size(strip.rect.min + vec2(0.0, strip.header_inset()), vec2(strip.rect.width(), HEADER + GRIP));
+    let scale = ui.ctx().pixels_per_point();
+    let pair = (COMPACT_COLUMN_WIDTH * scale).ceil() / scale;
+    let x = if strip.attached { strip.rect.center().x - 10.0 } else { strip.rect.right() - pair };
+    let button_width = if strip.attached { 20.0 } else { (pair * scale * 0.5).floor() / scale };
+    let arrow = Rect::from_min_size(pos2(x, top.top()), vec2(button_width, HEADER));
+    let response = rounded_button(
+        ui,
+        arrow,
+        key("expand").with(&strip.first),
+        if if strip.embedded { horizontal_peer_left(app, &strip.first).unwrap_or(strip.left) } else { strip.left } {
+            "chevrons-right"
+        } else {
+            "chevrons-left"
+        },
+        tl!("Expand Panel Group"),
+        header_corners(strip, arrow, t.radius_sm),
+    );
     if response.clicked() {
-        commands.push(("window.panel.group", json!({"panel":strip.first,"operation":"expand"})));
+        commands.push(("window.panel.group", expansion(app, ui.ctx(), strip)));
     }
-    begin(app, ui, &response, &strip.first, true, strip.rect);
     if !strip.attached {
-        let close = arrow.translate(vec2(20.0, 0.0));
-        let response = button(ui, close, key("close").with(&strip.first), "x", tl!("Close Tab Group"));
+        let close = Rect::from_min_max(pos2(arrow.right(), top.top()), pos2(strip.rect.right(), top.top() + HEADER));
+        let response = rounded_button(ui, close, key("close").with(&strip.first), "x", tl!("Close Tab Group"), header_corners(strip, close, t.radius_sm));
         if response.clicked() {
-            commands.push(("window.panel.group", json!({"panel":strip.first,"operation":"close-window"})));
+            commands.push(("window.panel.group", json!({"panel":strip.first,"operation":if strip.embedded {"close-row"} else {"close-window"}})));
         }
-        begin(app, ui, &response, &strip.first, true, strip.rect);
     }
     let grip = Rect::from_min_max(pos2(top.left(), top.top() + HEADER), top.max);
     let response = ui.interact(grip, key("grip").with(&strip.first), Sense::click_and_drag());
@@ -281,9 +534,9 @@ fn header(app: &PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands: &mut 
     for y in [-1.5, 1.5] {
         ui.painter().line_segment([grip.center() + vec2(-half, y), grip.center() + vec2(half, y)], egui::Stroke::new(1.0, t.text_faint.gamma_multiply(0.3)));
     }
-    begin(app, ui, &response, &strip.first, true, strip.rect);
+    begin(app, ui, &response, &strip.first, true, DragView::Palette, strip.rect);
     if response.double_clicked() {
-        commands.push(("window.panel.group", json!({"panel":strip.first,"operation":"expand"})));
+        commands.push(("window.panel.group", expansion(app, ui.ctx(), strip)));
     }
 }
 fn resize(app: &PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands: &mut Vec<(&'static str, Value)>) {
@@ -295,8 +548,38 @@ fn resize(app: &PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands: &mut 
             continue;
         }
         let x = if left { strip.rect.left() } else { strip.rect.right() };
-        let rect = Rect::from_min_max(pos2(x - 2.0, strip.rect.top() + HEADER + GRIP), pos2(x + 2.0, strip.rect.bottom()));
-        let response = ui.interact(rect, key("resize").with((&strip.first, left)), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+        let pixel = ui.ctx().pixels_per_point().recip();
+        let center = (x / pixel).round() * pixel + if left { pixel * 0.5 } else { -pixel * 0.5 };
+        let rect = Rect::from_min_max(pos2(center - pixel * 0.5, strip.rect.top() + HEADER + GRIP), pos2(center + pixel * 0.5, strip.rect.bottom()));
+        let result = craft_ui::layout::ResizeHandle::new(
+            key("resize").with((&strip.first, left)),
+            craft_ui::layout::SplitAxis::Horizontal,
+            rect,
+            tl!("Resize panels"),
+            craft_ui::layout::ResizeHandleStyle {
+                hovered: egui::Color32::TRANSPARENT,
+                dragged: egui::Color32::TRANSPARENT,
+                focused: crate::theme::Tokens::get(ui.ctx()).accent,
+            },
+        )
+        .hit_margin(2.5)
+        .value(strip.rect.width(), COMPACT_COLUMN_WIDTH..=240.0)
+        .reversed(left)
+        .show(ui);
+        let response = result.response;
+        if result.delta != 0.0 && !response.dragged() {
+            let width = (strip.rect.width() + if left { -result.delta } else { result.delta }).clamp(COMPACT_COLUMN_WIDTH, 240.0);
+            commands.push(("window.panel.group", json!({"panel":strip.first,"operation":"strip-width","width":width})));
+            if left
+                && !strip.attached
+                && !strip.embedded
+                && let Some(w) = app.ui.docking.as_ref().and_then(|w| w.layout.floating.iter().find(|w| w.contains(&strip.first)))
+            {
+                let mut rect = w.rect;
+                rect[0] = strip.rect.right() - width;
+                commands.push(("window.panel.layout", json!({"action":Action::MoveFloating {panel:strip.first.clone(),rect}})));
+            }
+        }
         if response.drag_started() {
             let press = ui.input(|i| i.pointer.press_origin()).unwrap_or(rect.center());
             ui.data_mut(|d| {
@@ -319,10 +602,12 @@ fn resize(app: &PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands: &mut 
             && let Some(start) = ui.data(|d| d.get_temp::<Resize>(key("resize")))
         {
             let dx = ui.ctx().pointer_interact_pos().unwrap_or(start.press).x - start.press.x;
-            let width = (start.rect.width() + if start.left { -dx } else { dx }).clamp(COMPACT_COLUMN_WIDTH, 240.0);
+            let width =
+                if start.attached { strip.rect.width() } else { (start.rect.width() + if start.left { -dx } else { dx }).clamp(COMPACT_COLUMN_WIDTH, 240.0) };
             commands.push(("window.panel.group", json!({"panel":start.panel,"operation":"strip-width","width":width})));
             if start.left
                 && !start.attached
+                && !strip.embedded
                 && let Some(w) = app.ui.docking.as_ref().and_then(|w| w.layout.floating.iter().find(|w| w.contains(&start.panel)))
             {
                 let mut rect = w.rect;
@@ -345,60 +630,35 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &Layout<S
     ctx.data_mut(|d| d.insert_temp(key("strips"), drawn.clone()));
     let t = crate::theme::Tokens::get(&ctx);
     for strip in &drawn {
-        let paint = |ui: &mut egui::Ui, app: &mut PhotocraftApp, commands: &mut Vec<(&'static str, Value)>| {
-            if super::modal_open(app, ui.ctx()) {
-                ui.disable();
-            }
-            ui.interact(strip.rect, key("background").with(&strip.first), Sense::click());
-            ui.set_min_size(strip.rect.size());
-            ui.set_max_size(strip.rect.size());
-            ui.painter().rect_filled(strip.rect, t.radius_sm, t.card);
-            if strip.attached {
-                ui.painter().vline(
-                    strip.rect.right() - ctx.pixels_per_point().recip() * 0.5,
-                    strip.rect.y_range(),
-                    egui::Stroke::new(ctx.pixels_per_point().recip(), t.card_border),
-                );
-            } else {
-                ui.painter().rect_stroke(strip.rect, t.radius_sm, egui::Stroke::new(ctx.pixels_per_point().recip(), t.card_border), egui::StrokeKind::Inside);
-            }
-            header(app, ui, strip, commands);
-            icon_list(app, ui, strip, commands);
-            resize(app, ui, strip, commands);
-            if strip.attached {
-                height_handle(app, ui, &strip.first, strip.rect, 100.0, commands);
-            }
-        };
-        if strip.attached {
-            let mut child =
-                ui.new_child(egui::UiBuilder::new().id_salt((&strip.first, "compact")).max_rect(strip.rect).layout(egui::Layout::top_down(egui::Align::Min)));
-            child.set_clip_rect(strip.rect);
-            paint(&mut child, app, commands);
-        } else {
+        if !strip.attached && !strip.embedded {
             egui::Area::new(key("float").with(&strip.first))
                 .order(egui::Order::Middle)
                 .fixed_pos(strip.rect.min)
                 .movable(false)
                 .fade_in(false)
-                .show(&ctx, |ui| paint(ui, app, commands));
+                .show(&ctx, |ui| paint_strip(app, ui, strip, commands));
         }
     }
     column_height_handles(app, ui, layout, bounds, commands);
     let pixel = ctx.pixels_per_point().recip();
     if compat::columns(layout).iter().any(|(side, _)| *side == Side::Start) {
-        ui.painter().vline(bounds.left() + pixel * 0.5, bounds.y_range(), egui::Stroke::new(pixel, t.card_border));
+        let x = (bounds.left() / pixel).round() * pixel + pixel * 0.5;
+        ui.painter().vline(x, bounds.y_range(), egui::Stroke::new(pixel, t.card_border));
+    }
+    let columns = ctx.data(|d| d.get_temp::<Vec<(String, Rect, Side)>>(key("columns"))).unwrap_or_default();
+    for (first, rect, side) in columns {
+        let left = (side == Side::Start) != crate::direction::is_rtl();
+        let x = if left { rect.right() } else { rect.left() };
+        let x = (x / pixel).round() * pixel + if left { -pixel * 0.5 } else { pixel * 0.5 };
+        let stock = DockArea::<String>::hit_id(area_id(), &Hit::Divider(craft_ui::docking::Divider::Column(first.clone())));
+        let tint = if keyboard_resize_focus(&ctx, &first, !left) || keyboard_handle_focus(&ctx, stock) { t.accent } else { t.card_border };
+        ui.painter().vline(x, rect.y_range(), egui::Stroke::new(pixel, tint));
     }
     for (hit, rect) in DockArea::<String>::hit_rects(&ctx, area_id()) {
-        match hit {
-            Hit::Divider(craft_ui::docking::Divider::Column(_)) => {
-                let x = (rect.center().x / pixel).round() * pixel - pixel * 0.5;
-                ui.painter().vline(x, rect.y_range(), egui::Stroke::new(pixel, t.card_border));
-            }
-            Hit::Divider(craft_ui::docking::Divider::Group(_)) => {
-                let y = (rect.center().y / pixel).round() * pixel - pixel * 0.5;
-                ui.painter().hline(rect.x_range(), y, egui::Stroke::new(pixel, t.card_border));
-            }
-            _ => {}
+        if let Hit::Divider(craft_ui::docking::Divider::Group(_)) = hit {
+            let y = (rect.center().y / pixel).round() * pixel - pixel * 0.5;
+            let tint = if keyboard_handle_focus(&ctx, DockArea::<String>::hit_id(area_id(), &hit)) { t.accent } else { t.card_border };
+            ui.painter().hline(rect.x_range(), y, egui::Stroke::new(pixel, tint));
         }
     }
     flyout(app, &ctx, layout, &drawn, commands);
@@ -416,7 +676,7 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &Layout<S
 }
 fn icon_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands: &mut Vec<(&'static str, Value)>) {
     let t = crate::theme::Tokens::get(ui.ctx());
-    let view = Rect::from_min_max(pos2(strip.rect.left(), strip.rect.top() + INSET + HEADER + GRIP), strip.rect.max - vec2(0.0, INSET));
+    let view = Rect::from_min_max(pos2(strip.rect.left(), strip.rect.top() + strip.header_inset() + HEADER + GRIP), strip.rect.max - vec2(0.0, 1.5));
     let mut child = ui.new_child(egui::UiBuilder::new().id_salt((&strip.first, "icon-list")).max_rect(view).layout(egui::Layout::top_down(egui::Align::Min)));
     child.set_clip_rect(view.intersect(ui.clip_rect()));
     child.style_mut().spacing.scroll = egui::style::ScrollStyle {
@@ -441,17 +701,23 @@ fn icon_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands
                 if on || r.hovered() {
                     ui.painter().rect_filled(r.rect, t.radius_sm, t.card_border);
                 }
-                if on {
+                if on || r.has_focus() && ui.data(|d| d.get_temp::<bool>(key("keyboard-input"))).unwrap_or(false) {
                     ui.painter().rect_stroke(r.rect, t.radius_sm, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
                 }
-                let icon = Rect::from_center_size(pos2(cell.left() + COMPACT_COLUMN_WIDTH * 0.5, cell.center().y), Vec2::splat(20.0));
+                let icon = Rect::from_center_size(
+                    pos2(cell.left() + (COMPACT_COLUMN_WIDTH * ui.ctx().pixels_per_point()).ceil() / ui.ctx().pixels_per_point() * 0.5, cell.center().y),
+                    Vec2::splat(20.0),
+                );
                 crate::icons::paint(ui, icon, panel_icon(&id), 20.0, t.text_dim);
                 let available = cell.right() - icon.right() - 12.0;
-                let minimum = ui
-                    .painter()
-                    .layout_no_wrap(format!("{}…", normalize_label(&id).chars().take(2).collect::<String>()), egui::FontId::proportional(12.0), t.text)
-                    .size()
-                    .x;
+                let minimum = if available > 0.0 {
+                    ui.painter()
+                        .layout_no_wrap(format!("{}…", normalize_label(&id).chars().take(2).collect::<String>()), egui::FontId::proportional(12.0), t.text)
+                        .size()
+                        .x
+                } else {
+                    f32::INFINITY
+                };
                 if available >= minimum {
                     let galley = ui.painter().layout(normalize_label(&id), egui::FontId::proportional(12.0), t.text, available);
                     let mut job = (*galley.job).clone();
@@ -461,7 +727,7 @@ fn icon_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands
                     let galley = ui.fonts_mut(|f| f.layout_job(job));
                     ui.painter().galley(pos2(icon.right() + 6.0, cell.center().y - galley.size().y * 0.5), galley, t.text);
                 }
-                begin(app, ui, &r, &id, false, cell);
+                begin(app, ui, &r, &id, false, DragView::Palette, cell);
                 if r.clicked() {
                     if on {
                         app.ui.docking_flyout = None;
@@ -469,7 +735,7 @@ fn icon_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands
                         commands.push(("window.panel.group", json!({"panel":id,"operation":"peek"})));
                     }
                 }
-                r.on_hover_text(normalize_label(&id));
+                r.on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(normalize_label(&id));
             }
         });
     ui.data_mut(|d| d.insert_temp(key("scroll").with(&strip.first), output.state.clamped_offset().y));
@@ -479,28 +745,77 @@ fn normalize_label(id: &str) -> String {
     PANELS.iter().find(|p| p.0 == id).map(|p| tl!(p.1).to_string()).unwrap_or_else(|| id.into())
 }
 
-fn flyout(app: &mut PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>, strips: &[Strip], commands: &mut Vec<(&'static str, Value)>) {
-    let Some(id) = app.ui.docking_flyout.clone() else { return };
-    let Some(strip) = strips.iter().find(|s| s.panels().any(|p| p == &id)) else {
-        app.ui.docking_flyout = None;
-        return;
-    };
-    let (width, height) = if let Some(w) = layout.floating.iter().find(|w| w.contains(&id)) {
-        (w.rect[2], w.rect[3])
+#[derive(Clone)]
+struct EditorPlacement {
+    panel: String,
+    right: bool,
+    top: f32,
+    anchor: Rect,
+    bounds: Rect,
+    generation: u64,
+}
+
+fn normal_editor_size(app: &PhotocraftApp, layout: &Layout<String>, panel: &str) -> [f32; 2] {
+    app.ui
+        .panel_presentation
+        .flyouts
+        .get(panel)
+        .or_else(|| app.ui.panel_presentation.floating_sizes.get(panel))
+        .copied()
+        .or_else(|| {
+            layout
+                .floating
+                .iter()
+                .find(|w| w.contains(panel) && !compat::independent_window(w))
+                .map(|w| [w.rect[2], w.rect[3]])
+                .filter(|s| s[0] >= 220.0 && s[1] >= 120.0)
+        })
+        .unwrap_or([320.0, 400.0])
+}
+fn preferred_editor_size(app: &PhotocraftApp, layout: &Layout<String>, panel: &str) -> [f32; 2] {
+    if app.ui.panel_presentation.flyouts.contains_key(panel) || app.ui.panel_presentation.floating_sizes.contains_key(panel) || floats(layout, panel) {
+        normal_editor_size(app, layout, panel)
     } else {
         compat::columns(layout)
             .into_iter()
-            .find(|(_, c)| c.groups.iter().any(|g| g.panels.contains(&id)))
-            .map(|(_, c)| (c.width, 440.0))
-            .unwrap_or((320.0, 440.0))
-    };
-    let top = strip.cells().into_iter().find(|(p, _)| p == &id).map_or(strip.rect.top(), |(_, r)| r.top());
-    let width = width.clamp(220.0, 520.0);
-    let height = app.ui.panel_presentation.flyouts.get(&id).map_or(height, |size| size[1]).max(120.0).min(ctx.content_rect().height());
-    let y = top.min(ctx.content_rect().bottom() - height).max(ctx.content_rect().top());
-    let x = if strip.left { strip.rect.right() } else { strip.rect.left() - width };
-    let mut rect = Rect::from_min_size(pos2(x, y), vec2(width, height));
-    if let Some(start) = ctx.data(|d| d.get_temp::<EditorResize>(key("editor-resize"))).filter(|r| r.panel == id) {
+            .find(|(_, c)| c.groups.iter().any(|g| g.panels.iter().any(|p| p == panel)))
+            .map_or([320.0, 400.0], |(_, c)| [c.width, 440.0])
+    }
+}
+fn editor_bounds(ctx: &egui::Context) -> Rect {
+    ctx.data(|d| d.get_temp::<Rect>(key("bounds"))).unwrap_or_else(|| ctx.content_rect())
+}
+fn editor_geometry(app: &PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>, strip: &Strip, strips: &[Strip], panel: &str) -> Option<(Rect, bool)> {
+    let bounds = editor_bounds(ctx);
+    if !bounds.is_finite() || bounds.width() < 80.0 || bounds.height() < 80.0 {
+        return None;
+    }
+    let [width, height] = preferred_editor_size(app, layout, panel);
+    let placement = ctx
+        .data(|d| d.get_temp::<EditorPlacement>(key("editor-placement")))
+        .filter(|p| p.panel == panel && p.anchor == strip.rect && p.bounds == bounds && p.generation == app.ui.docking_generation)
+        .unwrap_or_else(|| {
+            let top = strip.cells().into_iter().find(|(p, _)| p == panel).map_or(strip.rect.top(), |(_, r)| r.top());
+            EditorPlacement {
+                panel: panel.into(),
+                right: opens_right(ctx, strip, strips, width, bounds),
+                top: top.min(bounds.bottom() - height.min(bounds.height())).max(bounds.top()),
+                anchor: strip.rect,
+                bounds,
+                generation: app.ui.docking_generation,
+            }
+        });
+    let available = if placement.right { bounds.right() - strip.rect.right() } else { strip.rect.left() - bounds.left() };
+    if available < 80.0 {
+        return None;
+    }
+    let width = width.max(220.0).min(available);
+    let height = height.max(120.0).min((bounds.bottom() - placement.top).max(0.0));
+    // The owner and editor share one physical border band rather than two facing outlines.
+    let anchor = if placement.right { strip.rect.right() - ctx.pixels_per_point().recip() } else { strip.rect.left() + ctx.pixels_per_point().recip() };
+    let x = if placement.right { anchor } else { anchor - width };
+    let mut rect = Rect::from_min_size(pos2(x, placement.top), vec2(width, height));
+    if let Some(start) = ctx.data(|d| d.get_temp::<EditorResize>(key("editor-resize"))).filter(|r| r.panel == panel) {
         let delta = ctx.pointer_interact_pos().unwrap_or(start.press) - start.press;
         let width = (start.rect.width()
             + if start.bottom {
@@ -510,13 +825,32 @@ fn flyout(app: &mut PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>,
             } else {
                 delta.x
             })
-        .clamp(220.0, 520.0);
-        let height = (start.rect.height() + if start.bottom { delta.y } else { 0.0 }).clamp(120.0, ctx.content_rect().height().max(120.0));
-        rect = Rect::from_min_size(
-            pos2(if start.left && !start.bottom { start.rect.right() - width } else { start.rect.left() }, start.rect.top()),
-            vec2(width, height),
-        );
+        .max(220.0)
+        .min(available);
+        let height = (start.rect.height() + if start.bottom { delta.y } else { 0.0 }).max(120.0).min((bounds.bottom() - placement.top).max(0.0));
+        rect = Rect::from_min_size(pos2(if placement.right { anchor } else { anchor - width }, placement.top), vec2(width, height));
     }
+    let right = placement.right;
+    ctx.data_mut(|d| d.insert_temp(key("editor-placement"), placement));
+    Some((rect, right))
+}
+
+fn flyout(app: &mut PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>, strips: &[Strip], commands: &mut Vec<(&'static str, Value)>) {
+    let Some(id) = app.ui.docking_flyout.clone() else {
+        ctx.data_mut(|d| {
+            d.remove::<EditorPlacement>(key("editor-placement"));
+            d.remove::<Rect>(key("flyout-rect"));
+        });
+        return;
+    };
+    let Some(strip) = strips.iter().find(|s| s.panels().any(|p| p == &id)) else {
+        app.ui.docking_flyout = None;
+        return;
+    };
+    let Some((rect, opens_right)) = editor_geometry(app, ctx, layout, strip, strips, &id) else {
+        app.ui.docking_flyout = None;
+        return;
+    };
     ctx.data_mut(|d| d.insert_temp(key("flyout-rect"), rect));
     if !egui::Popup::is_any_open(ctx)
         && ctx.input(|i| {
@@ -537,22 +871,22 @@ fn flyout(app: &mut PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>,
         ui.set_min_size(rect.size());
         ui.set_max_size(rect.size());
         ui.painter().rect_filled(rect, 0.0, t.card);
-        ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(ctx.pixels_per_point().recip(), t.card_border), egui::StrokeKind::Inside);
         let header = Rect::from_min_size(rect.min, vec2(rect.width(), 26.0));
-        ui.painter().text(header.left_center() + vec2(10.0, 0.0), egui::Align2::LEFT_CENTER, normalize_label(&id), egui::FontId::proportional(12.0), t.text);
-        let arrow = Rect::from_min_size(pos2(header.right() - 42.0, header.top()), Vec2::splat(20.0));
-        if button(ui, arrow, key("flyout-collapse"), if strip.left { "chevrons-left" } else { "chevrons-right" }, tl!("Collapse Panel Group")).clicked() {
+        super::contract::single_header(ui, header, &normalize_label(&id));
+        let arrow = Rect::from_min_size(pos2(header.right() - 42.0, header.top() + INSET), Vec2::splat(20.0));
+        if button(ui, arrow, key("flyout-collapse"), if opens_right { "chevrons-left" } else { "chevrons-right" }, tl!("Collapse Panel Group")).clicked() {
             app.ui.docking_flyout = None;
         }
         let menu = button(ui, arrow.translate(vec2(20.0, 0.0)), key("flyout-menu"), "ellipsis", tl!("Panel menu"));
         egui::Popup::menu(&menu).show(|ui| panel_menu(app, ui, &id));
         let response = ui.interact(Rect::from_min_max(header.min, pos2(arrow.left(), header.bottom())), key("flyout-drag"), Sense::drag());
-        begin(app, ui, &response, &id, false, rect);
+        begin(app, ui, &response, &id, false, DragView::Editor, rect);
         let content = Rect::from_min_max(pos2(rect.left() + 6.0, header.bottom()), rect.max - vec2(6.0, 6.0));
         let mut child = ui.new_child(egui::UiBuilder::new().id_salt((&id, "flyout-body")).max_rect(content).layout(egui::Layout::top_down(egui::Align::Min)));
         child.set_clip_rect(content);
         body(app, &mut child, &id);
-        editor_resize(app, ui, &id, rect, !strip.left, commands);
+        editor_resize(app, ui, &id, rect, !opens_right, commands);
+        ui.painter().rect_stroke(rect, 0.0, egui::Stroke::new(ctx.pixels_per_point().recip(), t.card_border), egui::StrokeKind::Inside);
     });
 }
 
@@ -594,8 +928,58 @@ struct Landing {
     marker: Rect,
     compact: bool,
 }
-fn landing(ctx: &egui::Context, source: &str, whole: bool, p: Pos2, size: Vec2, visual_width: f32) -> Option<Landing> {
+fn horizontal_landing(ctx: &egui::Context, p: Pos2) -> Option<Landing> {
+    let canvas = super::last_bodies(ctx).into_iter().find(|(id, _)| id == super::CANVAS)?.1;
+    for bottom in [false, true] {
+        let y = if bottom { canvas.bottom() } else { canvas.top() };
+        if canvas.x_range().contains(p.x) && (p.y - y).abs() <= 12.0 {
+            let pixel = ctx.pixels_per_point().recip();
+            return Some(Landing {
+                target: Target::At { anchor: super::CANVAS.into(), placement: Placement::Edge(if bottom { Zone::Bottom } else { Zone::Top }) },
+                marker: Rect::from_min_max(pos2(canvas.left(), y - pixel * 0.5), pos2(canvas.right(), y + pixel * 0.5)),
+                compact: false,
+            });
+        }
+    }
+    None
+}
+
+fn landing(ctx: &egui::Context, source: &str, whole: bool, p: Pos2) -> Option<Landing> {
     let strips = ctx.data(|d| d.get_temp::<Vec<Strip>>(key("strips"))).unwrap_or_default();
+    let compact = strips.iter().any(|s| s.panels().any(|id| id == source));
+    let covered_by_float = strips.iter().any(|s| !s.attached && !s.panels().any(|id| id == source) && s.rect.contains(p));
+    // Both full/stock and compact sources resolve against these exact fitted boundaries.
+    let columns = ctx.data(|d| d.get_temp::<Vec<(String, Rect, Side)>>(key("columns"))).unwrap_or_default();
+    if !covered_by_float && let Some(target) = horizontal_landing(ctx, p) {
+        return Some(target);
+    }
+    let mut edges = Vec::new();
+    for (anchor, rect, side) in &columns {
+        if covered_by_float || anchor == source || whole && strips.iter().any(|s| s.first == *anchor && s.panels().any(|id| id == source)) {
+            continue;
+        }
+        if !rect.y_range().contains(p.y) {
+            continue;
+        }
+        let left = (*side == Side::Start) != crate::direction::is_rtl();
+        for after in [false, true] {
+            let x = if left != after { rect.left() } else { rect.right() };
+            let distance = (p.x - x).abs();
+            if distance <= 18.0 {
+                edges.push((
+                    distance,
+                    Landing {
+                        target: Target::At { anchor: anchor.clone(), placement: Placement::Column { after } },
+                        marker: Rect::from_min_max(pos2(x - 1.0, rect.top()), pos2(x + 1.0, rect.bottom())),
+                        compact,
+                    },
+                ));
+            }
+        }
+    }
+    if let Some((_, edge)) = edges.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)) {
+        return Some(edge);
+    }
     for strip in strips.iter().rev() {
         if whole && strip.panels().any(|id| id == source) {
             continue;
@@ -605,9 +989,8 @@ fn landing(ctx: &egui::Context, source: &str, whole: bool, p: Pos2, size: Vec2, 
                 let x = if left { strip.rect.left() } else { strip.rect.right() };
                 if (p.x - x).abs() <= 8.0 {
                     let pixel = ctx.pixels_per_point().recip();
-                    let x = if left { x - visual_width + pixel } else { x - pixel };
                     return Some(Landing {
-                        target: Target::Float { rect: Some([x, strip.rect.top(), size.x, size.y]) },
+                        target: Target::At { anchor: strip.first.clone(), placement: Placement::Split(if left { Zone::Left } else { Zone::Right }) },
                         marker: Rect::from_min_max(
                             pos2(if left { strip.rect.left() } else { strip.rect.right() } - pixel, strip.rect.top()),
                             pos2(if left { strip.rect.left() } else { strip.rect.right() } + pixel, strip.rect.bottom()),
@@ -617,7 +1000,7 @@ fn landing(ctx: &egui::Context, source: &str, whole: bool, p: Pos2, size: Vec2, 
                 }
             }
         }
-        if p.y < strip.rect.top() + INSET + HEADER + GRIP - 2.0 || !strip.rect.expand2(vec2(8.0, 0.0)).contains(p) {
+        if p.y < strip.rect.top() + strip.header_inset() + HEADER + GRIP - 2.0 || !strip.rect.expand2(vec2(8.0, 0.0)).contains(p) {
             continue;
         }
         let cells = strip.cells();
@@ -632,35 +1015,224 @@ fn landing(ctx: &egui::Context, source: &str, whole: bool, p: Pos2, size: Vec2, 
             compact: true,
         });
     }
+    if covered_by_float {
+        return None;
+    }
+    if let Some(bounds) = ctx.data(|d| d.get_temp::<Rect>(key("bounds"))) {
+        for left in [true, false] {
+            let x = if left { bounds.left() } else { bounds.right() };
+            if (p.x - x).abs() <= 18.0 && bounds.y_range().contains(p.y) {
+                let side = if left != crate::direction::is_rtl() { Side::Start } else { Side::End };
+                // Existing docks are handled by their real boundaries above.
+                if !columns.iter().any(|(_, _, s)| *s == side) {
+                    return Some(Landing {
+                        target: Target::NewDock { side },
+                        marker: Rect::from_min_max(pos2(x - 1.0, bounds.top()), pos2(x + 1.0, bounds.bottom())),
+                        compact,
+                    });
+                }
+            }
+        }
+    }
     None
 }
+// Stock tabs retain the shared renderer's precise insertion/reorder resolver.
+// Compact sources use this fallback only when no column/compact landing owns the pointer.
+/// One full surface owns the pointer, even when it deliberately offers no target.
+/// Tab insertion has a single physical marker per logical slot; body centers never merge tabs.
+fn full_landing(ctx: &egui::Context, layout: &Layout<String>, source: &str, whole: bool, p: Pos2, compact: bool) -> (Option<Landing>, bool) {
+    let hits = DockArea::<String>::hit_rects(ctx, area_id());
+    let mut bodies = super::last_bodies(ctx);
+    // A collapsed root tab bar has no body callback; its fitted header still owns insertion slots.
+    for (id, frame) in ctx.data(|d| d.get_temp::<Vec<(String, Rect)>>(key("group-rects"))).unwrap_or_default() {
+        if id == super::CANVAS || floats(layout, &id) || in_dock_column(layout, &id) {
+            continue;
+        }
+        let members = group_members(layout, &id);
+        if !bodies.iter().any(|(p, _)| members.contains(p)) {
+            bodies.push((id, Rect::from_min_max(pos2(frame.left(), frame.bottom()), frame.max)));
+        }
+    }
+    bodies.reverse();
+    bodies.sort_by_key(|(id, _)| !floats(layout, id));
+    let rtl = crate::direction::is_rtl();
+    let pixel = ctx.pixels_per_point().recip();
+    for (id, body) in bodies.into_iter().filter(|(id, _)| id != super::CANVAS && !is_spacer(id)) {
+        let members = group_members(layout, &id);
+        if whole && members.iter().any(|id| id == source) {
+            continue;
+        }
+        let Some(anchor) = members.iter().find(|id| id.as_str() != source).cloned() else { continue };
+        let tabs: Vec<_> = members.iter().filter_map(|id| hits.iter().find_map(|(h, r)| matches!(h,Hit::Tab(p) if p==id).then_some((id, r)))).collect();
+        let top = tabs.first().map_or(body.top() - super::contract::FULL_HEADER_HEIGHT, |(_, r)| r.top());
+        let frame = Rect::from_min_max(pos2(body.left(), top), body.max);
+        if !frame.expand2(vec2(6.0, 8.0)).contains(p) {
+            continue;
+        }
+        let floating = floats(layout, &anchor);
+        let header = Rect::from_min_max(frame.min, pos2(frame.right(), body.top()));
+        if header.expand2(vec2(6.0, 0.0)).contains(p) && p.y > frame.top() + 5.0 {
+            let mut slots = Vec::new();
+            for (index, (tab, rect)) in tabs.iter().enumerate() {
+                if tab.as_str() == source {
+                    continue;
+                }
+                let leading = if rtl { rect.right() } else { rect.left() };
+                let trailing = if rtl { rect.left() } else { rect.right() };
+                let next = tabs.iter().skip(index + 1).map(|(id, _)| (*id).clone()).find(|id| id != source);
+                for (x, before) in [(leading, Some((*tab).clone())), (trailing, next)] {
+                    if (p.x - x).abs() <= 6.0 {
+                        slots.push(((p.x - x).abs(), x, before));
+                    }
+                }
+            }
+            if let Some((last, last_rect)) = tabs.last() {
+                let trailing = if rtl { last_rect.left() } else { last_rect.right() };
+                let controls = if floating { 66.0 } else { 46.0 };
+                let in_empty = if rtl { p.x < trailing && p.x > frame.left() + controls } else { p.x > trailing && p.x < frame.right() - controls };
+                if in_empty && last.as_str() != source {
+                    slots.push(((p.x - trailing).abs(), trailing, None));
+                }
+            }
+            if let Some((_, x, before)) = slots.into_iter().min_by(|a, b| a.0.total_cmp(&b.0)) {
+                let x = (x / pixel).round() * pixel;
+                return (
+                    Some(Landing {
+                        target: Target::At { anchor, placement: Placement::Tab { before } },
+                        marker: Rect::from_min_max(pos2(x - pixel * 0.5, header.top()), pos2(x + pixel * 0.5, header.bottom())),
+                        compact: false,
+                    }),
+                    true,
+                );
+            }
+            return (None, true);
+        }
+        let zone = if p.y <= frame.top() + 5.0 {
+            Some(Zone::Top)
+        } else if p.y >= frame.bottom() - 14.0 {
+            Some(Zone::Bottom)
+        } else if p.y >= body.top() && p.x <= frame.left() + 14.0 {
+            Some(Zone::Left)
+        } else if p.y >= body.top() && p.x >= frame.right() - 14.0 {
+            Some(Zone::Right)
+        } else {
+            None
+        };
+        let Some(zone) = zone else { return (None, floating) };
+        let horizontal = matches!(zone, Zone::Left | Zone::Right);
+        if compact && !horizontal {
+            return (None, true);
+        }
+        let placement = if in_dock_column(layout, &anchor) && !horizontal {
+            Placement::Group { below: zone == Zone::Bottom, height: None }
+        } else {
+            match Placement::for_zone(layout, &anchor, zone, rtl) {
+                Ok(p) => p,
+                Err(_) => return (None, true),
+            }
+        };
+        let mut marker_frame = frame;
+        if horizontal
+            && in_dock_column(layout, &anchor)
+            && let Some((_, column)) = compat::columns(layout).into_iter().find(|(_, c)| c.groups.iter().any(|g| g.panels.contains(&anchor)))
+            && let Some(first) = column.groups.first().and_then(|g| g.panels.first())
+            && let Some((_, rect, _)) =
+                ctx.data(|d| d.get_temp::<Vec<(String, Rect, Side)>>(key("columns"))).unwrap_or_default().iter().find(|(id, _, _)| id == first)
+        {
+            marker_frame = *rect;
+        }
+        let marker = match zone {
+            Zone::Left | Zone::Right => {
+                let x = if zone == Zone::Left { marker_frame.left() } else { marker_frame.right() };
+                Rect::from_min_max(pos2(x - pixel * 0.5, marker_frame.top()), pos2(x + pixel * 0.5, marker_frame.bottom()))
+            }
+            _ => {
+                let y = if zone == Zone::Top { frame.top() } else { frame.bottom() };
+                Rect::from_min_max(pos2(frame.left(), y - pixel * 0.5), pos2(frame.right(), y + pixel * 0.5))
+            }
+        };
+        return (Some(Landing { target: Target::At { anchor, placement }, marker, compact }), floating);
+    }
+    (None, false)
+}
+
+/// Compact sources can join the same full body edges as stock tabs.
+fn resolved_landing(ctx: &egui::Context, layout: &Layout<String>, source: &str, whole: bool, p: Pos2, compact: bool) -> Option<Landing> {
+    let (full, exclusive) = full_landing(ctx, layout, source, whole, p, compact);
+    if exclusive {
+        return full;
+    }
+    landing(ctx, source, whole, p).or(full)
+}
+fn detached_target(app: &PhotocraftApp, layout: &Layout<String>, panel: &str, rect: Rect, bounds: Rect, pointer: Pos2) -> Target<String> {
+    let mut action = Action::MoveGroup { panel: panel.into(), to: Target::Float { rect: Some([rect.left(), rect.top(), rect.width(), rect.height()]) } };
+    restore_detached_rect(app, layout, &mut action, bounds, Some(pointer));
+    match action {
+        Action::MoveGroup { to, .. } => to,
+        _ => Target::Float { rect: None },
+    }
+}
+
+/// A horizontal dock's drawn width is not a sensible new floating window size.
+pub(super) fn restore_detached_rect(app: &PhotocraftApp, layout: &Layout<String>, action: &mut Action<String>, bounds: Rect, pointer: Option<Pos2>) {
+    let (panel, rect) = match action {
+        Action::Float { panel, rect } => (panel, rect),
+        Action::MovePanel { panel, to: Target::Float { rect: Some(rect) } }
+        | Action::MoveGroup { panel, to: Target::Float { rect: Some(rect) } }
+        | Action::MoveColumn { panel, to: Target::Float { rect: Some(rect) } }
+        | Action::MoveWindow { panel, to: Target::Float { rect: Some(rect) } } => (panel, rect),
+        _ => return,
+    };
+    if floats(layout, panel) {
+        return;
+    }
+    let [width, height] = app.ui.panel_presentation.floating_sizes.get(panel).copied().unwrap_or([rect[2].clamp(220.0, 520.0), rect[3].clamp(120.0, 480.0)]);
+    if let Some(pointer) = pointer {
+        // Keep the grab point in the restored window when the horizontal dock was wider.
+        if rect[2] > width {
+            rect[0] = pointer.x - ((pointer.x - rect[0]) / rect[2]).clamp(0.0, 1.0) * width;
+        }
+        if rect[3] > height {
+            rect[1] = pointer.y - ((pointer.y - rect[1]) / rect[3]).clamp(0.0, 1.0) * height;
+        }
+    }
+    rect[2] = width.min(bounds.width()).max(1.0);
+    rect[3] = height.min(bounds.height()).max(1.0);
+    rect[0] = rect[0].clamp(bounds.left(), (bounds.right() - rect[2]).max(bounds.left()));
+    rect[1] = rect[1].clamp(bounds.top(), (bounds.bottom() - rect[3]).max(bounds.top()));
+}
+
 pub(super) fn resolve_drag(
-    _app: &PhotocraftApp,
+    app: &PhotocraftApp,
     ctx: &egui::Context,
     request: &DropRequest<'_, String>,
     commands: &mut Vec<(&'static str, Value)>,
 ) -> Option<DropFeedback> {
-    let size = request.floating_rect.map_or(vec2(320.0, 400.0), |r| r.size());
-    let width = if _app.ui.panel_presentation.compact.contains(request.panel) {
-        _app.ui.panel_presentation.widths.get(request.panel).copied().unwrap_or(COMPACT_COLUMN_WIDTH)
-    } else {
-        size.x
-    };
-    let target = landing(ctx, request.panel, request.whole_group, request.pointer, size, width)?;
-    if request.released {
-        if let Some(from) = request.floating_rect {
-            let at = ctx.input(|i| i.time);
-            ctx.data_mut(|d| d.insert_temp(key("flight"), Flight { panel: request.panel.clone(), from, at, generation: _app.ui.docking_generation }));
-        }
-        commands.push((
-            "window.panel.group",
-            json!({"operation":"drop","panel":request.panel,"whole":request.whole_group,"unit":"group","to":target.target,"compact":target.compact}),
-        ));
+    if ctx.input(|i| i.modifiers.ctrl || i.modifiers.command) {
+        return None;
     }
-    Some(DropFeedback { preview: None, insertion: Some(target.marker) })
+    let layout = app.ui.docking.as_ref().map(|w| std::borrow::Cow::Borrowed(&w.layout)).unwrap_or_else(|| std::borrow::Cow::Owned(super::legacy(app)));
+    let compact = compat::compact(&layout, &app.ui.panel_presentation, request.panel);
+    let size = request.floating_rect.map_or(vec2(320.0, 400.0), |r| r.size());
+    let target = resolved_landing(ctx, &layout, request.panel, request.whole_group, request.pointer, compact);
+    if request.released {
+        let to = target
+            .as_ref()
+            .map(|t| t.target.clone())
+            .or_else(|| request.floating_rect.map(|r| detached_target(app, &layout, request.panel, r, request.screen, request.pointer)));
+        if let Some(to) = to {
+            if let Some(from) = request.floating_rect.filter(|_| target.is_some() && !matches!(to, Target::Float { .. })) {
+                let at = ctx.input(|i| i.time);
+                ctx.data_mut(|d| d.insert_temp(key("flight"), Flight { panel: request.panel.clone(), from, at, generation: app.ui.docking_generation }));
+            }
+            commands.push(("window.panel.group",json!({"operation":"drop","panel":request.panel,"whole":request.whole_group,
+                "unit":if request.whole_group && request.floating_rect.is_none() && floats(&layout,request.panel){"window"}else{"group"},"to":to,"compact":target.as_ref().map_or(compact,|t|t.compact),"sourceWidth":size.x,"sourceHeight":size.y,"gap":ctx.pixels_per_point().recip()})));
+        }
+    }
+    Some(DropFeedback { preview: if target.is_none() { request.floating_rect } else { None }, insertion: target.map(|t| t.marker) })
 }
 
-fn drag(app: &PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>, bounds: Rect, commands: &mut Vec<(&'static str, Value)>) {
+fn drag(app: &PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>, _bounds: Rect, commands: &mut Vec<(&'static str, Value)>) {
     if !ctx.input(|i| i.pointer.primary_down()) {
         ctx.data_mut(|d| d.remove::<bool>(key("suppressed")));
     }
@@ -679,35 +1251,9 @@ fn drag(app: &PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>, bound
     }
     let p = ctx.pointer_interact_pos().unwrap_or(drag.press);
     let rect = drag.source.translate(p - drag.press);
-    let compact = compat::compact(layout, &app.ui.panel_presentation, &drag.panel);
-    let size = layout.floating.iter().find(|w| w.contains(&drag.panel)).map_or(vec2(320.0, 400.0), |w| vec2(w.rect[2], w.rect[3]));
-    let mut target = if disabled { None } else { landing(ctx, &drag.panel, drag.whole, p, size, drag.source.width()) };
-    if target.is_none() && !disabled {
-        for left in [true, false] {
-            let x = if left { bounds.left() } else { bounds.right() };
-            if (p.x - x).abs() <= 18.0 && bounds.y_range().contains(p.y) {
-                let side = if left != crate::direction::is_rtl() { Side::Start } else { Side::End };
-                let anchor = compat::columns(layout)
-                    .into_iter()
-                    .filter(|(s, _)| *s == side)
-                    .flat_map(|(_, c)| &c.groups)
-                    .flat_map(|g| &g.panels)
-                    .find(|id| *id != &drag.panel);
-                let to = anchor.map_or(Target::NewDock { side }, |anchor| Target::At { anchor: anchor.clone(), placement: Placement::Column { after: false } });
-                target = Some(Landing { target: to, marker: Rect::from_min_max(pos2(x - 1.0, bounds.top()), pos2(x + 1.0, bounds.bottom())), compact });
-                break;
-            }
-        }
-        if target.is_none() {
-            let hits = DockArea::<String>::hit_rects(ctx, area_id());
-            if let Some((Hit::Tab(anchor), r)) =
-                hits.iter().find(|(hit, r)| matches!(hit,Hit::Tab(id) if id!=&drag.panel) && r.expand2(vec2(0.0, 18.0)).contains(p))
-            {
-                target =
-                    Some(Landing { target: Target::At { anchor: anchor.clone(), placement: Placement::Tab { before: None } }, marker: *r, compact: false });
-            }
-        }
-    }
+    let editor = matches!(drag.view, DragView::Editor);
+    let compact = !editor && compat::compact(layout, &app.ui.panel_presentation, &drag.panel);
+    let target = if disabled { None } else { resolved_landing(ctx, layout, &drag.panel, drag.whole, p, compact) };
     let t = crate::theme::Tokens::get(ctx);
     let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, key("preview")));
     painter.rect_filled(rect, t.radius_sm, t.card.gamma_multiply(0.75));
@@ -717,15 +1263,21 @@ fn drag(app: &PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>, bound
     }
     if released {
         let at = ctx.input(|i| i.time);
-        ctx.data_mut(|d| d.insert_temp(key("flight"), Flight { panel: drag.panel.clone(), from: rect, at, generation: app.ui.docking_generation }));
+        ctx.data_mut(|d| {
+            d.remove::<Flight>(key("flight"));
+            if target.as_ref().is_some_and(|t| !matches!(t.target, Target::Float { .. })) {
+                d.insert_temp(key("flight"), Flight { panel: drag.panel.clone(), from: rect, at, generation: app.ui.docking_generation });
+            }
+        });
         let target = target.map_or_else(
             || {
-                let size = layout.floating.iter().find(|w| w.contains(&drag.panel)).map_or(vec2(320.0, 400.0), |w| vec2(w.rect[2], w.rect[3]));
+                let [width, height] = normal_editor_size(app, layout, &drag.panel);
+                let size = if editor { drag.source.size() } else { vec2(width, height) };
                 Target::Float { rect: Some([rect.left(), rect.top(), size.x, size.y]) }
             },
             |t| t.target,
         );
-        commands.push(("window.panel.group", json!({"operation":"drop","panel":drag.panel,"whole":drag.whole,"to":target,"compact":compact})));
+        commands.push(("window.panel.group", json!({"operation":"drop","panel":drag.panel,"whole":drag.whole,"editor":editor,"unit":if layout.floating.iter().any(|w|w.contains(&drag.panel) && compat::independent_window(w)){"group"}else{"window"},"to":target,"compact":compact,"sourceWidth":drag.source.width(),"sourceHeight":drag.source.height(),"gap":ctx.pixels_per_point().recip()})));
         ctx.data_mut(|d| d.remove::<Drag>(key("drag")));
     } else {
         ctx.request_repaint();
@@ -737,7 +1289,12 @@ fn drag(app: &PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>, bound
 fn animate_landing(app: &PhotocraftApp, ctx: &egui::Context, strips: &[Strip]) {
     let Some(flight) = ctx.data(|d| d.get_temp::<Flight>(key("flight"))) else { return };
     let age = (ctx.input(|i| i.time) - flight.at).max(0.0);
-    if age >= 0.15 || app.ui.docking_generation != flight.generation {
+    if age >= 0.15
+        || app.ui.docking_generation != flight.generation
+        || app.session.prefs().workspace_locked
+        || super::modal_open(app, ctx)
+        || !ctx.input(|i| i.focused)
+    {
         ctx.data_mut(|d| d.remove::<Flight>(key("flight")));
         return;
     }
@@ -765,14 +1322,13 @@ pub(super) fn drop_command(app: &mut PhotocraftApp, params: &Value) -> Result<Va
     let target: Target<String> = serde_json::from_value(params.get("to").cloned().ok_or("drop target is required")?).map_err(|e| e.to_string())?;
     let mut workspace = workspace_of(app)?;
     let group_only = params.get("unit").and_then(Value::as_str) == Some("group");
-    let ids = if whole && group_only {
-        group_members(&workspace.layout, &panel)
-    } else if whole {
-        compat::members(&workspace.layout, &panel)
-    } else {
-        vec![panel.clone()]
-    };
-    let compact = compat::compact(&workspace.layout, &app.ui.panel_presentation, &panel);
+    let ids = moving_ids(&workspace.layout, &panel, whole, group_only);
+    let remainder = workspace.layout.floating.iter().find(|w| w.contains(&panel)).and_then(|w| w.panels().find(|id| !ids.contains(id)).cloned());
+    let editor = params.get("editor").and_then(Value::as_bool).unwrap_or(false);
+    let source_closed = super::collapsed_members(app, &workspace.layout).contains(&panel);
+    let horizontal_edge = matches!(&target, Target::At { placement: Placement::Edge(Zone::Top | Zone::Bottom), .. });
+    let source_compact = !editor && compat::compact(&workspace.layout, &app.ui.panel_presentation, &panel);
+    let compact = source_compact;
     let anchor = match &target {
         Target::At { anchor, .. } => Some(anchor.clone()),
         _ => None,
@@ -781,10 +1337,51 @@ pub(super) fn drop_command(app: &mut PhotocraftApp, params: &Value) -> Result<Va
         return Ok(json!({"unchanged":true}));
     }
     let destination_compact = anchor.as_ref().is_some_and(|a| compat::compact(&workspace.layout, &app.ui.panel_presentation, a));
+    let destination_closed = matches!(&target, Target::At { placement: Placement::Tab { .. }, .. })
+        && anchor.as_ref().is_some_and(|a| super::collapsed_members(app, &workspace.layout).contains(a));
     // A neighbouring column is an independent owner; its presentation must not be
     // inherited from the expanded column used only as the placement anchor.
-    let separate_column = matches!(&target, Target::NewDock { .. } | Target::At { placement: Placement::Column { .. }, .. });
+    let separate_column =
+        matches!(&target, Target::NewDock { .. } | Target::At { placement: Placement::Column { .. } | Placement::Split(Zone::Left | Zone::Right), .. });
     let floating = matches!(target, Target::Float { .. });
+    let compact = if !separate_column && !floating && anchor.is_some() { destination_compact } else { compact };
+    let source_size = workspace
+        .layout
+        .floating
+        .iter()
+        .find(|w| w.contains(&panel) && !compat::independent_window(w))
+        .map(|w| [w.rect[2], w.rect[3]])
+        .filter(|size| (220.0..=100_000.0).contains(&size[0]) && (120.0..=100_000.0).contains(&size[1]));
+    let receiver = anchor.as_ref().and_then(|a| workspace.layout.floating.iter().find(|w| w.contains(a) && !w.contains(&panel))).map(|w| {
+        let visible = if !compat::independent_window(w) && w.panels().all(|p| app.ui.panel_presentation.compact.contains(p)) {
+            w.panels().next().and_then(|p| app.ui.panel_presentation.widths.get(p)).copied().unwrap_or(COMPACT_COLUMN_WIDTH)
+        } else {
+            w.rect[2]
+        };
+        let source_width = if compact {
+            app.ui.panel_presentation.widths.get(&panel).copied().unwrap_or(COMPACT_COLUMN_WIDTH)
+        } else {
+            params.get("sourceWidth").and_then(Value::as_f64).map(|v| v as f32).filter(|v| v.is_finite() && (220.0..=100_000.0).contains(v)).unwrap_or(320.0)
+        };
+        let gap = params.get("gap").and_then(Value::as_f64).map(|v| v as f32).filter(|v| v.is_finite() && (0.0..=4.0).contains(v)).unwrap_or(1.0);
+        let left = matches!(&target, Target::At { placement: Placement::Split(Zone::Left), .. });
+        let mut rect = w.rect;
+        rect[2] = (visible + source_width + gap).min(1_000_000.0);
+        if !compact {
+            let height = params
+                .get("sourceHeight")
+                .and_then(Value::as_f64)
+                .map(|v| v as f32)
+                .filter(|v| v.is_finite() && (120.0..=100_000.0).contains(v))
+                .or_else(|| source_size.map(|s| s[1]))
+                .unwrap_or(400.0);
+            rect[3] = rect[3].max(height);
+        }
+        if left {
+            rect[0] -= source_width + gap;
+        }
+        rect
+    });
     let action = if !whole {
         Action::MovePanel { panel: panel.clone(), to: target }
     } else if group_only {
@@ -797,24 +1394,53 @@ pub(super) fn drop_command(app: &mut PhotocraftApp, params: &Value) -> Result<Va
         Action::MoveGroup { panel: panel.clone(), to: target }
     };
     workspace.apply(action, permissions).map_err(|e| e.to_string())?;
+    resize_drop_remainder(&mut workspace, params, remainder)?;
+    if separate_column
+        && (compact || destination_compact)
+        && let (Some(rect), Some(anchor)) = (receiver, anchor.as_ref())
+        && workspace.layout.floating.iter().any(|w| w.contains(anchor))
+    {
+        workspace.apply(Action::MoveFloating { panel: anchor.clone(), rect }, permissions).map_err(|e| e.to_string())?;
+    }
     if in_dock_column(&workspace.layout, &panel) {
-        workspace
-            .apply(Action::SetIconic { panel: panel.clone(), iconic: compact && (separate_column || anchor.is_none() || destination_compact) }, permissions)
-            .map_err(|e| e.to_string())?;
+        workspace.apply(Action::SetIconic { panel: panel.clone(), iconic: compact }, permissions).map_err(|e| e.to_string())?;
+    }
+    if editor && !compact {
+        workspace.apply(Action::SetMinimized { panel: panel.clone(), minimized: false }, permissions).map_err(|e| e.to_string())?;
     }
     if !valid_workspace(&workspace) {
         return Err("invalid resulting workspace".into());
     }
+    if editor && !compact {
+        app.ui.docking_collapsed.retain(|id| !ids.contains(id));
+    }
     let mut settings = app.ui.panel_presentation.clone();
+    if !floating && let Some(size) = source_size {
+        for id in &ids {
+            settings.floating_sizes.insert(id.clone(), size);
+        }
+    }
     settings.compact.retain(|p| !ids.contains(p));
-    if floating && compact || !in_dock_column(&workspace.layout, &panel) && destination_compact {
+    if !in_dock_column(&workspace.layout, &panel) && compact {
         settings.compact.extend(ids);
     }
     settings.compact.sort();
     settings.compact.dedup();
+    let gap = params.get("gap").and_then(Value::as_f64).map(|v| v as f32).filter(|v| v.is_finite() && (0.0..=4.0).contains(v)).unwrap_or(1.0);
+    fit_compact_windows(&mut workspace.layout, &settings, gap);
     app.ui.panel_presentation = settings;
     let returns = app.ui.docking_returns.clone();
     commit(app, workspace, returns);
+    let root_group = app.ui.docking.as_ref().is_some_and(|w| !floats(&w.layout, &panel) && !in_dock_column(&w.layout, &panel));
+    if root_group {
+        let members = app.ui.docking.as_ref().map(|w| group_members(&w.layout, &panel)).unwrap_or_default();
+        app.ui.docking_collapsed.retain(|id| !members.contains(id));
+        if destination_closed || horizontal_edge && !editor && (source_compact || source_closed) {
+            app.ui.docking_collapsed.extend(members);
+        } else {
+            super::reveal_group(app, &panel);
+        }
+    }
     app.ui.docking_flyout = None;
     Ok(json!({"layout":app.ui.docking.as_ref().map(|w|&w.layout)}))
 }
@@ -878,6 +1504,10 @@ fn column_height_handles(app: &PhotocraftApp, ui: &mut egui::Ui, layout: &Layout
 mod demo;
 
 #[cfg(test)]
+#[path = "repair_tests.rs"]
+mod repair_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::panel_docking::{Node, valid};
@@ -887,17 +1517,17 @@ mod tests {
     fn app() -> PhotocraftApp {
         PhotocraftApp::new(photocraft_engine::Session::new(), Default::default())
     }
-    fn layout(app: &PhotocraftApp) -> &Layout<String> {
+    pub(super) fn layout(app: &PhotocraftApp) -> &Layout<String> {
         &app.ui.docking.as_ref().unwrap().layout
     }
-    fn compact_pair() -> PhotocraftApp {
+    pub(super) fn compact_pair() -> PhotocraftApp {
         let mut app = app();
         app.run("window.panel.float", json!({"panel":"properties","x":100,"y":100,"width":320,"height":400})).unwrap();
         app.run("window.panel.move", json!({"panel":"actions","anchor":"properties","zone":"bottom"})).unwrap();
         app.run("window.panel.group", json!({"panel":"properties","operation":"collapse"})).unwrap();
         app
     }
-    fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
+    pub(super) fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
         harness_size(app, vec2(1280.0, 800.0))
     }
     fn harness_size(app: PhotocraftApp, size: Vec2) -> Harness<'static, PhotocraftApp> {
@@ -916,7 +1546,7 @@ mod tests {
         h.run_steps(4);
         h
     }
-    fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
+    pub(super) fn click(h: &mut Harness<'static, PhotocraftApp>, p: Pos2) {
         h.event(Event::PointerMoved(p));
         h.run_steps(1);
         h.event(Event::PointerButton { pos: p, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -1008,7 +1638,7 @@ mod tests {
             assert_eq!(app.ui.panel_presentation.widths.get("actions"), Some(&width));
         }
         let saved = crate::dock::snapshot(&app);
-        for value in [json!(43), json!(241), json!("wide"), Value::Null] {
+        for value in [json!(41), json!(241), json!("wide"), Value::Null] {
             assert!(app.run("window.panel.group", json!({"panel":"properties","operation":"strip-width","width":value})).is_err());
             assert_eq!(crate::dock::snapshot(&app), saved);
         }
@@ -1115,7 +1745,14 @@ mod tests {
         h.ctx.data_mut(|d| {
             d.insert_temp(
                 key("drag"),
-                Drag { panel: "properties".into(), whole: true, press: strip.rect.min, source: strip.rect, generation: h.state().ui.docking_generation },
+                Drag {
+                    panel: "properties".into(),
+                    whole: true,
+                    view: DragView::Palette,
+                    press: strip.rect.min,
+                    source: strip.rect,
+                    generation: h.state().ui.docking_generation,
+                },
             )
         });
         h.event(Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
@@ -1136,7 +1773,7 @@ mod tests {
         assert_eq!(app.ui.toolbar_floating, Some([150.0, 180.0]));
     }
 
-    fn press(h: &mut Harness<'static, PhotocraftApp>, from: Pos2, to: Pos2) {
+    pub(super) fn press(h: &mut Harness<'static, PhotocraftApp>, from: Pos2, to: Pos2) {
         h.event(Event::PointerMoved(from));
         h.run_steps(1);
         h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
@@ -1146,7 +1783,7 @@ mod tests {
             h.run_steps(1);
         }
     }
-    fn release(h: &mut Harness<'static, PhotocraftApp>, to: Pos2) {
+    pub(super) fn release(h: &mut Harness<'static, PhotocraftApp>, to: Pos2) {
         h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
         h.run_steps(3);
     }
@@ -1190,7 +1827,7 @@ mod tests {
         app.run("window.panel.group", json!({"panel":"properties","operation":"expand"})).unwrap();
         app.run("window.panel.edge", json!({"panel":"properties","edge":"left"})).unwrap();
         app.run("window.panel.group", json!({"panel":"properties","operation":"edge-size","height":600})).unwrap();
-        let view = rendered_layout(&app, layout(&app), 800.0, None);
+        let view = rendered_layout(&app, layout(&app), 800.0, None, 1.0);
         let c = compat::columns(&view).into_iter().find(|(_, c)| c.groups.iter().any(|g| g.panels.iter().any(|p| p == "properties"))).unwrap().1;
         assert_eq!(c.groups[0].height, Some(300.0));
         assert_eq!(c.groups[1].height, Some(300.0));
@@ -1200,7 +1837,7 @@ mod tests {
         drop(view);
         app.run("window.panel.layout", json!({"action":Action::<String>::ResizeGroup {panel:"properties".into(),height:Some(400.0)}})).unwrap();
         app.run("window.panel.group", json!({"panel":"properties","operation":"edge-size","height":450})).unwrap();
-        let view = rendered_layout(&app, layout(&app), 800.0, None);
+        let view = rendered_layout(&app, layout(&app), 800.0, None, 1.0);
         let c = compat::columns(&view).into_iter().find(|(_, c)| c.groups.iter().any(|g| g.panels.iter().any(|p| p == "properties"))).unwrap().1;
         assert_eq!(c.groups[0].height, Some(300.0));
         assert_eq!(c.groups[1].height, Some(150.0));
@@ -1248,17 +1885,23 @@ mod tests {
         assert_eq!(crate::dock::snapshot(h.state()), before);
     }
     #[test]
-    fn side_snap_uses_one_physical_pixel_and_does_not_merge_independent_columns() {
+    fn side_attachment_keeps_independent_parts_with_one_physical_pixel_between_them() {
         let mut h = harness(compact_pair());
         h.state_mut().run("window.panel.float", json!({"panel":"navigator","x":400,"y":100})).unwrap();
         h.state_mut().run("window.panel.group", json!({"panel":"navigator","operation":"collapse"})).unwrap();
         h.run_steps(3);
         let target = strips(h.state(), &h.ctx, layout(h.state())).into_iter().find(|s| s.first == "properties").unwrap();
-        let landing = landing(&h.ctx, "navigator", true, pos2(target.rect.right(), target.rect.center().y), vec2(320.0, 400.0), 44.0).unwrap();
+        let landing = landing(&h.ctx, "navigator", true, pos2(target.rect.right(), target.rect.center().y)).unwrap();
         h.state_mut().run("window.panel.group", json!({"panel":"navigator","operation":"drop","whole":true,"to":landing.target})).unwrap();
         let window = layout(h.state()).floating.iter().find(|w| w.contains("navigator")).unwrap();
-        assert_eq!(window.rect[0], target.rect.right() - h.ctx.pixels_per_point().recip());
-        assert_eq!(layout(h.state()).floating.len(), 2);
+        assert!(window.contains("properties"));
+        assert_eq!(group_members(layout(h.state()), "navigator"), ["navigator"]);
+        assert_eq!(layout(h.state()).floating.len(), 1);
+        h.run_steps(4);
+        let drawn = strips(h.state(), &h.ctx, layout(h.state()));
+        let a = drawn.iter().find(|s| s.first == "properties").unwrap().rect;
+        let b = drawn.iter().find(|s| s.first == "navigator").unwrap().rect;
+        assert!((b.left() - a.right() - h.ctx.pixels_per_point().recip()).abs() < 0.1);
     }
     #[test]
     fn releasing_a_drag_joins_the_stack_without_reentrant_context_locks() {
@@ -1385,4 +2028,177 @@ mod tests {
             h.render().unwrap().save(path.join(format!("port-floating-tools-{scale}.png"))).unwrap();
         }
     }
+}
+
+#[cfg(test)]
+#[path = "followup_tests.rs"]
+mod followup_tests;
+
+#[cfg(test)]
+#[path = "gesture_followup_tests.rs"]
+mod gesture_followup_tests;
+
+/// Observe fitted groups before their header is drawn, without registering stock input twice.
+pub(super) fn observe_group(ctx: &egui::Context, panels: &[String], rect: Rect) {
+    ctx.data_mut(|d| {
+        let groups = d.get_temp_mut_or_default::<Vec<(String, Rect)>>(key("group-rects"));
+        groups.extend(panels.iter().cloned().map(|p| (p, rect)));
+    });
+}
+/// Toggle a horizontal part around its neighbour, keeping the other parts in place.
+pub(super) fn command_geometry(app: &PhotocraftApp, ctx: &egui::Context, params: &mut Value) {
+    if params.get("operation").and_then(Value::as_str) == Some("drop") {
+        if let Some(rect) = drop_remainder_rect(app, ctx, params) {
+            params["originRect"] = json!(rect);
+        }
+        return;
+    }
+    let Some(operation) = params.get("operation").and_then(Value::as_str).filter(|op| matches!(*op, "expand" | "collapse")) else { return };
+    let expanding = operation == "expand";
+    let Some(panel) = params.get("panel").and_then(Value::as_str) else { return };
+    let Some(window) = app.ui.docking.as_ref().and_then(|w| w.layout.floating.iter().find(|w| w.contains(panel))) else { return };
+    let groups = ctx.data(|d| d.get_temp::<Vec<(String, Rect)>>(key("group-rects"))).unwrap_or_default();
+    let Some(source) = groups.iter().find(|(p, _)| p == panel).map(|(_, r)| *r) else { return };
+    let width = app.ui.panel_presentation.widths.get(panel).copied().unwrap_or(COMPACT_COLUMN_WIDTH);
+    if compat::independent_window(window) {
+        let Some(mut frame) = groups.iter().filter(|(p, _)| window.contains(p)).map(|(_, r)| *r).reduce(Rect::union) else { return };
+        let next = if expanding { app.ui.panel_presentation.floating_sizes.get(panel).map_or(320.0, |size| size[0]) } else { width };
+        let delta = next - source.width();
+        if groups.iter().any(|(p, r)| p != panel && window.contains(p) && r.left() >= source.right() - 1.0 && r.y_range().intersects(source.y_range())) {
+            frame = frame.translate(vec2(-delta, 0.0));
+        }
+        frame.max.x += delta;
+        if expanding {
+            let height = app.ui.panel_presentation.floating_sizes.get(panel).map_or(400.0, |size| size[1]);
+            frame.max.y = frame.min.y + frame.height().max(height);
+        } else {
+            let mut compact: std::collections::HashSet<_> = app.ui.panel_presentation.compact.iter().cloned().collect();
+            if let Some(workspace) = &app.ui.docking {
+                compact.extend(group_members(&workspace.layout, panel));
+            }
+            if let Some(height) = compact_tree_height(&window.root, &compact, ctx.pixels_per_point().recip()) {
+                frame.max.y = frame.min.y + height;
+            }
+        }
+        if !expanding {
+            params["normalSize"] = json!([source.width(), source.height().max(120.0)]);
+        }
+        params["windowRect"] = json!([frame.left(), frame.top(), frame.width(), frame.height()]);
+    } else if !expanding {
+        let neighbours = ctx.data(|d| d.get_temp::<Vec<Strip>>(key("strips"))).unwrap_or_default();
+        if neighbours.iter().any(|s| s.first != panel && (s.rect.left() - source.right()).abs() <= 8.0 && s.rect.y_range().intersects(source.y_range())) {
+            let mut rect = window.rect;
+            rect[0] = source.right() - width;
+            params["windowRect"] = json!(rect);
+        }
+    }
+}
+
+fn compact_tree_height(node: &super::Node<String>, compact: &std::collections::HashSet<String>, gap: f32) -> Option<f32> {
+    match node {
+        super::Node::Tabs { panels, .. } if panels.iter().all(|p| compact.contains(p)) => Some(HEADER + GRIP + ROW * panels.len() as f32 + 1.5),
+        super::Node::Split { axis, first, second, .. } => {
+            let a = compact_tree_height(first, compact, gap)?;
+            let b = compact_tree_height(second, compact, gap)?;
+            Some(if *axis == super::SplitAxis::Horizontal { a.max(b) } else { a + b + gap })
+        }
+        _ => None,
+    }
+}
+
+fn moving_ids(layout: &Layout<String>, panel: &str, whole: bool, group_only: bool) -> Vec<String> {
+    if !whole {
+        vec![panel.into()]
+    } else if group_only {
+        group_members(layout, panel)
+    } else {
+        layout.floating.iter().find(|w| w.contains(panel)).map_or_else(|| compat::members(layout, panel), |w| w.panels().cloned().collect())
+    }
+}
+/// Remove the departed horizontal extent, not the neighbouring panes' visible widths.
+/// Current fitted group intervals also handle tabs sharing a frame and vertically stacked rows.
+fn drop_remainder_rect(app: &PhotocraftApp, ctx: &egui::Context, params: &Value) -> Option<[f32; 4]> {
+    let panel = params.get("panel")?.as_str()?;
+    let layout = &app.ui.docking.as_ref()?.layout;
+    let window = layout.floating.iter().find(|w| w.contains(panel) && compat::independent_window(w))?;
+    let target: Target<String> = serde_json::from_value(params.get("to")?.clone()).ok()?;
+    if matches!(&target,Target::At{anchor,..} if window.contains(anchor)) {
+        return None;
+    }
+    let ids =
+        moving_ids(layout, panel, params.get("whole").and_then(Value::as_bool).unwrap_or(false), params.get("unit").and_then(Value::as_str) == Some("group"));
+    let mut intervals: Vec<_> = ctx
+        .data(|d| d.get_temp::<Vec<(String, Rect)>>(key("group-rects")))
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|(id, r)| window.contains(id) && !ids.contains(id) && r.is_finite() && r.is_positive())
+        .map(|(_, r)| (r.left(), r.right()))
+        .collect();
+    intervals.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (left, mut start) = intervals.first().copied().map(|(a, _)| (a, a))?;
+    let mut end = start;
+    let mut width = 0.0;
+    let pixel = ctx.pixels_per_point().recip();
+    for (a, b) in intervals {
+        if a <= end + pixel + 0.01 {
+            end = end.max(b);
+        } else {
+            width += end - start + pixel;
+            start = a;
+            end = b;
+        }
+    }
+    width += end - start;
+    let mut rect = window.rect;
+    rect[0] = left;
+    rect[2] = width;
+    Some(rect)
+}
+fn resize_drop_remainder(workspace: &mut super::Workspace, params: &Value, panel: Option<String>) -> Result<(), String> {
+    if let (Some(panel), Some(raw)) = (panel, params.get("originRect")) {
+        let rect: [f32; 4] = serde_json::from_value(raw.clone()).map_err(|e| format!("invalid origin rect: {e}"))?;
+        workspace.apply(Action::MoveFloating { panel, rect }, permissions).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Compact-only compound frames have a natural height, including when joined or restored.
+fn fit_compact_windows(layout: &mut Layout<String>, settings: &crate::state::PanelPresentation, gap: f32) {
+    let compact = settings.compact.iter().cloned().collect();
+    for window in layout.floating.iter_mut().filter(|w| w.native.is_none() && compat::independent_window(w)) {
+        if let Some(height) = compact_tree_height(&window.root, &compact, gap) {
+            window.rect[3] = height;
+        }
+    }
+}
+/// Closest horizontal sibling in the same shared tree; independent of viewport/header position.
+fn horizontal_peer_left(app: &PhotocraftApp, panel: &str) -> Option<bool> {
+    let window = app.ui.docking.as_ref()?.layout.floating.iter().find(|w| w.contains(panel))?;
+    let mut node = &window.root;
+    let mut side = None;
+    for _ in 0..64 {
+        let super::Node::Split { axis, first, second, .. } = node else { break };
+        let in_first = tree_groups(first).iter().any(|g| g.panels.iter().any(|p| p == panel));
+        if *axis == super::SplitAxis::Horizontal {
+            side = Some(!in_first);
+        }
+        node = if in_first { first } else { second };
+    }
+    side
+}
+pub(super) fn collapse_left(app: &PhotocraftApp, ctx: &egui::Context, panel: &str, fallback: Rect) -> bool {
+    if let Some((side, _)) =
+        app.ui.docking.as_ref().and_then(|w| compat::columns(&w.layout).into_iter().find(|(_, c)| c.groups.iter().any(|g| g.panels.iter().any(|p| p == panel))))
+    {
+        return (side == Side::Start) != crate::direction::is_rtl();
+    }
+    horizontal_peer_left(app, panel).unwrap_or_else(|| {
+        let frame = ctx
+            .data(|d| d.get_temp::<Vec<(String, Rect)>>(key("group-rects")))
+            .unwrap_or_default()
+            .into_iter()
+            .find(|(id, _)| id == panel)
+            .map_or(fallback, |(_, r)| r);
+        frame.center().x < ctx.content_rect().center().x
+    })
 }

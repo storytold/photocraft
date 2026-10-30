@@ -1,7 +1,7 @@
 //! Compatibility for the fork's view commands and saved layouts, using the current Workspace.
 use super::{
     Action, CANVAS, Column, Floating, Layout, Node, PANELS, PhotocraftApp, Placement, Side, SplitAxis, SplitSize, Target, Value, Workspace, commit, ensure,
-    group_members, in_dock_column, json, normalize, permissions, registered, reveal_group, tree_groups, valid_workspace, workspace_of,
+    floats, group_members, in_dock_column, json, normalize, permissions, registered, reveal_group, tree_groups, valid_workspace, workspace_of,
 };
 use crate::state::PanelPresentation;
 use craft_ui::docking::Group as DockGroup;
@@ -61,9 +61,22 @@ pub(super) fn columns(layout: &Layout<String>) -> Vec<(Side, &Column<String>)> {
     }
     out
 }
+pub(super) fn independent_window(window: &Floating<String>) -> bool {
+    let mut pending = vec![&window.root];
+    while let Some(node) = pending.pop() {
+        if let Node::Split { axis, first, second, .. } = node {
+            if *axis == SplitAxis::Horizontal {
+                return true;
+            }
+            pending.extend([first.as_ref(), second.as_ref()]);
+        }
+    }
+    false
+}
+
 pub(super) fn members(layout: &Layout<String>, panel: &str) -> Vec<String> {
     if let Some(window) = layout.floating.iter().find(|w| w.contains(&panel.to_owned())) {
-        window.panels().cloned().collect()
+        if independent_window(window) { group_members(layout, panel) } else { window.panels().cloned().collect() }
     } else if let Some((_, col)) = columns(layout).into_iter().find(|(_, c)| c.groups.iter().any(|g| g.panels.iter().any(|p| p == panel))) {
         col.groups.iter().flat_map(|g| g.panels.clone()).collect()
     } else {
@@ -75,6 +88,33 @@ pub(super) fn compact(layout: &Layout<String>, settings: &PanelPresentation, pan
         .into_iter()
         .find(|(_, c)| c.groups.iter().any(|g| g.panels.iter().any(|p| p == panel)))
         .map_or_else(|| members(layout, panel).iter().all(|id| settings.compact.contains(id)), |(_, c)| c.iconic)
+}
+
+/// One-time migration of the previous default, preserving all nondefault personal sizes.
+pub(crate) fn upgrade_metrics(app: &mut PhotocraftApp) {
+    if app.ui.panel_presentation.metrics_revision != 0 || app.ui.docking_kept.is_some() {
+        return;
+    }
+    for width in app.ui.panel_presentation.widths.values_mut().filter(|w| **w == 44.0) {
+        *width = super::COMPACT_COLUMN_WIDTH;
+    }
+    if let Some(workspace) = &mut app.ui.docking {
+        let mut pending: Vec<_> = workspace.layout.root.iter_mut().collect();
+        while let Some(node) = pending.pop() {
+            match node {
+                Node::Split { first, second, .. } => pending.extend([first.as_mut(), second.as_mut()]),
+                Node::Dock { columns, .. } => {
+                    for column in columns {
+                        if column.iconic_width == Some(44.0) {
+                            column.iconic_width = None;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    app.ui.panel_presentation.metrics_revision = 1;
 }
 fn finite(params: &Value, key: &str, fallback: f32) -> Result<f32, String> {
     match params.get(key) {
@@ -113,102 +153,47 @@ fn change(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<Value, St
     settings.migrated = true;
     let ids = members(&workspace.layout, &panel);
     let was_compact = compact(&workspace.layout, &settings, &panel);
-    let mut flyout = None;
+    let mut flyout = app.ui.docking_flyout.clone().filter(|_| operation == "flyout-size");
+    let mut root_closed = None;
+    let mut changed_ids = ids.clone();
     if id == "window.panel.edge" {
-        let edge = params.get("edge").and_then(Value::as_str).ok_or("edge must name a workspace side")?;
-        let individual = match params.get("individual") {
-            None => false,
-            Some(v) => v.as_bool().ok_or("individual must be a boolean")?,
-        };
-        let collapsed = match params.get("collapsed") {
-            None => was_compact,
-            Some(v) => v.as_bool().ok_or("collapsed must be a boolean")?,
-        };
-        let to = if edge == "floating" {
-            Target::Float {
-                rect: Some([finite(params, "x", 120.0)?, finite(params, "y", 140.0)?, finite(params, "width", 320.0)?, finite(params, "height", 400.0)?]),
-            }
-        } else {
-            let side = match edge {
-                "left" => Side::Start,
-                "rightInner" | "rightOuter" | "rightRail" => Side::End,
-                _ => return Err("unknown workspace edge".into()),
-            };
-            if let Some(anchor) = params.get("stack").and_then(Value::as_str).and_then(normalize) {
-                Target::At {
-                    anchor: anchor.into(),
-                    placement: Placement::Group { below: params.get("position").and_then(Value::as_str) != Some("top"), height: None },
-                }
-            } else if let Some(before) = params.get("before").and_then(Value::as_str).and_then(normalize) {
-                Target::At { anchor: before.into(), placement: Placement::Column { after: false } }
-            } else {
-                let cols: Vec<_> = columns(&workspace.layout).into_iter().filter(|(s, _)| *s == side).collect();
-                let target = if edge == "rightOuter" { cols.first() } else { cols.last() };
-                match target.and_then(|(_, c)| c.groups.first()).and_then(|g| g.panels.first()) {
-                    Some(anchor) if !ids.contains(anchor) => {
-                        Target::At { anchor: anchor.clone(), placement: Placement::Column { after: edge != "rightOuter" } }
-                    }
-                    _ => Target::NewDock { side },
-                }
-            }
-        };
-        let action = if individual {
-            Action::MovePanel { panel: panel.clone(), to }
-        } else if workspace.layout.floating.iter().any(|w| w.contains(&panel)) {
-            Action::MoveWindow { panel: panel.clone(), to }
-        } else if in_dock_column(&workspace.layout, &panel) {
-            Action::MoveColumn { panel: panel.clone(), to }
-        } else {
-            Action::MoveGroup { panel: panel.clone(), to }
-        };
-        let same_edge = matches!(&action,Action::MoveColumn {to:Target::NewDock {side},..} if columns(&workspace.layout).into_iter().any(|(s,c)|s==*side && c.groups.iter().any(|g|g.panels.contains(&panel))));
-        if !same_edge {
-            apply(&mut workspace, action)?;
-        }
-        let moved = if individual { vec![panel.clone()] } else { ids.clone() };
-        settings.compact.retain(|id| !moved.contains(id));
-        if in_dock_column(&workspace.layout, &panel) {
-            apply(&mut workspace, Action::SetIconic { panel: panel.clone(), iconic: collapsed })?;
-        } else if collapsed {
-            settings.compact.extend(moved);
-        }
+        (changed_ids, root_closed) = attach_edge(&mut workspace, &mut settings, panel.clone(), &ids, was_compact, params)?;
     } else {
         match operation {
             "collapse" | "expand" => {
-                let iconic = operation == "collapse";
-                if in_dock_column(&workspace.layout, &panel) {
-                    apply(&mut workspace, Action::SetIconic { panel: panel.clone(), iconic })?;
-                } else {
-                    if iconic && workspace.layout.floating.iter().any(|w| w.native.is_some() && w.contains(&panel)) {
-                        apply(&mut workspace, Action::SetNative { panel: panel.clone(), rect: None })?;
-                    }
-                    settings.compact.retain(|id| !ids.contains(id));
-                    if iconic {
-                        settings.compact.extend(ids.clone());
-                    }
+                if !floats(&workspace.layout, &panel) && !in_dock_column(&workspace.layout, &panel) {
+                    root_closed = Some(operation == "collapse");
                 }
+                set_collapsed(&mut workspace, &mut settings, &panel, &ids, operation == "collapse", params)?;
             }
             "peek" => {
                 apply(&mut workspace, Action::Activate { panel: panel.clone() })?;
                 flyout = Some(panel.clone());
             }
             "strip-width" => {
-                let width = finite(params, "width", 44.0)?;
-                if !(44.0..=240.0).contains(&width) {
-                    return Err("strip width must be 44..240".into());
+                let width = finite(params, "width", super::COMPACT_COLUMN_WIDTH)?;
+                if !(super::COMPACT_COLUMN_WIDTH..=240.0).contains(&width) {
+                    return Err("strip width must be 42..240".into());
                 }
                 if in_dock_column(&workspace.layout, &panel) {
                     apply(&mut workspace, Action::ResizeIconic { panel: panel.clone(), width: Some(width) })?;
                 }
-                for id in &ids {
-                    settings.widths.insert(id.clone(), width);
+                if !in_dock_column(&workspace.layout, &panel) {
+                    for id in &ids {
+                        settings.widths.insert(id.clone(), width);
+                    }
                 }
             }
             "edge-size" => resize_column(&mut workspace, &mut settings, &panel, &ids, was_compact, params)?,
             "flyout-size" => resize_flyout(&mut workspace, &mut settings, &panel, params)?,
             "tab" => {
                 let anchor = params.get("anchor").and_then(Value::as_str).and_then(normalize).ok_or("tab requires an anchor")?;
+                let closed = super::collapsed_members(app, &workspace.layout).contains(anchor);
                 apply(&mut workspace, Action::Move { panel: panel.clone(), anchor: anchor.into(), placement: Placement::Tab { before: None } })?;
+                changed_ids = vec![panel.clone()];
+                if !floats(&workspace.layout, &panel) && !in_dock_column(&workspace.layout, &panel) {
+                    root_closed = Some(closed);
+                }
             }
             "close-window" => {
                 apply(&mut workspace, Action::CloseWindow { panel: panel.clone() })?;
@@ -226,10 +211,18 @@ fn change(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<Value, St
     settings.compact.sort();
     settings.compact.dedup();
     let returns = app.ui.docking_returns.clone();
-    commit(app, workspace, returns);
-    sync_presentation(&workspace_of(app)?.layout, &mut settings);
     app.ui.panel_presentation = settings;
-    app.ui.docking_collapsed.retain(|id| !ids.contains(id));
+    commit(app, workspace, returns);
+    app.ui.docking_collapsed.retain(|id| !changed_ids.contains(id));
+    if let Some(closed) = root_closed {
+        let members = app.ui.docking.as_ref().map(|w| group_members(&w.layout, &panel)).unwrap_or_default();
+        app.ui.docking_collapsed.retain(|id| !members.contains(id));
+        if closed {
+            app.ui.docking_collapsed.extend(members);
+        } else {
+            reveal_group(app, &panel);
+        }
+    }
     if operation == "expand" {
         for id in &ids {
             reveal_group(app, id);
@@ -242,6 +235,139 @@ fn change(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<Value, St
         app.ui.docking_flyout = None;
     }
     Ok(json!({"layout":app.ui.docking.as_ref().map(|w| &w.layout),"presentation":app.ui.panel_presentation}))
+}
+
+/// Attach without mixing edge placement branches with the other view commands.
+fn attach_edge(
+    workspace: &mut Workspace,
+    settings: &mut PanelPresentation,
+    panel: String,
+    ids: &[String],
+    was_compact: bool,
+    params: &Value,
+) -> Result<(Vec<String>, Option<bool>), String> {
+    let mut root_closed = None;
+    let edge = params.get("edge").and_then(Value::as_str).ok_or("edge must name a workspace side")?;
+    let individual = match params.get("individual") {
+        None => false,
+        Some(v) => v.as_bool().ok_or("individual must be a boolean")?,
+    };
+    let collapsed = match params.get("collapsed") {
+        None => was_compact,
+        Some(v) => v.as_bool().ok_or("collapsed must be a boolean")?,
+    };
+    if matches!(edge, "top" | "bottom") {
+        if let Some(size) = workspace
+            .layout
+            .floating
+            .iter()
+            .find(|w| w.contains(&panel) && !independent_window(w))
+            .map(|w| [w.rect[2], w.rect[3]])
+            .filter(|s| s[0] >= 220.0 && s[1] >= 120.0)
+        {
+            for id in ids {
+                settings.floating_sizes.insert(id.clone(), size);
+            }
+        }
+        root_closed = Some(collapsed);
+    }
+    let to = if matches!(edge, "top" | "bottom") {
+        Target::At { anchor: CANVAS.into(), placement: Placement::Edge(if edge == "top" { super::Zone::Top } else { super::Zone::Bottom }) }
+    } else if edge == "floating" {
+        Target::Float {
+            rect: Some([finite(params, "x", 120.0)?, finite(params, "y", 140.0)?, finite(params, "width", 320.0)?, finite(params, "height", 400.0)?]),
+        }
+    } else {
+        let side = match edge {
+            "left" => Side::Start,
+            "rightInner" | "rightOuter" | "rightRail" => Side::End,
+            _ => return Err("unknown workspace edge".into()),
+        };
+        if let Some(anchor) = params.get("stack").and_then(Value::as_str).and_then(normalize) {
+            Target::At {
+                anchor: anchor.into(),
+                placement: Placement::Group { below: params.get("position").and_then(Value::as_str) != Some("top"), height: None },
+            }
+        } else if let Some(before) = params.get("before").and_then(Value::as_str).and_then(normalize) {
+            Target::At { anchor: before.into(), placement: Placement::Column { after: false } }
+        } else {
+            let cols: Vec<_> = columns(&workspace.layout).into_iter().filter(|(s, _)| *s == side).collect();
+            let target = if edge == "rightOuter" { cols.first() } else { cols.last() };
+            let moved = if individual { std::slice::from_ref(&panel) } else { ids };
+            match target.and_then(|(_, c)| c.groups.iter().flat_map(|g| &g.panels).find(|id| !moved.contains(id))) {
+                Some(anchor) => Target::At { anchor: anchor.clone(), placement: Placement::Column { after: edge != "rightOuter" } },
+                _ => Target::NewDock { side },
+            }
+        }
+    };
+    let action = if individual {
+        Action::MovePanel { panel: panel.clone(), to }
+    } else if workspace.layout.floating.iter().any(|w| w.contains(&panel)) {
+        Action::MoveWindow { panel: panel.clone(), to }
+    } else if in_dock_column(&workspace.layout, &panel) {
+        Action::MoveColumn { panel: panel.clone(), to }
+    } else {
+        Action::MoveGroup { panel: panel.clone(), to }
+    };
+    let same_edge = matches!(&action,Action::MoveColumn {to:Target::NewDock {side},..} | Action::MovePanel {to:Target::NewDock {side},..} | Action::MoveGroup {to:Target::NewDock {side},..} if columns(&workspace.layout).into_iter().any(|(s,c)|s==*side && c.groups.iter().any(|g|g.panels.contains(&panel))));
+    if !same_edge {
+        apply(workspace, action)?;
+    }
+    let moved = if individual { vec![panel.clone()] } else { ids.to_vec() };
+    settings.compact.retain(|id| !moved.contains(id));
+    if in_dock_column(&workspace.layout, &panel) {
+        apply(workspace, Action::SetIconic { panel: panel.clone(), iconic: collapsed })?;
+    } else if collapsed && floats(&workspace.layout, &panel) {
+        settings.compact.extend(moved.clone());
+    }
+    Ok((moved, root_closed))
+}
+
+fn set_collapsed(workspace: &mut Workspace, settings: &mut PanelPresentation, panel: &str, ids: &[String], iconic: bool, params: &Value) -> Result<(), String> {
+    if let Some(raw) = params.get("windowRect") {
+        let rect: [f32; 4] = serde_json::from_value(raw.clone()).map_err(|e| format!("invalid window rect: {e}"))?;
+        apply(workspace, Action::MoveFloating { panel: panel.into(), rect })?;
+    }
+    if iconic && let Some(raw) = params.get("normalSize") {
+        let size: [f32; 2] = serde_json::from_value(raw.clone()).map_err(|e| format!("invalid normal size: {e}"))?;
+        if !size.iter().all(|v| v.is_finite()) || !(220.0..=100_000.0).contains(&size[0]) || !(120.0..=100_000.0).contains(&size[1]) {
+            return Err("invalid normal size".into());
+        }
+        for id in ids {
+            settings.floating_sizes.insert(id.clone(), size);
+        }
+    }
+
+    if !floats(&workspace.layout, panel) && !in_dock_column(&workspace.layout, panel) {
+        settings.compact.retain(|id| !ids.contains(id));
+        return Ok(());
+    }
+    if in_dock_column(&workspace.layout, panel) {
+        apply(workspace, Action::SetIconic { panel: panel.into(), iconic })?;
+    } else {
+        if !iconic
+            && (params.get("x").is_some() || params.get("y").is_some())
+            && let Some(window) = workspace.layout.floating.iter().find(|w| w.contains(panel))
+        {
+            let mut rect = window.rect;
+            rect[0] = finite(params, "x", rect[0])?;
+            rect[1] = finite(params, "y", rect[1])?;
+            apply(workspace, Action::MoveFloating { panel: panel.into(), rect })?;
+        }
+        if iconic && !workspace.layout.floating.iter().any(|w| w.contains(panel)) {
+            let [width, height] = settings.floating_sizes.get(panel).copied().unwrap_or([320.0, 400.0]);
+            let rect = [finite(params, "x", 120.0)?, finite(params, "y", 140.0)?, width, height];
+            apply(workspace, Action::MoveGroup { panel: panel.into(), to: Target::Float { rect: Some(rect) } })?;
+        }
+        if iconic && workspace.layout.floating.iter().any(|w| w.native.is_some() && w.contains(panel)) {
+            apply(workspace, Action::SetNative { panel: panel.into(), rect: None })?;
+        }
+        settings.compact.retain(|id| !ids.contains(id));
+        if iconic {
+            settings.compact.extend_from_slice(ids);
+        }
+    }
+    Ok(())
 }
 
 fn native_window(workspace: &mut Workspace, panel: &str, params: &Value) -> Result<(), String> {
@@ -289,8 +415,28 @@ struct OldAttachment {
     width: f32,
     expanded: bool,
 }
+fn field<T: serde::de::DeserializeOwned>(value: &Value, key: &str) -> Option<T> {
+    serde_json::from_value(value.get(key)?.clone()).ok()
+}
+/// A changed or damaged optional view field cannot reset every other panel preference.
+fn read_presentation(raw: &Value) -> PanelPresentation {
+    if let Ok(presentation) = serde_json::from_value(raw.clone()) {
+        return presentation;
+    }
+    PanelPresentation {
+        compact: field(raw, "compact").unwrap_or_default(),
+        widths: field(raw, "widths").unwrap_or_default(),
+        heights: field(raw, "heights").unwrap_or_default(),
+        migrated: field(raw, "migrated").unwrap_or(false),
+        flyouts: field(raw, "flyouts").unwrap_or_default(),
+        floating_sizes: field(raw, "floating_sizes").unwrap_or_default(),
+        tools_size: field(raw, "tools_size").unwrap_or_default(),
+        metrics_revision: field(raw, "metrics_revision").unwrap_or(if raw.get("metrics_revision").is_none() { 0 } else { 1 }),
+    }
+}
+
 pub(crate) fn presentation(saved: &Value) -> PanelPresentation {
-    let mut p: PanelPresentation = saved.get("panelPresentation").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
+    let mut p: PanelPresentation = saved.get("panelPresentation").map(read_presentation).unwrap_or_default();
     if saved.get("dockingColumns").is_some() {
         p.migrated = true;
         p.compact = saved.get("dockingCollapsed").and_then(|v| serde_json::from_value(v.clone()).ok()).unwrap_or_default();
@@ -307,10 +453,16 @@ pub(crate) fn presentation(saved: &Value) -> PanelPresentation {
     p.compact.retain(|id| normalize(id).is_some());
     p.compact.sort();
     p.compact.dedup();
-    p.widths.retain(|id, w| normalize(id).is_some() && w.is_finite() && (44.0..=240.0).contains(w));
+    p.widths.retain(|id, w| normalize(id).is_some() && w.is_finite() && (super::COMPACT_COLUMN_WIDTH..=240.0).contains(w));
     p.flyouts.retain(|id, size| {
-        normalize(id).is_some() && size.iter().all(|v| v.is_finite()) && (220.0..=520.0).contains(&size[0]) && (120.0..=100_000.0).contains(&size[1])
+        normalize(id).is_some() && size.iter().all(|v| v.is_finite()) && (220.0..=100_000.0).contains(&size[0]) && (120.0..=100_000.0).contains(&size[1])
     });
+    p.floating_sizes.retain(|id, size| {
+        normalize(id).is_some() && size.iter().all(|v| v.is_finite()) && (220.0..=100_000.0).contains(&size[0]) && (120.0..=100_000.0).contains(&size[1])
+    });
+    p.tools_size = p
+        .tools_size
+        .filter(|s| s.iter().all(|v| v.is_finite()) && (super::COMPACT_COLUMN_WIDTH..=240.0).contains(&s[0]) && (160.0..=100_000.0).contains(&s[1]));
     p.heights.retain(|id, h| normalize(id).is_some() && h.is_finite() && (100.0..=100_000.0).contains(h));
     p
 }
@@ -493,6 +645,44 @@ fn default_place_placeholder(id: &str) -> Action<String> {
     Action::OpenAt { panel: id.into(), anchor: CANVAS.into(), placement: Placement::Split(craft_ui::docking::Zone::Right) }
 }
 
+/// Transfer the authoritative width only when an owner crosses between attached and floating.
+pub(super) fn transfer_widths(previous: Option<&Layout<String>>, next: &mut Layout<String>, settings: &mut PanelPresentation) {
+    let Some(previous) = previous else { return };
+    for window in &previous.floating {
+        if (220.0..=100_000.0).contains(&window.rect[2]) && window.rect[3] >= 120.0 {
+            for id in window.panels().filter(|id| next.contains(id) && !next.floating.iter().any(|w| w.contains(id.as_str()))) {
+                settings.floating_sizes.insert(id.clone(), [window.rect[2], window.rect[3]]);
+            }
+        }
+    }
+    let previously_attached: Vec<_> = columns(previous).into_iter().flat_map(|(_, c)| c.groups.iter().flat_map(|g| &g.panels)).collect();
+    // Attached geometry is authoritative. Copy it only on an actual transition to float.
+    for (_, column) in columns(previous).into_iter().filter(|(_, c)| c.iconic) {
+        let width = column.iconic_width.unwrap_or(super::COMPACT_COLUMN_WIDTH).clamp(super::COMPACT_COLUMN_WIDTH, 240.0);
+        for id in column.groups.iter().flat_map(|g| &g.panels).filter(|id| next.floating.iter().any(|w| w.contains(id.as_str()))) {
+            settings.widths.insert(id.clone(), width);
+        }
+    }
+    let mut pending: Vec<_> = next.root.iter_mut().collect();
+    while let Some(node) = pending.pop() {
+        match node {
+            Node::Split { first, second, .. } => pending.extend([first.as_mut(), second.as_mut()]),
+            Node::Dock { columns, .. } => {
+                for column in columns.iter_mut().filter(|c| c.iconic) {
+                    if column.groups.iter().flat_map(|g| &g.panels).any(|id| previously_attached.contains(&id)) {
+                        continue;
+                    }
+                    if let Some(id) = column.groups.iter().flat_map(|g| &g.panels).find(|id| previous.floating.iter().any(|w| w.contains(id.as_str()))) {
+                        column.iconic_width =
+                            Some(settings.widths.get(id).copied().unwrap_or(super::COMPACT_COLUMN_WIDTH).clamp(super::COMPACT_COLUMN_WIDTH, 240.0));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Keep appearance metadata synchronized when modern Workspace commands move a column.
 pub(super) fn sync_presentation(layout: &Layout<String>, settings: &mut PanelPresentation) {
     for (_, column) in columns(layout) {
@@ -517,7 +707,7 @@ fn resize_column(
 ) -> Result<(), String> {
     if params.get("width").is_some() {
         let width = finite(params, "width", 320.0)?;
-        let (lo, hi) = if was_compact { (44.0, 240.0) } else { (220.0, 520.0) };
+        let (lo, hi) = if was_compact { (super::COMPACT_COLUMN_WIDTH, 240.0) } else { (220.0, 520.0) };
         if !(lo..=hi).contains(&width) {
             return Err("column width is out of range".into());
         }
@@ -632,16 +822,19 @@ fn resize_flyout(workspace: &mut Workspace, settings: &mut PanelPresentation, pa
     let defaults = settings.flyouts.get(panel).copied().unwrap_or([320.0, 440.0]);
     let width = finite(params, "width", defaults[0])?;
     let height = finite(params, "height", defaults[1])?;
-    if !(220.0..=520.0).contains(&width) || !(120.0..=100_000.0).contains(&height) {
+    if !(220.0..=100_000.0).contains(&width) || !(120.0..=100_000.0).contains(&height) {
         return Err("flyout size is out of range".into());
     }
     if in_dock_column(&workspace.layout, panel) {
-        apply(workspace, Action::ResizeColumn { panel: panel.into(), width })?;
-    } else if let Some(window) = workspace.layout.floating.iter().find(|w| w.contains(panel)) {
+        apply(workspace, Action::ResizeColumn { panel: panel.into(), width: width.min(520.0) })?;
+    } else if let Some(window) = workspace.layout.floating.iter().find(|w| w.contains(panel) && !independent_window(w)) {
         let mut rect = window.rect;
         rect[2] = width;
         rect[3] = height;
         apply(workspace, Action::MoveFloating { panel: panel.into(), rect })?;
+    }
+    for id in group_members(&workspace.layout, panel) {
+        settings.floating_sizes.insert(id, [width, height]);
     }
     settings.flyouts.insert(panel.into(), [width, height]);
     Ok(())

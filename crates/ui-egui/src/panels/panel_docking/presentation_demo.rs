@@ -30,6 +30,9 @@ impl Clip {
         Self { directory, frame: 0 }
     }
     fn capture(&mut self, h: &mut H) {
+        if let Some(document) = h.state().session.active() {
+            assert_eq!(document.history.past_len(), 0, "panel chrome cannot paint through to the synthetic document");
+        }
         h.render().unwrap().save(self.directory.join(format!("{:04}.png", self.frame))).unwrap();
         self.frame += 1;
     }
@@ -185,6 +188,14 @@ fn full_stack(root: &Path) {
     let at = pos2(s.rect.right() - 33.0, s.rect.top() + INSET + 10.0);
     clip.click(&mut h, at);
     assert!(h.state().ui.panel_presentation.compact.iter().all(|p| p != "properties" && p != "actions"));
+    let floating_divider = DockArea::<String>::hit_rects(&h.ctx, area_id())
+        .into_iter()
+        .find(|(hit, _)| matches!(hit,Hit::Divider(Divider::WindowSplit(id,_)) if id=="properties"))
+        .unwrap()
+        .1;
+    let before = h.state().ui.docking.clone();
+    clip.drag(&mut h, floating_divider.center(), floating_divider.center() + vec2(0.0, 50.0), Modifiers::NONE, false);
+    assert_ne!(h.state().ui.docking, before, "floating stack row resize remains live");
     run(&mut h, "window.panel.edge", json!({"panel":"properties","edge":"left"}));
     clip.settle(&mut h);
     let from = divider(&h, Divider::Group("properties".into()));
@@ -227,7 +238,7 @@ fn compact_width(root: &Path) {
         let from = pos2(s.rect.right() - 1.0, s.rect.center().y);
         clip.drag(&mut h, from, from + vec2(delta, 0.0), Modifiers::NONE, false);
     }
-    assert!((strip(&h, "properties").rect.width() - 44.0).abs() < 0.5);
+    assert!((strip(&h, "properties").rect.width() - super::COMPACT_COLUMN_WIDTH).abs() < 0.5);
 }
 fn cancellation(root: &Path) {
     let mut h = joined();
@@ -298,6 +309,82 @@ fn preferences(root: &Path) {
     clip.settle(&mut h);
 }
 
+fn right_boundary_gestures(root: &Path) {
+    for full in [false, true] {
+        for after in [false, true] {
+            let mut h = joined();
+            if full {
+                run(&mut h, "window.panel.group", json!({"panel":"properties","operation":"expand"}));
+            }
+            let mut clip = Clip::new(root, &format!("09-right-{}-{}", if full { "full" } else { "compact" }, if after { "inner" } else { "outer" }));
+            clip.capture(&mut h);
+            let from = if full {
+                DockArea::<String>::hit_rects(&h.ctx, area_id())
+                    .into_iter()
+                    .find(|(hit, _)| matches!(hit,Hit::DragBar(id) if id=="properties"))
+                    .unwrap()
+                    .1
+                    .center()
+            } else {
+                grip(&strip(&h, "properties"))
+            };
+            let rect = h
+                .ctx
+                .data(|d| d.get_temp::<Vec<(String, Rect, craft_ui::docking::Side)>>(key("columns")))
+                .unwrap()
+                .into_iter()
+                .find(|(id, _, _)| id == "layers")
+                .unwrap()
+                .1;
+            clip.drag(&mut h, from, pos2(if after { rect.left() } else { rect.right() }, rect.top() + 180.0), Modifiers::NONE, false);
+            assert!(h.state().ui.docking.as_ref().unwrap().layout.floating.iter().all(|w| !w.contains("properties")));
+            h.render()
+                .unwrap()
+                .save(root.join(format!("right-{}-{}.png", if full { "full" } else { "compact" }, if after { "inner" } else { "outer" })))
+                .unwrap();
+        }
+    }
+}
+
+fn landing_timing(root: &Path) {
+    let mut h = joined();
+    let from = grip(&strip(&h, "properties"));
+    let rect = h
+        .ctx
+        .data(|d| d.get_temp::<Vec<(String, Rect, craft_ui::docking::Side)>>(key("columns")))
+        .unwrap()
+        .into_iter()
+        .find(|(id, _, _)| id == "layers")
+        .unwrap()
+        .1;
+    let to = pos2(rect.left(), rect.top() + 180.0);
+    h.input_mut().time = Some(10.0);
+    h.event(Event::PointerMoved(from));
+    h.run_steps(1);
+    h.input_mut().time = Some(10.01);
+    h.event(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.input_mut().time = Some(10.1);
+    h.event(Event::PointerMoved(to));
+    h.run_steps(1);
+    h.input_mut().time = Some(11.0);
+    h.event(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    let committed = h.state().ui.docking.clone();
+    let mut clip = Clip::new(root, "10-landing-timing");
+    for ms in [0, 50, 150, 300] {
+        h.input_mut().time = Some(11.0 + f64::from(ms) / 1000.0);
+        h.run_steps(1);
+        assert_eq!(h.state().ui.docking, committed, "landing cannot move the receiving group");
+        if ms >= 150 {
+            assert!(h.ctx.data(|d| d.get_temp::<super::Flight>(key("flight"))).is_none());
+        }
+        assert!(h.ctx.data(|d| d.get_temp::<super::Drag>(key("drag"))).is_none());
+        clip.capture(&mut h);
+    }
+    std::fs::write(root.join("10-landing-timing/timestamps-ms.json"), "[0,50,150,300]\n").unwrap();
+}
+
 #[test]
 fn current_version_showcase() {
     let Some(root) = std::env::var_os("PHOTOCRAFT_PANEL_SHOWCASE").map(PathBuf::from) else { return };
@@ -319,6 +406,8 @@ fn current_version_showcase() {
     cancellation(&root);
     restore(&root);
     preferences(&root);
+    right_boundary_gestures(&root);
+    landing_timing(&root);
     let mut h = harness();
     invoke(&mut h, "edit.preferences.workspace", json!({}));
     h.render().unwrap().save(root.join("workspace-preferences.png")).unwrap();

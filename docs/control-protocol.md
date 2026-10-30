@@ -721,7 +721,8 @@ The `docking` object in `ui.state` and in saved workspaces is craft-ui's `Worksp
 `version` (2), `layout`, `hidden` (each closed panel with its return place), `saved` and
 `locked`. `dockingReturns` holds where each floating panel docks back, and
 `dockingCollapsed` retains legacy collapsed-group state. `panelPresentation` stores compact
-floating membership, compact widths, total column heights and editor flyout sizes;
+floating membership, compact widths, total column heights, editor flyout sizes,
+remembered normal floating sizes and Tools resize dimensions;
 `toolbarFloating` is a logical `[x,y]` position or `null` for docked Tools. These are view
 metadata; `Workspace` remains the owner of panel placement. Flyout visibility and drag/resize
 previews are transient and are never serialized.
@@ -729,8 +730,11 @@ previews are transient and are never serialized.
 Bare layouts bearing the fork's `dockingColumns`, `dockingEdges` or `dockingStripWidths`
 markers migrate to `Workspace`, retaining tab membership, active tabs, column order, row
 weights, attachments and valid hidden return locations. An unmarked legacy layout retains
-upstream's default-layout fallback. Unknown newer workspace/presentation data is preserved
-without applying it. A fresh default layout replaces the six-button launcher with actual
+upstream's default-layout fallback. Unsupported non-null shared workspace data is
+preserved without applying it, including unreadable payloads with unchanged version
+tags. Rendering the fallback does not overwrite it; an explicit layout edit/reset
+replaces it. Invalid presentation fields fall back independently. See
+[Panel docking compatibility](panel-docking-contract.md). A fresh default layout replaces the six-button launcher with actual
 movable panel groups beside Layers; an existing modern customized layout is respected.
 
 The existing `ui.set` panel visibility, `dockTabs` selection and `dockWidth` controls
@@ -744,16 +748,21 @@ that group. Validation is atomic across mixed `ui.set` requests.
 
 `window.panel.group {panel, operation}` also provides:
 
-- `collapse` / `expand`: compact or expand the entire owning column/window, preserving rows
-  and tabs. Clicking an icon peeks one editor; the column chevron expands every row.
+- `collapse` / `expand`: compact or expand the owning dock column or compact palette,
+  preserving rows and tabs. Horizontal floating parts toggle their own tab group
+  independently. Clicking an icon peeks one editor; a palette chevron expands its rows.
 - `peek`: open one editor immediately beside its owning icon; right-side columns open left.
-- `strip-width {width}`: compact widths from 44 to 240 logical points. Labels appear only
+- `strip-width {width}`: compact widths from 42 to 240 logical points. Labels appear only
   when initial characters plus an ellipsis fit; icons keep a fixed leading anchor.
 - `edge-size {width?,height?,heights?,previousHeight?}`: shared column width (220–520 for
-  full editors, 44–240 for compact strips), optional total height (100–100000), and positive
+  full editors, 42–240 for compact strips), optional total height (100–100000), and positive
   row weights keyed by panel ID. `height:null` restores available-height sizing.
   `previousHeight` supplies the previous measured height when scaling explicit row heights.
-- `flyout-size {width?,height?}`: editor size (width 220–520, height 120–100000).
+- `flyout-size {width?,height?}`: editor size (width 220–100000, height 120–100000).
+  The visible editor fits the available workspace on its opening side; resizing keeps
+  that side and top anchor until it closes or its owner/workspace moves. A compact
+  compound window keeps its own geometry; its child editor stores a separate normal
+  size. Attached full-column width retains its 520-point cap.
 - `tab {anchor}`: combine the panel with the anchor's tabs.
 - `native {enabled,x?,y?,width?,height?}`: request a desktop OS window or return it embedded.
 - `close-row` / `close-window`: close a section or its complete floating window.
@@ -763,13 +772,16 @@ provide `anchor` and optional `zone`/`before`, or a serialized `placement`.
 
 `window.panel.edge {panel,edge,individual?,collapsed?,stack?,position?,before?,x?,y?,width?,height?}`
 moves an already attached or floating owner directly to `left`, `rightInner`, `rightOuter`,
-`rightRail` or `floating`. Expanded editors remain expanded unless `collapsed:true` is supplied.
+`rightRail`, `top`, `bottom` or `floating`. Top/bottom form expanded horizontal rows.
+Other expanded editors remain expanded unless `collapsed:true` is supplied.
 `individual:true` moves only that panel. `stack` names a destination section; `position:"top"`
 inserts above it (otherwise below). `before` inserts a column before its named neighbour.
 The first mouse insertion slot lies below the grip lines, with separate middle/bottom slots.
 
-`window.tools.float {x?,y?}` and `window.tools.dock {}` move Tools as one palette; individual
-tools never detach. Coordinates must be finite. The palette has the same compact header,
+`window.tools.float {x?,y?,width?,height?}` and `window.tools.dock {}` move Tools as one palette; individual
+tools never detach. Coordinates must be finite; optional size is 42..240 by 160..100000 pt.
+Floating Tools has edge/corner resize handles and retains its size through workspace restore.
+The palette has the same compact header,
 grip and narrow inset scrolling treatment as panel columns.
 
 Lock Workspace cancels unfinished layout gestures. Ctrl/Cmd suppresses docking; Escape,
@@ -781,3 +793,17 @@ native movement settling and reuses an unchanged layout snapshot on idle frames.
 `window.panel.<id> {show:true}` reveals the requested panel. Snapshots retain Timeline
 visibility, tab order, active tabs and sizes. Creating an adjustment/fill layer still opens
 Properties; ordinary layer selection does not reopen it.
+
+Mouse tab merging offers only insertion slots beside/between existing tabs, with one
+vertical marker for each slot; unused header space after the final tab belongs to
+that final slot. Body centers do not merge tabs. Outer group edges make separate
+sections; horizontal compact/full parts preserve their independent view modes.
+A group-header drag moves that group rather than its entire attached column.
+Adjacent floating compact windows peek/expand outward where space allows.
+
+
+Horizontal panel groups at the top/bottom keep their attached tab bar when collapsed
+with `window.panel.group`. Expand opens the same group in place; a compact source
+dropped on the canvas's top/bottom edge starts as that tab bar. Tab insertion into
+a closed bar keeps it closed. Its collapse flags and saved normal floating size
+round-trip with the workspace; detaching an expanded group restores the normal size.

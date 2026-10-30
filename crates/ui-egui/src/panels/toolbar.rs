@@ -81,7 +81,7 @@ pub(super) fn tool_flyout_release(row: Rect, pointer: Option<Pos2>, released: bo
 }
 
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let width = 44.0 + if app.ui.panels.toolbar_double { 32.0 } else { 0.0 };
+    let width = crate::panel_docking::COMPACT_COLUMN_WIDTH + if app.ui.panels.toolbar_double { 32.0 } else { 0.0 };
     crate::toolbar_docking::show(app, ui, width, 3, toolbar_content);
 }
 

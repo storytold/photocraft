@@ -231,8 +231,12 @@ fn crowded_tabs_keep_their_whole_names_and_the_menu_lists_every_document() {
 #[test]
 fn the_overflow_button_is_pinned_to_the_right_end() {
     for theme in [ThemeKind::Pro, ThemeKind::Studio] {
-        let at = |docs: usize| {
-            let h = harness(docs, theme);
+        let at = |docs: usize, double: bool| {
+            let mut h = harness(docs, theme);
+            // Vary the left reservation, keeping the right edge fixed. This avoids relying
+            // on a particular glyph fit at the toolbar's previous default width.
+            h.state_mut().ui.panels.toolbar_double = double;
+            h.run_steps(2);
             let s = strip(&h);
             let button = h.get_by_label("More documents").rect();
             let last = s.tabs.iter().map(|(_, r)| r.right()).fold(f32::MIN, f32::max);
@@ -241,7 +245,7 @@ fn the_overflow_button_is_pinned_to_the_right_end() {
             assert!(button.right() <= s.rect.right() + 0.5 && button.right() >= s.rect.right() - 10.0, "{theme:?}: » at {button:?} in {:?}", s.rect);
             (button, last)
         };
-        let ((a, last_a), (b, last_b)) = (at(14), at(23));
+        let ((a, last_a), (b, last_b)) = (at(14, false), at(23, true));
         assert!((last_a - last_b).abs() > 1.0, "{theme:?}: the fits must end at different places to tell");
         assert_eq!(a, b, "{theme:?}: the » button doesn't follow the last tab");
     }
