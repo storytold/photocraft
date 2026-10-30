@@ -259,6 +259,13 @@ mod title_tests {
     }
 }
 
+/// Whether blend mode `m` starts one of the groups Photoshop's blend mode lists draw a line above:
+/// Normal, Dissolve (and Pass Through, Clear) | darken | lighten | contrast | difference | colour
+/// (#5532). The first mode of a list never gets a line.
+pub(crate) fn starts_blend_group(m: BlendMode) -> bool {
+    matches!(m, BlendMode::Darken | BlendMode::Lighten | BlendMode::Overlay | BlendMode::Difference | BlendMode::Hue)
+}
+
 fn label(ui: &mut egui::Ui, s: &str) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(s).color(t.text_dim));

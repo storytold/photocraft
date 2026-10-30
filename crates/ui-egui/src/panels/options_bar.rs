@@ -1,6 +1,6 @@
 use super::brush_controls::{brush_preset_chip, mixer_load_swatch, paint_mode_dropdown, smoothing_field, smoothing_options, tool_mode_dropdown};
 use super::properties::{select_and_mask_button, selection_mode_buttons};
-use super::{BlendMode, Color32, PhotocraftApp, RichText, Sense, Tokens, Tool, Value, icons, json, vec2, widgets};
+use super::{BlendMode, Color32, PhotocraftApp, RichText, Sense, Tokens, Tool, Value, icons, json, starts_blend_group, vec2, widgets};
 use photocraft_paint::BrushSettings;
 
 // Custom controls also need to bring keyboard focus into a scroll viewport.
@@ -443,7 +443,9 @@ fn selection_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: 
             opt_label(ui, tl!("Mode"));
             let opts: Vec<(BlendMode, &str)> = BlendMode::LAYER_MODES.iter().map(|m| (*m, m.label())).collect();
             // The wheel over it steps the mode, as over the Layers panel's (#2061).
-            widgets::dropdown_wheel_hovered(ui, "gradient-blend-mode", tl!("Blend Mode"), &mut app.ui.tool_options.gradient_blend_mode, &opts, 96.0);
+            widgets::dropdown_wheel_grouped(ui, "gradient-blend-mode", tl!("Blend Mode"), &mut app.ui.tool_options.gradient_blend_mode, &opts, 96.0, |m| {
+                starts_blend_group(*m)
+            });
             opt_label(ui, tl!("Opacity"));
             let r = widgets::value_field(ui, &mut app.ui.tool_options.fill_opacity, 1.0..=100.0, "%", 62.0);
             // Live while scrubbed, one undo step per scrub (#5012).
