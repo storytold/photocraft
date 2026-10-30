@@ -2645,6 +2645,9 @@ mod tabs_tests;
 mod doc_window_dialog_tests;
 
 #[cfg(test)]
+mod doc_window_key_tests;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
