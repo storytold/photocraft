@@ -28,10 +28,11 @@ pub(super) fn purge(s: &mut Session, what: &str) -> Result<Value> {
         freed += before.saturating_sub(history_bytes(s, false));
         items.push("undo");
     }
-    if matches!(what, "clipboard" | "all") && (s.clipboard.is_some() || s.style_clipboard.is_some()) {
+    if matches!(what, "clipboard" | "all") && clipboard_held(s) {
         freed += clip_bytes(s);
         s.clipboard = None;
         s.style_clipboard = None;
+        s.layer_mask_clipboard = None;
         items.push("clipboard");
     }
     if matches!(what, "histories" | "all") {
@@ -81,8 +82,12 @@ pub(super) fn can_purge_undo(s: &Session) -> std::result::Result<(), String> {
     s.active().filter(|d| d.history.can_undo()).map(|_| ()).ok_or_else(|| "nothing to purge".into())
 }
 
+fn clipboard_held(s: &Session) -> bool {
+    s.clipboard.is_some() || s.style_clipboard.is_some() || s.layer_mask_clipboard.is_some()
+}
+
 pub(super) fn can_purge_clipboard(s: &Session) -> std::result::Result<(), String> {
-    if s.clipboard.is_some() || s.style_clipboard.is_some() { Ok(()) } else { Err("the clipboard is empty".into()) }
+    if clipboard_held(s) { Ok(()) } else { Err("the clipboard is empty".into()) }
 }
 
 pub(super) fn can_purge_histories(s: &Session) -> std::result::Result<(), String> {
