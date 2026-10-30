@@ -117,8 +117,10 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let canvas = canvas_drop_rect(app);
     let ctx = ui.ctx().clone();
-    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str| {
-        run(app, "pattern.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group})).is_some()
+    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
+        run(app, "pattern.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
+            .map(|_| ())
+            .ok_or_else(|| "The Pattern library rejected the item move.".to_owned())
     };
     let mut adapter = BrowserAdapter {
         panel: "patterns",
@@ -134,10 +136,13 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
+        // Cross-group membership uses the Pattern domain command; sibling/group order is saved
+        // in the canonical picker layout state.
         capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
         item_context_menu: Some(crate::pickers::asset_browser::standard_item_context_menu),
         group_context_menu: Some(crate::pickers::asset_browser::standard_group_context_menu),
         nested_group_context_menu: None,
+        canonical_hierarchy_move: None,
         hierarchy_item_move: Some(&mut commit_item_move),
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
@@ -317,14 +322,21 @@ pub(crate) fn compact_pattern_browser(
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
-        // Compact pickers use the same scoped hierarchy resolver as full panels. Selection closes
-        // the popup; same-group item ordering and group hierarchy changes keep it open. Intentional
-        // exception: there is no compact-picker command context for cross-group membership moves,
-        // so the absent callback rejects those candidates rather than persisting a UI-only move.
-        capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true, canonical_hierarchy_drag: true },
+        // Compact pickers have no domain-command context for committing item or group moves.
+        // Keep selection/activation available, but do not expose drag semantics that could only
+        // mutate this popup's transient PresetUi projection.
+        capabilities: BrowserCapabilities {
+            item_drag: false,
+            item_drop: false,
+            group_drag: false,
+            selection: true,
+            activation: true,
+            canonical_hierarchy_drag: false,
+        },
         item_context_menu: Some(compact_item_context_menu),
         group_context_menu: Some(compact_group_context_menu),
         nested_group_context_menu: None,
+        canonical_hierarchy_move: None,
         hierarchy_item_move: None,
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, paint_state: ItemPaintState| {

@@ -118,8 +118,10 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for g in &src {
         texes.push(g.items.iter().map(|s| style_texture(app, &ctx, s)).collect());
     }
-    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str| {
-        run(app, "style.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group})).is_some()
+    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
+        run(app, "style.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
+            .map(|_| ())
+            .ok_or_else(|| "The Style library rejected the item move.".to_owned())
     };
     let mut adapter = BrowserAdapter {
         panel: "styles",
@@ -135,10 +137,13 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
+        // Cross-group membership uses the Style domain command; sibling/group order is saved
+        // in the canonical picker layout state.
         capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
         nested_group_context_menu: None,
+        canonical_hierarchy_move: None,
         hierarchy_item_move: Some(&mut commit_item_move),
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
@@ -197,8 +202,10 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
-    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str| {
-        run(app, "shape.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group})).is_some()
+    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
+        run(app, "shape.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
+            .map(|_| ())
+            .ok_or_else(|| "The Shape library rejected the item move.".to_owned())
     };
     let mut adapter = BrowserAdapter {
         panel: "shapes",
@@ -214,10 +221,21 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
-        capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
+        // The projection also contains the derived `Custom Shapes` group, whose items live in
+        // edit_state.custom_shapes and have no move command. Until that source supports the same
+        // canonical move contract, keep drag semantics disabled for this mixed-source adapter.
+        capabilities: BrowserCapabilities {
+            item_drag: false,
+            item_drop: false,
+            group_drag: false,
+            selection: true,
+            activation: true,
+            canonical_hierarchy_drag: false,
+        },
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
         nested_group_context_menu: None,
+        canonical_hierarchy_move: None,
         hierarchy_item_move: Some(&mut commit_item_move),
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
@@ -882,6 +900,7 @@ mod tests {
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
+            canonical_hierarchy_move: None,
             hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
@@ -926,6 +945,7 @@ mod tests {
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
+            canonical_hierarchy_move: None,
             hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
@@ -1024,6 +1044,7 @@ mod tests {
             item_context_menu: None,
             group_context_menu: None,
             nested_group_context_menu: None,
+            canonical_hierarchy_move: None,
             hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
@@ -1283,6 +1304,7 @@ mod tests {
             item_context_menu: Some(consumer_item_menu),
             group_context_menu: Some(consumer_group_menu),
             nested_group_context_menu: None,
+            canonical_hierarchy_move: None,
             hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},

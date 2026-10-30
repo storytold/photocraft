@@ -88,6 +88,28 @@ pub(crate) struct DropCandidate {
     pub(crate) validity: DropValidity,
 }
 
+/// A move request that has passed canonical hierarchy validation.
+///
+/// Adapters receive this value rather than reconstructing a destination from pointer geometry.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct DropMoveIntent {
+    pub(crate) source: NodeId,
+    pub(crate) position: DropPosition,
+}
+
+/// Outcome of handing a validated move intent to its domain adapter.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DropCommitResult<E> {
+    /// There was no current hit candidate to commit.
+    NoCandidate,
+    /// The current candidate failed canonical hierarchy validation.
+    Rejected(DropRejection),
+    /// The adapter was called and declined or failed the move.
+    Failed(E),
+    /// The adapter accepted the exact validated move intent.
+    Committed,
+}
+
 impl DropCandidate {
     /// Whether this candidate is eligible for commit.
     pub(crate) fn is_valid(&self) -> bool {
@@ -122,6 +144,30 @@ impl DragSession {
     /// Return the candidate to commit, but only when it is valid.
     pub(crate) fn commit_position(&self) -> Option<&DropPosition> {
         self.candidate.as_ref().filter(|candidate| candidate.validity == DropValidity::Valid).map(|candidate| &candidate.position)
+    }
+
+    /// Return the exact source/destination pair only when the current candidate is valid.
+    pub(crate) fn validated_intent(&self) -> Result<Option<DropMoveIntent>, DropRejection> {
+        let Some(candidate) = self.candidate.as_ref() else {
+            return Ok(None);
+        };
+        if let DropValidity::Invalid(reason) = &candidate.validity {
+            return Err(reason.clone());
+        }
+        Ok(Some(DropMoveIntent { source: self.source.clone(), position: candidate.position.clone() }))
+    }
+
+    /// Hand one validated intent to the adapter and preserve its failure as an explicit result.
+    /// The adapter owns domain acceptance and commit; this session never mutates the hierarchy.
+    pub(crate) fn commit_with<E>(&self, commit: impl FnOnce(&DropMoveIntent) -> Result<(), E>) -> DropCommitResult<E> {
+        match self.validated_intent() {
+            Ok(None) => DropCommitResult::NoCandidate,
+            Err(reason) => DropCommitResult::Rejected(reason),
+            Ok(Some(intent)) => match commit(&intent) {
+                Ok(()) => DropCommitResult::Committed,
+                Err(error) => DropCommitResult::Failed(error),
+            },
+        }
     }
 }
 
@@ -204,7 +250,7 @@ pub(crate) fn resolve_drop_candidate(source: &NodeId, hit: &DropHitRegion, hiera
 
 #[cfg(test)]
 mod tests {
-    use super::{DropHitRegion, DropIndicator, DropRejection, DropValidity, PointerRegion, arbitrate_hit_index, container_outline_rects, resolve_drop_candidate};
+    use super::{DropCommitResult, DropHitRegion, DropIndicator, DropRejection, DropValidity, DragSession, PointerRegion, arbitrate_hit_index, container_outline_rects, resolve_drop_candidate};
     use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
     use egui::{Pos2, Rect};
 
@@ -317,5 +363,46 @@ mod tests {
         assert_eq!(bottom.bottom(), target.bottom());
         assert_eq!(left.left(), target.left());
         assert_eq!(right.right(), target.right());
+    }
+
+    #[test]
+    fn commit_hands_the_exact_validated_intent_to_the_adapter() {
+        let hierarchy = hierarchy();
+        let mut session = DragSession::new(NodeId::from("card"));
+        session.resolve(Pos2::new(20.0, 25.0), &hit(PointerRegion::LeadingEdge, Some("other"), None), &hierarchy);
+
+        let result = session.commit_with(|intent| {
+            assert_eq!(intent.source, NodeId::from("card"));
+            assert_eq!(intent.position, DropPosition::Before { target: "other".into() });
+            Ok::<(), &'static str>(())
+        });
+
+        assert_eq!(result, DropCommitResult::Committed);
+    }
+
+    #[test]
+    fn invalid_or_missing_candidates_never_reach_the_adapter() {
+        let hierarchy = hierarchy();
+        let mut invalid = DragSession::new(NodeId::from("card"));
+        invalid.resolve(Pos2::new(20.0, 25.0), &hit(PointerRegion::LeadingEdge, Some("card"), None), &hierarchy);
+        let mut called = false;
+        let rejected = invalid.commit_with(|_| {
+            called = true;
+            Ok::<(), ()>(())
+        });
+        assert_eq!(rejected, DropCommitResult::Rejected(DropRejection::SameNode));
+        assert!(!called);
+
+        let empty = DragSession::new(NodeId::from("card"));
+        assert_eq!(empty.commit_with(|_| Ok::<(), ()>(())), DropCommitResult::NoCandidate);
+    }
+
+    #[test]
+    fn adapter_failure_is_preserved_as_a_commit_result() {
+        let hierarchy = hierarchy();
+        let mut session = DragSession::new(NodeId::from("card"));
+        session.resolve(Pos2::new(20.0, 25.0), &hit(PointerRegion::LeadingEdge, Some("other"), None), &hierarchy);
+
+        assert_eq!(session.commit_with(|_| Err("adapter rejected move")), DropCommitResult::Failed("adapter rejected move"));
     }
 }

@@ -45,6 +45,184 @@ fn shared_hierarchy_drop_contract_preserves_brush_folder_moves() {
 }
 
 #[test]
+fn brush_folder_item_and_folder_moves_commit_to_the_authoritative_library() {
+    use crate::pickers::picker_state::HierarchyOrderEntry;
+    use photocraft_engine::paint::BrushPreset;
+
+    let folder = |parts: &[&str]| parts.iter().map(|part| (*part).to_string()).collect::<Vec<_>>();
+    let preset = |name: &str, path: &[&str]| BrushPreset {
+        name: name.into(),
+        brush: Default::default(),
+        builtin: false,
+        group: "Kit".into(),
+        folder: folder(path),
+        captures: Default::default(),
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.tools.presets.extend([
+        preset("Folder item", &["Soft"]),
+        preset("Soft sibling", &["Soft"]),
+        preset("Nested descendant", &["Soft", "Inner"]),
+        preset("Hard anchor", &["Hard"]),
+    ]);
+    app.ui.presets_ui.set_hierarchy_order(
+        "brushes",
+        "",
+        vec![HierarchyOrderEntry::Item("unrelated-layout-token".into())],
+    );
+    let generic_layout_before = app.ui.presets_ui.hierarchy_order.clone();
+
+    apply(
+        &mut app,
+        vec![Action::MoveBefore {
+            name: "Folder item".into(),
+            group: "Kit".into(),
+            folder: Some(folder(&["Hard"])),
+            before: "Hard anchor".into(),
+        }],
+    );
+
+    let moved_item = app.session.tools.presets.iter().find(|preset| preset.name == "Folder item").unwrap();
+    assert_eq!(moved_item.group, "Kit");
+    assert_eq!(moved_item.folder, folder(&["Hard"]), "FolderItem moves retain the full destination folder path");
+    assert_eq!(
+        app.session.tools.presets.iter().filter(|preset| preset.folder == folder(&["Hard"])).map(|preset| preset.name.as_str()).collect::<Vec<_>>(),
+        ["Folder item", "Hard anchor"],
+        "the before-item anchor determines authoritative preset order",
+    );
+
+    let folder_move = folder_drop("Kit", &folder(&["Soft"]), "Kit", &folder(&["Hard"]), false)
+        .expect("dropping the Soft folder onto Hard creates a domain move action");
+    apply(&mut app, vec![folder_move]);
+
+    for (name, expected_path) in [
+        ("Soft sibling", folder(&["Hard", "Soft"])),
+        ("Nested descendant", folder(&["Hard", "Soft", "Inner"])),
+    ] {
+        let moved = app.session.tools.presets.iter().find(|preset| preset.name == name).unwrap();
+        assert_eq!(moved.group, "Kit");
+        assert_eq!(moved.folder, expected_path, "moving a Folder commits its complete subtree");
+    }
+    assert_eq!(
+        app.ui.presets_ui.hierarchy_order,
+        generic_layout_before,
+        "brush domain commits must not write a competing hierarchy into generic PresetUi state",
+    );
+
+    let authoritative_before_failure = app.session.tools.presets.clone();
+    apply(
+        &mut app,
+        vec![Action::MoveBefore {
+            name: "Soft sibling".into(),
+            group: "Kit".into(),
+            folder: Some(folder(&["Missing destination"])),
+            before: "Hard anchor".into(),
+        }],
+    );
+    assert_eq!(app.session.tools.presets, authoritative_before_failure, "a rejected domain commit leaves the brush library unchanged");
+    assert_eq!(app.ui.presets_ui.hierarchy_order, generic_layout_before, "a rejected commit cannot leak into generic picker hierarchy state");
+    assert!(!app.ui.status.is_empty(), "the adapter reports the failed domain commit");
+}
+
+/// Exercise the canonical browser release path (rather than constructing Brush `Action`s
+/// directly): folder cards and folder headers must both reach the path-aware Brush adapter.
+fn drag_in_brush_picker(presets: Vec<photocraft_engine::paint::BrushPreset>, source: &str, target: &str) -> Harness<'static, (BrushesPanelState, crate::pickers::picker_state::PresetUi, Vec<Action>)> {
+    use egui::{Event, Modifiers, PointerButton, vec2};
+
+    let mut h = Harness::builder().with_size(vec2(520.0, 620.0)).build_ui_state(
+        move |ui, state: &mut (BrushesPanelState, crate::pickers::picker_state::PresetUi, Vec<Action>)| {
+            if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                state.2.extend(crate::pickers::brush_browser::picker_browser(ui, &presets, None, &mut state.0, &mut state.1, 600.0));
+            }
+        },
+        (BrushesPanelState::default(), crate::pickers::picker_state::PresetUi::default(), Vec::new()),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+    h.run_steps(3);
+
+    let source = h.get_by_label(source).rect().center();
+    let target = h.get_by_label(target).rect().center();
+    h.event(Event::PointerMoved(source));
+    h.run_steps(1);
+    h.event(Event::PointerButton { pos: source, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=8 {
+        h.event(Event::PointerMoved(source + (target - source) * (step as f32 / 8.0)));
+        h.run_steps(1);
+    }
+    h.event(Event::PointerButton { pos: target, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    h
+}
+
+fn brush_test_preset(name: &str, folder: &[&str]) -> photocraft_engine::paint::BrushPreset {
+    photocraft_engine::paint::BrushPreset {
+        name: name.into(),
+        brush: Default::default(),
+        builtin: false,
+        group: "Kit".into(),
+        folder: folder.iter().map(|part| (*part).into()).collect(),
+        captures: Default::default(),
+    }
+}
+
+#[test]
+fn canonical_brush_folder_item_drop_maps_to_authoritative_move_action() {
+    let presets = vec![brush_test_preset("Moving brush", &["Soft"]), brush_test_preset("Hard anchor", &["Hard"])];
+    let h = drag_in_brush_picker(presets.clone(), "Moving brush", "Hard");
+
+    assert!(matches!(
+        h.state().2.as_slice(),
+        [Action::Move { name, group, folder: Some(path), index: None }]
+            if name == "Moving brush" && group == "Kit" && path == &["Hard".to_string()]
+    ), "canonical FolderItem drops map to a Brush move with the complete destination path: {:?}", h.state().2);
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.tools.presets = presets;
+    apply(&mut app, h.state().2.clone());
+    let moved = app.session.tools.presets.iter().find(|preset| preset.name == "Moving brush").unwrap();
+    assert_eq!(moved.folder, vec!["Hard".to_string()], "the mapped Brush command updates authoritative preset domain state");
+}
+
+#[test]
+fn canonical_brush_folder_drop_maps_to_authoritative_move_into_action() {
+    let presets = vec![brush_test_preset("Soft brush", &["Soft"]), brush_test_preset("Nested brush", &["Soft", "Inner"]), brush_test_preset("Hard brush", &["Hard"])];
+    let h = drag_in_brush_picker(presets.clone(), "Soft", "Hard");
+
+    assert!(matches!(
+        h.state().2.as_slice(),
+        [Action::MoveInto { group, folder, into: Some((target, path)), before: None, before_item: None }]
+            if group == "Kit" && folder == &["Soft".to_string()] && target == "Kit" && path == &["Hard".to_string()]
+    ), "canonical Folder drops map to a subtree MoveInto action: {:?}", h.state().2);
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.session.tools.presets = presets;
+    apply(&mut app, h.state().2.clone());
+    for (name, expected_path) in [
+        ("Soft brush", vec!["Hard".to_string(), "Soft".to_string()]),
+        ("Nested brush", vec!["Hard".to_string(), "Soft".to_string(), "Inner".to_string()]),
+    ] {
+        let moved = app.session.tools.presets.iter().find(|preset| preset.name == name).unwrap();
+        assert_eq!(moved.folder, expected_path, "the mapped Brush command commits the entire folder subtree");
+    }
+}
+
+#[test]
+fn canonical_brush_folder_item_rejection_is_reported_without_a_domain_action() {
+    let h = drag_in_brush_picker(
+        vec![brush_test_preset("Twin", &["Soft"]), brush_test_preset("Twin", &["Other"]), brush_test_preset("Hard brush", &["Hard"])],
+        "Twin",
+        "Hard",
+    );
+
+    assert!(h.state().2.is_empty(), "an unaddressable duplicate-name preset must not emit a lossy Brush command: {:?}", h.state().2);
+    assert!(
+        h.query_all_by_label("Move rejected: \"The dragged Brush name is ambiguous in the library.\"").next().is_some(),
+        "the canonical adapter's error must be visible to the user",
+    );
+}
+
+#[test]
 fn collapsed_hierarchy_state_follows_group_and_folder_renames() {
     let key = |group: &str, folder: &[&str]| folder_view_key(group, &folder.iter().map(|part| (*part).to_string()).collect::<Vec<_>>());
     let mut collapsed = vec![key("Imported", &[]), key("Imported", &["Soft"]), key("Imported", &["Soft", "Inner"]), key("Other", &["Soft"])];

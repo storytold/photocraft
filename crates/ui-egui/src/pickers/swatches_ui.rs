@@ -79,8 +79,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Swatches are applied by clicking; dragging a swatch onto the canvas has no action. Keep
     // hierarchy reordering enabled without advertising a dead canvas-drop destination.
     let canvas = Rect::NOTHING;
-    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str| {
-        run(app, "swatches.move", json!({"swatch": key, "group": source_group, "to": destination_group})).is_some()
+    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
+        run(app, "swatches.move", json!({"swatch": key, "group": source_group, "to": destination_group, "position": index}))
+            .map(|_| ())
+            .ok_or_else(|| "The Swatches library rejected the item move.".to_owned())
     };
     // In a very short dock, the menu and footer need priority over the optional search row.
     // Preserve the user's search preference so it returns when the panel is tall enough again.
@@ -105,12 +107,13 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
-        // Swatches use canonical card/group targets; dropping onto the canvas remains unsupported
-        // because this adapter intentionally registers no canvas drop target.
+        // Cross-group membership uses the Swatches domain command; sibling/group order is saved
+        // in the canonical picker layout state.
         capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
         nested_group_context_menu: None,
+        canonical_hierarchy_move: None,
         hierarchy_item_move: Some(&mut commit_item_move),
         paint_group: None,
         paint_item: &mut |ui, rect: Rect, group_index, item_index, _paint_state: ItemPaintState| {
@@ -575,8 +578,7 @@ mod tests {
         assert!(out[0].1.starts_with(b"ASEF"));
     }
 
-    /// #3658: dragging a group header reorders the groups, and the new order sticks in the UI
-    /// state (UI state is serde, so it saves and reloads with the rest of the panel state).
+    /// Group order is persisted as part of the canonical picker hierarchy state.
     #[test]
     fn dragging_a_group_header_reorders_and_persists() {
         let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -594,9 +596,8 @@ mod tests {
         assert_eq!(order.len(), names.len());
         assert_eq!(names.get(order[0]).map(String::as_str), Some(last.as_str()), "the dragged group moved to the front: {order:?}");
         assert_eq!(names.get(order[1]).map(String::as_str), Some(first.as_str()));
-        // The reorder is remembered by name (not by the positions it happened to have).
         assert_eq!(h.state().ui.presets_ui.hierarchy_order[PANEL][""][0], crate::pickers::picker_state::HierarchyOrderEntry::Group(last.clone()));
-        assert!(serde_json::to_value(&h.state().ui.presets_ui).unwrap().get("groupOrder").is_none(), "root order uses the canonical hierarchy field");
+        assert!(serde_json::to_value(&h.state().ui.presets_ui).unwrap().get("groupOrder").is_none());
     }
 
     #[test]
@@ -609,12 +610,10 @@ mod tests {
         assert!(headers.len() >= 2);
         let (target_group, target_rect) = &headers[0];
         let (moving_group, moving_rect) = headers.last().unwrap();
-        let target_item =
-            h.state().session.presets.swatches.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
+        let target_item = h.state().session.presets.swatches.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
         let root_order_before = h.state().ui.presets_ui.display_order(PANEL, &headers.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>());
 
-        // Aim at the left half of the first swatch: the group must land before that card, not
-        // append after the whole parent group or reorder among the root headers.
+        // Aim at the left half of the first swatch so the group is inserted before that card.
         let target = first_cell(&h) - vec2(5.0, 0.0);
         drag(&mut h, moving_rect.center(), target);
 
@@ -624,7 +623,6 @@ mod tests {
         assert_eq!(state.hierarchy_order[PANEL][target_group].get(1), Some(&crate::pickers::picker_state::HierarchyOrderEntry::Item(target_item)));
         let names: Vec<String> = headers.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(state.display_order(PANEL, &names), root_order_before, "a card-level drop must not also reorder root groups");
-        let _ = target_rect;
     }
 
     #[test]

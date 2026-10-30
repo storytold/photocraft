@@ -34,6 +34,18 @@ pub(crate) enum AssetDrag {
     CanonicalGroup { scope: String, node_id: NodeId },
 }
 
+impl AssetDrag {
+    /// Return the path-qualified canonical source identity for this browser scope.
+    /// Legacy name/path payloads intentionally do not produce canonical move requests.
+    pub(crate) fn canonical_node_id(&self, expected_scope: &str) -> Option<&NodeId> {
+        match self {
+            Self::Preset { scope, node_id: Some(node_id), .. } | Self::CanonicalGroup { scope, node_id }
+                if scope == expected_scope => Some(node_id),
+            _ => None,
+        }
+    }
+}
+
 /// Shared header hit convention: the upper third inserts before; the rest nests inside.
 pub(crate) fn header_drop_before(rect: Rect, pointer: Pos2) -> bool {
     pointer.y < rect.top() + rect.height() / 3.0
@@ -429,6 +441,24 @@ mod tests {
         assert_eq!(no_left, None);
         assert_eq!(right, Some(Rect::from_min_max(Pos2::new(260.0, 25.0), Pos2::new(310.0, 65.0))));
         assert_eq!(no_right, None);
+    }
+}
+
+#[cfg(test)]
+mod canonical_drag_tests {
+    use super::AssetDrag;
+    use crate::pickers::picker_browser_model::NodeId;
+
+    #[test]
+    fn canonical_source_identity_is_scope_checked_and_path_qualified() {
+        let item = AssetDrag::Preset { scope: "brushes".to_owned(), key: "soft".to_owned(), node_id: Some(NodeId::group_path(["Favorites"], "soft")) };
+        let group = AssetDrag::CanonicalGroup { scope: "brushes".to_owned(), node_id: NodeId::group_path(["Favorites"], "Favorites") };
+        let legacy = AssetDrag::Group { scope: "brushes".to_owned(), name: "Favorites".to_owned(), path: Vec::new() };
+
+        assert_eq!(item.canonical_node_id("brushes"), Some(&NodeId::group_path(["Favorites"], "soft")));
+        assert_eq!(group.canonical_node_id("brushes"), Some(&NodeId::group_path(["Favorites"], "Favorites")));
+        assert_eq!(item.canonical_node_id("patterns"), None);
+        assert_eq!(legacy.canonical_node_id("brushes"), None);
     }
 }
 

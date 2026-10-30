@@ -21,8 +21,8 @@ use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, 
 use crate::pickers::picker_state::escape_hierarchy_key_part;
 use crate::pickers::picker_state::{HierarchyOrderEntry, ItemRenameState, PresetUi};
 use crate::pickers::picker_browser_hierarchy::{HierarchyIdentity, commit_hierarchy_move};
-use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
-use crate::pickers::picker_browser_dragging::{DragSession, DropHitRegion, arbitrate_hit_index, paint_candidate};
+use crate::pickers::picker_browser_model::{ContainerId, HierarchyNode, NodeId, PickerBrowserHierarchy};
+use crate::pickers::picker_browser_dragging::{DragSession, DropCommitResult, DropHitRegion, DropMoveIntent, arbitrate_hit_index, paint_candidate};
 use crate::theme::Tokens;
 
 pub(crate) const MIN_THUMB: f32 = 20.0;
@@ -463,7 +463,7 @@ fn hierarchy_action(drop: HierarchyDrop) -> BrowserAction {
 
 fn source_node_for_drag(drag: &AssetDrag, panel: &str, identities: &std::collections::BTreeMap<NodeId, HierarchyIdentity>) -> Option<NodeId> {
     if let AssetDrag::CanonicalGroup { scope, node_id } = drag {
-        return (scope == panel && matches!(identities.get(node_id), Some(HierarchyIdentity::Group(_))))
+        return (scope == panel && matches!(identities.get(node_id), Some(HierarchyIdentity::Group(_) | HierarchyIdentity::Folder { .. })))
             .then(|| node_id.clone());
     }
     if let AssetDrag::Preset { scope, key, node_id } = drag {
@@ -616,11 +616,14 @@ pub(crate) struct BrowserAdapter<'a> {
     /// `None` intentionally exposes no nested-group rename/delete menu for adapters without a
     /// domain command implementation; only Brushes currently supplies this specialised policy.
     pub(crate) nested_group_context_menu: Option<NestedGroupContextMenu>,
-    /// Commit a card's domain membership change before the canonical hierarchy persists a
-    /// cross-group move. Return false to reject the move. Root placement retains source membership.
-    /// This narrow callback supports simple group membership only; adapters with nested-folder
-    /// semantics must not opt into canonical dragging until the callback can express full paths.
-    pub(crate) hierarchy_item_move: Option<&'a mut dyn FnMut(&str, &str, &str) -> bool>,
+    /// Authoritative adapter commit for a validated canonical move. The callback receives the
+    /// exact source identity and destination position, and owns all domain persistence (including
+    /// path-aware folder/item moves). Returning an error rejects the move and is shown to the user.
+    /// When absent, the shared browser uses its legacy hierarchy persistence for Group/Item trees.
+    pub(crate) canonical_hierarchy_move: Option<&'a mut dyn FnMut(&DropMoveIntent) -> Result<(), String>>,
+    /// Domain commit for simple flat item moves. Receives the source group/key and the exact
+    /// destination group/final insertion index computed by the canonical hierarchy resolver.
+    pub(crate) hierarchy_item_move: Option<&'a mut dyn FnMut(&str, &str, &str, usize) -> Result<(), String>>,
     /// Optional override for group-row visuals; the default is a group row with disclosure.
     pub(crate) paint_group: Option<&'a mut PaintGroup>,
     /// Consumer-specific item painter. The state distinguishes regular selection styling from a drag ghost.
@@ -711,6 +714,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     let item_context_menu = adapter.item_context_menu;
     let group_context_menu = adapter.group_context_menu;
     let nested_group_context_menu = adapter.nested_group_context_menu;
+    let canonical_hierarchy_move = &mut adapter.canonical_hierarchy_move;
     let hierarchy_item_move = &mut adapter.hierarchy_item_move;
     let paint_group = &mut adapter.paint_group;
     let paint_item = &mut adapter.paint_item;
@@ -1603,6 +1607,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 canonical_drop_hits.borrow_mut().push((root_append_hit(root_end_rect, indicator, hit_index), root_end_response));
             }
         });
+    let mut hierarchy_drop_feedback = None;
     if canonical_hierarchy_drag {
         if let Some(pointer) = ui.ctx().pointer_interact_pos() {
             let hits: Vec<DropHitRegion> = canonical_drop_hits.borrow().iter().map(|(hit, _)| hit.clone()).collect();
@@ -1618,39 +1623,58 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                         paint_candidate(ui, &candidate, t.accent);
                         // Resolve and validate the exact candidate before taking egui's global
                         // one-shot payload. The taken source must still identify this same node.
-                        if let Some(released) = asset_browser_take_release(ui.ctx())
-                            && source_node_for_drag(&released, panel, &hierarchy_identities).as_ref() == Some(&source)
-                            && let Some(position) = session.commit_position()
-                        {
-                            let domain_move = match (hierarchy_identities.get(&source), &position) {
-                                (Some(HierarchyIdentity::Item { group, key }), DropPosition::Before { target } | DropPosition::After { target }) => {
-                                    hierarchy.parent_of(target).and_then(|parent| match parent {
-                                        ContainerId::Group(id) => match hierarchy_identities.get(&id) {
-                                            Some(HierarchyIdentity::Group(destination)) if destination != group => Some((group.clone(), key.clone(), destination.clone())),
-                                            _ => None,
-                                        },
-                                        ContainerId::Root => None,
-                                    })
-                                }
-                                (Some(HierarchyIdentity::Item { group, key }), DropPosition::AppendTo { container: ContainerId::Group(id) }) => {
-                                    match hierarchy_identities.get(id) {
-                                        Some(HierarchyIdentity::Group(destination)) if destination != group => Some((group.clone(), key.clone(), destination.clone())),
-                                        _ => None,
+                        if let Some(released) = asset_browser_take_release(ui.ctx()) {
+                            if source_node_for_drag(&released, panel, &hierarchy_identities).as_ref() == Some(&source) {
+                                let result = session.commit_with(|intent| {
+                                    if let Some(commit) = canonical_hierarchy_move.as_deref_mut() {
+                                        return commit(intent);
                                     }
-                                }
-                                _ => None,
-                            };
-                            let domain_move_succeeded = domain_move.is_none_or(|(source_group, key, destination_group)| {
-                                hierarchy_item_move.as_deref_mut().is_some_and(|commit| commit(&source_group, &key, &destination_group))
-                            });
-                            if domain_move_succeeded {
-                                let _ = commit_hierarchy_move(st, panel, &mut hierarchy, &source, &position, &hierarchy_identities);
+                                    if let Some(HierarchyIdentity::Item { group, key }) = hierarchy_identities.get(&intent.source) {
+                                        let resolved = hierarchy.resolve_move(&intent.source, &intent.position).map_err(|error| format!("Could not resolve item move: {error:?}"))?;
+                                        let ContainerId::Group(destination_id) = resolved.destination() else {
+                                            return Err("This asset library cannot move items outside a named group.".to_owned());
+                                        };
+                                        let Some(HierarchyIdentity::Group(destination_group)) = hierarchy_identities.get(destination_id) else {
+                                            return Err("The destination group is no longer available.".to_owned());
+                                        };
+                                        let Some(commit) = hierarchy_item_move.as_deref_mut() else {
+                                            return Err("This asset adapter does not support authoritative item moves.".to_owned());
+                                        };
+                                        let children = hierarchy.children_of(resolved.destination()).ok_or_else(|| "The destination group is no longer available.".to_owned())?;
+                                        let same_container = hierarchy.parent_of(&intent.source).as_ref() == Some(resolved.destination());
+                                        let domain_index = children
+                                            .iter()
+                                            .filter(|node| !same_container || node.id() != &intent.source)
+                                            .take(resolved.insertion_index())
+                                            .filter(|node| matches!(node, HierarchyNode::Item(_)))
+                                            .count();
+                                        commit(group, key, destination_group, domain_index)?;
+                                    }
+                                    let legacy_persistable = hierarchy_identities.values().all(|identity| {
+                                        matches!(identity, HierarchyIdentity::Item { .. } | HierarchyIdentity::Group(_))
+                                    });
+                                    if !legacy_persistable {
+                                        return Err("This asset adapter does not support path-aware hierarchy moves.".to_owned());
+                                    }
+                                    commit_hierarchy_move(st, panel, &mut hierarchy, &intent.source, &intent.position, &hierarchy_identities)
+                                        .map_err(|error| format!("Could not persist hierarchy move: {error:?}"))
+                                });
+                                hierarchy_drop_feedback = match result {
+                                    DropCommitResult::Committed | DropCommitResult::NoCandidate => None,
+                                    DropCommitResult::Rejected(reason) => Some(format!("Move rejected: {reason:?}")),
+                                    DropCommitResult::Failed(error) => Some(error),
+                                };
+                            } else {
+                                hierarchy_drop_feedback = Some("Move rejected: the dragged source changed before release.".to_owned());
                             }
                         }
                     }
                 }
             }
         }
+    }
+    if let Some(message) = hierarchy_drop_feedback {
+        ui.colored_label(ui.visuals().error_fg_color, message);
     }
     // A nested group header is a distinct target family from the root-group rows. If the pointer
     // is over one, the root resolver must not reinterpret that same release as a root reorder.
@@ -2036,6 +2060,7 @@ mod filter_tests {
                     item_context_menu: None,
                     group_context_menu: None,
                     nested_group_context_menu: None,
+                    canonical_hierarchy_move: None,
                     hierarchy_item_move: None,
                     paint_group: None,
                     paint_item: &mut paint_item,

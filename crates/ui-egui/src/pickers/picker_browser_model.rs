@@ -170,6 +170,18 @@ pub(crate) struct ResolvedMove {
     destination_snapshot: Vec<NodeId>,
 }
 
+impl ResolvedMove {
+    /// Destination sibling sequence after source removal has been accounted for.
+    pub(crate) fn destination(&self) -> &ContainerId {
+        &self.destination
+    }
+
+    /// Final insertion index within `destination` after source removal.
+    pub(crate) fn insertion_index(&self) -> usize {
+        self.insertion_index
+    }
+}
+
 /// Errors produced when a hierarchy mutation cannot be applied safely.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum HierarchyError {

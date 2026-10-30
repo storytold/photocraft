@@ -59,8 +59,10 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .collect();
     let mut state = std::mem::take(&mut app.ui.presets_ui);
     let canvas = canvas_drop_rect(app);
-    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str| {
-        run(app, "gradient.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group})).is_some()
+    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str, index: usize| {
+        run(app, "gradient.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group, "index": index}))
+            .map(|_| ())
+            .ok_or_else(|| "The Gradient library rejected the item move.".to_owned())
     };
     let mut adapter = BrowserAdapter {
         panel: "gradients",
@@ -76,10 +78,13 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
+        // Cross-group membership uses the Gradient domain command; sibling/group order is saved
+        // in the canonical picker layout state.
         capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
         nested_group_context_menu: None,
+        canonical_hierarchy_move: None,
         hierarchy_item_move: Some(&mut commit_item_move),
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
@@ -172,8 +177,6 @@ mod tests {
         assert!(headers.len() >= 2, "gradient group headers are visible");
         let (target_group, target_header) = &headers[0];
         let (moving_group, moving_header) = headers.last().unwrap();
-        let target_item =
-            h.state().session.presets.gradients.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
         let size = *h.state().ui.presets_ui.sizes.get("gradients").unwrap_or(&40.0);
         let origin = h.ctx.input(|input| input.viewport_rect().min);
         let target = egui::pos2(origin.x + 8.0 + 20.0 + size * 0.5 - 5.0, target_header.bottom() + 2.0 + size * 0.5);
