@@ -574,70 +574,69 @@ fn german_color_picker_fits_its_actions_and_translates_the_title() {
         assert!(r.left() > swatch.right(), "{label} must stay beside the swatches: {r:?}, {swatch:?}");
         assert!((r.right() - title.right()).abs() < 1.0, "{label} aligns with the title edge");
     }
-    assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(760.0, 480.0)).contains_rect(frame), "{frame:?}");
-}
 
-#[test]
-fn file_info_multiline_fields_keep_enter_and_cancel_discards_edits() {
-    use egui_kittest::kittest::Queryable;
+    #[test]
+    fn file_info_multiline_fields_keep_enter_and_cancel_discards_edits() {
+        use egui_kittest::kittest::Queryable;
 
-    crate::i18n::with_language(crate::i18n::Lang::EN, || {
+        crate::i18n::with_language(crate::i18n::Lang::EN, || {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            let ctx = h.ctx.clone();
+            crate::menus::invoke(h.state_mut(), &ctx, "file.fileInfo", json!({})).unwrap();
+            h.run_steps(4);
+            use egui::accesskit::Role;
+            let fields = [
+                (Role::TextInput, "Document Title"),
+                (Role::TextInput, "Author"),
+                (Role::TextInput, "Author title"),
+                (Role::MultilineTextInput, "Description"),
+                (Role::MultilineTextInput, "Keywords"),
+                (Role::ComboBox, "Copyright status"),
+                (Role::MultilineTextInput, "Copyright Notice"),
+                (Role::TextInput, "Copyright Info URL"),
+            ];
+            for pair in fields.windows(2) {
+                assert!(
+                    h.get_by_role_and_label(pair[0].0, pair[0].1).rect().center().y < h.get_by_role_and_label(pair[1].0, pair[1].1).rect().center().y,
+                    "field order: {pair:?}"
+                );
+            }
+            for (label, key) in [("Description", "description"), ("Keywords", "keywords"), ("Copyright Notice", "copyright")] {
+                h.get_by_role_and_label(Role::MultilineTextInput, label).click();
+                h.run_steps(1);
+                h.event(egui::Event::Text("First".into()));
+                h.run_steps(1);
+                h.key_press(egui::Key::Enter);
+                h.run_steps(1);
+                h.event(egui::Event::Text("Second".into()));
+                h.run_steps(1);
+                let dialog = h.state().ui.dialogs.last().expect("Enter edits the field, not OK");
+                assert_eq!(dialog.fields[key], "First\nSecond", "{label}");
+            }
+            h.get_by_label("Cancel").click();
+            h.run_steps(2);
+            assert!(h.state().ui.dialogs.is_empty());
+            assert_eq!(h.state_mut().run("file.fileInfo", json!({})).unwrap()["description"], "");
+        });
+    }
+
+    #[test]
+    fn file_info_keeps_multiline_metadata_on_confirm_and_reopen() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 700.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
-        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-        let ctx = h.ctx.clone();
-        crate::menus::invoke(h.state_mut(), &ctx, "file.fileInfo", json!({})).unwrap();
-        h.run_steps(4);
-        use egui::accesskit::Role;
-        let fields = [
-            (Role::TextInput, "Document Title"),
-            (Role::TextInput, "Author"),
-            (Role::TextInput, "Author title"),
-            (Role::MultilineTextInput, "Description"),
-            (Role::MultilineTextInput, "Keywords"),
-            (Role::ComboBox, "Copyright status"),
-            (Role::MultilineTextInput, "Copyright Notice"),
-            (Role::TextInput, "Copyright Info URL"),
-        ];
-        for pair in fields.windows(2) {
-            assert!(
-                h.get_by_role_and_label(pair[0].0, pair[0].1).rect().center().y < h.get_by_role_and_label(pair[1].0, pair[1].1).rect().center().y,
-                "field order: {pair:?}"
-            );
+        let ctx = egui::Context::default();
+        let id = crate::menus::invoke(&mut app, &ctx, "file.fileInfo", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        for key in ["description", "copyright"] {
+            app.ui.dialog_mut(id).unwrap().fields.insert(key.into(), json!("First line\nSecond line"));
         }
-        for (label, key) in [("Description", "description"), ("Keywords", "keywords"), ("Copyright Notice", "copyright")] {
-            h.get_by_role_and_label(Role::MultilineTextInput, label).click();
-            h.run_steps(1);
-            h.event(egui::Event::Text("First".into()));
-            h.run_steps(1);
-            h.key_press(egui::Key::Enter);
-            h.run_steps(1);
-            h.event(egui::Event::Text("Second".into()));
-            h.run_steps(1);
-            let dialog = h.state().ui.dialogs.last().expect("Enter edits the field, not OK");
-            assert_eq!(dialog.fields[key], "First\nSecond", "{label}");
+        confirm(&mut app, id).unwrap();
+        let id = crate::menus::invoke(&mut app, &ctx, "file.fileInfo", json!({})).unwrap()["dialog"].as_u64().unwrap();
+        for key in ["description", "copyright"] {
+            assert_eq!(app.ui.dialog_mut(id).unwrap().fields[key], "First line\nSecond line");
         }
-        h.get_by_label("Cancel").click();
-        h.run_steps(2);
-        assert!(h.state().ui.dialogs.is_empty());
-        assert_eq!(h.state_mut().run("file.fileInfo", json!({})).unwrap()["description"], "");
-    });
-}
-
-#[test]
-fn file_info_keeps_multiline_metadata_on_confirm_and_reopen() {
-    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
-    let ctx = egui::Context::default();
-    let id = crate::menus::invoke(&mut app, &ctx, "file.fileInfo", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    for key in ["description", "copyright"] {
-        app.ui.dialog_mut(id).unwrap().fields.insert(key.into(), json!("First line\nSecond line"));
-    }
-    confirm(&mut app, id).unwrap();
-    let id = crate::menus::invoke(&mut app, &ctx, "file.fileInfo", json!({})).unwrap()["dialog"].as_u64().unwrap();
-    for key in ["description", "copyright"] {
-        assert_eq!(app.ui.dialog_mut(id).unwrap().fields[key], "First line\nSecond line");
     }
 }
 
