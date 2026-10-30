@@ -306,6 +306,9 @@ pub struct Interface {
     pub notification_auto_hide: bool,
     /// Seconds a notice stays on screen before it hides itself (Auto Hide Notifications).
     pub notification_duration_seconds: u32,
+    /// macOS: ⌘H hides PhotoCraft, as in every other Mac app, and View › Extras moves to ⌃⌘H.
+    /// Off (the default), Extras keeps Photoshop's ⌘H and Hide moves to ⌃⌘H.
+    pub cmd_h_hides_app: bool,
 }
 
 impl Default for Interface {
@@ -335,7 +338,20 @@ impl Default for Interface {
             show_file_name_in_title: true,
             notification_auto_hide: true,
             notification_duration_seconds: 6,
+            cmd_h_hides_app: false,
         }
+    }
+}
+
+/// View › Extras, Photoshop's ⌘H, and where it moves when ⌘H hides the app.
+const EXTRAS: &str = "view.extras";
+const EXTRAS_WHEN_CMD_H_HIDES: &str = "Ctrl+Cmd+H";
+
+impl Interface {
+    /// A command's default shortcut as these preferences have it: `default`, except that View ›
+    /// Extras gives ⌘H up to Hide PhotoCraft (`cmd_h_hides_app`).
+    pub fn default_shortcut<'a>(&self, id: &str, default: Option<&'a str>) -> Option<&'a str> {
+        if id == EXTRAS && self.cmd_h_hides_app { Some(EXTRAS_WHEN_CMD_H_HIDES) } else { default }
     }
 }
 
@@ -450,7 +466,7 @@ pub use shortcuts::{
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore};
-pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
+pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, MAC_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
 use validate::{check_value, get_path, keyed, set_path};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -1279,7 +1295,7 @@ impl Preferences {
         match self.shortcuts.get(id) {
             Some(s) if s.is_empty() => None,
             Some(s) => Some(s.as_str()),
-            None => default,
+            None => self.interface.default_shortcut(id, default),
         }
     }
 
