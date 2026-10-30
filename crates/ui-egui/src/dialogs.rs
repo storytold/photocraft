@@ -323,7 +323,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::adjust_dialog::owns(fields) => crate::adjust_dialog::body(app, ui, fields),
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
-        _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
+        _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(app, ui, fields),
         _ if fields.contains_key("__form") => crate::view_cmds::form_body(ui, fields),
         _ => {}
     }
