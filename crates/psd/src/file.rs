@@ -280,8 +280,12 @@ impl PsdFile {
             .map_or(0, LayerInfo::channel_data_len)
             .saturating_add(usize::try_from(self.image_data.encoded_len()).unwrap_or(usize::MAX))
             .saturating_add(usize::try_from(widened).unwrap_or(usize::MAX));
+        // The exact size when it can be computed (embedded smart-object data and other tagged
+        // blocks are not small): the output then never reallocates, which on the web would be one
+        // unrecoverable multi-gigabyte `realloc` as the buffer doubles.
+        let hint = self.encoded_len().ok().and_then(|n| usize::try_from(n).ok()).map_or(hint, |exact| exact.max(hint));
         let mut out = Vec::new();
-        out.try_reserve(hint).map_err(|_| PsdError::LimitExceeded("not enough memory to serialize the file"))?;
+        out.try_reserve_exact(hint).map_err(|_| PsdError::LimitExceeded("not enough memory to serialize the file"))?;
         if widen {
             Header { version: v, ..self.header.clone() }.write(&mut out);
         } else {
