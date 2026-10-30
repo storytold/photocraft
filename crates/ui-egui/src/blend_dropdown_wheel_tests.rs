@@ -233,7 +233,8 @@ fn painted(h: &Harness<'_, PhotocraftApp>, text: &str) -> Option<(Rect, Rect)> {
 /// hid behind a thin scroll bar.
 #[test]
 fn the_open_blend_list_shows_every_mode() {
-    let mut h = harness(pixel_layer);
+    // A window with room for the whole list on one side of the box (it never runs beside it).
+    let mut h = harness_sized(vec2(1440.0, 2000.0), pixel_layer);
     let at = dropdown(&h).center();
     click(&mut h, at);
     h.run_steps(6);
