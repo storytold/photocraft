@@ -83,6 +83,11 @@ pub(crate) mod dds {
         rc::dds::has_additional_images(bytes).map_err(|e| err(F, e))
     }
     pub(crate) fn decode(b: &[u8], l: &Limits) -> Result<Image, CodecError> {
+        let fourcc = b.get(84..88);
+        let flags = b.get(80..84).and_then(|v| <[u8; 4]>::try_from(v).ok()).map(u32::from_le_bytes);
+        if flags.is_some_and(|flags| flags & 0x4 != 0) && fourcc == Some(b"DX10") && b.get(140..144) == Some(&[0; 4]) {
+            return Err(CodecError::malformed(F, "DX10 array size must be positive"));
+        }
         from_rc(F, rc::dds::decode(b, &limits(l)).map_err(|e| err(F, e))?)
     }
     pub(crate) fn encode(image: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
