@@ -494,3 +494,47 @@ fn rapid_alt_clicks_on_hand_slot_do_not_fit_on_screen() {
     let zoom_after = app.ui.views.first().map(|v| v.zoom).unwrap_or(1.0);
     assert_eq!(zoom_after, zoom_before, "Alt double-click must not run view.fitOnScreen");
 }
+
+/// #10301 CodeRabbit: plain click after Alt-click within the double-click window must not fit.
+#[test]
+fn plain_click_after_alt_on_hand_slot_does_not_fit_on_screen() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    // Far from fit-on-screen so a real Hand double-click is observable.
+    if let Some(v) = app.ui.views.first_mut() {
+        v.zoom = 4.0;
+    }
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+    frame(&mut app, &ctx, 0.0, vec![]);
+    frame(&mut app, &ctx, 0.1, vec![]);
+    let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::Hand)).unwrap();
+    let bx = if Tokens::get(&ctx).pro { 30.0 } else { 36.0 };
+    let mut buttons: Vec<Rect> = ctx.viewport(|v| {
+        v.prev_pass
+            .widgets
+            .layers()
+            .flat_map(|(_, w)| w.iter())
+            .filter(|w| w.rect.size() == egui::Vec2::splat(bx) && w.sense.senses_click())
+            .map(|w| w.rect)
+            .collect()
+    });
+    buttons.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    let at = buttons[index].center();
+    let alt = egui::Modifiers { alt: true, ..Default::default() };
+    let none = egui::Modifiers::default();
+    let pointer = |pos, pressed, modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+    app.ui.tool = Tool::RotateView;
+    let zoom_of = |app: &PhotocraftApp| app.ui.views.first().map(|v| v.zoom).unwrap_or(1.0);
+    assert_eq!(zoom_of(&app), 4.0);
+    // Alt-click cycles to Hand; a plain click soon after is egui's "second" click of a double.
+    frame(&mut app, &ctx, 1.0, vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)]);
+    frame(&mut app, &ctx, 1.02, vec![egui::Event::ModifiersChanged(alt), pointer(at, false, alt)]);
+    frame(&mut app, &ctx, 1.04, vec![]);
+    assert_eq!(app.ui.tool, Tool::Hand);
+    frame(&mut app, &ctx, 1.08, vec![egui::Event::ModifiersChanged(none), egui::Event::PointerMoved(at), pointer(at, true, none)]);
+    frame(&mut app, &ctx, 1.10, vec![egui::Event::ModifiersChanged(none), pointer(at, false, none)]);
+    frame(&mut app, &ctx, 1.12, vec![]);
+    assert_eq!(app.ui.tool, Tool::Hand, "plain click keeps Hand selected");
+    assert_eq!(zoom_of(&app), 4.0, "plain click paired with prior Alt-click must not fitOnScreen");
+}
