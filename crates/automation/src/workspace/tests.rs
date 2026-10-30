@@ -366,6 +366,12 @@ fn windows_unc_root_writes_and_exports_when_supported() {
     export.commit();
     drop(export);
     assert_eq!(std::fs::read(inside.join("frames/nested/clip_0001.png")).unwrap(), b"kept");
+    // The share honours the held ancestors' share mode: no swap while the chain is open.
+    let root = workspace.write.as_ref().unwrap();
+    let chain = held_directory_chain(root, Path::new("frames/nested/deeper")).unwrap();
+    assert!(std::fs::rename(inside.join("frames"), inside.join("frames-moved")).is_err());
+    assert!(inside.join("frames/nested/deeper").is_dir());
+    drop(chain);
 
     // Neither the in-place write nor directory creation follows a link out of the root.
     let link = inside.join("junction");
@@ -408,21 +414,63 @@ fn windows_handle_relative_helpers_match_the_capability_operations() {
     create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
     assert!(inside.join("a/b/c").is_dir());
     create_dir_all_unc(root, Path::new("a/b/c")).unwrap();
-    plain_directories(root, Path::new("a/b/c"), true).unwrap();
-    plain_directories(root, Path::new("a/b/missing"), false).unwrap();
-    assert_eq!(plain_directories(root, Path::new("a/b/missing"), true).unwrap_err().kind(), std::io::ErrorKind::NotFound);
+    assert_eq!(held_directory_chain(root, Path::new("a/b/c")).unwrap().len(), 3);
     std::fs::write(inside.join("a/file"), b"x").unwrap();
-    assert!(plain_directories(root, Path::new("a/file"), false).is_err());
+    assert_eq!(create_dir_all_unc(root, Path::new("a/file")).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(create_dir_all_unc(root, Path::new("a/file/below")).is_err());
+    assert!(inside.join("a/file").is_file());
     assert!(ensure_export_dir(root, Path::new("a/b/d")).is_ok());
     assert!(inside.join("a/b/d").is_dir());
 
     let link = inside.join("junction");
     if std::process::Command::new("cmd.exe").args(["/D", "/C", "mklink", "/J"]).arg(&link).arg(&outside).status().is_ok_and(|status| status.success()) {
-        assert!(plain_directories(root, Path::new("junction/frames"), false).is_err());
+        assert!(create_dir_all_unc(root, Path::new("junction")).is_err());
         assert!(create_dir_all_unc(root, Path::new("junction/frames")).is_err());
         assert!(!outside.join("frames").exists());
         assert!(write_in_place(root, Path::new("junction/escape.png"), b"blocked").is_err());
         assert!(!outside.join("escape.png").exists());
+        let _ = std::fs::remove_dir(link);
+    }
+}
+
+/// The ancestor-swap race against [`create_dir_all_unc`]: between verifying an ancestor and the
+/// ambient `create_dir`, an attacker renames the ancestor away and puts a junction to the
+/// outside in its place. The walk holds a handle on every verified ancestor, opened by
+/// `cap-std` without `FILE_SHARE_DELETE`, so the rename (and a removal) fails with
+/// `ERROR_SHARING_VIOLATION` for as long as the chain is held, and the directory is created
+/// inside the root. A junction that is already in place is refused before anything is created.
+#[cfg(windows)]
+#[test]
+fn windows_held_ancestors_cannot_be_swapped_during_directory_creation() {
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    let (inside, outside, workspace) = roots("unc-held-chain");
+    let root = workspace.write.as_ref().unwrap();
+    std::fs::create_dir(inside.join("a")).unwrap();
+
+    let chain = held_directory_chain(root, Path::new("a/b")).unwrap();
+    assert_eq!(chain.len(), 2);
+    assert!(inside.join("a/b").is_dir());
+    let swap = std::fs::rename(inside.join("a"), inside.join("a-moved"));
+    assert_eq!(swap.unwrap_err().raw_os_error(), Some(ERROR_SHARING_VIOLATION));
+    assert_eq!(std::fs::remove_dir(inside.join("a/b")).unwrap_err().raw_os_error(), Some(ERROR_SHARING_VIOLATION));
+    // With the ancestors pinned, the one ambient step lands inside the root.
+    let held_parent = &chain[1];
+    open_or_create_plain_dir(held_parent, Path::new("c"), Path::new("a/b/c"), &root.path.join("a/b/c")).unwrap();
+    assert!(inside.join("a/b/c").is_dir());
+    assert!(inside.join("a").is_dir());
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
+    drop(chain);
+    std::fs::rename(inside.join("a"), inside.join("a-moved")).unwrap();
+
+    // The swap already done: the junction is seen through the parent handle and refused.
+    let link = inside.join("a");
+    if std::process::Command::new("cmd.exe").args(["/D", "/C", "mklink", "/J"]).arg(&link).arg(&outside).status().is_ok_and(|status| status.success()) {
+        let refused = open_or_create_plain_dir(&root.dir, Path::new("a"), Path::new("a"), &root.path.join("a"));
+        assert_eq!(refused.unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+        assert!(held_directory_chain(root, Path::new("a/b/c")).is_err());
+        assert!(ensure_export_dir(root, Path::new("a/b/c")).is_err());
+        assert!(workspace.export_sequence("a/b/c").is_err());
+        assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 0);
         let _ = std::fs::remove_dir(link);
     }
 }

@@ -292,41 +292,63 @@ fn ensure_export_dir(root: &RootCapability, relative: &Path) -> std::io::Result<
 }
 
 /// Directory creation is the one step `cap-std` has no handle-relative form of on Windows (it
-/// never opens with `FILE_DIRECTORY_FILE`), so below a UNC root the missing tail of `relative`
-/// is made with `std::fs::create_dir_all` on the canonical root path — trusted launch
-/// configuration, never the request. The step is bracketed: before it, every existing
-/// component must be a plain directory as seen through the capability ([`plain_directories`]),
-/// so the ambient path resolves the way the handle does; after it, every component must be
-/// present and a plain directory, and the caller then opens the result through the handle. An
-/// ancestor swapped for a link between the two checks is reported as an error; the most that
-/// window can leave behind is an empty directory at the link's target. No file is ever
-/// written, renamed or removed ambiently.
+/// never opens with `FILE_DIRECTORY_FILE`), so below a UNC root an absent component is made
+/// with `std::fs::create_dir` on the canonical root path — trusted launch configuration, never
+/// the request. The walk ([`held_directory_chain`]) descends one component at a time and keeps
+/// a handle open on every ancestor it has verified through its parent's handle. `cap-std`
+/// opens directories without `FILE_SHARE_DELETE` precisely so that they cannot be renamed or
+/// deleted underneath its sandboxed path lookups, and the held chain pins the ancestors here
+/// the same way: an ancestor cannot be swapped for a link while the walk is below it, so the
+/// one ambient `create_dir` can only add a new, empty directory inside the directory its held
+/// parent handle names. Something that appears under the component's name between the check
+/// and `create_dir` makes `create_dir` fail with `AlreadyExists`, which is reported, never
+/// resolved. No file is ever written, renamed or removed ambiently.
 #[cfg(windows)]
 fn create_dir_all_unc(root: &RootCapability, relative: &Path) -> std::io::Result<()> {
-    plain_directories(root, relative, false)?;
-    std::fs::create_dir_all(root.path.join(relative))?;
-    plain_directories(root, relative, true)
+    held_directory_chain(root, relative).map(drop)
 }
 
-/// Check through the capability that each component of `relative` that exists is a plain
-/// directory — not a link, which ambient resolution would follow out of the root. With `all`,
-/// every component must exist.
+/// Open each component of `relative` through the handle of its parent, creating an absent one
+/// first as described at [`create_dir_all_unc`]. The returned handles, outermost first, keep
+/// every directory on the way pinned for as long as they are held.
 #[cfg(windows)]
-fn plain_directories(root: &RootCapability, relative: &Path, all: bool) -> std::io::Result<()> {
+fn held_directory_chain(root: &RootCapability, relative: &Path) -> std::io::Result<Vec<Dir>> {
+    let mut chain: Vec<Dir> = Vec::new();
     let mut ancestor = PathBuf::new();
     for component in relative.components() {
         ancestor.push(component);
-        match root.dir.symlink_metadata(&ancestor) {
-            Ok(meta) if meta.is_dir() && !meta.is_symlink() => {}
-            Err(e) if !all && e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-            Ok(_) => {
-                let message = format!("`{}` is not a plain directory below the root", ancestor.display());
-                return Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, message));
-            }
-            Err(e) => return Err(e),
-        }
+        let parent = chain.last().unwrap_or(&root.dir);
+        let dir = open_or_create_plain_dir(parent, Path::new(component.as_os_str()), &ancestor, &root.path.join(&ancestor))?;
+        chain.push(dir);
     }
-    Ok(())
+    Ok(chain)
+}
+
+/// Open `name`, one component of `parent`, when it is a plain directory; when it is absent,
+/// create it at `ambient` (its path below the canonical root, which `parent` is a handle to)
+/// and open what is there now. `ancestor` names the component relative to the root in errors.
+#[cfg(windows)]
+fn open_or_create_plain_dir(parent: &Dir, name: &Path, ancestor: &Path, ambient: &Path) -> std::io::Result<Dir> {
+    match open_plain_dir(parent, name, ancestor) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(ambient)?;
+            open_plain_dir(parent, name, ancestor)
+        }
+        opened => opened,
+    }
+}
+
+/// Open `name` in `parent` only if it is a plain directory — not a link, which ambient
+/// resolution would follow out of the root, and not a file.
+#[cfg(windows)]
+fn open_plain_dir(parent: &Dir, name: &Path, ancestor: &Path) -> std::io::Result<Dir> {
+    let meta = parent.symlink_metadata(name)?;
+    if meta.is_dir() && !meta.is_symlink() {
+        parent.open_dir(name)
+    } else {
+        let message = format!("`{}` is not a plain directory below the root", ancestor.display());
+        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, message))
+    }
 }
 
 /// Both root spellings refer to the capability opened at startup. Do not resolve an untrusted
