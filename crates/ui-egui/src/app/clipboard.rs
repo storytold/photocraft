@@ -67,7 +67,9 @@ impl PhotocraftApp {
             return Ok(false);
         };
         let sig = clip_signature(w, h, &bytes);
-        if self.os_clip_sig == Some(sig) && self.session.clipboard.is_some() {
+        // The unchanged OS image is stale when an internal clip has replaced it since (our
+        // unexported pixel copy or a path component): importing would paste superseded content.
+        if self.os_clip_sig == Some(sig) && (self.session.clipboard.is_some() || self.session.path_clipboard.is_some()) {
             return Ok(false);
         }
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
