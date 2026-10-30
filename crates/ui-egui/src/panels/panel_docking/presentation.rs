@@ -7,6 +7,9 @@ use super::{
 use craft_ui::docking::{DockArea, DropFeedback, DropRequest, Hit};
 use egui::{Pos2, Rect, Sense, Vec2, pos2, vec2};
 
+#[path = "part_resize.rs"]
+mod part_resize;
+
 const HEADER: f32 = super::contract::HEADER_CONTROL_SIZE;
 const GRIP: f32 = 11.0;
 const ROW: f32 = 35.0;
@@ -371,6 +374,9 @@ pub(super) fn embedded_limits(app: &PhotocraftApp, ctx: &egui::Context, layout: 
         for group in tree_groups(&window.root).into_iter().filter(|g| g.panels.iter().all(|p| app.ui.panel_presentation.compact.contains(p))) {
             let Some(first) = group.panels.first() else { continue };
             let mut width = app.ui.panel_presentation.widths.get(first).copied().unwrap_or(COMPACT_COLUMN_WIDTH);
+            if let Some(preview) = part_resize::width(ctx, first) {
+                width = preview;
+            }
             if let Some(start) = resize.as_ref().filter(|r| group.panels.contains(&r.panel) && !r.height) {
                 let dx = ctx.pointer_interact_pos().unwrap_or(start.press).x - start.press.x;
                 width = (start.rect.width() + if start.left { -dx } else { dx }).clamp(COMPACT_COLUMN_WIDTH, 240.0);
@@ -540,7 +546,7 @@ fn header(app: &PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands: &mut 
     }
 }
 fn resize(app: &PhotocraftApp, ui: &mut egui::Ui, strip: &Strip, commands: &mut Vec<(&'static str, Value)>) {
-    if app.session.prefs().workspace_locked {
+    if app.session.prefs().workspace_locked || strip.embedded {
         return;
     }
     for left in [true, false] {
@@ -641,8 +647,9 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &Layout<S
     }
     column_height_handles(app, ui, layout, bounds, commands);
     let pixel = ctx.pixels_per_point().recip();
-    if compat::columns(layout).iter().any(|(side, _)| *side == Side::Start) {
-        let x = (bounds.left() / pixel).round() * pixel + pixel * 0.5;
+    if compat::columns(layout).iter().any(|(side, _)| *side == Side::Start) || crate::toolbar_docking::docked_this_frame(&ctx) {
+        let start = if crate::direction::is_rtl() { bounds.right() } else { bounds.left() };
+        let x = (start / pixel).round() * pixel + if crate::direction::is_rtl() { -pixel * 0.5 } else { pixel * 0.5 };
         ui.painter().vline(x, bounds.y_range(), egui::Stroke::new(pixel, t.card_border));
     }
     let columns = ctx.data(|d| d.get_temp::<Vec<(String, Rect, Side)>>(key("columns"))).unwrap_or_default();
@@ -661,6 +668,7 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, layout: &Layout<S
             ui.painter().hline(rect.x_range(), y, egui::Stroke::new(pixel, tint));
         }
     }
+    part_resize::show(app, ui, layout);
     flyout(app, &ctx, layout, &drawn, commands);
     drag(app, &ctx, layout, bounds, commands);
     animate_landing(app, &ctx, &drawn);
@@ -1071,7 +1079,8 @@ fn full_landing(ctx: &egui::Context, layout: &Layout<String>, source: &str, whol
         }
         let floating = floats(layout, &anchor);
         let header = Rect::from_min_max(frame.min, pos2(frame.right(), body.top()));
-        if header.expand2(vec2(6.0, 0.0)).contains(p) && p.y > frame.top() + 5.0 {
+        let bottom_edge = body.height() <= 0.0 && p.y >= frame.bottom() - 5.0;
+        if header.expand2(vec2(6.0, 0.0)).contains(p) && p.y > frame.top() + 5.0 && !bottom_edge {
             let mut slots = Vec::new();
             for (index, (tab, rect)) in tabs.iter().enumerate() {
                 if tab.as_str() == source {
@@ -1159,7 +1168,7 @@ fn full_landing(ctx: &egui::Context, layout: &Layout<String>, source: &str, whol
 /// Compact sources can join the same full body edges as stock tabs.
 fn resolved_landing(ctx: &egui::Context, layout: &Layout<String>, source: &str, whole: bool, p: Pos2, compact: bool) -> Option<Landing> {
     let (full, exclusive) = full_landing(ctx, layout, source, whole, p, compact);
-    if exclusive {
+    if exclusive || full.is_some() {
         return full;
     }
     landing(ctx, source, whole, p).or(full)
@@ -1186,7 +1195,14 @@ pub(super) fn restore_detached_rect(app: &PhotocraftApp, layout: &Layout<String>
     if floats(layout, panel) {
         return;
     }
-    let [width, height] = app.ui.panel_presentation.floating_sizes.get(panel).copied().unwrap_or([rect[2].clamp(220.0, 520.0), rect[3].clamp(120.0, 480.0)]);
+    let [width, height] = if compact_source(app, layout, panel) {
+        [
+            app.ui.panel_presentation.widths.get(panel).copied().unwrap_or(COMPACT_COLUMN_WIDTH),
+            HEADER + GRIP + ROW * group_members(layout, panel).len() as f32 + 1.5,
+        ]
+    } else {
+        normal_editor_size(app, layout, panel)
+    };
     if let Some(pointer) = pointer {
         // Keep the grab point in the restored window when the horizontal dock was wider.
         if rect[2] > width {
@@ -1208,13 +1224,18 @@ pub(super) fn resolve_drag(
     request: &DropRequest<'_, String>,
     commands: &mut Vec<(&'static str, Value)>,
 ) -> Option<DropFeedback> {
-    if ctx.input(|i| i.modifiers.ctrl || i.modifiers.command) {
+    let layout = app.ui.docking.as_ref().map(|w| std::borrow::Cow::Borrowed(&w.layout)).unwrap_or_else(|| std::borrow::Cow::Owned(super::legacy(app)));
+    let compact = compact_source(app, &layout, request.panel);
+    let force_float = ctx.input(|i| i.modifiers.ctrl || i.modifiers.command);
+    if force_float && !compact {
         return None;
     }
-    let layout = app.ui.docking.as_ref().map(|w| std::borrow::Cow::Borrowed(&w.layout)).unwrap_or_else(|| std::borrow::Cow::Owned(super::legacy(app)));
-    let compact = compat::compact(&layout, &app.ui.panel_presentation, request.panel);
-    let size = request.floating_rect.map_or(vec2(320.0, 400.0), |r| r.size());
-    let target = resolved_landing(ctx, &layout, request.panel, request.whole_group, request.pointer, compact);
+    let floating = request.floating_rect.map(|rect| match detached_target(app, &layout, request.panel, rect, request.screen, request.pointer) {
+        Target::Float { rect: Some([x, y, w, h]) } => Rect::from_min_size(pos2(x, y), vec2(w, h)),
+        _ => rect,
+    });
+    let size = floating.map_or(vec2(320.0, 400.0), |r| r.size());
+    let target = if force_float { None } else { resolved_landing(ctx, &layout, request.panel, request.whole_group, request.pointer, compact) };
     if request.released {
         let to = target
             .as_ref()
@@ -1229,7 +1250,28 @@ pub(super) fn resolve_drag(
                 "unit":if request.whole_group && request.floating_rect.is_none() && floats(&layout,request.panel){"window"}else{"group"},"to":to,"compact":target.as_ref().map_or(compact,|t|t.compact),"sourceWidth":size.x,"sourceHeight":size.y,"gap":ctx.pixels_per_point().recip()})));
         }
     }
-    Some(DropFeedback { preview: if target.is_none() { request.floating_rect } else { None }, insertion: target.map(|t| t.marker) })
+    Some(DropFeedback { preview: if target.is_none() { floating } else { None }, insertion: target.map(|t| t.marker) })
+}
+
+fn compact_source(app: &PhotocraftApp, layout: &Layout<String>, panel: &str) -> bool {
+    compat::compact(layout, &app.ui.panel_presentation, panel)
+        || !floats(layout, panel) && !in_dock_column(layout, panel) && super::collapsed_members(app, layout).contains(panel)
+}
+
+pub(super) fn preview_parts(app: &PhotocraftApp, ctx: &egui::Context, layout: &mut std::borrow::Cow<'_, Layout<String>>) {
+    part_resize::preview(app, ctx, layout);
+}
+
+pub(super) fn compact_detach(app: &PhotocraftApp, layout: &Layout<String>, action: &Action<String>) -> Option<Value> {
+    let (panel, rect, whole) = match action {
+        Action::Float { panel, rect } | Action::MovePanel { panel, to: Target::Float { rect: Some(rect) } } => (panel, rect, false),
+        Action::MoveGroup { panel, to: Target::Float { rect: Some(rect) } } => (panel, rect, true),
+        _ => return None,
+    };
+    if floats(layout, panel) || in_dock_column(layout, panel) || !compact_source(app, layout, panel) {
+        return None;
+    }
+    Some(json!({"panel":panel,"operation":"drop","whole":whole,"unit":"group","to":Target::<String>::Float{rect:Some(*rect)}}))
 }
 
 fn drag(app: &PhotocraftApp, ctx: &egui::Context, layout: &Layout<String>, _bounds: Rect, commands: &mut Vec<(&'static str, Value)>) {
@@ -1327,7 +1369,7 @@ pub(super) fn drop_command(app: &mut PhotocraftApp, params: &Value) -> Result<Va
     let editor = params.get("editor").and_then(Value::as_bool).unwrap_or(false);
     let source_closed = super::collapsed_members(app, &workspace.layout).contains(&panel);
     let horizontal_edge = matches!(&target, Target::At { placement: Placement::Edge(Zone::Top | Zone::Bottom), .. });
-    let source_compact = !editor && compat::compact(&workspace.layout, &app.ui.panel_presentation, &panel);
+    let source_compact = !editor && compact_source(app, &workspace.layout, &panel);
     let compact = source_compact;
     let anchor = match &target {
         Target::At { anchor, .. } => Some(anchor.clone()),

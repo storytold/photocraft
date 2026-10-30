@@ -114,6 +114,7 @@ pub struct FloatingFrame<'a> {
     bounds: Option<Rect>,
     limits: PanelLimits,
     resizable: bool,
+    resize_axes: [bool; 2],
     resize_label: &'a str,
     opacity: f32,
     reserve_top_resize_band: bool,
@@ -142,6 +143,7 @@ impl<'a> FloatingFrame<'a> {
             bounds: None,
             limits: PanelLimits::default(),
             resizable: true,
+            resize_axes: [true, true],
             resize_label: "Resize window",
             opacity: 1.0,
             reserve_top_resize_band: true,
@@ -169,6 +171,12 @@ impl<'a> FloatingFrame<'a> {
 
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
+        self
+    }
+
+    /// Restrict the stock edge handles when a host owns resizing on one axis.
+    pub fn resize_axes(mut self, axes: [bool; 2]) -> Self {
+        self.resize_axes = axes;
         self
     }
 
@@ -230,6 +238,9 @@ impl<'a> FloatingFrame<'a> {
         let limits = PanelLimits { min: self.limits.min.max(vec2(40.0, RESIZE_BAND + TITLE_HEIGHT + 20.0)).min(self.limits.max), ..self.limits };
         let canceled = ui.input(|input| input.key_pressed(Key::Escape)) || crate::focus::lost(ui.ctx());
         for (name, mut handle, direction) in handles(rect) {
+            if direction.x != 0.0 && !self.resize_axes[0] || direction.y != 0.0 && !self.resize_axes[1] {
+                continue;
+            }
             if !self.reserve_top_resize_band && direction.y < 0.0 {
                 handle.max.y = (rect.top() + ui.ctx().pixels_per_point().recip()).min(rect.bottom());
             }

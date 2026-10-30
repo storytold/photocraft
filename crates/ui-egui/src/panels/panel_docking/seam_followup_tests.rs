@@ -66,7 +66,7 @@ fn a_previously_stretched_compact_chain_is_fitted_without_losing_normal_sizes() 
     assert!(strip_rect(&h, "brushes").height() < 100.0);
     assert_eq!(h.state().ui.panel_presentation.floating_sizes, sizes);
 }
-fn assert_one_border_band(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32) {
+pub(super) fn assert_one_border_band(h: &mut Harness<'static, PhotocraftApp>, x: f32, y: f32) {
     let scale = h.ctx.pixels_per_point();
     let border = crate::theme::Tokens::get(&h.ctx).card_border.to_array();
     let image = h.render().unwrap();

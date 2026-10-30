@@ -86,6 +86,7 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
             .limits(limits)
             .reserve_top_resize_band(self.style.title_height > 0.0)
             .resizable(movable)
+            .resize_axes([!self.content.owns_floating_width(first), true])
             .resize_label(&resize_label)
             .opacity(opacity)
             .show(ctx, &style, |ui, contents| self.window_contents(ui, window, contents, rect, &style));

@@ -859,6 +859,16 @@ pub trait DockContent<P> {
     fn resize_handle_style(&self, default: crate::layout::ResizeHandleStyle) -> crate::layout::ResizeHandleStyle {
         default
     }
+    /// Presentation-only collapse of a group; its selected tab remains model state.
+    fn group_collapsed(&self, _panels: &[P]) -> bool {
+        false
+    }
+    /// Paint a fitted split gap in the owning surface, without another resize target.
+    fn split_separator(&mut self, _ui: &mut Ui, _rect: Rect) {}
+    /// The host supplies exclusive horizontal resize input for this floating tree.
+    fn owns_floating_width(&self, _panel: &P) -> bool {
+        false
+    }
     /// Plain text name for accessibility, menus and the default visual label.
     fn logical_label(&self, panel: &P) -> String
     where
@@ -1009,6 +1019,15 @@ impl<P, C: DockContent<P> + ?Sized> DockContent<P> for Overrides<'_, P, C> {
     }
     fn resize_handle_style(&self, default: crate::layout::ResizeHandleStyle) -> crate::layout::ResizeHandleStyle {
         self.inner.resize_handle_style(default)
+    }
+    fn group_collapsed(&self, panels: &[P]) -> bool {
+        self.inner.group_collapsed(panels)
+    }
+    fn split_separator(&mut self, ui: &mut Ui, rect: Rect) {
+        self.inner.split_separator(ui, rect);
+    }
+    fn owns_floating_width(&self, panel: &P) -> bool {
+        self.inner.owns_floating_width(panel)
     }
     fn logical_label(&self, panel: &P) -> String {
         (self.label)(panel)

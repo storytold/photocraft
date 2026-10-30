@@ -34,8 +34,9 @@ prove behavioral compatibility with arbitrary future UI changes.
 ## Mouse targets and header surfaces
 
 The host resolver handles every ordinary panel drag, including a deliberate empty
-result. `None` from the shared hook is reserved for Ctrl/Cmd force-floating, so the
-stock resolver cannot add alternative targets behind the host result. Tab insertion
+result. `None` from the shared hook is reserved for expanded Ctrl/Cmd force-floating;
+compact sources keep host sizing without docking targets. The stock resolver cannot
+add alternative targets behind the host result. Tab insertion
 uses one vertical marker per slot before/between/after visible tabs; the final slot
 extends through unused header space before the controls. The middle of a tab or body
 does not provide another merge target. Separate sections use distinct outer edges,
@@ -96,6 +97,20 @@ a floating palette. A closed bar has no body callback; the fitted group observer
 still supplies its real header rectangle for before/between/after insertion slots.
 New tabs inherit a closed receiving bar's state. Header buttons toggle the current
 mode, and save/restore preserves it. No additional layout tree is introduced.
+
+A closed horizontal bar retains its selected member for restoration, but paints no
+active editor tab. Its detached preview and resulting palette use the compact
+size, including force-floating with Ctrl/Cmd. An expanded editor detaches at its
+normal editor size. The lower edge of a header-only receiving group remains a
+split-below target; an explicit group target takes precedence over canvas edges.
+
+Independent parts of a floating horizontal split own their width gestures. A drag
+changes the selected column's width and the outer frame's width, preserving its
+neighbours' widths. The preview uses a transient gesture snapshot; release commits
+fixed split sizes to the same shared workspace. Escape, loss of focus, modal state,
+workspace locking and generation changes cancel it. Stock vertical resizing stays
+available. Shared dividers and the Tools boundary each paint one physical seam in
+the owning layer, clipped to that owner's rectangle.
 
 ## Restore and fallback
 

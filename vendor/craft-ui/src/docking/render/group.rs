@@ -50,7 +50,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         if self.content.custom_group(ui, panels, selected, rect, matches!(kind, GroupKind::Floating { .. })) {
             return;
         }
-        self.record_float(panels, rect.size(), rect.size());
+        let host_collapsed = self.content.group_collapsed(panels);
+        let minimized = minimized || host_collapsed;
+        if !host_collapsed {
+            self.record_float(panels, rect.size(), rect.size());
+        }
         let policy = self.permissions(selected);
         let splits = matches!(kind, GroupKind::Frame | GroupKind::Floating { .. }) && policy.accepts_splits;
         let rtl = self.style.right_to_left;
@@ -397,17 +401,18 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
         let minimized = owner.filter(|owner| self.minimizes(owner)).map(|owner| owner.minimized);
         let policy = self.permissions(panel);
         let label = self.label_of(panel);
-        let color = if active { self.style.text } else { self.style.inactive_text };
+        let visual_active = active && !owner.is_some_and(|owner| self.content.group_collapsed(owner.panels));
+        let color = if visual_active { self.style.text } else { self.style.inactive_text };
         let galley = self.tab_label(ui, panel, &label, color, (rect.width() - TAB_PADDING).max(0.0));
         let elided = galley.elided;
         let tab_id = self.id.with(("tab", panel));
         let pointer_focus = self.pointer_focus(ui, tab_id);
-        let response = tabs::Tab::new(tab_id, &label, active)
+        let response = tabs::Tab::new(tab_id, &label, visual_active)
             .sense(if policy.movable { Sense::click_and_drag() } else { Sense::click() })
             .focus_stroke(if pointer_focus { Stroke::NONE } else { Stroke::new(1.0, self.style.accent) })
             .show_at(ui, rect, |ui, response| {
                 let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-                painter.rect_filled(rect, 0.0, if active || response.hovered() { self.style.active_background } else { self.style.tab_background });
+                painter.rect_filled(rect, 0.0, if visual_active || response.hovered() { self.style.active_background } else { self.style.tab_background });
                 let at = pos2(rect.left() + TAB_PADDING * 0.5, rect.center().y - galley.size().y * 0.5);
                 painter.galley(at, galley.clone(), color);
             });

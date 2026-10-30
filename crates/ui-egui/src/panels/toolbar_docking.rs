@@ -176,6 +176,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
             }
         }
     } else {
+        let frame_nr = ctx.cumulative_frame_nr();
+        ctx.data_mut(|d| d.insert_temp(key("docked-frame"), frame_nr));
         let result = crate::direction::start_panel("toolbar").resizable(false).show_separator_line(false).exact_size(width).frame(frame).show(ui, |ui| {
             ctx.data_mut(|d| d.insert_temp(key("origin"), egui::pos2(ui.max_rect().left() - f32::from(margin), bounds.top())));
             contents(app, ui);
@@ -183,4 +185,8 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui, width: f32, margi
         crate::panel_visibility::chrome(&ctx, "tools", result.response.rect);
     }
     crate::dock::persist(app, &ctx);
+}
+
+pub(crate) fn docked_this_frame(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(key("docked-frame"))) == Some(ctx.cumulative_frame_nr())
 }

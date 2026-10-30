@@ -414,3 +414,6 @@ mod seam_followup_tests;
 
 #[path = "final_transition_tests.rs"]
 mod final_transition_tests;
+
+#[path = "desktop_review_tests.rs"]
+mod desktop_review_tests;

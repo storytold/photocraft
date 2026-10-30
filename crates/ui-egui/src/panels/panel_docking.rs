@@ -587,6 +587,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let height_preview = presentation::height_preview(ui.ctx());
     let mut layout = presentation::rendered_layout(app, &canonical, ui.available_height(), height_preview.as_ref(), ui.ctx().pixels_per_point().recip());
     presentation::preview_columns(ui.ctx(), &mut layout);
+    presentation::preview_parts(app, ui.ctx(), &mut layout);
     let compact_limits = presentation::embedded_limits(app, ui.ctx(), &canonical);
     let fillers = fillers(&layout);
     let reveal = app.ui.docking_reveal.take();
@@ -654,6 +655,12 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     pin_group_heights(ui.ctx(), &layout, &mut actions);
     for mut action in actions {
         presentation::restore_detached_rect(app, &canonical, &mut action, bounds, ui.ctx().pointer_interact_pos());
+        if let Some(params) = presentation::compact_detach(app, &canonical, &action) {
+            if let Err(error) = app.run("window.panel.group", params) {
+                app.ui.status = error;
+            }
+            continue;
+        }
         if let Some(params) = presentation::bottom_resize(&layout, &action) {
             if let Err(error) = app.run("window.panel.group", params) {
                 app.ui.status = error;
@@ -1259,6 +1266,15 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
     fn resize_handle_style(&self, _default: craft_ui::layout::ResizeHandleStyle) -> craft_ui::layout::ResizeHandleStyle {
         // Presentation paints each final seam once, including keyboard focus.
         craft_ui::layout::ResizeHandleStyle { hovered: egui::Color32::TRANSPARENT, dragged: egui::Color32::TRANSPARENT, focused: egui::Color32::TRANSPARENT }
+    }
+    fn group_collapsed(&self, panels: &[String]) -> bool {
+        panels.iter().all(|panel| self.collapsed.contains(panel))
+    }
+    fn split_separator(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        ui.painter().rect_filled(rect, 0.0, crate::theme::Tokens::get(ui.ctx()).card_border);
+    }
+    fn owns_floating_width(&self, panel: &String) -> bool {
+        self.app.ui.docking.as_ref().is_some_and(|w| w.layout.floating.iter().any(|w| w.native.is_none() && w.contains(panel) && compat::independent_window(w)))
     }
     fn column_rect(&mut self, ctx: &egui::Context, column: &Column<String>, rect: egui::Rect, side: Side) {
         presentation::observe_column(ctx, column, rect, side);

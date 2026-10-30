@@ -211,6 +211,11 @@ impl<P: Clone + Eq + Hash + Debug + Send + Sync + 'static> Renderer<'_, P> {
                 // The divider's inner-edge hit margin must win over child scrollbars, just
                 // as accordion dividers win over the adjacent panel's content.
                 // Named by its layout path, which `ResizeSplit` takes and hits report.
+                self.content.split_separator(ui, split.divider);
+                let host_width = *axis == SplitAxis::Horizontal && self.tree.as_ref().is_some_and(|(panel, _)| self.content.owns_floating_width(panel));
+                if host_width {
+                    return;
+                }
                 let layout_path = self.original_path(path);
                 let response = ResizeHandle::new(
                     self.split_id(&layout_path),

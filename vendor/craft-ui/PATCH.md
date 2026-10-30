@@ -8,7 +8,17 @@ The optional `custom_group` hook also lets a host exclusively draw a compact par
 a floating split tree. Returning false preserves the complete stock group behavior;
 true skips its stock tabs/body/targets, with limits still supplied through the existing
 host limits path. PhotoCraft owns ordinary drop feedback (including empty results)
-and uses the stock resolver for Ctrl/Cmd force-floating only.
+and uses the stock resolver for expanded Ctrl/Cmd force-floating. Compact host
+sources keep host sizing even when force-floating.
+
+The optional `group_collapsed` hook suppresses an active-editor visual and skips
+floating-size recording for a host's closed header. Its default is false. The
+optional `split_separator` hook paints a divider in its owning layer; its default
+does nothing. `owns_floating_width` lets a host replace horizontal split and outer
+frame handles while keeping vertical stock handles. It defaults to false;
+`FloatingFrame::resize_axes` defaults to both axes. PhotoCraft uses these hooks to
+resize one column of a compound floating window without changing its neighbours'
+widths. No additional persistent layout tree is stored.
 
 
 To restore the optional test inputs without adding fonts to PhotoCraft, use a
