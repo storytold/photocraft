@@ -126,6 +126,11 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             || crate::frame_tool::options_bar(app, ui, tool)
                             || crate::artboard_tool::options_bar(app, ui, tool)
                         {
+                            // The Background Eraser and retouch tools draw their own bars, and
+                            // their strokes snap too: the switch goes at the end of theirs.
+                            if crate::stroke_constraint::connects(tool) {
+                                crate::perspective_ruler_ui::snap_button(app, ui);
+                            }
                             return;
                         }
                         let brush_before = app.session.tools.brush.clone();
@@ -136,6 +141,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         // action available for Brush, Pencil and Eraser in every palette (#2659).
                         if matches!(tool, Tool::Brush | Tool::Pencil | Tool::Eraser) {
                             crate::symmetry_ui::menu(app, ui);
+                        }
+                        if crate::stroke_constraint::connects(tool) {
+                            crate::perspective_ruler_ui::snap_button(app, ui);
                         }
                         crate::brush_panel::commit_gesture(app, ui.ctx(), &brush_before, &brush);
                     });
