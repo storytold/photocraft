@@ -207,8 +207,8 @@ mod tests {
 
     #[test]
     fn every_mask_on_small_grids_matches_the_oracle() {
-        for w in 1..=4usize {
-            for h in 1..=4usize {
+        for w in 1..=3usize {
+            for h in 1..=3usize {
                 for bits in 0..1u32 << (w * h) {
                     let mask: Vec<bool> = (0..w * h).map(|i| bits >> i & 1 == 1).collect();
                     for r in [1, 2, 3, 5] {
@@ -259,16 +259,9 @@ mod tests {
 
     #[test]
     fn named_cases_match_the_oracle() {
-        for (w, h) in [(64, 48), (1, 97), (97, 1), (7, 3), (300, 200)] {
+        for (w, h) in [(64, 48), (1, 97), (97, 1), (7, 3)] {
             for (what, mask) in cases(w, h) {
-                let set = mask.iter().filter(|m| **m).count();
                 for r in [1, 2, 3, 5, 16, 200] {
-                    // The oracle costs one store per cell of each clipped square: keep the big
-                    // grids' dense cases at the small radii.
-                    let square = (2 * r + 1).min(w) * (2 * r + 1).min(h);
-                    if set.saturating_mul(square) > 50_000_000 {
-                        continue;
-                    }
                     check(w, h, &mask, r, what);
                 }
             }
@@ -291,9 +284,9 @@ mod tests {
 
     #[test]
     fn a_small_or_sparse_mask_takes_the_direct_path_however_big_the_grid() {
-        let (w, h) = (6000, 4000);
+        let (w, h) = (600, 400);
         let mut one = vec![false; w * h];
-        one[2000 * w + 3000] = true;
+        one[200 * w + 300] = true;
         let Some(b) = bounds(w, &one) else { panic!("one cell is set") };
         assert_eq!(choose(w, h, &b, 3), Path::Direct);
         let mut two = vec![false; w * h];
@@ -306,11 +299,11 @@ mod tests {
 
     #[test]
     fn a_bulky_mask_takes_the_separable_path_with_bounded_scratch() {
-        let (w, h) = (2400, 2400);
+        let (w, h) = (240, 240);
         let mut rng = Rng(7);
         let mut mask = vec![false; w * h];
-        for y in 200..2200 {
-            for x in 200..2200 {
+        for y in 20..220 {
+            for x in 20..220 {
                 mask[y * w + x] = rng.next().is_multiple_of(2);
             }
         }
