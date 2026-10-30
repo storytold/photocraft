@@ -841,17 +841,20 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if t.warp.is_some() || t.target.is_some() || !t.layers.is_empty() {
         return;
     }
-    if t.quad == corners(t.rect)
-        && !t.selection
-        && t.path.is_none()
+    let untouched = t.quad == corners(t.rect) && !t.selection && t.path.is_none();
+    // The stored warp is edited only when the source can be previewed without it: the texels
+    // the box opened with have the warp in them, and the mesh would warp them again.
+    if untouched
         && let Some(w) = existing
+        && preview_without_smart_warp(app, ctx, w.bounds)
+        && let Some(t) = app.ui.transform.as_mut()
     {
         t.rect = w.bounds;
         t.quad = corners(w.bounds);
         t.warp = Some(w);
-        preview_without_smart_warp(app, ctx);
         return;
     }
+    let Some(t) = app.ui.transform.as_mut() else { return };
     let h = Homography::rect_to_quad(t.rect, t.quad).unwrap_or(Homography::IDENTITY);
     let mesh = BezierMesh::identity(t.rect, 1, 1).map_points(|p| {
         let (x, y) = h.apply(p[0], p[1]);
@@ -872,19 +875,19 @@ pub fn warps_active_layer(app: &PhotocraftApp) -> bool {
         .is_some_and(|l| matches!(&l.content, LayerContent::Smart(sm) if sm.warp.as_ref().is_some_and(|w| !w.is_identity())))
 }
 
-/// The preview texels of a smart object whose stored warp the session just adopted: its source
-/// placed without the warp, over the warp box, so the box's mesh warps it once. The texels read
-/// when the box opened are the layer's render, which already has the warp: warping that again
-/// drew the picture well inside the grid (#9798). A source that can't be re-rendered (a missing
-/// linked file) keeps them.
-fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let (Some(t), Some(st)) = (app.ui.transform.as_ref(), app.session.active()) else { return };
-    let (id, session, r) = (LayerId(t.layer), t.session, t.rect);
+/// The preview texels for editing a smart object's stored warp: its source placed without the
+/// warp, over the warp box `r`, so the box's mesh warps it once. The texels read when the box
+/// opened are the layer's render, which already has the warp: warping that again drew the
+/// picture well inside the grid (#9798). False when the source can't be re-rendered (a missing
+/// linked file): the texels keep the warp, so the caller must not adopt it.
+fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context, r: [f64; 4]) -> bool {
+    let (Some(t), Some(st)) = (app.ui.transform.as_ref(), app.session.active()) else { return false };
+    let (id, session) = (LayerId(t.layer), t.session);
     let doc = st.doc.clone();
-    let Some(LayerContent::Smart(sm)) = doc.layer(id).map(|l| &l.content) else { return };
+    let Some(LayerContent::Smart(sm)) = doc.layer(id).map(|l| &l.content) else { return false };
     let mut flat = sm.clone();
     flat.warp = None;
-    let Ok(Some(surface)) = photocraft_engine::smart_cmds::render(&doc, &flat) else { return };
+    let Ok(Some(surface)) = photocraft_engine::smart_cmds::render(&doc, &flat) else { return false };
     flat.cache = Some(surface);
     let mut plain = (*doc).clone();
     if let Some(l) = plain.layer_mut(id) {
@@ -892,12 +895,13 @@ fn preview_without_smart_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let b = photocraft_geom::Rect::new(r[0].round() as i32, r[1].round() as i32, r[2].round() as i32, r[3].round() as i32);
     if b.is_empty() {
-        return;
+        return false;
     }
     let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
-    let Some(pv) = app.transform_preview.as_mut() else { return };
+    let Some(pv) = app.transform_preview.as_mut() else { return false };
     let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
     pv.texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
+    true
 }
 
 /// The open transform moves an editable type layer as a whole (not a lone mask, channel, path or

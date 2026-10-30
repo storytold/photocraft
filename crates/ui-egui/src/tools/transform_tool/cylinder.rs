@@ -18,7 +18,7 @@
 //! greyed, as for a custom warp, and a cylinder has no splits and no grid menu.
 
 use super::warp::surface_at;
-use super::*;
+use super::{Color32, CursorIcon, PhotocraftApp, Pos2, Stroke, ToolEvent, TransformPreview, ViewXform, Warp, WarpDrag, WarpStyle, vec2};
 
 /// What a press on the cylinder grabbed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,9 +134,12 @@ pub(super) fn cylinder_dragged(v0: [f64; 7], handle: CylinderHandle, d: [f64; 2]
             }
         }
         CylinderHandle::Bend => {
-            let depth = (v0[4] + d[1] / a).clamp(-DEPTH_LIMIT, DEPTH_LIMIT);
-            v[4] = depth;
-            v[5] = depth;
+            // Both arcs bend by the same amount, so a file's unequal depths keep their difference
+            // and a press that doesn't move changes nothing; a stored depth past the limit is
+            // kept as the limit rather than clamped by the press.
+            let step = d[1] / a;
+            v[4] = depth_dragged(v0[4], step);
+            v[5] = depth_dragged(v0[5], step);
         }
         CylinderHandle::Bottom => v[1] += d[1],
         CylinderHandle::Wrap => v[6] = wrap_of_pos(pos_of_wrap(v0[6]) + d[0] / a),
@@ -146,6 +149,10 @@ pub(super) fn cylinder_dragged(v0: [f64; 7], handle: CylinderHandle, d: [f64; 2]
             v[1] += d[1];
             v[3] += d[1];
         }
+    }
+    // A move keeps the shape as it is, however narrow.
+    if handle == CylinderHandle::Surface {
+        return v;
     }
     // The silhouette or edge being moved stops just short of the other one.
     if v[2] - v[0] < MIN_SIDE {
@@ -163,6 +170,13 @@ pub(super) fn cylinder_dragged(v0: [f64; 7], handle: CylinderHandle, d: [f64; 2]
         }
     }
     v
+}
+
+/// `depth0` moved by `step`, kept within the half axis, or within its own reach when it already
+/// lies past that (a cylinder read from a file).
+fn depth_dragged(depth0: f64, step: f64) -> f64 {
+    let limit = DEPTH_LIMIT.max(depth0.abs());
+    (depth0 + step).clamp(-limit, limit)
 }
 
 /// Pointer input on a cylinder in Warp mode: a press grabs a handle or the surface

@@ -177,8 +177,12 @@ fn is_stored_cylinder(layer: &Layer, w: &Warp) -> bool {
     let Some(o) = shown.mesh.as_ref() else { return false };
     let tol = 1e-6 * (1.0 + o.points.iter().flatten().chain(&shown.bounds).fold(0.0f64, |a, v| a.max(v.abs())));
     let near = |a: &[f64], b: &[f64]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| (x - y).abs() <= tol);
+    // A cylinder's depths and wrap are dimensionless: at a large document offset the coordinate
+    // tolerance would pass off a change of wrap as none.
+    let near_values =
+        |a: &[f64], b: &[f64]| a.len() == b.len() && a.iter().zip(b).enumerate().all(|(i, (x, y))| (x - y).abs() <= if i < 4 { tol } else { 1e-9 });
     match (w.style, w.mesh.as_ref()) {
-        (WarpStyle::Cylinder, _) => shown.style == WarpStyle::Cylinder && near(&shown.bounds, &w.bounds) && near(&shown.values, &w.values),
+        (WarpStyle::Cylinder, _) => shown.style == WarpStyle::Cylinder && near(&shown.bounds, &w.bounds) && near_values(&shown.values, &w.values),
         (WarpStyle::Custom, Some(m)) => {
             o.us == m.us && o.vs == m.vs && near(&shown.bounds, &w.bounds) && near(o.points.as_flattened(), m.points.as_flattened())
         }
