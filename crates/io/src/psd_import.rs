@@ -19,8 +19,9 @@ use crate::blocks;
 use crate::pixels::{max_sample, sample_for_depth, try_interleave, zero_sample};
 
 /// Resources that are mapped to document fields or regenerated on export.
-pub(crate) const MAPPED_RESOURCES: [u16; 19] = [
+pub(crate) const MAPPED_RESOURCES: [u16; 20] = [
     ids::GLOBAL_ANGLE,
+    ids::PIXEL_ASPECT_RATIO,
     ids::GLOBAL_ALTITUDE,
     ids::RESOLUTION_INFO,
     ids::ICC_PROFILE,
@@ -1143,6 +1144,12 @@ fn read_initial_metadata(
                 }
             }
             ids::ICC_PROFILE => doc.icc_profile = Some(Arc::new(resource.data.clone())),
+            // A ratio that can't be read or drawn (zero, negative, NaN) leaves the pixels square,
+            // and its record is kept for the save (`pixel_aspect_resource`).
+            ids::PIXEL_ASPECT_RATIO => match crate::psd_export::readable_pixel_aspect(&resource.data) {
+                Some(ratio) => doc.pixel_aspect = ratio,
+                None => doc.metadata.psd_resources.push((resource.id, String::from_utf8_lossy(&resource.name).into_owned(), Arc::new(resource.data.clone()))),
+            },
             ids::XMP => doc.metadata.xmp = Some(String::from_utf8_lossy(&resource.data).into()),
             ids::EXIF => doc.metadata.exif = Some(Arc::new(resource.data.clone())),
             1032 => parse_guides(&resource.data, doc),

@@ -124,6 +124,7 @@ fn export_supported_document(
     if let Some(icc) = &doc.icc_profile {
         resources.push(ImageResource::new(ids::ICC_PROFILE, icc.to_vec()));
     }
+    resources.push(crate::psd_export::pixel_aspect_resource(doc));
     if !doc.guides.horizontal.is_empty() || !doc.guides.vertical.is_empty() {
         resources.push(ImageResource::new(1032, guides_resource(doc)));
     }

@@ -29,6 +29,27 @@ pub(crate) fn pascal_names_resource(names: &[&str]) -> Vec<u8> {
     v
 }
 
+/// The ratio of a pixel aspect ratio record, when it can be read and drawn.
+pub(crate) fn readable_pixel_aspect(data: &[u8]) -> Option<f64> {
+    photocraft_psd::PixelAspectRatio::from_bytes(data).ok().map(|par| par.ratio).filter(|ratio| ratio.is_finite() && *ratio > 0.0)
+}
+
+/// View › Pixel Aspect Ratio (resource 1064). Photoshop writes it in every file, square or not, so
+/// a file read and saved again keeps it.
+pub(crate) fn pixel_aspect_resource(doc: &Document) -> ImageResource {
+    use photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO;
+    // A record that couldn't be read goes back as it came, until a ratio is set over it.
+    if doc.pixel_aspect == 1.0
+        && let Some((_, name, data)) =
+            doc.metadata.psd_resources.iter().find(|(id, _, data)| *id == PIXEL_ASPECT_RATIO && readable_pixel_aspect(data).is_none())
+    {
+        let mut kept = ImageResource::new(PIXEL_ASPECT_RATIO, data.to_vec());
+        kept.name = name.clone().into_bytes();
+        return kept;
+    }
+    ImageResource::new(photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO, photocraft_psd::PixelAspectRatio::new(doc.pixel_aspect).to_bytes())
+}
+
 pub(crate) fn guides_resource(doc: &Document) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&1u32.to_be_bytes());
@@ -88,6 +109,10 @@ pub(crate) fn path_resources(doc: &Document, warnings: &mut Vec<String>) -> Vec<
 
 /// Whether an imported (unmodelled) resource still describes the document and is written back.
 pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bool {
+    // The pixel aspect ratio is the document's own (`pixel_aspect_resource`), never a kept copy.
+    if id == photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO {
+        return false;
+    }
     // Measurement scale / count resources: only while they still describe the document.
     if !crate::annotations_map::keep_resource(doc, id) {
         return false;

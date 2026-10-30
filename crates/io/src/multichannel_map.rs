@@ -143,6 +143,7 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool, size_limit: Optio
     ];
     // Grid and guides: Photoshop writes it in every file, guides or not.
     resources.push(ImageResource::new(GRID_AND_GUIDES, crate::psd_export::guides_resource(doc)));
+    resources.push(crate::psd_export::pixel_aspect_resource(doc));
     if !channels.is_empty() {
         let names: Vec<&str> = channels.iter().map(|c| c.name.as_str()).collect();
         resources.push(ImageResource::new(1006, crate::psd_export::pascal_names_resource(&names)));
