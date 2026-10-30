@@ -10,7 +10,6 @@ next to them.
 
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
-| `crates/ui-egui/tests/fixtures/panel-repair-workspace.json` | Panel-only workspace regression fixture | @KotovGGG | Sanitized panel audit snapshot, 2026-10-29 | MIT OR Apache-2.0; adjacent `panel-repair-workspace.LICENSE` |
 | `vendor/craft-ui/` | Shared UI source snapshot and local docking API patch | craft-libs contributors; local repair @KotovGGG | [craft-libs 92d392c](https://github.com/storytold/craft-libs/tree/92d392cff132eaf53e13afff77f38b5c11b73aa0/crates/ui) | MIT OR Apache-2.0; licenses in the snapshot |
 | `crates/codecs/src/codecs/xpm/x11_colors.rs` | X11 `rgb.txt` color-name lookup table (normalized X.Org RGB values) | X.Org Foundation and X11 contributors | <https://cgit.freedesktop.org/xorg/app/rgb/tree/rgb.txt> | MIT (X.Org app/rgb) |
 | `crates/ui-egui/src/i18n/el.tsv` | Greek UI translations | PhotoCraft contributors | Original translations of PhotoCraft's English labels | MIT OR Apache-2.0, [`LICENSE-translations.txt`](crates/ui-egui/src/i18n/LICENSE-translations.txt) |
@@ -36,7 +35,7 @@ next to them.
 | `epaint_default_fonts::EGUI_ICONS` (build input; deflated into `OUT_DIR/egui_fonts/egui-icons.ttf.deflate`, registered by `crates/ui-egui/src/egui_fonts.rs`) | egui-icons, five-glyph subset of emoji-icon-font | John Slegers | [egui fork at 6d518fc](https://github.com/storytold/egui/tree/6d518fc799681571963842f95b55a6b68431b15a/crates/epaint_default_fonts/fonts), [original](https://github.com/jslegers/emoji-icon-font); egui subset, unmodified here | MIT; Copyright (c) 2014 John Slegers; full upstream notice in [NOTICE](NOTICE) |
 | `assets/fonts/Inter-Regular.ttf`, `Inter-Medium.ttf`, `Inter-SemiBold.ttf` | Inter 4.001 (UI font) | The Inter Project Authors (Rasmus Andersson) | <https://github.com/rsms/inter> | SIL OFL 1.1, [`assets/fonts/OFL-Inter.txt`](assets/fonts/OFL-Inter.txt) |
 | `assets/fonts/JetBrainsMono-Regular.ttf` | JetBrains Mono 2.305 (numeric font) | The JetBrains Mono Project Authors | <https://github.com/JetBrains/JetBrainsMono> | SIL OFL 1.1, [`assets/fonts/OFL-JetBrainsMono.txt`](assets/fonts/OFL-JetBrainsMono.txt) |
-| `assets/icons/*.svg` except `slice-knife.svg`, `slice-select.svg`, `font-similar.svg`, `font-variable.svg`, `sampler.svg`, `artboard.svg`, `perspective-crop.svg`, `frame-placeholder.svg`, `ellipse-dashed.svg`, `gradient.svg`, `type-mask.svg`, `type-mask-vertical.svg`, `text-warp.svg`, `clip-below.svg`, `clip-release.svg`, `layer-mask.svg`, `adjustment-layer.svg`, `brush-replace.svg`, `quick-selection.svg`, `eraser-background.svg`, `eraser-magic.svg`, `lasso-magnetic.svg`, `direct-select.svg`, `convert-point.svg`, `pen-add-anchor.svg`, `pen-delete-anchor.svg`, `pen-freeform.svg`, `pen-curvature.svg`, `bandage-sparkle.svg`, `painting-symmetry.svg`, `symmetry-*.svg` and `marquee-{row,column}.svg`, `align-edge-*.svg` and `distribute-*.svg` (113 files; `star-filled.svg` is `star.svg` with a solid fill) | Lucide icons | Lucide Icons and Contributors | <https://github.com/lucide-icons/lucide> (`icons/<name>.svg`; `align-*` are now named `text-align-*` upstream) | ISC, [`assets/icons/LICENSE-lucide.txt`](assets/icons/LICENSE-lucide.txt) |
+| `assets/icons/*.svg` except `slice-knife.svg`, `slice-select.svg`, `font-similar.svg`, `font-variable.svg`, `sampler.svg`, `artboard.svg`, `perspective-crop.svg`, `frame-placeholder.svg`, `ellipse-dashed.svg`, `gradient.svg`, `type-mask.svg`, `type-mask-vertical.svg`, `text-warp.svg`, `clip-below.svg`, `clip-release.svg`, `layer-mask.svg`, `adjustment-layer.svg`, `brush-replace.svg`, `quick-selection.svg`, `eraser-background.svg`, `eraser-magic.svg`, `lasso-magnetic.svg`, `direct-select.svg`, `convert-point.svg`, `pen-add-anchor.svg`, `pen-delete-anchor.svg`, `pen-freeform.svg`, `pen-curvature.svg`, `bandage-sparkle.svg`, `painting-symmetry.svg`, `symmetry-*.svg`, `path-op-*.svg` and `marquee-{row,column}.svg`, `align-edge-*.svg` and `distribute-*.svg` (114 files; `star-filled.svg` is `star.svg` with a solid fill, `rotate-ccw.svg` is `rotate-cw.svg` mirrored) | Lucide icons | Lucide Icons and Contributors | <https://github.com/lucide-icons/lucide> (`icons/<name>.svg`; `align-*` are now named `text-align-*` upstream) | ISC, [`assets/icons/LICENSE-lucide.txt`](assets/icons/LICENSE-lucide.txt) |
 | `assets/icons/{check,chevron-down,chevron-left,chevron-right,chevron-up,chevrons-left,chevrons-right,circle,clock,compass,info,link,link-2,lock,minus,monitor,moon,move,navigation,plus,search,square,trash,triangle,type,x,zoom-in}.svg` | Lucide icons derived from Feather (subset of the row above) | Cole Bemis (Feather), Lucide Contributors | <https://github.com/feathericons/feather> via Lucide | MIT (Feather) and ISC (Lucide), [`assets/icons/LICENSE-lucide.txt`](assets/icons/LICENSE-lucide.txt) |
 | `assets/icons/slice-knife.svg` | Slice tool glyph | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
 | `assets/icons/slice-select.svg` | Slice Select tool glyph | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
@@ -46,6 +45,7 @@ next to them.
 | `assets/icons/artboard.svg` | Artboard tool glyph: a board with a tick at each end of its edges | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
 | `assets/icons/perspective-crop.svg` | Perspective Crop tool glyph: a crop frame in perspective with its grid and crop-mark ticks | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
 | `assets/icons/type-mask.svg`, `assets/icons/type-mask-vertical.svg` | Horizontal and Vertical Type Mask tool glyphs: a T drawn as marching ants (the vertical one beside a downward arrow), on Lucide's 24 px grid and stroke | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
+| `assets/icons/path-op-{new-layer,combine,subtract,intersect,exclude,merge}.svg` | Path Operations glyphs (Pen options bar): a single square for New Layer, and two overlapping squares showing the area each operation keeps (union, back minus front, overlap, everything but the overlap, the merged outline), drawn on Lucide's 24 px grid and stroke | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
 | `assets/icons/text-warp.svg` | Create Warped Text glyph (Type tool options bar): a T above a bowed arc, drawn on Lucide's 24 px grid and stroke | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
 | `assets/icons/marquee-row.svg`, `assets/icons/marquee-column.svg` | Single Row and Single Column Marquee tool glyphs: a dashed row (column) between two edge bars, drawn on Lucide's 24 px grid and stroke | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
 | `assets/icons/clip-below.svg`, `assets/icons/clip-release.svg` | Clipping-mask cursors (⌥ over the line between two layers): a hooked arrow onto the layer below; the same with a small "no" badge to release | PhotoCraft contributors | Original work | MIT OR Apache-2.0 |
@@ -116,9 +116,15 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 | `photocraft-type.jpg` | *Among the Sierra Nevada, California*, Albert Bierstadt, 1868 | [Commons](https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg) |
 | `photocraft-export-light.jpg` | *The Kiss*, Gustav Klimt, 1907–1908 | [Commons](https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg) |
 
-## Test data (not committed, not shipped)
+## Committed test fixtures (not shipped)
 
-`corpus/` is gitignored and no test fixtures are committed to the repository.
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/ui-egui/tests/fixtures/panel-repair-workspace.json` | Panel-only workspace regression fixture | @KotovGGG | Sanitized panel audit snapshot, 2026-10-29 | MIT OR Apache-2.0; adjacent `panel-repair-workspace.LICENSE` |
+
+## Test data (not shipped)
+
+`corpus/` is gitignored. Committed test fixtures are listed in the table above.
 `cargo xtask corpus --all` fetches every corpus at the pinned commits in `xtask/src/corpus_pins.rs`
 and verifies each file against the sha256 lists in `xtask/*.sha256`, with the upstream licence
 next to the files:

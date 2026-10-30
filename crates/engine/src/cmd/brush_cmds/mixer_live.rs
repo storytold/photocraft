@@ -30,6 +30,7 @@ fn valid_state(state: &MixerState) -> bool {
         && state.reservoir.as_ref().is_none_or(valid_color)
         && state.pickup.as_ref().is_none_or(valid_color)
         && state.color.as_ref().is_none_or(valid_color)
+        && state.sampled_over.as_ref().is_none_or(valid_color)
         && state.spatial.as_ref().is_none_or(|colors| colors.len() == 4096 && colors.iter().all(valid_color))
 }
 

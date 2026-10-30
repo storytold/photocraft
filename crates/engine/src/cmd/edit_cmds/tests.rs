@@ -1191,6 +1191,35 @@ fn guides_are_undoable() {
     assert!(s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 3, "position": 1})).is_err());
 }
 
+/// #5034: Move Guide turns a guide with `toOrientation` (⌥ while dragging it), in one undo
+/// step, taking its colour along; a % position is of the new axis.
+#[test]
+fn move_guide_turns_a_guide() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    s.execute("view.newGuide", json!({"orientation": "horizontal", "position": 30, "color": "magenta"})).unwrap();
+    s.execute("view.newGuide", json!({"orientation": "horizontal", "position": 70})).unwrap();
+    s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": "50%", "toOrientation": "vertical"})).unwrap();
+    let g = &s.active().unwrap().doc.guides;
+    assert_eq!((g.horizontal.clone(), g.vertical.clone()), (vec![70.0], vec![100.0]), "50% of the width");
+    assert_eq!(g.color(true, 100.0), Some([255, 0, 255]), "the colour moves with the guide");
+    assert_eq!(g.color(false, 30.0), None);
+    // The same orientation is a plain move.
+    s.execute("view.moveGuide", json!({"orientation": "vertical", "index": 0, "position": 20, "toOrientation": "vertical"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.guides.vertical, vec![20.0]);
+    s.undo();
+    s.undo();
+    let g = &s.active().unwrap().doc.guides;
+    assert_eq!((g.horizontal.clone(), g.vertical.clone()), (vec![30.0, 70.0], vec![]), "one undo step per move");
+    // Bad params are refused and leave the guides alone.
+    assert!(s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": 5, "toOrientation": "diagonal"})).is_err());
+    assert!(s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 0, "position": 5, "toOrientation": 1})).is_err());
+    assert!(s.execute("view.newGuide", json!({"orientation": "horizontal", "position": 5, "toOrientation": "vertical"})).is_err());
+    assert!(s.execute("view.moveGuide", json!({"orientation": "horizontal", "index": 9, "position": 5, "toOrientation": "vertical"})).is_err());
+    let g = &s.active().unwrap().doc.guides;
+    assert_eq!((g.horizontal.clone(), g.vertical.clone()), (vec![30.0, 70.0], vec![]));
+}
+
 /// #2955: the rulers' zero point is set and reset by command, undoable, and bad params are
 /// refused without touching the document.
 #[test]

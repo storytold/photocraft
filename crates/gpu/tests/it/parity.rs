@@ -145,7 +145,10 @@ fn gpu() -> Option<Gpu> {
 /// The returned guard holds [`GPU_LOCK`] until the device is dropped.
 fn any_device() -> Option<(wgpu::Adapter, wgpu::Device, wgpu::Queue, std::sync::MutexGuard<'static, ()>)> {
     let lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let adapter = pollster::block_on(wgpu::Instance::default().request_adapter(&wgpu::RequestAdapterOptions::default())).ok()?;
+    let adapter = pollster::block_on(
+        wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env()).request_adapter(&wgpu::RequestAdapterOptions::default()),
+    )
+    .ok()?;
     let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
     Some((adapter, device, queue, lock))
 }
@@ -636,6 +639,47 @@ fn special_eight_fill_matches_cpu() {
     }
 }
 
+/// The same for adjustment layers (#9501): the GPU's adjustment mix takes Fill inside the special
+/// eight's blend, as compose's adjustment branch does, with a mask and Opacity on top.
+#[test]
+fn special_eight_fill_on_adjustment_layers_matches_cpu() {
+    let Some(mut g) = gpu() else { return };
+    let special = [
+        BlendMode::ColorBurn,
+        BlendMode::LinearBurn,
+        BlendMode::ColorDodge,
+        BlendMode::LinearDodge,
+        BlendMode::VividLight,
+        BlendMode::LinearLight,
+        BlendMode::HardMix,
+        BlendMode::Difference,
+    ];
+    for mode in special {
+        for fill in [0.3, 0.6] {
+            let mut d = base_doc(64, 48);
+            d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
+            let mut l = Layer::new("invert", LayerContent::Adjustment(Adjustment::Invert));
+            l.blend = mode;
+            l.opacity = 0.7;
+            l.fill_opacity = fill;
+            d.layers.push(l);
+            check(&mut g, &d, &format!("adjustment {mode:?} fill {fill}"));
+            // CodeRabbit on #9512: clipped to a pixel layer, the adjustment takes Fill as
+            // coverage on both paths (compose's clipped branch, the planner's `atop`).
+            let mut d = base_doc(64, 48);
+            d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
+            d.layers.push(noise_layer("base", PixelFormat::RGBA8, Rect::from_xywh(8, 6, 40, 30), 9, 1.0));
+            let mut l = Layer::new("invert", LayerContent::Adjustment(Adjustment::Invert));
+            l.blend = mode;
+            l.opacity = 0.7;
+            l.fill_opacity = fill;
+            l.clipped = true;
+            d.layers.push(l);
+            check(&mut g, &d, &format!("clipped adjustment {mode:?} fill {fill}"));
+        }
+    }
+}
+
 #[test]
 fn xor_rounding_on_half_float_targets() {
     let Some((_adapter, device, queue, _lock)) = any_device() else { return };
@@ -854,6 +898,18 @@ fn groups_masks_and_clipping() {
         clip.fill_opacity = fill;
         d.layers.extend([base, clip]);
         check(&mut g, &d, "clipped Dissolve opacity/fill CPU/GPU parity");
+    }
+    // #4921: a clipped Dissolve layer keeps binary coverage at partial opacity/fill.
+    for (opacity, fill) in [(0.4, 1.0), (0.8, 0.5)] {
+        let mut d = base_doc(56, 44);
+        let base = noise_layer("base", PixelFormat::RGBA8, Rect::new(5, 6, 48, 40), 45, 0.0);
+        let mut clip = noise_layer("dissolve clip", PixelFormat::RGBA8, d.bounds(), 46, 0.0);
+        clip.clipped = true;
+        clip.blend = BlendMode::Dissolve;
+        clip.opacity = opacity;
+        clip.fill_opacity = fill;
+        d.layers.extend([base, clip]);
+        check(&mut g, &d, "clipped Dissolve CPU/GPU parity");
     }
     // Clipped group base (isolated) with a clipped layer.
     let mut d = base_doc(56, 44);
@@ -2199,6 +2255,8 @@ fn blend_if() {
             // An adjustment judged by its result, and a clipped layer.
             let mut adj = Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert));
             adj.blend_if.set(e, pair);
+            // Judged by its result before Opacity (#9542).
+            adj.opacity = 0.4;
             d.layers[1] = l.clone();
             d.layers[1].blend_if = Default::default();
             d.layers.push(adj);
@@ -2216,6 +2274,25 @@ fn blend_if() {
     l.blend_if.set(1, [r(60, 120, 255, 255), r(0, 0, 140, 200)]);
     d.layers.push(l);
     check(&mut g, &d, "gray blend if");
+}
+
+/// A Pass Through group with Blend If renders isolated on the GPU as on the CPU (#9554): an
+/// adjustment inside it leaves the layers beneath alone.
+#[test]
+fn pass_through_group_with_blend_if_is_isolated() {
+    use photocraft_doc::BlendRange;
+    let Some(mut g) = gpu() else { return };
+    for gated in [true, false] {
+        let mut d = base_doc(64, 48);
+        d.layers[0] = noise_layer("bg", PixelFormat::RGBA8, Rect::from_xywh(0, 0, 64, 48), 5, 1.0);
+        let mut grp = Layer::group("group", vec![Layer::new("inv", LayerContent::Adjustment(Adjustment::Invert))]);
+        grp.blend = BlendMode::PassThrough;
+        if gated {
+            grp.blend_if.set(1, [BlendRange::FULL, BlendRange { black: [0, 0], white: [110, 110] }]);
+        }
+        d.layers.push(grp);
+        check(&mut g, &d, &format!("pass-through group, Blend If {gated}"));
+    }
 }
 
 #[test]
@@ -3131,6 +3208,33 @@ fn pass_through_clipping_base_with_an_adjustment() {
     check(&mut g, &d, "pass-through clipping base with an adjustment");
 }
 
+/// Dissolve's adjustment/effect decisions use document coordinates, even in offset regions
+/// and in the paged compositor. The clipped path comes from #4992.
+#[test]
+fn dissolve_adjustments_and_effects_match_cpu_in_offset_regions() {
+    let Some(mut g) = gpu() else { return };
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for effects in [false, true] {
+            let mut d = Document::new("Dissolve", Size::new(300, 280), ColorMode::Rgb, depth);
+            d.layers.push(noise_layer("base", d.pixel_format(), Rect::new(0, 0, 300, 280), 19, 0.4));
+            let mut layer = if effects {
+                let mut l = noise_layer("effect", d.pixel_format(), Rect::new(-8, 13, 290, 270), 27, 0.6);
+                l.effects.items = vec![Effect::ColorOverlay { common: FxCommon::new(BlendMode::Normal, 0.7), color: Color::rgb(0.2, 0.8, 0.4) }];
+                l
+            } else {
+                Layer::new("adjustment", LayerContent::Adjustment(Adjustment::Invert))
+            };
+            layer.blend = BlendMode::Dissolve;
+            layer.opacity = 0.37;
+            layer.mask = Some(mask(Rect::new(11, 7, 287, 265), 43, 0.0));
+            d.layers.push(layer);
+            let label = format!("Dissolve effects={effects} {depth:?}");
+            fx_check(&mut g, &d, &label);
+            diff_rect(&mut g, &d, Rect::new(17, 23, 281, 269), &label).unwrap();
+        }
+    }
+}
+
 /// Transparency Shapes Layer off changes the special eight's blend (the layer's alpha blends as
 /// Fill, #5692); the GPU has no pass for it and leaves such documents to the CPU. Other modes look
 /// the same either way and stay on the GPU.
@@ -3238,6 +3342,61 @@ fn dissolve_clipped_adjustment_matches_cpu() {
         check(&mut g, &d, &format!("clipped Dissolve adjustment {fmt:?}"));
         diff_rect(&mut g, &d, Rect::new(250, 1, 270, 20), "clipped adjustment offset region").unwrap_or_else(|e| panic!("{e}"));
     }
+}
+
+/// Integration of #9509 and #9512: coverage endpoints, Fill, masks and clipping share the CPU oracle.
+#[test]
+fn integration_adjustment_fill_opacity_masks_and_hdr_match_cpu() {
+    let Some(mut g) = gpu() else { return };
+    for clipped in [false, true] {
+        for mode in [BlendMode::Normal, BlendMode::ColorDodge, BlendMode::LinearBurn] {
+            for fill in [0.0, 0.5, 1.0] {
+                for opacity in [0.5, 1.0] {
+                    for coverage in [0.5, 1.0] {
+                        let mut d = Document::new("combined adjustment", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+                        let mut base = Layer::raster("base", PixelFormat::RGBA32F);
+                        base.surface_mut().unwrap().write_pixel(0, 0, &[0.25, 0.5, 0.75, 1.0]);
+                        let look = Adjustment::ColorLookup {
+                            name: "half".into(),
+                            lut: Some(std::sync::Arc::new(vec![0.5; 24])),
+                            size: 2,
+                            tetrahedral: false,
+                            dither: false,
+                            source: None,
+                        };
+                        let mut layer = Layer::new("adjust", LayerContent::Adjustment(look));
+                        layer.blend = mode;
+                        layer.clipped = clipped;
+                        layer.fill_opacity = fill;
+                        layer.opacity = opacity;
+                        let mut mask = LayerMask::reveal_all();
+                        mask.surface = photocraft_raster::Surface::with_default(
+                            PixelFormat { mode: ColorMode::Grayscale, sample: SampleType::F32, alpha: false },
+                            &[coverage],
+                        );
+                        layer.mask = Some(mask);
+                        d.layers = vec![base, layer];
+                        check(&mut g, &d, &format!("combined {mode:?} fill={fill} opacity={opacity} mask={coverage} clipped={clipped}"));
+                    }
+                }
+            }
+        }
+    }
+    // The existing GPU harness requires float32 accumulation. The CPU regression separately
+    // covers 1e8 inputs, beyond the range of half-float source textures on some adapters.
+    let mut d = Document::new("HDR full coverage", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+    let mut base = Layer::raster("HDR", PixelFormat::RGBA32F);
+    base.surface_mut().unwrap().write_pixel(0, 0, &[1.0e4, 1.0e4, 1.0e4, 1.0]);
+    let look = Adjustment::ColorLookup {
+        name: "half".into(),
+        lut: Some(std::sync::Arc::new(vec![0.5; 24])),
+        size: 2,
+        tetrahedral: false,
+        dither: false,
+        source: None,
+    };
+    d.layers = vec![base, Layer::new("lookup", LayerContent::Adjustment(look))];
+    check(&mut g, &d, "HDR full coverage with bounded result");
 }
 
 /// Siblings share only immutable GPU objects, not resident pages or document caches.

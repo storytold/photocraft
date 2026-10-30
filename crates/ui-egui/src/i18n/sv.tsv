@@ -4770,3 +4770,10 @@ cameraRaw	Show Vectorscope	Visa vektorskop
 cameraRaw	Tone Histogram	Tonhistogram
 cameraRaw	Vignetting	Vinjettering
 cameraRaw	White Balance: As Shot	Vitbalans: som tagen
+	Current Layer:	Aktuellt lager:
+	Delete effect	Ta bort effekt
+	Move effect down	Flytta effekten nedåt
+	Move effect up	Flytta effekten uppåt
+	Path operations	Banåtgärder
+	The path was discarded	Banan kasserades
+	The path was kept as the Work Path	Banan behölls som arbetsbana

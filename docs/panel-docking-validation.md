@@ -1,5 +1,24 @@
 # Panel docking repair validation
 
+## Upstream integration checkpoint (2026-10-30)
+
+Integrated upstream `b1cfff9d30298eea4f446a8f6a5e4285cb43c6e7` into the
+panel branch, resolving the host test modules and retaining upstream's screen-mode
+availability checks in the whole-Tools footer. The reviewed craft-ui and egui pins
+are unchanged.
+
+On this merged source, 136 panel tests passed (two opt-in benchmarks ignored).
+Dependency-contract, dock, workspace, Tools, type/screen-mode flyout, visibility
+and overflow filters passed. Fresh final-transition captures and 72 physical-pixel
+seam assertions passed. The two after PNGs were refreshed from this source.
+
+The remaining engine/full-UI, Clippy, layers, wasm and complete capture gates are
+still in progress at this checkpoint. It is not final acceptance. Native Windows
+focus/IME, physical monitors, mixed DPI and real GPU stalls remain unverified;
+the contributor builds the main application EXE. The existing PR remains a draft.
+
+## Historical checkpoint
+
 Validated 2026-10-30 against upstream `382b047c30483024159aaa63831947bc99a5e28b`.
 The two final transition regressions were demonstrated failing before the fix:
 full height on join/detach, and attached top-bar collapse/tab insertion.
@@ -9,7 +28,7 @@ full height on join/detach, and attached top-bar collapse/tab insertion.
 - 346 shared docking tests passed with the documented optional test inputs.
 - Formatting, UI/engine all-targets Clippy, shared-library Clippy, engine/UI doctest checks, 31-crate layer check, 24-crate wasm plus codecs/heif, and parity/scorecard regeneration passed.
 - 570 offscreen matrix PNGs across three Pro themes and 100/125/150/200% scale, including the sanitized problem layout, plus 515 replay frames; 72 physical-pixel seam checks passed.
-- Five scoped CPU hover/drag runs completed; reproduction and results are in [validation notes](panel-docking-demo.md).
+- Five scoped CPU hover/drag runs completed; results are in [Scoped CPU timing](#scoped-cpu-timing), and capture reproduction is in [the demo](panel-docking-demo.md).
 - The full UI run is **not green**: 92 failures. 92 match independently recorded historical baseline failures; 0 do not match that record. This is separate from the passing panel suite.
 
 The full UI command was `cargo test -p photocraft-ui-egui --lib --tests -- --test-threads=4`.

@@ -7,7 +7,7 @@ use crate::theme::{self, Tokens};
 
 mod angle_dial;
 mod color_count;
-pub use angle_dial::angle_dial_row;
+pub use angle_dial::{angle_dial_line, angle_dial_row};
 pub use color_count::color_count_row;
 mod type_ahead;
 pub use type_ahead::list_open as dropdown_list_open;
@@ -57,7 +57,7 @@ pub use panel::{
 pub use scrub::{scrub_label, scrub_option_icon, scrub_option_label};
 #[cfg(test)]
 use slider::DOUBLE_CLICK_S;
-pub use slider::{RowGestures, second_click, slider, slider_row, slider_row_prec, slider_row_with};
+pub use slider::{RowGestures, row_label, second_click, slider, slider_line, slider_row, slider_row_prec, slider_row_with};
 pub(crate) use slider::{count_notches, wheel_notches_of};
 #[cfg(test)]
 pub(crate) use slider::{curve_fraction, curve_value};

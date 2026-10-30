@@ -153,7 +153,7 @@ The window itself draws with the same device (or, with the CPU canvas, one it wa
 
 ## Logs
 
-The desktop app writes its `log` records to standard error and to `logs/photocraft.log` in the settings directory (Linux `~/.config/photocraft/logs/`, macOS `~/Library/Application Support/Photocraft/logs/`, Windows `%APPDATA%\Photocraft\logs\`, or under `PHOTOCRAFT_CONFIG_DIR` / the portable data folder). A start launched from a desktop menu or the Dock has no terminal, so this file is what to attach to a bug report: GPU startup fallbacks, a lost device and the crash guard's panic report all land there. Each launch moves the previous log to `photocraft.1.log` (and that one to `photocraft.2.log`), so the log of a run that crashed survives the next start. A launch while another PhotoCraft is still running leaves that instance's log where it is and writes its own `photocraft-<pid>.log` next to it (the newest two of those are kept once their instances have exited; the `PhotoCraft <version>, log file <path>` line at startup names the file in use). The file stops growing at 16 MiB. `--version` and command-line errors write no file.
+The desktop app writes its `log` records to standard error and to `logs/photocraft.log` in the settings directory (Linux `~/.config/photocraft/logs/`, macOS `~/Library/Application Support/Photocraft/logs/`, Windows `%APPDATA%\Photocraft\logs\`, or under `PHOTOCRAFT_CONFIG_DIR` / the portable data folder). A start launched from a desktop menu or the Dock has no terminal, so this file is what to attach to a bug report: GPU startup fallbacks, a lost device and the crash guard's panic report all land there. Each launch moves the previous log to `photocraft.1.log` (and that one to `photocraft.2.log`), so the log of a run that crashed survives the next start. A launch while another PhotoCraft is still running leaves that instance's log where it is and writes its own `photocraft-<pid>.log` next to it (the newest two of those are kept once their instances have exited; the `PhotoCraft <version>, log file <path>` line at startup names the file in use). The file stops growing at 16 MiB. `--version` and command-line errors write no file. A desktop start that fails before any window exists logs the error and, when no terminal, automation client or headless session can report it, shows it in a dialog naming this file (#7643).
 
 By default PhotoCraft's own crates log at `info` and everything else at `warn`. `RUST_LOG` replaces that with env_logger-style directives, for example `RUST_LOG=debug`, `RUST_LOG=warn,photocraft_gpu=trace` or `RUST_LOG=info,wgpu_core=warn`; a directive ending in `*` covers every target starting with it (`photocraft*=debug`). The logger is `apps/photocraft/src/logging.rs`; the web build logs to the browser console instead.
 
@@ -174,7 +174,7 @@ By default PhotoCraft's own crates log at `info` and everything else at `warn`. 
 | `PHOTOCRAFT_CPU_CANVAS=1` | Force the CPU canvas path instead of the wgpu shader canvas |
 | `PHOTOCRAFT_NATIVE_WAYLAND=1` | Linux: stay on native Wayland when a pen is attached (by default the window then opens through Xwayland, because Wayland gives the app no pen input; #639). A pen is an input device with `BTN_TOOL_PEN` and the `ABS_X`/`ABS_Y` axes; virtual keyboards that claim every key are not pens (#1072) |
 | `PHOTOCRAFT_GPU_ADAPTER=nvidia` | Linux: use the graphics adapter whose name contains this (case-insensitive); overrides `performance.gpuAdapter` for one launch |
-| `WGPU_BACKEND=dx12` | Pick the wgpu backend(s) (`vulkan`, `dx12`, `metal`, `gl`); overrides `performance.gpuBackend` and the startup fallback |
+| `WGPU_BACKEND=dx12` | Pick the wgpu backend(s) (`vulkan`, `dx12`, `metal`, `gl`); overrides `performance.gpuBackend` and the startup fallback. Tests read it too: on Windows with an Intel GPU, run them with `WGPU_BACKEND=dx12`, since loading the Intel Vulkan driver crashes the test process with `STATUS_ACCESS_VIOLATION` (#4) |
 | `WGPU_DX12_COMPILER=fxc` | DX12 shader compiler (`fxc`, `dxc`, `auto`); `dxc` and `auto` look `dxcompiler.dll` up through the DLL search path |
 | `PHOTOCRAFT_GPU_TILE=2048` | Force GPU canvas tiling (tests tile seams) |
 | `PHOTOCRAFT_TEXEL_GUARD=1` (or `=0`) | Force on (off) uploading egui's fully transparent texels as alpha 1/255. On by default only for Intel Iris Xe on DX12, whose driver shows stale memory in all-zero texture blocks: red squares in brush previews and tool icons (`ui-egui/src/texel_guard.rs`; check a GPU with `cargo run --release -p photocraft-gpu --example zero_block_probe -- dx12 400`) |
@@ -250,6 +250,17 @@ cargo run -p photocraft-cli -- batch --actions actions.json --in photos/ --out d
 cargo run -p photocraft-cli -- commands --filter blur                    # the command registry
 cargo run -p photocraft-cli --example man-and-completions -- out/       # man pages + bash/zsh/fish/elvish/PowerShell completions
 ```
+
+The Linux AppImage includes the same CLI. Select it with a leading `--cli`:
+
+```sh
+./photocraft-<version>-linux-x86_64.AppImage --cli --help
+./photocraft-<version>-linux-x86_64.AppImage --cli mcp
+ln -s photocraft-<version>-linux-x86_64.AppImage photocraft-cli
+./photocraft-cli commands --filter blur
+```
+
+The `--cli` selector is removed; all remaining arguments, stdin, stdout, stderr and the exit status are passed through. CLI launches skip desktop integration. The symlink form uses the AppImage runtime's `ARGV0`; the normal AppImage name launches the GUI.
 
 `actions.json` holds the steps of a recorded action: `[["<id>", {…}], …]`, `[{"command": "<id>", "params": {…}}, …]` or bare ids, as a list or wrapped in `{"actions": …}` or `{"steps": …}`; a droplet file works too. It can also be an Actions set (the Actions panel's `actions.json`, `{"actions": [{"name": …, "steps": […]}, …]}`): `--action <name>` picks the action to play (optional when the set holds one), and the whole set is loaded for each file, so a step that plays another action of the set works. `batch` refuses an `--out` folder that is the `--in` folder, since the results would replace the originals, unless `--in-place` is given. `run` prints one JSON line per command result.
 
@@ -492,6 +503,8 @@ cargo run --release -p photocraft-ui-egui --example perf_scenarios -- \
 That writes the row's own report and stops there: it does **not** evaluate the budget, so read
 `p50_ms`/`p95_ms`/`max_ms` out of the JSON yourself. Use `cargo xtask perf --bench <name>` when you
 want the verdict, the merged `results.json`/`summary.md` and the regression check.
+Every `--bench` name must match a `[[bench]]` name in `perf/budgets.toml`; an unknown name
+is rejected before any benchmark runs or any report or baseline is written.
 
 Read the sample count before quoting a percentile. `--reps` defaults to 7 in `--quick` and 15
 otherwise, it is per bench, and some rows cap it themselves (the `#211` algorithm rows use

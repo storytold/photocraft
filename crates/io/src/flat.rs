@@ -730,6 +730,17 @@ fn prepare_flat(mut img: Image, format: Format, warnings: &mut Vec<String>) -> R
             img = gray;
             warnings.push(format!("colours converted to sGray; {format:?} can't embed the document's colour profile"));
         }
+    } else if img.icc.is_none() {
+        // An untagged document is in the default working space for its mode, which is how the
+        // canvas shows it and what Photoshop embeds for it (#9325): sRGB, and for gray the Dot
+        // Gain 20 %-compatible working gray (not sGray, which would show the same samples
+        // darker). A JPEG or PNG with Embed Color Profile then says so instead of leaving
+        // viewers to guess. The codec still leaves it out when embedding is off.
+        if img.layout().is_rgb() {
+            img.icc = Some(Builtin::Srgb.profile().to_bytes().to_vec());
+        } else if img.layout().is_gray() {
+            img.icc = Some(Builtin::DotGain20Compat.profile().to_bytes().to_vec());
+        }
     }
     Ok(img)
 }
@@ -1232,6 +1243,69 @@ mod cmyk_band_tests {
         let first = out.data().get(..4).unwrap().to_vec();
         assert!(out.data().chunks(4).all(|p| p == first.as_slice()), "{:?}", out.data());
         assert_eq!(first[3], 255);
+    }
+}
+
+#[cfg(test)]
+mod assumed_profile_tests {
+    use super::*;
+    use photocraft_cms::{Builtin, Profile};
+    use photocraft_color::Color;
+
+    fn doc(mode: ColorMode) -> Document {
+        Document::with_background("t", Size::new(16, 12), mode, SampleType::U8, Color::rgba(0.78, 0.39, 0.2, 1.0))
+    }
+
+    fn embedded(r: &ExportResult) -> Option<String> {
+        codecs::decode(&r.bytes).unwrap().icc.map(|b| Profile::parse(&b).unwrap().description)
+    }
+
+    #[test]
+    fn streamed_png_keeps_the_same_assumed_profile_and_pixels() {
+        for mode in [ColorMode::Rgb, ColorMode::Grayscale] {
+            for embed in [false, true] {
+                let d = doc(mode);
+                let mut opts = ExportOptions::default();
+                opts.encode.embed_icc = embed;
+                let whole = export_flat(&d, Format::Png, &opts).unwrap();
+                let streamed = export_png_streamed(&d, &opts, &photocraft_raster::Interrupt::NONE, 3).unwrap();
+                assert_eq!(embedded(&streamed), embedded(&whole));
+                let expected = if mode == ColorMode::Rgb { Builtin::Srgb } else { Builtin::DotGain20Compat };
+                assert_eq!(embedded(&streamed), embed.then(|| expected.description().to_string()));
+                let a = codecs::decode(&whole.bytes).unwrap();
+                let b = codecs::decode(&streamed.bytes).unwrap();
+                assert_eq!((a.dimensions(), a.layout(), a.sample_type()), (b.dimensions(), b.layout(), b.sample_type()));
+                assert_eq!(a.data(), b.data());
+            }
+        }
+    }
+
+    /// #9325: an untagged document is in the profile assumed for its mode, and Photoshop embeds
+    /// that (sRGB IEC61966-2.1 for a new or untagged RGB document) when the profile is embedded.
+    #[test]
+    fn untagged_documents_embed_the_profile_they_are_assumed_to_be_in() {
+        let opts = ExportOptions::default();
+        assert!(opts.encode.embed_icc);
+        for ext in ["jpg", "png", "tif", "webp"] {
+            let r = crate::export(&doc(ColorMode::Rgb), ext, &opts).unwrap();
+            assert_eq!(embedded(&r).as_deref(), Some(Builtin::Srgb.description()), "{ext}");
+        }
+        // #9342 review: an untagged gray document shows through the default working gray (Dot
+        // Gain 20 %-compatible), so that is the profile its samples are tagged with, not sGray
+        // (which would show them darker than the canvas).
+        let r = crate::export(&doc(ColorMode::Grayscale), "png", &opts).unwrap();
+        assert_eq!(embedded(&r).as_deref(), Some(Builtin::DotGain20Compat.description()));
+        // Embed Color Profile off: still none.
+        let mut off = ExportOptions::default();
+        off.encode.embed_icc = false;
+        assert_eq!(embedded(&crate::export(&doc(ColorMode::Rgb), "jpg", &off).unwrap()), None);
+        // A format without profiles gets no warning about one.
+        let r = crate::export(&doc(ColorMode::Rgb), "bmp", &opts).unwrap();
+        assert!(!r.warnings.iter().any(|w| w.contains("profile")), "{:?}", r.warnings);
+        // A tagged document keeps its own profile.
+        let mut p3 = doc(ColorMode::Rgb);
+        p3.icc_profile = Some(Arc::new(Builtin::DisplayP3.profile().to_bytes().to_vec()));
+        assert_eq!(embedded(&crate::export(&p3, "jpg", &opts).unwrap()).as_deref(), Some(Builtin::DisplayP3.description()));
     }
 }
 

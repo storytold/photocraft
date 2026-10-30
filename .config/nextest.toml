@@ -19,11 +19,11 @@ gpu = { max-threads = 4 }
 filter = 'package(photocraft-gpu) | (package(photocraft-ui-egui) & (kind(test) | test(/canvas|gpu|mip|type_tool|background_redraw::|floating_group_titles|swap_arrow::tests::rendered_glyph/)))'
 test-group = 'gpu'
 
-# CI (`--profile ci`, .github/workflows/ci.yml). Stops at the first failure so a red PR frees its
-# runner, fails a test that hangs instead of letting it hold the runner, and repeats every failure
-# at the end of the log. The default profile's GPU override still applies.
+# CI (`--profile ci`, .github/workflows/ci.yml). Collect all failures in one integration run
+# instead of exposing one regression per rebuild. A hanging test still terminates, and every
+# failure is repeated at the end of the log. The default profile's GPU override still applies.
 [profile.ci]
-fail-fast = true
+fail-fast = false
 slow-timeout = { period = "60s", terminate-after = 10 }
 failure-output = "immediate-final"
 

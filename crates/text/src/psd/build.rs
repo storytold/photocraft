@@ -54,6 +54,7 @@ pub(crate) fn style_sheet_data(s: &CharStyle, font: usize, k: f32) -> E {
                 FontBaseline::Subscript => 2,
             }),
         ),
+        ("BaselineDirection".into(), E::Int(if s.rotate_roman { 2 } else { 1 })),
         ("Underline".into(), E::Bool(s.underline)),
         ("Strikethrough".into(), E::Bool(s.strikethrough)),
         ("Ligatures".into(), E::Bool(s.ligatures)),

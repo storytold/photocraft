@@ -127,7 +127,7 @@ impl Session {
 
     /// [`Self::disabled_reason`] for a call with `params`.
     pub fn disabled_reason_with(&self, id: &str, params: &Value) -> Option<String> {
-        let Some(s) = commands::find(id) else { return Some(format!("unknown command `{id}`")) };
+        let Some(s) = commands::find(id) else { return Some(EngineError::UnknownCommand(id.into()).to_string()) };
         self.precondition(s, &channel_cmds::inject_target(self, id, params.clone())).err().or_else(|| self.job_conflict(id, s.journal))
     }
 
@@ -140,13 +140,18 @@ impl Session {
         if spec.id == "layer.new.layerFromBackground" && params.get("ifPresent").and_then(Value::as_bool) == Some(true) {
             return self.active().map(|_| ()).ok_or_else(|| "no document open".into());
         }
+        if spec.id == "layer.smartFilter.deleteFilterMask" && params.get("ifPresent").and_then(Value::as_bool) == Some(true) {
+            return smart_cmds::smart_layer_active(self);
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
 
     /// Whether `id` is a layer command whose `"layer"` param names an existing layer, so it needs no
     /// active layer (#2457). Matches how `layer_param` resolves the layer when the command runs.
     fn names_existing_layer(&self, id: &str, params: &Value) -> bool {
-        matches!(id, "layer.hideLayers" | "layer.showLayers" | "layer.renameLayer")
+        (matches!(id, "layer.hideLayers" | "layer.showLayers" | "layer.renameLayer")
+            || (id == "layer.setProps"
+                && params.as_object().is_some_and(|o| o.contains_key("visible") && o.keys().all(|k| matches!(k.as_str(), "layer" | "visible" | "coalesce")))))
             && params.get("layer").and_then(Value::as_u64).is_some_and(|l| self.active().is_some_and(|st| st.doc.layer(LayerId(l)).is_some()))
     }
 

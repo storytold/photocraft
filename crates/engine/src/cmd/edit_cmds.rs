@@ -916,7 +916,18 @@ fn edit_guide(s: &mut Session, p: &Value) -> Result<Value> {
 /// View › New Guide / guide moves (undoable, like Photoshop's "New Guide"/"Move Guide" states).
 fn guide_cmd(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
     let vertical = p.get("orientation").and_then(Value::as_str).unwrap_or("horizontal") == "vertical";
-    let pos = guide_position(s, p, vertical)?;
+    // Move Guide can turn the guide (⌥ while dragging it, as in Photoshop): `toOrientation`.
+    let to_vertical = match p.get("toOrientation").map(|v| v.as_str()) {
+        None => vertical,
+        Some(Some("vertical")) => true,
+        Some(Some("horizontal")) => false,
+        Some(_) => return Err(EngineError::Other("`toOrientation` must be \"horizontal\" or \"vertical\"".into())),
+    };
+    if to_vertical != vertical && op != "move" {
+        return Err(EngineError::Other("`toOrientation` applies to view.moveGuide only".into()));
+    }
+    // A % position is of the axis the guide ends up on.
+    let pos = guide_position(s, p, to_vertical)?;
     let color = if op == "new" { guide_color(p)? } else { None };
     let index = p.get("index").and_then(Value::as_u64).map(|v| v as usize);
     let label = match op {
@@ -939,10 +950,20 @@ fn guide_cmd(s: &mut Session, p: &Value, op: &str) -> Result<Value> {
             "move" => {
                 let i = index.filter(|i| *i < g.len()).ok_or(EngineError::Other("no such guide".into()))?;
                 let to = pos.ok_or(EngineError::Other("missing `position`".into()))?;
-                let from = std::mem::replace(&mut g[i], to);
+                let from = if to_vertical == vertical {
+                    std::mem::replace(&mut g[i], to)
+                } else {
+                    let from = g.remove(i);
+                    if to_vertical {
+                        guides.vertical.push(to)
+                    } else {
+                        guides.horizontal.push(to)
+                    }
+                    from
+                };
                 // The guide takes its colour along; another guide left at the old position keeps it.
                 if let Some(rgb) = guides.color(vertical, from) {
-                    guides.set_color(vertical, to, Some(rgb));
+                    guides.set_color(to_vertical, to, Some(rgb));
                 }
                 guides.prune_colors();
             }
@@ -1088,7 +1109,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Move Guide",
             &[],
             None,
-            r##"{"orientation":"horizontal|vertical","index":n,"position":px or "<number><unit>"} (units as for view.newGuide)"##,
+            r##"{"orientation":"horizontal|vertical","index":n,"position":px or "<number><unit>","toOrientation":"horizontal|vertical"?} (units as for view.newGuide; toOrientation turns the guide, its position then on the new axis)"##,
             has_doc,
             |s, p| guide_cmd(s, p, "move")
         ),

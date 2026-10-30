@@ -4773,3 +4773,10 @@ cameraRaw	Show Vectorscope	Näytä vektoriskooppi
 cameraRaw	Tone Histogram	Sävyhistogrammi
 cameraRaw	Vignetting	Vinjetointi
 cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
+	Current Layer:	Nykyinen taso:
+	Delete effect	Poista tehoste
+	Move effect down	Siirrä tehostetta alas
+	Move effect up	Siirrä tehostetta ylös
+	Path operations	Polkutoiminnot
+	The path was discarded	Polku hylättiin
+	The path was kept as the Work Path	Polku säilytettiin työpolkuna
