@@ -395,7 +395,7 @@ pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: 
 fn alloc_error(e: AllocationError) -> IoError {
     match e {
         AllocationError::SizeOverflow => IoError::Unsupported("image too large".into()),
-        AllocationError::NotEnoughMemory { bytes } => IoError::Unsupported(format!("not enough memory for a {} MB image", bytes >> 20)),
+        AllocationError::NotEnoughMemory { .. } => IoError::Unsupported("not enough memory to open this image".into()),
     }
 }
 
