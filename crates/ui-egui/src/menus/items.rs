@@ -181,6 +181,22 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             items.insert(after + 1 + k, it);
         }
     }
+    // View › Pixel Aspect Ratio: saved custom ratios follow the presets, checked while in use, as
+    // Photoshop lists them (#9950). They go at the end of the submenu, after the last preset, so
+    // they stay listed whichever preset comes last.
+    let pp: Vec<String> = vec!["View".into(), "Pixel Aspect Ratio".into()];
+    if !app.ui.shell.custom_pars.is_empty()
+        && let Some(after) = items.iter().rposition(|i| i.path == pp)
+    {
+        let separator = MenuItem { id: "---".into(), label: "---".into(), path: pp.clone(), shortcut: None, enabled: false, checked: None, color: None };
+        let entries = app.ui.shell.custom_pars.iter().map(|c| {
+            let id = format!("{}{}", crate::workspace_ui::SAVED_PAR, c.name);
+            let checked = checked(app, &id);
+            MenuItem { id, label: format!("{} ({})", c.name, c.ratio), path: pp.clone(), shortcut: None, enabled: true, checked, color: None }
+        });
+        let rows: Vec<MenuItem> = std::iter::once(separator).chain(entries).collect();
+        items.splice(after + 1..after + 1, rows);
+    }
     // Keep the update command with the links, ahead of System Info and About.
     if let Some(at) = items.iter().position(|i| i.id == "help.checkForUpdates") {
         let update = items.remove(at);
