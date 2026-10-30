@@ -7,6 +7,7 @@ use photocraft_codecs::*;
 
 const COMPRESSION: u16 = 259;
 const SUBSAMPLING: u16 = 530;
+const YCBCR_COEFFICIENTS: u16 = 529;
 const REFERENCE_BLACK_WHITE: u16 = 532;
 
 /// A directory whose Compression is `c`.
@@ -80,6 +81,16 @@ fn reference_black_white_sets_the_code_range() {
 }
 
 #[test]
+fn ycbcr_coefficients_set_the_luma_weights() {
+    // Weights 0.25, 0.5, 0.25 with Cb −64 and Cr +64: R = Y + 1.5·Cr, B = Y + 1.5·Cb, and G keeps Y
+    // (BT.601 would give R 218 and B 15).
+    let weights = [rational(1, 4), rational(1, 2), rational(1, 4)];
+    let dir = strips(1, 1, 8, 3, 6, 1, &[128, 64, 192]).tag(SUBSAMPLING, SHORT, &[1, 1]).tag(YCBCR_COEFFICIENTS, RATIONAL, &weights);
+    let img = decode(&build(true, false, &[dir], &[0]).bytes).unwrap();
+    assert_eq!(rgb(&img), [224, 128, 32]);
+}
+
+#[test]
 fn sixteen_bit_ycbcr_reads_as_rgb() {
     let px: Vec<u8> = [65535u16, 32768, 32768, 0, 32768, 32768].iter().flat_map(|v| v.to_le_bytes()).collect();
     let dir = strips(2, 1, 16, 3, 6, 1, &px).tag(SUBSAMPLING, SHORT, &[1, 1]);
@@ -103,7 +114,7 @@ fn unsupported_ycbcr_files_fail_cleanly() {
     // Coefficients and ReferenceBlackWhite that would divide by zero fall back to the defaults.
     let bad = strips(1, 1, 8, 3, 6, 1, &[255, 128, 128])
         .tag(SUBSAMPLING, SHORT, &[1, 1])
-        .tag(529, RATIONAL, &[rational(0, 1), rational(0, 0), rational(5, 1)])
+        .tag(YCBCR_COEFFICIENTS, RATIONAL, &[rational(0, 1), rational(0, 0), rational(5, 1)])
         .tag(REFERENCE_BLACK_WHITE, RATIONAL, &[rational(7, 1); 6]);
     let img = decode(&build(true, false, &[bad], &[0]).bytes).unwrap();
     assert_eq!(&img.to_rgba8()[..3], &[255, 255, 255]);
