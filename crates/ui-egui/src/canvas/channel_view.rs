@@ -142,16 +142,23 @@ fn composite_sampled(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
 }
 
 /// Whether a proxy composite picks the full composite's pixels: no layer effects or vector masks
-/// ([`proxy_faithful`](photocraft_compose::proxy::proxy_faithful)) and no feathered masks, whose
-/// radius is in document pixels.
+/// ([`proxy_faithful`](photocraft_compose::proxy::proxy_faithful)), no feathered masks, whose
+/// radius is in document pixels, and no pattern fills, whose tiles keep their size on a proxy
+/// unless a cache of the same fill is shrunk with it.
 fn proxy_matches(doc: &Document) -> bool {
+    use photocraft_doc::{Fill, LayerContent};
     // A stack, not recursion: groups can nest deeply.
     let mut stack: Vec<&photocraft_doc::Layer> = doc.layers.iter().collect();
     while let Some(l) = stack.pop() {
         if photocraft_compose::masks::has_feather(l) {
             return false;
         }
-        if let photocraft_doc::LayerContent::Group(g) = &l.content {
+        if let LayerContent::Fill(fill @ Fill::Pattern { .. }) = &l.content
+            && l.fill_cache.as_ref().is_none_or(|c| c.fill != *fill)
+        {
+            return false;
+        }
+        if let LayerContent::Group(g) = &l.content {
             stack.extend(&g.children);
         }
     }

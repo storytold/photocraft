@@ -531,3 +531,25 @@ fn feathered_masks_keep_the_full_resolution_composite() {
     doc.layers.push(Layer::group("group", vec![inner]));
     assert!(!proxy_matches(&doc));
 }
+
+/// A pattern fill's tiles keep their size on a proxy, so it would sample other pattern pixels:
+/// such documents keep the full-resolution composite unless the fill's own cache is shrunk with
+/// the proxy.
+#[test]
+fn uncached_pattern_fills_keep_the_full_resolution_composite() {
+    use photocraft_doc::{Fill, FillCache, Layer, LayerContent};
+    let pattern = Fill::Pattern { name: "p".into(), scale: 1.0, id: "p".into(), angle: 0.0, link: true, phase: (0.0, 0.0) };
+    let mut doc = spot_doc(ColorMode::Rgb, photocraft_color::SampleType::U8, 1.0, 1.0);
+    doc.layers.push(Layer::group("group", vec![Layer::new("pattern", LayerContent::Fill(pattern.clone()))]));
+    assert!(!proxy_matches(&doc));
+    let mut stale = Layer::new("pattern", LayerContent::Fill(pattern.clone()));
+    stale.fill_cache = Some(FillCache { fill: Fill::Solid(photocraft_color::Color::WHITE), surface: Surface::new(doc.pixel_format()) });
+    doc.layers.pop();
+    doc.layers.push(stale);
+    assert!(!proxy_matches(&doc));
+    let mut cached = Layer::new("pattern", LayerContent::Fill(pattern.clone()));
+    cached.fill_cache = Some(FillCache { fill: pattern, surface: Surface::new(doc.pixel_format()) });
+    doc.layers.pop();
+    doc.layers.push(cached);
+    assert!(proxy_matches(&doc));
+}
