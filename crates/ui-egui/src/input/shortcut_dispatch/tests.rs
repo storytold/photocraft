@@ -638,10 +638,12 @@ fn delete_with_several_layers_selected_deletes_them_even_with_the_mask_targeted(
     let first = photocraft_doc::LayerId(s.execute("layer.newAdjustmentLayer.curves", json!({})).unwrap()["layer"].as_u64().unwrap());
     let second = photocraft_doc::LayerId(s.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap()["layer"].as_u64().unwrap());
     s.execute("layer.select", json!({"layer": first.0, "mode": "add"})).unwrap();
+    // The new layers took the harness's selection as their masks (#8801): select again.
+    s.execute("select.all", json!({})).unwrap();
     let st = s.active().unwrap();
     assert_eq!(st.selected_layers().len(), 2);
     assert!(st.active_layer.and_then(|l| st.doc.layer(l)).is_some_and(|l| l.mask.is_some()), "the active adjustment layer has a mask");
-    assert!(st.doc.selection.is_some(), "the harness keeps a selection");
+    assert!(st.doc.selection.is_some(), "a selection is active");
     h.state_mut().ui.mask_target = true;
     h.run_steps(2);
     let n = names(&h).len();

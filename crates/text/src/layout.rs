@@ -10,8 +10,8 @@
 //! into text space: a line becomes a column running top to bottom, and successive columns advance
 //! right to left. Within a column, CJK characters stay upright (centred on the column, placed with
 //! the font's vertical metrics: `VORG`, `vhea`/`vmtx`, else the ideographic em box) and use the
-//! font's vertical alternates (`vert`) for punctuation, brackets and the long-vowel mark; other
-//! text (Latin, digits) runs rotated 90° clockwise, Photoshop's default. Lines, clusters, carets
+//! font's vertical alternates (`vert`) for punctuation, brackets and the long-vowel mark. Roman
+//! letters stand upright one per em unless the run sets `rotate_roman`. Lines, clusters, carets
 //! and hit tests stay in line space; [`TextLayout::to_text`] / [`TextLayout::to_line`] convert.
 
 use std::borrow::Cow;

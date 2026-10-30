@@ -130,6 +130,14 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
             failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", actions_cmds::MAX_PLAYBACK_STEPS)}));
             break;
         }
+        let resolved = match actions_cmds::playback_params(&app.session, id, p) {
+            Ok(p) => p,
+            Err(e) => {
+                failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+                break;
+            }
+        };
+        let p = &resolved;
         // The gate judges the step before its dialog opens: a denied step neither runs nor
         // pauses.
         if let Some(auth) = app.session.authorize
@@ -157,6 +165,8 @@ fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>)
         let target = app.session.active().map(|d| d.doc.id);
         let result = if id == "actions.play" {
             play(app, p)
+        } else if actions_cmds::saves_smart_contents(&app.session, id) {
+            app.session.execute(actions_cmds::SAVE_CONTENTS, json!({})).map_err(|e| e.to_string())
         } else if actions_cmds::shell_save_command(id) {
             // Write synchronously, so the next step doesn't meet a document locked by a
             // background save.

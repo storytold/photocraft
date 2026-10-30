@@ -60,7 +60,7 @@ pub mod zoom_window_fit;
 
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
-pub(crate) use cursors::{alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
+pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
 #[cfg(test)]
 pub(crate) use display::GPU_OUTPUT;
@@ -106,6 +106,8 @@ pub(crate) use tabs::tab_title_at;
 use tabs::{TEAR_OFF, pro_tab_title, tab_context_items, tab_drop_index, tab_move_target, tabs, torn_off};
 pub use tabs::{TabStrip, document_area, extra_windows};
 use tabs::{dots, paint_dots};
+#[cfg(test)]
+use tabs::{main_canvas_document, move_target_after_filter};
 #[cfg(test)]
 pub(crate) use textures::detail_plan;
 pub(crate) use textures::{DetailPlan, damage_since, effect_reach, ensure_texture_in_view, retain_gpu_documents, shown_as_document};
@@ -978,6 +980,7 @@ fn handle_canvas_tool_stroke(
         && app.drag.is_none()
         && response.is_pointer_button_down_on()
         && ui.input(|i| i.pointer.primary_pressed())
+        && !crate::brush_mode_menu::blocks_canvas(app, ctx)
         && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p))
     {
         let d = xf.to_doc(p);
@@ -1441,7 +1444,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
         t if app.alt_sampling
             || (app.drag.is_none()
                 && !app.services.right_button_down.as_ref().is_some_and(|f| f())
-                && alt_samples(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) =>
+                && alt_picks(t, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))) =>
         {
             // While it samples (button held), the comparison ring replaces the cursor (#213).
             if let Some(icon) = eyedropper_ring(app, painter, xf, p, response.is_pointer_button_down_on()) {
@@ -1546,6 +1549,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
             if precise_other_cursor(app) { egui::CursorIcon::Crosshair } else { pen_cursor(ui.ctx(), tool, p) }
         }
         // Preferences › Cursors › Other Cursors: Precise shows a crosshair for every tool.
+        Tool::Move if crate::move_mods::copying(app, alt) => egui::CursorIcon::Copy,
         Tool::Move | Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask
             if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise =>
         {
@@ -1738,6 +1742,21 @@ fn sync_view_to_document(app: &PhotocraftApp, ctx: &egui::Context, view: &mut Vi
     aspect
 }
 
+fn update_polygon_camera(app: &mut PhotocraftApp, ctx: &egui::Context, (idx, primary): (usize, bool), rect: Rect, view: &mut View, ppp: f32, aspect: f32) {
+    let previous_center = view.center;
+    if primary {
+        polygon_cancel_stale(app);
+        polygon_edge_scroll(app, ctx, idx, rect, view, ppp);
+    }
+    // Bounds belong to an actual edge-scroll update, not an idle/finished polygon.
+    if view.center != previous_center && !app.session.prefs().tools.overscroll {
+        crate::scrollbars::clamp_view_with_aspect(view, rect.size(), ppp, aspect);
+    }
+    if view.center != previous_center {
+        ctx.request_repaint();
+    }
+}
+
 pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect: Rect, mut view: View, primary: bool) -> View {
     let ctx = ui.ctx().clone();
     // The camera as the app holds it before this frame's input. The canvas works on its own copy
@@ -1795,6 +1814,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let doc = app.session.documents()[idx].doc.clone();
     let size = [doc.size.width, doc.size.height];
     let aspect = sync_view_to_document(app, &ctx, &mut view, &doc, rect, ppp);
+    update_polygon_camera(app, &ctx, (idx, primary), rect, &mut view, ppp, aspect);
+
     let flip = app.ui.view.flip_horizontal;
     // Document rendering follows the target; only shader uniforms and overlay geometry ease.
     let target_xf = ViewXform { rect, zoom: view.zoom / ppp, center: view.center, flip, rotation: view.rotation, aspect };
@@ -1874,6 +1895,10 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     crate::crop_ui::cancel_stale(app);
     crate::crop_ui::ensure_frame(app);
     let mut drawing = crate::crop_ui::active(app);
+    if let Some(pen) = app.ui.pen.as_mut().filter(|pen| pen.dragging && !pen.curvature) {
+        pen.reposition = reposition;
+        drawing = true;
+    }
     if let Some(d) = app.drag.as_mut().filter(|d| crate::hold_keys::repositions(d.tool)) {
         d.reposition = reposition;
         drawing = true;
@@ -2604,4 +2629,59 @@ mod lasso_preview_tests {
         let (dashes, solid) = painted(&mut app, |app, p| draw_tool_state(app, p, &xf(), None));
         assert_eq!((dashes, solid), (0, 1), "Magnetic Lasso: the traced border is solid");
     }
+}
+
+pub(crate) use drag::cancel_stale_vector_drag;
+
+#[cfg(test)]
+#[path = "pen_gesture_owner_tests.rs"]
+mod pen_gesture_owner_tests;
+#[cfg(test)]
+#[path = "pen_path_visual_tests.rs"]
+mod pen_path_visual_tests;
+
+/// Between Polygonal Lasso clicks, reveal more of the image near or beyond the viewport edge.
+/// Only the view moves: fixed vertices stay in document coordinates, including while button-up.
+fn polygon_edge_scroll(app: &PhotocraftApp, ctx: &egui::Context, idx: usize, rect: Rect, view: &mut View, ppp: f32) {
+    if app.ui.polygon.is_empty()
+        || app.ui.tool != Tool::PolygonLasso
+        || app.session.active_index() != Some(idx)
+        || !app.ui.dialogs.is_empty()
+        || app.camera_raw.is_some()
+        || app.discard.is_some()
+        || app.drag.is_some()
+        || !crate::menus::modal_allows(app, "select.lasso")
+        || app.ui.transform.is_some()
+        || crate::distort_ui::modal_workspace(app).is_some()
+        || ctx.text_edit_focused()
+        || egui::Popup::is_any_open(ctx)
+        || crate::hold_keys::for_frame(app, ctx, false).is_some()
+    {
+        return;
+    }
+    let Some((pointer, dt)) = ctx.input(|i| (i.focused && !i.pointer.middle_down()).then(|| i.pointer.hover_pos().map(|p| (p, i.stable_dt))).flatten()) else {
+        return;
+    };
+    let zoom = view.zoom / ppp;
+    if !pointer.x.is_finite() || !pointer.y.is_finite() || !dt.is_finite() || dt <= 0.0 || !zoom.is_finite() || zoom <= 0.0 {
+        return;
+    }
+    // Moving over a neighbouring document is not a request to pan either tiled view.
+    if arranged_cells(app, app.last_canvas_rect).is_some_and(|cells| cells.iter().any(|(other, cell)| *other != idx && cell.contains(pointer))) {
+        return;
+    }
+    let edge = 32.0_f32.min(rect.width() * 0.25).min(rect.height() * 0.25);
+    if edge <= 0.0 {
+        return;
+    }
+    let speed = |p: f32, lo: f32, hi: f32| {
+        let direction = ((edge - (hi - p)) / edge).clamp(0.0, 1.0) - ((edge - (p - lo)) / edge).clamp(0.0, 1.0);
+        if direction == 0.0 { 0.0 } else { direction.signum() * (80.0 + 520.0 * direction.abs()) }
+    };
+    let velocity = vec2(speed(pointer.x, rect.left(), rect.right()), speed(pointer.y, rect.top(), rect.bottom()));
+    let velocity = velocity * (600.0 / velocity.length().max(600.0));
+    let xf = ViewXform { rect, zoom, center: view.center, flip: app.ui.view.flip_horizontal, rotation: view.rotation, aspect: app.ui.view.display_aspect() };
+    let delta = xf.unmap_vec(velocity) * dt.min(0.05) / zoom;
+    view.center[0] += delta.x;
+    view.center[1] += delta.y;
 }

@@ -625,7 +625,7 @@ fn gpu_budget(app: &mut PhotocraftApp, gpu: &crate::gpu_canvas::GpuCanvas, idx: 
 /// Memory Usage and GPU Memory (Preferences › Performance), in bytes.
 fn budget_allowance(app: &PhotocraftApp) -> (u64, u64) {
     let performance = &app.session.prefs().performance;
-    (u64::from(performance.memory_usage_mb).saturating_mul(1 << 20), u64::from(performance.gpu_memory_mb).saturating_mul(1 << 20))
+    (u64::from(performance.effective_memory_usage_mb()).saturating_mul(1 << 20), u64::from(performance.gpu_memory_mb).saturating_mul(1 << 20))
 }
 
 /// The document pixels a view shows, with a margin for filtering. Uses all four canvas corners
