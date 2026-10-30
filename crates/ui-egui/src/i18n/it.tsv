@@ -4625,3 +4625,23 @@ shape	Appearance	Aspetto
 	Refine Hair needs hair detection, which isn't available yet	Migliora capelli richiede il rilevamento dei capelli, non ancora disponibile
 	Select and Mask was closed: its document is no longer the active one	Seleziona e maschera è stato chiuso: il suo documento non è più quello attivo
 	Select and Mask was closed: another layer was selected	Seleziona e maschera è stato chiuso: è stato selezionato un altro livello
+
+# Histogram panel options and statistics, and the update notice (2026-10)
+	Calculating…	Calcolo in corso…
+	Click to refresh histogram with uncached data	Fai clic per aggiornare l'istogramma con dati non in cache
+	Count:	Conteggio:
+	Level:	Livello:
+	Percentile:	Percentile:
+	Source:	Sorgente:
+	Uncached Refresh	Aggiorna senza cache
+	Show Statistics	Mostra statistiche
+	Show Channels in Color	Mostra canali a colori
+	Update and Restart	Aggiorna e riavvia
+	Release Notes	Note di rilascio
+
+# Render path in the status bar, layer comp order and the font picker (2026-10)
+	CPU Rendering	Rendering su CPU
+	Drawn on the CPU: {reason}. Click for System Info.	Disegnato sulla CPU: {reason}. Fai clic per Info sistema.
+	Move Up	Sposta su
+	Move Down	Sposta giù
+	No matching fonts	Nessun font corrispondente
