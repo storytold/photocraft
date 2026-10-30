@@ -72,10 +72,10 @@ pub use setup::{Refresh, device_descriptor, device_limits, display_texels, timin
 use shaders::{CANVAS_WGSL, ENCODE_WGSL, MIP_WGSL};
 #[cfg(not(target_arch = "wasm32"))]
 use texels::texel_to_f32;
-pub use texels::{LayerFit, premultiply_rgba8, premultiply_rgba16f};
+pub use texels::{LayerFit, premultiply_rgba8, premultiply_rgba16f, texels, texels_of_part};
+use texels::{canvas_texels, texel_bytes, texels_into};
 #[cfg(test)]
 use texels::{f16_to_f32, f32_to_f16};
-use texels::{texel_bytes, texels, texels_into};
 
 /// Default tile side; documents up to this size (and the device limit) use a single texture.
 pub const DEFAULT_TILE: u32 = 8192;
@@ -503,23 +503,47 @@ impl GpuCanvas {
     }
 
     /// Replace the whole document image with a `format` texture of premultiplied `texels`.
-    fn upload_full_as(&self, doc: u64, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) {
-        if size[0] == 0 || size[1] == 0 || texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(format) || !self.health.is_ok() {
-            return;
+    /// Returns whether it wrote the texture (not when the GPU is unhealthy or has no resources).
+    fn upload_full_as(&self, doc: u64, size: [u32; 2], format: wgpu::TextureFormat, texels: &[u8]) -> bool {
+        if texels.len() as u64 != size[0] as u64 * size[1] as u64 * texel_bytes(format) {
+            return false;
         }
         let (device, queue) = (&self.rs.device, &self.rs.queue);
         let mut renderer = self.rs.renderer.write();
-        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        if !self.reserve_in(res, doc, size, format) {
+            return false;
+        }
+        let Some(d) = res.docs.get(&doc) else { return false };
+        d.write(queue, [0, 0], size, size[0], texels);
+        d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
+        true
+    }
+
+    /// Make sure document `doc` has a `size` texture for a preview of a document of `depth`
+    /// (see [`GpuCanvas::format_for`]) without writing it, so [`GpuCanvas::upload_buffer_rect`]
+    /// can fill only what is shown. A texture it creates starts transparent; one it keeps holds its
+    /// old pixels. Returns false when there is no texture.
+    pub fn reserve_buffer(&self, doc: u64, size: [u32; 2], depth: photocraft_doc::SampleType) -> bool {
+        let format = self.format_for(depth, size);
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        self.reserve_in(res, doc, size, format)
+    }
+
+    /// [`GpuCanvas::reserve_buffer`] with the renderer's resources already locked.
+    fn reserve_in(&self, res: &mut Resources, doc: u64, size: [u32; 2], format: wgpu::TextureFormat) -> bool {
+        if size[0] == 0 || size[1] == 0 || !self.health.is_ok() {
+            return false;
+        }
         if res.docs.get(&doc).is_none_or(|d| d.size != size || d.format != format) {
-            let Some(tex) = DocTextures::new(device, res, size, self.tile, format) else {
+            let Some(tex) = DocTextures::new(&self.rs.device, res, size, self.tile, format) else {
                 res.docs.remove(&doc);
-                return;
+                return false;
             };
             res.docs.insert(doc, tex);
         }
-        let Some(d) = res.docs.get(&doc) else { return };
-        d.write(queue, [0, 0], size, size[0], texels);
-        d.regenerate_mips(device, queue, res, [0, 0, size[0], size[1]]);
+        true
     }
 
     /// Replace a rectangle `origin..origin+size` of an uploaded document with premultiplied texels
@@ -555,10 +579,23 @@ impl GpuCanvas {
 
     /// Upload a CPU composite covering the whole document (a preview of a document of `depth`:
     /// see [`GpuCanvas::format_for`]).
-    pub fn upload_buffer_full(&self, doc: u64, buf: &photocraft_compose::Buffer, depth: photocraft_doc::SampleType) {
+    /// Returns whether it wrote the texture.
+    pub fn upload_buffer_full(&self, doc: u64, buf: &photocraft_compose::Buffer, depth: photocraft_doc::SampleType) -> bool {
         let size = [buf.rect.width(), buf.rect.height()];
         let format = self.format_for(depth, size);
-        self.upload_full_as(doc, size, format, &texels(format, &buf.px));
+        self.upload_full_as(doc, size, format, &canvas_texels(format, &buf.px))
+    }
+
+    /// Upload the part `rect` (document pixels) of a CPU composite `buf` that covers it, converted
+    /// straight from `buf` (no copy of the part). Returns false as [`GpuCanvas::upload_rect`] does,
+    /// or when `buf` doesn't cover `rect`.
+    pub fn upload_buffer_part(&self, doc: u64, buf: &photocraft_compose::Buffer, rect: photocraft_geom::Rect) -> bool {
+        let Some(format) = self.format_of(doc) else { return false };
+        if rect.x0 < 0 || rect.y0 < 0 {
+            return false;
+        }
+        let Some(texels) = texels_of_part(format, buf, rect) else { return false };
+        self.upload_rect(doc, [rect.x0 as u32, rect.y0 as u32], [rect.width(), rect.height()], &texels)
     }
 
     /// Upload a CPU composite of a sub-rectangle (in document pixels, `buf.rect`).
@@ -568,7 +605,7 @@ impl GpuCanvas {
         if r.x0 < 0 || r.y0 < 0 {
             return false;
         }
-        self.upload_rect(doc, [r.x0 as u32, r.y0 as u32], [r.width(), r.height()], &texels(format, &buf.px))
+        self.upload_rect(doc, [r.x0 as u32, r.y0 as u32], [r.width(), r.height()], &canvas_texels(format, &buf.px))
     }
 
     /// Composite `region` of `doc` with the wgpu compositor straight into its display texture

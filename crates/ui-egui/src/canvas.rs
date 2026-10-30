@@ -64,9 +64,10 @@ pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_c
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
 #[cfg(test)]
 pub(crate) use display::GPU_OUTPUT;
+pub use display::display_image;
 #[cfg(test)]
 use display::texture_key;
-pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
+pub(crate) use display::{cache_key, canvas_display, display_doc};
 use display::{checker, hdr_preview, sync_display_lut};
 pub use drag::{Drag, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
 pub(crate) use drag::{angle_readout, draw_readout, draw_value_readout};
@@ -75,7 +76,7 @@ pub(crate) use drag::{marquee_drag_ants, marquee_preview_px};
 #[cfg(test)]
 pub(crate) use filter_preview::committed_filter_preview;
 use filter_preview::{ensure_adjust_proxy, ensure_proxy_preview, filter_preview_display_doc};
-pub(crate) use filter_preview::{ensure_filter_preview, filter_channel_preview, filter_preview_factor};
+pub(crate) use filter_preview::{ensure_filter_preview, filter_channel_preview, filter_preview_factor, upload_filter_preview_view};
 #[cfg(test)]
 pub(crate) use gesture::constrained_polygon_point;
 pub use gesture::{commit_crop, commit_polygon, polygon_cancel_stale, polygon_replaces_selection, polygon_retract};
@@ -380,6 +381,16 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
         on_gpu = true;
         app.navigator_gpu.remove(&doc.id);
         let original_size = [doc.size.width.div_ceil(k), doc.size.height.div_ceil(k)];
+        if k > 1 && key == doc.id.0 ^ (1u64 << 61) {
+            upload_filter_preview_view(app, key, photocraft_geom::Rect::EMPTY);
+        }
+        if k == 1 && key == doc.id.0 ^ (1u64 << 61) {
+            // A size-changing preview grows around the old image centre, as drawn below (a
+            // pixel more each way covers its half-pixel shift).
+            let half = |p: u32, o: u32| i32::try_from((i64::from(p) - i64::from(o)).div_euclid(2)).unwrap_or(0);
+            let shift = (half(preview_size[0], original_size[0]), half(preview_size[1], original_size[1]));
+            upload_filter_preview_view(app, key, visible_doc_rect(&xf).translate(shift.0, shift.1).inflate(1));
+        }
         let shown = filter_preview_display_doc(app, doc, key);
         let params = crate::gpu_canvas::ViewParams {
             doc: key,
