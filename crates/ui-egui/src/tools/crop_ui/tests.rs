@@ -1197,3 +1197,36 @@ fn esc_hides_the_frame_until_a_press_or_re_picking_the_tool() {
         assert!(app.ui.crop_rect.is_some());
     }
 }
+
+#[test]
+fn closing_a_dismissed_document_never_hides_the_next_tabs_frame() {
+    // #10370 review: the dismissal was keyed by tab index, so a same-size tab moving into the
+    // closed one's index kept its frame hidden.
+    let mut app = app(SampleType::U8);
+    let doc = Document::with_background("other", Size::new(200, 100), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    app.session.add_document(doc, None);
+    assert!(app.session.set_active(0));
+    ensure_frame(&mut app);
+    press_esc(&mut app);
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
+    assert!(app.session.close(0).is_some());
+    assert_eq!(app.session.active_index(), Some(0));
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
+}
+
+#[test]
+fn a_straighten_press_ends_the_dismissal() {
+    // #10370 review: a press taken by Straighten skipped `begin_drag`, which ends the dismissal,
+    // so a click too short to level anything left the frame hidden.
+    let mut app = app(SampleType::U8);
+    ensure_frame(&mut app);
+    press_esc(&mut app);
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, None);
+    app.crop.straighten.armed = true;
+    drag(&mut app, &[[50.0, 20.0], [50.5, 20.0]], NONE);
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some());
+}
