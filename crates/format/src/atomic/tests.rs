@@ -481,3 +481,18 @@ fn a_directory_flush_the_file_system_cannot_do_still_saves() {
     let fs = Faulty { fail_sync_dir: Some(Ok(5)), ..Default::default() };
     assert!(atomic_write_with(&fs, NO_RETRY, &p, b"newer").is_err());
 }
+
+/// #9440: network shares (SMB) refuse a directory flush with `ERROR_INVALID_FUNCTION` (1) or
+/// `ERROR_NOT_SUPPORTED` (50) on Windows; those count as flushed. Real failures still don't.
+#[test]
+fn windows_unsupported_directory_flush_codes_are_classified() {
+    let code = |c| dir_synced(Err(io::Error::from_raw_os_error(c)));
+    assert!(dir_synced(Err(io::Error::from(io::ErrorKind::Unsupported))).is_ok());
+    if cfg!(windows) {
+        assert!(code(1).is_ok());
+        assert!(code(50).is_ok());
+        assert!(code(5).is_err(), "ERROR_ACCESS_DENIED stays a failure");
+        assert!(code(1117).is_err(), "ERROR_IO_DEVICE stays a failure");
+    }
+    assert!(dir_synced(Err(io::Error::from(io::ErrorKind::Other))).is_err());
+}

@@ -260,7 +260,7 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
     // so the caller keeps the document unsaved and its recovery data instead of discarding them
     // on a save that may not last.
     #[cfg(windows)]
-    fs.sync_dir(&dir).map_err(|e| publication_error(e, path))?;
+    dir_synced(fs.sync_dir(&dir)).map_err(|e| publication_error(e, path))?;
     #[cfg(not(windows))]
     dir_synced(fs.sync_dir(&dir)).map_err(|e| unconfirmed_error(e, path))?;
     Ok(())
@@ -281,9 +281,10 @@ fn open_dir_for_sync(dir: &Path) -> io::Result<Option<std::fs::File>> {
 /// `result` of flushing a directory, with "this file system can't flush directories" counted as
 /// success: `EINVAL` (Linux file systems without directory fsync), `ENOTSUP`/`EOPNOTSUPP` and,
 /// on Apple platforms, `ENOTTY`, or [`io::ErrorKind::Unsupported`]. Waiting or retrying won't
-/// change those, and failing every save there would make saving impossible. Any other error is
-/// returned: the flush was attempted and failed.
-#[cfg(not(windows))]
+/// change those, and failing every save there would make saving impossible. On Windows that is
+/// `ERROR_INVALID_FUNCTION` (1) and `ERROR_NOT_SUPPORTED` (50), which network shares (SMB, #9440)
+/// return when asked to flush a directory handle; access denied and I/O errors stay failures.
+/// Any other error is returned: the flush was attempted and failed.
 pub(crate) fn dir_synced(result: io::Result<()>) -> io::Result<()> {
     match result {
         Err(e) if dir_sync_unsupported(&e) => Ok(()),
@@ -291,10 +292,13 @@ pub(crate) fn dir_synced(result: io::Result<()>) -> io::Result<()> {
     }
 }
 
-#[cfg(not(windows))]
 fn dir_sync_unsupported(e: &io::Error) -> bool {
     if e.kind() == io::ErrorKind::Unsupported {
         return true;
+    }
+    // Win32 codes, not errno: ERROR_INVALID_FUNCTION and ERROR_NOT_SUPPORTED.
+    if cfg!(windows) {
+        return matches!(e.raw_os_error(), Some(1 | 50));
     }
     // errno values: EINVAL is 22 everywhere; ENOTSUP and EOPNOTSUPP are 95 on Linux and
     // Android, 45 and 102 on Apple platforms, 45 on the BSDs; ENOTTY is 25. Elsewhere 45 means

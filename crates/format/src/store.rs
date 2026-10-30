@@ -721,7 +721,7 @@ fn write_bundle_file(root: &Path, path: &Path, data: &[u8], fs: &dyn crate::atom
         crate::atomic::retry_rename(crate::atomic::RenameRetry::platform(), || std::fs::rename(&tmp, path))?;
         #[cfg(windows)]
         {
-            fs.sync_dir(parent).map_err(|e| crate::atomic::publication_error(e, path))?;
+            crate::atomic::dir_synced(fs.sync_dir(parent)).map_err(|e| crate::atomic::publication_error(e, path))?;
         }
         // Elsewhere a failed flush is reported too (#4968), but a file system that can't flush a
         // directory at all still saves, as in `atomic_write`.
@@ -1086,7 +1086,7 @@ impl PcraftWriter {
             // both object directories again before publishing a manifest that references them.
             // This also persists the fixed subdirectories of a newly created bundle.
             for sub in ["tiles", "blobs"] {
-                fs.sync_dir(&dir.join(sub)).map_err(|e| crate::atomic::publication_error(e, &dir.join(sub)))?;
+                crate::atomic::dir_synced(fs.sync_dir(&dir.join(sub))).map_err(|e| crate::atomic::publication_error(e, &dir.join(sub)))?;
             }
         }
         #[cfg(not(windows))]
