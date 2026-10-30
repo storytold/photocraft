@@ -100,13 +100,15 @@ pub(crate) fn display_spaces(data: &[u8], versioned: bool, skip: usize) -> Vec<u
 }
 
 /// The spot colours of an Alternate Spot Colors resource (1067) by channel identifier, those in
-/// a colour space [`decode_known_color`] reads. The reference editor's 24.7 stores a spot's DisplayInfo colour
-/// in a space it does not document (psd-tools cmyk-alpha-spot.psd: 0x2331) and its ink here, in
-/// Lab.
+/// a colour space [`decode_known_color`] reads. The reference editor's 24.7 stores a spot's
+/// DisplayInfo colour in a space it does not document (psd-tools cmyk-alpha-spot.psd: 0x2331)
+/// and its ink here, in Lab.
 pub(crate) fn alternate_spot_colors(data: &[u8]) -> Vec<(u32, Color)> {
     let count = data.get(2..4).map_or(0, |c| usize::from(u16::from_be_bytes([c[0], c[1]])));
     let body = data.get(4..).unwrap_or_default();
-    body.chunks_exact(14)
+    body.as_chunks::<14>()
+        .0
+        .iter()
         .take(count)
         .filter_map(|rec| {
             let u = |i: usize| u16::from_be_bytes([rec[i], rec[i + 1]]);
