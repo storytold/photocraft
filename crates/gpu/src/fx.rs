@@ -226,6 +226,24 @@ impl B {
         let Some(k) = blur_kernel(size) else { return src };
         self.conv(src, k)
     }
+    fn max(&mut self, a: In, b: In) -> In {
+        self.push(stage(Kernel::MFinish, Some(a), Some(b), [2.0, 0.0, 0.0, 0.0], 0))
+    }
+    fn softer_glow_tail(&mut self, blur: In, size: f32, range: f32) -> In {
+        let width = photocraft_compose::effects::softer_glow_tail_width(size);
+        if width == 0.0 {
+            return blur;
+        }
+        let distance = self.field(FieldKind::Outside, size + width);
+        let tail = self.push(stage(
+            Kernel::MGlow,
+            Some(distance),
+            None,
+            [size - width, width, photocraft_compose::effects::softer_glow_tail_amplitude(range), 1.0],
+            0,
+        ));
+        self.max(blur, tail)
+    }
     /// Separable convolution with a symmetric kernel `(radius, weights)` (two `MBlur` passes).
     fn conv(&mut self, src: In, (r, w): (i32, Vec<f32>)) -> In {
         if r <= 0 {

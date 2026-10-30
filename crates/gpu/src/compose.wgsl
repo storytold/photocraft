@@ -1000,8 +1000,21 @@ fn fs_adjmix(in: VOut) -> @location(0) vec4<f32> {
     if (op.mode == M_DISSOLVE) {
         return select(b, vec4(a.rgb, b.a), dissolve_noise(doc_px(p)) < k);
     }
-    let bl = blend_rgb(op.mode, b.rgb, a.rgb);
-    return vec4(b.rgb + (bl - b.rgb) * k, b.a);
+    // Fill below 100% in one of the special eight (compose::blend_back, psblend::blend_rgb_fill):
+    // the result pulled toward the mode's neutral colour; Hard Mix (cb - f(1 - cs)) / (1 - f).
+    let f = clamp(op.fill, 0.0, 1.0);
+    let special = f < 1.0 && fill_is_special(op.mode);
+    var cs = a.rgb;
+    if (special) {
+        var neutral = 0.0;
+        if (op.mode == 5 || op.mode == 6) { neutral = 1.0; }
+        if (op.mode == 16 || op.mode == 17) { neutral = 0.5; }
+        cs = vec3(neutral) + (a.rgb - vec3(neutral)) * f;
+    }
+    var bl = blend_rgb(op.mode, b.rgb, cs);
+    if (special && op.mode == 19) { bl = clamp((b.rgb - f * (vec3(1.0) - a.rgb)) / (1.0 - f), vec3(0.0), vec3(1.0)); }
+    // Keep bounded adjustment results exact at full coverage over HDR backdrops.
+    return vec4(b.rgb * (1.0 - k) + bl * k, b.a);
 }
 
 // Pass-through group coverage mixes premultiplied colour, then returns straight alpha.
@@ -1025,8 +1038,8 @@ fn fs_lerp(in: VOut) -> @location(0) vec4<f32> {
         return vec4(clamp(pm.rgb / al, vec3(0.0), vec3(1.0)), al);
     }
     if ((op.flags & F_BLEND_IF) != 0u) {
-        // compose::apply_blend_if: "This Layer" is C (the layer's own content with its masks),
-        // or B itself for an adjustment layer; "Underlying Layer" is A.
+        // compose::apply_blend_if: "This Layer" is C (the layer's own content with its masks, or an
+        // adjustment's result before Opacity, #9542), B when p4.y is set; "Underlying Layer" is A.
         var this_px = b;
         if (op.p4.y < 0.5) {
             this_px = textureLoad(tex_c, p, 0);
@@ -1080,15 +1093,19 @@ fn blend_if_weight(this_px: vec4<f32>, under: vec4<f32>) -> f32 {
         if (px.a <= 0.0) {
             continue;
         }
-        // The CPU gets 8- and 16-bit levels exactly (k / 255 × 255 = k), but GPU arithmetic can
-        // land a few millionths below, which flips a hard threshold at that level: values that
-        // close to a level are that level. Real 8/16-bit values off a level are ≥ 1/257 away.
-        let raw = clamp(px.rgb, vec3(0.0), vec3(1.0)) * 255.0;
-        let v = select(raw, round(raw), abs(raw - round(raw)) < vec3(1e-4));
+        // compose::blend_if_level: a value on a level's 16-bit step (Photoshop's 0..32768,
+        // round(c × 32768 / 255)) is that level, as Photoshop compares Blend If (#9521); every
+        // 8-bit level is on its own step, a few millionths of GPU drift included.
+        let x = clamp(px.rgb, vec3(0.0), vec3(1.0));
+        let raw = x * 255.0;
+        let level = round(raw);
+        let v = select(raw, level, round(x * 32768.0) == round(level * 32768.0 / 255.0));
         if (op.p4.x > 0.5) {
             k = k * bi_weight(0u, s, v.r) * bi_weight(1u, s, v.r);
         } else {
-            let gray = 0.299 * v.r + 0.587 * v.g + 0.114 * v.b;
+            // compose::blend_if_gray: (30 R + 59 G + 11 B) / 100, rounded half down on whole levels.
+            let sum = 30.0 * v.r + 59.0 * v.g + 11.0 * v.b;
+            let gray = select(sum / 100.0, floor((sum + 49.0) / 100.0), all(v == round(v)));
             k = k * bi_weight(0u, s, gray) * bi_weight(1u, s, v.r) * bi_weight(2u, s, v.g) * bi_weight(3u, s, v.b);
         }
         if (k <= 0.0) {
@@ -1432,6 +1449,18 @@ fn fs_mblur(in: VOut) -> @location(0) vec4<f32> {
 @fragment
 fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
     let d = textureLoad(tex_a, local(in.pos), 0).r + 0.5;
+    if (op.p0.w > 0.5) {
+        let t = (d - op.p0.x) / op.p0.y;
+        var tail = 0.0;
+        if (t >= 0.0 && t <= 1.0) {
+            tail = op.p0.z * t * t * (3.0 - 2.0 * t);
+        } else if (t > 1.0 && t <= 2.0) {
+            let u = t - 1.0;
+            let remaining = 1.0 - u;
+            tail = op.p0.z * remaining * remaining * (1.0 + 2.0 * u);
+        }
+        return mout(tail);
+    }
     var m = 0.5 * clamp(1.0 - (d - op.p0.x) / op.p0.y, 0.0, 1.0);
     if (d <= op.p0.x) { m = 1.0; }
     return mout(m);
@@ -1443,7 +1472,11 @@ fn fs_mglow(in: VOut) -> @location(0) vec4<f32> {
 fn fs_mfinish(in: VOut) -> @location(0) vec4<f32> {
     let p = local(in.pos);
     var v = textureLoad(tex_a, p, 0).r;
-    if (op.p0.x > 0.5) { v = abs(v - textureLoad(tex_b, p, 0).r); }
+    if (op.p0.x > 1.5) {
+        v = max(v, textureLoad(tex_b, p, 0).r);
+    } else if (op.p0.x > 0.5) {
+        v = abs(v - textureLoad(tex_b, p, 0).r);
+    }
     if (op.p0.y > 0.5 && op.p0.y < 1.5) { v = 1.0 - v; }
     if (op.p0.z > 0.5) { v = lut(0, v); }
     if (op.p0.y > 1.5) { v = 1.0 - v; }

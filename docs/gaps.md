@@ -500,5 +500,6 @@ what an agent can't finish alone.
 | 2026-10-11 | minor | G8: Character panel OpenType buttons landed (TYPE-218-5, #3752); Numerals and Stylistic Sets submenus still missing |
 | 2026-10-11 | minor | G10: one-page flattened PDF write shipped (io::pdf, #3401); FILE-215-10 now partial |
 | 2026-10-10 | minor | G2: recorded Tilt-Shift computation/filtered-proxy measurements and limits; gap and estimate remain open
+| 2026-10-11 | minor | G14 Sony metadata/crop progress recorded without closing camera colour or tone gaps |
 | 2026-10-10 | minor | Checked against the alpha gate (no alpha blockers); #2374 marked closed |
 | 2026-10-10 | major | First version, from the full re-measure against Photoshop 2026 27.11.0 and the open issues |

@@ -692,7 +692,9 @@ fn ok_after_a_document_switch_changes_neither_document() {
     ui(&mut app, json!({"stroke": {"points": [[120.0, 50.0], [130.0, 50.0]]}}));
     let before = (fingerprint(&app, 0), fingerprint(&app, 1));
     let switched = call(&mut app, "engine.execute", json!({"command": "document.activate", "params": {"document": 1}}));
-    assert_eq!(app.session.active_index(), Some(1), "{switched}");
+    assert_eq!(switched["ok"], false, "external edits respect the modal gate");
+    assert_eq!(app.session.active_index(), Some(0));
+    assert!(app.session.set_active(1), "simulate a trusted native target change before the next frame");
     let r = call(&mut app, "ui.menu.invoke", json!({"command": "select.selectAndMask", "params": {"ui": {"commit": true}}}));
     assert!(r.get("error").is_some(), "the stale OK is refused: {r}");
     assert_eq!((fingerprint(&app, 0), fingerprint(&app, 1)), before, "neither document changed");
@@ -732,7 +734,9 @@ fn ok_after_a_layer_switch_leaves_the_new_layer_alone() {
     open(&mut app).unwrap();
     ui(&mut app, json!({"output": "layerMask"}));
     let revision = app.session.active().unwrap().revision;
-    call(&mut app, "engine.execute", json!({"command": "layer.select", "params": {"layer": other.0}}));
+    let blocked = call(&mut app, "engine.execute", json!({"command": "layer.select", "params": {"layer": other.0}}));
+    assert_eq!(blocked["ok"], false, "external edits respect the modal gate");
+    app.session.execute("layer.select", json!({"layer":other.0})).unwrap();
     let revision_after_select = app.session.active().unwrap().revision;
     let r = call(&mut app, "ui.menu.invoke", json!({"command": "select.selectAndMask", "params": {"ui": {"commit": true}}}));
     assert!(r.get("error").is_some(), "the stale OK is refused: {r}");

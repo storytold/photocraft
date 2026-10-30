@@ -253,6 +253,22 @@ impl PhotocraftApp {
     }
 
     pub fn sync_views(&mut self) {
+        // The Paths panel selection belongs to the active document. Ordinary edits replace the
+        // snapshot and advance its revision; a replaced snapshot without a newer revision is a
+        // reopened document, even with the same ID.
+        let document = self.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
+        let same_document = match (&self.path_document, &document) {
+            (Some((old_id, old_revision, old_source)), Some((id, revision, source))) => old_id == id && (revision > old_revision || old_source.ptr_eq(source)),
+            (None, None) => true,
+            _ => false,
+        };
+        if !same_document {
+            self.ui.selected_path = None;
+        }
+        self.path_document = document;
+        vector_ui::cancel_stale_pen(self);
+        crate::direct_select::cancel_stale(self);
+        canvas::cancel_stale_vector_drag(self);
         type_transform::cancel_stale(self);
         crate::cam_transform::cancel_stale(self);
         crate::lasso_ui::cancel_stale(self);
@@ -286,7 +302,7 @@ impl PhotocraftApp {
             let new_docs: Vec<usize> = ids.iter().enumerate().filter(|(_, id)| !self.view_docs.contains(id)).map(|(i, _)| i).collect();
             for &idx in &new_docs {
                 if !self.ui.windows.iter().any(|w| w.document == idx) {
-                    crate::view_cmds::float_window(self, idx, idx);
+                    crate::view_cmds::float_window(self, idx, idx, false);
                 }
             }
         }

@@ -1148,6 +1148,9 @@ pub struct Preferences {
     /// as the user changes it and restored at launch when Workspace › Remember Workspace
     /// Changes is on. JSON owned by the shell.
     pub panel_layout: Value,
+    /// The Color panel's options (what it shows, its ramp, Web colors, which chip it edits),
+    /// kept across restarts as Photoshop keeps them. JSON owned by the shell.
+    pub color_panel: Value,
     /// The last choices of dialogs that remember them across restarts, by command id (Edit ›
     /// Fill…: `"edit.fill"` → its params). JSON owned by the shell.
     pub dialogs: BTreeMap<String, Value>,

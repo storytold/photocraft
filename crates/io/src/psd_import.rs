@@ -498,7 +498,7 @@ impl Ctx<'_> {
             let parsed = (!block.is_foreign_order())
                 .then(|| {
                     photocraft_text::psd::text_layer_from_tysh(&block.data, self.dpi).or_else(|| {
-                        let (text, transform) = blocks::parse_tysh(&block.data).unwrap_or_default();
+                        let (text, transform) = blocks::parse_tysh(&block.data)?;
                         photocraft_text::psd::transform_is_safe(&transform).then(|| TextLayer { text, transform, ..Default::default() })
                     })
                 })

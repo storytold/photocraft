@@ -92,6 +92,7 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("OpenRaster", &["ora"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg", "jpeg"]),
+    ("JPEG XL", &["jxl"]),
     ("WebP", &["webp"]),
     ("TIFF", &["tif", "tiff"]),
     ("Targa", &["tga"]),

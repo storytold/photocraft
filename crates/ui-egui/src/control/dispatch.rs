@@ -1,3 +1,4 @@
+use super::METHODS;
 use super::inspect::inspect;
 use super::params::{
     BUTTONS, KEY_MODIFIERS, MAX_CLICKS, POINTER_MODIFIERS, UI_SET_FIELDS, bool_field, err, f32_field, f32_range, input_choice, input_modifiers, input_number,
@@ -10,7 +11,7 @@ type Handler = fn(&mut PhotocraftApp, &egui::Context, &ControlRequest) -> Option
 
 pub(super) fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     const HANDLERS: [Handler; 5] = [engine_methods, shell_methods, dialog_methods, input_methods, app_methods];
-    HANDLERS.iter().find_map(|handler| handler(app, ctx, req)).unwrap_or_else(|| err(format!("unknown method `{}`", req.method)))
+    HANDLERS.iter().find_map(|handler| handler(app, ctx, req)).unwrap_or_else(|| err(photocraft_engine::command_hints::unknown_method(&req.method, METHODS)))
 }
 
 fn str_param<'a>(p: &'a Value, key: &str) -> Option<&'a str> {
@@ -68,20 +69,23 @@ fn context_choose(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Ou
 fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
     let Some(id) = str_param(p, "command").or(str_param(p, "id")) else { return err("missing `command`") };
+    if req.method == "engine.execute" && METHODS.contains(&id) && photocraft_engine::commands::find(id).is_none() {
+        return err(photocraft_engine::command_hints::protocol_method_as_command(id));
+    }
     let params = p.get("params").cloned().unwrap_or(json!({}));
     let wait = wait_param(p);
     // A control-channel menu click must respect the same modal gate as the native menu.
     // The documented `ui` requests of Camera Raw and the full-window workspaces operate
     // the already-open one rather than click a menu. Only that continuation may pass its
-    // own modal gate. engine.execute is deliberately not subject to the UI's menu-click semantics.
+    // own modal gate. Both command entry points respect document ownership.
     let open_modal = if app.camera_raw.is_some() { Some("filter.cameraRaw") } else { crate::distort_ui::modal_workspace(app) };
     let continuation = open_modal == Some(id)
         && params.as_object().is_some_and(|fields| fields.len() == 1 && fields.get("ui").is_some_and(Value::is_object))
         && app.ui.dialogs.is_empty()
         && app.discard.is_none()
         && !crate::crop_ui::blocks(app, id);
-    if req.method == "ui.menu.invoke" && !continuation && !crate::menus::modal_allows(app, id) {
-        return err("menu command is unavailable while a modal dialog is open");
+    if !continuation && !crate::menus::modal_allows(app, id) {
+        return err("command is unavailable while a modal dialog is open");
     }
     if let Some(authorize) = app.services.automation_command.as_ref()
         && let Err(error) = authorize(id, &params)
@@ -272,6 +276,8 @@ struct ToolSet {
     cam_transform_on_drop: Option<bool>,
     tile_grid: Option<bool>,
     layer_filter: Option<crate::layer_filter_ui::Filter>,
+    pen_mode: Option<String>,
+    pen_path_op: Option<String>,
 }
 
 impl ToolSet {
@@ -291,6 +297,8 @@ impl ToolSet {
             // Developer overlay of the active layer's storage tiles (tile_overlay.rs).
             tile_grid: bool_field(p, "tileGrid")?,
             layer_filter: p.get("layerFilter").map(|v| crate::layer_filter_ui::patched(&app.ui, v)).transpose()?,
+            pen_mode: pen_mode_param(p)?,
+            pen_path_op: pen_path_op_param(p)?,
         })
     }
 
@@ -328,6 +336,12 @@ impl ToolSet {
         if let Some(f) = self.layer_filter {
             crate::layer_filter_ui::apply(&mut app.ui, f);
         }
+        if let Some(m) = self.pen_mode {
+            app.ui.tool_options.vector_mode = m;
+        }
+        if let Some(o) = self.pen_path_op {
+            app.ui.tool_options.pen_path_op = o;
+        }
     }
 
     fn apply_gradient_and_trace(&self, app: &mut PhotocraftApp) {
@@ -345,6 +359,21 @@ impl ToolSet {
             crate::gradient_ui::options_changed(app, &gradient_before);
         }
     }
+}
+
+/// The Pen tools' options bar (#1397): Path or Shape mode.
+fn pen_mode_param(p: &Value) -> std::result::Result<Option<String>, String> {
+    let Some(v) = p.get("penMode") else { return Ok(None) };
+    v.as_str().filter(|m| matches!(*m, "path" | "shape")).map(|m| Some(m.to_string())).ok_or_else(|| "penMode must be \"path\" or \"shape\"".to_string())
+}
+
+/// The Pen tools' Path Operation.
+fn pen_path_op_param(p: &Value) -> std::result::Result<Option<String>, String> {
+    let Some(v) = p.get("penPathOp") else { return Ok(None) };
+    v.as_str()
+        .filter(|o| crate::vector_ui::PATH_OPS.iter().any(|(id, ..)| id == o))
+        .map(|o| Some(o.to_string()))
+        .ok_or_else(|| "penPathOp must be one of newLayer, combine, subtract, intersect, exclude".to_string())
 }
 
 fn gradient_blend_param(p: &Value) -> std::result::Result<Option<photocraft_color::BlendMode>, String> {
@@ -893,7 +922,14 @@ fn color_picker_dialog(app: &mut PhotocraftApp, p: &Value) -> Outcome {
         let (Some(parent), Some(effect), Some(field)) = (u64_param(p, "parent"), str_param(p, "effect"), str_param(p, "field")) else {
             return err("need integer `parent` and string `effect` and `field`");
         };
-        return match crate::layer_style::color_picker::open(app, parent, effect, field) {
+        let stop = match p.get("stop") {
+            None | Some(Value::Null) => None,
+            Some(v) => match v.as_u64().and_then(|i| usize::try_from(i).ok()) {
+                Some(i) => Some(i),
+                None => return err("`stop` must be a non-negative integer"),
+            },
+        };
+        return match crate::layer_style::color_picker::open(app, parent, effect, field, stop) {
             Ok(id) => ok(json!({"dialog": id})),
             Err(error) => err(error),
         };
@@ -1110,6 +1146,9 @@ fn pointer(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
         mods: modifiers_from(&parsed.modifiers),
     };
     for sample in parsed.events {
+        if crate::brush_mode_menu::blocks_control(app, ctx, sample.ev) {
+            continue;
+        }
         if !pointer_event_intercepted(app, ctx, &gesture, &sample) {
             forward_pointer_event(app, &gesture, sample);
         }

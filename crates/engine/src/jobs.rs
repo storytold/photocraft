@@ -955,6 +955,7 @@ impl Session {
                 "layerComp.apply" => crate::comps_cmds::recorded_apply(self, params),
                 _ => crate::layer_multi_cmds::recorded_step(self, id, params, pre_selected),
             };
+            let params = crate::actions_cmds::recorded_params(self, id, params);
             self.journal.push((id.to_string(), params));
         }
     }

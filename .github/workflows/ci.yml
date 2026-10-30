@@ -11,6 +11,10 @@ on:
     types: [opened, synchronize, reopened, labeled]
   workflow_dispatch:
     inputs:
+      full_sweep:
+        description: "Run every testkit sweep case (runtime comparison and integration validation)"
+        type: boolean
+        default: false
       color_range:
         description: "Compare cropped Color Range on 24 MP (Linux, exact outputs)"
         type: boolean
@@ -50,6 +54,7 @@ permissions:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  PHOTOCRAFT_FULL_SWEEP: ${{ inputs.full_sweep && '1' || '0' }}
   # No test or fuzz run may print a page: the engine refuses to spool, and if something ever
   # bypasses that, lp fails loudly on a printer that does not exist.
   PHOTOCRAFT_NO_PRINT: "1"
@@ -153,6 +158,7 @@ jobs:
       # Cargo.toml's dev profile already keeps line tables only.
       dev-debug: ""
       env: |
+        PHOTOCRAFT_FULL_SWEEP=${{ inputs.full_sweep && '1' || '0' }}
         PHOTOCRAFT_NO_PRINT=1
         LPDEST=photocraft-no-such-printer
       timeout-minutes: 100
