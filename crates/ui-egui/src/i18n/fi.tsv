@@ -2815,6 +2815,7 @@ fontWeight	Italic	Kursivoitu
 # Shared Layer Style color picker
 	Color Picker (Layer Style Color)	Värinvalitsin (tasotyylin väri)
 	Auto Hide Notifications	Piilota ilmoitukset automaattisesti
+	Use global menu bar	Käytä yleistä valikkopalkkia
 	Notification Duration (seconds)	Ilmoituksen kesto (sekuntia)
 	Bundle Arrow-Key Nudges	Yhdistä nuolinäppäinsiirrot
 	Nudge Bundle Pause (ms)	Siirtojen yhdistämisen tauko (ms)
