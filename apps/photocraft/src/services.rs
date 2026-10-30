@@ -15,13 +15,13 @@ use std::sync::Arc;
 mod recovery_tests;
 
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
-/// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
-/// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
+/// Photoshop and Procreate brushes (.abr, .brush, .brushset), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase)
+/// and keyboard shortcut sets (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
 const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
     "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
-    "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "grd", "asl", "svg", "svgz",
-    "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
+    "iff", "lbm", "ilbm", "heic", "heif", "hif", "dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf", "abr", "brush", "brushset", "grd",
+    "asl", "svg", "svgz", "aco", "act", "ase", "kys", "af", "afdesign", "afphoto", "afpub",
 ];
 const SVG_EXTS: &[&str] = &["svg", "svgz"];
 
@@ -69,7 +69,7 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("Amiga IFF", &["iff", "lbm", "ilbm"]),
     ("DICOM", &["dcm", "dicom", "dc3"]),
     ("Camera Raw", &["dng", "cr2", "cr3", "nef", "nrw", "arw", "pef", "orf", "rw2", "raf"]),
-    ("Brushes", &["abr"]),
+    ("Brushes", &["abr", "brush", "brushset"]),
     ("Gradients", &["grd"]),
     ("Styles", &["asl"]),
     ("Swatches", &["aco", "act", "ase"]),

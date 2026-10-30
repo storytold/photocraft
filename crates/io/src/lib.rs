@@ -63,6 +63,7 @@ pub mod pdf;
 mod pdn;
 pub use pcraft_cache::PcraftExportCache;
 pub mod pixels;
+pub mod procreate;
 mod psd_export;
 mod psd_import;
 pub mod psd_thumbnail;

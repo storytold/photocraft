@@ -87,7 +87,7 @@ id = "TOOL-213-12"
 target = "Import an image file as a brush tip"
 status = "done"
 issue = 213
-note = "brush.presets.importImage (path or data); Brushes panel and preset picker Import Brushes… take .abr or an image (#3279)"
+note = "brush.presets.importImage (path or data); Brushes panel and preset picker Import Brushes… take .abr, Procreate .brush/.brushset or an image (#3279, #7364)"
 
 [[item]]
 id = "TOOL-213-13"

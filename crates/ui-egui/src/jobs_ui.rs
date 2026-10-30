@@ -510,13 +510,22 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
         return;
     }
     match e.outcome {
-        JobOutcome::Done(v) if e.command == "brush.presets.importAbr" => {
+        JobOutcome::Done(v) if matches!(e.command.as_str(), "brush.presets.importAbr" | "brush.presets.importProcreate") => {
             let n = v.get("count").and_then(Value::as_u64).unwrap_or(0);
             let group = v.get("group").and_then(Value::as_str).unwrap_or_default();
-            app.ui.status = crate::i18n::fmt(
+            let imported = crate::i18n::fmt(
                 &crate::i18n::trn(crate::i18n::current(), n, "Imported {n} brush from {group}", "Imported {n} brushes from {group}"),
                 &[("group", group)],
             );
+            // What the import left out, as the preset file import reports it.
+            let warnings: Vec<&str> = v.get("warnings").and_then(Value::as_array).map(|w| w.iter().filter_map(Value::as_str).collect()).unwrap_or_default();
+            app.ui.status = match warnings.first() {
+                Some(warning) => {
+                    let template = "{message} (notes: {n}; {warning})";
+                    crate::i18n::fmt(tl!(template), &[("message", &imported), ("n", &warnings.len().to_string()), ("warning", warning)])
+                }
+                None => imported,
+            };
             app.ui.status_error = false;
             app.ui.panels.brush_settings = true;
             app.ui.brush_tab = 1;

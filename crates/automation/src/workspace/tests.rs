@@ -423,6 +423,7 @@ fn apply_data_set_is_judged_by_the_values_it_applies() {
 fn automation_rejects_ambient_path_commands_and_preferences() {
     for (id, params) in [
         ("brush.presets.importAbr", serde_json::json!({"path": "/outside/set.abr"})),
+        ("brush.presets.importProcreate", serde_json::json!({"path": "/outside/set.brushset"})),
         ("brush.presets.importImage", serde_json::json!({"path": "/outside/tip.png"})),
         ("gradient.presets.importGrd", serde_json::json!({"path": "/outside/set.grd"})),
         ("plugin.install", serde_json::json!({"path": "/outside/plugin.wasm"})),
@@ -443,6 +444,7 @@ fn automation_rejects_ambient_path_commands_and_preferences() {
     }
     for (id, params) in [
         ("brush.presets.importAbr", serde_json::json!({"data": "QUJD"})),
+        ("brush.presets.importProcreate", serde_json::json!({"data": "QUJD"})),
         ("brush.presets.importImage", serde_json::json!({"data": "QUJD"})),
         ("gradient.presets.importGrd", serde_json::json!({"data": "QUJD"})),
         ("plugin.install", serde_json::json!({"data": "QUJD"})),
