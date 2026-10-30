@@ -168,20 +168,30 @@ fn profile_summary(st: &photocraft_engine::display_color::MonitorStatus) -> Stri
         (Some(name), "auto") => name.as_str(),
         _ => st.profile.as_str(),
     };
-    let source = tl!(st.source);
+    let source = source_label(st.source);
     match &st.reason {
-        Some(reason) => format!("{name} ({source}: {reason})"),
+        Some(reason) => format!("{name} ({source}: {})", crate::gpu_status::localize_diagnostic(reason)),
         None => format!("{name} ({source})"),
+    }
+}
+
+/// `auto` / `manual` / `fallback` are catalog keys. Anything else is a profile id, shown as stored.
+fn source_label(source: &str) -> String {
+    match source {
+        "auto" => tl!("auto").to_string(),
+        "manual" => tl!("manual").to_string(),
+        "fallback" => tl!("fallback").to_string(),
+        other => other.to_string(),
     }
 }
 
 /// When the last re-read failed and an earlier reading is shown: why.
 fn retained(app: &PhotocraftApp) -> Option<String> {
     match &app.session.color.monitor_detection {
-        MonitorDetection::Retained { reason } => Some({
-            let template = "previous reading kept; the last re-read failed: {reason}";
-            crate::i18n::fmt(tl!(template), &[("reason", reason)])
-        }),
+        MonitorDetection::Retained { reason } => Some(crate::i18n::fmt(
+            tl!("previous reading kept; the last re-read failed: {reason}"),
+            &[("reason", &crate::gpu_status::localize_diagnostic(reason))],
+        )),
         _ => None,
     }
 }
@@ -315,6 +325,32 @@ fn displays_changed(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
         }
         _ => false,
     }
+}
+
+/// Help › System Info's display rows: a label and the profile in use.
+pub fn profile_rows(app: &PhotocraftApp) -> Vec<(String, String)> {
+    let c = &app.session.color;
+    if c.displays.is_empty() {
+        return vec![(tl!("Monitor").to_string(), profile_summary(&c.monitor_status()))];
+    }
+    c.displays
+        .iter()
+        .map(|d| {
+            let label = if c.main_display == Some(d.id) {
+                crate::i18n::fmt(tl!("{display} (main)"), &[("display", &d.name)])
+            } else if d.name.is_empty() {
+                tl!("Monitor").to_string()
+            } else {
+                d.name.clone()
+            };
+            (label, profile_summary(&c.monitor_status_for(Some(d.id))))
+        })
+        .collect()
+}
+
+/// Why an earlier display reading is still shown, when the last re-read failed.
+pub fn retained_note(app: &PhotocraftApp) -> Option<String> {
+    retained(app)
 }
 
 /// Help › System Info's lines: the monitor profile of each display.

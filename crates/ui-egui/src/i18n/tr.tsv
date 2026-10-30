@@ -1061,7 +1061,6 @@
 	Done	Bitti
 	Dots	Noktalar
 	Drag a rectangle around the object	Nesnenin çevresine bir dikdörtgen sürükleyin
-	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click to delete.	Kısıtlama eklemek için görüntü üzerinde sürükleyin; yatay/dikey için Shift; silmek için sağ tıklayın.
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Kısıtlama eklemek için görüntü üzerinde sürükleyin; yatay/dikey için Shift tuşunu kullanın; değiştirmek veya silmek için bir kısıtlamaya sağ tıklayın.
 	Drag to move the active shape's path or the Work Path	Etkin şeklin yolunu veya Çalışma Yolunu taşımak için sürükleyin
 	Click: select anchor · Drag: move anchor, handle or segment · {shift}-click: add · {alt}-click: whole subpath	Tıklayın: çapa noktasını seçin · Sürükleyin: çapa noktasını, tutamacı veya parçayı taşıyın · {shift}-tıklayın: ekleyin · {alt}-tıklayın: alt yolun tamamı
@@ -4226,6 +4225,42 @@ cameraData	Lens	Lens
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
+	Application	Uygulama
+	Platform	Platform
+	Adapter	Bağdaştırıcı
+	Backend	Backend
+	Driver	Sürücü
+	GPU preference	GPU tercihi
+	At launch	Başlangıçta
+	Compositor	Birleştirici
+	Monitor	Monitör
+	Images: {images}. Window: {window}.	Görüntüler: {images}. Pencere: {window}.
+	Discrete GPU	Ayrık GPU
+	Integrated GPU	Tümleşik GPU
+	Virtual GPU	Sanal GPU
+	Other GPU	Diğer GPU
+	Unknown adapter	Bilinmeyen bağdaştırıcı
+	Software graphics	Yazılımsal grafik
+	{display} (main)	{display} (ana)
+	CPU image rendering; no software graphics adapter is available, so the window uses hardware graphics	CPU ile görüntü işleme; yazılım grafik bağdaştırıcısı yok, bu yüzden pencere donanım grafiğini kullanıyor
+	Intel graphics on Windows: using DirectX 12 (the Intel Vulkan driver is known to crash)	Windows'ta Intel grafikleri: DirectX 12 (Intel Vulkan sürücüsünün çöktüğü bilinir)
+	--safe-gpu: CPU renderer for this launch	--safe-gpu: bu başlangıç için CPU işleyici
+	WGPU_BACKEND={value} overrides the backend	WGPU_BACKEND={value} backend'i geçersiz kılar
+	the previous start didn't finish on {backend}; using {next}	Önceki başlangıç {backend} üzerinde bitmedi; {next} kullanılıyor
+	this platform doesn't report display profiles	Bu platform görüntü profillerini bildirmiyor
+	the display profile hasn't been read yet	Görüntü profili henüz okunmadı
+	{display} has no ICC profile	{display} için ICC profili yok
+	the display profile can't be read: {error}	Görüntü profili okunamıyor: {error}
+	`{profile}` is a {space} profile, not RGB	`{profile}` bir {space} profilidir, RGB değil
+	`{profile}` can't be used as a display profile: {error}	`{profile}` görüntü profili olarak kullanılamaz: {error}
+	GPU device lost	GPU aygıtı kayboldu
+	GPU device lost: {detail}	GPU aygıtı kayboldu: {detail}
+	GPU error: {detail}	GPU hatası: {detail}
+	previous reading kept; the last re-read failed: {reason}	Önceki okuma korundu; son yeniden okuma başarısız: {reason}
+	auto	otomatik
+	fallback	yedek
+	manual	manuel
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları
+	Graphics memory	Grafik belleği

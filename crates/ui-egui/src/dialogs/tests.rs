@@ -429,3 +429,31 @@ fn fit_image_is_as_narrow_as_its_content() {
         assert!(window.contains_rect(node.rect()), "{label} inside the window");
     }
 }
+
+#[test]
+fn system_info_fits_a_narrow_native_viewport_at_high_scale() {
+    use egui_kittest::kittest::Queryable;
+    for width in [400.0, 520.0] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.perf.gpu_info.adapter = "Discrete GPU".into();
+        app.perf.gpu_info.video_memory_mb = Some(8192);
+        let mut h =
+            egui_kittest::Harness::builder().with_size(egui::vec2(width, 1200.0)).with_pixels_per_point(2.0).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.state_mut().ui.open_dialog(DialogKind::About, json!({"systemInfo":true}).as_object().unwrap().clone());
+        h.run_steps(8);
+        let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::unique(RECTS))).unwrap();
+        assert_eq!(rects.len(), 1);
+        assert!(rects[0].left() >= -0.5 && rects[0].right() <= width + 0.5, "{width}: {:?}", rects[0]);
+        for label in ["Copy", "OK"] {
+            let rect = h.get_by_label(label).rect();
+            assert!(rect.left() >= 0.0 && rect.right() <= width, "{width}: {label} at {rect:?}");
+        }
+        h.get_by_label("Graphics memory");
+        if let Some(directory) = std::env::var_os("PHOTOCRAFT_SYSTEM_INFO_SCREENSHOTS") {
+            let directory = std::path::PathBuf::from(directory);
+            std::fs::create_dir_all(&directory).unwrap();
+            h.render().unwrap().save(directory.join(format!("system-info-narrow-{width}.png"))).unwrap();
+        }
+    }
+}
