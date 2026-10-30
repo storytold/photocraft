@@ -688,6 +688,44 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 - The third-party sets (psd-tools, ag-psd, PngSuite) are fetched from their upstreams the same way,
   and are never copied into photocraft-corpus.
 
+## PSD write recipes
+
+The PSD write oracle exercises actual edits before export. The recipe runner opens each
+base with `photocraft-cli`, applies its commands to a uniquely selected layer, exports
+and reopens the PSD, and checks the specified properties. It records the generated
+files and results for a later independent Photoshop verification (#6130).
+
+```sh
+cargo xtask corpus --photoshop
+cargo build -p photocraft-cli --release
+cargo xtask psd-write-oracle xtask/psd-write-oracle/starter.json corpus/photoshop target/release/photocraft-cli target/psd-write-oracle
+```
+
+The output directory must not exist. It contains `report.json`, `manifest.json`, a
+candidate PSD per successful export, and CLI stdout/stderr for diagnosis. A failed
+case does not prevent the other cases from running, but the command exits nonzero.
+The manifest records the checkout revision, whether tracked files were modified, the
+CLI binary hash, recipe hash, corpus revision and candidate hashes. The checkout
+revision does not establish where a supplied binary was built; use a binary built from
+that revision and preserve the CI run's provenance. Missing fonts and other warnings
+are recorded. The checkout and corpus are not written to by the runner.
+
+Recipes are versioned JSON. A case has a unique `id`, a relative `base` PSD path,
+its `base_sha256`, a `target` with layer `kind` and optional `name`, and `checks`.
+An optional list of `commands` contains a `command` id and `params`; the runner
+supplies the resolved `layer` id. Targets that match zero or multiple layers fail.
+Only `type.*` and `layer.layerStyle.*` commands are accepted. Checks use JSON pointers
+relative to the inspected layer: `unchanged` requires a present, equal value before
+and after; `equals` checks the exported value; `changed_to` requires the exported
+value to match and differ from the base. Every edited case needs a `changed_to` check.
+See the starter recipes for examples. Regenerate hashes when deliberately changing
+the corpus pin, and review them against `xtask/photoshop-corpus.sha256`.
+
+These checks use PhotoCraft's own importer and inspector; they do **not** prove that
+Photoshop can open the output or interprets it correctly. The report marks those
+stages `not_run`. The ordinary CI corpus job does not yet run this recipe command or
+upload its artifacts; that integration and the Photoshop judge are separate work.
+
 ## Rendering fidelity (PSD oracle)
 
 `cargo xtask test-corpus -p io -- --nocapture` compares our composite of every corpus PSD with

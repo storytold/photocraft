@@ -152,7 +152,14 @@ fn layer_sel(l: &Layer, selected: &[photocraft_doc::LayerId], instances: &HashMa
             v["smartContents"] = json!({"id": sm.contents_id.0, "instances": instances.get(&sm.contents_id).copied().unwrap_or(1)});
         }
         LayerContent::Text(t) => {
-            v["text"] = json!({"text": t.text, "font": t.font_family, "sizePt": t.size_pt});
+            v["text"] = json!({
+                "text": t.text,
+                "font": t.font_family,
+                "sizePt": t.size_pt,
+                "antialias": serde_json::to_value(t.antialias).unwrap_or(Value::Null),
+                "runs": serde_json::to_value(t.char_runs()).unwrap_or(Value::Null),
+                "paragraphs": serde_json::to_value(t.paragraph_runs()).unwrap_or(Value::Null),
+            });
         }
         _ => {}
     }
@@ -181,6 +188,7 @@ fn layer_sel(l: &Layer, selected: &[photocraft_doc::LayerId], instances: &HashMa
         v["effects"] = json!({
             "enabled": l.effects.enabled,
             "items": l.effects.items.iter().map(|e| json!({"kind": e.label(), "enabled": e.enabled()})).collect::<Vec<_>>(),
+            "data": serde_json::to_value(&l.effects.items).unwrap_or(Value::Null),
         });
     }
     // Video layer (Layer › Video Layers): the frame stack behind the displayed content.
@@ -199,6 +207,49 @@ mod tests {
     use super::*;
     use photocraft_color::PixelFormat;
     use photocraft_doc::{LayerMask, Path, VectorMask};
+
+    #[test]
+    fn layer_inspect_reports_text_runs_and_full_effect_data() {
+        let text = photocraft_doc::TextLayer {
+            text: "Hi".into(),
+            font_family: "Fixture Sans".into(),
+            size_pt: 18.0,
+            antialias: photocraft_doc::text::AntiAlias::Crisp,
+            ..Default::default()
+        };
+        let mut lyr = Layer::new("Styled text", LayerContent::Text(text));
+        lyr.effects.enabled = true;
+        lyr.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
+
+        let inspected = layer(&lyr);
+        let text_json = &inspected["text"];
+        assert_eq!(text_json["text"], "Hi");
+        assert_eq!(text_json["font"], "Fixture Sans");
+        assert_eq!(text_json["sizePt"], 18.0);
+        assert_eq!(text_json["antialias"], serde_json::to_value(photocraft_doc::text::AntiAlias::Crisp).unwrap());
+        assert_eq!(
+            text_json["runs"],
+            serde_json::to_value(match &lyr.content {
+                LayerContent::Text(t) => t.char_runs(),
+                _ => Vec::new(),
+            })
+            .unwrap()
+        );
+        assert_eq!(
+            text_json["paragraphs"],
+            serde_json::to_value(match &lyr.content {
+                LayerContent::Text(t) => t.paragraph_runs(),
+                _ => Vec::new(),
+            })
+            .unwrap()
+        );
+
+        let effects = &inspected["effects"];
+        assert_eq!(effects["enabled"], true);
+        assert_eq!(effects["items"][0]["kind"], "Drop Shadow");
+        assert_eq!(effects["data"], serde_json::to_value(&lyr.effects.items).unwrap());
+        assert!(effects["data"][0]["DropShadow"]["distance"].is_number(), "{effects}");
+    }
 
     #[test]
     fn an_adjustment_layer_is_reported_with_the_params_its_command_takes() {
