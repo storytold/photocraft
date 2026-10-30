@@ -30,6 +30,7 @@ use crate::widgets;
 
 mod controls;
 mod convert;
+mod filmstrip;
 mod menu;
 mod open;
 mod proxy;
@@ -38,6 +39,7 @@ mod sidecar;
 pub use controls::show;
 #[cfg(test)]
 use convert::open_pixels;
+pub use filmstrip::HeldRaw;
 pub use menu::menu;
 #[cfg(test)]
 use open::{Coverage, commit_open_raw, document_index, finish_redevelop, open_raw, replace_raw_document};
@@ -79,6 +81,8 @@ pub struct CameraRawDialog {
     pub(crate) detail: crate::camera_raw_detail_ui::DetailPreview,
     display: std::sync::Arc<photocraft_engine::display_color::CanvasDisplay>,
     pub(crate) viewport: Option<ERect>,
+    /// Whether the main window had focus last frame (see [`show`]).
+    main_focused: bool,
     pub(crate) float: bool,
     tex: Option<TextureHandle>,
     before_tex: Option<TextureHandle>,
@@ -116,6 +120,8 @@ pub struct CameraRawDialog {
     redo: Vec<CameraRaw>,
     /// Params at pointer-down. One drag is one undo step.
     edit_origin: Option<CameraRaw>,
+    /// Geometry › Upright › Guided's tool (Shift+T).
+    pub(crate) guides: crate::camera_raw_guides_ui::GuideTool,
 }
 
 impl CameraRawDialog {
@@ -133,6 +139,7 @@ impl CameraRawDialog {
         result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id()})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
+        result["guidedUprightTool"] = json!({"active": self.guides.active, "selected": self.guides.selected});
         result["previewPending"] = json!(self.render_pending());
         result["previewApproximate"] = json!(!self.detail.ready && (self.pw != self.full_w || self.ph != self.full_h));
         result["detailPending"] = json!(self.detail.pending());

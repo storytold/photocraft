@@ -11,7 +11,7 @@ use photocraft_algo::exif;
 use photocraft_algo::lens::{self, EdgeMode, LensCorrection};
 use photocraft_algo::transform::Interp;
 use photocraft_algo::wideangle::{self, WideAngle};
-use photocraft_color::{ColorMode, SampleType};
+use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, Layer, LayerContent, LayerId, SmartFilter};
 use photocraft_geom::Rect;
 use photocraft_raster::{Surface, from_rgba_into};
@@ -155,6 +155,8 @@ pub fn raw_params(cmd: &str, p: &Value) -> Result<CameraRaw> {
     // `exposure` becomes `2^exposure`, which overflows f32 to infinity from 128 up (and then
     // writes inf/NaN into 32-bit layers). Clamp to the documented -5..5.
     cr.exposure = cr.exposure.clamp(-5.0, 5.0);
+    // The warp turns these into a homography and sample offsets.
+    cr.clamp_geometry();
     Ok(cr)
 }
 
@@ -187,21 +189,24 @@ pub fn camera_raw_surface(surf: &Surface, area: Rect, p: &CameraRaw) -> Surface 
         return surf.clone();
     }
     let Some(len) = raw_pixels(area) else { return surf.clone() };
-    let fmt = surf.format();
     let (w, h) = (area.width() as usize, area.height() as usize);
     let mut px = rgba_region(surf, area, len);
-    camera_raw::develop(&mut px, w, h, p, fmt.sample == SampleType::F32);
+    camera_raw::develop(&mut px, w, h, p, surf.format().sample == SampleType::F32);
+    // A warp leaves the corners it uncovers transparent, so the result needs alpha; otherwise
+    // alpha is untouched.
+    let warped = !p.geometry_neutral();
+    let src = if warped && !surf.format().alpha { surf.convert(PixelFormat::new(surf.format().mode, surf.format().sample, true)) } else { surf.clone() };
+    let fmt = src.format();
     let n = fmt.channels();
-    let orig = surf.read_region(area);
+    let orig = src.read_region(area);
     let mut data = vec![0.0f32; w * h * n];
     for (i, (q, o)) in px.iter().zip(data.chunks_exact_mut(n)).enumerate() {
         from_rgba_into(&fmt, *q, o);
-        if fmt.alpha {
-            // Alpha is untouched.
+        if fmt.alpha && !warped {
             o[n - 1] = orig[i * n + n - 1];
         }
     }
-    let mut out = surf.clone();
+    let mut out = src;
     out.write_region(area, &data);
     out.prune();
     out
@@ -417,7 +422,9 @@ fn camera_raw_cmd(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let t0 = Stopwatch::start();
-    let id = run_filter(s, RAW, "Camera Raw Filter", p.clone(), false, &|surf, canvas| camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr))?;
+    let id = run_filter(s, RAW, "Camera Raw Filter", p.clone(), !cr.geometry_neutral(), &|surf, canvas| {
+        camera_raw_surface(surf, canvas.union(&surf.content_bounds()), &cr)
+    })?;
     Ok(json!({"layer": id.0, "identity": cr.is_identity(), "ms": t0.ms()}))
 }
 
@@ -472,7 +479,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Camera Raw Filter…",
             menu: &["Filter"],
             shortcut: Some("Cmd+Shift+A"),
-            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","seed":u32=0}"##,
+            params: r##"{"temperature":-100..100=0,"tint":-100..100=0,"exposure":-5..5=0,"contrast":-100..100=0,"highlights":-100..100=0,"shadows":-100..100=0,"whites":-100..100=0,"blacks":-100..100=0,"texture":-100..100=0,"clarity":-100..100=0,"dehaze":-100..100=0,"vibrance":-100..100=0,"saturation":-100..100=0,"curveHighlights":-100..100=0,"curveLights":-100..100=0,"curveDarks":-100..100=0,"curveShadows":-100..100=0,"curveSplits":[25,50,75],"pointCurve":[[in,out]],"pointCurveRed":[[in,out]],"pointCurveGreen":[[in,out]],"pointCurveBlue":[[in,out]],"hslHue":[8],"hslSat":[8],"hslLum":[8],"gradeShadows":{"hue":deg,"sat":0..100,"lum":-100..100},"gradeMidtones":{},"gradeHighlights":{},"gradeGlobal":{},"gradeBlending":0..100=50,"gradeBalance":-100..100=0,"shadowTint":-100..100=0,"calibrationHue":[red,green,blue] -100..100,"calibrationSat":[red,green,blue] -100..100 (the Calibration panel: Shadows tint and the primaries' hue and saturation),"sharpenAmount":0..150=0,"sharpenRadius":0.5..3=1,"sharpenDetail":0..100=25,"sharpenMasking":0..100=0,"noiseLuminance":0..100=0,"noiseLuminanceDetail":0..100=50,"noiseColor":0..100=0,"noiseColorDetail":0..100=50,"grainAmount":0..100=0,"grainSize":0..100=25,"grainRoughness":0..100=50,"vignetteAmount":-100..100=0,"vignetteMidpoint":0..100=50,"vignetteRoundness":-100..100=0,"vignetteFeather":0..100=50,"vignetteHighlights":0..100=0,"vignetteStyle":"highlightPriority|colorPriority|paintOverlay","upright":"off|auto|level|vertical|full|guided","uprightGuides":[[[x,y],[x,y]] (Guided: 2 to 4 guides, endpoints as 0..1 fractions of the frame)],"transformVertical":-100..100=0,"transformHorizontal":-100..100=0,"transformRotate":-10..10=0,"transformAspect":-100..100=0,"transformScale":50..150=100,"transformOffsetX":-100..100=0,"transformOffsetY":-100..100=0,"seed":u32=0}"##,
             enabled: raw_enabled,
             run: camera_raw_cmd,
             journal: true,
@@ -511,6 +518,27 @@ mod tests {
         })
         .unwrap();
         s
+    }
+
+    /// A raw opens as a Background layer: a warp turns it into a layer with transparent corners,
+    /// as Lens Correction's Transparency edge does; colour-only settings leave it a Background.
+    #[test]
+    fn camera_raw_warp_makes_the_background_a_layer_with_transparent_corners() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 60, "height": 40, "background": "white"})).unwrap();
+        let bg = s.active().unwrap().active_layer.unwrap();
+        assert!(s.active().unwrap().doc.is_background(bg));
+        s.execute(RAW, json!({"exposure": 0.5})).unwrap();
+        assert!(s.active().unwrap().doc.is_background(bg));
+        s.execute(RAW, json!({"transformRotate": 8})).unwrap();
+        let d = s.active().unwrap();
+        assert!(!d.doc.is_background(bg));
+        let surf = d.doc.layer(bg).unwrap().surface().unwrap();
+        assert!(surf.format().alpha);
+        assert!(surf.rgba(0, 0)[3] < 0.01 && surf.rgba(30, 20)[3] == 1.0);
+        // Guided Upright without guides is an identity; unknown modes are refused.
+        assert_eq!(s.execute(RAW, json!({"upright": "guided"})).unwrap()["identity"], true);
+        assert!(s.execute(RAW, json!({"upright": "sideways"})).is_err());
     }
 
     fn active_px(s: &Session, x: i32, y: i32) -> [f32; 4] {

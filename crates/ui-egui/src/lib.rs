@@ -117,6 +117,7 @@ pub use dialogs::brush_preset_dialog;
 pub use dialogs::caf_ui;
 use dialogs::camera_raw_detail_ui;
 use dialogs::camera_raw_gpu;
+use dialogs::camera_raw_guides_ui;
 use dialogs::camera_raw_preview_ui;
 use dialogs::camera_raw_scope_ui;
 pub use dialogs::camera_raw_ui;
@@ -553,9 +554,9 @@ pub struct PhotocraftApp {
     pub(crate) gradient: gradient_ui::LiveGradient,
     /// Filter › Camera Raw Filter dialog (camera_raw_ui).
     pub(crate) camera_raw: Option<camera_raw_ui::CameraRawDialog>,
-    /// A raw file just opened interactively, waiting for the open-time Camera Raw dialog (shown
-    /// on the next frame, which has the egui context).
-    pub(crate) pending_raw_open: Option<camera_raw_ui::RawOpen>,
+    /// Raws just opened interactively, waiting in the open-time Camera Raw dialog (shown on the
+    /// next frame, which has the egui context); several share it in a filmstrip.
+    pub(crate) raw_shelf: Vec<camera_raw_ui::HeldRaw>,
     /// The open-time re-develops (or their Camera Raw steps) running in the background, one per
     /// raw being opened.
     pub(crate) raw_redevelop: Vec<camera_raw_ui::Redevelop>,

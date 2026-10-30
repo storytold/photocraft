@@ -4215,3 +4215,26 @@ curves	Smooth	Згладити
 	Font size presets	Набори розмірів шрифту
 	Leading presets	Набори інтерліньяжу
 	Tracking presets	Набори трекінгу
+	Upright	Випрямлення
+	Manual Transformations	Ручна трансформація
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Намалюйте на зображенні дві або більше напрямних уздовж ліній, які мають бути вертикальними або горизонтальними (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Перетягніть кінець напрямної, щоб перемістити його; виберіть напрямну й натисніть Delete, щоб видалити її. Не більше чотирьох напрямних.
+cameraRaw	Geometry	Геометрія
+cameraRaw	Off	Вимкнено
+cameraRaw	Auto	Авто
+cameraRaw	Level	Рівень
+cameraRaw	Vertical	Вертикальна
+cameraRaw	Full	Повна
+cameraRaw	Disable Upright	Вимкнути випрямлення
+cameraRaw	Auto: apply balanced perspective corrections	Авто: збалансована корекція перспективи
+cameraRaw	Level: apply only level correction	Горизонт: лише вирівнювання горизонту
+cameraRaw	Vertical: apply level and vertical perspective correction	Вертикаль: горизонт і вертикальна перспектива
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Повне: горизонт, горизонтальна й вертикальна перспектива
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	За напрямними: намалюйте дві або більше напрямних, щоб задати корекцію перспективи
+cameraRaw	Horizontal	Горизонтальна
+cameraRaw	Rotate	Повернути
+cameraRaw	Aspect	Пропорції
+cameraRaw	Scale	Масштаб
+cameraRaw	Offset X	Зсув по X
+cameraRaw	Offset Y	Зсув по Y
+cameraRaw	Guided	За напрямними
