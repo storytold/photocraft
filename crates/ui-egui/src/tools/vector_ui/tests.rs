@@ -531,6 +531,39 @@ fn one_pixel_line_fills_one_pixel_row() {
     }
 }
 
+/// CodeRabbit on #9506: a straight line's width changes smoothly with its weight under Align
+/// Edges: the weight snaps to the nearest whole pixel (1.99 and 2.01 both fill 2 rows, not 1
+/// and 3), and its sides stay on pixel edges.
+#[test]
+fn align_edges_snaps_a_fractional_weight_to_the_nearest_pixel() {
+    for (weight, want) in [(1.0, 1.0), (1.4, 1.0), (1.99, 2.0), (2.0, 2.0), (2.01, 2.0), (2.6, 3.0), (3.0, 3.0)] {
+        for (a, b, i) in [([10.0, 23.0], [70.0, 23.0], 1), ([33.0, 9.0], [33.0, 50.0], 0)] {
+            let (from, to, w) = super::shapes::align_line_edges(a, b, weight, false).expect("a line");
+            assert_eq!(w, want, "weight {weight}");
+            let (lo, hi) = (from[i] - w / 2.0, from[i] + w / 2.0);
+            assert!(lo.fract() == 0.0 && hi.fract() == 0.0 && from[i] == to[i], "weight {weight}: sides {lo}..{hi}");
+        }
+    }
+}
+
+/// CodeRabbit on #9506: a ⇧-drag line stays at 45° when its ends snap to whole pixels, even a
+/// short one (rounding each end on its own turned 10.1,10.49 → 11.3,11.69 into a 1 × 2 step).
+#[test]
+fn a_short_shift_drag_line_keeps_its_45_degrees() {
+    let o = app().ui.tool_options.clone();
+    for (start, end) in [([10.1, 10.49], [11.3, 11.69]), ([20.4, 5.6], [17.1, 8.9]), ([3.3, 40.2], [9.8, 33.1]), ([50.5, 50.5], [44.2, 44.0])] {
+        let g = super::shapes::shape_geometry(&o, Tool::Line, start, end, egui::Modifiers::SHIFT).expect("a line");
+        let p = |k: &str| [g[k][0].as_f64().unwrap(), g[k][1].as_f64().unwrap()];
+        let (from, to) = (p("from"), p("to"));
+        assert!(from.iter().chain(&to).all(|v| v.fract() == 0.0), "whole pixels: {g}");
+        let (dx, dy) = (to[0] - from[0], to[1] - from[1]);
+        assert!(dx != 0.0 && dx.abs() == dy.abs(), "{start:?} → {end:?}: still 45°: {g}");
+    }
+    // Without ⇧ each end still snaps to its nearest pixel, even on an exact diagonal.
+    let g = super::shapes::shape_geometry(&o, Tool::Line, [10.1, 10.49], [11.3, 11.69], egui::Modifiers::NONE).expect("a line");
+    assert_eq!((g["from"].clone(), g["to"].clone()), (json!([10.0, 10.0]), json!([11.0, 12.0])), "{g}");
+}
+
 #[test]
 fn shift_pressed_during_a_shape_drag_constrains_it() {
     // #668: ⇧ only counted when held at the press; Photoshop constrains when it is pressed
