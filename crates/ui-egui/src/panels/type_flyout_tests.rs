@@ -426,6 +426,8 @@ fn alt_click_cycles_the_tool_flyout_slot() {
     assert_eq!(app.ui.tool, Tool::RectMarquee);
     assert!(!flyout(&ctx));
     // Alt-click advances through every flyout entry, including ones Shift+M skips.
+    // Clear i.modifiers before the release while keeping Alt on the release event, so a
+    // regression that only reads i.modifiers (and ignores the pointer-release modifiers) fails.
     for (t, want) in [
         (1.5, Tool::EllipseMarquee),
         (2.0, Tool::SingleRowMarquee),
@@ -438,7 +440,12 @@ fn alt_click_cycles_the_tool_flyout_slot() {
             t,
             vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)],
         );
-        frame(&mut app, &ctx, t + 0.05, vec![egui::Event::ModifiersChanged(alt), pointer(at, false, alt)]);
+        frame(
+            &mut app,
+            &ctx,
+            t + 0.05,
+            vec![egui::Event::ModifiersChanged(Default::default()), pointer(at, false, alt)],
+        );
         frame(&mut app, &ctx, t + 0.1, vec![]);
         assert_eq!(app.ui.tool, want, "alt-click at {t}");
         assert!(!flyout(&ctx), "alt-click must not open the flyout");
@@ -451,7 +458,12 @@ fn alt_click_cycles_the_tool_flyout_slot() {
         4.0,
         vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)],
     );
-    frame(&mut app, &ctx, 4.05, vec![egui::Event::ModifiersChanged(alt), pointer(at, false, alt)]);
+    frame(
+        &mut app,
+        &ctx,
+        4.05,
+        vec![egui::Event::ModifiersChanged(Default::default()), pointer(at, false, alt)],
+    );
     frame(&mut app, &ctx, 4.1, vec![]);
     assert_eq!(app.ui.tool, Tool::EllipseMarquee, "inactive slot cycles from its shown tool");
 }
