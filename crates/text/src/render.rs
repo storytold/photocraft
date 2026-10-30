@@ -572,7 +572,7 @@ pub fn glyph_outlines(layout: &TextLayout, transform: &Affine, warp: Option<&War
 
 /// Glyph outlines of `layout` in document space (through `transform`, bent by `warp`), one
 /// element list per glyph, for Type › Create Work Path and Convert to Shape. Faux bold is not
-/// applied (Photoshop also converts the regular outline); faux italic and scaling are. Under a
+/// applied (the regular outline is converted); faux italic and scaling are. Under a
 /// warp, control points are mapped directly, which is exact for straight segments and a close
 /// approximation for curves.
 pub fn outlines(layout: &TextLayout, transform: &Affine, warp: Option<&Warp>) -> Vec<Vec<PathEl>> {
