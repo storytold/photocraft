@@ -64,6 +64,9 @@ struct Frame {
     layout: TextLayout,
 }
 
+/// Lay out the named type layer at the document's resolution for a read-only caret query.
+/// Missing layers and non-type content return errors; `cmd` identifies the query in parameter
+/// errors. The frame retains model geometry, while ink checks read the document's current cache.
 fn frame(doc: &Document, id: LayerId, cmd: &str) -> Result<Frame> {
     let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let LayerContent::Text(t) = &layer.content else {
@@ -142,6 +145,9 @@ fn column(layout: &TextLayout, aff: Affine, text: &str, index: usize, doc_x: Opt
     if solved.is_finite() { solved as f32 } else { x }
 }
 
+/// Query the nearest caret at a finite document point without changing selection or history.
+/// An explicit layer may be hidden or outside the point; otherwise pick the topmost shown hit.
+/// `inside` distinguishes actual layout/cached-ink containment from a nearest caret outside it.
 fn hit_test(s: &Session, p: &Value) -> Result<Value> {
     const CMD: &str = "type.hitTest";
     let x = req_f64(p, "x", CMD)?;
