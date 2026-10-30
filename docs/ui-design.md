@@ -121,6 +121,37 @@ then send normal Tab and Space events through the app's shortcut dispatcher. The
 focus traversal and activation with that nondefault binding; default canvas Tab still toggles
 panels. These offscreen checks do not establish native window or platform input acceptance.
 
+### Main-toolbar Alt/Option-click (2026-10-26, #8731)
+
+A completed short Alt-click (Windows/Linux) or Option-click (macOS) advances in the
+clicked slot's visible flyout order and wraps. An inactive slot starts from its displayed,
+remembered member. Edit Toolbar's hidden members are omitted; a single visible member
+selects itself. This is independent of shortcut assignments and includes tools without a
+letter shortcut. The selection uses the same explicit path as ordinary toolbar and
+`tools.select.*` choices, so temporary overrides are cleared and existing selected-tool
+and tool-option persistence apply. No document or history entry changes.
+
+PhotoCraft latches Alt/Option from the primary press and selects on release. Adding the
+modifier after pressing does not cycle; releasing it before the button still does. A hold
+or drag-away retains the existing flyout behavior and its concluding release does not
+cycle. A short modifier-click closes an open flyout and makes only the cycling choice.
+Keyboard activation remains ordinary selection. Hand/Zoom double-click view actions require
+two consecutive ordinary pointer clicks on the same slot; a modifier-click followed by an
+ordinary click cannot invoke them. A release elsewhere or a flyout-owned gesture breaks
+that pair. Eligible ordinary clicks use the toolkit's time and movement limits independently
+of its modifier-blind click count, so an ordinary pair immediately after Alt/Option-click
+still invokes the view action. A third rapid ordinary click does not repeat it. A release
+and subsequent press delivered in one frame retain their separate press-time modifiers.
+
+Reference boundary: Adobe's [CS6 manual](https://helpx.adobe.com/pdf/cs6/photoshop_reference.pdf),
+"Keys for selecting tools", documents the gesture with Add Anchor Point, Delete Anchor Point
+and Convert Point exceptions. It does not establish whether those tools are skipped or
+suppress cycling from particular displayed members. **The entire Pen slot retains its
+existing click behavior pending that evidence.** This is a deferred part of #8731, not a
+claim about Photoshop's Pen-group behavior. No current Photoshop build was available;
+modifier timing and hold/drag arbitration above follow PhotoCraft conventions and remain
+subject to reference-app comparison.
+
 ## Menus
 
 Horizontal and vertical ruler ticks, labels and pointer markers are clipped to their respective
