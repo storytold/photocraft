@@ -24,6 +24,7 @@ use crate::state::{MadeLayer, Tool, TransformMode, TransformSession};
 
 mod begin;
 mod commit;
+mod cylinder;
 mod drag_modes;
 mod draw;
 mod options_bar;
@@ -35,9 +36,12 @@ pub(crate) use begin::begin_content_aware;
 pub(crate) use begin::moving_layers;
 #[cfg(test)]
 pub(crate) use begin::moving_texel;
-pub use begin::{WARP_ONE_LAYER, begin, begin_copy, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_type};
+pub use begin::{WARP_ONE_LAYER, begin, begin_copy, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_active_layer, warps_type};
 pub(crate) use commit::{SAVE_FOR_WEB, committing, nudge};
 pub use commit::{cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event, track_steps};
+use cylinder::CylinderHandle;
+#[cfg(test)]
+use cylinder::{cylinder_cursor, cylinder_default, cylinder_dragged, cylinder_handles, cylinder_hit, cylinder_values};
 #[cfg(test)]
 use drag_modes::{HandleIndicator, handle_indicator, keep_convex, turns};
 pub(crate) use drag_modes::{apply_drag, corner_distorts, legacy_mods};
@@ -56,7 +60,7 @@ pub(crate) use options_bar::position_size_fields;
 #[cfg(test)]
 use options_bar::{
     POSITION_LIMIT_PX, Parts, SCALE_LIMIT_PCT, SIZE_UNIT_KEY, SKEW_LIMIT_DEG, matching_anchor, readout, rotate_about_pivot, scale_about_pivot, scale_limit_pct,
-    set_size_unit, size_pct, size_shown, size_unit, warp_grid_id,
+    set_size_unit, size_pct, size_shown, size_unit, warp_grid_id, warp_style_options,
 };
 pub use options_bar::{options_bar, reset_warp};
 pub(crate) use pointer::{Gesture, Hit, hit, rotate_cursor_dir};
@@ -103,6 +107,9 @@ enum WarpDrag {
     Point { index: usize, start: [f64; 2], pts0: Vec<[f64; 2]> },
     /// Anywhere else on the grid: the surface under the pointer follows it.
     Surface { s: f64, t: f64, start: [f64; 2], pts0: Vec<[f64; 2]> },
+    /// A cylinder's handle, or its surface (which turns the wrap); `values0` are its seven values
+    /// at the press (cylinder.rs).
+    Cylinder { handle: CylinderHandle, start: [f64; 2], values0: [f64; 7] },
 }
 
 /// Preview state that isn't serialisable: the document without the transformed pixels, and
@@ -140,6 +147,11 @@ pub struct TransformPreview {
     committing: Option<JobId>,
     /// Content-Aware Scale's live preview (cas_transform.rs).
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
+    /// While a smart object's stored warp is edited (begin.rs `preview_without_smart_warp`):
+    /// the texels and box of the mode the session is not in. Warp mode shows the source without
+    /// the warp over the warp box, Free Transform the layer's render with it over its own box;
+    /// leaving or re-entering Warp mode, and Undo across it, swap them.
+    other_texels: Option<OtherTexels>,
     /// A box over several layers (#6501): their composite, which `texture` holds.
     several: Option<Several>,
 }
@@ -219,6 +231,25 @@ fn style_reach(doc: &Document, ids: &[LayerId]) -> i32 {
         }
     }
     reach
+}
+
+/// The preview texels of the transform mode the session is not in, and the box they cover
+/// ([`TransformPreview::other_texels`]).
+struct OtherTexels {
+    texture: crate::transform_tex::PreviewTextures,
+    rect: [f64; 4],
+    quad: [[f64; 2]; 4],
+}
+
+/// Swaps the session's texels and box with the other mode's (`t` holds the box the texels
+/// cover), when there are any: the stored warp's edit shows the source without the warp, the
+/// box the render with it.
+fn swap_mode_texels(t: &mut TransformSession, pv: &mut TransformPreview) {
+    if let Some(o) = pv.other_texels.as_mut() {
+        std::mem::swap(&mut pv.texture, &mut o.texture);
+        std::mem::swap(&mut t.rect, &mut o.rect);
+        std::mem::swap(&mut t.quad, &mut o.quad);
+    }
 }
 
 /// What [`follow_edits`] needs to rebuild the preview document.

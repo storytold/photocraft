@@ -535,3 +535,30 @@ fn proof_setup_presets_and_checkmarks() {
     let params = crate::filter_dialog::parse_spec(spec.params);
     assert!(matches!(&params[0].kind, crate::filter_dialog::Kind::Choice { options, .. } if options[0] == "srgb" && !options.iter().any(|v| v.contains('/'))));
 }
+
+/// Edit › Transform › Warp is checked while the active layer is warped, as the reference's is:
+/// a smart object with a stored warp, or a Warp box open (#9798).
+#[test]
+fn transform_warp_is_checked_for_a_warped_layer() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(false), "no document");
+    app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.sync_views();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(8, 8, 32, 32), &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(false), "a plain layer");
+    let ctx = egui::Context::default();
+    crate::transform_tool::begin_warp(&mut app, &ctx).unwrap();
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(true), "a Warp box is open");
+    crate::transform_tool::cancel(&mut app);
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(false));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(false), "a smart object without a warp");
+    app.run("layer.smartObjects.warp", json!({"style": "cylinder", "values": [8, 32, 32, 8, 0.5, 0.5, 0.85], "rect": [8, 8, 32, 32]})).unwrap();
+    assert_eq!(checked(&app, "edit.transform.warp"), Some(true), "a stored warp");
+}

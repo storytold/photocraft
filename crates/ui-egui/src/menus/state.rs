@@ -147,6 +147,12 @@ pub(super) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     if id == "select.isolateLayers" {
         return Some(app.session.active().is_some_and(|d| !d.isolated_layers.is_empty()));
     }
+    // Edit › Transform › Warp carries a check while the active layer is warped (a smart object
+    // with a stored warp, or a Warp box open), as the reference's does: picking it then edits
+    // that warp (#9798).
+    if id == "edit.transform.warp" {
+        return Some(crate::transform_tool::warps_active_layer(app));
+    }
     if id == "view.proofColors" || id == "view.gamutWarning" {
         let Some(d) = app.session.active() else { return Some(false) };
         let pv = app.session.color.proof(d.doc.id);

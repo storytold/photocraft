@@ -1,4 +1,5 @@
 use super::begin::warps_type;
+use super::cylinder::draw_cylinder;
 use super::drag_modes::{HandleIndicator, handle_indicator};
 use super::options_bar::{quad_scale, readout};
 use super::pointer::{Hit, handle_at, rotate_dir, rotation_degrees};
@@ -170,7 +171,8 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         // The same keys as `cursor`, sticky ones included, so the guide matches the pointer.
         let mods = crate::workspace_ui::sticky_mods(app, painter.ctx().input(|i| i.modifiers));
         let alt = mods.alt || mods.command;
-        let guide = at.filter(|_| !warps_type(app)).and_then(|p| {
+        // No splits on type (#3004) or a cylinder (#4112).
+        let guide = at.filter(|_| !warps_type(app) && w.style != WarpStyle::Cylinder).and_then(|p| {
             let tool = pv.split_tool.or_else(|| {
                 (alt || pv.split_quick).then(|| {
                     let m = w.to_mesh(1, 1);
@@ -552,6 +554,12 @@ fn draw_warp_overlay(painter: &egui::Painter, xf: &ViewXform, w: &Warp, pv: &Tra
             })
             .collect()
     };
+    // A cylinder is outlined and cut into a 3 × 2 grid, as the reference draws it, with its own
+    // handles on the lines (#4112, cylinder.rs). It has no split guide.
+    if w.style == WarpStyle::Cylinder {
+        draw_cylinder(painter, w, curve, scr, pv, line);
+        return;
+    }
     // Patch boundaries are the grid. Only Default (one patch) draws the rule-of-thirds guides;
     // a 3×3 preset is three even cells, not those guides repeated inside every cell.
     let thirds = single_patch(&m);

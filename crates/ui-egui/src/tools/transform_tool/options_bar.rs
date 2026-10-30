@@ -1,5 +1,6 @@
 use super::begin::{enter_warp, leave_warp, warps_type};
 use super::commit::{cancel, commit};
+use super::cylinder::cylinder_default;
 use super::pointer::point_on_quad;
 use super::warp::edit_session_warp;
 use super::{BezierMesh, Homography, PhotocraftApp, SplitTool, Stroke, TransformSession, Warp, WarpStyle, json, vec2};
@@ -362,12 +363,14 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
     };
     // Type takes only the styles (#3004): Split and Grid are greyed, and there is no Custom.
     let on_type = warps_type(app);
+    // A cylinder has no splits or grid either (#4112): its handles are its own.
+    let cylinder = w.style == WarpStyle::Cylinder;
     // Split, Grid, then the warp style with its bend fields.
-    ui.add_enabled_ui(!on_type, |ui| warp_mesh_fields(app, ui, w));
+    ui.add_enabled_ui(!on_type && !cylinder, |ui| warp_mesh_fields(app, ui, w));
     crate::widgets::vline(ui, 22.0);
     lbl(ui, tl!("Warp:"));
     let mut style = w.style;
-    let opts: Vec<(WarpStyle, &str)> = WarpStyle::all().filter(|s| !(on_type && *s == WarpStyle::Custom)).map(|s| (s, s.label())).collect();
+    let opts: Vec<(WarpStyle, &str)> = warp_style_options(on_type).map(|s| (s, s.label())).collect();
     if crate::widgets::dropdown(ui, "warp-style", tl!("Warp"), &mut style, &opts, 120.0)
         && let Some(t) = app.ui.transform.as_mut()
     {
@@ -376,10 +379,13 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
             WarpStyle::Custom => Warp::custom(w.to_mesh(1, 1), b),
             WarpStyle::None if on_type => Warp::none(b),
             WarpStyle::None => Warp::custom(BezierMesh::identity(b, 1, 1), b),
+            // The cylinder the menu starts with over the box (a box too thin for one keeps its shape).
+            WarpStyle::Cylinder => cylinder_default(b).unwrap_or_else(|| Warp::custom(w.to_mesh(1, 1), b)),
             s => Warp { style: s, bend: if w.style.is_preset() { w.bend } else { 50.0 }, ..Warp::none(b) },
         });
     }
-    // Orientation and the bend fields are always there, and only act on a preset style.
+    // Orientation and the bend fields are always there, and only act on a preset style (a
+    // cylinder keeps them greyed, as the reference does: its handles are its only controls).
     let preset = w.style.is_preset();
     ui.add_enabled_ui(preset, |ui| {
         let orient = crate::icons::button(ui, "arrow-left-right", 26.0, w.vertical, tl!("Vertical"));
@@ -404,6 +410,12 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
             }
         }
     });
+}
+
+/// The Warp menu's styles in Photoshop's order: None, Custom and the presets, then Cylinder
+/// (#4112). Type takes only the styles its Warp Text has: no Custom, no Cylinder (#3004).
+pub(super) fn warp_style_options(on_type: bool) -> impl Iterator<Item = WarpStyle> {
+    WarpStyle::all().filter(move |s| !(on_type && *s == WarpStyle::Custom)).chain((!on_type).then_some(WarpStyle::Cylinder))
 }
 
 /// The Split icons and the Grid menu of the Warp options bar.

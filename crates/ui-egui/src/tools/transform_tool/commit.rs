@@ -384,6 +384,15 @@ fn step(app: &mut PhotocraftApp, redo: bool) -> serde_json::Value {
     let Some(step) = from.pop() else { return serde_json::Value::Null };
     to.push(Step::of(t));
     s.settled = Some(step.clone());
+    let (had_warp, rect, quad) = (t.warp.is_some(), t.rect, t.quad);
     step.restore(t);
+    // Across the Warp boundary, a stored warp's edit shows other texels (begin.rs): the step
+    // brings its own box, so only the texels swap, and the other mode keeps the box it left.
+    if had_warp != t.warp.is_some()
+        && let Some(o) = pv.other_texels.as_mut()
+    {
+        std::mem::swap(&mut pv.texture, &mut o.texture);
+        (o.rect, o.quad) = (rect, quad);
+    }
     json!({"transform": t})
 }
