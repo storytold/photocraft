@@ -26,6 +26,9 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
                 if prefix != "pattern.presets" && app.ui.presets_ui.selected.get(panel) == Some(k) {
                     app.ui.presets_ui.selected.insert(panel.into(), n.clone());
                 }
+                if panel == "gradients" {
+                    app.ui.presets_ui.rename_hierarchy_item(panel, k, n);
+                }
                 true
             } else {
                 false
@@ -34,6 +37,9 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
         BrowserAction::Delete(k) => {
             if run(app, &edit, json!({"action": "delete", "preset": k})).is_some() {
                 app.ui.presets_ui.selected.remove(panel);
+                if panel == "gradients" {
+                    app.ui.presets_ui.delete_hierarchy_item(panel, k);
+                }
                 true
             } else {
                 false
@@ -41,6 +47,11 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
         }
         BrowserAction::Move(k, g) => run(app, &edit, json!({"action": "move", "preset": k, "to": g})).is_some(),
         BrowserAction::MoveItem(k, g, index) => {
+            // Patterns have no engine reorder command: their shared-browser sibling sequence is
+            // the persisted view order and has already been updated by the drag resolver.
+            if prefix == "pattern.presets" {
+                return true;
+            }
             let mut params = json!({"action": "move", "preset": k, "to": g});
             if let Some(index) = index {
                 params["index"] = json!(index);
@@ -87,9 +98,9 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
         BrowserAction::Select(_)
         | BrowserAction::Activate(_)
         | BrowserAction::Drop(_, _)
-        | BrowserAction::RenameFolder { .. }
-        | BrowserAction::DeleteFolder { .. }
-        | BrowserAction::MoveItemToFolder { .. }
+        | BrowserAction::RenameNestedGroup { .. }
+        | BrowserAction::DeleteNestedGroup { .. }
+        | BrowserAction::MoveItemToGroup { .. }
         | BrowserAction::MoveGroup { .. }
         | BrowserAction::MoveInto { .. } => false,
     }

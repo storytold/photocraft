@@ -5,8 +5,8 @@ use egui::{Color32, Rect, accesskit::Role, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 
-use crate::pickers::brush_browser::BrushDrag;
 use crate::brush_panel::grouped_presets;
+use crate::pickers::brush_browser::BrushDrag;
 
 use super::*;
 
@@ -16,7 +16,13 @@ fn shared_hierarchy_drop_contract_preserves_brush_folder_moves() {
 
     assert_eq!(
         folder_drop("Imported", &folder(&["Soft"]), "Imported", &folder(&["Hard"]), false),
-        Some(Action::MoveInto { group: "Imported".into(), folder: folder(&["Soft"]), into: Some(("Imported".into(), folder(&["Hard"]))), before: None }),
+        Some(Action::MoveInto {
+            group: "Imported".into(),
+            folder: folder(&["Soft"]),
+            into: Some(("Imported".into(), folder(&["Hard"]))),
+            before: None,
+            before_item: None
+        }),
         "dropping on a folder body nests the dragged folder",
     );
     assert_eq!(
@@ -27,7 +33,7 @@ fn shared_hierarchy_drop_contract_preserves_brush_folder_moves() {
     assert_eq!(folder_drop("Imported", &folder(&["Soft"]), "Imported", &folder(&["Soft", "Nested"]), false), None);
     assert_eq!(
         folder_drop("Imported", &folder(&["Soft"]), "Other", &[], true),
-        Some(Action::MoveInto { group: "Imported".into(), folder: folder(&["Soft"]), into: None, before: Some("Other".into()) }),
+        Some(Action::MoveInto { group: "Imported".into(), folder: folder(&["Soft"]), into: None, before: Some("Other".into()), before_item: None }),
         "dropping a nested folder before a group lifts it to the top level",
     );
     assert_eq!(
@@ -68,7 +74,7 @@ fn brush_hierarchy_preserves_the_supported_folder_depth() {
             .iter()
             .map(|node| match node {
                 Node::Preset(_) => 0,
-                Node::Folder(folder) => 1 + depth(&folder.children),
+                Node::Group(group) => 1 + depth(&group.children),
             })
             .max()
             .unwrap_or(0)
@@ -93,7 +99,7 @@ fn shared_browser_projection_keeps_brush_folder_paths_and_identity() {
     let projected = groups.iter().flat_map(|group| &group.items).find(|item| item.key == identity).expect("projected brush");
     assert_eq!(projected.key, identity);
     assert_eq!(projected.name, name);
-    assert_eq!(projected.folder, vec!["Imported".to_string(), "Soft".to_string()]);
+    assert_eq!(projected.group_path, vec!["Imported".to_string(), "Soft".to_string()]);
 }
 
 #[test]

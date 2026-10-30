@@ -1335,8 +1335,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
                         .or_else(|| group_name.map(str::to_owned))
                         .unwrap_or_else(|| key.clone());
                     json!({"group": group_name.is_some(), "name": name, "folder": [], "text": text})
-                }).or_else(|| app.ui.presets_ui.folder_renaming.as_ref().filter(|rename| rename.panel == "brush-picker").map(|rename| {
-                    json!({"group": true, "name": rename.group, "folder": rename.folder, "text": rename.text})
+                }).or_else(|| app.ui.presets_ui.group_renaming.as_ref().filter(|rename| rename.panel == "brush-picker").map(|rename| {
+                    json!({"group": true, "name": rename.group, "folder": rename.group_path, "text": rename.text})
                 })),
                 // The card's parts (`view` is the Brushes panel's listing and doesn't apply).
                 "showName": app.ui.brush_picker_list.show_name,

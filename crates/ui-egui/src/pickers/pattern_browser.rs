@@ -89,14 +89,14 @@ pub(crate) fn pattern_group_views(patterns: &[photocraft_doc::Pattern], groups: 
                 .iter()
                 .filter_map(|id| patterns.iter().find(|p| &p.id == id))
                 .filter(|p| assigned.insert(p.id.clone()))
-                .map(|p| ItemView { key: p.id.clone(), name: p.display_name().to_string(), folder: Vec::new() })
+                .map(|p| ItemView { key: p.id.clone(), name: p.display_name().to_string(), group_path: Vec::new() })
                 .collect(),
         })
         .collect();
     let loose: Vec<ItemView> = patterns
         .iter()
         .filter(|p| !assigned.contains(&p.id))
-        .map(|p| ItemView { key: p.id.clone(), name: p.display_name().to_string(), folder: Vec::new() })
+        .map(|p| ItemView { key: p.id.clone(), name: p.display_name().to_string(), group_path: Vec::new() })
         .collect();
     if !loose.is_empty() {
         if let Some(group) = views.iter_mut().find(|g| g.name == "Patterns") {
@@ -134,13 +134,11 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         capabilities: BrowserCapabilities::default(),
         item_context_menu: Some(crate::pickers::asset_browser::standard_item_context_menu),
         group_context_menu: Some(crate::pickers::asset_browser::standard_group_context_menu),
-        folder_context_menu: None,
+        nested_group_context_menu: None,
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
-            if let Some(pattern) = groups
-                .get(group_index)
-                .and_then(|group| group.items.get(item_index))
-                .and_then(|item| lib.iter().find(|pattern| pattern.id == item.key))
+            if let Some(pattern) =
+                groups.get(group_index).and_then(|group| group.items.get(item_index)).and_then(|item| lib.iter().find(|pattern| pattern.id == item.key))
             {
                 let texture = pattern_texture(&ctx, pattern);
                 ui.painter().image(texture.id(), rect, Rect::from_min_max(Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
@@ -148,7 +146,12 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         },
         paint_list_item: None,
     };
-    let events = picker_shell(ui, &mut st, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new pattern from the selection"))), ..Default::default() });
+    let events = picker_shell(
+        ui,
+        &mut st,
+        &mut adapter,
+        ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new pattern from the selection"))), ..Default::default() },
+    );
     app.ui.presets_ui = st;
     for event in events {
         match &event {
@@ -160,8 +163,8 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 app.ui.presets_ui.selected.insert("patterns".into(), key.clone());
                 run(app, "pattern.presets.apply", json!({"pattern": key}));
             }
-            // Only the brush browser supports nested-folder context actions.
-            BrowserAction::RenameFolder { .. } | BrowserAction::DeleteFolder { .. } => {}
+            // Only the brush browser supports nested-group context actions.
+            BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
                 generic(app, "patterns", "pattern.presets", &event, json!({}));
             }
@@ -305,13 +308,11 @@ pub(crate) fn compact_pattern_browser(
         capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true },
         item_context_menu: Some(compact_item_context_menu),
         group_context_menu: Some(compact_group_context_menu),
-        folder_context_menu: None,
+        nested_group_context_menu: None,
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, paint_state: ItemPaintState| {
-            if let Some(pattern) = groups
-                .get(group_index)
-                .and_then(|group| group.items.get(item_index))
-                .and_then(|item| pats.iter().find(|pattern| pattern.id == item.key))
+            if let Some(pattern) =
+                groups.get(group_index).and_then(|group| group.items.get(item_index)).and_then(|item| pats.iter().find(|pattern| pattern.id == item.key))
             {
                 ui.painter().image(pattern_texture(&ctx, pattern).id(), rect, uv, Color32::WHITE);
                 if let ItemPaintState::Item { selected } = paint_state {
@@ -340,7 +341,7 @@ pub(crate) fn compact_pattern_browser(
                         }
                         browser_ui.close();
                     }
-                    BrowserAction::RenameFolder { .. } | BrowserAction::DeleteFolder { .. } => {}
+                    BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
                     action => action_events.push(action),
                 }
             }

@@ -8,15 +8,15 @@ use std::collections::BTreeSet;
 use egui::{Align2, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, pos2, vec2};
 
 use crate::pickers::asset_browser_groups::{ROW_INDENT, group_open, row_indent};
-use crate::pickers::asset_browser_hierarchy::{HierarchyFolder, draw_hierarchy, hierarchy_tree};
+use crate::pickers::asset_browser_hierarchy::{HierarchyGroup, draw_hierarchy, hierarchy_tree};
 use crate::pickers::asset_browser_interaction::{
     AssetDrag, ContextMenuAction, HeaderDropCapabilities, HierarchyDrop, asset_browser_header_target_with_capabilities, asset_browser_item_gesture,
-    asset_browser_item_target, context_menu_target, draw_group_context_menu, draw_item_context_menu, header_drop_before, hierarchy_folder_drop,
-    item_drop_after, item_row_edge_targets, paint_group_insertion_line,
+    asset_browser_item_hierarchy_target, asset_browser_item_target, context_menu_target, draw_group_context_menu, draw_item_context_menu, header_drop_before,
+    hierarchy_group_drop, item_drop_after, item_row_edge_targets, paint_group_insertion_line,
 };
 use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, list_row as asset_browser_list_row};
-use crate::pickers::picker_state::PresetUi;
 use crate::pickers::picker_state::escape_hierarchy_key_part;
+use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
 use crate::theme::Tokens;
 
 pub(crate) const MIN_THUMB: f32 = 20.0;
@@ -29,8 +29,8 @@ pub(crate) struct ItemView {
     pub(crate) key: String,
     /// Display label shown in the item card or list row.
     pub(crate) name: String,
-    /// Optional path beneath the containing group. Empty paths keep existing flat libraries flat.
-    pub(crate) folder: Vec<String>,
+    /// Optional nested-group path beneath the containing root group.
+    pub(crate) group_path: Vec<String>,
 }
 
 /// Asset-neutral group and its ordered items, ready for rendering by the shared browser.
@@ -41,7 +41,7 @@ pub(crate) struct GroupView {
     pub(crate) items: Vec<ItemView>,
 }
 
-/// Test helper for the shared browser's group/item/folder query contract.
+/// Test helper for the shared browser's root-group/nested-group/item query contract.
 #[cfg(test)]
 pub(crate) fn filter_groups(groups: &[GroupView], query: &str) -> Vec<GroupView> {
     let query = query.trim().to_lowercase();
@@ -53,7 +53,7 @@ pub(crate) fn filter_groups(groups: &[GroupView], query: &str) -> Vec<GroupView>
                 .items
                 .iter()
                 .filter(|item| item_visible_for_query(item, &query, group_matches))
-                .map(|item| ItemView { key: item.key.clone(), name: item.name.clone(), folder: item.folder.clone() })
+                .map(|item| ItemView { key: item.key.clone(), name: item.name.clone(), group_path: item.group_path.clone() })
                 .collect();
             group_visible_for_query(&query, group_matches, !items.is_empty()).then(|| GroupView { name: group.name.clone(), items })
         })
@@ -65,7 +65,7 @@ fn group_matches_query(group: &GroupView, query: &str) -> bool {
 }
 
 fn item_matches_query(item: &ItemView, query: &str) -> bool {
-    !query.is_empty() && (item.name.to_lowercase().contains(query) || item.folder.iter().any(|part| part.to_lowercase().contains(query)))
+    !query.is_empty() && (item.name.to_lowercase().contains(query) || item.group_path.iter().any(|part| part.to_lowercase().contains(query)))
 }
 
 fn group_visible_for_query(query: &str, group_matches: bool, has_matching_items: bool) -> bool {
@@ -76,11 +76,165 @@ fn item_visible_for_query(item: &ItemView, query: &str, group_matches: bool) -> 
     query.is_empty() || group_matches || item_matches_query(item, query)
 }
 
+struct GroupRenderSegment {
+    group_index: usize,
+    depth: usize,
+    show_header: bool,
+    item_indices: Vec<usize>,
+}
+
+/// Flatten the shared sibling sequences into render segments. Cards and child groups are walked in
+/// their canonical order; adjacent cards are batched for grid layout, and every group is emitted at
+/// exactly the position represented by its `Group` token.
+fn group_render_segments(
+    groups: &[GroupView],
+    display: &[(usize, usize)],
+    parents: &std::collections::BTreeMap<String, String>,
+    orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
+) -> Vec<GroupRenderSegment> {
+    fn visit(
+        group_index: usize,
+        depth: usize,
+        show_header: bool,
+        groups: &[GroupView],
+        display: &[(usize, usize)],
+        parents: &std::collections::BTreeMap<String, String>,
+        orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
+        visited: &mut BTreeSet<String>,
+        out: &mut Vec<GroupRenderSegment>,
+    ) {
+        let Some(group) = groups.get(group_index) else { return };
+        if !visited.insert(group.name.clone()) {
+            return;
+        }
+        let children: Vec<(usize, usize)> = display
+            .iter()
+            .filter_map(|&(child_index, child_depth)| {
+                let child = groups.get(child_index)?;
+                parents.get(&child.name).is_some_and(|parent| parent == &group.name).then_some((child_index, child_depth))
+            })
+            .collect();
+        let child_by_name: std::collections::BTreeMap<&str, (usize, usize)> =
+            children.iter().filter_map(|&(index, child_depth)| groups.get(index).map(|child| (child.name.as_str(), (index, child_depth)))).collect();
+        let item_by_key: std::collections::BTreeMap<&str, usize> = group.items.iter().enumerate().map(|(index, item)| (item.key.as_str(), index)).collect();
+        let default_items: Vec<HierarchyOrderEntry> = group.items.iter().map(|item| HierarchyOrderEntry::Item(item.key.clone())).collect();
+        let default_groups: Vec<HierarchyOrderEntry> =
+            children.iter().filter_map(|(index, _)| groups.get(*index).map(|child| HierarchyOrderEntry::Group(child.name.clone()))).collect();
+        let mut entries = orders.get(&group.name).cloned().unwrap_or_else(|| default_items.into_iter().chain(default_groups).collect());
+        // Be defensive at the projection boundary too: stale or partial saved order must never
+        // hide a newly-added card or child group. Missing peers append in source/display order.
+        for item in &group.items {
+            let entry = HierarchyOrderEntry::Item(item.key.clone());
+            if !entries.contains(&entry) {
+                entries.push(entry);
+            }
+        }
+        for (child_index, _) in &children {
+            if let Some(child) = groups.get(*child_index) {
+                let entry = HierarchyOrderEntry::Group(child.name.clone());
+                if !entries.contains(&entry) {
+                    entries.push(entry);
+                }
+            }
+        }
+        let mut run = Vec::new();
+        let mut first = show_header;
+        for entry in entries {
+            match entry {
+                HierarchyOrderEntry::Item(key) => {
+                    if let Some(&index) = item_by_key.get(key.as_str()) {
+                        run.push(index);
+                    }
+                }
+                HierarchyOrderEntry::Group(name) => {
+                    if !run.is_empty() || first {
+                        out.push(GroupRenderSegment { group_index, depth, show_header: first, item_indices: std::mem::take(&mut run) });
+                        first = false;
+                    }
+                    if let Some((child_index, child_depth)) = child_by_name.get(name.as_str()).copied() {
+                        visit(child_index, child_depth, true, groups, display, parents, orders, visited, out);
+                    }
+                }
+            }
+        }
+        if !run.is_empty() || first {
+            out.push(GroupRenderSegment { group_index, depth, show_header: first, item_indices: run });
+        }
+    }
+
+    let mut out = Vec::new();
+    let mut visited = BTreeSet::new();
+    for &(group_index, depth) in display {
+        if depth == 0 {
+            visit(group_index, depth, true, groups, display, parents, orders, &mut visited, &mut out);
+        }
+    }
+    out
+}
+
 fn item_occurrence_position(groups: &[GroupView], key: &str) -> Option<(usize, usize)> {
     groups
         .iter()
         .enumerate()
         .find_map(|(group_index, group)| group.items.iter().position(|item| item.key.as_str() == key).map(|item_index| (group_index, item_index)))
+}
+
+fn move_item_sibling_order(
+    st: &mut PresetUi,
+    panel: &str,
+    orders: &std::collections::BTreeMap<String, Vec<HierarchyOrderEntry>>,
+    source_group: &str,
+    target_group: &str,
+    key: &str,
+    before: Option<&HierarchyOrderEntry>,
+) {
+    let moving = HierarchyOrderEntry::Item(key.to_string());
+    if source_group != target_group {
+        if let Some(entries) = orders.get(source_group) {
+            let remaining = entries.iter().filter(|entry| *entry != &moving).cloned().collect();
+            st.set_hierarchy_order(panel, source_group, remaining);
+        }
+    }
+    let entries = orders.get(target_group).cloned().unwrap_or_default();
+    st.move_hierarchy_entry(panel, target_group, entries, moving, before);
+}
+
+/// Pick the last eligible target, matching the browser's existing reverse-order drop arbitration.
+fn best_drop_target_index<T>(targets: &[T], mut eligible: impl FnMut(&T) -> bool) -> Option<usize> {
+    targets.iter().rposition(&mut eligible)
+}
+
+/// An item target outranks the indentation-column target when both hit regions overlap. The
+/// indentation column must not consume egui's one-shot release payload before that arbitration.
+fn best_indent_drop_target_index<T>(targets: &[T], item_target_wins: bool, eligible: impl FnMut(&T) -> bool) -> Option<usize> {
+    (!item_target_wins).then(|| best_drop_target_index(targets, eligible)).flatten()
+}
+
+/// Find the next hierarchy sibling at the destination level after a card. A following direct
+/// preset is a stable item anchor; a following child group is a sibling-group anchor. This keeps
+/// a drop immediately after a card ahead of a nested group that happens to follow it in storage.
+fn item_hierarchy_insertion_anchor(
+    items: &[ItemView],
+    index: usize,
+    group_path: &[String],
+    after: bool,
+    moving_group_path: Option<&[String]>,
+) -> (Option<String>, Option<String>) {
+    if !after {
+        return (None, items.get(index).map(|item| item.key.clone()));
+    }
+    // A group is temporarily still present in the projected item list while the drop is
+    // resolved. Do not choose that same group as its own `before` anchor: the engine removes
+    // the moving subtree before validating destination siblings, so such an anchor is stale.
+    let next = items
+        .iter()
+        .skip(index.saturating_add(1))
+        .find(|item| item.group_path.starts_with(group_path) && !moving_group_path.is_some_and(|moving| item.group_path.starts_with(moving)));
+    match next {
+        Some(item) if item.group_path == group_path => (None, Some(item.key.clone())),
+        Some(item) => (item.group_path.get(group_path.len()).cloned(), None),
+        None => (None, None),
+    }
 }
 
 /// Generic browser interactions; each asset consumer translates these into its own commands.
@@ -104,30 +258,30 @@ pub(crate) enum BrowserAction {
     RenameGroup(String, String),
     /// Delete a group and its contents.
     DeleteGroup(String),
-    /// Rename a nested folder identified by its owning group and full path.
-    RenameFolder { group: String, folder: Vec<String>, text: String },
-    /// Delete a nested folder and its contents, identified by its owning group and full path.
-    DeleteFolder { group: String, folder: Vec<String> },
+    /// Rename a nested group identified by its owning root group and full path.
+    RenameNestedGroup { group: String, group_path: Vec<String>, text: String },
+    /// Delete a nested group and its contents, identified by its owning root group and full path.
+    DeleteNestedGroup { group: String, group_path: Vec<String> },
     /// Request creation of a new group.
     NewGroup,
     /// Request creation of a new item.
     New,
-    /// Move an item into a nested folder; an empty path means directly into the group.
+    /// Move an item into a nested group; an empty path means directly into the root group.
     /// `before` identifies the destination sibling to insert before; `None` appends.
-    MoveItemToFolder { key: String, group: String, folder: Vec<String>, before: Option<String> },
-    /// Reorder a group or nested folder among siblings. An empty `folder` identifies the group;
+    MoveItemToGroup { key: String, group: String, group_path: Vec<String>, before: Option<String> },
+    /// Reorder a root or nested group among siblings. An empty `group_path` identifies the root group;
     /// `before=None` appends it after its siblings.
-    MoveGroup { group: String, folder: Vec<String>, before: Option<String> },
-    /// Move a group or nested folder into a destination hierarchy. `into=None` promotes it to a
-    /// top-level group; an empty destination folder means directly inside that group. `before=None`
+    MoveGroup { group: String, group_path: Vec<String>, before: Option<String> },
+    /// Move a root or nested group into a destination hierarchy. `into=None` promotes it to a
+    /// top-level group; an empty destination path means directly inside that group. `before=None`
     /// appends within the destination.
-    MoveInto { group: String, folder: Vec<String>, into: Option<(String, Vec<String>)>, before: Option<String> },
+    MoveInto { group: String, group_path: Vec<String>, into: Option<(String, Vec<String>)>, before: Option<String>, before_item: Option<String> },
 }
 
 fn hierarchy_action(drop: HierarchyDrop) -> BrowserAction {
     match drop {
-        HierarchyDrop::MoveGroup { group, folder, before } => BrowserAction::MoveGroup { group, folder, before },
-        HierarchyDrop::MoveInto { group, folder, into, before } => BrowserAction::MoveInto { group, folder, into, before },
+        HierarchyDrop::MoveGroup { group, group_path, before } => BrowserAction::MoveGroup { group, group_path, before },
+        HierarchyDrop::MoveInto { group, group_path, into, before } => BrowserAction::MoveInto { group, group_path, into, before, before_item: None },
     }
 }
 
@@ -183,7 +337,7 @@ pub(crate) struct BrowserOptions {
     pub(crate) flush: bool,
     /// Centre a partially filled grid row in the available item area.
     pub(crate) center_grid: bool,
-    /// Left inset for grid items before nested-folder indentation is added.
+    /// Left inset for grid items before nested-group indentation is added.
     pub(crate) grid_indent: f32,
     /// Start every group expanded rather than only the first group.
     pub(crate) all_groups_open: bool,
@@ -193,7 +347,7 @@ pub(crate) struct BrowserOptions {
     pub(crate) item_size: Option<egui::Vec2>,
     /// Optional allocated list-row height. Defaults to 24px when not set.
     pub(crate) list_item_height: Option<f32>,
-    /// Emit group/folder moves as domain actions instead of applying transient browser ordering.
+    /// Emit group moves as domain actions instead of applying transient browser ordering.
     pub(crate) domain_hierarchy_actions: bool,
 }
 
@@ -232,7 +386,7 @@ pub(crate) type PaintItem<'a> = dyn FnMut(&egui::Ui, Rect, usize, usize, ItemPai
 /// labels into `GroupView`/`ItemView`, paints its own preview, and handles returned `BrowserAction` values with
 /// its own commands. The browser never knows about gradient, pattern, swatch, style, or brush data.
 pub(crate) struct BrowserAdapter<'a> {
-    /// Stable key for this consumer's selection, sizing, and folder-collapse state.
+    /// Stable key for this consumer's selection, sizing, and group-collapse state.
     pub(crate) panel: &'a str,
     /// Consumer-projected groups and ordered items to display.
     pub(crate) groups: &'a [GroupView],
@@ -245,9 +399,9 @@ pub(crate) struct BrowserAdapter<'a> {
     pub(crate) item_context_menu: Option<ItemContextMenu>,
     /// Consumer-specific group menu policy, attached to the shared group hit target.
     pub(crate) group_context_menu: Option<GroupContextMenu>,
-    /// Optional context-menu policy for nested folder headers. Receives the owning group and full folder path.
-    pub(crate) folder_context_menu: Option<FolderContextMenu>,
-    /// Optional override for group-row visuals; the default is a folder row with disclosure.
+    /// Optional context-menu policy for nested group headers. Receives the owning root group and full group path.
+    pub(crate) nested_group_context_menu: Option<NestedGroupContextMenu>,
+    /// Optional override for group-row visuals; the default is a group row with disclosure.
     pub(crate) paint_group: Option<&'a mut PaintGroup>,
     /// Consumer-specific item painter. The state distinguishes regular selection styling from a drag ghost.
     pub(crate) paint_item: &'a mut PaintItem<'a>,
@@ -259,8 +413,8 @@ pub(crate) struct BrowserAdapter<'a> {
 pub(crate) type ItemContextMenu = fn(&mut egui::Ui, &mut PresetUi, &str, &ItemView, &GroupView, &[String], &mut Vec<BrowserAction>);
 /// Consumer callback that appends generic events for actions offered on a group header.
 pub(crate) type GroupContextMenu = fn(&mut egui::Ui, &mut PresetUi, &str, &GroupView, &mut Vec<BrowserAction>);
-/// Consumer callback for rename/delete operations on a nested folder, with its full path.
-pub(crate) type FolderContextMenu = fn(&mut egui::Ui, &mut PresetUi, &str, &GroupView, &[String], &mut Vec<BrowserAction>);
+/// Consumer callback for rename/delete operations on a nested group, with its full path.
+pub(crate) type NestedGroupContextMenu = fn(&mut egui::Ui, &mut PresetUi, &str, &GroupView, &[String], &mut Vec<BrowserAction>);
 
 /// Default menu policy for the standard preset panels. Keeping this separate from the browser
 /// lets specialised consumers supply their own operations without forking the shared hit targets.
@@ -307,7 +461,7 @@ fn compact_context_menu_target(ui: &mut egui::Ui, resp: egui::Response, menu: im
 
 /// Space between preset cards, and the grid's inset from the panel's left edge.
 const GRID_GAP: f32 = 0.0;
-type FolderRelease = (AssetDrag, String, Vec<String>, bool);
+type GroupRelease = (AssetDrag, String, Vec<String>, bool);
 
 /// Draw only the reusable library region. It owns groups/items, selection, drag/drop and item/group
 /// context targets, but not the containing panel's optional controls or footer.
@@ -333,7 +487,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     let capabilities = adapter.capabilities;
     let item_context_menu = adapter.item_context_menu;
     let group_context_menu = adapter.group_context_menu;
-    let folder_context_menu = adapter.folder_context_menu;
+    let nested_group_context_menu = adapter.nested_group_context_menu;
     let paint_group = &mut adapter.paint_group;
     let paint_item = &mut adapter.paint_item;
     let paint_list_item = &mut adapter.paint_list_item;
@@ -343,11 +497,11 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     let list = size <= MIN_THUMB + 0.5;
     let selected = st.selected.get(panel).cloned();
     let rename_row_top = ui.cursor().top();
-    let folder_rename = st.folder_renaming.clone().filter(|rename| rename.panel == panel);
-    let has_rename_row = folder_rename.is_some() || st.renaming.as_ref().is_some_and(|r| r.0 == panel);
+    let nested_group_rename = st.group_renaming.clone().filter(|rename| rename.panel == panel);
+    let has_rename_row = nested_group_rename.is_some() || st.renaming.as_ref().is_some_and(|r| r.0 == panel);
     // Rename field (Photoshop opens a small dialog; inline keeps the panel modeless).
-    if let Some(mut rename) = folder_rename {
-        // The typed folder target is authoritative while this editor is active. Remove any stale
+    if let Some(mut rename) = nested_group_rename {
+        // The typed nested-group target is authoritative while this editor is active. Remove any stale
         // legacy target for the same panel so it cannot reappear after commit or cancellation.
         if st.renaming.as_ref().is_some_and(|r| r.0 == panel) {
             st.renaming = None;
@@ -365,17 +519,17 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
             }
         });
         rename.text = text.clone();
-        st.folder_renaming = Some(rename.clone());
+        st.group_renaming = Some(rename.clone());
         if let Some(ok) = done {
-            st.folder_renaming = None;
+            st.group_renaming = None;
             if ok && !text.trim().is_empty() {
-                ev.push(BrowserAction::RenameFolder { group: rename.group, folder: rename.folder, text: text.trim().to_string() });
+                ev.push(BrowserAction::RenameNestedGroup { group: rename.group, group_path: rename.group_path, text: text.trim().to_string() });
             }
         }
     } else if let Some((p, key, mut text)) = st.renaming.clone().filter(|r| r.0 == panel) {
-        // Starting a regular item/group rename supersedes any pending folder target for this panel.
-        if st.folder_renaming.as_ref().is_some_and(|rename| rename.panel == panel) {
-            st.folder_renaming = None;
+        // Starting a regular item/group rename supersedes any pending nested-group target for this panel.
+        if st.group_renaming.as_ref().is_some_and(|rename| rename.panel == panel) {
+            st.group_renaming = None;
         }
         let mut done = None;
         ui.horizontal(|ui| {
@@ -412,13 +566,36 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     let mut expanded_groups = BTreeSet::new();
     let mut dropped: Option<(String, Pos2)> = None;
     let mut browser_item_drop = false;
-    // Folder drag (#3658): the order the folders are drawn in, and what the pointer is doing this
+    // Group drag (#3658): the order the groups are drawn in, and what the pointer is doing this
     // frame (the insertion line and the drop are resolved once every header is known).
     let mut drag: Option<(usize, Pos2)> = None;
     let mut released: Option<(usize, Pos2)> = None;
-    let mut folder_releases: Vec<FolderRelease> = Vec::new();
+    let mut group_releases: Vec<GroupRelease> = Vec::new();
+    let non_root_hierarchy_target_hovered = std::cell::Cell::new(false);
     let group_names: Vec<String> = groups.iter().map(|g| g.name.clone()).collect();
     let display = st.nested_display_order(panel, &group_names);
+    let parents = st.group_parent.get(panel).cloned().unwrap_or_default();
+    let mut hierarchy_orders = std::collections::BTreeMap::new();
+    let mut migrated_orders = Vec::new();
+    for group in groups {
+        let child_groups: Vec<String> = display
+            .iter()
+            .filter_map(|(child_index, _)| {
+                let child = groups.get(*child_index)?;
+                (parents.get(&child.name).is_some_and(|parent| parent == &group.name)).then(|| child.name.clone())
+            })
+            .collect();
+        let item_keys: Vec<String> = group.items.iter().map(|item| item.key.clone()).collect();
+        let entries = st.ordered_hierarchy_entries(panel, &group.name, &item_keys, &child_groups);
+        if st.group_item_anchors.get(panel).is_some_and(|anchors| anchors.values().any(|(parent, _)| parent == &group.name)) {
+            migrated_orders.push((group.name.clone(), entries.clone()));
+        }
+        hierarchy_orders.insert(group.name.clone(), entries);
+    }
+    for (parent, entries) in migrated_orders {
+        st.set_hierarchy_order(panel, &parent, entries);
+    }
+    let render_segments = group_render_segments(groups, &display, &parents, &hierarchy_orders);
     // The browser is the flexible middle region of a picker panel. Keep it at the allocated
     // height even when the library is short; otherwise the footer floats up and each consumer's
     // panel geometry depends on how many presets happen to be installed.
@@ -439,7 +616,12 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 ui.ctx().request_repaint();
             }
             let mut hidden_groups = BTreeSet::new();
-            for &(gi, depth) in &display {
+            // Resolve hierarchy-on-card candidates across every visible group segment so a
+            // group drag can show only one insertion line in the entire shared browser.
+            let mut item_hierarchy_targets: Vec<(egui::Response, Rect, bool, bool, usize, String, Vec<String>)> = Vec::new();
+            for segment in &render_segments {
+                let gi = segment.group_index;
+                let depth = segment.depth;
                 let Some(g) = groups.get(gi) else { continue };
                 let group_matches = group_matches_query(g, &query);
                 let has_matching_items = g.items.iter().any(|item| item_matches_query(item, &query));
@@ -459,6 +641,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 } else {
                     expanded_groups.insert(g.name.clone());
                 }
+                if segment.show_header {
                 let (hr, hresp) = if let Some(paint) = paint_group.as_deref_mut() {
                     let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
                     let r = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
@@ -486,7 +669,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                         item_drop: capabilities.item_drop,
                         group_drag: capabilities.group_drag,
                         reject_group_drop: hresp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                            matches!(payload.as_ref(), AssetDrag::Group { scope, name } if scope == panel && group_is_descendant(st, panel, name, &g.name))
+                            matches!(payload.as_ref(), AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && group_is_descendant(st, panel, name, &g.name))
                         }),
                     },
                 );
@@ -506,15 +689,21 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 if let Some(dragged) = header_released {
                     match dragged {
                         AssetDrag::Preset { scope, key } if scope.as_str() == panel => {
-                            ev.push(BrowserAction::MoveItem(key, g.name.clone(), None));
+                            ev.push(BrowserAction::MoveItem(key.clone(), g.name.clone(), None));
                             browser_item_drop = true;
+                            if !domain_hierarchy_actions
+                                && let Some((source_index, _)) = item_occurrence_position(groups, &key)
+                                && let Some(source_group) = groups.get(source_index)
+                            {
+                                move_item_sibling_order(st, panel, &hierarchy_orders, &source_group.name, &g.name, &key, None);
+                            }
                         }
                         // Top-level group source headers are handled once by the final release
                         // resolver below, which also knows the between-header insertion order.
-                        AssetDrag::Group { scope, .. } if scope.as_str() == panel && domain_hierarchy_actions => {}
-                        AssetDrag::Folder { scope, group, folder } if scope.as_str() == panel && domain_hierarchy_actions => {
+                        AssetDrag::Group { scope, path, .. } if scope.as_str() == panel && path.is_empty() && domain_hierarchy_actions => {}
+                        AssetDrag::Group { scope, name, path } if scope.as_str() == panel && domain_hierarchy_actions => {
                             let edge = ui.ctx().pointer_interact_pos().is_some_and(|p| header_drop_before(hr, p));
-                            if let Some(action) = hierarchy_folder_drop(&group, &folder, &g.name, &[], edge) {
+                            if let Some(action) = hierarchy_group_drop(&name, &path, &g.name, &[], edge) {
                                 ev.push(hierarchy_action(action));
                             }
                         }
@@ -545,43 +734,51 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     released = Some((gi, p));
                 }
                 headers.push((gi, inset_row_rect(hr, depth), g.name.clone()));
+                }
                 // Keep each group's assets directly beneath its header. The previous separate
                 // content pass placed every swatch after every group header, so expanding a group
                 // could not reveal its assets in the expected place.
                 if open {
-                    let mut folder_toggles = Vec::new();
+                    let mut group_toggles = Vec::new();
                     {
+                        let segment_items: Vec<&ItemView> = segment
+                            .item_indices
+                            .iter()
+                            .filter_map(|index| g.items.get(*index))
+                            .filter(|item| item_visible_for_query(item, &query, group_matches))
+                            .collect();
                         let tree = hierarchy_tree(
-                            g.items
-                                .iter()
-                                .filter(|item| item_visible_for_query(item, &query, group_matches))
-                                .map(|item| (item.folder.as_slice(), item))
-                                .collect(),
+                            segment_items.iter().map(|item| (item.group_path.as_slice(), *item)).collect(),
                             crate::pickers::asset_browser_hierarchy::MAX_HIERARCHY_DEPTH,
                         );
-                        let toggled_folders = st.toggled.clone();
-                        let mut is_folder_open = move |folder: &HierarchyFolder<'_, ItemView>| {
-                            let path = folder.path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/");
-                            !toggled_folders.contains(&format!("{panel}/{}/{}", escape_hierarchy_key_part(&g.name), path))
+                        let toggled_groups = st.toggled.clone();
+                        let mut is_group_open = move |group: &HierarchyGroup<'_, ItemView>| {
+                            let path = group.path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/");
+                            !toggled_groups.contains(&format!("{panel}/{}/{}", escape_hierarchy_key_part(&g.name), path))
                         };
                         let st_cell = std::cell::RefCell::new(&mut *st);
                         let ev_cell = std::cell::RefCell::new(&mut ev);
-                        let mut draw_folder = |ui: &mut egui::Ui, folder: &HierarchyFolder<'_, ItemView>, folder_open: bool, folder_depth: usize| {
+                        let mut draw_group = |ui: &mut egui::Ui, group: &HierarchyGroup<'_, ItemView>, group_open: bool, group_depth: usize| {
                             let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
                             let fr = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
-                            let row_depth = folder_depth + 1 + depth;
+                            let row_depth = group_depth + 1 + depth;
                             let fresp = ui.interact(inset_row_rect(fr, row_depth), allocated.id, Sense::click_and_drag());
+                            if fresp.hovered()
+                                && fresp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel))
+                            {
+                                non_root_hierarchy_target_hovered.set(true);
+                            }
                             fresp.widget_info(|| {
-                                egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, folder.path.last().map(String::as_str).unwrap_or(""))
+                                egui::WidgetInfo::labeled(egui::WidgetType::CollapsingHeader, true, group.path.last().map(String::as_str).unwrap_or(""))
                             });
                             paint_asset_browser_header(
                                 ui,
                                 fr,
-                                folder_open,
-                                folder.path.last().map(String::as_str).unwrap_or(""),
+                                group_open,
+                                group.path.last().map(String::as_str).unwrap_or(""),
                                 row_depth,
                                 fresp.hovered(),
-                                Some(folder.count),
+                                Some(group.count),
                             );
                             if let Some(dragged) = asset_browser_header_target_with_capabilities(
                                 ui,
@@ -589,40 +786,43 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 inset_row_rect(fr, row_depth),
                                 panel,
                                 &g.name,
-                                &folder.path,
+                                &group.path,
                                 HeaderDropCapabilities {
-                                    item_drop: capabilities.item_drop,
-                                    group_drag: capabilities.group_drag,
+                                    item_drop: capabilities.item_drop && domain_hierarchy_actions,
+                                    // Nested path groups can only accept group drops when the
+                                    // consumer has a domain adapter for those paths. Never consume
+                                    // a release that the transient root-group model cannot apply.
+                                    group_drag: capabilities.group_drag && domain_hierarchy_actions,
                                     reject_group_drop: fresp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                                        matches!(payload.as_ref(), AssetDrag::Group { scope, name } if scope == panel && group_is_descendant(&**st_cell.borrow(), panel, name, &g.name))
+                                        matches!(payload.as_ref(), AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && group_is_descendant(&**st_cell.borrow(), panel, name, &g.name))
                                     }),
                                 },
                             ) {
                                 let edge = ui.ctx().pointer_interact_pos().is_some_and(|p| header_drop_before(fr, p));
-                                folder_releases.push((dragged, g.name.clone(), folder.path.clone(), edge));
+                                group_releases.push((dragged, g.name.clone(), group.path.clone(), edge));
                             }
                             if fresp.clicked() {
-                                let path = folder.path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/");
-                                folder_toggles.push(format!("{panel}/{}/{}", escape_hierarchy_key_part(&g.name), path));
+                                let path = group.path.iter().map(|part| escape_hierarchy_key_part(part)).collect::<Vec<_>>().join("/");
+                                group_toggles.push(format!("{panel}/{}/{}", escape_hierarchy_key_part(&g.name), path));
                             }
-                            if let Some(menu) = folder_context_menu {
+                            if let Some(menu) = nested_group_context_menu {
                                 if compact_context_menus {
                                     compact_context_menu_target(ui, fresp.clone(), |ui| {
-                                        menu(ui, &mut st_cell.borrow_mut(), panel, g, &folder.path, &mut ev_cell.borrow_mut())
+                                menu(ui, &mut st_cell.borrow_mut(), panel, g, &group.path, &mut ev_cell.borrow_mut())
                                     });
                                 } else {
                                     context_menu_target(fresp.clone(), |ui| {
-                                        menu(ui, &mut st_cell.borrow_mut(), panel, g, &folder.path, &mut ev_cell.borrow_mut())
+                                menu(ui, &mut st_cell.borrow_mut(), panel, g, &group.path, &mut ev_cell.borrow_mut())
                                     });
                                 }
                             }
                         };
-                        let mut draw_items = |ui: &mut egui::Ui, items: &[&ItemView], folder_depth: usize| {
+                        let mut draw_items = |ui: &mut egui::Ui, items: &[&ItemView], group_depth: usize| {
                             let w = ui.available_width();
                             // Cards and hierarchy rows share the same 20px-per-level visual
                             // coordinate. Grid-only padding is accounted for inside that amount,
                             // rather than being added on top of the hierarchy indentation.
-                            let visual_indent = row_indent(depth + folder_depth + 1);
+                            let visual_indent = row_indent(depth + group_depth + 1);
                             let content_indent = if list { visual_indent } else { (visual_indent - grid_indent).max(0.0) };
                             let pad = content_indent + (if list { 0.0 } else { grid_indent });
                             let gap = if list || flush { 0.0 } else { GRID_GAP };
@@ -689,7 +889,30 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                         ui.painter().rect_stroke(r, CornerRadius::ZERO, Stroke::new(2.0, t.accent), egui::StrokeKind::Middle);
                                     }
                                 }
-                                let mut released_drag = if capabilities.item_drag {
+                                let hierarchy_accepts = resp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| match payload.as_ref() {
+                                    AssetDrag::Group { scope, name, path } if scope == panel => {
+                                        if path.is_empty() {
+                                            domain_hierarchy_actions
+                                                .then_some(!group_is_descendant(&**st_cell.borrow(), panel, name, &g.name) && name != &g.name)
+                                                .unwrap_or(true)
+                                        } else {
+                                            domain_hierarchy_actions && !(name == &g.name && it.group_path.starts_with(path))
+                                        }
+                                    }
+                                    _ => false,
+                                });
+                                let hierarchy_drag = resp.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                                    matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel)
+                                });
+                                if hierarchy_drag && !hierarchy_accepts {
+                                    // Invalid/self/unsupported card targets must not fall through
+                                    // and reinterpret the same release as a root-group reorder.
+                                    non_root_hierarchy_target_hovered.set(true);
+                                }
+                                if capabilities.group_drag {
+                                    item_hierarchy_targets.push((resp.clone(), r, !list, hierarchy_accepts, ii, g.name.clone(), it.group_path.clone()));
+                                }
+                                let mut released_drag = if capabilities.item_drag && !hierarchy_drag {
                                     asset_browser_item_target(ui, &resp, r, next_rect, &mut insertion_markers, panel, &it.key, !list)
                                 } else {
                                     None
@@ -708,8 +931,27 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                         );
                                     if let Some((side, edge_rect)) = edge_target {
                                         let edge_response = ui.interact(edge_rect, ui.id().with((panel, gi, ii, side)), Sense::hover());
-                                        released_drag =
-                                            asset_browser_item_target(ui, &edge_response, r, next_rect, &mut insertion_markers, panel, &it.key, true);
+                                        let edge_hierarchy_accepts = edge_response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| match payload.as_ref() {
+                                            AssetDrag::Group { scope, name, path } if scope == panel => {
+                                                if path.is_empty() {
+                                                    domain_hierarchy_actions
+                                                        .then_some(!group_is_descendant(&**st_cell.borrow(), panel, name, &g.name) && name != &g.name)
+                                                        .unwrap_or(true)
+                                                } else {
+                                                    domain_hierarchy_actions && !(name == &g.name && it.group_path.starts_with(path))
+                                                }
+                                            }
+                                            _ => false,
+                                        });
+                                        let edge_hierarchy_drag = edge_response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                                            matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel)
+                                        });
+                                        if capabilities.group_drag {
+                                            item_hierarchy_targets.push((edge_response.clone(), r, true, edge_hierarchy_accepts, ii, g.name.clone(), it.group_path.clone()));
+                                        }
+                                        if !edge_hierarchy_drag {
+                                            released_drag = asset_browser_item_target(ui, &edge_response, r, next_rect, &mut insertion_markers, panel, &it.key, true);
+                                        }
                                     }
                                 }
                                 if let Some(AssetDrag::Preset { scope, key }) = released_drag
@@ -725,27 +967,39 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                     {
                                         index = index.saturating_sub(1);
                                     }
-                                    if it.folder.is_empty() {
+                                    if it.group_path.is_empty() {
+                                        if !domain_hierarchy_actions
+                                            && let Some((source_group_index, _)) = item_occurrence_position(groups, &key)
+                                            && let Some(source_group) = groups.get(source_group_index)
+                                        {
+                                            let entries = hierarchy_orders.get(&g.name).cloned().unwrap_or_default();
+                                            let target = HierarchyOrderEntry::Item(it.key.clone());
+                                            let before = entries
+                                                .iter()
+                                                .position(|entry| entry == &target)
+                                                .and_then(|position| if after { entries.get(position + 1).cloned() } else { entries.get(position).cloned() });
+                                            move_item_sibling_order(&mut **st_cell.borrow_mut(), panel, &hierarchy_orders, &source_group.name, &g.name, &key, before.as_ref());
+                                        }
                                         ev_cell.borrow_mut().push(BrowserAction::MoveItem(key, g.name.clone(), Some(index)));
                                     } else {
                                         let before = if after {
                                             g.items
                                                 .iter()
                                                 .skip(ii + 1)
-                                                .find(|candidate| candidate.folder == it.folder && candidate.key != key)
+                                                .find(|candidate| candidate.group_path == it.group_path && candidate.key != key)
                                                 .map(|candidate| candidate.key.clone())
                                         } else {
                                             Some(it.key.clone())
                                         };
-                                        ev_cell.borrow_mut().push(BrowserAction::MoveItemToFolder {
+                                        ev_cell.borrow_mut().push(BrowserAction::MoveItemToGroup {
                                             key,
                                             group: g.name.clone(),
-                                            folder: it.folder.clone(),
+                                            group_path: it.group_path.clone(),
                                             before,
                                         });
                                     }
                                 }
-                                let hover = if it.folder.is_empty() { it.name.clone() } else { format!("{} / {}", it.folder.join(" / "), it.name) };
+                                let hover = if it.group_path.is_empty() { it.name.clone() } else { format!("{} / {}", it.group_path.join(" / "), it.name) };
                                 let resp = resp.on_hover_text(hover);
                                 let (selected, activated) = asset_browser_item_gesture(&resp, capabilities.selection, capabilities.activation);
                                 if activated {
@@ -802,35 +1056,89 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                             &tree,
                             0,
                             crate::pickers::asset_browser_hierarchy::MAX_HIERARCHY_DEPTH,
-                            &mut is_folder_open,
-                            &mut draw_folder,
+                            &mut is_group_open,
+                            &mut draw_group,
                             &mut draw_items,
                         );
                     }
-                    for (dragged, target_group, target_folder, edge) in folder_releases.drain(..) {
+                    for (dragged, target_group, target_group_path, edge) in group_releases.drain(..) {
                         match dragged {
                             AssetDrag::Preset { scope, key } if scope == panel => {
-                                ev.push(BrowserAction::MoveItemToFolder { key, group: target_group, folder: target_folder, before: None });
+                                ev.push(BrowserAction::MoveItemToGroup { key, group: target_group, group_path: target_group_path, before: None });
                                 browser_item_drop = true;
                             }
-                            AssetDrag::Group { scope, name } if scope == panel && domain_hierarchy_actions => {
-                                if let Some(action) = hierarchy_folder_drop(&name, &[], &target_group, &target_folder, edge) {
-                                    ev.push(hierarchy_action(action));
-                                }
-                            }
-                            AssetDrag::Folder { scope, group, folder } if scope == panel && domain_hierarchy_actions => {
-                                if let Some(action) = hierarchy_folder_drop(&group, &folder, &target_group, &target_folder, edge) {
+                            AssetDrag::Group { scope, name, path } if scope == panel && domain_hierarchy_actions => {
+                                if let Some(action) = hierarchy_group_drop(&name, &path, &target_group, &target_group_path, edge) {
                                     ev.push(hierarchy_action(action));
                                 }
                             }
                             _ => {}
                         }
                     }
-                    for key in folder_toggles {
+                    for key in group_toggles {
                         if !st.toggled.remove(&key) {
                             st.toggled.insert(key);
                         }
                     }
+                }
+            }
+            // Match the existing indentation-column arbitration: the last eligible
+            // (topmost/deepest) hit target wins both its preview and its release.
+            let best_item_hierarchy_target = best_drop_target_index(&item_hierarchy_targets, |(response, _, _, accepts, _, _, _)| {
+                    *accepts
+                        && response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
+                            matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel)
+                        })
+                });
+            // The indentation column overlaps the leading edge of nested cards. Treat these as
+            // competing destinations, not independent drop zones: when a card wins, its vertical
+            // insertion marker and release must suppress the column's horizontal append marker.
+            let item_hierarchy_target_wins = best_item_hierarchy_target.is_some();
+            if item_hierarchy_target_wins {
+                indent_release = None;
+            }
+            if let Some((response, rect, grid, _, item_index, target_name, target_group_path)) =
+                best_item_hierarchy_target.and_then(|index| item_hierarchy_targets.get(index))
+                && let Some((dragged, after)) = asset_browser_item_hierarchy_target(ui, response, *rect, *grid, true)
+                && let Some(target_group) = groups.iter().find(|group| group.name == *target_name)
+            {
+                browser_item_drop = true;
+                let moving_group_path = match &dragged {
+                    AssetDrag::Group { name, path, .. } if *name == *target_name && !path.is_empty() => Some(path.clone()),
+                    _ => None,
+                };
+                match dragged {
+                    AssetDrag::Group { scope, name, path } if scope == panel && domain_hierarchy_actions => {
+                        let (before, before_item) =
+                            item_hierarchy_insertion_anchor(&target_group.items, *item_index, target_group_path, after, moving_group_path.as_deref());
+                        ev.push(BrowserAction::MoveInto {
+                            group: name,
+                            group_path: path,
+                            into: Some((target_name.clone(), target_group_path.clone())),
+                            before,
+                            before_item,
+                        });
+                        // The nested card/header target has consumed this release. Do not let the
+                        // source root header also resolve a between-root-groups reorder.
+                        released = None;
+                    }
+                    AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && !domain_hierarchy_actions => {
+                        if let Some(target_item) = target_group.items.get(*item_index).map(|item| item.key.clone()) {
+                            let entries = hierarchy_orders.get(target_name).cloned().unwrap_or_default();
+                            let target_entry = HierarchyOrderEntry::Item(target_item);
+                            let before = entries
+                                .iter()
+                                .position(|entry| entry == &target_entry)
+                                .and_then(|position| if after { entries.get(position + 1).cloned() } else { entries.get(position).cloned() });
+                            if let Some(old_parent) = parents.get(&name).filter(|parent| *parent != target_name) {
+                                st.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(name.clone()));
+                            }
+                            st.nest_group(panel, &group_names, &name, Some(target_name));
+                            st.move_hierarchy_entry(panel, target_name, entries, HierarchyOrderEntry::Group(name), before.as_ref());
+                            released = None;
+                        }
+                    }
+                    _ => {}
                 }
             }
             // Each expanded group owns a drop area spanning its full header width. Its vertical
@@ -859,39 +1167,39 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 ui.id().with(("group-indent-column", panel, group_name)),
                                 Sense::hover(),
                             );
-                            if let Some(AssetDrag::Group { scope, name }) = response.dnd_release_payload::<AssetDrag>().map(|payload| payload.as_ref().clone())
-                                && scope == panel
-                                && name != *group_name
-                            {
-                                indent_release = Some((name, group_name.clone()));
-                            }
                             indent_drop_targets.push((group_name.clone(), response));
-                            // Temporary visual debugging: blue marks the indentation drop target.
-                            let color = egui::Color32::from_rgba_unmultiplied(40, 130, 255, 76);
-                            ui.painter().rect_filled(column, egui::CornerRadius::ZERO, color);
-                            ui.painter().rect_stroke(
-                                column,
-                                egui::CornerRadius::ZERO,
-                                egui::Stroke::new(1.0, color.gamma_multiply(2.0)),
-                                egui::StrokeKind::Inside,
-                            );
                         }
                     }
                 }
             }
-            // Paint the append-into-parent marker below the parent's complete visible subtree.
-            // The debug overlay above visualizes the full-height, 20px-wide drop columns.
-            let indent_target_hovered = indent_drop_targets.iter().any(|(parent, response)| {
-                response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                    matches!(payload.as_ref(), AssetDrag::Group { scope, name } if scope == panel && name != parent && !group_is_descendant(st, panel, name, parent))
-                })
-            });
-            if indent_target_hovered {
-                if let Some((parent, _)) = indent_drop_targets.iter().rev().find(|(parent, response)| {
+            // `dnd_release_payload` takes the one global egui payload. Resolve the card target
+            // first, then allow the indentation column to consume it only when no card target
+            // won and the pointer is actually over an eligible column. Calling it while merely
+            // registering each column lets an overlapping column steal a card release.
+            let indent_target = best_indent_drop_target_index(&indent_drop_targets, item_hierarchy_target_wins, |(parent, response)| {
                     response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| {
-                        matches!(payload.as_ref(), AssetDrag::Group { scope, name } if scope == panel && name != parent && !group_is_descendant(st, panel, name, parent))
+                        matches!(payload.as_ref(), AssetDrag::Group { scope, name, path } if scope == panel && path.is_empty() && name != parent && !group_is_descendant(st, panel, name, parent))
                     })
-                }) {
+                }).and_then(|index| indent_drop_targets.get(index));
+            if indent_target.is_none()
+                && indent_drop_targets.iter().any(|(_, response)| {
+                    response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| matches!(payload.as_ref(), AssetDrag::Group { scope, .. } if scope == panel))
+                })
+            {
+                non_root_hierarchy_target_hovered.set(true);
+            }
+            if let Some((parent, response)) = indent_target
+                && let Some(AssetDrag::Group { scope, name, path }) = response.dnd_release_payload::<AssetDrag>().map(|payload| payload.as_ref().clone())
+                && scope == panel
+                && path.is_empty()
+                && name != *parent
+            {
+                indent_release = Some((name, parent.clone()));
+            }
+            // Paint the append-into-parent marker below the parent's complete visible subtree.
+            let indent_target_hovered = indent_target.is_some();
+            if indent_target_hovered {
+                if let Some((parent, _)) = indent_target {
                     let end = headers
                         .iter()
                         .filter(|(_, _, name)| name == parent || group_is_descendant(st, panel, parent, name))
@@ -918,55 +1226,96 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 }
             }
             // The regular group drag marker handles between-header reordering.
-            if !indent_target_hovered && let Some((from, p)) = drag {
+            if !indent_target_hovered && !item_hierarchy_target_wins && let Some((from, p)) = drag {
                 // Header targets already paint their feedback through the shared interaction
                 // helper. Only draw the between-groups insertion marker when the pointer is in a
                 // gap/outside a target header.
                 if !headers.iter().any(|(i, r, _)| *i != from && r.contains(p)) {
-                    let before = group_drop_before(&headers, from, p.y);
-                    // The source header resolves to a no-op on release; never show a marker
-                    // suggesting that dropping it there would move it.
-                    if before != Some(from) {
-                        let anchor = match before {
-                            Some(i) => headers.iter().find(|(x, _, _)| *x == i).map(|(_, r, _)| *r),
-                            None => headers.last().map(|(_, r, _)| *r),
-                        };
-                        if let Some(r) = anchor {
-                            paint_group_insertion_line(ui, r, before.is_some(), t.accent);
+                    if let Some(from_name) = groups.get(from).map(|group| group.name.as_str()) {
+                        let before = group_drop_before(&headers, from, from_name, p, &parents);
+                        // The source header resolves to a no-op on release; never show a marker
+                        // suggesting that dropping it there would move it.
+                        if before != Some(from) {
+                            let source_parent = parents.get(from_name);
+                            let source_rect = headers.iter().find(|(index, _, _)| *index == from).map(|(_, rect, _)| *rect);
+                            let promote_to_root = source_parent.is_some() && source_rect.is_some_and(|rect| p.x < rect.left() + ROW_INDENT * 0.5);
+                            let destination_parent = if promote_to_root { None } else { source_parent };
+                            let anchor = match before {
+                                Some(i) => headers.iter().find(|(x, _, _)| *x == i).map(|(_, r, _)| *r),
+                                None => headers.iter().rev().find(|(_, _, name)| parents.get(name).map(String::as_str) == destination_parent.map(String::as_str)).map(|(_, r, _)| *r),
+                            };
+                            if let Some(r) = anchor {
+                                paint_group_insertion_line(ui, r, before.is_some(), t.accent);
+                            }
                         }
                     }
                 }
             }
         });
+    // A nested group header is a distinct target family from the root-group rows. If the pointer
+    // is over one, the root resolver must not reinterpret that same release as a root reorder.
+    if non_root_hierarchy_target_hovered.get() {
+        released = None;
+    }
     ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(("preset-browser-rect", panel)), scroll.inner_rect));
     // Apply the drop now every header rect is known; the next frame draws the new order.
     if let Some((from_name, parent)) = indent_release {
         if !group_is_descendant(st, panel, &from_name, &parent) {
+            if let Some(old_parent) = parents.get(&from_name).filter(|old_parent| *old_parent != &parent) {
+                st.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(from_name.clone()));
+            }
             st.nest_group(panel, &group_names, &from_name, Some(&parent));
-            st.move_group(panel, &group_names, &from_name, None);
+            let entries = hierarchy_orders.get(&parent).cloned().unwrap_or_default();
+            st.move_hierarchy_entry(panel, &parent, entries, HierarchyOrderEntry::Group(from_name), None);
         }
     } else if let Some((from, p)) = released {
         let from_name = groups.get(from).map(|g| g.name.clone());
         if let Some(from_name) = from_name {
             if let Some((_, rect, target)) = headers.iter().find(|(i, rect, _)| *i != from && rect.contains(p)) {
+                let edge = header_drop_before(*rect, p);
                 if domain_hierarchy_actions && !group_is_descendant(st, panel, &from_name, target) {
-                    let edge = header_drop_before(*rect, p);
-                    if let Some(action) = hierarchy_folder_drop(&from_name, &[], target, &[], edge) {
+                    if let Some(action) = hierarchy_group_drop(&from_name, &[], target, &[], edge) {
                         ev.push(hierarchy_action(action));
                     }
-                } else {
-                    let edge = header_drop_before(*rect, p);
-                    st.drop_group_on_header(panel, &group_names, &from_name, target, edge);
+                } else if !domain_hierarchy_actions {
+                    let destination_parent = if edge { parents.get(target).cloned() } else { Some(target.clone()) };
+                    let creates_cycle =
+                        destination_parent.as_deref().is_some_and(|parent| parent == from_name || group_is_descendant(st, panel, &from_name, parent));
+                    if !creates_cycle {
+                        if let Some(old_parent) = parents.get(&from_name).filter(|old_parent| Some(*old_parent) != destination_parent.as_ref()) {
+                            st.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(from_name.clone()));
+                        }
+                        st.nest_group(panel, &group_names, &from_name, destination_parent.as_deref());
+                        if let Some(parent) = destination_parent {
+                            let entries = hierarchy_orders.get(&parent).cloned().unwrap_or_default();
+                            let before = edge.then(|| HierarchyOrderEntry::Group(target.clone()));
+                            st.move_hierarchy_entry(panel, &parent, entries, HierarchyOrderEntry::Group(from_name), before.as_ref());
+                        } else {
+                            st.move_group(panel, &group_names, &from_name, Some(target));
+                        }
+                    }
                 }
             } else {
-                let before = group_drop_before(&headers, from, p.y);
+                let before = group_drop_before(&headers, from, &from_name, p, &parents);
                 if before != Some(from) {
                     let before_name = before.and_then(|i| groups.get(i).map(|g| g.name.clone()));
                     if domain_hierarchy_actions {
-                        ev.push(BrowserAction::MoveGroup { group: from_name, folder: Vec::new(), before: before_name });
+                        ev.push(BrowserAction::MoveGroup { group: from_name, group_path: Vec::new(), before: before_name });
                     } else {
-                        st.nest_group(panel, &group_names, &from_name, None);
-                        st.move_group(panel, &group_names, &from_name, before_name.as_deref());
+                        let source_parent = parents.get(&from_name).cloned();
+                        let source_rect = headers.iter().find(|(index, _, _)| *index == from).map(|(_, rect, _)| *rect);
+                        let promote_to_root = source_parent.is_some() && source_rect.is_some_and(|rect| p.x < rect.left() + ROW_INDENT * 0.5);
+                        if let Some(parent) = source_parent.clone().filter(|_| !promote_to_root) {
+                            let entries = hierarchy_orders.get(&parent).cloned().unwrap_or_default();
+                            let before = before_name.as_ref().map(|name| HierarchyOrderEntry::Group(name.clone()));
+                            st.move_hierarchy_entry(panel, &parent, entries, HierarchyOrderEntry::Group(from_name), before.as_ref());
+                        } else {
+                            if let Some(old_parent) = source_parent.as_deref() {
+                                st.remove_hierarchy_entry(panel, old_parent, &HierarchyOrderEntry::Group(from_name.clone()));
+                            }
+                            st.nest_group(panel, &group_names, &from_name, None);
+                            st.move_group(panel, &group_names, &from_name, before_name.as_deref());
+                        }
                     }
                 }
             }
@@ -980,21 +1329,37 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     ev
 }
 
-/// The folder (by library index) a header dragged to `y` lands before (`None` = last). `headers`
-/// is in display order; mirrors `dock::drop_before`.
-fn group_drop_before(headers: &[(usize, Rect, String)], from: usize, y: f32) -> Option<usize> {
-    let hit = headers.iter().find(|(_, r, _)| y < r.center().y).map(|(i, _, _)| *i);
+/// The sibling group (by library index) a header dragged to `y` lands before (`None` = last).
+/// Root and nested groups use the same sibling-level positioning rule.
+fn group_drop_before(
+    headers: &[(usize, Rect, String)],
+    from: usize,
+    from_name: &str,
+    pointer: Pos2,
+    parents: &std::collections::BTreeMap<String, String>,
+) -> Option<usize> {
+    let source_parent = parents.get(from_name);
+    let source_rect = headers.iter().find(|(index, _, _)| *index == from).map(|(_, rect, _)| *rect);
+    let promote_to_root = source_parent.is_some() && source_rect.is_some_and(|rect| pointer.x < rect.left() + ROW_INDENT * 0.5);
+    let destination_parent = if promote_to_root { None } else { source_parent };
+    let siblings: Vec<(usize, Rect, &str)> =
+        headers.iter().filter(|(_, _, name)| parents.get(name) == destination_parent).map(|(index, rect, name)| (*index, *rect, name.as_str())).collect();
+    let hit = siblings.iter().find(|(_, rect, _)| pointer.y < rect.center().y).map(|(index, _, _)| *index);
     match hit {
         Some(i) if i == from => Some(from),
         Some(i) => {
-            let after_self = headers.iter().position(|(x, _, _)| *x == from).zip(headers.iter().position(|(x, _, _)| *x == i)).is_some_and(|(a, b)| b == a + 1);
+            let after_self = siblings
+                .iter()
+                .position(|(index, _, _)| *index == from)
+                .zip(siblings.iter().position(|(index, _, _)| *index == i))
+                .is_some_and(|(a, b)| b == a + 1);
             if after_self { Some(from) } else { Some(i) }
         }
         None => None,
     }
 }
 
-/// Folder header rects drawn last frame (name → rect), in display order; for tests and automation.
+/// Group header rects drawn last frame (name → rect), in display order; for tests and automation.
 #[cfg(test)]
 pub fn last_group_headers(ctx: &egui::Context, panel: &str) -> Vec<(String, Rect)> {
     ctx.data(|d| d.get_temp(egui::Id::new(("preset-group-headers", panel)))).unwrap_or_default()
@@ -1008,26 +1373,31 @@ pub(crate) fn last_browser_rect(ctx: &egui::Context, panel: &str) -> Option<Rect
 
 #[cfg(test)]
 mod filter_tests {
-    use super::{GroupView, ItemView, filter_groups, item_occurrence_position};
+    use super::{
+        BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, HierarchyOrderEntry, ItemPaintState, ItemView, best_drop_target_index,
+        best_indent_drop_target_index, browser, filter_groups, group_render_segments, item_hierarchy_insertion_anchor, item_occurrence_position,
+    };
+    use crate::pickers::picker_state::PresetUi;
+    use egui_kittest::kittest::Queryable;
 
     fn group(name: &str, items: Vec<ItemView>) -> GroupView {
         GroupView { name: name.into(), items }
     }
 
-    fn item(key: &str, name: &str, folder: &[&str]) -> ItemView {
-        ItemView { key: key.into(), name: name.into(), folder: folder.iter().map(|part| (*part).into()).collect() }
+    fn item(key: &str, name: &str, group_path: &[&str]) -> ItemView {
+        ItemView { key: key.into(), name: name.into(), group_path: group_path.iter().map(|part| (*part).into()).collect() }
     }
 
     #[test]
-    fn filtering_keeps_identity_order_and_matches_group_or_folder_names() {
+    fn filtering_keeps_identity_order_and_matches_root_or_nested_group_names() {
         let groups = vec![
             group("Warm", vec![item("sunset-id", "Sunset", &["Favorites", "Sky"]), item("ember-id", "Ember", &[])]),
             group("Cool", vec![item("ocean-id", "Ocean", &[])]),
         ];
 
-        let by_folder = filter_groups(&groups, "sky");
-        assert_eq!(by_folder.len(), 1);
-        assert_eq!(by_folder[0].items.iter().map(|item| item.key.as_str()).collect::<Vec<_>>(), ["sunset-id"]);
+        let by_nested_group = filter_groups(&groups, "sky");
+        assert_eq!(by_nested_group.len(), 1);
+        assert_eq!(by_nested_group[0].items.iter().map(|item| item.key.as_str()).collect::<Vec<_>>(), ["sunset-id"]);
 
         let by_item = filter_groups(&groups, "ember");
         assert_eq!(by_item.len(), 1);
@@ -1046,5 +1416,258 @@ mod filter_tests {
 
         assert_eq!(item_occurrence_position(&groups, "brush-occurrence-a"), Some((0, 0)));
         assert_eq!(item_occurrence_position(&groups, "brush-occurrence-b"), Some((0, 1)));
+    }
+
+    #[test]
+    fn best_drop_target_is_the_last_eligible_candidate() {
+        let candidates = [false, true, false, true, false];
+
+        assert_eq!(best_drop_target_index(&candidates, |eligible| *eligible), Some(3));
+        assert_eq!(best_drop_target_index(&[false, false], |eligible| *eligible), None);
+    }
+
+    #[test]
+    fn card_drop_target_wins_over_an_overlapping_group_indent_column() {
+        let columns = [false, true, true];
+
+        assert_eq!(best_indent_drop_target_index(&columns, true, |eligible| *eligible), None);
+        assert_eq!(best_indent_drop_target_index(&columns, false, |eligible| *eligible), Some(2));
+    }
+
+    #[test]
+    fn card_drop_anchor_tracks_the_next_item_or_nested_group_at_the_same_level() {
+        let items = vec![item("a", "A", &[]), item("b", "B", &[]), item("nested", "Nested item", &["Nested"]), item("c", "C", &[])];
+
+        assert_eq!(item_hierarchy_insertion_anchor(&items, 1, &[], false, None), (None, Some("b".into())));
+        assert_eq!(item_hierarchy_insertion_anchor(&items, 0, &[], true, None), (None, Some("b".into())));
+        assert_eq!(item_hierarchy_insertion_anchor(&items, 1, &[], true, None), (Some("Nested".into()), None));
+        assert_eq!(item_hierarchy_insertion_anchor(&items, 3, &[], true, None), (None, None));
+    }
+
+    #[test]
+    fn card_drop_after_skips_the_group_being_moved_when_it_is_the_next_sibling() {
+        let items = vec![item("a", "A", &[]), item("f1", "F1", &["F"]), item("f2", "F2", &["F"]), item("b", "B", &[])];
+
+        // F already follows A. It cannot be its own `before` anchor after the engine
+        // partitions F out of the source group; B is the stable next sibling instead.
+        assert_eq!(item_hierarchy_insertion_anchor(&items, 0, &[], true, Some(&["F".into()])), (None, Some("b".into())));
+    }
+
+    #[test]
+    fn card_drop_after_skips_a_moving_group_before_the_target_card() {
+        let items = vec![item("f", "F", &["F"]), item("a", "A", &[]), item("b", "B", &[])];
+
+        assert_eq!(item_hierarchy_insertion_anchor(&items, 1, &[], true, Some(&["F".into()])), (None, Some("b".into())));
+    }
+
+    #[test]
+    fn nested_card_drop_after_skips_the_moving_group_and_anchors_to_the_next_sibling_group() {
+        let items = vec![
+            item("a", "A", &["Parent"]),
+            item("f1", "F1", &["Parent", "Moving"]),
+            item("f2", "F2", &["Parent", "Moving"]),
+            item("g1", "G1", &["Parent", "Next"]),
+        ];
+
+        assert_eq!(
+            item_hierarchy_insertion_anchor(&items, 0, &["Parent".into()], true, Some(&["Parent".into(), "Moving".into()])),
+            (Some("Next".into()), None)
+        );
+    }
+
+    fn segment_summary(segments: &[super::GroupRenderSegment], groups: &[GroupView]) -> Vec<(String, bool, Vec<String>)> {
+        segments
+            .iter()
+            .map(|segment| {
+                let group = &groups[segment.group_index];
+                let items = segment.item_indices.iter().filter_map(|index| group.items.get(*index)).map(|item| item.key.clone()).collect();
+                (group.name.clone(), segment.show_header, items)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn unified_sibling_order_splits_card_runs_at_group_positions() {
+        let groups = vec![
+            group("Parent", vec![item("a", "A", &[]), item("b", "B", &[]), item("c", "C", &[])]),
+            group("Before A", vec![item("x", "X", &[])]),
+            group("Before C", vec![item("y", "Y", &[])]),
+        ];
+        // The persisted sequence is the sole source of sibling positioning, regardless of the
+        // groups' library/display order.
+        let display = [(0, 0), (2, 1), (1, 1)];
+        let parents = [("Before A".into(), "Parent".into()), ("Before C".into(), "Parent".into())].into();
+        let orders = [(
+            "Parent".into(),
+            vec![
+                HierarchyOrderEntry::Group("Before A".into()),
+                HierarchyOrderEntry::Item("a".into()),
+                HierarchyOrderEntry::Item("b".into()),
+                HierarchyOrderEntry::Group("Before C".into()),
+                HierarchyOrderEntry::Item("c".into()),
+            ],
+        )]
+        .into();
+
+        let segments = group_render_segments(&groups, &display, &parents, &orders);
+
+        assert_eq!(
+            segment_summary(&segments, &groups),
+            [
+                ("Parent".into(), true, vec![]),
+                ("Before A".into(), true, vec!["x".into()]),
+                ("Parent".into(), false, vec!["a".into(), "b".into()]),
+                ("Before C".into(), true, vec!["y".into()]),
+                ("Parent".into(), false, vec!["c".into()]),
+            ]
+        );
+        assert_eq!(segments.iter().filter(|segment| segment.show_header).count(), groups.len());
+    }
+
+    #[test]
+    fn sibling_sequence_keeps_empty_groups_and_appends_unlisted_entries() {
+        let groups =
+            vec![group("Parent", vec![item("a", "A", &[])]), group("First", vec![]), group("Second", vec![]), group("Stale", vec![]), group("Append", vec![])];
+        let display = [(0, 0), (1, 1), (2, 1), (3, 1), (4, 1)];
+        let parents =
+            [("First".into(), "Parent".into()), ("Second".into(), "Parent".into()), ("Stale".into(), "Parent".into()), ("Append".into(), "Parent".into())]
+                .into();
+        let orders = [(
+            "Parent".into(),
+            vec![HierarchyOrderEntry::Group("Second".into()), HierarchyOrderEntry::Item("a".into()), HierarchyOrderEntry::Group("First".into())],
+        )]
+        .into();
+
+        let segments = group_render_segments(&groups, &display, &parents, &orders);
+
+        assert_eq!(
+            segment_summary(&segments, &groups),
+            [
+                ("Parent".into(), true, vec![]),
+                ("Second".into(), true, vec![]),
+                ("Parent".into(), false, vec!["a".into()]),
+                ("First".into(), true, vec![]),
+                ("Stale".into(), true, vec![]),
+                ("Append".into(), true, vec![]),
+            ]
+        );
+    }
+
+    #[test]
+    fn unified_order_supports_empty_parent_and_nested_group_sequences() {
+        let groups = vec![group("Parent", vec![]), group("Child", vec![item("b", "B", &[])]), group("Grandchild", vec![])];
+        let display = [(0, 0), (1, 1), (2, 2)];
+        let parents = [("Child".into(), "Parent".into()), ("Grandchild".into(), "Child".into())].into();
+        let orders = [
+            ("Parent".into(), vec![HierarchyOrderEntry::Group("Child".into())]),
+            ("Child".into(), vec![HierarchyOrderEntry::Group("Grandchild".into()), HierarchyOrderEntry::Item("b".into())]),
+        ]
+        .into();
+
+        let segments = group_render_segments(&groups, &display, &parents, &orders);
+
+        assert_eq!(
+            segment_summary(&segments, &groups),
+            [("Parent".into(), true, vec![]), ("Child".into(), true, vec![]), ("Grandchild".into(), true, vec![]), ("Child".into(), false, vec!["b".into()]),]
+        );
+        assert_eq!(segments.iter().filter(|segment| segment.show_header).count(), groups.len());
+    }
+
+    #[test]
+    fn malformed_group_parent_cycles_are_emitted_once_without_recursing_forever() {
+        let groups = vec![group("A", vec![]), group("B", vec![])];
+        let display = [(0, 0), (1, 0)];
+        let parents = [("A".into(), "B".into()), ("B".into(), "A".into())].into();
+
+        let segments = group_render_segments(&groups, &display, &parents, &Default::default());
+
+        assert_eq!(segment_summary(&segments, &groups).iter().map(|(name, _, _)| name.as_str()).collect::<Vec<_>>(), ["A", "B"]);
+    }
+
+    fn nested_group_drop_harness(domain_hierarchy_actions: bool, target_nested_card: bool) -> egui_kittest::Harness<'static, (PresetUi, Vec<BrowserAction>)> {
+        use egui_kittest::Harness;
+
+        let groups = vec![group("A", vec![item("nested-card", "Nested item", &["Nested"])]), group("B", vec![item("root-card", "Root item", &[])])];
+        let mut h = Harness::builder().with_size(egui::vec2(420.0, 360.0)).build_ui_state(
+            move |ui, state: &mut (PresetUi, Vec<BrowserAction>)| {
+                if !ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    return;
+                }
+                let mut paint_item = |_: &egui::Ui, _: egui::Rect, _: usize, _: usize, _: ItemPaintState| {};
+                let mut adapter = BrowserAdapter {
+                    panel: "hierarchy-drop-test",
+                    groups: &groups,
+                    options: BrowserOptions {
+                        canvas: egui::Rect::NOTHING,
+                        flush: false,
+                        center_grid: false,
+                        grid_indent: 8.0,
+                        all_groups_open: true,
+                        compact_context_menus: false,
+                        item_size: None,
+                        list_item_height: None,
+                        domain_hierarchy_actions,
+                    },
+                    capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: true, selection: false, activation: false },
+                    item_context_menu: None,
+                    group_context_menu: None,
+                    nested_group_context_menu: None,
+                    paint_group: None,
+                    paint_item: &mut paint_item,
+                    paint_list_item: None,
+                };
+                let (preset_ui, actions) = state;
+                actions.extend(browser(ui, preset_ui, &mut adapter, 300.0));
+            },
+            (PresetUi::default(), Vec::new()),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(3);
+
+        let source = super::last_group_headers(&h.ctx, "hierarchy-drop-test").into_iter().find(|(name, _)| name == "B").map(|(_, rect)| rect.center()).unwrap();
+        let target = if target_nested_card { h.get_by_label("Nested item").rect() } else { h.get_by_label("Nested").rect() };
+        let target = target.center();
+        h.event(egui::Event::PointerMoved(source));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: source, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        for step in 1..=6 {
+            h.event(egui::Event::PointerMoved(source + (target - source) * (step as f32 / 6.0)));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+        h
+    }
+
+    #[test]
+    fn root_group_drop_on_nested_header_resolves_once_in_domain_mode() {
+        let h = nested_group_drop_harness(true, false);
+        assert!(matches!(
+            h.state().1.as_slice(),
+            [BrowserAction::MoveInto { group, into: Some((target, path)), before: None, before_item: None, .. }]
+                if group == "B" && target == "A" && path == &["Nested".to_string()]
+        ));
+        assert_eq!(h.state().1.len(), 1, "the nested header's MoveInto must suppress the source header's root MoveGroup");
+    }
+
+    #[test]
+    fn unsupported_root_group_drop_on_nested_header_or_card_is_not_reinterpreted_as_root_reorder() {
+        let h = nested_group_drop_harness(false, false);
+        assert!(h.state().1.is_empty(), "unsupported nested header must not consume or misroute the release");
+        assert!(h.state().0.group_parent.get("hierarchy-drop-test").is_none_or(|parents| !parents.contains_key("B")));
+        assert!(h.state().0.group_order.get("hierarchy-drop-test").is_none(), "an unsupported nested target must not mutate root group order");
+    }
+
+    #[test]
+    fn root_group_drop_on_nested_card_updates_the_unified_sibling_sequence() {
+        let h = nested_group_drop_harness(false, true);
+        assert!(h.state().1.is_empty(), "the transient shared hierarchy handles the drop without a domain command");
+        assert_eq!(h.state().0.group_parent["hierarchy-drop-test"]["B"], "A");
+        assert!(h.state().0.group_order.get("hierarchy-drop-test").is_none(), "nested insertion must not mutate root group order");
+        assert!(
+            h.state().0.hierarchy_order["hierarchy-drop-test"]["A"].contains(&HierarchyOrderEntry::Group("B".into())),
+            "the moved group must occupy the same sibling sequence as the target card"
+        );
     }
 }

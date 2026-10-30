@@ -27,7 +27,7 @@ use crate::{PhotocraftApp, icons, widgets};
 #[cfg(test)]
 pub(crate) use crate::pickers::brush_browser::browser_group_views;
 pub use crate::pickers::brush_browser::{
-    Action, FolderNode, ListLayout, MAX_VIEW_DEPTH, Node, PANEL_LIST, apply, drop_target, folder_drop, folder_tree, folder_view_key, group_key, preset_list,
+    Action, GroupNode, ListLayout, MAX_VIEW_DEPTH, Node, PANEL_LIST, apply, drop_target, folder_drop, folder_tree, folder_view_key, group_key, preset_list,
 };
 #[cfg(test)]
 pub(crate) use crate::pickers::brush_browser::{

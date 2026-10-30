@@ -52,7 +52,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|group| GroupView {
             name: group.name.clone(),
-            items: group.items.iter().map(|item| ItemView { key: item.name.clone(), name: item.name.clone(), folder: Vec::new() }).collect(),
+            items: group.items.iter().map(|item| ItemView { key: item.name.clone(), name: item.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
     let mut state = std::mem::take(&mut app.ui.presets_ui);
@@ -74,7 +74,7 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         capabilities: BrowserCapabilities::default(),
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
-        folder_context_menu: None,
+        nested_group_context_menu: None,
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
             let group = &groups[group_index];
@@ -89,7 +89,8 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         },
         paint_list_item: None,
     };
-    let events = picker_shell(ui, &mut state, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new gradient"))), ..Default::default() });
+    let events =
+        picker_shell(ui, &mut state, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new gradient"))), ..Default::default() });
     app.ui.presets_ui = state;
 
     for event in events {
@@ -102,8 +103,8 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 app.ui.presets_ui.selected.insert("gradients".into(), key.clone());
                 run(app, "gradient.presets.apply", json!({"preset": key}));
             }
-            // Only the brush browser supports nested-folder context actions.
-            BrowserAction::RenameFolder { .. } | BrowserAction::DeleteFolder { .. } => {}
+            // Only the brush browser supports nested-group context actions.
+            BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
                 generic(app, "gradients", "gradient.presets", &event, json!({"name": "Custom"}));
             }
@@ -124,4 +125,59 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.close();
     }
     ui.separator();
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Modifiers, vec2};
+    use egui_kittest::Harness;
+
+    use super::gradients_panel;
+    use crate::PhotocraftApp;
+    use crate::pickers::asset_browser::last_group_headers;
+    use crate::pickers::picker_state::HierarchyOrderEntry;
+
+    #[test]
+    fn gradients_group_drop_before_card_persists_the_unified_order() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        assert!(app.session.presets.gradients.len() >= 2, "the fixture needs two gradient groups");
+        let mut h = Harness::builder().with_size(vec2(360.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    gradients_panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(3);
+
+        let headers = last_group_headers(&h.ctx, "gradients");
+        assert!(headers.len() >= 2, "gradient group headers are visible");
+        let (target_group, target_header) = &headers[0];
+        let (moving_group, moving_header) = headers.last().unwrap();
+        let target_item =
+            h.state().session.presets.gradients.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
+        let size = *h.state().ui.presets_ui.sizes.get("gradients").unwrap_or(&40.0);
+        let origin = h.ctx.input(|input| input.viewport_rect().min);
+        let target = egui::pos2(origin.x + 8.0 + 20.0 + size * 0.5 - 5.0, target_header.bottom() + 2.0 + size * 0.5);
+
+        h.event(egui::Event::PointerMoved(moving_header.center()));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: moving_header.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run_steps(1);
+        for step in 1..=6 {
+            h.event(egui::Event::PointerMoved(moving_header.center() + (target - moving_header.center()) * (step as f32 / 6.0)));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(3);
+
+        let state = &h.state().ui.presets_ui;
+        assert_eq!(state.group_parent["gradients"][moving_group], *target_group);
+        assert_eq!(state.hierarchy_order["gradients"][target_group].get(0), Some(&HierarchyOrderEntry::Group(moving_group.clone())));
+        assert_eq!(state.hierarchy_order["gradients"][target_group].get(1), Some(&HierarchyOrderEntry::Item(target_item)));
+        let names: Vec<String> = headers.iter().map(|(name, _)| name.clone()).collect();
+        assert_eq!(state.display_order("gradients", &names).len(), names.len());
+    }
 }

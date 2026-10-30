@@ -13,12 +13,19 @@ pub(crate) fn canvas_drop_rect(app: &PhotocraftApp) -> Rect {
     crate::rulers::content_rect(app, app.last_canvas_rect)
 }
 
-/// Shared payload for dragging an asset or one of its group/folder headers.
+/// Shared payload for dragging an asset or one of its group headers.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum AssetDrag {
-    Preset { scope: String, key: String },
-    Group { scope: String, name: String },
-    Folder { scope: String, group: String, folder: Vec<String> },
+    Preset {
+        scope: String,
+        key: String,
+    },
+    /// Any group node, including a nested group. `path` is empty for a root group.
+    Group {
+        scope: String,
+        name: String,
+        path: Vec<String>,
+    },
 }
 
 /// Shared header hit convention: the upper third inserts before; the rest nests inside.
@@ -44,11 +51,11 @@ pub(crate) fn item_row_edge_targets(area: Rect, item_rect: Rect, first: bool, la
     (left, right)
 }
 
-/// Semantic destination for dragging a group or nested folder onto a hierarchy header.
+/// Semantic destination for dragging a root or nested group onto a hierarchy header.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum HierarchyDrop {
-    MoveGroup { group: String, folder: Vec<String>, before: Option<String> },
-    MoveInto { group: String, folder: Vec<String>, into: Option<(String, Vec<String>)>, before: Option<String> },
+    MoveGroup { group: String, group_path: Vec<String>, before: Option<String> },
+    MoveInto { group: String, group_path: Vec<String>, into: Option<(String, Vec<String>)>, before: Option<String> },
 }
 
 /// Which kinds of drops a particular hierarchy header accepts.
@@ -120,50 +127,46 @@ mod insertion_marker_tests {
 }
 
 /// Resolve a hierarchy-header drop without coupling to a consumer's command type.
-pub(crate) fn hierarchy_folder_drop(src_group: &str, src_folder: &[String], target_group: &str, target_folder: &[String], edge: bool) -> Option<HierarchyDrop> {
-    if src_group == target_group && target_folder.starts_with(src_folder) {
+pub(crate) fn hierarchy_group_drop(src_group: &str, src_path: &[String], target_group: &str, target_path: &[String], edge: bool) -> Option<HierarchyDrop> {
+    if src_group == target_group && target_path.starts_with(src_path) {
         return None;
     }
     let group = src_group.to_string();
-    let folder = src_folder.to_vec();
+    let group_path = src_path.to_vec();
     if !edge {
-        let parent = src_folder.split_last().map(|(_, p)| p);
-        if src_group == target_group && parent == Some(target_folder) {
+        let parent = src_path.split_last().map(|(_, p)| p);
+        if src_group == target_group && parent == Some(target_path) {
             return None;
         }
-        return Some(HierarchyDrop::MoveInto { group, folder, into: Some((target_group.to_string(), target_folder.to_vec())), before: None });
+        return Some(HierarchyDrop::MoveInto { group, group_path, into: Some((target_group.to_string(), target_path.to_vec())), before: None });
     }
-    match target_folder.split_last() {
-        None if src_folder.is_empty() => Some(HierarchyDrop::MoveGroup { group, folder, before: Some(target_group.to_string()) }),
-        None => Some(HierarchyDrop::MoveInto { group, folder, into: None, before: Some(target_group.to_string()) }),
+    match target_path.split_last() {
+        None if src_path.is_empty() => Some(HierarchyDrop::MoveGroup { group, group_path, before: Some(target_group.to_string()) }),
+        None => Some(HierarchyDrop::MoveInto { group, group_path, into: None, before: Some(target_group.to_string()) }),
         Some((leaf, parent)) => {
-            let siblings = src_group == target_group && src_folder.split_last().map(|(_, p)| p) == Some(parent);
+            let siblings = src_group == target_group && src_path.split_last().map(|(_, p)| p) == Some(parent);
             if siblings {
-                Some(HierarchyDrop::MoveGroup { group, folder, before: Some(leaf.clone()) })
+                Some(HierarchyDrop::MoveGroup { group, group_path, before: Some(leaf.clone()) })
             } else {
-                Some(HierarchyDrop::MoveInto { group, folder, into: Some((target_group.to_string(), parent.to_vec())), before: Some(leaf.clone()) })
+                Some(HierarchyDrop::MoveInto { group, group_path, into: Some((target_group.to_string(), parent.to_vec())), before: Some(leaf.clone()) })
             }
         }
     }
 }
 
 /// Build the shared payload for a hierarchy header.
-pub(crate) fn asset_browser_header_payload(scope: &str, group: &str, folder: &[String]) -> AssetDrag {
-    if folder.is_empty() {
-        AssetDrag::Group { scope: scope.to_string(), name: group.to_string() }
-    } else {
-        AssetDrag::Folder { scope: scope.to_string(), group: group.to_string(), folder: folder.to_vec() }
-    }
+pub(crate) fn asset_browser_header_payload(scope: &str, group: &str, group_path: &[String]) -> AssetDrag {
+    AssetDrag::Group { scope: scope.to_string(), name: group.to_string(), path: group_path.to_vec() }
 }
 
-/// Shared drag target for group/folder headers, including scoped drop indicators.
+/// Shared drag target for group headers, including scoped drop indicators.
 pub(crate) fn asset_browser_header_target_with_capabilities(
     ui: &egui::Ui,
     response: &egui::Response,
     rect: Rect,
     scope: &str,
     group: &str,
-    folder: &[String],
+    group_path: &[String],
     capabilities: HeaderDropCapabilities,
 ) -> Option<AssetDrag> {
     let HeaderDropCapabilities { item_drop, group_drag, reject_group_drop } = capabilities;
@@ -171,53 +174,42 @@ pub(crate) fn asset_browser_header_target_with_capabilities(
         return None;
     }
     if group_drag {
-        response.dnd_set_drag_payload(asset_browser_header_payload(scope, group, folder));
+        response.dnd_set_drag_payload(asset_browser_header_payload(scope, group, group_path));
     }
     let hovered = response.dnd_hover_payload::<AssetDrag>().map(|payload| payload.as_ref().clone());
+    let pointer = ui.ctx().pointer_interact_pos();
+    let edge = pointer.is_some_and(|p| header_drop_before(rect, p));
+    let source = match hovered.as_ref() {
+        Some(AssetDrag::Group { scope: drag_scope, name, path }) if group_drag && drag_scope == scope => Some((name.as_str(), path.as_slice())),
+        _ => None,
+    };
+    let hierarchy_drop = (!reject_group_drop)
+        .then_some(())
+        .and_then(|()| source)
+        .and_then(|(source_group, source_path)| hierarchy_group_drop(source_group, source_path, group, group_path, edge));
     if let Some(dragged) = hovered.as_ref() {
-        let pointer = ui.ctx().pointer_interact_pos();
-        let edge = pointer.is_some_and(|p| header_drop_before(rect, p));
-        let source = match dragged {
-            AssetDrag::Group { scope: drag_scope, name } if group_drag && drag_scope == scope => Some((name.as_str(), &[][..])),
-            AssetDrag::Folder { scope: drag_scope, group: source_group, folder: source_folder } if group_drag && drag_scope == scope => {
-                Some((source_group.as_str(), source_folder.as_slice()))
-            }
-            _ => None,
-        };
-        let hierarchy_drop = (!reject_group_drop)
-            .then_some(())
-            .and_then(|()| source)
-            .and_then(|(source_group, source_folder)| hierarchy_folder_drop(source_group, source_folder, group, folder, edge));
         match dragged {
             AssetDrag::Preset { scope: drag_scope, .. } if item_drop && drag_scope == scope => {
                 let t = Tokens::get(ui.ctx());
                 paint_group_drop_outline(ui, rect, t.accent);
             }
-            AssetDrag::Group { .. } | AssetDrag::Folder { .. } if group_drag && hierarchy_drop.is_some() => {
-                if matches!(hierarchy_drop, Some(HierarchyDrop::MoveInto { before: None, .. })) {
+            AssetDrag::Group { .. } if group_drag && hierarchy_drop.is_some() => {
+                if matches!(hierarchy_drop.as_ref(), Some(HierarchyDrop::MoveInto { before: None, .. })) {
                     let t = Tokens::get(ui.ctx());
                     paint_group_drop_outline(ui, rect, t.accent);
                 } else {
-                    paint_group_insertion_line(ui, rect, true, Tokens::get(ui.ctx()).accent);
+                    crate::widgets::drop_line(ui, rect, false, false, &Tokens::get(ui.ctx()));
                 }
             }
             _ => {}
         }
     }
-    response.dnd_release_payload::<AssetDrag>().map(|payload| payload.as_ref().clone()).filter(|drag| match drag {
-        AssetDrag::Preset { scope: drag_scope, .. } => item_drop && drag_scope == scope,
-        AssetDrag::Group { scope: drag_scope, name } if group_drag && drag_scope == scope && !reject_group_drop => {
-            let pointer = ui.ctx().pointer_interact_pos();
-            let edge = pointer.is_some_and(|p| header_drop_before(rect, p));
-            hierarchy_folder_drop(name, &[], group, folder, edge).is_some()
-        }
-        AssetDrag::Folder { scope: drag_scope, group: source_group, folder: source_folder } if group_drag && drag_scope == scope && !reject_group_drop => {
-            let pointer = ui.ctx().pointer_interact_pos();
-            let edge = pointer.is_some_and(|p| header_drop_before(rect, p));
-            hierarchy_folder_drop(source_group, source_folder, group, folder, edge).is_some()
-        }
+    let accepts_drop = match hovered.as_ref() {
+        Some(AssetDrag::Preset { scope: drag_scope, .. }) => item_drop && drag_scope == scope,
+        Some(AssetDrag::Group { scope: drag_scope, .. }) if group_drag && drag_scope == scope && !reject_group_drop => hierarchy_drop.is_some(),
         _ => false,
-    })
+    };
+    if accepts_drop { response.dnd_release_payload::<AssetDrag>().map(|payload| payload.as_ref().clone()) } else { None }
 }
 
 /// Shared item hit target and insertion indicator.
@@ -251,6 +243,28 @@ pub(crate) fn asset_browser_item_target(
         .dnd_release_payload::<AssetDrag>()
         .map(|payload| payload.as_ref().clone())
         .filter(|drag| matches!(drag, AssetDrag::Preset { scope: drag_scope, key: dragged } if drag_scope == scope && dragged != key))
+}
+
+/// A group dragged onto an item is inserted immediately before or after that card in its
+/// containing group. The returned boolean uses the same edge decision as the visible card line.
+pub(crate) fn asset_browser_item_hierarchy_target(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    rect: Rect,
+    grid: bool,
+    accepts: bool,
+) -> Option<(AssetDrag, bool)> {
+    if !accepts {
+        return None;
+    }
+    let hovered = response.dnd_hover_payload::<AssetDrag>().map(|payload| payload.as_ref().clone());
+    let hierarchy_drag = matches!(hovered, Some(AssetDrag::Group { .. }));
+    if hierarchy_drag {
+        let after = ui.ctx().pointer_interact_pos().is_some_and(|pointer| item_drop_after(rect, pointer, grid));
+        crate::widgets::drop_line(ui, rect, after, grid, &Tokens::get(ui.ctx()));
+        return response.dnd_release_payload::<AssetDrag>().map(|payload| payload.as_ref().clone()).map(|drag| (drag, after));
+    }
+    None
 }
 
 /// Common click/double-click semantics for asset rows and cards.
@@ -338,41 +352,41 @@ pub(crate) fn context_menu_target(resp: egui::Response, menu: impl FnOnce(&mut e
 }
 
 #[cfg(test)]
-mod hierarchy_folder_drop_tests {
-    use super::{HierarchyDrop, hierarchy_folder_drop};
+mod hierarchy_group_drop_tests {
+    use super::{HierarchyDrop, hierarchy_group_drop};
 
     fn path(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| (*part).to_string()).collect()
     }
 
     #[test]
-    fn rejects_dropping_a_folder_on_itself_or_a_descendant() {
+    fn rejects_dropping_a_group_on_itself_or_a_descendant() {
         let source = path(&["Brushes", "Favorites"]);
 
-        assert_eq!(hierarchy_folder_drop("Library", &source, "Library", &source, false), None);
-        assert_eq!(hierarchy_folder_drop("Library", &source, "Library", &path(&["Brushes", "Favorites", "Soft"]), true), None);
+        assert_eq!(hierarchy_group_drop("Library", &source, "Library", &source, false), None);
+        assert_eq!(hierarchy_group_drop("Library", &source, "Library", &path(&["Brushes", "Favorites", "Soft"]), true), None);
     }
 
     #[test]
-    fn rejects_dropping_a_folder_into_its_current_parent() {
-        assert_eq!(hierarchy_folder_drop("Library", &path(&["Brushes", "Favorites"]), "Library", &path(&["Brushes"]), false), None);
+    fn rejects_dropping_a_group_into_its_current_parent() {
+        assert_eq!(hierarchy_group_drop("Library", &path(&["Brushes", "Favorites"]), "Library", &path(&["Brushes"]), false), None);
     }
 
     #[test]
-    fn allows_reordering_a_folder_before_a_sibling() {
+    fn allows_reordering_a_group_before_a_sibling() {
         assert_eq!(
-            hierarchy_folder_drop("Library", &path(&["Brushes", "Favorites"]), "Library", &path(&["Brushes", "Recent"]), true),
-            Some(HierarchyDrop::MoveGroup { group: "Library".to_string(), folder: path(&["Brushes", "Favorites"]), before: Some("Recent".to_string()) }),
+            hierarchy_group_drop("Library", &path(&["Brushes", "Favorites"]), "Library", &path(&["Brushes", "Recent"]), true),
+            Some(HierarchyDrop::MoveGroup { group: "Library".to_string(), group_path: path(&["Brushes", "Favorites"]), before: Some("Recent".to_string()) }),
         );
     }
 
     #[test]
-    fn allows_moving_a_folder_into_another_folder() {
+    fn allows_moving_a_group_into_another_group() {
         assert_eq!(
-            hierarchy_folder_drop("Library", &path(&["Brushes", "Favorites"]), "Library", &path(&["Textures"]), false),
+            hierarchy_group_drop("Library", &path(&["Brushes", "Favorites"]), "Library", &path(&["Textures"]), false),
             Some(HierarchyDrop::MoveInto {
                 group: "Library".to_string(),
-                folder: path(&["Brushes", "Favorites"]),
+                group_path: path(&["Brushes", "Favorites"]),
                 into: Some(("Library".to_string(), path(&["Textures"]))),
                 before: None,
             }),
@@ -380,12 +394,12 @@ mod hierarchy_folder_drop_tests {
     }
 
     #[test]
-    fn allows_moving_a_folder_into_another_groups_folder() {
+    fn allows_moving_a_group_into_another_root_groups_nested_group() {
         assert_eq!(
-            hierarchy_folder_drop("Library", &path(&["Brushes", "Favorites"]), "Other", &path(&["Textures"]), false),
+            hierarchy_group_drop("Library", &path(&["Brushes", "Favorites"]), "Other", &path(&["Textures"]), false),
             Some(HierarchyDrop::MoveInto {
                 group: "Library".to_string(),
-                folder: path(&["Brushes", "Favorites"]),
+                group_path: path(&["Brushes", "Favorites"]),
                 into: Some(("Other".to_string(), path(&["Textures"]))),
                 before: None,
             }),

@@ -1,4 +1,4 @@
-//! Shared group and folder header presentation for asset browsers.
+//! Shared root and nested group header presentation for asset browsers.
 //!
 //! The browser owns expansion state and hierarchy traversal; brush and preset consumers share
 //! this header's hit target and visual treatment while retaining their own group actions.
@@ -19,7 +19,7 @@ pub(crate) fn group_open(st: &PresetUi, panel: &str, index: usize, name: &str, a
     (index == 0 || all_groups_open) != st.toggled.contains(&format!("{panel}/{}", crate::pickers::picker_state::escape_hierarchy_key_part(name)))
 }
 
-/// Shared collapsible group/folder row. The caller owns toggle state and context actions.
+/// Shared collapsible group row. The caller owns toggle state and context actions.
 pub(crate) fn header(ui: &mut egui::Ui, name: &str, open: bool, depth: usize, count: Option<usize>, height: f32) -> (Rect, egui::Response) {
     let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
     let rect = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
@@ -30,7 +30,7 @@ pub(crate) fn header(ui: &mut egui::Ui, name: &str, open: bool, depth: usize, co
     (rect, response)
 }
 
-/// Paint a group/folder header; nesting is conveyed by indentation rather than an accent bar.
+/// Paint a group header; nesting is conveyed by indentation rather than an accent bar.
 pub(crate) fn paint(ui: &egui::Ui, rect: Rect, open: bool, name: &str, depth: usize, _hovered: bool, count: Option<usize>) {
     paint_with_opacity(ui, rect, open, name, depth, count, 1.0);
 }

@@ -23,7 +23,7 @@ use crate::pickers::picker_footer::FooterOptions;
 use crate::pickers::picker_shell::{ShellOptions, picker_shell};
 use crate::pickers::preset_commands::run;
 
-/// The browser's panel key (selection, folder state and thumbnail size live under it).
+/// The browser's panel key (selection, group state and thumbnail size live under it).
 pub const PANEL: &str = "swatches";
 /// Default cell size: Photoshop's small swatches.
 const DEFAULT_SIZE: f32 = 22.0;
@@ -71,7 +71,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|g| GroupView {
             name: g.name.clone(),
-            items: g.items.iter().map(|s| ItemView { key: s.name.clone(), name: s.name.clone(), folder: Vec::new() }).collect(),
+            items: g.items.iter().map(|s| ItemView { key: s.name.clone(), name: s.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
     let mut st = std::mem::take(&mut app.ui.presets_ui);
@@ -103,7 +103,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         capabilities: BrowserCapabilities::default(),
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
-        folder_context_menu: None,
+        nested_group_context_menu: None,
         paint_group: None,
         paint_item: &mut |ui, rect: Rect, group_index, item_index, _paint_state: ItemPaintState| {
             let color = table.get(group_index).and_then(|items| items.get(item_index)).copied().unwrap_or(Color32::GRAY);
@@ -111,7 +111,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         },
         paint_list_item: None,
     };
-    let events = picker_shell(ui, &mut st, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new swatch"))), ..Default::default() });
+    let events =
+        picker_shell(ui, &mut st, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new swatch"))), ..Default::default() });
     if compact {
         if let Some(was_visible) = search_was_visible {
             st.search_visible.insert(PANEL.into(), was_visible);
@@ -142,13 +143,17 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
         // Swatches don't drop onto the canvas.
         BrowserAction::Drop(..) => {}
         BrowserAction::Rename(k, n) => {
-            if run(app, "swatches.rename", json!({"swatch": k, "name": n})).is_some() && app.ui.presets_ui.selected.get(PANEL) == Some(&k) {
-                sel(app, &n);
+            if run(app, "swatches.rename", json!({"swatch": k, "name": n})).is_some() {
+                app.ui.presets_ui.rename_hierarchy_item(PANEL, &k, &n);
+                if app.ui.presets_ui.selected.get(PANEL) == Some(&k) {
+                    sel(app, &n);
+                }
             }
         }
         BrowserAction::Delete(k) => {
             if run(app, "swatches.delete", json!({"swatch": k})).is_some() {
                 app.ui.presets_ui.selected.remove(PANEL);
+                app.ui.presets_ui.delete_hierarchy_item(PANEL, &k);
             }
         }
         BrowserAction::Move(k, g) => drop(run(app, "swatches.move", json!({"swatch": k, "to": g}))),
@@ -159,12 +164,20 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
             }
             drop(run(app, "swatches.move", params));
         }
-        BrowserAction::RenameGroup(g, n) => drop(run(app, "swatches.renameGroup", json!({"group": g, "name": n}))),
-        BrowserAction::DeleteGroup(g) => drop(run(app, "swatches.deleteGroup", json!({"group": g}))),
-        // Only the brush browser supports nested-folder context actions.
-        BrowserAction::RenameFolder { .. }
-        | BrowserAction::DeleteFolder { .. }
-        | BrowserAction::MoveItemToFolder { .. }
+        BrowserAction::RenameGroup(g, n) => {
+            if run(app, "swatches.renameGroup", json!({"group": g, "name": n})).is_some() {
+                app.ui.presets_ui.rename_group(PANEL, &g, &n);
+            }
+        }
+        BrowserAction::DeleteGroup(g) => {
+            if run(app, "swatches.deleteGroup", json!({"group": g})).is_some() {
+                app.ui.presets_ui.delete_group(PANEL, &g);
+            }
+        }
+        // Only the brush browser supports nested-group context actions.
+        BrowserAction::RenameNestedGroup { .. }
+        | BrowserAction::DeleteNestedGroup { .. }
+        | BrowserAction::MoveItemToGroup { .. }
         | BrowserAction::MoveGroup { .. }
         | BrowserAction::MoveInto { .. } => {}
         BrowserAction::NewGroup => new_group(app),
@@ -377,7 +390,7 @@ mod tests {
     fn first_cell(h: &Harness<'_, PhotocraftApp>) -> egui::Pos2 {
         let origin = h.ctx.input(|i| i.viewport_rect()).min;
         let header_bottom = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL).first().map(|(_, rect)| rect.bottom()).unwrap_or(origin.y);
-        egui::pos2(origin.x + 8.0 + 12.0 + 8.0, header_bottom + 2.0 + DEFAULT_SIZE / 2.0)
+        egui::pos2(origin.x + 8.0 + 20.0 + DEFAULT_SIZE / 2.0, header_bottom + 2.0 + DEFAULT_SIZE / 2.0)
     }
 
     /// Harness construction renders once before the test installs the app's named theme fonts.
@@ -530,7 +543,7 @@ mod tests {
         assert!(out[0].1.starts_with(b"ASEF"));
     }
 
-    /// #3658: dragging a group header reorders the folders, and the new order sticks in the UI
+    /// #3658: dragging a group header reorders the groups, and the new order sticks in the UI
     /// state (UI state is serde, so it saves and reloads with the rest of the panel state).
     #[test]
     fn dragging_a_group_header_reorders_and_persists() {
@@ -539,17 +552,66 @@ mod tests {
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
         h.run_steps(2);
         let headers = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL);
-        assert!(headers.len() >= 2, "the default library has folders: {headers:?}");
+        assert!(headers.len() >= 2, "the default library has groups: {headers:?}");
         let names: Vec<String> = headers.iter().map(|(n, _)| n.clone()).collect();
         let (first, first_r) = &headers[0];
         let (last, last_r) = headers.last().unwrap();
-        // Drag the last folder's header above the first; the insertion lands before it.
+        // Drag the last group's header above the first; the insertion lands before it.
         drag(&mut h, last_r.center(), egui::pos2(first_r.center().x, first_r.top() + 1.0));
         let order = h.state().ui.presets_ui.display_order(PANEL, &names);
         assert_eq!(order.len(), names.len());
-        assert_eq!(names.get(order[0]).map(String::as_str), Some(last.as_str()), "the dragged folder moved to the front: {order:?}");
+        assert_eq!(names.get(order[0]).map(String::as_str), Some(last.as_str()), "the dragged group moved to the front: {order:?}");
         assert_eq!(names.get(order[1]).map(String::as_str), Some(first.as_str()));
         // The reorder is remembered by name (not by the positions it happened to have).
-        assert_eq!(h.state().ui.presets_ui.group_order.get(PANEL).and_then(|o| o.first()), Some(last));
+        assert_eq!(h.state().ui.presets_ui.hierarchy_order[PANEL][""][0], crate::pickers::picker_state::HierarchyOrderEntry::Group(last.clone()));
+        assert!(!h.state().ui.presets_ui.group_order.contains_key(PANEL), "root order uses the canonical hierarchy field");
+    }
+
+    #[test]
+    fn dragging_a_group_before_a_card_uses_the_same_sibling_sequence() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(300.0, 4000.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_after_font_setup(ui, app), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(2);
+        let headers = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL);
+        assert!(headers.len() >= 2);
+        let (target_group, target_rect) = &headers[0];
+        let (moving_group, moving_rect) = headers.last().unwrap();
+        let target_item =
+            h.state().session.presets.swatches.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
+        let root_order_before = h.state().ui.presets_ui.display_order(PANEL, &headers.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>());
+
+        // Aim at the left half of the first swatch: the group must land before that card, not
+        // append after the whole parent group or reorder among the root headers.
+        let target = first_cell(&h) - vec2(5.0, 0.0);
+        drag(&mut h, moving_rect.center(), target);
+
+        let state = &h.state().ui.presets_ui;
+        assert_eq!(state.group_parent[PANEL][moving_group], *target_group);
+        assert_eq!(state.hierarchy_order[PANEL][target_group].first(), Some(&crate::pickers::picker_state::HierarchyOrderEntry::Group(moving_group.clone())));
+        assert_eq!(state.hierarchy_order[PANEL][target_group].get(1), Some(&crate::pickers::picker_state::HierarchyOrderEntry::Item(target_item)));
+        let names: Vec<String> = headers.iter().map(|(name, _)| name.clone()).collect();
+        assert_eq!(state.display_order(PANEL, &names), root_order_before, "a card-level drop must not also reorder root groups");
+        let _ = target_rect;
+    }
+
+    #[test]
+    fn dragging_a_card_before_another_reorders_the_same_sibling_sequence() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let group_name = app.session.presets.swatches[0].name.clone();
+        let first = app.session.presets.swatches[0].items[0].name.clone();
+        let second = app.session.presets.swatches[0].items[1].name.clone();
+        let mut h = Harness::builder().with_size(vec2(300.0, 4000.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_after_font_setup(ui, app), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(2);
+
+        let first_cell = first_cell(&h);
+        drag(&mut h, first_cell + vec2(DEFAULT_SIZE, 0.0), first_cell - vec2(5.0, 0.0));
+
+        assert_eq!(h.state().session.presets.swatches[0].items[0].name, second);
+        assert_eq!(
+            h.state().ui.presets_ui.hierarchy_order[PANEL][&group_name][0..2],
+            [crate::pickers::picker_state::HierarchyOrderEntry::Item(second), crate::pickers::picker_state::HierarchyOrderEntry::Item(first),]
+        );
     }
 }

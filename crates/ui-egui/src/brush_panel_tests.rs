@@ -90,6 +90,49 @@ fn brush_settings_texture_uses_compact_patterns_browser_and_keeps_panel_selectio
 }
 
 #[test]
+fn brush_settings_texture_browse_uses_unified_group_card_drop_order() {
+    use egui_kittest::kittest::Queryable;
+
+    let mut h = harness(0, 3);
+    h.state_mut().session.tools.brush.texture.enabled = true;
+    let state_id = egui::Id::new(("compact-pattern-browser", "brush-texture-patterns"));
+    h.ctx.data_mut(|data| data.insert_temp(state_id, crate::pickers::picker_state::PresetUi::default()));
+    h.run_steps(2);
+    h.get_by_label("Browse…").click();
+    h.run_steps(3);
+
+    let groups = crate::pickers::pattern_browser::pattern_group_views(&h.state().session.patterns.items, &h.state().session.presets.pattern_groups);
+    let (target_group, target_item) = groups.iter().find_map(|group| group.items.first().map(|item| (group.name.clone(), item))).unwrap();
+    let moving_group = groups.last().unwrap().name.clone();
+    assert_ne!(moving_group, target_group);
+    let headers = crate::pickers::asset_browser::last_group_headers(&h.ctx, "brush-texture-patterns");
+    let source = headers.iter().find(|(name, _)| name == &moving_group).map(|(_, rect)| rect.center()).unwrap();
+    let target = h.get_by_label(&target_item.name).rect().center() - vec2(4.0, 0.0);
+
+    h.event(egui::Event::PointerMoved(source));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: source, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+    h.run_steps(1);
+    for step in 1..=6 {
+        h.event(egui::Event::PointerMoved(source + (target - source) * (step as f32 / 6.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: target, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+    h.run_steps(3);
+
+    let state =
+        h.ctx.data(|data| data.get_temp::<crate::pickers::picker_state::PresetUi>(state_id)).expect("compact browser state persists across popup frames");
+    assert_eq!(state.group_parent["brush-texture-patterns"][&moving_group], target_group);
+    assert_eq!(
+        &state.hierarchy_order["brush-texture-patterns"][&target_group][0..2],
+        &[
+            crate::pickers::picker_state::HierarchyOrderEntry::Group(moving_group),
+            crate::pickers::picker_state::HierarchyOrderEntry::Item(target_item.key.clone()),
+        ]
+    );
+}
+
+#[test]
 fn brush_texture_pattern_gear_menu_stays_open_when_pointer_leaves_it() {
     use egui_kittest::kittest::Queryable;
 
@@ -981,7 +1024,7 @@ fn folder_tree_nests_presets_in_panel_order() {
         for n in nodes {
             match n {
                 Node::Preset(p) => out.push(p.name.clone()),
-                Node::Folder(f) => {
+                Node::Group(f) => {
                     out.push(format!("[{} {}]", f.path.join("/"), f.count));
                     show(&f.children, out);
                     out.push("[end]".into());
@@ -1073,11 +1116,11 @@ fn folder_drops_map_to_move_commands() {
     // Into: a folder onto another folder, a group onto a group.
     assert_eq!(
         folder_drop("Kit", &v(&["Dry"]), "Kit", &v(&["Inks"]), false),
-        Some(Action::MoveInto { group: "Kit".into(), folder: v(&["Dry"]), into: Some(("Kit".into(), v(&["Inks"]))), before: None })
+        Some(Action::MoveInto { group: "Kit".into(), folder: v(&["Dry"]), into: Some(("Kit".into(), v(&["Inks"]))), before: None, before_item: None })
     );
     assert_eq!(
         folder_drop("Pack", &[], "Kit", &v(&["Inks"]), false),
-        Some(Action::MoveInto { group: "Pack".into(), folder: vec![], into: Some(("Kit".into(), v(&["Inks"]))), before: None })
+        Some(Action::MoveInto { group: "Pack".into(), folder: vec![], into: Some(("Kit".into(), v(&["Inks"]))), before: None, before_item: None })
     );
     // Onto itself, into its own folder, or into the folder it is already in: nothing.
     assert_eq!(folder_drop("Kit", &v(&["Inks"]), "Kit", &v(&["Inks"]), false), None);
@@ -1093,11 +1136,17 @@ fn folder_drops_map_to_move_commands() {
     assert_eq!(folder_drop("Pack", &[], "Kit", &[], true), Some(Action::MoveGroup { group: "Pack".into(), folder: vec![], before: Some("Kit".into()) }));
     assert_eq!(
         folder_drop("Kit", &v(&["Inks", "Fine"]), "Pack", &[], true),
-        Some(Action::MoveInto { group: "Kit".into(), folder: v(&["Inks", "Fine"]), into: None, before: Some("Pack".into()) })
+        Some(Action::MoveInto { group: "Kit".into(), folder: v(&["Inks", "Fine"]), into: None, before: Some("Pack".into()), before_item: None })
     );
     assert_eq!(
         folder_drop("Kit", &v(&["Inks", "Fine"]), "Pack", &v(&["Box"]), true),
-        Some(Action::MoveInto { group: "Kit".into(), folder: v(&["Inks", "Fine"]), into: Some(("Pack".into(), vec![])), before: Some("Box".into()) })
+        Some(Action::MoveInto {
+            group: "Kit".into(),
+            folder: v(&["Inks", "Fine"]),
+            into: Some(("Pack".into(), vec![])),
+            before: Some("Box".into()),
+            before_item: None
+        })
     );
 
     let mut app = app();

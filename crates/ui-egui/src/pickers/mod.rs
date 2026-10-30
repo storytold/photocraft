@@ -9,6 +9,8 @@ pub(crate) mod brush_browser;
 pub mod brush_picker;
 pub(crate) mod gradients_browser;
 pub(crate) mod pattern_browser;
+pub(crate) mod picker_browser_dragging;
+pub(crate) mod picker_browser_hierarchy;
 pub(crate) mod picker_footer;
 pub(crate) mod picker_shell;
 pub(crate) mod picker_state;

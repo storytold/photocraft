@@ -25,9 +25,9 @@ use photocraft_engine::BrushSettings;
 use photocraft_engine::paint::{BrushPreset, MAX_BRUSH_SIZE, TipShape};
 use serde_json::{Value, json};
 
-pub(crate) use crate::pickers::brush_browser::SCALE_RANGE;
 use crate::brush_panel::BrushesPanelState;
 use crate::brushes_tab::{self, Action};
+pub(crate) use crate::pickers::brush_browser::SCALE_RANGE;
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, icons, widgets};
 
@@ -98,8 +98,8 @@ pub fn close(ui: &mut crate::state::UiState) {
     if ui.presets_ui.renaming.as_ref().is_some_and(|(panel, _, _)| panel == "brush-picker") {
         ui.presets_ui.renaming = None;
     }
-    if ui.presets_ui.folder_renaming.as_ref().is_some_and(|rename| rename.panel == "brush-picker") {
-        ui.presets_ui.folder_renaming = None;
+    if ui.presets_ui.group_renaming.as_ref().is_some_and(|rename| rename.panel == "brush-picker") {
+        ui.presets_ui.group_renaming = None;
     }
 }
 
@@ -311,7 +311,14 @@ pub fn body(
         |ui, allocated_h| {
             let actions = {
                 let mut brush_state = state.borrow_mut();
-                crate::pickers::brush_browser::picker_browser(ui, presets, current, &mut brush_state, &mut preset_ui.borrow_mut(), (allocated_h - 4.0).max(80.0))
+                crate::pickers::brush_browser::picker_browser(
+                    ui,
+                    presets,
+                    current,
+                    &mut brush_state,
+                    &mut preset_ui.borrow_mut(),
+                    (allocated_h - 4.0).max(80.0),
+                )
             };
             actions.into_iter().map(Pick::List).collect::<Vec<_>>()
         },

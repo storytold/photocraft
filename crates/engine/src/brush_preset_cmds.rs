@@ -302,6 +302,17 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
         Some(Value::String(b)) => Some(b.trim().to_string()),
         Some(_) => return Err(bad(cmd, "`before` must be a folder name")),
     };
+    let before_item = match p.get("beforeItem") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(name)) if !name.trim().is_empty() && name.chars().count() <= MAX_NAME => Some(name.trim().to_string()),
+        Some(_) => return Err(bad(cmd, format!("`beforeItem` must be a non-empty preset name of at most {MAX_NAME} characters"))),
+    };
+    if before.is_some() && before_item.is_some() {
+        return Err(bad(cmd, "`before` and `beforeItem` cannot be combined"));
+    }
+    if before_item.is_some() && dest.is_none() {
+        return Err(bad(cmd, "`beforeItem` needs an `into` destination"));
+    }
     // The destination's own folders and groups, without the one being moved.
     let others: Vec<BrushPreset> = s.tools.presets.iter().filter(|x| !moving(x)).cloned().collect();
     let (new_group, new_prefix, siblings) = match &dest {
@@ -328,6 +339,12 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
     {
         return Err(bad(cmd, format!("`before`: no folder named `{b}` there")));
     }
+    if let (Some((dg, df)), Some(anchor)) = (&dest, &before_item) {
+        let matches = others.iter().filter(|x| x.name.eq_ignore_ascii_case(anchor) && x.group == *dg && x.folder == *df).count();
+        if matches != 1 {
+            return Err(bad(cmd, format!("`beforeItem`: expected one direct preset named `{anchor}` in the destination folder")));
+        }
+    }
     let deepest = s.tools.presets.iter().filter(|x| moving(x)).map(|x| new_prefix.len() + rest_of(x).len()).max().unwrap_or(0);
     if deepest > MAX_FOLDER_DEPTH {
         return Err(bad(cmd, format!("folders can be nested at most {MAX_FOLDER_DEPTH} deep")));
@@ -340,14 +357,16 @@ fn move_into(s: &mut Session, p: &Value, g: String, f: Vec<String>, dest: Dest, 
         x.folder = new_prefix.iter().cloned().chain(tail).collect();
         x.builtin = false;
     }
-    let pos = match (&dest, &before) {
-        (None, Some(b)) => rest.iter().position(|x| x.group == *b),
-        (None, None) => None,
-        (Some((dg, df)), Some(b)) => {
+    let pos = match (&dest, &before, &before_item) {
+        (Some((dg, df)), None, Some(anchor)) => rest.iter().position(|x| x.name.eq_ignore_ascii_case(anchor) && x.group == *dg && x.folder == *df),
+        (None, Some(b), None) => rest.iter().position(|x| x.group == *b),
+        (None, None, None) => None,
+        (Some((dg, df)), Some(b), None) => {
             let sib: Vec<String> = df.iter().cloned().chain(std::iter::once(b.clone())).collect();
             rest.iter().position(|x| in_folder(x, dg, &sib))
         }
-        (Some((dg, df)), None) => rest.iter().rposition(|x| in_folder(x, dg, df)).map(|k| k + 1),
+        (Some((dg, df)), None, None) => rest.iter().rposition(|x| in_folder(x, dg, df)).map(|k| k + 1),
+        _ => None,
     };
     let tail = rest.split_off(pos.unwrap_or(rest.len()).min(rest.len()));
     rest.extend(block);
@@ -467,7 +486,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "brush.presets.moveGroup",
             "Move Brush Group",
-            r##"{"group":string,"folder":[name]? (move this nested folder instead),"into":{"group":string?,"folder":[name]?}? (move it inside that folder of that group, [] = directly in the group; no group = out to the top level as a group of its own; the folder keeps its content),"before":group? (or sibling folder name, in its new place with `into`) | "index":n? (group or sibling folder position, without `into`)=end} → {group, folder?, index}"##,
+            r##"{"group":string,"folder":[name]? (move this nested folder instead),"into":{"group":string?,"folder":[name]?}? (move it inside that folder of that group, [] = directly in the group; no group = out to the top level as a group of its own; the folder keeps its content),"before":group? (or sibling folder name), "beforeItem":preset? (direct item in the destination folder; mutually exclusive with `before`) | "index":n? (group or sibling folder position, without `into`)=end} → {group, folder?, index}"##,
             move_group
         ),
         spec!(
@@ -751,6 +770,96 @@ mod tests {
     }
 
     #[test]
+    fn folder_drop_before_a_direct_preset_preserves_the_interleaved_library_order() {
+        let mut s = Session::new();
+        for (name, folder) in [("A", &[][..]), ("B", &[][..]), ("C", &[][..]), ("Child item", &["Child"][..])] {
+            s.tools.presets.push(BrushPreset {
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: "Set".into(),
+                folder: folder.iter().map(|part| (*part).to_string()).collect(),
+                captures: Default::default(),
+            });
+        }
+
+        s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Child"], "into": {"group": "Set"}, "beforeItem": "B"})).unwrap();
+
+        let order: Vec<String> = s
+            .tools
+            .presets
+            .iter()
+            .filter(|preset| !preset.builtin)
+            .map(|preset| if preset.folder.is_empty() { preset.name.clone() } else { format!("{}: {}", preset.folder.join("/"), preset.name) })
+            .collect();
+        assert_eq!(order, ["A", "Child: Child item", "B", "C"]);
+        assert_eq!(folder_of(&s, "Child item"), ["Child"]);
+    }
+
+    #[test]
+    fn folder_drop_after_the_last_direct_preset_appends_after_it() {
+        let mut s = Session::new();
+        for (name, folder) in [("A", &[][..]), ("B", &[][..]), ("Child item", &["Child"][..])] {
+            s.tools.presets.push(BrushPreset {
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: "Set".into(),
+                folder: folder.iter().map(|part| (*part).to_string()).collect(),
+                captures: Default::default(),
+            });
+        }
+
+        s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Child"], "into": {"group": "Set"}})).unwrap();
+
+        let order: Vec<String> = s
+            .tools
+            .presets
+            .iter()
+            .filter(|preset| !preset.builtin)
+            .map(|preset| if preset.folder.is_empty() { preset.name.clone() } else { format!("{}: {}", preset.folder.join("/"), preset.name) })
+            .collect();
+        assert_eq!(order, ["A", "B", "Child: Child item"]);
+    }
+
+    #[test]
+    fn folder_drop_before_the_next_nested_folder_preserves_the_card_gap() {
+        let mut s = Session::new();
+        for (name, folder) in [("A", &[][..]), ("Nested item", &["Nested"][..]), ("B", &[][..]), ("Child item", &["Child"][..])] {
+            s.tools.presets.push(BrushPreset {
+                name: name.into(),
+                brush: Default::default(),
+                builtin: false,
+                group: "Set".into(),
+                folder: folder.iter().map(|part| (*part).to_string()).collect(),
+                captures: Default::default(),
+            });
+        }
+
+        s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Child"], "into": {"group": "Set"}, "before": "Nested"})).unwrap();
+
+        let order: Vec<String> = s
+            .tools
+            .presets
+            .iter()
+            .filter(|preset| !preset.builtin)
+            .map(|preset| if preset.folder.is_empty() { preset.name.clone() } else { format!("{}: {}", preset.folder.join("/"), preset.name) })
+            .collect();
+        assert_eq!(order, ["A", "Child: Child item", "Nested: Nested item", "B"]);
+    }
+
+    #[test]
+    fn moving_a_folder_into_itself_is_rejected_without_mutation() {
+        let mut s = with_folders();
+        let before = s.tools.presets.clone();
+
+        let result = s.execute("brush.presets.moveGroup", json!({"group": "Set", "folder": ["Ink"], "into": {"group": "Set", "folder": ["Ink"]}}));
+
+        assert!(result.is_err());
+        assert_eq!(s.tools.presets, before);
+    }
+
+    #[test]
     fn bad_moves_into_folders_fail_without_changes() {
         let mut s = with_two_groups();
         // A chain 31 deep under Set/Deep.
@@ -784,6 +893,8 @@ mod tests {
             // A name clash at the destination.
             json!({"group": "Set", "folder": ["Dry"], "into": {"group": "Other"}}),
             json!({"group": "Other", "folder": ["Box"], "into": {"group": "Set", "folder": ["Ink"]}, "before": "Nope"}),
+            json!({"group": "Other", "folder": ["Box"], "into": {"group": "Set"}, "beforeItem": "Nope"}),
+            json!({"group": "Other", "folder": ["Box"], "into": {"group": "Set"}, "before": "Ink", "beforeItem": "S0"}),
             json!({"group": "Set", "folder": ["Dry"], "into": {"group": "Set", "folder": ["Ink"]}, "index": 0}),
             // Missing destinations and bad shapes.
             json!({"group": "Set", "folder": ["Dry"], "into": {"group": "Nope"}}),

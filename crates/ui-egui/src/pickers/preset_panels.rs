@@ -1,7 +1,7 @@
 //! Window › Gradients, Patterns (tabs of the Color card, as in Photoshop's Essentials workspace),
 //! Styles, Shapes, Tool Presets and Clone Source (floating panels).
 //!
-//! The preset panels share one browser: folders with disclosure triangles, a thumbnail grid (or a
+//! The preset panels share one browser: nested groups with disclosure triangles, a thumbnail grid (or a
 //! list when the size slider is at its minimum), a rename field, a context menu (Rename, Delete,
 //! Move to group) and the Photoshop footer (size slider · New Group · New · Delete). Clicking a
 //! preset selects it, double-clicking or dragging it onto the canvas applies it. Every action is
@@ -22,7 +22,7 @@ use crate::pickers::asset_browser::{BrowserAction, BrowserAdapter, BrowserCapabi
 use crate::pickers::asset_browser::{standard_group_context_menu, standard_item_context_menu};
 #[cfg(test)]
 use crate::pickers::asset_browser_hierarchy::hierarchy_tree;
-pub use crate::pickers::asset_browser_hierarchy::{HierarchyFolder, HierarchyNode};
+pub use crate::pickers::asset_browser_hierarchy::{HierarchyGroup, HierarchyNode};
 use crate::pickers::asset_browser_interaction::canvas_drop_rect;
 #[cfg(test)]
 use crate::pickers::asset_browser_interaction::{AssetDrag, asset_browser_header_payload, header_drop_before};
@@ -107,7 +107,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|g| GroupView {
             name: g.name.clone(),
-            items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone(), folder: Vec::new() }).collect(),
+            items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
     let canvas = canvas_drop_rect(app);
@@ -135,7 +135,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         capabilities: BrowserCapabilities::default(),
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
-        folder_context_menu: None,
+        nested_group_context_menu: None,
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
             ui.painter().rect_filled(rect, 2.0, t.field);
@@ -163,8 +163,8 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let _ = pos;
                 run(app, "style.presets.apply", json!({"preset": k}));
             }
-            // Only the brush browser supports nested-folder context actions.
-            BrowserAction::RenameFolder { .. } | BrowserAction::DeleteFolder { .. } => {}
+            // Only the brush browser supports nested-group context actions.
+            BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
                 generic(app, "styles", "style.presets", &e, json!({"name": "Style"}));
             }
@@ -180,7 +180,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .iter()
         .map(|g| GroupView {
             name: g.name.clone(),
-            items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone(), folder: Vec::new() }).collect(),
+            items: g.items.iter().map(|i| ItemView { key: i.name.clone(), name: i.name.clone(), group_path: Vec::new() }).collect(),
         })
         .collect();
     let canvas = canvas_drop_rect(app);
@@ -204,7 +204,7 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         capabilities: BrowserCapabilities::default(),
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
-        folder_context_menu: None,
+        nested_group_context_menu: None,
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
             let texture = shape_texture(&ctx, &src[group_index].items[item_index]);
@@ -241,8 +241,8 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
                 run(app, "shape.presets.place", p);
             }
-            // Only the brush browser supports nested-folder context actions.
-            BrowserAction::RenameFolder { .. } | BrowserAction::DeleteFolder { .. } => {}
+            // Only the brush browser supports nested-group context actions.
+            BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
             _ => {
                 generic(app, "shapes", "shape.presets", &e, json!({"name": "Shape"}));
             }
@@ -599,7 +599,7 @@ mod tests {
     use super::*;
     use crate::menus::invoke;
     use crate::pickers::pattern_browser::{compact_pattern_browser, pattern_group_views};
-    use crate::pickers::picker_state::MAX_GROUP_DEPTH;
+    use crate::pickers::picker_state::{HierarchyOrderEntry, MAX_GROUP_DEPTH};
     use crate::state::ToolOptions;
 
     fn app() -> (PhotocraftApp, egui::Context) {
@@ -629,7 +629,10 @@ mod tests {
         for id in ["window.panel.styles", "window.panel.shapes", "window.panel.toolPresets", "window.panel.cloneSource"] {
             invoke(&mut app, &ctx, id, Value::Null).unwrap();
             let panel = id.strip_prefix("window.panel.").unwrap();
-            assert!(app.ui.docking.as_ref().is_some_and(|layout| layout.floating.iter().any(|group| group.panels.iter().any(|member| member == panel))), "{id} uses shared floating chrome");
+            assert!(
+                app.ui.docking.as_ref().is_some_and(|layout| layout.floating.iter().any(|group| group.panels.iter().any(|member| member == panel))),
+                "{id} uses shared floating chrome"
+            );
             assert_eq!(crate::panel_docking::checked(&app, id), Some(true));
             invoke(&mut app, &ctx, id, json!({"show": false})).unwrap();
             assert!(!app.ui.docking.as_ref().is_some_and(|layout| layout.contains(&panel.to_owned())), "{id} closes through shared docking");
@@ -684,26 +687,27 @@ mod tests {
         assert!(matches!(l.content, photocraft_doc::LayerContent::Shape(_)));
     }
 
-    /// #3658: a group/folder drag reorders by name, stores only a real reorder, and falls back to
-    /// the library's order when the saved order matches it or names a group that's gone.
+    /// Root group moves use the canonical hierarchy sequence; legacy groupOrder remains a read
+    /// fallback for old saved UI state.
     #[test]
-    fn moving_a_folder_reorders_like_the_dock_tabs() {
+    fn moving_a_nested_group_reorders_like_the_dock_tabs() {
         let names: Vec<String> = ["Grays", "Pastel", "Pure", "Dark"].iter().map(|s| s.to_string()).collect();
         let mut st = PresetUi::default();
         assert_eq!(st.display_order("swatches", &names), vec![0, 1, 2, 3]);
         st.move_group("swatches", &names, "Pastel", None);
-        assert_eq!(st.group_order.get("swatches").unwrap(), &["Grays", "Pure", "Dark", "Pastel"]);
+        assert_eq!(st.hierarchy_order["swatches"][""], ["Grays", "Pure", "Dark", "Pastel"].map(|name| HierarchyOrderEntry::Group(name.into())));
+        assert!(!st.group_order.contains_key("swatches"), "new root order does not write the legacy field");
         st.move_group("swatches", &names, "Pastel", Some("Grays"));
-        assert_eq!(st.group_order.get("swatches").unwrap(), &["Pastel", "Grays", "Pure", "Dark"]);
+        assert_eq!(st.hierarchy_order["swatches"][""], ["Pastel", "Grays", "Pure", "Dark"].map(|name| HierarchyOrderEntry::Group(name.into())));
         assert_eq!(st.display_order("swatches", &names), vec![1, 0, 2, 3]);
         // Back to the library's own order: no entry, as the dock stores its default tab order.
         st.move_group("swatches", &names, "Pastel", Some("Pure"));
-        assert!(!st.group_order.contains_key("swatches"), "a no-op order is not stored");
+        assert!(!st.hierarchy_order.get("swatches").is_some_and(|orders| orders.contains_key("")), "a no-op order is not stored");
         // Out-of-range names, moves onto themselves and unknown `before` names change nothing bad.
         for (from, before) in [("Nope", None), ("Grays", Some("Grays"))] {
             let mut m = PresetUi::default();
             m.move_group("swatches", &names, from, before);
-            assert!(m.group_order.is_empty(), "{from} {before:?}");
+            assert!(m.hierarchy_order.is_empty() && m.group_order.is_empty(), "{from} {before:?}");
             assert_eq!(m.display_order("swatches", &names), vec![0, 1, 2, 3]);
         }
         // A missing group in a saved order follows the rest in library order.
@@ -744,7 +748,7 @@ mod tests {
         assert!(!st.toggled.iter().any(|key| key.starts_with("gradients/Renamed")));
 
         // Slash-containing labels are encoded as one component so they cannot collide with a
-        // group/folder path; renaming and deleting them must preserve that distinction.
+        // group path; renaming and deleting them must preserve that distinction.
         let slash_group = format!("gradients/{}", crate::pickers::picker_state::escape_hierarchy_key_part("A/B"));
         st.toggled.insert(format!("{slash_group}/Inner"));
         st.toggled.insert("gradients/A/B/Inner".into());
@@ -765,7 +769,7 @@ mod tests {
                 crate::pickers::picker_state::escape_hierarchy_key_part("B"),
                 crate::pickers::picker_state::escape_hierarchy_key_part("C")
             ),
-            "a slash inside one folder component is not a path separator",
+            "a slash inside one group component is not a path separator",
         );
 
         st.nest_group("gradients", &names, "Child", None);
@@ -773,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_group_header_drop_matches_brush_folder_drop_convention() {
+    fn nested_group_header_drop_matches_brush_group_drop_convention() {
         let names: Vec<String> = ["Parent", "Child", "Grandchild", "Sibling"].iter().map(|s| s.to_string()).collect();
         let mut st = PresetUi::default();
         st.nest_group("gradients", &names, "Child", Some("Parent"));
@@ -813,11 +817,14 @@ mod tests {
     }
 
     #[test]
-    fn shared_header_payload_keeps_group_and_folder_identity() {
-        assert_eq!(asset_browser_header_payload("patterns", "Textures", &[]), AssetDrag::Group { scope: "patterns".into(), name: "Textures".into() });
+    fn shared_header_payload_keeps_root_and_nested_group_identity() {
+        assert_eq!(
+            asset_browser_header_payload("patterns", "Textures", &[]),
+            AssetDrag::Group { scope: "patterns".into(), name: "Textures".into(), path: Vec::new() }
+        );
         assert_eq!(
             asset_browser_header_payload("brushes", "Ink", &["Imported".into(), "Dry".into()]),
-            AssetDrag::Folder { scope: "brushes".into(), group: "Ink".into(), folder: vec!["Imported".into(), "Dry".into()] }
+            AssetDrag::Group { scope: "brushes".into(), name: "Ink".into(), path: vec!["Imported".into(), "Dry".into()] }
         );
     }
 
@@ -845,7 +852,7 @@ mod tests {
             capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
-            folder_context_menu: None,
+            nested_group_context_menu: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -888,7 +895,7 @@ mod tests {
             capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
-            folder_context_menu: None,
+            nested_group_context_menu: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -945,7 +952,8 @@ mod tests {
 
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let groups = vec![GroupView { name: "Only group".into(), items: vec![ItemView { key: "only".into(), name: "Only item".into(), folder: Vec::new() }] }];
+        let groups =
+            vec![GroupView { name: "Only group".into(), items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }] }];
         let mut st = PresetUi::default();
         let menu_calls = Rc::new(Cell::new(0));
         let search_calls = Rc::new(Cell::new(0));
@@ -984,7 +992,7 @@ mod tests {
             capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: false, activation: false },
             item_context_menu: None,
             group_context_menu: None,
-            folder_context_menu: None,
+            nested_group_context_menu: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -1024,36 +1032,36 @@ mod tests {
         let c = Item("c");
         let d = Item("d");
         let path = |parts: &[&str]| parts.iter().map(|s| (*s).to_string()).collect::<Vec<_>>();
-        let folder_path = path(&["Folder"]);
-        let nested_path = path(&["Folder", "Nested"]);
-        let tree = hierarchy_tree(vec![(&folder_path, &a), (&[], &b), (&nested_path, &c), (&folder_path, &d)], 4);
-        assert!(matches!(tree.first(), Some(HierarchyNode::Folder(f)) if f.path == ["Folder"] && f.count == 3));
+        let group_path = path(&["Nested"]);
+        let nested_path = path(&["Nested", "Child"]);
+        let tree = hierarchy_tree(vec![(&group_path, &a), (&[], &b), (&nested_path, &c), (&group_path, &d)], 4);
+        assert!(matches!(tree.first(), Some(HierarchyNode::Group(f)) if f.path == ["Nested"] && f.count == 3));
         assert!(matches!(tree.get(1), Some(HierarchyNode::Preset(item)) if item.0 == "b"));
-        let Some(HierarchyNode::Folder(folder)) = tree.first() else { panic!("folder node") };
-        assert!(matches!(folder.children.first(), Some(HierarchyNode::Preset(item)) if item.0 == "a"));
-        assert!(matches!(folder.children.get(1), Some(HierarchyNode::Folder(nested)) if nested.path == ["Folder", "Nested"]));
-        assert!(matches!(folder.children.get(2), Some(HierarchyNode::Preset(item)) if item.0 == "d"));
+        let Some(HierarchyNode::Group(group)) = tree.first() else { panic!("group node") };
+        assert!(matches!(group.children.first(), Some(HierarchyNode::Preset(item)) if item.0 == "a"));
+        assert!(matches!(group.children.get(1), Some(HierarchyNode::Group(nested)) if nested.path == ["Nested", "Child"]));
+        assert!(matches!(group.children.get(2), Some(HierarchyNode::Preset(item)) if item.0 == "d"));
 
-        let deep_path = path(&["Folder", "Deep", "TooDeep"]);
+        let deep_path = path(&["Nested", "Deep", "TooDeep"]);
         let bounded = hierarchy_tree(vec![(&nested_path, &c), (&deep_path, &d)], 1);
-        assert!(matches!(bounded.first(), Some(HierarchyNode::Folder(f)) if f.path == ["Folder"] && f.children.len() == 2));
+        assert!(matches!(bounded.first(), Some(HierarchyNode::Group(group)) if group.path == ["Nested"] && group.children.len() == 2));
     }
 
     #[test]
-    fn asset_group_projects_folder_paths_into_the_shared_hierarchy() {
+    fn asset_group_projects_legacy_folder_paths_into_the_shared_group_hierarchy() {
         let group = GroupView {
             name: "Brushes".into(),
             items: vec![
-                ItemView { key: "a".into(), name: "A".into(), folder: vec!["Imported".into()] },
-                ItemView { key: "b".into(), name: "B".into(), folder: Vec::new() },
-                ItemView { key: "c".into(), name: "C".into(), folder: vec!["Imported".into(), "Soft".into()] },
+                ItemView { key: "a".into(), name: "A".into(), group_path: vec!["Imported".into()] },
+                ItemView { key: "b".into(), name: "B".into(), group_path: Vec::new() },
+                ItemView { key: "c".into(), name: "C".into(), group_path: vec!["Imported".into(), "Soft".into()] },
             ],
         };
-        let tree = hierarchy_tree(group.items.iter().map(|item| (item.folder.as_slice(), item)).collect(), 4);
-        assert!(matches!(tree.first(), Some(HierarchyNode::Folder(folder)) if folder.path == ["Imported"] && folder.count == 2));
+        let tree = hierarchy_tree(group.items.iter().map(|item| (item.group_path.as_slice(), item)).collect(), 4);
+        assert!(matches!(tree.first(), Some(HierarchyNode::Group(group)) if group.path == ["Imported"] && group.count == 2));
         assert!(matches!(tree.get(1), Some(HierarchyNode::Preset(item)) if item.key == "b"));
         assert!(
-            matches!(&tree[0], HierarchyNode::Folder(folder) if matches!(folder.children.get(1), Some(HierarchyNode::Folder(nested)) if nested.path == ["Imported", "Soft"] && nested.count == 1 && matches!(nested.children.first(), Some(HierarchyNode::Preset(item)) if item.key == "c")))
+            matches!(&tree[0], HierarchyNode::Group(group) if matches!(group.children.get(1), Some(HierarchyNode::Group(nested)) if nested.path == ["Imported", "Soft"] && nested.count == 1 && matches!(nested.children.first(), Some(HierarchyNode::Preset(item)) if item.key == "c")))
         );
     }
 
@@ -1086,14 +1094,14 @@ mod tests {
     }
 
     #[test]
-    fn compact_patterns_browser_preserves_folder_disclosure_between_frames() {
+    fn compact_patterns_browser_preserves_group_disclosure_between_frames() {
         use egui_kittest::Harness;
 
         let (app, _) = app();
         let patterns = app.session.patterns.items.clone();
         let groups = pattern_group_views(&patterns, &app.session.presets.pattern_groups);
         assert!(groups.len() > 1, "the fixture needs a second group to toggle");
-        let folder = groups[1].name.clone();
+        let group = groups[1].name.clone();
         let panel = "compact-disclosure-test";
         let state_id = egui::Id::new(("compact-pattern-browser", panel));
         let mut h = Harness::builder().with_size(vec2(320.0, 240.0)).build_ui_state(
@@ -1109,20 +1117,20 @@ mod tests {
 
         h.run_steps(3);
         assert!(
-            h.ctx.data(|d| d.get_temp::<PresetUi>(state_id).is_some_and(|s| s.toggled.contains(&format!("{panel}/{folder}")))),
-            "later folders start collapsed"
+            h.ctx.data(|d| d.get_temp::<PresetUi>(state_id).is_some_and(|s| s.toggled.contains(&format!("{panel}/{group}")))),
+            "later groups start collapsed"
         );
 
         let header =
-            last_group_headers(&h.ctx, panel).iter().find(|(name, _)| name == &folder).map(|(_, rect)| rect.center()).expect("second group header is visible");
+            last_group_headers(&h.ctx, panel).iter().find(|(name, _)| name == &group).map(|(_, rect)| rect.center()).expect("second group header is visible");
         h.event(egui::Event::PointerMoved(header));
         h.run_steps(1);
         h.event(egui::Event::PointerButton { pos: header, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
         h.event(egui::Event::PointerButton { pos: header, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
         h.run_steps(2);
 
-        let key = format!("{panel}/{folder}");
-        assert!(!h.ctx.data(|d| d.get_temp::<PresetUi>(state_id).is_some_and(|s| s.toggled.contains(&key))), "clicking the folder expands it");
+        let key = format!("{panel}/{group}");
+        assert!(!h.ctx.data(|d| d.get_temp::<PresetUi>(state_id).is_some_and(|s| s.toggled.contains(&key))), "clicking the group expands it");
         h.run_steps(2);
         assert!(!h.ctx.data(|d| d.get_temp::<PresetUi>(state_id).is_some_and(|s| s.toggled.contains(&key))), "the next frame must retain the expanded state");
     }
@@ -1156,6 +1164,46 @@ mod tests {
         assert_eq!(h.state().session.journal.last().map(|(id, _)| id.as_str()), Some("pattern.presets.select"));
     }
 
+    #[test]
+    fn patterns_panel_card_drag_updates_the_shared_card_group_sequence() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        let (app, _) = app();
+        let groups = pattern_group_views(&app.session.patterns.items, &app.session.presets.pattern_groups);
+        let (group_name, first_key, first_name, second_key, second_name) = groups
+            .iter()
+            .find(|group| group.items.len() >= 2)
+            .map(|group| (group.name.clone(), group.items[0].key.clone(), group.items[0].name.clone(), group.items[1].key.clone(), group.items[1].name.clone()))
+            .expect("a built-in Patterns group has two cards for a reorder gesture");
+        let mut h = Harness::builder().with_size(vec2(360.0, 420.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|fonts| fonts.definitions().families.contains_key(&egui::FontFamily::Name("semibold".into()))) {
+                    patterns_panel(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(4);
+        let from = h.get_by_label(&second_name).rect().center();
+        let to = h.get_by_label(&first_name).rect().center() - vec2(4.0, 0.0);
+        h.event(egui::Event::PointerMoved(from));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: from, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run_steps(1);
+        for step in 1..=6 {
+            h.event(egui::Event::PointerMoved(from + (to - from) * (step as f32 / 6.0)));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::PointerButton { pos: to, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(3);
+
+        assert_eq!(
+            &h.state().ui.presets_ui.hierarchy_order["patterns"][&group_name][0..2],
+            &[crate::pickers::picker_state::HierarchyOrderEntry::Item(second_key), crate::pickers::picker_state::HierarchyOrderEntry::Item(first_key),]
+        );
+    }
+
     fn consumer_item_menu(
         ui: &mut egui::Ui,
         _st: &mut PresetUi,
@@ -1182,7 +1230,8 @@ mod tests {
     fn browser_keeps_context_hit_targets_but_delegates_menu_actions() {
         use egui_kittest::{Harness, kittest::Queryable};
 
-        let groups = vec![GroupView { name: "Only group".into(), items: vec![ItemView { key: "only".into(), name: "Only item".into(), folder: Vec::new() }] }];
+        let groups =
+            vec![GroupView { name: "Only group".into(), items: vec![ItemView { key: "only".into(), name: "Only item".into(), group_path: Vec::new() }] }];
         let mut st = PresetUi::default();
         let mut adapter = BrowserAdapter {
             panel: "consumer-actions",
@@ -1201,7 +1250,7 @@ mod tests {
             capabilities: BrowserCapabilities::default(),
             item_context_menu: Some(consumer_item_menu),
             group_context_menu: Some(consumer_group_menu),
-            folder_context_menu: None,
+            nested_group_context_menu: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -1235,10 +1284,10 @@ mod tests {
         assert!(matches!(h.state().last(), Some(BrowserAction::DeleteGroup(group)) if group == "Only group"));
     }
 
-    /// #3658: the folder order persists with the UI state and reads leniently (an old state has no
+    /// #3658: the group order persists with the UI state and reads leniently (an old state has no
     /// field, and garbage in one never fails the whole state).
     #[test]
-    fn folder_order_persists_and_reads_leniently() {
+    fn group_order_persists_and_reads_leniently() {
         let old: PresetUi = serde_json::from_value(json!({"sizes": {"swatches": 22.0}})).unwrap();
         assert!(old.group_order.is_empty(), "an older state without the field still loads");
         let mut st = PresetUi::default();
