@@ -1,4 +1,4 @@
-use super::convert::{UniqueNames, export, import};
+use super::convert::{UniqueNames, export, import_with_encoding};
 use super::{Action, DEFAULT_SET, EngineError, Result, Session, Value, bad, json};
 
 pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
@@ -6,8 +6,14 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
     if s.actions.recording.is_some() || s.actions.playing > 0 {
         return Err(bad(cmd, "stop recording or playing before loading actions"));
     }
+    let encoding = match p.get("encoding") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(e)) if e == "auto" => None,
+        Some(Value::String(e)) if !e.is_empty() => Some(e.as_str()),
+        Some(_) => return Err(bad(cmd, "encoding must be \"auto\" or a label such as shift_jis, gbk, big5, euc-kr, windows-1252, macintosh")),
+    };
     let (bytes, _) = crate::preset_import_cmds::file_bytes(p, cmd, ".atn file")?;
-    let mut imp = import(&bytes).map_err(|e| bad(cmd, e))?;
+    let mut imp = import_with_encoding(&bytes, encoding).map_err(|e| bad(cmd, e))?;
     match p.get("set") {
         None | Some(Value::Null) => {}
         Some(Value::String(n)) if !n.trim().is_empty() => {
@@ -77,6 +83,7 @@ pub(super) fn load(s: &mut Session, p: &Value) -> Result<Value> {
         "unsupported": imp.unsupported,
         "functionKeys": keys.iter().map(|(n, k)| json!({"action": n, "key": k})).collect::<Vec<_>>(),
         "warnings": imp.warnings,
+        "encoding": imp.encoding.as_deref().unwrap_or("UTF-8"),
     }))
 }
 
