@@ -98,7 +98,15 @@ fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
     // A downsampled document (#10249): the whole canvas at `factor` from a proxy picks the same
     // pixels (`downsample` keeps every factor-th one) for ~1/factor² of the compositing.
     if factor > 1 && r == doc.bounds() && proxy_matches(doc) {
-        let p = photocraft_compose::proxy::proxy_document(doc, factor);
+        // Only Multichannel composites read the extra channels; the selection and Quick Mask
+        // never show in a composite. Left out, they cost nothing to shrink.
+        let mut layers_only = doc.clone();
+        if doc.mode != ColorMode::Multichannel {
+            layers_only.channels.clear();
+        }
+        layers_only.selection = None;
+        layers_only.quick_mask = None;
+        let p = photocraft_compose::proxy::proxy_document(&layers_only, factor);
         let mut out = Vec::with_capacity((w * h) as usize);
         let _ = photocraft_compose::render_bands(&p, Rect::new(0, 0, w as i32, h as i32), 0, |band| -> Result<(), ()> {
             out.extend(band.px.iter().map(|p| {
