@@ -530,6 +530,15 @@ fn feathered_masks_keep_the_full_resolution_composite() {
     inner.mask = Some(mask);
     doc.layers.push(Layer::group("group", vec![inner]));
     assert!(!proxy_matches(&doc));
+    // Hidden layers are not composited: a hidden group (or a hidden layer in it) doesn't count.
+    let last = doc.layers.len() - 1;
+    doc.layers[last].visible = false;
+    assert!(proxy_matches(&doc));
+    doc.layers[last].visible = true;
+    if let LayerContent::Group(g) = &mut doc.layers[last].content {
+        g.children[0].visible = false;
+    }
+    assert!(proxy_matches(&doc));
 }
 
 /// A pattern fill's tiles keep their size on a proxy, so it would sample other pattern pixels:

@@ -147,8 +147,9 @@ fn composite_sampled(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
 /// unless a cache of the same fill is shrunk with it.
 fn proxy_matches(doc: &Document) -> bool {
     use photocraft_doc::{Fill, LayerContent};
-    // A stack, not recursion: groups can nest deeply.
-    let mut stack: Vec<&photocraft_doc::Layer> = doc.layers.iter().collect();
+    // A stack, not recursion: groups can nest deeply. Hidden layers (and what they hold) are not
+    // composited, so they don't count.
+    let mut stack: Vec<&photocraft_doc::Layer> = doc.layers.iter().filter(|l| l.visible).collect();
     while let Some(l) = stack.pop() {
         if photocraft_compose::masks::has_feather(l) {
             return false;
@@ -159,7 +160,7 @@ fn proxy_matches(doc: &Document) -> bool {
             return false;
         }
         if let LayerContent::Group(g) = &l.content {
-            stack.extend(&g.children);
+            stack.extend(g.children.iter().filter(|c| c.visible));
         }
     }
     photocraft_compose::proxy::proxy_faithful(doc)
