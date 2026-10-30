@@ -45,6 +45,42 @@ fn tool_paint_source(app: &PhotocraftApp, stroke: bool) -> (&Option<photocraft_d
     if stroke { (&o.shape_stroke_gradient, app.session.tools.background) } else { (&o.shape_fill_gradient, app.session.tools.foreground) }
 }
 
+/// A Line-tool drag snapped as Photoshop's Align Edges (on by default) does: the ends on whole
+/// pixels, and a horizontal or vertical line's weight on whole pixels and its sides on pixel edges,
+/// the low side moved down to the edge at or before it (a 1 px line drawn at y 23 fills row 22, as
+/// in Photoshop), so a 1 px line fills one pixel row instead of half of two (#9486). Diagonal lines
+/// keep their exact sides, and a ⇧-constrained 45° one its angle. None when the ends meet.
+pub(super) fn align_line_edges(a: [f64; 2], b: [f64; 2], weight: f64, keep_angle: bool) -> Option<([f64; 2], [f64; 2], f64)> {
+    let d = [b[0] - a[0], b[1] - a[1]];
+    let (mut a, mut b) = (a.map(f64::round), b.map(f64::round));
+    // A ⇧-constrained 45° line (`keep_angle`) keeps its angle: one whole-pixel step along both
+    // axes, not each end rounded on its own (which can turn a short diagonal into a 1 × 2 step).
+    if keep_angle && (d[0].abs() - d[1].abs()).abs() <= 1e-9 * d[0].abs().max(1.0) {
+        let step = d[0].abs().round();
+        b = [a[0] + step.copysign(d[0]), a[1] + step.copysign(d[1])];
+    }
+    if a == b {
+        return None;
+    }
+    let mut weight = weight;
+    // The axis across a horizontal (1) or vertical (0) line.
+    let across = if a[1] == b[1] {
+        Some(1)
+    } else if a[0] == b[0] {
+        Some(0)
+    } else {
+        None
+    };
+    if let Some(i) = across {
+        // Whole pixels across: the weight snaps to the nearest pixel (so 1.99 and 2.01 both fill
+        // 2, not 1 and 3), then the low side moves down to the edge at or before it.
+        weight = weight.round().max(1.0);
+        let lo = (a[i] - weight / 2.0).floor();
+        (a[i], b[i]) = (lo + weight / 2.0, lo + weight / 2.0);
+    }
+    Some((a, b, weight))
+}
+
 /// Geometry of a Shape-tool drag as `shape.create` params, without fill and stroke (None when too
 /// small): ⇧ constrains proportions, ⌥ draws from the centre. Custom shapes give their box as a `rect`.
 pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<Value> {
@@ -59,7 +95,8 @@ pub(super) fn shape_geometry(o: &ToolOptions, tool: Tool, start: [f64; 2], end: 
         if dx.hypot(dy) < 1.0 {
             return None;
         }
-        json!({"kind": "line", "from": start, "to": [start[0] + dx, start[1] + dy], "weight": o.line_weight.max(1.0)})
+        let (from, to, weight) = align_line_edges(start, [start[0] + dx, start[1] + dy], f64::from(o.line_weight.max(1.0)), mods.shift)?;
+        json!({"kind": "line", "from": from, "to": to, "weight": weight})
     } else {
         let (mut w, mut h) = (end[0] - start[0], end[1] - start[1]);
         if mods.shift {
