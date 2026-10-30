@@ -181,7 +181,7 @@ pub use layer_params::blend_from_str;
 pub(crate) use layer_params::{NEW_LAYER_PATH, explicit_layer, layer_listing, layer_panel_option, layer_param, mask_at_depth, mask_new_layer, selection_mask};
 pub(crate) use layer_references::{recorded_drop, recorded_layer};
 use ops::{arrange, merge_group, move_mask, set_mask, set_mask_and_deselect};
-pub(crate) use ops::{layer_copy, translate_layer};
+pub(crate) use ops::{layer_copy, translate_layer, translate_layer_wrapped};
 use params::{bad, set_clipped};
 pub(crate) use params::{check_f32_values, cmyk_param, color_param, int, int_i32, parse_hex, u32_id, u32_id_param};
 
@@ -992,7 +992,7 @@ fn build() -> Vec<CommandSpec> {
             "Move Layer",
             [],
             None,
-            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"="pixels","selection":bool=false,"nest":bool=false} → null | {nested:[id]} (no layer: every selected layer; linked layers follow; target mask: a layer whose mask is unlinked moves that mask alone, a linked mask moves with the layer; selection: the selection moves too, in the same step; nest: auto-nesting as the Move tool does it, a layer whose bounds centre lands on another artboard joins it and one whose centre is off every artboard leaves for the top level; a clipping base takes the layers clipped to it along and a clipped layer goes only where its base goes; artboards, the Background, empty layers, layers whose board doesn't change, groups that would nest too deep and layers locked with Prevent Auto-Nesting (on the layer, a group around it or the destination board) stay put, with their whole clipping group; nested lists the layers that changed board)"##,
+            r##"{"layer":id?,"dx":i32,"dy":i32,"units":"px"|"pt"="px" (pt: points, whole pixels at the document's resolution),"target":"pixels"|"mask"="pixels","selection":bool=false,"wrap":bool=false,"nest":bool=false} → null | {nested:[id]} (no layer: every selected layer; linked layers follow; target mask: a layer whose mask is unlinked moves that mask alone, a linked mask moves with the layer; selection: the selection moves too, in the same step; wrap: View › Pattern Preview, pixels that leave the canvas come back on the opposite edge so the tile stays seamless; nest: auto-nesting as the Move tool does it, a layer whose bounds centre lands on another artboard joins it and one whose centre is off every artboard leaves for the top level; a clipping base takes the layers clipped to it along and a clipped layer goes only where its base goes; artboards, the Background, empty layers, layers whose board doesn't change, groups that would nest too deep and layers locked with Prevent Auto-Nesting (on the layer, a group around it or the destination board) stay put, with their whole clipping group; nested lists the layers that changed board)"##,
             has_layer,
             crate::layer_multi_cmds::translate
         ),

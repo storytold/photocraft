@@ -654,3 +654,34 @@ fn move_tool_drag_onto_another_artboard_nests_the_layer_there() {
     assert_eq!(board(&app, copy), Some(a), "the copy joined board A");
     assert_eq!(board(&app, red), Some(b), "the original stayed on board B");
 }
+
+/// View › Pattern Preview: dragging a block off the right edge shows it coming in on the left,
+/// and the release commits that wrap (#10293).
+#[test]
+fn pattern_preview_drag_wraps_pixels_across_the_canvas_edge() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 32, "height": 16, "background": "transparent"})).unwrap();
+    app.sync_views();
+    app.session.execute("layer.new.layer", json!({})).unwrap();
+    app.session
+        .edit("paint", |doc, a| {
+            doc.layer_mut(a.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(28, 4, 32, 12), &[0.0, 0.0, 1.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+    app.ui.view.pattern_preview = true;
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    let m = egui::Modifiers::NONE;
+    crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 8.0, pressure: 1.0 }, m);
+    crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 36.0, y: 8.0, pressure: 1.0 }, m);
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    let blue = |d: &photocraft_doc::Document, x: i32| d.layer(id).and_then(|l| l.surface()).is_some_and(|s| s.pixel(x, 6)[2] > 0.9);
+    let shown = super::display_doc(&mut app, 0).expect("a wrapped preview").0;
+    assert!(blue(&shown, 2), "the preview brings the block in on the left");
+    assert!(!blue(&shown, 30), "the preview clears where the block was");
+    crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 36.0, y: 8.0 }, m);
+    let committed = &app.session.active().unwrap().doc;
+    assert!(blue(committed, 2) && !blue(committed, 30), "release commits the wrap");
+}
