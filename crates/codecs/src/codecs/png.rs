@@ -177,7 +177,8 @@ pub(crate) fn decode_rows<E: From<CodecError>>(
 ) -> Result<Option<PngExtras>, E> {
     let mut input = Cursor::new(bytes);
     let Opened { mut reader, layout, sample, images } = open(&mut input, limits)?;
-    if reader.info().interlaced || reader.info().animation_control.is_some() {
+    let upright = reader.info().exif_metadata.as_deref().is_none_or(|e| crate::orientation::exif_orientation(e) == 1);
+    if reader.info().interlaced || reader.info().animation_control.is_some() || !upright {
         return Ok(None);
     }
     let (width, height) = reader.info().size();
