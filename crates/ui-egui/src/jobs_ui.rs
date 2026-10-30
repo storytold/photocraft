@@ -346,7 +346,7 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
         }
         JobOutcome::Cancelled => {
             app.jobs.close_after_saves = false;
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", label)]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", label)]);
             app.ui.status_error = false;
         }
     }
@@ -431,7 +431,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) -> bool {
     if let Some(save) = app.jobs.saves.iter().find(|s| s.job == id)
         && !save.state.try_cancel()
     {
-        app.ui.status = crate::i18n::fmt(tl!("{label} is writing the file and can no longer be cancelled"), &[("label", label.as_deref().unwrap_or_default())]);
+        app.ui.status = crate::i18n::fmt(tl!("{label} is writing the file and can no longer be canceled"), &[("label", label.as_deref().unwrap_or_default())]);
         app.ui.status_error = false;
         return false;
     }
@@ -439,7 +439,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: JobId) -> bool {
     if cancelled {
         // The event (and its status text) arrives with the next poll; say so now as well.
         if let Some(l) = label {
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &l)]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &l)]);
             app.ui.status_error = false;
         }
     }
@@ -502,7 +502,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             }
             JobOutcome::Failed(err) => app.open_failed(&tab.name, &err),
             JobOutcome::Cancelled => {
-                app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &tab.name)]);
+                app.ui.status = crate::i18n::fmt(tl!("Canceled opening {name}"), &[("name", &tab.name)]);
                 app.ui.status_error = false;
             }
         }
@@ -538,7 +538,7 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
             notices::error(app, format!("{}: {err}", e.label));
         }
         JobOutcome::Cancelled => {
-            app.ui.status = crate::i18n::fmt(tl!("Cancelled {label}"), &[("label", &e.label)]);
+            app.ui.status = crate::i18n::fmt(tl!("Canceled {label}"), &[("label", &e.label)]);
             app.ui.status_error = false;
         }
     }

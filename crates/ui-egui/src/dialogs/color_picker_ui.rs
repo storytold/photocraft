@@ -544,15 +544,15 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     p.rect_filled(cur, 0.0, c32(orig));
     p.rect_stroke(sw, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
     let click_cur = ui.interact(cur, ui.scope_id().with("cp-current"), Sense::click());
-    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Click to restore the current colour")));
-    if click_cur.on_hover_text(tl!("Click to restore the current colour")).clicked() {
+    click_cur.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Click to restore the current color")));
+    if click_cur.on_hover_text(tl!("Click to restore the current color")).clicked() {
         set_rgb(f, orig, Keep::Nothing);
     }
     // Photoshop's warnings beside the swatch, each over a chip of the nearest colour that passes
     // (a click takes it): out of gamut for printing on top, not a web colour below.
     let x = sw.right() + 8.0;
-    let gamut = tl!("Out of gamut for printing: click for the nearest printable colour");
-    let web = tl!("Not a web colour: click for the nearest web colour");
+    let gamut = tl!("Out of gamut for printing: click for the nearest printable color");
+    let web = tl!("Not a web color: click for the nearest web color");
     for (slot, warning, tip) in [(0.0, out_of_gamut(rgb), gamut), (34.0, not_web_safe(rgb), web)] {
         let Some(near) = warning else { continue };
         let icon = Rect::from_min_size(pos2(x, sw.top() + 2.0 + slot), vec2(13.0, 13.0));

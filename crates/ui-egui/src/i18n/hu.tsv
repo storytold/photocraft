@@ -333,7 +333,6 @@
 	Insert Blank Frame	Üres képkocka beszúrása
 	Interpret Footage…	Videoanyag értelmezése…
 	Intersect Shape Areas	Alakzatterületek metszete
-	Inverse Selection	Kijelölés megfordítása
 	Invert…	Invertálás…
 	Isolate Layers	Rétegek elkülönítése
 	Kurtosis	Csúcsosság
@@ -499,8 +498,8 @@
 	Close Panel	Panel bezárása
 	Close Window	Ablak bezárása
 	Clouds	Felhők
-	Color Blindness — Deuteranopia-type	Színtévesztés — deuteranópia típusú
-	Color Blindness — Protanopia-type	Színtévesztés — protanópia típusú
+	Color Blindness - Deuteranopia-type	Színtévesztés - deuteranópia típusú
+	Color Blindness - Protanopia-type	Színtévesztés - protanópia típusú
 	Color Halftone…	Színes féltónus…
 	Color Lookup Tables	Színleképezési táblák
 	Color Picker (Custom Canvas Color)	Színválasztó (egyéni vászonszín)
@@ -744,7 +743,6 @@
 	Proof Colors	Színpróba
 	Proof Setup	Színpróba beállítása
 	Properties	Tulajdonságok
-	Quick Export As PNG	Gyors exportálás PNG-be
 	Quit	Kilépés
 	Quit {app}	Kilépés: {app}
 	Radial Blur…	Sugárirányú elmosás…
@@ -963,7 +961,7 @@
 	Catch-up on Stroke End	Utolérés a vonás végén
 	Center	Középen
 	Center text	Szöveg középre igazítása
-	Centre the gradient (offset 0, 0)	Színátmenet középre helyezése (eltolás: 0, 0)
+	Center the gradient (offset 0, 0)	Színátmenet középre helyezése (eltolás: 0, 0)
 	Change	Cserél
 	Change All	Mindet cserél
 	Change To:	Csere erre:
@@ -976,7 +974,7 @@
 	Click to add a point, right-click to remove	Kattintással pontot adhatsz hozzá, jobb kattintással eltávolíthatod
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	Kattintással alkalmazhatod, {key}+kattintással törölheted a felülbírálásokat, dupla kattintással megnyithatod a stílusbeállításokat
 	Click to edit the gradient	Kattints a színátmenet szerkesztéséhez
-	Click to sample the foreground colour  ·  {key}-click for background	Kattintás: mintavétel az előtérszínhez  ·  {key}+kattintás: a háttérszínhez
+	Click to sample the foreground color  ·  {key}-click for background	Kattintás: mintavétel az előtérszínhez  ·  {key}+kattintás: a háttérszínhez
 	Clone source set at {x}, {y}	Klónozási forrás beállítva: {x}, {y}
 	Clone Stamp	Klónozó bélyegző
 	Close Style Options	Stílusbeállítások bezárása
@@ -1751,7 +1749,7 @@ layerLabel	Magenta	Bíbor
 	Change Screen Mode  (F)	Képernyőmód váltása  (F)
 	Click the first point or press {key} to close · Esc cancels	Lezárás: kattintás az első pontra vagy {key} · Esc: megszakítás
 	Click the first point or press {key} to close · {del} removes a point · Esc cancels	Lezárás: kattintás az első pontra vagy {key} · {del}: pont eltávolítása · Esc: megszakítás
-	Click to fill similar colours	Kattintással kitöltheted a hasonló színeket
+	Click to fill similar colors	Kattintással kitöltheted a hasonló színeket
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Kattintás: nagyítás  ·  {key}+kattintás: kicsinyítés  ·  húzás jobbra/balra: nagyítás/kicsinyítés
 	Click, then move along an edge · click to fasten a point · {alt}-click for a straight segment · double-click to close	Kattints, majd haladj végig egy élen · kattintás: pont rögzítése · {alt}+kattintás: egyenes szakasz · dupla kattintás: lezárás
 	Clip to layer below	Vágás az alatta lévő réteghez
@@ -1780,7 +1778,7 @@ layerLabel	Magenta	Bíbor
 	Dark	Sötét
 	Data Set: {name}  ({index}/{total})	Adatkészlet: {name}  ({index}/{total})
 	Data Sets	Adatkészletek
-	Default colours (D)	Alapértelmezett színek (D)
+	Default Foreground and Background Colors (D)	Alapértelmezett előtér- és háttérszín (D)
 	Define	Megadás
 	Define at least one variable first.	Előbb adj meg legalább egy változót.
 	Delete Cropped Pixels	Levágott pixelek törlése
@@ -1793,8 +1791,8 @@ layerLabel	Magenta	Bíbor
 	Discord	Discord
 	Doc: {w} × {h} px	Dok.: {w} × {h} px
 	Drag a box or click four corners · drag the corners onto the edges of a skewed shape · {commit} commits · Esc cancels	Húzz egy keretet, vagy kattints a négy sarokra · húzd a sarkokat a ferde alakzat éleire · {commit}: véglegesítés · Esc: megszakítás
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Húzz egy körbevágási keretet · belül húzva mozgatod · az élekkel átméretezed ({ratio}: arány, {centre}: középről) · Space: mozgatás rajzolás közben · nyilak: léptetés · X: tájolás cseréje · {commit}: véglegesítés · Esc: megszakítás
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	A középpont körül húzva forgatod a nézetet  ·  Shift: 15°-os lépések
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Húzz egy körbevágási keretet · belül húzva mozgatod · az élekkel átméretezed ({ratio}: arány, {centre}: középről) · Space: mozgatás rajzolás közben · nyilak: léptetés · X: tájolás cseréje · {commit}: véglegesítés · Esc: megszakítás
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	A középpont körül húzva forgatod a nézetet  ·  Shift: 15°-os lépések
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Húzz, vagy kattints sokszögpontokat · lasszózás közben Alt: egyenes szakaszok · {add}: hozzáadás · {sub} rajzolás előtt: kivonás
 	Drag to draw a gradient	Húzással rajzolhatsz színátmenetet
 	Drag to move the active layer	Húzással mozgathatod az aktív réteget
@@ -1925,7 +1923,7 @@ layerLabel	Magenta	Bíbor
 	Source: set	Forrás: beállítva
 	Style	Stílus
 	Subtract from selection  ({key})	Kivonás a kijelölésből  ({key})
-	Swap colours (X)	Színek cseréje (X)
+	Switch Foreground and Background Colors (X)	Előtér- és háttérszín cseréje (X)
 	System title bar	Rendszer címsora
 	Text Replacement	Szövegcsere
 	Thumbnail size (smallest: list)	Bélyegképméret (a legkisebb: lista)
@@ -1940,7 +1938,7 @@ layerLabel	Magenta	Bíbor
 	Working…	Feldolgozás…
 	Workspaces	Munkaterületek
 	Zoom	Nagyító
-	{label} is writing the file and can no longer be cancelled	{label}: a fájl írása folyamatban, már nem szakítható meg
+	{label} is writing the file and can no longer be canceled	{label}: a fájl írása folyamatban, már nem szakítható meg
 	{message} (notes: {n}; {warning})	{message} (megjegyzések: {n}; {warning})
 	{mode} Color · {bits} bit	Színmód: {mode} · {bits} bit
 	{name} Properties	Tulajdonságok: {name}
@@ -2265,7 +2263,7 @@ navigator	Zoom	Nagyítás mértéke
 	One Flame Along Path	Egy láng az útvonal mentén
 	Opacity Threshold	Átlátszatlansági küszöb
 	Open	Megnyitás
-	Open a document to select a colour range.	Színtartomány kijelöléséhez nyiss meg egy dokumentumot.
+	Open a document to select a color range.	Színtartomány kijelöléséhez nyiss meg egy dokumentumot.
 	Orange	Narancs
 	Out Black	Kimeneti fekete
 	Out From Center	Középponttól kifelé
@@ -2350,7 +2348,7 @@ navigator	Zoom	Nagyítás mértéke
 	Roses	Rózsák
 	Rough Pastels	Durva pasztell
 	Ruler	Vonalzó
-	Sample: foreground colour	Minta: előtérszín
+	Sample: foreground color	Minta: előtérszín
 	Sampled Colors	Mintavételezett színek
 	Sandstone	Homokkő
 	Saturation	Telítettség
@@ -2458,7 +2456,6 @@ navigator	Zoom	Nagyítás mértéke
 	Use Measurement Scale	Mérési méretarány használata
 	Use Selection In Source	Kijelölés használata a forrásban
 	Use Selection In Target	Kijelölés használata a célban
-	Uses the foreground and background colours.	Az előtér- és a háttérszínt használja.
 	Vertical Only	Csak függőleges
 	Vibrance	Élénkség
 	View Options	Nézetbeállítások
@@ -2509,7 +2506,7 @@ navigator	Zoom	Nagyítás mértéke
 	Camera Raw Filter	Camera Raw szűrő
 	Camera Raw Filter ({layer})	Camera Raw szűrő ({layer})
 	Camera Raw isn't open	A Camera Raw nincs megnyitva
-	Cancelled opening {name}	Megnyitás megszakítva: {name}
+	Canceled opening {name}	Megnyitás megszakítva: {name}
 	Damaged Photoshop document	Sérült Photoshop-dokumentum
 	The document “{name}” may be damaged.	A(z) „{name}” dokumentum sérült lehet.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Egyes rétegeket, képpontokat vagy maszkokat nem sikerült beolvasni. Folytatod a megnyitást?
@@ -2517,7 +2514,7 @@ navigator	Zoom	Nagyítás mértéke
 	The document “{name}” does not have an embedded {mode} profile.	Nincs beágyazott profil ({mode}) ebben a dokumentumban: „{name}”
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	A dokumentum beágyazott színprofilja nem egyezik az aktuális munkaszíntérrel ({mode}): „{name}”
 	Working: {working}	Munkaszíntér: {working}
-	Cancelled {label}	Megszakítva: {label}
+	Canceled {label}	Megszakítva: {label}
 	Clarity	Tisztaság
 	Color Detail	Színrészletesség
 	Color Grading	Színtónusozás
@@ -2699,7 +2696,7 @@ cameraRaw	Yellow	Sárga
 	Centimeters	Centiméter
 	Clear	Kiürít
 	Clear Existing Guides	Meglévő segédvonalak törlése
-	Click to restore the current colour	Kattints a jelenlegi szín visszaállításához
+	Click to restore the current color	Kattints a jelenlegi szín visszaállításához
 	Cmd	Cmd
 	CMYK Color	CMYK-szín
 	Coated CMYK	Mázolt papíros CMYK
@@ -2880,7 +2877,7 @@ cameraRaw	Yellow	Sárga
 	No model credits were built into this copy.	Ez a példány nem tartalmaz adatokat a modellek készítőiről.
 	No presets of this type.	Ilyen típusú előbeállítás nincs.
 	No saved presets yet.	Még nincs mentett előbeállítás.
-	Not a web colour: click for the nearest web colour	Nem webes szín: kattints a legközelebbi webes színért
+	Not a web color: click for the nearest web color	Nem webes szín: kattints a legközelebbi webes színért
 	Notification Duration (seconds)	Értesítés időtartama (másodperc)
 	Bundle Arrow-Key Nudges	Nyílbillentyűs mozgatások összevonása
 	Nudge Bundle Pause (ms)	Összevonási szünet (ms)
@@ -2891,7 +2888,7 @@ cameraRaw	Yellow	Sárga
 	OpenGL	OpenGL
 	Optimized	Optimalizált
 	Original	Eredeti
-	Out of gamut for printing: click for the nearest printable colour	Nyomtatási színtartományon kívül: kattints a legközelebbi nyomtatható színért
+	Out of gamut for printing: click for the nearest printable color	Nyomtatási színtartományon kívül: kattints a legközelebbi nyomtatható színért
 	Out of memory	Elfogyott a memória
 	Package	Csomagolás
 	Percent	Százalék
@@ -2970,7 +2967,7 @@ cameraRaw	Yellow	Sárga
 	Rulers & Grids	Vonalzók és rácsok
 	Save a Copy	Másolat mentése
 	Save as PDF	Mentés PDF-ként
-	Save cancelled	Mentés megszakítva
+	Save canceled	Mentés megszakítva
 	Save failed: {error}	A mentés nem sikerült: {error}
 	Save for Web (Legacy)	Mentés webre (régi)
 	Save HTML and Images	HTML és képek mentése
@@ -4131,7 +4128,7 @@ cameraRaw	Yellow	Sárga
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	A nyomtatási beállításokban ne jelöld be a tükrözést is: a két tükrözés kioltja egymást.
 	Print Settings…	Nyomtatási beállítások…
-	Remember to turn off the printer's own colour management in Print Settings…	Ne felejtsd el kikapcsolni a nyomtató saját színkezelését a nyomtatási beállításokban…
+	Remember to turn off the printer's own color management in Print Settings…	Ne felejtsd el kikapcsolni a nyomtató saját színkezelését a nyomtatási beállításokban…
 	Sent to {printer}	Elküldve ide: {printer}
 	set in Print Settings…	a nyomtatási beállításokban adható meg…
 	ICO is limited to 256 × 256 pixels	Az ICO legfeljebb 256 × 256 képpont lehet
@@ -4312,12 +4309,12 @@ cameraRaw	Yellow	Sárga
 	Decrease Brush Hardness	Ecsetkeménység csökkentése
 	Increase Brush Hardness	Ecsetkeménység növelése
 	Demosaic	Demozaikolás
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hogyan tölti ki a program a kamera színszűrő-mozaikját. A fájl megnyitásakor érvényesül; az előnézet a megnyitáskor használt módszert mutatja.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hogyan tölti ki a program a kamera színszűrő-mozaikját. A fájl megnyitásakor érvényesül; az előnézet a megnyitáskor használt módszert mutatja.
 	AHD (adaptive homogeneity)	AHD (adaptív homogenitás)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: a legtisztább élek és a legkevesebb színes szegély, a leglassabb.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Gradienskorrigált interpoláció: éles és gyors, apró részleteken némi színes szegéllyel.
-	The fastest and the softest, with colour fringing on fine detail.	A leggyorsabb és a leglágyabb, apró részleteken színes szegéllyel.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: a legtisztább élek és a legkevesebb színes szegély, a leglassabb.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Gradienskorrigált interpoláció: éles és gyors, apró részleteken némi színes szegéllyel.
+	The fastest and the softest, with color fringing on fine detail.	A leggyorsabb és a leglágyabb, apró részleteken színes szegéllyel.
 	“{name}” already exists. Replace it?	„{name}” már létezik. Lecseréli?
 	The name in the save dialog was “{name}”.	A mentési párbeszédpanelen megadott név: „{name}”.
 	Move Up	Mozgatás felfelé

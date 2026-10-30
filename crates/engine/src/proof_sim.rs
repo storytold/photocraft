@@ -307,8 +307,8 @@ pub fn specs() -> Vec<CommandSpec> {
         kind_spec!("view.proofSetup.workingBlackPlate", "Working Black Plate"),
         kind_spec!("view.proofSetup.workingCmyPlate", "Working CMY Plate"),
         kind_spec!("view.proofSetup.legacyMacintoshRgb", "Legacy Macintosh RGB"),
-        kind_spec!("view.proofSetup.colorBlindnessProtanopia", "Color Blindness — Protanopia-type"),
-        kind_spec!("view.proofSetup.colorBlindnessDeuteranopia", "Color Blindness — Deuteranopia-type"),
+        kind_spec!("view.proofSetup.colorBlindnessProtanopia", "Color Blindness - Protanopia-type"),
+        kind_spec!("view.proofSetup.colorBlindnessDeuteranopia", "Color Blindness - Deuteranopia-type"),
         CommandSpec {
             id: "view.thirtyTwoBitPreviewOptions",
             label: "32-bit Preview Options…",

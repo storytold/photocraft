@@ -126,7 +126,8 @@ fn color_to_alpha_sits_in_filter_other_after_offset() {
     assert_eq!(items[c2a].label, "Color to Alpha…");
     assert!(items[c2a].enabled, "the Background becomes a layer when the filter runs");
     let others: Vec<_> = items.iter().filter(|i| i.path.first().is_some_and(|p| p == "Filter") && i.path.len() == 2).map(|i| &i.path[1]).collect();
-    assert!(!others.iter().any(|p| p.as_str() == "Other"), "no duplicate Other submenu: {others:?}");
+    assert!(others.iter().any(|p| p.as_str() == "Other"), "the catalogue's Other submenu: {others:?}");
+    assert!(!others.iter().any(|p| p.as_str() == "Other…"), "no second submenu spelled Other…: {others:?}");
 }
 
 #[test]

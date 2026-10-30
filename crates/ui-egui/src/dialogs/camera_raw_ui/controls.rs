@@ -83,12 +83,12 @@ fn demosaic_row(ui: &mut egui::Ui, m: &mut photocraft_io::raw::Demosaic) {
     use photocraft_io::raw::Demosaic;
     ui.horizontal(|ui| {
         ui.label(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", "Demosaic")).on_hover_text(tl!(
-            "How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with."
+            "How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with."
         ));
         let options = [
-            (Demosaic::Ahd, "AHD (adaptive homogeneity)", "Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest."),
-            (Demosaic::Mhc, "Malvar–He–Cutler", "Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail."),
-            (Demosaic::Bilinear, "Bilinear", "The fastest and the softest, with colour fringing on fine detail."),
+            (Demosaic::Ahd, "AHD (adaptive homogeneity)", "Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest."),
+            (Demosaic::Mhc, "Malvar–He–Cutler", "Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail."),
+            (Demosaic::Bilinear, "Bilinear", "The fastest and the softest, with color fringing on fine detail."),
         ];
         widgets::dropdown_with_tooltips(ui, "camera-raw-demosaic", tl!("Demosaic"), m, &options, 180.0);
     });

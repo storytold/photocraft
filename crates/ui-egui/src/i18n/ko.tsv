@@ -513,7 +513,6 @@
 	Deselect	선택 해제
 	Reselect	다시 선택
 	Inverse	반전
-	Inverse Selection	선택 영역 반전
 	Similar	유사한 항목
 	Color Range…	색상 범위…
 	Focus Area…	초점 영역…
@@ -634,8 +633,8 @@
 	Legacy Macintosh RGB	기존 Macintosh RGB
 	Internet Standard RGB	인터넷 표준 RGB
 	Monitor RGB	모니터 RGB
-	Color Blindness — Protanopia-type	색각 이상 — 적색맹
-	Color Blindness — Deuteranopia-type	색각 이상 — 녹색맹
+	Color Blindness - Protanopia-type	색각 이상 - 적색맹
+	Color Blindness - Deuteranopia-type	색각 이상 - 녹색맹
 	Zoom In	확대
 	Zoom Out	축소
 	Fit on Screen	화면에 맞추기
@@ -955,7 +954,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	클릭하여 점 추가 · 바깥으로 드래그하거나 {key} 키를 누른 채 클릭하거나 Delete 키로 제거
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	클릭하여 적용, {key} 키를 누른 채 클릭하여 재정의 지우기, 두 번 클릭하여 스타일 옵션 열기
 	Click to edit the gradient	클릭하여 그레이디언트 편집
-	Click to restore the current colour	클릭하여 현재 색상 복원
+	Click to restore the current color	클릭하여 현재 색상 복원
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	클릭하여 확대 · {key} 키를 누른 채 클릭하여 축소 · 오른쪽/왼쪽으로 드래그하여 확대/축소
 	Click with the Note tool to add a note.	메모 도구로 클릭하여 메모를 추가하세요.
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	클릭: 모서리 · 드래그: 곡선 · 첫 점 클릭: 닫기 · {key}: 완료 · Esc: 취소
@@ -1044,7 +1043,7 @@
 	Darks	어두운 계열
 	Data Sets	데이터 세트
 	Default	기본값
-	Default colours (D)	기본 색상 (D)
+	Default Foreground and Background Colors (D)	기본 색상 (D)
 	Default printer	기본 프린터
 	Default restored.	기본값을 복원했습니다.
 	Define	정의
@@ -1325,7 +1324,7 @@
 	Opacity Jitter	불투명도 지터
 	Opacity:	불투명도:
 	Open a document to define variables.	변수를 정의하려면 문서를 여세요.
-	Open a document to select a colour range.	색상 범위를 선택하려면 문서를 여세요.
+	Open a document to select a color range.	색상 범위를 선택하려면 문서를 여세요.
 	Open a document to use the timeline.	타임라인을 사용하려면 문서를 여세요.
 	Optical	광학
 	Optimized	최적화
@@ -1401,7 +1400,6 @@
 	Purity	순도
 	Quality	품질
 	Quick Actions	빠른 작업
-	Quick Export As PNG	PNG로 빠르게 내보내기
 	Radial Gradient	방사형 그레이디언트
 	Radius	반경
 	Radius:	반경:
@@ -1544,7 +1542,7 @@
 	Subtract from Sample	샘플에서 빼기
 	Subtract from selection  ({key})	선택 영역에서 빼기  ({key})
 	Suggestions:	제안:
-	Swap colours (X)	색상 교환 (X)
+	Switch Foreground and Background Colors (X)	색상 교환 (X)
 	Swaps height and width	높이와 너비 바꾸기
 	Switch between free transform and warp modes	자유 변형과 뒤틀기 모드 간 전환
 	Switch theme	테마 전환
@@ -1648,7 +1646,7 @@
 	Choke	조이기
 	Classic	클래식
 	Click to add text	클릭하여 텍스트 추가
-	Click to fill similar colours	클릭하여 유사한 색상 채우기
+	Click to fill similar colors	클릭하여 유사한 색상 채우기
 	Clone Stamp Tool	복제 도장 도구
 	Color Burn	색상 번
 	Color Dodge	색상 닷지
@@ -1807,7 +1805,7 @@
 	Rectangular Marquee Tool	사각형 선택 윤곽 도구
 	Reds	빨강 계열
 	Reflected	반사
-	Sample: foreground colour	샘플: 전경색
+	Sample: foreground color	샘플: 전경색
 	Sampled Colors	샘플링한 색상
 	Satin	새틴
 	Save Pixel Aspect Ratio	픽셀 종횡비 저장
@@ -1845,7 +1843,7 @@
 	Transfer	전달
 	Triangle Tool	삼각형 도구
 	Unsaved changes	저장하지 않은 변경 사항
-	Uses the foreground and background colours.	전경색과 배경색을 사용합니다.
+	Uses the foreground and background colors.	전경색과 배경색을 사용합니다.
 	Web	웹
 	Web Large	웹 대형
 	Web Minimum	웹 최소
@@ -2109,7 +2107,7 @@
 	Graphics	그래픽
 	Reset GPU Backend	GPU 백엔드 초기화
 	Applies at next launch.	다음 실행 시 적용됩니다.
-	Click to sample the foreground colour  ·  {key}-click for background	클릭하여 전경색 샘플링 · {key} 키를 누른 채 클릭하여 배경색 샘플링
+	Click to sample the foreground color  ·  {key}-click for background	클릭하여 전경색 샘플링 · {key} 키를 누른 채 클릭하여 배경색 샘플링
 	{key}-click to set the source	{key} 키를 누른 채 클릭하여 원본 설정
 	{key} to subtract	{key} 키로 빼기
 	Clone source {n} ({key}-click with Clone Stamp to set)	복제 원본 {n} (복제 도장으로 {key} 키를 누른 채 클릭하여 설정)
@@ -2168,7 +2166,7 @@
 	Gradient Options	그레이디언트 옵션
 	Align with layer	레이어에 맞추기
 	Reset Alignment	정렬 초기화
-	Centre the gradient (offset 0, 0)	그레이디언트를 중앙에 배치(오프셋 0, 0)
+	Center the gradient (offset 0, 0)	그레이디언트를 중앙에 배치(오프셋 0, 0)
 	The current gradient (pick one in Window › Gradients)	현재 그레이디언트(창 › 그레이디언트에서 선택)
 	Select a type layer to edit its character and paragraph settings.	문자 및 단락 설정을 편집하려면 문자 레이어를 선택하세요.
 # Gradient Editor window, opened from the options bar's gradient swatch.
@@ -2202,7 +2200,7 @@
 	Vulkan	Vulkan
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	선택 영역으로 만들 패스가 없습니다: 펜 도구로 그리거나 패스 패널에서 선택하세요.
 	Cancel opening	열기 취소
-	Cancelled opening {name}	{name} 열기를 취소했습니다
+	Canceled opening {name}	{name} 열기를 취소했습니다
 	Damaged Photoshop document	손상된 Photoshop 문서
 	The document “{name}” may be damaged.	문서 “{name}”이(가) 손상되었을 수 있습니다.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	일부 레이어, 픽셀 또는 마스크를 읽을 수 없습니다. 계속 여시겠습니까?
@@ -2212,7 +2210,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	문서 “{name}”에 포함된 색상 프로파일이 현재 {mode} 작업 색상 공간과 일치하지 않습니다.
 	Working: {working}	작업 색상 공간: {working}
 	Developing {name}	{name} 현상 중
-	Cancelled {label}	{label} 작업을 취소했습니다
+	Canceled {label}	{label} 작업을 취소했습니다
 	Esc to cancel	Esc 키로 취소
 	Opened {name}	{name} 열림
 	Opening {name}	{name} 여는 중
@@ -2220,7 +2218,7 @@
 	Saving {name}	{name} 저장 중
 	Saving {percent}	저장 중 {percent}
 	A save to {name} is still running; try again when it finishes	{name}에 저장하는 작업이 아직 진행 중입니다. 완료된 후 다시 시도하세요
-	{label} is writing the file and can no longer be cancelled	{label}: 파일을 쓰는 중이므로 더 이상 취소할 수 없습니다
+	{label} is writing the file and can no longer be canceled	{label}: 파일을 쓰는 중이므로 더 이상 취소할 수 없습니다
 	Opening {name}…	{name} 여는 중…
 	Opening…	여는 중…
 	Reading…	읽는 중…
@@ -2960,7 +2958,7 @@ cameraRaw	Color	색상
 	Discard Layers and Save a Copy	레이어를 삭제하고 사본 저장
 	Don't show again	다시 표시 안 함
 	Save failed: {error}	저장 실패: {error}
-	Save cancelled	저장이 취소되었습니다
+	Save canceled	저장이 취소되었습니다
 	Couldn't place {name}: {error}	{name}을(를) 가져올 수 없습니다: {error}
 	Magnetic Lasso Tool	자석 올가미 도구
 	Frequency	빈도
@@ -3099,7 +3097,7 @@ fontWeight	Italic	기울임
 	Rotate View	보기 회전
 	Rotate View Tool	보기 회전 도구
 	Reset View	보기 재설정
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	중심 주위를 드래그해 보기 회전  ·  Shift로 15° 단위 제한
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	중심 주위를 드래그해 보기 회전  ·  Shift로 15° 단위 제한
 
 # Painting symmetry presets.
 	Dual Axis	이중 축
@@ -3120,8 +3118,8 @@ fontWeight	Italic	기울임
 	Show Sampling Ring	샘플링 링 표시
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	인쇄 색역 밖: 클릭하면 가장 가까운 인쇄 가능한 색상으로 바뀝니다
-	Not a web colour: click for the nearest web colour	웹 색상이 아님: 클릭하면 가장 가까운 웹 색상으로 바뀝니다
+	Out of gamut for printing: click for the nearest printable color	인쇄 색역 밖: 클릭하면 가장 가까운 인쇄 가능한 색상으로 바뀝니다
+	Not a web color: click for the nearest web color	웹 색상이 아님: 클릭하면 가장 가까운 웹 색상으로 바뀝니다
 	Color to Alpha…	색상을 알파로…
 	Transparency Threshold	투명도 한계값
 	Opacity Threshold	불투명도 한계값
@@ -3216,7 +3214,7 @@ fontWeight	Italic	기울임
 	How often fastening points are placed by themselves	고정점이 자동으로 놓이는 빈도
 	Scrubby Zoom	스크러비 확대/축소
 	{mode} Color · {bits} bit	{mode} 색상 · {bits}비트
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	드래그하여 자르기 상자 만들기 · 안쪽을 드래그하여 이동 · 가장자리로 크기 조절({ratio} 비율, {centre} 중심) · 그리는 중 Space로 이동 · 화살표로 미세 이동 · X로 방향 전환 · {commit} 적용 · Esc 취소
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	드래그하여 자르기 상자 만들기 · 안쪽을 드래그하여 이동 · 가장자리로 크기 조절({ratio} 비율, {centre} 중심) · 그리는 중 Space로 이동 · 화살표로 미세 이동 · X로 방향 전환 · {commit} 적용 · Esc 취소
 	Appearance Settings…	화면 설정…
 	Add to favorites	즐겨찾기에 추가
 	Remove from favorites	즐겨찾기에서 제거
@@ -3451,7 +3449,7 @@ curves	Smooth	매끄럽게
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	인쇄 설정에서도 이미지 반전을 켜지 마세요. 두 번 반전하면 원래대로 돌아갑니다.
 	Print Settings…	인쇄 설정…
-	Remember to turn off the printer's own colour management in Print Settings…	인쇄 설정에서 프린터 자체의 색상 관리를 끄세요…
+	Remember to turn off the printer's own color management in Print Settings…	인쇄 설정에서 프린터 자체의 색상 관리를 끄세요…
 	Sent to {printer}	{printer}(으)로 전송됨
 	set in Print Settings…	인쇄 설정에서 지정…
 	ICO is limited to 256 × 256 pixels	ICO는 256 × 256픽셀로 제한됩니다
@@ -3605,12 +3603,12 @@ curves	Smooth	매끄럽게
 	Decrease Brush Hardness	브러시 경도 줄이기
 	Increase Brush Hardness	브러시 경도 늘리기
 	Demosaic	디모자이크
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	카메라 컬러 필터 모자이크를 채우는 방법입니다. 파일을 열 때 적용되며, 미리 보기는 파일을 연 방식으로 표시됩니다.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	카메라 컬러 필터 모자이크를 채우는 방법입니다. 파일을 열 때 적용되며, 미리 보기는 파일을 연 방식으로 표시됩니다.
 	AHD (adaptive homogeneity)	AHD (적응형 균질성)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: 가장 깨끗한 가장자리와 가장 적은 색 번짐, 가장 느림.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	기울기 보정 보간: 선명하고 빠르지만 미세한 디테일에 약간의 색 번짐이 있음.
-	The fastest and the softest, with colour fringing on fine detail.	가장 빠르고 가장 부드러우며, 미세한 디테일에 색 번짐이 있음.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: 가장 깨끗한 가장자리와 가장 적은 색 번짐, 가장 느림.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	기울기 보정 보간: 선명하고 빠르지만 미세한 디테일에 약간의 색 번짐이 있음.
+	The fastest and the softest, with color fringing on fine detail.	가장 빠르고 가장 부드러우며, 미세한 디테일에 색 번짐이 있음.
 	“{name}” already exists. Replace it?	“{name}”이(가) 이미 있습니다. 대치하시겠습니까?
 	The name in the save dialog was “{name}”.	저장 대화상자에 입력한 이름: “{name}”
 	Move Up	위로 이동

@@ -537,7 +537,6 @@
 	Deselect	取消選取
 	Reselect	重新選取
 	Inverse	反轉
-	Inverse Selection	反轉選取範圍
 	Similar	相近色
 	Color Range…	顏色範圍…
 	Focus Area…	焦點區域…
@@ -659,8 +658,8 @@
 	Legacy Macintosh RGB	舊版 Macintosh RGB
 	Internet Standard RGB	網際網路標準 RGB
 	Monitor RGB	顯示器 RGB
-	Color Blindness — Protanopia-type	色盲 — 紅色盲型
-	Color Blindness — Deuteranopia-type	色盲 — 綠色盲型
+	Color Blindness - Protanopia-type	色盲 - 紅色盲型
+	Color Blindness - Deuteranopia-type	色盲 - 綠色盲型
 	Zoom In	放大顯示
 	Zoom Out	縮小顯示
 	Fit on Screen	顯示全頁
@@ -972,7 +971,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	按一下新增點 · 拖出、{key}+按一下或按 Delete 以移除
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	按一下套用，{key}+按一下清除覆寫，連按兩下開啟樣式選項
 	Click to edit the gradient	按一下以編輯漸層
-	Click to restore the current colour	按一下以還原目前顏色
+	Click to restore the current color	按一下以還原目前顏色
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	按一下放大  ·  {key}+按一下縮小  ·  向右/向左拖曳以放大/縮小
 	Click with the Note tool to add a note.	使用註解工具按一下以新增註解。
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	按一下：轉角 · 拖曳：平滑 · 按一下第一點：閉合 · {key} 完成 · Esc 取消
@@ -1059,7 +1058,7 @@
 	Darks	暗部
 	Data Sets	資料組
 	Default	預設
-	Default colours (D)	預設顏色 (D)
+	Default Foreground and Background Colors (D)	預設顏色 (D)
 	Default printer	預設印表機
 	Default restored.	已還原預設值。
 	Define	定義
@@ -1346,7 +1345,7 @@
 	Opacity Jitter	不透明度快速變換
 	Opacity:	不透明度：
 	Open a document to define variables.	請開啟文件以定義變數。
-	Open a document to select a colour range.	請開啟文件以選取顏色範圍。
+	Open a document to select a color range.	請開啟文件以選取顏色範圍。
 	Open a document to use the timeline.	請開啟文件以使用時間軸。
 	Optical	視覺
 	Optimized	最佳化
@@ -1422,7 +1421,6 @@
 	Purity	純度
 	Quality	品質
 	Quick Actions	快速動作
-	Quick Export As PNG	快速匯出為 PNG
 	Radial Gradient	放射狀漸層
 	Radius	半徑
 	Radius:	半徑：
@@ -1566,7 +1564,7 @@
 	Subtract from Sample	從樣本中減去
 	Subtract from selection  ({key})	從選取範圍減去  ({key})
 	Suggestions:	建議：
-	Swap colours (X)	切換顏色 (X)
+	Switch Foreground and Background Colors (X)	切換顏色 (X)
 	Swaps height and width	交換高度和寬度
 	Switch between free transform and warp modes	在任意變形和彎曲模式間切換
 	Switch theme	切換主題
@@ -1671,7 +1669,7 @@
 	Choke	收縮
 	Classic	經典
 	Click to add text	按一下以新增文字
-	Click to fill similar colours	按一下以填滿相近顏色
+	Click to fill similar colors	按一下以填滿相近顏色
 	Clone Stamp Tool	仿製印章工具
 	Color Burn	加深顏色
 	Color Dodge	加亮顏色
@@ -1831,7 +1829,7 @@
 	Rectangular Marquee Tool	矩形選取畫面工具
 	Reds	紅色
 	Reflected	反射
-	Sample: foreground colour	取樣：前景色
+	Sample: foreground color	取樣：前景色
 	Sampled Colors	取樣的顏色
 	Satin	緞面
 	Save Pixel Aspect Ratio	儲存像素外觀比例
@@ -1869,7 +1867,7 @@
 	Transfer	轉換
 	Triangle Tool	三角形工具
 	Unsaved changes	未儲存的變更
-	Uses the foreground and background colours.	使用前景色和背景色。
+	Uses the foreground and background colors.	使用前景色和背景色。
 	Web	網頁
 	Web Large	網頁 (大)
 	Web Minimum	網頁 (最小)
@@ -2137,7 +2135,7 @@
 	Graphics	圖形
 	Reset GPU Backend	重設 GPU 後端
 	Applies at next launch.	下次啟動時套用。
-	Click to sample the foreground colour  ·  {key}-click for background	按一下以取樣前景色 · {key}+按一下取樣背景色
+	Click to sample the foreground color  ·  {key}-click for background	按一下以取樣前景色 · {key}+按一下取樣背景色
 	{key}-click to set the source	{key}+按一下以設定來源
 	{key} to subtract	按 {key} 以減去
 	Clone source {n} ({key}-click with Clone Stamp to set)	仿製來源 {n} (使用仿製印章時 {key}+按一下以設定)
@@ -2199,7 +2197,7 @@
 	Gradient Options	漸層選項
 	Align with layer	與圖層對齊
 	Reset Alignment	重設對齊
-	Centre the gradient (offset 0, 0)	置中漸層 (位移 0, 0)
+	Center the gradient (offset 0, 0)	置中漸層 (位移 0, 0)
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	漸層編輯器
 	Gradient picker	漸層挑選器
@@ -2233,7 +2231,7 @@
 	Alt-click to define a source point to clone from	按 Alt 鍵並按一下以定義仿製來源點
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	沒有可用來建立選取範圍的路徑：請使用鋼筆工具繪製，或在路徑面板中選取一個路徑。
 	Cancel opening	取消開啟
-	Cancelled opening {name}	已取消開啟 {name}
+	Canceled opening {name}	已取消開啟 {name}
 	Damaged Photoshop document	已損毀的 Photoshop 文件
 	The document “{name}” may be damaged.	文件「{name}」可能已損毀。
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	無法讀取部分圖層、像素或遮色片。是否繼續開啟？
@@ -2243,7 +2241,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	文件「{name}」嵌入的色彩描述檔與目前的 {mode} 工作空間不符。
 	Working: {working}	工作空間：{working}
 	Developing {name}	正在處理 {name}
-	Cancelled {label}	已取消 {label}
+	Canceled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
 	Opened {name}	已開啟 {name}
 	Opening {name}	正在開啟 {name}
@@ -2251,7 +2249,7 @@
 	Saving {name}	正在儲存 {name}
 	Saving {percent}	正在儲存 {percent}
 	A save to {name} is still running; try again when it finishes	仍在儲存到 {name}；請在完成後再試一次
-	{label} is writing the file and can no longer be cancelled	{label} 正在寫入檔案，已無法取消
+	{label} is writing the file and can no longer be canceled	{label} 正在寫入檔案，已無法取消
 	Opening {name}…	正在開啟 {name}…
 	Opening…	正在開啟…
 	Reading…	正在讀取…
@@ -2337,7 +2335,7 @@ cameraRaw	Blending	混合
 	Discard Layers and Save a Copy	放棄圖層並儲存拷貝
 	Don't show again	不再顯示
 	Save failed: {error}	儲存失敗：{error}
-	Save cancelled	已取消儲存
+	Save canceled	已取消儲存
 	Magnetic Lasso Tool	磁性套索工具
 	Frequency	頻率
 	Use tablet pressure to change pen width	使用繪圖板壓力以變更鋼筆寬度
@@ -2485,7 +2483,7 @@ fontWeight	Italic	斜體
 	Rotate View	旋轉檢視
 	Rotate View Tool	旋轉檢視工具
 	Reset View	重設檢視
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	繞中心拖曳以旋轉檢視  ·  Shift 限制為 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	繞中心拖曳以旋轉檢視  ·  Shift 限制為 15°
 
 # Painting symmetry presets.
 	Dual Axis	雙軸
@@ -2506,8 +2504,8 @@ fontWeight	Italic	斜體
 	Show Sampling Ring	顯示取樣環
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	超出列印色域：按一下以使用最接近的可列印顏色
-	Not a web colour: click for the nearest web colour	不是網頁顏色：按一下以使用最接近的網頁顏色
+	Out of gamut for printing: click for the nearest printable color	超出列印色域：按一下以使用最接近的可列印顏色
+	Not a web color: click for the nearest web color	不是網頁顏色：按一下以使用最接近的網頁顏色
 	Color to Alpha…	顏色轉為 Alpha…
 	Transparency Threshold	透明度臨界值
 	Opacity Threshold	不透明度臨界值
@@ -2604,7 +2602,7 @@ fontWeight	Italic	斜體
 	How often fastening points are placed by themselves	自動放置固定點的頻率
 	Scrubby Zoom	細微縮放
 	{mode} Color · {bits} bit	{mode} 色彩 · {bits} 位元
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	拖移繪製裁切框 · 在框內拖移以移動 · 拖移邊緣調整大小（{ratio} 比例，{centre} 中心）· 繪製時按 Space 移動 · 方向鍵微移 · X 切換方向 · {commit} 確認 · Esc 取消
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	拖移繪製裁切框 · 在框內拖移以移動 · 拖移邊緣調整大小（{ratio} 比例，{centre} 中心）· 繪製時按 Space 移動 · 方向鍵微移 · X 切換方向 · {commit} 確認 · Esc 取消
 	Appearance Settings…	外觀設定…
 	Add to favorites	加入最愛
 	Remove from favorites	從最愛移除
@@ -2863,7 +2861,7 @@ curves	Smooth	平滑
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	請勿同時勾選列印設定中的鏡像：兩次翻轉會互相抵消。
 	Print Settings…	列印設定…
-	Remember to turn off the printer's own colour management in Print Settings…	請記得在列印設定中關閉印表機本身的色彩管理…
+	Remember to turn off the printer's own color management in Print Settings…	請記得在列印設定中關閉印表機本身的色彩管理…
 	Sent to {printer}	已傳送至 {printer}
 	set in Print Settings…	在列印設定中設定…
 	ICO is limited to 256 × 256 pixels	ICO 最大為 256 × 256 像素
@@ -3020,12 +3018,12 @@ curves	Smooth	平滑
 	Decrease Brush Hardness	降低筆刷硬度
 	Increase Brush Hardness	提高筆刷硬度
 	Demosaic	去馬賽克
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填補相機彩色濾鏡陣列的馬賽克。在開啟檔案時套用；預覽顯示開啟時所用的方法。
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填補相機彩色濾鏡陣列的馬賽克。在開啟檔案時套用；預覽顯示開啟時所用的方法。
 	AHD (adaptive homogeneity)	AHD（自適應同質性）
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks：邊緣最乾淨、色邊最少，速度最慢。
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	梯度校正插值：銳利且快速，細節處有些許色邊。
-	The fastest and the softest, with colour fringing on fine detail.	最快也最柔和，細節處有色邊。
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks：邊緣最乾淨、色邊最少，速度最慢。
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	梯度校正插值：銳利且快速，細節處有些許色邊。
+	The fastest and the softest, with color fringing on fine detail.	最快也最柔和，細節處有色邊。
 	“{name}” already exists. Replace it?	「{name}」已存在。要取代它嗎？
 	The name in the save dialog was “{name}”.	儲存對話框中的名稱是「{name}」。
 	Move Up	上移

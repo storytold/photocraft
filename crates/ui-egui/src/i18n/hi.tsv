@@ -359,10 +359,10 @@ cameraRaw	Camera Raw Filter ({layer})	Camera Raw फ़िल्टर ({layer})
 cameraRaw	Camera Raw isn't open	Camera Raw खुला नहीं है
 	Camera Raw isn't open	Camera Raw खुला नहीं है
 cameraRaw	Cancel	रद्द करें
-cameraRaw	Cancelled opening {name}	{name} खोलना रद्द किया गया
-	Cancelled opening {name}	{name} खोलना रद्द किया गया
-cameraRaw	Cancelled {label}	{label} रद्द किया गया
-	Cancelled {label}	{label} रद्द किया गया
+cameraRaw	Canceled opening {name}	{name} खोलना रद्द किया गया
+	Canceled opening {name}	{name} खोलना रद्द किया गया
+cameraRaw	Canceled {label}	{label} रद्द किया गया
+	Canceled {label}	{label} रद्द किया गया
 cameraRaw	Clarity	स्पष्टता
 	Clarity	स्पष्टता
 cameraRaw	Color	रंग

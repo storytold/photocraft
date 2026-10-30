@@ -631,7 +631,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
             }
         }
         Tool::RotateView => {
-            hint(ui, tl!("Drag around the centre to rotate the view  ·  Shift constrains to 15°"));
+            hint(ui, tl!("Drag around the center to rotate the view  ·  Shift constrains to 15°"));
             if let Some(i) = app.session.active_index() {
                 ui.label(tl!("Angle"));
                 let mut angle = app.ui.views.get(i).map(|v| v.rotation).unwrap_or(0.0);

@@ -442,7 +442,6 @@
 	Grow	Mở rộng theo màu
 	Horizontal	Ngang
 	Huge	Cực lớn
-	Inverse Selection	Đảo vùng chọn
 	Isolate Layers	Cô lập lớp
 	Language Options	Tùy chọn ngôn ngữ
 	Large	Lớn
@@ -593,8 +592,8 @@
 	Clear Guides	Xóa đường căn
 	Clear Selected Artboard Guides	Xóa đường căn artboard đã chọn
 	Clear Slices	Xóa lát cắt
-	Color Blindness — Deuteranopia-type	Mù màu — kiểu Deuteranopia
-	Color Blindness — Protanopia-type	Mù màu — kiểu Protanopia
+	Color Blindness - Deuteranopia-type	Mù màu - kiểu Deuteranopia
+	Color Blindness - Protanopia-type	Mù màu - kiểu Protanopia
 	Count	Đếm
 	Custom Pixel Aspect Ratio…	Tỷ lệ khung pixel tùy chỉnh…
 	D1/DV NTSC (0.91)	D1/DV NTSC (0.91)
@@ -780,8 +779,8 @@
 	Custom Shape Tool	Công cụ Hình tùy chỉnh
 	Set foreground color	Đặt màu nền trước
 	Set background color	Đặt màu nền
-	Swap colours (X)	Đổi màu (X)
-	Default colours (D)	Màu mặc định (D)
+	Switch Foreground and Background Colors (X)	Đổi chỗ màu trước và màu sau (X)
+	Default Foreground and Background Colors (D)	Màu trước và màu sau mặc định (D)
 	Edit Toolbar…	Sửa thanh công cụ…
 	Edit in Quick Mask Mode  (Q)	Chỉnh sửa ở chế độ Mặt nạ nhanh  (Q)
 	Edit in Standard Mode  (Q)	Chỉnh sửa ở chế độ chuẩn  (Q)
@@ -903,9 +902,9 @@
 	Drag to move the active layer	Kéo để di chuyển lớp đang chọn
 	Drag to pan  ·  hold Space with any tool	Kéo để xem toàn cảnh  ·  giữ Space với mọi công cụ
 	Drag to draw a gradient	Kéo để vẽ chuyển sắc
-	Click to fill similar colours	Bấm để tô các màu tương tự
+	Click to fill similar colors	Bấm để tô các màu tương tự
 	Click to add text	Bấm để thêm chữ
-	Click to sample the foreground colour  ·  {key}-click for background	Bấm để lấy mẫu màu nền trước  ·  {key}-bấm cho nền
+	Click to sample the foreground color  ·  {key}-click for background	Bấm để lấy mẫu màu nền trước  ·  {key}-bấm cho nền
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Bấm để phóng to  ·  {key}-bấm để thu nhỏ  ·  kéo phải/trái để thu phóng
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Kéo hoặc bấm điểm đa giác · giữ Alt khi Lasso để có đoạn thẳng · {add} thêm · {sub} trước khi vẽ sẽ trừ
 	Hold Alt while drawing for straight segments	Giữ Alt khi vẽ để có đoạn thẳng
@@ -981,7 +980,6 @@
 	Release Clipping Mask	Nhả mặt nạ cắt
 	Merge Down	Gộp xuống
 	Merge Group	Gộp nhóm
-	Quick Export As PNG	Xuất nhanh dạng PNG
 	Rename Layer…	Đổi tên lớp…
 	Frame from Layers…	Frame từ các lớp…
 	Create new document from current state	Tạo tài liệu mới từ trạng thái hiện tại
@@ -1242,7 +1240,7 @@
 	Diamond	Hình thoi
 	Align with layer	Căn với lớp
 	Reset Alignment	Đặt lại căn chỉnh
-	Centre the gradient (offset 0, 0)	Căn giữa chuyển sắc (dịch lệch 0, 0)
+	Center the gradient (offset 0, 0)	Căn giữa chuyển sắc (dịch lệch 0, 0)
 	The current gradient (pick one in Window › Gradients)	Chuyển sắc hiện tại (chọn trong Cửa sổ › Chuyển sắc)
 	Click to edit the gradient	Bấm để chỉnh chuyển sắc
 	Create new gradient	Tạo chuyển sắc mới
@@ -1590,7 +1588,7 @@ cameraRaw	Shadows	Vùng tối
 	Manage submitted jobs in the system print queue	Quản lý các lệnh in đã gửi trong hàng đợi in của hệ thống
 	Esc to cancel	Esc để hủy
 	Cancel opening	Hủy mở tệp
-	Cancelled opening {name}	Đã hủy mở {name}
+	Canceled opening {name}	Đã hủy mở {name}
 	Damaged Photoshop document	Tài liệu Photoshop bị hỏng
 	The document “{name}” may be damaged.	Tài liệu “{name}” có thể đã bị hỏng.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Không thể đọc một số lớp, pixel hoặc mặt nạ. Bạn có muốn tiếp tục mở không?
@@ -1599,10 +1597,10 @@ cameraRaw	Shadows	Vùng tối
 	The document “{name}” does not have an embedded {mode} profile.	Tài liệu “{name}” không có hồ sơ {mode} nhúng.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Tài liệu “{name}” có hồ sơ màu nhúng không khớp với không gian làm việc {mode} hiện tại.
 	Working: {working}	Không gian làm việc: {working}
-	Cancelled {label}	Đã hủy {label}
+	Canceled {label}	Đã hủy {label}
 	Cancel transform (Esc)	Hủy biến đổi (Esc)
 	Cancel warp (Esc)	Hủy biến dạng (Esc)
-	Save cancelled	Đã hủy lưu
+	Save canceled	Đã hủy lưu
 	Spell check complete.	Đã kiểm tra chính tả xong.
 	Save failed: {error}	Không thể lưu: {error}
 	Couldn't place {name}: {error}	Không thể đặt {name}: {error}
@@ -1966,11 +1964,11 @@ document	Orientation	Hướng trang
 	Eyedropper	Ống hút màu
 	Add to Sample	Thêm vào mẫu
 	Subtract from Sample	Bớt khỏi mẫu
-	Sample: foreground colour	Mẫu: màu nền trước
+	Sample: foreground color	Mẫu: màu nền trước
 	{added}, {removed} subtracted	{added}, đã bớt {removed}
 	Clear Samples	Xóa mẫu
 	Selection	Vùng chọn
-	Open a document to select a colour range.	Mở một tài liệu để chọn phạm vi màu.
+	Open a document to select a color range.	Mở một tài liệu để chọn phạm vi màu.
 	Sampled Colors	Màu lấy mẫu
 	Reds	Đỏ
 	Yellows	Vàng
@@ -2039,7 +2037,7 @@ layers	Fill:	Độ tô:
 	Channels:	Kênh:
 	Click a red pupil to neutralize it	Nhấp vào đồng tử đỏ để trung hòa
 	Click to pick · Esc to cancel	Nhấp để chọn · Esc để hủy
-	Click to restore the current colour	Nhấp để khôi phục màu hiện tại
+	Click to restore the current color	Nhấp để khôi phục màu hiện tại
 	Clone source {n} ({key}-click with Clone Stamp to set)	Nguồn nhân bản {n} ({key}+nhấp bằng Dấu nhân bản để đặt)
 	Color Picker (Layer Style Color)	Ống hút màu (Màu kiểu lớp)
 	Color Picker (Text Color)	Ống hút màu (Màu chữ)
@@ -2095,13 +2093,13 @@ layers	Fill:	Độ tô:
 	No subject found — try a rectangle around the object	Không tìm thấy chủ thể — thử khung chữ nhật quanh đối tượng
 	No subject found — try Object Selection or the Lasso	Không tìm thấy chủ thể — thử Chọn đối tượng hoặc Lasso
 	No tool presets.	Không có thiết lập sẵn công cụ.
-	Not a web colour: click for the nearest web colour	Không phải màu web: nhấp để lấy màu web gần nhất
+	Not a web color: click for the nearest web color	Không phải màu web: nhấp để lấy màu web gần nhất
 	Now drag the selection onto another area	Bây giờ kéo vùng chọn sang vùng khác
 	Object Selection found nothing there — try a tighter rectangle	Chọn đối tượng không tìm thấy gì — thử khung chữ nhật chặt hơn
 	Only Web Colors	Chỉ màu web
 	Open paths use centered strokes	Đường dẫn mở dùng nét căn giữa
 	Option-click to define a source point to clone from	Option+nhấp để chỉ định điểm nguồn nhân bản
-	Out of gamut for printing: click for the nearest printable colour	Ngoài gamut in: nhấp để lấy màu in được gần nhất
+	Out of gamut for printing: click for the nearest printable color	Ngoài gamut in: nhấp để lấy màu in được gần nhất
 	Pick screen color	Lấy màu màn hình
 	Pick Color From Image	Lấy màu từ hình ảnh
 	Point Sample	Mẫu điểm
@@ -2144,7 +2142,7 @@ layers	Fill:	Độ tô:
 	Unavailable in this color mode	Không dùng được ở chế độ màu này
 	Update the current brush with these settings	Cập nhật cọ hiện tại với các thiết lập này
 	Use finite lengths and a positive pattern total	Dùng độ dài hữu hạn và tổng họa tiết dương
-	Uses the foreground and background colours.	Dùng màu nền trước và màu nền sau.
+	Uses the foreground and background colors.	Dùng màu nền trước và màu nền sau.
 	Weight	Độ dày
 	Zoom in	Phóng to
 	Zoom out	Thu nhỏ
@@ -2233,7 +2231,7 @@ layers	Fill:	Độ tô:
 	Untagged {mode}	{mode} chưa gắn hồ sơ
 	Use File › Open, or paste a copied image with {paste}.	Dùng Tệp › Mở, hoặc dán ảnh đã sao chép bằng {paste}.
 	Vector Mask from Current Path	Mặt nạ vector từ đường dẫn hiện tại
-	{label} is writing the file and can no longer be cancelled	{label} đang ghi tệp và không thể hủy nữa
+	{label} is writing the file and can no longer be canceled	{label} đang ghi tệp và không thể hủy nữa
 	{name} options	Tùy chọn {name}
 	{n} commands are not in PhotoCraft.	{n} lệnh không có trong PhotoCraft.
 	{size} (was {old})	{size} (trước là {old})
@@ -2830,7 +2828,7 @@ fontWeight	ExtraBold	Rất đậm
 fontWeight	Black	Đen
 fontWeight	Italic	Nghiêng
 	Rotate View Tool	Công cụ xoay khung nhìn
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Kéo vòng quanh tâm để xoay khung nhìn  ·  Shift giới hạn ở 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Kéo vòng quanh tâm để xoay khung nhìn  ·  Shift giới hạn ở 15°
 	Transparency Threshold	Ngưỡng trong suốt
 	Opacity Threshold	Ngưỡng độ mờ
 	Rasterize svg groups deeper than	Raster hoá các nhóm svg sâu hơn
@@ -2877,7 +2875,7 @@ fontWeight	Italic	Nghiêng
 	Dash	Nét đứt
 	Gap	Khoảng hở
 	{mode} Color · {bits} bit	Màu {mode} · {bits} bit
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Kéo hộp cắt · kéo bên trong để di chuyển · cạnh để đổi kích thước ({ratio} tỉ lệ, {centre} giữa) · Space di chuyển khi đang vẽ · phím mũi tên dịch nhẹ · X đổi chiều · {commit} chốt · Esc huỷ
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Kéo hộp cắt · kéo bên trong để di chuyển · cạnh để đổi kích thước ({ratio} tỉ lệ, {centre} giữa) · Space di chuyển khi đang vẽ · phím mũi tên dịch nhẹ · X đổi chiều · {commit} chốt · Esc huỷ
 	Camera Data	Dữ liệu máy ảnh
 cameraData	Make	Hãng sản xuất
 cameraData	Model	Kiểu máy
@@ -3712,7 +3710,7 @@ curves	Smooth	Làm mượt
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Đừng bật thêm Ảnh phản chiếu trong thiết lập in: hai lần lật sẽ triệt tiêu nhau.
 	Print Settings…	Thiết lập in…
-	Remember to turn off the printer's own colour management in Print Settings…	Nhớ tắt quản lý màu riêng của máy in trong thiết lập in…
+	Remember to turn off the printer's own color management in Print Settings…	Nhớ tắt quản lý màu riêng của máy in trong thiết lập in…
 	Sent to {printer}	Đã gửi tới {printer}
 	set in Print Settings…	đặt trong thiết lập in…
 	ICO is limited to 256 × 256 pixels	ICO giới hạn ở 256 × 256 pixel
@@ -3888,12 +3886,12 @@ curves	Smooth	Làm mượt
 	Decrease Brush Hardness	Giảm độ cứng của cọ
 	Increase Brush Hardness	Tăng độ cứng của cọ
 	Demosaic	Giải khảm
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cách lấp đầy khảm lọc màu của máy ảnh. Áp dụng khi mở tệp; bản xem trước hiển thị phương pháp đã dùng khi mở.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Cách lấp đầy khảm lọc màu của máy ảnh. Áp dụng khi mở tệp; bản xem trước hiển thị phương pháp đã dùng khi mở.
 	AHD (adaptive homogeneity)	AHD (đồng nhất thích ứng)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: cạnh sạch nhất và ít viền màu nhất, chậm nhất.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Nội suy hiệu chỉnh gradient: sắc nét và nhanh, có chút viền màu ở chi tiết nhỏ.
-	The fastest and the softest, with colour fringing on fine detail.	Nhanh nhất và mềm nhất, có viền màu ở chi tiết nhỏ.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: cạnh sạch nhất và ít viền màu nhất, chậm nhất.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Nội suy hiệu chỉnh gradient: sắc nét và nhanh, có chút viền màu ở chi tiết nhỏ.
+	The fastest and the softest, with color fringing on fine detail.	Nhanh nhất và mềm nhất, có viền màu ở chi tiết nhỏ.
 	“{name}” already exists. Replace it?	“{name}” đã tồn tại. Thay thế?
 	The name in the save dialog was “{name}”.	Tên trong hộp thoại lưu là “{name}”.
 	Move Up	Di chuyển lên

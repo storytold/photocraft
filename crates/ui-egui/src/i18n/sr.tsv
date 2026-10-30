@@ -501,7 +501,6 @@
 	Deselect	Poništi selekciju
 	Reselect	Ponovo izaberi
 	Inverse	Inverzno
-	Inverse Selection	Obrni selekciju
 	Similar	Slično
 	Color Range…	Opseg boja…
 	Focus Area…	Oblast fokusa…
@@ -621,8 +620,8 @@
 	Legacy Macintosh RGB	Stari Macintosh RGB
 	Internet Standard RGB	Internet standard RGB
 	Monitor RGB	RGB monitora
-	Color Blindness — Protanopia-type	Daltonizam — tip protanopije
-	Color Blindness — Deuteranopia-type	Daltonizam — tip deuteranopije
+	Color Blindness - Protanopia-type	Daltonizam - tip protanopije
+	Color Blindness - Deuteranopia-type	Daltonizam - tip deuteranopije
 	Zoom In	Uvećaj prikaz
 	Zoom Out	Umanji prikaz
 	Fit on Screen	Uklopi u ekran
@@ -926,7 +925,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	Kliknite da dodate tačku · prevucite van, {key}-klik ili Delete da uklonite
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	Kliknite da primenite, {key}-klik da uklonite nadjačavanja, dvoklik za opcije stila
 	Click to edit the gradient	Kliknite da uredite gradijent
-	Click to restore the current colour	Kliknite da vratite tekuću boju
+	Click to restore the current color	Kliknite da vratite tekuću boju
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Kliknite da uvećate  ·  {key}-klik da umanjite  ·  prevucite udesno/ulevo da uvećate/umanjite
 	Click with the Note tool to add a note.	Kliknite alatkom za beleške da dodate belešku.
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Klik: ugao · Prevlačenje: glatko · Klik na prvu tačku: zatvori · {key} završi · Esc otkaži
@@ -1006,7 +1005,7 @@
 	Darks	Tamni tonovi
 	Data Sets	Skupovi podataka
 	Default	Podrazumevano
-	Default colours (D)	Podrazumevane boje (D)
+	Default Foreground and Background Colors (D)	Podrazumevane boje prednjeg plana i pozadine (D)
 	Default printer	Podrazumevani štampač
 	Default restored.	Podrazumevano stanje je vraćeno.
 	Define	Definiši
@@ -1283,7 +1282,7 @@
 	Opacity Jitter	Kolebanje neprozirnosti
 	Opacity:	Neprozirnost:
 	Open a document to define variables.	Otvorite dokument da biste definisali promenljive.
-	Open a document to select a colour range.	Otvorite dokument da biste izabrali opseg boja.
+	Open a document to select a color range.	Otvorite dokument da biste izabrali opseg boja.
 	Open a document to use the timeline.	Otvorite dokument da biste koristili vremensku liniju.
 	Optical	Optički
 	Optimized	Optimizovano
@@ -1359,7 +1358,6 @@
 	Purity	Čistoća
 	Quality	Kvalitet
 	Quick Actions	Brze radnje
-	Quick Export As PNG	Brzi izvoz u PNG
 	Radial Gradient	Radijalni gradijent
 	Radius	Poluprečnik
 	Radius:	Poluprečnik:
@@ -1500,7 +1498,7 @@
 	Subtract from Sample	Oduzmi od uzorka
 	Subtract from selection  ({key})	Oduzmi od selekcije  ({key})
 	Suggestions:	Predlozi:
-	Swap colours (X)	Zameni boje (X)
+	Switch Foreground and Background Colors (X)	Zameni boje prednjeg plana i pozadine (X)
 	Swaps height and width	Zamenjuje visinu i širinu
 	Switch between free transform and warp modes	Prebaci između režima slobodne transformacije i krivljenja
 	Switch theme	Promeni temu
@@ -1602,7 +1600,7 @@
 	Choke	Sužavanje
 	Classic	Klasično
 	Click to add text	Kliknite da dodate tekst
-	Click to fill similar colours	Kliknite da popunite slične boje
+	Click to fill similar colors	Kliknite da popunite slične boje
 	Clone Stamp Tool	Alatka pečat za kloniranje
 	Color Burn	Zatamnjivanje boje
 	Color Dodge	Posvetljivanje boje
@@ -1763,7 +1761,7 @@
 	Rectangular Marquee Tool	Alatka za pravougaonu selekciju
 	Reds	Crvene
 	Reflected	Reflektovano
-	Sample: foreground colour	Uzorak: boja prednjeg plana
+	Sample: foreground color	Uzorak: boja prednjeg plana
 	Sampled Colors	Uzorkovane boje
 	Satin	Saten
 	Save Pixel Aspect Ratio	Sačuvaj odnos stranica piksela
@@ -1801,7 +1799,6 @@
 	Transfer	Prenos
 	Triangle Tool	Alatka trougao
 	Unsaved changes	Nesačuvane izmene
-	Uses the foreground and background colours.	Koristi boje prednjeg plana i pozadine.
 	Web	Veb
 	Web Large	Veb, veliko
 	Web Minimum	Veb, minimum
@@ -2064,7 +2061,7 @@
 	Graphics	Grafika
 	Reset GPU Backend	Resetuj GPU pozadinski sistem
 	Applies at next launch.	Primenjuje se pri sledećem pokretanju.
-	Click to sample the foreground colour  ·  {key}-click for background	Kliknite da uzorkujete boju prednjeg plana  ·  {key}-klik za pozadinu
+	Click to sample the foreground color  ·  {key}-click for background	Kliknite da uzorkujete boju prednjeg plana  ·  {key}-klik za pozadinu
 	{key}-click to set the source	{key}-klik da postavite izvor
 	{key} to subtract	{key} za oduzimanje
 	Clone source {n} ({key}-click with Clone Stamp to set)	Izvor kloniranja {n} ({key}-klik pečatom za kloniranje da postavite)
@@ -2122,7 +2119,7 @@
 	Gradient Options	Opcije gradijenta
 	Align with layer	Poravnaj sa slojem
 	Reset Alignment	Resetuj poravnanje
-	Centre the gradient (offset 0, 0)	Centriraj gradijent (pomak 0, 0)
+	Center the gradient (offset 0, 0)	Centriraj gradijent (pomak 0, 0)
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	Uređivač gradijenta
 	Gradient picker	Birač gradijenta
@@ -2156,7 +2153,7 @@
 	Alt-click to define a source point to clone from	Alt-klik da odredite izvornu tačku za kloniranje
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Nema putanje od koje bi se napravila selekcija: nacrtajte je alatkom pero ili je izaberite u panelu Putanje.
 	Cancel opening	Otkaži otvaranje
-	Cancelled opening {name}	Otkazano otvaranje: {name}
+	Canceled opening {name}	Otkazano otvaranje: {name}
 	Damaged Photoshop document	Oštećen Photoshop dokument
 	The document “{name}” may be damaged.	Dokument „{name}“ je možda oštećen.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Neki slojevi, pikseli ili maske nisu mogli da se pročitaju. Želite li da nastavite sa otvaranjem?
@@ -2165,7 +2162,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Dokument „{name}“ ima ugrađeni profil boja koji se ne slaže sa trenutnim {mode} radnim prostorom.
 	Working: {working}	Radni prostor: {working}
 	Developing {name}	Razvijanje: {name}
-	Cancelled {label}	Otkazano: {label}
+	Canceled {label}	Otkazano: {label}
 	Esc to cancel	Esc za otkazivanje
 	Opened {name}	Otvoreno: {name}
 	Opening {name}	Otvaranje: {name}
@@ -2173,7 +2170,7 @@
 	Saving {name}	Čuvanje: {name}
 	Saving {percent}	Čuvanje {percent}
 	A save to {name} is still running; try again when it finishes	Čuvanje u {name} je još u toku; pokušajte ponovo kada se završi
-	{label} is writing the file and can no longer be cancelled	{label}: datoteka se upisuje i više ne može da se otkaže
+	{label} is writing the file and can no longer be canceled	{label}: datoteka se upisuje i više ne može da se otkaže
 	Opening {name}…	Otvaranje: {name}…
 	Opening…	Otvaranje…
 	Reading…	Čitanje…
@@ -2547,7 +2544,7 @@
 	Pixel	Piksel
 	Adjustment	Korekcija
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Prevucite (laso) ili kliknite tačke (mnogougao) · {add} dodaje · {sub} oduzima
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Prevucite okvir za opsecanje · prevlačenje unutra pomera · ivice menjaju veličinu ({ratio} odnos, {centre} centar) · razmaknica pomera tokom crtanja · strelice pomeraju malo · X menja orijentaciju · {commit} potvrđuje · Esc otkazuje
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Prevucite okvir za opsecanje · prevlačenje unutra pomera · ivice menjaju veličinu ({ratio} odnos, {centre} centar) · razmaknica pomera tokom crtanja · strelice pomeraju malo · X menja orijentaciju · {commit} potvrđuje · Esc otkazuje
 	{mode} Color · {bits} bit	{mode} boje · {bits} bita
 	Drag to move the layer	Prevucite da pomerite sloj
 	Scrubby Zoom	Zumiranje prevlačenjem
@@ -2752,7 +2749,7 @@ cameraRaw	Blending	Stapanje
 	Discard Layers and Save a Copy	Odbaci slojeve i sačuvaj kopiju
 	Don't show again	Ne prikazuj ponovo
 	Save failed: {error}	Čuvanje nije uspelo: {error}
-	Save cancelled	Čuvanje je otkazano
+	Save canceled	Čuvanje je otkazano
 	Couldn't place {name}: {error}	Postavljanje {name} nije uspelo: {error}
 	Magnetic Lasso Tool	Alatka magnetni laso
 	Frequency	Frekvencija
@@ -2892,7 +2889,7 @@ fontWeight	Italic	Kurziv
 	Impressionist	Impresionistički
 	Rotate View Tool	Alatka za rotiranje prikaza
 	Reset View	Resetuj prikaz
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Prevlačite oko centra da rotirate prikaz  ·  Shift ograničava na korake od 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Prevlačite oko centra da rotirate prikaz  ·  Shift ograničava na korake od 15°
 
 # Painting symmetry presets.
 	Dual Axis	Dvostruka osa
@@ -2913,8 +2910,8 @@ fontWeight	Italic	Kurziv
 	Show Sampling Ring	Prikaži prsten uzorkovanja
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	Van gamuta za štampu: kliknite za najbližu boju koja može da se odštampa
-	Not a web colour: click for the nearest web colour	Nije veb boja: kliknite za najbližu veb boju
+	Out of gamut for printing: click for the nearest printable color	Van gamuta za štampu: kliknite za najbližu boju koja može da se odštampa
+	Not a web color: click for the nearest web color	Nije veb boja: kliknite za najbližu veb boju
 	Color to Alpha…	Boja u alfu…
 	Transparency Threshold	Prag providnosti
 	Opacity Threshold	Prag neprozirnosti
@@ -4260,7 +4257,7 @@ shape	Appearance	Izgled
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nemojte uključiti i ogledalsku sliku u podešavanjima štampanja: dva preslikavanja se poništavaju.
 	Print Settings…	Podešavanja štampanja…
-	Remember to turn off the printer's own colour management in Print Settings…	Ne zaboravite da isključite upravljanje bojama samog štampača u podešavanjima štampanja…
+	Remember to turn off the printer's own color management in Print Settings…	Ne zaboravite da isključite upravljanje bojama samog štampača u podešavanjima štampanja…
 	Sent to {printer}	Poslato na {printer}
 	set in Print Settings…	podešava se u podešavanjima štampanja…
 # Custom print paper (#3820)
@@ -4455,12 +4452,12 @@ shape	Appearance	Izgled
 	Decrease Brush Hardness	Smanji tvrdoću četkice
 	Increase Brush Hardness	Povećaj tvrdoću četkice
 	Demosaic	Demozaikovanje
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Kako se popunjava mozaik filtera boja kamere. Primenjuje se pri otvaranju datoteke; pregled prikazuje metod kojim je datoteka otvorena.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Kako se popunjava mozaik filtera boja kamere. Primenjuje se pri otvaranju datoteke; pregled prikazuje metod kojim je datoteka otvorena.
 	AHD (adaptive homogeneity)	AHD (adaptivna homogenost)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: najčistije ivice i najmanje obojenih rubova, najsporiji.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolacija sa korekcijom gradijenta: oštra i brza, sa malo obojenih rubova na finim detaljima.
-	The fastest and the softest, with colour fringing on fine detail.	Najbrži i najmekši, sa obojenim rubovima na finim detaljima.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: najčistije ivice i najmanje obojenih rubova, najsporiji.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Interpolacija sa korekcijom gradijenta: oštra i brza, sa malo obojenih rubova na finim detaljima.
+	The fastest and the softest, with color fringing on fine detail.	Najbrži i najmekši, sa obojenim rubovima na finim detaljima.
 	“{name}” already exists. Replace it?	„{name}“ već postoji. Zameniti?
 	The name in the save dialog was “{name}”.	Ime u dijalogu za čuvanje je bilo „{name}“.
 	Move Up	Pomeri nagore

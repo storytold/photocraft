@@ -551,13 +551,13 @@ pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, two_column
         p.rect_stroke(b, 1.0, Stroke::new(1.0, ink(d)), StrokeKind::Inside);
     }
     if let Some(d) = &d {
-        d.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Default colours (D)")));
+        d.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Default Foreground and Background Colors (D)")));
     }
-    s.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Swap colours (X)")));
-    if s.on_hover_text(tl!("Swap colours (X)")).clicked() {
+    s.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Switch Foreground and Background Colors (X)")));
+    if s.on_hover_text(tl!("Switch Foreground and Background Colors (X)")).clicked() {
         chip_command(app, "tools.swapColors");
     }
-    if d.is_some_and(|d| d.on_hover_text(tl!("Default colours (D)")).clicked()) {
+    if d.is_some_and(|d| d.on_hover_text(tl!("Default Foreground and Background Colors (D)")).clicked()) {
         chip_command(app, "tools.defaultColors");
     }
 }

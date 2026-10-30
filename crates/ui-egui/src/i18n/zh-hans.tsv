@@ -532,7 +532,6 @@
 	Deselect	取消选择
 	Reselect	重新选择
 	Inverse	反向
-	Inverse Selection	反选选区
 	Similar	选择相似
 	Color Range…	色彩范围…
 	Focus Area…	焦点区域…
@@ -654,8 +653,8 @@
 	Legacy Macintosh RGB	旧版 Macintosh RGB
 	Internet Standard RGB	互联网标准 RGB
 	Monitor RGB	显示器 RGB
-	Color Blindness — Protanopia-type	色盲 — 红色盲型
-	Color Blindness — Deuteranopia-type	色盲 — 绿色盲型
+	Color Blindness - Protanopia-type	色盲 - 红色盲型
+	Color Blindness - Deuteranopia-type	色盲 - 绿色盲型
 	Zoom In	放大
 	Zoom Out	缩小
 	Fit on Screen	适合屏幕
@@ -985,7 +984,7 @@
 	Click to add a point · drag off or ⌘/Ctrl-click or Delete to remove	单击添加点 · 拖离、按 ⌘/Ctrl 单击或按 Delete 移除
 	Click to apply, ⌥-click to clear overrides, double-click for Style Options	单击应用，按 ⌥ 单击清除覆盖设置，双击打开样式选项
 	Click to edit the gradient	单击编辑渐变
-	Click to restore the current colour	单击恢复当前颜色
+	Click to restore the current color	单击恢复当前颜色
 	Click to zoom in  ·  ⌥-click to zoom out	单击放大  ·  按 ⌥ 单击缩小
 	Click with the Note tool to add a note.	使用注释工具单击以添加注释。
 	Click: corner · Drag: smooth · Click first point: close · ↩ finish · Esc cancel	单击：角点 · 拖动：平滑点 · 单击起点：闭合 · ↩ 完成 · Esc 取消
@@ -1072,7 +1071,7 @@
 	Darks	暗部
 	Data Sets	数据组
 	Default	默认
-	Default colours (D)	默认颜色（D）
+	Default Foreground and Background Colors (D)	默认颜色（D）
 	Default printer	默认打印机
 	Default restored.	已恢复默认值。
 	Define	定义
@@ -1364,7 +1363,7 @@
 	Opacity Jitter	不透明度抖动
 	Opacity:	不透明度：
 	Open a document to define variables.	打开文档以定义变量。
-	Open a document to select a colour range.	打开文档以选择色彩范围。
+	Open a document to select a color range.	打开文档以选择色彩范围。
 	Open a document to use the timeline.	打开文档以使用时间轴。
 	Open…     ⌘O	打开…     ⌘O
 	Optical	视觉
@@ -1441,7 +1440,6 @@
 	Purity	纯度
 	Quality	品质
 	Quick Actions	快速操作
-	Quick Export As PNG	快速导出为 PNG
 	Radial Gradient	径向渐变
 	Radius	半径
 	Radius:	半径：
@@ -1586,7 +1584,7 @@
 	Subtract from Sample	从采样中减去
 	Subtract from selection  (⌥)	从选区中减去  (⌥)
 	Suggestions:	建议：
-	Swap colours (X)	交换颜色 (X)
+	Switch Foreground and Background Colors (X)	交换颜色 (X)
 	Swaps height and width	交换高度和宽度
 	Switch between free transform and warp modes	在自由变换和变形模式之间切换
 	Switch theme	切换主题
@@ -1694,7 +1692,7 @@
 	Choke	收缩
 	Classic	经典
 	Click to add text	单击以添加文字
-	Click to fill similar colours	单击以填充相近颜色
+	Click to fill similar colors	单击以填充相近颜色
 	Clone Stamp Tool	仿制图章工具
 	Color Burn	颜色加深
 	Color Dodge	颜色减淡
@@ -1857,7 +1855,7 @@
 	Rectangular Marquee Tool	矩形选框工具
 	Reds	红色
 	Reflected	对称
-	Sample: foreground colour	采样：前景色
+	Sample: foreground color	采样：前景色
 	Sampled Colors	采样颜色
 	Satin	光泽
 	Save Pixel Aspect Ratio	保存像素长宽比
@@ -1897,7 +1895,6 @@
 	Triangle Tool	三角形工具
 	Up	向上
 	Unsaved changes	未保存的更改
-	Uses the foreground and background colours.	使用前景色和背景色。
 	Watercolour look: lighter interior, darker rims.	水彩效果：内部较浅，边缘较深。
 	Web	Web
 	Web Large	Web 大尺寸
@@ -2222,7 +2219,7 @@ cameraRaw	Blending	混合
 	Graphics	图形
 	Reset GPU Backend	重置 GPU 后端
 	Applies at next launch.	下次启动时生效。
-	Click to sample the foreground colour  ·  {key}-click for background	单击拾取前景色  ·  按 {key} 单击拾取背景色
+	Click to sample the foreground color  ·  {key}-click for background	单击拾取前景色  ·  按 {key} 单击拾取背景色
 	{key}-click to set the source	按 {key} 单击设置源点
 	{key} to subtract	按 {key} 从选区中减去
 	Clone source {n} ({key}-click with Clone Stamp to set)	仿制源 {n}（使用仿制图章时按 {key} 单击设置）
@@ -2281,7 +2278,7 @@ cameraRaw	Blending	混合
 	Gradient Options	渐变选项
 	Align with layer	与图层对齐
 	Reset Alignment	重置对齐
-	Centre the gradient (offset 0, 0)	将渐变居中（偏移量 0, 0）
+	Center the gradient (offset 0, 0)	将渐变居中（偏移量 0, 0）
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	渐变编辑器
 	Gradient picker	渐变拾色器
@@ -2315,7 +2312,7 @@ cameraRaw	Blending	混合
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	没有可用于生成选区的路径：请用钢笔工具绘制路径，或在路径面板中选择路径。
 # Layer navigation, copy transforms and cancellable opening (labels added on main since this catalog).
 	Cancel opening	取消打开
-	Cancelled opening {name}	已取消打开 {name}
+	Canceled opening {name}	已取消打开 {name}
 	Damaged Photoshop document	已损坏的 Photoshop 文档
 	The document “{name}” may be damaged.	文档“{name}”可能已损坏。
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	无法读取某些图层、像素或蒙版。是否继续打开？
@@ -2325,7 +2322,7 @@ cameraRaw	Blending	混合
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	文档“{name}”嵌入的颜色配置文件与当前的 {mode} 工作空间不匹配。
 	Working: {working}	工作空间：{working}
 	Developing {name}	正在处理 {name}
-	Cancelled {label}	已取消 {label}
+	Canceled {label}	已取消 {label}
 	Esc to cancel	按 Esc 取消
 	Opened {name}	已打开 {name}
 	Opening {name}	正在打开 {name}
@@ -2333,7 +2330,7 @@ cameraRaw	Blending	混合
 	Saving {name}	正在保存 {name}
 	Saving {percent}	正在保存 {percent}
 	A save to {name} is still running; try again when it finishes	仍在保存到 {name}；请在完成后重试
-	{label} is writing the file and can no longer be cancelled	{label} 正在写入文件，已无法取消
+	{label} is writing the file and can no longer be canceled	{label} 正在写入文件，已无法取消
 	Opening {name}…	正在打开 {name}…
 	Opening…	正在打开…
 	Reading…	正在读取…
@@ -2388,7 +2385,7 @@ cameraRaw	Blending	混合
 	Discard Layers and Save a Copy	扔掉图层并存储副本
 	Don't show again	不再显示
 	Save failed: {error}	存储失败：{error}
-	Save cancelled	已取消存储
+	Save canceled	已取消存储
 	Magnetic Lasso Tool	磁性套索工具
 	Frequency	频率
 	Use tablet pressure to change pen width	使用绘图板压力以更改钢笔宽度
@@ -2536,7 +2533,7 @@ fontWeight	Italic	斜体
 	Rotate View	旋转视图
 	Rotate View Tool	旋转视图工具
 	Reset View	重置视图
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	绕中心拖动以旋转视图  ·  Shift 限制为 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	绕中心拖动以旋转视图  ·  Shift 限制为 15°
 
 # Painting symmetry presets.
 	Dual Axis	双轴
@@ -2557,8 +2554,8 @@ fontWeight	Italic	斜体
 	Show Sampling Ring	显示采样环
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	超出打印色域：单击使用最接近的可打印颜色
-	Not a web colour: click for the nearest web colour	不是 Web 颜色：单击使用最接近的 Web 颜色
+	Out of gamut for printing: click for the nearest printable color	超出打印色域：单击使用最接近的可打印颜色
+	Not a web color: click for the nearest web color	不是 Web 颜色：单击使用最接近的 Web 颜色
 	Color to Alpha…	颜色转为 Alpha…
 	Transparency Threshold	透明度阈值
 	Opacity Threshold	不透明度阈值
@@ -2655,7 +2652,7 @@ fontWeight	Italic	斜体
 	How often fastening points are placed by themselves	自动放置紧固点的频率
 	Scrubby Zoom	细微缩放
 	{mode} Color · {bits} bit	{mode} 颜色 · {bits} 位
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	拖移绘制裁剪框 · 在框内拖移以移动 · 拖移边缘调整大小（{ratio} 比例，{centre} 中心）· 绘制时按 Space 移动 · 方向键微移 · X 切换方向 · {commit} 确认 · Esc 取消
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	拖移绘制裁剪框 · 在框内拖移以移动 · 拖移边缘调整大小（{ratio} 比例，{centre} 中心）· 绘制时按 Space 移动 · 方向键微移 · X 切换方向 · {commit} 确认 · Esc 取消
 	Appearance Settings…	外观设置…
 	Add to favorites	添加到收藏
 	Remove from favorites	从收藏中移除
@@ -2899,7 +2896,7 @@ curves	Smooth	平滑
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	不要同时勾选打印设置中的镜像：两次翻转会相互抵消。
 	Print Settings…	打印设置…
-	Remember to turn off the printer's own colour management in Print Settings…	请记得在打印设置中关闭打印机自身的色彩管理…
+	Remember to turn off the printer's own color management in Print Settings…	请记得在打印设置中关闭打印机自身的色彩管理…
 	Sent to {printer}	已发送到 {printer}
 	set in Print Settings…	在打印设置中设置…
 	ICO is limited to 256 × 256 pixels	ICO 最大为 256 × 256 像素
@@ -3056,12 +3053,12 @@ curves	Smooth	平滑
 	Decrease Brush Hardness	减小画笔硬度
 	Increase Brush Hardness	增大画笔硬度
 	Demosaic	去马赛克
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填补相机彩色滤镜阵列的马赛克。在打开文件时应用；预览显示打开时所用的方法。
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	如何填补相机彩色滤镜阵列的马赛克。在打开文件时应用；预览显示打开时所用的方法。
 	AHD (adaptive homogeneity)	AHD（自适应同质性）
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks：边缘最干净、色边最少，速度最慢。
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	梯度校正插值：锐利且快速，细节处有些许色边。
-	The fastest and the softest, with colour fringing on fine detail.	最快也最柔和，细节处有色边。
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks：边缘最干净、色边最少，速度最慢。
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	梯度校正插值：锐利且快速，细节处有些许色边。
+	The fastest and the softest, with color fringing on fine detail.	最快也最柔和，细节处有色边。
 	“{name}” already exists. Replace it?	“{name}”已存在。要替换它吗？
 	The name in the save dialog was “{name}”.	存储对话框中的名称是“{name}”。
 	Move Up	上移

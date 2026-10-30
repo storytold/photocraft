@@ -92,7 +92,6 @@
 	Export As…	Експортувати як…
 	Export	Експорт
 	Export…	Експортувати…
-	Quick Export As PNG	Швидкий експорт у PNG
 	Quick Export as PNG	Швидкий експорт у PNG
 	Place Embedded…	Розмістити вбудований…
 	Place Linked…	Розмістити пов'язаний…
@@ -284,7 +283,6 @@
 	All	Усе
 	Deselect	Зняти виділення
 	Reselect	Відновити виділення
-	Inverse Selection	Інвертувати виділення
 	Inverse	Інвертувати
 	Color Range…	Колірний діапазон…
 	Select and Mask…	Виділити та маскувати…
@@ -569,8 +567,8 @@
 	Background	Фон
 	Set foreground color	Установити колір переднього плану
 	Set background color	Установити колір фону
-	Swap colours (X)	Поміняти кольори місцями (X)
-	Default colours (D)	Типові кольори (D)
+	Switch Foreground and Background Colors (X)	Поміняти кольори місцями (X)
+	Default Foreground and Background Colors (D)	Типові кольори (D)
 	Brush Tool Options	Параметри пензля
 	Opacity	Непрозорість
 	Flow	Потік
@@ -1575,7 +1573,7 @@
 	Revert “{name}” to the last saved version? Your changes will be lost.	Повернути «{name}» до останньої збереженої версії? Ваші зміни буде втрачено.
 	{key} to subtract	{key}, щоб відняти
 	↑↓ navigate   {key} run   esc close	↑↓ навігація   {key} виконати   esc закрити
-	Click to restore the current colour	Клацніть, щоб відновити поточний колір
+	Click to restore the current color	Клацніть, щоб відновити поточний колір
 	Click with the Note tool to add a note.	Клацніть інструментом «Нотатка», щоб додати нотатку.
 	Drag a rectangle around the object	Намалюйте прямокутник навколо об'єкта
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Перетягніть на зображенні, щоб додати обмеження; Shift для горизонталі/вертикалі; клацніть правою кнопкою на обмеженні, щоб змінити або видалити його.
@@ -1656,10 +1654,10 @@
 	Drag to move the active layer	Перетягніть, щоб перемістити активний шар
 	Drag to pan  ·  hold Space with any tool	Перетягніть для панорамування  ·  утримуйте пробіл із будь-яким інструментом
 	Drag to draw a gradient	Перетягніть, щоб намалювати градієнт
-	Click to fill similar colours	Клацніть, щоб залити подібні кольори
+	Click to fill similar colors	Клацніть, щоб залити подібні кольори
 	Click to add text	Клацніть, щоб додати текст
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Перетягування (ласо) або клацання точок (багатокутне) · {add} додати · {sub} відняти
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Намалюйте рамку кадрування · перетягування всередині переміщує · краї змінюють розмір ({ratio} пропорції, {centre} центр) · пробіл переміщує під час малювання · стрілки зсувають · X змінює орієнтацію · {commit} підтверджує · Esc скасовує
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Намалюйте рамку кадрування · перетягування всередині переміщує · краї змінюють розмір ({ratio} пропорції, {centre} центр) · пробіл переміщує під час малювання · стрілки зсувають · X змінює орієнтацію · {commit} підтверджує · Esc скасовує
 	{mode} Color · {bits} bit	Колір {mode} · {bits} біт
 	Drag to move the layer	Перетягніть, щоб перемістити шар
 	Fit Screen	Умістити на екрані
@@ -1691,7 +1689,6 @@
 	Appearance	Вигляд
 	Text Position:	Положення тексту:
 	Text color	Колір тексту
-	Uses the foreground and background colours.	Використовує кольори переднього плану та фону.
 	Answer the unsaved-changes prompt first	Спочатку дайте відповідь у діалозі незбережених змін
 	Unsaved changes	Незбережені зміни
 	Don't Save	Не зберігати
@@ -1711,7 +1708,7 @@
 	name	назва
 	new	новий
 	Go to Layer	Перейти до шару
-	Open a document to select a colour range.	Відкрийте документ, щоб виділити колірний діапазон.
+	Open a document to select a color range.	Відкрийте документ, щоб виділити колірний діапазон.
 	Saved	Збережено
 	Reveal in Finder	Показати у Finder
 	Show in Explorer	Показати у Провіднику
@@ -1886,8 +1883,8 @@
 	Character Styles Panel	Панель стилів символів
 	Clear Canvas Guides	Очистити напрямні полотна
 	Clear Selected Artboard Guides	Очистити напрямні вибраної монтажної області
-	Color Blindness — Deuteranopia-type	Порушення сприйняття кольору — дейтеранопія
-	Color Blindness — Protanopia-type	Порушення сприйняття кольору — протанопія
+	Color Blindness - Deuteranopia-type	Порушення сприйняття кольору - дейтеранопія
+	Color Blindness - Protanopia-type	Порушення сприйняття кольору - протанопія
 	Color Table…	Таблиця кольорів…
 	Combine Shapes	Об'єднати фігури
 	Contract…	Стиснути…
@@ -2058,7 +2055,7 @@
 	Canvas	Полотно
 	Capture	Зберегти стан
 	Center Crop Marks	Центральні мітки обрізання
-	Centre the gradient (offset 0, 0)	Центрувати градієнт (зсув 0, 0)
+	Center the gradient (offset 0, 0)	Центрувати градієнт (зсув 0, 0)
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	Редактор градієнтів
 	Gradient picker	Вибір градієнта
@@ -2216,7 +2213,7 @@
 	Roughness	Шорсткість
 	Roundness	Округлість
 	Rulers & Grids	Лінійки та сітки
-	Sample: foreground colour	Зразок: колір переднього плану
+	Sample: foreground color	Зразок: колір переднього плану
 	Sampling: Background Swatch	Вибірка: зразок фону
 	Sampling: Continuous	Вибірка: безперервна
 	Sampling: Once	Вибірка: одноразова
@@ -2473,7 +2470,7 @@
 	Alt-click to define a source point to clone from	Alt+клацання, щоб визначити точку джерела клонування
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Немає контуру для створення виділення: намалюйте його пером або виберіть на панелі контурів.
 	Cancel opening	Скасувати відкриття
-	Cancelled opening {name}	Відкриття {name} скасовано
+	Canceled opening {name}	Відкриття {name} скасовано
 	Damaged Photoshop document	Пошкоджений документ Photoshop
 	The document “{name}” may be damaged.	Документ «{name}», можливо, пошкоджено.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Не вдалося прочитати деякі шари, пікселі або маски. Продовжити відкриття?
@@ -2483,7 +2480,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Вбудований колірний профіль документа «{name}» не відповідає поточному робочому простору {mode}.
 	Working: {working}	Робочий простір: {working}
 	Developing {name}	Обробка {name}
-	Cancelled {label}	Скасовано: {label}
+	Canceled {label}	Скасовано: {label}
 	Esc to cancel	Esc для скасування
 	Opened {name}	Відкрито: {name}
 	Opening {name}	Відкриття {name}
@@ -2491,7 +2488,7 @@
 	Saving {name}	Збереження {name}
 	Saving {percent}	Збереження {percent}
 	A save to {name} is still running; try again when it finishes	Збереження в {name} ще триває; спробуйте ще раз, коли воно завершиться
-	{label} is writing the file and can no longer be cancelled	{label}: триває запис файлу, скасувати вже не можна
+	{label} is writing the file and can no longer be canceled	{label}: триває запис файлу, скасувати вже не можна
 	Opening {name}…	Відкриття {name}…
 	Opening…	Відкриття…
 	Reading…	Читання…
@@ -2588,7 +2585,7 @@ cameraRaw	Roughness	Шорсткість
 	Discard Layers and Save a Copy	Відкинути шари та зберегти копію
 	Don't show again	Більше не показувати
 	Save failed: {error}	Не вдалося зберегти: {error}
-	Save cancelled	Збереження скасовано
+	Save canceled	Збереження скасовано
 	Couldn't place {name}: {error}	Не вдалося розмістити {name}: {error}
 	Magnetic Lasso Tool	Інструмент «Магнітне ласо»
 	Frequency	Частота
@@ -2731,7 +2728,7 @@ fontWeight	Italic	Курсивний
 	Impressionist	Імпресіоністичний
 	Rotate View Tool	Інструмент «Поворот перегляду»
 	Reset View	Скинути перегляд
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Перетягніть навколо центру, щоб повернути перегляд  ·  Shift обмежує крок до 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Перетягніть навколо центру, щоб повернути перегляд  ·  Shift обмежує крок до 15°
 
 # Additional shell controls, dynamic dialog fields and command labels.
 	(coming soon)	(незабаром)
@@ -2946,7 +2943,7 @@ fontWeight	Italic	Курсивний
 	Import Brushes… (.abr or image)	Імпортувати пензлі… (.abr або зображення)
 	Import Brush from Image…	Імпортувати пензель із зображення…
 	System Info	Інформація про систему
-	Click to sample the foreground colour  ·  {key}-click for background	Клацання бере зразок переднього плану  ·  {key}+клацання для фону
+	Click to sample the foreground color  ·  {key}-click for background	Клацання бере зразок переднього плану  ·  {key}+клацання для фону
 	Create Warped Text	Створити деформований текст
 	Rasterize Smart Object	Растеризувати смартоб'єкт
 	Rasterize Fill Content	Растеризувати вміст заливки
@@ -3615,9 +3612,9 @@ cameraRaw	Masking	Маскування
 	All Layers No Adjustments	Усі шари без коригувань
 	Color to Alpha…	Колір у прозорість…
 	Current & Below No Adjustments	Поточний і нижчі без коригувань
-	Not a web colour: click for the nearest web colour	Колір поза вебпалітрою: клацніть, щоб вибрати найближчий колір із неї
+	Not a web color: click for the nearest web color	Колір поза вебпалітрою: клацніть, щоб вибрати найближчий колір із неї
 	Now drag the selection onto another area	Тепер перетягніть виділення на іншу ділянку
-	Out of gamut for printing: click for the nearest printable colour	Колір поза колірним охопленням друку: клацніть, щоб вибрати найближчий колір, придатний для друку
+	Out of gamut for printing: click for the nearest printable color	Колір поза колірним охопленням друку: клацніть, щоб вибрати найближчий колір, придатний для друку
 	Point Sample	Точкова вибірка
 	Sample Size:	Розмір вибірки:
 	Show Sampling Ring	Показувати кільце вибірки
@@ -3948,7 +3945,7 @@ curves	Smooth	Згладити
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Не вмикайте також дзеркальне відображення в параметрах друку: два відображення скасовують одне одного.
 	Print Settings…	Параметри друку…
-	Remember to turn off the printer's own colour management in Print Settings…	Не забудьте вимкнути керування кольором самого принтера в параметрах друку…
+	Remember to turn off the printer's own color management in Print Settings…	Не забудьте вимкнути керування кольором самого принтера в параметрах друку…
 	Sent to {printer}	Надіслано на {printer}
 	set in Print Settings…	задається в параметрах друку…
 	ICO is limited to 256 × 256 pixels	ICO обмежено розміром 256 × 256 пікселів
@@ -4112,12 +4109,12 @@ curves	Smooth	Згладити
 	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Щоб продовжити, потрібно растеризувати цей смартоб’єкт. Після цього його вміст більше не можна буде редагувати. Растеризувати смартоб’єкт?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Щоб продовжити, потрібно растеризувати цей шар заливки. Після цього його заливку більше не можна буде редагувати. Растеризувати шар?
 	Demosaic	Демозаїк
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Як відновлюється мозаїка кольорового фільтра камери. Застосовується під час відкриття файлу; попередній перегляд показує метод, з яким файл було відкрито.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Як відновлюється мозаїка кольорового фільтра камери. Застосовується під час відкриття файлу; попередній перегляд показує метод, з яким файл було відкрито.
 	AHD (adaptive homogeneity)	AHD (адаптивна однорідність)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Хіракава–Паркс: найчистіші краї й найменше кольорової облямівки, найповільніший.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Інтерполяція з корекцією градієнта: різка й швидка, з невеликою кольоровою облямівкою на дрібних деталях.
-	The fastest and the softest, with colour fringing on fine detail.	Найшвидший і найм'якший, з кольоровою облямівкою на дрібних деталях.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Хіракава–Паркс: найчистіші краї й найменше кольорової облямівки, найповільніший.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Інтерполяція з корекцією градієнта: різка й швидка, з невеликою кольоровою облямівкою на дрібних деталях.
+	The fastest and the softest, with color fringing on fine detail.	Найшвидший і найм'якший, з кольоровою облямівкою на дрібних деталях.
 	Move Up	Перемістити вгору
 	Move Down	Перемістити вниз
 	Memory Usage	Використання пам’яті

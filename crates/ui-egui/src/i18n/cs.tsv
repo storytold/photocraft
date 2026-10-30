@@ -533,7 +533,6 @@
 	Deselect	Zrušit výběr
 	Reselect	Znovu vybrat
 	Inverse	Invertovat výběr
-	Inverse Selection	Invertovat výběr
 	Similar	Podobné
 	Color Range…	Rozsah barev…
 	Focus Area…	Oblast zaostření…
@@ -654,8 +653,8 @@
 	Legacy Macintosh RGB	Starší Macintosh RGB
 	Internet Standard RGB	Internetový standard RGB
 	Monitor RGB	RGB monitoru
-	Color Blindness — Protanopia-type	Barvoslepost — protanopie
-	Color Blindness — Deuteranopia-type	Barvoslepost — deuteranopie
+	Color Blindness - Protanopia-type	Barvoslepost - protanopie
+	Color Blindness - Deuteranopia-type	Barvoslepost - deuteranopie
 	Zoom In	Přiblížit
 	Zoom Out	Oddálit
 	Fit on Screen	Přizpůsobit obrazovce
@@ -975,7 +974,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	Kliknutím přidáte bod · odstraníte tažením ven, {key}+kliknutím nebo klávesou Delete
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	Kliknutím použijete, {key}+kliknutím zrušíte přepsání, dvojklikem otevřete možnosti stylu
 	Click to edit the gradient	Kliknutím upravíte přechod
-	Click to restore the current colour	Kliknutím obnovíte aktuální barvu
+	Click to restore the current color	Kliknutím obnovíte aktuální barvu
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Kliknutím přiblížíte  ·  {key}+kliknutím oddálíte  ·  tažením doprava/doleva přiblížíte/oddálíte
 	Click with the Note tool to add a note.	Poznámku přidáte kliknutím nástrojem poznámka.
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Kliknutí: roh · tažení: hladký bod · kliknutí na první bod: uzavřít · {key} dokončit · Esc zrušit
@@ -1058,7 +1057,7 @@
 	Darks	Tmavé tóny
 	Data Sets	Datové sady
 	Default	Výchozí
-	Default colours (D)	Výchozí barvy (D)
+	Default Foreground and Background Colors (D)	Výchozí barvy popředí a pozadí (D)
 	Default printer	Výchozí tiskárna
 	Default restored.	Výchozí hodnota obnovena.
 	Define	Definovat
@@ -1344,7 +1343,7 @@
 	Opacity Jitter	Kolísání krytí
 	Opacity:	Krytí:
 	Open a document to define variables.	Chcete-li definovat proměnné, otevřete dokument.
-	Open a document to select a colour range.	Chcete-li vybrat rozsah barev, otevřete dokument.
+	Open a document to select a color range.	Chcete-li vybrat rozsah barev, otevřete dokument.
 	Open a document to use the timeline.	Chcete-li použít časovou osu, otevřete dokument.
 	Optical	Optické
 	Optimized	Optimalizovaný
@@ -1420,7 +1419,6 @@
 	Purity	Čistota
 	Quality	Kvalita
 	Quick Actions	Rychlé akce
-	Quick Export As PNG	Rychlý export do PNG
 	Radial Gradient	Radiální přechod
 	Radius	Poloměr
 	Radius:	Poloměr:
@@ -1563,7 +1561,7 @@
 	Subtract from Sample	Odebrat ze vzorku
 	Subtract from selection  ({key})	Odebrat z výběru  ({key})
 	Suggestions:	Návrhy:
-	Swap colours (X)	Prohodit barvy (X)
+	Switch Foreground and Background Colors (X)	Prohodit barvy popředí a pozadí (X)
 	Swaps height and width	Prohodí výšku a šířku
 	Switch between free transform and warp modes	Přepnout mezi volnou transformací a deformací
 	Switch theme	Přepnout motiv
@@ -1670,7 +1668,7 @@
 	Choke	Stažení
 	Classic	Klasický
 	Click to add text	Kliknutím přidáte text
-	Click to fill similar colours	Kliknutím vyplníte podobné barvy
+	Click to fill similar colors	Kliknutím vyplníte podobné barvy
 	Clone Stamp Tool	Nástroj klonovací razítko
 	Color Burn	Ztmavit barvy
 	Color Dodge	Zesvětlit barvy
@@ -1829,7 +1827,7 @@
 	Rectangular Marquee Tool	Nástroj obdélníkový výběr
 	Reds	Červené
 	Reflected	Zrcadlený
-	Sample: foreground colour	Vzorek: barva popředí
+	Sample: foreground color	Vzorek: barva popředí
 	Sampled Colors	Vzorkované barvy
 	Satin	Satén
 	Save Pixel Aspect Ratio	Uložit poměr stran pixelu
@@ -1867,7 +1865,7 @@
 	Transfer	Přenos
 	Triangle Tool	Nástroj trojúhelník
 	Unsaved changes	Neuložené změny
-	Uses the foreground and background colours.	Používá barvy popředí a pozadí.
+	Uses the foreground and background colors.	Používá barvy popředí a pozadí.
 	Web	Web
 	Web Large	Web velký
 	Web Minimum	Web minimální
@@ -2143,7 +2141,7 @@
 	Graphics	Grafika
 	Reset GPU Backend	Obnovit grafický backend
 	Applies at next launch.	Projeví se při příštím spuštění.
-	Click to sample the foreground colour  ·  {key}-click for background	Kliknutím nasnímáte barvu popředí  ·  {key}+kliknutím barvu pozadí
+	Click to sample the foreground color  ·  {key}-click for background	Kliknutím nasnímáte barvu popředí  ·  {key}+kliknutím barvu pozadí
 	{key}-click to set the source	{key}+kliknutím nastavíte zdroj
 	{key} to subtract	{key} pro odebrání
 	Clone source {n} ({key}-click with Clone Stamp to set)	Zdroj klonování {n} (nastavíte {key}+kliknutím klonovacím razítkem)
@@ -2205,7 +2203,7 @@
 	Gradient Options	Možnosti přechodu
 	Align with layer	Zarovnat s vrstvou
 	Reset Alignment	Obnovit zarovnání
-	Centre the gradient (offset 0, 0)	Vystředit přechod (posun 0, 0)
+	Center the gradient (offset 0, 0)	Vystředit přechod (posun 0, 0)
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	Editor přechodů
 	Gradient picker	Výběr přechodu
@@ -2239,7 +2237,7 @@
 	Alt-click to define a source point to clone from	Kliknutím s klávesou Alt určete zdrojový bod pro klonování
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Není k dispozici žádná cesta, ze které by šlo vytvořit výběr: nakreslete ji nástrojem Pero nebo ji vyberte na panelu Cesty.
 	Cancel opening	Zrušit otevírání
-	Cancelled opening {name}	Otevírání {name} zrušeno
+	Canceled opening {name}	Otevírání {name} zrušeno
 	Damaged Photoshop document	Poškozený dokument Photoshopu
 	The document “{name}” may be damaged.	Dokument „{name}“ může být poškozený.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Některé vrstvy, pixely nebo masky nebylo možné načíst. Chcete pokračovat v otevírání?
@@ -2248,7 +2246,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Dokument „{name}“ má vložený barevný profil, který neodpovídá aktuálnímu pracovnímu prostoru barev {mode}.
 	Working: {working}	Pracovní: {working}
 	Developing {name}	Vyvolávání {name}
-	Cancelled {label}	Zrušeno: {label}
+	Canceled {label}	Zrušeno: {label}
 	Esc to cancel	Esc pro zrušení
 	Opened {name}	Otevřeno: {name}
 	Opening {name}	Otevírání {name}
@@ -2256,7 +2254,7 @@
 	Saving {name}	Ukládání {name}
 	Saving {percent}	Ukládání {percent}
 	A save to {name} is still running; try again when it finishes	Ukládání do {name} stále probíhá; zkuste to znovu, až skončí
-	{label} is writing the file and can no longer be cancelled	{label} zapisuje soubor a už ho nelze zrušit
+	{label} is writing the file and can no longer be canceled	{label} zapisuje soubor a už ho nelze zrušit
 	Opening {name}…	Otevírání {name}…
 	Opening…	Otevírání…
 	Reading…	Načítání…
@@ -2346,7 +2344,7 @@ cameraRaw	Color	Barvy
 	Discard Layers and Save a Copy	Zahodit vrstvy a uložit kopii
 	Don't show again	Příště nezobrazovat
 	Save failed: {error}	Uložení se nezdařilo: {error}
-	Save cancelled	Ukládání zrušeno
+	Save canceled	Ukládání zrušeno
 	Couldn't place {name}: {error}	Nelze umístit {name}: {error}
 	Magnetic Lasso Tool	Nástroj magnetické laso
 	Frequency	Frekvence
@@ -2495,7 +2493,7 @@ fontWeight	Italic	Kurzíva
 	Rotate View	Otočit zobrazení
 	Rotate View Tool	Nástroj otočení zobrazení
 	Reset View	Obnovit zobrazení
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Tažením kolem středu otočíte zobrazení  ·  Shift omezí na 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Tažením kolem středu otočíte zobrazení  ·  Shift omezí na 15°
 
 # Painting symmetry presets.
 	Dual Axis	Dvojitá osa
@@ -2516,8 +2514,8 @@ fontWeight	Italic	Kurzíva
 	Show Sampling Ring	Zobrazit vzorkovací kroužek
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	Mimo gamut tisku: klepnutím zvolíte nejbližší tisknutelnou barvu
-	Not a web colour: click for the nearest web colour	Není webová barva: klepnutím zvolíte nejbližší webovou barvu
+	Out of gamut for printing: click for the nearest printable color	Mimo gamut tisku: klepnutím zvolíte nejbližší tisknutelnou barvu
+	Not a web color: click for the nearest web color	Není webová barva: klepnutím zvolíte nejbližší webovou barvu
 	Color to Alpha…	Barva na alfu…
 	Transparency Threshold	Práh průhlednosti
 	Opacity Threshold	Práh krytí
@@ -2614,7 +2612,7 @@ fontWeight	Italic	Kurzíva
 	How often fastening points are placed by themselves	Jak často se kotevní body umisťují samy
 	Scrubby Zoom	Plynulá lupa
 	{mode} Color · {bits} bit	Barva {mode} · {bits} bitů
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Tažením nakreslete ořez · tažením uvnitř posunete · okraje mění velikost ({ratio} poměr, {centre} střed) · Mezerník posouvá při kreslení · šipky posunují · X prohodí orientaci · {commit} potvrdí · Esc zruší
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Tažením nakreslete ořez · tažením uvnitř posunete · okraje mění velikost ({ratio} poměr, {centre} střed) · Mezerník posouvá při kreslení · šipky posunují · X prohodí orientaci · {commit} potvrdí · Esc zruší
 	Appearance Settings…	Nastavení vzhledu…
 	Add to favorites	Přidat do oblíbených
 	Remove from favorites	Odebrat z oblíbených
@@ -3860,7 +3858,7 @@ navigator	Zoom	Zvětšení
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nezapínejte současně zrcadlení v nastavení tisku: obě převrácení se navzájem zruší.
 	Print Settings…	Nastavení tisku…
-	Remember to turn off the printer's own colour management in Print Settings…	Nezapomeňte v nastavení tisku vypnout vlastní správu barev tiskárny…
+	Remember to turn off the printer's own color management in Print Settings…	Nezapomeňte v nastavení tisku vypnout vlastní správu barev tiskárny…
 	Sent to {printer}	Odesláno do {printer}
 	set in Print Settings…	nastavuje se v nastavení tisku…
 	ICO is limited to 256 × 256 pixels	ICO je omezen na 256 × 256 pixelů
@@ -4009,12 +4007,12 @@ navigator	Zoom	Zvětšení
 	Decrease Brush Hardness	Snížit tvrdost štětce
 	Increase Brush Hardness	Zvýšit tvrdost štětce
 	Demosaic	Demozaikování
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Jak se doplňuje mozaika barevného filtru fotoaparátu. Použije se při otevření souboru; náhled ukazuje metodu, se kterou byl otevřen.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Jak se doplňuje mozaika barevného filtru fotoaparátu. Použije se při otevření souboru; náhled ukazuje metodu, se kterou byl otevřen.
 	AHD (adaptive homogeneity)	AHD (adaptivní homogenita)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: nejčistší hrany a nejméně barevných lemů, nejpomalejší.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolace s korekcí gradientu: ostrá a rychlá, s mírnými barevnými lemy v jemných detailech.
-	The fastest and the softest, with colour fringing on fine detail.	Nejrychlejší a nejměkčí, s barevnými lemy v jemných detailech.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: nejčistší hrany a nejméně barevných lemů, nejpomalejší.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Interpolace s korekcí gradientu: ostrá a rychlá, s mírnými barevnými lemy v jemných detailech.
+	The fastest and the softest, with color fringing on fine detail.	Nejrychlejší a nejměkčí, s barevnými lemy v jemných detailech.
 	“{name}” already exists. Replace it?	„{name}“ již existuje. Nahradit?
 	The name in the save dialog was “{name}”.	Název v dialogu ukládání byl „{name}“.
 

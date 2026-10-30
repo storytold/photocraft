@@ -518,7 +518,6 @@
 	Deselect	Deselecteren
 	Reselect	Opnieuw selecteren
 	Inverse	Omkeren
-	Inverse Selection	Selectie omkeren
 	Similar	Vergelijkbaar
 	Color Range…	Kleurbereik…
 	Focus Area…	Scherptegebied…
@@ -638,8 +637,8 @@
 	Legacy Macintosh RGB	Verouderde Macintosh RGB
 	Internet Standard RGB	Internetstandaard RGB
 	Monitor RGB	Monitor-RGB
-	Color Blindness — Protanopia-type	Kleurenblindheid — type protanopie
-	Color Blindness — Deuteranopia-type	Kleurenblindheid — type deuteranopie
+	Color Blindness - Protanopia-type	Kleurenblindheid - type protanopie
+	Color Blindness - Deuteranopia-type	Kleurenblindheid - type deuteranopie
 	Zoom In	Inzoomen
 	Zoom Out	Uitzoomen
 	Fit on Screen	Passend in scherm
@@ -942,7 +941,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	Klik om een punt toe te voegen · sleep weg, {key}-klik of Delete om te verwijderen
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	Klik om toe te passen, {key}-klik om overschrijvingen te wissen, dubbelklik voor stijlopties
 	Click to edit the gradient	Klik om het verloop te bewerken
-	Click to restore the current colour	Klik om de huidige kleur te herstellen
+	Click to restore the current color	Klik om de huidige kleur te herstellen
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Klik om in te zoomen  ·  {key}-klik om uit te zoomen  ·  sleep naar rechts/links om in/uit te zoomen
 	Click with the Note tool to add a note.	Klik met het notitiegereedschap om een notitie toe te voegen.
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Klik: hoek · Slepen: vloeiend · Klik op eerste punt: sluiten · {key} voltooien · Esc annuleren
@@ -1027,7 +1026,7 @@
 	Darks	Donkere tinten
 	Data Sets	Gegevenssets
 	Default	Standaard
-	Default colours (D)	Standaardkleuren (D)
+	Default Foreground and Background Colors (D)	Standaard voorgrond- en achtergrondkleur (D)
 	Default printer	Standaardprinter
 	Default restored.	Standaard hersteld.
 	Define	Definiëren
@@ -1313,7 +1312,7 @@
 	Opacity Jitter	Dekkingsvariatie
 	Opacity:	Dekking:
 	Open a document to define variables.	Open een document om variabelen te definiëren.
-	Open a document to select a colour range.	Open een document om een kleurbereik te selecteren.
+	Open a document to select a color range.	Open een document om een kleurbereik te selecteren.
 	Open a document to use the timeline.	Open een document om de tijdlijn te gebruiken.
 	Optical	Optisch
 	Optimized	Geoptimaliseerd
@@ -1389,7 +1388,6 @@
 	Purity	Zuiverheid
 	Quality	Kwaliteit
 	Quick Actions	Snelle acties
-	Quick Export As PNG	Snel exporteren als PNG
 	Radial Gradient	Radiaal verloop
 	Radius	Straal
 	Radius:	Straal:
@@ -1528,7 +1526,7 @@
 	Subtract from Sample	Van monster aftrekken
 	Subtract from selection  ({key})	Van selectie aftrekken  ({key})
 	Suggestions:	Suggesties:
-	Swap colours (X)	Kleuren omwisselen (X)
+	Switch Foreground and Background Colors (X)	Voorgrond- en achtergrondkleur omwisselen (X)
 	Swaps height and width	Wisselt hoogte en breedte om
 	Switch between free transform and warp modes	Wisselen tussen vrije transformatie en verbuigen
 	Switch theme	Thema wisselen
@@ -1630,7 +1628,7 @@
 	Choke	Inkrimpen
 	Classic	Klassiek
 	Click to add text	Klik om tekst toe te voegen
-	Click to fill similar colours	Klik om vergelijkbare kleuren te vullen
+	Click to fill similar colors	Klik om vergelijkbare kleuren te vullen
 	Clone Stamp Tool	Kloonstempelgereedschap
 	Color Burn	Kleur doordrukken
 	Color Dodge	Kleur tegenhouden
@@ -1789,7 +1787,7 @@
 	Rectangular Marquee Tool	Rechthoekig selectiekader
 	Reds	Roodtinten
 	Reflected	Gespiegeld
-	Sample: foreground colour	Monster: voorgrondkleur
+	Sample: foreground color	Monster: voorgrondkleur
 	Sampled Colors	Bemonsterde kleuren
 	Satin	Satijn
 	Save Pixel Aspect Ratio	Pixelverhouding opslaan
@@ -1827,7 +1825,6 @@
 	Transfer	Overdracht
 	Triangle Tool	Driehoekgereedschap
 	Unsaved changes	Niet-opgeslagen wijzigingen
-	Uses the foreground and background colours.	Gebruikt de voorgrond- en achtergrondkleur.
 	Web	Web
 	Web Large	Web groot
 	Web Minimum	Web minimum
@@ -2093,7 +2090,7 @@
 	Graphics	Grafisch
 	Reset GPU Backend	GPU-backend herstellen
 	Applies at next launch.	Wordt toegepast bij de volgende start.
-	Click to sample the foreground colour  ·  {key}-click for background	Klik om de voorgrondkleur te bemonsteren  ·  {key}-klik voor achtergrond
+	Click to sample the foreground color  ·  {key}-click for background	Klik om de voorgrondkleur te bemonsteren  ·  {key}-klik voor achtergrond
 	{key}-click to set the source	{key}-klik om de bron in te stellen
 	{key} to subtract	{key} om af te trekken
 	Clone source {n} ({key}-click with Clone Stamp to set)	Kloonbron {n} ({key}-klik met kloonstempel om in te stellen)
@@ -2152,7 +2149,7 @@
 	Gradient Options	Verloopopties
 	Align with layer	Uitlijnen met laag
 	Reset Alignment	Uitlijning herstellen
-	Centre the gradient (offset 0, 0)	Het verloop centreren (verschuiving 0, 0)
+	Center the gradient (offset 0, 0)	Het verloop centreren (verschuiving 0, 0)
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	Verloopeditor
 	Gradient picker	Verloopkiezer
@@ -2187,7 +2184,7 @@
 	Alt-click to define a source point to clone from	Alt-klik om een bronpunt te definiëren om van te klonen
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Geen pad om een selectie van te maken: teken er een met het pengereedschap of selecteer er een in het paneel Paden.
 	Cancel opening	Openen annuleren
-	Cancelled opening {name}	Openen van {name} geannuleerd
+	Canceled opening {name}	Openen van {name} geannuleerd
 	Damaged Photoshop document	Beschadigd Photoshop-document
 	The document “{name}” may be damaged.	Het document ‘{name}’ is mogelijk beschadigd.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Sommige lagen, pixels of maskers konden niet worden gelezen. Wilt u doorgaan met openen?
@@ -2196,7 +2193,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Het document “{name}” heeft een ingesloten kleurprofiel dat niet overeenkomt met de huidige {mode}-werkruimte.
 	Working: {working}	Werkruimte: {working}
 	Developing {name}	{name} wordt ontwikkeld
-	Cancelled {label}	{label} geannuleerd
+	Canceled {label}	{label} geannuleerd
 	Esc to cancel	Esc om te annuleren
 	Opened {name}	{name} geopend
 	Opening {name}	{name} openen
@@ -2204,7 +2201,7 @@
 	Saving {name}	{name} opslaan
 	Saving {percent}	Opslaan {percent}
 	A save to {name} is still running; try again when it finishes	Er wordt nog opgeslagen naar {name}; probeer het opnieuw zodra dat klaar is
-	{label} is writing the file and can no longer be cancelled	{label} schrijft het bestand en kan niet meer worden geannuleerd
+	{label} is writing the file and can no longer be canceled	{label} schrijft het bestand en kan niet meer worden geannuleerd
 	Opening {name}…	{name} openen…
 	Opening…	Openen…
 	Reading…	Lezen…
@@ -2265,7 +2262,7 @@
 	Pixel	Pixel
 	Adjustment	Aanpassing
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Slepen (lasso) of punten klikken (veelhoek) · {add} toevoegen · {sub} aftrekken
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Sleep een bijsnijkader · sleep binnenin om te verplaatsen · randen wijzigen formaat ({ratio} verhouding, {centre} midden) · Spatie verplaatst tijdens tekenen · pijltjes verschuiven · X wisselt oriëntatie · {commit} past toe · Esc annuleert
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Sleep een bijsnijkader · sleep binnenin om te verplaatsen · randen wijzigen formaat ({ratio} verhouding, {centre} midden) · Spatie verplaatst tijdens tekenen · pijltjes verschuiven · X wisselt oriëntatie · {commit} past toe · Esc annuleert
 	{mode} Color · {bits} bit	{mode}-kleur · {bits} bit
 	Scrubby Zoom	Sleepzoom
 	Auto Erase	Automatisch gummen
@@ -2359,7 +2356,7 @@
 	Discard Layers and Save a Copy	Lagen negeren en kopie opslaan
 	Don't show again	Niet meer tonen
 	Save failed: {error}	Opslaan mislukt: {error}
-	Save cancelled	Opslaan geannuleerd
+	Save canceled	Opslaan geannuleerd
 	Style {name} saved	Stijl {name} opgeslagen
 	Make Default	Als standaard instellen
 	Reset to Default	Terugzetten naar standaard
@@ -2493,7 +2490,7 @@ fontWeight	Italic	Cursief
 	Rotate View	Weergave roteren
 	Rotate View Tool	Weergave-roteergereedschap
 	Reset View	Weergave herstellen
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Sleep rond het midden om de weergave te roteren  ·  Shift beperkt tot 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Sleep rond het midden om de weergave te roteren  ·  Shift beperkt tot 15°
 @id	select.all	Alles selecteren
 @id	edit.stroke	Omlijnen…
 @id	edit.transform.scale	Schalen
@@ -3667,8 +3664,8 @@ cameraRaw	Whites	Witten
 @id	filter.sharpen.sharpen	Verscherpen
 	Good	Goed
 	Best	Beste
-	Out of gamut for printing: click for the nearest printable colour	Buiten afdrukbereik: klik voor de dichtstbijzijnde afdrukbare kleur
-	Not a web colour: click for the nearest web colour	Geen webkleur: klik voor de dichtstbijzijnde webkleur
+	Out of gamut for printing: click for the nearest printable color	Buiten afdrukbereik: klik voor de dichtstbijzijnde afdrukbare kleur
+	Not a web color: click for the nearest web color	Geen webkleur: klik voor de dichtstbijzijnde webkleur
 	Adjustment Properties	Eigenschappen aanpassing
 	Brush Stroke	Penseelstreek
 	Default Foreground and Background Colors	Standaard voorgrond- en achtergrondkleur
@@ -4008,7 +4005,7 @@ curves	Smooth	Vloeiend maken
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Schakel niet ook Spiegelbeeld in bij de afdrukinstellingen: de twee spiegelingen heffen elkaar op.
 	Print Settings…	Afdrukinstellingen…
-	Remember to turn off the printer's own colour management in Print Settings…	Vergeet niet het eigen kleurbeheer van de printer uit te schakelen in de afdrukinstellingen…
+	Remember to turn off the printer's own color management in Print Settings…	Vergeet niet het eigen kleurbeheer van de printer uit te schakelen in de afdrukinstellingen…
 	Sent to {printer}	Verzonden naar {printer}
 	set in Print Settings…	instellen in de afdrukinstellingen…
 	ICO is limited to 256 × 256 pixels	ICO is beperkt tot 256 × 256 pixels
@@ -4156,12 +4153,12 @@ curves	Smooth	Vloeiend maken
 	Decrease Brush Hardness	Penseelhardheid verlagen
 	Increase Brush Hardness	Penseelhardheid verhogen
 	Demosaic	Demosaicing
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hoe het kleurfiltermozaïek van de camera wordt ingevuld. Wordt toegepast bij het openen van het bestand; de voorvertoning toont de methode waarmee het is geopend.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Hoe het kleurfiltermozaïek van de camera wordt ingevuld. Wordt toegepast bij het openen van het bestand; de voorvertoning toont de methode waarmee het is geopend.
 	AHD (adaptive homogeneity)	AHD (adaptieve homogeniteit)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: de schoonste randen en de minste kleurranden, het traagst.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Gradiëntgecorrigeerde interpolatie: scherp en snel, met wat kleurranden in fijne details.
-	The fastest and the softest, with colour fringing on fine detail.	Het snelst en het zachtst, met kleurranden in fijne details.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: de schoonste randen en de minste kleurranden, het traagst.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Gradiëntgecorrigeerde interpolatie: scherp en snel, met wat kleurranden in fijne details.
+	The fastest and the softest, with color fringing on fine detail.	Het snelst en het zachtst, met kleurranden in fijne details.
 	“{name}” already exists. Replace it?	“{name}” bestaat al. Vervangen?
 	The name in the save dialog was “{name}”.	De naam in het venster Opslaan was “{name}”.
 	Move Up	Omhoog

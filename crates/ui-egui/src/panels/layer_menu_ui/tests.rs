@@ -394,7 +394,7 @@ fn multi_selection_menu_greys_what_acts_on_one_layer() {
         assert!(h.get_by_label(label).accesskit_node().is_disabled(), "{label} works on one layer only");
     }
     for label in [
-        "Quick Export As PNG",
+        "Quick Export as PNG",
         "Export As…",
         "Add Layer Mask",
         "Duplicate Layers…",

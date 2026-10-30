@@ -771,7 +771,7 @@
 	Current Layer	Τρέχον επίπεδο
 	Current Size	Τρέχον μέγεθος
 	Custom Shapes	Προσαρμοσμένα σχήματα
-	Default colours (D)	Προεπιλεγμένα χρώματα (D)
+	Default Foreground and Background Colors (D)	Προεπιλεγμένα χρώματα (D)
 	Default printer	Προεπιλεγμένος εκτυπωτής
 	Default restored.	Έγινε επαναφορά των προεπιλογών.
 	Define at least one variable first.	Ορίστε πρώτα τουλάχιστον μία μεταβλητή.
@@ -797,7 +797,7 @@
 	Drop an image or PSD anywhere to open it.	Σύρετε μια εικόνα ή ένα PSD εδώ για να το ανοίξετε.
 	Native file drag-and-drop is unavailable	Η μεταφορά και απόθεση αρχείων δεν είναι διαθέσιμη
 	Open a document to define variables.	Ανοίξτε ένα έγγραφο για να ορίσετε μεταβλητές.
-	Open a document to select a colour range.	Ανοίξτε ένα έγγραφο για να επιλέξετε εύρος χρωμάτων.
+	Open a document to select a color range.	Ανοίξτε ένα έγγραφο για να επιλέξετε εύρος χρωμάτων.
 	Open a document to use the timeline.	Ανοίξτε ένα έγγραφο για να χρησιμοποιήσετε τη χρονογραμμή.
 	Option-click to define a source point to clone from	Πατήστε Option και κάντε κλικ για να ορίσετε σημείο προέλευσης κλωνοποίησης
 	Output Channel:	Κανάλι εξόδου:
@@ -832,7 +832,6 @@
 	Protect Foreground Color	Προστασία χρώματος προσκηνίου
 	Protect Tones	Προστασία τονικών τιμών
 	Quick Actions	Γρήγορες ενέργειες
-	Quick Export As PNG	Γρήγορη εξαγωγή ως PNG
 	Radial Gradient	Ακτινική διαβάθμιση
 	Paints from the document's opening state	Ζωγραφίζει χρησιμοποιώντας την αρχική κατάσταση του εγγράφου
 	PhotoCraft website	Ιστότοπος PhotoCraft
@@ -842,7 +841,7 @@
 	Portrait, 5 x 7	Κατακόρυφο, 5 × 7
 	Protect Texture	Προστασία υφής
 	Recent	Πρόσφατα
-	Sample: foreground colour	Δείγμα: χρώμα προσκηνίου
+	Sample: foreground color	Δείγμα: χρώμα προσκηνίου
 	Sampled Colors	Χρώματα δείγματος
 	Save Pixel Aspect Ratio	Διατήρηση αναλογίας εικονοστοιχείων
 	Scratch Sizes	Μεγέθη πρόχειρης μνήμης
@@ -1142,7 +1141,7 @@
 	Discard Layers and Save a Copy	Απόρριψη επιπέδων και αποθήκευση αντιγράφου
 	Don't show again	Να μην εμφανιστεί ξανά
 	Save failed: {error}	Αποτυχία αποθήκευσης: {error}
-	Save cancelled	Η αποθήκευση ακυρώθηκε
+	Save canceled	Η αποθήκευση ακυρώθηκε
 	Use tablet pressure to change pen width	Χρησιμοποιήστε την πίεση της γραφίδας για να αλλάξετε το πλάτος της
 	Date and Time	Ημερομηνία και ώρα
 	Scale Units	Μονάδες κλίμακας
@@ -1599,7 +1598,7 @@
 	Gradient Options	Επιλογές διαβάθμισης
 	Align with layer	Στοίχιση με το επίπεδο
 	Reset Alignment	Επαναφορά στοίχισης
-	Centre the gradient (offset 0, 0)	Κεντράρισμα διαβάθμισης (μετατόπιση 0, 0)
+	Center the gradient (offset 0, 0)	Κεντράρισμα διαβάθμισης (μετατόπιση 0, 0)
 	Refine Strokes	Πινελιές βελτίωσης
 	Edits	Επεξεργασίες
 # Gradient Editor window, opened from the options bar's gradient swatch.
@@ -1630,7 +1629,7 @@
 	Alt-click to define a source point to clone from	Alt-κλικ για ορισμό σημείου προέλευσης κλωνοποίησης
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Δεν υπάρχει διαδρομή για δημιουργία επιλογής: σχεδιάστε μία με το εργαλείο Πένα (Pen Tool) ή επιλέξτε μία στο πλαίσιο Διαδρομές.
 	Cancel opening	Ακύρωση ανοίγματος
-	Cancelled opening {name}	Ακυρώθηκε το άνοιγμα του {name}
+	Canceled opening {name}	Ακυρώθηκε το άνοιγμα του {name}
 	Damaged Photoshop document	Κατεστραμμένο έγγραφο Photoshop
 	The document “{name}” may be damaged.	Το έγγραφο «{name}» μπορεί να είναι κατεστραμμένο.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Δεν ήταν δυνατή η ανάγνωση ορισμένων επιπέδων, εικονοστοιχείων ή μασκών. Θέλετε να συνεχίσετε το άνοιγμα;
@@ -1638,7 +1637,7 @@
 	The document “{name}” does not have an embedded {mode} profile.	Το έγγραφο «{name}» δεν έχει ενσωματωμένο προφίλ {mode}.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Το έγγραφο «{name}» έχει ενσωματωμένο χρωματικό προφίλ που δεν ταιριάζει με τον τρέχοντα χώρο εργασίας {mode}.
 	Working: {working}	Χώρος εργασίας: {working}
-	Cancelled {label}	Ακυρώθηκε: {label}
+	Canceled {label}	Ακυρώθηκε: {label}
 	Esc to cancel	Esc για ακύρωση
 	Opened {name}	Άνοιξε το {name}
 	Opening {name}	Άνοιγμα του {name}
@@ -1646,7 +1645,7 @@
 	Saving {name}	Αποθήκευση του {name}
 	Saving {percent}	Αποθήκευση {percent}
 	A save to {name} is still running; try again when it finishes	Η αποθήκευση στο {name} βρίσκεται ακόμη σε εξέλιξη· δοκιμάστε ξανά όταν ολοκληρωθεί
-	{label} is writing the file and can no longer be cancelled	{label}: γίνεται εγγραφή του αρχείου και δεν μπορεί πλέον να ακυρωθεί
+	{label} is writing the file and can no longer be canceled	{label}: γίνεται εγγραφή του αρχείου και δεν μπορεί πλέον να ακυρωθεί
 	Opening {name}…	Άνοιγμα του {name}…
 	Opening…	Άνοιγμα…
 	Reading…	Ανάγνωση…
@@ -2213,9 +2212,9 @@
 	Click to add text	Κάντε κλικ για προσθήκη κειμένου
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	Κλικ για εφαρμογή, {key}-κλικ για απαλοιφή αλλαγών, διπλό κλικ για επιλογές στυλ
 	Click to edit the gradient	Κάντε κλικ για επεξεργασία της διαβάθμισης
-	Click to fill similar colours	Κάντε κλικ για γέμισμα παρόμοιων χρωμάτων
-	Click to restore the current colour	Κάντε κλικ για επαναφορά του τρέχοντος χρώματος
-	Click to sample the foreground colour  ·  {key}-click for background	Κλικ για δειγματοληψία χρώματος προσκηνίου · {key}-κλικ για φόντο
+	Click to fill similar colors	Κάντε κλικ για γέμισμα παρόμοιων χρωμάτων
+	Click to restore the current color	Κάντε κλικ για επαναφορά του τρέχοντος χρώματος
+	Click to sample the foreground color  ·  {key}-click for background	Κλικ για δειγματοληψία χρώματος προσκηνίου · {key}-κλικ για φόντο
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Κλικ για μεγέθυνση · {key}-κλικ για σμίκρυνση · σύρσιμο δεξιά/αριστερά για αλλαγή μεγέθυνσης
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Κλικ: γωνία · Σύρσιμο: εξομάλυνση · Κλικ στο πρώτο σημείο: κλείσιμο · {key}: τέλος · Esc: ακύρωση
 	Click: corner · Drag: smooth · {alt}-drag: break handle · Click or drag first point: close · {key} finish · Esc cancel	Κλικ: γωνία · Σύρσιμο: εξομάλυνση · {alt}+σύρσιμο: διάσπαση λαβής · Κλικ ή σύρσιμο στο πρώτο σημείο: κλείσιμο · {key}: τέλος · Esc: ακύρωση
@@ -2232,8 +2231,8 @@
 	Collapse	Σύμπτυξη
 	Collapse group  ({key}-click: all groups)	Σύμπτυξη ομάδας  ({key}-κλικ: όλες οι ομάδες)
 	Color & Swatches	Χρώμα και δείγματα
-	Color Blindness — Deuteranopia-type	Αχρωματοψία — τύπος δευτερανωπίας
-	Color Blindness — Protanopia-type	Αχρωματοψία — τύπος πρωτανωπίας
+	Color Blindness - Deuteranopia-type	Αχρωματοψία - τύπος δευτερανωπίας
+	Color Blindness - Protanopia-type	Αχρωματοψία - τύπος πρωτανωπίας
 	Color Decontaminate	Απομάκρυνση χρωματικής επιμόλυνσης
 	Color Dynamics	Δυναμική χρώματος
 	Color Halftone	Χρωματικός ημιτονισμός
@@ -2369,8 +2368,8 @@
 	Dots	Κουκκίδες
 	Down	Κάτω
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Σύρετε για λάσο ή κάντε κλικ για πολυγωνική επιλογή · {add} προσθήκη · {sub} αφαίρεση
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Σύρετε για περιοχή περικοπής · σύρετε στο εσωτερικό για μετακίνηση · από τα άκρα αλλάζει μέγεθος ({ratio} αναλογία, {centre} κέντρο) · Space για μετακίνηση κατά τη σχεδίαση · βέλη για μετακίνηση · X εναλλαγή προσανατολισμού · {commit} εφαρμογή · Esc ακύρωση
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Σύρετε γύρω από το κέντρο για να περιστρέψετε την προβολή  ·  Shift περιορίζει στις 15°
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Σύρετε για περιοχή περικοπής · σύρετε στο εσωτερικό για μετακίνηση · από τα άκρα αλλάζει μέγεθος ({ratio} αναλογία, {centre} κέντρο) · Space για μετακίνηση κατά τη σχεδίαση · βέλη για μετακίνηση · X εναλλαγή προσανατολισμού · {commit} εφαρμογή · Esc ακύρωση
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Σύρετε γύρω από το κέντρο για να περιστρέψετε την προβολή  ·  Shift περιορίζει στις 15°
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Σύρετε πάνω στην εικόνα για προσθήκη περιορισμού· Shift για οριζόντιο/κατακόρυφο· δεξί κλικ σε έναν περιορισμό για αλλαγή ή διαγραφή.
 	Drag or click polygon points · hold Alt during lasso for straight segments · {add} add · {sub} before drawing subtracts	Σύρετε ή κάντε κλικ για πολυγωνικά σημεία · κρατήστε Alt κατά το λάσο για ευθείες · {add} προσθήκη · {sub} αφαίρεση πριν από τη σχεδίαση
 	Drag to draw a gradient	Σύρετε για να σχεδιάσετε διαβάθμιση
@@ -2593,7 +2592,6 @@
 	Intersect with selection  ({key})	Τομή με την επιλογή  ({key})
 	Intersect with selection  (⇧⌥)	Τομή με την επιλογή  (⇧⌥)
 	Invalid {mode} profile	Μη έγκυρο προφίλ {mode}
-	Inverse Selection	Αντιστροφή επιλογής
 	Invert All	Αντιστροφή όλων
 	Invert has no settings.	Η αντιστροφή δεν διαθέτει ρυθμίσεις.
 	Invert…	Αντιστροφή…
@@ -3184,7 +3182,7 @@
 	Sumi-e	Ιαπωνική ζωγραφική με μελάνι
 	Surface Blur	Θόλωση επιφάνειας
 	Surface Blur…	Θόλωση επιφάνειας…
-	Swap colours (X)	Εναλλαγή χρωμάτων (X)
+	Switch Foreground and Background Colors (X)	Εναλλαγή χρωμάτων (X)
 	Swaps height and width	Εναλλαγή ύψους και πλάτους
 	Swash	Διακοσμητικά τελειώματα
 	Switch between free transform and warp modes	Εναλλαγή ελεύθερου μετασχηματισμού και παραμόρφωσης
@@ -3257,7 +3255,6 @@
 	Use File › Open to open an image.	Χρησιμοποιήστε Αρχείο › Άνοιγμα για να ανοίξετε μια εικόνα.
 	Use Legacy	Χρήση παλαιάς λειτουργίας
 	Use Measurement Scale	Χρήση κλίμακας μέτρησης
-	Uses the foreground and background colours.	Χρησιμοποιεί τα χρώματα προσκηνίου και φόντου.
 	Vanishing Point	Σημείο φυγής
 	Vanishing Point…	Σημείο φυγής…
 	Variable Data Sets	Σύνολα δεδομένων μεταβλητών
@@ -3621,8 +3618,8 @@ fontWeight	Thin	Πολύ λεπτά
 	Show Sampling Ring	Εμφάνιση δακτυλίου δειγματοληψίας
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	Εκτός γκάμας εκτύπωσης: κάντε κλικ για το πλησιέστερο εκτυπώσιμο χρώμα
-	Not a web colour: click for the nearest web colour	Δεν είναι χρώμα web: κάντε κλικ για το πλησιέστερο χρώμα web
+	Out of gamut for printing: click for the nearest printable color	Εκτός γκάμας εκτύπωσης: κάντε κλικ για το πλησιέστερο εκτυπώσιμο χρώμα
+	Not a web color: click for the nearest web color	Δεν είναι χρώμα web: κάντε κλικ για το πλησιέστερο χρώμα web
 	Color to Alpha…	Χρώμα σε άλφα…
 	Transparency Threshold	Κατώφλι διαφάνειας
 	Opacity Threshold	Κατώφλι αδιαφάνειας
@@ -3946,7 +3943,7 @@ curves	Smooth	Εξομάλυνση
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Μην ενεργοποιείτε επίσης τον κατοπτρισμό στις ρυθμίσεις εκτύπωσης: οι δύο αναστροφές αλληλοαναιρούνται.
 	Print Settings…	Ρυθμίσεις εκτύπωσης…
-	Remember to turn off the printer's own colour management in Print Settings…	Θυμηθείτε να απενεργοποιήσετε τη διαχείριση χρωμάτων του εκτυπωτή στις ρυθμίσεις εκτύπωσης…
+	Remember to turn off the printer's own color management in Print Settings…	Θυμηθείτε να απενεργοποιήσετε τη διαχείριση χρωμάτων του εκτυπωτή στις ρυθμίσεις εκτύπωσης…
 	Sent to {printer}	Στάλθηκε στον {printer}
 	set in Print Settings…	ορίζεται στις ρυθμίσεις εκτύπωσης…
 	ICO is limited to 256 × 256 pixels	Το ICO περιορίζεται σε 256 × 256 εικονοστοιχεία
@@ -4096,12 +4093,12 @@ curves	Smooth	Εξομάλυνση
 	Decrease Brush Hardness	Μείωση σκληρότητας πινέλου
 	Increase Brush Hardness	Αύξηση σκληρότητας πινέλου
 	Demosaic	Αποψηφιδοποίηση
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Πώς συμπληρώνεται το ψηφιδωτό του χρωματικού φίλτρου της κάμερας. Εφαρμόζεται όταν ανοίγει το αρχείο· η προεπισκόπηση δείχνει τη μέθοδο με την οποία άνοιξε.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Πώς συμπληρώνεται το ψηφιδωτό του χρωματικού φίλτρου της κάμερας. Εφαρμόζεται όταν ανοίγει το αρχείο· η προεπισκόπηση δείχνει τη μέθοδο με την οποία άνοιξε.
 	AHD (adaptive homogeneity)	AHD (προσαρμοστική ομοιογένεια)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: οι πιο καθαρές ακμές και τα λιγότερα χρωματικά περιθώρια, η πιο αργή.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Παρεμβολή με διόρθωση κλίσης: ευκρινής και γρήγορη, με λίγα χρωματικά περιθώρια στις λεπτές λεπτομέρειες.
-	The fastest and the softest, with colour fringing on fine detail.	Η πιο γρήγορη και η πιο μαλακή, με χρωματικά περιθώρια στις λεπτές λεπτομέρειες.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: οι πιο καθαρές ακμές και τα λιγότερα χρωματικά περιθώρια, η πιο αργή.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Παρεμβολή με διόρθωση κλίσης: ευκρινής και γρήγορη, με λίγα χρωματικά περιθώρια στις λεπτές λεπτομέρειες.
+	The fastest and the softest, with color fringing on fine detail.	Η πιο γρήγορη και η πιο μαλακή, με χρωματικά περιθώρια στις λεπτές λεπτομέρειες.
 	“{name}” already exists. Replace it?	Το «{name}» υπάρχει ήδη. Να αντικατασταθεί;
 	The name in the save dialog was “{name}”.	Το όνομα στο παράθυρο αποθήκευσης ήταν «{name}».
 	Move Up	Μετακίνηση επάνω

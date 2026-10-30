@@ -102,7 +102,6 @@
 	Export As…	Экспортировать как…
 	Export	Экспорт
 	Export…	Экспортировать…
-	Quick Export As PNG	Быстрый экспорт в PNG
 	Quick Export as PNG	Быстрый экспорт в PNG
 	Place Embedded…	Поместить встроенный…
 	Place Linked…	Поместить связанный…
@@ -306,7 +305,6 @@
 	All	Всё
 	Deselect	Отменить выделение
 	Reselect	Повторить выделение
-	Inverse Selection	Инвертировать выделение
 	Inverse	Инверсия
 	Color Range…	Цветовой диапазон…
 	Select and Mask…	Выделение и маска…
@@ -592,8 +590,8 @@
 	Background	Фон
 	Set foreground color	Основной цвет
 	Set background color	Цвет фона
-	Swap colours (X)	Поменять цвета (X)
-	Default colours (D)	Цвета по умолчанию (D)
+	Switch Foreground and Background Colors (X)	Поменять цвета (X)
+	Default Foreground and Background Colors (D)	Цвета по умолчанию (D)
 	Brush Tool Options	Параметры кисти
 	Opacity	Непрозрачность
 	Flow	Нажим
@@ -1598,7 +1596,7 @@
 	Revert “{name}” to the last saved version? Your changes will be lost.	Вернуть «{name}» к последней сохранённой версии? Изменения будут потеряны.
 	{key} to subtract	{key} — вычесть
 	↑↓ navigate   {key} run   esc close	↑↓ переход   {key} выполнить   esc закрыть
-	Click to restore the current colour	Щёлкните, чтобы восстановить текущий цвет
+	Click to restore the current color	Щёлкните, чтобы восстановить текущий цвет
 	Click with the Note tool to add a note.	Щёлкните инструментом «Заметки», чтобы добавить заметку.
 	Drag a rectangle around the object	Обведите объект прямоугольником
 	Drag on the image to add a constraint; Shift for horizontal/vertical; right-click a constraint to change or delete it.	Перетащите по изображению, чтобы добавить ограничение; Shift — горизонталь/вертикаль; щелчок правой кнопкой по ограничению — изменить или удалить.
@@ -1679,10 +1677,10 @@
 	Drag to move the active layer	Перетащите, чтобы переместить активный слой
 	Drag to pan  ·  hold Space with any tool	Перетащите для панорамирования  ·  удерживайте Space с любым инструментом
 	Drag to draw a gradient	Перетащите, чтобы нарисовать градиент
-	Click to fill similar colours	Щёлкните, чтобы залить похожие цвета
+	Click to fill similar colors	Щёлкните, чтобы залить похожие цвета
 	Click to add text	Щёлкните, чтобы добавить текст
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Перетащите (лассо) или щёлкайте точки (многоугольное) · {add} добавить · {sub} вычесть
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Выделите рамку кадрирования · перетащите внутри для перемещения · края меняют размер ({ratio} пропорции, {centre} центр) · Space двигает при рисовании · стрелки сдвигают · X меняет ориентацию · {commit} применить · Esc отмена
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Выделите рамку кадрирования · перетащите внутри для перемещения · края меняют размер ({ratio} пропорции, {centre} центр) · Space двигает при рисовании · стрелки сдвигают · X меняет ориентацию · {commit} применить · Esc отмена
 	{mode} Color · {bits} bit	{mode}, {bits} бит
 	Drag to move the layer	Перетащите, чтобы переместить слой
 	Fit Screen	По размеру экрана
@@ -1714,7 +1712,6 @@
 	Appearance	Внешний вид
 	Text Position:	Положение текста:
 	Text color	Цвет текста
-	Uses the foreground and background colours.	Использует основной цвет и цвет фона.
 	Answer the unsaved-changes prompt first	Сначала ответьте на запрос о несохранённых изменениях
 	Unsaved changes	Несохранённые изменения
 	Don't Save	Не сохранять
@@ -1734,7 +1731,7 @@
 	name	имя
 	new	новый
 	Go to Layer	Перейти к слою
-	Open a document to select a colour range.	Откройте документ, чтобы выбрать цветовой диапазон.
+	Open a document to select a color range.	Откройте документ, чтобы выбрать цветовой диапазон.
 	Saved	Сохранено
 	Reveal in Finder	Показать в Finder
 	Show in Explorer	Показать в Проводнике
@@ -1911,8 +1908,8 @@
 	Character Styles Panel	Панель «Стили символов»
 	Clear Canvas Guides	Удалить направляющие холста
 	Clear Selected Artboard Guides	Удалить направляющие выбранной области
-	Color Blindness — Deuteranopia-type	Цветовая слепота — дейтеранопия
-	Color Blindness — Protanopia-type	Цветовая слепота — протанопия
+	Color Blindness - Deuteranopia-type	Цветовая слепота - дейтеранопия
+	Color Blindness - Protanopia-type	Цветовая слепота - протанопия
 	Color Table…	Цветовая таблица…
 	Combine Shapes	Комбинировать фигуры
 	Contract…	Сжать…
@@ -2083,7 +2080,7 @@
 	Canvas	Холст
 	Capture	Снять
 	Center Crop Marks	Центральные метки кадрирования
-	Centre the gradient (offset 0, 0)	Центрировать градиент (смещение 0, 0)
+	Center the gradient (offset 0, 0)	Центрировать градиент (смещение 0, 0)
 	Change Screen Mode  (F)	Сменить режим экрана  (F)
 	Change To:	Изменить на:
 	Clear All	Очистить всё
@@ -2235,7 +2232,7 @@
 	Roughness	Шероховатость
 	Roundness	Круглость
 	Rulers & Grids	Линейки и сетка
-	Sample: foreground colour	Выборка: основной цвет
+	Sample: foreground color	Выборка: основной цвет
 	Sampling: Background Swatch	Выборка: фоновый образец
 	Sampling: Continuous	Выборка: непрерывная
 	Sampling: Once	Выборка: однократная
@@ -2504,7 +2501,7 @@
 	Alt-click to define a source point to clone from	Alt+щелчок, чтобы задать точку-источник клонирования
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Нет контура для создания выделения: нарисуйте его инструментом «Перо» или выберите на панели «Контуры».
 	Cancel opening	Отменить открытие
-	Cancelled opening {name}	Открытие {name} отменено
+	Canceled opening {name}	Открытие {name} отменено
 	Damaged Photoshop document	Повреждённый документ Photoshop
 	The document “{name}” may be damaged.	Документ «{name}», возможно, повреждён.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Не удалось прочитать некоторые слои, пикселы или маски. Продолжить открытие?
@@ -2514,7 +2511,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Встроенный цветовой профиль документа «{name}» не совпадает с текущим рабочим пространством {mode}.
 	Working: {working}	Рабочее пространство: {working}
 	Developing {name}	Обработка {name}
-	Cancelled {label}	{label}: отменено
+	Canceled {label}	{label}: отменено
 	Esc to cancel	Esc — отмена
 	Opened {name}	Открыто: {name}
 	Opening {name}	Открытие {name}
@@ -2522,7 +2519,7 @@
 	Saving {name}	Сохранение {name}
 	Saving {percent}	Сохранение {percent}
 	A save to {name} is still running; try again when it finishes	Сохранение в {name} ещё выполняется; повторите попытку после его завершения
-	{label} is writing the file and can no longer be cancelled	{label}: идёт запись файла, отменить уже нельзя
+	{label} is writing the file and can no longer be canceled	{label}: идёт запись файла, отменить уже нельзя
 	Opening {name}…	Открытие {name}…
 	Opening…	Открытие…
 	Reading…	Чтение…
@@ -2620,7 +2617,7 @@ cameraRaw	Roughness	Неровность
 	Discard Layers and Save a Copy	Удалить слои и сохранить копию
 	Don't show again	Больше не показывать
 	Save failed: {error}	Не удалось сохранить: {error}
-	Save cancelled	Сохранение отменено
+	Save canceled	Сохранение отменено
 	Couldn't place {name}: {error}	Не удалось поместить {name}: {error}
 	Magnetic Lasso Tool	Магнитное лассо
 	Frequency	Частота
@@ -2765,7 +2762,7 @@ fontWeight	Italic	Курсив
 	Impressionist	Импрессионист
 	Rotate View Tool	Инструмент поворота вида
 	Reset View	Сбросить вид
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Перетащите вокруг центра, чтобы повернуть вид  ·  Shift фиксирует шаг 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Перетащите вокруг центра, чтобы повернуть вид  ·  Shift фиксирует шаг 15°
 
 # Painting symmetry presets.
 	Dual Axis	Две оси
@@ -2785,11 +2782,11 @@ fontWeight	Italic	Курсив
 	All Layers No Adjustments	Все слои без коррекции
 	Current & Below No Adjustments	Текущий и ниже без коррекции
 	Show Sampling Ring	Показать кольцо выборки
-	Click to sample the foreground colour  ·  {key}-click for background	Клик — взять основной цвет  ·  {key}-клик — фоновый цвет
+	Click to sample the foreground color  ·  {key}-click for background	Клик — взять основной цвет  ·  {key}-клик — фоновый цвет
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	Вне цветового охвата печати: щёлкните, чтобы выбрать ближайший печатаемый цвет
-	Not a web colour: click for the nearest web colour	Не веб-цвет: щёлкните, чтобы выбрать ближайший веб-цвет
+	Out of gamut for printing: click for the nearest printable color	Вне цветового охвата печати: щёлкните, чтобы выбрать ближайший печатаемый цвет
+	Not a web color: click for the nearest web color	Не веб-цвет: щёлкните, чтобы выбрать ближайший веб-цвет
 	Color to Alpha…	Цвет в альфа-канал…
 	Transparency Threshold	Порог прозрачности
 	Opacity Threshold	Порог непрозрачности
@@ -3202,7 +3199,7 @@ curves	Smooth	Сгладить
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Не включайте также зеркальное отражение в параметрах печати: два отражения отменяют друг друга.
 	Print Settings…	Параметры печати…
-	Remember to turn off the printer's own colour management in Print Settings…	Не забудьте отключить управление цветом самого принтера в параметрах печати…
+	Remember to turn off the printer's own color management in Print Settings…	Не забудьте отключить управление цветом самого принтера в параметрах печати…
 	Sent to {printer}	Отправлено на {printer}
 	set in Print Settings…	задаётся в параметрах печати…
 	ICO is limited to 256 × 256 pixels	ICO ограничен размером 256 × 256 пикселей
@@ -3875,12 +3872,12 @@ curves	Smooth	Сгладить
 	In White	Входной белый
 	Increase Brush Hardness	Увеличить жёсткость кисти
 	Demosaic	Демозаик
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Как восстанавливается мозаика цветного фильтра камеры. Применяется при открытии файла; превью показывает метод, с которым файл был открыт.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Как восстанавливается мозаика цветного фильтра камеры. Применяется при открытии файла; превью показывает метод, с которым файл был открыт.
 	AHD (adaptive homogeneity)	AHD (адаптивная однородность)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Хиракава–Паркс: самые чистые края и меньше всего цветной каймы, самый медленный.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Интерполяция с коррекцией градиента: резкая и быстрая, с небольшой цветной каймой на мелких деталях.
-	The fastest and the softest, with colour fringing on fine detail.	Самый быстрый и самый мягкий, с цветной каймой на мелких деталях.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Хиракава–Паркс: самые чистые края и меньше всего цветной каймы, самый медленный.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Интерполяция с коррекцией градиента: резкая и быстрая, с небольшой цветной каймой на мелких деталях.
+	The fastest and the softest, with color fringing on fine detail.	Самый быстрый и самый мягкий, с цветной каймой на мелких деталях.
 	“{name}” already exists. Replace it?	«{name}» уже существует. Заменить?
 	The name in the save dialog was “{name}”.	В окне сохранения было указано имя «{name}».
 	Move Up	Переместить вверх

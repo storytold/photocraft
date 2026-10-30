@@ -548,7 +548,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
                 });
                 if printers.is_some() {
                     ui.label(
-                        egui::RichText::new(tl!("Remember to turn off the printer's own colour management in Print Settings…")).color(t.warning).size(11.0),
+                        egui::RichText::new(tl!("Remember to turn off the printer's own color management in Print Settings…")).color(t.warning).size(11.0),
                     );
                 }
             }

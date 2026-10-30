@@ -527,7 +527,6 @@
 	Deselect	選択を解除
 	Reselect	再選択
 	Inverse	選択範囲を反転
-	Inverse Selection	選択範囲を反転
 	Similar	近似色を選択
 	Color Range…	色域指定…
 	Focus Area…	焦点領域…
@@ -648,8 +647,8 @@
 	Legacy Macintosh RGB	旧 Macintosh RGB
 	Internet Standard RGB	インターネット標準 RGB
 	Monitor RGB	モニター RGB
-	Color Blindness — Protanopia-type	色覚特性 — 1 型(P 型)
-	Color Blindness — Deuteranopia-type	色覚特性 — 2 型(D 型)
+	Color Blindness - Protanopia-type	色覚特性 - 1 型(P 型)
+	Color Blindness - Deuteranopia-type	色覚特性 - 2 型(D 型)
 	Zoom In	拡大
 	Zoom Out	縮小
 	Fit on Screen	画面サイズに合わせる
@@ -963,7 +962,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	クリックで点を追加 · 外へドラッグ、{key}+クリック、Delete で削除
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	クリックで適用、{key}+クリックで上書き解除、ダブルクリックでスタイルオプション
 	Click to edit the gradient	クリックしてグラデーションを編集
-	Click to restore the current colour	クリックして現在の色に戻す
+	Click to restore the current color	クリックして現在の色に戻す
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	クリックで拡大 · {key}+クリックで縮小 · 右/左にドラッグで拡大/縮小
 	Click with the Note tool to add a note.	注釈ツールでクリックすると注釈を追加できます。
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	クリック: 角 · ドラッグ: 滑らか · 最初の点をクリック: 閉じる · {key} 完了 · Esc キャンセル
@@ -1046,7 +1045,7 @@
 	Darks	暗部
 	Data Sets	データセット
 	Default	既定
-	Default colours (D)	初期カラーに戻す(D)
+	Default Foreground and Background Colors (D)	前景色と背景色を既定に戻す (D)
 	Default printer	既定のプリンター
 	Default restored.	既定に戻しました。
 	Define	定義
@@ -1332,7 +1331,7 @@
 	Opacity Jitter	不透明度のジッター
 	Opacity:	不透明度:
 	Open a document to define variables.	変数を定義するには、ドキュメントを開いてください。
-	Open a document to select a colour range.	色域を指定するには、ドキュメントを開いてください。
+	Open a document to select a color range.	色域を指定するには、ドキュメントを開いてください。
 	Open a document to use the timeline.	タイムラインを使うには、ドキュメントを開いてください。
 	Optical	オプティカル
 	Optimized	最適化
@@ -1408,7 +1407,6 @@
 	Purity	純度
 	Quality	画質
 	Quick Actions	クイックアクション
-	Quick Export As PNG	PNG としてクイック書き出し
 	Radial Gradient	円形グラデーション
 	Radius	半径
 	Radius:	半径:
@@ -1548,7 +1546,7 @@
 	Subtract from Sample	サンプルから削除
 	Subtract from selection  ({key})	選択範囲から削除 ({key})
 	Suggestions:	候補:
-	Swap colours (X)	描画色と背景色を入れ替え(X)
+	Switch Foreground and Background Colors (X)	前景色と背景色を入れ替え (X)
 	Swaps height and width	高さと幅を入れ替えます
 	Switch between free transform and warp modes	自由変形とワープのモードを切り替え
 	Switch theme	テーマを切り替え
@@ -1653,7 +1651,7 @@
 	Choke	境界のぼかし幅
 	Classic	クラシック
 	Click to add text	クリックしてテキストを追加
-	Click to fill similar colours	クリックして近い色を塗りつぶし
+	Click to fill similar colors	クリックして近い色を塗りつぶし
 	Clone Stamp Tool	コピースタンプツール
 	Color Burn	焼き込みカラー
 	Color Dodge	覆い焼きカラー
@@ -1813,7 +1811,7 @@
 	Rectangular Marquee Tool	長方形選択ツール
 	Reds	レッド系
 	Reflected	反射形
-	Sample: foreground colour	サンプル: 描画色
+	Sample: foreground color	サンプル: 描画色
 	Sampled Colors	サンプルしたカラー
 	Satin	サテン
 	Save Pixel Aspect Ratio	ピクセル縦横比を保存
@@ -1851,7 +1849,6 @@
 	Transfer	伝達
 	Triangle Tool	三角形ツール
 	Unsaved changes	未保存の変更
-	Uses the foreground and background colours.	描画色と背景色を使用します。
 	Web	Web
 	Web Large	Web (大)
 	Web Minimum	Web (最小)
@@ -2128,7 +2125,7 @@
 	Graphics	グラフィックス
 	Reset GPU Backend	GPU バックエンドをリセット
 	Applies at next launch.	次回の起動時に適用されます。
-	Click to sample the foreground colour  ·  {key}-click for background	クリックで描画色を取得 · {key}+クリックで背景色を取得
+	Click to sample the foreground color  ·  {key}-click for background	クリックで描画色を取得 · {key}+クリックで背景色を取得
 	{key}-click to set the source	{key}+クリックでソースを設定
 	{key} to subtract	{key} で削除
 	Clone source {n} ({key}-click with Clone Stamp to set)	コピーソース {n} ({key}+クリックでコピースタンプのソースを設定)
@@ -2187,7 +2184,7 @@
 	Gradient Options	グラデーションオプション
 	Align with layer	レイヤーに揃える
 	Reset Alignment	位置をリセット
-	Centre the gradient (offset 0, 0)	グラデーションを中央に配置(オフセット 0, 0)
+	Center the gradient (offset 0, 0)	グラデーションを中央に配置(オフセット 0, 0)
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	グラデーションエディター
 	Gradient picker	グラデーションピッカー
@@ -2220,7 +2217,7 @@
 	Vulkan	Vulkan
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	選択範囲を作成するパスがありません。ペンツールで描くか、パスパネルでパスを選択してください。
 	Cancel opening	開くのをキャンセル
-	Cancelled opening {name}	{name} を開くのをキャンセルしました
+	Canceled opening {name}	{name} を開くのをキャンセルしました
 	Damaged Photoshop document	破損した Photoshop ドキュメント
 	The document “{name}” may be damaged.	ドキュメント「{name}」は破損している可能性があります。
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	一部のレイヤー、ピクセル、またはマスクを読み込めませんでした。開く処理を続行しますか？
@@ -2230,7 +2227,7 @@
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	ドキュメント「{name}」の埋め込みカラープロファイルは、現在の {mode} 作業用スペースと一致しません。
 	Working: {working}	作業用スペース: {working}
 	Developing {name}	{name} を現像中
-	Cancelled {label}	{label} をキャンセルしました
+	Canceled {label}	{label} をキャンセルしました
 	Esc to cancel	Esc キーでキャンセル
 	Opened {name}	{name} を開きました
 	Opening {name}	{name} を開いています
@@ -2238,7 +2235,7 @@
 	Saving {name}	{name} を保存しています
 	Saving {percent}	保存中 {percent}
 	A save to {name} is still running; try again when it finishes	{name} への保存がまだ実行中です。完了してからもう一度お試しください
-	{label} is writing the file and can no longer be cancelled	{label} はファイルを書き込み中のため、キャンセルできません
+	{label} is writing the file and can no longer be canceled	{label} はファイルを書き込み中のため、キャンセルできません
 	Opening {name}…	{name} を開いています…
 	Opening…	開いています…
 	Reading…	読み込み中…
@@ -2322,7 +2319,7 @@ cameraRaw	Color	カラー
 	Discard Layers and Save a Copy	レイヤーを破棄してコピーを保存
 	Don't show again	次回から表示しない
 	Save failed: {error}	保存に失敗しました: {error}
-	Save cancelled	保存をキャンセルしました
+	Save canceled	保存をキャンセルしました
 	Magnetic Lasso Tool	マグネット選択ツール
 	Frequency	頻度
 	Use tablet pressure to change pen width	タブレットの筆圧を使用してペンの幅を変更
@@ -2467,7 +2464,7 @@ fontWeight	Italic	斜体
 	Rotate View	表示を回転
 	Rotate View Tool	表示回転ツール
 	Reset View	表示をリセット
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	中心の周りをドラッグして表示を回転  ·  Shift で 15° 単位
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	中心の周りをドラッグして表示を回転  ·  Shift で 15° 単位
 
 # Painting symmetry presets.
 	Dual Axis	二軸
@@ -2488,8 +2485,8 @@ fontWeight	Italic	斜体
 	Show Sampling Ring	サンプリングリングを表示
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	印刷の色域外: クリックすると最も近い印刷可能な色になります
-	Not a web colour: click for the nearest web colour	Web カラーではありません: クリックすると最も近い Web カラーになります
+	Out of gamut for printing: click for the nearest printable color	印刷の色域外: クリックすると最も近い印刷可能な色になります
+	Not a web color: click for the nearest web color	Web カラーではありません: クリックすると最も近い Web カラーになります
 
 # Generated labels: filter/gallery parameter names, option choices and gallery names (camelCase keys shown as words) (added 2026-10, checked against the code)
 	Accented Edges	輪郭の強調
@@ -3337,7 +3334,7 @@ fontWeight	Italic	斜体
 	Document Size	ドキュメントサイズ
 	Dodge/Burn	覆い焼き/焼き込み
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	ドラッグ (投げ縄) またはクリックでポイント指定 (多角形) · {add} 追加 · {sub} 除外
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	切り抜きボックスをドラッグ · 内側をドラッグで移動 · 縁でサイズ変更 ({ratio} で比率、{centre} で中心) · 描画中は Space で移動 · 矢印キーで微調整 · X で縦横を切り替え · {commit} で確定 · Esc で取り消し
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	切り抜きボックスをドラッグ · 内側をドラッグで移動 · 縁でサイズ変更 ({ratio} で比率、{centre} で中心) · 描画中は Space で移動 · 矢印キーで微調整 · X で縦横を切り替え · {commit} で確定 · Esc で取り消し
 	Drag to move the layer	ドラッグしてレイヤーを移動
 	Duplicated selection name	複製した選択範囲の名前
 	Dynamics	ダイナミクス
@@ -3922,7 +3919,7 @@ curves	Smooth	スムーズ
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	印刷設定の「鏡像」も有効にしないでください。2回反転すると元に戻ります。
 	Print Settings…	印刷設定…
-	Remember to turn off the printer's own colour management in Print Settings…	印刷設定でプリンター独自のカラーマネジメントを無効にしてください…
+	Remember to turn off the printer's own color management in Print Settings…	印刷設定でプリンター独自のカラーマネジメントを無効にしてください…
 	Sent to {printer}	{printer} に送信しました
 	set in Print Settings…	印刷設定で指定…
 # Restored rows (custom print paper #3820, brush presets, Vanishing Point help, brush panel menu)
@@ -4074,12 +4071,12 @@ curves	Smooth	スムーズ
 	Decrease Brush Hardness	ブラシの硬さを下げる
 	Increase Brush Hardness	ブラシの硬さを上げる
 	Demosaic	デモザイク
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	カメラのカラーフィルター配列をどのように補間するか。ファイルを開くときに適用されます。プレビューは開いたときの方式で表示されます。
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	カメラのカラーフィルター配列をどのように補間するか。ファイルを開くときに適用されます。プレビューは開いたときの方式で表示されます。
 	AHD (adaptive homogeneity)	AHD（適応的均質性）
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks：エッジが最もきれいで色にじみが最も少ないが、最も遅い。
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	勾配補正補間：シャープで高速だが、細部に多少の色にじみが出る。
-	The fastest and the softest, with colour fringing on fine detail.	最も高速で最も柔らかく、細部に色にじみが出る。
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks：エッジが最もきれいで色にじみが最も少ないが、最も遅い。
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	勾配補正補間：シャープで高速だが、細部に多少の色にじみが出る。
+	The fastest and the softest, with color fringing on fine detail.	最も高速で最も柔らかく、細部に色にじみが出る。
 	“{name}” already exists. Replace it?	「{name}」は既に存在します。置き換えますか？
 	The name in the save dialog was “{name}”.	保存ダイアログで指定した名前は「{name}」でした。
 	Move Up	上へ移動

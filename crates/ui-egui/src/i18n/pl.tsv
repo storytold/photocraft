@@ -525,7 +525,6 @@
 	Deselect	Odznacz
 	Reselect	Zaznacz ponownie
 	Inverse	Odwróć
-	Inverse Selection	Odwróć zaznaczenie
 	Similar	Podobne
 	Color Range…	Zakres kolorów…
 	Focus Area…	Obszar ostrości…
@@ -647,8 +646,8 @@
 	Legacy Macintosh RGB	Starszy Macintosh RGB
 	Internet Standard RGB	Standardowy RGB dla Internetu
 	Monitor RGB	RGB monitora
-	Color Blindness — Protanopia-type	Ślepota barw — typ protanopii
-	Color Blindness — Deuteranopia-type	Ślepota barw — typ deuteranopii
+	Color Blindness - Protanopia-type	Ślepota barw - typ protanopii
+	Color Blindness - Deuteranopia-type	Ślepota barw - typ deuteranopii
 	Zoom In	Powiększ
 	Zoom Out	Pomniejsz
 	Fit on Screen	Dopasuj do ekranu
@@ -977,7 +976,7 @@
 	Click to add a point · drag off or {key}-click or Delete to remove	Kliknij, aby dodać punkt · przeciągnij poza obszar, kliknij z {key} lub naciśnij Delete, aby usunąć
 	Click to apply, {key}-click to clear overrides, double-click for Style Options	Kliknij, aby zastosować, kliknij z {key}, aby wyczyścić zastąpienia, kliknij dwukrotnie, aby otworzyć opcje stylu
 	Click to edit the gradient	Kliknij, aby edytować gradient
-	Click to restore the current colour	Kliknij, aby przywrócić bieżący kolor
+	Click to restore the current color	Kliknij, aby przywrócić bieżący kolor
 	Click to zoom in  ·  {key}-click to zoom out  ·  drag right/left to zoom in/out	Kliknij, aby powiększyć  ·  kliknij z {key}, aby pomniejszyć  ·  przeciągnij w prawo/lewo, aby powiększyć/pomniejszyć
 	Click with the Note tool to add a note.	Kliknij narzędziem Notatka, aby dodać notatkę.
 	Click: corner · Drag: smooth · Click first point: close · {key} finish · Esc cancel	Klik: narożnik · Przeciągnięcie: gładki · Klik w pierwszy punkt: zamknij · {key} zakończ · Esc anuluj
@@ -1062,7 +1061,7 @@
 	Darks	Ciemne
 	Data Sets	Zestawy danych
 	Default	Domyślne
-	Default colours (D)	Kolory domyślne (D)
+	Default Foreground and Background Colors (D)	Kolory domyślne (D)
 	Default printer	Drukarka domyślna
 	Default restored.	Przywrócono wartość domyślną.
 	Define	Zdefiniuj
@@ -1344,7 +1343,7 @@
 	Opacity Jitter	Rozrzut krycia
 	Opacity:	Krycie:
 	Open a document to define variables.	Otwórz dokument, aby zdefiniować zmienne.
-	Open a document to select a colour range.	Otwórz dokument, aby wybrać zakres kolorów.
+	Open a document to select a color range.	Otwórz dokument, aby wybrać zakres kolorów.
 	Open a document to use the timeline.	Otwórz dokument, aby użyć osi czasu.
 	Optical	Optyczne
 	Optimized	Zoptymalizowany
@@ -1420,7 +1419,6 @@
 	Purity	Czystość
 	Quality	Jakość
 	Quick Actions	Szybkie akcje
-	Quick Export As PNG	Szybki eksport jako PNG
 	Radial Gradient	Gradient promienisty
 	Radius	Promień
 	Radius:	Promień:
@@ -1560,7 +1558,7 @@
 	Subtract from Sample	Odejmij od próbki
 	Subtract from selection  ({key})	Odejmij od zaznaczenia  ({key})
 	Suggestions:	Sugestie:
-	Swap colours (X)	Zamień kolory (X)
+	Switch Foreground and Background Colors (X)	Zamień kolory (X)
 	Swaps height and width	Zamienia wysokość i szerokość
 	Switch between free transform and warp modes	Przełącz między trybami dowolnego przekształcania i wypaczenia
 	Switch theme	Przełącz motyw
@@ -1663,7 +1661,7 @@
 	Choke	Zwężenie
 	Classic	Klasyczny
 	Click to add text	Kliknij, aby dodać tekst
-	Click to fill similar colours	Kliknij, aby wypełnić podobne kolory
+	Click to fill similar colors	Kliknij, aby wypełnić podobne kolory
 	Clone Stamp Tool	Narzędzie Pieczątka
 	Color Burn	Wypalanie koloru
 	Color Dodge	Rozjaśnianie koloru
@@ -1823,7 +1821,7 @@
 	Rectangular Marquee Tool	Narzędzie Zaznaczenie prostokątne
 	Reds	Czerwone
 	Reflected	Odbity
-	Sample: foreground colour	Próbka: kolor pierwszego planu
+	Sample: foreground color	Próbka: kolor pierwszego planu
 	Sampled Colors	Próbkowane kolory
 	Satin	Satyna
 	Save Pixel Aspect Ratio	Zapisz proporcje pikseli
@@ -1861,7 +1859,6 @@
 	Transfer	Transfer
 	Triangle Tool	Narzędzie Trójkąt
 	Unsaved changes	Niezapisane zmiany
-	Uses the foreground and background colours.	Używa kolorów pierwszego planu i tła.
 	Web	Internet
 	Web Large	Internet — duży
 	Web Minimum	Internet — minimalny
@@ -2134,7 +2131,7 @@
 	Graphics	Grafika
 	Reset GPU Backend	Resetuj backend GPU
 	Applies at next launch.	Zadziała po następnym uruchomieniu.
-	Click to sample the foreground colour  ·  {key}-click for background	Kliknij, aby pobrać kolor pierwszego planu  ·  kliknij z {key}, aby pobrać kolor tła
+	Click to sample the foreground color  ·  {key}-click for background	Kliknij, aby pobrać kolor pierwszego planu  ·  kliknij z {key}, aby pobrać kolor tła
 	{key}-click to set the source	Kliknij z {key}, aby ustawić źródło
 	{key} to subtract	{key}, aby odjąć
 	Clone source {n} ({key}-click with Clone Stamp to set)	Źródło klonowania {n} (kliknij z {key} Pieczątką, aby ustawić)
@@ -2187,7 +2184,7 @@
 	Gradient Options	Opcje gradientu
 	Align with layer	Wyrównaj do warstwy
 	Reset Alignment	Resetuj wyrównanie
-	Centre the gradient (offset 0, 0)	Wyśrodkuj gradient (przesunięcie 0, 0)
+	Center the gradient (offset 0, 0)	Wyśrodkuj gradient (przesunięcie 0, 0)
 # Gradient Editor window, opened from the options bar's gradient swatch.
 	Gradient Editor	Edytor gradientu
 	Gradient picker	Wybór gradientu
@@ -2222,7 +2219,7 @@
 	Alt-click to define a source point to clone from	Kliknij z Alt, aby zdefiniować punkt źródłowy klonowania
 	No path to make a selection from: draw one with the Pen tool or select one in the Paths panel.	Brak ścieżki, z której można utworzyć zaznaczenie: narysuj ją narzędziem Pióro lub wybierz w panelu Ścieżki.
 	Cancel opening	Anuluj otwieranie
-	Cancelled opening {name}	Anulowano otwieranie {name}
+	Canceled opening {name}	Anulowano otwieranie {name}
 	Damaged Photoshop document	Uszkodzony dokument programu Photoshop
 	The document “{name}” may be damaged.	Dokument „{name}” może być uszkodzony.
 	Some layers, pixels or masks could not be read. Do you want to continue opening it?	Nie udało się odczytać niektórych warstw, pikseli lub masek. Czy kontynuować otwieranie?
@@ -2231,7 +2228,7 @@
 	The document “{name}” does not have an embedded {mode} profile.	Dokument „{name}” nie ma osadzonego profilu {mode}.
 	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	Dokument „{name}” ma osadzony profil kolorów, który nie pasuje do bieżącej przestrzeni roboczej {mode}.
 	Working: {working}	Przestrzeń robocza: {working}
-	Cancelled {label}	Anulowano: {label}
+	Canceled {label}	Anulowano: {label}
 	Esc to cancel	Esc, aby anulować
 	Opened {name}	Otworzono: {name}
 	Opening {name}	Otwieranie {name}
@@ -2239,7 +2236,7 @@
 	Saving {name}	Zapisywanie {name}
 	Saving {percent}	Zapisywanie {percent}
 	A save to {name} is still running; try again when it finishes	Zapisywanie do {name} wciąż trwa; spróbuj ponownie, gdy się zakończy
-	{label} is writing the file and can no longer be cancelled	{label} zapisuje plik i nie można już tego anulować
+	{label} is writing the file and can no longer be canceled	{label} zapisuje plik i nie można już tego anulować
 	Opening {name}…	Otwieranie {name}…
 	Opening…	Otwieranie…
 	Reading…	Odczyt…
@@ -2608,7 +2605,7 @@
 	Pixel	Piksel
 	Adjustment	Korekta
 	Drag (lasso) or click points (polygonal) · {add} add · {sub} subtract	Przeciągaj (lasso) lub klikaj punkty (wielokątne) · {add} dodaj · {sub} odejmij
-	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Przeciągnij ramkę przycinania · przeciągnij wewnątrz, aby przesunąć · krawędzie zmieniają rozmiar ({ratio} proporcje, {centre} od środka) · Spacja przesuwa podczas rysowania · strzałki przesuwają · X zamienia orientację · {commit} zatwierdza · Esc anuluje
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} center) · Space moves while drawing · arrows nudge · X swaps orientation · {commit} commits · Esc cancels	Przeciągnij ramkę przycinania · przeciągnij wewnątrz, aby przesunąć · krawędzie zmieniają rozmiar ({ratio} proporcje, {centre} od środka) · Spacja przesuwa podczas rysowania · strzałki przesuwają · X zamienia orientację · {commit} zatwierdza · Esc anuluje
 	{mode} Color · {bits} bit	Kolor {mode} · {bits} bitów
 	Drag to move the layer	Przeciągnij, aby przesunąć warstwę
 	Scrubby Zoom	Powiększanie przeciąganiem
@@ -2805,7 +2802,7 @@ cameraRaw	Roughness	Chropowatość
 	Discard Layers and Save a Copy	Odrzuć warstwy i zapisz kopię
 	Don't show again	Nie pokazuj ponownie
 	Save failed: {error}	Zapis nie powiódł się: {error}
-	Save cancelled	Anulowano zapis
+	Save canceled	Anulowano zapis
 	Magnetic Lasso Tool	Narzędzie Lasso magnetyczne
 	Frequency	Częstotliwość
 	Use tablet pressure to change pen width	Użyj nacisku tabletu do zmiany szerokości pióra
@@ -3531,7 +3528,7 @@ cameraRaw	Roughness	Chropowatość
 	Impressionist	Impresjonistyczny
 	Rotate View Tool	Narzędzie Obróć widok
 	Reset View	Resetuj widok
-	Drag around the centre to rotate the view  ·  Shift constrains to 15°	Przeciągnij wokół środka, aby obrócić widok  ·  Shift ogranicza do 15°
+	Drag around the center to rotate the view  ·  Shift constrains to 15°	Przeciągnij wokół środka, aby obrócić widok  ·  Shift ogranicza do 15°
 
 # Painting symmetry presets.
 	Dual Axis	Podwójna oś
@@ -3552,8 +3549,8 @@ cameraRaw	Roughness	Chropowatość
 	Show Sampling Ring	Pokaż pierścień próbkowania
 
 # Color Picker warnings
-	Out of gamut for printing: click for the nearest printable colour	Poza gamą druku: kliknij, aby wybrać najbliższy kolor do druku
-	Not a web colour: click for the nearest web colour	To nie jest kolor internetowy: kliknij, aby wybrać najbliższy kolor internetowy
+	Out of gamut for printing: click for the nearest printable color	Poza gamą druku: kliknij, aby wybrać najbliższy kolor do druku
+	Not a web color: click for the nearest web color	To nie jest kolor internetowy: kliknij, aby wybrać najbliższy kolor internetowy
 	Color to Alpha…	Kolor na alfę…
 	Transparency Threshold	Próg przezroczystości
 	Opacity Threshold	Próg krycia
@@ -3863,7 +3860,7 @@ curves	Smooth	Wygładź
 # Native Windows printing qualification
 	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	Nie włączaj też odbicia lustrzanego w ustawieniach druku: oba odbicia wzajemnie się znoszą.
 	Print Settings…	Ustawienia druku…
-	Remember to turn off the printer's own colour management in Print Settings…	Pamiętaj o wyłączeniu zarządzania kolorami drukarki w ustawieniach druku…
+	Remember to turn off the printer's own color management in Print Settings…	Pamiętaj o wyłączeniu zarządzania kolorami drukarki w ustawieniach druku…
 	Sent to {printer}	Wysłano do {printer}
 	set in Print Settings…	ustawiane w ustawieniach druku…
 	ICO is limited to 256 × 256 pixels	ICO jest ograniczony do 256 × 256 pikseli
@@ -4012,12 +4009,12 @@ curves	Smooth	Wygładź
 	Decrease Brush Hardness	Zmniejsz twardość pędzla
 	Increase Brush Hardness	Zwiększ twardość pędzla
 	Demosaic	Demozaikowanie
-	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Sposób uzupełniania mozaiki filtra barwnego aparatu. Stosowany przy otwieraniu pliku; podgląd pokazuje metodę, z którą plik został otwarty.
+	How the camera's color filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Sposób uzupełniania mozaiki filtra barwnego aparatu. Stosowany przy otwieraniu pliku; podgląd pokazuje metodę, z którą plik został otwarty.
 	AHD (adaptive homogeneity)	AHD (adaptacyjna jednorodność)
 	Malvar–He–Cutler	Malvar–He–Cutler
-	Hirakawa–Parks: the cleanest edges and the least colour fringing, the slowest.	Hirakawa–Parks: najczystsze krawędzie i najmniej barwnych obwódek, najwolniejsza.
-	Gradient-corrected interpolation: sharp and fast, with some colour fringing on fine detail.	Interpolacja z korekcją gradientu: ostra i szybka, z niewielkimi barwnymi obwódkami na drobnych szczegółach.
-	The fastest and the softest, with colour fringing on fine detail.	Najszybsza i najmiększa, z barwnymi obwódkami na drobnych szczegółach.
+	Hirakawa–Parks: the cleanest edges and the least color fringing, the slowest.	Hirakawa–Parks: najczystsze krawędzie i najmniej barwnych obwódek, najwolniejsza.
+	Gradient-corrected interpolation: sharp and fast, with some color fringing on fine detail.	Interpolacja z korekcją gradientu: ostra i szybka, z niewielkimi barwnymi obwódkami na drobnych szczegółach.
+	The fastest and the softest, with color fringing on fine detail.	Najszybsza i najmiększa, z barwnymi obwódkami na drobnych szczegółach.
 	“{name}” already exists. Replace it?	„{name}” już istnieje. Zastąpić?
 	The name in the save dialog was “{name}”.	Nazwa w oknie zapisywania: „{name}”.
 	Move Up	Przesuń w górę

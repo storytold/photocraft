@@ -124,7 +124,7 @@ fn the_frame_loop_keeps_running_during_a_slow_job_and_esc_cancels_it() {
     h.run_steps(3);
     assert!(h.state().session.job(job).is_none());
     assert!(Arc::ptr_eq(&h.state().session.active().unwrap().doc, &doc_before));
-    assert!(h.state().ui.status.contains("Cancelled"), "{}", h.state().ui.status);
+    assert!(h.state().ui.status.contains("Canceled"), "{}", h.state().ui.status);
     assert!(h.query_by_label("Esc to cancel").is_none(), "the dialog closed");
 }
 
@@ -549,7 +549,7 @@ fn a_failed_or_cancelled_foreground_save_leaves_the_document_unsaved() {
     assert!(gates.written().is_empty(), "nothing written");
     let st = h.state().session.active().unwrap();
     assert!(st.is_dirty() && st.path.is_none());
-    assert_eq!(h.state().ui.status, "Cancelled Saving g.psd");
+    assert_eq!(h.state().ui.status, "Canceled Saving g.psd");
     assert!(crate::jobs_ui::foreground_save(h.state()).is_none());
 }
 
@@ -573,7 +573,7 @@ fn a_failed_save_or_one_cancelled_while_encoding_leaves_the_document_unsaved() {
     assert!(gates.written().is_empty(), "nothing written");
     let st = h.state().session.active().unwrap();
     assert!(st.is_dirty() && st.path.is_none());
-    assert_eq!(h.state().ui.status, "Cancelled Saving b.psd");
+    assert_eq!(h.state().ui.status, "Canceled Saving b.psd");
 }
 
 /// Step until the save in `h` has started writing.
@@ -595,7 +595,7 @@ fn a_save_that_has_started_writing_cannot_be_cancelled() {
     crate::jobs_ui::cancel(h.state_mut(), job);
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
-    assert_eq!(h.state().ui.status, "Saving w.psd is writing the file and can no longer be cancelled");
+    assert_eq!(h.state().ui.status, "Saving w.psd is writing the file and can no longer be canceled");
     assert!(h.state().session.job(job).is_some(), "still running, the document still locked");
 
     gates.write.store(true, Ordering::Relaxed);
