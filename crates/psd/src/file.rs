@@ -521,7 +521,7 @@ impl PsdFile {
     /// and some of its 16-bit PSBs carry no other mark (#4654): when the layers sit in a global
     /// `Lr16`/`Lr32` block, that name with one name per extra channel marks it too.
     ///
-    /// A file without layer records is read as having one unless its alpha channel names
+    /// A file without layer records has one when it is marked, or unless its alpha channel names
     /// account for every extra channel without "Transparency" among them: a flat file from the
     /// reference editor lists only its alpha and spot channels there (psd-tools
     /// cmyk-alpha-spot.psd), while writers of plain RGBA files name nothing.
@@ -540,7 +540,7 @@ impl PsdFile {
             }
             None => {
                 let names = self.alpha_channel_names();
-                names.len() != usize::from(self.header.channels - color) || names.first().is_some_and(|n| n == TRANSPARENCY_NAME)
+                marked || names.len() != usize::from(self.header.channels - color) || names.first().is_some_and(|n| n == TRANSPARENCY_NAME)
             }
         }
     }
@@ -871,6 +871,11 @@ mod write_tests {
             assert_eq!(u.merged_has_alpha(), transparency, "1045 {names:?}");
             assert_eq!(u.alpha_channel_names(), names, "1045");
         }
+        // A merged-transparency marker wins over a complete list of names.
+        let mut marked = file.clone();
+        marked.resources.push(ImageResource::new(1006, pascal(&["Spot", "Alpha 1"])));
+        marked.global_blocks.push(TaggedBlock::new(*b"Mt32", Vec::new()));
+        assert!(marked.merged_has_alpha());
         // Truncated names stop at the damage.
         let mut cut = file.clone();
         cut.resources.push(ImageResource::new(1006, vec![9, b'a']));

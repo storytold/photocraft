@@ -62,6 +62,7 @@ pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[St
     } else if let Some(r) = file.resource(crate::channel_map::DISPLAY_INFO_OLD) {
         crate::channel_map::apply_display_info(&r.data, false, 0, &mut doc.channels);
     }
+    crate::psd_import::alternate_spot_inks(file, 0, 0, &mut doc.channels);
     // Alpha-type planes are stored as-is, not as ink: undo the inversion for them.
     for ch in doc.channels.iter_mut().filter(|c| c.spot.is_none()) {
         let vals: Vec<f32> = ch.surface.read_region(canvas).chunks_exact(ch.surface.channels()).map(|v| 1.0 - v[0]).collect();

@@ -1399,7 +1399,7 @@ fn import_flattened(
 /// from the Alternate Spot Colors (1067), matched by the identifiers of 1053. `ids_from` is the
 /// first imported channel's position in 1053 (1 past a merged transparency), `skip` the
 /// DisplayInfo records before it.
-fn alternate_spot_inks(file: &PsdFile, ids_from: usize, skip: usize, channels: &mut [AlphaChannel]) {
+pub(crate) fn alternate_spot_inks(file: &PsdFile, ids_from: usize, skip: usize, channels: &mut [AlphaChannel]) {
     let (Some(alt), Some(info), Some(ids)) = (
         file.resource(crate::channel_map::ALTERNATE_SPOT_COLORS),
         file.resource(crate::channel_map::DISPLAY_INFO),
