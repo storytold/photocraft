@@ -44,6 +44,12 @@ fn slot_tool(ui: &egui::Ui, current: Tool, slot: &[Tool], key: egui::Id) -> Tool
     ui.data(|d| d.get_temp::<Tool>(key)).filter(|t| slot.contains(t)).unwrap_or(slot[0])
 }
 
+/// Next tool in a toolbar flyout slot after `from`, wrapping (Photoshop Alt/Option-click).
+pub(super) fn next_slot_tool(slot: &[Tool], from: Tool) -> Tool {
+    let i = slot.iter().position(|&t| t == from).unwrap_or(0);
+    slot[(i + 1) % slot.len()]
+}
+
 /// [`TOOL_SECTIONS`] without the tools hidden in Edit › Toolbar (`hidden` holds tool names: the
 /// dialog writes `Tool` debug names, `edit.toolbar` takes any name `Tool::from_name` reads). A
 /// slot keeps only its visible tools, so its flyout lists just those; a slot with none left is
@@ -167,8 +173,16 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     if slot.len() > 1 {
                                         paint_toolbar_flyout_indicator(ui, &t, &resp);
                                     }
+                                    // Plain click selects the shown tool; Alt/Option-click cycles the
+                                    // flyout slot to the next tool, as Shift+letter does for the key group.
                                     if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
-                                        crate::tool_memory::select(app, tool);
+                                        let pick = if slot.len() > 1 && ui.input(|i| i.modifiers.alt) {
+                                            let from = if slot.contains(&app.ui.tool) { app.ui.tool } else { tool };
+                                            next_slot_tool(slot, from)
+                                        } else {
+                                            tool
+                                        };
+                                        crate::tool_memory::select(app, pick);
                                     }
                                     // Double-clicking the Hand tool fits the image on screen (Photoshop).
                                     if resp.double_clicked() && tool == Tool::Hand {
