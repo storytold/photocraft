@@ -95,8 +95,10 @@ what an agent can't finish alone.
   and saves back into the file's `Txt2` since 2026-10-21, #7962),
   the visual RTL caret and PSD storage of the paragraph direction (TYPE-218-2; the paragraph
   direction buttons landed 2026-10-22), complex-script fallback fonts and golden tests
-  (TYPE-218-3), OpenType Numerals submenu and greying out features the font lacks
-  (TYPE-218-5; the Character panel buttons landed 2026-10-11, #3752, and the Stylistic Sets submenu, Set 1-20, landed 2026-10-30, #10285), text free transform
+  (TYPE-218-3), OpenType Numerals submenu, greying out features the font lacks and PSD
+  save of Stylistic Sets in documents made here, which get no `Txt2` block (TYPE-218-5; the
+  Character panel buttons landed 2026-10-11, #3752, and the Stylistic Sets submenu, Set 1–20,
+  2026-10-30, #10285), text free transform
   (#2630), area type in PSD (TYPE-218-10). Done since the re-measure: manual and optical kerning with PSD round trip
   (TYPE-218-6, #206), variable-font axes (TYPE-218-4, #2985), Warp on live type without a
   rasterize prompt, as in Photoshop (TYPE-218-9, #3004), and the live Warp Text preview that opens
@@ -406,7 +408,7 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-30 | minor | G8: Type > OpenType > Stylistic Sets submenu (Set 1–20) landed (TYPE-218-5, #10285); Numerals submenu and font-capability greying still missing |
+| 2026-10-30 | minor | G8: Type > OpenType > Stylistic Sets submenu (Set 1–20) landed (TYPE-218-5, #10285); Numerals submenu, font-capability greying and PSD save of the sets in documents made here still missing |
 | 2026-10-27 | minor | Smooth/Feather command reads and replacement use selection bounds plus blur reach; full-canvas reference and release comparisons extended; percentages and scorecard budgets unchanged |
 | 2026-10-27 | minor | G9: 12 of 181 preferences do nothing, the scorecard's count with integration batch 9 (#9775) on main; no estimate changed |
 | 2026-10-26 | minor | Expand/Contract/Border distance work, mask reads and replacement cropped to nonzero bounds; bounded distances for radii ≤5; 36 MP exact-output comparisons improve 1.54–37.82× across eight cases; percentages, estimates and scorecard budgets unchanged |
