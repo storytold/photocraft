@@ -417,7 +417,7 @@ fn alpha_tint_draws_over_the_inks() {
     assert_eq!(vec![px[0].r(), px[0].g(), px[0].b()], want);
 }
 
-/// Editing a spot (colour, solidity, coverage, visibility) refreshes the canvas texture.
+/// Editing a spot (colour, solidity, visibility) or the picture under it refreshes the canvas texture.
 #[test]
 fn spot_edits_refresh_the_overlay() {
     let mut app = PhotocraftApp::new(Session::new(), crate::Services::default());
@@ -435,15 +435,13 @@ fn spot_edits_refresh_the_overlay() {
     assert_eq!(pixel(&app), Some(Color32::from_rgb(0, 255, 255)), "solid transparent cyan over white");
     let edits = [
         ("channel.options", json!({"channel": spot, "color": "#ff00ff"})),
-        ("channel.options", json!({"channel": spot, "solidity": 100})),
+        // A gray picture first: a solid ink over white looks the same at any solidity.
         ("edit.fill", json!({"color": "#808080"})),
+        ("channel.options", json!({"channel": spot, "solidity": 100})),
         ("channel.setVisible", json!({"channel": spot, "visible": false})),
     ];
     let mut last = pixel(&app);
     for (cmd, params) in edits {
-        if cmd == "edit.fill" {
-            app.run("channel.target", json!({"channel": spot})).unwrap();
-        }
         app.run(cmd, params.clone()).unwrap();
         let shown = ensure(&mut app, &ctx, 0);
         let now = pixel(&app);
