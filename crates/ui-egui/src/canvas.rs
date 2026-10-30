@@ -1327,6 +1327,10 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
         if tool == Tool::Move {
             return crate::rulers::guide_at(app, d[0], d[1]);
         }
+        // The Hand's held ⌘ is the Zoom tool here (`hold_keys::hand_zoom`), not ⌘ as the Move tool.
+        if tool == Tool::Zoom {
+            return None;
+        }
         command_guide_at(app, tool, d, crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers)))
     });
     if panning {
