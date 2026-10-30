@@ -429,3 +429,46 @@ fn fit_image_is_as_narrow_as_its_content() {
         assert!(window.contains_rect(node.rect()), "{label} inside the window");
     }
 }
+
+/// #9965: Save for Web opened wider than a laptop-sized window and kept growing, pushing its
+/// settings column and resize grip off the screen. It must fit the window and keep its size.
+#[test]
+fn save_for_web_fits_the_window_and_keeps_its_size() {
+    for (size, doc, ppp) in [
+        (egui::vec2(1366.0, 768.0), (640, 480), 1.0),
+        (egui::vec2(1920.0, 1080.0), (640, 480), 1.0),
+        (egui::vec2(1024.0, 600.0), (640, 480), 1.0),
+        (egui::vec2(800.0, 600.0), (4000, 3000), 1.0),
+        (egui::vec2(1280.0, 720.0), (6000, 4000), 1.25),
+        (egui::vec2(1536.0, 864.0), (300, 2000), 1.5),
+        // Smaller than the dialog's own minimum, in points.
+        (egui::vec2(512.0, 384.0), (640, 480), 1.0),
+        (egui::vec2(480.0, 360.0), (4000, 3000), 2.0),
+    ] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": doc.0, "height": doc.1})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(size).with_pixels_per_point(ppp).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        crate::file_ui::open_web(h.state_mut());
+        h.run_steps(6);
+        let frame = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+            let rects: Vec<egui::Rect> = h.ctx.data(|m| m.get_temp(egui::Id::unique(RECTS))).unwrap();
+            rects[0]
+        };
+        let opened = frame(&h);
+        assert!(
+            opened.left() >= 0.0 && opened.top() >= 0.0 && opened.right() <= size.x && opened.bottom() <= size.y,
+            "{size:?} at {ppp}: the dialog at {opened:?} is off screen"
+        );
+        // The whole modal too, its frame and resize grip around the contents.
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size).expand(0.5);
+        let areas: Vec<egui::Rect> = h.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().filter_map(|l| m.area_rect(l.id)).collect());
+        assert!(!areas.is_empty());
+        for r in areas {
+            assert!(screen.contains_rect(r), "{size:?} at {ppp}: an area at {r:?} is off screen");
+        }
+        // The growth was a fraction of a point a frame: give it a few hundred.
+        h.run_steps(300);
+        assert_eq!(frame(&h), opened, "{size:?}: the dialog changed size on its own");
+    }
+}

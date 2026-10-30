@@ -204,9 +204,10 @@ fn is_curves(fields: &serde_json::Map<String, Value>) -> bool {
 /// resized (#5113); it grows to fit its controls below the graph.
 const CURVES_SIZE: egui::Vec2 = egui::vec2(300.0, 420.0);
 /// The smallest a resizable dialog is dragged to: Curves keeps a usable graph (#8984), the others
-/// their two-column layouts.
-fn resizable_min(fields: &serde_json::Map<String, Value>) -> egui::Vec2 {
-    if is_curves(fields) { egui::vec2(300.0, 420.0) } else { egui::vec2(560.0, 400.0) }
+/// their two-column layouts. A small window caps it, so the dialog and its buttons stay on screen.
+fn resizable_min(ctx: &egui::Context, fields: &serde_json::Map<String, Value>) -> egui::Vec2 {
+    let min = if is_curves(fields) { egui::vec2(300.0, 420.0) } else { egui::vec2(560.0, 400.0) };
+    min.min(ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::Vec2::ZERO)
 }
 
 /// Where the size the user last gave a resizable dialog is kept (#8984), beside its place.
@@ -580,7 +581,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // Curves reopens at the size it was left at (#8984).
         let remembered = if is_curves(&fields) { ctx.data_mut(|m| m.get_persisted::<egui::Vec2>(size_id(place))) } else { None };
         let resize = resizable.map(|size| {
-            let min = resizable_min(&fields);
+            let min = resizable_min(ctx, &fields);
             (remembered.unwrap_or(size), min, resizable_max(ctx, &fields, min))
         });
         let mut given = None;

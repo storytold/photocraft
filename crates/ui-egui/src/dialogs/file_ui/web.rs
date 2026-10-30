@@ -265,7 +265,15 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
     }
     let p = params(f);
     f.insert("__previewRects".into(), json!([]));
-    let area = egui::vec2((ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(260.0), (ui.available_height() - 48.0).max(180.0));
+    // The previews take what the settings column leaves, as it was last drawn: 250 pt, or wider
+    // with its scroll bar in a short window. Reserving a fixed 250 there let the row overrun the
+    // dialog by the bar, the dialog grow to fit, the previews take the growth, and so on every
+    // frame until the dialog was wider than the screen (#9965).
+    let settings_key = egui::Id::unique("web-settings-width");
+    let settings_w = ui.data(|d| d.get_temp::<f32>(settings_key)).unwrap_or(250.0).max(250.0);
+    // The previews shrink before the settings do, down to a small floor that still fits beside
+    // them in a small window.
+    let area = egui::vec2((ui.available_width() - settings_w - 20.0 - ui.spacing().item_spacing.x).max(120.0), (ui.available_height() - 48.0).max(120.0));
     ui.horizontal_top(|ui| {
         // Previews grow with the dialog; settings retain their compact width.
         ui.vertical(|ui| {
@@ -295,7 +303,7 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
         });
         ui.add_space(10.0);
         // Settings scroll independently on smaller windows.
-        ui.vertical(|ui| {
+        let settings = ui.vertical(|ui| {
             ui.set_width(250.0);
             egui::ScrollArea::vertical().id_salt("web-settings").max_height(area.y).show(ui, |ui| {
                 ui.label(egui::RichText::new(tl!("Preset")).color(t.text_dim));
@@ -417,6 +425,7 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                 }
             });
         });
+        ui.data_mut(|d| d.insert_temp(settings_key, settings.response.rect.width()));
     });
 }
 
