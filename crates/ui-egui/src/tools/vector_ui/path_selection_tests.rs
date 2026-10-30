@@ -819,3 +819,41 @@ fn path_selection_picks_the_topmost_overlapping_component() {
     crate::vector_ui::path_selection_finish(h.state_mut(), [10.0, 10.0], [10.0, 10.0]);
     assert!(h.state().ui.path_selection.subpaths.is_empty());
 }
+
+/// A `PathOp::Join` subpath is its component's hole, not an independently selectable shape:
+/// the ring selects the whole component (ring and hole together), the hole selects nothing,
+/// and a drag moves both subpaths as one.
+#[test]
+fn path_selection_treats_a_joined_hole_as_its_component() {
+    let mut h = harness();
+    let layer = h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [20, 20, 40, 40], "fill": "#ff0000"})).unwrap()["layer"].as_u64().unwrap();
+    // A donut: the outer rectangle combined, the inner one joined as its hole — wound the
+    // opposite way, which is what makes it a hole under the non-zero fill rule.
+    let k = |x: f64, y: f64| json!({"anchor": [x, y]});
+    h.state_mut()
+        .run(
+            "shape.edit",
+            json!({"layer": layer, "path": {"subpaths": [
+                {"closed": true, "knots": [k(20.0, 20.0), k(60.0, 20.0), k(60.0, 60.0), k(20.0, 60.0)]},
+                {"closed": true, "op": "join", "knots": [k(30.0, 30.0), k(30.0, 50.0), k(50.0, 50.0), k(50.0, 30.0)]},
+            ]}}),
+        )
+        .unwrap();
+    h.state_mut().ui.tool = Tool::PathSelection;
+    h.run_steps(2);
+
+    // The ring selects the whole component: both the ring and its joined hole.
+    crate::vector_ui::path_selection_finish(h.state_mut(), [25.0, 40.0], [25.0, 40.0]);
+    assert_eq!(h.state().ui.path_selection.subpaths, vec![0, 1], "the ring and its hole are one component");
+    // A drag moves both subpaths together: the hole follows the ring.
+    crate::vector_ui::path_selection_finish(h.state_mut(), [25.0, 40.0], [35.0, 40.0]);
+    let l = h.state().session.active().unwrap().doc.layer(photocraft_doc::LayerId(layer)).unwrap();
+    let photocraft_doc::LayerContent::Shape(sh) = &l.content else { panic!("not a shape") };
+    assert_eq!(sh.path.subpaths[0].knots[0].anchor, photocraft_geom::Point::new(30.0, 20.0), "the ring moved");
+    assert_eq!(sh.path.subpaths[1].knots[0].anchor, photocraft_geom::Point::new(40.0, 30.0), "the hole moved with it");
+
+    // The hole is no component's fill: a press inside it selects nothing. (The drag moved
+    // the donut: the hole now spans 40..60.)
+    crate::vector_ui::path_selection_finish(h.state_mut(), [50.0, 40.0], [50.0, 40.0]);
+    assert!(h.state().ui.path_selection.subpaths.is_empty(), "the joined hole is not selectable on its own");
+}

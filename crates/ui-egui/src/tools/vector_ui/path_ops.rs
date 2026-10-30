@@ -266,23 +266,22 @@ pub(crate) fn selected_subpaths(app: &PhotocraftApp, doc: &Document, target: Pat
     sel.subpaths.iter().copied().filter(|&i| i < path.subpaths.len()).collect()
 }
 
-/// The subpath of `path` under document point `at`: its outline within `tol` or its filled
-/// interior. Resolved in one topmost-first pass (the last subpath folded in, as compositing
-/// draws it): a lower component's edge or fill hidden under a higher one's fill never wins,
-/// as Photoshop's black arrow picks the visible component.
-fn pick_subpath_at(path: &Path, at: [f64; 2], tol: f64) -> Option<usize> {
-    path.subpaths
-        .iter()
-        .enumerate()
-        .rev()
-        .find(|(_, sp)| {
-            let outline = sp.knots.len() >= 2 && {
-                let single = Path { subpaths: vec![(*sp).clone()], fill_rule: path.fill_rule, inverted: false };
-                photocraft_vector::edit::hit(&single, photocraft_geom::Point::new(at[0], at[1]), tol, &[]).is_some()
-            };
-            outline || point_in_subpath(sp, at)
-        })
-        .map(|(i, _)| i)
+/// The shape component of `path` under document point `at`: the range of its subpaths, picked
+/// topmost-first (the last component folded in, as compositing draws it). Components are
+/// [`Path::components`] — a `Join` subpath is its predecessor's hole or continuation, not an
+/// independently filled, selectable shape; the interior test renders the component's exact
+/// coverage, so a joined hole is not part of its component. The black arrow selects the
+/// whole component: a drag moves every subpath of the range together.
+fn pick_subpath_at(path: &Path, at: [f64; 2], tol: f64) -> Option<std::ops::Range<usize>> {
+    let p = photocraft_geom::Point::new(at[0], at[1]);
+    path.components().into_iter().rev().find(|c| {
+        let single = Path { subpaths: path.subpaths[c.clone()].to_vec(), fill_rule: path.fill_rule, inverted: false };
+        if photocraft_vector::edit::hit(&single, p, tol, &[]).is_some() {
+            return true;
+        }
+        let area = photocraft_doc::Rect::from_xywh(at[0].floor() as i32, at[1].floor() as i32, 1, 1);
+        photocraft_vector::fill_rasterizer(&single, photocraft_vector::DEFAULT_TOLERANCE).render(area).first().is_some_and(|&v| v > 0.0)
+    })
 }
 
 /// The topmost visible shape layer under `at` (document coordinates):
@@ -378,7 +377,7 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
     // The press's target: a shape layer under the pointer (selected on the press, as in
     // Photoshop), else the path selected in the Paths panel (a saved path — the pasted path is
     // one), else the targeted vector mask, the active shape's path or the work path.
-    let hit: Option<(PathTarget, Path, Option<usize>)> = app
+    let hit: Option<(PathTarget, Path, Option<std::ops::Range<usize>>)> = app
         .session
         .active()
         .and_then(|st| {
@@ -399,7 +398,7 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
                 (t, p, sub)
             })
         });
-    let Some((target, path, hit_subpath)) = hit else {
+    let Some((target, path, component)) = hit else {
         clear(app);
         return;
     };
@@ -410,25 +409,24 @@ pub fn path_selection_finish(app: &mut PhotocraftApp, start: [f64; 2], end: [f64
         let _ = app.run("layer.select", json!({"layer": id}));
     }
 
-    // The press landed on the path's layer but no subpath: keep/drop the layer selection and
+    // The press landed on the path's layer but no component: keep/drop the layer selection and
     // clear the component selection (a drag from empty canvas is a no-op; Photoshop
     // marquee-selects here, a follow-up).
-    let Some(hit_subpath) = hit_subpath else {
+    let Some(component) = component else {
         clear(app);
         return;
     };
 
-    // Selection bookkeeping: a press on an already-selected subpath of the same, structurally
-    // unchanged path keeps the selection (a drag starting on it moves all of it); any other
-    // press makes the hit the new selection.
+    // Selection bookkeeping: a press on the already-selected component of the same,
+    // structurally unchanged path keeps the selection (a drag starting on it moves all of
+    // it); any other press makes the hit the new selection.
+    let picked: Vec<usize> = component.collect();
     let knots: Vec<usize> = path.subpaths.iter().map(|s| s.knots.len()).collect();
     let sel = &mut app.ui.path_selection;
-    let keep = sel.target.as_ref() == Some(&target)
-        && sel.doc == app.session.active().map_or(0, |st| st.doc.id.0)
-        && sel.knots == knots
-        && sel.subpaths.contains(&hit_subpath);
+    let keep =
+        sel.target.as_ref() == Some(&target) && sel.doc == app.session.active().map_or(0, |st| st.doc.id.0) && sel.knots == knots && sel.subpaths == picked;
     if !keep {
-        *sel = PathSelection { doc: app.session.active().map_or(0, |st| st.doc.id.0), target: Some(target.clone()), subpaths: vec![hit_subpath], knots };
+        *sel = PathSelection { doc: app.session.active().map_or(0, |st| st.doc.id.0), target: Some(target.clone()), subpaths: picked, knots };
     }
 
     if dx.abs() + dy.abs() >= 0.5 {
