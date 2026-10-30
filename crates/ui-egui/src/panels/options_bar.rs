@@ -118,7 +118,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                             // Art History has no Mode (the engine paints Normal) and no Flow.
                             if tool == Tool::ArtHistoryBrush {
                                 let width = if t.pro { 62.0 } else { 66.0 };
-                                percent_field(ui, tl!("Opacity"), &mut brush.opacity, 0.0..=100.0, width);
+                                percent_field(ui, tl!("Opacity"), &mut brush.opacity, 1.0..=100.0, width);
                             }
                             crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
                             widgets::vline(ui, 22.0);
