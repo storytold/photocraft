@@ -720,6 +720,33 @@ fn command_click_adds_nothing_in_lab_or_on_a_targeted_mask() {
     assert_eq!(crate::filter_dialog::params_of(&masked.ui.dialog_mut(id).unwrap().fields), before);
 }
 
+/// The new canvas-point shortcut follows an Action dialog's recorded target, even when the
+/// Channels panel currently points elsewhere.
+#[test]
+fn command_click_respects_the_dialogs_explicit_target() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_image();
+    app.run("channel.new", json!({"name": "Saved sky", "fill": "white"})).unwrap();
+    app.run("channel.target", json!({"channel": {"color": 0}})).unwrap();
+    let id = open_with_params(&mut app, "image.adjustments.curves", &json!({"target": {"channel": 0}})).unwrap();
+    let before = crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields);
+    let doc = app.session.active().unwrap().doc.clone();
+    pointer_down(&mut app, &ctx, 8.0, 8.0, json!({"command": true}));
+    assert_eq!(crate::filter_dialog::params_of(&app.ui.dialog_mut(id).unwrap().fields), before, "a saved alpha cannot sample the colour composite");
+    assert_eq!(app.session.active().unwrap().doc, doc);
+    crate::dialogs::cancel(&mut app, id).unwrap();
+
+    app.run("channel.target", json!({"channel": 0})).unwrap();
+    let id = open_with_params(&mut app, "image.adjustments.curves", &json!({"target": "pixels"})).unwrap();
+    pointer_down(&mut app, &ctx, 8.0, 8.0, json!({"command": true}));
+    assert_eq!(channel_points(&app, "points"), vec![[0.0, 0.0], [86.0, 86.0], [255.0, 255.0]]);
+    assert_eq!(app.ui.dialog_mut(id).unwrap().fields["target"], "pixels");
+    for key in ["red", "green", "blue"] {
+        assert_eq!(channel_points(&app, key), vec![[0.0, 0.0], [255.0, 255.0]], "{key} untouched");
+    }
+    assert_eq!(app.session.active().unwrap().doc, doc, "adding a preview point leaves committed pixels alone");
+}
+
 #[test]
 fn ui_pointer_drives_an_armed_curves_picker() {
     let mut app = app_with_image();
@@ -812,6 +839,31 @@ fn curves_channel_popup_keeps_custom_names_verbatim_in_italian() {
     assert!(names.iter().any(|n| n == green), "built-in labels follow the language: {names:?}");
 }
 
+/// Levels translates built-in channel labels while preserving a user-defined identical name verbatim.
+#[test]
+fn levels_channel_popup_keeps_custom_names_verbatim_in_italian() {
+    let it = crate::i18n::Lang::from_code("it").expect("it registered");
+    let green = crate::i18n::tr(it, "Green");
+    let _lang = crate::i18n::language_scope(it);
+    let make = |app| {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        open(h.state_mut(), "image.adjustments.levels").unwrap();
+        h.run_steps(4);
+        h
+    };
+    let mut app = app_with_image();
+    app.run("channel.new", json!({"name": "Green", "fill": "white"})).unwrap();
+    app.run("channel.target", json!({"channel": 0})).unwrap();
+    let mut h = make(app);
+    assert_eq!(popup_channels(&mut h), ["Green"], "custom names stay as entered");
+
+    let mut app = app_with_image();
+    app.run("channel.target", json!({"channel": {"color": 1}})).unwrap();
+    let mut h = make(app);
+    assert_eq!(popup_channels(&mut h), [green], "built-in names translate");
+}
+
 /// Curves open in a harness over `app`.
 fn curves_harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
@@ -839,13 +891,26 @@ fn curves_on_a_targeted_filter_mask_is_a_gray_plane() {
     let id = app.session.active().unwrap().active_layer.unwrap();
     app.select_filter_mask_target(Some(id.0));
     assert!(app.filter_mask_targeted());
-    let c = isolated(&app).expect("a gray target");
+    let c = isolated(&app, &Map::new()).expect("a gray target");
     assert_eq!(c.gray, Some(photocraft_engine::channel_cmds::GraySurface::FilterMask));
+    // The implicit white mask's histogram agrees with a stored Reveal All, including 24 MP
+    // and dimensions that don't divide evenly by the histogram's sampling interval.
+    let source = HistSource::Channel { layer: id, surface: photocraft_engine::channel_cmds::GraySurface::FilterMask };
+    for size in [photocraft_geom::Size::new(32, 32), photocraft_geom::Size::new(6000, 4000), photocraft_geom::Size::new(6001, 4003)] {
+        let mut doc = (*app.session.active().unwrap().doc).clone();
+        doc.size = size;
+        let implicit = tone::compute_histograms(&doc, source, photocraft_doc::adjust::ToneSpace::Rgb);
+        let photocraft_doc::LayerContent::Smart(sm) = &mut doc.layer_mut(id).unwrap().content else { panic!("smart fixture") };
+        sm.filter_mask = Some(photocraft_doc::LayerMask::reveal_all());
+        let stored = tone::compute_histograms(&doc, source, photocraft_doc::adjust::ToneSpace::Rgb);
+        assert_eq!(implicit.ch, stored.ch, "{size:?}: implicit white has the same histogram as stored white");
+        assert!(implicit.ch[0][255] > 0);
+    }
     // Its histogram counts the filter mask's levels: half black after a stroke.
     app.run("paint.stroke", json!({"points": [[8, 0], [8, 31]], "size": 16, "hardness": 1, "color": "#000000", "target": "filterMask"})).unwrap();
     let surface = photocraft_engine::channel_cmds::GraySurface::FilterMask;
     let st = app.session.active().unwrap();
     let h = tone::compute_histograms(&st.doc, HistSource::Channel { layer: id, surface }, photocraft_doc::adjust::ToneSpace::Rgb);
     assert!(h.ch[0][0] > 0 && h.ch[0][255] > 0, "black and white levels");
-    assert_eq!(curve_mode(&app, "curves"), photocraft_doc::ColorMode::Grayscale);
+    assert_eq!(curve_mode(&app, "curves", &Map::new()), photocraft_doc::ColorMode::Grayscale);
 }

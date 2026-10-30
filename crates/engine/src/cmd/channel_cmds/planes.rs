@@ -1,13 +1,14 @@
+use super::targeting::{Target, target_of};
 use super::view::{ChannelTarget, color_names};
-use super::{ColorMode, DocState, Document, PixelFormat, Rect, Surface};
+use super::{ColorMode, DocState, Document, PixelFormat, Rect, Surface, Value};
 
-/// The Curves dialog's Channel popup lists only this channel when the Channels panel has a
+/// The Levels/Curves Channel popup lists only this channel when the Channels panel has a
 /// single non-composite target (a colour component, layer mask, saved channel or Quick Mask).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct IsolatedCurveChannel {
     /// Channels-panel name, including a custom alpha name or "{layer} Mask".
     pub name: String,
-    /// Curves param key: empty = composite `points`; otherwise `red`/`green`/…
+    /// Tone parameter key: empty = composite; otherwise `red`/`green`/…
     pub key: &'static str,
     /// Index into the tone-space histograms (composite = 0 for RGB/CMYK).
     pub hist: usize,
@@ -21,7 +22,7 @@ pub struct IsolatedCurveChannel {
     pub gray: Option<GraySurface>,
 }
 
-/// A grayscale plane Curves can target: the dialog parses and previews its curves in gray levels
+/// A grayscale plane Levels/Curves can target: the dialog parses and previews gray levels
 /// even in Lab and CMYK documents (#5335).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GraySurface {
@@ -44,9 +45,41 @@ pub fn isolated_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
 /// thumbnail targets it without touching the Channels panel, and both ways of selecting the mask
 /// must give the same Curves dropdown (#5335).
 pub fn isolated_curve_channel_for(st: &DocState, layers_panel_mask: bool) -> Option<IsolatedCurveChannel> {
+    isolated_curve_channel_with_params(st, layers_panel_mask, &Value::Null)
+}
+
+/// The channel a tone dialog edits, with an explicit command target taking precedence over
+/// panel state (notably when an Action opens a recorded step's dialog).
+pub fn isolated_curve_channel_with_params(st: &DocState, layers_panel_mask: bool, params: &Value) -> Option<IsolatedCurveChannel> {
     let doc = &st.doc;
     let mode = edit_mode(doc);
-    match st.channel_view.target {
+    let target = if params.get("target").is_some() {
+        match target_of(params) {
+            Target::Mask => ChannelTarget::LayerMask,
+            Target::FilterMask => return filter_mask_curve_channel(st),
+            Target::Alpha(i) => ChannelTarget::Alpha(i),
+            Target::QuickMask => {
+                doc.quick_mask.as_ref()?;
+                return Some(IsolatedCurveChannel {
+                    name: "Quick Mask".into(),
+                    key: "",
+                    hist: 0,
+                    tint: false,
+                    translate: true,
+                    gray: Some(GraySurface::QuickMask),
+                });
+            }
+            // Explicit pixel commands retain the engine's single-colour restriction, but
+            // bypass implicit Quick Mask and Layers-panel mask targeting.
+            Target::Pixels => match st.channel_view.target {
+                ChannelTarget::Color(k) => ChannelTarget::Color(k),
+                _ => return None,
+            },
+        }
+    } else {
+        st.channel_view.target
+    };
+    match target {
         ChannelTarget::Color(k) => {
             let names = color_names(mode);
             let keys = crate::adjust_params::channel_keys(crate::adjust_params::default_space(mode));

@@ -116,7 +116,7 @@ use planes::edit_mode;
 pub(crate) use planes::tone;
 pub use planes::{
     GraySurface, IsolatedCurveChannel, channel_format, color_count, filter_mask_curve_channel, isolated_curve_channel, isolated_curve_channel_for,
-    next_alpha_name,
+    isolated_curve_channel_with_params, next_alpha_name,
 };
 pub(crate) use refs::source_spec;
 pub use refs::{Blending, ChanRef, parse_ref};
@@ -128,7 +128,7 @@ pub(crate) use targeting::{
     is_channel_target, is_spot_target, mask_target_enabled, read_target_surface, restrict_to_color, routed, target_of, target_surface, targeted_channel,
     targeted_color,
 };
-pub use targeting::{follows_filter_mask, follows_target};
+pub use targeting::{follows_filter_mask, follows_target, gray_target};
 pub(crate) use view::fix_view;
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};
 
