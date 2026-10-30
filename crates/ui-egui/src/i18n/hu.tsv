@@ -4415,3 +4415,31 @@ cameraRaw	Yellow	Sárga
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
+	Upright	Upright
+	Manual Transformations	Kézi átalakítások
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Rajzoljon két vagy több segédvonalat a képre olyan vonalak mentén, amelyeknek függőlegesnek vagy vízszintesnek kell lenniük (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	A segédvonal végét húzással mozgathatja; egy segédvonalat kijelölve és a Delete billentyűt lenyomva törölhet. Legfeljebb négy segédvonal.
+cameraRaw	Geometry	Geometria
+cameraRaw	Off	Ki
+cameraRaw	Auto	Automatikus
+cameraRaw	Level	Szint
+cameraRaw	Vertical	Függőleges
+cameraRaw	Full	Teljes
+cameraRaw	Disable Upright	Upright kikapcsolása
+cameraRaw	Auto: apply balanced perspective corrections	Automatikus: kiegyensúlyozott perspektívakorrekciók alkalmazása
+cameraRaw	Level: apply only level correction	Vízszintezés: csak a vízszintezés alkalmazása
+cameraRaw	Vertical: apply level and vertical perspective correction	Függőleges: vízszintezés és függőleges perspektívakorrekció alkalmazása
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Teljes: vízszintezés, valamint vízszintes és függőleges perspektívakorrekció alkalmazása
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Vezetett: rajzoljon két vagy több segédvonalat a perspektívakorrekciók testreszabásához
+cameraRaw	Horizontal	Vízszintes
+cameraRaw	Rotate	Forgatás
+cameraRaw	Aspect	Képarány
+cameraRaw	Scale	Méretarány
+cameraRaw	Offset X	X eltolás
+cameraRaw	Offset Y	Y eltolás
+cameraRaw	Guided	Vezetett
+	Saved Camera Raw settings to {file}	Camera Raw-beállítások mentve ide: {file}
+	Save the settings to each raw's sidecar without opening it	A beállítások mentése minden raw kísérőfájljába megnyitás nélkül
+	No settings saved: these raws can't keep a sidecar here	Nincs mentve semmi: ezek a raw fájlok itt nem kaphatnak kísérőfájlt
+	Some settings could not be saved; the raws stay open	Néhány beállítást nem sikerült menteni; a raw fájlok nyitva maradnak
+	Nothing to save: these raws are at their default settings	Nincs mit menteni: ezek a raw fájlok alapértelmezett beállításokon vannak

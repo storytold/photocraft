@@ -3526,3 +3526,31 @@ curves	Smooth	Glätten
 	Font size presets	Schriftgrößen-Vorgaben
 	Leading presets	Zeilenabstand-Vorgaben
 	Tracking presets	Laufweiten-Vorgaben
+	Upright	Upright
+	Manual Transformations	Manuelle Transformationen
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Zeichnen Sie zwei oder mehr Hilfslinien auf das Bild entlang von Linien, die senkrecht oder waagerecht sein sollen (Umschalt+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Ziehen Sie ein Ende einer Hilfslinie, um es zu verschieben; wählen Sie eine Hilfslinie aus und drücken Sie Entf, um sie zu entfernen. Bis zu vier Hilfslinien.
+cameraRaw	Geometry	Geometrie
+cameraRaw	Off	Aus
+cameraRaw	Auto	Automatisch
+cameraRaw	Level	Stufe
+cameraRaw	Vertical	Vertikal
+cameraRaw	Full	Voll
+cameraRaw	Disable Upright	Upright deaktivieren
+cameraRaw	Auto: apply balanced perspective corrections	Automatisch: ausgewogene Perspektivkorrekturen anwenden
+cameraRaw	Level: apply only level correction	Waagerecht: nur die Ausrichtungskorrektur anwenden
+cameraRaw	Vertical: apply level and vertical perspective correction	Vertikal: Ausrichtung und vertikale Perspektivkorrektur anwenden
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Vollständig: Ausrichtung sowie horizontale und vertikale Perspektivkorrekturen anwenden
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Geführt: zwei oder mehr Hilfslinien zeichnen, um die Perspektivkorrekturen anzupassen
+cameraRaw	Horizontal	Horizontal
+cameraRaw	Rotate	Drehen
+cameraRaw	Aspect	Seitenverhältnis
+cameraRaw	Scale	Skalieren
+cameraRaw	Offset X	Versatz X
+cameraRaw	Offset Y	Versatz Y
+cameraRaw	Guided	Geführt
+	Saved Camera Raw settings to {file}	Camera-Raw-Einstellungen in {file} gespeichert
+	Save the settings to each raw's sidecar without opening it	Die Einstellungen in der Filialdatei jeder Raw-Datei speichern, ohne sie zu öffnen
+	No settings saved: these raws can't keep a sidecar here	Nichts gespeichert: Diese Raw-Dateien können hier keine Filialdatei haben
+	Some settings could not be saved; the raws stay open	Einige Einstellungen konnten nicht gespeichert werden; die Raw-Dateien bleiben geöffnet
+	Nothing to save: these raws are at their default settings	Nichts zu speichern: Diese Raw-Dateien haben ihre Standardeinstellungen

@@ -4251,3 +4251,31 @@ cameraRaw	Dehaze	Odstranění oparu
 	Font size presets	Předvolby velikosti písma
 	Leading presets	Předvolby prokladu
 	Tracking presets	Předvolby prostrkání
+	Upright	Vyrovnání
+	Manual Transformations	Ruční transformace
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Nakreslete na obrázek dvě nebo více vodítek podél čar, které mají být svislé nebo vodorovné (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Konec vodítka přesunete tažením; vodítko odstraníte tak, že ho vyberete a stisknete Delete. Nejvýše čtyři vodítka.
+cameraRaw	Geometry	Geometrie
+cameraRaw	Off	Vypnuto
+cameraRaw	Auto	Automaticky
+cameraRaw	Level	Úroveň
+cameraRaw	Vertical	Svisle
+cameraRaw	Full	Úplná
+cameraRaw	Disable Upright	Vypnout vyrovnání
+cameraRaw	Auto: apply balanced perspective corrections	Automaticky: použít vyvážené korekce perspektivy
+cameraRaw	Level: apply only level correction	Horizont: použít pouze vyrovnání horizontu
+cameraRaw	Vertical: apply level and vertical perspective correction	Svisle: použít vyrovnání horizontu a korekci svislé perspektivy
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Úplné: použít vyrovnání horizontu a korekci vodorovné i svislé perspektivy
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	S vodítky: nakreslete dvě nebo více vodítek a upravte korekce perspektivy
+cameraRaw	Horizontal	Vodorovně
+cameraRaw	Rotate	Otočit
+cameraRaw	Aspect	Poměr stran
+cameraRaw	Scale	Měřítko
+cameraRaw	Offset X	Posun X
+cameraRaw	Offset Y	Posun Y
+cameraRaw	Guided	S vodítky
+	Saved Camera Raw settings to {file}	Nastavení Camera Raw uložena do {file}
+	Save the settings to each raw's sidecar without opening it	Uložit nastavení do souboru sidecar každého snímku raw bez jeho otevření
+	No settings saved: these raws can't keep a sidecar here	Nic neuloženo: tyto snímky raw zde nemohou mít soubor sidecar
+	Some settings could not be saved; the raws stay open	Některá nastavení nelze uložit; snímky raw zůstávají otevřené
+	Nothing to save: these raws are at their default settings	Není co ukládat: tyto snímky raw mají výchozí nastavení

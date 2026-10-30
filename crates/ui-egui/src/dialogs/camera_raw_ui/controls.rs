@@ -1,4 +1,4 @@
-use super::open::{Target, cancel, commit_open_raw, open_raw, raw_stage};
+use super::open::{Target, cancel, raw_stage};
 use super::sidecar::{load_settings, report_file_error, save_settings};
 use super::{
     Align2, BANDS, CameraRaw, CameraRawDialog, Color32, ERect, FontId, PANEL_W, PhotocraftApp, Pos2, Sense, Stroke, Tokens, ToneZone, Value, Wheel, curve_lut,
@@ -69,7 +69,7 @@ pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
         Target::OpenRaw => {
             let raw = d.raw_open.clone().ok_or("no raw file is being opened")?;
             let (params, original) = (d.params.clone(), d.original.clone());
-            commit_open_raw(app, &params, &raw, Some(&original))?
+            super::filmstrip::open_all(app, &params, &raw, &original)?
         }
     };
     app.camera_raw = None;
@@ -145,6 +145,111 @@ fn section(ui: &mut egui::Ui, title: &str, open: bool, body: impl FnOnce(&mut eg
         .show(ui, body);
 }
 
+/// Geometry: Upright (Off, Auto, Level, Vertical, Full, Guided) and the Manual Transformations.
+fn geometry(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, guides: &mut crate::camera_raw_guides_ui::GuideTool) {
+    let reveal = std::mem::take(&mut guides.reveal);
+    let id = ui.make_persistent_id(("camera-raw-section", "Geometry"));
+    if reveal {
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+        state.set_open(true);
+        state.store(ui.ctx());
+    }
+    let response =
+        egui::CollapsingHeader::new(egui::RichText::new(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", "Geometry")).font(FontId::proportional(13.0)))
+            .id_salt(("camera-raw-section", "Geometry"))
+            .default_open(false)
+            .show(ui, |ui| {
+                widgets::section_label(ui, tl!("Upright"));
+                const MODES: [(&str, &str, &str); 6] = [
+                    ("off", "Off", "Disable Upright"),
+                    ("auto", "Auto", "Auto: apply balanced perspective corrections"),
+                    ("level", "Level", "Level: apply only level correction"),
+                    ("vertical", "Vertical", "Vertical: apply level and vertical perspective correction"),
+                    ("full", "Full", "Full: apply level, horizontal, and vertical perspective corrections"),
+                    ("guided", "Guided", "Guided: draw two or more guides to customize perspective corrections"),
+                ];
+                ui.horizontal_wrapped(|ui| {
+                    for (mode, name, tip) in MODES {
+                        let name = crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", name);
+                        let on = p.upright == mode;
+                        let response = widgets::pill_tab(ui, name, on).on_hover_text(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", tip));
+                        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, name));
+                        if response.clicked() {
+                            if p.upright != mode {
+                                p.upright = mode.into();
+                                // Guides belong to Guided; another mode starts without them.
+                                p.upright_guides.clear();
+                                *dirty = true;
+                            }
+                            guides.active = mode == "guided";
+                        }
+                    }
+                });
+                if p.upright == "guided" {
+                    let n = p.upright_guides.len();
+                    let text = if n < 2 {
+                        tl!("Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).")
+                    } else {
+                        tl!("Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.")
+                    };
+                    ui.label(egui::RichText::new(text).small().weak());
+                    if n > 0 && ui.button(tl!("Clear Guides")).clicked() {
+                        p.upright_guides.clear();
+                        guides.selected = None;
+                        *dirty = true;
+                    }
+                }
+                widgets::section_label(ui, tl!("Manual Transformations"));
+                row(ui, dirty, "Vertical", &mut p.transform_vertical, -100.0..=100.0, None);
+                row(ui, dirty, "Horizontal", &mut p.transform_horizontal, -100.0..=100.0, None);
+                row(ui, dirty, "Rotate", &mut p.transform_rotate, -10.0..=10.0, None);
+                row(ui, dirty, "Aspect", &mut p.transform_aspect, -100.0..=100.0, None);
+                let scale = slider(ui, dirty, "Scale", &mut p.transform_scale, 50.0..=150.0, None);
+                if scale.double_clicked() {
+                    // Scale's neutral is 100 %, not the 0 every other slider resets to.
+                    p.transform_scale = 100.0;
+                }
+                row(ui, dirty, "Offset X", &mut p.transform_offset_x, -100.0..=100.0, None);
+                row(ui, dirty, "Offset Y", &mut p.transform_offset_y, -100.0..=100.0, None);
+            });
+    if reveal {
+        response.header_response.scroll_to_me(Some(egui::Align::TOP));
+    }
+}
+
+/// Shift+T picks Guided Upright and its tool (a second press puts the tool down); Delete or
+/// Backspace removes the selected guide. Each change is one undo step.
+fn guide_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
+    if ctx.text_edit_focused() {
+        return;
+    }
+    // Shift exactly, since consume_key with no Shift would also take Shift+T.
+    let shift_t = ctx.input_mut(|i| i.modifiers.shift && !i.modifiers.command && !i.modifiers.alt && i.consume_key(egui::Modifiers::SHIFT, egui::Key::T));
+    if shift_t {
+        let was = d.params.clone();
+        if crate::camera_raw_guides_ui::toggle(&mut d.guides, &mut d.params) {
+            let guided = std::mem::replace(&mut d.params, was);
+            remember_edit(d);
+            d.params = guided;
+            d.dirty = true;
+        }
+        if d.guides.active {
+            d.guides.reveal = true;
+        }
+    }
+    let delete = d.guides.active
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
+    if delete {
+        let was = d.params.clone();
+        if crate::camera_raw_guides_ui::delete_selected(&mut d.guides, &mut d.params) {
+            let edited = std::mem::replace(&mut d.params, was);
+            remember_edit(d);
+            d.params = edited;
+            d.dirty = true;
+        }
+    }
+}
+
 fn wheel(ui: &mut egui::Ui, dirty: &mut bool, title: &str, w: &mut Wheel) {
     widgets::section_label(ui, crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", title));
     let hs = widgets::hue_stops();
@@ -188,10 +293,11 @@ fn curve_editor(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, state: &
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.camera_raw.is_none()
-        && let Some(raw) = app.pending_raw_open.take()
-        && let Err(e) = open_raw(app, ctx, raw)
+        && !app.raw_shelf.is_empty()
+        && let Err(e) = super::filmstrip::open_held(app, ctx, 0)
     {
         // The document stays open, developed with the defaults.
+        app.raw_shelf.remove(0);
         app.ui.status = e;
         app.ui.status_error = true;
     }
@@ -205,14 +311,26 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Camera Raw is modal, as in Photoshop: the main window is dimmed and takes no input while it
     // is open (in a separate window, or drawn over it where there are no extra windows).
     let main = ctx.content_rect();
-    egui::Area::new(egui::Id::unique("camera-raw-modal")).order(egui::Order::Foreground).fixed_pos(main.min).show(ctx, |ui| {
-        let (r, _) = ui.allocate_exact_size(main.size(), Sense::click_and_drag());
+    let scrim = egui::Area::new(egui::Id::unique("camera-raw-modal")).order(egui::Order::Foreground).fixed_pos(main.min).show(ctx, |ui| {
+        let (r, response) = ui.allocate_exact_size(main.size(), Sense::click_and_drag());
         ui.painter().rect_filled(r, 0.0, Tokens::get(ui.ctx()).scrim);
+        response
     });
+    let window = egui::ViewportId::from_hash_of("camera-raw-window");
+    // Coming back to PhotoCraft (⌘Tab, the Dock) can bring the main window over Camera Raw,
+    // leaving only the dimmed window that takes no input: the main window gaining focus, or a
+    // click on it, brings Camera Raw back to the front.
+    let main_focused = ctx.input(|i| i.viewport().focused.unwrap_or(false));
+    if let Some(d) = app.camera_raw.as_mut() {
+        if raise_camera_raw(d.main_focused, main_focused, scrim.inner.clicked() || scrim.inner.drag_started()) {
+            ctx.send_viewport_cmd_to(window, egui::ViewportCommand::Focus);
+        }
+        d.main_focused = main_focused;
+    }
     // A window of its own (title bar, moved and resized like any window), like Adobe Camera Raw.
     let builder = egui::ViewportBuilder::default().with_title(window_title).with_inner_size([1360.0, 900.0]).with_min_inner_size([900.0, 600.0]);
     let mut close = false;
-    ctx.show_viewport_immediate(egui::ViewportId::from_hash_of("camera-raw-window"), builder, |ui, class| {
+    ctx.show_viewport_immediate(window, builder, |ui, class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             close = true;
         }
@@ -221,6 +339,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if close && app.camera_raw.is_some() {
         cancel(app);
     }
+}
+
+/// Whether to bring Camera Raw's window to the front: when the main window has just gained focus
+/// (it came forward over Camera Raw's) or is clicked.
+fn raise_camera_raw(was_focused: bool, focused: bool, clicked: bool) -> bool {
+    (focused && !was_focused) || clicked
 }
 
 impl CameraRawDialog {
@@ -241,9 +365,11 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let screen = ctx.content_rect();
     let current_display = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok());
     let mut action: Option<&str> = None;
+    let mut show_held: Option<usize> = None;
     egui::Area::new(egui::Id::unique("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
+        guide_keys(d, ctx);
         let pointer = ctx.input(|i| i.pointer.primary_down());
         if pointer && d.edit_origin.is_none() {
             d.edit_origin = Some(d.params.clone());
@@ -278,7 +404,16 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let animated_zoom = app.session.prefs().general.animated_zoom;
         let scope = &mut app.ui.camera_raw_scope;
         // Clip both pixels and scope overlays before painting the settings dock/footer.
-        let preview_body = ERect::from_min_max(body.min, pos2((body.right() - PANEL_W).max(body.left() + 1.0), body.bottom()));
+        // Several raws being opened: the filmstrip on the left.
+        let film_w = if d.target == Target::OpenRaw && app.raw_shelf.len() > 1 { super::filmstrip::FILM_W } else { 0.0 };
+        if film_w > 0.0 {
+            let film = ERect::from_min_max(body.min, pos2(body.left() + film_w - 1.0, body.bottom()));
+            painter.rect_filled(film, 0.0, t.dock);
+            painter.line_segment([film.right_top(), film.right_bottom()], Stroke::new(1.0, t.separator));
+            show_held = super::filmstrip::filmstrip(ui, film, &mut app.raw_shelf, d.raw_open.as_ref().map(|r| r.document), &t);
+        }
+        let preview_body =
+            ERect::from_min_max(pos2(body.left() + film_w, body.top()), pos2((body.right() - PANEL_W).max(body.left() + film_w + 1.0), body.bottom()));
         let view = ERect::from_min_max(
             preview_body.min + vec2(16.0, 16.0),
             pos2((preview_body.right() - 16.0).max(preview_body.left() + 17.0), (preview_body.bottom() - 48.0).max(preview_body.top() + 17.0)),
@@ -290,8 +425,18 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let mut preview = ui.new_child(egui::UiBuilder::new().max_rect(view));
         preview.set_clip_rect(view.intersect(ui.clip_rect()));
         preview.painter().rect_filled(view, 0.0, t.canvas);
-        let (r, response, panning, zoom_box) =
-            crate::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut scope.sampler_tool, animated_zoom);
+        // The Guided Upright tool takes the preview's clicks as the sampler does (the Hand and
+        // Zoom tools put it down).
+        if d.params.upright != "guided" || scope.sampler_tool {
+            d.guides.active = false;
+        }
+        let guided = d.guides.active;
+        let mut clicks_taken = scope.sampler_tool || guided;
+        let (r, response, panning, zoom_box) = crate::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut clicks_taken, animated_zoom);
+        if !clicks_taken {
+            scope.sampler_tool = false;
+            d.guides.active = false;
+        }
         let tex = if d.show_before { d.before_tex.as_ref() } else { d.tex.as_ref() };
         if let Some(tex) = tex {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
@@ -305,6 +450,13 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             }
             d.scope.preview_rect = Some(r);
             crate::camera_raw_scope_ui::preview(&mut preview, d, scope, r, &response, panning);
+            if guided && d.guides.active && !d.show_before {
+                let shown = d.params.clone();
+                let (fw, fh) = (d.full_w, d.full_h);
+                if crate::camera_raw_guides_ui::preview(&mut preview, &mut d.guides, &mut d.params, &shown, r, fw, fh, &response, panning, d.tex.as_ref()) {
+                    d.dirty = true;
+                }
+            }
         }
         if let Some(region) = zoom_box {
             preview.painter().rect_stroke(region, 0.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
@@ -312,7 +464,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let toolbar = ERect::from_min_max(pos2(preview_body.left() + 16.0, view.bottom() + 8.0), preview_body.right_bottom() - vec2(16.0, 4.0));
         let mut nav_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar).layout(egui::Layout::left_to_right(egui::Align::Center)));
         nav_ui.set_clip_rect(preview_body.intersect(ui.clip_rect()));
-        crate::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut scope.sampler_tool);
+        let mut tool_taken = scope.sampler_tool || d.guides.active;
+        crate::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut tool_taken);
+        if !tool_taken {
+            scope.sampler_tool = false;
+            d.guides.active = false;
+        }
         if d.detail.pending() {
             nav_ui.spinner();
         }
@@ -423,6 +580,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 row(ui, &mut dirty, "Blending", &mut p.grade_blending, 0.0..=100.0, None);
                 row(ui, &mut dirty, "Balance", &mut p.grade_balance, -100.0..=100.0, None);
             });
+            geometry(ui, p, &mut dirty, &mut d.guides);
             section(ui, "Detail", false, |ui| {
                 if let Some(raw) = d.raw_open.as_mut() {
                     demosaic_row(ui, &mut raw.demosaic);
@@ -476,6 +634,15 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         ) {
             action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
         }
+        // Done (open-time dialog): keep the settings in the raws' sidecars, open nothing.
+        if d.target == Target::OpenRaw
+            && fu
+                .add_sized([90.0, 28.0], egui::Button::new(tl!("Done")))
+                .on_hover_text(tl!("Save the settings to each raw's sidecar without opening it"))
+                .clicked()
+        {
+            action = Some("done");
+        }
         fu.add_space(12.0);
         widgets::checkbox(&mut fu, &mut d.show_before, tl!("Before (Y)"));
         fu.label(egui::RichText::new(format!("{:.0} ms", d.render_ms)).color(t.text_faint));
@@ -496,12 +663,18 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         }
     });
     crate::camera_raw_scope_ui::persist(app, ctx);
+    if let Some(i) = show_held
+        && let Err(e) = super::filmstrip::show_raw(app, ctx, i)
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
+    }
     if ctx.input(|i| i.key_pressed(egui::Key::Y))
         && let Some(d) = app.camera_raw.as_mut()
     {
         d.show_before = !d.show_before;
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !app.camera_raw.as_mut().is_some_and(|d| d.guides.escape()) {
         action = Some("cancel");
     }
     match action {
@@ -511,6 +684,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             }
         }
         Some("cancel") => cancel(app),
+        Some("done") => {
+            super::filmstrip::done(app);
+        }
         Some("save") => {
             let r = save_settings(app);
             report_file_error(app, r);
@@ -520,5 +696,21 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             report_file_error(app, r);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Coming back to PhotoCraft can put the main window over Camera Raw's: the main window
+    /// gaining focus brings Camera Raw's window to the front, once per activation, and so does a
+    /// click on the dimmed main window.
+    #[test]
+    fn the_main_window_gaining_focus_brings_camera_raw_back_to_the_front() {
+        assert!(raise_camera_raw(false, true, false), "the main window came forward");
+        assert!(!raise_camera_raw(true, true, false), "only once, so Camera Raw's own focus isn't fought");
+        assert!(!raise_camera_raw(true, false, false) && !raise_camera_raw(false, false, false));
+        assert!(raise_camera_raw(true, true, true), "a click on the dimmed main window");
     }
 }

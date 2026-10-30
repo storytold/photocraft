@@ -4261,3 +4261,31 @@ curves	Smooth	Vloeiend maken
 	Font size presets	Voorinstellingen lettergrootte
 	Leading presets	Voorinstellingen interlinie
 	Tracking presets	Voorinstellingen spatiëring
+	Upright	Upright
+	Manual Transformations	Handmatige transformaties
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Teken twee of meer hulplijnen op de afbeelding langs lijnen die verticaal of horizontaal moeten zijn (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Sleep het uiteinde van een hulplijn om het te verplaatsen; selecteer een hulplijn en druk op Delete om deze te verwijderen. Maximaal vier hulplijnen.
+cameraRaw	Geometry	Geometrie
+cameraRaw	Off	Uit
+cameraRaw	Auto	Automatisch
+cameraRaw	Level	Niveau
+cameraRaw	Vertical	Verticaal
+cameraRaw	Full	Volledig
+cameraRaw	Disable Upright	Upright uitschakelen
+cameraRaw	Auto: apply balanced perspective corrections	Automatisch: evenwichtige perspectiefcorrecties toepassen
+cameraRaw	Level: apply only level correction	Waterpas: alleen waterpascorrectie toepassen
+cameraRaw	Vertical: apply level and vertical perspective correction	Verticaal: waterpas en verticale perspectiefcorrectie toepassen
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Volledig: waterpas plus horizontale en verticale perspectiefcorrecties toepassen
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Begeleid: teken twee of meer hulplijnen om de perspectiefcorrecties aan te passen
+cameraRaw	Horizontal	Horizontaal
+cameraRaw	Rotate	Roteren
+cameraRaw	Aspect	Beeldverhouding
+cameraRaw	Scale	Schalen
+cameraRaw	Offset X	Verschuiving X
+cameraRaw	Offset Y	Verschuiving Y
+cameraRaw	Guided	Begeleid
+	Saved Camera Raw settings to {file}	Camera Raw-instellingen opgeslagen in {file}
+	Save the settings to each raw's sidecar without opening it	De instellingen in het sidecarbestand van elke raw opslaan zonder die te openen
+	No settings saved: these raws can't keep a sidecar here	Niets opgeslagen: deze raws kunnen hier geen sidecarbestand krijgen
+	Some settings could not be saved; the raws stay open	Sommige instellingen konden niet worden opgeslagen; de raws blijven open
+	Nothing to save: these raws are at their default settings	Niets op te slaan: deze raws staan op hun standaardinstellingen

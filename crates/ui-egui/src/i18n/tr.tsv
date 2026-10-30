@@ -4229,3 +4229,31 @@ cameraData	Lens	Lens
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları
+	Upright	Upright
+	Manual Transformations	Elle Dönüştürmeler
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Görüntüde dikey veya yatay olması gereken çizgiler boyunca iki veya daha fazla kılavuz çizin (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Taşımak için kılavuzun ucunu sürükleyin; kaldırmak için bir kılavuz seçip Delete tuşuna basın. En fazla dört kılavuz.
+cameraRaw	Geometry	Geometri
+cameraRaw	Off	Kapalı
+cameraRaw	Auto	Otomatik
+cameraRaw	Level	Seviye
+cameraRaw	Vertical	Dikey
+cameraRaw	Full	Tam
+cameraRaw	Disable Upright	Upright'ı Devre Dışı Bırak
+cameraRaw	Auto: apply balanced perspective corrections	Otomatik: dengeli perspektif düzeltmeleri uygula
+cameraRaw	Level: apply only level correction	Düzleme: yalnızca düzleme düzeltmesi uygula
+cameraRaw	Vertical: apply level and vertical perspective correction	Dikey: düzleme ve dikey perspektif düzeltmesi uygula
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Tam: düzleme, yatay ve dikey perspektif düzeltmelerini uygula
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Kılavuzlu: perspektif düzeltmelerini özelleştirmek için iki veya daha fazla kılavuz çizin
+cameraRaw	Horizontal	Yatay
+cameraRaw	Rotate	Döndür
+cameraRaw	Aspect	En-Boy
+cameraRaw	Scale	Ölçekle
+cameraRaw	Offset X	Ofset X
+cameraRaw	Offset Y	Ofset Y
+cameraRaw	Guided	Kılavuzlu
+	Saved Camera Raw settings to {file}	Camera Raw ayarları {file} dosyasına kaydedildi
+	Save the settings to each raw's sidecar without opening it	Ayarları her raw dosyasının yan dosyasına kaydet, açmadan
+	No settings saved: these raws can't keep a sidecar here	Hiçbir şey kaydedilmedi: bu raw dosyaları burada yan dosyaya sahip olamaz
+	Some settings could not be saved; the raws stay open	Bazı ayarlar kaydedilemedi; raw dosyaları açık kalıyor
+	Nothing to save: these raws are at their default settings	Kaydedilecek bir şey yok: bu raw dosyaları varsayılan ayarlarda

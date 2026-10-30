@@ -4573,3 +4573,31 @@ shape	Appearance	Izgled
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova
+	Upright	Uspravljanje
+	Manual Transformations	Ručne transformacije
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Nacrtajte na slici dve ili više vodilja duž linija koje treba da budu vertikalne ili horizontalne (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Prevucite kraj vodilje da biste ga pomerili; izaberite vodilju i pritisnite Delete da biste je uklonili. Najviše četiri vodilje.
+cameraRaw	Geometry	Geometrija
+cameraRaw	Off	Isključeno
+cameraRaw	Auto	Automatski
+cameraRaw	Level	Nivo
+cameraRaw	Vertical	Vertikalno
+cameraRaw	Full	Potpuna
+cameraRaw	Disable Upright	Isključi uspravljanje
+cameraRaw	Auto: apply balanced perspective corrections	Automatski: primeni uravnotežene korekcije perspektive
+cameraRaw	Level: apply only level correction	Nivo: primeni samo korekciju nivoa
+cameraRaw	Vertical: apply level and vertical perspective correction	Vertikalno: primeni korekciju nivoa i vertikalne perspektive
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Puno: primeni korekcije nivoa, horizontalne i vertikalne perspektive
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Vođeno: nacrtajte dve ili više vodilja da prilagodite korekcije perspektive
+cameraRaw	Horizontal	Horizontalno
+cameraRaw	Rotate	Rotacija
+cameraRaw	Aspect	Odnos stranica
+cameraRaw	Scale	Skaliranje
+cameraRaw	Offset X	Pomak X
+cameraRaw	Offset Y	Pomak Y
+cameraRaw	Guided	Vođeno
+	Saved Camera Raw settings to {file}	Подешавања Camera Raw сачувана у {file}
+	Save the settings to each raw's sidecar without opening it	Sačuvaj podešavanja u prateću datoteku svakog raw snimka bez otvaranja
+	No settings saved: these raws can't keep a sidecar here	Ništa nije sačuvano: ovi raw snimci ovde ne mogu imati prateću datoteku
+	Some settings could not be saved; the raws stay open	Neka podešavanja nije moguće sačuvati; raw snimci ostaju otvoreni
+	Nothing to save: these raws are at their default settings	Nema šta da se sačuva: ovi raw snimci imaju podrazumevana podešavanja

@@ -195,6 +195,20 @@ impl LensMap {
         }
     }
 
+    /// Follows the keystone with homography `m` (normalised coordinates: centre 0, half
+    /// diagonal 1) before the distortion: Camera Raw's Upright sits there.
+    pub fn then_homography(mut self, m: [f64; 9]) -> LensMap {
+        let k = if m[8].abs() > 1e-12 { m[8] } else { 1.0 };
+        let mut r = [0.0; 9];
+        for i in 0..3 {
+            for j in 0..3 {
+                r[i * 3 + j] = (0..3).map(|q| m[i * 3 + q] / k * self.hinv[q * 3 + j]).sum();
+            }
+        }
+        self.hinv = r;
+        self
+    }
+
     /// Output px → where to sample (`None` when the keystone sends it to infinity).
     pub fn sample(&self, x: f64, y: f64) -> Option<Sample> {
         // Undo scale and rotation (about the centre).
@@ -208,7 +222,8 @@ impl LensMap {
         if w <= 0.05 {
             return None;
         }
-        let (ux, uy) = (nx / w, ny / w);
+        // The whole matrix: Upright's rotation ([`Self::then_homography`]) fills its top rows.
+        let (ux, uy) = ((m[0] * nx + m[1] * ny + m[2]) / w, (m[3] * nx + m[4] * ny + m[5]) / w);
         // Lens distortion (Brown–Conrady).
         let r2 = ux * ux + uy * uy;
         let radial = 1.0 + self.k1 * r2 + self.k2 * r2 * r2;
