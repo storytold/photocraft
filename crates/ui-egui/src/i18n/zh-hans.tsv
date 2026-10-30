@@ -3185,3 +3185,64 @@ curves	Smooth	平滑
 	Font size presets	字号预设
 	Leading presets	行距预设
 	Tracking presets	字距调整预设
+
+# Channels panel, rasterize prompts, font panel and workspace notices.
+	Drag a crop box · drag inside to move · edges resize ({ratio} ratio, {centre} centre) · Space moves while drawing · {commit} commits · Esc cancels	拖动裁剪框 · 框内拖动可移动 · 拖边缘调整（{ratio} 比例，{centre} 中心）· 空格键拖动画面 · {commit} 确认 · Esc 取消
+	Kerning: Metrics, Optical or a value in 1/1000 em (Alt+←/→ at the caret)	字距：度量、视觉，或 1/1000 em 的数值（光标处按 Alt+←/→）
+	Basic Latin	基本拉丁文
+	Latin 1	拉丁文-1
+	Latin Extended-A	拉丁文扩展-A
+	Latin Extended-B	拉丁文扩展-B
+	Greek	希腊文
+	Cyrillic	西里尔文
+	Punctuation	标点
+	Numbers	数字
+	Currency	货币符号
+	Symbols	符号
+	Math Symbols	数学符号
+	Arrows	箭头
+	The current gradient (pick one in Window › Gradients)	当前渐变（可在 窗口 › 渐变 中选择）
+	Duplicate Channel	复制通道
+	Delete Channel	删除通道
+	Rename Channel…	重命名通道…
+	Merge Spot Channel	合并专色通道
+	Convert to Alpha Channel	转换为 Alpha 通道
+	Exit Quick Mask	退出快速蒙版
+	New Channel…	新建通道…
+	New Spot Channel…	新建专色通道…
+	Split Channels	拆分通道
+	Merge Channels…	合并通道…
+	Native file drag-and-drop is not supported on Wayland yet. Use File › Open, or run PhotoCraft under XWayland with `WAYLAND_DISPLAY= photocraft`.	Wayland 上暂不支持原生文件拖放。请用 文件 › 打开，或设置 `WAYLAND_DISPLAY= photocraft` 在 XWayland 下运行 PhotoCraft。
+	Channel1	通道1
+	Channel2	通道2
+	Channel3	通道3
+	Channel4	通道4
+	New Channel	新建通道
+	Spot	专色
+	Spot Healing	污点修复
+	New channel only	仅新通道
+	Hanging Punctuation	悬挂标点
+	Roman Hanging Punctuation	罗马悬挂标点
+	Saved Multichannel	已保存的多通道
+	Spot Channel	专色通道
+	Target Composite Channel	目标复合通道
+	Target Channel 3	目标通道 3
+	Target Channel 4	目标通道 4
+	Target Channel 5	目标通道 5
+	Target Channel 6	目标通道 6
+	Target Channel 7	目标通道 7
+	Target Channel 8	目标通道 8
+	Target Channel 9	目标通道 9
+	Mask Channel	蒙版通道
+	Source Channel	源通道
+	Source1 Channel	源1 通道
+	Source2 Channel	源2 通道
+	Show Channels in Color	以彩色显示通道
+	Save your work and restart PhotoCraft to retry GPU acceleration. CPU rendering remains active for this session.	请保存工作并重启 PhotoCraft 以重试 GPU 加速。本次会话仍使用 CPU 渲染。
+	The document does not have an embedded colour profile. Working space: {working}.	文档没有内嵌色彩配置文件。工作空间：{working}。
+	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	文档内嵌的色彩配置文件与工作空间不一致。\n内嵌：{embedded}\n工作：{working}
+	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	继续前必须栅格化这个智能对象。其内容将不再可编辑。要栅格化智能对象吗？
+	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	继续前必须栅格化这个填充图层。其填充内容将不再可编辑。要栅格化图层吗？
+	This layer must be rasterized before proceeding.	继续前必须栅格化这个图层。
+	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	继续前必须栅格化这个形状图层。它将不再作为形状可编辑。要栅格化形状吗？
+	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	继续前必须栅格化这个文字图层。文字将不再可编辑。要栅格化文字吗？
