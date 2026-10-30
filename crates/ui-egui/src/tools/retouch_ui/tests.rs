@@ -8,6 +8,62 @@ fn app() -> PhotocraftApp {
     app
 }
 
+#[test]
+fn selection_brush_paints_and_alt_erases_without_painting_pixels() {
+    let mut app = app();
+    let before = active(&app).surface().unwrap().rgba(30, 30);
+    drag(&mut app, Tool::SelectionBrush);
+    assert!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(30, 30, 0) > 0.9);
+    assert_eq!(active(&app).surface().unwrap().rgba(30, 30), before);
+    let alt = egui::Modifiers { alt: true, ..egui::Modifiers::NONE };
+    tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 }, alt);
+    tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 30.0 }, alt);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(30, 30, 0), 0.0);
+}
+
+#[test]
+fn selection_brush_escape_and_tool_switch_cancel_without_history() {
+    let mut app = app();
+    app.ui.tool = Tool::SelectionBrush;
+    let revision = app.session.active().unwrap().revision;
+    let none = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 }, none);
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        events: vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: none }],
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| crate::shortcuts::handle(&mut app, ui.ctx()));
+    output.textures_delta.clear();
+    assert!(app.drag.is_none());
+    tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 30.0 }, none);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 }, none);
+    app.ui.tool = Tool::Move;
+    tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 30.0 }, none);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+}
+
+#[test]
+fn selection_brush_soft_strength_and_persistent_subtract() {
+    let mut app = app();
+    app.ui.tool = Tool::SelectionBrush;
+    crate::canvas::paint_mouse::sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({"brush":{"size":30,"hardness":0.0,"opacity":0.5}})).unwrap();
+    let none = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 30.0 }, none);
+    let a = app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(40, 30, 0);
+    assert!((a - 0.5).abs() < 0.03);
+    app.ui.tool_options.selection_brush.subtract = true;
+    tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 30.0 }, none);
+    assert!(app.session.active().unwrap().doc.selection.as_ref().is_none_or(|s| s.sample_channel(40, 30, 0) == 0.0));
+    assert!(app.ui.tool_options.selection_brush.subtracts(true));
+}
+
 fn drag(app: &mut PhotocraftApp, tool: Tool) {
     app.ui.tool = tool;
     let m = egui::Modifiers::NONE;

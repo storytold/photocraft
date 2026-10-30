@@ -42,6 +42,7 @@ pub mod rulers;
 pub mod scrollbars;
 pub mod select_mask_view;
 mod selection;
+mod selection_brush;
 pub mod snap_ui;
 mod start_screen;
 mod strokes;
@@ -242,7 +243,9 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
         Some(Some((proxy, k))) => (proxy.selection.as_ref(), (*k).max(1)),
     };
     // Selection outline: true boundary, animated marching ants (cached per revision).
-    if let Some(sel) = outlined.filter(|_| app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app)) {
+    if let Some(sel) =
+        outlined.filter(|_| app.ui.tool != Tool::SelectionBrush && app.ui.view.shows(app.ui.view.show.selection_edges) && !polygon_replaces_selection(app))
+    {
         // Trace at display resolution over the visible part only; key by the mask's tile identity
         // (not the document revision) so unrelated edits don't re-trace it. The step is in
         // device pixels per document pixel (`View::zoom`, not the point zoom), so a 1 px
@@ -488,6 +491,7 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
             painter.image(tex, xf.doc_rect(a), uv, Color32::WHITE);
         }
     }
+    selection_brush::paint(app, ctx, painter, &xf, idx);
     crate::color_range_ui::paint_selection_preview(app, ctx, painter, doc.id, img_rect, flip);
     // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
     if doc.has_artboards() {
@@ -1455,7 +1459,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 pipette_cursor(ui.ctx(), p)
             }
         }
-        t if t.is_brushlike() || t == Tool::QuickSelection => {
+        t if t.is_brushlike() || matches!(t, Tool::QuickSelection | Tool::SelectionBrush) => {
             // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
             // full size), precise crosshair, or the standard pointer.
             use photocraft_engine::prefs::PaintingCursor;
@@ -1589,7 +1593,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
     let held = crate::workspace_ui::sticky_mods(app, ui.input(|i| i.modifiers));
     let mods = app.drag.as_ref().map_or(held, |d| d.modifiers);
     if let Some(b) = crate::tool_feedback::badge(app, tool, mods) {
-        crate::tool_feedback::draw_badge(painter, p, b, tool == Tool::QuickSelection);
+        crate::tool_feedback::draw_badge(painter, p, b, matches!(tool, Tool::QuickSelection | Tool::SelectionBrush));
     }
     // ⇧ after a stroke: the straight line a click would paint (#257).
     crate::stroke_constraint::draw_line_preview(app, painter, xf, p, tool, held.shift);

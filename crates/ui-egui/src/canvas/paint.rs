@@ -511,10 +511,11 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
                 draw_smoothing_string(painter, xf, s);
             }
         }
-        t if t.is_brushlike() || t == Tool::QuickSelection => {
+        t if t.is_brushlike() || matches!(t, Tool::QuickSelection | Tool::SelectionBrush) => {
             // Retouching strokes preview as a translucent trail of the brush footprint: a mask,
             // not a brush-wide egui polyline (which zoomed in tessellates into wedges, #189).
             let col = match t {
+                Tool::SelectionBrush => return,
                 Tool::QuickSelection => Color32::from_white_alpha(40),
                 // The Remove Tool tints what it will remove, like Photoshop's.
                 Tool::Remove => crate::theme::Tokens::get(painter.ctx()).danger.gamma_multiply(0.45),
@@ -531,7 +532,7 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             let brush = || photocraft_engine::retouch_cmds::stroke_brush(&app.session.tools.brush, &json!({}));
             match t {
                 // Quick Selection reads the brush's size alone (`select.quick`).
-                Tool::QuickSelection => trail.feed(&d.points, app.session.tools.brush.size),
+                Tool::QuickSelection | Tool::SelectionBrush => trail.feed(&d.points, app.session.tools.brush.size),
                 // Remove removes every pixel a dab touches, so its whole reach is tinted: a soft
                 // tip's reaches well past the nominal radius.
                 Tool::Remove => trail.feed_reach(&d.points, brush),

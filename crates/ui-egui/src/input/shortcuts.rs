@@ -789,6 +789,13 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
         }
     }
     // Enter / Escape commit or cancel in-progress tool state (polygonal lasso, crop).
+    if app.drag.as_ref().is_some_and(|d| d.tool == Tool::SelectionBrush) {
+        let mods = ctx.input(|i| i.modifiers);
+        if ctx.input_mut(|i| i.consume_key(mods, Key::Escape)) {
+            app.drag = None;
+            return true;
+        }
+    }
     if crate::lasso_ui::active(app) {
         let mods = ctx.input(|i| i.modifiers);
         if ctx.input_mut(|i| i.consume_key(mods, Key::Escape)) {

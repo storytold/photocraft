@@ -91,6 +91,11 @@ fn reset_all(app: &mut PhotocraftApp) {
 
 fn reset_session_brush(app: &mut PhotocraftApp) {
     app.session.tools.brush = crate::paint_mouse::fresh_brush(&app.session.tools.brush);
+    if app.ui.tool == Tool::SelectionBrush {
+        app.session.tools.brush.size = 60.0;
+        app.session.tools.brush.hardness = 0.7;
+        app.session.tools.brush.opacity = 1.0;
+    }
     app.session.tools.brush_gesture = None;
     app.session.tools.current_preset = None;
     app.session.tools.brush_changed();
@@ -108,6 +113,7 @@ fn is_selection_tool(tool: Tool) -> bool {
             | Tool::MagneticLasso
             | Tool::MagicWand
             | Tool::QuickSelection
+            | Tool::SelectionBrush
             | Tool::ObjectSelection
     )
 }
@@ -164,6 +170,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         Tool::MagneticLasso => reset!(feather, anti_alias, magnetic_width, magnetic_contrast, magnetic_frequency, magnetic_pressure),
         Tool::MagicWand => reset!(tolerance, anti_alias, contiguous),
         Tool::QuickSelection => reset!(enhance_edge),
+        Tool::SelectionBrush => reset!(selection_brush),
         Tool::ObjectSelection => reset!(enhance_edge, object_finder),
         Tool::Crop => reset!(
             crop_ratio,

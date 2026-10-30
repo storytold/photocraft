@@ -39,7 +39,7 @@ pub(crate) fn pencil_tip_is_round(size: f32) -> bool {
 /// cursor. Other brushes follow Preferences › Cursors › Show Crosshair in Brush Tip, as in
 /// Photoshop; the Background Eraser always shows its sampling hotspot.
 pub(super) fn brush_tip_centre(tool: Tool, option: bool, show_crosshair: bool) -> bool {
-    if tool == Tool::QuickSelection {
+    if matches!(tool, Tool::QuickSelection | Tool::SelectionBrush) {
         return false;
     }
     if matches!(tool, Tool::CloneStamp | Tool::Healing) {

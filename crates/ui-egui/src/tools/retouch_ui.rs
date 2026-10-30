@@ -164,6 +164,19 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
             Some(cp) => cp,
             None => return false,
         },
+        Tool::SelectionBrush => {
+            let xy: Vec<[f64; 2]> = points.iter().map(|q| [q[0], q[1]]).collect();
+            if let Err(e) = app.run(
+                "select.brush",
+                json!({"points": xy, "size": app.session.tools.brush.size, "hardness":app.session.tools.brush.hardness*100.0,
+                    "opacity":app.session.tools.brush.opacity*100.0,"fillClosed":o.selection_brush.fill_closed,
+                    "mode": if o.selection_brush.subtracts(mods.alt) { "subtract" } else { "add" }}),
+            ) {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+            return true;
+        }
         Tool::QuickSelection => {
             let size = app.session.tools.brush.size;
             let mode = if mods.alt { "subtract" } else { "add" };
@@ -498,7 +511,8 @@ fn pct(ui: &mut egui::Ui, label: &str, v: &mut f32) {
 
 /// Options bar for the retouching and smart-selection tools. Returns false for other tools.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bool {
-    if !tool.is_brushlike() && !matches!(tool, Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
+    if !tool.is_brushlike()
+        && !matches!(tool, Tool::SelectionBrush | Tool::QuickSelection | Tool::ObjectSelection | Tool::Patch | Tool::ContentAwareMove | Tool::RedEye)
         || matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser)
     {
         return false;
@@ -684,6 +698,38 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
             crate::widgets::value_field(ui, &mut o.art_history_tolerance, 0.0..=100.0, "", 50.0);
             crate::widgets::vline(ui, 22.0);
             opt(ui, tl!("Stylized dabs from a history state"));
+        }
+        Tool::SelectionBrush => {
+            let settings = &mut o.selection_brush;
+            if crate::widgets::pill_tab(ui, tl!("Add"), !settings.subtract).clicked() {
+                settings.subtract = false;
+            }
+            if crate::widgets::pill_tab(ui, tl!("Subtract"), settings.subtract).clicked() {
+                settings.subtract = true;
+            }
+            let before = app.session.tools.brush.clone();
+            let mut brush = before.clone();
+            opt(ui, tl!("Size"));
+            crate::widgets::value_field(ui, &mut brush.size, 1.0..=5000.0, "px", 56.0);
+            let mut hardness = brush.hardness * 100.0;
+            let mut opacity = brush.opacity * 100.0;
+            opt(ui, tl!("Hardness"));
+            crate::widgets::value_field(ui, &mut hardness, 0.0..=100.0, "%", 52.0);
+            opt(ui, tl!("Opacity"));
+            crate::widgets::value_field(ui, &mut opacity, 0.0..=100.0, "%", 52.0);
+            ui.menu_button(tl!("Brush Settings"), |ui| {
+                crate::widgets::slider_row(ui, tl!("Size"), &mut brush.size, 1.0..=5000.0, "px", None);
+                crate::widgets::slider_row(ui, tl!("Hardness"), &mut hardness, 0.0..=100.0, "%", None);
+                crate::widgets::slider_row(ui, tl!("Opacity"), &mut opacity, 0.0..=100.0, "%", None);
+            });
+            ui.menu_button(tl!("Overlay"), |ui| {
+                crate::widgets::color_edit_button_rgb(ui, &mut settings.overlay_color);
+                crate::widgets::slider_row(ui, tl!("Display Opacity"), &mut settings.overlay_opacity, 0.0..=100.0, "%", None);
+                crate::widgets::checkbox(ui, &mut settings.fill_closed, tl!("Fill Closed Strokes"));
+            });
+            brush.hardness = hardness / 100.0;
+            brush.opacity = opacity / 100.0;
+            crate::brush_panel::commit_gesture(app, ui.ctx(), &before, &brush);
         }
         Tool::QuickSelection => {
             crate::widgets::checkbox(ui, &mut o.sample_all.quick_selection, tl!("Sample All Layers"));

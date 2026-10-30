@@ -89,6 +89,7 @@ pub struct ToolOptions {
     pub finger_painting: bool,
     /// Quick Selection enhance edge.
     pub enhance_edge: bool,
+    pub selection_brush: SelectionBrushOptions,
     /// Pen: "path" (work path) or "shape" (shape layer).
     pub vector_mode: String,
     /// Pen, Freeform Pen and Curvature Pen › Path Operations (#1397): how a new path combines with
@@ -413,6 +414,7 @@ impl Default for ToolOptions {
             protect_detail: true,
             finger_painting: false,
             enhance_edge: false,
+            selection_brush: Default::default(),
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
             shape_fill: true,
@@ -478,5 +480,30 @@ impl Default for ToolOptions {
             art_history_area: 50.0,
             art_history_tolerance: 0.0,
         }
+    }
+}
+
+/// Selection Brush view settings. Coverage strength lives in its per-tool brush, not here.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase", deny_unknown_fields)]
+pub struct SelectionBrushOptions {
+    pub subtract: bool,
+    pub overlay_color: [f32; 3],
+    pub overlay_opacity: f32,
+    pub fill_closed: bool,
+}
+impl Default for SelectionBrushOptions {
+    fn default() -> Self {
+        Self { subtract: false, overlay_color: [1.0, 0.0, 0.0], overlay_opacity: 40.0, fill_closed: true }
+    }
+}
+impl SelectionBrushOptions {
+    pub fn valid(&self) -> bool {
+        self.overlay_color.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
+            && self.overlay_opacity.is_finite()
+            && (0.0..=100.0).contains(&self.overlay_opacity)
+    }
+    pub fn subtracts(&self, alt: bool) -> bool {
+        self.subtract || alt
     }
 }
