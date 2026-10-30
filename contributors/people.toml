@@ -283,5 +283,8 @@ sync_github_name = false
 real_name = "Jason DeBoever"
 sync_github_name = true
 
+[people.MeltedHugo]
+real_name = "Ember"
+
 [people.dylanmtaylor]
 sync_github_name = true

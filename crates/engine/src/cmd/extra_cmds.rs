@@ -666,13 +666,16 @@ fn content_pixels(doc: &Document, l: &Layer) -> photocraft_raster::Surface {
     tmp.clipped = false;
     tmp.visible = true;
     let canvas = doc.bounds();
-    let buf = photocraft_compose::render_layer(&tmp, canvas);
+    let buf = photocraft_compose::render_layer_in(doc, &tmp, canvas);
     let fmt = doc.pixel_format();
     let n = fmt.channels();
     let mut data = vec![0.0f32; buf.px.len() * n];
-    for (p, out) in buf.px.iter().zip(data.chunks_exact_mut(n)) {
-        from_rgba_into(&fmt, *p, out);
-    }
+    let cmyk = photocraft_compose::cmyk_space(doc);
+    photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+        for (p, out) in buf.px.iter().zip(data.chunks_exact_mut(n)) {
+            from_rgba_into(&fmt, *p, out);
+        }
+    });
     let mut s = photocraft_raster::Surface::new(fmt);
     s.write_region(canvas, &data);
     s.prune();
