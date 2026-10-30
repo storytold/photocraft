@@ -944,7 +944,6 @@ mod read_many {
     }
 }
 
-
 /// Object lookup and record arrays against the structures they replaced.
 mod stream_storage {
     use crate::stream::{self, Kind, Object, Tag, Value};
