@@ -31,6 +31,7 @@ pub fn import_flat_with(name: &str, bytes: &[u8], ctl: &Interrupt) -> Result<Imp
 
 /// [`import_flat_with`]; `stream` lets a PNG be decoded straight into the tiles (tests turn it off
 /// to get the whole-image path to compare with).
+#[cfg(test)]
 fn import_flat_impl(name: &str, bytes: &[u8], ctl: &Interrupt, stream_min: Option<u64>) -> Result<ImportResult, IoError> {
     import_flat_impl_with_limit(name, bytes, ctl, stream_min, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
 }
@@ -551,7 +552,7 @@ fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt, min_bytes: u64
                     failed.store(true, std::sync::atomic::Ordering::Relaxed);
                 }
             })
-            .map_err(alloc_error)?;
+            .map_err(|e| alloc_error(e, w, h))?;
         if failed.load(std::sync::atomic::Ordering::Relaxed) {
             return Err(IoError::Unsupported("the decoded image does not match its size".into()));
         }
@@ -628,7 +629,7 @@ pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: 
             failed.store(true, std::sync::atomic::Ordering::Relaxed);
         }
     });
-    written.map_err(alloc_error)?;
+    written.map_err(|e| alloc_error(e, w, h))?;
     if failed.load(std::sync::atomic::Ordering::Relaxed) {
         return Err(IoError::Unsupported("the decoded image does not match its size".into()));
     }
@@ -717,12 +718,14 @@ impl RowConverter {
     }
 }
 
-/// The error an out-of-memory or oversized surface allocation is reported as.
-fn alloc_error(e: AllocationError) -> IoError {
+/// The error an out-of-memory or oversized surface allocation for a `w`×`h` image is reported as.
+/// The failed reservation is usually one tile or row band, not the image, so the message names
+/// the image by its pixel size rather than by the bytes that could not be reserved.
+fn alloc_error(e: AllocationError, w: u32, h: u32) -> IoError {
     match e {
         AllocationError::LengthMismatch { .. } => IoError::Unsupported("the decoded image does not match its size".into()),
-        AllocationError::SizeOverflow => IoError::Unsupported("image too large".into()),
-        AllocationError::NotEnoughMemory { bytes } => IoError::Unsupported(format!("not enough memory for a {} MB image", bytes >> 20)),
+        AllocationError::SizeOverflow => IoError::Unsupported(format!("the {w}×{h} image is too large to open")),
+        AllocationError::NotEnoughMemory { .. } => IoError::Unsupported(format!("not enough memory to open the {w}×{h} image")),
     }
 }
 
