@@ -66,8 +66,8 @@ jobs:
   # Whether the Windows legs and the web build run. main, manual runs and PRs labelled `full-ci`
   # get both. Other PRs get Windows when they touch code whose behaviour differs by platform: the
   # app shell, UI, text and fonts, GPU, pen input, native saves, build scripts or the lockfile.
-  # Format changes must exercise the Windows-only publication barriers (#8034). macOS is tested
-  # only by release.yml.
+  # Format changes must exercise the Windows-only publication barriers (#8034). Full-workspace
+  # macOS tests run in release.yml; printing.yml checks focused print paths on all three desktop OSes.
   platforms:
     if: github.event.action != 'labeled' || github.event.label.name == 'full-ci'
     timeout-minutes: 10

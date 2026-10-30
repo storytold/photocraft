@@ -4005,6 +4005,7 @@ layerLabel	No Color	Bez boje
 	Exported presets to {path}	Šabloni su izvezeni u {path}
 	Ran script {name}	Pokrenuta skripta {name}
 	Sent to the printer ({spooler})	Poslato na štampač ({spooler})
+	Sent to the printer	Poslato na štampač
 	Printed to {path}	Odštampano u {path}
 	Exported {path} ({size})	Izvezeno: {path} ({size})
 	Exported {path}	Izvezeno: {path}

@@ -4069,6 +4069,7 @@ layerLabel	No Color	Nessun colore
 	Exported presets to {path}	Predefiniti esportati in {path}
 	Ran script {name}	Script eseguito: {name}
 	Sent to the printer ({spooler})	Inviato alla stampante ({spooler})
+	Sent to the printer	Inviato alla stampante
 	Printed to {path}	Stampato in {path}
 	Exported {path} ({size})	Esportato: {path} ({size})
 	Exported {path}	Esportato: {path}

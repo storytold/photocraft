@@ -66,6 +66,7 @@ mod services;
 // macOS gets one instance from LaunchServices (open-documents Apple events).
 #[cfg(any(not(target_os = "macos"), test))]
 mod single_instance;
+mod system_print;
 // Tablet support (macOS AppKit monitor, Linux X11/Wayland, Windows barrel button).
 mod tablet;
 mod ui_state;
@@ -496,14 +497,12 @@ fn main() -> eframe::Result {
                         services::xwayland_command(var("FLATPAK_ID").as_deref(), var("APPIMAGE").as_deref(), std::env::var_os("DISPLAY").is_some());
                 }
             }
+            let mut session = Session::new();
             #[cfg(target_os = "linux")]
-            let session = {
-                let mut session = Session::new();
+            {
                 session.print_spooler = print_portal::spooler();
-                session
-            };
-            #[cfg(not(target_os = "linux"))]
-            let session = Session::new();
+            }
+            session.system_print_dialog = Some(system_print::dialog());
             PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
             let mut app = PhotocraftApp::new(session, services);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);

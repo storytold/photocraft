@@ -4,6 +4,8 @@
      @SHORT_VERSION@ (numeric X.Y.Z) and @BUILD_SHA@. -->
 <plist version="1.0">
 <dict>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>PhotoCraft uses Preview to show the macOS print dialog for the document you choose to print.</string>
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <!-- UI translations are embedded in Rust; declare them for AppKit's system dialogs.

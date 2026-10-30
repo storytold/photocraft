@@ -3684,6 +3684,7 @@ curves	Smooth	Vyhladit
 	Exported presets to {path}	Přednastavení exportována do {path}
 	Ran script {name}	Spuštěn skript {name}
 	Sent to the printer ({spooler})	Odesláno k tisku ({spooler})
+	Sent to the printer	Odesláno k tisku
 	Printed to {path}	Vytištěno do souboru {path}
 	Exported {path} ({size})	Exportováno: {path} ({size})
 	Exported {path}	Exportováno: {path}

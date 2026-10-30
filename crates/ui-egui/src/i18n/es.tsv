@@ -4053,6 +4053,7 @@ layerLabel	No Color	Sin color
 	Exported presets to {path}	Se exportaron los ajustes preestablecidos a {path}
 	Ran script {name}	Se ejecutó la secuencia de comandos {name}
 	Sent to the printer ({spooler})	Se envió a la impresora ({spooler})
+	Sent to the printer	Se envió a la impresora
 	Printed to {path}	Se imprimió en {path}
 	Exported {path} ({size})	Se exportó {path} ({size})
 	Exported {path}	Se exportó {path}

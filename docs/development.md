@@ -721,17 +721,65 @@ their own modes, an upper stroke covering lower ones.
 
 `file.print` and `file.printOneCopy` keep PDF layout, scaling, marks and ICC conversion in
 PhotoCraft and submit the rendered bytes through `craft-print` at the Git revision pinned in
-`Cargo.toml`. CUPS streams the PDF on macOS/Linux; Windows uses the shared Windows PDF backend.
-The driver receives exact physical sheet size so it does not scale PhotoCraft's layout twice.
-Windows raster printing does not establish physical-printer colour fidelity; test critical
-photo output with the actual printer and its profile.
+`Cargo.toml`. The print dialog lists system printers on macOS, Windows and Linux; CUPS-backed
+systems expose their available driver options, while Windows can open the selected driver's saved
+preferences. The job settings include copies, collation, duplex and grayscale where the backend
+supports them. Paper orientation is sent explicitly to CUPS and is represented by the PDF page
+dimensions for Windows. **Auto-Rotate Image** is on by default: when artwork and page orientations
+differ, the image rotates 90 degrees counterclockwise and the preview shows that rotation; turn it
+off to keep the document's original direction. The driver receives the PDF's exact physical sheet size so it does
+not scale PhotoCraft's layout twice. The OS-specific driver preferences are not a unified native per-job
+dialog: CUPS settings are applied to the submitted job, while Windows' preferences are saved as
+that printer's defaults. Windows raster printing does not establish physical-printer colour
+fidelity; test critical photo output with the actual printer and its profile.
 
-Desktop commands run composition and submission on a background worker. The UI reports success
-only when the spooler accepts the job; remove submitted jobs in the system print queue. Headless
+Position and Size follows the [Photoshop print workflow](https://helpx.adobe.com/photoshop/desktop/print/position-and-scale-images-for-printing.html):
+Top and Left display the current position while Center is enabled. Deselect Center to edit
+those fields or drag the image in the preview; disabling Center preserves its current position.
+Dragging Emulsion Down output accounts for the mirrored Left coordinate. Scale, Height and Width
+preserve aspect ratio; Scale to Fit Media disables manual size edits. Print Resolution reports
+document PPI divided by print scale, independently of artwork rotation, without resampling.
+Settings scroll independently of the preview so Print and Cancel stay visible on shorter screens.
+Corner/center crop marks and registration crosshairs preview at their PDF sizes.
+
+Every paper preset and custom size selects CUPS media explicitly, overriding conflicting
+`media`, `PageSize` and `PageRegion` driver options. Supported tray/quality choices are retained
+when reopening Print; selecting another printer loads that printer's defaults. Invalid paper,
+scale, position or document resolution returns an error before composing a PDF. The PDF 1.4
+paper limit is 14,400 points per side. Fit uses an estimated 18 pt inset (36 pt with marks);
+actual printer imageable margins, proof-color preview and interactive resize handles remain open.
+
+| Platform | Print confirmation | Direct Print One Copy backend |
+|---|---|---|
+| macOS | Cocoa print sheet through Preview's standard print command | CUPS `lp` |
+| Linux (X11 / Wayland) | XDG desktop Print portal | CUPS `lp` |
+| Windows | Windows Forms Print dialog; in-box Windows.Data.Pdf rendering | Windows.Data.Pdf plus the Windows spooler |
+
+The desktop Print button always hands the composed PDF to the operating system for confirmation:
+the macOS print sheet, the XDG Print portal on Linux, or the Windows Print dialog. Cancelling that
+dialog submits no job and fires no print event. `file.printOneCopy` remains the deliberate direct
+route through `craft-print`. Entering an output path also keeps a PDF copy. Grayscale is composed
+into the print PDF and represented in the PhotoCraft preview.
+
+The shared Windows direct backend bounds DEVMODE sheet dimensions to 128 inches per side;
+PhotoCraft validates that limit before rendering a direct job, including dry runs. PDF-only
+output retains the PDF 1.4 limit of 200 inches per side on every desktop platform.
+
+`.github/workflows/printing.yml` runs the focused print engine, UI controls and real-control
+PDF tests plus clippy on macOS, Linux and Windows whenever print sources/manifests change.
+The Windows job also loads and rasterizes RGB, Gray and CMYK print PDFs through Windows.Data.Pdf
+without creating a printer, queue or print job.
+These tests do not submit physical jobs or open print dialogs. Release acceptance still
+requires, on each platform: open Print, save and inspect a PDF, then print a measured layout and
+a profiled image on the intended printer, checking dimensions, orientation,
+tray/media, copies, duplex and color. Cancel or remove test jobs in the OS queue as needed.
+
+Desktop commands run composition and the system dialog on a background worker. The UI reports
+success only after the dialog confirms the job. Headless
 `Session::execute` stays synchronous. The returned `pdf` is `null` for a spool-only job, and
 `command` is a diagnostic preview, not an executable command with a PDF path. Supplying `output`
 keeps a PDF at that path and defaults `send` to false. `dryRun` renders the PDF and reports the
 backend command without submitting; it writes a PDF only when `output` is explicit. `send: false`
 without an output requires `dryRun: true`. Remembered print settings omit `output`, `dryRun` and
-`send`, so Print One Copy derives submission from its own output choice. Shared spooler transport
+`send` and `systemDialog`, so Print One Copy derives submission from its own output choice. Shared spooler transport
 files are automatically removed on Windows; CUPS needs none.

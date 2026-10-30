@@ -1,9 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<!-- Hardened-runtime entitlements for PhotoCraft. Deliberately empty: the app is pure Rust,
-     loads no unsigned code, needs no JIT, and is not sandboxed (it opens files by path, from the
-     command line and drag-and-drop). Add exceptions here only with a reason in a comment. -->
+<!-- Preview supplies macOS's native print sheet. The hardened app therefore needs permission
+     to send that explicit, user-triggered Apple event. -->
 <plist version="1.0">
 <dict>
+  <key>com.apple.security.automation.apple-events</key>
+  <true/>
 </dict>
 </plist>
