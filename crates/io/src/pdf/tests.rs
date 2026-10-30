@@ -113,6 +113,56 @@ fn topmost_solid_shape_is_exported_as_a_vector_path() {
 }
 
 #[test]
+fn topmost_text_layer_is_exported_with_selectable_text_and_vector_outlines() {
+    use photocraft_doc::TextLayer;
+    let mut d = doc(ColorMode::Rgb);
+    let text = TextLayer {
+        text: "Vector PDF".into(),
+        size_pt: 24.0,
+        color: photocraft_color::Color::rgb(0.0, 0.0, 1.0),
+        transform: photocraft_geom::Affine::translate(1.0, 1.5),
+        ..Default::default()
+    };
+    d.layers.push(Layer::new("Text", LayerContent::Text(text)));
+    let out = export(&d).unwrap();
+    check_structure(&out.bytes);
+    let content = stream_after(&out.bytes, "/Contents 4 0 R");
+    let content = String::from_utf8(content).unwrap();
+    assert!(content.contains("/Span << /ActualText <FEFF"));
+    assert!(content.contains("0 0 1 rg"));
+    assert!(content.contains("BT"));
+    assert!(content.contains("3 Tr"));
+    assert!(content.contains("/F1"));
+    assert!(content.contains("(Vector PDF) Tj"));
+    assert!(content.contains("ET"));
+    assert!(content.contains("EMC"));
+    assert_eq!(stream_after(&out.bytes, "/Subtype /Image"), vec![255; 4 * 2 * 3]);
+}
+
+#[test]
+fn topmost_shape_and_text_layers_are_both_exported_as_vectors() {
+    use photocraft_doc::{Fill, Path, ShapeLayer, Subpath, TextLayer};
+    let mut d = doc(ColorMode::Rgb);
+    let shape = ShapeLayer {
+        path: Path::new(vec![Subpath::polygon(&[(0.0, 0.0), (2.0, 0.0), (2.0, 1.0)])]),
+        fill: Some(Fill::Solid(photocraft_color::Color::rgb(1.0, 0.0, 0.0))),
+        ..Default::default()
+    };
+    d.layers.push(Layer::new("Shape", LayerContent::Shape(shape)));
+    let text = TextLayer { text: "Hi".into(), size_pt: 12.0, color: photocraft_color::Color::rgb(0.0, 1.0, 0.0), ..Default::default() };
+    d.layers.push(Layer::new("Text", LayerContent::Text(text)));
+    let out = export(&d).unwrap();
+    check_structure(&out.bytes);
+    let content = stream_after(&out.bytes, "/Contents 4 0 R");
+    let content = String::from_utf8(content).unwrap();
+    assert!(content.contains("1 0 0 rg\n"));
+    assert!(content.contains("0 1 0 rg\n"));
+    assert!(content.contains("/Span << /ActualText <FEFF00480069> >> BDC"));
+    assert!(content.contains("(Hi) Tj"));
+    assert_eq!(stream_after(&out.bytes, "/Subtype /Image"), vec![255; 4 * 2 * 3]);
+}
+
+#[test]
 fn greyscale_and_cmyk_pages_keep_their_channels() {
     let g = export(&doc(ColorMode::Grayscale)).unwrap();
     assert!(has(&g.bytes, "/ColorSpace /DeviceGray"), "gray is DeviceGray");
