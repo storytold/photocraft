@@ -349,9 +349,13 @@ fn stylistic_sets_survive_psd_and_pcraft_round_trips() {
     let id = text_layer(&mut s, "Il36");
     s.execute("type.openType.stylisticSets.set1", json!({})).unwrap();
     s.execute("type.openType.stylisticSets.set5", json!({})).unwrap();
-    let raw = text(&s, id).psd_raw.clone().unwrap();
-    let back = photocraft_text::psd::text_layer_from_tysh(&raw, 72.0).unwrap();
-    let st = &back.char_runs()[0].style;
+    // The sets travel in the file's `Txt2`, not the layer's `TySh`, so save and reopen a whole PSD.
+    let psd = photocraft_io::export(&s.active().unwrap().doc, "x.psd", &Default::default()).unwrap().bytes;
+    let back = photocraft_io::import("x.psd", &psd).unwrap().document;
+    let Some(LayerContent::Text(t)) = back.walk().into_iter().map(|(_, _, l)| &l.content).find(|c| matches!(c, LayerContent::Text(_))) else {
+        panic!("text layer lost in PSD")
+    };
+    let st = &t.char_runs()[0].style;
     assert!(feature_on(st, "ss01") && feature_on(st, "ss05") && !feature_on(st, "ss02"));
     let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
     let doc = photocraft_format::load_from_bytes(&bytes).unwrap();
