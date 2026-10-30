@@ -1901,6 +1901,33 @@ fn essential_menu_items_stay_visible() {
     assert!(!items.iter().any(|i| i.id == "edit.fade"));
 }
 
+/// The web build saves when the page is hidden, where no frame (and so no timer) runs.
+#[test]
+fn autosave_dirty_now_saves_without_a_frame_and_honors_the_preference() {
+    let saved: Arc<Mutex<Vec<u64>>> = Arc::default();
+    let s2 = saved.clone();
+    let services = crate::Services {
+        autosave: Some(Box::new(move |_doc: &Arc<photocraft_doc::Document>, rev: u64, _path: Option<&str>| {
+            s2.lock().unwrap().push(rev);
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    autosave_dirty_now(&mut app);
+    assert!(saved.lock().unwrap().is_empty(), "clean documents are not saved");
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    autosave_dirty_now(&mut app);
+    assert_eq!(saved.lock().unwrap().len(), 1);
+    autosave_dirty_now(&mut app);
+    assert_eq!(saved.lock().unwrap().len(), 1, "unchanged since the last save");
+    app.run("prefs.set", json!({"path": "fileHandling.autosave", "value": false})).unwrap();
+    app.run("edit.fill", json!({"color": "#00ff00"})).unwrap();
+    autosave_dirty_now(&mut app);
+    assert_eq!(saved.lock().unwrap().len(), 1, "autosave off");
+}
+
 #[test]
 fn autosave_runs_for_dirty_documents() {
     type Saved = Arc<Mutex<Vec<(u64, u64)>>>;

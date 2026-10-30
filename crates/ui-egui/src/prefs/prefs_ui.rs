@@ -89,7 +89,7 @@ use save::SaveRetry;
 pub(crate) use save::save_preferences;
 #[cfg(test)]
 use save::{SAVE_RETRY_MAX_S, SAVE_RETRY_S, merge_changes, persist};
-pub use save::{autosave_now, tick};
+pub use save::{autosave_dirty_now, autosave_now, tick};
 #[cfg(test)]
 pub(crate) use shortcuts::capture_key_press;
 pub use shortcuts::{is_modifier_key, reserved_shortcut, shortcut_items, shortcut_text};

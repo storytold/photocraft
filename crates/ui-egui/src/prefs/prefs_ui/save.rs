@@ -309,6 +309,14 @@ pub fn autosave_now(app: &mut PhotocraftApp) {
     app.prefs_rt.next_autosave_ms = f64::MIN_POSITIVE;
 }
 
+/// Autosave unsaved documents right now, outside the frame loop (the web build, when the page is
+/// hidden and no frames run). Honors the Autosave preference; documents already saved at their
+/// current revision are skipped.
+pub fn autosave_dirty_now(app: &mut PhotocraftApp) {
+    autosave_now(app);
+    autosave(app);
+}
+
 /// History Log preference: append executed commands to a text file.
 fn history_log(app: &mut PhotocraftApp) {
     let n = app.session.journal.len();
