@@ -462,8 +462,12 @@ pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
 
 /// Where the clone source is sampled from, shown only while a Clone Stamp or Healing Brush stroke
 /// is painted, as in Photoshop: setting the source (⌥-click) leaves nothing on the canvas (#668).
+/// A source in another open document has no point on this canvas.
 pub fn source_marker_point(app: &PhotocraftApp) -> Option<[f64; 2]> {
     if !matches!(app.active_tool(), Tool::CloneStamp | Tool::Healing) {
+        return None;
+    }
+    if app.session.presets.clone.active().source_doc(app.session.active().map(|d| d.doc.id)).is_some() {
         return None;
     }
     let at = app.drag.as_ref().filter(|d| matches!(d.tool, Tool::CloneStamp | Tool::Healing)).and_then(|d| d.points.last().map(|p| [p[0], p[1]]))?;

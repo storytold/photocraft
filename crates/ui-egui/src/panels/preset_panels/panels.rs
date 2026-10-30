@@ -577,12 +577,19 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     ui.add_space(4.0);
-    let src_line =
-        match (slot.source, slot.layer.and_then(|l| app.session.active().and_then(|d| d.doc.layer(photocraft_doc::LayerId(l)).map(|x| x.name.clone())))) {
-            (Some(_), Some(l)) => format!("Source: {} : {l}", app.session.active().map(|d| d.doc.name.clone()).unwrap_or_default()),
-            (Some(_), None) => "Source: set".to_string(),
-            _ => crate::i18n::fmt(tl!("Source: not set ({key}-click with Clone Stamp)"), &[("key", &crate::shortcuts::pretty("Alt"))]),
-        };
+    // The document the source was set in (the active one for slots set before slots remembered it).
+    let source_doc = match slot.document {
+        Some(id) => app.session.documents().iter().find(|d| d.doc.id == id),
+        None => app.session.active(),
+    };
+    let src_line = match (slot.source, source_doc) {
+        (Some(_), None) => tl!("Source: document closed").to_string(),
+        (Some(_), Some(d)) => match slot.layer.and_then(|l| d.doc.layer(photocraft_doc::LayerId(l))) {
+            Some(l) => format!("Source: {} : {}", d.doc.name, l.name),
+            None => "Source: set".to_string(),
+        },
+        _ => crate::i18n::fmt(tl!("Source: not set ({key}-click with Clone Stamp)"), &[("key", &crate::shortcuts::pretty("Alt"))]),
+    };
     ui.label(egui::RichText::new(src_line).color(t.text_dim).size(11.0));
     ui.add_space(4.0);
     let lbl = |ui: &mut egui::Ui, s: &str| {
@@ -683,7 +690,7 @@ pub fn clone_sample_point(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<[
     let anchor = if app.ui.tool_options.clone_aligned { s.anchor.or(stroking) } else { stroking };
     match (anchor, at) {
         (Some(a), Some(h)) => {
-            let m = Mapping { source: (src[0], src[1]), anchor: (a[0], a[1]), m: transform_matrix(s.scale, s.rotation, s.flip_h, s.flip_v) };
+            let m = Mapping { source: (src[0], src[1]), anchor: (a[0], a[1]), m: transform_matrix(s.scale, s.rotation, s.flip_h, s.flip_v), document: None };
             let (x, y) = m.map(h[0], h[1]);
             Some([x, y])
         }

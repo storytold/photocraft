@@ -1,16 +1,79 @@
 use super::heal::history_source;
-use super::sampling::{SampleLayers, sample, sample_layers};
+use super::sampling::{SampleLayers, composite_region, sample, sample_layers};
 use super::{
     BlendMode, BrushSettings, Document, EngineError, LayerId, PixelFormat, Rect, Region, Result, SampleType, Session, Stroke, StrokePoint, Surface, Value,
     alpha_index, apply_coverage, bad, blend_from_str, coverage, damage_json, flag, has_pixel_layer, json, parse_brush, pattern_stamp, periodic, point,
     reject_huge_stroke, run_stroke, to_rgba,
 };
 
+/// Where a clone stroke reads its pixels: the document it paints, or the other open document its
+/// clone source was set in (⌥-click in one document, paint in another, as in Photoshop).
+#[derive(Clone)]
+pub(super) enum CloneFrom {
+    Here,
+    /// Current Layer and Current & Below read `layer` (the layer the source was set on, else that
+    /// document's active layer); All Layers reads the document's composite.
+    Other {
+        doc: std::sync::Arc<Document>,
+        layer: Option<LayerId>,
+    },
+}
+
+/// The document `map` samples, for a stroke in the active document.
+pub(super) fn clone_from(s: &Session, map: &crate::presets::clone_source::Mapping, cmd: &str) -> Result<CloneFrom> {
+    let Some(src) = map.document else { return Ok(CloneFrom::Here) };
+    if s.active().is_some_and(|st| st.doc.id == src.id) {
+        return Ok(CloneFrom::Here);
+    }
+    let st = s
+        .documents()
+        .iter()
+        .find(|st| st.doc.id == src.id)
+        .ok_or_else(|| bad(cmd, "the clone source's document was closed: set a new source (Alt-click, or cloneSource.set)"))?;
+    let layer = src.layer.filter(|l| st.doc.layer(*l).is_some()).or(st.active_layer);
+    Ok(CloneFrom::Other { doc: st.doc.clone(), layer })
+}
+
+/// Pixels of `rect` in another document, in the painted surface's format `fmt`.
+fn sample_other(doc: &Document, layer: Option<LayerId>, which: SampleLayers, rect: Rect, fmt: PixelFormat, cmd: &str) -> Result<Region> {
+    if which != SampleLayers::Current {
+        return Ok(composite_region(doc, layer, which, rect, fmt));
+    }
+    let surf = layer
+        .and_then(|l| doc.layer(l))
+        .and_then(|l| l.surface())
+        .ok_or_else(|| bad(cmd, "the clone source's layer has no pixels: set Sample to All Layers, or set the source on a pixel layer"))?;
+    Ok(convert_region(Region::read(surf, rect), &surf.format(), &fmt))
+}
+
+/// `r`, whose pixels are in `from`, in `to`: another document's colour mode or alpha. Depth needs
+/// nothing (regions hold normalised floats). Converted as Edit › Paste converts between documents
+/// ([`photocraft_raster::convert_pixel`]).
+fn convert_region(r: Region, from: &PixelFormat, to: &PixelFormat) -> Region {
+    if from.mode == to.mode && from.alpha == to.alpha {
+        return r;
+    }
+    let mut out = Region::new(r.rect, to.channels());
+    for (src, dst) in r.data.chunks_exact(from.channels()).zip(out.data.chunks_exact_mut(to.channels())) {
+        for (d, v) in dst.iter_mut().zip(photocraft_raster::convert_pixel(from, to, src)) {
+            *d = v;
+        }
+    }
+    out
+}
+
 /// Where a clone stroke samples: `offset` / `source` params, else the active Clone Source slot,
-/// with the slot's (or the call's) scale, rotation and flips (see `presets::clone_source`).
-pub(super) fn clone_mapping(s: &mut Session, p: &Value, stroke: &Stroke, cmd: &str) -> Result<crate::presets::clone_source::Mapping> {
+/// with the slot's (or the call's) scale, rotation and flips (see `presets::clone_source`), and
+/// the document it reads. An aligned stroke from the slot remembers its anchor, once the source
+/// is known to be readable.
+pub(super) fn clone_mapping(s: &mut Session, p: &Value, stroke: &Stroke, cmd: &str) -> Result<(crate::presets::clone_source::Mapping, CloneFrom)> {
     let f = stroke.points[0];
-    crate::presets::clone_source::mapping(s, p, (f.x, f.y), cmd)
+    let (map, anchor) = crate::presets::clone_source::resolve(s, p, (f.x, f.y), cmd)?;
+    let from = clone_from(s, &map, cmd)?;
+    if let Some(a) = anchor {
+        s.presets.clone.active_mut().anchor = Some(a);
+    }
+    Ok((map, from))
 }
 
 /// Source pixels for destination `rect`: a translated read, or a bilinear resample when the
@@ -20,14 +83,21 @@ pub(super) fn clone_sample(
     pre: &Document,
     id: Option<LayerId>,
     surf: &Surface,
+    from: &CloneFrom,
     which: SampleLayers,
     rect: Rect,
     map: &crate::presets::clone_source::Mapping,
     wrap: bool,
     cmd: &str,
 ) -> Result<Region> {
-    let read = |rect| {
-        if wrap { periodic::sample(pre, id, surf, which, rect, cmd) } else { Ok(sample(pre, id, surf, which, rect)) }
+    let fmt = surf.format();
+    let read = |rect| match from {
+        CloneFrom::Here if wrap => periodic::sample(pre, id, surf, which, rect, cmd),
+        CloneFrom::Here => Ok(sample(pre, id, surf, which, rect)),
+        CloneFrom::Other { doc, layer } if wrap => {
+            periodic::sample_with(doc.bounds(), fmt.channels(), rect, cmd, |r| sample_other(doc, *layer, which, r, fmt, cmd))
+        }
+        CloneFrom::Other { doc, layer } => sample_other(doc, *layer, which, rect, fmt, cmd),
     };
     if map.is_translation() {
         let off = map.offset();
@@ -78,7 +148,8 @@ pub fn clone_preview_periodic(
     let id = d.active_layer.ok_or_else(|| bad("clone.preview", "no active layer"))?;
     let surf = d.doc.layer(id).and_then(|l| l.surface()).ok_or_else(|| bad("clone.preview", "no pixel surface"))?;
     let which = sample_layers(&json!({"sampleLayer": sample_layer}), "clone.preview")?;
-    let region = clone_sample(&d.doc, Some(id), surf, which, rect, map, wrap, "clone.preview")?;
+    let from = clone_from(s, map, "clone.preview")?;
+    let region = clone_sample(&d.doc, Some(id), surf, &from, which, rect, map, wrap, "clone.preview")?;
     let px = region.data.chunks_exact(surf.format().channels()).map(|p| to_rgba(&surf.format(), p)).collect();
     Ok(photocraft_compose::Buffer { rect, px })
 }
@@ -128,7 +199,7 @@ pub(super) fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
     // rendering the stroke again (the hitch on release).
     let live = s.live_commit.take().filter(|l| l.matches(s, CMD, p, &stroke.points));
     let from_live = live.is_some();
-    let map = clone_mapping(s, p, &stroke, CMD)?;
+    let (map, from) = clone_mapping(s, p, &stroke, CMD)?;
     let off = map.offset();
     let dmg =
         run_stroke(s, "Clone Stamp", id, p, |pre, surf, sel, lock| {
@@ -143,11 +214,11 @@ pub(super) fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
                 let before = surf.clone();
                 let bounds = renderer.bounds();
                 return periodic::Composite { target: surf, before: &before, tile: pre.bounds(), opacity: stroke.brush.opacity, selection: sel, lock, mode }
-                    .draw(bounds, &stroke.brush, &stroke.points, |r| clone_sample(pre, id, &before, which, r, &map, true, CMD));
+                    .draw(bounds, &stroke.brush, &stroke.points, |r| clone_sample(pre, id, &before, &from, which, r, &map, true, CMD));
             }
             let (bounds, cov) = coverage(CMD, &stroke)?;
             // Samples come from the pre-stroke state, so pixels painted earlier in the stroke are never re-cloned.
-            let paint = clone_sample(pre, id, surf, which, bounds, &map, flag(p, "wrap", false), CMD)?;
+            let paint = clone_sample(pre, id, surf, &from, which, bounds, &map, flag(p, "wrap", false), CMD)?;
             Ok(apply_coverage(surf, bounds, &cov, stroke.brush.opacity, sel, lock, &paint, mode))
         })?;
     let mut r = clone_result(dmg, off, aligned, p, &stroke);
@@ -161,7 +232,7 @@ pub(super) fn clone_stamp(s: &mut Session, p: &Value) -> Result<Value> {
 enum LivePaint {
     /// The clone source (Clone Stamp; the Healing Brush shows its texture while drawing and
     /// blends it on release).
-    Clone { which: SampleLayers, map: crate::presets::clone_source::Mapping, cmd: &'static str },
+    Clone { which: SampleLayers, map: crate::presets::clone_source::Mapping, from: CloneFrom, cmd: &'static str },
     /// The History Brush's history state.
     History(Surface),
     /// The Pattern Stamp's pattern, tiled from its aligned placement (Impressionist strokes are
@@ -215,9 +286,11 @@ impl LiveRetouch {
         let paint = match cmd {
             "paint.cloneStamp" | "paint.healingBrush" => {
                 let f = *stroke.points.first().ok_or_else(|| bad(cmd, "`points` is empty"))?;
+                let map = crate::presets::clone_source::resolve(s, p, (f.x, f.y), cmd)?.0;
                 LivePaint::Clone {
                     which: sample_layers(p, cmd)?,
-                    map: crate::presets::clone_source::resolve(s, p, (f.x, f.y), cmd)?.0,
+                    from: clone_from(s, &map, cmd)?,
+                    map,
                     cmd: if cmd == "paint.healingBrush" { "paint.healingBrush" } else { "paint.cloneStamp" },
                 }
             }
@@ -344,7 +417,7 @@ impl LiveRetouch {
         let mut tail = self.renderer.tail_preview();
         self.tail = tail.as_mut().map_or(Rect::EMPTY, |t| t.take_dirty_rect());
         dirty = dirty.union(&self.tail);
-        let LivePaint::Clone { which, map, cmd } = &self.paint else {
+        let LivePaint::Clone { which, map, from, cmd } = &self.paint else {
             return Err(bad(&self.cmd, "periodic painting requires a clone source"));
         };
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
@@ -357,7 +430,7 @@ impl LiveRetouch {
             lock: self.lock,
             mode: self.mode,
         }
-        .draw(dirty, &self.brush, &self.points, |r| clone_sample(&self.pre, self.id, &self.pre_surf, *which, r, map, true, cmd))
+        .draw(dirty, &self.brush, &self.points, |r| clone_sample(&self.pre, self.id, &self.pre_surf, from, *which, r, map, true, cmd))
     }
 
     /// Redraw `r` from the pre-stroke pixels with the clone source through coverage `cov`.
@@ -366,8 +439,8 @@ impl LiveRetouch {
             return Ok(r);
         }
         let paint = match &self.paint {
-            LivePaint::Clone { which, map, cmd } => {
-                clone_sample(&self.pre, self.id, &self.pre_surf, *which, r, map, *cmd == "paint.cloneStamp" && flag(&self.params, "wrap", false), cmd)?
+            LivePaint::Clone { which, map, from, cmd } => {
+                clone_sample(&self.pre, self.id, &self.pre_surf, from, *which, r, map, *cmd == "paint.cloneStamp" && flag(&self.params, "wrap", false), cmd)?
             }
             LivePaint::History(src) => Region::read(src, r),
             LivePaint::Pattern { tile, place } => pattern_stamp::paint_region(tile, place, &self.pre_surf.format(), r),

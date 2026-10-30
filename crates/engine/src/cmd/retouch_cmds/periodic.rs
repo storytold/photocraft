@@ -234,14 +234,19 @@ impl PatchStroke {
 }
 
 pub(super) fn sample(pre: &Document, id: Option<LayerId>, surf: &Surface, which: SampleLayers, rect: Rect, cmd: &str) -> Result<Region> {
-    let tile = pre.bounds();
+    sample_with(pre.bounds(), surf.channels(), rect, cmd, |r| Ok(super::sample(pre, id, surf, which, r)))
+}
+
+/// [`sample`] through `read`, which returns `n`-channel pixels of a rectangle inside `tile` (the
+/// bounds of the document the source repeats).
+pub(super) fn sample_with(tile: Rect, n: usize, rect: Rect, cmd: &str, mut read: impl FnMut(Rect) -> Result<Region>) -> Result<Region> {
     if tile.is_empty() {
         return Err(bad(cmd, "cannot repeat an empty document"));
     }
     if rect.is_empty() {
-        return Ok(Region::new(Rect::EMPTY, surf.channels()));
+        return Ok(Region::new(Rect::EMPTY, n));
     }
-    let (w, h, n) = (rect.width() as usize, rect.height() as usize, surf.channels());
+    let (w, h) = (rect.width() as usize, rect.height() as usize);
     let len = w
         .checked_mul(h)
         .and_then(|v| v.checked_mul(n))
@@ -258,7 +263,7 @@ pub(super) fn sample(pre: &Document, id: Option<LayerId>, surf: &Surface, which:
         while dx < w {
             let sx = (i64::from(rect.x0) + dx as i64 - i64::from(tile.x0)).rem_euclid(i64::from(tile.width())) as i32 + tile.x0;
             let cols = (w - dx).min((tile.x1 - sx) as usize);
-            let part = super::sample(pre, id, surf, which, Rect::new(sx, sy, sx + cols as i32, sy + rows as i32));
+            let part = read(Rect::new(sx, sy, sx + cols as i32, sy + rows as i32))?;
             for (dst, src) in out.data.chunks_exact_mut(w * n).skip(dy).take(rows).zip(part.data.chunks_exact(cols * n)) {
                 if let Some(dst) = dst.get_mut(dx * n..(dx + cols) * n) {
                     dst.copy_from_slice(src);

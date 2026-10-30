@@ -86,12 +86,19 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
     let wrap = tool == Tool::CloneStamp && app.ui.view.pattern_preview;
     let stroke_start = app.drag.as_ref().map(|d| d.start);
     let anchor = if app.ui.tool_options.clone_aligned { slot.anchor.or(stroke_start) } else { stroke_start }.unwrap_or(at);
-    let map =
-        Mapping { source: (source[0], source[1]), anchor: (anchor[0], anchor[1]), m: transform_matrix(slot.scale, slot.rotation, slot.flip_h, slot.flip_v) };
     let Some(st) = app.session.active() else { return };
+    // A source set in another open document is read from it, so its edits redraw the overlay too.
+    let document = slot.source_doc(Some(st.doc.id));
+    let source_revision = document.and_then(|d| app.session.documents().iter().find(|o| o.doc.id == d.id)).map(|o| o.revision);
+    let map = Mapping {
+        source: (source[0], source[1]),
+        anchor: (anchor[0], anchor[1]),
+        m: transform_matrix(slot.scale, slot.rotation, slot.flip_h, slot.flip_v),
+        document,
+    };
     let (display, display_key) = canvas_display(app, &st.doc, output);
     let key = format!(
-        "{:?}:{}:{:?}:{:?}:{map:?}:{}:{}:{}:{}:{wrap}:{}:{}",
+        "{:?}:{}:{source_revision:?}:{:?}:{:?}:{map:?}:{}:{}:{}:{}:{wrap}:{}:{}",
         st.doc.id,
         st.revision,
         st.active_layer,
@@ -130,7 +137,7 @@ pub(super) fn draw_clone_preview(app: &mut PhotocraftApp, painter: &egui::Painte
         // Darken, Lighten and Difference mix the source with the image under the brush (the
         // composite, whatever Sample reads), so Difference turns black where they line up.
         if overlay.blend != "normal" {
-            let here = Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0] };
+            let here = Mapping { source: (0.0, 0.0), anchor: (0.0, 0.0), m: [1.0, 0.0, 0.0, 1.0], document: None };
             let Ok(under) = photocraft_engine::retouch_cmds::clone_preview_periodic(&app.session, rect, &here, "all", wrap) else {
                 return;
             };
