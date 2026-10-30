@@ -148,6 +148,7 @@ fn fresh_stylistic_sets_round_trip_through_psd() {
     let style = txt2.path(&["1", "1"]).and_then(E::as_array).and_then(|a| a.first()).and_then(|o| o.path(&["0", "6", "0"])).and_then(E::as_array).and_then(|a| a.first()).and_then(|r| r.path(&["0", "0", "6"])).expect("style run");
     // Bits 0 and 4 → sets 1 and 5.
     assert_eq!(style.get("85").and_then(E::as_i64), Some((1 << 0) | (1 << 4)));
+    assert_eq!(style.path(&["53", "99"]).and_then(E::as_str), Some("SimplePaint"), "paint stream tag");
     assert_eq!(style.path(&["53", "0", "0"]).and_then(E::as_i64), Some(1), "fill colour type RGB");
     assert!(style.path(&["53", "0", "1"]).and_then(E::as_array).is_some_and(|v| v.len() == 4), "fill colour values");
     assert_eq!(style.get("0").and_then(E::as_i64), Some(0), "font index 0");
