@@ -20,6 +20,9 @@
 [people.brianblakely]
 sync_github_name = true
 
+[people.abdallah-shehawey]
+sync_github_name = true
+
 [people.abdul-karim-mia]
 real_name = "Abdul karim mia"
 sync_github_name = false

@@ -255,6 +255,7 @@ Paragraph; the rest open as in-app floating windows.
 | Date | Change | Summary |
 |---|---|---|
 | 2026-10-27 | minor | Every preference takes effect: 12 of 181 do nothing, the scorecard's count with integration batch 9 (#9775) on main; new layers go above a group whose lock would refuse them (#4329) |
+| 2026-10-26 | trivial | Window size and maximized state survive restarts at any interface size; caption buttons on the GNOME Wayland system frame, Preferences › Interface › System title bar (storytold/egui#3) |
 | 2026-10-25 | minor | Every preference takes effect: 12 of 178 do nothing, the scorecard's count (it still said 46 of 149) |
 | 2026-10-25 | minor | Art History Brush is in the History group of the Y flyout (partial, TOOL-213-20, #1610) |
 | 2026-10-24 | minor | Color panel: Hue Cube and Brightness Cube show Photoshop's out-of-gamut ⚠ and the nearest printable colour under the chips when the field is at least 53 pt tall, as the slider modes did; a click takes it (#8672). No percentage changed |
