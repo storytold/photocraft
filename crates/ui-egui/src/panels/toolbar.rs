@@ -176,7 +176,14 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     // Plain click selects the shown tool; Alt/Option-click cycles the
                                     // flyout slot to the next tool, as Shift+letter does for the key group.
                                     let alt = ui.input(|i| i.modifiers.alt);
-                                    if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
+                                    // egui's double-click ignores modifiers: a plain click after an
+                                    // Alt-click within max_double_click_delay still reports
+                                    // double_clicked(). Remember the previous click's Alt so Hand
+                                    // fit / Zoom 100% only run for two plain clicks.
+                                    let prev_alt_id = key.with("click-alt");
+                                    let prev_alt = ui.data(|d| d.get_temp::<bool>(prev_alt_id)).unwrap_or(false);
+                                    let slot_click = resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key);
+                                    if slot_click {
                                         let pick = if slot.len() > 1 && alt {
                                             let from = if slot.contains(&app.ui.tool) { app.ui.tool } else { tool };
                                             next_slot_tool(slot, from)
@@ -186,16 +193,21 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                         crate::tool_memory::select(app, pick);
                                     }
                                     // Double-clicking the Hand tool fits the image on screen (Photoshop).
-                                    // Alt-clicks only cycle the slot: a second rapid Alt-click must not
+                                    // Alt-clicks only cycle the slot: a second rapid Alt-click, or a
+                                    // plain click that egui pairs with a prior Alt-click, must not
                                     // count as Hand/Zoom double-click after cycling onto those tools.
-                                    if resp.double_clicked() && !alt && tool == Tool::Hand {
+                                    let plain_double = resp.double_clicked() && !alt && !prev_alt;
+                                    if plain_double && tool == Tool::Hand {
                                         crate::tool_memory::select(app, tool);
                                         // With no document open there is nothing to fit.
                                         let _ = app.run("view.fitOnScreen", json!({}));
                                     }
-                                    if resp.double_clicked() && !alt && tool == Tool::Zoom {
+                                    if plain_double && tool == Tool::Zoom {
                                         crate::tool_memory::select(app, tool);
                                         let _ = app.run("view.actualPixels", json!({}));
+                                    }
+                                    if slot_click {
+                                        ui.data_mut(|d| d.insert_temp(prev_alt_id, alt));
                                     }
                                     // Right-click, long-press, or press-drag away opens the flyout (Photoshop).
                                     let held_for =
