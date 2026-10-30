@@ -3864,6 +3864,38 @@ fn warp_mode_previews_a_stored_smart_warp_from_the_unwarped_source() {
     }
 }
 
+/// Leaving Warp mode, and Undo back into Free Transform, show the render with the stored warp
+/// again (the texels the box opened with), and re-entering shows the source without it (#9798).
+#[test]
+fn leaving_warp_mode_restores_the_stored_warps_render() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 32, 32));
+    app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    app.run("layer.smartObjects.warp", json!({"style": "cylinder", "values": [8, 32, 32, 8, 0.5, 0.5, 0.85], "rect": [8, 8, 32, 32]})).unwrap();
+    begin(&mut app, &ctx).unwrap();
+    let texels = |app: &PhotocraftApp| app.transform_preview.as_ref().unwrap().texture.level_image(0).unwrap().0.size;
+    let rect = |app: &PhotocraftApp| app.ui.transform.as_ref().unwrap().rect;
+    let (warped, box0) = (texels(&app), rect(&app));
+    assert!(warped[1] > 24 && box0[3] > 32.0, "the render with the warp hangs below the box: {warped:?} {box0:?}");
+    enter_warp(&mut app, &ctx);
+    track_steps(&mut app, &ctx);
+    assert_eq!((texels(&app), rect(&app)), ([24, 24], [8.0, 8.0, 32.0, 32.0]), "the source over the warp box");
+    leave_warp(&mut app);
+    track_steps(&mut app, &ctx);
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
+    assert_eq!((texels(&app), rect(&app)), (warped, box0), "back to the render with the warp");
+    enter_warp(&mut app, &ctx);
+    track_steps(&mut app, &ctx);
+    assert_eq!((texels(&app), rect(&app)), ([24, 24], [8.0, 8.0, 32.0, 32.0]), "and back again, without a re-render");
+    let _ = intercept(&mut app, "edit.undo");
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
+    assert_eq!((texels(&app), rect(&app)), (warped, box0), "undo into Free Transform");
+    let _ = intercept(&mut app, "edit.redo");
+    assert_eq!((texels(&app), rect(&app)), ([24, 24], [8.0, 8.0, 32.0, 32.0]), "redo into Warp");
+    leave_warp(&mut app);
+    assert_eq!((texels(&app), rect(&app)), (warped, box0), "leaving after a redo");
+}
+
 /// A cylinder on a pixel layer commits as previewed: the pixels wrap round between the
 /// silhouettes and the ones on the back are hidden.
 #[test]

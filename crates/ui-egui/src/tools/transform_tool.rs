@@ -147,6 +147,11 @@ pub struct TransformPreview {
     committing: Option<JobId>,
     /// Content-Aware Scale's live preview (cas_transform.rs).
     pub(crate) content_aware: Option<crate::cas_transform::Live>,
+    /// While a smart object's stored warp is edited (begin.rs `preview_without_smart_warp`):
+    /// the texels and box of the mode the session is not in. Warp mode shows the source without
+    /// the warp over the warp box, Free Transform the layer's render with it over its own box;
+    /// leaving or re-entering Warp mode, and Undo across it, swap them.
+    other_texels: Option<OtherTexels>,
     /// A box over several layers (#6501): their composite, which `texture` holds.
     several: Option<Several>,
 }
@@ -226,6 +231,25 @@ fn style_reach(doc: &Document, ids: &[LayerId]) -> i32 {
         }
     }
     reach
+}
+
+/// The preview texels of the transform mode the session is not in, and the box they cover
+/// ([`TransformPreview::other_texels`]).
+struct OtherTexels {
+    texture: crate::transform_tex::PreviewTextures,
+    rect: [f64; 4],
+    quad: [[f64; 2]; 4],
+}
+
+/// Swaps the session's texels and box with the other mode's (`t` holds the box the texels
+/// cover), when there are any: the stored warp's edit shows the source without the warp, the
+/// box the render with it.
+fn swap_mode_texels(t: &mut TransformSession, pv: &mut TransformPreview) {
+    if let Some(o) = pv.other_texels.as_mut() {
+        std::mem::swap(&mut pv.texture, &mut o.texture);
+        std::mem::swap(&mut t.rect, &mut o.rect);
+        std::mem::swap(&mut t.quad, &mut o.quad);
+    }
 }
 
 /// What [`follow_edits`] needs to rebuild the preview document.
