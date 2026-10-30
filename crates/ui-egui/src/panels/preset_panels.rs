@@ -924,4 +924,12 @@ mod tests {
         app.ui.tool = Tool::Brush;
         assert_eq!(crate::retouch_ui::source_marker_point(&app), None);
     }
+
+    #[test]
+    fn gradient_and_pattern_lists_grow_with_a_tall_panel() {
+        // Previously capped at 260 / 280 px whatever the dock height (#10339).
+        assert_eq!(panels::list_max_h(1200.0), 1160.0);
+        assert_eq!(panels::list_max_h(100.0), 90.0);
+        assert_eq!(panels::list_max_h(f32::NAN), 90.0);
+    }
 }
