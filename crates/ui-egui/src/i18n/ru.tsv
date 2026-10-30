@@ -4704,3 +4704,26 @@ shape	Appearance	Оформление
 	Font size presets	Наборы размеров шрифта
 	Leading presets	Наборы интерлиньяжа
 	Tracking presets	Наборы трекинга
+	Upright	Выпрямление
+	Manual Transformations	Ручное трансформирование
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Нарисуйте на изображении две или более направляющих вдоль линий, которые должны быть вертикальными или горизонтальными (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Перетащите конец направляющей, чтобы переместить его; выберите направляющую и нажмите Delete, чтобы удалить её. Не более четырёх направляющих.
+cameraRaw	Geometry	Геометрия
+cameraRaw	Off	Выкл
+cameraRaw	Auto	Авто
+cameraRaw	Level	Уровень
+cameraRaw	Vertical	Вертикальная
+cameraRaw	Full	Полная
+cameraRaw	Disable Upright	Отключить выпрямление
+cameraRaw	Auto: apply balanced perspective corrections	Авто: сбалансированная коррекция перспективы
+cameraRaw	Level: apply only level correction	Горизонт: только выравнивание горизонта
+cameraRaw	Vertical: apply level and vertical perspective correction	Вертикаль: горизонт и вертикальная перспектива
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Полное: горизонт, горизонтальная и вертикальная перспектива
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	По направляющим: нарисуйте две или больше направляющих, чтобы задать коррекцию перспективы
+cameraRaw	Horizontal	Горизонтальная
+cameraRaw	Rotate	Повернуть
+cameraRaw	Aspect	Пропорции
+cameraRaw	Scale	Масштаб
+cameraRaw	Offset X	Смещение по X
+cameraRaw	Offset Y	Смещение по Y
+cameraRaw	Guided	По направляющим

@@ -4431,3 +4431,26 @@ layerLabel	No Color	Sem cor
 	Font size presets	Predefinições de tamanho da fonte
 	Leading presets	Predefinições de entrelinha
 	Tracking presets	Predefinições de tracking
+	Upright	Endireitamento
+	Manual Transformations	Transformações manuais
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	Desenhe duas ou mais guias na imagem ao longo de linhas que devem ser verticais ou horizontais (Shift+T).
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	Arraste a extremidade de uma guia para movê-la; selecione uma guia e pressione Delete para removê-la. Até quatro guias.
+cameraRaw	Geometry	Geometria
+cameraRaw	Off	Desativado
+cameraRaw	Auto	Automático
+cameraRaw	Level	Nível
+cameraRaw	Vertical	Vertical
+cameraRaw	Full	Completa
+cameraRaw	Disable Upright	Desativar endireitamento
+cameraRaw	Auto: apply balanced perspective corrections	Automático: aplica correções de perspectiva equilibradas
+cameraRaw	Level: apply only level correction	Nível: aplica apenas o nivelamento
+cameraRaw	Vertical: apply level and vertical perspective correction	Vertical: aplica nivelamento e correção de perspectiva vertical
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	Completo: aplica nivelamento e correções de perspectiva horizontal e vertical
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	Guiado: desenhe duas ou mais guias para personalizar as correções de perspectiva
+cameraRaw	Horizontal	Horizontal
+cameraRaw	Rotate	Girar
+cameraRaw	Aspect	Proporção
+cameraRaw	Scale	Escala
+cameraRaw	Offset X	Deslocamento X
+cameraRaw	Offset Y	Deslocamento Y
+cameraRaw	Guided	Guiado

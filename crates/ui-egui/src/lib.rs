@@ -117,6 +117,7 @@ pub use dialogs::brush_preset_dialog;
 pub use dialogs::caf_ui;
 use dialogs::camera_raw_detail_ui;
 use dialogs::camera_raw_gpu;
+use dialogs::camera_raw_guides_ui;
 use dialogs::camera_raw_preview_ui;
 use dialogs::camera_raw_scope_ui;
 pub use dialogs::camera_raw_ui;

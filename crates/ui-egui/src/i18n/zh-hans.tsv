@@ -3185,3 +3185,26 @@ curves	Smooth	平滑
 	Font size presets	字号预设
 	Leading presets	行距预设
 	Tracking presets	字距调整预设
+	Upright	透视校正
+	Manual Transformations	手动变换
+	Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).	沿应为垂直或水平的线条在图像上绘制两条或更多参考线 (Shift+T)。
+	Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.	拖动参考线的端点可移动它；选择参考线并按 Delete 键可将其删除。最多四条参考线。
+cameraRaw	Geometry	几何
+cameraRaw	Off	关闭
+cameraRaw	Auto	自动
+cameraRaw	Level	级别
+cameraRaw	Vertical	垂直
+cameraRaw	Full	完全
+cameraRaw	Disable Upright	停用透视校正
+cameraRaw	Auto: apply balanced perspective corrections	自动：应用平衡的透视校正
+cameraRaw	Level: apply only level correction	水平：仅应用水平校正
+cameraRaw	Vertical: apply level and vertical perspective correction	垂直：应用水平校正和垂直透视校正
+cameraRaw	Full: apply level, horizontal, and vertical perspective corrections	完全：应用水平校正以及水平和垂直透视校正
+cameraRaw	Guided: draw two or more guides to customize perspective corrections	引导：绘制两条或更多参考线以自定义透视校正
+cameraRaw	Horizontal	水平
+cameraRaw	Rotate	旋转
+cameraRaw	Aspect	长宽比
+cameraRaw	Scale	缩放
+cameraRaw	Offset X	X 偏移
+cameraRaw	Offset Y	Y 偏移
+cameraRaw	Guided	引导

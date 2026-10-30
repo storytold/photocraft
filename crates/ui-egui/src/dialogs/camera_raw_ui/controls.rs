@@ -145,6 +145,111 @@ fn section(ui: &mut egui::Ui, title: &str, open: bool, body: impl FnOnce(&mut eg
         .show(ui, body);
 }
 
+/// Geometry: Upright (Off, Auto, Level, Vertical, Full, Guided) and the Manual Transformations.
+fn geometry(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, guides: &mut crate::camera_raw_guides_ui::GuideTool) {
+    let reveal = std::mem::take(&mut guides.reveal);
+    let id = ui.make_persistent_id(("camera-raw-section", "Geometry"));
+    if reveal {
+        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
+        state.set_open(true);
+        state.store(ui.ctx());
+    }
+    let response =
+        egui::CollapsingHeader::new(egui::RichText::new(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", "Geometry")).font(FontId::proportional(13.0)))
+            .id_salt(("camera-raw-section", "Geometry"))
+            .default_open(false)
+            .show(ui, |ui| {
+                widgets::section_label(ui, tl!("Upright"));
+                const MODES: [(&str, &str, &str); 6] = [
+                    ("off", "Off", "Disable Upright"),
+                    ("auto", "Auto", "Auto: apply balanced perspective corrections"),
+                    ("level", "Level", "Level: apply only level correction"),
+                    ("vertical", "Vertical", "Vertical: apply level and vertical perspective correction"),
+                    ("full", "Full", "Full: apply level, horizontal, and vertical perspective corrections"),
+                    ("guided", "Guided", "Guided: draw two or more guides to customize perspective corrections"),
+                ];
+                ui.horizontal_wrapped(|ui| {
+                    for (mode, name, tip) in MODES {
+                        let name = crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", name);
+                        let on = p.upright == mode;
+                        let response = widgets::pill_tab(ui, name, on).on_hover_text(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", tip));
+                        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, name));
+                        if response.clicked() {
+                            if p.upright != mode {
+                                p.upright = mode.into();
+                                // Guides belong to Guided; another mode starts without them.
+                                p.upright_guides.clear();
+                                *dirty = true;
+                            }
+                            guides.active = mode == "guided";
+                        }
+                    }
+                });
+                if p.upright == "guided" {
+                    let n = p.upright_guides.len();
+                    let text = if n < 2 {
+                        tl!("Draw two or more guides on the image along lines that should be vertical or horizontal (Shift+T).")
+                    } else {
+                        tl!("Drag a guide's end to move it; select a guide and press Delete to remove it. Up to four guides.")
+                    };
+                    ui.label(egui::RichText::new(text).small().weak());
+                    if n > 0 && ui.button(tl!("Clear Guides")).clicked() {
+                        p.upright_guides.clear();
+                        guides.selected = None;
+                        *dirty = true;
+                    }
+                }
+                widgets::section_label(ui, tl!("Manual Transformations"));
+                row(ui, dirty, "Vertical", &mut p.transform_vertical, -100.0..=100.0, None);
+                row(ui, dirty, "Horizontal", &mut p.transform_horizontal, -100.0..=100.0, None);
+                row(ui, dirty, "Rotate", &mut p.transform_rotate, -10.0..=10.0, None);
+                row(ui, dirty, "Aspect", &mut p.transform_aspect, -100.0..=100.0, None);
+                let scale = slider(ui, dirty, "Scale", &mut p.transform_scale, 50.0..=150.0, None);
+                if scale.double_clicked() {
+                    // Scale's neutral is 100 %, not the 0 every other slider resets to.
+                    p.transform_scale = 100.0;
+                }
+                row(ui, dirty, "Offset X", &mut p.transform_offset_x, -100.0..=100.0, None);
+                row(ui, dirty, "Offset Y", &mut p.transform_offset_y, -100.0..=100.0, None);
+            });
+    if reveal {
+        response.header_response.scroll_to_me(Some(egui::Align::TOP));
+    }
+}
+
+/// Shift+T picks Guided Upright and its tool (a second press puts the tool down); Delete or
+/// Backspace removes the selected guide. Each change is one undo step.
+fn guide_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
+    if ctx.text_edit_focused() {
+        return;
+    }
+    // Shift exactly, since consume_key with no Shift would also take Shift+T.
+    let shift_t = ctx.input_mut(|i| i.modifiers.shift && !i.modifiers.command && !i.modifiers.alt && i.consume_key(egui::Modifiers::SHIFT, egui::Key::T));
+    if shift_t {
+        let was = d.params.clone();
+        if crate::camera_raw_guides_ui::toggle(&mut d.guides, &mut d.params) {
+            let guided = std::mem::replace(&mut d.params, was);
+            remember_edit(d);
+            d.params = guided;
+            d.dirty = true;
+        }
+        if d.guides.active {
+            d.guides.reveal = true;
+        }
+    }
+    let delete = d.guides.active
+        && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace));
+    if delete {
+        let was = d.params.clone();
+        if crate::camera_raw_guides_ui::delete_selected(&mut d.guides, &mut d.params) {
+            let edited = std::mem::replace(&mut d.params, was);
+            remember_edit(d);
+            d.params = edited;
+            d.dirty = true;
+        }
+    }
+}
+
 fn wheel(ui: &mut egui::Ui, dirty: &mut bool, title: &str, w: &mut Wheel) {
     widgets::section_label(ui, crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", title));
     let hs = widgets::hue_stops();
@@ -244,6 +349,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     egui::Area::new(egui::Id::unique("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
+        guide_keys(d, ctx);
         let pointer = ctx.input(|i| i.pointer.primary_down());
         if pointer && d.edit_origin.is_none() {
             d.edit_origin = Some(d.params.clone());
@@ -290,8 +396,18 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let mut preview = ui.new_child(egui::UiBuilder::new().max_rect(view));
         preview.set_clip_rect(view.intersect(ui.clip_rect()));
         preview.painter().rect_filled(view, 0.0, t.canvas);
-        let (r, response, panning, zoom_box) =
-            crate::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut scope.sampler_tool, animated_zoom);
+        // The Guided Upright tool takes the preview's clicks as the sampler does (the Hand and
+        // Zoom tools put it down).
+        if d.params.upright != "guided" || scope.sampler_tool {
+            d.guides.active = false;
+        }
+        let guided = d.guides.active;
+        let mut clicks_taken = scope.sampler_tool || guided;
+        let (r, response, panning, zoom_box) = crate::camera_raw_preview_ui::interact(&mut preview, navigation, view, size, &mut clicks_taken, animated_zoom);
+        if !clicks_taken {
+            scope.sampler_tool = false;
+            d.guides.active = false;
+        }
         let tex = if d.show_before { d.before_tex.as_ref() } else { d.tex.as_ref() };
         if let Some(tex) = tex {
             // Never tile a checker across the offscreen extent of a highly zoomed image.
@@ -305,6 +421,13 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             }
             d.scope.preview_rect = Some(r);
             crate::camera_raw_scope_ui::preview(&mut preview, d, scope, r, &response, panning);
+            if guided && d.guides.active && !d.show_before {
+                let shown = d.params.clone();
+                let (fw, fh) = (d.full_w, d.full_h);
+                if crate::camera_raw_guides_ui::preview(&mut preview, &mut d.guides, &mut d.params, &shown, r, fw, fh, &response, panning, d.tex.as_ref()) {
+                    d.dirty = true;
+                }
+            }
         }
         if let Some(region) = zoom_box {
             preview.painter().rect_stroke(region, 0.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
@@ -312,7 +435,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let toolbar = ERect::from_min_max(pos2(preview_body.left() + 16.0, view.bottom() + 8.0), preview_body.right_bottom() - vec2(16.0, 4.0));
         let mut nav_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar).layout(egui::Layout::left_to_right(egui::Align::Center)));
         nav_ui.set_clip_rect(preview_body.intersect(ui.clip_rect()));
-        crate::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut scope.sampler_tool);
+        let mut tool_taken = scope.sampler_tool || d.guides.active;
+        crate::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut tool_taken);
+        if !tool_taken {
+            scope.sampler_tool = false;
+            d.guides.active = false;
+        }
         if d.detail.pending() {
             nav_ui.spinner();
         }
@@ -423,6 +551,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 row(ui, &mut dirty, "Blending", &mut p.grade_blending, 0.0..=100.0, None);
                 row(ui, &mut dirty, "Balance", &mut p.grade_balance, -100.0..=100.0, None);
             });
+            geometry(ui, p, &mut dirty, &mut d.guides);
             section(ui, "Detail", false, |ui| {
                 if let Some(raw) = d.raw_open.as_mut() {
                     demosaic_row(ui, &mut raw.demosaic);
@@ -501,7 +630,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     {
         d.show_before = !d.show_before;
     }
-    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+    if ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !app.camera_raw.as_mut().is_some_and(|d| d.guides.escape()) {
         action = Some("cancel");
     }
     match action {
