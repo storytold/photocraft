@@ -109,7 +109,7 @@ impl Model {
 }
 
 /// The colour the panel edits.
-fn active(app: &PhotocraftApp) -> [f32; 3] {
+pub(crate) fn active(app: &PhotocraftApp) -> [f32; 3] {
     let c = if app.ui.color_panel.background { app.session.tools.background } else { app.session.tools.foreground };
     [c[0], c[1], c[2]].map(|x| x.clamp(0.0, 1.0))
 }
@@ -347,7 +347,7 @@ fn sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, mode: ColorPanelMode) {
 
 /// Photoshop's alerts under the chips: ⚠ when the colour can't print (click: the nearest CMYK
 /// colour) and, for Web Color sliders, the cube when it isn't a web colour (click: the nearest).
-fn alerts(app: &mut PhotocraftApp, ui: &mut egui::Ui, col: Rect, rgb: [f32; 3], web: bool) {
+pub(crate) fn alerts(app: &mut PhotocraftApp, ui: &mut egui::Ui, col: Rect, rgb: [f32; 3], web: bool) {
     let t = Tokens::get(ui.ctx());
     let background = app.ui.color_panel.background;
     let mut y = col.top() + CHIPS_W + 2.0;
@@ -767,4 +767,27 @@ pub(crate) fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.separator();
     ramp_menu(app, ui);
+}
+
+/// Remember the Color panel's options in the preferences when they change, so they survive a
+/// restart (#9592). Cheap: a small JSON compare per frame.
+pub fn persist(app: &mut PhotocraftApp) {
+    let stored = app.session.prefs().color_panel.clone();
+    // Changed outside the panel since the last sync (`prefs.set`, a reset): the panel takes it.
+    if app.ui.color_panel_synced.as_ref().is_some_and(|synced| *synced != stored) {
+        restore(app);
+        app.ui.color_panel_synced = Some(stored);
+        return;
+    }
+    let Ok(now) = serde_json::to_value(app.ui.color_panel) else { return };
+    if stored != now {
+        app.session.prefs.edit(|p| p.color_panel = now.clone());
+    }
+    app.ui.color_panel_synced = Some(now);
+}
+
+/// Restore the remembered Color panel options (at launch, or after a preference change made
+/// outside the panel); none stored (a reset) or unreadable ones are the defaults.
+pub fn restore(app: &mut PhotocraftApp) {
+    app.ui.color_panel = serde_json::from_value(app.session.prefs().color_panel.clone()).unwrap_or_default();
 }

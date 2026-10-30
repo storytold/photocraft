@@ -280,10 +280,11 @@ fn text_run_baseline_roundtrips() {
 fn zip_incremental_only_new_tiles() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U16);
     let mut w = PcraftWriter::new();
-    let (_, s1) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    let (first, s1) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert!(s1.tiles_total > 5);
     assert_eq!(s1.tiles_written, s1.tiles_total);
-    let (_, s2) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    let (cached, s2) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
+    assert_eq!(first, cached);
     assert_eq!(s2.tiles_written, 0);
     assert_eq!(s2.tiles_reused, s2.tiles_total);
     assert_eq!(s2.blobs_written, 0);
@@ -293,6 +294,7 @@ fn zip_incremental_only_new_tiles() {
     let (bytes, s3) = w.save_zip(&doc, &SaveOptions::default()).unwrap();
     assert_eq!(s3.tiles_written, 1);
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
+    assert_eq!(bytes, PcraftWriter::new().save_zip(&doc, &SaveOptions::default()).unwrap().0);
 }
 
 #[test]

@@ -1015,12 +1015,17 @@ impl Document {
 
     /// Pixel format for new raster layers in this document.
     pub fn pixel_format(&self) -> PixelFormat {
-        let mode = match self.mode {
+        Self::pixel_format_for(self.mode, self.depth)
+    }
+
+    /// [`Self::pixel_format`] of a document in `mode` at `depth`.
+    pub fn pixel_format_for(mode: ColorMode, depth: SampleType) -> PixelFormat {
+        let mode = match mode {
             ColorMode::Indexed | ColorMode::Multichannel => ColorMode::Rgb,
             ColorMode::Bitmap | ColorMode::Duotone => ColorMode::Grayscale,
             m => m,
         };
-        PixelFormat::new(mode, self.depth, true)
+        PixelFormat::new(mode, depth, true)
     }
 
     pub fn bounds(&self) -> Rect {

@@ -115,7 +115,7 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool, size_limit: Optio
     let header = Header::new(version, doc.size.width, doc.size.height, channels.len().max(1) as u16, psd_depth(sample), PsdMode::Multichannel);
     let image_data = ImageData::encode(Compression::Rle, &planes, &header)
         .or_else(|_| ImageData::encode(Compression::Raw, &planes, &header))
-        .unwrap_or(ImageData { compression: Compression::Raw, data: planes });
+        .unwrap_or(ImageData::new(Compression::Raw, planes));
     let mut resources = vec![
         ImageResource::new(ids::RESOLUTION_INFO, ResolutionInfo::from_dpi(f64::from(doc.resolution_dpi)).to_bytes()),
         ImageResource::new(ids::GLOBAL_ANGLE, (doc.global_light.angle.round() as i32).to_be_bytes().to_vec()),
@@ -196,8 +196,10 @@ pub(crate) fn layerless_file(
         image_data,
         write_as_psb: false,
     };
-    if let Some(limit) = size_limit {
-        warnings.extend(crate::psd_export::fit_psd_size(&mut file, limit));
+    if let Some(limit) = size_limit
+        && let Some(warning) = crate::psd_export::fit_psd_size(&mut file, limit)
+    {
+        warnings.push(warning);
     }
     crate::psd_export::sign_global_blocks(&mut file);
     file
