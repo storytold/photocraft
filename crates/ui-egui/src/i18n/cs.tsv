@@ -4248,6 +4248,80 @@ cameraRaw	Dehaze	Odstranění oparu
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Poměr stran
+	Could not prepare a file to send: {error}	Soubor k odeslání se nepodařilo připravit: {error}
+	There is no saved file to send. Choose PSD or PNG.	Není uložený soubor k odeslání. Zvol PSD nebo PNG.
+	Submitting needs an internet connection.	Odesílání potřebuje připojení k internetu.
+	Open the DeviantArt developer page	Otevřít stránku pro vývojáře DeviantArt
+	DeviantArt app id	Id aplikace DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Přihlášení k DeviantArt zůstává ve klíčence systému, ne v souboru nastavení PhotoCraftu.
+	Connect DeviantArt	Připojit DeviantArt
+	Tags	Štítky
+	Letters, numbers and underscores, separated by commas.	Písmena, čísla a podtržítka, oddělená čárkami.
+	Submit as	Odeslat jako
+	Also submit when I Save	Odeslat i při uložení
+	Also submit when I Save As	Odeslat i při Uložit jako
+	Also submit when I Save a Copy	Odeslat i při uložení kopie
+	Also submit when I Export	Odeslat i při exportu
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt je nastaven. Uložte nebo exportujte soubor a pak ho odešlete.
+	Connect DeviantArt first.	Nejprve připojte DeviantArt.
+	The DeviantArt app id should be a number.	Id aplikace DeviantArt má být číslo.
+	DeviantArt submitting needs the desktop app.	Odesílání na DeviantArt je jen v desktopové aplikaci.
+	A DeviantArt submit is already running.	Odesílání na DeviantArt už běží.
+	Waiting for DeviantArt…	Čeká se na DeviantArt…
+	Submitting {name} to DeviantArt…	Odesílání {name} na DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Soubor je větší, než DeviantArt přijme (30 MB).
+	DeviantArt is connected.	DeviantArt je připojen.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Vytvořte veřejnou aplikaci na DeviantArt, bez client secret. Zkopírujte adresu níže do přesměrování, vložte sem client id a připojte se.
+	Copied the redirect address.	Adresa přesměrování zkopírována.
+	Connected	Připojeno
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG je to, co DeviantArt ukazuje. PSD je ve Sta.sh jen soubor.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK nahraje do Sta.sh. Veřejné to není, dokud to nezveřejníte.
+	Connect again	Připojit znovu
+	Disconnect DeviantArt	Odpojit DeviantArt
+	Submit to DeviantArt…	Odeslat na DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} je ve Sta.sh. Veřejné to bude až po zveřejnění.
+	Open the Sta.sh page	Otevřít stránku Sta.sh
+	DeviantArt was disconnected.	DeviantArt byl odpojen.
+	The DeviantArt login expired. Connect again.	Přihlášení k DeviantArt vypršelo. Připojte se znovu.
+	Saved file	Uložený soubor
+	Submitted {name} to Sta.sh. Item {id}.	{name} odesláno do Sta.sh. Položka {id}.
+	Opened {name}.	{name} otevřeno.
+	Connect again after this update so gallery, publish and the profile picture are allowed.	Připojte se znovu, aby šly galerie, zveřejnění a profilový obrázek.
+	Sta.sh item id	Id položky Sta.sh
+	Publish this publicly	Zveřejnit veřejně
+	Not for all ages	Ne pro každý věk
+	License	Licence
+	Creative Commons	Creative Commons
+	Commercial use	Komerční užití
+	Publish	Zveřejnit
+	Deviation id	Id díla
+	Update title and tags	Aktualizovat název a štítky
+	My gallery	Moje galerie
+	Profile picture	Profilový obrázek
+	Set as DeviantArt profile picture	Nastavit jako profilový obrázek DeviantArt
+	Confirm that this publish is public.	Potvrďte, že zveřejnění je veřejné.
+	More options	Další volby
+	Upload with OK first. Publish uses the Sta.sh item from that upload.	Nejprve nahrajte přes OK. Zveřejnění použije položku Sta.sh z tohoto nahrání.
+	Open the Telegram message	Otevřít zprávu v Telegramu
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Deset nejnovějších souborů poslaných tomuto botovi. Kliknutím jeden otevřete ve PhotoCraftu.
+	Your published works. Click one to open it in PhotoCraft. Sta.sh drafts are not in this list.	Vaše zveřejněná díla. Kliknutím jedno otevřete ve PhotoCraftu. Koncepty ve Sta.sh v seznamu nejsou.
+	Get files	Získat soubory
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Soubory odeslané z PhotoCraftu a deset nejnovějších souborů tomuto botovi. Kliknutím jeden otevřete ve PhotoCraftu.
+	No files yet. Send one from here, or send the bot a file, then try again.	Zatím žádné soubory. Pošlete jeden odsud nebo botovi a zkuste to znovu.
+	Sta.sh drafts from this account, then published works. Click one to open it in PhotoCraft.	Koncepty Sta.sh z tohoto účtu a pak zveřejněná díla. Kliknutím jedno otevřete ve PhotoCraftu.
+	No Sta.sh files yet.	Ve Sta.sh zatím nic není.
+	No published works in the gallery.	V galerii nejsou žádná zveřejněná díla.
+	Telegram did not return a link for this chat.	Telegram nevrátil odkaz na tento chat.
+	Sta.sh drafts open their page. Published works open in PhotoCraft.	Koncepty Sta.sh otevřou svou stránku. Zveřejněná díla se otevřou ve PhotoCraftu.
+	DeviantArt did not offer a download.	DeviantArt nenabídl stažení.
+	Published on DeviantArt.	Zveřejněno na DeviantArt.
+	Updated the title and tags on DeviantArt.	Název a štítky na DeviantArt aktualizovány.
+	Set the DeviantArt profile picture.	Profilový obrázek DeviantArt nastaven.
+
+# Independent publishing and account management
+	Publishing options	Možnosti zveřejnění
+	Gallery and profile	Galerie a profil
 	Font size presets	Předvolby velikosti písma
 	Leading presets	Předvolby prokladu
 	Tracking presets	Předvolby prostrkání
+	Enter the deviation id first.	Nejprve zadejte ID díla.

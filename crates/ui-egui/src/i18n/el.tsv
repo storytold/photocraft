@@ -4201,6 +4201,81 @@ curves	Smooth	Εξομάλυνση
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Στόχος
+	Could not prepare a file to send: {error}	Δεν ήταν δυνατή η προετοιμασία αρχείου για αποστολή: {error}
+	There is no saved file to send. Choose PSD or PNG.	Δεν υπάρχει αποθηκευμένο αρχείο για αποστολή. Διάλεξε PSD ή PNG.
+	Submitting needs an internet connection.	Η υποβολή χρειάζεται σύνδεση στο διαδίκτυο.
+	Open the DeviantArt developer page	Άνοιγμα της σελίδας προγραμματιστών του DeviantArt
+	DeviantArt app id	Id εφαρμογής DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Η σύνδεση DeviantArt μένει στην κλειδοθήκη του συστήματος, όχι στο αρχείο ρυθμίσεων του PhotoCraft.
+	Connect DeviantArt	Σύνδεση DeviantArt
+	Title	Τίτλος
+	Tags	Ετικέτες
+	Letters, numbers and underscores, separated by commas.	Γράμματα, αριθμοί και κάτω παύλες, χωρισμένα με κόμματα.
+	Submit as	Υποβολή ως
+	Also submit when I Save	Υποβολή και κατά την αποθήκευση
+	Also submit when I Save As	Υποβολή και στο Αποθήκευση ως
+	Also submit when I Save a Copy	Υποβολή και κατά την αποθήκευση αντιγράφου
+	Also submit when I Export	Υποβολή και κατά την εξαγωγή
+	DeviantArt is set up. Save or export a file, then submit it.	Το DeviantArt ρυθμίστηκε. Αποθηκεύστε ή εξάγετε ένα αρχείο και μετά υποβάλετέ το.
+	Connect DeviantArt first.	Συνδέστε πρώτα το DeviantArt.
+	The DeviantArt app id should be a number.	Το id της εφαρμογής DeviantArt πρέπει να είναι αριθμός.
+	DeviantArt submitting needs the desktop app.	Η υποβολή στο DeviantArt υπάρχει μόνο στην εφαρμογή για υπολογιστή.
+	A DeviantArt submit is already running.	Μια υποβολή στο DeviantArt εκτελείται ήδη.
+	Waiting for DeviantArt…	Αναμονή για το DeviantArt…
+	Submitting {name} to DeviantArt…	Υποβολή του {name} στο DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Το αρχείο είναι μεγαλύτερο από ό,τι δέχεται το DeviantArt (30 MB).
+	DeviantArt is connected.	Το DeviantArt συνδέθηκε.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Δημιουργήστε μια δημόσια εφαρμογή στο DeviantArt, χωρίς client secret. Αντιγράψτε την παρακάτω διεύθυνση στην ανακατεύθυνση, επικολλήστε εδώ το client id και συνδεθείτε.
+	Copied the redirect address.	Η διεύθυνση ανακατεύθυνσης αντιγράφηκε.
+	Connected	Συνδέθηκε
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	Το PNG είναι αυτό που δείχνει το DeviantArt. Ένα PSD μένει στο Sta.sh μόνο ως αρχείο.
+	OK uploads to Sta.sh. Nothing is public until you publish.	Το OK ανεβάζει στο Sta.sh. Δεν είναι δημόσιο μέχρι να το δημοσιεύσετε.
+	Connect again	Σύνδεση ξανά
+	Disconnect DeviantArt	Αποσύνδεση DeviantArt
+	Submit to DeviantArt…	Υποβολή στο DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	Το {name} είναι στο Sta.sh. Μένει ιδιωτικό μέχρι να το δημοσιεύσετε.
+	Open the Sta.sh page	Άνοιγμα της σελίδας Sta.sh
+	DeviantArt was disconnected.	Το DeviantArt αποσυνδέθηκε.
+	The DeviantArt login expired. Connect again.	Η σύνδεση στο DeviantArt έληξε. Συνδεθείτε ξανά.
+	Saved file	Αποθηκευμένο αρχείο
+	Submitted {name} to Sta.sh. Item {id}.	Το {name} υποβλήθηκε στο Sta.sh. Στοιχείο {id}.
+	Opened {name}.	Το {name} άνοιξε.
+	Connect again after this update so gallery, publish and the profile picture are allowed.	Συνδεθείτε ξανά, ώστε να επιτρέπονται η συλλογή, η δημοσίευση και η εικόνα προφίλ.
+	Sta.sh item id	Id στοιχείου Sta.sh
+	Publish this publicly	Δημόσια δημοσίευση
+	Not for all ages	Όχι για όλες τις ηλικίες
+	License	Άδεια
+	Creative Commons	Creative Commons
+	Commercial use	Εμπορική χρήση
+	Publish	Δημοσίευση
+	Deviation id	Id έργου
+	Update title and tags	Ενημέρωση τίτλου και ετικετών
+	My gallery	Η συλλογή μου
+	Profile picture	Εικόνα προφίλ
+	Set as DeviantArt profile picture	Ορισμός ως εικόνα προφίλ DeviantArt
+	Confirm that this publish is public.	Επιβεβαιώστε ότι η δημοσίευση είναι δημόσια.
+	More options	Περισσότερες επιλογές
+	Upload with OK first. Publish uses the Sta.sh item from that upload.	Ανεβάστε πρώτα με OK. Η δημοσίευση χρησιμοποιεί το στοιχείο Sta.sh από αυτή τη μεταφόρτωση.
+	Open the Telegram message	Άνοιγμα του μηνύματος στο Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Τα δέκα νεότερα αρχεία προς αυτό το bot. Κλικ για άνοιγμα στο PhotoCraft.
+	Your published works. Click one to open it in PhotoCraft. Sta.sh drafts are not in this list.	Τα δημοσιευμένα έργα σας. Κλικ για άνοιγμα στο PhotoCraft. Τα πρόχειρα του Sta.sh δεν είναι στη λίστα.
+	Get files	Λήψη αρχείων
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Αρχεία που έστειλε το PhotoCraft και τα δέκα νεότερα προς αυτό το bot. Κλικ για άνοιγμα στο PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Δεν υπάρχουν αρχεία ακόμα. Στείλτε ένα από εδώ ή στο bot και δοκιμάστε ξανά.
+	Sta.sh drafts from this account, then published works. Click one to open it in PhotoCraft.	Πρόχειρα Sta.sh αυτού του λογαριασμού και μετά δημοσιευμένα έργα. Κλικ για άνοιγμα στο PhotoCraft.
+	No Sta.sh files yet.	Δεν υπάρχει τίποτα στο Sta.sh ακόμα.
+	No published works in the gallery.	Δεν υπάρχουν δημοσιευμένα έργα στη συλλογή.
+	Telegram did not return a link for this chat.	Το Telegram δεν έδωσε σύνδεσμο για αυτή τη συνομιλία.
+	Sta.sh drafts open their page. Published works open in PhotoCraft.	Τα πρόχειρα Sta.sh ανοίγουν τη σελίδα τους. Τα δημοσιευμένα έργα ανοίγουν στο PhotoCraft.
+	DeviantArt did not offer a download.	Το DeviantArt δεν προσέφερε λήψη.
+	Published on DeviantArt.	Δημοσιεύτηκε στο DeviantArt.
+	Updated the title and tags on DeviantArt.	Ενημερώθηκαν ο τίτλος και οι ετικέτες στο DeviantArt.
+	Set the DeviantArt profile picture.	Ορίστηκε η εικόνα προφίλ DeviantArt.
+
+# Independent publishing and account management
+	Publishing options	Επιλογές δημοσίευσης
+	Gallery and profile	Συλλογή και προφίλ
 	Font size presets	Προεπιλογές μεγέθους γραμματοσειράς
 	Leading presets	Προεπιλογές διάστιχου
 	Tracking presets	Προεπιλογές διαστήματος χαρακτήρων
+	Enter the deviation id first.	Εισαγάγετε πρώτα το ID του έργου.

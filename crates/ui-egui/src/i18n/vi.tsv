@@ -3997,6 +3997,81 @@ curves	Smooth	Làm mượt
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Tỷ lệ khung hình
+	Could not prepare a file to send: {error}	Không chuẩn bị được tệp để gửi: {error}
+	There is no saved file to send. Choose PSD or PNG.	Không có tệp đã lưu để gửi. Hãy chọn PSD hoặc PNG.
+	Submitting needs an internet connection.	Việc gửi cần kết nối internet.
+	Open the DeviantArt developer page	Mở trang nhà phát triển DeviantArt
+	DeviantArt app id	Id ứng dụng DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Đăng nhập DeviantArt nằm trong móc khóa của hệ thống, không nằm trong tệp cài đặt của PhotoCraft.
+	Connect DeviantArt	Kết nối DeviantArt
+	Title	Tiêu đề
+	Tags	Thẻ
+	Letters, numbers and underscores, separated by commas.	Chữ, số và gạch dưới, cách nhau bằng dấu phẩy.
+	Submit as	Gửi dưới dạng
+	Also submit when I Save	Gửi cả khi Lưu
+	Also submit when I Save As	Gửi cả khi Lưu thành
+	Also submit when I Save a Copy	Gửi cả khi Lưu bản sao
+	Also submit when I Export	Gửi cả khi Xuất
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt đã sẵn sàng. Hãy lưu hoặc xuất một tệp, rồi gửi.
+	Connect DeviantArt first.	Hãy kết nối DeviantArt trước.
+	The DeviantArt app id should be a number.	Id ứng dụng DeviantArt phải là một số.
+	DeviantArt submitting needs the desktop app.	Gửi lên DeviantArt chỉ có trong ứng dụng máy tính.
+	A DeviantArt submit is already running.	Một lượt gửi DeviantArt đang chạy.
+	Waiting for DeviantArt…	Đang đợi DeviantArt…
+	Submitting {name} to DeviantArt…	Đang gửi {name} lên DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Tệp lớn hơn mức DeviantArt nhận (30 MB).
+	DeviantArt is connected.	Đã kết nối DeviantArt.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Tạo một ứng dụng công khai trên DeviantArt, không cần client secret. Sao chép địa chỉ bên dưới vào chuyển hướng, dán id vào đây rồi kết nối.
+	Copied the redirect address.	Đã sao chép địa chỉ chuyển hướng.
+	Connected	Đã kết nối
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG là ảnh DeviantArt hiển thị. PSD chỉ được lưu như một tệp trong Sta.sh.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK tải lên Sta.sh. Chưa công khai cho đến khi bạn đăng.
+	Connect again	Kết nối lại
+	Disconnect DeviantArt	Ngắt kết nối DeviantArt
+	Submit to DeviantArt…	Gửi lên DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} nằm trong Sta.sh. Nó vẫn riêng tư cho đến khi bạn đăng.
+	Open the Sta.sh page	Mở trang Sta.sh
+	DeviantArt was disconnected.	Đã ngắt DeviantArt.
+	The DeviantArt login expired. Connect again.	Đăng nhập DeviantArt đã hết hạn. Hãy kết nối lại.
+	Saved file	Tệp đã lưu
+	Submitted {name} to Sta.sh. Item {id}.	Đã gửi {name} vào Sta.sh. Mục {id}.
+	Opened {name}.	Đã mở {name}.
+	Connect again after this update so gallery, publish and the profile picture are allowed.	Hãy kết nối lại để cho phép thư viện, đăng tải và ảnh hồ sơ.
+	Sta.sh item id	Id mục Sta.sh
+	Publish this publicly	Đăng công khai
+	Not for all ages	Không dành cho mọi độ tuổi
+	License	Giấy phép
+	Creative Commons	Creative Commons
+	Commercial use	Sử dụng thương mại
+	Publish	Đăng
+	Deviation id	Id tác phẩm
+	Update title and tags	Cập nhật tiêu đề và thẻ
+	My gallery	Thư viện của tôi
+	Profile picture	Ảnh hồ sơ
+	Set as DeviantArt profile picture	Đặt làm ảnh hồ sơ DeviantArt
+	Confirm that this publish is public.	Hãy xác nhận rằng bài đăng này là công khai.
+	More options	Thêm tùy chọn
+	Upload with OK first. Publish uses the Sta.sh item from that upload.	Hãy tải lên bằng OK trước. Đăng dùng mục Sta.sh của lần tải đó.
+	Open the Telegram message	Mở tin nhắn Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Mười tệp mới nhất gửi cho bot này. Nhấp một tệp để mở trong PhotoCraft.
+	Your published works. Click one to open it in PhotoCraft. Sta.sh drafts are not in this list.	Tác phẩm bạn đã đăng. Nhấp một tác phẩm để mở trong PhotoCraft. Bản nháp Sta.sh không có trong danh sách này.
+	Get files	Lấy tệp
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Tệp PhotoCraft đã gửi và mười tệp mới nhất gửi cho bot này. Nhấp một tệp để mở trong PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Chưa có tệp. Hãy gửi một tệp từ đây hoặc cho bot, rồi thử lại.
+	Sta.sh drafts from this account, then published works. Click one to open it in PhotoCraft.	Bản nháp Sta.sh của tài khoản này, rồi tác phẩm đã đăng. Nhấp một mục để mở trong PhotoCraft.
+	No Sta.sh files yet.	Sta.sh chưa có gì.
+	No published works in the gallery.	Thư viện không có tác phẩm đã đăng.
+	Telegram did not return a link for this chat.	Telegram không trả về liên kết cho cuộc trò chuyện này.
+	Sta.sh drafts open their page. Published works open in PhotoCraft.	Bản nháp Sta.sh mở trang của chúng. Tác phẩm đã đăng mở trong PhotoCraft.
+	DeviantArt did not offer a download.	DeviantArt không cung cấp tệp tải xuống.
+	Published on DeviantArt.	Đã đăng trên DeviantArt.
+	Updated the title and tags on DeviantArt.	Đã cập nhật tiêu đề và thẻ trên DeviantArt.
+	Set the DeviantArt profile picture.	Đã đặt ảnh hồ sơ DeviantArt.
+
+# Independent publishing and account management
+	Publishing options	Tùy chọn xuất bản
+	Gallery and profile	Thư viện và hồ sơ
 	Font size presets	Cỡ chữ đặt sẵn
 	Leading presets	Giãn dòng đặt sẵn
 	Tracking presets	Khoảng cách chữ đặt sẵn
+	Enter the deviation id first.	Nhập ID tác phẩm trước.

@@ -58,6 +58,10 @@ winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"]
 [target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "windows")))'.dependencies]
 photocraft-ipp = { workspace = true }
 
+# Nonblocking saved-file opens prevent a raced FIFO from stalling a Sta.sh upload.
+[target.'cfg(all(unix, not(target_arch = "wasm32")))'.dependencies]
+rustix = { version = "=1.1.5", features = ["fs"] }
+
 [dev-dependencies]
 photocraft-affinity = { workspace = true, features = ["synth"] }
 # Synthetic camera raw files for the open tests.

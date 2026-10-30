@@ -4212,6 +4212,81 @@ curves	Smooth	Згладити
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Ціль
+	Could not prepare a file to send: {error}	Не вдалося підготувати файл для надсилання: {error}
+	There is no saved file to send. Choose PSD or PNG.	Немає збереженого файла для надсилання. Виберіть PSD або PNG.
+	Submitting needs an internet connection.	Для надсилання потрібне з'єднання з інтернетом.
+	Open the DeviantArt developer page	Відкрити сторінку розробника DeviantArt
+	DeviantArt app id	Id застосунку DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Вхід DeviantArt лишається у в'язці ключів системи, не у файлі налаштувань PhotoCraft.
+	Connect DeviantArt	Підключити DeviantArt
+	Title	Назва
+	Tags	Мітки
+	Letters, numbers and underscores, separated by commas.	Літери, цифри й підкреслення, через кому.
+	Submit as	Надіслати як
+	Also submit when I Save	Надсилати і під час збереження
+	Also submit when I Save As	Надсилати і під час «Зберегти як»
+	Also submit when I Save a Copy	Надсилати і під час збереження копії
+	Also submit when I Export	Надсилати і під час експорту
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt налаштовано. Збережіть або експортуйте файл, а потім надішліть його.
+	Connect DeviantArt first.	Спочатку підключіть DeviantArt.
+	The DeviantArt app id should be a number.	Id застосунку DeviantArt має бути числом.
+	DeviantArt submitting needs the desktop app.	Надсилання на DeviantArt є лише в настільній програмі.
+	A DeviantArt submit is already running.	Надсилання на DeviantArt уже триває.
+	Waiting for DeviantArt…	Очікування DeviantArt…
+	Submitting {name} to DeviantArt…	Надсилання {name} на DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Файл більший, ніж приймає DeviantArt (30 МБ).
+	DeviantArt is connected.	DeviantArt підключено.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Створіть публічний застосунок на DeviantArt, без client secret. Скопіюйте адресу нижче в перенаправлення, вставте сюди id і підключіться.
+	Copied the redirect address.	Адресу перенаправлення скопійовано.
+	Connected	Підключено
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG — це те, що показує DeviantArt. PSD у Sta.sh лише файл.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK завантажує в Sta.sh. Публічним це стане лише після публікації.
+	Connect again	Підключити знову
+	Disconnect DeviantArt	Відключити DeviantArt
+	Submit to DeviantArt…	Надіслати на DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} у Sta.sh. Воно лишається приватним, доки ви його не опублікуєте.
+	Open the Sta.sh page	Відкрити сторінку Sta.sh
+	DeviantArt was disconnected.	DeviantArt від'єднано.
+	The DeviantArt login expired. Connect again.	Вхід у DeviantArt закінчився. Підключіться знову.
+	Saved file	Збережений файл
+	Submitted {name} to Sta.sh. Item {id}.	{name} надіслано в Sta.sh. Елемент {id}.
+	Opened {name}.	{name} відкрито.
+	Connect again after this update so gallery, publish and the profile picture are allowed.	Підключіться знову, щоб дозволити галерею, публікацію і фото профілю.
+	Sta.sh item id	Id елемента Sta.sh
+	Publish this publicly	Опублікувати публічно
+	Not for all ages	Не для будь-якого віку
+	License	Ліцензія
+	Creative Commons	Creative Commons
+	Commercial use	Комерційне використання
+	Publish	Опублікувати
+	Deviation id	Id твору
+	Update title and tags	Оновити назву і мітки
+	My gallery	Моя галерея
+	Profile picture	Фото профілю
+	Set as DeviantArt profile picture	Зробити фото профілю DeviantArt
+	Confirm that this publish is public.	Підтвердьте, що ця публікація публічна.
+	More options	Додаткові параметри
+	Upload with OK first. Publish uses the Sta.sh item from that upload.	Спочатку завантажте через OK. Публікація бере елемент Sta.sh з цього завантаження.
+	Open the Telegram message	Відкрити повідомлення Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Десять найновіших файлів, надісланих цьому боту. Клік відкриває один у PhotoCraft.
+	Your published works. Click one to open it in PhotoCraft. Sta.sh drafts are not in this list.	Ваші опубліковані роботи. Клік відкриває одну в PhotoCraft. Чернетки Sta.sh у цьому списку немає.
+	Get files	Забрати файли
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Файли, надіслані з PhotoCraft, і десять найновіших цьому боту. Клік відкриває один у PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Файлів ще немає. Надішліть один звідси або боту й спробуйте знову.
+	Sta.sh drafts from this account, then published works. Click one to open it in PhotoCraft.	Чернетки Sta.sh цього облікового запису, потім опубліковані роботи. Клік відкриває одну в PhotoCraft.
+	No Sta.sh files yet.	У Sta.sh ще нічого немає.
+	No published works in the gallery.	У галереї немає опублікованих робіт.
+	Telegram did not return a link for this chat.	Telegram не повернув посилання на цей чат.
+	Sta.sh drafts open their page. Published works open in PhotoCraft.	Чернетки Sta.sh відкривають свою сторінку. Опубліковані роботи відкриваються в PhotoCraft.
+	DeviantArt did not offer a download.	DeviantArt не запропонував завантаження.
+	Published on DeviantArt.	Опубліковано на DeviantArt.
+	Updated the title and tags on DeviantArt.	Назву й теги на DeviantArt оновлено.
+	Set the DeviantArt profile picture.	Аватар DeviantArt встановлено.
+
+# Independent publishing and account management
+	Publishing options	Параметри публікації
+	Gallery and profile	Галерея та профіль
 	Font size presets	Набори розмірів шрифту
 	Leading presets	Набори інтерліньяжу
 	Tracking presets	Набори трекінгу
+	Enter the deviation id first.	Спочатку введіть ID роботи.

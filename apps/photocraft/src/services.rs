@@ -14,6 +14,10 @@ use std::sync::Arc;
 #[cfg(test)]
 mod recovery_tests;
 
+mod deviantart_storage;
+pub(crate) use deviantart_storage::store_deviantart_token;
+use deviantart_storage::{load_deviantart_file, save_deviantart_file};
+
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
@@ -761,6 +765,14 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         // Set by main, which starts loading the store before the window opens.
         preset_store: None,
         is_wayland: false,
+        load_deviantart: Some(Box::new(load_deviantart_file)),
+        save_deviantart: Some(Box::new(|text: &str| save_deviantart_file(text))),
+        deviantart_connect: Some(std::sync::Arc::new(crate::deviantart_api::connect)),
+        deviantart_current_refresh: Some(std::sync::Arc::new(crate::deviantart_api::current_refresh)),
+        deviantart_submit: Some(std::sync::Arc::new(|refresh, client_id, title, comments, tags, filename, bytes| {
+            crate::deviantart_api::submit(refresh, client_id, title, comments, tags, filename, bytes)
+        })),
+        deviantart_call: Some(std::sync::Arc::new(crate::deviantart_api::call)),
         ..recovery_services(recovery_dir())
     }
 }

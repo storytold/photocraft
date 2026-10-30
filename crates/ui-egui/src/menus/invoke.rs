@@ -286,6 +286,8 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                 Err(tl!(message).to_string())
             }
         }
+        "file.submitDeviantArt" if params.is_null() || params.as_object().is_some_and(|object| object.is_empty()) => crate::deviantart::command(app),
+        "file.submitDeviantArt" => app.run(id, params.clone()),
         "file.saveAs" => {
             let choices = crate::FormatChoices::from_params(params, id)?;
             app.save_as_with(params.get("path").and_then(Value::as_str).map(str::to_string), choices)

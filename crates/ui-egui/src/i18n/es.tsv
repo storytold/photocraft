@@ -4460,6 +4460,81 @@ navigator	Zoom	Zoom
 	Tight Curl	Rizo apretado
 	Loose Curl	Rizo suelto
 	Stylized dabs from a history state	Toques estilizados desde un estado del historial
+	Could not prepare a file to send: {error}	No se pudo preparar un archivo para enviar: {error}
+	There is no saved file to send. Choose PSD or PNG.	No hay un archivo guardado para enviar. Elige PSD o PNG.
+	Submitting needs an internet connection.	Enviar necesita conexión a internet.
+	Open the DeviantArt developer page	Abrir la página de desarrolladores de DeviantArt
+	DeviantArt app id	Id de la aplicación de DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	El acceso a DeviantArt queda en el llavero del sistema, no en el archivo de ajustes de PhotoCraft.
+	Connect DeviantArt	Conectar DeviantArt
+	Title	Título
+	Tags	Etiquetas
+	Letters, numbers and underscores, separated by commas.	Letras, números y guiones bajos, separados por comas.
+	Submit as	Enviar como
+	Also submit when I Save	Enviar también al guardar
+	Also submit when I Save As	Enviar también al Guardar como
+	Also submit when I Save a Copy	Enviar también al Guardar una copia
+	Also submit when I Export	Enviar también al exportar
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt está listo. Guarda o exporta un archivo y luego envíalo.
+	Connect DeviantArt first.	Conecta DeviantArt primero.
+	The DeviantArt app id should be a number.	El id de la aplicación de DeviantArt debe ser un número.
+	DeviantArt submitting needs the desktop app.	Enviar a DeviantArt solo está en la aplicación de escritorio.
+	A DeviantArt submit is already running.	Ya hay un envío a DeviantArt en curso.
+	Waiting for DeviantArt…	Esperando a DeviantArt…
+	Submitting {name} to DeviantArt…	Enviando {name} a DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	El archivo es más grande de lo que DeviantArt acepta (30 MB).
+	DeviantArt is connected.	DeviantArt está conectado.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Crea una app pública en DeviantArt, sin client secret. Copia la dirección de abajo en la redirección, pega aquí el client id y conecta.
+	Copied the redirect address.	Dirección de redirección copiada.
+	Connected	Conectado
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG es lo que muestra DeviantArt. Un PSD queda en Sta.sh solo como archivo.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK sube a Sta.sh. No es público hasta que publiques.
+	Connect again	Conectar de nuevo
+	Disconnect DeviantArt	Desconectar DeviantArt
+	Submit to DeviantArt…	Enviar a DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} está en Sta.sh. Sigue en privado hasta que lo publiques.
+	Open the Sta.sh page	Abrir la página de Sta.sh
+	DeviantArt was disconnected.	DeviantArt se desconectó.
+	The DeviantArt login expired. Connect again.	El inicio de sesión de DeviantArt caducó. Conéctese de nuevo.
+	Saved file	Archivo guardado
+	Submitted {name} to Sta.sh. Item {id}.	{name} enviado a Sta.sh. Elemento {id}.
+	Opened {name}.	{name} abierto.
+	Connect again after this update so gallery, publish and the profile picture are allowed.	Conéctate otra vez para permitir la galería, publicar y la foto de perfil.
+	Sta.sh item id	Id de elemento de Sta.sh
+	Publish this publicly	Publicar de forma pública
+	Not for all ages	No para todas las edades
+	License	Licencia
+	Creative Commons	Creative Commons
+	Commercial use	Uso comercial
+	Publish	Publicar
+	Deviation id	Id de la obra
+	Update title and tags	Actualizar título y etiquetas
+	My gallery	Mi galería
+	Profile picture	Foto de perfil
+	Set as DeviantArt profile picture	Usar como foto de perfil de DeviantArt
+	Confirm that this publish is public.	Confirma que esta publicación es pública.
+	More options	Más opciones
+	Upload with OK first. Publish uses the Sta.sh item from that upload.	Sube primero con OK. Publicar usa el elemento de Sta.sh de esa subida.
+	Open the Telegram message	Abrir el mensaje de Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Los diez archivos más nuevos enviados a este bot. Un clic abre uno en PhotoCraft.
+	Your published works. Click one to open it in PhotoCraft. Sta.sh drafts are not in this list.	Tus obras publicadas. Un clic abre una en PhotoCraft. Los borradores de Sta.sh no están en esta lista.
+	Get files	Traer archivos
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Archivos enviados desde PhotoCraft y los diez más nuevos enviados a este bot. Un clic abre uno en PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Aún no hay archivos. Envía uno desde aquí o al bot y vuelve a intentarlo.
+	Sta.sh drafts from this account, then published works. Click one to open it in PhotoCraft.	Borradores de Sta.sh de esta cuenta y luego obras publicadas. Un clic abre uno en PhotoCraft.
+	No Sta.sh files yet.	Aún no hay nada en Sta.sh.
+	No published works in the gallery.	No hay obras publicadas en la galería.
+	Telegram did not return a link for this chat.	Telegram no devolvió un enlace para este chat.
+	Sta.sh drafts open their page. Published works open in PhotoCraft.	Los borradores de Sta.sh abren su página. Las obras publicadas se abren en PhotoCraft.
+	DeviantArt did not offer a download.	DeviantArt no ofreció una descarga.
+	Published on DeviantArt.	Publicado en DeviantArt.
+	Updated the title and tags on DeviantArt.	Se actualizaron el título y las etiquetas en DeviantArt.
+	Set the DeviantArt profile picture.	Se estableció la foto de perfil de DeviantArt.
+
+# Independent publishing and account management
+	Publishing options	Opciones de publicación
+	Gallery and profile	Galería y perfil
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking
+	Enter the deviation id first.	Introduce primero el ID de la obra.

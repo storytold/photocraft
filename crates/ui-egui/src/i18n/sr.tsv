@@ -4570,6 +4570,83 @@ shape	Appearance	Izgled
 	Tight Curl	Usko uvijeno
 	Loose Curl	Labavo uvijeno
 	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
+	A DeviantArt submit is already running.	Slanje na DeviantArt je već u toku.
+	Also submit when I Export	Pošalji i pri izvozu
+	Also submit when I Save	Pošalji i pri čuvanju
+	Also submit when I Save As	Pošalji i pri „Sačuvaj kao“
+	Also submit when I Save a Copy	Pošalji i pri čuvanju kopije
+	Connect DeviantArt	Poveži DeviantArt
+	Connect DeviantArt first.	Prvo povežite DeviantArt.
+	Connect again	Poveži ponovo
+	Connected	Povezano
+	Copied the redirect address.	Adresa preusmeravanja je kopirana.
+	Could not prepare a file to send: {error}	Datoteka za slanje nije pripremljena: {error}
+	DeviantArt app id	ID aplikacije DeviantArt
+	DeviantArt is connected.	DeviantArt je povezan.
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt je podešen. Sačuvajte ili izvezite datoteku, pa je pošaljite.
+	DeviantArt submitting needs the desktop app.	Slanje na DeviantArt postoji samo u desktop aplikaciji.
+	Disconnect DeviantArt	Prekini vezu sa DeviantArt
+	Letters, numbers and underscores, separated by commas.	Slova, brojevi i donje crte, odvojeni zarezima.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK šalje na Sta.sh. Ništa nije javno dok ne objavite.
+	Open the DeviantArt developer page	Otvori stranicu za programere DeviantArt
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	PNG je slika koju DeviantArt prikazuje. PSD u Sta.sh ostaje samo datoteka.
+	Submit as	Pošalji kao
+	Submitting needs an internet connection.	Za slanje je potrebna veza sa internetom.
+	Submitting {name} to DeviantArt…	Šaljem {name} na DeviantArt…
+	Tags	Oznake
+	That file is larger than DeviantArt accepts (30 MB).	Datoteka je veća nego što DeviantArt prima (30 MB).
+	The DeviantArt app id should be a number.	ID aplikacije DeviantArt treba da bude broj.
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	Prijava za DeviantArt ostaje u sistemskom privezku ključeva, ne u datoteci podešavanja PhotoCraft-a.
+	There is no saved file to send. Choose PSD or PNG.	Nema sačuvane datoteke za slanje. Izaberite PSD ili PNG.
+	Title	Naslov
+	Waiting for DeviantArt…	Čekam DeviantArt…
+	Submit to DeviantArt…	Pošalji na DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} je u Sta.sh. Ostaje privatno dok ga ne objavite.
+	Open the Sta.sh page	Otvori stranicu Sta.sh
+	DeviantArt was disconnected.	DeviantArt je isključen.
+	The DeviantArt login expired. Connect again.	DeviantArt prijava je istekla. Povežite se ponovo.
+	Saved file	Sačuvana datoteka
+	Commercial use	Komercijalna upotreba
+	Confirm that this publish is public.	Potvrdite da je ovo objavljivanje javno.
+	Connect again after this update so gallery, publish and the profile picture are allowed.	Povežite se ponovo posle ove izmene da bi galerija, objavljivanje i slika profila bili dozvoljeni.
+	Creative Commons	Creative Commons
+	Deviation id	Broj dela
+	License	Licenca
+	More options	Još opcija
+	My gallery	Moja galerija
+	Not for all ages	Nije za sve uzraste
+	Opened {name}.	Otvoreno: {name}.
+	Profile picture	Slika profila
+	Publish	Objavi
+	Publish this publicly	Objavi javno
+	Set as DeviantArt profile picture	Postavi kao sliku profila na DeviantArt
+	Sta.sh item id	Broj stavke u Sta.sh
+	Submitted {name} to Sta.sh. Item {id}.	{name} je poslato na Sta.sh. Stavka {id}.
+	Update title and tags	Ažuriraj naslov i oznake
+	Upload with OK first. Publish uses the Sta.sh item from that upload.	Prvo pošaljite sa OK. Objavljivanje koristi stavku Sta.sh iz tog slanja.
+	Open the Telegram message	Otvori Telegram poruku
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Deset najnovijih datoteka poslatih ovom botu. Klik otvara jednu u PhotoCraftu.
+	Your published works. Click one to open it in PhotoCraft. Sta.sh drafts are not in this list.	Vaša objavljena dela. Klik otvara jedno u PhotoCraftu. Sta.sh nacrti nisu na ovoj listi.
+	Sent {name} to Telegram.	{name} je poslato na Telegram.
+	Sent {name}. {url}	Poslato: {name}. {url}
+	Could not pin the message. The file was still sent.	Poruka nije zakačena. Datoteka je ipak poslata.
+	Get files	Preuzmi datoteke
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Datoteke koje je PhotoCraft poslao i deset najnovijih ovom botu. Klik otvara jednu u PhotoCraftu.
+	No files yet. Send one from here, or send the bot a file, then try again.	Još nema datoteka. Pošaljite jednu odavde ili botu, pa pokušajte ponovo.
+	Sta.sh drafts from this account, then published works. Click one to open it in PhotoCraft.	Sta.sh nacrti ovog naloga, zatim objavljena dela. Klik otvara jedno u PhotoCraftu.
+	No Sta.sh files yet.	U Sta.sh još nema ničega.
+	No published works in the gallery.	U galeriji nema objavljenih dela.
+	Telegram did not return a link for this chat.	Telegram nije vratio vezu za ovaj razgovor.
+	Sta.sh drafts open their page. Published works open in PhotoCraft.	Sta.sh nacrti otvaraju svoju stranicu. Objavljena dela se otvaraju u PhotoCraftu.
+	DeviantArt did not offer a download.	DeviantArt nije ponudio preuzimanje.
+	Published on DeviantArt.	Objavljeno na DeviantArt-u.
+	Updated the title and tags on DeviantArt.	Naslov i oznake na DeviantArt-u su ažurirani.
+	Set the DeviantArt profile picture.	Profilna slika DeviantArt-a je postavljena.
+
+# Independent publishing and account management
+	Publishing options	Опције објављивања
+	Gallery and profile	Галерија и профил
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova
+	Enter the deviation id first.	Прво унесите ID рада.

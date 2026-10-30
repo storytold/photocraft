@@ -41,13 +41,22 @@ thiserror = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
 rfd = { workspace = true }
+tempfile = "3"
 arboard = { version = "3.7", features = ["wayland-data-control"] }
 open = "5"
+ureq = { version = "2.12", default-features = false, features = ["tls", "gzip"] }
+sha2 = "0.10.9"
+base64 = "0.22.1"
+rand = "0.8.8"
 # Reads the saved window layout (eframe persistence) to drop values that would abort startup.
 ron = "0.12"
 # Background release checks; HTTPS with Rust TLS, no async runtime.
 
+[target.'cfg(any(target_os = "freebsd", target_os = "openbsd"))'.dependencies]
+keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
+
 [target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", features = ["apple-native"] }
 # Safe CoreGraphics bindings, compatible with the existing macOS 11 deployment target.
 # `event` (CGEventSource) is used for the Caps Lock poll (#1758).
 core-graphics2 = { version = "=0.6.1", default-features = false, features = ["display", "window", "link", "event"] }
@@ -71,9 +80,8 @@ dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 
 # Drop position on X11 (`cursor.rs`): pure-Rust X client, already in Cargo.lock; pinned exactly.
 [target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", features = ["linux-native-sync-persistent", "crypto-rust"] }
 photocraft-cms = { workspace = true }
-# The print portal's PDF: a private (0600) temporary file, removed when the dialog is done.
-tempfile = "3"
 x11rb = { version = "=0.13.2", default-features = false, features = ["image", "randr", "xkb"] }
 # Clipboard images in types other than PNG on Wayland (`services.rs`, #2546): arboard asks for
 # image/png only. Already in Cargo.lock (arboard's wayland-data-control); pinned exactly.
@@ -94,6 +102,7 @@ winit = { version = "=0.30.13", default-features = false, features = ["x11"] }
 # GetCursorPos) and the window frame for the custom title bar (`window_frame.rs`, window styles),
 # no dependencies of its own. Pinned exactly: review the diff before bumping.
 [target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", features = ["windows-native"] }
 # Safe Windows screen-capture bindings; Linux uses the pure-Rust X11 client/portal.
 xcap = "=0.9.8"
 winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }

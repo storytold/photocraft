@@ -68,6 +68,7 @@ pub mod color_to_alpha_cmds;
 pub mod comps_cmds;
 pub mod contour_lib_cmds;
 pub mod cutout_cmds;
+pub mod deviantart_cmds;
 pub mod distort_cmds;
 pub mod document_preset_cmds;
 pub mod edit_cmds;
@@ -1314,6 +1315,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::web_cmds::specs());
     v.extend(crate::automate_cmds::specs());
     v.extend(crate::print_cmds::specs());
+    v.extend(crate::deviantart_cmds::specs());
     v.extend(crate::installed_profiles::specs());
     v.extend(crate::pick_cmds::specs());
     v.extend(crate::layer_nav_cmds::specs());

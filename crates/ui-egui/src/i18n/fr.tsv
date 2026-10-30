@@ -4540,6 +4540,81 @@ shape	Appearance	Apparence
 	Tight Curl	Boucle serrée
 	Loose Curl	Boucle lâche
 	Stylized dabs from a history state	Touches stylisées depuis un état d'historique
+	Could not prepare a file to send: {error}	Impossible de préparer un fichier à envoyer : {error}
+	There is no saved file to send. Choose PSD or PNG.	Il n'y a pas de fichier enregistré à envoyer. Choisissez PSD ou PNG.
+	Submitting needs an internet connection.	L'envoi nécessite une connexion Internet.
+	Open the DeviantArt developer page	Ouvrir la page développeur DeviantArt
+	DeviantArt app id	Identifiant d'application DeviantArt
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	La connexion DeviantArt reste dans le trousseau du système, pas dans le fichier de réglages de PhotoCraft.
+	Connect DeviantArt	Connecter DeviantArt
+	Title	Titre
+	Tags	Mots-clés
+	Letters, numbers and underscores, separated by commas.	Lettres, chiffres et traits de soulignement, séparés par des virgules.
+	Submit as	Envoyer comme
+	Also submit when I Save	Envoyer aussi quand j'enregistre
+	Also submit when I Save As	Envoyer aussi à Enregistrer sous
+	Also submit when I Save a Copy	Envoyer aussi à Enregistrer une copie
+	Also submit when I Export	Envoyer aussi à l'exportation
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt est prêt. Enregistrez ou exportez un fichier, puis envoyez-le.
+	Connect DeviantArt first.	Connectez d'abord DeviantArt.
+	The DeviantArt app id should be a number.	L'identifiant d'application DeviantArt doit être un nombre.
+	DeviantArt submitting needs the desktop app.	L'envoi vers DeviantArt n'existe que dans l'application de bureau.
+	A DeviantArt submit is already running.	Un envoi DeviantArt est déjà en cours.
+	Waiting for DeviantArt…	En attente de DeviantArt…
+	Submitting {name} to DeviantArt…	Envoi de {name} sur DeviantArt…
+	That file is larger than DeviantArt accepts (30 MB).	Le fichier est plus grand que ce que DeviantArt accepte (30 Mo).
+	DeviantArt is connected.	DeviantArt est connecté.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Créez une application publique sur DeviantArt, sans client secret. Copiez l'adresse ci-dessous dans la redirection, collez l'identifiant ici, puis connectez-vous.
+	Copied the redirect address.	Adresse de redirection copiée.
+	Connected	Connecté
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	Le PNG est l'image que DeviantArt affiche. Un PSD n'est qu'un fichier dans Sta.sh.
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK envoie dans Sta.sh. Ce n'est public qu'après publication.
+	Connect again	Reconnecter
+	Disconnect DeviantArt	Déconnecter DeviantArt
+	Submit to DeviantArt…	Envoyer sur DeviantArt…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} est dans Sta.sh. Il reste privé tant que vous ne le publiez pas.
+	Open the Sta.sh page	Ouvrir la page Sta.sh
+	DeviantArt was disconnected.	DeviantArt a été déconnecté.
+	The DeviantArt login expired. Connect again.	La connexion DeviantArt a expiré. Reconnectez-vous.
+	Saved file	Fichier enregistré
+	Submitted {name} to Sta.sh. Item {id}.	{name} envoyé dans Sta.sh. Élément {id}.
+	Opened {name}.	{name} ouvert.
+	Connect again after this update so gallery, publish and the profile picture are allowed.	Reconnectez-vous pour autoriser la galerie, la publication et la photo de profil.
+	Sta.sh item id	Identifiant d'élément Sta.sh
+	Publish this publicly	Publier publiquement
+	Not for all ages	Pas pour tous les âges
+	License	Licence
+	Creative Commons	Creative Commons
+	Commercial use	Usage commercial
+	Publish	Publier
+	Deviation id	Identifiant de l'œuvre
+	Update title and tags	Mettre à jour le titre et les mots-clés
+	My gallery	Ma galerie
+	Profile picture	Photo de profil
+	Set as DeviantArt profile picture	Définir comme photo de profil DeviantArt
+	Confirm that this publish is public.	Confirmez que cette publication est publique.
+	More options	Plus d'options
+	Upload with OK first. Publish uses the Sta.sh item from that upload.	Envoyez d'abord avec OK. Publier utilise l'élément Sta.sh de cet envoi.
+	Open the Telegram message	Ouvrir le message Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Les dix fichiers les plus récents envoyés à ce bot. Un clic en ouvre un dans PhotoCraft.
+	Your published works. Click one to open it in PhotoCraft. Sta.sh drafts are not in this list.	Vos œuvres publiées. Un clic en ouvre une dans PhotoCraft. Les brouillons Sta.sh ne sont pas dans cette liste.
+	Get files	Récupérer les fichiers
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Fichiers envoyés depuis PhotoCraft et les dix plus récents envoyés à ce bot. Un clic en ouvre un dans PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Pas encore de fichiers. Envoyez-en un d'ici ou au bot, puis réessayez.
+	Sta.sh drafts from this account, then published works. Click one to open it in PhotoCraft.	Brouillons Sta.sh de ce compte, puis les œuvres publiées. Un clic en ouvre un dans PhotoCraft.
+	No Sta.sh files yet.	Rien dans Sta.sh pour l'instant.
+	No published works in the gallery.	Aucune œuvre publiée dans la galerie.
+	Telegram did not return a link for this chat.	Telegram n'a pas renvoyé de lien pour cette discussion.
+	Sta.sh drafts open their page. Published works open in PhotoCraft.	Les brouillons Sta.sh ouvrent leur page. Les œuvres publiées s'ouvrent dans PhotoCraft.
+	DeviantArt did not offer a download.	DeviantArt n'a pas proposé de téléchargement.
+	Published on DeviantArt.	Publié sur DeviantArt.
+	Updated the title and tags on DeviantArt.	Titre et balises mis à jour sur DeviantArt.
+	Set the DeviantArt profile picture.	Photo de profil DeviantArt définie.
+
+# Independent publishing and account management
+	Publishing options	Options de publication
+	Gallery and profile	Galerie et profil
 	Font size presets	Tailles de police prédéfinies
 	Leading presets	Interlignages prédéfinis
 	Tracking presets	Approches prédéfinies
+	Enter the deviation id first.	Saisissez d’abord l’identifiant de l’œuvre.

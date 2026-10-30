@@ -4178,6 +4178,81 @@ curves	Smooth	スムーズ
 	Tight Curl	タイトカール
 	Loose Curl	ルーズカール
 	Stylized dabs from a history state	履歴状態から様式化したダブを描きます
+	Could not prepare a file to send: {error}	送るファイルを用意できませんでした: {error}
+	There is no saved file to send. Choose PSD or PNG.	送れる保存済みのファイルがありません。PSD か PNG を選んでください。
+	Submitting needs an internet connection.	送信にはインターネット接続が必要です。
+	Open the DeviantArt developer page	DeviantArt の開発者ページを開く
+	DeviantArt app id	DeviantArt アプリ ID
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	DeviantArt のログインは PhotoCraft の設定ファイルではなく、システムのキーチェーンに保存されます。
+	Connect DeviantArt	DeviantArt に接続
+	Title	題名
+	Tags	タグ
+	Letters, numbers and underscores, separated by commas.	文字、数字、アンダースコア。カンマで区切ります。
+	Submit as	送信形式
+	Also submit when I Save	保存時にも送信
+	Also submit when I Save As	別名保存時にも送信
+	Also submit when I Save a Copy	コピー保存時にも送信
+	Also submit when I Export	書き出し時にも送信
+	DeviantArt is set up. Save or export a file, then submit it.	DeviantArt の準備ができました。ファイルを保存または書き出してから送信してください。
+	Connect DeviantArt first.	先に DeviantArt に接続してください。
+	The DeviantArt app id should be a number.	DeviantArt のアプリ ID は数字です。
+	DeviantArt submitting needs the desktop app.	DeviantArt への送信はデスクトップアプリだけです。
+	A DeviantArt submit is already running.	DeviantArt への送信がすでに実行中です。
+	Waiting for DeviantArt…	DeviantArt を待っています…
+	Submitting {name} to DeviantArt…	{name} を DeviantArt に送信しています…
+	That file is larger than DeviantArt accepts (30 MB).	ファイルが DeviantArt の上限（30 MB）を超えています。
+	DeviantArt is connected.	DeviantArt に接続しました。
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	DeviantArt で公開アプリを作ります。client secret は不要です。下のアドレスをリダイレクトにコピーし、ここにクライアント ID を貼って接続します。
+	Copied the redirect address.	リダイレクトアドレスをコピーしました。
+	Connected	接続済み
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	DeviantArt が表示するのは PNG です。PSD は Sta.sh にファイルとして置かれるだけです。
+	OK uploads to Sta.sh. Nothing is public until you publish.	OK は Sta.sh に送ります。公開は公開操作のあとです。
+	Connect again	再接続
+	Disconnect DeviantArt	DeviantArt を切断
+	Submit to DeviantArt…	DeviantArt に送る…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} は Sta.sh にあります。公開するまで非公開です。
+	Open the Sta.sh page	Sta.sh のページを開く
+	DeviantArt was disconnected.	DeviantArt を切断しました。
+	The DeviantArt login expired. Connect again.	DeviantArt のログインの有効期限が切れました。もう一度接続してください。
+	Saved file	保存済みのファイル
+	Submitted {name} to Sta.sh. Item {id}.	{name} を Sta.sh に送信しました。項目 {id}。
+	Opened {name}.	{name} を開きました。
+	Connect again after this update so gallery, publish and the profile picture are allowed.	ギャラリー、公開、プロフィール画像を使うには、もう一度接続してください。
+	Sta.sh item id	Sta.sh 項目 ID
+	Publish this publicly	公開する
+	Not for all ages	全年齢向けではない
+	License	ライセンス
+	Creative Commons	クリエイティブ・コモンズ
+	Commercial use	商用利用
+	Publish	公開
+	Deviation id	作品 ID
+	Update title and tags	題名とタグを更新
+	My gallery	自分のギャラリー
+	Profile picture	プロフィール画像
+	Set as DeviantArt profile picture	DeviantArt のプロフィール画像にする
+	Confirm that this publish is public.	この公開が公開設定であることを確認してください。
+	More options	詳細オプション
+	Upload with OK first. Publish uses the Sta.sh item from that upload.	先に OK でアップロードします。公開はその Sta.sh 項目を使います。
+	Open the Telegram message	Telegram のメッセージを開く
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	このボットに送られた新しい順10件。クリックすると PhotoCraft で開きます。
+	Your published works. Click one to open it in PhotoCraft. Sta.sh drafts are not in this list.	公開済みの作品です。クリックすると PhotoCraft で開きます。Sta.sh の下書きはこの一覧にありません。
+	Get files	ファイルを取得
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	PhotoCraft から送ったファイルと、このボットに送られた新しい順10件。クリックすると PhotoCraft で開きます。
+	No files yet. Send one from here, or send the bot a file, then try again.	まだファイルがありません。ここから送るか、ボットにファイルを送ってからもう一度。
+	Sta.sh drafts from this account, then published works. Click one to open it in PhotoCraft.	このアカウントの Sta.sh 下書き、そのあと公開作品。クリックすると PhotoCraft で開きます。
+	No Sta.sh files yet.	Sta.sh にはまだ何もありません。
+	No published works in the gallery.	ギャラリーに公開作品はありません。
+	Telegram did not return a link for this chat.	Telegram はこのチャットのリンクを返しませんでした。
+	Sta.sh drafts open their page. Published works open in PhotoCraft.	Sta.sh の下書きはそのページを開きます。公開作品は PhotoCraft で開きます。
+	DeviantArt did not offer a download.	DeviantArt はダウンロードを用意しませんでした。
+	Published on DeviantArt.	DeviantArt に公開しました。
+	Updated the title and tags on DeviantArt.	DeviantArt のタイトルとタグを更新しました。
+	Set the DeviantArt profile picture.	DeviantArt のプロフィール画像を設定しました。
+
+# Independent publishing and account management
+	Publishing options	公開オプション
+	Gallery and profile	ギャラリーとプロフィール
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット
 	Tracking presets	トラッキングのプリセット
+	Enter the deviation id first.	先に作品IDを入力してください。

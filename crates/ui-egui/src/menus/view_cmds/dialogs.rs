@@ -610,6 +610,7 @@ pub(crate) fn write_copy(app: &mut PhotocraftApp, doc: &photocraft_doc::Document
     app.ui.status_error = false;
     let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(path))]);
     crate::notices::io_warnings(app, &what, &warnings);
+    crate::deviantart::after_written(app, path, crate::deviantart::WriteKind::SaveCopy);
     Ok(json!({"path": path, "warnings": warnings}))
 }
 

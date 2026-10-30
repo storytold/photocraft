@@ -4412,6 +4412,81 @@ cameraRaw	Yellow	Sárga
 	Tight Curl	Szoros göndör
 	Loose Curl	Laza göndör
 	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
+	Could not prepare a file to send: {error}	A küldendő fájl nem készíthető elő: {error}
+	There is no saved file to send. Choose PSD or PNG.	Nincs mentett fájl a küldéshez. Válassz PSD-t vagy PNG-t.
+	Submitting needs an internet connection.	A küldéshez internetkapcsolat kell.
+	Open the DeviantArt developer page	A DeviantArt fejlesztői oldal megnyitása
+	DeviantArt app id	DeviantArt-alkalmazásazonosító
+	The DeviantArt login stays in the system keychain, not in PhotoCraft's settings file.	A DeviantArt-bejelentkezés a rendszer kulcstartójában marad, nem a PhotoCraft beállításfájljában.
+	Connect DeviantArt	DeviantArt csatlakoztatása
+	Title	Cím
+	Tags	Címkék
+	Letters, numbers and underscores, separated by commas.	Betűk, számok és aláhúzások, vesszővel elválasztva.
+	Submit as	Küldés mint
+	Also submit when I Save	Küldés mentéskor is
+	Also submit when I Save As	Küldés másként mentéskor is
+	Also submit when I Save a Copy	Küldés másolat mentésekor is
+	Also submit when I Export	Küldés exportáláskor is
+	DeviantArt is set up. Save or export a file, then submit it.	A DeviantArt be van állítva. Mentsen vagy exportáljon egy fájlt, majd küldje el.
+	Connect DeviantArt first.	Először csatlakoztassa a DeviantArtot.
+	The DeviantArt app id should be a number.	A DeviantArt-alkalmazásazonosítónak számnak kell lennie.
+	DeviantArt submitting needs the desktop app.	A DeviantArt-küldés csak az asztali alkalmazásban van.
+	A DeviantArt submit is already running.	Egy DeviantArt-küldés már fut.
+	Waiting for DeviantArt…	Várakozás a DeviantArtra…
+	Submitting {name} to DeviantArt…	{name} küldése a DeviantArtra…
+	That file is larger than DeviantArt accepts (30 MB).	A fájl nagyobb, mint amit a DeviantArt elfogad (30 MB).
+	DeviantArt is connected.	A DeviantArt csatlakoztatva.
+	Create a Public app on DeviantArt, without a client secret. Copy the address below into the redirect field, paste the client id here, then connect.	Hozzon létre egy nyilvános DeviantArt-alkalmazást, client secret nélkül. Másolja az alábbi címet az átirányításba, illessze be ide az azonosítót, majd csatlakozzon.
+	Copied the redirect address.	Az átirányítási cím másolva.
+	Connected	Csatlakoztatva
+	PNG is what DeviantArt shows. A PSD is only stored as a file in Sta.sh.	A PNG az, amit a DeviantArt mutat. A PSD a Sta.sh-ban csak fájl.
+	OK uploads to Sta.sh. Nothing is public until you publish.	Az OK a Sta.sh-ba tölt. Csak közzététel után lesz nyilvános.
+	Connect again	Újracsatlakozás
+	Disconnect DeviantArt	DeviantArt leválasztása
+	Submit to DeviantArt…	Küldés a DeviantArtra…
+	Submitted {name} to Sta.sh. It stays private until you publish it.	{name} a Sta.sh-ban van. Közzététel előtt privát marad.
+	Open the Sta.sh page	A Sta.sh-oldal megnyitása
+	DeviantArt was disconnected.	A DeviantArt le lett választva.
+	The DeviantArt login expired. Connect again.	A DeviantArt bejelentkezés lejárt. Csatlakozzon újra.
+	Saved file	Mentett fájl
+	Submitted {name} to Sta.sh. Item {id}.	{name} elküldve a Sta.sh-ba. Elem: {id}.
+	Opened {name}.	{name} megnyitva.
+	Connect again after this update so gallery, publish and the profile picture are allowed.	Csatlakozzon újra, hogy a galéria, a közzététel és a profilkép engedélyezett legyen.
+	Sta.sh item id	Sta.sh-elemazonosító
+	Publish this publicly	Nyilvános közzététel
+	Not for all ages	Nem minden korosztálynak
+	License	Licenc
+	Creative Commons	Creative Commons
+	Commercial use	Kereskedelmi felhasználás
+	Publish	Közzététel
+	Deviation id	Alkotásazonosító
+	Update title and tags	Cím és címkék frissítése
+	My gallery	Saját galéria
+	Profile picture	Profilkép
+	Set as DeviantArt profile picture	Beállítás DeviantArt-profilképként
+	Confirm that this publish is public.	Erősítse meg, hogy a közzététel nyilvános.
+	More options	További lehetőségek
+	Upload with OK first. Publish uses the Sta.sh item from that upload.	Először töltsön fel az OK gombbal. A közzététel az ehhez tartozó Sta.sh-elemet használja.
+	Open the Telegram message	A Telegram-üzenet megnyitása
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	A botnak küldött tíz legújabb fájl. Egy kattintás megnyitja a PhotoCraftban.
+	Your published works. Click one to open it in PhotoCraft. Sta.sh drafts are not in this list.	A közzétett művei. Egy kattintás megnyitja a PhotoCraftban. A Sta.sh-vázlatok nincsenek a listában.
+	Get files	Fájlok behozása
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	A PhotoCraftból küldött fájlok és a botnak küldött tíz legújabb. Egy kattintás megnyitja a PhotoCraftban.
+	No files yet. Send one from here, or send the bot a file, then try again.	Még nincsenek fájlok. Küldjön egyet innen vagy a botnak, majd próbálja újra.
+	Sta.sh drafts from this account, then published works. Click one to open it in PhotoCraft.	A fiók Sta.sh-vázlatai, majd a közzétett művek. Egy kattintás megnyitja a PhotoCraftban.
+	No Sta.sh files yet.	A Sta.sh-ban még nincs semmi.
+	No published works in the gallery.	A galériában nincs közzétett mű.
+	Telegram did not return a link for this chat.	A Telegram nem adott hivatkozást ehhez a csevegéshez.
+	Sta.sh drafts open their page. Published works open in PhotoCraft.	A Sta.sh-vázlatok a saját oldalukat nyitják meg. A közzétett művek a PhotoCraftban nyílnak meg.
+	DeviantArt did not offer a download.	A DeviantArt nem adott letöltést.
+	Published on DeviantArt.	Közzétéve a DeviantArton.
+	Updated the title and tags on DeviantArt.	A DeviantArt cím és címkék frissítve.
+	Set the DeviantArt profile picture.	DeviantArt profilkép beállítva.
+
+# Independent publishing and account management
+	Publishing options	Közzétételi beállítások
+	Gallery and profile	Galéria és profil
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások
+	Enter the deviation id first.	Először add meg az alkotás azonosítóját.
