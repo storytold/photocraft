@@ -424,3 +424,14 @@ fn only_images_of_the_minimum_decoded_size_stream() {
     assert!(import_png_streamed("t", &wide, &Interrupt::NONE, 80_000).unwrap().is_some());
     assert!(import_png_streamed("t", &wide, &Interrupt::NONE, 80_001).unwrap().is_none());
 }
+
+/// A failed reservation is one tile or row band, so the error names the image by its pixel
+/// size, never by the bytes of that reservation (which read as a tiny "0 MB image").
+#[test]
+fn allocation_errors_name_the_image_not_the_reservation() {
+    let oom = alloc_error(AllocationError::NotEnoughMemory { bytes: 4096 }, 8000, 6000).to_string();
+    assert!(oom.contains("not enough memory to open the 8000×6000 image"), "{oom}");
+    assert!(!oom.contains("MB"), "{oom}");
+    let overflow = alloc_error(AllocationError::SizeOverflow, 70000, 70000).to_string();
+    assert!(overflow.contains("70000×70000 image is too large"), "{overflow}");
+}
