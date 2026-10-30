@@ -28,6 +28,7 @@ pub mod move_hover;
 pub mod move_lock;
 pub mod move_mods;
 pub mod object_finder;
+pub mod path_components;
 pub mod perspective_crop_ui;
 pub mod perspective_ui;
 pub mod puppet_ui;
