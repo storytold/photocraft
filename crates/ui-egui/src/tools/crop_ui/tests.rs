@@ -1144,3 +1144,56 @@ fn readout_shows_the_frame_size_while_drawing_or_resizing() {
     assert_eq!(frame_size([f64::NAN, 0.0, 1.0, 1.0]), None);
     assert_eq!(frame_size([-f64::MAX, 0.0, f64::MAX, 1.0]), None);
 }
+
+/// Esc through the real shortcut handler.
+fn press_esc(app: &mut PhotocraftApp) {
+    let key = egui::Key::Escape;
+    let input = egui::RawInput {
+        focused: true,
+        events: vec![egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+        ..Default::default()
+    };
+    egui::Context::default().run_ui(input, |ui| crate::shortcuts::handle(app, ui.ctx())).textures_delta.clear();
+}
+
+#[test]
+fn esc_hides_the_frame_until_a_press_or_re_picking_the_tool() {
+    // #10370: Esc cancelled the crop but the next frame made the default frame again.
+    for classic in [false, true] {
+        let mut app = app(SampleType::U8);
+        app.ui.tool_options.crop_shield.classic_mode = classic;
+        ensure_frame(&mut app);
+        assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
+        // The untouched default frame: Esc hides it, and it stays hidden frame after frame.
+        press_esc(&mut app);
+        for _ in 0..3 {
+            ensure_frame(&mut app);
+            assert_eq!(app.ui.crop_rect, None, "classic={classic}");
+        }
+        // A press on the canvas draws a new frame.
+        drag(&mut app, &[[50.0, 20.0], [80.0, 40.0], [120.0, 70.0]], NONE);
+        assert_eq!(app.ui.crop_rect, Some([50.0, 20.0, 120.0, 70.0]));
+        // A drawn frame: Esc hides it too, and crops nothing.
+        press_esc(&mut app);
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None);
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
+        // Re-picking the tool brings the default frame back.
+        app.ui.tool = Tool::Brush;
+        ensure_frame(&mut app);
+        app.ui.tool = Tool::Crop;
+        ensure_frame(&mut app);
+        assert!(app.ui.crop_rect.is_some() && app.crop.default_frame);
+        // The options bar's cancel hides it as well; a plain cancel (stale document) does not.
+        dismiss(&mut app);
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None);
+        app.ui.tool = Tool::Brush;
+        ensure_frame(&mut app);
+        app.ui.tool = Tool::Crop;
+        ensure_frame(&mut app);
+        cancel(&mut app);
+        ensure_frame(&mut app);
+        assert!(app.ui.crop_rect.is_some());
+    }
+}
