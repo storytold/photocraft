@@ -546,6 +546,55 @@ mod tests {
         }
     }
 
+    /// #8653: on any curve (an S-curve, one with a retracted handle, a closed subpath's wrapping
+    /// segment) the split is exact, the new anchor is smooth with collinear opposite handles, and
+    /// the neighbours' handles are shortened along their own lines to t and 1 − t of their length.
+    #[test]
+    fn a_split_curve_keeps_its_shape_with_a_smooth_anchor_and_shortened_neighbour_handles() {
+        let s_curve = {
+            let mut sp = Subpath::polyline(&[(0.0, 0.0), (90.0, 30.0)]);
+            sp.knots[0].out_ctrl = Point::new(60.0, -50.0);
+            sp.knots[1].in_ctrl = Point::new(10.0, 90.0);
+            (Path::new(vec![sp]), [0, 0])
+        };
+        let half_retracted = {
+            let mut sp = Subpath::polyline(&[(0.0, 0.0), (100.0, 0.0)]);
+            sp.knots[1].in_ctrl = Point::new(100.0, 60.0);
+            (Path::new(vec![sp]), [0, 0])
+        };
+        let closed_wrap = {
+            let mut sp = Subpath::polygon(&[(0.0, 0.0), (100.0, 0.0), (100.0, 100.0)]);
+            sp.knots[2].out_ctrl = Point::new(40.0, 140.0);
+            sp.knots[0].in_ctrl = Point::new(-30.0, 50.0);
+            (Path::new(vec![sp]), [0, 2])
+        };
+        for (name, (path, knot)) in [("s-curve", s_curve), ("half-retracted", half_retracted), ("closed wrap", closed_wrap)] {
+            for t in [0.07, 0.31, 0.5, 0.88] {
+                let seg = path.subpaths[0].segments()[knot[1]];
+                let mut p = path.clone();
+                let r = add_anchor(&mut p, knot, t).unwrap();
+                let k = at(&p, r[0], r[1]);
+                assert!(k.smooth, "{name} t={t}");
+                assert!(dist(k.anchor, eval(&seg, t)) < 1e-9, "{name} t={t}");
+                let (vi, vo) = ((k.in_ctrl.x - k.anchor.x, k.in_ctrl.y - k.anchor.y), (k.out_ctrl.x - k.anchor.x, k.out_ctrl.y - k.anchor.y));
+                let cross = (vi.0 * vo.1 - vi.1 * vo.0) / (vi.0.hypot(vi.1) * vo.0.hypot(vo.1));
+                assert!(cross.abs() < 1e-9 && vi.0 * vo.0 + vi.1 * vo.1 < 0.0, "{name} t={t}: handles collinear and opposite {k:?}");
+                // The neighbours: the previous anchor's out handle is t of its old length, the
+                // next anchor's in handle 1 − t, each on its old line.
+                let halves = p.subpaths[0].segments();
+                let (first, second) = (halves[r[1] - 1], halves[r[1]]);
+                assert!(dist(first[1], lerp(seg[0], seg[1], t)) < 1e-9, "{name} t={t}");
+                assert!(dist(second[2], lerp(seg[3], seg[2], 1.0 - t)) < 1e-9, "{name} t={t}");
+                // Exact: the halves reparametrised cover the old segment.
+                for i in 0..=200 {
+                    let u = f64::from(i) / 200.0;
+                    let q = if u <= t { eval(&first, u / t) } else { eval(&second, (u - t) / (1.0 - t)) };
+                    assert!(dist(q, eval(&seg, u)) < 1e-9, "{name} t={t} u={u}");
+                }
+            }
+        }
+    }
+
     #[test]
     fn adding_to_a_straight_segment_uses_the_hit_position() {
         for (points, closed) in [
