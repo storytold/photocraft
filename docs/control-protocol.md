@@ -779,6 +779,8 @@ that group. Validation is atomic across mixed `ui.set` requests.
 
 Existing `close`, `up`, `down` and `move` group operations remain available. For `move`,
 provide `anchor` and optional `zone`/`before`, or a serialized `placement`.
+The transfer moves all group members atomically, preserves their order and selects
+the requested `panel`.
 
 `window.panel.edge {panel,edge,individual?,collapsed?,stack?,position?,before?,x?,y?,width?,height?}`
 moves an already attached or floating owner directly to `left`, `rightInner`, `rightOuter`,
@@ -800,7 +802,8 @@ Workspace Auto-Collapse Iconic Panels applies to flyouts; Auto-Show Hidden Panel
 Tab-hidden chrome temporarily on edge hover. Persistence defers pointer-held previews and
 native movement settling and reuses an unchanged layout snapshot on idle frames.
 
-`window.panel.<id> {show:true}` reveals the requested panel. Snapshots retain Timeline
+`window.panel.<id> {show:true}` reveals, selects and expands the requested panel,
+including when another tab is selected. Snapshots retain Timeline
 visibility, tab order, active tabs and sizes. Creating an adjustment/fill layer still opens
 Properties; ordinary layer selection does not reopen it.
 

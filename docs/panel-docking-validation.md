@@ -1,21 +1,51 @@
 # Panel docking repair validation
 
-## Upstream integration checkpoint (2026-10-30)
+## Current merged source (2026-10-30)
 
-Integrated upstream `b1cfff9d30298eea4f446a8f6a5e4285cb43c6e7` into the
-panel branch, resolving the host test modules and retaining upstream's screen-mode
-availability checks in the whole-Tools footer. The reviewed craft-ui and egui pins
-are unchanged.
+Integrated upstream `b1cfff9d30298eea4f446a8f6a5e4285cb43c6e7`, resolving all five
+conflicts. Both host test-module additions and upstream screen-mode availability
+checks remain, with the whole-Tools footer and shared Workspace adapter. The
+reviewed craft-ui/egui pins and core panel implementation did not change.
 
-On this merged source, 136 panel tests passed (two opt-in benchmarks ignored).
-Dependency-contract, dock, workspace, Tools, type/screen-mode flyout, visibility
-and overflow filters passed. Fresh final-transition captures and 72 physical-pixel
-seam assertions passed. The two after PNGs were refreshed from this source.
+Fresh results on this merged source:
 
-The remaining engine/full-UI, Clippy, layers, wasm and complete capture gates are
-still in progress at this checkpoint. It is not final acceptance. Native Windows
-focus/IME, physical monitors, mixed DPI and real GPU stalls remain unverified;
-the contributor builds the main application EXE. The existing PR remains a draft.
+- 136 panel tests passed; two opt-in benchmarks ignored. Dependency-contract,
+  dock, workspace, Tools, type/screen-mode flyout, visibility and overflow filters passed.
+- 2762 engine tests passed (22 ignored); adversarial `panic_hunt` passed separately.
+- 346 shared docking tests and 9 workspace integration tests passed.
+- fmt, 31-crate layers, 24-crate wasm plus codecs/heif, parity/scorecard generation,
+  UI/engine doctest checks (zero examples), and shared-library Clippy passed.
+- 570 new offscreen matrix PNGs, 72 physical-pixel seam assertions, 515 pointer
+  replay frames and 15 refreshed GIFs completed. Transition/theme/DPI montages and
+  selected raw captures were reviewed. Both documented after PNGs were refreshed.
+- SHA-256 checks confirmed that 1267 core source files stayed unchanged during
+  validation and capture. No new CPU/GPU performance measurements are claimed.
+
+The full UI **library** run is **not green**: 4460 passed, 95 failed, 23 ignored.
+92 failure names match the historical record; this is not an independently rerun
+full baseline of the new upstream. Three additional, unchanged upstream
+`selected_fonts_commit_pattern_0/2/3` Probe tests select the installed `Inter Hewn`
+font instead of their expected `Inter` after ArrowDown+Enter. The Probe renders
+Character/options controls without docking; the Windows font registry confirms
+that family is installed. Fonts and unrelated type code were not changed.
+The complete workspace test suite was not run.
+
+Strict UI/engine all-targets Clippy also remains **failed**. The standard command
+stops at upstream `text/src/psd_path.rs:157` (`overly_complex_bool_expr`). Additional
+`--no-deps` diagnostic runs expose `engine/src/crop_fill.rs:78` (`nonminimal_bool`),
+`canvas/strokes.rs:495,500` and `widgets/text_field.rs:29` (`collapsible_match`),
+`dialogs/vp_ui.rs:989` (`nonminimal_bool`), and
+`dialogs/color_picker_ui/tests.rs:130` (`manual_range_contains`). All six affected
+files have no diff from upstream/main. No lint/CI suppression or unrelated
+text/PSD/painting fixes were added to this panel PR. Shared Clippy passed separately.
+
+Current logs, source/capture hashes, raw frames and GIFs are saved in the separate
+handoff package at `plan/panel-repair/home-portable-2026-10-30` on branch
+`codex/panel-layout-handoff-2026-10-30`. The original package stays historical.
+The existing PR remains a draft pending contributor desktop acceptance and review
+of the documented non-green gates. Native focus/IME, physical monitors, mixed DPI
+and real GPU stalls remain unverified. The contributor builds the product EXE;
+it was not built or launched by the agent.
 
 ## Historical checkpoint
 
