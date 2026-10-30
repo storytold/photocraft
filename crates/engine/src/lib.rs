@@ -12,6 +12,7 @@ mod allocation;
 pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
+pub mod channel_transform;
 mod clip_group;
 mod crop_fill;
 pub mod display_color;

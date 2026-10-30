@@ -109,6 +109,7 @@ enum WarpDrag {
 /// full-resolution textures of those pixels (transform_tex.rs).
 pub struct TransformPreview {
     pub session: u64,
+    pub(crate) channel: Option<crate::channel_transform_preview::Preview>,
     pub doc: Arc<Document>,
     pub texture: crate::transform_tex::PreviewTextures,
     pub opacity: f32,

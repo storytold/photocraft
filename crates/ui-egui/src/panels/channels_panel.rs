@@ -67,6 +67,7 @@ struct RowPresentation {
 }
 
 struct RowInteractions<'a> {
+    target_locked: bool,
     row: Row,
     name: &'a str,
     cell: Rect,
@@ -89,7 +90,7 @@ fn handle_row_interactions(ui: &mut egui::Ui, mut row: RowInteractions<'_>) {
 }
 
 fn handle_channel_row_click(ui: &egui::Ui, row: &mut RowInteractions<'_>) {
-    if !row.response.clicked() || row.eye_response.clicked() {
+    if row.target_locked || !row.response.clicked() || row.eye_response.clicked() {
         return;
     }
     let modifiers = ui.input(|input| input.modifiers);
@@ -122,7 +123,7 @@ fn handle_channel_row_double_click(ui: &mut egui::Ui, row: &mut RowInteractions<
     // channel becomes a spot channel, #3761), double-clicking the name renames it.
     let on_thumb = row.response.interact_pointer_pos().is_some_and(|p| p.x < row.cell.right() + 4.0);
     match row.row {
-        Row::QuickMask if row.response.double_clicked() => row.actions.push(("ui.channelOptions".into(), json!("quickMask"))),
+        Row::QuickMask if row.response.double_clicked() && !row.target_locked => row.actions.push(("ui.channelOptions".into(), json!("quickMask"))),
         Row::LayerMask if row.response.double_clicked() => row.actions.push(("ui.channelOptions".into(), json!("mask"))),
         Row::Alpha(index) => {
             handle_alpha_double_click(ui, row, index, on_thumb, rename_id);
@@ -132,7 +133,7 @@ fn handle_channel_row_double_click(ui: &mut egui::Ui, row: &mut RowInteractions<
 }
 
 fn handle_alpha_double_click(ui: &mut egui::Ui, row: &mut RowInteractions<'_>, index: usize, on_thumb: bool, rename_id: egui::Id) {
-    if row.response.double_clicked() {
+    if row.response.double_clicked() && !row.target_locked {
         if on_thumb {
             row.actions.push(("ui.channelOptions".into(), json!(index)));
         } else {
@@ -215,13 +216,11 @@ fn drop_insertion(row: Row, pointer_y: f32, rect: Rect, alpha_count: usize) -> (
 }
 
 /// What clicking `row`'s eye asks for.
-fn eye_action(row: Row, visible: bool, gray_view: bool, layer_id: Option<u64>) -> (String, Value) {
+fn eye_action(row: Row, visible: bool, layer_id: Option<u64>) -> (String, Value) {
     let view_cmd = photocraft_engine::mask_view_cmds::ID.to_string();
     match row {
         // The mask's eye: the overlay on, or the mask view off.
         Row::LayerMask => (view_cmd, json!({ "layer": layer_id, "mode": if visible { "off" } else { "overlay" } })),
-        // Showing the composite again over a gray mask view keeps the mask as an overlay.
-        Row::Composite if gray_view => (view_cmd, json!({ "layer": layer_id, "mode": "overlay" })),
         _ => ("channel.setVisible".into(), json!({ "channel": row.reference(), "visible": !visible })),
     }
 }
@@ -266,14 +265,14 @@ fn row_presentation(row: Row, context: &RowPresentationContext<'_>, mask_visible
             context.doc.channels[i].name.clone(),
             1 + context.shown_colors + i,
             Some(3 + context.shown_colors + i).filter(|s| *s <= 9),
-            context.view.alpha_shown(i),
+            context.view.alpha_shown(i) && !context.gray_view,
             context.view.target == ChannelTarget::Alpha(i),
         ),
         Row::QuickMask => (
             "Quick Mask".to_string(),
             1 + context.shown_colors + context.doc.channels.len(),
             None,
-            !context.view.quick_mask_hidden,
+            !context.view.quick_mask_hidden && !context.gray_view,
             context.view.target == ChannelTarget::Composite,
         ),
         Row::LayerMask => {
@@ -292,6 +291,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     let doc = st.doc.clone();
     let view = st.channel_view.clone();
+    let target_locked = photocraft_engine::channel_transform::locked(&app.session);
     // ⌥-click mask view (#196): gray shows the mask alone (colour eyes off), overlay over the composite.
     let mask_view = photocraft_engine::mask_view_cmds::current(st).map(|v| v.mode);
     let gray_view = mask_view == Some(photocraft_engine::mask_view_cmds::MaskViewMode::Gray);
@@ -370,7 +370,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             eye_resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("Visibility {name}")));
             let layer_id = masked.as_ref().map(|l| l.id.0);
             if eye_resp.clicked() {
-                actions.push(eye_action(row, visible, gray_view, layer_id));
+                actions.push(eye_action(row, visible, layer_id));
             }
             let ts = if t.pro { 28.0 } else { 30.0 };
             let cell = Rect::from_min_size(pos2(rect.left() + 36.0, rect.center().y - ts / 2.0), vec2(ts, ts));
@@ -382,7 +382,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             drawn.push((name.clone(), thumb));
             // Rows are painted: name them for screen readers and UI tests.
-            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, &name));
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, !target_locked, selected, &name));
             // Spot channels: a swatch of the ink on the thumbnail corner.
             if let Row::Alpha(i) = row {
                 paint_spot_swatch(&painter, thumb, doc.channels[i].spot);
@@ -412,6 +412,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             handle_row_interactions(
                 ui,
                 RowInteractions {
+                    target_locked,
                     row,
                     name: &name,
                     cell,

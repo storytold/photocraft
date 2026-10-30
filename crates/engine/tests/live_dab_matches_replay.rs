@@ -214,3 +214,39 @@ fn pressure_sized_live_dabs_commit_only_the_requested_mask_or_channel() {
         }
     }
 }
+
+#[test]
+fn single_color_live_dabs_replay_through_the_channel_restriction() {
+    for depth in [8, 16, 32] {
+        let mut s = setup(depth, "rgb");
+        s.execute("channel.target", json!({"channel":"red"})).unwrap();
+        let before = s.active().unwrap().doc.clone();
+        let original = pixels(&s);
+        for cmd in ["paint.smudge", "paint.blur", "paint.sharpen", "paint.dodge", "paint.burn", "paint.sponge"] {
+            let points = [[40.0, 40.0, 0.1], [65.0, 50.0, 0.4], [100.0, 60.0, 1.0], [140.0, 70.0, 0.7], [60.0, 40.0, 0.2]];
+            let params = json!({"points":points,"size":40,"hardness":70,"strength":80,"opacity":55,"spacing":25});
+            s.execute(cmd, params.clone()).unwrap();
+            let want = s.active().unwrap().doc.clone();
+            assert_ne!(want, before, "{cmd} at {depth}-bit changes the selected channel");
+            s.execute("edit.undo", json!({})).unwrap();
+
+            let mut start = params.clone();
+            start["points"] = json!([points[0]]);
+            let mut live = LiveDab::begin(&s, cmd, &start).unwrap();
+            for q in &points[1..] {
+                live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();
+            }
+            s.offer_live_dab(live).unwrap();
+            let result = s.execute(cmd, params).unwrap();
+            assert!(result.get("fromLive").is_none(), "an unrestricted live surface cannot be reused for one colour");
+            assert_eq!(s.active().unwrap().doc, want, "depth={depth} {cmd}");
+            let current = pixels(&s);
+            assert_eq!(original.len(), current.len());
+            for (old, new) in original.as_chunks::<4>().0.iter().zip(current.as_chunks::<4>().0) {
+                assert_eq!(&old[1..], &new[1..], "{cmd} preserves Green, Blue and transparency");
+            }
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(s.active().unwrap().doc, before);
+        }
+    }
+}

@@ -281,3 +281,50 @@ fn a_recorded_transform_of_other_layers_than_the_selection_keeps_their_ids() {
     s.execute("actions.stop", json!({})).unwrap();
     assert_eq!(s.actions.list[0].steps[0].1["layers"], json!([paint.0]));
 }
+
+#[test]
+fn explicit_layers_bypass_panel_colour_but_reject_an_explicit_colour_target() {
+    let (mut s, paint, text) = two_layers();
+    s.execute("channel.target", json!({"channel":"red"})).unwrap();
+    let p0 = bounds(&s, paint);
+    let t0 = bounds(&s, text);
+    let r = s.execute("edit.transform", json!({"layers":[paint.0,text.0],"dx":5,"interpolation":"nearest"})).unwrap();
+    assert_eq!(r["layers"], json!([paint.0, text.0]));
+    assert_eq!(bounds(&s, paint), p0.translate(5, 0));
+    assert_eq!(bounds(&s, text), t0.translate(5, 0));
+    s.undo();
+    let doc = s.active().unwrap().doc.clone();
+    let steps = s.active().unwrap().history.past_len();
+    assert!(s.execute("edit.transform", json!({"layers":[paint.0,text.0],"target":{"color":0},"dx":5})).is_err());
+    assert!(std::sync::Arc::ptr_eq(&doc, &s.active().unwrap().doc));
+    assert_eq!(s.active().unwrap().history.past_len(), steps);
+}
+
+#[test]
+fn panel_colour_moves_only_the_active_raster_when_several_layers_are_selected() {
+    let (mut s, paint, text) = two_layers();
+    s.execute("layer.select", json!({"layer":paint.0,"mode":"add"})).unwrap();
+    s.execute("channel.target", json!({"channel":"red"})).unwrap();
+    let t0 = text_matrix(&s, text);
+    s.tools.background = [0.0, 0.0, 0.0, 1.0];
+    let original = s.active().unwrap().doc.layer(paint).unwrap().surface().unwrap().clone();
+    s.execute("edit.transform", json!({"dx":5,"interpolation":"nearest"})).unwrap();
+    let st = s.active().unwrap();
+    let after = st.doc.layer(paint).unwrap().surface().unwrap();
+    assert_eq!(text_matrix(&s, text), t0);
+    assert_eq!(after.read_region(Rect::new(12, 15, 13, 16)), vec![0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(after.read_region(Rect::new(52, 15, 53, 16)), vec![1.0, 0.0, 0.0, 0.0]);
+    for y in 0..40 {
+        for x in 0..60 {
+            let (mut a, mut b) = ([0.0; 4], [0.0; 4]);
+            after.read_pixel(x, y, &mut a);
+            original.read_pixel(x, y, &mut b);
+            assert_eq!(a[1..], b[1..]);
+        }
+    }
+    s.undo();
+    assert_eq!(
+        s.active().unwrap().doc.layer(paint).unwrap().surface().unwrap().to_interleaved(Rect::new(0, 0, 60, 40)),
+        original.to_interleaved(Rect::new(0, 0, 60, 40))
+    );
+}

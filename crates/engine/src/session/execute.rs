@@ -3,6 +3,8 @@ use super::{
     Arc, Document, EngineError, LayerId, Result, Session, Value, brush_cmds, channel_cmds, commands, hidden_target, jobs, layer_multi_cmds, retouch_cmds,
     smart_cmds,
 };
+use crate::channel_transform;
+use crate::warp_cmds;
 
 impl Session {
     /// Run a command by id with JSON params. Returns a JSON result.
@@ -94,7 +96,11 @@ impl Session {
     /// document, a hidden target. The run params (the Channels panel's target filled in) when it
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
+        if let Some(reason) = channel_transform::refusal(self, id, params, spec.journal) {
+            return Err(EngineError::Disabled(id.into(), reason.into()));
+        }
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
+        let run_params = if channel_transform::geometric(id) { channel_transform::params(self, &run_params)? } else { run_params };
         if let Err(why) = self.explicit_layer_enabled(spec, params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
@@ -133,6 +139,15 @@ impl Session {
 
     /// The command's own precondition for a call with `params` (their target filled in).
     fn precondition(&self, spec: &commands::CommandSpec, params: &Value) -> std::result::Result<(), String> {
+        if let Some(reason) = channel_transform::refusal(self, spec.id, params, spec.journal) {
+            return Err(reason.into());
+        }
+        if warp_cmds::inline_edit(spec.id, params) {
+            return Ok(());
+        }
+        if channel_transform::geometric(spec.id) && channel_cmds::is_channel_target(params) {
+            return self.active().map(|_| ()).ok_or_else(|| "no document open".into());
+        }
         if self.names_existing_layer(spec.id, params) {
             return Ok(());
         }
@@ -196,6 +211,9 @@ impl Session {
     /// [`Self::edit`], recording a history state only when `record` is set. An unrecorded change
     /// still marks the document modified and leaves the redo states alone.
     pub(crate) fn edit_with<R>(&mut self, label: &str, record: bool, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        if channel_transform::locked(self) {
+            return Err(EngineError::Other(channel_transform::LOCKED.into()));
+        }
         // Every mutation path (linked-file refresh, transform, place) re-renders smart objects
         // through this entry; the requesting session's authority must reach those renders.
         let _authorization = crate::jobs::render_authorization_scope(self.authorize);
@@ -213,7 +231,7 @@ impl Session {
         let mut active = st.active_layer;
         let r = f(&mut doc, &mut active)?;
         if let (Some(k), Some(id)) = (restrict, active) {
-            channel_cmds::restrict_to_color(&before, &mut doc, id, k);
+            channel_cmds::restrict_to_color(&before, &mut doc, id, k)?;
         }
         if let Some(id) = filter_mask_layer {
             smart_cmds::refresh_after_filter_mask_edit(&mut doc, id)?;

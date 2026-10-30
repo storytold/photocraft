@@ -1936,6 +1936,57 @@ fn right_click_menu_warp_row_enters_warp_mode() {
 }
 
 #[test]
+fn channel_transform_warp_is_enabled_in_both_menus_without_retargeting_or_committing() {
+    for target in [json!("green"), json!("mask"), json!(0), json!("quickMask")] {
+        let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+        let expected = if target == "mask" {
+            app.run("layer.layerMask.revealAll", json!({})).unwrap();
+            app.run("channel.target", json!({"channel":"mask"})).unwrap();
+            app.run("view.layerMask", json!({"mode":"gray"})).unwrap();
+            json!("mask")
+        } else if target == 0 {
+            app.run("channel.new", json!({})).unwrap();
+            app.run("channel.target", json!({"channel":0})).unwrap();
+            json!({"channel":0})
+        } else if target == "quickMask" {
+            app.run("select.editInQuickMaskMode", json!({"on":true})).unwrap();
+            json!("quickMask")
+        } else {
+            app.run("channel.target", json!({"channel":"green"})).unwrap();
+            json!({"color":1})
+        };
+        app.run("select.rect", json!({"x":8,"y":8,"width":16,"height":16})).unwrap();
+        let ctx = egui::Context::default();
+        begin(&mut app, &ctx).unwrap_or_else(|e| panic!("{target}: {e}"));
+        let t = app.ui.transform.as_mut().unwrap();
+        t.quad = t.quad.map(|[x, y]| [x + 3.0, y + 2.0]);
+        let before = t.clone();
+        let st = app.session.active().unwrap();
+        let (source, eyes, history) = (st.doc.clone(), st.channel_view.clone(), st.history.past_len());
+        assert_eq!(before.target, Some(expected.clone()));
+        assert!(crate::menus::is_enabled(&app, "edit.transform.warp"), "main menu: {target}");
+        crate::canvas_tool_menu::open_transform(&mut app, &ctx, [10.0, 10.0]);
+        let menu = app.ui.canvas_tool_menu.clone().unwrap();
+        assert!(crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"), "context menu: {target}");
+        crate::canvas_tool_menu::choose(&mut app, &ctx, "edit.transform.warp");
+        let t = app.ui.transform.as_ref().unwrap();
+        assert!(t.warp.is_some(), "{target}");
+        assert_eq!((t.session, t.rect, t.quad, t.target.as_ref()), (before.session, before.rect, before.quad, before.target.as_ref()));
+        let [x, y] = before.quad[0];
+        let mapped = t.warp.as_ref().unwrap().map(before.rect[0], before.rect[1]);
+        assert!((mapped.0 - x).abs() < 1e-6 && (mapped.1 - y).abs() < 1e-6, "the prior drag carries into Warp");
+        let st = app.session.active().unwrap();
+        assert!(std::sync::Arc::ptr_eq(&source, &st.doc));
+        assert_eq!(st.channel_view, eyes);
+        assert_eq!(st.history.past_len(), history);
+        assert_eq!(st.channel_transform.as_ref().unwrap().target, expected);
+        assert!(!crate::menus::is_enabled(&app, "edit.transform.warp"));
+        assert!(!crate::canvas_tool_menu::available(&app, &menu, "edit.transform.warp"));
+        cancel(&mut app);
+    }
+}
+
+#[test]
 fn right_click_menu_offers_warp_for_a_path() {
     // Photoshop's Transform Path menu has Warp too (#3027).
     let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
@@ -2926,14 +2977,15 @@ fn preview_of_a_clipped_smart_object_is_not_empty() {
 fn targeted_unlinked_mask_transforms_alone_through_the_box() {
     let mut app = masked_app(false);
     app.ui.mask_target = true;
+    app.run("view.layerMask", json!({"mode":"overlay"})).unwrap();
     let ctx = egui::Context::default();
     begin(&mut app, &ctx).unwrap();
     let t = app.ui.transform.as_ref().unwrap();
     assert_eq!(t.target, Some(json!("mask")));
     assert_eq!(t.rect, [0.0, 0.0, 16.0, 64.0], "the box frames the mask's content");
-    // The preview document shows the mask vacated (revealed).
+    // The captured preview source stays immutable.
     let pd = &app.transform_preview.as_ref().unwrap().doc;
-    assert!(pd.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.sample_channel(4, 4, 0) > 0.99);
+    assert!(pd.layer(app.session.active().unwrap().active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.sample_channel(4, 4, 0) < 0.01);
     // Move the box 20 px right and commit.
     let t = app.ui.transform.as_mut().unwrap();
     t.quad = t.quad.map(|[x, y]| [x + 20.0, y]);
@@ -2944,21 +2996,22 @@ fn targeted_unlinked_mask_transforms_alone_through_the_box() {
     let m = &l.mask.as_ref().unwrap().surface;
     assert!(m.sample_channel(4, 30, 0) > 0.99 && m.sample_channel(30, 30, 0) < 0.01, "mask moved 20 px right");
     assert_eq!(l.surface().unwrap().content_bounds(), photocraft_geom::Rect::new(8, 8, 24, 24), "pixels untouched");
-    // Warp mode doesn't apply to a lone mask.
+    // Warp uses the same isolated mask target.
     app.ui.mask_target = true;
     begin(&mut app, &ctx).unwrap();
     enter_warp(&mut app, &egui::Context::default());
-    assert!(app.ui.transform.as_ref().unwrap().warp.is_none());
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_some());
 }
 
 #[test]
-fn linked_mask_target_transforms_the_layer() {
+fn linked_mask_target_transforms_alone() {
     let mut app = masked_app(true);
     app.ui.mask_target = true;
+    app.run("view.layerMask", json!({"mode":"overlay"})).unwrap();
     let ctx = egui::Context::default();
     begin(&mut app, &ctx).unwrap();
-    assert_eq!(app.ui.transform.as_ref().unwrap().target, None);
-    assert_eq!(app.ui.transform.as_ref().unwrap().rect, [8.0, 8.0, 24.0, 24.0]);
+    assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!("mask")));
+    assert_eq!(app.ui.transform.as_ref().unwrap().rect, [0.0, 0.0, 16.0, 64.0]);
 }
 
 /// ⌘T with Path Selection and a path transforms the path, not the layer's pixels, as one
@@ -3279,4 +3332,31 @@ fn several_layers_reuse_the_transform_interpolation_preference() {
     let transform = app.ui.transform.as_ref().unwrap();
     assert_eq!(transform.layers.len(), 2);
     assert_eq!(transform.interpolation, "nearest");
+}
+
+#[test]
+fn selected_layers_keep_a_channel_transform_isolated_and_warp_available() {
+    let mut app = app_with_square(64, photocraft_geom::Rect::new(8, 8, 24, 24));
+    let st = app.session.active_mut().unwrap();
+    let first = st.active_layer.unwrap();
+    let mut other = photocraft_doc::Layer::raster("other", photocraft_color::PixelFormat::RGBA8);
+    other.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(32, 8, 48, 24), &[0., 1., 0., 1.]);
+    let second = other.id;
+    Arc::make_mut(&mut st.doc).layers.push(other);
+    st.selected_layers = vec![first, second];
+    app.run("channel.target", json!({"channel":"green"})).unwrap();
+    app.run("channel.setVisible", json!({"channel":"composite","visible":true})).unwrap();
+    let before = app.session.active().unwrap().doc.layer(second).unwrap().surface().unwrap().to_interleaved(photocraft_geom::Rect::new(0, 0, 64, 64));
+    let ctx = egui::Context::default();
+    begin(&mut app, &ctx).unwrap();
+    assert!(app.ui.transform.as_ref().unwrap().layers.is_empty());
+    assert_eq!(app.ui.transform.as_ref().unwrap().target, Some(json!({"color":1})));
+    begin_warp(&mut app, &ctx).unwrap();
+    assert!(app.ui.transform.as_ref().unwrap().warp.is_some());
+    app.run("channel.setVisible", json!({"channel":"green","visible":false})).unwrap();
+    end_if_left(&mut app);
+    assert!(app.ui.transform.is_some());
+    cancel(&mut app);
+    assert!(!app.session.active().unwrap().channel_view.color_visible(1));
+    assert_eq!(app.session.active().unwrap().doc.layer(second).unwrap().surface().unwrap().to_interleaved(photocraft_geom::Rect::new(0, 0, 64, 64)), before);
 }

@@ -286,23 +286,24 @@ fn average(s: &mut Session, p: &Value) -> Result<Value> {
 // ---------- transform presets ----------
 
 /// The presets' params: like Free Transform, they follow the Channels and Layers panel target.
-const TRANSFORM_TARGET: &str =
-    r#"{"target":"pixels"|"mask"|"quickMask"|{"channel":i}=Channels panel target (an unlinked mask, an alpha channel or the Quick Mask turns alone)}"#;
+const TRANSFORM_TARGET: &str = r#"{"layer":id?,"target":"pixels"|"mask"|"quickMask"|{"channel":i}|{"color":i}=Channels panel target (scalar channels and explicitly targeted masks turn alone regardless of linking; an explicit layer without target transforms the layer)}"#;
 
 /// Flips and turns about the centre of the box Free Transform would open: with a selection
 /// limiting the transform it is the selection's own bounds, as in Photoshop, so Select All
 /// mirrors across the canvas (#6928); otherwise the content's bounds.
 fn transform_preset(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
+    let p = &crate::channel_transform::params(s, p)?;
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    // A targeted alpha channel, the Quick Mask or an unlinked layer mask turns by itself (#2835).
-    let (b, mut params) = match crate::transform_cmds::lone_target(&d.doc, d.active_layer, p)? {
-        Some(surf) => (crate::transform_cmds::target_frame(&d.doc, surf), json!({"target": p.get("target")})),
-        None => {
-            let id = d.active_layer.ok_or(EngineError::Other("no active layer".into()))?;
-            let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
-            (crate::transform_cmds::transform_frame(&d.doc, l), json!({"layer": id.0}))
-        }
-    };
+    // Scalar targets turn alone; an explicit layer without a target retains whole-layer behaviour.
+    let (b, mut params) =
+        match crate::channel_transform::source_bounds(&d.doc, p.get("layer").and_then(Value::as_u64).map(photocraft_doc::LayerId).or(d.active_layer), p)? {
+            Some(bounds) => (bounds, p.clone()),
+            None => {
+                let id = layer_param(s, p)?;
+                let l = d.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+                (crate::transform_cmds::transform_frame(&d.doc, l), p.clone())
+            }
+        };
     if b.is_empty() {
         return Err(EngineError::Other("nothing to transform".into()));
     }

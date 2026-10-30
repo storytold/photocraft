@@ -374,13 +374,38 @@ fn main() {
         exec(&mut s, "layer.setAdjustment", json!({"gamma": g}));
         ms(t) + b.refresh(&s, false)
     });
-    select(&mut s, 1);
+    exec(&mut s, "layer.select", json!({"layer": "paint"}));
     let mut d = 1;
     b.time("move paint layer 10 px + refresh", |b| {
         d = -d;
         let t = Instant::now();
         exec(&mut s, "layer.translate", json!({"dx": 10 * d, "dy": 5 * d}));
         ms(t) + b.refresh(&s, false)
+    });
+    b.time("move red channel 10 px + refresh", |b| {
+        d = -d;
+        let t = Instant::now();
+        exec(&mut s, "layer.translate", json!({"dx": 10 * d, "dy": 5 * d, "target": {"color": 0}}));
+        ms(t) + b.refresh(&s, false)
+    });
+    // A separate full-canvas raster layer gives the channel path a true 24–36 MP sample rather
+    // than timing the sparse brush strokes in the ordinary interactive document.
+    let mut full = Session::new();
+    full.add_document(s.active().expect("doc").doc.as_ref().clone(), None);
+    exec(&mut full, "layer.select", json!({"layer": "paint"}));
+    exec(&mut full, "edit.fill", json!({"color": "#808080"}));
+    let mut full_d = 1;
+    b.time("move full paint layer 10 px + refresh", |b| {
+        full_d = -full_d;
+        let t = Instant::now();
+        exec(&mut full, "layer.translate", json!({"dx": 10 * full_d, "dy": 5 * full_d}));
+        ms(t) + b.refresh(&full, false)
+    });
+    b.time("move full red channel 10 px + refresh", |b| {
+        full_d = -full_d;
+        let t = Instant::now();
+        exec(&mut full, "layer.translate", json!({"dx": 10 * full_d, "dy": 5 * full_d, "target": {"color": 0}}));
+        ms(t) + b.refresh(&full, false)
     });
     b.time("undo (move)", |b| {
         exec(&mut s, "layer.translate", json!({"dx": 7, "dy": 3}));

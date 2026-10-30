@@ -333,6 +333,7 @@ impl LiveMixer {
             surface,
             bounds,
             mixer: Some((self.original_state, after)),
+            color: self.core.color_restrict,
         });
         Ok(params)
     }

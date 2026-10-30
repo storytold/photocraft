@@ -630,6 +630,8 @@ impl LiveDab {
         self.bounds = self.bounds.union(&dmg);
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         let surface = surf.clone();
+        // Unlike the Brush preview, this surface has not restored untargeted colour samples.
+        // A single-colour commit must therefore replay through the channel restriction.
         Ok(crate::brush_cmds::LiveCommit {
             mixer: None,
             cmd: self.cmd,
@@ -639,6 +641,7 @@ impl LiveDab {
             points: self.points,
             surface,
             bounds: self.bounds,
+            color: None,
         })
     }
 }

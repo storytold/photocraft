@@ -3,9 +3,7 @@ use super::refs::{ChanRef, alpha_index, bad, doc_index, gray_plane, parse_ref};
 use super::selection::{uniform, unselected_surface};
 use super::targeting::target;
 use super::view::{ChannelTarget, QuickMaskOptions, color_names, composite_name, fix_view, touch};
-use super::{
-    AlphaChannel, Color, ColorIndicates, ColorMode, DocState, Document, EngineError, Layer, PixelFormat, Result, Session, Surface, Value, json, list, sel,
-};
+use super::{AlphaChannel, Color, ColorIndicates, ColorMode, Document, EngineError, Layer, PixelFormat, Result, Session, Surface, Value, json, list, sel};
 
 // ---------------------------------------------------------------------------------------------
 // Channel management
@@ -184,13 +182,30 @@ pub(super) fn delete_channel(s: &mut Session, p: &Value) -> Result<Value> {
             ChannelTarget::Alpha(t) if t > i => ChannelTarget::Alpha(t - 1),
             t => t,
         };
-        fix_view_now(st);
     }
+    fix_view_now(s);
     Ok(Value::Null)
 }
 
-pub(super) fn fix_view_now(st: &mut DocState) {
+pub(super) fn fix_view_now(s: &mut Session) {
+    // Native commits release the interactive guard and retain their lock on the running job.
+    let transform_locked = crate::channel_transform::locked(s);
+    let Some(st) = s.active_mut() else { return };
     fix_view(st);
+    // Recover an empty view only for ordinary eye/target operations. Document edits and
+    // undo/redo preserve valid visibility exactly, including all eyes hidden by a transform.
+    let n = st.doc.channels.len();
+    let colors = color_count(&st.doc);
+    let quick = st.doc.quick_mask.is_some();
+    let active = st.active_layer;
+    let shown = {
+        let doc = &st.doc;
+        let v = &st.channel_view;
+        (0..n).any(|i| v.alpha_shown(i)) || (quick && !v.quick_mask_hidden) || active.is_some_and(|id| doc.layer(id).is_some_and(|l| l.mask.is_some()))
+    };
+    if st.channel_view.visible_colors(colors) == 0 && !shown && !transform_locked {
+        st.channel_view.color_hidden.clear();
+    }
     touch(st);
 }
 
@@ -250,27 +265,49 @@ pub(super) fn set_visible(s: &mut Session, p: &Value) -> Result<Value> {
     let r = p.get("channel").and_then(|v| parse_ref(v, doc)).ok_or_else(|| bad(cmd, "missing or unknown `channel`"))?;
     let colors = color_count(doc);
     let n = doc.channels.len();
-    let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let v = &mut st.channel_view;
-    let visible = |cur: bool| p.get("visible").and_then(Value::as_bool).unwrap_or(!cur);
     match r {
-        ChanRef::Composite => {
-            let all = v.visible_colors(colors) == colors;
-            let on = visible(all);
-            v.color_hidden = vec![!on; colors];
-        }
-        ChanRef::Color(k) if k < colors => {
-            let on = visible(v.color_visible(k));
-            v.set_color_visible(k, on);
-        }
-        ChanRef::Alpha(i) if i < n => {
-            let on = visible(v.alpha_shown(i));
-            v.set_alpha_visible(i, on);
-        }
-        ChanRef::QuickMask => v.quick_mask_hidden = !visible(!v.quick_mask_hidden),
+        ChanRef::Composite => {}
+        ChanRef::QuickMask if doc.quick_mask.is_some() => {}
+        ChanRef::Color(k) if k < colors => {}
+        ChanRef::Alpha(i) if i < n => {}
         _ => return Err(bad(cmd, "that channel has no visibility")),
     }
-    fix_view_now(st);
+    let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    let v = &mut st.channel_view;
+    let gray_mask = v.layer_mask.is_some_and(|m| m.mode == crate::mask_view_cmds::MaskViewMode::Gray);
+    let visible = |cur: bool| p.get("visible").and_then(Value::as_bool).unwrap_or(!cur);
+    // Grayscale mask view suppresses the other channels. Showing one of their eyes leaves
+    // that view without changing the edit target; the mask remains visible as an overlay.
+    let showing = visible(
+        !gray_mask
+            && match r {
+                ChanRef::Composite => v.visible_colors(colors) == colors,
+                ChanRef::Color(k) => v.color_visible(k),
+                ChanRef::Alpha(i) => v.alpha_shown(i),
+                ChanRef::QuickMask => !v.quick_mask_hidden,
+                _ => false,
+            },
+    );
+    if gray_mask && showing {
+        v.color_hidden = vec![true; colors];
+        if let Some(mask) = v.layer_mask.as_mut() {
+            mask.mode = crate::mask_view_cmds::MaskViewMode::Overlay;
+        }
+    }
+    match r {
+        ChanRef::Composite => {
+            v.color_hidden = vec![!showing; colors];
+        }
+        ChanRef::Color(k) if k < colors => {
+            v.set_color_visible(k, showing);
+        }
+        ChanRef::Alpha(i) if i < n => {
+            v.set_alpha_visible(i, showing);
+        }
+        ChanRef::QuickMask => v.quick_mask_hidden = !showing,
+        _ => return Err(bad(cmd, "that channel has no visibility")),
+    }
+    fix_view_now(s);
     Ok(list(s))
 }
 

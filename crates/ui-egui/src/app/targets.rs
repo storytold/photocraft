@@ -13,7 +13,10 @@ impl PhotocraftApp {
     /// ⌘I then inverts the mask, as in Photoshop (#780). A targeted alpha channel or Quick Mask
     /// mode wins, as the engine routes those itself.
     pub fn with_mask_target(&self, id: &str, params: Value) -> Value {
-        if !photocraft_engine::channel_cmds::follows_target(id) || params.get("target").is_some() {
+        if (id.starts_with("edit.transform") && params.get("layer").is_some())
+            || !photocraft_engine::channel_cmds::follows_target(id)
+            || params.get("target").is_some()
+        {
             return params;
         }
         // A filter mask is painted, filled and filtered in place; it doesn't float or move, and
@@ -47,6 +50,9 @@ impl PhotocraftApp {
     /// is an adjustment layer (no pixels of its own), or every colour channel is off and that mask
     /// is the picture. An alpha channel or Quick Mask wins, as the engine routes those itself.
     pub fn layer_mask_targeted(&self) -> bool {
+        if self.filter_mask_targeted() {
+            return false;
+        }
         let Some(st) = self.session.active() else { return false };
         let layer_mask = st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::LayerMask;
         let composite = (st.channel_view.target == photocraft_engine::channel_cmds::ChannelTarget::Composite || layer_mask) && st.doc.quick_mask.is_none();
@@ -76,6 +82,11 @@ impl PhotocraftApp {
     /// Explicitly targeting a filter mask ends any conflicting mask view; untargeting it ends its
     /// own view too.
     pub(crate) fn select_filter_mask_target(&mut self, layer: Option<u64>) {
+        if photocraft_engine::channel_transform::locked(&self.session) {
+            self.ui.status = photocraft_engine::channel_transform::LOCKED.into();
+            self.ui.status_error = true;
+            return;
+        }
         if layer.is_none() {
             self.end_filter_mask_view();
         }
@@ -102,6 +113,13 @@ impl PhotocraftApp {
     /// active layer (a shape layer's path is its content, not a mask). Targeting a mask or the
     /// pixels brings back that target's foreground/background pair, as in Photoshop (#2166).
     pub(crate) fn sync_mask_targets(&mut self) {
+        if let Some(guard) = self.session.active().and_then(|st| st.channel_transform.as_ref()) {
+            self.ui.mask_target = guard.target == "mask";
+            self.ui.vector_mask_target = false;
+            self.ui.filter_mask_target = None;
+            self.session.tools.target_mask(self.ui.mask_target || guard.target == "quickMask" || guard.target.get("channel").is_some());
+            return;
+        }
         if let Some(st) = self.session.active_mut() {
             use photocraft_engine::channel_cmds::ChannelTarget;
             let channel = st.channel_view.target;
