@@ -13,6 +13,10 @@ use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbe
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
 
+/// Decoded size from which a PNG is read straight into the tiles. Below it the whole-image path
+/// is faster, and the memory the stream saves is small.
+const STREAM_MIN_BYTES: u64 = 32 << 20;
+
 /// Decodes a flat image into a single-layer document; a TIFF with Photoshop layer data opens
 /// layered (see [`crate::tiff_layers`]).
 pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
@@ -27,8 +31,8 @@ pub fn import_flat_with(name: &str, bytes: &[u8], ctl: &Interrupt) -> Result<Imp
 
 /// [`import_flat_with`]; `stream` lets a PNG be decoded straight into the tiles (tests turn it off
 /// to get the whole-image path to compare with).
-fn import_flat_impl(name: &str, bytes: &[u8], ctl: &Interrupt, stream: bool) -> Result<ImportResult, IoError> {
-    import_flat_impl_with_limit(name, bytes, ctl, stream, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
+fn import_flat_impl(name: &str, bytes: &[u8], ctl: &Interrupt, stream_min: Option<u64>) -> Result<ImportResult, IoError> {
+    import_flat_impl_with_limit(name, bytes, ctl, stream_min, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)
 }
 
 pub(crate) fn import_flat_with_limit(name: &str, bytes: &[u8], pixel_limit: u64) -> Result<ImportResult, IoError> {
@@ -36,17 +40,20 @@ pub(crate) fn import_flat_with_limit(name: &str, bytes: &[u8], pixel_limit: u64)
 }
 
 pub(crate) fn import_flat_with_limit_and_interrupt(name: &str, bytes: &[u8], pixel_limit: u64, ctl: &Interrupt) -> Result<ImportResult, IoError> {
-    import_flat_impl_with_limit(name, bytes, ctl, true, pixel_limit)
+    import_flat_impl_with_limit(name, bytes, ctl, Some(STREAM_MIN_BYTES), pixel_limit)
 }
 
-fn import_flat_impl_with_limit(name: &str, bytes: &[u8], ctl: &Interrupt, stream: bool, pixel_limit: u64) -> Result<ImportResult, IoError> {
+fn import_flat_impl_with_limit(name: &str, bytes: &[u8], ctl: &Interrupt, stream_min: Option<u64>, pixel_limit: u64) -> Result<ImportResult, IoError> {
     // Detected once; every step below branches on it.
     let format = codecs::detect(bytes);
     if format == Some(Format::Tiff) {
         return import_tiff_page_with_limit(name, bytes, None, pixel_limit);
     }
     // A PNG whose rows come in final order is decoded straight into the tiles.
-    let streamed = if stream && format == Some(Format::Png) { import_png_streamed(name, bytes, ctl)? } else { None };
+    let streamed = match stream_min {
+        Some(min) if format == Some(Format::Png) => import_png_streamed(name, bytes, ctl, min)?,
+        _ => None,
+    };
     let (mut r, img) = match streamed {
         Some(r) => (r, None),
         None => {
@@ -493,11 +500,11 @@ fn flat_document(
 }
 
 /// A PNG opened straight into the tiles of its layer, a group of rows at a time, so the whole
-/// decoded image never exists next to them. `None` when it can't be: an interlaced or animated
-/// file, or one whose `eXIf` (which may follow the image data) calls for turning the pixels
+/// decoded image never exists next to them. `None` when it can't be or isn't worth it (under
+/// `min_bytes` decoded): an interlaced or animated file, or one whose `eXIf` (which may follow the image data) calls for turning the pixels
 /// upright; the caller then decodes the whole image as for any other format. Errors, limits and
 /// metadata are the whole-image decoder's.
-fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt) -> Result<Option<ImportResult>, IoError> {
+fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt, min_bytes: u64) -> Result<Option<ImportResult>, IoError> {
     struct Stream {
         surface: Surface,
         header: codecs::PngHeader,
@@ -507,7 +514,14 @@ fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt) -> Result<Opti
     // after its decode, never takes progress backwards.
     let state = std::cell::RefCell::new(None::<Stream>);
     let busy = || IoError::Unsupported("the PNG reader re-entered itself".into());
-    let mut begin = |header: &codecs::PngHeader| -> Result<(), IoError> {
+    let mut begin = |header: &codecs::PngHeader| -> Result<bool, IoError> {
+        // Decoded size, from the header; a size that overflows is certainly large enough.
+        let bytes = u64::from(header.width)
+            .checked_mul(u64::from(header.height))
+            .and_then(|px| px.checked_mul((header.layout.channels() * header.sample.bytes()) as u64));
+        if bytes.is_some_and(|b| b < min_bytes) {
+            return Ok(false);
+        }
         let (_, target_layout, _, csample) = flat_target(header.layout, header.sample);
         *state.try_borrow_mut().map_err(|_| busy())? = Some(Stream {
             surface: Surface::new(surface_format(target_layout, csample)),
@@ -516,7 +530,7 @@ fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt) -> Result<Opti
         });
         ctl.check().map_err(|_| IoError::Cancelled)?;
         ctl.progress(0.02);
-        Ok(())
+        Ok(true)
     };
     let mut rows = |y0: u32, data: &[u8]| -> Result<(), IoError> {
         ctl.check().map_err(|_| IoError::Cancelled)?;

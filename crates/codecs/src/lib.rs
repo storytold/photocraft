@@ -115,19 +115,19 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
 }
 
 /// Decodes a PNG a group of rows at a time, for a caller that builds its own pixel storage and
-/// never needs the whole decoded image. `begin` gets the [`PngHeader`] once, then `rows(y0, data)`
+/// never needs the whole decoded image. `begin` gets the [`PngHeader`] once and returns whether to go on, then `rows(y0, data)`
 /// gets whole rows `y0..` (up to 256 of them, native-endian) in final order, holding exactly the
 /// samples [`decode`] would return. The result is the metadata, complete once the file is read.
 ///
-/// `Ok(None)`, with neither closure called, means the rows can't be had in final order (an
-/// interlaced or animated PNG): use [`decode_as_with`]. Damaged files fail as [`decode_as_with`]
+/// `Ok(None)`, with no row delivered, means the rows can't be had in final order (an
+/// interlaced or animated PNG) or `begin` returned false: use [`decode_as_with`]. Damaged files fail as [`decode_as_with`]
 /// fails them, possibly after some rows. The limits are checked before the first row; the
 /// orientation is not applied, so [`PngExtras::orientation`] other than 1 is for the caller to
 /// handle (or to fall back to [`decode_as_with`], which turns the image upright).
 pub fn decode_png_rows<E: From<CodecError>>(
     bytes: &[u8],
     opts: &DecodeOptions,
-    begin: &mut dyn FnMut(&PngHeader) -> Result<(), E>,
+    begin: &mut dyn FnMut(&PngHeader) -> Result<bool, E>,
     rows: &mut PngRowSink<'_, E>,
 ) -> Result<Option<PngExtras>, E> {
     png::decode_rows(bytes, &opts.limits, begin, rows)
