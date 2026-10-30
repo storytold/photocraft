@@ -173,6 +173,39 @@ fn up(p: &Plane, w: usize, h: usize) -> Plane {
     Plane { w, h, v: out }
 }
 
+/// The source rows of [`up`]`(p, w, h)` at output row `y`, one per tap (`None` where the
+/// zero-stuffed row is all zeros).
+fn up_rows(p: &Plane, h: usize, y: usize) -> [Option<usize>; 5] {
+    let lh = p.h.min(h.div_ceil(2));
+    std::array::from_fn(|k| {
+        let m = mirror(y as isize + k as isize - 2, h);
+        (m.is_multiple_of(2) && m / 2 < lh).then_some(m / 2)
+    })
+}
+
+/// One sample of [`up`]`(p, w, h)`: column `x` of the output row whose [`up_rows`] are `rows`.
+/// It adds the same terms in the same order as `up`, so it gives the same bits.
+fn up_at(p: &Plane, w: usize, rows: &[Option<usize>; 5], x: usize) -> f32 {
+    let lw = p.w.min(w.div_ceil(2));
+    let col = |j: usize| -> f32 { (0..5).filter_map(|k| rows[k].map(|r| TAPS[k] * (p.v[r * p.w + j] * 4.0))).sum() };
+    if x >= 2 && x + 2 < w {
+        // Away from the edges no tap mirrors.
+        (0..5)
+            .filter_map(|k| {
+                let i = x + k - 2;
+                (i.is_multiple_of(2) && i / 2 < lw).then(|| TAPS[k] * col(i / 2))
+            })
+            .sum()
+    } else {
+        (0..5)
+            .filter_map(|k| {
+                let m = mirror(x as isize + k as isize - 2, w);
+                (m.is_multiple_of(2) && m / 2 < lw).then(|| TAPS[k] * col(m / 2))
+            })
+            .sum()
+    }
+}
+
 /// Levels down to about 2 pixels on the short side.
 fn depth(w: usize, h: usize) -> usize {
     let mut s = w.min(h);
@@ -217,14 +250,14 @@ fn llf(u: &Plane, remap: impl Fn(f32, f32) -> f32 + Sync) -> Plane {
         });
         let gr = gaussian(m, n);
         for l in 0..n - 1 {
-            let coarse = up(&gr[l + 1], gr[l].w, gr[l].h);
-            let (gl, fine, lw) = (&g[l].v, &gr[l].v, g[l].w);
+            let (gl, fine, lw, lh, coarse) = (&g[l].v, &gr[l].v, g[l].w, g[l].h, &gr[l + 1]);
             rows(&mut lap[l], lw, |y, row| {
+                let taps = up_rows(coarse, lh, y);
                 for (x, o) in row.iter_mut().enumerate() {
                     let i = y * lw + x;
                     let wgt = (1.0 - (gl[i].clamp(lo, hi) - r).abs() / step).max(0.0);
                     if wgt > 0.0 {
-                        *o += wgt * (fine[i] - coarse.v[i]);
+                        *o += wgt * (fine[i] - up_at(coarse, lw, &taps, x));
                     }
                 }
             });
@@ -244,8 +277,10 @@ fn llf(u: &Plane, remap: impl Fn(f32, f32) -> f32 + Sync) -> Plane {
 /// The `q` quantile (0 … 1) of `v`.
 fn quantile(v: &[f32], q: f32) -> f32 {
     let mut s = v.to_vec();
-    s.sort_by(f32::total_cmp);
-    s[((s.len() - 1) as f32 * q).round() as usize]
+    // Selecting the one element is linear, a full sort is not (5 sorts of the work copy were a
+    // fifteenth of a render). `total_cmp` ties are bit-identical, so it is the sorted element.
+    let i = ((s.len() - 1) as f32 * q).round() as usize;
+    *s.select_nth_unstable_by(i, f32::total_cmp).1
 }
 
 /// 1st and 99th percentiles of the log luminance on a copy at most 256 pixels across.
@@ -444,8 +479,30 @@ mod tests {
                 assert_eq!(blur_step(&p, step).v, blur_step_reference(&p, step).v, "blur {w}×{h} step {step}");
             }
             for (uw, uh) in [(w * 2, h * 2), (w * 2 - 1, h * 2 - 1), (w * 2, h * 2 - 1), (w.max(2) * 2 - 3, h * 2)] {
-                assert_eq!(up(&p, uw, uh).v, up_reference(&p, uw, uh).v, "up {w}×{h} → {uw}×{uh}");
+                let full = up(&p, uw, uh);
+                assert_eq!(full.v, up_reference(&p, uw, uh).v, "up {w}×{h} → {uw}×{uh}");
+                // The filter samples `up` one pixel at a time; every sample has the same bits.
+                for y in 0..uh {
+                    let taps = up_rows(&p, uh, y);
+                    for x in 0..uw {
+                        assert_eq!(up_at(&p, uw, &taps, x).to_bits(), full.v[y * uw + x].to_bits(), "up_at {w}×{h} → {uw}×{uh} at {x},{y}");
+                    }
+                }
             }
+        }
+    }
+
+    #[test]
+    fn quantile_is_the_sorted_element() {
+        let p = noise_plane(301, 211, 9);
+        let mut v = p.v.clone();
+        // Ties and signed zeros, which `total_cmp` orders by their bits.
+        v.extend([0.0, -0.0, 0.0, -0.0, 3.5, 3.5, f32::MIN_POSITIVE]);
+        let mut sorted = v.clone();
+        sorted.sort_by(f32::total_cmp);
+        for q in [0.0, 0.001, 0.01, 0.25, 0.5, 0.99, 1.0] {
+            let want = sorted[((sorted.len() - 1) as f32 * q).round() as usize];
+            assert_eq!(quantile(&v, q).to_bits(), want.to_bits(), "q {q}");
         }
     }
 

@@ -35,15 +35,17 @@ pub type Stamp = (u64, u128);
 /// ids, stamp)]).
 pub type LinkScan = Arc<Mutex<Option<(u64, Vec<(String, Vec<u64>, Option<Stamp>)>)>>>;
 
+/// Stamps `file`, a linked path resolved by [`crate::doc_path`]; `None` (not looked at, like a
+/// missing file) when it is not followed.
 #[cfg(not(target_arch = "wasm32"))]
-fn stamp(path: &str) -> Option<Stamp> {
-    let meta = std::fs::metadata(path).ok()?;
+fn stamp(file: Option<&std::path::Path>) -> Option<Stamp> {
+    let meta = std::fs::metadata(file?).ok()?;
     let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
     Some((meta.len(), modified.as_nanos()))
 }
 
 #[cfg(target_arch = "wasm32")]
-fn stamp(_: &str) -> Option<Stamp> {
+fn stamp(_: Option<&std::path::Path>) -> Option<Stamp> {
     None
 }
 
@@ -64,9 +66,22 @@ pub fn linked_files(d: &Document) -> Vec<(String, Vec<u64>)> {
 /// the layers of the ones that changed.
 pub(crate) fn update_changed(s: &mut Session, _: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    let (doc, files) = (st.doc.id.0, linked_files(&st.doc));
-    let now = files.into_iter().map(|(p, ids)| (p.clone(), ids, stamp(&p))).collect();
+    let (doc, files) = (st.doc.id.0, resolved_files(st));
+    let now = files.into_iter().map(|(p, file, ids)| (p, ids, stamp(file.as_deref()))).collect();
     s.apply_link_stamps(doc, now)
+}
+
+/// [`linked_files`] of `st`'s document with the file each path resolves to, or `None` for a path
+/// that is not followed ([`crate::doc_path`]).
+fn resolved_files(st: &crate::DocState) -> Vec<(String, Option<std::path::PathBuf>, Vec<u64>)> {
+    let document = st.path.as_deref().map(std::path::Path::new);
+    linked_files(&st.doc)
+        .into_iter()
+        .map(|(p, ids)| {
+            let file = crate::doc_path::resolve_in(&p, document).ok();
+            (p, file, ids)
+        })
+        .collect()
 }
 
 impl Session {
@@ -77,14 +92,15 @@ impl Session {
             return;
         }
         let Some(st) = self.active() else { return };
-        let (doc, files) = (st.doc.id.0, linked_files(&st.doc));
-        if files.is_empty() {
+        let (doc, files) = (st.doc.id.0, resolved_files(st));
+        // Nothing to look at: no links, or none that is followed.
+        if files.iter().all(|(_, file, _)| file.is_none()) {
             return;
         }
         let slot: LinkScan = Arc::default();
         let out = slot.clone();
         let spawned = std::thread::Builder::new().name("link-watch".into()).spawn(move || {
-            let stamps = files.into_iter().map(|(p, ids)| (p.clone(), ids, stamp(&p))).collect();
+            let stamps = files.into_iter().map(|(p, file, ids)| (p, ids, stamp(file.as_deref()))).collect();
             *out.lock().unwrap_or_else(PoisonError::into_inner) = Some((doc, stamps));
         });
         if spawned.is_ok() {
