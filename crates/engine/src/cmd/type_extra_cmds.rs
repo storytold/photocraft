@@ -503,6 +503,12 @@ fn warp_text(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---------- OpenType toggles ----------
 
+/// The OpenType tags of Type › OpenType › Stylistic Sets: `STYLISTIC_SET_TAGS[n - 1]` is Set n.
+pub const STYLISTIC_SET_TAGS: [&str; 20] = [
+    "ss01", "ss02", "ss03", "ss04", "ss05", "ss06", "ss07", "ss08", "ss09", "ss10", "ss11", "ss12", "ss13", "ss14", "ss15", "ss16", "ss17", "ss18", "ss19",
+    "ss20",
+];
+
 /// Is the OpenType toggle `tag` on for a character style? (`liga`/`dlig` have dedicated fields.)
 pub fn feature_on(st: &photocraft_doc::text::CharStyle, tag: &str) -> bool {
     match tag {
@@ -764,34 +770,13 @@ pub fn specs() -> Vec<CommandSpec> {
     const LP: &str = r##"{"layer":id?}"##;
     const FP: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers)}"##;
     const OT: &str = r##"{"layer":id? or "layers":[id,…]? (default selected Type layers),"on":bool? (default: toggle representative),"range":[startChar,endChar]? (single layer; default all)}"##;
-    // One toggle per stylistic set (`ss01`..`ss20`); a run fn can't capture, so each carries its tag.
+    // One toggle per stylistic set; a run fn can't capture, so each indexes the tag table itself.
     macro_rules! stylistic_sets {
-        ($(($n:literal, $tag:literal)),* $(,)?) => {
-            [$(spec!(concat!("type.openType.stylisticSets.set", $n), concat!("Set ", $n), &["Type", "OpenType", "Stylistic Sets"], OT, has_format_target, |s, p| toggle_opentype(s, p, $tag))),*]
+        ($($n:literal),* $(,)?) => {
+            [$(spec!(concat!("type.openType.stylisticSets.set", $n), concat!("Set ", $n), &["Type", "OpenType", "Stylistic Sets"], OT, has_format_target, |s, p| toggle_opentype(s, p, STYLISTIC_SET_TAGS[$n - 1]))),*]
         };
     }
-    let sets = stylistic_sets![
-        (1, "ss01"),
-        (2, "ss02"),
-        (3, "ss03"),
-        (4, "ss04"),
-        (5, "ss05"),
-        (6, "ss06"),
-        (7, "ss07"),
-        (8, "ss08"),
-        (9, "ss09"),
-        (10, "ss10"),
-        (11, "ss11"),
-        (12, "ss12"),
-        (13, "ss13"),
-        (14, "ss14"),
-        (15, "ss15"),
-        (16, "ss16"),
-        (17, "ss17"),
-        (18, "ss18"),
-        (19, "ss19"),
-        (20, "ss20"),
-    ];
+    let sets = stylistic_sets![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
     let mut all = vec![
         spec!("type.antiAlias.none", "None", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::None)),
         spec!("type.antiAlias.sharp", "Sharp", &["Type", "Anti-Alias"], FP, has_format_target, |s, p| set_aa(s, p, AntiAlias::Sharp)),
