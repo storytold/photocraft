@@ -369,3 +369,123 @@ fn a_copied_group_cannot_nest_the_destination_past_the_group_depth_limit() {
     assert!(e.to_string().contains("deeper than"), "{e}");
     assert_eq!(*doc(&s, 1), before, "nothing was copied");
 }
+
+/// #9620: style ids are per document, so the source's style 1 must not bind to the destination's.
+#[test]
+fn copied_text_brings_its_named_styles_instead_of_binding_the_destinations_ids() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
+    let text = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hello", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    let cs = s.execute("type.characterStyle.new", json!({"name": "Source black 24", "fromSelection": false, "attrs": {"size": 24}})).unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    s.execute("type.characterStyle.apply", json!({"id": cs, "layer": text, "range": [0, 5]})).unwrap();
+    let ps = s.execute("type.paragraphStyle.new", json!({"name": "Source body", "fromSelection": false, "attrs": {"align": "center"}})).unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    s.execute("type.paragraphStyle.apply", json!({"id": ps, "layer": text, "range": [0, 5]})).unwrap();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    let dcs = s.execute("type.characterStyle.new", json!({"name": "Destination red 48", "fromSelection": false, "attrs": {"size": 48}})).unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    let dps = s.execute("type.paragraphStyle.new", json!({"name": "Destination head", "fromSelection": false, "attrs": {"align": "right"}})).unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    assert_eq!((cs, ps), (dcs, dps), "both documents number their first styles 1");
+    let copy = |s: &mut Session| {
+        s.set_active(0);
+        let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [text]})).unwrap();
+        let LayerContent::Text(t) = &doc(s, 1).layer(copied(&r)).unwrap().content else { panic!("not text") };
+        (t.runs[0].style.style_sheet.unwrap(), t.paragraphs[0].style.style_sheet.unwrap())
+    };
+    let (c, p) = copy(&mut s);
+    let st = &doc(&s, 1).text_styles;
+    assert_ne!((c, p), (dcs as u32, dps as u32));
+    assert_eq!(st.char_style(c).unwrap().name, "Source black 24");
+    assert_eq!(st.para_style(p).unwrap().name, "Source body");
+    assert_eq!(st.char_style(dcs as u32).unwrap().name, "Destination red 48", "the destination's own styles are untouched");
+    assert_eq!(st.para_style(dps as u32).unwrap().name, "Destination head");
+    // A second copy reuses the imported styles, and undo takes an import back with its copy.
+    assert_eq!(copy(&mut s), (c, p));
+    assert_eq!((doc(&s, 1).text_styles.character.len(), doc(&s, 1).text_styles.paragraph.len()), (2, 2));
+    assert!(s.undo());
+    assert!(s.undo());
+    assert_eq!((doc(&s, 1).text_styles.character.len(), doc(&s, 1).text_styles.paragraph.len()), (1, 1));
+}
+
+/// A name the destination already uses for another style is imported once as "Body 1", and later
+/// copies reuse it instead of adding "Body 2".
+#[test]
+fn a_clashing_style_name_is_imported_once_across_copies() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
+    let text = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hello", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    let cs = s.execute("type.characterStyle.new", json!({"name": "Body", "fromSelection": false, "attrs": {"size": 24}})).unwrap()["id"].as_u64().unwrap();
+    s.execute("type.characterStyle.apply", json!({"id": cs, "layer": text, "range": [0, 5]})).unwrap();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    s.execute("type.characterStyle.new", json!({"name": "Body", "fromSelection": false, "attrs": {"size": 48}})).unwrap();
+    let copy = |s: &mut Session| {
+        s.set_active(0);
+        let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [text]})).unwrap();
+        let LayerContent::Text(t) = &doc(s, 1).layer(copied(&r)).unwrap().content else { panic!("not text") };
+        t.runs[0].style.style_sheet.unwrap()
+    };
+    let first = copy(&mut s);
+    assert_eq!(doc(&s, 1).text_styles.char_style(first).unwrap().name, "Body 1");
+    assert_eq!(copy(&mut s), first, "the second copy reuses Body 1");
+    assert_eq!(doc(&s, 1).text_styles.character.len(), 2);
+}
+
+/// An imported style's colour converts with the copied runs, so clearing a run's overrides in a
+/// destination of another colour mode keeps the converted colour.
+#[test]
+fn an_imported_styles_colour_converts_with_the_copied_runs() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
+    let text = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hello", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    let cs =
+        s.execute("type.characterStyle.new", json!({"name": "Red", "fromSelection": false, "attrs": {"color": "#ff0000"}})).unwrap()["id"].as_u64().unwrap();
+    s.execute("type.characterStyle.apply", json!({"id": cs, "layer": text, "range": [0, 5]})).unwrap();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    s.set_active(0);
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [text]})).unwrap();
+    let d = doc(&s, 1);
+    let LayerContent::Text(t) = &d.layer(copied(&r)).unwrap().content else { panic!("not text") };
+    let run = &t.runs[0].style;
+    assert_eq!(run.color.mode, ColorMode::Grayscale);
+    assert_eq!(d.text_styles.resolve_char(None, run.style_sheet, "").color, run.color);
+}
+
+/// A style colour the conversion leaves alone keeps its raw value, so it still matches the
+/// destination's equal style instead of coming in again as "Grey 1".
+#[test]
+fn an_unconverted_style_colour_still_matches_the_destinations_style() {
+    let grey = json!({"color": {"mode": "Grayscale", "c": [0.1000000001, 0.0, 0.0, 0.0], "alpha": 1.0}});
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
+    let text = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hello", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    let cs = s.execute("type.characterStyle.new", json!({"name": "Grey", "fromSelection": false, "attrs": grey})).unwrap()["id"].as_u64().unwrap();
+    s.execute("type.characterStyle.apply", json!({"id": cs, "layer": text, "range": [0, 5]})).unwrap();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    s.execute("image.mode.grayscale", json!({})).unwrap();
+    s.execute("type.characterStyle.new", json!({"name": "Grey", "fromSelection": false, "attrs": grey})).unwrap();
+    s.set_active(0);
+    s.execute("layer.copyToDocument", json!({"document": 1, "layers": [text]})).unwrap();
+    let names: Vec<_> = doc(&s, 1).text_styles.character.iter().map(|d| d.name.as_str()).collect();
+    assert_eq!(names, ["Grey"]);
+}
+
+#[test]
+fn a_layer_duplicated_into_a_new_document_keeps_its_named_styles() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100, "background": "transparent"})).unwrap();
+    let text = s.execute("type.create", json!({"x": 10, "y": 50, "text": "Hello", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    let cs = s.execute("type.characterStyle.new", json!({"name": "Source black 24", "fromSelection": false, "attrs": {"size": 24}})).unwrap()["id"]
+        .as_u64()
+        .unwrap();
+    s.execute("type.characterStyle.apply", json!({"id": cs, "layer": text, "range": [0, 5]})).unwrap();
+    let r = s.execute("layer.duplicate", json!({"layer": text, "document": "new"})).unwrap();
+    let d = doc(&s, r["document"].as_u64().unwrap() as usize);
+    assert_eq!(d.text_styles.char_style(cs as u32).unwrap().name, "Source black 24");
+}

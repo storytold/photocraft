@@ -756,6 +756,25 @@ fn convert_layer_colors(l: &mut Layer, cc: &mut dyn FnMut(&mut Color)) {
     }
 }
 
+/// Applies `cc` to the colour of every type style of `doc`, so a run whose overrides are cleared
+/// does not get back a colour of the old mode.
+fn convert_style_colors(doc: &mut Document, cc: &mut dyn FnMut(&mut Color)) {
+    let st = &mut doc.text_styles;
+    let sets = st.character.iter_mut().map(|d| &mut d.attrs).chain(st.paragraph.iter_mut().map(|d| &mut d.char_attrs)).chain([&mut st.basic.char_attrs]);
+    for v in sets.filter_map(|a| a.get_mut("color")) {
+        if let Ok(mut c) = serde_json::from_value::<Color>(v.clone()) {
+            let before = c;
+            cc(&mut c);
+            // An untouched colour keeps its raw value, so it still matches an equal raw style.
+            if c != before
+                && let Ok(n) = serde_json::to_value(c)
+            {
+                *v = n;
+            }
+        }
+    }
+}
+
 fn paint_colors(p: &mut FxPaint, cc: &mut dyn FnMut(&mut Color)) {
     match p {
         FxPaint::Color(c) => cc(c),
@@ -786,6 +805,7 @@ pub fn convert_document(doc: &mut Document, dst: &Profile, intent: Intent, bpc: 
         convert_layer_colors(l, &mut |c| convert_color(c, from_mode, to_mode, &t));
         // Preserved PSD blocks describing colours in the old mode no longer apply.
     }
+    convert_style_colors(doc, &mut |c| convert_color(c, from_mode, to_mode, &t));
     doc.mode = to_mode;
     doc.icc_profile = Some(dst.to_bytes());
     // Leaving Indexed / Duotone: the palette and inks no longer apply.
@@ -804,14 +824,16 @@ fn ink_duotone(doc: &mut Document) {
     }
     let Some(d) = doc.duotone.take_if(|d| !d.inks.is_empty()) else { return };
     crate::image_cmds::for_each_surface(&mut doc.layers, false, &mut |surf, _| *surf = ink_surface(surf, &d));
+    let mut ink = |c: &mut Color| {
+        if matches!(c.mode, ColorMode::Grayscale | ColorMode::Duotone) {
+            let [r, g, b] = d.render(c.c[0]);
+            *c = Color::rgba(r, g, b, c.alpha);
+        }
+    };
     for l in &mut doc.layers {
-        convert_layer_colors(l, &mut |c| {
-            if matches!(c.mode, ColorMode::Grayscale | ColorMode::Duotone) {
-                let [r, g, b] = d.render(c.c[0]);
-                *c = Color::rgba(r, g, b, c.alpha);
-            }
-        });
+        convert_layer_colors(l, &mut ink);
     }
+    convert_style_colors(doc, &mut ink);
     doc.mode = ColorMode::Rgb;
     doc.icc_profile = Some(Builtin::Srgb.profile().to_bytes());
 }
