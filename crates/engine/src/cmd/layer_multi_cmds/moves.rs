@@ -89,6 +89,12 @@ pub(crate) fn with_links(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
 /// vector content (shapes, linked vector masks) all move together. `before` is `doc` as it was
 /// before any of the moves (the edit's starting document), read when type and shapes re-render.
 pub(crate) fn move_layers(doc: &mut Document, before: &Document, moves: &[(LayerId, i32, i32)]) -> Result<()> {
+    move_layers_wrapped(doc, before, moves, None)
+}
+
+/// [`move_layers`]. `wrap` is the canvas when View › Pattern Preview is on: raster pixels that
+/// leave it come back on the opposite edge. The deltas are already reduced into one tile.
+pub(crate) fn move_layers_wrapped(doc: &mut Document, before: &Document, moves: &[(LayerId, i32, i32)], wrap: Option<photocraft_geom::Rect>) -> Result<()> {
     for &(id, dx, dy) in moves {
         if dx == 0 && dy == 0 {
             continue;
@@ -98,7 +104,7 @@ pub(crate) fn move_layers(doc: &mut Document, before: &Document, moves: &[(Layer
         if locks.position || locks.all {
             return Err(EngineError::Other(format!("layer \"{}\" is position-locked", l.name)));
         }
-        crate::commands::translate_layer(before, l, dx, dy);
+        crate::commands::translate_layer_wrapped(before, l, dx, dy, wrap);
         crate::vector_cmds::translate_vectors(before, l, dx as f64, dy as f64);
     }
     Ok(())
@@ -149,7 +155,20 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(EngineError::Other("no active layer".into()));
     }
     let mask_target = p.get("target").and_then(Value::as_str) == Some("mask");
+    let wrap = match p.get("wrap") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(v)) => *v,
+        Some(_) => return Err(bad("layer.translate", "`wrap` must be a boolean")),
+    };
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    let tile = wrap.then(|| before.bounds());
+    let (dx, dy) = match tile {
+        Some(tile) => wrapped_delta(dx, dy, tile),
+        None => (dx, dy),
+    };
+    if dx == 0 && dy == 0 {
+        return Ok(Value::Null);
+    }
     s.edit("Move", |doc, _| {
         let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().partition(|id| mask_target && doc.layer(**id).is_some_and(moves_mask_alone));
         let mut ids = move_targets(doc, &rest);
@@ -157,7 +176,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
             return Err(EngineError::NoLayer(roots[0]));
         }
         let moves: Vec<_> = ids.iter().map(|&id| (id, dx, dy)).collect();
-        move_layers(doc, &before, &moves)?;
+        move_layers_wrapped(doc, &before, &moves, tile)?;
         for id in alone {
             let locks = doc.effective_locks(id);
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -165,7 +184,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
                 return Err(EngineError::Other(format!("layer \"{}\" is position-locked", l.name)));
             }
             if let Some(m) = &mut l.mask {
-                m.surface = shift_surface(&m.surface, dx, dy);
+                m.surface = move_surface(&m.surface, dx, dy, tile);
             }
             ids.push(id);
         }
@@ -176,7 +195,7 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
         // The Move tool carries the selection along when it moves several layers whole, as
         // Photoshop does (#7538): one step, so Undo takes both back.
         if carry {
-            doc.selection = doc.selection.as_ref().map(|sel| shift_surface(sel, dx, dy));
+            doc.selection = doc.selection.as_ref().map(|sel| move_surface(sel, dx, dy, tile));
         }
         Ok(ids)
     })?;
@@ -199,6 +218,16 @@ pub fn moved(doc: &Document, ids: &[LayerId], dx: i32, dy: i32) -> Result<Docume
 
 /// [`moved`] for a drag aimed at the layer mask (`mask_target`): unlinked masks move alone.
 pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_target: bool) -> Result<Document> {
+    moved_wrapping(doc, ids, dx, dy, mask_target, None)
+}
+
+/// [`moved_target`] that wraps raster pixels inside `tile` (View › Pattern Preview). `None`
+/// is a straight move. Deltas are reduced into one tile here, matching `layer.translate`.
+pub fn moved_wrapping(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_target: bool, wrap: Option<photocraft_geom::Rect>) -> Result<Document> {
+    let (dx, dy) = match wrap {
+        Some(tile) => wrapped_delta(dx, dy, tile),
+        None => (dx, dy),
+    };
     let mut out = doc.clone();
     for &id in ids {
         let locks = doc.effective_locks(id);
@@ -208,13 +237,20 @@ pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_targ
         }
         if mask_target && moves_mask_alone(l) {
             if let Some(m) = &mut l.mask {
-                m.surface = shift_surface(&m.surface, dx, dy);
+                m.surface = move_surface(&m.surface, dx, dy, wrap);
             }
             continue;
         }
-        shift_shown(doc, l, dx, dy);
+        shift_shown(doc, l, dx, dy, wrap);
     }
     Ok(out)
+}
+
+/// `dx` and `dy` reduced into one `tile`, so a move of exactly the canvas is no move. A tile
+/// with no extent leaves the delta unchanged.
+pub fn wrapped_delta(dx: i32, dy: i32, tile: photocraft_geom::Rect) -> (i32, i32) {
+    let Some((w, h)) = tile_period(tile) else { return (dx, dy) };
+    (wrap_axis(dx, w), wrap_axis(dy, h))
 }
 
 /// `photocraft_algo::resample::translate_surface` with the content scan cached per tile (a Move
@@ -224,20 +260,21 @@ pub(crate) fn shift_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32) ->
 }
 
 /// [`crate::commands::translate_layer`] plus the vector side, without re-rendering anything.
-fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
+/// `wrap` matches the commit: raster pixels fold back into the canvas.
+fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<photocraft_geom::Rect>) {
     use self::shift_surface as translate_surface;
     let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
     if let Some(r) = &mut l.effects.reference {
         *r = (r.0 + f64::from(dx), r.1 + f64::from(dy));
     }
     if let Some(m) = l.mask.as_mut().filter(|m| m.linked) {
-        m.surface = translate_surface(&m.surface, dx, dy);
+        m.surface = move_surface(&m.surface, dx, dy, wrap);
     }
     if let Some(vm) = l.vector_mask.as_mut().filter(|v| v.linked) {
         vm.path = vm.path.transform(&a);
     }
     match &mut l.content {
-        LayerContent::Raster(s) => *s = translate_surface(s, dx, dy),
+        LayerContent::Raster(s) => *s = move_surface(s, dx, dy, wrap),
         LayerContent::Text(t) => {
             t.transform = a.mul(&t.transform);
             if let Some(c) = &mut t.cache {
@@ -250,10 +287,131 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
             if let Some(ab) = &mut g.artboard {
                 ab.rect = ab.rect.translate(dx, dy);
             }
-            g.children.iter_mut().for_each(|c| shift_shown(doc, c, dx, dy));
+            g.children.iter_mut().for_each(|c| shift_shown(doc, c, dx, dy, wrap));
         }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
     }
+}
+
+fn move_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32, wrap: Option<photocraft_geom::Rect>) -> photocraft_raster::Surface {
+    match wrap {
+        Some(tile) => wrap_surface(s, dx, dy, tile),
+        None => shift_surface(s, dx, dy),
+    }
+}
+
+fn tile_period(tile: photocraft_geom::Rect) -> Option<(i32, i32)> {
+    let w = i32::try_from(tile.width()).ok()?;
+    let h = i32::try_from(tile.height()).ok()?;
+    (w > 0 && h > 0).then_some((w, h))
+}
+
+fn wrap_axis(delta: i32, period: i32) -> i32 {
+    i64::from(delta).rem_euclid(i64::from(period)) as i32
+}
+
+/// Move `s` by whole pixels, folding samples that start inside `tile` back into it. Samples
+/// already outside the tile stay where they are. A shift that never leaves the tile is an
+/// ordinary move. Anything we cannot copy exactly falls back to that ordinary move.
+pub(crate) fn wrap_surface(s: &photocraft_raster::Surface, dx: i32, dy: i32, tile: photocraft_geom::Rect) -> photocraft_raster::Surface {
+    let Some((w, h)) = tile_period(tile) else { return shift_surface(s, dx, dy) };
+    let dx = wrap_axis(dx, w);
+    let dy = wrap_axis(dy, h);
+    if dx == 0 && dy == 0 {
+        return s.clone();
+    }
+    let inside = photocraft_compose::bounds::content_bounds(s).intersect(&tile);
+    if inside.is_empty() {
+        return shift_surface(s, dx, dy);
+    }
+    let moved = inside.translate(dx, dy);
+    if tile.contains_rect(&moved) {
+        return shift_surface(s, dx, dy);
+    }
+    let bpp = s.format().bytes_per_pixel();
+    let bytes = match encoded_len(inside, bpp) {
+        Some(_) => s.to_interleaved(inside),
+        None => return shift_surface(s, dx, dy),
+    };
+    let pieces = wrap_pieces(inside, dx, dy, tile, w, h);
+    let mut chunks = Vec::with_capacity(pieces.len());
+    for (dest, from) in pieces {
+        let Some(chunk) = slice_encoded(&bytes, inside, from, bpp) else { return shift_surface(s, dx, dy) };
+        if encoded_len(dest, bpp) != Some(chunk.len()) {
+            return shift_surface(s, dx, dy);
+        }
+        chunks.push((dest, chunk));
+    }
+    let mut out = s.clone();
+    out.fill_rect(inside, &s.default_pixel());
+    for (dest, chunk) in chunks {
+        out.write_interleaved(dest, &chunk);
+    }
+    out.prune();
+    out
+}
+
+fn encoded_len(r: photocraft_geom::Rect, bpp: usize) -> Option<usize> {
+    let w = usize::try_from(r.width()).ok()?;
+    let h = usize::try_from(r.height()).ok()?;
+    w.checked_mul(h)?.checked_mul(bpp)
+}
+
+/// `(destination inside the tile, source rect inside `src`)` for a non-negative `dx`/`dy`
+/// smaller than the tile.
+fn wrap_pieces(
+    src: photocraft_geom::Rect,
+    dx: i32,
+    dy: i32,
+    tile: photocraft_geom::Rect,
+    w: i32,
+    h: i32,
+) -> Vec<(photocraft_geom::Rect, photocraft_geom::Rect)> {
+    use photocraft_geom::Rect;
+    let moved = src.translate(dx, dy);
+    let zones = [
+        (tile, 0, 0),
+        (Rect::new(tile.x1, tile.y0, tile.x1.saturating_add(w), tile.y1), -w, 0),
+        (Rect::new(tile.x0, tile.y1, tile.x1, tile.y1.saturating_add(h)), 0, -h),
+        (Rect::new(tile.x1, tile.y1, tile.x1.saturating_add(w), tile.y1.saturating_add(h)), -w, -h),
+    ];
+    let mut out = Vec::new();
+    for (zone, sx, sy) in zones {
+        let part = moved.intersect(&zone);
+        if part.is_empty() {
+            continue;
+        }
+        let from = part.translate(-dx, -dy);
+        let dest = part.translate(sx, sy);
+        if from.is_empty() || dest.is_empty() {
+            continue;
+        }
+        out.push((dest, from));
+    }
+    out
+}
+
+fn slice_encoded(bytes: &[u8], src: photocraft_geom::Rect, from: photocraft_geom::Rect, bpp: usize) -> Option<Vec<u8>> {
+    if from.is_empty() || bpp == 0 || !src.contains_rect(&from) {
+        return None;
+    }
+    let sw = usize::try_from(src.width()).ok()?;
+    let fw = usize::try_from(from.width()).ok()?;
+    let fh = usize::try_from(from.height()).ok()?;
+    let row = fw.checked_mul(bpp)?;
+    let total = row.checked_mul(fh)?;
+    let x0 = usize::try_from(from.x0.checked_sub(src.x0)?).ok()?;
+    let y0 = usize::try_from(from.y0.checked_sub(src.y0)?).ok()?;
+    let mut out = vec![0u8; total];
+    for row_i in 0..fh {
+        let sy = y0.checked_add(row_i)?;
+        let src_off = sy.checked_mul(sw)?.checked_add(x0)?.checked_mul(bpp)?;
+        let dst_off = row_i.checked_mul(row)?;
+        let src_end = src_off.checked_add(row)?;
+        let dst_end = dst_off.checked_add(row)?;
+        out.get_mut(dst_off..dst_end)?.copy_from_slice(bytes.get(src_off..src_end)?);
+    }
+    Some(out)
 }
 
 /// Reorder one or multiple layers to a single destination in one undoable edit.
