@@ -132,7 +132,29 @@ pub fn sky_mask_low(img: &RgbImage, threshold: f32) -> Option<Vec<bool>> {
         }
     }
     let mask = clean_mask(&mask, w, h, 0.002, 0.01);
+    if is_backdrop(img, &mask, top) {
+        return None;
+    }
     mask.iter().any(|v| *v).then_some(mask)
+}
+
+/// A neutral region that also covers most of the bottom rows is a studio or product backdrop,
+/// not an overcast sky (which never reaches the bottom of a photo); blue sky is never one.
+fn is_backdrop(img: &RgbImage, mask: &[bool], rows: usize) -> bool {
+    let (w, h) = (img.w, img.h);
+    let bottom = (h - rows.min(h)) * w..h * w;
+    let Some(bottom_rows) = mask.get(bottom) else { return false };
+    let covered = bottom_rows.iter().filter(|m| **m).count();
+    if covered * 10 < bottom_rows.len() * 6 {
+        return false;
+    }
+    let (mut sat, mut n) = (0.0f32, 0usize);
+    for (p, _) in img.px.iter().zip(mask).filter(|(_, m)| **m) {
+        let (mx, mn) = (p[0].max(p[1]).max(p[2]), p[0].min(p[1]).min(p[2]));
+        sat += if mx > 1e-4 { (mx - mn) / mx } else { 0.0 };
+        n += 1;
+    }
+    n > 0 && sat / (n as f32) < 0.1
 }
 
 /// Selects the sky over `canvas`. `None` if no sky was found.
@@ -267,6 +289,18 @@ mod tests {
         let img = RgbImage::from_fn(64, 64, |_, y| if y < 30 { [0.85, 0.86, 0.88] } else { [0.2, 0.3, 0.1] });
         let r = select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 64, 64), SkyParams::default()).expect("sky");
         assert!(r.at(30, 10) > 0.9 && r.at(30, 50) < 0.1);
+    }
+
+    /// #4634: a near-white studio backdrop around a product is not an overcast sky, but blue sky
+    /// reaching the bottom (a photo taken upward) still is.
+    #[test]
+    fn a_white_backdrop_is_not_sky_but_a_blue_sky_down_to_the_bottom_is() {
+        let disc = |x: usize, y: usize| ((x as f32 - 75.0).powi(2) + (y as f32 - 50.0).powi(2)).sqrt() < 30.0;
+        let img = RgbImage::from_fn(150, 100, |x, y| if disc(x, y) { [0.12, 0.12, 0.12] } else { [0.95, 0.95, 0.94] });
+        assert!(select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 150, 100), SkyParams::default()).is_none());
+        let img = RgbImage::from_fn(150, 100, |x, y| if disc(x, y) { [0.12, 0.3, 0.1] } else { [0.35, 0.6, 0.95] });
+        let r = select_sky(&ImageSampler { img: &img, origin: (0, 0) }, Rect::new(0, 0, 150, 100), SkyParams::default()).expect("blue sky");
+        assert!(r.at(5, 95) > 0.9 && r.at(75, 50) < 0.1);
     }
 
     #[test]

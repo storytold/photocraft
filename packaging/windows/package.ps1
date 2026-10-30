@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Produces, in $env:DIST (default: dist/release):
-    photocraft-<version>-windows-<arch>.msi            per-machine installer (WiX v5)
+    photocraft-<version>-windows-<arch>.msi            installer (WiX v5, per-user by default, per-machine optional)
     photocraft-<version>-windows-<arch>-portable.zip   photocraft.exe + photocraft-cli.exe + portable.txt
 
   The binaries link the C runtime statically (+crt-static), so neither the MSI nor the portable
@@ -91,6 +91,21 @@ Copy-Item (Join-Path $Bin 'photocraft.exe'), (Join-Path $Bin 'photocraft-cli.exe
 
 & (Join-Path $PSScriptRoot 'sign.ps1') (Join-Path $Stage 'photocraft.exe') (Join-Path $Stage 'photocraft-cli.exe')
 
+# ---- font notices for the MSI ------------------------------------------------------------------
+# The portable ZIP already carries these notices; stage the complete files before MSI creation too.
+$Docs = Join-Path $Stage 'font-licences'
+New-Item -ItemType Directory -Force -Path $Docs | Out-Null
+# The existing MSI document group also carries notices for bundled egui font inputs.
+Copy-Item -LiteralPath (Join-Path $Root 'NOTICE'), (Join-Path $Root 'ATTRIBUTION.md') -Destination $Docs
+$HasCraftFontLicences = 1
+if ($env:CRAFT_FONTS_DIR) {
+  foreach ($ofl in Get-ChildItem -Path (Join-Path $env:CRAFT_FONTS_DIR 'fonts\*\OFL.txt') -File -ErrorAction SilentlyContinue) {
+    Copy-Item -LiteralPath $ofl.FullName -Destination (Join-Path $Docs "OFL-$($ofl.Directory.Name).txt")
+    $HasCraftFontLicences = 1
+  }
+}
+# ---- end font notices for the MSI --------------------------------------------------------------
+
 # ---- MSI ---------------------------------------------------------------------------------------
 # The setup wizard's art, drawn here from the app icon so the MSI shows PhotoCraft rather than
 # WiX's stock bitmaps: a 493x58 banner across the top of the inner pages (the page title is drawn
@@ -137,11 +152,15 @@ Invoke-Native 'wix build' {
     -culture en-US -loc (Join-Path $PSScriptRoot 'photocraft.en-us.wxl') `
     -d "Version=$MsiVersion" -d "DisplayVersion=$Version" -d "BinDir=$Stage" -d "IconPath=$(Join-Path $Root 'assets\app-icon\photocraft.ico')" `
     -d "BannerBmp=$Banner" -d "DialogBmp=$Dialog" `
+    -d "DocsDir=$Docs" -d "HasCraftFontLicences=$HasCraftFontLicences" `
     -o $Msi
 }
 Invoke-Native 'MSI shortcut icon validation (ICE50)' {
   wix msi validate $Msi -ice ICE50 -intermediateFolder (Join-Path $Stage 'msi-validation')
 }
+# Inspect the compiled tables and evaluate the duplicate guards with Windows Installer.
+# ICE validation alone cannot catch a well-formed condition with its meaning reversed.
+& (Join-Path $PSScriptRoot 'check-install-policy.ps1') -MsiPath $Msi
 # wix writes its debug symbols (.wixpdb) next to the MSI; keep them out of the release assets.
 Remove-Item -Force -ErrorAction SilentlyContinue ([IO.Path]::ChangeExtension($Msi, '.wixpdb'))
 & (Join-Path $PSScriptRoot 'sign.ps1') $Msi
@@ -151,7 +170,7 @@ $Portable = Join-Path $TargetDir "windows-package\photocraft-$Version-windows-$A
 Remove-Item -Recurse -Force $Portable -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force -Path $Portable | Out-Null
 Copy-Item (Join-Path $Stage '*.exe') $Portable
-foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE') {
+foreach ($f in 'README.md', 'LICENSE', 'LICENSE-MIT', 'LICENSE-APACHE', 'NOTICE', 'ATTRIBUTION.md') {
   $p = Join-Path $Root $f
   if (Test-Path $p) { Copy-Item $p $Portable }
 }

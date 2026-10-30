@@ -11,7 +11,7 @@ use crate::theme::{ThemeKind, Tokens};
 const SIZE: egui::Vec2 = vec2(900.0, 200.0);
 
 fn bottom_id() -> egui::Id {
-    egui::Id::new("status-bar-test-bottom")
+    egui::Id::unique("status-bar-test-bottom")
 }
 
 fn harness(kind: ThemeKind) -> Harness<'static, PhotocraftApp> {
@@ -195,4 +195,26 @@ fn fullscreen_status_zoom_preserves_shift_precision_and_recovers_from_the_minimu
     h.hover_at(next + vec2(20.0, 0.0));
     h.run_steps(1);
     assert!(h.state().ui.views[0].zoom > minimum, "reversing direction responds immediately after reaching a bound");
+}
+
+/// #5016: toggling appearance between dark and light with default settings preserves the Pro
+/// layout and does not make a Fit button appear.
+#[test]
+fn appearance_toggle_preserves_pro_layout_and_has_no_fit_button() {
+    let mut h = harness(ThemeKind::ProMedium);
+    assert!(h.query_by_label("Fit").is_none());
+    assert!(Tokens::get(&h.ctx).pro);
+
+    // Switch to Light mode (top-bar appearance button).
+    let ctx = h.ctx.clone();
+    crate::prefs_ui::cycle_appearance(h.state_mut(), &ctx);
+    if h.state().session.prefs().interface.appearance_mode == photocraft_engine::prefs::AppearanceMode::Auto {
+        crate::prefs_ui::cycle_appearance(h.state_mut(), &ctx);
+    }
+    crate::prefs_ui::tick(h.state_mut(), &ctx);
+    h.run_steps(3);
+    assert_eq!(h.state().session.prefs().interface.appearance_mode, photocraft_engine::prefs::AppearanceMode::Light);
+    assert_eq!(h.state().ui.theme, ThemeKind::ProLight);
+    assert!(Tokens::get(&h.ctx).pro);
+    assert!(h.query_by_label("Fit").is_none(), "Fit button must not appear in light mode (#5016)");
 }

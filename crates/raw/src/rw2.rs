@@ -1,5 +1,6 @@
-//! Panasonic / Leica RW2 with the bit-packed sensor layout (PanasonicRaw
-//! RawFormat 5, written by recent Lumix bodies).
+//! Panasonic / Leica RW2: the bit-packed stream of recent Lumix bodies
+//! (PanasonicRaw RawFormat 5) and the vendor-compressed stream of the earlier
+//! ones (RawFormat 3 and 4).
 //!
 //! The container is TIFF-like (`IIU\0`); IFD0 holds Panasonic's own tags,
 //! whose ids and meanings are public (ExifTool's PanasonicRaw table):
@@ -9,7 +10,7 @@
 //! WB{Red,Green,Blue}Level (0x24–0x26), RawFormat (0x2D) and RawDataOffset
 //! (0x118).
 //!
-//! The packing was established by observation of sample files:
+//! RawFormat 5 — the packing was established by observation of sample files:
 //!
 //! * From RawDataOffset the data is stored in pages of 0x4000 bytes, each
 //!   page split at 0x1FF8 with its second part first (the logical page is
@@ -19,8 +20,26 @@
 //!   the least significant bit up, the remaining top bits unused; rows are
 //!   whole blocks.
 //!
-//! The older RawFormat 4 (and earlier) store vendor-compressed data, which is
-//! not decoded.
+//! RawFormat 3 and 4 — the vendor-compressed layout, also established by
+//! observation of sample files (verified by decoding whole frames against the
+//! camera's embedded JPEG and the recorded levels):
+//!
+//! * The payload at RawDataOffset is a fixed-rate stream: 16 bytes per 14
+//!   pixels, so a row occupies `width / 14 * 16` bytes and rows are
+//!   byte-aligned. Bits are consumed down from the top of each 0x4000-byte
+//!   page, through the same page split as RawFormat 5 (`(i + 0x4000 - 0x2008)
+//!   % 0x4000`), reading fields LSB-first from the little-endian 16-bit word
+//!   the cursor points at.
+//! * Pixels arrive in groups of 14 with two predictors carried over from one
+//!   group to the next (even and odd columns). Every third pixel carries a
+//!   2-bit scale selector `sh` (0, 1, 2 or 4). The first value of each parity
+//!   is absolute (8 + 4 bits); the rest are 8-bit deltas around 0x80 scaled
+//!   by `sh`, wrapping in the low `sh` bits.
+//! * The decoded samples sit 15 counts above the recorded BlackLevel tags
+//!   (measured on the darkest pixels of sample files), so 15 is added when
+//!   they are read.
+//!
+//! Every other RawFormat value is not decoded.
 
 use crate::error::{RawError, Result};
 use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
@@ -44,6 +63,8 @@ const RAW_DATA_OFFSET: u16 = 0x0118;
 /// Page size and split point of the stored stream (observed).
 const PAGE: usize = 0x4000;
 const SPLIT: usize = 0x1FF8;
+/// Byte split of the vendor-compressed stream (observed).
+const COMPRESSED_SPLIT: usize = 0x2008;
 
 /// Physical offset (relative to RawDataOffset) of logical byte `i`.
 #[inline]
@@ -75,34 +96,13 @@ pub(crate) fn unpack_block(b: &[u8; 16], bits: u32, out: &mut [u16]) {
     }
 }
 
-pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
-    let ifd = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("RW2 has no IFD0"))?;
-    let raw_format = t.tag_uint(&ifd, RAW_FORMAT);
-    if raw_format != Some(5) {
-        let f = raw_format.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into());
-        return Err(RawError::unsupported(format!("Panasonic RW2 raw format {f} (vendor-compressed) is not decoded yet")));
-    }
-    let width = t.tag_uint(&ifd, SENSOR_WIDTH).ok_or_else(|| RawError::malformed("RW2 has no sensor width"))? as usize;
-    let height = t.tag_uint(&ifd, SENSOR_HEIGHT).ok_or_else(|| RawError::malformed("RW2 has no sensor height"))? as usize;
-    let bits = t.tag_uint(&ifd, BITS_PER_SAMPLE).unwrap_or(12);
+/// Reads the bit-packed RawFormat 5 stream (`src` starts at RawDataOffset).
+fn decode_packed(src: &[u8], width: usize, height: usize, bits: u32) -> Result<Vec<u16>> {
     let ppb = pixels_per_block(bits).ok_or_else(|| RawError::unsupported(format!("Panasonic RW2 with {bits}-bit samples")))?;
     if !width.is_multiple_of(ppb) {
         return Err(RawError::unsupported(format!("Panasonic RW2 {width} pixels wide (not whole {ppb}-pixel blocks)")));
     }
-    limits.check(width as u64, height as u64, 2)?;
-    let cfa = match t.tag_uint(&ifd, CFA_PATTERN) {
-        Some(1) => "RGGB",
-        Some(2) => "GRBG",
-        Some(3) => "GBRG",
-        Some(4) => "BGGR",
-        _ => return Err(RawError::unsupported("Panasonic RW2 without a CFA pattern")),
-    };
-    let cfa = Cfa::bayer(cfa).ok_or_else(|| RawError::malformed("bad CFA"))?;
-    let offset =
-        t.tag_uint(&ifd, RAW_DATA_OFFSET).or_else(|| t.tag_uint(&ifd, tag::STRIP_OFFSETS)).ok_or_else(|| RawError::malformed("RW2 has no raw data offset"))?
-            as usize;
     let row_bytes = width / ppb * 16;
-    let src = t.data.get(offset..).ok_or_else(|| RawError::malformed("RW2 raw data lies outside the file"))?;
     let need = row_bytes * height;
     // Whole pages are stored; tolerate a short final page (its missing bytes read as 0).
     if src.len() < need.saturating_sub(PAGE) {
@@ -124,11 +124,145 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
             }
         }
     });
+    Ok(data)
+}
+
+/// LSB-first bit cursor of the vendor-compressed stream: it walks down from
+/// the top of each 0x4000-byte page (addressed through `COMPRESSED_SPLIT`)
+/// and refills by advancing one page.
+struct Bits<'a> {
+    buf: &'a [u8],
+    base: usize,
+    pos: usize,
+    nbits: u32,
+}
+
+impl<'a> Bits<'a> {
+    #[cfg(test)]
+    fn new(buf: &'a [u8], base: usize) -> Self {
+        Bits { buf, base, pos: 0, nbits: 0 }
+    }
+
+    /// Positions the cursor `skip_in_page` bytes into the page at `base`, in constant time.
+    /// Equivalent to `new(buf, base)` followed by `skip_in_page` calls of `get(8)`: the first
+    /// read loads one page (`pos = PAGE`), and each byte skipped consumes 8 bits. Narrow images
+    /// repeated this replay per row, which made cursor setup quadratic.
+    fn new_at(buf: &'a [u8], base: usize, skip_in_page: usize) -> Self {
+        debug_assert!(skip_in_page < PAGE);
+        Bits { buf, base, pos: PAGE, nbits: PAGE as u32 * 8 - 8 * skip_in_page as u32 }
+    }
+
+    #[inline]
+    fn get(&mut self, num: u32) -> u32 {
+        if num > self.nbits {
+            self.nbits += PAGE as u32 * 8;
+            self.pos += PAGE;
+        }
+        let mut at = ((self.nbits - num) >> 3) as usize ^ 0x3FF0;
+        at = (at + PAGE - COMPRESSED_SPLIT) % PAGE;
+        let at = self.base + at + self.pos - PAGE;
+        self.nbits -= num;
+        // Out-of-range reads (a page short at the end of the file) read as 0.
+        let lo = u32::from(self.buf.get(at).copied().unwrap_or(0));
+        let hi = u32::from(self.buf.get(at + 1).copied().unwrap_or(0));
+        ((lo | (hi << 8)) >> (self.nbits & 7)) & ((1u32 << num) - 1)
+    }
+}
+
+/// Decodes one row of the vendor-compressed stream.
+fn compressed_row(buf: &[u8], row_bytes: usize, row: usize, out: &mut [u16]) {
+    let skip = row_bytes * row;
+    let mut bits = Bits::new_at(buf, skip / PAGE * PAGE, skip % PAGE);
+    let mut sh: i32 = 0;
+    for group in out.as_chunks_mut::<14>().0 {
+        let mut pred = [0i32; 2];
+        let mut nonz = [0i32; 2];
+        for (i, px) in group.iter_mut().enumerate() {
+            if i % 3 == 2 {
+                sh = 4 >> (3 - bits.get(2));
+            }
+            let p = i & 1;
+            if nonz[p] != 0 {
+                let j = bits.get(8) as i32;
+                if j != 0 {
+                    pred[p] -= 0x80 << sh;
+                    if pred[p] < 0 || sh == 4 {
+                        pred[p] &= !(-1 << sh);
+                    }
+                    pred[p] += j << sh;
+                }
+            } else {
+                nonz[p] = bits.get(8) as i32;
+                if nonz[p] != 0 || i > 11 {
+                    pred[p] = (nonz[p] << 4) | bits.get(4) as i32;
+                }
+            }
+            *px = pred[p] as u16;
+        }
+    }
+}
+
+/// Reads the vendor-compressed RawFormat 3/4 stream (`src` starts at
+/// RawDataOffset).
+fn decode_compressed(src: &[u8], width: usize, height: usize, bits: u32) -> Result<Vec<u16>> {
+    if bits != 12 {
+        return Err(RawError::unsupported(format!("Panasonic RW2 with {bits}-bit compressed samples")));
+    }
+    if !width.is_multiple_of(14) {
+        return Err(RawError::unsupported(format!("Panasonic RW2 {width} pixels wide (not whole 14-pixel blocks)")));
+    }
+    let row_bytes = width / 14 * 16;
+    let need = row_bytes * height;
+    // Whole pages are stored; tolerate a short final page (its missing bytes read as 0).
+    if src.len() < need.saturating_sub(PAGE) {
+        return Err(RawError::malformed("RW2 raw data is truncated"));
+    }
+    let mut data = vec![0u16; width * height];
+    let band = par::band_rows(width);
+    par::chunks_mut(&mut data, band * width, |i, chunk| {
+        for (r, out) in chunk.chunks_exact_mut(width).enumerate() {
+            compressed_row(src, row_bytes, i * band + r, out);
+        }
+    });
+    Ok(data)
+}
+
+pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
+    let ifd = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("RW2 has no IFD0"))?;
+    let raw_format = t.tag_uint(&ifd, RAW_FORMAT);
+    let compressed = match raw_format {
+        Some(5) => false,
+        Some(3 | 4) => true,
+        other => {
+            let f = other.map(|v| v.to_string()).unwrap_or_else(|| "unknown".into());
+            return Err(RawError::unsupported(format!("Panasonic RW2 raw format {f} (vendor-compressed) is not decoded yet")));
+        }
+    };
+    let width = t.tag_uint(&ifd, SENSOR_WIDTH).ok_or_else(|| RawError::malformed("RW2 has no sensor width"))? as usize;
+    let height = t.tag_uint(&ifd, SENSOR_HEIGHT).ok_or_else(|| RawError::malformed("RW2 has no sensor height"))? as usize;
+    limits.check(width as u64, height as u64, 2)?;
+    let bits = t.tag_uint(&ifd, BITS_PER_SAMPLE).unwrap_or(12);
+    let cfa = match t.tag_uint(&ifd, CFA_PATTERN) {
+        Some(1) => "RGGB",
+        Some(2) => "GRBG",
+        Some(3) => "GBRG",
+        Some(4) => "BGGR",
+        _ => return Err(RawError::unsupported("Panasonic RW2 without a CFA pattern")),
+    };
+    let cfa = Cfa::bayer(cfa).ok_or_else(|| RawError::malformed("bad CFA"))?;
+    let offset =
+        t.tag_uint(&ifd, RAW_DATA_OFFSET).or_else(|| t.tag_uint(&ifd, tag::STRIP_OFFSETS)).ok_or_else(|| RawError::malformed("RW2 has no raw data offset"))?
+            as usize;
+    let src = t.data.get(offset..).ok_or_else(|| RawError::malformed("RW2 raw data lies outside the file"))?;
+    let data = if compressed { decode_compressed(src, width, height, bits)? } else { decode_packed(src, width, height, bits)? };
 
     let full = Rect::new(0, 0, width, height);
     let level = |tg: u16| t.tag_uint(&ifd, tg).map(f64::from);
     let mut warnings = Vec::new();
-    let black = match BLACK_LEVEL.map(level) {
+    // The compressed variants record a black level 15 counts below the decoded black.
+    let black_offset = if compressed { 15.0 } else { 0.0 };
+    let black_level = |tg: u16| t.tag_uint(&ifd, tg).map(|v| f64::from(v) + black_offset);
+    let black = match BLACK_LEVEL.map(black_level) {
         [Some(r), Some(g), Some(b)] => {
             let v = cfa.phase(0, 0).map(|c| [r, g, b][usize::from(c).min(2)] as f32);
             BlackLevels { rows: 2, cols: 2, values: v.to_vec(), delta_h: Vec::new(), delta_v: Vec::new() }
@@ -203,5 +337,100 @@ mod tests {
         unpack_block(&[0xFF; 16], 14, &mut out);
         assert_eq!(&out[..9], &[0x3FFF; 9]);
         assert_eq!(&out[9..], &[0; 3]);
+    }
+
+    #[test]
+    fn compressed_bits_walk_down_pages() {
+        // A fresh cursor reads the word at 0x2007 first (the top of the first
+        // page under the compressed split), then walks down.
+        let mut buf = vec![0u8; 0x4000];
+        buf[0x2007] = 0xAC;
+        buf[0x2008] = 0x03;
+        buf[0x2006] = 0x11;
+        buf[0x2017] = 0x55;
+        // A 4-bit field starts in the high nibble of the top word.
+        let mut b = Bits::new(&buf, 0);
+        assert_eq!(b.get(4), 0xA);
+        let mut b = Bits::new(&buf, 0);
+        assert_eq!(b.get(8), 0xAC);
+        assert_eq!(b.get(8), 0x11);
+        // 16 bytes later the cursor wraps to the end of the next 16-byte run.
+        for _ in 0..14 {
+            b.get(8);
+        }
+        assert_eq!(b.get(8), 0x55);
+    }
+
+    #[test]
+    fn new_at_matches_byte_replay() {
+        // new_at must position the cursor identically to new() followed by skip_in_page
+        // get(8) calls, so the quadratic per-row replay can be removed safely.
+        let mut buf = vec![0u8; 0x8000];
+        for (i, b) in buf.iter_mut().enumerate() {
+            *b = (i * 7 + 3) as u8;
+        }
+        for base in [0usize, PAGE, 2 * PAGE] {
+            for skip in [0usize, 1, 7, 100, PAGE - 1] {
+                let mut replay = Bits::new(&buf, base);
+                for _ in 0..skip {
+                    replay.get(8);
+                }
+                let mut direct = Bits::new_at(&buf, base, skip);
+                for _ in 0..20 {
+                    assert_eq!(replay.get(5), direct.get(5), "base {base} skip {skip}");
+                    assert_eq!(replay.get(8), direct.get(8), "base {base} skip {skip}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn compressed_group_walks_predictors() {
+        // One 14-pixel group: both parities start absolute, a delta of 0x80
+        // keeps their value, and the scale selector is written before the
+        // delta of every third pixel. The test writer mirrors `Bits` so the
+        // fields land where the decoder reads them.
+        let mut buf = vec![0u8; 0x4000];
+        {
+            let mut w = TestWriter { buf: &mut buf, pos: 0, nbits: 0 };
+            w.put(0x10, 8);
+            w.put(0x5, 4);
+            w.put(0x2A, 8);
+            w.put(0xA, 4);
+            for i in 2..14 {
+                if i % 3 == 2 {
+                    w.put(0, 2);
+                }
+                w.put(0x80, 8);
+            }
+        }
+        let mut out = [0u16; 14];
+        compressed_row(&buf, 16, 0, &mut out);
+        assert_eq!(out, [0x105, 0x2AA, 0x105, 0x2AA, 0x105, 0x2AA, 0x105, 0x2AA, 0x105, 0x2AA, 0x105, 0x2AA, 0x105, 0x2AA]);
+    }
+
+    /// Mirror of [`Bits`] for unit tests: deposits fields where the reader
+    /// will pick them up.
+    struct TestWriter<'a> {
+        buf: &'a mut [u8],
+        pos: usize,
+        nbits: u32,
+    }
+
+    impl TestWriter<'_> {
+        fn put(&mut self, v: u32, num: u32) {
+            if num > self.nbits {
+                self.nbits += PAGE as u32 * 8;
+                self.pos += PAGE;
+            }
+            let mut at = ((self.nbits - num) >> 3) as usize ^ 0x3FF0;
+            at = (at + PAGE - COMPRESSED_SPLIT) % PAGE;
+            let at = at + self.pos - PAGE;
+            self.nbits -= num;
+            let cur = u32::from(self.buf[at]) | (u32::from(self.buf[at + 1]) << 8);
+            let cur = cur | ((v & ((1 << num) - 1)) << (self.nbits & 7));
+            self.buf[at] = cur as u8;
+            self.buf[at + 1] = (cur >> 8) as u8;
+        }
     }
 }

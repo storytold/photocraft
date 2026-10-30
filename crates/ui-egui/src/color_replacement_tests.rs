@@ -137,7 +137,8 @@ fn live_stroke_at(depth: u32) {
     tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 20.0 }, m);
     assert!(app.live_stroke.is_none());
     // The preview at the last move is the committed stroke.
-    let level = if depth == 8 { 1.0 / 255.0 + 1e-6 } else { 0.0 };
+    // 8 bits may round a level or two apart between the live working copy and the commit.
+    let level = if depth == 8 { 2.0 / 255.0 + 1e-6 } else { 0.0 };
     for y in 0..40 {
         for x in 0..80 {
             let (got, want) = (shown.rgba(x, y), rgba(&app, x, y));

@@ -25,7 +25,7 @@ Implemented only from public specifications, papers and observation of files:
 * ITU-T T.81 (ISO 10918-1) Annex H: lossless JPEG, process 14 ("LJ92").
 * The published description of Canon's CR2 container (header, raw IFD, slice tag 0xC640).
 * Publicly documented maker-note / private tags (ExifTool's tag tables): Canon ModelID (0x0010),
-  SensorInfo (0x00E0) and ColorData (0x4001), Nikon WB_RBLevels (0x000C) and BlackLevel (0x003D), Sony
+  SensorInfo (0x00E0) and ColorData (0x4001), Nikon WB_RBLevels (0x000C), ColorSpace (0x001E) and BlackLevel (0x003D), Sony
   BlackLevel (0x7310), WB_RGGBLevels (0x7313), SonyRawFileType (0x7000) and SonyToneCurve
   (0x7010), the PanasonicRaw IFD0 tags, Olympus ImageProcessing (0x2040) and CameraSettings
   (0x2020) preview tags, the Fujifilm RAF header and metadata records (RawImageCropTopLeft /
@@ -45,6 +45,10 @@ Implemented only from public specifications, papers and observation of files:
   by observation of sample files (bit packing, page layout, sample justification; for RAF the
   three sample storages and the reversed order of the X-Trans / Bayer layout records, each
   verified by developing with every candidate phase against the camera's preview).
+* Panasonic RW2 RawFormat 3/4 (vendor-compressed): the fixed-rate 16 bytes per 14 pixels, the
+  predictor groups with per-parity predictors, the 2/4/8-bit field widths, the page-permuted
+  downward bit order and the black level sitting 15 counts above the recorded tags were all
+  established by observation of sample files.
 * Demosaicing: Malvar, He & Cutler (ICASSP 2004); Hirakawa & Parks, "Adaptive
   homogeneity-directed demosaicing" (IEEE TIP 2005); for X-Trans and other non-Bayer CFAs,
   gradient-weighted green interpolation (Lu & Tan, "Color filter array demosaicking: new method
@@ -63,20 +67,27 @@ camera colour tables were copied.
 
 | Format | Status |
 |---|---|
-| DNG | Uncompressed (8–16 bit, packed or not), Deflate (compression 8, predictors 1 and 2), lossless JPEG and JPEG XL (DNG 1.7, e.g. Samsung Expert RAW; decoded by `jxl-oxide`; not in wasm32 builds, where it is `Unsupported`); strips and tiles; CFA (Bayer) and LinearRaw (three-sample colour, or one-sample monochrome such as Leica Monochrom and film-scanner DNGs, developed as neutral grey with no white balance or colour matrix); LinearizationTable, BlackLevel (+ repeat, DeltaH/V), WhiteLevel, ActiveArea, DefaultCrop, ColorMatrix1/2, CameraCalibration, ForwardMatrix, AnalogBalance, AsShotNeutral / AsShotWhiteXY, BaselineExposure, Orientation, OpcodeList2 GainMap (lens shading) |
-| DNG (lossy JPEG, floating point; opcodes other than GainMap; ProfileGainTableMap) | Unsupported / not applied (reported) |
+| DNG | Uncompressed (8–16 bit, packed or not), Deflate (compression 8, predictors 1 and 2), lossless JPEG, lossy JPEG (DNG 1.4 compression 34892: 8-bit baseline JPEG tiles or strips, gray for CFA, YCbCr-coded RGB for LinearRaw; decoded by `zune-jpeg`, the stored 8-bit values then go through the same LinearizationTable / BlackLevel / WhiteLevel as every other depth) and JPEG XL (DNG 1.7, e.g. Samsung Expert RAW; decoded by `jxl-oxide`; not in wasm32 builds, where it is `Unsupported`); strips and tiles; CFA (Bayer) and LinearRaw (three-sample colour, or one-sample monochrome such as Leica Monochrom and film-scanner DNGs, developed as neutral grey with no white balance or colour matrix); LinearizationTable, BlackLevel (+ repeat, DeltaH/V), WhiteLevel, ActiveArea, DefaultCrop, ColorMatrix1/2, CameraCalibration, ForwardMatrix, AnalogBalance, AsShotNeutral / AsShotWhiteXY, BaselineExposure, Orientation, floating-point JPEG XL raw data (DNG 1.7 lossy LinearRaw, as Adobe DNG Converter writes it; scaled by the highest WhiteLevel), OpcodeList2 GainMap (lens shading) and MapPolynomial |
+| DNG (floating point other than JPEG XL; opcodes other than OpcodeList2 GainMap and MapPolynomial; ProfileGainTableMap) | Unsupported / not applied (reported) |
 | CR2 | Lossless JPEG with slices, borders and as-shot white balance from the maker note, black measured on the masked border. CR2 has no CFA tag and the row phase varies by model, so it is measured from the data (the green diagonal), with a Canon model-ID table as the fallback (see `src/cr2.rs`) |
 | CR2 sRAW / mRAW | Unsupported |
 | NEF / NRW, ARW, PEF and other TIFF/EP raws | Uncompressed and lossless-JPEG (incl. Sony lossless ARW) CFA data |
 | Nikon compressed NEF (compression 34713): lossless and lossy type 1 / 2, 12 and 14 bit | Decoded: fixed Huffman tables + maker-note `0x0096` seeds and curve (see `src/nefc.rs`). BlackLevel `0x003d` is read in 14-bit units. "Lossy after split" files are unsupported (preview fallback) |
 | Sony compressed ARW ("cRAW", SonyRawFileType 2) | Decoded: 11-bit min/max + 7-bit delta blocks, SonyToneCurve to 14 bits, the curve's 512 black level when no BlackLevel tag is written (the first-generation bodies, e.g. the ILCE-7) |
 | Panasonic / Leica RW2, RawFormat 5 (12- and 14-bit packed) | Decoded, with PanasonicRaw black / white / WB / sensor borders |
+| Panasonic / Leica RW2, RawFormat 3 and 4 (vendor-compressed, 12-bit) | Decoded; the black level is read 15 counts above the recorded tag; PanasonicRaw white / WB / sensor borders |
 | Olympus ORF, uncompressed 16-bit (E-1, E-400…) | Decoded, with ImageProcessing black / WB / ValidBits / crop |
-| Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 4 and older, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
+| Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 6 and newer, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
 | Fujifilm RAF, uncompressed (X-Trans I–V, GFX and Bayer bodies since about 2010) | Decoded: 16-bit containers (either byte order), 12-bit LSB-first packing, 14-bit packing in 32-bit words; X-Trans 6×6 or Bayer 2×2 layout, black, as-shot WB, crop, RawExposureBias, orientation from the preview's EXIF |
 | Fujifilm compressed RAF, early FinePix / SuperCCD RAF (no CFA TIFF) | Unsupported (no public description of the compression); preview fallback |
 | CR3 | Native CRX unsupported; bounded JPEG-track/PRVW preview fallback with CMT1 orientation. I/O labels the result as an 8-bit camera preview |
 | X-Trans and other periodic non-Bayer CFAs (up to 16×16) | Demosaiced by one pattern-agnostic edge-directed method, whatever `Demosaic` is chosen |
+
+Nikon maker-note compression modes 6/10 select checked little-endian packed 12/14-bit
+rows even when TIFF Compression is 34713. The modern lossy `0x44 0x40` curve uses
+its smaller encoded domain while preserving sensor ADUs. Valid Nikon CropArea
+coordinates take precedence over model fallbacks. HE/HE* and lossy-after-split
+remain unsupported. Four pinned CC0 Z6 files cover both bit depths and both paths.
 
 ## Development pipeline
 
@@ -108,11 +119,16 @@ out). One cell in three is held out: the look is used only when it shows the sam
 the matrix is plausible and the held-out mean CIE76 ΔE drops to at most 85 % of the fallback's.
 Pass it as `DevelopOptions::camera_look`; `develop` then notes "colour fitted to the camera's
 embedded JPEG (mean ΔE …)". The crate cannot decode JPEG itself: `photocraft-io` decodes the
-smallest preview at least 512 pixels long, fits and develops in one go.
+smallest preview at least 512 pixels long, fits and develops in one go. A preview without an ICC
+profile is read in the colour space the raw states (`embedded_preview_color_space`): the EXIF
+ColorSpace (a Sony body set to Adobe RGB writes Uncalibrated with Interoperability "R03"), else a
+Nikon maker note's ColorSpace (0x001E; Nikon writes no EXIF ColorSpace), sRGB when the file says
+nothing.
 Camera Raw's tuned import fits at the default exposure and as-shot white balance first,
 then applies the user's Exposure, Temperature and Tint to that same rendering.
 The D5100's measured image area is 4928 × 3264 at (8, 8) in a 4992 × 3280
-sensor plane; it removes the border without changing levels, WB or calibration.
+sensor plane; the D90's is 4288 × 2848 at (10, 10) in a 4352 × 2868 plane; each
+removes the border without changing levels, WB or calibration.
 Measured image areas preserve an explicit file crop.
 
 For a slightly tighter camera JPEG, fitting can align the reference proxy using a bounded
@@ -137,7 +153,10 @@ Raw rendering (quarter size, medians over the frames) the measured profile is 0.
 luminance with a mean CIE76 ΔE of 1.8; the look fitted to the embedded JPEG would be 0.30 stop and
 ΔE 6.4, as it follows the camera's picture style instead. The open-time re-develop
 (`photocraft-io`'s `import_raw_tuned`) and the tone curve its previews use (`tone_curve`) take the
-same look as the default open, so changing a slider does not change the colour rendering.
+same look as the default open, so changing a slider does not change the colour rendering. The D4's
+saturation level was measured on 14-bit files and follows the sample depth (a 12-bit frame is the
+14-bit one shifted right by two, so its level is a quarter of it): the three public 12-bit D4 files
+develop within 0.02 stop of their 14-bit twin.
 
 ## Tools
 

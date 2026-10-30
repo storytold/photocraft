@@ -10,8 +10,12 @@
 //!   shown after a short delay so quick jobs don't flash it. Esc cancels.
 //! - Files opening in the background get a document tab at once ([`OpenTab`]); its canvas area
 //!   shows the progress, and closing the tab cancels the open.
-//! - Saves encode and write on a worker ([`start_save`], #2017) under the modal progress dialog;
-//!   the document is locked meanwhile, and the save is recorded when the job ends.
+//! - Saves encode and write on a worker ([`start_save`], #2017); the document is locked
+//!   meanwhile, and the save is recorded when the job ends. With Preferences › File Handling ›
+//!   Save in Background on (the default) you keep working while the file is written, the progress
+//!   in the document's tab and the status bar; off, the save runs in the foreground (#6207): the
+//!   modal progress dialog shows at once and no shortcut or tool input reaches the app until the
+//!   file is complete ([`foreground_save`]).
 //!
 //! The canvas keeps showing the pre-job state: workers never touch the session's documents.
 
@@ -147,6 +151,9 @@ pub struct SaveJob {
     /// The job has ended (cancelled, say) but its worker may still be running: kept until it
     /// returns, so quitting and another save to the same file wait for it.
     pub ended: bool,
+    /// Started with Save in Background off: the app waits for it under the modal progress dialog
+    /// (see [`foreground_save`]).
+    pub foreground: bool,
 }
 
 /// The shell's job bookkeeping.
@@ -193,7 +200,7 @@ pub fn run(app: &mut PhotocraftApp, id: &str, params: Value) -> Result<Value, St
 /// replaces it when decoded. `path` is remembered for File › Save and Open Recent.
 pub fn start_open(app: &mut PhotocraftApp, name: &str, path: Option<String>, source: OpenSource) -> Result<(), String> {
     let name = &app.open_name(name);
-    match app.session.start_open(name, source).map_err(|e| e.to_string())? {
+    match app.session.start_open_for_user(name, source).map_err(|e| e.to_string())? {
         // Inline (wasm): finish now, like a background open that ended at once.
         Started::Done(v) => finish_open(app, name, path.as_deref(), &v, None),
         Started::Job(job) => {
@@ -301,7 +308,9 @@ pub fn start_save(
             Ok(Some((path, warnings)))
         }
         Started::Job(job) => {
-            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false });
+            // Preferences › File Handling › Save in Background, read when the save starts.
+            let foreground = !app.session.prefs().file_handling.save_in_background;
+            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false, foreground });
             // Control and MCP requests wait on it, as for other jobs.
             app.jobs.last_started = Some(job);
             // The status bar's progress readout names the save; clear any old message.
@@ -394,9 +403,20 @@ pub fn keep_polling(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
     true
 }
 
-/// The job the user is looking at: the open tab in view, the active document's job, or (for
-/// the status bar) the newest running job.
+/// The save the app is waiting on, while it runs: one started with Preferences › File Handling ›
+/// Save in Background off (#6207). Like Photoshop's foreground save it blocks the app: the modal
+/// progress dialog shows at once ([`dialog`]) and no shortcut or tool reaches the documents
+/// until the file is written; anything after it (a close prompt, quitting) waits for it.
+pub fn foreground_save(app: &PhotocraftApp) -> Option<JobInfo> {
+    app.jobs.saves.iter().filter(|s| s.foreground && !s.ended).find_map(|s| app.session.job(s.job))
+}
+
+/// The job the user is looking at: a foreground save, the open tab in view, the active
+/// document's job, or (for the status bar) the newest running job.
 pub fn job_in_view(app: &PhotocraftApp) -> Option<JobInfo> {
+    if let Some(j) = foreground_save(app) {
+        return Some(j);
+    }
     if let Some(j) = app.jobs.focus.and_then(|j| app.session.job(j)) {
         return Some(j);
     }
@@ -525,39 +545,84 @@ fn on_event(app: &mut PhotocraftApp, ctx: &egui::Context, e: JobEvent) {
 }
 
 /// What [`crate::PhotocraftApp::open_bytes`] does after decoding, for a background open's result
-/// (`{document, warnings, color}`).
+/// (`{document, docId, warnings, color}` or `{held, …}`).
 fn finish_open(app: &mut PhotocraftApp, name: &str, path: Option<&str>, v: &Value, slot: Option<usize>) -> Result<(), String> {
-    let mut index = v.get("document").and_then(Value::as_u64).ok_or("the open job returned no document")? as usize;
-    if let Some(slot) = slot
-        && let Ok(moved) = app.run("document.move", json!({"document": index, "to": slot}))
-    {
-        index = moved.get("document").and_then(Value::as_u64).map_or(index, |i| i as usize);
-    }
     let warnings: Vec<String> =
         v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    let held = |doc, read_only, question, policy_applied| crate::open_prompt::Held {
+        doc,
+        read_only,
+        damage_pending: v.get("damaged").and_then(Value::as_bool).unwrap_or(false),
+        name: name.to_string(),
+        path: path.map(str::to_string),
+        warnings: warnings.clone(),
+        bytes: None,
+        slot,
+        question,
+        policy_applied,
+    };
+    // Held back for the profile prompt (Ask When Opening).
+    if let Some(id) = v.get("held").and_then(Value::as_u64) {
+        let (doc, read_only) = app.session.take_held_open(id).ok_or("the open job's document is gone")?;
+        crate::open_prompt::arrive(app, held(doc, read_only, v.get("color").filter(|q| !q.is_null()).cloned(), false));
+        return Ok(());
+    }
+    // poll_jobs applies all ready jobs before the shell handles their events. An earlier
+    // handler may have moved or closed tabs, so the apply-time index is no longer authority.
+    let document = v.get("docId").and_then(Value::as_u64).map(DocId).ok_or("the open job returned no document identity")?;
+    let index = app.session.documents().iter().position(|st| st.doc.id == document).ok_or("the open job's document is missing")?;
+    // An earlier file is waiting on its prompt: this document waits after it, in order.
+    if crate::open_prompt::waiting(app)
+        && let Some(st) = app.session.close(index)
+    {
+        let read_only = st.source_read_only;
+        let doc = Arc::try_unwrap(st.doc).unwrap_or_else(|d| (*d).clone());
+        crate::open_prompt::arrive(app, held(doc, read_only, None, true));
+        return Ok(());
+    }
+    if let Some(slot) = slot {
+        let _ = app.run("document.move", json!({"document": index, "to": slot}));
+    }
+    after_open(app, document, name, path, &warnings, None)
+}
+
+/// What every open does for its admitted document: remember where it came from, say
+/// so, show the import warnings (a raw opens in Camera Raw first, developed from `path` or
+/// `bytes`) and fire the "Open Document" script events.
+pub(crate) fn after_open(
+    app: &mut PhotocraftApp,
+    document: DocId,
+    name: &str,
+    path: Option<&str>,
+    warnings: &[String],
+    bytes: Option<&[u8]>,
+) -> Result<(), String> {
+    let index = app.session.documents().iter().position(|st| st.doc.id == document).ok_or("the opened document is missing")?;
     app.session.set_active(index);
     if let Some(p) = path {
         app.opened_from(p);
     }
     app.sync_views();
-    let warnings = crate::file_open::with_missing_fonts(app, warnings);
-    app.ui.status = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
+    // Fonts the document's type uses that aren't installed join the import warnings (#4559).
+    let warnings = crate::file_open::with_missing_fonts(app, warnings.to_vec());
+    let warnings = warnings.as_slice();
+    let opened = crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]);
+    app.ui.status = opened.clone();
     app.ui.status_error = false;
     // A raw opens in Camera Raw first; the dialog says how it was developed.
-    if crate::camera_raw_ui::wants_open_dialog(app, &warnings) {
-        crate::camera_raw_ui::queue_open_dialog(app, name, path, None);
-        notices::io_warnings(app, &crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]), &crate::camera_raw_ui::without_develop_note(&warnings));
+    if crate::camera_raw_ui::wants_open_dialog(app, warnings) {
+        crate::camera_raw_ui::queue_open_dialog(app, document, name, path, bytes, warnings)?;
+        notices::io_warnings(app, &opened, &crate::camera_raw_ui::without_develop_note(warnings));
     } else {
-        notices::io_warnings(app, &crate::i18n::fmt(tl!("Opened {name}"), &[("name", name)]), &warnings);
+        notices::io_warnings(app, &opened, warnings);
+        // A raw that opened without the dialog is developed by its sidecar / Camera Raw Defaults.
+        if let Some(index) = app.session.active_index() {
+            crate::camera_raw_ui::opened_without_dialog(app, index, name, path, warnings);
+        }
     }
     // Script events bound to "Open Document".
     photocraft_engine::automate_cmds::document_opened(&mut app.session);
     app.sync_views();
-    let color = v.get("color").cloned().unwrap_or(Value::Null);
-    let ask = color.get("ask").and_then(Value::as_bool) == Some(true);
-    if ask && (color.get("mismatch").and_then(Value::as_bool) == Some(true) || color.get("missing").is_some()) {
-        crate::prefs_ui::open_mismatch(app, &color);
-    }
     Ok(())
 }
 
@@ -666,16 +731,24 @@ pub fn status_progress(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// The modal progress window for a job locking the active document (Photoshop shows one for
 /// long filters): title, status, bar, percentage and elapsed time, Cancel. Appears after
-/// [`DIALOG_DELAY_MS`]; Esc cancels (see [`tick`]).
+/// [`DIALOG_DELAY_MS`]; Esc cancels (see [`tick`]). A save shows it only when it runs in the
+/// foreground (Save in Background off), and then at once, so nothing can be clicked meanwhile; a
+/// background save shows its progress in the tab and the status bar instead.
 pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
-    let Some(j) = app.session.active_job() else { return };
-    if j.elapsed_ms < DIALOG_DELAY_MS {
-        return;
-    }
+    let j = match foreground_save(app) {
+        Some(j) => j,
+        None => {
+            let Some(j) = app.session.active_job() else { return };
+            if j.elapsed_ms < DIALOG_DELAY_MS || app.jobs.saves.iter().any(|s| s.job == j.id) {
+                return;
+            }
+            j
+        }
+    };
     let t = Tokens::get(ctx);
     let mut cancel_it = false;
     // Photoshop doesn't dim the window behind its progress dialog either.
-    let modal = egui::Modal::new(egui::Id::new("job-progress")).backdrop_color(Color32::from_black_alpha(36)).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("job-progress")).backdrop_color(Color32::from_black_alpha(36)).show(ctx, |ui| {
         ui.set_width(360.0);
         ui.label(RichText::new(tl!(&j.label)).font(crate::theme::semibold(15.0)));
         ui.add_space(4.0);
@@ -720,7 +793,7 @@ pub struct OpenCardRects {
 }
 
 fn open_card_rects_id() -> egui::Id {
-    egui::Id::new("open-card-rects")
+    egui::Id::unique("open-card-rects")
 }
 
 /// The opening card's parts as drawn last frame, if it was shown.
@@ -744,7 +817,7 @@ pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
     ui.painter().rect_filled(area, 0.0, t.canvas);
     // Centre the card at the height its content needed last frame; the background is painted
     // once the rows are laid out, so a taller content (a long translation) still gets a card.
-    let height_id = egui::Id::new(("open-card-height", job));
+    let height_id = egui::Id::unique(("open-card-height", job));
     let height = ui.ctx().data(|d| d.get_temp::<f32>(height_id)).unwrap_or(OPEN_CARD_MIN_HEIGHT);
     let card = Rect::from_center_size(area.center(), vec2(OPEN_CARD_WIDTH, height));
     let fill = ui.painter().add(egui::Shape::Noop);
@@ -815,5 +888,4 @@ pub fn bytes(b: &[u8]) -> OpenSource {
 }
 
 #[cfg(test)]
-#[path = "jobs_ui_tests.rs"]
 mod tests;

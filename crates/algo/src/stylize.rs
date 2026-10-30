@@ -178,8 +178,9 @@ pub(crate) fn emboss(src: &Image, out: Rect, ctx: &Ctx, angle: f32, height: f32,
     res
 }
 
-/// Find Edges: Sobel magnitude per colour channel, dark edges on white
-/// (CMYK samples are ink, so there the edge strength is the ink itself).
+/// Find Edges: Sobel magnitude per colour channel, dark edges on white (CMYK samples are ink, so
+/// there the edge strength is the ink itself). At full strength, as Photoshop's: a 60-level step
+/// darkens by 240 (Photoshop 27.11; a quarter of that was 4× too pale).
 pub(crate) fn find_edges(src: &Image, out: Rect, ctx: &Ctx) -> Vec<f32> {
     let n = src.ch;
     let cc = if ctx.alpha { n - 1 } else { n };
@@ -192,7 +193,7 @@ pub(crate) fn find_edges(src: &Image, out: Rect, ctx: &Ctx) -> Vec<f32> {
             let g = |dx: i32, dy: i32| src.get(x + dx, y + dy, c);
             let gx = (g(1, -1) + 2.0 * g(1, 0) + g(1, 1)) - (g(-1, -1) + 2.0 * g(-1, 0) + g(-1, 1));
             let gy = (g(-1, 1) + 2.0 * g(0, 1) + g(1, 1)) - (g(-1, -1) + 2.0 * g(0, -1) + g(1, -1));
-            let e = ((gx * gx + gy * gy).sqrt() / 4.0).clamp(0.0, 1.0);
+            let e = (gx * gx + gy * gy).sqrt().clamp(0.0, 1.0);
             *v = if sub { e } else { 1.0 - e };
         }
     }

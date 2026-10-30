@@ -3,7 +3,9 @@
 //! tools (Brush, Pencil, Clone Stamp, Healing, Eraser, …): Move, Marquee, Crop and Zoom keep
 //! their own cursors. Tests drive the real canvas (`document_area`) and compare the painted
 //! cursor that caps lock produces with the one the Precise preference draws — they must match,
-//! and the Standard preference (off) must not.
+//! and the Standard preference (off) must not. The tools under Cursors › Other Cursors with a
+//! cursor of their own (the pens, Eyedropper, Color Sampler, Paint Bucket) swap it for the
+//! crosshair and back with caps lock (#4639).
 
 use egui::CursorIcon;
 use egui_kittest::Harness;
@@ -111,5 +113,44 @@ fn caps_lock_leaves_non_painting_tools_cursors_alone() {
         let on = fp(&h);
         assert_eq!(on, off, "{tool:?}: caps lock must not change a non-painting cursor");
         caps(&mut h, false);
+    }
+}
+
+fn other(h: &mut Harness<'_, PhotocraftApp>, value: &str) {
+    h.state_mut().run("prefs.set", json!({"path": "cursors.other", "value": value})).unwrap();
+    h.run_steps(2);
+}
+
+/// #4639: the pen tools show their own icon under Standard Other Cursors and the crosshair
+/// under Precise, and caps lock swaps one for the other either way, as in Photoshop. The
+/// Eyedropper, Color Sampler and Paint Bucket, which already followed the preference, swap too.
+#[test]
+fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
+    for tool in [
+        Tool::Pen,
+        Tool::FreeformPen,
+        Tool::CurvaturePen,
+        Tool::AddAnchorPoint,
+        Tool::DeleteAnchorPoint,
+        Tool::ConvertPoint,
+        Tool::Eyedropper,
+        Tool::ColorSampler,
+        Tool::PaintBucket,
+    ] {
+        let mut h = capslock_harness();
+        h.state_mut().ui.tool = tool;
+        h.run_steps(2);
+        other(&mut h, "standard");
+        let standard = fp(&h);
+        assert_eq!(standard.icon, CursorIcon::None, "{tool:?}: the standard cursor is the tool's own icon, drawn");
+        other(&mut h, "precise");
+        let precise = fp(&h);
+        assert_ne!(standard, precise, "{tool:?}: Standard and Precise differ");
+        caps(&mut h, true);
+        assert_eq!(fp(&h), standard, "{tool:?}: caps lock turns the precise crosshair back into the icon");
+        other(&mut h, "standard");
+        assert_eq!(fp(&h), precise, "{tool:?}: caps lock turns the icon into the precise crosshair");
+        caps(&mut h, false);
+        assert_eq!(fp(&h), standard, "{tool:?}: releasing caps lock restores the icon");
     }
 }

@@ -28,32 +28,47 @@ pub(crate) fn centre(b: Rect) -> (f32, f32, f32) {
     (b.x0 as f32 + w / 2.0, b.y0 as f32 + h / 2.0, w.min(h) / 2.0)
 }
 
+/// The bounds' centre and half width and height: Twirl, Pinch and Spherize act inside the ellipse
+/// inscribed in the bounds, as Photoshop's do, so on a wide or tall image the effect reaches all
+/// four edges instead of stopping at a circle fitted to the shorter side (#5643). A point maps to
+/// unit-circle coordinates `(u, v)` and back.
+fn ellipse(b: Rect) -> (f32, f32, f32, f32) {
+    let (w, h) = (b.width() as f32, b.height() as f32);
+    (b.x0 as f32 + w / 2.0, b.y0 as f32 + h / 2.0, w / 2.0, h / 2.0)
+}
+
 pub(crate) fn twirl(src: &Image, out: Rect, ctx: &Ctx, angle: f32) -> Vec<f32> {
-    let (cx, cy, rr) = centre(ctx.bounds);
+    let (cx, cy, hx, hy) = ellipse(ctx.bounds);
     let a = angle.to_radians();
     remap(src, out, ctx, Edge::Repeat, |x, y| {
-        let (dx, dy) = (x - cx, y - cy);
-        let r = (dx * dx + dy * dy).sqrt();
-        if r >= rr || rr <= 0.0 {
+        if hx <= 0.0 || hy <= 0.0 {
             return (x, y);
         }
-        let t = a * (1.0 - r / rr);
+        let (u, v) = ((x - cx) / hx, (y - cy) / hy);
+        let r = (u * u + v * v).sqrt();
+        if r >= 1.0 {
+            return (x, y);
+        }
+        let t = a * (1.0 - r);
         let (s, c) = t.sin_cos();
-        (cx + dx * c - dy * s, cy + dx * s + dy * c)
+        (cx + (u * c - v * s) * hx, cy + (u * s + v * c) * hy)
     })
 }
 
 pub(crate) fn pinch(src: &Image, out: Rect, ctx: &Ctx, amount: f32) -> Vec<f32> {
-    let (cx, cy, rr) = centre(ctx.bounds);
+    let (cx, cy, hx, hy) = ellipse(ctx.bounds);
     let a = (amount / 100.0).clamp(-1.0, 1.0);
     remap(src, out, ctx, Edge::Repeat, |x, y| {
-        let (dx, dy) = (x - cx, y - cy);
-        let r = (dx * dx + dy * dy).sqrt();
-        if r >= rr || r <= 0.0 {
+        if hx <= 0.0 || hy <= 0.0 {
             return (x, y);
         }
-        let rs = rr * (r / rr).powf(1.0 - a * 0.5);
-        (cx + dx * rs / r, cy + dy * rs / r)
+        let (u, v) = ((x - cx) / hx, (y - cy) / hy);
+        let r = (u * u + v * v).sqrt();
+        if r >= 1.0 || r <= 0.0 {
+            return (x, y);
+        }
+        let k = r.powf(1.0 - a * 0.5) / r;
+        (cx + u * k * hx, cy + v * k * hy)
     })
 }
 
@@ -64,20 +79,22 @@ fn sphere_1d(rn: f32, a: f32) -> f32 {
 }
 
 pub(crate) fn spherize(src: &Image, out: Rect, ctx: &Ctx, amount: f32, mode: SpherizeMode) -> Vec<f32> {
-    let b = ctx.bounds;
-    let (cx, cy, rr) = centre(b);
-    let (hx, hy) = (b.width() as f32 / 2.0, b.height() as f32 / 2.0);
+    let (cx, cy, hx, hy) = ellipse(ctx.bounds);
     let a = (amount / 100.0).clamp(-1.0, 1.0);
     remap(src, out, ctx, Edge::Repeat, |x, y| {
         let (dx, dy) = (x - cx, y - cy);
         match mode {
             SpherizeMode::Normal => {
-                let r = (dx * dx + dy * dy).sqrt();
-                if r >= rr || r <= 0.0 {
+                if hx <= 0.0 || hy <= 0.0 {
                     return (x, y);
                 }
-                let rs = rr * sphere_1d(r / rr, a);
-                (cx + dx * rs / r, cy + dy * rs / r)
+                let (u, v) = (dx / hx, dy / hy);
+                let r = (u * u + v * v).sqrt();
+                if r >= 1.0 || r <= 0.0 {
+                    return (x, y);
+                }
+                let k = sphere_1d(r, a) / r;
+                (cx + u * k * hx, cy + v * k * hy)
             }
             SpherizeMode::HorizontalOnly => {
                 if dx.abs() >= hx {
@@ -94,6 +111,10 @@ pub(crate) fn spherize(src: &Image, out: Rect, ctx: &Ctx, amount: f32, mode: Sph
         }
     })
 }
+
+/// The most Wave generators the renderer models: it clamps the setting to this, so a file asking
+/// for more (the command allows up to 999) would render differently from how it was authored.
+pub const MAX_WAVE_GENERATORS: u32 = 64;
 
 /// Wave generator settings.
 pub(crate) struct WaveSpec {
@@ -120,8 +141,9 @@ fn shape(t: WaveType, phase: f32) -> f32 {
     }
 }
 
+/// Wave: displace `src` over `out` by the average of `w.generators` seeded waves (at most `MAX_WAVE_GENERATORS`) along each axis.
 pub(crate) fn wave(src: &Image, out: Rect, ctx: &Ctx, w: WaveSpec) -> Vec<f32> {
-    let n = w.generators.clamp(1, 64);
+    let n = w.generators.clamp(1, MAX_WAVE_GENERATORS);
     let lerp = |(a, b): (f32, f32), t: f32| a + (b - a).max(0.0) * t;
     let gens: Vec<(f32, f32, f32, f32)> = (0..n)
         .map(|i| {
@@ -160,19 +182,30 @@ pub(crate) fn polar(src: &Image, out: Rect, ctx: &Ctx, mode: PolarMode) -> Vec<f
     let (w, h) = (b.width().max(1) as f32, b.height().max(1) as f32);
     let (cx, cy) = (b.x0 as f32 + w / 2.0, b.y0 as f32 + h / 2.0);
     let rmax = w.min(h) / 2.0;
-    remap(src, out, ctx, Edge::Transparent, |x, y| match mode {
+    // Photoshop 27.11: the angle runs counter-clockwise from 12 o'clock, and points past the
+    // source's edge repeat its edge pixels (the corners outside the circle are filled, not empty).
+    // Photoshop evaluates the map at pixel corners and reads the source at the resulting index
+    // (half a pixel from `remap`'s centres): within 2 levels on a whole test chart in both directions.
+    remap(src, out, ctx, Edge::Repeat, |x, y| polar_map(x - 0.5, y - 0.5, mode, b, (w, h), (cx, cy), rmax))
+}
+
+fn polar_map(x: f32, y: f32, mode: PolarMode, b: Rect, (w, h): (f32, f32), (cx, cy): (f32, f32), rmax: f32) -> (f32, f32) {
+    let (sx, sy) = match mode {
         PolarMode::RectangularToPolar => {
-            // Output is polar: angle from 12 o'clock clockwise → source x,
-            // radius → source y.
+            // Output is polar: angle from 12 o'clock counter-clockwise → source x, radius → source y.
             let (dx, dy) = (x - cx, y - cy);
-            let theta = dx.atan2(-dy).rem_euclid(std::f32::consts::TAU);
+            // The 12 o'clock seam itself reads the source's right edge (360°, not 0°).
+            let theta = (-dx).atan2(-dy);
+            let theta = if theta <= 0.0 { theta + std::f32::consts::TAU } else { theta };
             let r = (dx * dx + dy * dy).sqrt();
             (b.x0 as f32 + theta / std::f32::consts::TAU * w, b.y0 as f32 + r / rmax * h)
         }
         PolarMode::PolarToRectangular => {
-            let theta = (x - b.x0 as f32) / w * std::f32::consts::TAU;
+            // Photoshop's angle is one column ahead of its radius row (fitted exactly).
+            let theta = (x + 1.0 - b.x0 as f32) / w * std::f32::consts::TAU;
             let r = (y - b.y0 as f32) / h * rmax;
-            (cx + r * theta.sin(), cy - r * theta.cos())
+            (cx - r * theta.sin(), cy - r * theta.cos())
         }
-    })
+    };
+    (sx + 0.5, sy + 0.5)
 }

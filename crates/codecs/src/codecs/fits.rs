@@ -14,11 +14,15 @@
 //!   65535 when they fit in it (DeepSkyStacker, most stackers) and by the maximum otherwise. NaN
 //!   and blank pixels read as 0.
 //! * The other header cards are kept as text: `KEY` → value (strings unquoted), `COMMENT` and
-//!   `HISTORY` by their text, `HIERARCH` keywords by their long name.
+//!   `HISTORY` by their text, `HIERARCH` keywords by their long name. Long strings continued
+//!   on `CONTINUE` cards are joined.
 //!
 //! Writing: gray or RGB, U8 (`BITPIX = 8`), U16 (`BITPIX = 16`, `BZERO = 32768`) or F32
-//! (`BITPIX = -32`, 0..1), bottom-to-top with `ROWORDER = 'BOTTOM-UP'`, plus the text cards.
+//! (`BITPIX = -32`, 0..1), bottom-to-top with `ROWORDER = 'BOTTOM-UP'`, plus the text cards
+//! (strings longer than one card on `CONTINUE` cards).
 //! Tile-compressed files (fpack `ZIMAGE` tables) are recognised and refused.
+
+use std::collections::HashMap;
 
 use crate::Format;
 use crate::error::CodecError;
@@ -104,13 +108,19 @@ fn parse_card(raw: &[u8]) -> Card {
 
 struct Header {
     cards: Vec<Card>,
+    /// First-occurrence index of each non-HIERARCH keyword, so `get` is O(1). The card
+    /// count and the number of looked-up keywords (NAXIS1..NAXISn) are both file-controlled,
+    /// so a linear scan per lookup lets a crafted header multiply commentary cards by axis
+    /// count into quadratic work.
+    index: HashMap<String, usize>,
     /// Offset of the data unit.
     data_start: usize,
 }
 
 impl Header {
     fn get(&self, key: &str) -> Option<&Value> {
-        self.cards.iter().find(|c| !c.hierarch && c.key == key).and_then(|c| c.value.as_ref())
+        let c = &self.cards[*self.index.get(key)?];
+        c.value.as_ref()
     }
 
     fn int(&self, key: &str) -> Option<i64> {
@@ -149,10 +159,31 @@ fn parse_header(b: &[u8], start: usize) -> Result<Header, CodecError> {
         if raw.starts_with(b"END") && raw.get(3..).is_some_and(|r| r.iter().all(|&c| c == b' ')) {
             break;
         }
-        cards.push(parse_card(raw));
+        let card = parse_card(raw);
+        // Long strings (FITS 4.0 section 4.2.1.2): a string ending in '&' goes on in the next
+        // `CONTINUE` record. An orphaned `CONTINUE` stays a card of its own (commentary).
+        if let Some(Card { value: Some(Value::Str(s)), .. }) = cards.last_mut()
+            && s.ends_with('&')
+            && card.key == "CONTINUE"
+            && card.text.starts_with("  ")
+            && let Value::Str(more) = parse_value(&card.text)
+        {
+            s.pop();
+            s.push_str(&more);
+            continue;
+        }
+        cards.push(card);
     }
     let data_start = pos.div_ceil(BLOCK).checked_mul(BLOCK).ok_or_else(|| err("header too long"))?;
-    Ok(Header { cards, data_start })
+    // Index each non-HIERARCH keyword to its first occurrence, matching the previous
+    // `find(|c| !c.hierarch && c.key == key)` lookup while making `get` O(1).
+    let mut index = HashMap::with_capacity(cards.len());
+    for (i, c) in cards.iter().enumerate() {
+        if !c.hierarch {
+            index.entry(c.key.clone()).or_insert(i);
+        }
+    }
+    Ok(Header { cards, index, data_start })
 }
 
 /// The axis lengths (`NAXIS1`, `NAXIS2`, …).
@@ -390,9 +421,22 @@ impl Writer {
     fn value(&mut self, key: &str, v: &str) {
         if literal(v) {
             self.card(&format!("{key:<8}= {v:>20}"));
-        } else {
-            self.card(&format!("{key:<8}= {}", quoted(v, CARD - 10)));
+            return;
         }
+        // A string too long for one card goes on in `CONTINUE` cards, every piece but the last
+        // ending in '&' (FITS 4.0 section 4.2.1.2). A doubled quote is never split, and trailing
+        // blanks (not significant) are dropped so none are kept before an '&'.
+        let escaped = ascii(v).trim_end().replace('\'', "''");
+        let mut rest = escaped.as_str();
+        let mut head = format!("{key:<8}= ");
+        while rest.len() > CARD - 12 {
+            let cut = CARD - 13 - rest.get(..CARD - 13).unwrap_or("").bytes().rev().take_while(|&b| b == b'\'').count() % 2;
+            let (piece, tail) = rest.split_at_checked(cut).unwrap_or((rest, ""));
+            self.card(&format!("{head}'{piece}&'"));
+            head = "CONTINUE  ".to_string();
+            rest = tail;
+        }
+        self.card(&format!("{head}'{rest:<8}'"));
     }
 
     fn commentary(&mut self, key: &str, text: &str) {
@@ -410,7 +454,8 @@ impl Writer {
         if matches!(upper.as_str(), "COMMENT" | "HISTORY") {
             self.commentary(&upper, v);
         } else if standard_key(key) {
-            if !STRUCTURAL.contains(&key) && !is_naxis(key) {
+            // `CONTINUE` only ever carries a string's continuation, written by `value`.
+            if !STRUCTURAL.contains(&key) && !is_naxis(key) && key != "CONTINUE" {
                 self.value(key, v);
             }
         } else {
@@ -501,7 +546,11 @@ pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Ve
             for p in 0..nc {
                 for y in 0..hu {
                     for x in 0..wu {
-                        out.extend_from_slice(&d[idx(p, y, x)].to_be_bytes());
+                        // 0..1 as documented: a value above 2 would make readers (ours too)
+                        // take the data as ADU and scale it by 65535. NaN is written as 0.
+                        let v = d[idx(p, y, x)];
+                        let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+                        out.extend_from_slice(&v.to_be_bytes());
                     }
                 }
             }
@@ -524,6 +573,40 @@ mod tests {
         let mut out = w.out;
         out.resize(out.len().div_ceil(BLOCK) * BLOCK, b' ');
         out
+    }
+
+    #[test]
+    fn continue_strings_decode() {
+        let mut b = header(&[
+            "SIMPLE  = T",
+            "BITPIX  = 8",
+            "NAXIS   = 2",
+            "NAXIS1  = 1",
+            "NAXIS2  = 1",
+            "OBJECT  = 'aaa&'",
+            "CONTINUE  'bbb&' / a comment",
+            "CONTINUE  '&'",
+            "CONTINUE  ''",
+            "OBSERVER= 'R&'",
+            "COMMENT hi",
+            "CONTINUE  'orphan'",
+        ]);
+        b.push(0);
+        let img = decode(&b, &Limits::default()).unwrap();
+        let text = [("OBJECT", "aaabbb"), ("OBSERVER", "R&"), ("COMMENT", "hi"), ("CONTINUE", "'orphan'")];
+        assert_eq!(img.meta.text, text.map(|(k, v)| (k.to_string(), v.to_string())));
+    }
+
+    #[test]
+    fn continue_strings_round_trip() {
+        for value in ["a".repeat(100), format!("{}' {}", "a".repeat(65), "b".repeat(100)), "'".repeat(100), "a".repeat(68)] {
+            let mut img = Image::from_u8(1, 1, ChannelLayout::Gray, vec![0]).unwrap();
+            img.meta.text = vec![("OBJECT".into(), value.clone()), ("CONTINUE".into(), "orphan".into())];
+            let b = crate::encode(&img, F, &EncodeOptions::default()).unwrap();
+            assert!(!b.chunks(CARD).any(|c| c.starts_with(b"CONTINUE=")));
+            let decoded = decode(&b, &Limits::default()).unwrap();
+            assert_eq!(decoded.meta.text, vec![("OBJECT".into(), value)]);
+        }
     }
 
     #[test]
@@ -567,6 +650,17 @@ mod tests {
         }
         let img = decode(&b, &Limits::default()).unwrap();
         assert_eq!(img.to_f32_samples().unwrap(), vec![1.0, 0.0]);
+    }
+
+    #[test]
+    fn hdr_float_saves_clamped_and_reopens_as_saved() {
+        // One value above 2 used to make the reader scale everything by 65535 (all black).
+        let img = Image::from_f32(2, 1, ChannelLayout::Gray, &[0.5, 3.0]).unwrap();
+        let opts = EncodeOptions::default();
+        let bytes = encode(&img, crate::fidelity::plan(&img, F, &opts), &opts).unwrap();
+        let back = decode(&bytes, &Limits::default()).unwrap().to_f32_samples().unwrap();
+        assert!((back[0] - 0.5).abs() < 1e-6, "{back:?}");
+        assert!((back[1] - 1.0).abs() < 1e-6, "{back:?}");
     }
 
     #[test]

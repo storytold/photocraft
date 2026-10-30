@@ -8,8 +8,8 @@ MIT/Apache-licensed, so the two talk only through files and a child process. No 
 filter definition or library is in this repository.
 
 This page covers using G'MIC from the app and automation, and the host (`crates/gmic`, the
-`gmic.*` commands in `crates/engine/src/gmic_cmds.rs`, Filter › G'MIC and About Plug-ins in
-`crates/ui-egui/src/plugins_ui.rs`). Sandboxed WebAssembly plug-ins are a separate mechanism,
+`gmic.*` commands in `crates/engine/src/cmd/gmic_cmds.rs`, Filter › G'MIC and About Plug-ins in
+`crates/ui-egui/src/menus/plugins_ui.rs`). Sandboxed WebAssembly plug-ins are a separate mechanism,
 described in [plugins.md](plugins.md).
 
 ## Using G'MIC
