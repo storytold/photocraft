@@ -485,3 +485,18 @@ fn opening_or_closing_a_workspace_without_input_rebuilds_the_menus() {
     app.distort.gallery = None;
     assert_eq!(state_hash(&app, None), closed, "and come back when it is cancelled");
 }
+
+/// #9950: View › Pixel Aspect Ratio lists the saved ratios, so adding or deleting one, even one
+/// not in use, rebuilds the menus.
+#[test]
+fn saving_or_deleting_a_pixel_aspect_ratio_rebuilds_the_menus() {
+    let mut app = app(true);
+    let ctx = egui::Context::default();
+    let before = state_hash(&app, None);
+    crate::menus::invoke(&mut app, &ctx, "view.pixelAspectRatio.custom", json!({"name": "Cinema", "ratio": 1.25})).unwrap();
+    crate::menus::invoke(&mut app, &ctx, "view.pixelAspectRatio.square", json!({})).unwrap();
+    let saved = state_hash(&app, None);
+    assert_ne!(saved, before, "a saved ratio is a new menu item");
+    crate::menus::invoke(&mut app, &ctx, "view.pixelAspectRatio.custom", json!({"delete": "Cinema"})).unwrap();
+    assert_ne!(state_hash(&app, None), saved, "deleting a ratio not in use removes its item");
+}
