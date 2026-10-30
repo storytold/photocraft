@@ -2086,3 +2086,18 @@ fn ui_set_mask_target_ends_a_filter_mask_view() {
     let photocraft_doc::LayerContent::Smart(sm) = &l.content else { panic!("smart object") };
     assert_eq!(sm.filter_mask.as_ref().unwrap().value(20, 20), 1.0, "not into the filter mask");
 }
+
+#[test]
+fn ui_inspect_redacts_token_fields_added_to_dialogs() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let mut fields = serde_json::Map::new();
+    fields.insert("token".into(), json!("secret"));
+    fields.insert("nested".into(), json!({"refreshToken": "also-secret", "visible": true}));
+    app.ui.open_dialog(crate::state::DialogKind::Command, fields);
+
+    let snapshot = inspect(&app, &egui::Context::default());
+    let dialog = &snapshot["dialogs"][0]["fields"];
+    assert!(dialog.get("token").is_none());
+    assert!(dialog["nested"].get("refreshToken").is_none());
+    assert_eq!(dialog["nested"]["visible"], true);
+}

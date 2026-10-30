@@ -429,3 +429,19 @@ fn fit_image_is_as_narrow_as_its_content() {
         assert!(window.contains_rect(node.rect()), "{label} inside the window");
     }
 }
+
+#[test]
+fn a_tall_share_dialog_keeps_its_title_and_buttons_in_a_short_window() {
+    use egui_kittest::kittest::Queryable;
+    let size = egui::vec2(900.0, 520.0);
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    open_command_dialog(h.state_mut(), "file.sendTelegram", "Send to Telegram");
+    h.run_steps(4);
+    for label in ["Send to Telegram", "OK", "Cancel"] {
+        let r = h.get_by_label(label).rect();
+        assert!(r.top() >= 0.0 && r.bottom() <= size.y, "{label} at {r:?} is outside the {size:?} window");
+    }
+}

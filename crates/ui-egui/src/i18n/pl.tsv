@@ -4119,6 +4119,53 @@ curves	Smooth	Wygładź
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Cel
+	Send to Telegram…	Wyślij do Telegramu…
+	Send to Telegram	Wyślij do Telegramu
+	Bot token	Token bota
+	Sent {name} to Telegram.	Wysłano {name} do Telegramu.
+	That file is larger than Telegram accepts (50 MB).	Ten plik jest większy, niż przyjmuje Telegram (50 MB).
+	Could not read {name}: {error}	Nie można odczytać {name}: {error}
+	The bot token should look like 123456789:ABC…	Token bota powinien wyglądać jak 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Wpisz id czatu (liczbę) albo publiczną nazwę @channelname.
+	Telegram sending needs the desktop app.	Wysyłanie do Telegramu jest tylko w aplikacji na komputer.
+	Telegram is set up. Save or export a file, then send it.	Telegram jest ustawiony. Zapisz lub wyeksportuj plik, a potem go wyślij.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Utwórz bota w BotFather i wyślij mu dowolną wiadomość. Id uzupełnisz przez Znajdź czaty albo wklej liczbę lub @channelname.
+	Open the official bot guide	Otwórz oficjalny przewodnik botów
+	Find chats for this token	Znajdź czaty dla tego tokenu
+	No chats yet. Send your bot a message, then try again.	Nie ma jeszcze czatów. Wyślij botowi wiadomość i spróbuj ponownie.
+	Also send when I Save	Wysyłaj też przy Zapisz
+	Also send when I Save As	Wysyłaj też przy Zapisz jako
+	Also send when I Export	Wysyłaj też przy Eksporcie
+	Sent {name}. {url}	Wysłano: {name}. {url}
+	Sending {name} to Telegram…	Wysyłanie {name} do Telegramu…
+	Sent to Telegram	Wysłano do Telegramu
+	A Telegram send is already running.	Wysyłanie do Telegramu już trwa.
+	Send as	Wyślij jako
+	Saved file	Zapisany plik
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Zapisany plik to kopia na dysku. PSD i PNG to nowa kopia otwartego dokumentu, razem ze zmianami, których nie zapisano.
+	Chats or channels. Several are allowed, separated by commas.	Czaty lub kanały. Kilka jest dozwolonych, rozdzielone przecinkami.
+	Also send when I Save a Copy	Wysyłaj też przy Zapisz kopię
+	Also send a PNG preview with a PSD	Z plikiem PSD wyślij też podgląd PNG
+	Send automatically	Wysyłaj automatycznie
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Token bota jest w pęku kluczy systemu, nie w pliku ustawień PhotoCraft.
+	Sending needs an internet connection.	Wysyłanie wymaga połączenia z internetem.
+	Copied the chat id.	Skopiowano id czatu.
+	*File:* `{name}`	*Plik:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Rozmiar:* {size}
+	*Time:* {time}	*Czas:* {time}
+	*Path:* `{path}`	*Ścieżka:* `{path}`
+	Pin the message	Przypnij wiadomość
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Przypięcie wymaga, by bot był administratorem. Inaczej plik i tak zostanie wysłany.
+	Could not pin the message. The file was still sent.	Nie udało się przypiąć wiadomości. Plik został wysłany.
+	Get from Telegram	Pobierz z Telegrama
+	No files yet. Send your bot a file or a photo, then try again.	Nie ma jeszcze plików. Wyślij botowi plik lub zdjęcie i spróbuj ponownie.
+	Open the Telegram message	Otwórz wiadomość Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Dziesięć najnowszych plików wysłanych do tego bota. Kliknięcie otwiera jeden w PhotoCraft.
+	Get files	Pobierz pliki
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Pliki wysłane z PhotoCraft i dziesięć najnowszych do tego bota. Kliknięcie otwiera jeden w PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Jeszcze nie ma plików. Wyślij jeden stąd albo do bota i spróbuj ponownie.
+	Telegram did not return a link for this chat.	Telegram nie zwrócił linku do tego czatu.
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła

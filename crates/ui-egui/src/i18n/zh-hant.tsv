@@ -3138,6 +3138,53 @@ curves	Smooth	平滑
 	Profile	描述檔
 	Target	目標
 	Units	單位
+	Send to Telegram…	傳送到 Telegram…
+	Send to Telegram	傳送到 Telegram
+	Bot token	機器人權杖
+	Sent {name} to Telegram.	已將 {name} 傳送到 Telegram。
+	That file is larger than Telegram accepts (50 MB).	此檔案大於 Telegram 接受的大小（50 MB）。
+	Could not read {name}: {error}	無法讀取 {name}：{error}
+	The bot token should look like 123456789:ABC…	機器人權杖應形如 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	請輸入聊天 ID（數字）或公開的 @channelname。
+	Telegram sending needs the desktop app.	傳送到 Telegram 僅在桌面應用程式中可用。
+	Telegram is set up. Save or export a file, then send it.	Telegram 已設定。請先儲存或匯出檔案，然後再傳送。
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	用 BotFather 建立一個機器人，然後傳給它任意一則訊息。用「尋找聊天」填入 ID，或貼上數字或 @channelname。
+	Open the official bot guide	開啟官方機器人指南
+	Find chats for this token	尋找此權杖的聊天
+	No chats yet. Send your bot a message, then try again.	還沒有聊天。先傳一則訊息給機器人，然後再試。
+	Also send when I Save	儲存時也傳送
+	Also send when I Save As	另存新檔時也傳送
+	Also send when I Export	匯出時也傳送
+	Sent {name}. {url}	已傳送：{name}。{url}
+	Sending {name} to Telegram…	正在把 {name} 傳送到 Telegram…
+	Sent to Telegram	已傳送到 Telegram
+	A Telegram send is already running.	已有一次 Telegram 傳送正在進行。
+	Send as	傳送為
+	Saved file	已儲存的檔案
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	已儲存的檔案是磁碟上的那份。PSD 和 PNG 是目前開啟文件的新副本，包含尚未儲存的修改。
+	Chats or channels. Several are allowed, separated by commas.	聊天或頻道。可以填多個，用逗號分開。
+	Also send when I Save a Copy	儲存副本時也傳送
+	Also send a PNG preview with a PSD	傳送 PSD 時一併傳送 PNG 預覽
+	Send automatically	自動傳送
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	機器人權杖存在系統鑰匙圈中，不在 PhotoCraft 的設定檔裡。
+	Sending needs an internet connection.	傳送需要網際網路連線。
+	Copied the chat id.	已複製聊天 ID。
+	*File:* `{name}`	*檔案：* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*大小：* {size}
+	*Time:* {time}	*時間：* {time}
+	*Path:* `{path}`	*路徑：* `{path}`
+	Pin the message	置頂訊息
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	置頂需要機器人是管理員。否則檔案仍會傳送。
+	Could not pin the message. The file was still sent.	無法置頂訊息。檔案仍已傳送。
+	Get from Telegram	從 Telegram 取得
+	No files yet. Send your bot a file or a photo, then try again.	還沒有檔案。請先傳檔案或照片給機器人，然後再試。
+	Open the Telegram message	開啟 Telegram 訊息
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	傳給這個機器人的最新十個檔案。點一個即可在 PhotoCraft 中開啟。
+	Get files	取回檔案
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	PhotoCraft 發出的檔案，以及傳給這個機器人的最新十個檔案。點一個即可在 PhotoCraft 中開啟。
+	No files yet. Send one from here, or send the bot a file, then try again.	還沒有檔案。從這裡傳送一個，或傳給機器人一個檔案，然後再試。
+	Telegram did not return a link for this chat.	Telegram 沒有返回這個聊天的連結。
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設

@@ -4226,6 +4226,53 @@ cameraData	Lens	Lens
 	Tight Curl	Sıkı Kıvrım
 	Loose Curl	Gevşek Kıvrım
 	Stylized dabs from a history state	Bir geçmiş durumundan stilize benekler
+	Send to Telegram…	Telegram'a gönder…
+	Send to Telegram	Telegram'a gönder
+	Bot token	Bot belirteci
+	Sent {name} to Telegram.	{name} Telegram'a gönderildi.
+	That file is larger than Telegram accepts (50 MB).	Bu dosya Telegram'ın kabul ettiğinden büyük (50 MB).
+	Could not read {name}: {error}	{name} okunamadı: {error}
+	The bot token should look like 123456789:ABC…	Bot belirteci biçimi: 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Bir sohbet kimliği (bir sayı) veya herkese açık bir @channelname girin.
+	Telegram sending needs the desktop app.	Telegram'a gönderme yalnızca masaüstü uygulamada vardır.
+	Telegram is set up. Save or export a file, then send it.	Telegram ayarlandı. Bir dosyayı kaydedin veya dışa aktarın, sonra gönderin.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	BotFather ile bir bot oluşturun ve ona herhangi bir ileti gönderin. Kimliği Sohbetleri bul ile doldurun ya da bir sayı veya @channelname yapıştırın.
+	Open the official bot guide	Resmi bot rehberini aç
+	Find chats for this token	Bu belirtecin sohbetlerini bul
+	No chats yet. Send your bot a message, then try again.	Henüz sohbet yok. Botunuza bir ileti gönderin ve yeniden deneyin.
+	Also send when I Save	Kaydettiğimde de gönder
+	Also send when I Save As	Farklı Kaydet'te de gönder
+	Also send when I Export	Dışa aktarınca da gönder
+	Sent {name}. {url}	Gönderildi: {name}. {url}
+	Sending {name} to Telegram…	{name} Telegram'a gönderiliyor…
+	Sent to Telegram	Telegram'a gönderildi
+	A Telegram send is already running.	Bir Telegram gönderimi zaten sürüyor.
+	Send as	Şu biçimde gönder
+	Saved file	Kayıtlı dosya
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Kayıtlı dosya diskteki kopyadır. PSD ve PNG, kaydedilmemiş değişiklikler dahil açık belgenin yeni bir kopyasıdır.
+	Chats or channels. Several are allowed, separated by commas.	Sohbetler veya kanallar. Birden fazlası virgülle ayrılabilir.
+	Also send when I Save a Copy	Kopya Kaydet'te de gönder
+	Also send a PNG preview with a PSD	Bir PSD ile birlikte PNG önizlemesi de gönder
+	Send automatically	Otomatik gönder
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Bot belirteci sistem anahtarlığında durur, PhotoCraft ayar dosyasında değil.
+	Sending needs an internet connection.	Göndermek için internet bağlantısı gerekir.
+	Copied the chat id.	Sohbet kimliği kopyalandı.
+	*File:* `{name}`	*Dosya:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Boyut:* {size}
+	*Time:* {time}	*Zaman:* {time}
+	*Path:* `{path}`	*Yol:* `{path}`
+	Pin the message	İletiyi sabitle
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Sabitlemek için botun yönetici olması gerekir. Değilse dosya yine gönderilir.
+	Could not pin the message. The file was still sent.	İleti sabitlenemedi. Dosya yine de gönderildi.
+	Get from Telegram	Telegram'dan al
+	No files yet. Send your bot a file or a photo, then try again.	Henüz dosya yok. Botuna bir dosya veya fotoğraf gönder, sonra yeniden dene.
+	Open the Telegram message	Telegram mesajını aç
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Bu bota gönderilen en yeni on dosya. Birine tıklamak onu PhotoCraft'ta açar.
+	Get files	Dosyaları getir
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	PhotoCraft'ın gönderdiği dosyalar ve bu bota gelen en yeni on dosya. Birine tıklamak onu PhotoCraft'ta açar.
+	No files yet. Send one from here, or send the bot a file, then try again.	Henüz dosya yok. Buradan bir tane gönderin ya da bota bir dosya gönderip yeniden deneyin.
+	Telegram did not return a link for this chat.	Telegram bu sohbet için bir bağlantı vermedi.
 	Font size presets	Yazı tipi boyutu hazır ayarları
 	Leading presets	Satır aralığı hazır ayarları
 	Tracking presets	İzleme hazır ayarları

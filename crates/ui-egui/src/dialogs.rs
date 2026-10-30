@@ -324,6 +324,18 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
         _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
+        _ if crate::telegram::owns(fields) => {
+            let room = (ui.ctx().content_rect().bottom() - ui.cursor().top() - DIALOG_CHROME).max(120.0);
+            egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| {
+                crate::telegram::body(app, ui, fields);
+            });
+        }
+        _ if crate::telegram::result_owns(fields) => {
+            let room = (ui.ctx().content_rect().bottom() - ui.cursor().top() - DIALOG_CHROME).max(120.0);
+            egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| {
+                crate::telegram::result_body(app, ui, fields);
+            });
+        }
         _ if fields.contains_key("__form") => crate::view_cmds::form_body(ui, fields),
         _ => {}
     }
@@ -419,7 +431,7 @@ fn button_row(
 ) -> (Option<bool>, bool) {
     let mut outcome: Option<bool> = None;
     let mut apply_requested = false;
-    if matches!(d.kind, DialogKind::About | DialogKind::Error) {
+    if matches!(d.kind, DialogKind::About | DialogKind::Error) || crate::telegram::result_owns(fields) {
         // ↩ is OK too, as on every other dialog (#4872), from the frame after the
         // alert appeared: the ↩ that raised it (committing a locked layer's Free
         // Transform, say) must not close it again at once.
@@ -847,7 +859,9 @@ pub fn is_route_marker(key: &str) -> bool {
 /// the engine (a disk-change save, Export As, Save for Web, Print), so automation is judged for
 /// that command rather than for the dialog's `__command`.
 fn file_command(fields: &Fields) -> Option<&'static str> {
-    if crate::disk_change_prompt::owns(fields) {
+    if crate::telegram::owns(fields) {
+        Some("file.sendTelegram")
+    } else if crate::disk_change_prompt::owns(fields) {
         Some("file.save")
     } else if fields.contains_key("__export") {
         Some("file.export.exportAs")
@@ -946,6 +960,9 @@ fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
         }
         crate::guide_layout_ui::validate(app, &d.fields)?;
     }
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| crate::telegram::owns(&d.fields)) {
+        crate::telegram::validate(app, &d.fields)?;
+    }
     Ok(())
 }
 
@@ -985,6 +1002,8 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
 fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     match d.kind {
         _ if crate::file_ui::owns(&d.fields) => crate::file_ui::confirm(app, &d.fields),
+        _ if crate::telegram::owns(&d.fields) => crate::telegram::confirm(app, &d.fields),
+        _ if crate::telegram::result_owns(&d.fields) => Ok(Value::Null),
         _ if crate::new_guide_ui::owns(&d.fields) => crate::new_guide_ui::confirm(app, &d.fields),
         _ if crate::color_picker_ui::owns(&d.fields) => crate::color_picker_ui::confirm(app, &d.fields),
         _ if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
@@ -1044,6 +1063,12 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
 /// schema dialog for filters, the Color Range dialog for `select.colorRange`, otherwise a bare
 /// confirm dialog.
 pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) -> u64 {
+    if command == "file.sendTelegram"
+        && let Ok(value) = crate::telegram::command(app)
+        && let Some(id) = value.get("dialog").and_then(serde_json::Value::as_u64)
+    {
+        return id;
+    }
     if command == "view.newGuideLayout" {
         return crate::guide_layout_ui::open(app);
     }

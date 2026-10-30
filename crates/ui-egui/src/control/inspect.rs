@@ -29,7 +29,7 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
     }
     dialogs.extend(crate::discard_ui::inspect(app));
-    json!({
+    let mut snapshot = json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
@@ -100,7 +100,24 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "jobs": crate::jobs_ui::inspect(app),
         "histogram": crate::histogram_panel::inspect(app),
         "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
-    })
+    });
+    redact_inspected_tokens(&mut snapshot);
+    snapshot
+}
+
+fn redact_inspected_tokens(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            for key in ["token", "botToken", "refreshToken", "accessToken"] {
+                object.remove(key);
+            }
+            for value in object.values_mut() {
+                redact_inspected_tokens(value);
+            }
+        }
+        Value::Array(values) => values.iter_mut().for_each(redact_inspected_tokens),
+        _ => {}
+    }
 }
 
 pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {

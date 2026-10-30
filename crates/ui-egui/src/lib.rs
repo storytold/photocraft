@@ -46,6 +46,7 @@ pub mod proxy;
 pub mod render_path;
 pub mod screenshot;
 pub mod state;
+pub mod telegram;
 pub mod texel_guard;
 pub mod theme;
 pub use titlebar::{Caption, CaptionFamily, CaptionIcon, CaptionIcons, CaptionStyle, RenderIconFn};
@@ -244,6 +245,7 @@ pub use services::{
     FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn,
     SameFileFn, SaveFileFn, SaveTextFn, Services, SystemThemeFn, WindowFrameFn, WriteFn,
 };
+pub use services::{TelegramDownloadFn, TelegramGetFn, TelegramSendFn};
 pub use text::bidi_text;
 pub use text::cjk_fonts;
 pub use text::direction;
@@ -321,6 +323,12 @@ pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
     pub services: Services,
+    /// File › Send to Telegram. Not part of [`UiState`]: the control channel must not see the token.
+    pub telegram: telegram::Settings,
+    /// The Telegram token being edited. Kept outside `UiState` so dialog inspection cannot expose it.
+    pub(crate) telegram_token_draft: String,
+    /// A send whose HTTP request is still running. Polled from the frame loop.
+    pub(crate) telegram_job: Option<telegram::Job>,
     /// Canvas caches per (document, display): CPU textures hold monitor values; the GPU
     /// canvas state is shared (`canvas::GPU_OUTPUT`).
     canvases: HashMap<(DocId, u32), canvas::CanvasCache>,

@@ -154,6 +154,8 @@ pub struct SaveJob {
     /// Started with Save in Background off: the app waits for it under the modal progress dialog
     /// (see [`foreground_save`]).
     pub foreground: bool,
+    /// Send this file to Telegram once the write has finished. None for saves the user did not arm.
+    pub notify_telegram: Option<crate::telegram::WriteKind>,
 }
 
 /// The shell's job bookkeeping.
@@ -308,9 +310,8 @@ pub fn start_save(
             Ok(Some((path, warnings)))
         }
         Started::Job(job) => {
-            // Preferences › File Handling › Save in Background, read when the save starts.
             let foreground = !app.session.prefs().file_handling.save_in_background;
-            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false, foreground });
+            app.jobs.saves.push(SaveJob { job, doc, revision, path, copy, automation, state, ended: false, foreground, notify_telegram: None });
             // Control and MCP requests wait on it, as for other jobs.
             app.jobs.last_started = Some(job);
             // The status bar's progress readout names the save; clear any old message.
@@ -337,6 +338,10 @@ fn finish_save(app: &mut PhotocraftApp, ctx: &egui::Context, save: SaveJob, labe
             }
             if !save.copy {
                 crate::discard_ui::saved_document(app, ctx, save.doc);
+            }
+            if let Some(kind) = save.notify_telegram {
+                let source = app.session.documents().iter().find(|st| st.doc.id == save.doc).map(|st| st.doc.clone());
+                crate::telegram::after_written_for(app, &save.path, kind, source.as_deref());
             }
         }
         JobOutcome::Failed(err) => {

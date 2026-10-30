@@ -220,6 +220,7 @@ pub fn quick_export_selected_layers_png(app: &mut PhotocraftApp) -> Result<Value
             let write = app.services.write.as_mut().ok_or("no writer configured")?;
             write(&path, &bytes)?;
             crate::notices::io_warnings(app, &format!("Exported {}", crate::file_open::display_name(&path)), &warnings);
+            crate::telegram::after_written_for(app, &path, crate::telegram::WriteKind::Export, Some(doc));
             exported.push(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}));
         }
         app.ui.status = format!("Exported {} PNG files", exported.len());
@@ -1023,8 +1024,6 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     let f = f.clone();
     app.pick_save(&suggested, move |app, path| {
         let r = write_export(app, &doc, &f, &path)?;
-        // An action being recorded keeps a whole-document export with its destination and
-        // settings (#7207). A layer's export isn't recorded: its layer is this document's.
         if !f.contains_key("__layer") {
             let mut step = settings_of(&f);
             step.insert("path".into(), json!(path));
@@ -1047,6 +1046,7 @@ fn write_export(app: &mut PhotocraftApp, doc: &Document, f: &Map<String, Value>,
     let template = "Exported {path}";
     let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(path))]);
     crate::notices::io_warnings(app, &what, &warnings);
+    crate::telegram::after_written_for(app, path, crate::telegram::WriteKind::Export, Some(&out));
     Ok(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}))
 }
 
@@ -1091,6 +1091,7 @@ fn confirm_layers(app: &mut PhotocraftApp, f: &Map<String, Value>, ids: &[photoc
             let template = "Exported {path}";
             let what = crate::i18n::fmt(tl!(template), &[("path", &crate::file_open::display_name(&path))]);
             crate::notices::io_warnings(app, &what, &warnings);
+            crate::telegram::after_written_for(app, &path, crate::telegram::WriteKind::Export, Some(&out));
             exported.push(json!({"path": path, "bytes": bytes.len(), "warnings": warnings}));
         }
         let template = "Exported {n} files";
@@ -1134,7 +1135,11 @@ pub fn quick_export_png(app: &mut PhotocraftApp) -> Result<Value, String> {
 fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     let r = app.run("file.export.quickExport", p)?;
     let template = "Exported {path}";
-    app.ui.status = crate::i18n::fmt(tl!(template), &[("path", r["path"].as_str().unwrap_or_default())]);
+    let path = r["path"].as_str().unwrap_or_default().to_string();
+    app.ui.status = crate::i18n::fmt(tl!(template), &[("path", &path)]);
+    if !path.is_empty() {
+        crate::telegram::after_written(app, &path, crate::telegram::WriteKind::Export);
+    }
     Ok(r)
 }
 

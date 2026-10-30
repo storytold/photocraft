@@ -3718,6 +3718,53 @@ curves	Smooth	매끄럽게
 	Category	카테고리
 	Target	대상
 	Units	단위
+	Send to Telegram…	Telegram으로 보내기…
+	Send to Telegram	Telegram으로 보내기
+	Bot token	봇 토큰
+	Sent {name} to Telegram.	{name}을(를) Telegram으로 보냈습니다.
+	That file is larger than Telegram accepts (50 MB).	이 파일은 Telegram이 받는 크기(50 MB)보다 큽니다.
+	Could not read {name}: {error}	{name}을(를) 읽을 수 없습니다: {error}
+	The bot token should look like 123456789:ABC…	봇 토큰 형식: 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	채팅 ID(숫자) 또는 공개 @channelname 을 입력합니다.
+	Telegram sending needs the desktop app.	Telegram 보내기는 데스크톱 앱에서만 됩니다.
+	Telegram is set up. Save or export a file, then send it.	Telegram이 설정되었습니다. 파일을 저장하거나 내보낸 다음 보냅니다.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	BotFather로 봇을 만든 다음 그 봇에게 아무 메시지나 보냅니다. 채팅 찾기로 ID를 채우거나 숫자 또는 @channelname 을 붙여 넣습니다.
+	Open the official bot guide	공식 봇 안내 열기
+	Find chats for this token	이 토큰의 채팅 찾기
+	No chats yet. Send your bot a message, then try again.	아직 채팅이 없습니다. 봇에게 메시지를 보낸 다음 다시 시도하세요.
+	Also send when I Save	저장할 때도 보내기
+	Also send when I Save As	다른 이름으로 저장할 때도 보내기
+	Also send when I Export	내보낼 때도 보내기
+	Sent {name}. {url}	보냈습니다: {name}. {url}
+	Sending {name} to Telegram…	{name}을(를) Telegram으로 보내는 중…
+	Sent to Telegram	Telegram으로 보냈습니다
+	A Telegram send is already running.	Telegram 보내기가 이미 진행 중입니다.
+	Send as	보내는 형식
+	Saved file	저장된 파일
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	저장된 파일은 디스크의 복사본입니다. PSD와 PNG는 저장하지 않은 변경을 포함한, 열린 문서의 새 복사본입니다.
+	Chats or channels. Several are allowed, separated by commas.	채팅 또는 채널. 여러 개는 쉼표로 구분합니다.
+	Also send when I Save a Copy	사본 저장할 때도 보내기
+	Also send a PNG preview with a PSD	PSD와 함께 PNG 미리보기도 보내기
+	Send automatically	자동으로 보내기
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	봇 토큰은 시스템 키체인에 있으며 PhotoCraft 설정 파일에는 없습니다.
+	Sending needs an internet connection.	보내려면 인터넷 연결이 필요합니다.
+	Copied the chat id.	채팅 ID를 복사했습니다.
+	*File:* `{name}`	*파일:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*크기:* {size}
+	*Time:* {time}	*시간:* {time}
+	*Path:* `{path}`	*경로:* `{path}`
+	Pin the message	메시지 고정
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	고정하려면 봇이 관리자여야 합니다. 아니면 파일은 그대로 보내집니다.
+	Could not pin the message. The file was still sent.	메시지를 고정하지 못했습니다. 파일은 보내졌습니다.
+	Get from Telegram	텔레그램에서 가져오기
+	No files yet. Send your bot a file or a photo, then try again.	아직 파일이 없습니다. 봇에게 파일이나 사진을 보낸 뒤 다시 시도하세요.
+	Open the Telegram message	Telegram 메시지 열기
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	이 봇에 보낸 최신 파일 10개. 하나를 클릭하면 PhotoCraft에서 열립니다.
+	Get files	파일 가져오기
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	PhotoCraft에서 보낸 파일과 이 봇에 보낸 최신 파일 10개. 하나를 클릭하면 PhotoCraft에서 열립니다.
+	No files yet. Send one from here, or send the bot a file, then try again.	아직 파일이 없습니다. 여기서 보내거나 봇에게 파일을 보낸 다음 다시 시도하세요.
+	Telegram did not return a link for this chat.	Telegram이 이 채팅의 링크를 주지 않았습니다.
 	Font size presets	글꼴 크기 사전 설정
 	Leading presets	행간 사전 설정
 	Tracking presets	자간 사전 설정

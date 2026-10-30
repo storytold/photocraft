@@ -3521,6 +3521,53 @@ curves	Smooth	Haluskan
 	Gamma	Gamma
 	Profile	Profil
 	Target	Target
+	Send to Telegram…	Kirim ke Telegram…
+	Send to Telegram	Kirim ke Telegram
+	Bot token	Token bot
+	Sent {name} to Telegram.	{name} terkirim ke Telegram.
+	That file is larger than Telegram accepts (50 MB).	Berkas ini lebih besar daripada yang diterima Telegram (50 MB).
+	Could not read {name}: {error}	Tidak dapat membaca {name}: {error}
+	The bot token should look like 123456789:ABC…	Token bot seharusnya berbentuk 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Masukkan id obrolan (angka) atau @channelname publik.
+	Telegram sending needs the desktop app.	Pengiriman Telegram hanya ada di aplikasi desktop.
+	Telegram is set up. Save or export a file, then send it.	Telegram sudah disiapkan. Simpan atau ekspor berkas, lalu kirim.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Buat bot dengan BotFather, lalu kirim pesan apa saja ke bot itu. Isi id lewat Cari obrolan, atau tempel angka atau @channelname.
+	Open the official bot guide	Buka panduan bot resmi
+	Find chats for this token	Cari obrolan untuk token ini
+	No chats yet. Send your bot a message, then try again.	Belum ada obrolan. Kirim pesan ke bot Anda, lalu coba lagi.
+	Also send when I Save	Kirim juga saat Simpan
+	Also send when I Save As	Kirim juga saat Simpan Sebagai
+	Also send when I Export	Kirim juga saat Ekspor
+	Sent {name}. {url}	Terkirim: {name}. {url}
+	Sending {name} to Telegram…	Mengirim {name} ke Telegram…
+	Sent to Telegram	Terkirim ke Telegram
+	A Telegram send is already running.	Pengiriman Telegram sudah berjalan.
+	Send as	Kirim sebagai
+	Saved file	Berkas tersimpan
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Berkas tersimpan adalah salinan di disk. PSD dan PNG adalah salinan baru dokumen yang terbuka, termasuk perubahan yang belum disimpan.
+	Chats or channels. Several are allowed, separated by commas.	Obrolan atau kanal. Beberapa boleh, dipisah koma.
+	Also send when I Save a Copy	Kirim juga saat Simpan Salinan
+	Also send a PNG preview with a PSD	Kirim juga pratinjau PNG bersama PSD
+	Send automatically	Kirim otomatis
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Token bot ada di keychain sistem, bukan di berkas pengaturan PhotoCraft.
+	Sending needs an internet connection.	Mengirim membutuhkan koneksi internet.
+	Copied the chat id.	Id obrolan disalin.
+	*File:* `{name}`	*Berkas:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Ukuran:* {size}
+	*Time:* {time}	*Waktu:* {time}
+	*Path:* `{path}`	*Jalur:* `{path}`
+	Pin the message	Sematkan pesan
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Menyematkan butuh bot sebagai admin. Jika tidak, berkas tetap terkirim.
+	Could not pin the message. The file was still sent.	Pesan tidak dapat disematkan. Berkas tetap terkirim.
+	Get from Telegram	Ambil dari Telegram
+	No files yet. Send your bot a file or a photo, then try again.	Belum ada berkas. Kirim berkas atau foto ke bot, lalu coba lagi.
+	Open the Telegram message	Buka pesan Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Sepuluh berkas terbaru yang dikirim ke bot ini. Klik satu untuk membukanya di PhotoCraft.
+	Get files	Ambil berkas
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Berkas yang dikirim PhotoCraft, dan sepuluh berkas terbaru ke bot ini. Klik satu untuk membukanya di PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Belum ada berkas. Kirim satu dari sini atau ke bot, lalu coba lagi.
+	Telegram did not return a link for this chat.	Telegram tidak memberi tautan untuk obrolan ini.
 	Font size presets	Preset ukuran font
 	Leading presets	Preset leading
 	Tracking presets	Preset tracking

@@ -3997,6 +3997,53 @@ curves	Smooth	Làm mượt
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Tỷ lệ khung hình
+	Send to Telegram…	Gửi tới Telegram…
+	Send to Telegram	Gửi tới Telegram
+	Bot token	Mã token bot
+	Sent {name} to Telegram.	Đã gửi {name} tới Telegram.
+	That file is larger than Telegram accepts (50 MB).	Tệp này lớn hơn mức Telegram nhận (50 MB).
+	Could not read {name}: {error}	Không đọc được {name}: {error}
+	The bot token should look like 123456789:ABC…	Mã token của bot phải trông như 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Nhập id cuộc trò chuyện (một số) hoặc @channelname công khai.
+	Telegram sending needs the desktop app.	Gửi Telegram chỉ có trong ứng dụng máy tính.
+	Telegram is set up. Save or export a file, then send it.	Telegram đã được thiết lập. Hãy lưu hoặc xuất một tệp, rồi gửi.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Tạo bot bằng BotFather, rồi gửi cho bot đó một tin bất kỳ. Điền id bằng Tìm cuộc trò chuyện, hoặc dán một số hay @channelname.
+	Open the official bot guide	Mở hướng dẫn bot chính thức
+	Find chats for this token	Tìm cuộc trò chuyện cho token này
+	No chats yet. Send your bot a message, then try again.	Chưa có cuộc trò chuyện. Hãy gửi tin cho bot rồi thử lại.
+	Also send when I Save	Cũng gửi khi tôi Lưu
+	Also send when I Save As	Cũng gửi khi tôi Lưu thành
+	Also send when I Export	Cũng gửi khi tôi Xuất
+	Sent {name}. {url}	Đã gửi: {name}. {url}
+	Sending {name} to Telegram…	Đang gửi {name} tới Telegram…
+	Sent to Telegram	Đã gửi tới Telegram
+	A Telegram send is already running.	Một lượt gửi Telegram đang chạy.
+	Send as	Gửi dưới dạng
+	Saved file	Tệp đã lưu
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Tệp đã lưu là bản trên đĩa. PSD và PNG là bản sao mới của tài liệu đang mở, gồm cả thay đổi chưa lưu.
+	Chats or channels. Several are allowed, separated by commas.	Cuộc trò chuyện hoặc kênh. Nhiều mục được phép, cách nhau bằng dấu phẩy.
+	Also send when I Save a Copy	Cũng gửi khi tôi Lưu bản sao
+	Also send a PNG preview with a PSD	Gửi kèm bản xem PNG với PSD
+	Send automatically	Tự động gửi
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Mã token của bot nằm trong móc khóa hệ thống, không nằm trong tệp cài đặt PhotoCraft.
+	Sending needs an internet connection.	Việc gửi cần kết nối internet.
+	Copied the chat id.	Đã sao chép id cuộc trò chuyện.
+	*File:* `{name}`	*Tệp:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Kích thước:* {size}
+	*Time:* {time}	*Thời gian:* {time}
+	*Path:* `{path}`	*Đường dẫn:* `{path}`
+	Pin the message	Ghim tin nhắn
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Ghim cần bot là quản trị viên. Nếu không, tệp vẫn được gửi.
+	Could not pin the message. The file was still sent.	Không ghim được tin nhắn. Tệp vẫn đã được gửi.
+	Get from Telegram	Lấy từ Telegram
+	No files yet. Send your bot a file or a photo, then try again.	Chưa có tệp. Hãy gửi cho bot một tệp hoặc ảnh, rồi thử lại.
+	Open the Telegram message	Mở tin nhắn Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Mười tệp mới nhất gửi cho bot này. Nhấp một tệp để mở trong PhotoCraft.
+	Get files	Lấy tệp
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Tệp PhotoCraft đã gửi và mười tệp mới nhất gửi cho bot này. Nhấp một tệp để mở trong PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Chưa có tệp. Hãy gửi một tệp từ đây hoặc cho bot, rồi thử lại.
+	Telegram did not return a link for this chat.	Telegram không trả về liên kết cho cuộc trò chuyện này.
 	Font size presets	Cỡ chữ đặt sẵn
 	Leading presets	Giãn dòng đặt sẵn
 	Tracking presets	Khoảng cách chữ đặt sẵn

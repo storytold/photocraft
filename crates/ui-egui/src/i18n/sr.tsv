@@ -4570,6 +4570,42 @@ shape	Appearance	Izgled
 	Tight Curl	Usko uvijeno
 	Loose Curl	Labavo uvijeno
 	Stylized dabs from a history state	Stilizovane mrlje iz stanja istorije
+	Send to Telegram…	Pošalji na Telegram…
+	Send to Telegram	Pošalji na Telegram
+	*File:* `{name}`	*Datoteka:* `{name}`
+	*Format:* {format}	*Oblik:* {format}
+	*Path:* `{path}`	*Putanja:* `{path}`
+	*Size:* {size}	*Veličina:* {size}
+	*Time:* {time}	*Vreme:* {time}
+	Also send a PNG preview with a PSD	Uz PSD pošalji i PNG pregled
+	Also send when I Export	Pošalji i pri izvozu
+	Also send when I Save	Pošalji i pri čuvanju
+	Also send when I Save As	Pošalji i pri „Sačuvaj kao“
+	Also send when I Save a Copy	Pošalji i pri čuvanju kopije
+	Bot token	Token bota
+	Chats or channels. Several are allowed, separated by commas.	Ćaskanja ili kanali. Dozvoljeno je više njih, odvojenih zarezima.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Napravite bota preko BotFather-a i pošaljite mu bilo koju poruku. Id popunite preko traženja ćaskanja, ili nalepite broj ili @channelname.
+	Find chats for this token	Nađi ćaskanja za ovaj token
+	Get from Telegram	Preuzmi sa Telegrama
+	No chats yet. Send your bot a message, then try again.	Još nema ćaskanja. Pošaljite botu poruku, pa pokušajte ponovo.
+	No files yet. Send your bot a file or a photo, then try again.	Još nema datoteka. Pošaljite botu datoteku ili fotografiju, pa pokušajte ponovo.
+	Open the official bot guide	Otvori zvanično uputstvo za bota
+	Pin the message	Zakači poruku
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Kačenje traži da bot bude administrator. Ako nije, datoteka se ipak pošalje.
+	Saved file	Sačuvana datoteka
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Sačuvana datoteka šalje kopiju na disku. PSD i PNG su nova kopija otvorenog dokumenta, uključujući izmene koje niste sačuvali.
+	Send as	Pošalji kao
+	Send automatically	Šalji automatski
+	Sending needs an internet connection.	Za slanje je potrebna veza sa internetom.
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Token bota ostaje u sistemskom privezku ključeva, ne u datoteci podešavanja PhotoCraft-a.
+	Open the Telegram message	Otvori Telegram poruku
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Deset najnovijih datoteka poslatih ovom botu. Klik otvara jednu u PhotoCraftu.
+	Get files	Preuzmi datoteke
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Datoteke koje je PhotoCraft poslao i deset najnovijih ovom botu. Klik otvara jednu u PhotoCraftu.
+	No files yet. Send one from here, or send the bot a file, then try again.	Još nema datoteka. Pošaljite jednu odavde ili botu, pa pokušajte ponovo.
+	Telegram did not return a link for this chat.	Telegram nije vratio vezu za ovaj razgovor.
+	Sent {name}. {url}	Poslato: {name}. {url}
+	Could not pin the message. The file was still sent.	Nije moguće zakačiti poruku. Datoteka je ipak poslata.
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova

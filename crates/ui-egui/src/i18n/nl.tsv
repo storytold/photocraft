@@ -4258,6 +4258,53 @@ curves	Smooth	Vloeiend maken
 	Tight Curl	Strakke krul
 	Loose Curl	Losse krul
 	Stylized dabs from a history state	Gestileerde tikken uit een historiestatus
+	Send to Telegram…	Naar Telegram sturen…
+	Send to Telegram	Naar Telegram sturen
+	Bot token	Bottoken
+	Sent {name} to Telegram.	{name} naar Telegram gestuurd.
+	That file is larger than Telegram accepts (50 MB).	Dit bestand is groter dan Telegram aanneemt (50 MB).
+	Could not read {name}: {error}	{name} kon niet worden gelezen: {error}
+	The bot token should look like 123456789:ABC…	Het bottoken hoort eruit te zien als 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Vul een chat-id (een getal) of een openbare @channelname in.
+	Telegram sending needs the desktop app.	Naar Telegram sturen kan alleen in de desktop-app.
+	Telegram is set up. Save or export a file, then send it.	Telegram is ingesteld. Sla een bestand op of exporteer het, en stuur het dan.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Maak een bot met BotFather en stuur die bot een bericht. Vul het id via Chats zoeken, of plak een getal of @channelname.
+	Open the official bot guide	Officiële botgids openen
+	Find chats for this token	Chats bij dit token zoeken
+	No chats yet. Send your bot a message, then try again.	Nog geen chats. Stuur je bot een bericht en probeer het opnieuw.
+	Also send when I Save	Ook bij Opslaan sturen
+	Also send when I Save As	Ook bij Opslaan als sturen
+	Also send when I Export	Ook bij Exporteren sturen
+	Sent {name}. {url}	Verstuurd: {name}. {url}
+	Sending {name} to Telegram…	{name} naar Telegram sturen…
+	Sent to Telegram	Naar Telegram gestuurd
+	A Telegram send is already running.	Er loopt al een verzending naar Telegram.
+	Send as	Versturen als
+	Saved file	Opgeslagen bestand
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Het opgeslagen bestand is de kopie op schijf. PSD en PNG zijn een nieuwe kopie van het open document, inclusief niet-opgeslagen wijzigingen.
+	Chats or channels. Several are allowed, separated by commas.	Chats of kanalen. Meerdere mogen, gescheiden door komma's.
+	Also send when I Save a Copy	Ook bij Kopie opslaan sturen
+	Also send a PNG preview with a PSD	Met een PSD ook een PNG-voorbeeld sturen
+	Send automatically	Automatisch sturen
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Het bottoken staat in de sleutelhanger van het systeem, niet in het instellingenbestand van PhotoCraft.
+	Sending needs an internet connection.	Versturen heeft een internetverbinding nodig.
+	Copied the chat id.	Chat-id gekopieerd.
+	*File:* `{name}`	*Bestand:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Grootte:* {size}
+	*Time:* {time}	*Tijd:* {time}
+	*Path:* `{path}`	*Pad:* `{path}`
+	Pin the message	Bericht vastzetten
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Vastzetten kan alleen als de bot beheerder is. Anders wordt het bestand toch verzonden.
+	Could not pin the message. The file was still sent.	Het bericht kon niet worden vastgezet. Het bestand is wel verzonden.
+	Get from Telegram	Ophalen uit Telegram
+	No files yet. Send your bot a file or a photo, then try again.	Nog geen bestanden. Stuur je bot een bestand of een foto en probeer het opnieuw.
+	Open the Telegram message	Telegram-bericht openen
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	De tien nieuwste bestanden naar deze bot. Een klik opent er een in PhotoCraft.
+	Get files	Bestanden ophalen
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Bestanden die PhotoCraft stuurde, en de tien nieuwste naar deze bot. Een klik opent er een in PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Nog geen bestanden. Stuur er een vanaf hier of naar de bot, en probeer het opnieuw.
+	Telegram did not return a link for this chat.	Telegram gaf geen link voor deze chat.
 	Font size presets	Voorinstellingen lettergrootte
 	Leading presets	Voorinstellingen interlinie
 	Tracking presets	Voorinstellingen spatiëring

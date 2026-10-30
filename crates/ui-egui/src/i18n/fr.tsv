@@ -4540,6 +4540,53 @@ shape	Appearance	Apparence
 	Tight Curl	Boucle serrée
 	Loose Curl	Boucle lâche
 	Stylized dabs from a history state	Touches stylisées depuis un état d'historique
+	Send to Telegram…	Envoyer vers Telegram…
+	Send to Telegram	Envoyer vers Telegram
+	Bot token	Jeton du bot
+	Sent {name} to Telegram.	{name} envoyé vers Telegram.
+	That file is larger than Telegram accepts (50 MB).	Ce fichier dépasse ce que Telegram accepte (50 Mo).
+	Could not read {name}: {error}	Impossible de lire {name} : {error}
+	The bot token should look like 123456789:ABC…	Le jeton du bot doit ressembler à 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Saisissez un identifiant de discussion (un nombre) ou un @channelname public.
+	Telegram sending needs the desktop app.	L'envoi vers Telegram n'existe que dans l'application de bureau.
+	Telegram is set up. Save or export a file, then send it.	Telegram est configuré. Enregistrez ou exportez un fichier, puis envoyez-le.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Créez un bot avec BotFather, puis envoyez-lui un message. Remplissez l'identifiant avec Chercher les discussions, ou collez un nombre ou @channelname.
+	Open the official bot guide	Ouvrir le guide officiel des bots
+	Find chats for this token	Chercher les discussions de ce jeton
+	No chats yet. Send your bot a message, then try again.	Aucune discussion pour l'instant. Envoyez un message à votre bot, puis réessayez.
+	Also send when I Save	Envoyer aussi quand j'enregistre
+	Also send when I Save As	Envoyer aussi quand j'enregistre sous
+	Also send when I Export	Envoyer aussi quand j'exporte
+	Sent {name}. {url}	Envoyé : {name}. {url}
+	Sending {name} to Telegram…	Envoi de {name} vers Telegram…
+	Sent to Telegram	Envoyé vers Telegram
+	A Telegram send is already running.	Un envoi vers Telegram est déjà en cours.
+	Send as	Envoyer comme
+	Saved file	Fichier enregistré
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Le fichier enregistré est la copie sur le disque. PSD et PNG sont une nouvelle copie du document ouvert, y compris les modifications non enregistrées.
+	Chats or channels. Several are allowed, separated by commas.	Discussions ou canaux. Plusieurs sont possibles, séparés par des virgules.
+	Also send when I Save a Copy	Envoyer aussi quand j'enregistre une copie
+	Also send a PNG preview with a PSD	Envoyer aussi un aperçu PNG avec un PSD
+	Send automatically	Envoi automatique
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Le jeton du bot est dans le trousseau du système, pas dans le fichier de réglages de PhotoCraft.
+	Sending needs an internet connection.	L'envoi nécessite une connexion Internet.
+	Copied the chat id.	Identifiant de discussion copié.
+	*File:* `{name}`	*Fichier :* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Taille :* {size}
+	*Time:* {time}	*Heure :* {time}
+	*Path:* `{path}`	*Chemin :* `{path}`
+	Pin the message	Épingler le message
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Épingler exige que le bot soit administrateur. Sinon, le fichier est quand même envoyé.
+	Could not pin the message. The file was still sent.	Le message n'a pas pu être épinglé. Le fichier a bien été envoyé.
+	Get from Telegram	Récupérer depuis Telegram
+	No files yet. Send your bot a file or a photo, then try again.	Pas encore de fichiers. Envoyez un fichier ou une photo à votre bot, puis réessayez.
+	Open the Telegram message	Ouvrir le message Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Les dix fichiers les plus récents envoyés à ce bot. Un clic en ouvre un dans PhotoCraft.
+	Get files	Récupérer les fichiers
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Fichiers envoyés depuis PhotoCraft et les dix plus récents envoyés à ce bot. Un clic en ouvre un dans PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Pas encore de fichiers. Envoyez-en un d'ici ou au bot, puis réessayez.
+	Telegram did not return a link for this chat.	Telegram n'a pas renvoyé de lien pour cette discussion.
 	Font size presets	Tailles de police prédéfinies
 	Leading presets	Interlignages prédéfinis
 	Tracking presets	Approches prédéfinies

@@ -30,6 +30,7 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("file.exit", "Exit", &["File"], Some("Cmd+Q")),
     ("edit.freeTransform", "Free Transform", &["Edit"], Some("Cmd+T")),
     ("file.export.exportAs", "Export As…", &["File", "Export"], Some("Cmd+Alt+Shift+W")),
+    ("file.sendTelegram", "Send to Telegram…", &["File"], None),
     ("file.export.quickExportAsPng", "Quick Export as PNG", &["File", "Export"], None),
     ("edit.transform.scale", "Scale", &["Edit", "Transform"], None),
     ("edit.transform.rotate", "Rotate", &["Edit", "Transform"], None),

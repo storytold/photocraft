@@ -4201,6 +4201,53 @@ curves	Smooth	Εξομάλυνση
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Target	Στόχος
+	Send to Telegram…	Αποστολή στο Telegram…
+	Send to Telegram	Αποστολή στο Telegram
+	Bot token	Διακριτικό bot
+	Sent {name} to Telegram.	Στάλθηκε το {name} στο Telegram.
+	That file is larger than Telegram accepts (50 MB).	Το αρχείο είναι μεγαλύτερο από ό,τι δέχεται το Telegram (50 MB).
+	Could not read {name}: {error}	Δεν ήταν δυνατή η ανάγνωση του {name}: {error}
+	The bot token should look like 123456789:ABC…	Το διακριτικό του bot πρέπει να μοιάζει με 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Βάλε ένα id συνομιλίας (αριθμό) ή ένα δημόσιο @channelname.
+	Telegram sending needs the desktop app.	Η αποστολή στο Telegram υπάρχει μόνο στην εφαρμογή για υπολογιστή.
+	Telegram is set up. Save or export a file, then send it.	Το Telegram ρυθμίστηκε. Αποθήκευσε ή εξήγαγε ένα αρχείο και μετά στείλ' το.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Φτιάξε ένα bot στο BotFather και στείλε του οποιοδήποτε μήνυμα. Συμπλήρωσε το id με Εύρεση συνομιλιών, ή επικόλλησε έναν αριθμό ή @channelname.
+	Open the official bot guide	Άνοιγμα του επίσημου οδηγού για bot
+	Find chats for this token	Εύρεση συνομιλιών για αυτό το διακριτικό
+	No chats yet. Send your bot a message, then try again.	Δεν υπάρχουν ακόμη συνομιλίες. Στείλε ένα μήνυμα στο bot και δοκίμασε ξανά.
+	Also send when I Save	Αποστολή και κατά την Αποθήκευση
+	Also send when I Save As	Αποστολή και κατά την Αποθήκευση ως
+	Also send when I Export	Αποστολή και κατά την Εξαγωγή
+	Sent {name}. {url}	Στάλθηκε το {name}. {url}
+	Sending {name} to Telegram…	Αποστολή του {name} στο Telegram…
+	Sent to Telegram	Στάλθηκε στο Telegram
+	A Telegram send is already running.	Μια αποστολή στο Telegram εκτελείται ήδη.
+	Send as	Αποστολή ως
+	Saved file	Αποθηκευμένο αρχείο
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Το αποθηκευμένο αρχείο είναι το αντίγραφο στον δίσκο. Τα PSD και PNG είναι νέο αντίγραφο του ανοιχτού εγγράφου, μαζί με αλλαγές που δεν έχουν αποθηκευτεί.
+	Chats or channels. Several are allowed, separated by commas.	Συνομιλίες ή κανάλια. Επιτρέπονται πολλές, χωρισμένες με κόμματα.
+	Also send when I Save a Copy	Αποστολή και κατά την Αποθήκευση αντιγράφου
+	Also send a PNG preview with a PSD	Αποστολή και προεπισκόπησης PNG μαζί με PSD
+	Send automatically	Αυτόματη αποστολή
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Το διακριτικό του bot μένει στην κλειδοθήκη του συστήματος, όχι στο αρχείο ρυθμίσεων του PhotoCraft.
+	Sending needs an internet connection.	Η αποστολή χρειάζεται σύνδεση στο διαδίκτυο.
+	Copied the chat id.	Το id συνομιλίας αντιγράφηκε.
+	*File:* `{name}`	*Αρχείο:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Μέγεθος:* {size}
+	*Time:* {time}	*Ώρα:* {time}
+	*Path:* `{path}`	*Διαδρομή:* `{path}`
+	Pin the message	Καρφίτσωμα μηνύματος
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Το καρφίτσωμα θέλει τον bot διαχειριστή. Αλλιώς το αρχείο στέλνεται και πάλι.
+	Could not pin the message. The file was still sent.	Το μήνυμα δεν καρφιτσώθηκε. Το αρχείο στάλθηκε.
+	Get from Telegram	Λήψη από το Telegram
+	No files yet. Send your bot a file or a photo, then try again.	Δεν υπάρχουν αρχεία ακόμα. Στείλτε στο bot ένα αρχείο ή μια φωτογραφία και δοκιμάστε ξανά.
+	Open the Telegram message	Άνοιγμα του μηνύματος στο Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Τα δέκα νεότερα αρχεία προς αυτό το bot. Κλικ για άνοιγμα στο PhotoCraft.
+	Get files	Λήψη αρχείων
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Αρχεία που έστειλε το PhotoCraft και τα δέκα νεότερα προς αυτό το bot. Κλικ για άνοιγμα στο PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Δεν υπάρχουν αρχεία ακόμα. Στείλτε ένα από εδώ ή στο bot και δοκιμάστε ξανά.
+	Telegram did not return a link for this chat.	Το Telegram δεν έδωσε σύνδεσμο για αυτή τη συνομιλία.
 	Font size presets	Προεπιλογές μεγέθους γραμματοσειράς
 	Leading presets	Προεπιλογές διάστιχου
 	Tracking presets	Προεπιλογές διαστήματος χαρακτήρων

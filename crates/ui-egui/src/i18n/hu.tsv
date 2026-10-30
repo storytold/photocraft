@@ -4412,6 +4412,53 @@ cameraRaw	Yellow	Sárga
 	Tight Curl	Szoros göndör
 	Loose Curl	Laza göndör
 	Stylized dabs from a history state	Stilizált pöttyök egy előzményállapotból
+	Send to Telegram…	Küldés a Telegramra…
+	Send to Telegram	Küldés a Telegramra
+	Bot token	Bot-token
+	Sent {name} to Telegram.	{name} elküldve a Telegramra.
+	That file is larger than Telegram accepts (50 MB).	A fájl nagyobb, mint amit a Telegram elfogad (50 MB).
+	Could not read {name}: {error}	{name} nem olvasható: {error}
+	The bot token should look like 123456789:ABC…	A bot-tokennek így kell kinéznie: 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Adj meg egy chat-azonosítót (egy számot) vagy egy nyilvános @channelname nevet.
+	Telegram sending needs the desktop app.	A Telegramra küldés csak az asztali alkalmazásban van.
+	Telegram is set up. Save or export a file, then send it.	A Telegram be van állítva. Mentsen vagy exportáljon egy fájlt, majd küldje el.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Hozz létre egy botot a BotFatherrel, és küldj neki egy üzenetet. Az azonosítót a Csevegések keresése tölti ki, vagy illessz be egy számot vagy @channelname nevet.
+	Open the official bot guide	A hivatalos botútmutató megnyitása
+	Find chats for this token	Csevegések keresése ehhez a tokenhez
+	No chats yet. Send your bot a message, then try again.	Még nincs csevegés. Küldj üzenetet a botnak, majd próbáld újra.
+	Also send when I Save	Küldés mentéskor is
+	Also send when I Save As	Küldés a Mentés másként során is
+	Also send when I Export	Küldés exportáláskor is
+	Sent {name}. {url}	Elküldve: {name}. {url}
+	Sending {name} to Telegram…	{name} küldése a Telegramra…
+	Sent to Telegram	Elküldve a Telegramra
+	A Telegram send is already running.	Már fut egy küldés a Telegramra.
+	Send as	Küldés mint
+	Saved file	Mentett fájl
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	A mentett fájl a lemezen lévő másolat. A PSD és a PNG az nyitott dokumentum új másolata, a nem mentett módosításokkal együtt.
+	Chats or channels. Several are allowed, separated by commas.	Csevegések vagy csatornák. Több is megadható, vesszővel elválasztva.
+	Also send when I Save a Copy	Küldés a Másolat mentése során is
+	Also send a PNG preview with a PSD	PNG-előnézet küldése a PSD mellé
+	Send automatically	Automatikus küldés
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	A bot-token a rendszer kulcstartójában van, nem a PhotoCraft beállításfájljában.
+	Sending needs an internet connection.	A küldéshez internetkapcsolat kell.
+	Copied the chat id.	A chat-azonosító másolva.
+	*File:* `{name}`	*Fájl:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Méret:* {size}
+	*Time:* {time}	*Idő:* {time}
+	*Path:* `{path}`	*Útvonal:* `{path}`
+	Pin the message	Üzenet kitűzése
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	A kitűzéshez a botnak adminnak kell lennie. Különben a fájl így is elküldődik.
+	Could not pin the message. The file was still sent.	Az üzenetet nem sikerült kitűzni. A fájl elküldve.
+	Get from Telegram	Letöltés a Telegramból
+	No files yet. Send your bot a file or a photo, then try again.	Még nincsenek fájlok. Küldjön a botnak egy fájlt vagy fényképet, majd próbálja újra.
+	Open the Telegram message	A Telegram-üzenet megnyitása
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	A botnak küldött tíz legújabb fájl. Egy kattintás megnyitja a PhotoCraftban.
+	Get files	Fájlok behozása
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	A PhotoCraftból küldött fájlok és a botnak küldött tíz legújabb. Egy kattintás megnyitja a PhotoCraftban.
+	No files yet. Send one from here, or send the bot a file, then try again.	Még nincsenek fájlok. Küldjön egyet innen vagy a botnak, majd próbálja újra.
+	Telegram did not return a link for this chat.	A Telegram nem adott hivatkozást ehhez a csevegéshez.
 	Font size presets	Betűméret-előbeállítások
 	Leading presets	Sorköz-előbeállítások
 	Tracking presets	Betűköz-előbeállítások

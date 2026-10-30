@@ -761,7 +761,67 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
         // Set by main, which starts loading the store before the window opens.
         preset_store: None,
         is_wayland: false,
+        load_telegram: Some(Box::new(load_telegram_file)),
+        save_telegram: Some(Box::new(|text: &str| save_telegram_file(text))),
+        telegram_send: Some(std::sync::Arc::new(crate::telegram_api::post_send_document)),
+        telegram_get: Some(std::sync::Arc::new(crate::telegram_api::get)),
+        telegram_download: Some(std::sync::Arc::new(crate::telegram_api::download_file_id)),
         ..recovery_services(recovery_dir())
+    }
+}
+
+const TELEGRAM_KEYCHAIN: &str = "ai.storyteller.photocraft";
+const TELEGRAM_KEYCHAIN_USER: &str = "telegram-bot-token";
+
+/// Chat ids and switches on disk. The bot token stays in the system keychain.
+fn save_telegram_file(text: &str) -> Result<(), String> {
+    let (rest, token) = photocraft_ui_egui::telegram::without_token(text)?;
+    // Keychain first: rewriting the file without the token must not leave the token nowhere.
+    store_telegram_token(&token)?;
+    let path = config_dir().ok_or_else(|| "no config directory".to_string())?.join("telegram.json");
+    write_atomic(&path, rest.as_bytes())?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    Ok(())
+}
+
+fn load_telegram_file() -> Option<String> {
+    let path = config_dir()?.join("telegram.json");
+    let text = std::fs::read_to_string(&path).ok()?;
+    let (_, embedded) = photocraft_ui_egui::telegram::without_token(&text).ok()?;
+    let stored = match load_telegram_token() {
+        Ok(token) => token,
+        // A keychain read error is not "no token": keep any embedded copy and do not migrate.
+        Err(_) => return Some(photocraft_ui_egui::telegram::with_token(&text, &embedded)),
+    };
+    let token = if stored.is_empty() { embedded.clone() } else { stored };
+    if !embedded.is_empty() {
+        let _ = save_telegram_file(&photocraft_ui_egui::telegram::with_token(&text, &token));
+    }
+    Some(photocraft_ui_egui::telegram::with_token(&text, &token))
+}
+
+fn store_telegram_token(token: &str) -> Result<(), String> {
+    let entry = keyring::Entry::new(TELEGRAM_KEYCHAIN, TELEGRAM_KEYCHAIN_USER).map_err(|error| error.to_string())?;
+    if token.is_empty() {
+        return match entry.delete_credential() {
+            Ok(()) => Ok(()),
+            Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error.to_string()),
+        };
+    }
+    entry.set_password(token).map_err(|error| error.to_string())
+}
+
+fn load_telegram_token() -> Result<String, String> {
+    let entry = keyring::Entry::new(TELEGRAM_KEYCHAIN, TELEGRAM_KEYCHAIN_USER).map_err(|error| error.to_string())?;
+    match entry.get_password() {
+        Ok(token) => Ok(token),
+        Err(keyring::Error::NoEntry) => Ok(String::new()),
+        Err(error) => Err(error.to_string()),
     }
 }
 

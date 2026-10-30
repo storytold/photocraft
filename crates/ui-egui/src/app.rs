@@ -38,6 +38,9 @@ impl PhotocraftApp {
             session,
             ui: UiState::default(),
             services,
+            telegram: crate::telegram::Settings::default(),
+            telegram_token_draft: String::new(),
+            telegram_job: None,
             canvases: HashMap::new(),
             navigator_textures: HashMap::new(),
             display_memo: HashMap::new(),
@@ -200,6 +203,9 @@ impl PhotocraftApp {
         // Saved preferences are in place before the first frame; recovery starts in upkeep.
         prefs_ui::load(&mut app);
         layers_panel_ui::restore_options(&mut app);
+        if let Some(text) = app.services.load_telegram.as_mut().and_then(|load| load()) {
+            app.telegram = crate::telegram::settings_from_json(&text);
+        }
         histogram_panel::restore_options(&mut app);
         // After the saved preferences, which say whether the set was already offered.
         kys_import::offer_import(&mut app);

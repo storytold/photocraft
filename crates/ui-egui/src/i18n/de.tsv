@@ -3523,6 +3523,53 @@ curves	Smooth	Glätten
 	Interpolation	Interpolation
 	Target	Ziel
 	Units	Einheiten
+	Send to Telegram…	An Telegram senden…
+	Send to Telegram	An Telegram senden
+	Bot token	Bot-Token
+	Sent {name} to Telegram.	{name} an Telegram gesendet.
+	That file is larger than Telegram accepts (50 MB).	Die Datei ist größer, als Telegram annimmt (50 MB).
+	Could not read {name}: {error}	{name} konnte nicht gelesen werden: {error}
+	The bot token should look like 123456789:ABC…	Der Bot-Token sollte aussehen wie 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Eine Chat-ID (eine Zahl) oder einen öffentlichen @channelname eingeben.
+	Telegram sending needs the desktop app.	Telegram-Versand gibt es nur in der Desktop-App.
+	Telegram is set up. Save or export a file, then send it.	Telegram ist eingerichtet. Speichere oder exportiere eine Datei und sende sie dann.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Lege einen Bot bei BotFather an und schick ihm irgendeine Nachricht. Die ID füllst du über Chats suchen, oder du fügst eine Zahl oder @channelname ein.
+	Open the official bot guide	Offizielle Bot-Anleitung öffnen
+	Find chats for this token	Chats zu diesem Token suchen
+	No chats yet. Send your bot a message, then try again.	Noch keine Chats. Schick deinem Bot eine Nachricht und versuch es noch einmal.
+	Also send when I Save	Auch beim Speichern senden
+	Also send when I Save As	Auch bei „Speichern unter“ senden
+	Also send when I Export	Auch beim Exportieren senden
+	Sent {name}. {url}	Gesendet: {name}. {url}
+	Sending {name} to Telegram…	Sende {name} an Telegram…
+	Sent to Telegram	An Telegram gesendet
+	A Telegram send is already running.	Ein Telegram-Versand läuft schon.
+	Send as	Senden als
+	Saved file	Gespeicherte Datei
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Die gespeicherte Datei ist die Kopie auf der Platte. PSD und PNG sind eine neue Kopie des offenen Dokuments, samt ungespeicherter Änderungen.
+	Chats or channels. Several are allowed, separated by commas.	Chats oder Kanäle. Mehrere sind erlaubt, durch Kommas getrennt.
+	Also send when I Save a Copy	Auch bei „Kopie speichern“ senden
+	Also send a PNG preview with a PSD	Mit einem PSD auch eine PNG-Vorschau senden
+	Send automatically	Automatisch senden
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Der Bot-Token liegt im Schlüsselbund des Systems, nicht in PhotoCrafts Einstellungsdatei.
+	Sending needs an internet connection.	Zum Senden braucht es eine Internetverbindung.
+	Copied the chat id.	Chat-ID kopiert.
+	*File:* `{name}`	*Datei:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Größe:* {size}
+	*Time:* {time}	*Zeit:* {time}
+	*Path:* `{path}`	*Pfad:* `{path}`
+	Pin the message	Nachricht anheften
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Anheften geht nur, wenn der Bot Admin ist. Sonst wird die Datei trotzdem gesendet.
+	Could not pin the message. The file was still sent.	Die Nachricht konnte nicht angeheftet werden. Die Datei wurde trotzdem gesendet.
+	Get from Telegram	Von Telegram holen
+	No files yet. Send your bot a file or a photo, then try again.	Noch keine Dateien. Schick deinem Bot eine Datei oder ein Foto und versuch es noch einmal.
+	Open the Telegram message	Telegram-Nachricht öffnen
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Die zehn neuesten Dateien an diesen Bot. Ein Klick öffnet sie in PhotoCraft.
+	Get files	Dateien holen
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Dateien, die PhotoCraft gesendet hat, und die zehn neuesten Dateien an diesen Bot. Ein Klick öffnet sie in PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Noch keine Dateien. Sende eine von hier oder dem Bot eine Datei und versuch es noch einmal.
+	Telegram did not return a link for this chat.	Telegram hat für diesen Chat keinen Link geliefert.
 	Font size presets	Schriftgrößen-Vorgaben
 	Leading presets	Zeilenabstand-Vorgaben
 	Tracking presets	Laufweiten-Vorgaben

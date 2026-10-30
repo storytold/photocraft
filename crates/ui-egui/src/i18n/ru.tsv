@@ -4701,6 +4701,53 @@ shape	Appearance	Оформление
 	Tight Curl	Плотный завиток
 	Loose Curl	Свободный завиток
 	Stylized dabs from a history state	Стилизованные мазки из состояния истории
+	Send to Telegram…	Отправить в Telegram…
+	Send to Telegram	Отправить в Telegram
+	Bot token	Токен бота
+	Sent {name} to Telegram.	{name} отправлен в Telegram.
+	That file is larger than Telegram accepts (50 MB).	Файл больше, чем принимает Telegram (50 МБ).
+	Could not read {name}: {error}	Не удалось прочитать {name}: {error}
+	The bot token should look like 123456789:ABC…	Токен бота должен выглядеть как 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Введите id чата (число) или публичное @channelname.
+	Telegram sending needs the desktop app.	Отправка в Telegram есть только в приложении для компьютера.
+	Telegram is set up. Save or export a file, then send it.	Telegram настроен. Сохраните или экспортируйте файл, затем отправьте его.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Создайте бота у BotFather и отправьте ему любое сообщение. Id можно подставить кнопкой «Найти чаты» или вставить число или @channelname.
+	Open the official bot guide	Открыть официальное руководство по ботам
+	Find chats for this token	Найти чаты для этого токена
+	No chats yet. Send your bot a message, then try again.	Чатов пока нет. Отправьте боту сообщение и попробуйте снова.
+	Also send when I Save	Также отправлять при сохранении
+	Also send when I Save As	Также отправлять при «Сохранить как»
+	Also send when I Export	Также отправлять при экспорте
+	Sent {name}. {url}	Отправлено: {name}. {url}
+	Sending {name} to Telegram…	Отправка {name} в Telegram…
+	Sent to Telegram	Отправлено в Telegram
+	A Telegram send is already running.	Отправка в Telegram уже выполняется.
+	Send as	Отправить как
+	Saved file	Сохранённый файл
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Сохранённый файл — это копия на диске. PSD и PNG — новая копия открытого документа, включая несохранённые изменения.
+	Chats or channels. Several are allowed, separated by commas.	Чаты или каналы. Можно несколько, через запятую.
+	Also send when I Save a Copy	Также отправлять при «Сохранить копию»
+	Also send a PNG preview with a PSD	Вместе с PSD отправлять и PNG-превью
+	Send automatically	Отправлять автоматически
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Токен бота хранится в связке ключей системы, а не в файле настроек PhotoCraft.
+	Sending needs an internet connection.	Для отправки нужно подключение к интернету.
+	Copied the chat id.	Id чата скопирован.
+	*File:* `{name}`	*Файл:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Размер:* {size}
+	*Time:* {time}	*Время:* {time}
+	*Path:* `{path}`	*Путь:* `{path}`
+	Pin the message	Закрепить сообщение
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Закрепление требует, чтобы бот был администратором. Иначе файл всё равно отправится.
+	Could not pin the message. The file was still sent.	Не удалось закрепить сообщение. Файл всё равно отправлен.
+	Get from Telegram	Взять из Telegram
+	No files yet. Send your bot a file or a photo, then try again.	Файлов пока нет. Отправьте боту файл или фото и попробуйте снова.
+	Open the Telegram message	Открыть сообщение в Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Десять новых файлов, отправленных этому боту. Щелчок открывает один в PhotoCraft.
+	Get files	Забрать файлы
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Файлы, отправленные из PhotoCraft, и десять новых файлов этому боту. Щелчок открывает один в PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Файлов пока нет. Отправьте один отсюда или боту и попробуйте снова.
+	Telegram did not return a link for this chat.	Telegram не вернул ссылку на этот чат.
 	Font size presets	Наборы размеров шрифта
 	Leading presets	Наборы интерлиньяжа
 	Tracking presets	Наборы трекинга

@@ -441,4 +441,22 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// POST a Telegram `sendDocument` body. `None` on the web. The URL holds the bot token;
+    /// the implementation must not log it. Returns Telegram's JSON reply.
+    pub telegram_send: Option<TelegramSendFn>,
+    /// GET a Telegram bot method (`getUpdates`). Same secrecy rule as [`Self::telegram_send`].
+    pub telegram_get: Option<TelegramGetFn>,
+    pub telegram_download: Option<TelegramDownloadFn>,
+    /// The desktop settings file for File › Send to Telegram (not preferences: those are visible
+    /// to agents). `None` on the web.
+    pub load_telegram: Option<LoadTextFn>,
+    pub save_telegram: Option<SaveTextFn>,
 }
+
+/// POST `body` (`content_type`) to `url` for [`Services::telegram_send`]. `Send + Sync` so a
+/// send can finish on a background thread while the window keeps drawing.
+pub type TelegramSendFn = std::sync::Arc<dyn Fn(&str, &str, &[u8]) -> Result<String, String> + Send + Sync>;
+/// GET `url` for [`Services::telegram_get`].
+pub type TelegramGetFn = std::sync::Arc<dyn Fn(&str) -> Result<String, String> + Send + Sync>;
+/// Download a file the bot was sent. Arguments: bot token, file id. At most 20 MB.
+pub type TelegramDownloadFn = std::sync::Arc<dyn Fn(&str, &str) -> Result<Vec<u8>, String> + Send + Sync>;

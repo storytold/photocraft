@@ -4248,6 +4248,53 @@ cameraRaw	Dehaze	Odstranění oparu
 
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Aspect Ratio	Poměr stran
+	Send to Telegram…	Odeslat do Telegramu…
+	Send to Telegram	Odeslat do Telegramu
+	Bot token	Token bota
+	Sent {name} to Telegram.	{name} odesláno do Telegramu.
+	That file is larger than Telegram accepts (50 MB).	Soubor je větší, než Telegram přijme (50 MB).
+	Could not read {name}: {error}	{name} se nepodařilo přečíst: {error}
+	The bot token should look like 123456789:ABC…	Token bota má vypadat jako 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Zadej id chatu (číslo) nebo veřejné @channelname.
+	Telegram sending needs the desktop app.	Odesílání do Telegramu je jen v desktopové aplikaci.
+	Telegram is set up. Save or export a file, then send it.	Telegram je nastavený. Ulož nebo exportuj soubor a potom ho odešli.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Vytvoř bota přes BotFather a pošli mu jakoukoli zprávu. Id doplň přes Najít chaty, nebo vlož číslo či @channelname.
+	Open the official bot guide	Otevřít oficiální návod k botům
+	Find chats for this token	Najít chaty pro tento token
+	No chats yet. Send your bot a message, then try again.	Zatím žádné chaty. Pošli botovi zprávu a zkus to znovu.
+	Also send when I Save	Poslat také při Uložit
+	Also send when I Save As	Poslat také při Uložit jako
+	Also send when I Export	Poslat také při Exportu
+	Sent {name}. {url}	Odesláno {name}. {url}
+	Sending {name} to Telegram…	Odesílám {name} do Telegramu…
+	Sent to Telegram	Odesláno do Telegramu
+	A Telegram send is already running.	Odesílání do Telegramu už běží.
+	Send as	Odeslat jako
+	Saved file	Uložený soubor
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	Uložený soubor pošle kopii na disku. PSD a PNG jsou nová kopie otevřeného dokumentu včetně neuložených změn.
+	Chats or channels. Several are allowed, separated by commas.	Chaty nebo kanály. Více jich může být, oddělených čárkami.
+	Also send when I Save a Copy	Poslat také při Uložit kopii
+	Also send a PNG preview with a PSD	S PSD poslat i náhled PNG
+	Send automatically	Posílat automaticky
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	Token bota je v systémové klíčence, ne v souboru nastavení PhotoCraftu.
+	Sending needs an internet connection.	Odesílání potřebuje připojení k internetu.
+	Copied the chat id.	Id chatu zkopírováno.
+	*File:* `{name}`	*Soubor:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Velikost:* {size}
+	*Time:* {time}	*Čas:* {time}
+	*Path:* `{path}`	*Cesta:* `{path}`
+	Pin the message	Připnout zprávu
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Připnutí vyžaduje, aby byl bot správce. Jinak se soubor stejně odešle.
+	Could not pin the message. The file was still sent.	Zprávu se nepodařilo připnout. Soubor byl přesto odeslán.
+	Get from Telegram	Vzít z Telegramu
+	No files yet. Send your bot a file or a photo, then try again.	Zatím žádné soubory. Pošlete botovi soubor nebo fotku a zkuste to znovu.
+	Open the Telegram message	Otevřít zprávu v Telegramu
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Deset nejnovějších souborů poslaných tomuto botovi. Kliknutím jeden otevřete ve PhotoCraftu.
+	Get files	Získat soubory
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Soubory odeslané z PhotoCraftu a deset nejnovějších souborů tomuto botovi. Kliknutím jeden otevřete ve PhotoCraftu.
+	No files yet. Send one from here, or send the bot a file, then try again.	Zatím žádné soubory. Pošlete jeden odsud nebo botovi a zkuste to znovu.
+	Telegram did not return a link for this chat.	Telegram nevrátil odkaz na tento chat.
 	Font size presets	Předvolby velikosti písma
 	Leading presets	Předvolby prokladu
 	Tracking presets	Předvolby prostrkání

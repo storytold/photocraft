@@ -4460,6 +4460,53 @@ navigator	Zoom	Zoom
 	Tight Curl	Rizo apretado
 	Loose Curl	Rizo suelto
 	Stylized dabs from a history state	Toques estilizados desde un estado del historial
+	Send to Telegram…	Enviar a Telegram…
+	Send to Telegram	Enviar a Telegram
+	Bot token	Token del bot
+	Sent {name} to Telegram.	{name} enviado a Telegram.
+	That file is larger than Telegram accepts (50 MB).	El archivo es más grande de lo que Telegram acepta (50 MB).
+	Could not read {name}: {error}	No se pudo leer {name}: {error}
+	The bot token should look like 123456789:ABC…	El token del bot debe parecerse a 123456789:ABC…
+	Enter a chat id (a number) or a public @channelname.	Introduce un id de chat (un número) o un @channelname público.
+	Telegram sending needs the desktop app.	El envío a Telegram solo está en la aplicación de escritorio.
+	Telegram is set up. Save or export a file, then send it.	Telegram está configurado. Guarda o exporta un archivo y luego envíalo.
+	Create a bot with BotFather, then send that bot any message. Use Find chats to fill the id, or paste a number or @channelname.	Crea un bot con BotFather y envíale cualquier mensaje. Rellena el id con Buscar chats, o pega un número o @channelname.
+	Open the official bot guide	Abrir la guía oficial de bots
+	Find chats for this token	Buscar chats de este token
+	No chats yet. Send your bot a message, then try again.	Aún no hay chats. Envía un mensaje a tu bot y vuelve a intentarlo.
+	Also send when I Save	Enviar también al Guardar
+	Also send when I Save As	Enviar también al Guardar como
+	Also send when I Export	Enviar también al Exportar
+	Sent {name}. {url}	Enviado: {name}. {url}
+	Sending {name} to Telegram…	Enviando {name} a Telegram…
+	Sent to Telegram	Enviado a Telegram
+	A Telegram send is already running.	Ya hay un envío a Telegram en curso.
+	Send as	Enviar como
+	Saved file	Archivo guardado
+	Saved file sends the copy on disk. PSD and PNG are a new copy of the open document, including changes you have not saved.	El archivo guardado es la copia en el disco. PSD y PNG son una copia nueva del documento abierto, incluidos los cambios sin guardar.
+	Chats or channels. Several are allowed, separated by commas.	Chats o canales. Se permiten varios, separados por comas.
+	Also send when I Save a Copy	Enviar también al Guardar una copia
+	Also send a PNG preview with a PSD	Enviar también una vista PNG con un PSD
+	Send automatically	Enviar automáticamente
+	The bot token is kept in the system keychain, not in PhotoCraft's settings file.	El token del bot está en el llavero del sistema, no en el archivo de ajustes de PhotoCraft.
+	Sending needs an internet connection.	Enviar necesita conexión a internet.
+	Copied the chat id.	Id de chat copiado.
+	*File:* `{name}`	*Archivo:* `{name}`
+	*Format:* {format}	*Format:* {format}
+	*Size:* {size}	*Tamaño:* {size}
+	*Time:* {time}	*Hora:* {time}
+	*Path:* `{path}`	*Ruta:* `{path}`
+	Pin the message	Fijar el mensaje
+	Pinning needs the bot to be an admin. If it is not, the file is still sent.	Fijar exige que el bot sea administrador. Si no lo es, el archivo se envía igual.
+	Could not pin the message. The file was still sent.	No se pudo fijar el mensaje. El archivo sí se envió.
+	Get from Telegram	Traer de Telegram
+	No files yet. Send your bot a file or a photo, then try again.	Aún no hay archivos. Envía a tu bot un archivo o una foto y vuelve a intentarlo.
+	Open the Telegram message	Abrir el mensaje de Telegram
+	The ten newest files sent to this bot. Click one to open it in PhotoCraft.	Los diez archivos más nuevos enviados a este bot. Un clic abre uno en PhotoCraft.
+	Get files	Traer archivos
+	Files sent from PhotoCraft, and the ten newest files sent to this bot. Click one to open it in PhotoCraft.	Archivos enviados desde PhotoCraft y los diez más nuevos enviados a este bot. Un clic abre uno en PhotoCraft.
+	No files yet. Send one from here, or send the bot a file, then try again.	Aún no hay archivos. Envía uno desde aquí o al bot y vuelve a intentarlo.
+	Telegram did not return a link for this chat.	Telegram no devolvió un enlace para este chat.
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking

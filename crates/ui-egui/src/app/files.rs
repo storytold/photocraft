@@ -258,12 +258,13 @@ impl PhotocraftApp {
         if self.save_options_open() {
             return Err(SAVE_OPTIONS_OPEN.into());
         }
-        let r = self.write_save(path, None, choices)?;
+        let r = self.write_save(path.clone(), None, choices)?;
         // JPEG Options are recorded only where they change something
         // ([`jpeg_options_ui::plain_save_step`]); the Targa and DDS answers as given.
         let mut step = jpeg_options_ui::plain_save_step(choices.jpeg);
         FormatChoices { jpeg: None, ..choices }.record(&mut step);
         self.session.journal.push(("file.save".into(), step));
+        crate::telegram::arm_after_save(self, &path, crate::telegram::WriteKind::Save, &r);
         Ok(r)
     }
 
@@ -277,6 +278,7 @@ impl PhotocraftApp {
         }
         choices.record(&mut step);
         self.session.journal.push(("file.saveAs".into(), step));
+        crate::telegram::arm_after_save(self, &path, crate::telegram::WriteKind::SaveAs, &r);
         Ok(r)
     }
 
@@ -552,7 +554,19 @@ impl PhotocraftApp {
     /// (#2032, #4373), reports a failure in the status bar, and releases a close prompt waiting on
     /// the save.
     pub(crate) fn write_answered_save(&mut self, ctx: &egui::Context, doc: DocId, path: String, settings: &ExportSettings, copy: bool, step: (&str, Value)) {
-        let written = self.with_document(doc, |app| app.write_document(path, settings, copy));
+        let written = self.with_document(doc, |app| {
+            let written = app.write_document(path.clone(), settings, copy)?;
+            let kind = match step.0 {
+                "file.save" => Some(crate::telegram::WriteKind::Save),
+                "file.saveAs" => Some(crate::telegram::WriteKind::SaveAs),
+                "file.saveACopy" => Some(crate::telegram::WriteKind::SaveCopy),
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                crate::telegram::arm_after_save(app, &path, kind, &serde_json::json!({"pending": written.is_none()}));
+            }
+            Ok(written)
+        });
         if written.is_ok() {
             self.session.journal.push((step.0.into(), step.1));
         }
