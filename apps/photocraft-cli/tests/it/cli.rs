@@ -167,9 +167,9 @@ fn server_modes_reject_ignored_or_conflicting_options() {
         for flag in ["--control-token", "--control-token-file"] {
             server_usage_error(&[sub, flag, "unused"], if sub == "mcp" { "requires --bridge" } else { "requires --port" });
         }
+        server_usage_error(&[sub, "--automation-write-root", ".", "--automation-write-root", "."], "cannot be used multiple times");
         for flag in ["--automation-read-root", "--automation-write-root"] {
-            server_usage_error(&[sub, flag, ".", flag, "."], "cannot be used multiple times");
-            server_usage_error(&[sub, &format!("{flag}=")], &format!("a value is required for '{flag} "));
+            server_usage_error(&[sub, &format!("{flag}=")], "root needs a non-empty directory");
             server_usage_error(&[sub, flag, "--automation-write-root", "."], &format!("a value is required for '{flag} "));
         }
         let transport = if sub == "mcp" { "--bridge" } else { "--port" };
@@ -193,7 +193,7 @@ fn server_validation_does_not_consume_stdio_or_create_files() {
     let other = d.join("other.token");
     let token_flag = format!("--control-token-file={}", token.display());
     let other_flag = format!("--control-token-file={}", other.display());
-    for tail in [&["stray"][..], &["--automation-read-root", ".", "--automation-read-root", "."], &["--port", "0"], &[&other_flag]] {
+    for tail in [&["stray"][..], &["--automation-write-root", ".", "--automation-write-root", "."], &["--port", "0"], &[&other_flag]] {
         let mut child = bin()
             .current_dir(&d)
             .args(["serve", "--port", "0", &token_flag])
@@ -1495,4 +1495,118 @@ fn batch_skips_deselect_with_nothing_selected() {
     let info: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!((info["width"].as_u64(), info["height"].as_u64()), (Some(6), Some(8)), "the step after Deselect ran: {info}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn every_configured_read_root_must_be_a_valid_directory() {
+    let d = tmp("invalid-read-roots");
+    let good = d.join("good");
+    std::fs::create_dir_all(&good).unwrap();
+    let file = d.join("file");
+    std::fs::write(&file, b"not a directory").unwrap();
+    for sub in ["mcp", "serve"] {
+        for invalid in [d.join("missing"), file.clone()] {
+            for roots in [[&good, &invalid], [&invalid, &good]] {
+                let o = bin()
+                    .arg(sub)
+                    .arg("--automation-read-root")
+                    .arg(roots[0])
+                    .arg(format!("--automation-read-root={}", roots[1].display()))
+                    .stdin(Stdio::null())
+                    .output()
+                    .unwrap();
+                assert_eq!(o.status.code(), Some(1), "{sub}: {}", String::from_utf8_lossy(&o.stderr));
+                assert!(String::from_utf8_lossy(&o.stderr).contains("automation read root"));
+                assert!(o.stdout.is_empty(), "invalid roots must fail before the server starts");
+            }
+        }
+    }
+}
+
+#[test]
+fn serve_reads_roots_in_order_and_supports_absolute_paths_in_each_root() {
+    let d = tmp("serve-read-roots");
+    let first = d.join("first");
+    let second = d.join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    write_png(&first.join("shared.png"), 3, 2, 3);
+    write_png(&second.join("shared.png"), 7, 4, 5);
+    write_png(&second.join("fallback.png"), 6, 5, 7);
+    let mut child = bin()
+        .args(["serve", "--automation-read-root"])
+        .arg(&first)
+        .arg(format!("--automation-read-root={}", second.display()))
+        .arg("--automation-read-root")
+        .arg(&first)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    for (id, path) in [(1, "shared.png".into()), (2, "fallback.png".into()), (3, second.join("shared.png").to_string_lossy().into_owned())] {
+        writeln!(stdin, "{}", json!({"id": id, "method": "doc.open", "params": {"path": path}})).unwrap();
+    }
+    drop(stdin);
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let replies: Vec<Value> = String::from_utf8(output.stdout).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+    assert_eq!(replies.len(), 3);
+    for (reply, (width, height)) in replies.iter().zip([(3, 2), (6, 5), (7, 4)]) {
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["result"]["width"], width, "{reply}");
+        assert_eq!(reply["result"]["height"], height, "{reply}");
+    }
+}
+
+#[test]
+fn mcp_reads_roots_in_order_with_fallback() {
+    let d = tmp("mcp-read-roots");
+    let first = d.join("first");
+    let second = d.join("second");
+    std::fs::create_dir_all(&first).unwrap();
+    std::fs::create_dir_all(&second).unwrap();
+    write_png(&first.join("shared.png"), 3, 2, 3);
+    write_png(&second.join("shared.png"), 7, 4, 5);
+    write_png(&second.join("fallback.png"), 6, 5, 7);
+    let mut child = bin()
+        .arg("mcp")
+        .arg(format!("--automation-read-root={}", first.display()))
+        .arg("--automation-read-root")
+        .arg(&second)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut stdout = BufReader::new(child.stdout.take().unwrap());
+    let mut send = |value: Value| {
+        writeln!(stdin, "{value}").unwrap();
+        stdin.flush().unwrap();
+    };
+    let mut recv = |id: u64| -> Value {
+        loop {
+            let mut line = String::new();
+            assert!(stdout.read_line(&mut line).unwrap() > 0, "server closed");
+            let value: Value = serde_json::from_str(&line).unwrap();
+            if value["id"] == id {
+                return value;
+            }
+        }
+    };
+    send(json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+        "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}));
+    assert_eq!(recv(1)["result"]["serverInfo"]["name"], "photocraft");
+    send(json!({"jsonrpc":"2.0","method":"notifications/initialized"}));
+    for (id, path, width) in [(2, "shared.png", 3), (3, "fallback.png", 6)] {
+        send(json!({"jsonrpc":"2.0","id":id,"method":"tools/call","params":{"name":"doc_open","arguments":{"path":path}}}));
+        let reply = recv(id);
+        assert_ne!(reply["result"]["isError"], true, "{reply}");
+        let opened: Value = serde_json::from_str(reply["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
+        assert_eq!(opened["width"], width, "{reply}");
+    }
+    let _ = child.kill();
+    let _ = child.wait();
 }

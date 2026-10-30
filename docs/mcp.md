@@ -50,12 +50,48 @@ not put the CLI on `PATH`.
 PhotoCraft follows the same conventions as FilmCraft #28. Start a headless session:
 
 ```sh
-photocraft-cli mcp --automation-read-root /work/project --automation-write-root /work/project
+photocraft-cli mcp \
+  --automation-read-root /work/project \
+  --automation-read-root /library/reference \
+  --automation-write-root /work/project
 ```
 
-Paths are relative to the corresponding root, or absolute paths beneath it; without a root that
-filesystem authority is absent. Bridge mode uses `--bridge` and `--control-token-file` as
-described in [development.md](development.md). UI tools require a running desktop app.
+Repeat `--automation-read-root` to grant ordered read directories in headless `mcp`, `serve`,
+or desktop `photocraft --control`. Both `--flag <dir>` and `--flag=<dir>` work and can be mixed;
+duplicate read roots are allowed. Relative file requests search the roots in launch order.
+Headless reads select the first existing regular file; only a missing file tries the next root.
+Directory, permission, path-escape and decoding errors stop headless requests instead of falling back.
+Desktop `app.open`, including bridged `doc_open`, also supports native directory `.pcraft`
+documents through the selected read capability. An earlier root's ZIP file wins over a later
+root's directory; loading errors in a selected directory are terminal. Directory opens have
+no implicit save target, even through the write root's capability, and need explicit layered
+Save As beneath the write root.
+All configured roots must be valid existing directories; an empty, missing or invalid root
+fails startup rather than being dropped.
+
+There is still only one `--automation-write-root`. Repeating it is a usage error (exit 2),
+even with an identical value or mixed flag syntax. Writes are relative to that root, with no
+fallback to any read root. Read and write authority are independent; a write root does not grant
+reads, and omitting either kind of root denies that direction of filesystem access.
+Absolute request paths must be beneath a corresponding granted root and are opened through
+its directory capability, without ambient filesystem resolution of the requested path.
+
+A document opened through a read root that does not share the write root's held directory
+capability has no implicit save target. The same configured root shares that capability;
+canonical filesystem identity is not inferred. Use an explicit `doc_save {path:"copy.pcraft"}`
+(or another supported layered format) beneath the write root to establish one. Aliases and nested roots conservatively also
+require explicit Save As; a flat export does not establish a save target. Existing restrictions
+on pathless saves still apply. These grants do not enable ambient asset reads or headless
+directory-bundle access; desktop directory `.pcraft` reads remain scoped to the granted capabilities.
+
+Bridge mode uses `--bridge` and `--control-token-file` as described in
+[development.md](development.md). Configure all roots on the desktop process; passing root flags
+to `photocraft-cli mcp --bridge` is a usage error because the bridge cannot grant them.
+UI tools require a running desktop app. The desktop environment variable
+`PHOTOCRAFT_AUTOMATION_READ_ROOT` supplies one fallback directory only when no explicit read-root
+flags are present; explicit flags replace it, preserving CLI order. Similarly, one explicit
+write-root flag overrides `PHOTOCRAFT_AUTOMATION_WRITE_ROOT`. These variables do not grant
+headless CLI file access.
 
 A client has the full rights of the roots it is given: it can read any file below the read
 root, and `doc_save`, `doc_export` and the export tools can create files anywhere below the

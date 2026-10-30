@@ -395,7 +395,7 @@ pub(crate) fn parse(args: &[OsString]) -> Result<Cli, clap::Error> {
                     conflict(sub, m, "automation_read_root", "bridge")?;
                     conflict(sub, m, "automation_write_root", "bridge")?;
                 }
-                if a.bridge.is_some() && (a.automation.automation_read_root.is_some() || a.automation.automation_write_root.is_some()) {
+                if a.bridge.is_some() && (!a.automation.automation_read_root.is_empty() || a.automation.automation_write_root.is_some()) {
                     return Err(ServerOptionError::BridgeRoots.into_clap(sub));
                 }
                 check_server(sub, m, a.bridge.is_some(), "--bridge")?;

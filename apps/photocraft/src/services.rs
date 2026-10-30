@@ -639,9 +639,9 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
     let clip_unreadable: Rc<Cell<bool>> = Rc::default();
     let automation_read = automation.clone().map(|workspace| {
         Box::new(move |path: &str| {
-            let bytes = workspace.read(path).map_err(|error| error.to_string())?;
+            let (bytes, save_path) = workspace.read_with_save_path(path).map_err(|error| error.to_string())?;
             let name = Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or(path).to_string();
-            Ok((name, bytes))
+            Ok(photocraft_ui_egui::AutomationReadResult { name, bytes, save_path })
         }) as photocraft_ui_egui::AutomationReadFn
     });
     let automation_write = automation.clone().map(|workspace| {

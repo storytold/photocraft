@@ -221,8 +221,15 @@ pub(crate) enum SaveKind {
     Automation,
 }
 
-/// Read bytes through the desktop control session's authorized read root.
-pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<(String, Vec<u8>), String>>;
+/// Bytes and save provenance selected together by the automation read capability.
+pub struct AutomationReadResult {
+    pub name: String,
+    pub bytes: Vec<u8>,
+    /// None means an explicit Save As is required, even for a layered document.
+    pub save_path: Option<String>,
+}
+/// Read bytes through the desktop control session's authorized read roots.
+pub type AutomationReadFn = Box<dyn FnMut(&str) -> Result<AutomationReadResult, String>>;
 
 /// Write bytes through the desktop control session's authorized write root.
 pub type AutomationWriteFn = Box<dyn FnMut(&str, &[u8]) -> Result<(), String>>;

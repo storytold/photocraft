@@ -649,3 +649,125 @@ fn absolute_paths_are_checked_against_the_authority_s_own_root() {
     let none = AuthorizedWorkspace::default();
     assert!(none.read(&target.to_string_lossy()).is_err());
 }
+
+#[test]
+fn ordered_read_roots_keep_write_authority_and_save_provenance_separate() {
+    let (library, work, _) = roots("multiple-roots");
+    std::fs::write(library.join("photo.txt"), b"library").unwrap();
+    std::fs::write(work.join("draft.txt"), b"draft").unwrap();
+    std::fs::write(library.join("same.txt"), b"first").unwrap();
+    std::fs::write(work.join("same.txt"), b"second").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path(), library.as_path()], Some(&work)).unwrap();
+    assert_eq!(workspace.read_with_save_path("photo.txt").unwrap(), (b"library".to_vec(), None));
+    assert_eq!(workspace.read_with_save_path("draft.txt").unwrap(), (b"draft".to_vec(), Some("draft.txt".into())));
+    assert_eq!(workspace.read("same.txt").unwrap(), b"first");
+    let absolute = work.join("same.txt").to_string_lossy().into_owned();
+    assert_eq!(workspace.read_with_save_path(&absolute).unwrap(), (b"second".to_vec(), Some(absolute)));
+    let reverse = AuthorizedWorkspace::with_read_roots([work.as_path(), library.as_path()], Some(&work)).unwrap();
+    assert_eq!(reverse.read("same.txt").unwrap(), b"second");
+    // Identical configured spellings share the held handle, including the write grant.
+    assert!(Arc::ptr_eq(&workspace.read[0].dir, &workspace.read[2].dir));
+    assert!(Arc::ptr_eq(&workspace.read[1].dir, &workspace.write.as_ref().unwrap().dir));
+    workspace.write("result.txt", b"output").unwrap();
+    assert_eq!(std::fs::read(work.join("result.txt")).unwrap(), b"output");
+    assert!(!library.join("result.txt").exists());
+    assert!(workspace.write(&library.join("photo.txt").to_string_lossy(), b"blocked").is_err());
+    assert_eq!(std::fs::read(library.join("photo.txt")).unwrap(), b"library");
+    let error = workspace.read("missing.txt").unwrap_err().to_string();
+    assert!(error.contains("NotFound"), "{error}");
+}
+
+#[test]
+fn every_read_root_is_validated_and_write_roots_never_imply_reads() {
+    let (library, work, _) = roots("root-validation");
+    std::fs::write(work.join("file.txt"), b"work").unwrap();
+    for invalid in [library.join("missing"), work.join("file.txt"), PathBuf::new()] {
+        assert!(AuthorizedWorkspace::with_read_roots([library.as_path(), invalid.as_path(), work.as_path()], Some(&work)).is_err());
+    }
+    let write_only = AuthorizedWorkspace::with_read_roots(std::iter::empty(), Some(&work)).unwrap();
+    assert!(write_only.read("file.txt").is_err());
+    assert!(write_only.read(&work.join("file.txt").to_string_lossy()).is_err());
+    let read_only = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], None).unwrap();
+    assert_eq!(read_only.read_with_save_path("file.txt").unwrap(), (b"work".to_vec(), None));
+    assert!(read_only.write("file.txt", b"blocked").is_err());
+}
+
+#[test]
+fn an_earlier_directory_or_invalid_path_never_falls_back_to_a_later_file() {
+    let (library, work, _) = roots("root-errors");
+    std::fs::create_dir(library.join("same.txt")).unwrap();
+    std::fs::write(work.join("same.txt"), b"later").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    assert!(workspace.read("same.txt").is_err());
+    for invalid in ["", "../same.txt", "a/../same.txt", "a\\same.txt", "a//same.txt", "NUL", "same.txt:stream"] {
+        assert!(workspace.read(invalid).is_err(), "accepted {invalid:?}");
+        assert!(workspace.write(invalid, b"blocked").is_err(), "wrote {invalid:?}");
+    }
+    let traversal = library.join("../outside/same.txt");
+    assert!(workspace.read(&traversal.to_string_lossy()).is_err());
+    assert_eq!(std::fs::read(work.join("same.txt")).unwrap(), b"later");
+}
+
+#[cfg(unix)]
+#[test]
+fn multiple_roots_do_not_allow_link_escapes_or_alias_save_back() {
+    use std::os::unix::fs::symlink;
+    let (library, work, _) = roots("multi-root-links");
+    std::fs::write(work.join("photo.txt"), b"work").unwrap();
+    symlink(&work, library.join("escape")).unwrap();
+    std::fs::create_dir(work.join("escape")).unwrap();
+    std::fs::write(work.join("escape/photo.txt"), b"later").unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    // Being separately granted does not allow following a link out of the selected root.
+    assert!(workspace.read("escape/photo.txt").is_err());
+    assert_eq!(workspace.read("photo.txt").unwrap(), b"work");
+    let alias = library.join("alias");
+    symlink(&work, &alias).unwrap();
+    let aliased = AuthorizedWorkspace::new(Some(&alias), Some(&work)).unwrap();
+    assert_eq!(aliased.read_with_save_path("photo.txt").unwrap(), (b"work".to_vec(), None));
+    let nested = AuthorizedWorkspace::new(Some(&work.join("escape")), Some(&work)).unwrap();
+    assert_eq!(nested.read_with_save_path("photo.txt").unwrap(), (b"later".to_vec(), None));
+    symlink(&library, work.join("escape-write")).unwrap();
+    assert!(workspace.write("escape-write/output.txt", b"blocked").is_err());
+    assert!(!library.join("output.txt").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn same_root_leaf_link_save_replaces_the_link_without_writing_its_target() {
+    let (inside, _, workspace) = roots("leaf-link");
+    std::fs::write(inside.join("target.txt"), b"target").unwrap();
+    std::os::unix::fs::symlink("target.txt", inside.join("link.png")).unwrap();
+    let (bytes, save_path) = workspace.read_with_save_path("link.png").unwrap();
+    assert_eq!(bytes, b"target");
+    workspace.write(&save_path.unwrap(), b"replacement").unwrap();
+    assert_eq!(std::fs::read(inside.join("target.txt")).unwrap(), b"target");
+    assert_eq!(std::fs::read(inside.join("link.png")).unwrap(), b"replacement");
+    assert!(!std::fs::symlink_metadata(inside.join("link.png")).unwrap().file_type().is_symlink());
+}
+
+#[test]
+fn directory_pcraft_uses_ordered_roots_without_falling_back_after_selection() {
+    let (library, work, _) = roots("pcraft-ordered");
+    let save = |root: &Path, name: &str| {
+        let doc = photocraft_doc::Document::new(name, photocraft_doc::Size::new(4, 4), photocraft_doc::ColorMode::Rgb, photocraft_doc::SampleType::U8);
+        photocraft_format::PcraftWriter::new().save_dir(&doc, &root.join("native.pcraft"), &photocraft_format::SaveOptions::default()).unwrap();
+    };
+    save(&work, "Later");
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(&work)).unwrap();
+    assert_eq!(workspace.open_pcraft("native.pcraft").unwrap().unwrap().name, "Later");
+    save(&library, "First");
+    assert_eq!(workspace.open_pcraft("native.pcraft").unwrap().unwrap().name, "First");
+    assert_eq!(workspace.open_pcraft(&work.join("native.pcraft").to_string_lossy()).unwrap().unwrap().name, "Later");
+    std::fs::remove_dir_all(library.join("native.pcraft")).unwrap();
+    std::fs::write(library.join("native.pcraft"), b"zip placeholder").unwrap();
+    assert!(workspace.open_pcraft("native.pcraft").unwrap().is_none());
+    std::fs::remove_file(library.join("native.pcraft")).unwrap();
+    std::fs::create_dir(library.join("native.pcraft")).unwrap();
+    assert!(workspace.open_pcraft("native.pcraft").is_err());
+    for invalid in ["../native.pcraft", "a//native.pcraft", "a\\native.pcraft"] {
+        assert!(workspace.open_pcraft(invalid).is_err());
+    }
+    let write_only = AuthorizedWorkspace::with_read_roots(std::iter::empty(), Some(&work)).unwrap();
+    assert!(write_only.open_pcraft("native.pcraft").is_err());
+}

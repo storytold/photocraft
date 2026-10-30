@@ -633,6 +633,49 @@ async fn save_without_path_never_flattens_over_the_opened_file() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn ordered_read_roots_preserve_save_identity_over_mcp() {
+    let base = tmp("ordered-read-roots");
+    let library = base.join("library");
+    let work = base.join("work");
+    for (root, width, background) in [(&library, 11, "white"), (&work, 7, "black")] {
+        std::fs::create_dir_all(root).unwrap();
+        let mut fixture = photocraft_automation::Headless::new();
+        fixture.command_run("file.new", json!({"width": width, "height": 5, "background": background})).unwrap();
+        fixture.command_run("layer.new.layer", json!({"name": "Source marker"})).unwrap();
+        let bytes = photocraft_automation::files::save_bytes(&fixture.session.active().unwrap().doc, "same.pcraft", None, &Default::default()).unwrap().0;
+        std::fs::write(root.join("same.pcraft"), bytes).unwrap();
+    }
+    let original_library = std::fs::read(library.join("same.pcraft")).unwrap();
+    let original_work = std::fs::read(work.join("same.pcraft")).unwrap();
+    let workspace = AuthorizedWorkspace::with_read_roots([library.as_path(), work.as_path()], Some(work.as_path())).unwrap();
+    let client = connect(PhotocraftMcp::headless_with_workspace(workspace)).await;
+
+    assert_eq!(json_of(&call(&client, "doc_open", json!({"path": "same.pcraft"})).await)["width"], 11);
+    json_of(&call(&client, "command_run", json!({"id": "layer.new.layer", "params": {"name": "Library edit"}})).await);
+    let before = json_of(&call(&client, "session_list", json!({})).await);
+    assert!(before["documents"][0]["path"].is_null());
+    assert_eq!(before["documents"][0]["dirty"], true);
+    let denied = call(&client, "doc_save", json!({})).await;
+    assert_eq!(denied.is_error, Some(true));
+    assert!(text(&denied).contains("pass `path`"), "{}", text(&denied));
+    assert_eq!(json_of(&call(&client, "session_list", json!({})).await), before);
+    assert_eq!(std::fs::read(library.join("same.pcraft")).unwrap(), original_library);
+    assert_eq!(std::fs::read(work.join("same.pcraft")).unwrap(), original_work);
+
+    json_of(&call(&client, "doc_save", json!({"path": "same.pcraft"})).await);
+    json_of(&call(&client, "command_run", json!({"id": "layer.new.layer", "params": {"name": "Work edit"}})).await);
+    assert_eq!(json_of(&call(&client, "doc_save", json!({})).await)["path"], "same.pcraft");
+    let reopened = json_of(&call(&client, "doc_open", json!({"path": work.join("same.pcraft").to_string_lossy()})).await);
+    assert_eq!(reopened["width"], 11);
+    assert_eq!(json_of(&call(&client, "doc_inspect", json!({})).await)["layers"][0]["name"], "Work edit");
+    assert_eq!(json_of(&call(&client, "session_list", json!({})).await)["documents"][0]["dirty"], false);
+    assert_eq!(std::fs::read(library.join("same.pcraft")).unwrap(), original_library);
+    assert_ne!(std::fs::read(work.join("same.pcraft")).unwrap(), original_work);
+    client.cancel().await.unwrap();
+    cleanup(&base);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn filesystem_policy_rejects_absolute_and_escaping_paths_before_effects() {
     let base = tmp("filesystem-policy");
     let root = base.join("workspace");
@@ -697,7 +740,7 @@ async fn doc_place_is_capability_scoped() {
     assert_eq!(placed, 3, "the absolute path beneath the root places as well");
     let refused = call(&client, "doc_place", json!({"path": outside.join("outside.png").to_string_lossy()})).await;
     assert_eq!(refused.is_error, Some(true));
-    assert!(text(&refused).contains("must be inside the automation root"), "{}", text(&refused));
+    assert!(text(&refused).contains("must be inside an automation read root"), "{}", text(&refused));
     let after = json_of(&call(&client, "doc_inspect", json!({})).await)["layers"].as_array().unwrap().len();
     assert_eq!(after, placed, "nothing outside the root was placed");
     // The ambient command keeps its refusal: the capability-scoped method is the only way in.
@@ -730,7 +773,7 @@ async fn doc_replace_smart_object_is_capability_scoped() {
     assert_ne!(replaced.is_error, Some(true), "{}", text(&replaced));
     let refused = call(&client, "doc_replace_smart_object", json!({"path": outside.join("outside.png").to_string_lossy(), "layer": layer})).await;
     assert_eq!(refused.is_error, Some(true));
-    assert!(text(&refused).contains("must be inside the automation root"), "{}", text(&refused));
+    assert!(text(&refused).contains("must be inside an automation read root"), "{}", text(&refused));
     let ambient = call(&client, "command_run", json!({"id": "layer.smartObjects.replaceContents", "params": {"path": "inside.png", "layer": layer}})).await;
     assert_eq!(ambient.is_error, Some(true));
     assert!(text(&ambient).contains("ambient filesystem paths"), "{}", text(&ambient));

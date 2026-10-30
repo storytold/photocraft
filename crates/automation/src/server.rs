@@ -48,7 +48,8 @@ pub struct DocIndex {
 #[derive(Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct OpenParams {
-    /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
+    /// Path beneath the configured automation read roots: relative (forward slashes, searched
+    /// in launch order) or absolute. Only a missing file tries the next root.
     pub path: String,
 }
 
@@ -166,6 +167,7 @@ pub struct SaveParams {
     /// The extension selects the format. Omit to write back to the document's own file, which
     /// works only for a PSD, PSB or .pcraft file kept in its own format; any other save needs
     /// `path`, so a flattened or converted copy never replaces the opened file.
+    /// A document opened from a different read capability needs an explicit path first.
     #[serde(default)]
     pub path: Option<String>,
     /// Format override as an extension (pcraft, psd, png, jpg, tif, webp, exr, …).

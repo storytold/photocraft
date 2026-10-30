@@ -360,7 +360,7 @@ fn doc_place_reads_through_the_read_root_and_never_outside_it() {
     let inspected = h.handle("doc.inspect", json!({})).unwrap();
     assert_eq!(inspected["layers"].as_array().map(Vec::len), Some(2), "the placed layer is in the document: {inspected}");
     // A path outside the read root is refused the way the ambient command is (#2810).
-    for (path, reason) in [("../outside/logo.png", "parent traversal"), (absolute.as_str(), "must be inside the automation root")] {
+    for (path, reason) in [("../outside/logo.png", "parent traversal"), (absolute.as_str(), "must be inside an automation read root")] {
         let refused = h.handle("doc.place", json!({"path": path})).unwrap_err().to_string();
         assert!(refused.contains(reason), "{refused}");
         let inspected = h.handle("doc.inspect", json!({})).unwrap();
@@ -460,7 +460,7 @@ fn doc_replace_smart_object_reads_through_the_read_root_and_never_outside_it() {
     // Outside the read root, a bad layer, a missing path or a file that is no image: refused, nothing changed.
     for (params, reason) in [
         (json!({"path": "../outside/red.png"}), "parent traversal"),
-        (json!({"path": absolute}), "must be inside the automation root"),
+        (json!({"path": absolute}), "must be inside an automation read root"),
         (json!({"path": "logo.png", "layer": 999_999}), "no such layer"),
         (json!({}), "needs `path`"),
     ] {
@@ -607,7 +607,7 @@ fn doc_export_data_sets_refuse_collisions_and_import_reads_the_root() {
     assert_eq!(imported["imported"].as_u64(), Some(2), "{imported}");
     std::fs::write(base.join("outside.csv"), "Data Set,show\none,true\n").unwrap();
     let outside = h.handle("doc.importDataSets", json!({"path": base.join("outside.csv").to_string_lossy()})).unwrap_err().to_string();
-    assert!(outside.contains("must be inside the automation root"), "{outside}");
+    assert!(outside.contains("must be inside an automation read root"), "{outside}");
     // Release directory capabilities before cleanup on Windows.
     drop(h);
     std::fs::remove_dir_all(base).unwrap();
