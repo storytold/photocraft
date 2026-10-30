@@ -175,8 +175,9 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     }
                                     // Plain click selects the shown tool; Alt/Option-click cycles the
                                     // flyout slot to the next tool, as Shift+letter does for the key group.
+                                    let alt = ui.input(|i| i.modifiers.alt);
                                     if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
-                                        let pick = if slot.len() > 1 && ui.input(|i| i.modifiers.alt) {
+                                        let pick = if slot.len() > 1 && alt {
                                             let from = if slot.contains(&app.ui.tool) { app.ui.tool } else { tool };
                                             next_slot_tool(slot, from)
                                         } else {
@@ -185,12 +186,14 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                         crate::tool_memory::select(app, pick);
                                     }
                                     // Double-clicking the Hand tool fits the image on screen (Photoshop).
-                                    if resp.double_clicked() && tool == Tool::Hand {
+                                    // Alt-clicks only cycle the slot: a second rapid Alt-click must not
+                                    // count as Hand/Zoom double-click after cycling onto those tools.
+                                    if resp.double_clicked() && !alt && tool == Tool::Hand {
                                         crate::tool_memory::select(app, tool);
                                         // With no document open there is nothing to fit.
                                         let _ = app.run("view.fitOnScreen", json!({}));
                                     }
-                                    if resp.double_clicked() && tool == Tool::Zoom {
+                                    if resp.double_clicked() && !alt && tool == Tool::Zoom {
                                         crate::tool_memory::select(app, tool);
                                         let _ = app.run("view.actualPixels", json!({}));
                                     }

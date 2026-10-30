@@ -443,4 +443,54 @@ fn alt_click_cycles_the_tool_flyout_slot() {
         assert_eq!(app.ui.tool, want, "alt-click at {t}");
         assert!(!flyout(&ctx), "alt-click must not open the flyout");
     }
+    // From another tool, Alt-click advances from the slot's remembered (shown) tool: Rect after the wrap.
+    app.ui.tool = Tool::Brush;
+    frame(
+        &mut app,
+        &ctx,
+        4.0,
+        vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)],
+    );
+    frame(&mut app, &ctx, 4.05, vec![egui::Event::ModifiersChanged(alt), pointer(at, false, alt)]);
+    frame(&mut app, &ctx, 4.1, vec![]);
+    assert_eq!(app.ui.tool, Tool::EllipseMarquee, "inactive slot cycles from its shown tool");
+}
+
+/// #10301 CodeRabbit: two rapid Alt-clicks on Hand ↔ RotateView must not fit-on-screen.
+#[test]
+fn rapid_alt_clicks_on_hand_slot_do_not_fit_on_screen() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+    frame(&mut app, &ctx, 0.0, vec![]);
+    frame(&mut app, &ctx, 0.1, vec![]);
+    let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::Hand)).unwrap();
+    let bx = if Tokens::get(&ctx).pro { 30.0 } else { 36.0 };
+    let mut buttons: Vec<Rect> = ctx.viewport(|v| {
+        v.prev_pass
+            .widgets
+            .layers()
+            .flat_map(|(_, w)| w.iter())
+            .filter(|w| w.rect.size() == egui::Vec2::splat(bx) && w.sense.senses_click())
+            .map(|w| w.rect)
+            .collect()
+    });
+    buttons.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    let at = buttons[index].center();
+    let alt = egui::Modifiers { alt: true, ..Default::default() };
+    let pointer = |pos, pressed, modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+    app.ui.tool = Tool::RotateView;
+    let zoom_before = app.ui.views.first().map(|v| v.zoom).unwrap_or(1.0);
+    // Two Alt-clicks within egui's double-click window: cycle Hand → RotateView, never fit-on-screen.
+    frame(&mut app, &ctx, 1.0, vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)]);
+    frame(&mut app, &ctx, 1.02, vec![egui::Event::ModifiersChanged(alt), pointer(at, false, alt)]);
+    frame(&mut app, &ctx, 1.04, vec![]);
+    assert_eq!(app.ui.tool, Tool::Hand);
+    frame(&mut app, &ctx, 1.08, vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)]);
+    frame(&mut app, &ctx, 1.10, vec![egui::Event::ModifiersChanged(alt), pointer(at, false, alt)]);
+    frame(&mut app, &ctx, 1.12, vec![]);
+    assert_eq!(app.ui.tool, Tool::RotateView, "second Alt-click cycles back; must not stick on Hand from double-click");
+    let zoom_after = app.ui.views.first().map(|v| v.zoom).unwrap_or(1.0);
+    assert_eq!(zoom_after, zoom_before, "Alt double-click must not run view.fitOnScreen");
 }
