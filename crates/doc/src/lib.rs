@@ -14,6 +14,7 @@ pub mod analysis;
 pub mod blend_if;
 pub mod comps;
 pub mod effects;
+mod layer_selection;
 pub mod mode;
 pub mod pattern;
 pub mod slices;
@@ -35,6 +36,7 @@ pub use effects::{
     Bevel, BevelContour, BevelStyle, BevelTechnique, BevelTexture, Contour, Effect, FxCommon, FxPaint, GlobalLight, Glow, GlowSource, GlowTechnique, Gradient,
     GradientStyle, Satin, Shadow, StrokeFx, StrokePosition,
 };
+pub use layer_selection::SavedLayerSelection;
 pub use mode::{ColorTable, Duotone, DuotoneInk, StackMode};
 pub use pattern::Pattern;
 pub use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
@@ -883,6 +885,10 @@ pub struct Document {
     pub ruler_origin: [f64; 2],
     /// Active selection as a grayscale coverage surface (None = no selection).
     pub selection: Option<Surface>,
+    /// Layer targeting carried by an imported file or an export snapshot. The editing session
+    /// consumes this on admission; live targeting remains session state, outside document edits.
+    /// `None` means the file did not specify targeting; an empty set explicitly deselects layers.
+    pub saved_layer_selection: Option<SavedLayerSelection>,
     pub metadata: Metadata,
     /// Global light used by layer effects (PSD resources 1037/1049).
     pub global_light: GlobalLight,
@@ -975,6 +981,7 @@ impl Document {
             guides: Guides::default(),
             ruler_origin: [0.0, 0.0],
             selection: None,
+            saved_layer_selection: None,
             metadata: Metadata::default(),
             global_light: GlobalLight::default(),
             paths: Vec::new(),

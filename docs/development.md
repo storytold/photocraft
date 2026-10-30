@@ -581,6 +581,27 @@ Input calls (`ui.key`, `ui.type`, `ui.click`) now reply only after the app has p
 so a following `ui.inspect` observes their effect.
 
 
+### Saved layer selection interoperability (#10195)
+
+Generate small original-art PSD, PSB and native files for a maintainer to check in Photoshop:
+
+```sh
+cargo run -p photocraft-engine --example layer_selection_fixtures -- /tmp/photocraft-layer-selection
+```
+
+The example prints expected active/selected layers and the manual checklist. It covers a non-top
+layer, multiple selections with a distinct primary, nested groups and explicit deselection. Open
+the PSD/PSB files in Photoshop, compare the targeting, change the selection, save, and reopen in
+PhotoCraft. Record Photoshop's version and before/after screenshots. The automated pinned import
+oracles and round-trip tests do not replace this export reopening check.
+
+PSD resource 1024 addresses the emitted layer-record position, including folder divider slots;
+resource 1069 addresses layer IDs. An empty 1069 explicitly deselects all layers even when a
+cached 1024 remains. PhotoCraft's recovery policy for inconsistent targeting is to retain valid
+selected IDs and use their last member as primary when 1024 is outside that set. Unusable
+selection IDs fall back to a valid 1024, then the ordinary top-layer default. Malformed optional
+targeting warns without blocking usable image content.
+
 ## Photoshop Actions (.atn)
 
 `photocraft-psd` reads and writes Photoshop Actions files (`atn`, version 16: Photoshop 6 and

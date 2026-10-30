@@ -1900,6 +1900,40 @@ fn essential_menu_items_stay_visible() {
 }
 
 #[test]
+fn autosave_captures_layer_targeting_without_replacing_the_live_document() {
+    type Snapshots = Arc<Mutex<Vec<Arc<photocraft_doc::Document>>>>;
+    let snapshots: Snapshots = Arc::default();
+    let captured = snapshots.clone();
+    let services = crate::Services {
+        autosave: Some(Box::new(move |doc, _, _| {
+            captured.lock().unwrap().push(doc.clone());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 2, "height": 1, "background": "white"})).unwrap();
+    app.run("layer.new.layer", json!({"name": "Top"})).unwrap();
+    app.run("layer.select", json!({"name": "Background"})).unwrap();
+    let st = app.session.active().unwrap();
+    let (live, active, revision) = (st.doc.clone(), st.active_layer, st.revision);
+    tick(&mut app, &egui::Context::default());
+    autosave_now(&mut app);
+    tick(&mut app, &egui::Context::default());
+    let snapshots = snapshots.lock().unwrap();
+    let snapshot = snapshots.first().expect("dirty document was autosaved");
+    let bytes = photocraft_format::save_to_bytes(snapshot, &Default::default()).unwrap();
+    let mut recovered = photocraft_engine::Session::new();
+    recovered.add_document(photocraft_io::import("recovery.pcraft", &bytes).unwrap().document, None);
+    assert_eq!(recovered.active().unwrap().active_layer, active);
+    assert_eq!(recovered.active().unwrap().selected_layers, active.into_iter().collect::<Vec<_>>());
+    let st = app.session.active().unwrap();
+    assert!(Arc::ptr_eq(&live, &st.doc));
+    assert_eq!(st.revision, revision);
+    assert!(st.is_dirty() && st.doc.saved_layer_selection.is_none());
+}
+
+#[test]
 fn autosave_runs_for_dirty_documents() {
     type Saved = Arc<Mutex<Vec<(u64, u64)>>>;
     let saved: Saved = Arc::default();

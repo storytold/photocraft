@@ -34,7 +34,7 @@ pub(crate) const MAPPED_RESOURCES: [u16; 19] = [
     1032, // grid and guides
     1045, // unicode alpha names
     1006, // pascal alpha names
-    1069, // layer selection ids
+    ids::LAYER_SELECTION_IDS,
     1072, // layer group(s) enabled id
     crate::channel_map::DISPLAY_INFO,
     crate::channel_map::DISPLAY_INFO_OLD,
@@ -1289,6 +1289,7 @@ fn import_layered(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_
     let space = photocraft_compose::cmyk_space(doc);
     doc.layers = photocraft_color::convert::with_cmyk_space(space.as_ref(), || cx.build(&tree, 0));
     mark_background(file, &mut doc.layers);
+    crate::layer_selection_map::import(file, &tree, doc, &mut cx.warnings);
     if let Some(Ok(photocraft_psd::resources::ResourceData::LayerGroupInfo(groups))) =
         file.resources.iter().find(|r| r.id == ids::LAYER_GROUP_INFO).and_then(photocraft_psd::resources::ImageResource::parsed)
     {

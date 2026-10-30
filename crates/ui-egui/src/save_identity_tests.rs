@@ -30,6 +30,268 @@ fn identity(app: &PhotocraftApp) -> (String, Option<String>, u64, u64) {
     (st.doc.name.clone(), st.path.clone(), st.revision, st.saved_revision)
 }
 
+fn layer_target(session: &Session) -> (Option<String>, Vec<String>) {
+    let st = session.active().unwrap();
+    let active = st.active_layer.and_then(|id| st.doc.layer(id)).map(|l| l.name.clone());
+    let mut selected: Vec<_> = st.selected_layers().iter().map(|id| st.doc.layer(*id).unwrap().name.clone()).collect();
+    selected.sort();
+    (active, selected)
+}
+
+fn assert_saved_layer_target(name: &str, bytes: &[u8], expected: &(Option<String>, Vec<String>)) {
+    let mut reopened = Session::new();
+    reopened.add_document(photocraft_io::import(name, bytes).unwrap().document, None);
+    assert_eq!(&layer_target(&reopened), expected, "{name}");
+    assert!(reopened.active().unwrap().doc.saved_layer_selection.is_none());
+}
+
+fn select_middle(app: &mut PhotocraftApp) {
+    app.run("layer.new.layer", json!({"name": "Middle"})).unwrap();
+    app.run("layer.new.layer", json!({"name": "Top"})).unwrap();
+    app.run("layer.select", json!({"name": "Middle"})).unwrap();
+}
+
+#[test]
+fn synchronous_user_and_automation_saves_keep_current_layer_targeting() {
+    for automation in [false, true] {
+        for ext in ["psd", "psb", "pcraft"] {
+            let mut app = app();
+            select_middle(&mut app);
+            let bytes = Rc::new(RefCell::new(Vec::new()));
+            let captured = bytes.clone();
+            if automation {
+                app.services.automation_write = Some(Box::new(move |_, data| {
+                    *captured.borrow_mut() = data.to_vec();
+                    Ok(())
+                }));
+            } else {
+                app.services.write = Some(Box::new(move |_, data| {
+                    *captured.borrow_mut() = data.to_vec();
+                    Ok(())
+                }));
+            }
+            let name = format!("target.{ext}");
+            let target = layer_target(&app.session);
+            if automation {
+                app.save_automation(Some(name.clone())).unwrap();
+            } else {
+                app.save_as(Some(name.clone())).unwrap();
+            }
+            assert_saved_layer_target(&name, &bytes.borrow(), &target);
+            app.run("layer.select", json!({"name": "Background", "mode": "add"})).unwrap();
+            assert!(!app.session.active().unwrap().is_dirty(), "layer targeting leaves a clean file clean");
+            let target = layer_target(&app.session);
+            if automation {
+                app.save_automation(None).unwrap();
+            } else {
+                menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap();
+            }
+            assert_saved_layer_target(&name, &bytes.borrow(), &target);
+            app.run("select.deselectLayers", json!({})).unwrap();
+            if automation {
+                app.save_automation(None).unwrap();
+            } else {
+                menus::invoke(&mut app, &egui::Context::default(), "file.save", json!({})).unwrap();
+            }
+            assert_saved_layer_target(&name, &bytes.borrow(), &(None, Vec::new()));
+            assert!(app.session.active().unwrap().doc.saved_layer_selection.is_none(), "saving must not install its transport snapshot into live state");
+        }
+    }
+}
+
+#[test]
+fn save_a_copy_captures_layer_targeting_before_the_file_picker_and_replay_uses_current_targeting() {
+    let mut app = app();
+    select_middle(&mut app);
+    let bytes = Rc::new(RefCell::new(Vec::new()));
+    let captured = bytes.clone();
+    app.services.write = Some(Box::new(move |_, data| {
+        *captured.borrow_mut() = data.to_vec();
+        Ok(())
+    }));
+    let (dialog, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo("copy.psd".into()))]);
+    app.services.file_dialog = Some(dialog);
+    let ctx = egui::Context::default();
+    let target = layer_target(&app.session);
+    let before = identity(&app);
+    let live = app.session.active().unwrap().doc.clone();
+    menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();
+    app.run("layer.select", json!({"name": "Top"})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_saved_layer_target("copy.psd", &bytes.borrow(), &target);
+    assert_eq!(identity(&app).1, before.1, "a copy does not take ownership of the output path");
+    assert!(std::sync::Arc::ptr_eq(&live, &app.session.active().unwrap().doc));
+    assert_eq!(layer_target(&app.session).0.as_deref(), Some("Top"));
+    let current = layer_target(&app.session);
+    app.replay_save("file.saveACopy", &json!({"path": "replayed.psd"})).unwrap();
+    assert_saved_layer_target("replayed.psd", &bytes.borrow(), &current);
+
+    let (dialog, _) = crate::file_dialog::fake(vec![None]);
+    app.services.file_dialog = Some(dialog);
+    bytes.borrow_mut().clear();
+    let before = identity(&app);
+    menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(bytes.borrow().is_empty(), "cancelling the picker writes nothing");
+    assert_eq!(identity(&app), before);
+    app.services.write = Some(Box::new(|_, _| Err("disk full".into())));
+    assert!(app.replay_save("file.saveACopy", &json!({"path": "failed.psd"})).is_err());
+    assert_eq!(identity(&app), before);
+    assert_eq!(layer_target(&app.session), current);
+    assert!(std::sync::Arc::ptr_eq(&live, &app.session.active().unwrap().doc));
+}
+
+#[test]
+fn background_user_and_automation_saves_capture_the_original_documents_layer_target() {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::{Duration, Instant};
+    for automation in [false, true] {
+        for initially_clean in [false, true] {
+            for outcome in ["saved", "failed", "cancelled"] {
+                let mut app = app();
+                select_middle(&mut app);
+                // Keep the name stable so pointer identity also checks the successful completion.
+                Arc::make_mut(&mut app.session.active_mut().unwrap().doc).name = "background.psd".into();
+                if initially_clean {
+                    app.save_as(Some("background.psd".into())).unwrap();
+                }
+                app.background_jobs = true;
+                let gate = Arc::new(AtomicBool::new(false));
+                let ready = gate.clone();
+                let captured = Arc::new(Mutex::new(Vec::new()));
+                let written = captured.clone();
+                let save: crate::services::SaveFileFn = Arc::new(move |doc, path, settings, ctl| {
+                    let deadline = Instant::now() + Duration::from_secs(10);
+                    while !ready.load(Ordering::Acquire) {
+                        ctl.check()?;
+                        if Instant::now() >= deadline {
+                            return Err("test save was not released".into());
+                        }
+                        std::thread::yield_now();
+                    }
+                    let encoded = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+                    if outcome == "failed" {
+                        return Err("disk full".into());
+                    }
+                    ctl.commit()?;
+                    *written.lock().unwrap() = encoded.bytes;
+                    Ok(encoded.warnings)
+                });
+                if automation {
+                    app.services.automation_save = Some(save);
+                } else {
+                    app.services.save_file = Some(save);
+                }
+                let expected = layer_target(&app.session);
+                let live = app.session.active().unwrap().doc.clone();
+                let result = if automation { app.save_automation(Some("background.psd".into())) } else { app.save_as(Some("background.psd".into())) }.unwrap();
+                assert_eq!(result["pending"], true);
+                // The direct session targeting API stays view-only while a worker holds the
+                // document. The command surface still blocks pixel edits during that save.
+                let top = app.session.active().unwrap().doc.walk().into_iter().find(|(_, _, layer)| layer.name == "Top").unwrap().2.id;
+                app.session.select_layer(top).unwrap();
+                let latest = layer_target(&app.session);
+                let before = identity(&app);
+                assert_eq!(app.session.active().unwrap().is_dirty(), !initially_clean);
+                assert!(Arc::ptr_eq(&live, &app.session.active().unwrap().doc));
+                assert!(app.run("edit.fill", json!({"color": "#ff0000"})).is_err());
+                if outcome == "cancelled" {
+                    let job = app.jobs.saves.first().unwrap().job;
+                    assert!(app.session.cancel_job(job));
+                }
+                app.run("file.new", json!({"width": 2, "height": 1, "name": "Another document"})).unwrap();
+                let other = app.session.active().unwrap().doc.id;
+                gate.store(true, Ordering::Release);
+                let deadline = Instant::now() + Duration::from_secs(10);
+                while app.saving() {
+                    assert!(Instant::now() < deadline, "save did not finish");
+                    crate::jobs_ui::tick(&mut app, &egui::Context::default());
+                    std::thread::yield_now();
+                }
+                assert_eq!(app.session.active().unwrap().doc.id, other, "save completion preserves the current tab");
+                assert!(app.session.set_active(0));
+                assert_eq!(layer_target(&app.session), latest);
+                assert!(app.session.active().unwrap().doc.saved_layer_selection.is_none());
+                assert!(Arc::ptr_eq(&live, &app.session.active().unwrap().doc));
+                if outcome == "saved" {
+                    assert_saved_layer_target("background.psd", &captured.lock().unwrap(), &expected);
+                    assert!(!app.session.active().unwrap().is_dirty());
+                } else {
+                    assert!(captured.lock().unwrap().is_empty());
+                    assert_eq!(identity(&app), before);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn background_save_does_not_mark_a_different_document_snapshot_clean() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    use std::time::{Duration, Instant};
+    for automation in [false, true] {
+        let mut app = app();
+        select_middle(&mut app);
+        app.background_jobs = true;
+        let gate = Arc::new(AtomicBool::new(false));
+        let ready = gate.clone();
+        let save: crate::services::SaveFileFn = Arc::new(move |doc, path, settings, ctl| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !ready.load(Ordering::Acquire) {
+                ctl.check()?;
+                if Instant::now() >= deadline {
+                    return Err("test save was not released".into());
+                }
+                std::thread::yield_now();
+            }
+            let encoded = photocraft_io::export(doc, path, &settings.io_options()).map_err(|e| e.to_string())?;
+            ctl.commit()?;
+            Ok(encoded.warnings)
+        });
+        if automation {
+            app.services.automation_save = Some(save);
+        } else {
+            app.services.save_file = Some(save);
+        }
+        let previous_saved = app.session.active().unwrap().saved_revision;
+        let previous_path = app.session.active().unwrap().path.clone();
+        if automation {
+            app.save_automation(Some("stale.psd".into())).unwrap();
+        } else {
+            app.save_as(Some("stale.psd".into())).unwrap();
+        }
+        // Simulate a lower-level caller bypassing command admission: the job's original Arc
+        // guard must still reject completion instead of marking these new pixels saved.
+        app.session
+            .edit("forced content change", |doc, active| {
+                let layer = active.and_then(|id| doc.layer_mut(id)).and_then(|layer| layer.surface_mut()).ok_or(photocraft_engine::EngineError::NoDocument)?;
+                layer.write_pixel(0, 0, &[1.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+        let modified = app.session.active().unwrap().doc.clone();
+        let modified_revision = app.session.active().unwrap().revision;
+        gate.store(true, Ordering::Release);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while app.saving() {
+            assert!(Instant::now() < deadline, "save did not finish");
+            crate::jobs_ui::tick(&mut app, &egui::Context::default());
+            std::thread::yield_now();
+        }
+        let state = app.session.active().unwrap();
+        assert!(state.is_dirty());
+        assert_eq!((state.revision, state.saved_revision, &state.path), (modified_revision, previous_saved, &previous_path));
+        assert!(Arc::ptr_eq(&modified, &state.doc));
+        assert!(state.doc.saved_layer_selection.is_none());
+    }
+}
+
 #[test]
 fn save_settings_share_only_the_open_documents_native_cache() {
     let mut app = app();

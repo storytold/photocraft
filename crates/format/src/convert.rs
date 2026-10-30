@@ -6,7 +6,7 @@ use std::sync::Arc;
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::{
     AlphaChannel, CompAppearance, CompLayerState, DocId, Document, Effects, FillCache, Group, Layer, LayerComp, LayerContent, LayerId, LayerMask, Metadata,
-    NamedPath, Pattern, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
+    NamedPath, Pattern, SavedLayerSelection, ShapeLayer, SmartContentsId, SmartObject, SmartSource, TextLayer,
 };
 use photocraft_geom::{TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile, decode_pixel, encode_pixel};
@@ -241,6 +241,7 @@ pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
         guides: d.guides.clone(),
         ruler_origin: d.ruler_origin,
         selection: d.selection.as_ref().map(|s| surface_m(s, sink)),
+        saved_layer_selection: d.saved_layer_selection.clone(),
         metadata: MetadataM {
             xmp: d.metadata.xmp.as_deref().map(str::to_owned),
             exif: opt_blob(&d.metadata.exif, sink),
@@ -399,6 +400,17 @@ impl Loader<'_> {
             return *self.legacy_linked_contents.entry(path.clone()).or_insert_with(SmartContentsId::fresh);
         }
         SmartContentsId::fresh()
+    }
+
+    fn layer_selection(&self, saved: &SavedLayerSelection) -> Option<SavedLayerSelection> {
+        let active = saved.active.and_then(|id| self.id_map.get(&id.0).copied());
+        let selected: Vec<_> = saved.selected.iter().filter_map(|id| self.id_map.get(&id.0).copied()).collect();
+        // A selection whose IDs all disappeared is missing metadata, not Deselect Layers.
+        // The original selected set also wins over a primary that was not its member.
+        if (!saved.selected.is_empty() && selected.is_empty()) || (saved.active.is_some() && active.is_none() && selected.is_empty()) {
+            return None;
+        }
+        Some(SavedLayerSelection { active, selected })
     }
 
     fn comp(&mut self, m: &LayerCompM) -> Result<LayerComp> {
@@ -641,7 +653,7 @@ impl Loader<'_> {
             }
         }
         let id = if self.preserve_ids { DocId(m.id) } else { DocId::fresh() };
-        Ok(Document {
+        let mut document = Document {
             id,
             name: m.name.clone(),
             size: m.size,
@@ -654,6 +666,7 @@ impl Loader<'_> {
             guides: m.guides.clone(),
             ruler_origin: m.ruler_origin,
             selection: self.opt_surface(&m.selection)?,
+            saved_layer_selection: m.saved_layer_selection.as_ref().and_then(|saved| self.layer_selection(saved)),
             metadata: md,
             global_light: m.global_light,
             paths,
@@ -674,7 +687,11 @@ impl Loader<'_> {
             notes: m.notes.clone(),
             text_styles: m.text_styles.clone(),
             slices,
-        })
+        };
+        if let Some(saved) = document.saved_layer_selection.take() {
+            document.saved_layer_selection = Some(saved.resolve(&document));
+        }
+        Ok(document)
     }
 
     fn channel(&mut self, c: &ChannelM) -> Result<AlphaChannel> {

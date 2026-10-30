@@ -196,7 +196,7 @@ fn process_outputs<'a>(
             scratch.add_document(doc, Some(path.to_string()));
             if !f(&mut scratch, &out)? {
                 let d = scratch.active().ok_or(EngineError::NoDocument)?;
-                save_doc(&d.doc, &out, save)?;
+                save_doc(&d.save_snapshot(), &out, save)?;
             }
             Ok(())
         })();
@@ -307,7 +307,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
             let mut saved: Option<Arc<Document>> = None;
             for (id, params) in &steps {
                 if batch_save_point(id) {
-                    saved = Some(scratch.active().ok_or(EngineError::NoDocument)?.doc.clone());
+                    saved = Some(scratch.active().ok_or(EngineError::NoDocument)?.save_snapshot());
                     continue;
                 }
                 let r = scratch.execute(id, params.clone())?;

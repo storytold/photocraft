@@ -259,7 +259,7 @@ impl Headless {
         let i = self.doc_index(index)?;
         let (stored_path, doc) = {
             let state = &self.session.documents()[i];
-            (state.path.clone(), state.doc.clone())
+            (state.path.clone(), state.save_snapshot())
         };
         let target: PathBuf = match (path, stored_path.as_deref()) {
             (Some(p), _) => p.to_path_buf(),

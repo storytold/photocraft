@@ -135,8 +135,8 @@ pub(super) fn edit_contents(s: &mut Session, p: &Value) -> Result<Value> {
 /// parent) and marks it saved. Returns false if `index` isn't an Edit Contents document.
 pub fn commit_child(s: &mut Session, index: usize) -> Result<bool> {
     let Some(st) = s.docs.get(index) else { return Ok(false) };
-    let child = st.doc.clone();
-    let Some(link) = s.smart_links.iter().find(|l| l.child == child.id).copied() else { return Ok(false) };
+    let Some(link) = s.smart_links.iter().find(|l| l.child == st.doc.id).copied() else { return Ok(false) };
+    let child = st.save_snapshot();
     let parent = s.docs.iter().position(|d| d.doc.id == link.parent).ok_or_else(|| other("the smart object's document was closed"))?;
     let bytes = Arc::new(encode_source(&child)?);
     let prev = s.active;

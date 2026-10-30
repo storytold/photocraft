@@ -216,6 +216,7 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
 /// identity, name, selection, guides, paths, layer comps, annotations, automation state).
 fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
     let Document {
+        saved_layer_selection: _,
         id: _,
         name: _,
         size,
@@ -318,6 +319,7 @@ fn video_frames_equal(a: &VideoData, b: &VideoData) -> bool {
 /// destructure is exhaustive, so a new `Document` field fails to compile until it is classified.
 pub fn selection_only_change(a: &Document, b: &Document) -> bool {
     let Document {
+        saved_layer_selection: _,
         id,
         name,
         size: _,

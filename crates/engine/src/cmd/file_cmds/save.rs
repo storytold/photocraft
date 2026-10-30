@@ -223,12 +223,14 @@ pub(super) fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
             msg: "`path` is the document's own file, so the copy would replace it: choose another path, or pass \"overwrite\": true".into(),
         });
     }
-    let mut doc = (*d.doc).clone();
+    let mut doc = d.save_snapshot();
     if p.get("layers").and_then(Value::as_bool) == Some(false) {
         // "Layers" unchecked in Save a Copy: write the flattened image.
+        let doc = std::sync::Arc::make_mut(&mut doc);
         let fmt = doc.pixel_format();
-        let px = flattened_checked(&doc, fmt, "file.saveACopy")?;
+        let px = flattened_checked(doc, fmt, "file.saveACopy")?;
         doc.layers = vec![Layer::new("Background", LayerContent::Raster(px))];
+        doc.saved_layer_selection = None;
     }
     let warnings = save_doc(&doc, &path, SaveOpts::from_params(s, p, "file.saveACopy")?)?;
     Ok(json!({"path": path, "warnings": warnings}))

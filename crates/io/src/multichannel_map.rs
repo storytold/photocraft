@@ -23,7 +23,7 @@ const GRID_AND_GUIDES: u16 = 1032;
 const ALPHA_IDENTIFIERS: u16 = 1053;
 /// Resources that only describe layers: target layer (1024), layer groups (1026), layer
 /// selection ids (1069) and layer groups enabled (1072). A Multichannel document has no layers.
-const LAYER_ONLY_RESOURCES: [u16; 4] = [ids::LAYER_STATE, ids::LAYER_GROUP_INFO, 1069, 1072];
+const LAYER_ONLY_RESOURCES: [u16; 4] = [ids::LAYER_STATE, ids::LAYER_GROUP_INFO, ids::LAYER_SELECTION_IDS, 1072];
 
 /// Value of sample `i` of a big-endian plane.
 fn decode(plane: &[u8], i: usize, s: SampleType) -> f32 {

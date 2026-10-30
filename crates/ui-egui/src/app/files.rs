@@ -340,7 +340,7 @@ impl PhotocraftApp {
         let choices = FormatChoices::from_step(params, id)?;
         if id == "file.saveACopy" {
             // A copy: the document keeps its own file and unsaved state, as when recorded (#4373).
-            let doc = self.session.active().ok_or("no document")?.doc.clone();
+            let doc = self.session.active().ok_or("no document")?.save_snapshot();
             return crate::view_cmds::write_copy(self, &doc, path, choices);
         }
         self.save_as_step(path.to_string(), params.get("tiffLayers").and_then(Value::as_bool), choices)
@@ -410,7 +410,8 @@ impl PhotocraftApp {
         let st = self.session.active().ok_or("no document")?;
         let (doc, written, previous) = (st.doc.id, st.revision, st.saved_revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&st.doc, &path, settings)?;
+        let snapshot = st.save_snapshot();
+        let (bytes, warnings) = export(&snapshot, &path, settings)?;
         let write = self.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
         let revision = saved_revision_after_write(!self.services.write_unconfirmed, written, previous);
@@ -474,6 +475,10 @@ impl PhotocraftApp {
     }
 
     fn saved_inner(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool, kind: SaveKind) {
+        let confirmed = match kind {
+            SaveKind::User => !self.services.write_unconfirmed,
+            SaveKind::Automation => true,
+        };
         // Automation: only a layered save becomes the document's file; a flat one is a
         // copy, as in the headless server (#2579).
         let (hooks, arm) = match kind {
@@ -494,8 +499,10 @@ impl PhotocraftApp {
                     && arm
                 {
                     st.saved_to(path.to_string());
-                    // The job locked the document, but record the revision that was written.
-                    st.saved_revision = revision;
+                    // Successful background jobs passed the original document Arc guard:
+                    // intervening revisions only changed view state, such as layer targeting.
+                    // Unconfirmed browser downloads must retain their previous saved revision.
+                    st.saved_revision = if confirmed { st.revision } else { revision };
                     app.remember_stamp(doc, path);
                 }
                 // "Save Document" script events and File › Generate › Image Assets.
@@ -614,7 +621,8 @@ impl PhotocraftApp {
         let state = self.session.active().ok_or("no document")?;
         let (doc, revision) = (state.doc.id, state.revision);
         let export = self.services.export.as_ref().ok_or("no exporter configured")?;
-        let (bytes, warnings) = export(&state.doc, &target, &settings)?;
+        let snapshot = state.save_snapshot();
+        let (bytes, warnings) = export(&snapshot, &target, &settings)?;
         let write = self.services.automation_write.as_mut().ok_or("automation write authority is not configured")?;
         write(&target, &bytes)?;
         self.saved_automation(doc, revision, &target, &warnings, false);

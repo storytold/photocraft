@@ -9,7 +9,8 @@
 
 use photocraft_color::{BlendMode, Color, ColorMode, PixelFormat, SampleType};
 use photocraft_doc::{
-    Adjustment, ClippingPath, Effect, Fill, GlobalLight, Guides, LabelColor, LiveShape, Locks, Path, ShapeStroke, SmartFilter, VectorMask, text,
+    Adjustment, ClippingPath, Effect, Fill, GlobalLight, Guides, LabelColor, LiveShape, Locks, Path, SavedLayerSelection, ShapeStroke, SmartFilter, VectorMask,
+    text,
 };
 use photocraft_geom::{Affine, Size};
 use serde::{Deserialize, Serialize};
@@ -50,6 +51,9 @@ pub struct DocM {
     #[serde(default)]
     pub ruler_origin: [f64; 2],
     pub selection: Option<SurfaceM>,
+    /// Layer targeting to restore on open; absent in older bundles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub saved_layer_selection: Option<SavedLayerSelection>,
     pub metadata: MetadataM,
     pub global_light: GlobalLight,
     /// Saved paths (Paths panel).
