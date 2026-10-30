@@ -1,6 +1,6 @@
 use super::begin::warps_type;
-use super::drag_modes::{HandleIndicator, handle_indicator};
 use super::cylinder::draw_cylinder;
+use super::drag_modes::{HandleIndicator, handle_indicator};
 use super::options_bar::{quad_scale, readout};
 use super::pointer::{Hit, handle_at, rotate_dir, rotation_degrees};
 use super::warp::{on_section_edge, quick_split_kind, single_patch};

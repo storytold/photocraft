@@ -3645,6 +3645,8 @@ fn applying_the_box_hides_no_pointer() {
     // The overlay draws no handles while the box is applied, so no drawn pointer either.
     assert_eq!(cursor(&app, &xf, [32.0, 32.0], cmd()), Some(CursorIcon::ResizeNwSe));
     assert_eq!(cursor(&app, &xf, [96.0, 32.0], cmd()), Some(CursorIcon::ResizeVertical));
+}
+
 // ---- Cylinder (#4112) ----
 
 fn cylinder_of(app: &PhotocraftApp) -> [f64; 7] {
@@ -3726,6 +3728,16 @@ fn cylinder_drags_set_its_values_and_keep_them_sound() {
     let d = cylinder_dragged(v, CylinderHandle::Bend, [0.0, 5.0]);
     assert!((d[4] - 0.5).abs() < 1e-9 && (d[5] - 0.5).abs() < 1e-9, "{d:?}");
     assert_eq!(&cylinder_dragged(v, CylinderHandle::Bend, [0.0, -100.0])[4..6], &[-1.0, -1.0], "clamped to the half axis");
+    // Unequal depths from a file keep their difference, and a press that doesn't move keeps a
+    // depth past the limit as it is.
+    let file = [10.0, 40.0, 60.0, 10.0, 1.4, 0.2, 0.5];
+    assert_eq!(cylinder_dragged(file, CylinderHandle::Bend, [0.0, 0.0]), file);
+    let d = cylinder_dragged(file, CylinderHandle::Bend, [0.0, -5.0]);
+    assert!((d[4] - 1.2).abs() < 1e-9 && (d[5] - 0.0).abs() < 1e-9, "{d:?}");
+    assert_eq!(cylinder_dragged(file, CylinderHandle::Bend, [0.0, 50.0])[4], 1.4, "no further than it already reaches");
+    // A move keeps the shape, however narrow the cylinder.
+    let narrow = [10.0, 40.0, 10.5, 10.0, 0.3, 0.3, 0.5];
+    assert_eq!(cylinder_dragged(narrow, CylinderHandle::Surface, [5.0, 0.0]), [15.0, 40.0, 15.5, 10.0, 0.3, 0.3, 0.5]);
     // The bottom handle moves the lower edge; the arc keeps its depth.
     assert_eq!(cylinder_dragged(v, CylinderHandle::Bottom, [7.0, 6.0]), [10.0, 46.0, 60.0, 10.0, 0.3, 0.3, 0.5]);
     // The wrap handle follows the pointer along the half axis: right stretches the middle (wrap down).
@@ -3902,7 +3914,7 @@ fn cylinder_cursors_point_along_their_handles() {
     app.ui.transform.as_mut().unwrap().warp = Some(cylinder_default(b).unwrap());
     app.transform_preview.as_mut().unwrap().split_tool = Some(SplitTool::Cross);
     let xf = ViewXform { center: [56.0, 56.0], ..level };
-    assert_eq!(cursor(&app, &xf, [30.0, 56.0], true), Some(CursorIcon::Move));
+    assert_eq!(cursor(&app, &xf, [30.0, 56.0], cmd()), Some(CursorIcon::Move));
 }
 
 /// The Warp bar keeps Bend, H and V for a cylinder, greyed like Split, Grid and the orientation

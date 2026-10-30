@@ -39,11 +39,11 @@ pub(crate) use begin::moving_texel;
 pub use begin::{WARP_ONE_LAYER, begin, begin_copy, begin_placed, begin_selection, begin_warp, enter_warp, leave_warp, warps_active_layer, warps_type};
 pub(crate) use commit::{SAVE_FOR_WEB, committing, nudge};
 pub use commit::{cancel, commit, end_if_left, follow_edits, intercept, is_enabled, on_job_event, track_steps};
-#[cfg(test)]
-use drag_modes::{HandleIndicator, handle_indicator, keep_convex, turns};
 use cylinder::CylinderHandle;
 #[cfg(test)]
 use cylinder::{cylinder_cursor, cylinder_default, cylinder_dragged, cylinder_handles, cylinder_hit, cylinder_values};
+#[cfg(test)]
+use drag_modes::{HandleIndicator, handle_indicator, keep_convex, turns};
 pub(crate) use drag_modes::{apply_drag, corner_distorts, legacy_mods};
 #[cfg(test)]
 pub(crate) use drag_modes::{apply_mode_drag, unlinked_mods};
