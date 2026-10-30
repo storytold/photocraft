@@ -164,6 +164,8 @@ pub struct LiquifyDialog {
     redo: Vec<LiquifyStroke>,
     /// The stroke being drawn and its last point.
     cur: Option<(LiquifyStroke, [f64; 3])>,
+    /// History closed the brush while its physical button may still be held.
+    brush_interrupted: bool,
     /// The lasso polygon being drawn (document px) and whether it thaws (Alt held at pointer-down).
     lasso: Option<(bool, Vec<[f64; 2]>)>,
     proxy: ProxyImage,
@@ -338,6 +340,7 @@ impl LiquifyDialog {
     }
 
     fn undo(&mut self) {
+        self.brush_interrupted |= self.cur.is_some();
         self.end();
         if let Some(stroke) = self.strokes.pop() {
             if self.redo.len() == REDO_STACK_LIMIT {
@@ -349,6 +352,7 @@ impl LiquifyDialog {
     }
 
     fn redo(&mut self) {
+        self.brush_interrupted |= self.cur.is_some();
         self.end();
         if let Some(stroke) = self.redo.pop() {
             let d = self.field.apply_stroke(&stroke);
@@ -541,6 +545,7 @@ fn open_on(
         strokes,
         redo: Vec::new(),
         cur: None,
+        brush_interrupted: false,
         lasso: None,
         proxy,
         source: surf,
@@ -695,6 +700,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     let Some(d) = app.distort.liquify.as_mut() else { return };
     match ev {
         ToolEvent::Down { x, y, pressure } => {
+            d.brush_interrupted = false;
             if d.opts.tool == LiquifyTool::LassoMask {
                 d.lasso = Some((mods.alt, vec![[x, y]]));
             } else {
@@ -712,6 +718,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
             }
         }
         ToolEvent::Up { x, y } => {
+            d.brush_interrupted = false;
             if let Some((subtract, pts)) = d.lasso.take() {
                 d.close_lasso(subtract, pts);
                 return;
@@ -1162,9 +1169,22 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // Mouse → strokes (Space or middle button pans). Alt+right-drag resizes the brush (#4702).
         let (pan, secondary, mods_now) =
             ui.input(|i| (i.key_down(egui::Key::Space) || i.pointer.middle_down(), i.pointer.button_down(egui::PointerButton::Secondary), i.modifiers));
+        let (primary_down, primary_pressed, primary_released) =
+            ui.input(|i| (i.pointer.primary_down(), i.pointer.primary_pressed(), i.pointer.primary_released()));
+        let fresh_primary = primary_pressed
+            && resp.contains_pointer()
+            && !ctx.dragging_something_else(resp.id)
+            && ui.input(|i| i.pointer.press_origin()).is_some_and(|p| area.contains(p));
+        if !primary_down || fresh_primary {
+            d.brush_interrupted = false;
+        }
+        // egui clears the response's held/drag flags on a release, even when a new press
+        // follows in this frame. Only a fresh press in this preview may fill that gap.
+        let pointer_pos = resp.interact_pointer_pos().or_else(|| fresh_primary.then(|| ctx.pointer_interact_pos()).flatten());
         // From the press, not once the drag is recognised a few points later: that first frame
         // would otherwise start a stroke.
-        let resize = d.brush_resize.is_some() || (resp.is_pointer_button_down_on() && brush_resize_gesture(mods_now, secondary));
+        let resize = d.brush_resize.is_some() || ((fresh_primary || resp.is_pointer_button_down_on()) && brush_resize_gesture(mods_now, secondary));
+        let mut began_stroke = false;
         if resize {
             // Anchored where the button went down, not where the drag was recognised a few
             // points later, so the outline doesn't jump when the gesture starts.
@@ -1173,23 +1193,40 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             {
                 d.brush_resize = Some((p, d.opts.size, d.opts.density));
             }
-            if let (Some((anchor, size0, dens0)), Some(p)) = (d.brush_resize, resp.interact_pointer_pos()) {
+            if let (Some((anchor, size0, dens0)), Some(p)) = (d.brush_resize, pointer_pos) {
                 let delta = p - anchor;
                 let (size, density) = resized_brush(size0, dens0, delta.x, delta.y);
                 d.opts.size = size;
                 d.opts.density = density;
             }
-            if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
+            if (resp.drag_stopped() && !fresh_primary) || !ui.input(|i| i.pointer.any_down()) {
                 d.brush_resize = None;
             }
-        } else if pan && resp.dragged() {
+        } else if pan && (fresh_primary || resp.dragged()) {
             let dl = resp.drag_delta();
             d.center = [d.center[0] - f64::from(dl.x / d.zoom), d.center[1] - f64::from(dl.y / d.zoom)];
-        } else if let Some(pp) = resp.interact_pointer_pos() {
+        } else if !d.brush_interrupted
+            && let Some(pp) = pointer_pos
+        {
             let q = to_doc(d, area, pp);
             let pr = 1.0;
             mods = ui.input(|i| i.modifiers);
-            if d.lasso.is_some() {
+            if fresh_primary {
+                // Close the previous physical gesture before starting this one, even when
+                // release and press arrived together. A lasso must be applied before Down.
+                events.extend(
+                    d.lasso
+                        .as_ref()
+                        .and_then(|(_, pts)| pts.last().copied())
+                        .or_else(|| d.cur.as_ref().map(|(_, l)| [l[0], l[1]]))
+                        .map(|last| ToolEvent::Up { x: last[0], y: last[1] }),
+                );
+                events.push(ToolEvent::Down { x: q[0], y: q[1], pressure: pr });
+                if !primary_down {
+                    events.push(ToolEvent::Up { x: q[0], y: q[1] });
+                }
+                began_stroke = true;
+            } else if d.lasso.is_some() {
                 // A lasso in progress: collect the polygon, no brush dabs.
                 if resp.dragged() {
                     events.push(ToolEvent::Move { x: q[0], y: q[1], pressure: pr });
@@ -1208,9 +1245,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ctx.request_repaint();
             }
         }
-        let primary_down = ui.input(|i| i.pointer.primary_down());
         let lasso_up = d.lasso.is_some() && !primary_down;
-        if resp.drag_stopped() || lasso_up || (d.cur.is_some() && !primary_down) {
+        let released_gesture = primary_released && (d.cur.is_some() || d.lasso.is_some());
+        if !began_stroke
+            && !(d.brush_interrupted && primary_down)
+            && (resp.drag_stopped() || released_gesture || lasso_up || (d.cur.is_some() && !primary_down))
+        {
             let q = d.lasso.as_ref().and_then(|(_, pts)| pts.last().copied()).or_else(|| d.cur.as_ref().map(|(_, l)| [l[0], l[1]])).unwrap_or_default();
             events.push(ToolEvent::Up { x: q[0], y: q[1] });
         }
