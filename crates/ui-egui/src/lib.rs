@@ -876,3 +876,6 @@ mod saved_path_edit_tests;
 
 #[cfg(test)]
 mod pen_path_ownership_tests;
+
+#[cfg(test)]
+mod mask_clipboard_tests;
