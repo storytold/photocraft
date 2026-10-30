@@ -338,6 +338,7 @@ mod tests {
         let corpus = root.join("corpus");
         let output = root.join("output");
         fs::create_dir(&corpus).unwrap();
+        let corpus = corpus.canonicalize().unwrap();
         fs::create_dir(&output).unwrap();
         fs::write(corpus.join("base.psd"), b"base").unwrap();
         let cli = root.join("fake-cli");
