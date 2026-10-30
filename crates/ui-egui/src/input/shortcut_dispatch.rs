@@ -140,8 +140,9 @@ pub fn claim_delete_keys(ctx: &egui::Context, id: egui::Id) {
 
 impl Focus {
     pub fn of(ctx: &egui::Context) -> Focus {
-        // A layer rename keeps its keys even in the frame egui drops its focus (Esc, Tab).
-        if ctx.text_edit_focused() || crate::layer_row_ui::rename_active(ctx) {
+        // A layer rename and a zoom field keep their keys even in the frame egui drops their
+        // focus (Esc, Tab).
+        if ctx.text_edit_focused() || crate::layer_row_ui::rename_active(ctx) || crate::zoom_field::editing(ctx) {
             Focus::Text
         } else if ctx.egui_wants_keyboard_input() {
             let owner = ctx.data(|d| d.get_temp::<egui::Id>(delete_owner_id()));

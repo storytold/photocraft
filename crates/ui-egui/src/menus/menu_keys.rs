@@ -333,6 +333,12 @@ impl Keys {
                 _ => {}
             }
         }
+        // Typing a zoom: Alt only answers with the system alert. The menu bar stays off and the
+        // field keeps its focus and its text.
+        if tap && crate::zoom_field::is_focused(ctx) {
+            crate::zoom_field::request_alert(ctx);
+            tap = false;
+        }
         if events.iter().any(|e| matches!(e, Event::PointerButton { pressed: true, .. })) {
             self.focus = None;
             self.underline = false;

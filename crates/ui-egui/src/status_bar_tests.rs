@@ -156,13 +156,19 @@ fn fullscreen_status_zoom_keeps_typing_and_clears_a_pending_warp_on_release() {
     h.event(egui::Event::Text("250%".into()));
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
-    assert_eq!(h.state().ui.views[0].zoom, 2.5);
+    // A typed zoom waits for the canvas to glide there, and this harness draws only the bar: the
+    // field is what shows it was taken, as it keeps the typed number for the whole glide.
+    let shown = |h: &Harness<'_, PhotocraftApp>| {
+        let app = h.state();
+        crate::zoom_levels::field_percent(&h.ctx, app.session.documents()[0].doc.id, app.ui.views[0].zoom)
+    };
+    assert!((shown(&h) - 250.0).abs() < 0.05, "the field keeps the typed 250 %: {}", shown(&h));
     assert!(cursor_warp(&h).is_none());
     h.get_by_role(egui::accesskit::Role::SpinButton).click();
     h.run_steps(2);
     h.key_press(egui::Key::ArrowUp);
     h.run_steps(2);
-    assert!((h.state().ui.views[0].zoom - 2.51).abs() < 0.0001, "keep keyboard stepping in fullscreen");
+    assert!((shown(&h) - 251.0).abs() < 0.05, "keep keyboard stepping in fullscreen: {}", shown(&h));
 }
 
 #[test]

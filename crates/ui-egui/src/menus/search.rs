@@ -60,7 +60,7 @@ pub(super) fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, 
     let field = ui.add(egui::TextEdit::singleline(&mut query).id(text_id.with("field")).hint_text(crate::i18n::tr(lang, "Search menus")).desired_width(220.0));
     // The menu opens on the press; the release a frame later completes a click on the title,
     // outside the field, and egui takes the focus away from it again (#1447, #1438).
-    if reopened || opening {
+    if (reopened || opening) && !crate::zoom_field::editing(&ctx) {
         field.request_focus();
     }
     let results = search_items(items, &query, lang);

@@ -54,6 +54,7 @@ mod tool_input;
 mod transform_controls;
 mod view_xform;
 pub mod wheel_nav;
+pub mod zoom_field;
 pub mod zoom_hold;
 pub mod zoom_levels;
 pub mod zoom_window_fit;
@@ -1712,8 +1713,9 @@ fn layer_picker_eyedropper(app: &mut PhotocraftApp, ui: &egui::Ui, ctx: &egui::C
 }
 
 /// Per-frame reconciliation of the camera with its document: resize re-centre, pending fit/fill,
-/// and the overscroll clamp. Returns the pixel aspect the view is drawn with.
-fn sync_view_to_document(app: &PhotocraftApp, ctx: &egui::Context, view: &mut View, doc: &Document, rect: Rect, ppp: f32) -> f32 {
+/// and the overscroll clamp. Only the `primary` (main window) view spends the glide a typed zoom left for its
+/// document. Returns the pixel aspect the view is drawn with.
+fn sync_view_to_document(app: &PhotocraftApp, ctx: &egui::Context, view: &mut View, doc: &Document, rect: Rect, ppp: f32, primary: bool) -> f32 {
     let size = [doc.size.width, doc.size.height];
     if view.doc_size != size {
         // Like Photoshop: keep the zoom level, re-centre the resized document.
@@ -1721,6 +1723,30 @@ fn sync_view_to_document(app: &PhotocraftApp, ctx: &egui::Context, view: &mut Vi
             view.center = [size[0] as f32 / 2.0, size[1] as f32 / 2.0];
         }
         view.doc_size = size;
+    }
+    // A zoom typed into a zoom field is spent over a few frames, the way egui spends a wheel notch
+    // into `smooth_scroll_delta`: the same smoothing (90 % of the way, but in 0.2 s instead of 0.1 s),
+    // on the distance left to zoom in log space. `zoom_levels::set_from_field` leaves that distance.
+    if primary {
+        let id = crate::zoom_levels::pending_id(doc.id);
+        let pending = ctx.data(|d| d.get_temp::<f32>(id)).unwrap_or(0.0);
+        if pending != 0.0 {
+            if view.fit_pending || view.fill_pending || !pending.is_finite() {
+                ctx.data_mut(|d| d.remove::<f32>(id));
+            } else {
+                let t = egui::emath::exponential_smooth_factor(0.90, 0.2, ctx.input(|i| i.stable_dt).min(0.2));
+                // General › Animated Zoom decides, as for every other zoom: off, the typed zoom is
+                // one instant jump to the target.
+                let animate = app.session.prefs().general.animated_zoom;
+                let step = if !animate || pending.abs() < 0.002 { pending } else { t * pending };
+                view.zoom = crate::zoom_levels::clamp(view.zoom * step.exp(), view.doc_size);
+                // The glide is the animation: no camera transition runs under it.
+                view.zoom_animating = false;
+                view.zoom_anchor = None;
+                ctx.data_mut(|d| d.insert_temp(id, pending - step));
+                ctx.request_repaint();
+            }
+        }
     }
     // View › Pixel Aspect Ratio Correction: document pixels are shown this much wider.
     let aspect = app.ui.view.display_aspect();
@@ -1794,7 +1820,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     }
     let doc = app.session.documents()[idx].doc.clone();
     let size = [doc.size.width, doc.size.height];
-    let aspect = sync_view_to_document(app, &ctx, &mut view, &doc, rect, ppp);
+    let aspect = sync_view_to_document(app, &ctx, &mut view, &doc, rect, ppp, primary);
     let flip = app.ui.view.flip_horizontal;
     // Document rendering follows the target; only shader uniforms and overlay geometry ease.
     let target_xf = ViewXform { rect, zoom: view.zoom / ppp, center: view.center, flip, rotation: view.rotation, aspect };

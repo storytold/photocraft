@@ -368,6 +368,10 @@ pub struct Services {
     /// Preferences ▸ General ▸ Beep When Done: the platform's default beep, played when a
     /// background job finishes successfully. `None` in the web build (and in tests).
     pub beep: Option<fn()>,
+    /// The system's alert sound, played when a key does nothing in a zoom field being typed in
+    /// (Tab, Alt; see `zoom_field`): on Windows `MessageBeep(MB_ICONASTERISK)`, the Asterisk
+    /// sound. Falls back to [`Self::beep`] when unset. `None` in the web build (and in tests).
+    pub alert: Option<fn()>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as

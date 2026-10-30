@@ -834,6 +834,286 @@ fn value_field_holds_arithmetic_until_committed() {
     assert_eq!(*h.state(), (25.0, 3));
 }
 
+/// What stands in for the app around a zoom field in the tests below.
+#[derive(Clone, Copy, PartialEq)]
+enum EscEater {
+    /// Nothing takes Esc.
+    Nobody,
+    /// Like `shortcuts::handle`: Esc is taken when no text field has the keyboard.
+    Shortcuts,
+    /// Esc is taken before the field can see it, whatever the focus.
+    Always,
+}
+
+/// The zoom field alone, with a button after it (so Tab has somewhere to go). The state is the
+/// field's value and how many times it reported a change. `on_pasteboard` stands in for
+/// `zoom_field::tick`: a press at the right of the window is a press on the pasteboard.
+fn zoom_harness(start: f32, eater: EscEater, on_pasteboard: bool) -> egui_kittest::Harness<'static, (f32, u32)> {
+    egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
+        move |ui, (v, changes): &mut (f32, u32)| {
+            let ctx = ui.ctx().clone();
+            let typing = ctx.text_edit_focused() || crate::zoom_field::editing(&ctx);
+            if eater == EscEater::Always || (eater == EscEater::Shortcuts && !typing) {
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
+            }
+            let pressed = on_pasteboard && ctx.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| p.x > 150.0));
+            crate::zoom_field::track_pasteboard(&ctx, pressed);
+            if super::compact_wrapping_value_field(ui, v, 0.0..=12800.0, "%", egui::vec2(90.0, 20.0)).accessible_name("Zoom").changed() {
+                *changes += 1;
+            }
+            let _ = ui.button("next");
+        },
+        (start, 0),
+    )
+}
+
+fn zoom_field_node<'a>(h: &'a egui_kittest::Harness<'static, (f32, u32)>) -> egui_kittest::Node<'a> {
+    use egui_kittest::kittest::Queryable;
+    h.get_by_role(egui::accesskit::Role::SpinButton)
+}
+
+/// Clicks the field and types `text` over its selected number, one key at a time.
+fn click_and_type(h: &mut egui_kittest::Harness<'static, (f32, u32)>, text: &str) {
+    zoom_field_node(h).click();
+    h.run();
+    for c in text.chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run();
+    }
+}
+
+/// A button down (and up) at `pos`.
+fn click_at(h: &mut egui_kittest::Harness<'static, (f32, u32)>, pos: egui::Pos2, button: egui::PointerButton) {
+    h.event(egui::Event::PointerMoved(pos));
+    for pressed in [true, false] {
+        h.event(egui::Event::PointerButton { pos, button, pressed, modifiers: egui::Modifiers::NONE });
+        h.run();
+    }
+}
+
+/// The zoom field applies a typed number once, on Enter, however many digits it has: never the
+/// number its first keys spell on the way (`1`, `12` on the way to `1200`), and always clamped.
+#[test]
+fn a_typed_zoom_is_applied_once_on_enter() {
+    // (zoom before, typed, zoom after). The range is 0..=12800.
+    let cases = [(100.0, "200", 200.0), (3.0, "1200", 1200.0), (800.0, "5", 5.0), (25.0, "99999", 12800.0), (7.0, "7", 7.0)];
+    for (before, typed, after) in cases {
+        let mut h = zoom_harness(before, EscEater::Shortcuts, false);
+        click_and_type(&mut h, typed);
+        assert_eq!(*h.state(), (before, 0), "{typed} over {before}: nothing applies while typing");
+        h.key_press(egui::Key::Enter);
+        h.run();
+        let changes = u32::from(after != before);
+        assert_eq!(*h.state(), (after, changes), "{typed} over {before}: Enter applies it once");
+    }
+}
+
+/// Esc drops what was typed, whoever else wants the key, and the field is the zoom again.
+#[test]
+fn esc_drops_the_typed_zoom() {
+    for eater in [EscEater::Nobody, EscEater::Shortcuts, EscEater::Always] {
+        let mut h = zoom_harness(200.0, eater, false);
+        click_and_type(&mut h, "40");
+        click_and_type_more(&mut h, "50");
+        h.key_press(egui::Key::Escape);
+        h.run();
+        assert_eq!(*h.state(), (200.0, 0), "Esc does not apply 40 or 50");
+        assert_eq!(h.ctx.memory(|m| m.focused()), None, "Esc leaves the field");
+        // Nothing typed is left to come back with the next click and Enter.
+        zoom_field_node(&h).click();
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (200.0, 0), "the field shows the zoom, 200, again");
+    }
+}
+
+/// Types more into the field that already has the keyboard.
+fn click_and_type_more(h: &mut egui_kittest::Harness<'static, (f32, u32)>, text: &str) {
+    // The first number is still selected only when the field was just reached: select it as
+    // Photoshop's user would, with Ctrl+A.
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.run();
+    for c in text.chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run();
+    }
+}
+
+/// Tab (and ⇧Tab) in the zoom field: the alert, the text selected, the focus kept, nothing applied.
+#[test]
+fn tab_in_the_zoom_field_alerts_and_selects_the_text() {
+    use egui_kittest::kittest::Queryable;
+    for modifiers in [egui::Modifiers::NONE, egui::Modifiers::SHIFT] {
+        let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, "200");
+        assert!(!crate::zoom_field::alert_pending(&h.ctx), "typing is silent");
+        h.key_press_modifiers(modifiers, egui::Key::Tab);
+        h.run_steps(2);
+        assert_eq!(*h.state(), (100.0, 0), "Tab leaves the zoom alone");
+        assert!(zoom_field_node(&h).is_focused(), "and the focus in the field");
+        assert!(!h.get_by_label("next").is_focused(), "not on the next widget");
+        assert!(crate::zoom_field::alert_pending(&h.ctx), "and asks for the alert");
+        // The text is selected: this replaces 200 instead of making it 2003.
+        for c in "3".chars() {
+            h.event(egui::Event::Text(c.to_string()));
+            h.run();
+        }
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (3.0, 1));
+    }
+}
+
+/// A zoom field reads `1/2` as 50 % and `5/2` as 250 %, like Photoshop.
+#[test]
+fn a_zoom_field_reads_a_division_as_a_ratio() {
+    for (typed, after) in [("1/2", 50.0), ("5/2", 250.0), ("4/1", 400.0)] {
+        let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, typed);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (after, 1), "{typed}");
+    }
+}
+
+/// `,` is a decimal point in a zoom field, like `.`: `100,90` is `100.90`.
+#[test]
+fn a_zoom_field_reads_a_comma_as_a_decimal_point() {
+    for (typed, after) in [("100,90", 100.9), ("100.90", 100.9), ("12,5", 12.5), ("200,", 200.0)] {
+        let mut h = zoom_harness(50.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, typed);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (after, 1), "{typed}");
+    }
+}
+
+/// With a `/`, only `,` is a decimal point: `100/5,0` is 2000 %, `100/5.0` is not a number.
+#[test]
+fn a_zoom_field_takes_a_comma_but_no_point_in_a_ratio() {
+    let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, "100/5,0");
+    assert!(!crate::zoom_field::alert_pending(&h.ctx), "a comma in a ratio is silent");
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (2000.0, 1));
+}
+
+/// At most one `.` or `,`, never both, and no `.` next to a `/`: the key is dropped, with the alert.
+#[test]
+fn a_zoom_field_types_away_a_second_separator_and_a_point_in_a_ratio() {
+    // (typed, zoom after Enter)
+    for (typed, after) in
+        [("1.5.2", 1.52), ("1,5,2", 1.52), ("1,5.2", 1.52), ("1.5,2", 1.52), ("1,000.5", 1.0005), ("1.5/2", 1.52), ("100/5.0", 200.0), ("100/5,0", 2000.0)]
+    {
+        let mut h = zoom_harness(50.0, EscEater::Shortcuts, false);
+        click_and_type(&mut h, typed);
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (after, 1), "{typed}");
+    }
+    let mut h = zoom_harness(50.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, "1,5");
+    assert!(!crate::zoom_field::alert_pending(&h.ctx), "the first separator is silent");
+    h.event(egui::Event::Text(".".into()));
+    h.run();
+    assert!(crate::zoom_field::alert_pending(&h.ctx), "a `.` next to the `,` asks for the alert");
+}
+
+/// The rules follow the text through Backspace and the cursor: with the `.` deleted, a new one is
+/// silent; with it still there, it is typed away.
+#[test]
+fn a_zoom_field_follows_backspace_and_the_cursor_when_it_checks_the_separators() {
+    let mut h = zoom_harness(50.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, "1.5");
+    h.key_press(egui::Key::ArrowLeft);
+    h.run();
+    h.key_press(egui::Key::Backspace);
+    h.run();
+    h.event(egui::Event::Text(".".into()));
+    h.run();
+    assert!(!crate::zoom_field::alert_pending(&h.ctx), "the `.` was deleted, so the new one is silent");
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (1.5, 1));
+
+    let mut h = zoom_harness(50.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, "1.5");
+    h.key_press(egui::Key::ArrowLeft);
+    h.run();
+    h.event(egui::Event::Text(".".into()));
+    h.run();
+    assert!(crate::zoom_field::alert_pending(&h.ctx), "the `.` is still there, so a second one is typed away");
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (1.5, 1));
+}
+
+/// A pasted `100/5.0` stays in the field and asks for the alert; Enter puts the zoom back.
+#[test]
+fn a_pasted_ratio_with_a_point_alerts_and_enter_restores_the_zoom() {
+    let mut h = zoom_harness(150.0, EscEater::Shortcuts, false);
+    zoom_field_node(&h).click();
+    h.run();
+    assert!(!crate::zoom_field::alert_pending(&h.ctx));
+    h.event(egui::Event::Paste("100/5.0".into()));
+    h.run();
+    assert!(crate::zoom_field::alert_pending(&h.ctx), "the paste asks for the alert");
+    assert_eq!(*h.state(), (150.0, 0), "and applies nothing");
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (150.0, 0), "Enter keeps the zoom it had");
+    // Nothing of the paste is left to come back with the next click and Enter.
+    zoom_field_node(&h).click();
+    h.run();
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (150.0, 0));
+}
+
+/// Only digits, the two separators and `/` go into a zoom field: any other key (`%` too, which
+/// is drawn beside the field) asks for the alert and leaves the text as it was.
+#[test]
+fn a_zoom_field_takes_digits_and_separators_only() {
+    let mut h = zoom_harness(100.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, "2");
+    assert!(!crate::zoom_field::alert_pending(&h.ctx), "a digit is silent");
+    h.event(egui::Event::Text("a".into()));
+    h.run();
+    assert!(crate::zoom_field::alert_pending(&h.ctx), "a letter asks for the alert");
+    for c in "00".chars() {
+        h.event(egui::Event::Text(c.to_string()));
+        h.run();
+    }
+    h.key_press(egui::Key::Enter);
+    h.run();
+    assert_eq!(*h.state(), (200.0, 1), "the letter was not inserted: 2, then 00");
+}
+
+/// A click, with either button, on the pasteboard keeps the typed zoom and selects it; a click
+/// on anything else applies it, as before.
+#[test]
+fn a_click_on_the_pasteboard_selects_the_typed_zoom_and_applies_nothing() {
+    let away = egui::pos2(250.0, 80.0);
+    for button in [egui::PointerButton::Primary, egui::PointerButton::Secondary] {
+        let mut h = zoom_harness(40.0, EscEater::Shortcuts, true);
+        click_and_type(&mut h, "50");
+        click_at(&mut h, away, button);
+        assert_eq!(*h.state(), (40.0, 0), "{button:?}: the zoom stays");
+        assert!(zoom_field_node(&h).is_focused(), "{button:?}: the field keeps the keyboard");
+        h.event(egui::Event::Text("7".into()));
+        h.run();
+        h.key_press(egui::Key::Enter);
+        h.run();
+        assert_eq!(*h.state(), (7.0, 1), "{button:?}: the text was selected, 7 replaced 50");
+    }
+    let mut h = zoom_harness(40.0, EscEater::Shortcuts, false);
+    click_and_type(&mut h, "50");
+    click_at(&mut h, away, egui::PointerButton::Primary);
+    assert_eq!(*h.state(), (50.0, 1), "a click elsewhere applies the typed zoom");
+}
+
 /// #5717: a value past the range shows as it is without reporting a change; an edit is clamped.
 #[test]
 fn value_field_keeps_a_shown_value_past_its_range_and_clamps_edits() {
