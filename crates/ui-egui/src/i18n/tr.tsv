@@ -4238,3 +4238,5 @@ cameraData	Lens	Lens
 	Current Layer:	Geçerli Katman:
 	Underlying Layer:	Alttaki Katman:
 	Drag to move the selected path	Seçili yolu taşımak için sürükleyin
+	Add  (hold {key} to subtract)	Ekle  (çıkarmak için {key} tuşunu basılı tutun)
+	Subtract  (hold {key} to add)	Çıkar  (eklemek için {key} tuşunu basılı tutun)

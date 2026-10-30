@@ -4779,3 +4779,5 @@ cameraRaw	White Balance: As Shot	Hvidbalance: Som fotograferet
 	Path operations	Stihandlinger
 	The path was discarded	Stien blev kasseret
 	The path was kept as the Work Path	Stien blev bevaret som arbejdssti
+	Add  (hold {key} to subtract)	Tilføj  (hold {key} nede for at fratrække)
+	Subtract  (hold {key} to add)	Fratræk  (hold {key} nede for at tilføje)

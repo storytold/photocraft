@@ -4710,3 +4710,5 @@ shape	Appearance	Оформление
 	Refine Hair needs hair detection, which isn't available yet	Для уточнения волос нужно распознавание волос, которое пока недоступно
 	Select and Mask was closed: its document is no longer the active one	Окно «Выделение и маска» закрыто: его документ больше не активен
 	Select and Mask was closed: another layer was selected	Окно «Выделение и маска» закрыто: выбран другой слой
+	Add  (hold {key} to subtract)	Добавить  (удерживайте {key}, чтобы вычесть)
+	Subtract  (hold {key} to add)	Вычесть  (удерживайте {key}, чтобы добавить)

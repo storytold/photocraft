@@ -30,13 +30,21 @@ impl View {
 
 /// Upload what changed: the document proxy, the overlay, a finished preview.
 /// The options bar of the Content-Aware Fill workspace, for the active tool.
+/// The Sampling Brush's Add and Subtract tooltips. Alt reverses the mode while painting, which
+/// the buttons didn't say (#9514), so they name the key as the Lasso's mode buttons do.
+pub(super) fn brush_mode_tips() -> (String, String) {
+    let alt = crate::shortcuts::pretty("Alt");
+    (crate::i18n::fmt(tl!("Add  (hold {key} to subtract)"), &[("key", &alt)]), crate::i18n::fmt(tl!("Subtract  (hold {key} to add)"), &[("key", &alt)]))
+}
+
 fn caf_options_bar(bui: &mut egui::Ui, w: &mut CafWorkspace, fill_btn: &mut Option<Value>, reset_what: &mut Option<&str>) {
     match w.tool {
         CafTool::Brush => {
-            if crate::icons::button(bui, "plus", 26.0, w.brush_add, tl!("Add")).clicked() {
+            let (add_tip, subtract_tip) = brush_mode_tips();
+            if crate::icons::button(bui, "plus", 26.0, w.brush_add, &add_tip).clicked() {
                 w.brush_add = true;
             }
-            if crate::icons::button(bui, "minus", 26.0, !w.brush_add, tl!("Subtract")).clicked() {
+            if crate::icons::button(bui, "minus", 26.0, !w.brush_add, &subtract_tip).clicked() {
                 w.brush_add = false;
             }
             bui.add_space(8.0);
