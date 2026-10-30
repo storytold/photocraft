@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 #[test]
 fn edited_psd_roundtrip_is_checked_and_bad_expectations_fail() {
-    let root = std::env::temp_dir().join(format!("pc-psd-write-oracle-{}", std::process::id()));
-    fs::create_dir(&root).unwrap();
+    let temp = tempfile::tempdir().unwrap();
+    let root = temp.path();
     let base = root.join("base.psd");
     let cli = crate::binary();
     let made = Command::new(&cli)
@@ -42,5 +42,4 @@ fn edited_psd_roundtrip_is_checked_and_bad_expectations_fail() {
     assert!(crate::oracle_runner::run(&src, &[recipe_name, corpus, cli_path, bad_output.to_str().unwrap()]).is_err());
     let bad: Value = serde_json::from_slice(&fs::read(bad_output.join("report.json")).unwrap()).unwrap();
     assert_eq!(bad["cases"][0]["status"], "fail");
-    fs::remove_dir_all(root).unwrap();
 }
