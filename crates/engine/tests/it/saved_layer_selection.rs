@@ -7,6 +7,7 @@ use photocraft_geom::Size;
 use photocraft_raster::Surface;
 use serde_json::json;
 
+/// Admit five named layers at the requested pixel format with the ordinary top-layer default.
 fn scene(mode: ColorMode, depth: SampleType) -> Session {
     let mut doc = Document::new("Layers", Size::new(2, 2), mode, depth);
     for i in 1..=5 {
@@ -17,16 +18,19 @@ fn scene(mode: ColorMode, depth: SampleType) -> Session {
     session
 }
 
+/// Resolve a fixture name after import, where runtime IDs may differ from the saved document.
 fn id(session: &Session, name: &str) -> LayerId {
     session.active().unwrap().doc.walk().into_iter().find(|(_, _, layer)| layer.name == name).unwrap().2.id
 }
 
+/// Compare targeting by stable fixture names, using the public effective selected-layer set.
 fn target_names(session: &Session) -> (Option<String>, Vec<String>) {
     let state = session.active().unwrap();
     let name = |id| state.doc.layer(id).unwrap().name.clone();
     (state.active_layer.map(name), state.selected_layers().into_iter().map(name).collect())
 }
 
+/// Exercise both format import and session admission, which consumes the targeting transport field.
 fn reopen(path: &std::path::Path) -> Session {
     let bytes = std::fs::read(path).unwrap();
     let imported = photocraft_io::import(path.to_str().unwrap(), &bytes).unwrap();
@@ -35,6 +39,8 @@ fn reopen(path: &std::path::Path) -> Session {
     session
 }
 
+/// A middle-layer selection survives the public Save a Copy path across PSD/PSB/native formats,
+/// representative color models and 8-bit, 16-bit and 32-bit float document samples.
 #[test]
 fn third_layer_in_saved_copy_reopens_selected_at_every_depth() {
     let dir = tempfile::tempdir().unwrap();
@@ -51,6 +57,7 @@ fn third_layer_in_saved_copy_reopens_selected_at_every_depth() {
     }
 }
 
+/// Explicit saves capture view-only changes while preserving the live document Arc and history.
 #[test]
 fn repeated_save_captures_the_latest_selection_without_an_edit() {
     let dir = tempfile::tempdir().unwrap();
@@ -70,6 +77,8 @@ fn repeated_save_captures_the_latest_selection_without_an_edit() {
     }
 }
 
+/// Admission initializes the primary, selected set, anchor and history together; an empty set
+/// remains deselected instead of being replaced by the ordinary top-layer default.
 #[test]
 fn multiple_selected_layers_and_explicit_deselection_reopen() {
     let dir = tempfile::tempdir().unwrap();
@@ -98,6 +107,7 @@ fn multiple_selected_layers_and_explicit_deselection_reopen() {
     }
 }
 
+/// Runtime targets are restored for nested children, their containing group and a background layer.
 #[test]
 fn nested_child_group_and_background_targeting_survive_session_admission() {
     let dir = tempfile::tempdir().unwrap();

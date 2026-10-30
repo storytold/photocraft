@@ -1282,6 +1282,8 @@ fn import_multichannel(file: &PsdFile, merged: &Option<photocraft_psd::Result<Ve
     }
 }
 
+/// Reconstructs editable layers and resolves targeting against their source record slots.
+/// If no editable layer survives, the merged-image fallback carries no synthetic target.
 fn import_layered(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_>) {
     let DecodedImport { file, merged, sizes, canvas, depth, fmt, .. } = import;
     let cc = fmt.mode.color_channels();

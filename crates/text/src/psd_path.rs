@@ -135,9 +135,10 @@ fn cubic(s: &[Point; 4], t: f64) -> Point {
 /// Pieces each segment is measured in for [`starting_at`].
 const STEPS: usize = 64;
 
-/// `path` starting `s` px along it (the type origin moved there): an open path loses the part
-/// before `s`, a closed one starts at a new smooth knot there. Unchanged for `s` at or before the
-/// start, or (open) at or past the end.
+/// Moves the type origin `s` px along `path`: open paths lose their prefix and closed paths
+/// start at a new smooth knot. Open paths are unchanged at or before the start or at/past the end.
+/// Closed paths wrap the offset modulo their length; offsets within [`SAME`] of either endpoint
+/// preserve the knots. Nonfinite offsets/lengths and degenerate paths are unchanged.
 fn starting_at(path: &Subpath, s: f64) -> Subpath {
     let segs = path.segments();
     let lengths: Vec<f64> = segs
@@ -154,7 +155,7 @@ fn starting_at(path: &Subpath, s: f64) -> Subpath {
         return path.clone();
     }
     let s = if path.closed { s.rem_euclid(total) } else { s };
-    if s <= SAME || (!path.closed && s >= total - SAME) || (path.closed && s >= total - SAME) {
+    if s <= SAME || s >= total - SAME {
         return path.clone();
     }
     // The segment and parameter at arc length `s` (linear within a measured piece).

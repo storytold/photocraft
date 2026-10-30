@@ -211,6 +211,9 @@ pub(crate) fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) ->
     Ok(warnings)
 }
 
+/// Write the current document and selection without changing its path, history or saved revision.
+/// Flattening replaces the output tree, so its source targeting is discarded. Replacing the
+/// document's own file requires the caller's explicit `overwrite` parameter.
 pub(super) fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", "file.saveACopy")?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;

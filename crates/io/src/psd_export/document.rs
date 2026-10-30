@@ -46,6 +46,8 @@ pub(super) fn document_to_psd_sized(doc: &Document, opts: &PsdExportOptions, dep
     export_supported_document(doc, opts, depth, ctl, fmt, size_limit)
 }
 
+/// Builds layered PSD/PSB records, document resources and the merged composite for a supported
+/// colour model. Layer IDs are finalized before selection resources reference them.
 fn export_supported_document(
     doc: &Document,
     opts: &PsdExportOptions,
@@ -103,7 +105,6 @@ fn export_supported_document(
     };
     let space = photocraft_compose::cmyk_space(doc);
     photocraft_color::convert::with_cmyk_space(space.as_ref(), || ex.emit(&doc.layers, &mut tick));
-    drop(tick);
     ctl.progress(layers_share);
 
     let merged = prepare_merged_planes(doc, &mut ex, opts, ctl, fmt, duotone_inks.is_some(), layers_share);

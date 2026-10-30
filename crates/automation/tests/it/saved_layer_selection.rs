@@ -4,6 +4,8 @@ use photocraft_automation::{AuthorizedWorkspace, Headless, files};
 use photocraft_engine::Session;
 use serde_json::json;
 
+/// Return a name-based target with sorted membership so remapped IDs and selection order do not
+/// obscure which layers an automation save restored.
 fn target(s: &Session) -> (Option<String>, Vec<String>) {
     let st = s.active().unwrap();
     let active = st.active_layer.and_then(|id| st.doc.layer(id)).map(|l| l.name.clone());
@@ -12,6 +14,7 @@ fn target(s: &Session) -> (Option<String>, Vec<String>) {
     (active, selected)
 }
 
+/// Reopen through automation I/O and fresh session admission, checking transport data is consumed.
 fn assert_saved(path: &std::path::Path, expected: &(Option<String>, Vec<String>)) {
     let mut reopened = Session::new();
     reopened.add_document(files::open(path).unwrap().document, None);
@@ -19,6 +22,8 @@ fn assert_saved(path: &std::path::Path, expected: &(Option<String>, Vec<String>)
     assert!(reopened.active().unwrap().doc.saved_layer_selection.is_none(), "file targeting is consumed on admission");
 }
 
+/// Trusted and authorized-workspace saves preserve single, multiple and empty targets at each
+/// depth, including a pathless save made while only clean layer view state has changed.
 #[test]
 fn trusted_and_capability_saves_restore_current_non_top_multi_and_empty_layer_targets() {
     let dir = std::env::temp_dir().join(format!("photocraft-saved-layer-selection-{}", std::process::id()));
@@ -58,6 +63,8 @@ fn trusted_and_capability_saves_restore_current_non_top_multi_and_empty_layer_ta
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Indexed saves capture an inactive document without switching the active session; a failed
+/// write preserves that document's target, path, saved revision and live Arc identity.
 #[test]
 fn indexed_saves_take_the_inactive_documents_target_and_failure_preserves_it() {
     let dir = std::env::temp_dir().join(format!("photocraft-inactive-layer-selection-{}", std::process::id()));

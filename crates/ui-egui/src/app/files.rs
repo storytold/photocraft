@@ -474,6 +474,9 @@ impl PhotocraftApp {
         self.saved_inner(doc, revision, path, warnings, copy, SaveKind::Automation);
     }
 
+    /// Applies completion to the originating document, even when another tab is active.
+    /// Confirmed writes may include later view-only revisions after the worker's Arc guard;
+    /// unconfirmed downloads retain the caller's saved revision, and copies keep their file state.
     fn saved_inner(&mut self, doc: DocId, revision: u64, path: &str, warnings: &[String], copy: bool, kind: SaveKind) {
         let confirmed = match kind {
             SaveKind::User => !self.services.write_unconfirmed,

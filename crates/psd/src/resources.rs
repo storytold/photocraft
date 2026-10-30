@@ -175,6 +175,9 @@ pub enum ResourceData<'a> {
     LayerSelectionIds(Vec<u32>),
 }
 
+/// Decodes resource 1069 after checking the complete count-derived payload before allocation.
+/// The format parser preserves zero IDs, duplicates and order for the document mapper to
+/// resolve; truncated data and trailing bytes are malformed rather than partial selections.
 fn layer_selection_ids(data: &[u8]) -> Result<Vec<u32>> {
     let mut r = Reader::new(data);
     let count = r.u16()?;
@@ -384,6 +387,7 @@ mod tests {
         assert_eq!(ImageResource::new(4242, vec![]).parsed(), None);
     }
 
+    /// Parsing preserves the stored list exactly, including zero, duplicates and deselection.
     #[test]
     fn typed_layer_selection_ids_preserve_empty_order_and_duplicates() {
         for ids in [vec![], vec![9], vec![u32::MAX, 0, 9, 9]] {
@@ -395,6 +399,7 @@ mod tests {
         }
     }
 
+    /// Declared lengths must match the entire payload, including at the maximum valid count.
     #[test]
     fn typed_layer_selection_ids_reject_mismatched_counts_and_truncation() {
         for data in [vec![], vec![0], vec![0, 1], vec![0, 1, 0, 0, 0], vec![0, 0, 0], vec![0, 0, 0, 0, 0, 1], vec![255, 255]] {

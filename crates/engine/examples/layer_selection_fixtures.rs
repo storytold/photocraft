@@ -17,6 +17,7 @@ enum Target {
     Empty,
 }
 
+/// Paint one original rectangle using the document's pixel format; fail if its surface is absent.
 fn raster(doc: &Document, name: &str, bounds: Rect, color: [f32; 4]) -> io::Result<Layer> {
     let mut layer = Layer::raster(name, doc.pixel_format());
     let surface = layer.surface_mut().ok_or_else(|| io::Error::other("the fixture layer has no raster surface"))?;
@@ -24,6 +25,7 @@ fn raster(doc: &Document, name: &str, bounds: Rect, color: [f32; 4]) -> io::Resu
     Ok(layer)
 }
 
+/// Build five distinct colored layers, optionally adding a group with two named child targets.
 fn scene(nested: bool) -> io::Result<Document> {
     let mut doc = Document::new("Saved layer selection", Size::new(320, 200), ColorMode::Rgb, SampleType::U8);
     // All pixels are original geometric artwork; no external images, fonts or profiles.
@@ -47,6 +49,7 @@ fn scene(nested: bool) -> io::Result<Document> {
     Ok(doc)
 }
 
+/// Find a scene target by its human-readable name, including children inside the optional group.
 fn layer(session: &Session, name: &str) -> io::Result<LayerId> {
     session
         .active()
@@ -54,10 +57,13 @@ fn layer(session: &Session, name: &str) -> io::Result<LayerId> {
         .ok_or_else(|| io::Error::other(format!("fixture layer {name:?} is missing")))
 }
 
+/// Translate captured IDs for the review checklist and reject references outside the output tree.
 fn name(doc: &Document, id: LayerId) -> io::Result<&str> {
     doc.layer(id).map(|layer| layer.name.as_str()).ok_or_else(|| io::Error::other("the captured selection refers to a missing layer"))
 }
 
+/// Export each targeting scenario as PSD, PSB and native files and print its expected selection.
+/// An optional output directory makes the same original artwork reproducible for manual review.
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args_os().skip(1);
     let first = args.next();

@@ -10,11 +10,14 @@ use crate::{Document, LayerId};
 /// deselects every layer; the document's optional field distinguishes that from absent metadata.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SavedLayerSelection {
+    /// Primary target for single-layer commands. After resolution, a present primary belongs to `selected`.
     pub active: Option<LayerId>,
+    /// Selected layer IDs in stored order; resolution removes missing IDs and duplicates.
     pub selected: Vec<LayerId>,
 }
 
 impl SavedLayerSelection {
+    /// Use the ordinary new-document target, or deselection when the document has no layers.
     fn top(doc: &Document) -> Self {
         let active = doc.top_layer();
         Self { active, selected: active.into_iter().collect() }
@@ -74,6 +77,7 @@ mod tests {
     use super::*;
     use crate::{ColorMode, Layer, SampleType, Size};
 
+    /// Build a group with one child and a separate top layer so tree and list order differ.
     fn document() -> Document {
         let mut doc = Document::new("selection", Size::new(2, 1), ColorMode::Rgb, SampleType::U8);
         let child = Layer::raster("child", doc.pixel_format());
@@ -82,6 +86,7 @@ mod tests {
         doc
     }
 
+    /// Nested membership is resolved without losing the first occurrence of each stored ID.
     #[test]
     fn resolves_nested_ids_and_deduplicates_without_changing_order() {
         let doc = document();
@@ -92,6 +97,7 @@ mod tests {
         assert_eq!(selection, SavedLayerSelection { active: Some(child), selected: vec![top, child] });
     }
 
+    /// An absent, stale or unselected primary falls back within the surviving selected set.
     #[test]
     fn selected_set_wins_over_a_conflicting_or_stale_primary() {
         let doc = document();
@@ -107,6 +113,7 @@ mod tests {
         );
     }
 
+    /// Only an explicitly empty value deselects; absent or entirely stale targeting uses the default.
     #[test]
     fn absent_stale_and_explicitly_empty_targeting_are_distinct() {
         let mut doc = document();

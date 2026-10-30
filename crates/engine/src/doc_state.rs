@@ -74,6 +74,9 @@ impl DocState {
         self.history.pixel_bytes(&self.doc).saturating_add(self.history.extra_bytes(&self.doc, &snaps))
     }
 
+    /// Admit a document as a clean editing state, consuming its imported layer targeting before
+    /// creating history and the initial snapshot. The range anchor starts at the resolved primary;
+    /// import transport data is never retained by the live document or its history.
     pub fn new(mut doc: Document, path: Option<String>) -> Self {
         let saved = doc.take_saved_layer_selection();
         let active_layer = saved.active;
@@ -113,6 +116,8 @@ impl DocState {
     /// Capture the document and its current layer targeting for a save. The transport field
     /// exists only on this copy: selecting a layer does not change the live document's identity,
     /// history, or dirty state, including while a background job holds that document.
+    /// Layer data is cloned with the document's existing copy-on-write payload sharing. A missing
+    /// active layer means deselection; an inconsistent set follows the effective active target.
     pub fn save_snapshot(&self) -> Arc<Document> {
         let selected = match self.active_layer {
             None => Vec::new(),

@@ -30,6 +30,8 @@ fn identity(app: &PhotocraftApp) -> (String, Option<String>, u64, u64) {
     (st.doc.name.clone(), st.path.clone(), st.revision, st.saved_revision)
 }
 
+/// Compares targeting by layer names because import can remap numeric layer IDs.
+/// Sorting the selected names makes this assertion independent of storage order.
 fn layer_target(session: &Session) -> (Option<String>, Vec<String>) {
     let st = session.active().unwrap();
     let active = st.active_layer.and_then(|id| st.doc.layer(id)).map(|l| l.name.clone());
@@ -38,6 +40,8 @@ fn layer_target(session: &Session) -> (Option<String>, Vec<String>) {
     (active, selected)
 }
 
+/// Reopens serialized bytes through session admission, which must consume transport metadata
+/// rather than reset targeting to the constructor's ordinary top-layer default.
 fn assert_saved_layer_target(name: &str, bytes: &[u8], expected: &(Option<String>, Vec<String>)) {
     let mut reopened = Session::new();
     reopened.add_document(photocraft_io::import(name, bytes).unwrap().document, None);
@@ -45,12 +49,15 @@ fn assert_saved_layer_target(name: &str, bytes: &[u8], expected: &(Option<String
     assert!(reopened.active().unwrap().doc.saved_layer_selection.is_none());
 }
 
+/// Creates a non-top target so saves cannot pass by restoring the usual top-layer default.
 fn select_middle(app: &mut PhotocraftApp) {
     app.run("layer.new.layer", json!({"name": "Middle"})).unwrap();
     app.run("layer.new.layer", json!({"name": "Top"})).unwrap();
     app.run("layer.select", json!({"name": "Middle"})).unwrap();
 }
 
+/// User and capability-scoped saves must capture singleton, multiple and empty targeting,
+/// including explicit saves of clean documents whose selection changed after the last save.
 #[test]
 fn synchronous_user_and_automation_saves_keep_current_layer_targeting() {
     for automation in [false, true] {
@@ -99,6 +106,8 @@ fn synchronous_user_and_automation_saves_keep_current_layer_targeting() {
     }
 }
 
+/// A delayed copy dialog captures request-time targeting; replay captures its own current state.
+/// Neither successful copies nor failed/cancelled copies may replace live identity or file state.
 #[test]
 fn save_a_copy_captures_layer_targeting_before_the_file_picker_and_replay_uses_current_targeting() {
     let mut app = app();
@@ -141,6 +150,9 @@ fn save_a_copy_captures_layer_targeting_before_the_file_picker_and_replay_uses_c
     assert!(std::sync::Arc::ptr_eq(&live, &app.session.active().unwrap().doc));
 }
 
+/// Workers serialize launch-time targeting even if selection or the active tab changes.
+/// Completion preserves current view state and marks only confirmed writes clean;
+/// failed/cancelled jobs retain the original document's path and saved revision.
 #[test]
 fn background_user_and_automation_saves_capture_the_original_documents_layer_target() {
     use std::sync::{
@@ -228,6 +240,8 @@ fn background_user_and_automation_saves_capture_the_original_documents_layer_tar
     }
 }
 
+/// The originating-Arc guard must reject a completed save after an actual content edit,
+/// even though view-only selection changes are allowed to leave the same Arc in place.
 #[test]
 fn background_save_does_not_mark_a_different_document_snapshot_clean() {
     use std::sync::{

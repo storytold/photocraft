@@ -88,6 +88,7 @@ pub(crate) fn path_resources(doc: &Document, warnings: &mut Vec<String>) -> Vec<
 }
 
 /// Whether an imported (unmodelled) resource still describes the document and is written back.
+/// Layer-target resources are always excluded because the save snapshot regenerates them.
 pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bool {
     // Targeting is regenerated from the save snapshot, never from a stale imported copy.
     if matches!(id, ids::LAYER_STATE | ids::LAYER_SELECTION_IDS) {

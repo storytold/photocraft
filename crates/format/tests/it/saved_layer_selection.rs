@@ -5,6 +5,7 @@ use photocraft_format::{LoadOptions, PcraftWriter, SaveOptions, load_from_bytes,
 
 use crate::common::temp_dir;
 
+/// Builds a small depth-parametric tree with a background, nested child and top layer.
 fn document(depth: SampleType) -> Document {
     let mut doc = Document::with_background("selection", Size::new(2, 1), ColorMode::Rgb, depth, Color::WHITE);
     let child = Layer::raster("nested", doc.pixel_format());
@@ -13,15 +14,18 @@ fn document(depth: SampleType) -> Document {
     doc
 }
 
+/// Resolves fixture names independently of IDs, which may change during native loading.
 fn named(doc: &Document, name: &str) -> LayerId {
     doc.walk().into_iter().find(|(_, _, layer)| layer.name == name).unwrap().2.id
 }
 
+/// Selects the top layer and nested child while making the nested child primary.
 fn targeting(doc: &Document) -> SavedLayerSelection {
     let nested = named(doc, "nested");
     SavedLayerSelection { active: Some(nested), selected: vec![named(doc, "top"), nested] }
 }
 
+/// Both native bundle forms preserve absent, empty and multiple targeting without a v1 bump.
 #[test]
 fn layer_targeting_roundtrips_zip_and_directory_at_several_depths() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
@@ -39,6 +43,7 @@ fn layer_targeting_roundtrips_zip_and_directory_at_several_depths() {
     }
 }
 
+/// Fresh-ID loading must remap both the primary and every selected nested-layer reference.
 #[test]
 fn layer_targeting_follows_remapped_nested_ids() {
     let mut doc = document(SampleType::U8);
@@ -50,6 +55,7 @@ fn layer_targeting_follows_remapped_nested_ids() {
     assert_eq!(back.saved_layer_selection, Some(targeting(&back)));
 }
 
+/// Removing the optional field simulates an older v1 file and retains top-layer admission.
 #[test]
 fn older_manifest_without_layer_targeting_keeps_the_top_default() {
     let mut doc = document(SampleType::U8);
@@ -74,6 +80,7 @@ fn older_manifest_without_layer_targeting_keeps_the_top_default() {
     assert!(manifest["document"].get("saved_layer_selection").is_none(), "absent metadata stays absent on disk");
 }
 
+/// Lost references trigger normal fallback under either ID policy; explicit none stays none.
 #[test]
 fn dangling_layer_ids_do_not_become_an_explicit_deselection() {
     let mut doc = document(SampleType::U8);
@@ -97,6 +104,7 @@ fn dangling_layer_ids_do_not_become_an_explicit_deselection() {
     assert_eq!(back.take_saved_layer_selection(), SavedLayerSelection::default());
 }
 
+/// Normalization follows remapping, dropping stale/duplicate IDs and repairing the primary.
 #[test]
 fn surviving_selection_is_normalized_after_id_remapping() {
     let mut doc = document(SampleType::U8);
@@ -108,6 +116,7 @@ fn surviving_selection_is_normalized_after_id_remapping() {
     assert_eq!(back.saved_layer_selection, Some(SavedLayerSelection { active: Some(nested), selected: vec![nested] }));
 }
 
+/// Selection-only changes rewrite ZIP/directory manifests while reusing all cached tiles.
 #[test]
 fn targeting_changes_update_manifest_and_reuse_cached_tiles() {
     let mut doc = document(SampleType::U16);

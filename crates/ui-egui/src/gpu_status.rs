@@ -301,6 +301,8 @@ pub fn show_fallback(app: &mut PhotocraftApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
 
+    /// Emergency recovery must serialize current targeting without replacing live state.
+    /// Admission of the native recovery bytes must consume that targeting into the session.
     #[test]
     fn emergency_recovery_captures_the_current_layer_target() {
         use std::sync::{Arc, Mutex};

@@ -1899,6 +1899,8 @@ fn essential_menu_items_stay_visible() {
     assert!(!items.iter().any(|i| i.id == "edit.fade"));
 }
 
+/// Scheduled recovery must carry targeting through native serialization and admission
+/// while leaving the original document Arc, revision and dirty state intact.
 #[test]
 fn autosave_captures_layer_targeting_without_replacing_the_live_document() {
     type Snapshots = Arc<Mutex<Vec<Arc<photocraft_doc::Document>>>>;

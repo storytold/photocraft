@@ -227,6 +227,8 @@ fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
     ChannelM { name: name.clone(), surface: surface_m(surface, sink), spot: *spot, color: *color, opacity: *opacity, indicates: *indicates }
 }
 
+/// Builds a native manifest while placing pixel and binary payloads in the content store.
+/// Saved layer targeting remains optional manifest data, so selection-only saves reuse tiles.
 pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
     DocM {
         id: d.id.0,
@@ -402,6 +404,9 @@ impl Loader<'_> {
         SmartContentsId::fresh()
     }
 
+    /// Remaps targeting after all document layers have populated the loader's ID map.
+    /// Missing nonempty targeting returns `None` for the normal top-layer fallback; an
+    /// explicitly empty selection stays present and survives subsequent normalization.
     fn layer_selection(&self, saved: &SavedLayerSelection) -> Option<SavedLayerSelection> {
         let active = saved.active.and_then(|id| self.id_map.get(&id.0).copied());
         let selected: Vec<_> = saved.selected.iter().filter_map(|id| self.id_map.get(&id.0).copied()).collect();
@@ -572,6 +577,9 @@ impl Loader<'_> {
         })
     }
 
+    /// Restores a complete document before normalizing references to its final layer tree.
+    /// Older manifests keep targeting absent; supplied targeting follows preserved or fresh
+    /// runtime IDs without changing the native format version.
     pub(crate) fn document(&mut self, m: &DocM) -> Result<Document> {
         // Reserve every stored id before allocating identities missing from older bundles. If an
         // id is implausibly large, remap the whole document while retaining shared contents groups.

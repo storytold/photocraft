@@ -62,6 +62,8 @@ pub(super) fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// File › Revert: reload the saved file as one history step (undoable, like Photoshop's
 /// "Revert" history state); the document is clean afterwards.
+/// Consume imported targeting before the edit, then attach the complete selected set to the new
+/// history state so Undo and Redo restore the pre-Revert and saved targets respectively.
 pub(super) fn revert(s: &mut Session) -> Result<Value> {
     let path = s.active().and_then(|d| d.path.clone()).ok_or(EngineError::Other("the document has never been saved".into()))?;
     let bytes = read_file(&path)?;

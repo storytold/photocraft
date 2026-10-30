@@ -7,6 +7,7 @@ use photocraft_engine::Session;
 use photocraft_geom::Size;
 use serde_json::json;
 
+/// Create three painted layers so workflow tests persist both pixels and a non-top target.
 fn scene() -> Session {
     let mut doc = Document::new("source", Size::new(2, 2), ColorMode::Rgb, SampleType::U8);
     for name in ["Bottom", "Middle", "Top"] {
@@ -19,21 +20,25 @@ fn scene() -> Session {
     session
 }
 
+/// Look up a named fixture layer without assuming IDs survive a format roundtrip.
 fn id(session: &Session, name: &str) -> LayerId {
     session.active().unwrap().doc.walk().into_iter().find(|(_, _, layer)| layer.name == name).unwrap().2.id
 }
 
+/// Describe effective targeting by stable names rather than file-specific layer IDs.
 fn targets(session: &Session) -> (Option<String>, Vec<String>) {
     let state = session.active().unwrap();
     let name = |id| state.doc.layer(id).unwrap().name.clone();
     (state.active_layer.map(name), state.selected_layers().into_iter().map(name).collect())
 }
 
+/// Select Bottom and Middle with Middle primary and Bottom as a distinct runtime range anchor.
 fn multiple(session: &mut Session) {
     let (bottom, middle) = (id(session, "Bottom"), id(session, "Middle"));
     session.restore_layer_selection(Some(middle), &[bottom, middle], Some(bottom)).unwrap();
 }
 
+/// Import a written file into a fresh session, including constructor normalization of targeting.
 fn open(path: &Path) -> Session {
     let bytes = std::fs::read(path).unwrap();
     let doc = photocraft_io::import(path.to_str().unwrap(), &bytes).unwrap().document;
@@ -42,6 +47,7 @@ fn open(path: &Path) -> Session {
     session
 }
 
+/// Revert is one clean history step whose Undo/Redo restore the complete old/saved selected sets.
 #[test]
 fn revert_restores_saved_targeting_and_undo_redo_keep_both_targets() {
     let dir = tempfile::tempdir().unwrap();
@@ -74,6 +80,8 @@ fn revert_restores_saved_targeting_and_undo_redo_keep_both_targets() {
     }
 }
 
+/// Deferred saves use their captured selection after Close or a document switch; ordinary batch
+/// completion captures the final active document's targeting when there is no earlier save point.
 #[test]
 fn batch_keeps_targeting_from_a_save_followed_by_close_or_document_switch() {
     let dir = tempfile::tempdir().unwrap();
@@ -101,6 +109,8 @@ fn batch_keeps_targeting_from_a_save_followed_by_close_or_document_switch() {
     }
 }
 
+/// Save Contents embeds the child target in native bytes, proven by reopening through a fresh
+/// parent session rather than reusing the already-open child editing state.
 #[test]
 fn smart_contents_commit_captures_child_selection_for_the_next_open() {
     let mut session = scene();
@@ -128,6 +138,7 @@ fn smart_contents_commit_captures_child_selection_for_the_next_open() {
     assert!(reopened.active().unwrap().doc.saved_layer_selection.is_none());
 }
 
+/// Flattened copies target their replacement Background and leave the source selection untouched.
 #[test]
 fn flattened_layered_copies_do_not_keep_source_layer_ids() {
     let dir = tempfile::tempdir().unwrap();

@@ -7,6 +7,7 @@ use photocraft_io::{PsdExportOptions, document_to_psd, document_to_psd_with, imp
 use photocraft_psd::resources::{ImageResource, ids};
 use photocraft_psd::{Compression, LayerRecord, PsdFile, SectionType, TaggedBlock, Version, testgen};
 
+/// Creates a source record with explicit Unicode name, `lyid` and optional group marker.
 fn record(name: &str, id: u32, section: Option<SectionType>) -> LayerRecord {
     let mut blocks = vec![TaggedBlock::unicode_name(name), TaggedBlock::layer_id(id)];
     if let Some(section) = section {
@@ -15,6 +16,7 @@ fn record(name: &str, id: u32, section: Option<SectionType>) -> LayerRecord {
     LayerRecord { name: name.as_bytes().to_vec(), blocks, ..Default::default() }
 }
 
+/// Builds five independently addressable records with no preexisting targeting resources.
 fn flat_file() -> PsdFile {
     let mut file = testgen::small(Version::Psd, Compression::Raw);
     *file.layers_mut() = (0..5).map(|i| record(&format!("layer {i}"), 10 + i, None)).collect();
@@ -22,6 +24,7 @@ fn flat_file() -> PsdFile {
     file
 }
 
+/// Interleaves nested folders and divider records so raw indices differ from tree indices.
 fn grouped_file() -> PsdFile {
     let mut file = flat_file();
     *file.layers_mut() = vec![
@@ -37,6 +40,7 @@ fn grouped_file() -> PsdFile {
     file
 }
 
+/// Replaces raw 1024/1069 resources, distinguishing an absent list from an explicit empty one.
 fn targeting(file: &mut PsdFile, target: Option<u16>, selected: Option<&[u32]>) {
     file.resources.retain(|r| !matches!(r.id, ids::LAYER_STATE | ids::LAYER_SELECTION_IDS));
     if let Some(target) = target {
@@ -49,21 +53,25 @@ fn targeting(file: &mut PsdFile, target: Option<u16>, selected: Option<&[u32]>) 
     }
 }
 
+/// Exercises byte serialization and the public importer, including compatibility warnings.
 fn open(file: &PsdFile) -> (Document, Vec<String>) {
     let imported = import("target.psd", &file.to_bytes().unwrap()).unwrap();
     (imported.document, imported.warnings)
 }
 
+/// Finds a fixture layer by stable name rather than assuming runtime IDs match source IDs.
 fn layer(doc: &Document, name: &str) -> LayerId {
     doc.walk().into_iter().find(|(_, _, l)| l.name == name).unwrap().2.id
 }
 
+/// Checks primary and ordered selection through layer names after runtime-ID assignment.
 fn assert_targeting(doc: &Document, active: Option<&str>, selected: &[&str]) {
     let saved = doc.saved_layer_selection.as_ref().expect("saved targeting");
     assert_eq!(saved.active.map(|id| doc.layer(id).unwrap().name.as_str()), active);
     assert_eq!(saved.selected.iter().map(|id| doc.layer(*id).unwrap().name.as_str()).collect::<Vec<_>>(), selected);
 }
 
+/// Checks exact resource bytes and uniqueness independently of PhotoCraft's selection parser.
 fn assert_resources(file: &PsdFile, target: Option<u16>, selected: Option<&[u32]>) {
     assert_eq!(file.resource(ids::LAYER_STATE).map(|r| r.data.clone()), target.map(|n| n.to_be_bytes().to_vec()));
     let data = selected.map(|ids| {
@@ -77,6 +85,7 @@ fn assert_resources(file: &PsdFile, target: Option<u16>, selected: Option<&[u32]
     }
 }
 
+/// A non-top primary must retain its exact target index and layer ID through PSD bytes.
 #[test]
 fn third_of_five_layers_stays_active_after_a_byte_round_trip() {
     let mut source = flat_file();
@@ -89,6 +98,7 @@ fn third_of_five_layers_stays_active_after_a_byte_round_trip() {
     assert_targeting(&open(&output).0, Some("layer 2"), &["layer 2"]);
 }
 
+/// Backgrounds, children and groups use emitted record positions, including divider slots.
 #[test]
 fn grouped_record_indices_include_dividers_and_keep_the_primary_distinct_from_the_set() {
     for (index, id, name) in [(0, 10, "Background"), (4, 14, "deep child"), (5, 15, "inner"), (6, 16, "outer")] {
@@ -103,6 +113,7 @@ fn grouped_record_indices_include_dividers_and_keep_the_primary_distinct_from_th
     }
 }
 
+/// Empty 1069 overrides a stale cached 1024, and export omits that cached target entirely.
 #[test]
 fn explicit_empty_selection_overrides_a_cached_target_and_exports_no_target() {
     let mut source = grouped_file();
@@ -114,6 +125,7 @@ fn explicit_empty_selection_overrides_a_cached_target_and_exports_no_target() {
     assert_targeting(&open(&output).0, None, &[]);
 }
 
+/// Absent targeting stays absent, while legacy index-only files work without source `lyid`s.
 #[test]
 fn missing_metadata_stays_absent_and_a_legacy_index_needs_no_layer_ids() {
     let mut source = flat_file();
@@ -132,6 +144,7 @@ fn missing_metadata_stays_absent_and_a_legacy_index_needs_no_layer_ids() {
     assert_resources(&output, Some(2), Some(&[assigned]));
 }
 
+/// ID-only targeting preserves first-occurrence order and recovers the last ID as primary.
 #[test]
 fn selection_ids_can_restore_without_an_index_and_keep_order_without_duplicates() {
     let mut source = flat_file();
@@ -142,6 +155,7 @@ fn selection_ids_can_restore_without_an_index_and_keep_order_without_duplicates(
     assert_resources(&document_to_psd(&doc), Some(1), Some(&[12, 10, 11]));
 }
 
+/// An index outside authoritative 1069 cannot select an extra layer or become its primary.
 #[test]
 fn selection_ids_win_over_a_conflicting_target() {
     let mut source = flat_file();
@@ -151,6 +165,7 @@ fn selection_ids_win_over_a_conflicting_target() {
     assert!(warnings.iter().any(|w| w.contains("outside the saved selection")), "{warnings:?}");
 }
 
+/// Unresolvable selected IDs use a valid legacy index or leave session fallback available.
 #[test]
 fn missing_ids_recover_the_index_or_leave_the_default_fallback_available() {
     let mut source = flat_file();
@@ -163,6 +178,7 @@ fn missing_ids_recover_the_index_or_leave_the_default_fallback_available() {
     assert!(doc.saved_layer_selection.is_none());
 }
 
+/// `lyid` collisions with dividers or other layers are ambiguous, even if one record imports.
 #[test]
 fn duplicate_ids_including_dividers_never_select_an_arbitrary_record() {
     let mut source = grouped_file();
@@ -179,6 +195,7 @@ fn duplicate_ids_including_dividers_never_select_an_arbitrary_record() {
     assert_targeting(&doc, Some("deep child"), &["deep child"]);
 }
 
+/// Invalid optional resource payloads warn while valid companion metadata and pixels load.
 #[test]
 fn malformed_resources_warn_and_fall_back_without_losing_the_document() {
     let mut source = flat_file();
@@ -194,6 +211,7 @@ fn malformed_resources_warn_and_fall_back_without_losing_the_document() {
     assert!(warnings.iter().any(|w| w.contains("1024") && w.contains("could not be read")), "{warnings:?}");
 }
 
+/// Divider slots and out-of-range indices cannot resolve to an arbitrary editable layer.
 #[test]
 fn divider_and_out_of_range_indices_are_ignored() {
     let mut source = grouped_file();
@@ -205,6 +223,7 @@ fn divider_and_out_of_range_indices_are_ignored() {
     }
 }
 
+/// Zero is a valid source `lyid` throughout import, export and resource-byte assertions.
 #[test]
 fn layer_id_zero_is_not_a_sentinel() {
     let mut source = flat_file();
@@ -217,6 +236,7 @@ fn layer_id_zero_is_not_a_sentinel() {
     assert_resources(&document_to_psd(&doc), Some(0), Some(&[0]));
 }
 
+/// First-resource lookup wins, and stale raw targeting never bypasses the typed save state.
 #[test]
 fn duplicate_resources_use_the_first_copy_and_export_never_reuses_raw_targeting() {
     let mut source = flat_file();
@@ -233,6 +253,7 @@ fn duplicate_resources_use_the_first_copy_and_export_never_reuses_raw_targeting(
     assert_resources(&document_to_psd(&doc), None, None);
 }
 
+/// PSD/PSB targeting follows newly assigned IDs independently of supported depth and mode.
 #[test]
 fn new_layers_use_assigned_psd_ids_at_every_supported_depth_and_mode() {
     for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
@@ -252,6 +273,7 @@ fn new_layers_use_assigned_psd_ids_at_every_supported_depth_and_mode() {
     }
 }
 
+/// Export captures changed selection and repairs deleted references against the output tree.
 #[test]
 fn changed_and_deleted_targets_are_resolved_against_the_saved_document() {
     let mut source = flat_file();
@@ -264,6 +286,7 @@ fn changed_and_deleted_targets_are_resolved_against_the_saved_document() {
     assert_resources(&document_to_psd(&doc), Some(3), Some(&[14]));
 }
 
+/// Merged stand-ins and modes that discard layers must not inherit stale targeting resources.
 #[test]
 fn layerless_files_and_exports_never_target_synthetic_or_discarded_layers() {
     let mut source = testgen::merged_only(Version::Psd, photocraft_psd::ColorMode::Rgb, 8, Compression::Raw, 1, 1);

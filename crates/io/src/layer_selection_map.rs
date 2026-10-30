@@ -7,6 +7,8 @@ use photocraft_doc::{Document, Layer, LayerContent, LayerId, SavedLayerSelection
 use photocraft_psd::resources::{ImageResource, ResourceData, ids};
 use photocraft_psd::{LayerNode, LayerRecord, PsdFile, SectionType};
 
+/// Pairs the reconstructed tree with imported layers while retaining original record slots.
+/// Divider slots stay empty, and recursion uses the same depth limit as layer reconstruction.
 fn record_targets(nodes: &[LayerNode], layers: &[Layer], targets: &mut [Option<LayerId>], depth: usize) {
     for (node, layer) in nodes.iter().zip(layers) {
         if let Some(target) = targets.get_mut(node.index()) {
@@ -20,7 +22,8 @@ fn record_targets(nodes: &[LayerNode], layers: &[Layer], targets: &mut [Option<L
     }
 }
 
-/// An id must identify exactly one raw record, including records that are not selectable.
+/// Maps only unambiguous `lyid` values to imported layers, including zero as a valid ID.
+/// A collision with any raw record, even a divider, invalidates that ID for selection.
 fn unique_ids(file: &PsdFile, targets: &[Option<LayerId>]) -> HashMap<u32, Option<LayerId>> {
     let mut ids = HashMap::new();
     for (index, record) in file.layers().iter().enumerate() {
@@ -37,6 +40,8 @@ fn unique_ids(file: &PsdFile, targets: &[Option<LayerId>]) -> HashMap<u32, Optio
     ids
 }
 
+/// Resolves the first resource 1024 through raw record slots, warning on unusable metadata.
+/// Malformed, out-of-range and divider targets leave ordinary document fallback available.
 fn target_layer(file: &PsdFile, targets: &[Option<LayerId>], warnings: &mut Vec<String>) -> Option<LayerId> {
     let resource = file.resource(ids::LAYER_STATE)?;
     match resource.parsed() {
@@ -55,6 +60,8 @@ fn target_layer(file: &PsdFile, targets: &[Option<LayerId>], warnings: &mut Vec<
     }
 }
 
+/// Reads the first resource 1069 without conflating an explicit empty list with missing data.
+/// Optional metadata errors become warnings so otherwise usable image content still opens.
 fn selection_ids(file: &PsdFile, warnings: &mut Vec<String>) -> Option<Vec<u32>> {
     let resource = file.resource(ids::LAYER_SELECTION_IDS)?;
     match resource.parsed() {
@@ -67,11 +74,15 @@ fn selection_ids(file: &PsdFile, warnings: &mut Vec<String>) -> Option<Vec<u32>>
     }
 }
 
+/// Uses a valid legacy target as a singleton, retaining absent metadata when none resolves.
 fn singleton(active: Option<LayerId>) -> Option<SavedLayerSelection> {
     active.map(|id| SavedLayerSelection { active: Some(id), selected: vec![id] })
 }
 
 /// Applies saved targeting only to actual imported records, never to a merged-image stand-in.
+/// Resource 1069 defines the selected set, including explicit deselection; 1024 supplies the
+/// primary only when it belongs to that set. PhotoCraft recovers an inconsistent primary
+/// with the last surviving selected ID, or falls back to 1024 when no selected IDs resolve.
 pub(crate) fn import(file: &PsdFile, nodes: &[LayerNode], doc: &mut Document, warnings: &mut Vec<String>) {
     if file.layers().is_empty() || doc.layers.is_empty() || (file.resource(ids::LAYER_STATE).is_none() && file.resource(ids::LAYER_SELECTION_IDS).is_none()) {
         return;
@@ -114,6 +125,9 @@ pub(crate) fn import(file: &PsdFile, nodes: &[LayerNode], doc: &mut Document, wa
 }
 
 /// Regenerates targeting from the save snapshot and the records/ids that this export emitted.
+/// Resource 1024 counts divider slots; resource 1069 uses finalized `lyid` assignments.
+/// Explicit deselection emits only an empty 1069. Missing targeting and layerless output emit
+/// neither resource; values outside PSD's 16-bit count/index limits are omitted with warnings.
 pub(crate) fn export(doc: &Document, layer_ids: &HashMap<LayerId, u32>, records: &[LayerRecord], warnings: &mut Vec<String>) -> Vec<ImageResource> {
     let Some(saved) = doc.saved_layer_selection.clone() else { return Vec::new() };
     if records.is_empty() {

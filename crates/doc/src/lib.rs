@@ -967,6 +967,8 @@ impl FileEncoding {
 pub type LayerPath = Vec<usize>;
 
 impl Document {
+    /// Creates an empty document with the requested size and pixel format.
+    /// Callers supply layers; new documents carry no imported layer-targeting metadata.
     pub fn new(name: impl Into<String>, size: Size, mode: ColorMode, depth: SampleType) -> Self {
         Document {
             id: DocId::fresh(),
