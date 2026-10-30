@@ -383,3 +383,64 @@ fn long_press_y_button_selects_art_history() {
     frame(&mut app, &ctx, 2.05, vec![pointer(row, false)]);
     assert_eq!(app.ui.tool, Tool::ArtHistoryBrush);
 }
+
+#[test]
+fn next_slot_tool_wraps_around_the_flyout() {
+    let slot = [Tool::RectMarquee, Tool::EllipseMarquee, Tool::SingleRowMarquee, Tool::SingleColumnMarquee];
+    assert_eq!(next_slot_tool(&slot, Tool::RectMarquee), Tool::EllipseMarquee);
+    assert_eq!(next_slot_tool(&slot, Tool::SingleColumnMarquee), Tool::RectMarquee);
+    assert_eq!(next_slot_tool(&slot, Tool::Brush), Tool::EllipseMarquee, "unknown from → after the first");
+}
+
+/// Photoshop: Alt/Option-click a toolbar button cycles its flyout tools without opening the menu.
+#[test]
+fn alt_click_cycles_the_tool_flyout_slot() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+    frame(&mut app, &ctx, 0.0, vec![]);
+    frame(&mut app, &ctx, 0.1, vec![]);
+    let index = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).position(|slot| slot.contains(&Tool::RectMarquee)).unwrap();
+    let slot = TOOL_SECTIONS.iter().flat_map(|section| section.iter()).nth(index).copied().unwrap();
+    assert_eq!(slot, &[Tool::RectMarquee, Tool::EllipseMarquee, Tool::SingleRowMarquee, Tool::SingleColumnMarquee]);
+    let bx = if Tokens::get(&ctx).pro { 30.0 } else { 36.0 };
+    let mut buttons: Vec<Rect> = ctx.viewport(|v| {
+        v.prev_pass
+            .widgets
+            .layers()
+            .flat_map(|(_, w)| w.iter())
+            .filter(|w| w.rect.size() == egui::Vec2::splat(bx) && w.sense.senses_click())
+            .map(|w| w.rect)
+            .collect()
+    });
+    buttons.sort_by(|a, b| a.top().total_cmp(&b.top()));
+    let at = buttons[index].center();
+    let alt = egui::Modifiers { alt: true, ..Default::default() };
+    let pointer = |pos, pressed, modifiers| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers };
+    let flyout = |ctx: &egui::Context| ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::unique("tool-flyout"))).is_some();
+    app.ui.tool = Tool::RectMarquee;
+    // Plain click keeps the shown tool.
+    frame(&mut app, &ctx, 1.0, vec![egui::Event::PointerMoved(at), pointer(at, true, Default::default())]);
+    frame(&mut app, &ctx, 1.05, vec![pointer(at, false, Default::default())]);
+    frame(&mut app, &ctx, 1.1, vec![]);
+    assert_eq!(app.ui.tool, Tool::RectMarquee);
+    assert!(!flyout(&ctx));
+    // Alt-click advances through every flyout entry, including ones Shift+M skips.
+    for (t, want) in [
+        (1.5, Tool::EllipseMarquee),
+        (2.0, Tool::SingleRowMarquee),
+        (2.5, Tool::SingleColumnMarquee),
+        (3.0, Tool::RectMarquee),
+    ] {
+        frame(
+            &mut app,
+            &ctx,
+            t,
+            vec![egui::Event::ModifiersChanged(alt), egui::Event::PointerMoved(at), pointer(at, true, alt)],
+        );
+        frame(&mut app, &ctx, t + 0.05, vec![egui::Event::ModifiersChanged(alt), pointer(at, false, alt)]);
+        frame(&mut app, &ctx, t + 0.1, vec![]);
+        assert_eq!(app.ui.tool, want, "alt-click at {t}");
+        assert!(!flyout(&ctx), "alt-click must not open the flyout");
+    }
+}
