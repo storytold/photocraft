@@ -454,3 +454,80 @@ fn spot_edits_refresh_the_overlay() {
         last = now;
     }
 }
+
+/// The first draw of a big document composites a proxy, not the full canvas (#10249): it must
+/// pick the same pixels the full-resolution composite gives, in RGB and CMYK at 8 and 16 bit,
+/// with the inks printed over it the same way.
+#[test]
+fn proxy_composite_matches_the_full_resolution_one() {
+    use photocraft_color::{BlendMode, SampleType};
+    use photocraft_doc::{Layer, LayerContent, LayerMask};
+    for mode in [ColorMode::Rgb, ColorMode::Cmyk] {
+        for depth in [SampleType::U8, SampleType::U16] {
+            for factor in [2, 3, 4] {
+                let mut doc = spot_doc(mode, depth, 0.5, 1.0);
+                doc.size = photocraft_geom::Size::new(37, 23);
+                let mut s = Surface::new(doc.pixel_format());
+                for y in 0..23 {
+                    for x in 0..37 {
+                        let (fx, fy) = (x as f32 / 36.0, y as f32 / 22.0);
+                        s.write_pixel(x, y, &[fx, fy, (fx * fy * 7.0).fract(), 0.3 + 0.7 * fy]);
+                    }
+                }
+                let mut layer = Layer::new("pattern", LayerContent::Raster(s));
+                layer.blend = BlendMode::Multiply;
+                layer.opacity = 0.8;
+                let mut mask = LayerMask::reveal_all();
+                mask.surface.fill_rect(Rect::new(5, 3, 20, 15), &[0.25]);
+                layer.mask = Some(mask);
+                doc.layers.push(layer);
+                for ch in &mut doc.channels {
+                    let mut sf = Surface::new(ch.surface.format());
+                    for y in 0..23 {
+                        for x in 0..37 {
+                            sf.write_pixel(x, y, &[((x * 3 + y * 5) % 11) as f32 / 10.0]);
+                        }
+                    }
+                    ch.surface = sf;
+                }
+                assert!(proxy_matches(&doc));
+                let b = doc.bounds();
+                let (proxy, full) = (composite(&doc, b, factor), composite_sampled(&doc, b, factor));
+                assert_eq!(proxy.len(), full.len());
+                for (i, (p, f)) in proxy.iter().zip(&full).enumerate() {
+                    assert!(p.iter().zip(f).all(|(p, f)| (p - f).abs() < 1e-4), "{mode:?} {depth:?} /{factor} px {i}: {p:?} != {f:?}");
+                }
+                let mut v = ChannelView::default();
+                v.set_alpha_visible(0, true);
+                v.set_alpha_visible(1, true);
+                let got = render(&doc, &v, b, factor, Look::default(), None).unwrap();
+                let mut want = photocraft_compose::Buffer {
+                    rect: Rect::new(0, 0, 37usize.div_ceil(factor as usize) as i32, 23usize.div_ceil(factor as usize) as i32),
+                    px: full,
+                };
+                let mut small = doc.clone();
+                small.channels.iter_mut().for_each(|c| c.surface = photocraft_compose::proxy::downsample(&c.surface, factor));
+                photocraft_compose::multichannel::overprint(&mut want, &small, |_| true);
+                for (i, (g, w)) in got.iter().zip(&want.px).enumerate() {
+                    let w = Color32::from_rgba_premultiplied(q(w[0]), q(w[1]), q(w[2]), 255);
+                    assert!(g.to_array().iter().zip(w.to_array()).all(|(a, b)| a.abs_diff(b) <= 1), "{mode:?} {depth:?} /{factor} px {i}: {g:?} != {w:?}");
+                }
+            }
+        }
+    }
+}
+
+/// Feathered masks blur by document pixels, which a proxy would not scale: those documents keep
+/// the full-resolution composite.
+#[test]
+fn feathered_masks_keep_the_full_resolution_composite() {
+    use photocraft_doc::{Layer, LayerContent, LayerMask};
+    let mut doc = spot_doc(ColorMode::Rgb, photocraft_color::SampleType::U8, 1.0, 1.0);
+    assert!(proxy_matches(&doc));
+    let mut mask = LayerMask::reveal_all();
+    mask.feather = 4.0;
+    let mut inner = Layer::new("inner", LayerContent::Raster(Surface::new(doc.pixel_format())));
+    inner.mask = Some(mask);
+    doc.layers.push(Layer::group("group", vec![inner]));
+    assert!(!proxy_matches(&doc));
+}

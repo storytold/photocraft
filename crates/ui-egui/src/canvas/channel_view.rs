@@ -95,6 +95,28 @@ impl Look {
 /// Render in bands instead of allocating a full-resolution float composite to sample a preview.
 fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
     let (w, h) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
+    // A downsampled document (#10249): the whole canvas at `factor` from a proxy picks the same
+    // pixels (`downsample` keeps every factor-th one) for ~1/factor² of the compositing.
+    if factor > 1 && r == doc.bounds() && proxy_matches(doc) {
+        let p = photocraft_compose::proxy::proxy_document(doc, factor);
+        let mut out = Vec::with_capacity((w * h) as usize);
+        let _ = photocraft_compose::render_bands(&p, Rect::new(0, 0, w as i32, h as i32), 0, |band| -> Result<(), ()> {
+            out.extend(band.px.iter().map(|p| {
+                let a = p[3].clamp(0.0, 1.0);
+                [p[0] * a + 1.0 - a, p[1] * a + 1.0 - a, p[2] * a + 1.0 - a, 1.0]
+            }));
+            Ok(())
+        });
+        if out.len() == (w * h) as usize {
+            return out;
+        }
+    }
+    composite_sampled(doc, r, factor)
+}
+
+/// [`composite`] sampled from the full-resolution composite, rendered in bands.
+fn composite_sampled(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
+    let (w, h) = (r.width().div_ceil(factor), r.height().div_ceil(factor));
     let mut out = Vec::with_capacity((w * h) as usize);
     let f = factor as i32;
     let _ = photocraft_compose::render_bands(doc, r, 0, |band| -> Result<(), ()> {
@@ -109,6 +131,23 @@ fn composite(doc: &Document, r: Rect, factor: u32) -> Vec<[f32; 4]> {
         Ok(())
     });
     out
+}
+
+/// Whether a proxy composite picks the full composite's pixels: no layer effects or vector masks
+/// ([`proxy_faithful`](photocraft_compose::proxy::proxy_faithful)) and no feathered masks, whose
+/// radius is in document pixels.
+fn proxy_matches(doc: &Document) -> bool {
+    // A stack, not recursion: groups can nest deeply.
+    let mut stack: Vec<&photocraft_doc::Layer> = doc.layers.iter().collect();
+    while let Some(l) = stack.pop() {
+        if photocraft_compose::masks::has_feather(l) {
+            return false;
+        }
+        if let photocraft_doc::LayerContent::Group(g) = &l.content {
+            stack.extend(&g.children);
+        }
+    }
+    photocraft_compose::proxy::proxy_faithful(doc)
 }
 
 /// The channel view of `r` (document pixels, sampled every `factor` px) as premultiplied pixels,
