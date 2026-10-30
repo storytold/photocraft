@@ -139,10 +139,9 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
                 None => (px.iter().flat_map(|q| q.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect::<Vec<u8>>(), None),
                 Some(p) => match web_preview::optimized(ui, key, &format!("{}|{rev}|{frame:?}|{size_sig}", doc.id.0), p, &px, w, h) {
                     Ok((preview, bytes, colors, ext)) => (preview, Some(((bytes as f64 * ratio) as usize, colors, ext))),
-                    Err(error) => {
-                        ui.label(error);
-                        (vec![0; (w * h * 4) as usize], None)
-                    }
+                    // The error shows on the row above the panes; a label here sat beside the pane
+                    // and widened the dialog (#8830).
+                    Err(_) => (vec![0; (w * h * 4) as usize], None),
                 },
             };
             let img = egui::ColorImage::from_rgba_unmultiplied([w as usize, h as usize], &rgba);

@@ -2,7 +2,7 @@
 
 use photocraft_color::{BlendMode, Color, ColorMode, SampleType};
 use photocraft_doc::{Adjustment, Document, Fill, Layer, LayerContent, LayerId, LayerMask, Size};
-use photocraft_geom::Rect;
+use photocraft_geom::{Rect, TILE_SIZE};
 use photocraft_raster::Surface;
 use serde_json::{Map, Value, json};
 
@@ -168,7 +168,7 @@ pub(crate) use layer_params::{NEW_LAYER_PATH, explicit_layer, layer_listing, lay
 use ops::{arrange, merge_group, set_mask, set_mask_and_deselect};
 pub(crate) use ops::{layer_copy, translate_layer};
 use params::{bad, set_clipped};
-pub(crate) use params::{check_f32_values, color_param, int, int_i32, parse_hex, u32_id, u32_id_param};
+pub(crate) use params::{check_f32_values, cmyk_param, color_param, int, int_i32, parse_hex, u32_id, u32_id_param};
 
 pub fn command_specs() -> &'static [CommandSpec] {
     &registry().specs
@@ -365,12 +365,7 @@ fn build() -> Vec<CommandSpec> {
         cmd!("select.inverse", "Inverse", ["Select"], Some("Cmd+Shift+I"), "{}", has_selection, |s, _| {
             s.edit("Inverse", |doc, _| {
                 let old = doc.selection.take().unwrap_or_else(|| Surface::new(photocraft_color::PixelFormat::GRAY8));
-                let b = doc.bounds();
-                let data: Vec<f32> = old.read_region(b).into_iter().map(|v| 1.0 - v).collect();
-                let mut m = Surface::new(photocraft_color::PixelFormat::GRAY8);
-                m.write_region(b, &data);
-                m.prune();
-                doc.selection = Some(m);
+                doc.selection = Some(photocraft_algo::selection::inverse_surface(&old, doc.bounds()));
                 Ok(())
             })?;
             Ok(Value::Null)
@@ -419,15 +414,34 @@ fn build() -> Vec<CommandSpec> {
                     }
                     let old = doc.selection.take();
                     let combined = match (mode.as_str(), old) {
-                        ("add", Some(o)) => sel::combine_surfaces(&o, &shape, area, |a, b| a.max(b)),
-                        ("subtract", Some(o)) => sel::combine_surfaces(&o, &shape, area, |a, b| a * (1.0 - b)),
+                        ("add", Some(o)) => sel::combine_sparse(&o, &shape, area, |a, b| a.max(b)),
+                        ("subtract", Some(o)) => sel::combine_sparse(&o, &shape, area, |a, b| a * (1.0 - b)),
                         ("intersect", Some(o)) => sel::combine_surfaces(&o, &shape, area, |a, b| a.min(b)),
                         // With no existing selection, neither operation can select new pixels.
                         ("subtract" | "intersect", None) => Surface::new(photocraft_color::PixelFormat::GRAY8),
                         _ => shape,
                     };
-                    // Nothing selected on the canvas (e.g. dragged entirely outside it) deselects.
-                    doc.selection = (!combined.content_bounds().is_empty()).then_some(combined);
+                    // Sparse Add/Subtract keeps untouched pixels outside the canvas. Only pixels
+                    // inside the document count when deciding whether a selection remains.
+                    let has_on_canvas_pixels = (combined.default_bytes().first().copied().unwrap_or(0) != 0 && {
+                        let canvas_tiles = u64::from(area.width().div_ceil(TILE_SIZE as u32)) * u64::from(area.height().div_ceil(TILE_SIZE as u32));
+                        let stored = combined.tiles().filter(|(coord, _)| !coord.rect().intersect(&area).is_empty()).count() as u64;
+                        stored < canvas_tiles
+                    }) || combined.tiles().any(|(coord, tile)| {
+                        let tile_rect = coord.rect();
+                        let overlap = tile_rect.intersect(&area);
+                        if overlap.is_empty() {
+                            return false;
+                        }
+                        let x0 = (overlap.x0 - tile_rect.x0) as usize;
+                        let x1 = (overlap.x1 - tile_rect.x0) as usize;
+                        (overlap.y0 - tile_rect.y0..overlap.y1 - tile_rect.y0).any(|y| {
+                            let row_start = y as usize * TILE_SIZE as usize;
+                            let start = row_start + x0;
+                            tile.bytes().get(start..row_start + x1).is_some_and(|row| row.iter().any(|&v| v != 0))
+                        })
+                    });
+                    doc.selection = has_on_canvas_pixels.then_some(combined);
                     Ok(())
                 })?;
                 Ok(Value::Null)
@@ -778,13 +792,22 @@ fn build() -> Vec<CommandSpec> {
             "Solid Color…",
             ["Layer", "New Fill Layer"],
             None,
-            r##"{"color":"#rrggbb"=foreground,"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask, making a shape; else the selection is the layer mask)}"##,
+            r##"{"color":"#rrggbb"=foreground,"cmyk":[c,m,y,k]? (inks 0..1 the colour was picked as: a CMYK document's fill holds exactly these; default the foreground's CMYK pick),"path":"work"|saved path name|{…path}? (the active path: becomes the vector mask, making a shape; else the selection is the layer mask)}"##,
             has_doc,
             |s, p| {
                 let c = color_param("layer.newFillLayer.solidColor", p, "color", s.tools.foreground)?;
+                // The inks the colour was picked as, so CMYK 50/50/50/100 stays 50/50/50/100 instead
+                // of what its sRGB stand-in converts back to through the document profile (#8568).
+                let inks = match cmyk_param("layer.newFillLayer.solidColor", p, "cmyk")? {
+                    Some(k) => Some(k),
+                    None => s.tools.picked_cmyk([c[0], c[1], c[2]]),
+                };
                 let default_mask = layer_panel_option(s, "useDefaultMasksOnFillLayers", true);
                 let id = s.edit("New Color Fill Layer", |doc, active| {
-                    let fill = Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3])).in_mode(doc.mode);
+                    let fill = match inks {
+                        Some(k) if doc.mode == ColorMode::Cmyk => Fill::Solid(Color { mode: ColorMode::Cmyk, c: k, alpha: c[3] }),
+                        _ => Fill::Solid(Color::rgba(c[0], c[1], c[2], c[3])).in_mode(doc.mode),
+                    };
                     let mut l = Layer::new(doc.next_layer_name("Color Fill"), LayerContent::Fill(fill));
                     mask_new_layer(doc, &mut l, p, "layer.newFillLayer.solidColor", default_mask)?;
                     let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::Auto);
@@ -923,17 +946,7 @@ fn build() -> Vec<CommandSpec> {
             r##"{"foreground":"#rrggbb"|[r,g,b,a?]?,"background":same?,"foregroundCmyk":[c,m,y,k]? (inks 0..1 the foreground was picked as: a CMYK document is filled with exactly these),"backgroundCmyk":same?}"##,
             always,
             |s, p| {
-                let cmyk = |key: &str| -> Result<Option<[f32; 4]>> {
-                    let Some(v) = p.get(key).filter(|v| !v.is_null()) else { return Ok(None) };
-                    let inks: Option<Vec<f32>> = v
-                        .as_array()
-                        .filter(|a| a.len() == 4)
-                        .and_then(|a| a.iter().map(|x| x.as_f64().filter(|x| x.is_finite()).map(|x| x.clamp(0.0, 1.0) as f32)).collect());
-                    match inks.as_deref() {
-                        Some(&[c, m, y, k]) => Ok(Some([c, m, y, k])),
-                        _ => Err(bad("tools.setColors", format!("`{key}` must be [c, m, y, k] numbers 0..1"))),
-                    }
-                };
+                let cmyk = |key: &str| cmyk_param("tools.setColors", p, key);
                 let (fg_cmyk, bg_cmyk) = (cmyk("foregroundCmyk")?, cmyk("backgroundCmyk")?);
                 let foreground = color_param("tools.setColors", p, "foreground", s.tools.foreground)?;
                 let background = color_param("tools.setColors", p, "background", s.tools.background)?;

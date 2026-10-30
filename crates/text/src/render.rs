@@ -284,7 +284,8 @@ fn glyph_center(layout: &TextLayout, g: &PlacedGlyph, font: &skrifa::FontRef, si
 /// free Warp / Distort / Perspective ([`photocraft_doc::text::TypeDistortion`]). `None` when
 /// nothing bends it.
 pub fn layout_deform(layout: &TextLayout, layer: &photocraft_doc::TextLayer) -> Option<Warp> {
-    let base = Warp::on_path(&layer.shape).or_else(|| layout_warp(layout, layer.warp.as_ref()));
+    let text_start = layout.bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
+    let base = Warp::on_path_with_text_start(&layer.shape, text_start).or_else(|| layout_warp(layout, layer.warp.as_ref()));
     Warp::with_distortions(base, &layer.distortions)
 }
 
