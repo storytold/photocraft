@@ -25,6 +25,8 @@ use crate::preset_bridge::Batch;
 pub const MAX_SNAPSHOT_BYTES: usize = 256 << 20;
 /// Most recovery data kept at once, across documents.
 pub const MAX_TOTAL_BYTES: u64 = 768 << 20;
+/// Shown as "Autosave failed" when the total cap stops a write.
+pub const TOTAL_LIMIT_MSG: &str = "the browser's recovery storage limit is reached; save or close a document";
 /// Most entries read back at launch.
 pub const MAX_ENTRIES: usize = 64;
 const SIDECAR_MAX: usize = 1 << 20;
@@ -141,7 +143,9 @@ impl Recovery {
     }
 
     /// Serialise `doc` as the batch that replaces its entry. Errors (too large, over the cap,
-    /// cannot encode) are shown by the UI as "Autosave failed"; nothing is written.
+    /// cannot encode) are shown by the UI as "Autosave failed"; nothing is written. The cap
+    /// checked here only knows this tab's view (a cheap early refusal); the authoritative check
+    /// runs inside the write transaction (`indexed_presets::write_capped`).
     pub fn snapshot(&self, doc: &Arc<Document>, revision: u64, path: Option<&str>, saved_at: u64) -> Result<Batch, String> {
         self.with(|s| {
             let id = doc.id.0;
@@ -157,7 +161,7 @@ impl Recovery {
             }
             let others: u64 = s.sizes.iter().filter(|(k, _)| **k != key).map(|(_, n)| *n).sum();
             if others.saturating_add(bytes.len() as u64) > s.max_total {
-                return Err("the browser's recovery storage limit is reached; save or close a document".into());
+                return Err(TOTAL_LIMIT_MSG.into());
             }
             let info = RecoveryInfo { key: key.clone(), document_name: doc.name.clone(), original_path: path.map(str::to_string), saved_at, revision };
             let info = serde_json::to_vec(&info).map_err(|e| e.to_string())?;

@@ -12,8 +12,8 @@ use js_sys::{Function, Object, Promise, Reflect, Uint8Array};
 use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use web_sys::{Blob, IdbDatabase, IdbTransactionMode};
 
-use crate::indexed_presets::{FILES, TIMEOUT_MS, before, js, open, request, write};
-use crate::recovery_bridge::{MAX_ENTRIES, MAX_SNAPSHOT_BYTES, Recovery, recover_on_launch, session_of};
+use crate::indexed_presets::{FILES, TIMEOUT_MS, before, js, open, request, write, write_capped};
+use crate::recovery_bridge::{MAX_ENTRIES, MAX_SNAPSHOT_BYTES, MAX_TOTAL_BYTES, Recovery, TOTAL_LIMIT_MSG, recover_on_launch, session_of};
 use photocraft_ui_egui::Services;
 
 const DATABASE: &str = "photocraft.recovery";
@@ -152,7 +152,8 @@ pub fn services(db: Option<IdbDatabase>, recovery: Recovery) -> Services {
             let (id, done) = (doc.id.0, r1.clone());
             wasm_bindgen_futures::spawn_local(async move {
                 // A quota error lands here, and the UI shows it as "Autosave failed".
-                let result = write(&db, &batch).await;
+                // The total cap is enforced inside the transaction, against what every tab stored.
+                let result = write_capped(&db, &batch, Some((MAX_TOTAL_BYTES, TOTAL_LIMIT_MSG))).await;
                 done.finish(id, revision, result);
             });
             Ok(())

@@ -5,7 +5,7 @@ use wasm_bindgen::{JsCast, JsValue, closure::Closure};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{Blob, Event, EventTarget, IdbDatabase, IdbRequest, IdbTransactionMode};
 
-use crate::preset_bridge::{Batch, Bridge, MAX_RECORDS, record_limit};
+use crate::preset_bridge::{Batch, Bridge, MAX_RECORDS, fits_total, record_limit};
 use photocraft_engine::preset_store::MAX_STORE_BYTES;
 
 const DATABASE: &str = "photocraft.presets";
@@ -210,9 +210,26 @@ async fn read(db: &IdbDatabase, deadline: f64) -> Result<(Bridge, Vec<String>), 
 }
 
 pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), String> {
+    write_capped(db, batch, None).await
+}
+
+/// [`write`] with a limit on the whole store. With `cap = Some((max, message))`, a batch that
+/// stores anything first has the transaction read every stored record's size, and is aborted
+/// with `message` if it would take the store past `max` bytes ([`fits_total`]). The check and
+/// the commit are one transaction, so tabs sharing the database cannot each pass a private
+/// check and together exceed the cap.
+pub async fn write_capped(db: &IdbDatabase, batch: &Batch, cap: Option<(u64, &str)>) -> Result<(), String> {
     let tx = db.transaction_with_str_and_mode(FILES, IdbTransactionMode::Readwrite).map_err(js)?;
     let store = tx.object_store(FILES).map_err(js)?;
+    let mut reads = None;
     let queued = (|| -> Result<(), String> {
+        // Queued before the writes, so they see the store as it was. Their results arrive before
+        // the transaction can commit, and aborting then discards the queued writes.
+        if cap.is_some() && batch.values().any(Option::is_some) {
+            let keys = store.get_all_keys().map_err(js)?;
+            let values = store.get_all().map_err(js)?;
+            reads = Some((request(&keys), request(&values)));
+        }
         for (name, bytes) in batch {
             let key = JsValue::from_str(name);
             if let Some(bytes) = bytes {
@@ -247,6 +264,22 @@ pub async fn write(db: &IdbDatabase, batch: &Batch) -> Result<(), String> {
             }
         }
     });
+    if let (Some((max, message)), Some((keys, values))) = (cap, reads) {
+        let verdict = async {
+            let deadline = js_sys::Date::now() + TIMEOUT_MS;
+            let keys = Array::from(&before(&keys.promise, deadline).await?);
+            let values = Array::from(&before(&values.promise, deadline).await?);
+            let stored = keys.iter().zip(values.iter()).filter_map(|(k, v)| Some((k.as_string()?, v.dyn_ref::<Blob>().map_or(0, |b| b.size() as u64))));
+            Ok::<bool, String>(fits_total(stored, batch, max))
+        }
+        .await;
+        if !matches!(verdict, Ok(true)) {
+            let _ = tx.abort();
+            // Consume the abort so it is not reported as an unhandled rejection.
+            let _ = before(&promise, js_sys::Date::now() + TIMEOUT_MS).await;
+            return Err(verdict.err().unwrap_or_else(|| message.to_string()));
+        }
+    }
     let result = before(&promise, js_sys::Date::now() + TIMEOUT_MS).await.map(|_| ());
     if result.is_err() {
         let _ = tx.abort();
