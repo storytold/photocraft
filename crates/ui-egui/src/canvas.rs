@@ -1459,7 +1459,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                 pipette_cursor(ui.ctx(), p)
             }
         }
-        t if t.is_brushlike() || matches!(t, Tool::QuickSelection | Tool::SelectionBrush) => {
+        t if crate::paint_mouse::has_brush_picker(t) => {
             // Preferences › Cursors: brush tip outline (normal = the 50% contour, or
             // full size), precise crosshair, or the standard pointer.
             use photocraft_engine::prefs::PaintingCursor;
