@@ -91,6 +91,20 @@ fn ycbcr_coefficients_set_the_luma_weights() {
 }
 
 #[test]
+fn ycbcr_tags_with_the_wrong_count_use_the_defaults() {
+    // Four weights and seven black/white codes: both tags are malformed, so BT.601 and full range
+    // apply (the weights alone would give 224, 128, 32).
+    let weights = [rational(1, 4), rational(1, 2), rational(1, 4), rational(1, 4)];
+    let rbw = [rational(16, 1), rational(235, 1), rational(128, 1), rational(240, 1), rational(128, 1), rational(240, 1), rational(0, 1)];
+    let dir = strips(1, 1, 8, 3, 6, 1, &[128, 64, 192])
+        .tag(SUBSAMPLING, SHORT, &[1, 1])
+        .tag(YCBCR_COEFFICIENTS, RATIONAL, &weights)
+        .tag(REFERENCE_BLACK_WHITE, RATIONAL, &rbw);
+    let img = decode(&build(true, false, &[dir], &[0]).bytes).unwrap();
+    assert_eq!(rgb(&img), [218, 104, 15]);
+}
+
+#[test]
 fn sixteen_bit_ycbcr_reads_as_rgb() {
     let px: Vec<u8> = [65535u16, 32768, 32768, 0, 32768, 32768].iter().flat_map(|v| v.to_le_bytes()).collect();
     let dir = strips(2, 1, 16, 3, 6, 1, &px).tag(SUBSAMPLING, SHORT, &[1, 1]);

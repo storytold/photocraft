@@ -239,11 +239,11 @@ impl<'a> File<'a> {
         self.float(ifd.get(tag)?, 0)
     }
 
-    /// Exactly `n` values of a numeric tag as floats (`None` if the tag has fewer or any of them
-    /// is unreadable).
+    /// The values of a numeric tag as floats, when it holds exactly `n` (`None` for any other
+    /// count or an unreadable value).
     pub fn tag_f64s(&self, ifd: &Ifd, tag: u16, n: u64) -> Option<Vec<f64>> {
         let e = ifd.get(tag)?;
-        if e.count < n {
+        if e.count != n {
             return None;
         }
         (0..n).map(|i| self.float(e, i)).collect()
