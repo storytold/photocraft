@@ -1,6 +1,5 @@
 use super::descriptors::{
-    PX, Target, ang, class, code, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, pct, px,
-    ref_class, target, trimmed,
+    PX, Target, ang, class, code, desc, enm, get_enum, get_num, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, pct, px, ref_class, target, trimmed,
 };
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
@@ -16,7 +15,7 @@ pub(super) fn transform_from(d: &Descriptor) -> Mapped {
     let r: &[ReferenceItem] = get_ref(d, "null").unwrap_or(&target_layer);
     let unsupported = Mapped::Unsupported { harmless: false };
     let mut p = Map::new();
-    if let Some(o) = get_obj(d, "Ofst") {
+    if let Some(o) = d.get_object("Ofst") {
         let in_px = |k: &str| matches!(o.get(k), Some(D::UnitFloat { unit: PX, .. }));
         if !in_px("Hrzn") || !in_px("Vrtc") {
             return unsupported;
@@ -134,9 +133,10 @@ const CALC_BLEND: &[(&str, &str)] = &[
 const SOURCE_CHANNELS: &[(&str, &str)] =
     &[("RGB", "composite"), ("CMYK", "composite"), ("Lab", "composite"), ("Trsp", "transparency"), ("Msk", "mask"), ("fsel", "selection")];
 
+/// The Apply Image command a recorded Apply Image step replays as.
 pub(super) fn apply_image_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
-    let Some(with) = get_obj(d, "With") else { return unsupported };
+    let Some(with) = d.get_object("With") else { return unsupported };
     let Some(r) = get_ref(with, "T   ") else { return unsupported };
     let mut source = Map::new();
     for item in r {
@@ -159,7 +159,7 @@ pub(super) fn apply_image_from(d: &Descriptor) -> Mapped {
             _ => return unsupported,
         }
     }
-    if let Some(i) = get_bool(with, "Invr") {
+    if let Some(i) = with.get_bool("Invr") {
         source.insert("invert".into(), i.into());
     }
     let mut p = json!({"source": source});
@@ -174,7 +174,7 @@ pub(super) fn apply_image_from(d: &Descriptor) -> Mapped {
             p[param] = json!(v);
         }
     }
-    if let Some(t) = get_bool(with, "PrsT") {
+    if let Some(t) = with.get_bool("PrsT") {
         p["preserveTransparency"] = json!(t);
     }
     step("image.applyImage", p)
@@ -389,7 +389,7 @@ pub(super) fn color_range_from(d: &Descriptor) -> Mapped {
         }
         _ => {}
     }
-    if get_bool(d, "Invr") == Some(true) {
+    if d.get_bool("Invr") == Some(true) {
         p.insert("invert".into(), true.into());
     }
     step("select.colorRange", Value::Object(p))

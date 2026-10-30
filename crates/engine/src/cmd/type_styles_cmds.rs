@@ -17,7 +17,7 @@ use photocraft_doc::{Document, LayerContent, LayerId, TextLayer, TextStyles};
 use serde_json::{Map, Value, json};
 
 use crate::commands::CommandSpec;
-use crate::type_cmds::{apply_char_props, apply_para_props, refresh_at};
+use crate::type_cmds::{apply_char_props, apply_para_props, range_param, refresh_at};
 use crate::{EngineError, Result, Session};
 
 const FAMILY: &str = photocraft_text::fonts::DEFAULT_FAMILY;
@@ -54,27 +54,13 @@ fn targets(s: &Session, p: &Value) -> Vec<LayerId> {
     ids.into_iter().filter(|id| text_of(&st.doc, *id).is_some()).collect()
 }
 
+/// Enabled while a type layer is selected.
 fn has_target(s: &Session) -> std::result::Result<(), String> {
     has_doc(s)?;
     if targets(s, &Value::Null).is_empty() { Err("select a type layer".into()) } else { Ok(()) }
 }
 
-fn byte_at(text: &str, ci: usize) -> usize {
-    text.char_indices().nth(ci).map_or(text.len(), |(b, _)| b)
-}
-
-/// `range` in characters → bytes (whole text when absent).
-fn range_of(text: &str, p: &Value) -> (usize, usize) {
-    match p.get("range").and_then(Value::as_array) {
-        Some(r) if r.len() == 2 => {
-            let a = r[0].as_u64().unwrap_or(0) as usize;
-            let b = r[1].as_u64().unwrap_or(a as u64) as usize;
-            (byte_at(text, a.min(b)), byte_at(text, a.max(b)))
-        }
-        _ => (0, text.len()),
-    }
-}
-
+/// The optional style id param.
 fn id_param(cmd: &str, p: &Value) -> Result<Option<u32>> {
     crate::commands::u32_id_param(cmd, p, "id")
 }
@@ -323,7 +309,7 @@ fn target_ranges(s: &Session, p: &Value) -> Result<Vec<Target>> {
     Ok(ids
         .into_iter()
         .map(|id| {
-            let r = (p.get("range").is_some() && p.get("layers").is_none()).then(|| text_of(&st.doc, id).map(|t| range_of(&t.text, p))).flatten();
+            let r = (p.get("range").is_some() && p.get("layers").is_none()).then(|| text_of(&st.doc, id).map(|t| range_param(&t.text, p))).flatten();
             (id, r)
         })
         .collect())
@@ -335,7 +321,7 @@ fn sample(s: &Session, p: &Value) -> Option<(CharStyle, ParagraphStyle, LayerId,
     let st = s.active()?;
     let id = *targets(s, p).first()?;
     let t = text_of(&st.doc, id)?;
-    let (a, _) = range_of(&t.text, p);
+    let (a, _) = range_param(&t.text, p);
     let mut at = 0;
     let mut run = None;
     for r in t.char_runs() {

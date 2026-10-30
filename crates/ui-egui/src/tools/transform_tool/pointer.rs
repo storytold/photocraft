@@ -6,6 +6,7 @@ use super::{
     CursorIcon, HANDLE_PX, Homography, LayerContent, PhotocraftApp, ToolEvent, TransformMode, TransformPreview, TransformSession, ViewXform, WarpStyle,
     handle_tolerance,
 };
+use crate::snap_ui::in_quad;
 
 /// Which part of the box a document point hits.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -29,20 +30,9 @@ pub(crate) fn hit(t: &TransformSession, p: [f64; 2], tol: f64) -> Hit {
     let nearest = handles.map(|(q, h)| (d(q), h)).filter(|(dist, _)| *dist < tol).min_by(|a, b| a.0.total_cmp(&b.0));
     match nearest {
         Some((_, h)) => h,
-        None if inside(&t.quad, p) => Hit::Inside,
+        None if in_quad(&t.quad, p) => Hit::Inside,
         None => Hit::Outside,
     }
-}
-
-fn inside(q: &[[f64; 2]; 4], p: [f64; 2]) -> bool {
-    let mut c = false;
-    for i in 0..4 {
-        let (a, b) = (q[i], q[(i + 3) % 4]);
-        if (a[1] > p[1]) != (b[1] > p[1]) && p[0] < (b[0] - a[0]) * (p[1] - a[1]) / (b[1] - a[1]) + a[0] {
-            c = !c;
-        }
-    }
-    c
 }
 
 /// Transient drag state (kept in egui memory; not part of the serialised session).

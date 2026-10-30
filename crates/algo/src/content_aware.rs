@@ -621,7 +621,7 @@ impl SamplingStroke {
 }
 
 /// Squared distance from `p` to the segment `a`–`b`.
-fn seg_dist2(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
+pub(crate) fn seg_dist2(p: [f64; 2], a: [f64; 2], b: [f64; 2]) -> f64 {
     let (dx, dy) = (b[0] - a[0], b[1] - a[1]);
     let l2 = dx * dx + dy * dy;
     let t = if l2 > 0.0 { (((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / l2).clamp(0.0, 1.0) } else { 0.0 };

@@ -1,5 +1,5 @@
 use super::export::{set, set_before, unit};
-use super::{Affine, BezierMesh, Descriptor, Id, ObjectArray, UnicodeString, Value, VersionedDescriptor, Warp, WarpStyle, get_desc, num, text_of};
+use super::{Affine, BezierMesh, Descriptor, Id, ObjectArray, UnicodeString, Value, VersionedDescriptor, Warp, WarpStyle, get_desc, num};
 
 /// Everything needed to write the placed-layer blocks of a smart object.
 #[derive(Clone, Debug)]
@@ -179,7 +179,7 @@ pub fn sold_bytes(template: Option<&Descriptor>, s: &PlacedSpec<'_>, warnings: &
     let d = match template {
         Some(t) => {
             let mut d = t.clone();
-            if text_of(t, "placed").as_deref() != Some(s.placed) {
+            if t.get_text("placed").as_deref() != Some(s.placed) {
                 set(&mut d, "placed", Value::Text(UnicodeString::new_nul(s.placed)));
             }
             if quad_moved(t, s, stored) {

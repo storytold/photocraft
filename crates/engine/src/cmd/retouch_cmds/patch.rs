@@ -246,25 +246,13 @@ pub fn preview(s: &Session, p: &Value, max_cells: u64, min_step: u32) -> Result<
     Ok((doc, dmg))
 }
 
-/// Optional whole-number param in `lo..=hi`; absent or null gives `default`.
-fn level(p: &Value, k: &str, default: u8, lo: u8, hi: u8) -> Result<u8> {
-    match p.get(k) {
-        None | Some(Value::Null) => Ok(default),
-        Some(v) => match v.as_f64() {
-            Some(x) if x.is_finite() && (f64::from(lo)..=f64::from(hi)).contains(&x) => Ok(x.round() as u8),
-            _ => Err(bad(CMD, format!("`{k}` must be a number {lo}..{hi}"))),
-        },
-    }
-}
-
 /// Patch: Content-Aware. The selection is filled from the place it was dragged to (see the module
 /// docs), as a background job.
 fn patch_content_aware(s: &mut Session, p: &Value) -> Result<Value> {
     use super::content_aware_move::{Target, land, mask, read, window};
     const LABEL: &str = "Patch (Content-Aware)";
     let plan = plan(s, p)?;
-    let structure = level(p, "structure", 4, 1, 7)?;
-    let color = level(p, "color", 0, 0, 10)?;
+    let (structure, color) = super::content_aware_move::structure_and_color(CMD, p)?;
     let target = Target { id: plan.id, all_layers: flag(p, "sampleAllLayers", false) && targets_pixels(p) };
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let doc = d.doc.clone();

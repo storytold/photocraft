@@ -44,8 +44,8 @@ pub use convert::{Imported, Skipped, Unsupported, export, function_key_name, imp
 use convert::{MAX_NAME_CHARS, export_item, normalise};
 #[cfg(test)]
 use descriptors::{
-    PCT, PT, PX, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_list, get_num, get_obj, get_ref, layer_ref, long,
-    name_ref, path_text, path_value, pct, px, target_ref, text, trimmed,
+    PCT, PT, PX, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_enum, get_list, get_num, get_ref, layer_ref, long, name_ref, path_text,
+    path_value, pct, px, target_ref, text, trimmed,
 };
 use descriptors::{jbool, jstr};
 #[cfg(test)]

@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
+use crate::analysis_ui::float_frame;
 use crate::theme::Tokens;
 
 /// View state of the type panels.
@@ -127,15 +128,6 @@ fn target(app: &PhotocraftApp) -> Value {
         return json!({ "layer": ed.layer, "range": [a, b], "coalesce": ed.session });
     }
     json!({})
-}
-
-fn float_frame(t: &Tokens) -> egui::Frame {
-    egui::Frame::NONE
-        .fill(t.card)
-        .stroke(Stroke::new(1.0, t.card_border))
-        .corner_radius(CornerRadius::same(t.radius_lg as u8))
-        .shadow(egui::Shadow { offset: [0, 10], blur: 30, spread: 0, color: t.shadow })
-        .inner_margin(egui::Margin::same(8))
 }
 
 /// Draws the open type panels and the spelling dialog.

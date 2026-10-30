@@ -10,10 +10,12 @@
 use egui::{Color32, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_doc::Contour;
 use photocraft_doc::adjust::CurvePoint;
+use photocraft_engine::contour_lib_cmds::name_of;
 use photocraft_engine::layer_style::{CONTOURS, contour_from_param, contour_param, contour_to_shc, contours_from_shc};
 use serde_json::{Map, Value, json};
 
 use super::{entry, set_param};
+use crate::camera_raw_ui::report_file_error;
 use crate::state::{DialogKind, PointCurveState};
 use crate::theme::Tokens;
 use crate::{PhotocraftApp, point_curve, widgets};
@@ -192,7 +194,7 @@ pub(super) fn row(
         });
         if let Some(name) = delete {
             let r = app.run("layer.layerStyle.contours.delete", json!({"name": name}));
-            report(app, r);
+            report_file_error(app, r);
         }
         if let Some(act) = act {
             library_action(app, act);
@@ -264,13 +266,6 @@ fn store(f: &mut Map<String, Value>, effect: &str, key: &str, name: &str, pts: &
     let Some(c) = contour_from_param(&v) else { return false };
     set_param(f, effect, key, contour_param(&c));
     true
-}
-
-fn name_of(c: &Contour) -> &str {
-    match c {
-        Contour::Linear => "Linear",
-        Contour::Custom { name, .. } => name,
-    }
 }
 
 /// Contour Editor › Input/Output: moves point `i` to `input`/`output` percent.
@@ -466,7 +461,7 @@ pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Str
         let name = if name.trim().is_empty() { "Contour".to_string() } else { name };
         match app.run("layer.layerStyle.contours.new", json!({"contour": contour_param(&shown_contour(&pts, &corners, name_of(&c))), "name": name})) {
             Ok(v) => set_param(f, &effect, &key, v["contour"].clone()),
-            Err(e) => report(app, Err(e)),
+            Err(e) => report_file_error(app, Err(e)),
         }
     }
     ctx.data_mut(|d| match &naming {
@@ -500,7 +495,7 @@ pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Str
             set_param(&mut d.fields, &effect, &key, first);
             Ok(Value::Null)
         });
-        report(app, r);
+        report_file_error(app, r);
     }
     if save {
         let r = contour_to_shc(&c).map_err(|e| e.to_string()).and_then(|bytes| {
@@ -511,7 +506,7 @@ pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Str
                 Ok(json!({"path": path}))
             })
         });
-        report(app, r);
+        report_file_error(app, r);
     }
 }
 
@@ -548,16 +543,7 @@ fn library_action(app: &mut PhotocraftApp, act: Act) {
             })
         }),
     };
-    report(app, r);
-}
-
-fn report(app: &mut PhotocraftApp, r: Result<Value, String>) {
-    if let Err(e) = r
-        && e != crate::file_dialog::CANCELLED
-    {
-        app.ui.status_error = true;
-        app.ui.status = e;
-    }
+    report_file_error(app, r);
 }
 
 #[cfg(test)]

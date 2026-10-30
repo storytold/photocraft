@@ -1,4 +1,5 @@
 use super::*;
+use crate::type_cmds::byte_at;
 
 fn session(text: &str) -> (Session, u64) {
     let mut s = Session::new();

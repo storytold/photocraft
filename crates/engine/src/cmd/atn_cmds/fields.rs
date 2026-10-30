@@ -1,4 +1,4 @@
-use super::descriptors::{ang, color_desc, color_hex, enm, get_bool, get_enum, get_num, get_obj, long, pct, px};
+use super::descriptors::{ang, color_desc, color_hex, enm, get_enum, get_num, long, pct, px};
 use super::tables::{blend_label, blend_ps, lookup, lookup_back};
 use super::{D, Descriptor, Map, Value, json};
 
@@ -32,7 +32,7 @@ pub(super) fn fields_from(d: &Descriptor, fields: &[F]) -> Option<Map<String, Va
     for F(key, param, kind) in fields {
         let v = match kind {
             Kind::Px | Kind::Pct | Kind::Ang | Kind::Long | Kind::ExactLong | Kind::Dbl => get_num(d, key).map(Value::from),
-            Kind::Bool => get_bool(d, key).map(Value::from),
+            Kind::Bool => d.get_bool(key).map(Value::from),
             Kind::Enum(_, table) => match get_enum(d, key) {
                 Some(e) => Some(Value::from(lookup(table, &e)?)),
                 None => None,
@@ -41,7 +41,7 @@ pub(super) fn fields_from(d: &Descriptor, fields: &[F]) -> Option<Map<String, Va
                 Some(e) => Some(Value::from(blend_label(&e)?)),
                 None => None,
             },
-            Kind::Color => match get_obj(d, key) {
+            Kind::Color => match d.get_object(key) {
                 Some(c) => Some(Value::from(color_hex(c)?)),
                 None => None,
             },

@@ -31,10 +31,12 @@ fn nul_name() -> UnicodeString {
     UnicodeString(vec![0])
 }
 
+/// An empty descriptor of class `class`.
 fn obj(class: &str) -> Descriptor {
     Descriptor { name: nul_name(), ..Descriptor::new(class) }
 }
 
+/// `v` padded with a zero byte to an even length.
 fn pad_even(mut v: Vec<u8>) -> Vec<u8> {
     if v.len() % 2 == 1 {
         v.push(0);
@@ -42,13 +44,7 @@ fn pad_even(mut v: Vec<u8>) -> Vec<u8> {
     v
 }
 
-fn text(d: &Descriptor, key: &str) -> Option<String> {
-    match d.get(key)? {
-        Value::Text(t) => Some(t.to_string_lossy()),
-        _ => None,
-    }
-}
-
+/// The number at `key` as a whole number.
 fn int(d: &Descriptor, key: &str) -> Option<i64> {
     match d.get(key)? {
         Value::Integer(i) => Some(i64::from(*i)),
@@ -59,29 +55,22 @@ fn int(d: &Descriptor, key: &str) -> Option<i64> {
     }
 }
 
-fn desc<'a>(d: &'a Descriptor, key: &str) -> Option<&'a Descriptor> {
-    match d.get(key)? {
-        Value::Descriptor(x) | Value::GlobalObject(x) => Some(x),
-        _ => None,
-    }
-}
-
 // ---------------------------------------------------------------- artboards
 
 /// Decodes an `artb`/`artd`/`abdd` block.
 pub fn parse_artboard(data: &[u8]) -> Option<Artboard> {
     let (vd, _) = VersionedDescriptor::parse_prefix(data).ok()?;
     let d = &vd.descriptor;
-    let r = desc(d, "artboardRect")?;
+    let r = d.get_object("artboardRect")?;
     let g = |k: &str| num(r.get(k)).map(|v| v.round() as i32);
     let rect = Rect::new(g("Left")?, g("Top ")?, g("Rght")?, g("Btom")?);
     let background = match int(d, "artboardBackgroundType").unwrap_or(1) {
         2 => ArtboardBackground::Black,
         3 => ArtboardBackground::Transparent,
-        4 => ArtboardBackground::Custom(desc(d, "Clr ").and_then(color_from_desc).unwrap_or(photocraft_doc::Color::WHITE)),
+        4 => ArtboardBackground::Custom(d.get_object("Clr ").and_then(color_from_desc).unwrap_or(photocraft_doc::Color::WHITE)),
         _ => ArtboardBackground::White,
     };
-    let preset = text(d, "artboardPresetName").unwrap_or_default();
+    let preset = d.get_text("artboardPresetName").unwrap_or_default();
     Some(Artboard { rect, background, preset })
 }
 
@@ -140,6 +129,7 @@ struct Setting {
     offset: Option<(i64, i64)>,
 }
 
+/// The layer comp settings in a `cmls` block.
 fn parse_cmls(data: &[u8]) -> Option<Vec<Setting>> {
     let (vd, _) = VersionedDescriptor::parse_prefix(data).ok()?;
     let Value::List(items) = vd.descriptor.get("layerSettings")? else { return None };
@@ -154,7 +144,7 @@ fn parse_cmls(data: &[u8]) -> Option<Vec<Setting>> {
             Some(Value::Boolean(b)) => Some(*b),
             _ => None,
         };
-        let offset = desc(s, "Ofst").and_then(|o| Some((int(o, "Hrzn")?, int(o, "Vrtc")?)));
+        let offset = s.get_object("Ofst").and_then(|o| Some((int(o, "Hrzn")?, int(o, "Vrtc")?)));
         out.push(Setting { comps, visible, offset });
     }
     Some(out)
@@ -193,8 +183,8 @@ pub(crate) fn decode_comps(resource: Option<&[u8]>, doc: &Document) -> (Vec<Laye
             let Some(id) = int(c, "compID") else { continue };
             let mut comp = LayerComp {
                 id: id as u32,
-                name: text(c, "Nm  ").unwrap_or_default(),
-                comment: text(c, "comment").unwrap_or_default(),
+                name: c.get_text("Nm  ").unwrap_or_default(),
+                comment: c.get_text("comment").unwrap_or_default(),
                 apply_visibility: false,
                 apply_position: false,
                 apply_appearance: false,

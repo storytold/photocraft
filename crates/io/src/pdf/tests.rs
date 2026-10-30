@@ -129,3 +129,52 @@ fn other_modes_are_refused_with_an_actionable_error() {
     assert!(e.contains("RGB") && e.contains("Mode"), "{e}");
     assert!(crate::export(&d, "x.pdf", &crate::ExportOptions::default()).is_err());
 }
+
+#[test]
+fn print_strings_keep_winansi_accents_and_punctuation() {
+    assert_eq!(pdf_string("Café – résumé"), r"(Caf\351 \226 r\351sum\351)");
+    assert_eq!(pdf_string("€ ‘quote’ “double” • Œœ Šš Žž Ÿ"), r"(\200 \221quote\222 \223double\224 \225 \214\234 \212\232 \216\236 \237)");
+    assert_eq!(pdf_string("é7"), r"(\3517)", "octal escapes must have three digits before a digit");
+}
+
+#[test]
+fn print_strings_keep_pdf_delimiters_safe_and_fallback_bounded() {
+    assert_eq!(pdf_string(r"a(b)\c"), r"(a\(b\)\\c)");
+    assert_eq!(pdf_string("\n\r\t\0\u{7f}\u{81}中😀"), "(????????)");
+    assert_eq!(pdf_string(""), "()");
+}
+
+fn print_page(marks: Marks, emulsion_down: bool) -> PrintPage {
+    PrintPage {
+        paper: (200.0, 300.0),
+        image: PrintImage { width: 2, height: 1, channels: 3, data: vec![255; 6], icc: None },
+        rect: (40.0, 60.0, 120.0, 90.0),
+        marks,
+        description: Some("Price: €20".into()),
+        label: Some("Café.psd".into()),
+        emulsion_down,
+    }
+}
+
+#[test]
+fn an_emulsion_down_page_mirrors_everything_inside_one_group() {
+    let content = content_stream(&print_page(Marks::default(), true));
+    assert!(content.starts_with("q 1 g 0 0 200.00 300.00 re f Q\nq -1 0 0 1 200.00 0 cm\n"), "{content}");
+    assert!(content.ends_with("ET\nQ\n"), "{content}");
+    assert!(content.contains(r"(Caf\351.psd) Tj") && content.contains(r"(Price: \20020) Tj"), "{content}");
+    let plain = content_stream(&print_page(Marks::default(), false));
+    assert!(!plain.contains("q -1 0 0 1") && plain.ends_with("ET\n"), "{plain}");
+}
+
+#[test]
+fn marks_push_the_texts_clear_and_corner_marks_sit_on_the_bleed() {
+    let marks = Marks { corner_crop: true, center_crop: true, registration: true, bleed: 9.0 };
+    let content = content_stream(&print_page(marks, false));
+    assert!(content.contains("BT /F1 8 Tf 0 g 40.00 180.00 Td"), "label above the marks: {content}");
+    assert!(content.contains("BT /F1 8 Tf 0 g 40.00 22.00 Td"), "description below the marks: {content}");
+    assert!(content.contains(" c S\n"), "registration targets: {content}");
+    let segments = corner_crop_segments(9.0, (40.0, 60.0, 120.0, 90.0));
+    assert_eq!(segments[0], ((34.0, 69.0), (16.0, 69.0)));
+    assert_eq!(segments[1], ((49.0, 54.0), (49.0, 36.0)));
+    check_structure(&print_pdf(&print_page(marks, false)));
+}

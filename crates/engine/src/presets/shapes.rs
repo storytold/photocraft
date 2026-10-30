@@ -360,6 +360,7 @@ fn place(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// Saves a path as a new shape preset.
 fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.presets.new";
     let path = match p.get("path") {
@@ -384,6 +385,7 @@ fn new_preset(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"name": name, "group": group}))
 }
 
+/// Renames, moves, groups or deletes shape presets, custom shapes included.
 fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "shape.presets.edit";
     let action = req_str(p, "action", CMD)?.to_string();
@@ -412,20 +414,14 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(r)
 }
 
+/// Restores the default shape groups, or appends them with `append`.
 fn reset(s: &mut Session, p: &Value) -> Result<Value> {
-    let mut b = builtin();
-    if p.get("append").and_then(Value::as_bool).unwrap_or(false) {
-        for g in &mut b {
-            g.name = super::gradients::unique_group(&s.presets.shapes, &g.name);
-        }
-        s.presets.shapes.extend(b);
-    } else {
-        s.presets.shapes = b;
-    }
+    let r = super::gradients::reset_groups(&mut s.presets.shapes, builtin(), p);
     s.presets_changed();
-    Ok(json!({"groups": s.presets.shapes.len()}))
+    Ok(r)
 }
 
+/// The shape preset commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {

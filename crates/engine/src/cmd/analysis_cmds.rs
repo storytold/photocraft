@@ -730,12 +730,14 @@ fn straighten(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ------------------------------------------------------------------ count
 
+/// The count group `p` names, or the active one, when it exists.
 fn group_index(d: &Document, p: &Value) -> Option<usize> {
     let i = p.get("group").and_then(Value::as_u64).map(|v| v as usize).unwrap_or(d.measurement.active_count_group);
     (i < d.measurement.count_groups.len()).then_some(i)
 }
 
-fn color_of(cmd: &str, p: &Value, key: &str) -> Result<Option<Color>> {
+/// The optional colour param `key`, or `None` when it is absent.
+pub(crate) fn color_of(cmd: &str, p: &Value, key: &str) -> Result<Option<Color>> {
     if p.get(key).is_none() {
         return Ok(None);
     }

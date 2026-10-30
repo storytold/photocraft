@@ -1899,7 +1899,7 @@ fn black_white_adjustment_layer_saves_as_photoshops_class_and_old_class_still_im
     let saved = photocraft_paint::tile::b64_decode(r["data"].as_str().unwrap()).unwrap();
     let file = atn::parse(&saved).unwrap();
     let make = file.actions[0].items[0].descriptor.as_ref().unwrap();
-    let kind = get_obj(make, "Usng").and_then(|u| get_obj(u, "Type")).unwrap();
+    let kind = make.get_object("Usng").and_then(|u| u.get_object("Type")).unwrap();
     assert_eq!(trimmed(&kind.class_id), "BanW");
     let mut t = Session::new();
     let r = t.execute("actions.load", json!({"data": b64(&saved)})).unwrap();
@@ -2577,7 +2577,7 @@ fn apply_image_dialog_channel_names_survive_a_strict_export() {
     }
     // A named channel is written as Photoshop records it: a `Chnl` name reference.
     let item = export_item("image.applyImage", &dialog("Alpha 1"), "S").unwrap();
-    let with = get_obj(item.descriptor.as_ref().unwrap(), "With").unwrap();
+    let with = item.descriptor.as_ref().unwrap().get_object("With").unwrap();
     let r = get_ref(with, "T   ").unwrap();
     assert!(matches!(&r[0], ReferenceItem::Name { class, name } if class.class_id.is("Chnl") && name.to_string_lossy() == "Alpha 1"));
 }
@@ -2608,13 +2608,13 @@ fn apply_image_numeric_source_selectors_are_refused() {
 fn defaults_photoshop_plays_differently_are_written() {
     let exported = |id: &str, p: Value| export_item(id, &p, "S").and_then(|i| i.descriptor).unwrap_or_else(|| panic!("{id} does not export"));
     let bucket = exported("paint.bucket", json!({"x": 1, "y": 2}));
-    assert_eq!((get_num(&bucket, "Tlrn"), get_bool(&bucket, "AntA")), (Some(32.0), Some(true)));
+    assert_eq!((get_num(&bucket, "Tlrn"), bucket.get_bool("AntA")), (Some(32.0), Some(true)));
     let canvas = exported("image.canvasSize", json!({"width": 10, "height": 10}));
     assert_eq!((get_enum(&canvas, "Hrzn").as_deref(), get_enum(&canvas, "Vrtc").as_deref()), (Some("Cntr"), Some("Cntr")));
     let apply = exported("image.applyImage", json!({}));
-    assert_eq!(get_obj(&apply, "With").and_then(|w| get_enum(w, "Clcl")).as_deref(), Some("Mltp"));
+    assert_eq!(apply.get_object("With").and_then(|w| get_enum(w, "Clcl")).as_deref(), Some("Mltp"));
     let balance = exported("image.adjustments.colorBalance", json!({"midtones": [10, 0, 0]}));
-    assert_eq!(get_bool(&balance, "PrsL"), Some(true));
+    assert_eq!(balance.get_bool("PrsL"), Some(true));
     assert_eq!(get_list(&balance, "ShdL").map(<[D]>::len), Some(3));
 }
 
@@ -2668,7 +2668,7 @@ fn lab_lightness_channel_is_written_and_read_as_photoshop_names_it() {
     let curves = exported("image.adjustments.curves", json!({"lightness": [[0, 10], [255, 245]]}));
     assert_eq!(entry_codes(&curves), ["Lght"]);
     let apply = exported("image.applyImage", json!({"sourceLayer": "merged", "sourceChannel": "Lightness"}));
-    let source = get_ref(get_obj(&apply, "With").unwrap(), "T   ").unwrap();
+    let source = get_ref(apply.get_object("With").unwrap(), "T   ").unwrap();
     assert!(matches!(&source[0], ReferenceItem::Enumerated { value, .. } if trimmed(value) == "Lght"), "{source:?}");
 
     // What Photoshop records, and what PhotoCraft wrote before, both read as Lightness.
@@ -3133,11 +3133,11 @@ fn saves_round_trip_through_photoshop_events() {
     let items = &file.actions[0].items;
     assert!(items.iter().all(|i| i.event.id() == "save"));
     let first = items[0].descriptor.as_ref().unwrap();
-    assert_eq!(get_obj(first, "As  ").map(|f| trimmed(&f.class_id)).as_deref(), Some("Pht3"));
+    assert_eq!(first.get_object("As  ").map(|f| trimmed(&f.class_id)).as_deref(), Some("Pht3"));
     assert_eq!(first.get("In  ").and_then(path_text).as_deref(), Some("/out/result.psd"));
-    assert_eq!(get_bool(items[1].descriptor.as_ref().unwrap(), "Cpy "), Some(true));
+    assert_eq!((items[1].descriptor.as_ref().unwrap()).get_bool("Cpy "), Some(true));
     // Photoshop's own WebP class, not the plug-in's: Photoshop 2026 rejects `Google WebPShop`.
-    assert_eq!(get_obj(items[1].descriptor.as_ref().unwrap(), "As  ").map(|f| trimmed(&f.class_id)).as_deref(), Some("WebPFormat"));
+    assert_eq!((items[1].descriptor.as_ref().unwrap()).get_object("As  ").map(|f| trimmed(&f.class_id)).as_deref(), Some("WebPFormat"));
     assert_eq!(import(&bytes).unwrap().actions[0].steps, steps);
 
     // A Save As PhotoCraft can't express in Photoshop's terms is skipped, never exported as a

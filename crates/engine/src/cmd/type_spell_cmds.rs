@@ -16,15 +16,12 @@ use photocraft_text::spell::Dictionary;
 use serde_json::{Value, json};
 
 use crate::commands::{CommandSpec, layer_param};
-use crate::type_cmds::{check_text_unlocked, norm_text, refresh_at, replace_text};
+use crate::type_cmds::{byte_at, check_text_unlocked, has_type_layer, norm_text, refresh_at, replace_text};
 use crate::{EngineError, Result, Session};
 
+/// A parameter error for `cmd`.
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
-}
-
-fn byte_at(text: &str, ci: usize) -> usize {
-    text.char_indices().nth(ci).map_or(text.len(), |(b, _)| b)
 }
 
 /// Maps ascending byte offsets to character offsets in a single forward pass. Calling
@@ -203,6 +200,7 @@ fn remove_word(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "removed": removed, "userDictionary": s.prefs().user_dictionary }))
 }
 
+/// Spell-checks the type layers: lists, changes, suggests or learns words.
 fn check_spelling(s: &mut Session, p: &Value) -> Result<Value> {
     match p.get("action").and_then(Value::as_str).unwrap_or("list") {
         "list" | "check" => list(s, p),
@@ -222,6 +220,7 @@ fn check_spelling(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
+/// Inserts text into a type layer at the cursor or over a selection.
 fn insert_text(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "type.insertText";
     let id = layer_param(s, p)?;
@@ -255,14 +254,7 @@ fn insert_text(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({ "layer": id.0, "caret": caret }))
 }
 
-fn has_text_layer(s: &Session) -> std::result::Result<(), String> {
-    let d = s.active().ok_or("no document open")?;
-    match d.active_layer.and_then(|id| d.doc.layer(id)).map(|l| &l.content) {
-        Some(LayerContent::Text(_)) => Ok(()),
-        _ => Err("the active layer is not a type layer".into()),
-    }
-}
-
+/// The spelling commands.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
@@ -281,7 +273,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: r#"{"layer":id?,"text":str,"at":char? (default: end of text),"range":[startChar,endChar]? (replaced),"label":str?} → {"layer","caret"}"#,
-            enabled: has_text_layer,
+            enabled: has_type_layer,
             journal: true,
             run: insert_text,
         },

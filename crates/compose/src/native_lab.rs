@@ -19,24 +19,10 @@ use photocraft_raster::Surface;
 
 use crate::Buffer;
 use crate::adjust::{self, LabOp};
+use crate::native::simple;
 
 /// Colour channels of a Lab pixel.
 const LAB: usize = 3;
-
-/// Whether the compositor would only blend `layer` Normally at its opacity through its layer mask:
-/// no clipping, vector mask, feathered mask, effects, excluded channels, Blend If or advanced
-/// blending.
-fn simple(layer: &Layer) -> bool {
-    layer.blend == BlendMode::Normal
-        && !layer.clipped
-        && !crate::masks::has_feather(layer)
-        && layer.vector_mask.as_ref().is_none_or(|v| !v.enabled)
-        && !crate::effects::has_effects(layer)
-        && layer.excluded_channels == 0
-        && layer.blend_if.is_default()
-        && layer.advanced.is_default()
-        && layer.video.is_none()
-}
 
 /// One step of a native stack, at the layer's opacity × fill, through its mask.
 enum Item<'a> {

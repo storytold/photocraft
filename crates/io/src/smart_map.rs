@@ -103,13 +103,6 @@ pub struct Placed {
     pub stack: Option<FilterStack>,
 }
 
-fn text_of(d: &Descriptor, key: &str) -> Option<String> {
-    match d.get(key)? {
-        Value::Text(t) => Some(t.to_string_lossy()),
-        _ => None,
-    }
-}
-
 fn bool_or(d: &Descriptor, key: &str, default: bool) -> bool {
     match d.get(key) {
         Some(Value::Boolean(b)) => *b,
@@ -129,7 +122,7 @@ pub fn sold_descriptor(data: &[u8]) -> Option<Descriptor> {
 pub fn parse_sold(data: &[u8]) -> Option<Placed> {
     let d = sold_descriptor(data)?;
     let (idnt, transform) = crate::blocks::parse_smart(b"SoLd", data);
-    let placed = text_of(&d, "placed").unwrap_or_default();
+    let placed = d.get_text("placed").unwrap_or_default();
     let stack = get_desc(&d, "filterFX").map(filter_stack);
     Some(Placed { descriptor: d, idnt, placed, transform, stack })
 }

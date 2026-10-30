@@ -12,6 +12,7 @@ use photocraft_engine::actions_cmds::{self, Action};
 
 use crate::PhotocraftApp;
 use crate::icons;
+use crate::swatches_ui::source;
 use crate::theme::Tokens;
 
 /// Which row is selected and which rows are expanded. The action list itself is
@@ -312,6 +313,7 @@ fn button_label_color(color: &str, t: &Tokens) -> Color32 {
     if color.is_empty() { t.text } else { Color32::from_rgb(20, 20, 20) }
 }
 
+/// Draws a checkbox in `rect`, ticked when `on`.
 fn paint_check(ui: &egui::Ui, rect: Rect, on: bool, t: &Tokens) {
     let b = Rect::from_center_size(rect.center(), vec2(11.0, 11.0));
     ui.painter().rect_stroke(b, 2.0, Stroke::new(1.0, t.text_faint), egui::StrokeKind::Inside);
@@ -321,6 +323,7 @@ fn paint_check(ui: &egui::Ui, rect: Rect, on: bool, t: &Tokens) {
     }
 }
 
+/// The label an action step shows in the Actions panel.
 fn step_label(id: &str, params: &Value) -> String {
     if id == "actions.play" {
         let target = params.get("action").map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string())).unwrap_or_default();
@@ -347,17 +350,6 @@ fn step_label(id: &str, params: &Value) -> String {
     } else {
         label_of(id)
     }
-}
-
-/// Command params for a picked file: a real path keeps the journal small; browser files arrive
-/// as bytes.
-fn source(name: &str, bytes: &[u8]) -> Value {
-    #[cfg(not(target_arch = "wasm32"))]
-    if std::path::Path::new(name).is_absolute() && std::path::Path::new(name).is_file() {
-        return json!({"path": name});
-    }
-    let _ = name;
-    json!({"data": photocraft_engine::paint::tile::b64_encode(bytes)})
 }
 
 /// Load a `.atn` file's bytes into the Actions panel (the panel menu's Load Actions…).

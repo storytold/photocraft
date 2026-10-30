@@ -1,7 +1,7 @@
 use super::adjustments::{HUE_RANGES, adjustment_by_class, adjustment_by_suffix, adjustment_steps};
 use super::descriptors::{
-    PX, Target, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_list, get_num, get_obj, get_ref, get_text, jbool, jnum,
-    jstr, layer_ref, layer_target, long, name_ref, pct, px, ref_class, target, target_ref, text, trimmed,
+    PX, Target, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_enum, get_list, get_num, get_ref, jbool, jnum, jstr, layer_ref,
+    layer_target, long, name_ref, pct, px, ref_class, target, target_ref, text, trimmed,
 };
 use super::fields::{Mapped, none, step, steps};
 use super::steps_layer::quick_mask_ref;
@@ -14,8 +14,8 @@ use super::{D, Descriptor, Id, Map, ReferenceItem, Value, json};
 /// recorded without a name or id.
 fn pattern_params(t: &Descriptor) -> Option<Map<String, Value>> {
     let mut p = Map::new();
-    if let Some(ptrn) = get_obj(t, "Ptrn") {
-        let key = get_text(ptrn, "Nm  ").filter(|n| !n.is_empty()).or_else(|| get_text(ptrn, "Idnt").filter(|i| !i.is_empty()))?;
+    if let Some(ptrn) = t.get_object("Ptrn") {
+        let key = ptrn.get_text("Nm  ").filter(|n| !n.is_empty()).or_else(|| ptrn.get_text("Idnt").filter(|i| !i.is_empty()))?;
         p.insert("pattern".into(), key.into());
     }
     if let Some(s) = get_num(t, "Scl ") {
@@ -24,7 +24,7 @@ fn pattern_params(t: &Descriptor) -> Option<Map<String, Value>> {
     if let Some(a) = get_num(t, "Angl") {
         p.insert("angle".into(), a.into());
     }
-    if let Some(l) = get_bool(t, "Algn") {
+    if let Some(l) = t.get_bool("Algn") {
         p.insert("link".into(), l.into());
     }
     Some(p)
@@ -59,6 +59,7 @@ const MASK_USING: &[(&str, &str)] = &[
     ("HdSl", "layer.layerMask.hideSelection"),
 ];
 
+/// Duplicate Layer into a new document, when the recorded Make step is one.
 fn duplicate_layer_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     let r = get_ref(d, "null")?;
     if ref_class(r).as_deref() != Some("Dcmn") || !matches!(target(r), Target::Class) {
@@ -70,15 +71,16 @@ fn duplicate_layer_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     }
     let mut params = layer_target(u)?;
     params.insert("document".into(), "new".into());
-    if let Some(n) = get_text(d, "Nm  ") {
+    if let Some(n) = d.get_text("Nm  ") {
         params.insert("documentName".into(), n.into());
     }
-    if let Some(n) = get_text(d, "LyrN") {
+    if let Some(n) = d.get_text("LyrN") {
         params.insert("name".into(), n.into());
     }
     Some(step("layer.duplicate", Value::Object(params)))
 }
 
+/// Add Layer Mask, when the recorded Make step makes a mask channel.
 fn mask_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     let Some(D::Class(c)) = d.get("Nw  ") else { return None };
     if trimmed(&c.class_id) != "Chnl" {
@@ -92,17 +94,18 @@ fn mask_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     })
 }
 
+/// New Document, when the recorded Make step makes one.
 fn new_document_from_descriptor(d: &Descriptor) -> Option<Mapped> {
-    let nw = get_obj(d, "Nw  ")?;
+    let nw = d.get_object("Nw  ")?;
     if get_enum(d, "Usng").as_deref() == Some("Slct") {
-        let id = if get_bool(d, "Cpy ") == Some(true) { "layer.new.layerViaCopy" } else { "layer.new.layerViaCut" };
+        let id = if d.get_bool("Cpy ") == Some(true) { "layer.new.layerViaCopy" } else { "layer.new.layerViaCut" };
         let mut mapped_steps = vec![(id, json!({}))];
-        if let Some(n) = get_text(nw, "Nm  ") {
+        if let Some(n) = nw.get_text("Nm  ") {
             mapped_steps.push(("layer.setProps", json!({"name": n})));
         }
         return Some(steps(mapped_steps));
     }
-    if get_text(nw, "preset").is_some() {
+    if nw.get_text("preset").is_some() {
         return Some(none("file.newFromClipboard"));
     }
     let (Some(w), Some(h)) = (get_num(nw, "Wdth"), get_num(nw, "Hght")) else {
@@ -114,7 +117,7 @@ fn new_document_from_descriptor(d: &Descriptor) -> Option<Mapped> {
         _ => value * res / 72.0,
     };
     let mut params = json!({"width": to_px("Wdth", w).round(), "height": to_px("Hght", h).round(), "resolution": res});
-    if let Some(n) = get_text(nw, "Nm  ") {
+    if let Some(n) = nw.get_text("Nm  ") {
         params["name"] = json!(n);
     }
     if let Some(D::Class(c)) = nw.get("Md  ")
@@ -136,6 +139,7 @@ fn new_document_from_descriptor(d: &Descriptor) -> Option<Mapped> {
     Some(step("file.new", params))
 }
 
+/// The command a recorded Make step replays as.
 pub(super) fn make_from(d: &Descriptor) -> Mapped {
     if let Some(mapped) = duplicate_layer_from_descriptor(d) {
         return mapped;
@@ -147,13 +151,13 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
         return mapped;
     }
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
-    let using = get_obj(d, "Usng");
-    let type_desc = using.and_then(|u| get_obj(u, "Type"));
+    let using = d.get_object("Usng");
+    let type_desc = using.and_then(|u| u.get_object("Type"));
     match ref_class(r).as_deref() {
         Some("Lyr") => {
             let mut p = Map::new();
             if let Some(u) = using {
-                if let Some(n) = get_text(u, "Nm  ") {
+                if let Some(n) = u.get_text("Nm  ") {
                     p.insert("name".into(), n.into());
                 }
                 if let Some(o) = get_num(u, "Opct") {
@@ -170,7 +174,7 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
             None => Mapped::Unsupported { harmless: false },
         },
         Some("contentLayer") => match type_desc {
-            Some(t) if t.class_id.is("solidColorLayer") => match get_obj(t, "Clr ").and_then(color_hex) {
+            Some(t) if t.class_id.is("solidColorLayer") => match t.get_object("Clr ").and_then(color_hex) {
                 Some(c) => step("layer.newFillLayer.solidColor", json!({"color": c})),
                 None => none("layer.newFillLayer.solidColor"),
             },
@@ -182,7 +186,7 @@ pub(super) fn make_from(d: &Descriptor) -> Mapped {
         },
         Some("layerSection") => {
             let mut p = Map::new();
-            if let Some(n) = using.and_then(|u| get_text(u, "Nm  ")) {
+            if let Some(n) = using.and_then(|u| u.get_text("Nm  ")) {
                 p.insert("name".into(), n.into());
             }
             match get_ref(d, "From") {
@@ -326,6 +330,7 @@ pub(super) fn make_to(id: &str, p: &Value) -> Option<Descriptor> {
     })
 }
 
+/// The selection command a recorded Set Selection step replays as.
 fn selection_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     match d.get("T   ") {
@@ -370,6 +375,7 @@ fn selection_from(d: &Descriptor) -> Mapped {
     }
 }
 
+/// Background from Layer or Layer from Background, as the recorded step converts.
 fn background_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     // On an image that opened as a normal layer there is no Background to convert;
@@ -378,8 +384,8 @@ fn background_from(d: &Descriptor) -> Mapped {
     let mut v = vec![("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false}))];
     let mut props = Map::new();
     props.insert("layer".into(), "Layer 0".into());
-    if let Some(t) = get_obj(d, "T   ") {
-        if let Some(n) = get_text(t, "Nm  ") {
+    if let Some(t) = d.get_object("T   ") {
+        if let Some(n) = t.get_text("Nm  ") {
             props.insert("name".into(), n.into());
         }
         if let Some(o) = get_num(t, "Opct").filter(|o| (o - 100.0).abs() > 1e-9) {
@@ -401,6 +407,7 @@ fn background_from(d: &Descriptor) -> Mapped {
     steps(v)
 }
 
+/// The command a recorded Set step replays as.
 pub(super) fn set_from(d: &Descriptor) -> Mapped {
     let Some(r) = get_ref(d, "null") else { return Mapped::Unsupported { harmless: false } };
     let unsupported = Mapped::Unsupported { harmless: false };
@@ -412,20 +419,20 @@ pub(super) fn set_from(d: &Descriptor) -> Mapped {
         // as a `set` of the Background); values other than the defaults then apply to the layer.
         (Some("Lyr"), Target::Property(p)) if p == "Bckg" => background_from(d),
         // The toolbox colours.
-        (Some("Clr"), Target::Property(p)) if p == "FrgC" || p == "BckC" => match get_obj(d, "T   ").and_then(color_hex) {
+        (Some("Clr"), Target::Property(p)) if p == "FrgC" || p == "BckC" => match d.get_object("T   ").and_then(color_hex) {
             Some(hex) => step("tools.setColors", json!({(if p == "FrgC" { "foreground" } else { "background" }): hex})),
             None => unsupported,
         },
         (Some("Lyr"), _) => {
             let Some(mut p) = layer_target(r) else { return unsupported };
-            let Some(t) = get_obj(d, "T   ") else { return unsupported };
+            let Some(t) = d.get_object("T   ") else { return unsupported };
             let mut v = Vec::new();
             if let Some(c) = get_enum(t, "Clr ").and_then(|c| lookup(LABEL_COLORS, &c)) {
                 let mut lp = p.clone();
                 lp.insert("color".into(), c.into());
                 v.push(("layer.setLabelColor", Value::Object(lp)));
             }
-            if let Some(n) = get_text(t, "Nm  ") {
+            if let Some(n) = t.get_text("Nm  ") {
                 p.insert("name".into(), n.into());
             }
             if let Some(o) = get_num(t, "Opct") {
@@ -438,7 +445,7 @@ pub(super) fn set_from(d: &Descriptor) -> Mapped {
                 let Some(label) = blend_label(&m) else { return unsupported };
                 p.insert("blend".into(), label.into());
             }
-            if let Some(vis) = get_bool(t, "Vsbl") {
+            if let Some(vis) = t.get_bool("Vsbl") {
                 p.insert("visible".into(), vis.into());
             }
             if p.keys().any(|k| k != "layer") {
@@ -447,7 +454,7 @@ pub(super) fn set_from(d: &Descriptor) -> Mapped {
             if v.is_empty() { unsupported } else { steps(v) }
         }
         // A Pattern Fill layer's pattern (double-click its thumbnail).
-        (Some("contentLayer"), Target::Ordinal(o)) if o == "Trgt" => match get_obj(d, "T   ") {
+        (Some("contentLayer"), Target::Ordinal(o)) if o == "Trgt" => match d.get_object("T   ") {
             Some(t) if t.class_id.is("patternLayer") => match pattern_params(t) {
                 Some(p) if !p.is_empty() => step("layer.fill.pattern.set", Value::Object(p)),
                 _ => unsupported,
@@ -455,7 +462,7 @@ pub(super) fn set_from(d: &Descriptor) -> Mapped {
             _ => unsupported,
         },
         (Some("AdjL"), Target::Ordinal(o)) if o == "Trgt" => {
-            match get_obj(d, "T   ").and_then(|t| adjustment_by_class(&trimmed(&t.class_id)).map(|a| (a, t))) {
+            match d.get_object("T   ").and_then(|t| adjustment_by_class(&trimmed(&t.class_id)).map(|a| (a, t))) {
                 Some((a, t)) => match (a.from)(t) {
                     // `kind` names the adjustment so Save Actions can write the class back.
                     // Not on an empty set (Photoshop's "reset to default"): params with any key

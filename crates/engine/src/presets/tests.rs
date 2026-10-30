@@ -896,3 +896,30 @@ fn export_presets_survive_a_presets_json_round_trip() {
     assert_eq!(restored.presets.export_presets[0].name, "Web");
     assert_eq!(restored.presets.export_presets[0].settings.format, "jpg");
 }
+
+#[test]
+fn every_group_preset_kind_appends_or_restores_its_defaults() {
+    let groups = |s: &Session, kind: &str| -> Vec<String> {
+        match kind {
+            "gradient" => s.presets.gradients.iter().map(|g| g.name.clone()).collect(),
+            "style" => s.presets.styles.iter().map(|g| g.name.clone()).collect(),
+            _ => s.presets.shapes.iter().map(|g| g.name.clone()).collect(),
+        }
+    };
+    for kind in ["gradient", "style", "shape"] {
+        let mut s = Session::new();
+        let builtin = groups(&s, kind);
+        assert!(!builtin.is_empty(), "{kind}");
+        let rev = s.prefs.rev();
+        let r = s.execute(&format!("{kind}.presets.reset"), json!({"append": true})).unwrap();
+        assert_eq!(r["groups"], json!(builtin.len() * 2), "{kind}");
+        assert!(s.prefs.rev() > rev, "{kind}: appending marks preferences dirty");
+        let names = groups(&s, kind);
+        assert_eq!(names[..builtin.len()], builtin[..], "{kind}");
+        let renamed: Vec<String> = builtin.iter().map(|b| format!("{b} 1")).collect();
+        assert_eq!(names[builtin.len()..], renamed[..], "{kind}: appended groups get unique names");
+        let r = s.execute(&format!("{kind}.presets.reset"), json!({"append": false})).unwrap();
+        assert_eq!(r["groups"], json!(builtin.len()), "{kind}");
+        assert_eq!(groups(&s, kind), builtin, "{kind}");
+    }
+}

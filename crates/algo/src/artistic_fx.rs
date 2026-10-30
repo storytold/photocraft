@@ -19,7 +19,7 @@ use crate::artistic::GalleryEffect;
 use crate::artistic::GalleryFilter as F;
 use crate::fxutil::{box_blur_n, cell_point, gauss_blur_n, gauss_box_radii, rgba, set_rgba};
 use crate::image::Image;
-use crate::noise::hash01;
+use crate::noise::{hash01, value_noise};
 
 type Px = [f32; 3];
 
@@ -222,10 +222,12 @@ fn kuwahara(win: &mut Win, r: usize) {
     });
 }
 
+/// How far a Kuwahara window of radius `r` reaches.
 fn kuwahara_reach(r: usize) -> i32 {
     2 * r.div_ceil(2).max(1) as i32 + 1
 }
 
+/// Sharpens the window with an unsharp mask of radius `sigma`.
 fn unsharp(win: &mut Win, sigma: f32, amount: f32) {
     if amount <= 0.0 {
         return;
@@ -237,20 +239,9 @@ fn unsharp(win: &mut Win, sigma: f32, amount: f32) {
     }
 }
 
-/// Smooth value noise (0–1) on a unit lattice.
-fn vnoise(x: f32, y: f32, seed: u32) -> f32 {
-    let (ix, iy) = (x.floor() as i32, y.floor() as i32);
-    let (tx, ty) = (x - ix as f32, y - iy as f32);
-    let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
-    let h = |a: i32, b: i32| hash01(a, b, 0, seed);
-    let top = h(ix, iy) + (h(ix + 1, iy) - h(ix, iy)) * sx;
-    let bot = h(ix, iy + 1) + (h(ix + 1, iy + 1) - h(ix, iy + 1)) * sx;
-    top + (bot - top) * sy
-}
-
 /// Three-octave value noise (0–1).
 fn fbm(x: f32, y: f32, seed: u32) -> f32 {
-    (vnoise(x, y, seed) * 0.57 + vnoise(x * 2.03, y * 2.03, seed ^ 0x51) * 0.29 + vnoise(x * 4.1, y * 4.1, seed ^ 0xa3) * 0.14) / 1.0
+    (value_noise(x, y, seed) * 0.57 + value_noise(x * 2.03, y * 2.03, seed ^ 0x51) * 0.29 + value_noise(x * 4.1, y * 4.1, seed ^ 0xa3) * 0.14) / 1.0
 }
 
 /// Stroke texture: value noise stretched `len` px along the direction `d` and `wid` px across.
@@ -261,7 +252,7 @@ fn strokes(x: i32, y: i32, d: (i32, i32), len: f32, wid: f32, seed: u32) -> f32 
     let (x, y) = (x as f32, y as f32);
     let u = x * ux + y * uy;
     let v = -x * uy + y * ux;
-    vnoise(u / len.max(0.5), v / wid.max(0.3), seed)
+    value_noise(u / len.max(0.5), v / wid.max(0.3), seed)
 }
 
 /// Repaints in discrete strokes `len` px long and `wid` px wide along `d`: every stroke takes the
@@ -320,7 +311,7 @@ fn texture(kind: &str, x: f32, y: f32, s: f32) -> f32 {
             let xo = x + if row as i32 % 2 == 0 { 0.0 } else { bw / 2.0 };
             let (u, v) = (xo.rem_euclid(bw), y.rem_euclid(bh));
             let d = u.min(bw - u).min(v.min(bh - v));
-            smoothstep(0.6, 2.2, d) * (0.85 + 0.15 * vnoise(x / 3.0, y / 3.0, 91))
+            smoothstep(0.6, 2.2, d) * (0.85 + 0.15 * value_noise(x / 3.0, y / 3.0, 91))
         }
         "burlap" => weave(x, y, 7.0, 0.35),
         "canvas" => weave(x, y, 3.5, 0.18),
@@ -347,7 +338,7 @@ fn weave(x: f32, y: f32, p: f32, noise: f32) -> f32 {
     let (u, v) = (x.rem_euclid(p) / p, y.rem_euclid(p) / p);
     // A thread is a rounded ridge across its cell.
     let ridge = if over_h { (v * PI).sin() } else { (u * PI).sin() };
-    let n = vnoise(x / (p * 0.7), y / (p * 2.0), 97);
+    let n = value_noise(x / (p * 0.7), y / (p * 2.0), 97);
     ridge * (1.0 - noise) + n * noise
 }
 
@@ -858,8 +849,8 @@ fn apply_brush_strokes(e: &GalleryEffect, win: &mut Win) -> bool {
             for i in 0..win.c.len() {
                 let (x, y) = win.xy(i);
                 let (fx, fy) = (x as f32 / sc, y as f32 / sc);
-                let dx = (vnoise(fx, fy, 91) - 0.5) * 2.0 * rad;
-                let dy = (vnoise(fx, fy, 92) - 0.5) * 2.0 * rad;
+                let dx = (value_noise(fx, fy, 91) - 0.5) * 2.0 * rad;
+                let dy = (value_noise(fx, fy, 92) - 0.5) * 2.0 * rad;
                 win.c[i] = src.sample(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy);
             }
             line_blur3(&mut win.c, w, h, direction(e.choice("strokeDirection")), (g("strokeLength") / 2.0) as usize);
@@ -924,8 +915,8 @@ fn apply_distort(e: &GalleryEffect, win: &mut Win) -> bool {
             for i in 0..win.c.len() {
                 let (x, y) = win.xy(i);
                 let (fx, fy) = (x as f32 / s, y as f32 / s);
-                let dx = (vnoise(fx, fy, 111) - 0.5) * 2.0 * mag;
-                let dy = (vnoise(fx, fy, 112) - 0.5) * 2.0 * mag;
+                let dx = (value_noise(fx, fy, 111) - 0.5) * 2.0 * mag;
+                let dy = (value_noise(fx, fy, 112) - 0.5) * 2.0 * mag;
                 win.c[i] = src.sample(x as f32 + 0.5 + dx, y as f32 + 0.5 + dy);
             }
         }
@@ -1106,7 +1097,7 @@ fn apply_sketch(e: &GalleryEffect, win: &mut Win, ctx: &Ctx) -> bool {
             let paper = mix(bg, fg, bl * 0.6);
             for i in 0..win.c.len() {
                 let (x, y) = win.xy(i);
-                let n = 0.5 * hash01(x, y, 0, 171) + 0.5 * vnoise(x as f32 / 1.8, y as f32 / 1.8, 172);
+                let n = 0.5 * hash01(x, y, 0, 171) + 0.5 * value_noise(x as f32 / 1.8, y as f32 / 1.8, 172);
                 let t = (1.0 - lum(&win.c[i])) + (n - 0.5) * (0.4 + den * 1.2);
                 win.c[i] = mix(paper, ink_c, smoothstep(0.45, 0.55, t));
             }
@@ -1202,18 +1193,22 @@ fn apply_stylize_texture(e: &GalleryEffect, win: &mut Win, ctx: &Ctx) -> bool {
                             p
                         }
                     }
-                    "clumped" => map(p, |v| v + (vnoise(x as f32 / 2.0, y as f32 / 2.0, 212) - 0.5) * it * 1.2),
+                    "clumped" => map(p, |v| v + (value_noise(x as f32 / 2.0, y as f32 / 2.0, 212) - 0.5) * it * 1.2),
                     "contrasty" => map(p, |v| (v - 0.5) * (1.0 + it * 2.0) + 0.5 + hc(4) * it * 0.5),
                     "enlarged" => {
                         let (fx, fy) = (x as f32 / 3.0, y as f32 / 3.0);
-                        [p[0] + (vnoise(fx, fy, 213) - 0.5) * it, p[1] + (vnoise(fx, fy, 214) - 0.5) * it, p[2] + (vnoise(fx, fy, 215) - 0.5) * it]
+                        [
+                            p[0] + (value_noise(fx, fy, 213) - 0.5) * it,
+                            p[1] + (value_noise(fx, fy, 214) - 0.5) * it,
+                            p[2] + (value_noise(fx, fy, 215) - 0.5) * it,
+                        ]
                     }
                     "stippled" => {
                         let st = if lum(&p) > hash01(x, y, 5, 211) { bg } else { fg };
                         mix(p, st, 0.3 + it * 0.7)
                     }
-                    "horizontal" => map(p, |v| v + (vnoise(x as f32 / 25.0, y as f32, 216) - 0.5) * it),
-                    "vertical" => map(p, |v| v + (vnoise(x as f32, y as f32 / 25.0, 217) - 0.5) * it),
+                    "horizontal" => map(p, |v| v + (value_noise(x as f32 / 25.0, y as f32, 216) - 0.5) * it),
+                    "vertical" => map(p, |v| v + (value_noise(x as f32, y as f32 / 25.0, 217) - 0.5) * it),
                     "speckle" => {
                         if hash01(x, y, 6, 211) < it * 0.1 {
                             mix(p, fg, 0.85)
@@ -1229,8 +1224,8 @@ fn apply_stylize_texture(e: &GalleryEffect, win: &mut Win, ctx: &Ctx) -> bool {
         F::MosaicTiles => {
             let (ts, gw, lg) = (g("tileSize"), g("groutWidth"), g("lightenGrout") / 10.0);
             let edge = |x: f32, y: f32| {
-                let jx = x + (vnoise(x / ts * 0.7, y / ts * 0.7, 221) - 0.5) * ts * 0.3;
-                let jy = y + (vnoise(x / ts * 0.7, y / ts * 0.7, 222) - 0.5) * ts * 0.3;
+                let jx = x + (value_noise(x / ts * 0.7, y / ts * 0.7, 221) - 0.5) * ts * 0.3;
+                let jy = y + (value_noise(x / ts * 0.7, y / ts * 0.7, 222) - 0.5) * ts * 0.3;
                 let (u, v) = (jx.rem_euclid(ts), jy.rem_euclid(ts));
                 u.min(ts - u).min(v.min(ts - v))
             };

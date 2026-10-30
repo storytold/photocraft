@@ -2,7 +2,7 @@ use super::edit::{TEMPLATE_NODES, edited_object, fits, is_stub, names_one_frame,
 use super::import::{OPENTYPE_KEYS, TXT2_FEATURES, TXT2_STYLISTIC_SETS, kern_units, manual, object_frame, pair_runs, parse_txt2, postscript_for, real};
 use super::{
     AntiAlias, Caps, CharStyle, Color, ColorMode, D, Descriptor, E, FontBaseline, Id, Kerning, Orientation, ParagraphStyle, TextAlign, TextLayer, TextShape,
-    TySh, UnicodeString, ed, engine_data, enum_value, enumv, parse_tysh, write_tysh,
+    TySh, UnicodeString, ed, engine_data, enumv, parse_tysh, write_tysh,
 };
 
 /// A fill colour as EngineData and `Txt2` store it: the colour type (0 gray, 1 RGB, 2 CMYK) and
@@ -1011,11 +1011,11 @@ pub fn build_tysh(layer: &TextLayer, dpi: f32, ink: Option<[f32; 4]>) -> Vec<u8>
                 .with("warpPerspectiveOther", D::Double(f64::from(w.vertical_distortion)))
                 .with("warpRotate", enumv("Ornt", if w.horizontal { "Hrzn" } else { "Vrtc" })),
         ),
-        (None, Some(old)) if enum_value(&old, "warpStyle").as_deref() == Some("warpNone") => Some(old),
+        (None, Some(old)) if old.get_enum("warpStyle").as_deref() == Some("warpNone") => Some(old),
         _ => None,
     };
     // Photoshop's trailing bounds: zeros for unwarped type, the text-space bounds when warped.
-    let warped = warp.as_ref().is_some_and(|w| enum_value(w, "warpStyle").is_some_and(|s| s != "warpNone"));
+    let warped = warp.as_ref().is_some_and(|w| w.get_enum("warpStyle").is_some_and(|s| s != "warpNone"));
     let bounds = if warped { [l, t, r, b] } else { [0.0; 4] };
     write_tysh(&TySh { transform: layer.transform, text, warp, bounds })
 }

@@ -4,20 +4,10 @@ use photocraft_geom::Rect;
 
 use crate::fxutil::{MAXC, luma, rgba, set_rgba, smoothstep, xy};
 use crate::image::Image;
-use crate::noise::hash01;
+use crate::noise::value_noise;
 use crate::{Ctx, LensType, Light, LightKind, TextureChannel};
 
-/// Smooth value noise in [0, 1).
-fn value_noise(x: f32, y: f32, seed: u32) -> f32 {
-    let (ix, iy) = (x.floor() as i32, y.floor() as i32);
-    let (tx, ty) = (x - ix as f32, y - iy as f32);
-    let (sx, sy) = (tx * tx * (3.0 - 2.0 * tx), ty * ty * (3.0 - 2.0 * ty));
-    let h = |a: i32, b: i32| hash01(a, b, 0, seed);
-    let top = h(ix, iy) + (h(ix + 1, iy) - h(ix, iy)) * sx;
-    let bot = h(ix, iy + 1) + (h(ix + 1, iy + 1) - h(ix, iy + 1)) * sx;
-    top + (bot - top) * sy
-}
-
+/// A hash of a lattice point to [0, 1] for the cloud filters.
 fn cloud_hash(x: i32, y: i32, seed: u32) -> f32 {
     let mut h = (x as u32).wrapping_mul(0x8da6_b343) ^ (y as u32).wrapping_mul(0xd816_3841) ^ seed.wrapping_mul(0xcb1a_b31f);
     h ^= h >> 13;

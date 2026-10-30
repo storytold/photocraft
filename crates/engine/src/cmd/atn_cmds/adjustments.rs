@@ -1,4 +1,4 @@
-use super::descriptors::{color_desc, color_hex, desc, enm, get_bool, get_enum, get_list, get_num, get_obj, jbool, jnum, jstr, long, num, pct, text};
+use super::descriptors::{color_desc, color_hex, desc, enm, get_enum, get_list, get_num, jbool, jnum, jstr, long, num, pct, text};
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
 use super::tables::{CHANNELS, channel_key, channel_ref, lookup, lookup_back};
 use super::{D, Descriptor, Map, Value, json};
@@ -16,8 +16,9 @@ fn per_channel(d: &Descriptor) -> Option<Vec<(Option<&'static str>, &Descriptor)
         .collect()
 }
 
+/// Levels params from a recorded Levels adjustment, or `None` for Auto Levels.
 pub(super) fn levels_from(d: &Descriptor) -> Option<Value> {
-    if get_bool(d, "Auto") == Some(true) {
+    if d.get_bool("Auto") == Some(true) {
         return None;
     }
     let mut out = Map::new();
@@ -126,9 +127,10 @@ const HUE_KEY: &str = "H   ";
 
 pub(super) const HUE_RANGES: [&str; 6] = ["reds", "yellows", "greens", "cyans", "blues", "magentas"];
 
+/// Hue/Saturation params from a recorded Hue/Saturation adjustment.
 fn hue_sat_from(d: &Descriptor) -> Option<Value> {
     let mut out = Map::new();
-    if let Some(c) = get_bool(d, "Clrz") {
+    if let Some(c) = d.get_bool("Clrz") {
         out.insert("colorize".into(), c.into());
     }
     for e in get_list(d, "Adjs").unwrap_or(&[]) {
@@ -198,10 +200,12 @@ fn triple(d: &Descriptor, k: &str) -> Option<Value> {
     Some(json!(v?))
 }
 
+/// The three numbers at `k` as a recorded list.
 fn triple_to(p: &Value, k: &str) -> Option<D> {
     Some(D::List(p.get(k)?.as_array()?.iter().map(|v| v.as_f64().map(long)).collect::<Option<Vec<_>>>()?))
 }
 
+/// Color Balance params from a recorded Color Balance adjustment.
 fn color_balance_from(d: &Descriptor) -> Option<Value> {
     let mut out = Map::new();
     for (key, param) in [("ShdL", "shadows"), ("MdtL", "midtones"), ("HghL", "highlights")] {
@@ -209,7 +213,7 @@ fn color_balance_from(d: &Descriptor) -> Option<Value> {
             out.insert(param.into(), v);
         }
     }
-    if let Some(b) = get_bool(d, "PrsL") {
+    if let Some(b) = d.get_bool("PrsL") {
         out.insert("preserveLuminosity".into(), b.into());
     }
     Some(Value::Object(out))
@@ -234,18 +238,20 @@ const BW: &[F] = &[
     F("tintColor", "tintColor", Kind::Color),
 ];
 
+/// The red, green, blue and constant weights of one Channel Mixer output.
 fn mixer_channel(e: &Descriptor) -> Option<Value> {
     Some(json!([get_num(e, "Rd  ").unwrap_or(0.0), get_num(e, "Grn ").unwrap_or(0.0), get_num(e, "Bl  ").unwrap_or(0.0), get_num(e, "Cnst").unwrap_or(0.0)]))
 }
 
+/// Channel Mixer params from a recorded Channel Mixer adjustment.
 fn channel_mixer_from(d: &Descriptor) -> Option<Value> {
     let mut out = Map::new();
     for (key, param) in [("Rd  ", "red"), ("Grn ", "green"), ("Bl  ", "blue"), ("Gry ", "gray")] {
-        if let Some(e) = get_obj(d, key) {
+        if let Some(e) = d.get_object(key) {
             out.insert(param.into(), mixer_channel(e)?);
         }
     }
-    if let Some(m) = get_bool(d, "Mnch") {
+    if let Some(m) = d.get_bool("Mnch") {
         out.insert("monochrome".into(), m.into());
     }
     Some(Value::Object(out))
@@ -325,19 +331,19 @@ fn selective_to(p: &Value) -> Option<Descriptor> {
 
 /// Gradient Map: the gradient's colour stops at 0..4096 → `stops: [[0..1, "#rrggbb"], …]`.
 fn gradient_map_from(d: &Descriptor) -> Option<Value> {
-    let grad = get_obj(d, "Grad")?;
+    let grad = d.get_object("Grad")?;
     let stops: Option<Vec<Value>> = get_list(grad, "Clrs")?
         .iter()
         .map(|v| match v {
-            D::Descriptor(stop) => Some(json!([(get_num(stop, "Lctn")? / 4096.0).clamp(0.0, 1.0), color_hex(get_obj(stop, "Clr ")?)?])),
+            D::Descriptor(stop) => Some(json!([(get_num(stop, "Lctn")? / 4096.0).clamp(0.0, 1.0), color_hex(stop.get_object("Clr ")?)?])),
             _ => None,
         })
         .collect();
     let mut out = json!({"stops": stops?});
-    if let Some(r) = get_bool(d, "Rvrs") {
+    if let Some(r) = d.get_bool("Rvrs") {
         out["reverse"] = json!(r);
     }
-    if let Some(dd) = get_bool(d, "Dthr") {
+    if let Some(dd) = d.get_bool("Dthr") {
         out["dither"] = json!(dd);
     }
     Some(out)
@@ -477,10 +483,11 @@ const SHADOWS_HIGHLIGHTS_TONE: [(&str, &str, &str); 3] = [("Amnt", "amount", "Am
 const SHADOWS_HIGHLIGHTS: [(&str, &str, &str); 4] =
     [("BlcC", "blackClip", "blackClip"), ("WhtC", "whiteClip", "whiteClip"), ("Cntr", "center", "midtone"), ("ClrC", "colorCorrection", "color")];
 
+/// The Shadows/Highlights command a recorded Shadows/Highlights step replays as.
 pub(super) fn shadows_highlights_from(d: &Descriptor) -> Mapped {
     let mut m = Map::new();
     for (code, name, prefix) in SHADOWS_HIGHLIGHTS_TONES {
-        let Some(t) = get_obj(d, code).or_else(|| get_obj(d, name)) else { continue };
+        let Some(t) = d.get_object(code).or_else(|| d.get_object(name)) else { continue };
         for (code, name, suffix) in SHADOWS_HIGHLIGHTS_TONE {
             if let Some(v) = get_num(t, code).or_else(|| get_num(t, name)) {
                 m.insert(format!("{prefix}{suffix}"), Value::from(v));

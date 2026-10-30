@@ -18,13 +18,14 @@ use photocraft_algo::puppet::{PuppetDensity, PuppetMode, PuppetPin, PuppetWarp, 
 use photocraft_algo::transform::Interp;
 use photocraft_algo::warp::{warp_mesh_gray, warp_mesh_surface};
 use photocraft_color::PixelFormat;
-use photocraft_doc::{Document, Layer, LayerContent, LayerId, Locks, SmartFilter};
+use photocraft_doc::{Document, Layer, LayerContent, Locks, SmartFilter};
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
 use crate::photo_cmds::Stopwatch;
+use crate::vector_cmds::layer_id;
 use crate::{EngineError, Result, Session};
 
 pub const LIQUIFY: &str = "filter.liquify";
@@ -190,13 +191,7 @@ pub fn apply_to_surface(id: &str, params: &Value, surf: &Surface, canvas: Rect) 
 
 // ---------- commands ----------
 
-fn target(s: &Session, p: &Value) -> Result<LayerId> {
-    match p.get("layer").and_then(Value::as_u64) {
-        Some(v) => Ok(LayerId(v)),
-        None => s.active().and_then(|d| d.active_layer).ok_or(EngineError::Other("no active layer".into())),
-    }
-}
-
+/// Enabled while the active layer is a pixel layer or a rendered smart object.
 fn pixel_layer(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     let id = d.active_layer.ok_or("no active layer")?;
@@ -230,8 +225,9 @@ type MaskFn<'a> = Option<&'a dyn Fn(&Surface, Option<&Surface>) -> Result<Surfac
 /// Deforms a layer's pixels (with the selection and canvas); an `Err` leaves the layer as it was.
 type LayerFn<'a> = &'a dyn Fn(&Surface, Option<&Surface>, Rect) -> Result<Surface>;
 
+/// Runs a distortion on the target layer as one undoable step.
 fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool, f: LayerFn, mask: MaskFn) -> Result<Value> {
-    let id = target(s, p)?;
+    let id = layer_id(s, p)?;
     let mut params = p.clone();
     if let Value::Object(m) = &mut params {
         m.remove("layer");
@@ -268,10 +264,11 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
     Ok(json!({"layer": id.0, "changed": true}))
 }
 
+/// Applies Liquify strokes to the target layer.
 fn liquify(s: &mut Session, p: &Value) -> Result<Value> {
     let canvas = s.active().ok_or(EngineError::NoDocument)?.doc.bounds();
     let (strokes, cell) = liquify_params(LIQUIFY, p, canvas)?;
-    let id = target(s, p)?;
+    let id = layer_id(s, p)?;
     if strokes.is_empty() {
         return Ok(json!({"layer": id.0, "changed": false}));
     }
@@ -321,9 +318,10 @@ fn deform_selected(surf: &Surface, sel: Option<&Surface>, f: &dyn Fn(&Surface) -
     }
 }
 
+/// Applies a Puppet Warp to the target layer.
 fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let w = puppet_params(cmd, p)?;
-    let id = target(s, p)?;
+    let id = layer_id(s, p)?;
     let smart = matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Smart(_)));
     if w.is_identity() && !smart {
         return Ok(json!({"layer": id.0, "changed": false}));
@@ -349,9 +347,10 @@ fn puppet(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     run_on_layer(s, cmd, "Puppet Warp", p, true, &layer_fn, Some(&mask_fn))
 }
 
+/// Applies a Perspective Warp to the target layer.
 fn perspective(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
     let planes = perspective_params(cmd, p)?;
-    let id = target(s, p)?;
+    let id = layer_id(s, p)?;
     let smart = matches!(s.active().and_then(|d| d.doc.layer(id)).map(|l| &l.content), Some(LayerContent::Smart(_)));
     if PerspectiveMap::is_identity(&planes) && !smart {
         return Ok(json!({"layer": id.0, "changed": false, "planes": planes}));

@@ -2,7 +2,7 @@ use super::export::{CELL_SIZE, blend_options, is_meta, pi, rgbc, whole};
 use super::placed::enumv;
 use super::{
     BlendMode, Descriptor, Id, J, Map, ReferenceItem, SmartFilter, UNSUPPORTED_FILTER, UnicodeString, Value, bool_or, camera_raw, displace, enum_of, get_desc,
-    hue_sat, json, num, perspective_warp, text_of,
+    hue_sat, json, num, perspective_warp,
 };
 
 // ---------- the filters we model ----------
@@ -404,14 +404,6 @@ pub(super) const TILE_COUNT: (i32, i32) = (1, 99);
 
 pub(super) const TILE_OFFSET: (i32, i32) = (1, 99);
 
-/// The `bool` at `key`.
-fn bool_at(d: &Descriptor, key: &str) -> Option<bool> {
-    match d.get(key)? {
-        Value::Boolean(b) => Some(*b),
-        _ => None,
-    }
-}
-
 /// Tiles' params; background and foreground fills use the colours the entry carries (`FrgC`,
 /// `BckC`). `None` when a setting or a colour that is there can't be read.
 fn tiles_params(f: &Descriptor, item: &Descriptor) -> Option<J> {
@@ -550,6 +542,7 @@ fn blur_filter_params(class: &str, f: &Descriptor) -> Option<J> {
     })
 }
 
+/// Params of a recorded Pixelate filter, by its class.
 fn pixel_filter_params(class: &str, f: &Descriptor, item: &Descriptor) -> Option<J> {
     Some(match (class, Some(f)) {
         ("Msc ", Some(f)) => json!({"cellSize": px(f, "ClSz")?}),
@@ -578,6 +571,7 @@ fn pixel_filter_params(class: &str, f: &Descriptor, item: &Descriptor) -> Option
     })
 }
 
+/// Params of a recorded Stylize filter, by its class.
 fn stylize_filter_params(class: &str, f: &Descriptor, item: &Descriptor) -> Option<J> {
     Some(match (class, Some(f)) {
         ("Wnd ", Some(f)) => json!({
@@ -589,8 +583,8 @@ fn stylize_filter_params(class: &str, f: &Descriptor, item: &Descriptor) -> Opti
             "size": int_in(f, "ExtS", EXTRUDE_SIZE.0, EXTRUDE_SIZE.1)?,
             "depth": int_in(f, "ExtD", EXTRUDE_DEPTH.0, EXTRUDE_DEPTH.1)?,
             "depthMode": enum_from(f, "ExtR", "ExtR", &EXTRUDE_DEPTHS)?,
-            "solidFrontFaces": bool_at(f, "ExtF")?,
-            "maskIncompleteBlocks": bool_at(f, "ExtM")?,
+            "solidFrontFaces": f.get_bool("ExtF")?,
+            "maskIncompleteBlocks": f.get_bool("ExtM")?,
         }),
         ("Tls ", Some(f)) => tiles_params(f, item)?,
         _ => return None,
@@ -877,7 +871,7 @@ pub fn filter_from_item(item: &Descriptor) -> SmartFilter {
     let (command, params) = match known {
         Some((c, p)) => (c.to_string(), p),
         None => {
-            let name = text_of(item, "Nm  ").unwrap_or_default();
+            let name = item.get_text("Nm  ").unwrap_or_default();
             // The stored descriptor carries neutral blending (the model's own fields replace
             // them on export), so hiding or re-blending the filter leaves its params alone.
             let mut neutral = item.clone();

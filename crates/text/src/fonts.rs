@@ -50,7 +50,7 @@ const MAX_BUNDLED_FONT_BYTES: u64 = 16 << 20;
 
 /// Inflate a bundled font. Data that doesn't inflate gives no font (empty bytes, which every
 /// consumer skips), never a panic; `bundled_fonts_inflate_to_their_files` keeps it from happening.
-fn inflate_font(deflated: &[u8]) -> Vec<u8> {
+pub fn inflate_font(deflated: &[u8]) -> Vec<u8> {
     use std::io::Read as _;
     let mut out = Vec::new();
     match flate2::read::DeflateDecoder::new(deflated).take(MAX_BUNDLED_FONT_BYTES + 1).read_to_end(&mut out) {

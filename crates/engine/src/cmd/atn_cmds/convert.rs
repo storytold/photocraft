@@ -1,4 +1,4 @@
-use super::descriptors::{desc, get_obj, jstr};
+use super::descriptors::{desc, jstr};
 use super::events::{event_and_descriptor, event_for};
 use super::fields::Mapped;
 use super::{Action, AtnAction, AtnEvent, AtnFile, AtnItem, D, DEFAULT_SET, Descriptor, PHOTOSHOP_STEP, UnicodeString, Value, atn, json};
@@ -157,7 +157,7 @@ fn export_items(id: &str, params: &Value, set: &str) -> Option<Vec<AtnItem>> {
         return Some(vec![item]);
     }
     let descriptor = item.descriptor.as_ref()?;
-    let properties = get_obj(descriptor, "T   ")?;
+    let properties = descriptor.get_object("T   ")?;
     if properties.items.len() <= 1 {
         return Some(vec![item]);
     }

@@ -1,5 +1,5 @@
 use super::adjustments::{adjustment_by_class, adjustment_steps, levels_from, levels_to, shadows_highlights_from, shadows_highlights_to};
-use super::descriptors::{desc, get_bool, get_ref, jbool, layer_ref, layer_target, ref_class};
+use super::descriptors::{desc, get_ref, jbool, layer_ref, layer_target, ref_class};
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, none, step};
 use super::steps_doc::{
     align_from, align_to, canvas_size_from, canvas_size_to, close_from, close_to, conditional_from, conditional_to, convert_mode_from, convert_mode_to,
@@ -116,11 +116,12 @@ pub(super) fn pixel_target(p: &Value) -> bool {
     p.get("target").is_none_or(|t| t.as_str() == Some("pixels"))
 }
 
+/// The Levels, Auto Tone or Auto Contrast command a recorded Levels step replays as.
 fn levels_event_from(d: &Descriptor) -> Mapped {
-    if get_bool(d, "Auto") == Some(true) {
+    if d.get_bool("Auto") == Some(true) {
         return none("image.autoTone");
     }
-    if get_bool(d, "AuCo") == Some(true) {
+    if d.get_bool("AuCo") == Some(true) {
         return none("image.autoContrast");
     }
     match levels_from(d) {
