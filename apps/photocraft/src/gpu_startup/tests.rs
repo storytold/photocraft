@@ -197,6 +197,9 @@ fn adapter_names_match_loosely_and_the_environment_wins() {
     assert_eq!(wanted_adapter(Some("  "), "iris"), Some("iris".into()));
     assert_eq!(wanted_adapter(Some("nvidia"), "iris"), Some("nvidia".into()));
     assert_eq!(wanted_adapter(Some(&"x".repeat(1000)), "").map(|w| w.len()), Some(256));
+    // The source System Info names: the override only when it is the request.
+    assert!(adapter_request_from_env(Some("nvidia")));
+    assert!(!adapter_request_from_env(Some("  ")) && !adapter_request_from_env(None));
 }
 
 #[test]

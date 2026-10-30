@@ -1,14 +1,10 @@
 use super::fields::choice_label;
 use super::{Map, PhotocraftApp, RichText, Tokens, Value, json, prefs};
 
-/// Performance › Graphics: the compositor's GPU memory budget and whether the active document's
-/// layers fit it (the GPU Memory preference sets it).
+/// Performance › Graphics: the GPU memory budgets and their inputs (the same lines as Help ›
+/// System Info) and whether the active document's layers fit (the GPU Memory preference sets it).
 pub(super) fn gpu_memory_lines(app: &PhotocraftApp) -> Vec<String> {
-    let mut v = Vec::new();
-    if app.perf.gpu_budget_mb > 0 {
-        let budget = crate::chrome_ui::fmt_bytes(app.perf.gpu_budget_mb.saturating_mul(1 << 20));
-        v.push(crate::i18n::fmt(tl!("GPU memory budget: {budget}"), &[("budget", &budget)]));
-    }
+    let mut v = crate::gpu_status::budget_lines(&crate::gpu_status::BudgetInputs::of(app));
     let doc = app.session.active().map(|st| st.doc.id.0);
     if let Some(fit) = app.perf.gpu_layer_fit.filter(|f| Some(f.doc) == doc) {
         let args = [("needed", crate::chrome_ui::fmt_bytes(fit.needed)), ("budget", crate::chrome_ui::fmt_bytes(fit.budget))];

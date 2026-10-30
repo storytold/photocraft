@@ -347,6 +347,11 @@ impl GpuCanvas {
         r.callback_resources.get::<Resources>()?.compositor_budget
     }
 
+    /// The GPU bytes one document's display texture set may take (see [`canvas_budget`]).
+    pub fn canvas_budget_bytes(&self) -> u64 {
+        self.canvas_budget.load(Ordering::Relaxed)
+    }
+
     /// Set the GPU bytes one document's display texture set may take (see [`canvas_budget`]).
     pub fn set_canvas_budget(&self, bytes: u64) {
         self.canvas_budget.store(bytes, Ordering::Relaxed);

@@ -340,9 +340,12 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
         }
         DialogKind::About if fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => {
             let lines = crate::gpu_status::system_info_ui(app);
-            for l in &lines {
-                ui.add(egui::Label::new(egui::RichText::new(l).font(crate::theme::mono(12.0))).selectable(true));
-            }
+            // The render-path history and the slow frames can run to a hundred lines.
+            egui::ScrollArea::vertical().max_height(420.0).auto_shrink([false, true]).show(ui, |ui| {
+                for l in &lines {
+                    ui.add(egui::Label::new(egui::RichText::new(l).font(crate::theme::mono(12.0))).selectable(true));
+                }
+            });
             ui.add_space(8.0);
             if crate::widgets::secondary_button(ui, tl!("Copy"), 84.0).clicked() {
                 ui.ctx().copy_text(crate::gpu_status::system_info(app).join("\n"));

@@ -201,6 +201,17 @@ impl SlowFrames {
     }
 }
 
+/// The diagnostics report's slow-frame lines (Help › System Info, `gpu_status`): a count, then
+/// one log-style line per kept frame, newest first.
+pub fn report_lines(slow: &SlowFrames) -> Vec<String> {
+    let n = slow.frames.len().to_string();
+    let ms = format!("{SLOW_FRAME_MS:.0}");
+    let template = "Slow frames (over {ms} ms): {count}";
+    let mut v = vec![crate::i18n::fmt(tl!(template), &[("ms", &ms), ("count", &n)])];
+    v.extend(slow.frames().rev().map(|s| format!("  {:.0} ms: {}", s.t, s.line())));
+    v
+}
+
 impl serde::Serialize for SlowFrames {
     fn serialize<S: serde::Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
         ser.collect_seq(self.frames.iter())

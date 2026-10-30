@@ -87,7 +87,10 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     if let Some(result) = crate::panel_docking::command(app, id, params) {
         return Some(result);
     }
-    // Help › Discord, website, GitHub, Report an Issue.
+    // Help › Report an Issue copies the diagnostics first; Discord, website, GitHub just open.
+    if id == "help.reportIssue" {
+        return Some(Ok(crate::links::report_issue(app, ctx)));
+    }
     if let Some(url) = crate::links::url_for(id) {
         return Some(Ok(crate::links::open(app, ctx, url)));
     }
