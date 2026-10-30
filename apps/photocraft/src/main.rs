@@ -335,7 +335,7 @@ fn main() -> eframe::Result {
     let logger = logging::install();
     crash_guard::install_hook();
     #[cfg(not(target_arch = "wasm32"))]
-    if let Some(done) = craft_update::self_update::finish(&craft_update::suite::PHOTOCRAFT, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
+    if let Some(done) = craft_update::self_update::finish(&photocraft_ui_egui::UPDATE_APP, &std::env::args_os().skip(1).collect::<Vec<_>>()) {
         if let Err(e) = done {
             eprintln!("PhotoCraft update helper failed: {e}");
             std::process::exit(1);
