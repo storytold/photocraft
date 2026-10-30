@@ -143,7 +143,7 @@ pub fn follow(
     let pinned = ctx.input(|i| i.viewport().maximized == Some(true) || i.viewport().fullscreen == Some(true));
     let layout = Layout {
         ppp: ctx.pixels_per_point(),
-        aspect: app.ui.view.display_aspect(),
+        aspect: app.display_aspect_of(Some(window.document)),
         chrome: rect.size() - crate::rulers::content_rect(app, rect).size(),
         bars: if app.ui.view.shows_scrollbars() { crate::scrollbars::THICKNESS } else { 0.0 },
         flip: app.ui.view.flip_horizontal,
@@ -290,6 +290,32 @@ mod tests {
         app.ui.extras.rulers = true;
         let ruled = frame(&app, ViewportClass::Immediate, &at(2.0)).unwrap();
         assert!(ruled.x > 800.0 && ruled.y > 600.0, "{ruled:?}");
+    }
+
+    /// Every open document window follows in the same frame: each is sized for its own document's
+    /// pixel aspect ratio, not the active document's.
+    #[test]
+    fn follow_sizes_a_window_for_its_own_documents_pixel_aspect_ratio() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        for _ in 0..2 {
+            app.run("file.new", json!({"width": 400, "height": 300})).unwrap();
+        }
+        app.sync_views();
+        app.ui.extras.rulers = false;
+        app.ui.view.pixel_aspect_correction = true;
+        app.run("view.setPixelAspectRatio", json!({"ratio": 2.0})).unwrap();
+        app.session.set_active(0);
+        app.sync_views();
+        app.run("prefs.set", json!({"path": "general.zoomResizesWindows", "value": true})).unwrap();
+        let ctx = Context::default();
+        let viewport = ViewportId::from_hash_of(("docwin", 5_u64));
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+        let window = DocWindow { id: 5, document: 1, view: view([400, 300], 1.0), open: true, position: None, floating: false, focused: false };
+        let bars = Vec2::splat(crate::scrollbars::THICKNESS);
+        // The first frame records the zoom; a zoom after it resizes the window.
+        assert_eq!(follow(&app, &ctx, ViewportClass::Immediate, viewport, &window, &mut view([400, 300], 1.0), rect), None);
+        let size = follow(&app, &ctx, ViewportClass::Immediate, viewport, &window, &mut view([400, 300], 1.5), rect);
+        assert_eq!(size, Some(vec2(1200.0, 450.0) + bars), "the second document's pixels are twice as wide");
     }
 
     /// Where the image lands in a window of the wrapped size, and the canvas area the scrollbars

@@ -1767,7 +1767,7 @@ fn sync_view_to_document(app: &PhotocraftApp, ctx: &egui::Context, view: &mut Vi
         view.doc_size = size;
     }
     // View › Pixel Aspect Ratio Correction: document pixels are shown this much wider.
-    let aspect = app.ui.view.display_aspect();
+    let aspect = app.ui.view.display_aspect(doc.pixel_aspect);
     if view.fit_pending && rect.width() > 50.0 {
         fit_view(view, doc, rect.size(), ppp, aspect);
     }
@@ -2890,7 +2890,8 @@ fn polygon_edge_scroll(app: &PhotocraftApp, ctx: &egui::Context, idx: usize, rec
     };
     let velocity = vec2(speed(pointer.x, rect.left(), rect.right()), speed(pointer.y, rect.top(), rect.bottom()));
     let velocity = velocity * (600.0 / velocity.length().max(600.0));
-    let xf = ViewXform { rect, zoom, center: view.center, flip: app.ui.view.flip_horizontal, rotation: view.rotation, aspect: app.ui.view.display_aspect() };
+    let xf =
+        ViewXform { rect, zoom, center: view.center, flip: app.ui.view.flip_horizontal, rotation: view.rotation, aspect: app.display_aspect_of(Some(idx)) };
     let delta = xf.unmap_vec(velocity) * dt.min(0.05) / zoom;
     view.center[0] += delta.x;
     view.center[1] += delta.y;

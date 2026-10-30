@@ -41,12 +41,8 @@ pub(super) fn screen_mode_commands(
     (commands, remember)
 }
 
-/// Pixel aspect ratio (width / height of a pixel) of a preset id.
-pub fn pixel_aspect_ratio(id: &str) -> f32 {
-    // View › Pixel Aspect Ratio › Custom: `custom:<ratio>:<name>` (see `workspace_ui`).
-    if let Some(r) = id.strip_prefix("custom:").and_then(|r| r.split(':').next()?.parse::<f32>().ok()) {
-        return r;
-    }
+/// Pixel aspect ratio (width / height of a pixel) of a View › Pixel Aspect Ratio preset id.
+pub fn pixel_aspect_ratio(id: &str) -> f64 {
     match id {
         "d1DvNtsc" => 0.91,
         "d1DvPal" => 1.09,
@@ -57,6 +53,21 @@ pub fn pixel_aspect_ratio(id: &str) -> f32 {
         "anamorphic2To1" => 2.0,
         _ => 1.0,
     }
+}
+
+/// Whether two pixel aspect ratios are the same to the Custom dialog's three decimals.
+pub fn same_aspect(a: f64, b: f64) -> bool {
+    (a - b).abs() < 5e-4
+}
+
+/// The View › Pixel Aspect Ratio preset id for `ratio`, if one matches.
+pub fn aspect_preset(ratio: f64) -> Option<&'static str> {
+    super::PIXEL_ASPECTS.into_iter().find(|k| same_aspect(pixel_aspect_ratio(k), ratio))
+}
+
+/// The active document's pixel aspect ratio (None without a document).
+pub fn active_aspect(app: &crate::PhotocraftApp) -> Option<f64> {
+    app.session.active().map(|d| d.doc.pixel_aspect)
 }
 
 pub(super) fn show_slot<'a>(s: &'a mut Show, key: &str) -> Option<&'a mut bool> {

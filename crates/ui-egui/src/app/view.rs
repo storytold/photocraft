@@ -18,4 +18,15 @@ impl PhotocraftApp {
     pub fn point_zoom(&self) -> f32 {
         self.current_zoom() / self.canvas_ppp()
     }
+
+    /// How much wider than tall the active document's pixels are drawn (see
+    /// [`crate::view_cmds::ViewOptions::display_aspect`]); 1 with no document.
+    pub fn display_aspect(&self) -> f32 {
+        self.display_aspect_of(self.session.active_index())
+    }
+
+    /// [`Self::display_aspect`] for the document at `index`: each keeps its own pixel aspect ratio.
+    pub fn display_aspect_of(&self, index: Option<usize>) -> f32 {
+        self.ui.view.display_aspect(index.and_then(|i| self.session.documents().get(i)).map_or(1.0, |d| d.doc.pixel_aspect))
+    }
 }

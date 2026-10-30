@@ -751,7 +751,7 @@ fn doc_on_screen(h: &Harness<'_, PhotocraftApp>, x: f32, y: f32) -> Pos2 {
         center: v.center,
         flip: app.ui.view.flip_horizontal,
         rotation: v.rotation,
-        aspect: app.ui.view.display_aspect(),
+        aspect: app.display_aspect(),
     };
     xf.to_screen(x, y)
 }

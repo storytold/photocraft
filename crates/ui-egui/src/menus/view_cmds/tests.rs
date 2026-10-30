@@ -40,6 +40,45 @@ fn place_embedded_enablement_does_not_require_native_doc() {
     }
 }
 
+/// #9950: View › Pixel Aspect Ratio is each document's, as in Photoshop: choosing a ratio
+/// stretches only the active document, the submenu ticks the active document's ratio, and the
+/// Correction toggle stays one switch for every document.
+#[test]
+fn pixel_aspect_ratio_is_each_documents_own() {
+    let (mut app, ctx) = app_with(2);
+    let (first, second) = (app.session.documents()[0].doc.id, app.session.documents()[1].doc.id);
+    let select = |app: &mut PhotocraftApp, id| {
+        let i = app.session.documents().iter().position(|d| d.doc.id == id).unwrap();
+        app.session.set_active(i);
+    };
+    select(&mut app, first);
+    menu(&mut app, &ctx, "view.pixelAspectRatio.d1DvPal", json!({})).unwrap();
+    assert_eq!(app.display_aspect(), 1.09_f32);
+    select(&mut app, second);
+    assert_eq!(app.session.active().unwrap().doc.pixel_aspect, 1.0, "the other document keeps square pixels");
+    assert_eq!(app.display_aspect(), 1.0);
+    assert_eq!(checked(&app, "view.pixelAspectRatio.square"), Some(true));
+    assert_eq!(checked(&app, "view.pixelAspectRatio.d1DvPal"), Some(false));
+    menu(&mut app, &ctx, "view.pixelAspectRatio.anamorphic2To1", json!({})).unwrap();
+    select(&mut app, first);
+    assert_eq!(checked(&app, "view.pixelAspectRatio.d1DvPal"), Some(true), "the tick follows the active document");
+    assert_eq!(app.display_aspect_of(Some(1)), 2.0);
+    // Correction off shows every document square; their ratios are kept.
+    menu(&mut app, &ctx, "view.pixelAspectRatioCorrection", json!({})).unwrap();
+    assert_eq!((app.display_aspect_of(Some(0)), app.display_aspect_of(Some(1))), (1.0, 1.0));
+    assert_eq!(app.session.active().unwrap().doc.pixel_aspect, 1.09);
+    // Undo puts the ratio back, like any document change.
+    app.session.undo();
+    assert_eq!(app.session.active().unwrap().doc.pixel_aspect, 1.0);
+    // With no document the ratios are unavailable rather than an error later.
+    let (mut empty, _) = app_with(0);
+    assert_eq!(is_enabled(&empty, "view.pixelAspectRatio.d1DvPal"), Some(false));
+    empty.ui.shell.custom_pars.push(crate::workspace_ui::CustomPar { name: "Cinema".into(), ratio: 1.25 });
+    let saved = menu_items(&empty).into_iter().find(|i| i.id == format!("{}Cinema", crate::workspace_ui::SAVED_PAR)).unwrap();
+    assert!(!saved.enabled, "a saved ratio needs a document too");
+    assert_eq!(checked(&empty, "view.pixelAspectRatio.square"), Some(false));
+}
+
 #[test]
 fn show_snap_extras_and_screen_modes_are_state() {
     let (mut app, ctx) = app_with(1);
@@ -78,7 +117,7 @@ fn show_snap_extras_and_screen_modes_are_state() {
     assert!(app.ui.view.hides_chrome() && app.ui.view.hides_tabs());
     assert_eq!(checked(&app, "view.screenMode.fullScreen"), Some(true));
     menu(&mut app, &ctx, "view.pixelAspectRatio.anamorphic2To1", json!({})).unwrap();
-    assert_eq!(pixel_aspect_ratio(&app.ui.view.pixel_aspect), 2.0);
+    assert_eq!(app.session.active().unwrap().doc.pixel_aspect, 2.0);
     // State serializes with the rest of the UI (control channel).
     let v = serde_json::to_value(&app.ui).unwrap();
     assert_eq!(v["view"]["screen_mode"], "fullScreen");

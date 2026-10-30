@@ -500,7 +500,7 @@ fn a_curvature_pen_double_click_through_the_canvas_rounds_a_corner() {
             center: v.center,
             flip: false,
             rotation: v.rotation,
-            aspect: app.ui.view.display_aspect(),
+            aspect: app.display_aspect(),
         };
         xf.to_screen(160.0, 40.0)
     };

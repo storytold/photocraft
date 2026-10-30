@@ -48,7 +48,7 @@ pub(super) fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             crate::tool_feedback::draw_ants(ui.painter(), &[r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()], true);
             if resp.drag_stopped() {
                 let doc_rect = Rect::from_min_max(((r.min - rect.min) / s).to_pos2(), ((r.max - rect.min) / s).to_pos2());
-                let (canvas, ppp, aspect) = (app.last_canvas_rect, app.canvas_ppp(), app.ui.view.display_aspect());
+                let (canvas, ppp, aspect) = (app.last_canvas_rect, app.canvas_ppp(), app.display_aspect());
                 navigator_zoom_to(&mut app.ui.views[idx], doc_rect, [size.width, size.height], canvas.size(), ppp, aspect);
             }
         }
@@ -98,7 +98,7 @@ pub(super) fn navigator(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         if v.zoom_animating && app.session.prefs().general.animated_zoom { v.display_camera.unwrap_or((v.zoom, v.center)) } else { (v.zoom, v.center) };
     let point_zoom = (zoom / app.canvas_ppp()).max(1e-6);
     // Pixel aspect correction shows fewer document columns across the same canvas width.
-    let vw = canvas.width() / point_zoom / app.ui.view.display_aspect() * s;
+    let vw = canvas.width() / point_zoom / app.display_aspect() * s;
     let vh = canvas.height() / point_zoom * s;
     let c = pos2(rect.min.x + center[0] * s, rect.min.y + center[1] * s);
     let vr = Rect::from_center_size(c, vec2(vw, vh)).intersect(frame.shrink(1.0));

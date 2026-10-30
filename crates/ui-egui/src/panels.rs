@@ -310,7 +310,7 @@ mod navigator_wheel_tests {
             let preview = last_navigator_preview(&ctx).unwrap();
             let scale = preview.width() / 200.0;
             let expected_center = preview.min + vec2(center[0], center[1]) * scale;
-            let expected_size = vec2(80.0 / app.ui.view.display_aspect(), 60.0) * (app.canvas_ppp() / zoom * scale);
+            let expected_size = vec2(80.0 / app.display_aspect(), 60.0) * (app.canvas_ppp() / zoom * scale);
             assert!((painted.center() - expected_center).length() < 0.01, "{animating}/{enabled}/{displayed:?}: {painted:?}");
             assert!((painted.size() - expected_size).length() < 0.01, "{animating}/{enabled}/{displayed:?}: {painted:?}");
             out.textures_delta.clear();
@@ -445,7 +445,7 @@ mod navigator_wheel_tests {
             [200, 100],
             vec2(800.0, 600.0),
             app.canvas_ppp(),
-            app.ui.view.display_aspect(),
+            app.display_aspect(),
         );
         let v = &app.ui.views[0];
         assert!((v.zoom - expected.zoom).abs() / expected.zoom < 0.05, "{} vs {}", v.zoom, expected.zoom);

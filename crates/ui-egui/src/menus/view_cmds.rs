@@ -29,7 +29,7 @@ use dispatch::is_enabled_with_engine;
 pub use dispatch::{checked, handles, invoke, is_enabled, leave_full_screen_without_document};
 #[cfg(test)]
 use options::screen_mode_commands;
-pub use options::{persist, pixel_aspect_ratio, restore};
+pub use options::{active_aspect, aspect_preset, persist, pixel_aspect_ratio, restore, same_aspect};
 
 /// View › Show flags (Photoshop defaults).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -99,8 +99,8 @@ pub struct ViewOptions {
     pub snap_to: SnapTo,
     /// View › Flip Horizontal: mirror the view only (the document is untouched).
     pub flip_horizontal: bool,
-    /// View › Pixel Aspect Ratio preset id ("square", "d1DvNtsc", …) and its correction toggle.
-    pub pixel_aspect: String,
+    /// View › Pixel Aspect Ratio Correction (the ratio itself is each document's own,
+    /// `Document::pixel_aspect`).
     pub pixel_aspect_correction: bool,
     pub pattern_preview: bool,
     pub pixel_art_preview: bool,
@@ -132,7 +132,6 @@ impl Default for ViewOptions {
             show: Show::default(),
             snap_to: SnapTo::default(),
             flip_horizontal: false,
-            pixel_aspect: "square".into(),
             // Photoshop shows non-square pixels corrected until the user turns it off.
             pixel_aspect_correction: true,
             pattern_preview: false,
@@ -158,12 +157,13 @@ impl ViewOptions {
     pub fn hides_tabs(&self) -> bool {
         self.screen_mode != "standard"
     }
-    /// Horizontal display scale of a document pixel: the pixel aspect ratio while View › Pixel
-    /// Aspect Ratio Correction is on, else 1 (square). The document's pixels never change.
-    pub fn display_aspect(&self) -> f32 {
-        let r = pixel_aspect_ratio(&self.pixel_aspect);
-        // `ui.set` can store any string; only the dialog's 0.1–10 range is drawn.
-        if self.pixel_aspect_correction && r.is_finite() { r.clamp(0.1, 10.0) } else { 1.0 }
+    /// Horizontal display scale of a pixel of a document whose pixel aspect ratio is
+    /// `pixel_aspect`: that ratio while View › Pixel Aspect Ratio Correction is on, else 1
+    /// (square). The document's pixels never change.
+    pub fn display_aspect(&self, pixel_aspect: f64) -> f32 {
+        let r = pixel_aspect as f32;
+        // A file can hold any ratio; only the Custom dialog's 0.1–10 range is drawn.
+        if self.pixel_aspect_correction && r.is_finite() && r > 0.0 { r.clamp(0.1, 10.0) } else { 1.0 }
     }
     /// Photoshop's full screen modes show no scroll bars.
     pub fn shows_scrollbars(&self) -> bool {

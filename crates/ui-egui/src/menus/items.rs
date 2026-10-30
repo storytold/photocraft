@@ -192,7 +192,8 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
         let entries = app.ui.shell.custom_pars.iter().map(|c| {
             let id = format!("{}{}", crate::workspace_ui::SAVED_PAR, c.name);
             let checked = checked(app, &id);
-            MenuItem { id, label: format!("{} ({})", c.name, c.ratio), path: pp.clone(), shortcut: None, enabled: true, checked, color: None }
+            let enabled = crate::workspace_ui::is_enabled(app, &id).unwrap_or(true);
+            MenuItem { id, label: format!("{} ({})", c.name, c.ratio), path: pp.clone(), shortcut: None, enabled, checked, color: None }
         });
         let rows: Vec<MenuItem> = std::iter::once(separator).chain(entries).collect();
         items.splice(after + 1..after + 1, rows);
