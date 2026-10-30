@@ -162,11 +162,9 @@ pub fn translate(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let before = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let tile = wrap.then(|| before.bounds());
-    let (dx, dy) = match tile {
-        Some(tile) => wrapped_delta(dx, dy, tile),
-        None => (dx, dy),
-    };
-    if dx == 0 && dy == 0 {
+    // A whole number of canvases changes nothing only when every target is raster samples.
+    // Text, shapes and the rest keep the raw delta, so they still move.
+    if tile.is_some_and(|tile| wrapped_delta(dx, dy, tile) == (0, 0) && targets_only_wrap(&before, &roots, mask_target)) {
         return Ok(Value::Null);
     }
     s.edit("Move", |doc, _| {
@@ -222,12 +220,8 @@ pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_targ
 }
 
 /// [`moved_target`] that wraps raster pixels inside `tile` (View › Pattern Preview). `None`
-/// is a straight move. Deltas are reduced into one tile here, matching `layer.translate`.
+/// is a straight move. `dx` and `dy` stay raw: only [`wrap_surface`] folds them into the tile.
 pub fn moved_wrapping(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_target: bool, wrap: Option<photocraft_geom::Rect>) -> Result<Document> {
-    let (dx, dy) = match wrap {
-        Some(tile) => wrapped_delta(dx, dy, tile),
-        None => (dx, dy),
-    };
     let mut out = doc.clone();
     for &id in ids {
         let locks = doc.effective_locks(id);
@@ -246,8 +240,8 @@ pub fn moved_wrapping(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_ta
     Ok(out)
 }
 
-/// `dx` and `dy` reduced into one `tile`, so a move of exactly the canvas is no move. A tile
-/// with no extent leaves the delta unchanged.
+/// `dx` and `dy` folded into one `tile`. A tile with no extent leaves the delta unchanged.
+/// Raster wrapping uses this; text, shapes and other geometry keep the raw delta.
 pub fn wrapped_delta(dx: i32, dy: i32, tile: photocraft_geom::Rect) -> (i32, i32) {
     let Some((w, h)) = tile_period(tile) else { return (dx, dy) };
     (wrap_axis(dx, w), wrap_axis(dy, h))
@@ -290,6 +284,30 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32, wrap: Option<pho
             g.children.iter_mut().for_each(|c| shift_shown(doc, c, dx, dy, wrap));
         }
         LayerContent::Adjustment(_) | LayerContent::Fill(_) => {}
+    }
+}
+
+/// True when a whole-canvas `dx`/`dy` would leave every targeted layer unchanged: each move is
+/// raster samples (or a mask moved alone) folding back onto themselves. A group counts only when
+/// every descendant does. Text, shapes, smart objects, artboards, linked vector masks and effect
+/// reference points do not.
+fn targets_only_wrap(doc: &Document, roots: &[LayerId], mask_target: bool) -> bool {
+    let (alone, rest): (Vec<LayerId>, Vec<LayerId>) = roots.iter().copied().partition(|id| mask_target && doc.layer(*id).is_some_and(moves_mask_alone));
+    let ids = move_targets(doc, &rest);
+    if ids.is_empty() && alone.is_empty() {
+        return false;
+    }
+    ids.iter().all(|id| doc.layer(*id).is_some_and(|l| subtree_wraps_only(l, 0)))
+}
+
+fn subtree_wraps_only(l: &Layer, depth: usize) -> bool {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH || l.effects.reference.is_some() || l.vector_mask.as_ref().is_some_and(|m| m.linked) {
+        return false;
+    }
+    match &l.content {
+        LayerContent::Raster(_) | LayerContent::Adjustment(_) | LayerContent::Fill(_) => true,
+        LayerContent::Group(g) => g.artboard.is_none() && g.children.iter().all(|c| subtree_wraps_only(c, depth + 1)),
+        LayerContent::Text(_) | LayerContent::Shape(_) | LayerContent::Smart(_) => false,
     }
 }
 

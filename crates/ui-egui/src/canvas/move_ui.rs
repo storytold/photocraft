@@ -158,20 +158,19 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let pattern = app.ui.view.pattern_preview;
         app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false, pattern });
     }
-    let applied = if app.ui.view.pattern_preview { photocraft_engine::layer_multi_cmds::wrapped_delta(offset.0, offset.1, doc.bounds()) } else { offset };
     let p = app.move_preview.as_mut()?;
-    if applied == (0, 0) && p.offsets.is_empty() {
+    if offset == (0, 0) && p.offsets.is_empty() {
         return None;
     }
-    if p.offsets.last() != Some(&applied) {
+    if p.offsets.last() != Some(&offset) {
         let t0 = crate::gpu_canvas::now_ms();
         let wrap = app.ui.view.pattern_preview.then_some(doc.bounds());
-        match photocraft_engine::layer_multi_cmds::moved_wrapping(&doc, &p.ids, applied.0, applied.1, mask_target, wrap) {
+        match photocraft_engine::layer_multi_cmds::moved_wrapping(&doc, &p.ids, offset.0, offset.1, mask_target, wrap) {
             Ok(d) => {
                 // Duotone documents display through their inks.
                 let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
                 p.shown = Some(Arc::new(d));
-                p.offsets.push(applied);
+                p.offsets.push(offset);
             }
             Err(_) => {
                 p.shown = None;
@@ -303,17 +302,11 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     // Within the range the preview and the ΔX/ΔY readout show (`drag_offset`), so the release
     // commits the offset they showed even at the lowest zoom of a huge document.
     let (dx, dy) = (dx.clamp(-1e7, 1e7), dy.clamp(-1e7, 1e7));
-    // Only when the canvas shows this very offset (else it recomposites everything once).
-    let at = if app.ui.view.pattern_preview {
-        app.session
-            .active()
-            .map(|st| photocraft_engine::layer_multi_cmds::wrapped_delta(dx as i32, dy as i32, st.doc.bounds()))
-            .unwrap_or((dx as i32, dy as i32))
-    } else {
-        (dx as i32, dy as i32)
-    };
+    // The raw drag, including a whole number of canvases. `layer.translate` drops that only
+    // when every target is raster samples folding back onto themselves.
+    let at = (dx as i32, dy as i32);
     let shown = app.move_preview.take().filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at));
-    if dx == 0.0 && dy == 0.0 || (app.ui.view.pattern_preview && at == (0, 0)) {
+    if dx == 0.0 && dy == 0.0 {
         return;
     }
     if app.run("layer.translate", pattern_wrap(app, json!({"dx": dx, "dy": dy, "selection": carries_selection(app)}))).is_err() {
