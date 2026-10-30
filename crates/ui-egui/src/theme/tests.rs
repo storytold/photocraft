@@ -126,8 +126,8 @@ fn pro_light_gray_and_light_themes() {
             assert!(contrast(t.text, bg) >= 4.5, "{kind:?} text on {bg:?}: {}", contrast(t.text, bg));
             assert!(contrast(t.icon, bg) >= 3.0, "{kind:?} icon on {bg:?}");
             assert!(contrast(t.text_dim, bg) >= 3.0, "{kind:?} dim text on {bg:?}");
+            assert!(contrast(t.text_faint, bg) >= 3.0, "{kind:?} faint text on {bg:?}: {}", contrast(t.text_faint, bg));
         }
-        assert!(contrast(t.text_faint, t.card) >= 2.0, "{kind:?} faint text");
         assert!(contrast(t.accent_text, t.card) >= 3.0, "{kind:?} accent text");
     }
     // The four Pro levels step from darkest to lightest, as in Photoshop.

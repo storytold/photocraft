@@ -204,11 +204,9 @@ fn slider_with(ui: &mut Ui, value: &mut f32, range: std::ops::RangeInclusive<f32
         surface(ui, kr, t.card, true);
     } else {
         let kr = if t.pro { 6.0 } else { 7.0 };
-        painter.circle_filled(knob + vec2(0.0, 1.0), kr + 0.5, Color32::from_black_alpha(90));
-        painter.circle_filled(knob, kr, if t.pro { Color32::from_gray(236) } else { Color32::WHITE });
-        if let Some(outline) = t.knob_outline() {
-            painter.circle_stroke(knob, kr, Stroke::new(1.0, outline));
-        }
+        painter.circle_filled(knob + vec2(0.0, 1.0), kr + 0.5, t.shadow);
+        painter.circle_filled(knob, kr, t.text);
+        painter.circle_stroke(knob, kr, Stroke::new(1.0, t.card));
         if resp.hovered() || resp.dragged() {
             painter.circle_stroke(knob, 9.5, Stroke::new(2.0, t.accent_soft));
         }
@@ -286,4 +284,30 @@ pub fn slider_row_prec(
     }
     ui.add_space(4.0);
     r
+}
+
+#[cfg(test)]
+mod theme_token_tests {
+    #[test]
+    fn slider_knob_uses_theme_tokens_instead_of_fixed_colours() {
+        for kind in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::ProLightGray, crate::theme::ThemeKind::Studio, crate::theme::ThemeKind::StudioLight]
+        {
+            let ctx = egui::Context::default();
+            crate::theme::apply(&ctx, kind);
+            let t = crate::theme::Tokens::for_kind(kind);
+            let mut value = 0.5;
+            let output = ctx.run_ui(Default::default(), |ui| {
+                super::slider(ui, &mut value, 0.0..=1.0, None);
+            });
+            assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.fill == t.text)), "{kind:?}: knob fill follows the text token");
+            assert!(
+                output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.stroke.color == t.card)),
+                "{kind:?}: knob outline follows the card token"
+            );
+            assert!(
+                output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Circle(c) if c.fill == t.shadow)),
+                "{kind:?}: knob shadow follows the shadow token"
+            );
+        }
+    }
 }
