@@ -239,13 +239,18 @@ fn pngsuite_corpus_rows_match_the_whole_decode() {
         panic!("{} is missing: run `cargo xtask corpus --all`", dir.display());
     };
     let opts = DecodeOptions { keep_orientation: true, ..Default::default() };
-    let (mut streamed, mut refused) = (0, 0);
+    let (mut streamed, mut refused, mut skipped) = (0, 0, 0);
     for e in entries.flatten() {
         let p = e.path();
         if p.extension().and_then(|s| s.to_str()) != Some("png") {
             continue;
         }
         let bytes = std::fs::read(&p).unwrap();
+        // The importer only streams files `detect` takes for PNG.
+        if detect(&bytes) != Some(Format::Png) {
+            skipped += 1;
+            continue;
+        }
         let whole = decode_with(&bytes, &opts);
         let (mut data, mut header) = (Vec::new(), None);
         let rows = decode_png_rows::<CodecError>(
@@ -279,6 +284,6 @@ fn pngsuite_corpus_rows_match_the_whole_decode() {
             (a, b) => panic!("{}: whole {:?}, rows {:?}", p.display(), a.map(|_| ()), b.map(|r| r.map(|_| ()))),
         }
     }
-    eprintln!("pngsuite: {streamed} streamed, {refused} refused (interlaced)");
+    eprintln!("pngsuite: {streamed} streamed, {refused} refused (interlaced), {skipped} skipped (not detected as PNG)");
     assert!(streamed > 100, "only {streamed} PNGs streamed: run `cargo xtask corpus --all`");
 }
