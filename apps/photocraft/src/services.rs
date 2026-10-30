@@ -523,6 +523,84 @@ fn image_from_files(paths: &[PathBuf]) -> Option<(u32, u32, Vec<u8>)> {
     })
 }
 
+/// Whether the X11 clipboard advertises `text/uri-list`, or `None` on Wayland, with no owner,
+/// or when the owner doesn't answer `TARGETS`. Asking an image-only owner for the file list can
+/// start an INCR transfer that arboard abandons, leaving the owner waiting and the following
+/// image read unable to start (#10231), so the caller skips that request unless the target list
+/// says files may be there.
+#[cfg(target_os = "linux")]
+fn x11_clipboard_has_uri_list() -> Option<bool> {
+    use std::time::{Duration, Instant};
+    use x11rb::connection::Connection as _;
+    use x11rb::protocol::Event;
+    use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, CreateWindowAux, EventMask, WindowClass};
+
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return None;
+    }
+    let (conn, screen_num) = x11rb::connect(None).ok()?;
+    let screen = conn.setup().roots.get(screen_num)?;
+    let intern = |name: &[u8]| conn.intern_atom(false, name).ok()?.reply().ok().map(|r| r.atom);
+    let clipboard = intern(b"CLIPBOARD")?;
+    let targets = intern(b"TARGETS")?;
+    let uri_list = intern(b"text/uri-list")?;
+    let property = intern(b"PHOTOCRAFT_CLIPBOARD_TARGETS")?;
+    if conn.get_selection_owner(clipboard).ok()?.reply().ok()?.owner == x11rb::NONE {
+        return None;
+    }
+    let window = conn.generate_id().ok()?;
+    conn.create_window(
+        x11rb::COPY_DEPTH_FROM_PARENT,
+        window,
+        screen.root,
+        0,
+        0,
+        1,
+        1,
+        0,
+        WindowClass::INPUT_OUTPUT,
+        x11rb::COPY_FROM_PARENT,
+        &CreateWindowAux::new().event_mask(EventMask::PROPERTY_CHANGE),
+    )
+    .ok()?;
+    conn.convert_selection(window, clipboard, targets, property, x11rb::CURRENT_TIME).ok()?;
+    conn.flush().ok()?;
+    // The paste is waiting on this, so give a slow owner a moment and fall back to the old
+    // file-list-first read rather than delaying it for long.
+    let deadline = Instant::now() + Duration::from_millis(250);
+    while Instant::now() < deadline {
+        let Some(event) = conn.poll_for_event().ok()? else {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        };
+        let Event::SelectionNotify(event) = event else { continue };
+        if event.requestor != window || event.selection != clipboard || event.target != targets {
+            continue;
+        }
+        if event.property == x11rb::NONE {
+            return None;
+        }
+        let reply = conn.get_property(true, window, event.property, AtomEnum::ATOM, 0, 1024).ok()?.reply().ok()?;
+        if reply.type_ != u32::from(AtomEnum::ATOM) || reply.format != 32 {
+            return None;
+        }
+        return Some(reply.value32()?.any(|atom| atom == uri_list));
+    }
+    None
+}
+
+/// Whether asking for a file list is worth a request. `None` means the target list couldn't be
+/// read (Wayland, no owner, or a slow X11 owner), where the old file-list-first read stays.
+fn should_read_file_list(offers_uri_list: Option<bool>) -> bool {
+    offers_uri_list != Some(false)
+}
+
+/// The copied files as [`clipboard_image`] takes them, asking the OS only when the advertised
+/// targets allow it.
+fn read_file_list(offers_uri_list: Option<bool>, read: impl FnOnce() -> Result<Vec<PathBuf>, arboard::Error>) -> Result<Option<Vec<PathBuf>>, String> {
+    if should_read_file_list(offers_uri_list) { clipboard_read(read()) } else { Ok(None) }
+}
+
 /// Largest clipboard image payload read on Wayland (1 GiB, a 16K × 16K RGBA BMP), so no real
 /// screenshot is turned away, while a broken or hostile source can't make us allocate without end.
 #[cfg(target_os = "linux")]
@@ -741,9 +819,13 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                         slot.insert(opened.map_err(|e| e.to_string())?)
                     }
                 };
+                #[cfg(target_os = "linux")]
+                let file_list = x11_clipboard_has_uri_list();
+                #[cfg(not(target_os = "linux"))]
+                let file_list = None;
                 clipboard_image(
                     cb,
-                    |cb| clipboard_read(cb.get().file_list()),
+                    |cb| read_file_list(file_list, || cb.get().file_list()),
                     |cb| match cb.get_image() {
                         Ok(img) => Ok(Some((img.width as u32, img.height as u32, img.bytes.into_owned()))),
                         Err(error) => {

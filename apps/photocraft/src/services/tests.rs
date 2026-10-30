@@ -831,6 +831,20 @@ fn only_missing_content_reads_as_nothing_to_paste() {
     }
 }
 
+/// #10231: a large xclip image can answer a file-list request with an INCR transfer arboard
+/// abandons, so the image read never gets a turn. When the target list says there is no
+/// `text/uri-list`, the paste must not ask for one at all.
+#[test]
+fn an_image_only_target_list_never_asks_for_files() {
+    assert!(should_read_file_list(None), "an unknown target list keeps the old read");
+    assert!(should_read_file_list(Some(true)));
+    assert!(!should_read_file_list(Some(false)));
+    let got = read_file_list(Some(false), || panic!("must not request text/uri-list"));
+    assert_eq!(got, Ok(None));
+    let paths = read_file_list(Some(true), || Ok(vec![PathBuf::from("a.png")]));
+    assert_eq!(paths, Ok(Some(vec![PathBuf::from("a.png")])));
+}
+
 /// #10231: xclip answers a request for a format it doesn't offer (the copied-file list) with
 /// the image's own type, which arboard reports as an unknown error. The paste still reads the
 /// image instead of stopping at the missing file list.
