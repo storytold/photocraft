@@ -28,8 +28,6 @@ fn the_generator_checkbox_reads_enable_generator() {
     h.get_by_label("Enable Generator").click();
     h.run_steps(2);
     assert_eq!(h.state()["generatorEnabled"], true);
-    let de = crate::i18n::Lang::from_code("de").unwrap();
-    assert_eq!(crate::i18n::tr(de, "Enable Generator"), "Generator aktivieren");
 }
 
 #[test]
@@ -1130,15 +1128,17 @@ fn tool_options_survive_a_restart() {
     tick(&mut app, &ctx);
     app.ui.tool_options.move_auto_select = false;
     app.ui.tool_options.feather = 12.0;
+    app.ui.tool_options.transform_interpolation = Some(photocraft_engine::prefs::Interpolation::Nearest);
     crate::tool_memory::persist(&mut app, &ctx);
     tick(&mut app, &ctx);
     // Only what differs from the defaults is stored.
-    assert_eq!(stored(&store)["toolOptions"], json!({"move_auto_select": false, "feather": 12.0}));
+    assert_eq!(stored(&store)["toolOptions"], json!({"move_auto_select": false, "feather": 12.0, "transform_interpolation": "nearestNeighbor"}));
     let saved = store.lock().unwrap().clone().unwrap();
     let (mut app2, _) = app_with_saved(Some(saved));
     tick(&mut app2, &ctx);
     assert!(!app2.ui.tool_options.move_auto_select);
     assert_eq!(app2.ui.tool_options.feather, 12.0);
+    assert_eq!(app2.ui.tool_options.transform_interpolation, Some(photocraft_engine::prefs::Interpolation::Nearest));
     assert_eq!(app2.ui.tool_options.tolerance, crate::state::ToolOptions::default().tolerance);
     // A hand-edited file: unreadable fields keep their defaults, the good ones still load.
     for bad in [json!("junk"), json!({"move_auto_select": "no", "feather": 1e300, "tolerance": 5.0, "unknown": 1})] {

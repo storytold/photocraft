@@ -22,7 +22,7 @@
 //! - the target is not a plain pixel layer (smart object, type, shape, group: the command edits
 //!   a smart object's filters or refuses), or is itself clipped (a clipped adjustment would act on
 //!   the whole clipping group, not just the target);
-//! - the target uses Blend If (its "This Layer" ranges test the layer's adjusted colour);
+//! - the target uses Blend If (its "Current Layer" ranges test the layer's adjusted colour);
 //! - the target's untouched area is visible (a surface without alpha whose content doesn't cover
 //!   the canvas: the command only edits content);
 //! - the command targets an alpha channel, the Quick Mask or a single colour channel;

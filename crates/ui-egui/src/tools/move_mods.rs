@@ -84,6 +84,11 @@ fn moving(app: &PhotocraftApp) -> bool {
     app.drag.as_ref().is_some_and(|d| d.tool == Tool::Move)
 }
 
+/// The pointer reflects the pending copy, then the latched duplication for the whole drag.
+pub fn copying(app: &PhotocraftApp, alt: bool) -> bool {
+    if moving(app) && app.move_mods.start.is_some() { app.move_mods.alt || app.move_mods.dup_from.is_some() } else { alt }
+}
+
 /// Duplicates the selected layers (the copies become the selection), remembering the history
 /// length before so [`fold_history`] can merge the copy and the move into one step.
 fn duplicate(app: &mut PhotocraftApp) -> Option<usize> {
