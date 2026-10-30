@@ -154,6 +154,7 @@ fn native_options(custom_titlebar: bool) -> eframe::NativeOptions {
             .with_min_inner_size([760.0, 480.0])
             .with_drag_and_drop(true)
             .with_decorations(!custom_titlebar)
+            .with_transparent(true)
             .with_fullsize_content_view(true)
             .with_titlebar_shown(false)
             .with_title_shown(false),
@@ -362,6 +363,7 @@ fn main() -> eframe::Result {
         control: control_port,
         auth,
         automation,
+        no_splash,
         mut launch_options,
     } = launch;
 
@@ -506,6 +508,9 @@ fn main() -> eframe::Result {
             let session = Session::new();
             PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
             let mut app = PhotocraftApp::new(session, services);
+            if !no_splash {
+                app.enable_splash();
+            }
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.custom_titlebar = custom_titlebar;

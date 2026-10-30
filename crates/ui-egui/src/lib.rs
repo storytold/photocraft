@@ -36,6 +36,7 @@ pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
 pub mod screenshot;
+pub mod splash;
 pub mod state;
 pub mod texel_guard;
 pub mod theme;
@@ -433,6 +434,8 @@ pub struct PhotocraftApp {
     /// sent again only when it changes, so idle frames don't spam the backend.
     last_window_title: String,
     fonts_ready: bool,
+    /// Startup splash screen overlay and timing state.
+    pub splash: Option<splash::SplashState>,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
     /// Window › Arrange: the first document of the shown run of tiles, when there are more

@@ -380,7 +380,10 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if !keep_polling(app, ctx) {
         return;
     }
-    if let Some(job) = job_in_view(app)
+    let now = ctx.input(|i| i.time);
+    let splash_active = app.splash.as_ref().is_some_and(|s| s.is_active(now));
+    if !splash_active
+        && let Some(job) = job_in_view(app)
         && !ctx.text_edit_focused()
         && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {

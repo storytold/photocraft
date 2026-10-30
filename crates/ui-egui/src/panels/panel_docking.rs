@@ -617,7 +617,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     open_window_drops(app, ui.ctx(), std::mem::take(&mut output.window_files));
     // Keys pressed in a floating panel's own OS window run the main window's shortcuts.
     let forwarded = std::mem::take(&mut output.forwarded_events);
-    crate::shortcuts::handle_forwarded(app, ui.ctx(), forwarded, output.forwarded_modifiers.unwrap_or_default());
+    let now = ui.ctx().input(|i| i.time);
+    let splash_active = app.splash.as_ref().is_some_and(|s| s.is_active(now));
+    if !splash_active {
+        crate::shortcuts::handle_forwarded(app, ui.ctx(), forwarded, output.forwarded_modifiers.unwrap_or_default());
+    }
     let mut actions = output.actions;
     pin_group_heights(ui.ctx(), &layout, &mut actions);
     for action in actions {

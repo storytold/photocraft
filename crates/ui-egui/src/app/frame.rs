@@ -77,11 +77,13 @@ impl PhotocraftApp {
         discard_ui::guard_window_close(self, ctx);
         // Background jobs: apply finished ones, keep frames coming, Esc cancels (before the
         // shortcuts see Esc).
+        let now = ctx.input(|i| i.time);
+        let splash_active = self.splash.as_ref().is_some_and(|s| s.is_active(now));
         if !screen_picker::tick(self, ctx) {
             jobs_ui::tick(self, ctx);
             #[cfg(not(target_arch = "wasm32"))]
             crate::dialogs::filter_preview_worker::discard_closed(self);
-            if type_tool::in_ui_pass(ctx) {
+            if !splash_active && type_tool::in_ui_pass(ctx) {
                 if self.fonts_ready {
                     shortcuts::handle(self, ctx);
                 } else {
@@ -170,6 +172,25 @@ impl PhotocraftApp {
             // The frame's stage record was started with its input: close it here too.
             self.finish_frame(0.0);
             return;
+        }
+        let now = ctx.input(|i| i.time);
+        if !self.synthetic.is_empty()
+            && let Some(s) = &mut self.splash
+        {
+            s.dismiss();
+            ctx.request_repaint();
+        }
+
+        if let Some(splash) = &mut self.splash {
+            if splash.is_active(now) {
+                splash.show(&ctx, ui);
+                self.automation_input = false;
+                self.finish_frame(0.0);
+                return;
+            } else {
+                self.splash = None;
+                ctx.request_repaint();
+            }
         }
         let t0 = gpu_canvas::now_ms();
         self.perf.stage.ui_start(t0, frame.info().cpu_usage);

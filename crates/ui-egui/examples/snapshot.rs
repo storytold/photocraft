@@ -40,6 +40,7 @@ fn main() {
         .and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?))))
         .unwrap_or((1440.0, 900.0));
     let scale: f32 = arg(&args, "--scale").and_then(|s| s.parse().ok()).unwrap_or(2.0);
+    let splash = args.iter().any(|a| a == "--splash");
     let wayland_notice = args.iter().any(|a| a == "--wayland-notice");
     let update_notice = args.iter().any(|a| a == "--update-notice");
     let script: Vec<(String, Value)> =
@@ -87,6 +88,9 @@ fn main() {
             services.is_wayland = wayland_notice;
             services.xwayland_command = wayland_notice.then(|| "WAYLAND_DISPLAY= photocraft".into());
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+            if splash {
+                app.enable_splash();
+            }
             if update_notice {
                 app.session.updates.status = photocraft_engine::updates_cmds::Status::Available {
                     release: photocraft_engine::updates_cmds::Release {
@@ -131,7 +135,15 @@ fn main() {
             }
         };
     }
-    harness.run_steps(4);
+    if splash {
+        harness.run_steps(2);
+        let img = harness.render().expect("render");
+        img.save(&out).expect("save png");
+        println!("wrote {out} ({}×{})", img.width(), img.height());
+        return;
+    } else {
+        harness.run_steps(4);
+    }
     let ctx = harness.ctx.clone();
     let timing = std::env::var_os("SNAPSHOT_TIMING").is_some();
     for (method, params) in script {
@@ -180,9 +192,11 @@ fn main() {
     while t_settle.elapsed() < std::time::Duration::from_millis(settle_ms) {
         harness.step();
     }
-    // Let fade animations settle.
-    for _ in 0..12 {
-        harness.step();
+    if !splash {
+        // Let fade animations settle.
+        for _ in 0..12 {
+            harness.step();
+        }
     }
     let (req, _rx) = ControlRequest::new("ui.inspect", Value::Null);
     if let Outcome::Done(v) = handle(harness.state_mut(), &ctx, &req) {
