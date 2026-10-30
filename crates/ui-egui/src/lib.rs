@@ -203,6 +203,7 @@ pub use panels::comps_ui;
 pub use panels::doc_props_ui;
 pub use panels::histogram_panel;
 pub use panels::history_menu_ui;
+pub use panels::info_panel_options;
 pub use panels::layer_filter_ui;
 pub use panels::layer_menu_ui;
 pub use panels::layer_props_ui;
@@ -305,8 +306,9 @@ use widgets::tab_strip;
 pub use widgets::text_field_menu;
 pub use widgets::tone;
 
-/// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
-type InfoSampleKey = (i32, i32, u64, u32);
+/// Cached Info sample: document ID, active generation, pixel x/y, revision and Sample Size.
+/// The generation distinguishes reopened native documents that retain their saved ID/revision.
+type InfoSampleKey = (DocId, u64, i32, i32, u64, u32);
 
 pub struct PhotocraftApp {
     pub session: Session,
@@ -325,8 +327,10 @@ pub struct PhotocraftApp {
     navigator_gpu: HashMap<DocId, crate::gpu_canvas::ViewParams>,
     /// Documents whose GPU canvas texture holds the plain document (`canvas::ensure_gpu`).
     navigator_plain: std::collections::HashSet<DocId>,
-    /// The Info panel's Color Sampler readouts for (document, revision) (`panels::sampler_readouts`).
+    /// Color Sampler readouts per document activation and revision (`panels::sampler_readouts`).
     info_samplers: Option<panels::SamplerReadouts>,
+    /// The Info panel's extra-channel readings under the pointer (`panels::pointer_channels`).
+    info_channels: Option<panels::PointerChannels>,
     /// Display profile readings (#569).
     monitors: monitor_status::State,
     checker: Option<egui::TextureHandle>,
@@ -575,7 +579,7 @@ pub struct PhotocraftApp {
     /// Layer hovered on the canvas, highlighted in the Layers panel.
     pub(crate) canvas_hover_layer: Option<photocraft_doc::LayerId>,
     pub(crate) clone_preview: Option<crate::canvas::ClonePreviewCache>,
-    /// Info panel sample cache: ((x, y, revision, Sample Size), composite RGBA).
+    /// Info sample cache: ((document, activation, x, y, revision, Sample Size), composite RGBA).
     info_sample: Option<(InfoSampleKey, [f32; 4])>,
     /// Guide being dragged (from a ruler or with the Move tool).
     pub(crate) guide_drag: Option<rulers::GuideDrag>,

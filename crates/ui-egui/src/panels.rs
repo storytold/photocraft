@@ -33,6 +33,7 @@ pub mod histogram_panel;
 mod history;
 pub mod history_menu_ui;
 mod info;
+pub mod info_panel_options;
 mod layer_drag;
 pub mod layer_filter_ui;
 pub mod layer_menu_ui;
@@ -79,7 +80,7 @@ pub(crate) use history::select_snapshot;
 pub(crate) use history::selected_snapshot;
 #[cfg(test)]
 use info::info_panel;
-pub(crate) use info::{SamplerReadouts, sampler_readouts};
+pub(crate) use info::{PointerChannels, SamplerReadouts, sampler_readouts};
 #[cfg(test)]
 use layer_drag::{background_drop_refused, layer_drop_payload};
 pub(crate) use layer_drag::{dropped_on, layer_drag_edge_scroll};

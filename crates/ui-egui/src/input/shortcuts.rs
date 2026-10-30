@@ -494,6 +494,11 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.camera_raw.is_some() {
         return false;
     }
+    // Info Panel Options owns its keyboard, including Escape; document shortcuts must not
+    // change the canvas or consume the dialog's cancellation key underneath the modal.
+    if app.ui.info_panel_dialog.is_some() {
+        return false;
+    }
     // A foreground save (Save in Background off, #6207) blocks the app until the file is written;
     // only Esc reaches it, to cancel while it still encodes (see `jobs_ui::tick`).
     if crate::jobs_ui::foreground_save(app).is_some() {

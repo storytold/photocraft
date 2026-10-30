@@ -5,9 +5,11 @@
 //! document, are discarded when it closes, and are not saved to `.pcraft` or PSD. Placing, moving
 //! and removing them changes no pixels and adds no History step, so they are not journaled. Each
 //! point reads one composite pixel (no averaging); its values match the Info panel's pointer
-//! readout (RGB 0–255 and colour-managed CMYK percentages, as in the Color Picker).
+//! readout: every colour readout mode ([`Readouts`]) plus the extra channels' ink
+//! ([`channel_readouts`]).
 
 use photocraft_doc::Document;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -33,20 +35,148 @@ pub fn device_cmyk(r: f32, g: f32, b: f32) -> [i32; 4] {
     photocraft_color::convert::rgb_to_cmyk([unit(r), unit(g), unit(b)]).map(|v| (unit(v) * 100.0).round() as i32)
 }
 
+/// Every colour readout of one composite sample, as the Info panel's readout modes show it
+/// (Photoshop's Panel Options › Color Readout): RGB 0–255, colour-managed CMYK percentages,
+/// Grayscale, HSB, HSL, Lab, Web Color, Total Ink and Opacity.
+///
+/// Verified against Photoshop 2027's Info panel (2026-10-28, flat swatches): Grayscale is
+/// `100 − Rec.601 luma` of the encoded RGB (pure red reads K 70 %, gray 128 reads 50 %), whatever
+/// the document's profile (sRGB and Adobe RGB read alike) or the gray working space; Opacity is
+/// the composite alpha under the pointer (a 50 % layer over an opaque layer reads 100 %).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Readouts {
+    pub rgb: [i32; 3],
+    pub cmyk: [i32; 4],
+    /// Grayscale: K %.
+    pub gray: i32,
+    /// Hue 0–359°, saturation %, brightness %.
+    pub hsb: [i32; 3],
+    /// Hue 0–359°, saturation %, lightness %.
+    pub hsl: [i32; 3],
+    /// L 0–100, a and b about −128..127.
+    pub lab: [i32; 3],
+    /// Six lowercase hex digits, `rrggbb`.
+    pub web: String,
+    /// The CMYK percentages added up.
+    pub total_ink: i32,
+    /// Composite alpha %.
+    pub opacity: i32,
+}
+
+/// The readouts of straight-alpha `rgba` (0..1; 32-bit samples outside that are clamped, NaN
+/// reads as 0) in `doc`, whose CMYK profile the CMYK and Total Ink readouts use.
+/// Lab is derived from this RGB composite, not the original Lab channels: native out-of-gamut
+/// Lab values already clipped during RGB compositing cannot be recovered here.
+pub fn readouts(doc: &Document, rgba: [f32; 4]) -> Readouts {
+    let unit = |v: f32| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+    let rgb = [unit(rgba[0]), unit(rgba[1]), unit(rgba[2])];
+    let q = |v: f32| (v * 255.0).round() as i32;
+    let pct = |v: f32| (v * 100.0).round() as i32;
+    let cmyk = photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgb[0], rgb[1], rgb[2]));
+    let [h, s, b] = photocraft_color::convert::rgb_to_hsb_sextant(rgb);
+    let hue = ((h * 60.0).round() as i32).rem_euclid(360);
+    let (mx, mn) = (rgb[0].max(rgb[1]).max(rgb[2]), rgb[0].min(rgb[1]).min(rgb[2]));
+    let (l, d) = ((mx + mn) / 2.0, mx - mn);
+    let sl = if d <= 0.0 { 0.0 } else { d / (1.0 - (2.0 * l - 1.0).abs()).max(f32::EPSILON) };
+    Readouts {
+        rgb: rgb.map(q),
+        cmyk,
+        gray: pct(1.0 - photocraft_color::convert::rgb_to_gray(rgb)),
+        hsb: [hue, pct(s), pct(b)],
+        hsl: [hue, pct(sl), pct(l)],
+        lab: lab(doc, rgb).map(|v| v.round() as i32),
+        web: format!("{:02x}{:02x}{:02x}", q(rgb[0]), q(rgb[1]), q(rgb[2])),
+        total_ink: cmyk.iter().sum(),
+        opacity: pct(unit(rgba[3])),
+    }
+}
+
+/// CIE Lab (D50) of composite `rgb` through the document's profile (the compositor's output
+/// profile, so an Adobe RGB document's red is not read as sRGB red), the same transform Color
+/// Range uses; the sRGB maths only when no transform can be built.
+fn lab(doc: &Document, rgb: [f32; 3]) -> [f32; 3] {
+    let src = crate::color_cmds::composite_profile(doc);
+    match photocraft_cms::cached(&src, photocraft_cms::Builtin::LabD50.profile(), photocraft_cms::TransformOptions::default()) {
+        Ok(t) => {
+            let mut out = [0.0f32; 3];
+            t.eval(&rgb, &mut out);
+            // The Lab profile's normalised encoding (ICC v4) → L 0–100, a and b −128–127.
+            [out[0] * 100.0, out[1] * 255.0 - 128.0, out[2] * 255.0 - 128.0]
+        }
+        Err(_) => photocraft_color::convert::srgb_to_lab(rgb),
+    }
+}
+
+/// One extra channel's reading at a pixel, as Photoshop shows a channel targeted on its own:
+/// ink % for a spot channel (its stored value, 1 = solid ink), masked % for an alpha channel
+/// (`1 − value`: white, selected, reads 0 %).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChannelReadout {
+    pub name: String,
+    pub spot: bool,
+    pub percent: i32,
+}
+
+/// The reading of every extra (alpha and spot) channel of `doc` at pixel `(x, y)`, in
+/// Channels-panel order: one pixel, no averaging. Empty off the canvas.
+pub fn channel_readouts(doc: &Document, x: i32, y: i32) -> Vec<ChannelReadout> {
+    if !doc.bounds().contains(x, y) {
+        return Vec::new();
+    }
+    doc.channels
+        .iter()
+        .map(|ch| {
+            let v = ch.surface.pixel(x, y).first().copied().unwrap_or(0.0);
+            let v = if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) };
+            let ink = if ch.spot.is_some() { v } else { 1.0 - v };
+            ChannelReadout { name: ch.name.clone(), spot: ch.spot.is_some(), percent: (ink * 100.0).round() as i32 }
+        })
+        .collect()
+}
+
+/// Total Spot Ink: every spot channel's ink % at the pixel added up (alpha channels left out). A
+/// separations total, where Photoshop's Total Ink adds up the CMYK plates only.
+pub fn total_spot_ink(channels: &[ChannelReadout]) -> i32 {
+    channels.iter().filter(|c| c.spot).fold(0_i32, |total, c| total.saturating_add(c.percent))
+}
+
 /// The Info-panel values for a sample point at document pixel `pos`: composite RGB 0–255 and
 /// colour-managed CMYK percentages (the document's CMYK profile when it has one). One composite
 /// pixel, no averaging.
 pub fn readout(doc: &Document, pos: [f64; 2]) -> ([i32; 3], [i32; 4]) {
-    let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], 1, crate::sample_cmds::SampleLayers::All);
-    let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as i32;
-    let cmyk = photocraft_color::convert::with_cmyk_space(photocraft_compose::cmyk_space(doc).as_ref(), || device_cmyk(rgba[0], rgba[1], rgba[2]));
-    ([q(rgba[0]), q(rgba[1]), q(rgba[2])], cmyk)
+    let r = readouts(doc, crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], 1, crate::sample_cmds::SampleLayers::All));
+    (r.rgb, r.cmyk)
 }
 
-/// One point as the list command reports it.
+/// One point as the list command reports it: its number and position, every [`Readouts`] field,
+/// `totalSpotInk` ([`total_spot_ink`]) and `channels` ([`channel_readouts`]).
 pub fn point_json(doc: &Document, index: usize, pos: [f64; 2]) -> Value {
-    let (rgb, cmyk) = readout(doc, pos);
-    json!({"index": index, "number": index + 1, "position": [pos[0], pos[1]], "rgb": rgb, "cmyk": cmyk})
+    let rgba = crate::sample_cmds::sample_color(doc, None, pos[0], pos[1], 1, crate::sample_cmds::SampleLayers::All);
+    let mut v = json!({"index": index, "number": index + 1, "position": [pos[0], pos[1]]});
+    if let (Some(o), Ok(Value::Object(r))) = (v.as_object_mut(), serde_json::to_value(readouts(doc, rgba))) {
+        o.extend(r);
+        // Points sit on whole pixels inside the canvas (`pixel`), so the casts are exact.
+        let channels = channel_readouts(doc, pos[0] as i32, pos[1] as i32);
+        o.insert("totalSpotInk".into(), json!(total_spot_ink(&channels)));
+        o.insert("channels".into(), json!(channels));
+    }
+    v
+}
+
+fn sample_channels(s: &mut Session, p: &Value) -> Result<Value> {
+    const CMD: &str = "document.sampleChannels";
+    let c = |k: &str| -> Result<i32> {
+        p.get(k)
+            .and_then(Value::as_f64)
+            .map(f64::floor)
+            .filter(|v| v.is_finite() && *v >= f64::from(i32::MIN) && *v <= f64::from(i32::MAX))
+            .map(|v| v as i32)
+            .ok_or_else(|| bad(CMD, format!("`{k}` must be a finite number (document pixels)")))
+    };
+    let (x, y) = (c("x")?, c("y")?);
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    Ok(json!(channel_readouts(&st.doc, x, y)))
 }
 
 fn list_json(doc: &Document, points: &[[f64; 2]]) -> Value {
@@ -152,7 +282,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Add Color Sampler",
             menu: &[],
             shortcut: None,
-            params: r##"{"x":f64,"y":f64} → the new point {index, number, position, rgb, cmyk}; errors at the 10-point limit or off the canvas"##,
+            params: r##"{"x":f64,"y":f64} → the new point {index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, totalSpotInk, channels:[{name, spot, percent}]}; errors at the 10-point limit or off the canvas"##,
             enabled: has_doc,
             run: add,
             journal: false,
@@ -192,9 +322,19 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Color Samplers",
             menu: &[],
             shortcut: None,
-            params: r##"{} → {max, samplers:[{index, number, position, rgb, cmyk}]}"##,
+            params: r##"{} → {max, samplers:[{index, number, position, rgb, cmyk, gray, hsb, hsl, lab, web, totalInk, opacity, totalSpotInk, channels:[{name, spot, percent}]}]} (every Info panel readout of each point: RGB 0–255, CMYK %, Grayscale K %, HSB, HSL, Lab, web hex, Total Ink % (the CMYK plates), composite Opacity %, Total Spot Ink % (every spot channel added up) and each alpha/spot channel's % as a channel targeted alone reads it)"##,
             enabled: has_doc,
             run: list,
+            journal: false,
+        },
+        CommandSpec {
+            id: "document.sampleChannels",
+            label: "Sample Channels",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"x":i32,"y":i32} → [{name, spot, percent}] (every alpha and spot channel's reading at that pixel, in Channels-panel order: ink % for a spot channel, masked % for an alpha channel with white = 0 %; one pixel, no averaging; empty off the canvas)"##,
+            enabled: has_doc,
+            run: sample_channels,
             journal: false,
         },
     ]

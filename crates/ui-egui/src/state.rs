@@ -413,6 +413,13 @@ pub struct UiState {
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
+    /// Info panel options: which readouts it shows.
+    #[serde(default)]
+    pub info_panel: crate::info_panel_options::InfoPanelState,
+    /// The Info panel's Panel Options dialog while open (the options being edited); never
+    /// restored with a workspace.
+    #[serde(skip)]
+    pub info_panel_dialog: Option<crate::info_panel_options::InfoPanelState>,
     /// Histogram panel options: view, channel, statistics, colours, source.
     #[serde(default)]
     pub histogram_panel: crate::histogram_panel::HistogramPanelState,
@@ -568,6 +575,8 @@ impl Default for UiState {
             docking_collapsed: Vec::new(),
             docking_reveal: None,
             color_panel: Default::default(),
+            info_panel: Default::default(),
+            info_panel_dialog: None,
             brush_section: 0,
             brush_tab: 0,
             brushes_panel: Default::default(),
