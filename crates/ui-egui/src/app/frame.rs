@@ -100,9 +100,7 @@ impl PhotocraftApp {
             }
         }
         // Web drops onto the canvas, read since the last frame: placed below, one at a time.
-        let to_place: Vec<(String, Vec<u8>)> =
-            self.services.place_inbox.as_ref().map(|q| std::mem::take(&mut *q.lock().unwrap_or_else(|e| e.into_inner()))).unwrap_or_default();
-        self.drop_places.extend(to_place.into_iter().map(|(name, bytes)| file_open::DropPlace::Bytes(name, bytes)));
+        self.queue_web_places();
         // Finder double-click / Open With / Dock drops (macOS open-documents events).
         self.drain_os_events(ctx);
         // While files are dragged over the window it gets no pointer events: keep frames coming so
