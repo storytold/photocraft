@@ -1,350 +1,195 @@
-//! Canonical, asset-neutral hierarchy model for picker browsers.
+//! Persistence and projection boundary for the picker-browser hierarchy model.
 //!
-//! This is the browser's runtime model, not a replacement for an asset library's persistence
-//! schema. Adapters project domain assets into this tree and translate validated moves back into
-//! domain commands. Root and group containers both hold an ordered mixture of cards and groups.
+//! The canonical, asset-neutral tree and its move invariants live in `picker_browser_model`.
+//! This module translates that model to and from the existing picker persistence representation.
 
-use std::fmt;
+use std::collections::BTreeMap;
 
-/// Stable identity of one card or group in a browser tree.
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub(crate) struct NodeId(String);
+use super::picker_browser_model::{DropPosition, HierarchyError, HierarchyNode, NodeId, PickerBrowserHierarchy};
+use super::picker_state::{HierarchyOrderEntry, PresetUi};
 
-impl NodeId {
-    /// Create an identity from an adapter-owned stable key.
-    pub(crate) fn new(value: impl Into<String>) -> Self {
-        Self(value.into())
-    }
-
-    /// Return the underlying adapter key.
-    pub(crate) fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl From<&str> for NodeId {
-    fn from(value: &str) -> Self {
-        Self::new(value)
-    }
-}
-
-impl From<String> for NodeId {
-    fn from(value: String) -> Self {
-        Self::new(value)
-    }
-}
-
-impl fmt::Display for NodeId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.0.fmt(f)
-    }
-}
-
-/// The kind of hierarchy node. Only groups may own children.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum NodeKind {
-    /// A draggable asset card.
-    Item,
-    /// A container that may hold cards and other groups.
-    Group,
-}
-
-/// One node in the ordered hierarchy.
+/// Adapter-owned domain identity for projecting a moved hierarchy back to persisted picker state.
+/// Item identity deliberately stores the persisted item key and original group; its current parent
+/// is derived from the canonical tree after the move, not from the ID's original projection path.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct HierarchyNode {
-    /// Stable identity supplied by the asset adapter.
-    pub(crate) id: NodeId,
-    /// Whether this node is a card or a group.
-    pub(crate) kind: NodeKind,
-    /// Ordered children; this must be empty for item nodes.
-    pub(crate) children: Vec<HierarchyNode>,
+pub(crate) enum HierarchyIdentity {
+    Item { group: String, key: String },
+    Group(String),
+    /// A nested folder identified by its owning root group and full folder path.
+    /// This identity is domain-owned and must not be persisted through the legacy
+    /// name-keyed `PresetUi` hierarchy representation.
+    Folder { group: String, path: Vec<String> },
+    /// An item inside a nested folder, qualified by its owning root group and full folder path.
+    FolderItem { group: String, path: Vec<String>, key: String },
 }
 
-impl HierarchyNode {
-    /// Construct an item node.
-    pub(crate) fn item(id: impl Into<NodeId>) -> Self {
-        Self { id: id.into(), kind: NodeKind::Item, children: Vec::new() }
-    }
-
-    /// Construct a group node with ordered children.
-    pub(crate) fn group(id: impl Into<NodeId>, children: Vec<Self>) -> Self {
-        Self { id: id.into(), kind: NodeKind::Group, children }
-    }
-}
-
-/// A container that can receive an appended child.
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub(crate) enum ContainerId {
-    /// The top-level browser sequence.
-    Root,
-    /// The child sequence owned by a group.
-    Group(NodeId),
-}
-
-/// Exact structural destination for a drag operation.
+/// Apply one resolved browser drop and persist the resulting canonical child sequences.
 ///
-/// Before and after are always sibling insertions: the target node determines the destination
-/// container. Append is the only operation that names a container directly, and covers both
-/// appending to a non-empty group and inserting into an empty group or at the end of root.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum DropPosition {
-    /// Insert immediately before the target in its current parent's ordered children.
-    Before { target: NodeId },
-    /// Insert immediately after the target in its current parent's ordered children.
-    After { target: NodeId },
-    /// Insert as the final child of a container.
-    AppendTo { container: ContainerId },
-}
-
-/// Errors produced when a hierarchy mutation cannot be applied safely.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum HierarchyError {
-    /// The source node does not exist.
-    MissingSource(NodeId),
-    /// The requested target node does not exist.
-    MissingTarget(NodeId),
-    /// The requested destination group does not exist.
-    MissingContainer(NodeId),
-    /// An item was used as a destination container.
-    ItemCannotContainChildren(NodeId),
-    /// A group cannot be moved into itself or one of its descendants.
-    Cycle(NodeId),
-    /// The input tree contains duplicate identities or an item with children.
-    InvalidTree,
-}
-
-/// Ordered hierarchy. Every identity occurs exactly once; the root is an implicit container.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct PickerBrowserHierarchy {
-    roots: Vec<HierarchyNode>,
-}
-
-impl PickerBrowserHierarchy {
-    /// Construct and validate a hierarchy from its root-level sequence.
-    pub(crate) fn new(roots: Vec<HierarchyNode>) -> Result<Self, HierarchyError> {
-        let tree = Self { roots };
-        tree.validate()?;
-        Ok(tree)
+/// `identities` is the adapter's reverse map for every node in `hierarchy`; it must remain stable
+/// for the lifetime of that projected tree. Path-qualified `NodeId`s distinguish equal group names
+/// in different branches and remain unchanged while a node moves. No render indices or encoded
+/// `NodeId` strings are interpreted here. A successful move rewrites the existing serialized
+/// hierarchy representation from the resulting tree, retiring stale source tokens and anchors.
+pub(crate) fn commit_hierarchy_move(
+    state: &mut PresetUi,
+    panel: &str,
+    hierarchy: &mut PickerBrowserHierarchy,
+    source: &NodeId,
+    position: &DropPosition,
+    identities: &BTreeMap<NodeId, HierarchyIdentity>,
+) -> Result<(), HierarchyError> {
+    fn count_nodes(nodes: &[HierarchyNode]) -> usize {
+        nodes.iter().map(|node| 1 + count_nodes(node.children())).sum()
     }
 
-    /// Read the ordered root-level sequence.
-    pub(crate) fn roots(&self) -> &[HierarchyNode] {
-        &self.roots
-    }
-
-    /// Find a node by stable identity.
-    pub(crate) fn node(&self, id: &NodeId) -> Option<&HierarchyNode> {
-        fn find<'a>(nodes: &'a [HierarchyNode], id: &NodeId) -> Option<&'a HierarchyNode> {
-            for node in nodes {
-                if &node.id == id {
-                    return Some(node);
-                }
-                if let Some(found) = find(&node.children, id) {
-                    return Some(found);
-                }
+    fn validate_identities(nodes: &[HierarchyNode], identities: &BTreeMap<NodeId, HierarchyIdentity>) -> Result<(), HierarchyError> {
+        for node in nodes {
+            match (node, identities.get(node.id())) {
+                (HierarchyNode::Item(_), Some(HierarchyIdentity::Item { .. })) => {}
+                (HierarchyNode::Group { children, .. }, Some(HierarchyIdentity::Group(_))) => validate_identities(children, identities)?,
+                _ => return Err(HierarchyError::InvalidTree),
             }
-            None
         }
-        find(&self.roots, id)
-    }
-
-    /// Return the immediate parent container of a node (`Root` for a top-level node).
-    pub(crate) fn parent_of(&self, id: &NodeId) -> Option<ContainerId> {
-        fn find(nodes: &[HierarchyNode], id: &NodeId, parent: &ContainerId) -> Option<ContainerId> {
-            for node in nodes {
-                if &node.id == id {
-                    return Some(parent.clone());
-                }
-                if node.kind == NodeKind::Group {
-                    if let Some(found) = find(&node.children, id, &ContainerId::Group(node.id.clone())) {
-                        return Some(found);
-                    }
-                }
-            }
-            None
-        }
-        find(&self.roots, id, &ContainerId::Root)
-    }
-
-    /// Apply one exact insertion operation. Validation occurs before the tree is changed.
-    pub(crate) fn move_node(&mut self, source: &NodeId, position: &DropPosition) -> Result<(), HierarchyError> {
-        self.validate_position(source, position)?;
-        let destination = match position {
-            DropPosition::Before { target } | DropPosition::After { target } => {
-                let parent = self.parent_of(target).ok_or_else(|| HierarchyError::MissingTarget(target.clone()))?;
-                (parent, Some((target.clone(), matches!(position, DropPosition::After { .. }))))
-            }
-            DropPosition::AppendTo { container } => (container.clone(), None),
-        };
-
-        // Resolve the target's sibling index before removal. Adjust it when source and destination
-        // are the same sequence so the result remains immediately adjacent to the target.
-        let target_index = destination
-            .1
-            .as_ref()
-            .and_then(|(target, after)| self.children(&destination.0)?.iter().position(|node| &node.id == target).map(|index| (index, *after)));
-        if destination.1.is_some() && target_index.is_none() {
-            return Err(HierarchyError::MissingTarget(destination.1.as_ref().expect("checked").0.clone()));
-        }
-
-        let source_parent = self.parent_of(source).ok_or_else(|| HierarchyError::MissingSource(source.clone()))?;
-        let source_index = self
-            .children(&source_parent)
-            .and_then(|nodes| nodes.iter().position(|node| &node.id == source))
-            .ok_or_else(|| HierarchyError::MissingSource(source.clone()))?;
-        let mut insertion_index =
-            target_index.map(|(index, after)| index + usize::from(after)).unwrap_or_else(|| self.children(&destination.0).map_or(0, <[_]>::len));
-        if source_parent == destination.0 && source_index < insertion_index {
-            insertion_index -= 1;
-        }
-
-        let moving = self.remove_from(&source_parent, source).ok_or_else(|| HierarchyError::MissingSource(source.clone()))?;
-        let children = self.children_mut(&destination.0).ok_or_else(|| match &destination.0 {
-            ContainerId::Root => HierarchyError::InvalidTree,
-            ContainerId::Group(id) => HierarchyError::MissingContainer(id.clone()),
-        })?;
-        children.insert(insertion_index.min(children.len()), moving);
-        debug_assert!(self.validate().is_ok());
         Ok(())
     }
 
-    /// Check a proposed move without mutating the hierarchy.
-    pub(crate) fn validate_position(&self, source: &NodeId, position: &DropPosition) -> Result<(), HierarchyError> {
-        let source_node = self.node(source).ok_or_else(|| HierarchyError::MissingSource(source.clone()))?;
-        let destination = match position {
-            DropPosition::Before { target } | DropPosition::After { target } => {
-                if target == source {
-                    return Err(HierarchyError::Cycle(source.clone()));
+    // Preflight the complete reverse map before either the hierarchy or serialized state changes.
+    validate_identities(hierarchy.roots(), identities)?;
+    if identities.len() != count_nodes(hierarchy.roots()) {
+        return Err(HierarchyError::InvalidTree);
+    }
+    let resolved = hierarchy.resolve_move(source, position)?;
+    hierarchy.apply_resolved_move(resolved)?;
+
+    fn persist_children(
+        state: &mut PresetUi,
+        panel: &str,
+        parent: &str,
+        nodes: &[HierarchyNode],
+        identities: &BTreeMap<NodeId, HierarchyIdentity>,
+    ) -> Result<(), HierarchyError> {
+        let mut entries = Vec::with_capacity(nodes.len());
+        for node in nodes {
+            let entry = match (node, identities.get(node.id())) {
+                (HierarchyNode::Item(_), Some(HierarchyIdentity::Item { group, key })) if parent.is_empty() => {
+                    HierarchyOrderEntry::RootItem { group: group.clone(), key: key.clone() }
                 }
-                self.parent_of(target).ok_or_else(|| HierarchyError::MissingTarget(target.clone()))?
-            }
-            DropPosition::AppendTo { container } => container.clone(),
-        };
-        if let ContainerId::Group(group) = &destination {
-            let Some(container_node) = self.node(group) else {
-                return Err(HierarchyError::MissingContainer(group.clone()));
+                (HierarchyNode::Item(_), Some(HierarchyIdentity::Item { key, .. })) => HierarchyOrderEntry::Item(key.clone()),
+                (HierarchyNode::Group { .. }, Some(HierarchyIdentity::Group(name))) => HierarchyOrderEntry::Group(name.clone()),
+                _ => return Err(HierarchyError::InvalidTree),
             };
-            if container_node.kind != NodeKind::Group {
-                return Err(HierarchyError::ItemCannotContainChildren(group.clone()));
+            entries.push(entry);
+        }
+        state.set_hierarchy_order(panel, parent, entries);
+        Ok(())
+    }
+
+    fn persist_tree(
+        state: &mut PresetUi,
+        panel: &str,
+        parent: &str,
+        nodes: &[HierarchyNode],
+        identities: &BTreeMap<NodeId, HierarchyIdentity>,
+    ) -> Result<(), HierarchyError> {
+        persist_children(state, panel, parent, nodes, identities)?;
+        for node in nodes {
+            if !node.is_group() {
+                continue;
             }
-            if source_node.kind == NodeKind::Group && (group == source || self.is_descendant_of(group, source)) {
-                return Err(HierarchyError::Cycle(source.clone()));
-            }
+            let Some(HierarchyIdentity::Group(name)) = identities.get(node.id()) else {
+                return Err(HierarchyError::InvalidTree);
+            };
+            persist_tree(state, panel, name, node.children(), identities)?;
         }
         Ok(())
     }
 
-    /// Verify unique identities and the rule that only groups own children.
-    pub(crate) fn validate(&self) -> Result<(), HierarchyError> {
-        fn visit(nodes: &[HierarchyNode], seen: &mut std::collections::BTreeSet<NodeId>) -> Result<(), HierarchyError> {
-            for node in nodes {
-                if !seen.insert(node.id.clone()) || (node.kind == NodeKind::Item && !node.children.is_empty()) {
-                    return Err(HierarchyError::InvalidTree);
-                }
-                visit(&node.children, seen)?;
-            }
-            Ok(())
-        }
-        visit(&self.roots, &mut std::collections::BTreeSet::new())
-    }
-
-    fn is_descendant_of(&self, candidate: &NodeId, ancestor: &NodeId) -> bool {
-        let mut parent = self.parent_of(candidate);
-        while let Some(ContainerId::Group(id)) = parent {
-            if &id == ancestor {
-                return true;
-            }
-            parent = self.parent_of(&id);
-        }
-        false
-    }
-
-    fn children(&self, container: &ContainerId) -> Option<&[HierarchyNode]> {
-        match container {
-            ContainerId::Root => Some(&self.roots),
-            ContainerId::Group(id) => self.node(id).filter(|node| node.kind == NodeKind::Group).map(|node| node.children.as_slice()),
-        }
-    }
-
-    fn children_mut(&mut self, container: &ContainerId) -> Option<&mut Vec<HierarchyNode>> {
-        match container {
-            ContainerId::Root => Some(&mut self.roots),
-            ContainerId::Group(id) => find_group_mut(&mut self.roots, id).map(|node| &mut node.children),
-        }
-    }
-
-    fn remove_from(&mut self, container: &ContainerId, id: &NodeId) -> Option<HierarchyNode> {
-        let children = self.children_mut(container)?;
-        let index = children.iter().position(|node| &node.id == id)?;
-        Some(children.remove(index))
-    }
-}
-
-fn find_group_mut<'a>(nodes: &'a mut [HierarchyNode], id: &NodeId) -> Option<&'a mut HierarchyNode> {
-    for node in nodes {
-        if &node.id == id {
-            return (node.kind == NodeKind::Group).then_some(node);
-        }
-        if let Some(found) = find_group_mut(&mut node.children, id) {
-            return Some(found);
-        }
-    }
-    None
+    persist_tree(state, panel, "", hierarchy.roots(), identities)?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{ContainerId, DropPosition, HierarchyError, HierarchyNode as Node, NodeId, PickerBrowserHierarchy};
+    use std::collections::BTreeMap;
 
-    fn tree() -> PickerBrowserHierarchy {
-        PickerBrowserHierarchy::new(vec![
-            Node::group("A", vec![Node::item("one"), Node::group("B", vec![Node::item("two")]), Node::item("three")]),
-            Node::group("C", vec![]),
+    use super::{HierarchyIdentity, commit_hierarchy_move};
+    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
+    use crate::pickers::picker_state::{HierarchyOrderEntry, PresetUi};
+
+    #[test]
+    fn commit_persists_group_before_card_in_the_mixed_sibling_sequence() {
+        let mut hierarchy = PickerBrowserHierarchy::new(vec![
+            HierarchyNode::group("A", vec![HierarchyNode::item("one"), HierarchyNode::item("two")]),
+            HierarchyNode::group("B", vec![]),
         ])
-        .unwrap()
-    }
+        .unwrap();
+        let identities = BTreeMap::from([
+            (NodeId::from("A"), HierarchyIdentity::Group("A".into())),
+            (NodeId::from("one"), HierarchyIdentity::Item { group: "A".into(), key: "one".into() }),
+            (NodeId::from("two"), HierarchyIdentity::Item { group: "A".into(), key: "two".into() }),
+            (NodeId::from("B"), HierarchyIdentity::Group("B".into())),
+        ]);
+        let mut state = PresetUi::default();
 
-    fn ids(nodes: &[Node]) -> Vec<&str> {
-        nodes.iter().map(|node| node.id.as_str()).collect()
-    }
+        commit_hierarchy_move(
+            &mut state,
+            "gradients",
+            &mut hierarchy,
+            &NodeId::from("B"),
+            &DropPosition::Before { target: NodeId::from("one") },
+            &identities,
+        )
+        .unwrap();
 
-    #[test]
-    fn before_and_after_are_sibling_insertions_at_the_targets_parent() {
-        let mut hierarchy = tree();
-        hierarchy.move_node(&NodeId::from("three"), &DropPosition::Before { target: NodeId::from("one") }).unwrap();
-        assert_eq!(ids(&hierarchy.node(&NodeId::from("A")).unwrap().children), ["three", "one", "B"]);
-        hierarchy.move_node(&NodeId::from("three"), &DropPosition::After { target: NodeId::from("B") }).unwrap();
-        assert_eq!(ids(&hierarchy.node(&NodeId::from("A")).unwrap().children), ["one", "B", "three"]);
-    }
-
-    #[test]
-    fn append_supports_empty_containers_and_root_level_cards() {
-        let mut hierarchy = tree();
-        hierarchy.move_node(&NodeId::from("one"), &DropPosition::AppendTo { container: ContainerId::Group("C".into()) }).unwrap();
-        hierarchy.move_node(&NodeId::from("two"), &DropPosition::AppendTo { container: ContainerId::Root }).unwrap();
-        assert_eq!(ids(&hierarchy.node(&NodeId::from("C")).unwrap().children), ["one"]);
-        assert_eq!(ids(hierarchy.roots()), ["A", "C", "two"]);
-    }
-
-    #[test]
-    fn rejects_cycles_and_item_containers_without_mutating_the_tree() {
-        let mut hierarchy = tree();
-        let before = hierarchy.clone();
         assert_eq!(
-            hierarchy.move_node(&NodeId::from("A"), &DropPosition::AppendTo { container: ContainerId::Group("B".into()) }),
-            Err(HierarchyError::Cycle("A".into()))
+            state.hierarchy_order["gradients"]["A"],
+            [HierarchyOrderEntry::Group("B".into()), HierarchyOrderEntry::Item("one".into()), HierarchyOrderEntry::Item("two".into())]
         );
-        assert_eq!(
-            hierarchy.move_node(&NodeId::from("one"), &DropPosition::AppendTo { container: ContainerId::Group("two".into()) }),
-            Err(HierarchyError::ItemCannotContainChildren("two".into()))
-        );
-        assert_eq!(hierarchy, before);
+        assert_eq!(state.parent_of("gradients", "B"), Some("A"));
     }
 
     #[test]
-    fn same_container_move_keeps_the_requested_adjacency() {
-        let mut hierarchy = tree();
-        hierarchy.move_node(&NodeId::from("one"), &DropPosition::After { target: NodeId::from("three") }).unwrap();
-        assert_eq!(ids(&hierarchy.node(&NodeId::from("A")).unwrap().children), ["B", "three", "one"]);
+    fn commit_moves_cards_into_groups_and_back_to_root_without_losing_identity() {
+        let mut hierarchy = PickerBrowserHierarchy::new(vec![
+            HierarchyNode::group("A", vec![HierarchyNode::item("child")]),
+            HierarchyNode::item("root-card"),
+        ])
+        .unwrap();
+        let identities = BTreeMap::from([
+            (NodeId::from("A"), HierarchyIdentity::Group("A".into())),
+            (NodeId::from("child"), HierarchyIdentity::Item { group: "A".into(), key: "child".into() }),
+            (NodeId::from("root-card"), HierarchyIdentity::Item { group: "Original".into(), key: "root-card".into() }),
+        ]);
+        let mut state = PresetUi::default();
+
+        commit_hierarchy_move(
+            &mut state,
+            "gradients",
+            &mut hierarchy,
+            &NodeId::from("root-card"),
+            &DropPosition::AppendTo { container: ContainerId::Group("A".into()) },
+            &identities,
+        )
+        .unwrap();
+        assert_eq!(state.hierarchy_order["gradients"]["A"], [HierarchyOrderEntry::Item("child".into()), HierarchyOrderEntry::Item("root-card".into())]);
+        assert_eq!(state.hierarchy_order["gradients"][""], [HierarchyOrderEntry::Group("A".into())]);
+
+        commit_hierarchy_move(
+            &mut state,
+            "gradients",
+            &mut hierarchy,
+            &NodeId::from("root-card"),
+            &DropPosition::AppendTo { container: ContainerId::Root },
+            &identities,
+        )
+        .unwrap();
+        let [HierarchyOrderEntry::Group(group), HierarchyOrderEntry::RootItem { group: source_group, key }] = state.hierarchy_order["gradients"][""].as_slice() else {
+            panic!("the lifted card must be persisted as one typed root item");
+        };
+        assert_eq!(group, "A");
+        assert_eq!(source_group, "Original");
+        assert_eq!(key, "root-card");
+        assert_eq!(state.hierarchy_order["gradients"]["A"], [HierarchyOrderEntry::Item("child".into())]);
+        assert_eq!(state.parent_of("gradients", "A"), None);
     }
 }

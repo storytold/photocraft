@@ -413,6 +413,21 @@ fn pattern_batch_delete_keeps_the_library_when_one_name_is_missing() {
 }
 
 #[test]
+fn pattern_item_edits_reject_a_stale_or_wrong_group_identity() {
+    let mut s = session(8);
+    // Bricks belongs to Textures, not Geometric. A group-qualified picker action must not
+    // mutate it if the occurrence was stale or its owning group was misidentified.
+    assert!(s.execute("pattern.presets.edit", json!({"action": "rename", "preset": "Bricks", "group": "Geometric", "name": "Wrong Group"})).is_err());
+    assert!(s.execute("pattern.presets.edit", json!({"action": "delete", "preset": "Bricks", "group": "Geometric"})).is_err());
+    assert!(crate::pattern_cmds::resolve(&s, "Bricks").is_some());
+
+    s.execute("pattern.presets.edit", json!({"action": "rename", "preset": "Bricks", "group": "Textures", "name": "Renamed Brick"})).unwrap();
+    assert!(crate::pattern_cmds::resolve(&s, "Renamed Brick").is_some());
+    s.execute("pattern.presets.edit", json!({"action": "delete", "preset": "Renamed Brick", "group": "Textures"})).unwrap();
+    assert!(crate::pattern_cmds::resolve(&s, "Renamed Brick").is_none());
+}
+
+#[test]
 fn pattern_batch_delete_rejects_non_string_members_without_deleting() {
     for invalid in [json!(null), json!(7), json!({})] {
         let mut s = session(8);

@@ -136,7 +136,7 @@ fn dragging_a_brush_shows_its_tip_preview() {
             let payload = egui::DragAndDrop::payload::<BrushDrag>(&h.ctx);
             let expected_scope = if mode == 2 { "brush-picker" } else { "brushes" };
             assert!(
-                matches!(payload.as_deref(), Some(BrushDrag::Preset { scope, key }) if scope.as_str() == expected_scope && key == &current_identity),
+                matches!(payload.as_deref(), Some(BrushDrag::Preset { scope, key, .. }) if scope.as_str() == expected_scope && key == &current_identity),
                 "drag key must identify this preset occurrence: {identity} → {current_identity}; payload: {payload:?}"
             );
             assert!(h.query_by_role_and_label(Role::Image, &name).is_some(), "dragged brush needs a real tip thumbnail, not only its name");

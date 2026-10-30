@@ -64,6 +64,18 @@ fn pattern_key(s: &Session, p: &Value, cmd: &str) -> Result<photocraft_doc::Patt
     crate::pattern_cmds::resolve(s, key).ok_or_else(|| bad(cmd, format!("no pattern \"{key}\" (see pattern.presets.list)")))
 }
 
+/// When supplied by a picker occurrence, `group` must still own the library pattern.
+/// Pattern ids are globally stable, but this prevents a stale group-qualified action from
+/// renaming or deleting an item after it has been moved to another group.
+fn validate_item_group(s: &Session, key: &str, group: Option<&str>, cmd: &str) -> Result<()> {
+    let Some(group) = group else { return Ok(()) };
+    let id = photocraft_doc::pattern::find(&s.patterns.items, key, key)
+        .map(|pattern| pattern.id.as_str())
+        .ok_or_else(|| bad(cmd, format!("no library pattern \"{key}\"")))?;
+    let owns = s.presets.pattern_groups.iter().any(|g| g.name == group && g.items.iter().any(|item| item == id));
+    if owns { Ok(()) } else { Err(bad(cmd, format!("pattern \"{key}\" is not in group \"{group}\""))) }
+}
+
 fn active_pattern_fill(s: &Session) -> Option<photocraft_doc::LayerId> {
     let d = s.active()?;
     let id = d.active_layer?;
@@ -122,7 +134,11 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
     let action = req_str(p, "action", CMD)?.to_string();
     // Rename/delete act on the library pattern (by id or name).
     let r = match action.as_str() {
-        "rename" => super::call(s, "pattern.rename", json!({"pattern": req_str(p, "preset", CMD)?, "name": req_str(p, "name", CMD)?}))?,
+        "rename" => {
+            let key = req_str(p, "preset", CMD)?;
+            validate_item_group(s, key, str_param(p, "group"), CMD)?;
+            super::call(s, "pattern.rename", json!({"pattern": key, "name": req_str(p, "name", CMD)?}))?
+        }
         "delete" => {
             let keys: Vec<String> = match p.get("preset") {
                 Some(Value::Array(a)) => a
@@ -138,6 +154,7 @@ fn edit(s: &mut Session, p: &Value) -> Result<Value> {
             // removed when a later name was missing, and Undo cannot put a preset back (#4103).
             let mut ids = Vec::new();
             for k in &keys {
+                validate_item_group(s, k, str_param(p, "group"), CMD)?;
                 // Only library patterns can be deleted here; a document-only pattern must
                 // fail the whole batch up front rather than midway through it.
                 let id = photocraft_doc::pattern::find(&s.patterns.items, k, k)

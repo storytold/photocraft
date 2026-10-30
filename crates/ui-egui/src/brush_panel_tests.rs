@@ -122,7 +122,7 @@ fn brush_settings_texture_browse_uses_unified_group_card_drop_order() {
 
     let state =
         h.ctx.data(|data| data.get_temp::<crate::pickers::picker_state::PresetUi>(state_id)).expect("compact browser state persists across popup frames");
-    assert_eq!(state.group_parent["brush-texture-patterns"][&moving_group], target_group);
+    assert_eq!(state.parent_of("brush-texture-patterns", &moving_group), Some(target_group.as_str()));
     assert_eq!(
         &state.hierarchy_order["brush-texture-patterns"][&target_group][0..2],
         &[

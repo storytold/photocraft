@@ -48,6 +48,8 @@ pub(crate) fn paint_gradient(ui: &egui::Ui, rect: Rect, stops: &[(f32, [f32; 4])
 pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (foreground, background) = (app.session.tools.foreground, app.session.tools.background);
     let library = app.session.presets.gradients.clone();
+    // Keep the adapter projection domain-shaped and unsorted. The shared browser combines these
+    // groups with saved parent/sibling state into its canonical runtime hierarchy each frame.
     let groups: Vec<GroupView> = library
         .iter()
         .map(|group| GroupView {
@@ -57,6 +59,9 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .collect();
     let mut state = std::mem::take(&mut app.ui.presets_ui);
     let canvas = canvas_drop_rect(app);
+    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str| {
+        run(app, "gradient.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group})).is_some()
+    };
     let mut adapter = BrowserAdapter {
         panel: "gradients",
         groups: &groups,
@@ -71,10 +76,11 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
-        capabilities: BrowserCapabilities::default(),
+        capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
         nested_group_context_menu: None,
+        hierarchy_item_move: Some(&mut commit_item_move),
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
             let group = &groups[group_index];
@@ -91,16 +97,26 @@ pub(crate) fn gradients_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     let events =
         picker_shell(ui, &mut state, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new gradient"))), ..Default::default() });
+    drop(adapter);
+    drop(commit_item_move);
     app.ui.presets_ui = state;
 
     for event in events {
         match &event {
             BrowserAction::Select(key) => {
-                app.ui.presets_ui.selected.insert("gradients".into(), key.clone());
+                app.ui.presets_ui.set_selected("gradients", key);
+                run(app, "gradient.presets.select", json!({"preset": key}));
+            }
+            BrowserAction::SelectItem { group, group_path, key } => {
+                app.ui.presets_ui.set_selected_item("gradients", group, group_path, key);
                 run(app, "gradient.presets.select", json!({"preset": key}));
             }
             BrowserAction::Activate(key) | BrowserAction::Drop(key, _) => {
-                app.ui.presets_ui.selected.insert("gradients".into(), key.clone());
+                app.ui.presets_ui.set_selected("gradients", key);
+                run(app, "gradient.presets.apply", json!({"preset": key}));
+            }
+            BrowserAction::ActivateItem { group, group_path, key } => {
+                app.ui.presets_ui.set_selected_item("gradients", group, group_path, key);
                 run(app, "gradient.presets.apply", json!({"preset": key}));
             }
             // Only the brush browser supports nested-group context actions.
@@ -174,7 +190,7 @@ mod tests {
         h.run_steps(3);
 
         let state = &h.state().ui.presets_ui;
-        assert_eq!(state.group_parent["gradients"][moving_group], *target_group);
+        assert_eq!(state.parent_of("gradients", moving_group), Some(target_group.as_str()));
         assert_eq!(state.hierarchy_order["gradients"][target_group].get(0), Some(&HierarchyOrderEntry::Group(moving_group.clone())));
         assert_eq!(state.hierarchy_order["gradients"][target_group].get(1), Some(&HierarchyOrderEntry::Item(target_item)));
         let names: Vec<String> = headers.iter().map(|(name, _)| name.clone()).collect();

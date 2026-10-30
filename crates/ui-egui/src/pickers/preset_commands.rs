@@ -24,9 +24,13 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
                 // Pattern item keys are stable library IDs, not display names. Keep the selected ID
                 // when a pattern is renamed; other standard presets use their names as identity.
                 if prefix != "pattern.presets" && app.ui.presets_ui.selected.get(panel) == Some(k) {
-                    app.ui.presets_ui.selected.insert(panel.into(), n.clone());
+                    if let Some(group) = app.ui.presets_ui.selected_group.get(panel).cloned() {
+                        app.ui.presets_ui.set_selected_item(panel, &group, &[], n);
+                    } else {
+                        app.ui.presets_ui.set_selected(panel, n);
+                    }
                 }
-                if panel == "gradients" {
+                if prefix != "pattern.presets" {
                     app.ui.presets_ui.rename_hierarchy_item(panel, k, n);
                 }
                 true
@@ -34,16 +38,36 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
                 false
             }
         }
+        BrowserAction::RenameItem { group, group_path, key, text } => {
+            if run(app, &edit, json!({"action": "rename", "preset": key, "group": group, "name": text})).is_some() {
+                if prefix != "pattern.presets" && app.ui.presets_ui.is_selected_item(panel, group, group_path, key) {
+                    app.ui.presets_ui.set_selected_item(panel, group, group_path, text);
+                }
+                // Pattern keys are stable library IDs rather than display names. Keep their
+                // hierarchy identity unchanged; other adapters rename the exact folder occurrence.
+                if prefix != "pattern.presets" {
+                    app.ui.presets_ui.rename_hierarchy_item_at_path(panel, group, group_path, key, text);
+                }
+                true
+            } else { false }
+        }
         BrowserAction::Delete(k) => {
             if run(app, &edit, json!({"action": "delete", "preset": k})).is_some() {
-                app.ui.presets_ui.selected.remove(panel);
-                if panel == "gradients" {
-                    app.ui.presets_ui.delete_hierarchy_item(panel, k);
-                }
+                app.ui.presets_ui.clear_selected(panel);
+                app.ui.presets_ui.delete_hierarchy_item(panel, k);
                 true
             } else {
                 false
             }
+        }
+        BrowserAction::DeleteItem { group, group_path, key } => {
+            if run(app, &edit, json!({"action": "delete", "preset": key, "group": group})).is_some() {
+                if app.ui.presets_ui.is_selected_item(panel, group, group_path, key) {
+                    app.ui.presets_ui.clear_selected(panel);
+                }
+                app.ui.presets_ui.delete_hierarchy_item_at_path(panel, group, group_path, key);
+                true
+            } else { false }
         }
         BrowserAction::Move(k, g) => run(app, &edit, json!({"action": "move", "preset": k, "to": g})).is_some(),
         BrowserAction::MoveItem(k, g, index) => {
@@ -86,7 +110,7 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
         BrowserAction::New => {
             if let Some(r) = run(app, &format!("{prefix}.new"), new_params) {
                 let name = r.get("name").or(r.get("pattern")).and_then(Value::as_str).unwrap_or_default().to_string();
-                app.ui.presets_ui.selected.insert(panel.into(), name.clone());
+                app.ui.presets_ui.set_selected(panel, &name);
                 if prefix != "pattern.presets" {
                     app.ui.presets_ui.renaming = Some((panel.into(), name.clone(), name));
                 }
@@ -96,7 +120,9 @@ pub(crate) fn generic(app: &mut PhotocraftApp, panel: &str, prefix: &str, e: &Br
             }
         }
         BrowserAction::Select(_)
+        | BrowserAction::SelectItem { .. }
         | BrowserAction::Activate(_)
+        | BrowserAction::ActivateItem { .. }
         | BrowserAction::Drop(_, _)
         | BrowserAction::RenameNestedGroup { .. }
         | BrowserAction::DeleteNestedGroup { .. }

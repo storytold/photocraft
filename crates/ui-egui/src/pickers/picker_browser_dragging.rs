@@ -4,11 +4,9 @@
 //! module maps that region to one exact [`DropPosition`]. The indicator is carried by the same
 //! candidate, so preview and release can consume the same resolved result.
 
-#![allow(dead_code)] // Staged as the new drag contract; existing browser adapters are not migrated yet.
-
 use egui::{Pos2, Rect};
 
-use crate::pickers::picker_browser_hierarchy::{ContainerId, DropPosition, HierarchyError, NodeId, PickerBrowserHierarchy};
+use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyError, NodeId, PickerBrowserHierarchy};
 
 /// The geometric part of a hit target, independent of its semantic destination.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -36,6 +34,10 @@ pub(crate) struct DropHitRegion {
     pub(crate) hit_rect: Rect,
     /// Exact geometry for the indicator (which need not equal the hit area).
     pub(crate) indicator_rect: Rect,
+    /// Structural depth; deeper targets win when hit areas overlap.
+    pub(crate) depth: usize,
+    /// Stable registration order used to break equal-depth overlaps.
+    pub(crate) order: usize,
 }
 
 /// Shape and exact bounds of the drop preview.
@@ -58,6 +60,8 @@ pub(crate) enum DropRejection {
     SameNode,
     /// The receiving container does not accept children.
     UnsupportedContainer,
+    /// The move would exceed the supported group nesting depth.
+    DepthExceeded,
     /// The source or target disappeared from the current hierarchy.
     StaleNode,
     /// The hierarchy itself is malformed.
@@ -82,6 +86,13 @@ pub(crate) struct DropCandidate {
     pub(crate) indicator: DropIndicator,
     /// Commit eligibility, kept separate from the meaning of the position.
     pub(crate) validity: DropValidity,
+}
+
+impl DropCandidate {
+    /// Whether this candidate is eligible for commit.
+    pub(crate) fn is_valid(&self) -> bool {
+        self.validity == DropValidity::Valid
+    }
 }
 
 /// Transient pointer state for an active drag. It does not mirror or mutate the hierarchy.
@@ -112,6 +123,43 @@ impl DragSession {
     pub(crate) fn commit_position(&self) -> Option<&DropPosition> {
         self.candidate.as_ref().filter(|candidate| candidate.validity == DropValidity::Valid).map(|candidate| &candidate.position)
     }
+}
+
+/// Return the winning hit's index so the browser can take the payload from that exact response.
+/// Deepest targets win; equal-depth targets prefer later (more specific) registrations.
+pub(crate) fn arbitrate_hit_index(pointer: Pos2, hits: &[DropHitRegion]) -> Option<usize> {
+    hits.iter()
+        .enumerate()
+        .filter(|(_, hit)| hit.hit_rect.contains(pointer))
+        .max_by_key(|(_, hit)| (hit.depth, hit.order))
+        .map(|(index, _)| index)
+}
+
+/// Paint the indicator carried by the resolved candidate. Invalid candidates use egui's error
+/// color so the same geometry communicates rejection without ever looking like a valid drop.
+pub(crate) fn paint_candidate(ui: &egui::Ui, candidate: &DropCandidate, color: egui::Color32) {
+    let color = if candidate.is_valid() { color } else { ui.visuals().error_fg_color };
+    match &candidate.indicator {
+        DropIndicator::InsertionLine { rect } | DropIndicator::RootAppendLine { rect } => {
+            ui.painter().rect_filled(*rect, egui::CornerRadius::ZERO, color);
+        }
+        DropIndicator::ContainerHighlight { rect } => {
+            for border in container_outline_rects(*rect) {
+                ui.painter().rect_filled(border, egui::CornerRadius::ZERO, color);
+            }
+        }
+    }
+}
+
+/// Inward-facing four-pixel border used when a validated candidate appends into a group.
+/// Keeping the geometry separate makes the preview's thickness independently reviewable.
+fn container_outline_rects(rect: Rect) -> [Rect; 4] {
+    [
+        Rect::from_min_max(rect.min, Pos2::new(rect.right(), (rect.top() + 4.0).min(rect.bottom()))),
+        Rect::from_min_max(Pos2::new(rect.left(), (rect.bottom() - 4.0).max(rect.top())), rect.max),
+        Rect::from_min_max(rect.min, Pos2::new((rect.left() + 4.0).min(rect.right()), rect.bottom())),
+        Rect::from_min_max(Pos2::new((rect.right() - 4.0).max(rect.left()), rect.top()), rect.max),
+    ]
 }
 
 /// Convert a geometric hit region into one semantic operation and its matching indicator.
@@ -149,14 +197,15 @@ pub(crate) fn resolve_drop_candidate(source: &NodeId, hit: &DropHitRegion, hiera
         Err(HierarchyError::ItemCannotContainChildren(_) | HierarchyError::MissingContainer(_)) => DropValidity::Invalid(DropRejection::UnsupportedContainer),
         Err(HierarchyError::MissingSource(_) | HierarchyError::MissingTarget(_)) => DropValidity::Invalid(DropRejection::StaleNode),
         Err(HierarchyError::InvalidTree) => DropValidity::Invalid(DropRejection::InvalidHierarchy),
+        Err(HierarchyError::DepthExceeded) => DropValidity::Invalid(DropRejection::DepthExceeded),
     };
     Some(DropCandidate { position, indicator, validity })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{DropHitRegion, DropIndicator, DropRejection, DropValidity, PointerRegion, resolve_drop_candidate};
-    use crate::pickers::picker_browser_hierarchy::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
+    use super::{DropHitRegion, DropIndicator, DropRejection, DropValidity, PointerRegion, arbitrate_hit_index, container_outline_rects, resolve_drop_candidate};
+    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
     use egui::{Pos2, Rect};
 
     fn hit(region: PointerRegion, target: Option<&str>, container: Option<ContainerId>) -> DropHitRegion {
@@ -166,6 +215,8 @@ mod tests {
             region,
             hit_rect: Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(110.0, 40.0)),
             indicator_rect: Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(110.0, 24.0)),
+            depth: 0,
+            order: 0,
         }
     }
 
@@ -181,6 +232,19 @@ mod tests {
 
         let trailing = resolve_drop_candidate(&NodeId::from("card"), &hit(PointerRegion::TrailingEdge, Some("other"), None), &hierarchy()).unwrap();
         assert_eq!(trailing.position, DropPosition::After { target: "other".into() });
+    }
+
+    #[test]
+    fn dragging_a_group_onto_a_card_uses_that_cards_parent_sequence() {
+        let candidate = resolve_drop_candidate(
+            &NodeId::from("other"),
+            &hit(PointerRegion::TrailingEdge, Some("card"), None),
+            &hierarchy(),
+        )
+        .unwrap();
+        assert_eq!(candidate.position, DropPosition::After { target: "card".into() });
+        assert_eq!(candidate.validity, DropValidity::Valid);
+        assert!(candidate.is_valid());
     }
 
     #[test]
@@ -200,6 +264,7 @@ mod tests {
         let candidate = resolve_drop_candidate(&NodeId::from("card"), &hit(PointerRegion::LeadingEdge, Some("card"), None), &hierarchy()).unwrap();
         assert_eq!(candidate.position, DropPosition::Before { target: "card".into() });
         assert_eq!(candidate.validity, DropValidity::Invalid(DropRejection::SameNode));
+        assert!(!candidate.is_valid());
     }
 
     #[test]
@@ -211,5 +276,46 @@ mod tests {
             resolve_drop_candidate(&NodeId::from("parent"), &hit(PointerRegion::GroupBody, None, Some(ContainerId::Group("child".into()))), &hierarchy)
                 .unwrap();
         assert_eq!(candidate.validity, DropValidity::Invalid(DropRejection::WouldCreateCycle));
+        assert!(!candidate.is_valid());
+    }
+
+    #[test]
+    fn arbitration_prefers_deepest_then_latest_hit() {
+        let pointer = Pos2::new(20.0, 25.0);
+        let mut shallow = hit(PointerRegion::LeadingEdge, Some("other"), None);
+        let mut deep = hit(PointerRegion::TrailingEdge, Some("other"), None);
+        shallow.depth = 1;
+        deep.depth = 2;
+        assert_eq!(arbitrate_hit_index(pointer, &[deep.clone(), shallow.clone()]), Some(0));
+        deep.depth = 1;
+        assert_eq!(arbitrate_hit_index(pointer, &[shallow, deep.clone()]), Some(1));
+    }
+
+    #[test]
+    fn root_append_is_an_explicit_container_end_candidate() {
+        let candidate = resolve_drop_candidate(
+            &NodeId::from("card"),
+            &hit(PointerRegion::ContainerEnd, None, Some(ContainerId::Root)),
+            &hierarchy(),
+        )
+        .unwrap();
+        assert_eq!(candidate.position, DropPosition::AppendTo { container: ContainerId::Root });
+        assert_eq!(candidate.validity, DropValidity::Valid);
+    }
+
+    #[test]
+    fn group_append_preview_uses_an_inward_four_pixel_outline() {
+        let target = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(210.0, 80.0));
+
+        let [top, bottom, left, right] = container_outline_rects(target);
+
+        assert_eq!(top.height(), 4.0);
+        assert_eq!(bottom.height(), 4.0);
+        assert_eq!(left.width(), 4.0);
+        assert_eq!(right.width(), 4.0);
+        assert_eq!(top.top(), target.top());
+        assert_eq!(bottom.bottom(), target.bottom());
+        assert_eq!(left.left(), target.left());
+        assert_eq!(right.right(), target.right());
     }
 }

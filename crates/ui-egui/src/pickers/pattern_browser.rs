@@ -117,6 +117,9 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let canvas = canvas_drop_rect(app);
     let ctx = ui.ctx().clone();
+    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str| {
+        run(app, "pattern.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group})).is_some()
+    };
     let mut adapter = BrowserAdapter {
         panel: "patterns",
         groups: &groups,
@@ -131,10 +134,11 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
-        capabilities: BrowserCapabilities::default(),
+        capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
         item_context_menu: Some(crate::pickers::asset_browser::standard_item_context_menu),
         group_context_menu: Some(crate::pickers::asset_browser::standard_group_context_menu),
         nested_group_context_menu: None,
+        hierarchy_item_move: Some(&mut commit_item_move),
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
             if let Some(pattern) =
@@ -152,15 +156,25 @@ pub(crate) fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut adapter,
         ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new pattern from the selection"))), ..Default::default() },
     );
+    drop(adapter);
+    drop(commit_item_move);
     app.ui.presets_ui = st;
     for event in events {
         match &event {
             BrowserAction::Select(key) => {
-                app.ui.presets_ui.selected.insert("patterns".into(), key.clone());
+                app.ui.presets_ui.set_selected("patterns", key);
+                run(app, "pattern.presets.select", json!({"pattern": key}));
+            }
+            BrowserAction::SelectItem { group, group_path, key } => {
+                app.ui.presets_ui.set_selected_item("patterns", group, group_path, key);
                 run(app, "pattern.presets.select", json!({"pattern": key}));
             }
             BrowserAction::Activate(key) | BrowserAction::Drop(key, _) => {
-                app.ui.presets_ui.selected.insert("patterns".into(), key.clone());
+                app.ui.presets_ui.set_selected("patterns", key);
+                run(app, "pattern.presets.apply", json!({"pattern": key}));
+            }
+            BrowserAction::ActivateItem { group, group_path, key } => {
+                app.ui.presets_ui.set_selected_item("patterns", group, group_path, key);
                 run(app, "pattern.presets.apply", json!({"pattern": key}));
             }
             // Only the brush browser supports nested-group context actions.
@@ -223,10 +237,10 @@ pub(crate) fn compact_item_context_menu(
     ev: &mut Vec<BrowserAction>,
 ) {
     if ui.button(tl!("Rename…")).clicked() {
-        st.renaming = Some((panel.to_string(), item.key.clone(), item.name.clone()));
+        st.item_renaming = Some(crate::pickers::picker_state::ItemRenameState { panel: panel.to_string(), group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone(), text: item.name.clone() });
         compact_context_menu_close_later(ui, panel);
     } else if ui.button(tl!("Delete")).clicked() {
-        ev.push(BrowserAction::Delete(item.key.clone()));
+        ev.push(BrowserAction::DeleteItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() });
         compact_context_menu_close_later(ui, panel);
     } else {
         let mut move_to = None;
@@ -277,7 +291,7 @@ pub(crate) fn compact_pattern_browser(
         state.toggled.extend(groups.iter().skip(1).map(|g| format!("{panel}/{}", crate::pickers::picker_state::escape_hierarchy_key_part(&g.name))));
         state
     });
-    state.selected.insert(panel.into(), selected.to_string());
+    state.set_selected(panel, selected);
     state.sizes.entry(panel.into()).or_insert(40.0);
     let browser_h = max_h.min(ui.available_height());
     let parent_menu_id = egui::containers::menu::MenuState::from_ui(ui, |_, stack| stack.id);
@@ -303,12 +317,15 @@ pub(crate) fn compact_pattern_browser(
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
-        // Compact pickers use the same scoped drag contract as full panels. Selection closes the
-        // popup; dragging items between groups or reordering/nesting group headers keeps it open.
-        capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true },
+        // Compact pickers use the same scoped hierarchy resolver as full panels. Selection closes
+        // the popup; same-group item ordering and group hierarchy changes keep it open. Intentional
+        // exception: there is no compact-picker command context for cross-group membership moves,
+        // so the absent callback rejects those candidates rather than persisting a UI-only move.
+        capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true, canonical_hierarchy_drag: true },
         item_context_menu: Some(compact_item_context_menu),
         group_context_menu: Some(compact_group_context_menu),
         nested_group_context_menu: None,
+        hierarchy_item_move: None,
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, paint_state: ItemPaintState| {
             if let Some(pattern) =
@@ -339,6 +356,11 @@ pub(crate) fn compact_pattern_browser(
                         if id != selected {
                             picked = Some(id);
                         }
+                        browser_ui.close();
+                    }
+                    BrowserAction::SelectItem { group, group_path, key } | BrowserAction::ActivateItem { group, group_path, key } => {
+                        state.set_selected_item(panel, &group, &group_path, &key);
+                        if key != selected { picked = Some(key); }
                         browser_ui.close();
                     }
                     BrowserAction::RenameNestedGroup { .. } | BrowserAction::DeleteNestedGroup { .. } => {}
@@ -420,13 +442,11 @@ pub(crate) fn apply_compact_pattern_actions(app: &mut PhotocraftApp, ctx: &egui:
         // The shared preset command translator clears the panel selection after every delete.
         // Compact consumers keep their own selection key, so deleting an unrelated pattern must
         // not clear the Brush Texture picker's current pattern.
-        let selected_before = if matches!(event, BrowserAction::Delete(_)) { app.ui.presets_ui.selected.get(panel).cloned() } else { None };
+        let deleted_key = match &event { BrowserAction::Delete(key) | BrowserAction::DeleteItem { key, .. } => Some(key.as_str()), _ => None };
+        let selected_before = deleted_key.and_then(|_| app.ui.presets_ui.selected.get(panel).cloned());
         if generic(app, panel, "pattern.presets", &event, json!({})) {
-            if let (BrowserAction::Delete(key), Some(selected)) = (&event, selected_before)
-                && selected != *key
-            {
-                app.ui.presets_ui.selected.insert(panel.into(), selected);
-            }
+            if let (Some(key), Some(selected)) = (deleted_key, selected_before)
+                && selected != key { app.ui.presets_ui.selected.insert(panel.into(), selected); }
             let state_id = egui::Id::new(("compact-pattern-browser", panel));
             ctx.data_mut(|data| {
                 if let Some(mut state) = data.get_temp::<PresetUi>(state_id) {
@@ -436,11 +456,46 @@ pub(crate) fn apply_compact_pattern_actions(app: &mut PhotocraftApp, ctx: &egui:
                         BrowserAction::Delete(key) if state.selected.get(panel) == Some(key) => {
                             state.selected.remove(panel);
                         }
+                        BrowserAction::DeleteItem { key, .. } if state.selected.get(panel) == Some(key) => { state.selected.remove(panel); }
                         _ => {}
                     }
                     data.insert_temp(state_id, state);
                 }
             });
         }
+    }
+}
+
+#[cfg(test)]
+mod hierarchy_drop_tests {
+    use crate::pickers::asset_browser_interaction::card_drop_hit;
+    use crate::pickers::picker_browser_dragging::{PointerRegion, resolve_drop_candidate};
+    use crate::pickers::picker_browser_model::{DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
+    use egui::{Pos2, Rect};
+
+    #[test]
+    fn list_and_grid_card_edges_resolve_to_the_same_sibling_positions() {
+        let moving = NodeId::item("Patterns", "moving-pattern");
+        let target = NodeId::item("Patterns", "target-pattern");
+        let hierarchy = PickerBrowserHierarchy::new(vec![HierarchyNode::group(
+            NodeId::group("Patterns"),
+            vec![HierarchyNode::item(moving.clone()), HierarchyNode::item(target.clone())],
+        )])
+        .unwrap();
+        let rect = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(110.0, 80.0));
+
+        let grid_before = card_drop_hit(rect, Pos2::new(20.0, 50.0), true, target.clone(), 1, 0);
+        let list_before = card_drop_hit(rect, Pos2::new(60.0, 25.0), false, target.clone(), 1, 0);
+        let grid_after = card_drop_hit(rect, Pos2::new(100.0, 50.0), true, target.clone(), 1, 0);
+        let list_after = card_drop_hit(rect, Pos2::new(60.0, 75.0), false, target.clone(), 1, 0);
+
+        assert_eq!(grid_before.region, PointerRegion::LeadingEdge);
+        assert_eq!(list_before.region, PointerRegion::LeadingEdge);
+        assert_eq!(grid_after.region, PointerRegion::TrailingEdge);
+        assert_eq!(list_after.region, PointerRegion::TrailingEdge);
+        assert_eq!(resolve_drop_candidate(&moving, &grid_before, &hierarchy).unwrap().position, DropPosition::Before { target: target.clone() });
+        assert_eq!(resolve_drop_candidate(&moving, &list_before, &hierarchy).unwrap().position, DropPosition::Before { target: target.clone() });
+        assert_eq!(resolve_drop_candidate(&moving, &grid_after, &hierarchy).unwrap().position, DropPosition::After { target: target.clone() });
+        assert_eq!(resolve_drop_candidate(&moving, &list_after, &hierarchy).unwrap().position, DropPosition::After { target });
     }
 }

@@ -6,6 +6,8 @@
 use egui::{Pos2, Rect};
 
 use crate::PhotocraftApp;
+use crate::pickers::picker_browser_dragging::{DropHitRegion, PointerRegion};
+use crate::pickers::picker_browser_model::{ContainerId, NodeId};
 use crate::theme::Tokens;
 
 /// Canvas drop bounds used by preset-browser adapters, excluding the ruler strips.
@@ -19,6 +21,8 @@ pub(crate) enum AssetDrag {
     Preset {
         scope: String,
         key: String,
+        /// Exact hierarchy identity for canonical drag arbitration. Legacy consumers may omit it.
+        node_id: Option<NodeId>,
     },
     /// Any group node, including a nested group. `path` is empty for a root group.
     Group {
@@ -26,6 +30,8 @@ pub(crate) enum AssetDrag {
         name: String,
         path: Vec<String>,
     },
+    /// Canonical group source with an exact path-qualified node identity.
+    CanonicalGroup { scope: String, node_id: NodeId },
 }
 
 /// Shared header hit convention: the upper third inserts before; the rest nests inside.
@@ -49,6 +55,79 @@ pub(crate) fn item_row_edge_targets(area: Rect, item_rect: Rect, first: bool, la
         .then(|| Rect::from_min_max(Pos2::new(item_rect.right(), item_rect.top()), Pos2::new(area.right(), item_rect.bottom())))
         .filter(|rect| rect.is_positive());
     (left, right)
+}
+
+/// Capture a card's leading/trailing half as a semantic sibling insertion target. The returned
+/// hit rectangle remains the card bounds; indicator geometry is a separate narrow line.
+pub(crate) fn card_drop_hit(rect: Rect, pointer: Pos2, grid: bool, target: NodeId, depth: usize, order: usize) -> DropHitRegion {
+    let after = item_drop_after(rect, pointer, grid);
+    let indicator_rect = if grid {
+        let x = if after { rect.right() } else { rect.left() };
+        Rect::from_min_max(Pos2::new(x - 2.0, rect.top()), Pos2::new(x + 2.0, rect.bottom()))
+    } else {
+        let y = if after { rect.bottom() } else { rect.top() };
+        Rect::from_min_max(Pos2::new(rect.left(), y - 2.0), Pos2::new(rect.right(), y + 2.0))
+    };
+    DropHitRegion {
+        target: Some(target),
+        container: None,
+        region: if after { PointerRegion::TrailingEdge } else { PointerRegion::LeadingEdge },
+        hit_rect: rect,
+        indicator_rect,
+        depth,
+        order,
+    }
+}
+
+/// Capture a group header: its leading third inserts before the group and its body appends inside.
+pub(crate) fn group_header_drop_hit(
+    rect: Rect,
+    pointer: Pos2,
+    target: NodeId,
+    depth: usize,
+    order: usize,
+) -> DropHitRegion {
+    let before = header_drop_before(rect, pointer);
+    let indicator_rect = if before {
+        group_insertion_marker_rect(rect, true)
+    } else {
+        rect
+    };
+    DropHitRegion {
+        target: before.then_some(target.clone()),
+        container: (!before).then_some(ContainerId::Group(target)),
+        region: if before { PointerRegion::LeadingEdge } else { PointerRegion::GroupBody },
+        hit_rect: rect,
+        indicator_rect,
+        depth,
+        order,
+    }
+}
+
+/// Capture an append target spanning a group's visible subtree (e.g. the indent column).
+pub(crate) fn group_append_hit(hit_rect: Rect, indicator_rect: Rect, group: NodeId, depth: usize, order: usize) -> DropHitRegion {
+    DropHitRegion {
+        target: None,
+        container: Some(ContainerId::Group(group)),
+        region: PointerRegion::GroupBody,
+        hit_rect,
+        indicator_rect,
+        depth,
+        order,
+    }
+}
+
+/// Capture the explicit end of the root sibling sequence, including an empty browser's drop area.
+pub(crate) fn root_append_hit(rect: Rect, indicator_rect: Rect, order: usize) -> DropHitRegion {
+    DropHitRegion {
+        target: None,
+        container: Some(ContainerId::Root),
+        region: PointerRegion::ContainerEnd,
+        hit_rect: rect,
+        indicator_rect,
+        depth: 0,
+        order,
+    }
 }
 
 /// Semantic destination for dragging a root or nested group onto a hierarchy header.
@@ -98,7 +177,9 @@ fn group_insertion_marker_rect(rect: Rect, before: bool) -> Rect {
 
 #[cfg(test)]
 mod insertion_marker_tests {
-    use super::{group_drop_outline_rects, group_insertion_marker_rect};
+    use super::{card_drop_hit, group_append_hit, group_drop_outline_rects, group_header_drop_hit, group_insertion_marker_rect, root_append_hit};
+    use crate::pickers::picker_browser_model::{ContainerId, NodeId};
+    use crate::pickers::picker_browser_dragging::PointerRegion;
     use egui::{Pos2, Rect};
 
     #[test]
@@ -123,6 +204,36 @@ mod insertion_marker_tests {
         assert_eq!(right.width(), 4.0);
         assert_eq!(left.left(), target.left());
         assert_eq!(right.right(), target.right());
+    }
+
+    #[test]
+    fn card_and_group_hit_regions_keep_hit_and_indicator_geometry_separate() {
+        let card = Rect::from_min_max(Pos2::new(10.0, 30.0), Pos2::new(110.0, 70.0));
+        let hit = card_drop_hit(card, Pos2::new(90.0, 40.0), true, NodeId::from("card"), 1, 2);
+        assert_eq!(hit.hit_rect, card);
+        assert_eq!(hit.region, PointerRegion::TrailingEdge);
+        assert_eq!(hit.indicator_rect.width(), 4.0);
+
+        let header = Rect::from_min_max(Pos2::new(10.0, 80.0), Pos2::new(210.0, 110.0));
+        let before = group_header_drop_hit(header, Pos2::new(20.0, 85.0), NodeId::from("group"), 0, 0);
+        assert_eq!(before.region, PointerRegion::LeadingEdge);
+        assert_eq!(before.indicator_rect.width(), header.width());
+        assert_eq!(before.indicator_rect.height(), 4.0);
+
+        let body = group_header_drop_hit(header, Pos2::new(100.0, 100.0), NodeId::from("group"), 0, 0);
+        assert_eq!(body.region, PointerRegion::GroupBody);
+        assert_eq!(body.container, Some(ContainerId::Group(NodeId::from("group"))));
+    }
+
+    #[test]
+    fn append_hit_regions_name_their_destination_container() {
+        let rect = Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(30.0, 80.0));
+        let group = group_append_hit(rect, rect, NodeId::from("group"), 2, 4);
+        assert_eq!(group.region, PointerRegion::GroupBody);
+        assert_eq!(group.container, Some(ContainerId::Group(NodeId::from("group"))));
+        let root = root_append_hit(rect, rect, 5);
+        assert_eq!(root.region, PointerRegion::ContainerEnd);
+        assert_eq!(root.container, Some(ContainerId::Root));
     }
 }
 
@@ -157,6 +268,31 @@ pub(crate) fn hierarchy_group_drop(src_group: &str, src_path: &[String], target_
 /// Build the shared payload for a hierarchy header.
 pub(crate) fn asset_browser_header_payload(scope: &str, group: &str, group_path: &[String]) -> AssetDrag {
     AssetDrag::Group { scope: scope.to_string(), name: group.to_string(), path: group_path.to_vec() }
+}
+
+/// Register a draggable group source without installing any legacy target/release consumer.
+pub(crate) fn asset_browser_header_drag_source(response: &egui::Response, scope: &str, group: &str, group_path: &[String]) {
+    response.dnd_set_drag_payload(asset_browser_header_payload(scope, group, group_path));
+}
+
+/// Register a canonical hierarchy node as a draggable header using its exact typed identity.
+pub(crate) fn asset_browser_header_drag_source_with_id(response: &egui::Response, scope: &str, node_id: NodeId) {
+    response.dnd_set_drag_payload(AssetDrag::CanonicalGroup { scope: scope.to_owned(), node_id });
+}
+
+/// Register a card source with its exact canonical identity (keys may repeat across groups).
+pub(crate) fn asset_browser_item_drag_source_with_id(response: &egui::Response, scope: &str, key: &str, node_id: NodeId) {
+    response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string(), node_id: Some(node_id) });
+}
+
+/// Take the browser's one-shot release payload after a canonical hit has won arbitration.
+/// Call at most once per frame; legacy response helpers retain their existing ownership outside
+/// the canonical resolver.
+pub(crate) fn asset_browser_take_release(ctx: &egui::Context) -> Option<AssetDrag> {
+    if !ctx.input(|input| input.pointer.any_released()) {
+        return None;
+    }
+    egui::DragAndDrop::take_payload::<AssetDrag>(ctx).map(|payload| payload.as_ref().clone())
 }
 
 /// Shared drag target for group headers, including scoped drop indicators.
@@ -223,9 +359,9 @@ pub(crate) fn asset_browser_item_target(
     key: &str,
     grid: bool,
 ) -> Option<AssetDrag> {
-    response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string() });
+    response.dnd_set_drag_payload(AssetDrag::Preset { scope: scope.to_string(), key: key.to_string(), node_id: None });
     let hovered = response.dnd_hover_payload::<AssetDrag>().map(|payload| payload.as_ref().clone());
-    if matches!(&hovered, Some(AssetDrag::Preset { scope: drag_scope, key: dragged }) if drag_scope.as_str() == scope && dragged.as_str() != key) {
+    if matches!(&hovered, Some(AssetDrag::Preset { scope: drag_scope, key: dragged, .. }) if drag_scope.as_str() == scope && dragged.as_str() != key) {
         let after = ui.ctx().pointer_interact_pos().is_some_and(|p| item_drop_after(rect, p, grid));
         // Across a row break, use the edge of the card under the pointer rather than
         // jumping to the other row. This keeps exactly one marker visible at a time.
@@ -242,7 +378,7 @@ pub(crate) fn asset_browser_item_target(
     response
         .dnd_release_payload::<AssetDrag>()
         .map(|payload| payload.as_ref().clone())
-        .filter(|drag| matches!(drag, AssetDrag::Preset { scope: drag_scope, key: dragged } if drag_scope == scope && dragged != key))
+        .filter(|drag| matches!(drag, AssetDrag::Preset { scope: drag_scope, key: dragged, .. } if drag_scope == scope && dragged != key))
 }
 
 /// A group dragged onto an item is inserted immediately before or after that card in its

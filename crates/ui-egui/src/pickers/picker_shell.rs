@@ -83,6 +83,7 @@ pub(crate) fn picker_shell(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut B
         let footer_actions = crate::pickers::picker_footer::draw(ui, st, &panel, footer);
         events.extend(footer_actions.into_iter().map(|action| match action {
             crate::pickers::picker_footer::FooterAction::Delete(key) => BrowserAction::Delete(key),
+            crate::pickers::picker_footer::FooterAction::DeleteItem { group, group_path, key } => BrowserAction::DeleteItem { group, group_path, key },
             crate::pickers::picker_footer::FooterAction::New => BrowserAction::New,
             crate::pickers::picker_footer::FooterAction::NewGroup => BrowserAction::NewGroup,
         }));

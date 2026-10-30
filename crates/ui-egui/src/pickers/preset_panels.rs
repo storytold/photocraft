@@ -118,6 +118,9 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     for g in &src {
         texes.push(g.items.iter().map(|s| style_texture(app, &ctx, s)).collect());
     }
+    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str| {
+        run(app, "style.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group})).is_some()
+    };
     let mut adapter = BrowserAdapter {
         panel: "styles",
         groups: &groups,
@@ -132,10 +135,11 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
-        capabilities: BrowserCapabilities::default(),
+        capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
         nested_group_context_menu: None,
+        hierarchy_item_move: Some(&mut commit_item_move),
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
             ui.painter().rect_filled(rect, 2.0, t.field);
@@ -149,14 +153,20 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut adapter,
         ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new style from the selected layer"))), ..Default::default() },
     );
+    drop(adapter);
+    drop(commit_item_move);
     app.ui.presets_ui = st;
     let shift = ui.input(|i| i.modifiers.shift);
     for e in events {
         match &e {
             BrowserAction::Select(k) | BrowserAction::Activate(k) => {
-                app.ui.presets_ui.selected.insert("styles".into(), k.clone());
+                app.ui.presets_ui.set_selected("styles", k);
                 // Clicking applies to the selected layers (⇧ adds to their effects).
                 run(app, "style.presets.apply", json!({"preset": k, "add": shift}));
+            }
+            BrowserAction::SelectItem { group, group_path, key } | BrowserAction::ActivateItem { group, group_path, key } => {
+                app.ui.presets_ui.set_selected_item("styles", group, group_path, key);
+                run(app, "style.presets.apply", json!({"preset": key, "add": shift}));
             }
             BrowserAction::Drop(k, pos) => {
                 // Dropping on the canvas styles the layer under the pointer's selection: the active layer.
@@ -187,6 +197,9 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
+    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str| {
+        run(app, "shape.presets.edit", json!({"action": "move", "preset": key, "group": source_group, "to": destination_group})).is_some()
+    };
     let mut adapter = BrowserAdapter {
         panel: "shapes",
         groups: &groups,
@@ -201,10 +214,11 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
-        capabilities: BrowserCapabilities::default(),
+        capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
         nested_group_context_menu: None,
+        hierarchy_item_move: Some(&mut commit_item_move),
         paint_group: None,
         paint_item: &mut |ui, rect, group_index, item_index, _paint_state: ItemPaintState| {
             let texture = shape_texture(&ctx, &src[group_index].items[item_index]);
@@ -218,19 +232,31 @@ pub fn shapes_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         &mut adapter,
         ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new shape from the current path"))), ..Default::default() },
     );
+    drop(adapter);
+    drop(commit_item_move);
     app.ui.presets_ui = st;
     let fill = shape_fill(app);
     for e in events {
         match &e {
             BrowserAction::Select(k) => {
                 // Selecting a shape picks it for the Custom Shape tool (and switches to it).
-                app.ui.presets_ui.selected.insert("shapes".into(), k.clone());
+                app.ui.presets_ui.set_selected("shapes", k);
                 app.ui.presets_ui.custom_shape = k.clone();
+                app.ui.tool = Tool::CustomShape;
+            }
+            BrowserAction::SelectItem { group, group_path, key } => {
+                app.ui.presets_ui.set_selected_item("shapes", group, group_path, key);
+                app.ui.presets_ui.custom_shape = key.clone();
                 app.ui.tool = Tool::CustomShape;
             }
             BrowserAction::Activate(k) => {
                 app.ui.presets_ui.custom_shape = k.clone();
                 run(app, "shape.presets.place", json!({"preset": k, "fill": fill}));
+            }
+            BrowserAction::ActivateItem { group, group_path, key } => {
+                app.ui.presets_ui.set_selected_item("shapes", group, group_path, key);
+                app.ui.presets_ui.custom_shape = key.clone();
+                run(app, "shape.presets.place", json!({"preset": key, "fill": fill}));
             }
             BrowserAction::Drop(k, pos) => {
                 app.ui.presets_ui.custom_shape = k.clone();
@@ -687,8 +713,8 @@ mod tests {
         assert!(matches!(l.content, photocraft_doc::LayerContent::Shape(_)));
     }
 
-    /// Root group moves use the canonical hierarchy sequence; legacy groupOrder remains a read
-    /// fallback for old saved UI state.
+    /// Root group moves use the canonical hierarchy sequence; legacy groupOrder is normalized
+    /// into that sequence when old saved UI state is read.
     #[test]
     fn moving_a_nested_group_reorders_like_the_dock_tabs() {
         let names: Vec<String> = ["Grays", "Pastel", "Pure", "Dark"].iter().map(|s| s.to_string()).collect();
@@ -696,7 +722,7 @@ mod tests {
         assert_eq!(st.display_order("swatches", &names), vec![0, 1, 2, 3]);
         st.move_group("swatches", &names, "Pastel", None);
         assert_eq!(st.hierarchy_order["swatches"][""], ["Grays", "Pure", "Dark", "Pastel"].map(|name| HierarchyOrderEntry::Group(name.into())));
-        assert!(!st.group_order.contains_key("swatches"), "new root order does not write the legacy field");
+        assert!(serde_json::to_value(&st).unwrap().get("groupOrder").is_none(), "new root order does not write the legacy field");
         st.move_group("swatches", &names, "Pastel", Some("Grays"));
         assert_eq!(st.hierarchy_order["swatches"][""], ["Pastel", "Grays", "Pure", "Dark"].map(|name| HierarchyOrderEntry::Group(name.into())));
         assert_eq!(st.display_order("swatches", &names), vec![1, 0, 2, 3]);
@@ -707,12 +733,11 @@ mod tests {
         for (from, before) in [("Nope", None), ("Grays", Some("Grays"))] {
             let mut m = PresetUi::default();
             m.move_group("swatches", &names, from, before);
-            assert!(m.hierarchy_order.is_empty() && m.group_order.is_empty(), "{from} {before:?}");
+            assert!(m.hierarchy_order.is_empty(), "{from} {before:?}");
             assert_eq!(m.display_order("swatches", &names), vec![0, 1, 2, 3]);
         }
         // A missing group in a saved order follows the rest in library order.
-        let mut m = PresetUi::default();
-        m.group_order.insert("swatches".into(), vec!["Dark".into(), "Grays".into()]);
+        let m: PresetUi = serde_json::from_value(json!({"groupOrder": {"swatches": ["Dark", "Grays"]}})).unwrap();
         assert_eq!(m.display_order("swatches", &names), vec![3, 0, 1, 2]);
     }
 
@@ -725,26 +750,30 @@ mod tests {
         st.nest_group("gradients", &names, "Grandchild", Some("Child"));
         st.nest_group("gradients", &names, "Parent", Some("Grandchild")); // would create a cycle
 
-        assert_eq!(st.group_parent["gradients"]["Child"], "Parent");
-        assert_eq!(st.group_parent["gradients"]["Grandchild"], "Child");
-        assert!(!st.group_parent["gradients"].contains_key("Parent"));
+        assert_eq!(st.parent_of("gradients", "Child"), Some("Parent"));
+        assert_eq!(st.parent_of("gradients", "Grandchild"), Some("Child"));
+        assert_eq!(st.parent_of("gradients", "Parent"), None);
         assert!(st.toggled.contains("gradients/Child"), "moving a group must not reset its open state");
         assert_eq!(st.nested_display_order("gradients", &names), vec![(0, 0), (1, 1), (2, 2), (3, 0)]);
         let saved = serde_json::to_value(&st).unwrap();
         assert_eq!(saved["groupParent"]["gradients"]["Child"], "Parent");
         assert!(saved.get("group_parent").is_none(), "saved UI state uses the stable camelCase key");
         let legacy: PresetUi = serde_json::from_value(json!({"group_parent":{"gradients":{"Child":"Parent"}}})).unwrap();
-        assert_eq!(legacy.group_parent["gradients"]["Child"], "Parent");
+        assert_eq!(legacy.parent_of("gradients", "Child"), Some("Parent"));
 
-        st.group_order.insert("gradients".into(), names.clone());
+        st.set_hierarchy_order(
+            "gradients",
+            "",
+            ["Parent", "Sibling"].map(|name| HierarchyOrderEntry::Group(name.into())).to_vec(),
+        );
         st.toggled.insert("gradients/Parent/Inner".into());
         st.rename_group("gradients", "Parent", "Renamed");
-        assert_eq!(st.group_parent["gradients"]["Child"], "Renamed");
-        assert_eq!(st.group_order["gradients"][0], "Renamed");
+        assert_eq!(st.parent_of("gradients", "Child"), Some("Renamed"));
+        assert_eq!(st.hierarchy_order["gradients"][""][0], HierarchyOrderEntry::Group("Renamed".into()));
         assert!(st.toggled.contains("gradients/Renamed/Inner"));
         st.delete_group("gradients", "Renamed");
-        assert!(!st.group_parent["gradients"].contains_key("Child"), "children of a deleted group become roots");
-        assert!(!st.group_order["gradients"].iter().any(|name| name == "Renamed"));
+        assert_eq!(st.parent_of("gradients", "Child"), None, "children of a deleted group become roots");
+        assert!(!st.hierarchy_order["gradients"][""].contains(&HierarchyOrderEntry::Group("Renamed".into())));
         assert!(!st.toggled.iter().any(|key| key.starts_with("gradients/Renamed")));
 
         // Slash-containing labels are encoded as one component so they cannot collide with a
@@ -773,7 +802,7 @@ mod tests {
         );
 
         st.nest_group("gradients", &names, "Child", None);
-        assert!(!st.group_parent["gradients"].contains_key("Child"));
+        assert_eq!(st.parent_of("gradients", "Child"), None);
     }
 
     #[test]
@@ -785,15 +814,15 @@ mod tests {
 
         // Dropping on the upper edge of a nested header inserts before it at the same level.
         st.drop_group_on_header("gradients", &names, "Sibling", "Grandchild", true);
-        assert_eq!(st.group_parent["gradients"]["Sibling"], "Child");
+        assert_eq!(st.parent_of("gradients", "Sibling"), Some("Child"));
         assert_eq!(st.nested_display_order("gradients", &names), vec![(0, 0), (1, 1), (3, 2), (2, 2)]);
 
         // Dropping on the body nests into the target, just like the Brushes panel.
         st.drop_group_on_header("gradients", &names, "Sibling", "Parent", false);
-        assert_eq!(st.group_parent["gradients"]["Sibling"], "Parent");
+        assert_eq!(st.parent_of("gradients", "Sibling"), Some("Parent"));
         // A source cannot be dropped before its own descendant, which would make a cycle.
         st.drop_group_on_header("gradients", &names, "Parent", "Grandchild", true);
-        assert!(!st.group_parent["gradients"].contains_key("Parent"));
+        assert_eq!(st.parent_of("gradients", "Parent"), None);
     }
 
     #[test]
@@ -853,6 +882,7 @@ mod tests {
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
+            hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -896,6 +926,7 @@ mod tests {
             item_context_menu: Some(standard_item_context_menu),
             group_context_menu: Some(standard_group_context_menu),
             nested_group_context_menu: None,
+            hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -989,10 +1020,11 @@ mod tests {
                 list_item_height: None,
                 domain_hierarchy_actions: false,
             },
-            capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: false, activation: false },
+            capabilities: BrowserCapabilities { item_drag: false, item_drop: false, group_drag: false, selection: false, activation: false, canonical_hierarchy_drag: false },
             item_context_menu: None,
             group_context_menu: None,
             nested_group_context_menu: None,
+            hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -1251,6 +1283,7 @@ mod tests {
             item_context_menu: Some(consumer_item_menu),
             group_context_menu: Some(consumer_group_menu),
             nested_group_context_menu: None,
+            hierarchy_item_move: None,
             paint_group: None,
             paint_item: &mut |_, _, _, _, _: ItemPaintState| {},
             paint_list_item: None,
@@ -1284,19 +1317,23 @@ mod tests {
         assert!(matches!(h.state().last(), Some(BrowserAction::DeleteGroup(group)) if group == "Only group"));
     }
 
-    /// #3658: the group order persists with the UI state and reads leniently (an old state has no
-    /// field, and garbage in one never fails the whole state).
+    /// #3658: legacy groupOrder migrates to canonical mixed sibling order and reads leniently.
     #[test]
-    fn group_order_persists_and_reads_leniently() {
+    fn legacy_group_order_migrates_and_reads_leniently() {
         let old: PresetUi = serde_json::from_value(json!({"sizes": {"swatches": 22.0}})).unwrap();
-        assert!(old.group_order.is_empty(), "an older state without the field still loads");
-        let mut st = PresetUi::default();
-        st.group_order.insert("swatches".into(), vec!["Dark".into(), "Grays".into()]);
-        let back: PresetUi = serde_json::from_value(serde_json::to_value(&st).unwrap()).unwrap();
-        assert_eq!(back.group_order.get("swatches").unwrap(), &["Dark", "Grays"]);
+        assert!(old.hierarchy_order.is_empty(), "an older state without the field still loads");
+        let st: PresetUi = serde_json::from_value(json!({"groupOrder": {"swatches": ["Dark", "Grays"]}})).unwrap();
+        assert_eq!(
+            st.hierarchy_order["swatches"][""],
+            ["Dark", "Grays"].map(|name| HierarchyOrderEntry::Group(name.into()))
+        );
+        let saved = serde_json::to_value(&st).unwrap();
+        assert!(saved.get("groupOrder").is_none(), "new writes use only the canonical hierarchy sequence");
+        let back: PresetUi = serde_json::from_value(saved).unwrap();
+        assert_eq!(back.display_order("swatches", &["Grays".into(), "Dark".into()]), vec![1, 0]);
         for bad in [json!("x"), json!(7), json!({"swatches": "paths"}), json!({"swatches": [1, null, {"a": 1}]})] {
             let back: PresetUi = serde_json::from_value(json!({"groupOrder": bad})).unwrap();
-            assert!(back.group_order.get("swatches").is_none_or(Vec::is_empty), "{bad}");
+            assert!(back.hierarchy_order.get("swatches").is_none_or(|orders| orders.get("").is_none_or(Vec::is_empty)), "{bad}");
         }
     }
 

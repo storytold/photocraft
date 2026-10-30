@@ -66,8 +66,8 @@ pub fn use_swatch(app: &mut PhotocraftApp, name: &str, background: bool) {
 
 /// The Swatches panel body.
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    let lib = &app.session.presets.swatches;
-    let groups: Vec<GroupView> = lib
+    let library = app.session.presets.swatches.clone();
+    let groups: Vec<GroupView> = library
         .iter()
         .map(|g| GroupView {
             name: g.name.clone(),
@@ -76,7 +76,12 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         .collect();
     let mut st = std::mem::take(&mut app.ui.presets_ui);
     let table = colors(app, ui.ctx());
-    let canvas = app.last_canvas_rect;
+    // Swatches are applied by clicking; dragging a swatch onto the canvas has no action. Keep
+    // hierarchy reordering enabled without advertising a dead canvas-drop destination.
+    let canvas = Rect::NOTHING;
+    let mut commit_item_move = |source_group: &str, key: &str, destination_group: &str| {
+        run(app, "swatches.move", json!({"swatch": key, "group": source_group, "to": destination_group})).is_some()
+    };
     // In a very short dock, the menu and footer need priority over the optional search row.
     // Preserve the user's search preference so it returns when the panel is tall enough again.
     let compact = ui.available_height() < 90.0;
@@ -100,10 +105,13 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             list_item_height: None,
             domain_hierarchy_actions: false,
         },
-        capabilities: BrowserCapabilities::default(),
+        // Swatches use canonical card/group targets; dropping onto the canvas remains unsupported
+        // because this adapter intentionally registers no canvas drop target.
+        capabilities: BrowserCapabilities { canonical_hierarchy_drag: true, ..BrowserCapabilities::default() },
         item_context_menu: Some(standard_item_context_menu),
         group_context_menu: Some(standard_group_context_menu),
         nested_group_context_menu: None,
+        hierarchy_item_move: Some(&mut commit_item_move),
         paint_group: None,
         paint_item: &mut |ui, rect: Rect, group_index, item_index, _paint_state: ItemPaintState| {
             let color = table.get(group_index).and_then(|items| items.get(item_index)).copied().unwrap_or(Color32::GRAY);
@@ -113,6 +121,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     let events =
         picker_shell(ui, &mut st, &mut adapter, ShellOptions { footer: Some(FooterOptions::standard(tl!("Create new swatch"))), ..Default::default() });
+    drop(adapter);
+    drop(commit_item_move);
     if compact {
         if let Some(was_visible) = search_was_visible {
             st.search_visible.insert(PANEL.into(), was_visible);
@@ -129,16 +139,24 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
     let sel = |app: &mut PhotocraftApp, k: &str| {
-        app.ui.presets_ui.selected.insert(PANEL.into(), k.to_string());
+        app.ui.presets_ui.set_selected(PANEL, k);
     };
     match e {
         BrowserAction::Select(k) => {
             sel(app, &k);
             use_swatch(app, &k, background);
         }
+        BrowserAction::SelectItem { group, group_path, key } => {
+            app.ui.presets_ui.set_selected_item(PANEL, &group, &group_path, &key);
+            use_swatch(app, &key, background);
+        }
         BrowserAction::Activate(k) => {
             sel(app, &k);
             app.ui.presets_ui.renaming = Some((PANEL.into(), k.clone(), k));
+        }
+        BrowserAction::ActivateItem { group, group_path, key } => {
+            app.ui.presets_ui.set_selected_item(PANEL, &group, &group_path, &key);
+            app.ui.presets_ui.renaming = Some((PANEL.into(), key.clone(), key));
         }
         // Swatches don't drop onto the canvas.
         BrowserAction::Drop(..) => {}
@@ -150,10 +168,24 @@ fn handle(app: &mut PhotocraftApp, e: BrowserAction, background: bool) {
                 }
             }
         }
+        BrowserAction::RenameItem { group, group_path, key, text } => {
+            if run(app, "swatches.rename", json!({"swatch": key, "name": text})).is_some() {
+                app.ui.presets_ui.rename_hierarchy_item_in_group(PANEL, &group, &key, &text);
+                if app.ui.presets_ui.is_selected_item(PANEL, &group, &group_path, &key) {
+                    app.ui.presets_ui.set_selected_item(PANEL, &group, &group_path, &text);
+                }
+            }
+        }
         BrowserAction::Delete(k) => {
             if run(app, "swatches.delete", json!({"swatch": k})).is_some() {
-                app.ui.presets_ui.selected.remove(PANEL);
+                app.ui.presets_ui.clear_selected(PANEL);
                 app.ui.presets_ui.delete_hierarchy_item(PANEL, &k);
+            }
+        }
+        BrowserAction::DeleteItem { group, group_path, key } => {
+            if run(app, "swatches.delete", json!({"swatch": key})).is_some() {
+                if app.ui.presets_ui.is_selected_item(PANEL, &group, &group_path, &key) { app.ui.presets_ui.clear_selected(PANEL); }
+                app.ui.presets_ui.delete_hierarchy_item_in_group(PANEL, &group, &key);
             }
         }
         BrowserAction::Move(k, g) => drop(run(app, "swatches.move", json!({"swatch": k, "to": g}))),
@@ -564,7 +596,7 @@ mod tests {
         assert_eq!(names.get(order[1]).map(String::as_str), Some(first.as_str()));
         // The reorder is remembered by name (not by the positions it happened to have).
         assert_eq!(h.state().ui.presets_ui.hierarchy_order[PANEL][""][0], crate::pickers::picker_state::HierarchyOrderEntry::Group(last.clone()));
-        assert!(!h.state().ui.presets_ui.group_order.contains_key(PANEL), "root order uses the canonical hierarchy field");
+        assert!(serde_json::to_value(&h.state().ui.presets_ui).unwrap().get("groupOrder").is_none(), "root order uses the canonical hierarchy field");
     }
 
     #[test]
@@ -587,7 +619,7 @@ mod tests {
         drag(&mut h, moving_rect.center(), target);
 
         let state = &h.state().ui.presets_ui;
-        assert_eq!(state.group_parent[PANEL][moving_group], *target_group);
+        assert_eq!(state.parent_of(PANEL, moving_group), Some(target_group.as_str()));
         assert_eq!(state.hierarchy_order[PANEL][target_group].first(), Some(&crate::pickers::picker_state::HierarchyOrderEntry::Group(moving_group.clone())));
         assert_eq!(state.hierarchy_order[PANEL][target_group].get(1), Some(&crate::pickers::picker_state::HierarchyOrderEntry::Item(target_item)));
         let names: Vec<String> = headers.iter().map(|(name, _)| name.clone()).collect();

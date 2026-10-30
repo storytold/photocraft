@@ -11,6 +11,7 @@ use crate::pickers::asset_browser::{self, BrowserAction, BrowserAdapter, Browser
 use crate::pickers::asset_browser_hierarchy::{HierarchyGroup, HierarchyNode, hierarchy_tree};
 pub(crate) use crate::pickers::asset_browser_interaction::AssetDrag as BrushDrag;
 use crate::pickers::asset_browser_interaction::{ContextMenuAction, HierarchyDrop, draw_group_context_menu, draw_item_context_menu, hierarchy_group_drop};
+use crate::pickers::picker_browser_model::NodeId;
 use crate::pickers::picker_state::{NestedGroupRenameState, PresetUi};
 use crate::theme::Tokens;
 
@@ -262,13 +263,13 @@ pub(crate) fn picker_browser(
         Some(name) => {
             let matching: Vec<_> = presets.iter().filter(|preset| preset.name.eq_ignore_ascii_case(name)).collect();
             if matching.len() == 1 {
-                preset_ui.selected.insert(PANEL.to_string(), preview_identity(matching[0]));
+                preset_ui.set_selected(PANEL, &preview_identity(matching[0]));
             } else {
-                preset_ui.selected.remove(PANEL);
+                preset_ui.clear_selected(PANEL);
             }
         }
         None => {
-            preset_ui.selected.remove(PANEL);
+            preset_ui.clear_selected(PANEL);
         }
     }
     // The footer slider is bounded by the browser's actual width. Otherwise a large scale makes
@@ -312,10 +313,14 @@ pub(crate) fn picker_browser(
             list_item_height: Some(44.0),
             domain_hierarchy_actions: true,
         },
-        capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true },
+        // Brush folders are projected from each item's full `group_path` by the canonical tree.
+        // The shared resolver emits path-aware domain actions; Brush dispatches those through its
+        // engine commands rather than persisting folder structure in generic `PresetUi` state.
+        capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true, canonical_hierarchy_drag: true },
         item_context_menu: Some(brush_item_context_menu),
         group_context_menu: Some(brush_group_context_menu),
         nested_group_context_menu: Some(brush_nested_group_context_menu),
+        hierarchy_item_move: None,
         paint_group: None,
         paint_item: &mut paint_item,
         paint_list_item: Some(&mut paint_list_item),
@@ -332,11 +337,16 @@ fn browser_actions_to_actions(presets: &[BrushPreset], browser_actions: Vec<Brow
         .into_iter()
         .filter_map(|action| match action {
             BrowserAction::Select(key) => occurrence_name(presets, &key).map(Action::Select),
+            BrowserAction::SelectItem { key, .. } => occurrence_name(presets, &key).map(Action::Select),
             BrowserAction::Activate(key) => occurrence_name(presets, &key).map(Action::Choose),
+            BrowserAction::ActivateItem { key, .. } => occurrence_name(presets, &key).map(Action::Choose),
             BrowserAction::Rename(key, text) => {
                 occurrence_name(presets, &key).map(|name| Action::Rename(Renaming { group: false, name, folder: Vec::new(), text }))
             }
+            BrowserAction::RenameItem { group: _, group_path, key, text } => occurrence_name(presets, &key)
+                .map(|name| Action::Rename(Renaming { group: false, name, folder: group_path, text })),
             BrowserAction::Delete(key) => occurrence_name(presets, &key).map(Action::Delete),
+            BrowserAction::DeleteItem { key, .. } => occurrence_name(presets, &key).map(Action::Delete),
             BrowserAction::Move(key, group) => {
                 occurrence_name(presets, &key).map(|name| Action::Move { name, group: group_key(presets, &group), folder: Some(Vec::new()), index: None })
             }
@@ -387,7 +397,7 @@ fn brush_item_context_menu(
     st: &mut PresetUi,
     panel: &str,
     item: &ItemView,
-    _group: &GroupView,
+    group: &GroupView,
     _group_names: &[String],
     actions: &mut Vec<BrowserAction>,
 ) {
@@ -396,9 +406,9 @@ fn brush_item_context_menu(
             if st.group_renaming.as_ref().is_some_and(|rename| rename.panel == panel) {
                 st.group_renaming = None;
             }
-            st.renaming = Some((panel.to_string(), item.key.clone(), item.name.clone()));
+            st.item_renaming = Some(crate::pickers::picker_state::ItemRenameState { panel: panel.to_string(), group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone(), text: item.name.clone() });
         }
-        Some(ContextMenuAction::Delete) => actions.push(BrowserAction::Delete(item.key.clone())),
+        Some(ContextMenuAction::Delete) => actions.push(BrowserAction::DeleteItem { group: group.name.clone(), group_path: item.group_path.clone(), key: item.key.clone() }),
         Some(ContextMenuAction::MoveTo(_)) | None => {}
     }
 }
@@ -1018,10 +1028,12 @@ pub fn preset_list(
             list_item_height: Some(44.0),
             domain_hierarchy_actions: true,
         },
-        capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true },
+        // Use the same canonical path-aware hierarchy as the floating Brush picker.
+        capabilities: BrowserCapabilities { item_drag: true, item_drop: true, group_drag: true, selection: true, activation: true, canonical_hierarchy_drag: true },
         item_context_menu: Some(brush_item_context_menu),
         group_context_menu: Some(brush_group_context_menu),
         nested_group_context_menu: Some(brush_nested_group_context_menu),
+        hierarchy_item_move: None,
         paint_group: None,
         paint_item: &mut paint_item,
         paint_list_item: list.then_some(&mut paint_list_item as &mut crate::pickers::asset_browser::PaintListItem<'_>),
@@ -1037,8 +1049,7 @@ pub fn preset_list(
 fn sync_brush_state_to_browser(st: &BrushesPanelState, browser: &mut PresetUi, presets: &[BrushPreset], current: Option<&str>, panel: &str) {
     browser.search.insert(panel.to_string(), st.filter.clone());
     browser.sizes.insert(panel.to_string(), if st.view == BrushesView::List { asset_browser::MIN_THUMB } else { 40.0 });
-    browser.group_order.remove(panel);
-    browser.group_parent.remove(panel);
+    browser.flatten_group_nesting(panel);
     browser.toggled.retain(|key| !key.starts_with(&format!("{panel}/")));
     let group_labels: Vec<String> = grouped_presets(presets).into_iter().map(|(label, _)| label).collect();
     browser.toggled.extend(st.collapsed.iter().map(|key| {
@@ -1050,13 +1061,13 @@ fn sync_brush_state_to_browser(st: &BrushesPanelState, browser: &mut PresetUi, p
         Some(name) => {
             let mut matching = presets.iter().filter(|preset| preset.name.eq_ignore_ascii_case(name));
             if let Some(preset) = matching.next().filter(|_| matching.next().is_none()) {
-                browser.selected.insert(panel.to_string(), preview_identity(preset));
+                browser.set_selected(panel, &preview_identity(preset));
             } else {
-                browser.selected.remove(panel);
+                browser.clear_selected(panel);
             }
         }
         None => {
-            browser.selected.remove(panel);
+            browser.clear_selected(panel);
         }
     }
 
@@ -1120,6 +1131,14 @@ fn paint_brush_hierarchy_drag_label(ui: &egui::Ui, scope: &str, id: egui::Id) {
     let (drag_scope, name) = match &*drag {
         BrushDrag::Group { scope, name, path } => {
             (scope.as_str(), path.last().cloned().unwrap_or_else(|| if name.is_empty() { UNGROUPED.to_string() } else { name.clone() }))
+        }
+        BrushDrag::CanonicalGroup { scope, node_id } => {
+            let name = match node_id {
+                NodeId::Group(name) => name.clone(),
+                NodeId::GroupPath(path) => path.last().cloned().unwrap_or_default(),
+                _ => return,
+            };
+            (scope.as_str(), name)
         }
         BrushDrag::Preset { .. } => return,
     };
