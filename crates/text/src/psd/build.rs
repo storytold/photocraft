@@ -210,6 +210,10 @@ fn txt2_style_runs(layer: &TextLayer, base: &E, fonts: &mut Vec<E>, dpi: f32) ->
         style.set("6", real(s.horizontal_scale));
         style.set("7", real(s.vertical_scale));
         style.set("8", E::Int(s.tracking.round() as i64));
+        // A fresh minimal run has no `/53`; create the paint dict so the fill is written (#10308).
+        if !matches!(style.get("53").and_then(|p| p.get("0")), Some(E::Dict(_))) {
+            style.set("53", E::Dict(vec![("0".into(), E::dict())]));
+        }
         if let Some(paint @ E::Dict(_)) = style.get_mut("53").and_then(|p| p.get_mut("0")) {
             let (kind, values) = fill_color(&s.color);
             paint.set("0", E::Int(kind));
@@ -500,13 +504,29 @@ fn td_restyled(entry: &E, layer: &TextLayer, fonts: &mut Vec<E>, dpi: f32) -> Op
     Some(entry)
 }
 
+/// A `Txt2` font-list entry (`<< /0 << /99 /CoolTypeFont /0 << /0 name /2 type >> >> >>`).
+fn txt2_font_entry(name: &str, kind: i64) -> E {
+    E::Dict(vec![(
+        "0".into(),
+        E::Dict(vec![
+            ("99".into(), E::Name("CoolTypeFont".into())),
+            ("0".into(), E::Dict(vec![("0".into(), E::String(name.to_string())), ("2".into(), E::Int(kind))])),
+        ]),
+    )])
+}
+
 /// The index of the PostScript font `name` in a `Txt2` font list (`<< /0 << /99 /CoolTypeFont
 /// /0 << /0 name /2 type >> >> >>` entries), appending it (shaped like the list's first entry)
-/// when missing. `None` for an empty list: there is no entry to shape a new one on.
+/// when missing. An empty list gets a seeded CoolTypeFont entry so PhotoCraft-native blocks still
+/// name a font (#10308).
 fn txt2_font(fonts: &mut Vec<E>, name: &str) -> Option<i64> {
     let named = |f: &E| f.path(&["0", "0", "0"]).and_then(E::as_str) == Some(name);
     if let Some(i) = fonts.iter().position(named) {
         return i64::try_from(i).ok();
+    }
+    if fonts.is_empty() {
+        fonts.push(txt2_font_entry(name, 0));
+        return Some(0);
     }
     let mut entry = fonts.first()?.clone();
     let font = entry.get_mut("0")?.get_mut("0")?;
@@ -556,9 +576,14 @@ pub fn needs_txt2(objects: &[(i32, &TextLayer)]) -> bool {
 }
 
 /// A minimal `Txt2` style run Photoshop will read: the shape [`txt2_style_runs`] fills from a
-/// layer when the file has no template object to copy (a PhotoCraft-native document).
+/// layer when the file has no template object to copy (a PhotoCraft-native document). Includes an
+/// empty `/53` paint dict so the fill colour can be written.
 fn minimal_txt2_style_run() -> E {
-    let style = E::Dict(vec![("0".into(), E::Int(0)), ("11".into(), E::Int(1))]);
+    let style = E::Dict(vec![
+        ("0".into(), E::Int(0)),
+        ("11".into(), E::Int(1)),
+        ("53".into(), E::Dict(vec![("0".into(), E::dict())])),
+    ]);
     let data = E::Dict(vec![("0".into(), E::String(String::new())), ("6".into(), style)]);
     E::Dict(vec![("0".into(), E::Dict(vec![("0".into(), data)])), ("1".into(), E::Int(1))])
 }
@@ -790,10 +815,16 @@ pub fn build_txt2_at(objects: &[(i32, &TextLayer)], previous: Option<&[u8]>, dpi
             }
         }
     }
+    // Write the font list whenever it grew (including the first seed on a PhotoCraft-native block).
     if fonts.len() != fonts_before
-        && let Some(list @ E::Dict(_)) = outer.get_mut("0").and_then(|v| v.get_mut("1"))
+        && let Some(doc @ E::Dict(_)) = outer.get_mut("0")
     {
-        list.set("0", E::Array(fonts));
+        match doc.get_mut("1") {
+            Some(list @ E::Dict(_)) => list.set("0", E::Array(fonts)),
+            _ => {
+                doc.set("1", E::Dict(vec![("0".into(), E::Array(fonts))]));
+            }
+        }
     }
     match outer.get_mut("1") {
         Some(objs @ E::Dict(_)) => objs.set("1", E::Array(slots)),
