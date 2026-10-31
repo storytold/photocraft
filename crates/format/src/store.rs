@@ -212,6 +212,13 @@ pub(crate) fn read_manifest(src: &dyn ByteSource, opts: &LoadOptions) -> Result<
     if let Err(crate::finite::Problem::NonFinite { path }) = crate::finite::check(&m) {
         return Err(FormatError::corrupt(format!("`{path}` is out of range")));
     }
+    fn count_layers(layers: &[LayerM]) -> usize {
+        layers.iter().fold(layers.len(), |count, layer| match &layer.content {
+            ContentM::Group { children, .. } => count.saturating_add(count_layers(children)),
+            _ => count,
+        })
+    }
+    m.document.responsive.validate(count_layers(&m.document.layers)).map_err(|message| FormatError::LimitExceeded(message.into()))?;
     Ok(m)
 }
 
@@ -907,10 +914,29 @@ impl PcraftWriter {
         self.hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         self.blob_hash_cache.retain(|_, (w, _)| w.strong_count() > 0);
         convert::check_nesting(&doc.layers)?;
+        // Prune before validating: a deletion path that missed `remove_layers` leaves
+        // dangling entries in the in-memory layout, and their counts would fail the
+        // bounds below before `doc_m`'s save-side pruning could drop them. What gets
+        // validated is what gets saved.
+        let mut responsive = doc.responsive.clone();
+        let present = doc.walk().iter().map(|(_, _, l)| l.id).collect();
+        responsive.prune_absent(&present);
+        responsive.validate(doc.walk().len()).map_err(|message| FormatError::LimitExceeded(message.into()))?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c);
+        let mut previews = Vec::new();
+        if let Some(t) = &opts.thumbnail {
+            previews.push((THUMB, png(t)?));
+        }
+        if let Some(t) = &opts.composite {
+            previews.push((COMPOSITE, png(t)?));
+        }
+        // Compatibility: a document with no responsive data saves as version 1 (a v1-only
+        // reader keeps opening it byte-compatibly); version 2 marks files that carry the
+        // responsive layout program.
+        let format_version = if document.responsive.is_empty() { FORMAT_VERSION - 1 } else { FORMAT_VERSION };
         let manifest = Manifest {
-            format_version: FORMAT_VERSION,
+            format_version,
             generator: format!("photocraft-format {}", env!("CARGO_PKG_VERSION")),
             document,
             thumbnail: opts.thumbnail.as_ref().map(|_| THUMB.to_owned()),
