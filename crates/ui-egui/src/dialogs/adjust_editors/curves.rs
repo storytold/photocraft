@@ -218,7 +218,7 @@ fn curve_key(ch: &ToneChannel) -> &'static str {
 }
 
 /// A pencil-drawn channel: its 256 output levels (identity when absent or not a map).
-fn read_map(v: &Value, key: &str) -> Vec<f32> {
+pub(super) fn read_map(v: &Value, key: &str) -> Vec<f32> {
     let map: Option<Vec<f32>> = v
         .get(key)
         .and_then(Value::as_array)
