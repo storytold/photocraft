@@ -987,7 +987,8 @@ fn handle_canvas_tool_stroke(
         // The press's own modifiers: a ⇧ that arrives with the click still connects the line.
         let press_mods = ui.input(|i| pointer_button_modifiers(&i.events, PointerButton::Primary)).unwrap_or(mods);
         tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, press_mods);
-        app.press_stroke = app.drag.is_some();
+        // Source picking and refused Clone/Healing presses consume their release too.
+        app.press_stroke = app.drag.is_some() || matches!(tool, Tool::CloneStamp | Tool::Healing);
     }
     let press_stroke = app.press_stroke;
     // A live tool's press that went to the ⌥ eyedropper keeps sampling for the whole press: the
@@ -1102,7 +1103,7 @@ fn handle_canvas_tool_stroke(
             tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, mods);
         }
     }
-    if press_stroke && (app.drag.is_none() || !ui.input(|i| i.pointer.primary_down())) {
+    if press_stroke && !ui.input(|i| i.pointer.primary_down()) {
         app.press_stroke = false;
     }
 }

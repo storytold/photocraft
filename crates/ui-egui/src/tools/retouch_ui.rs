@@ -139,14 +139,7 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], m
         Tool::PatternStamp => ("paint.patternStamp", pattern_stamp_params(app, points)),
         Tool::Healing | Tool::CloneStamp => {
             let Some(p) = clone_params(app) else {
-                // Option-click on the Mac, Alt-click on Windows.
-                app.ui.status = if cfg!(target_os = "macos") {
-                    tl!("Option-click to define a source point to clone from")
-                } else {
-                    tl!("Alt-click to define a source point to clone from")
-                }
-                .into();
-                app.ui.status_error = true;
+                require_source(app);
                 return true;
             };
             (if tool == Tool::Healing { "paint.healingBrush" } else { "paint.cloneStamp" }, p)
@@ -452,12 +445,51 @@ pub fn report_smart_result(app: &mut PhotocraftApp, res: Result<Value, String>, 
 
 /// ⌥-click with Clone Stamp / Healing Brush sets the source.
 pub fn set_source(app: &mut PhotocraftApp, x: f64, y: f64) {
-    app.ui.clone_source = Some([x.round(), y.round()]);
-    app.ui.clone_offset = None;
-    let _ = app.run("cloneSource.set", json!({"source": [x.round(), y.round()]}));
-    let template = "Clone source set at {x}, {y}";
-    app.ui.status = crate::i18n::fmt(tl!(template), &[("x", &format!("{x:.0}")), ("y", &format!("{y:.0}"))]);
+    let source = [x.round(), y.round()];
+    match app.run("cloneSource.set", json!({"source": source})) {
+        Ok(_) => {
+            app.ui.clone_source = Some(source);
+            app.ui.clone_offset = None;
+            app.ui.clone_source_pick = None;
+            let template = "Clone source set at {x}, {y}";
+            app.ui.status = crate::i18n::fmt(tl!(template), &[("x", &format!("{x:.0}")), ("y", &format!("{y:.0}"))]);
+            app.ui.status_error = false;
+        }
+        Err(e) => {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+    }
+}
+
+/// Source picking cannot survive a tool/document change or a restored workspace.
+pub(crate) fn source_pick_active(app: &mut PhotocraftApp) -> bool {
+    let current = app.session.active().map(|st| (app.ui.tool, st.doc.id.0));
+    if app.ui.clone_source_pick != current || !matches!(app.ui.tool, Tool::CloneStamp | Tool::Healing) {
+        app.ui.clone_source_pick = None;
+    }
+    app.ui.clone_source_pick.is_some()
+}
+
+pub(crate) fn source_pick_cancel(app: &mut PhotocraftApp) {
+    app.ui.clone_source_pick = None;
+    app.ui.status.clear();
     app.ui.status_error = false;
+}
+
+/// Refuse immediately instead of showing a stroke that disappears at release (#3697).
+pub(crate) fn require_source(app: &mut PhotocraftApp) -> bool {
+    if clone_params(app).is_some() {
+        return true;
+    }
+    app.ui.status = if cfg!(target_os = "macos") {
+        tl!("Option-click to define a source point to clone from")
+    } else {
+        tl!("Alt-click to define a source point to clone from")
+    }
+    .into();
+    app.ui.status_error = true;
+    false
 }
 
 /// Where the clone source is sampled from, shown only while a Clone Stamp or Healing Brush stroke
@@ -503,6 +535,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
     {
         return false;
     }
+    let source_picking = source_pick_active(app);
     let o = &mut app.ui.tool_options;
     match tool {
         Tool::SpotHealing => {
@@ -600,8 +633,19 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
                 ("all".to_string(), tl!("All Layers")),
             ];
             crate::widgets::dropdown(ui, "clone-sample", tl!("Source"), &mut o.clone_sample, &opts, 130.0);
-            if app.ui.clone_source.is_none() {
-                crate::widgets::vline(ui, 22.0);
+            crate::widgets::vline(ui, 22.0);
+            if ui.button(if source_picking { tl!("Cancel") } else { tl!("Set Source") }).clicked() {
+                if source_picking {
+                    source_pick_cancel(app);
+                } else if let Some(st) = app.session.active() {
+                    app.ui.clone_source_pick = Some((tool, st.doc.id.0));
+                    app.ui.status = tl!("Click to set the source").into();
+                    app.ui.status_error = false;
+                }
+            }
+            if source_picking {
+                opt(ui, tl!("Click to set the source"));
+            } else if clone_params(app).is_none() {
                 opt(ui, &crate::i18n::fmt(tl!("{key}-click to set the source"), &[("key", &crate::shortcuts::pretty("Alt"))]));
             }
         }

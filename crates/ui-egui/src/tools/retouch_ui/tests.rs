@@ -833,3 +833,63 @@ fn art_history_stroke_runs_the_command() {
     drag(&mut app, Tool::ArtHistoryBrush);
     assert_eq!(app.session.journal.last().map(|(id, _)| id.as_str()), Some("paint.artHistoryBrush"));
 }
+
+#[test]
+fn missing_clone_source_is_refused_before_a_preview_starts() {
+    for tool in [Tool::CloneStamp, Tool::Healing] {
+        let mut app = app();
+        app.ui.tool = tool;
+        let revision = app.session.active().unwrap().revision;
+        tool_event(&mut app, ToolEvent::Down { x: 10.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        assert!(app.ui.status_error);
+        assert!(app.drag.is_none());
+        tool_event(&mut app, ToolEvent::Move { x: 50.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, egui::Modifiers::NONE);
+        assert!(app.drag.is_none());
+        assert_eq!(app.session.active().unwrap().revision, revision);
+    }
+}
+
+#[test]
+fn one_shot_source_pick_needs_no_alt_and_does_not_paint() {
+    for tool in [Tool::CloneStamp, Tool::Healing] {
+        let mut app = app();
+        app.ui.tool = tool;
+        let doc = app.session.active().unwrap().doc.id.0;
+        let revision = app.session.active().unwrap().revision;
+        app.ui.clone_source_pick = Some((tool, doc));
+        tool_event(&mut app, ToolEvent::Down { x: 70.0, y: 20.0, pressure: 1.0 }, egui::Modifiers::NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 20.0 }, egui::Modifiers::NONE);
+        assert_eq!(app.session.presets.clone.active().source, Some([70.0, 20.0]));
+        assert!(app.ui.clone_source_pick.is_none());
+        assert!(app.drag.is_none());
+        assert!(!app.ui.status_error);
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        assert!(require_source(&mut app));
+    }
+}
+
+#[test]
+fn source_picker_cancels_on_tool_document_and_escape_changes() {
+    let mut app = app();
+    app.ui.tool = Tool::CloneStamp;
+    let doc = app.session.active().unwrap().doc.id.0;
+    app.ui.clone_source_pick = Some((Tool::CloneStamp, doc));
+    app.ui.tool = Tool::Brush;
+    assert!(!source_pick_active(&mut app));
+    app.ui.tool = Tool::CloneStamp;
+    app.ui.clone_source_pick = Some((Tool::CloneStamp, doc));
+    app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+    assert!(!source_pick_active(&mut app));
+    let doc = app.session.active().unwrap().doc.id.0;
+    app.ui.clone_source_pick = Some((Tool::CloneStamp, doc));
+    let ctx = egui::Context::default();
+    ctx.begin_pass(egui::RawInput {
+        events: vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }],
+        ..Default::default()
+    });
+    crate::shortcuts::handle(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    assert!(app.ui.clone_source_pick.is_none());
+    assert!(app.session.presets.clone.active().source.is_none());
+}
