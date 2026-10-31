@@ -256,6 +256,10 @@ fn set_field(f: &mut Map<String, Value>, field: &str, value: Value) -> Result<()
 
 /// Opens the Color Picker dialog `id`'s body asked for ([`request`], [`request_field`]), on its
 /// colour: OK sets that field of the dialog (not the foreground), Cancel leaves it as it was.
+///
+/// A dialog can provide `__pickColorDefault` when its field is a non-colour choice that has not
+/// yet been replaced by the picked colour. The temporary default seeds the picker without
+/// changing the parent field; it is removed before the picker opens.
 pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
     let Some(d) = app.ui.dialog_mut(id) else { return };
     let (title, field) = match d.fields.remove(REQUEST) {
@@ -267,7 +271,11 @@ pub fn open_requested(app: &mut PhotocraftApp, id: u64) {
         }
         _ => return,
     };
-    let rgb = field_value(&d.fields, &field).and_then(parse_hex).unwrap_or([0.0; 3]);
+    let rgb = field_value(&d.fields, &field)
+        .and_then(parse_hex)
+        .or_else(|| d.fields.get("__pickColorDefault").and_then(Value::as_str).and_then(parse_hex))
+        .unwrap_or([0.0; 3]);
+    d.fields.remove("__pickColorDefault");
     open_for_field(app, &title, rgb, id, &field);
 }
 

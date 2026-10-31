@@ -276,6 +276,7 @@ fn every_filter_previews_off_the_ui_thread_and_a_newer_value_cancels_the_old() {
         command: "filter.blur.gaussianBlur".into(),
         params: json!({"radius": 999.0}),
         k: 1,
+        tool_colors: (app.session.tools.foreground, app.session.tools.background),
     };
     let (told, cancelled) = std::sync::mpsc::channel();
     app.filter_preview_worker
@@ -329,6 +330,7 @@ fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::syn
         command: command.into(),
         params,
         k: 1,
+        tool_colors: (app.session.tools.foreground, app.session.tools.background),
     };
     let doc = app.session.documents()[0].doc.clone();
     let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
@@ -347,6 +349,7 @@ fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::syn
                 key.target,
                 &documents,
                 &Default::default(),
+                Some(key.tool_colors),
             )
             .map(|d| {
                 let buffer = photocraft_compose::flatten(&d);
@@ -368,6 +371,68 @@ fn drive_until(app: &mut PhotocraftApp, ctx: &egui::Context, what: &str, done: i
         assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
         ensure_filter_preview(app, 0, ctx);
         std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn indexed_matte_preview_matches_commit_and_refreshes_tool_colors_inline_and_on_worker() {
+    for background in [false, true] {
+        for depth in [8, 16, 32] {
+            for matte in ["foreground", "background"] {
+                let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+                app.background_jobs = background;
+                app.run("file.new", json!({"width": 64, "height": 48, "depth": depth, "background": "transparent"})).unwrap();
+                app.run("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+                app.run("edit.colorSettings", json!({"workingRgb": "display-p3"})).unwrap();
+                app.session
+                    .edit("Translucent edge", |doc, active| {
+                        let format = doc.pixel_format();
+                        doc.layer_mut(active.unwrap())
+                            .unwrap()
+                            .surface_mut()
+                            .unwrap()
+                            .fill_rect(photocraft_geom::Rect::new(0, 0, 32, 48), &photocraft_raster::from_rgba(&format, [1.0, 0.0, 0.0, 0.5]));
+                        Ok(())
+                    })
+                    .unwrap();
+                let source = app.session.active().unwrap().doc.clone();
+                let params = json!({"palette": "exact", "forced": "none", "dither": "none", "matte": matte});
+                crate::filter_dialog::open(&mut app, "image.mode.indexedColor").unwrap();
+                app.ui.dialogs.last_mut().unwrap().fields.extend(params.as_object().unwrap().clone());
+                let ctx = egui::Context::default();
+                let mut previous = None;
+                for (foreground, background_color) in [("#3366cc", "#cc6633"), ("#26bf59", "#bf26a6")] {
+                    app.session.execute("tools.setColors", json!({"foreground": foreground, "background": background_color})).unwrap();
+                    let colors = (app.session.tools.foreground, app.session.tools.background);
+                    let shown = ensure_filter_preview(&mut app, 0, &ctx);
+                    if background {
+                        assert!(shown.is_none(), "old tool colors must not remain visible");
+                    }
+                    drive_until(&mut app, &ctx, "the current matte colors", |app| {
+                        app.filter_preview.as_ref().is_some_and(|p| p.key.tool_colors == colors && p.result.is_some())
+                    });
+                    let preview = app.filter_preview.as_ref().unwrap().result.as_ref().unwrap();
+                    let mut applied = photocraft_engine::Session::new();
+                    applied.color.settings = app.session.color.settings.clone();
+                    applied.tools.foreground = colors.0;
+                    applied.tools.background = colors.1;
+                    applied.add_document((*source).clone(), None);
+                    applied.execute("image.mode.indexedColor", params.clone()).unwrap();
+                    let committed = &applied.active().unwrap().doc;
+                    assert_eq!(preview.icc_profile, source.icc_profile);
+                    assert_eq!(preview.color_table, committed.color_table);
+                    let actual = preview.layers[0].surface().unwrap().read_region(preview.bounds());
+                    let expected = committed.layers[0].surface().unwrap().read_region(committed.bounds());
+                    assert_eq!(actual, expected, "{matte}, {depth}-bit, worker={background}");
+                    if let Some(previous) = previous {
+                        assert_ne!(actual, previous, "changing the selected tool color refreshes the pixels");
+                    }
+                    previous = Some(actual);
+                    assert_eq!(app.session.active().unwrap().doc.mode, photocraft_doc::ColorMode::Rgb, "preview does not commit");
+                }
+            }
+        }
     }
 }
 
@@ -477,6 +542,7 @@ fn a_mid_drag_empty_result_leaves_the_preview_alone() {
         command: "filter.blur.gaussianBlur".into(),
         params: json!({"radius": moved}),
         k: 1,
+        tool_colors: (app.session.tools.foreground, app.session.tools.background),
     };
     let (release_empty, wait) = std::sync::mpsc::channel::<()>();
     app.filter_preview_worker
