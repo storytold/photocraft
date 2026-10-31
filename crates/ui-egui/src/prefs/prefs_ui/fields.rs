@@ -50,6 +50,9 @@ pub(super) fn humanize(key: &str) -> String {
     if key == "notificationDurationSeconds" {
         return "Notification Duration (seconds)".into();
     }
+    if key == "gmicPath" {
+        return "G'MIC executable".into();
+    }
     // Tools: arrow-key nudges bundle into one History state (#2259).
     if key == "bundleNudges" {
         return "Bundle Arrow-Key Nudges".into();

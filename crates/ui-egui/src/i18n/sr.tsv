@@ -3072,6 +3072,40 @@ fontWeight	Italic	Kurziv
 	XOR	XOR
 	Color Burn (Paint.NET)	Zatamnjivanje boje (Paint.NET)
 	Color Dodge (Paint.NET)	Posvetljivanje boje (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	O dodacima…
+	About Plug-ins	O dodacima
+	G'MIC	G'MIC
+	G'MIC Command…	G'MIC komanda…
+	Locate G'MIC…	Pronađi G'MIC…
+	Refresh Filters	Osveži filtere
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Dodajte ga pomoću Instaliraj dodatak… ili stavite .wasm datoteke u fasciklu zadatu u Podešavanja › Dodaci. Da biste napisali sopstveni, počnite od Rust primera u examples/plugins/invert-rs.
+	Choose Check Again to look for G'MIC.	Izaberite Proveri ponovo da biste potražili G'MIC.
+	Download G'MIC…	Preuzmi G'MIC…
+	Filter List Unavailable	Lista filtera nije dostupna
+	G'MIC Not Found	G'MIC nije pronađen
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC je zaseban, besplatan program za obradu slika sa stotinama filtera. PhotoCraft pokreće primerak instaliran na ovom računaru; nije uključen u PhotoCraft.
+	G'MIC was not found on this computer.	G'MIC nije pronađen na ovom računaru.
+	G'MIC {version} found: {path}	G'MIC {version} pronađen: {path}
+	Loading Filters…	Učitavanje filtera…
+	Loading the filter list… (the first time takes about a minute)	Učitavanje liste filtera… (prvi put traje oko minut)
+	Looking for G'MIC…	Traženje G'MIC-a…
+	No plug-ins are installed.	Nema instaliranih dodataka.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	PhotoCraft dodaci su izolovani WebAssembly filteri: jedna .wasm datoteka radi na macOS-u, Windows-u, Linux-u i na vebu. Dodatak vidi samo piksele koje filtrira; ne može da čita datoteke niti da koristi mrežu.
+	The filter list couldn't be loaded: {error}	Lista filtera nije mogla da se učita: {error}
+	Using G'MIC	Korišćenje G'MIC-a
+	Writing plug-ins	Pisanje dodataka
+	{count} filters in Filter › G'MIC	{count} filtera u Filter › G'MIC
+	G'MIC executable	G'MIC izvršna datoteka
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC zahteva desktop aplikaciju: veb verzija ne može da pokreće druge programe.
+	Install it with Homebrew, then choose Check Again:	Instalirajte ga pomoću Homebrew-a, a zatim izaberite Proveri ponovo:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Preuzmite verziju za komandnu liniju (gmic-…-cli-win64.zip) sa gmic.eu, raspakujte je, zatim izaberite Pronađi G'MIC… i odaberite gmic.exe.
+	Install the gmic package, then choose Check Again:	Instalirajte paket gmic, a zatim izaberite Proveri ponovo:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Instalirajte paket gmic pomoću menadžera paketa ili ga preuzmite sa gmic.eu, a zatim izaberite Proveri ponovo.
+	About G'MIC…	O G'MIC-u…
+	Plug-in Preferences…	Podešavanja dodataka…
+
 	Stroke Options	Opcije obruba
 	Solid	Puna
 	Dashed	Isprekidana

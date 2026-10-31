@@ -3666,6 +3666,40 @@ fontWeight	Italic	斜体
 	XOR	XOR
 	Color Burn (Paint.NET)	焼き込みカラー (Paint.NET)
 	Color Dodge (Paint.NET)	覆い焼きカラー (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	プラグインについて…
+	About Plug-ins	プラグインについて
+	G'MIC	G'MIC
+	G'MIC Command…	G'MIC コマンド…
+	Locate G'MIC…	G'MIC の場所を指定…
+	Refresh Filters	フィルターを更新
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	「プラグインをインストール…」で追加するか、環境設定 › プラグインで指定したフォルダーに .wasm ファイルを置いてください。自作するには examples/plugins/invert-rs の Rust サンプルから始めてください。
+	Choose Check Again to look for G'MIC.	「再確認」を選ぶと G'MIC を探します。
+	Download G'MIC…	G'MIC をダウンロード…
+	Filter List Unavailable	フィルター一覧を利用できません
+	G'MIC Not Found	G'MIC が見つかりません
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC は、数百のフィルターを備えた独立した無料の画像処理プログラムです。PhotoCraft はこのコンピューターにインストールされているものを使用します。PhotoCraft には含まれていません。
+	G'MIC was not found on this computer.	このコンピューターに G'MIC が見つかりません。
+	G'MIC {version} found: {path}	G'MIC {version} が見つかりました: {path}
+	Loading Filters…	フィルターを読み込み中…
+	Loading the filter list… (the first time takes about a minute)	フィルター一覧を読み込み中…(初回は 1 分ほどかかります)
+	Looking for G'MIC…	G'MIC を探しています…
+	No plug-ins are installed.	インストールされているプラグインはありません。
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	PhotoCraft のプラグインは、サンドボックス化された WebAssembly フィルターです。1 つの .wasm ファイルが macOS、Windows、Linux、Web で動作します。プラグインが見られるのは処理対象のピクセルだけで、ファイルの読み込みやネットワークの使用はできません。
+	The filter list couldn't be loaded: {error}	フィルター一覧を読み込めませんでした: {error}
+	Using G'MIC	G'MIC の使い方
+	Writing plug-ins	プラグインの作り方
+	{count} filters in Filter › G'MIC	フィルター › G'MIC に {count} 個のフィルター
+	G'MIC executable	G'MIC 実行ファイル
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC にはデスクトップ版アプリが必要です。Web 版では他のプログラムを起動できません。
+	Install it with Homebrew, then choose Check Again:	Homebrew でインストールしてから「再確認」を選んでください:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	gmic.eu からコマンドライン版 (gmic-…-cli-win64.zip) をダウンロードして展開し、「G'MIC の場所を指定…」で gmic.exe を選んでください。
+	Install the gmic package, then choose Check Again:	gmic パッケージをインストールしてから「再確認」を選んでください:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	パッケージマネージャーで gmic パッケージをインストールするか gmic.eu からダウンロードし、「再確認」を選んでください。
+	About G'MIC…	G'MIC について…
+	Plug-in Preferences…	プラグインの環境設定…
+
 	Stroke Options	線のオプション
 	Solid	実線
 	Dashed	破線

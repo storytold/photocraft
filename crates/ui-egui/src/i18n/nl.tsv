@@ -3810,6 +3810,40 @@ cameraRaw	Whites	Witten
 	Color Dodge (Paint.NET)	Kleur tegenhouden (Paint.NET)
 	Pro Medium	Pro Medium
 	Studio Light	Studio Light
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	Over plug-ins…
+	About Plug-ins	Over plug-ins
+	G'MIC	G'MIC
+	G'MIC Command…	G'MIC-opdracht…
+	Locate G'MIC…	G'MIC zoeken…
+	Refresh Filters	Filters vernieuwen
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Voeg er een toe met Plug-in installeren…, of zet .wasm-bestanden in de map die is ingesteld bij Voorkeuren › Plug-ins. Om er zelf een te schrijven, begin je met het Rust-voorbeeld in examples/plugins/invert-rs.
+	Choose Check Again to look for G'MIC.	Kies Opnieuw controleren om G'MIC te zoeken.
+	Download G'MIC…	G'MIC downloaden…
+	Filter List Unavailable	Filterlijst niet beschikbaar
+	G'MIC Not Found	G'MIC niet gevonden
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC is een apart, gratis beeldbewerkingsprogramma met honderden filters. PhotoCraft gebruikt de versie die op deze computer is geïnstalleerd; G'MIC wordt niet met PhotoCraft meegeleverd.
+	G'MIC was not found on this computer.	G'MIC is niet gevonden op deze computer.
+	G'MIC {version} found: {path}	G'MIC {version} gevonden: {path}
+	Loading Filters…	Filters laden…
+	Loading the filter list… (the first time takes about a minute)	De filterlijst wordt geladen… (de eerste keer duurt dit ongeveer een minuut)
+	Looking for G'MIC…	G'MIC zoeken…
+	No plug-ins are installed.	Er zijn geen plug-ins geïnstalleerd.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	PhotoCraft-plug-ins zijn afgeschermde WebAssembly-filters: één .wasm-bestand werkt op macOS, Windows, Linux en het web. Een plug-in ziet alleen de pixels die hij filtert; hij kan geen bestanden lezen en het netwerk niet gebruiken.
+	The filter list couldn't be loaded: {error}	De filterlijst kon niet worden geladen: {error}
+	Using G'MIC	G'MIC gebruiken
+	Writing plug-ins	Plug-ins schrijven
+	{count} filters in Filter › G'MIC	{count} filters in Filter › G'MIC
+	G'MIC executable	G'MIC-programma
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC heeft de desktop-app nodig: de webversie kan geen andere programma's starten.
+	Install it with Homebrew, then choose Check Again:	Installeer het met Homebrew en kies daarna Opnieuw controleren:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Download de opdrachtregelversie (gmic-…-cli-win64.zip) van gmic.eu, pak die uit, kies daarna G'MIC zoeken… en selecteer gmic.exe.
+	Install the gmic package, then choose Check Again:	Installeer het pakket gmic en kies daarna Opnieuw controleren:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Installeer het pakket gmic met je pakketbeheerder of download het van gmic.eu, en kies daarna Opnieuw controleren.
+	About G'MIC…	Over G'MIC…
+	Plug-in Preferences…	Plug-invoorkeuren…
+
 	Stroke Options	Lijnopties
 	Solid	Ononderbroken
 	Dashed	Gestreept

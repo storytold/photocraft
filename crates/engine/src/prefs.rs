@@ -858,6 +858,8 @@ pub struct PlugIns {
     /// Load the WebAssembly plug-ins (`*.wasm`) in `additional_plugins_folder` (native only).
     pub use_additional_plugins_folder: bool,
     pub additional_plugins_folder: String,
+    /// The G'MIC command-line program (`gmic`) for Filter › G'MIC; empty: look on PATH (native only).
+    pub gmic_path: String,
     pub show_extension_panels: bool,
     pub allow_scripts_to_connect: bool,
     pub generator_enabled: bool,
@@ -868,6 +870,7 @@ impl Default for PlugIns {
         Self {
             use_additional_plugins_folder: false,
             additional_plugins_folder: String::new(),
+            gmic_path: String::new(),
             show_extension_panels: true,
             allow_scripts_to_connect: false,
             generator_enabled: false,
@@ -1337,6 +1340,7 @@ impl Session {
         // Without waiting for the system font scan: this runs on the UI thread at launch.
         photocraft_text::set_shared_missing_glyph_protection(self.prefs().type_.missing_glyph_protection());
         crate::plugin_cmds::sync_prefs(self);
+        crate::gmic_cmds::sync_prefs(self);
     }
 
     /// Everything persisted as one JSON document: the preferences plus `colorSettings`.

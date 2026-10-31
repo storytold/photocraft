@@ -97,6 +97,13 @@ pub const SHELL_COMMANDS: &[(&str, &str, &[&str], Option<&str>)] = &[
     ("help.reportIssue", "Report an Issue…", &["Help"], None),
     ("help.systemInfo", "System Info…", &["Help"], None),
     ("help.about", "About PhotoCraft", &["Help"], None),
+    ("help.aboutPlugins", "About Plug-ins…", &["Help"], None),
+    // Filter › Plug-ins › About Plug-ins… and Filter › G'MIC (`plugins_ui` places them).
+    ("plugins.about", "About Plug-ins…", &["Filter", "Plug-ins"], None),
+    ("gmic.refreshFilters", "Refresh Filters", &["Filter", "G'MIC"], None),
+    ("gmic.get", "About G'MIC…", &["Filter", "G'MIC"], None),
+    ("gmic.locate", "Locate G'MIC…", &[], None),
+    ("gmic.checkAgain", "Check Again", &[], None),
 ];
 
 /// The tools, in toolbar order: shortcut id (`tools.select.<tool>`), Photoshop's name for it

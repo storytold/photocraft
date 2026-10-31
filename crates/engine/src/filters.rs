@@ -204,6 +204,10 @@ pub fn apply_filter_to_surface(
     if id == crate::plugin_cmds::RUN {
         return Ok(crate::plugin_cmds::apply_to_surface(id, params, surf, selection, canvas));
     }
+    // G'MIC catalogue filters (gmic_cmds; raw pipelines are never recorded).
+    if id == crate::gmic_cmds::FILTER {
+        return Ok(crate::gmic_cmds::apply_to_surface(id, params, surf, selection, canvas));
+    }
     let Some(mut fp) = params_for(id, params) else { return Ok(None) };
     // A map that can no longer be read (moved or deleted since) leaves the pixels alone, like an
     // unknown filter; the command itself already refused an unreadable map when it was added.
