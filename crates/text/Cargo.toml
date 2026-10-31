@@ -15,8 +15,8 @@ photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }
 photocraft-doc = { workspace = true }
 photocraft-psd = { workspace = true }
-# No `system` feature: fontique's system backend links fontconfig on Linux. We scan font
-# directories ourselves (native) and always register the bundled fonts (native + web).
+# No global `system` feature: fontique's system backend links fontconfig on Linux. On macOS,
+# CoreText provides an indexed system-font collection; other native platforms scan directories.
 parley = { version = "0.11", default-features = false, features = ["std"] }
 skrifa = "0.44"
 flate2 = { workspace = true }
@@ -36,6 +36,9 @@ rayon = { workspace = true }
 # like the folder scan's, so our own collection keeps its behaviour (generic families, merging
 # installed faces into the bundled families). It uses no fontconfig, unlike `system` on Linux.
 [target.'cfg(target_os = "macos")'.dependencies]
+parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts", "system"] }
+
+[target.'cfg(target_vendor = "apple")'.dependencies]
 parley = { version = "0.11", default-features = false, features = ["std", "complex-scripts", "system"] }
 
 [build-dependencies]
