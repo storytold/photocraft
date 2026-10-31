@@ -182,14 +182,16 @@ fn cancelling_format_options_releases_the_destination_and_reopens_the_chooser() 
     assert!(app.saving(), "the destination remains reserved while format options are open");
     assert!(menus::invoke(&mut app, &ctx, "file.saveACopy", json!({})).is_err());
     assert!(provider.take_events().is_empty(), "Save a Copy cannot reuse the pending save's intent");
-    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
-        |ui, app| {
-            crate::targa_options_ui::show(app, ui.ctx());
-            file_providers::capture(app);
-        },
-        app,
-    );
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let mut h = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(800.0, 600.0))
+        .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+        .build_ui_state(
+            |ui, app| {
+                crate::targa_options_ui::show(app, ui.ctx());
+                file_providers::capture(app);
+            },
+            app,
+        );
     h.run_steps(2);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
