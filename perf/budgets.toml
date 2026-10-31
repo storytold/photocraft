@@ -982,3 +982,21 @@ bench = "interactive_bench"
 row = "Displace dialog preview 10 % (GPU resident)"
 budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 5.6 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
+
+[[scenario]]
+id = "P101"
+title = "Twirl 120° dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Twirl 120° dialog preview (GPU resident)"
+budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 5.9 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
+
+[[scenario]]
+id = "P102"
+title = "Wave (5 generators) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Wave (5 generators) dialog preview (GPU resident)"
+budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 4.9 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
