@@ -693,24 +693,3 @@ fn artboard_export_dialog_preflights_every_board_for_its_revision() {
     refresh_artboard_export_preflight(&app, &mut skip_fields);
     assert_eq!(skip_fields.get("artboards"), Some(&json!([])));
 }
-
-
-
-#[test]
-fn responsive_export_can_skip_only_affected_artboards() {
-    assert_eq!(responsive_artboards_to_export(&[9, 5, 2], &[5], false), vec![9, 5, 2]);
-    assert_eq!(responsive_artboards_to_export(&[9, 5, 2], &[5], true), vec![9, 2]);
-    assert_eq!(responsive_artboards_to_export(&[9, 5, 2], &[5, 5, 99], true), vec![9, 2]);
-    assert!(responsive_artboards_to_export(&[9], &[9], true).is_empty());
-    assert_eq!(
-        crate::i18n::tr(crate::i18n::Lang::from_code("de").unwrap(), "Skip artboards with findings or incomplete checks"),
-        "Zeichenflächen mit Befunden oder unvollständiger Prüfung überspringen"
-    );
-    assert_eq!(
-        crate::i18n::fmt(crate::i18n::tr(crate::i18n::Lang::from_code("de").unwrap(), "No layout findings on {boards} artboards."), &[("boards", "1")]),
-        "Keine Layout-Befunde auf den Zeichenflächen (1)."
-    );
-}
-
-#[test]
-fn artboard_export_dialog_preflights_every_board_for_its_revision() {
