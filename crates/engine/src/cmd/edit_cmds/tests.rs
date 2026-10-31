@@ -1431,6 +1431,26 @@ fn editing_a_guide_changes_what_is_given_in_one_undoable_step() {
     assert_eq!(g.color(true, 200.0), Some([0xff, 0x00, 0xff]));
 }
 
+/// #10440: Edit Selected Guides reads its position as New Guide does, arithmetic included; % is of
+/// the new orientation's extent.
+#[test]
+fn editing_a_guide_takes_arithmetic_in_its_position() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 400, "height": 200, "resolution": 100})).unwrap();
+    s.execute("view.newGuide", json!({"orientation": "vertical", "position": 10})).unwrap();
+    s.execute("view.newGuide", json!({"orientation": "vertical", "position": 20})).unwrap();
+    s.execute("view.editGuide", json!({"orientation": "vertical", "index": 0, "position": "100% / 4"})).unwrap();
+    s.execute("view.editGuide", json!({"orientation": "vertical", "index": 1, "position": "1in + 1"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.guides.vertical, vec![100.0, 200.0]);
+    s.execute("view.editGuide", json!({"orientation": "vertical", "index": 0, "newOrientation": "horizontal", "position": "50% − 10px"})).unwrap();
+    let g = &s.active().unwrap().doc.guides;
+    assert_eq!((g.vertical.clone(), g.horizontal.clone()), (vec![200.0], vec![90.0]));
+    let before = g.clone();
+    let err = s.execute("view.editGuide", json!({"orientation": "vertical", "index": 0, "position": "1in * 2in"})).unwrap_err();
+    assert!(err.to_string().contains("not a length"), "{err}");
+    assert_eq!(s.active().unwrap().doc.guides, before);
+}
+
 #[test]
 fn bad_guide_edits_are_refused_without_a_history_step() {
     let mut s = Session::new();
