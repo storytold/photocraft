@@ -77,7 +77,7 @@ impl FontDb {
     /// Characters mapped by the face of `family` nearest to `weight`/`italic`, ascending
     /// (controls and whitespace other than the space excluded). Empty for an unknown family.
     pub fn charmap(&mut self, family: &str, weight: u16, italic: bool) -> Vec<char> {
-        let Some(info) = self.fcx.collection.family_by_name(family) else {
+        let Some(info) = self.family_info(family) else {
             return Vec::new();
         };
         let fonts = info.fonts();
