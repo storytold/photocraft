@@ -146,3 +146,22 @@ Files copied into `corpus/` by hand (tiff, exr, raw) must be MIT, BSD or CC0.
 | `docs/images/uv-showcase/overview.png` | Textured model beside its editable UV map | veteraros-ai | Screenshot of *SKVERNA: Inquisition Order*, [ArtStation](https://www.artstation.com/artwork/wJqx2w) | CC BY 4.0 under the contributor-approved terms; [`LICENSE-CC-BY-4.0.txt`](docs/images/uv-showcase/LICENSE-CC-BY-4.0.txt) |
 | `docs/images/uv-showcase/{mask-sublayers,model-wireframe,model-selection,model-mirror}.png` | Native PhotoCraft captures of the 3D/UV workspace using ORBIT-07 | PhotoCraft contributors | Original synthetic model and maps; captured in PhotoCraft | CC0 1.0; [`LICENSE-CC0-1.0.txt`](docs/images/uv-showcase/LICENSE-CC0-1.0.txt) |
 | `docs/samples/uv-workbench/orbit-07/` | ORBIT-07 sample model, material and four texture maps | PhotoCraft contributors | Original synthetic geometry and maps | CC0 1.0; `LICENSE.txt` beside the files; packaged as `orbit-07-demo.zip` |
+
+## UV workbench Rust dependencies
+
+The versions below are pinned in `Cargo.lock`. Their published crate manifests and bundled
+license texts were checked together. All four offer permissive licenses. This inventory
+covers these four dependencies, not a complete audit of the transitive dependency graph.
+License files are copied verbatim from the corresponding crates.io packages.
+
+| Dependency | Upstream source | Declared license | Retained license texts |
+|---|---|---|---|
+| glam 0.33.12 | [glam-rs](https://github.com/bitshifter/glam-rs) | MIT OR Apache-2.0 | [MIT](docs/licenses/uv-dependencies/glam-0.33.12/LICENSE-MIT), [Apache-2.0](docs/licenses/uv-dependencies/glam-0.33.12/LICENSE-APACHE) |
+| fbxcel 0.9.0 | [fbxcel](https://github.com/lo48576/fbxcel) | MIT OR Apache-2.0 | [MIT](docs/licenses/uv-dependencies/fbxcel-0.9.0/LICENSE-MIT.txt), [Apache-2.0](docs/licenses/uv-dependencies/fbxcel-0.9.0/LICENSE-APACHE.txt) |
+| tobj 4.0.5 | [tobj](https://github.com/Twinklebear/tobj) | MIT | [MIT](docs/licenses/uv-dependencies/tobj-4.0.5/LICENSE.md) |
+| earcutr 0.5.0 | [earcutr](https://github.com/frewsxcv/earcutr) | ISC | [ISC](docs/licenses/uv-dependencies/earcutr-0.5.0/LICENSE) |
+
+Binary distributions using these dependencies must retain the applicable license and
+copyright notices. The retained MIT and ISC texts include the notices supplied by the
+packages; MIT is an available licensing option for glam and fbxcel. This section does not
+replace the notices required for other PhotoCraft dependencies.

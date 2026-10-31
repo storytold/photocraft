@@ -96,7 +96,12 @@ Scope: one imported UV set, tile 1001, Color/Normal/ID/AO/CV/Opacity/Metallic/Ro
 No ASCII FBX, glTF/GLB, UDIM, skinning/animation evaluation, procedural material shaders,
 height/displacement, clearcoat or transmission. Nondefault FBX inheritance is approximated. Stacked UVs share pixels.
 Limits: 1M triangles, 3M positions, 16M mask pixels, 256 MiB model input / 2 GiB project files, 128 MiB
-manifest. Binary FBX is structurally checked before constructing its parser tree: at most
+manifest. At most 4,096 corners per OBJ/FBX polygon are accepted. Triangulation also has a shared per-model
+budget of 67,108,864 work units (64 × 1024 × 1024), charged as the square of each polygon's
+corner count. Exceeding either limit intentionally rejects the entire import with an error;
+oversized polygons are not silently skipped or replaced with a triangle fan. Simplify or
+triangulate complex polygons in the source application before importing. These limits bound
+estimated triangulation work, not elapsed time. Binary FBX structural limits are
 256 nesting levels, 1M nodes, 2M attributes, 128 MiB per decoded array and a 384 MiB
 budget for declared decoded data plus estimated tree metadata. These are admission budgets,
 not a hard process-memory or execution-time limit; parser overhead and geometry copies add
