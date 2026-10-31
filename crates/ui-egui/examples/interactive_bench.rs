@@ -418,7 +418,7 @@ fn main() {
             ("Maximum r 40 (round)", Box::new(|d| photocraft_algo::FilterParams::Maximum { radius: 40.0 + d, preserve: photocraft_algo::Preserve::Roundness })),
             (
                 "Maximum r 100 (round)",
-                Box::new(|d| photocraft_algo::FilterParams::Maximum { radius: 100.0 + d, preserve: photocraft_algo::Preserve::Roundness }),
+                Box::new(|d| photocraft_algo::FilterParams::Maximum { radius: 100.0 - d, preserve: photocraft_algo::Preserve::Roundness }),
             ),
             (
                 "Custom (Blur More's kernel)",
@@ -445,6 +445,53 @@ fn main() {
             let t = Instant::now();
             std::hint::black_box(photocraft_algo::apply(surf, &fp, photocraft_algo::output_area(&fp, content, doc.bounds(), None), doc.bounds(), None));
             println!("  (the CPU's {name} over the whole layer: {:.0} ms)", ms(t));
+        }
+        // Displace (multi-input): a 512×512 map stretched over the layer, Wrap Around, per slider
+        // step; the first frame uploads the layer's whole extent and the map.
+        let map: std::sync::Arc<Vec<[f32; 4]>> = std::sync::Arc::new(
+            (0..512 * 512).map(|i| [((i % 512) as f32 / 511.0 * 7.0).fract(), ((i / 512) as f32 / 511.0 * 5.0).fract(), 0.5, 1.0]).collect(),
+        );
+        let displace = |scale: f32| {
+            let content = doc.layer(target).and_then(|l| l.surface()).map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY);
+            let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
+            let d = photocraft_gpu::DisplaceParams {
+                map: map.clone(),
+                map_size: [512, 512],
+                bounds: doc.bounds(),
+                scale: [scale, scale],
+                stretch: true,
+                undefined: photocraft_gpu::Undefined::Wrap,
+            };
+            let blur = photocraft_gpu::SeparableBlur::Displace(std::sync::Arc::new(d));
+            let program = photocraft_gpu::GaussianBlur::new(blur, extent, doc.bounds(), None, false, doc.depth).expect("a runnable displace");
+            photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
+        };
+        if let Some(g) = &mut b.gpu {
+            g.comp.set_operators(doc.id, vec![displace(12.8)]);
+        }
+        let first = b.render(&doc, view);
+        println!("  (GPU-resident Displace: first frame with the whole-extent window and map upload {first:.1} ms)");
+        let mut step = 0;
+        b.time("Displace dialog preview 10 % (GPU resident)", |b| {
+            step += 1;
+            if let Some(g) = &mut b.gpu {
+                g.comp.set_operators(doc.id, vec![displace(12.8 + (step % 2) as f32)]);
+            }
+            b.render(&doc, view)
+        });
+        {
+            let surf = doc.layer(target).and_then(|l| l.surface()).expect("surface");
+            let image = photocraft_algo::Image { rect: Rect::new(0, 0, 512, 512), ch: 4, data: map.iter().flatten().copied().collect() };
+            let fp = photocraft_algo::FilterParams::Displace {
+                horizontal: 10.0,
+                vertical: 10.0,
+                stretch: true,
+                undefined: photocraft_algo::UndefinedAreas::Wrap,
+                map: Some(std::sync::Arc::new(image)),
+            };
+            let t = Instant::now();
+            std::hint::black_box(photocraft_algo::apply(surf, &fp, doc.bounds(), doc.bounds(), None));
+            println!("  (the CPU's Displace over the whole layer: {:.0} ms)", ms(t));
         }
         if let Some(g) = &mut b.gpu {
             g.comp.clear_operators(doc.id);

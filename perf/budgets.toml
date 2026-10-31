@@ -973,3 +973,12 @@ bench = "interactive_bench"
 row = "Maximum r 100 (round) dialog preview (GPU resident)"
 budget_ms = 16
 enforce = false  # 93 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
+
+[[scenario]]
+id = "P100"
+title = "Displace 10 % dialog slider step (map stretched, Wrap Around), GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Displace dialog preview 10 % (GPU resident)"
+budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 5.6 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
