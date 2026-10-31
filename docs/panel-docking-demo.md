@@ -1,21 +1,41 @@
 # Panel docking repair demonstrations
 
-## Native-review follow-up
+## Complete gesture gallery
 
-The contributor tested the repaired v0.18.0 Windows EXE and reported no remaining
-major panel issues. These deterministic recordings were then regenerated after
-integrating main `422ca7bed`; they are not native desktop capture:
+The gallery now contains 13 caption-free GIFs. Each shows recorded pointer input,
+one fixed close crop and pauses around the action, rather than only settled
+before/after states. These are offscreen replays of the repaired runtime, not a
+native desktop video or a performance measurement.
 
-| Gesture | Recording |
+| Interaction | Recording |
 |---|---|
-| Insert a panel immediately below document tabs, then collapse it | [Below the document tab row](images/panel-repair/below-document-tabs.gif) |
-| Expand a compact stack, collapse it and restore normal editor heights | [Compact group heights](images/panel-repair/compact-group-height.gif) |
-| Resize the outer bottom corner without first changing any part's width | [Floating group bottom resize](images/panel-repair/floating-bottom-resize.gif) |
+| Compact grouping, flyout and tear-off | [Replay](images/panel-repair/group-flyout-detach.gif) |
+| Insert and reorder compact tabs | [Replay](images/panel-repair/compact-tab-order.gif) |
+| Move a whole compact group between the left and right docks | [Replay](images/panel-repair/side-docking.gif) |
+| Change the vertical divider between full panels | [Replay](images/panel-repair/vertical-divider.gif) |
+| Dock below document tabs and toggle the attached row | [Replay](images/panel-repair/below-document-tabs.gif) |
+| Restore normal compact-group heights | [Replay](images/panel-repair/compact-group-height.gif) |
+| Resize the outer bottom corner and edge without changing width first | [Replay](images/panel-repair/floating-bottom-resize.gif) |
+| Resize the middle part while neighbour widths stay fixed | [Replay](images/panel-repair/middle-part-width.gif) |
+| Collapse and expand the left/right parts independently | [Replay](images/panel-repair/independent-parts.gif) |
+| Move the whole Tools palette, resize both axes and redock it | [Replay](images/panel-repair/tools-floating-resize.gif) |
+| Join/detach a full editor beside a compact palette without losing height | [Replay](images/panel-repair/full-editor-join-detach.gif) |
+| Dock an upper row, expand it and collapse it while it stays attached | [Replay](images/panel-repair/attached-row-collapse.gif) |
+| Insert and reorder tabs in a collapsed upper row | [Replay](images/panel-repair/attached-tab-insertion.gif) |
 
-To reproduce these recordings, set `PHOTOCRAFT_NATIVE_HEIGHT_CAPTURES` to an output
-directory and run `cargo test -p photocraft-ui-egui --lib capture_native_height_and_document_header_review -- --test-threads=1`.
-The test covers three Pro themes and 100/125/150/200% scale. Existing document tabs
-keep selection, reordering, large-tab preferences and workspace restore behavior.
+To capture the raw replays, from the repository root:
+
+```powershell
+$env:PHOTOCRAFT_PANEL_SHOWCASE = "$PWD/plan/panel-showcase"
+cargo test -p photocraft-ui-egui --lib current_version_showcase -- --test-threads=1
+Remove-Item Env:PHOTOCRAFT_PANEL_SHOWCASE
+$env:PHOTOCRAFT_PR_FOLLOWUP_REPLAY = "$PWD/plan/panel-showcase"
+cargo test -p photocraft-ui-egui --lib pr_followup_pointer_replay -- --test-threads=1
+```
+
+Source provenance, playback/encoding limitations and licenses are adjacent to the
+images. Captures use synthetic blank documents only. Runtime code is unchanged
+from the reviewed integration; the later additions are test-only replay helpers.
 
 ## Join and attached-collapse regressions
 

@@ -11,6 +11,9 @@ use std::sync::Arc;
 
 type H = Harness<'static, PhotocraftApp>;
 
+#[path = "pr_followup_replay.rs"]
+mod pr_followup_replay;
+
 struct Clip {
     directory: PathBuf,
     frame: usize,

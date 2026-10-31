@@ -1,5 +1,18 @@
 # Panel docking repair validation
 
+## Gallery follow-up (2026-10-31)
+
+Only test-only replay helpers, documentation and GIF assets changed after the
+submission below; product/runtime code is unchanged. Both opt-in pointer replay
+runs passed, producing 887 raw PNG frames. The gallery now contains 13 GIFs,
+covering the complete panel repair without caption overlays. Every encoded frame
+was decoded and compared with its quantized source; total display durations and
+loop metadata were checked. Selected frame sheets were reviewed for crop/context.
+The updated panel filter passed 165 tests (two explicit benchmarks ignored), and
+fmt passed. UI Clippy reports the same five previously documented locations;
+no new replay-helper findings were reported. The broader runtime results below
+remain dated to their actual tested source and were not rerun for an asset change.
+
 ## Review submission (2026-10-31)
 
 Validated code: `88da5a9142c9c55bbb9fb93abe8ddc5192f83929`, integrating main
