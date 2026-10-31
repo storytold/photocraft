@@ -112,9 +112,23 @@ impl DocState {
     /// Robust against stale state: ids no longer in the document are skipped, and if the active
     /// layer was changed without updating the set, the selection is just the active layer.
     pub fn selected_layers(&self) -> Vec<LayerId> {
+        /// Collects selected IDs in document order without constructing layer paths.
+        fn collect(layers: &[photocraft_doc::Layer], selected: &[LayerId], out: &mut Vec<LayerId>) {
+            for layer in layers {
+                if selected.binary_search(&layer.id).is_ok() {
+                    out.push(layer.id);
+                }
+                if let Some(children) = layer.children() {
+                    collect(children, selected, out);
+                }
+            }
+        }
         let Some(active) = self.active_layer else { return Vec::new() };
-        let set: &[LayerId] = if self.selected_layers.contains(&active) { &self.selected_layers } else { std::slice::from_ref(&active) };
-        self.doc.walk().into_iter().map(|(_, _, l)| l.id).filter(|id| set.contains(id)).collect()
+        let mut selected = if self.selected_layers.contains(&active) { self.selected_layers.clone() } else { vec![active] };
+        selected.sort_unstable();
+        let mut out = Vec::new();
+        collect(&self.doc.layers, &selected, &mut out);
+        out
     }
     pub fn is_layer_selected(&self, id: LayerId) -> bool {
         self.active_layer == Some(id) || (self.active_layer.is_some_and(|a| self.selected_layers.contains(&a)) && self.selected_layers.contains(&id))
