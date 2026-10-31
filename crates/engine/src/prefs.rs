@@ -222,6 +222,8 @@ pub struct General {
     pub export_clipboard: bool,
     pub resize_image_during_place: bool,
     pub always_create_smart_objects_when_placing: bool,
+    /// Place files without opening Free Transform on them (#8492).
+    pub skip_transform_when_placing: bool,
     /// Scroll wheel zooms instead of panning.
     pub zoom_with_scroll_wheel: bool,
     /// Wheel zoom eases over the frames of a notch; off, a notch is one instant ×1.1 step.
@@ -242,6 +244,7 @@ impl Default for General {
             export_clipboard: true,
             resize_image_during_place: true,
             always_create_smart_objects_when_placing: true,
+            skip_transform_when_placing: false,
             zoom_with_scroll_wheel: false,
             animated_zoom: true,
             zoom_resizes_windows: false,

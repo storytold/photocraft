@@ -253,6 +253,11 @@ pub type ClipboardUnreadableFn = Box<dyn Fn() -> bool>;
 /// Shared queue of (file name, bytes) delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
+/// Shared queue of (the document whose canvas a file was dropped on, file name, bytes) delivered
+/// asynchronously: the document is the one [`PhotocraftApp::dropped_on_canvas`] named at the drop,
+/// so a tab selected while the file is still being read doesn't receive it.
+pub type PlaceInbox = std::sync::Arc<std::sync::Mutex<Vec<(photocraft_doc::DocId, String, Vec<u8>)>>>;
+
 /// Read the saved preferences text (`None` when there is none yet).
 pub type LoadTextFn = Box<dyn FnMut() -> Option<String>>;
 
@@ -373,10 +378,10 @@ pub struct Services {
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,
-    /// Files delivered asynchronously for a drop onto the active document's canvas (web
-    /// drag-and-drop, routed by [`PhotocraftApp::dropped_on_canvas`]): placed as layers like a
+    /// Files delivered asynchronously for a drop onto a document's canvas (web drag-and-drop,
+    /// routed by [`PhotocraftApp::dropped_on_canvas`]): placed as layers of that document like a
     /// desktop canvas drop (Place Embedded, each in Free Transform).
-    pub place_inbox: Option<Inbox>,
+    pub place_inbox: Option<PlaceInbox>,
     /// OS clipboard images: copies go out, screenshots and images from other apps come in.
     pub clipboard_set_image: Option<ClipboardSetFn>,
     pub clipboard_get_image: Option<ClipboardGetFn>,

@@ -11,7 +11,7 @@ use photocraft_doc::Document;
 use photocraft_ui_egui::i18n;
 use photocraft_ui_egui::served_fonts;
 use photocraft_ui_egui::theme::ThemeKind;
-use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, Services};
+use photocraft_ui_egui::{FileDialogAnswer, FileDialogRequest, PhotocraftApp, PlaceInbox, Services};
 use wasm_bindgen::JsCast as _;
 
 type Inbox = Arc<Mutex<Vec<(String, Vec<u8>)>>>;
@@ -83,7 +83,7 @@ pub fn start() {
                     PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
                     PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
                     let inbox: Inbox = Arc::default();
-                    let place_inbox: Inbox = Arc::default();
+                    let place_inbox: PlaceInbox = Arc::default();
                     let served: Served = Arc::default();
                     load_font_manifest(served.clone(), cc.egui_ctx.clone());
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
@@ -266,8 +266,8 @@ struct WebShell {
     app: PhotocraftApp,
     /// Dropped files to open as documents.
     inbox: Inbox,
-    /// Dropped files to place on the active document's canvas.
-    place_inbox: Inbox,
+    /// Dropped files to place on a document's canvas, with that document.
+    place_inbox: PlaceInbox,
     /// Read by the `beforeunload` listener ([`guard_unload`]).
     unsaved: Arc<AtomicBool>,
     served: Served,
@@ -362,8 +362,12 @@ impl eframe::App for WebShell {
                 for ((f, name), place) in files {
                     match f.bytes_async().await {
                         Ok(bytes) => {
-                            let queue = if place { &place_inbox } else { &inbox };
-                            queue.lock().unwrap_or_else(PoisonError::into_inner).push((name, bytes));
+                            // Placed on the document it was dropped on, even if another tab was
+                            // selected while it was read.
+                            match place {
+                                Some(doc) => place_inbox.lock().unwrap_or_else(PoisonError::into_inner).push((doc, name, bytes)),
+                                None => inbox.lock().unwrap_or_else(PoisonError::into_inner).push((name, bytes)),
+                            }
                             ctx.request_repaint();
                         }
                         Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
@@ -407,7 +411,7 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
+fn services(inbox: Inbox, place_inbox: PlaceInbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
     Services {
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
