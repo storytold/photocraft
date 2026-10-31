@@ -24,18 +24,29 @@ fn map_sample(map: &Image, u: f32, v: f32, c: usize) -> f32 {
     top + (bot - top) * ay
 }
 
-/// A map value's shift as a fraction of the full one: Photoshop's zero is level 128, and each level
-/// is one 128th, so at 100 % a level moves one pixel (160 moves 32 px, 255 moves 127, 0 moves
-/// -128). Mid-grey as 127.5 with 255ths moved 160 by 32.6 px (#10444).
-fn shift(m: f32) -> f32 {
-    (m * 255.0 - 128.0) / 128.0
+/// A map value's shift as a fraction of the full one. On an 8-bit map Photoshop's zero is level
+/// 128, and each level is one 128th, so at 100 % a level moves one pixel (160 moves 32 px, 255
+/// moves 127, 0 moves -128). Mid-grey as 127.5 with 255ths moved 160 by 32.6 px (#10444). A deeper
+/// map has no level 128: its zero is its exact mid-grey, half (Photoshop's 16-bit 16384 of 32768),
+/// which as level 127.5 moved 0.5 px at 100 %.
+fn shift(m: f32, levels: bool) -> f32 {
+    if levels { (m * 255.0 - 128.0) / 128.0 } else { (m - 0.5) * 2.0 }
 }
 
 /// Displace: the map's first channel shifts pixels horizontally and its
-/// second (or first, for one-channel maps) vertically; level 128 = no shift.
+/// second (or first, for one-channel maps) vertically; level 128 (half, on a deeper map) = no shift.
 /// The map is stretched over the bounds or tiled from their top-left.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn displace(src: &Image, out: Rect, ctx: &Ctx, scale: (f32, f32), stretch: bool, undefined: UndefinedAreas, map: Option<&Image>) -> Vec<f32> {
+pub(crate) fn displace(
+    src: &Image,
+    out: Rect,
+    ctx: &Ctx,
+    scale: (f32, f32),
+    stretch: bool,
+    undefined: UndefinedAreas,
+    map: Option<&Image>,
+    map_8bit: bool,
+) -> Vec<f32> {
     let Some(map) = map.filter(|m| !m.rect.is_empty()) else { return src.crop(out) };
     let b = ctx.bounds;
     let (mw, mh) = (map.rect.width() as f32, map.rect.height() as f32);
@@ -46,8 +57,8 @@ pub(crate) fn displace(src: &Image, out: Rect, ctx: &Ctx, scale: (f32, f32), str
     remap(src, out, ctx, edge_of(undefined), |x, y| {
         let (lx, ly) = (x - b.x0 as f32, y - b.y0 as f32);
         let (u, v) = if stretch { (lx / bw * mw, ly / bh * mh) } else { (lx.rem_euclid(mw), ly.rem_euclid(mh)) };
-        let dx = shift(map_sample(map, u, v, 0)) * sx;
-        let dy = shift(map_sample(map, u, v, vc)) * sy;
+        let dx = shift(map_sample(map, u, v, 0), map_8bit) * sx;
+        let dy = shift(map_sample(map, u, v, vc), map_8bit) * sy;
         (x + dx, y + dy)
     })
 }

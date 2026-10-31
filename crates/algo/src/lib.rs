@@ -404,6 +404,10 @@ pub enum FilterParams {
         undefined: UndefinedAreas,
         #[serde(skip)]
         map: Option<std::sync::Arc<Image>>,
+        /// Whether the map has 8-bit levels: its zero is then level 128, as in Photoshop, and
+        /// deeper maps' is half, their exact mid-grey.
+        #[serde(skip)]
+        map_8bit: bool,
     },
     /// Curve points `[t, offset]`: t 0–1 top→bottom, offset −1…1 of half the width.
     Shear {
@@ -846,8 +850,8 @@ pub fn kernel(params: &FilterParams, src: &Image, out: Rect, ctx: &Ctx) -> Vec<f
         }
         FilterParams::TraceContour { level, upper } => stylize2::trace_contour(src, out, ctx, *level, *upper),
         FilterParams::Wind { method, from_right, seed } => stylize2::wind(src, out, ctx, *method, *from_right, *seed),
-        FilterParams::Displace { horizontal, vertical, stretch, undefined, map } => {
-            distort2::displace(src, out, ctx, (*horizontal, *vertical), *stretch, *undefined, map.as_deref())
+        FilterParams::Displace { horizontal, vertical, stretch, undefined, map, map_8bit } => {
+            distort2::displace(src, out, ctx, (*horizontal, *vertical), *stretch, *undefined, map.as_deref(), *map_8bit)
         }
         FilterParams::Shear { points, undefined } => distort2::shear(src, out, ctx, points, *undefined),
         FilterParams::ZigZag { amount, ridges, style } => distort2::zigzag(src, out, ctx, *amount, *ridges, *style),
