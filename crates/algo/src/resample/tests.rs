@@ -226,6 +226,31 @@ fn half_and_double_sizes() {
     }
 }
 
+/// A free transform's per-axis prefilter (#4864) is Image Size's Bicubic, bit for bit, when the
+/// scales are equal or one is 1; otherwise it is two Image Sizes, one per axis, the smaller first.
+#[test]
+fn per_axis_bicubic_is_image_size_for_each_axis() {
+    for sample in SampleType::ALL {
+        let mut s = Surface::new(PixelFormat::new(ColorMode::Rgb, sample, true));
+        let r = Rect::new(3, 5, 67, 45);
+        let v: Vec<f32> = (0..r.height())
+            .flat_map(|y| (0..r.width()).flat_map(move |x| [((x * 7 + y * 13) % 17) as f32 / 16.0, ((x * y) % 5) as f32 / 4.0, 0.5, 1.0]))
+            .collect();
+        s.write_region(r, &v);
+        let same = |a: &Surface, b: &Surface, what: &str| {
+            assert_eq!(a.content_bounds(), b.content_bounds(), "{sample:?} {what}");
+            assert_eq!(a.read_region(a.content_bounds()), b.read_region(b.content_bounds()), "{sample:?} {what}");
+        };
+        for (sx, sy) in [(0.5, 0.5), (0.3, 0.3), (1.0, 0.25), (0.4, 1.0), (1.0 / 64.0, 1.0 / 64.0)] {
+            same(&resize_surface_per_axis(&s, sx, sy), &resize_surface(&s, sx, sy, Resample::Bicubic), &format!("{sx} x {sy}"));
+        }
+        let y_first = resize_surface(&resize_surface(&s, 1.0, 0.25, Resample::Bicubic), 0.875, 1.0, Resample::Bicubic);
+        same(&resize_surface_per_axis(&s, 0.875, 0.25), &y_first, "0.875 x 0.25");
+        let x_first = resize_surface(&resize_surface(&s, 0.3, 1.0, Resample::Bicubic), 1.0, 0.6, Resample::Bicubic);
+        same(&resize_surface_per_axis(&s, 0.3, 0.6), &x_first, "0.3 x 0.6");
+    }
+}
+
 #[test]
 fn downscale_averages_checkerboard() {
     let mut s = Surface::new(PixelFormat::RGBA8);
