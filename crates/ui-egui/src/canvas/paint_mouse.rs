@@ -48,13 +48,15 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
     };
     // The picked preset belongs to the outgoing tool's brush: keep it with that tool, and take the
     // incoming tool's own (none for a brush not picked from a preset), so Update Brush can't
-    // overwrite one tool's preset with another tool's brush.
-    let outgoing = app.ui.brush_tool;
-    app.ui.tool_presets.retain(|(t, _)| *t != outgoing);
-    if let Some(name) = app.session.tools.current_preset.take() {
-        app.ui.tool_presets.push((outgoing, name));
+    // overwrite one tool's preset with another tool's brush. The engine keeps the set-aside
+    // presets, so renaming or deleting a preset updates them too.
+    let (outgoing, incoming) = (format!("{:?}", app.ui.brush_tool), format!("{tool:?}"));
+    let tools = &mut app.session.tools;
+    tools.tool_presets.retain(|(t, _)| *t != outgoing);
+    if let Some(name) = tools.current_preset.take() {
+        tools.tool_presets.push((outgoing, name));
     }
-    app.session.tools.current_preset = app.ui.tool_presets.iter().find(|(t, _)| *t == tool).map(|(_, n)| n.clone());
+    tools.current_preset = tools.tool_presets.iter().position(|(t, _)| *t == incoming).map(|i| tools.tool_presets.remove(i).1);
     app.session.tools.brush_changed();
     app.ui.brush_tool = tool;
 }

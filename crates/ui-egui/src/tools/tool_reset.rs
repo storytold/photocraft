@@ -92,7 +92,7 @@ fn reset_all(app: &mut PhotocraftApp) {
     app.ui.tool_options = ToolOptions::default();
     app.ui.selection_mode = 0;
     app.ui.tool_brushes.clear();
-    app.ui.tool_presets.clear();
+    app.session.tools.tool_presets.clear();
     reset_session_brush(app);
 }
 
