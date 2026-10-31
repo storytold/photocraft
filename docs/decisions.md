@@ -47,10 +47,10 @@ fractional radii, which we have no oracle for yet.
 
 The ladder keeps every integer radius bit-identical, so recorded actions and smart filters at
 those radii render as before. It is continuous and monotone in the radius and the same for Minimum
-and Maximum. The next square is the current one grown by a 3×3 square, so Squareness costs about
-5–20% more at a fractional radius. The next disc adds a ring of a few offsets, one shifted-row pass
+and Maximum. The next square is the current one grown by a 3×3 square, so Squareness costs up to
+about 20% more at a fractional radius. The next disc adds a ring of a few offsets, one shifted-row pass
 each, so Roundness costs up to about twice as much at small radii (where the disc itself is only a
-few rows) and about 20% more from r 5.
+few rows) and about 15% more at larger radii.
 We rejected per-offset coverage weights (an anti-aliased kernel): they change integer radii too,
 need an anchor value that min/max morphology does not define, and lose the separable O(1) square.
 
@@ -62,7 +62,7 @@ same half-widths. And with alpha, colour blends premultiplied: a straight blend 
 colour of transparent pixels into the half-transparent fringe (a grey edge around a white shape on
 an empty layer). Infinite HDR samples snap to the nearer end rather than producing NaN.
 
-Fractional radii now render differently, which is the fix. Squareness radii in [k, k + 0.5) are
+Fractional radii now render differently, which is the fix. Squareness radii in (k, k + 0.5) are
 stronger than before (1.4 was the 3×3 square and is now 40% of the way to 5×5), and radii in
 [k + 0.5, k + 1) are weaker (1.6 was the full 5×5 and is now 60% of the way there). A GPU path
 must use the same rule: `other::square_step`, `other::disc_step` and `other::disc_half_widths`
