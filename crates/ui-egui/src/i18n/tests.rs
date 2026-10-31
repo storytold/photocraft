@@ -18,6 +18,12 @@ fn hindi_tags_resolve() {
     assert_eq!(Lang::from_pref("HI"), HI());
 }
 
+#[test]
+fn hindi_takes_the_singular_for_zero_and_one() {
+    let forms: Vec<usize> = [0, 1, 2, 5].into_iter().map(HI().0.plural).collect();
+    assert_eq!(forms, [0, 0, 1, 1]);
+}
+
 /// The layer Color menu, Layer › New › Layer and the Layers panel name each label color in
 /// Hindi, each with its own name.
 #[test]
