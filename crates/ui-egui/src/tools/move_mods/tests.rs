@@ -515,3 +515,19 @@ fn a_nudge_is_one_screen_pixel() {
         assert_eq!(left_edge(&app, id), 8 + step - 10, "⇧← at {zoom}");
     }
 }
+
+/// #9511: below 0.1 % (a large document zooms out until its shorter side is 2 px) the nudge is
+/// still one screen pixel: 6000 document pixels at a 12,000 × 12,000 px document's lowest zoom,
+/// not capped at 1000. The ladder's f32 rungs (0.1 %, 0.2 %) still give whole steps (1000,
+/// not 999).
+#[test]
+fn a_nudge_is_one_screen_pixel_below_a_tenth_of_a_percent() {
+    let lowest = crate::zoom_levels::min([12_000, 12_000]);
+    for (zoom, step) in [(0.002, 500), (0.001, 1000), (0.0005, 2000), (lowest, 6000)] {
+        let mut app = app_with_layer();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.ui.views[0].zoom = zoom;
+        assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+        assert_eq!(left_edge(&app, id), 8 + step, "→ at {zoom}");
+    }
+}

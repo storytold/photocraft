@@ -200,14 +200,16 @@ pub fn abandon(app: &mut PhotocraftApp) {
 
 /// The document pixels one plain arrow press moves layers by with the Move tool: one screen
 /// pixel, as in Photoshop (#9511). Zoomed out that is several document pixels (2 at 50 %, 4 at
-/// 25 %; 1 at 66.7 %: whole pixels only), zoomed in still one. ⇧'s 10 px don't scale. Free
-/// Transform keeps 1 px.
+/// 25 %; 1 at 66.7 %: whole pixels only), zoomed in still one. No cap: the zoom bottoms out
+/// with the document's shorter side 2 px on screen (`zoom_levels::min`), so a step is at most
+/// half that side. ⇧'s 10 px don't scale. Free Transform keeps 1 px.
 fn screen_pixel_step(app: &PhotocraftApp) -> f64 {
     let zoom = f64::from(app.current_zoom());
     if app.ui.transform.is_some() || !zoom.is_finite() || zoom <= 0.0 {
         return 1.0;
     }
-    (1.0 / zoom + 1e-6).floor().clamp(1.0, 1000.0)
+    // A relative margin: the f32 zoom is a hair off its rung (0.1 % is 1 / 999.99995).
+    (1.0 / zoom * (1.0 + 1e-6)).floor().max(1.0)
 }
 
 /// Arrow keys with the Move tool (or while Free Transform is active): nudge one screen pixel
