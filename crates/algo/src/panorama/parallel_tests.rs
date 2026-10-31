@@ -350,7 +350,7 @@ fn multiband_matches_the_serial_code() {
         for ch in [1usize, 3] {
             let (imgs, wts) = rois(w, h, ch, n as u64 * 31 + ch as u64);
             for levels in [1usize, 2, 3, 5, 7] {
-                let got = multiband(w, h, &imgs, &wts, levels);
+                let got = multiband(w, h, &imgs, &wts, levels).unwrap();
                 let want = ref_multiband(w, h, &imgs, &wts, levels);
                 assert_eq!(bits(&got.0), bits(&want.0), "colours {w}x{h}x{ch} levels {levels}");
                 assert_eq!(bits(&got.1), bits(&want.1), "coverage {w}x{h}x{ch} levels {levels}");
@@ -358,7 +358,7 @@ fn multiband_matches_the_serial_code() {
         }
     }
     // No images at all, and zero levels.
-    assert_eq!(multiband(9, 7, &[], &[], 3).0.len(), ref_multiband(9, 7, &[], &[], 3).0.len());
+    assert_eq!(multiband(9, 7, &[], &[], 3).unwrap().0.len(), ref_multiband(9, 7, &[], &[], 3).0.len());
 }
 
 /// Batching the bands (#7758) changes when they are built, not the result. Budgets from none
@@ -374,7 +374,7 @@ fn multiband_batches_match_the_serial_code() {
             for levels in [1usize, 3, 5] {
                 let want = ref_multiband(w, h, &imgs, &wts, levels);
                 for &budget in &budgets {
-                    let got = multiband_batched(w, h, &imgs, &wts, levels, budget);
+                    let got = try_multiband_batched(w, h, &imgs, &wts, levels, budget, None).unwrap();
                     assert_eq!(bits(&got.0), bits(&want.0), "colours {w}x{h}x{ch} levels {levels} budget {budget}");
                     assert_eq!(bits(&got.1), bits(&want.1), "coverage {w}x{h}x{ch} levels {levels} budget {budget}");
                 }
@@ -388,10 +388,10 @@ fn multiband_batches_match_the_serial_code() {
 #[test]
 fn multiband_hashes_recorded_from_the_serial_code() {
     let (imgs, wts) = rois(97, 61, 3, 5);
-    let (px, cov) = multiband(97, 61, &imgs, &wts, 5);
+    let (px, cov) = multiband(97, 61, &imgs, &wts, 5).unwrap();
     assert_eq!(fnv(&[&px, &cov]), 0xf89a5726082ebb6c, "97x61 rgb, 5 levels");
     let (imgs, wts) = rois(130, 70, 1, 9);
-    let (px, cov) = multiband(130, 70, &imgs, &wts, 7);
+    let (px, cov) = multiband(130, 70, &imgs, &wts, 7).unwrap();
     assert_eq!(fnv(&[&px, &cov]), 0xb7d7ddc59d201730, "130x70 grey, 7 levels");
     let wt = weights(65, 41, 3);
     let mut px = noise(65 * 41 * 3, 4);
@@ -407,4 +407,21 @@ fn multiband_rejects_single_band_larger_than_budget() {
     let (imgs, wts) = rois(w, h, ch, 42);
     let err = try_multiband_batched(w, h, &imgs, &wts, 3, 100, Some(100)).unwrap_err();
     assert!(matches!(err, photocraft_raster::AllocationError::NotEnoughMemory { bytes } if bytes > 100));
+}
+
+/// [`band_bytes_bound`] covers the cost the batching estimates for any ROI, offsets and levels.
+#[test]
+fn band_bytes_bound_covers_the_band_cost() {
+    for (n, &(w, h)) in [(1usize, 1usize), (5, 3), (40, 30), (97, 61), (130, 70), (201, 129)].iter().enumerate() {
+        for ch in [1usize, 3, 4] {
+            let (imgs, _) = rois(w, h, ch, n as u64 + 3);
+            for levels in [0usize, 1, 2, 3, 5, 7] {
+                for im in &imgs {
+                    let cost = band_cost(im, w, h, ch, levels);
+                    let bound = band_bytes_bound(im.w, im.h, ch, levels, w, h);
+                    assert!(bound >= cost, "{w}x{h}x{ch} levels {levels} roi {}x{} at ({}, {}): bound {bound} < cost {cost}", im.w, im.h, im.x0, im.y0);
+                }
+            }
+        }
+    }
 }

@@ -264,7 +264,7 @@ fn auto_blend(s: &mut Session, p: &Value) -> Result<Value> {
         let order = seam_order(&surfs, 0);
         // Seamless Tones and Colors also evens out exposure and colour between the layers (gain
         // compensation over their overlaps), as in Photomerge.
-        let opt = BlendOptions { seamless, gains: seamless, geometry: None, budget: Some(MAX_BLEND_BYTES as usize) };
+        let opt = BlendOptions { seamless, gains: seamless, geometry: None, budget: None };
         let b = seam_blend(surfs, area, &order, opt, None)?;
         let weights: Vec<Vec<f32>> = b.layers.iter().map(|(_, m)| m.read_region(area)).collect();
         let blended = seamless.then(|| b.composite.read_region(area));
@@ -346,13 +346,13 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "edit.autoAlignLayers",
             "Auto-Align Layers…",
-            r#"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=the locked selected layer, else the bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"#,
+            r##"{"projection":"auto|perspective|cylindrical|spherical|collage|reposition","reference":layer id?=the locked selected layer, else the bottom selected layer,"geometricCorrection":bool=false,"interpolation":"bicubic|bilinear|nearest","registration":"auto|features|intensity"}"##,
             auto_align
         ),
         spec!(
             "edit.autoBlendLayers",
             "Auto-Blend Layers…",
-            r#"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2,"depthMap":bool=false}"#,
+            r##"{"method":"panorama|stack","seamlessTones":bool=true,"haloControl":0..8=2,"depthMap":bool=false}"##,
             auto_blend
         ),
     ]

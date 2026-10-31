@@ -500,33 +500,53 @@ fn band_row(band: &PyramidBand, l: usize, ch: usize, py: usize) -> Option<(usize
 /// uses a many-core machine better than one band's row-parallel work, and one at a time made the
 /// usual 2–4 image Photomerge 12–36% slower on a 32-thread desktop.
 #[cfg(not(target_arch = "wasm32"))]
-const BAND_BUDGET: usize = 5 << 30;
+pub const BAND_BUDGET: usize = 5 << 30;
 
 /// Without threads the bands of a batch are built one after another anyway, so each is added as
 /// soon as it is built (the browser's address space is 4 GB).
 #[cfg(target_arch = "wasm32")]
-const BAND_BUDGET: usize = 0;
+pub const BAND_BUDGET: usize = 0;
 
 /// Multi-band blend of `imgs` into a `w × h` panorama (origin 0,0) with one weight map per image
 /// over the same grid as its ROI (`weights[i]` has `w_i × h_i` entries). Returns the colour
-/// channels (`ch` per pixel) and the total coverage.
-pub fn multiband(w: usize, h: usize, imgs: &[RoiImage], weights: &[Vec<f32>], levels: usize) -> (Vec<f32>, Vec<f32>) {
-    multiband_batched(w, h, imgs, weights, levels, BAND_BUDGET)
+/// channels (`ch` per pixel) and the total coverage, or an error when a buffer can't be allocated.
+pub fn multiband(w: usize, h: usize, imgs: &[RoiImage], weights: &[Vec<f32>], levels: usize) -> Result<(Vec<f32>, Vec<f32>), AllocationError> {
+    try_multiband_batched(w, h, imgs, weights, levels, BAND_BUDGET, None)
 }
 
-/// Fallible [`multiband`], checking allocations and size limits.
-pub fn try_multiband(w: usize, h: usize, imgs: &[RoiImage], weights: &[Vec<f32>], levels: usize) -> Result<(Vec<f32>, Vec<f32>), AllocationError> {
-    try_multiband_batched(w, h, imgs, weights, levels, BAND_BUDGET, None)
+/// The grid an image's band is built on: its ROI grown by a margin and aligned down to the
+/// coarsest level's grid, clipped to the `w × h` canvas. Returns `(x0, y0, width, height)`.
+fn band_grid(im: &RoiImage, w: usize, h: usize, levels: usize) -> (i32, i32, usize, usize) {
+    let align = 1i32 << (levels.max(1) - 1);
+    let margin = align * 4;
+    let gx0 = ((im.x0 - margin).max(0) / align) * align;
+    let gy0 = ((im.y0 - margin).max(0) / align) * align;
+    let gx1 = (im.x0 + im.w as i32 + margin).min(w as i32);
+    let gy1 = (im.y0 + im.h as i32 + margin).min(h as i32);
+    (gx0, gy0, (gx1 - gx0).max(1) as usize, (gy1 - gy0).max(1) as usize)
+}
+
+/// Estimated bytes of building one band: its grid's colour and weight planes about three times
+/// over (the pyramids are 4/3 of a plane, and the grid copy, coverage and `expand` scratch come
+/// on top).
+pub(super) fn band_cost(im: &RoiImage, w: usize, h: usize, ch: usize, levels: usize) -> usize {
+    let (_, _, gw, gh) = band_grid(im, w, h, levels);
+    gw.saturating_mul(gh).saturating_mul(ch + 1).saturating_mul(4 * 3)
+}
+
+/// An upper bound on `band_cost` (the estimate batching uses) for any ROI of `w × h` pixels on a `canvas_w × canvas_h`
+/// canvas: the grid grows the ROI by the margin on both sides and aligns its start down by up to
+/// `align - 1`, and never exceeds the canvas.
+pub fn band_bytes_bound(w: usize, h: usize, ch: usize, levels: usize, canvas_w: usize, canvas_h: usize) -> usize {
+    let align = 1usize << (levels.max(1) - 1).min(30);
+    let margin = align.saturating_mul(4);
+    let extent = |n: usize, canvas: usize| n.saturating_add(margin.saturating_mul(2)).saturating_add(align).min(canvas).max(1);
+    extent(w, canvas_w).saturating_mul(extent(h, canvas_h)).saturating_mul(ch.saturating_add(1)).saturating_mul(4 * 3)
 }
 
 /// [`multiband`], building at most `budget` estimated bytes of bands at a time (at least one
 /// image). Each pixel still adds the bands in image order, so the result doesn't depend on it.
-pub(super) fn multiband_batched(w: usize, h: usize, imgs: &[RoiImage], weights: &[Vec<f32>], levels: usize, budget: usize) -> (Vec<f32>, Vec<f32>) {
-    let ch = imgs.first().map_or(1, |i| i.ch);
-    try_multiband_batched(w, h, imgs, weights, levels, budget, None).unwrap_or_else(|_| (vec![0.0; w * h * ch], vec![0.0; w * h]))
-}
-
-/// Fallible [`multiband_batched`] with an optional single-band budget cap.
+/// With `max_band_budget`, a single band estimated above it is an error instead.
 pub fn try_multiband_batched(
     w: usize,
     h: usize,
@@ -538,7 +558,6 @@ pub fn try_multiband_batched(
 ) -> Result<(Vec<f32>, Vec<f32>), AllocationError> {
     let ch = imgs.first().map_or(1, |i| i.ch);
     let levels = levels.max(1);
-    let align = 1i32 << (levels - 1);
     // Level sizes of the panorama.
     let mut sizes = vec![(w, h)];
     for _ in 1..levels {
@@ -553,21 +572,8 @@ pub fn try_multiband_batched(
         let wsum_len = lw.checked_mul(lh).ok_or(AllocationError::SizeOverflow)?;
         wsum.push(alloc_plane(wsum_len)?);
     }
-    let margin = align * 4;
-    // Each image on its ROI grown by a margin and aligned to the coarsest level's grid.
-    let grid = |im: &RoiImage| {
-        let gx0 = ((im.x0 - margin).max(0) / align) * align;
-        let gy0 = ((im.y0 - margin).max(0) / align) * align;
-        let gx1 = (im.x0 + im.w as i32 + margin).min(w as i32);
-        let gy1 = (im.y0 + im.h as i32 + margin).min(h as i32);
-        (gx0, gy0, (gx1 - gx0).max(1) as usize, (gy1 - gy0).max(1) as usize)
-    };
-    // Building one band holds its grid's colour and weight planes about three times over: the
-    // pyramids are 4/3 of a plane, and the grid copy, coverage and `expand` scratch come on top.
-    let cost = |im: &RoiImage| {
-        let (_, _, gw, gh) = grid(im);
-        gw.saturating_mul(gh).saturating_mul(ch + 1).saturating_mul(4 * 3)
-    };
+    let grid = |im: &RoiImage| band_grid(im, w, h, levels);
+    let cost = |im: &RoiImage| band_cost(im, w, h, ch, levels);
     let band = |k: usize| -> PyramidBand {
         let im = &imgs[k];
         let (gx0, gy0, gw, gh) = grid(im);

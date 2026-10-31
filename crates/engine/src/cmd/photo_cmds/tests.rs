@@ -369,15 +369,57 @@ fn photomerge_rejects_insufficient_memory_budget() {
     assert_eq!(s.active().unwrap().doc.name, "img1");
 }
 
+/// A flat opaque RGBA8 surface covering `area`.
+fn flat_surface(area: Rect, v: f32) -> Surface {
+    let fmt = PixelFormat::RGBA8;
+    let n = (area.width() * area.height()) as usize;
+    let data: Vec<f32> = (0..n).flat_map(|_| [v, v, v, 1.0]).collect();
+    let mut s = Surface::new(fmt);
+    s.write_region(area, &data);
+    s
+}
+
 #[test]
-fn photomerge_single_band_larger_than_budget_fails_safely() {
+fn seam_blend_rejects_a_band_larger_than_its_budget() {
+    let (a, b) = (Rect::new(0, 0, 64, 64), Rect::new(32, 0, 96, 64));
+    let warped = vec![flat_surface(a, 0.3), flat_surface(b, 0.6)];
+    let opt = BlendOptions { seamless: true, gains: true, geometry: None, budget: Some(1000) };
+    let err = seam_blend(warped, Rect::new(0, 0, 96, 64), &[0, 1], opt, None).err().expect("a 1000 byte budget can't hold a band");
+    assert!(err.to_string().contains("not enough memory to allocate"), "{err}");
+    // Without a budget the same blend succeeds.
+    let warped = vec![flat_surface(a, 0.3), flat_surface(b, 0.6)];
+    let opt = BlendOptions { seamless: true, gains: true, geometry: None, budget: None };
+    assert!(seam_blend(warped, Rect::new(0, 0, 96, 64), &[0, 1], opt, None).is_ok());
+}
+
+#[test]
+fn photomerge_succeeds_with_a_large_enough_memory_budget() {
     let (sw, sh) = (520, 220);
     let sc = scene(sw, sh, 5);
     let mut s = Session::new();
-    for (k, (x0, g)) in [(0usize, 1.0f32), (130, 1.15)].into_iter().enumerate() {
-        s.add_document(doc_from(&format!("b{k}"), &crop(&sc, sw, x0, 10, 220, 200, g), 220, 200, SampleType::U8), None);
+    for (k, x0) in [0usize, 180].into_iter().enumerate() {
+        s.add_document(doc_from(&format!("img{k}"), &crop(&sc, sw, x0, 10, 260, 200, 1.0), 260, 200, SampleType::U8), None);
     }
-    let err = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "reposition", "memoryBudget": 100_000})).unwrap_err();
-    assert!(err.to_string().contains("not enough memory for Photomerge"), "{err}");
-    assert_eq!(s.documents().len(), 2);
+    let r = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "reposition", "memoryBudget": 1u64 << 30})).unwrap();
+    assert_eq!(r["layers"], 2, "{r}");
+    assert_eq!(s.documents().len(), 3);
+}
+
+#[test]
+fn photomerge_memory_budget_precedence_and_defaults() {
+    // The param wins over the environment and the machine.
+    assert_eq!(budget_from(Some(123), Some("64"), Some(64 << 30)), 123);
+    // Then the environment variable (MiB).
+    assert_eq!(budget_from(None, Some(" 64 "), Some(64 << 30)), 64 << 20);
+    // An unparsable variable falls through to the machine.
+    assert_eq!(budget_from(None, Some("lots"), Some(8 << 30)), 4 << 30);
+    // Half of RAM with no upper ceiling.
+    assert_eq!(budget_from(None, None, Some(64 << 30)), 32 << 30);
+    // At least 1 GiB, and 4 GiB of RAM assumed when unknown.
+    assert_eq!(budget_from(None, None, Some(1 << 30)), 1 << 30);
+    assert_eq!(budget_from(None, None, None), 2 << 30);
+    // Huge values saturate instead of panicking or truncating.
+    assert_eq!(budget_from(Some(u64::MAX), None, None), usize::try_from(u64::MAX).unwrap_or(usize::MAX));
+    let _ = budget_from(None, Some("18446744073709551615"), None);
+    let _ = budget_from(None, None, Some(u64::MAX));
 }
