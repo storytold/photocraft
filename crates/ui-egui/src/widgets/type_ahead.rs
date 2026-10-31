@@ -48,7 +48,10 @@ pub fn keys(ui: &mut Ui, id: Id, current: Option<usize>, labels: &[&str]) -> Opt
         d.insert_temp(shown_id, pass);
     });
     if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::Enter)) {
+        // This list only (a dropdown in a popover leaves it open), and no longer marked open as
+        // `close_list` leaves it, so a list opened again at once starts with no letters typed.
         ui.close();
+        ui.data_mut(|d| d.remove::<u64>(open_id()));
     }
     let (typed, now) = ui.input_mut(|i| {
         let mut typed = String::new();
@@ -257,6 +260,34 @@ mod tests {
         h.run_steps(1);
         assert_eq!(h.state().1, Some(1), "d picks Dark");
         super::close_list(&h.ctx);
+        h.state_mut().0 = false;
+        h.run_steps(1);
+        h.state_mut().0 = true;
+        type_key(&h, egui::Key::A, "a");
+        h.run_steps(1);
+        assert_eq!(h.state().1, Some(0), "a starts over: Alpha");
+    }
+
+    /// #9314 review: ↩ closes the list as [`super::close_list`] does, so a quick click that opens
+    /// it again at once forgets the letters typed before: "d", ↩, reopened, "a" is Alpha, not "da".
+    #[test]
+    fn a_list_reopened_right_after_enter_starts_a_new_prefix() {
+        let labels = ["Alpha", "Dark", "Dawn"];
+        // Frames as quick as a real click's, so the letters are typed with no pause between them.
+        let mut h = egui_kittest::Harness::builder().with_step_dt(1.0 / 60.0).build_ui_state(
+            move |ui, (open, picked): &mut (bool, Option<usize>)| {
+                if *open && let Some(i) = super::keys(ui, egui::Id::unique("list"), *picked, &labels) {
+                    *picked = Some(i);
+                }
+            },
+            (true, Some(0)),
+        );
+        h.run_steps(1);
+        type_key(&h, egui::Key::D, "d");
+        h.run_steps(1);
+        assert_eq!(h.state().1, Some(1), "d picks Dark");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(1);
         h.state_mut().0 = false;
         h.run_steps(1);
         h.state_mut().0 = true;
