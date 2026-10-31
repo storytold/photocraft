@@ -28,7 +28,7 @@
 use std::cell::Cell;
 use std::sync::OnceLock;
 
-use egui::{Align, Align2, Layout, NumExt};
+use egui::{Align, Align2, Layout};
 
 pub use crate::i18n::Dir;
 
@@ -445,13 +445,13 @@ pub fn float_window_x(canvas: egui::Rect, width: f32, inset: f32, cascade: f32) 
     }
 }
 
-/// Clamp `rect` to at least `min` in both dimensions, keeping the edge a resizable window is
-/// anchored on fixed: under RTL the fork anchors the window rect at its right edge (resize grip
-/// on the left), so a too-narrow rect grows leftward; in LTR it grows rightward from the fixed
-/// left edge. The top edge is fixed in both directions. A min-size clamp computed against the
-/// wrong edge moves the anchored edge and the min width is lost in that direction.
+/// Clamp a resizable window's rect to exactly `min`, keeping the edge the window is anchored on
+/// fixed: under RTL the fork anchors the window rect at its right edge (resize grip on the
+/// left), so the clamped rect grows leftward from a fixed right edge; in LTR it keeps the fixed
+/// left edge. The top edge is fixed in both directions. The returned rect's size is exactly
+/// `min` — it never preserves the input rect's current size, so shrink drags are honoured.
 pub fn clamp_window_min_size(rect: egui::Rect, min: egui::Vec2) -> egui::Rect {
-    let size = rect.size().at_least(min);
+    let size = min;
     if is_rtl() {
         egui::Rect::from_min_size(egui::pos2(rect.right() - size.x, rect.top()), size)
     } else {
