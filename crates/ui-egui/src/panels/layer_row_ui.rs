@@ -250,16 +250,10 @@ pub fn paint_triangle(painter: &Painter, c: Pos2, open: bool, color: egui::Color
 
 
 /// Photoshop-style Layers flyout commands. The dock owns tab-group controls, not this menu.
-/// Callers wrap in `direction::popup_body`, which owns the sizing pass; the paint pass re-scopes
-/// justified at `Max` so the full-width item rows mirror and their labels hug the reading-start
-/// edge (a `Min` cross align hugs the left even under the direction flag).
+/// Callers wrap in `direction::popup_body`, which owns the sizing pass and the mirrored body;
+/// the item rows go through `menu_row`, whose button atoms mirror under the direction flag.
 pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
-    if crate::direction::is_rtl() && !ui.is_sizing_pass() {
-        let max_rect = ui.max_rect();
-        ui.scope_builder(egui::UiBuilder::new().max_rect(max_rect).layout(egui::Layout::top_down_justified(egui::Align::Max)), |ui| panel_menu_body(app, ui));
-    } else {
-        panel_menu_body(app, ui);
-    }
+    panel_menu_body(app, ui);
 }
 
 /// The flyout's commands.
@@ -498,3 +492,52 @@ mod rename_tests;
 
 #[cfg(test)]
 mod edit_tests;
+
+#[cfg(test)]
+mod popup_twin_tests {
+    use egui::{Pos2, Rect, vec2};
+    use serde_json::json;
+
+    use super::panel_menu;
+    use crate::direction::{Dir, direction_scope};
+
+    /// `panel_menu` keeps its caller's `direction::popup_body` body (no local re-scope): under
+    /// RTL a flyout item's label hugs the popup's reading-start (right) edge; left-to-right it
+    /// hugs the left edge, as the LTR twin in `rtl_tests` shows for the rows themselves.
+    #[test]
+    fn panel_menu_item_hugs_the_reading_start_edge_in_both_directions() {
+        let probe = |dir: Dir| -> (Rect, Rect) {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut session = photocraft_engine::Session::new();
+            session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+            session.execute("layer.new.layer", json!({})).unwrap();
+            let mut app = PhotocraftApp::new(session, crate::Services::default());
+            let strip = Rect::from_min_size(Pos2::ZERO, vec2(220.0, 400.0));
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down_justified(egui::Align::Min)));
+                crate::direction::popup_body(&mut strip_ui, |ui| {
+                    ui.set_min_width(180.0);
+                    panel_menu(&mut app, ui);
+                });
+            });
+            let label = out
+                .shapes
+                .iter()
+                .find_map(|cs| match &cs.shape {
+                    egui::Shape::Text(t) if t.galley.text().contains("New Layer") => Some(t.visual_bounding_rect()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("{dir:?}: the New Layer row label is painted"));
+            out.textures_delta.clear();
+            (strip, label)
+        };
+        let (l_strip, l_label) = probe(Dir::Ltr);
+        let (r_strip, r_label) = probe(Dir::Rtl);
+        assert!(l_label.left() - l_strip.left() < 40.0, "LTR: the label hugs the left edge: {l_label:?} in {l_strip:?}");
+        assert!(r_strip.right() - r_label.right() < 40.0, "RTL: the label hugs the right edge: {r_label:?} in {r_strip:?}");
+        assert!(r_label.right() > l_label.right() + 10.0, "RTL: the label sits at the reading start: ltr {l_label:?} rtl {r_label:?}");
+    }
+}
