@@ -177,6 +177,34 @@ fn unit_conversion_preserves_fractional_negative_positions_and_percent_extents()
 }
 
 #[test]
+fn switching_units_and_confirming_preserves_high_precision_positions() {
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    for original in [-1e-10_f64, 1e-10, -1e-100, 1e-100, -123.45678901234567, 0.0, 100.0, 123.45678901234567] {
+        let (app, ctx) = app_at_resolution("pixels", 300);
+        let mut h = Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        let d = open(h.state_mut(), &ctx);
+        set(h.state_mut(), d, "vertical", &format!("{original} px"));
+        h.run_steps(3);
+        for label in ["Inches", "Millimeters", "Pixels"] {
+            h.get_by_label("Units").click();
+            h.run_steps(3);
+            h.get_by_label(label).click();
+            h.run_steps(3);
+        }
+        crate::dialogs::confirm(h.state_mut(), d).unwrap();
+        let (horizontal, vertical) = guides(h.state());
+        assert!(horizontal.is_empty());
+        assert_eq!(vertical.len(), 1);
+        let actual = vertical[0];
+        // Allow floating-point conversion error, but no loss from decimal-place rounding.
+        let tolerance = original.abs() * f64::EPSILON * 8.0;
+        assert!((actual - original).abs() <= tolerance, "{original} px became {actual} px");
+    }
+}
+
+#[test]
 fn editing_an_existing_guide_accepts_the_selected_unit_and_undo_restores_it() {
     let (mut app, _) = app("pixels");
     app.run(COMMAND, json!({"orientation": "horizontal", "position": 10})).unwrap();
