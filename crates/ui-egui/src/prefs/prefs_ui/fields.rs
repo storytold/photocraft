@@ -184,7 +184,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
     // The dialog follows the language being edited, so a change shows before OK.
     let lang = crate::i18n::Lang::from_pref(values.pointer("/interface/language").and_then(Value::as_str).unwrap_or("auto"));
     let mut search = f.get("__search").and_then(Value::as_str).unwrap_or("").to_string();
-    crate::widgets::text_field(ui, ui.scope_id().with("prefs-search"), &mut search, tl!("Search settings…"), ui.available_width(), false);
+    crate::widgets::text_field(ui, ui.scope_id().with("prefs-search"), &mut search, tl!("Search settings…"), crate::text::direction::row_width(ui), false);
     let found = preference_sections(&values, &search);
     if !found.iter().any(|(id, _)| *id == section)
         && let Some((first, _)) = found.first()
@@ -213,7 +213,7 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
         // included — align at the reading start and the scroll area's content inherits the layout.
         // LTR is egui's default `top_down(Align::Min)`, unchanged.
         ui.with_layout(crate::text::direction::body_layout(), |ui| {
-            ui.set_width((ui.available_width() - 12.0).max(340.0));
+            ui.set_width((crate::text::direction::row_width(ui) - 12.0).max(340.0));
             let title = SECTIONS.iter().find(|(id, _)| *id == section).map_or("General", |(_, t)| *t);
             ui.label(RichText::new(tl!(&title)).font(crate::theme::semibold(14.0)).color(t.text));
             let show_all = search.trim().is_empty()
@@ -335,7 +335,7 @@ pub(super) fn tools_field_visible(obj: &Map<String, Value>, key: &str) -> bool {
 fn pref_group(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui)) {
     let t = Tokens::get(ui.ctx());
     egui::Frame::new().stroke(egui::Stroke::new(1.0, t.card_border)).corner_radius(t.radius).inner_margin(10.0).show(ui, |ui| {
-        ui.set_width(ui.available_width());
+        ui.set_width(crate::text::direction::row_width(ui));
         ui.label(RichText::new(tl!(title)).strong().color(t.text));
         ui.add_space(4.0);
         add(ui);
