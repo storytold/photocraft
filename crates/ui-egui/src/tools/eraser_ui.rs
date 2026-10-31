@@ -49,14 +49,16 @@ pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]]) -
 /// the commit, with the jitter seed from the first point (`retouch_ui::stroke_seed`).
 pub(crate) fn background_eraser_params(app: &PhotocraftApp, points: &[[f64; 3]]) -> Value {
     let o = &app.ui.tool_options;
-    json!({
+    let mut p = json!({
         "points": points,
         "sampling": o.bg_sampling,
         "limits": o.bg_limits,
         "tolerance": o.bg_tolerance,
         "protectForegroundColor": o.bg_protect_fg,
         "seed": crate::retouch_ui::stroke_seed(points),
-    })
+    });
+    crate::canvas::pattern_wrap(app, &mut p);
+    p
 }
 
 /// Whether `tool` is the Eraser in Pencil mode: it erases hard, aliased pixels through

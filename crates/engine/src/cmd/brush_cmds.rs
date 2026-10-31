@@ -9,7 +9,7 @@
 use photocraft_doc::LayerContent;
 use photocraft_geom::Rect;
 use photocraft_paint::mixer::{MixerSettings, MixerState};
-use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement, color_replacement_effect};
+use photocraft_paint::replace::{Limits, ReplaceMode, ReplaceSettings, Sampling, apply_color_replacement_wrapped, color_replacement_effect};
 use photocraft_paint::tile::PREVIEW_SIDE;
 use photocraft_paint::{
     BrushPreset, BrushSettings, GrayTile, Pattern, PresetCaptures, StoredTile, Stroke, StrokePoint, StrokeRenderer, TipShape, render_stroke,
@@ -851,8 +851,9 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
     let dmg = s.edit("Color Replacement", |doc, _| {
         let sel = doc.selection.clone();
         let lock = doc.effective_locks(id).transparency;
+        let wrap = flag(p, "wrap", false).then(|| doc.bounds());
         let surf = paint_surface(doc, id, &json!({}))?;
-        Ok(apply_color_replacement(surf, &stroke, &rs, sel.as_ref(), lock))
+        Ok(apply_color_replacement_wrapped(surf, &stroke, &rs, sel.as_ref(), lock, wrap))
     })?;
     Ok(damage_json(s, dmg))
 }
@@ -861,8 +862,10 @@ fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {
 /// recolouring per dab as the commit, so the preview at the last point is the committed result.
 pub fn live_color_replacement(s: &Session, p: &Value) -> Result<crate::retouch_cmds::LiveDab> {
     let (stroke, rs, id) = color_replacement_setup(s, p)?;
-    crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", &json!({}), stroke, Some(id), 0, |pre| {
-        Box::new(color_replacement_effect(pre.clone(), rs))
+    // Layer pixels, as the commit paints, wrapped as it is.
+    let params = json!({"wrap": flag(p, "wrap", false)});
+    crate::retouch_cmds::LiveDab::with_effect(s, "paint.colorReplacement", &params, stroke, Some(id), 0, |pre, wrap| {
+        Box::new(color_replacement_effect(pre.clone(), rs, wrap))
     })?
     .with_tail_preview()
 }
@@ -1328,7 +1331,7 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!(
             "paint.colorReplacement",
             "Color Replacement",
-            r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":0..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"target":"pixels"="pixels","seed":u64?}"##,
+            r##"{"points":[…],"brush":{…}?,"size":px?,"mode":"hue|saturation|color|luminosity"="color","sampling":"continuous|once|backgroundSwatch"="continuous","limits":"contiguous|discontiguous|findEdges"="contiguous","tolerance":0..100=30,"antiAlias":bool=true,"color":"#rrggbb"?=foreground,"target":"pixels"="pixels","seed":u64?,"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges)}"##,
             crate::commands::has_paintable,
             color_replacement,
             true

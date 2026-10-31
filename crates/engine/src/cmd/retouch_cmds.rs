@@ -16,7 +16,8 @@ use photocraft_algo::retouch::{ToneRange, dodge_burn, local_blur, local_sharpen,
 use photocraft_color::{BlendMode, PixelFormat, SampleType};
 use photocraft_doc::{Document, LayerContent, LayerId};
 use photocraft_geom::Rect;
-use photocraft_paint::retouch::{Footprint, Region, Smudge, alpha_index, apply_coverage, apply_dab_stroke};
+use photocraft_paint::retouch::{Footprint, Region, Smudge, WorkTiles, alpha_index, apply_coverage, apply_dab_stroke_wrapped};
+use photocraft_paint::wrap::wrap_coord;
 use photocraft_paint::{BrushSettings, Stroke, StrokePoint};
 use photocraft_raster::{Surface, from_rgba_into, to_rgba};
 use rayon::prelude::*;
@@ -121,6 +122,10 @@ fn num(p: &Value, k: &str, d: f32) -> f32 {
 }
 fn flag(p: &Value, k: &str, d: bool) -> bool {
     p.get(k).and_then(Value::as_bool).unwrap_or(d)
+}
+/// The canvas a stroke with `"wrap": true` repeats across (View › Pattern Preview).
+fn wrap_tile(pre: &Document, p: &Value) -> Option<Rect> {
+    flag(p, "wrap", false).then(|| pre.bounds()).filter(|t| !t.is_empty())
 }
 fn string<'a>(p: &'a Value, k: &str, d: &'a str) -> &'a str {
     p.get(k).and_then(Value::as_str).unwrap_or(d)
@@ -251,7 +256,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","pattern":id|name?=Patterns panel current,"scale":1..1000 %=100,"angle":deg=0,"aligned":bool=true,"impressionist":bool=false,"mode":"normal|multiply|…"="normal","phase":[px,py]? → {"damage","phase","aligned","pattern"}"#
+                r#","pattern":id|name?=Patterns panel current,"scale":1..1000 %=100,"angle":deg=0,"aligned":bool=true,"impressionist":bool=false,"mode":"normal|multiply|…"="normal","phase":[px,py]?,"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges) → {"damage","phase","aligned","pattern"}"#
             ),
             enabled: pattern_stamp::enabled,
             run: pattern_stamp::run,
@@ -263,7 +268,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","source":[sx,sy] | "offset":[dx,dy],"aligned":bool=true,"sampleLayer":"current|currentAndBelow|all"="current","mode":"normal|…"="normal" → {"damage","offset","aligned","nextSource"}"#
+                r#","source":[sx,sy] | "offset":[dx,dy],"aligned":bool=true,"sampleLayer":"current|currentAndBelow|all"="current","mode":"normal|…"="normal","wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges) → {"damage","offset","aligned","nextSource"}"#
             ),
             enabled: has_pixel_layer,
             run: healing_brush,
@@ -274,7 +279,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Spot Healing Brush",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","type":"contentAware|createTexture|proximityMatch"="contentAware","sampleAllLayers":bool=false"#),
+            params: brush_params!(
+                r#","type":"contentAware|createTexture|proximityMatch"="contentAware","sampleAllLayers":bool=false,"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges)"#
+            ),
             enabled: has_pixel_layer,
             run: spot_healing,
             journal: true,
@@ -316,7 +323,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Dodge",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","range":"shadows|midtones|highlights"="midtones","exposure":1..100=50,"protectTones":bool=true"#),
+            params: brush_params!(
+                r#","range":"shadows|midtones|highlights"="midtones","exposure":1..100=50,"protectTones":bool=true,"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges)"#
+            ),
             enabled: has_pixel_layer,
             run: |s, p| dab_cmd(s, p, "paint.dodge"),
             journal: true,
@@ -326,7 +335,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Burn",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","range":"shadows|midtones|highlights"="midtones","exposure":1..100=50,"protectTones":bool=true"#),
+            params: brush_params!(
+                r#","range":"shadows|midtones|highlights"="midtones","exposure":1..100=50,"protectTones":bool=true,"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges)"#
+            ),
             enabled: has_pixel_layer,
             run: |s, p| dab_cmd(s, p, "paint.burn"),
             journal: true,
@@ -336,7 +347,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Sponge",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","mode":"desaturate|saturate"="desaturate","vibrance":bool=true (flow = sponge strength)"#),
+            params: brush_params!(
+                r#","mode":"desaturate|saturate"="desaturate","vibrance":bool=true (flow = sponge strength),"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges)"#
+            ),
             enabled: has_pixel_layer,
             run: |s, p| dab_cmd(s, p, "paint.sponge"),
             journal: true,
@@ -346,7 +359,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Blur",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","strength":1..100=50,"sampleAllLayers":bool=false"#),
+            params: brush_params!(
+                r#","strength":1..100=50,"sampleAllLayers":bool=false,"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges)"#
+            ),
             enabled: has_pixel_layer,
             run: |s, p| dab_cmd(s, p, "paint.blur"),
             journal: true,
@@ -356,7 +371,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Sharpen",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","strength":1..100=50,"protectDetail":bool=true,"sampleAllLayers":bool=false"#),
+            params: brush_params!(
+                r#","strength":1..100=50,"protectDetail":bool=true,"sampleAllLayers":bool=false,"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges)"#
+            ),
             enabled: has_pixel_layer,
             run: |s, p| dab_cmd(s, p, "paint.sharpen"),
             journal: true,
@@ -366,7 +383,9 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Smudge",
             menu: &[],
             shortcut: None,
-            params: brush_params!(r#","strength":1..100=50,"fingerPainting":bool=false (starts with the foreground colour),"sampleAllLayers":bool=false"#),
+            params: brush_params!(
+                r#","strength":1..100=50,"fingerPainting":bool=false (starts with the foreground colour),"sampleAllLayers":bool=false,"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges)"#
+            ),
             enabled: has_pixel_layer,
             run: |s, p| dab_cmd(s, p, "paint.smudge"),
             journal: true,
@@ -377,7 +396,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","state":row (a History panel row, as history.setSource: 0 = oldest state, then the current one, then the greyed redo states),"snapshot":id (a history.newSnapshot id; default: the History panel's source, else the oldest held state; a source of another canvas size is an error)"#
+                r#","state":row (a History panel row, as history.setSource: 0 = oldest state, then the current one, then the greyed redo states),"snapshot":id (a history.newSnapshot id; default: the History panel's source, else the oldest held state; a source of another canvas size is an error),"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges)"#
             ),
             enabled: has_pixel_layer,
             run: history_brush,

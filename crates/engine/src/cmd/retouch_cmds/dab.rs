@@ -1,9 +1,10 @@
 use super::sampling::{AllLayers, sample_all_layers};
 use super::{
     BrushSettings, Document, EngineError, Footprint, IndexedParallelIterator, LayerId, ParallelIterator, ParallelSliceMut, PixelFormat, Rect, Region, Result,
-    Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, alpha_index, apply_dab_stroke, bad, damage_json, dodge_burn, flag, from_rgba_into,
-    has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, run_stroke, sponge, string, to_rgba,
+    Session, Smudge, Stroke, StrokePoint, Surface, ToneRange, Value, WorkTiles, alpha_index, apply_dab_stroke_wrapped, bad, damage_json, dodge_burn, flag,
+    from_rgba_into, has_pixel_layer, json, local_blur, local_sharpen, num, parse_brush, run_stroke, sponge, string, to_rgba, wrap_tile,
 };
+use photocraft_paint::wrap::{fits, fold_area, pieces, wrap_coord};
 
 // ---------------------------------------------------------------------------------------------
 // Toning (Dodge / Burn / Sponge) and focus (Blur / Sharpen), Smudge
@@ -46,8 +47,9 @@ fn color_dab(fmt: &PixelFormat, work: &mut Region, fp: &Footprint, strength: f32
 /// stroke's coverage there (`toned` is the full-exposure colour). Dabs build up coverage as in a
 /// brush stroke, capped at full coverage, so Exposure caps a stroke the way Opacity caps a paint
 /// stroke: overlapping dabs and passes within one stroke don't compound the tone curve, and a
-/// new stroke builds on the last.
-fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static) -> DabEffect {
+/// new stroke builds on the last. Wrapped around `wrap` (View › Pattern Preview), the coverage is
+/// kept per canvas pixel, so a stroke coming back to a pixel one canvas away tones it once.
+fn tone_stroke(fmt: PixelFormat, wrap: Option<Rect>, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static) -> DabEffect {
     /// Side of the cells that remember, per touched pixel, the coverage applied so far and the
     /// original pixel (copied from the working pixels the first time a dab reaches it). Dense
     /// cells rather than a map per pixel: a map lookup per covered pixel made long strokes with
@@ -60,11 +62,8 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
     let mut cells: std::collections::HashMap<(i32, i32), Cell> = std::collections::HashMap::new();
     let a = alpha_index(&fmt);
     let n = fmt.channels();
-    Box::new(move |work, fp| {
-        let r = fp.rect.intersect(&work.rect);
-        if r.is_empty() {
-            return;
-        }
+    // Tone the pixels of `px` at `r` moved by `(dx, dy)`, remembered at `r`.
+    let mut tone = move |px: &mut Region, fp: &Footprint, r: Rect, (dx, dy): (i32, i32)| {
         let mut enc = [0.0f32; 8];
         for cy in r.y0.div_euclid(CELL)..=(r.y1 - 1).div_euclid(CELL) {
             for cx in r.x0.div_euclid(CELL)..=(r.x1 - 1).div_euclid(CELL) {
@@ -78,7 +77,7 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
                 let cell = cells.entry((cx, cy)).or_insert_with(|| Cell { cov: vec![-1.0; len], orig: vec![0.0; len * n] });
                 for y in part.y0..part.y1 {
                     for x in part.x0..part.x1 {
-                        let k = fp.at(x, y).clamp(0.0, 1.0);
+                        let k = fp.at(x + dx, y + dy).clamp(0.0, 1.0);
                         if k <= 0.0 {
                             continue;
                         }
@@ -86,7 +85,7 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
                         let (Some(prev), Some(src)) = (cell.cov.get_mut(i), cell.orig.get_mut(i * n..i * n + n)) else { continue };
                         if *prev < 0.0 {
                             // First touch: the working pixel is still the original.
-                            src.copy_from_slice(work.px(x, y));
+                            src.copy_from_slice(px.px(x + dx, y + dy));
                             *prev = 0.0;
                         }
                         // Dabs build up the stroke's coverage as a brush stroke's do (flow), up
@@ -100,12 +99,51 @@ fn tone_stroke(fmt: PixelFormat, toned: impl Fn([f32; 3]) -> [f32; 3] + 'static)
                         let t = toned([o[0], o[1], o[2]]);
                         let m = [o[0] + (t[0] - o[0]) * k, o[1] + (t[1] - o[1]) * k, o[2] + (t[2] - o[2]) * k];
                         from_rgba_into(&fmt, [m[0], m[1], m[2], o[3]], &mut enc);
-                        let px = work.px_mut(x, y);
+                        let out = px.px_mut(x + dx, y + dy);
                         for c in 0..n {
                             if Some(c) != a {
-                                px[c] = enc[c];
+                                out[c] = enc[c];
                             }
                         }
+                    }
+                }
+            }
+        }
+    };
+    Box::new(move |work, fp| {
+        let r = fp.rect.intersect(&work.rect);
+        if r.is_empty() {
+            return;
+        }
+        match wrap {
+            None => tone(work, fp, r, (0, 0)),
+            Some(tile) if fits(r, tile) => {
+                for (part, off) in pieces(r, tile) {
+                    tone(work, fp, part, off);
+                }
+            }
+            // A dab bigger than the canvas covers its pixels more than once: tone each at the
+            // most coverage any copy gets (the copy `WorkTiles` keeps), and give every copy that.
+            Some(tile) => {
+                let area = fold_area(r, tile);
+                let mut on = Region::new(area, work.ch);
+                let mut most = Footprint { dab: fp.dab, index: fp.index, rect: area, cov: vec![0.0; area.width() as usize * area.height() as usize] };
+                let at = |x, y| (wrap_coord(x, tile.x0, tile.x1), wrap_coord(y, tile.y0, tile.y1));
+                for y in r.y0..r.y1 {
+                    for x in r.x0..r.x1 {
+                        let (tx, ty) = at(x, y);
+                        let i = on.index(tx, ty);
+                        on.px_mut(tx, ty).copy_from_slice(work.px(x, y));
+                        if let Some(m) = most.cov.get_mut(i) {
+                            *m = m.max(fp.at(x, y));
+                        }
+                    }
+                }
+                tone(&mut on, &most, area, (0, 0));
+                for y in r.y0..r.y1 {
+                    for x in r.x0..r.x1 {
+                        let (tx, ty) = at(x, y);
+                        work.px_mut(x, y).copy_from_slice(on.px(tx, ty));
                     }
                 }
             }
@@ -215,11 +253,12 @@ impl DabTool {
         }
     }
 
-    /// The per-dab effect on a working copy in `fmt`, for a brush of `spacing`.
-    pub(super) fn effect(&self, fmt: PixelFormat, spacing: f32) -> DabEffect {
+    /// The per-dab effect on a working copy in `fmt`, for a brush of `spacing`, on a stroke
+    /// wrapped around `wrap`.
+    pub(super) fn effect(&self, fmt: PixelFormat, spacing: f32, wrap: Option<Rect>) -> DabEffect {
         let sp = spacing;
         match self.clone() {
-            Self::Tone { burn, range, exposure, protect } => tone_stroke(fmt, move |c| dodge_burn(c, exposure, range, burn, protect)),
+            Self::Tone { burn, range, exposure, protect } => tone_stroke(fmt, wrap, move |c| dodge_burn(c, exposure, range, burn, protect)),
             // Flow is already in each dab's coverage; a full-flow pass moves colours half-way.
             Self::Sponge { saturate, vibrance } => Box::new(move |work, fp| color_dab(&fmt, work, fp, 0.5, sp, |c, k| sponge(c, k, saturate, vibrance))),
             Self::Focus { sharpen, strength, protect, sigma } => {
@@ -281,9 +320,10 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
             return Ok(l.bounds);
         }
         let fmt = surf.format();
-        let mut effect = tool.effect(fmt, stroke.brush.spacing);
-        let mut sampler = all.then(|| AllLayers::new(pre, fmt));
-        Ok(apply_dab_stroke(surf, &stroke, sel, lock, tool.neighborhood().halo(), |work, fp| match &mut sampler {
+        let (halo, wrap) = (tool.neighborhood().halo(), wrap_tile(pre, p));
+        let mut effect = tool.effect(fmt, stroke.brush.spacing, wrap);
+        let mut sampler = all.then(|| AllLayers::new(pre, fmt).wrapped(wrap, &stroke, halo));
+        Ok(apply_dab_stroke_wrapped(surf, &stroke, sel, lock, halo, wrap, |work, fp| match &mut sampler {
             Some(all) => all.dab(work, fp, |w, f| effect(w, f)),
             None => effect(work, fp),
         }))
@@ -293,81 +333,6 @@ pub(super) fn dab_cmd(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
         r["fromLive"] = json!(true);
     }
     Ok(r)
-}
-
-/// Side of the tiles a live sequential-dab stroke keeps its working pixels in ([`WorkTiles`]).
-const WORK_TILE: i32 = 128;
-
-/// The working copy of a live sequential-dab stroke: the target's native channels as `f32`, in
-/// tiles copied from the pre-stroke surface the first time a dab writes to them. Unlike a
-/// `Surface`, it isn't rounded to the document's depth between dabs, so each dab sees what the
-/// commit's working copy (`apply_dab_stroke`) holds and the preview is the commit's pixels.
-struct WorkTiles {
-    ch: usize,
-    tiles: std::collections::HashMap<(i32, i32), Vec<f32>>,
-}
-
-impl WorkTiles {
-    fn new(ch: usize) -> Self {
-        Self { ch, tiles: std::collections::HashMap::new() }
-    }
-
-    fn tile_rect((tx, ty): (i32, i32)) -> Rect {
-        Rect::new(tx * WORK_TILE, ty * WORK_TILE, tx * WORK_TILE + WORK_TILE, ty * WORK_TILE + WORK_TILE)
-    }
-
-    /// The tiles `r` overlaps.
-    fn coords(r: Rect) -> impl Iterator<Item = (i32, i32)> {
-        let (x0, x1) = (r.x0.div_euclid(WORK_TILE), (r.x1 - 1).div_euclid(WORK_TILE));
-        let (y0, y1) = (r.y0.div_euclid(WORK_TILE), (r.y1 - 1).div_euclid(WORK_TILE));
-        let empty = r.is_empty();
-        (y0..=y1).filter(move |_| !empty).flat_map(move |ty| (x0..=x1).map(move |tx| (tx, ty)))
-    }
-
-    /// The working pixels of `r`: the pre-stroke pixels `pre` where no dab has written yet.
-    fn read(&self, pre: &Surface, r: Rect) -> Region {
-        let mut out = Region::new(r, self.ch);
-        let n = self.ch;
-        let mut buf = Vec::new();
-        for c in Self::coords(r) {
-            let tr = Self::tile_rect(c);
-            let part = r.intersect(&tr);
-            let w = part.width() as usize * n;
-            let tile = self.tiles.get(&c);
-            if tile.is_none() {
-                pre.read_region_into(part, &mut buf);
-            }
-            for y in part.y0..part.y1 {
-                let src = match tile {
-                    Some(t) => t.get(((y - tr.y0) * WORK_TILE + (part.x0 - tr.x0)) as usize * n..).and_then(|s| s.get(..w)),
-                    None => buf.get((y - part.y0) as usize * w..).and_then(|s| s.get(..w)),
-                };
-                let dst = out.index(part.x0, y) * n;
-                if let (Some(s), Some(d)) = (src, out.data.get_mut(dst..dst + w)) {
-                    d.copy_from_slice(s);
-                }
-            }
-        }
-        out
-    }
-
-    /// Store `region` as the working pixels of its rectangle.
-    fn write(&mut self, pre: &Surface, region: &Region) {
-        let (r, n) = (region.rect, self.ch);
-        for c in Self::coords(r) {
-            let tr = Self::tile_rect(c);
-            let tile = self.tiles.entry(c).or_insert_with(|| pre.read_region(tr));
-            let part = r.intersect(&tr);
-            let w = part.width() as usize * n;
-            for y in part.y0..part.y1 {
-                let dst = ((y - tr.y0) * WORK_TILE + (part.x0 - tr.x0)) as usize * n;
-                let src = region.index(part.x0, y) * n;
-                if let (Some(s), Some(d)) = (region.data.get(src..src + w), tile.get_mut(dst..dst + w)) {
-                    d.copy_from_slice(s);
-                }
-            }
-        }
-    }
 }
 
 /// A Dodge, Burn, Sponge, Blur, Sharpen or Smudge stroke shown while it is drawn: each new dab
@@ -396,6 +361,8 @@ pub struct LiveDab {
     sel: Option<Surface>,
     lock: bool,
     bounds: Rect,
+    /// The canvas a wrapped stroke repeats across (View › Pattern Preview, `"wrap": true`).
+    wrap: Option<Rect>,
     /// Show the dabs finishing the stroke would add, so the preview at the last point is the
     /// commit. Only for effects that a repeated dab doesn't change (Color Replacement): the
     /// tail runs on a scratch copy at every push, so an effect that carries paint from dab to
@@ -425,13 +392,14 @@ impl LiveDab {
         let (tool, _) = DabTool::parse(s, cmd, p, &stroke)?;
         let (neighborhood, spacing, brush) = (tool.neighborhood(), stroke.brush.spacing, Box::new(stroke.brush.clone()));
         let effect = tool.clone();
-        let mut live = Self::with_neighborhood(s, cmd, p, stroke, id, neighborhood, |pre| effect.effect(pre.format(), spacing))?;
+        let mut live = Self::with_neighborhood(s, cmd, p, stroke, id, neighborhood, |pre, wrap| effect.effect(pre.format(), spacing, wrap))?;
         live.tool = Some((tool, brush));
         Ok(live)
     }
 
-    /// Start a live stroke of `cmd` that runs `effect` (made from the target before the stroke)
-    /// at each dab of `stroke`, reading `halo` pixels around it. `p` gives the target.
+    /// Start a live stroke of `cmd` that runs `effect` (made from the target before the stroke
+    /// and the canvas a wrapped stroke repeats across) at each dab of `stroke`, reading `halo`
+    /// pixels around it. `p` gives the target and `wrap`.
     pub(crate) fn with_effect(
         s: &Session,
         cmd: &str,
@@ -439,7 +407,7 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         halo: i32,
-        effect: impl FnOnce(&Surface) -> DabEffect,
+        effect: impl FnOnce(&Surface, Option<Rect>) -> DabEffect,
     ) -> Result<Self> {
         Self::with_neighborhood(s, cmd, p, stroke, id, DabNeighborhood::Halo(halo), effect)
     }
@@ -451,7 +419,7 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         neighborhood: DabNeighborhood,
-        effect: impl FnOnce(&Surface) -> DabEffect,
+        effect: impl FnOnce(&Surface, Option<Rect>) -> DabEffect,
     ) -> Result<Self> {
         let st = s.active().ok_or(EngineError::NoDocument)?;
         let base = (st.doc.id, st.revision);
@@ -470,7 +438,7 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         halo: i32,
-        effect: impl FnOnce(&Surface) -> DabEffect,
+        effect: impl FnOnce(&Surface, Option<Rect>) -> DabEffect,
     ) -> Result<Self> {
         Self::with_neighborhood_on(doc, cmd, p, stroke, id, DabNeighborhood::Halo(halo), effect)
     }
@@ -482,12 +450,13 @@ impl LiveDab {
         stroke: Stroke,
         id: Option<LayerId>,
         neighborhood: DabNeighborhood,
-        effect: impl FnOnce(&Surface) -> DabEffect,
+        effect: impl FnOnce(&Surface, Option<Rect>) -> DabEffect,
     ) -> Result<Self> {
+        let wrap = wrap_tile(&doc, p);
         let sel = doc.selection.clone();
         let (surf, lock) = crate::channel_cmds::target_surface(&mut doc, id, p)?;
         let pre_surf = surf.clone();
-        let effect = effect(&pre_surf);
+        let effect = effect(&pre_surf, wrap);
         // Generate the same dabs as `apply_dab_stroke` (zoom 1), without a StrokeRenderer:
         // its accumulated coverage isn't used here, and each effect rasterizes its own footprint.
         let ctx = photocraft_paint::BrushContext::new(&stroke.brush);
@@ -502,7 +471,7 @@ impl LiveDab {
             done: 0,
             effect,
             neighborhood,
-            work: WorkTiles::new(pre_surf.channels()),
+            work: WorkTiles::new(pre_surf.channels()).wrapped(wrap),
             pre_surf,
             id,
             params: p.clone(),
@@ -510,6 +479,7 @@ impl LiveDab {
             sel,
             lock,
             bounds: Rect::EMPTY,
+            wrap,
             preview_tail: false,
             tail: Rect::EMPTY,
             tool: None,
@@ -545,15 +515,34 @@ impl LiveDab {
             if r.is_empty() {
                 continue;
             }
+            let fp = ctx.footprint(d, self.done.saturating_add(k));
             let mut region = self.work.read(&self.pre_surf, self.neighborhood.read_rect(r, d));
-            (self.effect)(&mut region, &ctx.footprint(d, self.done.saturating_add(k)));
-            self.work.write(&self.pre_surf, &region.crop(r));
-            dmg = dmg.union(&r);
+            (self.effect)(&mut region, &fp);
+            self.work.write_dab(&self.pre_surf, &region, &fp);
+            dmg = dmg.union(&self.on_canvas(r));
         }
         self.done = self.done.saturating_add(new.len());
         new.clear();
         self.pending = new;
         dmg
+    }
+
+    /// Where the stroke's rectangle `r` lands on the document: `r`, or in a wrapped stroke the
+    /// part of the canvas it covers.
+    fn on_canvas(&self, r: Rect) -> Rect {
+        self.wrap.map_or(r, |t| photocraft_paint::wrap::fold_area(r, t))
+    }
+
+    /// [`Self::show`] working pixels laid out in the stroke's own coordinates: a wrapped stroke
+    /// shows each part where it lies on the canvas.
+    fn show_unwrapped(&mut self, work: &Region) -> Result<()> {
+        let Some(tile) = self.wrap else { return self.show(work.rect, work) };
+        for (part, (dx, dy)) in photocraft_paint::wrap::pieces(work.rect, tile) {
+            let mut piece = work.crop(part.translate(dx, dy));
+            piece.rect = part;
+            self.show(part, &piece)?;
+        }
+        Ok(())
     }
 
     /// Mix the working pixels of `r` back over the original into the shown document.
@@ -591,7 +580,7 @@ impl LiveDab {
         // Back to the stroke without the previous tail.
         let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
         let shown = dmg.union(&old);
-        let tail_rect = tail.as_ref().map_or(Rect::EMPTY, |(r, _)| *r);
+        let tail_rect = tail.as_ref().map_or(Rect::EMPTY, |(r, _)| self.on_canvas(*r));
         if shown.is_empty() && tail_rect.is_empty() {
             return Ok(Rect::EMPTY);
         }
@@ -600,9 +589,9 @@ impl LiveDab {
             let work = self.work.read(&self.pre_surf, shown);
             self.show(shown, &work)?;
         }
-        if let Some((r, work)) = tail {
-            self.show(r, &work)?;
-            self.tail = r;
+        if let Some((_, work)) = tail {
+            self.show_unwrapped(&work)?;
+            self.tail = tail_rect;
         }
         Ok(shown.union(&tail_rect))
     }

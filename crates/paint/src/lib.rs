@@ -10,7 +10,8 @@
 //!
 //! Module map: [`brush`] (the serde model), [`dynamics`] (points → dabs), [`render`] (dabs →
 //! stroke buffer → pixels), [`presets`] (built-ins), [`mixer`] (Mixer Brush), [`replace`] (Color
-//! Replacement), [`retouch`] (sequential/accumulating helpers for the retouch tools).
+//! Replacement), [`retouch`] (sequential/accumulating helpers for the retouch tools), [`wrap`]
+//! (View › Pattern Preview: strokes repeating across the canvas edges).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -32,6 +33,7 @@ pub mod retouch;
 pub mod rng;
 pub mod symmetry;
 pub mod tile;
+pub mod wrap;
 
 pub use brush::{
     BrushPreset, BrushSettings, ColorDynamics, Control, DualBrush, Dynamic, MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern, PatternStyle, Pose, PresetCaptures,

@@ -11,7 +11,7 @@ use photocraft_algo::selection as sel;
 use photocraft_doc::{Document, Layer, LayerContent, LayerId};
 use photocraft_geom::Rect;
 use photocraft_paint::Stroke;
-use photocraft_paint::bg_erase::{BgEraseSettings, apply_background_eraser, background_eraser_effect, background_eraser_stroke};
+use photocraft_paint::bg_erase::{BgEraseSettings, apply_background_eraser_wrapped, background_eraser_effect, background_eraser_stroke};
 use photocraft_paint::replace::{Limits, Sampling};
 use serde_json::{Value, json};
 
@@ -150,10 +150,12 @@ fn background_eraser(s: &mut Session, p: &Value) -> Result<Value> {
     let (stroke, bs, id) = background_eraser_setup(s, p)?;
     let dmg = s.edit("Background Eraser", |doc, _| {
         let selection = doc.selection.clone();
+        // View › Pattern Preview: the stroke carries on across the canvas edges.
+        let wrap = flag(p, "wrap", false).then(|| doc.bounds());
         crate::extra_cmds::background_to_layer(doc, id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let surf = l.surface_mut().ok_or_else(|| bad(CMD, "not a pixel layer"))?;
-        Ok(apply_background_eraser(surf, &stroke, &bs, selection.as_ref()))
+        Ok(apply_background_eraser_wrapped(surf, &stroke, &bs, selection.as_ref(), wrap))
     })?;
     Ok(damage(s, dmg, true))
 }
@@ -168,7 +170,9 @@ pub fn live_background_eraser(s: &Session, p: &Value) -> Result<crate::retouch_c
     doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     crate::extra_cmds::background_to_layer(&mut doc, id);
     let stroke = background_eraser_stroke(&stroke);
-    crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &json!({}), stroke, Some(id), 0, |pre| match background_eraser_effect(pre, &bs) {
+    // Layer pixels, as the commit erases, wrapped as it is.
+    let params = json!({"wrap": flag(p, "wrap", false)});
+    crate::retouch_cmds::LiveDab::with_effect_on(doc, CMD, &params, stroke, Some(id), 0, |pre, wrap| match background_eraser_effect(pre, &bs, wrap) {
         Some(effect) => Box::new(effect),
         // No alpha: the commit erases nothing either.
         None => Box::new(|_: &mut photocraft_paint::retouch::Region, _: &photocraft_paint::retouch::Footprint| {}),
@@ -194,7 +198,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Background Eraser",
             menu: &[],
             shortcut: None,
-            params: r##"{"points":[[x,y,pressure?],…],"size":px?,"hardness":0..1?,"brush":{…}?,"preset":name?,"sampling":"continuous|once|backgroundSwatch"="continuous","limits":"discontiguous|contiguous|findEdges"="contiguous","tolerance":0..100=50,"protectForegroundColor":bool=false,"seed":u64?}"##,
+            params: r##"{"points":[[x,y,pressure?],…],"size":px?,"hardness":0..1?,"brush":{…}?,"preset":name?,"sampling":"continuous|once|backgroundSwatch"="continuous","limits":"discontiguous|contiguous|findEdges"="contiguous","tolerance":0..100=50,"protectForegroundColor":bool=false,"seed":u64?,"wrap":bool=false (View › Pattern Preview: the stroke goes on across the canvas edges)}"##,
             enabled: has_pixel_layer,
             run: background_eraser,
             journal: true,
