@@ -17,10 +17,15 @@ use rayon::prelude::*;
 
 /// Faux-italic slant in degrees (Photoshop-like).
 pub const FAUX_ITALIC_DEG: f32 = 12.0;
-/// How far faux bold grows the outline on every side, as a fraction of the font size
-/// ([`crate::embolden`]): stems get twice this heavier, close to the weight of the earlier
-/// faux bold, which stamped the glyph at offsets of this radius.
-pub const FAUX_BOLD_RADIUS: f32 = 0.036;
+/// How far faux bold grows the outline on every side, in pixels (`crate::embolden`): stems get
+/// twice this heavier. Photoshop thickens by about `size/72`; the flat 3.6% of the size used
+/// before overshot its ink by 1.3–1.5× from 50 px up. So the ring follows the size, with a pixel
+/// floor that fades in below ~32 px (Photoshop's small type reads heavier than `size/72`) and a
+/// cap so a sub-pixel glyph does not grow into a blob.
+pub fn faux_bold_radius(size_px: f32) -> f32 {
+    (size_px / 72.0).max((size_px / 40.0).min(0.45))
+}
+
 /// Largest raster we produce (pixels), as a guard against absurd sizes.
 const MAX_PIXELS: u64 = 256 * 1024 * 1024;
 /// Cumulative coverage-pixel work budget across the colour passes of one render.
@@ -167,7 +172,7 @@ fn visible_color_passes(layout: &TextLayout, warp: Option<&Warp>) -> Vec<(Color,
 /// Draws every glyph and decoration of `layout` whose style colour is `color` (or all of them
 /// when `color` is `None`) into `sink`, through `transform` (text space → sink space), bending
 /// the outlines with `warp` first (in text space). Faux bold glyphs are drawn from their outline
-/// thickened by [`FAUX_BOLD_RADIUS`] ([`crate::embolden`]).
+/// thickened by [`faux_bold_radius`] ([`crate::embolden`]).
 fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_color: Option<&Color>, warp: Option<&Warp>) {
     for g in &layout.glyphs {
         let st = &layout.styles[g.style as usize];
@@ -205,7 +210,7 @@ fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_c
             if outline.draw(settings(), &mut shape).is_err() {
                 continue;
             }
-            shape.embolden(f64::from(face.size_px * FAUX_BOLD_RADIUS));
+            shape.embolden(f64::from(faux_bold_radius(face.size_px)));
             bold = Some(shape);
         }
         let settings = settings();
