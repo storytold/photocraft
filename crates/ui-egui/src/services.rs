@@ -7,10 +7,10 @@ use super::{
 pub(crate) const SAVE_OPTIONS_OPEN: &str = "Answer the TIFF, Targa, BMP, DDS or JPEG Options before starting another save";
 
 /// The format answers a save takes instead of asking: the Targa bits per pixel (`"tgaBits"`),
-/// the DDS options (`"ddsCompression"`, `"ddsMipmaps"`), JPEG Options (`"quality"` 0–12,
-/// `"jpegFormat"`) and TIFF Options (`"tiffCompression"`, `"tiffTransparency"`, `"tiffPyramid"`,
-/// `"tiffLayers"`). `None` asks in Save As and takes the default in automation saves, which never
-/// prompt.
+/// the BMP bits per pixel (`"bmpBits"`), the DDS options (`"ddsCompression"`, `"ddsMipmaps"`),
+/// JPEG Options (`"quality"` 0–12, `"jpegFormat"`) and TIFF Options (`"tiffCompression"`,
+/// `"tiffTransparency"`, `"tiffPyramid"`, `"tiffLayers"`). `None` asks in Save As and takes the
+/// default in automation saves, which never prompt.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct FormatChoices {
     pub tga_bits: Option<photocraft_io::TgaBits>,

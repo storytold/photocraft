@@ -71,12 +71,12 @@ impl Default for SaveOpts {
 }
 
 impl SaveOpts {
-    /// `quality`, `jpegFormat`, `tiffLayers` and `tgaBits` from command `cmd`'s params (a
-    /// `jpegFormat` it doesn't name or a `tgaBits` other than 24 or 32 is an error); the image
-    /// previews and the PSD merged image from the session's File Handling preferences (Ask When
-    /// Saving has no dialog here, so it saves them, as Photoshop's Save As checkbox and its
-    /// Maximize Compatibility checkbox both start on). The `.pcraft` full-size composite comes from
-    /// `pcraftFullComposite`, or without it from the File Handling preference.
+    /// `quality`, `jpegFormat`, `tiffLayers`, `tgaBits` and `bmpBits` from command `cmd`'s params
+    /// (a `jpegFormat` it doesn't name or a `tgaBits` or `bmpBits` other than 24 or 32 is an
+    /// error); the image previews and the PSD merged image from the session's File Handling
+    /// preferences (Ask When Saving has no dialog here, so it saves them, as Photoshop's Save As
+    /// checkbox and its Maximize Compatibility checkbox both start on). The `.pcraft` full-size
+    /// composite comes from `pcraftFullComposite`, or without it from the File Handling preference.
     pub(crate) fn from_params(s: &Session, p: &Value, cmd: &str) -> Result<Self> {
         let file_handling = &s.prefs().file_handling;
         Ok(SaveOpts {
