@@ -684,7 +684,9 @@ impl Ex {
             }
             return;
         }
-        let size = same_source.and_then(|t| crate::smart_map::stored_size(&t.descriptor)).unwrap_or(src.size);
+        // `Sz  ` is in the descriptor's own units (`sm.placed_size`, #10207), not necessarily
+        // the source's pixels; a re-authored object has neither and writes its source size.
+        let size = same_source.and_then(|t| crate::smart_map::stored_size(&t.descriptor)).or(sm.placed_size).unwrap_or(src.size);
         let size = if size.0 > 0.0 && size.1 > 0.0 { size } else { size_from_layer(sm) };
         let mut warnings = Vec::new();
         let fx = (!stack.filters.is_empty()).then(|| filter_fx(&stack, &l.name, &mut warnings));
@@ -710,10 +712,14 @@ impl Ex {
             let item = match (sm.stack_mode, self.source_composite(&src.uuid)) {
                 (None, Some((img, img_bounds))) => {
                     let unfiltered = match &sm.perspective {
-                        Some(p) => {
-                            photocraft_algo::warp::place_source_projective(&img, img_bounds, &photocraft_algo::transform::Homography(*p), sm.warp.as_ref())
-                        }
-                        None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref()),
+                        Some(p) => photocraft_algo::warp::place_source_projective(
+                            &img,
+                            img_bounds,
+                            &photocraft_algo::transform::Homography(*p),
+                            sm.warp.as_ref(),
+                            sm.placed_size,
+                        ),
+                        None => photocraft_algo::warp::place_source(&img, img_bounds, &sm.transform, sm.warp.as_ref(), sm.placed_size),
                     };
                     match unfiltered {
                         Ok(unfiltered) => {

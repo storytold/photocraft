@@ -643,7 +643,7 @@ pub(crate) fn warp_of(w: &Descriptor) -> Option<Option<photocraft_geom::warp::Wa
         let mesh = if points.len() == 16 && env.get("quiltSliceX").is_none() {
             BezierMesh { us: vec![0.0, 1.0], vs: vec![0.0, 1.0], points }
         } else {
-            quilt_mesh(w, env, points)?
+            envelope_mesh(w, &points).or_else(|| quilt_mesh(w, env, points))?
         };
         warp.mesh = mesh.is_valid().then_some(mesh);
         warp.mesh.as_ref()?;
@@ -653,6 +653,50 @@ pub(crate) fn warp_of(w: &Descriptor) -> Option<Option<photocraft_geom::warp::Wa
 
 /// The most patches a `quiltWarp` is read with along each side.
 pub(crate) const QUILT_MAX_PATCHES: usize = 64;
+
+/// A `customEnvelopeWarp` grid of `vOrder` × `uOrder` control points (`uOrder` points per row, u
+/// fastest) as a 4 × 4 bicubic patch: Photoshop's custom envelope writes `uOrder = 4, vOrder = 2`
+/// — cubic in one direction, linear in the other — which degree-elevates exactly to bicubic
+/// (#10207). `None` for a full 4 × 4 grid (the single-patch read's case), orders that don't cover
+/// the points, or a side that can't be elevated (order outside `2..=4`); a split grid belongs to
+/// [`quilt_mesh`].
+fn envelope_mesh(w: &Descriptor, points: &[[f64; 2]]) -> Option<photocraft_geom::warp::BezierMesh> {
+    let order = |k: &str| -> Option<usize> {
+        let n = num(w.get(k))?;
+        (n.is_finite() && n.fract() == 0.0 && (2.0..=4.0).contains(&n)).then_some(n as usize)
+    };
+    let (nu, nv) = (order("uOrder")?, order("vOrder")?);
+    if nu.checked_mul(nv)? != points.len() || (nu == 4 && nv == 4) {
+        return None;
+    }
+    let rows: Vec<Vec<[f64; 2]>> = points.chunks(nu).map(elevate_bezier).collect();
+    let mut grid = vec![[0.0; 2]; 16];
+    for (i, col) in (0..4).map(|i| rows.iter().map(|r| r[i]).collect::<Vec<_>>()).enumerate() {
+        for (j, p) in elevate_bezier(&col).iter().enumerate() {
+            grid[j * 4 + i] = *p;
+        }
+    }
+    Some(photocraft_geom::warp::BezierMesh { us: vec![0.0, 1.0], vs: vec![0.0, 1.0], points: grid })
+}
+
+/// `row`'s control points (degree `row.len() - 1`) degree-elevated to four (degree 3): the surface
+/// is unchanged — `[a, b]` becomes `[a, (2a + b) / 3, (a + 2b) / 3, b]`.
+fn elevate_bezier(row: &[[f64; 2]]) -> Vec<[f64; 2]> {
+    let mut r = row.to_vec();
+    while r.len() < 4 {
+        let m = r.len();
+        let mut q = Vec::with_capacity(m + 1);
+        for i in 0..=m {
+            // The elevated point i of degree m is (i/m)·P[i-1] + (1 - i/m)·P[i].
+            let t = i as f64 / m as f64;
+            let p0 = if i == 0 { [0.0; 2] } else { r[i - 1] };
+            let p1 = if i == m { [0.0; 2] } else { r[i] };
+            q.push([t * p0[0] + (1.0 - t) * p1[0], t * p0[1] + (1.0 - t) * p1[1]]);
+        }
+        r = q;
+    }
+    r
+}
 
 /// The control-point grid of a split ("quilt") custom warp. `deformNumCols` × `deformNumRows`
 /// control points, three per patch side plus one, in row-major order; `quiltSliceX` and
@@ -732,29 +776,45 @@ pub(crate) fn parse_prefix_versioned(data: &[u8]) -> Option<Descriptor> {
     VersionedDescriptor::parse_prefix(data).ok().map(|(v, _)| v.descriptor)
 }
 
+/// A warp's `bounds` as a placement frame, falling back to `rect` when degenerate.
+fn warp_bounds_or(wp: &photocraft_geom::warp::Warp, rect: [f64; 4]) -> [f64; 4] {
+    let [x0, y0, x1, y1] = wp.bounds;
+    if wp.bounds.iter().all(|v| v.is_finite()) && x1 - x0 > 1e-9 && y1 - y0 > 1e-9 { wp.bounds } else { rect }
+}
+
 /// The source-space box Photoshop maps onto a placed layer's `Trnf` quad: the bounding box of a
 /// custom warp's control points (one patch or a split grid) or of a cylinder's mesh (#4112),
-/// which may spill past the source, else the source rect `0..w × 0..h`. Mapping the source rect
-/// instead counts the overhang twice and stretches the placement. A degenerate or non-finite box
-/// falls back to the source rect.
+/// which may spill past the source; for any other warp style the warp's `bounds` box, which a
+/// `SoLd` need not keep in source-pixel units (#10207); else the source rect `0..w × 0..h`.
+/// Mapping the source rect instead counts the overhang twice and stretches the placement. A
+/// degenerate or non-finite box falls back to the source rect.
 pub(crate) fn placed_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
     use photocraft_geom::warp::WarpStyle;
     let rect = [0.0, 0.0, w, h];
-    let Some(m) = warp.filter(|wp| matches!(wp.style, WarpStyle::Custom | WarpStyle::Cylinder)).and_then(|wp| wp.mesh.as_ref()).filter(|m| m.is_valid()) else {
+    let Some(wp) = warp.filter(|wp| wp.style != WarpStyle::None) else {
         return rect;
+    };
+    if !matches!(wp.style, WarpStyle::Custom | WarpStyle::Cylinder) {
+        return warp_bounds_or(wp, rect);
+    }
+    let Some(m) = wp.mesh.as_ref().filter(|m| m.is_valid()) else {
+        return warp_bounds_or(wp, rect);
     };
     let inf = f64::INFINITY;
     let b = m.points.iter().fold([inf, inf, -inf, -inf], |b, [x, y]| [b[0].min(*x), b[1].min(*y), b[2].max(*x), b[3].max(*y)]);
     let ok = b.iter().all(|v| v.is_finite()) && b[2] - b[0] > 1e-9 && b[3] - b[1] > 1e-9;
-    if ok { b } else { rect }
+    if ok { b } else { warp_bounds_or(wp, rect) }
 }
 
 /// The source-space box a projective (Distort / Perspective) placement maps onto its corners: a
-/// cylinder's control-point box, as for an affine placement (#4112), else the source rect. A
-/// custom warp keeps the source rect here: there is no Photoshop reference for that combination.
+/// cylinder's or custom envelope's control-point box, as for an affine placement (#4112) — the
+/// `nonAffineTransform` quad frames the mesh's extent, which may spill past `bounds` (#10207) —
+/// another warp style's `bounds` box, else the source rect.
 pub(crate) fn perspective_frame(warp: Option<&photocraft_geom::warp::Warp>, w: f64, h: f64) -> [f64; 4] {
+    use photocraft_geom::warp::WarpStyle;
     match warp {
-        Some(wp) if wp.style == photocraft_geom::warp::WarpStyle::Cylinder => placed_frame(warp, w, h),
+        Some(wp) if matches!(wp.style, WarpStyle::Cylinder | WarpStyle::Custom) => placed_frame(warp, w, h),
+        Some(wp) if wp.style != WarpStyle::None => warp_bounds_or(wp, [0.0, 0.0, w, h]),
         _ => [0.0, 0.0, w, h],
     }
 }
@@ -778,6 +838,19 @@ pub fn parse_smart(key: &[u8; 4], data: &[u8]) -> (String, Affine) {
         }
     }
     (id, affine)
+}
+
+/// The `Sz  ` a `SoLd`/`SoLE` stores: the placed object's size in the descriptor's own units,
+/// which need not equal the embedded file's pixel size — the source is scaled to it before the
+/// warp and transform apply (#10207). `None` for other blocks, a missing or empty `Sz  `.
+pub fn parse_placed_size(key: &[u8; 4], data: &[u8]) -> Option<(f64, f64)> {
+    if key != b"SoLd" && key != b"SoLE" {
+        return None;
+    }
+    let d = data.get(8..).and_then(parse_prefix_versioned)?;
+    let sz = get_desc(&d, "Sz  ")?;
+    let (w, h) = (num(sz.get("Wdth"))?, num(sz.get("Hght"))?);
+    (w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0).then_some((w, h))
 }
 
 /// The affine that takes the source-space box `frame` (left, top, right, bottom; see
