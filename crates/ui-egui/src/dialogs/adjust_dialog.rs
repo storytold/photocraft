@@ -366,9 +366,12 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         dynamic_color_sliders: app.session.prefs().interface.dynamic_color_sliders,
         isolated_curve,
     };
-    let e = adjust_editors::editor(ui, &kind, &mut values, &cx);
+    let mut e = adjust_editors::editor(ui, &kind, &mut values, &cx);
     if e.import_gradients {
         crate::preset_files_ui::import_gradients_dialog(app);
+    }
+    if e.auto {
+        adjust_editors::apply_auto(app, &mut values, active, &mut e);
     }
     if e.changed
         && let Value::Object(v) = values

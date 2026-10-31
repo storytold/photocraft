@@ -823,3 +823,55 @@ fn folder_luts_lists_lut_files_by_name() {
     assert!(folder_luts("").is_empty());
     assert!(folder_luts(dir.path().join("missing").to_str().unwrap()).is_empty());
 }
+
+/// #9269: Black & White's Auto spreads an image's greys wider than the default mix, leaves the
+/// weights of colours the image lacks at their defaults, and changes nothing in the document.
+#[test]
+fn black_white_auto_spreads_the_greys() {
+    use crate::adjust_params::{BW_DEFAULTS, HUE_RANGES};
+    // A red and a blue the default mix turns into the same grey (0.43).
+    let (red, blue) = ([0.776, 0.2, 0.2], [0.29, 0.29, 1.0]);
+    let gray = |c: [f32; 3], w: &[f32; 6]| photocraft_compose::adjust::black_white_gray(c, w);
+    let w = auto_black_white(&[red, blue]);
+    let gap = |w: &[f32; 6]| (gray(red, w) - gray(blue, w)).abs();
+    assert!(gap(&BW_DEFAULTS) < 0.01);
+    assert!(gap(&w) > 1.0 / 32.0, "{w:?}: {}", gap(&w));
+    assert!(w.iter().all(|v| (0.0..=150.0).contains(v)), "{w:?}");
+    // Yellows, greens, cyans and magentas aren't in the image: they keep their defaults.
+    for k in [1, 2, 3, 5] {
+        assert_eq!(w[k], BW_DEFAULTS[k], "{}", HUE_RANGES[k]);
+    }
+    // A grey image (and no pixels at all) keeps the default mix.
+    assert_eq!(auto_black_white(&[[0.2; 3], [0.7; 3]]), BW_DEFAULTS);
+    assert_eq!(auto_black_white(&[]), BW_DEFAULTS);
+
+    // The command: an adjustment layer reads the image under it; the document is unchanged.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 20, "height": 10})).unwrap();
+    paint(&mut s, |x, _| if x < 10 { [0.776, 0.2, 0.2, 1.0] } else { [0.29, 0.29, 1.0, 1.0] });
+    let id = s.execute("layer.newAdjustmentLayer.blackWhite", json!({})).unwrap()["layer"].as_u64().unwrap();
+    let rev = s.active().unwrap().revision;
+    let r = s.execute("image.adjustments.blackWhite.auto", json!({"layer": id})).unwrap();
+    let got: Vec<f32> = HUE_RANGES.iter().map(|k| r[*k].as_f64().unwrap() as f32).collect();
+    assert_eq!(got, w.to_vec());
+    assert_eq!(s.active().unwrap().revision, rev, "nothing changes");
+    assert!(s.execute("image.adjustments.blackWhite.auto", json!({"layer": 999})).is_err());
+    assert!(s.execute("image.adjustments.blackWhite.auto", json!({"layer": "x"})).is_err());
+
+    // A layer above the adjustment isn't part of what it adjusts.
+    s.execute("layer.new.layer", json!({})).unwrap();
+    paint(&mut s, |_, _| [0.5, 0.5, 0.5, 1.0]);
+    assert_eq!(s.execute("image.adjustments.blackWhite.auto", json!({"layer": id})).unwrap(), r);
+
+    // Sampling a big canvas still finds a thin painted stripe.
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 512, "height": 512, "background": "transparent"})).unwrap();
+    paint(&mut s, |x, y| match (x, y < 256) {
+        (1, true) => [0.776, 0.2, 0.2, 1.0],
+        (1, false) => [0.29, 0.29, 1.0, 1.0],
+        _ => [0.0; 4],
+    });
+    let r = s.execute("image.adjustments.blackWhite.auto", json!({})).unwrap();
+    let got: Vec<f32> = HUE_RANGES.iter().map(|k| r[*k].as_f64().unwrap() as f32).collect();
+    assert_eq!(got, w.to_vec());
+}

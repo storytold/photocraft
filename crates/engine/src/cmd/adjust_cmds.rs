@@ -583,6 +583,16 @@ pub fn specs() -> Vec<CommandSpec> {
             hdr_toning
         ),
         CommandSpec {
+            id: "image.adjustments.blackWhite.auto",
+            label: "Black & White Auto",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"layer":id?} → {"reds","yellows","greens","cyans","blues","magentas"} (%: the Auto mix for the image a Black & White adjustment layer sees, or for a pixel layer's own pixels; nothing changes)"##,
+            enabled: has_doc,
+            run: black_white_auto,
+            journal: false,
+        },
+        CommandSpec {
             id: "image.adjustments.colorLookup.list",
             label: "List Color Lookup Looks",
             menu: &[],
@@ -593,6 +603,102 @@ pub fn specs() -> Vec<CommandSpec> {
             journal: false,
         },
     ]
+}
+
+/// At most this many pixels are sampled for [`auto_black_white`].
+const AUTO_BW_SAMPLES: usize = 1 << 16;
+/// Grey levels [`auto_black_white`] tells apart.
+const AUTO_BW_BINS: usize = 32;
+
+/// Black & White's Auto (#9269): the colour weights (%, in [`crate::adjust_params::HUE_RANGES`]
+/// order) that spread the image's greys over the most grey levels. PhotoCraft's own search, not
+/// Photoshop's: from the default mix, each weight in turn steps through 0..=150 % to the value
+/// that most raises the entropy of the greys' histogram ([`AUTO_BW_BINS`] levels), less a pull
+/// back towards the default, until a pass changes nothing. So colours the default mix turns into
+/// the same grey are told apart, with the mildest change that does it; colours the image lacks
+/// keep their default weight.
+pub fn auto_black_white(px: &[[f32; 3]]) -> [f32; 6] {
+    let defaults = crate::adjust_params::BW_DEFAULTS;
+    let score = |w: &[f32; 6]| -> f32 {
+        if px.is_empty() {
+            return 0.0;
+        }
+        let mut bins = [0u32; AUTO_BW_BINS];
+        for c in px {
+            let g = photocraft_compose::adjust::black_white_gray(*c, w).clamp(0.0, 1.0);
+            if let Some(b) = bins.get_mut(((g * AUTO_BW_BINS as f32) as usize).min(AUTO_BW_BINS - 1)) {
+                *b += 1;
+            }
+        }
+        let n = px.len() as f32;
+        let entropy: f32 = bins.iter().filter(|&&k| k > 0).map(|&k| k as f32 / n).map(|q| -q * q.log2()).sum();
+        let pull: f32 = w.iter().zip(defaults).map(|(v, d)| (v - d).abs()).sum::<f32>() / 100.0;
+        entropy - 0.05 * pull
+    };
+    let mut w = defaults;
+    let mut best = score(&w);
+    for _ in 0..4 {
+        let mut changed = false;
+        for k in 0..6 {
+            for step in 0..=15 {
+                let mut t = w;
+                t[k] = step as f32 * 10.0;
+                let s = score(&t);
+                if s > best + 1e-6 {
+                    (best, w, changed) = (s, t, true);
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    w
+}
+
+/// Hides `id` and everything composited above it. Returns whether `id` is in `layers`.
+fn hide_from(layers: &mut [Layer], id: photocraft_doc::LayerId) -> bool {
+    let mut found = false;
+    for l in layers.iter_mut() {
+        if found || l.id == id {
+            found = true;
+            l.visible = false;
+        } else if l.children_mut().is_some_and(|c| hide_from(c, id)) {
+            found = true;
+        }
+    }
+    found
+}
+
+/// `image.adjustments.blackWhite.auto`: [`auto_black_white`] for `layer` (default the active one):
+/// the composite of what lies below a Black & White adjustment layer (what it adjusts), or a pixel
+/// layer's own pixels (what Image › Adjustments › Black & White changes).
+fn black_white_auto(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "image.adjustments.blackWhite.auto";
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let id = match p.get("layer") {
+        None | Some(Value::Null) => st.active_layer.ok_or_else(|| EngineError::Other("no active layer".into()))?,
+        Some(v) => photocraft_doc::LayerId(v.as_u64().ok_or_else(|| bad(cmd, "`layer` must be a layer id"))?),
+    };
+    let layer = st.doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let area = st.doc.bounds();
+    let rgba: Vec<[f32; 4]> = match &layer.content {
+        LayerContent::Adjustment(_) => {
+            let mut below = (*st.doc).clone();
+            hide_from(&mut below.layers, id);
+            photocraft_compose::render(&below, area).px
+        }
+        _ => {
+            let surf = layer.surface().ok_or_else(|| EngineError::Other(format!("layer \"{}\" has no pixels", layer.name)))?;
+            let fmt = surf.format();
+            surf.read_region(area).chunks_exact(fmt.channels()).map(|c| to_rgba(&fmt, c)).collect()
+        }
+    };
+    let covered = || rgba.iter().filter(|c| c[3] > 0.0);
+    let stride = covered().count().div_ceil(AUTO_BW_SAMPLES).max(1);
+    let px: Vec<[f32; 3]> = covered().step_by(stride).map(|c| [c[0], c[1], c[2]]).collect();
+    let w = auto_black_white(&px);
+    Ok(Value::Object(crate::adjust_params::HUE_RANGES.iter().zip(w).map(|(k, v)| ((*k).to_string(), json!(v))).collect()))
 }
 
 #[cfg(test)]
