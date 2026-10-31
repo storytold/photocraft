@@ -12,8 +12,8 @@ Status: **done** (behaves as in Photoshop, with a test), **partial** (exists, di
 **missing**. Evidence is a file under `crates/ui-egui/src/` unless another path is given, a
 scorecard id, or an issue. Modifier names are macOS first (⌘ ⌥ ⇧); Windows/Linux use Ctrl and Alt.
 
-**Summary (estimated, weights = how often the gesture is used):** ~40% ready. Tools 67/68
-present (99%, measured: the `Tool` enum has 67 variants; only Art History Brush is missing).
+**Summary (estimated, weights = how often the gesture is used):** ~40% ready. Tools 68/68
+present (100%, measured: the `Tool` enum has 68 variants; Art History Brush is partial, TOOL-213-20).
 Free Transform modifiers and Crop are close to Photoshop; the gaps are
 in the long tail of modifiers, in-transform UI, spring-loaded tools, panels and preferences.
 Remaining: 60–110 h for transforms and modifiers (gap G5), 60–100 h for tools (G6), 150–250 h
