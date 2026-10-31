@@ -170,11 +170,25 @@ fn list_system_printers(s: &Session) -> Vec<craft_print::Printer> {
         Some(source) => source(),
         None => {
             SYSTEM_LISTINGS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            craft_print::printers()
+            system_printers_now()
         }
     };
     keep(&LAST_PRINTERS, s.printer_source.as_ref(), list.clone());
     list
+}
+
+/// The system's printers. craft-print asks each Windows driver about two-sided printing through
+/// prntvpt.dll; without it, list the spooler's printers through GDI instead (#8272). Like
+/// `craft_print::printers`, a listing that fails is an empty list.
+fn system_printers_now() -> Vec<craft_print::Printer> {
+    if require_print_tickets().is_ok() {
+        return craft_print::printers();
+    }
+    craft_print::rgb::printers()
+        .unwrap_or_default()
+        .into_iter()
+        .map(|p| craft_print::Printer { name: p.name, description: String::new(), default: p.default, two_sided: None })
+        .collect()
 }
 
 /// `file.printers`' stand-in: the session's outside the browser, and `None` in the browser, where
@@ -1076,31 +1090,55 @@ fn render_and_spool(doc: &Document, p: &Value, cmd: &str, spooler: Option<&Spool
     )
 }
 
-/// Windows prints a PDF through Windows.Data.Pdf.dll, which the apps delay-load (see their
-/// `build.rs`) so a Windows image without it still starts. Calling into it when it cannot load
-/// would abort the process, so check that it loads first (#5884).
+/// Windows prints a PDF through Windows.Data.Pdf.dll and sets its options through the Print
+/// Ticket API in prntvpt.dll, which the apps delay-load (see their `build.rs`) so a Windows image
+/// without them still starts. Calling into one that cannot load would abort the process, so check
+/// that both load first (#5884, #8272).
 fn require_windows_pdf() -> Result<()> {
     #[cfg(target_os = "windows")]
     {
-        let root = std::env::var_os("SystemRoot").unwrap_or_else(|| std::ffi::OsString::from(r"C:\Windows"));
-        if !windows_pdf_loads(&windows_pdf_dll(std::path::Path::new(&root))) {
+        if !system_dll_loads(WINDOWS_PDF_DLL) {
             return Err(other(
                 "printing this page needs the Windows PDF component (Windows.Data.Pdf.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
             ));
         }
+        require_print_tickets()?;
+    }
+    Ok(())
+}
+
+/// `craft-print` reads and sets Windows printer options through prntvpt.dll (the Print Ticket
+/// API), which stripped Windows images can lack; the apps delay-load it (#8272).
+fn require_print_tickets() -> Result<()> {
+    #[cfg(target_os = "windows")]
+    if !system_dll_loads(PRINT_TICKET_DLL) {
+        return Err(other(
+            "printing this page needs the Windows Print Ticket component (prntvpt.dll), which is missing or cannot load. Save as PDF and print it from another app, or print an RGB image without page text or labels to print directly.",
+        ));
     }
     Ok(())
 }
 
 #[cfg(target_os = "windows")]
-fn windows_pdf_dll(system_root: &std::path::Path) -> std::path::PathBuf {
-    system_root.join("System32").join("Windows.Data.Pdf.dll")
+const WINDOWS_PDF_DLL: &str = "Windows.Data.Pdf.dll";
+#[cfg(target_os = "windows")]
+const PRINT_TICKET_DLL: &str = "prntvpt.dll";
+
+#[cfg(target_os = "windows")]
+fn system_dll_loads(name: &str) -> bool {
+    let root = std::env::var_os("SystemRoot").unwrap_or_else(|| std::ffi::OsString::from(r"C:\Windows"));
+    dll_loads(&system_dll(std::path::Path::new(&root), name))
+}
+
+#[cfg(target_os = "windows")]
+fn system_dll(system_root: &std::path::Path, name: &str) -> std::path::PathBuf {
+    system_root.join("System32").join(name)
 }
 
 /// Loads the DLL rather than checking the file exists: one that is present but cannot load (a
 /// dependency stripped too) would still abort at the delay-load stub.
 #[cfg(target_os = "windows")]
-fn windows_pdf_loads(dll: &std::path::Path) -> bool {
+fn dll_loads(dll: &std::path::Path) -> bool {
     dll.to_str().is_some_and(|p| winsafe::HINSTANCE::LoadLibrary(p).is_ok())
 }
 
