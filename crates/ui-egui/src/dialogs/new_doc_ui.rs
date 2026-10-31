@@ -296,6 +296,19 @@ fn small_label(ui: &mut egui::Ui, s: &str) {
     ui.label(RichText::new(s).size(11.5).color(t.text_dim));
 }
 
+/// The preset-details name field. In a right-to-left UI its text runs right-to-left: the
+/// paragraph base direction and the alignment follow the UI direction, as the title bar's
+/// and the menus' do, so Arabic names align to the field's right edge. A left-to-right UI
+/// keeps egui's default left-aligned single-line edit, pixel-identical.
+fn name_edit(ui: &mut egui::Ui, name: &mut String) -> egui::Response {
+    let font = egui::FontId::proportional(15.0);
+    let mut layouter = crate::widgets::rtl_singleline_layouter(font.clone());
+    let edit = crate::widgets::rtl_singleline(name, &mut layouter).desired_width(250.0).font(font);
+    ui.add(edit)
+}
+
+/// A single-line edit whose text reads right-to-left in a right-to-left UI (Arabic preset names
+/// align to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
 /// Lay out a preset card's title centred in `width`: wrapped onto at most two lines, the rest
 /// elided, so long translations stay inside the card.
 fn card_title(painter: &egui::Painter, title: &str, width: f32, color: egui::Color32) -> std::sync::Arc<egui::Galley> {
@@ -491,7 +504,7 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
         let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         let label = ui.label(tl!("Preset Name"));
         let mut name = get_s(f, "__presetName", "");
-        ui.add(egui::TextEdit::singleline(&mut name).id_salt("document-preset-name").desired_width(240.0).char_limit(255)).labelled_by(label.id);
+        crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.id_salt("document-preset-name").desired_width(240.0).char_limit(255)).labelled_by(label.id);
         f.insert("__presetName".into(), json!(name));
         ui.horizontal(|ui| {
             if widgets::secondary_button(ui, tl!("Save"), 110.0).clicked() || enter {
@@ -523,9 +536,21 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
     }
 }
 
+/// The dialog body. The host no longer wraps modal bodies in an RTL scope, so this dialog
+/// mirrors its own blocks and rows.
+///
 /// Returns whether a preset double-click requested creation, after applying its settings.
 /// A recent category click can make egui count the preset double-click as a triple-click.
 pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> bool {
+    let mut create = false;
+    crate::direction::window_body(ui, |ui| {
+        create = body_blocks(app, ui, f);
+    });
+    create
+}
+
+/// The New Document blocks: the category tabs, the preset grid and the preset details.
+fn body_blocks(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> bool {
     let t = Tokens::get(ui.ctx());
     // Headings and field labels are static, as in Photoshop: no text cursor over them, no
     // drag-selecting them (#8331). Text fields keep theirs.
@@ -566,8 +591,8 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
         .collect();
     let chosen = get_s(f, "__preset", "");
     ui.horizontal_top(|ui| {
-        // Left: preset grid.
-        ui.vertical(|ui| {
+        // Presets column, at the reading start.
+        ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
             ui.set_width(520.0);
             if cat == "Saved" {
                 create |= saved_presets(app, ui, f);
@@ -639,15 +664,15 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
             });
         });
         ui.add_space(10.0);
-        // Right: Preset Details.
-        ui.vertical(|ui| {
+        // Preset Details column, at the reading end.
+        ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
             ui.set_width(260.0);
             ui.label(RichText::new(tl!("PRESET DETAILS")).size(11.0).color(t.text_faint));
             ui.add_space(4.0);
             // Keep the canonical English default in state; only the TextEdit shows a translation.
             let raw = get_s(f, "name", "Untitled-1");
             let mut name = if raw == "Untitled-1" { tl!("Untitled-1").to_string() } else { raw };
-            let r = ui.add(egui::TextEdit::singleline(&mut name).desired_width(250.0).font(egui::FontId::proportional(15.0))).accessible_name(tl!("Name"));
+            let r = name_edit(ui, &mut name).accessible_name(tl!("Name"));
             if r.changed() {
                 f.insert("name".into(), json!(name));
             }

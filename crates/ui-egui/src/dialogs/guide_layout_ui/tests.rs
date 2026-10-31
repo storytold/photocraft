@@ -324,3 +324,93 @@ fn preview_cache_tracks_document_revision() {
     app.run(COMMAND, json!({"margin":23})).unwrap();
     assert!(preview(&app, &app.session.active().unwrap().doc).unwrap().0.vertical.contains(&23.0));
 }
+
+/// The Columns and Rows group boxes and the OK button, in one run of the dialog in `dir`, plus
+/// the dialog frame's centre x — the axis a mirrored run must mirror about.
+fn mirrored_rows(dir: crate::text::direction::Dir) -> (egui::Rect, egui::Rect, egui::Rect, f32) {
+    use egui_kittest::kittest::Queryable;
+    let _dir = crate::text::direction::direction_scope(dir);
+    let mut app = app();
+    let id = open(&mut app);
+    let mut h = harness(app);
+    h.run_steps(3);
+    let frame = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the dialog frame");
+    (h.get_by_label("Columns").rect(), h.get_by_label("Rows").rect(), h.get_by_label("OK").rect(), frame.center().x)
+}
+
+/// In a right-to-left UI the body reads from the right — the Columns group leads, the Rows group
+/// follows toward the reading end and the action rail moves to the left — while only the
+/// direction is forced: the labels and data stay the ones the left-to-right run pins.
+#[test]
+fn the_body_rows_mirror_in_a_right_to_left_ui() {
+    let (l_columns, l_rows, l_ok, l_axis) = mirrored_rows(crate::text::direction::Dir::Ltr);
+    assert!(l_columns.right() < l_rows.left(), "LTR: the Columns group leads: {l_columns:?} / {l_rows:?}");
+    assert!(l_ok.left() > l_rows.right(), "LTR: the rail follows the fields: {l_ok:?} / {l_rows:?}");
+
+    let (r_columns, r_rows, r_ok, r_axis) = mirrored_rows(crate::text::direction::Dir::Rtl);
+    assert!((l_axis - r_axis).abs() < 1.0, "the dialog sits at the same place in both directions: {l_axis} / {r_axis}");
+    assert!(r_columns.left() > r_rows.right(), "RTL: the Columns group still leads, from the right: {r_columns:?} / {r_rows:?}");
+    assert!(r_ok.right() < r_rows.left(), "RTL: the rail leads at the reading end: {r_ok:?} / {r_rows:?}");
+    // Every row mirrors about one common axis (the dialog frame's centre need not be it: the
+    // host's own chrome is not mirrored).
+    let axis = (l_columns.center().x + r_columns.center().x) / 2.0;
+    for (name, ltr, rtl) in [("Columns", l_columns, r_columns), ("Rows", l_rows, r_rows), ("OK", l_ok, r_ok)] {
+        assert!((ltr.center().x + rtl.center().x - 2.0 * axis).abs() < 2.0, "{name} mirrors about the same axis {axis}: {ltr:?} / {rtl:?}");
+    }
+}
+
+/// Each settings label the `Grid` replaced, its rect and the same-named editor beside it on the
+/// same row, plus the Number fields' shown values, in one run of the dialog in `dir`.
+fn label_editor_pairs(dir: crate::text::direction::Dir) -> (Vec<(&'static str, egui::Rect, egui::Rect)>, Vec<String>) {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    let _dir = crate::text::direction::direction_scope(dir);
+    let mut app = app();
+    let _id = open(&mut app);
+    let mut h = harness(app);
+    h.run_steps(3);
+    // The editors by their accessible label (a `:` caption names its dropdown without it).
+    let mut editors: Vec<(&str, egui::Rect)> = Vec::new();
+    for role in [Role::SpinButton, Role::TextInput, Role::ComboBox] {
+        for text in ["Preset:", "Target", "Number", "Width", "Height", "Spacing"] {
+            for n in h.query_all_by_role_and_label(role, text) {
+                editors.push((text.trim_end_matches(':'), n.rect()));
+            }
+        }
+    }
+    let mut pairs = Vec::new();
+    for text in ["Preset:", "Target:", "Number", "Width", "Height", "Spacing"] {
+        let key = text.trim_end_matches(':');
+        for label in h.query_all_by_role_and_label(Role::Label, text) {
+            let label = label.rect();
+            // Same row, same label, nearest horizontally: the two axes' rows share their y.
+            let editor = editors
+                .iter()
+                .filter(|(l, r)| *l == key && (r.center().y - label.center().y).abs() < 5.0)
+                .map(|(_, r)| *r)
+                .min_by(|a, b| (a.center().x - label.center().x).abs().total_cmp(&(b.center().x - label.center().x).abs()))
+                .unwrap_or_else(|| panic!("no editor beside the {text} label"));
+            pairs.push((text, label, editor));
+        }
+    }
+    let values = h.query_all_by_role_and_label(Role::SpinButton, "Number").filter_map(|n| n.value()).collect();
+    (pairs, values)
+}
+
+/// In a right-to-left UI every settings label sits at the reading start of its editor — the label
+/// on the right, the editor toward the reading end — while the values stay the LTR run's ones.
+#[test]
+fn the_settings_rows_mirror_their_label_editor_order_in_a_right_to_left_ui() {
+    let (ltr_pairs, ltr_values) = label_editor_pairs(crate::text::direction::Dir::Ltr);
+    assert!(!ltr_pairs.is_empty());
+    for (text, label, editor) in &ltr_pairs {
+        assert!(label.right() <= editor.left() + 1.0, "LTR: the {text} label leads its editor: {label:?} / {editor:?}");
+    }
+
+    let (rtl_pairs, rtl_values) = label_editor_pairs(crate::text::direction::Dir::Rtl);
+    assert_eq!(rtl_pairs.len(), ltr_pairs.len(), "the same rows in both directions");
+    for (text, label, editor) in &rtl_pairs {
+        assert!(editor.right() <= label.left() + 1.0, "RTL: the {text} label sits at the reading start: {label:?} / {editor:?}");
+    }
+    assert_eq!(ltr_values, rtl_values, "only the direction changed, not the values: {ltr_values:?} / {rtl_values:?}");
+}

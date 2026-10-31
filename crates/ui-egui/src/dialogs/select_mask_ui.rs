@@ -9,7 +9,8 @@
 //! Preview, Transparency or Opacity, Overlay's colour and what it indicates), Refine Mode, Edge
 //! Detection, Global Refinements (with Clear Selection and Invert) and Output Settings, then
 //! Reset, OK and Cancel. The view keys (O M V A T K Y, F cycles, hold X for the image) work as in
-//! the dialog this replaces.
+//! the dialog this replaces. In a right-to-left language the chrome mirrors (the tools on the
+//! right, the Properties panel on the left); the document itself stays left-to-right.
 //!
 //! What the workspace holds is plain data: the tools' edits (`select.refineEdge`'s `edits`), the
 //! Refine Edge Brush strokes (`refineStrokes`) and the settings. OK runs `select.refineEdge` with
@@ -25,7 +26,7 @@
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
+use egui::{Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_engine::select_mask_edits::{self, MAX_EDIT_POINTS, MAX_EDITS};
 use photocraft_engine::smartselect_cmds::{MAX_STROKE_POINTS, MAX_STROKES};
@@ -1490,7 +1491,34 @@ fn upload(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// A section of the Properties panel: a bold title that folds it, open by default.
 fn section(ui: &mut egui::Ui, id: &str, title: &str, body: impl FnOnce(&mut egui::Ui)) {
-    egui::CollapsingHeader::new(egui::RichText::new(title).strong()).id_salt(id).default_open(true).show(ui, body);
+    // Branch on the same flag the fork's header row reads, so the two can never disagree when
+    // the thread-local direction and the ctx flag diverge.
+    if !ui.style().right_to_left {
+        egui::CollapsingHeader::new(egui::RichText::new(title).strong()).id_salt(id).default_open(true).show(ui, body);
+        return;
+    }
+    // egui's CollapsingHeader pins its own vertical scope to Align::Min, so its title would
+    // stay at the panel's left. CollapsingState's header row leads with the fold arrow on the
+    // reading-start edge, and the body inherits the panel's mirrored layout.
+    let id = ui.make_persistent_id(egui::IdSalt::new(id));
+    let state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, true);
+    let mut toggled = state.clone();
+    let header = state.show_header(ui, |ui| {
+        // The fork's own header starts its text right at the arrow slot (item_spacing.x = 0).
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.add(egui::Label::new(egui::RichText::new(title).strong()).sense(egui::Sense::click()));
+    });
+    let (toggle, header_inner, body_response) = header.body(body);
+    // Keep what CollapsingHeader's own header publishes: one whole-row clickable widget that
+    // carries the disclosure role and the expanded state.
+    let row = header_inner.response.interact(egui::Sense::click());
+    if toggle.clicked() || row.clicked() {
+        toggled.toggle(ui);
+        toggled.store(ui.ctx());
+    }
+    row.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DisclosureTriangle, ui.is_enabled(), title));
+    ui.ctx().accesskit_node_builder(row.id, |node| node.set_expanded(toggled.is_open()));
+    let _ = body_response;
 }
 
 /// The options bar of the current tool.
@@ -1544,7 +1572,10 @@ fn properties(ui: &mut egui::Ui, w: &mut SelectMaskWorkspace, t: &Tokens) -> Opt
     widgets::hairline(ui);
     section(ui, "sm-view", tl!("View Mode"), |ui| {
         ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
+            // Ui::vertical always lays out top_down(Align::Min), which in a mirrored row paints
+            // the column at the row's far edge while its width is reserved at the reading start;
+            // a body_layout scope puts the content at the column's reading-start edge instead.
+            ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
                 ui.label(egui::RichText::new(tl!("View")).color(t.text_dim));
                 let labels: Vec<String> = Mode::ALL.iter().map(|m| format!("{} ({:?})", m.label(), m.key())).collect();
                 let options: Vec<(Mode, &str)> = Mode::ALL.iter().zip(&labels).map(|(m, l)| (*m, l.as_str())).collect();
@@ -1554,7 +1585,7 @@ fn properties(ui: &mut egui::Ui, w: &mut SelectMaskWorkspace, t: &Tokens) -> Opt
             // Beside the view list, as Photoshop's; long labels are cut rather than widening the
             // panel past its edge (every row below lines up on that edge).
             let room = ui.available_width();
-            ui.vertical(|ui| {
+            ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
                 ui.set_max_width(room);
                 ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Truncate);
                 widgets::checkbox(ui, &mut w.opts.show_edge, &format!("{} (J)", tl!("Show Edge")));
@@ -1837,77 +1868,102 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let bar = ERect::from_min_size(full.min, vec2(full.width(), BAR_H));
         painter.rect_filled(bar, 0.0, t.dock);
         painter.line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, t.separator));
-        let mut bui = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(8.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let mut bui = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(8.0, 4.0))).layout(crate::text::direction::row()));
         if let Some(e) = options_bar(&mut bui, w) {
             edit = Some(e);
         }
         let body = ERect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
-        // The tools on the left: Lasso and Polygonal Lasso share a slot (right-click to pick).
-        let left = ERect::from_min_size(body.min, vec2(LEFT_W, body.height()));
-        painter.rect_filled(left, 0.0, t.dock);
-        painter.line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.separator));
-        let mut strip = ui.new_child(egui::UiBuilder::new().max_rect(left.shrink2(vec2(6.0, 8.0))));
-        strip.spacing_mut().item_spacing.y = 4.0;
+        let rtl = crate::text::direction::is_rtl();
+        // The tools on the reading-start edge (left in LTR, right in RTL): Lasso and Polygonal
+        // Lasso share a slot (right-click to pick).
+        let strip = if rtl {
+            ERect::from_min_size(pos2(body.right() - LEFT_W, body.top()), vec2(LEFT_W, body.height()))
+        } else {
+            ERect::from_min_size(body.min, vec2(LEFT_W, body.height()))
+        };
+        painter.rect_filled(strip, 0.0, t.dock);
+        let (strip_edge, strip_edge_b) = if rtl { (strip.left_top(), strip.left_bottom()) } else { (strip.right_top(), strip.right_bottom()) };
+        painter.line_segment([strip_edge, strip_edge_b], Stroke::new(1.0, t.separator));
+        let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip.shrink2(vec2(6.0, 8.0))).layout(crate::text::direction::body_layout()));
+        strip_ui.spacing_mut().item_spacing.y = 4.0;
         for slot in [SmTool::Quick, SmTool::RefineEdge, SmTool::Brush, SmTool::Object, w.l_tool, SmTool::Hand, SmTool::Zoom] {
-            let r = crate::icons::button(&mut strip, slot.icon(), 34.0, w.tool == slot, &slot.tip());
+            let r = crate::icons::button(&mut strip_ui, slot.icon(), 34.0, w.tool == slot, &slot.tip());
             if r.clicked() {
                 w.pick(slot);
             }
             if matches!(slot, SmTool::Lasso | SmTool::PolygonalLasso) {
                 // The slot's flyout triangle, as the main toolbar's.
-                let c = r.rect.right_bottom() - vec2(3.0, 3.0);
-                painter.add(egui::Shape::convex_polygon(vec![c, c - vec2(5.0, 0.0), c - vec2(0.0, 5.0)], t.icon, Stroke::NONE));
+                let c = if rtl { r.rect.left_bottom() + vec2(3.0, -3.0) } else { r.rect.right_bottom() - vec2(3.0, 3.0) };
+                let wing = if rtl { vec2(5.0, 0.0) } else { vec2(-5.0, 0.0) };
+                painter.add(egui::Shape::convex_polygon(vec![c, c + wing, c - vec2(0.0, 5.0)], t.icon, Stroke::NONE));
                 r.context_menu(|ui| {
-                    for l in [SmTool::Lasso, SmTool::PolygonalLasso] {
-                        if ui.selectable_label(w.tool == l, l.tip()).clicked() {
-                            w.pick(l);
-                            ui.close();
+                    crate::menus::popup_body(ui, |ui| {
+                        for l in [SmTool::Lasso, SmTool::PolygonalLasso] {
+                            if crate::menu_keys::menu_row(ui, &l.tip(), None, w.tool == l, true).clicked() {
+                                w.pick(l);
+                                ui.close();
+                            }
                         }
-                    }
+                    });
                 });
             }
         }
-        // The Properties panel on the right.
-        let right = ERect::from_min_size(pos2(body.right() - PANEL_W, body.top()), vec2(PANEL_W, body.height()));
-        painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let head = ERect::from_min_size(right.min, vec2(PANEL_W, TAB_H));
+        // The Properties panel on the reading-end edge (right in LTR, left in RTL).
+        let panel = if rtl {
+            ERect::from_min_size(body.min, vec2(PANEL_W, body.height()))
+        } else {
+            ERect::from_min_size(pos2(body.right() - PANEL_W, body.top()), vec2(PANEL_W, body.height()))
+        };
+        painter.rect_filled(panel, 0.0, t.dock);
+        let (panel_edge, panel_edge_b) = if rtl { (panel.right_top(), panel.right_bottom()) } else { (panel.left_top(), panel.left_bottom()) };
+        painter.line_segment([panel_edge, panel_edge_b], Stroke::new(1.0, t.separator));
+        let head = ERect::from_min_size(panel.min, vec2(PANEL_W, TAB_H));
         painter.line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, t.separator));
-        painter.text(head.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, tl!("Properties"), FontId::proportional(12.0), t.text);
+        let (head_text, head_align) = crate::direction::start_text_anchor(head, 12.0);
+        painter.text(head_text, head_align, tl!("Properties"), FontId::proportional(12.0), t.text);
         let mut props = ui.new_child(
-            egui::UiBuilder::new().max_rect(ERect::from_min_max(head.left_bottom() + vec2(14.0, 10.0), pos2(right.right() - 14.0, right.bottom() - 56.0))),
+            egui::UiBuilder::new()
+                .max_rect(ERect::from_min_max(head.left_bottom() + vec2(14.0, 10.0), pos2(panel.right() - 14.0, panel.bottom() - 56.0)))
+                .layout(crate::text::direction::body_layout()),
         );
         egui::ScrollArea::vertical().id_salt("sm-props").show(&mut props, |ui| {
             if let Some(e) = properties(ui, w, &t) {
                 edit = Some(e);
             }
         });
-        // Reset at the left, OK and Cancel against the right edge.
-        let foot = ERect::from_min_size(pos2(right.left() + 10.0, right.bottom() - 46.0), vec2(PANEL_W - 20.0, 32.0));
-        painter.line_segment([pos2(right.left(), foot.top() - 6.0), pos2(right.right(), foot.top() - 6.0)], Stroke::new(1.0, t.separator));
-        let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        // Reset at the reading start, OK and Cancel against the reading end.
+        let foot = ERect::from_min_size(pos2(panel.left() + 10.0, panel.bottom() - 46.0), vec2(PANEL_W - 20.0, 32.0));
+        painter.line_segment([pos2(panel.left(), foot.top() - 6.0), pos2(panel.right(), foot.top() - 6.0)], Stroke::new(1.0, t.separator));
+        let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(crate::text::direction::trailing()));
         if widgets::secondary_button(&mut fb, tl!("Cancel"), 70.0).clicked() {
             action = Some("cancel");
         }
         if widgets::primary_button(&mut fb, tl!("OK"), 64.0).clicked() {
             action = Some("ok");
         }
-        fb.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        // Reset at the reading start: `direction::row` puts the first widget there.
+        fb.with_layout(crate::text::direction::row(), |ui| {
             if crate::icons::button(ui, "undo-2", 24.0, false, tl!("Reset")).clicked() {
                 do_reset = true;
             }
         });
         // The document under its tab.
-        let doc_area = ERect::from_min_max(pos2(left.right(), body.top()), pos2(right.left(), body.bottom()));
+        let (doc_x0, doc_x1) = if rtl { (panel.right(), strip.left()) } else { (strip.right(), panel.left()) };
+        let doc_area = ERect::from_min_max(pos2(doc_x0, body.top()), pos2(doc_x1, body.bottom()));
         let tab = ERect::from_min_size(doc_area.min, vec2(doc_area.width(), TAB_H));
         painter.rect_filled(tab, 0.0, t.dock);
         painter.line_segment([tab.left_bottom(), tab.right_bottom()], Stroke::new(1.0, t.separator));
         let title = title.clone().unwrap_or_default();
         let galley = painter.layout_no_wrap(title, FontId::proportional(12.0), t.text);
         let tab_w = (galley.size().x + 28.0).min(tab.width());
-        let active_tab = ERect::from_min_size(tab.min, vec2(tab_w, TAB_H));
+        let active_tab = if rtl {
+            ERect::from_min_max(pos2(tab.right() - tab_w, tab.min.y), pos2(tab.right(), tab.max.y))
+        } else {
+            ERect::from_min_size(tab.min, vec2(tab_w, TAB_H))
+        };
         painter.rect_filled(active_tab, 0.0, t.canvas);
-        painter.galley(pos2(active_tab.left() + 14.0, active_tab.center().y - galley.size().y / 2.0), galley, t.text);
+        let title_x = if rtl { active_tab.right() - 14.0 - galley.size().x } else { active_tab.left() + 14.0 };
+        painter.galley(pos2(title_x, active_tab.center().y - galley.size().y / 2.0), galley, t.text);
         let area = ERect::from_min_max(pos2(doc_area.left(), tab.bottom()), doc_area.max);
         painter.rect_filled(area, 0.0, t.canvas);
         let (cw, chh) = (w.canvas.width() as f32, w.canvas.height() as f32);

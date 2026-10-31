@@ -493,8 +493,47 @@ mod navigator_wheel_tests {
 fn empty(ui: &mut egui::Ui, s: &str) {
     let t = Tokens::get(ui.ctx());
     ui.add_space(6.0);
-    ui.label(RichText::new(s).color(t.text_faint));
+    crate::direction::dialog_row(ui, |ui| {
+        ui.label(RichText::new(s).color(t.text_faint));
+    });
     ui.add_space(6.0);
+}
+
+#[cfg(test)]
+mod empty_state_direction_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// A panel group's empty section ("No document") hugs the reading-start edge of the group
+    /// body: the left edge left-to-right, the right edge right-to-left.
+    #[test]
+    fn empty_state_hugs_the_reading_start_edge() {
+        let _lang = crate::i18n::language_scope(crate::i18n::Lang::EN);
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let _dir = direction_scope(dir);
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut h = Harness::builder().with_size(vec2(300.0, 120.0)).build_ui_state(
+                |ui, state: &mut (PhotocraftApp, Option<Rect>)| {
+                    state.1 = Some(ui.max_rect());
+                    layers(&mut state.0, ui);
+                },
+                (app, None::<Rect>),
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(3);
+            let body = h.state().1.expect("the group body's rect was recorded");
+            let label = h.get_by_label("No document").rect();
+            if dir == Dir::Ltr {
+                assert!(label.left() - body.left() <= 1.0 && label.right() < body.center().x, "LTR: the label hugs the left edge: {label:?} in {body:?}");
+            } else {
+                assert!(
+                    body.right() - label.right() <= 1.0 && label.left() > body.center().x,
+                    "RTL: the label hugs the right (reading-start) edge: {label:?} in {body:?}"
+                );
+            }
+        }
+    }
 }
 
 #[cfg(test)]

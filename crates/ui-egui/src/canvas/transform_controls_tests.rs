@@ -357,3 +357,69 @@ fn transform_control_hit_keeps_move_interior_free_and_has_rotation_band() {
     assert!(!transform_controls_hit(r, r.center()));
     assert!(!transform_controls_hit(r, pos2(60.0, 4.0)));
 }
+
+/// The canvas stays left-to-right in a right-to-left UI: the Move tool's transform box and its
+/// eight handles sit exactly where a left-to-right UI puts them (rtl-canvas-guard).
+#[test]
+fn transform_handles_are_rtl_invariant() {
+    use crate::direction::{Dir, direction_scope};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 80, 40], "fill": "#ff0000"})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::Move;
+    app.ui.tool_options.move_show_transform = true;
+    let xf =
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let handles = |app: &PhotocraftApp| {
+        let r = transform_controls_rect(app, &xf).expect("shape controls");
+        let centres = [r.left_top(), r.center_top(), r.right_top(), r.right_center(), r.right_bottom(), r.center_bottom(), r.left_bottom(), r.left_center()];
+        (r, centres)
+    };
+    let ltr = {
+        let _ltr = direction_scope(Dir::Ltr);
+        handles(&app)
+    };
+    let rtl = {
+        let _rtl = direction_scope(Dir::Rtl);
+        handles(&app)
+    };
+    assert_eq!(rtl.0, ltr.0, "the transform box is unchanged");
+    for (i, (a, b)) in rtl.1.iter().zip(ltr.1.iter()).enumerate() {
+        assert_eq!(a, b, "handle {i} is unchanged");
+    }
+    // The hover regions move with them: the same point still starts the same gesture.
+    for (i, p) in ltr.1.iter().enumerate() {
+        assert_eq!(transform_controls_cursor(rtl.0, *p), transform_controls_cursor(ltr.0, *p), "handle {i} hovers the same");
+        assert_eq!(transform_controls_turn(rtl.0, *p), transform_controls_turn(ltr.0, *p), "handle {i} turns the same");
+    }
+}
+
+/// The screen↔doc mapping is direction-blind (rtl-canvas-guard): the same screen point resolves
+/// to the same document point, and a document rectangle projects to the same screen box, under a
+/// right-to-left UI.
+#[test]
+fn canvas_point_mapping_is_rtl_invariant() {
+    use crate::direction::{Dir, direction_scope};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.sync_views();
+    let active = ViewXform::active(&app).expect("the canvas has a view");
+    let points = [active.rect.left_top() + vec2(20.0, 30.0), active.rect.center(), active.rect.right_bottom() - vec2(5.0, 5.0)];
+    let sample = |app: &PhotocraftApp| {
+        let active = ViewXform::active(app).expect("the canvas has a view");
+        (points.map(|p| doc_point_at(app, p)), points.map(|p| active.to_doc(p)), active.doc_rect(photocraft_geom::Rect::new(10, 20, 110, 90)))
+    };
+    let ltr = {
+        let _ltr = direction_scope(Dir::Ltr);
+        sample(&app)
+    };
+    let rtl = {
+        let _rtl = direction_scope(Dir::Rtl);
+        sample(&app)
+    };
+    assert_eq!(rtl, ltr, "the mapping is unchanged under RTL");
+    for ((p, d), m) in points.iter().zip(ltr.0.iter()).zip(ltr.1.iter()) {
+        assert_eq!(*d, Some(*m), "doc_point_at agrees with the view transform at {p:?}");
+    }
+}

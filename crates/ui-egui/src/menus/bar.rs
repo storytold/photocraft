@@ -1,6 +1,6 @@
 use super::invoke::invoke;
 use super::items::{ItemCache, MenuItem, menu_items};
-use super::render::{alt_click, render_level, render_level_rows};
+use super::render::{alt_click, popup_body, render_level, render_level_rows, render_level_with};
 use super::search::help_search;
 use super::{PhotocraftApp, TOP_MENUS, Value, json};
 
@@ -15,7 +15,7 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
     let built: std::cell::OnceCell<ItemCache> = std::cell::OnceCell::new();
     let app_ref: &PhotocraftApp = app;
     let rtl = crate::direction::is_rtl();
-    let mut edge = if rtl { ui.cursor().right() } else { ui.cursor().left() };
+    let mut edge = crate::direction::start_edge(ui.cursor());
     let lang = crate::i18n::current();
     let mut clicked: Option<String> = None;
     let t = crate::theme::Tokens::get(ui.ctx());
@@ -45,13 +45,10 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
             for (k, top) in TOP_MENUS.iter().enumerate() {
                 // egui's menu_button toggles on release; these titles open on the press (one
                 // gesture can press, drag to an item and release), so each drives its popup.
-                // The title the keyboard is on (Alt / F10) is lit like a hovered one.
-                let focused = keys.focus == Some(if rtl { TOP_MENUS.len() - 1 - k } else { k });
-                let label = if nav.underline {
-                    crate::menu_keys::mnemonic_text(ui, "", &top_labels[k], top_mnemonics[k], Some(t.text_dim))
-                } else {
-                    egui::RichText::new(top_labels[k].as_str()).color(t.text_dim).into()
-                };
+                // The title the keyboard is on (Alt / F10) is lit like a hovered one. The keys'
+                // indexes are the menus' logical order (File first), whatever side it is drawn on.
+                let focused = keys.focus == Some(k);
+                let label = crate::menu_keys::mnemonic_text(ui, "", &top_labels[k], top_mnemonics[k], nav.underline, Some(t.text_dim));
                 let mut button = egui::Button::new(label);
                 if focused {
                     button = button.fill(ui.visuals().widgets.hovered.weak_bg_fill);
@@ -81,44 +78,43 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                     .style(config.style.clone())
                     .info(egui::UiStackInfo::new(egui::UiKind::Menu).with_tag_value(egui::containers::menu::MenuConfig::MENU_CONFIG_TAG, config))
                     .show(|ui| {
-                        let items = &built
-                            .get_or_init(|| {
-                                let state = crate::native_menu::state_hash(app_ref, None);
-                                let input = crate::native_menu::had_input(ui.ctx());
-                                let items = kept.take().and_then(|c| c.reuse(state, input)).unwrap_or_else(|| menu_items(app_ref));
-                                ItemCache { state, items }
-                            })
-                            .items;
-                        let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(*top)).collect();
-                        ui.set_min_width(220.0);
-                        if mine.is_empty() {
-                            ui.weak(crate::i18n::tr(lang, "(coming soon)"));
-                        }
-                        if *top == "Help" {
-                            // The search field scrolls with the rows, as part of the menu's content.
-                            crate::menu_nav::level(ui, 1, &mut nav, |ui, nav| {
-                                help_search(ui, items, opening, &mut clicked, nav);
-                                render_level_rows(ui, &mine, 1, &mut clicked, nav);
-                            });
-                        } else {
-                            render_level(ui, &mine, 1, &mut clicked, &mut nav);
-                        }
+                        popup_body(ui, |ui| {
+                            let items = &built
+                                .get_or_init(|| {
+                                    let state = crate::native_menu::state_hash(app_ref, None);
+                                    let input = crate::native_menu::had_input(ui.ctx());
+                                    let items = kept.take().and_then(|c| c.reuse(state, input)).unwrap_or_else(|| menu_items(app_ref));
+                                    ItemCache { state, items }
+                                })
+                                .items;
+                            let mine: Vec<&MenuItem> = items.iter().filter(|i| i.path.first().map(String::as_str) == Some(*top)).collect();
+                            ui.set_min_width(220.0);
+                            if mine.is_empty() {
+                                ui.weak(crate::i18n::tr(lang, "(coming soon)"));
+                            }
+                            if *top == "Help" {
+                                // The search field scrolls with the rows, as part of the menu's
+                                // content; the level still goes through `render_level_with` so the
+                                // right-to-left body scope covers it like every other menu.
+                                render_level_with(ui, 1, &mut nav, |ui, nav| {
+                                    help_search(ui, items, opening, &mut clicked, nav);
+                                    render_level_rows(ui, &mine, 1, &mut clicked, nav);
+                                });
+                            } else {
+                                render_level(ui, &mine, 1, &mut clicked, &mut nav);
+                            }
+                        })
                     });
                 buttons.push(title);
             }
-            edge = if rtl { buttons.iter().map(|b| b.rect.left()).fold(edge, f32::min) } else { buttons.iter().map(|b| b.rect.right()).fold(edge, f32::max) };
+            edge = crate::direction::row_end_edge(buttons.iter().map(|b| b.rect), edge);
             switch_on_hover(ui.ctx(), &buttons);
-            // ← and → step to the menu on that side, so in screen order.
-            let mut tops: Vec<egui::Id> = buttons.iter().map(egui::Popup::default_response_id).collect();
-            if rtl {
-                tops.reverse();
-            }
+            // The keys' lists stay in logical menu order (File first): the arrows step to the
+            // menu on the side they point at, which `horizontal_nav_keys` swaps in a
+            // right-to-left UI (there File sits at the right and reading order runs leftward).
+            let tops: Vec<egui::Id> = buttons.iter().map(egui::Popup::default_response_id).collect();
             nav.keys(ui.ctx(), &tops, &mut clicked);
-            let mut mnemonics = top_mnemonics.clone();
-            if rtl {
-                mnemonics.reverse();
-            }
-            keys.keys(ui.ctx(), &tops, &mnemonics, &mut nav, &mut clicked);
+            keys.keys(ui.ctx(), &tops, &top_mnemonics, &mut nav, &mut clicked);
         });
     });
     keys.store(ui.ctx());

@@ -265,17 +265,24 @@ fn mnemonics_are_underlined_only_with_alt_or_a_keyboard_opened_menu() {
 fn underlined_text_marks_the_mnemonic_once_and_keeps_the_prefix() {
     let ctx = egui::Context::default();
     let mut out = ctx.run_ui(Default::default(), |ui| {
-        let t = crate::menu_keys::mnemonic_text(ui, "✔ ", "Save As…", Some('A'), None);
+        let t = crate::menu_keys::mnemonic_text(ui, "✔ ", "Save As…", Some('A'), true, None);
         let egui::WidgetText::LayoutJob(job) = t else { panic!("a mnemonic makes a layout job") };
         assert_eq!(job.text, "✔ Save As…");
         let underlined: Vec<&str> =
             job.sections.iter().filter(|s| s.format.underline != egui::Stroke::NONE).map(|s| &job.text[s.byte_range.start.0..s.byte_range.end.0]).collect();
         assert_eq!(underlined, ["a"], "the first occurrence, case-insensitively");
-        let t = crate::menu_keys::mnemonic_text(ui, "", "Edit", None, None);
+        let t = crate::menu_keys::mnemonic_text(ui, "", "Edit", None, false, None);
         assert!(matches!(t, egui::WidgetText::RichText(_)), "without a mnemonic, plain text");
-        let t = crate::menu_keys::mnemonic_text(ui, "", "Édition", Some('D'), None);
+        let t = crate::menu_keys::mnemonic_text(ui, "", "Édition", Some('D'), true, None);
         let egui::WidgetText::LayoutJob(job) = t else { panic!() };
         assert_eq!(job.sections.len(), 3, "multi-byte text before the letter is kept whole");
+        // Hidden mnemonics change nothing; shown ones mark an Arabic label transiently.
+        let t = crate::menu_keys::mnemonic_text(ui, "", "ملف", Some('F'), false, None);
+        assert!(matches!(t, egui::WidgetText::RichText(_)), "not shown: plain text");
+        let t = crate::menu_keys::mnemonic_text(ui, "", "ملف", Some('F'), true, None);
+        assert_eq!(t.text(), "ملف (F)", "shown: the key appears after the label");
+        let t = crate::menu_keys::mnemonic_text(ui, "", "فتح…", Some('O'), true, None);
+        assert_eq!(t.text(), "فتح (O)…", "the key goes before a trailing ellipsis");
     });
     out.textures_delta.clear();
 }
@@ -308,9 +315,11 @@ fn the_shortcuts_wait_while_the_keyboard_is_on_the_bar() {
 
 /// #5863: a label with no Latin letter (Chinese, Japanese…) shows its English label's letter in
 /// parentheses, before a trailing ellipsis, and takes it as its mnemonic; labels with letters and
-/// the top menus' Photoshop letters are as before, and the letters stay unique.
+/// the top menus' Photoshop letters are as before, and the letters stay unique. CJK is never a
+/// right-to-left language, so the suffix is pinned under an explicit left-to-right scope.
 #[test]
-fn labels_without_latin_letters_show_their_english_key() {
+fn cjk_menus_keep_the_english_key_suffix() {
+    let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
     let labels: Vec<String> = ["文件", "编辑", "Image", "图层"].map(String::from).to_vec();
     let english = ["File", "Edit", "Image", "Layer"];
     let preferred = [Some('F'), Some('E'), Some('I'), Some('L')];
@@ -332,6 +341,110 @@ fn labels_without_latin_letters_show_their_english_key() {
     // An English UI is unchanged.
     let labels: Vec<String> = ["File", "Edit"].map(String::from).to_vec();
     assert_eq!(crate::menu_keys::localized(&labels, &["File", "Edit"], &[Some('F'), Some('E')]).0, labels);
+}
+
+/// The same CJK labels in both directions: the permanent suffix is a left-to-right UI's, and an
+/// RTL row never carries one (decision 1) — but the English key stays the row's mnemonic either
+/// way, so Alt+letter keeps working in both.
+#[test]
+fn cjk_labels_keep_their_key_in_both_directions() {
+    let labels: Vec<String> = ["文件", "编辑"].map(String::from).to_vec();
+    let english = ["File", "Edit"];
+    let preferred = [Some('F'), Some('E')];
+    let (ltr_shown, ltr_keys) = {
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        crate::menu_keys::localized(&labels, &english, &preferred)
+    };
+    let (rtl_shown, rtl_keys) = {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        crate::menu_keys::localized(&labels, &english, &preferred)
+    };
+    assert_eq!(ltr_shown, ["文件(F)", "编辑(E)"], "the CJK suffix stays in a left-to-right UI");
+    assert_eq!(rtl_shown, labels, "a right-to-left row carries no permanent suffix");
+    assert_eq!(ltr_keys, [Some('F'), Some('E')]);
+    assert_eq!(rtl_keys, ltr_keys, "the English key stays the row's mnemonic in both directions");
+}
+
+/// In a right-to-left UI the label is shown unchanged — no permanent "(F)" — while its English
+/// key stays the row's mnemonic, so Alt+letter still fires (decision 1).
+#[test]
+fn arabic_labels_never_gain_a_permanent_key_suffix() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let labels: Vec<String> = ["ملف", "تحرير"].map(String::from).to_vec();
+    let (shown, keys) = crate::menu_keys::localized(&labels, &["File", "Edit"], &[Some('F'), Some('E')]);
+    assert_eq!(shown, labels, "the labels render unchanged");
+    assert_eq!(keys, [Some('F'), Some('E')], "the English keys stay the mnemonics");
+    // Rows: the ellipsis stays where it was, the key is kept but not shown.
+    let labels: Vec<String> = ["جديد…", "فتح...", "إغلاق"].map(String::from).to_vec();
+    let (shown, keys) = crate::menu_keys::localized(&labels, &["New…", "Open...", "Close"], &[]);
+    assert_eq!(shown, ["جديد…", "فتح...", "إغلاق"]);
+    assert_eq!(keys, [Some('N'), Some('O'), Some('C')]);
+}
+
+/// The whole bar in a right-to-left UI: the focus arrows swap with the reading order, and the
+/// keyboard still starts on File (the reading start, drawn at the right).
+#[test]
+fn in_rtl_the_bar_focus_arrows_follow_the_reading_order() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let mut h = bar();
+    alt_tap(&mut h);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(0), "Alt puts the keyboard on File");
+    key(&mut h, egui::Key::ArrowLeft);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(1), "← moves to Edit (the next menu, to the left)");
+    key(&mut h, egui::Key::ArrowRight);
+    key(&mut h, egui::Key::ArrowRight);
+    assert_eq!(Keys::current(&h.ctx).focus, Some(9), "→ wraps back to Help");
+    key(&mut h, egui::Key::ArrowDown);
+    h.run_steps(2);
+    assert!(is_open(&h.ctx) && h.query_by_label_contains("About PhotoCraft").is_some(), "↓ opens Help");
+}
+
+/// The whole bar in Arabic: the labels keep their text (no permanent key suffix), Alt+letter and
+/// a letter in the open menu still fire, and the key shows only as a transient mark. The bare bar
+/// harness runs no shell frame, so the language is committed to the context directly, as the
+/// shell does: fonts install and the theme direction updates before the next frames.
+#[test]
+fn arabic_access_keys_still_fire() {
+    // The bare harness paints Arabic in its first frame, which only the eager font provider can
+    // serve: without the craft-fonts input there is no provider at all (the lazy loader registers
+    // a face a frame later, too late for a headless frame), and without an installed Arabic face
+    // there is nothing to reach.
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let candidates = photocraft_text::scripts::system_candidates(photocraft_text::scripts::Script::Arabic);
+        if candidates.is_empty() {
+            eprintln!("skipping: no installed Arabic font");
+            return;
+        }
+    }
+    if photocraft_text::craft_fonts::CRAFT_FONTS.is_empty() {
+        eprintln!("skipping: built without the craft-fonts input");
+        return;
+    }
+    let mut h = bar();
+    crate::i18n::sync_context(&h.ctx, "ar");
+    h.run_steps(4);
+    h.get_by_label("ملف").click();
+    h.run_steps(4);
+    assert!(is_open(&h.ctx), "the Arabic File title opens");
+    assert!(h.query_by_label_contains("ملف (F)").is_none(), "no permanent key suffix on the title");
+    assert!(h.query_by_label_contains("جديد (N)").is_none(), "nor on the rows: no marks while the mouse opened it");
+    // Alt+F opens File despite no visible key: the English mnemonics are kept.
+    key(&mut h, egui::Key::Escape);
+    alt_key(&mut h, egui::Key::F);
+    h.run_steps(2);
+    assert!(is_open(&h.ctx), "Alt+F opens File");
+    assert!(h.query_by_label_contains("ملف (F)").is_some(), "a keyboard-opened menu shows the keys transiently");
+    // A letter runs its row, as in English: Alt+V switches to View, Z runs Zoom In.
+    alt_key(&mut h, egui::Key::V);
+    h.run_steps(2);
+    let zoom_in = crate::i18n::tr(crate::i18n::current(), "Zoom In").to_string();
+    assert!(h.query_by_label_contains(&zoom_in).is_some(), "View is open in Arabic");
+    let zoom = h.state().ui.views[0].zoom;
+    key(&mut h, egui::Key::from_name("Z").unwrap());
+    h.run_steps(3);
+    assert!(!is_open(&h.ctx), "the letter closed the menu");
+    assert!(h.state().ui.views[0].zoom > zoom, "Z ran Zoom In from the Arabic View menu");
 }
 
 /// The whole app: with the bar focused by an Alt tap, a command shortcut leaves the bar and runs
@@ -367,12 +480,8 @@ fn every_menu_row_starts_its_label_after_one_checkmark_column() {
     let ctx = egui::Context::default();
     let mut out = ctx.run_ui(Default::default(), |ui| {
         let start = |checked: bool, label: &str, mnemonic: Option<char>| {
-            let galley = crate::menu_keys::menu_row_text(ui, checked, label, mnemonic).into_galley(
-                ui,
-                Some(egui::TextWrapMode::Extend),
-                f32::INFINITY,
-                egui::TextStyle::Button,
-            );
+            let galley = crate::menu_keys::menu_row_text(ui, checked, label, mnemonic, mnemonic.is_some(), crate::menu_keys::GutterSide::ReadingStart)
+                .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Button);
             let first = label.chars().next().unwrap_or(' ');
             let row = galley.rows.first().expect("one row");
             let glyph = row.glyphs.iter().find(|g| g.chr == first).expect("the label's first glyph");
@@ -392,8 +501,41 @@ fn every_menu_row_starts_its_label_after_one_checkmark_column() {
         assert!((underlined - plain).abs() < 0.01, "an underlined mnemonic doesn't move the label");
         let underlined_mid = start(true, "Lock Guides", Some('G'));
         assert!((underlined_mid - plain).abs() < 0.01, "nor a mnemonic after the first letter");
-        let t = crate::menu_keys::menu_row_text(ui, true, "Rulers", None);
+        let t = crate::menu_keys::menu_row_text(ui, true, "Rulers", None, false, crate::menu_keys::GutterSide::ReadingStart);
         assert_eq!(t.text(), "✔ Rulers", "a checked row keeps its mark (and its accessible label)");
+    });
+    out.textures_delta.clear();
+}
+
+/// In a right-to-left menu the checkmark column sits at the row's reading start — the right
+/// edge — whatever script the label starts with, and the whole column stays shared (#5705).
+#[test]
+fn in_rtl_the_checkmark_column_sits_at_the_reading_start() {
+    let ctx = egui::Context::default();
+    // The row text follows the style flag, as the theme sets it from the language.
+    ctx.all_styles_mut(|s| s.right_to_left = true);
+    let mut out = ctx.run_ui(Default::default(), |ui| {
+        let start = |checked: bool, label: &str| {
+            let galley = crate::menu_keys::menu_row_text(ui, checked, label, None, false, crate::menu_keys::GutterSide::ReadingStart).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Button,
+            );
+            let row = galley.rows.first().expect("one row");
+            (galley.text().to_owned(), row.glyphs.iter().map(|g| (g.chr, g.pos.x)).collect::<Vec<_>>())
+        };
+        for label in ["ملف", "8 Bits/Channel", "锁定参考线"] {
+            let (text, checked) = start(true, label);
+            let (_, unchecked) = start(false, label);
+            let first = label.chars().next().expect("a label");
+            let mark = checked.iter().find(|(c, _)| *c == '✔').map(|(_, x)| *x).expect("the mark is drawn");
+            let glyph = checked.iter().find(|(c, _)| *c == first).map(|(_, x)| *x).expect("the label's first glyph");
+            assert!(text.ends_with(label), "the label is shown whole: {text:?}");
+            assert!(mark > glyph, "{label}: the mark is at the reading start (right) of the label");
+            let unchecked_first = unchecked.iter().find(|(c, _)| *c == first).map(|(_, x)| *x).expect("the first glyph");
+            assert!((glyph - unchecked_first).abs() < 0.01, "{label}: checked and unchecked share the column");
+        }
     });
     out.textures_delta.clear();
 }

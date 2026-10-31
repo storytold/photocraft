@@ -741,3 +741,37 @@ fn a_turn_takes_settings_and_paper_together() {
         assert!(f.get("__pageError").is_some(), "{partial}");
     }
 }
+
+/// The print dialog in one direction: the page preview, the settings column's head and the
+/// paper and orientation dropdowns.
+fn print_dialog_rects(dir: crate::direction::Dir) -> (egui::Rect, egui::Rect, egui::Rect, egui::Rect) {
+    use egui_kittest::kittest::Queryable;
+    let (app, _) = app();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1100.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                crate::dialogs::show(app, ui.ctx());
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    let _scope = crate::direction::direction_scope(dir);
+    open_print(h.state_mut());
+    h.run_steps(5);
+    (h.get_by_label("Print preview image").rect(), h.get_by_label("Printer Setup").rect(), h.get_by_label("Paper").rect(), h.get_by_label("Orientation").rect())
+}
+
+/// The print dialog follows the reading order: the page preview sits at the reading start and
+/// the settings column after it, and the settings' own rows mirror with it.
+#[test]
+fn print_dialog_mirrors_its_columns_and_rows_under_rtl() {
+    let (l_preview, l_head, l_paper, l_orientation) = print_dialog_rects(crate::direction::Dir::Ltr);
+    let (r_preview, r_head, r_paper, r_orientation) = print_dialog_rects(crate::direction::Dir::Rtl);
+    assert!(l_preview.left() < l_head.left(), "the preview leads in a left-to-right dialog");
+    assert!(l_head.left() >= l_preview.right() - 1.0, "the settings column follows the preview: {l_head:?} {l_preview:?}");
+    assert!(r_preview.right() > r_head.right(), "the preview leads in a right-to-left dialog");
+    assert!(r_head.right() < r_preview.left(), "the settings column follows the preview: {r_head:?} {r_preview:?}");
+    assert!(l_paper.left() < l_orientation.left(), "the paper dropdown comes first left to right");
+    assert!(r_paper.right() > r_orientation.right(), "the paper dropdown comes first right to left");
+}

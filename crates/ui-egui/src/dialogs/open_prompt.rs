@@ -204,14 +204,18 @@ fn show_damage(app: &mut PhotocraftApp) {
 
 /// Body of the standard modal; the same fields are visible to automation.
 pub(crate) fn damage_body(ui: &mut egui::Ui, fields: &serde_json::Map<String, Value>) {
-    ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
-    if let Some(warnings) = fields.get("warnings").and_then(Value::as_array) {
-        egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
-            for warning in warnings.iter().filter_map(Value::as_str) {
-                ui.label(warning);
-            }
-        });
-    }
+    // One direction-aware body: in a left-to-right UI the blocks keep the default layout; in a
+    // right-to-left one they hug the reading start and the message reads from the right.
+    ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
+        ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
+        if let Some(warnings) = fields.get("warnings").and_then(Value::as_array) {
+            egui::ScrollArea::vertical().max_height(140.0).show(ui, |ui| {
+                for warning in warnings.iter().filter_map(Value::as_str) {
+                    ui.label(warning);
+                }
+            });
+        }
+    });
 }
 
 /// Continue or discard this file only, then move the queue forward. Accepting does not
@@ -266,4 +270,36 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     app.session.set_active(index);
     crate::jobs_ui::after_open(app, document, &name, path.as_deref(), &warnings, bytes.as_deref().map(Vec::as_slice))?;
     Ok(json!({"document": index, "action": action}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    /// The prompt's message and first warning drawn in `dir`, with the content area they were
+    /// drawn in.
+    fn prompt(dir: crate::text::direction::Dir) -> (egui::Rect, egui::Rect, egui::Rect) {
+        let _scope = crate::text::direction::direction_scope(dir);
+        let mut fields = serde_json::Map::new();
+        fields.insert("message".into(), json!("Damaged document"));
+        fields.insert("warnings".into(), json!(["Layer 3 could not be read"]));
+        let area = std::cell::Cell::new(egui::Rect::ZERO);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 300.0)).build_ui(|ui| {
+            area.set(ui.max_rect());
+            damage_body(ui, &fields);
+        });
+        h.run();
+        (h.get_by_label("Damaged document").rect(), h.get_by_label("Layer 3 could not be read").rect(), area.get())
+    }
+
+    #[test]
+    fn the_prompt_reads_from_the_reading_start() {
+        let (message, warning, area) = prompt(crate::text::direction::Dir::Ltr);
+        assert!((message.left() - area.left()).abs() < 1.0, "left-to-right: the message starts at the left edge: {message:?} in {area:?}");
+        assert!((warning.left() - area.left()).abs() < 1.0, "left-to-right: the warnings list starts at the left edge: {warning:?} in {area:?}");
+        let (message, warning, area) = prompt(crate::text::direction::Dir::Rtl);
+        assert!((message.right() - area.right()).abs() < 1.0, "right-to-left: the message ends at the right edge: {message:?} in {area:?}");
+        assert!((warning.right() - area.right()).abs() < 1.0, "right-to-left: the warnings list ends at the right edge: {warning:?} in {area:?}");
+    }
 }

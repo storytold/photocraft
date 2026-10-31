@@ -262,58 +262,11 @@ pub fn show_dialog(app: &mut PhotocraftApp, ctx: &Context) {
     };
     egui::Modal::new(egui::Id::unique("layers-panel-options-modal")).show(ctx, |ui| {
         ui.set_width(if matches!(dialog, LayersPanelDialog::PanelOptions(_)) { 480.0 } else { 380.0 });
-        ui.horizontal(|ui| {
-            ui.heading(title);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("×").on_hover_text(tl!("Cancel")).clicked() {
-                    cancelled = true;
-                }
-            });
+        // One direction-aware body: in LTR `body_layout()` is the Modal's own layout, so nothing
+        // moves; in RTL the blocks right-align and every nested row mirrors.
+        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(crate::direction::body_layout()), |ui| {
+            dialog_body(ui, &mut dialog, title, &mut confirmed, &mut cancelled);
         });
-        ui.separator();
-        match &mut dialog {
-            LayersPanelDialog::PanelOptions(opts) => {
-                ui.horizontal_top(|ui| {
-                    ui.vertical(|ui| {
-                        ui.set_width(345.0);
-                        ui.vertical(|ui| options_body(ui, opts));
-                    });
-                    ui.add_space(10.0);
-                    ui.vertical(|ui| {
-                        ui.set_min_width(74.0);
-                        if ui.add_sized([74.0, 29.0], egui::Button::new(tl!("OK"))).clicked() {
-                            confirmed = true;
-                        }
-                        ui.add_space(6.0);
-                        if ui.add_sized([74.0, 29.0], egui::Button::new(tl!("Cancel"))).clicked() {
-                            cancelled = true;
-                        }
-                    });
-                });
-            }
-            LayersPanelDialog::NewLayer(name) | LayersPanelDialog::NewGroup(name) => {
-                ui.label(tl!("Name:"));
-                ui.text_edit_singleline(name);
-            }
-            LayersPanelDialog::LockLayers { transparency, pixels, position, artboard, all } => {
-                ui.checkbox(transparency, tl!("Transparency"));
-                ui.checkbox(pixels, tl!("Image"));
-                ui.checkbox(position, tl!("Position"));
-                ui.checkbox(artboard, tl!("Prevent Auto-Nesting"));
-                ui.checkbox(all, tl!("All"));
-            }
-        }
-        if !matches!(dialog, LayersPanelDialog::PanelOptions(_)) {
-            ui.add_space(10.0);
-            ui.horizontal(|ui| {
-                if ui.button(tl!("OK")).clicked() {
-                    confirmed = true;
-                }
-                if ui.button(tl!("Cancel")).clicked() {
-                    cancelled = true;
-                }
-            });
-        }
     });
     if confirmed && !cancelled {
         let r = match dialog {
@@ -334,6 +287,64 @@ pub fn show_dialog(app: &mut PhotocraftApp, ctx: &Context) {
         }
     } else if !cancelled {
         app.ui.layers_panel_dialog = Some(dialog);
+    }
+}
+
+/// The modal's content: the heading with × at the reading end, then the dialog's body and footer.
+fn dialog_body(ui: &mut Ui, dialog: &mut LayersPanelDialog, title: &str, confirmed: &mut bool, cancelled: &mut bool) {
+    ui.horizontal(|ui| {
+        ui.heading(title);
+        ui.with_layout(crate::direction::trailing(), |ui| {
+            if ui.small_button("×").on_hover_text(tl!("Cancel")).clicked() {
+                *cancelled = true;
+            }
+        });
+    });
+    ui.separator();
+    match dialog {
+        LayersPanelDialog::PanelOptions(opts) => {
+            ui.horizontal_top(|ui| {
+                // The column keeps the body's layout: in RTL its blocks hug the reading start,
+                // and the width reservation follows that edge instead of the left one.
+                ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
+                    ui.set_width(345.0);
+                    options_body(ui, opts);
+                });
+                ui.add_space(10.0);
+                ui.vertical(|ui| {
+                    ui.set_min_width(74.0);
+                    if ui.add_sized([74.0, 29.0], egui::Button::new(tl!("OK"))).clicked() {
+                        *confirmed = true;
+                    }
+                    ui.add_space(6.0);
+                    if ui.add_sized([74.0, 29.0], egui::Button::new(tl!("Cancel"))).clicked() {
+                        *cancelled = true;
+                    }
+                });
+            });
+        }
+        LayersPanelDialog::NewLayer(name) | LayersPanelDialog::NewGroup(name) => {
+            ui.label(tl!("Name:"));
+            ui.text_edit_singleline(name);
+        }
+        LayersPanelDialog::LockLayers { transparency, pixels, position, artboard, all } => {
+            ui.checkbox(transparency, tl!("Transparency"));
+            ui.checkbox(pixels, tl!("Image"));
+            ui.checkbox(position, tl!("Position"));
+            ui.checkbox(artboard, tl!("Prevent Auto-Nesting"));
+            ui.checkbox(all, tl!("All"));
+        }
+    }
+    if !matches!(dialog, LayersPanelDialog::PanelOptions(_)) {
+        ui.add_space(10.0);
+        ui.horizontal(|ui| {
+            if ui.button(tl!("OK")).clicked() {
+                *confirmed = true;
+            }
+            if ui.button(tl!("Cancel")).clicked() {
+                *cancelled = true;
+            }
+        });
     }
 }
 
@@ -474,5 +485,69 @@ mod tests {
         assert_eq!(options, LayersPanelOptions::default());
         let saved = serde_json::to_value(&options).unwrap();
         assert_eq!(saved["thumbnailSize"], "medium");
+    }
+
+    /// The panel dialog mirrors under RTL and only under RTL: the title and the footer buttons
+    /// start from the right, the × sits at the title row's left end. The × is the narrowest
+    /// button (it carries the hover text "Cancel"); the footer Cancel is the widest "Cancel".
+    #[test]
+    fn dialog_mirrors_in_rtl_and_stays_ltr_otherwise() {
+        use egui_kittest::kittest::Queryable;
+        fn rects(rtl: bool) -> (egui::Rect, egui::Rect, egui::Rect, egui::Rect) {
+            let _guard = rtl.then(|| crate::direction::direction_scope(crate::direction::Dir::Rtl));
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.ui.layers_panel_dialog = Some(LayersPanelDialog::NewLayer(String::new()));
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(
+                |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                        show_dialog(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(5);
+            let x = h.get_all_by_role(egui::accesskit::Role::Button).map(|n| n.rect()).reduce(|a, b| if a.width() <= b.width() { a } else { b }).unwrap();
+            let cancel = h.get_all_by_label("Cancel").map(|n| n.rect()).reduce(|a, b| if a.width() >= b.width() { a } else { b }).unwrap();
+            (x, h.get_by_label("New Layer").rect(), h.get_by_label("OK").rect(), cancel)
+        }
+        let (x_l, t_l, ok_l, c_l) = rects(false);
+        assert!(t_l.left() < x_l.left() && ok_l.left() < c_l.left(), "LTR unchanged: {t_l:?} {x_l:?} {ok_l:?} {c_l:?}");
+        let (x_r, t_r, ok_r, c_r) = rects(true);
+        assert!(x_r.right() < t_r.left() && ok_r.right() > c_r.right(), "RTL mirrored: {x_r:?} {t_r:?} {ok_r:?} {c_r:?}");
+    }
+
+    /// The Panel Options column follows the body's direction: its group label and its first
+    /// radio sit at the reading start — the right in RTL, the left in LTR — like the title.
+    #[test]
+    fn panel_options_column_follows_the_direction() {
+        use egui_kittest::kittest::Queryable;
+        fn rects(rtl: bool) -> (egui::Rect, egui::Rect, egui::Rect) {
+            let _guard = rtl.then(|| crate::direction::direction_scope(crate::direction::Dir::Rtl));
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.ui.layers_panel_dialog = Some(LayersPanelDialog::PanelOptions(LayersPanelOptions::default()));
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(
+                |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                        show_dialog(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(5);
+            let radio = h.get_all_by_role(egui::accesskit::Role::RadioButton).map(|n| n.rect()).next().unwrap();
+            (h.get_by_label("Thumbnail Size").rect(), radio, h.get_by_label("Layers Panel Options").rect())
+        }
+        let (label_l, radio_l, title_l) = rects(false);
+        assert!(
+            (label_l.left() - title_l.left()).abs() < 24.0 && (radio_l.left() - label_l.left()).abs() < 24.0,
+            "LTR: the column starts at the left: {label_l:?} {radio_l:?} {title_l:?}"
+        );
+        let (label_r, radio_r, title_r) = rects(true);
+        assert!(
+            (label_r.right() - title_r.right()).abs() < 24.0 && (radio_r.right() - label_r.right()).abs() < 24.0,
+            "RTL: the column starts at the right: {label_r:?} {radio_r:?} {title_r:?}"
+        );
     }
 }

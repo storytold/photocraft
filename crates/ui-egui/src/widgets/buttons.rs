@@ -7,8 +7,9 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     if t.pro {
         return checkbox(ui, on, label);
     }
+    // A `horizontal`-shaped row: `interact_size.y` tall, so a tall parent can't stretch it.
     let mut resp = ui
-        .horizontal(|ui| {
+        .allocate_ui_with_layout(vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::text::direction::row(), |ui| {
             let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 17.0), Sense::click());
             let how_on = ui.ctx().animate_bool(resp.id, *on);
             let bg = if *on { t.accent } else { t.field_border };
@@ -17,7 +18,11 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             } else {
                 ui.painter().rect_filled(rect, 8.5, bg);
             }
-            let x = egui::lerp((rect.left() + 8.5)..=(rect.right() - 8.5), how_on);
+            // The switch reads off at the row's start and on at its end: in a right-to-left UI
+            // the knob travels left as it turns on.
+            let (off_x, on_x) =
+                if crate::text::direction::is_rtl() { (rect.right() - 8.5, rect.left() + 8.5) } else { (rect.left() + 8.5, rect.right() - 8.5) };
+            let x = egui::lerp(off_x..=on_x, how_on);
             ui.painter().circle_filled(pos2(x, rect.center().y), 6.5, Color32::WHITE);
             ui.label(egui::RichText::new(tl!(label)).color(if *on { t.text } else { t.text_dim }));
             resp
@@ -69,7 +74,8 @@ pub enum ButtonRole {
 impl ButtonRole {
     /// Position from the left in the platform's order. Windows and Linux put the default action
     /// first (OK Cancel Apply, Yes No Cancel); macOS puts it last, in the corner, with Cancel beside
-    /// it and the other answers further left (Don't Save, Cancel, Save).
+    /// it and the other answers further left (Don't Save, Cancel, Save). The row itself mirrors
+    /// with the reading direction (see [`dialog_buttons`]).
     fn slot(self, mac: bool) -> u8 {
         match (self, mac) {
             (Self::Default, false) | (Self::Alternate, true) => 0,
@@ -108,8 +114,10 @@ impl<'a> DialogButton<'a> {
 }
 
 /// A dialog's button row at the cursor, in the platform's order (see [`ButtonRole`]): every modal
-/// draws its buttons through this, so they all agree. Inside a right-to-left row it sits at the
-/// right edge. The buttons are laid out left to right, so Tab walks them in reading order.
+/// draws its buttons through this, so they all agree. Inside the dialog footer it hugs the
+/// reading end (`text::direction::trailing_min` there). The row follows the UI's reading
+/// direction ([`crate::text::direction::row`]): the same add order paints the platform's mirrored
+/// order, and Tab still walks the buttons in creation order.
 /// Returns the role of the button clicked this frame.
 pub fn dialog_buttons(ui: &mut Ui, buttons: &[DialogButton]) -> Option<ButtonRole> {
     let mac = ui.ctx().os() == egui::os::OperatingSystem::Mac;
@@ -118,7 +126,7 @@ pub fn dialog_buttons(ui: &mut Ui, buttons: &[DialogButton]) -> Option<ButtonRol
         let s = button_size(ui, b.label, b.min_width);
         vec2(acc.x + s.x, acc.y.max(s.y))
     }) + vec2(gap * buttons.len().saturating_sub(1) as f32, 0.0);
-    ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+    ui.allocate_ui_with_layout(size, crate::text::direction::row(), |ui| {
         let mut hit = None;
         for slot in 0..4 {
             for b in buttons.iter().filter(|b| b.role.slot(mac) == slot) {
@@ -214,8 +222,9 @@ fn button_impl_h(ui: &mut Ui, label: &str, min_width: f32, height: Option<f32>, 
 /// Spectrum-style checkbox (blue when checked).
 pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());
+    // A `horizontal`-shaped row: `interact_size.y` tall, so a tall parent can't stretch it.
     let (mut resp, label_resp) = ui
-        .horizontal(|ui| {
+        .allocate_ui_with_layout(vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::text::direction::row(), |ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::CLICK);
             let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);

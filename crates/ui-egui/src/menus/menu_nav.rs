@@ -1,9 +1,9 @@
 //! Native-menu behaviour for the menu bar's menus (#138): a menu or submenu taller than the
 //! window scrolls (mouse wheel / trackpad, and the ▲ / ▼ arrows at its top and bottom that scroll
 //! while the pointer rests on them, like macOS and Windows menus on a small display), and the
-//! keyboard drives an open menu: ↑ / ↓ move the highlight (and keep it in view), → opens a
-//! submenu or the next menu, ← closes the submenu or opens the previous menu, ↩ / Space run the
-//! highlighted item, Esc closes.
+//! keyboard drives an open menu: ↑ / ↓ move the highlight (and keep it in view), the forward key
+//! (→, or ← in a right-to-left UI) opens a submenu or the next menu, the back key closes the
+//! submenu or opens the previous menu, ↩ / Space run the highlighted item, Esc closes.
 //!
 //! The highlight is view state only (egui memory), per top-level menu; it follows the pointer too,
 //! so the mouse and the keyboard share one highlighted row like a native menu.
@@ -345,6 +345,9 @@ impl Nav {
         let typing = ctx.text_edit_focused();
         let press = |k: Key| !(typing && matches!(k, Key::ArrowLeft | Key::ArrowRight | Key::Space)) && ctx.input_mut(|i| i.consume_key(Modifiers::NONE, k));
         let current = self.highlighted(level).and_then(|i| self.rows.get(level)?.get(i)).cloned();
+        // In a right-to-left UI the menu on the reading-order next side is on the left: the
+        // physical arrows swap (the bar is drawn right-to-left, submenus open leftward).
+        let (fwd, back) = crate::direction::horizontal_nav_keys();
         let switch = |by: usize| {
             let n = tops.len();
             if let Some(&id) = tops.get((top + by) % n) {
@@ -357,12 +360,12 @@ impl Nav {
             self.step(level, true);
         } else if press(Key::ArrowUp) {
             self.step(level, false);
-        } else if press(Key::ArrowRight) {
+        } else if press(fwd) {
             match current {
                 Some(Row { widget, enabled: true, command: None, .. }) => self.open_sub(ctx, level, widget),
                 _ => switch(1),
             }
-        } else if press(Key::ArrowLeft) {
+        } else if press(back) {
             if level > 0 {
                 if let Some(&root) = self.roots.get(level - 1) {
                     MenuState::from_id(ctx, root, |s| s.open_item = None);

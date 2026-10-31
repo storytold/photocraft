@@ -89,6 +89,13 @@ fn per_unit_row(ui: &mut egui::Ui, f: &mut Map<String, Value>, field: &str, name
 
 /// The dialog body.
 pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    // One direction-aware body: in a left-to-right UI the layout is egui's default, so nothing
+    // moves; in a right-to-left UI the blocks hug the reading start and every row mirrors.
+    ui.with_layout(crate::direction::body_layout(), |ui| body_fields(app, ui, f));
+}
+
+/// The Bitmap dialog's fields.
+fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     ui.spacing_mut().item_spacing.y = 6.0;
     let res_units = [("ppi", tl!("Pixels/Inch")), ("ppcm", tl!("Pixels/Centimeter"))];
@@ -165,3 +172,56 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
 
 #[cfg(test)]
 mod tests;
+
+/// The Bitmap body mirrors in a right-to-left UI: the rows read from the right and the units
+/// dropdown ends the row at the reading end.
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::Queryable;
+
+    /// The Bitmap body drawn in `dir`.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, (PhotocraftApp, Map<String, Value>)> {
+        let _dir = crate::direction::direction_scope(dir);
+        let mut fields = Map::new();
+        fields.insert("__inputResolution".into(), json!(72.0));
+        fields.insert("__resUnit".into(), json!("ppi"));
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(440.0, 360.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(|ui, s: &mut (PhotocraftApp, Map<String, Value>)| body(&s.0, ui, &mut s.1), (app, fields));
+        h.run_steps(3);
+        h
+    }
+
+    /// The rows read from the right in a right-to-left UI: the caption sits at the reading start
+    /// and the units dropdown ends the row.
+    #[test]
+    fn the_rows_mirror_in_a_right_to_left_ui() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+
+        let ltr_output = ltr.get_by_label("Output:").rect();
+        let ltr_units = ltr.get_by_label("Units").rect();
+        assert!(ltr_units.left() > ltr_output.right(), "LTR: the dropdown ends the row: {ltr_output:?} {ltr_units:?}");
+
+        let rtl_output = rtl.get_by_label("Output:").rect();
+        let rtl_units = rtl.get_by_label("Units").rect();
+        assert!(rtl_units.right() < rtl_output.left(), "RTL: the row mirrors: {rtl_output:?} {rtl_units:?}");
+    }
+
+    /// The rows hug the reading start of the column: the left in LTR, the right in RTL.
+    #[test]
+    fn the_rows_hug_the_reading_start() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let ltr_input = ltr.get_by_label("Input:").rect();
+        let ltr_output = ltr.get_by_label("Output:").rect();
+        assert!((ltr_input.left() - ltr_output.left()).abs() < 1.0, "LTR: the rows start at the left: {ltr_input:?} {ltr_output:?}");
+        let rtl_input = rtl.get_by_label("Input:").rect();
+        let rtl_output = rtl.get_by_label("Output:").rect();
+        assert!((rtl_input.right() - rtl_output.right()).abs() < 1.0, "RTL: the rows end at the right: {rtl_input:?} {rtl_output:?}");
+    }
+}

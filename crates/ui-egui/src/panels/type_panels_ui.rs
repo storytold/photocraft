@@ -144,34 +144,37 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let canvas = app.last_canvas_rect;
     if app.ui.type_panels.styles {
         let mut close = false;
+        let x = crate::text::direction::float_window_x(canvas, 290.0, 24.0, 0.0);
         egui::Window::new(tl!("Type Styles"))
             .id(egui::Id::unique("type-styles-window"))
             .title_bar(false)
             .resizable(false)
             .frame(float_frame(&t))
-            .default_pos(pos2((canvas.right() - 314.0).max(canvas.left() + 8.0), canvas.top() + 40.0))
+            .default_pos(pos2(x, canvas.top() + 40.0))
             .show(ctx, |ui| {
-                ui.set_width(290.0);
-                ui.horizontal(|ui| {
-                    let mut tab = app.ui.type_panels.styles_tab;
-                    for (i, name) in [tl!("Character Styles"), tl!("Paragraph Styles")].iter().enumerate() {
-                        if crate::widgets::pill_tab(ui, name, tab == i).clicked() {
-                            tab = i;
+                crate::text::direction::window_body(ui, |ui| {
+                    ui.set_width(290.0);
+                    crate::direction::full_row(ui, |ui| {
+                        let mut tab = app.ui.type_panels.styles_tab;
+                        for (i, name) in [tl!("Character Styles"), tl!("Paragraph Styles")].iter().enumerate() {
+                            if crate::widgets::pill_tab(ui, name, tab == i).clicked() {
+                                tab = i;
+                            }
                         }
-                    }
-                    if tab != app.ui.type_panels.styles_tab {
-                        app.ui.type_panels.styles_tab = tab;
-                        app.ui.type_panels.options = None;
-                    }
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
-                            close = true;
+                        if tab != app.ui.type_panels.styles_tab {
+                            app.ui.type_panels.styles_tab = tab;
+                            app.ui.type_panels.options = None;
                         }
+                        crate::direction::full_trailing(ui, |ui| {
+                            if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
+                                close = true;
+                            }
+                        });
                     });
-                });
-                crate::widgets::hairline(ui);
-                ui.add_space(4.0);
-                styles_panel(app, ui, app.ui.type_panels.styles_tab == 1);
+                    crate::widgets::hairline(ui);
+                    ui.add_space(4.0);
+                    styles_panel(app, ui, app.ui.type_panels.styles_tab == 1);
+                })
             });
         if close {
             app.ui.type_panels.styles = false;
@@ -179,25 +182,29 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     if app.ui.type_panels.glyphs {
         let mut close = false;
+        // The LTR cascade keeps a 32 px gap to Type Styles: 314 + 372 - 340.
+        let x = crate::text::direction::float_window_x(canvas, 340.0, 346.0, 0.0);
         egui::Window::new(tl!("Glyphs"))
             .id(egui::Id::unique("glyphs-window"))
             .title_bar(false)
             .resizable(false)
             .frame(float_frame(&t))
-            .default_pos(pos2((canvas.right() - 314.0 - 372.0).max(canvas.left() + 8.0), canvas.top() + 40.0))
+            .default_pos(pos2(x, canvas.top() + 40.0))
             .show(ctx, |ui| {
-                ui.set_width(340.0);
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(tl!("Glyphs")).color(t.text).size(12.0).strong());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
-                            close = true;
-                        }
+                crate::text::direction::window_body(ui, |ui| {
+                    ui.set_width(340.0);
+                    crate::direction::full_row(ui, |ui| {
+                        ui.label(RichText::new(tl!("Glyphs")).color(t.text).size(12.0).strong());
+                        crate::direction::full_trailing(ui, |ui| {
+                            if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
+                                close = true;
+                            }
+                        });
                     });
-                });
-                crate::widgets::hairline(ui);
-                ui.add_space(4.0);
-                glyphs_panel(app, ui);
+                    crate::widgets::hairline(ui);
+                    ui.add_space(4.0);
+                    glyphs_panel(app, ui);
+                })
             });
         if close {
             app.ui.type_panels.glyphs = false;
@@ -247,7 +254,12 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool)
             }
             let label = if is_cur && over { format!("{name}+") } else { name.to_string() };
             let color = if id == 0 { t.text_dim } else { t.text };
-            ui.painter().text(pos2(rect.left() + 8.0, rect.center().y), Align2::LEFT_CENTER, label, egui::FontId::proportional(12.0), color);
+            let (at, align) = if crate::text::direction::is_rtl() {
+                (pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER)
+            } else {
+                (pos2(rect.left() + 8.0, rect.center().y), Align2::LEFT_CENTER)
+            };
+            ui.painter().text(at, align, label, egui::FontId::proportional(12.0), color);
             if resp.double_clicked() && (id != 0 || paragraph) {
                 app.ui.type_panels.options = Some((paragraph, id as u32));
             } else if resp.clicked() {
@@ -281,7 +293,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool)
     crate::widgets::hairline(ui);
     ui.add_space(2.0);
     let sel = selected.filter(|i| *i != 0 || paragraph);
-    ui.horizontal(|ui| {
+    crate::direction::full_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         if crate::icons::button(ui, "ban", 22.0, false, tl!("Clear Override")).clicked() && has_target && over {
             action = Some((format!("{prefix}.clearOverride"), tgt.clone()));
@@ -292,7 +304,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool)
         {
             action = Some((format!("{prefix}.redefine"), tgt.clone()));
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        crate::direction::full_trailing(ui, |ui| {
             if crate::icons::button(ui, "trash", 22.0, false, tl!("Delete style")).clicked()
                 && let Some(id) = sel.filter(|i| *i != 0)
             {
@@ -349,9 +361,9 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     let mut clear: Vec<&str> = Vec::new();
     let mut open_color = false;
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    crate::direction::full_row(ui, |ui| {
         ui.label(RichText::new(tl!("Style Options")).color(t.text).size(11.5).strong());
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        crate::direction::full_trailing(ui, |ui| {
             if crate::icons::button(ui, "x", 18.0, false, tl!("Close Style Options")).clicked() {
                 app.ui.type_panels.options = None;
             }
@@ -360,9 +372,10 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     // Name.
     let key = egui::Id::unique(("style-name", paragraph, id));
     let mut name: String = ui.data(|d| d.get_temp(key)).unwrap_or_else(|| s["name"].as_str().unwrap_or("").to_string());
-    ui.horizontal(|ui| {
+    crate::direction::full_row(ui, |ui| {
         let name_label = ui.label(RichText::new(tl!("Name")).color(t.text_dim).size(11.5));
-        let r = ui.add_enabled(id != 0, egui::TextEdit::singleline(&mut name).desired_width(170.0)).labelled_by(name_label.id);
+        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+        let r = ui.add_enabled(id != 0, crate::widgets::rtl_singleline(&mut name, &mut layouter).desired_width(170.0)).labelled_by(name_label.id);
         if r.lost_focus() && name.trim() != s["name"].as_str().unwrap_or("") && !name.trim().is_empty() {
             let _ = run(app, &format!("{prefix}.rename"), json!({ "id": id, "name": name.trim() }));
             ui.data_mut(|d| d.remove::<String>(key));
@@ -378,133 +391,166 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     // Preferences ▸ Units & Rulers ▸ Type: the model stores points; the fields may show pixels
     // (by the document's resolution) or millimetres.
     let (type_unit, unit_label) = crate::type_tool::type_unit(app);
-    egui::Grid::new(("style-opts", paragraph, id)).num_columns(3).spacing([6.0, 3.0]).show(ui, |ui| {
-        // (label, model key, panel key, kind)
-        let rows: &[(&str, &str, &str, &str)] = &[
-            (tl!("Font"), "font_family", "font", "font"),
-            (tl!("Size"), "size_pt", "size", "pt"),
-            (tl!("Leading"), "leading_pt", "leading", "leading"),
-            (tl!("Tracking"), "tracking", "tracking", "num"),
-            (tl!("Baseline"), "baseline_shift_pt", "baselineShift", "pt"),
-            (tl!("Color"), "color", "color", "color"),
-            (tl!("Faux Bold"), "faux_bold", "fauxBold", "bool"),
-            (tl!("Faux Italic"), "faux_italic", "fauxItalic", "bool"),
-            (tl!("Underline"), "underline", "underline", "bool"),
-            (tl!("Strikethrough"), "strikethrough", "strikethrough", "bool"),
-        ];
-        for &(label, key, panel, kind) in rows {
-            let mut on = defined(&char_attrs, key);
-            let was = on;
-            let on_box = ui.checkbox(&mut on, "");
-            let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
-            on_box.labelled_by(row_label.id);
-            let v = if on { char_attrs[key].clone() } else { resolved_c[key].clone() };
-            ui.add_enabled_ui(on, |ui| match kind {
-                "font" => {
-                    let mut f = v.as_str().unwrap_or("").to_string();
-                    if family_picker(ui, &format!("style-font-{paragraph}-{id}"), &mut f, preview, &mut library) {
-                        // A style picked under the family's ">" comes with it.
-                        set = Some(match library.picked_style.take() {
-                            Some(style) => json!({ panel: f, "fontStyle": style }),
-                            None => json!({ panel: f }),
-                        });
-                    }
-                }
-                "pt" | "num" | "leading" => {
-                    let auto = kind == "leading" && v.is_null();
-                    let mut x = v.as_f64().unwrap_or(0.0) as f32;
-                    let range = if kind == "num" { -1000.0..=10000.0 } else { -1296.0..=1296.0 };
-                    let unit = if kind == "num" { "" } else { " pt" };
-                    if auto {
-                        ui.label(RichText::new(tl!("Auto")).color(t.text_dim).size(11.5));
-                    } else if crate::widgets::value_field(ui, &mut x, range, unit, 70.0).accessible_name(tl!(&label)).changed() {
-                        set = Some(json!({ key: x }));
-                    }
-                }
-                "color" => {
-                    let c = serde_json::from_value::<photocraft_doc::Color>(v.clone()).map(|c| c.to_rgb()).unwrap_or([0.0; 3]);
-                    let [r, g, b] = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-                    open_color = crate::widgets::color_swatch(ui, Color32::from_rgb(r, g, b)).on_hover_text(tl!("Color Picker (Text Color)")).clicked();
-                }
-                _ => {
-                    let mut b = v.as_bool().unwrap_or(false);
-                    if ui.checkbox(&mut b, "").accessible_name(tl!(&label)).changed() {
-                        set = Some(json!({ key: b }));
-                    }
-                }
-            });
-            ui.end_row();
-            if on != was {
-                if on {
-                    set = Some(json!({ key: resolved_c[key].clone() }));
-                } else {
-                    clear.push(key);
-                }
-            }
-        }
-        if paragraph {
-            let rows: &[(&str, &str, &str)] = &[
-                (tl!("Align"), "align", "align"),
-                (tl!("Indent First"), "first_line_indent_pt", "pt"),
-                (tl!("Indent Left"), "start_indent_pt", "pt"),
-                (tl!("Indent Right"), "end_indent_pt", "pt"),
-                (tl!("Space Before"), "space_before_pt", "pt"),
-                (tl!("Space After"), "space_after_pt", "pt"),
-                // Hyphenate is stored and round-trips to PSD, but layout never hyphenates (#6710).
+    let rtl = crate::text::direction::is_rtl();
+    // The grid is direction-blind, so in a right-to-left UI it gets one column per row and each
+    // row's content is a mirrored hand row (see the loops below).
+    // The fork's `Grid` cannot start under a right-to-left cursor, so it runs in an LTR scope;
+    // in RTL each row is one cell holding a mirrored hand row (the loops below).
+    crate::direction::ltr_grid(ui, ("style-opts", paragraph, id), 3, vec2(6.0, 3.0), |ui| {
+            // (label, model key, panel key, kind)
+            let rows: &[(&str, &str, &str, &str)] = &[
+                (tl!("Font"), "font_family", "font", "font"),
+                (tl!("Size"), "size_pt", "size", "pt"),
+                (tl!("Leading"), "leading_pt", "leading", "leading"),
+                (tl!("Tracking"), "tracking", "tracking", "num"),
+                (tl!("Baseline"), "baseline_shift_pt", "baselineShift", "pt"),
+                (tl!("Color"), "color", "color", "color"),
+                (tl!("Faux Bold"), "faux_bold", "fauxBold", "bool"),
+                (tl!("Faux Italic"), "faux_italic", "fauxItalic", "bool"),
+                (tl!("Underline"), "underline", "underline", "bool"),
+                (tl!("Strikethrough"), "strikethrough", "strikethrough", "bool"),
             ];
-            for &(label, key, kind) in rows {
-                let mut on = defined(&para_attrs, key);
+            for &(label, key, panel, kind) in rows {
+                let mut on = defined(&char_attrs, key);
                 let was = on;
-                let on_box = ui.checkbox(&mut on, "");
-                let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
-                on_box.labelled_by(row_label.id);
-                let v = if on { para_attrs[key].clone() } else { resolved_p[key].clone() };
-                ui.add_enabled_ui(on, |ui| match kind {
-                    "align" => {
-                        let mut a = v.as_str().unwrap_or("Left").to_string();
-                        // English values for the engine; labels go through `dropdown`'s `tl!`.
-                        let opts: Vec<(String, &str)> = [
-                            ("Left", "Left"),
-                            ("Center", "Center"),
-                            ("Right", "Right"),
-                            ("JustifyLeft", "Justify last left"),
-                            ("JustifyCenter", "Justify last centered"),
-                            ("JustifyRight", "Justify last right"),
-                            ("JustifyAll", "Justify all"),
-                        ]
-                        .into_iter()
-                        .map(|(v, l)| (v.to_string(), l))
-                        .collect();
-                        if crate::widgets::dropdown(ui, &format!("style-align-{id}"), tl!("Alignment"), &mut a, &opts, 110.0) {
-                            set = Some(json!({ "align": a }));
+                // The checkbox registers first in both directions, so the keyboard focus order and
+                // the editor's same-frame enable state match the left-to-right row.
+                let mut editor_cell = |ui: &mut egui::Ui, on: bool, v: &Value| {
+                    ui.add_enabled_ui(on, |ui| match kind {
+                        "font" => {
+                            let mut f = v.as_str().unwrap_or("").to_string();
+                            if family_picker(ui, &format!("style-font-{paragraph}-{id}"), &mut f, preview, &mut library) {
+                                // A style picked under the family's ">" comes with it.
+                                set = Some(match library.picked_style.take() {
+                                    Some(style) => json!({ panel: f, "fontStyle": style }),
+                                    None => json!({ panel: f }),
+                                });
+                            }
                         }
-                    }
-                    "pt" => {
-                        let mut x = v.as_f64().unwrap_or(0.0) as f32 * type_unit;
-                        if crate::widgets::value_field(ui, &mut x, -1296.0 * type_unit..=1296.0 * type_unit, &format!(" {unit_label}"), 70.0)
-                            .accessible_name(tl!(&label))
-                            .changed()
-                        {
-                            set = Some(json!({ key: x / type_unit }));
+                        "pt" | "num" | "leading" => {
+                            let auto = kind == "leading" && v.is_null();
+                            let mut x = v.as_f64().unwrap_or(0.0) as f32;
+                            let range = if kind == "num" { -1000.0..=10000.0 } else { -1296.0..=1296.0 };
+                            let unit = if kind == "num" { "" } else { " pt" };
+                            if auto {
+                                ui.label(RichText::new(tl!("Auto")).color(t.text_dim).size(11.5));
+                            } else if crate::widgets::value_field(ui, &mut x, range, unit, 70.0).accessible_name(tl!(&label)).changed() {
+                                set = Some(json!({ key: x }));
+                            }
                         }
-                    }
-                    _ => {
-                        let mut b = v.as_bool().unwrap_or(false);
-                        if ui.checkbox(&mut b, "").accessible_name(tl!(&label)).changed() {
-                            set = Some(json!({ key: b }));
+                        "color" => {
+                            let c = serde_json::from_value::<photocraft_doc::Color>(v.clone()).map(|c| c.to_rgb()).unwrap_or([0.0; 3]);
+                            let [r, g, b] = c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+                            open_color = crate::widgets::color_swatch(ui, Color32::from_rgb(r, g, b)).on_hover_text(tl!("Color Picker (Text Color)")).clicked();
                         }
-                    }
-                });
+                        _ => {
+                            let mut b = v.as_bool().unwrap_or(false);
+                            if ui.checkbox(&mut b, "").accessible_name(tl!(&label)).changed() {
+                                set = Some(json!({ key: b }));
+                            }
+                        }
+                    });
+                };
+                if rtl {
+                    // The row's triple in reading order: the checkbox leads from the reading
+                    // start (the grid's rightmost cell), then the label, then the editor.
+                    let v = if on { char_attrs[key].clone() } else { resolved_c[key].clone() };
+                    editor_cell(ui, on, &v);
+                    let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
+                    let on_box = ui.checkbox(&mut on, "");
+                    on_box.labelled_by(row_label.id);
+                } else {
+                    let on_box = ui.checkbox(&mut on, "");
+                    let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
+                    on_box.labelled_by(row_label.id);
+                    let v = if on { char_attrs[key].clone() } else { resolved_c[key].clone() };
+                    editor_cell(ui, on, &v);
+                }
                 ui.end_row();
                 if on != was {
                     if on {
-                        set = Some(json!({ key: resolved_p[key].clone() }));
+                        set = Some(json!({ key: resolved_c[key].clone() }));
                     } else {
                         clear.push(key);
                     }
                 }
             }
-        }
+            if paragraph {
+                let rows: &[(&str, &str, &str)] = &[
+                    (tl!("Align"), "align", "align"),
+                    (tl!("Indent First"), "first_line_indent_pt", "pt"),
+                    (tl!("Indent Left"), "start_indent_pt", "pt"),
+                    (tl!("Indent Right"), "end_indent_pt", "pt"),
+                    (tl!("Space Before"), "space_before_pt", "pt"),
+                    (tl!("Space After"), "space_after_pt", "pt"),
+                    // Hyphenate is stored and round-trips to PSD, but layout never hyphenates (#6710).
+                ];
+                for &(label, key, kind) in rows {
+                    let mut on = defined(&para_attrs, key);
+                    let was = on;
+                    // The checkbox registers first in both directions, so the keyboard focus order
+                    // and the editor's same-frame enable state match the left-to-right row.
+                    let mut editor_cell = |ui: &mut egui::Ui, on: bool, v: &Value| {
+                        ui.add_enabled_ui(on, |ui| match kind {
+                            "align" => {
+                                let mut a = v.as_str().unwrap_or("Left").to_string();
+                                // English values for the engine; labels go through `dropdown`'s `tl!`.
+                                let opts: Vec<(String, &str)> = [
+                                    ("Left", "Left"),
+                                    ("Center", "Center"),
+                                    ("Right", "Right"),
+                                    ("JustifyLeft", "Justify last left"),
+                                    ("JustifyCenter", "Justify last centered"),
+                                    ("JustifyRight", "Justify last right"),
+                                    ("JustifyAll", "Justify all"),
+                                ]
+                                .into_iter()
+                                .map(|(v, l)| (v.to_string(), l))
+                                .collect();
+                                if crate::widgets::dropdown(ui, &format!("style-align-{id}"), tl!("Alignment"), &mut a, &opts, 110.0) {
+                                    set = Some(json!({ "align": a }));
+                                }
+                            }
+                            "pt" => {
+                                let mut x = v.as_f64().unwrap_or(0.0) as f32 * type_unit;
+                                if crate::widgets::value_field(ui, &mut x, -1296.0 * type_unit..=1296.0 * type_unit, &format!(" {unit_label}"), 70.0)
+                                    .accessible_name(tl!(&label))
+                                    .changed()
+                                {
+                                    set = Some(json!({ key: x / type_unit }));
+                                }
+                            }
+                            _ => {
+                                let mut b = v.as_bool().unwrap_or(false);
+                                if ui.checkbox(&mut b, "").accessible_name(tl!(&label)).changed() {
+                                    set = Some(json!({ key: b }));
+                                }
+                            }
+                        });
+                    };
+                    if rtl {
+                        let v = if on { para_attrs[key].clone() } else { resolved_p[key].clone() };
+                        editor_cell(ui, on, &v);
+                        let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
+                        let on_box = ui.checkbox(&mut on, "");
+                        on_box.labelled_by(row_label.id);
+                    } else {
+                        let on_box = ui.checkbox(&mut on, "");
+                        let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
+                        on_box.labelled_by(row_label.id);
+                        let v = if on { para_attrs[key].clone() } else { resolved_p[key].clone() };
+                        editor_cell(ui, on, &v);
+                    }
+                    ui.end_row();
+                    if on != was {
+                        if on {
+                            set = Some(json!({ key: resolved_p[key].clone() }));
+                        } else {
+                            clear.push(key);
+                        }
+                    }
+                }
+            }
     });
     library.finish(app);
     if let Some(attrs) = set {
@@ -633,7 +679,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let (family, style) = glyph_font(app);
     // Font family + style.
-    ui.horizontal(|ui| {
+    crate::direction::full_row(ui, |ui| {
         let mut f = family.clone();
         let mut library = crate::type_tool::FontLibrary::of(app);
         let picked = family_picker(ui, "glyph-family", &mut f, app.session.prefs().type_.font_preview, &mut library);
@@ -654,7 +700,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     // Show: category.
     let mut cat = if app.ui.type_panels.glyph_category.is_empty() { tl!("Entire Font").to_string() } else { app.ui.type_panels.glyph_category.clone() };
-    ui.horizontal(|ui| {
+    crate::direction::full_row(ui, |ui| {
         ui.label(RichText::new(tl!("Show:")).color(t.text_dim).size(11.5));
         let opts: Vec<(String, &str)> = photocraft_text::glyphs::CATEGORIES.iter().map(|c| (c.to_string(), *c)).collect();
         if crate::widgets::dropdown(ui, "glyph-category", tl!("Category"), &mut cat, &opts, 160.0) {
@@ -726,14 +772,14 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     // Footer: family name, size slider.
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    crate::direction::full_row(ui, |ui| {
         let info = selected
             .as_deref()
             .and_then(|s| s.chars().next())
             .map(|c| format!("U+{:04X}  ·  {} glyphs", c as u32, chars.len()))
             .unwrap_or_else(|| format!("{} glyphs", chars.len()));
         ui.label(RichText::new(info).color(t.text_faint).size(10.5));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        crate::direction::full_trailing(ui, |ui| {
             let mut s = size;
             ui.add_sized([90.0, 16.0], egui::Slider::new(&mut s, 24.0..=64.0).show_value(false)).accessible_name(tl!("Size"));
             if (s - size).abs() > 0.1 {
@@ -790,83 +836,87 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .title_bar(false)
         .anchor(Align2::CENTER_CENTER, vec2(0.0, -40.0))
         .show(ctx, |ui| {
-            ui.set_width(380.0);
-            ui.horizontal(|ui| {
-                ui.label(RichText::new(tl!("Check Spelling")).color(t.text).size(13.0).strong());
-                // The close box (#5496) is Done, as in Photoshop: every change is already made.
-                if crate::dialogs::CLOSE_BOX {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
-                            act = Some("done");
+            crate::text::direction::window_body(ui, |ui| {
+                ui.set_width(380.0);
+                crate::direction::full_row(ui, |ui| {
+                    ui.label(RichText::new(tl!("Check Spelling")).color(t.text).size(13.0).strong());
+                    // The close box (#5496) is Done, as in Photoshop: every change is already made.
+                    if crate::dialogs::CLOSE_BOX {
+                        crate::direction::full_trailing(ui, |ui| {
+                            if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
+                                act = Some("done");
+                            }
+                        });
+                    }
+                });
+                ui.add_space(6.0);
+                ui.horizontal_top(|ui| {
+                    ui.with_layout(crate::direction::body_layout(), |ui| {
+                        ui.set_width(250.0);
+                        ui.label(RichText::new(tl!("Not in Dictionary:")).color(t.text_dim).size(11.5));
+                        let word = item.as_ref().and_then(|i| i["word"].as_str()).unwrap_or("");
+                        let shown = if item.is_some() {
+                            word.to_string()
+                        } else if d.items.is_empty() || d.index >= d.items.len() {
+                            "".into()
+                        } else {
+                            String::new()
+                        };
+                        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+                        ui.add_enabled(false, crate::widgets::rtl_singleline(&mut shown.clone(), &mut layouter).desired_width(240.0)).accessible_name(tl!("Not in Dictionary:"));
+                        ui.add_space(4.0);
+                        let change_label = ui.label(RichText::new(tl!("Change To:")).color(t.text_dim).size(11.5));
+                        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+                        ui.add_enabled(item.is_some(), crate::widgets::rtl_singleline(&mut change_to, &mut layouter).desired_width(240.0)).labelled_by(change_label.id);
+                        ui.add_space(4.0);
+                        ui.label(RichText::new(tl!("Suggestions:")).color(t.text_dim).size(11.5));
+                        egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(3)).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
+                            ui.set_min_size(vec2(240.0, 110.0));
+                            egui::ScrollArea::vertical().id_salt("spell-sugg").max_height(110.0).show(ui, |ui| {
+                                for s in item.as_ref().and_then(|i| i["suggestions"].as_array()).into_iter().flatten() {
+                                    let s = s.as_str().unwrap_or("");
+                                    let r = ui.selectable_label(s == change_to, s);
+                                    if r.clicked() {
+                                        change_to = s.to_string();
+                                    }
+                                    if r.double_clicked() {
+                                        change_to = s.to_string();
+                                        act = Some("change");
+                                    }
+                                }
+                            });
+                        });
+                        ui.add_space(4.0);
+                        if crate::widgets::checkbox(ui, &mut all_layers, tl!("Check All Layers")).changed() {
+                            act = Some("relist");
+                        }
+                        let msg = if item.is_none() { tl!("Spell check complete.") } else { "" };
+                        if !msg.is_empty() {
+                            ui.label(RichText::new(msg).color(t.text).size(11.5));
                         }
                     });
-                }
-            });
-            ui.add_space(6.0);
-            ui.horizontal_top(|ui| {
-                ui.vertical(|ui| {
-                    ui.set_width(250.0);
-                    ui.label(RichText::new(tl!("Not in Dictionary:")).color(t.text_dim).size(11.5));
-                    let word = item.as_ref().and_then(|i| i["word"].as_str()).unwrap_or("");
-                    let shown = if item.is_some() {
-                        word.to_string()
-                    } else if d.items.is_empty() || d.index >= d.items.len() {
-                        "".into()
-                    } else {
-                        String::new()
-                    };
-                    ui.add_enabled(false, egui::TextEdit::singleline(&mut shown.clone()).desired_width(240.0)).accessible_name(tl!("Not in Dictionary:"));
-                    ui.add_space(4.0);
-                    let change_label = ui.label(RichText::new(tl!("Change To:")).color(t.text_dim).size(11.5));
-                    ui.add_enabled(item.is_some(), egui::TextEdit::singleline(&mut change_to).desired_width(240.0)).labelled_by(change_label.id);
-                    ui.add_space(4.0);
-                    ui.label(RichText::new(tl!("Suggestions:")).color(t.text_dim).size(11.5));
-                    egui::Frame::NONE.fill(t.field).corner_radius(CornerRadius::same(3)).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
-                        ui.set_min_size(vec2(240.0, 110.0));
-                        egui::ScrollArea::vertical().id_salt("spell-sugg").max_height(110.0).show(ui, |ui| {
-                            for s in item.as_ref().and_then(|i| i["suggestions"].as_array()).into_iter().flatten() {
-                                let s = s.as_str().unwrap_or("");
-                                let r = ui.selectable_label(s == change_to, s);
-                                if r.clicked() {
-                                    change_to = s.to_string();
-                                }
-                                if r.double_clicked() {
-                                    change_to = s.to_string();
-                                    act = Some("change");
+                    ui.with_layout(crate::direction::body_layout(), |ui| {
+                        ui.spacing_mut().item_spacing.y = 4.0;
+                        if crate::widgets::primary_button(ui, tl!("Done"), 100.0).clicked() {
+                            act = Some("done");
+                        }
+                        ui.add_space(6.0);
+                        ui.add_enabled_ui(item.is_some(), |ui| {
+                            for (label, a) in [
+                                (tl!("Ignore"), "ignore"),
+                                (tl!("Ignore All"), "ignoreAll"),
+                                (tl!("Change"), "change"),
+                                (tl!("Change All"), "changeAll"),
+                                (tl!("Add"), "add"),
+                            ] {
+                                if crate::widgets::secondary_button(ui, label, 100.0).clicked() {
+                                    act = Some(a);
                                 }
                             }
                         });
                     });
-                    ui.add_space(4.0);
-                    if crate::widgets::checkbox(ui, &mut all_layers, tl!("Check All Layers")).changed() {
-                        act = Some("relist");
-                    }
-                    let msg = if item.is_none() { tl!("Spell check complete.") } else { "" };
-                    if !msg.is_empty() {
-                        ui.label(RichText::new(msg).color(t.text).size(11.5));
-                    }
                 });
-                ui.vertical(|ui| {
-                    ui.spacing_mut().item_spacing.y = 4.0;
-                    if crate::widgets::primary_button(ui, tl!("Done"), 100.0).clicked() {
-                        act = Some("done");
-                    }
-                    ui.add_space(6.0);
-                    ui.add_enabled_ui(item.is_some(), |ui| {
-                        for (label, a) in [
-                            (tl!("Ignore"), "ignore"),
-                            (tl!("Ignore All"), "ignoreAll"),
-                            (tl!("Change"), "change"),
-                            (tl!("Change All"), "changeAll"),
-                            (tl!("Add"), "add"),
-                        ] {
-                            if crate::widgets::secondary_button(ui, label, 100.0).clicked() {
-                                act = Some(a);
-                            }
-                        }
-                    });
-                });
-            });
+            })
         });
     if let Some(s) = app.ui.type_panels.spell.as_mut() {
         s.change_to = change_to.clone();
@@ -991,6 +1041,191 @@ mod tests {
         h.run_steps(2);
         assert!(h.state().ui.type_panels.spell.is_none(), "the × closed Check Spelling");
         assert_eq!(h.state().session.active().unwrap().revision, revision, "and changed nothing");
+    }
+
+    /// The Type Styles header follows the direction: the × sits at the row's far end and
+    /// Character Styles starts the reading order — rightmost in a right-to-left UI, leftmost in
+    /// a left-to-right one.
+    #[test]
+    fn type_styles_window_header_follows_the_direction() {
+        use egui_kittest::kittest::Queryable;
+        for (rtl, mirrored) in [(false, false), (true, true)] {
+            let _dir = crate::text::direction::direction_scope(if rtl { crate::text::direction::Dir::Rtl } else { crate::text::direction::Dir::Ltr });
+            let app = app_with_text("Hi");
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+                |ui, app| {
+                    // The fonts are installed after the harness's first frame: paint only once they are active.
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        windows(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            // The fonts are set up after the harness's first frame: the window appears after it.
+            h.state_mut().ui.type_panels.styles = true;
+            h.run_steps(4);
+            let close = h.get_by_label("Close").rect();
+            let character = h.get_by_label("Character Styles").rect();
+            let paragraph = h.get_by_label("Paragraph Styles").rect();
+            if mirrored {
+                assert!(close.left() < character.left(), "the × ends the reading end of the header row: {close:?} over {character:?}");
+                assert!(character.right() > paragraph.right(), "Character Styles starts the reading order: {character:?} over {paragraph:?}");
+            } else {
+                assert!(close.left() > character.left(), "the × ends the row's far end: {close:?} over {character:?}");
+                assert!(character.right() < paragraph.right(), "Character Styles starts the reading order: {character:?} over {paragraph:?}");
+            }
+        }
+    }
+
+    /// The Check Spelling close box sits at the reading end of the title row in a right-to-left
+    /// UI, the mirror of its left-to-right placement.
+    #[test]
+    fn rtl_check_spellings_close_box_is_at_the_reading_end() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+        let mut app = app_with_text("Teh cat");
+        menu(&mut app, "edit.checkSpelling", &json!({})).unwrap().unwrap();
+        let spell = app.ui.type_panels.spell.take();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+            |ui, app| {
+                // The fonts are installed after the harness's first frame: paint only once they are active.
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    windows(app, ui.ctx());
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.state_mut().ui.type_panels.spell = spell;
+        h.run_steps(3);
+        if !crate::dialogs::CLOSE_BOX {
+            assert_eq!(h.query_all_by_label("Close").count(), 0, "no close box on macOS");
+            return;
+        }
+        let x = h.get_by_label("Close").rect();
+        let done = h.get_by_label("Done").rect();
+        assert!(x.bottom() <= done.top(), "the × ends the title row: {x:?} over {done:?}");
+        assert!(x.left() <= done.left(), "the × is at the reading end in a right-to-left UI: {x:?} over {done:?}");
+        // The window node carries the same title; pick the in-dialog caption by its role.
+        let title = h
+            .query_all(egui_kittest::kittest::by().label("Check Spelling"))
+            .find(|n| n.accesskit_node().role() == Role::Label)
+            .unwrap_or_else(|| panic!("the in-dialog caption"))
+            .rect();
+        assert!(((x.left() + title.right()) / 2.0 - 500.0).abs() < 4.0, "the window stays centred: {x:?} over {title:?}");
+    }
+
+    /// The Glyphs window is the second column of the cascade: after the Type Styles window in
+    /// reading order — to its left in a left-to-right UI, to its right in a right-to-left one.
+    #[test]
+    fn glyphs_window_follows_type_styles_in_reading_order() {
+        use egui_kittest::kittest::Queryable;
+        for (rtl, after) in [(false, false), (true, true)] {
+            let _dir = crate::text::direction::direction_scope(if rtl { crate::text::direction::Dir::Rtl } else { crate::text::direction::Dir::Ltr });
+            let app = app_with_text("Hi");
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+                |ui, app| {
+                    // The fonts are installed after the harness's first frame: paint only once they are active.
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        windows(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            // The fonts are set up after the harness's first frame: the windows appear after it.
+            h.state_mut().ui.type_panels.styles = true;
+            h.state_mut().ui.type_panels.glyphs = true;
+            h.run_steps(4);
+            // The windows' own titles are their egui ids, not widgets: the "Show:" caption of the
+            // Glyphs panel and a Type Styles tab say where each window sits.
+            let glyphs = h.get_by_label("Show:").rect();
+            let character = h.get_by_label("Character Styles").rect();
+            assert_eq!(
+                glyphs.left() > character.left(),
+                after,
+                "the Glyphs window must come {} the Type Styles window in reading order: {glyphs:?} over {character:?}",
+                if after { "after" } else { "before" },
+            );
+        }
+    }
+
+    /// The Glyphs panel reads right-to-left — the Category editor follows its caption and the
+    /// size slider ends the footer — while the glyph grid keeps its left-to-right codepoint
+    /// order (its cells are hand-painted, so nothing mirrors them).
+    #[test]
+    fn glyphs_panel_rows_follow_the_direction_but_keep_the_grid_ltr() {
+        use egui_kittest::kittest::Queryable;
+        for (rtl, editor_first) in [(false, false), (true, true)] {
+            let _dir = crate::text::direction::direction_scope(if rtl { crate::text::direction::Dir::Rtl } else { crate::text::direction::Dir::Ltr });
+            let mut app = app_with_text("Hi");
+            app.ui.type_panels.glyphs = true;
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(|ui, app| windows(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            let show = h.get_by_label("Show:").rect();
+            let category = h.get_by_label("Category").rect();
+            assert_eq!(
+                category.right() < show.left(),
+                editor_first,
+                "the Category editor must come {} its caption: {category:?} over {show:?}",
+                if editor_first { "after" } else { "before" },
+            );
+            let size = h.get_by_label("Size").rect();
+            assert_eq!(
+                size.right() < show.left(),
+                editor_first,
+                "the size slider must sit at the reading {} of the footer: {size:?} over {show:?}",
+                if editor_first { "end" } else { "start" },
+            );
+            let a = h.get_by_label("U+0041").rect();
+            let b = h.get_by_label("U+0042").rect();
+            assert!(a.left() < b.left(), "the glyph grid keeps its codepoint order in both directions: {a:?} over {b:?}");
+        }
+    }
+
+    /// The Paragraph Style Options grid reads right-to-left — the editor starts the row and the
+    /// checkbox ends it (egui::Grid ignores the direction, so the cells are emitted in reading
+    /// order) — and the Align dropdown keeps its physical option order either way.
+    #[test]
+    fn paragraph_style_options_grid_follows_the_direction() {
+        use egui_kittest::kittest::Queryable;
+        for (rtl, editor_first) in [(false, false), (true, true)] {
+            let _dir = crate::text::direction::direction_scope(if rtl { crate::text::direction::Dir::Rtl } else { crate::text::direction::Dir::Ltr });
+            let mut app = app_with_text("Hi");
+            app.ui.type_panels.styles = true;
+            app.ui.type_panels.styles_tab = 1;
+            app.ui.type_panels.options = Some((true, 0));
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1000.0, 700.0)).build_ui_state(
+                |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        windows(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run_steps(4);
+            // "Align" names the checkbox: the caption labels it, so kittest drops the caption.
+            h.get_by_label("Align").click();
+            h.run();
+            let align = h.get_by_label("Align").rect();
+            let editor = h.get_by_label("Alignment").rect();
+            assert_eq!(
+                editor.right() < align.left(),
+                editor_first,
+                "the Align editor must come {} its checkbox: {editor:?} over {align:?}",
+                if editor_first { "after" } else { "before" },
+            );
+            // Enabling the row turned the dropdown on: its options stay in their physical order.
+            h.get_by_label("Alignment").click();
+            h.run();
+            let justify = h.get_by_label("Justify last left").rect();
+            let all = h.get_by_label("Justify all").rect();
+            assert!(justify.top() < all.top(), "the Align options keep their physical order: {justify:?} over {all:?}");
+        }
     }
 
     #[test]

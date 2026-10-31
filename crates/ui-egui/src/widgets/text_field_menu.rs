@@ -218,7 +218,11 @@ fn draw(ctx: &Context, open: &Open) -> Option<Action> {
     let id = menu_id();
     let screen = ctx.content_rect();
     let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(180.0, 170.0), |r| r.size());
-    let pos = egui::pos2(open.pos.x.min(screen.right() - size.x).max(screen.left()), open.pos.y.min(screen.bottom() - size.y).max(screen.top()));
+    // The menu hangs from the pointer at its reading-start edge: its left edge left-to-right, its
+    // right edge right-to-left, clamped to the window either way.
+    let rtl = crate::direction::is_rtl();
+    let x = if rtl { open.pos.x - size.x } else { open.pos.x };
+    let pos = egui::pos2(x.min(screen.right() - size.x).max(screen.left()), open.pos.y.min(screen.bottom() - size.y).max(screen.top()));
     let mut chosen = None;
     egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).show(ctx, |ui| {
         egui::Frame::menu(ui.style()).show(ui, |ui| {
@@ -233,19 +237,24 @@ fn draw(ctx: &Context, open: &Open) -> Option<Action> {
             v.widgets.hovered.corner_radius = egui::CornerRadius::same(3);
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.set_width(170.0);
-            for row in ROWS {
-                let Some((label, keys, action)) = *row else {
-                    ui.separator();
-                    continue;
-                };
-                let mut item = egui::Button::new(tl!(label)).min_size(egui::vec2(170.0, 20.0));
-                if !keys.is_empty() {
-                    item = item.shortcut_text(crate::shortcuts::pretty(keys));
+            // One source of truth with the popup rows (menus/render.rs): the style flag, so
+            // atom placement can never disagree with the fork's glyph/align mirroring.
+            let rtl = ui.style().right_to_left;
+            // The Area body has no direction of its own; scope it like a window body so the
+            // rows hug the reading-start edge in a right-to-left UI (LTR unchanged).
+            ui.with_layout(crate::direction::body_layout(), |ui| {
+                for row in ROWS {
+                    let Some((label, keys, action)) = *row else {
+                        ui.separator();
+                        continue;
+                    };
+                    let shortcut = if keys.is_empty() { None } else { Some(keys.to_owned()) };
+                    let item = crate::menu_keys::menu_row_button(tl!(label).into(), shortcut, rtl).min_size(egui::vec2(170.0, 20.0));
+                    if ui.add_enabled(enabled(open, action), item).clicked() {
+                        chosen = Some(action);
+                    }
                 }
-                if ui.add_enabled(enabled(open, action), item).clicked() {
-                    chosen = Some(action);
-                }
-            }
+            });
         });
     });
     chosen
@@ -376,5 +385,92 @@ mod tests {
         assert_eq!(choose(&mut h, "Cut").as_deref(), Some("Alpha"), "Cut copies the selected text");
         assert_eq!(text(&h), "", "and removes it from the field");
         assert!(h.ctx.memory(|m| m.has_focus(field)), "the rename is still being typed");
+    }
+
+    /// Where a text was painted in the open menu, if it was.
+    fn painted_in_menu(h: &Harness<'_, PhotocraftApp>, needle: &str) -> Option<Pos2> {
+        let menu = h.ctx.memory(|m| m.area_rect(super::menu_id()))?;
+        h.output().shapes.iter().find_map(|c| match &c.shape {
+            egui::Shape::Text(t) if t.galley.text() == needle && menu.contains(t.pos) => Some(t.pos),
+            _ => None,
+        })
+    }
+
+    /// The menu's rows: in a left-to-right UI the shortcut follows the label, at the row's far
+    /// end; in a right-to-left one it leads it, at the far end there.
+    #[test]
+    fn the_shortcut_sits_at_the_rows_far_end() {
+        let texts = |rtl: bool| crate::menu_keys::menu_row_button("Undo".into(), Some("Cmd+Z".to_string()), rtl).atoms().iter_texts().map(|t| t.text().to_owned()).collect::<Vec<_>>();
+        let shortcut = crate::shortcuts::pretty("Cmd+Z");
+        assert_eq!(texts(false), vec!["Undo".to_owned(), shortcut.clone()], "the shortcut follows the label");
+        assert_eq!(texts(true), vec![shortcut, "Undo".to_owned()], "and leads it in a right-to-left row");
+    }
+
+    /// A row without a shortcut (Delete) has no spacer of its own: one is added in a
+    /// right-to-left menu, so its label hugs the reading start like every other row's.
+    #[test]
+    fn a_row_without_a_shortcut_keeps_its_label_at_the_reading_start() {
+        let ltr = crate::menu_keys::menu_row_button("Delete".into(), None, false);
+        let atoms = ltr.atoms();
+        assert_eq!(atoms.len(), 1, "a left-to-right row has no spacer");
+        assert!(matches!(&atoms[0].kind, egui::AtomKind::Text(t) if t.text() == "Delete"), "and its label is the row");
+
+        let rtl = crate::menu_keys::menu_row_button("Delete".into(), None, true);
+        let atoms = rtl.atoms();
+        let label = atoms.iter().position(|a| matches!(&a.kind, egui::AtomKind::Text(t) if t.text() == "Delete")).expect("the label");
+        assert_eq!(label, atoms.len() - 1, "the label is the last atom, so the spacer pushes it to the reading end");
+        assert_eq!(atoms.iter().filter(|a| a.grow).count(), 1, "the row reserves one spacer");
+    }
+
+    /// The menu in a left-to-right UI: the label at the row's left, its shortcut at the right.
+    #[test]
+    fn in_ltr_the_edit_menu_keeps_the_shortcut_after_the_label() {
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let (mut h, field) = renaming();
+        right_click(&mut h, field);
+        let shortcut = crate::shortcuts::pretty("Cmd+Z");
+        let label = painted_in_menu(&h, "Undo").expect("the label is painted");
+        let key = painted_in_menu(&h, &shortcut).expect("the shortcut is painted");
+        assert!(label.x < key.x, "the shortcut follows the label in a left-to-right menu");
+    }
+
+    /// The menu itself in a right-to-left UI: the rows mirror, the shortcut leading the label
+    /// (the fork paints a row's atoms from the left), and an item is still chosen.
+    #[test]
+    fn in_rtl_the_edit_menu_mirrors_its_rows() {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let (mut h, field) = renaming();
+        crate::theme::set_direction(&h.ctx, true);
+        right_click(&mut h, field);
+        let shortcut = crate::shortcuts::pretty("Cmd+Z");
+        let label = painted_in_menu(&h, "Undo").expect("the label is painted");
+        let key = painted_in_menu(&h, &shortcut).expect("the shortcut is painted");
+        assert!(key.x < label.x, "the shortcut leads the label in a right-to-left menu");
+        assert!(h.query_by_label_contains(&format!("{shortcut} Undo")).is_some(), "and the row reads in that order");
+        assert_eq!(choose(&mut h, "Select All"), None, "the items are still chosen");
+        assert_eq!(open_on(&h.ctx), None, "choosing closes the menu");
+    }
+
+    /// The menu opens at the pointer with its reading-start edge there: its left edge in a
+    /// left-to-right UI, its right edge in a right-to-left one.
+    #[test]
+    fn the_edit_menu_hangs_from_the_pointer_at_its_reading_start_edge() {
+        let screen = |h: &Harness<'_, PhotocraftApp>| h.ctx.content_rect();
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let (mut h, field) = renaming();
+        let at = h.ctx.read_response(field).unwrap().rect.center();
+        right_click(&mut h, field);
+        let menu = h.ctx.memory(|m| m.area_rect(super::menu_id())).expect("the menu is drawn");
+        let want = at.x.min(screen(&h).right() - menu.width()).max(screen(&h).left());
+        assert!((menu.left() - want).abs() < 1.0, "LTR: the menu's left edge hangs from the pointer ({menu:?} vs pointer x {at:?})");
+
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let (mut h, field) = renaming();
+        crate::theme::set_direction(&h.ctx, true);
+        let at = h.ctx.read_response(field).unwrap().rect.center();
+        right_click(&mut h, field);
+        let menu = h.ctx.memory(|m| m.area_rect(super::menu_id())).expect("the menu is drawn");
+        let want = at.x.min(screen(&h).right()).max(screen(&h).left() + menu.width());
+        assert!((menu.right() - want).abs() < 1.0, "RTL: the menu's right edge hangs from the pointer ({menu:?} vs pointer x {at:?})");
     }
 }

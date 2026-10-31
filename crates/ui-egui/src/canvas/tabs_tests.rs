@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::theme::ThemeKind;
 
-use super::{TabStrip, pro_tab_title};
+use super::{TabStrip, pro_tab_title, tab_drop_index};
 
 /// A real app window with `docs` documents named "ch1-pNN.png".
 fn harness(docs: usize, theme: ThemeKind) -> Harness<'static, PhotocraftApp> {
@@ -34,6 +34,51 @@ fn strip(h: &Harness<'_, PhotocraftApp>) -> TabStrip {
 
 fn has_menu(h: &Harness<'_, PhotocraftApp>) -> bool {
     h.query_by_label("More documents").is_some()
+}
+
+/// Run the harness's frames in a right-to-left UI: the scope flips the direction only.
+fn rtl_steps(h: &mut Harness<'_, PhotocraftApp>, steps: usize) {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    h.run_steps(steps);
+}
+
+/// A window drawn in a right-to-left UI, with the same documents and styles as [`harness`].
+fn rtl_harness(docs: usize, theme: ThemeKind) -> Harness<'static, PhotocraftApp> {
+    let mut h = harness(docs, theme);
+    rtl_steps(&mut h, 2);
+    h
+}
+
+/// A right-to-left strip starts at its trailing edge: the first document sits at the right and the
+/// last at the left, as in Photoshop's Arabic UI.
+#[test]
+fn rtl_tabs_start_at_the_right_end() {
+    for theme in [ThemeKind::Pro, ThemeKind::Studio] {
+        let h = rtl_harness(3, theme);
+        let s = strip(&h);
+        assert_eq!(s.tabs.len(), 3, "{theme:?}: every tab stays on the strip");
+        let first = s.tabs[0].1;
+        let last = s.tabs[2].1;
+        assert!(first.right() > last.right(), "{theme:?}: the first tab leads from the right: {s:?}");
+        assert!(first.left() > last.left(), "{theme:?}: the tabs run right to left: {s:?}");
+        assert!(first.right() >= s.rect.right() - 9.0, "{theme:?}: the first tab hugs the right end: {first:?} in {:?}", s.rect);
+    }
+}
+
+/// The » button sits at the strip's reading end: the left one in a right-to-left UI, and no tab
+/// runs under it.
+#[test]
+fn rtl_overflow_button_is_pinned_to_the_left_end() {
+    for theme in [ThemeKind::Pro, ThemeKind::Studio] {
+        let h = rtl_harness(14, theme);
+        let s = strip(&h);
+        assert!(s.tabs.len() < 14, "{theme:?}: some tabs overflow into the menu");
+        let button = h.get_by_label("More documents").rect();
+        assert!(button.left() <= s.rect.left() + 9.0, "{theme:?}: » {button:?} is not at the left end of {:?}", s.rect);
+        for (_, r) in &s.tabs {
+            assert!(r.left() >= button.right() - 0.5, "{theme:?}: » {button:?} overlaps the tab {r:?}");
+        }
+    }
 }
 
 #[test]
@@ -245,4 +290,100 @@ fn the_overflow_button_is_pinned_to_the_right_end() {
         assert!((last_a - last_b).abs() > 1.0, "{theme:?}: the fits must end at different places to tell");
         assert_eq!(a, b, "{theme:?}: the » button doesn't follow the last tab");
     }
+}
+
+/// The drop slot follows the visual order: in a right-to-left strip the neighbour is the first tab
+/// at or left of the pointer, and a drop past the left end opens after the last document.
+#[test]
+fn rtl_drop_slots_follow_the_visual_order() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let r = |x: f32| egui::Rect::from_min_size(egui::pos2(x, 0.0), egui::vec2(100.0, 26.0));
+    // Document 0 sits at the right, document 2 at the left.
+    let placed = vec![(0, r(200.0)), (1, r(100.0)), (2, r(0.0))];
+    assert_eq!(tab_drop_index(&placed, 250.0), 0, "right of the first tab: before it");
+    assert_eq!(tab_drop_index(&placed, 150.0), 1, "between the first and the second");
+    assert_eq!(tab_drop_index(&placed, 50.0), 2, "between the second and the third");
+    assert_eq!(tab_drop_index(&placed, -10.0), 3, "past the left end: after the last document");
+    let s = TabStrip { rect: egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(300.0, 26.0)), tabs: placed.clone() };
+    assert_eq!(s.slot(250.0), 0);
+    assert_eq!(s.slot(150.0), 1);
+    assert_eq!(s.slot(50.0), 2);
+    assert_eq!(s.slot(-10.0), 3, "past the left end: after the last document");
+}
+
+/// The text painted inside a tab, widest first: the title, then the meta.
+fn texts_in_tab(h: &Harness<'_, PhotocraftApp>, tab: egui::Rect) -> Vec<egui::Rect> {
+    let mut out: Vec<egui::Rect> = h
+        .output()
+        .shapes
+        .iter()
+        .filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => {
+                let r = text.visual_bounding_rect();
+                (tab.contains_rect(r) || r.intersects(tab)).then_some(r)
+            }
+            _ => None,
+        })
+        .collect();
+    out.sort_by(|a, b| b.width().total_cmp(&a.width()));
+    out
+}
+
+/// The title leads from the reading end and the × sits at the reading start: left and right in a
+/// left-to-right strip, the other way round in a right-to-left one.
+#[test]
+fn rtl_tab_title_leads_from_the_right_and_the_close_button_sits_left() {
+    for theme in [ThemeKind::Pro, ThemeKind::Studio] {
+        let ltr = harness(1, theme);
+        let (_, ltab) = strip(&ltr).tabs[0];
+        let lclose = ltr.query_by_label("Close").expect("the × is labelled").rect();
+        let ltexts = texts_in_tab(&ltr, ltab);
+        let ltitle = ltexts.first().copied().expect("the title is painted");
+        assert!(ltitle.left() >= ltab.left() + 8.0 && ltitle.left() <= ltab.left() + 28.0, "{theme:?}: the title starts at the left: {ltitle:?} in {ltab:?}");
+
+        let rtl = rtl_harness(1, theme);
+        let (_, rtab) = strip(&rtl).tabs[0];
+        let rclose = rtl.query_by_label("Close").expect("the × is labelled").rect();
+        let rtexts = texts_in_tab(&rtl, rtab);
+        let rtitle = rtexts.first().copied().expect("the title is painted");
+        assert!(
+            rtitle.right() <= rtab.right() - 8.0 && rtitle.right() >= rtab.right() - 28.0,
+            "{theme:?}: the title ends at the right: {rtitle:?} in {rtab:?}"
+        );
+        // The × swaps sides with the direction (Photoshop's macOS variant keeps the × before the
+        // title in a left-to-right strip, so only the mirror is pinned here).
+        assert!(
+            (lclose.center().x - ltab.center().x) * (rclose.center().x - rtab.center().x) < 0.0,
+            "{theme:?}: the × does not swap sides: {lclose:?} in {ltab:?}, {rclose:?} in {rtab:?}"
+        );
+
+        // The Studio meta follows the title: to its right in a left-to-right strip, to its left in
+        // a right-to-left one.
+        if theme == ThemeKind::Studio {
+            let lmeta = ltexts[1];
+            assert!(lmeta.left() >= ltitle.right() - 0.5, "{theme:?}: the meta follows the title: {lmeta:?} after {ltitle:?}");
+            let rmeta = rtexts[1];
+            assert!(rmeta.right() <= rtitle.left() + 0.5, "{theme:?}: the meta follows the title: {rmeta:?} before {rtitle:?}");
+        }
+    }
+}
+
+/// A tab dragged past the strip's reading end opens after the last document: in a right-to-left
+/// strip that is the left end.
+#[test]
+fn rtl_dragging_a_tab_to_the_left_end_moves_it_last() {
+    let mut h = rtl_harness(3, ThemeKind::Pro);
+    let s = strip(&h);
+    let first = s.tabs[0].1;
+    let end = egui::pos2(s.rect.left() + 2.0, s.rect.center().y);
+    h.hover_at(first.center());
+    rtl_steps(&mut h, 1);
+    h.drag_at(first.center());
+    rtl_steps(&mut h, 1);
+    h.hover_at(end);
+    rtl_steps(&mut h, 1);
+    h.drop_at(end);
+    rtl_steps(&mut h, 3);
+    let names: Vec<String> = h.state().session.documents().iter().map(|st| st.doc.name.clone()).collect();
+    assert_eq!(names, vec!["ch1-p02.png", "ch1-p03.png", "ch1-p01.png"], "the dragged tab became the last document");
 }

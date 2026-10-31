@@ -65,7 +65,11 @@ pub fn intercept(app: &mut PhotocraftApp, command: &str, params: &Value) -> Opti
 
 pub fn body(ui: &mut egui::Ui, fields: &Map<String, Value>) {
     let fallback = if is_vector(fields) { "Delete the vector mask?" } else { "Apply mask to layer before removing?" };
-    ui.label(tl!(fields.get("message").and_then(Value::as_str).unwrap_or(fallback)));
+    // The message reads from the reading start: left in a left-to-right UI, right in a
+    // right-to-left one. The dialog host mirrors block by block, so the body owns this.
+    ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
+        ui.label(tl!(fields.get("message").and_then(Value::as_str).unwrap_or(fallback)));
+    });
 }
 
 /// Apply is the default button; it's greyed out where the mask can't be applied.
@@ -92,4 +96,32 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
         "layer.layerMask.apply"
     };
     app.run_command(command, json!({"layer": layer}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    /// The prompt's message label drawn in `dir`, with the content area it was drawn in.
+    fn message(dir: crate::text::direction::Dir) -> (egui::Rect, egui::Rect) {
+        let _scope = crate::text::direction::direction_scope(dir);
+        let mut fields = Map::new();
+        fields.insert("message".into(), json!("Remove the mask?"));
+        let area = std::cell::Cell::new(egui::Rect::ZERO);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 200.0)).build_ui(|ui| {
+            area.set(ui.max_rect());
+            body(ui, &fields);
+        });
+        h.run();
+        (h.get_by_label("Remove the mask?").rect(), area.get())
+    }
+
+    #[test]
+    fn the_prompt_reads_from_the_reading_start() {
+        let (ltr, ltr_area) = message(crate::text::direction::Dir::Ltr);
+        let (rtl, rtl_area) = message(crate::text::direction::Dir::Rtl);
+        assert!((ltr.left() - ltr_area.left()).abs() < 1.0, "left-to-right: the message starts at the left edge: {ltr:?} in {ltr_area:?}");
+        assert!((rtl.right() - rtl_area.right()).abs() < 1.0, "right-to-left: the message ends at the right edge: {rtl:?} in {rtl_area:?}");
+    }
 }

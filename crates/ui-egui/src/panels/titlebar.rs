@@ -9,6 +9,10 @@
 //! Windows' 46 pt buttons at the right end by default; on Linux libadwaita's round buttons (GNOME),
 //! Breeze's (KDE) or a plain round set elsewhere, with the set of buttons and their side taken
 //! from the desktop's button layout. The shapes are drawn here, not read from the icon theme.
+//!
+//! `CaptionStyle`'s two groups are logical ends — reading start and reading end; in a
+//! right-to-left UI ([`crate::direction::is_rtl`]) they mirror to the opposite physical ends
+//! (Arabic Windows puts Close in the top-left corner). The glyphs are semantic and never flip.
 
 use egui::{Color32, CursorIcon, Id, LayerId, Order, PointerButton, Pos2, Rect, ResizeDirection, Sense, Stroke, Ui, ViewportCommand, pos2, vec2};
 use serde_json::json;
@@ -102,13 +106,15 @@ impl CaptionFamily {
     }
 }
 
-/// The caption buttons' look and placement.
+/// The caption buttons' look and placement. `left`/`right` are the logical ends — reading start
+/// and reading end; the physical side is chosen at render time from the UI direction (a
+/// right-to-left UI mirrors them, [`crate::direction::is_rtl`]).
 #[derive(Clone, PartialEq, Debug)]
 pub struct CaptionStyle {
     pub family: CaptionFamily,
-    /// The buttons at the bar's left end, left to right.
+    /// The buttons at the bar's reading-start end, in listed order.
     pub left: Vec<Caption>,
-    /// The buttons at the bar's right end, left to right.
+    /// The buttons at the bar's reading-end end, in listed order.
     pub right: Vec<Caption>,
     /// The round buttons' glyphs from the desktop's icon theme; `None`, or an icon it lacks, draws
     /// the family's own.
@@ -157,7 +163,8 @@ impl Default for CaptionStyle {
 impl CaptionStyle {
     /// `family` with the buttons a GTK decoration layout names (`gtk-decoration-layout`, GNOME's
     /// `button-layout`, e.g. `appmenu:minimize,maximize,close`): those before the colon go left,
-    /// those after it right; without a colon all go left, as in GTK. Names other than `minimize`,
+    /// those after it right (logical ends — [`CaptionStyle`] mirrors them in a right-to-left UI);
+    /// without a colon all go left, as in GTK. Names other than `minimize`,
     /// `maximize` and `close` (`appmenu`, `icon`, `spacer`, …) are skipped, and a button named
     /// twice is placed once.
     pub fn from_gtk_layout(family: CaptionFamily, layout: &str) -> Self {
@@ -196,15 +203,20 @@ pub fn bar_height(app: &PhotocraftApp, ctx: &egui::Context, base: f32) -> f32 {
     if app.custom_titlebar && style(app, ctx).family == CaptionFamily::Adwaita { base.max(47.0) } else { base }
 }
 
-/// The width the caption buttons take at the bar's (left, right) end: zero for a side without
-/// buttons, and for both without the custom title bar.
+/// The width the caption buttons take at the bar's physical (left, right) ends, already mirrored
+/// for the UI direction: zero for a side without buttons, and for both without the custom title
+/// bar.
 pub fn reserved(app: &PhotocraftApp, ctx: &egui::Context) -> (f32, f32) {
     if !app.custom_titlebar {
         return (0.0, 0.0);
     }
     let s = style(app, ctx);
     let width = |side: &[Caption]| slots(s.family, side, 0.0, true).last().map_or(0.0, |(_, r, _)| r.1);
-    (width(&s.left), width(&s.right))
+    let (left, right) = (width(&s.left), width(&s.right));
+    // A right-to-left UI mirrors the bar (`layout`), so each group takes the opposite end: swap
+    // the sides the width is reported on. `title_bar` lays its margins, lead and control group
+    // out from these physical widths.
+    if crate::direction::is_rtl() { (right, left) } else { (left, right) }
 }
 
 /// Each button's horizontal extent (left, right) and face centre on a side starting at `from`, in
@@ -228,15 +240,24 @@ fn slots(family: CaptionFamily, side: &[Caption], from: f32, outer_left: bool) -
 }
 
 /// Every caption button's hit rect (full bar height, flush with the window's edge) and face
-/// centre, for a bar `bar` between the window's `left` and `right` edges.
+/// centre, for a bar `bar` between the window's `left` and `right` edges. In a right-to-left UI
+/// the whole arrangement is reflected about the bar's centre line: each group takes the opposite
+/// end and its internal order reverses.
 fn layout(s: &CaptionStyle, bar: Rect, left: f32, right: f32) -> Vec<(Caption, Rect, Pos2)> {
-    let rect = |(c, (l, r), centre): (Caption, (f32, f32), f32)| {
-        (c, Rect::from_min_max(pos2(l, bar.top()), pos2(r, bar.bottom() - 1.0)), pos2(centre, bar.center().y))
-    };
     let lefts = slots(s.family, &s.left, left, true);
     let width = slots(s.family, &s.right, 0.0, false).last().map_or(0.0, |(_, r, _)| r.1);
     let rights = slots(s.family, &s.right, right - width, false);
-    lefts.into_iter().chain(rights).map(rect).collect()
+    let mut out: Vec<(Caption, (f32, f32), f32)> = lefts.into_iter().chain(rights).collect();
+    if crate::direction::is_rtl() {
+        // Windows: Close leftmost, as in Arabic Windows and right-to-left GTK/KDE decorations.
+        // Glyphs never flip. `slots` stays direction-agnostic: the mirror lives only here.
+        let span = left + right;
+        for (_, slot, centre) in &mut out {
+            *slot = (span - slot.1, span - slot.0);
+            *centre = span - *centre;
+        }
+    }
+    out.into_iter().map(|(c, (l, r), centre)| (c, Rect::from_min_max(pos2(l, bar.top()), pos2(r, bar.bottom() - 1.0)), pos2(centre, bar.center().y))).collect()
 }
 
 /// Caption button ids (stable, so tests and agents can find them).
@@ -254,8 +275,9 @@ fn toggle_maximize(ctx: &egui::Context) {
 
 /// The caption buttons at the ends of `bar` (the title bar's outer rect), full bar height, flush
 /// with the window's edges (even if the bar's contents run wider) so a maximized window's corner
-/// hits the outermost one. Close runs File › Exit, which asks about unsaved documents first. On
-/// Linux the buttons drag the window too, as GTK's and KDE's do.
+/// hits the outermost one; the groups sit at the reading-start/reading-end ends, mirrored with
+/// the UI direction (`layout`). Close runs File › Exit, which asks about unsaved documents first.
+/// On Linux the buttons drag the window too, as GTK's and KDE's do.
 pub fn caption_buttons(app: &mut PhotocraftApp, ui: &mut Ui, bar: Rect) {
     let t = Tokens::get(ui.ctx());
     let s = style(app, ui.ctx());

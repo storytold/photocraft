@@ -1,6 +1,6 @@
 //! The About window's credits: every contributor (GitHub login always; display and real names only
 //! with recorded consent) and the AI models that helped. The tables are baked into the binary by
-//! build.rs from contributors/contributors.json; nothing is
+//! build.rs from contributors/contributors.json (craftrules standards/contributors.md); nothing is
 //! read at run time. UI strings go through `tl!` (column abbreviations like `+LOC` stay as they are).
 
 use std::cmp::Ordering;
@@ -108,7 +108,7 @@ impl SortKey {
         matches!(self, SortKey::Name | SortKey::FirstCommit | SortKey::LastCommit)
     }
 
-    /// Counts line up on the right of their column; names and dates read from the left.
+    /// Counts line up on their column's reading end; names and dates read from the reading start.
     fn numeric(self) -> bool {
         !self.default_ascending()
     }
@@ -254,6 +254,15 @@ pub fn contributors_ui(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// [`contributors_ui`] over a given list (tests pass their own).
 fn contributors_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[Contributor], total_commits: u64) {
+    // The dialog body mirrors its blocks one by one; this one mirrors as a whole, so its rows read
+    // from the right.
+    crate::text::direction::window_body(ui, |ui| {
+        contributors_body(app, ui, contributors, total_commits);
+    });
+}
+
+/// The contributors list: the controls, the counts and the list itself.
+fn contributors_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[Contributor], total_commits: u64) {
     let id = egui::Id::unique("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
     ui.horizontal_wrapped(|ui| {
@@ -353,6 +362,24 @@ fn column_width<'a>(ui: &egui::Ui, header: &str, cells: impl Iterator<Item = &'a
     (widest.max(head) + 2.0 * CELL_PAD).ceil()
 }
 
+/// The columns in the order they are drawn: in a right-to-left UI the reading start is the
+/// right, so the columns come from the end. `egui_extras::Table` lays its cells out from the
+/// left whatever the direction, so the order is ours to set.
+fn visual_order<T: Copy, const N: usize>(columns: &[T; N]) -> [T; N] {
+    let mut out = *columns;
+    if crate::text::direction::is_rtl() {
+        out.reverse();
+    }
+    out
+}
+
+/// Does the content of a cell hug its right edge? Counts line up on the reading end of their
+/// column and names and dates read from the reading start, so in a right-to-left UI both swap
+/// sides.
+fn hugs_the_right(numeric: bool) -> bool {
+    if numeric { !crate::text::direction::is_rtl() } else { crate::text::direction::is_rtl() }
+}
+
 /// A credits table: columns of `widths`, the `None` one taking what the others leave (at least
 /// `flex_min`). The header stays put while the rows scroll, within `height` (header included). Too
 /// narrow for every column (a long translation), it scrolls sideways rather than clip one.
@@ -381,7 +408,7 @@ fn credits_table(
             .auto_shrink([false, false])
             .min_scrolled_height(body_h)
             .max_scroll_height(body_h)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+            .cell_layout(crate::text::direction::row());
         for w in widths {
             b = b.column(match w {
                 Some(w) => egui_extras::Column::exact(*w),
@@ -396,7 +423,8 @@ fn credits_table(
 fn table(app: &mut PhotocraftApp, ui: &mut egui::Ui, list: &[&Contributor], v: &mut View, height: f32) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let names = v.names;
-    let widths: Vec<Option<f32>> = SortKey::ALL
+    let keys = visual_order(&SortKey::ALL);
+    let widths: Vec<Option<f32>> = keys
         .iter()
         .map(|&k| {
             let cells: Vec<String> = list.iter().map(|c| k.cell(c)).collect();
@@ -410,7 +438,7 @@ fn table(app: &mut PhotocraftApp, ui: &mut egui::Ui, list: &[&Contributor], v: &
         NAME_MIN_W,
         height,
         |mut header| {
-            for k in SortKey::ALL {
+            for &k in &keys {
                 header.col(|ui| {
                     let sort = (v.key == k).then_some(v.ascending);
                     let (long, short) = k.label();
@@ -428,12 +456,15 @@ fn table(app: &mut PhotocraftApp, ui: &mut egui::Ui, list: &[&Contributor], v: &
         |body| {
             body.rows(TABLE_ROW_H, list.len(), |mut row| {
                 let Some(c) = list.get(row.index()) else { return };
-                row.col(|ui| {
-                    ui.add_space(CELL_PAD);
-                    link(app, ui, c, names);
-                });
-                for k in SortKey::ALL.into_iter().skip(1) {
-                    row.col(|ui| cell(ui, k.numeric(), &k.cell(c)));
+                for &k in &keys {
+                    row.col(|ui| {
+                        if k == SortKey::Name {
+                            ui.add_space(CELL_PAD);
+                            link(app, ui, c, names);
+                        } else {
+                            cell(ui, k.numeric(), &k.cell(c));
+                        }
+                    });
                 }
             });
         },
@@ -441,14 +472,16 @@ fn table(app: &mut PhotocraftApp, ui: &mut egui::Ui, list: &[&Contributor], v: &
 }
 
 fn cell(ui: &mut egui::Ui, numeric: bool, text: &str) {
-    let layout = if numeric { egui::Layout::right_to_left(egui::Align::Center) } else { egui::Layout::left_to_right(egui::Align::Center) };
+    // Counts line up on the reading end of their column, names and dates read from the reading
+    // start; the numbers themselves stay left-to-right.
+    let layout = if numeric { crate::text::direction::trailing() } else { crate::text::direction::row() };
     ui.with_layout(layout, |ui| {
         ui.add_space(CELL_PAD);
         ui.add(egui::Label::new(text).selectable(false));
     });
 }
 
-/// One header: its label (on the right over counts, like their numbers) under a rule. A sortable
+/// One header: its label (over the counts, on their reading end) under a rule. A sortable
 /// one (`sort` is `Some`) is a button, with the arrow on the label's inner side when it's the sort
 /// (`Some(Some(ascending))`), in room every header keeps.
 fn header_cell(ui: &mut egui::Ui, t: &crate::theme::Tokens, label: &str, numeric: bool, sort: Option<Option<bool>>) -> egui::Response {
@@ -463,7 +496,7 @@ fn header_cell(ui: &mut egui::Ui, t: &crate::theme::Tokens, label: &str, numeric
     let galley = ui.painter().layout_no_wrap(label.to_string(), crate::theme::semibold(size), color);
     let inner = rect.shrink2(egui::vec2(CELL_PAD, 0.0));
     let y = rect.center().y - galley.size().y / 2.0;
-    let (text_x, arrow_x) = if numeric {
+    let (text_x, arrow_x) = if hugs_the_right(numeric) {
         let x = inner.right() - galley.size().x;
         (x, x - SORT_ARROW_W / 2.0)
     } else {
@@ -507,8 +540,18 @@ fn model_cells(m: &Model, total: u64) -> [String; 6] {
     ]
 }
 
+/// The Models table's headers, one per column (`model_cells` fills the same order).
+const MODEL_COLUMNS: usize = 6;
+
 /// [`models_ui`] over a given list (tests pass their own).
 fn models_in(ui: &mut egui::Ui, models: &[Model], total_commits: u64) {
+    crate::text::direction::window_body(ui, |ui| {
+        models_body(ui, models, total_commits);
+    });
+}
+
+/// The models table: the counts and the list itself.
+fn models_body(ui: &mut egui::Ui, models: &[Model], total_commits: u64) {
     if models.is_empty() {
         ui.label(tl!("No model credits were built into this copy."));
         return;
@@ -516,11 +559,12 @@ fn models_in(ui: &mut egui::Ui, models: &[Model], total_commits: u64) {
     let t = crate::theme::Tokens::get(ui.ctx());
     // Counted against every commit, or the busiest model's if the total somehow trails it.
     let total = total_commits.max(models.iter().map(|m| m.commits).max().unwrap_or(0));
-    let heads = [tl!("Company"), tl!("Model"), tl!("Version"), tl!("Commits"), tl!("% of all commits"), tl!("Lines +/−")];
+    let heads: [&str; MODEL_COLUMNS] = [tl!("Company"), tl!("Model"), tl!("Version"), tl!("Commits"), tl!("% of all commits"), tl!("Lines +/−")];
     let rows: Vec<[String; 6]> = models.iter().map(|m| model_cells(m, total)).collect();
+    let order = visual_order(&core::array::from_fn::<usize, MODEL_COLUMNS, _>(|i| i));
     // The model name takes the spare width.
     let widths: Vec<Option<f32>> =
-        (0..heads.len()).map(|i| (i != 1).then(|| column_width(ui, heads[i], rows.iter().filter_map(|r| r.get(i)).map(String::as_str)))).collect();
+        order.iter().map(|&i| (i != 1).then(|| column_width(ui, heads[i], rows.iter().filter_map(|r| r.get(i)).map(String::as_str)))).collect();
     let numeric = |i: usize| i >= 3;
     credits_table(
         ui,
@@ -529,17 +573,17 @@ fn models_in(ui: &mut egui::Ui, models: &[Model], total_commits: u64) {
         NAME_MIN_W,
         table_height(ui, rows.len()),
         |mut header| {
-            for (i, h) in heads.iter().enumerate() {
+            for &i in &order {
                 header.col(|ui| {
-                    header_cell(ui, &t, h, numeric(i), None);
+                    header_cell(ui, &t, heads[i], numeric(i), None);
                 });
             }
         },
         |body| {
             body.rows(TABLE_ROW_H, rows.len(), |mut row| {
                 let Some(cells) = rows.get(row.index()) else { return };
-                for (i, text) in cells.iter().enumerate() {
-                    row.col(|ui| cell(ui, numeric(i), text));
+                for &i in &order {
+                    row.col(|ui| cell(ui, numeric(i), &cells[i]));
                 }
             });
         },
@@ -549,6 +593,7 @@ fn models_in(ui: &mut egui::Ui, models: &[Model], total_commits: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::{NodeT, Queryable};
 
     fn c(login: &'static str, display: Option<&'static str>, real: Option<&'static str>, added: u64, deleted: u64, first: &'static str) -> Contributor {
         Contributor {
@@ -614,6 +659,150 @@ mod tests {
         assert_eq!(signed(-1000), "−1,000");
         assert_eq!(day("2026-10-07T18:45:23Z"), "2026-10-07");
         assert_eq!(day(""), "—");
+    }
+
+    /// The Contributors table as drawn, for the right-to-left twin.
+    fn table_harness(contributors: Vec<Contributor>) -> egui_kittest::Harness<'static> {
+        let mut app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(720.0, 520.0)).build_ui(move |ui| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                return;
+            }
+            let id = egui::Id::unique("credits_view");
+            if ui.data(|d| d.get_temp::<View>(id)).is_none() {
+                ui.data_mut(|d| d.insert_temp(id, View { table: true, ..View::default() }));
+            }
+            ui.set_width(700.0);
+            contributors_in(&mut app, ui, &contributors, 1);
+        });
+        crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(4);
+        h
+    }
+
+    /// A column's header: the button that sorts by it.
+    fn header_rect<S>(h: &egui_kittest::Harness<'_, S>, k: SortKey) -> egui::Rect {
+        let label = k.label().1;
+        h.query_all_by_role(egui::accesskit::Role::Button)
+            .find(|n| n.accesskit_node().label().is_some_and(|l| l == label || l.starts_with(label)))
+            .map(|n| n.rect())
+            .unwrap_or_else(|| panic!("no {label} header"))
+    }
+
+    /// The cells under a column's header.
+    fn column_cells<S>(h: &egui_kittest::Harness<'_, S>, col: egui::Rect) -> Vec<egui::Rect> {
+        h.query_all_by_role(egui::accesskit::Role::Label)
+            .map(|n| n.rect())
+            .filter(|r| r.top() > col.bottom() && r.center().x > col.left() && r.center().x < col.right())
+            .collect()
+    }
+
+    /// The Models table as drawn, for the right-to-left twin.
+    fn models_harness(models: Vec<Model>) -> egui_kittest::Harness<'static> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(720.0, 520.0)).build_ui(move |ui| {
+            if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                return;
+            }
+            ui.set_width(700.0);
+            models_in(ui, &models, 482);
+        });
+        crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(4);
+        h
+    }
+
+    /// A header of the Models table: it sorts nothing, so it is a label.
+    fn model_header(h: &egui_kittest::Harness<'_>, label: &str) -> egui::Rect {
+        h.query_all_by_label(label).next().map(|n| n.rect()).unwrap_or_else(|| panic!("no {label} header"))
+    }
+
+    #[test]
+    fn the_models_table_mirrors_in_a_right_to_left_ui() {
+        let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+        let models: Vec<Model> = ["A", "B", "C"]
+            .iter()
+            .enumerate()
+            .map(|(i, name)| Model {
+                company: "Anthropic",
+                model: name,
+                version: "1.0",
+                commits: 228 - i as u64 * 100,
+                lines_added: 150_000,
+                lines_deleted: 20_000,
+            })
+            .collect();
+        let h = models_harness(models);
+        // The company is the reading start: the rightmost column.
+        let company = model_header(&h, "Company");
+        let lines = model_header(&h, "Lines +/−");
+        assert!(company.left() > lines.left(), "the columns didn't mirror: {company:?} vs {lines:?}");
+        // The counts line up on the reading end (the left).
+        let counts = column_cells(&h, model_header(&h, "Commits"));
+        assert_eq!(counts.len(), 3, "{} commit cells", counts.len());
+        assert!(counts.iter().all(|r| (r.left() - counts[0].left()).abs() < 0.5), "the counts don't line up: {counts:?}");
+    }
+
+    #[test]
+    fn the_contributors_table_mirrors_in_a_right_to_left_ui() {
+        let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+        let h = table_harness(people().to_vec());
+        let headers: Vec<egui::Rect> = SortKey::ALL.iter().map(|&k| header_rect(&h, k)).collect();
+        // The reading start (the name) is the rightmost column, the reading end the leftmost.
+        assert!(headers.windows(2).all(|w| w[0].left() > w[1].left()), "the columns didn't mirror: {headers:?}");
+        // The counts line up on the reading end (the left), the dates read from the reading start.
+        let counts = column_cells(&h, header_rect(&h, SortKey::LinesAdded));
+        assert!(counts.len() >= 4, "{} line-count cells", counts.len());
+        assert!(counts.iter().all(|r| (r.left() - counts[0].left()).abs() < 0.5), "the counts don't line up: {counts:?}");
+        assert!(counts.iter().any(|r| (r.right() - counts[0].right()).abs() > 0.5), "the counts aren't left-aligned: {counts:?}");
+        let dates = column_cells(&h, header_rect(&h, SortKey::FirstCommit));
+        assert!(dates.len() >= 4, "{} date cells", dates.len());
+        assert!(dates.iter().all(|r| (r.right() - dates[0].right()).abs() < 0.5), "the dates don't line up: {dates:?}");
+        assert!(dates.iter().any(|r| (r.left() - dates[0].left()).abs() > 0.5), "the dates aren't right-aligned: {dates:?}");
+    }
+
+    /// The About dialog on its Contributors tab, table view, as drawn in the window.
+    fn about_contributors_harness() -> egui_kittest::Harness<'static, crate::PhotocraftApp> {
+        let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let mut fields = serde_json::Map::new();
+        fields.insert("tab".into(), serde_json::json!("contributors"));
+        h.state_mut().ui.open_dialog(crate::state::DialogKind::About, fields);
+        h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique("credits_view"), View { table: true, ..View::default() }));
+        h.run_steps(6);
+        h
+    }
+
+    /// RTL: the About dialog opens as wide as its left-to-right twin — the mirrored body scope
+    /// must not balloon the frame (the dialog host's one unverified fork behaviour).
+    #[test]
+    fn the_about_dialog_keeps_its_width_in_a_right_to_left_ui() {
+        let width = |dir: crate::text::direction::Dir| -> f32 {
+            let _dir = crate::text::direction::direction_scope(dir);
+            let h = about_contributors_harness();
+            crate::dialogs::rects(&h.ctx)[0].width()
+        };
+        let ltr = width(crate::text::direction::Dir::Ltr);
+        let rtl = width(crate::text::direction::Dir::Rtl);
+        assert!((ltr - rtl).abs() <= 1.0, "the About frame is {ltr} pt wide in LTR and {rtl} pt in RTL");
+    }
+
+    /// RTL twin of `every_column_fits_the_about_window` (`ui_tests`), written order-independently
+    /// (the smallest left, the largest right) so it holds whichever way the columns are drawn: a
+    /// long translation that pushes the table past the window fails here.
+    #[test]
+    fn every_column_fits_the_about_window_in_a_right_to_left_ui() {
+        let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+        let h = about_contributors_harness();
+        let frame = crate::dialogs::rects(&h.ctx)[0];
+        let hs: Vec<egui::Rect> = SortKey::ALL.iter().map(|&k| header_rect(&h, k)).collect();
+        let left = hs.iter().map(|r| r.left()).fold(f32::INFINITY, f32::min);
+        let right = hs.iter().map(|r| r.right()).fold(f32::NEG_INFINITY, f32::max);
+        assert!(right - left <= frame.width() + 0.5, "the table is {} pt wide in a {} pt window", right - left, frame.width());
+        // Every column sits inside the window, whichever side it is drawn on.
+        for (k, col) in SortKey::ALL.iter().zip(&hs) {
+            assert!(col.left() >= frame.left() - 1.0 && col.right() <= frame.right() + 1.0, "{k:?}: {col:?} spills out of {frame:?}");
+        }
     }
 }
 

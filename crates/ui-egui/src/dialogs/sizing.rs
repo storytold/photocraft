@@ -3,7 +3,7 @@
 //! Field values are stored in pixels (plus a display unit), so automation can set `width`/`height`
 //! directly and the dialog maps them to `image.imageSize` / `image.canvasSize` unchanged.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -159,15 +159,28 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 }
 
+/// A row in reading order: `ui.horizontal` in a left-to-right dialog, its mirror in a
+/// right-to-left one. The row keeps `ui.horizontal`'s height and alignment.
+///
+/// Not `direction::dialog_row()`: that helper's `Align::Min` cross-align and full-height
+/// allocation change the LTR row metrics.
+fn row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    let size = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, crate::direction::row(), add)
+}
+
 fn label(ui: &mut egui::Ui, text: &str, width: f32) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
+    // The caption hugs its control: right of it in a left-to-right row, left of it in a
+    // right-to-left one.
+    let (pos, anchor) = crate::direction::end_text_anchor(r, 6.0);
+    ui.painter().text(pos, anchor, text, egui::FontId::proportional(12.0), t.text_dim);
 }
 
 fn info_row(ui: &mut egui::Ui, k: &str, v: String) {
     let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
+    row(ui, |ui| {
         label(ui, tl!(k), 90.0);
         ui.label(egui::RichText::new(v).color(t.text).size(12.0));
     });
@@ -230,13 +243,13 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // fields); a physical size (inches, cm…) changes the resolution instead.
     let unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
     let editable = resampling || !matches!(unit.as_str(), "px" | "percent");
-    let w_row = ui.horizontal(|ui| {
+    let w_row = row(ui, |ui| {
         label(ui, tl!("Width:"), 90.0);
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w")).inner;
         unit_dropdown(ui, f, "is-unit-w");
         c
     });
-    let h_row = ui.horizontal(|ui| {
+    let h_row = row(ui, |ui| {
         label(ui, tl!("Height:"), 90.0);
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h")).inner;
         unit_dropdown(ui, f, "is-unit-h");
@@ -262,20 +275,24 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert(key.into(), json!(1.0));
         }
     }
-    // Photoshop's chain bracket linking width and height (right of the unit dropdowns).
-    let x0 = w_row.response.rect.right().max(h_row.response.rect.right()) + 4.0;
+    // Photoshop's chain bracket linking width and height, at the reading end of the rows:
+    // right of the unit dropdowns left to right, left of them in a right-to-left dialog.
+    let rtl = crate::direction::is_rtl();
+    let rows = w_row.response.rect.union(h_row.response.rect);
+    let x0 = if rtl { rows.left() - 18.0 } else { rows.right() + 4.0 };
     let bracket = Rect::from_min_max(pos2(x0, w_row.response.rect.center().y), pos2(x0 + 14.0, h_row.response.rect.center().y));
     let link = ui.interact(bracket.expand(2.0), ui.scope_id().with("constrain"), Sense::click());
     let col = if constrain { t.text } else { t.text_faint };
+    // The bracket opens towards the rows: its spine and the chain icon sit on their near edge.
+    let (x, edge) = if rtl { (bracket.right() - 8.0, bracket.right()) } else { (bracket.left() + 8.0, bracket.left()) };
     if constrain {
         let p = ui.painter();
-        let x = bracket.left() + 8.0;
-        p.line_segment([pos2(bracket.left(), bracket.top()), pos2(x, bracket.top())], Stroke::new(1.0, col));
+        p.line_segment([pos2(edge, bracket.top()), pos2(x, bracket.top())], Stroke::new(1.0, col));
         p.line_segment([pos2(x, bracket.top()), pos2(x, bracket.center().y - 8.0)], Stroke::new(1.0, col));
         p.line_segment([pos2(x, bracket.center().y + 8.0), pos2(x, bracket.bottom())], Stroke::new(1.0, col));
-        p.line_segment([pos2(x, bracket.bottom()), pos2(bracket.left(), bracket.bottom())], Stroke::new(1.0, col));
+        p.line_segment([pos2(x, bracket.bottom()), pos2(edge, bracket.bottom())], Stroke::new(1.0, col));
     }
-    let chain = Rect::from_center_size(pos2(bracket.left() + 8.0, bracket.center().y), vec2(14.0, 14.0));
+    let chain = Rect::from_center_size(pos2(x, bracket.center().y), vec2(14.0, 14.0));
     ui.painter().rect_filled(chain, 2.0, if link.hovered() { t.hover } else { Color32::TRANSPARENT });
     crate::icons::paint(ui, chain, if constrain { "link" } else { "unlink" }, 11.0, col);
     if link.on_hover_text(tl!("Constrain proportions")).clicked() && resampling {
@@ -289,7 +306,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert("width".into(), json!((num(f, "height") * ow / oh.max(1.0)).round().max(1.0)));
         }
     }
-    ui.horizontal(|ui| {
+    row(ui, |ui| {
         label(ui, tl!("Resolution:"), 90.0);
         let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
         if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).accessible_name(tl!("Resolution")).changed() {
@@ -313,7 +330,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.label(egui::RichText::new(tl!("Pixels/Inch")).color(t.text_dim).size(12.0));
     });
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    row(ui, |ui| {
         label(ui, "", 90.0);
         let mut on = resampling;
         if crate::widgets::checkbox(ui, &mut on, tl!("Resample")).changed() {
@@ -354,7 +371,9 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
     let bpp = num(f, "__bytesPerPixel").max(1.0);
     let relative = f.get("relative").and_then(Value::as_bool).unwrap_or(false);
-    ui.label(egui::RichText::new(tl!("Current Size")).font(crate::theme::semibold(12.0)).color(t.text));
+    crate::direction::dialog_row(ui, |ui| {
+        ui.label(egui::RichText::new(tl!("Current Size")).font(crate::theme::semibold(12.0)).color(t.text));
+    });
     info_row(ui, tl!("Size:"), human_bytes(ow * oh * bpp));
     info_row(ui, tl!("Width:"), format!("{} px", ow as i64));
     info_row(ui, tl!("Height:"), format!("{} px", oh as i64));
@@ -362,21 +381,21 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     crate::widgets::hairline(ui);
     ui.add_space(6.0);
     let (nw, nh) = if relative { (ow + num(f, "width"), oh + num(f, "height")) } else { (num(f, "width"), num(f, "height")) };
-    ui.horizontal(|ui| {
+    row(ui, |ui| {
         ui.label(egui::RichText::new(tl!("New Size")).font(crate::theme::semibold(12.0)).color(t.text));
         ui.label(egui::RichText::new(human_bytes(nw.max(0.0) * nh.max(0.0) * bpp)).color(t.text_dim).size(12.0));
     });
-    ui.horizontal(|ui| {
+    row(ui, |ui| {
         label(ui, tl!("Width:"), 90.0);
         dim_field(ui, f, "width", "__origW", "cs-w");
         unit_dropdown(ui, f, "cs-unit-w");
     });
-    ui.horizontal(|ui| {
+    row(ui, |ui| {
         label(ui, tl!("Height:"), 90.0);
         dim_field(ui, f, "height", "__origH", "cs-h");
         unit_dropdown(ui, f, "cs-unit-h");
     });
-    ui.horizontal(|ui| {
+    row(ui, |ui| {
         label(ui, "", 90.0);
         let mut rel = relative;
         if crate::widgets::checkbox(ui, &mut rel, tl!("Relative")).changed() {
@@ -388,7 +407,7 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert("relative".into(), json!(rel));
         }
     });
-    ui.horizontal(|ui| {
+    row(ui, |ui| {
         label(ui, tl!("Anchor:"), 90.0);
         let cur = f.get("anchor").and_then(Value::as_str).unwrap_or("center").to_string();
         if let Some(a) = anchor_grid(ui, &cur, nw - ow, nh - oh) {
@@ -396,7 +415,7 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
     });
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    row(ui, |ui| {
         label(ui, tl!("Canvas extension color:"), 150.0);
         let mut cur = f.get("extensionColor").and_then(Value::as_str).unwrap_or("background").to_string();
         let opts = [

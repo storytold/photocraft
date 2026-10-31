@@ -1,5 +1,5 @@
 use super::layer_drag::dropped_on;
-use super::{Align2, Color32, HistorySource, PhotocraftApp, Rect, Sense, Stroke, StrokeKind, Tokens, Tool, Value, empty, icons, json, pos2, vec2, widgets};
+use super::{Color32, HistorySource, PhotocraftApp, Rect, Sense, Stroke, StrokeKind, Tokens, Tool, Value, empty, icons, json, pos2, vec2, widgets};
 
 pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -75,12 +75,12 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             let color = if is_redo { t.text_faint } else { t.text };
             icons::paint(
                 ui,
-                Rect::from_center_size(pos2(rect.left() + 42.0, rect.center().y), vec2(16.0, 16.0)),
+                Rect::from_center_size(pos2(crate::direction::start_x(rect, 42.0), rect.center().y), vec2(16.0, 16.0)),
                 icon,
                 12.0,
                 if is_redo { t.text_faint } else { t.icon },
             );
-            ui.painter().text(pos2(rect.left() + 58.0, rect.center().y), Align2::LEFT_CENTER, &e, egui::FontId::proportional(12.0), color);
+            ui.painter().text(pos2(crate::direction::start_x(rect, 58.0), rect.center().y), crate::direction::start_align(), &e, egui::FontId::proportional(12.0), color);
             if history_source_column(ui, rect, egui::Id::unique(("history-source", i)), source == Some(HistorySource::State(i))) {
                 set_source = Some(i);
             }
@@ -197,7 +197,7 @@ pub(super) fn history(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 /// row, so the click doesn't also step to the state or snapshot.
 fn history_source_column(ui: &mut egui::Ui, row: Rect, salt: egui::Id, is_source: bool) -> bool {
     let t = Tokens::get(ui.ctx());
-    let cell = Rect::from_min_size(row.min, vec2(24.0, row.height()));
+    let cell = Rect::from_min_size(pos2(crate::direction::start_x(row, 0.0), row.top()), vec2(24.0, row.height()));
     let resp = ui.interact(cell, ui.scope_id().with(salt), Sense::click()).on_hover_text(tl!("Sets the source for the history brush"));
     if is_source {
         icons::paint(ui, cell.shrink(4.0), icons::tool_icon(Tool::HistoryBrush), 12.0, t.icon);
@@ -281,15 +281,19 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: Option<u6
         } else if resp.hovered() {
             ui.painter().rect_filled(rect, 0.0, t.hover.gamma_multiply(0.5));
         }
-        let thumb = Rect::from_min_size(pos2(rect.left() + 28.0, rect.center().y - 14.0), vec2(28.0, 28.0));
+        let thumb = Rect::from_min_size(pos2(crate::direction::start_x(rect, 28.0), rect.center().y - 14.0), vec2(28.0, 28.0));
         widgets::checker(ui.painter(), thumb, 4.0);
         let tex = app.snapshot_thumb(&ctx, doc_id, snap, &live);
         ui.painter().image(tex, thumb, Rect::from_min_max(egui::Pos2::ZERO, pos2(1.0, 1.0)), Color32::WHITE);
         ui.painter().rect_stroke(thumb, 0.0, Stroke::new(1.0, t.separator), StrokeKind::Outside);
         match renaming.as_mut().filter(|(id, _)| *id == snap.id) {
             Some((_, text)) => {
-                let field = Rect::from_min_max(pos2(thumb.right() + 6.0, rect.center().y - 10.0), pos2(rect.right() - 6.0, rect.center().y + 10.0));
-                let r = ui.put(field, egui::TextEdit::singleline(text)).accessible_name(tl!("Name"));
+                let fx = crate::direction::after_x(thumb, 6.0, 0.0);
+                let tx = crate::direction::end_x(rect, 6.0);
+                let field = Rect::from_min_max(pos2(fx.min(tx), rect.center().y - 10.0), pos2(fx.max(tx), rect.center().y + 10.0));
+                let font = egui::FontId::proportional(12.0);
+                let mut layouter = widgets::rtl_singleline_layouter(font.clone());
+                let r = ui.put(field, widgets::rtl_singleline(text, &mut layouter).font(font)).accessible_name(tl!("Name"));
                 if r.lost_focus() {
                     if !ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                         cmd = Some(("history.renameSnapshot", json!({"snapshot": snap.id, "name": text.clone()})));
@@ -307,7 +311,7 @@ fn snapshot_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, selected: Option<u6
                 }
             }
             None => {
-                ui.painter().text(pos2(thumb.right() + 8.0, rect.center().y), Align2::LEFT_CENTER, &snap.name, egui::FontId::proportional(12.0), t.text);
+                ui.painter().text(pos2(crate::direction::after_x(thumb, 8.0, 0.0), rect.center().y), crate::direction::start_align(), &snap.name, egui::FontId::proportional(12.0), t.text);
             }
         }
         if history_source_column(ui, rect, egui::Id::unique(("history-snapshot-source", snap.id)), source == Some(HistorySource::Snapshot(snap.id))) {

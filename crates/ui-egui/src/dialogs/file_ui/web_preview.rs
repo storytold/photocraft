@@ -88,36 +88,43 @@ pub fn table(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.scope(|ui| {
         ui.spacing_mut().interact_size = egui::vec2(14.0, 14.0);
         ui.spacing_mut().item_spacing = egui::vec2(1.0, 1.0);
-        egui::Grid::new("web-color-table").spacing(egui::vec2(1.0, 1.0)).show(ui, |ui| {
-            for (i, source) in table.iter().enumerate() {
-                let mut color = settings.color_table_edits.get(&i).copied().unwrap_or(*source);
-                let response = ui.push_id(i, |ui| crate::widgets::color_edit_button_srgb(ui, &mut color)).inner;
-                response.clone().on_hover_text(format!("Index {i}: {}", web_cmds::rgb_hex(color)));
-                if response.clicked() {
-                    f.insert("__selectedColor".into(), json!(i));
-                }
-                if f.get("__selectedColor").and_then(Value::as_u64) == Some(i as u64) {
-                    let t = Tokens::get(ui.ctx());
-                    ui.painter().rect_stroke(response.rect, t.radius_sm, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
-                }
-                if response.changed() {
-                    let edits = f.entry("colorTableEdits").or_insert_with(|| json!({}));
-                    if let Some(edits) = edits.as_object_mut() {
-                        edits.insert(i.to_string(), json!(web_cmds::rgb_hex(color)));
+        // The swatches keep the palette's index order in every direction: an indexed colour
+        // table is data, not a reading row.
+        // The fork's `Grid` cannot start under a right-to-left cursor; the swatch table is data
+        // and keeps its index order, so it runs in an LTR scope in either direction.
+        crate::direction::ltr_vertical(ui, |ui| {
+            egui::Grid::new("web-color-table").spacing(egui::vec2(1.0, 1.0)).show(ui, |ui| {
+                for (i, source) in table.iter().enumerate() {
+                    let mut color = settings.color_table_edits.get(&i).copied().unwrap_or(*source);
+                    let response = ui.push_id(i, |ui| crate::widgets::color_edit_button_srgb(ui, &mut color)).inner;
+                    response.clone().on_hover_text(format!("Index {i}: {}", web_cmds::rgb_hex(color)));
+                    if response.clicked() {
+                        f.insert("__selectedColor".into(), json!(i));
+                    }
+                    if f.get("__selectedColor").and_then(Value::as_u64) == Some(i as u64) {
+                        let t = Tokens::get(ui.ctx());
+                        ui.painter().rect_stroke(response.rect, t.radius_sm, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+                    }
+                    if response.changed() {
+                        let edits = f.entry("colorTableEdits").or_insert_with(|| json!({}));
+                        if let Some(edits) = edits.as_object_mut() {
+                            edits.insert(i.to_string(), json!(web_cmds::rgb_hex(color)));
+                        }
+                    }
+                    if i % 16 == 15 {
+                        ui.end_row();
                     }
                 }
-                if i % 16 == 15 {
-                    ui.end_row();
+                if f.get("__transparentIndex").and_then(Value::as_u64).is_some() {
+                    let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
+                    crate::widgets::checker(ui.painter(), rect, 4.0);
+                    response.on_hover_text(tl!("Transparency"));
                 }
-            }
-            if f.get("__transparentIndex").and_then(Value::as_u64).is_some() {
-                let (rect, response) = ui.allocate_exact_size(egui::vec2(14.0, 14.0), egui::Sense::hover());
-                crate::widgets::checker(ui.painter(), rect, 4.0);
-                response.on_hover_text(tl!("Transparency"));
-            }
+            });
         });
     });
-    ui.horizontal(|ui| {
+    let footer_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(footer_size, crate::direction::row(), |ui| {
         ui.weak(format!("{}: {}", tl!("Colors"), table.len()));
         if ui.small_button(tl!("Reset")).clicked() {
             f.remove("colorTableEdits");
@@ -207,7 +214,9 @@ impl Navigation {
 pub fn controls(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut nav = Navigation::read(f);
     let effective = n(f, "__effectiveZoom", 1.0) as f32;
-    ui.horizontal(|ui| {
+    // The zoom row reads from the right in a right-to-left UI.
+    let row_size = egui::vec2(ui.available_width(), ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(row_size, crate::direction::row(), |ui| {
         if ui.small_button(tl!("Fit")).clicked() {
             nav.zoom = None;
             nav.center = egui::vec2(0.5, 0.5);
@@ -325,5 +334,61 @@ mod tests {
             assert_eq!(nav.zoom, Some(32.0));
             assert!(nav.center.is_finite());
         }
+    }
+
+    /// The x position of a painted text run, by its content.
+    fn text_x<T>(h: &egui_kittest::Harness<'_, T>, needle: &str) -> f32 {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|s| if let egui::Shape::Text(t) = &s.shape { Some(t) } else { None })
+            .find(|t| t.galley.text() == needle)
+            .map(|t| t.pos.x)
+            .unwrap_or(f32::NAN)
+    }
+
+    /// The zoom row reads in the UI's direction: its first control sits at the reading start.
+    #[test]
+    fn zoom_row_reads_in_the_ui_direction() {
+        use egui_kittest::kittest::Queryable;
+        let row = |dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 200.0)).build_ui_state(
+                |ui, state: &mut Map<String, Value>| {
+                    controls(ui, state);
+                },
+                Map::new(),
+            );
+            h.run_steps(2);
+            (text_x(&h, "Fit"), h.get_by_label("100%").rect().center().x)
+        };
+        let (ltr_fit, ltr_pct) = row(crate::direction::Dir::Ltr);
+        assert!(ltr_fit < ltr_pct, "LTR: Fit sits left of 100%: {ltr_fit} {ltr_pct}");
+        let (rtl_fit, rtl_pct) = row(crate::direction::Dir::Rtl);
+        assert!(rtl_fit > rtl_pct, "RTL: Fit sits right of 100%: {rtl_fit} {rtl_pct}");
+    }
+
+    /// The colour table's footer reads in the UI's direction: the count at the reading start and
+    /// the Reset button at the reading end.
+    #[test]
+    fn colour_table_footer_reads_in_the_ui_direction() {
+        let row = |dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(400.0, 300.0))
+                .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+                .build_ui_state(
+                    |ui, state: &mut Map<String, Value>| {
+                        table(ui, state);
+                    },
+                    serde_json::from_value::<Map<String, Value>>(json!({"format": "gif", "colorTable": ["#ff0000", "#0000ff"], "dither": "none"})).unwrap(),
+                );
+            h.run_steps(2);
+            (text_x(&h, "Colors: 2"), text_x(&h, "Reset"))
+        };
+        let (ltr_count, ltr_reset) = row(crate::direction::Dir::Ltr);
+        assert!(ltr_count < ltr_reset, "LTR: the count sits left of Reset: {ltr_count} {ltr_reset}");
+        let (rtl_count, rtl_reset) = row(crate::direction::Dir::Rtl);
+        assert!(rtl_count > rtl_reset, "RTL: the count sits right of Reset: {rtl_count} {rtl_reset}");
     }
 }

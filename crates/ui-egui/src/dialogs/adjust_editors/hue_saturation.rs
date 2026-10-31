@@ -63,6 +63,16 @@ pub(super) fn spectrum_bar(p: &egui::Painter, r: Rect, colors: &[Color32]) {
 }
 
 pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
+    let mut edit = Edit::default();
+    // A right-to-left UI mirrors the panel: the body layout right-aligns the blocks and flips the
+    // rows. The spectrum keeps its physical mapping — a hue's colour stays under its handle — and
+    // so do the sliders' colour tracks.
+    ui.with_layout(crate::direction::body_layout(), |ui| edit = hue_saturation_body(ui, v, cx));
+    edit
+}
+
+/// The Hue/Saturation panel, drawn inside the mirrored body scope.
+fn hue_saturation_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let range_id = cx.mem.with("hs-range");
     let mut range: usize = ui.data(|d| d.get_temp(range_id)).unwrap_or(0);
@@ -207,4 +217,101 @@ pub(super) fn hue_saturation(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) ->
         ui.label(RichText::new(lab).font(crate::theme::mono(11.0)).color(t.text_faint));
     }
     e
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::direction::Dir;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    /// The Hue/Saturation panel over a fresh adjustment, drawn in `dir` with `range` selected.
+    fn harness(dir: Dir, range: usize) -> egui_kittest::Harness<'static, Value> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(380.0, 420.0)).build_ui_state(
+            move |ui, v: &mut Value| {
+                // The scope covers every frame, including the frames of a later gesture: the
+                // guard would otherwise die when this function returns.
+                let _dir = crate::direction::direction_scope(dir);
+                // The fonts install after the harness's first frame; skip that one.
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                let cx = EditorCx {
+                    mem: egui::Id::unique("hs-rtl"),
+                    hist: None,
+                    gray: false,
+                    swatches: [[0.0; 3], [1.0; 3]],
+                    gradients: Vec::new(),
+                    dialog: true,
+                    dynamic_color_sliders: true,
+                    isolated_curve: None,
+                };
+                ui.data_mut(|d| d.insert_temp(cx.mem.with("hs-range"), range));
+                hue_saturation(ui, v, &cx);
+            },
+            json!({}),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    }
+
+    /// The caption of the row named `name`.
+    fn caption(h: &egui_kittest::Harness<'_, Value>, name: &str) -> egui::Rect {
+        h.query_all(egui_kittest::kittest::by().label(name).include_labels())
+            .find(|n| n.accesskit_node().role() == Role::Label)
+            .unwrap_or_else(|| panic!("the {name} caption"))
+            .rect()
+    }
+
+    /// RTL: the panel's rows read from the right and the value field sits at the reading end;
+    /// LTR keeps today's layout. The wave twin in `adjust_editors/ui_tests.rs` covers the same
+    /// caption/field pair through the public dispatch; this one owns the Range row and the
+    /// hue-range handles.
+    #[test]
+    fn hue_saturation_panel_mirrors_under_rtl() {
+        let ltr = harness(Dir::Ltr, 0);
+        let rtl = harness(Dir::Rtl, 0);
+
+        let ltr_caption = caption(&ltr, "Hue");
+        let ltr_field = ltr.get_by_role_and_label(Role::SpinButton, "Hue").rect();
+        assert!(ltr_field.left() > ltr_caption.left(), "LTR: the field follows the caption: {ltr_field:?} {ltr_caption:?}");
+
+        let rtl_caption = caption(&rtl, "Hue");
+        let rtl_field = rtl.get_by_role_and_label(Role::SpinButton, "Hue").rect();
+        assert!(rtl_field.left() < rtl_caption.left(), "RTL: the field leads the caption, at the reading end: {rtl_field:?} {rtl_caption:?}");
+
+        // The Range dropdown starts its row at the reading start, like the caption.
+        let ltr_range = ltr.get_by_role_and_label(Role::ComboBox, "Range").rect();
+        let rtl_range = rtl.get_by_role_and_label(Role::ComboBox, "Range").rect();
+        assert!((ltr_range.left() - ltr_caption.left()).abs() < 4.0, "LTR: the dropdown starts the row: {ltr_range:?} {ltr_caption:?}");
+        assert!((rtl_range.right() - rtl_caption.right()).abs() < 4.0, "RTL: the dropdown starts the row: {rtl_range:?} {rtl_caption:?}");
+    }
+
+    /// The hue range handles keep their physical place on the spectrum in a right-to-left UI: a
+    /// hue's colour stays under its own handle.
+    #[test]
+    fn the_hue_range_handles_stay_physical_in_rtl() {
+        let handles = |dir: Dir| -> Vec<f32> {
+            let h = harness(dir, 1);
+            let mut xs: Vec<f32> = Vec::new();
+            for clipped in &h.output().shapes {
+                let egui::Shape::Rect(r) = &clipped.shape else { continue };
+                if (r.rect.width() - 5.0).abs() < 0.1 && (r.rect.height() - 12.0).abs() < 0.1 {
+                    xs.push(r.rect.center().x);
+                }
+            }
+            xs.sort_by(f32::total_cmp);
+            xs.dedup_by(|a, b| (*a - *b).abs() < 0.5);
+            xs
+        };
+        let ltr = handles(Dir::Ltr);
+        let rtl = handles(Dir::Rtl);
+        assert_eq!(ltr.len(), 4, "the Reds range paints four handles: {ltr:?}");
+        assert_eq!(rtl.len(), 4, "the Reds range paints four handles: {rtl:?}");
+        for (a, b) in ltr.iter().zip(&rtl) {
+            assert!((a - b).abs() < 1.0, "the handles keep their physical place: {ltr:?} {rtl:?}");
+        }
+    }
 }

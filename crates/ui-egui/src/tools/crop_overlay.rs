@@ -285,15 +285,9 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
 pub fn options_button(o: &mut ToolOptions, ui: &mut egui::Ui) {
     let r =
         crate::icons::button(ui, "grid-3x3", 24.0, false, &format!("{}  ({})", tl!("Set the overlay options for the Crop tool"), tl!(o.crop_overlay.label())));
-    egui::Popup::menu(&r).show(|ui| {
+    egui::Popup::menu(&r).show(|ui| crate::menus::popup_body(ui, |ui| {
         ui.set_min_width(220.0);
-        let item = |ui: &mut egui::Ui, on: bool, label: &str, key: Option<&str>| {
-            let mut b = egui::Button::new(format!("{} {}", if on { "✔" } else { "  " }, label));
-            if let Some(k) = key {
-                b = b.shortcut_text(crate::shortcuts::pretty(k));
-            }
-            ui.add(b).clicked()
-        };
+        let item = |ui: &mut egui::Ui, on: bool, label: &str, key: Option<&str>| crate::menu_keys::menu_row(ui, label, key, on, true).clicked();
         for k in CropOverlay::ALL {
             if item(ui, o.crop_overlay == k, tl!(k.label()), None) {
                 set_overlay(o, k);
@@ -313,12 +307,11 @@ pub fn options_button(o: &mut ToolOptions, ui: &mut egui::Ui) {
             ui.close();
         }
         let turns = o.crop_overlay.orientations() > 1;
-        let b = egui::Button::new(format!("   {}", tl!("Cycle Orientation"))).shortcut_text(crate::shortcuts::pretty("Shift+O"));
-        if ui.add_enabled(turns, b).clicked() {
+        if crate::menu_keys::menu_row(ui, tl!("Cycle Orientation"), Some("Shift+O"), false, turns).clicked() {
             cycle_orientation(o);
             ui.close();
         }
-    });
+    }));
 }
 
 #[cfg(test)]
@@ -558,5 +551,48 @@ mod tests {
         assert_eq!((o.crop_overlay, o.crop_overlay_show, o.crop_overlay_orientation), (CropOverlay::Thirds, OverlayShow::Auto, 0));
         let o: ToolOptions = serde_json::from_str(r#"{"crop_overlay": "goldenSpiral", "crop_overlay_show": "always", "crop_overlay_orientation": 3}"#).unwrap();
         assert_eq!((o.crop_overlay, o.crop_overlay_show, o.crop_overlay_orientation), (CropOverlay::GoldenSpiral, OverlayShow::Always, 3));
+    }
+
+    /// The overlay menu's rows are menu-bar rows: the checkmark column opens them at the reading
+    /// start and the shortcut sits at the row's far end — its left in a right-to-left UI.
+    #[test]
+    fn overlay_menu_rows_mirror_like_menu_bar_rows() {
+        let row = |rtl: bool, key: Option<&str>| -> (egui::WidgetText, Vec<egui::Atom<'static>>) {
+            let mut out: Option<(egui::WidgetText, Vec<egui::Atom<'static>>)> = None;
+            egui::__run_test_ui(|ui| {
+                ui.style_mut().set_right_to_left(rtl);
+                let text = crate::menu_keys::menu_row_text(ui, true, "Golden Spiral", None, false, crate::menu_keys::GutterSide::ReadingStart);
+                let button = crate::menu_keys::menu_row_button(text.clone(), key.map(str::to_owned), rtl);
+                out = Some((text, button.atoms().iter().cloned().collect()));
+            });
+            out.expect("the row")
+        };
+        let atom_text = |a: &egui::Atom<'_>| match &a.kind {
+            egui::AtomKind::Text(t) => t.text().to_owned(),
+            _ => String::new(),
+        };
+        let shortcut = crate::shortcuts::pretty("O");
+
+        // Left-to-right: the label leads the row and the shortcut ends it.
+        let (text, atoms) = row(false, Some("O"));
+        assert_eq!(text.text(), "✔ Golden Spiral");
+        assert_eq!(atom_text(&atoms[0]), "✔ Golden Spiral");
+        assert_eq!(atom_text(&atoms[atoms.len() - 1]), shortcut);
+
+        // Right-to-left: the shortcut moves to the far (left) end of the row, and the row's text
+        // reads from the right, with the checkmark column at the reading start.
+        let (text, atoms) = row(true, Some("O"));
+        assert_eq!(atom_text(&atoms[0]), shortcut);
+        assert_eq!(atom_text(&atoms[atoms.len() - 1]), "✔ Golden Spiral");
+        let job = match &text {
+            egui::WidgetText::LayoutJob(job) => job.clone(),
+            other => panic!("a layout job, got {other:?}"),
+        };
+        assert_eq!(job.direction, egui::epaint::text::TextDirection::RightToLeft);
+
+        // Right-to-left without a shortcut: a grow spacer keeps the label at the reading start.
+        let (_text, atoms) = row(true, None);
+        assert!(atoms[0].grow, "the row reserves a spacer");
+        assert_eq!(atom_text(&atoms[atoms.len() - 1]), "✔ Golden Spiral");
     }
 }

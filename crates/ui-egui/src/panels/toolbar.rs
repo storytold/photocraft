@@ -95,7 +95,7 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             // Toolbar width is a user preference, not a Pro-only feature.
             // Keep the same hit target in every theme (including RTL layouts).
             let (cr, resp) = ui.allocate_exact_size(vec2(bx, 14.0), Sense::click());
-            let (shrink, grow) = if crate::direction::is_rtl() { ("chevrons-right", "chevrons-left") } else { ("chevrons-left", "chevrons-right") };
+            let (shrink, grow) = ("chevrons-left", "chevrons-right");
             icons::paint(ui, cr, if double { shrink } else { grow }, 11.0, if resp.hovered() { t.text } else { t.text_faint });
             resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Toolbar")));
             if resp.clicked() {
@@ -235,52 +235,65 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                                         })
                                                         .fold(0.0f32, f32::max);
                                                     let fw = (label_w + 42.0 + 40.0).max(180.0);
-                                                    for &item in slot.iter() {
-                                                        let (r, ir) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
-                                                        if ir.hovered() {
-                                                            ui.painter().rect_filled(r, 3.0, t.hover);
-                                                        }
-                                                        if item == tool {
-                                                            ui.painter().rect_filled(
-                                                                Rect::from_center_size(pos2(r.left() + 8.0, r.center().y), vec2(4.0, 4.0)),
-                                                                0.0,
+                                                    // Cap the body at the row width: in a right-to-left UI the
+                                                    // frame's min_rect starts at the trailing edge of the wide
+                                                    // area, so an uncapped body stretches to the full area width.
+                                                    ui.set_max_width(fw);
+                                                    // A mirrored menu body: in a right-to-left UI the rows start
+                                                    // from the right (LTR keeps egui's default layout).
+                                                    ui.with_layout(crate::direction::body_layout(), |ui| {
+                                                        // Hand-painted atoms mirror with the row: mark, icon and label
+                                                        // lead from the reading start, the shortcut sits at its end.
+                                                        let rtl = crate::direction::is_rtl();
+                                                        for &item in slot.iter() {
+                                                            let (r, ir) = ui.allocate_exact_size(vec2(fw, 26.0), Sense::click());
+                                                            if ir.hovered() {
+                                                                ui.painter().rect_filled(r, 3.0, t.hover);
+                                                            }
+                                                            let cy = r.center().y;
+                                                            let (dot_x, icon_x, label_at, shortcut_at) = if rtl {
+                                                                (r.right() - 8.0, r.right() - 26.0, pos2(r.right() - 42.0, cy), pos2(r.left() + 8.0, cy))
+                                                            } else {
+                                                                (r.left() + 8.0, r.left() + 26.0, pos2(r.left() + 42.0, cy), pos2(r.right() - 8.0, cy))
+                                                            };
+                                                            if item == tool {
+                                                                ui.painter().rect_filled(Rect::from_center_size(pos2(dot_x, cy), vec2(4.0, 4.0)), 0.0, t.text);
+                                                            }
+                                                            icons::paint(
+                                                                ui,
+                                                                Rect::from_center_size(pos2(icon_x, cy), vec2(18.0, 18.0)),
+                                                                icons::tool_icon(item),
+                                                                14.0,
+                                                                t.icon,
+                                                            );
+                                                            ui.painter().text(
+                                                                label_at,
+                                                                if rtl { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER },
+                                                                tl!(item.label()),
+                                                                egui::FontId::proportional(12.5),
                                                                 t.text,
                                                             );
-                                                        }
-                                                        icons::paint(
-                                                            ui,
-                                                            Rect::from_center_size(pos2(r.left() + 26.0, r.center().y), vec2(18.0, 18.0)),
-                                                            icons::tool_icon(item),
-                                                            14.0,
-                                                            t.icon,
-                                                        );
-                                                        ui.painter().text(
-                                                            pos2(r.left() + 42.0, r.center().y),
-                                                            Align2::LEFT_CENTER,
-                                                            tl!(item.label()),
-                                                            egui::FontId::proportional(12.5),
-                                                            t.text,
-                                                        );
-                                                        if let Some(sc) = crate::tool_shortcuts::shortcut(app, item) {
-                                                            ui.painter().text(
-                                                                pos2(r.right() - 8.0, r.center().y),
-                                                                Align2::RIGHT_CENTER,
-                                                                crate::shortcuts::pretty(&sc),
-                                                                egui::FontId::proportional(12.0),
-                                                                t.text_dim,
+                                                            if let Some(sc) = crate::tool_shortcuts::shortcut(app, item) {
+                                                                ui.painter().text(
+                                                                    shortcut_at,
+                                                                    if rtl { Align2::LEFT_CENTER } else { Align2::RIGHT_CENTER },
+                                                                    crate::shortcuts::pretty(&sc),
+                                                                    egui::FontId::proportional(12.0),
+                                                                    t.text_dim,
+                                                                );
+                                                            }
+                                                            let drag_release = tool_flyout_release(
+                                                                r,
+                                                                ui.input(|i| i.pointer.hover_pos()),
+                                                                ui.input(|i| i.pointer.primary_released()),
+                                                                ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key),
                                                             );
+                                                            if ir.clicked() || drag_release {
+                                                                crate::tool_memory::select(app, item);
+                                                                ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
+                                                            }
                                                         }
-                                                        let drag_release = tool_flyout_release(
-                                                            r,
-                                                            ui.input(|i| i.pointer.hover_pos()),
-                                                            ui.input(|i| i.pointer.primary_released()),
-                                                            ui.data(|d| d.get_temp::<egui::Id>(held_id)) == Some(key),
-                                                        );
-                                                        if ir.clicked() || drag_release {
-                                                            crate::tool_memory::select(app, item);
-                                                            ui.data_mut(|d| d.remove::<(egui::Id, Rect)>(flyout_id));
-                                                        }
-                                                    }
+                                                    });
                                                 });
                                             },
                                         );
@@ -367,18 +380,30 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let close = if was_held || long_press { egui::PopupCloseBehavior::IgnoreClicks } else { egui::PopupCloseBehavior::CloseOnClick };
                 egui::Popup::menu(&sm).open_memory(open).close_behavior(close).at_pointer_fixed().show(|ui| {
                     ui.set_min_width(220.0);
-                    for (id, label) in [
-                        ("view.screenMode.standard", tl!("Standard Screen Mode")),
-                        ("view.screenMode.fullScreenWithMenuBar", tl!("Full Screen Mode With Menu Bar")),
-                        ("view.screenMode.fullScreen", tl!("Full Screen Mode")),
-                    ] {
-                        let on = crate::view_cmds::checked(app, id).unwrap_or(false);
-                        let enabled = crate::view_cmds::is_enabled(app, id).unwrap_or(true);
-                        if ui.add_enabled(enabled, egui::Button::selectable(on, label)).clicked() {
-                            let _ = crate::menus::invoke(app, &ctx, id, json!({}));
-                            ui.close();
+                    // Popup::menu pins its body top_down_justified(Align::Min), which stays
+                    // left-to-right whatever the direction flag; the shared popup body scopes
+                    // itself under RTL, like every menu bar popup.
+                    let rows = |ui: &mut egui::Ui| {
+                        for (id, label) in [
+                            ("view.screenMode.standard", tl!("Standard Screen Mode")),
+                            ("view.screenMode.fullScreenWithMenuBar", tl!("Full Screen Mode With Menu Bar")),
+                            ("view.screenMode.fullScreen", tl!("Full Screen Mode")),
+                        ] {
+                            let on = crate::view_cmds::checked(app, id).unwrap_or(false);
+                            let enabled = crate::view_cmds::is_enabled(app, id).unwrap_or(true);
+                            // Plain Button packs its atoms LTR whatever the direction flag; the
+                            // menu-row atom pins the label to the row's reading start under RTL.
+                            let row = crate::menus::menu_keys::menu_row_button_atom(label.into(), None, ui.style().right_to_left)
+                                .selected(on)
+                                .frame_when_inactive(on)
+                                .frame(true);
+                            if ui.add_enabled(enabled, row).clicked() {
+                                let _ = crate::menus::invoke(app, &ctx, id, json!({}));
+                                ui.close();
+                            }
                         }
-                    }
+                    };
+                    crate::menus::popup_body(ui, rows);
                 });
             });
         });
@@ -575,5 +600,212 @@ pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, two_column
 fn chip_command(app: &mut PhotocraftApp, id: &str) {
     if app.run(id, json!({})).is_ok() {
         crate::type_tool::foreground_changed(app);
+    }
+}
+
+#[cfg(test)]
+mod rtl_direction_tests {
+    use super::*;
+
+    /// One toolbar frame; returns the painted texts as (anchor x, text).
+    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) -> Vec<(f32, String)> {
+        fn collect(shape: &egui::Shape, out: &mut Vec<(f32, String)>) {
+            match shape {
+                egui::Shape::Text(t) => out.push((t.pos.x, t.galley.text().to_string())),
+                egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        let mut out = ctx.run_ui(
+            egui::RawInput { time: Some(time), events, screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 1800.0))), ..Default::default() },
+            |ui| toolbar(app, ui),
+        );
+        out.textures_delta.clear();
+        let mut texts = Vec::new();
+        out.shapes.iter().for_each(|c| collect(&c.shape, &mut texts));
+        texts
+    }
+
+    /// Open the Brush slot's flyout with a long press; returns its area rect and the last pass's texts.
+    fn open_brush_flyout(app: &mut PhotocraftApp, ctx: &egui::Context) -> (Rect, Vec<(f32, String)>) {
+        frame(app, ctx, 0.0, vec![]);
+        frame(app, ctx, 0.1, vec![]);
+        let index = TOOL_SECTIONS.iter().flat_map(|s| s.iter()).position(|slot| slot.contains(&Tool::Brush)).unwrap();
+        let bx = if Tokens::get(ctx).pro { 30.0 } else { 36.0 };
+        let mut buttons: Vec<Rect> = ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, w)| w.iter())
+                .filter(|w| w.rect.size() == egui::Vec2::splat(bx) && w.sense.senses_click())
+                .map(|w| w.rect)
+                .collect()
+        });
+        buttons.sort_by(|a, b| a.top().total_cmp(&b.top()));
+        let at = buttons[index].center();
+        let pointer = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        frame(app, ctx, 1.0, vec![egui::Event::PointerMoved(at), pointer(at, true)]);
+        frame(app, ctx, 1.36, vec![]);
+        frame(app, ctx, 1.4, vec![pointer(at, false)]);
+        let texts = frame(app, ctx, 1.45, vec![]);
+        let menu = ctx.memory(|m| m.area_rect(egui::Id::unique(("tool-slot", index)).with("flyout"))).expect("the flyout is open");
+        (menu, texts)
+    }
+
+    /// The flyout's clickable 26-point rows from the last pass.
+    fn flyout_rows(ctx: &egui::Context, menu: Rect) -> Vec<Rect> {
+        ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, w)| w.iter())
+                .filter(|w| w.sense.senses_click() && (w.rect.height() - 26.0).abs() < 0.5 && menu.contains(w.rect.center()))
+                .map(|w| w.rect)
+                .collect()
+        })
+    }
+
+    /// In a right-to-left UI the flyout's rows and labels start from the right (the reading
+    /// start), not the end; the shortcut stays at the row's left (reading end).
+    #[test]
+    fn rtl_flyout_rows_start_from_the_right() {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        let (menu, texts) = open_brush_flyout(&mut app, &ctx);
+        let rows = flyout_rows(&ctx, menu);
+        assert_eq!(rows.len(), 4, "the Brush flyout's four rows in {menu:?}");
+        for r in &rows {
+            assert!(r.right() > menu.center().x && menu.right() - r.right() < 12.0, "row hugs the reading start (right): {r:?} in {menu:?}");
+        }
+        let label_x = texts.iter().find(|(_, s)| s == tl!(Tool::Brush.label())).map(|(x, _)| *x).expect("the Brush label");
+        assert!(label_x > menu.center().x, "the label leads from the right: {label_x} in {menu:?}");
+    }
+
+    /// LTR guard: the same rows keep hugging the left edge, pixel-identical to before.
+    #[test]
+    fn ltr_flyout_rows_start_from_the_left() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        let (menu, texts) = open_brush_flyout(&mut app, &ctx);
+        let rows = flyout_rows(&ctx, menu);
+        assert_eq!(rows.len(), 4, "the Brush flyout's four rows in {menu:?}");
+        for r in &rows {
+            assert!(r.left() < menu.center().x && r.left() - menu.left() < 12.0, "row hugs the left: {r:?} in {menu:?}");
+        }
+        let label_x = texts.iter().find(|(_, s)| s == tl!(Tool::Brush.label())).map(|(x, _)| *x).expect("the Brush label");
+        assert!(label_x < menu.center().x, "the label leads from the left: {label_x} in {menu:?}");
+    }
+
+    /// The flyout body is exactly as wide as its rows in both directions: in RTL the frame's
+    /// min_rect would otherwise span the area's full width, leaving trailing slack (the same
+    /// labels render, so the widths must match).
+    #[test]
+    fn flyout_width_matches_ltr_in_rtl() {
+        let mut ltr_app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let ltr_ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ltr_ctx, crate::theme::ThemeKind::ALL[0]);
+        let (ltr_menu, _) = open_brush_flyout(&mut ltr_app, &ltr_ctx);
+
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let mut rtl_app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let rtl_ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&rtl_ctx, crate::theme::ThemeKind::ALL[0]);
+        let (rtl_menu, _) = open_brush_flyout(&mut rtl_app, &rtl_ctx);
+
+        assert!(
+            (rtl_menu.width() - ltr_menu.width()).abs() < 1.0,
+            "RTL flyout width {} matches LTR {} (no trailing slack)",
+            rtl_menu.width(),
+            ltr_menu.width()
+        );
+        let rows = flyout_rows(&rtl_ctx, rtl_menu);
+        assert_eq!(rows.len(), 4, "the Brush flyout's four rows in {rtl_menu:?}");
+        for r in &rows {
+            assert!(rtl_menu.width() - r.width() < 24.0, "the body is only frame margins wider than its rows: {r:?} in {rtl_menu:?}");
+        }
+    }
+
+    /// Secondary-click the last toolbar button (the screen-mode control, enabled once a
+    /// document is open, #9349) to open its mode list; returns the popup's area rect and the
+    /// last pass's painted texts as (anchor x, text).
+    fn open_screen_mode_popup(app: &mut PhotocraftApp, ctx: &egui::Context) -> (Rect, Vec<(f32, String)>) {
+        frame(app, ctx, 0.0, vec![]);
+        frame(app, ctx, 0.1, vec![]);
+        let bx = if Tokens::get(ctx).pro { 30.0 } else { 36.0 };
+        let mut buttons: Vec<(egui::Id, Rect)> = ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, w)| w.iter())
+                .filter(|w| w.rect.size() == egui::Vec2::splat(bx) && w.sense.senses_click())
+                .map(|w| (w.id, w.rect))
+                .collect()
+        });
+        buttons.sort_by(|a, b| a.1.top().total_cmp(&b.1.top()));
+        let (sm_id, sm_rect) = *buttons.last().expect("the screen-mode button is the last toolbar button");
+        let at = sm_rect.center();
+        let secondary = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+        frame(app, ctx, 1.0, vec![egui::Event::PointerMoved(at), secondary(true)]);
+        frame(app, ctx, 1.1, vec![secondary(false)]);
+        let texts = frame(app, ctx, 1.2, vec![]);
+        let menu = ctx.memory(|m| m.area_rect(sm_id.with("popup"))).expect("the screen-mode popup is open");
+        (menu, texts)
+    }
+
+    /// An app with one document open, so the screen-mode control is enabled (#9349).
+    fn screen_mode_app() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let doc = photocraft_doc::Document::with_background(
+            "screen-mode-test",
+            photocraft_doc::Size::new(8, 8),
+            photocraft_doc::ColorMode::Rgb,
+            photocraft_doc::SampleType::U8,
+            photocraft_doc::Color::WHITE,
+        );
+        app.session.open_document(doc, None);
+        app
+    }
+
+    /// In a right-to-left UI the screen-mode list's rows and labels align to the list's right
+    /// edge (the reading start); the row anchor of a right-aligned label is its right edge.
+    #[test]
+    fn rtl_screen_mode_popup_aligns_to_the_right() {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        crate::theme::set_direction(&ctx, true);
+        let mut app = screen_mode_app();
+        let (menu, texts) = open_screen_mode_popup(&mut app, &ctx);
+        let rows: Vec<Rect> = ctx.viewport(|v| {
+            v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.sense.senses_click() && w.rect.height() < 40.0 && w.rect.width() > menu.width() - 20.0).map(|w| w.rect).collect()
+        });
+        assert_eq!(rows.len(), 3, "the screen-mode list's three rows in {menu:?}");
+        for r in &rows {
+            assert!(menu.right() - r.right() < 12.0, "row hugs the reading start (right): {r:?} in {menu:?}");
+        }
+        let label_x = texts.iter().find(|(_, s)| s == tl!("Standard Screen Mode")).map(|(x, _)| *x).expect("the Standard row label");
+        eprintln!("DEBUG menu={menu:?} rows={rows:?} texts={texts:?}");
+        assert!(label_x > menu.center().x, "the label leads from the right: {label_x} in {menu:?}");
+    }
+
+    /// LTR guard: the same list keeps its labels at the left edge, pixel-identical to before.
+    #[test]
+    fn ltr_screen_mode_popup_aligns_to_the_left() {
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        let mut app = screen_mode_app();
+        let (menu, texts) = open_screen_mode_popup(&mut app, &ctx);
+        let rows: Vec<Rect> = ctx.viewport(|v| {
+            v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.sense.senses_click() && w.rect.height() < 40.0 && w.rect.width() > menu.width() - 20.0).map(|w| w.rect).collect()
+        });
+        assert_eq!(rows.len(), 3, "the screen-mode list's three rows in {menu:?}");
+        for r in &rows {
+            assert!(r.left() - menu.left() < 12.0, "row hugs the left: {r:?} in {menu:?}");
+        }
+        let label_x = texts.iter().find(|(_, s)| s == tl!("Standard Screen Mode")).map(|(x, _)| *x).expect("the Standard row label");
+        assert!(label_x < menu.center().x, "the label leads from the left: {label_x} in {menu:?}");
     }
 }

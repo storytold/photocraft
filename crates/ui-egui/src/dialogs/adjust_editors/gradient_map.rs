@@ -77,6 +77,8 @@ fn gradient_map_strip(ui: &mut egui::Ui, stops: &mut Vec<Stop>, cx: &EditorCx, s
     let (outer, resp) = ui.allocate_exact_size(vec2(w, 44.0), Sense::click_and_drag());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Gradient stops")));
     let bar = Rect::from_min_max(outer.min + vec2(8.0, 2.0), pos2(outer.right() - 8.0, outer.top() + 26.0));
+    // The ramp stays physical in a right-to-left UI: its left end is the first stop, so the
+    // colours keep addressing the same tones.
     let x_of = |loc: f32| bar.left() + loc * bar.width();
     let loc_of = |x: f32| ((x - bar.left()) / bar.width().max(1.0)).clamp(0.0, 1.0);
     let hit =
@@ -149,6 +151,16 @@ fn gradient_map_strip(ui: &mut egui::Ui, stops: &mut Vec<Stop>, cx: &EditorCx, s
 }
 
 pub(super) fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
+    let mut edit = Edit::default();
+    // The editor mirrors in a right-to-left UI: the body layout right-aligns the blocks and
+    // flips the rows. The gradient strip keeps its physical order — its colours address the
+    // tones, not the reading direction.
+    ui.with_layout(crate::direction::body_layout(), |ui| edit = gradient_map_body(ui, v, cx));
+    edit
+}
+
+/// The Gradient Map editor, drawn inside the mirrored body scope.
+fn gradient_map_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     let mut e = Edit::default();
     let mut stops = read_stops(v);
@@ -168,30 +180,33 @@ pub(super) fn gradient_map(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> E
             .icon(widgets::chevron_icon)
             .close_behavior(close)
             .show_ui(ui, |ui| {
-                let gear = crate::icons::button(ui, "settings", 24.0, false, tl!("Gradient Preset Options"));
-                egui::containers::menu::SubMenu::new().show(ui, &gear, |ui| {
-                    if ui.button(tl!("Import .GRD")).clicked() {
-                        e.import_gradients = true;
-                        ui.close();
+                // The library mirrors with the dialog: the names read from the right.
+                ui.with_layout(crate::direction::body_layout(), |ui| {
+                    let gear = crate::icons::button(ui, "settings", 24.0, false, tl!("Gradient Preset Options"));
+                    egui::containers::menu::SubMenu::new().show(ui, &gear, |ui| {
+                        if ui.button(tl!("Import .GRD")).clicked() {
+                            e.import_gradients = true;
+                            ui.close();
+                        }
+                    });
+                    ui.separator();
+                    for g in &cx.gradients {
+                        ui.label(RichText::new(&g.name).color(t.text_faint));
+                        for p in &g.items {
+                            ui.horizontal(|ui| {
+                                // A map has no transparency: colour stops only, shown opaque.
+                                let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
+                                let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
+                                crate::preset_panels::paint_gradient(ui, r, &rgba);
+                                // Both, not short-circuited: the name is drawn either way.
+                                let name = ui.selectable_label(false, &p.name);
+                                if press.chosen(ui, &swatch) | press.chosen(ui, &name) {
+                                    picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
+                                }
+                            });
+                        }
                     }
                 });
-                ui.separator();
-                for g in &cx.gradients {
-                    ui.label(RichText::new(&g.name).color(t.text_faint));
-                    for p in &g.items {
-                        ui.horizontal(|ui| {
-                            // A map has no transparency: colour stops only, shown opaque.
-                            let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
-                            let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
-                            crate::preset_panels::paint_gradient(ui, r, &rgba);
-                            // Both, not short-circuited: the name is drawn either way.
-                            let name = ui.selectable_label(false, &p.name);
-                            if press.chosen(ui, &swatch) | press.chosen(ui, &name) {
-                                picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
-                            }
-                        });
-                    }
-                }
             });
         press.after(&combo.response);
         let _ = combo.response.accessible_name(tl!("Preset:"));
@@ -284,4 +299,175 @@ pub fn gradient_presets(app: &PhotocraftApp, kind: &str) -> Vec<Group<GradientPr
 pub fn swatches(app: &PhotocraftApp) -> [[f32; 3]; 2] {
     let c = |x: [f32; 4]| [x[0], x[1], x[2]];
     [c(app.session.tools.foreground), c(app.session.tools.background)]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    /// The Gradient Map editor over an empty parameter set, drawn in `dir`.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, Value> {
+        harness_with(dir, Vec::new())
+    }
+
+    /// The Gradient Map editor drawn in `dir`, its preset picker offering the library `lib`.
+    fn harness_with(dir: Dir, lib: Vec<Group<GradientPreset>>) -> egui_kittest::Harness<'static, Value> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(380.0, 420.0)).build_ui_state(
+            move |ui, v: &mut Value| {
+                // The scope covers every frame, including the frames of a later gesture: the
+                // guard would otherwise die when this function returns.
+                let _dir = crate::direction::direction_scope(dir);
+                // The fonts install after the harness's first frame; skip that one.
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                let cx = EditorCx {
+                    mem: egui::Id::unique("gm-rtl"),
+                    hist: None,
+                    gray: false,
+                    swatches: [[0.0; 3], [1.0; 3]],
+                    gradients: lib.clone(),
+                    dialog: true,
+                    dynamic_color_sliders: true,
+                    isolated_curve: None,
+                };
+                gradient_map(ui, v, &cx);
+            },
+            json!({}),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    }
+
+    /// The rect of the widget named `name`: a caption that names a control is skipped.
+    fn rect_of(h: &egui_kittest::Harness<'_, Value>, name: &str) -> egui::Rect {
+        h.query_all(egui_kittest::kittest::by().label(name).include_labels())
+            .rfind(|n| n.accesskit_node().role() != egui::accesskit::Role::Label)
+            .map(|n| n.rect())
+            .or_else(|| h.query_all_by_label(name).last().map(|n| n.rect()))
+            .unwrap_or_else(|| panic!("{name} not found"))
+    }
+
+    /// The stop locations the editor wrote, sorted.
+    fn stop_locations(h: &egui_kittest::Harness<'_, Value>) -> Vec<f32> {
+        let mut ts: Vec<f32> = h
+            .state()
+            .get("stops")
+            .and_then(Value::as_array)
+            .map(|a| a.iter().filter_map(|s| s.as_array()?.first()?.as_f64()).map(|t| t as f32).collect())
+            .unwrap_or_default();
+        ts.sort_by(f32::total_cmp);
+        ts
+    }
+
+    /// The preset picker's swatch: a 48x16 painted mesh, which has no accesskit node, so its
+    /// rect is read back from the painted mesh's bounds.
+    fn swatch_rect(h: &egui_kittest::Harness<'_, Value>) -> egui::Rect {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Mesh(m) => {
+                    let mut min = egui::pos2(f32::INFINITY, f32::INFINITY);
+                    let mut max = egui::pos2(f32::NEG_INFINITY, f32::NEG_INFINITY);
+                    for v in &m.vertices {
+                        min = min.min(v.pos);
+                        max = max.max(v.pos);
+                    }
+                    let r = egui::Rect::from_min_max(min, max);
+                    ((r.width() - 48.0).abs() < 1.0 && (r.height() - 16.0).abs() < 1.0).then_some(r)
+                }
+                _ => None,
+            })
+            .next()
+            .unwrap_or_else(|| panic!("the preset swatch mesh"))
+    }
+
+    /// Open the preset combo's list with a plain click: the PressCombo opens on the press and
+    /// the release on the box leaves the list open for a second click.
+    fn open_preset_popup(h: &mut egui_kittest::Harness<'_, Value>) {
+        let at = h.query_all_by_role(egui::accesskit::Role::ComboBox).last().unwrap_or_else(|| panic!("the preset combo")).rect().center();
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(3);
+    }
+
+    /// The editor mirrors in a right-to-left UI: the rows read from the right and the blocks hug
+    /// the right edge of the column.
+    #[test]
+    fn gradient_map_editor_mirrors_under_rtl() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+
+        let ltr_reverse = rect_of(&ltr, "Reverse");
+        let ltr_dither = rect_of(&ltr, "Dither");
+        assert!(ltr_reverse.left() < ltr_dither.left(), "LTR reads left to right: {ltr_reverse:?} {ltr_dither:?}");
+
+        let rtl_reverse = rect_of(&rtl, "Reverse");
+        let rtl_dither = rect_of(&rtl, "Dither");
+        assert!(rtl_reverse.left() > rtl_dither.left(), "RTL reads right to left: {rtl_reverse:?} {rtl_dither:?}");
+
+        let ltr_strip = rect_of(&ltr, "Gradient stops");
+        let ltr_add = rect_of(&ltr, "Add Stop");
+        assert!((ltr_strip.left() - ltr_add.left()).abs() < 2.0, "the blocks start at the left in LTR: {ltr_strip:?} {ltr_add:?}");
+
+        let rtl_strip = rect_of(&rtl, "Gradient stops");
+        let rtl_add = rect_of(&rtl, "Add Stop");
+        assert!((rtl_strip.right() - rtl_add.right()).abs() < 2.0, "the blocks end at the right in RTL: {rtl_strip:?} {rtl_add:?}");
+        assert!((rtl_strip.width() - ltr_strip.width()).abs() < 1.0, "the strip keeps its width: {rtl_strip:?} {ltr_strip:?}");
+    }
+
+    /// The ramp stays physical in a right-to-left UI: its left end is still the first stop.
+    #[test]
+    fn gradient_map_ramp_keeps_its_physical_order_under_rtl() {
+        let mut h = harness(Dir::Rtl);
+        let strip = rect_of(&h, "Gradient stops");
+        // The bar sits inside the widget, inset by 8 pt on each side.
+        let at = egui::pos2(strip.left() + 8.0 + (strip.width() - 16.0) * 0.1, strip.top() + 12.0);
+        h.hover_at(at);
+        h.run_steps(1);
+        h.drag_at(at);
+        h.run_steps(1);
+        h.drop_at(at);
+        h.run_steps(3);
+        let stops = stop_locations(&h);
+        assert_eq!(stops.len(), 3, "the click adds a stop: {stops:?}");
+        assert!(stops[1] < 0.2, "the left end is still the first stop: {stops:?}");
+    }
+
+    /// The preset library's rows mirror in a right-to-left UI — the swatch sits right of the
+    /// gradient name — and picking the swatch still writes its stops.
+    #[test]
+    fn gradient_map_preset_popup_mirrors_and_picks() {
+        let lib = || vec![Group::new("Mine", vec![GradientPreset::new("My Teal", &["#008080", "#ffee00"])])];
+        let mut ltr = harness_with(Dir::Ltr, lib());
+        let mut rtl = harness_with(Dir::Rtl, lib());
+
+        let row = |h: &mut egui_kittest::Harness<'_, Value>| {
+            open_preset_popup(h);
+            (h.get_by_label("My Teal").rect(), swatch_rect(h))
+        };
+        let (ltr_name, ltr_swatch) = row(&mut ltr);
+        let (rtl_name, rtl_swatch) = row(&mut rtl);
+        assert!(ltr_swatch.right() < ltr_name.left(), "LTR: the swatch is left of the name: {ltr_swatch:?} {ltr_name:?}");
+        assert!(rtl_swatch.left() > rtl_name.right(), "RTL: the swatch is right of the name: {rtl_swatch:?} {rtl_name:?}");
+
+        for (h, swatch) in [(&mut ltr, ltr_swatch), (&mut rtl, rtl_swatch)] {
+            let at = swatch.center();
+            h.hover_at(at);
+            h.run_steps(1);
+            h.drag_at(at);
+            h.run_steps(1);
+            h.drop_at(at);
+            h.run_steps(3);
+            let hexes: Vec<&Value> = h.state().get("stops").and_then(Value::as_array).map(|a| a.iter().filter_map(|s| s.get(1)).collect()).unwrap_or_default();
+            assert_eq!(hexes, vec![&json!("#008080"), &json!("#ffee00")], "picking the swatch writes its stops");
+        }
+    }
 }

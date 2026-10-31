@@ -110,23 +110,12 @@ fn the_close_box_and_the_title_drag_keep_apart() {
     let frame = rects(&h.ctx)[0];
     assert!((x.center().y - title.center().y).abs() < 2.0 && x.left() > title.right(), "the × is on the title row: {x:?}, {title:?}");
     assert!(frame.right() - x.right() < 16.0, "at its right end: {x:?} in {frame:?}");
-    let drag = |h: &mut egui_kittest::Harness<'static, PhotocraftApp>, from: egui::Pos2, to: egui::Pos2| {
-        h.hover_at(from);
-        h.drag_at(from);
-        h.run_steps(2);
-        for i in 1..=8 {
-            h.hover_at(from + (to - from) * (i as f32 / 8.0));
-            h.run_steps(1);
-        }
-        h.drop_at(to);
-        h.run_steps(3);
-    };
-    drag(&mut h, x.center(), x.center() + egui::vec2(-80.0, 60.0));
+    drag_dialog(&mut h, x.center(), x.center() + egui::vec2(-80.0, 60.0));
     assert_eq!(h.state().ui.dialogs.len(), 1, "a drag from the × doesn't close the dialog");
     assert!((h.get_by_label("Gaussian Blur").rect().min - title.min).length() < 1.0, "nor move it");
     let x = h.get_by_label("Close").rect();
     let beside = x.left_center() - egui::vec2(4.0, 0.0);
-    drag(&mut h, beside, beside + egui::vec2(-120.0, 40.0));
+    drag_dialog(&mut h, beside, beside + egui::vec2(-120.0, 40.0));
     assert_eq!(h.state().ui.dialogs.len(), 1, "a title drag doesn't close the dialog");
     let moved = h.get_by_label("Gaussian Blur").rect().min - title.min;
     assert!((moved - egui::vec2(-120.0, 40.0)).length() < 2.0, "the band beside the × moved the dialog: {moved:?}");
@@ -408,6 +397,19 @@ fn dialog_harness(size: egui::Vec2, command: &str) -> egui_kittest::Harness<'sta
     h
 }
 
+/// Drags the pointer from `from` to `to` in small steps, the way a title-band drag moves a dialog.
+fn drag_dialog(h: &mut egui_kittest::Harness<'static, PhotocraftApp>, from: egui::Pos2, to: egui::Pos2) {
+    h.hover_at(from);
+    h.drag_at(from);
+    h.run_steps(2);
+    for i in 1..=8 {
+        h.hover_at(from + (to - from) * (i as f32 / 8.0));
+        h.run_steps(1);
+    }
+    h.drop_at(to);
+    h.run_steps(3);
+}
+
 /// #3152: Motion Blur's angle is a dial, as in Photoshop. Clicking or dragging it points the
 /// blur; the field still takes the whole -360..360 range.
 #[test]
@@ -552,6 +554,152 @@ fn fit_image_is_as_narrow_as_its_content() {
         // A caption and the field it names share the label; either sits inside the window.
         let node = h.query_all_by_label(label).next().unwrap_or_else(|| panic!("{label} in the dialog"));
         assert!(window.contains_rect(node.rect()), "{label} inside the window");
+    }
+}
+
+/// RTL twin of `the_close_box_and_the_title_drag_keep_apart`: the × sits at the title band's
+/// left end, and the band beside it — now on the ×'s right — still drags the dialog.
+#[test]
+fn rtl_the_close_box_and_the_title_drag_keep_apart() {
+    use egui_kittest::kittest::Queryable;
+    if !CLOSE_BOX {
+        return;
+    }
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    let mut h = dialog_harness(egui::vec2(1280.0, 800.0), "filter.blur.gaussianBlur");
+    let title = h.get_by_label("Gaussian Blur").rect();
+    let x = h.get_by_label("Close").rect();
+    let frame = rects(&h.ctx)[0];
+    assert!((x.center().y - title.center().y).abs() < 2.0 && x.right() < title.left(), "the × is on the title row: {x:?}, {title:?}");
+    assert!(x.left() - frame.left() < 16.0, "at the band's left end: {x:?} in {frame:?}");
+    drag_dialog(&mut h, x.center(), x.center() + egui::vec2(80.0, 60.0));
+    assert_eq!(h.state().ui.dialogs.len(), 1, "a drag from the × doesn't close the dialog");
+    assert!((h.get_by_label("Gaussian Blur").rect().min - title.min).length() < 1.0, "nor move it");
+    let x = h.get_by_label("Close").rect();
+    let beside = x.right_center() + egui::vec2(4.0, 0.0);
+    drag_dialog(&mut h, beside, beside + egui::vec2(120.0, 40.0));
+    assert_eq!(h.state().ui.dialogs.len(), 1, "a title drag doesn't close the dialog");
+    let moved = h.get_by_label("Gaussian Blur").rect().min - title.min;
+    assert!((moved - egui::vec2(120.0, 40.0)).length() < 2.0, "the band beside the × moved the dialog: {moved:?}");
+}
+
+/// The RTL body scope right-aligns the blocks; it must not stretch the frame to the column's
+/// full width: each dialog opens as wide in RTL as in LTR (dialog-host Risks a).
+#[test]
+fn rtl_dialogs_open_as_wide_as_their_ltr_twins() {
+    use egui_kittest::Harness;
+    let width = |dir: crate::text::direction::Dir, command: Option<&str>| -> f32 {
+        let _dir = crate::text::direction::direction_scope(dir);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        match command {
+            Some(cmd) => {
+                crate::filter_dialog::open(h.state_mut(), cmd).unwrap();
+            }
+            None => {
+                h.state_mut().ui.open_dialog(DialogKind::About, serde_json::Map::new());
+            }
+        }
+        h.run_steps(4);
+        rects(&h.ctx)[0].width()
+    };
+    for command in [Some("filter.blur.gaussianBlur"), None] {
+        let ltr = width(crate::text::direction::Dir::Ltr, command);
+        let rtl = width(crate::text::direction::Dir::Rtl, command);
+        let name = if command.is_some() { "Gaussian Blur" } else { "About" };
+        assert!((ltr - rtl).abs() < 1.0, "{name}: LTR {ltr} vs RTL {rtl}");
+    }
+}
+
+/// RTL: the footer's buttons mirror ([Cancel][OK] reading left to right, OK at the reading
+/// start) and the group hugs the reading end — the dialog's left edge here. The Tab walk is the
+/// widgets twins' (`rtl_dialog_buttons_keep_the_tab_order`).
+#[test]
+fn rtl_footer_buttons_mirror_and_hug_the_reading_end() {
+    use egui_kittest::kittest::Queryable;
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    let h = dialog_harness(egui::vec2(1280.0, 800.0), "filter.blur.gaussianBlur");
+    let ok = h.get_by_label("OK").rect();
+    let cancel = h.get_by_label("Cancel").rect();
+    let frame = rects(&h.ctx)[0];
+    assert!(ok.right() > cancel.right(), "mirrored visual order: {ok:?} vs {cancel:?}");
+    assert!(cancel.left() - frame.left() < 40.0, "the group hugs the reading end: {cancel:?} in {frame:?}");
+}
+
+/// RTL: the About pills read from the right, the first tab at the reading start, and the
+/// about blurb's galley hugs the dialog's reading-start edge — the right edge in RTL, the
+/// left edge in LTR (the LTR twin keeps the default left placement).
+#[test]
+fn rtl_about_tabs_read_from_the_right() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let blurb = "PhotoCraft — an open-source, native image editor written in Rust.";
+    for dir in [crate::text::direction::Dir::Ltr, crate::text::direction::Dir::Rtl] {
+        let _rtl = crate::text::direction::direction_scope(dir);
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.state_mut().ui.open_dialog(DialogKind::About, serde_json::Map::new());
+        h.run_steps(4);
+        let about = h.get_by_label("About").rect();
+        let contributors = h.get_by_label("Contributors").rect();
+        let models = h.get_by_label("Models").rect();
+        let frame = rects(&h.ctx)[0];
+        if dir == crate::text::direction::Dir::Rtl {
+            assert!(
+                about.right() > contributors.right() && contributors.right() > models.right(),
+                "reading order right to left: {about:?} {contributors:?} {models:?}"
+            );
+            assert!(frame.right() - about.right() < 40.0, "the first pill starts at the reading start: {about:?} in {frame:?}");
+        }
+        fn blurb_edges(shape: &egui::Shape, text: &str, edges: &mut Vec<(f32, f32)>) {
+            match shape {
+                egui::Shape::Text(t) if t.galley.job.text == text => edges.push((t.pos.x, t.pos.x + t.galley.rect.right())),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| blurb_edges(s, text, edges)),
+                _ => {}
+            }
+        }
+        let mut edges = Vec::new();
+        h.output().shapes.iter().for_each(|s| blurb_edges(&s.shape, blurb, &mut edges));
+        let (left, right) = edges.into_iter().next().unwrap_or_else(|| panic!("`{blurb}` painted"));
+        if dir == crate::text::direction::Dir::Rtl {
+            assert!(frame.right() - right < 40.0, "the blurb hugs the reading start: right {right} in {frame:?}");
+        } else {
+            assert!(left - frame.left() < 40.0, "LTR unchanged: blurb left {left} in {frame:?}");
+        }
+    }
+}
+
+/// RTL twin of the picker's inset checks: the vertical insets, the fit and the mirrored margin
+/// hold, and the OK / Cancel stack stays one flush block inside the padding. Which side the
+/// stack hugs is the picker body's own explicit layout (`color_picker_ui`), not the host's.
+#[test]
+fn rtl_color_picker_keeps_its_insets_and_a_flush_button_stack() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    for size in [egui::vec2(760.0, 480.0), egui::vec2(960.0, 640.0)] {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(size).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        crate::color_picker_ui::open(h.state_mut(), "foreground");
+        h.run_steps(4);
+        let frame = rects(&h.ctx)[0];
+        let title = h.get_by_label("Color Picker (Foreground Color)").rect();
+        let ok = h.get_by_label("OK").rect();
+        let cancel = h.get_by_label("Cancel").rect();
+        let web = h.get_by_label("Only Web Colors").rect();
+        assert!((ok.right() - cancel.right()).abs() < 1.0 || (ok.left() - cancel.left()).abs() < 1.0, "a flush stack: {ok:?} vs {cancel:?}");
+        assert!(ok.left() - frame.left() >= 16.0 && frame.right() - ok.right() >= 16.0, "buttons inside the window's padding: {ok:?} in {frame:?}");
+        assert!(frame.bottom() - web.bottom() >= 16.0, "checkbox has comfortable bottom padding");
+        assert!(title.top() - frame.top() >= 16.0, "title has top padding");
+        assert!(frame.right() - title.right() < 40.0, "the title row runs to the reading start: {title:?} in {frame:?}");
+        assert!(egui::Rect::from_min_size(egui::Pos2::ZERO, size).contains_rect(frame), "padded picker fits {size:?}: {frame:?}");
+        // The margin on the mirrored side must stay part of the dialog, clear of the canvas.
+        let margin = egui::pos2(frame.right() - 8.0, web.center().y);
+        h.hover_at(margin);
+        h.run_steps(1);
+        assert!(free_pointer_over(&h.ctx, egui::Rect::from_min_size(egui::Pos2::ZERO, size)).is_none());
     }
 }
 

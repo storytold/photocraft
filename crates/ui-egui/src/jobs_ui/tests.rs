@@ -1097,3 +1097,140 @@ fn open_identity_keeps_same_poll_results_in_the_profile_queue() {
     assert!(app.held_opens.is_empty());
     control.assert_untouched(&app);
 }
+
+/// A progress bar's fill grows from the left in a left-to-right UI and from the right in a
+/// right-to-left one; the indeterminate segment travels the other way.
+#[test]
+fn the_progress_bar_fill_mirrors() {
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 8.0));
+    {
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let fill = crate::widgets::progress_fill(rect, 0.4, rect.height());
+        assert!((fill.left() - 0.0).abs() < 0.01 && (fill.right() - 40.0).abs() < 0.01, "LTR: {fill:?}");
+    }
+    {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let fill = crate::widgets::progress_fill(rect, 0.4, rect.height());
+        assert!((fill.left() - 60.0).abs() < 0.01 && (fill.right() - 100.0).abs() < 0.01, "RTL: {fill:?}");
+    }
+    // The indeterminate segment slides toward the reading end: left in LTR, right in RTL.
+    {
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let fill = crate::widgets::progress_travel(rect, 0.3125);
+        assert!((fill.left() - 2.5).abs() < 0.01 && (fill.right() - 32.5).abs() < 0.01, "LTR: {fill:?}");
+    }
+    {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let fill = crate::widgets::progress_travel(rect, 0.3125);
+        assert!((fill.left() - 67.5).abs() < 0.01 && (fill.right() - 97.5).abs() < 0.01, "RTL: {fill:?}");
+    }
+    // A track that does not start at the origin: the RTL segment mirrors the LTR one about the
+    // track's centre and stays inside the track.
+    let track = egui::Rect::from_min_size(egui::pos2(1100.0, 0.0), egui::vec2(140.0, 8.0));
+    let ltr_fill = {
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        crate::widgets::progress_travel(track, 0.3125)
+    };
+    let rtl_fill = {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        crate::widgets::progress_travel(track, 0.3125)
+    };
+    assert!(rtl_fill.left() >= track.left() && rtl_fill.right() <= track.right(), "RTL: the segment stays inside the track: {rtl_fill:?} in {track:?}");
+    let mirrored_left = track.left() + track.right() - ltr_fill.right();
+    let mirrored_right = track.left() + track.right() - ltr_fill.left();
+    assert!((rtl_fill.left() - mirrored_left).abs() < 0.01, "RTL: the segment mirrors the LTR one: {rtl_fill:?} vs {ltr_fill:?}");
+    assert!((rtl_fill.right() - mirrored_right).abs() < 0.01, "RTL: the segment mirrors the LTR one: {rtl_fill:?} vs {ltr_fill:?}");
+}
+
+/// The tab's progress underline grows from the left in a left-to-right UI and from the right in a
+/// right-to-left one.
+#[test]
+fn the_tab_progress_underline_mirrors() {
+    let line = egui::Rect::from_min_size(egui::pos2(1100.0, 20.0), egui::vec2(140.0, 2.0));
+    {
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let fill = crate::widgets::progress_fill(line, 0.4, 0.0);
+        assert!((fill.left() - line.left()).abs() < 0.01, "LTR: the underline starts at the line's left: {fill:?}");
+        assert!((fill.width() - line.width() * 0.4).abs() < 0.01, "LTR: the underline keeps its width: {fill:?}");
+    }
+    {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let fill = crate::widgets::progress_fill(line, 0.4, 0.0);
+        assert!((fill.right() - line.right()).abs() < 0.01, "RTL: the underline ends at the line's right: {fill:?}");
+        assert!((fill.width() - line.width() * 0.4).abs() < 0.01, "RTL: the underline keeps its width: {fill:?}");
+    }
+}
+
+/// The opening card mirrors: in a right-to-left UI the Cancel button sits at the card's reading
+/// end (the left) and the title hugs the right.
+#[test]
+fn the_opening_card_mirrors_in_a_right_to_left_ui() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let job = slow_job(h.state_mut(), &gate);
+    h.state_mut().jobs.opens.clear();
+    h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: "shot.psd".to_string(), path: None, slot: None, order: None });
+    h.state_mut().jobs.focus = Some(job);
+    h.run_steps(4);
+    let r = crate::jobs_ui::open_card_rects(&h.ctx).expect("the opening card was drawn");
+    assert!(r.cancel.right() < r.card.center().x, "RTL: the Cancel sits at the reading end: {:?} in {:?}", r.cancel, r.card);
+    assert!(r.card.contains_rect(r.cancel), "RTL: the Cancel stays inside the card: {:?} in {:?}", r.cancel, r.card);
+    assert!(r.title.right() <= r.card.right() - 10.0, "RTL: the title keeps the card's padding: {:?}", r.title);
+    assert!(r.title.right() > r.card.center().x, "RTL: the title starts at the reading start: {:?}", r.title);
+    gate.store(true, Ordering::Relaxed);
+    h.state_mut().jobs.focus = None;
+    h.state_mut().jobs.opens.clear();
+    h.run_steps(4);
+}
+
+/// The same card in a left-to-right UI keeps the Cancel at the far (right) end.
+#[test]
+fn the_opening_card_keeps_its_cancel_at_the_right_end_in_left_to_right() {
+    let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let job = slow_job(h.state_mut(), &gate);
+    h.state_mut().jobs.opens.clear();
+    h.state_mut().jobs.opens.push(crate::jobs_ui::OpenTab { job, name: "shot.psd".to_string(), path: None, slot: None, order: None });
+    h.state_mut().jobs.focus = Some(job);
+    h.run_steps(4);
+    let r = crate::jobs_ui::open_card_rects(&h.ctx).expect("the opening card was drawn");
+    assert!(r.cancel.left() > r.card.center().x, "LTR: the Cancel sits at the far end: {:?} in {:?}", r.cancel, r.card);
+    assert!(r.title.left() < r.card.center().x, "LTR: the title starts at the reading start: {:?}", r.title);
+    gate.store(true, Ordering::Relaxed);
+    h.state_mut().jobs.focus = None;
+    h.state_mut().jobs.opens.clear();
+    h.run_steps(4);
+}
+
+/// The modal progress dialog mirrors: in a right-to-left UI the Cancel button leads from the
+/// left (the reading end) and the elapsed time follows it.
+#[test]
+fn the_progress_dialog_mirrors_in_a_right_to_left_ui() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let _job = slow_job(h.state_mut(), &gate);
+    frames_until(&mut h, 10, |h| h.query_by_label("Cancel").is_some());
+    let cancel = h.get_by_label("Cancel").rect();
+    let esc = h.get_by_label("Esc to cancel").rect();
+    assert!(cancel.left() < esc.left(), "RTL: the Cancel leads from the left: {cancel:?} vs {esc:?}");
+    gate.store(true, Ordering::Relaxed);
+    h.run_steps(4);
+}
+
+/// The same dialog in a left-to-right UI keeps the Cancel at the far (right) end.
+#[test]
+fn the_progress_dialog_keeps_its_cancel_at_the_right_end_in_left_to_right() {
+    let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+    let mut h = app_harness();
+    let gate = Arc::new(AtomicBool::new(false));
+    let _job = slow_job(h.state_mut(), &gate);
+    frames_until(&mut h, 10, |h| h.query_by_label("Cancel").is_some());
+    let cancel = h.get_by_label("Cancel").rect();
+    let esc = h.get_by_label("Esc to cancel").rect();
+    assert!(cancel.right() > esc.right(), "LTR: the Cancel sits at the far end: {cancel:?} vs {esc:?}");
+    gate.store(true, Ordering::Relaxed);
+    h.run_steps(4);
+}

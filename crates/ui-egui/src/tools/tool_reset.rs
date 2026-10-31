@@ -58,7 +58,11 @@ pub fn invoke(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Resul
 
 /// The confirmation's text.
 pub fn body(ui: &mut egui::Ui) {
-    ui.label(tl!("Reset all tools to their default settings?"));
+    // One direction-aware body: in a left-to-right UI the label keeps egui's default layout; in a
+    // right-to-left one it hugs the reading start and reads from the right.
+    ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
+        ui.label(tl!("Reset all tools to their default settings?"));
+    });
 }
 
 /// OK in the confirmation.
@@ -236,6 +240,7 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
 
     fn app() -> PhotocraftApp {
         let mut s = photocraft_engine::Session::new();
@@ -308,5 +313,27 @@ mod tests {
         let keys: Vec<String> = Tool::ALL.iter().filter_map(|t| sample_all_key(*t)).collect();
         let distinct: std::collections::BTreeSet<&String> = keys.iter().collect();
         assert_eq!((keys.len(), distinct.len()), (12, 12), "one key per tool with the option");
+    }
+
+    /// The confirmation's message drawn in `dir`, with the content area it was drawn in.
+    fn message(dir: crate::direction::Dir) -> (egui::Rect, egui::Rect) {
+        let _scope = crate::direction::direction_scope(dir);
+        let area = std::cell::Cell::new(egui::Rect::ZERO);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 200.0)).build_ui(|ui| {
+            area.set(ui.max_rect());
+            body(ui);
+        });
+        h.run();
+        (h.get_by_label("Reset all tools to their default settings?").rect(), area.get())
+    }
+
+    /// The confirmation reads from the reading start: left in a left-to-right UI, right in a
+    /// right-to-left one.
+    #[test]
+    fn the_confirmation_reads_from_the_reading_start() {
+        let (ltr, ltr_area) = message(crate::direction::Dir::Ltr);
+        let (rtl, rtl_area) = message(crate::direction::Dir::Rtl);
+        assert!((ltr.left() - ltr_area.left()).abs() < 1.0, "left-to-right: the message starts at the left edge: {ltr:?} in {ltr_area:?}");
+        assert!((rtl.right() - rtl_area.right()).abs() < 1.0, "right-to-left: the message ends at the right edge: {rtl:?} in {rtl_area:?}");
     }
 }

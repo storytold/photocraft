@@ -30,9 +30,14 @@ pub(crate) fn open(app: &mut PhotocraftApp, answered: &str, path: &str) {
 }
 
 pub fn body(ui: &mut egui::Ui, fields: &Map<String, Value>) {
-    ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
-    ui.add_space(6.0);
-    ui.label(fields.get("detail").and_then(Value::as_str).unwrap_or_default());
+    // One direction-aware body: in a left-to-right UI the blocks keep egui's default layout; in a
+    // right-to-left one they hug the reading start and the question reads from the right. The
+    // file name inside the message keeps its own left-to-right run.
+    ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
+        ui.label(fields.get("message").and_then(Value::as_str).unwrap_or_default());
+        ui.add_space(6.0);
+        ui.label(fields.get("detail").and_then(Value::as_str).unwrap_or_default());
+    });
 }
 
 /// Replace: the save the prompt held back.
@@ -43,4 +48,41 @@ pub fn confirm(app: &mut PhotocraftApp) -> Result<Value, String> {
 /// Cancel: nothing is written.
 pub fn cancel(app: &mut PhotocraftApp) -> Result<Value, String> {
     app.answer_replace(false)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    /// The prompt's message and detail drawn in `dir`, with the content area they were drawn in.
+    fn drawn(dir: crate::text::direction::Dir) -> (egui::Rect, egui::Rect, egui::Rect) {
+        let _scope = crate::text::direction::direction_scope(dir);
+        let mut fields = Map::new();
+        fields.insert("message".into(), json!("Replace it?"));
+        fields.insert("detail".into(), json!("The name in the save dialog changed."));
+        let area = std::cell::Cell::new(egui::Rect::ZERO);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 200.0)).build_ui(|ui| {
+            area.set(ui.max_rect());
+            body(ui, &fields);
+        });
+        h.run();
+        (h.get_by_label("Replace it?").rect(), h.get_by_label("The name in the save dialog changed.").rect(), area.get())
+    }
+
+    /// The question reads from the reading start: left in a left-to-right UI, right in a
+    /// right-to-left one.
+    #[test]
+    fn the_prompt_reads_from_the_reading_start() {
+        let (ltr, ltr_detail, ltr_area) = drawn(crate::text::direction::Dir::Ltr);
+        let (rtl, rtl_detail, rtl_area) = drawn(crate::text::direction::Dir::Rtl);
+        assert!(
+            (ltr.left() - ltr_area.left()).abs() < 1.0 && (ltr_detail.left() - ltr_area.left()).abs() < 1.0,
+            "left-to-right: the prompt starts at the left edge: {ltr:?} {ltr_detail:?} in {ltr_area:?}"
+        );
+        assert!(
+            (rtl.right() - rtl_area.right()).abs() < 1.0 && (rtl_detail.right() - rtl_area.right()).abs() < 1.0,
+            "right-to-left: the prompt ends at the right edge: {rtl:?} {rtl_detail:?} in {rtl_area:?}"
+        );
+    }
 }

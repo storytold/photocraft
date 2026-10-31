@@ -202,7 +202,7 @@ pub(super) fn axis_sliders(app: &mut PhotocraftApp, ui: &mut egui::Ui, c: &photo
             ui.horizontal(|ui| {
                 let axis_name = axis_label(&axis.0);
                 ui.label(egui::RichText::new(&axis_name).color(t.text_dim));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(crate::direction::trailing(), |ui| {
                     changed |= crate::widgets::value_field(ui, &mut v, min..=max, "", 74.0).accessible_name(axis_name).changed();
                 });
             });
@@ -383,6 +383,20 @@ pub(super) struct FontFieldEdit {
     pub(super) reveal: bool,
 }
 
+/// A row in reading order: `ui.horizontal` in a left-to-right UI, its mirror in a right-to-left
+/// one. The row keeps `ui.horizontal`'s height and alignment.
+fn row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    let size = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, crate::direction::row(), add)
+}
+
+/// `row` with its items top-aligned: `ui.horizontal_top` in a left-to-right UI, its mirror in a
+/// right-to-left one.
+fn row_top<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    let size = ui.available_size_before_wrap();
+    ui.allocate_ui_with_layout(size, crate::direction::row().with_cross_align(egui::Align::Min), add)
+}
+
 /// Shared by the Type options, Character, style and Glyphs panels. Selection changes still
 /// flow through each caller's existing engine command.
 pub(crate) fn family_picker_in(
@@ -497,6 +511,7 @@ pub(crate) fn family_picker_in(
         if revealing {
             edit.reveal = false;
         }
+        let rtl = crate::direction::is_rtl();
         // The filter bar, as in Photoshop: the class list toggle, Show Variable / Favorite /
         // Similar Fonts and Clear All (`font_filters`). The name field itself is the search.
         let filters_id = field.with("filters");
@@ -520,7 +535,7 @@ pub(crate) fn family_picker_in(
             ui.set_max_width(menu_width);
         }
         crate::font_filters::preview_banner(ui, &previewed, &previewed_label, library.preview_text.as_deref(), menu_width);
-        ui.horizontal(|ui| {
+        row(ui, |ui| {
             crate::font_filters::filter_buttons(ui, &mut filters);
             crate::font_filters::clear_all(ui, &mut filters);
         });
@@ -558,7 +573,11 @@ pub(crate) fn family_picker_in(
                 changed = **f != *current;
                 current.clone_from(f);
                 photocraft_text::served::request(f);
-                edit.text = (*shown).to_string();
+                // While a query is active the field keeps the typed text, so Enter's full-name
+                // match still resolves to the family the user named, not the stepped row.
+                if edit.query.is_empty() {
+                    edit.text = (*shown).to_string();
+                }
                 edit.row = Some(next);
                 selected = Some(next);
                 stepped = Some(next);
@@ -590,10 +609,12 @@ pub(crate) fn family_picker_in(
         // the row's whole available height and hold the menu at its full height under a short
         // search result, so the row keeps its room and the line is drawn once the row is laid out.
         let mut divider: Option<f32> = None;
-        let body = ui.horizontal_top(|ui| {
+        let body = row_top(ui, |ui| {
             if !filters.hide_classes {
-                crate::font_filters::class_list(ui, &mut filters);
-                divider = Some(ui.cursor().min.x + 3.0);
+                ui.allocate_ui_with_layout(egui::vec2(class_w, ui.available_height()), crate::direction::row(), |ui| {
+                    crate::font_filters::class_list(ui, &mut filters);
+                });
+                divider = if rtl { Some(ui.cursor().max.x - 3.0) } else { Some(ui.cursor().min.x + 3.0) };
                 ui.add_space(6.0 + ui.spacing().item_spacing.x);
             }
             // The list scrolls under the fixed preview and filters, at its full height or the room
@@ -745,20 +766,28 @@ pub(crate) fn family_picker_in(
                     }
                 })
             });
-            (shown.inner_rect.right(), (!rows.is_empty()).then_some(shown.inner_rect.height()))
+            (shown.inner_rect.left(), shown.inner_rect.right(), (!rows.is_empty()).then_some(shown.inner_rect.height()))
         });
         if let Some(x) = divider {
             ui.painter().vline(x, body.response.rect.y_range(), ui.visuals().widgets.noninteractive.bg_stroke);
         }
-        let (list_right, list_height) = body.inner;
+        let (list_left, list_right, list_height) = body.inner;
         // The list's viewport, while it lists fonts.
         if list_height.is_some() {
             edit.menu_height = list_height;
         }
         // The lists' own extent, from the class list to the font list's scroll bar: the row
-        // itself stretches with the popup, so it can't tell when the popup is too wide.
-        let list_right = list_right + FONT_SCROLL_BAR_WIDTH;
-        let body = egui::Rect::from_min_max(body.response.rect.min, egui::pos2(list_right.min(body.response.rect.right()), body.response.rect.bottom()));
+        // itself stretches with the popup, so it can't tell when the popup is too wide. In a
+        // right-to-left UI the class list sits at the row's right end and the scroll bar on the
+        // list's left, so the extent runs from the list's left edge to the row's right edge.
+        let bar_left = ui.style().right_to_left;
+        let body = if rtl {
+            let area_left = list_left - if bar_left { FONT_SCROLL_BAR_WIDTH } else { 0.0 };
+            egui::Rect::from_min_max(egui::pos2(area_left.min(body.response.rect.left()), body.response.rect.top()), body.response.rect.max)
+        } else {
+            let area_right = list_right + if bar_left { 0.0 } else { FONT_SCROLL_BAR_WIDTH };
+            egui::Rect::from_min_max(body.response.rect.min, egui::pos2(area_right.min(body.response.rect.right()), body.response.rect.bottom()))
+        };
         ui.data_mut(|d| {
             d.insert_temp(filters_id, filters);
             d.insert_temp(expanded_id, expanded);
@@ -847,4 +876,103 @@ pub(super) fn wheel_family_index(index: usize, len: usize, notches: f32) -> Opti
     }
     let last = len - 1;
     Some(if notches < 0.0 { index.saturating_add(steps).min(last) } else { index.saturating_sub(steps) })
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::font_picker_in;
+    use egui::accesskit::Role;
+    use egui::vec2;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use photocraft_engine::prefs::FontPreview;
+
+    struct Picker {
+        current: String,
+        families: Vec<String>,
+        popup: egui::Id,
+    }
+
+    fn picker_harness(dir: crate::direction::Dir) -> Harness<'static, Picker> {
+        let mut families: Vec<String> = (0..20).map(|i| format!("Family {i:02}")).collect();
+        families.push("Zeta Sans".into());
+        let state = Picker { current: "Family 00".into(), families, popup: egui::Id::NULL };
+        let mut h = Harness::builder().with_size(vec2(600.0, 900.0)).with_max_steps(16).build_ui_state(
+            |ui, s: &mut Picker| {
+                s.popup = ui.make_persistent_id(egui::IdSalt::new("type-font")).with("popup");
+                let fams = s.families.clone();
+                font_picker_in(ui, &mut s.current, 170.0, &fams, FontPreview::Off, &[]);
+            },
+            state,
+        );
+        // The app sets the egui flag from the direction (theme::apply); flip only that.
+        h.ctx.all_styles_mut(|s| s.set_right_to_left(dir == crate::direction::Dir::Rtl));
+        h.run();
+        h
+    }
+
+    /// The font menu's chrome mirrors in a right-to-left UI: the class list moves to the
+    /// reading-start side (the right) of the font list, and the filter buttons read before
+    /// Clear All. The font rows stay physical, as each row's sample is painted at its right edge.
+    #[test]
+    fn the_font_menu_chrome_mirrors_in_rtl() {
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let rtl = dir == crate::direction::Dir::Rtl;
+            let _scope = crate::direction::direction_scope(dir);
+            let mut h = picker_harness(dir);
+            h.get_by_role(Role::TextInput).click();
+            h.run();
+            let popup = h.ctx.memory(|m| m.area_rect(h.state().popup)).expect("the font menu is open");
+            let classes = h.get_by_label("All Classes").rect();
+            let buttons = h.get_by_label("Show Variable Fonts").rect();
+            let clear = h.get_by_label("Clear All").rect();
+            let row = h.get_by_label("Family 00").rect();
+            assert!(popup.contains_rect(row), "{dir:?}: the font rows stay inside the menu: {row:?} in {popup:?}");
+            assert_eq!(classes.center().x > row.center().x, rtl, "{dir:?}: class list {classes:?} vs font row {row:?} in {popup:?}");
+            assert_eq!(clear.center().x < buttons.center().x, rtl, "{dir:?}: Clear All {clear:?} vs filter buttons {buttons:?}");
+            if rtl {
+                assert!(classes.right() > popup.right() - 140.0, "{dir:?}: the class list hugs the right: {classes:?} in {popup:?}");
+            } else {
+                assert!(classes.left() < popup.left() + 140.0, "{dir:?}: the class list hugs the left: {classes:?} in {popup:?}");
+            }
+        }
+    }
+
+    /// The axis row mirrors like the app body does: the value field sits at the row's reading
+    /// end — right of the label in a left-to-right UI, left of it in a right-to-left one.
+    #[test]
+    fn the_axis_value_field_sits_at_the_reading_end() {
+        struct AxisRow {
+            value: f32,
+            label: egui::Rect,
+            field: egui::Rect,
+        }
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let rtl = dir == crate::direction::Dir::Rtl;
+            let _scope = crate::direction::direction_scope(dir);
+            let state = AxisRow { value: 400.0, label: egui::Rect::NOTHING, field: egui::Rect::NOTHING };
+            let mut h = Harness::builder().with_size(vec2(400.0, 200.0)).build_ui_state(
+                |ui, s: &mut AxisRow| {
+                    ui.with_layout(crate::direction::body_layout(), |ui| {
+                        ui.horizontal(|ui| {
+                            let label = ui.label("Weight");
+                            let field = ui
+                                .with_layout(crate::direction::trailing(), |ui| {
+                                    crate::widgets::value_field(ui, &mut s.value, 100.0..=900.0, "", 74.0).accessible_name("Weight")
+                                })
+                                .inner;
+                            s.label = label.rect;
+                            s.field = field.rect;
+                        });
+                    });
+                },
+                state,
+            );
+            // The app sets the egui flag from the direction (theme::apply); flip only that.
+            h.ctx.all_styles_mut(|s| s.set_right_to_left(rtl));
+            h.run();
+            let s = h.state();
+            assert_eq!(s.field.center().x > s.label.center().x, !rtl, "{dir:?}: label {:?} vs field {:?}", s.label, s.field);
+        }
+    }
 }

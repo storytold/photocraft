@@ -38,6 +38,18 @@ pub fn dropdown_wheel_hovered<T: PartialEq + Clone>(
     dropdown_with(ui, id, name, current, options, width, true, true)
 }
 
+/// The body of an open dropdown list. egui pins popup bodies left-to-right (`Popup::menu` lays
+/// them out `top_down_justified(Align::Min)` whatever the direction flag), so in a right-to-left
+/// UI the list scopes its own body: rows keep filling the list's width but align to the reading
+/// start. Left-to-right the popup's own layout is used unchanged.
+fn list_body<R>(ui: &mut Ui, add_contents: impl FnOnce(&mut Ui) -> R) -> R {
+    if crate::direction::is_rtl() {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(egui::Layout::top_down_justified(egui::Align::Max)), add_contents).inner
+    } else {
+        add_contents(ui)
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn dropdown_with<T: PartialEq + Clone>(
     ui: &mut Ui,
@@ -65,51 +77,53 @@ fn dropdown_with<T: PartialEq + Clone>(
     let texts: Vec<String> = options.iter().map(|(_, l)| shown(l)).collect();
     let response =
         craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).close_behavior(close).show_ui(ui, |ui| {
-            fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
-            // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
-            let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
-            let shown = options.iter().position(|(v, _)| v == current);
-            if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
-                *current = v.clone();
-                chosen.push(v.clone());
-                reveal = true;
-                keyed = true;
-            }
-            // Over the open list the wheel steps the value too, instead of scrolling the list.
-            over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
-            if over_list {
-                let stepped = wheel_steps(ui, wheel_id, true, current, options);
-                wheeled = !stepped.is_empty();
-                reveal |= wheeled;
-                chosen.extend(stepped);
-            }
-            // The row nearest the pointer, by its distance to each row.
-            let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
-            let mut nearest: Option<(f32, &T)> = None;
-            for ((v, _), text) in options.iter().zip(texts.iter()) {
-                let item = ui.selectable_label(v == current, text.as_str());
-                if reveal && v == current {
-                    item.scroll_to_me(None);
-                }
-                if item.hovered() {
-                    hovered = Some(v.clone());
-                }
-                if let Some(p) = pointer {
-                    let d = (item.rect.top() - p.y).max(p.y - item.rect.bottom()).max(0.0);
-                    if nearest.is_none_or(|(n, _)| d < n) {
-                        nearest = Some((d, v));
-                    }
-                }
-                if press.chosen(ui, &item) {
+            list_body(ui, |ui| {
+                fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
+                // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
+                let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
+                let shown = options.iter().position(|(v, _)| v == current);
+                if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
                     *current = v.clone();
                     chosen.push(v.clone());
+                    reveal = true;
+                    keyed = true;
                 }
-            }
-            // Between two rows (item spacing) the pointer hovers neither; it is still over the list,
-            // so keep previewing the nearest row instead of flashing the current value back (#2553).
-            if hovered.is_none() {
-                hovered = nearest.map(|(_, v)| v.clone());
-            }
+                // Over the open list the wheel steps the value too, instead of scrolling the list.
+                over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
+                if over_list {
+                    let stepped = wheel_steps(ui, wheel_id, true, current, options);
+                    wheeled = !stepped.is_empty();
+                    reveal |= wheeled;
+                    chosen.extend(stepped);
+                }
+                // The row nearest the pointer, by its distance to each row.
+                let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
+                let mut nearest: Option<(f32, &T)> = None;
+                for ((v, _), text) in options.iter().zip(texts.iter()) {
+                    let item = ui.selectable_label(v == current, text.as_str());
+                    if reveal && v == current {
+                        item.scroll_to_me(None);
+                    }
+                    if item.hovered() {
+                        hovered = Some(v.clone());
+                    }
+                    if let Some(p) = pointer {
+                        let d = (item.rect.top() - p.y).max(p.y - item.rect.bottom()).max(0.0);
+                        if nearest.is_none_or(|(n, _)| d < n) {
+                            nearest = Some((d, v));
+                        }
+                    }
+                    if press.chosen(ui, &item) {
+                        *current = v.clone();
+                        chosen.push(v.clone());
+                    }
+                }
+                // Between two rows (item spacing) the pointer hovers neither; it is still over the list,
+                // so keep previewing the nearest row instead of flashing the current value back (#2553).
+                if hovered.is_none() {
+                    hovered = nearest.map(|(_, v)| v.clone());
+                }
+            })
         });
     // A scrubby caption drawn just before the dropdown names it; otherwise its own name does.
     let response = match take_label_scrub_name(ui, response.response.rect) {
@@ -233,34 +247,43 @@ const MENU_EDGE: f32 = 4.0;
 const MENU_MIN_HEIGHT: f32 = 120.0;
 
 /// The colour picker popup of a colour swatch: a click on `swatch` toggles it, a click outside
-/// closes it. While open, its left edge stays where it first showed (at the swatch, or further
-/// left when the window edge needs it), below the swatch or above it as room allows. The picker's
-/// width follows its value readouts, and placing it anew every frame moved it under the pointer,
-/// flipping it from side to side near the right edge of the window (#534).
+/// closes it. While open, its reading-start edge stays where it first showed (the swatch's left
+/// edge, or further left when the window edge needs it; mirrored to the right edge in a
+/// right-to-left UI), below the swatch or above it as room allows. The picker's width follows its
+/// value readouts, and placing it anew every frame moved it under the pointer, flipping it from
+/// side to side near the window's reading-end edge (#534).
 pub fn swatch_popup(swatch: &Response) -> egui::Popup<'static> {
     // Room for the readouts to widen after the picker opened.
     const SLACK: f32 = 32.0;
     let popup = egui::Popup::from_toggle_button_response(swatch).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
     let ctx = &swatch.ctx;
-    let key = popup.get_id().with("left");
+    let rtl = crate::direction::is_rtl();
+    let key = popup.get_id().with(if rtl { "right" } else { "left" });
     if !popup.is_open() {
         ctx.data_mut(|d| d.remove::<f32>(key));
         return popup;
     }
     crate::press_menu::above_parent(ctx, swatch.layer_id, egui::LayerId::new(egui::Order::Foreground, popup.get_id()));
-    // Its width is known from the frame after it opened (egui sizes it unseen first).
-    let left = ctx.data(|d| d.get_temp::<f32>(key)).or_else(|| {
+    // Its width is known from the frame after it opened (egui sizes it unseen first). The pinned
+    // edge is the reading start: the left edge left-to-right, the right edge right-to-left.
+    let edge = ctx.data(|d| d.get_temp::<f32>(key)).or_else(|| {
         let width = popup.get_expected_size()?.x;
         let screen = ctx.content_rect();
-        let left = swatch.rect.left().min(screen.right() - width - SLACK).max(screen.left());
-        ctx.data_mut(|d| d.insert_temp(key, left));
-        Some(left)
+        let edge = if rtl {
+            swatch.rect.right().max(screen.left() + width + SLACK).min(screen.right())
+        } else {
+            swatch.rect.left().min(screen.right() - width - SLACK).max(screen.left())
+        };
+        ctx.data_mut(|d| d.insert_temp(key, edge));
+        Some(edge)
     });
-    let Some(left) = left else { return popup };
-    popup
-        .anchor(Rect::from_x_y_ranges(left..=left, swatch.rect.y_range()))
-        .align(egui::RectAlign::BOTTOM_START)
-        .align_alternatives(&[egui::RectAlign::TOP_START])
+    let Some(edge) = edge else { return popup };
+    let (align, alternatives): (egui::RectAlign, &'static [egui::RectAlign]) = if rtl {
+        (egui::RectAlign::BOTTOM_END, &[egui::RectAlign::TOP_END])
+    } else {
+        (egui::RectAlign::BOTTOM_START, &[egui::RectAlign::TOP_START])
+    };
+    popup.anchor(Rect::from_x_y_ranges(edge..=edge, swatch.rect.y_range())).align(align).align_alternatives(alternatives)
 }
 
 pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name: &str, current: &mut T, options: &[(T, &str, &str)], width: f32) -> bool {
@@ -269,20 +292,22 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name:
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
     let response =
         craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).close_behavior(close).show_ui(ui, |ui| {
-            fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)));
-            let labels: Vec<&str> = options.iter().map(|(_, l, _)| tl!(l)).collect();
-            let shown = options.iter().position(|(v, _, _)| v == current);
-            if let Some((v, _, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
-                *current = v.clone();
-                changed = true;
-            }
-            for (v, l, tip) in options {
-                let item = ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip));
-                if press.chosen(ui, &item) {
+            list_body(ui, |ui| {
+                fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)));
+                let labels: Vec<&str> = options.iter().map(|(_, l, _)| tl!(l)).collect();
+                let shown = options.iter().position(|(v, _, _)| v == current);
+                if let Some((v, _, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
                     *current = v.clone();
                     changed = true;
                 }
-            }
+                for (v, l, tip) in options {
+                    let item = ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip));
+                    if press.chosen(ui, &item) {
+                        *current = v.clone();
+                        changed = true;
+                    }
+                }
+            })
         });
     let response = match take_label_scrub_name(ui, response.response.rect) {
         Some(label) => response.response.labelled_by(label),
@@ -293,4 +318,100 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name:
         response.on_hover_text(tl!(tip));
     }
     changed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::{Event, Modifiers, PointerButton, pos2, vec2};
+
+    /// Draw a swatch button with its [`swatch_popup`] clicked open, in `dir`; returns the swatch's
+    /// rect and the open popup's area rect.
+    fn open_swatch_popup(dir: crate::direction::Dir) -> (Rect, Rect) {
+        let _scope = crate::direction::direction_scope(dir);
+        let ctx = egui::Context::default();
+        crate::theme::set_direction(&ctx, dir == crate::direction::Dir::Rtl);
+        let mut popup_id = egui::Id::unique("swatch-popup");
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
+        let mut frame = |events: Vec<Event>| -> Rect {
+            let mut swatch = Rect::NOTHING;
+            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ui| {
+                let r = ui.put(Rect::from_min_size(pos2(200.0, 20.0), vec2(40.0, 24.0)), egui::Button::new("swatch"));
+                swatch = r.rect;
+                let popup = swatch_popup(&r);
+                popup_id = popup.get_id();
+                popup.show(|ui| {
+                    ui.set_min_width(120.0);
+                    ui.label("picker");
+                });
+            });
+            output.textures_delta.clear();
+            swatch
+        };
+        let swatch = frame(Vec::new());
+        let at = swatch.center();
+        frame(vec![Event::PointerMoved(at)]);
+        frame(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        frame(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        frame(Vec::new());
+        frame(Vec::new());
+        let popup = ctx.memory(|m| m.area_rect(popup_id)).expect("the popup is open and placed");
+        (swatch, popup)
+    }
+
+    /// The swatch popup hangs below the swatch at its reading-start edge: the left edge
+    /// left-to-right, the right edge in a right-to-left UI.
+    #[test]
+    fn the_swatch_popup_aligns_to_the_reading_start_edge() {
+        let (swatch, popup) = open_swatch_popup(crate::direction::Dir::Ltr);
+        assert!((popup.left() - swatch.left()).abs() < 0.5, "LTR: the popup's left edge is at the swatch's left ({popup:?} vs {swatch:?})");
+        assert!((popup.top() - swatch.bottom()).abs() < 0.5, "LTR: it opens below the swatch");
+        let (swatch, popup) = open_swatch_popup(crate::direction::Dir::Rtl);
+        assert!((popup.right() - swatch.right()).abs() < 0.5, "RTL: the popup's right edge is at the swatch's right ({popup:?} vs {swatch:?})");
+        assert!((popup.top() - swatch.bottom()).abs() < 0.5, "RTL: it opens below the swatch");
+    }
+
+    /// Draw a [`dropdown`], press its button to open the list, in `dir`; returns the closed
+    /// button's label rect and the open list's "Beta" item label rect from the painted shapes.
+    fn open_dropdown(dir: crate::direction::Dir) -> (Rect, Rect) {
+        let _scope = crate::direction::direction_scope(dir);
+        let ctx = egui::Context::default();
+        crate::theme::set_direction(&ctx, dir == crate::direction::Dir::Rtl);
+        let options = [("a", "Alpha"), ("b", "Beta"), ("c", "Gamma")];
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 400.0));
+        let text_rect = |shapes: &[egui::epaint::ClippedShape], text: &str| -> Rect {
+            shapes
+                .iter()
+                .find(|c| matches!(&c.shape, egui::Shape::Text(t) if t.galley.text() == text))
+                .unwrap_or_else(|| panic!("no text {text:?} painted"))
+                .shape
+                .visual_bounding_rect()
+        };
+        let frame = |events: Vec<Event>| -> egui::FullOutput {
+            let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), events, ..Default::default() }, |ui| {
+                let mut current = "a";
+                dropdown(ui, "rtl-list-test", "List", &mut current, &options, 120.0);
+            });
+            output.textures_delta.clear();
+            output
+        };
+        let button = text_rect(&frame(Vec::new()).shapes, "Alpha");
+        let at = button.center();
+        frame(vec![Event::PointerMoved(at)]);
+        frame(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE }]);
+        frame(vec![Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE }]);
+        frame(Vec::new());
+        let item = text_rect(&frame(Vec::new()).shapes, "Beta");
+        (button, item)
+    }
+
+    /// An open dropdown list aligns its item rows from the reading start: the item labels start
+    /// at the list's left edge left-to-right, and end at its right edge in a right-to-left UI.
+    #[test]
+    fn open_list_rows_align_from_the_reading_start() {
+        let (button, item) = open_dropdown(crate::direction::Dir::Ltr);
+        assert!((item.left() - button.left()).abs() < 12.0, "LTR: the item label starts at the list's left edge ({item:?} vs button {button:?})");
+        let (button, item) = open_dropdown(crate::direction::Dir::Rtl);
+        assert!((button.right() - item.right()).abs() < 12.0, "RTL: the item label ends at the list's right edge ({item:?} vs button {button:?})");
+    }
 }

@@ -186,8 +186,8 @@ fn level<'a>(items: Vec<Entry<'a>>, prefix: &[String]) -> Vec<Node<'a>> {
 }
 
 /// Where a preset dropped onto `target` lands: (group, folder, index in that group after the
-/// dragged preset is taken out). `after` = dropped on the target's lower (list) or right (grid)
-/// half.
+/// dragged preset is taken out). `after` = dropped on the target's lower (list) or reading-end
+/// (grid) half.
 pub fn drop_target(presets: &[BrushPreset], dragged: &str, target: &str, after: bool) -> Option<(String, Vec<String>, usize)> {
     let t = presets.iter().find(|p| p.name == target)?;
     let members: Vec<&str> = presets.iter().filter(|p| p.group == t.group).map(|p| p.name.as_str()).collect();
@@ -292,9 +292,16 @@ pub fn apply(app: &mut PhotocraftApp, acts: Vec<Action>) {
     }
 }
 
-/// Is the pointer on the second half of `r` (lower in a list, right in a grid)?
+/// Is the pointer on the second half of `r` (lower in a list, reading-end half in a grid)?
 fn second_half(ui: &egui::Ui, r: egui::Rect, grid: bool) -> bool {
-    ui.ctx().pointer_interact_pos().is_some_and(|p| if grid { p.x > r.center().x } else { p.y > r.center().y })
+    ui.ctx().pointer_interact_pos().is_some_and(|p| {
+        if grid {
+            // A mirrored grid's columns run right to left, so its left half is the far half.
+            if crate::direction::is_rtl() { p.x < r.center().x } else { p.x > r.center().x }
+        } else {
+            p.y > r.center().y
+        }
+    })
 }
 
 /// Drag, drop and context menu of one preset cell or row.
@@ -304,7 +311,11 @@ fn preset_interactions(ui: &egui::Ui, resp: &egui::Response, r: egui::Rect, p: &
     if let Some(d) = resp.dnd_hover_payload::<BrushDrag>()
         && matches!(&*d, BrushDrag::Preset(n) if *n != p.name)
     {
-        widgets::drop_line(ui, r, second_half(ui, r, grid), grid, &t);
+        // The marker sits on the boundary the item lands on: in a mirrored grid that is the
+        // cell's left edge, while `drop_line` paints r.right() for `after`.
+        let after = second_half(ui, r, grid);
+        let line_after = if grid && crate::direction::is_rtl() { !after } else { after };
+        widgets::drop_line(ui, r, line_after, grid, &t);
     }
     if let Some(d) = resp.dnd_release_payload::<BrushDrag>()
         && let BrushDrag::Preset(n) = &*d
@@ -347,12 +358,34 @@ pub(crate) fn grid_cell_width(cell: f32, scale: f32) -> f32 {
     cell * if scale.is_finite() { scale.clamp(*PREVIEW_SCALE_RANGE.start(), *PREVIEW_SCALE_RANGE.end()) } else { 1.0 }
 }
 
+/// A list row's tip cell: it leads from the reading start.
+pub(crate) fn list_row_tip_rect(rtl: bool, r: egui::Rect, k: f32) -> egui::Rect {
+    if rtl {
+        egui::Rect::from_min_size(pos2(r.right() - 22.0 - 36.0 * k, r.top() + 2.0), vec2(36.0, 30.0) * k)
+    } else {
+        egui::Rect::from_min_size(r.left_top() + vec2(22.0, 2.0), vec2(36.0, 30.0) * k)
+    }
+}
+
+/// The span a list row's name is painted in: the anchor and the limit. In a right-to-left UI
+/// the anchor is the span's right end and the limit its left end.
+pub(crate) fn list_row_name_span(rtl: bool, r: egui::Rect, sr: egui::Rect) -> (f32, f32) {
+    if rtl { (sr.left() - 12.0, r.left() + 4.0) } else { (sr.right() + 12.0, r.right() - 4.0) }
+}
+
 fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushPreset], indent: f32, scale: f32, acts: &mut Vec<Action>) {
     let t = Tokens::get(ui.ctx());
     let k = list_row_height(scale) / 44.0;
     let (full, resp) = ui.allocate_exact_size(vec2(ui.available_width(), list_row_height(scale)), Sense::click_and_drag());
-    // Rows inside nested folders are indented; the whole width stays the drop target.
-    let r = egui::Rect::from_min_max(full.min + vec2(indent.min(full.width() / 2.0), 0.0), full.max);
+    // Rows inside nested folders are indented from the reading start; the whole width stays the
+    // drop target.
+    let rtl = crate::direction::is_rtl();
+    let ind = indent.min(full.width() / 2.0);
+    let r = if rtl {
+        egui::Rect::from_min_max(full.min, pos2(full.right() - ind, full.bottom()))
+    } else {
+        egui::Rect::from_min_max(full.min + vec2(ind, 0.0), full.max)
+    };
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, current, &p.name));
     if !ui.is_rect_visible(r) {
         return;
@@ -364,7 +397,8 @@ fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushP
     }
     let pb = &p.brush;
     let tip = brush_preview::tip_texture(ui.ctx(), &format!("brushes-tip:{}", p.name), &pb.tip, (pb.hardness, pb.angle, pb.roundness), 36, t.text);
-    let cell = egui::Rect::from_min_size(r.left_top() + vec2(22.0, 2.0), vec2(36.0, 30.0) * k);
+    // The tip leads from the reading start; the textures themselves stay physical (canvas-like).
+    let cell = list_row_tip_rect(rtl, r, k);
     let tr = egui::Rect::from_center_size(cell.center(), vec2(30.0, 30.0) * k * crate::brush_sections::thumb_scale(pb.size));
     ui.painter().image(tip.id(), tr, full_uv(), Color32::WHITE);
     ui.painter().text(
@@ -376,11 +410,17 @@ fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushP
     );
     // The stroke preview gives up width so a narrow list (the picker) still shows the name; its
     // texture slot carries the width, so lists of different widths don't re-render each other's.
-    let w = (r.width() - (cell.right() - r.left()) - STROKE_NAME_ROOM).clamp(60.0, 170.0).round();
+    let tip_side = if rtl { r.right() - cell.left() } else { cell.right() - r.left() };
+    let w = (r.width() - tip_side - STROKE_NAME_ROOM).clamp(60.0, 170.0).round();
     let stroke = brush_preview::stroke_texture(ui.ctx(), &format!("brushes-stroke-{w}:{}", p.name), pb, w as u32, 36, t.text);
-    let sr = egui::Rect::from_min_size(pos2(cell.right() + 8.0, r.top() + 4.0 * k), vec2(w, 36.0 * k));
+    let sr = if rtl {
+        egui::Rect::from_min_size(pos2(cell.left() - 8.0 - w, r.top() + 4.0 * k), vec2(w, 36.0 * k))
+    } else {
+        egui::Rect::from_min_size(pos2(cell.right() + 8.0, r.top() + 4.0 * k), vec2(w, 36.0 * k))
+    };
     ui.painter().image(stroke.id(), sr, full_uv(), Color32::WHITE);
-    crate::layer_row_ui::label(ui.painter(), sr.right() + 12.0, r.center().y, r.right() - 4.0, &p.name, egui::FontId::proportional(12.0), t.text_dim);
+    let (name_x, name_right) = list_row_name_span(rtl, r, sr);
+    crate::direction::paint_label_span(ui.painter(), name_x, r.center().y, name_right, &p.name, egui::FontId::proportional(12.0), t.text_dim);
     preset_interactions(ui, &resp, r, p, presets, false, acts);
 }
 
@@ -511,6 +551,25 @@ fn card_tip_rect(cell: egui::Rect, number_h: Option<f32>, size: f32, scale: f32)
     egui::Rect::from_center_size(room.center(), egui::Vec2::splat(if side.is_finite() { side.max(1.0) } else { 1.0 }))
 }
 
+/// A preset card's tip cell: it leads from the reading start.
+pub(crate) fn card_tip_cell(rtl: bool, top: egui::Rect, tip_w: f32) -> egui::Rect {
+    if rtl {
+        egui::Rect::from_min_size(pos2(top.right() - tip_w, top.top()), vec2(tip_w, top.height()))
+    } else {
+        egui::Rect::from_min_size(top.left_top(), vec2(tip_w, top.height()))
+    }
+}
+
+/// The span the name inside a card's stroke cell is painted in: the anchor and the limit.
+pub(crate) fn card_stroke_name_span(rtl: bool, cell: egui::Rect, scale: f32) -> (f32, f32) {
+    if rtl { (cell.right() - 8.0 * scale, cell.left() + 6.0 * scale) } else { (cell.left() + 8.0 * scale, cell.right() - 6.0 * scale) }
+}
+
+/// The span the name in a card's bottom row is painted in: the anchor and the limit.
+pub(crate) fn card_bottom_name_span(rtl: bool, cell: egui::Rect, scale: f32) -> (f32, f32) {
+    if rtl { (cell.right() - 6.0 * scale, cell.left() + 6.0 * scale) } else { (cell.left() + 6.0 * scale, cell.right() - 6.0 * scale) }
+}
+
 /// One preset in the Brush Preset picker: a 2 × 2 grid whose bottom row (the name) spans both
 /// columns — tip at the top left, stroke preview at the top right. A part that's off loses its
 /// cell (the other takes the room): with only the tip and the name on, the name moves into the
@@ -571,15 +630,17 @@ fn preset_card(
         ui.painter().rect_filled(card, 3.0, t.hover);
     }
     let pb = &p.brush;
+    let rtl = crate::direction::is_rtl();
     let inner = card.shrink2(vec2(pad, pad_y));
     let top = egui::Rect::from_min_size(inner.left_top(), vec2(inner.width(), top_h));
-    let mut x = top.left();
+    // The tip cell leads from the reading start; the stroke/name cell takes what remains.
+    let mut x = if rtl { top.right() } else { top.left() };
     if show_tip {
         // The tip thumbnail with the size under it (like the list row). With the tip alone the
         // cell takes the whole card, so the thumbnail is centred in it (the tip-only grid).
         // Compact cards drop the number — it wouldn't fit — and the tip takes the cell whole.
         let tip_w = if tip_only { top.width() } else { (CARD_TIP_W * scale).min(top.width() * 0.5) };
-        let cell = egui::Rect::from_min_size(top.left_top(), vec2(tip_w, top_h));
+        let cell = card_tip_cell(rtl, top, tip_w);
         let tip = brush_preview::tip_texture(ui.ctx(), &format!("brushes-tip:{}", p.name), &pb.tip, (pb.hardness, pb.angle, pb.roundness), 36, t.text);
         let number =
             (!compact).then(|| ui.painter().layout_no_wrap(format!("{}", pb.size.round() as i64), egui::FontId::proportional(CARD_NUM_FONT), t.text_faint));
@@ -589,42 +650,33 @@ fn preset_card(
             let at = pos2(cell.center().x - g.size().x / 2.0, cell.bottom() - 1.0 - g.size().y);
             ui.painter().galley(at, g, t.text_faint);
         }
-        x = cell.right();
+        x = if rtl { cell.left() } else { cell.right() };
     }
     if show_stroke || name_in_top {
         // The stroke preview, or the name where it goes when the stroke is hidden.
-        let cell = egui::Rect::from_min_max(pos2(x, top.top()), top.right_bottom());
+        let cell = if rtl {
+            egui::Rect::from_min_max(inner.left_top(), pos2(x, top.bottom()))
+        } else {
+            egui::Rect::from_min_max(pos2(x, top.top()), top.right_bottom())
+        };
         if show_stroke {
             let cw = if cell.width().is_finite() { cell.width().max(1.0) } else { 1.0 };
             let w = ((cw - 16.0 * scale).clamp(24.0 * scale, 260.0 * scale)).min(cw).max(1.0).round();
             let h = (36.0 * scale_h).round().max(1.0) as u32;
             let stroke = brush_preview::stroke_texture(ui.ctx(), &format!("brushes-stroke-{w}:{}", p.name), pb, w as u32, h, t.text);
-            let sr = egui::Rect::from_min_size(pos2(cell.left() + 8.0 * scale, cell.center().y - 18.0 * scale_h), vec2(w, 36.0 * scale_h));
+            let sx = if rtl { cell.right() - 8.0 * scale - w } else { cell.left() + 8.0 * scale };
+            let sr = egui::Rect::from_min_size(pos2(sx, cell.center().y - 18.0 * scale_h), vec2(w, 36.0 * scale_h));
             ui.painter().image(stroke.id(), sr, full_uv(), Color32::WHITE);
         } else {
-            crate::layer_row_ui::label(
-                ui.painter(),
-                cell.left() + 8.0 * scale,
-                cell.center().y,
-                cell.right() - 6.0 * scale,
-                &p.name,
-                egui::FontId::proportional(CARD_NAME_FONT),
-                t.text_dim,
-            );
+            let (nx, nright) = card_stroke_name_span(rtl, cell, scale);
+            crate::direction::paint_label_span(ui.painter(), nx, cell.center().y, nright, &p.name, egui::FontId::proportional(CARD_NAME_FONT), t.text_dim);
         }
     }
     if name_h > 0.0 {
         // The merged bottom row: the name across the whole card.
         let cell = egui::Rect::from_min_size(pos2(inner.left(), top.bottom()), vec2(inner.width(), name_h));
-        crate::layer_row_ui::label(
-            ui.painter(),
-            cell.left() + 6.0 * scale,
-            cell.center().y,
-            cell.right() - 6.0 * scale,
-            &p.name,
-            egui::FontId::proportional(CARD_NAME_FONT),
-            t.text_dim,
-        );
+        let (x, right) = card_bottom_name_span(rtl, cell, scale);
+        crate::direction::paint_label_span(ui.painter(), x, cell.center().y, right, &p.name, egui::FontId::proportional(CARD_NAME_FONT), t.text_dim);
     }
     let resp = resp.on_hover_text(&p.name);
     // A tip-only card's grid drops between columns, like the Brushes tab's: the rest drop between
@@ -667,6 +719,19 @@ pub fn folder_drop(src_group: &str, src_folder: &[String], group: &str, folder: 
     }
 }
 
+/// A group's display name: the built-in groups and the default group are translated; every other
+/// name is user data (a renamed group) and passes through unchanged. A folder's name is always
+/// user data.
+fn group_label(name: &str) -> String {
+    if name == UNGROUPED || photocraft_engine::paint::presets::GROUPS.contains(&name) { crate::i18n::t(name).to_string() } else { name.to_string() }
+}
+
+/// A group header's painted anchors: the reading-start edge and the x of the chevron, the
+/// folder icon, the name and the count, at the given folder depth.
+pub(crate) fn group_header_anchors(r: egui::Rect, depth: usize) -> crate::widgets::HeaderAnchors {
+    crate::widgets::header_anchors(r, 4.0 + FOLDER_INDENT * depth.min(MAX_VIEW_DEPTH) as f32)
+}
+
 /// A group's or nested folder's header: chevron, folder, name, count. Click toggles; a group or
 /// folder dragged here lands before it (its upper edge) or goes into it ([`folder_drop`]); a
 /// preset dropped here moves to the end of the group or folder. `key` is the group key, `folder` the nested folder's path (empty for the
@@ -677,26 +742,31 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], op
     if resp.hovered() {
         ui.painter().rect_filled(r, t.radius_sm, t.hover);
     }
-    let shown = folder.last().map_or(label, String::as_str);
-    let x = r.left() + 4.0 + FOLDER_INDENT * folder.len().min(MAX_VIEW_DEPTH) as f32;
+    // The displayed name is translated (built-in groups and UNGROUPED have catalog rows; user and
+    // imported names fall back to the source unchanged); `key` and the commands keep the raw label.
+    let shown = if folder.is_empty() { group_label(label) } else { folder.last().map_or(label, String::as_str).to_string() };
+    // The reading-start edge at this folder depth; the glyphs walk toward the reading end.
+    let a = group_header_anchors(r, folder.len());
+    let chevron_x = a.chevron_x;
     icons::paint(
         ui,
-        egui::Rect::from_min_size(pos2(x, r.center().y - 7.0), vec2(14.0, 14.0)),
+        egui::Rect::from_min_size(pos2(chevron_x, r.center().y - 7.0), vec2(14.0, 14.0)),
         if open { "chevron-down" } else { "chevron-right" },
         12.0,
         t.text_dim,
     );
+    let folder_x = a.folder_x;
     icons::paint(
         ui,
-        egui::Rect::from_min_size(pos2(x + 18.0, r.center().y - 8.0), vec2(16.0, 16.0)),
+        egui::Rect::from_min_size(pos2(folder_x, r.center().y - 8.0), vec2(16.0, 16.0)),
         if open { "folder-open" } else { "folder" },
         14.0,
         t.icon,
     );
     let font = if folder.is_empty() { theme::semibold(12.0) } else { theme::medium(12.0) };
-    ui.painter().text(pos2(x + 40.0, r.center().y), egui::Align2::LEFT_CENTER, shown, font, t.text);
-    ui.painter().text(pos2(r.right() - 8.0, r.center().y), egui::Align2::RIGHT_CENTER, count.to_string(), theme::medium(11.0), t.text_faint);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DisclosureTriangle, true, shown));
+    ui.painter().text(pos2(a.name_x, r.center().y), a.halign, shown.as_str(), font, t.text);
+    ui.painter().text(pos2(a.count_x, r.center().y), crate::direction::end_align(), count.to_string(), theme::medium(11.0), t.text_faint);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DisclosureTriangle, true, shown.clone()));
     let me = match folder {
         [] => BrushDrag::Group(key.to_string()),
         f => BrushDrag::Folder { group: key.to_string(), folder: f.to_vec() },
@@ -775,7 +845,7 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
             // to the indent like the full-card rows. The scale floors at the slider's own
             // bottom end.
             let scale = d.scale.max(*crate::brush_picker::SCALE_RANGE.start());
-            ui.vertical(|ui| {
+            ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
                 ui.spacing_mut().item_spacing = vec2(CARD_GAP, GRID_GAP);
                 let fixed = if tip_only(d.show) {
                     Some(CARD_TIP_ONLY_W * scale)
@@ -815,7 +885,7 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
             // Rows of whole columns, each with the same margin: a wrapped row indented only
             // its first line and left the spare width on the right.
             let (left, cols) = grid_columns(ui.available_width(), grid_cell_width(d.layout.cell, d.scale), d.layout.indent + indent, GRID_GAP);
-            ui.vertical(|ui| {
+            ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
                 ui.spacing_mut().item_spacing = vec2(GRID_GAP, GRID_GAP);
                 for row in run.chunks(cols) {
                     ui.horizontal(|ui| {
@@ -867,8 +937,9 @@ fn rename_bar(ui: &mut egui::Ui, st: &mut BrushesPanelState, acts: &mut Vec<Acti
     let mut done = false;
     ui.horizontal(|ui| {
         let name_label = ui.label(RichText::new(if r.group { tl!("Group name") } else { tl!("Brush name") }).color(t.text_dim));
+        let mut layouter = widgets::rtl_singleline_layouter(egui::FontId::default());
         let resp = ui
-            .add(egui::TextEdit::singleline(&mut r.text).desired_width((ui.available_width() - 140.0).max(60.0)).id_salt("brush-rename"))
+            .add(widgets::rtl_singleline(&mut r.text, &mut layouter).desired_width((ui.available_width() - 140.0).max(60.0)).id_salt("brush-rename"))
             .labelled_by(name_label.id);
         if !resp.has_focus() && !resp.lost_focus() {
             resp.request_focus();
@@ -945,13 +1016,9 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
         let name = match &*d {
             BrushDrag::Preset(n) => n.clone(),
-            BrushDrag::Group(g) => {
-                if g.is_empty() {
-                    UNGROUPED.to_string()
-                } else {
-                    g.clone()
-                }
-            }
+            // A group's built-in name is translated; a folder's name is user data and passes
+            // through unchanged.
+            BrushDrag::Group(g) => group_label(if g.is_empty() { UNGROUPED } else { g.as_str() }),
             BrushDrag::Folder { folder, .. } => folder.last().cloned().unwrap_or_default(),
         };
         egui::Area::new(egui::Id::unique(("brush-drag-label", layout.id))).order(egui::Order::Tooltip).fixed_pos(p + vec2(12.0, 8.0)).interactable(false).show(
@@ -961,7 +1028,7 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
                     ui.set_opacity(0.8);
                 }
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    ui.horizontal(|ui| {
+                    ui.with_layout(crate::direction::row(), |ui| {
                         if let BrushDrag::Preset(n) = &*d
                             && let Some(preset) = presets.iter().find(|preset| preset.name == *n)
                         {
@@ -987,6 +1054,12 @@ pub fn preset_list(ui: &mut egui::Ui, presets: &[BrushPreset], current: Option<&
 
 /// The Brushes tab.
 pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // A mirrored body: in a right-to-left UI every row below reads from the right (LTR unchanged).
+    let size = ui.available_size_before_wrap();
+    ui.allocate_ui_with_layout(size, crate::direction::body_layout(), |ui| show_body(app, ui));
+}
+
+fn show_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let inner_w = ui.available_width().max(180.0);
     // Size of the current brush (Photoshop's Brushes panel slider).
@@ -1015,7 +1088,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.add_space(20.0);
         let search_w = (inner_w - 112.0).clamp(90.0, inner_w - 40.0);
         widgets::text_field(ui, ui.scope_id().with("brush-search"), &mut app.ui.brushes_panel.filter, tl!("Search Brushes"), search_w, false);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::direction::trailing(), |ui| {
             let view = &mut app.ui.brushes_panel.view;
             let grid_tip = "Grid view";
             let list_tip = "List view";
@@ -1033,7 +1106,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "image", 14.0, t.text_faint);
         ui.add_space(20.0);
         let w = (inner_w - 112.0).clamp(90.0, inner_w - 40.0);
-        ui.allocate_ui_with_layout(vec2(w, 18.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.allocate_ui_with_layout(vec2(w, 18.0), crate::direction::row(), |ui| {
             let scale = &mut app.ui.brushes_panel.scale;
             let resp = widgets::slider(ui, scale, PREVIEW_SCALE_RANGE, None).on_hover_text(tl!("Preview size"));
             if resp.changed() {
@@ -1051,19 +1124,19 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ui.label(
             RichText::new(crate::i18n::trn(crate::i18n::current(), app.session.tools.presets.len() as u64, "{n} preset", "{n} presets")).color(t.text_faint),
         );
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::direction::trailing(), |ui| {
             // The current preset by identity: editing the brush after picking must not deselect it.
             let current = app.session.tools.current_preset.clone().filter(|n| app.session.tools.presets.iter().any(|p| p.name.eq_ignore_ascii_case(n)));
-            if ui.add_enabled_ui(current.is_some(), |ui| icons::button(ui, "trash", 24.0, false, "Delete brush")).inner.clicked()
+            if ui.add_enabled_ui(current.is_some(), |ui| icons::button(ui, "trash", 24.0, false, tl!("Delete brush"))).inner.clicked()
                 && let Some(name) = current
             {
                 run_or_status(app, "brush.presets.delete", json!({ "name": name }));
             }
-            let new = icons::button(ui, "square-plus", 24.0, false, "Create new brush from the current settings");
-            if crate::brush_picker::named(new, "Create new brush from the current settings").clicked() {
+            let new = icons::button(ui, "square-plus", 24.0, false, tl!("Create new brush from the current settings"));
+            if crate::brush_picker::named(new, tl!("Create new brush from the current settings")).clicked() {
                 crate::brush_preset_dialog::open(app, None);
             }
-            if icons::button(ui, "folder-open", 24.0, false, "Import Brushes… (.abr or image)").clicked() {
+            if icons::button(ui, "folder-open", 24.0, false, tl!("Import Brushes… (.abr or image)")).clicked() {
                 let _ = crate::preset_files_ui::import_brushes(app);
             }
         });
@@ -1075,5 +1148,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
 }
 
+#[cfg(test)]
+mod rtl_tests;
 #[cfg(test)]
 mod tests;

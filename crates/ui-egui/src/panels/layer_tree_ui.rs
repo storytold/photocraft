@@ -6,7 +6,7 @@
 //! `.pcraft` and as the PSD section divider's open/closed folder type, toggled through
 //! `layer.setExpanded` (a view change: no history step).
 
-use egui::{Rect, Sense, Shape, Stroke, pos2, vec2};
+use egui::{Rect, Sense, Shape, Stroke, pos2};
 use photocraft_doc::{Document, Layer, LayerContent};
 use serde_json::{Value, json};
 
@@ -46,28 +46,31 @@ pub fn panel_rows<'a>(app: &PhotocraftApp, doc: &'a Document) -> Vec<(usize, &'a
     rows
 }
 
-/// The hit area of a group row's triangle starting at `x`.
+/// The hit area of a group row's triangle starting at `x` (mirrored in a right-to-left UI).
 pub fn triangle_rect(row: Rect, x: f32) -> Rect {
-    Rect::from_min_size(pos2(x - 2.0, row.top()), vec2(TRIANGLE_W + 2.0, row.height()))
+    crate::direction::start_span(x - crate::direction::step() * 2.0, TRIANGLE_W + 2.0, row.top(), row.bottom())
 }
 
-/// Paint and handle a group row's disclosure triangle at `*x` (advancing it). Returns true when
-/// it was clicked this frame, so the row doesn't also treat the click as a selection.
+/// Paint and handle a group row's disclosure triangle at `*x` (advancing it in reading
+/// direction). Returns true when it was clicked this frame, so the row doesn't also treat the
+/// click as a selection.
 pub fn disclosure(ui: &mut egui::Ui, row: Rect, x: &mut f32, l: &Layer, actions: &mut Vec<(String, Value)>) -> bool {
     let LayerContent::Group(g) = &l.content else { return false };
+    // `x` walks in reading direction; under RTL it decreases and a closed triangle points left.
+    let dir = crate::direction::step();
     let hit = triangle_rect(row, *x);
     let resp = ui.interact(hit, ui.scope_id().with(("disclosure", l.id.0)), Sense::click());
     let t = Tokens::get(ui.ctx());
-    let c = pos2(*x + TRIANGLE_W / 2.0 - 1.0, row.center().y);
+    let c = pos2(if dir > 0.0 { *x + TRIANGLE_W / 2.0 - 1.0 } else { *x - (TRIANGLE_W / 2.0 - 1.0) }, row.center().y);
     let s = 3.5;
     let pts = if g.expanded {
         vec![pos2(c.x - s, c.y - s * 0.6), pos2(c.x + s, c.y - s * 0.6), pos2(c.x, c.y + s * 0.6)]
     } else {
-        vec![pos2(c.x - s * 0.6, c.y - s), pos2(c.x + s * 0.6, c.y), pos2(c.x - s * 0.6, c.y + s)]
+        vec![pos2(c.x - dir * s * 0.6, c.y - s), pos2(c.x + dir * s * 0.6, c.y), pos2(c.x - dir * s * 0.6, c.y + s)]
     };
     let color = if resp.hovered() { t.text } else { t.icon };
     ui.painter().add(Shape::convex_polygon(pts, color, Stroke::NONE));
-    *x += TRIANGLE_W;
+    *x = crate::direction::advance(*x, TRIANGLE_W);
     let clicked = resp.clicked();
     if clicked {
         let all = ui.input(|i| i.modifiers.alt);

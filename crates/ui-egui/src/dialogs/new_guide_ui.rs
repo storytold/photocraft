@@ -156,37 +156,91 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.colored_label(ui.visuals().error_fg_color, error);
         ui.add_space(4.0);
     }
-    egui::Grid::new("new-guide-dialog").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-        ui.label(tl!("Orientation"));
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut orientation, "horizontal".to_string(), tl!("Horizontal"));
-            ui.radio_value(&mut orientation, "vertical".to_string(), tl!("Vertical"));
+    if crate::text::direction::is_rtl() {
+        // The fork's `egui::Grid` cannot be drawn in a right-to-left body: its cursor only
+        // advances left-to-right, so the placer's available width goes NaN and egui panics. The
+        // same rows are drawn without it: each caption occupies the shared label column at the
+        // reading start, its editor follows toward the reading end.
+        let spacing = ui.spacing().item_spacing;
+        ui.spacing_mut().item_spacing = egui::vec2(12.0, 8.0);
+        let label_w = caption_width(ui, &[tl!("Orientation"), tl!("Position"), tl!("Color")]);
+        settings_line(ui, label_w, tl!("Orientation"), |ui, _| orientation_choices(ui, &mut orientation));
+        settings_line(ui, label_w, tl!("Position"), |ui, caption| position_field(ui, &mut position, caption.id));
+        settings_line(ui, label_w, tl!("Color"), |ui, _| color_choices(ui, f, &mut color));
+        ui.spacing_mut().item_spacing = spacing;
+    } else {
+        egui::Grid::new("new-guide-dialog").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            ui.label(tl!("Orientation"));
+            orientation_choices(ui, &mut orientation);
+            ui.end_row();
+            let position_label = ui.label(tl!("Position"));
+            position_field(ui, &mut position, position_label.id);
+            ui.end_row();
+            ui.label(tl!("Color"));
+            color_choices(ui, f, &mut color);
+            ui.end_row();
         });
-        ui.end_row();
-        let position_label = ui.label(tl!("Position"));
-        ui.add(egui::TextEdit::singleline(&mut position).desired_width(120.0)).labelled_by(position_label.id);
-        ui.end_row();
-        ui.label(tl!("Color"));
-        ui.horizontal(|ui| {
-            // Custom… first, then Photoshop's colours.
-            let options: Vec<(String, &str)> =
-                std::iter::once(CUSTOM).chain(GUIDE_COLORS.iter().map(|(n, ..)| *n)).map(|n| (n.to_string(), color_label(n))).collect();
-            crate::widgets::dropdown(ui, "new-guide-color", tl!("Color"), &mut color, &options, 140.0);
-            if color == CUSTOM {
-                let hex = custom_color(f);
-                let rgb = photocraft_engine::prefs::parse_hex(&hex).unwrap_or([0x4a, 0xff, 0xff]);
-                if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), tl!("Custom…")).clicked() {
-                    f.insert("customColor".into(), json!(hex));
-                    crate::color_picker_ui::request_field(f, "customColor", &crate::color_picker_ui::title_for(tl!("Guides")));
-                }
-                ui.label(egui::RichText::new(hex).monospace());
-            }
-        });
-        ui.end_row();
-    });
+    }
     f.insert("orientation".into(), json!(orientation));
     f.insert("position".into(), json!(position));
     f.insert("color".into(), json!(color));
+}
+
+/// The width of the widest caption, so the mirrored rows' editors line up the way the grid's
+/// second column lines them up.
+fn caption_width(ui: &egui::Ui, captions: &[&str]) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    captions.iter().map(|c| ui.painter().layout_no_wrap((*c).to_owned(), font.clone(), egui::Color32::WHITE).size().x).fold(0.0, f32::max)
+}
+
+/// A caption beside its editor, in reading order: the caption at the reading start, its text
+/// hugging the column's edge, the editor toward the reading end. The caption keeps the column's
+/// width, so the editors line up the way the grid's second column lines them up.
+fn settings_line(ui: &mut egui::Ui, label_w: f32, caption: &str, editor: impl FnOnce(&mut egui::Ui, egui::Response)) -> egui::Response {
+    // The caption's own cell: the caption hugs the reading start of the column, its text in a
+    // box as wide as the text, the way the grid's caption does.
+    let cell = egui::Layout::top_down(if crate::text::direction::is_rtl() { egui::Align::Max } else { egui::Align::Min });
+    crate::text::direction::dialog_row(ui, |ui| {
+        let response = ui.allocate_ui_with_layout(egui::vec2(label_w, ui.spacing().interact_size.y), cell, |ui| ui.label(caption)).inner;
+        editor(ui, response.clone());
+        response
+    })
+    .inner
+}
+
+/// The Orientation choices: the two radios (the caption is drawn by the caller).
+fn orientation_choices(ui: &mut egui::Ui, orientation: &mut String) {
+    ui.horizontal(|ui| {
+        ui.radio_value(orientation, "horizontal".to_string(), tl!("Horizontal"));
+        ui.radio_value(orientation, "vertical".to_string(), tl!("Vertical"));
+    });
+}
+
+/// The Position field, named by its caption for accessibility.
+fn position_field(ui: &mut egui::Ui, position: &mut String, labelled_by: egui::Id) {
+    // Numeric-by-content: the digits stay LTR, but under RTL the field right-aligns via the helper.
+    let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+    ui.add(crate::widgets::rtl_singleline(position, &mut layouter).desired_width(120.0)).labelled_by(labelled_by);
+}
+
+/// The Color choices: the dropdown, then the Custom… swatch and its hex when one is picked (the
+/// caption is drawn by the caller).
+fn color_choices(ui: &mut egui::Ui, f: &mut Map<String, Value>, color: &mut String) {
+    ui.horizontal(|ui| {
+        // Custom… first, then Photoshop's colours.
+        let options: Vec<(String, &str)> =
+            std::iter::once(CUSTOM).chain(GUIDE_COLORS.iter().map(|(n, ..)| *n)).map(|n| (n.to_string(), color_label(n))).collect();
+        crate::widgets::dropdown(ui, "new-guide-color", tl!("Color"), color, &options, 140.0);
+        if color == CUSTOM {
+            let hex = custom_color(f);
+            let rgb = photocraft_engine::prefs::parse_hex(&hex).unwrap_or([0x4a, 0xff, 0xff]);
+            if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), tl!("Custom…")).clicked() {
+                f.insert("customColor".into(), json!(hex));
+                crate::color_picker_ui::request_field(f, "customColor", &crate::color_picker_ui::title_for(tl!("Guides")));
+            }
+            ui.label(egui::RichText::new(hex).monospace());
+        }
+    });
 }
 
 /// The command's parameters: a bare number gets the ruler unit; anything else goes as typed, for
@@ -267,5 +321,7 @@ fn confirm_edit(app: &mut PhotocraftApp, f: &Map<String, Value>, params: &Value)
     }
 }
 
+#[cfg(test)]
+mod rtl_tests;
 #[cfg(test)]
 mod tests;

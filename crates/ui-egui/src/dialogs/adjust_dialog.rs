@@ -327,6 +327,13 @@ fn curve_mode(app: &PhotocraftApp, kind: &str) -> photocraft_doc::ColorMode {
 
 /// Dialog body: the kind's editor over the fields, then the Preview checkbox.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+    // The blocks right-align in a right-to-left UI and their rows mirror; left to right the
+    // layout is egui's default, so the dialog reads as it did before.
+    ui.with_layout(crate::direction::body_layout(), |ui| body_blocks(app, ui, fields));
+}
+
+/// The dialog body, drawn inside the mirrored body scope.
+fn body_blocks(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let kind = fields.get("__adjust").and_then(Value::as_str).unwrap_or_default().to_string();
     let mode = curve_mode(app, &kind);
     if matches!(kind.as_str(), "levels" | "curves") {
@@ -390,3 +397,81 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::Queryable;
+
+    /// A Levels dialog drawn in `dir`, with its eyedropper row on screen.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let _dir = crate::direction::direction_scope(dir);
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let app = PhotocraftApp::new(session, crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        open(h.state_mut(), "image.adjustments.levels").unwrap();
+        h.run_steps(3);
+        h
+    }
+
+    /// The eyedropper row follows the reading direction: the label starts the row and the
+    /// three point pickers follow it, mirrored in a right-to-left UI.
+    #[test]
+    fn the_eyedropper_row_follows_the_reading_direction() {
+        let ltr = harness(Dir::Ltr);
+        let ltr_label = ltr.get_by_label("Eyedroppers:").rect();
+        let ltr_black = ltr.get_by_label("Set Black Point").rect();
+        let ltr_gray = ltr.get_by_label("Set Neutral Gray Point").rect();
+        let ltr_white = ltr.get_by_label("Set White Point").rect();
+        assert!(ltr_label.right() <= ltr_black.left(), "LTR: the label starts the row: {ltr_label:?} {ltr_black:?}");
+        assert!(
+            ltr_black.left() < ltr_gray.left() && ltr_gray.left() < ltr_white.left(),
+            "LTR: the pickers read left to right: {ltr_black:?} {ltr_gray:?} {ltr_white:?}"
+        );
+
+        let rtl = harness(Dir::Rtl);
+        let rtl_label = rtl.get_by_label("Eyedroppers:").rect();
+        let rtl_black = rtl.get_by_label("Set Black Point").rect();
+        let rtl_gray = rtl.get_by_label("Set Neutral Gray Point").rect();
+        let rtl_white = rtl.get_by_label("Set White Point").rect();
+        assert!(rtl_label.left() >= rtl_black.right(), "RTL: the label starts the row: {rtl_label:?} {rtl_black:?}");
+        assert!(
+            rtl_black.left() > rtl_gray.left() && rtl_gray.left() > rtl_white.left(),
+            "RTL: the pickers read right to left: {rtl_black:?} {rtl_gray:?} {rtl_white:?}"
+        );
+    }
+
+    /// The dialog's frame rect.
+    fn frame(h: &egui_kittest::Harness<'static, PhotocraftApp>) -> egui::Rect {
+        let id = h.state().ui.dialogs.last().expect("the dialog is open").id;
+        h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the dialog frame")
+    }
+
+    /// The mirrored body scope must not stretch the frame: the Levels dialog opens as wide in
+    /// RTL as in LTR (dialog-host Risks a).
+    #[test]
+    fn the_adjust_dialog_opens_as_wide_in_rtl_as_in_ltr() {
+        let width = |dir: Dir| {
+            let h = harness(dir);
+            frame(&h).width()
+        };
+        let (ltr, rtl) = (width(Dir::Ltr), width(Dir::Rtl));
+        assert!((ltr - rtl).abs() < 1.0, "the frame width is the same in both directions: LTR {ltr} vs RTL {rtl}");
+    }
+
+    /// The body's blocks hug the reading start: the label leading the eyedropper row sits at
+    /// the dialog's content start edge — the right in RTL, the left in LTR (the panel twin
+    /// asserts the same anchor, `adjust_editors/levels.rs`).
+    #[test]
+    fn the_body_blocks_hug_the_reading_start() {
+        let (ltr, rtl) = (harness(Dir::Ltr), harness(Dir::Rtl));
+        let (ltr_frame, rtl_frame) = (frame(&ltr), frame(&rtl));
+        let ltr_label = ltr.get_by_label("Eyedroppers:").rect();
+        let rtl_label = rtl.get_by_label("Eyedroppers:").rect();
+        assert!(ltr_label.left() - ltr_frame.left() < 40.0, "LTR: the label leads at the left: {ltr_label:?} {ltr_frame:?}");
+        assert!(rtl_frame.right() - rtl_label.right() < 40.0, "RTL: the label leads at the right: {rtl_label:?} {rtl_frame:?}");
+    }
+}

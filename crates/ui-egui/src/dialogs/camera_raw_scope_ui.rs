@@ -360,7 +360,7 @@ fn warning(ui: &mut egui::Ui, rect: Rect, mask: u8, on: &mut bool, label: &str) 
 /// Scope display options. The menu stays open while toggling, so options that depend on
 /// Show Vectorscope appear in place.
 fn context_menu(response: &egui::Response, has_selection: bool, view: &mut CameraRawScopeState) {
-    egui::Popup::context_menu(response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| context(ui, has_selection, view));
+    egui::Popup::context_menu(response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| crate::menus::popup_body(ui, |ui| context(ui, has_selection, view)));
 }
 
 fn context(ui: &mut egui::Ui, has_selection: bool, view: &mut CameraRawScopeState) {

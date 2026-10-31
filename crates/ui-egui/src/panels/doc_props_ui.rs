@@ -2,7 +2,7 @@
 //! selected. Canvas size and orientation, resolution, colour mode and bit depth, and the
 //! Rulers & Grids toggles. Every edit dispatches an engine or view command, so the panel stays thin.
 
-use egui::{Align2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_doc::{ColorMode, Document, Layer, LayerId, SampleType};
 use serde_json::{Value, json};
 
@@ -69,30 +69,15 @@ pub fn canvas_resize_params(old: (u32, u32), new_w: Option<f32>, new_h: Option<f
 
 /// Collapsible section header with a chevron, Photoshop Properties style. Returns whether it is open.
 fn section(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
-    let t = Tokens::get(ui.ctx());
-    let key = egui::Id::unique(("doc-props-section", id));
-    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(true);
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
-    icons::paint(
-        ui,
-        Rect::from_center_size(pos2(r.left() + 7.0, r.center().y), vec2(12.0, 12.0)),
-        if open { "chevron-down" } else { "chevron-right" },
-        11.0,
-        t.text_dim,
-    );
-    ui.painter().text(pos2(r.left() + 18.0, r.center().y), Align2::LEFT_CENTER, title, crate::theme::semibold(12.0), t.text);
-    if resp.clicked() {
-        open = !open;
-        ui.data_mut(|d| d.insert_temp(key, open));
-    }
-    open
+    crate::widgets::section_header(ui, id, title, 22.0, false).inner
 }
 
 /// Right-aligned field label in a fixed-width column.
 fn field_label(ui: &mut egui::Ui, s: &str, w: f32) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(w, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 4.0, r.center().y), Align2::RIGHT_CENTER, s, egui::FontId::proportional(12.0), t.text_dim);
+    let (x, anchor) = if crate::direction::is_rtl() { (r.left() + 4.0, Align2::LEFT_CENTER) } else { (r.right() - 4.0, Align2::RIGHT_CENTER) };
+    ui.painter().text(pos2(x, r.center().y), anchor, s, egui::FontId::proportional(12.0), t.text_dim);
 }
 
 /// A number field that only reports a committed value (drag released, Enter, focus lost).
@@ -119,7 +104,12 @@ fn dim_field(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(74.0, 24.0), Sense::hover());
     ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.field_border.gamma_multiply(0.6)), StrokeKind::Inside);
-    ui.painter().text(r.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, text, crate::theme::mono(12.0), t.text_faint);
+    let (p, anchor) = if crate::direction::is_rtl() {
+        (r.right_center() - vec2(6.0, 0.0), Align2::RIGHT_CENTER)
+    } else {
+        (r.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER)
+    };
+    ui.painter().text(p, anchor, text, crate::theme::mono(12.0), t.text_faint);
 }
 
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
@@ -129,7 +119,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let has_bg = st.doc.layers.first().is_some_and(|l| is_background(&st.doc, l));
     let lu = crate::layer_props_ui::LenUnit::of(app);
     let mut run: Vec<(String, Value)> = Vec::new();
-    ui.horizontal(|ui| {
+    crate::direction::full_row(ui, |ui| {
         let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
         ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
         icons::paint(ui, r, "file", 15.0, t.icon);
@@ -142,16 +132,16 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if section(ui, "canvas", tl!("Canvas")) {
         let link_key = egui::Id::unique("doc-props-link");
         let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(false);
-        ui.horizontal(|ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            ui.vertical(|ui| {
+            ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
                 ui.add_space(14.0);
                 if icons::button(ui, if linked { "link" } else { "unlink" }, 22.0, linked, tl!("Link width and height")).clicked() {
                     ui.data_mut(|d| d.insert_temp(link_key, !linked));
                 }
             });
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
+            ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
+                crate::direction::full_row(ui, |ui| {
                     stacked_label(ui, "W", &["W", "H"], 18.0, 4.0);
                     if let Some(v) = committed_field(ui, "w", "Width", w as f32, lu) {
                         run.extend(canvas_resize_params((w, h), Some(v), None, linked).map(|p| ("image.canvasSize".to_string(), p)));
@@ -159,7 +149,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     stacked_label(ui, "X", &["X", "Y"], 22.0, 4.0);
                     dim_field(ui, "0 px");
                 });
-                ui.horizontal(|ui| {
+                crate::direction::full_row(ui, |ui| {
                     stacked_label(ui, "H", &["W", "H"], 18.0, 4.0);
                     if let Some(v) = committed_field(ui, "h", "Height", h as f32, lu) {
                         run.extend(canvas_resize_params((w, h), None, Some(v), linked).map(|p| ("image.canvasSize".to_string(), p)));
@@ -169,7 +159,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 });
             });
         });
-        ui.horizontal(|ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.add_space(label_w + 6.0);
             ui.spacing_mut().item_spacing.x = 2.0;
             let portrait = h > w;
@@ -181,12 +171,12 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
         ui.add_space(2.0);
-        ui.horizontal(|ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.add_space(label_w + 6.0);
             ui.label(RichText::new(crate::i18n::fmt(tl!("Resolution: {dpi} pixels/inch"), &[("dpi", &widgets::fmt_num(dpi as f64))])).color(t.text));
         });
         ui.add_space(2.0);
-        ui.horizontal(|ui| {
+        crate::direction::full_row(ui, |ui| {
             field_label(ui, tl!("Mode"), label_w);
             let mut m = mode;
             let opts: Vec<(ColorMode, &str)> = MODES.iter().map(|(m, l, _)| (*m, *l)).collect();
@@ -196,7 +186,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 run.push(((*id).to_string(), Value::Null));
             }
         });
-        ui.horizontal(|ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.add_space(label_w + 8.0);
             let mut d = depth;
             let opts: Vec<(SampleType, &str, &str)> =
@@ -207,7 +197,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 run.push(((*id).to_string(), Value::Null));
             }
         });
-        ui.horizontal(|ui| {
+        crate::direction::full_row(ui, |ui| {
             field_label(ui, tl!("Fill"), label_w);
             let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
             ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
@@ -222,7 +212,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     widgets::hairline(ui);
     ui.add_space(2.0);
     if section(ui, "rulers", tl!("Rulers & Grids")) {
-        ui.horizontal(|ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.x = 6.0;
             let pixel_grid = crate::view_cmds::checked(app, "view.show.pixelGrid").unwrap_or(false);
@@ -247,7 +237,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     widgets::hairline(ui);
     ui.add_space(2.0);
     if section(ui, "guides", tl!("Guides")) {
-        ui.horizontal(|ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.x = 6.0;
             for (icon, tip, id) in [
@@ -375,6 +365,87 @@ mod tests {
         let at = |l: &str| centres.iter().find(|(s, _)| s == l).map(|(_, x)| *x).unwrap_or_else(|| panic!("no {l} label in {centres:?}"));
         assert!((at("W") - at("H")).abs() < 0.01, "W and H: {centres:?}");
         assert!((at("X") - at("Y")).abs() < 0.01, "X and Y: {centres:?}");
+    }
+
+    /// The x span of a painted text run, by its content, with the panel drawn in `dir`.
+    fn panel_text_span(dir: crate::direction::Dir, needle: &str) -> Option<(f32, f32)> {
+        use egui_kittest::Harness;
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
+        let _scope = crate::direction::direction_scope(dir);
+        let mut h = Harness::builder().with_size(vec2(320.0, 600.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    properties(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(3);
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|s| if let egui::Shape::Text(t) = &s.shape { Some(t) } else { None })
+            .find(|t| t.galley.text() == needle)
+            .map(|t| (t.pos.x, t.galley.size().x))
+    }
+
+    /// The Canvas W row's painted "W" glyph, its "Width" value field and the link icon, with the
+    /// panel drawn in `dir`.
+    fn canvas_group_rects(dir: crate::direction::Dir) -> ((f32, f32), egui::Rect, egui::Rect) {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 40, "height": 20, "background": "white"})).unwrap();
+        let _scope = crate::direction::direction_scope(dir);
+        let mut h = Harness::builder().with_size(vec2(320.0, 600.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    properties(app, ui);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(3);
+        let w = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| if let egui::Shape::Text(t) = &s.shape { Some(t) } else { None })
+            .find(|t| t.galley.text() == "W")
+            .map(|t| (t.pos.x, t.galley.size().x))
+            .expect("the W stacked label");
+        let width_field = h.get_by_label("Width").rect();
+        let link = h.get_by_label("Link width and height").rect();
+        (w, width_field, link)
+    }
+
+    #[test]
+    fn document_panel_anchors_follow_the_reading_direction() {
+        let (lx, _) = panel_text_span(crate::direction::Dir::Ltr, "Canvas").expect("LTR Canvas title");
+        assert!(lx < 60.0, "LTR section title sits on the left: {lx}");
+        let (rx, rw) = panel_text_span(crate::direction::Dir::Rtl, "Canvas").expect("RTL Canvas title");
+        assert!(rx + rw > 250.0, "RTL section title hugs the right edge: {rx} + {rw}");
+        let (lx, _) = panel_text_span(crate::direction::Dir::Ltr, "Mode").expect("LTR Mode label");
+        assert!(lx < 60.0, "LTR Mode label sits on the left: {lx}");
+        let (rx, _) = panel_text_span(crate::direction::Dir::Rtl, "Mode").expect("RTL Mode label");
+        assert!(rx > 190.0, "RTL Mode label sits at the reading start: {rx}");
+    }
+
+    /// The Canvas W row keeps its label, value field and link icon grouped at the panel's
+    /// reading-start edge, in both directions.
+    #[test]
+    fn canvas_group_follows_the_reading_direction() {
+        let (w, field, link) = canvas_group_rects(crate::direction::Dir::Ltr);
+        assert!(link.left() < 60.0, "LTR link icon hugs the left edge: {link:?}");
+        assert!(w.0 < 60.0, "LTR W label sits on the left: {w:?}");
+        assert!(field.left() > w.0 + w.1, "LTR Width field right of its label: {field:?} vs {w:?}");
+        let (w, field, link) = canvas_group_rects(crate::direction::Dir::Rtl);
+        assert!(link.right() > 250.0, "RTL link icon hugs the right edge: {link:?}");
+        assert!(w.0 > 190.0, "RTL W label sits at the reading start: {w:?}");
+        assert!(field.right() < w.0, "RTL Width field left of its label: {field:?} vs {w:?}");
+        assert!(w.0 - field.right() < 40.0, "RTL W label stays adjacent to its field: gap {}", w.0 - field.right());
     }
 
     #[test]

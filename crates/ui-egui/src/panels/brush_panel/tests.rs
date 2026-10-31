@@ -1876,3 +1876,151 @@ fn checkboxes_show_a_pressed_state_from_their_label() {
     assert!(*h.state(), "the release checks it");
     assert_eq!(fill(&h), Some(widgets::check_box_fill(true, false, &t)));
 }
+
+/// The same window under a thread-local RTL scope; the guard must outlive the harness's steps.
+fn rtl_harness(tab: usize, section: usize) -> (impl Drop, Harness<'static, PhotocraftApp>) {
+    let guard = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    (guard, harness(tab, section))
+}
+
+/// A click (press + release) at `at`, as in new_doc_ui's tests.
+fn click_at(h: &mut Harness<'static, PhotocraftApp>, at: egui::Pos2) {
+    h.hover_at(at);
+    h.run_steps(1);
+    h.drag_at(at);
+    h.run_steps(1);
+    h.drop_at(at);
+    h.run_steps(2);
+}
+
+#[test]
+fn rtl_section_lock_sits_on_the_left_and_toggles() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let (_rtl, mut h) = rtl_harness(0, 0);
+    let lock = h.get_by_role_and_label(Role::Button, "Lock: Scattering");
+    let row = h.get_by_label("Scattering").rect();
+    assert!(lock.rect().center().x < row.center().x, "the lock sits at the reading end (left) in RTL: {:?}", lock.rect());
+    assert!(lock.rect().left() <= row.left() + 22.0);
+    assert!(!h.state().session.tools.brush.locks.scattering);
+    assert_eq!(h.state().ui.brush_section, 0);
+    {
+        use egui_kittest::kittest::NodeT;
+        eprintln!("DBG is_rtl={} row={row:?} lock={:?}", crate::direction::is_rtl(), lock.rect());
+        for n in h.query_all(egui_kittest::kittest::by().label("Scattering").include_labels()) {
+            eprintln!("DBG scattering node rect={:?} role={:?}", n.rect(), n.accesskit_node().role());
+        }
+    }
+    click_at(&mut h, egui::pos2(row.left() + 11.0, row.center().y));
+    eprintln!("DBG after click locks.scattering={} section={}", h.state().session.tools.brush.locks.scattering, h.state().ui.brush_section);
+    assert!(h.state().session.tools.brush.locks.scattering, "the mirrored lock zone still toggles the lock");
+    assert_eq!(h.state().ui.brush_section, 0, "the lock stays a separate target");
+}
+
+#[test]
+fn rtl_enable_box_click_works_mirrored() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let (_rtl, mut h) = rtl_harness(0, 1);
+    let at = h.get_by_role_and_label(Role::CheckBox, "Enable Shape Dynamics").rect().center();
+    let row = h.get_by_label("Shape Dynamics").rect();
+    assert!(at.x > row.center().x, "the enable box sits at the reading start (right) in RTL");
+    click_at(&mut h, at);
+    assert!(h.state().session.tools.brush.shape_dynamics.enabled, "the mirrored box toggles its section");
+    // A click in another row's mirrored lock zone must not select that row.
+    let other = h.get_by_label("Scattering").rect();
+    click_at(&mut h, egui::pos2(other.left() + 10.0, other.center().y));
+    assert_eq!(h.state().ui.brush_section, 1, "the lock zone did not select the row");
+    assert!(h.state().session.tools.brush.locks.scattering, "the mirrored lock still toggles");
+}
+
+fn canvas_harness() -> Harness<'static, PhotocraftApp> {
+    let mut app = app();
+    app.ui.panels.brush_settings = true;
+    app.last_canvas_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0));
+    let mut h = Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            window(app, &ctx);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    h
+}
+
+#[test]
+fn rtl_window_opens_at_the_mirrored_canvas_edge() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let h = canvas_harness();
+    let x = h.get_by_role_and_label(Role::Button, "Close");
+    assert!(x.rect().left() < 100.0, "the close button sits at the canvas's left edge + 30 px inset in RTL: {:?}", x.rect());
+    let row = h.get_by_label("Scattering").rect();
+    assert!(row.left() >= 0.0, "the window stays on-canvas: {row:?}");
+    drop(rtl);
+
+    let hl = canvas_harness();
+    let x = hl.get_by_role_and_label(Role::Button, "Close");
+    assert!(x.rect().left() >= 1200.0 - WIDTH - 30.0 - 40.0, "LTR keeps the window at the canvas's right edge: {:?}", x.rect());
+}
+
+#[test]
+fn rtl_columns_swap_sections_right_options_left() {
+    use egui_kittest::kittest::Queryable;
+
+    let (rtl, h) = rtl_harness(0, 0);
+    let sections = h.get_by_label("Brush Tip Shape").rect();
+    let options = caption_rect(&h, "Size");
+    eprintln!("DBG cols is_rtl={} sections={sections:?} options={options:?}", crate::direction::is_rtl());
+    {
+        use egui_kittest::kittest::NodeT;
+        let mut v: Vec<_> = h.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::Button).include_labels()).collect();
+        v.extend(h.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::CheckBox).include_labels()));
+        v.extend(h.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::Label).include_labels()));
+        v.extend(h.query_all(egui_kittest::kittest::by().role(egui::accesskit::Role::SpinButton).include_labels()));
+        v.sort_by_key(|n| (n.rect().min.y as i32, n.rect().min.x as i32));
+        for n in v {
+            eprintln!("DBG node rect={:?} role={:?} label={:?}", n.rect(), n.accesskit_node().role(), n.accesskit_node().label());
+        }
+    }
+    assert!(options.left() < sections.left(), "the options pane sits left of the sections in RTL: {options:?} {sections:?}");
+
+    drop(rtl);
+    let hl = harness(0, 0);
+    let sections = hl.get_by_label("Brush Tip Shape").rect();
+    let options = caption_rect(&hl, "Size");
+    assert!(options.left() > sections.left(), "LTR keeps the options right of the sections: {options:?} {sections:?}");
+}
+
+#[test]
+fn rtl_tab_pills_and_close_cluster_mirror() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+
+    let (rtl, h) = rtl_harness(0, 0);
+    let settings = h.get_by_role_and_label(Role::Button, "Brush Settings");
+    let brushes = h.get_by_role_and_label(Role::Button, "Brushes");
+    assert!(settings.rect().right() > brushes.rect().right(), "the first pill starts the row at the right in RTL");
+    let x = h.get_by_role_and_label(Role::Button, "Close");
+    let menu = h.get_by_label("Panel menu");
+    assert!(x.rect().center().x < menu.rect().center().x, "the close button is left of the menu button in RTL");
+    assert!(x.rect().left() < brushes.rect().left(), "the close cluster sits at the reading end, left of the pills");
+
+    drop(rtl);
+    let hl = harness(0, 0);
+    let settings = hl.get_by_role_and_label(Role::Button, "Brush Settings");
+    let brushes = hl.get_by_role_and_label(Role::Button, "Brushes");
+    assert!(settings.rect().right() < brushes.rect().right(), "LTR keeps the first pill at the left");
+    let x = hl.get_by_role_and_label(Role::Button, "Close");
+    let menu = hl.get_by_label("Panel menu");
+    assert!(x.rect().center().x > menu.rect().center().x, "LTR keeps the close button right of the menu button");
+}

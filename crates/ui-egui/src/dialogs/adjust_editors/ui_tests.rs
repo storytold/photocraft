@@ -810,7 +810,7 @@ fn editor_harness(kind: &'static str, params: serde_json::Value) -> Harness<'sta
                 dynamic_color_sliders: true,
                 isolated_curve: None,
             };
-            editor(ui, kind, values, &cx);
+            ui.with_layout(crate::direction::body_layout(), |ui| editor(ui, kind, values, &cx));
         },
         params,
     );
@@ -911,4 +911,181 @@ fn row_values_round_to_their_own_decimals() {
     assert_eq!(row_value(4.6, 2.0, 255.0, None), 5.0, "wide ranges stay whole numbers");
     assert!((row_value(1.234, 0.01, 9.99, None) - 1.23).abs() < 1e-6, "small ranges keep two decimals");
     assert!(row_value(f32::NAN, -20.0, 20.0, Some(u32::MAX)).is_nan(), "no panic on odd input");
+}
+
+/// RTL/LTR twins for the editors' shared chrome: the slider rows' caption and number field, the
+/// fields' numeric text, the check boxes, the radio rows and the spectrum strip. Each test draws
+/// the bare editor under both directions, as the dialog host and the Properties panel scope it,
+/// and asserts reading order rather than absolute x.
+mod rtl {
+    use egui::{Pos2, Rect};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    use serde_json::{Value, json};
+
+    use super::{editor_harness, field_text, type_into_field};
+    use crate::direction::{Dir, direction_scope};
+
+    /// A slider row's caption: the plain Label behind the named control.
+    fn caption(h: &Harness<'static, Value>, text: &str) -> Rect {
+        h.query_all(egui_kittest::kittest::by().label(text).include_labels())
+            .find(|n| n.accesskit_node().role() == egui::accesskit::Role::Label)
+            .expect("the row's caption")
+            .rect()
+    }
+
+    /// A slider row's number field: the SpinButton named by its caption.
+    fn field(h: &Harness<'static, Value>, text: &str) -> Rect {
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, text).rect()
+    }
+
+    /// A real press and release at `at`, as a user's click.
+    fn click_at(h: &mut Harness<'static, Value>, at: Pos2) {
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.run();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+    }
+
+    /// The x positions of the glyphs of the painted text `text`, in paint order.
+    fn glyph_positions(h: &Harness<'static, Value>, text: &str) -> Vec<f32> {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text.trim() == text => Some(t.galley.clone()),
+                _ => None,
+            })
+            .find(|g| g.rows.first().is_some_and(|r| r.glyphs.len() >= text.chars().count()))
+            .map(|g| g.rows[0].glyphs.iter().map(|gl| gl.pos.x).collect())
+            .expect("the text is painted")
+    }
+
+    /// Exposure's slider rows mirror: the caption leads at the reading start, the number field
+    /// sits at the reading end, and the rows keep their vertical order; LTR is unchanged.
+    #[test]
+    fn exposure_slider_rows_mirror_and_keep_their_order() {
+        let probe = |dir: Dir| -> (Rect, Rect, [f32; 3]) {
+            let _dir = direction_scope(dir);
+            let h = editor_harness("exposure", json!({}));
+            let rows = ["Exposure", "Offset", "Gamma Correction"].map(|t| caption(&h, t).top());
+            (caption(&h, "Exposure"), field(&h, "Exposure"), rows)
+        };
+        {
+            let (cap, fld, rows) = probe(Dir::Ltr);
+            assert!(fld.left() > cap.right(), "LTR: the field follows the caption ({fld:?} vs {cap:?})");
+            assert!(rows[0] < rows[1] && rows[1] < rows[2], "LTR rows in order: {rows:?}");
+        }
+        {
+            let (cap, fld, rows) = probe(Dir::Rtl);
+            assert!(fld.right() < cap.left(), "RTL: the field sits at the reading end ({fld:?} vs {cap:?})");
+            assert!(rows[0] < rows[1] && rows[1] < rows[2], "RTL keeps the rows' vertical order: {rows:?}");
+        }
+    }
+
+    /// Numeric text inside a mirrored row keeps its left-to-right form: the field takes the
+    /// ASCII digits it was given, shows them in that order (numbers are not layout) and paints
+    /// their glyphs from left to right.
+    #[test]
+    fn number_fields_keep_numeric_text_ltr_in_rtl() {
+        for dir in [Dir::Rtl, Dir::Ltr] {
+            let _dir = direction_scope(dir);
+            let mut h = editor_harness("exposure", json!({}));
+            type_into_field(&mut h, 0, "-12.5");
+            assert_eq!(h.state()["exposure"].as_f64(), Some(-12.5), "{dir:?}: {}", h.state());
+            assert_eq!(field_text(&h, 0), "-12.5", "{dir:?}");
+            let xs = glyph_positions(&h, "-12.5");
+            assert!(xs.len() >= 5, "{dir:?}: the number is painted ({xs:?})");
+            assert!(xs.windows(2).all(|w| w[0] <= w[1]), "{dir:?}: the digits run left to right ({xs:?})");
+        }
+    }
+
+    /// The painted 14×14 check box on the caption's row.
+    fn painted_box(h: &Harness<'static, Value>, caption: Rect) -> Rect {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Rect(r) => Some(r.rect),
+                _ => None,
+            })
+            .filter(|r| (r.width() - 14.0).abs() < 0.5 && (r.height() - 14.0).abs() < 0.5 && (r.center().y - caption.center().y).abs() < 6.0)
+            .min_by(|a, b| (a.center().x - caption.center().x).abs().total_cmp(&(b.center().x - caption.center().x).abs()))
+            .expect("the check box is painted")
+    }
+
+    /// The "Use Legacy" box leads on the reading start (right in RTL): a click on the 14-point
+    /// box toggles the row and a click past the label does nothing; LTR keeps the box left.
+    #[test]
+    fn use_legacy_box_leads_on_the_reading_start() {
+        let probe = |dir: Dir, at_box: bool| -> Option<bool> {
+            let _dir = direction_scope(dir);
+            let mut h = editor_harness("brightnessContrast", json!({}));
+            let cap = h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Use Legacy").rect();
+            let box_rect = painted_box(&h, cap);
+            let x = match (dir, at_box) {
+                (Dir::Ltr, true) => {
+                    assert!(box_rect.right() < cap.left(), "LTR: the box leads at the left ({box_rect:?} vs {cap:?})");
+                    box_rect.center().x
+                }
+                (Dir::Ltr, false) => cap.right() + 6.0,
+                (Dir::Rtl, true) => {
+                    assert!(box_rect.left() > cap.right(), "RTL: the box leads at the right ({box_rect:?} vs {cap:?})");
+                    box_rect.center().x
+                }
+                (Dir::Rtl, false) => cap.left() - 6.0,
+            };
+            click_at(&mut h, Pos2::new(x, box_rect.center().y));
+            h.state()["legacy"].as_bool()
+        };
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            assert_eq!(probe(dir, true), Some(true), "{dir:?}: the box toggles the row");
+            assert_eq!(probe(dir, false), None, "{dir:?}: nothing to click past the label");
+        }
+    }
+
+    /// The Color Balance tone row reads from the reading start: "Tone:", then Shadows,
+    /// Midtones and Highlights toward the reading end; LTR keeps the familiar order.
+    #[test]
+    fn color_balance_tone_row_follows_reading_order() {
+        let probe = |dir: Dir| -> (f32, [f32; 3]) {
+            let _dir = direction_scope(dir);
+            let h = editor_harness("colorBalance", json!({}));
+            let tone = caption(&h, "Tone:").center().x;
+            let radios = ["Shadows", "Midtones", "Highlights"].map(|t| h.get_by_role_and_label(egui::accesskit::Role::RadioButton, t).rect().center().x);
+            (tone, radios)
+        };
+        {
+            let (tone, r) = probe(Dir::Ltr);
+            assert!(tone < r[0] && r[0] < r[1] && r[1] < r[2], "LTR: {tone} then {r:?}");
+        }
+        {
+            let (tone, r) = probe(Dir::Rtl);
+            assert!(tone > r[0] && r[0] > r[1] && r[1] > r[2], "RTL: {tone} then {r:?}");
+        }
+    }
+
+    /// Hue/Saturation: the Hue row mirrors like every plain row, while the spectrum strip keeps
+    /// its physical placement — the same rectangle in both directions, so a hue's colour stays
+    /// under its handle.
+    #[test]
+    fn hue_saturation_rows_mirror_and_the_spectrum_stays_physical() {
+        let probe = |dir: Dir| -> (Rect, Rect, Rect) {
+            let _dir = direction_scope(dir);
+            let h = editor_harness("hueSaturation", json!({}));
+            let cap = caption(&h, "Hue");
+            let fld = field(&h, "Hue");
+            let bars = h.ctx.data(|d| d.get_temp::<Rect>(egui::Id::unique("precision").with("hs-bars"))).expect("the spectrum bars are drawn");
+            (cap, fld, bars)
+        };
+        let (ltr_cap, ltr_fld, ltr_bars) = probe(Dir::Ltr);
+        let (rtl_cap, rtl_fld, rtl_bars) = probe(Dir::Rtl);
+        assert!(ltr_fld.left() > ltr_cap.right(), "LTR: the field follows the caption ({ltr_fld:?} vs {ltr_cap:?})");
+        assert!(rtl_fld.right() < rtl_cap.left(), "RTL: the field sits at the reading end ({rtl_fld:?} vs {rtl_cap:?})");
+        assert!(
+            (ltr_bars.min - rtl_bars.min).length() < 0.5 && (ltr_bars.size() - rtl_bars.size()).length() < 0.5,
+            "the spectrum keeps its physical placement ({ltr_bars:?} vs {rtl_bars:?})"
+        );
+    }
 }

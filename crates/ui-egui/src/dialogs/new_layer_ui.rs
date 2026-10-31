@@ -70,14 +70,24 @@ pub fn neutral_label(mode: BlendMode) -> String {
 }
 
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    // One direction-aware body: in a left-to-right UI the layout is the modal's own, so nothing
+    // moves; in a right-to-left one the captions hug the reading start and every row mirrors.
+    ui.with_layout(crate::direction::body_layout(), |ui| body_fields(ui, f));
+}
+
+/// A single-line edit whose text reads right-to-left in a right-to-left UI (Arabic names align
+/// to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
+/// The dialog's fields.
+fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let label_width = 64.0;
     let row_label = |ui: &mut egui::Ui, text: &str| {
-        ui.allocate_ui_with_layout(egui::vec2(label_width, 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| ui.label(text)).inner
+        // The caption hugs its column's field side, so it stays next to the editor.
+        ui.allocate_ui_with_layout(egui::vec2(label_width, 22.0), crate::direction::trailing(), |ui| ui.label(text)).inner
     };
     ui.horizontal(|ui| {
         let name_label = row_label(ui, tl!("Name:"));
         let mut name = f.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-        let field = ui.add(egui::TextEdit::singleline(&mut name).desired_width(260.0)).labelled_by(name_label.id);
+        let field = crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(260.0)).labelled_by(name_label.id);
         if field.changed() {
             f.insert("name".into(), json!(name));
         }
@@ -211,5 +221,47 @@ mod tests {
         h.event(egui::Event::Text("Shade".into()));
         h.run_steps(2);
         assert_eq!(h.state().ui.dialogs[0].fields["name"], "Shade");
+    }
+
+    /// The body mirrors in a right-to-left UI: the captions hug the reading start, the checkbox
+    /// rows indent from it, and the dialog keeps the same width.
+    #[test]
+    fn the_body_mirrors_in_a_right_to_left_ui() {
+        let layout = |dir: crate::direction::Dir| {
+            let _dir = crate::direction::direction_scope(dir);
+            let mut app = app();
+            open(&mut app).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    let ctx = ui.ctx().clone();
+                    if ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        crate::dialogs::show(app, &ctx);
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            let frame = crate::dialogs::rects(&h.ctx)[0];
+            let color = h.get_by_label("Color:").rect();
+            let mode = h.get_by_label("Mode").rect();
+            let clip = h.get_by_label("Use Previous Layer to Create Clipping Mask").rect();
+            let spacing = h.ctx.global_style().spacing.item_spacing.x;
+            (frame, color, mode, clip, spacing)
+        };
+        let (frame, color, mode, clip, spacing) = layout(crate::direction::Dir::Ltr);
+        assert!(color.left() - frame.left() < 80.0, "LTR: the caption hugs the reading start: {color:?} in {frame:?}");
+        // The caption's field side touches its editor, one item spacing away.
+        assert!((mode.left() - color.right() - spacing).abs() < 2.0, "LTR: the caption hugs its editor: {color:?} {mode:?}");
+        assert!(mode.left() > color.right(), "LTR: the dropdown ends the row: {color:?} {mode:?}");
+        assert!(clip.left() - frame.left() > 70.0, "LTR: the checkbox row indents past the captions: {clip:?} in {frame:?}");
+        let (frame, color, mode, clip, spacing) = layout(crate::direction::Dir::Rtl);
+        assert!(frame.right() - color.right() < 80.0, "RTL: the caption hugs the reading start: {color:?} in {frame:?}");
+        // The caption's field side touches its editor, one item spacing away.
+        assert!((color.left() - mode.right() - spacing).abs() < 2.0, "RTL: the caption hugs its editor: {color:?} {mode:?}");
+        assert!(mode.right() < color.left(), "RTL: the dropdown follows the caption to the reading end: {color:?} {mode:?}");
+        assert!(frame.right() - clip.right() > 70.0, "RTL: the checkbox row indents past the captions: {clip:?} in {frame:?}");
+        // The mirrored dialog is the same width as the left-to-right one.
+        assert!((layout(crate::direction::Dir::Ltr).0.width() - frame.width()).abs() < 1.0);
     }
 }

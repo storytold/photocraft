@@ -2039,3 +2039,398 @@ fn reset_section_on_type_keeps_the_favourite_fonts() {
     assert_eq!(prefs.favorite_fonts, ["Bebas Neue"], "the favourites are kept");
     assert_eq!(stored(&store)["type"]["favoriteFonts"], json!(["Bebas Neue"]));
 }
+
+/// The Preferences dialog in a right-to-left language: the section list sits at the reading
+/// start (the right) and the settings column at the reading end (the left).
+#[test]
+fn rtl_prefs_sidebar_sits_at_the_reading_start() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    let (mut app, _) = app_with_store();
+    open_preferences(&mut app, "general");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let row = h.query_all_by_role_and_label(Role::Button, "General").next().expect("the General section row").rect();
+    let title = h.query_all_by_role_and_label(Role::Label, "General").next().expect("the General title").rect();
+    assert!(row.left() > title.right(), "the section list reads first: {row:?} {title:?}");
+}
+
+/// The left-to-right twin: the section list keeps its place at the left.
+#[test]
+fn ltr_prefs_sidebar_sits_at_the_left() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _) = app_with_store();
+    open_preferences(&mut app, "general");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let row = h.query_all_by_role_and_label(Role::Button, "General").next().expect("the General section row").rect();
+    let title = h.query_all_by_role_and_label(Role::Label, "General").next().expect("the General title").rect();
+    assert!(row.right() < title.left(), "the section list keeps its place: {row:?} {title:?}");
+}
+
+/// The settings rows read label first: in a right-to-left dialog the label sits at the reading
+/// start and its editor follows toward the reading end.
+#[test]
+fn rtl_prefs_grid_rows_read_label_first() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    let (mut app, _) = app_with_store();
+    open_preferences(&mut app, "interface");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let label = h.query_all_by_role_and_label(Role::Label, "Language").next().expect("the Language label").rect();
+    let editor = h.query_all_by_role_and_label(Role::ComboBox, "Language").next().expect("the Language dropdown").rect();
+    assert!(label.left() > editor.right(), "the label reads first: {label:?} {editor:?}");
+}
+
+/// The left-to-right twin of the settings rows: the label keeps its place at the left.
+#[test]
+fn ltr_prefs_grid_rows_read_label_first() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _) = app_with_store();
+    open_preferences(&mut app, "interface");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let label = h.query_all_by_role_and_label(Role::Label, "Language").next().expect("the Language label").rect();
+    let editor = h.query_all_by_role_and_label(Role::ComboBox, "Language").next().expect("the Language dropdown").rect();
+    assert!(label.right() < editor.left(), "the label keeps its place: {label:?} {editor:?}");
+}
+
+/// The Preferences sidebar's section button with the label `title`.
+fn prefs_section_row(h: &egui_kittest::Harness<'_, PhotocraftApp>, title: &str) -> egui::Rect {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::Queryable;
+    h.query_all_by_role_and_label(Role::Button, title).next().expect("the section row").rect()
+}
+
+/// Whether the UI fonts can shape Arabic: the Arabic face ships only with `CRAFT_FONTS_DIR` (or a
+/// system fallback), and epaint panics on a glyph it cannot find.
+fn arabic_text_available(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> bool {
+    h.ctx.fonts_mut(|fonts| {
+        [egui::FontFamily::Proportional, egui::FontFamily::Name("medium".into()), egui::FontFamily::Name("semibold".into())]
+            .iter()
+            .all(|family| fonts.has_glyph(&egui::FontId::new(12.5, family.clone()), 'ا'))
+    })
+}
+
+/// Whether the app's own egui style mirrors right to left.
+fn app_is_rtl(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> bool {
+    h.ctx.style_of(egui::Theme::Dark).right_to_left || h.ctx.style_of(egui::Theme::Light).right_to_left
+}
+
+/// Previewing a language in Preferences mirrors the dialog without touching the app: the
+/// pending language drives the dialog's direction, the app keeps its own.
+#[test]
+fn prefs_preview_mirrors_without_flipping_the_app() {
+    use egui_kittest::Harness;
+    let (mut app, _) = app_with_store();
+    let id = open_preferences(&mut app, "general");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    if !arabic_text_available(&h) {
+        eprintln!("skipping: the Arabic font is missing (build with CRAFT_FONTS_DIR)");
+        return;
+    }
+    let before = prefs_section_row(&h, "General");
+    // The dropdown writes the picked language into the dialog's pending values.
+    let mut values = h.state_mut().ui.dialog_mut(id).unwrap().fields.get("values").cloned().unwrap();
+    values["interface"]["language"] = json!("ar");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("values".into(), values);
+    h.run_steps(4);
+    let ar = crate::i18n::tr(crate::i18n::Lang::from_code("ar").unwrap(), "General");
+    let after = prefs_section_row(&h, ar);
+    assert!(after.left() > before.left(), "the previewed Arabic dialog mirrors: {before:?} {after:?}");
+    assert!(!app_is_rtl(&h), "the app's own direction stays left-to-right");
+    assert_eq!(crate::i18n::current(), crate::i18n::Lang::EN, "the app's language stays English");
+}
+
+/// Committing Arabic flips the app and the dialog in the same frame; English flips it back.
+#[test]
+fn switching_language_to_arabic_flips_prefs_same_frame() {
+    use egui_kittest::Harness;
+    let (mut app, _) = app_with_store();
+    let id = open_preferences(&mut app, "general");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    if !arabic_text_available(&h) {
+        eprintln!("skipping: the Arabic font is missing (build with CRAFT_FONTS_DIR)");
+        return;
+    }
+    // The dialog draws in the language it is editing, so Arabic is picked in its values.
+    let mut values = h.state_mut().ui.dialog_mut(id).unwrap().fields.get("values").cloned().unwrap();
+    values["interface"]["language"] = json!("ar");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("values".into(), values);
+    h.run_steps(4);
+    // Saving that language flips the app itself.
+    h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "ar"})).unwrap();
+    h.run_steps(4);
+    assert!(app_is_rtl(&h), "the app follows the language it was given");
+    let ar = crate::i18n::tr(crate::i18n::Lang::from_code("ar").unwrap(), "General");
+    let row = prefs_section_row(&h, ar);
+    assert!(row.left() > 1280.0 / 2.0, "the section list sits at the reading start: {row:?}");
+    h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "en"})).unwrap();
+    h.run_steps(4);
+    assert!(!app_is_rtl(&h), "the direction is not sticky");
+}
+
+/// The right-to-left twin of the favourite badge: the star keeps its physical corner, so
+/// hovering it shows the badge without shifting the swatches next to it.
+#[test]
+fn rtl_theme_star_badge_on_hover_does_not_move_the_next_swatch() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    let (mut app, _) = app_with_store();
+    open_preferences(&mut app, "interface");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let first = h.get_by_label("Classic").rect();
+    let next = h.get_by_label("Adwaita").rect();
+    h.hover_at(first.center());
+    h.run_steps(3);
+    // The badge is painted at the physical right corner of the swatch; it does not mirror.
+    let badge = h.query_by_label("Add to favorites: Classic").expect("the badge shows while the swatch is hovered").rect();
+    let corner = first.right_top() + vec2(-3.0, 3.0);
+    assert!((badge.center() - corner).length() < 1.0, "the badge keeps its corner: {badge:?} {first:?}");
+    assert_eq!(h.get_by_label("Classic").rect(), first);
+    assert_eq!(h.get_by_label("Adwaita").rect(), next);
+}
+
+/// The Toolbar preferences grid mirrors its columns in a right-to-left UI: the key letter sits
+/// at the reading end (the left) and the tool checkbox at the reading start.
+#[test]
+fn toolbar_grid_mirrors_columns_in_rtl() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    let mut fields = Map::new();
+    fields.insert("toolbarHidden".into(), json!([]));
+    let mut h = Harness::builder()
+        .with_size(vec2(520.0, 480.0))
+        .build_ui_state(|ui: &mut egui::Ui, f: &mut Map<String, Value>| super::dialogs::toolbar_tab(ui, f), fields);
+    h.run_steps(3);
+    let checkbox = h.query_all_by_role_and_label(Role::CheckBox, "Move Tool").next().expect("the Move Tool checkbox").rect();
+    let letter = h
+        .query_all_by_role_and_label(Role::Label, "V")
+        .map(|n| n.rect())
+        .min_by(|a, b| (a.center().y - checkbox.center().y).abs().total_cmp(&(b.center().y - checkbox.center().y).abs()))
+        .expect("the V key letter");
+    assert!(letter.right() < checkbox.left(), "the key letter sits at the reading end: {letter:?} {checkbox:?}");
+}
+
+/// The left-to-right twin of the Toolbar grid: the key letter keeps its place at the right.
+#[test]
+fn toolbar_grid_keeps_columns_in_ltr() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut fields = Map::new();
+    fields.insert("toolbarHidden".into(), json!([]));
+    let mut h = Harness::builder()
+        .with_size(vec2(520.0, 480.0))
+        .build_ui_state(|ui: &mut egui::Ui, f: &mut Map<String, Value>| super::dialogs::toolbar_tab(ui, f), fields);
+    h.run_steps(3);
+    let checkbox = h.query_all_by_role_and_label(Role::CheckBox, "Move Tool").next().expect("the Move Tool checkbox").rect();
+    let letter = h
+        .query_all_by_role_and_label(Role::Label, "V")
+        .map(|n| n.rect())
+        .min_by(|a, b| (a.center().y - checkbox.center().y).abs().total_cmp(&(b.center().y - checkbox.center().y).abs()))
+        .expect("the V key letter");
+    assert!(letter.left() > checkbox.right(), "the key letter keeps its place: {letter:?} {checkbox:?}");
+}
+
+/// The Preset I/O and Embedded Profile Mismatch bodies read in the right-to-left order: the
+/// Action label sits at the reading start, the preset checkboxes stack under it and the
+/// answers line up at the reading start too.
+#[test]
+fn preset_and_mismatch_rows_read_rtl() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    fn presets_io_harness() -> Harness<'static, Map<String, Value>> {
+        let mut fields = Map::new();
+        fields.insert("action".into(), json!("export"));
+        Harness::builder().with_size(vec2(420.0, 260.0)).build_ui_state(
+            |ui: &mut egui::Ui, f: &mut Map<String, Value>| {
+                ui.with_layout(crate::text::direction::body_layout(), |ui| super::dialogs::presets_io_body(ui, f));
+            },
+            fields,
+        )
+    }
+
+    fn mismatch_harness(rtl: bool) -> Harness<'static, Map<String, Value>> {
+        let mut fields = Map::new();
+        fields.insert("message".into(), json!("Embedded profile mismatch."));
+        fields.insert("action".into(), json!("preserve"));
+        fields.insert("missing".into(), json!(false));
+        fields.insert("embedded".into(), json!("Adobe RGB (1998)"));
+        fields.insert("working".into(), json!("sRGB"));
+        Harness::builder().with_size(vec2(420.0, 260.0)).with_context_setup(move |ctx| crate::theme::set_direction(ctx, rtl)).build_ui_state(
+            |ui: &mut egui::Ui, f: &mut Map<String, Value>| {
+                ui.with_layout(crate::text::direction::body_layout(), |ui| super::dialogs::mismatch_body(ui, f));
+            },
+            fields,
+        )
+    }
+
+    let (rtl_label, rtl_combo, rtl_boxes) = {
+        let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+        let mut h = presets_io_harness();
+        h.run_steps(3);
+        let label = h.query_all_by_role_and_label(Role::Label, "Action").next().expect("the Action label").rect();
+        let combo = h.query_all_by_role_and_label(Role::ComboBox, "Action").next().expect("the Action dropdown").rect();
+        let boxes: Vec<egui::Rect> = ["Brushes", "Custom Shapes", "Tool Presets"]
+            .iter()
+            .map(|name| h.query_all_by_role_and_label(Role::CheckBox, name).next().expect(name).rect())
+            .collect();
+        (label, combo, boxes)
+    };
+
+    let (ltr_label, ltr_combo, ltr_boxes) = {
+        let _ltr = crate::text::direction::direction_scope(crate::text::direction::Dir::Ltr);
+        let mut h = presets_io_harness();
+        h.run_steps(3);
+        let label = h.query_all_by_role_and_label(Role::Label, "Action").next().expect("the Action label").rect();
+        let combo = h.query_all_by_role_and_label(Role::ComboBox, "Action").next().expect("the Action dropdown").rect();
+        let boxes: Vec<egui::Rect> = ["Brushes", "Custom Shapes", "Tool Presets"]
+            .iter()
+            .map(|name| h.query_all_by_role_and_label(Role::CheckBox, name).next().expect(name).rect())
+            .collect();
+        (label, combo, boxes)
+    };
+
+    assert!(rtl_label.left() > rtl_combo.right(), "the Action label reads first: {rtl_label:?} {rtl_combo:?}");
+    assert!(ltr_label.right() < ltr_combo.left(), "the Action label keeps its place: {ltr_label:?} {ltr_combo:?}");
+    for (name, a, b) in [("Brushes", &rtl_boxes[0], &rtl_boxes[1]), ("Custom Shapes", &rtl_boxes[1], &rtl_boxes[2])] {
+        assert!(a.top() < b.top(), "{name} stacks below the row above it: {a:?} {b:?}");
+    }
+    assert!((rtl_boxes[0].right() - rtl_boxes[2].right()).abs() < 0.5, "the checkboxes share their reading-end edge: {rtl_boxes:?}");
+    assert!((ltr_boxes[0].left() - ltr_boxes[2].left()).abs() < 0.5, "the checkboxes share their reading-start edge: {ltr_boxes:?}");
+
+    let rtl_radios = {
+        let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+        let mut h = mismatch_harness(true);
+        h.run_steps(3);
+        let message = h.query_all_by_role_and_label(Role::Label, "Embedded profile mismatch.").next().expect("the message").rect();
+        let radios: Vec<egui::Rect> = h.query_all_by_role(Role::RadioButton).map(|n| n.rect()).collect();
+        (message, radios)
+    };
+    let ltr_radios = {
+        let _ltr = crate::text::direction::direction_scope(crate::text::direction::Dir::Ltr);
+        let mut h = mismatch_harness(false);
+        h.run_steps(3);
+        let message = h.query_all_by_role_and_label(Role::Label, "Embedded profile mismatch.").next().expect("the message").rect();
+        let radios: Vec<egui::Rect> = h.query_all_by_role(Role::RadioButton).map(|n| n.rect()).collect();
+        (message, radios)
+    };
+
+    assert_eq!(rtl_radios.1.len(), 3, "the three answers");
+    assert_eq!(ltr_radios.1.len(), 3, "the three answers");
+    for radio in &rtl_radios.1 {
+        assert!((radio.right() - rtl_radios.0.right()).abs() < 0.5, "the answers line up at the reading start: {radio:?} {:?}", rtl_radios.0);
+    }
+    for radio in &ltr_radios.1 {
+        assert!((radio.left() - ltr_radios.0.left()).abs() < 0.5, "the answers keep their place: {radio:?} {:?}", ltr_radios.0);
+    }
+    assert!(rtl_radios.1[0].right() > ltr_radios.1[0].right(), "the answers sit at the reading start: {:?} {:?}", rtl_radios.1[0], ltr_radios.1[0]);
+    assert!(ltr_radios.1[0].left() < rtl_radios.1[0].left(), "the answers keep their place: {:?} {:?}", ltr_radios.1[0], rtl_radios.1[0]);
+}
+
+/// The right-to-left settings grid: the labels of different lengths share their reading-start
+/// (right) edge, so the label column reads as one line.
+#[test]
+fn rtl_prefs_labels_share_their_reading_start_edge() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    let (mut app, _) = app_with_store();
+    open_preferences(&mut app, "interface");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let language = h.query_all_by_role_and_label(Role::Label, "Language").next().expect("the Language label").rect();
+    let scale = h.query_all_by_role_and_label(Role::Label, "UI scale").next().expect("the UI scale label").rect();
+    assert!((language.right() - scale.right()).abs() < 0.5, "the labels share their right edge: {language:?} {scale:?}");
+}
+
+/// The left-to-right twin: the labels keep their shared left edge.
+#[test]
+fn ltr_prefs_labels_share_their_reading_start_edge() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _) = app_with_store();
+    open_preferences(&mut app, "interface");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let language = h.query_all_by_role_and_label(Role::Label, "Language").next().expect("the Language label").rect();
+    let scale = h.query_all_by_role_and_label(Role::Label, "UI scale").next().expect("the UI scale label").rect();
+    assert!((language.left() - scale.left()).abs() < 0.5, "the labels keep their left edge: {language:?} {scale:?}");
+}
+
+/// The right-to-left boolean row: the checkbox hugs the reading-start edge, where the other
+/// rows' labels sit.
+#[test]
+fn rtl_prefs_bool_row_sits_at_the_reading_start() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    let (mut app, _) = app_with_store();
+    open_preferences(&mut app, "general");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let checkbox = h.query_all_by_role_and_label(Role::CheckBox, "Beep when done").next().expect("the Beep when done checkbox").rect();
+    let label = h.query_all_by_role_and_label(Role::Label, "Image interpolation").next().expect("the Image interpolation label").rect();
+    // The named node is the checkbox's text; its 14 px box and the 6 px gap sit between the
+    // text and the cell's reading-start edge, which the labels share.
+    let gap = label.right() - checkbox.right();
+    assert!((gap - 20.0).abs() < 1.0, "the checkbox box hugs the labels' reading-start edge: {checkbox:?} {label:?}");
+}
+
+/// The left-to-right twin: the checkbox keeps its place in the editor column, after the label
+/// column the row shares with the other fields.
+#[test]
+fn ltr_prefs_bool_row_keeps_its_place() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (mut app, _) = app_with_store();
+    open_preferences(&mut app, "general");
+    let mut h = Harness::builder().with_size(vec2(1280.0, 800.0)).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        app
+    });
+    h.run_steps(4);
+    let checkbox = h.query_all_by_role_and_label(Role::CheckBox, "Beep when done").next().expect("the Beep when done checkbox").rect();
+    let label = h.query_all_by_role_and_label(Role::Label, "Image interpolation").next().expect("the Image interpolation label").rect();
+    assert!(checkbox.left() > label.right(), "the checkbox keeps its place in the editor column: {checkbox:?} {label:?}");
+}

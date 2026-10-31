@@ -288,7 +288,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     crate::widgets::vline(ui, 22.0);
     crate::widgets::checkbox(ui, &mut app.ui.tool_options.perspective_crop_grid, tl!("Show Grid"));
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    ui.with_layout(crate::direction::trailing(), |ui| {
         let commit_tip = crate::i18n::fmt(tl!("Commit current crop operation  ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]);
         if crate::icons::button(ui, "check", 26.0, false, &commit_tip).clicked() {
             commit(app);
@@ -403,5 +403,41 @@ mod tests {
         app.sync_views();
         assert_eq!(app.ui.perspective_crop, None);
         assert!(app.pcrop.drag.is_none() && app.pcrop.clicks.is_empty());
+    }
+
+    /// The commit/cancel group hugs the options bar's reading end — far right in LTR, far left in
+    /// RTL, the two buttons' order mirrored — via direction::trailing(), not a fixed LTR pin.
+    /// The canvas overlay stays LTR in both (rtl-canvas-guard), so only the bar is asserted here.
+    #[test]
+    fn options_bar_commit_group_hugs_the_reading_end() {
+        use egui_kittest::kittest::Queryable;
+        let rects = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let doc = Document::with_background("p", Size::new(200, 150), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+            let mut s = photocraft_engine::Session::new();
+            s.add_document(doc, None);
+            let mut app = PhotocraftApp::new(s, crate::Services::default());
+            app.ui.tool = Tool::PerspectiveCrop;
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 60.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    crate::panels::options_bar(app, ui);
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(4);
+            let commit = h.get_by_label_contains("Commit current crop operation").rect();
+            let cancel = h.get_by_label_contains("Cancel current crop operation").rect();
+            (commit, cancel)
+        };
+        let (ltr_commit, ltr_cancel) = rects(crate::direction::Dir::Ltr);
+        assert!(ltr_commit.center().x > ltr_cancel.center().x, "LTR order: {ltr_commit:?} vs {ltr_cancel:?}");
+        assert!(ltr_commit.right() > 1400.0 * 0.9, "LTR group hugs the right end: {ltr_commit:?}");
+        let (rtl_commit, rtl_cancel) = rects(crate::direction::Dir::Rtl);
+        assert!(rtl_commit.center().x < rtl_cancel.center().x, "RTL order: {rtl_commit:?} vs {rtl_cancel:?}");
+        assert!(rtl_commit.left() < 1400.0 * 0.1, "RTL group hugs the left end: {rtl_commit:?}");
     }
 }

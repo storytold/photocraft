@@ -121,6 +121,13 @@ const METHODS: &[(&str, &str)] = &[("fit", "Fit"), ("fill", "Fill"), ("conform",
 
 /// Render the dialog. Mutates `fields["__variables"]` and `fields["__page"]`.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+    // One direction-aware body: in a left-to-right UI the layout is the modal's own, so nothing
+    // moves; in a right-to-left one the blocks hug the reading start and every row mirrors.
+    ui.with_layout(crate::direction::body_layout(), |ui| body_ui(app, ui, fields));
+}
+
+/// The dialog's pages and fields.
+fn body_ui(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let layers = layer_options(app);
     let mut state = normalize(fields.get("__variables").unwrap_or(&Value::Null));
@@ -175,7 +182,8 @@ fn define_page(ui: &mut egui::Ui, _t: &Tokens, layers: &[(u64, String, bool)], s
         ui.horizontal(|ui| {
             // name
             let mut name = d.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-            if ui.add(egui::TextEdit::singleline(&mut name).hint_text(tl!("name")).desired_width(110.0)).changed() {
+            let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+            if ui.add(crate::widgets::rtl_singleline(&mut name, &mut layouter).hint_text(tl!("name")).desired_width(110.0)).changed() {
                 d["name"] = json!(name);
             }
             // layer
@@ -253,7 +261,8 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
     let mut cur = data_set_index(fields, sets.len());
 
     ui.horizontal(|ui| {
-        if ui.button("◀").clicked() && cur > 0 {
+        // The pager mirrors with its row: icon_name swaps the chevrons under RTL, so each still points backwards through the sets.
+        if crate::icons::button(ui, "chevron-left", 22.0, false, tl!("Previous data set")).clicked() && cur > 0 {
             cur -= 1;
         }
         let name = sets
@@ -272,7 +281,7 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
                 &[("name", &name), ("index", &(if sets.is_empty() { 0 } else { cur + 1 }).to_string()), ("total", &sets.len().to_string())],
             )
         });
-        if ui.button("▶").clicked() && cur + 1 < sets.len() {
+        if crate::icons::button(ui, "chevron-right", 22.0, false, tl!("Next data set")).clicked() && cur + 1 < sets.len() {
             cur += 1;
         }
         if ui.button(tl!("New")).clicked() {
@@ -292,7 +301,8 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
         let mut sname = set.get("name").and_then(Value::as_str).unwrap_or("").to_string();
         ui.horizontal(|ui| {
             let name_label = ui.label(tl!("Name:"));
-            if ui.add(egui::TextEdit::singleline(&mut sname).desired_width(200.0)).labelled_by(name_label.id).changed() {
+            let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+            if ui.add(crate::widgets::rtl_singleline(&mut sname, &mut layouter).desired_width(200.0)).labelled_by(name_label.id).changed() {
                 set["name"] = json!(sname);
             }
         });
@@ -324,13 +334,15 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
                     }
                     "pixelReplacement" => {
                         let mut p = values[i].get("value").and_then(Value::as_str).unwrap_or("").to_string();
-                        if ui.add(egui::TextEdit::singleline(&mut p).hint_text(tl!("image file path")).desired_width(240.0)).changed() {
+                        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+                        if ui.add(crate::widgets::rtl_singleline(&mut p, &mut layouter).hint_text(tl!("image file path")).desired_width(240.0)).changed() {
                             values[i]["value"] = json!(p);
                         }
                     }
                     _ => {
                         let mut txt = values[i].get("value").and_then(Value::as_str).unwrap_or("").to_string();
-                        if ui.add(egui::TextEdit::singleline(&mut txt).desired_width(240.0)).accessible_name(vname.clone()).changed() {
+                        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+                        if ui.add(crate::widgets::rtl_singleline(&mut txt, &mut layouter).desired_width(240.0)).accessible_name(vname.clone()).changed() {
                             values[i]["value"] = json!(txt);
                         }
                     }
@@ -362,6 +374,7 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui_kittest::kittest::Queryable;
     use photocraft_doc::{DataSet, DataValue, LayerId, VarKind, VariableDef, Variables, variables::Value as VV};
 
     #[test]
@@ -421,5 +434,72 @@ mod tests {
         assert!(!owns(&f));
         f.insert("__variables".into(), json!({}));
         assert!(owns(&f));
+    }
+
+    fn app() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app
+    }
+
+    /// The dialog rendered in `dir`, parked on `page` with `state` as its editable variables.
+    fn harness(dir: crate::direction::Dir, page: &str, state: Value) -> egui_kittest::Harness<'_, PhotocraftApp> {
+        let _dir = crate::direction::direction_scope(dir);
+        let mut app = app();
+        let r = menu(&mut app, "image.variables.define", &json!({})).unwrap().unwrap();
+        let id = r["dialog"].as_u64().unwrap();
+        let d = app.ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
+        d.fields.insert("__page".into(), json!(page));
+        d.fields.insert("__variables".into(), state);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let ctx = ui.ctx().clone();
+                if ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    crate::dialogs::show(app, &ctx);
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(4);
+        h
+    }
+
+    /// The dialog mirrors in a right-to-left UI: the intro text and the page switcher hug the
+    /// reading start, and the switcher keeps its logical order.
+    #[test]
+    fn the_body_mirrors_in_a_right_to_left_ui() {
+        let rects = |dir: crate::direction::Dir| {
+            let h = harness(dir, "define", json!({"defs": [], "dataSets": []}));
+            let define = h.get_by_label("Define").rect();
+            let data_sets = h.get_by_label("Data Sets").rect();
+            let intro = h.get_by_label("Variables bind a layer's visibility, text or pixels to a named data slot.").rect();
+            (define, data_sets, intro)
+        };
+        let (define, data_sets, intro) = rects(crate::direction::Dir::Ltr);
+        assert!(define.right() <= data_sets.left(), "LTR: Define starts the switcher: {define:?} {data_sets:?}");
+        assert!((intro.left() - define.left()).abs() < 30.0, "LTR: the intro hugs the reading start: {intro:?} {define:?}");
+        let (define, data_sets, intro) = rects(crate::direction::Dir::Rtl);
+        assert!(define.left() >= data_sets.right(), "RTL: Define still starts the switcher: {define:?} {data_sets:?}");
+        assert!((intro.right() - define.right()).abs() < 30.0, "RTL: the intro hugs the reading start: {intro:?} {define:?}");
+    }
+
+    /// The data-set pager keeps prev/next at the row's reading ends: under RTL the chevron icons
+    /// swap with the mirrored row so each still points backwards through the sets.
+    #[test]
+    fn the_data_set_pager_mirrors_in_a_right_to_left_ui() {
+        let state = json!({
+            "defs": [{"name": "title", "layer": 1, "type": "textReplacement", "method": "fit", "align": "center", "clip": false}],
+            "dataSets": [{"name": "Set A", "values": [{"variable": "title", "kind": "text", "value": "x"}]}]
+        });
+        let pager = |dir: crate::direction::Dir| {
+            let h = harness(dir, "dataSets", state.clone());
+            (h.get_by_label("Previous data set").rect(), h.get_by_label("Next data set").rect())
+        };
+        let (prev, next) = pager(crate::direction::Dir::Ltr);
+        assert!(prev.right() <= next.left(), "LTR: prev sits left of next: {prev:?} {next:?}");
+        let (prev, next) = pager(crate::direction::Dir::Rtl);
+        assert!(prev.right() >= next.right(), "RTL: prev (swapped icon) sits at the reading start: {prev:?} {next:?}");
     }
 }

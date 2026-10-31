@@ -206,11 +206,25 @@ pub fn reset(fields: &mut Map<String, Value>) {
     select(fields, Some(0));
 }
 
-/// Where the dialog first opens (offset from the window's top-left): at the right edge, beside the
-/// image, as Photoshop docks its Blur Tools panel, so the pins under it stay in view. Moved, it
-/// reopens where it was left, like any dialog.
+/// The blur dialog's outer width: its 440 pt content plus the modal frame's 6 pt margins.
+const DIALOG_WIDTH: f32 = 452.0;
+/// The offset from the window's right edge to the dialog's left edge in a left-to-right UI.
+const LTR_OFFSET: f32 = 480.0;
+/// The gap the dialog keeps from the window's edge, the same on both sides.
+const EDGE_GAP: f32 = LTR_OFFSET - DIALOG_WIDTH;
+
+/// Where the dialog first opens (offset from the window's top-left): at the reading-end edge,
+/// beside the image, as Photoshop docks its Blur Tools panel, so the pins under it stay in view.
+/// Moved, it reopens where it was left, like any dialog.
 pub fn first_place(fields: &Map<String, Value>, ctx: &egui::Context) -> Option<egui::Vec2> {
-    owns(fields).then(|| vec2((ctx.content_rect().width() - 480.0).max(0.0), 96.0))
+    if !owns(fields) {
+        return None;
+    }
+    // The window's right edge in a left-to-right UI, its left edge in a right-to-left one, with
+    // the same gap from the edge on both sides.
+    let width = ctx.content_rect().width();
+    let x = if crate::direction::is_rtl() { EDGE_GAP.min((width - DIALOG_WIDTH).max(0.0)) } else { (width - LTR_OFFSET).max(0.0) };
+    Some(vec2(x, 96.0))
 }
 
 /// One pin: position as fractions of the bounds, its amount (blur in pixels, Spin's blur angle in
@@ -398,55 +412,59 @@ pub fn remove_selected(fields: &mut Map<String, Value>) -> bool {
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let k = kind(f).unwrap_or(Kind::Field);
-    match selected(f) {
-        Some(i) => {
-            let mut list = pins(f);
-            if let Some(pin) = list.get_mut(i) {
-                let mut v = pin.blur as f32;
-                let (label, unit) = if k == Kind::Spin { (tl!("Blur Angle"), "°") } else { (tl!("Blur"), "px") };
-                if crate::widgets::slider_row(ui, label, &mut v, 0.0..=k.max() as f32, unit, None).changed() {
-                    pin.blur = f64::from(v.round()).clamp(0.0, k.max());
-                    set_pins(f, &list);
-                    select(f, Some(i));
+    // One direction-aware body: in a left-to-right UI the blocks keep the default layout; in a
+    // right-to-left one they hug the reading start and the nested rows mirror.
+    ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
+        match selected(f) {
+            Some(i) => {
+                let mut list = pins(f);
+                if let Some(pin) = list.get_mut(i) {
+                    let mut v = pin.blur as f32;
+                    let (label, unit) = if k == Kind::Spin { (tl!("Blur Angle"), "°") } else { (tl!("Blur"), "px") };
+                    if crate::widgets::slider_row(ui, label, &mut v, 0.0..=k.max() as f32, unit, None).changed() {
+                        pin.blur = f64::from(v.round()).clamp(0.0, k.max());
+                        set_pins(f, &list);
+                        select(f, Some(i));
+                    }
                 }
             }
+            None => {
+                ui.label(egui::RichText::new(tl!("No pin selected")).color(t.text_dim));
+            }
         }
-        None => {
-            ui.label(egui::RichText::new(tl!("No pin selected")).color(t.text_dim));
-        }
-    }
-    ui.add_space(4.0);
-    let hint = |ui: &mut egui::Ui, text: &str| ui.add(egui::Label::new(egui::RichText::new(text).color(t.text_dim).size(11.5)).wrap());
-    if k == Kind::Tilt {
-        hint(
-            ui,
-            tl!(
-                "Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it."
-            ),
-        );
-    } else {
-        hint(ui, tl!("Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin."));
-    }
-    if k == Kind::Iris {
-        hint(
-            ui,
-            tl!("Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts."),
-        );
-    }
-    if k == Kind::Spin {
-        hint(ui, tl!("Drag the handles on the outline to resize and turn it; the ring sets the blur angle."));
-    }
-    // Delete removes the selected pin, unless a field is being typed in.
-    let typing = ui.ctx().memory(|m| m.focused().is_some());
-    if !typing && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)) {
-        remove_selected(f);
-        ui.ctx().request_repaint();
-    }
-    if let Some(mut preview) = f.get("__preview").and_then(Value::as_bool) {
         ui.add_space(4.0);
-        crate::widgets::checkbox(ui, &mut preview, tl!("Preview"));
-        f.insert("__preview".into(), json!(preview));
-    }
+        let hint = |ui: &mut egui::Ui, text: &str| ui.add(egui::Label::new(egui::RichText::new(text).color(t.text_dim).size(11.5)).wrap());
+        if k == Kind::Tilt {
+            hint(
+                ui,
+                tl!(
+                    "Drag the pin to move the band, or its ring to change its blur. Drag the solid lines to widen the sharp band, the dashed lines to set the transition, and the dots to turn it."
+                ),
+            );
+        } else {
+            hint(ui, tl!("Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin."));
+        }
+        if k == Kind::Iris {
+            hint(
+                ui,
+                tl!("Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts."),
+            );
+        }
+        if k == Kind::Spin {
+            hint(ui, tl!("Drag the handles on the outline to resize and turn it; the ring sets the blur angle."));
+        }
+        // Delete removes the selected pin, unless a field is being typed in.
+        let typing = ui.ctx().memory(|m| m.focused().is_some());
+        if !typing && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Delete) || i.consume_key(egui::Modifiers::NONE, egui::Key::Backspace)) {
+            remove_selected(f);
+            ui.ctx().request_repaint();
+        }
+        if let Some(mut preview) = f.get("__preview").and_then(Value::as_bool) {
+            ui.add_space(4.0);
+            crate::widgets::checkbox(ui, &mut preview, tl!("Preview"));
+            f.insert("__preview".into(), json!(preview));
+        }
+    });
 }
 
 /// What a press at screen point `at` grabs: one of the selected pin's handles (axis 0–3 = +u, +v,
@@ -770,5 +788,96 @@ pub fn scale_for_proxy(params: &mut Value, k: u32) {
         if let Some(b) = pin.get("blur").and_then(Value::as_f64) {
             pin["blur"] = json!(b / f64::from(k));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::{NodeT, Queryable};
+
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+
+    fn dialog_fields() -> Map<String, Value> {
+        let mut f = Map::new();
+        f.insert("__command".into(), serde_json::json!(COMMAND));
+        f.insert("pins".into(), serde_json::json!([{"x": 0.5, "y": 0.5, "blur": 15.0}]));
+        f.insert("__selected".into(), serde_json::json!(0));
+        f.insert("__preview".into(), serde_json::json!(true));
+        f
+    }
+
+    /// RTL: the amount row reads from the right — the caption at the reading start, the value
+    /// field at the reading end; LTR keeps the caption left of the field.
+    #[test]
+    fn amount_row_mirrors_in_rtl() {
+        use egui::accesskit::Role;
+        let probe = |dir: Dir| -> (egui::Rect, egui::Rect) {
+            let _dir = direction_scope(dir);
+            let mut h = Harness::builder().with_size(vec2(360.0, 220.0)).build_ui_state(|ui, f: &mut Map<String, Value>| body(ui, f), dialog_fields());
+            crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run();
+            let field = h.get_by_role_and_label(Role::SpinButton, "Blur").rect();
+            let label = h
+                .query_all(egui_kittest::kittest::by().label("Blur").include_labels())
+                .find(|n| n.accesskit_node().role() == Role::Label)
+                .expect("the amount row's caption")
+                .rect();
+            (label, field)
+        };
+        let (label, field) = probe(Dir::Ltr);
+        assert!(field.right() > label.right(), "LTR: the value field is right of the caption ({field:?} vs {label:?})");
+        let (label, field) = probe(Dir::Rtl);
+        assert!(field.left() < label.left(), "RTL: the value field is left of the caption, at the reading end ({field:?} vs {label:?})");
+    }
+
+    /// RTL: the body's blocks hug the reading start — a caption sits at the column's right
+    /// edge; LTR keeps it at the left.
+    #[test]
+    fn body_blocks_hug_the_reading_start_in_rtl() {
+        let probe = |dir: Dir| -> (egui::Rect, egui::Rect) {
+            let _dir = direction_scope(dir);
+            let mut f = Map::new();
+            f.insert("__command".into(), serde_json::json!(COMMAND));
+            // The harness's own frame leaves a margin, so the body lays out in the column the
+            // harness hands it, not in the whole viewport.
+            let column = std::cell::Cell::new(egui::Rect::ZERO);
+            let mut h = Harness::builder().with_size(vec2(360.0, 220.0)).build_ui_state(
+                |ui, f: &mut Map<String, Value>| {
+                    column.set(ui.max_rect());
+                    body(ui, f)
+                },
+                f,
+            );
+            crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+            h.run();
+            (h.get_by_label("No pin selected").rect(), column.get())
+        };
+        let (label, column) = probe(Dir::Ltr);
+        assert!((label.left() - column.left()).abs() < 2.0, "LTR: the caption hugs the column's left edge ({label:?} in {column:?})");
+        let (label, column) = probe(Dir::Rtl);
+        assert!((label.right() - column.right()).abs() < 2.0, "RTL: the caption hugs the column's right edge ({label:?} in {column:?})");
+    }
+
+    /// RTL: the dialog first opens at the window's left edge; LTR at its right edge, with the
+    /// same gap from the edge on both sides.
+    #[test]
+    fn first_place_mirrors_in_rtl() {
+        let place = |dir: Dir| -> (egui::Vec2, f32) {
+            let _dir = direction_scope(dir);
+            let ctx = egui::Context::default();
+            let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), vec2(1000.0, 800.0))), ..Default::default() };
+            let mut out = None;
+            ctx.run_pass(input, |ctx| {
+                out = Some((first_place(&dialog_fields(), ctx).expect("the dialog owns the fields"), ctx.content_rect().width()));
+            })
+            .drop_without_applying_deltas();
+            out.expect("the frame ran")
+        };
+        let (ltr, width) = place(Dir::Ltr);
+        assert!((ltr.x - (width - LTR_OFFSET).max(0.0)).abs() < 0.01, "LTR: the dialog opens at the right edge ({ltr:?} of {width})");
+        let (rtl, width) = place(Dir::Rtl);
+        assert!((rtl.x - EDGE_GAP.min((width - DIALOG_WIDTH).max(0.0))).abs() < 0.01, "RTL: the dialog opens at the left edge ({rtl:?} of {width})");
     }
 }

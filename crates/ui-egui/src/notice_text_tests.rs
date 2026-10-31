@@ -133,3 +133,48 @@ fn a_plain_click_on_a_notice_leaves_copy_to_the_document() {
     assert!(copied.is_empty(), "{copied:?}");
     assert!(h.state().session.clipboard.is_some(), "Edit › Copy copies the layer");
 }
+
+/// The stack hugs the reading-end corner (lower-right LTR, lower-left RTL) and the dismiss × sits
+/// at the card's reading end of the title row. Direction only — never injected data (PLAN.md).
+#[test]
+fn the_notice_stack_hugs_the_reading_end_corner() {
+    use crate::direction::{Dir, direction_scope};
+    for (dir, rtl) in [(Dir::Ltr, false), (Dir::Rtl, true)] {
+        let _dir = direction_scope(dir);
+        let mut h = Harness::builder().with_size(vec2(800.0, 600.0)).with_max_steps(8).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            crate::notices::post(&mut app, "Notice title", vec!["a detail line".to_owned()], false, None);
+            app
+        });
+        h.run_steps(4);
+        let title = h.get_by_label("Notice title").rect();
+        let bullet = h.get_by_label("• a detail line").rect();
+        // The × of the notice's own title row (other rows may have one too).
+        let dismiss = h
+            .get_all_by_label("×")
+            .map(|n| n.rect())
+            .filter(|r| (r.center().y - title.center().y).abs() < 30.0)
+            .min_by(|a, b| (a.center().x - title.center().x).abs().total_cmp(&(b.center().x - title.center().x).abs()))
+            .unwrap_or_else(|| panic!("{dir:?}: the dismiss × is drawn"));
+        if rtl {
+            assert!(dismiss.center().x < title.center().x, "{dir:?}: the dismiss × leads the title: {dismiss:?} {title:?}");
+            assert!((dismiss.left() - 27.0).abs() <= 4.0, "{dir:?}: the stack's left edge is 16 px inside the window: {dismiss:?}");
+            assert!(dismiss.left() >= 0.0, "{dir:?}: the stack stays on-screen: {dismiss:?}");
+        } else {
+            assert!(dismiss.center().x > title.center().x, "{dir:?}: the dismiss × trails the title: {dismiss:?} {title:?}");
+            assert!((dismiss.right() - 773.0).abs() <= 4.0, "{dir:?}: the stack's right edge is 16 px inside the window: {dismiss:?}");
+            assert!(dismiss.right() <= 800.0, "{dir:?}: the stack stays on-screen: {dismiss:?}");
+        }
+        // The stack's bottom edge clears the status bar by 36 px: the bullet line is the card's
+        // last content, with the card's 10 px inner margin and 1 px stroke below it, then the
+        // stack's 6 px gap and 6 px item spacing.
+        let stack_bottom = bullet.bottom() + 23.0;
+        assert!((stack_bottom - 564.0).abs() <= 4.0, "{dir:?}: the stack's bottom is 36 px above the window's: {stack_bottom} {bullet:?}");
+        // Two more frames must not move the card: a row sized to the remaining height grows it
+        // every frame.
+        h.run_steps(2);
+        assert_eq!(h.get_by_label("Notice title").rect(), title, "{dir:?}: the title stays put");
+        assert_eq!(h.get_by_label("• a detail line").rect(), bullet, "{dir:?}: the bullet line stays put");
+    }
+}

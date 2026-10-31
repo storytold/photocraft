@@ -126,7 +126,7 @@ fn skew_about_pivot(app: &mut PhotocraftApp, skew_h: f64, skew_v: f64) {
     }
 }
 
-/// Width of the mode, cancel and commit cluster kept on the right of the options bar.
+/// Width of the mode, cancel and commit cluster kept at the reading end of the options bar.
 const ACTIONS_W: f32 = 140.0;
 
 /// Width of the action buttons when they follow the Warp fields (one more than the box bar: Reset).
@@ -184,16 +184,15 @@ pub(super) fn size_pct(u: &crate::layer_props_ui::LenUnit, v: f32, side: f64) ->
 
 /// Options bar while transforming: the fields (reference point X/Y, W/H %, angle, interpolation,
 /// or the warp controls), then the mode switch, cancel and commit right after them. A bar too
-/// narrow for both pins the buttons to the right edge and clips the fields, so Commit and Cancel
-/// are always reachable.
+/// narrow for both pins the buttons to the reading-end edge and clips the fields, so Commit and
+/// Cancel are always reachable.
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let Some(t) = app.ui.transform.clone() else { return };
     let bar = ui.available_rect_before_wrap();
     let warping = t.warp.is_some();
     let buttons_w = if warping { WARP_ACTIONS_W } else { ACTIONS_W };
-    let split = (bar.right() - buttons_w).max(bar.left());
-    let fields = egui::Rect::from_min_max(bar.min, egui::pos2(split, bar.bottom()));
-    let mut row = ui.new_child(egui::UiBuilder::new().id_salt("transform-fields").max_rect(fields).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    let (fields, strip) = crate::direction::split_end(bar, buttons_w);
+    let mut row = ui.new_child(egui::UiBuilder::new().id_salt("transform-fields").max_rect(fields).layout(crate::direction::row()));
     row.set_clip_rect(fields);
     if let Some(w) = t.warp.clone() {
         warp_fields(app, &mut row, &w);
@@ -203,9 +202,10 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         transform_fields(app, &mut row, &t);
     }
     crate::widgets::vline(&mut row, 22.0);
-    let start = row.min_rect().right().min(split);
-    let actions = egui::Rect::from_min_max(egui::pos2(start, bar.top()), egui::pos2(start + buttons_w, bar.bottom()));
-    let mut btns = ui.new_child(egui::UiBuilder::new().id_salt("transform-actions").max_rect(actions).layout(egui::Layout::right_to_left(egui::Align::Center)));
+    let content_end = crate::direction::end_x(row.min_rect(), 0.0);
+    let start = if crate::direction::is_rtl() { content_end.max(strip.right()) } else { content_end.min(strip.left()) };
+    let actions = crate::direction::end_span(start, buttons_w, bar.top(), bar.bottom());
+    let mut btns = ui.new_child(egui::UiBuilder::new().id_salt("transform-actions").max_rect(actions).layout(crate::direction::trailing()));
     transform_actions(app, &mut btns, warping, t.content_aware.is_none());
 }
 
@@ -337,9 +337,11 @@ pub(crate) fn position_size_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, t
     let rh = crate::widgets::value_field_extent(ui, &mut h, -hlim_u..=hlim_u, suffix, size_w, places, units, side_h).accessible_name(tl!("Height"));
     for r in [&rw, &rh] {
         r.context_menu(|ui| {
-            if let Some(name) = crate::rulers::unit_menu(ui, u.unit) {
-                set_size_unit(app, name);
-            }
+            crate::menus::popup_body(ui, |ui| {
+                if let Some(name) = crate::rulers::unit_menu(ui, u.unit) {
+                    set_size_unit(app, name);
+                }
+            });
         });
     }
     let (w, h) = (size_pct(&u, w, side_w) as f32, size_pct(&u, h, side_h) as f32);
@@ -529,7 +531,7 @@ fn split_icon(ui: &mut egui::Ui, kind: &str, tip: &str, on: bool) -> egui::Respo
     resp.on_hover_text(tip)
 }
 
-/// Warp switch, cancel and commit, kept on the right of the options bar.
+/// Warp switch, cancel and commit, kept at the reading end of the options bar.
 /// `mode_switch`: the Free Transform / Warp switch (not for Content-Aware Scale, which only scales).
 fn transform_actions(app: &mut PhotocraftApp, ui: &mut egui::Ui, warping: bool, mode_switch: bool) {
     ui.add_space(8.0);
@@ -594,4 +596,83 @@ pub(super) fn rotate_about_pivot(app: &mut PhotocraftApp, da: f64) {
         let (x, y) = (q[0] - c[0], q[1] - c[1]);
         [c[0] + x * cs - y * sn, c[1] + x * sn + y * cs]
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    fn session() -> TransformSession {
+        TransformSession {
+            session: 1,
+            layer: 1,
+            rect: [0.0, 0.0, 100.0, 50.0],
+            quad: [[0.0, 0.0], [100.0, 0.0], [100.0, 50.0], [0.0, 50.0]],
+            pivot: [50.0, 25.0],
+            interpolation: "bicubic".into(),
+            warp: None,
+            selection: false,
+            target: None,
+            path: None,
+            made: None,
+            mode: Default::default(),
+            content_aware: None,
+            skew_v: 0.0,
+            layers: Vec::new(),
+        }
+    }
+
+    fn bar(width: f32) -> Harness<'static, PhotocraftApp> {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.ui.transform = Some(session());
+        let h = Harness::builder().with_size(vec2(width, 48.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                ui.horizontal_centered(|ui| options_bar(app, ui));
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h
+    }
+
+    #[test]
+    fn rtl_bar_pins_actions_left_and_reads_fields_right_to_left() {
+        let _rtl = direction_scope(Dir::Rtl);
+        let width = 720.0;
+        let mut h = bar(width);
+        h.run_steps(6);
+        let commit = h.get_by_label("Commit transform").rect();
+        let cancel = h.get_by_label("Cancel transform").rect();
+        let mode = h.get_by_label("Switch between free transform and warp modes").rect();
+        assert!(commit.left() < 36.0, "commit pins to the left edge: {commit:?}");
+        assert!(cancel.left() > commit.right() - 1.0, "cancel is right of commit");
+        assert!(mode.left() > cancel.right() - 1.0, "warp switch is right of cancel");
+        let x = h.get_by_label("X").rect();
+        let y = h.get_by_label("Y").rect();
+        assert!(x.center().x > y.center().x, "fields read right-to-left: X right of Y");
+        assert!(x.center().x > width / 2.0, "fields start at the right edge: {x:?}");
+    }
+
+    #[test]
+    fn ltr_bar_pins_actions_right_and_reads_fields_left_to_right() {
+        let width = 720.0;
+        let mut h = bar(width);
+        h.run_steps(6);
+        let commit = h.get_by_label("Commit transform").rect();
+        let cancel = h.get_by_label("Cancel transform").rect();
+        let mode = h.get_by_label("Switch between free transform and warp modes").rect();
+        assert!(commit.right() > width - 36.0, "commit pins to the right edge: {commit:?}");
+        assert!(cancel.right() < commit.left() + 1.0, "cancel is left of commit");
+        assert!(mode.right() < cancel.left() + 1.0, "warp switch is left of cancel");
+        let x = h.get_by_label("X").rect();
+        let y = h.get_by_label("Y").rect();
+        assert!(x.center().x < y.center().x, "fields read left-to-right: X left of Y");
+        assert!(x.center().x < width / 2.0, "fields start at the left edge: {x:?}");
+    }
 }

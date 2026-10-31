@@ -10,7 +10,7 @@
 //!
 //! That is all: the Preferences dropdown, the system-locale match and the catalog tests (parse,
 //! placeholders, plural forms) pick it up from the registry. A right-to-left language (Arabic,
-//! Hebrew, Persian, Urdu, see [`dir_for_code`]) also mirrors the window's chrome
+//! Hebrew, Persian, Urdu, see [`dir_for_code`]) also mirrors the interface
 //! ([`crate::direction`]).
 //!
 //! # Looking strings up
@@ -235,7 +235,7 @@ pub static LANGUAGES: [LangInfo; 27] = [
     // Hindi; `hi`, `hi-IN` locales resolve here.
     LangInfo { code: "hi", name: "हिन्दी", source: catalog!("hi"), plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     // Arabic (Modern Standard); `ar-SA`, `ar-EG` and the other regional locales resolve here. The
-    // chrome mirrors right to left (`dir_for_code`), and egui lays each label out right to left.
+    // interface mirrors right to left (`dir_for_code`), and egui lays each label out right to left.
     LangInfo { code: "ar", name: "العربية", source: catalog!("ar"), plural: plural_arabic, complete_menus: true, catalog: OnceLock::new() },
     // Swedish; `sv-SE` and `sv-FI` locales resolve here.
     LangInfo { code: "sv", name: "Svenska", source: catalog!("sv"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
@@ -444,6 +444,8 @@ pub fn sync_context(ctx: &egui::Context, language: &str) {
     if changed {
         ctx.data_mut(|data| data.insert_temp(id, lang));
         crate::theme::install_fonts(ctx);
+        // The language's direction, in both theme branches, before this frame's repaint.
+        crate::theme::set_direction(ctx, crate::direction::is_rtl());
         ctx.request_repaint();
     }
 }
@@ -474,12 +476,33 @@ pub fn tr_id<'a>(lang: Lang, id: &str, label: &'a str) -> &'a str {
 }
 
 /// Fill `{name}` placeholders. Unknown placeholders are left as written.
+///
+/// A value whose first strong letter reads against the template's own direction is wrapped in
+/// bidi isolates (U+2066 LRI … U+2069 PDI), so an embedded Latin name can't scramble a
+/// right-to-left sentence (or an Arabic name a left-to-right one). A same-direction value is
+/// inserted as written, keeping left-to-right output byte-identical.
 pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
+    let template_rtl = strong_rtl(template).unwrap_or(false);
     let mut out = template.to_string();
     for (k, v) in args {
-        out = out.replace(&format!("{{{k}}}"), v);
+        let filled = match strong_rtl(v) {
+            Some(v_rtl) if v_rtl != template_rtl => format!("\u{2066}{v}\u{2069}"),
+            _ => (*v).to_string(),
+        };
+        out = out.replace(&format!("{{{k}}}"), &filled);
     }
     out
+}
+
+/// Whether `text`'s first strong letter (bidi class L vs R/AL) reads right to left; `None` when it
+/// has none (digits, punctuation).
+fn strong_rtl(text: &str) -> Option<bool> {
+    use unicode_bidi::{BidiClass, bidi_class};
+    text.chars().find_map(|c| match bidi_class(c) {
+        BidiClass::L => Some(false),
+        BidiClass::R | BidiClass::AL => Some(true),
+        _ => None,
+    })
 }
 
 /// A plural-aware message: `one`/`other` are the English forms (with `{n}` where the count goes).

@@ -94,6 +94,29 @@ fn layout_gives_the_name_what_the_indicators_leave() {
     assert!(right < rects[3].1.left());
 }
 
+/// The shared label paints nothing when the reading start is at or past the far limit, in both
+/// directions: the right-to-left branch mirrors the left-to-right contract instead of clamping
+/// the anchor and painting outside the row.
+#[test]
+fn a_label_at_or_past_its_limit_paints_nothing() {
+    use crate::direction::{Dir, direction_scope};
+    let ctx = egui::Context::default();
+    let row = Rect::from_min_size(pos2(100.0, 40.0), vec2(300.0, 22.0));
+    let layer = egui::LayerId::new(egui::Order::Middle, egui::Id::unique("layer-row-label"));
+    let font = egui::FontId::proportional(11.5);
+    {
+        let _ltr = direction_scope(Dir::Ltr);
+        let painter = egui::Painter::new(ctx.clone(), layer, row);
+        assert!(crate::direction::paint_label_span(&painter, row.right(), row.center().y, row.right(), "Shadow", font.clone(), egui::Color32::WHITE).is_none());
+    }
+    {
+        let _rtl = direction_scope(Dir::Rtl);
+        let painter = egui::Painter::new(ctx.clone(), layer, row);
+        assert!(crate::direction::paint_label_span(&painter, row.left(), row.center().y, row.left(), "Shadow", font.clone(), egui::Color32::WHITE).is_none());
+        assert!(crate::direction::paint_label_span(&painter, row.left() - 5.0, row.center().y, row.left(), "Shadow", font, egui::Color32::WHITE).is_none());
+    }
+}
+
 #[test]
 fn long_names_never_run_under_the_indicators() {
     for ppp in [1.0, 1.5, 2.0] {
@@ -713,6 +736,48 @@ fn eye_column_edges_toggle_visibility_without_selecting_layer() {
 
 /// #1662: a hidden layer's eye box stays empty, as in Photoshop (only a visible layer paints its
 /// eye), in every theme; the widened hit area (#8467) changes nothing that is drawn.
+/// The panel flyout is measured during the popup's sizing pass, whose max_rect is the wide
+/// default area size (600 px): a right-to-left body that anchors its rows to the reading end
+/// of that wide rect balloons the popup. The RTL scope must measure no wider than LTR for the
+/// same content (the LTR branch is the untouched, pixel-identical oracle).
+#[test]
+fn the_panel_menu_body_does_not_grow_wider_in_rtl() {
+    use crate::direction::{Dir, direction_scope};
+    let menu_width = |dir: Dir| -> f32 {
+        let _scope = direction_scope(dir);
+        let ctx = egui::Context::default();
+        crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        session.execute("layer.new.layer", json!({})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        let mut width = 0.0;
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            // The popup's sizing-pass ui: the default area size as max_rect, the menu's
+            // justified layout, and sizing_pass on (the fork shrinks justified layouts then).
+            ui.scope_builder(
+                egui::UiBuilder::new()
+                    .max_rect(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(600.0, 400.0)))
+                    .layout(egui::Layout::top_down_justified(egui::Align::Min))
+                    .sizing_pass(),
+                |ui| {
+                    ui.set_min_width(180.0);
+                    crate::direction::popup_body(ui, |ui| super::panel_menu(&mut app, ui));
+                    width = ui.min_rect().width();
+                },
+            );
+        })
+        .textures_delta
+        .clear();
+        width
+    };
+    let ltr = menu_width(Dir::Ltr);
+    let rtl = menu_width(Dir::Rtl);
+    assert!(ltr < 600.0, "ltr sanity: the body measured the wide sizing rect ({ltr})");
+    assert!(rtl <= ltr + 0.5, "the menu body grew in RTL: ltr {ltr} vs rtl {rtl}");
+}
+
 #[test]
 fn a_hidden_layers_eye_box_paints_nothing() {
     fn bounds(shape: &egui::Shape, out: &mut Vec<Rect>) {
@@ -741,4 +806,91 @@ fn a_hidden_layers_eye_box_paints_nothing() {
         assert!(in_eye_box(shown) > 0, "{theme}: a visible layer paints its eye");
         assert_eq!(in_eye_box(hidden), 0, "{theme}: a hidden layer's eye box is left empty");
     }
+}
+
+/// Panel-menu item rows mirror with the body: in a right-to-left UI each item's label hugs the
+/// popup's reading-start (right) edge; left-to-right it hugs the left edge, pixel-identical.
+#[test]
+fn panel_menu_item_labels_hug_the_reading_start_edge() {
+    use crate::direction::{Dir, direction_scope};
+    let probe = |dir: Dir| {
+        let _scope = direction_scope(dir);
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let mut h = harness(s, 1.0, "promedium", 290.0);
+        h.ctx.all_styles_mut(|st| st.right_to_left = dir == Dir::Rtl);
+        h.run_steps(2);
+        let group = crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "layers").expect("layers group");
+        let menu = h.query_all_by_label("Panel menu").map(|n| n.rect()).find(|r| group.contains(r.center())).expect("menu btn");
+        click(&mut h, menu.center());
+        h.run_steps(8);
+        let row = h.get_by_label("New Layer…").rect();
+        fn galleys(shape: &egui::Shape, text: &str, out: &mut Vec<Rect>) {
+            match shape {
+                egui::Shape::Text(t) if t.galley.job.text == text => out.push(Rect::from_min_size(t.pos, t.galley.size())),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| galleys(s, text, out)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for s in &h.output().shapes {
+            galleys(&s.shape, "New Layer…", &mut found);
+        }
+        (row, found)
+    };
+    let (row_ltr, g_ltr) = probe(Dir::Ltr);
+    let (row_rtl, g_rtl) = probe(Dir::Rtl);
+    let label_ltr = g_ltr.iter().copied().find(|r| row_ltr.contains_rect(*r)).expect("LTR: the item label is painted in its row");
+    let label_rtl = g_rtl.iter().copied().find(|r| row_rtl.contains_rect(*r)).expect("RTL: the item label is painted in its row");
+    assert!(label_ltr.left() - row_ltr.left() < 12.0, "LTR: label hugs the left edge, row {row_ltr:?}, label {label_ltr:?}");
+    assert!(row_rtl.right() - label_rtl.right() < 12.0, "RTL: label hugs the right edge, row {row_rtl:?}, label {label_rtl:?}");
+}
+
+/// The in-place rename field runs right-to-left in a right-to-left UI: its galley's paragraph
+/// base direction is RTL and the text hugs the field's right edge; a left-to-right UI keeps
+/// egui's default auto-direction, left-aligned edit.
+#[test]
+fn the_rename_field_runs_rtl_in_rtl_and_stays_ltr_in_ltr() {
+    use crate::direction::{Dir, direction_scope};
+    use egui::epaint::text::TextDirection;
+    // Start a rename and report the field rect plus every painted galley of the layer's name as
+    // owned (direction, halign, rect).
+    let probe = |dir: Dir| {
+        let _scope = direction_scope(dir);
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let layer = s.execute("layer.new.layer", json!({"name": "Alpha"})).unwrap()["layer"].as_u64().unwrap();
+        let mut h = harness(s, 1.0, "promedium", 290.0);
+        h.ctx.all_styles_mut(|st| st.right_to_left = dir == Dir::Rtl);
+        h.run_steps(2);
+        assert!(super::start_rename(&h.ctx, layer, "Alpha").is_none());
+        h.run_steps(2);
+        let id = egui::Id::unique(("layer-rename-field", layer));
+        let field = h.ctx.read_response(id).expect("rename field drawn").rect;
+        fn galleys<'a>(shape: &'a egui::Shape, text: &str, out: &mut Vec<(&'a egui::Galley, Pos2)>) {
+            match shape {
+                egui::Shape::Text(t) if t.galley.job.text == text => out.push((&t.galley, t.pos)),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| galleys(s, text, out)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        for s in &h.output().shapes {
+            galleys(&s.shape, "Alpha", &mut found);
+        }
+        let found = found
+            .iter()
+            .map(|(g, pos)| (g.job.direction, g.job.halign, egui::Rect::from_min_size(*pos, g.size())))
+            .collect::<Vec<_>>();
+        (field, found)
+    };
+    let (field_ltr, g_ltr) = probe(Dir::Ltr);
+    assert!(!g_ltr.is_empty(), "LTR: the name is painted");
+    assert!(g_ltr.iter().all(|(d, _, _)| *d == TextDirection::Auto), "LTR: auto direction, got {g_ltr:?}");
+    assert!(g_ltr.iter().all(|(_, _, r)| r.left() < field_ltr.center().x), "LTR: left-aligned in {field_ltr:?}");
+    let (field_rtl, g_rtl) = probe(Dir::Rtl);
+    let (_d, halign, r) = g_rtl.iter().find(|(d, _, _)| *d == TextDirection::RightToLeft).expect("RTL: an RTL galley for the name");
+    assert_eq!(*halign, egui::Align::Max, "RTL: right-aligned text");
+    assert!(r.right() > field_rtl.center().x, "RTL: galley at the field's right edge in {field_rtl:?}, got {r:?}");
 }

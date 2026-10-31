@@ -2,7 +2,8 @@
 //! with Use (Files or Folder), the list of what will be loaded, Browse…, Remove, Add Open Files and
 //! Sort By Name, then Attempt to Automatically Align Source Images and Create Smart Object after
 //! Loading Layers. Statistics adds Stack Mode and always creates a smart object. OK runs the
-//! corresponding engine command with the list or the folder.
+//! corresponding engine command with the list or the folder. In a right-to-left language the
+//! rows read from the right and the file list keeps the reading start.
 use egui::{RichText, vec2};
 use serde_json::{Map, Value, json};
 
@@ -112,6 +113,15 @@ fn browse(app: &mut PhotocraftApp, id: u64, folder: bool) {
 
 /// The dialog's body (dialog `id`); OK and Cancel are the standard ones below it.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
+    // The dialog host leaves the body on the default layout, so the body mirrors itself: in a
+    // right-to-left UI the blocks read from the right and the rows inside them mirror with them.
+    ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
+        body_blocks(app, ui, f, id);
+    });
+}
+
+/// The Stack Mode and Use rows, the file list with its Browse column and the checkboxes.
+fn body_blocks(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     let t = Tokens::get(ui.ctx());
     if statistics(f) {
         ui.horizontal(|ui| {
@@ -150,7 +160,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             ui.set_min_size(vec2(300.0, 160.0));
             ui.set_max_width(300.0);
             egui::ScrollArea::vertical().id_salt("load-stack-files").max_height(160.0).auto_shrink([false, false]).show(ui, |ui| {
-                ui.with_layout(egui::Layout::top_down(egui::Align::Min), |ui| {
+                // The entries hug the list's reading-start edge (right in a right-to-left UI);
+                // an explicit top-down(Align::Min) pin would keep them left under RTL.
+                ui.with_layout(crate::text::direction::body_layout(), |ui| {
                     if folder_mode && !folder(f).is_empty() {
                         ui.label(RichText::new(folder(f)).color(t.text_dim));
                     }
@@ -164,7 +176,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             });
         });
         ui.add_space(8.0);
-        ui.vertical(|ui| {
+        // The Browse column: `ui.vertical` pins `top_down(Align::Min)`, so mirror it the same way
+        // the body does — its buttons flush toward the list (the reading start).
+        ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
             ui.spacing_mut().item_spacing.y = 4.0;
             if widgets::secondary_button(ui, tl!("Browse…"), 120.0).clicked() {
                 browse_now = true;
@@ -240,3 +254,6 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests;

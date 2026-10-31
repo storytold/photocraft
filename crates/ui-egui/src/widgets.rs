@@ -11,6 +11,7 @@ pub use angle_dial::{angle_dial_line, angle_dial_row};
 pub use color_count::color_count_row;
 mod type_ahead;
 pub use type_ahead::list_open as dropdown_list_open;
+pub use crate::direction::popup_body;
 
 mod buttons;
 mod color;
@@ -21,6 +22,7 @@ mod fields;
 pub(super) mod numeric_expression;
 mod panel;
 pub mod point_curve;
+mod progress;
 pub mod press_menu;
 mod scrub;
 mod slider;
@@ -51,9 +53,10 @@ pub use fields::{
 };
 pub(crate) use panel::body_margin;
 pub use panel::{
-    FOOTER_BAR, chevron_icon, drop_line, footer_height, hairline, panel_footer, panel_menu_button, pill_tab, section_label, style_spectrum_popup_menu, surface,
-    vline,
+    FOOTER_BAR, HeaderAnchors, chevron_icon, drop_line, footer_height, hairline, header_anchors, panel_footer, panel_menu_button, pill_tab, section_header,
+    section_label, style_spectrum_popup_menu, surface, vline,
 };
+pub use progress::{progress_fill, progress_travel};
 pub use scrub::{scrub_label, scrub_option_icon, scrub_option_label};
 #[cfg(test)]
 use slider::DOUBLE_CLICK_S;
@@ -62,7 +65,8 @@ pub(crate) use slider::{count_notches, wheel_notches_of};
 #[cfg(test)]
 pub(crate) use slider::{curve_fraction, curve_value};
 pub use text_field::{
-    INPUT_EVENT_LIMIT, TEXT_FIELD_H, TEXT_FIELD_LIMIT, cap_text_events, focus_first_field, text_field, text_field_ex, text_field_with_trailing,
+    INPUT_EVENT_LIMIT, TEXT_FIELD_H, TEXT_FIELD_LIMIT, cap_text_events, focus_first_field, rtl_multiline_edit, rtl_multiline_layouter, rtl_singleline,
+    rtl_singleline_add, rtl_singleline_edit, rtl_singleline_layouter, text_field, text_field_ex, text_field_with_trailing,
 };
 pub use units::{
     FieldUnits, fmt_num, fmt_num_prec, fmt_num2, parse_num, set_field_resolution, unit_decimals, unit_of_key, value_field_extent, value_field_prec,

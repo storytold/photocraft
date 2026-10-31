@@ -49,8 +49,6 @@ pub(crate) fn check(app: &mut PhotocraftApp, _ctx: &egui::Context, params: Value
     if result.is_ok() || failed_to_start {
         app.ui.updates_open = true;
         app.updates_rt.startup_checked = true;
-        // A release the user dismissed is offered again by a manual check.
-        app.updates_rt.notified_version = None;
     }
     result
 }
@@ -80,12 +78,10 @@ pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-#[cfg(target_arch = "wasm32")]
-pub(crate) fn show(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
-
-#[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut download: Option<String> = None;
+
+    #[cfg(not(target_arch = "wasm32"))]
     {
         let was_open = app.updates_rt.updater.prompt_open();
         app.updates_rt.updater.tick(ctx);
@@ -101,35 +97,76 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if was_open && !app.updates_rt.updater.prompt_open() {
             app.ui.updates_open = false;
         }
+        if app.updates_rt.updater.prompt_open() {
+            return;
+        }
     }
+
+    if !app.ui.updates_open {
+        if let Some(url) = download {
+            crate::links::open(app, ctx, &url);
+        }
+        return;
+    }
+    let mut open = true;
+    let status = app.session.updates.status.clone();
+    let mut retry = false;
+    egui::Window::new(tl!("PhotoCraft Updates"))
+        .id(egui::Id::unique("photocraft_updates"))
+        .open(&mut open)
+        .collapsible(false)
+        .resizable(false)
+        .default_width(380.0)
+        .show(ctx, |ui| {
+            crate::direction::window_body(ui, |ui| {
+                let t = crate::theme::Tokens::get(ctx);
+                ui.label(crate::i18n::fmt(crate::i18n::t("Installed version: {version}"), &[("version", photocraft_engine::build_info::VERSION)]));
+                ui.add_space(8.0);
+                match &status {
+                    Status::Checking => {
+                        ui.horizontal(|ui| {
+                            ui.spinner();
+                            ui.label(tl!("Checking for updates…"));
+                        });
+                    }
+                    Status::Available { release } => {
+                        ui.label(crate::i18n::fmt(crate::i18n::t("PhotoCraft {version} is available."), &[("version", &release.version)]));
+                        #[cfg(not(target_arch = "wasm32"))]
+                        {
+                            if crate::widgets::primary_button(ui, tl!("Update and Restart"), 180.0).clicked() {
+                                app.updates_rt.updater.offer(release_of(release));
+                            }
+                            if ui.button(tl!("Release Notes")).clicked() {
+                                download = Some(release.url.clone());
+                            }
+                        }
+                        #[cfg(target_arch = "wasm32")]
+                        if crate::widgets::primary_button(ui, tl!("Open Download Page"), 160.0).clicked() {
+                            download = Some(release.url.clone());
+                        }
+                    }
+                    Status::UpToDate => {
+                        ui.label(tl!("PhotoCraft is up to date."));
+                    }
+                    Status::Failed { message } => {
+                        ui.colored_label(t.warning, tl!("Could not check for updates."));
+                        ui.label(message);
+                    }
+                    Status::Idle => {
+                        ui.label(tl!("Updates have not been checked yet."));
+                    }
+                }
+                if !matches!(status, Status::Checking) && ui.button(tl!("Check Again")).clicked() {
+                    retry = true;
+                }
+            })
+        });
+    app.ui.updates_open = open;
     if let Some(url) = download {
         crate::links::open(app, ctx, &url);
     }
-    if app.updates_rt.updater.prompt_open() {
-        return;
-    }
-    if app.ui.updates_open {
-        let dialog = craft_update::CheckResultDialog::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION);
-        match dialog.show(ctx, &check_status(&app.session.updates.status)) {
-            craft_update::CheckResultResponse::None => {}
-            craft_update::CheckResultResponse::Close => app.ui.updates_open = false,
-            craft_update::CheckResultResponse::CheckAgain => {
-                let _ = check(app, ctx, serde_json::json!({}));
-            }
-        }
-    }
-}
-
-/// The engine's check state as the result dialog shows it. An available release goes to the
-/// startup prompt, so the dialog draws nothing for it.
-#[cfg(not(target_arch = "wasm32"))]
-fn check_status(status: &Status) -> craft_update::updater::Status {
-    use craft_update::updater::Status as Shown;
-    match status {
-        Status::Checking => Shown::Checking,
-        Status::UpToDate => Shown::UpToDate,
-        Status::Failed { message } => Shown::Failed(message.clone()),
-        Status::Idle | Status::Available { .. } => Shown::Idle,
+    if retry {
+        let _ = check(app, ctx, serde_json::json!({}));
     }
 }
 
@@ -313,5 +350,89 @@ mod tests {
         assert!(app.ui.updates_open);
         assert_eq!(call(&mut app, "ui.set", serde_json::json!({"updatesOpen": false}))["ok"], true);
         assert!(!app.ui.updates_open);
+    }
+
+    /// The checking row reads in the UI's direction: the spinner leads at the reading start.
+    #[test]
+    fn checking_row_spinner_sits_at_the_reading_start() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        fn harness(dir: crate::direction::Dir) -> Harness<'static, PhotocraftApp> {
+            let _dir = crate::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.ui.updates_open = true;
+            app.session.updates.status = Status::Checking;
+            let mut h = Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(4);
+            h
+        }
+
+        let ltr = harness(crate::direction::Dir::Ltr);
+        let spinner = ltr.get_by_role(Role::ProgressIndicator).rect();
+        let label = ltr.get_by_label("Checking for updates…").rect();
+        assert!(spinner.center().x < label.center().x, "LTR: the spinner leads on the left: {spinner:?} vs {label:?}");
+
+        let rtl = harness(crate::direction::Dir::Rtl);
+        let spinner = rtl.get_by_role(Role::ProgressIndicator).rect();
+        let label = rtl.get_by_label("Checking for updates…").rect();
+        assert!(spinner.center().x > label.center().x, "RTL: the spinner leads on the right: {spinner:?} vs {label:?}");
+    }
+
+    /// The window's blocks hug the reading-start edge: the status label and the Check Again button
+    /// align to the window's right in an RTL UI and to its left in an LTR one.
+    #[test]
+    fn status_blocks_align_to_the_reading_start_edge() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        fn harness(dir: crate::direction::Dir) -> Harness<'static, PhotocraftApp> {
+            let _dir = crate::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Services::default());
+            app.ui.updates_open = true;
+            app.session.updates.status = Status::UpToDate;
+            let mut h = Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(|ui, app: &mut PhotocraftApp| show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(4);
+            h
+        }
+        let win_id = egui::Id::unique("photocraft_updates");
+
+        let ltr = harness(crate::direction::Dir::Ltr);
+        let win = ltr.ctx.memory(|m| m.area_rect(win_id)).expect("the updates window");
+        let label = ltr.get_by_label("PhotoCraft is up to date.").rect();
+        let again = ltr.get_by_label("Check Again").rect();
+        assert!(label.left() - win.left() < 40.0, "LTR: the status label hugs the left: {label:?} in {win:?}");
+        assert!(again.left() - win.left() < 40.0, "LTR: the Check Again button hugs the left: {again:?} in {win:?}");
+
+        let rtl = harness(crate::direction::Dir::Rtl);
+        let win = rtl.ctx.memory(|m| m.area_rect(win_id)).expect("the updates window");
+        let label = rtl.get_by_label("PhotoCraft is up to date.").rect();
+        let again = rtl.get_by_label("Check Again").rect();
+        assert!(win.right() - label.right() < 40.0, "RTL: the status label hugs the right: {label:?} in {win:?}");
+        assert!(win.right() - again.right() < 40.0, "RTL: the Check Again button hugs the right: {again:?} in {win:?}");
+    }
+
+    /// Every string the updates window shows has an Arabic row: a missing key would fall back to
+    /// English in the mirrored UI.
+    #[test]
+    fn arabic_translates_the_update_window_strings() {
+        let ar = crate::i18n::Lang::from_code("ar").expect("ar registered");
+        for key in [
+            "PhotoCraft Updates",
+            "Installed version: {version}",
+            "Checking for updates…",
+            "PhotoCraft {version} is available.",
+            "Update and Restart",
+            "Release Notes",
+            "Open Download Page",
+            "PhotoCraft is up to date.",
+            "Could not check for updates.",
+            "Updates have not been checked yet.",
+            "Check Again",
+        ] {
+            assert!(crate::i18n::has(ar, key), "ar is missing {key:?}");
+            assert_ne!(crate::i18n::tr(ar, key), key, "ar falls back to English for {key:?}");
+        }
     }
 }

@@ -246,6 +246,9 @@ pub(crate) fn full_uv() -> egui::Rect {
 /// the current controls open. The lock on the right is a separate hit target.
 fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSettings) {
     let t = Tokens::get(ui.ctx());
+    let rtl = crate::direction::is_rtl();
+    // Advance sign for hand-painted x-math: rows pack from the reading-start edge.
+    let s: f32 = if rtl { -1.0 } else { 1.0 };
     ui.vertical(|ui| {
         ui.set_width(150.0);
         ui.spacing_mut().item_spacing.y = 1.0;
@@ -253,10 +256,15 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
         if br_resp.hovered() {
             ui.painter().rect_filled(br_rect, t.radius_sm, t.hover);
         }
-        let icon_rect = egui::Rect::from_center_size(egui::pos2(br_rect.left() + 12.0, br_rect.center().y), vec2(13.0, 13.0));
+        let icon_rect =
+            egui::Rect::from_center_size(egui::pos2(if rtl { br_rect.right() - 12.0 } else { br_rect.left() + 12.0 }, br_rect.center().y), vec2(13.0, 13.0));
         icons::paint(ui, icon_rect, "brush", 12.0, if br_resp.hovered() { t.text } else { t.icon });
         let galley = ui.painter().layout_no_wrap(tl!("Brushes").to_string(), theme::semibold(12.0), if br_resp.hovered() { t.text } else { t.text_dim });
-        ui.painter().galley(egui::pos2(br_rect.left() + 26.0, br_rect.center().y - galley.size().y / 2.0), galley, t.text);
+        ui.painter().galley(
+            egui::pos2(if rtl { br_rect.right() - 26.0 - galley.size().x } else { br_rect.left() + 26.0 }, br_rect.center().y - galley.size().y / 2.0),
+            galley,
+            t.text,
+        );
         if br_resp.clicked() {
             let _ = crate::menus::invoke(app, ui.ctx(), "window.panel.brushes", json!({}));
         }
@@ -283,9 +291,12 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
             } else if resp.hovered() {
                 ui.painter().rect_filled(r, t.radius_sm, t.hover);
             }
-            let mut x = r.left() + 6.0;
+            let mut x = if rtl { r.right() - 6.0 } else { r.left() + 6.0 };
+            // The lock zone at the row's reading end is part of the row's hit rect too; a click
+            // landing there toggles the lock whichever of the two widgets the hit test picks.
+            let on_lock = resp.interact_pointer_pos().is_some_and(|p| if rtl { p.x < r.left() + 22.0 } else { p.x > r.right() - 22.0 });
             if *has_box && let Some(flag) = section_flag(b, i) {
-                let br = egui::Rect::from_center_size(egui::pos2(x + 6.0, r.center().y), vec2(13.0, 13.0));
+                let br = egui::Rect::from_center_size(egui::pos2(x + 6.0 * s, r.center().y), vec2(13.0, 13.0));
                 // A checkbox-only row is one accessible checkbox across its whole width. A
                 // controls section keeps its separate enable box and selectable label.
                 let box_resp = (!toggle_only).then(|| {
@@ -295,7 +306,6 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
                     });
                     resp
                 });
-                let on_lock = resp.interact_pointer_pos().is_some_and(|p| p.x > r.right() - 22.0);
                 // A press on the row (but not its lock) presses the box too: a release there
                 // turns the section on, or toggles a checkbox-only row (#4476).
                 let pressed = box_resp.as_ref().is_some_and(|b| b.is_pointer_button_down_on()) || (resp.is_pointer_button_down_on() && !on_lock);
@@ -306,23 +316,23 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
                 } else if !toggle_only && resp.clicked() && !on_lock {
                     *flag = true;
                 }
-                x += 20.0;
+                x += 20.0 * s;
             } else {
                 // No box (Brush Tip Shape): the name still starts in the names' column,
                 // as in Photoshop (#4282).
-                x += 20.0;
+                x += 20.0 * s;
             }
             let color = if sel { t.text } else { t.text_dim };
             let font = if i == 0 { theme::semibold(12.0) } else { theme::medium(12.0) };
             let mut job = egui::text::LayoutJob::simple_singleline(tl!(name).to_string(), font, color);
-            job.wrap = egui::text::TextWrapping::truncate_at_width((r.right() - 22.0 - x).max(0.0));
+            job.wrap = egui::text::TextWrapping::truncate_at_width((if rtl { x - (r.left() + 22.0) } else { r.right() - 22.0 - x }).max(0.0));
             let galley = ui.painter().layout_job(job);
             let elided = galley.elided;
-            ui.painter().galley(egui::pos2(x, r.center().y - galley.size().y / 2.0), galley, color);
+            ui.painter().galley(egui::pos2(if rtl { x - galley.size().x } else { x }, r.center().y - galley.size().y / 2.0), galley, color);
             let resp = if elided { resp.on_hover_text(tl!(name)) } else { resp };
             let mut lock_clicked = false;
             if let Some(lock) = section_lock(b, i) {
-                let lr = egui::Rect::from_center_size(egui::pos2(r.right() - 11.0, r.center().y), vec2(18.0, 18.0));
+                let lr = egui::Rect::from_center_size(egui::pos2(if rtl { r.left() + 11.0 } else { r.right() - 11.0 }, r.center().y), vec2(18.0, 18.0));
                 let lresp = ui.interact(lr, ui.scope_id().with(("brush-sec-lock", i)), Sense::click());
                 lresp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), *lock, format!("{}: {}", tl!("Lock"), tl!(*name))));
                 // Like Photoshop: lock icons stay visible on every lockable section row.
@@ -333,7 +343,7 @@ fn section_list(app: &mut PhotocraftApp, ui: &mut egui::Ui, b: &mut BrushSetting
                 }
                 let tip =
                     if *lock { tl!("Unlock: picking a preset replaces these settings") } else { tl!("Lock: keep these settings when picking another preset") };
-                if lresp.on_hover_text(tip).clicked() {
+                if lresp.on_hover_text(tip).clicked() || (resp.clicked() && on_lock) {
                     *lock = !*lock;
                     lock_clicked = true;
                 }
@@ -358,7 +368,10 @@ fn settings_tab(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.brush_section = 0;
     }
     let section = app.ui.brush_section;
-    ui.horizontal_top(|ui| {
+    // The columns follow the direction explicitly: sections lead (right in RTL), options follow.
+    let cols = if crate::direction::is_rtl() { egui::Layout::right_to_left(egui::Align::Min) } else { egui::Layout::left_to_right(egui::Align::Min) };
+    let cols_size = ui.available_size_before_wrap();
+    ui.allocate_ui_with_layout(cols_size, cols, |ui| {
         section_list(app, ui, &mut b);
         widgets::vline(ui, 482.0);
         ui.vertical(|ui| {
@@ -509,52 +522,60 @@ pub fn window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .shadow(egui::Shadow { offset: [0, 10], blur: 30, spread: 0, color: t.shadow })
         .inner_margin(egui::Margin::same(10));
     let canvas = app.last_canvas_rect;
+    // First-show position: 30 px inside the canvas's reading-end edge.
+    let x = if crate::direction::is_rtl() {
+        (canvas.left() + 30.0).min(canvas.right() - WIDTH - 8.0).max(canvas.left() + 8.0)
+    } else {
+        (canvas.right() - WIDTH - 30.0).max(canvas.left() + 8.0)
+    };
     let mut open = true;
     egui::Window::new(tl!("Brush Settings"))
         .id(egui::Id::unique("brush-settings"))
         .title_bar(false)
         .resizable(false)
         .frame(frame)
-        .default_pos(egui::pos2((canvas.right() - WIDTH - 30.0).max(canvas.left() + 8.0), canvas.top() + 24.0))
+        .default_pos(egui::pos2(x, canvas.top() + 24.0))
         .show(ctx, |ui| {
-            ui.set_width(WIDTH);
-            ui.horizontal(|ui| {
-                let mut tab = app.ui.brush_tab;
-                for (i, name) in [tl!("Brush Settings"), tl!("Brushes")].iter().enumerate() {
-                    if widgets::pill_tab(ui, name, tab == i).clicked() {
-                        tab = i;
-                    }
-                }
-                app.ui.brush_tab = tab;
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
-                        open = false;
-                    }
-                    let menu_btn = widgets::panel_menu_button(ui);
-                    egui::Popup::menu(&menu_btn).show(|ui| {
-                        widgets::style_spectrum_popup_menu(ui);
-                        ui.set_min_width(180.0);
-                        panel_menu(app, ui);
-                        ui.separator();
-                        if ui.button(tl!("Close")).clicked() {
-                            open = false;
-                            ui.close();
+            crate::direction::window_body(ui, |ui| {
+                ui.set_width(WIDTH);
+                ui.horizontal(|ui| {
+                    let mut tab = app.ui.brush_tab;
+                    for (i, name) in [tl!("Brush Settings"), tl!("Brushes")].iter().enumerate() {
+                        if widgets::pill_tab(ui, name, tab == i).clicked() {
+                            tab = i;
                         }
-                        if ui.button(tl!("Close Tab Group")).clicked() {
+                    }
+                    app.ui.brush_tab = tab;
+                    ui.with_layout(crate::direction::trailing(), |ui| {
+                        if icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                             open = false;
-                            ui.close();
                         }
+                        let menu_btn = widgets::panel_menu_button(ui);
+                        egui::Popup::menu(&menu_btn).show(|ui| {
+                            widgets::style_spectrum_popup_menu(ui);
+                            ui.set_min_width(180.0);
+                            panel_menu(app, ui);
+                            ui.separator();
+                            if ui.button(tl!("Close")).clicked() {
+                                open = false;
+                                ui.close();
+                            }
+                            if ui.button(tl!("Close Tab Group")).clicked() {
+                                open = false;
+                                ui.close();
+                            }
+                        });
                     });
                 });
+                ui.add_space(6.0);
+                widgets::hairline(ui);
+                ui.add_space(6.0);
+                if app.ui.brush_tab == 1 {
+                    crate::brushes_tab::show(app, ui);
+                } else {
+                    settings_tab(app, ui);
+                }
             });
-            ui.add_space(6.0);
-            widgets::hairline(ui);
-            ui.add_space(6.0);
-            if app.ui.brush_tab == 1 {
-                crate::brushes_tab::show(app, ui);
-            } else {
-                settings_tab(app, ui);
-            }
         });
     if !open {
         app.ui.panels.brush_settings = false;

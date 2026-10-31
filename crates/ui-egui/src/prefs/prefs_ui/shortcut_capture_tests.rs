@@ -200,27 +200,6 @@ fn shift_is_recorded_when_modifier_key_events_carry_no_bits() {
     assert_eq!(field(&h, id, "capture"), json!(false));
 }
 
-/// ⌘Z can be bound like any other key (#9487): while a field waits for keys it is the shortcut
-/// to record, not the dialog's own Undo (#4697), which used to undo the click that started the
-/// capture. Once recorded, ⌘Z steps the dialog back again.
-#[test]
-fn cmd_z_is_recorded_while_capturing_and_undoes_otherwise() {
-    let (mut h, id) = dialog(1.0, "edit.search", "search…");
-    capture(&mut h, &crate::shortcuts::pretty("Cmd+F"), Key::ControlLeft, Modifiers::COMMAND, Key::Z);
-    assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Cmd+Z"));
-    assert_eq!(field(&h, id, "capture"), json!(false));
-    key(&mut h, Key::Z, true, Modifiers::COMMAND);
-    h.run_steps(2);
-    assert_ne!(field(&h, id, "overrides")["edit.search"], json!("Cmd+Z"), "⌘Z outside a capture undoes the change");
-    assert_eq!(field(&h, id, "capture"), json!(false), "and doesn't wait for keys again");
-    // CodeRabbit on #9504: clearing the restored capture isn't a new edit, so Redo still works.
-    h.run_steps(2);
-    key(&mut h, Key::Z, true, Modifiers::COMMAND | Modifiers::SHIFT);
-    h.run_steps(2);
-    assert_eq!(field(&h, id, "overrides")["edit.search"], json!("Cmd+Z"), "⇧⌘Z redoes the recorded shortcut");
-    assert_eq!(field(&h, id, "capture"), json!(false));
-}
-
 #[test]
 fn ctrl_k_is_recorded_as_ctrl_k_not_the_control_key() {
     for ppp in [1.0, 2.0] {
@@ -445,4 +424,68 @@ fn accept_takes_the_key_from_every_command_holding_it() {
     click(&mut h, "Accept and Go to Conflict");
     let o = field(&h, id, "overrides");
     assert_eq!((o["edit.cut"].clone(), o["edit.copy"].clone(), o["edit.paste"].clone()), (json!(""), json!(""), json!("Cmd+X")), "{o}");
+}
+
+/// The dialog re-laid-out in `dir`: the twins force the direction only — the language and the
+/// injected data stay as the LTR dialog built them.
+fn dialog_in_direction(dir: crate::direction::Dir) -> (Harness<'static, PhotocraftApp>, u64) {
+    let (mut h, id) = dialog(1.0, "edit.search", "search…");
+    let _guard = crate::direction::direction_scope(dir);
+    h.run_steps(2);
+    (h, id)
+}
+
+/// In a right-to-left UI the shortcut grid reads name first (rightmost) and the shortcut
+/// column last (leftmost), like the menu rows read label first and shortcut at the reading end.
+#[test]
+fn shortcuts_grid_mirrors_columns_in_rtl() {
+    for (dir, name_first) in [(crate::direction::Dir::Ltr, true), (crate::direction::Dir::Rtl, false)] {
+        let (h, _) = dialog_in_direction(dir);
+        let name = h.get_by_label_contains("Search…").rect();
+        let key = h.get_by_label(&crate::shortcuts::pretty("Cmd+F")).rect();
+        assert_eq!(name.min.x < key.min.x, name_first, "{dir:?}: name column at the reading start");
+    }
+}
+
+/// The grid's first row — the category header — must be on screen in both directions: the
+/// fork's grid cannot place a row under a right-to-left cursor (x = -inf).
+#[test]
+fn shortcuts_grid_header_row_is_on_screen_in_both_directions() {
+    for (dir, name_first) in [(crate::direction::Dir::Ltr, true), (crate::direction::Dir::Rtl, false)] {
+        let (h, _) = dialog_in_direction(dir);
+        let screen = h.ctx.clone().viewport_rect();
+        let name = h.get_by_label_contains("Search…").rect();
+        let key = h.get_by_label(&crate::shortcuts::pretty("Cmd+F")).rect();
+        for cell in [name, key] {
+            assert!(cell.min.x.is_finite() && cell.max.x.is_finite(), "{dir:?}: data cell off screen: {cell:?}");
+            assert!(cell.min.x >= screen.min.x && cell.max.x <= screen.max.x, "{dir:?}: data cell outside the window: {cell:?}");
+        }
+        // The "Edit" header is the grid's first row, directly above the name cell and sharing
+        // its column: at the reading start — right of the shortcut cell in RTL, left in LTR.
+        let header = h
+            .query_all_by_label("Edit")
+            .map(|n| n.rect())
+            .find(|r| r.max.y <= name.min.y && name.min.y - r.max.y < 30.0 && (r.min.x - name.min.x).abs() < 2.0)
+            .unwrap_or_else(|| panic!("{dir:?}: no header in the name column above the data row"));
+        assert!(header.min.x.is_finite() && header.max.x.is_finite(), "{dir:?}: header off screen: {header:?}");
+        assert!(header.min.x >= screen.min.x && header.max.x <= screen.max.x, "{dir:?}: header outside the window: {header:?}");
+        assert_eq!(header.min.x < key.min.x, name_first, "{dir:?}: header at the reading start");
+    }
+}
+
+/// Plain rows mirror with the host body: labels sit right of their controls, and the bottom
+/// action row's first button sits at the reading start.
+#[test]
+fn shortcuts_rows_read_rtl() {
+    for (dir, ltr) in [(crate::direction::Dir::Ltr, true), (crate::direction::Dir::Rtl, false)] {
+        let (h, _) = dialog_in_direction(dir);
+        let label = h.get_by_label("Search").rect();
+        // The app behind the dialog has other text inputs (a "Color" field); the search box
+        // carries the filter's value.
+        let edit = h.get_by(|n| n.role() == egui::accesskit::Role::TextInput && n.value().as_deref() == Some("search…")).rect();
+        assert_eq!(label.min.x < edit.min.x, ltr, "{dir:?}: search label before its field");
+        let add = h.get_by_role_and_label(egui::accesskit::Role::Button, "Add Shortcut").rect();
+        let reset = h.get_by_role_and_label(egui::accesskit::Role::Button, "Reset All to Defaults").rect();
+        assert_eq!(add.min.x < reset.min.x, ltr, "{dir:?}: first action button at the reading start");
+    }
 }

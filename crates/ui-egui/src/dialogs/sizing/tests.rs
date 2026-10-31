@@ -1,3 +1,5 @@
+use egui::Align2;
+
 use super::*;
 
 #[test]
@@ -333,5 +335,56 @@ fn sizing_dialogs_open_on_width_selected() {
         h.run_steps(3);
         assert!(h.state().ui.dialogs.is_empty(), "{command}: Enter is OK");
         assert_eq!(h.state().session.active().unwrap().doc.size.width, 50, "{command}");
+    }
+}
+
+/// The caption hugs its control: right-aligned in a left-to-right row, left-aligned in a
+/// right-to-left one.
+#[test]
+fn caption_anchor_follows_the_reading_direction() {
+    use crate::text::direction::{Dir, direction_scope};
+    let r = Rect::from_min_size(pos2(10.0, 20.0), vec2(90.0, 22.0));
+    let _ltr = direction_scope(Dir::Ltr);
+    let (x, anchor) = crate::direction::end_text_anchor(r, 6.0);
+    assert_eq!(anchor, Align2::RIGHT_CENTER);
+    assert_eq!(x, pos2(r.right() - 6.0, r.center().y));
+    {
+        let _rtl = direction_scope(Dir::Rtl);
+        let (x, anchor) = crate::direction::end_text_anchor(r, 6.0);
+        assert_eq!(anchor, Align2::LEFT_CENTER);
+        assert_eq!(x, pos2(r.left() + 6.0, r.center().y));
+    }
+}
+
+/// The width row mirrors in a right-to-left dialog: the Units list sits left of the Width
+/// field instead of right of it.
+#[test]
+fn width_row_mirrors_in_rtl() {
+    use crate::text::direction::{Dir, direction_scope};
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    for (dir, rtl) in [(Dir::Ltr, false), (Dir::Rtl, true)] {
+        let _scope = direction_scope(dir);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1400.0, 900.0))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        open(h.state_mut(), "image.imageSize").unwrap();
+        h.run_steps(3);
+        let width = h.query_all_by_role(Role::SpinButton).find(|n| n.accesskit_node().label().as_deref() == Some("Width")).expect("the Width field").rect();
+        let units: Vec<egui::Rect> =
+            h.query_all_by_role(Role::ComboBox).filter(|n| n.accesskit_node().label().as_deref() == Some("Units")).map(|n| n.rect()).collect();
+        assert!(!units.is_empty(), "the row's Units list is missing");
+        let units = units
+            .into_iter()
+            .min_by(|a, b| (a.center().y - width.center().y).abs().total_cmp(&(b.center().y - width.center().y).abs()))
+            .expect("the Units list");
+        if rtl {
+            assert!(units.left() < width.left(), "RTL: the Units list sits left of the Width field: {units:?} {width:?}");
+        } else {
+            assert!(units.left() > width.left(), "LTR: the Units list sits right of the Width field: {units:?} {width:?}");
+        }
     }
 }

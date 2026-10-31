@@ -80,8 +80,10 @@ fn field_fine(range: &std::ops::RangeInclusive<f32>, decimals: Option<u32>, step
     if step_from_decimals { decimals.is_some_and(|d| d > 0) || *range.end() - *range.start() <= 10.0 } else { *range.end() - *range.start() <= 10.0 }
 }
 
-/// A [`value_field`] that leaves `trailing` points free inside its box, right of the suffix, and
-/// returns the box with the number's response.
+/// A [`value_field`] that leaves `trailing` points free inside its box at the reading end
+/// (right of the suffix left-to-right, left of it right-to-left), and returns the box with the
+/// number's response. A caller that reserves `trailing` points must put its own control there
+/// (the pop-up ▾); the field only reserves the space.
 // The explicit accessible name accompanies the existing numeric-field parameters.
 #[expect(clippy::too_many_arguments)]
 pub(super) fn value_field_in(
@@ -122,7 +124,21 @@ fn value_field_box(
         // A direct click+drag target avoids egui snapping the padding/suffix to the nearby
         // numeric button. It is not focusable; the editor drawn next wins inside its bounds.
         // Preserve a popup field's trailing arrow, and never extend outside the UI clip.
-        let hit = Rect::from_min_max(pos2(s.rect.left(), rect.top()), pos2(rect.right() - trailing, rect.bottom())).intersect(ui.clip_rect());
+        // The caption may sit on either side of the field (mirrored rows put it right of the
+        // field): span the true x-union. With the caption right of the field, the ▾'s own
+        // interact is registered later, and egui resolves a tie between overlapping interacts
+        // to the last-registered one, so the ▾ wins the arrow zone.
+        let (l, r) = (rect.left().min(s.rect.left()), rect.right().max(s.rect.right()));
+        let hit = if s.rect.left() <= rect.right() {
+            Rect::from_min_max(pos2(l, rect.top()), pos2(rect.right() - trailing, rect.bottom()))
+        } else {
+            // Under RTL the band starts at the pop-up arrow's inner edge, so the border strip
+            // between the field's edge and the arrow is not the band's alone (LTR leaves it
+            // to the field's edge).
+            let l = if trailing > 0.0 && crate::direction::is_rtl() { l.max(rect.left() + POPUP_ARROW_INSET) } else { l };
+            Rect::from_min_max(pos2(l, rect.top()), pos2(r, rect.bottom()))
+        }
+        .intersect(ui.clip_rect());
         let mut resp = ui.interact(hit, s.label, Sense::CLICK | Sense::DRAG);
         option_click = resp.clicked();
         if let Some(tip) = s.tip
@@ -143,8 +159,8 @@ fn value_field_box(
     if !t.bevel {
         ui.painter().rect_stroke(rect, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
     }
-    // The number's slot ends 1 pt left of the suffix, by its measured width (the suffix is drawn
-    // 6 pt from the right edge), so a one-character unit like `%` leaves the number room (#3040).
+    // The number's slot ends 1 pt from the suffix, by its measured width (the suffix is drawn
+    // 6 pt from the reading-end edge), so a one-character unit like `%` leaves the number room (#3040).
     let suffix_font = theme::mono(11.0);
     let suffix_w = if suffix.is_empty() { 0.0 } else { ui.painter().layout_no_wrap(suffix.to_owned(), suffix_font.clone(), t.text_faint).size().x + 3.0 };
     // Centred: the digits' ink then sits within 0.2 pt of the box's centre, where a 1 pt lift
@@ -154,7 +170,13 @@ fn value_field_box(
     let row_h = ui.painter().layout_no_wrap("0".into(), font.clone(), t.text).size().y;
     let slot_h = (rect.height() - 4.0).max(row_h).min(rect.height() - 2.0);
     let cy = rect.center().y;
-    let field = Rect::from_min_max(pos2(rect.left() + 4.0, cy - slot_h / 2.0), pos2(rect.right() - 4.0 - suffix_w - trailing, cy + slot_h / 2.0));
+    // RTL reserves the suffix (+ trailing arrow) at the field's left edge instead of its right.
+    let (slot_l, slot_r) = if crate::direction::is_rtl() {
+        (rect.left() + 4.0 + suffix_w + trailing, rect.right() - 4.0)
+    } else {
+        (rect.left() + 4.0, rect.right() - 4.0 - suffix_w - trailing)
+    };
+    let field = Rect::from_min_max(pos2(slot_l, cy - slot_h / 2.0), pos2(slot_r, cy + slot_h / 2.0));
     // Small ranges (gamma 0.01–9.99, 0–1 centres) need two decimals and a finer drag, like Photoshop.
     let fine = field_fine(&range, decimals, step_from_decimals);
     let unit = field_step(&range, decimals, step_from_decimals);
@@ -233,7 +255,12 @@ fn value_field_box(
         resp.flags.set(Flags::DRAG_STOPPED, resp.flags.contains(Flags::DRAG_STOPPED) || s.stopped);
     }
     if !suffix.is_empty() {
-        ui.painter().text(pos2(rect.right() - 6.0 - trailing, rect.center().y), Align2::RIGHT_CENTER, suffix, suffix_font, t.text_faint);
+        let (x, anchor) = if crate::direction::is_rtl() {
+            (rect.left() + 6.0 + trailing, Align2::LEFT_CENTER)
+        } else {
+            (rect.right() - 6.0 - trailing, Align2::RIGHT_CENTER)
+        };
+        ui.painter().text(pos2(x, rect.center().y), anchor, suffix, suffix_font, t.text_faint);
     }
     if step != 0.0 {
         // Round to the step before adding it, so whole-number fields drop decimals (55.4 + 1 = 56).
@@ -267,6 +294,9 @@ fn value_field_box(
 /// Width of the ▾ that opens a [`popup_value_field`]'s slider, inside the field's box.
 pub const POPUP_ARROW_W: f32 = 14.0;
 
+/// Inset of the ▾ from the field's reading-end edge.
+const POPUP_ARROW_INSET: f32 = 2.0;
+
 /// Width of a [`popup_value_field`]'s pop-up slider.
 const POPUP_SLIDER_W: f32 = 160.0;
 
@@ -282,7 +312,7 @@ pub struct PopupFieldResponse {
 }
 
 /// A [`value_field`] with Photoshop's pop-up slider (the Layers panel's Opacity and Fill): a click
-/// on the ▾ inside the field's right edge opens a slider below it, a click outside closes it.
+/// on the ▾ inside the field's reading-end edge opens a slider below it, a click outside closes it.
 /// Pressing the ▾ and dragging moves the value straight away, as far as the slider would, and
 /// closes the slider on release. The number can still be typed, scrubbed and stepped like any
 /// value field. `name` (already translated) names the ▾ for its tooltip and for accessibility.
@@ -290,7 +320,12 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
     let t = Tokens::get(ui.ctx());
     let (lo, hi) = (*range.start(), *range.end());
     let (mut field, rect) = value_field_in(ui, value, range.clone(), suffix, width, POPUP_ARROW_W, FieldOpts::default(), None);
-    let arrow = Rect::from_min_max(pos2(rect.right() - POPUP_ARROW_W - 2.0, rect.top() + 2.0), rect.max - vec2(2.0, 2.0));
+    // RTL puts the ▾ at the field's left (reading-end) edge.
+    let arrow = if crate::direction::is_rtl() {
+        Rect::from_min_max(pos2(rect.left() + POPUP_ARROW_INSET, rect.top() + 2.0), pos2(rect.left() + POPUP_ARROW_W + POPUP_ARROW_INSET, rect.bottom() - 2.0))
+    } else {
+        Rect::from_min_max(pos2(rect.right() - POPUP_ARROW_W - POPUP_ARROW_INSET, rect.top() + 2.0), rect.max - vec2(POPUP_ARROW_INSET, 2.0))
+    };
     let resp = ui.interact(arrow, field.id.with("popup-slider"), Sense::click_and_drag());
     let name = name.trim_end_matches([':', '：']).to_string();
     // Both the number and its ▾ are named by the control's own semantic name.
@@ -337,11 +372,17 @@ pub fn popup_value_field(ui: &mut Ui, name: &str, value: &mut f32, range: std::o
         egui::Popup::close_id(ui.ctx(), popup_id);
     }
 
+    // The popup opens under the ▾, which is at the field's reading-end edge (left in RTL).
+    let (align, alternatives) = if crate::direction::is_rtl() {
+        (egui::RectAlign::BOTTOM_START, [egui::RectAlign::TOP_START])
+    } else {
+        (egui::RectAlign::BOTTOM_END, [egui::RectAlign::TOP_END])
+    };
     let popup = egui::Popup::from_toggle_button_response(&resp)
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .anchor(rect)
-        .align(egui::RectAlign::BOTTOM_END)
-        .align_alternatives(&[egui::RectAlign::TOP_END]);
+        .align(align)
+        .align_alternatives(&alternatives);
     let open = popup.is_open();
     if resp.hovered() || resp.dragged() || open {
         ui.painter().rect_filled(arrow, t.radius_sm, t.field_border.gamma_multiply(0.6));

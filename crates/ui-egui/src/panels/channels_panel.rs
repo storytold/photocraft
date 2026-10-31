@@ -5,7 +5,7 @@
 //! Rows can be dragged onto the footer's buttons, as in Photoshop (#4689): New duplicates the
 //! channel, Delete deletes it, and Load Channel as Selection loads it.
 
-use egui::{Align2, Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Color32, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_doc::ColorIndicates;
 use photocraft_engine::channel_cmds::{self, ChannelTarget};
 use serde_json::{Value, json};
@@ -71,7 +71,6 @@ struct RowInteractions<'a> {
     name: &'a str,
     cell: Rect,
     rect: Rect,
-    text_pos: egui::Pos2,
     response: &'a egui::Response,
     eye_response: &'a egui::Response,
     ctx: &'a egui::Context,
@@ -120,7 +119,8 @@ fn handle_channel_row_click(ui: &egui::Ui, row: &mut RowInteractions<'_>) {
 fn handle_channel_row_double_click(ui: &mut egui::Ui, row: &mut RowInteractions<'_>, rename_id: egui::Id) {
     // Like Photoshop: double-clicking the thumbnail opens Channel Options (where an alpha
     // channel becomes a spot channel, #3761), double-clicking the name renames it.
-    let on_thumb = row.response.interact_pointer_pos().is_some_and(|p| p.x < row.cell.right() + 4.0);
+    let thumb_edge = crate::direction::after_x(row.cell, 4.0, 0.0);
+    let on_thumb = row.response.interact_pointer_pos().is_some_and(|p| crate::direction::start_side(p.x, thumb_edge));
     match row.row {
         Row::QuickMask if row.response.double_clicked() => row.actions.push(("ui.channelOptions".into(), json!("quickMask"))),
         Row::LayerMask if row.response.double_clicked() => row.actions.push(("ui.channelOptions".into(), json!("mask"))),
@@ -140,7 +140,9 @@ fn handle_alpha_double_click(ui: &mut egui::Ui, row: &mut RowInteractions<'_>, i
         }
     }
     let Some(mut text) = row.ctx.data(|data| data.get_temp::<String>(rename_id)) else { return };
-    let edit_rect = Rect::from_min_max(pos2(row.text_pos.x - 3.0, row.rect.center().y - 11.0), pos2(row.rect.right() - 36.0, row.rect.center().y + 11.0));
+    let ex = crate::direction::after_x(row.cell, 7.0, 0.0);
+    let tx = crate::direction::end_x(row.rect, 36.0);
+    let edit_rect = Rect::from_min_max(pos2(ex.min(tx), row.rect.center().y - 11.0), pos2(ex.max(tx), row.rect.center().y + 11.0));
     let edit = ui.put(edit_rect, egui::TextEdit::singleline(&mut text).font(egui::FontId::proportional(12.5))).accessible_name(tl!("Name"));
     if !edit.has_focus() && !edit.lost_focus() {
         edit.request_focus();
@@ -234,7 +236,8 @@ fn paint_row_background(painter: &egui::Painter, t: &Tokens, rect: Rect, selecte
         painter.rect_filled(rect, radius, t.hover.gamma_multiply(0.5));
     }
     if t.pro {
-        painter.line_segment([pos2(rect.left() + 30.0, rect.top()), pos2(rect.left() + 30.0, rect.bottom())], Stroke::new(1.0, t.separator));
+        let sx = crate::direction::start_x(rect, 30.0);
+        painter.line_segment([pos2(sx, rect.top()), pos2(sx, rect.bottom())], Stroke::new(1.0, t.separator));
         painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.separator));
     }
 }
@@ -243,7 +246,10 @@ fn paint_row_background(painter: &egui::Painter, t: &Tokens, rect: Rect, selecte
 fn paint_spot_swatch(painter: &egui::Painter, thumb: Rect, spot: Option<(photocraft_doc::Color, f32)>) {
     let Some((ink, _)) = spot else { return };
     let c = ink.to_rgb().map(|v| (v.clamp(0.0, 1.0) * 255.0) as u8);
-    painter.rect_filled(Rect::from_min_size(thumb.right_bottom() - vec2(9.0, 9.0), vec2(9.0, 9.0)), 0.0, Color32::from_rgb(c[0], c[1], c[2]));
+    // On the thumbnail's reading-end bottom corner.
+    let e = crate::direction::end_x(thumb, 9.0);
+    let tip = crate::direction::end_x(thumb, 0.0);
+    painter.rect_filled(Rect::from_min_max(pos2(e.min(tip), thumb.bottom() - 9.0), pos2(e.max(tip), thumb.bottom())), 0.0, Color32::from_rgb(c[0], c[1], c[2]));
 }
 
 fn row_presentation(row: Row, context: &RowPresentationContext<'_>, mask_visible: bool) -> RowPresentation {
@@ -360,7 +366,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             let painter = ui.painter_at(rect.expand(1.0));
             paint_row_background(&painter, &t, rect, selected, resp.hovered());
-            let eye = Rect::from_min_size(pos2(rect.left() + 6.0, rect.center().y - 11.0), vec2(22.0, 22.0));
+            let eye = Rect::from_min_size(pos2(crate::direction::start_x_w(rect, 6.0, 22.0), rect.center().y - 11.0), vec2(22.0, 22.0));
             let eye_resp = ui.interact(eye, ui.scope_id().with(("chan-eye", format!("{:?}", row.reference()))), Sense::click());
             // Like Photoshop, the temporary mask row's eye is empty until the mask is shown.
             if row != Row::LayerMask || visible || eye_resp.hovered() {
@@ -373,7 +379,7 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 actions.push(eye_action(row, visible, gray_view, layer_id));
             }
             let ts = if t.pro { 28.0 } else { 30.0 };
-            let cell = Rect::from_min_size(pos2(rect.left() + 36.0, rect.center().y - ts / 2.0), vec2(ts, ts));
+            let cell = Rect::from_min_size(pos2(crate::direction::start_x_w(rect, 36.0, ts), rect.center().y - ts / 2.0), vec2(ts, ts));
             // Thumbnails keep the document's aspect ratio (the textures are letterboxed squares).
             let (thumb, uv) = fit_thumb(cell, doc.size.width, doc.size.height);
             let tex = if row == Row::LayerMask { mask_tex } else { thumbs.get(thumb_idx).copied() };
@@ -398,12 +404,11 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             };
             job.append(&label, 0.0, egui::TextFormat { font_id: font, color: t.text, italics: italic, ..Default::default() });
             let galley = painter.layout_job(job);
-            let text_pos = pos2(cell.right() + 10.0, rect.center().y - galley.size().y / 2.0);
-            painter.galley(text_pos, galley, t.text);
+            painter.galley(pos2(crate::direction::after_x(cell, 10.0, galley.size().x), rect.center().y - galley.size().y / 2.0), galley, t.text);
             if let Some(slot) = slot {
                 painter.text(
-                    pos2(rect.right() - 8.0, rect.center().y),
-                    Align2::RIGHT_CENTER,
+                    pos2(crate::direction::end_x(rect, 8.0), rect.center().y),
+                    crate::direction::end_align(),
                     crate::shortcuts::pretty(&format!("Cmd+{slot}")),
                     theme::mono(11.0),
                     t.text_faint,
@@ -416,7 +421,6 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     name: &name,
                     cell,
                     rect,
-                    text_pos,
                     response: &resp,
                     eye_response: &eye_resp,
                     ctx: &ctx,

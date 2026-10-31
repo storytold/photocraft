@@ -1575,6 +1575,7 @@
 	Search commands	Befehle suchen
 	Search commands, tools and panels…	Befehle, Werkzeuge und Bedienfelder suchen…
 	Search fonts	Schriften suchen
+	Search menus	Menüs suchen
 	Select All	Alles auswählen
 	Select Subject	Motiv auswählen
 	Select a type layer or click into text to insert glyphs	Wähle eine Textebene aus oder klicke in den Text, um Glyphen einzufügen
@@ -3524,3 +3525,11 @@ curves	Smooth	Glätten
 	Select and Mask was closed: its document is no longer the active one	Auswählen und maskieren wurde geschlossen: Das zugehörige Dokument ist nicht mehr aktiv
 	Select and Mask was closed: another layer was selected	Auswählen und maskieren wurde geschlossen: Es wurde eine andere Ebene ausgewählt
 	Edit Brush…	Pinsel bearbeiten…
+	Count:	Zähler:
+	Level:	Stufe:
+	Percentile:	Perzentil:
+	Source:	Quelle:
+	Top Left Radius:	Oben links Radius:
+	Top Right Radius:	Oben rechts Radius:
+	Bottom Left Radius:	Unten links Radius:
+	Bottom Right Radius:	Unten rechts Radius:

@@ -267,18 +267,35 @@ fn theme_swatch(ui: &mut egui::Ui, kind: ThemeKind, id: &str, selected: &mut Str
 /// A grid row of theme swatches, marked Active when the appearance mode shows this family.
 fn theme_row(ui: &mut egui::Ui, title: &str, active: bool, selected: &mut String, favorites: &mut Vec<SavedTheme>, options: &[(&str, ThemeKind)]) {
     let t = Tokens::get(ui.ctx());
-    ui.label(RichText::new(tl!(title)).color(t.text_dim));
-    ui.horizontal(|ui| {
-        // Room for the favourite star badges on the swatch corners.
-        ui.spacing_mut().item_spacing.x = 6.0;
-        for (id, kind) in options {
-            theme_swatch(ui, *kind, id, selected, favorites);
-        }
-        if active {
-            ui.add_space(6.0);
-            ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
-        }
-    });
+    // Grid columns always advance left to right, so emit them in reading order.
+    crate::direction::grid_cells(
+        ui,
+        |ui| {
+            ui.label(RichText::new(tl!(title)).color(t.text_dim));
+        },
+        |ui| {
+            ui.horizontal(|ui| {
+                // Room for the favourite star badges on the swatch corners.
+                ui.spacing_mut().item_spacing.x = 6.0;
+                let rtl = crate::direction::is_rtl();
+                // A Grid cell's row stays physical, so under RTL the strip is emitted in
+                // reverse: the Active marker goes first (the reading end) and the first option
+                // ends up the rightmost one. The swatch paint itself never mirrors.
+                if rtl && active {
+                    ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
+                    ui.add_space(6.0);
+                }
+                for i in 0..options.len() {
+                    let (id, kind) = options[if rtl { options.len() - 1 - i } else { i }];
+                    theme_swatch(ui, kind, id, selected, favorites);
+                }
+                if !rtl && active {
+                    ui.add_space(6.0);
+                    ui.label(RichText::new(tl!("Active")).color(t.accent_text).small());
+                }
+            });
+        },
+    );
     ui.end_row();
 }
 
@@ -307,10 +324,18 @@ pub(super) fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, s
     let t = Tokens::get(ui.ctx());
     let mut mode = obj.get("appearanceMode").and_then(Value::as_str).unwrap_or("auto").to_string();
     if rows.mode {
-        ui.label(RichText::new(tl!("Appearance Mode")).color(t.text_dim));
         let choices: [(String, &str); 3] = [("auto".into(), tl!("Sync with system")), ("dark".into(), tl!("Dark")), ("light".into(), tl!("Light"))];
         let pairs: Vec<(String, &str)> = choices.iter().map(|(id, label)| (id.clone(), *label)).collect();
-        crate::widgets::dropdown(ui, "appearance-mode", tl!("Appearance Mode"), &mut mode, &pairs, 220.0);
+        // Grid columns always advance left to right, so emit them in reading order.
+        crate::direction::grid_cells(
+            ui,
+            |ui| {
+                ui.label(RichText::new(tl!("Appearance Mode")).color(t.text_dim));
+            },
+            |ui| {
+                crate::widgets::dropdown(ui, "appearance-mode", tl!("Appearance Mode"), &mut mode, &pairs, 220.0);
+            },
+        );
         ui.end_row();
     }
     let light_active = mode == "light" || (mode == "auto" && system == Some(egui::Theme::Light));
@@ -327,4 +352,84 @@ pub(super) fn appearance_rows(ui: &mut egui::Ui, obj: &mut Map<String, Value>, s
     obj.insert("lightTheme".into(), json!(light));
     obj.insert("darkTheme".into(), json!(dark));
     obj.insert("favoriteThemes".into(), json!(favorites));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use crate::text::direction::body_layout;
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// The Appearance grid as the preferences page draws it: two columns, the rows of
+    /// `appearance_rows`, under the body's own direction.
+    fn appearance_harness() -> Harness<'static, Map<String, Value>> {
+        let fields = Map::new();
+        // The app sets the direction flag with the style before its first frame; the widgets
+        // mirror on it, and a Grid's first sizing pass would otherwise cache LTR column widths.
+        Harness::builder().with_size(vec2(520.0, 480.0)).with_context_setup(|ctx| crate::theme::set_direction(ctx, crate::direction::is_rtl())).build_ui_state(
+            |ui: &mut egui::Ui, f: &mut Map<String, Value>| {
+                ui.with_layout(body_layout(), |ui| {
+                    super::super::fields::grid_scope(ui, |ui| {
+                        egui::Grid::new("appearance-grid").num_columns(2).show(ui, |ui| {
+                            appearance_rows(ui, f, Some(egui::Theme::Dark), AppearanceRows::matching(""));
+                        });
+                    });
+                });
+            },
+            fields,
+        )
+    }
+
+    /// The rect of one light-theme swatch, by its theme name.
+    fn swatch(h: &Harness<'_, Map<String, Value>>, index: usize) -> egui::Rect {
+        let name = swatch_name(LIGHT_THEME_OPTIONS[index].0);
+        h.query_all_by_role_and_label(Role::RadioButton, &name).next().unwrap_or_else(|| panic!("the {name} swatch")).rect()
+    }
+
+    /// The name a swatch shows, translated like the page does.
+    fn swatch_name(id: &str) -> String {
+        crate::i18n::t(&choice_label(id)).to_string()
+    }
+
+    /// The Appearance grid in a right-to-left UI: the label reads first (at the right), the
+    /// editor follows toward the left, and the first light-theme swatch is the rightmost one.
+    /// The favourite badge stays at its physical corner: it is painted, not laid out.
+    #[test]
+    fn appearance_rows_read_rtl() {
+        let _rtl = direction_scope(Dir::Rtl);
+        let mut h = appearance_harness();
+        h.run_steps(3);
+        let label = h.query_all_by_role_and_label(Role::Label, "Appearance Mode").next().expect("the Appearance Mode label").rect();
+        let editor = h.query_all_by_role_and_label(Role::ComboBox, "Appearance Mode").next().expect("the Appearance Mode dropdown").rect();
+        assert!(label.left() > editor.right(), "the label reads first: {label:?} {editor:?}");
+
+        let first = swatch(&h, 0);
+        let last = swatch(&h, LIGHT_THEME_OPTIONS.len() - 1);
+        assert!(first.left() > last.left(), "the first swatch is the rightmost one: {first:?} {last:?}");
+
+        h.hover_at(first.center());
+        h.run_steps(3);
+        let name = swatch_name(LIGHT_THEME_OPTIONS[0].0);
+        let badge = h.query_by_label(&format!("Add to favorites: {name}")).expect("the badge shows while the swatch is hovered").rect();
+        let corner = first.right_top() + vec2(-3.0, 3.0);
+        assert!((badge.center() - corner).length() < 1.0, "the badge keeps its physical corner: {badge:?} {first:?}");
+    }
+
+    /// The left-to-right twin: the label keeps its place at the left and the first swatch stays
+    /// the leftmost one.
+    #[test]
+    fn appearance_rows_read_ltr() {
+        let _ltr = direction_scope(Dir::Ltr);
+        let mut h = appearance_harness();
+        h.run_steps(3);
+        let label = h.query_all_by_role_and_label(Role::Label, "Appearance Mode").next().expect("the Appearance Mode label").rect();
+        let editor = h.query_all_by_role_and_label(Role::ComboBox, "Appearance Mode").next().expect("the Appearance Mode dropdown").rect();
+        assert!(label.right() < editor.left(), "the label keeps its place: {label:?} {editor:?}");
+
+        let first = swatch(&h, 0);
+        let last = swatch(&h, LIGHT_THEME_OPTIONS.len() - 1);
+        assert!(first.left() < last.left(), "the first swatch keeps its place: {first:?} {last:?}");
+    }
 }

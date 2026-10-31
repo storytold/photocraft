@@ -1,5 +1,6 @@
-//! Filter › Liquify…: a full-window dialog like Photoshop's (tool strip on the left, properties on
-//! the right, preview in the middle, OK / Cancel).
+//! Filter › Liquify…: a full-window dialog like Photoshop's (tool strip on the reading-start edge,
+//! properties on the reading-end edge, preview in the middle, OK / Cancel). The sides mirror in a
+//! right-to-left UI; the preview stays canvas space.
 //!
 //! The preview is a CPU proxy: the layer box-downsampled once to at most 1600 px
 //! (`ProxyImage`), re-rendered through the displacement field only where a dab changed it
@@ -802,12 +803,47 @@ fn tool_icon(t: LiquifyTool) -> &'static str {
         LiquifyTool::TwirlCw => "rotate-cw",
         LiquifyTool::Pucker => "scan",
         LiquifyTool::Bloat => "maximize-2",
+        // A swap pair, but the glyph points at the canvas, so it must not follow the interface
+        // direction: the strip draws it through [`button_ltr`], the LTR twin of `icons::button`.
         LiquifyTool::PushLeft => "chevrons-left",
         LiquifyTool::Freeze => "lock",
         LiquifyTool::Thaw => "lock-open",
         LiquifyTool::LassoMask => "lasso",
         _ => "circle",
     }
+}
+
+/// True when `tool`'s glyph keeps its direction in a right-to-left UI: the PushLeft chevron
+/// points at the canvas, so the strip draws it through [`button_ltr`], not the shared button.
+fn keeps_direction(tool: LiquifyTool) -> bool {
+    tool == LiquifyTool::PushLeft
+}
+
+/// The tool strip's button for `tool`: the glyph follows the interface, except for the tools
+/// whose glyph points at the canvas ([`keeps_direction`]).
+fn tool_button(ui: &mut egui::Ui, tool: LiquifyTool, name: &str, box_size: f32, selected: bool, tooltip: &str) -> egui::Response {
+    if keeps_direction(tool) { button_ltr(ui, name, box_size, selected, tooltip) } else { crate::icons::button(ui, name, box_size, selected, tooltip) }
+}
+
+/// The LTR twin of [`crate::icons::button`]: same chrome, same glyph size, but the glyph never
+/// mirrors. Liquify's PushLeft chevron points at the canvas, so it keeps its direction in a
+/// right-to-left UI, where the shared button would swap `chevrons-left` for `chevrons-right`.
+fn button_ltr(ui: &mut egui::Ui, name: &str, box_size: f32, selected: bool, tooltip: &str) -> egui::Response {
+    use craft_ui::buttons::{ButtonVisuals, IconButton, IconButtonStyle};
+    let t = Tokens::get(ui.ctx());
+    let style = IconButtonStyle {
+        normal: ButtonVisuals { fill: Color32::TRANSPARENT, stroke: Stroke::NONE, icon: t.icon },
+        hovered: ButtonVisuals { fill: t.hover, stroke: Stroke::NONE, icon: t.text },
+        pressed: None,
+        selected: ButtonVisuals { fill: t.accent_soft, stroke: Stroke::new(1.0, t.accent_border), icon: t.accent_text },
+        corner_radius: t.radius_sm.into(),
+        focus_stroke: Stroke::new(1.0, t.accent),
+    };
+    let label = if tooltip.is_empty() { name } else { tl!(tooltip) };
+    let resp = IconButton::new(label, vec2(box_size, box_size), &style).selected(selected).show(ui, |ui, rect, tint| {
+        crate::icons::paint_ltr(ui, rect, name, (box_size * 0.52).round(), tint);
+    });
+    if tooltip.is_empty() { resp } else { resp.on_hover_text(label) }
 }
 
 fn shortcut(t: LiquifyTool) -> &'static str {
@@ -889,13 +925,34 @@ fn backdrop_layering<T: Copy>(backdrop: Option<T>, mode: BackdropMode, opacity: 
     Layering { image, behind, front }
 }
 
-/// Draws the dialog (a full-window layer over the app).
+/// The tool strip's rectangle: it hugs the reading-start edge, left in a left-to-right UI and
+/// right in a right-to-left one.
+fn tool_strip_rect(body: ERect) -> ERect {
+    if crate::direction::is_rtl() {
+        ERect::from_min_size(pos2(body.right() - LEFT_W, body.top()), vec2(LEFT_W, body.height()))
+    } else {
+        ERect::from_min_size(body.min, vec2(LEFT_W, body.height()))
+    }
+}
+
+/// The properties panel's rectangle: it hugs the reading-end edge, right in a left-to-right UI
+/// and left in a right-to-left one.
+fn props_panel_rect(body: ERect) -> ERect {
+    if crate::direction::is_rtl() {
+        ERect::from_min_size(pos2(body.left(), body.top()), vec2(RIGHT_W, body.height()))
+    } else {
+        ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()))
+    }
+}
+
+/// Draws the tool strip and returns its rectangle.
 fn draw_tool_strip(ui: &mut egui::Ui, painter: &egui::Painter, t: &Tokens, d: &mut LiquifyDialog, body: ERect) -> ERect {
-    // Left tool strip.
-    let left = ERect::from_min_size(body.min, vec2(LEFT_W, body.height()));
-    painter.rect_filled(left, 0.0, t.dock);
-    painter.line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.separator));
-    let mut strip = ui.new_child(egui::UiBuilder::new().max_rect(left.shrink2(vec2(6.0, 8.0))));
+    let rtl = crate::direction::is_rtl();
+    let strip_rect = tool_strip_rect(body);
+    painter.rect_filled(strip_rect, 0.0, t.dock);
+    let edge = if rtl { strip_rect.left_top() } else { strip_rect.right_top() };
+    painter.line_segment([edge, pos2(edge.x, strip_rect.bottom())], Stroke::new(1.0, t.separator));
+    let mut strip = ui.new_child(egui::UiBuilder::new().max_rect(strip_rect.shrink2(vec2(6.0, 8.0))));
     strip.spacing_mut().item_spacing.y = 4.0;
     for tool in LiquifyTool::ALL {
         let tip = match tool {
@@ -903,14 +960,18 @@ fn draw_tool_strip(ui: &mut egui::Ui, painter: &egui::Painter, t: &Tokens, d: &m
             LiquifyTool::LassoMask => tl!("Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)").to_string(),
             _ => format!("{} ({})", tl!(tool.label()), shortcut(tool)),
         };
-        if crate::icons::button(&mut strip, tool_icon(tool), 34.0, d.opts.tool == tool, &tip).clicked() {
+        let name = tool_icon(tool);
+        // PushLeft's chevron points at the canvas and keeps its direction; every other tool
+        // glyph follows the interface, like everywhere else.
+        let clicked = tool_button(&mut strip, tool, name, 34.0, d.opts.tool == tool, &tip).clicked();
+        if clicked {
             d.opts.tool = tool;
         }
         if matches!(tool, LiquifyTool::Smooth | LiquifyTool::PushLeft | LiquifyTool::Thaw) {
             strip.add_space(6.0);
         }
     }
-    left
+    strip_rect
 }
 
 /// The preview's wheel and trackpad input: zoom about the pointer, or pan.
@@ -991,89 +1052,93 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             t.text,
         );
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), full.max);
-        let left = draw_tool_strip(ui, &painter, &t, d, body);
-        // Right properties panel.
-        let right = ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()));
-        painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 12.0))));
+        // The tool strip hugs the reading-start edge, the properties panel the reading-end edge.
+        let strip = draw_tool_strip(ui, &painter, &t, d, body);
+        let rtl = crate::direction::is_rtl();
+        let panel = props_panel_rect(body);
+        painter.rect_filled(panel, 0.0, t.dock);
+        let edge = if rtl { panel.right_top() } else { panel.left_top() };
+        painter.line_segment([edge, pos2(edge.x, panel.bottom())], Stroke::new(1.0, t.separator));
+        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink2(vec2(14.0, 12.0))));
         egui::ScrollArea::vertical().id_salt("liquify-props").show(&mut props, |ui| {
-            ui.spacing_mut().item_spacing.y = 6.0;
-            widgets::section_label(ui, tl!("Brush Tool Options"));
-            widgets::slider_row(ui, tl!("Size"), &mut d.opts.size, 1.0..=3000.0, "", None);
-            widgets::slider_row(ui, tl!("Density"), &mut d.opts.density, 0.0..=100.0, "", None);
-            widgets::slider_row(ui, tl!("Pressure"), &mut d.opts.pressure, 0.0..=100.0, "", None);
-            widgets::slider_row(ui, tl!("Rate"), &mut d.opts.rate, 0.0..=100.0, "", None);
-            widgets::hairline(ui);
-            widgets::section_label(ui, tl!("Brush Reconstruct Options"));
-            widgets::slider_row(ui, tl!("Amount"), &mut d.opts.reconstruct_amount, 0.0..=100.0, "%", None);
-            ui.horizontal(|ui| {
-                if widgets::secondary_button(ui, tl!("Reconstruct"), 110.0).clicked() {
-                    let a = f64::from(d.opts.reconstruct_amount);
-                    d.global(LiquifyTool::ReconstructAll, Some(a));
+            crate::direction::window_body(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+                widgets::section_label(ui, tl!("Brush Tool Options"));
+                widgets::slider_row(ui, tl!("Size"), &mut d.opts.size, 1.0..=3000.0, "", None);
+                widgets::slider_row(ui, tl!("Density"), &mut d.opts.density, 0.0..=100.0, "", None);
+                widgets::slider_row(ui, tl!("Pressure"), &mut d.opts.pressure, 0.0..=100.0, "", None);
+                widgets::slider_row(ui, tl!("Rate"), &mut d.opts.rate, 0.0..=100.0, "", None);
+                widgets::hairline(ui);
+                widgets::section_label(ui, tl!("Brush Reconstruct Options"));
+                widgets::slider_row(ui, tl!("Amount"), &mut d.opts.reconstruct_amount, 0.0..=100.0, "%", None);
+                ui.horizontal(|ui| {
+                    if widgets::secondary_button(ui, tl!("Reconstruct"), 110.0).clicked() {
+                        let a = f64::from(d.opts.reconstruct_amount);
+                        d.global(LiquifyTool::ReconstructAll, Some(a));
+                    }
+                    if widgets::secondary_button(ui, tl!("Restore All"), 110.0).clicked() {
+                        d.restore_all();
+                    }
+                });
+                widgets::hairline(ui);
+                widgets::section_label(ui, tl!("Mask Options"));
+                ui.horizontal(|ui| {
+                    if widgets::secondary_button(ui, tl!("None"), 70.0).clicked() {
+                        d.global(LiquifyTool::ThawAll, None);
+                    }
+                    if widgets::secondary_button(ui, tl!("Mask All"), 80.0).clicked() {
+                        d.global(LiquifyTool::FreezeAll, None);
+                    }
+                    if widgets::secondary_button(ui, tl!("Invert All"), 80.0).clicked() {
+                        d.global(LiquifyTool::InvertFreeze, None);
+                    }
+                });
+                widgets::hairline(ui);
+                widgets::section_label(ui, tl!("View Options"));
+                widgets::checkbox(ui, &mut d.opts.show_mesh, tl!("Show Mesh"));
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Mesh Size"));
+                    widgets::dropdown(
+                        ui,
+                        "liquify-mesh-size",
+                        tl!("Mesh Size"),
+                        &mut d.opts.mesh_size,
+                        &[(0, tl!("Small")), (1, tl!("Medium")), (2, tl!("Large"))],
+                        110.0,
+                    );
+                });
+                widgets::checkbox(ui, &mut d.opts.show_mask, tl!("Show Mask"));
+                widgets::checkbox(ui, &mut d.opts.show_backdrop, tl!("Show Backdrop"));
+                if d.opts.show_backdrop {
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Use"));
+                        let names: Vec<(Option<u64>, &str)> = backdrop_layers.iter().map(|(id, n)| (*id, n.as_str())).collect();
+                        widgets::dropdown_literal(ui, "liquify-backdrop-use", tl!("Layer"), &mut d.opts.backdrop_layer, &names, 150.0);
+                    });
+                    ui.horizontal(|ui| {
+                        ui.label(tl!("Mode"));
+                        let modes = [(BackdropMode::InFront, tl!("In Front")), (BackdropMode::Behind, tl!("Behind")), (BackdropMode::Blend, tl!("Blend"))];
+                        widgets::dropdown(ui, "liquify-backdrop-mode", tl!("Mode"), &mut d.opts.backdrop_mode, &modes, 150.0);
+                    });
+                    widgets::slider_row(ui, tl!("Opacity"), &mut d.opts.backdrop_opacity, 0.0..=100.0, "", None);
                 }
-                if widgets::secondary_button(ui, tl!("Restore All"), 110.0).clicked() {
-                    d.restore_all();
-                }
-            });
-            widgets::hairline(ui);
-            widgets::section_label(ui, tl!("Mask Options"));
-            ui.horizontal(|ui| {
-                if widgets::secondary_button(ui, tl!("None"), 70.0).clicked() {
-                    d.global(LiquifyTool::ThawAll, None);
-                }
-                if widgets::secondary_button(ui, tl!("Mask All"), 80.0).clicked() {
-                    d.global(LiquifyTool::FreezeAll, None);
-                }
-                if widgets::secondary_button(ui, tl!("Invert All"), 80.0).clicked() {
-                    d.global(LiquifyTool::InvertFreeze, None);
-                }
-            });
-            widgets::hairline(ui);
-            widgets::section_label(ui, tl!("View Options"));
-            widgets::checkbox(ui, &mut d.opts.show_mesh, tl!("Show Mesh"));
-            ui.horizontal(|ui| {
-                ui.label(tl!("Mesh Size"));
-                widgets::dropdown(
-                    ui,
-                    "liquify-mesh-size",
-                    tl!("Mesh Size"),
-                    &mut d.opts.mesh_size,
-                    &[(0, tl!("Small")), (1, tl!("Medium")), (2, tl!("Large"))],
-                    110.0,
+                widgets::hairline(ui);
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} stroke(s) · field {} px/node · dab {:.2} ms · preview {:.2} ms",
+                        d.strokes.len(),
+                        d.cell,
+                        d.dab_ms,
+                        d.preview_ms
+                    ))
+                    .color(t.text_faint)
+                    .size(11.0),
                 );
             });
-            widgets::checkbox(ui, &mut d.opts.show_mask, tl!("Show Mask"));
-            widgets::checkbox(ui, &mut d.opts.show_backdrop, tl!("Show Backdrop"));
-            if d.opts.show_backdrop {
-                ui.horizontal(|ui| {
-                    ui.label(tl!("Use"));
-                    let names: Vec<(Option<u64>, &str)> = backdrop_layers.iter().map(|(id, n)| (*id, n.as_str())).collect();
-                    widgets::dropdown_literal(ui, "liquify-backdrop-use", tl!("Layer"), &mut d.opts.backdrop_layer, &names, 150.0);
-                });
-                ui.horizontal(|ui| {
-                    ui.label(tl!("Mode"));
-                    let modes = [(BackdropMode::InFront, tl!("In Front")), (BackdropMode::Behind, tl!("Behind")), (BackdropMode::Blend, tl!("Blend"))];
-                    widgets::dropdown(ui, "liquify-backdrop-mode", tl!("Mode"), &mut d.opts.backdrop_mode, &modes, 150.0);
-                });
-                widgets::slider_row(ui, tl!("Opacity"), &mut d.opts.backdrop_opacity, 0.0..=100.0, "", None);
-            }
-            widgets::hairline(ui);
-            ui.label(
-                egui::RichText::new(format!(
-                    "{} stroke(s) · field {} px/node · dab {:.2} ms · preview {:.2} ms",
-                    d.strokes.len(),
-                    d.cell,
-                    d.dab_ms,
-                    d.preview_ms
-                ))
-                .color(t.text_faint)
-                .size(11.0),
-            );
         });
         // Footer buttons.
-        let foot = ERect::from_min_size(pos2(right.left() + 14.0, right.bottom() - 48.0), vec2(RIGHT_W - 28.0, 32.0));
-        let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        let foot = ERect::from_min_size(pos2(panel.left() + 14.0, panel.bottom() - 48.0), vec2(RIGHT_W - 28.0, 32.0));
+        let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(crate::direction::trailing()));
         if let Some(role) = widgets::dialog_buttons(
             &mut fb,
             &[
@@ -1083,8 +1148,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ) {
             action = Some(if role == widgets::ButtonRole::Default { "ok" } else { "cancel" });
         }
-        // Preview.
-        let area = ERect::from_min_max(pos2(left.right(), body.top()), pos2(right.left(), body.bottom()));
+        // Preview: the gap between the tool strip and the properties panel. Its geometry is
+        // canvas space and stays physical.
+        let (area_start, area_end) = if rtl { (panel.right(), strip.left()) } else { (strip.right(), panel.left()) };
+        let area = ERect::from_min_max(pos2(area_start, body.top()), pos2(area_end, body.bottom()));
         painter.rect_filled(area, 0.0, t.canvas);
         let (cw, ch) = (d.canvas.width() as f32, d.canvas.height() as f32);
         if d.zoom <= 0.0 {
@@ -1318,3 +1385,99 @@ fn draw_mesh(d: &LiquifyDialog, painter: &egui::Painter, area: ERect) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+
+    /// The PushLeft chevron points at the canvas, so it keeps its direction in a right-to-left
+    /// UI; every other tool glyph follows the interface, like the rest of the interface.
+    #[test]
+    fn push_left_chevron_keeps_its_direction_in_rtl() {
+        let _rtl = direction_scope(Dir::Rtl);
+        // The shared button swaps the swap pair, so it would point the chevron the wrong way.
+        assert_eq!(crate::icons::icon_name(tool_icon(LiquifyTool::PushLeft)), "chevrons-right");
+        assert!(keeps_direction(LiquifyTool::PushLeft));
+        // The other tool glyphs are not swap pairs: the shared button leaves them alone.
+        for tool in LiquifyTool::ALL {
+            if tool == LiquifyTool::PushLeft {
+                continue;
+            }
+            assert!(!keeps_direction(tool), "{tool:?}");
+            assert_eq!(crate::icons::icon_name(tool_icon(tool)), tool_icon(tool), "{tool:?}");
+        }
+    }
+
+    /// The tool strip hugs the reading-start edge and the properties panel the reading-end edge.
+    #[test]
+    fn side_panels_mirror_in_rtl() {
+        let body = ERect::from_min_max(pos2(10.0, 20.0), pos2(510.0, 620.0));
+        {
+            let _ltr = direction_scope(Dir::Ltr);
+            let strip = tool_strip_rect(body);
+            let panel = props_panel_rect(body);
+            assert_eq!(strip.left(), body.left());
+            assert_eq!(panel.right(), body.right());
+            assert_eq!(strip.width(), LEFT_W);
+            assert_eq!(panel.width(), RIGHT_W);
+        }
+        {
+            let _rtl = direction_scope(Dir::Rtl);
+            let strip = tool_strip_rect(body);
+            let panel = props_panel_rect(body);
+            assert_eq!(strip.right(), body.right());
+            assert_eq!(panel.left(), body.left());
+            assert_eq!(strip.width(), LEFT_W);
+            assert_eq!(panel.width(), RIGHT_W);
+        }
+    }
+
+    /// The icon textures a frame paints, by name (`bytes://icons/<name>.svg`).
+    fn painted_icon_names(ctx: &egui::Context, output: &egui::FullOutput) -> Vec<String> {
+        let mut names = Vec::new();
+        for clipped in &output.shapes {
+            let egui::epaint::Shape::Rect(rect) = &clipped.shape else { continue };
+            let Some(brush) = &rect.brush else { continue };
+            let manager = ctx.tex_manager();
+            let name = manager.read().meta(brush.fill_texture_id).map(|meta| meta.name.clone());
+            if let Some(name) = name
+                && name.contains("icons/")
+            {
+                names.push(name);
+            }
+        }
+        names
+    }
+
+    /// The PushLeft button paints the same glyph in a right-to-left UI as in a left-to-right one.
+    #[test]
+    fn push_left_button_paints_the_same_glyph_in_rtl() {
+        fn glyphs(dir: Dir, shared: bool) -> Vec<String> {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            egui_extras::install_image_loaders(&ctx);
+            let mut names = Vec::new();
+            // The first frame loads the icon; the second paints it.
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    if shared {
+                        crate::icons::button(ui, tool_icon(LiquifyTool::PushLeft), 34.0, false, "");
+                    } else {
+                        tool_button(ui, LiquifyTool::PushLeft, tool_icon(LiquifyTool::PushLeft), 34.0, false, "");
+                    }
+                });
+                names = painted_icon_names(&ctx, &output);
+                output.textures_delta.clear();
+            }
+            names
+        }
+        let ltr = glyphs(Dir::Ltr, false);
+        let rtl = glyphs(Dir::Rtl, false);
+        assert!(ltr.iter().any(|n| n.contains("chevrons-left")), "{ltr:?}");
+        assert_eq!(ltr, rtl, "the PushLeft glyph must not follow the interface direction");
+        // Without the twin the shared button would paint the mirrored chevron in RTL.
+        let shared_rtl = glyphs(Dir::Rtl, true);
+        assert!(shared_rtl.iter().any(|n| n.contains("chevrons-right")), "{shared_rtl:?}");
+    }
+}

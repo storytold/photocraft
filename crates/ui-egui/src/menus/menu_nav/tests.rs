@@ -207,9 +207,10 @@ fn resting_on_the_scroll_arrows_scrolls() {
 
 #[test]
 fn arrows_open_and_close_submenus_and_enter_runs_a_command() {
+    let (fwd, back) = crate::direction::horizontal_nav_keys();
     let mut h = harness((1024.0, 600.0, 1.5));
     open(&mut h, "Filter");
-    // Walk down to the first submenu (Blur, Distort, …) and open it with →.
+    // Walk down to the first submenu (Blur, Distort, …) and open it with the forward key.
     for _ in 0..rows(&h, 0).len() {
         key(&mut h, egui::Key::ArrowDown);
         let nav = Nav::current(&h.ctx);
@@ -217,21 +218,21 @@ fn arrows_open_and_close_submenus_and_enter_runs_a_command() {
             break;
         }
     }
-    key(&mut h, egui::Key::ArrowRight);
+    key(&mut h, fwd);
     h.run_steps(2);
     let nav = Nav::current(&h.ctx);
-    assert_eq!(nav.level, 1, "→ moves into the submenu");
+    assert_eq!(nav.level, 1, "the forward key moves into the submenu");
     assert!(nav.rows.get(1).is_some_and(|r| !r.is_empty()), "the submenu is open");
     let first = nav.rows[1].iter().position(|r| r.enabled);
     assert_eq!(nav.highlighted(1), first, "its first enabled row is highlighted");
     assert!(visible(&h, 1, first.unwrap()));
     key(&mut h, egui::Key::ArrowDown);
     assert_eq!(Nav::current(&h.ctx).level, 1);
-    // ← closes it again.
-    key(&mut h, egui::Key::ArrowLeft);
+    // The back key closes it again.
+    key(&mut h, back);
     h.run_steps(2);
     let nav = Nav::current(&h.ctx);
-    assert_eq!((nav.level, nav.rows.len()), (0, 1), "← closes the submenu");
+    assert_eq!((nav.level, nav.rows.len()), (0, 1), "the back key closes the submenu");
     // ↩ runs the highlighted command and closes the menu: Select › All.
     key(&mut h, egui::Key::Escape);
     open(&mut h, "Select");
@@ -250,21 +251,57 @@ fn arrows_open_and_close_submenus_and_enter_runs_a_command() {
 
 #[test]
 fn left_and_right_switch_menus_and_shortcuts_wait_while_one_is_open() {
+    let (fwd, back) = crate::direction::horizontal_nav_keys();
     let mut h = harness((1280.0, 720.0, 1.0));
     assert!(!is_open(&h.ctx));
     open(&mut h, "File");
     assert!(is_open(&h.ctx), "shortcuts leave the keys to an open menu");
-    key(&mut h, egui::Key::ArrowRight);
+    key(&mut h, fwd);
     h.run_steps(2);
-    assert!(h.query_by_label_contains("Open…").is_none(), "→ leaves File");
-    assert!(h.query_by_label_contains("Undo").is_some(), "→ opens Edit");
-    key(&mut h, egui::Key::ArrowLeft);
+    assert!(h.query_by_label_contains("Open…").is_none(), "the forward key leaves File");
+    assert!(h.query_by_label_contains("Undo").is_some(), "the forward key opens Edit");
+    key(&mut h, back);
     h.run_steps(2);
-    assert!(h.query_by_label_contains("Open…").is_some(), "← back to File");
+    assert!(h.query_by_label_contains("Open…").is_some(), "the back key returns to File");
     key(&mut h, egui::Key::Escape);
     h.run_steps(2);
     assert!(h.query_by_label_contains("Open…").is_none(), "Esc closes the menu");
     assert!(!is_open(&h.ctx), "shortcuts work again");
+}
+
+/// In a right-to-left UI the physical arrows swap: the left key advances (a submenu opens
+/// leftward, the reading-order next menu sits to the left), the right key goes back.
+#[test]
+fn in_rtl_left_advances_and_right_goes_back() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let mut h = harness((1280.0, 720.0, 1.0));
+    open(&mut h, "File");
+    // File is the rightmost title; its reading-order next (Edit) sits to its left.
+    key(&mut h, egui::Key::ArrowLeft);
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("Undo").is_some(), "← advances to Edit");
+    assert!(h.query_by_label_contains("Open…").is_none(), "File closed");
+    key(&mut h, egui::Key::ArrowRight);
+    h.run_steps(2);
+    assert!(h.query_by_label_contains("Open…").is_some(), "→ goes back to File");
+    assert!(h.query_by_label_contains("Undo").is_none(), "Edit closed again");
+    // A submenu opens with the left key and closes with the right one.
+    key(&mut h, egui::Key::Escape);
+    open(&mut h, "Filter");
+    for _ in 0..rows(&h, 0).len() {
+        let nav = Nav::current(&h.ctx);
+        if nav.highlighted(0).and_then(|i| nav.rows[0].get(i)).is_some_and(|r| r.command.is_none()) {
+            break;
+        }
+        key(&mut h, egui::Key::ArrowDown);
+    }
+    key(&mut h, egui::Key::ArrowLeft);
+    h.run_steps(2);
+    assert_eq!(Nav::current(&h.ctx).level, 1, "← moves into the submenu");
+    key(&mut h, egui::Key::ArrowRight);
+    h.run_steps(2);
+    let nav = Nav::current(&h.ctx);
+    assert_eq!((nav.level, nav.rows.len()), (0, 1), "→ closes the submenu");
 }
 
 /// In Help › Search, ← / → move the field's cursor instead of switching to Window / File, and

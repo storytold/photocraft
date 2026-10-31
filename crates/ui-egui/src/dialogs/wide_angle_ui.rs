@@ -1,8 +1,10 @@
 //! Filter › Adaptive Wide Angle…: a full-window dialog like Photoshop's. Drag on the image to
 //! draw a constraint (the scene line between the two points, curved by the lens model); hold
 //! Shift when releasing to make it horizontal or vertical; right-click a constraint for its menu
-//! (Free, Horizontal, Vertical, Delete), as in Photoshop. The right panel holds the correction model, focal length, crop factor, scale and the
-//! constraint list. The preview solves the mesh warp on a CPU proxy (≤ 800 px); OK runs
+//! (Free, Horizontal, Vertical, Delete), as in Photoshop. The side panel holds the correction
+//! model, focal length, crop factor, scale and the constraint list; it hugs the reading end, so
+//! it sits on the right in a left-to-right UI and on the left in a right-to-left one. The preview
+//! solves the mesh warp on a CPU proxy (≤ 800 px); OK runs
 //! `filter.adaptiveWideAngle` with the constraints in document pixels.
 //!
 //! Control channel: `ui.menu.invoke {"id":"filter.adaptiveWideAngle","params":{"ui":{"set":{…},
@@ -236,7 +238,7 @@ fn constraint_menu(ui: &mut egui::Ui, d: &mut WideAngleDialog) {
     };
     for (o, label) in [(Orientation::Free, tl!("Free")), (Orientation::Horizontal, tl!("Horizontal")), (Orientation::Vertical, tl!("Vertical"))] {
         let current = d.params.constraints.get(i).is_some_and(|c| c.orientation == o);
-        if ui.radio(current, label).clicked() {
+        if crate::menu_keys::menu_row(ui, label, None, current, true).clicked() {
             if let Some(c) = d.params.constraints.get_mut(i) {
                 c.orientation = o;
                 d.dirty = true;
@@ -245,7 +247,7 @@ fn constraint_menu(ui: &mut egui::Ui, d: &mut WideAngleDialog) {
         }
     }
     ui.separator();
-    if ui.button(tl!("Delete")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Delete"), None, false, true).clicked() {
         d.params.constraints.remove(i);
         d.menu_for = None;
         d.dirty = true;
@@ -275,7 +277,18 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         painter.text(title.center(), Align2::CENTER_CENTER, format!("Adaptive Wide Angle ({})", d.layer_name), FontId::proportional(13.0), t.text);
         let footer_h = 48.0;
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), pos2(full.right(), full.bottom() - footer_h));
-        let view = ERect::from_min_max(body.min, pos2(body.right() - PANEL_W, body.bottom())).shrink(16.0);
+        let rtl = crate::direction::is_rtl();
+        // The control panel hugs the reading end; the preview takes the rest. The image itself
+        // (canvas space) stays left-to-right.
+        let (view, panel) = if rtl {
+            (ERect::from_min_max(pos2(body.left() + PANEL_W, body.top()), body.max), ERect::from_min_max(body.min, pos2(body.left() + PANEL_W, body.bottom())))
+        } else {
+            (
+                ERect::from_min_max(body.min, pos2(body.right() - PANEL_W, body.bottom())),
+                ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max),
+            )
+        };
+        let view = view.shrink(16.0);
         painter.rect_filled(view, 0.0, t.canvas);
         let s = (view.width() / d.pw as f32).min(view.height() / d.ph as f32);
         let img_r = ERect::from_center_size(view.center(), vec2(d.pw as f32 * s, d.ph as f32 * s));
@@ -320,7 +333,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 .min_by(|a, b| a.1.total_cmp(&b.1));
             d.menu_for = near.filter(|(_, dist)| *dist < 10.0).map(|(i, _)| i);
         }
-        resp.context_menu(|ui| constraint_menu(ui, d));
+        resp.context_menu(|ui| {
+            crate::menus::popup_body(ui, |ui| constraint_menu(ui, d));
+        });
         let show_src = !d.preview || d.drag.is_some();
         let tex = if show_src { d.src_tex.as_ref() } else { d.out_tex.as_ref() };
         widgets::checker(&painter, img_r, 8.0);
@@ -358,10 +373,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             painter.add(egui::Shape::line(pts, Stroke::new(2.0, t.accent_soft)));
         }
         // Panel.
-        let right = ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max);
-        painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 10.0))));
+        painter.rect_filled(panel, 0.0, t.dock);
+        let separator = if rtl { [panel.right_top(), panel.right_bottom()] } else { [panel.left_top(), panel.left_bottom()] };
+        painter.line_segment(separator, Stroke::new(1.0, t.separator));
+        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink2(vec2(14.0, 10.0))).layout(crate::direction::body_layout()));
         egui::ScrollArea::vertical().id_salt("awa-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 5.0;
             widgets::section_label(ui, tl!("Correction"));
@@ -436,7 +451,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         });
         let foot = ERect::from_min_max(pos2(full.left(), full.bottom() - footer_h), full.max);
         painter.rect_filled(foot, 0.0, t.dock);
-        let mut fu = ui.new_child(egui::UiBuilder::new().max_rect(foot.shrink2(vec2(16.0, 9.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        let mut fu = ui.new_child(egui::UiBuilder::new().max_rect(foot.shrink2(vec2(16.0, 9.0))).layout(crate::direction::trailing()));
         if let Some(role) = widgets::dialog_buttons(
             &mut fu,
             &[
@@ -579,5 +594,77 @@ mod tests {
         assert_eq!(app.session.active().unwrap().history.past_len(), steps, "the document beneath is untouched");
         crate::edit_history::tests::press_z(&mut app, &ctx, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT);
         assert_eq!(app.wide_angle.as_ref().unwrap().params.constraints.len(), 2, "⇧⌘Z puts it back");
+    }
+
+    /// Under a right-to-left UI the panel hugs the reading end (the left) and the preview takes
+    /// the right, so the panel's controls sit on the left and a right-click over the mirrored
+    /// preview opens the constraint menu. The image space itself stays left-to-right.
+    #[test]
+    fn rtl_moves_the_preview_to_the_right() {
+        use egui_kittest::kittest::Queryable;
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let size = vec2(1000.0, 600.0);
+        let mut h = egui_kittest::Harness::builder().with_size(size).build_ui_state(|ui, app: &mut PhotocraftApp| show(app, ui.ctx()), grey_layer());
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let ctx = h.ctx.clone();
+        open_with_a_constraint(h.state_mut(), &ctx);
+        h.run_steps(2);
+        // The panel is on the left now: its controls sit in the left half of the window.
+        let delete = h.get_all_by_label("Delete").next().expect("the panel's Delete button").rect();
+        assert!(delete.left() < size.x / 2.0, "the panel hugs the left: {delete:?}");
+        // The mirrored view rect (see `show`): the panel on the left, the preview to its right.
+        let view = ERect::from_min_max(pos2(PANEL_W + 16.0, 30.0 + 16.0), pos2(size.x - 16.0, size.y - 48.0 - 16.0));
+        let p = view.center();
+        let button = |pressed| egui::Event::PointerButton { pos: p, button: egui::PointerButton::Secondary, pressed, modifiers: egui::Modifiers::NONE };
+        h.input_mut().events.extend([egui::Event::PointerMoved(p), button(true)]);
+        h.run_steps(1);
+        h.input_mut().events.push(button(false));
+        h.run_steps(2);
+        assert!(h.query_by_label("Horizontal").is_some(), "the constraint menu opens over the mirrored preview");
+    }
+
+    /// The constraint menu's rows go through the shared popup body + `menu_row`: under RTL the
+    /// checked row's label hugs the popup's right edge, under LTR the left edge.
+    #[test]
+    fn constraint_menu_rows_mirror_only_under_rtl() {
+        let texts = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+            let mut popup = egui::Rect::NOTHING;
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let btn = ui.button("constraint");
+                    let _ = egui::Popup::menu(&btn)
+                        .open_memory(Some(egui::SetOpenCommand::Bool(true)))
+                        .show(|ui| {
+                            crate::menus::popup_body(ui, |ui| {
+                                let _ = crate::menu_keys::menu_row(ui, tl!("Free"), None, false, true);
+                                let _ = crate::menu_keys::menu_row(ui, tl!("Horizontal"), None, true, true);
+                            });
+                        })
+                        .inspect(|r| popup = r.response.rect);
+                });
+                texts = out
+                    .shapes
+                    .iter()
+                    .filter_map(|cs| match &cs.shape {
+                        egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                        _ => None,
+                    })
+                    .collect();
+                out.textures_delta.clear();
+            }
+            (popup, texts)
+        };
+        let (rtl_popup, rtl) = texts(crate::direction::Dir::Rtl);
+        let (ltr_popup, ltr) = texts(crate::direction::Dir::Ltr);
+        assert!(rtl_popup.is_positive() && ltr_popup.is_positive(), "the popups opened");
+        let at = |v: &[(String, egui::Rect)], s: &str| v.iter().find(|(t, _)| t.contains(s)).map(|(_, r)| *r).unwrap_or(egui::Rect::NOTHING);
+        let row = at(&rtl, "Horizontal");
+        assert!(rtl_popup.right() - row.right() < 32.0, "rtl: the row label hugs the popup's right edge: {row:?} in {rtl_popup:?}");
+        let row = at(&ltr, "Horizontal");
+        assert!(row.left() - ltr_popup.left() < 32.0, "ltr: the row label hugs the popup's left edge: {row:?} in {ltr_popup:?}");
     }
 }

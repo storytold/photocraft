@@ -1278,7 +1278,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if s.clip.is_some() || !s.strokes.is_empty() || s.tool == VpTool::Stamp {
         crate::widgets::checkbox(ui, &mut s.new_layer, tl!("New Layer"));
     }
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    ui.with_layout(crate::direction::trailing(), |ui| {
         if crate::widgets::primary_button(ui, "✓", 32.0)
             .on_hover_text(crate::i18n::fmt(tl!("Apply Vanishing Point ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]))
             .clicked()
@@ -1297,3 +1297,48 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    fn app_with_vp() -> PhotocraftApp {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 240, "height": 160, "depth": 16})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session.execute("edit.fill", json!({"color": "#4080c0"})).unwrap();
+        app.sync_views();
+        crate::distort_ui::menu(&mut app, &ctx, VP, &json!({})).unwrap().unwrap();
+        app
+    }
+
+    /// The apply/cancel group hugs the options bar's reading end — far right in LTR, far left in
+    /// RTL, with the two buttons' order mirrored — via direction::trailing(), not a fixed LTR pin.
+    /// The canvas overlay stays LTR in both (rtl-canvas-guard), so only the bar is asserted here.
+    #[test]
+    fn options_bar_commit_group_hugs_the_reading_end() {
+        let rects = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 60.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    crate::panels::options_bar(app, ui);
+                },
+                app_with_vp(),
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(4);
+            (h.get_by_label("✓").rect(), h.get_by_label("⊘").rect())
+        };
+        let (ltr_commit, ltr_cancel) = rects(crate::direction::Dir::Ltr);
+        assert!(ltr_commit.center().x > ltr_cancel.center().x, "LTR order: {ltr_commit:?} vs {ltr_cancel:?}");
+        assert!(ltr_commit.right() > 1400.0 * 0.9, "LTR group hugs the right end: {ltr_commit:?}");
+        let (rtl_commit, rtl_cancel) = rects(crate::direction::Dir::Rtl);
+        assert!(rtl_commit.center().x < rtl_cancel.center().x, "RTL order: {rtl_commit:?} vs {rtl_cancel:?}");
+        assert!(rtl_commit.left() < 1400.0 * 0.1, "RTL group hugs the left end: {rtl_commit:?}");
+    }
+}

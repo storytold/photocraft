@@ -60,7 +60,11 @@ pub fn buttons(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: u64, fields: &mut
     // table there once a preset is picked, so OK applies what the Table menu shows.
     drop_loaded_unless_custom(fields);
     let fields = &*fields;
-    ui.horizontal(|ui| {
+    // The file row reads in the UI's direction: Load… at the reading start (the right in a
+    // right-to-left UI), Save… after it. `ui.horizontal` does not mirror it on its own: the
+    // dialog body keeps a `top_down(Align::Min)` layout, so the row needs the direction pin.
+    let row_size = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(row_size, crate::direction::row(), |ui| {
         if ui.button(tl!("Load…")).clicked()
             && let Err(e) = app.pick_file_bytes_filtered(&["act"], move |app, name, bytes| {
                 let (colors, transparent) =
@@ -123,6 +127,30 @@ mod tests {
         assert!(owns(&Map::from_iter([("__command".to_string(), json!("image.mode.colorTable"))])));
         assert!(!owns(&Map::from_iter([("__command".to_string(), json!("image.mode.indexedColor"))])));
         assert!(!owns(&Map::new()));
+    }
+
+    /// The file row reads in the UI's direction: Load… at the reading start, Save… after it.
+    /// The dialog body keeps a `top_down(Align::Min)` layout, so the row mirrors only because
+    /// it pins the direction itself.
+    #[test]
+    fn the_file_row_reads_in_the_ui_direction() {
+        use egui_kittest::kittest::Queryable;
+        let row = |rtl: bool| {
+            let _dir = crate::text::direction::direction_scope(if rtl { crate::text::direction::Dir::Rtl } else { crate::text::direction::Dir::Ltr });
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(380.0, 80.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    let mut fields = Map::new();
+                    super::buttons(app, ui, 0, &mut fields);
+                },
+                app(),
+            );
+            h.run_steps(2);
+            (h.get_by_label("Load…").rect(), h.get_by_label("Save…").rect())
+        };
+        let (load, save) = row(false);
+        assert!(load.left() < save.left(), "LTR: Load… before Save… ({load:?}, {save:?})");
+        let (load, save) = row(true);
+        assert!(load.left() > save.left(), "RTL: Load… at the reading start ({load:?}, {save:?})");
     }
 
     #[test]

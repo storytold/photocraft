@@ -1,4 +1,5 @@
-//! Non-blocking notices: a small stack of cards in the lower-right corner of the window for things
+//! Non-blocking notices: a small stack of cards in the window's lower reading-end corner (lower-right
+//! in LTR, lower-left in RTL) for things
 //! the user should see but that must not interrupt work (import/export warnings such as "adjustment
 //! flattened", files that couldn't be opened). Notices live in [`UiState`](crate::UiState) so the
 //! control channel can read them (`ui.inspect`) and clear them (`ui.set`).
@@ -220,10 +221,12 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let t = crate::theme::Tokens::get(ctx);
     let mut dismiss_id = None;
-    // Clear the status bar (~24 px) and leave the dock's edge some air.
+    // Clear the status bar (~24 px) and leave the dock's edge some air. The stack hugs the
+    // reading-end corner: lower-right, lower-left in a right-to-left UI.
+    let (anchor, off) = crate::direction::end_corner_anchor(true, 16.0, -36.0);
     let area = egui::Area::new(egui::Id::unique("photocraft-notices"))
         .order(egui::Order::Foreground)
-        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -36.0))
+        .anchor(anchor, off)
         .interactable(true)
         .show(ctx, |ui| {
             ui.set_max_width(360.0);
@@ -236,10 +239,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     .shadow(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: t.shadow })
                     .show(ui, |ui| {
                         ui.set_width(340.0);
-                        ui.horizontal(|ui| {
+                        // A fixed-height row, as `ui.horizontal` gives: the card's height comes from
+                        // its content, so a row sized to the remaining height would grow every frame.
+                        let row_size = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+                        ui.allocate_ui_with_layout(row_size, crate::direction::row(), |ui| {
                             let title = egui::RichText::new(n.text(&n.title)).strong().color(if n.error { t.warning } else { t.text });
                             ui.add(egui::Label::new(title).wrap());
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                            ui.with_layout(crate::direction::trailing_min(), |ui| {
                                 if ui.add(egui::Button::new(egui::RichText::new("×").color(t.text_dim)).frame(false)).on_hover_text(tl!("Dismiss")).clicked() {
                                     dismiss_id = Some(n.id);
                                 }

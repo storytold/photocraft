@@ -136,6 +136,8 @@ pub fn parse_spec(spec: &str) -> Vec<Param> {
     out
 }
 
+/// A single-line edit whose text reads right-to-left in a right-to-left UI (Arabic text aligns
+/// to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
 /// The number a range bound starts with, ignoring a unit or marker after it: `5000 px?` → 5000,
 /// `1000 %` → 1000. A bound that is not a number at all is `None`.
 fn leading_number(bound: &str) -> Option<f32> {
@@ -768,6 +770,32 @@ const RESULT_PICKED: &str = "__resultPicked";
 /// The Result the picker opened on: a picked colour that differs from it sets the sliders.
 const RESULT_FROM: &str = "__resultFrom";
 
+/// A row in reading order: `ui.horizontal` in a left-to-right dialog, its mirror in a
+/// right-to-left one. The row keeps `ui.horizontal`'s height and alignment.
+///
+/// Not `direction::dialog_row()`: that helper's `Align::Min` cross-align and full-height
+/// allocation change the LTR row metrics. Duplicated from `dialogs/sizing.rs`'s helper of the
+/// same shape; hoist both into `text/direction.rs` when that shared file reopens.
+fn row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    let size = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, crate::direction::row(), add)
+}
+
+/// A block at the reading start: the left in a left-to-right dialog, the right in a
+/// right-to-left one.
+///
+/// `crate::widgets::checkbox` already lays out its own full-width reading-order row, so the
+/// box lands at the reading start without this wrapper, too; the wrapper just keeps the call
+/// sites uniform.
+fn block<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    if crate::direction::is_rtl() {
+        row(ui, add)
+    } else {
+        let inner = add(ui);
+        egui::InnerResponse::new(inner, ui.response())
+    }
+}
+
 /// Replace Color's Result swatch (#6278), as in Photoshop: the sampled colour after the Hue,
 /// Saturation and Lightness shift. Picking a Result in its Color Picker sets the three sliders so
 /// the sampled colour becomes it.
@@ -791,9 +819,9 @@ fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let bytes = rgb.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
     let name = tl!("Result");
     let mut clicked = false;
-    ui.horizontal(|ui| {
+    row(ui, |ui| {
         ui.label(egui::RichText::new(name).color(t.text_dim));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::direction::trailing(), |ui| {
             clicked = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), name).clicked();
             ui.label(egui::RichText::new(crate::color_picker_ui::hex(rgb)).color(t.text_dim).monospace());
         });
@@ -858,10 +886,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     } else if uses_logarithmic_slider(min, max) {
                         // Keep one numeric field for direct entry and one log-scaled slider for
                         // wide ranges. slider_row would add a second, linear slider (#146).
-                        ui.horizontal(|ui| {
+                        row(ui, |ui| {
                             let name = label(&p.key);
                             ui.label(egui::RichText::new(&name).color(t.text_dim));
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            ui.with_layout(crate::direction::trailing(), |ui| {
                                 crate::widgets::value_field(ui, &mut v, min..=max, unit, 74.0).accessible_name(name);
                             });
                         });
@@ -881,7 +909,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 f.insert(p.key, json!((v * scale).round() / scale));
             }
             Kind::Choice { options, default } => {
-                ui.horizontal(|ui| {
+                row(ui, |ui| {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
                     let initial = default.as_deref().or_else(|| options.first().map(String::as_str)).unwrap_or("");
                     let mut cur = f.get(&p.key).and_then(Value::as_str).unwrap_or(initial).to_string();
@@ -934,14 +962,16 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             }
             Kind::Bool(default) => {
                 let mut b = f.get(&p.key).and_then(Value::as_bool).unwrap_or(default);
-                crate::widgets::checkbox(ui, &mut b, &label(&p.key));
+                block(ui, |ui| {
+                    crate::widgets::checkbox(ui, &mut b, &label(&p.key));
+                });
                 f.insert(p.key, json!(b));
             }
             Kind::Text => {
                 let mut v = f.get(&p.key).and_then(Value::as_str).unwrap_or_default().to_string();
-                ui.horizontal(|ui| {
+                row(ui, |ui| {
                     let lp = ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
-                    ui.add(egui::TextEdit::singleline(&mut v).desired_width(200.0)).labelled_by(lp.id);
+                    crate::widgets::rtl_singleline_add(ui, &mut v, |e| e.desired_width(200.0)).labelled_by(lp.id);
                     // Install Plug-in…: pick the .wasm file instead of typing its path (#7531).
                     if cmd == "plugin.install" && p.key == "path" && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
                         f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(p.key));
@@ -960,7 +990,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let mut sel = cur.to_string();
                 let mut opts: Vec<(String, &str)> = vec![("-1".to_string(), tl!("None"))];
                 opts.extend(names.iter().enumerate().map(|(i, n)| (i.to_string(), n.as_str())));
-                ui.horizontal(|ui| {
+                row(ui, |ui| {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut sel, &opts, 170.0);
                 });
@@ -975,13 +1005,17 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     f.get(&p.key).and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_f64().unwrap_or(0.0) as f32).collect()).unwrap_or_default();
                 vals.resize(n, 0.0);
                 ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
-                egui::Grid::new(format!("flt-grid-{cmd}-{}", p.key)).spacing([4.0, 4.0]).show(ui, |ui| {
-                    for (i, v) in vals.iter_mut().enumerate() {
-                        crate::widgets::value_field(ui, v, -999.0..=999.0, "", 44.0).accessible_name(format!("{} {}", label(&p.key), i + 1));
-                        if (i + 1) % side == 0 {
-                            ui.end_row();
+                // The fork's `Grid` cannot start under a right-to-left cursor, so the value
+                // cells run in an LTR scope (the grid is data, not a reading row).
+                crate::direction::ltr_vertical(ui, |ui| {
+                    egui::Grid::new(format!("flt-grid-{cmd}-{}", p.key)).spacing([4.0, 4.0]).show(ui, |ui| {
+                        for (i, v) in vals.iter_mut().enumerate() {
+                            crate::widgets::value_field(ui, v, -999.0..=999.0, "", 44.0).accessible_name(format!("{} {}", label(&p.key), i + 1));
+                            if (i + 1) % side == 0 {
+                                ui.end_row();
+                            }
                         }
-                    }
+                    });
                 });
                 f.insert(p.key, json!(vals.iter().map(|v| v.round() as i64).collect::<Vec<_>>()));
             }
@@ -994,9 +1028,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let name = label(&p.key);
                 let mut clicked = false;
                 let eyedropper = cmd == REPLACE_COLOR && p.key == "color";
-                ui.horizontal(|ui| {
+                row(ui, |ui| {
                     ui.label(egui::RichText::new(&name).color(t.text_dim));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.with_layout(crate::direction::trailing(), |ui| {
                         // PhotoCraft's Color Picker, as everywhere else (#2144).
                         clicked = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), &name).clicked();
                         if eyedropper {
@@ -1020,7 +1054,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             }
             Kind::Int { default } => {
                 let mut v = f.get(&p.key).and_then(Value::as_f64).unwrap_or(default as f64) as f32;
-                ui.horizontal(|ui| {
+                row(ui, |ui| {
                     ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
                     crate::widgets::value_field(ui, &mut v, -30000.0..=30000.0, "", 80.0).accessible_name(label(&p.key));
                     // A seed gets a fresh random value in one click (#5710): Clouds, Add Noise,
@@ -1043,7 +1077,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
     if let Some(mut preview) = f.get("__preview").and_then(Value::as_bool) {
         ui.add_space(4.0);
-        crate::widgets::checkbox(ui, &mut preview, tl!("Preview"));
+        block(ui, |ui| crate::widgets::checkbox(ui, &mut preview, tl!("Preview")));
         f.insert("__preview".into(), json!(preview));
     }
 }
@@ -1347,3 +1381,33 @@ impl FilterPreviewKey {
 
 #[cfg(test)]
 mod tests;
+
+/// The parameter rows read caption-then-value in a left-to-right dialog and mirror under a
+/// right-to-left direction, flipping only the direction: language, dialog and data stay put.
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+
+    #[test]
+    fn a_param_row_reads_caption_then_value_and_mirrors_in_rtl() {
+        use egui_kittest::kittest::Queryable;
+        for (dir, caption_first) in
+            [(crate::text::direction::Dir::Ltr, true), (crate::text::direction::Dir::Rtl, false)]
+        {
+            let _direction = crate::text::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(1280.0, 800.0))
+                .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            crate::filter_dialog::open(h.state_mut(), "filter.blur.gaussianBlur").unwrap();
+            h.run_steps(4);
+            // Gaussian Blur's Radius is a log-slider row: caption, then its value field at the
+            // reading end (`trailing()`).
+            let caption = h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Radius"));
+            let field = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Radius");
+            assert_eq!(caption.rect().right() < field.rect().left(), caption_first, "{dir:?}");
+        }
+    }
+}

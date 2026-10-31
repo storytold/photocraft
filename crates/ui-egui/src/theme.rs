@@ -1093,12 +1093,23 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
         }
         s.spacing.scroll = scroll;
         s.spacing.tooltip_width = 280.0;
+        // Right-to-left languages mirror egui's widgets (submenus, popups, scrollbars, window
+        // chrome); republished to both theme branches below.
+        s.set_right_to_left(crate::direction::is_rtl());
     });
     // egui selects its style branch using OS appearance, independently of PhotoCraft's fixed
     // Dark/Light mode or platform appearance service. Both branches need the selected palette.
     let style = ctx.global_style();
     ctx.set_style_of(egui::Theme::Light, Arc::clone(&style));
     ctx.set_style_of(egui::Theme::Dark, style);
+}
+
+/// Set the egui direction flag in both theme branches: `true` mirrors every egui-owned widget
+/// (submenus and popups open reading-end first, vertical scrollbars sit left, collapsing-header
+/// triangles point left, checkbox/radio icons swap sides, window title bars put close on the
+/// left). Patching both branches keeps a Light/Dark switch from reverting the direction.
+pub fn set_direction(ctx: &egui::Context, rtl: bool) {
+    ctx.all_styles_mut(|s| s.set_right_to_left(rtl));
 }
 
 /// Seconds the pointer rests on a control before its tooltip shows.

@@ -65,7 +65,7 @@ pub(super) fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if resp.hovered() {
         ui.painter().rect_filled(r, t.radius_sm, t.hover);
     }
-    let chip = Rect::from_min_size(pos2(r.left() + 4.0, r.center().y - 8.0), vec2(16.0, 16.0));
+    let chip = Rect::from_center_size(pos2(crate::direction::start_x(r, 12.0), r.center().y), vec2(16.0, 16.0));
     let p = ui.painter();
     match app.session.tools.mixer.next_load(app.session.tools.foreground) {
         Some(c) => {
@@ -77,17 +77,19 @@ pub(super) fn mixer_load_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     }
     p.rect_stroke(chip, 2.0, Stroke::new(1.0, t.field_border), StrokeKind::Outside);
-    icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, r.center().y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
+    icons::paint(ui, Rect::from_center_size(pos2(crate::direction::end_x(r, 9.0), r.center().y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Current Brush Load")));
     let resp = resp.on_hover_text(tl!("Current Brush Load"));
     let mut run = None;
     egui::Popup::menu(&resp).show(|ui| {
-        if ui.button(tl!("Load Brush")).clicked() {
-            run = Some("brush.mixer.load");
-        }
-        if ui.button(tl!("Clean Brush")).clicked() {
-            run = Some("brush.mixer.clean");
-        }
+        crate::menus::popup_body(ui, |ui| {
+            if ui.button(tl!("Load Brush")).clicked() {
+                run = Some("brush.mixer.load");
+            }
+            if ui.button(tl!("Clean Brush")).clicked() {
+                run = Some("brush.mixer.clean");
+            }
+        });
     });
     if let Some(id) = run
         && let Err(e) = app.run(id, json!({}))
@@ -106,7 +108,7 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
     if resp.hovered() || state.brush_picker.is_some() {
         ui.painter().rect_filled(r, t.radius_sm, t.hover);
     }
-    let c = pos2(r.left() + 14.0, r.top() + 11.0);
+    let c = pos2(crate::direction::start_x(r, 14.0), r.top() + 11.0);
     // Photoshop's white tip vanishes on light chrome; light themes use their icon colour.
     let tip = if t.dark() { Color32::WHITE } else { t.icon };
     // The brush's own tip, as the Brush Preset picker's thumbnails draw it: the engine's falloff
@@ -115,7 +117,7 @@ pub(super) fn brush_preset_chip(ui: &mut egui::Ui, b: &photocraft_engine::BrushS
     let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
     ui.painter().image(tex.id(), Rect::from_center_size(c, vec2(14.0, 14.0)), uv, Color32::WHITE);
     ui.painter().text(pos2(c.x, r.bottom() - 5.0), Align2::CENTER_CENTER, format!("{}", b.size.round() as i64), egui::FontId::proportional(9.5), t.text_dim);
-    icons::paint(ui, Rect::from_center_size(pos2(r.right() - 9.0, c.y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
+    icons::paint(ui, Rect::from_center_size(pos2(crate::direction::end_x(r, 9.0), c.y), vec2(10.0, 10.0)), "chevron-down", 9.0, t.text_faint);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Brush Preset picker")));
     if resp.on_hover_text(tl!("Brush Preset picker")).clicked() {
         if state.brush_picker.is_some() {

@@ -6,7 +6,7 @@
 //! drive it like any dialog. OK remembers the choices in the preferences (`dialogs["edit.fill"]`),
 //! which are saved to disk, so the dialog opens with them again after a restart.
 
-use egui::{Align2, Sense, pos2, vec2};
+use egui::{Sense, vec2};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -133,10 +133,13 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     app.run(COMMAND, params(f))
 }
 
-fn label(ui: &mut egui::Ui, text: &str) {
+/// Paints the caption; returns its box so tests can assert where it landed.
+fn label(ui: &mut egui::Ui, text: &str) -> egui::Rect {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(112.0, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
+    let (pos, align) = crate::direction::end_text_anchor(r, 6.0);
+    ui.painter().text(pos, align, text, egui::FontId::proportional(12.0), t.text_dim);
+    r
 }
 
 fn get_str(f: &Map<String, Value>, k: &str, d: &str) -> String {
@@ -150,6 +153,13 @@ fn parse_hex(h: &str) -> [u8; 3] {
 
 /// The dialog body.
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    // One direction-aware body: in a left-to-right UI the layout is egui's default, so nothing
+    // moves; in a right-to-left one the blocks hug the reading start and every row mirrors.
+    ui.with_layout(crate::text::direction::body_layout(), |ui| body_fields(app, ui, f));
+}
+
+/// The Fill dialog's fields.
+fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     let mut contents = get_str(f, "contents", "foreground");
     ui.horizontal(|ui| {
@@ -206,3 +216,6 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests;

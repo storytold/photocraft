@@ -334,7 +334,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             s.update_grid();
         }
     }
-    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+    ui.with_layout(crate::direction::trailing(), |ui| {
         if crate::widgets::primary_button(ui, "✓", 32.0)
             .on_hover_text(crate::i18n::fmt(tl!("Commit Perspective Warp ({key})"), &[("key", &crate::shortcuts::pretty("Enter"))]))
             .clicked()
@@ -426,5 +426,48 @@ mod tests {
             let s = app.distort.perspective.as_ref().unwrap();
             assert!(s.planes.is_empty() && s.drag.is_none(), "release {release}");
         }
+    }
+
+    /// The commit/cancel group hugs the options bar's reading end — far right in LTR, far left in
+    /// RTL, the two buttons' order mirrored — via direction::trailing(), not a fixed LTR pin.
+    /// The canvas overlay stays LTR in both (rtl-canvas-guard), so only the bar is asserted here.
+    #[test]
+    fn options_bar_commit_group_hugs_the_reading_end() {
+        use egui_kittest::kittest::Queryable;
+        let rects = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.session.execute("file.new", json!({"width": 200, "height": 120, "depth": 8})).unwrap();
+            app.session.execute("layer.new.layer", json!({})).unwrap();
+            app.session
+                .edit("paint", |doc, active| {
+                    doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(Rect::new(10, 10, 190, 110), &[0.2, 0.6, 0.9, 1.0]);
+                    Ok(())
+                })
+                .unwrap();
+            app.sync_views();
+            crate::distort_ui::menu(&mut app, &ctx, "edit.perspectiveWarp", &json!({})).unwrap().unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1400.0, 60.0)).build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        return;
+                    }
+                    crate::panels::options_bar(app, ui);
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+            h.run_steps(4);
+            let commit = h.get_by_label("✓").rect();
+            let cancel = h.get_by_label("⊘").rect();
+            (commit, cancel)
+        };
+        let (ltr_commit, ltr_cancel) = rects(crate::direction::Dir::Ltr);
+        assert!(ltr_commit.center().x > ltr_cancel.center().x, "LTR order: {ltr_commit:?} vs {ltr_cancel:?}");
+        assert!(ltr_commit.right() > 1400.0 * 0.9, "LTR group hugs the right end: {ltr_commit:?}");
+        let (rtl_commit, rtl_cancel) = rects(crate::direction::Dir::Rtl);
+        assert!(rtl_commit.center().x < rtl_cancel.center().x, "RTL order: {rtl_commit:?} vs {rtl_cancel:?}");
+        assert!(rtl_commit.left() < 1400.0 * 0.1, "RTL group hugs the left end: {rtl_commit:?}");
     }
 }

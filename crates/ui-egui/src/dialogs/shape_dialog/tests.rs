@@ -338,7 +338,7 @@ fn right_click_picks_the_unit_of_that_field_only_and_it_is_not_remembered() {
     // Height has its own menu, with its own unit checked: Inches switches Height alone.
     click(&ctx, &app, &mut f, s[1].2.center(), egui::PointerButton::Secondary);
     let menu = frame(&ctx, &app, &mut f, vec![]);
-    assert!(menu.iter().any(|(t, _)| t == "✓ Pixels"), "{menu:?}");
+    assert!(menu.iter().any(|(t, _)| t == "✔ Pixels"), "{menu:?}");
     let in_item = menu.iter().find(|(t, _)| t == "Inches").unwrap().1.center();
     click(&ctx, &app, &mut f, in_item, egui::PointerButton::Primary);
     let s = sides(&frame(&ctx, &app, &mut f, vec![]));

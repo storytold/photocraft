@@ -489,3 +489,91 @@ fn theme_icons_are_cached_and_fall_back() {
     out.textures_delta.clear();
     assert_eq!(calls.load(Ordering::Relaxed), 3, "each icon and size rendered once; absurd sizes never");
 }
+
+/// RTL twin of `caption_buttons_take_the_right_end_and_nothing_overlaps_them`: the same Windows
+/// style, only the direction scope flips — Close mirrors into the top-left corner and the order
+/// reverses (Close, Maximize, Minimize left to right).
+#[test]
+fn in_rtl_caption_buttons_take_the_left_end_and_nothing_overlaps_them() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    for width in [760.0, 1100.0, 1440.0] {
+        let mut w = Win::new(width);
+        w.frame(vec![]);
+        w.frame(vec![]);
+        let [min, max, close] = CAPTIONS.map(|c| w.caption(c));
+        assert_eq!((close.left(), close.top()), (0.0, 0.0), "Close sits in the window's corner at {width}");
+        assert!(close.height() >= 31.0 && [min, max, close].iter().all(|r| r.width() == BUTTON_WIDTH));
+        assert_eq!((close.right(), max.right()), (max.left(), min.left()), "order mirrored at {width}");
+        let widgets = w.bar_widgets();
+        assert!(widgets.len() >= 10, "menus, search, theme, workspace: {widgets:?}");
+        for a in &widgets {
+            assert!(a.left() >= min.right(), "{a:?} runs into the caption buttons at {width}");
+        }
+    }
+}
+
+/// RTL twin of `linux_buttons_sit_where_the_layout_says_and_drag_the_window`: same injected
+/// style, only the direction flips — the reading-end group lands at the physical left (edge gap
+/// outermost), the reading-start group at the physical right; clicks and drags still work.
+#[test]
+fn in_rtl_linux_buttons_sit_mirrored_and_still_drag_the_window() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    use Caption::*;
+    for (family, size, gap, end) in [(CaptionFamily::Adwaita, 24.0, 6.5, 10.0), (CaptionFamily::Breeze, 18.0, 4.5, 8.0)] {
+        let width = 1100.0;
+        let mut w = Win::new(width);
+        w.app.services.caption_style = Some(Box::new(move |_| CaptionStyle { family, left: vec![Close], right: vec![Minimize, Maximize], icons: None }));
+        w.frame(vec![]);
+        w.frame(vec![]);
+        let [min, max, close] = CAPTIONS.map(|c| w.caption(c));
+        assert_eq!((max.left(), max.width()), (0.0, gap + size + end), "reading-end group at the physical left: {family:?}");
+        assert_eq!((min.left(), min.width()), (max.right(), 2.0 * gap + size), "{family:?}");
+        assert_eq!((close.right(), close.width()), (width, end + size + gap), "reading-start group at the physical right: {family:?}");
+        if family == CaptionFamily::Adwaita {
+            assert_eq!(close.height(), 46.0);
+        } else {
+            assert!((31.0..46.0).contains(&close.height()), "{close:?}");
+        }
+        let mark = crate::brand::mark_rect(&w.ctx).expect("the brand mark is painted");
+        assert!(mark.right() < close.left(), "the bar ends before the right buttons: {mark:?} {close:?}");
+        for a in w.bar_widgets() {
+            assert!(a.left() >= min.right() && a.right() <= close.left(), "{a:?} runs into the caption buttons ({family:?})");
+        }
+        assert!(w.click(max.center()).contains(&ViewportCommand::Maximized(true)));
+        assert!(w.click(close.center()).iter().any(|c| matches!(c, ViewportCommand::Close)));
+        let at = min.center();
+        let cmds = w.gesture(&[at, at + vec2(12.0, 4.0), at + vec2(30.0, 8.0)]);
+        assert_eq!(cmds.iter().filter(|c| matches!(c, ViewportCommand::StartDrag)).count(), 1, "{cmds:?}");
+        assert!(!cmds.contains(&ViewportCommand::Minimized(true)), "{cmds:?}");
+    }
+}
+
+/// RTL twin of `only_sides_with_buttons_take_room`: `reserved` reports physical sides, so a
+/// right-to-left UI swaps them — the group moves to the other end's width.
+#[test]
+fn in_rtl_only_sides_with_buttons_take_room() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let mut w = Win::new(1000.0);
+    w.app.services.caption_style = Some(Box::new(|_| CaptionStyle::from_gtk_layout(CaptionFamily::Adwaita, "appmenu:close")));
+    assert_eq!(reserved(&w.app, &w.ctx), (6.5 + 24.0 + 10.0, 0.0), "Close's group moves to the physical left");
+    w.app.custom_titlebar = false;
+    assert_eq!(reserved(&w.app, &w.ctx), (0.0, 0.0));
+    w.app.custom_titlebar = true;
+    w.app.services.caption_style = None;
+    assert_eq!(reserved(&w.app, &w.ctx), (3.0 * BUTTON_WIDTH, 0.0), "Windows default under RTL");
+}
+
+/// RTL twin of the maximized-corner assertion in `edge_zones_resize_unless_maximized`: resize
+/// zones stay physical (the West edge still resizes), but maximized the top-LEFT corner is Close.
+#[test]
+fn in_rtl_maximized_top_left_corner_closes_and_edges_still_resize() {
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let mut w = Win::new(1000.0);
+    w.frame(vec![]);
+    let cmds = w.gesture(&[pos2(1.0, 300.0), pos2(8.0, 306.0)]);
+    assert_eq!(cmds, vec![ViewportCommand::BeginResize(ResizeDirection::West)], "resize zones stay physical: {cmds:?}");
+    w.maximized = true;
+    let cmds = w.gesture(&[pos2(1.0, 300.0), pos2(8.0, 300.0)]);
+    assert!(!cmds.iter().any(|c| matches!(c, ViewportCommand::BeginResize(_))), "maximized: no zones: {cmds:?}");
+    assert!(w.click(pos2(0.5, 0.5)).iter().any(|c| matches!(c, ViewportCommand::Close)), "top-left corner is Close now");
+}

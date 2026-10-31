@@ -1,0 +1,78 @@
+//! Right-to-left twins of the Layers panel rows (#144): in both directions a row's children
+//! share one leading edge (eye column, thumbnail, name, in reading order) and one trailing
+//! edge (the indicators packed against the pad edge where the overlay scrollbar sits).
+//! Direction only — the language stays English, like the left-to-right twins in `tests`.
+
+use egui::vec2;
+use egui_kittest::Harness;
+use serde_json::json;
+
+use super::{GAP, RIGHT_PAD, RowRects, recorded};
+use crate::PhotocraftApp;
+use crate::direction::{Dir, direction_scope};
+
+/// A locked, styled layer above a plain one, so rows carry a thumbnail, a name and indicators.
+fn session() -> photocraft_engine::Session {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let a = s.execute("layer.new.layer", json!({"name": "Styled"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerStyle.dropShadow", json!({"layer": a})).unwrap();
+    s.execute("layer.setProps", json!({"layer": a, "blend": "Multiply", "locks": {"all": true}})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Plain"})).unwrap();
+    s
+}
+
+/// The rows the Layers panel drew, in `dir`.
+fn rows_in(dir: Dir) -> Vec<RowRects> {
+    let _scope = direction_scope(dir);
+    let mut h = Harness::builder().with_size(vec2(1440.0, 1000.0)).with_max_steps(64).build_eframe(move |cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        PhotocraftApp::new(session(), crate::Services::default())
+    });
+    h.ctx.all_styles_mut(|st| st.right_to_left = dir == Dir::Rtl);
+    let ctx = h.ctx.clone();
+    let (req, _rx) = crate::control::ControlRequest::new(
+        "ui.set",
+        json!({"theme": "promedium", "dockWidth": 290.0, "dock": {"collapsed": ["color", "properties", "history", "navigator"]}}),
+    );
+    crate::control::handle(h.state_mut(), &ctx, &req);
+    h.run_steps(8);
+    recorded(&ctx)
+}
+
+/// Every row's children keep the reading order and share the pad edge in both directions:
+/// left-to-right the eye and thumbnail hug the left (leading) edge and the indicators pack
+/// from the right (trailing) pad edge; right-to-left the whole row mirrors as a unit.
+#[test]
+fn row_children_share_one_leading_and_one_trailing_edge_in_both_directions() {
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let rtl = dir == Dir::Rtl;
+        let rows = rows_in(dir);
+        assert!(rows.len() >= 3, "{dir:?}: rows drawn ({})", rows.len());
+        let mut with_indicators = 0;
+        for r in &rows {
+            let name = r.name.unwrap_or_else(|| panic!("{dir:?}: layer {} has no name rect", r.layer));
+            let thumb = r.thumbnail.unwrap_or_else(|| panic!("{dir:?}: layer {} has no thumbnail", r.layer));
+            // Leading edge: the thumbnail sits past the eye column on the reading-start side.
+            if rtl {
+                assert!(thumb.right() <= r.row.right() - 30.0 + 0.01, "{dir:?}: thumbnail off the right edge: {thumb:?} in {r:?}", r = r.row);
+                assert!(name.right() <= thumb.left() + 0.01, "{dir:?}: name right of its thumbnail: {name:?} {thumb:?}");
+            } else {
+                assert!(thumb.left() >= r.row.left() + 30.0 - 0.01, "{dir:?}: thumbnail off the left edge: {thumb:?} in {:?}", r.row);
+                assert!(name.left() >= thumb.right() - 0.01, "{dir:?}: name left of its thumbnail: {name:?} {thumb:?}");
+            }
+            // Trailing edge: the first indicator hugs the pad edge (the scrollbar side).
+            let Some(&(_, first)) = r.indicators.first() else { continue };
+            with_indicators += 1;
+            let last = r.indicators.last().map(|(_, r)| *r).unwrap_or(first);
+            if rtl {
+                assert!((first.left() - (r.row.left() + RIGHT_PAD)).abs() < 0.01, "{dir:?}: first indicator off the left pad edge: {first:?} in {:?}", r.row);
+                assert!(name.left() >= last.right() + GAP - 0.01, "{dir:?}: name under the indicators: {name:?} {last:?}");
+            } else {
+                assert!((r.row.right() - RIGHT_PAD - first.right()).abs() < 0.01, "{dir:?}: first indicator off the right pad edge: {first:?} in {:?}", r.row);
+                assert!(name.right() <= last.left() - GAP + 0.01, "{dir:?}: name under the indicators: {name:?} {last:?}");
+            }
+        }
+        assert!(with_indicators >= 1, "{dir:?}: the styled layer drew its indicators");
+    }
+}

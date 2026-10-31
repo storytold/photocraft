@@ -74,10 +74,24 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 fn label(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(112.0, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
+    // The caption hugs the control beside it: the box's right edge in a left-to-right row, its
+    // left edge in a mirrored one.
+    let (x, anchor) = caption_anchor(r, crate::direction::is_rtl());
+    ui.painter().text(pos2(x, r.center().y), anchor, text, egui::FontId::proportional(12.0), t.text_dim);
+}
+
+fn caption_anchor(r: egui::Rect, rtl: bool) -> (f32, Align2) {
+    if rtl { (r.left() + 6.0, Align2::LEFT_CENTER) } else { (r.right() - 6.0, Align2::RIGHT_CENTER) }
 }
 
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    // One direction-aware body: in a left-to-right UI the layout is egui's default, so nothing
+    // moves; in a right-to-left one the blocks hug the reading start and every row mirrors.
+    ui.with_layout(crate::direction::body_layout(), |ui| body_fields(ui, f));
+}
+
+/// The Stroke dialog's fields.
+fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     crate::widgets::section_label(ui, tl!("Stroke"));
     crate::widgets::hairline(ui);
@@ -112,5 +126,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     crate::dialog_blend_ui::body(ui, f, "stroke");
 }
 
+#[cfg(test)]
+mod rtl_tests;
 #[cfg(test)]
 mod tests;

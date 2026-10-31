@@ -663,7 +663,9 @@ fn graph(app: &mut PhotocraftApp, ui: &mut egui::Ui, s: &Shown, channel: HistCha
     }
     // The cached-data warning: click it (or double-click the graph) for an Uncached Refresh.
     if s.stale || s.hist.level > 1 {
-        let icon = Rect::from_min_size(r.right_top() + vec2(-18.0, 2.0), vec2(16.0, 16.0));
+        // Chrome badge at the graph's reading-end corner; the graph itself stays LTR.
+        let corner = if crate::direction::is_rtl() { r.left_top() + vec2(2.0, 2.0) } else { r.right_top() + vec2(-18.0, 2.0) };
+        let icon = Rect::from_min_size(corner, vec2(16.0, 16.0));
         crate::icons::paint(ui, icon, "triangle-alert", 12.0, t.warning);
         let warn =
             ui.interact(icon, ui.scope_id().with("hist-cached-warning"), Sense::click()).on_hover_text(tl!("Click to refresh histogram with uncached data"));
@@ -718,13 +720,26 @@ fn statistics(ui: &mut egui::Ui, h: &Histograms, mode: ColorMode, channel: HistC
         (tl!("Pixels:"), s.pixels.to_string(), tl!("Cache Level:"), h.level.max(1).to_string()),
     ];
     let mono = crate::theme::mono(11.5);
-    egui::Grid::new("hist-stats").num_columns(4).spacing(vec2(6.0, 2.0)).show(ui, |ui| {
-        for (k1, v1, k2, v2) in rows {
-            for (k, v) in [(k1, v1), (k2, v2)] {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.label(egui::RichText::new(k).color(t.text_dim).size(11.5));
-                });
-                ui.label(egui::RichText::new(v).font(mono.clone()).color(t.text));
+    // The grid runs in an LTR scope (the fork's placer never sees an RTL cursor); the pairs
+    // still swap places in a right-to-left UI: the first pair reads first, from the right.
+    crate::direction::ltr_grid(ui, "hist-stats", 4, vec2(6.0, 2.0), |ui| {
+        for (k1, v1, k2, v2) in &rows {
+            let mut pairs = [(k1, v1), (k2, v2)];
+            if crate::direction::is_rtl() {
+                pairs.reverse();
+            }
+            for (k, v) in pairs {
+                crate::direction::grid_cells(
+                    ui,
+                    |ui| {
+                        ui.with_layout(crate::direction::trailing(), |ui| {
+                            ui.label(egui::RichText::new(*k).color(t.text_dim).size(11.5));
+                        });
+                    },
+                    |ui| {
+                        ui.label(egui::RichText::new(v.as_str()).font(mono.clone()).color(t.text));
+                    },
+                );
             }
             ui.end_row();
         }
@@ -745,64 +760,68 @@ pub fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     };
     let opts = app.ui.histogram_panel;
     let channel = resolve_channel(s.mode, opts.channel);
-    if opts.view == HistView::Compact {
-        // Compact View: the graph alone; a single channel is always in its colour.
-        graph(app, ui, &s, channel, true, 100.0);
-        return;
-    }
-    let mut changed = false;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!("Channel:")).color(t.text_dim).size(12.0));
-        let mut ch = channel;
-        let options = channel_options(s.mode);
-        if crate::widgets::dropdown(ui, "histogram-panel-ch", tl!("Channel"), &mut ch, &options, 110.0) {
-            app.ui.histogram_panel.channel = ch;
-            changed = true;
+    // Scope the panel body so nested rows mirror exactly once in RTL (LTR keeps the default
+    // top_down(Min)); the graphs inside keep their physical level axis in both directions.
+    ui.allocate_ui_with_layout(ui.available_size_before_wrap(), crate::direction::body_layout(), |ui| {
+        if opts.view == HistView::Compact {
+            // Compact View: the graph alone; a single channel is always in its colour.
+            graph(app, ui, &s, channel, true, 100.0);
+            return;
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if crate::icons::button(ui, "rotate-cw", 20.0, false, tl!("Uncached Refresh")).clicked() {
-                uncached_refresh(app);
-            }
-        });
-    });
-    let colored = opts.show_channels_in_color;
-    let hover = graph(app, ui, &s, channel, colored, 100.0);
-    // Source: only for documents with several layers.
-    if s.layers > 1 {
+        let mut changed = false;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(tl!("Source:")).color(t.text_dim).size(12.0));
-            let mut src = opts.source;
-            let mut options = vec![(HistSourceChoice::EntireImage, "Entire Image"), (HistSourceChoice::SelectedLayer, "Selected Layer")];
-            if s.adjustment {
-                options.push((HistSourceChoice::AdjustmentComposite, "Adjustment Composite"));
-            } else if src == HistSourceChoice::AdjustmentComposite {
-                src = HistSourceChoice::EntireImage;
-            }
-            if crate::widgets::dropdown(ui, "histogram-panel-src", tl!("Source"), &mut src, &options, 150.0) {
-                app.ui.histogram_panel.source = src;
+            ui.label(egui::RichText::new(tl!("Channel:")).color(t.text_dim).size(12.0));
+            let mut ch = channel;
+            let options = channel_options(s.mode);
+            if crate::widgets::dropdown(ui, "histogram-panel-ch", tl!("Channel"), &mut ch, &options, 110.0) {
+                app.ui.histogram_panel.channel = ch;
                 changed = true;
             }
+            ui.with_layout(crate::direction::trailing(), |ui| {
+                if crate::icons::button(ui, "rotate-cw", 20.0, false, tl!("Uncached Refresh")).clicked() {
+                    uncached_refresh(app);
+                }
+            });
         });
-    }
-    if opts.show_statistics {
-        ui.add_space(4.0);
-        let levels = app.ui.histogram_range.or_else(|| hover.map(|l| [l, l]));
-        statistics(ui, &s.hist, s.mode, channel, levels, &t);
-    }
-    if opts.view == HistView::AllChannels {
-        for c in color_channels(s.mode) {
-            ui.add_space(4.0);
-            ui.label(egui::RichText::new(tl!(channel_label(s.mode, *c))).color(t.text).size(11.5));
-            let w = ui.available_width();
-            let (r, _) = ui.allocate_exact_size(vec2(w, 90.0), Sense::hover());
-            let p = ui.painter_at(r);
-            p.rect_filled(r, 0.0, t.field);
-            tone::draw_histogram(&p, r, bins(&s.hist, s.mode, *c), graph_color(*c, colored, &t));
+        let colored = opts.show_channels_in_color;
+        let hover = graph(app, ui, &s, channel, colored, 100.0);
+        // Source: only for documents with several layers.
+        if s.layers > 1 {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(tl!("Source:")).color(t.text_dim).size(12.0));
+                let mut src = opts.source;
+                let mut options = vec![(HistSourceChoice::EntireImage, "Entire Image"), (HistSourceChoice::SelectedLayer, "Selected Layer")];
+                if s.adjustment {
+                    options.push((HistSourceChoice::AdjustmentComposite, "Adjustment Composite"));
+                } else if src == HistSourceChoice::AdjustmentComposite {
+                    src = HistSourceChoice::EntireImage;
+                }
+                if crate::widgets::dropdown(ui, "histogram-panel-src", tl!("Source"), &mut src, &options, 150.0) {
+                    app.ui.histogram_panel.source = src;
+                    changed = true;
+                }
+            });
         }
-    }
-    if changed {
-        persist_options(app);
-    }
+        if opts.show_statistics {
+            ui.add_space(4.0);
+            let levels = app.ui.histogram_range.or_else(|| hover.map(|l| [l, l]));
+            statistics(ui, &s.hist, s.mode, channel, levels, &t);
+        }
+        if opts.view == HistView::AllChannels {
+            for c in color_channels(s.mode) {
+                ui.add_space(4.0);
+                ui.label(egui::RichText::new(tl!(channel_label(s.mode, *c))).color(t.text).size(11.5));
+                let w = ui.available_width();
+                let (r, _) = ui.allocate_exact_size(vec2(w, 90.0), Sense::hover());
+                let p = ui.painter_at(r);
+                p.rect_filled(r, 0.0, t.field);
+                tone::draw_histogram(&p, r, bins(&s.hist, s.mode, *c), graph_color(*c, colored, &t));
+            }
+        }
+        if changed {
+            persist_options(app);
+        }
+    });
 }
 
 /// The Histogram items of the panel menu.
@@ -867,3 +886,114 @@ pub fn inspect(app: &PhotocraftApp) -> Value {
 
 #[cfg(test)]
 mod tests;
+
+/// The panel's mirrored layout: the selectors swap sides around the channel dropdown, the
+/// statistics grid stays on the panel, and the graph keeps its physical level axis.
+#[cfg(test)]
+mod rtl_layout {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+    use serde_json::json;
+
+    /// The panel's width in the harness, in points.
+    const PANEL_W: f32 = 300.0;
+
+    /// What one render of the panel measures.
+    struct Measured {
+        channel_label: Rect,
+        dropdown: Rect,
+        refresh: Rect,
+        graph: Rect,
+        stats: Vec<Rect>,
+    }
+
+    fn app_with_document() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        // The compact view is the graph alone: the selectors and the statistics need the
+        // expanded one.
+        app.ui.histogram_panel.view = HistView::Expanded;
+        app
+    }
+
+    /// One panel frame through a minimal egui pass.
+    fn frame(app: &mut PhotocraftApp) {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(Default::default());
+        let mut ui = egui::Ui::new(
+            ctx.clone(),
+            egui::Id::unique("hist-rtl-test"),
+            egui::UiBuilder::new().max_rect(Rect::from_min_size(egui::Pos2::ZERO, vec2(PANEL_W, 900.0))),
+        );
+        show(app, &mut ui);
+        ctx.end_pass().textures_delta.clear();
+    }
+
+    /// Frames until the panel shows the histogram it wants: the count runs off the UI thread.
+    fn settle(app: &mut PhotocraftApp) {
+        let t0 = std::time::Instant::now();
+        loop {
+            for e in [app.doc_hist.as_mut(), app.doc_hist_preview.as_mut()].into_iter().flatten() {
+                e.at = -1e12;
+            }
+            frame(app);
+            if app.hist_job.is_none() && shown(app).is_some_and(|s| !s.stale) {
+                return;
+            }
+            assert!(t0.elapsed() < std::time::Duration::from_secs(60), "the histogram never settled");
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+    }
+
+    /// The panel as `dir` draws it.
+    fn measure(dir: Dir) -> Measured {
+        let _dir = direction_scope(dir);
+        let mut app = app_with_document();
+        settle(&mut app);
+        let mut h = Harness::builder().with_size(vec2(PANEL_W, 500.0)).build_ui_state(|ui, app: &mut PhotocraftApp| show(app, ui), app);
+        h.run_steps(2);
+        let channel_label = h.get_by_label(tl!("Channel:")).rect();
+        let dropdown = h.get_by_value(tl!("RGB")).rect();
+        let refresh = h.get_by_label(tl!("Uncached Refresh")).rect();
+        // The graph is the panel's one tall interactive widget.
+        let graph = h.ctx.interactive_rects_last_pass().into_iter().find(|r| r.height() > 50.0).expect("the graph");
+        let stats = vec![
+            h.get_by_label(tl!("Mean:")).rect(),
+            h.get_by_label(tl!("Std Dev:")).rect(),
+            h.get_by_label(tl!("Median:")).rect(),
+            h.get_by_label(tl!("Pixels:")).rect(),
+            h.get_by_label(tl!("Level:")).rect(),
+            h.get_by_label(tl!("Count:")).rect(),
+            h.get_by_label(tl!("Percentile:")).rect(),
+            h.get_by_label(tl!("Cache Level:")).rect(),
+        ];
+        Measured { channel_label, dropdown, refresh, graph, stats }
+    }
+
+    /// The statistics cells stay on the panel, under the graph.
+    fn assert_stats_on_the_panel(m: &Measured) {
+        for r in &m.stats {
+            assert!(r.min.x.is_finite() && r.max.x.is_finite(), "the statistics cell {r:?} has no place on the panel");
+            assert!(r.min.x >= -0.5 && r.max.x <= PANEL_W + 0.5, "the statistics cell {r:?} is outside the panel");
+            assert!(r.min.y > m.graph.bottom(), "the statistics cell {r:?} is above the graph");
+        }
+    }
+
+    #[test]
+    fn the_panel_mirrors_in_a_right_to_left_ui() {
+        let ltr = measure(Dir::Ltr);
+        let rtl = measure(Dir::Rtl);
+        // The selectors mirror around the channel dropdown.
+        assert!(ltr.channel_label.right() <= ltr.dropdown.left(), "ltr: the label is left of the dropdown: {:?} {:?}", ltr.channel_label, ltr.dropdown);
+        assert!(rtl.channel_label.left() >= rtl.dropdown.right(), "rtl: the label is right of the dropdown: {:?} {:?}", rtl.channel_label, rtl.dropdown);
+        assert!(ltr.refresh.left() >= ltr.dropdown.right(), "ltr: the refresh button is right of the dropdown: {:?} {:?}", ltr.refresh, ltr.dropdown);
+        assert!(rtl.refresh.right() <= rtl.dropdown.left(), "rtl: the refresh button is left of the dropdown: {:?} {:?}", rtl.refresh, rtl.dropdown);
+        // The graph keeps its physical level axis.
+        assert_eq!(ltr.graph.x_range(), rtl.graph.x_range(), "the graph keeps its place: {:?} {:?}", ltr.graph, rtl.graph);
+        // The statistics grid stays on the panel, in both directions.
+        assert_stats_on_the_panel(&ltr);
+        assert_stats_on_the_panel(&rtl);
+    }
+}

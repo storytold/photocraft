@@ -45,60 +45,74 @@ pub(super) fn opacity_row_layout(available: f32, label_width: f32, gap: f32) -> 
     ((available - reserved).max(40.0), show_label)
 }
 
+/// The blend and lock rows read in the panel's direction. The dock hands the panel a
+/// `top_down(Align::Min)` body, where the direction flag alone leaves a nested row
+/// left-to-right, so the rows carry their own layout.
+fn panel_row() -> egui::Layout {
+    crate::direction::row()
+}
+
+/// The opacity and fill fields sit at the row's reading end: the right in LTR, the left in
+/// Arabic.
+fn field_row() -> egui::Layout {
+    crate::direction::trailing()
+}
+
 /// Blend mode, Opacity, the locks and Fill with no layer selected: Photoshop keeps them in place,
 /// greyed out at Normal, 100% and unlocked, instead of removing them (#8880). Same layout as the
 /// active layer's rows in `layers`.
 fn inactive_blend_rows(ui: &mut egui::Ui, pro: bool) {
-    // Each row is disabled on its own and laid out as the active layer's rows are: a disabled
-    // wrapper around both added an item gap under the Fill row, which pushed the layer list down
-    // in the themes whose docks keep item spacing (#9546).
-    ui.horizontal(|ui| {
-        ui.disable();
-        let opacity_label = if pro { tl!("Opacity:") } else { tl!("Opacity") };
-        let (blend_width, show_opacity_label) = opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
-        let mut m = BlendMode::Normal;
-        let options = blend_options(false, m);
-        widgets::dropdown_wheel_hovered(ui, "blend", tl!("Blend Mode"), &mut m, &options, blend_width);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let mut o = 100.0;
-            widgets::popup_value_field(ui, opacity_label, &mut o, 0.0..=100.0, "%", LAYER_PCT_W);
-            if show_opacity_label {
-                scrub_pct_label(ui, opacity_label, &mut o, ui.available_width());
-            }
+    // Same structure as the active rows in `layers`: the disabled wrapper sits inside each
+    // allocated row, so it adds no item gap under the rows (#9546).
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), panel_row(), |ui| {
+        ui.add_enabled_ui(false, |ui| {
+            let opacity_label = if pro { tl!("Opacity:") } else { tl!("Opacity") };
+            let (blend_width, show_opacity_label) = opacity_row_layout(ui.available_width(), body_text_width(ui, opacity_label), ui.spacing().item_spacing.x);
+            let mut m = BlendMode::Normal;
+            let options = blend_options(false, m);
+            widgets::dropdown_wheel_hovered(ui, "blend", tl!("Blend Mode"), &mut m, &options, blend_width);
+            ui.with_layout(field_row(), |ui| {
+                let mut o = 100.0;
+                widgets::popup_value_field(ui, opacity_label, &mut o, 0.0..=100.0, "%", LAYER_PCT_W);
+                if show_opacity_label {
+                    scrub_pct_label(ui, opacity_label, &mut o, ui.available_width());
+                }
+            });
         });
     });
     ui.add_space((theme::ROW_GAP - ui.spacing().item_spacing.y).max(0.0));
-    ui.horizontal(|ui| {
-        ui.disable();
-        let lock_label = if pro { tl!("Lock:") } else { tl!("Lock") };
-        let lang = crate::i18n::current();
-        let fill_label = if pro { crate::i18n::tr_ctx(lang, "layers", "Fill:") } else { crate::i18n::tr_ctx(lang, "layers", "Fill") };
-        let gap = ui.spacing().item_spacing.x;
-        let icons_w = if pro { 5.0 * 20.0 + gap } else { 22.0 + gap };
-        let fits = body_text_width(ui, lock_label) + icons_w + body_text_width(ui, fill_label) + LAYER_PCT_W + 2.0 * gap <= ui.available_width();
-        if fits {
-            label(ui, lock_label);
-        }
-        if pro {
-            ui.scope(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                for (icon, tip) in [
-                    ("grid-3x3", tl!("Lock transparent pixels")),
-                    ("brush", tl!("Lock image pixels")),
-                    ("move", tl!("Lock position")),
-                    ("scan", tl!("Prevent auto-nesting in and out of Artboards and Frames")),
-                    ("lock", tl!("Lock all")),
-                ] {
-                    icons::button(ui, icon, 20.0, false, tip);
-                }
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), panel_row(), |ui| {
+        ui.add_enabled_ui(false, |ui| {
+            let lock_label = if pro { tl!("Lock:") } else { tl!("Lock") };
+            let lang = crate::i18n::current();
+            let fill_label = if pro { crate::i18n::tr_ctx(lang, "layers", "Fill:") } else { crate::i18n::tr_ctx(lang, "layers", "Fill") };
+            let gap = ui.spacing().item_spacing.x;
+            let icons_w = if pro { 5.0 * 20.0 + gap } else { 22.0 + gap };
+            let fits = body_text_width(ui, lock_label) + icons_w + body_text_width(ui, fill_label) + LAYER_PCT_W + 2.0 * gap <= ui.available_width();
+            if fits {
+                label(ui, lock_label);
+            }
+            if pro {
+                ui.scope(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    for (icon, tip) in [
+                        ("grid-3x3", tl!("Lock transparent pixels")),
+                        ("brush", tl!("Lock image pixels")),
+                        ("move", tl!("Lock position")),
+                        ("scan", tl!("Prevent auto-nesting in and out of Artboards and Frames")),
+                        ("lock", tl!("Lock all")),
+                    ] {
+                        icons::button(ui, icon, 20.0, false, tip);
+                    }
+                });
+            } else {
+                icons::button(ui, "lock-open", 22.0, false, tl!("Lock layer"));
+            }
+            ui.with_layout(field_row(), |ui| {
+                let mut f = 100.0;
+                widgets::popup_value_field(ui, fill_label, &mut f, 0.0..=100.0, "%", LAYER_PCT_W);
+                scrub_pct_label(ui, fill_label, &mut f, ui.available_width());
             });
-        } else {
-            icons::button(ui, "lock-open", 22.0, false, tl!("Lock layer"));
-        }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let mut f = 100.0;
-            widgets::popup_value_field(ui, fill_label, &mut f, 0.0..=100.0, "%", LAYER_PCT_W);
-            scrub_pct_label(ui, fill_label, &mut f, ui.available_width());
         });
     });
     ui.add_space(2.0);
@@ -143,7 +157,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let bg = crate::doc_props_ui::is_background(&doc, l);
         // Pass Through is a group's mode: offered only when every target is a group.
         let all_groups = ids.iter().all(|id| doc.layer(*id).is_some_and(|x| x.is_group()));
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), panel_row(), |ui| {
             ui.add_enabled_ui(!bg, |ui| {
                 let mut m = l.blend;
                 // Reserve space for the numeric field first. On a narrow dock, hide the
@@ -162,7 +176,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
                 // Hovering a mode previews it on the canvas (#970).
                 crate::blend_preview::hover(app, &ids, hovered.filter(|_| chosen.is_empty()));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(field_row(), |ui| {
                     let mut o = l.opacity * 100.0;
                     let field = widgets::popup_value_field(ui, opacity_label, &mut o, 0.0..=100.0, "%", LAYER_PCT_W);
                     // On a narrow dock the (scrubby) label yields its room to the controls (#2309).
@@ -179,7 +193,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
         // Docks zero the item spacing: keep the Opacity and Fill fields apart (#155).
         ui.add_space((theme::ROW_GAP - ui.spacing().item_spacing.y).max(0.0));
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), panel_row(), |ui| {
             let lock_label = if t.pro { tl!("Lock:") } else { tl!("Lock") };
             // Layer fill opacity (≠ Edit › Fill / path fill → Tô).
             let lang = crate::i18n::current();
@@ -222,7 +236,7 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             }
             ui.add_enabled_ui(!bg, |ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.with_layout(field_row(), |ui| {
                     let mut f = l.fill_opacity * 100.0;
                     let field = widgets::popup_value_field(ui, fill_label, &mut f, 0.0..=100.0, "%", LAYER_PCT_W);
                     let scrub = scrub_pct_label(ui, fill_label, &mut f, ui.available_width());
@@ -560,10 +574,12 @@ pub(super) fn footer_label(command: &str) -> &'static str {
     }
 }
 
-/// The small down-arrow makes it clear that the footer icon expands into a menu.
+/// The small down-arrow makes it clear that the footer icon expands into a menu. It sits at the
+/// button's reading-end bottom corner: the right in a left-to-right UI, the left in a right-to-left one.
 fn footer_menu_arrow(ui: &egui::Ui, rect: Rect) {
     let t = Tokens::get(ui.ctx());
-    let arrow = Rect::from_min_size(rect.right_bottom() - vec2(11.0, 10.0), vec2(9.0, 9.0));
+    let x = if crate::direction::is_rtl() { crate::direction::start_x(rect, 2.0) } else { crate::direction::end_x(rect, 11.0) };
+    let arrow = Rect::from_min_size(pos2(x, rect.bottom() - 10.0), vec2(9.0, 9.0));
     icons::paint(ui, arrow, "chevron-down", 8.0, t.text_dim);
 }
 
@@ -593,4 +609,56 @@ pub(crate) fn fx_button(ui: &mut egui::Ui, size: f32, tip: &str) -> egui::Respon
 
 pub(super) fn channels(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     crate::channels_panel::show(app, ui);
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::direction::{Dir, direction_scope};
+
+    use super::{field_row, panel_row};
+
+    #[test]
+    fn blend_rows_follow_the_reading_direction() {
+        let ltr = direction_scope(Dir::Ltr);
+        assert_eq!(panel_row().main_dir(), egui::Direction::LeftToRight);
+        // The field sits at the row's reading end: the right in LTR.
+        assert_eq!(field_row().main_dir(), egui::Direction::RightToLeft);
+        drop(ltr);
+        let _rtl = direction_scope(Dir::Rtl);
+        assert_eq!(panel_row().main_dir(), egui::Direction::RightToLeft);
+        assert_eq!(field_row().main_dir(), egui::Direction::LeftToRight);
+    }
+
+    /// The rows themselves, not just the helpers: rendered, the blend dropdown sits at the row's
+    /// reading start and the Opacity field at its reading end.
+    #[test]
+    fn blend_row_widgets_mirror_with_the_direction() {
+        use egui_kittest::kittest::Queryable;
+
+        let _lang = crate::i18n::language_scope(crate::i18n::Lang::EN);
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let _dir = direction_scope(dir);
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(420.0, 160.0)).build_ui_state(
+                |ui, row: &mut Option<egui::Rect>| {
+                    *row = Some(ui.max_rect());
+                    super::inactive_blend_rows(ui, true);
+                },
+                None,
+            );
+            h.run_steps(3);
+            let row = (*h.state()).expect("the row's rect was recorded");
+            let blend = h.query_all_by_label("Blend Mode").next().expect("the blend dropdown is drawn").rect();
+            // The field, its ▾ and the scrub label all carry the Opacity name; the field is the widest.
+            let opacity =
+                h.query_all_by_label_contains("Opacity").map(|n| n.rect()).max_by(|a, b| a.width().total_cmp(&b.width())).expect("the Opacity field is drawn");
+            // The rows center their content (main_align Center), so assert the mirrored
+            // halves, not an edge hug: dropdown on the reading-start half, field on the end half.
+            let row_mid = row.center().x;
+            if dir == Dir::Ltr {
+                assert!(blend.center().x < row_mid && row_mid < opacity.center().x, "LTR: dropdown left half, field right half: {blend:?} {opacity:?} {row:?}");
+            } else {
+                assert!(opacity.center().x < row_mid && row_mid < blend.center().x, "RTL: field left half, dropdown right half: {blend:?} {opacity:?} {row:?}");
+            }
+        }
+    }
 }

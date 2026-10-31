@@ -515,7 +515,9 @@ not the dialog. Read the dialog's state through `ui.inspect` (`cameraRaw`: param
 zoom, control rectangles) and drive it with the `ui` params below. To *see* it, render offscreen
 (`cargo run -p photocraft-ui-egui --example snapshot -- --script '[["ui.menu.invoke", {"id": "filter.cameraRaw"}]]'`
 or an `egui_kittest` harness): those embed
-viewports, so the dialog is drawn over the main window and appears in the image.
+viewports, so the dialog is drawn over the main window and appears in the image. Popup menus and
+context menus are not part of the capture either; open them offscreen with the `snapshot`
+example's `--click-at`/`--right-click-at`.
 
 `ui.menu.invoke {"id":"filter.cameraRaw","params":{}}` opens Camera Raw on the active
 RGB/Grayscale layer. `params: {"smartFilter": {"layer": id, "index": i}}` opens it on an existing

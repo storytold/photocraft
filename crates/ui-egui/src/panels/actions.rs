@@ -4,7 +4,7 @@
 //! `play` / `list` / `get` / `delete` / `move` / `rename`), so the panel, the CLI and MCP share them. This module
 //! keeps only which row is selected and which rows are expanded.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, pos2, vec2};
+use egui::{Color32, Rect, Sense, Stroke, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -464,10 +464,29 @@ fn insert_stop_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
     Ok(json!({"dialog": id}))
 }
 
+/// The message field of Insert Stop…: in a right-to-left UI the galley's base direction is
+/// right-to-left and the text anchors at the reading end; left-to-right keeps egui's default
+/// edit, pixel-identical.
+fn rtl_multiline(ui: &mut egui::Ui, text: &mut String, rows: usize, width: f32) -> egui::Response {
+    let edit = egui::TextEdit::multiline(text).desired_rows(rows).desired_width(width);
+    if !crate::direction::is_rtl() {
+        return ui.add(edit);
+    }
+    let font = egui::FontId::default();
+    let mut layouter = move |ui: &egui::Ui, text: &dyn egui::TextBuffer, wrap_width: f32| {
+        let mut job = egui::text::LayoutJob::simple(text.as_str().to_owned(), font.clone(), ui.visuals().text_color(), wrap_width);
+        job.direction = egui::epaint::text::TextDirection::RightToLeft;
+        job.halign = egui::Align::Max;
+        job.keep_trailing_whitespace = true;
+        ui.fonts_mut(|f| f.layout_job(job))
+    };
+    ui.add(edit.align(egui::Align2::RIGHT_TOP).layouter(&mut layouter))
+}
+
 pub fn insert_stop_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
     let message_label = ui.label(tl!("Message:"));
     let mut message = fields.get("message").and_then(Value::as_str).unwrap_or_default().to_string();
-    ui.add(egui::TextEdit::multiline(&mut message).desired_rows(4).desired_width(320.0)).labelled_by(message_label.id);
+    rtl_multiline(ui, &mut message, 4, 320.0).labelled_by(message_label.id);
     fields.insert("message".into(), json!(message));
     ui.add_space(6.0);
     let mut allow = fields.get("allowContinue").and_then(Value::as_bool).unwrap_or(false);
@@ -716,7 +735,10 @@ fn drag_row(ui: &egui::Ui, response: &egui::Response, row: DragRow, t: &Tokens) 
     let slot = index.saturating_add(usize::from(after));
     let to = if from < slot { slot.saturating_sub(1) } else { slot };
     let y = if after { response.rect.bottom() } else { response.rect.top() };
-    ui.painter().line_segment([pos2(response.rect.left() + 22.0, y), pos2(response.rect.right(), y)], Stroke::new(2.0, t.accent));
+    ui.painter().line_segment(
+        [pos2(crate::direction::start_x(response.rect, 22.0), y), pos2(crate::direction::end_x(response.rect, 0.0), y)],
+        Stroke::new(2.0, t.accent),
+    );
     response.dnd_release_payload::<DragRow>().map(|source| (*source, to))
 }
 
@@ -772,7 +794,9 @@ fn delete_selection(app: &mut PhotocraftApp) {
 fn rename_field(app: &mut PhotocraftApp, ui: &mut egui::Ui, index: usize, rect: Rect) -> Option<String> {
     let mut r = app.ui.actions.renaming.take().filter(|r| r.index == index)?;
     let id = egui::Id::unique(("action-rename-field", index));
-    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(egui::FontId::proportional(12.0))).accessible_name(tl!("Name"));
+    let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::proportional(12.0));
+    let edit = crate::widgets::rtl_singleline(&mut r.text, &mut layouter).id(id).font(egui::FontId::proportional(12.0));
+    let te = ui.put(rect, edit).accessible_name(tl!("Name"));
     if !r.focused {
         te.request_focus();
         // Like Photoshop, the whole name starts selected so typing replaces it.
@@ -843,36 +867,44 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, to
     if response.hovered() {
         ui.painter().rect_filled(rect, 0.0, tokens.hover.gamma_multiply(0.5));
     }
-    let triangle = Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(8.0, 8.0));
+    let triangle = Rect::from_center_size(pos2(crate::direction::start_x(rect, 12.0), rect.center().y), vec2(8.0, 8.0));
+    let gx = |x: f32| crate::direction::glyph_x(x, triangle.center().x);
     let points = if collapsed {
-        vec![triangle.left_top(), triangle.right_center(), triangle.left_bottom()]
+        vec![pos2(gx(triangle.left()), triangle.top()), pos2(gx(triangle.right()), triangle.center().y), pos2(gx(triangle.left()), triangle.bottom())]
     } else {
-        vec![triangle.left_top(), triangle.right_top(), triangle.center_bottom()]
+        vec![pos2(gx(triangle.left()), triangle.top()), pos2(gx(triangle.right()), triangle.top()), pos2(triangle.center().x, triangle.bottom())]
     };
     ui.painter().add(egui::Shape::convex_polygon(points, tokens.text_dim, Stroke::NONE));
     icons::paint(
         ui,
-        Rect::from_center_size(pos2(rect.left() + 30.0, rect.center().y), vec2(16.0, 16.0)),
+        Rect::from_center_size(pos2(crate::direction::start_x(rect, 30.0), rect.center().y), vec2(16.0, 16.0)),
         if collapsed { "folder" } else { "folder-open" },
         12.0,
         tokens.icon,
     );
-    ui.painter().text(pos2(rect.left() + 44.0, rect.center().y), Align2::LEFT_CENTER, set, egui::FontId::proportional(12.0), tokens.text);
+    ui.painter().text(pos2(crate::direction::start_x(rect, 44.0), rect.center().y), crate::direction::start_align(), set, egui::FontId::proportional(12.0), tokens.text);
     let summary = crate::i18n::trn(crate::i18n::current(), count, "{n} action", "{n} actions");
-    ui.painter().text(pos2(rect.right() - 8.0, rect.center().y), Align2::RIGHT_CENTER, summary, egui::FontId::proportional(11.0), tokens.text_faint);
+    ui.painter().text(pos2(crate::direction::end_x(rect, 8.0), rect.center().y), crate::direction::end_align(), summary, egui::FontId::proportional(11.0), tokens.text_faint);
     let toggled = response.clicked();
     let mut save = false;
     response.context_menu(|ui| {
-        if ui.button(tl!("Save Set…")).clicked() {
-            save = true;
-            ui.close();
-        }
+        // Popup bodies are pinned left-to-right whatever the direction flag; the shared popup
+        // body re-scopes them under RTL (the menus/render.rs pattern).
+        crate::menus::popup_body(ui, |ui| {
+            if ui.button(tl!("Save Set…")).clicked() {
+                save = true;
+                ui.close();
+            }
+        });
     });
     SetHeaderResult { toggled, save }
 }
 
 fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index: usize, name: &str, swatch: &str) {
     egui::Popup::context_menu(response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        // Popup bodies are pinned left-to-right whatever the direction flag; the shared popup
+        // body re-scopes them under RTL (the menus/render.rs pattern).
+        crate::menus::popup_body(ui, |ui| {
         ui.label(tl!("Keyboard Shortcuts"));
         let current = app.session.prefs().shortcuts.get(&shortcut_id(name)).cloned().unwrap_or_default();
         // Photoshop's Action Options: a function key, with Shift and Command (#7646).
@@ -909,6 +941,7 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
                     ui.close();
                 }
             }
+        });
         });
     });
 }
@@ -991,7 +1024,6 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             let indent = if set.is_some() { 14.0 } else { 0.0 };
             let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click_and_drag());
-            let x0 = rect.left() + indent;
             if reveal == Some((i, 0)) {
                 ui.scroll_to_rect(rect, Some(egui::Align::BOTTOM));
             }
@@ -1010,32 +1042,35 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             let expanded = app.ui.actions.expanded.get(i).copied().unwrap_or(false) && !button_mode;
             if !button_mode {
-                let tri = Rect::from_center_size(pos2(x0 + 12.0, rect.center().y), vec2(8.0, 8.0));
+                let tri = Rect::from_center_size(pos2(crate::direction::start_x(rect, indent + 12.0), rect.center().y), vec2(8.0, 8.0));
+                let gx = |x: f32| crate::direction::glyph_x(x, tri.center().x);
                 let pts = if expanded {
-                    vec![tri.left_top(), tri.right_top(), tri.center_bottom()]
+                    vec![pos2(gx(tri.left()), tri.top()), pos2(gx(tri.right()), tri.top()), pos2(tri.center().x, tri.bottom())]
                 } else {
-                    vec![tri.left_top(), tri.right_center(), tri.left_bottom()]
+                    vec![pos2(gx(tri.left()), tri.top()), pos2(gx(tri.right()), tri.center().y), pos2(gx(tri.left()), tri.bottom())]
                 };
                 ui.painter().add(egui::Shape::convex_polygon(pts, t.text_dim, Stroke::NONE));
-                crate::icons::paint(ui, Rect::from_center_size(pos2(x0 + 30.0, rect.center().y), vec2(16.0, 16.0)), "play", 11.0, t.icon);
+                crate::icons::paint(ui, Rect::from_center_size(pos2(crate::direction::start_x(rect, indent + 30.0), rect.center().y), vec2(16.0, 16.0)), "play", 11.0, t.icon);
             }
             let recording_this = recording.is_some_and(|(_, r)| r == i);
             let nsteps = steps.len();
-            let name_x = if button_mode { x0 + 8.0 } else { x0 + 44.0 };
+            let name_x = if button_mode { crate::direction::start_x(rect, indent + 8.0) } else { crate::direction::start_x(rect, indent + 44.0) };
             let name_color = if button_mode { button_label_color(swatch, &t) } else { t.text };
             let name_rect = if app.ui.actions.renaming.as_ref().is_some_and(|r| r.index == i) {
-                let field = Rect::from_min_max(pos2(x0 + 40.0, rect.top() + 3.0), pos2((rect.right() - 80.0).max(x0 + 120.0), rect.bottom() - 3.0));
+                let fx = crate::direction::start_x(rect, indent + 40.0);
+                let tx = crate::direction::end_x(rect, 80.0).max(crate::direction::start_x(rect, indent + 120.0));
+                let field = Rect::from_min_max(pos2(fx.min(tx), rect.top() + 3.0), pos2(fx.max(tx), rect.bottom() - 3.0));
                 if let Some(text) = rename_field(app, ui, i, field) {
                     renamed = Some((i, text));
                 }
                 field
             } else {
-                ui.painter().text(pos2(name_x, rect.center().y), Align2::LEFT_CENTER, name, egui::FontId::proportional(12.0), name_color)
+                ui.painter().text(pos2(name_x, rect.center().y), crate::direction::start_align(), name, egui::FontId::proportional(12.0), name_color)
             };
             if !button_mode {
                 ui.painter().text(
-                    pos2(rect.right() - 8.0, rect.center().y),
-                    Align2::RIGHT_CENTER,
+                    pos2(crate::direction::end_x(rect, 8.0), rect.center().y),
+                    crate::direction::end_align(),
                     app.session
                         .prefs()
                         .shortcuts
@@ -1047,7 +1082,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 );
             }
             if recording_this {
-                ui.painter().circle_filled(pos2(rect.right() - 64.0, rect.center().y), 4.0, Color32::from_rgb(230, 60, 60));
+                ui.painter().circle_filled(pos2(crate::direction::end_x(rect, 64.0), rect.center().y), 4.0, Color32::from_rgb(230, 60, 60));
             }
             if resp.clicked() {
                 app.ui.actions.selected = Some(i);
@@ -1056,7 +1091,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     if !resp.double_clicked() {
                         play_idx = Some(i);
                     }
-                } else if resp.interact_pointer_pos().is_some_and(|p| p.x < x0 + 20.0) {
+                } else if resp.interact_pointer_pos().is_some_and(|p| crate::direction::start_side(p.x, crate::direction::start_x(rect, indent + 20.0))) {
                     if app.ui.actions.expanded.len() <= i {
                         app.ui.actions.expanded.resize(i + 1, false);
                     }
@@ -1075,7 +1110,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             }
             if expanded {
-                let context = StepRowsContext { action: i, x0, steps, disabled, dialogs, reveal, tokens: &t };
+                let context = StepRowsContext { action: i, indent, steps, disabled, dialogs, reveal, tokens: &t };
                 let events = draw_step_rows(app, ui, &context);
                 moved = moved.or(events.moved);
                 toggled = toggled.or(events.toggled);
@@ -1182,7 +1217,7 @@ fn scroll_actions_during_drag(ui: &mut egui::Ui) {
 
 struct StepRowsContext<'a> {
     action: usize,
-    x0: f32,
+    indent: f32,
     steps: &'a [(String, Value)],
     disabled: &'a std::collections::BTreeSet<usize>,
     dialogs: &'a std::collections::BTreeSet<usize>,
@@ -1229,13 +1264,13 @@ fn draw_step_label(app: &PhotocraftApp, ui: &egui::Ui, rect: Rect, response: &eg
         ui.painter().rect_filled(response.rect, 0.0, context.tokens.hover.gamma_multiply(0.5));
     }
     let color = if context.disabled.contains(&step) { context.tokens.text_faint } else { context.tokens.text_dim };
-    ui.painter().text(pos2(context.x0 + 62.0, rect.center().y), Align2::LEFT_CENTER, label, egui::FontId::proportional(11.5), color);
+    ui.painter().text(pos2(crate::direction::start_x(rect, context.indent + 62.0), rect.center().y), crate::direction::start_align(), label, egui::FontId::proportional(11.5), color);
 }
 
 fn draw_step_controls(ui: &mut egui::Ui, rect: Rect, step: usize, label: &str, context: &StepRowsContext<'_>) -> (egui::Response, egui::Response) {
     let on = !context.disabled.contains(&step);
     let check = ui.interact(
-        Rect::from_center_size(pos2(context.x0 + 30.0, rect.center().y), vec2(16.0, 16.0)),
+        Rect::from_center_size(pos2(crate::direction::start_x(rect, context.indent + 30.0), rect.center().y), vec2(16.0, 16.0)),
         ui.scope_id().with(("action-step-check", context.action, step)),
         Sense::click(),
     );
@@ -1243,7 +1278,7 @@ fn draw_step_controls(ui: &mut egui::Ui, rect: Rect, step: usize, label: &str, c
     paint_check(ui, check.rect, on, context.tokens);
     let with_dialog = context.dialogs.contains(&step);
     let dialog = ui.interact(
-        Rect::from_center_size(pos2(context.x0 + 46.0, rect.center().y), vec2(16.0, 16.0)),
+        Rect::from_center_size(pos2(crate::direction::start_x(rect, context.indent + 46.0), rect.center().y), vec2(16.0, 16.0)),
         ui.scope_id().with(("action-step-dialog", context.action, step)),
         Sense::click(),
     );

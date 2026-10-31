@@ -61,18 +61,22 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut bits = p.bits;
     let modal = egui::Modal::new(egui::Id::unique("targa-options")).show(ctx, |ui| {
         ui.set_max_width(340.0);
-        ui.label(egui::RichText::new(tl!("Targa Options")).font(crate::theme::semibold(15.0)));
-        ui.add_space(4.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(8.0);
-        crate::widgets::section_label(ui, tl!("Resolution"));
-        ui.radio_value(&mut bits, TgaBits::Bits24, tl!("24 bits/pixel"));
-        ui.radio_value(&mut bits, TgaBits::Bits32, tl!("32 bits/pixel"));
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
-            cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
+        crate::text::direction::window_body(ui, |ui| {
+            ui.label(egui::RichText::new(tl!("Targa Options")).font(crate::theme::semibold(15.0)));
+            ui.add_space(4.0);
+            crate::widgets::hairline(ui);
+            ui.add_space(8.0);
+            crate::widgets::section_label(ui, tl!("Resolution"));
+            ui.radio_value(&mut bits, TgaBits::Bits24, tl!("24 bits/pixel"));
+            ui.radio_value(&mut bits, TgaBits::Bits32, tl!("32 bits/pixel"));
+            ui.add_space(12.0);
+            // Top-aligned: a `Center` cross align in a right-to-left row balloons the row to
+            // the body's full remaining height in the fork and stretches the modal.
+            ui.with_layout(crate::text::direction::trailing_min(), |ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
+                cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
+            });
         });
     });
     cancel |= modal.should_close();
@@ -117,5 +121,53 @@ mod tests {
         for bad in [json!(16), json!("32"), json!(32.5), json!(false)] {
             assert!(bits_param(&json!({"tgaBits": bad}), "file.saveAs").is_err(), "{bad}");
         }
+    }
+
+    /// The modal's geometry in one direction: the title, the first radio and the footer buttons.
+    struct Geometry {
+        title: egui::Rect,
+        radio: egui::Rect,
+        ok: egui::Rect,
+        cancel: egui::Rect,
+        modal: egui::Rect,
+    }
+
+    /// The Targa Options modal over an empty document, drawn in `dir`.
+    fn geometry(dir: crate::text::direction::Dir) -> Geometry {
+        use egui_kittest::kittest::Queryable;
+        let _dir = crate::text::direction::direction_scope(dir);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+        park(&mut app, "/tmp/photocraft-targa-options.tga".into(), false, "file.saveAs").unwrap();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(1280.0, 800.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        h.run_steps(4);
+        Geometry {
+            title: h.get_by_label("Targa Options").rect(),
+            radio: h.get_by_label("24 bits/pixel").rect(),
+            ok: h.get_by_label("OK").rect(),
+            cancel: h.get_by_label("Cancel").rect(),
+            modal: h.ctx.memory(|m| m.area_rect(egui::Id::unique("targa-options"))).unwrap_or(egui::Rect::ZERO),
+        }
+    }
+
+    /// RTL: the title reads from the right and the button group hugs the reading end, the mirror
+    /// of the left-to-right dialog — which keeps its width: the body's right alignment must not
+    /// stretch the frame to the column's full width.
+    #[test]
+    fn rtl_targa_options_mirror_the_dialog() {
+        let ltr = geometry(crate::text::direction::Dir::Ltr);
+        let rtl = geometry(crate::text::direction::Dir::Rtl);
+        let centre = ltr.modal.center().x;
+        assert!(ltr.title.left() < centre && ltr.ok.right() > centre, "LTR: the title is on the left, the buttons on the right: {:?} {:?}", ltr.title, ltr.ok);
+        assert!(rtl.title.right() > centre && rtl.ok.left() < centre, "RTL: the title is on the right, the buttons on the left: {:?} {:?}", rtl.title, rtl.ok);
+        assert!(ltr.cancel.left() < ltr.ok.left(), "LTR: Cancel then OK: {:?} {:?}", ltr.cancel, ltr.ok);
+        assert!(rtl.ok.left() < rtl.cancel.left(), "RTL: the buttons mirror: {:?} {:?}", rtl.ok, rtl.cancel);
+        let ltr_edge = ltr.title.left().min(ltr.radio.left());
+        let rtl_edge = rtl.title.right().max(rtl.radio.right());
+        assert!((centre - ltr_edge - (rtl_edge - centre)).abs() < 1.0, "the modal keeps its width: {ltr_edge} vs {rtl_edge}");
+        assert!((ltr.modal.width() - rtl.modal.width()).abs() < 1.0, "the modal keeps its width: {:?} vs {:?}", ltr.modal, rtl.modal);
     }
 }

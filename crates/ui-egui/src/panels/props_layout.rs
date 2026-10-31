@@ -59,7 +59,8 @@ pub fn header(ui: &mut egui::Ui, layer: &Layer) {
     let kind = kind_label(layer);
     let kind_g = ui.painter().layout_no_wrap(tl!(&kind).to_owned(), egui::FontId::proportional(11.0), t.text_faint);
     let kind_w = kind_g.size().x;
-    // The name takes what's left between the icon and the kind (elided when long).
+    // The name takes what's left between the icon and the kind (elided when long). The header
+    // stays physical: the icon and name keep the left, the kind the right, in both directions.
     let name_x = r.left() + 26.0;
     let name_w = (r.right() - kind_w - 8.0 - name_x).max(0.0);
     let mut job = egui::text::LayoutJob::simple_singleline(layer.name.clone(), theme::medium(12.5), t.text);
@@ -73,37 +74,13 @@ pub fn header(ui: &mut egui::Ui, layer: &Layer) {
     resp.widget_info(move || egui::WidgetInfo::labeled(egui::Role::Label, true, format!("{name} — {kind}")));
 }
 
-/// A collapsible section: a separator, then a chevron + title row. Returns whether it's open.
+/// A collapsible section: a separator, then a chevron + title row, leading at the reading
+/// start (the right end in a right-to-left UI). Returns whether it's open.
 /// Every Properties section uses this, so headers look and behave alike.
 pub fn section(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
-    let t = Tokens::get(ui.ctx());
-    let key = egui::Id::unique(("props-section", id));
-    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(true);
-    ui.add_space(theme::ROW_GAP);
-    widgets::hairline(ui);
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), SECTION_H), Sense::click());
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    crate::icons::paint(
-        ui,
-        Rect::from_center_size(pos2(r.left() + 7.0, r.center().y), vec2(12.0, 12.0)),
-        if open { "chevron-down" } else { "chevron-right" },
-        11.0,
-        t.text_dim,
-    );
-    ui.painter().text(pos2(r.left() + 18.0, r.center().y), egui::Align2::LEFT_CENTER, tl!(title), theme::semibold(12.0), t.text);
-    if resp.clicked() {
-        open = !open;
-        ui.data_mut(|d| d.insert_temp(key, open));
-    }
-    let label = title.to_string();
-    resp.widget_info(move || egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, open, &label));
-    record(ui.ctx(), title, r);
-    if open {
-        ui.add_space(theme::ROW_GAP / 2.0);
-    }
-    open
+    let ir = widgets::section_header(ui, id, title, SECTION_H, true);
+    record(ui.ctx(), title, ir.response.rect);
+    ir.inner
 }
 
 /// Section headers drawn this pass, top to bottom (title, rect), for tests and `ui.inspect`.
@@ -192,3 +169,132 @@ pub fn quick_actions_ui(app: &PhotocraftApp, ui: &mut egui::Ui, content: &LayerC
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::Harness;
+    use serde_json::json;
+
+    /// The painted box of the text with this content.
+    fn painted_text(h: &Harness<'_, ()>, text: &str) -> egui::Rect {
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.job.text == text => Some(t.galley.rect.translate(t.pos.to_vec2())),
+                _ => None,
+            })
+            .next()
+            .unwrap_or_else(|| panic!("the painted `{text}`"))
+    }
+
+    /// The painted box of the icon image inside `within`: egui paints an image as a
+    /// textured rect (or a textured mesh when rotated).
+    fn painted_icon(h: &Harness<'_, ()>, within: egui::Rect) -> egui::Rect {
+        fn find_icon(shape: &egui::Shape, within: egui::Rect) -> Option<egui::Rect> {
+            match shape {
+                egui::Shape::Rect(r) if r.brush.is_some() => r.rect.intersects(within).then_some(r.rect),
+                egui::Shape::Mesh(m) if m.texture_id != egui::TextureId::default() => {
+                    let r = m.calc_bounds();
+                    r.intersects(within).then_some(r)
+                }
+                // SVG icons tessellate into vector paths, not textured rects.
+                egui::Shape::Path(p) => {
+                    let r = p.visual_bounding_rect();
+                    r.intersects(within).then_some(r)
+                }
+                egui::Shape::Vec(v) => v.iter().find_map(|s| find_icon(s, within)),
+                _ => None,
+            }
+        }
+        h.output().shapes.iter().find_map(|cs| find_icon(&cs.shape, within)).unwrap_or_else(|| panic!("the painted icon"))
+    }
+
+    /// A section header drawn in `dir`: its title box, its chevron box, and the row it sits in.
+    fn section_header(dir: Dir) -> (egui::Rect, egui::Rect, egui::Rect) {
+        let _dir = direction_scope(dir);
+        let mut h = Harness::builder().with_size(vec2(300.0, 120.0)).build_ui_state(
+            |ui, _state: &mut ()| {
+                // The fonts are installed after the harness is built: the first frame has
+                // none, and the painted captions would panic without them.
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    section(ui, "appearance", "Appearance");
+                }
+            },
+            (),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        let row = sections_drawn(&h.ctx).into_iter().find(|(title, _)| title == "Appearance").map(|(_, r)| r).unwrap_or_else(|| panic!("the section row"));
+        (painted_text(&h, "Appearance"), painted_icon(&h, row), row)
+    }
+
+    /// The painted text boxes of a draw call in `dir`.
+    fn painted_in(dir: Dir, draw: impl Fn(&mut egui::Ui)) -> Vec<(String, egui::Rect)> {
+        let _dir = direction_scope(dir);
+        let mut h = Harness::builder().with_size(vec2(300.0, 120.0)).build_ui_state(
+            move |ui, _state: &mut ()| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    draw(ui);
+                }
+            },
+            (),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h.output()
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) => Some((t.galley.job.text.clone(), t.galley.rect.translate(t.pos.to_vec2()))),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A layer to draw the header of.
+    fn layer() -> Layer {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+        let id = s.execute("layer.new.layer", json!({"name": "Paint"})).unwrap()["layer"].as_u64().unwrap();
+        s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().clone()
+    }
+
+    /// The section header reads from the right in a right-to-left UI: the title ends 18 px
+    /// before the row's right edge, where the chevron leads it.
+    #[test]
+    fn section_header_reads_from_the_right_in_rtl() {
+        let (ltr_title, ltr_chev, ltr_row) = section_header(Dir::Ltr);
+        assert!((ltr_title.left() - (ltr_row.left() + 18.0)).abs() < 1.0, "LTR: the title starts 18 px into its row: {ltr_title:?} {ltr_row:?}");
+        assert!((ltr_chev.center().x - (ltr_row.left() + 7.0)).abs() < 1.0, "LTR: the chevron leads 7 px into its row: {ltr_chev:?} {ltr_row:?}");
+        assert!(ltr_chev.right() <= ltr_title.left(), "LTR: the chevron stays before the title: {ltr_chev:?} {ltr_title:?}");
+
+        let (rtl_title, rtl_chev, rtl_row) = section_header(Dir::Rtl);
+        assert!((rtl_title.right() - (rtl_row.right() - 18.0)).abs() < 1.0, "RTL: the title ends 18 px before its row's right edge: {rtl_title:?} {rtl_row:?}");
+        assert!(
+            (rtl_chev.center().x - (rtl_row.right() - 7.0)).abs() < 1.0,
+            "RTL: the chevron leads 7 px before its row's right edge: {rtl_chev:?} {rtl_row:?}"
+        );
+        assert!(rtl_chev.left() >= rtl_title.right(), "RTL: the chevron stays after the title: {rtl_chev:?} {rtl_title:?}");
+    }
+
+    /// The layer header's icon and name stay on the physical left and the stacked label on the
+    /// physical right: the fields around them mirror, these do not.
+    #[test]
+    fn the_layer_header_and_the_stacked_label_stay_physical() {
+        let layer = layer();
+        let draw = |ui: &mut egui::Ui| {
+            header(ui, &layer);
+            stacked_label(ui, "W", &["W", "H"], LABEL_W, 2.0);
+        };
+        let ltr = painted_in(Dir::Ltr, draw);
+        let rtl = painted_in(Dir::Rtl, draw);
+        for text in ["Paint", "Pixel Layer", "W"] {
+            let ltr_box = ltr.iter().find(|(t, _)| t == text).map(|(_, r)| *r).unwrap_or_else(|| panic!("the LTR `{text}`"));
+            let rtl_box = rtl.iter().find(|(t, _)| t == text).map(|(_, r)| *r).unwrap_or_else(|| panic!("the RTL `{text}`"));
+            assert_eq!(ltr_box, rtl_box, "the `{text}` keeps its physical position");
+        }
+    }
+}

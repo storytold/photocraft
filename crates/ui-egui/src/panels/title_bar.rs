@@ -138,13 +138,10 @@ pub fn title_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.painter().galley(egui::pos2(x, full.center().y - galley.size().y / 2.0), galley, t.text_dim);
             } else if free.1 - free.0 > 80.0 {
                 // Too narrow for the whole name: show the start of it, elided, in the free gap
-                // next to the menus.
+                // next to the menus, anchored at the gap's reading-start edge.
                 let avail = free.1 - free.0 - 2.0 * TITLE_GAP;
-                let mut job = title_job(&title, font, t.text_dim);
-                job.wrap = egui::text::TextWrapping::truncate_at_width(avail);
-                let g = ui.painter().layout_job(job);
-                let x = if rtl { free.1 - TITLE_GAP - g.size().x } else { free.0 + TITLE_GAP };
-                ui.painter().galley(egui::pos2(x, full.center().y - g.size().y / 2.0), g, t.text_dim);
+                let free_rect = egui::Rect::from_min_max(egui::pos2(free.0, full.top()), egui::pos2(free.1, full.bottom()));
+                crate::direction::paint_elided(ui.painter(), crate::direction::start_x(free_rect, TITLE_GAP), full.center().y, avail, &title, font, t.text_dim);
             }
         });
     if custom {
@@ -182,11 +179,12 @@ pub fn sync_window_title(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
 }
 
-/// The in-app title line. It reads left to right as a whole, so a right-to-left document name keeps
-/// "— PhotoCraft" after it, at the right; egui orders the name's own words.
+/// The in-app title line, based in the UI's direction: left to right in a left-to-right language,
+/// right to left in a right-to-left one, so the line starts at the reading start; egui orders the
+/// name's own words either way (UAX#9).
 pub(crate) fn title_job(title: &str, font: egui::FontId, color: egui::Color32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::simple_singleline(title.to_owned(), font, color);
-    job.direction = egui::epaint::text::TextDirection::LeftToRight;
+    job.direction = crate::direction::text_direction();
     job
 }
 
@@ -210,4 +208,21 @@ pub(super) fn title_x(center: f32, left: f32, right: f32, width: f32) -> Option<
         return Some(lo);
     }
     Some((center - width / 2.0).clamp(lo, hi))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+
+    #[test]
+    fn title_job_bases_its_direction_on_the_ui_direction() {
+        let font = egui::FontId::proportional(13.0);
+        let _ltr = direction_scope(Dir::Ltr);
+        let ltr = title_job("Untitled.png", font.clone(), egui::Color32::WHITE);
+        assert_eq!(ltr.direction, egui::epaint::text::TextDirection::LeftToRight);
+        let _rtl = direction_scope(Dir::Rtl);
+        let rtl = title_job("lashi.png", font, egui::Color32::WHITE);
+        assert_eq!(rtl.direction, egui::epaint::text::TextDirection::RightToLeft);
+    }
 }

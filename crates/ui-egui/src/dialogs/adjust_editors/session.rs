@@ -82,6 +82,13 @@ pub fn properties_reset(ctx: &egui::Context, doc: u64, id: LayerId, adj: &Adjust
 /// The Properties-panel editor of an adjustment layer: previews live (`app.live_adjust`) while a
 /// control moves and commits one `layer.setAdjustment` per gesture.
 pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
+    // The editor is a body of its own: in a right-to-left UI its blocks hug the reading end and
+    // the rows of the editors it hosts mirror.
+    ui.with_layout(crate::direction::body_layout(), |ui| layer_editor_body(app, ui, id, adj));
+}
+
+/// The editor's body, drawn inside the mirrored scope.
+fn layer_editor_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj: &Adjustment) {
     let t = Tokens::get(ui.ctx());
     let kind = photocraft_engine::commands::adjustment_kind(adj);
     match adj {
@@ -144,5 +151,53 @@ pub fn layer_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, adj
             tone::keep_after_commit(app, id, rev);
         }
         app.live_adjust = None;
+    }
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::kittest::Queryable;
+
+    /// The Properties editor harness: the app and the column the editor draws in.
+    struct State {
+        app: PhotocraftApp,
+        column: egui::Rect,
+    }
+
+    /// Draw the Properties editor of `adj` in `dir`.
+    fn harness(dir: Dir, adj: Adjustment) -> egui_kittest::Harness<'static, State> {
+        let _dir = direction_scope(dir);
+        let state = State { app: PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()), column: egui::Rect::ZERO };
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(320.0, 200.0)).build_ui_state(
+            move |ui, state: &mut State| {
+                // The fonts install after the harness's first frame; skip that one.
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                state.column = ui.available_rect_before_wrap();
+                layer_editor(&mut state.app, ui, LayerId(1), &adj);
+            },
+            state,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(2);
+        h
+    }
+
+    /// The editor's notice hugs the reading end of its column: the right in a right-to-left UI,
+    /// the left in a left-to-right one.
+    #[test]
+    fn the_editor_notice_hugs_the_reading_end() {
+        let ltr = harness(Dir::Ltr, Adjustment::Invert);
+        let notice = ltr.get_by_label("Invert has no settings.").rect();
+        let column = ltr.state().column;
+        assert!((notice.left() - column.left()).abs() < 2.0, "LTR: {notice:?} in {column:?}");
+
+        let rtl = harness(Dir::Rtl, Adjustment::Invert);
+        let notice = rtl.get_by_label("Invert has no settings.").rect();
+        let column = rtl.state().column;
+        assert!((notice.right() - column.right()).abs() < 2.0, "RTL: {notice:?} in {column:?}");
     }
 }

@@ -68,6 +68,17 @@ fn dim(ui: &mut egui::Ui, s: &str) {
     ui.label(RichText::new(s).color(t.text_dim));
 }
 
+/// A row's trailing controls pinned to the reading end in RTL, so every fixed-width value
+/// field and dropdown in the section bodies shares one trailing edge across rows. LTR keeps
+/// the row's natural left-to-right packing (pixel-identical).
+fn trailing_controls(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)) {
+    if crate::direction::is_rtl() {
+        ui.with_layout(crate::direction::trailing(), add);
+    } else {
+        add(ui);
+    }
+}
+
 /// Whether a dynamic's control has a 0..1 input its own response curve shapes (not Off, not the
 /// direction controls, not Angle Jitter, whose controls set an angle).
 pub(crate) fn takes_curve(control: Control, angle: bool) -> bool {
@@ -87,17 +98,19 @@ fn control_row(ui: &mut egui::Ui, id: &str, d: &mut Dynamic, angle: bool) {
     let mut open: bool = ui.data(|m| m.get_temp(open_id)).unwrap_or(false);
     ui.horizontal(|ui| {
         dim(ui, tl!("Control:"));
-        let n = if angle || matches!(d.control, Control::InitialDirection | Control::Direction) { 8 } else { 6 };
-        widgets::dropdown(ui, id, tl!("Control:"), &mut d.control, &CONTROLS[..n], 130.0);
-        if d.control == Control::Fade {
-            let mut steps = d.fade_steps as f32;
-            if widgets::value_field(ui, &mut steps, 1.0..=9999.0, "", 56.0).accessible_name(tl!("Fade steps")).on_hover_text(tl!("Fade steps")).changed() {
-                d.fade_steps = steps.round().clamp(1.0, 9999.0) as u32;
+        trailing_controls(ui, |ui| {
+            let n = if angle || matches!(d.control, Control::InitialDirection | Control::Direction) { 8 } else { 6 };
+            widgets::dropdown(ui, id, tl!("Control:"), &mut d.control, &CONTROLS[..n], 130.0);
+            if d.control == Control::Fade {
+                let mut steps = d.fade_steps as f32;
+                if widgets::value_field(ui, &mut steps, 1.0..=9999.0, "", 56.0).accessible_name(tl!("Fade steps")).on_hover_text(tl!("Fade steps")).changed() {
+                    d.fade_steps = steps.round().clamp(1.0, 9999.0) as u32;
+                }
             }
-        }
-        if takes_curve(d.control, angle) && crate::icons::button(ui, "spline", 22.0, open || !d.curve.is_linear(), tl!("Response curve")).clicked() {
-            open = !open;
-        }
+            if takes_curve(d.control, angle) && crate::icons::button(ui, "spline", 22.0, open || !d.curve.is_linear(), tl!("Response curve")).clicked() {
+                open = !open;
+            }
+        });
     });
     if open && takes_curve(d.control, angle) {
         let mut points = d.curve.points();
@@ -130,7 +143,7 @@ fn size_row(ui: &mut egui::Ui, label: &str, size: &mut f32, max: f32, restore: O
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
         ui.label(RichText::new(tl!(label)).color(t.text_dim));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::direction::trailing(), |ui| {
             let mut s = *size;
             if widgets::value_field(ui, &mut s, 1.0..=max, "px", 74.0).accessible_name(tl!(label)).changed() {
                 *size = s.round().clamp(1.0, max);
@@ -330,7 +343,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], 
         ui.vertical(|ui| {
             ui.add_space(10.0);
             ui.horizontal(|ui| {
-                ui.allocate_ui_with_layout(vec2(72.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| dim(ui, tl!("Angle:")));
+                ui.allocate_ui_with_layout(vec2(72.0, 24.0), crate::direction::row(), |ui| dim(ui, tl!("Angle:")));
                 let mut a = b.angle;
                 if widgets::value_field(ui, &mut a, -180.0..=180.0, "°", 70.0).accessible_name(tl!("Angle:")).changed() {
                     b.angle = a.round().clamp(-180.0, 180.0);
@@ -338,7 +351,7 @@ fn tip_shape(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset], 
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                ui.allocate_ui_with_layout(vec2(72.0, 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| dim(ui, tl!("Roundness:")));
+                ui.allocate_ui_with_layout(vec2(72.0, 24.0), crate::direction::row(), |ui| dim(ui, tl!("Roundness:")));
                 let mut r = (b.roundness * 100.0).round();
                 if widgets::value_field(ui, &mut r, 1.0..=100.0, "%", 70.0).accessible_name(tl!("Roundness:")).changed() {
                     b.roundness = (r.round() / 100.0).clamp(0.01, 1.0);
@@ -488,7 +501,9 @@ fn texture(ui: &mut egui::Ui, b: &mut BrushSettings) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
         dim(ui, tl!("Mode:"));
-        widgets::dropdown(ui, "brush-texture-mode", tl!("Mode"), &mut tx.mode, &MASK_MODES, 130.0);
+        trailing_controls(ui, |ui| {
+            widgets::dropdown(ui, "brush-texture-mode", tl!("Mode"), &mut tx.mode, &MASK_MODES, 130.0);
+        });
     });
     ui.add_space(4.0);
     pct(ui, tl!("Depth"), &mut tx.depth, 1.0);
@@ -504,9 +519,11 @@ fn dual_brush(ui: &mut egui::Ui, b: &mut BrushSettings, presets: &[BrushPreset])
     let d = &mut b.dual_brush;
     ui.horizontal(|ui| {
         dim(ui, tl!("Mode:"));
-        widgets::dropdown(ui, "brush-dual-mode", tl!("Mode"), &mut d.mode, &MASK_MODES, 120.0);
-        ui.add_space(8.0);
-        widgets::checkbox(ui, &mut d.flip, tl!("Flip"));
+        trailing_controls(ui, |ui| {
+            widgets::dropdown(ui, "brush-dual-mode", tl!("Mode"), &mut d.mode, &MASK_MODES, 120.0);
+            ui.add_space(8.0);
+            widgets::checkbox(ui, &mut d.flip, tl!("Flip"));
+        });
     });
     ui.add_space(4.0);
     // The dual tip is a sub-setting, not a selection: no persistent highlight (a look-alike match
@@ -615,32 +632,40 @@ pub fn section_body(ui: &mut egui::Ui, b: &mut BrushSettings, i: usize, presets:
     let note = |ui: &mut egui::Ui, s: &str| {
         ui.label(RichText::new(s).color(t.text_faint).font(theme::medium(11.5)));
     };
-    if i == 0 {
-        return tip_shape(ui, b, presets, current);
-    }
-    match i {
-        1 => shape_dynamics(ui, b),
-        2 => scattering(ui, b),
-        3 => texture(ui, b),
-        4 => dual_brush(ui, b, presets),
-        5 => color_dynamics(ui, b),
-        6 => {
-            transfer(ui, b, tool);
-            mixer_options(ui, b);
+    // One section body fills the panel at a time: scope the whole body so nested plain
+    // `ui.horizontal` rows mirror exactly once in RTL (LTR keeps the default top_down(Min)).
+    ui.allocate_ui_with_layout(ui.available_size_before_wrap(), crate::direction::body_layout(), |ui| {
+        if i == 0 {
+            return tip_shape(ui, b, presets, current);
         }
-        7 => pose(ui, b),
-        8 => note(ui, "Adds extra randomness to the soft edges of the brush tip. No options: turn it on in the list."),
-        9 => note(ui, "Builds up paint along the edges of the stroke for a watercolour look. No options: turn it on in the list."),
-        10 => {
-            note(ui, tl!("Airbrush: keeps depositing paint while the pointer rests."));
-            ui.add_space(6.0);
-            num(ui, tl!("Rate"), &mut b.build_up_rate, 1.0..=200.0, "/s");
+        match i {
+            1 => shape_dynamics(ui, b),
+            2 => scattering(ui, b),
+            3 => texture(ui, b),
+            4 => dual_brush(ui, b, presets),
+            5 => color_dynamics(ui, b),
+            6 => {
+                transfer(ui, b, tool);
+                mixer_options(ui, b);
+            }
+            7 => pose(ui, b),
+            8 => note(ui, "Adds extra randomness to the soft edges of the brush tip. No options: turn it on in the list."),
+            9 => note(ui, "Builds up paint along the edges of the stroke for a watercolour look. No options: turn it on in the list."),
+            10 => {
+                note(ui, tl!("Airbrush: keeps depositing paint while the pointer rests."));
+                ui.add_space(6.0);
+                num(ui, tl!("Rate"), &mut b.build_up_rate, 1.0..=200.0, "/s");
+            }
+            11 => smoothing(ui, b),
+            _ => note(ui, "Keeps the current pattern and scale when you switch to another textured brush preset."),
         }
-        11 => smoothing(ui, b),
-        _ => note(ui, "Keeps the current pattern and scale when you switch to another textured brush preset."),
-    }
-    None
+        None
+    })
+    .inner
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests;

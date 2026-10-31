@@ -1,23 +1,34 @@
-//! Layers panel row: the right-hand indicators and the name between them and the thumbnails
-//! (#144).
+//! Layers panel row: the indicators and the name between them and the thumbnails (#144).
 //!
 //! The indicators (lock, fx badge with its effects triangle, link, the blend-mode label) are
-//! laid out first, from the row's right edge inward; the name gets the width that is left and
-//! is cut with an ellipsis, so a long name never runs under an indicator at any panel width or
-//! UI scale. The blend-mode label is optional: it is dropped before the name gets too narrow.
-//! The rects drawn each frame are recorded ([`recorded`]) for tests and automation.
+//! laid out first, from the row's reading-start edge (the right edge in a left-to-right UI,
+//! the left edge in a right-to-left one, where the overlay scrollbar also moves); the name
+//! gets the width that is left and is cut with an ellipsis, so a long name never runs under an
+//! indicator at any panel width or UI scale. The blend-mode label is optional: it is dropped
+//! before the name gets too narrow. The rects drawn each frame are recorded ([`recorded`]) for
+//! tests and automation.
 
-use egui::{Align2, FontId, Galley, Painter, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
+use egui::{FontId, Painter, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use photocraft_color::BlendMode;
 use photocraft_doc::{Adjustment, Layer, LayerContent};
 use serde_json::{Value, json};
-use std::sync::Arc;
 
 use crate::icons;
 use crate::theme::{self, Tokens};
 
-/// Space kept free at a row's right edge: the overlay scrollbar sits there.
+/// Space kept free at a row's pad edge: the overlay scrollbar sits there (right in a
+/// left-to-right UI, left in a right-to-left one).
 pub const RIGHT_PAD: f32 = 10.0;
+
+/// The x where a row's indicators start packing: the reading-end pad edge, where the overlay
+/// scrollbar sits (`row.right() - RIGHT_PAD`, or `row.left() + RIGHT_PAD` in a right-to-left UI).
+pub fn pad_edge(row: Rect) -> f32 {
+    crate::direction::end_x(row, RIGHT_PAD)
+}
+
+// The signed x-step and reading-start x for hand-painted row geometry live at the core.
+pub use crate::direction::{start_x, step};
+
 /// Gap between indicators, and between the name and the first indicator.
 const GAP: f32 = 4.0;
 /// Width of an icon indicator (lock, link).
@@ -52,25 +63,33 @@ pub struct RowRects {
     pub indicators: Vec<(Indicator, Rect)>,
 }
 
-/// Lay out `items` (right to left, with their widths; `Blend` is optional) inside `row`,
-/// leaving the name the span from `name_left`. Returns the indicator rects and the name's
-/// right limit.
-pub fn layout(row: Rect, name_left: f32, items: &[(Indicator, f32)]) -> (Vec<(Indicator, Rect)>, f32) {
-    let mut right = row.right() - RIGHT_PAD;
+/// Lay out `items` in reading order inside `row` — packed from the row's right edge in a
+/// left-to-right UI, from its left edge in a right-to-left one — leaving the name the span
+/// from `name_anchor` (where the name starts, in reading order) to the returned limit. `Blend`
+/// is optional: it is dropped before the name gets too narrow. Returns the indicator rects and
+/// the name's far limit.
+pub fn layout(row: Rect, name_anchor: f32, items: &[(Indicator, f32)]) -> (Vec<(Indicator, Rect)>, f32) {
+    let rtl = crate::direction::is_rtl();
+    // The indicators pack from the pad edge toward the name, against the reading direction.
+    let dir = -step();
+    let mut cursor = pad_edge(row);
     let mut out = Vec::with_capacity(items.len());
     for &(kind, w) in items {
         let w = w.max(0.0);
         // The fx badge hugs its triangle; everything else keeps a gap.
         let gap = if kind == Indicator::Fx && out.last().is_some_and(|(k, _)| *k == Indicator::FxTriangle) { 1.0 } else { GAP };
-        let left = right - w;
-        if kind == Indicator::Blend && left - GAP - name_left < MIN_NAME_W {
+        let far = cursor + dir * w;
+        // The edge of this item that faces the name.
+        let near = cursor.min(far) + dir * gap;
+        let room = if rtl { name_anchor - near } else { near - name_anchor };
+        if kind == Indicator::Blend && room < MIN_NAME_W {
             continue;
         }
-        out.push((kind, Rect::from_min_max(pos2(left, row.top()), pos2(right, row.bottom()))));
-        right = left - gap;
+        out.push((kind, Rect::from_min_max(pos2(cursor.min(far), row.top()), pos2(cursor.max(far), row.bottom()))));
+        cursor = far + dir * gap;
     }
-    let name_right = out.last().map_or(right, |(_, r)| r.left() - GAP);
-    (out, name_right)
+    let name_limit = out.last().map_or(cursor, |(_, r)| if rtl { r.right() + GAP } else { r.left() - GAP });
+    (out, name_limit)
 }
 
 /// The PSD key of the adjustment `l` holds when PhotoCraft keeps it as imported but cannot
@@ -82,7 +101,7 @@ pub fn unsupported_key(l: &Layer) -> Option<&str> {
     }
 }
 
-/// Width the always-shown indicators of `l` take at the row's right (blend label excluded).
+/// Width the always-shown indicators of `l` take at the row's pad edge (blend label excluded).
 pub fn reserved_width(l: &Layer) -> f32 {
     let mut w = RIGHT_PAD;
     if unsupported_key(l).is_some() {
@@ -113,38 +132,17 @@ pub fn indent(depth: usize, row_width: f32, fixed: f32) -> f32 {
     (depth as f32 * 14.0).min((row_width - fixed - MIN_NAME_W).max(0.0))
 }
 
-/// A single-line galley cut with "…" to `max_width` (nothing when there's no room).
-pub fn truncated(painter: &Painter, text: &str, font: FontId, color: egui::Color32, italics: bool, max_width: f32) -> Option<Arc<Galley>> {
-    if max_width < 8.0 {
-        return None;
-    }
-    let format = egui::text::TextFormat { font_id: font, color, italics, ..Default::default() };
-    let layout = |s: &str, wrap: bool| {
-        let mut job = egui::text::LayoutJob::default();
-        job.append(s, 0.0, format.clone());
-        if wrap {
-            job.wrap = egui::text::TextWrapping { max_width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
-        }
-        painter.layout_job(job)
-    };
-    // A right-to-left name (Arabic, Hebrew) too long for the row is cut at its logical end, so its
-    // start stays and "…" is at the left (`bidi_text::elide`).
-    if let Some(shown) = crate::bidi_text::elide(text, |s| layout(s, false).size().x <= max_width) {
-        return Some(layout(&shown, false));
-    }
-    // egui puts a right-to-left name into display order itself; left-to-right names are cut at
-    // their right end by egui.
-    Some(layout(text, true))
-}
 
-/// Paint `l`'s right-hand indicators in `row` and handle the effects triangle. Returns the
-/// name's right limit, the indicator rects, and whether the triangle was clicked this frame (so
-/// the row doesn't also treat the click as a selection).
+
+/// Paint `l`'s indicators in `row` (packed from the reading-start edge) and handle the effects
+/// triangle. `name_anchor` is where the name starts in reading order. Returns the name's far
+/// limit, the indicator rects, and whether the triangle was clicked this frame (so the row
+/// doesn't also treat the click as a selection).
 pub fn indicators(
     ui: &egui::Ui,
     painter: &Painter,
     row: Rect,
-    name_left: f32,
+    name_anchor: f32,
     l: &Layer,
     fx_open: bool,
     actions: &mut Vec<(String, Value)>,
@@ -181,7 +179,7 @@ pub fn indicators(
     if let Some(g) = &blend_galley {
         items.push((Indicator::Blend, g.size().x));
     }
-    let (rects, name_right) = layout(row, name_left, &items);
+    let (rects, name_limit) = layout(row, name_anchor, &items);
     let mut clicked = false;
     let cy = row.center().y;
     for &(kind, r) in &rects {
@@ -232,31 +230,40 @@ pub fn indicators(
             }
         }
     }
-    (name_right, rects, clicked)
+    (name_limit, rects, clicked)
 }
 
-/// A small disclosure triangle: pointing down when open, right when closed.
+/// A small disclosure triangle: pointing down when open, right when closed (left in a
+/// right-to-left UI).
 pub fn paint_triangle(painter: &Painter, c: Pos2, open: bool, color: egui::Color32) {
     let s = 3.0;
+    // A painted polygon, not an icon: the flip is local to this triangle.
+    let sgn = if crate::direction::is_rtl() { -1.0 } else { 1.0 };
     let pts = if open {
         vec![pos2(c.x - s, c.y - s * 0.6), pos2(c.x + s, c.y - s * 0.6), pos2(c.x, c.y + s * 0.6)]
     } else {
-        vec![pos2(c.x - s * 0.6, c.y - s), pos2(c.x + s * 0.6, c.y), pos2(c.x - s * 0.6, c.y + s)]
+        vec![pos2(c.x - sgn * s * 0.6, c.y - s), pos2(c.x + sgn * s * 0.6, c.y), pos2(c.x - sgn * s * 0.6, c.y + s)]
     };
     painter.add(Shape::convex_polygon(pts, color, Stroke::NONE));
 }
 
-/// Paint `text` left-aligned at `x`, vertically centred on `cy`, cut to end before `right`.
-/// Returns the painted rect.
-pub fn label(painter: &Painter, x: f32, cy: f32, right: f32, text: &str, font: FontId, color: egui::Color32) -> Option<Rect> {
-    let g = truncated(painter, text, font, color, false, right - x)?;
-    let r = Align2::LEFT_CENTER.anchor_size(pos2(x, cy), g.size());
-    painter.galley(r.min, g, color);
-    Some(r)
-}
+
 
 /// Photoshop-style Layers flyout commands. The dock owns tab-group controls, not this menu.
+/// Callers wrap in `direction::popup_body`, which owns the sizing pass; the paint pass re-scopes
+/// justified at `Max` so the full-width item rows mirror and their labels hug the reading-start
+/// edge (a `Min` cross align hugs the left even under the direction flag).
 pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
+    if crate::direction::is_rtl() && !ui.is_sizing_pass() {
+        let max_rect = ui.max_rect();
+        ui.scope_builder(egui::UiBuilder::new().max_rect(max_rect).layout(egui::Layout::top_down_justified(egui::Align::Max)), |ui| panel_menu_body(app, ui));
+    } else {
+        panel_menu_body(app, ui);
+    }
+}
+
+/// The flyout's commands.
+fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     use crate::layers_panel_ui::run_menu_command;
     use crate::state::LayersPanelDialog;
 
@@ -442,7 +449,14 @@ pub fn rename_field(ui: &mut egui::Ui, layer: u64, rect: Rect) -> Option<(String
     let ctx = ui.ctx().clone();
     let mut r = rename(&ctx).filter(|r| r.layer == layer)?;
     let id = egui::Id::unique(("layer-rename-field", layer));
-    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(FontId::proportional(12.5))).accessible_name(tl!("Name"));
+    let font = FontId::proportional(12.5);
+    // In a right-to-left UI the name runs right-to-left, aligned to the field's right edge, so
+    // an Arabic name reads from the right; a left-to-right UI keeps egui's default single-line
+    // edit, pixel-identical.
+    let mut layouter = crate::widgets::rtl_singleline_layouter(font.clone());
+    let te = ui
+        .put(rect, crate::widgets::rtl_singleline(&mut r.text, &mut layouter).id(id).font(font))
+        .accessible_name(tl!("Name"));
     r.pass = ctx.cumulative_pass_nr();
     if !r.focused {
         te.request_focus();
@@ -475,6 +489,9 @@ pub fn rename_field(ui: &mut egui::Ui, layer: u64, rect: Rect) -> Option<(String
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests;
 
 #[cfg(test)]
 mod rename_tests;

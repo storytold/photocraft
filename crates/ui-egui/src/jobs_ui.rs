@@ -635,14 +635,10 @@ pub fn bar(ui: &egui::Ui, rect: Rect, frac: Option<f32>, t: &Tokens) {
     let r = rect.height() / 2.0;
     p.rect_filled(rect, r, t.field);
     p.rect_stroke(rect, r, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
+    let time = ui.input(|i| i.time) as f32;
     let fill = match frac {
-        Some(f) => Rect::from_min_size(rect.min, vec2((rect.width() * f.clamp(0.0, 1.0)).max(rect.height()), rect.height())),
-        None => {
-            let time = ui.input(|i| i.time) as f32;
-            let w = rect.width() * 0.3;
-            let x = rect.left() + ((time * 0.8).fract() * (rect.width() + w)) - w;
-            Rect::from_min_max(egui::pos2(x.max(rect.left()), rect.top()), egui::pos2((x + w).min(rect.right()), rect.bottom()))
-        }
+        Some(f) => crate::widgets::progress_fill(rect, f, rect.height()),
+        None => crate::widgets::progress_travel(rect, time),
     };
     if fill.width() > 0.0 {
         p.rect_filled(fill, r, t.accent);
@@ -750,26 +746,30 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Photoshop doesn't dim the window behind its progress dialog either.
     let modal = egui::Modal::new(egui::Id::unique("job-progress")).backdrop_color(Color32::from_black_alpha(36)).show(ctx, |ui| {
         ui.set_width(360.0);
-        ui.label(RichText::new(tl!(&j.label)).font(crate::theme::semibold(15.0)));
-        ui.add_space(4.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(10.0);
-        let msg = if j.message.is_empty() || j.message == j.label { tl!("Working…").to_string() } else { j.message.clone() };
-        ui.label(RichText::new(msg).color(t.text_dim));
-        ui.add_space(8.0);
-        let (br, _) = ui.allocate_exact_size(vec2(ui.available_width(), 8.0), Sense::hover());
-        bar(ui, br, shown_fraction(&j), &t);
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(percent(&j)).color(t.text_faint).size(11.5));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(RichText::new(elapsed(j.elapsed_ms)).color(t.text_faint).size(11.5));
+        // One direction-aware body: in LTR `body_layout()` is the Modal's own layout, so nothing
+        // moves; in RTL the blocks hug the reading end and every nested row mirrors.
+        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(crate::direction::body_layout()), |ui| {
+            ui.label(RichText::new(tl!(&j.label)).font(crate::theme::semibold(15.0)));
+            ui.add_space(4.0);
+            crate::widgets::hairline(ui);
+            ui.add_space(10.0);
+            let msg = if j.message.is_empty() || j.message == j.label { tl!("Working…").to_string() } else { j.message.clone() };
+            ui.label(RichText::new(msg).color(t.text_dim));
+            ui.add_space(8.0);
+            let (br, _) = ui.allocate_exact_size(vec2(ui.available_width(), 8.0), Sense::hover());
+            bar(ui, br, shown_fraction(&j), &t);
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new(percent(&j)).color(t.text_faint).size(11.5));
+                ui.with_layout(crate::direction::trailing(), |ui| {
+                    ui.label(RichText::new(elapsed(j.elapsed_ms)).color(t.text_faint).size(11.5));
+                });
             });
-        });
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            cancel_it = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
-            ui.label(RichText::new(tl!("Esc to cancel")).color(t.text_faint).size(11.0));
+            ui.add_space(12.0);
+            ui.with_layout(crate::direction::trailing(), |ui| {
+                cancel_it = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
+                ui.label(RichText::new(tl!("Esc to cancel")).color(t.text_faint).size(11.0));
+            });
         });
     });
     // A click on the backdrop doesn't cancel the work; Esc is handled in `tick`.
@@ -822,7 +822,7 @@ pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
     let card = Rect::from_center_size(area.center(), vec2(OPEN_CARD_WIDTH, height));
     let fill = ui.painter().add(egui::Shape::Noop);
     let border = ui.painter().add(egui::Shape::Noop);
-    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card.shrink(OPEN_CARD_PAD)));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(card.shrink(OPEN_CARD_PAD)).layout(crate::direction::body_layout()));
     let title = child
         .add(egui::Label::new(RichText::new(crate::i18n::fmt(tl!("Opening {name}"), &[("name", &tab.name)])).font(crate::theme::semibold(14.0))).truncate())
         .rect;
@@ -837,7 +837,7 @@ pub fn open_card(app: &mut PhotocraftApp, ui: &mut egui::Ui, job: JobId) {
     let mut cancel_rect = Rect::NOTHING;
     child.horizontal(|ui| {
         ui.label(RichText::new(percent(&j)).color(t.text_faint).size(11.5));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::direction::trailing(), |ui| {
             let r = crate::widgets::secondary_button(ui, tl!("Cancel"), 76.0);
             cancel_it = r.clicked();
             cancel_rect = r.rect;
@@ -867,8 +867,7 @@ pub fn open_tabs(app: &PhotocraftApp) -> Vec<(JobId, String, f32)> {
 pub fn tab_underline(ui: &egui::Ui, r: Rect, frac: f32, t: &Tokens) {
     let line = Rect::from_min_max(egui::pos2(r.left() + 4.0, r.bottom() - 3.0), egui::pos2(r.right() - 4.0, r.bottom() - 1.0));
     ui.painter().rect_filled(line, 1.0, t.field_border);
-    let f = Rect::from_min_size(line.min, vec2(line.width() * frac.clamp(0.0, 1.0), line.height()));
-    ui.painter().rect_filled(f, 1.0, t.accent);
+    ui.painter().rect_filled(crate::widgets::progress_fill(line, frac, 0.0), 1.0, t.accent);
 }
 
 /// Jobs for `ui.inspect`.

@@ -198,35 +198,40 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let (mut quality, mut format) = (p.quality, p.format);
     let modal = egui::Modal::new(egui::Id::unique("jpeg-options")).show(ctx, |ui| {
         ui.set_max_width(360.0);
-        ui.label(egui::RichText::new(tl!("JPEG Options")).font(crate::theme::semibold(15.0)));
-        ui.add_space(4.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(8.0);
-        crate::widgets::section_label(ui, tl!("Image Options"));
-        ui.horizontal(|ui| {
-            let quality_caption = ui.label(tl!("Quality"));
-            ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1)).labelled_by(quality_caption.id);
-            // Photoshop's presets: picking one sets the quality it starts at.
-            let preset = craft_ui::ComboBox::from_id_salt("jpeg-quality-preset").selected_text(quality_label(quality)).show_ui(ui, |ui| {
-                for q in [3, 5, 8, 10] {
-                    if ui.selectable_label(quality_label(quality) == quality_label(q), quality_label(q)).clicked() {
-                        quality = q;
+        // One direction-aware body: in LTR `body_layout()` is the Modal's own layout, so nothing
+        // moves; in RTL the blocks right-align and every nested row mirrors.
+        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(crate::direction::body_layout()), |ui| {
+            ui.label(egui::RichText::new(tl!("JPEG Options")).font(crate::theme::semibold(15.0)));
+            ui.add_space(4.0);
+            crate::widgets::hairline(ui);
+            ui.add_space(8.0);
+            crate::widgets::section_label(ui, tl!("Image Options"));
+            ui.horizontal(|ui| {
+                let quality_caption = ui.label(tl!("Quality"));
+                ui.add(egui::DragValue::new(&mut quality).range(0..=MAX_QUALITY).speed(0.1)).labelled_by(quality_caption.id);
+                // Photoshop's presets: picking one sets the quality it starts at.
+                let preset = craft_ui::ComboBox::from_id_salt("jpeg-quality-preset").selected_text(quality_label(quality)).show_ui(ui, |ui| {
+                    for q in [3, 5, 8, 10] {
+                        if ui.selectable_label(quality_label(quality) == quality_label(q), quality_label(q)).clicked() {
+                            quality = q;
+                        }
                     }
-                }
+                });
+                let _ = preset.response.accessible_name(tl!("Preset"));
             });
-            let _ = preset.response.accessible_name(tl!("Preset"));
-        });
-        ui.add(egui::Slider::new(&mut quality, 0..=MAX_QUALITY).show_value(false)).accessible_name(tl!("Quality"));
-        ui.add_space(8.0);
-        crate::widgets::section_label(ui, tl!("Format Options"));
-        ui.radio_value(&mut format, JpegFormat::Baseline, tl!("Baseline (\"Standard\")"));
-        ui.radio_value(&mut format, JpegFormat::Optimized, tl!("Baseline Optimized"));
-        ui.radio_value(&mut format, JpegFormat::Progressive, tl!("Progressive"));
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
-            cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
+            ui.add(egui::Slider::new(&mut quality, 0..=MAX_QUALITY).show_value(false)).accessible_name(tl!("Quality"));
+            ui.add_space(8.0);
+            crate::widgets::section_label(ui, tl!("Format Options"));
+            ui.radio_value(&mut format, JpegFormat::Baseline, tl!("Baseline (\"Standard\")"));
+            ui.radio_value(&mut format, JpegFormat::Optimized, tl!("Baseline Optimized"));
+            ui.radio_value(&mut format, JpegFormat::Progressive, tl!("Progressive"));
+            ui.add_space(12.0);
+            // The group hugs the row's reading end: the right edge in LTR, the left in RTL.
+            ui.with_layout(crate::direction::trailing(), |ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
+                cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
+            });
         });
     });
     cancel |= modal.should_close();
@@ -370,5 +375,46 @@ mod tests {
         assert_eq!(choice_param(&step, "file.saveAs"), Ok(Some(c)), "a recorded step replays the same answer");
         let unset = JpegChoice { quality: None, format: JpegFormat::Progressive }.apply(ExportSettings { jpeg_quality: Some(95), ..ExportSettings::default() });
         assert_eq!(unset.jpeg_quality, Some(95), "no quality keeps the quality the save had");
+    }
+
+    /// The dialog mirrors in a right-to-left UI: the button group moves to the other end of the
+    /// dialog and its order flips, while the dialog keeps the same width.
+    #[test]
+    fn the_dialog_mirrors_in_a_right_to_left_ui() {
+        use egui_kittest::kittest::Queryable;
+
+        let buttons = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.jpeg_options = Some(Prompt {
+                doc: photocraft_doc::DocId(1),
+                path: "a.jpg".into(),
+                quality: 8,
+                format: JpegFormat::Baseline,
+                own_quality: None,
+                copy: false,
+                record: "file.saveAs",
+            });
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(800.0, 600.0))
+                .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+                .build_ui_state(|ui, app| show(app, ui.ctx()), app);
+            h.run_steps(3);
+            let modal = h.ctx.memory(|m| m.area_rect(egui::Id::unique("jpeg-options"))).expect("the modal");
+            (h.get_by_label("OK").rect(), h.get_by_label("Cancel").rect(), modal, h.get_by_label("JPEG Options").rect())
+        };
+        let (ok_l, cancel_l, modal_l, title_l) = buttons(crate::direction::Dir::Ltr);
+        let (ok_r, cancel_r, modal_r, title_r) = buttons(crate::direction::Dir::Rtl);
+        assert!(ok_l.left() > cancel_l.left(), "LTR: OK at the reading end");
+        assert!(ok_r.left() < cancel_r.left(), "RTL: the button order mirrors");
+        // The group hugs the reading end of the dialog: the right in LTR, the left in RTL.
+        assert!(modal_l.right() - ok_l.right() < 40.0, "LTR: the group hugs the right: {ok_l:?} in {modal_l:?}");
+        assert!(ok_r.left() - modal_r.left() < 40.0, "RTL: the group hugs the left: {ok_r:?} in {modal_r:?}");
+        // The dialog is the same width in both directions.
+        assert!((modal_l.width() - modal_r.width()).abs() < 1.0, "the same width in both directions");
+        // The body stays inside the modal's own box in both directions.
+        for (title, modal) in [(title_l, modal_l), (title_r, modal_r)] {
+            assert!(title.left() >= modal.left() - 1.0 && title.right() <= modal.right() + 1.0, "the title stays inside the modal box: {title:?} in {modal:?}");
+        }
     }
 }

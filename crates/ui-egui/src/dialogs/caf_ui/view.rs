@@ -28,6 +28,54 @@ impl View {
     }
 }
 
+/// The height of the workspace's title strip.
+const TITLE_H: f32 = 30.0;
+
+/// The workspace's panes: the tool strip, the Content-Aware Fill panel, the preview panel and
+/// the document view.
+#[derive(Clone, Copy)]
+struct Panes {
+    title: ERect,
+    bar: ERect,
+    strip: ERect,
+    panel: ERect,
+    preview: ERect,
+    view: ERect,
+}
+
+/// Lays the workspace out in reading order: the tool strip hugs the reading-start edge, the
+/// Content-Aware Fill panel the reading-end edge, the preview panel sits between the panel and
+/// the document view, and the document view takes what is left.
+fn panes(full: ERect, rtl: bool) -> Panes {
+    let title = ERect::from_min_size(full.min, vec2(full.width(), TITLE_H));
+    let bar = ERect::from_min_size(pos2(full.left(), title.bottom()), vec2(full.width(), BAR_H));
+    let body = ERect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
+    let strip_x = if rtl { full.right() - LEFT_W } else { full.left() };
+    let strip = ERect::from_min_size(pos2(strip_x, title.bottom()), vec2(LEFT_W, full.height() - title.height()));
+    let panel_x = if rtl { body.left() } else { body.right() - PANEL_W };
+    let panel = ERect::from_min_size(pos2(panel_x, body.top()), vec2(PANEL_W, body.height()));
+    let pv_x = if rtl { panel.right() } else { panel.left() - PREVIEW_W };
+    let preview = ERect::from_min_size(pos2(pv_x, body.top()), vec2(PREVIEW_W, body.height()));
+    let (view_min, view_max) = if rtl {
+        (pos2(preview.right(), body.top()), pos2(strip.left(), body.bottom()))
+    } else {
+        (pos2(strip.right(), body.top()), pos2(preview.left(), body.bottom()))
+    };
+    Panes { title, bar, strip, panel, preview, view: ERect::from_min_max(view_min, view_max) }
+}
+
+/// The preview's image area: below its title strip, above the zoom row.
+fn preview_area(pv_rect: ERect) -> ERect {
+    ERect::from_min_max(pv_rect.min + vec2(0.0, 30.0), pv_rect.max - vec2(0.0, 44.0))
+}
+
+/// The spinner in the preview's corner: 8 pt in from the reading-start edge, 8 pt up from the
+/// bottom.
+fn spinner_rect(pv_area: ERect, rtl: bool) -> ERect {
+    let min = if rtl { pv_area.left_bottom() + vec2(8.0, -26.0) } else { pv_area.right_bottom() - vec2(26.0, 26.0) };
+    ERect::from_min_size(min, vec2(18.0, 18.0))
+}
+
 /// Upload what changed: the document proxy, the overlay, a finished preview.
 /// The options bar of the Content-Aware Fill workspace, for the active tool.
 fn caf_options_bar(bui: &mut egui::Ui, w: &mut CafWorkspace, fill_btn: &mut Option<Value>, reset_what: &mut Option<&str>) {
@@ -145,7 +193,7 @@ fn caf_props_panel(
     widgets::hairline(ui);
     ui.horizontal(|ui| {
         widgets::section_label(ui, tl!("Sampling Area Options"));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::text::direction::trailing(), |ui| {
             if crate::icons::button(ui, "undo-2", 22.0, false, tl!("Reset")).clicked() {
                 *reset_what = Some("sampling");
             }
@@ -164,7 +212,7 @@ fn caf_props_panel(
     widgets::hairline(ui);
     ui.horizontal(|ui| {
         widgets::section_label(ui, tl!("Fill Settings"));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::text::direction::trailing(), |ui| {
             if crate::icons::button(ui, "undo-2", 22.0, false, tl!("Reset")).clicked() {
                 *reset_what = Some("fill");
             }
@@ -209,10 +257,14 @@ fn caf_props_panel(
 
 /// The Preview panel: the sampled result in its own pan / zoom view, and the zoom row under it.
 fn caf_preview_panel(ui: &mut egui::Ui, painter: &egui::Painter, t: &Tokens, w: &mut CafWorkspace, pv_rect: ERect) {
+    let rtl = crate::text::direction::is_rtl();
     painter.rect_filled(pv_rect, 0.0, t.dock);
-    painter.line_segment([pv_rect.left_top(), pv_rect.left_bottom()], Stroke::new(1.0, t.separator));
-    painter.text(pv_rect.left_top() + vec2(12.0, 10.0), Align2::LEFT_TOP, tl!("Preview"), FontId::proportional(12.0), t.text);
-    let pv_area = ERect::from_min_max(pv_rect.min + vec2(0.0, 30.0), pv_rect.max - vec2(0.0, 44.0));
+    let (sep_top, sep_bottom) = if rtl { (pv_rect.right_top(), pv_rect.right_bottom()) } else { (pv_rect.left_top(), pv_rect.left_bottom()) };
+    painter.line_segment([sep_top, sep_bottom], Stroke::new(1.0, t.separator));
+    let (title_pos, title_align) =
+        if rtl { (pv_rect.right_top() + vec2(-12.0, 10.0), Align2::RIGHT_TOP) } else { (pv_rect.left_top() + vec2(12.0, 10.0), Align2::LEFT_TOP) };
+    painter.text(title_pos, title_align, tl!("Preview"), FontId::proportional(12.0), t.text);
+    let pv_area = preview_area(pv_rect);
     painter.rect_filled(pv_area, 0.0, t.canvas);
     if w.preview.zoom <= 0.0 {
         // Opens framed on the sampling window, as Photoshop's.
@@ -235,7 +287,7 @@ fn caf_preview_panel(ui: &mut egui::Ui, painter: &egui::Painter, t: &Tokens, w: 
     }
     if w.preview.shown != w.preview.want {
         // Being recomputed: a spinner in the corner.
-        let sp = ERect::from_min_size(pv_area.right_bottom() - vec2(26.0, 26.0), vec2(18.0, 18.0));
+        let sp = spinner_rect(pv_area, rtl);
         ui.put(sp, egui::Spinner::new().size(16.0));
     }
     let presp = ui.interact(pv_area, egui::Id::unique("caf-preview-view"), Sense::click_and_drag());
@@ -250,7 +302,7 @@ fn caf_preview_panel(ui: &mut egui::Ui, painter: &egui::Painter, t: &Tokens, w: 
         }
     }
     let zrow = ERect::from_min_size(pos2(pv_rect.left() + 10.0, pv_rect.bottom() - 38.0), vec2(PREVIEW_W - 20.0, 30.0));
-    let mut zr = ui.new_child(egui::UiBuilder::new().max_rect(zrow).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    let mut zr = ui.new_child(egui::UiBuilder::new().max_rect(zrow).layout(crate::text::direction::row()));
     let mut pct = (w.preview.zoom * 100.0).round();
     if widgets::value_field(&mut zr, &mut pct, 1.0..=3200.0, "%", 64.0).accessible_name(tl!("Zoom")).changed() {
         w.preview.zoom = pct / 100.0;
@@ -285,52 +337,52 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         w.texture_limit = ctx.input(|i| i.max_texture_side);
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
         let painter = ui.painter().clone();
+        let rtl = crate::text::direction::is_rtl();
+        let p = panes(full, rtl);
         painter.rect_filled(full, 0.0, t.chrome);
         // Title strip.
-        let title = ERect::from_min_size(full.min, vec2(full.width(), 30.0));
-        painter.rect_filled(title, 0.0, t.dock);
-        painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
+        painter.rect_filled(p.title, 0.0, t.dock);
+        painter.line_segment([p.title.left_bottom(), p.title.right_bottom()], Stroke::new(1.0, t.separator));
         let pct = if w.zoom > 0.0 { w.zoom * 100.0 } else { 100.0 };
         painter.text(
-            title.center(),
+            p.title.center(),
             Align2::CENTER_CENTER,
             format!("{} ({}, {:.0}%)", tl!("Content-Aware Fill…").trim_end_matches('…'), w.layer_name, pct),
             FontId::proportional(13.0),
             t.text,
         );
         // Options bar.
-        let bar = ERect::from_min_size(pos2(full.left(), title.bottom()), vec2(full.width(), BAR_H));
-        painter.rect_filled(bar, 0.0, t.dock);
-        painter.line_segment([bar.left_bottom(), bar.right_bottom()], Stroke::new(1.0, t.separator));
-        let mut bui =
-            ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(LEFT_W + 8.0, 4.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        painter.rect_filled(p.bar, 0.0, t.dock);
+        painter.line_segment([p.bar.left_bottom(), p.bar.right_bottom()], Stroke::new(1.0, t.separator));
+        let mut bui = ui.new_child(egui::UiBuilder::new().max_rect(p.bar.shrink2(vec2(LEFT_W + 8.0, 4.0))).layout(crate::text::direction::row()));
         caf_options_bar(&mut bui, w, &mut fill_btn, &mut reset_what);
 
-        let body = ERect::from_min_max(pos2(full.left(), bar.bottom()), full.max);
-        // Left tool strip.
-        let left = ERect::from_min_size(pos2(full.left(), title.bottom()), vec2(LEFT_W, full.height() - title.height()));
-        painter.rect_filled(left, 0.0, t.dock);
-        painter.line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.separator));
-        let mut strip = ui.new_child(egui::UiBuilder::new().max_rect(left.shrink2(vec2(6.0, 8.0))));
+        // The tool strip docks on the reading-start side (left; right in a right-to-left UI).
+        painter.rect_filled(p.strip, 0.0, t.dock);
+        let (sep_a, sep_b) = if rtl { (p.strip.left_top(), p.strip.left_bottom()) } else { (p.strip.right_top(), p.strip.right_bottom()) };
+        painter.line_segment([sep_a, sep_b], Stroke::new(1.0, t.separator));
+        let mut strip = ui.new_child(egui::UiBuilder::new().max_rect(p.strip.shrink2(vec2(6.0, 8.0))).layout(crate::text::direction::body_layout()));
         strip.spacing_mut().item_spacing.y = 4.0;
         for tool in [CafTool::Brush, CafTool::Lasso, CafTool::Hand, CafTool::Zoom] {
             if crate::icons::button(&mut strip, tool_icon(tool), 34.0, w.tool == tool, &tool_tip(tool)).clicked() {
                 w.tool = tool;
             }
         }
-        // Right: the Content-Aware Fill panel.
-        let right = ERect::from_min_size(pos2(body.right() - PANEL_W, body.top()), vec2(PANEL_W, body.height()));
-        painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props =
-            ui.new_child(egui::UiBuilder::new().max_rect(ERect::from_min_max(right.min + vec2(14.0, 12.0), pos2(right.right() - 14.0, right.bottom() - 60.0))));
-        egui::ScrollArea::vertical()
-            .id_salt("caf-props")
-            .show(&mut props, |ui| caf_props_panel(ui, w, &t, &mut reset_what, &mut new_sampling, &mut rebase_needed));
-        // Footer, in Photoshop's order on every platform: reset all at the left, then OK, Apply,
-        // Cancel against the right edge.
-        let foot = ERect::from_min_size(pos2(right.left() + 10.0, right.bottom() - 48.0), vec2(PANEL_W - 20.0, 32.0));
-        let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        // The Content-Aware Fill panel, on the reading-end side (right; left in RTL).
+        painter.rect_filled(p.panel, 0.0, t.dock);
+        let (sep_a, sep_b) = if rtl { (p.panel.right_top(), p.panel.right_bottom()) } else { (p.panel.left_top(), p.panel.left_bottom()) };
+        painter.line_segment([sep_a, sep_b], Stroke::new(1.0, t.separator));
+        let mut props = ui.new_child(
+            egui::UiBuilder::new().max_rect(ERect::from_min_max(p.panel.min + vec2(14.0, 12.0), pos2(p.panel.right() - 14.0, p.panel.bottom() - 60.0))),
+        );
+        egui::ScrollArea::vertical().id_salt("caf-props").show(&mut props, |ui| {
+            crate::text::direction::window_body(ui, |ui| caf_props_panel(ui, w, &t, &mut reset_what, &mut new_sampling, &mut rebase_needed));
+        });
+        // Footer, in Photoshop's order on every platform: reset all at the reading-end's far
+        // side, then OK, Apply, Cancel against the reading end (mirrored in RTL by
+        // `trailing`, which keeps this add order).
+        let foot = ERect::from_min_size(pos2(p.panel.left() + 10.0, p.panel.bottom() - 48.0), vec2(PANEL_W - 20.0, 32.0));
+        let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(crate::text::direction::trailing()));
         if widgets::secondary_button(&mut fb, tl!("Cancel"), 70.0).clicked() {
             action = Some("cancel");
         }
@@ -343,12 +395,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if crate::icons::button(&mut fb, "undo-2", 24.0, false, tl!("Reset")).clicked() {
             reset_what = Some("all");
         }
-        // The Preview panel.
-        let pv_rect = ERect::from_min_size(pos2(right.left() - PREVIEW_W, body.top()), vec2(PREVIEW_W, body.height()));
+        // The Preview panel, between the panel and the document view (mirrored in RTL).
         let uv = ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
-        caf_preview_panel(ui, &painter, &t, w, pv_rect);
+        caf_preview_panel(ui, &painter, &t, w, p.preview);
         // The document view.
-        let area = ERect::from_min_max(pos2(left.right(), body.top()), pos2(pv_rect.left(), body.bottom()));
+        let area = p.view;
         painter.rect_filled(area, 0.0, t.canvas);
         let (cw, chh) = (w.canvas.width() as f32, w.canvas.height() as f32);
         if w.zoom <= 0.0 {
@@ -470,5 +521,120 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    /// A layer with a selection, so the workspace opens.
+    fn app_with_selection() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.session.execute("file.new", json!({"width": 200, "height": 160, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        app.session.execute("select.rect", json!({"x": 90, "y": 70, "width": 20, "height": 20})).unwrap();
+        app.sync_views();
+        app
+    }
+
+    /// The workspace, drawn in the current thread's reading direction.
+    fn workspace() -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let mut app = app_with_selection();
+        super::super::open(&mut app).unwrap();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(1600.0, 1000.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(|ui, app: &mut PhotocraftApp| show(app, ui.ctx()), app);
+        h.run_steps(3);
+        h
+    }
+
+    /// The rect of the one widget labelled `label`.
+    fn rect_of(h: &egui_kittest::Harness<'_, PhotocraftApp>, label: &str) -> ERect {
+        let nodes: Vec<_> = h.query_all_by_label(label).collect();
+        assert_eq!(nodes.len(), 1, "one {label} widget");
+        nodes[0].rect()
+    }
+
+    /// In a right-to-left UI the tool strip hugs the window's right edge, the Content-Aware Fill
+    /// panel its left edge, and the document view is what is left between the two.
+    #[test]
+    fn the_workspace_mirrors_in_a_right_to_left_ui() {
+        let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+        let h = workspace();
+        let window = h.ctx.content_rect();
+        let p = panes(window, true);
+        assert_eq!(p.strip.right(), window.right(), "the tool strip hugs the right edge");
+        assert_eq!(p.panel.left(), window.left(), "the panel hugs the left edge");
+        assert_eq!(p.preview.left(), p.panel.right(), "the preview sits next to the panel");
+        assert_eq!(p.preview.right(), p.view.left(), "the preview sits next to the document view");
+        assert_eq!(p.view.right(), p.strip.left(), "the document view ends at the tool strip");
+        // The strip's buttons follow it: they hug its reading-start edge.
+        let brush = rect_of(&h, &tool_tip(CafTool::Brush));
+        assert!((brush.right() - (p.strip.right() - 6.0)).abs() < 0.5, "the tool buttons hug the strip's right edge: {:?} in {:?}", brush, p.strip);
+    }
+
+    /// The left-to-right layout is the mirror of the right-to-left one.
+    #[test]
+    fn the_workspace_keeps_its_left_to_right_layout() {
+        let _ltr = crate::text::direction::direction_scope(crate::text::direction::Dir::Ltr);
+        let h = workspace();
+        let window = h.ctx.content_rect();
+        let p = panes(window, false);
+        assert_eq!(p.strip.left(), window.left(), "the tool strip hugs the left edge");
+        assert_eq!(p.panel.right(), window.right(), "the panel hugs the right edge");
+        assert_eq!(p.preview.right(), p.panel.left(), "the preview sits next to the panel");
+        assert_eq!(p.preview.left(), p.view.right(), "the preview sits next to the document view");
+        assert_eq!(p.view.left(), p.strip.right(), "the document view starts at the tool strip");
+        // The strip's buttons follow it: they hug its reading-start edge.
+        let brush = rect_of(&h, &tool_tip(CafTool::Brush));
+        assert!((brush.left() - (p.strip.left() + 6.0)).abs() < 0.5, "the tool buttons hug the strip's left edge: {:?} in {:?}", brush, p.strip);
+    }
+
+    /// The footer's buttons mirror with the reading direction, but the Tab walk still follows
+    /// the registration order: Cancel, Apply, OK.
+    #[test]
+    fn the_footer_mirrors_without_changing_the_tab_order() {
+        for (dir, rtl) in [(crate::text::direction::Dir::Ltr, false), (crate::text::direction::Dir::Rtl, true)] {
+            let _dir = crate::text::direction::direction_scope(dir);
+            let mut h = workspace();
+            let cancel = rect_of(&h, "Cancel");
+            let apply = rect_of(&h, "Apply");
+            let ok = rect_of(&h, "OK");
+            if rtl {
+                assert!(cancel.left() < apply.left() && apply.left() < ok.left(), "the footer reads right to left: {cancel:?} {apply:?} {ok:?}");
+            } else {
+                assert!(cancel.left() > apply.left() && apply.left() > ok.left(), "the footer reads left to right: {cancel:?} {apply:?} {ok:?}");
+            }
+            let mut walked: Vec<&str> = Vec::new();
+            for _ in 0..80 {
+                h.key_press(egui::Key::Tab);
+                h.run_steps(1);
+                for label in ["Cancel", "Apply", "OK"] {
+                    let focused = h.query_all_by_label(label).any(|n| n.is_focused());
+                    if focused && walked.last().copied() != Some(label) {
+                        walked.push(label);
+                    }
+                }
+                if walked.len() == 3 {
+                    break;
+                }
+            }
+            assert_eq!(walked, ["Cancel", "Apply", "OK"], "the Tab walk follows the registration order");
+        }
+    }
+
+    /// The preview's spinner stays in the preview image area, in both directions.
+    #[test]
+    fn the_preview_spinner_stays_in_the_preview_area() {
+        for dir in [crate::text::direction::Dir::Ltr, crate::text::direction::Dir::Rtl] {
+            let rtl = dir == crate::text::direction::Dir::Rtl;
+            let window = ERect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 1000.0));
+            let pv_area = preview_area(panes(window, rtl).preview);
+            let sp = spinner_rect(pv_area, rtl);
+            assert!(pv_area.contains_rect(sp), "{dir:?}: the spinner stays in the preview area: {sp:?} in {pv_area:?}");
+        }
     }
 }

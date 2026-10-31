@@ -14,6 +14,12 @@
 //! `--update-notice` previews a newer release without contacting the network.
 //! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
 //!
+//! `--locale <code>` renders in that UI language, like `PHOTOCRAFT_LOCALE` (`ar` mirrors the
+//! shell right-to-left by itself). `--direction rtl|ltr` forces the layout direction, like
+//! `PHOTOCRAFT_UI_DIRECTION` (check mirroring with a left-to-right language, or guard against
+//! double-mirroring). Both re-exec this example with the matching environment variable, which
+//! the language and direction readers read once per process.
+//!
 //! `--monitor 1366x768 --window-top 31` simulates the display the window is on (in points) and
 //! where its content starts on it, e.g. a window running under a Windows taskbar.
 //!
@@ -33,8 +39,75 @@ fn arg(args: &[String], name: &str) -> Option<String> {
     args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
 }
 
+/// `--locale <code>` / `--direction rtl|ltr` seed the language and direction readers, which read
+/// `PHOTOCRAFT_LOCALE` / `PHOTOCRAFT_UI_DIRECTION` once per process. Setting an environment
+/// variable in-process is `unsafe` (forbidden here), so re-exec without the flags.
+fn apply_locale_direction_flags(args: &[String]) {
+    let env = match locale_direction_env(args) {
+        Ok(env) => env,
+        Err(message) => {
+            eprintln!("{message}");
+            std::process::exit(2);
+        }
+    };
+    if env.is_empty() {
+        return;
+    }
+    let exe = std::env::current_exe().expect("current_exe");
+    let status = std::process::Command::new(exe)
+        .args(strip_locale_direction_flags(args))
+        .envs(env)
+        .status()
+        .expect("re-exec snapshot with the locale/direction environment");
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+/// The environment the locale/direction flags seed, or the error for a bad value.
+fn locale_direction_env(args: &[String]) -> Result<Vec<(&'static str, String)>, String> {
+    let mut env = Vec::new();
+    if args.iter().any(|a| a == "--locale") {
+        let tag = arg(args, "--locale").unwrap_or_default();
+        let tag = tag.trim();
+        // Same charset and cap as i18n::system::bounded_tags, so --locale and PHOTOCRAFT_LOCALE behave alike.
+        let plausible = tag.starts_with(|c: char| c.is_ascii_alphanumeric())
+            && tag.len() <= 128
+            && tag.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'_' | b'.' | b'@'));
+        if !plausible {
+            return Err("--locale must be a language tag like ar or pt-BR".into());
+        }
+        env.push(("PHOTOCRAFT_LOCALE", tag.to_owned()));
+    }
+    if args.iter().any(|a| a == "--direction") {
+        let dir = arg(args, "--direction").unwrap_or_default();
+        let dir = dir.trim().to_ascii_lowercase();
+        if dir != "rtl" && dir != "ltr" {
+            return Err("--direction must be rtl or ltr".into());
+        }
+        env.push(("PHOTOCRAFT_UI_DIRECTION", dir));
+    }
+    Ok(env)
+}
+
+/// The argv to re-exec with: the flags and their values dropped.
+fn strip_locale_direction_flags(args: &[String]) -> Vec<&String> {
+    let mut rest = Vec::with_capacity(args.len());
+    let mut skip_value = false;
+    for a in &args[1..] {
+        if skip_value {
+            skip_value = false;
+        } else if a == "--locale" || a == "--direction" {
+            skip_value = true;
+            continue;
+        } else {
+            rest.push(a);
+        }
+    }
+    rest
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    apply_locale_direction_flags(&args);
     let out = arg(&args, "--out").unwrap_or_else(|| "snapshot.png".into());
     let (w, h) = arg(&args, "--size")
         .and_then(|s| s.split_once('x').and_then(|(a, b)| Some((a.parse::<f32>().ok()?, b.parse::<f32>().ok()?))))
@@ -195,4 +268,46 @@ fn main() {
     let img = harness.render().expect("render");
     img.save(&out).expect("save png");
     println!("wrote {out} ({}×{})", img.width(), img.height());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn argv(list: &[&str]) -> Vec<String> {
+        list.iter().copied().map(String::from).collect()
+    }
+
+    #[test]
+    fn flags_seed_the_matching_environment() {
+        assert!(locale_direction_env(&argv(&["snapshot"])).unwrap().is_empty());
+        assert_eq!(locale_direction_env(&argv(&["snapshot", "--locale", "ar"])).unwrap(), vec![("PHOTOCRAFT_LOCALE", "ar".to_owned())]);
+        assert_eq!(locale_direction_env(&argv(&["snapshot", "--direction", "LTR"])).unwrap(), vec![("PHOTOCRAFT_UI_DIRECTION", "ltr".to_owned())]);
+        assert_eq!(
+            locale_direction_env(&argv(&["snapshot", "--locale", "pt-BR", "--direction", "rtl"])).unwrap(),
+            vec![("PHOTOCRAFT_LOCALE", "pt-BR".to_owned()), ("PHOTOCRAFT_UI_DIRECTION", "rtl".to_owned())]
+        );
+    }
+
+    #[test]
+    fn bad_flag_values_are_rejected() {
+        for case in [
+            &["snapshot", "--locale", ""][..],
+            &["snapshot", "--locale"],
+            &["snapshot", "--locale", "--out"],
+            &["snapshot", "--locale", "ar;rm -rf"],
+            &["snapshot", "--direction"],
+            &["snapshot", "--direction", "both"],
+        ] {
+            assert!(locale_direction_env(&argv(case)).is_err(), "{case:?}");
+        }
+    }
+
+    #[test]
+    fn flags_are_stripped_from_the_reexec_argv() {
+        let full = argv(&["snapshot", "--out", "u.png", "--locale", "ar", "--size", "10x10"]);
+        assert_eq!(strip_locale_direction_flags(&full), vec!["--out", "u.png", "--size", "10x10"]);
+        assert!(strip_locale_direction_flags(&argv(&["snapshot", "--direction"])).is_empty());
+        assert!(strip_locale_direction_flags(&argv(&["snapshot"])).is_empty());
+    }
 }

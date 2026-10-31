@@ -101,12 +101,19 @@ pub(super) fn row(
     disp: &mut Value,
 ) {
     let t = Tokens::get(ui.ctx());
-    ui.horizontal(|ui| {
-        // In the page's label column, empty for Bevel & Emboss's Contour (its check box is above).
+    // The row reads in the UI's direction: the label at the reading start, the picker at the end.
+    // One interaction band tall, as `ui.horizontal` allocates, so LTR keeps its top placement.
+    // In a right-to-left fork the available-width read balloons; the column's max_rect carries
+    // the same width the left-to-right read sees at the start of a row.
+    let avail_x = crate::direction::row_width(ui);
+    let size = vec2(avail_x, ui.spacing().interact_size.y);
+    // The capped size keeps the row one band tall in both directions; `row()`'s centreing
+    // then places the label at the same offset from the band top left-to-right and right-to-left.
+    let _r = ui.allocate_ui_with_layout(size, crate::direction::row(), |ui| {
         if label.is_empty() {
-            ui.allocate_exact_size(vec2(super::LABEL_W, 1.0), Sense::hover());
+            ui.add_space(16.0);
         } else {
-            crate::widgets::row_label(ui, label, super::LABEL_W);
+            ui.label(RichText::new(tl!(label)).color(t.text_dim));
         }
         let c = contour_of(disp.get(key));
         let (r, thumb) = ui.allocate_exact_size(vec2(36.0, 36.0), Sense::click());
@@ -181,15 +188,18 @@ pub(super) fn row(
                 });
             }
             ui.separator();
-            if ui.button(tl!("Load Contours…")).clicked() {
-                act = Some(Act::Load);
-            }
-            if ui.button(tl!("Replace Contours…")).clicked() {
-                act = Some(Act::Replace);
-            }
-            if ui.add_enabled(!user.is_empty(), egui::Button::new(tl!("Save Contours…"))).clicked() {
-                act = Some(Act::Save);
-            }
+            // The actions read from the reading start: right-aligned in a right-to-left UI.
+            ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
+                if ui.button(tl!("Load Contours…")).clicked() {
+                    act = Some(Act::Load);
+                }
+                if ui.button(tl!("Replace Contours…")).clicked() {
+                    act = Some(Act::Replace);
+                }
+                if ui.add_enabled(!user.is_empty(), egui::Button::new(tl!("Save Contours…"))).clicked() {
+                    act = Some(Act::Save);
+                }
+            });
         });
         if let Some(name) = delete {
             let r = app.run("layer.layerStyle.contours.delete", json!({"name": name}));
@@ -342,11 +352,16 @@ pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Str
     let mut new_clicked = false;
     let mut commit_name = false;
     let mut preset: Option<String> = None;
-    let modal = egui::Modal::new(mem.with("modal")).show(&ctx, |ui| {
+    // The editor's own modal reads in the UI's direction: the title at the reading start, the
+    // graph and the buttons in reading order. The area's layout reaches the frame's content.
+    let area = egui::Modal::default_area(mem.with("modal")).layout(crate::direction::body_layout());
+    let modal = egui::Modal::new(mem.with("modal")).area(area).show(&ctx, |ui| {
         ui.label(RichText::new(tl!("Contour Editor")).font(crate::theme::semibold(14.0)).color(t.text));
         ui.add_space(6.0);
         ui.horizontal_top(|ui| {
-            ui.vertical(|ui| {
+            // The column mirrors with the UI: its blocks sit at the reading start and its rows
+            // read in the UI's direction.
+            ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tl!("Preset:")).color(t.text_dim));
                     let mut cur = name_of(&c).to_string();
@@ -441,7 +456,8 @@ pub(super) fn editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Str
                 });
             });
             ui.add_space(10.0);
-            ui.vertical(|ui| {
+            // The action column mirrors with the UI: its buttons sit at the reading start.
+            ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
                 if widgets::primary_button(ui, tl!("OK"), 84.0).clicked() {
                     close = Some(true);
                 }
@@ -587,5 +603,85 @@ mod library_tests {
         assert!(!fields.contains_key(EDITOR));
         assert!(ctx.data(|d| d.get_temp::<String>(naming)).is_none());
         assert!(app.session.presets.contours.is_empty());
+    }
+
+    /// The Contour Editor follows the UI's direction: the graph column sits at the reading start
+    /// and the action column at the reading end — the left in a right-to-left UI.
+    #[test]
+    fn the_contour_editor_columns_follow_the_ui_direction() {
+        use egui_kittest::kittest::Queryable;
+        let columns = |dir: crate::direction::Dir| -> (egui::Rect, egui::Rect) {
+            let _dir = crate::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+            app.run("layer.new.layer", json!({})).unwrap();
+            app.run("layer.layerStyle.dropShadow", json!({})).unwrap();
+            let st = app.session.active().unwrap();
+            let mut fields = crate::layer_style::initial_fields(st.doc.layer(st.active_layer.unwrap()).unwrap(), None, 120.0);
+            open_editor(&mut fields, "fx1", "contour");
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(
+                |ui, (app, fields): &mut (PhotocraftApp, Map<String, Value>)| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        editor(app, ui, fields);
+                    }
+                },
+                (app, fields),
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            let labelled = |label: &str| h.query_all_by_label(label).next().expect(label).rect();
+            (labelled("Preset:"), labelled("OK"))
+        };
+        let (ltr_preset, ltr_ok) = columns(crate::direction::Dir::Ltr);
+        assert!(ltr_ok.left() > ltr_preset.left(), "the actions follow the graph: {ltr_ok:?} {ltr_preset:?}");
+        let (rtl_preset, rtl_ok) = columns(crate::direction::Dir::Rtl);
+        assert!(rtl_ok.right() < rtl_preset.right(), "the actions lead in a right-to-left UI: {rtl_ok:?} {rtl_preset:?}");
+    }
+}
+
+/// The Contour row keeps `ui.horizontal`'s one-band height in LTR — the mirrored row is capped
+/// to an interaction band, not the column's remaining height — and mirrors its items in RTL.
+#[cfg(test)]
+mod row_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::kittest::Queryable;
+
+    /// The dropShadow page drawn in `dir`: (bottom of the "Size" row above the contour row,
+    /// the "Contour" label, the "Anti-aliased" checkbox).
+    fn contour_row(dir: Dir) -> (f32, egui::Rect, egui::Rect) {
+        let _dir = direction_scope(dir);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let fields = {
+            let st = app.session.active().unwrap();
+            crate::layer_style::initial_fields(st.doc.layer(st.active_layer.unwrap()).unwrap(), Some("dropShadow"), 120.0)
+        };
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+            |ui, (app, fields): &mut (PhotocraftApp, Map<String, Value>)| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    let mut f = fields.clone();
+                    crate::layer_style::body(app, ui, &mut f);
+                }
+            },
+            (app, fields),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(4);
+        let above = h.query_all_by_label("Size").map(|n| n.rect().bottom()).fold(0.0, f32::max);
+        let labelled = |label: &str| h.query_all_by_label(label).next().expect(label).rect();
+        (above, labelled("Contour"), labelled("Anti-aliased"))
+    }
+
+    #[test]
+    fn the_contour_row_keeps_its_band_in_ltr_and_mirrors_in_rtl() {
+        let (ltr_above, ltr_contour, ltr_aa) = contour_row(Dir::Ltr);
+        assert!(ltr_contour.top() - ltr_above < 12.0, "LTR: the row hugs the row above, one band tall: {ltr_contour:?}");
+        assert!(ltr_aa.left() > ltr_contour.right(), "LTR: the label reads before the controls: {ltr_contour:?} {ltr_aa:?}");
+        let (rtl_above, rtl_contour, rtl_aa) = contour_row(Dir::Rtl);
+        assert!(rtl_contour.top() - rtl_above < 12.0, "RTL: same band, not the remaining column height: {rtl_contour:?}");
+        assert!(rtl_aa.right() < rtl_contour.left(), "RTL: the label sits at the reading start: {rtl_contour:?} {rtl_aa:?}");
+        assert!((ltr_contour.top() - rtl_contour.top()).abs() < 2.0, "the mirroring moves x, not y: {ltr_contour:?} {rtl_contour:?}");
     }
 }

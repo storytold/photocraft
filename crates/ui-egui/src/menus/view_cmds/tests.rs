@@ -843,3 +843,76 @@ fn full_screen_modes_need_a_document() {
     leave_full_screen_without_document(&mut app, &ctx);
     assert_eq!(app.ui.view.screen_mode, "standard");
 }
+
+/// The Change Screen Mode (F) toolbar flyout is direction-symmetric: under RTL its popup is
+/// the same width as under LTR (±1px), rows hug the reading start, and no dead space opens at
+/// the trailing edge (a Max-aligned RTL body scope would inflate the popup to the area width).
+#[test]
+fn screen_mode_flyout_width_is_direction_symmetric() {
+    use egui::{Pos2, Rect, Vec2, vec2};
+    fn flyout(dir: crate::direction::Dir) -> (Rect, Vec<Rect>) {
+        let _scope = crate::direction::direction_scope(dir);
+        let (mut app, ctx) = app_with(1);
+        crate::PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
+        let frame = |app: &mut PhotocraftApp, time: f64, events: Vec<egui::Event>| {
+            let mut out = ctx.run_ui(
+                egui::RawInput { time: Some(time), events, screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 1800.0))), ..Default::default() },
+                |ui| crate::panels::toolbar(app, ui),
+            );
+            out.textures_delta.clear();
+        };
+        frame(&mut app, 0.0, vec![]);
+        frame(&mut app, 0.1, vec![]);
+        // The bottom-most tool-sized clickable button is the Change Screen Mode (F) control.
+        let bx = if crate::theme::Tokens::get(&ctx).pro { 30.0 } else { 36.0 };
+        let (sm_id, at) = ctx
+            .viewport(|v| {
+                v.prev_pass
+                    .widgets
+                    .layers()
+                    .flat_map(|(_, w)| w.iter())
+                    .filter(|w| w.rect.size() == Vec2::splat(bx) && w.sense.senses_click())
+                    .map(|w| (w.id, w.rect))
+                    .collect::<Vec<_>>()
+            })
+            .into_iter()
+            .max_by(|a, b| a.1.top().total_cmp(&b.1.top()))
+            .map(|(id, r)| (id, r.center()))
+            .expect("the screen mode button");
+        let right = |pos: Pos2, pressed: bool| egui::Event::PointerButton { pos, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() };
+        frame(&mut app, 1.0, vec![egui::Event::PointerMoved(at), right(at, true)]);
+        frame(&mut app, 1.1, vec![right(at, false)]);
+        frame(&mut app, 1.2, vec![]);
+        let popup_id = sm_id.with("popup");
+        let popup = ctx.memory(|m| m.area_rect(popup_id)).expect("the flyout is open");
+        // The popup's own Area registers a click-sense "move" widget over the whole popup
+        // rect (id `<popup>.with("move")`); it is popup chrome, not a row, so the row filter
+        // skips a widget spanning the full popup rect.
+        let rows = ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, w)| w.iter())
+                .filter(|w| w.rect != popup && w.sense.senses_click() && popup.contains(w.rect.center()) && w.rect.width() > 100.0)
+                .map(|w| w.rect)
+                .collect::<Vec<_>>()
+        });
+        (popup, rows)
+    }
+    let (ltr_popup, ltr_rows) = flyout(crate::direction::Dir::Ltr);
+    let (rtl_popup, rtl_rows) = flyout(crate::direction::Dir::Rtl);
+    assert_eq!(ltr_rows.len(), 3, "the three screen modes in {ltr_popup:?}: {ltr_rows:?}");
+    assert_eq!(rtl_rows.len(), 3, "the three screen modes in {rtl_popup:?}: {rtl_rows:?}");
+    assert!(
+        (rtl_popup.width() - ltr_popup.width()).abs() <= 1.0,
+        "flyout width RTL {:.1} == LTR {:.1} (±1px): {rtl_popup:?} vs {ltr_popup:?}",
+        rtl_popup.width(),
+        ltr_popup.width()
+    );
+    for r in &rtl_rows {
+        assert!(rtl_popup.right() - r.right() < 12.0, "rtl row hugs the reading start (right): {r:?} in {rtl_popup:?}");
+    }
+    for r in &ltr_rows {
+        assert!(r.left() - ltr_popup.left() < 12.0, "ltr row hugs the left: {r:?} in {ltr_popup:?}");
+    }
+}

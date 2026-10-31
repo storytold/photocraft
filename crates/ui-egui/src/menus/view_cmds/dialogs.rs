@@ -130,113 +130,128 @@ pub fn form_keys(f: &Map<String, Value>) -> Vec<String> {
     keys
 }
 
+/// Caption column width of a mirrored `__form` row: the editors share one column, like the
+/// left-to-right `Grid`'s.
+const FORM_CAPTION_W: f32 = 120.0;
+
 /// Body of a `__form` dialog: text fields, number fields, checkboxes and `__choices` dropdowns.
 pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let choices = f.get("__choices").cloned().unwrap_or(Value::Null);
     // Data-driven labels (a per-part checkbox shows the part's name, not a catalogue entry)
     // come from `__labels` verbatim; everything else goes through the catalogue.
     let labels = f.get("__labels").cloned().unwrap_or(Value::Null);
-    let file_info = f.get("__command").and_then(Value::as_str) == Some("file.fileInfo");
-    let label = |k: &str| {
-        if file_info {
-            match k {
-                "title" => return tl!("Document Title").to_owned(),
-                "copyright" => return tl!("Copyright Notice").to_owned(),
-                "copyrightUrl" => return tl!("Copyright Info URL").to_owned(),
-                _ => {}
-            }
-        }
-        labels.get(k).and_then(Value::as_str).map_or_else(|| label_of(k), str::to_string)
-    };
     let keys = form_keys(f);
     let mut browse: Option<String> = None;
-    egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-        for k in keys {
-            let v = f.get(&k).cloned().unwrap_or(Value::Null);
-            if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
-                let label = ui.label(tl!("File Naming"));
-                let mut naming = v.as_str().unwrap_or_default().to_owned();
-                ui.add(egui::TextEdit::singleline(&mut naming).desired_width(260.0).hint_text("{name}"))
-                    .labelled_by(label.id)
-                    .on_hover_text("{name} · {serial} · {date} (UTC)");
-                f.insert(k, json!(naming));
-                ui.end_row();
+    // RTL hands the rows out in reading order (the fork's `Grid` cannot run under a mirrored
+    // body); LTR is the plain two-column grid. The caption column width is shared either way.
+    crate::direction::form_grid(ui, "form-dialog", [12.0, 6.0], FORM_CAPTION_W, |row| {
+        for k in &keys {
+            if !form_field_renders(f, k) {
                 continue;
             }
-            if k == "quality" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
-                ui.label(label(&k));
-                let mut custom = v.as_f64().is_some();
-                let mut quality = v.as_f64().or_else(|| f.get("__batchQuality").and_then(Value::as_f64)).unwrap_or(8.0).clamp(0.0, 12.0) as f32;
-                ui.horizontal(|ui| {
-                    crate::widgets::checkbox(ui, &mut custom, tl!("Custom"));
-                    ui.add_enabled_ui(custom, |ui| crate::widgets::value_field(ui, &mut quality, 0.0..=12.0, "", 74.0).accessible_name(tl!("Quality")));
-                });
-                // None preserves the command's existing JPEG and lossless WebP defaults.
-                // The inactive custom value is shell state, never a command parameter.
-                f.insert("__batchQuality".into(), json!(quality));
-                f.insert(k, if custom { json!(quality) } else { Value::Null });
-                ui.end_row();
-                continue;
-            }
-            let new = match &v {
-                Value::Array(_) | Value::Object(_) | Value::Null => continue,
-                Value::Bool(b) => {
-                    ui.label("");
-                    let mut b = *b;
-                    ui.checkbox(&mut b, label(&k));
-                    json!(b)
-                }
-                Value::String(s) => {
-                    ui.label(label(&k));
-                    let mut s = s.clone();
-                    match choices.get(&k).and_then(Value::as_array) {
-                        Some(opts) => {
-                            let opts: Vec<(String, String)> = opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), label(o))).collect();
-                            let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
-                            crate::widgets::dropdown(ui, &format!("form-{k}"), &label(&k), &mut s, &refs, 200.0);
-                        }
-                        None => {
-                            if file_info && matches!(k.as_str(), "description" | "keywords" | "copyright") {
-                                egui::ScrollArea::vertical().id_salt(("form-text", &k)).max_height(80.0).show(ui, |ui| {
-                                    let response = ui.add(egui::TextEdit::multiline(&mut s).desired_rows(3).desired_width(260.0)).accessible_name(label(&k));
-                                    if response.has_focus() {
-                                        ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
-                                    }
-                                });
-                            } else {
-                                ui.horizontal(|ui| {
-                                    ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(&k));
-                                    // A folder field gets the system folder picker (#7942, #9357).
-                                    if crate::dialogs::is_folder_field(&k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
-                                        browse = Some(k.clone());
-                                    }
-                                });
-                            }
-                        }
-                    }
-                    json!(s)
-                }
-                Value::Number(n) => {
-                    ui.label(label(&k));
-                    if let Some(mut i) = n.as_i64() {
-                        ui.add(egui::DragValue::new(&mut i).custom_parser(crate::widgets::parse_num)).accessible_name(label(&k));
-                        json!(i)
-                    } else {
-                        let mut x = n.as_f64().unwrap_or(0.0);
-                        ui.add(egui::DragValue::new(&mut x).speed(0.5).custom_parser(crate::widgets::parse_num)).accessible_name(label(&k));
-                        json!(x)
-                    }
-                }
-            };
-            f.insert(k, new);
-            ui.end_row();
+            let caption = form_caption_text(f, k, &labels);
+            row(&caption, &mut |ui, caption_id| form_editor(ui, f, k, &choices, &labels, caption_id, &mut browse));
         }
     });
+    camera_data(ui, f);
     if let Some(key) = browse {
         f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(key));
     }
-    camera_data(ui, f);
 }
+
+/// Whether a `__form` field draws a row: composite values ride along for the command. The
+/// Batch dialog's `quality` is null until the user picks a custom quality, but its row (the
+/// `Custom` checkbox) is drawn all the same.
+fn form_field_renders(f: &Map<String, Value>, k: &str) -> bool {
+    if f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") && k == "quality" {
+        return true;
+    }
+    matches!(f.get(k), Some(Value::Bool(_)) | Some(Value::String(_)) | Some(Value::Number(_)))
+}
+
+/// A `__form` row's caption text: the `__labels` override, else the catalogue. The Batch
+/// dialog's naming row uses its own title; a checkbox row has no caption.
+fn form_caption_text(f: &Map<String, Value>, k: &str, labels: &Value) -> String {
+    if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
+        return tl!("File Naming").to_owned();
+    }
+    if matches!(f.get(k), Some(Value::Bool(_))) {
+        return String::new();
+    }
+    labels.get(k).and_then(Value::as_str).map_or_else(|| label_of(k), str::to_string)
+}
+
+/// One `__form` field's editor cell, drawn after the caption in reading order. The `Grid` (LTR)
+/// and the mirrored rows (RTL) both draw from here; the caller ends the row.
+fn form_editor(ui: &mut egui::Ui, f: &mut Map<String, Value>, k: &str, choices: &Value, labels: &Value, caption_id: egui::Id, browse: &mut Option<String>) {
+    let label = |key: &str| labels.get(key).and_then(Value::as_str).map_or_else(|| label_of(key), str::to_string);
+    let v = f.get(k).cloned().unwrap_or(Value::Null);
+    if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
+        let mut naming = v.as_str().unwrap_or_default().to_owned();
+        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+        ui.add(crate::widgets::rtl_singleline(&mut naming, &mut layouter).desired_width(260.0).hint_text("{name}"))
+            .labelled_by(caption_id)
+            .on_hover_text("{name} · {serial} · {date} (UTC)");
+        f.insert(k.to_string(), json!(naming));
+        return;
+    }
+    if k == "quality" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
+        let mut custom = v.as_f64().is_some();
+        let mut quality = v.as_f64().or_else(|| f.get("__batchQuality").and_then(Value::as_f64)).unwrap_or(8.0).clamp(0.0, 12.0) as f32;
+        ui.horizontal(|ui| {
+            crate::widgets::checkbox(ui, &mut custom, tl!("Custom"));
+            ui.add_enabled_ui(custom, |ui| crate::widgets::value_field(ui, &mut quality, 0.0..=12.0, "", 74.0).accessible_name(tl!("Quality")));
+        });
+        // None preserves the command's existing JPEG and lossless WebP defaults.
+        // The inactive custom value is shell state, never a command parameter.
+        f.insert("__batchQuality".into(), json!(quality));
+        f.insert(k.to_string(), if custom { json!(quality) } else { Value::Null });
+        return;
+    }
+    let new = match &v {
+        Value::Array(_) | Value::Object(_) | Value::Null => return,
+        Value::Bool(b) => {
+            let mut b = *b;
+            ui.checkbox(&mut b, label(k));
+            json!(b)
+        }
+        Value::String(s) => {
+            let mut s = s.clone();
+            match choices.get(k).and_then(Value::as_array) {
+                Some(opts) => {
+                    let opts: Vec<(String, String)> = opts.iter().filter_map(Value::as_str).map(|o| (o.to_string(), label(o))).collect();
+                    let refs: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
+                    crate::widgets::dropdown(ui, &format!("form-{k}"), &label(k), &mut s, &refs, 200.0);
+                }
+                None => {
+                    ui.horizontal(|ui| {
+                        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+                        ui.add(crate::widgets::rtl_singleline(&mut s, &mut layouter).desired_width(260.0)).accessible_name(label(k));
+                        // A folder field gets the system folder picker (#7942, #9357).
+                        if crate::dialogs::is_folder_field(k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
+                            *browse = Some(k.to_string());
+                        }
+                    });
+                }
+            }
+            json!(s)
+        }
+        Value::Number(n) => {
+            if let Some(mut i) = n.as_i64() {
+                ui.add(egui::DragValue::new(&mut i).custom_parser(crate::widgets::parse_num)).accessible_name(label(k));
+                json!(i)
+            } else {
+                let mut x = n.as_f64().unwrap_or(0.0);
+                ui.add(egui::DragValue::new(&mut x).speed(0.5).custom_parser(crate::widgets::parse_num)).accessible_name(label(k));
+                json!(x)
+            }
+        }
+    };
+    f.insert(k.to_string(), new);
+}
+
+/// Caption column width of a mirrored Camera Data row, wide enough for the field labels.
+const CAMERA_CAPTION_W: f32 = 160.0;
 
 /// File Info's read-only Camera Data section (`__camera`, from the document's EXIF/XMP).
 fn camera_data(ui: &mut egui::Ui, f: &Map<String, Value>) {
@@ -244,12 +259,14 @@ fn camera_data(ui: &mut egui::Ui, f: &Map<String, Value>) {
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Camera Data")).font(crate::theme::semibold(13.0)));
     ui.add_space(4.0);
-    egui::Grid::new("form-camera-data").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
+    // Same shape as `form_body` (see its note on the mirrored grid), read-only editors.
+    crate::direction::form_grid(ui, "form-camera-data", [12.0, 4.0], CAMERA_CAPTION_W, |row| {
         for (key, label) in photocraft_engine::file_cmds::CAMERA_FIELDS {
             if let Some(v) = camera.get(key).and_then(Value::as_str) {
-                ui.label(crate::i18n::tr_ctx(crate::i18n::current(), "cameraData", label));
-                ui.add(egui::Label::new(v).selectable(true));
-                ui.end_row();
+                let caption = crate::i18n::tr_ctx(crate::i18n::current(), "cameraData", label);
+                row(&caption, &mut |ui, _caption_id| {
+                    ui.add(egui::Label::new(v).selectable(true));
+                });
             }
         }
     });
@@ -416,7 +433,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
             let (_, _, name) = doc?;
             dialog(
                 app,
-                json!({"dir": dir, "prefix": name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a), "format": "png", "visibleOnly": true, "trim": false}),
+                json!({"dir": dir, "prefix": name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a), "format": "png", "visibleOnly": true}),
                 json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}),
             )
         }
@@ -647,4 +664,94 @@ fn export_contents(app: &mut PhotocraftApp) -> Result<Value, String> {
         app.ui.status_error = false;
         Ok(json!({"path": path, "fileName": name, "bytes": bytes.len()}))
     })
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    /// The Select › Load Selection dialog (a `__form` dialog: dropdowns, a text field and a
+    /// checkbox), rendered in `dir`. Only the direction is forced: the labels and values stay
+    /// the ones the left-to-right run pins.
+    fn load_selection(dir: crate::direction::Dir) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let _dir = crate::direction::direction_scope(dir);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "select.loadSelection", json!({})).unwrap();
+        h.run_steps(3);
+        h
+    }
+
+    /// The dialog's own frame, as the host sized it.
+    fn frame(h: &egui_kittest::Harness<'static, PhotocraftApp>) -> egui::Rect {
+        let id = h.state().ui.dialogs.last().unwrap().id;
+        h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the dialog")
+    }
+
+    /// The form reads from the right in a right-to-left UI: the checkbox row sits at the
+    /// reading start and the Operation dropdown, whose caption column pushes it away from
+    /// that edge, follows it — mirrored from the left-to-right run.
+    #[test]
+    fn rtl_the_form_rows_read_from_the_right() {
+        let ltr = load_selection(crate::direction::Dir::Ltr);
+        let ltr_frame = frame(&ltr);
+        let ltr_drop = ltr.get_by_value("New").rect();
+        let ltr_invert = ltr.get_by_label("Invert").rect();
+        assert!(
+            (ltr_invert.left() - ltr_drop.left()).abs() < 0.5,
+            "LTR: the checkbox and the dropdown share the grid's editor column: {ltr_invert:?} vs {ltr_drop:?}"
+        );
+        assert!(
+            ltr_invert.left() - ltr_frame.left() >= 40.0,
+            "LTR: the empty caption cell keeps the grid's 40 pt caption column: {ltr_invert:?} in {ltr_frame:?}"
+        );
+
+        let rtl = load_selection(crate::direction::Dir::Rtl);
+        let rtl_frame = frame(&rtl);
+        let rtl_drop = rtl.get_by_value("New").rect();
+        let rtl_invert = rtl.get_by_label("Invert").rect();
+        assert!(rtl_frame.right() - rtl_invert.right() < 40.0, "RTL: the checkbox row leads at the right: {rtl_invert:?} in {rtl_frame:?}");
+        assert!(rtl_invert.right() > rtl_drop.right(), "RTL: the captioned row follows the caption column: {rtl_invert:?} vs {rtl_drop:?}");
+    }
+
+    /// The mirrored body keeps the dialog as wide as its left-to-right twin.
+    #[test]
+    fn rtl_the_form_dialog_keeps_its_width() {
+        let width = |dir| frame(&load_selection(dir)).width();
+        let ltr = width(crate::direction::Dir::Ltr);
+        let rtl = width(crate::direction::Dir::Rtl);
+        assert!((ltr - rtl).abs() < 1.0, "LTR {ltr} vs RTL {rtl}");
+    }
+
+    /// The Batch dialog (a `__form` dialog whose `quality` starts null), rendered in `dir`
+    /// after a recorded action. Only the direction is forced.
+    fn batch(dir: crate::direction::Dir) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let _dir = crate::direction::direction_scope(dir);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
+        app.run("actions.record", json!({"name": "Invert"})).unwrap();
+        app.run("image.adjustments.invert", json!({})).unwrap();
+        app.run("actions.stop", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let ctx = h.ctx.clone();
+        crate::menus::invoke(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
+        h.run_steps(3);
+        h
+    }
+
+    /// The Batch dialog's `quality` row — the `Custom` checkbox — draws even though `quality`
+    /// starts null, in both directions.
+    #[test]
+    fn the_batch_custom_quality_row_renders_in_both_directions() {
+        let ltr = batch(crate::direction::Dir::Ltr);
+        let rtl = batch(crate::direction::Dir::Rtl);
+        assert!(ltr.get_by_label("Custom").rect().width() > 0.0, "LTR: the Custom checkbox draws");
+        assert!(rtl.get_by_label("Custom").rect().width() > 0.0, "RTL: the Custom checkbox draws");
+    }
 }

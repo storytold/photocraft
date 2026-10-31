@@ -80,14 +80,15 @@ pub(crate) fn unit_menu(ui: &mut egui::Ui, current: Unit) -> Option<&'static str
     unit_menu_of(ui, current, &UNITS)
 }
 
-/// [`unit_menu`] with only `units` in it.
+/// [`unit_menu`] with only `units` in it. Rows go through the shared [`crate::menu_keys::menu_row`]:
+/// the current unit's mark sits in the row's checkmark column at its reading start, not as a text
+/// prefix that an RTL paragraph would move to the wrong end.
 pub(crate) fn unit_menu_of(ui: &mut egui::Ui, current: Unit, units: &[Unit]) -> Option<&'static str> {
     crate::widgets::menu_scroll(ui, |ui| {
         ui.set_min_width(150.0);
         let mut chosen = None;
         for (label, name, checked) in unit_menu_items(current, units) {
-            let label = if checked { format!("✓ {label}") } else { label };
-            if ui.button(label).clicked() {
+            if crate::menu_keys::menu_row(ui, &label, None, checked, true).clicked() {
                 ui.close();
                 chosen = Some(name);
             }

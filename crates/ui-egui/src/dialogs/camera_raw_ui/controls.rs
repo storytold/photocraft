@@ -139,10 +139,17 @@ fn tone_row(ui: &mut egui::Ui, dirty: &mut bool, alt: &mut Option<ToneZone>, zon
 }
 
 fn section(ui: &mut egui::Ui, title: &str, open: bool, body: impl FnOnce(&mut egui::Ui)) {
+    if crate::text::direction::is_rtl() {
+        ui.visuals_mut().collapsing_header_frame = true;
+    }
     egui::CollapsingHeader::new(egui::RichText::new(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", title)).font(FontId::proportional(13.0)))
         .id_salt(("camera-raw-section", title))
         .default_open(open)
-        .show(ui, body);
+        .show(ui, |ui| {
+            // The body is drawn in an explicit top-down column, which keeps nested rows
+            // left-to-right; scope it so its rows follow the reading direction.
+            let _ = ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), body);
+        });
 }
 
 fn wheel(ui: &mut egui::Ui, dirty: &mut bool, title: &str, w: &mut Wheel) {
@@ -275,10 +282,21 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let ok_label = if d.target == Target::OpenRaw { tl!("Open") } else { tl!("OK") };
         let footer_h = 48.0;
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), pos2(full.right(), full.bottom() - footer_h));
+        let rtl = crate::text::direction::is_rtl();
         let animated_zoom = app.session.prefs().general.animated_zoom;
         let scope = &mut app.ui.camera_raw_scope;
-        // Clip both pixels and scope overlays before painting the settings dock/footer.
-        let preview_body = ERect::from_min_max(body.min, pos2((body.right() - PANEL_W).max(body.left() + 1.0), body.bottom()));
+        // Clip both pixels and scope overlays before painting the settings dock/footer. The dock
+        // hugs the reading end (right in a left-to-right UI, left in a right-to-left one); the
+        // preview takes the rest, and the image in it stays left-to-right.
+        let (preview_body, panel) = if rtl {
+            let split = (body.left() + PANEL_W).min(body.right() - 1.0).max(body.left());
+            (ERect::from_min_max(pos2(split, body.top()), body.max), ERect::from_min_max(body.min, pos2(split, body.bottom())))
+        } else {
+            (
+                ERect::from_min_max(body.min, pos2((body.right() - PANEL_W).max(body.left() + 1.0), body.bottom())),
+                ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max),
+            )
+        };
         let view = ERect::from_min_max(
             preview_body.min + vec2(16.0, 16.0),
             pos2((preview_body.right() - 16.0).max(preview_body.left() + 17.0), (preview_body.bottom() - 48.0).max(preview_body.top() + 17.0)),
@@ -310,7 +328,9 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             preview.painter().rect_stroke(region, 0.0, egui::Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
         }
         let toolbar = ERect::from_min_max(pos2(preview_body.left() + 16.0, view.bottom() + 8.0), preview_body.right_bottom() - vec2(16.0, 4.0));
-        let mut nav_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        // The preview's tool strip follows the reading direction like the toolbox; the image and
+        // the scopes over it keep their own left-to-right space.
+        let mut nav_ui = ui.new_child(egui::UiBuilder::new().max_rect(toolbar).layout(crate::text::direction::row()));
         nav_ui.set_clip_rect(preview_body.intersect(ui.clip_rect()));
         crate::camera_raw_preview_ui::toolbar(&mut nav_ui, navigation, view, size, &mut scope.sampler_tool);
         if d.detail.pending() {
@@ -320,10 +340,10 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             nav_ui.label(egui::RichText::new(tl!("Full-resolution preview unavailable")).color(t.text_faint)).on_hover_text(error);
         }
         // Panels.
-        let right = ERect::from_min_max(pos2(body.right() - PANEL_W, body.top()), body.max);
-        painter.rect_filled(right, 0.0, t.dock);
-        painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 10.0))));
+        painter.rect_filled(panel, 0.0, t.dock);
+        let separator = if rtl { [panel.right_top(), panel.right_bottom()] } else { [panel.left_top(), panel.left_bottom()] };
+        painter.line_segment(separator, Stroke::new(1.0, t.separator));
+        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(panel.shrink2(vec2(14.0, 10.0))).layout(crate::text::direction::body_layout()));
         // This header is outside the settings scroll area and follows the same Before/After
         // selector as the texture. Both derive from the same completed preview revision.
         crate::camera_raw_scope_ui::header(&mut props, d, scope);
@@ -452,7 +472,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 }
             });
         });
-        crate::camera_raw_scope_ui::floating(ctx, d, scope, right);
+        crate::camera_raw_scope_ui::floating(ctx, d, scope, panel);
         crate::camera_raw_scope_ui::shortcuts(ctx, scope);
         d.dirty |= dirty;
         if d.dirty {
@@ -466,7 +486,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         let foot = ERect::from_min_max(pos2(full.left(), full.bottom() - footer_h), full.max);
         painter.rect_filled(foot, 0.0, t.dock);
         painter.line_segment([foot.left_top(), foot.right_top()], Stroke::new(1.0, t.separator));
-        let mut fu = ui.new_child(egui::UiBuilder::new().max_rect(foot.shrink2(vec2(16.0, 9.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        let mut fu = ui.new_child(egui::UiBuilder::new().max_rect(foot.shrink2(vec2(16.0, 9.0))).layout(crate::text::direction::trailing()));
         if let Some(role) = widgets::dialog_buttons(
             &mut fu,
             &[
@@ -520,5 +540,100 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             report_file_error(app, r);
         }
         _ => {}
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::PhotocraftApp;
+
+    fn app_with_pixels() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+        app
+    }
+
+    /// The Camera Raw dialog drawn in a harness, in the given direction.
+    fn harness(dir: crate::text::direction::Dir, size: egui::Vec2) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let _dir = crate::text::direction::direction_scope(dir);
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(size)
+            // The theme, and with it the direction flag, must be in place before the first frame.
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::Pro))
+            .build_ui_state(
+                |ui, app: &mut PhotocraftApp| {
+                    if app.camera_raw.is_none() {
+                        crate::dialogs::camera_raw_ui::open(app, ui.ctx()).unwrap();
+                    }
+                    show(app, ui.ctx());
+                },
+                app_with_pixels(),
+            );
+        h.run_steps(3);
+        h
+    }
+
+    /// The settings dock hugs the reading end: on the right in a left-to-right UI, on the left
+    /// in a right-to-left one. The image in the preview keeps its own left-to-right space.
+    #[test]
+    fn rtl_moves_the_settings_dock_to_the_left() {
+        use egui_kittest::kittest::Queryable;
+        let size = vec2(1000.0, 600.0);
+        let rtl = harness(crate::text::direction::Dir::Rtl, size);
+        let ltr = harness(crate::text::direction::Dir::Ltr, size);
+        let screen = ltr.ctx.content_rect();
+        // The dock's first section header tells which side the dock is on.
+        let rtl_dock = rtl.get_by_role_and_label(egui::accesskit::Role::DisclosureTriangle, "Light").rect();
+        let ltr_dock = ltr.get_by_role_and_label(egui::accesskit::Role::DisclosureTriangle, "Light").rect();
+        assert!(rtl_dock.right() < screen.left() + PANEL_W, "the dock hugs the left: {rtl_dock:?}");
+        assert!(ltr_dock.left() > screen.right() - PANEL_W, "the dock hugs the right: {ltr_dock:?}");
+        // The section header sits at the panel's reading start, like its body.
+        assert!(rtl_dock.center().x > screen.left() + PANEL_W / 2.0, "the RTL header is at the panel's right edge: {rtl_dock:?}");
+        assert!(ltr_dock.center().x < screen.right() - PANEL_W / 2.0, "the LTR header is at the panel's left edge: {ltr_dock:?}");
+        // The preview takes the rest of the window.
+        let rtl_view = rtl.state().camera_raw.as_ref().and_then(|d| d.viewport).unwrap();
+        let ltr_view = ltr.state().camera_raw.as_ref().and_then(|d| d.viewport).unwrap();
+        assert!(rtl_view.center().x > screen.center().x, "the preview takes the right: {rtl_view:?}");
+        assert!(ltr_view.center().x < screen.center().x, "the preview takes the left: {ltr_view:?}");
+    }
+
+    /// The footer's buttons hug the reading end and the platform order mirrors with them.
+    #[test]
+    fn rtl_puts_the_footer_buttons_at_the_reading_end() {
+        use egui_kittest::kittest::Queryable;
+        let size = vec2(1000.0, 600.0);
+        let rtl = harness(crate::text::direction::Dir::Rtl, size);
+        let ltr = harness(crate::text::direction::Dir::Ltr, size);
+        let screen = ltr.ctx.content_rect();
+        let rtl_ok = rtl.get_by_label("OK").rect();
+        let rtl_cancel = rtl.get_by_label("Cancel").rect();
+        let ltr_ok = ltr.get_by_label("OK").rect();
+        let ltr_cancel = ltr.get_by_label("Cancel").rect();
+        assert!(rtl_ok.left() < screen.center().x, "the buttons hug the reading end: {rtl_ok:?}");
+        assert!(ltr_ok.left() > screen.center().x, "the buttons hug the right edge: {ltr_ok:?}");
+        assert!(rtl_cancel.left() < rtl_ok.left(), "the platform order mirrors: {rtl_cancel:?} {rtl_ok:?}");
+        assert!(ltr_ok.left() < ltr_cancel.left(), "the platform order is unchanged: {ltr_ok:?} {ltr_cancel:?}");
+    }
+
+    /// A slider's caption sits at the reading start of its row: on the right in a right-to-left
+    /// settings panel, on the left in a left-to-right one. The value field follows at the
+    /// reading end.
+    #[test]
+    fn rtl_puts_the_slider_captions_at_the_reading_start() {
+        use egui_kittest::kittest::Queryable;
+        let size = vec2(1000.0, 600.0);
+        let rtl = harness(crate::text::direction::Dir::Rtl, size);
+        let ltr = harness(crate::text::direction::Dir::Ltr, size);
+        let screen = ltr.ctx.content_rect();
+        let rtl_caption = rtl.get_by_role_and_label(egui::accesskit::Role::Label, "Exposure").rect();
+        let ltr_caption = ltr.get_by_role_and_label(egui::accesskit::Role::Label, "Exposure").rect();
+        // The settings panel hugs the reading end, so its reading start is the far edge.
+        let rtl_mid = screen.left() + PANEL_W / 2.0;
+        let ltr_mid = screen.right() - PANEL_W / 2.0;
+        assert!(rtl_caption.center().x > rtl_mid, "the caption is at the panel's right edge: {rtl_caption:?}");
+        assert!(ltr_caption.center().x < ltr_mid, "the caption is at the panel's left edge: {ltr_caption:?}");
     }
 }

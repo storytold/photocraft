@@ -312,3 +312,37 @@ fn the_layer_mask_row_on_the_trash_asks_first() {
     let st = h.state().session.active().unwrap();
     assert!(st.doc.layer(photocraft_doc::LayerId(masked)).unwrap().mask.is_some(), "nothing deleted yet");
 }
+
+/// The row of a channel, as a rect (the eye's "Visibility …" button for its toggle).
+fn rect_of(h: &egui_kittest::Harness<'_, PhotocraftApp>, label: &str) -> egui::Rect {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{NodeT, Queryable};
+    h.query_all_by_label(label)
+        .find(|n| matches!(n.accesskit_node().role(), Role::Button) && n.rect().height() > 20.0)
+        .unwrap_or_else(|| panic!("no row or button {label}"))
+        .rect()
+}
+
+/// Rows mirror under a right-to-left UI: the eye and thumbnail hug the row's reading-start
+/// edge (the right edge in RTL, the left in LTR), with the LTR geometry unchanged.
+#[test]
+fn rows_hug_the_reading_start_edge_in_both_directions() {
+    use crate::i18n::{self, Lang};
+    use crate::text::direction::{self, Dir};
+    let _lang = i18n::language_scope(Lang::EN);
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction::direction_scope(dir);
+        let (mut h, _) = channels_harness();
+        h.run_steps(3);
+        let row = rect_of(&h, "Alpha 1");
+        let eye = rect_of(&h, "Visibility Alpha 1");
+        let thumb = recorded(&h.ctx).into_iter().find(|(n, _)| n == "Alpha 1").map(|(_, r)| r).expect("thumb recorded");
+        if dir == Dir::Rtl {
+            assert!((eye.right() - (row.right() - 6.0)).abs() < 1.0, "RTL: the eye hugs the right edge: {eye:?} in {row:?}");
+            assert!((thumb.right() - (row.right() - 36.0)).abs() < 1.0, "RTL: the thumbnail follows the eye: {thumb:?} in {row:?}");
+        } else {
+            assert!((eye.left() - (row.left() + 6.0)).abs() < 1.0, "LTR: the eye hugs the left edge: {eye:?} in {row:?}");
+            assert!((thumb.left() - (row.left() + 36.0)).abs() < 1.0, "LTR: the thumbnail follows the eye: {thumb:?} in {row:?}");
+        }
+    }
+}

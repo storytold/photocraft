@@ -66,7 +66,10 @@ impl PressMenu {
     fn item_response(&self, ui: &mut Ui, text: impl Into<egui::WidgetText>) -> (Response, bool) {
         // Under the item: the highlight it would have if hovered, while the gesture drags over it.
         let highlight = ui.painter().add(egui::Shape::Noop);
-        let response = ui.button(text);
+        // A plain button packs its atoms left-to-right whatever the direction flag; the row
+        // atom helper puts a leading grow in a right-to-left popup, so the label hugs the row's
+        // right edge instead (as `menu_row` does).
+        let response = ui.add(crate::menu_keys::menu_row_button_atom(text.into(), None, ui.style().right_to_left));
         if self.dragged_over(ui, &response) {
             let v = &ui.visuals().widgets.hovered;
             ui.painter().set(highlight, egui::Shape::rect_filled(response.rect.expand(v.expansion), v.corner_radius, v.weak_bg_fill));
@@ -109,7 +112,7 @@ pub fn show_with_close_behavior<R>(button: &Response, close_behavior: PopupClose
     // The release ending the press that opened the menu is a click outside the popup: it must not
     // close it again.
     let close = if button.clicked() && menu.owns_gesture(&ctx) { PopupCloseBehavior::IgnoreClicks } else { close_behavior };
-    let shown = Popup::menu(button).open_memory(open).close_behavior(close).show(|ui| content(ui, &menu)).map(|r| r.inner);
+    let shown = Popup::menu(button).open_memory(open).close_behavior(close).show(|ui| crate::menus::popup_body(ui, |ui| content(ui, &menu))).map(|r| r.inner);
     if shown.is_some() || Popup::is_id_open(&ctx, menu.popup) {
         above_parent(&ctx, button.layer_id, egui::LayerId::new(egui::Order::Foreground, menu.popup));
     }
@@ -473,5 +476,39 @@ mod tests {
         rig.press(at, false);
         assert!(!rig.frame(Vec::new()).open, "a second click on the box closes the list");
         assert_eq!(rig.value, 0);
+    }
+
+    /// A press-menu item inside the shared popup body hugs the reading edge: under RTL the label
+    /// sits at the row's right, under LTR at the left (the row is a fixed-width strip both ways).
+    #[test]
+    fn press_menu_items_mirror_only_under_rtl() {
+        let label_right = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let menu = PressMenu { popup: egui::Id::unique("twin") };
+                let strip = egui::Rect::from_min_size(pos2(20.0, 20.0), vec2(200.0, 24.0));
+                let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down_justified(egui::Align::Min)));
+                crate::menus::popup_body(&mut strip_ui, |ui| {
+                    let _ = menu.item_response(ui, "Levels");
+                });
+            });
+            let r = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                    _ => None,
+                })
+                .find(|(t, _)| t.contains("Levels"))
+                .map(|(_, r)| r.right());
+            out.textures_delta.clear();
+            r.unwrap_or(f32::NAN)
+        };
+        let ltr = label_right(crate::direction::Dir::Ltr);
+        let rtl = label_right(crate::direction::Dir::Rtl);
+        assert!(ltr.is_finite() && rtl.is_finite(), "the item label is drawn both ways: ltr {ltr} rtl {rtl}");
+        assert!(rtl > ltr + 10.0, "rtl: the label hugs the row's right edge: ltr right {ltr}, rtl right {rtl}");
     }
 }

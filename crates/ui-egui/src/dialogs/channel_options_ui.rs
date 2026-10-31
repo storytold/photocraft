@@ -6,7 +6,7 @@
 //! On the layer mask (double-click its Channels row, or Mask Options… on its Layers thumbnail)
 //! it is Photoshop's Layer Mask Display Options: just the rubylith's colour and opacity.
 
-use egui::{Align2, Sense, pos2, vec2};
+use egui::{Sense, vec2};
 use photocraft_doc::ColorIndicates;
 use serde_json::{Map, Value, json};
 
@@ -95,10 +95,13 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     app.run(COMMAND, params(f))
 }
 
+/// A caption in a fixed column that hugs the field it names: the box's right edge in a
+/// left-to-right UI, its left edge in a right-to-left one.
 fn label(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(84.0, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
+    let (pos, align) = crate::direction::end_text_anchor(r, 6.0);
+    ui.painter().text(pos, align, text, egui::FontId::proportional(12.0), t.text_dim);
 }
 
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
@@ -106,11 +109,22 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     if layer_mask(f) {
         return mask_body(ui, f);
     }
+    // The dialog host leaves the body on the default layout, so the body mirrors itself: in a
+    // right-to-left UI the blocks read from the right and the rows inside them mirror with them.
+    ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
+        body_blocks(ui, f);
+    });
+}
+
+/// A single-line edit whose text reads right-to-left in a right-to-left UI (Arabic names align
+/// to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
+/// The Channel Options blocks: the name, the mask-indication radios and the colour row.
+fn body_blocks(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let quick = f.get("channel").and_then(Value::as_str) == Some("quickMask");
     if let Some(mut name) = f.get("name").and_then(Value::as_str).map(str::to_string) {
         ui.horizontal(|ui| {
             label(ui, tl!("Name:"));
-            if ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0)).accessible_name(tl!("Name")).changed() {
+            if crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(200.0)).accessible_name(tl!("Name")).changed() {
                 f.insert("name".into(), json!(name));
             }
         });
@@ -154,19 +168,22 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 
 /// Layer Mask Display Options: Color and Opacity, as Photoshop's dialog has them.
 fn mask_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    ui.horizontal(|ui| {
-        label(ui, tl!("Color:"));
-        let current = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([1.0, 0.0, 0.0]);
-        let c = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(c[0], c[1], c[2]), tl!("Overlay Color")).clicked() {
-            crate::color_picker_ui::request(f, &crate::color_picker_ui::title_for(tl!("Overlay Color")));
-        }
-        ui.add_space(12.0);
-        ui.label(tl!("Opacity:"));
-        let mut pct = f.get("opacity").and_then(Value::as_f64).unwrap_or(50.0) as f32;
-        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).accessible_name(tl!("Opacity:")).changed() {
-            f.insert("opacity".into(), json!(pct.round()));
-        }
+    // The host leaves the body on the default layout, so the body mirrors itself.
+    ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
+        ui.horizontal(|ui| {
+            label(ui, tl!("Color:"));
+            let current = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([1.0, 0.0, 0.0]);
+            let c = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+            if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(c[0], c[1], c[2]), tl!("Overlay Color")).clicked() {
+                crate::color_picker_ui::request(f, &crate::color_picker_ui::title_for(tl!("Overlay Color")));
+            }
+            ui.add_space(12.0);
+            ui.label(tl!("Opacity:"));
+            let mut pct = f.get("opacity").and_then(Value::as_f64).unwrap_or(50.0) as f32;
+            if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).accessible_name(tl!("Opacity:")).changed() {
+                f.insert("opacity".into(), json!(pct.round()));
+            }
+        });
     });
 }
 
@@ -226,30 +243,37 @@ pub fn confirm_new_spot(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Resu
 
 pub fn new_spot_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
-    let mut name = f.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-    ui.horizontal(|ui| {
-        label(ui, tl!("Name:"));
-        if ui.add(egui::TextEdit::singleline(&mut name).desired_width(200.0)).accessible_name(tl!("Name")).changed() {
-            f.insert("name".into(), json!(name));
-        }
-    });
-    crate::widgets::section_label(ui, tl!("Ink Characteristics"));
-    crate::widgets::hairline(ui);
-    ui.horizontal(|ui| {
-        label(ui, tl!("Color:"));
-        let current = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([1.0, 0.0, 0.0]);
-        let c = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
-        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(c[0], c[1], c[2]), tl!("Spot Color")).clicked() {
-            crate::color_picker_ui::request(f, &crate::color_picker_ui::title_for(tl!("Spot Color")));
-        }
-        ui.add_space(12.0);
-        ui.label(tl!("Solidity:"));
-        let mut pct = f.get("solidity").and_then(Value::as_f64).unwrap_or(0.0) as f32;
-        if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).accessible_name(tl!("Solidity:")).changed() {
-            f.insert("solidity".into(), json!(pct.round()));
-        }
+    // The host leaves the body on the default layout, so the body mirrors itself: in a
+    // right-to-left UI the blocks read from the right and the rows inside them mirror with them.
+    ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
+        let mut name = f.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+        ui.horizontal(|ui| {
+            label(ui, tl!("Name:"));
+            if crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(200.0)).accessible_name(tl!("Name")).changed() {
+                f.insert("name".into(), json!(name));
+            }
+        });
+        crate::widgets::section_label(ui, tl!("Ink Characteristics"));
+        crate::widgets::hairline(ui);
+        ui.horizontal(|ui| {
+            label(ui, tl!("Color:"));
+            let current = f.get("color").and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex).unwrap_or([1.0, 0.0, 0.0]);
+            let c = current.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+            if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(c[0], c[1], c[2]), tl!("Spot Color")).clicked() {
+                crate::color_picker_ui::request(f, &crate::color_picker_ui::title_for(tl!("Spot Color")));
+            }
+            ui.add_space(12.0);
+            ui.label(tl!("Solidity:"));
+            let mut pct = f.get("solidity").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+            if crate::widgets::value_field(ui, &mut pct, 0.0..=100.0, "%", 64.0).accessible_name(tl!("Solidity:")).changed() {
+                f.insert("solidity".into(), json!(pct.round()));
+            }
+        });
     });
 }
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests;

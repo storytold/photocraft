@@ -145,30 +145,35 @@ fn mode_note(blend: Option<&str>) -> Option<&'static str> {
 
 /// The Blending Options form: Mode (with the Dissolve note), Opacity, Preview and the result viewport.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
-    ui.horizontal(|ui| {
-        ui.label(tl!("Mode"));
-        let mut blend = fields.get("blend").and_then(Value::as_str).unwrap_or("Normal").to_string();
-        let options: Vec<_> = BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
-        if widgets::dropdown(ui, "smart-filter-blend", tl!("Blend Mode"), &mut blend, &options, 200.0) {
-            fields.insert("blend".into(), json!(blend));
+    // The host mirrors its title, close box and footer on its own, so the body scopes itself: in
+    // a right-to-left UI the blocks sit at the reading start and the nested rows read from the
+    // right; a left-to-right UI keeps the default layout.
+    ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
+        ui.horizontal(|ui| {
+            ui.label(tl!("Mode"));
+            let mut blend = fields.get("blend").and_then(Value::as_str).unwrap_or("Normal").to_string();
+            let options: Vec<_> = BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
+            if widgets::dropdown(ui, "smart-filter-blend", tl!("Blend Mode"), &mut blend, &options, 200.0) {
+                fields.insert("blend".into(), json!(blend));
+            }
+        });
+        if let Some(note) = mode_note(fields.get("blend").and_then(Value::as_str)) {
+            ui.label(egui::RichText::new(note).color(Tokens::get(ui.ctx()).text_faint).size(11.0));
         }
+        let mut opacity = fields.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32;
+        if widgets::slider_row(ui, tl!("Opacity"), &mut opacity, 0.0..=100.0, "%", None).changed() {
+            fields.insert("opacity".into(), json!(opacity));
+        }
+        let mut preview = fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
+        if widgets::checkbox(ui, &mut preview, tl!("Preview")).changed() {
+            fields.insert("__preview".into(), json!(preview));
+        }
+        if let Err(e) = fields.get(TARGET).ok_or("no Smart Filter target").map_err(str::to_string).and_then(|t| validate_target(app, t)) {
+            ui.colored_label(Tokens::get(ui.ctx()).danger, e);
+            return;
+        }
+        viewport(app, ui, fields, preview);
     });
-    if let Some(note) = mode_note(fields.get("blend").and_then(Value::as_str)) {
-        ui.label(egui::RichText::new(note).color(Tokens::get(ui.ctx()).text_faint).size(11.0));
-    }
-    let mut opacity = fields.get("opacity").and_then(Value::as_f64).unwrap_or(100.0) as f32;
-    if widgets::slider_row(ui, tl!("Opacity"), &mut opacity, 0.0..=100.0, "%", None).changed() {
-        fields.insert("opacity".into(), json!(opacity));
-    }
-    let mut preview = fields.get("__preview").and_then(Value::as_bool).unwrap_or(true);
-    if widgets::checkbox(ui, &mut preview, tl!("Preview")).changed() {
-        fields.insert("__preview".into(), json!(preview));
-    }
-    if let Err(e) = fields.get(TARGET).ok_or("no Smart Filter target").map_err(str::to_string).and_then(|t| validate_target(app, t)) {
-        ui.colored_label(Tokens::get(ui.ctx()).danger, e);
-        return;
-    }
-    viewport(app, ui, fields, preview);
 }
 
 #[derive(Clone)]
@@ -243,3 +248,55 @@ fn viewport(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+/// The Blending Options body reads from the right in a right-to-left UI.
+#[cfg(test)]
+mod rtl_tests {
+    use super::{body, open};
+    use crate::PhotocraftApp;
+    use crate::direction::{Dir, direction_scope};
+    use serde_json::{Map, Value};
+
+    /// The text the body painted, with each string's left edge, drawn in `dir`.
+    fn painted(app: &mut PhotocraftApp, fields: &mut Map<String, Value>, dir: Dir) -> Vec<(String, f32)> {
+        /// Gather the text of `shape`, descending into nested shape groups.
+        fn collect(shape: &egui::Shape, out: &mut Vec<(String, f32)>) {
+            match shape {
+                egui::Shape::Text(text) => out.push((text.galley.job.text.clone(), text.pos.x)),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, out)),
+                _ => {}
+            }
+        }
+        let _scope = direction_scope(dir);
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 640.0))), ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| body(app, ui, fields));
+        output.textures_delta.clear();
+        let mut texts = Vec::new();
+        output.shapes.iter().for_each(|s| collect(&s.shape, &mut texts));
+        texts
+    }
+
+    /// The left edge of the painted `needle`.
+    fn at(painted: &[(String, f32)], needle: &str) -> Option<f32> {
+        painted.iter().find(|(text, _)| text == needle).map(|(_, x)| *x)
+    }
+
+    /// The Mode and Opacity labels sit at the reading start in a right-to-left UI, and at the
+    /// left in a left-to-right one.
+    #[test]
+    fn the_body_reads_from_the_right_in_rtl() {
+        let (mut app, layer) = super::tests::app(8, "rgb");
+        let id = open(&mut app, layer, 0).unwrap();
+        let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        let ltr = painted(&mut app, &mut fields.clone(), Dir::Ltr);
+        let rtl = painted(&mut app, &mut fields.clone(), Dir::Rtl);
+        for label in ["Mode", "Opacity"] {
+            let ltr_x = at(&ltr, label).unwrap_or_else(|| panic!("the {label} label"));
+            let rtl_x = at(&rtl, label).unwrap_or_else(|| panic!("the {label} label"));
+            assert!(ltr_x < 40.0, "LTR: {label} at the left: {ltr_x}");
+            assert!(rtl_x > 380.0, "RTL: {label} at the reading start: {rtl_x}");
+        }
+    }
+}

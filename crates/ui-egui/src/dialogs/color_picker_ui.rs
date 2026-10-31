@@ -416,7 +416,7 @@ fn flat_grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) ->
 
 /// Room for both component columns, including units, without overflowing the title's width; with
 /// the frame and title the window fits Photoshop's (about 534 x 376 points).
-pub(crate) const CONTENT_WIDTH: f32 = 488.0;
+pub(crate) const CONTENT_WIDTH: f32 = 498.0;
 /// Translated action labels can be substantially wider than their English equivalents.
 pub(crate) fn content_width(ui: &egui::Ui) -> f32 {
     let labels = ["OK", "Cancel", "Add to Swatches"];
@@ -434,16 +434,22 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
     ui.set_width(content_width(ui));
     ui.spacing_mut().item_spacing.y = 4.0;
     let mut outcome = None;
-    ui.horizontal_top(|ui| {
+    let rtl = crate::direction::is_rtl();
+    // Reading order: the colour field sits at the reading start, the values follow it.
+    crate::direction::dialog_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
-        ui.vertical(|ui| {
+        ui.with_layout(crate::direction::body_layout(), |ui| {
             ui.horizontal_top(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 color_field(ui, f);
             });
             ui.add_space(8.0);
             let mut web = f.get("__webOnly").and_then(Value::as_bool).unwrap_or(false);
-            if widgets::checkbox(ui, &mut web, tl!("Only Web Colors")).changed() {
+            // A plain checkbox in both directions: it takes its natural width, and bounding its
+            // row to a ballooned available-width read in a right-to-left fork would widen the
+            // fork and with it the frame.
+            let check = widgets::checkbox(ui, &mut web, tl!("Only Web Colors"));
+            if check.changed() {
                 f.insert("__webOnly".into(), json!(web));
                 set_rgb(f, current(f).rgb, Keep::Nothing);
             }
@@ -454,12 +460,15 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
                 set_rgb(f, rgb, Keep::Nothing);
             }
         });
-        ui.vertical(|ui| {
+        ui.with_layout(crate::direction::body_layout(), |ui| {
             ui.horizontal_top(|ui| {
                 swatches(ui, f);
-                // As wide as the longest label, at the right edge like Photoshop's.
+                // As wide as the longest label, at the reading end like Photoshop's.
                 let button_width = widgets::button_width(ui, &[tl!("OK"), tl!("Cancel"), tl!("Add to Swatches")]).max(96.0);
-                ui.with_layout(egui::Layout::top_down(egui::Align::Max), |ui| {
+                // The stack hugs the reading end: right in a left-to-right UI, left in a
+                // right-to-left one.
+                let stack = if rtl { egui::Layout::top_down(egui::Align::Min) } else { egui::Layout::top_down(egui::Align::Max) };
+                ui.with_layout(stack, |ui| {
                     if widgets::primary_button(ui, tl!("OK"), button_width).clicked() {
                         outcome = Some(true);
                     }
@@ -544,8 +553,14 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let rgb = current(f).rgb;
     let orig = f.get("__orig").and_then(Value::as_str).and_then(parse_hex).unwrap_or(rgb);
     let (area, _) = ui.allocate_exact_size(vec2(56.0 + 24.0, 92.0), Sense::hover());
-    // new / current swatches, labelled above and below.
-    let sw = Rect::from_min_size(area.min + vec2(0.0, 16.0), vec2(56.0, 64.0));
+    // new / current swatches, labelled above and below; the pair keeps the warning strip on
+    // the side it was drawn on, mirrored with the reading direction.
+    let rtl = crate::direction::is_rtl();
+    let sw = if rtl {
+        Rect::from_min_size(pos2(area.right() - 56.0, area.top() + 16.0), vec2(56.0, 64.0))
+    } else {
+        Rect::from_min_size(area.min + vec2(0.0, 16.0), vec2(56.0, 64.0))
+    };
     let p = ui.painter();
     let label = |text: &str, at: egui::Pos2, align: egui::Align2| {
         p.text(at, align, text, egui::FontId::proportional(11.0), t.text_dim);
@@ -563,7 +578,7 @@ fn swatches(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
     // Photoshop's warnings beside the swatch, each over a chip of the nearest colour that passes
     // (a click takes it): out of gamut for printing on top, not a web colour below.
-    let x = sw.right() + 8.0;
+    let x = if rtl { sw.left() - 21.0 } else { sw.right() + 8.0 };
     let gamut = tl!("Out of gamut for printing: click for the nearest printable colour");
     let web = tl!("Not a web colour: click for the nearest web colour");
     for (slot, warning, tip) in [(0.0, out_of_gamut(rgb), gamut), (34.0, not_web_safe(rgb), web)] {
@@ -628,7 +643,10 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
     let &Components { rgb, hsv, lab, cmyk } = now;
     let mut edit: Option<([f32; 3], Keep)> = None;
     let mut new_mode: Option<&str> = None;
-    ui.horizontal_top(|ui| {
+    // Left-to-right even in RTL: egui's Grid places its first cell at the raw cursor, which is
+    // x = -inf at the start of a right-to-left row (the two column groups still mirror as blocks
+    // of the surrounding row).
+    crate::direction::ltr(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
         ui.vertical(|ui| {
             egui::Grid::new("cp-hsb-rgb").min_row_height(0.0).num_columns(4).spacing([4.0, 2.0]).show(ui, |ui| {
@@ -873,5 +891,45 @@ mod screen_integration_tests {
         let photocraft_doc::LayerContent::Text(text) = &layer.content else { panic!("not text") };
         assert_eq!(text.color.to_rgba8(), [255, 136, 0, 255]);
         assert_eq!(h.state().session.active().unwrap().history.entries().len(), before + 1);
+    }
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    fn picker_frame(dir: crate::direction::Dir) -> (Rect, Rect, Rect, Rect) {
+        let _dir = crate::direction::direction_scope(dir);
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(760.0, 480.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), "foreground");
+        h.run_steps(4);
+        let frame = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", id)))).expect("the picker window");
+        let ok = h.get_by_label("OK").rect();
+        let cancel = h.get_by_label("Cancel").rect();
+        let cur = h.get_by_label("Click to restore the current colour").rect();
+        (frame, ok, cancel, cur)
+    }
+
+    /// RTL mirrors the picker's top row: the OK / Cancel stack hugs the reading end and the
+    /// new / current swatch pair sits at the reading start, each the pixel mirror of the
+    /// left-to-right picker, with the same frame width.
+    #[test]
+    fn rtl_picker_mirrors_the_action_stack_and_swatch_pair() {
+        let (lf, lok, lcancel, lcur) = picker_frame(crate::direction::Dir::Ltr);
+        let (rf, rok, rcancel, rcur) = picker_frame(crate::direction::Dir::Rtl);
+        assert!((rf.width() - lf.width()).abs() < 1.0, "the frame keeps its width: {rf:?} vs {lf:?}");
+        assert!((lok.left() - lcancel.left()).abs() < 1.0 && (rok.left() - rcancel.left()).abs() < 1.0, "a flush stack in both directions: {lok:?} {rok:?}");
+        assert!(
+            (rok.left() - rf.left() - (lf.right() - lok.right())).abs() < 2.0,
+            "the stack hugs the reading end in RTL, the mirror of LTR: {rok:?} in {rf:?} vs {lok:?} in {lf:?}"
+        );
+        assert!(
+            (rcur.center().x - (rf.left() + rf.right() - lcur.center().x)).abs() < 2.0,
+            "the swatch pair mirrors to the reading start: {rcur:?} in {rf:?} vs {lcur:?} in {lf:?}"
+        );
+        assert!(rok.right() < rcur.left(), "the stack reads after the swatches: {rok:?} vs {rcur:?}");
     }
 }

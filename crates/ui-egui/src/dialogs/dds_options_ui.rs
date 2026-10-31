@@ -71,21 +71,26 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut options = p.options;
     let modal = egui::Modal::new(egui::Id::unique("dds-options")).show(ctx, |ui| {
         ui.set_max_width(340.0);
-        ui.label(egui::RichText::new(tl!("DDS Options")).font(crate::theme::semibold(15.0)));
-        ui.add_space(4.0);
-        crate::widgets::hairline(ui);
-        ui.add_space(8.0);
-        crate::widgets::section_label(ui, tl!("Compression"));
-        for c in DdsCompression::ALL {
-            ui.radio_value(&mut options.compression, c, label(c));
-        }
-        ui.add_space(8.0);
-        crate::widgets::checkbox(ui, &mut options.mipmaps, tl!("Generate Mipmaps"));
-        ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = 10.0;
-            ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
-            cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
+        // One mirrored scope for the whole body: the title, the section label and the radio rows
+        // read from the right in a right-to-left UI, and the nested rows mirror with them.
+        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(crate::direction::body_layout()), |ui| {
+            ui.label(egui::RichText::new(tl!("DDS Options")).font(crate::theme::semibold(15.0)));
+            ui.add_space(4.0);
+            crate::widgets::hairline(ui);
+            ui.add_space(8.0);
+            crate::widgets::section_label(ui, tl!("Compression"));
+            for c in DdsCompression::ALL {
+                ui.radio_value(&mut options.compression, c, label(c));
+            }
+            ui.add_space(8.0);
+            crate::widgets::checkbox(ui, &mut options.mipmaps, tl!("Generate Mipmaps"));
+            ui.add_space(12.0);
+            // The group hugs the reading end: the right edge in LTR, the left in RTL.
+            ui.with_layout(crate::direction::trailing(), |ui| {
+                ui.spacing_mut().item_spacing.x = 10.0;
+                ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
+                cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
+            });
         });
     });
     cancel |= modal.should_close();
@@ -144,5 +149,61 @@ mod tests {
         record(DdsOptions { compression: DdsCompression::Bc1, mipmaps: true }, &mut step);
         assert_eq!(step, json!({"path": "a.dds", "ddsCompression": "bc1", "ddsMipmaps": true}));
         assert_eq!(options_param(&step, "file.saveAs"), Ok(Some(DdsOptions { compression: DdsCompression::Bc1, mipmaps: true })));
+    }
+
+    /// The DDS Options modal in a harness, with the window it draws in.
+    fn options_window() -> (egui_kittest::Harness<'static, PhotocraftApp>, egui::Rect) {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", serde_json::json!({"width": 64, "height": 64})).unwrap();
+        park(&mut app, "t.dds".into(), false, "file.saveAs").unwrap();
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        h.run_steps(2);
+        let win = h.ctx.memory(|m| m.area_rect(egui::Id::unique("dds-options"))).expect("the modal");
+        (h, win)
+    }
+
+    /// The options mirror in a right-to-left UI: the title and the radio rows read from the
+    /// right, the button group hugs the left, and the modal keeps its width.
+    #[test]
+    fn rtl_the_options_mirror() {
+        use egui_kittest::kittest::Queryable;
+        let (ltr, ltr_win) = {
+            let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+            options_window()
+        };
+        let ltr_title = ltr.get_by_label("DDS Options").rect();
+        let ltr_radio = ltr.get_by_label("BC1 / DXT1").rect();
+        let ltr_ok = ltr.get_by_label("OK").rect();
+        let ltr_cancel = ltr.get_by_label("Cancel").rect();
+
+        let (rtl, rtl_win) = {
+            let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+            options_window()
+        };
+        let rtl_title = rtl.get_by_label("DDS Options").rect();
+        let rtl_radio = rtl.get_by_label("BC1 / DXT1").rect();
+        let rtl_ok = rtl.get_by_label("OK").rect();
+        let rtl_cancel = rtl.get_by_label("Cancel").rect();
+
+        // English keeps the title, the radio rows and the buttons where they are.
+        assert!(ltr_title.left() < ltr_win.center().x, "the title reads from the left: {ltr_title:?} in {ltr_win:?}");
+        assert!(ltr_radio.left() < ltr_win.center().x, "the radio rows read from the left: {ltr_radio:?} in {ltr_win:?}");
+        assert!(ltr_ok.right() > ltr_cancel.right(), "the default button is rightmost: {ltr_ok:?} vs {ltr_cancel:?}");
+
+        // Arabic mirrors them.
+        assert!(rtl_title.right() > rtl_win.center().x, "the title reads from the right: {rtl_title:?} in {rtl_win:?}");
+        assert!(rtl_radio.right() > rtl_win.center().x, "the radio rows read from the right: {rtl_radio:?} in {rtl_win:?}");
+        assert!(rtl_ok.left() < rtl_cancel.left(), "the default button is leftmost: {rtl_ok:?} vs {rtl_cancel:?}");
+        // The group hugs the reading end by the same margin in both directions.
+        assert!(
+            (ltr_win.right() - ltr_ok.right() - (rtl_ok.left() - rtl_win.left())).abs() < 2.0,
+            "the button group hugs the reading end in both directions: {ltr_ok:?} {rtl_ok:?}"
+        );
+
+        // The mirrored body keeps the modal's width.
+        assert!((rtl_win.width() - ltr_win.width()).abs() < 1.0, "the modal keeps its width: {ltr_win:?} vs {rtl_win:?}");
     }
 }

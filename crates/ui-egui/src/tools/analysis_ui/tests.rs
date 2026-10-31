@@ -1,4 +1,7 @@
 use super::*;
+use crate::direction::{Dir, direction_scope};
+use crate::i18n::{self, Lang};
+use egui_kittest::{Harness, kittest::Queryable};
 
 fn app() -> (PhotocraftApp, egui::Context) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
@@ -295,4 +298,123 @@ fn count_size_fields_send_whole_numbers_the_engine_applies() {
     app.run("count.setGroup", count_size_params(8.0, 20.0)).unwrap();
     let g = &app.session.active().unwrap().doc.measurement.count_groups[0];
     assert_eq!((g.marker_size, g.label_size), (8, 20));
+}
+
+/// The shell harness: the app in a window, so the analysis panels draw as they do live.
+fn harness() -> Harness<'static, PhotocraftApp> {
+    let mut h = Harness::builder().with_size(egui::vec2(1600.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::ProMedium);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 400, "height": 300})).expect("new document");
+        app
+    });
+    h.run_steps(4);
+    h
+}
+
+/// The first node labelled `label` (the icon buttons and the fields can share a name).
+fn node(h: &Harness<'static, PhotocraftApp>, label: &str) -> egui::Rect {
+    h.query_all_by_label(label).next().unwrap_or_else(|| panic!("`{label}` drawn")).rect()
+}
+
+/// The node labelled `label` inside `window`: the label alone is not unique — the document
+/// tab's close button is labelled `Close` too, and it is drawn first.
+fn node_in(h: &Harness<'static, PhotocraftApp>, window: egui::Rect, label: &str) -> egui::Rect {
+    h.query_all_by_label(label).find(|n| window.contains(n.rect().center())).unwrap_or_else(|| panic!("`{label}` drawn inside the window")).rect()
+}
+
+/// The Measurement Log opens 16 px inside the canvas's reading-end edge, 300 px away from
+/// it. The window is 620 px wide: the left-to-right branch measures that width from the
+/// reading-end edge, the right-to-left branch anchors the window's near edge there, so the
+/// reading-end edge ends up the same distance away in either direction.
+const LOG_EDGE_GAP: f32 = 16.0 + 300.0;
+const LOG_WIDTH: f32 = 620.0;
+
+/// The Measurement Log opens at the canvas's reading-end edge, and its close button and
+/// buttons read from the reading start.
+#[test]
+fn the_measurement_log_window_mirrors() {
+    let _lang = i18n::language_scope(Lang::EN);
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let mut h = harness();
+        h.state_mut().ui.analysis.measurement_log = true;
+        h.run_steps(4);
+        let window = h.ctx.memory(|m| m.area_rect(egui::Id::unique("measurement-log"))).expect("the log window");
+        let canvas = h.state().last_canvas_rect;
+        let close = node_in(&h, window, "Close");
+        let record = node_in(&h, window, "Record Measurements");
+        let trash = node_in(&h, window, "Delete selected measurements");
+        if dir == Dir::Rtl {
+            assert!(close.center().x < window.center().x, "the close button sits at the reading end (left)");
+            assert!(record.center().x > trash.center().x, "the buttons read right to left");
+        } else {
+            assert!(close.center().x > window.center().x, "the close button sits at the reading end (right)");
+            assert!(record.center().x < trash.center().x, "the buttons read left to right");
+        }
+        // The gap between the canvas's reading-end edge and the window, with the part of the
+        // window that extends from that edge taken off.
+        let gap = if dir == Dir::Rtl { window.left() - canvas.left() } else { canvas.right() - window.left() - LOG_WIDTH };
+        assert!((gap - LOG_EDGE_GAP).abs() < 2.0, "the window opens {LOG_EDGE_GAP} px inside the canvas's reading-end edge: {gap}");
+    }
+}
+
+/// The Notes panel's previous/next chevrons and its delete button follow the reading direction.
+#[test]
+fn the_notes_panel_mirrors() {
+    let _lang = i18n::language_scope(Lang::EN);
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let mut h = harness();
+        h.state_mut().run("notes.add", json!({"x": 20, "y": 20, "author": "Ann", "color": [1.0, 0.5, 0.75]})).expect("note");
+        h.state_mut().run("notes.add", json!({"x": 120, "y": 80, "author": "Bob", "color": [0.25, 0.5, 1.0]})).expect("note");
+        h.state_mut().ui.analysis.notes = true;
+        h.run_steps(4);
+        let prev = node(&h, "Previous note");
+        let next = node(&h, "Next note");
+        let delete = node(&h, "Delete note");
+        if dir == Dir::Rtl {
+            assert!(prev.center().x > next.center().x, "previous sits at the reading start (right)");
+            assert!(delete.center().x < next.center().x, "the delete button sits at the reading end (left)");
+        } else {
+            assert!(prev.center().x < next.center().x, "previous sits at the reading start (left)");
+            assert!(delete.center().x > next.center().x, "the delete button sits at the reading end (right)");
+        }
+    }
+}
+
+/// The analysis dialog's field label leads at the reading start, and its buttons follow the
+/// reading direction.
+#[test]
+fn the_analysis_dialog_mirrors() {
+    let _lang = i18n::language_scope(Lang::EN);
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let mut h = harness();
+        let mut f = serde_json::Map::new();
+        f.insert("preset".into(), json!("custom"));
+        f.insert("pixelLength".into(), json!(40));
+        f.insert("logicalLength".into(), json!(1));
+        f.insert("units".into(), json!("cm"));
+        h.state_mut().ui.analysis.dialog = Some(("scale".into(), f));
+        h.run_steps(4);
+        let ok = node(&h, "OK");
+        let cancel = node(&h, "Cancel");
+        let cells: Vec<egui::Rect> = h.query_all_by_label("Pixel Length:").map(|n| n.rect()).collect();
+        assert!(cells.len() >= 2, "the field and its label: {cells:?}");
+        let label = cells.iter().copied().min_by(|a, b| (a.width() - 110.0).abs().total_cmp(&(b.width() - 110.0).abs())).unwrap_or_else(|| panic!("the label"));
+        if dir == Dir::Rtl {
+            assert!(ok.center().x > cancel.center().x, "OK comes first, at the reading start");
+            assert!(
+                label.center().x > cells.iter().filter(|c| **c != label).map(|c| c.center().x).fold(f32::MIN, f32::max),
+                "the label leads at the reading start"
+            );
+        } else {
+            assert!(ok.center().x < cancel.center().x, "OK comes first, at the reading start");
+            assert!(
+                label.center().x < cells.iter().filter(|c| **c != label).map(|c| c.center().x).fold(f32::MAX, f32::min),
+                "the label leads at the reading start"
+            );
+        }
+    }
 }

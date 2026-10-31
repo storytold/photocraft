@@ -386,7 +386,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let alt = crate::shortcuts::pretty("Alt");
         crate::analysis_ui::panel_window(app, ctx, "modifier-keys", tl!("Modifier Keys"), vec2(-420.0, 80.0), 150.0, |ui| {
             close = crate::analysis_ui::title_row(ui, tl!("Modifier Keys"));
-            ui.horizontal(|ui| {
+            crate::text::direction::dialog_row(ui, |ui| {
                 for (label, on) in [(&*shift, &mut s.sticky_shift), (&*cmd, &mut s.sticky_command), (&*alt, &mut s.sticky_alt)] {
                     if ui.add(egui::Button::new(RichText::new(label).size(14.0)).selected(*on).min_size(vec2(40.0, 30.0))).clicked() {
                         *on = !*on;
@@ -408,95 +408,95 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let title = title(&kind);
     let names: Vec<String> = app.session.prefs().workspaces.keys().cloned().collect();
     let mut result: Option<bool> = None;
-    egui::Window::new(title).id(egui::Id::unique("shell-dialog")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
+    egui::Window::new(title).id(egui::Id::unique("shell-dialog")).title_bar(false).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
         ctx,
         |ui| {
-            ui.label(RichText::new(tl!(&title)).color(t.text).size(13.0).strong());
-            crate::widgets::hairline(ui);
-            ui.add_space(6.0);
-            let text = |ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(tl!(&label)).color(t.text_dim).size(11.0));
-                    let mut v = f.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-                    if ui.add(egui::TextEdit::singleline(&mut v).desired_width(180.0)).accessible_name(tl!(label)).changed() {
-                        f.insert(key.into(), json!(v));
-                    }
-                });
-            };
-            let check = |ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str| {
-                let mut on = f.get(key).and_then(Value::as_bool).unwrap_or(false);
-                if crate::widgets::checkbox(ui, &mut on, label).changed() {
-                    f.insert(key.into(), json!(on));
-                }
-            };
-            let number = |ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, range: std::ops::RangeInclusive<f32>| {
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(tl!(&label)).color(t.text_dim).size(11.0));
-                    let mut v = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-                    if crate::widgets::slider(ui, &mut v, range.clone(), None).changed()
-                        | crate::widgets::value_field(ui, &mut v, range, "", 60.0).accessible_name(tl!(&label)).changed()
-                    {
-                        f.insert(key.into(), json!(v));
-                    }
-                });
-            };
-            match kind.as_str() {
-                "newWorkspace" => {
-                    text(ui, &mut f, "name", tl!("Name:"));
-                    ui.label(RichText::new(tl!("Capture")).color(t.text_dim).size(11.0));
-                    ui.label(
-                        RichText::new(tl!("Panel locations are saved in the workspace. Keyboard shortcuts, menus and toolbar are optional."))
-                            .color(t.text_faint)
-                            .size(10.5),
-                    );
-                    check(ui, &mut f, "keyboardShortcuts", tl!("Keyboard Shortcuts"));
-                    check(ui, &mut f, "menus", tl!("Menus"));
-                    check(ui, &mut f, "toolbar", tl!("Toolbar"));
-                }
-                "deleteWorkspace" => {
-                    let mut cur = f.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-                    let opts: Vec<(String, &str)> = names.iter().map(|n| (n.clone(), n.as_str())).collect();
-                    if !opts.is_empty() && crate::widgets::dropdown(ui, "ws-delete", tl!("Workspace"), &mut cur, &opts, 180.0) {
-                        f.insert("name".into(), json!(cur));
-                    }
-                }
-                "customPar" => {
-                    text(ui, &mut f, "name", tl!("Name:"));
-                    number(ui, &mut f, "ratio", tl!("Factor:"), 0.1..=10.0);
-                }
-                "preview32" => {
-                    // A slider fills its available width. Keep its field above it, so the
-                    // field cannot grow an auto-sized window beyond that width each frame.
-                    ui.set_width((ctx.content_rect().width() - 32.0).clamp(0.0, 320.0));
-                    let mut m = f.get("method").and_then(Value::as_str).unwrap_or("exposureGamma").to_string();
-                    if crate::widgets::dropdown(
-                        ui,
-                        "p32-method",
-                        tl!("Mode"),
-                        &mut m,
-                        &[("exposureGamma".to_string(), tl!("Exposure and Gamma")), ("highlightCompression".to_string(), tl!("Highlight Compression"))],
-                        180.0,
-                    ) {
-                        f.insert("method".into(), json!(m));
-                    }
-                    ui.add_enabled_ui(m == "exposureGamma", |ui| {
-                        for (key, label, range) in [("exposure", tl!("Exposure:"), -20.0..=20.0), ("gamma", tl!("Gamma:"), 0.1..=9.99)] {
-                            let mut v = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-                            if crate::widgets::slider_row(ui, label, &mut v, range, "", None).changed() {
-                                f.insert(key.into(), json!(v));
-                            }
+            crate::text::direction::window_body(ui, |ui| {
+                ui.label(RichText::new(tl!(&title)).color(t.text).size(13.0).strong());
+                crate::widgets::hairline(ui);
+                ui.add_space(6.0);
+                let text = |ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str| {
+                    crate::text::direction::dialog_row(ui, |ui| {
+                        ui.label(RichText::new(tl!(&label)).color(t.text_dim).size(11.0));
+                        let mut v = f.get(key).and_then(Value::as_str).unwrap_or("").to_string();
+                        if crate::widgets::rtl_singleline_edit(ui, &mut v, 180.0, "").accessible_name(tl!(label)).changed() {
+                            f.insert(key.into(), json!(v));
                         }
                     });
-                }
-                _ => {
-                    for (k, label) in extras_options() {
-                        check(ui, &mut f, k, label);
+                };
+                let check = |ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str| {
+                    let mut on = f.get(key).and_then(Value::as_bool).unwrap_or(false);
+                    if crate::widgets::checkbox(ui, &mut on, label).changed() {
+                        f.insert(key.into(), json!(on));
+                    }
+                };
+                let number = |ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, range: std::ops::RangeInclusive<f32>| {
+                    crate::text::direction::dialog_row(ui, |ui| {
+                        ui.label(RichText::new(tl!(&label)).color(t.text_dim).size(11.0));
+                        let mut v = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+                        if crate::widgets::slider(ui, &mut v, range.clone(), None).changed()
+                            | crate::widgets::value_field(ui, &mut v, range, "", 60.0).accessible_name(tl!(&label)).changed()
+                        {
+                            f.insert(key.into(), json!(v));
+                        }
+                    });
+                };
+                match kind.as_str() {
+                    "newWorkspace" => {
+                        text(ui, &mut f, "name", tl!("Name:"));
+                        ui.label(RichText::new(tl!("Capture")).color(t.text_dim).size(11.0));
+                        ui.label(
+                            RichText::new(tl!("Panel locations are saved in the workspace. Keyboard shortcuts, menus and toolbar are optional."))
+                                .color(t.text_faint)
+                                .size(10.5),
+                        );
+                        check(ui, &mut f, "keyboardShortcuts", tl!("Keyboard Shortcuts"));
+                        check(ui, &mut f, "menus", tl!("Menus"));
+                        check(ui, &mut f, "toolbar", tl!("Toolbar"));
+                    }
+                    "deleteWorkspace" => {
+                        let mut cur = f.get("name").and_then(Value::as_str).unwrap_or("").to_string();
+                        let opts: Vec<(String, &str)> = names.iter().map(|n| (n.clone(), n.as_str())).collect();
+                        if !opts.is_empty() && crate::widgets::dropdown(ui, "ws-delete", tl!("Workspace"), &mut cur, &opts, 180.0) {
+                            f.insert("name".into(), json!(cur));
+                        }
+                    }
+                    "customPar" => {
+                        text(ui, &mut f, "name", tl!("Name:"));
+                        number(ui, &mut f, "ratio", tl!("Factor:"), 0.1..=10.0);
+                    }
+                    "preview32" => {
+                        // A slider fills its available width. Keep its field above it, so the
+                        // field cannot grow an auto-sized window beyond that width each frame.
+                        ui.set_width((ctx.content_rect().width() - 32.0).clamp(0.0, 320.0));
+                        let mut m = f.get("method").and_then(Value::as_str).unwrap_or("exposureGamma").to_string();
+                        if crate::widgets::dropdown(
+                            ui,
+                            "p32-method",
+                            tl!("Mode"),
+                            &mut m,
+                            &[("exposureGamma".to_string(), tl!("Exposure and Gamma")), ("highlightCompression".to_string(), tl!("Highlight Compression"))],
+                            180.0,
+                        ) {
+                            f.insert("method".into(), json!(m));
+                        }
+                        ui.add_enabled_ui(m == "exposureGamma", |ui| {
+                            for (key, label, range) in [("exposure", tl!("Exposure:"), -20.0..=20.0), ("gamma", tl!("Gamma:"), 0.1..=9.99)] {
+                                let mut v = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
+                                if crate::widgets::slider_row(ui, label, &mut v, range, "", None).changed() {
+                                    f.insert(key.into(), json!(v));
+                                }
+                            }
+                        });
+                    }
+                    _ => {
+                        for (k, label) in extras_options() {
+                            check(ui, &mut f, k, label);
+                        }
                     }
                 }
-            }
-            ui.add_space(8.0);
-            ui.horizontal(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(8.0);
+                ui.with_layout(crate::text::direction::trailing_min(), |ui| {
                     let ok = if kind == "deleteWorkspace" { tl!("Delete") } else { tl!("OK") };
                     if let Some(role) = crate::widgets::dialog_buttons(
                         ui,
@@ -508,7 +508,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                         result = Some(role == crate::widgets::ButtonRole::Default);
                     }
                 });
-            });
+            })
         },
     );
     match result {
@@ -808,5 +808,69 @@ mod tests {
         crate::menus::invoke(&mut app, &ctx, id, p).unwrap();
         let d = app.session.active().unwrap().doc.id;
         assert_eq!(app.session.color.hdr[&d].exposure, 1.5);
+    }
+
+    #[test]
+    fn rtl_shell_dialog_mirrors_field_rows_and_footer() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        for dir in [crate::text::direction::Dir::Ltr, crate::text::direction::Dir::Rtl] {
+            let _scope = crate::text::direction::direction_scope(dir);
+            let rtl = dir == crate::text::direction::Dir::Rtl;
+            let (app, _ctx) = app();
+            let mut h = Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(|ui, app| windows(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            let ctx = h.ctx.clone();
+            crate::menus::invoke(h.state_mut(), &ctx, "window.workspace.newWorkspace", json!({})).unwrap();
+            h.run_steps(4);
+            // The "Name:" label and its text field share the accessible name; the field is the wide one.
+            let mut nodes: Vec<_> = h.query_all_by_label("Name:").collect();
+            assert_eq!(nodes.len(), 2, "dir={dir:?}: label + field under Name:");
+            nodes.sort_by(|a, b| a.rect().width().total_cmp(&b.rect().width()));
+            let (label, field) = (nodes[0].rect(), nodes[1].rect());
+            if rtl {
+                assert!(label.center().x > field.center().x, "RTL: label at the reading start: {label:?} vs {field:?}");
+            } else {
+                assert!(label.center().x < field.center().x, "LTR: {label:?} vs {field:?}");
+            }
+            let win = h.ctx.memory(|m| m.area_rect(egui::Id::unique("shell-dialog"))).unwrap();
+            assert!(field.top() - win.top() < 80.0, "dir={dir:?}: the Name row sits under the title, not centred in the body: {field:?} in {win:?}");
+            let ok = h.get_by_label("OK").rect();
+            let cancel = h.get_by_label("Cancel").rect();
+            if rtl {
+                assert!(ok.center().x > cancel.center().x, "RTL footer mirrors: {ok:?} vs {cancel:?}");
+                assert!(cancel.left() - win.left() < 40.0, "RTL footer hugs the reading end (left): {cancel:?} in {win:?}");
+            } else {
+                assert!(ok.center().x < cancel.center().x, "LTR footer: {ok:?} vs {cancel:?}");
+                assert!(win.right() - cancel.right() < 40.0, "LTR footer hugs the reading end (right): {cancel:?} in {win:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn rtl_modifier_keys_buttons_read_from_the_right() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let shift = crate::shortcuts::pretty("Shift");
+        let alt = crate::shortcuts::pretty("Alt");
+        for dir in [crate::text::direction::Dir::Ltr, crate::text::direction::Dir::Rtl] {
+            let _scope = crate::text::direction::direction_scope(dir);
+            let rtl = dir == crate::text::direction::Dir::Rtl;
+            let (mut app, _ctx) = app();
+            app.run("file.new", json!({"width": 50, "height": 50})).unwrap();
+            let mut h = Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(|ui, app| windows(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            let ctx = h.ctx.clone();
+            h.run_steps(2);
+            crate::menus::invoke(h.state_mut(), &ctx, "window.panel.modifierKeys", json!({})).unwrap();
+            h.run_steps(4);
+            let shift = h.get_by_label(shift.as_str()).rect();
+            let alt = h.get_by_label(alt.as_str()).rect();
+            if rtl {
+                assert!(shift.center().x > alt.center().x, "RTL: Shift at the reading start: {shift:?} vs {alt:?}");
+            } else {
+                assert!(shift.center().x < alt.center().x, "LTR: {shift:?} vs {alt:?}");
+            }
+            let win = h.ctx.memory(|m| m.area_rect(egui::Id::unique("modifier-keys"))).unwrap();
+            assert!(shift.top() - win.top() < 80.0, "dir={dir:?}: the button row sits under the title, not centred in the panel: {shift:?} in {win:?}");
+        }
     }
 }

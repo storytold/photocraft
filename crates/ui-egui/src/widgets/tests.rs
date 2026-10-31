@@ -71,6 +71,90 @@ fn checkbox_label_is_a_button_target_not_selectable_text() {
     assert!(!*h.state(), "the same named checkbox supports Space");
 }
 
+/// RTL: the box leads on the right and the click targets flip with it. The box has no accessible
+/// node of its own (the label carries the checkbox role), so the probe clicks where the 14 pt
+/// square sits: 6 pt of gap plus half the box from the label's near edge.
+#[test]
+fn rtl_checkbox_box_leads_on_the_right_and_click_targets_flip() {
+    use egui_kittest::Harness;
+    let click = |h: &mut Harness<'static, bool>, at: egui::Pos2| {
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+    };
+    let probe = |dir: crate::text::direction::Dir, box_before_label: bool| -> (egui::Rect, bool) {
+        let _dir = crate::text::direction::direction_scope(dir);
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0)).build_ui_state(
+            |ui, on: &mut bool| {
+                super::checkbox(ui, on, "Show Transform Controls");
+            },
+            false,
+        );
+        h.run_steps(2);
+        let label = h.get_by_label("Show Transform Controls").rect();
+        let at = if box_before_label { egui::pos2(label.left() - 13.0, label.center().y) } else { egui::pos2(label.right() + 13.0, label.center().y) };
+        click(&mut h, at);
+        (label, *h.state())
+    };
+    let (label, on) = probe(crate::text::direction::Dir::Ltr, true);
+    assert!(on, "LTR: the box before the label toggles ({label:?})");
+    let (_, off) = probe(crate::text::direction::Dir::Ltr, false);
+    assert!(!off, "LTR: nothing to toggle after the label");
+    let (label, on) = probe(crate::text::direction::Dir::Rtl, false);
+    assert!(on, "RTL: the box after the label (on its right) toggles ({label:?})");
+    let (_, off) = probe(crate::text::direction::Dir::Rtl, true);
+    assert!(!off, "RTL: nothing to toggle before the label");
+}
+
+/// RTL: the switch leads on the right (label to its left) and clicking it still flips the state.
+/// The knob is painted, so its off position is read back from the shapes: it starts at the
+/// switch's reading-start edge.
+#[test]
+fn rtl_toggle_switch_leads_on_the_right_and_the_knob_starts_at_the_reading_start() {
+    use egui_kittest::Harness;
+    fn knob(shapes: &[egui::epaint::ClippedShape], out: &mut Vec<egui::Pos2>) {
+        for clipped in shapes {
+            circle(&clipped.shape, out);
+        }
+    }
+
+    fn circle(shape: &egui::Shape, out: &mut Vec<egui::Pos2>) {
+        match shape {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| circle(s, out)),
+            egui::Shape::Circle(c) if (c.radius - 6.5).abs() < 0.5 && c.fill == Color32::WHITE => out.push(c.center),
+            _ => {}
+        }
+    }
+    let probe = |dir: crate::text::direction::Dir| -> (f32, bool) {
+        let _dir = crate::text::direction::direction_scope(dir);
+        let rtl = dir == crate::text::direction::Dir::Rtl;
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0)).build_ui_state(
+            |ui, on: &mut bool| {
+                super::toggle(ui, on, "Use Graphics Processor");
+            },
+            false,
+        );
+        h.run_steps(2);
+        let mut circles = Vec::new();
+        knob(&h.output().shapes, &mut circles);
+        let x = circles.first().expect("the knob is painted").x;
+        // The switch centre is half a knob radius past the knob's off position.
+        let at = egui::pos2(if rtl { x - 6.5 } else { x + 6.5 }, 12.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+        h.run();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+        h.run_steps(2);
+        (x, *h.state())
+    };
+    let (x, on) = probe(crate::text::direction::Dir::Ltr);
+    assert!(x < 60.0 && on, "LTR: the switch leads the row and toggles (knob at {x})");
+    let (x, on) = probe(crate::text::direction::Dir::Rtl);
+    assert!(x > 240.0 && on, "RTL: the switch leads on the right and toggles (knob at {x})");
+}
+
 /// #3208: a rounded swatch's checker is one shared, repeating, unblurred two-by-two tile on
 /// the rounded rect, scaled so a cell stays `cell` points, so nothing shows past the corners.
 #[test]
@@ -297,6 +381,50 @@ fn text_field_bounds_an_oversized_existing_value() {
     h.event(egui::Event::Key { key: egui::Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
     h.run_steps(1);
     assert!(h.state().chars().count() < super::TEXT_FIELD_LIMIT, "an edit keeps the bounded copy");
+}
+
+/// RTL: a text field's hint and value align at the reading start (the box's right edge), while a
+/// monospaced hex/code field stays left-to-right. Text is painted as a galley anchored at the
+/// align point, so the anchor's x sits at the field's inner left (LTR) or right (RTL).
+#[test]
+fn rtl_text_field_aligns_hint_and_value_at_the_reading_start() {
+    use egui::accesskit::Role;
+    fn anchor_x(shapes: &[egui::epaint::ClippedShape], needle: &str) -> Option<f32> {
+        fn walk(shape: &egui::Shape, needle: &str, found: &mut Option<f32>) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, needle, found)),
+                egui::Shape::Text(t) if t.galley.text().contains(needle) => *found = Some(t.pos.x),
+                _ => {}
+            }
+        }
+        let mut found = None;
+        shapes.iter().for_each(|c| walk(&c.shape, needle, &mut found));
+        found
+    }
+    let probe = |dir: crate::text::direction::Dir, mono: bool, text: &str, needle: &str| -> (egui::Rect, f32) {
+        let _dir = crate::text::direction::direction_scope(dir);
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(300.0, 80.0))
+            .build_ui_state(|ui, s: &mut String| drop(super::text_field(ui, egui::Id::unique("tf"), s, "hint text", 200.0, mono)), text.to_string());
+        crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(2);
+        let field = h.get_by_role(Role::TextInput).rect();
+        let x = anchor_x(&h.output().shapes, needle).expect("the text is painted");
+        (field, x)
+    };
+    // The hint shows while the field is empty.
+    let (field, x) = probe(crate::text::direction::Dir::Ltr, false, "", "hint text");
+    assert!(x < field.center().x, "LTR: the hint anchors at the left edge ({x} in {field:?})");
+    let (field, x) = probe(crate::text::direction::Dir::Rtl, false, "", "hint text");
+    assert!(x > field.center().x, "RTL: the hint anchors at the right edge ({x} in {field:?})");
+    // Typed value content follows the same alignment.
+    let (field, x) = probe(crate::text::direction::Dir::Ltr, false, "abc", "abc");
+    assert!(x < field.center().x, "LTR: the value anchors at the left edge ({x} in {field:?})");
+    let (field, x) = probe(crate::text::direction::Dir::Rtl, false, "abc", "abc");
+    assert!(x > field.center().x, "RTL: the value anchors at the right edge ({x} in {field:?})");
+    // Hex/code fields stay left-to-right even under RTL.
+    let (field, x) = probe(crate::text::direction::Dir::Rtl, true, "#282828", "#282828");
+    assert!(x < field.center().x, "RTL mono: code stays left-aligned ({x} in {field:?})");
 }
 
 /// #2150: text queued by the control channel (`ui.type`) joins the input in `raw_input_hook`
@@ -707,13 +835,31 @@ fn dragging_a_label_scrubs_the_field_right_after_it() {
 /// A right-aligned OK / Cancel / Apply row as `os` draws it: labels left to right, and the
 /// row's right edge with the window's.
 fn button_row(os: egui::os::OperatingSystem) -> (Vec<String>, f32, f32) {
+    let (order, _, right, _, edge) = button_row_harness(os, egui::Layout::right_to_left(egui::Align::Min));
+    (order, right, edge)
+}
+
+/// [`button_row`] in an outer footer row of `outer`: the labels in visual left-to-right order,
+/// the buttons' left and right edges, and the content rect's left and right edges.
+fn button_row_harness(os: egui::os::OperatingSystem, outer: egui::Layout) -> (Vec<String>, f32, f32, f32, f32) {
+    use egui_kittest::kittest::Queryable;
+    let h = button_row_ui(os, outer);
+    let mut drawn: Vec<(f32, f32, String)> =
+        ["OK", "Cancel", "Apply"].iter().map(|l| (h.get_by_label(l).rect().left(), h.get_by_label(l).rect().right(), l.to_string())).collect();
+    drawn.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let left = drawn.first().map_or(0.0, |d| d.0);
+    let right = drawn.last().map_or(0.0, |d| d.1);
+    (drawn.into_iter().map(|d| d.2).collect(), left, right, h.ctx.content_rect().left(), h.ctx.content_rect().right())
+}
+
+/// The harness [`button_row_harness`] measures: one dialog button row drawn from the second
+/// frame, once the theme's fonts are bound.
+fn button_row_ui(os: egui::os::OperatingSystem, outer: egui::Layout) -> egui_kittest::Harness<'static, bool> {
     use super::{ButtonRole, DialogButton};
-    use egui_kittest::{Harness, kittest::Queryable};
-    // Drawn from the second frame, once the theme's fonts are bound.
-    let mut h = Harness::builder().with_size(egui::vec2(500.0, 80.0)).build_ui_state(
-        |ui, ready: &mut bool| {
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 80.0)).build_ui_state(
+        move |ui, ready: &mut bool| {
             if *ready {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                ui.with_layout(outer, |ui| {
                     let row = [
                         DialogButton::new(ButtonRole::Default, "OK", 84.0),
                         DialogButton::new(ButtonRole::Cancel, "Cancel", 84.0),
@@ -729,11 +875,7 @@ fn button_row(os: egui::os::OperatingSystem) -> (Vec<String>, f32, f32) {
     h.ctx.set_os(os);
     *h.state_mut() = true;
     h.run();
-    let mut drawn: Vec<(f32, f32, String)> =
-        ["OK", "Cancel", "Apply"].iter().map(|l| (h.get_by_label(l).rect().left(), h.get_by_label(l).rect().right(), l.to_string())).collect();
-    drawn.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let right = drawn.last().map_or(0.0, |d| d.1);
-    (drawn.into_iter().map(|d| d.2).collect(), right, h.ctx.content_rect().right())
+    h
 }
 
 #[test]
@@ -744,6 +886,58 @@ fn dialog_buttons_follow_the_platform_order() {
         assert_eq!(order, want, "{os:?}");
         assert!(edge - right < 20.0, "{os:?}: the row hugs the right edge ({right} of {edge})");
     }
+}
+
+/// RTL: the same logical add order paints the platform's mirrored order, and the group hugs the
+/// reading end — the footer row's left edge here, as the dialog footer pins it.
+#[test]
+fn rtl_dialog_buttons_follow_the_platform_order_mirrored() {
+    use egui::os::OperatingSystem as Os;
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    for (os, want) in [(Os::Windows, ["Apply", "Cancel", "OK"]), (Os::Nix, ["Apply", "Cancel", "OK"]), (Os::Mac, ["OK", "Apply", "Cancel"])] {
+        let (order, left, _, content_left, _) = button_row_harness(os, crate::text::direction::trailing_min());
+        assert_eq!(order, want, "{os:?}");
+        assert!(left - content_left < 20.0, "{os:?}: the group hugs the left (reading-end) edge ({left} of {content_left})");
+    }
+}
+
+/// Mirroring must not change the Tab walk: focus follows creation order, which the slot loop
+/// owns, in both directions (Windows row).
+#[test]
+fn rtl_dialog_buttons_keep_the_tab_order() {
+    use egui::os::OperatingSystem as Os;
+    use egui_kittest::kittest::Queryable;
+    let walk = |dir: crate::text::direction::Dir| -> Vec<&'static str> {
+        let _dir = crate::text::direction::direction_scope(dir);
+        let outer = crate::text::direction::trailing_min();
+        let mut h = button_row_ui(Os::Windows, outer);
+        let mut walked = Vec::new();
+        for _ in 0..3 {
+            h.key_press(egui::Key::Tab);
+            h.run();
+            for l in ["OK", "Cancel", "Apply"] {
+                if h.query_by_label(l).is_some_and(|n| n.is_focused()) {
+                    walked.push(l);
+                }
+            }
+        }
+        walked
+    };
+    assert_eq!(walk(crate::text::direction::Dir::Ltr), ["OK", "Cancel", "Apply"]);
+    assert_eq!(walk(crate::text::direction::Dir::Rtl), ["OK", "Cancel", "Apply"], "mirrored visuals must not change the Tab walk");
+}
+
+/// The block's size fold is order-independent: the row is as wide in RTL as in LTR.
+#[test]
+fn rtl_dialog_buttons_block_keeps_its_width() {
+    use egui::os::OperatingSystem as Os;
+    let width = |dir: crate::text::direction::Dir| -> f32 {
+        let _dir = crate::text::direction::direction_scope(dir);
+        let outer = crate::text::direction::trailing_min();
+        let (_, left, right, _, _) = button_row_harness(Os::Windows, outer);
+        right - left
+    };
+    assert!((width(crate::text::direction::Dir::Ltr) - width(crate::text::direction::Dir::Rtl)).abs() < 0.5);
 }
 
 #[test]

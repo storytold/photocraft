@@ -205,21 +205,25 @@ pub(crate) fn interact(
         ui.ctx().data_mut(|data| data.remove::<ZoomCapture>(capture_id));
     }
     response.context_menu(|ui| {
-        if ui.button(tl!("Fit in View")).clicked() {
-            state.fit();
-            ui.close();
-        }
-        if ui.button(tl!("100%")).clicked() {
-            state.zoom_at(1.0, at, viewport, size);
-            ui.close();
-        }
-        ui.menu_button(tl!("Zoom Tool"), |ui| {
-            for percent in [25.0, 50.0, 100.0, 200.0, 400.0, 800.0, 1600.0] {
-                if ui.button(format!("{percent:.0}%")).clicked() {
-                    state.zoom_at(percent / 100.0, at, viewport, size);
-                    ui.close();
-                }
+        crate::menus::popup_body(ui, |ui| {
+            if crate::menu_keys::menu_row(ui, tl!("Fit in View"), None, false, true).clicked() {
+                state.fit();
+                ui.close();
             }
+            if crate::menu_keys::menu_row(ui, tl!("100%"), None, false, true).clicked() {
+                state.zoom_at(1.0, at, viewport, size);
+                ui.close();
+            }
+            ui.menu_button(tl!("Zoom Tool"), |ui| {
+                crate::menus::popup_body(ui, |ui| {
+                    for percent in [25.0, 50.0, 100.0, 200.0, 400.0, 800.0, 1600.0] {
+                        if crate::menu_keys::menu_row(ui, &format!("{percent:.0}%"), None, false, true).clicked() {
+                            state.zoom_at(percent / 100.0, at, viewport, size);
+                            ui.close();
+                        }
+                    }
+                });
+            });
         });
     });
     if !ui.ctx().text_edit_focused() {
@@ -392,5 +396,50 @@ mod tests {
         view.zoom_at(f32::INFINITY, viewport.center(), viewport, size);
         view.pan(vec2(f32::NAN, 1.0), viewport, size);
         assert_eq!(view, before);
+    }
+
+    /// The zoom context menu's rows: RTL mirrors the label to the popup's right edge, LTR is
+    /// unchanged (the shared `popup_body` + `menu_row` pass through).
+    #[test]
+    fn zoom_context_menu_rows_mirror_only_under_rtl() {
+        let texts = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+            let mut popup = egui::Rect::NOTHING;
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let btn = ui.button("preview");
+                    let _ = egui::Popup::menu(&btn)
+                        .open_memory(Some(egui::SetOpenCommand::Bool(true)))
+                        .show(|ui| {
+                            crate::menus::popup_body(ui, |ui| {
+                                let _ = crate::menu_keys::menu_row(ui, tl!("Fit in View"), None, false, true);
+                                let _ = crate::menu_keys::menu_row(ui, tl!("100%"), None, false, true);
+                            });
+                        })
+                        .inspect(|r| popup = r.response.rect);
+                });
+                texts = out
+                    .shapes
+                    .iter()
+                    .filter_map(|cs| match &cs.shape {
+                        egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                        _ => None,
+                    })
+                    .collect();
+                out.textures_delta.clear();
+            }
+            (popup, texts)
+        };
+        let (rtl_popup, rtl) = texts(crate::direction::Dir::Rtl);
+        let (ltr_popup, ltr) = texts(crate::direction::Dir::Ltr);
+        assert!(rtl_popup.is_positive() && ltr_popup.is_positive(), "the popups opened");
+        let at = |v: &[(String, egui::Rect)], s: &str| v.iter().find(|(t, _)| t.contains(s)).map(|(_, r)| *r).unwrap_or(egui::Rect::NOTHING);
+        let fit = at(&rtl, "Fit");
+        assert!(rtl_popup.right() - fit.right() < 32.0, "rtl: the row label hugs the popup's right edge: {fit:?} in {rtl_popup:?}");
+        let fit = at(&ltr, "Fit");
+        assert!(fit.left() - ltr_popup.left() < 32.0, "ltr: the row label hugs the popup's left edge: {fit:?} in {ltr_popup:?}");
     }
 }

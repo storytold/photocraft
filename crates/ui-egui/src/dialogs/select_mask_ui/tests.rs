@@ -789,3 +789,208 @@ fn sparse_large_preview_counts_coverage_without_a_dense_canvas_mask() {
     assert_eq!(selected_pixels(Some(&inverted), smaller), 999_999);
     assert_eq!(selected_pixels(None, area), 0);
 }
+
+/// The workspace's harness at 1400 × 900, as the LTR render test draws it.
+fn workspace_harness(app: PhotocraftApp) -> egui_kittest::Harness<'static, PhotocraftApp> {
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1400.0, 900.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let ctx = ui.ctx().clone();
+            if !ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                return;
+            }
+            show(app, &ctx);
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    h.run_steps(4);
+    h
+}
+
+/// The painted rect of a painter-drawn text (not an egui widget): the document tab's title and
+/// the Properties panel's head label.
+fn painted_text_rect(h: &egui_kittest::Harness<'_, PhotocraftApp>, text: &str) -> egui::Rect {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Text(ts) if ts.galley.text() == text => Some(s.shape.visual_bounding_rect()),
+            _ => None,
+        })
+        .next()
+        .unwrap_or_else(|| panic!("no painted text {text:?}"))
+}
+
+/// The active document tab's painted rect: the only canvas-coloured rect of tab height.
+fn active_tab_rect(h: &egui_kittest::Harness<'_, PhotocraftApp>) -> egui::Rect {
+    let canvas = crate::theme::Tokens::get(&h.ctx).canvas;
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Rect(r) if r.fill == canvas && r.rect.height() == TAB_H => Some(r.rect),
+            _ => None,
+        })
+        .next()
+        .expect("the active document tab")
+}
+
+/// The Lasso slot's flyout triangle — the only 3-point path hugging the Lasso button — as its
+/// (min_x, max_x) span.
+fn flyout_triangle_x(h: &egui_kittest::Harness<'_, PhotocraftApp>, lasso: egui::Rect) -> (f32, f32) {
+    h.output()
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Path(p) if p.points.len() == 3 && p.points.iter().all(|pt| (pt.x - lasso.center().x).abs() < 40.0) => {
+                let min = p.points.iter().map(|pt| pt.x).fold(f32::MAX, f32::min);
+                let max = p.points.iter().map(|pt| pt.x).fold(f32::MIN, f32::max);
+                Some((min, max))
+            }
+            _ => None,
+        })
+        .next()
+        .expect("the Lasso slot's flyout triangle")
+}
+
+/// Left-to-right: the tools on the left, the Properties panel on the right, and the footer's OK
+/// and Cancel against the right edge with Reset at the left.
+#[test]
+fn ltr_keeps_the_workspace_layout() {
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    let h = workspace_harness(app);
+    let hand = h.get_by_label("Hand Tool (H)").rect();
+    assert!(hand.right() < 60.0, "the tool strip is on the left: {hand:?}");
+    let remember = h.query_by_label_contains("Remember Settings").expect("the checkbox").rect();
+    assert!(remember.left() > 1000.0, "the Properties panel is on the right: {remember:?}");
+    let cancel = h.get_by_label("Cancel").rect();
+    let ok = h.get_by_label("OK").rect();
+    let reset = h.get_by_label("Reset").rect();
+    assert!(cancel.left() > ok.right(), "Cancel is the outermost: {cancel:?} {ok:?}");
+    assert!(reset.left() < ok.left(), "Reset is at the left: {reset:?} {ok:?}");
+    // The Properties panel's own rows read left to right.
+    let color_aware = h.get_by_label("Color Aware").rect();
+    let object_aware = h.get_by_label("Object Aware").rect();
+    assert!(color_aware.left() < object_aware.left(), "the panel's rows read left to right: {color_aware:?} {object_aware:?}");
+    // The folding section titles hug the panel's left edge, as the fork's CollapsingHeader draws them.
+    let refine = h.get_by_role_and_label(egui::accesskit::Role::DisclosureTriangle, "Refine Mode").rect();
+    assert!(refine.left() > 1000.0 && refine.left() < 1100.0, "the section title hugs the panel's left edge: {refine:?}");
+    // The View Mode section's two columns sit side by side, not on top of each other: the view
+    // dropdown is left of the checkbox column.
+    let view = h.query_by_value("Onion Skin (O)").expect("the view dropdown").rect();
+    let show_edge = h.query_by_label_contains("Show Edge").expect("the checkbox").rect();
+    assert!(view.right() < show_edge.left(), "the view dropdown is left of the checkbox column: {view:?} {show_edge:?}");
+    // The active document tab hugs the document area's left edge.
+    let tab = active_tab_rect(&h);
+    assert!(tab.left() < 100.0 && tab.width() < 400.0, "the active tab is at the left edge: {tab:?}");
+    // The Properties head label starts 12 pt in from the panel head's left edge.
+    let head = painted_text_rect(&h, "Properties");
+    assert!(head.left() > 1000.0 && head.left() < 1100.0, "the head label hugs the panel's left edge: {head:?}");
+    // The Lasso slot's flyout triangle points right from the button's right edge.
+    let lasso = h.get_by_label("Lasso Tool (L)").rect();
+    let (tri_min, tri_max) = flyout_triangle_x(&h, lasso);
+    assert!(
+        (tri_max - (lasso.right() - 3.0)).abs() < 1.0 && (tri_min - (lasso.right() - 8.0)).abs() < 1.0,
+        "the flyout points right from the button's right edge: {tri_min}..{tri_max} vs {lasso:?}"
+    );
+}
+
+/// Right-to-left: the chrome mirrors — the tools on the right, the Properties panel on the left,
+/// OK and Cancel against the left edge with Reset at the right. The document stays left-to-right.
+#[test]
+fn rtl_mirrors_the_workspace_chrome() {
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    let mut app = app_with_selection();
+    open(&mut app).unwrap();
+    let h = workspace_harness(app);
+    let hand = h.get_by_label("Hand Tool (H)").rect();
+    assert!(hand.left() > 1340.0, "the tool strip is on the right: {hand:?}");
+    let remember = h.query_by_label_contains("Remember Settings").expect("the checkbox").rect();
+    assert!(remember.right() < 360.0, "the Properties panel is on the left: {remember:?}");
+    let cancel = h.get_by_label("Cancel").rect();
+    let ok = h.get_by_label("OK").rect();
+    let reset = h.get_by_label("Reset").rect();
+    assert!(cancel.right() < ok.left(), "Cancel is the outermost: {cancel:?} {ok:?}");
+    assert!(reset.left() > ok.right(), "Reset is at the right: {reset:?} {ok:?}");
+    // The options bar's row reads from the right: Add comes before Subtract, mirrored.
+    let add = h.get_by_label("Add").rect();
+    let subtract = h.get_by_label("Subtract").rect();
+    assert!(add.left() > subtract.right(), "the options bar mirrors: {add:?} {subtract:?}");
+    // The Properties panel's own rows read from the right.
+    let color_aware = h.get_by_label("Color Aware").rect();
+    let object_aware = h.get_by_label("Object Aware").rect();
+    assert!(color_aware.left() > object_aware.right(), "the panel's rows mirror: {color_aware:?} {object_aware:?}");
+    // The folding section titles lead with the arrow at the panel's reading-start (right) edge,
+    // where the fork's CollapsingHeader would leave them at the left. The RTL header publishes
+    // the same DisclosureTriangle role as LTR's CollapsingHeader, plus the inner label node.
+    let refine = h.get_by_role_and_label(egui::accesskit::Role::DisclosureTriangle, "Refine Mode").rect();
+    assert!(refine.right() > 300.0 && refine.right() <= 352.0, "the section title hugs the panel's right edge: {refine:?}");
+    // The View Mode section's two columns sit side by side in RTL too: the view dropdown is
+    // right of the checkbox column and the two do not overlap.
+    let view = h.query_by_value("Onion Skin (O)").expect("the view dropdown").rect();
+    let mut cb_right = f32::MIN;
+    for label in ["Show Edge", "Show Original", "Real-Time Refinement", "High Quality Preview"] {
+        cb_right = cb_right.max(h.query_by_label_contains(label).expect("the checkbox").rect().right());
+    }
+    assert!(view.left() > cb_right, "the view dropdown is right of the checkbox column: {view:?} cb_right={cb_right}");
+    // The active document tab hugs the document area's right edge.
+    let tab = active_tab_rect(&h);
+    assert!(tab.right() > 1300.0 && tab.width() < 400.0, "the active tab is at the right edge: {tab:?}");
+    // The Properties head label ends 12 pt before the panel head's right edge.
+    let head = painted_text_rect(&h, "Properties");
+    assert!(head.right() > 300.0 && head.right() <= 350.0, "the head label hugs the panel's right edge: {head:?}");
+    // The Lasso slot's flyout triangle points left from the button's left edge.
+    let lasso = h.get_by_label("Lasso Tool (L)").rect();
+    let (tri_min, tri_max) = flyout_triangle_x(&h, lasso);
+    assert!(
+        (tri_min - (lasso.left() + 3.0)).abs() < 1.0 && (tri_max - (lasso.left() + 8.0)).abs() < 1.0,
+        "the flyout points left from the button's left edge: {tri_min}..{tri_max} vs {lasso:?}"
+    );
+}
+
+/// The lasso flyout's rows go through the shared popup body + `menu_row`: under RTL the
+/// checked row's label hugs the popup's right edge, under LTR the left edge.
+#[test]
+fn lasso_flyout_rows_mirror_only_under_rtl() {
+    let texts = |dir: crate::direction::Dir| {
+        let _scope = crate::direction::direction_scope(dir);
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+        let mut popup = egui::Rect::NOTHING;
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let btn = ui.button("lasso");
+                let _ = egui::Popup::menu(&btn)
+                    .open_memory(Some(egui::SetOpenCommand::Bool(true)))
+                    .show(|ui| {
+                        crate::menus::popup_body(ui, |ui| {
+                            let l = SmTool::Lasso.tip();
+                            let _ = crate::menu_keys::menu_row(ui, &l, None, true, true);
+                        });
+                    })
+                    .inspect(|r| popup = r.response.rect);
+            });
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                    _ => None,
+                })
+                .collect();
+            out.textures_delta.clear();
+        }
+        (popup, texts)
+    };
+    let (rtl_popup, rtl) = texts(crate::direction::Dir::Rtl);
+    let (ltr_popup, ltr) = texts(crate::direction::Dir::Ltr);
+    assert!(rtl_popup.is_positive() && ltr_popup.is_positive(), "the popups opened");
+    let tip = SmTool::Lasso.tip();
+    let at = |v: &[(String, egui::Rect)]| v.iter().find(|(t, _)| t.contains(&tip)).map(|(_, r)| *r).unwrap_or(egui::Rect::NOTHING);
+    let row = at(&rtl);
+    assert!(rtl_popup.right() - row.right() < 32.0, "rtl: the row label hugs the popup's right edge: {row:?} in {rtl_popup:?}");
+    let row = at(&ltr);
+    assert!(row.left() - ltr_popup.left() < 32.0, "ltr: the row label hugs the popup's left edge: {row:?} in {ltr_popup:?}");
+}

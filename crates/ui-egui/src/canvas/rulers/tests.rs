@@ -414,6 +414,52 @@ fn unit_menu_lists_every_unit_with_the_current_one_checked() {
     assert_eq!(checked, vec!["inches"]);
 }
 
+/// The unit menu's rows mirror in a right-to-left UI: every label hugs the row's right edge and
+/// the current unit's mark sits in the checkmark column at the reading start (right of the
+/// label), not as a text prefix. Left-to-right keeps the mark at the left, in the column.
+#[test]
+fn unit_menu_rows_mirror_in_rtl_with_the_mark_in_the_gutter() {
+    use crate::direction::{Dir, direction_scope};
+    let render = |dir: Dir| -> Vec<(String, egui::Rect, Vec<(char, f32)>)> {
+        let _scope = direction_scope(dir);
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+        let mut out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0))), ..Default::default() },
+            |ui| {
+                ui.allocate_ui_with_layout(egui::vec2(200.0, 300.0), egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                    let _ = unit_menu_of(ui, Unit::Inches, &UNITS);
+                });
+            },
+        );
+        let texts = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(ts) => {
+                    let glyphs = ts.galley.rows.first().map(|r| r.glyphs.iter().map(|g| (g.chr, g.pos.x)).collect()).unwrap_or_default();
+                    Some((ts.galley.text().to_string(), ts.visual_bounding_rect(), glyphs))
+                }
+                _ => None,
+            })
+            .collect();
+        out.textures_delta.clear();
+        texts
+    };
+    let at = |v: &[(String, egui::Rect, Vec<(char, f32)>)], s: &str| v.iter().find(|(t, _, _)| t.contains(s)).cloned();
+    let glyph = |v: &[(String, egui::Rect, Vec<(char, f32)>)], s: &str, c: char| at(v, s).and_then(|(_, _, g)| g.iter().find(|(ch, _)| *ch == c).map(|(_, x)| *x));
+    let rtl = render(Dir::Rtl);
+    let inches = at(&rtl, "Inches").unwrap().1;
+    assert!(inches.right() > 200.0 - 32.0, "rtl: the labels hug the right edge: {inches:?}");
+    let (mark, label) = (glyph(&rtl, "Inches", '✔'), glyph(&rtl, "Inches", 'I'));
+    assert!(mark.is_some() && mark > label, "rtl: the current unit's mark is at the reading start (right) of its label: {mark:?} {label:?}");
+    let ltr = render(Dir::Ltr);
+    let inches = at(&ltr, "Inches").unwrap().1;
+    assert!(inches.left() < 32.0, "ltr: labels start at the left edge: {inches:?}");
+    let (mark, label) = (glyph(&ltr, "Inches", '✔'), glyph(&ltr, "Inches", 'I'));
+    assert!(mark.is_some() && mark < label, "ltr: the mark sits in the column at the left of the label: {mark:?} {label:?}");
+}
+
 #[test]
 fn picking_a_ruler_unit_changes_the_preference() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());

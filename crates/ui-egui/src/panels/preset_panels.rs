@@ -270,7 +270,7 @@ pub(crate) fn pattern_picker(app: &PhotocraftApp, ui: &mut egui::Ui, selected: &
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Patterns")));
     let mut picked = None;
     egui::Popup::menu(&resp).show(|ui| {
-        picked = pattern_grid(app, ui, selected);
+        picked = crate::menus::popup_body(ui, |ui| pattern_grid(app, ui, selected));
     });
     picked
 }
@@ -365,7 +365,7 @@ pub(crate) struct Place<'a> {
     pub(crate) flush: bool,
 }
 
-/// Space between the cells of a preset grid, and the grid's inset from the panel's left edge.
+/// Space between the cells of a preset grid, and the grid's inset from the panel's reading-start edge.
 const GRID_GAP: f32 = 4.0;
 const GRID_INSET: f32 = 8.0;
 
@@ -383,12 +383,17 @@ fn draw_group_header(ui: &mut egui::Ui, group: &GroupView, context: GroupHeaderC
     if response.hovered() || response.dragged() {
         ui.painter().rect_filled(rect, 2.0, tokens.hover.gamma_multiply(0.5));
     }
-    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), open, &group.name));
-    let triangle = Rect::from_center_size(pos2(rect.left() + 9.0, rect.center().y), vec2(12.0, 12.0));
+    // Triangle, folder and name anchor from the reading-start edge (left in LTR, right in RTL);
+    // the closed chevron points along the reading direction via the icon-flip table.
+    let tri_x = crate::direction::start_x(rect, 9.0);
+    let fold_x = crate::direction::start_x(rect, 25.0);
+    let name_x = crate::direction::start_x(rect, 37.0);
+    let halign = crate::direction::start_align();
+    let triangle = Rect::from_center_size(pos2(tri_x, rect.center().y), vec2(12.0, 12.0));
     crate::icons::paint(ui, triangle, if open { "chevron-down" } else { "chevron-right" }, 10.0, tokens.text_dim);
-    let folder = Rect::from_center_size(pos2(rect.left() + 25.0, rect.center().y), vec2(14.0, 14.0));
+    let folder = Rect::from_center_size(pos2(fold_x, rect.center().y), vec2(14.0, 14.0));
     crate::icons::paint(ui, folder, if open { "folder-open" } else { "folder" }, 12.0, tokens.icon);
-    ui.painter().text(pos2(rect.left() + 37.0, rect.center().y), Align2::LEFT_CENTER, &group.name, FontId::proportional(11.5), tokens.text);
+    ui.painter().text(pos2(name_x, rect.center().y), halign, &group.name, FontId::proportional(11.5), tokens.text);
     if response.clicked() {
         let key = format!("{panel}/{}", group.name);
         if !state.toggled.remove(&key) {
@@ -430,9 +435,10 @@ pub(crate) fn browser(
     // Rename field (Photoshop opens a small dialog; inline keeps the panel modeless).
     if let Some((p, key, mut text)) = st.renaming.clone().filter(|r| r.0 == panel) {
         let mut done = None;
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
             let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
+            let mut layouter = crate::widgets::rtl_singleline_layouter(FontId::default());
+            let r = ui.add(crate::widgets::rtl_singleline(&mut text, &mut layouter).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -493,9 +499,11 @@ pub(crate) fn browser(
                 };
                 let rows = g.items.len().div_ceil(cols);
                 let (area, _) = ui.allocate_exact_size(vec2(w, rows as f32 * (cell.y + gap) + 2.0), Sense::hover());
+                let rtl = crate::direction::is_rtl();
+                let origin_x = grid_origin_x(area, pad, cell, gap, cols, rtl);
                 for (ii, it) in g.items.iter().enumerate() {
-                    let (cx, cy) = ((ii % cols) as f32, (ii / cols) as f32);
-                    let r = Rect::from_min_size(area.min + vec2(pad + cx * (cell.x + gap), cy * (cell.y + gap)), cell);
+                    let (col, row) = (grid_col(ii, cols, rtl), ii / cols);
+                    let r = Rect::from_min_size(pos2(origin_x + col as f32 * (cell.x + gap), area.min.y + row as f32 * (cell.y + gap)), cell);
                     let resp = ui.interact(r, ui.scope_id().with((panel, gi, ii)), Sense::click_and_drag());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &it.name));
                     let is_sel = selected.as_deref() == Some(&it.key);
@@ -505,9 +513,10 @@ pub(crate) fn browser(
                         } else if resp.hovered() {
                             ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.5));
                         }
-                        let tr = Rect::from_min_size(r.min + vec2(24.0, 2.0), vec2(20.0, 20.0));
+                        // List rows: thumbnail at the reading start, name after it (left in LTR).
+                        let (tr, name_x, halign) = list_row_slots(r);
                         thumb(ui, tr, gi, ii);
-                        ui.painter().text(pos2(tr.right() + 8.0, r.center().y), Align2::LEFT_CENTER, &it.name, FontId::proportional(11.5), t.text);
+                        ui.painter().text(pos2(name_x, r.center().y), halign, &it.name, FontId::proportional(11.5), t.text);
                     } else {
                         thumb(ui, r, gi, ii);
                         // Touching cells draw no border of their own: only the selected and the
@@ -602,7 +611,7 @@ pub(crate) fn browser(
     // Footer: thumbnail size | New Group, New, Delete.
     let footer_top = ui.min_rect().bottom();
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let mut s = size;
         ui.add_sized(vec2(90.0, 18.0), egui::Slider::new(&mut s, MIN_THUMB..=96.0).show_value(false))
@@ -611,7 +620,7 @@ pub(crate) fn browser(
         if (s - size).abs() > 0.01 {
             st.sizes.insert(panel.to_string(), s);
         }
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::direction::trailing(), |ui| {
             if crate::icons::button(ui, "trash", 24.0, false, tl!("Delete")).clicked()
                 && let Some(k) = selected.clone()
             {
@@ -631,6 +640,30 @@ pub(crate) fn browser(
         ui.ctx().request_repaint();
     }
     ev
+}
+
+/// A grid item's column within its row: items fill the row from the reading start — the first
+/// cell left-to-right, the row's last cell right-to-left (same physical cells either way).
+fn grid_col(ii: usize, cols: usize, rtl: bool) -> usize {
+    if rtl { cols - 1 - ii % cols } else { ii % cols }
+}
+
+/// A grid row block's left edge: the block anchors at the reading-start edge, so the inset sits
+/// there (left in LTR, right in RTL) and the leftover width at the reading end. A single-column
+/// list fills the whole width, so both directions anchor at `area.min.x`.
+fn grid_origin_x(area: Rect, pad: f32, cell: egui::Vec2, gap: f32, cols: usize, rtl: bool) -> f32 {
+    let grid_w = cols as f32 * cell.x + (cols as f32 - 1.0) * gap;
+    if rtl { area.right() - pad - grid_w } else { area.min.x + pad }
+}
+
+/// A list row's thumbnail rect and the x its name is drawn at: the thumbnail sits at the reading
+/// start (left in a left-to-right UI, right in a right-to-left one) and the name follows it.
+fn list_row_slots(row: Rect) -> (Rect, f32, Align2) {
+    (
+        crate::direction::start_rect(row, vec2(24.0, 2.0), vec2(20.0, 20.0)),
+        crate::direction::start_x(row, 52.0),
+        crate::direction::start_align(),
+    )
 }
 
 /// The folder (by library index) a header dragged to `y` lands before (`None` = last). `headers`
@@ -923,5 +956,83 @@ mod tests {
         app.drag = None;
         app.ui.tool = Tool::Brush;
         assert_eq!(crate::retouch_ui::source_marker_point(&app), None);
+    }
+
+    /// The preset grid fills its row from the reading start: the first item's column is the row's
+    /// first cell left-to-right and its last cell right-to-left, the cells themselves unchanged.
+    #[test]
+    fn the_preset_grid_fills_from_the_reading_start_edge() {
+        assert_eq!(grid_col(0, 4, false), 0);
+        assert_eq!(grid_col(1, 4, false), 1);
+        assert_eq!(grid_col(0, 4, true), 3, "in RTL the first item sits in the row's last column");
+        assert_eq!(grid_col(1, 4, true), 2);
+        assert_eq!(grid_col(4, 4, true), 3, "the next row starts at the reading start again");
+        assert_eq!(grid_col(0, 1, true), 0, "a single-column list has one column either way");
+        // The row block anchors at the reading-start edge: the inset sits there and the leftover
+        // width at the reading end, so the RTL grid is the mirror image of the LTR one.
+        let area = Rect::from_min_size(pos2(100.0, 0.0), vec2(250.0, 10.0));
+        let cell = vec2(40.0, 40.0);
+        let cols = 4; // grid_w = 4*40 + 3*GRID_GAP
+        let grid_w = cols as f32 * cell.x + (cols as f32 - 1.0) * GRID_GAP;
+        assert_eq!(grid_origin_x(area, GRID_INSET, cell, GRID_GAP, cols, false), area.left() + GRID_INSET);
+        assert_eq!(grid_origin_x(area, GRID_INSET, cell, GRID_GAP, cols, true), area.right() - GRID_INSET - grid_w);
+        // In RTL the first item's right edge is the reading-start inset: area.right() - GRID_INSET.
+        let first_x = grid_origin_x(area, GRID_INSET, cell, GRID_GAP, cols, true) + grid_col(0, cols, true) as f32 * (cell.x + GRID_GAP);
+        assert!((first_x + cell.x - (area.right() - GRID_INSET)).abs() < 1e-6);
+        // The list branch (one column, no pad) is unchanged in both directions.
+        assert_eq!(grid_origin_x(area, 0.0, vec2(area.width(), 24.0), 0.0, 1, true), area.left());
+        assert_eq!(grid_origin_x(area, 0.0, vec2(area.width(), 24.0), 0.0, 1, false), area.left());
+    }
+
+    /// A list row's thumbnail sits at the reading start and the name follows it.
+    #[test]
+    fn a_list_row_keeps_its_thumbnail_at_the_reading_start() {
+        let row = Rect::from_min_size(pos2(10.0, 0.0), vec2(240.0, 24.0));
+        let (thumb, name_x, halign) = {
+            let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+            list_row_slots(row)
+        };
+        assert_eq!(thumb.left(), row.left() + 24.0);
+        assert_eq!(name_x, row.left() + 52.0);
+        assert_eq!(halign, Align2::LEFT_CENTER);
+        let (thumb, name_x, halign) = {
+            let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+            list_row_slots(row)
+        };
+        assert_eq!(thumb.right(), row.right() - 24.0, "in RTL the thumbnail hugs the right edge");
+        assert_eq!(name_x, row.right() - 52.0);
+        assert_eq!(halign, Align2::RIGHT_CENTER);
+    }
+
+    /// The compact rows lay out in reading order through the same allocation `ui.horizontal`
+    /// makes, so a left-to-right UI is pixel-identical to it (a plain `with_layout(row())` would
+    /// claim the whole remaining height and push everything below down).
+    #[test]
+    fn a_reading_order_row_allocates_like_ui_horizontal() {
+        let row = |converted: bool| {
+            let ctx = egui::Context::default();
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                ..Default::default()
+            };
+            let mut rect = egui::Rect::ZERO;
+            let mut interact_h = 0.0;
+            let mut out = ctx.run_ui(input, |ui| {
+                interact_h = ui.spacing().interact_size.y;
+                let r = if converted {
+                    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, interact_h), crate::direction::row(), |ui| ui.label("x"))
+                } else {
+                    ui.horizontal(|ui| ui.label("x"))
+                };
+                rect = r.response.rect;
+            });
+            // The headless pass never uploads the atlas; drop its delta deliberately.
+            out.textures_delta.clear();
+            (rect, interact_h)
+        };
+        let (converted, interact_h) = row(true);
+        let (plain, _) = row(false);
+        assert_eq!(converted, plain, "the conversion is pixel-identical to ui.horizontal in LTR");
+        assert_eq!(converted.height(), interact_h, "the row reserves the interact height, not the free space");
     }
 }

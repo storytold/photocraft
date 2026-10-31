@@ -142,7 +142,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         app.ui.status_error = true;
     }
     if app.ui.text_edit.is_some() {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::direction::trailing(), |ui| {
             ui.add_space(8.0);
             if crate::icons::button(
                 ui,
@@ -253,7 +253,9 @@ pub(super) fn kerning_field(ui: &mut egui::Ui, shown: &str, width: f32) -> Optio
     let mut out = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        let resp = ui.add(egui::TextEdit::singleline(&mut buf).desired_width((width - 40.0).max(24.0)).id(id.with("edit"))).accessible_name(tl!("Kerning"));
+        // Numeric-by-content: the value stays LTR, but under RTL the field right-aligns via the helper.
+        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+        let resp = ui.add(crate::widgets::rtl_singleline(&mut buf, &mut layouter).desired_width((width - 40.0).max(24.0)).id(id.with("edit"))).accessible_name(tl!("Kerning"));
         if resp.has_focus() {
             ui.data_mut(|d| d.insert_temp(id, buf.clone()));
         } else {
@@ -422,4 +424,57 @@ pub(super) fn toggle_cell(ui: &mut egui::Ui, w: f32, on: bool, tip: &str, paint:
     let tip = tip.to_string();
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, on, &tip));
     resp.on_hover_text(tl!(&tip)).clicked()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    /// The Type options bar with an open text edit, so the commit/cancel group shows: the
+    /// commit (check) and cancel (ban) buttons' rects, in the given UI direction.
+    fn commit_group(dir: crate::direction::Dir) -> (egui::Rect, egui::Rect) {
+        let _scope = crate::direction::direction_scope(dir);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 240, "height": 160, "depth": 16})).unwrap();
+        let layer = app.run("type.create", json!({"x": 20, "y": 40, "text": "Hi", "size": 20})).unwrap()["layer"].as_u64().unwrap();
+        app.ui.text_edit = Some(crate::state::TextEdit {
+            layer,
+            document: None,
+            caret: 2,
+            anchor: 2,
+            session: "t".into(),
+            created: false,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        });
+        app.ui.tool = crate::state::Tool::Type;
+        let mut h = Harness::builder().with_size(egui::vec2(1400.0, 60.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                crate::panels::options_bar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+        h.run_steps(4);
+        (h.get_by_label_contains("Commit any current edits").rect(), h.get_by_label_contains("Cancel any current edits").rect())
+    }
+
+    /// The commit/cancel group hugs the bar's reading end — far right in LTR, far left in RTL —
+    /// via direction::trailing(), not a fixed LTR pin.
+    #[test]
+    fn commit_group_hugs_the_reading_end() {
+        let (ltr_commit, ltr_cancel) = commit_group(crate::direction::Dir::Ltr);
+        assert!(ltr_commit.center().x > ltr_cancel.center().x, "LTR order: {ltr_commit:?} vs {ltr_cancel:?}");
+        assert!(ltr_commit.center().x > 1400.0 * 0.75, "LTR group hugs the right end: {ltr_commit:?}");
+        let (rtl_commit, rtl_cancel) = commit_group(crate::direction::Dir::Rtl);
+        assert!(rtl_commit.center().x < rtl_cancel.center().x, "RTL order: {rtl_commit:?} vs {rtl_cancel:?}");
+        assert!(rtl_commit.center().x < 1400.0 * 0.25, "RTL group hugs the left end: {rtl_commit:?}");
+    }
 }

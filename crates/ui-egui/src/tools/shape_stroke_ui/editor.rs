@@ -148,45 +148,84 @@ pub fn button(
             }
             ui.add_space(theme::ROW_GAP);
             ui.separator();
-            egui::Grid::new("stroke-geometry").num_columns(2).spacing(vec2(12.0, theme::ROW_GAP)).show(ui, |ui| {
-                ui.add_enabled_ui(closed, |ui| {
-                    ui.label(tl!("Alignment"));
-                });
-                ui.add_enabled_ui(closed, |ui| {
-                    choice(
+            // The fork's `Grid` cannot start under a right-to-left cursor, so the geometry rows
+            // run in an LTR scope; `grid_cells` emits each label/editor pair in reading order.
+            crate::direction::ltr_vertical(ui, |ui| {
+                egui::Grid::new("stroke-geometry").num_columns(2).spacing(vec2(12.0, theme::ROW_GAP)).show(ui, |ui| {
+                    crate::direction::grid_cells(
                         ui,
-                        "Alignment",
-                        &mut s.align,
-                        &[(StrokeAlign::Inside, "Inside"), (StrokeAlign::Center, "Center"), (StrokeAlign::Outside, "Outside")],
-                        &mut children,
-                    )
+                        |ui| {
+                            ui.add_enabled_ui(closed, |ui| {
+                                ui.label(tl!("Alignment"));
+                            });
+                        },
+                        |ui| {
+                            ui.add_enabled_ui(closed, |ui| {
+                                choice(
+                                    ui,
+                                    "Alignment",
+                                    &mut s.align,
+                                    &[(StrokeAlign::Inside, "Inside"), (StrokeAlign::Center, "Center"), (StrokeAlign::Outside, "Outside")],
+                                    &mut children,
+                                )
+                            });
+                        },
+                    );
+                    ui.end_row();
+                    crate::direction::grid_cells(
+                        ui,
+                        |ui| {
+                            ui.add_enabled_ui(!closed || !s.dashes.is_empty(), |ui| {
+                                ui.label(tl!("Caps"));
+                            });
+                        },
+                        |ui| {
+                            ui.add_enabled_ui(!closed || !s.dashes.is_empty(), |ui| {
+                                choice(ui, "Caps", &mut s.cap, &[(LineCap::Butt, "Butt / Flat"), (LineCap::Round, "Round"), (LineCap::Square, "Square")], &mut children)
+                            });
+                        },
+                    );
+                    ui.end_row();
+                    crate::direction::grid_cells(
+                        ui,
+                        |ui| {
+                            ui.add_enabled_ui(corners, |ui| {
+                                ui.label(tl!("Corners"));
+                            });
+                        },
+                        |ui| {
+                            ui.add_enabled_ui(corners, |ui| {
+                                choice(ui, "Corners", &mut s.join, &[(LineJoin::Miter, "Miter"), (LineJoin::Round, "Round"), (LineJoin::Bevel, "Bevel")], &mut children)
+                            });
+                        },
+                    );
+                    ui.end_row();
+                    crate::direction::grid_cells(
+                        ui,
+                        |ui| {
+                            ui.add_enabled_ui(corners && s.join == LineJoin::Miter, |ui| {
+                                ui.label(tl!("Miter limit"));
+                            });
+                        },
+                        |ui| {
+                            ui.add_enabled_ui(corners && s.join == LineJoin::Miter, |ui| number(ui, "Miter limit", &mut s.miter_limit, 1.0..=500.0, "×"));
+                        },
+                    );
+                    ui.end_row();
+                    crate::direction::grid_cells(
+                        ui,
+                        |ui| {
+                            ui.label(tl!("Opacity"));
+                        },
+                        |ui| {
+                            let mut opacity = s.opacity * 100.0;
+                            if number(ui, "Opacity", &mut opacity, 0.0..=100.0, "%") {
+                                s.opacity = opacity / 100.0;
+                            }
+                        },
+                    );
+                    ui.end_row();
                 });
-                ui.end_row();
-                ui.add_enabled_ui(!closed || !s.dashes.is_empty(), |ui| {
-                    ui.label(tl!("Caps"));
-                });
-                ui.add_enabled_ui(!closed || !s.dashes.is_empty(), |ui| {
-                    choice(ui, "Caps", &mut s.cap, &[(LineCap::Butt, "Butt / Flat"), (LineCap::Round, "Round"), (LineCap::Square, "Square")], &mut children)
-                });
-                ui.end_row();
-                ui.add_enabled_ui(corners, |ui| {
-                    ui.label(tl!("Corners"));
-                });
-                ui.add_enabled_ui(corners, |ui| {
-                    choice(ui, "Corners", &mut s.join, &[(LineJoin::Miter, "Miter"), (LineJoin::Round, "Round"), (LineJoin::Bevel, "Bevel")], &mut children)
-                });
-                ui.end_row();
-                ui.add_enabled_ui(corners && s.join == LineJoin::Miter, |ui| {
-                    ui.label(tl!("Miter limit"));
-                });
-                ui.add_enabled_ui(corners && s.join == LineJoin::Miter, |ui| number(ui, "Miter limit", &mut s.miter_limit, 1.0..=500.0, "×"));
-                ui.end_row();
-                ui.label(tl!("Opacity"));
-                let mut opacity = s.opacity * 100.0;
-                if number(ui, "Opacity", &mut opacity, 0.0..=100.0, "%") {
-                    s.opacity = opacity / 100.0;
-                }
-                ui.end_row();
             });
             if !closed {
                 ui.label(egui::RichText::new(tl!("Open paths use centered strokes")).small());

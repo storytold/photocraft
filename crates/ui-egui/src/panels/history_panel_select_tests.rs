@@ -288,3 +288,32 @@ fn a_new_state_at_the_history_limit_deselects_the_snapshot() {
     h.run_steps(4);
     assert_eq!(selected_snapshot(&h.ctx, h.state().session.active().unwrap()), None, "a new state deselects the snapshot");
 }
+
+/// Rows mirror under a right-to-left UI: the state label hugs the row's reading-start edge
+/// (the right edge in RTL, the left in LTR), with the LTR geometry unchanged.
+#[test]
+fn state_row_text_hugs_the_reading_start_edge_in_both_directions() {
+    use crate::i18n::{self, Lang};
+    use crate::text::direction::{self, Dir};
+    let _lang = i18n::language_scope(Lang::EN);
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction::direction_scope(dir);
+        let h = harness();
+        let row = h.get_all_by_label("Fill").last().expect("the last Fill row").rect();
+        let label = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == "Fill" => Some(t),
+                _ => None,
+            })
+            .find(|t| (t.pos.y - row.center().y).abs() < 8.0)
+            .expect("the Fill label painted");
+        if dir == Dir::Rtl {
+            assert!((label.pos.x + label.galley.size().x - (row.right() - 58.0)).abs() < 1.0, "RTL: {label:?} in {row:?}");
+        } else {
+            assert!((label.pos.x - (row.left() + 58.0)).abs() < 1.0, "LTR: {label:?} in {row:?}");
+        }
+    }
+}

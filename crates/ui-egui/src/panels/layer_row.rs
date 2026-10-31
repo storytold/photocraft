@@ -160,7 +160,15 @@ pub(super) fn layer_row(
         app.hover_layer = Some(l.id);
     }
     paint_row_background(&painter, &t, l, rect, selected, is_hovered);
-    let mut x = rect.left() + 6.0;
+    // The row walks an x-cursor from its reading-start edge: the left, or the right in a
+    // right-to-left UI. `step` carries the sign; everything that advances the cursor follows it.
+    let rtl = crate::direction::is_rtl();
+    let dir = crate::layer_row_ui::step();
+    let step = |d: f32| dir * d;
+    // The left edge of a box of width `w` placed at the cursor: the cursor itself in a
+    // left-to-right UI, its far side in a right-to-left one.
+    let anchor = |w: f32| if dir < 0.0 { -w } else { 0.0 };
+    let mut x = crate::layer_row_ui::start_x(rect, 6.0);
     let eye_resp = eye_column(app, ui, l, row, rect, actions);
     // Everything but the thumbnails, the indentation and the name, so a narrow panel squeezes
     // the indentation first, then the thumbnails (a layer with two masks has three).
@@ -175,24 +183,25 @@ pub(super) fn layer_row(
     // triangle's column, so it sits right of its parent: with only its depth its thumbnail lined
     // up under the group's, hiding the hierarchy. Top-level rows don't move.
     let steps = if !l.is_group() && depth > 0 { depth + 1 } else { depth };
-    x += 28.0 + crate::layer_row_ui::indent(steps, rect.width(), fixed);
+    x += step(28.0 + crate::layer_row_ui::indent(steps, rect.width(), fixed));
     let toggled = crate::layer_tree_ui::disclosure(ui, rect, &mut x, l, actions);
     if l.clipped {
-        paint_clipping_indicator(&painter, pos2(x, rect.center().y), t.text_faint);
-        x += 12.0;
+        paint_clipping_indicator(&painter, pos2(x + anchor(12.0), rect.center().y), t.text_faint);
+        x += step(12.0);
     }
-    let thumb = Rect::from_min_size(pos2(x, rect.center().y - ts / 2.0), vec2(ts, ts));
+    let thumb = Rect::from_min_size(pos2(x + anchor(ts), rect.center().y - ts / 2.0), vec2(ts, ts));
     if ts > 0.0 {
         draw_layer_thumb(app, ctx, ui, doc, l, thumb, row.primary);
-        x += ts + 6.0;
+        x += step(ts + 6.0);
     }
     // With thumbnails disabled the labels and disclosure controls remain interactive.
     let masks = if ts > 0.0 { crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ts, actions) } else { Default::default() };
     let rc = RowCtx { l, doc, row, rect, ts, thumb, resp: &resp, masks: &masks };
     paint_target_brackets(app, &painter, &t, &rc);
-    // Right-hand indicators first; the name gets what is left and ends in "…" (#144).
+    // The indicators first, from the reading-start edge; the name gets what is left and ends in
+    // "…" (#144).
     let fx_open = app.session.active().is_none_or(|d| !d.fx_collapsed.contains(&l.id));
-    let (name_right, indicators, fx_toggled) = crate::layer_row_ui::indicators(ui, &painter, rect, x, l, fx_open, actions);
+    let (name_limit, indicators, fx_toggled) = crate::layer_row_ui::indicators(ui, &painter, rect, x, l, fx_open, actions);
     // Dragging the fx badge drags all the layer's effects, not the layer (Photoshop). Like the eye,
     // it takes the drag from the row; clicks still reach the row.
     if let Some(&(_, badge)) = indicators.iter().find(|(k, _)| *k == crate::layer_row_ui::Indicator::Fx)
@@ -207,7 +216,7 @@ pub(super) fn layer_row(
     {
         actions.push(simple_lock_toggle(doc.is_background(l.id), l, &json!({"layer": l.id.0})));
     }
-    let name_rect = paint_row_name(&painter, &t, &rc, x, name_right);
+    let name_rect = paint_row_name(&painter, &t, &rc, x, name_limit);
     crate::layer_row_ui::record(
         ctx,
         crate::layer_row_ui::RowRects { layer: l.id.0, row: rect, thumbnail: (ts > 0.0).then_some(thumb), name: name_rect, indicators },
@@ -252,7 +261,12 @@ pub(super) fn layer_row(
     // anywhere else on the row opens Layer Style (#350, #537).
     // The first click already made this the active layer.
     handle_row_double_click(app, ui.ctx(), &rc, name_rect, actions);
-    let edit_rect = Rect::from_min_max(pos2(x - 3.0, rect.center().y - 11.0), pos2(name_right.max(x + 40.0), rect.center().y + 11.0));
+    let cy = rect.center().y;
+    let edit_rect = if rtl {
+        Rect::from_min_max(pos2((name_limit - 3.0).min(x - 40.0), cy - 11.0), pos2(x + 3.0, cy + 11.0))
+    } else {
+        Rect::from_min_max(pos2(x - 3.0, cy - 11.0), pos2(name_limit.max(x + 40.0), cy + 11.0))
+    };
     if let Some(done) = crate::layer_row_ui::rename_field(ui, l.id.0, edit_rect) {
         actions.push(done);
     }
@@ -272,8 +286,10 @@ struct RowCtx<'a> {
     masks: &'a crate::mask_thumbs_ui::MaskRects,
 }
 
+/// The eye column: at the row's reading-start edge — the left, or the right in a right-to-left
+/// UI.
 fn eye_cell(rect: Rect) -> Rect {
-    Rect::from_min_max(rect.left_top(), pos2((rect.left() + 30.0).min(rect.right()), rect.bottom()))
+    crate::direction::start_cell(rect, 30.0)
 }
 
 /// The row's fill (selection / hover), the label colour behind the eye column and the pro dividers.
@@ -298,7 +314,8 @@ fn paint_row_background(painter: &egui::Painter, t: &Tokens, l: &Layer, rect: Re
     }
     if t.pro {
         // Paint dividers over the label so the eye column stays distinct.
-        painter.line_segment([pos2(rect.left() + 30.0, rect.top()), pos2(rect.left() + 30.0, rect.bottom())], Stroke::new(1.0, t.separator));
+        let divider = if crate::direction::is_rtl() { rect.right() - 30.0 } else { rect.left() + 30.0 };
+        painter.line_segment([pos2(divider, rect.top()), pos2(divider, rect.bottom())], Stroke::new(1.0, t.separator));
         painter.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, t.separator));
     }
 }
@@ -357,16 +374,21 @@ fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Token
 }
 
 /// The layer name (and the kind sub-label of non-pixel rows); returns the name's rect.
-fn paint_row_name(painter: &egui::Painter, t: &Tokens, rc: &RowCtx<'_>, x: f32, name_right: f32) -> Option<Rect> {
+/// `x` is where the name starts in reading order and `name_limit` where it may end.
+fn paint_row_name(painter: &egui::Painter, t: &Tokens, rc: &RowCtx<'_>, x: f32, name_limit: f32) -> Option<Rect> {
     let (l, doc, rect, ts, selected) = (rc.l, rc.doc, rc.rect, rc.ts, rc.row.selected);
+    let rtl = crate::direction::is_rtl();
     let name_color = if l.visible { t.text } else { t.text_faint };
     let font = if selected && !t.pro { theme::medium(13.0) } else { egui::FontId::proportional(if t.pro { 12.0 } else { 13.0 }) };
     // Photoshop before 2026 set the Background layer's name in italics; 2026 sets it upright.
     let italic = !t.pro && doc.is_background(l.id);
     // Photoshop rows show only the name; the kind sub-label is a Studio-theme addition.
     let is_pixel = t.pro || ts == 0.0 || matches!(l.content, LayerContent::Raster(_));
-    let name_rect = crate::layer_row_ui::truncated(painter, &l.name, font, name_color, italic, name_right - x).map(|galley| {
-        let text_pos = pos2(x, rect.center().y - galley.size().y / 2.0 - if is_pixel { 0.0 } else { 7.0 });
+    let budget = if rtl { x - name_limit } else { name_limit - x };
+    let name_rect = crate::direction::elided_galley(painter, &l.name, font, name_color, italic, budget).map(|galley| {
+        // In a right-to-left UI the name hangs from its reading start, growing leftwards.
+        let tx = if rtl { x - galley.size().x } else { x };
+        let text_pos = pos2(tx, rect.center().y - galley.size().y / 2.0 - if is_pixel { 0.0 } else { 7.0 });
         let r = Rect::from_min_size(text_pos, galley.size());
         painter.galley(text_pos, galley, name_color);
         r
@@ -377,7 +399,7 @@ fn paint_row_name(painter: &egui::Painter, t: &Tokens, rc: &RowCtx<'_>, x: f32, 
             LayerContent::Group(g) => crate::i18n::trn(crate::i18n::current(), g.children.len() as u64, "Group · {n} layer", "Group · {n} layers"),
             other => tl!(other.kind_name()).to_string(),
         };
-        crate::layer_row_ui::label(painter, x, rect.center().y + 8.0, name_right, &sub, egui::FontId::proportional(11.0), t.text_faint);
+        crate::direction::paint_label_span(painter, x, rect.center().y + 8.0, name_limit, &sub, egui::FontId::proportional(11.0), t.text_faint);
     }
     name_rect
 }

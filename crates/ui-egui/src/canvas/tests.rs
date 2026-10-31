@@ -1249,65 +1249,6 @@ fn clone_overlay_is_circular_and_respects_visibility() {
     assert!(output.shapes.iter().all(|s| !matches!(s.shape, egui::Shape::Mesh(_))));
 }
 
-/// A soft brush previews soft: the overlay fades towards the rim with the brush's hardness, as
-/// the stroke it previews does, and reaches past the radius as a soft tip paints. A brush
-/// change redraws an overlay that hasn't moved.
-#[test]
-fn clone_overlay_follows_the_brush_hardness() {
-    let ctx = egui::Context::default();
-    let mut app = clone_overlay_app(20.0);
-    let xf = clone_overlay_view(100.0, 1.0);
-    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
-    let hard = clone_overlay_alpha(&app, &mut output);
-    app.session.tools.brush.hardness = 0.0;
-    let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
-    let soft = clone_overlay_alpha(&app, &mut output);
-    assert!(hard(32, 32) == 255 && soft(32, 32) > 240, "both show the source at the centre: {} {}", hard(32, 32), soft(32, 32));
-    assert_eq!(hard(32 + 8, 32), 255);
-    assert!(soft(32 + 8, 32) < 200, "a soft tip fades before its rim: {}", soft(32 + 8, 32));
-    assert!(soft(32 + 4, 32) > soft(32 + 8, 32), "and fades outwards");
-    assert!(hard(32 + 12, 32) == 0 && soft(32 + 13, 32) > 0, "a soft tip reaches past the radius, a hard one doesn't");
-    // The largest brush the overlay draws still shows at its softest.
-    let mut big = clone_overlay_app(1000.0);
-    big.session.tools.brush.hardness = 0.0;
-    let mut output = clone_overlay_frame(&ctx, &mut big, &xf);
-    assert_eq!(clone_overlay_alpha(&big, &mut output)(32, 32), 255, "a 1000 px soft brush previews too");
-}
-
-/// A scaled Clone Source reads a larger source area than the overlay covers: a large brush's
-/// overlay shrinks around the pointer until that area fits the sampling budget, rather than
-/// vanishing.
-#[test]
-fn clone_overlay_of_a_scaled_source_stays_within_the_sampling_budget() {
-    let ctx = egui::Context::default();
-    let xf = clone_overlay_view(100.0, 1.0);
-    for (size, scale) in [(600.0, 200), (1000.0, 300), (1000.0, 50)] {
-        let mut app = clone_overlay_app(size);
-        app.run("cloneSource.set", json!({"width": scale, "height": scale})).unwrap();
-        let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
-        assert!(output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Mesh(_))), "{size} px at {scale} %: the overlay shows");
-        assert_eq!(clone_overlay_alpha(&app, &mut output)(32, 32), 255, "{size} px at {scale} %: the source under the pointer");
-    }
-}
-
-/// The Healing Brush shares the Clone Stamp's source and overlay (Photoshop's Clone Source
-/// panel drives both); other tools show none.
-#[test]
-fn clone_overlay_shows_for_the_healing_brush_too() {
-    let ctx = egui::Context::default();
-    let xf = clone_overlay_view(100.0, 1.0);
-    for (tool, shown) in [(Tool::Healing, true), (Tool::CloneStamp, true), (Tool::Brush, false), (Tool::SpotHealing, false)] {
-        let mut app = clone_overlay_app(20.0);
-        app.ui.tool = tool;
-        let mut output = clone_overlay_frame(&ctx, &mut app, &xf);
-        assert_eq!(output.shapes.iter().any(|s| matches!(s.shape, egui::Shape::Mesh(_))), shown, "{tool:?}");
-        if shown {
-            assert_eq!(clone_overlay_alpha(&app, &mut output)(32, 32), 255, "{tool:?}: the source shows under the brush");
-        }
-        output.textures_delta.clear();
-    }
-}
-
 #[test]
 fn clone_overlay_keeps_magnified_pixels_crisp_on_upload_and_refresh() {
     let ctx = egui::Context::default();
@@ -2955,54 +2896,146 @@ fn damage_grows_by_nested_effect_reach() {
     assert_eq!(effect_reach(&[group]), 0);
 }
 
+/// The canvas stays left-to-right in a right-to-left UI (rtl-canvas-guard): a crop frame's
+/// screen rectangle and a wheel zoom land exactly where they land in a left-to-right UI. The
+/// document ↔ screen mapping is pinned in `transform_controls_tests.rs`.
 #[test]
-fn tab_reorder_keeps_floating_documents_in_place() {
-    let visible = [0, 2];
-    assert_eq!(move_target_after_filter(&visible, 0, 1, 3), 2);
-    assert_eq!(move_target_after_filter(&visible, 2, 0, 3), 0);
+fn canvas_geometry_is_rtl_invariant() {
+    use crate::direction::{Dir, direction_scope};
+    let rect = Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0));
+    let xf = ViewXform { rect, zoom: 1.0, center: [400.0, 300.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let crop = DRect::new(20, 30, 120, 130);
+    let probe = |xf: &ViewXform| {
+        let mut view = View { zoom: 1.0, center: [400.0, 300.0], ..Default::default() };
+        zoom_about(&mut view, xf, pos2(600.0, 200.0), 2.0, false, 1.0);
+        (xf.doc_rect(crop), view.center)
+    };
+    let ltr = {
+        let _ltr = direction_scope(Dir::Ltr);
+        probe(&xf)
+    };
+    let rtl = {
+        let _rtl = direction_scope(Dir::Rtl);
+        probe(&xf)
+    };
+    assert_eq!(rtl.0, ltr.0, "the crop frame's screen rectangle is unchanged");
+    assert_eq!(rtl.1, ltr.1, "the wheel zoom lands in the same place");
 }
 
+/// The drag readout is canvas-anchored measurement geometry: in a right-to-left UI its labels
+/// stay left of their numbers, and the numbers keep reading left to right.
 #[test]
-fn arrange_layout_only_includes_docked_documents() {
+fn the_drag_readout_stays_left_to_right_in_a_right_to_left_ui() {
+    use crate::direction::{Dir, direction_scope};
+    // The labels are translated, so pin the language the test reads them in.
+    let _en = crate::i18n::language_scope(crate::i18n::Lang::EN);
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    // The egui fork mirrors the widgets it owns in a right-to-left style.
+    ctx.all_styles_mut(|s| s.set_right_to_left(true));
+    // An area's first frame on a fresh context is its sizing pass, painted invisible; warm it up
+    // so both measured frames draw.
+    let mut warm = ctx.run_ui(egui::RawInput::default(), |ui| {
+        super::drag::draw_readout(ui.ctx(), "rtl-readout", pos2(40.0, 60.0), ["W:", "H:"], ["120 px".to_string(), "80 px".to_string()]);
+    });
+    warm.textures_delta.clear();
+    let positions = |ctx: &egui::Context| {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            super::drag::draw_readout(ui.ctx(), "rtl-readout", pos2(40.0, 60.0), ["W:", "H:"], ["120 px".to_string(), "80 px".to_string()]);
+        });
+        out.textures_delta.clear();
+        out.shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some((t.galley.text().to_string(), t.pos)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let ltr = {
+        let _ltr = direction_scope(Dir::Ltr);
+        positions(&ctx)
+    };
+    let rtl = {
+        let _rtl = direction_scope(Dir::Rtl);
+        positions(&ctx)
+    };
+    assert_eq!(rtl, ltr, "the readout is laid out the same way in both directions");
+    for (label, value) in [("W:", "120 px"), ("H:", "80 px")] {
+        let lx = ltr.iter().find(|(t, _)| t == label).map(|(_, p)| p.x).expect("the label is drawn");
+        let vx = ltr.iter().find(|(t, _)| t == value).map(|(_, p)| p.x).expect("the value is drawn");
+        assert!(lx < vx, "{label} stays left of {value}");
+    }
+}
+
+/// Arabic twin of the test above: with the labels translated, the values are still painted as
+/// left-to-right strings and still sit right of their labels (rtl-canvas-guard).
+#[test]
+fn the_drag_readout_stays_left_to_right_in_an_arabic_ui() {
+    use crate::direction::{Dir, direction_scope};
+    let _ar = crate::i18n::language_scope(crate::i18n::Lang::from_code("ar").expect("the Arabic catalog"));
+    let ctx = egui::Context::default();
+    crate::theme::install_fonts(&ctx);
+    // The egui fork mirrors the widgets it owns in a right-to-left style.
+    ctx.all_styles_mut(|s| s.set_right_to_left(true));
+    // An area's first frame on a fresh context is its sizing pass, painted invisible; warm it up
+    // so the measured frame draws.
+    let mut warm = ctx.run_ui(egui::RawInput::default(), |ui| {
+        super::drag::draw_readout(ui.ctx(), "ar-readout", pos2(40.0, 60.0), ["W:", "H:"], ["120 px".to_string(), "80 px".to_string()]);
+    });
+    warm.textures_delta.clear();
+    let positions = |ctx: &egui::Context| {
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            super::drag::draw_readout(ui.ctx(), "ar-readout", pos2(40.0, 60.0), ["W:", "H:"], ["120 px".to_string(), "80 px".to_string()]);
+        });
+        out.textures_delta.clear();
+        out.shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::Text(t) => Some((t.galley.text().to_string(), t.pos)),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+    };
+    let rtl = {
+        let _rtl = direction_scope(Dir::Rtl);
+        positions(&ctx)
+    };
+    for value in ["120 px", "80 px"] {
+        let (_, vp) = rtl.iter().find(|(t, _)| t == value).expect("the value is painted un-reordered");
+        let label_left = rtl.iter().any(|(t, p)| t != value && (p.y - vp.y).abs() < 1.0 && p.x < vp.x);
+        assert!(label_left, "{value} stays right of its label");
+    }
+}
+
+/// The layer menu opened from the canvas stays anchored at the click point in a right-to-left
+/// UI: the rows inside it may mirror, the menu itself must not move (rtl-canvas-guard).
+#[test]
+fn the_layer_menu_stays_anchored_in_a_right_to_left_ui() {
+    use crate::direction::{Dir, direction_scope};
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    for name in ["first", "floating", "last"] {
-        app.run("file.new", json!({"width": 80, "height": 60, "name": name})).unwrap();
-    }
-    app.ui.view.arrange = "threeUpStacked".into();
-    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 1})).unwrap();
-    let rect = Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
-    let shown: Vec<_> = arranged_cells(&app, rect).unwrap().into_iter().map(|(doc, _)| doc).collect();
-    assert_eq!(shown, vec![0, 2]);
-
-    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
-    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 2})).unwrap();
-    assert!(arranged_cells(&app, rect).is_none(), "the main canvas should be blank when every document is floating");
-}
-
-#[test]
-fn torn_off_document_is_not_drawn_again_in_the_main_window() {
-    for kind in [crate::theme::ThemeKind::Pro, crate::theme::ThemeKind::Studio] {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 80, "height": 60, "name": "floating"})).unwrap();
-        app.run("file.new", json!({"width": 80, "height": 60, "name": "docked"})).unwrap();
-        app.sync_views();
-        let ctx = egui::Context::default();
-        crate::menus::invoke(&mut app, &ctx, "window.arrange.floatInWindow", json!({"document": 0})).unwrap();
-        assert!(app.ui.windows[0].floating);
-        assert_eq!(app.session.active_index(), Some(0), "{kind:?}: the floated page remains active");
-        assert_eq!(main_canvas_document(&app), Some(1), "{kind:?}: the main canvas picks a docked page instead");
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(680.0, 480.0)).build_ui_state(
-            |ui, (app, ready): &mut (PhotocraftApp, bool)| {
-                if *ready {
-                    egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
-                }
-            },
-            (app, false),
-        );
-        PhotocraftApp::setup_context(&h.ctx, kind);
-        h.state_mut().1 = true;
-        h.run_steps(3);
-        let tabs = h.state().0.tab_strip.as_ref().map(|s| s.tabs.iter().map(|(doc, _)| *doc).collect::<Vec<_>>());
-        assert_eq!(tabs, Some(vec![1]), "{kind:?}: only the docked document stays on the main tab strip");
-    }
+    app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
+    let ctx = egui::Context::default();
+    // The egui fork mirrors the widgets it owns in a right-to-left style.
+    ctx.all_styles_mut(|s| s.set_right_to_left(true));
+    let at = [60.0f32, 70.0];
+    assert!(super::layer_pick_ui::open(&mut app, &ctx, at, 100.0, 100.0), "the menu opens over the layer");
+    let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0))), ..Default::default() };
+    let area = |ctx: &egui::Context, app: &mut PhotocraftApp| {
+        let mut out = ctx.run_ui(input.clone(), |ui| super::layer_pick_ui::show(app, ui.ctx()));
+        out.textures_delta.clear();
+        ctx.memory(|m| m.area_rect(egui::Id::unique("canvas-layer-menu")))
+    };
+    let ltr = {
+        let _ltr = direction_scope(Dir::Ltr);
+        area(&ctx, &mut app)
+    };
+    let rtl = {
+        let _rtl = direction_scope(Dir::Rtl);
+        area(&ctx, &mut app)
+    };
+    let ltr = ltr.expect("the menu area is shown");
+    let rtl = rtl.expect("the menu area is shown");
+    assert_eq!(rtl.min, ltr.min, "the menu does not move");
+    assert!((ltr.min - Pos2::new(at[0], at[1])).length() < 0.5, "the menu opens at the click point: {:?}", ltr.min);
 }

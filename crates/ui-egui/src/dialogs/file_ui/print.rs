@@ -153,6 +153,8 @@ pub(super) fn driver_page(f: &mut Map<String, Value>) -> bool {
 }
 
 /// Points per unit for the Position and Size fields.
+/// A single-line edit whose text reads right-to-left in a right-to-left UI; a left-to-right UI
+/// keeps egui's default edit, unchanged.
 fn unit_pt(units: &str) -> f64 {
     match units {
         "mm" => 72.0 / 25.4,
@@ -331,8 +333,11 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
     }
     let p = params(f);
     let mut browse = false;
-    ui.horizontal_top(|ui| {
-        // Page preview.
+    // The two columns follow the reading order: the page preview at the reading start, the
+    // settings after it. The page itself keeps its own left-to-right geometry.
+    crate::direction::dialog_row(ui, |ui| {
+        // Page preview: physical page space, at the reading start of the dialog. The page keeps
+        // its own left-to-right geometry in every direction.
         ui.vertical(|ui| {
             let (area, _) = ui.allocate_exact_size(egui::vec2(330.0, 400.0), egui::Sense::hover());
             ui.painter().rect_filled(area, 0.0, t.canvas);
@@ -421,7 +426,8 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             }
         });
         ui.add_space(12.0);
-        ui.vertical(|ui| {
+        // The settings column: its blocks sit at the reading start and its rows mirror.
+        ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
             ui.set_width(340.0);
             let head = |ui: &mut egui::Ui, s: &str| {
                 ui.add_space(4.0);
@@ -627,7 +633,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             head(ui, tl!("Save as PDF"));
             ui.horizontal(|ui| {
                 let mut out = s(f, "output", "");
-                if ui.add(egui::TextEdit::singleline(&mut out).hint_text(tl!("(print to the printer)")).desired_width(240.0)).changed() {
+                if crate::widgets::rtl_singleline_add(ui, &mut out, |e| e.hint_text(tl!("(print to the printer)")).desired_width(240.0)).changed() {
                     f.insert("output".into(), json!(out));
                 }
                 browse = ui.button(tl!("Browse…")).clicked();

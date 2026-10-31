@@ -42,6 +42,8 @@ const SETTINGS: [&str; 14] = [
     "embedProfile",
 ];
 
+/// A single-line edit whose text reads right-to-left in a right-to-left UI (Arabic preset names
+/// align to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
 fn settings_of(f: &Map<String, Value>) -> Map<String, Value> {
     SETTINGS.iter().filter_map(|k| f.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect()
 }
@@ -859,7 +861,7 @@ fn preset_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String,
         let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         let label = ui.label(tl!("Preset Name"));
         let mut name = s(f, "__presetName");
-        ui.add(egui::TextEdit::singleline(&mut name).id_salt("export-preset-name").desired_width(160.0).char_limit(255)).labelled_by(label.id);
+        crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.id_salt("export-preset-name").desired_width(160.0).char_limit(255)).labelled_by(label.id);
         f.insert("__presetName".into(), json!(name));
         ui.horizontal(|ui| {
             if crate::widgets::secondary_button(ui, tl!("Save"), 70.0).clicked() || enter {
@@ -892,9 +894,11 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
     let t = Tokens::get(ui.ctx());
     let Some(doc) = app.session.active().map(|s| s.doc.clone()) else { return };
     let source_profile = effective_source_profile(app, &doc);
-    ui.horizontal_top(|ui| {
-        // Left: settings.
-        ui.vertical(|ui| {
+    // The dialog host leaves the body on the default layout, so the body mirrors itself: in a
+    // right-to-left UI the panes swap sides and the rows inside them read from the right.
+    crate::direction::dialog_row(ui, |ui| {
+        // Settings, at the reading start.
+        ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
             ui.set_width(248.0);
             ui.label(egui::RichText::new(tl!("File Settings")).font(crate::theme::semibold(12.0)).color(t.text));
             ui.horizontal(|ui| {
@@ -967,8 +971,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             preset_fields(app, ui, f, bw, bh);
         });
         ui.add_space(12.0);
-        // Right: preview + estimated size.
-        ui.vertical(|ui| {
+        // Preview + estimated size, at the reading end.
+        ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
             let layer = f.get("__layer").and_then(Value::as_u64);
             let key = egui::Id::unique(("export-preview", doc.id.0, app.session.active().map_or(0, |s| s.revision), layer));
             let sig = format!(
@@ -1165,5 +1169,7 @@ fn quick_export(app: &mut PhotocraftApp, p: Value) -> Result<Value, String> {
     Ok(r)
 }
 
+#[cfg(test)]
+mod rtl_tests;
 #[cfg(test)]
 mod tests;

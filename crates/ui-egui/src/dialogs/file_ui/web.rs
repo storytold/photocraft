@@ -150,7 +150,9 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
             (tex, info)
         }
     };
-    ui.vertical(|ui| {
+    // The pane's column mirrors with the dialog: the captions read from the right in a
+    // right-to-left UI, while the preview image itself stays as it is.
+    ui.with_layout(crate::text::direction::body_layout(), |ui| {
         ui.set_width(size.x);
         let (r, response) = ui.allocate_exact_size((size - egui::vec2(0.0, 42.0)).max(egui::vec2(1.0, 1.0)), egui::Sense::drag());
         let response = response.on_hover_cursor(egui::CursorIcon::Grab);
@@ -217,13 +219,19 @@ fn web_playback(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_
     if playing {
         (frame, last) = advance_preview(frame, timeline.duration, timeline.fps, last, now);
     }
-    ui.horizontal(|ui| {
-        if crate::icons::button(ui, if playing { "pause" } else { "play" }, 22.0, playing, if playing { tl!("Pause") } else { tl!("Play") }).clicked() {
-            playing = !playing;
-            last = now;
-        }
-        ui.label(format!("{} / {}", frame + 1, timeline.duration));
-    });
+    // Media transport is physical: the frame axis runs left to right, like the canvas. The row
+    // keeps `ui.horizontal`'s band height so the layout does not change in either direction.
+    ui.allocate_ui_with_layout(
+        egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y),
+        egui::Layout::left_to_right(egui::Align::Center),
+        |ui| {
+            if crate::icons::button(ui, if playing { "pause" } else { "play" }, 22.0, playing, if playing { tl!("Pause") } else { tl!("Play") }).clicked() {
+                playing = !playing;
+                last = now;
+            }
+            ui.label(format!("{} / {}", frame + 1, timeline.duration));
+        },
+    );
     f.insert("__web_frame".into(), json!(frame));
     f.insert("__web_time".into(), json!(last));
     f.insert("__web_playing".into(), json!(playing));
@@ -246,7 +254,9 @@ pub(super) fn web_frame_document(doc: &photocraft_doc::Document, frame: Option<u
 pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
-    ui.horizontal(|ui| {
+    // The preview tabs read from the right in a right-to-left UI. The band height matches
+    // `ui.horizontal`, so the LTR layout is unchanged.
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::text::direction::row(), |ui| {
         let mut view = s(f, "__view", "2up");
         for (k, l) in WEB_VIEWS {
             if ui.selectable_label(view == k, tl!(l)).clicked() {
@@ -266,9 +276,11 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
     let p = params(f);
     f.insert("__previewRects".into(), json!([]));
     let area = egui::vec2((ui.available_width() - 270.0 - ui.spacing().item_spacing.x).max(260.0), (ui.available_height() - 48.0).max(180.0));
-    ui.horizontal_top(|ui| {
+    // Previews and settings swap sides in a right-to-left UI: the previews sit at the
+    // reading start, the settings at the reading end.
+    ui.allocate_ui_with_layout(ui.available_size_before_wrap(), crate::text::direction::row().with_cross_align(egui::Align::Min), |ui| {
         // Previews grow with the dialog; settings retain their compact width.
-        ui.vertical(|ui| {
+        ui.with_layout(crate::text::direction::body_layout(), |ui| {
             ui.set_width(area.x);
             match s(f, "__view", "2up").as_str() {
                 "original" => web_pane(app, ui, area, None, f, 0, frame),
@@ -294,8 +306,9 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
             }
         });
         ui.add_space(10.0);
-        // Settings scroll independently on smaller windows.
-        ui.vertical(|ui| {
+        // Settings scroll independently on smaller windows. The column mirrors, so the rows
+        // inside it read from the right in a right-to-left UI.
+        ui.with_layout(crate::text::direction::body_layout(), |ui| {
             ui.set_width(250.0);
             egui::ScrollArea::vertical().id_salt("web-settings").max_height(area.y).show(ui, |ui| {
                 ui.label(egui::RichText::new(tl!("Preset")).color(t.text_dim));
@@ -378,7 +391,7 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                     ui.horizontal(|ui| {
                         let matte_label = ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
                         let mut m = s(f, "matte", "#ffffff");
-                        if ui.add(egui::TextEdit::singleline(&mut m).desired_width(80.0)).labelled_by(matte_label.id).changed() {
+                        if crate::widgets::rtl_singleline_add(ui, &mut m, |e| e.desired_width(80.0)).labelled_by(matte_label.id).changed() {
                             f.insert("matte".into(), json!(m));
                         }
                     });
@@ -423,12 +436,23 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
 /// A size row in a two-column grid: the label, then a field showing `shown`. Returns the typed
 /// value when it changed, compared with the value the widget was given so a field that only
 /// clamps does not count as an edit.
+/// A single-line edit whose text reads right-to-left in a right-to-left UI; a left-to-right UI
+/// keeps egui's default edit, unchanged.
 fn size_field(ui: &mut egui::Ui, label: &str, shown: f64, range: std::ops::RangeInclusive<f32>, unit: &str, decimals: u32) -> Option<f64> {
     let t = Tokens::get(ui.ctx());
     let passed = (shown as f32).clamp(*range.start(), *range.end());
     let mut v = passed;
-    ui.label(egui::RichText::new(label).color(t.text_dim));
-    crate::widgets::value_field_prec(ui, &mut v, range, unit, 90.0, decimals).accessible_name(tl!(&label));
+    // `egui::Grid` ignores the interface direction, so the cells are emitted in reading order:
+    // the label at the reading start, the field after it.
+    crate::text::direction::grid_cells(
+        ui,
+        |ui| {
+            ui.label(egui::RichText::new(label).color(t.text_dim));
+        },
+        |ui| {
+            crate::widgets::value_field_prec(ui, &mut v, range, unit, 90.0, decimals).accessible_name(tl!(&label));
+        },
+    );
     ui.end_row();
     (v != passed).then_some(f64::from(v))
 }
@@ -447,16 +471,21 @@ fn web_size(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc:
         f.insert("height".into(), json!(height));
     };
     let max = MAX_PX as f32;
-    let (width, height, percent) = egui::Grid::new("web-size")
-        .num_columns(2)
-        .show(ui, |ui| {
-            (
-                size_field(ui, tl!("Width"), w, 1.0..=max, "px", 0),
-                size_field(ui, tl!("Height"), h, 1.0..=max, "px", 0),
-                size_field(ui, tl!("Percent"), pct, 1.0..=1000.0, "%", 2),
-            )
-        })
-        .inner;
+    // The fork's `Grid` cannot start under a right-to-left cursor; the size rows stay LTR and
+    // their cells keep their order in either direction.
+    let (width, height, percent) = crate::direction::ltr_vertical(ui, |ui| {
+        egui::Grid::new("web-size")
+            .num_columns(2)
+            .show(ui, |ui| {
+                (
+                    size_field(ui, tl!("Width"), w, 1.0..=max, "px", 0),
+                    size_field(ui, tl!("Height"), h, 1.0..=max, "px", 0),
+                    size_field(ui, tl!("Percent"), pct, 1.0..=1000.0, "%", 2),
+                )
+            })
+            .inner
+    })
+    .inner;
     let side = match (width, height) {
         (Some(v), _) => resize_from_side(w0, h0, v.round(), h, lock, true).ok(),
         (_, Some(v)) => resize_from_side(w0, h0, w, v.round(), lock, false).ok(),
@@ -573,4 +602,88 @@ pub(super) fn download_for_web(app: &mut PhotocraftApp, mut p: Value) -> Result<
     let write = app.services.write.as_mut().ok_or("no download service")?;
     web_cmds::save_for_web_with_writer(&mut app.session, &p, &mut |path, bytes| write(path, bytes).map_err(photocraft_engine::EngineError::Other))
         .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use egui::accesskit::Role;
+    use egui_kittest::{
+        Harness,
+        kittest::{NodeT, Queryable},
+    };
+
+    /// A document to draw the Save for Web body over.
+    fn app() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 24})).unwrap();
+        app
+    }
+
+    /// A caption's rect: the visible label, not the widget it names.
+    fn caption<T>(h: &Harness<'_, T>, name: &str) -> egui::Rect {
+        h.query_all(egui_kittest::kittest::by().label(name).include_labels())
+            .find(|n| n.accesskit_node().role() == Role::Label)
+            .unwrap_or_else(|| panic!("the {name} caption"))
+            .rect()
+    }
+
+    /// The preview pane's rect, as the body recorded it.
+    fn preview(h: &Harness<'_, (PhotocraftApp, Map<String, Value>)>) -> egui::Rect {
+        let r = &h.state().1["__previewRects"][0];
+        let x = |i: usize| r.get(i).and_then(Value::as_f64).unwrap_or_default() as f32;
+        egui::Rect::from_min_max(egui::pos2(x(0), x(1)), egui::pos2(x(2), x(3)))
+    }
+
+    /// The web body drawn in one direction: the preview tabs, the preview pane, the settings
+    /// column's head and the Image Size grid.
+    struct Body {
+        original: egui::Rect,
+        two_up: egui::Rect,
+        preview: egui::Rect,
+        preset: egui::Rect,
+        width_label: egui::Rect,
+        width_field: egui::Rect,
+    }
+
+    fn body(dir: crate::direction::Dir) -> Body {
+        let _scope = crate::direction::direction_scope(dir);
+        let mut app = app();
+        let id = open_web(&mut app);
+        let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        let mut h = Harness::builder().with_size(egui::vec2(1000.0, 800.0)).build_ui_state(
+            |ui, state: &mut (PhotocraftApp, Map<String, Value>)| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                web_body(&mut state.0, ui, &mut state.1);
+            },
+            (app, fields),
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(3);
+        Body {
+            original: h.get_by_role_and_label(Role::Button, "Original").rect(),
+            two_up: h.get_by_role_and_label(Role::Button, "2-Up").rect(),
+            preview: preview(&h),
+            preset: caption(&h, "Preset"),
+            width_label: caption(&h, "Width"),
+            width_field: h.get_by_role_and_label(Role::SpinButton, "Width").rect(),
+        }
+    }
+
+    /// The Save for Web body reads in the UI's direction: the preview tabs, the preview beside
+    /// the settings and the Image Size grid all follow it.
+    #[test]
+    fn the_web_body_reads_in_the_ui_direction() {
+        let ltr = body(crate::direction::Dir::Ltr);
+        assert!(ltr.original.right() < ltr.two_up.left(), "LTR: the tabs read left to right: {:?} {:?}", ltr.original, ltr.two_up);
+        assert!(ltr.preview.right() < ltr.preset.left(), "LTR: the preview leads the settings: {:?} {:?}", ltr.preview, ltr.preset);
+        assert!(ltr.width_label.right() < ltr.width_field.left(), "LTR: the grid's label leads its field: {:?} {:?}", ltr.width_label, ltr.width_field);
+
+        let rtl = body(crate::direction::Dir::Rtl);
+        assert!(rtl.original.left() > rtl.two_up.right(), "RTL: the tabs read right to left: {:?} {:?}", rtl.original, rtl.two_up);
+        assert!(rtl.preview.left() > rtl.preset.right(), "RTL: the preview leads the settings: {:?} {:?}", rtl.preview, rtl.preset);
+        assert!(rtl.width_label.left() > rtl.width_field.right(), "RTL: the grid's label leads its field: {:?} {:?}", rtl.width_label, rtl.width_field);
+    }
 }

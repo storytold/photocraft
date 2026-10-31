@@ -10,7 +10,7 @@ pub(super) struct LabelScrub {
     /// The visible label's own id, which names the field it scrubs.
     pub(super) name: Option<egui::Id>,
     pub(super) rect: Rect,
-    /// How far right of the label the field may start (the whole row for a slider row).
+    /// How far on either side of the label the field may start (the whole row for a slider row).
     pub(super) max_gap: f32,
     /// Options captions defer interaction until the adjacent field bounds are known.
     pub(super) option_area: bool,
@@ -27,9 +27,9 @@ fn label_scrub_id() -> egui::Id {
     egui::Id::unique("pc-label-scrub")
 }
 
-/// Makes `label` scrubby: dragging it left or right moves the value field drawn right after it on
+/// Makes `label` scrubby: dragging it left or right moves the value field drawn next to it on
 /// the same row (one step a point, ×10 with Shift, a tenth as fast with Alt), with Photoshop's
-/// scrubby cursor. A label with no value field right after it stays a plain label.
+/// scrubby cursor. A label with no value field beside it stays a plain label.
 pub fn scrub_label(ui: &Ui, label: &Response) -> Response {
     scrub_label_within(ui, label, 24.0)
 }
@@ -119,8 +119,9 @@ pub(super) fn label_scrub_response(ui: &Ui, resp: &Response, original_rect: Rect
     }
 }
 
-/// The label drag left for the field at `rect` this frame, if its label is just left of it on
-/// its row. Taken either way: a label only scrubs the next field drawn.
+/// The label drag left for the field at `rect` this frame, if its label is just beside it on
+/// its row (either side: mirrored rows put the field left of its label). Taken either way: a
+/// label only scrubs the next field drawn.
 pub(super) fn take_label_scrub(ui: &Ui, rect: Rect) -> Option<LabelScrub> {
     let s = ui.data_mut(|d| {
         let s = d.get_temp::<LabelScrub>(label_scrub_id());
@@ -128,8 +129,11 @@ pub(super) fn take_label_scrub(ui: &Ui, rect: Rect) -> Option<LabelScrub> {
         s
     })?;
     let same_row = rect.top() < s.rect.bottom() && rect.bottom() > s.rect.top();
-    let gap = rect.left() - s.rect.right();
-    let linked = s.pass == ui.ctx().cumulative_pass_nr() && same_row && gap >= -1.0 && gap <= s.max_gap;
+    // The field may sit on either side of its label (RTL rows mirror it): accept the side in band.
+    let gap_right = rect.left() - s.rect.right(); // field right of label (LTR rows)
+    let gap_left = s.rect.left() - rect.right(); // field left of label (RTL rows)
+    let in_band = |g: f32| g >= -1.0 && g <= s.max_gap;
+    let linked = s.pass == ui.ctx().cumulative_pass_nr() && same_row && (in_band(gap_right) || in_band(gap_left));
     if linked {
         ui.data_mut(|d| d.insert_temp(s.label.with("pc-scrub-linked"), true));
     }
@@ -150,4 +154,59 @@ pub(super) fn take_label_scrub_name(ui: &Ui, rect: Rect) -> Option<egui::Id> {
     // Only a caption on the control's own row names it; one left over from an earlier row does not.
     let same_row = rect.top() < s.rect.bottom() && rect.bottom() > s.rect.top();
     same_row.then_some(s.name).flatten()
+}
+
+#[cfg(test)]
+mod tests {
+    use egui::{Align, Modifiers};
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    use super::super::value_field;
+    use super::scrub_label;
+
+    /// Mirrored rows put the field LEFT of its label: the scrub links across the gap on that
+    /// side, and the drag stays physical (drag right still increases the value).
+    #[test]
+    fn dragging_a_label_scrubs_the_field_left_of_it_in_rtl() {
+        let mut h = Harness::new_ui_state(
+            |ui, s: &mut (f32, f32)| {
+                // Same draw order as the LTR twin; the mirrored row places the label right of the field.
+                ui.with_layout(egui::Layout::right_to_left(Align::Min), |ui| {
+                    ui.add_space(40.0); // keep the label clear of the window's right edge
+                    let l = ui.label("Size:");
+                    scrub_label(ui, &l);
+                    value_field(ui, &mut s.0, 0.0..=1000.0, "px", 80.0).accessible_name("Start");
+                });
+                ui.with_layout(egui::Layout::right_to_left(Align::Min), |ui| {
+                    ui.add_space(40.0);
+                    let l = ui.label("Mode:");
+                    scrub_label(ui, &l);
+                    ui.add_space(60.0);
+                    value_field(ui, &mut s.1, 0.0..=1000.0, "px", 80.0).accessible_name("End");
+                });
+            },
+            (100.0, 100.0),
+        );
+        h.run();
+        let drag = |h: &mut Harness<'static, (f32, f32)>, label: &str, dx: f32, mods: Modifiers| {
+            let at = h.get_by_label(label).rect().center();
+            h.hover_at(at);
+            h.run();
+            h.drag_at(at);
+            h.run();
+            for i in 1..=4 {
+                h.event(egui::Event::PointerMoved(at + egui::vec2(dx * i as f32 / 4.0, 0.0)));
+                h.event(egui::Event::ModifiersChanged(mods));
+                h.run();
+            }
+            h.drop_at(at + egui::vec2(dx, 0.0));
+            h.run();
+        };
+        drag(&mut h, "Size:", 20.0, Modifiers::NONE);
+        assert_eq!(h.state().0, 120.0, "the field left of its label scrubs too");
+        drag(&mut h, "Size:", -20.0, Modifiers::NONE);
+        assert_eq!(h.state().0, 100.0);
+        drag(&mut h, "Mode:", 20.0, Modifiers::NONE);
+        assert_eq!(h.state().1, 100.0, "a gap past max_gap doesn't link on the mirrored side either");
+    }
 }

@@ -43,7 +43,7 @@ pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     ui.add_space(6.0);
     let more = icons::button_with_icon_size(ui, "ellipsis", 28.0, 20.0, false, tl!("Align and distribute"));
-    egui::Popup::menu(&more).show(|ui| {
+    egui::Popup::menu(&more).show(|ui| crate::menus::popup_body(ui, |ui| {
         ui.set_min_width(200.0);
         let mut section = |ui: &mut egui::Ui, title: &str, items: &[(&str, &str, &str)]| {
             ui.label(egui::RichText::new(title).small().color(t.text_dim));
@@ -60,7 +60,7 @@ pub fn options(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         section(ui, tl!("Align"), &ALIGN);
         ui.separator();
         section(ui, tl!("Distribute"), &DISTRIBUTE);
-    });
+    }));
 }
 
 #[cfg(test)]

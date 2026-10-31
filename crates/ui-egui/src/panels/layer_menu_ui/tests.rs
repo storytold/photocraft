@@ -571,3 +571,51 @@ fn every_entry_is_a_known_command() {
         assert!(crate::menu_catalog::CATALOG.iter().any(|m| m.3 == id) || photocraft_engine::commands::find(id).is_some(), "{id}");
     }
 }
+
+/// The layer context menu's rows mirror in a right-to-left UI: every row's label hugs the menu's
+/// right edge; left-to-right they keep the plain button's left edge.
+#[test]
+fn context_menu_rows_mirror_in_rtl() {
+    use crate::direction::{Dir, direction_scope};
+    let render = |dir: Dir| -> Vec<(String, egui::Rect)> {
+        let _scope = direction_scope(dir);
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 10, "height": 10})).unwrap();
+        s.execute("layer.new.layer", json!({})).unwrap();
+        let app = crate::PhotocraftApp::new(s, crate::Services::default());
+        let st = app.session.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|st| st.right_to_left = dir == Dir::Rtl);
+        let mut out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 700.0))), ..Default::default() },
+            |ui| {
+                let mut actions = Vec::new();
+                ui.allocate_ui_with_layout(egui::vec2(240.0, 600.0), egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                    show(&app, ui, &l, false, &mut actions);
+                });
+            },
+        );
+        let texts = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), ts.visual_bounding_rect())),
+                _ => None,
+            })
+            .collect();
+        out.textures_delta.clear();
+        texts
+    };
+    let at = |v: &[(String, egui::Rect)], s: &str| v.iter().find(|(t, _)| t.contains(s)).map(|(_, r)| *r).unwrap_or(egui::Rect::NOTHING);
+    let rtl = render(Dir::Rtl);
+    for label in ["Duplicate Layer", "Rename Layer", "Color"] {
+        let r = at(&rtl, label);
+        assert!(r.right() > 240.0 - 32.0, "rtl: {label:?} hugs the menu's right edge: {r:?}");
+    }
+    let ltr = render(Dir::Ltr);
+    for label in ["Duplicate Layer", "Rename Layer", "Color"] {
+        let r = at(&ltr, label);
+        assert!(r.left() < 32.0, "ltr: {label:?} stays at the left edge: {r:?}");
+    }
+}

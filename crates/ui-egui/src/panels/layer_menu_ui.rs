@@ -150,7 +150,7 @@ pub fn show(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bo
         let has_selection = app.session.active().is_some_and(|s| s.doc.selection.is_some());
         items(app, ui, l, on_set, entries(l, on_set, has_selection), actions);
         ui.separator();
-        if ui.button(tl!("Rename Layer…")).clicked() {
+        if crate::menu_keys::menu_row(ui, tl!("Rename Layer…"), None, false, true).clicked() {
             rename = true;
             ui.close();
         }
@@ -176,14 +176,14 @@ pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actio
         let loads =
             [(tl!("Add Mask to Selection"), "add"), (tl!("Subtract Mask from Selection"), "subtract"), (tl!("Intersect Mask with Selection"), "intersect")];
         for (label, operation) in loads {
-            if ui.button(label).clicked() {
+            if crate::menu_keys::menu_row(ui, label, None, false, true).clicked() {
                 actions.push(("layer.select".into(), json!({"layer": l.id.0})));
                 actions.push(("select.loadSelection".into(), json!({"channel": "mask", "layer": l.id.0, "operation": operation})));
                 ui.close();
             }
         }
         ui.separator();
-        if ui.add_enabled(crate::menus::is_enabled(app, "select.selectAndMask"), egui::Button::new(tl!("Select and Mask…"))).clicked() {
+        if crate::menu_keys::menu_row(ui, tl!("Select and Mask…"), None, false, crate::menus::is_enabled(app, "select.selectAndMask")).clicked() {
             // Like double-clicking the thumbnail with that preference on: it refines the mask.
             actions.push(("layer.select".into(), json!({"layer": l.id.0})));
             actions.push(("ui.maskTarget".into(), json!(true)));
@@ -191,7 +191,7 @@ pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actio
             ui.close();
         }
         // Layer Mask Display Options: the rubylith's colour and opacity (`channel.options`).
-        if ui.button(tl!("Mask Options…")).clicked() {
+        if crate::menu_keys::menu_row(ui, tl!("Mask Options…"), None, false, true).clicked() {
             actions.push(("layer.select".into(), json!({"layer": l.id.0})));
             actions.push(("ui.maskTarget".into(), json!(true)));
             actions.push(("channel.options".into(), Value::Null));
@@ -230,7 +230,7 @@ fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool,
                 // selected first when clicked, so its items stay available.
                 let is_active = app.session.active().is_some_and(|s| s.active_layer == Some(l.id));
                 let enabled = !(on_set && single_layer_only(id)) && if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
-                if ui.add_enabled(enabled, egui::Button::new(tl!(&label))).clicked() {
+                if crate::menu_keys::menu_row(ui, tl!(&label), None, false, enabled).clicked() {
                     if !on_set {
                         actions.push(("layer.select".into(), json!({"layer": l.id.0})));
                     }
@@ -258,9 +258,18 @@ fn common_color(app: &crate::PhotocraftApp, l: &Layer, on_set: bool) -> Option<L
 }
 
 fn color_menu(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool, actions: &mut Vec<(String, Value)>) {
-    ui.menu_button(tl!("Color"), |ui| {
-        color_choices(app, ui, l, on_set, actions);
-    });
+    use egui::containers::menu::SubMenu;
+    let rtl = ui.style().right_to_left;
+    let label = tl!("Color");
+    // The row mirrors like any menu row: under RTL the label hugs the row's right edge and the
+    // arrow sits at its left (the glyph itself rotates with the direction flag in the fork).
+    let text = if rtl {
+        crate::menu_keys::menu_row_text(ui, false, label, None, false, crate::menu_keys::GutterSide::ReadingStart)
+    } else {
+        egui::RichText::new(label).into()
+    };
+    let response = ui.add(crate::menu_keys::submenu_row_button(text, rtl));
+    SubMenu::new().show(ui, &response, |ui| color_choices(app, ui, l, on_set, actions));
 }
 
 /// The eye column opens the same color choices directly, without the row's full context menu.
@@ -292,7 +301,12 @@ fn color_button(ui: &mut egui::Ui, color: LabelColor, checked: bool) -> egui::Re
     let check_id = egui::IdSalt::new(("label-check", color.id()));
     let swatch_id = egui::IdSalt::new(("label-swatch", color.id()));
     let name = color_name(color);
-    let button = egui::Button::new((Atom::custom(check_id, vec2(14.0, 16.0)), Atom::custom(swatch_id, vec2(16.0, 16.0)), name, Atom::grow())).atom_ui(ui);
+    // The atoms mirror with the direction: under RTL the check column sits at the row's right
+    // edge (the reading start), the swatch and the name to its left.
+    let check = Atom::custom(check_id, vec2(14.0, 16.0));
+    let swatch = Atom::custom(swatch_id, vec2(16.0, 16.0));
+    let atoms = egui::IntoAtoms::into_atoms((check, swatch, name, Atom::grow()));
+    let button = egui::Button::new(crate::menu_keys::mirror_atoms(atoms, ui.style().right_to_left)).atom_ui(ui);
     if checked && let Some(rect) = button.rect(check_id) {
         crate::icons::paint(ui, rect, "check", 14.0, t.icon);
     }

@@ -314,13 +314,25 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         buttons.iter().zip(&labels).map(|(b, label)| DialogButton::new(b.0, label, b.3).focus(focus && b.0 == ButtonRole::Default)).collect();
     let modal = egui::Modal::new(egui::Id::unique("discard-prompt")).show(ctx, |ui| {
         ui.set_max_width(420.0);
-        ui.label(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0)));
+        // The title and the question read from the right in a right-to-left UI: the mirrored body
+        // layout places them at the reading start, and body_label pins the paragraph direction.
+        // In a left-to-right UI both scopes are a no-op. Each scope sizes from the cursor — seeding
+        // max_rect(ui.max_rect()) would re-anchor the row at the modal's top and overlap the row
+        // above it.
+        let heading = egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0));
+        ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
+            crate::text::direction::body_label(ui, heading);
+        });
         ui.add_space(4.0);
         crate::widgets::hairline(ui);
         ui.add_space(8.0);
-        ui.label(message);
+        ui.scope_builder(egui::UiBuilder::new().layout(crate::text::direction::body_layout()), |ui| {
+            crate::text::direction::body_label(ui, message.as_str());
+        });
         ui.add_space(12.0);
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        // The answers hug the reading end: the right edge in a left-to-right UI, the left in a
+        // right-to-left one. The order inside the group mirrors with the direction.
+        ui.with_layout(crate::text::direction::trailing(), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             if let Some(role) = crate::widgets::dialog_buttons(ui, &row) {
                 answer = buttons.iter().find(|b| b.0 == role).map(|b| b.4);
@@ -416,6 +428,10 @@ fn button_label(mac: bool, label: &str, key: Option<Key>) -> String {
 fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<String> {
     let starts_with_key = |label: &str, k: Key| label.split_at_checked(1).is_some_and(|(first, _)| first.eq_ignore_ascii_case(k.name()));
     let inline = buttons.iter().all(|&(label, key)| key.is_none_or(|k| starts_with_key(tl!(label), k)));
+    // Buttons lay their text out left-to-right whatever the UI direction, so in a right-to-left
+    // UI an appended hint would land on the visual right: the reading start. The hint belongs at
+    // the reading end, so there it goes first. Left-to-right output is unchanged.
+    let rtl = crate::text::direction::is_rtl();
     buttons
         .iter()
         .map(|&(label, key)| {
@@ -425,6 +441,7 @@ fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<String> {
                 Some(_) if mac => text.to_string(),
                 Some(k) => match text.split_at_checked(1) {
                     Some((first, rest)) if inline => format!("({first}){rest}"),
+                    _ if rtl => format!("({}) {}", k.name(), text),
                     _ => format!("{text} ({})", k.name()),
                 },
             }
@@ -434,3 +451,103 @@ fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<String> {
 
 #[cfg(test)]
 mod tests;
+
+/// The RTL twins of the prompt's layout: the answers mirror and the blocks read from the right,
+/// while the keyboard order stays the one the answers were created in.
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use egui_kittest::kittest::Queryable;
+
+    type Prompted = egui_kittest::Harness<'static, PhotocraftApp>;
+
+    /// The unsaved-changes prompt over one dirty document, as `os` draws it.
+    fn prompt(os: egui::os::OperatingSystem) -> Prompted {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.sync_views();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(800.0, 600.0)).build_ui_state(
+            |ui, app| {
+                show(app, ui.ctx());
+                app.poll_file_dialog(ui.ctx(), None);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.ctx.set_os(os);
+        assert!(intercept(h.state_mut(), "file.close", &Value::Null));
+        h.run_steps(2);
+        h
+    }
+
+    /// The answers in the order they are drawn, left to right.
+    fn drawn<'a>(h: &Prompted, labels: [&'a str; 3]) -> Vec<&'a str> {
+        let mut v = labels.map(|l| (h.get_by_label(l).rect().left(), l)).to_vec();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        v.into_iter().map(|(_, l)| l).collect()
+    }
+
+    #[test]
+    fn rtl_the_answers_mirror_but_the_keyboard_order_stays() {
+        let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+        let mut h = prompt(egui::os::OperatingSystem::Windows);
+        let labels = ["(Y)es", "(N)o", "(C)ancel"];
+        assert_eq!(drawn(&h, labels), ["(C)ancel", "(N)o", "(Y)es"], "the answers read from the right");
+        // The title sits at the reading start and the answers at the reading end.
+        let title = h.get_by_label("Unsaved changes").rect();
+        let answers = h.get_by_label("(C)ancel").rect();
+        assert!(answers.left() < title.left(), "the answers hug the reading end: {answers:?} in {title:?}");
+        // Tab still walks the answers in the order they were created.
+        assert!(h.get_by_label("(Y)es").is_focused(), "the default answer starts focused");
+        h.key_press(Key::Tab);
+        h.run_steps(2);
+        assert!(h.get_by_label("(N)o").is_focused(), "Tab walks the answers in creation order");
+        h.key_press(Key::Tab);
+        h.run_steps(2);
+        assert!(h.get_by_label("(C)ancel").is_focused(), "Tab walks the answers in creation order");
+    }
+
+    #[test]
+    fn ltr_the_prompt_keeps_its_layout() {
+        let _ltr = crate::text::direction::direction_scope(crate::text::direction::Dir::Ltr);
+        let h = prompt(egui::os::OperatingSystem::Windows);
+        let labels = ["(Y)es", "(N)o", "(C)ancel"];
+        assert_eq!(drawn(&h, labels), labels, "left to right in a left-to-right UI");
+        let title = h.get_by_label("Unsaved changes").rect();
+        let answers = h.get_by_label("(C)ancel").rect();
+        assert!(answers.right() > title.right(), "the answers hug the right edge: {answers:?} in {title:?}");
+    }
+
+    /// The prompt's frame, as the modal's area reports it (`Area::end` pins the move widget's
+    /// rect to the final frame).
+    fn frame(h: &Prompted) -> egui::Rect {
+        h.ctx.read_response(egui::Id::unique("discard-prompt").with("move")).unwrap_or_else(|| panic!("the modal's frame is not registered")).rect
+    }
+
+    /// The heading and the question stack as two rows in both directions: the title scope must
+    /// not re-anchor at the modal's top and collide with the message on one baseline.
+    #[test]
+    fn the_title_and_the_question_never_share_a_baseline() {
+        for dir in [crate::text::direction::Dir::Ltr, crate::text::direction::Dir::Rtl] {
+            let _scope = crate::text::direction::direction_scope(dir);
+            let h = prompt(egui::os::OperatingSystem::Windows);
+            let title = h.get_by_label("Unsaved changes").rect();
+            let question = h.query_by_label_contains("before closing").expect("the question is drawn").rect();
+            assert!(title.bottom() <= question.top() + 0.5, "{dir:?}: title {title:?} overlaps the question {question:?}");
+        }
+    }
+
+    /// The prompt keeps its width in both directions.
+    #[test]
+    fn the_prompt_is_the_same_width_in_both_directions() {
+        let width = |dir: crate::text::direction::Dir| {
+            let _scope = crate::text::direction::direction_scope(dir);
+            let h = prompt(egui::os::OperatingSystem::Windows);
+            frame(&h).width()
+        };
+        let ltr = width(crate::text::direction::Dir::Ltr);
+        let rtl = width(crate::text::direction::Dir::Rtl);
+        assert!((ltr - rtl).abs() < 1.0, "the prompt keeps its width: {ltr} vs {rtl}");
+    }
+}

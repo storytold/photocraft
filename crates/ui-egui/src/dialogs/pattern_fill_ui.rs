@@ -65,8 +65,8 @@ pub(crate) fn open_new(app: &mut PhotocraftApp) -> Result<u64, String> {
         return Err(why);
     }
     let st = app.session.active().ok_or("no document open")?;
-    let pattern = photocraft_engine::pattern_cmds::resolve_id(&app.session, "").ok_or("no patterns")?;
-    let values = json!({"pattern": pattern, "scale": 100.0, "angle": 0.0, "link": true, "phase": [0.0, 0.0]});
+    let pattern = photocraft_engine::pattern_cmds::resolve(&app.session, "").ok_or("no patterns")?;
+    let values = json!({"pattern": pattern.id, "scale": 100.0, "angle": 0.0, "link": true, "phase": [0.0, 0.0]});
     let f = fields(cmds::CREATE, json!({"document": st.doc.id.0}), values);
     Ok(app.ui.open_dialog(crate::state::DialogKind::Command, f))
 }
@@ -157,6 +157,13 @@ fn num(f: &Map<String, Value>, k: &str, d: f64) -> f32 {
 /// The dialog body, in Photoshop's layout: the pattern with Snap to Origin beside it, then
 /// Angle, Scale and Link with Layer.
 pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    // One direction-aware body: in a left-to-right UI the layout is egui's default, so nothing
+    // moves; in a right-to-left one the blocks hug the reading start and every row mirrors.
+    ui.with_layout(crate::direction::body_layout(), |ui| body_fields(app, ui, f));
+}
+
+/// The Pattern Fill dialog's fields.
+fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     ui.horizontal(|ui| {
         let pat = f.get("pattern").and_then(Value::as_str).unwrap_or_default().to_string();
@@ -191,3 +198,84 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::Queryable;
+
+    #[allow(clippy::type_complexity)]
+    type FillHarness = egui_kittest::Harness<'static, (PhotocraftApp, Map<String, Value>, egui::Rect)>;
+
+    /// The Pattern Fill body drawn in `dir`, with the column it draws in.
+    fn harness(dir: Dir) -> (FillHarness, egui::Rect) {
+        let _dir = crate::direction::direction_scope(dir);
+        let mut fields = Map::new();
+        fields.insert("pattern".into(), json!(""));
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(420.0, 320.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(
+                |ui, s: &mut (PhotocraftApp, Map<String, Value>, egui::Rect)| {
+                    s.2 = ui.max_rect();
+                    body(&s.0, ui, &mut s.1);
+                },
+                (app, fields, egui::Rect::ZERO),
+            );
+        h.run_steps(3);
+        let rect = h.state().2;
+        (h, rect)
+    }
+
+    /// The first row reads from the right in a right-to-left UI: the pattern swatch keeps the
+    /// reading start and the Snap to Origin button moves to the reading end.
+    #[test]
+    fn the_pattern_row_mirrors_in_a_right_to_left_ui() {
+        let (ltr, _ltr_col) = harness(Dir::Ltr);
+        let (rtl, _rtl_col) = harness(Dir::Rtl);
+
+        let ltr_pattern = ltr.get_by_role_and_label(egui::accesskit::Role::Button, "Patterns").rect();
+        let ltr_snap = ltr.get_by_label("Snap to Origin").rect();
+        assert!(ltr_snap.left() > ltr_pattern.right(), "LTR: the button follows the swatch: {ltr_pattern:?} {ltr_snap:?}");
+
+        let rtl_pattern = rtl.get_by_role_and_label(egui::accesskit::Role::Button, "Patterns").rect();
+        let rtl_snap = rtl.get_by_label("Snap to Origin").rect();
+        assert!(rtl_snap.right() < rtl_pattern.left(), "RTL: the row mirrors: {rtl_pattern:?} {rtl_snap:?}");
+    }
+
+    /// The blocks hug the reading start of the column: the swatch and the Link with Layer
+    /// checkbox share the column's left edge in LTR and its right edge in RTL.
+    #[test]
+    fn the_blocks_hug_the_reading_start() {
+        let (ltr, ltr_col) = harness(Dir::Ltr);
+        let (rtl, rtl_col) = harness(Dir::Rtl);
+
+        let ltr_pattern = ltr.get_by_role_and_label(egui::accesskit::Role::Button, "Patterns").rect();
+        let ltr_link = ltr.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Link with Layer").rect();
+        assert!((ltr_pattern.left() - ltr_col.left()).abs() < 1.0, "LTR: the swatch hugs the column's left edge: {ltr_pattern:?} in {ltr_col:?}");
+        assert!(ltr_link.left() - ltr_col.left() < 24.0, "LTR: the caption hugs the column's left edge: {ltr_link:?} in {ltr_col:?}");
+
+        let rtl_pattern = rtl.get_by_role_and_label(egui::accesskit::Role::Button, "Patterns").rect();
+        let rtl_link = rtl.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Link with Layer").rect();
+        assert!((rtl_col.right() - rtl_pattern.right()).abs() < 1.0, "RTL: the swatch hugs the column's right edge: {rtl_pattern:?} in {rtl_col:?}");
+        assert!(rtl_col.right() - rtl_link.right() < 24.0, "RTL: the caption hugs the column's right edge: {rtl_link:?} in {rtl_col:?}");
+    }
+
+    /// The Angle and Scale captions hug the reading start of the column in both directions.
+    #[test]
+    fn the_angle_and_scale_captions_hug_the_reading_start() {
+        let (ltr, ltr_col) = harness(Dir::Ltr);
+        let ltr_angle = ltr.get_by_role_and_label(egui::accesskit::Role::Label, "Angle:").rect();
+        let ltr_scale = ltr.get_by_role_and_label(egui::accesskit::Role::Label, "Scale:").rect();
+        assert!((ltr_angle.left() - ltr_col.left()).abs() < 1.0, "LTR: the Angle caption hugs the column's left edge: {ltr_angle:?} in {ltr_col:?}");
+        assert!((ltr_scale.left() - ltr_col.left()).abs() < 1.0, "LTR: the Scale caption hugs the column's left edge: {ltr_scale:?} in {ltr_col:?}");
+
+        let (rtl, rtl_col) = harness(Dir::Rtl);
+        let rtl_angle = rtl.get_by_role_and_label(egui::accesskit::Role::Label, "Angle:").rect();
+        let rtl_scale = rtl.get_by_role_and_label(egui::accesskit::Role::Label, "Scale:").rect();
+        assert!((rtl_col.right() - rtl_angle.right()).abs() < 1.0, "RTL: the Angle caption hugs the column's right edge: {rtl_angle:?} in {rtl_col:?}");
+        assert!((rtl_col.right() - rtl_scale.right()).abs() < 1.0, "RTL: the Scale caption hugs the column's right edge: {rtl_scale:?} in {rtl_col:?}");
+    }
+}

@@ -1,5 +1,7 @@
 //! Icon rendering. SVGs are embedded (see `icon_data.rs`), recoloured to white, rasterized by the
 //! egui_extras SVG loader at the exact on-screen pixel size (crisp at any DPI), and tinted per use.
+//! Directional glyphs swap to their mirror partner under a right-to-left UI ([`icon_name`]);
+//! canvas cursors and badges never mirror.
 //!
 //! (History: the first shell used Unicode glyphs; half of them rendered as tofu boxes because the
 //! bundled fonts lacked them. Vector icons fix that for good.)
@@ -19,12 +21,83 @@ fn white_icons() -> &'static SvgIconSet {
     MAP.get_or_init(|| SvgIconSet::new(ICONS, SvgStyle { current_color: "#ffffff", stroke_width: Some("1.75") }, "bytes://icons/", "square"))
 }
 
-pub fn exists(name: &str) -> bool {
-    white_icons().contains(name)
+/// Icons whose glyphs point along the reading direction. Under a right-to-left UI each name
+/// draws its mirror partner, so a chevron keeps pointing the way it reads. Anything not
+/// listed draws unchanged.
+pub const SWAPPED_ICONS: &[(&str, &str)] = &[
+    ("chevron-left", "chevron-right"),
+    ("chevrons-left", "chevrons-right"),
+    // Reserved for sidebar toggles; panel-left is not in the icon set yet.
+    ("panel-left", "panel-right"),
+    ("toggle-left", "toggle-right"),
+];
+
+/// Icons drawn mirrored in place (same glyph flipped horizontally): none today — the set has
+/// no indent/log/send-class glyphs. The mechanism (the `uv` mirror in [`image`]) is kept for
+/// parity with craft-libs' icon model.
+pub const FLIPPED_ICONS: &[&str] = &[];
+
+/// Directional-looking icons kept physical on purpose: history runs in time, alignment edges
+/// name the canvas, media transport plays forward, vertical chevrons do not read sideways.
+pub const KEPT_ICONS: &[&str] = &[
+    "undo-2",
+    "redo-2",
+    "rotate-cw",
+    "arrow-left-right",
+    "play",
+    "pause",
+    "align-edge-left",
+    "align-edge-right",
+    "align-edge-hcenter",
+    "align-edge-top",
+    "align-edge-bottom",
+    "align-edge-vcenter",
+    "align-left",
+    "align-right",
+    "align-center",
+    "align-justify",
+    "zoom-in",
+    "chevron-down",
+    "chevron-up",
+];
+
+/// The mirror-image partner of `name` under a right-to-left UI ([`SWAPPED_ICONS`]), else
+/// `name` unchanged.
+pub fn icon_name(name: &str) -> &str {
+    if !crate::direction::is_rtl() {
+        return name;
+    }
+    for &(a, b) in SWAPPED_ICONS {
+        if name == a {
+            return b;
+        }
+        if name == b {
+            return a;
+        }
+    }
+    name
 }
 
-/// An egui image for an icon, tinted.
+/// True when `name` must draw mirrored in place ([`FLIPPED_ICONS`]; empty today).
+pub fn icon_flipped(name: &str) -> bool {
+    crate::direction::is_rtl() && FLIPPED_ICONS.contains(&name)
+}
+
+pub fn exists(name: &str) -> bool {
+    white_icons().contains(icon_name(name))
+}
+
+/// An egui image for an icon, tinted. Directional glyphs swap to their mirror partner under a
+/// right-to-left UI ([`icon_name`]); canvas cursors and badges take [`image_raw`] instead.
 pub fn image(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
+    let name = icon_name(name);
+    let img = image_raw(name, size, tint);
+    if icon_flipped(name) { img.uv(Rect::from_min_max(egui::pos2(1.0, 0.0), egui::pos2(0.0, 1.0))) } else { img }
+}
+
+/// The un-mirrored icon: canvas cursors and badges, and the opt-out for glyphs that point at
+/// the canvas or a physical timeline ([`paint_ltr`]).
+pub fn image_raw(name: &str, size: f32, tint: Color32) -> egui::Image<'static> {
     egui::Image::new(white_icons().source(name)).fit_to_exact_size(Vec2::splat(size)).tint(tint)
 }
 
@@ -34,6 +107,13 @@ pub fn paint(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
     image(name, size, tint).paint_at(ui, r);
 }
 
+/// Paint an icon that must not follow the interface direction: timeline transport and tools
+/// whose glyph points at the canvas.
+pub fn paint_ltr(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32) {
+    let r = Rect::from_center_size(rect.center(), Vec2::splat(size));
+    image_raw(name, size, tint).paint_at(ui, r);
+}
+
 /// An icon as the pointer, above every window: `name` with its hotspot `hot` (a fraction of the
 /// icon box) on `p`, white with a dark outline so it reads on any image. The caller hides the OS
 /// cursor (`CursorIcon::None`).
@@ -41,11 +121,11 @@ pub fn cursor(ctx: &egui::Context, name: &str, p: egui::Pos2, hot: Vec2, size: f
     let rect = Rect::from_min_size(p - hot * size, Vec2::splat(size));
     let area = egui::Area::new(egui::Id::unique("pc-icon-cursor")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
     area.show(ctx, |ui| {
-        let outline = image(name, size, Color32::from_black_alpha(200));
+        let outline = image_raw(name, size, Color32::from_black_alpha(200));
         for (dx, dy) in [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)] {
             outline.paint_at(ui, rect.translate(egui::vec2(dx, dy)));
         }
-        image(name, size, Color32::WHITE).paint_at(ui, rect);
+        image_raw(name, size, Color32::WHITE).paint_at(ui, rect);
     });
 }
 
@@ -66,19 +146,19 @@ fn badge(ctx: &egui::Context, name: &str, p: egui::Pos2, doubled: bool) {
     let rect = Rect::from_center_size(p + egui::vec2(20.0, 19.0), Vec2::splat(SIZE));
     let area = egui::Area::new(egui::Id::unique("pc-cursor-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
     area.show(ctx, |ui| {
-        let outline = image(name, SIZE, Color32::from_black_alpha(220));
+        let outline = image_raw(name, SIZE, Color32::from_black_alpha(220));
         let halo = [(-1.0, 0.0), (1.0, 0.0), (0.0, -1.0), (0.0, 1.0), (-1.0, -1.0), (1.0, 1.0), (-1.0, 1.0), (1.0, -1.0)];
         if doubled {
             let behind = rect.translate(egui::vec2(4.0, 4.0));
             for (dx, dy) in halo {
-                image(name, SIZE, Color32::WHITE).paint_at(ui, behind.translate(egui::vec2(dx, dy)));
+                image_raw(name, SIZE, Color32::WHITE).paint_at(ui, behind.translate(egui::vec2(dx, dy)));
             }
-            image(name, SIZE, Color32::BLACK).paint_at(ui, behind);
+            image_raw(name, SIZE, Color32::BLACK).paint_at(ui, behind);
         }
         for (dx, dy) in halo {
             outline.paint_at(ui, rect.translate(egui::vec2(dx, dy)));
         }
-        image(name, SIZE, Color32::WHITE).paint_at(ui, rect);
+        image_raw(name, SIZE, Color32::WHITE).paint_at(ui, rect);
     });
 }
 
@@ -450,6 +530,74 @@ mod tests {
                 assert!((single - vertical).abs() / vertical < tolerance, "inconsistent axis stroke weight at {size}px: {coverage:?}");
             }
             assert!(coverage[3] > vertical * 1.7 && coverage[3] < vertical * 2.1);
+        }
+    }
+
+    #[test]
+    fn swapped_icons_round_trip() {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        for &(a, b) in SWAPPED_ICONS {
+            assert_ne!(a, b, "a swap must change the glyph");
+            assert_eq!(icon_name(a), b, "{a}");
+            assert_eq!(icon_name(b), a, "{b}");
+        }
+    }
+
+    #[test]
+    fn kept_icons_are_identity() {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        for &name in KEPT_ICONS {
+            assert_eq!(icon_name(name), name, "{name}");
+            assert!(!icon_flipped(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn ltr_is_identity() {
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        assert_eq!(icon_name("chevron-left"), "chevron-left");
+        assert!(!icon_flipped("chevron-left"));
+        assert_eq!(icon_name("not-an-icon"), "not-an-icon");
+    }
+
+    #[test]
+    fn table_names_exist_in_icon_set() {
+        let set: std::collections::HashSet<&str> = ICONS.iter().map(|(name, _)| *name).collect();
+        for name in KEPT_ICONS {
+            assert!(set.contains(name), "{name}: KEPT_ICONS typo, not in the icon set");
+        }
+        for &(a, b) in SWAPPED_ICONS {
+            // The glyph RTL users get when code asks for `a` must be real; `a` itself may be a
+            // reserved name whose mirror ships first (panel-left has no SVG yet).
+            assert_ne!(a, b, "a swap must change the glyph");
+            assert!(set.contains(b), "{b}: swap target not in the icon set");
+        }
+    }
+
+    /// Under RTL the chevron drawn for "chevron-left" must be the true mirror image: every
+    /// raster column of "chevron-right" holds the mirrored column ink of "chevron-left".
+    #[test]
+    fn rtl_swap_draws_the_mirror_glyph() {
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        assert_eq!(icon_name("chevron-left"), "chevron-right");
+        for size in [14_u32, 28] {
+            let s = size as usize;
+            let column = |mask: &[bool], x: usize| (0..s).filter(|y| mask.get(y * s + x).copied().unwrap_or(false)).count();
+            let left = ink("chevron-left", size);
+            let right = ink("chevron-right", size);
+            for x in 0..s {
+                let mirrored = column(&left, s - 1 - x);
+                let drawn = column(&right, x);
+                assert!(
+                    (mirrored as i32 - drawn as i32).abs() <= 2,
+                    "chevron-right column {x} holds {drawn} ink pixels; the mirror of chevron-left holds {mirrored} at {size}px"
+                );
+            }
+            let half = |mask: &[bool], xs: std::ops::Range<usize>| xs.map(|x| column(mask, x)).sum::<usize>();
+            // A chevron's open side holds more ink than its vertex, where the two strokes merge;
+            // the strict inequality also fails for a symmetric glyph, keeping the mirror proof above non-vacuous.
+            assert!(half(&left, 0..s / 2) < half(&left, s / 2..s), "chevron-left must hold more ink on its open side at {size}px");
+            assert!(half(&right, s / 2..s) < half(&right, 0..s / 2), "chevron-right must hold more ink on its open side at {size}px");
         }
     }
 }

@@ -15,6 +15,21 @@ fn lang(code: &str) -> Lang {
     Lang::from_code(code).expect("registered language")
 }
 
+/// An Arabic menu title keeps its label (no permanent "(F)", decision 1) while its English access
+/// key stays the mnemonic for Alt+letter; CJK keeps its suffix byte-identically.
+#[test]
+fn arabic_menu_titles_drop_the_permanent_key_suffix() {
+    with_language(Lang::EN, || {
+        let ar = lang("ar");
+        let rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let (shown, keys) = crate::menu_keys::localized(&[tr(ar, "File").to_string()], &["File"], &[Some('F')]);
+        drop(rtl);
+        assert_eq!(shown, [tr(ar, "File").to_string()], "the label renders unchanged in a right-to-left UI");
+        assert_eq!(keys, [Some('F')], "the English key stays the mnemonic");
+        assert_eq!(file_title(lang("zh-hans")), "文件(F)", "CJK keeps its suffix");
+    });
+}
+
 #[test]
 fn requested_languages_resolve_regional_preferences() {
     for (tag, code) in [

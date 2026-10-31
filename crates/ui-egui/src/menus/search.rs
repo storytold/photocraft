@@ -50,6 +50,9 @@ pub fn search_items<'a>(items: &'a [MenuItem], query: &str, lang: crate::i18n::L
 pub(super) fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, clicked: &mut Option<String>, nav: &mut crate::menu_nav::Nav) {
     let ctx = ui.ctx().clone();
     let lang = crate::i18n::current();
+    // One source of truth with the menu rows: a right-to-left menu reads its result rows from the
+    // right, the shortcut last.
+    let rtl = ui.style().right_to_left;
     let text_id = egui::Id::unique("help-menu-search");
     let pass_id = text_id.with("pass");
     // A fresh opening of the Help menu starts empty, with the field focused.
@@ -57,7 +60,11 @@ pub(super) fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, 
     let reopened = ctx.data(|d| d.get_temp::<u64>(pass_id)).is_none_or(|p| p + 1 < pass);
     ctx.data_mut(|d| d.insert_temp(pass_id, pass));
     let mut query: String = if reopened { String::new() } else { ctx.data(|d| d.get_temp(text_id)).unwrap_or_default() };
-    let field = ui.add(egui::TextEdit::singleline(&mut query).id(text_id.with("field")).hint_text(crate::i18n::tr(lang, "Search menus")).desired_width(220.0));
+    // The hint and the query sit at the field's reading start — the right edge in a
+    // right-to-left menu; left-to-right keeps the pinned level layout's default.
+    let edit = egui::TextEdit::singleline(&mut query).id(text_id.with("field")).hint_text(crate::i18n::tr(lang, "Search menus")).desired_width(220.0);
+    let edit = if rtl { edit.align(egui::Align2::RIGHT_TOP) } else { edit };
+    let field = ui.add(edit);
     // The menu opens on the press; the release a frame later completes a click on the title,
     // outside the field, and egui takes the focus away from it again (#1447, #1438).
     if reopened || opening {
@@ -79,10 +86,8 @@ pub(super) fn help_search(ui: &mut egui::Ui, items: &[MenuItem], opening: bool, 
         for it in results {
             let mut trail: Vec<String> = it.path.iter().map(|p| crate::i18n::tr(lang, p).to_string()).collect();
             trail.push(translated_menu_label(lang, it));
-            let mut b = egui::Button::new(trail.join(" › "));
-            if let Some(sc) = &it.shortcut {
-                b = b.shortcut_text(crate::shortcuts::pretty(sc));
-            }
+            // The shortcut sits at the row's reading end, as in the other menu rows.
+            let b = crate::menu_keys::menu_row_button(trail.join(" › ").into(), it.shortcut.clone(), rtl);
             let hit = nav.row(ui, 0, it.enabled, Some(&it.id), None, |ui, _| {
                 let r = ui.add_enabled(it.enabled, b);
                 let hit = r.clicked() || released_on(ui, &r);

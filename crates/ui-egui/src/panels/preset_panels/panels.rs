@@ -1,5 +1,5 @@
 use super::{
-    Align2, Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, Sense, Stroke, TextureHandle, Tokens, Tool, Value,
+    Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, Sense, Stroke, TextureHandle, Tokens, Tool, Value,
     browser, canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
 };
 
@@ -123,34 +123,40 @@ fn float_window(
         .inner_margin(egui::Margin::same(8));
     let canvas = canvas_drop_rect(app);
     let mut close = false;
+    // The cascade offsets run from the canvas's reading-end edge: right in LTR, left in RTL.
+    let x = crate::direction::float_window_x(canvas, width, 16.0, -offset);
     egui::Window::new(title)
         .id(egui::Id::unique(("preset-window", key)))
         .title_bar(false)
         .resizable(false)
         .frame(frame)
-        .default_pos(pos2((canvas.right() - width - 16.0 - offset).max(canvas.left() + 8.0), canvas.top() + 40.0))
+        .default_pos(pos2(x, canvas.top() + 40.0))
         .show(ctx, |ui| {
             ui.set_width(width);
-            // Photoshop-style tab header with a close box.
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(tl!(&title)).color(t.text).size(12.0).strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
-                        close = true;
-                    }
-                    if key == "styles" {
-                        let resp = crate::icons::button(ui, "ellipsis", 20.0, false, tl!("Panel menu"));
-                        egui::Popup::menu(&resp).show(|ui| {
-                            crate::widgets::style_spectrum_popup_menu(ui);
-                            ui.set_min_width(180.0);
-                            styles_menu(app, ui);
-                        });
-                    }
+            crate::direction::window_body(ui, |ui| {
+                // Photoshop-style tab header with a close box at the reading end.
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(tl!(&title)).color(t.text).size(12.0).strong());
+                    ui.with_layout(crate::direction::trailing(), |ui| {
+                        if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
+                            close = true;
+                        }
+                        if key == "styles" {
+                            let resp = crate::icons::button(ui, "ellipsis", 20.0, false, tl!("Panel menu"));
+                            egui::Popup::menu(&resp).show(|ui| {
+                                crate::menus::popup_body(ui, |ui| {
+                                    crate::widgets::style_spectrum_popup_menu(ui);
+                                    ui.set_min_width(180.0);
+                                    styles_menu(app, ui);
+                                });
+                            });
+                        }
+                    });
                 });
+                crate::widgets::hairline(ui);
+                ui.add_space(4.0);
+                body(app, ui);
             });
-            crate::widgets::hairline(ui);
-            ui.add_space(4.0);
-            body(app, ui);
         });
     close
 }
@@ -357,7 +363,7 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let resp = resp.on_hover_text(&cur);
     egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_width(232.0);
-        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+        crate::menus::popup_body(ui, |ui| egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for g in &groups {
                 ui.label(egui::RichText::new(&g.name).color(t.text_dim).size(11.0));
                 ui.horizontal_wrapped(|ui| {
@@ -385,7 +391,7 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                 });
             }
-        });
+        }));
     });
 }
 
@@ -470,9 +476,10 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut pick: Option<String> = None;
     // Rename field.
     if let Some((_, key, mut text)) = app.ui.presets_ui.renaming.clone().filter(|r| r.0 == "toolPresets") {
-        ui.horizontal(|ui| {
+        ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
             let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
+            let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+            let r = ui.add(crate::widgets::rtl_singleline(&mut text, &mut layouter).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -499,8 +506,12 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.5));
             }
             let icon = Tool::from_name(tool).map(crate::icons::tool_icon).unwrap_or("settings");
-            crate::icons::paint(ui, Rect::from_center_size(pos2(r.left() + 14.0, r.center().y), vec2(16.0, 16.0)), icon, 13.0, t.icon);
-            ui.painter().text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, name, FontId::proportional(11.5), t.text);
+            // Icon at the reading start, name after it (left in LTR, right in RTL).
+            let icon_x = crate::direction::start_x(r, 14.0);
+            let text_x = crate::direction::start_x(r, 30.0);
+            let halign = crate::direction::start_align();
+            crate::icons::paint(ui, Rect::from_center_size(pos2(icon_x, r.center().y), vec2(16.0, 16.0)), icon, 13.0, t.icon);
+            ui.painter().text(pos2(text_x, r.center().y), halign, name, FontId::proportional(11.5), t.text);
             if resp.clicked() {
                 pick = Some(name.clone());
             }
@@ -517,10 +528,10 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
     });
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         crate::widgets::checkbox(ui, &mut app.ui.presets_ui.current_tool_only, tl!("Current Tool Only"));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.with_layout(crate::direction::trailing(), |ui| {
             if crate::icons::button(ui, "trash", 24.0, false, tl!("Delete tool preset")).clicked()
                 && let Some(n) = selected.clone()
             {
@@ -554,8 +565,8 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let cs = app.session.presets.clone.clone();
     let slot = cs.active().clone();
     let mut action: Option<Value> = None;
-    // The five source buttons.
-    ui.horizontal(|ui| {
+    // The five source buttons (slot 1 at the reading start).
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         for i in 0..photocraft_engine::presets::clone_source::SLOTS {
             let set = cs.slots[i].source.is_some();
@@ -568,7 +579,8 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             };
             let r = crate::icons::button(ui, "stamp", 30.0, cs.active == i, &tip);
             if set {
-                let d = r.rect.right_bottom() - vec2(6.0, 6.0);
+                // The set-dot sits at the slot's reading-end bottom corner (right in LTR, left in RTL).
+                let d = if crate::direction::is_rtl() { r.rect.left_bottom() + vec2(6.0, -6.0) } else { r.rect.right_bottom() - vec2(6.0, 6.0) };
                 ui.painter().circle_filled(d, 2.5, t.accent);
             }
             if r.clicked() {
@@ -593,48 +605,101 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let (mut ox, mut oy) = (off[0] as f32, off[1] as f32);
     let (mut w, mut h) = (slot.scale[0] as f32, slot.scale[1] as f32);
     let mut rot = slot.rotation as f32;
-    egui::Grid::new("clone-src-grid").num_columns(5).spacing(vec2(6.0, 4.0)).show(ui, |ui| {
-        lbl(ui, "X:");
-        if crate::widgets::value_field(ui, &mut ox, -30000.0..=30000.0, "px", 72.0).changed() && slot.source.is_some() {
-            action = Some(json!({"offset": [ox, oy]}));
-        }
-        lbl(ui, "W:");
-        if crate::widgets::value_field(ui, &mut w, -1000.0..=1000.0, "%", 64.0).changed() {
-            action = Some(json!({"width": w}));
-        }
-        // The W/H chain: with it on, a new W or H scales the other by the same factor.
-        let icon = if slot.linked { "link" } else { "unlink" };
-        if crate::icons::button(ui, icon, 22.0, slot.linked, tl!("Maintain aspect ratio")).clicked() {
-            action = Some(json!({"linked": !slot.linked}));
+    // egui::Grid is direction-blind, so in RTL the cells are emitted in mirrored order
+    // (link, W, X — then flip-V, flip-H, A) with the label after its field.
+    let rtl = crate::direction::is_rtl();
+    // The fork's `Grid` cannot start under a right-to-left cursor, so it runs in an LTR scope;
+    // the cells below are emitted in reading order (`rtl`).
+    crate::direction::ltr_vertical(ui, |ui| {
+        egui::Grid::new("clone-src-grid").num_columns(5).spacing(vec2(6.0, 4.0)).show(ui, |ui| {
+        if rtl {
+            let icon = if slot.linked { "link" } else { "unlink" };
+            if crate::icons::button(ui, icon, 22.0, slot.linked, tl!("Maintain aspect ratio")).clicked() {
+                action = Some(json!({"linked": !slot.linked}));
+            }
+            if crate::widgets::value_field(ui, &mut w, -1000.0..=1000.0, "%", 64.0).changed() {
+                action = Some(json!({"width": w}));
+            }
+            lbl(ui, "W:");
+            if crate::widgets::value_field(ui, &mut ox, -30000.0..=30000.0, "px", 72.0).changed() && slot.source.is_some() {
+                action = Some(json!({"offset": [ox, oy]}));
+            }
+            lbl(ui, "X:");
+        } else {
+            lbl(ui, "X:");
+            if crate::widgets::value_field(ui, &mut ox, -30000.0..=30000.0, "px", 72.0).changed() && slot.source.is_some() {
+                action = Some(json!({"offset": [ox, oy]}));
+            }
+            lbl(ui, "W:");
+            if crate::widgets::value_field(ui, &mut w, -1000.0..=1000.0, "%", 64.0).changed() {
+                action = Some(json!({"width": w}));
+            }
+            // The W/H chain: with it on, a new W or H scales the other by the same factor.
+            let icon = if slot.linked { "link" } else { "unlink" };
+            if crate::icons::button(ui, icon, 22.0, slot.linked, tl!("Maintain aspect ratio")).clicked() {
+                action = Some(json!({"linked": !slot.linked}));
+            }
         }
         ui.end_row();
-        lbl(ui, "Y:");
-        if crate::widgets::value_field(ui, &mut oy, -30000.0..=30000.0, "px", 72.0).changed() && slot.source.is_some() {
-            action = Some(json!({"offset": [ox, oy]}));
-        }
-        lbl(ui, "H:");
-        if crate::widgets::value_field(ui, &mut h, -1000.0..=1000.0, "%", 64.0).changed() {
-            action = Some(json!({"height": h}));
+        if rtl {
+            if crate::widgets::value_field(ui, &mut h, -1000.0..=1000.0, "%", 64.0).changed() {
+                action = Some(json!({"height": h}));
+            }
+            lbl(ui, "H:");
+            if crate::widgets::value_field(ui, &mut oy, -30000.0..=30000.0, "px", 72.0).changed() && slot.source.is_some() {
+                action = Some(json!({"offset": [ox, oy]}));
+            }
+            lbl(ui, "Y:");
+        } else {
+            lbl(ui, "Y:");
+            if crate::widgets::value_field(ui, &mut oy, -30000.0..=30000.0, "px", 72.0).changed() && slot.source.is_some() {
+                action = Some(json!({"offset": [ox, oy]}));
+            }
+            lbl(ui, "H:");
+            if crate::widgets::value_field(ui, &mut h, -1000.0..=1000.0, "%", 64.0).changed() {
+                action = Some(json!({"height": h}));
+            }
         }
         ui.end_row();
-        lbl(ui, "A:");
-        if crate::widgets::value_field(ui, &mut rot, -180.0..=180.0, "°", 72.0).changed() {
-            action = Some(json!({"rotation": rot}));
+        if rtl {
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
+                if crate::icons::button(ui, "scaling", 22.0, slot.flip_v, tl!("Flip Vertical")).clicked() {
+                    action = Some(json!({"flipV": !slot.flip_v}));
+                }
+            });
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
+                if crate::icons::button(ui, "arrow-left-right", 22.0, slot.flip_h, tl!("Flip Horizontal")).clicked() {
+                    action = Some(json!({"flipH": !slot.flip_h}));
+                }
+                if crate::icons::button(ui, "rotate-cw", 22.0, false, tl!("Reset Transform")).clicked() {
+                    run(app, "cloneSource.resetTransform", json!({}));
+                }
+            });
+            if crate::widgets::value_field(ui, &mut rot, -180.0..=180.0, "°", 72.0).changed() {
+                action = Some(json!({"rotation": rot}));
+            }
+            lbl(ui, "A:");
+        } else {
+            lbl(ui, "A:");
+            if crate::widgets::value_field(ui, &mut rot, -180.0..=180.0, "°", 72.0).changed() {
+                action = Some(json!({"rotation": rot}));
+            }
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
+                if crate::icons::button(ui, "arrow-left-right", 22.0, slot.flip_h, tl!("Flip Horizontal")).clicked() {
+                    action = Some(json!({"flipH": !slot.flip_h}));
+                }
+                if crate::icons::button(ui, "rotate-cw", 22.0, false, tl!("Reset Transform")).clicked() {
+                    run(app, "cloneSource.resetTransform", json!({}));
+                }
+            });
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
+                if crate::icons::button(ui, "scaling", 22.0, slot.flip_v, tl!("Flip Vertical")).clicked() {
+                    action = Some(json!({"flipV": !slot.flip_v}));
+                }
+            });
         }
-        ui.horizontal(|ui| {
-            if crate::icons::button(ui, "arrow-left-right", 22.0, slot.flip_h, tl!("Flip Horizontal")).clicked() {
-                action = Some(json!({"flipH": !slot.flip_h}));
-            }
-            if crate::icons::button(ui, "rotate-cw", 22.0, false, tl!("Reset Transform")).clicked() {
-                run(app, "cloneSource.resetTransform", json!({}));
-            }
+            ui.end_row();
         });
-        ui.horizontal(|ui| {
-            if crate::icons::button(ui, "scaling", 22.0, slot.flip_v, tl!("Flip Vertical")).clicked() {
-                action = Some(json!({"flipV": !slot.flip_v}));
-            }
-        });
-        ui.end_row();
     });
     if let Some(p) = action {
         run(app, "cloneSource.set", p);
@@ -646,7 +711,7 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let mut o = cs.overlay.clone();
     let before = o.clone();
     crate::widgets::checkbox(ui, &mut o.show, tl!("Show Overlay"));
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.add_space(18.0);
         ui.label(egui::RichText::new(tl!("Opacity:")).color(t.text_dim).size(11.5));
         crate::widgets::value_field(ui, &mut o.opacity, 0.0..=100.0, "%", 56.0).accessible_name(tl!("Opacity:"));
@@ -658,7 +723,7 @@ pub fn clone_source_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         ];
         crate::widgets::dropdown(ui, "clone-overlay-mode", tl!("Blend Mode"), &mut o.blend, &opts, 90.0);
     });
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.add_space(18.0);
         crate::widgets::checkbox(ui, &mut o.clipped, tl!("Clipped"));
         crate::widgets::checkbox(ui, &mut o.auto_hide, tl!("Auto Hide"));
@@ -689,4 +754,54 @@ pub fn clone_sample_point(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<[
         }
         _ => Some(src),
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Kittest twin of `direction::float_window_x`: the floating Styles window opens on the canvas's
+    /// reading-end half, and its close box sits at the header row's reading end. egui clamps
+    /// the area into the harness screen during its sizing pass, so expectations are relative
+    /// to the rendered window rect rather than absolute pixels.
+    #[test]
+    fn the_styles_window_opens_at_the_reading_end_edge() {
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::{NodeT, Queryable}};
+        let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
+        let open = |rtl: bool| {
+            let dir = if rtl { crate::direction::Dir::Rtl } else { crate::direction::Dir::Ltr };
+            let _scope = crate::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+            app.ui.presets_ui.styles = true;
+            app.last_canvas_rect = canvas;
+            let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).build_ui_state(
+                |ui, app| {
+                    // The fonts are installed after the harness's first frame: paint only once they are active.
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        windows(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            let window = h
+                .query_all(egui_kittest::kittest::by().role(Role::Window).include_labels())
+                .find(|n| n.accesskit_node().label().as_deref() == Some("Styles"))
+                .expect("the Styles window is open")
+                .rect();
+            (window, h.get_by_label("Close").rect())
+        };
+        let (win_ltr, close_ltr) = open(false);
+        assert!(win_ltr.center().x > canvas.center().x, "LTR: the window opens from the canvas's right edge: {win_ltr:?}");
+        assert!(win_ltr.left() >= canvas.left() && win_ltr.right() <= canvas.right(), "LTR: the window stays on the canvas: {win_ltr:?}");
+        assert!(close_ltr.left() > win_ltr.center().x && win_ltr.right() - close_ltr.right() < 24.0, "LTR: the close box hugs the header row's right end: {close_ltr:?} in {win_ltr:?}");
+        let (win_rtl, close_rtl) = open(true);
+        assert!(win_rtl.center().x < canvas.center().x, "RTL: the window opens from the canvas's left edge: {win_rtl:?}");
+        assert!(win_rtl.left() >= canvas.left() && win_rtl.right() <= canvas.right(), "RTL: the window stays on the canvas: {win_rtl:?}");
+        assert!(close_rtl.right() < win_rtl.center().x && close_rtl.left() - win_rtl.left() < 24.0, "RTL: the close box hugs the header row's left end: {close_rtl:?} in {win_rtl:?}");
+    }
+
 }
