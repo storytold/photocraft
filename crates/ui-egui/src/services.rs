@@ -340,9 +340,9 @@ pub struct Services {
     /// writes back to a file.
     pub file_stamp: Option<FileStampFn>,
     /// Whether two paths name one entry in one folder (native): a save dialog's answer and the
-    /// path the save writes to after Lowercase Extension, on a file system that ignores letter
-    /// case. A hard link is another entry. A save asks before replacing an entry it finds
-    /// different (`replace_prompt`).
+    /// path the save writes to after adding an extension or lowercasing a new file's extension,
+    /// on a file system that ignores letter case. A hard link is another entry. A save asks
+    /// before replacing an entry it finds different (`replace_prompt`).
     pub same_file: Option<SameFileFn>,
     /// `write` only asks for the bytes to be kept (a browser download, which the user can
     /// cancel and which reports nothing back), so a save through it names the document but

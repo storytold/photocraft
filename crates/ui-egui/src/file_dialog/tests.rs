@@ -489,7 +489,7 @@ fn the_app_keeps_running_while_a_dialog_is_open() {
     assert!(!app.file_dialog_open());
 }
 
-/// Preferences ▸ File Handling ▸ Lowercase Extension (default on): the chosen path's extension
+/// Preferences ▸ File Handling ▸ Lowercase Extension (default on): a new chosen path's extension
 /// is lowercased on the way to the writer; unchecked, the user's spelling is kept.
 #[test]
 fn save_paths_get_a_lowercase_extension_when_the_preference_is_on() {
@@ -591,34 +591,62 @@ fn a_save_asks_before_replacing_the_file_its_added_extension_names() {
     assert!(!app.file_dialog_open() && replace_prompt(&app).is_none());
 }
 
-/// Lowercase Extension changes `CAT.PSD` to `CAT.psd`. Where letter case tells two files apart
-/// (Linux), the dialog asked only about `CAT.PSD`; where it doesn't (Windows and macOS by
-/// default), both names reach the same file, which the dialog asked about.
+/// Lowercase Extension changes a new `CAT.PSD` to `CAT.psd`. If that lowercase path already
+/// exists, the app asks before replacing it; an existing `CAT.PSD` itself keeps its spelling.
 #[test]
 fn a_save_asks_before_replacing_the_file_its_lowercased_extension_names() {
     {
-        // Two files, even with the same size and modification time.
+        // Only the lowercase target exists: lowercasing the new name would replace it.
         let (mut app, open, written) = app();
         let disk = on_disk(&mut app);
-        for name in ["/pics/CAT.psd", "/pics/CAT.PSD"] {
-            changed_by_another_app(&disk, name);
-        }
+        changed_by_another_app(&disk, "/pics/CAT.psd");
         app.services.same_file = Some(Box::new(|a: &str, b: &str| a == b));
         save_as(&mut app, &open, "/pics/CAT.PSD");
         let id = replace_prompt(&app).expect("the save asks first");
         assert!(written.borrow().is_empty());
+        // A different exact-spelling entry can appear while the question is open. Confirmation
+        // must still write the lowercase destination named by the question, not recompute and
+        // switch to the newly-created uppercase path.
+        changed_by_another_app(&disk, "/pics/CAT.PSD");
         crate::dialogs::confirm(&mut app, id).unwrap();
         assert_eq!(*written.borrow(), ["/pics/CAT.psd"]);
+        assert_eq!(app.session.active().unwrap().path.as_deref(), Some("/pics/CAT.psd"));
     }
-    let (mut app, open, written) = app();
+    {
+        // The save dialog selected an existing uppercase entry. Keep the path it confirmed,
+        // rather than silently writing a second lowercase entry on a case-sensitive volume.
+        let (mut app, open, written) = app();
+        let disk = on_disk(&mut app);
+        changed_by_another_app(&disk, "/pics/CAT.PSD");
+        app.services.same_file = Some(Box::new(|a: &str, b: &str| a == b));
+        save_as(&mut app, &open, "/pics/CAT.PSD");
+        assert!(replace_prompt(&app).is_none(), "the dialog already asked about this file");
+        assert_eq!(*written.borrow(), ["/pics/CAT.PSD"]);
+    }
+}
+
+/// Opening an uppercase JPEG and confirming its own name in File › Save overwrites that exact
+/// entry. Before this regression test, the native dialog confirmed `photo.JPG`, then PhotoCraft
+/// wrote `photo.jpg`, leaving both files on a case-sensitive NTFS mount.
+#[test]
+fn plain_save_overwrites_an_existing_uppercase_extension_without_renaming_it() {
+    let ctx = egui::Context::default();
+    let path = "/pics/photo.JPG";
+    let (mut app, open, written) = jpeg_app(None, false);
     let disk = on_disk(&mut app);
-    for name in ["/pics/CAT.psd", "/pics/CAT.PSD"] {
-        changed_by_another_app(&disk, name);
-    }
-    app.services.same_file = Some(Box::new(|a: &str, b: &str| a.eq_ignore_ascii_case(b)));
-    save_as(&mut app, &open, "/pics/CAT.PSD");
-    assert!(replace_prompt(&app).is_none(), "the dialog asked about this file");
-    assert_eq!(*written.borrow(), ["/pics/CAT.psd"]);
+    changed_by_another_app(&disk, path);
+    app.opened_from(path);
+
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    answer(&open, Some(FileDialogAnswer::SaveTo(path.into())));
+    app.poll_file_dialog(&ctx, None);
+
+    assert_eq!(app.jpeg_options.as_ref().map(|p| p.path.as_str()), Some(path));
+    crate::jpeg_options_ui::confirm(&mut app, &ctx);
+    assert_eq!(*written.borrow(), [path]);
+    assert_eq!(app.session.active().unwrap().path.as_deref(), Some(path));
+    assert!(!disk.borrow().contains_key("/pics/photo.jpg"));
 }
 
 /// The save dialog asked about the file it answered: a bare name with no file under the added

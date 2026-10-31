@@ -1,8 +1,9 @@
 //! A save asks before replacing a file that the save dialog did not ask about. The dialog asks
-//! only about the name it answers, and the app can change that name afterwards: it gives a name
-//! without an extension the suggested file's (#5039), and lowercases the extension when
-//! Preferences ▸ File Handling › Lowercase Extension is on. When a file exists under the changed
-//! name, Replace writes over it and Cancel ends the save like the save dialog's Cancel.
+//! only about the name it answers, and the app can change a new name afterwards: it gives a name
+//! without an extension the suggested file's (#5039), and lowercases a new file's extension when
+//! Preferences ▸ File Handling › Lowercase Extension is on. An existing file keeps the exact
+//! spelling the dialog confirmed. When a file exists under a changed name, Replace writes over it
+//! and Cancel ends the save like the save dialog's Cancel.
 //!
 //! The prompt is an ordinary dialog in the UI state: `ui.dialog.confirm` replaces the file and
 //! `ui.dialog.cancel` keeps it. The file dialog stays open until it is answered
