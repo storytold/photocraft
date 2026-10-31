@@ -172,10 +172,18 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     let right_stroke = erase && app.drag.is_some();
     let right_start = erase && right_started;
     let right_click = response.secondary_clicked();
-    if right_click
-        && !erase
-        && !layer_menu
-        && !crate::color_hud::is_open(&app.ui)
+    // Press-to-open: the picker appears the moment the barrel goes down, not on the release. A pen
+    // user holds the barrel while choosing a preset, and a pen tap jitters past egui's click
+    // distance, so waiting for egui's click (a release that never drifted) left the picker closed
+    // after most pen right-clicks (#943). The gestures that own the right button — Alt resize,
+    // ⌘/Ctrl layer menu, Erase, the HUD picker — keep the release-based behaviour.
+    let resize_gesture = crate::brush_resize::applies(tool) && crate::brush_resize::is_right_gesture(crate::workspace_ui::sticky_mods(app, mods));
+    // Only a press on the canvas itself: `contains_pointer` is false under a floating panel over
+    // it, and a stroke in progress owns the barrel. Shadows the HUD-gesture press above, adding
+    // `long_touched` so pen taps open the picker too.
+    let right_press = (response.ctx.input(|i| i.pointer.button_pressed(PointerButton::Secondary)) || response.long_touched()) && response.contains_pointer();
+    let right_open = right_press && app.drag.is_none() && !resize_gesture && !resizing && !layer_menu && !erase && !crate::color_hud::is_open(&app.ui);
+    if right_open
         && right_click_picker(tool)
         && let Some(p) = response.interact_pointer_pos()
     {

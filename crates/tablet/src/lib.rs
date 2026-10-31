@@ -8,13 +8,19 @@
 //! - **Windows** ([`windows::Monitor`]): a thread-local message hook inspects `WM_POINTER*`
 //!   messages on the UI thread's message queue to read `PEN_FLAG_BARREL` (`GetPointerPenInfo`),
 //!   which winit 0.30 drops by mapping pen inputs to touch events.
-//!   AppKit's monitor API and Windows' thread hook need OS interop, so `macos.rs` and `windows.rs`
-//!   allow `unsafe` (craftrules never-crash: an isolated, tested helper crate with `SAFETY:`
-//!   comments on every block).
+//!   AppKit's monitor API and Windows' thread hook and Wintab reader need OS interop, so
+//!   `macos.rs`, `windows.rs` and `wintab.rs` allow `unsafe` (craftrules never-crash: an
+//!   isolated, tested helper crate with `SAFETY:` comments on every block).
 //! - **Linux X11** ([`x11::spawn`]): a second, pure-Rust X connection (x11rb) selects XInput2
 //!   raw events on the root window and maps the tablet device's valuators ("Abs Pressure",
 //!   "Abs Tilt X/Y", "Abs Rotary Z") to samples. Raw events reach every client that asks, also
 //!   while winit holds the pointer grab of a drag. No `unsafe`.
+//! - **Windows**: the pen normally rides Windows Ink — winit turns `WM_POINTER` pen frames into
+//!   touch with a normalised force. When the driver serves Wintab instead (the Wacom driver's
+//!   "Use Windows Ink" checkbox off, read from its settings file by [`wacom`]), the desktop app
+//!   installs [`wintab::Monitor`], which subclasses the window and reads `WT_PACKET` pressure,
+//!   tilt and barrel rotation (and the eraser end) into the same feed. Needs `unsafe` interop
+//!   like the AppKit monitor.
 //! - **Wayland**: not covered. The `zwp_tablet_v2` protocol has to be bound on winit's own
 //!   `wl_display` connection (the tablet events name winit's `wl_surface`), which needs
 //!   `unsafe` foreign-display interop, and binding it makes compositors stop emulating the
@@ -22,8 +28,9 @@
 //!   it, compositors give the window no pen input at all, so the desktop app opens its window
 //!   through Xwayland when a pen is attached, and the X11 reader applies.
 //!
-//! The platform glue only reads raw values and hands them to the pure mapping in [`appkit`] and
-//! [`xi`], which normalise, clamp and track pen state and are tested on every platform.
+//! The platform glue only reads raw values and hands them to the pure mapping in [`appkit`],
+//! [`xi`], [`windows`] and [`wintab`] (whose Windows-only glue is gated inside the module),
+//! which normalise, clamp and track pen state and are tested on every platform.
 //!
 //! A sample is reported through a callback: `Some(sample)` while a pen is in use (hovering or
 //! touching), `None` when the pointer is a mouse again.
@@ -36,7 +43,11 @@ pub mod xi;
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "windows")]
+pub mod wacom;
+#[cfg(target_os = "windows")]
 pub mod windows;
+// Pure mapping (tested everywhere); only the Windows glue inside is gated.
+pub mod wintab;
 #[cfg(target_os = "linux")]
 pub mod x11;
 

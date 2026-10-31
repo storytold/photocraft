@@ -5,7 +5,7 @@ use photocraft_geom::{Point, Rect};
 use photocraft_raster::Surface;
 
 use crate::brush::*;
-use crate::dynamics::{Smoother, smooth_points};
+use crate::dynamics::{Smoother, preview_angle, smooth_points};
 use crate::render::{BrushContext, StrokeRenderer, mask_combine, render_stroke, texture_combine};
 use crate::tile::GrayTile;
 use crate::{Dab, Stroke, StrokePoint, dabs};
@@ -463,6 +463,53 @@ fn tilt_direction_and_rotation_drive_angle() {
     flat.tilt_x = 90.0;
     let d = dabs_of(&b, &[flat]);
     assert!(d[0].radius <= 0.5 + 1e-6);
+}
+
+#[test]
+fn hover_preview_angle_matches_the_first_dab() {
+    // The cursor outline's hover angle is exactly what the stroke's first dab adds to the brush's
+    // angle, for the pen-driven controls a hover can know.
+    let mut p = StrokePoint::new(0.0, 0.0, 0.5);
+    p.tilt_x = 30.0;
+    p.tilt_y = -20.0;
+    p.rotation = 25.0;
+    let mk = |projection: bool| BrushSettings {
+        angle: 10.0,
+        shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::PenTilt), brush_projection: projection, ..Default::default() },
+        ..brush()
+    };
+    for projection in [false, true] {
+        let b = mk(projection);
+        let first = dabs_of(&b, &[p])[0].angle.to_degrees() - b.angle;
+        assert!((preview_angle(&b, &p) - first).abs() < 1e-3, "projection {projection}: {first}");
+        // Leaning up-right turns the tip counter-clockwise; projection adds the barrel rotation.
+        let want = (-p.tilt_y).atan2(p.tilt_x).to_degrees() + if projection { p.rotation } else { 0.0 };
+        assert!((first - want).abs() < 1e-3, "{first} vs {want}");
+    }
+    // Brush Pose overrides the sample, as it does for the dabs.
+    let mut b = mk(true);
+    b.pose = Pose { enabled: true, override_tilt_x: true, override_tilt_y: true, tilt_x: 0.0, tilt_y: -45.0, ..Default::default() };
+    let first = dabs_of(&b, &[p])[0].angle.to_degrees() - b.angle;
+    assert!((preview_angle(&b, &p) - first).abs() < 1e-3);
+    assert!((first - 115.0).abs() < 1e-3, "pose up 45° (90) plus rotation 25: {first}");
+}
+
+#[test]
+fn hover_preview_angle_is_zero_without_pen_angle_controls() {
+    let p = StrokePoint::new(0.0, 0.0, 1.0);
+    // Shape Dynamics off.
+    let b = BrushSettings { shape_dynamics: ShapeDynamics { enabled: false, angle: Dynamic::controlled(Control::PenTilt), ..Default::default() }, ..brush() };
+    assert_eq!(preview_angle(&b, &p), 0.0);
+    // An upright pen contributes nothing to a Pen Tilt control.
+    let b = BrushSettings { shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::PenTilt), ..Default::default() }, ..brush() };
+    assert_eq!(preview_angle(&b, &p), 0.0);
+    // A Direction control: no travel to know while hovering.
+    let b = BrushSettings { shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::Direction), ..Default::default() }, ..brush() };
+    assert_eq!(preview_angle(&b, &p), 0.0);
+    // Rotation follows the barrel.
+    let q = StrokePoint { rotation: 40.0, ..p };
+    let b = BrushSettings { shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::Rotation), ..Default::default() }, ..brush() };
+    assert!((preview_angle(&b, &q) - 40.0).abs() < 1e-4);
 }
 
 #[test]

@@ -1501,7 +1501,7 @@ fn draw_default_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &
                     // tip keeps the circle.
                     _ => {
                         let centre = brush_tip_centre(tool, alt || app.ui.shell.sticky_alt, cur.show_crosshair_in_brush_tip);
-                        let axes = crate::brush_cursor::pen_axes(xf, brush, app.stylus.sample());
+                        let axes = crate::brush_cursor::follow_axes(ui.ctx(), xf, brush, painting, app.stylus.sample());
                         crate::brush_cursor::cursor(painter, p, brush, full, axes, cur.painting == PaintingCursor::NormalTip, centre)
                     }
                 }

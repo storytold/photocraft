@@ -15,10 +15,41 @@ concurrency:
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
+  # `secrets` is not available in a job-level `if`, so a prerequisite job turns the token's
+  # presence into a non-secret output (true/false) that the scan job can gate on. It runs only
+  # where SonarCloud can run: the upstream repo, and PRs from the repo itself (fork PRs get no
+  # secrets).
+  token:
+    if: >-
+      github.repository == 'storytold/photocraft'
+      && (github.event_name != 'pull_request'
+      || github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-latest
+    outputs:
+      available: ${{ steps.check.outputs.available }}
+    steps:
+      - name: Check SONAR_TOKEN
+        id: check
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+          fi
+
   sonarcloud:
+    needs: token
+    # Skip instead of running the scan with the literal fallback below when the token is absent.
+    if: needs.token.outputs.available == 'true'
     # Track shared CI improvements on main.
     uses: storytold/craft-common-actions/.github/workflows/sonarcloud.yml@main
     with:
       timeout-minutes: 120
       fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
-    secrets: inherit
+    secrets:
+      # The shared workflow declares SONAR_TOKEN required, so the caller must pass the name
+      # unconditionally: GitHub validates required secrets at workflow evaluation, before any
+      # job-level `if` runs. The gate above keeps a tokenless run from executing the scan.
+      SONAR_TOKEN: ${{ secrets.SONAR_TOKEN || 'unused' }}

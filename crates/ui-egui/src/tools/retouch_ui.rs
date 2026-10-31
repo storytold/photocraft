@@ -124,7 +124,8 @@ pub(crate) fn stroke_seed(points: &[[f64; 3]]) -> u64 {
 /// Finish a stroke with a retouching tool. Returns false if `tool` isn't one.
 pub fn finish_stroke(app: &mut PhotocraftApp, tool: Tool, points: &[[f64; 3]], mods: egui::Modifiers) -> bool {
     let o = app.ui.tool_options.clone();
-    let pts = json!(points);
+    // The drag's tilt/rotation, as `paint.stroke` gets: the tool's dabs must follow the pen.
+    let pts = json!(app.stylus.stroke_points(points));
     let (cmd, mut p): (&str, Value) = match tool {
         Tool::SpotHealing => ("paint.spotHealing", json!({"type": o.spot_type, "sampleAllLayers": o.sample_all.spot_healing})),
         Tool::Remove => {

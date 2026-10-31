@@ -349,6 +349,78 @@ fn mixer_brush_is_selectable_and_paints_only_inside_the_selection_via_control() 
 }
 
 #[test]
+fn mixer_brush_and_color_replacement_commit_the_pens_tilt() {
+    // Their commits used to drop the pen's tilt and rotation, so a Pen Tilt angle control
+    // turned only the cursor outline.
+    for (tool, cmd) in [(Tool::MixerBrush, "paint.mixerBrush"), (Tool::ColorReplacement, "paint.colorReplacement")] {
+        let mut app = app();
+        app.ui.tool = tool;
+        let m = egui::Modifiers::NONE;
+        app.stylus.feed.set(Some(crate::stylus::PenSample { pressure: 1.0, tilt_x: 40.0, tilt_y: -25.0, rotation: 30.0, eraser: false }));
+        tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 30.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 30.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 30.0 }, m);
+        app.stylus.feed.set(None);
+        assert!(!app.ui.status_error, "{tool:?}: {}", app.ui.status);
+        let (id, p) = app.session.journal.last().unwrap();
+        assert_eq!(id, cmd);
+        // The Mixer Brush commits the live preview's canonical points (named objects, with
+        // the mouse defaults spelled out); the Color Replacement commits `finish_stroke`'s
+        // compact arrays.
+        let want = |x: f64, y: f64| {
+            if tool == Tool::MixerBrush {
+                json!({"x": x, "y": y, "pressure": 1.0, "tiltX": 40.0, "tiltY": -25.0, "rotation": 30.0, "wheel": 1.0, "time": 0.0})
+            } else {
+                json!([x, y, 1.0, 40.0, -25.0, 30.0])
+            }
+        };
+        assert_eq!(p["points"][0], want(20.0, 30.0), "{tool:?}");
+        assert_eq!(p["points"][1], want(60.0, 30.0), "{tool:?}");
+        tool_event(&mut app, ToolEvent::Down { x: 20.0, y: 45.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 45.0 }, m);
+        let (_, p) = app.session.journal.last().unwrap();
+        let want = if tool == Tool::MixerBrush {
+            json!({"x": 20.0, "y": 45.0, "pressure": 1.0, "tiltX": 0.0, "tiltY": 0.0, "rotation": 0.0, "wheel": 1.0, "time": 0.0})
+        } else {
+            json!([20.0, 45.0, 1.0])
+        };
+        assert_eq!(p["points"][0], want, "{tool:?}, mouse");
+    }
+}
+
+#[test]
+fn a_pen_tilt_angle_control_turns_the_mixer_brushs_dabs() {
+    // Roundness 0.25 with Angle = Pen Tilt: the tip is a 16×4 sliver that must turn with
+    // the pen, not just the cursor outline.
+    let paint = |tilt: Option<[f32; 2]>| {
+        let mut app = app();
+        app.run("tools.setColors", json!({"foreground": "#f02010"})).unwrap();
+        app.run(
+            "tools.setBrush",
+            json!({"brush": {"size": 16, "hardness": 1.0, "roundness": 0.25, "shapeDynamics": {"enabled": true, "angle": {"control": "penTilt"}}, "mixer": {"wet": 0.0, "load": 1.0, "mix": 0.0, "flow": 1.0}}}),
+        )
+        .unwrap();
+        app.ui.tool = Tool::MixerBrush;
+        if let Some([tilt_x, tilt_y]) = tilt {
+            app.stylus.feed.set(Some(crate::stylus::PenSample { pressure: 1.0, tilt_x, tilt_y, rotation: 0.0, eraser: false }));
+        }
+        let m = egui::Modifiers::NONE;
+        tool_event(&mut app, ToolEvent::Down { x: 50.0, y: 30.0, pressure: 1.0 }, m);
+        tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, m);
+        app.stylus.feed.set(None);
+        assert!(!app.ui.status_error, "{}", app.ui.status);
+        let s = active(&app).surface().unwrap();
+        // 2 px along the tip's long axis (x at angle 0), and 2 px across it.
+        (s.rgba(52, 30), s.rgba(50, 32))
+    };
+    let painted = |c: [f32; 4]| c[0] > 0.8 && c[1] < 0.3;
+    let (along, across) = paint(None);
+    assert!(painted(along) && !painted(across), "upright pen: a horizontal tip: {along:?} {across:?}");
+    let (along, across) = paint(Some([0.0, -50.0]));
+    assert!(!painted(along) && painted(across), "pen tilted 90°: the tip turns with it: {along:?} {across:?}");
+}
+
+#[test]
 fn patch_tool_lassoes_then_drags_the_patch() {
     let mut app = app();
     app.run("paint.pencil", json!({"points": [[68, 30], [74, 30]], "size": 6, "color": "#ff0000"})).unwrap();

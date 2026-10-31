@@ -992,7 +992,7 @@ fn convert_to_layers_conforms_the_contents_to_the_document_mode_and_depth() {
 
 fn deny_contents_paths(cmd: &str, p: &Value) -> Result<()> {
     if matches!(cmd, "layer.smartObjects.editContents" | "layer.smartObjects.convertToLayers" | "layer.smartObjects.saveContents") && p.get("path").is_some() {
-        return Err(other(format!("source path refused: {cmd}: {}", p["path"])));
+        return Err(other(format!("source path refused: {cmd}: {}", p["path"].as_str().unwrap_or_default())));
     }
     Ok(())
 }

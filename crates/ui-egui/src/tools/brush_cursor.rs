@@ -6,6 +6,8 @@ use std::sync::Arc;
 use egui::{CursorIcon, Painter, Pos2, Vec2};
 use photocraft_paint::brush::{BrushSettings, TipShape};
 
+use crate::stylus::PenSample;
+
 /// Below this on-screen radius an outline is unreadable: show the crosshair instead.
 const MIN_RADIUS: f32 = 3.0;
 
@@ -86,14 +88,48 @@ pub(crate) fn pen_axes(xf: &crate::canvas::ViewXform, brush: &BrushSettings, pen
         let direction = Vec2::new(point.tilt_x, point.tilt_y).normalized();
         v + direction * v.dot(direction) * (tilt.to_radians().cos().max(0.05) - 1.0)
     };
-    let x = project(Vec2::new(cs, -sn));
-    let y = project(Vec2::new(sn, cs));
-    [axes[0] * x.x + axes[1] * x.y, axes[0] * y.x + axes[1] * y.y]
+    if sd.brush_projection {
+        let x = project(Vec2::new(cs, -sn));
+        let y = project(Vec2::new(sn, cs));
+        [axes[0] * x.x + axes[1] * x.y, axes[0] * y.x + axes[1] * y.y]
+    } else {
+        // No projection: the pen's angle alone turns the outline, exactly as the brush's own angle would.
+        turned_axes(axes, angle)
+    }
 }
 
 /// Rings in radius units (document orientation) on screen, through [`tip_axes`].
 fn on_screen(rings: &[Vec<[f32; 2]>], axes: [Vec2; 2]) -> Vec<Vec<Vec2>> {
     rings.iter().map(|r| r.iter().map(|p| axes[0] * p[0] + axes[1] * p[1]).collect()).collect()
+}
+
+/// `axes` turned by `deg` (the tip's own counter-clockwise angle, as `BrushSettings::angle`): an
+/// outline that follows the pen's tilt or barrel rotation while it hovers. A zero or non-finite
+/// angle turns nothing.
+pub(crate) fn turned_axes(axes: [Vec2; 2], deg: f32) -> [Vec2; 2] {
+    if deg == 0.0 || !deg.is_finite() {
+        return axes;
+    }
+    let (sn, cs) = deg.to_radians().sin_cos();
+    [axes[0] * cs - axes[1] * sn, axes[0] * sn + axes[1] * cs]
+}
+
+/// The axes to draw the brush outline with: [`pen_axes`]' pen orientation and projection for the
+/// live hover pose — or, while a stroke is down, the pose the pen had just before it touched (the
+/// outline turns with the hover, then locks through the stroke, as Photoshop) still projected
+/// through the *current* view, so zooming or rotating mid-stroke resizes the outline with it. A
+/// mouse (no sample) keeps the brush's own angle.
+pub(crate) fn follow_axes(ctx: &egui::Context, xf: &crate::canvas::ViewXform, brush: &BrushSettings, painting: bool, sample: Option<PenSample>) -> [Vec2; 2] {
+    let id = egui::Id::unique("photocraft-tip-follow-pose");
+    let pose = if painting {
+        // The hover left this pose behind: hold it, never re-read mid-stroke.
+        ctx.data(|d| d.get_temp::<Option<PenSample>>(id).flatten())
+    } else {
+        ctx.data_mut(|d| d.insert_temp(id, sample));
+        sample
+    };
+    let axes = pose.map(|s| pen_axes(xf, brush, Some(s)));
+    axes.unwrap_or_else(|| pen_axes(xf, brush, sample))
 }
 
 /// The brush cursor at `at`. `radius` is the tip's screen radius (size / 2 at the current zoom),
@@ -229,6 +265,57 @@ mod tests {
             assert!(close(ex, xf.to_screen(70.0, 30.0) - o), "x axis at {rotation}°, flip {flip}, aspect {aspect}");
             assert!(close(ey, xf.to_screen(60.0, 40.0) - o), "y axis at {rotation}°, flip {flip}, aspect {aspect}");
         }
+    }
+
+    /// Turning the axes turns the outline exactly as raising the brush's own angle does.
+    #[test]
+    fn turned_axes_rotate_the_outline_like_the_angle_field() {
+        let xf = view(0.0, false, 1.0);
+        let axes = tip_axes(&xf, 20.0);
+        // A rightward tip turns up the screen at +90°, counter-clockwise as `angle` documents.
+        let turned = turned_axes(axes, 90.0);
+        assert!(close(turned[0], Vec2::new(0.0, -20.0)) && close(turned[1], Vec2::new(20.0, 0.0)), "{turned:?}");
+        // A round tip at angle 33 is its angle-0 rings turned by 33: the two paths agree.
+        let plain = BrushSettings { size: 40.0, roundness: 0.35, ..Default::default() };
+        let at33 = BrushSettings { angle: 33.0, ..plain.clone() };
+        let want = on_screen(&photocraft_paint::outline::tip_outline(&at33, true).expect("a rotated round tip traces"), axes);
+        let got = on_screen(&photocraft_paint::outline::tip_outline(&plain, true).expect("a round tip traces"), turned_axes(axes, 33.0));
+        assert_eq!(want.len(), got.len());
+        for (a, b) in want.iter().flatten().zip(got.iter().flatten()) {
+            assert!(close(*a, *b), "{a:?} vs {b:?}");
+        }
+        // Nothing to do, or hostile data: the axes are left alone.
+        assert!(close(turned_axes(axes, 0.0)[0], axes[0]));
+        assert!(close(turned_axes(axes, f32::NAN)[0], axes[0]));
+    }
+
+    /// The hover turn locks the moment the pen touches down and resumes when it lifts.
+    #[test]
+    fn follow_axes_hold_the_pre_touch_turn_through_a_stroke() {
+        use photocraft_paint::brush::{Control, Dynamic, ShapeDynamics};
+        let ctx = egui::Context::default();
+        let b = BrushSettings {
+            shape_dynamics: ShapeDynamics { enabled: true, angle: Dynamic::controlled(Control::PenTilt), ..Default::default() },
+            ..Default::default()
+        };
+        let xf = view(0.0, false, 1.0);
+        let axes = tip_axes(&xf, b.size);
+        let pen = |tilt_x| PenSample { pressure: 0.0, tilt_x, tilt_y: -45.0, rotation: 0.0, eraser: false };
+        // Hovering with the pen leaning "up" turns the outline 90° counter-clockwise.
+        let hover = follow_axes(&ctx, &xf, &b, false, Some(pen(0.0)));
+        assert!(close(hover[0], Vec2::new(0.0, -20.0)) && close(hover[1], Vec2::new(20.0, 0.0)), "{hover:?}");
+        // Touching down, even with a different live sample, holds the pre-touch pose.
+        let stroke = follow_axes(&ctx, &xf, &b, true, Some(pen(45.0)));
+        assert!(close(stroke[0], hover[0]) && close(stroke[1], hover[1]), "{stroke:?}");
+        // The pose is held, not its screen projection: zooming mid-stroke resizes the outline.
+        let zoomed = ViewXform { zoom: xf.zoom * 2.0, ..xf };
+        let bigger = follow_axes(&ctx, &zoomed, &b, true, Some(pen(45.0)));
+        assert!(close(bigger[0], hover[0] * 2.0) && close(bigger[1], hover[1] * 2.0), "{bigger:?}");
+        // Lifted: live again, and a mouse keeps the brush's own angle.
+        let after = follow_axes(&ctx, &xf, &b, false, Some(pen(45.0)));
+        assert!(!close(after[0], hover[0]), "{after:?}");
+        let mouse = follow_axes(&ctx, &xf, &b, false, None);
+        assert!(close(mouse[0], axes[0]) && close(mouse[1], axes[1]));
     }
 
     /// An unrotated, unflipped view gives what upstream's radius scaling gave.

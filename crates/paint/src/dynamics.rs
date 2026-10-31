@@ -476,6 +476,25 @@ pub fn control_angle(c: Control, fade_steps: u32, s: &StepInput) -> f32 {
     }
 }
 
+/// The angle offset a hovering cursor should add to [`BrushSettings::angle`] for pen sample `p`:
+/// what the angle dynamics and Brush Projection add at a stroke's first dab, so the tip outline
+/// turns with the pen's tilt and barrel rotation before it touches down. A hover has no travel
+/// direction, so Direction controls add nothing (and jitter is per-dab randomness: not previewed).
+/// Brush Pose overrides the sample, like it does for the dabs. 0 when Shape Dynamics are off.
+pub fn preview_angle(b: &BrushSettings, p: &StrokePoint) -> f32 {
+    let sd = &b.shape_dynamics;
+    if !sd.enabled {
+        return 0.0;
+    }
+    let p = apply_pose(b, *p);
+    let s = StepInput { point: p, direction: 0.0, initial_direction: 0.0, step: 0 };
+    let mut angle = control_angle(sd.angle.control, sd.angle.fade_steps, &s);
+    if sd.brush_projection {
+        angle += p.rotation;
+    }
+    angle
+}
+
 /// A 0..1 multiplier from a dynamic: control lerps from `minimum` to 1, jitter reduces randomly,
 /// never below `minimum`.
 fn scalar(d: &Dynamic, s: &StepInput, r: f32) -> f32 {
