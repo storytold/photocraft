@@ -1036,6 +1036,162 @@ fn minimum_maximum_and_custom_preview_on_the_gpu() {
     }
 }
 
+/// Adds a 300×200 map document (red and green ramps with steps) after the harness's document,
+/// keeping the harness's document active; returns its index.
+fn add_map_document(h: &mut Harness<'static, PhotocraftApp>) -> usize {
+    let mut map =
+        photocraft_doc::Document::new("map", photocraft_geom::Size::new(300, 200), photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8);
+    let mut l = photocraft_doc::Layer::raster("map", map.pixel_format());
+    let s = l.surface_mut().unwrap();
+    let data: Vec<f32> = (0..300 * 200)
+        .flat_map(|i| {
+            let (x, y) = ((i % 300) as f32, (i / 300) as f32);
+            [(x / 299.0 * 0.9 + 0.05 + if (i % 300) % 40 < 6 { 0.3 } else { 0.0 }).min(1.0), 1.0 - y / 199.0 * 0.8 - 0.1, 0.5, 1.0]
+        })
+        .collect();
+    s.write_region(photocraft_geom::Rect::new(0, 0, 300, 200), &data);
+    map.layers.push(l);
+    let at = h.state_mut().session.add_document(map, None);
+    h.state_mut().session.set_active(0);
+    h.run_steps(2);
+    at
+}
+
+/// Phase 4, multi-input: Displace with an open document as its map previews on the GPU at 100 %
+/// and zoomed out, matching the CPU preview; with no map (or a map file) it keeps the CPU's.
+#[test]
+fn displace_with_an_open_map_document_previews_on_the_gpu() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, blur) = harness_sized(rs, 4.0, true, [3000, 2400]);
+    if !gpu_path(&h) {
+        return;
+    }
+    let map = add_map_document(&mut h);
+    crate::dialogs::cancel(h.state_mut(), blur).unwrap();
+    let id = crate::filter_dialog::open(h.state_mut(), DISPLACE).unwrap();
+    let set = |h: &mut Harness<'static, PhotocraftApp>, params: &Value| {
+        let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
+        for (k, v) in params.as_object().unwrap() {
+            d.fields.insert(k.clone(), v.clone());
+        }
+        d.fields.insert("__preview".into(), json!(true));
+    };
+    for params in [
+        json!({"horizontal": 10.0, "vertical": 10.0, "fit": "stretch", "undefinedAreas": "wrap", "mapDocument": map}),
+        json!({"horizontal": -30.0, "vertical": 20.0, "fit": "tile", "undefinedAreas": "repeat", "mapDocument": map}),
+    ] {
+        set(&mut h, &params);
+        settle(&mut h, |app| on_gpu(app, 0));
+        assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "{params}: the CPU preview stands aside");
+        let what = format!("displace {params}");
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            let docs: Vec<_> = h.state().session.documents().iter().map(|d| d.doc.clone()).collect();
+            std::sync::Arc::new(
+                crate::filter_dialog::preview_document_for_target(
+                    &st.doc,
+                    st.active_layer,
+                    DISPLACE,
+                    &params,
+                    1,
+                    None,
+                    photocraft_engine::channel_cmds::ChannelTarget::Composite,
+                    &docs,
+                    &Default::default(),
+                )
+                .unwrap(),
+            )
+        };
+        let plain = h.state().session.active().unwrap().doc.clone();
+        let shown = probes_named(&mut h, Some(&what));
+        let (mut checked, mut differs) = (0, 0);
+        for (p, px) in &shown {
+            let (want, alpha) = expected_in(h.state(), &oracle, *p);
+            if alpha < 0.999 {
+                continue;
+            }
+            assert!(within(&want, *px), "{what}: at {p:?} the canvas shows {px:?}, the CPU {want:?}");
+            checked += 1;
+            differs += usize::from(!within(&expected_around(h.state(), &plain, *p, 0).0, *px));
+        }
+        assert!(checked >= 40 && differs >= 10, "{what}: {checked} probes checked, {differs} differ from the undisplaced image");
+    }
+    // The map is made once for the session, not per settings change.
+    assert_eq!(h.state().filter_gpu_preview.as_ref().map(|p| p.maps.len()), Some(1));
+    // The Navigator shows the displacement too: its run gets the open documents, so the map
+    // document resolves (it showed the unfiltered document).
+    let (nav, _) = navigator_doc(h.state_mut(), 0).expect("the Navigator's picture");
+    let k = nav.size.width.max(1);
+    let k = h.state().session.active().unwrap().doc.size.width.div_ceil(k);
+    let plain = crate::proxy::proxy_document(&h.state().session.active().unwrap().doc, k);
+    let last = json!({"horizontal": -30.0, "vertical": 20.0, "fit": "tile", "undefinedAreas": "repeat", "mapDocument": map});
+    let want = {
+        let st = h.state().session.active().unwrap();
+        let docs: Vec<_> = h.state().session.documents().iter().map(|d| d.doc.clone()).collect();
+        crate::filter_dialog::preview_document_for_target(
+            &st.doc,
+            st.active_layer,
+            DISPLACE,
+            &last,
+            k,
+            None,
+            photocraft_engine::channel_cmds::ChannelTarget::Composite,
+            &docs,
+            &Default::default(),
+        )
+        .unwrap()
+    };
+    let (shown, plain, want) = (photocraft_compose::flatten(&nav), photocraft_compose::flatten(&plain), photocraft_compose::flatten(&want));
+    assert_eq!(shown.px, want.px, "the Navigator: the CPU preview at its factor");
+    assert_ne!(shown.px, plain.px, "displaced, not the plain document");
+    // Zoomed out: the proxy, with its own reduced map.
+    h.state_mut().ui.views[0].zoom = 0.25;
+    settle(&mut h, |app| app.filter_gpu_preview.as_ref().is_some_and(|p| p.proxy.as_ref().is_some_and(|g| g.drawn.is_some())));
+    assert!(on_gpu(h.state_mut(), 0), "zoomed out on the GPU");
+    let maps = h.state().filter_gpu_preview.as_ref().unwrap().maps.iter().map(|(k, _)| k.3).collect::<Vec<_>>();
+    assert!(maps.contains(&2), "the proxy's map: {maps:?}");
+    // The proxy texture against the CPU's proxy preview (its map reduced the same way).
+    let last = json!({"horizontal": -30.0, "vertical": 20.0, "fit": "tile", "undefinedAreas": "repeat", "mapDocument": map});
+    let (k, key, size) = gpu_proxy(h.state_mut(), 0).expect("the proxy");
+    assert_eq!(k, 2);
+    let oracle = {
+        let st = h.state().session.active().unwrap();
+        let docs: Vec<_> = h.state().session.documents().iter().map(|d| d.doc.clone()).collect();
+        crate::filter_dialog::preview_document_for_target(
+            &st.doc,
+            st.active_layer,
+            DISPLACE,
+            &last,
+            2,
+            None,
+            photocraft_engine::channel_cmds::ChannelTarget::Composite,
+            &docs,
+            &Default::default(),
+        )
+        .unwrap()
+    };
+    let (_, tsize, texels) = h.state().gpu.as_ref().unwrap().read_texels(key).expect("the proxy texture");
+    assert_eq!(tsize, size);
+    let cpu = photocraft_compose::flatten(&oracle);
+    let worst = cpu.px.iter().zip(&texels).map(|(c, g)| (0..3).map(|i| (c[i] * c[3] - g[i]).abs()).fold(0.0f32, f32::max)).fold(0.0, f32::max);
+    assert!(worst <= 1.5 / 255.0, "the displaced proxy is {:.2}/255 off the CPU's proxy preview", worst * 255.0);
+    // No map document: the CPU's (which has none to show either).
+    h.state_mut().ui.views[0].zoom = 1.0;
+    set(&mut h, &json!({"mapDocument": -1}));
+    h.run_steps(4);
+    assert!(!on_gpu(h.state_mut(), 0), "no map, no GPU preview");
+    // Remembered, so the session isn't measured and built again every frame…
+    let refused = h.state().filter_gpu_refused;
+    assert!(refused.is_some(), "the refused settings are kept");
+    h.run_steps(2);
+    assert_eq!(h.state().filter_gpu_refused, refused);
+    // …and new settings try again.
+    set(&mut h, &json!({"mapDocument": map}));
+    settle(&mut h, |app| on_gpu(app, 0));
+    assert!(h.state().filter_gpu_refused.is_none());
+}
+
 /// Only the main canvas gives the dialog's preview window its GPU view: an Arrange tile or a
 /// floating window (perhaps on another display) must not replace it.
 #[test]
