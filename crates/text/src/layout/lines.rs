@@ -1,7 +1,7 @@
 //! Placing one broken line of a paragraph: kerning and tab stops, glyph and cluster positions,
 //! decorations, and the line's vertical-type and justification adjustments.
 
-use parley::{PositionedLayoutItem, Run};
+use parley::{Alignment, PositionedLayoutItem, Run};
 use photocraft_doc::text::{CharStyle, Kerning, TextAlign};
 use skrifa::instance::NormalizedCoord;
 
@@ -13,6 +13,24 @@ use super::{ClusterInfo, DecorationRect, Flow, GlyphFace, GlyphOrient, LineInfo,
 
 type Line<'a> = parley::Line<'a, RunBrush>;
 type GlyphRun<'a> = parley::GlyphRun<'a, RunBrush>;
+
+/// The advance of the whitespace `line` ends with, all of which hangs past the line's end, as in
+/// Photoshop. Parley follows CSS Text 4, where preserved whitespace before a hard break or the end
+/// of the text hangs only as far as it overflows, so its `hanging_advance` leaves that whitespace
+/// inside the line. Tabs are spaces in the paragraph text, so they count. Only whitespace in the
+/// paragraph's direction (`rtl`) hangs: in a run of the other direction it is inside the line.
+pub(super) fn trailing_whitespace(line: &Line<'_>, rtl: bool) -> f32 {
+    let mut clusters: Vec<(usize, f32, bool)> = line
+        .runs()
+        .flat_map(|r| {
+            let own = r.is_rtl() == rtl;
+            r.clusters().map(move |c| (c.text_range().start, c.advance(), own && (c.is_space_or_nbsp() || c.is_hard_line_break()))).collect::<Vec<_>>()
+        })
+        .collect();
+    clusters.sort_by_key(|c| c.0);
+    let trailing: f32 = clusters.iter().rev().take_while(|c| c.2).map(|c| c.1).sum();
+    trailing.max(line.metrics().hanging_advance)
+}
 
 /// A cluster of a line in visual order, for kerning.
 struct KernSlot {
@@ -139,11 +157,11 @@ fn collect_kern_slots(line: &Line<'_>, para: &Para<'_>) -> Vec<KernSlot> {
                 first,
                 last,
                 font: run.font().clone(),
-                coords: run.normalized_coords().to_vec(),
+                coords: run.normalized_coords().iter().map(|c| c.to_bits()).collect(),
                 size: run.font_size(),
                 rtl: c.is_rtl(),
                 blank: first.is_none() || c.is_space_or_nbsp() || c.text_range().end <= para.prefix.len(),
-                upright: env.vertical && c.first_style().brush.1 != VClass::Rotate as u8,
+                upright: env.vertical && c.style().brush.1 != VClass::Rotate as u8,
                 advance: c.advance() * hs,
                 growth: c.advance() * (hs - 1.0),
                 tab: para.tabs.binary_search(&c.text_range().start).is_ok(),
@@ -244,7 +262,7 @@ fn rotate_to_text_space(glyphs: &mut [PlacedGlyph], vinfo: &[VGlyph], baseline: 
 
 /// Underline and strikethrough rects of one run.
 fn push_decorations(out: &mut TextLayout, vertical: bool, gr: &GlyphRun<'_>, baseline: f32, shift: f32, span: &RunSpan) {
-    let rm = gr.run().metrics();
+    let rm = gr.run().font_metrics();
     let (x0, x1, si) = (span.x0, span.x1, span.style);
     if vertical {
         // Underline to the right of the column, strikethrough through its centre
@@ -354,6 +372,28 @@ impl Para<'_> {
         }
     }
 
+    /// The line's alignment offset and hanging advance with all of its `trailing` whitespace
+    /// hanging ([`trailing_whitespace`]). Parley aligned a line ending in a hard break or the end
+    /// of the text with only the part of that whitespace that overflowed hanging; this redoes its
+    /// alignment (`Layout::align`) with all of it. Such a line is a paragraph's last, so a
+    /// justified one is start-aligned. Other lines are returned as parley aligned them.
+    fn hung_offset(&self, m: &parley::LineMetrics, trailing: f32, rtl: bool) -> (f32, f32) {
+        if trailing <= m.hanging_advance {
+            return (m.offset, m.hanging_advance);
+        }
+        let free = m.inline_max_coord - m.inline_min_coord - m.indent - m.advance + trailing;
+        let base = if rtl { -trailing } else { m.indent };
+        if !self.align_options().align_when_overflowing && free <= 0.0 {
+            return (if rtl { base + free } else { base }, trailing);
+        }
+        let share = match (self.alignment(), rtl) {
+            (Alignment::Left, _) | (Alignment::Start | Alignment::Justify, false) | (Alignment::End, true) => 0.0,
+            (Alignment::Center, _) => 0.5,
+            _ => 1.0,
+        };
+        (base + free * share, trailing)
+    }
+
     /// The width the line may fill: its area slot's, else the box's.
     fn line_avail(&self, f: &LineFrame) -> Option<f32> {
         f.slot.map(|s| s.width).or(self.avail)
@@ -392,15 +432,17 @@ impl Para<'_> {
     }
 
     /// Appends one line's clusters, glyphs, decorations and `LineInfo` to `out`.
-    pub(super) fn place_line(&self, optical: &mut crate::optical::Cache, out: &mut TextLayout, line: &Line<'_>, f: &LineFrame) {
+    pub(super) fn place_line(&self, optical: &mut crate::optical::Cache, out: &mut TextLayout, line: &Line<'_>, f: &LineFrame, rtl: bool) {
         let env = self.env;
         let m = *line.metrics();
-        let adv = m.advance - m.trailing_whitespace;
+        // Parley's glyph positions include its own offset; `dx` moves them to `offset`.
+        let (offset, hanging) = self.hung_offset(&m, trailing_whitespace(line, rtl), rtl);
+        let adv = m.advance - hanging;
         let slots = collect_kern_slots(line, self);
         let mut kern_px = self.kerning(optical, &slots);
         let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index);
         let line_kern: f32 = kern_px.iter().sum::<f32>() - trailing_tabs;
-        let dx = self.line_start(f, m.offset, adv, line_kern);
+        let dx = self.line_start(f, offset, adv, line_kern) + (offset - m.offset);
         let lc = LineCtx { dx, baseline: f.baseline, slots: &slots, kern_px: &kern_px, line_index: out.lines.len() };
         let (g0, c0) = (out.glyphs.len(), out.clusters.len());
         let mut state = LineState { cursors: kern_cursors(line, &slots), seen_runs: Vec::new(), vinfo: Vec::new(), extra: 0.0 };
@@ -444,7 +486,7 @@ impl Para<'_> {
         let face = out.faces.len() as u32;
         out.faces.push(GlyphFace {
             font: run.font().clone(),
-            coords: run.normalized_coords().to_vec(),
+            coords: run.normalized_coords().iter().map(|c| c.to_bits()).collect(),
             size_px: run.font_size(),
             embolden: synthetic_bold(synth.embolden(), st.weight, run.font_attrs().weight.value()),
             skew_deg: synth.skew().unwrap_or(0.0),
@@ -482,8 +524,12 @@ impl Para<'_> {
     /// The glyphs of one run, with the kerning of the clusters before each.
     fn push_glyphs(&self, out: &mut TextLayout, lc: &LineCtx<'_>, state: &mut LineState, gr: &GlyphRun<'_>, face: u32, hs: f32) {
         let run = gr.run();
-        let rm = run.metrics();
-        let vm = if self.env.vertical { Some(VMetrics::new(run.font(), run.normalized_coords(), run.font_size())) } else { None };
+        let rm = run.font_metrics();
+        let vm = if self.env.vertical {
+            Some(VMetrics::new(run.font(), &run.normalized_coords().iter().map(|c| c.to_bits()).collect::<Vec<_>>(), run.font_size()))
+        } else {
+            None
+        };
         let class = gr.style().brush.1;
         // Glyphs of the run's own characters (not substituted by `vert`).
         let plain: Vec<u32> = match (&vm, class) {

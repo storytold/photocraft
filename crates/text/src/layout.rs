@@ -340,7 +340,7 @@ impl Layouter {
                 flow.stop = true;
                 break;
             };
-            para.place_line(&mut self.optical, out, &line, &frame);
+            para.place_line(&mut self.optical, out, &line, &frame, layout.is_rtl());
         }
         if area_full {
             // The shape is full: later paragraphs are hidden too.

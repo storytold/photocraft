@@ -389,6 +389,23 @@ fn rtl_text_is_reordered() {
     assert!(l.clusters.iter().all(|c| c.range.end <= "שלום abc".len()));
 }
 
+/// An RTL paragraph that ends in a Latin run and spaces: the spaces take the paragraph's
+/// direction (Unicode bidi rule L1) and sit at the line's end edge, where they hang, so the
+/// right-aligned text ends at the box edge with or without them.
+#[test]
+fn spaces_inside_an_opposite_direction_run_do_not_hang() {
+    let mut e = TextEngine::new();
+    for text in ["שלום abc", "שלום abc  "] {
+        let t = with_para(
+            TextLayer { shape: TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 100.0 }, ..point(text, 20.0) },
+            ParagraphStyle { align: TextAlign::Right, direction: TextDirection::Rtl, ..Default::default() },
+        );
+        let l = e.layout(&t, 72.0);
+        let right = l.clusters.iter().filter(|c| !text[c.range.clone()].trim().is_empty()).map(|c| c.x + c.advance).fold(f32::MIN, f32::max);
+        assert!((right - 200.0).abs() < 0.5, "{text:?}: the text ends at {right}");
+    }
+}
+
 /// Builds a TrueType collection from standalone fonts (table offsets rebased).
 fn make_ttc(fonts: &[&[u8]]) -> Vec<u8> {
     let header_len = 12 + 4 * fonts.len();
