@@ -98,8 +98,8 @@ pub fn overflow_button(ui: &mut Ui, id: egui::Id, r: Rect, tip: &str, labels: &[
         ui.set_min_width(140.0);
         for &i in overflow {
             let Some(name) = labels.get(i) else { continue };
-            let text = if checked.is_some() { format!("{} {name}", if checked == Some(i) { "✔" } else { "  " }) } else { (*name).to_owned() };
-            if ui.button(text).clicked() {
+            let on = checked == Some(i);
+            if crate::menu_keys::menu_row(ui, name, None, on, true).clicked() {
                 *picked = Some(i);
                 ui.close();
             }
@@ -151,12 +151,12 @@ fn tabs_in(
         }
         // The context menu belongs to the actual tab response, so its clicks are not
         // intercepted by an overlay.
-        resp.context_menu(|ui| {
-            if ui.button(tl!("Close")).clicked() {
+        crate::menus::context_menu(&resp, |ui| {
+            if crate::menu_keys::menu_row(ui, tl!("Close"), None, false, true).clicked() {
                 context = Some(TabContextAction::Close(i));
                 ui.close();
             }
-            if ui.button(tl!("Close Tab Group")).clicked() {
+            if crate::menu_keys::menu_row(ui, tl!("Close Tab Group"), None, false, true).clicked() {
                 context = Some(TabContextAction::CloseGroup);
                 ui.close();
             }
