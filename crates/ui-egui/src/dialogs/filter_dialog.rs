@@ -794,8 +794,13 @@ pub(crate) fn color_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64, m
     };
     let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return true };
     let Some(mut f) = app.ui.dialogs.last().map(|d| d.fields.clone()) else { return true };
-    let sample = !mods.shift && !mods.alt && f.get("__tool").and_then(Value::as_str).is_none_or(|t| t == "sample");
-    if sample {
+    let tool = f.get("__tool").and_then(Value::as_str);
+    let sample = !mods.shift && !mods.alt && tool.is_none_or(|t| t == "sample");
+    // A first Add to Sample, before any sample, starts from the clicked colour too: one point
+    // matches through `color`, and Color Range's matcher starts its range there as well.
+    let add = mods.shift || (!mods.alt && tool == Some("add"));
+    let first_add = add && f.get("points").and_then(Value::as_array).is_none_or(Vec::is_empty);
+    if sample || first_add {
         f.insert("color".into(), json!(crate::color_picker_ui::hex(rgb)));
     }
     // Where it was picked: Localized Color Clusters match the colour near this point (#4457);

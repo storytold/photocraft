@@ -1589,6 +1589,33 @@ fn replace_color_shift_and_alt_clicks_add_and_subtract_samples() {
     assert_eq!((field(&app, "points"), field(&app, "subtractPoints")), (json!([[7.0, 7.0]]), json!([])));
 }
 
+/// A first click with Add to Sample, before any plain sample, takes the clicked colour as the
+/// From colour, so the single-sample command replaces it, not the foreground colour (CodeRabbit
+/// review on #10443). Color Range's matcher, used from the second sample on, also starts its
+/// range at the first added colour.
+#[test]
+fn replace_color_first_add_to_sample_click_sets_the_from_colour() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "#00ff00"})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let id = open(&mut app, REPLACE_COLOR).unwrap();
+    let field = |app: &PhotocraftApp, k: &str| app.ui.dialogs.last().unwrap().fields.get(k).cloned().unwrap_or(Value::Null);
+    assert_ne!(field(&app, "color"), json!("#00ff00"), "the dialog starts from the foreground colour");
+    for (tool, mods) in [("sample", egui::Modifiers::SHIFT), ("add", egui::Modifiers::NONE)] {
+        let mut fields = app.ui.dialogs.last().unwrap().fields.clone();
+        reset_fields(&app, &mut fields);
+        fields.insert("__tool".into(), json!(tool));
+        app.ui.dialog_mut(id).unwrap().fields = fields;
+        assert!(color_eyedropper_sample(&mut app, 4.0, 4.0, mods));
+        assert_eq!(field(&app, "points"), json!([[4.0, 4.0]]));
+        assert_eq!(field(&app, "color"), json!("#00ff00"), "{tool}");
+    }
+    // A later added sample leaves the From colour alone.
+    app.ui.dialog_mut(id).unwrap().fields.insert("color".into(), json!("#123456"));
+    assert!(color_eyedropper_sample(&mut app, 6.0, 6.0, egui::Modifiers::SHIFT));
+    assert_eq!(field(&app, "color"), json!("#123456"));
+}
+
 /// Reset (Alt+Cancel) forgets the click order with the samples, so samples added afterwards
 /// carry an order that fits them and the command takes it (CodeRabbit review on #10443).
 #[test]
