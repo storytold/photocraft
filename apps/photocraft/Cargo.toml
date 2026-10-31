@@ -91,12 +91,12 @@ async-io = "=2.6.0"
 winit = { version = "=0.30.13", default-features = false, features = ["x11"] }
 
 # Safe Win32 wrappers on Windows: the pointer position for file drops (`cursor.rs`,
-# GetCursorPos) and the window frame for the custom title bar (`window_frame.rs`, window styles),
-# no dependencies of its own. Pinned exactly: review the diff before bumping.
+# GetCursorPos), the custom title bar (`window_frame.rs`, window styles), and the GPU vendor
+# preflight (`gpu_startup.rs`, DXGI). No dependencies of its own; review the diff before bumping.
 [target.'cfg(target_os = "windows")'.dependencies]
 # Safe Windows screen-capture bindings; Linux uses the pure-Rust X11 client/portal.
 xcap = "=0.9.8"
-winsafe = { version = "=0.0.29", default-features = false, features = ["user"] }
+winsafe = { version = "=0.0.29", default-features = false, features = ["user", "dxgi"] }
 
 # tests/mac_menu_appkit.rs: reads AppKit's menu bar back and sends it real key events.
 [target.'cfg(target_os = "macos")'.dev-dependencies]

@@ -151,6 +151,12 @@ If the device is lost while running (#243), every GPU entry point checks the dev
 
 The window itself draws with the same device (or, with the CPU canvas, one it watches), and nothing can draw it once wgpu reports that device lost, for example after a driver reset while the PC slept (#3438). A frame with shapes then panicked inside egui-wgpu ("Failed to create staging buffer", #1215). A frame without any froze the window, and the close button opened an unsaved-changes prompt nobody could see. `gpu_status::check_window` polls the device each frame. Once wgpu reports it lost, frames draw nothing, every unsaved document is written to crash recovery (`Services::flush_autosaves` waits for the writes), and the app closes; the next launch reopens them. `ui.gpu.simulateLoss {destroy: true}` destroys the real device to test this path.
 
+Automatic startup on Windows first scans DXGI vendor IDs. A complete scan without Intel skips
+the D3D12 capability probe. Finding Intel, or any factory, enumeration or adapter-description
+error, retains the original wgpu probe and its capability filtering before deciding whether to
+exclude Vulkan. This keeps legacy Intel and mixed-GPU behavior while avoiding device creation
+just to identify vendors on other systems.
+
 ## Logs
 
 The desktop app writes its `log` records to standard error and to `logs/photocraft.log` in the settings directory (Linux `~/.config/photocraft/logs/`, macOS `~/Library/Application Support/Photocraft/logs/`, Windows `%APPDATA%\Photocraft\logs\`, or under `PHOTOCRAFT_CONFIG_DIR` / the portable data folder). A start launched from a desktop menu or the Dock has no terminal, so this file is what to attach to a bug report: GPU startup fallbacks, a lost device and the crash guard's panic report all land there. Each launch moves the previous log to `photocraft.1.log` (and that one to `photocraft.2.log`), so the log of a run that crashed survives the next start. A launch while another PhotoCraft is still running leaves that instance's log where it is and writes its own `photocraft-<pid>.log` next to it (the newest two of those are kept once their instances have exited; the `PhotoCraft <version>, log file <path>` line at startup names the file in use). The file stops growing at 16 MiB. `--version` and command-line errors write no file. A desktop start that fails before any window exists logs the error and, when no terminal, automation client or headless session can report it, shows it in a dialog naming this file (#7643).

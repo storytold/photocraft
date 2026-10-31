@@ -1,0 +1,311 @@
+{
+  "base_revision": "2fccdcba8ea273dae3d997569bc888ed1df93470",
+  "date": "2026-10-28",
+  "platform": "Windows x86_64-pc-windows-msvc",
+  "rust": "1.95.0",
+  "profile": "release; default native features; PhotoCraft 0.17.0",
+  "gpu": {
+    "adapter": "NVIDIA GeForce RTX 4060",
+    "adapters": [
+      "NVIDIA GeForce RTX 4060",
+      "Microsoft Basic Render Driver",
+      "NVIDIA GeForce RTX 4060/PCIe/SSE2"
+    ],
+    "backend": "vulkan",
+    "canvas": "gpu",
+    "deviceType": "discreteGpu",
+    "driver": "NVIDIA 610.88",
+    "fallback": null,
+    "lost": null,
+    "preference": "auto",
+    "present": "autovsync, latency 1",
+    "selected": "auto",
+    "videoMemoryMb": 7956
+  },
+  "method": {
+    "samples_per_mode": 20,
+    "order": "Fresh process per sample; baseline/fixed on odd rounds, fixed/baseline on even rounds. Both modes warmed up before measurement.",
+    "settings": "Fresh isolated settings, empty workspace, default automatic backend and presentation mode. OS/driver caches warm; no forced cache eviction.",
+    "endpoint": "Windows GetProcessTimes creation FILETIME to return of wgpu Queue::present, logged as SystemTime nanoseconds. Presentation API completion, not display scanout.",
+    "editor_frame": "The first presentation is blank because fonts are installed during its logic pass; the second is the first editor frame. The UI code is unchanged.",
+    "control": "Local authenticated control connection used for ui.inspect, screenshots and graceful app.quit; identical in both modes.",
+    "instrumentation": "One executable for both modes. Temporary environment-gated logs immediately after Queue::present count its first five calls. A temporary PHOTOCRAFT_PROFILE_ORIGINAL_DX12 flag makes dx12_vendors call the unchanged wgpu_dx12_vendors directly for baseline mode. Fixed mode takes the submitted DXGI fast path. Both temporary probes were removed after collection.",
+    "hardware_limit": "Measured on an NVIDIA-only RTX 4060. Physical Intel and hybrid configurations were not available; fallback and legacy-filter behavior have regression coverage."
+  },
+  "summary_ms": {
+    "baseline": {
+      "first_present_ms": {
+        "median": 607.72,
+        "p95": 657.114
+      },
+      "first_editor_present_ms": {
+        "median": 646.535,
+        "p95": 698.336
+      },
+      "gpu_preflight_ms": {
+        "median": 197.955,
+        "p95": 222.4
+      }
+    },
+    "fixed": {
+      "first_present_ms": {
+        "median": 465.604,
+        "p95": 511.084
+      },
+      "first_editor_present_ms": {
+        "median": 507.965,
+        "p95": 553.145
+      },
+      "gpu_preflight_ms": {
+        "median": 7.955,
+        "p95": 9.52
+      }
+    }
+  },
+  "samples": {
+    "baseline": [
+      {
+        "run": 1,
+        "first_present_ms": 615.1112,
+        "first_editor_present_ms": 657.2042,
+        "gpu_preflight_ms": 213.15
+      },
+      {
+        "run": 2,
+        "first_present_ms": 607.7683,
+        "first_editor_present_ms": 646.2432,
+        "gpu_preflight_ms": 194.04
+      },
+      {
+        "run": 3,
+        "first_present_ms": 601.1076,
+        "first_editor_present_ms": 638.2131,
+        "gpu_preflight_ms": 196.16
+      },
+      {
+        "run": 4,
+        "first_present_ms": 608.0566,
+        "first_editor_present_ms": 647.7193,
+        "gpu_preflight_ms": 190.83
+      },
+      {
+        "run": 5,
+        "first_present_ms": 599.1513,
+        "first_editor_present_ms": 640.1089,
+        "gpu_preflight_ms": 195.13
+      },
+      {
+        "run": 6,
+        "first_present_ms": 606.2218,
+        "first_editor_present_ms": 642.7234,
+        "gpu_preflight_ms": 194.9
+      },
+      {
+        "run": 7,
+        "first_present_ms": 629.1676,
+        "first_editor_present_ms": 671.0665,
+        "gpu_preflight_ms": 205.34
+      },
+      {
+        "run": 8,
+        "first_present_ms": 627.8128,
+        "first_editor_present_ms": 671.6857,
+        "gpu_preflight_ms": 199.05
+      },
+      {
+        "run": 9,
+        "first_present_ms": 606.3515,
+        "first_editor_present_ms": 645.9453,
+        "gpu_preflight_ms": 204.02
+      },
+      {
+        "run": 10,
+        "first_present_ms": 607.6723,
+        "first_editor_present_ms": 647.3104,
+        "gpu_preflight_ms": 196.38
+      },
+      {
+        "run": 11,
+        "first_present_ms": 598.8773,
+        "first_editor_present_ms": 641.2686,
+        "gpu_preflight_ms": 198.39
+      },
+      {
+        "run": 12,
+        "first_present_ms": 657.1144,
+        "first_editor_present_ms": 698.3361,
+        "gpu_preflight_ms": 222.4
+      },
+      {
+        "run": 13,
+        "first_present_ms": 592.1164,
+        "first_editor_present_ms": 629.1387,
+        "gpu_preflight_ms": 193.42
+      },
+      {
+        "run": 14,
+        "first_present_ms": 608.6263,
+        "first_editor_present_ms": 646.8262,
+        "gpu_preflight_ms": 201.8
+      },
+      {
+        "run": 15,
+        "first_present_ms": 604.6816,
+        "first_editor_present_ms": 642.7969,
+        "gpu_preflight_ms": 202.83
+      },
+      {
+        "run": 16,
+        "first_present_ms": 609.602,
+        "first_editor_present_ms": 648.8485,
+        "gpu_preflight_ms": 197.52
+      },
+      {
+        "run": 17,
+        "first_present_ms": 592.4595,
+        "first_editor_present_ms": 631.5447,
+        "gpu_preflight_ms": 191.49
+      },
+      {
+        "run": 18,
+        "first_present_ms": 588.5115,
+        "first_editor_present_ms": 631.2502,
+        "gpu_preflight_ms": 188.82
+      },
+      {
+        "run": 19,
+        "first_present_ms": 706.6917,
+        "first_editor_present_ms": 750.5949,
+        "gpu_preflight_ms": 238.27
+      },
+      {
+        "run": 20,
+        "first_present_ms": 626.2634,
+        "first_editor_present_ms": 675.0454,
+        "gpu_preflight_ms": 203.95
+      }
+    ],
+    "fixed": [
+      {
+        "run": 1,
+        "first_present_ms": 500.7288,
+        "first_editor_present_ms": 553.1453,
+        "gpu_preflight_ms": 9.52
+      },
+      {
+        "run": 2,
+        "first_present_ms": 485.4389,
+        "first_editor_present_ms": 527.4371,
+        "gpu_preflight_ms": 7.2
+      },
+      {
+        "run": 3,
+        "first_present_ms": 456.021,
+        "first_editor_present_ms": 495.326,
+        "gpu_preflight_ms": 7.76
+      },
+      {
+        "run": 4,
+        "first_present_ms": 446.5346,
+        "first_editor_present_ms": 496.4488,
+        "gpu_preflight_ms": 7.94
+      },
+      {
+        "run": 5,
+        "first_present_ms": 436.288,
+        "first_editor_present_ms": 474.831,
+        "gpu_preflight_ms": 7.38
+      },
+      {
+        "run": 6,
+        "first_present_ms": 450.5546,
+        "first_editor_present_ms": 487.54,
+        "gpu_preflight_ms": 7.52
+      },
+      {
+        "run": 7,
+        "first_present_ms": 487.4964,
+        "first_editor_present_ms": 529.6793,
+        "gpu_preflight_ms": 8.43
+      },
+      {
+        "run": 8,
+        "first_present_ms": 473.1365,
+        "first_editor_present_ms": 514.7136,
+        "gpu_preflight_ms": 9.34
+      },
+      {
+        "run": 9,
+        "first_present_ms": 448.3684,
+        "first_editor_present_ms": 485.3205,
+        "gpu_preflight_ms": 7.97
+      },
+      {
+        "run": 10,
+        "first_present_ms": 464.7194,
+        "first_editor_present_ms": 503.4802,
+        "gpu_preflight_ms": 15.13
+      },
+      {
+        "run": 11,
+        "first_present_ms": 456.5983,
+        "first_editor_present_ms": 499.503,
+        "gpu_preflight_ms": 8.02
+      },
+      {
+        "run": 12,
+        "first_present_ms": 472.1838,
+        "first_editor_present_ms": 517.6119,
+        "gpu_preflight_ms": 7.76
+      },
+      {
+        "run": 13,
+        "first_present_ms": 553.1016,
+        "first_editor_present_ms": 603.0101,
+        "gpu_preflight_ms": 8.3
+      },
+      {
+        "run": 14,
+        "first_present_ms": 511.0844,
+        "first_editor_present_ms": 549.3886,
+        "gpu_preflight_ms": 8.82
+      },
+      {
+        "run": 15,
+        "first_present_ms": 441.6032,
+        "first_editor_present_ms": 478.9945,
+        "gpu_preflight_ms": 7.21
+      },
+      {
+        "run": 16,
+        "first_present_ms": 444.6021,
+        "first_editor_present_ms": 508.2531,
+        "gpu_preflight_ms": 7.63
+      },
+      {
+        "run": 17,
+        "first_present_ms": 452.558,
+        "first_editor_present_ms": 489.7258,
+        "gpu_preflight_ms": 8.08
+      },
+      {
+        "run": 18,
+        "first_present_ms": 473.7261,
+        "first_editor_present_ms": 512.7718,
+        "gpu_preflight_ms": 8.17
+      },
+      {
+        "run": 19,
+        "first_present_ms": 466.4883,
+        "first_editor_present_ms": 507.6766,
+        "gpu_preflight_ms": 7.19
+      },
+      {
+        "run": 20,
+        "first_present_ms": 476.5317,
+        "first_editor_present_ms": 523.6322,
+        "gpu_preflight_ms": 7.39
+      }
+    ]
+  }
+}
