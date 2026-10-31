@@ -11,6 +11,95 @@ use serde_json::json;
 
 const INVERT: &[u8] = include_bytes!("fixtures/invert.wasm");
 
+#[test]
+fn skin_smooth_maximum_colour_groups_fit_the_normal_wasm_budget() {
+    let plugin = Plugin::load(include_bytes!("fixtures/skin-smooth.wasm"), Limits::default()).unwrap();
+    let area = Rect::new(0, 0, 1050, 280);
+    let params = json!({"positiveColors":vec![[0.7,0.5,0.4];16],"negativeColors":vec![[0.1,0.2,0.8];16],
+        "fine":100,"medium":100,"large":100,"detail":0,"brightness":25});
+    for fmt in [PixelFormat { alpha: false, ..PixelFormat::RGBA8 }, PixelFormat { sample: SampleType::F32, ..PixelFormat::RGBA8 }] {
+        let mut source = Surface::new(fmt);
+        let pixel = if fmt.alpha { vec![0.7, 0.5, 0.4, 0.5] } else { vec![0.7, 0.5, 0.4] };
+        source.fill_rect(area, &pixel);
+        let out = plugin.apply(&source, area, None, &params).unwrap();
+        assert!(out.pixel(20, 20)[0] > source.pixel(20, 20)[0]);
+        if fmt.alpha {
+            assert_eq!(out.pixel(20, 20)[3], source.pixel(20, 20)[3]);
+        }
+    }
+}
+
+#[test]
+fn unchanged_f32_pixels_remain_exact_under_a_feathered_selection() {
+    let plugin = Plugin::load(&ok_module("(i32.const 0)"), Limits::default()).unwrap();
+    let area = Rect::new(0, 0, 16, 16);
+    let mut input = Surface::new(PixelFormat { sample: SampleType::F32, ..PixelFormat::RGBA8 });
+    input.fill_rect(area, &[0.7, 0.48, 0.36, 0.5]);
+    let mut selection = Surface::new(PixelFormat::GRAY8);
+    selection.fill_rect(area, &[0.4]);
+    let result = plugin.apply(&input, area, Some(&selection), &json!({})).unwrap();
+    assert_eq!(result.read_region(area), input.read_region(area));
+}
+
+#[test]
+fn host_acceleration_is_scoped_and_failed_bands_restart_from_original() {
+    use photocraft_plugins::acceleration::{self, Accelerator, Band};
+    use photocraft_raster::Interrupt;
+    use std::sync::Arc;
+    struct Partial;
+    impl Accelerator for Partial {
+        fn algorithm(&self) -> &str {
+            "test.v1"
+        }
+        fn filter(&self, band: Band<'_>, _: &Interrupt<'_>) -> photocraft_plugins::Result<bool> {
+            band.pixels.fill(0.0);
+            Ok(false)
+        }
+    }
+    let manifest = r#"{"id":"test.acceleration","name":"Test","kind":"filter","accelerator":"test.v1"}"#;
+    let bytes = module(manifest, 1, "(i32.const 0)", "");
+    let plugin = Plugin::load(&bytes, Default::default()).unwrap();
+    let input = surface(PixelFormat::RGBA8, 20, 12);
+    {
+        let _scope = acceleration::scope(Some(Arc::new(Partial)));
+        let result = plugin.apply(&input, Rect::new(0, 0, 20, 12), None, &json!({})).unwrap();
+        assert_eq!(result.read_region(Rect::new(0, 0, 20, 12)), input.read_region(Rect::new(0, 0, 20, 12)));
+        let _nested = acceleration::scope(None);
+        assert!(acceleration::current().is_none());
+    }
+    assert!(acceleration::current().is_none());
+}
+
+#[test]
+fn cancellation_interrupts_wasm_and_discards_partial_results() {
+    use photocraft_raster::Interrupt;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    // Cancellation is observed between fuel slices, even inside a non-returning pc_filter.
+    let bytes = ok_module("(loop $forever (br $forever)) (i32.const 0)");
+    let plugin = Plugin::load(&bytes, Limits { fuel_per_sample: 1_000_000_000, ..Default::default() }).unwrap();
+    let input = surface(PixelFormat::RGBA8, 16, 16);
+    let before = input.read_region(Rect::new(0, 0, 16, 16));
+    let checks = AtomicUsize::new(0);
+    let cancel = || checks.fetch_add(1, Ordering::Relaxed) >= 3;
+    let start = Instant::now();
+    assert!(matches!(plugin.apply_with(&input, Rect::new(0, 0, 16, 16), None, &json!({}), &Interrupt::cancel_only(&cancel)), Err(Error::Cancelled)));
+    assert!(start.elapsed() < Duration::from_secs(3));
+    assert_eq!(input.read_region(Rect::new(0, 0, 16, 16)), before);
+}
+
+#[test]
+fn band_progress_finishes_at_one() {
+    use std::sync::Mutex;
+    let plugin = Plugin::load(INVERT, Limits { band_bytes: 1, ..Default::default() }).unwrap();
+    let input = surface(PixelFormat::RGBA8, 520, 270);
+    let progress = Mutex::new(Vec::new());
+    let report = |p| progress.lock().unwrap().push(p);
+    plugin.apply_with(&input, Rect::new(0, 0, 520, 270), None, &json!({}), &photocraft_raster::Interrupt::new(&|| false, &report)).unwrap();
+    let progress = progress.into_inner().unwrap();
+    assert_eq!(progress.last(), Some(&1.0));
+    assert!(progress.windows(2).all(|w| w[0] <= w[1]));
+}
+
 /// A module implementing the ABI whose pieces can be swapped: `manifest` JSON, `version`,
 /// `filter` body (params `$buf $len $w $h $ch $fmt $pp $pl`, result i32) and extra items.
 fn module(manifest: &str, version: i32, filter: &str, extra: &str) -> Vec<u8> {
@@ -413,4 +502,47 @@ fn a_fifo_in_place_of_a_module_file_does_not_block_loading() {
     let r = rx.recv_timeout(Duration::from_secs(10)).expect("loading a FIFO must not block");
     assert!(matches!(r, Err(Error::Io(_))), "{r:?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn skin_smooth_abi_only_accepts_its_owned_allocations() {
+    let engine = wasmi::Engine::default();
+    let module = wasmi::Module::new(&engine, include_bytes!("fixtures/skin-smooth.wasm")).unwrap();
+    let mut store = wasmi::Store::new(&engine, ());
+    let instance = wasmi::Linker::<()>::new(&engine).instantiate_and_start(&mut store, &module).unwrap();
+    let memory = instance.get_memory(&store, "memory").unwrap();
+    let alloc = instance.get_typed_func::<i32, i32>(&store, "pc_alloc").unwrap();
+    let filter = instance.get_typed_func::<(i32, i32, i32, i32, i32, i32, i32, i32), i32>(&store, "pc_filter").unwrap();
+    assert_eq!(alloc.call(&mut store, -1).unwrap(), 0, "oversized allocations fail before allocating");
+    let params = br#"{"fine":0,"medium":0,"large":0,"detail":0,"unused":"UTF-8: \u706b"}"#;
+    let pixels = [0.670123f32, 0.410033, 0.320091, 0.500007];
+    let bytes: Vec<u8> = pixels.into_iter().flat_map(f32::to_le_bytes).collect();
+    let ptr = alloc.call(&mut store, bytes.len() as i32).unwrap();
+    let pp = alloc.call(&mut store, params.len() as i32).unwrap();
+    assert_ne!(ptr, 0);
+    assert_ne!(pp, 0);
+    assert_eq!(ptr % 4, 0);
+    assert_eq!(pp % 4, 0);
+    assert_eq!(alloc.call(&mut store, 4).unwrap(), 0, "an instance owns at most the two ABI buffers");
+    memory.write(&mut store, ptr as usize, &bytes).unwrap();
+    memory.write(&mut store, pp as usize, params).unwrap();
+    let fmt = 32 | 256 | 3 << 16;
+    for (buf, len, json, json_len) in [
+        (0, 16, pp, params.len() as i32),
+        (ptr + 4, 12, pp, params.len() as i32),
+        (ptr, 20, pp, params.len() as i32),
+        (ptr, 16, ptr, 16),
+        (ptr, 16, pp + 1, 1),
+        (ptr, 16, pp, 65537),
+    ] {
+        assert_eq!(filter.call(&mut store, (buf, len, 1, 1, 4, fmt, json, json_len)).unwrap(), 1);
+    }
+    assert_eq!(filter.call(&mut store, (ptr, 16, 1, 1, 4, fmt, pp, params.len() as i32)).unwrap(), 0);
+    let mut output = [0; 16];
+    memory.read(&store, ptr as usize, &mut output).unwrap();
+    assert_eq!(output.as_slice(), bytes);
+    memory.write(&mut store, pp as usize, &[255; 4]).unwrap();
+    assert_eq!(filter.call(&mut store, (ptr, 16, 1, 1, 4, fmt, pp, 4)).unwrap(), 3, "arbitrary JSON bytes are rejected safely");
+    memory.read(&store, ptr as usize, &mut output).unwrap();
+    assert_eq!(output.as_slice(), bytes);
 }

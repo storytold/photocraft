@@ -2,8 +2,9 @@
 
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
-use photocraft_raster::Surface;
+use photocraft_raster::{Interrupt, Surface};
 use serde_json::{Value, json};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::manifest::Area;
 use crate::runtime::{Deadline, Plugin};
@@ -94,6 +95,14 @@ impl Plugin {
     /// returns the new surface. `canvas` is the document bounds; `selection` (coverage in
     /// channel 0) limits and feathers the result, as for built-in filters.
     pub fn apply(&self, surface: &Surface, canvas: Rect, selection: Option<&Surface>, params: &Value) -> Result<Surface> {
+        self.apply_with(surface, canvas, selection, params, &Interrupt::NONE)
+    }
+
+    /// Cancellable run with band progress. Cancellation discards all partial output.
+    pub fn apply_with(&self, surface: &Surface, canvas: Rect, selection: Option<&Surface>, params: &Value, ctl: &Interrupt<'_>) -> Result<Surface> {
+        if ctl.cancelled() {
+            return Err(Error::Cancelled);
+        }
         let resolved = self.manifest().resolve_params(params)?;
         let area = self.output_area(surface, canvas, selection);
         let mut out = surface.clone();
@@ -131,8 +140,20 @@ impl Plugin {
                 tx += across;
             }
         }
-        let deadline = Deadline::new(self.limits());
-        let ctx = BandCtx { surface, extent, canvas, selection, fmt, ov, params: Value::Object(resolved) };
+        let deadline = Deadline::new(self.limits(), *ctl);
+        let accelerator = crate::acceleration::current().filter(|a| a.algorithm() == self.manifest().accelerator && !self.manifest().accelerator.is_empty());
+        let ctx = BandCtx {
+            surface,
+            extent,
+            canvas,
+            selection,
+            fmt,
+            ov,
+            params: Value::Object(resolved),
+            accelerator: accelerator.as_deref(),
+            ctl: *ctl,
+            accelerator_active: AtomicBool::new(accelerator.is_some()),
+        };
         let run = |b: &Rect| {
             let r = self.run_band(&ctx, *b, &deadline).map(|data| encode_band(surface, *b, &data));
             if let Err(error) = &r {
@@ -140,13 +161,15 @@ impl Plugin {
             }
             r
         };
-        // A few bands at a time: one per worker, and no more instances than the run's memory
-        // budget holds at their cap, so peak memory stays bounded however many cores run (#8603).
-        #[cfg(not(target_arch = "wasm32"))]
-        let group = self.limits().parallel_bands(rayon::current_num_threads());
-        #[cfg(target_arch = "wasm32")]
-        let group = 1;
-        for chunk in bands.chunks(group) {
+        // Limit CPU concurrency to the memory budget; an accelerator processes one band at a time.
+        let mut completed = 0;
+        while completed < bands.len() {
+            #[cfg(not(target_arch = "wasm32"))]
+            let group = if ctx.accelerator_active.load(Ordering::Relaxed) { 1 } else { self.limits().parallel_bands(rayon::current_num_threads()) };
+            #[cfg(target_arch = "wasm32")]
+            let group = 1;
+            let end = (completed + group).min(bands.len());
+            let chunk = &bands[completed..end];
             #[cfg(not(target_arch = "wasm32"))]
             let results: Vec<Result<Surface>> = {
                 use rayon::prelude::*;
@@ -159,12 +182,18 @@ impl Plugin {
                     out.tile_mut(*c).bytes_mut().copy_from_slice(t.bytes());
                 }
             }
+            completed += chunk.len();
+            ctl.progress(completed as f32 / bands.len() as f32);
+        }
+        if ctl.cancelled() {
+            return Err(Error::Cancelled);
         }
         out.prune();
         Ok(out)
     }
 
     fn run_band(&self, c: &BandCtx, band: Rect, deadline: &Deadline) -> Result<Vec<f32>> {
+        deadline.check()?;
         let n = c.fmt.channels();
         let input = band.inflate(c.ov);
         let mut data = read_clamped(c.surface, input, c.extent);
@@ -182,9 +211,22 @@ impl Plugin {
         }
         let pbytes = serde_json::to_vec(&params).map_err(|e| Error::Params(e.to_string()))?;
         let orig_full = data.clone();
-        let run =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.filter_buffer(&mut data, iw, ih, n as u32, format_code(c.fmt), &pbytes, deadline)));
-        run.map_err(|_| Error::Trap("the runtime panicked".into()))??;
+        let accelerated = match c.accelerator.filter(|_| c.accelerator_active.load(Ordering::Relaxed)) {
+            Some(a) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                a.filter(crate::acceleration::Band { pixels: &mut data, size: [iw, ih], channels: n, format: format_code(c.fmt), params: &params }, &c.ctl)
+            }))
+            .unwrap_or(Ok(false))?,
+            None => false,
+        };
+        deadline.check()?;
+        if !accelerated {
+            c.accelerator_active.store(false, Ordering::Relaxed);
+            data.copy_from_slice(&orig_full);
+            let run = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                self.filter_buffer(&mut data, iw, ih, n as u32, format_code(c.fmt), &pbytes, deadline)
+            }));
+            run.map_err(|_| Error::Trap("the runtime panicked".into()))??;
+        }
         // Keep the band (drop the overlap margins), sanitise and blend by the selection.
         let (bw, bh) = (band.width() as usize, band.height() as usize);
         let ov = c.ov as usize;
@@ -211,8 +253,8 @@ impl Plugin {
                         v = v.clamp(0.0, 1.0);
                     }
                     if let Some(d) = out.get_mut(di + ch) {
-                        // As a built-in edit mixes through the selection (#9483).
-                        *d = o * (1.0 - k) + v * k;
+                        // Preserve unchanged floats exactly; otherwise mix like built-in edits (#9483).
+                        *d = if k == 0.0 || v == o { o } else { o * (1.0 - k) + v * k };
                     }
                 }
             }
@@ -244,4 +286,7 @@ struct BandCtx<'a> {
     fmt: PixelFormat,
     ov: i32,
     params: Value,
+    accelerator: Option<&'a dyn crate::acceleration::Accelerator>,
+    ctl: Interrupt<'a>,
+    accelerator_active: AtomicBool,
 }

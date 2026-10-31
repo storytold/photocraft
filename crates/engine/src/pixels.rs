@@ -279,7 +279,8 @@ pub(crate) fn mix_through_selection(
         for ((a, o), k) in edited_row.iter().zip(orig_row).zip(&coverage) {
             // `o·(1−k) + a·k` keeps the edit exact at full coverage, even over huge 32-bit
             // values whose difference from it would round the edit away (#9483).
-            let mixed: [f32; 4] = std::array::from_fn(|c| o[c] * (1.0 - k) + a[c] * k);
+            // Preserve untouched samples exactly, including hidden colour in transparent pixels.
+            let mixed: [f32; 4] = std::array::from_fn(|c| if *k == 0.0 || a[c] == o[c] { o[c] } else { o[c] * (1.0 - k) + a[c] * k });
             let mut enc = [0.0f32; 8];
             let m = photocraft_raster::from_rgba_into(fmt, mixed, &mut enc);
             out.extend_from_slice(&enc[..m]);

@@ -119,6 +119,8 @@ pub use dialogs::brush_preset_dialog;
 pub use dialogs::caf_ui;
 use dialogs::camera_raw_detail_ui;
 use dialogs::camera_raw_gpu;
+#[cfg(not(target_arch = "wasm32"))]
+mod skin_smooth_gpu;
 use dialogs::camera_raw_preview_ui;
 use dialogs::camera_raw_scope_ui;
 pub use dialogs::camera_raw_ui;
@@ -491,6 +493,7 @@ pub struct PhotocraftApp {
     /// Selection outline cache: (doc, revision, segments).
     /// Live filter preview (proxy document with the filter applied).
     pub(crate) filter_preview: Option<filter_dialog::FilterPreview>,
+    pub(crate) skin_smooth_mask: Option<dialogs::skin_smooth_ui::MaskPreview>,
     pub(crate) smart_filter_targets: smart_filter_dialog::Targets,
     #[cfg(not(target_arch = "wasm32"))]
     filter_preview_worker: crate::dialogs::filter_preview_worker::Worker,

@@ -292,7 +292,9 @@ fn mixing_through_a_selection_matches_sampling_it_per_pixel() {
             let mut expected = Vec::new();
             for (i, (a, o)) in edited.iter().zip(&orig).enumerate() {
                 let k = sel.sample_channel(r.x0 + (i % w) as i32, r.y0 + (i / w) as i32, 0);
-                let mixed: [f32; 4] = std::array::from_fn(|c| o[c] * (1.0 - k) + a[c] * k);
+                let mut mixed: [f32; 4] = std::array::from_fn(|c| o[c] * (1.0 - k) + a[c] * k);
+                // Blue was not edited, so selection coverage must preserve its original value.
+                mixed[2] = o[2];
                 let mut enc = [0.0f32; 8];
                 let m = photocraft_raster::from_rgba_into(&fmt, mixed, &mut enc);
                 expected.extend_from_slice(&enc[..m]);
@@ -463,4 +465,14 @@ fn full_coverage_keeps_the_edit_over_huge_hdr_values() {
         let out = mix_through_selection(&fmt, Rect::new(0, 0, 1, 1), &[[o, o, o, 1.0]], &[[a, a, a, 1.0]], None);
         assert_eq!(out[..3], [a, a, a], "{a} over {o}");
     }
+}
+
+#[test]
+fn feathered_selection_keeps_unchanged_float_samples_exact() {
+    let area = Rect::new(0, 0, 2, 1);
+    let original = [[0.7, 0.48, 1.0 / 3.0, 0.0], [0.7, 0.48, 0.36, 0.5]];
+    let mut selection = Surface::new(PixelFormat::GRAY8);
+    selection.fill_rect(area, &[0.4]);
+    let output = mix_through_selection(&PixelFormat::RGBA32F, area, &original, &original, Some(&selection));
+    assert_eq!(output, original.into_iter().flatten().collect::<Vec<_>>());
 }

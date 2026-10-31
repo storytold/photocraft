@@ -1609,3 +1609,49 @@ fn replace_color_localized_color_clusters() {
     assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
     assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
 }
+#[test]
+fn plugin_viewport_preserves_selection_alpha_and_final_full_run() {
+    use photocraft_color::{PixelFormat, SampleType};
+    use photocraft_geom::Rect;
+    use photocraft_raster::Surface;
+    let plugin = photocraft_plugins::Plugin::load(include_bytes!("../../../../plugins/tests/fixtures/invert.wasm"), Default::default()).unwrap();
+    let id = plugin.id().to_string();
+    photocraft_plugins::registry::install(plugin);
+    for depth in [8, 16, 32] {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width":800,"height":540,"depth":depth,"background":"transparent"})).unwrap();
+        s.edit("fixture", |doc, active| {
+            let layer = active.ok_or(photocraft_engine::EngineError::NoDocument)?;
+            let surface = doc.layer_mut(layer).unwrap().surface_mut().unwrap();
+            for y in 0..540 {
+                for x in 0..800 {
+                    surface.write_pixel(x, y, &[0.2 + (x % 17) as f32 * 0.02, 0.6, 0.4, (x % 7) as f32 / 6.0]);
+                }
+            }
+            let mut selection = Surface::new(PixelFormat { sample: SampleType::F32, ..PixelFormat::GRAY8 });
+            for y in 20..520 {
+                for x in 20..780 {
+                    selection.write_pixel(x, y, &[0.35]);
+                }
+            }
+            doc.selection = Some(selection);
+            Ok(())
+        })
+        .unwrap();
+        let st = s.active().unwrap();
+        let (doc, active) = (st.doc.clone(), st.active_layer);
+        let full = preview_document(&doc, active, "plugin.run", &json!({"id":id}), 1).unwrap();
+        let region = Rect::new(237, 199, 623, 401);
+        let local = preview_document(&doc, active, "plugin.run", &json!({"id":id,"__previewRegion":[237,199,623,401]}), 1).unwrap();
+        let surface = |d: &photocraft_doc::Document| d.layer(active.unwrap()).unwrap().surface().unwrap().clone();
+        let (original, expected, result) = (surface(&doc), surface(&full), surface(&local));
+        assert_eq!(local.selection.as_ref().unwrap().read_region(doc.bounds()), doc.selection.as_ref().unwrap().read_region(doc.bounds()));
+        for (x, y) in [(237, 199), (400, 300), (622, 400), (236, 199), (623, 400), (700, 450)] {
+            assert_eq!(result.pixel(x, y), if region.contains(x, y) { expected.pixel(x, y) } else { original.pixel(x, y) }, "{depth} at {x},{y}");
+            assert_eq!(result.pixel(x, y).last(), original.pixel(x, y).last());
+        }
+        // The dialog's final command has no preview-only region: pixels outside it also change.
+        s.execute("plugin.run", json!({"id":id})).unwrap();
+        assert_eq!(surface(&s.active().unwrap().doc).read_region(doc.bounds()), expected.read_region(doc.bounds()));
+    }
+}

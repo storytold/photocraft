@@ -60,6 +60,18 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     }
     let st = app.session.documents().get(idx)?;
     let k = filter_preview_factor(app, &st.doc, &cmd, &params);
+    // Only the preview copy gets this region. OK still dispatches the dialog's full parameters.
+    if cmd == photocraft_engine::plugin_cmds::RUN
+        && let Some(visible) = ctx.data(|data| data.get_temp::<photocraft_geom::Rect>(egui::Id::unique(("plugin-preview-region", st.doc.id))))
+        && let Some(p) = params.as_object_mut()
+    {
+        let r = visible.intersect(&st.doc.bounds());
+        // Snap outward to preview tiles so small pans reuse a completed computation.
+        let q = (k as i32).saturating_mul(photocraft_geom::TILE_SIZE).max(1);
+        let up = |x: i32| x.div_euclid(q).saturating_add(i32::from(x.rem_euclid(q) != 0)).saturating_mul(q);
+        let r = photocraft_geom::Rect::new(r.x0.div_euclid(q) * q, r.y0.div_euclid(q) * q, up(r.x1), up(r.y1)).intersect(&st.doc.bounds());
+        p.insert("__previewRegion".into(), serde_json::json!([r.x0, r.y0, r.x1, r.y1]));
+    }
     let request = crate::filter_dialog::FilterPreviewKey {
         doc: st.doc.id,
         revision: st.revision,
@@ -108,7 +120,9 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
             let color = app.session.color.settings.clone();
             let task = request.clone();
+            let accelerator = app.session.effective_plugin_accelerator();
             if let Err(error) = app.filter_preview_worker.start(request.clone(), ctx.clone(), move |cancel| {
+                let _acceleration = photocraft_plugins::acceleration::scope(accelerator);
                 let t0 = crate::gpu_canvas::now_ms();
                 let result = crate::filter_dialog::preview_document_for_target(
                     &doc,
@@ -150,6 +164,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
         let doc = app.session.documents().get(idx)?.doc.clone();
         let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
         let t0 = crate::gpu_canvas::now_ms();
+        let _acceleration = photocraft_plugins::acceleration::scope(app.session.effective_plugin_accelerator());
         let computed = crate::filter_dialog::preview_document_for_target(
             &doc,
             request.active,

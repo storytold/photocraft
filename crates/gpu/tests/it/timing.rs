@@ -193,22 +193,13 @@ fn a_refresh_that_submits_several_times_is_one_measurement() {
     let t = timing.expect("a batched refresh is measured like any other");
     eprintln!("batched: {} command buffers, gpu {:.1} ms, submit {submit_ms:.1} ms, waited wall {wall_ms:.1} ms", t.spans, t.ms);
     assert_eq!(t.px, area(full));
-    if t.spans < 2 {
-        eprintln!("SKIP the sum: this refresh still fit one command buffer");
-        return;
-    }
+    assert!(t.spans >= 2, "the constrained residency budget must force multiple measured command buffers");
+    assert!(t.ms > 0.0, "the measured command buffers performed GPU work");
     assert!(t.ms <= wall_ms * 1.25, "summed gpu time {:.1} ms exceeds the whole waited-for refresh {wall_ms:.1} ms", t.ms);
-    // What this bound excludes is summing only the last command buffer. A correct sum measures
-    // ~85 % of the waited-for GPU time here; the flush thresholds split on accumulated work, so
-    // no single buffer of the several carries much over half of it, and timing only the last
-    // would land near 40 %. 0.6 sits between the two with room on both sides for a machine
-    // whose split is less even than this one's.
-    assert!(
-        t.ms >= (wall_ms - submit_ms) * 0.6,
-        "summed gpu time {:.1} ms is far below the {:.1} ms the refresh waited: is only the last command buffer timed?",
-        t.ms,
-        wall_ms - submit_ms
-    );
+    // Wall time also includes untimed queue uploads, mapping and driver/scheduler latency;
+    // it cannot bound execution time from below on a fast discrete GPU. The timer's exact
+    // multi-span sum (including the first span, excluding the gaps) is tested with known
+    // timestamp pairs in timing::tests::sums_every_span_without_counting_the_gap_between_submissions.
 }
 
 #[test]

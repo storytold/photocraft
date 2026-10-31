@@ -196,6 +196,7 @@ impl Session {
     /// [`Self::edit`], recording a history state only when `record` is set. An unrecorded change
     /// still marks the document modified and leaves the redo states alone.
     pub(crate) fn edit_with<R>(&mut self, label: &str, record: bool, f: impl FnOnce(&mut Document, &mut Option<LayerId>) -> Result<R>) -> Result<R> {
+        let _acceleration = photocraft_plugins::acceleration::scope(self.effective_plugin_accelerator());
         // Every mutation path (linked-file refresh, transform, place) re-renders smart objects
         // through this entry; the requesting session's authority must reach those renders.
         let _authorization = crate::jobs::render_authorization_scope(self.authorize);

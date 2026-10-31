@@ -30,6 +30,18 @@ Plug-ins are installed **per process**, not per document. A smart filter recorde
 installed; if it is missing, the filter is skipped (the cached pixels stay as they were), like other
 filters PhotoCraft does not implement.
 
+In this Smooth fork, native `plugin.run` uses background jobs with progress and cancellation
+(`Session::start`, or control requests with `wait: false`). Cancellation reaches WASM between fuel
+slices and discards partial output. The dialog keeps Enter for field edits; click OK to apply.
+On-canvas plug-in previews compute only the visible region and its overlap; final runs still use
+the complete selection. Smart-filter stack previews retain their existing full-stack path.
+
+Named presets use `plugin.preset.list {id}`, `plugin.preset.save {id,name,params}`,
+`plugin.preset.load {id,name}` and `plugin.preset.remove {id,name}`. They are saved under
+`Preferences.dialogs["plugin.presets.<id>"]`, with at most 64 names per plug-in and 64 characters
+per name. Loading revalidates parameters against the installed manifest and edits no pixels.
+The plug-in dialog exposes load, save/update and delete controls.
+
 ## The sandbox
 
 The host is [`wasmi`](https://github.com/wasmi-labs/wasmi), a pure-Rust WebAssembly interpreter
@@ -113,6 +125,15 @@ exports. All integers are `i32` unless noted; pointers are offsets into the modu
   preview shows the same lengths OK applies; when a `px` param with a positive `min` would drop below
   it, the preview runs less reduced instead. Unitless params reach the preview unchanged, whatever
   their name. OK, actions and smart filters always get the values as given.
+- `previewDefault` (optional boolean, default `true`): the initial Preview checkbox state.
+  Set `false` to avoid starting a slow filter as soon as its dialog opens.
+- Parameter type `"colors"` accepts up to 16 normalized RGB triples, defaults to `[]`, and
+  appears as `json` in command notation. Values outside 0–1, malformed triples and oversized
+  lists fail validation before a filter runs.
+- `presetValues` (optional object): for a `preset` choice with a `manual` option, maps other
+  choice names to declared parameter values, e.g. `{"soft":{"fine":70,"detail":10}}`.
+  Choosing one updates the fields; editing a field switches to `manual`. Values cannot include
+  routing fields or `preset` itself. Existing manifests without this metadata work as before.
 - `overlap` (0–256): pixels of context the filter needs around each output pixel (a blur radius).
   The host pads each band by `overlap` on every side, repeating the edge pixels of the canvas (or of
   off-canvas layer content), and keeps only the inner rectangle of the result.
@@ -185,3 +206,25 @@ original for the selection blend, and the instance's memory), i.e. ~12 MiB per t
 - Panel / UI plug-ins, plug-ins that read other layers or documents, host callbacks (progress,
   cancel), plug-in-provided file formats.
 - Filter › Last Filter does not repeat plug-in runs yet.
+
+## Native accelerators in the Smooth fork
+
+`accelerator` is an optional versioned algorithm contract, currently `"skinsmooth.v2"`.
+Version 2 adds `positiveColors` / `negativeColors` colour ranges; a v1 plug-in falls back to WASM.
+An unknown contract or unavailable device keeps WASM. This does not expose GPU imports or accept
+shader source from WASM: only a trusted host implementation can run. `Session.plugin_accelerator`
+is injected by the shell, scoped per operation and explicitly carried onto workers and preview
+sessions. Headless sessions default to WASM; the CPU rendering preference overrides the accelerator.
+
+The Smooth implementation uses bounded compute bands, shared pipelines/storage and an affine prefix
+scan of the original edge-aware recurrence. It preserves straight alpha, masks and host encoding,
+then returns pixels through the existing transactional edit/undo path. A declined or failed GPU
+band restarts from the original input with WASM; subsequent bands regain CPU parallelism. Device
+failure disables that GPU backend. GPU cancellation is cooperative between bounded bands.
+
+The executable remains native Rust/wgpu. Current GPU support is desktop-only; the browser build
+keeps WASM. Numerical parity tests cover RGB/RGBA at 8/16/32-bit, alpha, selections and
+band boundaries; exact tolerances are asserted in the tests (integer output may differ by one
+quantization step). Software adapters stay on WASM. The companion 0.6.0 test fixture is described
+in [the fixture metadata](../crates/plugins/tests/fixtures/skin-smooth.md). Sampling, Mask and preview
+behavior are documented in [the integration notes](skin-smooth.md).
