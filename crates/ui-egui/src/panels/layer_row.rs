@@ -184,7 +184,10 @@ pub(super) fn layer_row(
     // `ms`: the thumbnails' size (masks too); `ts`: the layer thumbnail's, none on a board.
     let ms = if base == 0.0 { 0.0 } else { crate::mask_thumbs_ui::thumb_size(l, base, rect.width() - others) };
     let ts = if artboard { 0.0 } else { ms };
-    let layer_thumb = if ts == 0.0 { 0.0 } else { ts + 6.0 };
+    // A board has no layer thumbnail, but its mask chain still needs the gap one leaves: the chain
+    // starts a little left of `x`, and without the gap it reached into the disclosure triangle's
+    // hit area, so a click there toggled the mask link instead of opening the board.
+    let layer_thumb = if ts == 0.0 { 6.0 } else { ts + 6.0 };
     let fixed = others + if ms == 0.0 { 0.0 } else { layer_thumb + crate::mask_thumbs_ui::width(l, ms) };
     // A layer inside a group (or an artboard) indents one step more than its depth, past the
     // triangle's column, so it sits right of its parent: with only its depth its thumbnail lined
@@ -200,6 +203,8 @@ pub(super) fn layer_row(
     if ts > 0.0 {
         draw_layer_thumb(app, ctx, ui, doc, l, thumb, row.primary);
         x += ts + 6.0;
+    } else if ms > 0.0 {
+        x += 6.0;
     }
     // With thumbnails disabled the labels and disclosure controls remain interactive.
     let masks = if ms > 0.0 { crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ms, actions) } else { Default::default() };
@@ -446,7 +451,9 @@ fn select_row_on_click(app: &mut PhotocraftApp, ui: &egui::Ui, rc: &RowCtx<'_>, 
             app.ui.properties_layer = None;
         }
         actions.push(("ui.maskTarget".into(), json!(true)));
-    } else if on_thumb || !row.primary {
+    } else if on_thumb || !row.primary || l.artboard().is_some() {
+        // A board has no thumbnail to click back to: a click on its row, off its masks, targets
+        // the board again.
         actions.push(("ui.maskTarget".into(), json!(false)));
     }
     // ⌥-click the layer thumbnail: fit the layer on screen, as Photoshop does.

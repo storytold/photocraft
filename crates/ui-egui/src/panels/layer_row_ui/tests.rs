@@ -793,3 +793,31 @@ fn a_masked_artboard_row_keeps_its_mask_thumbnail() {
     assert!(b.row.contains_rect(mask), "the mask thumbnail sits in the board's row");
     assert_eq!(b.row.height(), l.row.height(), "a layer's height, so the mask thumbnail fits");
 }
+
+/// A masked board's row: the mask chain stays clear of the disclosure triangle (a click there opens
+/// or closes the board, it doesn't unlink the mask), and once the mask is targeted, a click on the
+/// row off the mask targets the board again, since a board has no thumbnail to click back to.
+#[test]
+fn a_masked_artboard_row_keeps_the_triangle_clear_and_retargets_the_board() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+    let board = s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": board})).unwrap();
+    s.execute("layer.select", json!({"layer": board})).unwrap();
+    let mut h = harness(s, 1.0, "pro", 320.0);
+    // The triangle's widget is its whole hit area.
+    let hit = h.get_by_label("Collapse group Board").rect();
+    let (thumbs, chains) = crate::mask_thumbs_ui::recorded(&h.ctx, board).expect("mask thumbnail drawn");
+    let chain = chains.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).expect("a mask chain").1;
+    assert!(chain.left() >= hit.right(), "the chain ({chain:?}) is clear of the triangle's hit area ({hit:?})");
+
+    // Target the mask, then click the board's name: the board is targeted again.
+    let mask = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1;
+    click(&mut h, mask.center());
+    assert!(h.state().ui.mask_target, "clicking the mask thumbnail targets the mask");
+    let name = recorded(&h.ctx).iter().find(|r| r.layer == board).and_then(|r| r.name).expect("the board's name");
+    click(&mut h, name.center());
+    assert!(!h.state().ui.mask_target, "a click on the row off the mask targets the board");
+}
