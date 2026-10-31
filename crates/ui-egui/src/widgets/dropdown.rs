@@ -64,53 +64,56 @@ fn dropdown_with<T: PartialEq + Clone>(
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
     let texts: Vec<String> = options.iter().map(|(_, l)| shown(l)).collect();
     let response =
-        craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).close_behavior(close).show_ui(ui, |ui| {
-            fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
-            // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
-            let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
-            let shown = options.iter().position(|(v, _)| v == current);
-            if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
-                *current = v.clone();
-                chosen.push(v.clone());
-                reveal = true;
-                keyed = true;
-            }
-            // Over the open list the wheel steps the value too, instead of scrolling the list.
-            over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
-            if over_list {
-                let stepped = wheel_steps(ui, wheel_id, true, current, options);
-                wheeled = !stepped.is_empty();
-                reveal |= wheeled;
-                chosen.extend(stepped);
-            }
-            // The row nearest the pointer, by its distance to each row.
-            let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
-            let mut nearest: Option<(f32, &T)> = None;
-            for ((v, _), text) in options.iter().zip(texts.iter()) {
-                let item = ui.selectable_label(v == current, text.as_str());
-                if reveal && v == current {
-                    item.scroll_to_me(None);
-                }
-                if item.hovered() {
-                    hovered = Some(v.clone());
-                }
-                if let Some(p) = pointer {
-                    let d = (item.rect.top() - p.y).max(p.y - item.rect.bottom()).max(0.0);
-                    if nearest.is_none_or(|(n, _)| d < n) {
-                        nearest = Some((d, v));
-                    }
-                }
-                if press.chosen(ui, &item) {
+        craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(MENU_FULL_HEIGHT).icon(chevron_icon).close_behavior(close).show_ui(
+            ui,
+            |ui| {
+                fit_widest_option(ui, texts.iter().map(|l| l.as_str()));
+                // A typed letter jumps to the next option starting with it, ↩ closes the list (#1481).
+                let labels: Vec<&str> = texts.iter().map(|l| l.as_str()).collect();
+                let shown = options.iter().position(|(v, _)| v == current);
+                if let Some((v, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
                     *current = v.clone();
                     chosen.push(v.clone());
+                    reveal = true;
+                    keyed = true;
                 }
-            }
-            // Between two rows (item spacing) the pointer hovers neither; it is still over the list,
-            // so keep previewing the nearest row instead of flashing the current value back (#2553).
-            if hovered.is_none() {
-                hovered = nearest.map(|(_, v)| v.clone());
-            }
-        });
+                // Over the open list the wheel steps the value too, instead of scrolling the list.
+                over_list = wheel && ui.rect_contains_pointer(ui.clip_rect());
+                if over_list {
+                    let stepped = wheel_steps(ui, wheel_id, true, current, options);
+                    wheeled = !stepped.is_empty();
+                    reveal |= wheeled;
+                    chosen.extend(stepped);
+                }
+                // The row nearest the pointer, by its distance to each row.
+                let pointer = ui.ctx().pointer_hover_pos().filter(|_| ui.rect_contains_pointer(ui.clip_rect()));
+                let mut nearest: Option<(f32, &T)> = None;
+                for ((v, _), text) in options.iter().zip(texts.iter()) {
+                    let item = ui.selectable_label(v == current, text.as_str());
+                    if reveal && v == current {
+                        item.scroll_to_me(None);
+                    }
+                    if item.hovered() {
+                        hovered = Some(v.clone());
+                    }
+                    if let Some(p) = pointer {
+                        let d = (item.rect.top() - p.y).max(p.y - item.rect.bottom()).max(0.0);
+                        if nearest.is_none_or(|(n, _)| d < n) {
+                            nearest = Some((d, v));
+                        }
+                    }
+                    if press.chosen(ui, &item) {
+                        *current = v.clone();
+                        chosen.push(v.clone());
+                    }
+                }
+                // Between two rows (item spacing) the pointer hovers neither; it is still over the list,
+                // so keep previewing the nearest row instead of flashing the current value back (#2553).
+                if hovered.is_none() {
+                    hovered = nearest.map(|(_, v)| v.clone());
+                }
+            },
+        );
     // A scrubby caption drawn just before the dropdown names it; otherwise its own name does.
     let response = match take_label_scrub_name(ui, response.response.rect) {
         Some(label) => response.response.labelled_by(label),
@@ -232,6 +235,11 @@ const MENU_EDGE: f32 = 4.0;
 
 const MENU_MIN_HEIGHT: f32 = 120.0;
 
+/// A dropdown's list is as tall as its options, up to the room on its side of the box, which
+/// `craft_ui`'s menu caps it to: a fixed 420 pt ended the Layers panel's blend modes at Overlay,
+/// with the rest behind a thin scroll bar (#7261).
+const MENU_FULL_HEIGHT: f32 = f32::INFINITY;
+
 /// The colour picker popup of a colour swatch: a click on `swatch` toggles it, a click outside
 /// closes it. While open, its left edge stays where it first showed (at the swatch, or further
 /// left when the window edge needs it), below the swatch or above it as room allows. The picker's
@@ -268,22 +276,25 @@ pub fn dropdown_with_tooltips<T: PartialEq + Clone>(ui: &mut Ui, id: &str, name:
     let mut changed = false;
     let (press, close) = crate::press_menu::PressCombo::before(ui, id);
     let response =
-        craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(420.0).icon(chevron_icon).close_behavior(close).show_ui(ui, |ui| {
-            fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)));
-            let labels: Vec<&str> = options.iter().map(|(_, l, _)| tl!(l)).collect();
-            let shown = options.iter().position(|(v, _, _)| v == current);
-            if let Some((v, _, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
-                *current = v.clone();
-                changed = true;
-            }
-            for (v, l, tip) in options {
-                let item = ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip));
-                if press.chosen(ui, &item) {
+        craft_ui::ComboBox::from_id_salt(id).selected_text(label).width(width).height(MENU_FULL_HEIGHT).icon(chevron_icon).close_behavior(close).show_ui(
+            ui,
+            |ui| {
+                fit_widest_option(ui, options.iter().map(|(_, l, _)| tl!(l)));
+                let labels: Vec<&str> = options.iter().map(|(_, l, _)| tl!(l)).collect();
+                let shown = options.iter().position(|(v, _, _)| v == current);
+                if let Some((v, _, _)) = type_ahead::keys(ui, ui.make_persistent_id(id), shown, &labels).and_then(|i| options.get(i)) {
                     *current = v.clone();
                     changed = true;
                 }
-            }
-        });
+                for (v, l, tip) in options {
+                    let item = ui.selectable_label(v == current, tl!(l)).on_hover_text(tl!(tip));
+                    if press.chosen(ui, &item) {
+                        *current = v.clone();
+                        changed = true;
+                    }
+                }
+            },
+        );
     let response = match take_label_scrub_name(ui, response.response.rect) {
         Some(label) => response.response.labelled_by(label),
         None => response.response.accessible_name(name),
