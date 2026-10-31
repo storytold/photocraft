@@ -361,6 +361,7 @@ fn a_lost_window_device_closes_only_once_unsaved_work_is_saved() {
     assert_eq!(h.state().session.documents().len(), 1, "the document stays until the app closes");
 }
 
+/// Uploaded tiles retain their own placement when painted in the same view.
 #[test]
 fn tiled_canvas_keeps_tiles_in_place() {
     use photocraft_ui_egui::gpu_canvas::ViewParams;

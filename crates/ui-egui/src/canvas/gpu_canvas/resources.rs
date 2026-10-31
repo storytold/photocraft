@@ -231,13 +231,16 @@ fn pipeline(
 }
 
 impl Resources {
+    /// Create the shared canvas pipelines, layouts and display resources.
     pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue, target: wgpu::TextureFormat, high: bool) -> Self {
         let module =
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_canvas"), source: wgpu::ShaderSource::Wgsl(CANVAS_WGSL.into()) });
         let vis = wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT;
+        // Dynamic offset zero avoids WARP/DX12 aliasing copied uniform descriptors
+        // between views (https://github.com/gfx-rs/wgpu/issues/1002).
         let view_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_canvas_view"),
-            entries: &[uniform_entry(0, VIEW_UNIFORM_SIZE, vis, false), sampler_entry(1)],
+            entries: &[uniform_entry(0, VIEW_UNIFORM_SIZE, vis, true), sampler_entry(1)],
         });
         // Avoid reusing the last tile's placement on software DX12.
         let tile_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -329,7 +332,7 @@ impl Resources {
         };
         let encode_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_encode"),
-            entries: &[unfilterable, uniform_entry(1, 16, wgpu::ShaderStages::FRAGMENT, false)],
+            entries: &[unfilterable, uniform_entry(1, 16, wgpu::ShaderStages::FRAGMENT, true)],
         });
         let encode_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pc_encode"),
