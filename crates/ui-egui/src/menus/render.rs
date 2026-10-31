@@ -10,6 +10,18 @@ pub(super) fn render_level(ui: &mut egui::Ui, items: &[&MenuItem], depth: usize,
 /// re-exported here so `menus::popup_body` call sites keep working.
 pub(crate) use crate::direction::popup_body;
 
+/// A right-click context menu whose body goes through [`popup_body`], so it mirrors in a
+/// right-to-left UI like every other popup; left-to-right it is the stock call.
+pub fn context_menu<R>(resp: &egui::Response, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> Option<egui::InnerResponse<R>> {
+    egui::Popup::context_menu(resp).show(|ui| popup_body(ui, add_contents))
+}
+
+/// A menu button whose submenu body goes through [`popup_body`], so it mirrors in a
+/// right-to-left UI like every other popup; left-to-right it is the stock call.
+pub fn menu_button<R>(ui: &mut egui::Ui, label: impl Into<egui::WidgetText>, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<Option<R>> {
+    ui.menu_button(label, |ui| popup_body(ui, add_contents))
+}
+
 /// One menu level, with `pre` drawing the level's content (its rows, or the Help search above
 /// them). Menu popups can be taller than the window: each level stays on screen and scrolls
 /// (wheel, scroll arrows, keyboard), like a native menu on a small display. The level's body
@@ -475,5 +487,63 @@ mod rtl_tests {
         assert!(undo.left() - ltr_popup.left() < slack, "ltr: the label hugs the popup's left edge: {undo:?} in {ltr_popup:?}");
         assert!(dis.left() - ltr_popup.left() < slack, "ltr: the disabled row's label hugs the left edge too: {dis:?} in {ltr_popup:?}");
         assert!(ltr_popup.right() - sc.right() < slack, "ltr: the shortcut sits at the popup's right edge: {sc:?} in {ltr_popup:?}");
+    }
+
+    /// The `context_menu`/`menu_button` wrappers open their popup and return the body's value in
+    /// both directions: left-to-right they are the stock calls, and the right-to-left body scope
+    /// comes from `popup_body` inside them, not from any changed open/return behavior.
+    #[test]
+    fn context_menu_and_menu_button_wrappers_return_inner_in_both_directions() {
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let _scope = crate::direction::direction_scope(dir);
+            let at = egui::pos2(20.0, 10.0);
+            let raw = |frame: usize, button: egui::PointerButton| {
+                let mut raw = egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0))),
+                    ..Default::default()
+                };
+                match frame {
+                    0 => raw.events.push(egui::Event::PointerMoved(at)),
+                    1 => raw.events.push(egui::Event::PointerButton { pos: at, button, pressed: true, modifiers: egui::Modifiers::NONE }),
+                    2 => raw.events.push(egui::Event::PointerButton { pos: at, button, pressed: false, modifiers: egui::Modifiers::NONE }),
+                    _ => {}
+                }
+                raw
+            };
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+            let mut menu_opened = false;
+            for frame in 0..4 {
+                let mut out = ctx.run_ui(raw(frame, egui::PointerButton::Secondary), |ui| {
+                    let resp = ui.button("Target");
+                    if context_menu(&resp, |ui| {
+                        let _ = ui.button("Item");
+                    })
+                    .is_some()
+                    {
+                        menu_opened = true;
+                    }
+                });
+                out.textures_delta.clear();
+            }
+            assert!(menu_opened, "{dir:?}: context_menu returned Some after the secondary click");
+
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+            let mut button_inner = None;
+            for frame in 0..4 {
+                let mut out = ctx.run_ui(raw(frame, egui::PointerButton::Primary), |ui| {
+                    let ir = menu_button(ui, "Menu", |ui| {
+                        let _ = ui.button("Item");
+                        7
+                    });
+                    if ir.inner.is_some() {
+                        button_inner = ir.inner;
+                    }
+                });
+                out.textures_delta.clear();
+            }
+            assert_eq!(button_inner, Some(7), "{dir:?}: menu_button returned the body's value once opened");
+        }
     }
 }
