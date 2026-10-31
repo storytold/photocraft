@@ -89,7 +89,8 @@ pub(crate) struct ExportArgs {
     pub(crate) pcraft_full_composite: bool,
     /// A layered PSD/PSB stores Photoshop's white placeholder instead of the merged image
     /// (Maximize Compatibility off): a smaller file and a faster save, but readers that show only
-    /// the merged image see white
+    /// the merged image see white. Bitmap, Indexed Color and Duotone documents still write the
+    /// real image
     #[arg(long)]
     pub(crate) no_maximize_compatibility: bool,
 }
