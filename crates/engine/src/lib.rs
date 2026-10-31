@@ -13,6 +13,7 @@ pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
 mod clip_group;
+pub mod color_channels;
 mod crop_fill;
 pub mod display_color;
 pub mod doc_path;
@@ -213,7 +214,7 @@ pub struct Session {
     /// Quick Mask Options (colour, opacity, colour indicates) used when entering Quick Mask.
     pub quick_mask_options: channel_cmds::QuickMaskOptions,
     /// Colour channel the running command may change (a single colour channel is targeted).
-    color_restrict: Option<usize>,
+    color_restrict: Option<color_channels::Restriction>,
     /// Smart object whose filter mask the running command edits (`"target":"filterMask"`): each
     /// edit re-renders it, in the same history step.
     filter_mask_layer: Option<LayerId>,

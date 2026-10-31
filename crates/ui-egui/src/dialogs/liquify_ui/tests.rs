@@ -45,6 +45,50 @@ fn app_with_layer() -> PhotocraftApp {
 }
 
 #[test]
+fn native_component_liquify_preserves_proxy_detail_and_captured_commit_targets() {
+    for mode in ["rgb", "cmyk", "lab"] {
+        for depth in [8, 16, 32] {
+            for alpha in [true, false] {
+                let fixture = crate::distort_ui::component_tests::app(mode, depth);
+                let mut app = if alpha { fixture } else { crate::distort_ui::component_tests::without_alpha(fixture) };
+                open(&mut app, &egui::Context::default()).unwrap();
+                let d = app.distort.liquify.as_mut().unwrap();
+                let layer = d.layer;
+                let before = d.source.clone();
+                let bounds = d.canvas;
+                let mut field = LiquifyField::new(bounds, 8.0);
+                field.d.fill([2.0, 0.0]);
+                let mut out = vec![[0; 4]; 64 * 48];
+                assert!(render_components(&before, bounds, &field, 1.0, &d.target, bounds, bounds, &mut out));
+                for y in 0..48 {
+                    for x in 0..64 {
+                        let mut native = before.pixel(x, y);
+                        for k in [0, 2] {
+                            native[k] = before.sample_channel((x + 2).min(63), y, k);
+                        }
+                        let rgba = photocraft_raster::to_rgba(&before.format(), &native);
+                        let expected = [rgba[0] * rgba[3], rgba[1] * rgba[3], rgba[2] * rgba[3], rgba[3]].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+                        assert!(out[(y * 64 + x) as usize].iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "{mode}@{depth}");
+                    }
+                }
+                d.strokes
+                    .push(LiquifyStroke { points: vec![vec![24.0, 24.0, 1.0], vec![34.0, 24.0, 1.0]], ..LiquifyStroke::new(LiquifyTool::ForwardWarp, 30.0) });
+                d.rebuild();
+                d.render_dirty();
+                let mut detail = vec![[0; 4]; 64 * 48];
+                assert!(render_components(&before, bounds, &d.field, 1.0, &d.target, bounds, bounds, &mut detail));
+                assert_eq!(d.out, detail, "proxy at 100% equals the detail path");
+                app.run("channel.target", json!({"channel":{"color":1}})).unwrap();
+                commit(&mut app).unwrap();
+                let after = app.session.active().unwrap().doc.layer(layer).unwrap().surface().unwrap();
+                crate::distort_ui::component_tests::protected(&before, after, bounds);
+                assert_ne!(after.read_region(bounds), before.read_region(bounds));
+            }
+        }
+    }
+}
+
+#[test]
 fn zoomed_liquify_preview_uses_only_the_visible_full_resolution_crop() {
     let ctx = egui::Context::default();
     let mut app = app_with_layer();

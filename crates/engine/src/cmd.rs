@@ -321,26 +321,50 @@ fn build() -> Vec<CommandSpec> {
             has_pixel_or_channel,
             crate::fill_cmds::fill
         ),
-        cmd!("edit.clear", "Clear", ["Edit"], Some("Delete"), "{} (a targeted channel or Quick Mask is cleared alone)", has_pixel_or_channel, |s, p| {
-            let bg = s.tools.background;
-            // A targeted alpha channel or Quick Mask is filled instead (#2734).
-            if let Some(t) = crate::channel_cmds::targeted_channel(s) {
-                s.edit("Clear", |doc, _| crate::channel_cmds::clear_channel(doc, &t, bg))?;
-                return Ok(Value::Null);
+        cmd!(
+            "edit.clear",
+            "Clear",
+            ["Edit"],
+            Some("Delete"),
+            r##"{"target":"mask"|{"color":i}|{"colors":[i,…]}?=Channels panel target,"layer":id|name?=active} (a targeted mask, channel or Quick Mask is cleared alone)"##,
+            has_pixel_or_channel,
+            |s, p| {
+                let bg = s.tools.background;
+                // A targeted alpha channel or Quick Mask is filled instead (#2734).
+                let channel = if crate::channel_cmds::is_channel_target(p) {
+                    Some(p.clone())
+                } else if p.get("target").is_none() {
+                    crate::channel_cmds::targeted_channel(s)
+                } else {
+                    None
+                };
+                if let Some(t) = channel {
+                    s.edit("Clear", |doc, _| crate::channel_cmds::clear_channel(doc, &t, bg))?;
+                    return Ok(Value::Null);
+                }
+                let id = layer_param(s, p)?;
+                if is_mask_target(p) {
+                    s.edit("Clear Mask", |doc, _| crate::edit_cmds::clear_mask(doc, id, bg, p))?;
+                    return Ok(Value::Null);
+                }
+                // A targeted colour channel clears that channel only (#2720).
+                if let Some(colors) = crate::color_channels::target(s, p)? {
+                    s.edit("Clear", |doc, _| {
+                        for k in colors.indices() {
+                            crate::channel_cmds::clear_color_channel(doc, id, k, bg)?;
+                        }
+                        Ok(())
+                    })?;
+                    return Ok(Value::Null);
+                }
+                s.edit("Clear", |doc, _| {
+                    let sel = doc.selection.clone();
+                    let area = sel.as_ref().map(|m| m.content_bounds()).unwrap_or(doc.bounds());
+                    crate::edit_cmds::clear_area(doc, id, area, sel.as_ref(), bg)
+                })?;
+                Ok(Value::Null)
             }
-            let id = layer_param(s, p)?;
-            // A targeted colour channel clears that channel only (#2720).
-            if let Some(k) = crate::channel_cmds::targeted_color(s) {
-                s.edit("Clear", |doc, _| crate::channel_cmds::clear_color_channel(doc, id, k, bg))?;
-                return Ok(Value::Null);
-            }
-            s.edit("Clear", |doc, _| {
-                let sel = doc.selection.clone();
-                let area = sel.as_ref().map(|m| m.content_bounds()).unwrap_or(doc.bounds());
-                crate::edit_cmds::clear_area(doc, id, area, sel.as_ref(), bg)
-            })?;
-            Ok(Value::Null)
-        }),
+        ),
         // Select
         cmd!("select.all", "All", ["Select"], Some("Cmd+A"), "{}", has_doc, |s, _| {
             s.edit("Select All", |doc, _| {
@@ -914,20 +938,28 @@ fn build() -> Vec<CommandSpec> {
         cmd!("image.imageRotation.90ccw", "90° Counter Clockwise", ["Image", "Image Rotation"], None, "{}", has_doc, |s, _| {
             turn(s, "Rotate Canvas", crate::canvas_geom::Turn::Ccw90)
         }),
-        cmd!("image.adjustments.desaturate", "Desaturate", ["Image", "Adjustments"], Some("Cmd+Shift+U"), "{}", has_pixel_layer, |s, _| {
-            destructive_adjust(
-                s,
-                "Desaturate",
-                Adjustment::HueSaturation {
-                    hue: 0.0,
-                    saturation: -100.0,
-                    lightness: 0.0,
-                    colorize: false,
-                    ranges: photocraft_doc::adjust::HueRange::defaults(),
-                },
-                &Value::Null,
-            )
-        }),
+        cmd!(
+            "image.adjustments.desaturate",
+            "Desaturate",
+            ["Image", "Adjustments"],
+            Some("Cmd+Shift+U"),
+            r##"{"target":"pixels"|"mask"|{"color":i}|{"colors":[i,…]}?=Channels panel target,"layer":id|name?=active}"##,
+            has_pixel_layer,
+            |s, p| {
+                destructive_adjust(
+                    s,
+                    "Desaturate",
+                    Adjustment::HueSaturation {
+                        hue: 0.0,
+                        saturation: -100.0,
+                        lightness: 0.0,
+                        colorize: false,
+                        ranges: photocraft_doc::adjust::HueRange::defaults(),
+                    },
+                    p,
+                )
+            }
+        ),
         // Paint
         cmd!(
             "paint.stroke",
@@ -1211,6 +1243,13 @@ fn build() -> Vec<CommandSpec> {
                         };
                         crate::adjust_params::from_params(&kind, &tone, None, adjust_mode(s, p))?
                     }
+                };
+                let adj = if matches!(kind.as_str(), "levels" | "curves")
+                    && let Some(colors) = crate::color_channels::target(s, p)?
+                {
+                    crate::color_channels::tone_adjustment(&kind, p, adj, doc_mode(s), colors)?
+                } else {
+                    adj
                 };
                 let label = adj.label().to_string();
                 // A smart object records the adjustment as a smart filter (Photoshop), which

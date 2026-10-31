@@ -265,6 +265,11 @@ sync_github_name = false
 [people.drunkeninja42]
 real_name = "Kushagra Sharma"
 
+[people.hidoba]
+real_name = "Vlad Grankovsky"
+display_name = "Vlad Grankovsky"
+sync_github_name = false
+
 [people.WebWork-rrs]
 display_name = "Ratul Paul"
 

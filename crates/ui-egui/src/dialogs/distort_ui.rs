@@ -71,6 +71,79 @@ pub(crate) fn active_pixels(app: &PhotocraftApp) -> Result<(LayerId, Surface, bo
     }
 }
 
+/// Full-window filters capture their layer target; scalar planes use ordinary filter dialogs.
+pub(crate) fn active_filter_target(app: &PhotocraftApp) -> Result<(LayerId, Surface, Value), String> {
+    let st = app.session.active().ok_or("no document")?;
+    let layer = st.active_layer.ok_or("no active layer")?;
+    let target = crate::canvas::paint_target(app);
+    let params = serde_json::json!({"target":target});
+    if target.as_str() != Some("pixels") && target.get("colors").is_none() {
+        return Err("This filter workspace requires layer pixels or native colour channels".into());
+    }
+    if photocraft_engine::color_channels::explicit(&params, photocraft_engine::channel_cmds::color_count(&st.doc)).map_err(|e| e.to_string())?.is_some()
+        && !matches!(st.doc.layer(layer).map(|l| &l.content), Some(LayerContent::Raster(_)))
+    {
+        return Err("Rasterize the layer before editing its colour channels".into());
+    }
+    let surface = photocraft_engine::channel_cmds::read_target_surface(&st.doc, Some(layer), &params).map_err(|e| e.to_string())?.clone();
+    Ok((layer, surface, target))
+}
+
+#[cfg(test)]
+pub(crate) mod component_tests {
+    use super::*;
+
+    pub fn app(mode: &str, depth: u32) -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        app.run("file.new", json!({"width":64,"height":48,"mode":mode,"depth":depth})).unwrap();
+        app.session
+            .edit("Native detail", |doc, id| {
+                let surface = doc.layer_mut(id.unwrap()).unwrap().surface_mut().unwrap();
+                let n = surface.format().mode.color_channels();
+                for y in 0..48 {
+                    for x in 0..64 {
+                        let mut pixel: Vec<_> = (0..n).map(|k| ((x * 13 + y * 7 + k * 43) % 201 + 20) as f32 / 255.0).collect();
+                        pixel.push(0.65);
+                        surface.write_pixel(x as i32, y as i32, &pixel);
+                    }
+                }
+                Ok(())
+            })
+            .unwrap();
+        app.run("channel.target", json!({"colors":[0,2]})).unwrap();
+        app
+    }
+
+    pub fn without_alpha(mut app: PhotocraftApp) -> PhotocraftApp {
+        app.session
+            .edit("Alpha-less native raster", |doc, id| {
+                let bounds = doc.bounds();
+                let surface = doc.layer_mut(id.unwrap()).unwrap().surface_mut().unwrap();
+                let old = surface.format();
+                let format = photocraft_color::PixelFormat::new(old.mode, old.sample, false);
+                let raw = surface.read_region(bounds);
+                let raw: Vec<_> = raw.chunks_exact(old.channels()).flat_map(|pixel| pixel.iter().take(format.channels()).copied()).collect();
+                let mut replacement = Surface::new(format);
+                replacement.write_region(bounds, &raw);
+                *surface = replacement;
+                Ok(())
+            })
+            .unwrap();
+        app
+    }
+
+    pub fn protected(before: &Surface, after: &Surface, bounds: Rect) {
+        assert_eq!(before.format(), after.format());
+        for y in bounds.y0..bounds.y1 {
+            for x in bounds.x0..bounds.x1 {
+                for k in (0..before.channels()).filter(|k| ![0, 2].contains(k)) {
+                    assert_eq!(before.sample_channel(x, y, k).to_bits(), after.sample_channel(x, y, k).to_bits(), "component {k} at {x},{y}");
+                }
+            }
+        }
+    }
+}
+
 /// The document with layer `id` hidden (what shows behind a live preview of that layer).
 pub(crate) fn without_layer(doc: &Document, id: LayerId) -> Arc<Document> {
     let mut d = doc.clone();
