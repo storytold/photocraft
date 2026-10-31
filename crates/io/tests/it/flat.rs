@@ -61,6 +61,31 @@ codec_rt!(cin_gray16, "cin", ColorMode::Grayscale, SampleType::U16, false, 0.5 /
 codec_rt!(cin_rgb16, "cin", ColorMode::Rgb, SampleType::U16, false, 0.5 / 1023.0);
 codec_rt!(iff_rgb8_opaque, "iff", ColorMode::Rgb, SampleType::U8, false, 0.0);
 
+#[test]
+fn a_clear_pixels_colour_is_not_the_layers_bounds() {
+    // A PNG may store white under its clear pixels (unassociated alpha). Photoshop opens the
+    // document at the file's size but bounds the layer by the pixels whose alpha is not zero;
+    // measuring whole pixels instead made the layer span the canvas and Free Transform report
+    // the canvas instead of the artwork.
+    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType as CS};
+    let (w, h) = (8u32, 6u32);
+    let mut px = Vec::new();
+    for y in 0..h {
+        for x in 0..w {
+            let painted = (2..6).contains(&x) && (1..5).contains(&y);
+            px.extend_from_slice(if painted { &[0u8, 0, 0, 255] } else { &[255, 255, 255, 0] });
+        }
+    }
+    let img = Image::from_u8(w, h, ChannelLayout::Rgba, px).expect("image");
+    let bytes = photocraft_codecs::encode(&img, Format::Png, &EncodeOptions::default()).expect("encode");
+    let d = import("clear.png", &bytes).expect("import").document;
+    assert_eq!(d.size, photocraft_geom::Size::new(w, h), "the canvas is the file's");
+    let s = d.layers[0].surface().expect("raster layer");
+    assert_eq!(s.content_bounds(), photocraft_geom::Rect::new(2, 1, 6, 5), "the artwork's box");
+    // The colour under the clear pixels is kept: only the bounds ignore it.
+    assert_eq!(s.pixel(0, 0), vec![1.0, 1.0, 1.0, 0.0]);
+}
+
 fn indexed_bmp_8() -> Vec<u8> {
     const FILE_HEADER_SIZE: usize = 14;
     const INFO_HEADER_SIZE: usize = 40;

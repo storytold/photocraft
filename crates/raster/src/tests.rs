@@ -425,6 +425,31 @@ fn content_bounds_and_prune() {
 }
 
 #[test]
+fn a_clear_pixels_colour_is_not_content() {
+    // An encoder may leave white under the clear pixels (unassociated alpha). The layer's bounds
+    // are the pixels whose alpha is not zero, as Photoshop measures them, not the white's box.
+    let mut s = Surface::new(PixelFormat::RGBA8);
+    s.fill_rect(Rect::new(0, 0, 100, 100), &[1.0, 1.0, 1.0, 0.0]);
+    s.fill_rect(Rect::new(40, 30, 60, 50), &[0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s.content_bounds(), Rect::new(40, 30, 60, 50));
+    // The colour is still there: only the bounds ignore it.
+    assert_eq!(s.pixel(0, 0), vec![1.0, 1.0, 1.0, 0.0]);
+    // The sample type decides what "clear" is.
+    let mut s16 = Surface::new(PixelFormat::RGBA16);
+    s16.fill_rect(Rect::new(0, 0, 20, 20), &[1.0, 1.0, 1.0, 0.0]);
+    s16.fill_rect(Rect::new(3, 4, 9, 10), &[0.0, 0.0, 0.0, 1.0]);
+    assert_eq!(s16.content_bounds(), Rect::new(3, 4, 9, 10));
+    // A surface with no alpha channel has only its colour to measure.
+    let mut g = Surface::new(PixelFormat::GRAY8);
+    g.fill_rect(Rect::new(0, 0, 10, 10), &[1.0]);
+    assert_eq!(g.content_bounds(), Rect::new(0, 0, 10, 10));
+    // Nor does an opaque default pixel turn a colour into a clear one.
+    let mut opaque = Surface::with_default(PixelFormat::RGBA8, &[1.0, 1.0, 1.0, 1.0]);
+    opaque.fill_rect(Rect::new(2, 2, 5, 5), &[0.0, 0.0, 0.0, 0.0]);
+    assert_eq!(opaque.content_bounds(), Rect::new(2, 2, 5, 5));
+}
+
+#[test]
 fn interleaved_roundtrip_crossing_tiles() {
     let r = Rect::new(-20, 250, 280, 262);
     let bpp = PixelFormat::RGBA16.bytes_per_pixel();
