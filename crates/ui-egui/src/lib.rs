@@ -31,6 +31,7 @@ pub mod file_dialog;
 pub mod file_open;
 pub mod frame_stages;
 pub mod gpu_status;
+pub mod home_recent_ui;
 pub mod i18n;
 mod icon_data;
 pub mod icons;
@@ -342,6 +343,7 @@ pub struct PhotocraftApp {
     info_samplers: Option<panels::SamplerReadouts>,
     /// Display profile readings (#569).
     monitors: monitor_status::State,
+    pub(crate) thumbnail_cache: std::sync::Arc<std::sync::Mutex<crate::home_recent_ui::ThumbnailCache>>,
     checker: Option<egui::TextureHandle>,
     drag: Option<canvas::Drag>,
     /// An owned vector drag was cancelled (`canvas::cancel_stale_vector_drag`): the rest of its
