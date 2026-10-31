@@ -16,6 +16,8 @@ pub fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     sync_tooltips(app, ctx);
     sync_animations(app, ctx);
     app.sync_recent();
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::recent_files::tick(app, ctx);
     // Monotonic, not `ctx.input(|i| i.time)`: logic also runs on hidden ticks, where egui's input
     // time is that of the last UI pass.
     if let Some(wait) = persist(app, crate::gpu_canvas::now_ms() / 1000.0) {
