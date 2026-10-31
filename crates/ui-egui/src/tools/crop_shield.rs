@@ -123,18 +123,19 @@ pub fn hides_outside(app: &PhotocraftApp) -> bool {
 /// H with the Crop tool showing a box and no drag in progress toggles Show Cropped Area (in
 /// Classic Mode, where the option is greyed out, H is taken and does nothing), and P Use Classic
 /// Mode. Returns true when a key was used; otherwise H stays the Hand tool key and P the Pen's.
+/// ⇧H and ⇧P are always the tool keys.
 pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     if app.ui.tool != Tool::Crop || app.ui.crop_rect.is_none() || app.crop.drag.is_some() {
         return false;
     }
-    if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::H)) {
+    if ctx.input_mut(|i| consume_unshifted(i, Key::H)) {
         let s = &mut app.ui.tool_options.crop_shield;
         if !s.classic_mode {
             s.show_cropped_area = !s.show_cropped_area;
         }
         return true;
     }
-    if ctx.input_mut(|i| i.consume_key(Modifiers::NONE, Key::P)) {
+    if ctx.input_mut(|i| consume_unshifted(i, Key::P)) {
         let s = &mut app.ui.tool_options.crop_shield;
         s.classic_mode = !s.classic_mode;
         // The view follows at once, about its own centre: default mode turns it with the frame,
@@ -143,6 +144,16 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         return true;
     }
     false
+}
+
+/// `consume_key(Modifiers::NONE, key)` without the presses that hold ⇧ or ⌥: egui ignores an
+/// extra ⇧ and ⌥ there, but ⇧+letter is the tool key and Alt+letter opens the menu with that
+/// mnemonic (Alt+H Help, Alt+I Image). Reads each event's own modifiers, which synthetic
+/// (control channel) keys carry without changing the frame's.
+pub(crate) fn consume_unshifted(i: &mut egui::InputState, key: Key) -> bool {
+    let before = i.events.len();
+    i.events.retain(|e| !matches!(e, egui::Event::Key { key: k, pressed: true, modifiers, .. } if *k == key && !modifiers.shift && !modifiers.alt && modifiers.matches_logically(Modifiers::NONE)));
+    i.events.len() != before
 }
 
 /// The options bar's gear button and its menu. Returns true when Custom… asks for the Color
@@ -367,6 +378,43 @@ mod tests {
         ctx.input_mut(|i| i.events.push(egui::Event::Key { key: Key::H, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }));
         assert!(!keys(&mut app, &ctx));
         assert!(app.ui.tool_options.crop_shield.show_cropped_area);
+    }
+
+    /// ⇧H and ⇧P are the Hand and Pen tool keys even with a crop box: egui's `consume_key` ignores
+    /// an extra ⇧, so the plain-key checks must refuse it.
+    #[test]
+    fn shift_h_and_shift_p_switch_tools_instead_of_crop_options() {
+        for (key, tool) in [(Key::H, Tool::Hand), (Key::P, Tool::Pen)] {
+            let mut app = crop_app();
+            assert!(app.session.prefs().tools.use_shift_key_for_tool_switch);
+            let before = app.ui.tool_options.crop_shield.clone();
+            let ctx = egui::Context::default();
+            ctx.input_mut(|i| {
+                // Only the event holds ⇧, as with a control-channel `ui.key` (the frame's state lags).
+                i.events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::SHIFT });
+            });
+            crate::shortcuts::handle(&mut app, &ctx);
+            assert_eq!(app.ui.tool, tool, "{key:?}");
+            assert_eq!(app.ui.tool_options.crop_shield, before, "{key:?} leaves Show Cropped Area and Classic Mode alone");
+        }
+    }
+
+    /// Alt+H, Alt+P and Alt+I are not the crop box's H, P and I (Show Cropped Area, Classic Mode,
+    /// Front Image): egui's `consume_key` ignores an extra ⌥, so the plain-key checks must refuse
+    /// it and leave the press for later handlers.
+    #[test]
+    fn alt_letters_are_not_the_crop_box_keys() {
+        for key in [Key::H, Key::P, Key::I] {
+            let mut app = crop_app();
+            let (shield, ratio) = (app.ui.tool_options.crop_shield.clone(), app.ui.tool_options.crop_ratio.clone());
+            let ctx = egui::Context::default();
+            let alt = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT };
+            ctx.input_mut(|i| i.events.push(alt.clone()));
+            assert!(!keys(&mut app, &ctx) && !crate::crop_size::keys(&mut app, &ctx), "{key:?}");
+            assert_eq!(app.ui.tool_options.crop_shield, shield, "{key:?}");
+            assert_eq!(app.ui.tool_options.crop_ratio, ratio, "{key:?}");
+            assert!(ctx.input(|i| i.events.contains(&alt)), "{key:?} is left for later handlers");
+        }
     }
 
     #[test]
