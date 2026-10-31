@@ -556,3 +556,26 @@ fn split_files_failing_after_the_table_still_fall_back_to_the_preview() {
     let cut = file.len() - 40;
     assert!(unsupported(decode_raw(&file[..cut], &Limits::default())));
 }
+
+#[test]
+fn split_strips_with_up_to_four_extra_rows_are_accepted() {
+    // A strip may hold whole fixed-rate rows past the image (one body stores 4022 rows for
+    // 4020): up to 4 such rows decode, the image rows unchanged; a fifth is refused.
+    for bits in [12u32, 14] {
+        let huff = if bits == 12 { &LOSSY_12 } else { &LOSSY_14 };
+        let (w, h, split) = (24usize, 7usize, 3usize);
+        let t = split_table(bits, split);
+        let Encoding::Lossy(curve) = &t.encoding else { panic!() };
+        let max = curve.len() as i32 - 1;
+        for extra in 1..=5 {
+            let (src, recon) = encode_split(&gentle(w, h + extra, 600), w, huff, t.seeds, bits, split);
+            let got = decode(&src, w, h, bits, &t);
+            if extra <= 4 {
+                let want: Vec<u16> = recon[..w * h].iter().map(|&r| curve[r.clamp(0, max) as usize]).collect();
+                assert_eq!(got.unwrap(), want, "{bits}-bit, {extra} extra rows");
+            } else {
+                assert!(matches!(got, Err(RawError::Unsupported(_))), "{bits}-bit, {extra} extra rows: {got:?}");
+            }
+        }
+    }
+}
