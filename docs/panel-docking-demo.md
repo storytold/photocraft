@@ -1,5 +1,24 @@
 # Panel docking repair demonstrations
 
+## Native-review follow-up
+
+The contributor tested the repaired v0.18.0 Windows EXE and reported no remaining
+major panel issues. These deterministic recordings were then regenerated after
+integrating main `422ca7bed`; they are not native desktop capture:
+
+| Gesture | Recording |
+|---|---|
+| Insert a panel immediately below document tabs, then collapse it | [Below the document tab row](images/panel-repair/below-document-tabs.gif) |
+| Expand a compact stack, collapse it and restore normal editor heights | [Compact group heights](images/panel-repair/compact-group-height.gif) |
+| Resize the outer bottom corner without first changing any part's width | [Floating group bottom resize](images/panel-repair/floating-bottom-resize.gif) |
+
+To reproduce these recordings, set `PHOTOCRAFT_NATIVE_HEIGHT_CAPTURES` to an output
+directory and run `cargo test -p photocraft-ui-egui --lib capture_native_height_and_document_header_review -- --test-threads=1`.
+The test covers three Pro themes and 100/125/150/200% scale. Existing document tabs
+keep selection, reordering, large-tab preferences and workspace restore behavior.
+
+## Join and attached-collapse regressions
+
 A full editor keeps its normal height when joined to a short compact owner and when
 subsequently detached. A collapsed top/bottom group stays attached as a tab bar;
 expanding and collapsing it no longer turns it into a floating miniature. Closed

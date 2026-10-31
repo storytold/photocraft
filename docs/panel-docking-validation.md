@@ -1,6 +1,67 @@
 # Panel docking repair validation
 
-## Current merged source (2026-10-30)
+## Review submission (2026-10-31)
+
+Validated code: `88da5a9142c9c55bbb9fb93abe8ddc5192f83929`, integrating main
+`422ca7beda90d927643bcd074646ebbd37706d75`. The conflict in Cargo.lock is resolved
+with the explicit local craft-ui override retained. Craft-libs dependencies and
+snapshot provenance now use `c5a1cbfb5f9049f9270955caffb5bee5997aebf7`; egui's
+immutable revision is unchanged. The four upstream UI files updated since the old
+pin are copied unchanged. A source audit confirms 76 vendored source files match
+that revision; the six documented docking patch files are the only differences.
+
+The contributor built and tested the repaired v0.18.0 Windows EXE before this last
+upstream merge and reported no remaining major panel issues. The final upstream
+integration is covered by the automated results below; it is not a claim that the
+contributor tested the later updater-dialog/shared-widget changes. The agent did
+not build or launch the product EXE. Physical monitor/mixed-DPI, focused native IME
+checks and GPU/input latency have not been independently certified.
+
+Fresh checks on the integrated code:
+
+| Check | Result |
+|---|---|
+| Panel regressions | 164 passed; two explicit benchmark tests ignored |
+| Shared UI library | 579 passed, including all 346 docking tests |
+| Workspace integration | 9 passed |
+| Desktop all-targets compile check | passed |
+| fmt, layering | passed; 31 crates |
+| wasm | passed; 24 crates plus codecs/heif |
+| Complete UI library suite | **4494 passed, 95 failed, 23 ignored** |
+
+All 95 failure names exactly match the pre-merge repaired v0.18.0 snapshot; none
+were added or removed. This comparison does not establish an independently rerun
+clean-main baseline, and the complete UI suite is **not green**.
+
+Strict Clippy is also **not green**. The standard UI command stops at unchanged
+main code `text/src/psd_path.rs:157`; the `--no-deps` run reports the same five
+locations at `canvas/strokes.rs:495,500`, `dialogs/vp_ui.rs:989`,
+`widgets/text_field.rs:29` and `dialogs/color_picker_ui/tests.rs:130`. The standalone
+shared-library all-targets check reports two `nonminimal_bool` diagnostics at
+`docking/render/preview.rs:120`, which is byte-identical to the pinned upstream
+source. No lint suppressions, CI changes or unrelated fixes were introduced.
+
+Fresh captures comprise 444 PNGs: 120 native-follow-up states, 72 desktop-review
+states, 120 seam states and 132 join/collapse transitions, across three Pro themes
+and 100/125/150/200%. All four capture tests and their physical-pixel seam assertions
+pass. Compared with the contributor-reviewed repair, 443 PNGs are byte-identical;
+one drag-preview frame was reviewed side by side with no observed geometry change.
+Both documented after PNGs and the three new GIFs come from this integrated code.
+See [demonstrations and reproduction](panel-docking-demo.md).
+
+A new 600-sample-per-phase CPU kittest run measured p50 idle/hover/drag at
+2.273/2.268/2.473 ms, with drag p95 2.982 ms. This is test UI-frame CPU cost, not
+native FPS or GPU/input latency. No new broad `perf --quick`, engine-suite or corpus
+measurements are claimed for this integration. Previous counts below are historical.
+
+Raw logs, source audits, failure-name comparisons, capture hashes and frames are
+preserved separately in the fork's `codex/panel-layout-handoff-2026-10-31` branch,
+under `plan/panel-repair/pr-ready-portable-2026-10-31`. Earlier portable snapshots
+remain historical. The two original CodeRabbit documentation findings are fixed:
+committed test fixtures have their own attribution section, and the timing/demo
+links describe their actual targets.
+
+## Historical integration with upstream b1cfff9d3 (2026-10-30)
 
 Integrated upstream `b1cfff9d30298eea4f446a8f6a5e4285cb43c6e7`, resolving all five
 conflicts. Both host test-module additions and upstream screen-mode availability
