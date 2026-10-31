@@ -133,11 +133,26 @@ pub fn stroke_coverage(stroke: &Stroke) -> (Rect, Vec<f32>) {
 /// [`stroke_coverage`] that admits the **rendered** extent before it is made dense: `None` when the
 /// stroke covers more than `max_pixels`.
 ///
-/// Rendering itself is tiled, so it holds only the tiles the dabs touch. The bounds are read from
-/// those tiles, after tips, dynamics and scattering have placed every dab, so this is the stroke's
-/// real extent rather than an estimate from the input points. Only then is the `width × height`
-/// buffer allocated, which is what callers need bounded.
+/// Two gates, because the precise one cannot come first. The stroke's points are checked against
+/// the budget before anything is drawn: their box is a lower bound on where the dabs land, so a
+/// stroke already too wide there cannot fit however it renders. Only then is it rendered, and the
+/// bounds read from the tiles, after tips, dynamics and scattering have placed every dab, so the
+/// decision is made on the stroke's real extent rather than on an estimate. Only then is the
+/// `width × height` buffer allocated.
+///
+/// Rendering is tiled and holds only the tiles the dabs touch, but that is not the same as cheap:
+/// a two-point stroke spanning the accepted coordinate range fills 93,754 of them, 1.5 GB, which
+/// is why the cheap gate exists at all.
 pub fn stroke_coverage_within(stroke: &Stroke, max_pixels: u64) -> Option<(Rect, Vec<f32>)> {
+    // Rendering is what the budget is for, so it cannot be the first thing that happens: the
+    // tiles are built by `push` and held until the dense buffer is made, and a two-point stroke
+    // spanning the accepted coordinate range fills 93,754 of them (1.5 GB) before the check
+    // below ever runs. The points' own box is a lower bound on where the dabs land, so a stroke
+    // already too wide at its points cannot fit however it renders, and can be refused without
+    // rendering at all. Loose on purpose: it only has to catch the absurd ones.
+    if points_extent(stroke) > max_pixels {
+        return None;
+    }
     let mut r = crate::StrokeRenderer::new(&stroke.brush, None, 1.0);
     r.push(&stroke.points);
     r.finish();
@@ -146,6 +161,29 @@ pub fn stroke_coverage_within(stroke: &Stroke, max_pixels: u64) -> Option<(Rect,
         return None;
     }
     Some(r.dense_coverage())
+}
+
+/// Pixels the stroke's own points span, as a lower bound on the extent its dabs will cover.
+///
+/// A dab is centred on the path through the points, and scattering and a dual brush only move
+/// dabs further out, so the rendered extent contains this box whenever anything is drawn at all.
+/// An empty stroke spans nothing. Saturating throughout: the points are input-derived and may be
+/// far apart, and this must answer rather than overflow.
+fn points_extent(stroke: &Stroke) -> u64 {
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for p in &stroke.points {
+        if !p.x.is_finite() || !p.y.is_finite() {
+            continue;
+        }
+        (x0, y0) = (x0.min(p.x), y0.min(p.y));
+        (x1, y1) = (x1.max(p.x), y1.max(p.y));
+    }
+    if x1 < x0 || y1 < y0 {
+        return 0;
+    }
+    // `as` on an out-of-range or non-finite f64 saturates, which is the answer wanted here.
+    let side = |lo: f64, hi: f64| (hi - lo).max(0.0).ceil().min(u64::MAX as f64) as u64;
+    side(x0, x1).saturating_mul(side(y0, y1))
 }
 
 /// Index of the alpha channel, if the format has one.
@@ -636,5 +674,64 @@ mod tests {
                 );
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod extent_tests {
+    use super::*;
+    use crate::{BrushSettings, StrokePoint};
+
+    fn stroke(points: &[(f64, f64)]) -> Stroke {
+        Stroke {
+            brush: BrushSettings { pressure_size: false, spacing: 0.25, ..Default::default() },
+            points: points.iter().map(|&(x, y)| StrokePoint::new(x, y, 1.0)).collect(),
+        }
+    }
+
+    #[test]
+    fn the_points_span_is_measured_without_overflowing() {
+        assert_eq!(points_extent(&stroke(&[])), 0, "nothing spans nothing");
+        assert_eq!(points_extent(&stroke(&[(5.0, 5.0)])), 0, "one point has no area");
+        assert_eq!(points_extent(&stroke(&[(0.0, 0.0), (10.0, 4.0)])), 40);
+        assert_eq!(points_extent(&stroke(&[(10.0, 4.0), (0.0, 0.0)])), 40, "order does not matter");
+        // A fractional span is rounded up, so the bound never reads smaller than the pixels.
+        assert_eq!(points_extent(&stroke(&[(0.0, 0.0), (10.5, 4.5)])), 55);
+        // Input-derived and hostile: the far corners of the accepted range, and non-finite
+        // values, answer instead of overflowing or panicking.
+        assert_eq!(points_extent(&stroke(&[(-1e6, -1e6), (1e6, 1e6)])), 4_000_000_000_000);
+        assert_eq!(points_extent(&stroke(&[(f64::MIN, f64::MIN), (f64::MAX, f64::MAX)])), u64::MAX);
+        assert_eq!(points_extent(&stroke(&[(f64::NAN, 0.0), (f64::INFINITY, 1.0), (0.0, 0.0), (3.0, 2.0)])), 6);
+        assert_eq!(points_extent(&stroke(&[(f64::NAN, f64::NAN)])), 0, "no finite point is no span");
+    }
+
+    /// #4961 follow-up: a stroke whose points already span more than the budget is refused
+    /// before anything is rendered. Rendering it first builds the tiles the budget exists to
+    /// prevent: measured at 93,754 tiles holding 1.5 GB for this very stroke.
+    #[test]
+    fn a_stroke_wider_than_the_budget_is_refused_without_rendering() {
+        let huge = stroke(&[(-1e6, -1e6), (1e6, 1e6)]);
+        assert!(points_extent(&huge) > 4_000_000_000);
+        let started = std::time::Instant::now();
+        assert!(stroke_coverage_within(&huge, 67_108_864).is_none());
+        // Rendering this stroke takes seconds and gigabytes; refusing it takes neither. The
+        // bound is loose (whole seconds) so a slow machine cannot make this flaky.
+        assert!(started.elapsed() < std::time::Duration::from_secs(2), "it was rendered after all: {:?}", started.elapsed());
+    }
+
+    #[test]
+    fn a_stroke_inside_the_budget_still_renders_its_real_extent() {
+        let s = stroke(&[(0.0, 0.0), (40.0, 0.0)]);
+        let (bounds, cov) = stroke_coverage_within(&s, 67_108_864).expect("a small stroke fits");
+        assert!(bounds.width() > 40 && bounds.height() > 0, "the dabs reach past the points: {bounds:?}");
+        assert_eq!(cov.len(), bounds.width() as usize * bounds.height() as usize);
+        assert!(cov.iter().any(|&c| c > 0.0), "something was drawn");
+        // The precise check still has the last word: the rendered extent is wider than the
+        // points, so a budget between the two refuses even though the points would pass.
+        let points_only = points_extent(&s);
+        let rendered = u64::from(bounds.width()) * u64::from(bounds.height());
+        assert!(rendered > points_only, "the rendered box is the larger one: {rendered} vs {points_only}");
+        assert!(stroke_coverage_within(&s, rendered - 1).is_none(), "the post-render check still decides");
+        assert!(stroke_coverage_within(&s, rendered).is_some(), "and admits the exact extent");
     }
 }
