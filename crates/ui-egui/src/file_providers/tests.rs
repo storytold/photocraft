@@ -350,7 +350,7 @@ fn late_resource_lists_cannot_cross_accounts_or_reconnections() {
     let current = Resource { id: "current".into(), name: "current.psd".into(), updated_at: String::new() };
     host.set_resources(&next, vec![current.clone()]).unwrap();
     assert!(host.set_resources(&original, vec![Resource { id: "old".into(), name: "old.psd".into(), updated_at: String::new() }]).is_err());
-    assert_eq!(host.resources(), [current.clone()]);
+    assert_eq!(host.resources().as_slice(), std::slice::from_ref(&current));
     host.disconnect().unwrap();
     let again = host.connect("test-provider".into(), "Test files".into(), "account-two".into()).unwrap();
     assert_ne!(next, again, "even reconnecting the same account changes asynchronous authority");

@@ -189,6 +189,7 @@ fn cancelling_format_options_releases_the_destination_and_reopens_the_chooser() 
         },
         app,
     );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(2);
     h.key_press(egui::Key::Escape);
     h.run_steps(3);
