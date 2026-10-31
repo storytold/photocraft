@@ -282,3 +282,8 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.qvest-ssels]
+real_name = "Stefan Sels"
+display_name = "tronicum"
+sync_github_name = false
