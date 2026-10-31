@@ -189,8 +189,9 @@ fn web_drops_onto_the_canvas_are_placed_from_their_bytes() {
     at.set(egui::pos2(20.0, 20.0));
     assert_eq!(app.dropped_on_canvas(&ctx, &names), [false, false], "off the canvas: opened");
     let layers = layer_count(&app);
-    app.drop_places.push_back(crate::file_open::DropPlace::Bytes("photo.png".into(), png_bytes(4, 3)));
-    app.drop_places.push_back(crate::file_open::DropPlace::Bytes("bad.png".into(), b"bad".to_vec()));
+    let doc = app.session.active().unwrap().doc.id;
+    app.drop_places.push_back((doc, crate::file_open::DropPlace::Bytes("photo.png".into(), png_bytes(4, 3))));
+    app.drop_places.push_back((doc, crate::file_open::DropPlace::Bytes("bad.png".into(), b"bad".to_vec())));
     app.place_next_dropped(&ctx);
     assert_eq!(layer_count(&app), layers + 1);
     assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
@@ -536,6 +537,279 @@ fn a_separate_drop_applies_the_open_transform_and_places_at_once() {
     assert!(app.drop_places.is_empty());
     crate::transform_tool::commit(&mut app);
     assert_eq!(history_steps(&app), steps + 2);
+}
+
+/// Apply the jobs that have finished, frame by frame, until `done` holds (or 30 s pass).
+fn tick_until(app: &mut PhotocraftApp, ctx: &egui::Context, done: impl Fn(&PhotocraftApp) -> bool) {
+    let t = std::time::Instant::now();
+    while !done(app) {
+        assert!(t.elapsed() < std::time::Duration::from_secs(30), "not done after 30 s");
+        crate::jobs_ui::tick(app, ctx);
+        app.place_next_dropped(ctx);
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+}
+
+/// #10031: with background jobs a dropped file is decoded on a worker. Free Transform starts when
+/// the layer has landed, and the next file is started only after that transform is applied.
+#[test]
+fn background_drops_are_placed_by_a_job_one_after_another() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.background_jobs = true;
+    let (layers, steps) = (layer_count(&app), history_steps(&app));
+    let at = Some(egui::pos2(400.0, 300.0));
+    app.open_dropped(&ctx, vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("second.png", Ok(png_bytes(2, 2)))], at);
+    app.place_next_dropped(&ctx);
+    let place = app.jobs.place.clone().expect("the first file is being placed");
+    assert_eq!(place.name, "first.png");
+    assert!(app.session.job(place.job).is_some(), "as a background job");
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers, steps), "nothing lands before the job is applied");
+    assert!(app.ui.transform.is_none(), "Free Transform waits for the layer");
+    // Frames while it runs don't start the second file next to it.
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.drop_places.len(), 1);
+    assert_eq!(app.jobs.place.as_ref().map(|p| p.job), Some(place.job));
+
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    assert_eq!(layer_count(&app), layers + 1);
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "first");
+    // The second file waits for the first transform.
+    app.place_next_dropped(&ctx);
+    assert!(app.jobs.place.is_none() && app.drop_places.len() == 1);
+    crate::transform_tool::commit(&mut app);
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.jobs.place.as_ref().map(|p| p.name.as_str()), Some("second.png"));
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "second");
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    crate::transform_tool::commit(&mut app);
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers + 2, steps + 2));
+    assert!(app.drop_places.is_empty());
+}
+
+/// A file that can't be decoded is reported by name and the files dropped after it go on.
+#[test]
+fn a_background_place_that_fails_reports_it_and_the_queue_continues() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.background_jobs = true;
+    let layers = layer_count(&app);
+    app.open_dropped(&ctx, vec![dropped("bad.png", Ok(b"bad".to_vec())), dropped("good.png", Ok(png_bytes(2, 2)))], Some(egui::pos2(400.0, 300.0)));
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.jobs.place.as_ref().map(|p| p.name.as_str()), Some("bad.png"));
+    tick_until(&mut app, &ctx, |app| app.ui.notices.iter().any(|n| n.error && n.title.contains("bad.png")));
+    assert_eq!(layer_count(&app), layers, "nothing was placed");
+    assert_eq!(app.jobs.place.as_ref().map(|p| p.name.as_str()), Some("good.png"), "the next file started at once");
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    assert_eq!(layer_count(&app), layers + 1);
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    assert_eq!(app.ui.notices.iter().filter(|n| n.error).count(), 1);
+}
+
+/// Cancelling the place says so, places nothing and goes on with the queue.
+#[test]
+fn cancelling_a_background_place_continues_the_queue() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.background_jobs = true;
+    let (layers, steps) = (layer_count(&app), history_steps(&app));
+    app.open_dropped(&ctx, vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("second.png", Ok(png_bytes(2, 2)))], Some(egui::pos2(400.0, 300.0)));
+    app.place_next_dropped(&ctx);
+    let first = app.jobs.place.clone().expect("being placed");
+    assert!(crate::jobs_ui::cancel(&mut app, first.job));
+    crate::jobs_ui::tick(&mut app, &ctx);
+    assert_eq!((layer_count(&app), history_steps(&app)), (layers, steps));
+    let second = app.jobs.place.clone().expect("the queue went on");
+    assert_eq!(second.name, "second.png");
+    assert_ne!(second.job, first.job);
+    assert!(!app.ui.status_error);
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "second");
+    assert_eq!(layer_count(&app), layers + 1);
+}
+
+/// Frames with nothing to wait for: jobs applied and the drop queue served.
+fn idle_frames(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    for _ in 0..3 {
+        crate::jobs_ui::tick(app, ctx);
+        app.place_next_dropped(ctx);
+    }
+}
+
+/// Drops two files on the canvas of document A (the app's only one) with background jobs on, starts
+/// placing the first, then opens document B, which becomes active. Returns A's id and layer count.
+fn two_drops_then_switch(app: &mut PhotocraftApp, ctx: &egui::Context) -> (photocraft_doc::DocId, usize) {
+    app.background_jobs = true;
+    let (a, layers) = (app.session.active().unwrap().doc.id, layer_count(app));
+    app.open_dropped(ctx, vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("second.png", Ok(png_bytes(2, 2)))], Some(egui::pos2(400.0, 300.0)));
+    app.place_next_dropped(ctx);
+    assert_eq!(app.jobs.place.as_ref().map(|p| (p.name.as_str(), p.doc)), Some(("first.png", a)));
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    assert_ne!(app.session.active().unwrap().doc.id, a);
+    (a, layers)
+}
+
+/// FredApps' review of #10147: files dropped on A stay A's when the tab changes while the first is
+/// placed. It lands in A, no Free Transform opens over B, the second waits rather than going into B,
+/// and goes on in A when A is back in view.
+#[test]
+fn background_drops_stay_with_their_document_when_the_tab_changes() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let (a, layers) = two_drops_then_switch(&mut app, &ctx);
+    let (b_layers, b_steps) = (layer_count(&app), history_steps(&app));
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    idle_frames(&mut app, &ctx);
+    assert!(app.jobs.place.is_none() && app.ui.transform.is_none());
+    assert_eq!((layer_count(&app), history_steps(&app)), (b_layers, b_steps), "nothing placed in B");
+    assert_eq!(app.session.documents()[0].doc.layers.len(), layers + 1, "the first landed in A");
+    assert_eq!(app.drop_places.len(), 1, "the second waits for A");
+
+    assert!(app.session.set_active(0));
+    app.sync_views();
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.jobs.place.as_ref().map(|p| (p.name.as_str(), p.doc)), Some(("second.png", a)));
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    assert_eq!(layer_count(&app), layers + 2);
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    assert!(app.drop_places.is_empty());
+    assert_eq!(app.session.documents()[1].doc.layers.len(), b_layers);
+}
+
+/// Cancelling A's place while B is in view doesn't hand A's next file to B.
+#[test]
+fn cancelling_a_background_place_from_another_tab_keeps_the_queue_in_its_document() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let (a, layers) = two_drops_then_switch(&mut app, &ctx);
+    let (b_layers, b_steps) = (layer_count(&app), history_steps(&app));
+    let first = app.jobs.place.clone().unwrap();
+    assert!(crate::jobs_ui::cancel(&mut app, first.job));
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    idle_frames(&mut app, &ctx);
+    assert!(app.jobs.place.is_none());
+    assert_eq!((layer_count(&app), history_steps(&app)), (b_layers, b_steps), "nothing placed in B");
+    assert_eq!(app.session.documents()[0].doc.layers.len(), layers, "the cancelled file wasn't placed");
+    assert_eq!(app.drop_places.len(), 1);
+    assert!(app.session.set_active(0));
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.jobs.place.as_ref().map(|p| (p.name.as_str(), p.doc)), Some(("second.png", a)));
+}
+
+/// Closing A drops its waiting files with a message; none goes into B.
+#[test]
+fn closing_the_document_discards_its_dropped_files() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    two_drops_then_switch(&mut app, &ctx);
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    app.run("file.close", json!({"document": 0})).unwrap();
+    let (b_layers, b_steps) = (layer_count(&app), history_steps(&app));
+    app.place_next_dropped(&ctx);
+    assert!(app.drop_places.is_empty());
+    assert!(app.ui.status.contains("closed") && !app.ui.status_error, "{}", app.ui.status);
+    idle_frames(&mut app, &ctx);
+    assert!(app.jobs.place.is_none() && app.ui.transform.is_none());
+    assert_eq!((layer_count(&app), history_steps(&app)), (b_layers, b_steps));
+}
+
+/// Closing A while its file is being placed: nothing lands anywhere, and A's next file is dropped.
+#[test]
+fn closing_the_document_while_its_file_is_placed_places_nothing_elsewhere() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    two_drops_then_switch(&mut app, &ctx);
+    let (b_layers, b_steps) = (layer_count(&app), history_steps(&app));
+    app.run("file.close", json!({"document": 0})).unwrap();
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    idle_frames(&mut app, &ctx);
+    assert!(app.drop_places.is_empty() && app.jobs.place.is_none() && app.ui.transform.is_none());
+    assert_eq!(app.session.documents().len(), 1);
+    assert_eq!((layer_count(&app), history_steps(&app)), (b_layers, b_steps));
+}
+
+/// Without background jobs too: leaving A's Free Transform for B cancels that place (#1099) and A's
+/// next file waits for A instead of going into B.
+#[test]
+fn inline_drops_stay_with_their_document_when_the_tab_changes() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let layers = layer_count(&app);
+    app.open_dropped(&ctx, vec![dropped("first.png", Ok(png_bytes(4, 4))), dropped("second.png", Ok(png_bytes(2, 2)))], Some(egui::pos2(400.0, 300.0)));
+    app.place_next_dropped(&ctx);
+    assert!(app.ui.transform.is_some());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    crate::transform_tool::end_if_left(&mut app);
+    let (b_layers, b_steps) = (layer_count(&app), history_steps(&app));
+    app.place_next_dropped(&ctx);
+    assert!(app.ui.transform.is_none());
+    assert_eq!((layer_count(&app), history_steps(&app)), (b_layers, b_steps), "nothing placed in B");
+    assert_eq!(app.drop_places.len(), 1);
+    assert!(app.session.set_active(0));
+    app.sync_views();
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    assert_eq!(layer_count(&app), layers + 1, "the first was cancelled by leaving it, the second placed");
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().name, "second");
+}
+
+/// A web drop goes to the document it was dropped on, even when the tab changes before the shell
+/// has read the files.
+#[test]
+fn web_drops_go_to_the_document_they_were_dropped_on() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    let layers = layer_count(&app);
+    let inbox: crate::Inbox = Default::default();
+    app.services.place_inbox = Some(inbox.clone());
+    app.services.cursor_pos = Some(Box::new(|_: &egui::Context| Some(egui::pos2(400.0, 300.0))));
+    assert_eq!(app.dropped_on_canvas(&ctx, &["photo.png".to_string()]), [true]);
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let (b_layers, b_steps) = (layer_count(&app), history_steps(&app));
+    inbox.lock().unwrap().push(("photo.png".into(), png_bytes(4, 3)));
+    app.queue_web_places();
+    app.place_next_dropped(&ctx);
+    assert_eq!((layer_count(&app), history_steps(&app)), (b_layers, b_steps), "nothing placed in B");
+    assert!(app.session.set_active(0));
+    app.sync_views();
+    app.place_next_dropped(&ctx);
+    assert_eq!(layer_count(&app), layers + 1);
+    assert_eq!(app.ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+}
+
+/// A file dropped from a path is placed by the `file.placeEmbedded` job, read by the worker's
+/// caller, and a drop that arrives meanwhile queues behind it.
+#[test]
+fn a_background_drop_from_a_path_is_tracked_and_later_drops_queue() {
+    let dir = std::env::temp_dir().join(format!("photocraft-drop-place-job-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let abs = dir.join("photo.png");
+    std::fs::write(&abs, png_bytes(40, 20)).unwrap();
+    let ctx = egui::Context::default();
+    let mut app = app_with_canvas();
+    app.background_jobs = true;
+    let layers = layer_count(&app);
+    let at = Some(egui::pos2(400.0, 300.0));
+    app.open_dropped(&ctx, vec![dropped(abs, Err("egui's reader must not be used".into()))], at);
+    app.place_next_dropped(&ctx);
+    let place = app.jobs.place.clone().expect("being placed");
+    assert_eq!(place.name, "photo.png");
+    assert_eq!(app.jobs.last_started, Some(place.job));
+    // A drop while it runs is queued, not started beside it.
+    app.open_dropped(&ctx, vec![dropped("later.png", Ok(png_bytes(2, 2)))], at);
+    app.place_next_dropped(&ctx);
+    assert_eq!(app.drop_places.len(), 1);
+    assert_eq!(app.session.jobs().len(), 1);
+    tick_until(&mut app, &ctx, |app| app.jobs.place.is_none());
+    assert_eq!(layer_count(&app), layers + 1);
+    assert_eq!(app.drop_places.len(), 1, "waiting for the transform");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// #1099: switching tabs after an actual canvas drop cancels the place in its source document.
