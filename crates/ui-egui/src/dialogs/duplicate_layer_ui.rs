@@ -45,39 +45,22 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Val
         Some(Value::Number(n)) => n.to_string(),
         _ => String::new(),
     };
-    if crate::text::direction::is_rtl() {
-        // The fork's `egui::Grid` ignores the direction: its cells always advance to the right,
-        // so in a right-to-left UI it would render unmirrored. The same rows are drawn by hand
-        // in reading order instead: the label at the reading start, the field beside it.
-        ui.spacing_mut().item_spacing = egui::vec2(12.0, 6.0);
+    // A direction-aware two-column label/editor grid: left-to-right it is the plain
+    // `egui::Grid`, unchanged; right-to-left the fork's `Grid` cannot run under a mirrored
+    // body, so the same rows are hand-drawn with the caption in the shared label column at
+    // the reading start and the editor toward the reading end.
+    let label_w = caption_width(ui, &[tl!("Name:"), tl!("Document")], tl!("Destination"));
+    crate::text::direction::settings_grid(ui, "duplicate-layer", [12.0, 6.0], label_w, None, |row| {
         if matches!(fields.get("name"), Some(Value::String(_))) {
-            crate::text::direction::dialog_row(ui, |ui| name_row(ui, fields));
+            row(tl!("Name:").into(), &mut |ui, label| name_field(ui, fields, label));
         }
-        crate::text::direction::dialog_row(ui, |ui| {
-            ui.label(egui::RichText::new(tl!("Destination")).font(crate::theme::semibold(13.0)));
-        });
-        crate::text::direction::dialog_row(ui, |ui| document_row(ui, &mut destination, &options));
+        row(egui::RichText::new(tl!("Destination")).font(crate::theme::semibold(13.0)).into(), &mut |_, _| {});
+        row(tl!("Document").into(), &mut |ui, _| document_field(ui, &mut destination, &options));
         // Photoshop's document-`Name` is only there when the destination is a new document.
         if destination == "new" {
-            crate::text::direction::dialog_row(ui, |ui| document_name_row(ui, fields));
+            row(tl!("Name:").into(), &mut |ui, label| document_name_field(ui, fields, label));
         }
-    } else {
-        egui::Grid::new("duplicate-layer").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            if matches!(fields.get("name"), Some(Value::String(_))) {
-                name_row(ui, fields);
-                ui.end_row();
-            }
-            ui.label(egui::RichText::new(tl!("Destination")).font(crate::theme::semibold(13.0)));
-            ui.end_row();
-            document_row(ui, &mut destination, &options);
-            ui.end_row();
-            // Photoshop's document-`Name` is only there when the destination is a new document.
-            if destination == "new" {
-                document_name_row(ui, fields);
-                ui.end_row();
-            }
-        });
-    }
+    });
     if destination == "new" {
         fields.insert("destination".into(), json!("new"));
     } else if let Ok(i) = destination.parse::<u64>() {
@@ -85,27 +68,33 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Val
     }
 }
 
+/// The width of the widest caption — the Destination header in its semibold font, the row
+/// captions in the body font — so the mirrored rows' editors line up the way the grid's label
+/// column lines them up.
+fn caption_width(ui: &egui::Ui, captions: &[&str], header: &str) -> f32 {
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let width = |text: &str, font: &egui::FontId| ui.painter().layout_no_wrap(text.to_owned(), font.clone(), egui::Color32::WHITE).size().x;
+    captions.iter().map(|c| width(c, &body)).fold(width(header, &crate::theme::semibold(13.0)), f32::max)
+}
+
 /// A single-line edit whose text reads right-to-left in a right-to-left UI (Arabic names align
 /// to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
-/// The copy's name: the label names the field for accessibility.
-fn name_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+/// The copy's name: the row's caption names the field for accessibility.
+fn name_field(ui: &mut egui::Ui, fields: &mut Map<String, Value>, labelled_by: egui::Id) {
     let mut name = fields.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
-    let name_label = ui.label(tl!("Name:"));
-    crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(260.0)).labelled_by(name_label.id);
+    crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(260.0)).labelled_by(labelled_by);
     fields.insert("name".into(), json!(name));
 }
 
-/// The Document row: the destination document, or "New" for a fresh one.
-fn document_row(ui: &mut egui::Ui, destination: &mut String, options: &[(String, &str)]) {
-    ui.label(tl!("Document"));
+/// The Document row's editor: the destination document, or "New" for a fresh one.
+fn document_field(ui: &mut egui::Ui, destination: &mut String, options: &[(String, &str)]) {
     crate::widgets::dropdown(ui, "duplicate-layer-document", tl!("Document"), destination, options, 260.0);
 }
 
 /// The new document's name, shown only when the destination is a new document.
-fn document_name_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
+fn document_name_field(ui: &mut egui::Ui, fields: &mut Map<String, Value>, labelled_by: egui::Id) {
     let mut doc_name = fields.get("documentName").and_then(Value::as_str).unwrap_or("").to_string();
-    let name_label = ui.label(tl!("Name:"));
-    crate::widgets::rtl_singleline_add(ui, &mut doc_name, |e| e.desired_width(260.0)).labelled_by(name_label.id);
+    crate::widgets::rtl_singleline_add(ui, &mut doc_name, |e| e.desired_width(260.0)).labelled_by(labelled_by);
     fields.insert("documentName".into(), json!(doc_name));
 }
 
