@@ -412,3 +412,57 @@ fn rows_hug_the_reading_start_edge_in_both_directions() {
         }
     }
 }
+
+/// The Channel Options popup rows mirror only under a right-to-left UI: the label hugs the
+/// popup's right edge and the checkmark column sits at the reading start (right of the label);
+/// left-to-right keeps the plain left-aligned rows.
+#[test]
+fn channel_options_popup_rows_mirror_only_under_rtl() {
+    use crate::text::direction::{self, Dir};
+    let render = |dir: Dir| -> (egui::Rect, Vec<(String, egui::Rect, Vec<(char, f32)>)>) {
+        let _scope = direction::direction_scope(dir);
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+        let mut popup = egui::Rect::NOTHING;
+        let mut texts = Vec::new();
+        for _ in 0..3 {
+            let mut actions = Vec::new();
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.allocate_ui_with_layout(egui::vec2(300.0, 200.0), egui::Layout::top_down_justified(egui::Align::Min), |ui| {
+                    let btn = ui.button("Channel Options…");
+                    if let Some(r) = egui::Popup::menu(&btn)
+                        .open_memory(Some(egui::SetOpenCommand::Bool(true)))
+                        .show(|ui| crate::menus::popup_body(ui, |ui| indicates_items(ui, &mut actions, json!(0), ColorIndicates::MaskedAreas)))
+                    {
+                        popup = r.response.rect;
+                    }
+                });
+            });
+            out.textures_delta.clear();
+            texts = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => {
+                        let glyphs = ts.galley.rows.first().map(|r| r.glyphs.iter().map(|g| (g.chr, g.pos.x)).collect()).unwrap_or_default();
+                        Some((ts.galley.text().to_string(), ts.visual_bounding_rect(), glyphs))
+                    }
+                    _ => None,
+                })
+                .collect();
+        }
+        (popup, texts)
+    };
+    let at = |v: &[(String, egui::Rect, Vec<(char, f32)>)], s: &str| v.iter().find(|(t, _, _)| t.contains(s)).cloned();
+    let glyph = |v: &[(String, egui::Rect, Vec<(char, f32)>)], s: &str, c: char| at(v, s).and_then(|(_, _, g)| g.iter().find(|(ch, _)| *ch == c).map(|(_, x)| *x));
+    let slack = 32.0;
+    let (rtl_popup, rtl) = render(Dir::Rtl);
+    let (masked, selected) = (at(&rtl, "Masked Areas").unwrap().1, at(&rtl, "Selected Areas").unwrap().1);
+    assert!(rtl_popup.right() - masked.right() < slack && rtl_popup.right() - selected.right() < slack, "rtl: the labels hug the right edge: {masked:?} {selected:?} in {rtl_popup:?}");
+    assert!(glyph(&rtl, "Masked Areas", '✓') > glyph(&rtl, "Masked Areas", 'C'), "rtl: the checkmark is at the reading start of the checked row");
+    let (ltr_popup, ltr) = render(Dir::Ltr);
+    let (masked, selected) = (at(&ltr, "Masked Areas").unwrap().1, at(&ltr, "Selected Areas").unwrap().1);
+    assert!(selected.left() - ltr_popup.left() < slack, "ltr: the unchecked label hugs the left edge: {selected:?} in {ltr_popup:?}");
+    assert!(masked.left() > selected.left(), "ltr: the checked row starts after its gutter: {masked:?} {selected:?}");
+    assert!(glyph(&ltr, "Masked Areas", '✓') < glyph(&ltr, "Masked Areas", 'C'), "ltr: the checkmark is left of the label");
+}
