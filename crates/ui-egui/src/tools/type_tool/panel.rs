@@ -1,5 +1,5 @@
 use super::defaults::{apply, apply_defaults, default_styles, formatting_params, open_color_picker, shown_scale, target, type_unit};
-use super::fonts::{axis_sliders, font_picker, fonts_ready, selected_style, style_label, styles};
+use super::fonts::{axis_sliders, font_picker, fonts_ready, selected_style, style_options};
 use super::options_bar::{
     align_glyph, apply_kerning, direction_glyph, direction_items, icon_label, kerning_at, kerning_field, kerning_label, num_field, shown_family, styles_at,
     toggle_cell,
@@ -251,10 +251,9 @@ fn type_sections(app: &mut PhotocraftApp, ui: &mut egui::Ui, character: bool, pa
                 return;
             }
             let mut style = selected_style(&c);
-            let opts: Vec<(String, String)> =
-                styles(if fam.is_empty() { &c.font_family } else { &fam }).into_iter().map(|s| (s.clone(), style_label(&s))).collect();
+            let opts: Vec<(String, String)> = style_options(if fam.is_empty() { &c.font_family } else { &fam });
             let opts_ref: Vec<(String, &str)> = opts.iter().map(|(a, b)| (a.clone(), b.as_str())).collect();
-            if crate::widgets::dropdown(ui, "props-type-style", tl!("Style"), &mut style, &opts_ref, full) {
+            if crate::widgets::dropdown_literal(ui, "props-type-style", tl!("Style"), &mut style, &opts_ref, full) {
                 apply(app, ui.ctx(), json!({"fontStyle": style}));
             }
         });

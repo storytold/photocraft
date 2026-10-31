@@ -4171,6 +4171,8 @@ curves	Smooth	スムーズ
 	Font size presets	フォントサイズのプリセット
 	Leading presets	行送りのプリセット
 	Tracking presets	トラッキングのプリセット
+	Follows the interface language.	インターフェースの言語に従います。
+	Follow the interface language	インターフェースの言語に従う
 	Clear Selection	選択範囲をクリア
 	Color Aware	カラー認識
 	Decontaminate Colors	不要なカラーの除去

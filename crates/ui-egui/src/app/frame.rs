@@ -69,7 +69,10 @@ impl PhotocraftApp {
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
-        type_tool::sync_font_names(ctx, self.session.prefs().type_.show_font_names_in_english);
+        // A Chinese, Japanese or Korean interface lists a font by its own name unless the user
+        // chose otherwise (Preferences ▸ Type ▸ Show Font Names in English).
+        let localized_ui = photocraft_text::cjk::locale_script(Some(crate::i18n::current().code())).is_some();
+        type_tool::sync_font_names(ctx, self.session.prefs().type_.font_names_in_english(localized_ui));
         // A window bigger than its display (1440 × 900 on 1366 × 768) runs under the taskbar:
         // maximize it into the work area once (#315).
         work_area::fit_window(ctx);

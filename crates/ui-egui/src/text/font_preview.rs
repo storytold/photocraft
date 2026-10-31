@@ -50,11 +50,12 @@ pub(crate) fn sample(preview: FontPreview) -> Option<(f32, [f32; 2])> {
 }
 
 /// Family, display scale, the shared font database's generation (so a family installed or
-/// fetched (served fonts) after its first miss gets a sample once it is available) and the point
-/// size. Not the served catalog's generation: a listed family has no sample until its fonts are
-/// registered, which moves the database's generation, and keying on the catalog re-rendered
-/// every sample whenever it changed.
-type Key = (String, u32, u64, u32);
+/// fetched (served fonts) after its first miss gets a sample once it is available), the point
+/// size and the interface language (whose writing system picks the sample text). Not the served
+/// catalog's generation: a listed family has no sample until its fonts are registered, which
+/// moves the database's generation, and keying on the catalog re-rendered every sample whenever
+/// it changed.
+type Key = (String, u32, u64, u32, &'static str);
 #[derive(Clone)]
 struct Samples {
     latin: TextureHandle,
@@ -68,16 +69,36 @@ struct SampleImages {
     arabic: Option<ColorImage>,
 }
 
-/// The Latin sample text, and the Arabic one for a face that has both scripts. `chars` is the
-/// face's ascending charmap. Arabic-only and symbol faces show their own glyphs instead of the
-/// Latin sample and get no second sample.
-fn sample_texts(chars: &[char]) -> (String, Option<&'static str>) {
+/// The sample text a row shows, and the Arabic one for a face that has both scripts. `chars` is
+/// the face's ascending charmap; `localized` is the interface's own writing system's sample
+/// ([`localized_sample`]). A face of that writing system shows it, as Photoshop shows a Chinese
+/// font as "字体样式"; every other face shows "AaBbCc", or its own first glyphs (Arabic-only and
+/// symbol faces), and one that has both Latin and Arabic gets the second sample.
+fn sample_texts(chars: &[char], localized: Option<&'static str>) -> (String, Option<&'static str>) {
     let has = |c: char| chars.binary_search(&c).is_ok();
+    // A font that can't draw the whole sample is no font of that writing system for the menu:
+    // Photoshop draws boxes there, the menu shows the Latin sample instead.
+    if let Some(text) = localized.filter(|text| text.chars().all(has)) {
+        return (text.to_string(), None);
+    }
     if !SAMPLE.chars().all(has) {
         return (chars.iter().copied().filter(|c| !c.is_whitespace()).take(6).collect(), None);
     }
     let arabic = ARABIC_CORE.into_iter().chain(ARABIC_SAMPLE.chars().filter(|c| !c.is_whitespace())).all(has);
     (SAMPLE.into(), arabic.then_some(ARABIC_SAMPLE))
+}
+
+/// The interface's writing system's sample for a family that serves that writing system and can
+/// draw it — a Chinese font reads "字体样式" in a Chinese menu, a Traditional one "字體樣式", as
+/// in Photoshop. `None` for every other family, and outside a Chinese, Japanese or Korean
+/// interface, where "AaBbCc" stands.
+fn localized_sample(fonts: &mut photocraft_text::FontDb, family: &str) -> Option<&'static str> {
+    let script = photocraft_text::cjk::locale_script(Some(crate::i18n::current().code()))?;
+    let info = fonts.menu_info(family)?;
+    if !(info.scripts.has(script) && info.samples.has(script)) {
+        return None;
+    }
+    photocraft_text::font_menu::SAMPLES.iter().find(|(writing, _)| *writing == script).map(|(_, text)| *text)
 }
 
 fn render(engine: &mut photocraft_text::TextEngine, family: &str, text: &str, slot: f32, scale: u32, size: f32) -> Option<ColorImage> {
@@ -106,7 +127,8 @@ fn images(engine: &mut photocraft_text::TextEngine, family: &str, scale: u32, si
     if !engine.fonts.has_family(family) {
         return None;
     }
-    let (latin, arabic) = sample_texts(&engine.fonts.charmap(family, 400, false));
+    let localized = localized_sample(&mut engine.fonts, family);
+    let (latin, arabic) = sample_texts(&engine.fonts.charmap(family, 400, false), localized);
     let latin = render(engine, family, &latin, scaled(WIDTH, size), scale, size)?;
     let arabic = arabic.and_then(|text| render(engine, family, text, scaled(ARABIC_WIDTH, size), scale, size));
     Some(SampleImages { latin, arabic })
@@ -114,7 +136,7 @@ fn images(engine: &mut photocraft_text::TextEngine, family: &str, scale: u32, si
 
 fn key(ctx: &egui::Context, family: &str, size: f32) -> Key {
     let scale = ctx.pixels_per_point().ceil().clamp(1.0, 4.0) as u32;
-    (family.to_owned(), scale, photocraft_text::fonts::shared_generation(), size as u32)
+    (family.to_owned(), scale, photocraft_text::fonts::shared_generation(), size as u32, crate::i18n::current().code())
 }
 
 /// Width a row reserves for its samples: wider once a painted row showed the family covers
@@ -265,16 +287,16 @@ mod tests {
     fn only_faces_with_both_scripts_get_the_arabic_sample() {
         let latin = format!("{SAMPLE} ");
         let arabic = format!("{ARABIC_SAMPLE}{}", ARABIC_CORE.iter().collect::<String>());
-        let (text, second) = sample_texts(&charmap(&format!("{latin}{arabic}")));
+        let (text, second) = sample_texts(&charmap(&format!("{latin}{arabic}")), None);
         assert_eq!((text.as_str(), second), (SAMPLE, Some(ARABIC_SAMPLE)));
-        assert_eq!(sample_texts(&charmap(&latin)), (SAMPLE.into(), None));
-        let (own_glyphs, none) = sample_texts(&charmap(&arabic));
+        assert_eq!(sample_texts(&charmap(&latin), None), (SAMPLE.into(), None));
+        let (own_glyphs, none) = sample_texts(&charmap(&arabic), None);
         assert_eq!((own_glyphs.chars().count(), none), (6, None));
         assert!(own_glyphs.chars().all(|c| arabic.contains(c)));
-        assert_eq!(sample_texts(&[]), (String::new(), None));
+        assert_eq!(sample_texts(&[], None), (String::new(), None));
         for missing in ARABIC_CORE.into_iter().chain(ARABIC_SAMPLE.chars().filter(|c| !c.is_whitespace())) {
             let partial: String = format!("{latin}{arabic}").chars().filter(|&c| c != missing).collect();
-            assert_eq!(sample_texts(&charmap(&partial)).1, None, "without U+{:04X}", missing as u32);
+            assert_eq!(sample_texts(&charmap(&partial), None).1, None, "without U+{:04X}", missing as u32);
         }
     }
 
@@ -282,7 +304,7 @@ mod tests {
     fn a_system_arabic_face_renders_both_samples() {
         let mut engine = photocraft_text::TextEngine::new();
         engine.fonts.load_system_fonts();
-        let candidates: Vec<String> = engine.fonts.families().into_iter().filter(|f| sample_texts(&engine.fonts.charmap(f, 400, false)).1.is_some()).collect();
+        let candidates: Vec<String> = engine.fonts.families().into_iter().filter(|f| sample_texts(&engine.fonts.charmap(f, 400, false), None).1.is_some()).collect();
         // A face can map the Arabic characters to blank glyphs (#5259): `render` then rightly gives
         // no sample, so every candidate is rendered and the first one with an Arabic sample is checked.
         let mut rendered = None;
@@ -297,5 +319,41 @@ mod tests {
         };
         assert_eq!(arabic.size, [ARABIC_WIDTH as usize, HEIGHT as usize], "{family}");
         assert!(arabic.pixels.iter().any(|p| p.a() > 0), "{family}");
+    }
+
+    /// A font of the interface's writing system shows that writing system's sample ("字体样式"),
+    /// as Photoshop does — when it can draw it. A Latin-only face, or one that lacks part of the
+    /// sample, keeps "AaBbCc".
+    #[test]
+    fn the_interfaces_writing_system_gets_its_own_sample() {
+        let hans = charmap("AaBbCc字体样式");
+        assert_eq!(sample_texts(&hans, Some("字体样式")), ("字体样式".to_string(), None));
+        assert_eq!(sample_texts(&hans, Some("字體樣式")), (SAMPLE.to_string(), None), "the face lacks 體 and 樣: no boxes, the Latin sample");
+        assert_eq!(sample_texts(&charmap("AaBbCc"), Some("字体样式")), (SAMPLE.to_string(), None), "a Latin-only face");
+        assert_eq!(sample_texts(&hans, None), (SAMPLE.to_string(), None), "an English interface: as before");
+    }
+
+    /// On a machine with the Glow Sans family installed: a Chinese font's sample is the Chinese
+    /// one and a Latin font keeps "AaBbCc". Run it with
+    /// `cargo test -p photocraft-ui-egui --lib installed_chinese -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "requires the installed Glow Sans family; no font files are distributed"]
+    fn installed_chinese_fonts_show_the_chinese_sample() {
+        let previous = crate::i18n::current();
+        crate::i18n::set_current(crate::i18n::Lang::from_code("zh-hans").expect("a bundled catalog"));
+        let mut engine = photocraft_text::TextEngine::new();
+        engine.fonts.load_system_fonts();
+        let chars = engine.fonts.charmap("Glow Sans SC", 400, false);
+        let localized = localized_sample(&mut engine.fonts, "Glow Sans SC");
+        println!("Glow Sans SC sample: {localized:?}");
+        assert_eq!(localized, Some("字体样式"));
+        assert_eq!(sample_texts(&chars, localized).0, "字体样式");
+        // The row renders it: the text engine draws the sample from the font's own outlines.
+        let image = images(&mut engine, "Glow Sans SC", 1, MEDIUM).expect("the Chinese sample renders");
+        assert!(image.latin.pixels.iter().any(|pixel| pixel.a() > 0), "the sample has ink");
+        // A Latin family is untouched.
+        assert_eq!(localized_sample(&mut engine.fonts, "Inter"), None);
+        assert_eq!(sample_texts(&engine.fonts.charmap("Inter", 400, false), None).0, "AaBbCc");
+        crate::i18n::set_current(previous);
     }
 }

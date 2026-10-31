@@ -3133,6 +3133,8 @@ curves	Smooth	平滑
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設
+	Follows the interface language.	跟隨介面語言。
+	Follow the interface language	跟隨介面語言
 	Clear Selection	清除選取範圍
 	Color Aware	顏色感知
 	Decontaminate Colors	淨化顏色

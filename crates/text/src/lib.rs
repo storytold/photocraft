@@ -19,10 +19,12 @@
 
 pub mod area;
 pub mod cjk;
+pub mod collate;
 pub mod craft_fonts;
 mod embolden;
 pub mod engine_data;
 pub mod font_class;
+pub mod font_menu;
 pub mod fonts;
 pub mod glyphs;
 pub mod layout;
@@ -42,6 +44,7 @@ use photocraft_doc::TextLayer;
 
 pub use craft_fonts::{CRAFT_FONTS, CraftFont};
 pub use font_class::{FamilyTraits, FontClass, FontFormat};
+pub use font_menu::{CjkScripts, FamilyMenuInfo};
 pub use fonts::{FaceInfo, FontDb, ResolvedFont};
 pub use layout::{
     ClusterInfo, LineInfo, PlacedGlyph, TextLayout, byte_index, char_index, hit_char, line_edge, line_index, line_step, text_point_inside, word_boundary,
@@ -155,6 +158,10 @@ fn uses_system_fonts() -> bool {
 fn new_shared() -> std::sync::Mutex<TextEngine> {
     let mut engine = if uses_system_fonts() { TextEngine::with_system_fonts() } else { TextEngine::new() };
     engine.fonts.mark_shared();
+    // The font menus' names, grouping and samples, read here on the scan thread: drawing a menu
+    // must never wait for a font file. The warm-up fills the per-family cache without building
+    // the map a caller would only throw away.
+    engine.fonts.warm_menu_index();
     std::sync::Mutex::new(engine)
 }
 

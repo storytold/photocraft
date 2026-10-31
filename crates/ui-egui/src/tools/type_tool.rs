@@ -48,9 +48,9 @@ use editing::{insert, insert_typed, smart_quotes};
 pub(crate) use fonts::{Axis, axis_value, slider_axes};
 #[cfg(test)]
 use fonts::{FONT_LIST_HEIGHT, font_picker_in, preview_text, style_names, wheel_family_index};
-use fonts::{FontFieldEdit, accept_row, font_labels_id, font_menu_rows};
+use fonts::{FontFieldEdit, FontMenuModel, accept_row, font_menu_id, font_menu_rows};
 pub(crate) use fonts::{FontLibrary, family_picker_in, fonts_ready, selected_style};
-pub use fonts::{families, style_label, styles, sync_font_names, warm_fonts};
+pub use fonts::{families, style_options, styles, sync_font_names, warm_fonts};
 pub(crate) use ime::{ImeState, controls_only, finish_reset_logic, finish_reset_pass, in_ui_pass, install_reset_hooks};
 #[cfg(test)]
 use ime::{IncomingComposition, ResetPhase};

@@ -876,6 +876,52 @@ fn shift_key_tool_switch_is_on_by_default_and_a_stored_false_is_kept() {
     assert!(!stored.use_shift_key_for_tool_switch);
 }
 
+/// Show Font Names in English follows the interface language until the user chooses: a Chinese,
+/// Japanese or Korean interface lists a font by its own name, as Photoshop's editions do.
+#[test]
+fn font_names_follow_the_interface_language_until_chosen() {
+    let t = Preferences::default().type_;
+    assert_eq!(t.show_font_names_in_english, None, "unset: nothing stored for a default choice");
+    assert!(!t.font_names_in_english(true), "a Chinese, Japanese or Korean interface lists its fonts' own names");
+    assert!(t.font_names_in_english(false), "any other interface lists English names");
+    let chosen = |v| TypePrefs { show_font_names_in_english: Some(v), ..TypePrefs::default() };
+    assert!(chosen(true).font_names_in_english(true), "an explicit choice wins over the language");
+    assert!(!chosen(false).font_names_in_english(false));
+}
+
+/// A settings file from before version 3 stored Show Font Names in English on only because that
+/// was the old default, so it loads following the interface language; one saved since keeps an
+/// explicit choice, and an explicit off is a choice even in an old file.
+#[test]
+fn old_settings_files_take_the_font_names_default() {
+    for old in [
+        json!({"type": {"showFontNamesInEnglish": true}}),
+        json!({"version": 2, "type": {"showFontNamesInEnglish": true, "recentFonts": 5}}),
+    ] {
+        let mut s = Session::new();
+        s.load_prefs_json(&old.to_string()).unwrap();
+        assert_eq!(s.prefs().type_.show_font_names_in_english, None, "{old}");
+        assert!(!s.prefs().type_.font_names_in_english(true), "{old}");
+    }
+    let mut s = Session::new();
+    s.load_prefs_json(&json!({"version": 2, "type": {"showFontNamesInEnglish": false}}).to_string()).unwrap();
+    assert_eq!(s.prefs().type_.show_font_names_in_english, Some(false), "a chosen off is kept");
+    assert_eq!(s.prefs().type_.recent_fonts, 10, "other type settings keep their defaults");
+    // Chosen since and saved now: kept on the next start.
+    s.edit_prefs(|p| p.type_.show_font_names_in_english = Some(true));
+    let saved = s.prefs_to_json();
+    assert_eq!(serde_json::from_str::<Value>(&saved).unwrap()["version"], json!(PREFS_VERSION));
+    let mut restored = Session::new();
+    restored.load_prefs_json(&saved).unwrap();
+    assert_eq!(restored.prefs().type_.show_font_names_in_english, Some(true));
+    // Unset is saved as null, which loads as following the language again.
+    restored.edit_prefs(|p| p.type_.show_font_names_in_english = None);
+    let mut again = Session::new();
+    again.load_prefs_json(&restored.prefs_to_json()).unwrap();
+    assert_eq!(again.prefs().type_.show_font_names_in_english, None);
+}
+
+
 /// #5647: a settings file from before version 2 stored the switch off only because that was the
 /// old default, so it loads with the new default (on); one saved since keeps an explicit off.
 #[test]

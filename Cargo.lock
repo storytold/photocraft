@@ -5381,6 +5381,7 @@ dependencies = [
 name = "photocraft-text"
 version = "0.18.0"
 dependencies = [
+ "encoding_rs",
  "flate2",
  "parley",
  "photocraft-color",
