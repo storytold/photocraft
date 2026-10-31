@@ -160,7 +160,11 @@ pub(crate) fn group_gap_drop_hits(
     lower_depth: usize,
     order: usize,
 ) -> Vec<DropHitRegion> {
-    let line = |y: f32| Rect::from_min_max(Pos2::new(rect.left(), y - 2.0), Pos2::new(rect.right(), y + 2.0));
+    // Both semantic halves share one visual marker: the separator's exact center.
+    let line = Rect::from_min_max(
+        Pos2::new(rect.left(), rect.center().y - 2.0),
+        Pos2::new(rect.right(), rect.center().y + 2.0),
+    );
     let middle = rect.center().y;
     vec![
             DropHitRegion {
@@ -168,7 +172,7 @@ pub(crate) fn group_gap_drop_hits(
                 container: None,
                 region: PointerRegion::TrailingEdge,
                 hit_rect: Rect::from_min_max(rect.min, Pos2::new(rect.right(), middle)),
-                indicator_rect: line(rect.top() + 1.5),
+                indicator_rect: line,
                 depth: upper_depth,
                 order,
             },
@@ -177,7 +181,7 @@ pub(crate) fn group_gap_drop_hits(
                 container: None,
                 region: PointerRegion::LeadingEdge,
                 hit_rect: Rect::from_min_max(Pos2::new(rect.left(), middle), rect.max),
-                indicator_rect: line(rect.bottom() - 1.5),
+                indicator_rect: line,
                 depth: lower_depth,
                 order: order.saturating_add(1),
             },
@@ -414,8 +418,9 @@ mod insertion_marker_tests {
                     assert_eq!(hits.len(), 2);
                     assert_eq!(hits[0].hit_rect, Rect::from_min_max(gap.min, Pos2::new(gap.right(), top + 3.0)));
                     assert_eq!(hits[1].hit_rect, Rect::from_min_max(Pos2::new(left, top + 3.0), gap.max));
-                    assert_eq!(hits[0].indicator_rect, Rect::from_min_max(Pos2::new(left, top - 0.5), Pos2::new(gap.right(), top + 3.5)));
-                    assert_eq!(hits[1].indicator_rect, Rect::from_min_max(Pos2::new(left, top + 2.5), Pos2::new(gap.right(), top + 6.5)));
+                    let centered_line = Rect::from_min_max(Pos2::new(left, top + 1.0), Pos2::new(gap.right(), top + 5.0));
+                    assert_eq!(hits[0].indicator_rect, centered_line);
+                    assert_eq!(hits[1].indicator_rect, centered_line);
                     assert_eq!(hits[0].depth, 0);
                     assert_eq!(hits[1].depth, 1);
                     assert_eq!(hits[0].order + 1, hits[1].order);

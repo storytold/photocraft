@@ -181,10 +181,12 @@ pub(crate) fn arbitrate_hit_index(pointer: Pos2, hits: &[DropHitRegion]) -> Opti
         .map(|(index, _)| index)
 }
 
-/// Paint the indicator carried by the resolved candidate. Invalid candidates use egui's error
-/// color so the same geometry communicates rejection without ever looking like a valid drop.
+/// Paint the indicator carried by a valid resolved candidate. Invalid destinations intentionally
+/// remain visually quiet rather than drawing distracting error-colored bars.
 pub(crate) fn paint_candidate(ui: &egui::Ui, candidate: &DropCandidate, color: egui::Color32) {
-    let color = if candidate.is_valid() { color } else { ui.visuals().error_fg_color };
+    if !candidate.is_valid() {
+        return;
+    }
     match &candidate.indicator {
         DropIndicator::InsertionLine { rect } | DropIndicator::RootAppendLine { rect } => {
             ui.painter().rect_filled(*rect, egui::CornerRadius::ZERO, color);
