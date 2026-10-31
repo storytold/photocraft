@@ -38,6 +38,8 @@ pub enum Format {
     Jxl,
     /// Kodak Cineon (`.cin`, the 10-bit film-scan format DPX grew from).
     Cineon,
+    /// Pixar image (`.pxr`): 8-bit tiled grey/RGB/RGBA, read-only.
+    Pixar,
     /// DICOM single-frame images (uncompressed): read-only.
     Dicom,
     /// Amiga IFF/ILBM (`FORM ... ILBM`): planar bitplanes with a palette or 24-bit RGB.
@@ -74,6 +76,7 @@ pub struct FormatCaps {
 /// The test-suite asserts that every other enabled format is read+write.
 pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
     (Format::Xpm, "XPM is a legacy Unix icon interchange format. Reading existing XPM icons is supported; writing modern image assets should use PNG instead."),
+    (Format::Pixar, "Pixar (.pxr) is supported for opening legacy Pixar Image Computer pictures; this crate has no Pixar writer, so save as PNG instead."),
     (
         Format::Dicom,
         "DICOM single-frame images are imported for medical review; this crate has no DICOM writer, so save an imported frame as TIFF or PNG instead.",
@@ -107,7 +110,7 @@ const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 23] = [
+    pub const ALL: [Format; 24] = [
         Format::Png,
         Format::Jpeg,
         Format::Jxl,
@@ -129,6 +132,7 @@ impl Format {
         Format::Fits,
         Format::Dpx,
         Format::Cineon,
+        Format::Pixar,
         Format::Dicom,
         Format::Iff,
     ];
@@ -166,6 +170,7 @@ impl Format {
             Format::Dpx => "DPX",
             Format::Jxl => "JPEG XL",
             Format::Cineon => "Cineon",
+            Format::Pixar => "Pixar",
             Format::Dicom => "DICOM",
             Format::Iff => "Amiga IFF",
         }
@@ -196,6 +201,7 @@ impl Format {
             Format::Dpx => &["dpx"],
             Format::Jxl => &["jxl"],
             Format::Cineon => &["cin"],
+            Format::Pixar => &["pxr"],
             Format::Dicom => &["dcm", "dicom", "dc3"],
             Format::Iff => &["iff", "lbm", "ilbm"],
         }
@@ -224,6 +230,7 @@ impl Format {
             Format::Dpx => "image/x-dpx",
             Format::Jxl => "image/jxl",
             Format::Cineon => "image/x-cin",
+            Format::Pixar => "image/x-pixar",
             Format::Dicom => "application/dicom",
             Format::Iff => "image/x-iff",
         }
@@ -286,6 +293,7 @@ pub fn caps(format: Format) -> FormatCaps {
         // GrayA is widened to RGBA at the same depth; the 16-bit alpha header is corrected.
         Format::Jxl => FormatCaps { read: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
         Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
+        Format::Pixar => FormatCaps { read: true, write: false, depths: &[S::U8], layouts: &[L::Gray, L::GrayA, L::Rgb, L::Rgba], ..base },
         Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
         Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
     }
@@ -348,6 +356,9 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     }
     if crate::codecs::dpx::is_cineon(b) {
         return Some(Format::Cineon);
+    }
+    if crate::codecs::pixar::looks_like_pixar(b) {
+        return Some(Format::Pixar);
     }
     if crate::codecs::dicom::is_dicom(b) {
         return Some(Format::Dicom);
