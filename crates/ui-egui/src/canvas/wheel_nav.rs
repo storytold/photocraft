@@ -5,7 +5,10 @@
 //!   ⇧/Shift + ⌥/Alt + wheel snaps to the next zoom ladder level instead.
 //!   On Windows and Linux Ctrl + ⌥/Alt + wheel is the same zoom gesture (`alt_gesture`, #10488):
 //!   the windowing layer reports a held Ctrl as both `ctrl` and `command`, and Ctrl + Alt + wheel
-//!   was doing nothing before. Ctrl + Alt + ⇧ still does not snap (`latest_shift` stays strict).
+//!   was doing nothing before. Ctrl + Alt + ⇧ + wheel, on the other hand, is a dead gesture today:
+//!   the filter below drops the notch and the snap branch never sees it either (pinned by a test in
+//!   `wheel_nav/tests.rs`). Whether it should zoom like ⌥ + wheel or snap like ⌥ + ⇧ is open on
+//!   #10488: there is no measured Photoshop evidence for the combination, so no behaviour is claimed.
 //! - Preferences › General › Zoom with Scroll Wheel swaps the two: the wheel zooms and
 //!   ⌥/Alt + wheel scrolls; ⇧/Shift + wheel snaps to the next zoom ladder level.
 //! - A trackpad pinch zooms around the pointer, unless Preferences › Enhanced Controls ›
@@ -405,8 +408,11 @@ pub fn read_with(
     // The wheel events that belong to the gesture in progress: Shift+Alt (snap zoom), Alt-only
     // (continuous zoom), Shift-only (snap zoom with zoom_with_wheel), or plain (scroll/zoom).
     // The Alt branches take [`alt_gesture`], so Ctrl + Alt (Windows' ctrl + command mirror) counts
-    // as Alt here too; `latest_shift` above keeps its stricter test, so Ctrl + Alt + ⇧ + wheel
-    // zooms continuously instead of snapping, and the ⇧-snap branches stay as they were.
+    // as Alt here too, and the ⇧-snap branches stay as they were. `latest_shift` above keeps its
+    // stricter test, so a Ctrl + Alt + ⇧ notch is dropped by the alt branch (`!m.shift`) and the
+    // snap branch never takes it either: that combination is a dead gesture, pinned in
+    // `wheel_nav/tests.rs`. Which Photoshop gesture it should be is open on #10488 - do not quietly
+    // "fix" it in passing without measured evidence for the choice.
     // `instant`: the part of `raw` egui leaves unsmoothed (a trackpad; see `wheel_events`).
     let (raw, instant) = wheel
         .iter()

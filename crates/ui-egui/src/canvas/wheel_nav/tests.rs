@@ -635,9 +635,30 @@ fn each_modifier_maps_like_photoshop() {
     let (pan, zoom, _) = gesture(vec![vec![wheel(Vec2::new(0.0, 0.25), ctrl_alt)]], false, true);
     let speed = egui::InputOptions::default().scroll_zoom_speed;
     assert!(pan == Vec2::ZERO && (zoom - (speed * 40.0 * 0.25).exp()).abs() < 1e-4, "a fractional Ctrl + ⌥ step zooms once: {pan:?} {zoom}");
+    // Review 4432102938 asks what Ctrl + ⌥ + ⇧ + wheel does, and asks for an assertion rather than
+    // only a comment. The comment above the wheel filter used to claim it "zooms continuously
+    // instead of snapping", as did the module doc and the parity row; all three are corrected in
+    // this commit, because the filter rejects the notch instead: with `ctrl` held `latest_shift` is
+    // false (it excludes ctrl and command), so the alt branch runs and its `!m.shift` drops the
+    // notch out of `raw`, while `shift` stays false, so it never reaches the snap branch either.
+    // Zoom with Scroll Wheel off, Animated Zoom off. Asserting the claimed continuous zoom first
+    // failed exactly that way:
+    // "Ctrl + ⌥ + ⇧ + wheel zooms 10%, at once: [0.0 0.0] 1 snaps 0".
+    // What follows pins what the code does today (nothing at all, in either Animated Zoom mode) so
+    // the gesture cannot change silently; whether it should zoom like ⌥ + wheel or behave exactly
+    // like ⌥ + ⇧ (snap) is the open question for the maintainer on #10488 - this repo has no
+    // measured Photoshop evidence for the combination, so no behaviour was invented here.
+    let ctrl_alt_shift = Modifiers { alt: true, ctrl: true, command: true, shift: true, ..Modifiers::NONE };
+    let (pan, zoom, snaps) = one(ctrl_alt_shift);
+    assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 0, "Ctrl + ⌥ + ⇧ + wheel is a dead gesture today: {pan:?} {zoom} snaps {snaps}");
+    let (pan, zoom, snaps) = gesture_with(vec![vec![wheel(notch, ctrl_alt_shift)]], false, false, true);
+    assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 0, "and stays dead with Animated Zoom on: {pan:?} {zoom} snaps {snaps}");
+    // Without the Windows ctrl mirror the same wheel does snap, so only the ctrl half kills it.
+    let (pan, zoom, snaps) = one(Modifiers { alt: true, shift: true, ..Modifiers::NONE });
+    assert!(pan == Vec2::ZERO && zoom == 1.0 && snaps == 1, "⌥ + ⇧ + wheel still snaps: {pan:?} {zoom} snaps {snaps}");
     // macOS ⌘ + ⌥ (command set, ctrl not) is deliberately NOT the zoom gesture: it is left to egui's
-    // own scroll handling. Ctrl + ⌥ + ⇧ keeps its old behaviour too (`latest_shift` ignores ctrl), which
-    // means a continuous zoom with Animated Zoom on, and nothing with it off.
+    // own scroll handling. Ctrl + ⌥ + ⇧ is not the zoom gesture either (the row above: it is not
+    // even a scroll), and which of the two readings is right is the open question on #10488.
     let (pan, zoom, _) = one(Modifiers { alt: true, ..CMD });
     assert!(zoom == 1.0 && pan != Vec2::ZERO, "⌘ + ⌥ + wheel keeps scrolling: {pan:?} {zoom}");
 }
