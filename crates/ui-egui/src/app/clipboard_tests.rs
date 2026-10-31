@@ -507,3 +507,17 @@ fn os_clipboard_import_respects_a_newer_path_clip() {
     assert!(app.session.clipboard.is_some() && app.session.path_clipboard.is_none(), "newer OS pixels replace the path clip");
     drop(a);
 }
+
+/// The freshness signature covers every byte: a change to any byte of even a tiny OS image
+/// must read as a new clipboard (the old every-997th-byte sampling looked at one byte of a
+/// 3×2 image, so a greener pixel left the signature unchanged and a newer clip looked stale).
+#[test]
+fn clip_signature_covers_every_byte() {
+    let a = [0u8; 24];
+    let mut b = a;
+    b[7] = 200;
+    assert_ne!(clipboard::clip_signature(3, 2, &a), clipboard::clip_signature(3, 2, &b), "a changed byte anywhere changes the signature");
+    b[7] = 0;
+    b[23] = 1;
+    assert_ne!(clipboard::clip_signature(3, 2, &a), clipboard::clip_signature(3, 2, &b), "even the last byte counts");
+}
