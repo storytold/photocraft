@@ -306,6 +306,11 @@ pub struct Interface {
     pub notification_auto_hide: bool,
     /// Seconds a notice stays on screen before it hides itself (Auto Hide Notifications).
     pub notification_duration_seconds: u32,
+    /// Linux: while a global-menu host (Canonical AppMenu/dbusmenu registrar) serves the
+    /// menus, the in-window menu bar hides, except in full-screen modes, where the shell's
+    /// bar may be hidden too (the OS window is fullscreen). Off, PhotoCraft keeps its
+    /// in-window menu bar and exports nothing (Interface > Use Global Menu Bar).
+    pub global_menu_bar: bool,
 }
 
 impl Default for Interface {
@@ -335,6 +340,7 @@ impl Default for Interface {
             show_file_name_in_title: true,
             notification_auto_hide: true,
             notification_duration_seconds: 6,
+            global_menu_bar: true,
         }
     }
 }
@@ -450,7 +456,7 @@ pub use shortcuts::{
 };
 use store::read_lenient;
 pub use store::{InvalidPref, PREFS_VERSION, PrefsStore};
-pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
+pub use validate::{HIDDEN_UNTIL_IMPLEMENTED, LINUX_ONLY, SECTIONS, X11_DESKTOP_ONLY, choices, gpu_adapter_matches, is_color, is_hidden, parse_hex, range};
 use validate::{check_value, get_path, keyed, set_path};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

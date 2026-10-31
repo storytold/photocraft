@@ -4109,6 +4109,7 @@ curves	Smooth	Εξομάλυνση
 	Increase Brush Size	Αύξηση μεγέθους πινέλου
 	Decrease Brush Hardness	Μείωση σκληρότητας πινέλου
 	Increase Brush Hardness	Αύξηση σκληρότητας πινέλου
+	Use global menu bar	Χρήση καθολικής γραμμής μενού
 	Demosaic	Αποψηφιδοποίηση
 	How the camera's colour filter mosaic is filled in. It is applied when the file opens; the preview shows the method it was opened with.	Πώς συμπληρώνεται το ψηφιδωτό του χρωματικού φίλτρου της κάμερας. Εφαρμόζεται όταν ανοίγει το αρχείο· η προεπισκόπηση δείχνει τη μέθοδο με την οποία άνοιξε.
 	AHD (adaptive homogeneity)	AHD (προσαρμοστική ομοιογένεια)

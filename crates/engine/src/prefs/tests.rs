@@ -15,6 +15,8 @@ fn defaults_match_photoshop() {
     assert_eq!(p.transparency_and_gamut.colors(), [[255, 255, 255], [204, 204, 204]]);
     assert_eq!(p.transparency_and_gamut.square(), Some(8.0));
     assert_eq!(p.cursors.painting, PaintingCursor::NormalTip);
+    // Linux global menu: on until the user switches it off (Interface > Use Global Menu Bar).
+    assert!(p.interface.global_menu_bar);
     // Every dialog section is a key of the JSON form.
     let v = p.to_json();
     for (id, _) in SECTIONS {
@@ -158,6 +160,16 @@ fn favorite_themes_persist_and_reject_invalid_lists() {
         assert!(s.execute("prefs.set", json!({"path": "interface.favoriteThemes", "value": invalid})).is_err());
         assert_eq!(s.prefs().interface.favorite_themes, vec![Theme::Classic, Theme::Studio]);
     }
+}
+
+#[test]
+fn global_menu_bar_preference_round_trips() {
+    let mut s = session();
+    assert_eq!(s.execute("prefs.get", json!({"path": "interface.globalMenuBar"})).unwrap(), json!(true));
+    s.execute("prefs.set", json!({"path": "interface.globalMenuBar", "value": false})).unwrap();
+    assert!(!s.prefs().interface.global_menu_bar);
+    s.execute("prefs.reset", json!({"path": "interface.globalMenuBar"})).unwrap();
+    assert!(s.prefs().interface.global_menu_bar);
 }
 
 #[test]
@@ -1064,4 +1076,10 @@ fn the_web_build_caps_memory_usage() {
         assert_eq!(honoured_memory_usage_mb(stored, true), honoured, "web, {stored} MB");
         assert_eq!(honoured_memory_usage_mb(stored, false), stored, "desktop, {stored} MB");
     }
+}
+
+#[test]
+fn global_menu_preference_shows_on_linux_and_the_bsds_only() {
+    assert_eq!(is_hidden("interface.globalMenuBar"), !cfg!(all(unix, not(target_os = "macos"))));
+    assert!(X11_DESKTOP_ONLY.iter().all(|p| !HIDDEN_UNTIL_IMPLEMENTED.contains(p)));
 }
