@@ -499,3 +499,37 @@ fn free_transform_nudges_bundle_into_one_undo_step() {
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(quad(&app), moved(2.0, 0.0));
 }
+
+/// #9511: as in Photoshop, a plain arrow nudge is one screen pixel, so zoomed out it moves the
+/// layer several document pixels (floor of 1 / zoom: 4 at 25 %, 2 at 50 %, 1 at 66.7 %, 1 at
+/// 100 % and above); ⇧ is 10 document pixels at any zoom.
+#[test]
+fn a_nudge_is_one_screen_pixel() {
+    for (zoom, step) in [(0.25, 4), (0.5, 2), (2.0 / 3.0, 1), (1.0, 1), (2.0, 1)] {
+        let mut app = app_with_layer();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.ui.views[0].zoom = zoom;
+        assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+        assert_eq!(left_edge(&app, id), 8 + step, "→ at {zoom}");
+        assert!(press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::SHIFT));
+        assert_eq!(left_edge(&app, id), 8 + step - 10, "⇧← at {zoom}");
+    }
+}
+
+/// #9511: below 0.1 % (a large document zooms out until its shorter side is 2 px) the nudge is
+/// still one screen pixel: 6000 document pixels at a 12,000 × 12,000 px document's lowest zoom,
+/// not capped at 1000. The ladder's f32 rungs (0.1 %, 0.2 %) still give whole steps (1000,
+/// not 999).
+#[test]
+fn a_nudge_is_one_screen_pixel_below_a_tenth_of_a_percent() {
+    let lowest = crate::zoom_levels::min([12_000, 12_000]);
+    // 0.3333334 is just above a third, off the ladder (pinch, Zoom tool drag): 2.9999994 screen
+    // pixels' worth floors to 2, while the ladder's own f32 third still gives 3 (#10438 review).
+    for (zoom, step) in [(0.002, 500), (0.001, 1000), (0.0005, 2000), (lowest, 6000), (0.333_333_4, 2), (1.0 / 3.0, 3)] {
+        let mut app = app_with_layer();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.ui.views[0].zoom = zoom;
+        assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+        assert_eq!(left_edge(&app, id), 8 + step, "→ at {zoom}");
+    }
+}
