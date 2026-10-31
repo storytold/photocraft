@@ -138,7 +138,7 @@ fn perf_output_includes_slow_frames() {
     assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"], json!([]));
     app.slow_frames.set_threshold_ms(0.0);
     app.run("file.new", json!({"width": 64, "height": 32})).unwrap();
-    app.finish_frame(1.0);
+    app.finish_frame(&ctx, 1.0);
     let frames = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"].clone();
     let last = frames.as_array().and_then(|f| f.last()).expect("a slow frame").clone();
     assert_eq!(last["command"], "file.new", "{last}");
@@ -156,7 +156,7 @@ fn perf_output_includes_slow_frames() {
     let played = app.run("actions.play", json!({"action": "Zoom"})).unwrap();
     assert_eq!(played["ran"], 2, "{played}");
     let outer_ms = app.perf.command_ms;
-    app.finish_frame(1.0);
+    app.finish_frame(&ctx, 1.0);
     let frames = call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["perf"]["slowFrames"].clone();
     let last = frames.as_array().and_then(|f| f.last()).expect("a slow frame").clone();
     assert_eq!(last["command"], "actions.play", "{last}");

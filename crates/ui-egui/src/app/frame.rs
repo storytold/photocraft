@@ -167,7 +167,7 @@ impl PhotocraftApp {
             // No editor was drawn this pass: end its IME context rather than keep a stale owner.
             type_tool::sync_ime(self, &ctx);
             // The frame's stage record was started with its input: close it here too.
-            self.finish_frame(0.0);
+            self.finish_frame(&ctx, 0.0);
             return;
         }
         let t0 = gpu_canvas::now_ms();
@@ -190,7 +190,7 @@ impl PhotocraftApp {
             self.perf.record_gpu(t);
         }
         self.perf.frame(ui_ms);
-        self.finish_frame(ui_ms);
+        self.finish_frame(&ctx, ui_ms);
         if !drawn {
             return;
         }

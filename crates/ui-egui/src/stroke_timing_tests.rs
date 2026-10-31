@@ -390,7 +390,7 @@ fn the_stroke_trace_times_each_frame_of_a_stroke_and_ends_on_release() {
             app.perf.stage.start(t0, moves);
             app.perf.stage.ui_start(t0, Some(0.004));
             egui::CentralPanel::default().show(ui, |ui| crate::canvas::document_area(app, ui));
-            app.finish_frame(crate::gpu_canvas::now_ms() - t0);
+            app.finish_frame(&ctx, crate::gpu_canvas::now_ms() - t0);
         },
         app,
     );
