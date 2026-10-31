@@ -4670,8 +4670,10 @@ shape	Appearance	Оформление
 	Grayscale Ramp	Шкала градаций серого
 	Current Colors	Текущие цвета
 	Make Ramp Web Safe	Сделать шкалу безопасной для web
+	Scroll All Windows	Прокручивать все окна
 	The path was kept as the Work Path	Контур сохранён как рабочий контур
 	The path was discarded	Контур удалён
+# Art History Brush (#213).
 	Art History Brush Tool	Инструмент «Кисть истории искусств»
 	Tight Short	Плотный короткий
 	Tight Medium	Плотный средний

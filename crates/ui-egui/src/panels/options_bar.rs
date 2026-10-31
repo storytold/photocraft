@@ -648,6 +648,7 @@ fn tool_specific_options(app: &mut PhotocraftApp, ui: &mut egui::Ui, t: Tokens, 
             }
         }
         Tool::Hand => {
+            widgets::checkbox(ui, &mut app.ui.tool_options.hand_scroll_all, tl!("Scroll All Windows"));
             hint(ui, tl!("Drag to pan  ·  hold Space with any tool"));
             if widgets::secondary_button(ui, "100%", 0.0).clicked()
                 && let Some(i) = app.session.active_index()

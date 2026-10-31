@@ -4216,8 +4216,10 @@ cameraRaw	Dehaze	Odstranění oparu
 	Grayscale Ramp	Přechod stupňů šedi
 	Current Colors	Aktuální barvy
 	Make Ramp Web Safe	Omezit pruh na webové barvy
+	Scroll All Windows	Posouvat všechna okna
 	The path was kept as the Work Path	Cesta byla zachována jako pracovní cesta
 	The path was discarded	Cesta byla zahozena
+# Art History Brush (#213).
 	Art History Brush	Štětec umělecké historie
 	Art History Brush Tool	Nástroj štětec umělecké historie
 	Tight Short	Těsný krátký

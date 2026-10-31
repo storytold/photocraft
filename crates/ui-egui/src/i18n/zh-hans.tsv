@@ -3143,8 +3143,10 @@ curves	Smooth	平滑
 	Exported {path}	已导出 {path}
 	Exported {n} files	已导出 {n} 个文件
 	Driver: {driver}	驱动程序：{driver}
+	Scroll All Windows	滚动所有窗口
 	The path was kept as the Work Path	路径已保留为工作路径
 	The path was discarded	路径已丢弃
+# Art History Brush (#213).
 	Art History Brush	艺术历史画笔
 	Art History Brush Tool	艺术历史画笔工具
 	Tight Short	紧密短

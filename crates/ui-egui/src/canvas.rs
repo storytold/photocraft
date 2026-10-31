@@ -39,6 +39,7 @@ pub mod pixel_grid;
 pub mod quick_pick;
 pub mod rotate_view;
 pub mod rulers;
+pub mod scroll_all_windows;
 pub mod scrollbars;
 pub mod select_mask_view;
 mod selection;
@@ -638,6 +639,8 @@ struct DialogCanvasInput<'a> {
     temporary: Option<crate::hold_keys::Temporary>,
     free_hover: bool,
     img_rect: Rect,
+    idx: usize,
+    aspect: f32,
 }
 
 fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<'_>) {
@@ -703,6 +706,15 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         let d = input.xf.unmap_vec(d) / (input.view.zoom / input.ppp);
         input.view.center[0] -= d.x;
         input.view.center[1] -= d.y;
+        // Hand › Scroll All Windows, or Shift held: the other shown views follow, as on the free canvas.
+        if crate::scroll_all_windows::active(app, crate::workspace_ui::sticky_mods(app, input.ctx.input(|i| i.modifiers)).shift) {
+            let mut target = input.view.clone();
+            if !app.session.prefs().tools.overscroll {
+                crate::scrollbars::clamp_view_with_aspect(&mut target, input.rect.size(), input.ppp, input.aspect);
+            }
+            let source = crate::scroll_all_windows::source(app, input.idx);
+            crate::scroll_all_windows::follow(app, source, input.idx, target.center);
+        }
         input.ctx.set_cursor_icon(crate::tool_cursor::hand(input.ctx, true));
     } else if input.free_hover && (input.space_pan || dialog_hand) {
         input.ctx.set_cursor_icon(crate::tool_cursor::hand(input.ctx, false));
@@ -1941,6 +1953,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
                 temporary,
                 free_hover,
                 img_rect,
+                idx,
+                aspect,
             },
         );
     }
@@ -1954,6 +1968,16 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // Preferences › Tools › Enable Flick Panning: a Hand drag let go while moving glides on.
     let flick_id = egui::Id::unique(("pc-flick-pan", idx, primary, ctx.viewport_id()));
     let flick_on = app.session.prefs().tools.enable_flick_panning;
+    // Hand › Scroll All Windows, or Shift held (on the keyboard or in Window › Modifier Keys): the
+    // other shown views follow this one.
+    let scroll_all = hand_pan && crate::scroll_all_windows::active(app, crate::workspace_ui::sticky_mods(app, ctx.input(|i| i.modifiers)).shift);
+    let scroll_source = crate::scroll_all_windows::source(app, idx);
+    // A glide keeps the drag's choice after Space, Shift or the button is let go.
+    let scroll_all_id = flick_id.with("scroll-all");
+    if hand_pan && response.dragged() && !stroke_dismissal {
+        ctx.data_mut(|m| m.insert_temp(scroll_all_id, scroll_all));
+    }
+    let glide_scroll_all = ctx.data(|m| m.get_temp::<bool>(scroll_all_id)).unwrap_or(false);
     if let Some(d) = crate::flick_pan::frame(&ctx, flick_id, hand_pan && response.dragged() && !stroke_dismissal, response.drag_delta(), flick_on) {
         let d = xf.unmap_vec(d) / (view.zoom / ppp);
         if d.is_finite() {
@@ -1966,11 +1990,22 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         if !app.session.prefs().tools.overscroll && crate::scrollbars::clamp_view_with_aspect(&mut view, rect.size(), ppp, aspect) {
             ctx.data_mut(|m| m.get_temp_mut_or_default::<crate::flick_pan::Flick>(flick_id).stop());
         }
+        if glide_scroll_all {
+            crate::scroll_all_windows::follow(app, scroll_source, idx, view.center);
+        }
     }
     if hand_pan && response.dragged() && !stroke_dismissal {
         let d = xf.unmap_vec(response.drag_delta()) / (view.zoom / ppp);
         view.center[0] -= d.x;
         view.center[1] -= d.y;
+        crate::scroll_all_windows::follow_drag(
+            app,
+            scroll_all,
+            scroll_source,
+            idx,
+            &view,
+            crate::scroll_all_windows::ClampGeometry { size: rect.size(), ppp, aspect },
+        );
         // The tool cursors below are skipped while panning: the fist is set here (#2196).
         ctx.set_cursor_icon(crate::tool_cursor::hand(&ctx, true));
     } else if primary && !stroke_dismissal && temporary.is_none() && !middle && crate::layer_picker::armed(app).is_some() {
