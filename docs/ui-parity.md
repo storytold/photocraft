@@ -245,7 +245,7 @@ Paragraph; the rest open as in-app floating windows.
 | New layers (New Layer/Group, adjustment, fill, type, shape, paste, place…) go in as the top layer of an open active group (or an artboard the new content is on), above a closed one; type, shapes, pastes, placed files and frames go above a group whose lock (all, pixels, transparency or position) would refuse them; a new frame starts closed | done | `layer_place.rs`, `layer_place_tests.rs` |
 | A new layer or group inside a clipping mask joins it (clipped when the layer above its slot is), so the clipped layers keep their base | done | `layer_place_tests.rs` (#2203) |
 | Layers panel New Layer button: ⌘-click adds the layer below the active one (never under the Background) | done | `layer_place_tests.rs`, `new_group_button_tests.rs` |
-| Layers panel filter-type dropdown (Kind, Name, Effect, Mode, Attribute, Color, Smart Object, Selected, Artboard) | partial | Kind, Name and Mode; the other six missing. `layer_filter_ui.rs`, `ui.set {layerFilter}` (#5048) |
+| Layers panel filter-type dropdown (Kind, Name, Effect, Mode, Attribute, Color, Smart Object, Selected, Artboard) | partial | Kind, Name, Mode and Color (the layer color label); the other five missing. `layer_filter_ui.rs`, `ui.set {layerFilter}` (#5048) |
 | Adjustment scope: clipping control visible above tall Properties editors in a compact dock | done (2026-10-21) | `panels.rs`, `clipping_indicator_tests.rs`; #5231; stack-wide default retained |
 | Smart filter rows: click selects, drag onto another smart object moves, ⌥-drag copies, drag onto Delete removes; with a row selected, the Delete button and the ⌫/Delete key remove that filter, not the smart object | done | `smart_ui.rs`, `layer.smartFilter.transfer` (#4271), `smart_ui::keys` (#4751) |
 | Layers panel: Clip Thumbnails to Layer Bounds (panel menu, `interface.clipThumbnailsToLayerBounds`) | done (2026-10-12) | `layer_thumb_bounds_tests.rs`; #4281. Thumbnail size and the Panel Options dialog to come |
@@ -334,3 +334,4 @@ Paragraph; the rest open as in-app floating windows.
 | 2026-10-15 | minor | ⇧⌥ blend mode letters work while a Free Transform box is open, without picking a tool |
 | 2026-10-14 | minor | Mode dropdowns for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; the blend mode keys reach them, and tools without a blend mode (not Dodge, Burn or Sponge) pass the keys to the layers |
 | 2026-10-16 | minor | Hand tool: ⌘ held zooms in and ⌥ zooms out, as in Photoshop (#6434) |
+| 2026-10-24 | minor | Layers panel filter row: Color lists the layers with one color label, drivable by `ui.set {layerFilter: {by: "color", color}}`; no percentage changed |
