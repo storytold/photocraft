@@ -788,3 +788,33 @@ fn file_info_keeps_multiline_metadata_on_confirm_and_reopen() {
         assert_eq!(app.ui.dialog_mut(id).unwrap().fields[key], "First line\nSecond line");
     }
 }
+
+/// w26: a resizable dialog shrinks as well as it grows, in both directions. The minimum handed
+/// to the fork's `Resize` is the dialog's intended minimum only: the fork clamps the dragged
+/// size to `at_least(min_size)` every frame, so a minimum clamped against the dialog's current
+/// size pins the window at that size and swallows every shrink drag.
+#[test]
+fn a_resizable_dialog_shrinks_as_well_as_grows_in_both_directions() {
+    use egui::NumExt;
+    let avail = egui::vec2(700.0, 500.0);
+    let min = egui::vec2(560.0, 400.0);
+    let max = egui::vec2(1200.0, 900.0);
+    let dragged = |dir: crate::text::direction::Dir, delta: egui::Vec2| {
+        let _scope = crate::text::direction::direction_scope(dir);
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = dir == crate::text::direction::Dir::Rtl);
+        let mut flag = false;
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| flag = ui.style().right_to_left);
+        out.textures_delta.clear();
+        assert_eq!(flag, dir == crate::text::direction::Dir::Rtl, "{dir:?}: the real flag path is exercised");
+        // The callsite: the dialog's intended minimum, capped by the largest size it may take.
+        let min_size = resizable_min_size(min, max);
+        // The fork: the dragged size is clamped to `at_least(min_size)`, `at_most(max_size)`.
+        (avail + delta).at_least(min_size).at_most(max)
+    };
+    for dir in [crate::text::direction::Dir::Ltr, crate::text::direction::Dir::Rtl] {
+        assert_eq!(dragged(dir, egui::vec2(-100.0, 0.0)), egui::vec2(600.0, 500.0), "{dir:?}: a shrink drag shrinks the dialog");
+        assert_eq!(dragged(dir, egui::vec2(200.0, 100.0)), egui::vec2(900.0, 600.0), "{dir:?}: a grow drag grows the dialog");
+        assert_eq!(dragged(dir, egui::vec2(-600.0, -400.0)), egui::vec2(560.0, 400.0), "{dir:?}: the intended minimum still holds");
+    }
+}
