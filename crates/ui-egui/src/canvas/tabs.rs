@@ -745,6 +745,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if focused && !w.focused && app.session.active_index() != Some(w.document) {
                 app.session.set_active(w.document);
             }
+            window_shortcuts(app, ui.ctx(), class);
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
                 view = canvas_view(app, ui, w.document, rect, view.clone(), focused);
@@ -761,6 +762,22 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
     }
     app.ui.windows.retain(|w| w.open);
+}
+
+/// Keys typed in a document's own OS window go to that window's input, which the main window's
+/// shortcuts never read: the focused window runs them itself, with the main window's guards.
+/// Embedded in the main window (the web build, tests) it shares the main window's input, whose
+/// shortcuts already ran this frame. Only one window has the keyboard, so no key runs twice.
+fn window_shortcuts(app: &mut PhotocraftApp, ctx: &egui::Context, class: egui::ViewportClass) {
+    if class != egui::ViewportClass::EmbeddedWindow
+        && ctx.input(|i| i.focused)
+        && app.fonts_ready
+        && crate::type_tool::in_ui_pass(ctx)
+        && !crate::screen_picker::busy(ctx)
+    {
+        crate::shortcuts::handle(app, ctx);
+        crate::shortcuts::hold_window_keys(ctx);
+    }
 }
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the

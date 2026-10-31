@@ -413,7 +413,7 @@ pub fn clipboard_keys(ctx: &egui::Context, typing: bool, raw: &mut egui::RawInpu
 }
 
 /// The keys held down in floating panels' own OS windows, from the presses and releases they
-/// forwarded ([`handle_forwarded`]).
+/// forwarded ([`handle_forwarded`]), or in a document's own window ([`hold_window_keys`]).
 fn forwarded_down_id() -> egui::Id {
     egui::Id::unique("pc-forwarded-keys-down")
 }
@@ -459,6 +459,15 @@ pub(crate) fn handle_forwarded(app: &mut PhotocraftApp, ctx: &egui::Context, eve
         i.events = events_before;
         i.modifiers = modifiers_before;
     });
+}
+
+/// Keys held in a document's own OS window, after it ran the shortcuts on its input
+/// (`canvas::extra_windows`), count as held in the main window too, as a floating panel's
+/// forwarded keys do: the main window's shortcuts still run every frame, and a spring-loaded
+/// tool held down in the document window must not end there.
+pub(crate) fn hold_window_keys(ctx: &egui::Context) {
+    let down: std::collections::BTreeSet<Key> = ctx.input(|i| i.keys_down.iter().copied().collect());
+    ctx.data_mut(|d| d.insert_temp(forwarded_down_id(), down));
 }
 
 /// Runs the shortcuts on this frame's input. Keys still held in a floating panel's own window
