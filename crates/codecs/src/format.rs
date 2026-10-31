@@ -15,6 +15,13 @@ pub enum Format {
     Ico,
     /// Netpbm family: PBM/PGM/PPM (P1–P6), PAM (P7) and PFM (`PF`/`Pf`).
     Pnm,
+    /// ZSoft Paintbrush: 1/2/4-bit planar palettes, 8-bit indexed and 24-bit RGB.
+    Pcx,
+    /// X PixMap icons (XPM2 plain text and XPM3 C-string arrays).
+    Xpm,
+    /// DirectDraw Surface: a 2D texture, uncompressed or BC1–BC3. Reading takes the top mip
+    /// level; writing can add the full mip chain ([`crate::DdsOptions`]).
+    Dds,
     Qoi,
     OpenExr,
     /// Radiance RGBE.
@@ -25,6 +32,16 @@ pub enum Format {
     Heif,
     /// FITS (Flexible Image Transport System), the astronomy format: gray or RGB image data.
     Fits,
+    /// DPX (SMPTE 268M Digital Picture Exchange): luma, RGB or RGBA film and video frames.
+    Dpx,
+    /// JPEG XL: lossless export-only until the separate importer lands.
+    Jxl,
+    /// Kodak Cineon (`.cin`, the 10-bit film-scan format DPX grew from).
+    Cineon,
+    /// DICOM single-frame images (uncompressed): read-only.
+    Dicom,
+    /// Amiga IFF/ILBM (`FORM ... ILBM`): planar bitplanes with a palette or 24-bit RGB.
+    Iff,
 }
 
 /// What a format can hold **and** what this crate reads/writes for it.
@@ -56,11 +73,21 @@ pub struct FormatCaps {
 /// Formats that are enabled but intentionally not symmetric, with the reason.
 /// The test-suite asserts that every other enabled format is read+write.
 pub const ASYMMETRIC_EXCEPTIONS: &[(Format, &str)] = &[
+    (Format::Xpm, "XPM is a legacy Unix icon interchange format. Reading existing XPM icons is supported; writing modern image assets should use PNG instead."),
+    (
+        Format::Dicom,
+        "DICOM single-frame images are imported for medical review; this crate has no DICOM writer, so save an imported frame as TIFF or PNG instead.",
+    ),
+    (
+        Format::Pcx,
+        "PCX is supported for opening legacy paint and clipart assets. New files should use PNG; writing obsolete indexed and planar variants is intentionally not provided.",
+    ),
     (
         Format::Avif,
         "AVIF encode uses ravif (pure Rust) but decoding requires dav1d (C); read stays unsupported \
          until a pure-Rust AV1 decoder is viable. Only enabled with the non-default `avif` feature.",
     ),
+    (Format::Jxl, "Lossless JPEG XL export uses the pure-Rust zune-jpegxl encoder; JPEG XL reading is tracked separately and is not yet available."),
     (
         Format::Heif,
         "HEIC decode uses heic-rs (pure Rust, in the optional photocraft-heif crate behind the \
@@ -75,12 +102,15 @@ use SampleType as S;
 
 const RGB_GRAY: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba];
 const ALL_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::Cmyk, L::CmykA];
+/// TIFF also stores CIE L*a*b* (CIELab).
+const TIFF_LAYOUTS: &[ChannelLayout] = &[L::Gray, L::GrayA, L::Rgb, L::Rgba, L::Cmyk, L::CmykA, L::Lab, L::LabA];
 
 impl Format {
     /// Every format known to the crate (enabled or not).
-    pub const ALL: [Format; 15] = [
+    pub const ALL: [Format; 23] = [
         Format::Png,
         Format::Jpeg,
+        Format::Jxl,
         Format::Tiff,
         Format::WebP,
         Format::Gif,
@@ -88,12 +118,19 @@ impl Format {
         Format::Tga,
         Format::Ico,
         Format::Pnm,
+        Format::Pcx,
+        Format::Xpm,
+        Format::Dds,
         Format::Qoi,
         Format::OpenExr,
         Format::Hdr,
         Format::Avif,
         Format::Heif,
         Format::Fits,
+        Format::Dpx,
+        Format::Cineon,
+        Format::Dicom,
+        Format::Iff,
     ];
 
     pub fn caps(self) -> FormatCaps {
@@ -117,12 +154,20 @@ impl Format {
             Format::Tga => "TGA",
             Format::Ico => "ICO",
             Format::Pnm => "Netpbm",
+            Format::Pcx => "PCX",
+            Format::Xpm => "XPM",
+            Format::Dds => "DDS",
             Format::Qoi => "QOI",
             Format::OpenExr => "OpenEXR",
             Format::Hdr => "Radiance HDR",
             Format::Avif => "AVIF",
             Format::Heif => "HEIF",
             Format::Fits => "FITS",
+            Format::Dpx => "DPX",
+            Format::Jxl => "JPEG XL",
+            Format::Cineon => "Cineon",
+            Format::Dicom => "DICOM",
+            Format::Iff => "Amiga IFF",
         }
     }
 
@@ -139,12 +184,20 @@ impl Format {
             Format::Tga => &["tga", "icb", "vda", "vst"],
             Format::Ico => &["ico"],
             Format::Pnm => &["pnm", "pbm", "pgm", "ppm", "pam", "pfm"],
+            Format::Pcx => &["pcx"],
+            Format::Xpm => &["xpm"],
+            Format::Dds => &["dds"],
             Format::Qoi => &["qoi"],
             Format::OpenExr => &["exr"],
             Format::Hdr => &["hdr"],
             Format::Avif => &["avif"],
             Format::Heif => &["heic", "heif", "hif"],
             Format::Fits => &["fits", "fit", "fts"],
+            Format::Dpx => &["dpx"],
+            Format::Jxl => &["jxl"],
+            Format::Cineon => &["cin"],
+            Format::Dicom => &["dcm", "dicom", "dc3"],
+            Format::Iff => &["iff", "lbm", "ilbm"],
         }
     }
 
@@ -159,19 +212,27 @@ impl Format {
             Format::Tga => "image/x-tga",
             Format::Ico => "image/x-icon",
             Format::Pnm => "image/x-portable-anymap",
+            Format::Pcx => "image/x-pcx",
+            Format::Xpm => "image/x-xpixmap",
+            Format::Dds => "image/vnd-ms.dds",
             Format::Qoi => "image/qoi",
             Format::OpenExr => "image/x-exr",
             Format::Hdr => "image/vnd.radiance",
             Format::Avif => "image/avif",
             Format::Heif => "image/heif",
             Format::Fits => "image/fits",
+            Format::Dpx => "image/x-dpx",
+            Format::Jxl => "image/jxl",
+            Format::Cineon => "image/x-cin",
+            Format::Dicom => "application/dicom",
+            Format::Iff => "image/x-iff",
         }
     }
 
     /// Maximum encodable dimensions, if the format has a hard limit.
     pub fn max_dimensions(self) -> Option<(u32, u32)> {
         match self {
-            Format::Jpeg | Format::Gif => Some((65535, 65535)),
+            Format::Jpeg | Format::Gif | Format::Iff => Some((65535, 65535)),
             Format::WebP => Some((16384, 16384)),
             Format::Ico => Some((256, 256)),
             _ => None,
@@ -200,13 +261,18 @@ pub fn caps(format: Format) -> FormatCaps {
             FormatCaps { depths: &[S::U8, S::U16], layouts: RGB_GRAY, icc: true, exif: true, xmp: true, dpi: true, text: true, animation: true, ..base }
         }
         Format::Jpeg => FormatCaps { layouts: &[L::Gray, L::Rgb, L::Cmyk], alpha: false, icc: true, exif: true, xmp: true, dpi: true, lossy: true, ..base },
-        Format::Tiff => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: ALL_LAYOUTS, icc: true, xmp: true, dpi: true, text: true, ..base },
-        Format::WebP => FormatCaps { icc: true, exif: true, xmp: true, animation: true, ..base },
+        Format::Tiff => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: TIFF_LAYOUTS, icc: true, exif: true, xmp: true, dpi: true, text: true, ..base },
+        // Resolution travels in EXIF (WebP has no field of its own).
+        Format::WebP => FormatCaps { icc: true, exif: true, xmp: true, dpi: true, animation: true, ..base },
         Format::Gif => FormatCaps { layouts: &[L::Rgba], animation: true, lossy: true, ..base },
         Format::Bmp => base,
         Format::Tga => FormatCaps { layouts: RGB_GRAY, ..base },
         Format::Ico => FormatCaps { layouts: &[L::Rgba], ..base },
         Format::Pnm => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: ALL_LAYOUTS, ..base },
+        Format::Pcx => FormatCaps { read: true, write: false, layouts: &[L::Rgb], alpha: false, ..base },
+        Format::Xpm => FormatCaps { read: true, write: false, layouts: &[L::Rgba], ..base },
+        // Uncompressed by default; a block compression is lossy (see `fidelity_warnings_with`).
+        Format::Dds => FormatCaps { layouts: RGB_GRAY, ..base },
         Format::Qoi => base,
         Format::OpenExr => FormatCaps { depths: &[S::F16, S::F32], layouts: RGB_GRAY, ..base },
         Format::Hdr => FormatCaps { depths: &[S::F32], layouts: &[L::Rgb], alpha: false, lossy: true, ..base },
@@ -215,6 +281,13 @@ pub fn caps(format: Format) -> FormatCaps {
             FormatCaps { read: cfg!(feature = "heif"), write: false, depths: &[S::U8, S::U16], icc: true, exif: true, xmp: true, lossy: true, ..base }
         }
         Format::Fits => FormatCaps { depths: &[S::U8, S::U16, S::F32], layouts: &[L::Gray, L::Rgb], alpha: false, text: true, ..base },
+        // `text`: the DPX header fields only (see `fidelity_warnings_with`).
+        Format::Dpx => FormatCaps { depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], text: true, ..base },
+        // GrayA is widened to RGBA at the same depth; the 16-bit alpha header is corrected.
+        Format::Jxl => FormatCaps { read: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb, L::Rgba], ..base },
+        Format::Cineon => FormatCaps { depths: &[S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
+        Format::Dicom => FormatCaps { read: true, write: false, depths: &[S::U8, S::U16], layouts: &[L::Gray, L::Rgb], alpha: false, ..base },
+        Format::Iff => FormatCaps { depths: &[S::U8], layouts: &[L::Rgb, L::Rgba], alpha: true, ..base },
     }
 }
 
@@ -228,6 +301,10 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     if b.starts_with(&[0xFF, 0xD8, 0xFF]) {
         return Some(Format::Jpeg);
     }
+    // JPEG XL bare codestream and ISO/IEC 18181-2 container signature box.
+    if b.starts_with(&[0xFF, 0x0A]) || b.starts_with(b"\0\0\0\x0cJXL \r\n\x87\n") {
+        return Some(Format::Jxl);
+    }
     if b.starts_with(b"II*\0") || b.starts_with(b"MM\0*") || b.starts_with(b"II+\0") || b.starts_with(b"MM\0+") {
         return Some(Format::Tiff);
     }
@@ -239,6 +316,9 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     }
     if b.starts_with(b"qoif") {
         return Some(Format::Qoi);
+    }
+    if b.starts_with(b"DDS ") {
+        return Some(Format::Dds);
     }
     if b.starts_with(&[0x76, 0x2F, 0x31, 0x01]) {
         return Some(Format::OpenExr);
@@ -263,8 +343,26 @@ pub fn detect(bytes: &[u8]) -> Option<Format> {
     if b.len() >= 3 && b[0] == b'P' && matches!(b[1], b'1'..=b'7' | b'F' | b'f') && b[2].is_ascii_whitespace() {
         return Some(Format::Pnm);
     }
+    if b.starts_with(b"SDPX") || b.starts_with(b"XPDS") {
+        return Some(Format::Dpx);
+    }
+    if crate::codecs::dpx::is_cineon(b) {
+        return Some(Format::Cineon);
+    }
+    if crate::codecs::dicom::is_dicom(b) {
+        return Some(Format::Dicom);
+    }
+    if crate::codecs::iff::looks_like_iff(b) {
+        return Some(Format::Iff);
+    }
     if b.starts_with(b"SIMPLE  =") {
         return Some(Format::Fits);
+    }
+    if b.starts_with(b"/* XPM */") || b.starts_with(b"! XPM2\n") || b.starts_with(b"! XPM2\r\n") {
+        return Some(Format::Xpm);
+    }
+    if crate::codecs::pcx::looks_like_pcx(b) {
+        return Some(Format::Pcx);
     }
     if looks_like_tga(b) {
         return Some(Format::Tga);

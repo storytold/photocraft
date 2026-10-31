@@ -37,6 +37,13 @@ doc = false
 bench = false
 
 [[bin]]
+name = "asl"
+path = "fuzz_targets/asl.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
 name = "image_source_data"
 path = "fuzz_targets/image_source_data.rs"
 test = false
@@ -95,6 +102,13 @@ bench = false
 [[bin]]
 name = "resources"
 path = "fuzz_targets/resources.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "atn"
+path = "fuzz_targets/atn.rs"
 test = false
 doc = false
 bench = false

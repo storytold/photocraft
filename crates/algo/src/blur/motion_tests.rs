@@ -69,7 +69,7 @@ fn row_surface(surface: &Surface, params: &FilterParams, area: Rect, bounds: Rec
     let ctx = Ctx { bounds, mode: format.mode, alpha: format.alpha };
     let mut data = motion_rows(&src, area, &ctx, *angle, *distance);
     if let Some(selection) = selection {
-        crate::mix_selection(&mut data, area, selection, &src);
+        crate::mix_selection(&mut data, area, selection, &src, format.alpha);
     }
     let mut result = surface.clone();
     result.write_region(area, &data);

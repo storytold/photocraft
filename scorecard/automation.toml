@@ -21,9 +21,9 @@ note = "actions.rs:47 copies raw journal entries with explicit layer ids"
 [[item]]
 id = "AUTO-219-2"
 target = "Actions panel: step and dialog toggles, reorder, delete a step, Stop, sets, .atn import"
-status = "missing"
+status = "done"
 issue = 219
-note = "Panel deletes whole actions only (actions.rs:146)"
+note = "2026-10-12: set folders (collapsible, drag between sets, actions.assignSet), dialog toggle column (playback opens the step's dialog seeded with its values and resumes on OK; actions.dialog), Insert Stop… (actions.insert), step toggles, reorder, delete a step; Load/Save Actions (.atn) in the panel menu, CLI batch and actions.load/save (atn_cmds.rs): 90 Photoshop events map to commands both ways, the rest are kept verbatim and fail at playback by name; step toggles, reorder and delete a step done; Stop steps play (actions.stopMessage) but there is no Insert Stop menu item; sets and dialog toggles are stored and round-trip but the panel neither groups by set nor edits the dialog toggle"
 
 [[item]]
 id = "AUTO-219-3"
@@ -44,7 +44,7 @@ id = "AUTO-219-5"
 target = "Batch: subfolders, open documents, naming template, progress/cancel, error log, stop"
 status = "partial"
 issue = 219
-note = "file_cmds.rs:590-631 folder/array input, per-file errors; no recursion, template or cancel"
+note = "file_cmds.rs and file_cmds/batch_naming.rs: folder/array input, per-file errors, {name}/{serial}/{date} output templates and starting serial, Include All Subfolders (includeSubfolders: depth/loop/file-count bounded, results keep their subfolder; Batch and Image Processor dialogs, #3753); no open-documents source, cancel or error-log file"
 
 [[item]]
 id = "AUTO-219-6"
@@ -79,4 +79,4 @@ id = "AUTO-219-10"
 target = "Agent acceptance suite grown to 30-50 workflows"
 status = "partial"
 issue = 219
-note = "automation/tests/agent_tasks.rs runs 10 workflows over MCP"
+note = "automation/tests/it/agent_tasks.rs runs 10 workflows over MCP"

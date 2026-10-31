@@ -132,6 +132,13 @@ References: [Apple scene migration](https://developer.apple.com/documentation/ui
 
 ## Verification
 
+The preview was synchronized with upstream `main` at `952c328b3` (PhotoCraft 0.17.0) on
+2026-10-31. The iOS import service uses the updated `ImportOptions` contract, the Objective-C
+runtime dependency matches the desktop application's pin, and the Xcode marketing version is
+0.17.0. An unsigned generic-device Debug build passed. This synchronization has not yet been
+installed or re-tested on a physical iPad; earlier device observations below refer to the
+previous build. Distribution/signing requirements still apply.
+
 The iOS shell refreshes egui safe-area insets from the attached UIKit window every frame.
 This reserves the status bar and home indicator even when initial winit events arrived before
 scene attachment, and follows rotation/resume. Insets are converted from UIKit points using

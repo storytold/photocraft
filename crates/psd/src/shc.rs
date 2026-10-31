@@ -50,14 +50,17 @@ fn read_name(r: &mut Reader<'_>) -> Result<String> {
     r.check_count(n, 2)?;
     let n = usize::try_from(n).map_err(|_| PsdError::LimitExceeded("contour name length"))?;
     let mut units = Vec::with_capacity(n.min(MAX_NAME_UNITS));
+    // The last unit read, not the last one kept: past the cap the counted null is read but not kept.
+    let mut last = None;
     for _ in 0..n {
         let u = r.u16()?;
+        last = Some(u);
         if units.len() < MAX_NAME_UNITS {
             units.push(u);
         }
     }
-    // A count that leaves out the terminator: the null follows (a point count is never 0).
-    if units.last() != Some(&0) && r.peek_rest().get(..2) == Some(&[0, 0]) {
+    // A count that leaves out the terminator: the null follows.
+    if last != Some(0) && r.peek_rest().get(..2) == Some(&[0, 0]) {
         r.u16()?;
     }
     while units.last() == Some(&0) {
@@ -128,7 +131,8 @@ pub fn write(contours: &[ShcContour]) -> Result<Vec<u8>> {
     for c in contours {
         let n = u16::try_from(c.points.len()).ok().filter(|n| usize::from(*n) <= MAX_POINTS).ok_or(PsdError::LimitExceeded("too many points in a contour"))?;
         out.put_u32(2);
-        let units: Vec<u16> = c.name.encode_utf16().take(MAX_NAME_UNITS).collect();
+        // Capped on a character boundary, so a surrogate pair is never split.
+        let units = crate::io::utf16_units(&c.name, MAX_NAME_UNITS);
         out.put_u32(units.len() as u32 + 1);
         for u in units {
             out.put_u16(u);
@@ -194,5 +198,54 @@ mod tests {
         assert!(parse(b"8BFS\0\x01\xff\xff\xff\xff").is_err());
         let many = ShcContour { name: String::new(), points: vec![ShcPoint { input: 0.0, output: 0.0, continuous: true }; MAX_POINTS + 1] };
         assert!(write(&[many]).is_err());
+    }
+
+    fn pts(n: usize) -> Vec<ShcPoint> {
+        (0..n).map(|i| ShcPoint { input: (i * 10) as f32, output: (i * 20) as f32, continuous: i % 2 == 0 }).collect()
+    }
+
+    #[test]
+    fn shc_name_cap_never_splits_a_surrogate_pair() {
+        let name = format!("{}\u{1F600}", "a".repeat(MAX_NAME_UNITS - 1));
+        let c = ShcContour { name, points: pts(2) };
+        let back = parse(&write(&[c]).unwrap()).unwrap();
+        assert_eq!(back[0].name, "a".repeat(MAX_NAME_UNITS - 1));
+    }
+
+    #[test]
+    fn shc_names_at_and_over_the_cap_keep_the_stream_in_sync() {
+        for len in [MAX_NAME_UNITS, MAX_NAME_UNITS + 1, MAX_NAME_UNITS * 3] {
+            for first_points in [0, 3] {
+                let long = ShcContour { name: "b".repeat(len), points: pts(first_points) };
+                let next = ShcContour { name: "Next".into(), points: pts(4) };
+                let back = parse(&write(&[long, next.clone()]).unwrap()).unwrap_or_else(|e| panic!("len {len}, points {first_points}: {e}"));
+                assert_eq!(back.len(), 2);
+                assert_eq!(back[0].name, "b".repeat(len.min(MAX_NAME_UNITS)));
+                assert_eq!(back[0].points.len(), first_points);
+                assert_eq!(back[1], next, "len {len}, points {first_points}");
+            }
+        }
+    }
+
+    #[test]
+    fn shc_name_count_without_null_at_the_cap_still_reads() {
+        // A hostile/foreign file: 1024 units counted, no null counted, null follows.
+        let mut v = b"8BFS".to_vec();
+        v.put_u16(1);
+        v.put_u32(1);
+        v.put_u32(1);
+        v.put_u32(MAX_NAME_UNITS as u32);
+        for _ in 0..MAX_NAME_UNITS {
+            v.put_u16(u16::from(b'c'));
+        }
+        v.put_u16(0);
+        v.put_u16(1);
+        v.put_u16(7);
+        v.put_u16(9);
+        v.put_u32(0);
+        v.put_u32(255);
+        let c = parse(&v).unwrap();
+        assert_eq!(c[0].name, "c".repeat(MAX_NAME_UNITS));
+        assert_eq!((c[0].points[0].input, c[0].points[0].output), (9.0, 7.0));
     }
 }

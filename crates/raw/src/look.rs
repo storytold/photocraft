@@ -26,6 +26,10 @@
 //! axis, the camera's rendering of white, still follows the JPEG). Cells with a
 //! clipped sensor sample, clipped or near-black JPEG pixels are left out of the
 //! fit; cells on strong edges get less weight.
+//! A bounded centered alignment (90–100% of the raw frame's dimensions) can
+//! account for a camera JPEG's tighter framing. It changes only the fit proxy,
+//! requires correlation ≥ 0.9 and an improvement ≥ 0.05, and preserves the
+//! developed crop. Alignment uses training cells; held-out cells stay out of it.
 //!
 //! The reference must show the same picture (lightness correlation ≥ 0.7 with
 //! the raw) in colour (≥ 2 % of the cells with chroma above 4). One cell in
@@ -194,8 +198,95 @@ struct Cell {
 /// Fits a [`CameraLook`] so that developing `s` with `opts` (white balance,
 /// baseline exposure) matches the camera's `reference` rendering of it.
 pub fn fit_look(s: &Sensor, opts: &DevelopOptions, reference: &Reference) -> Result<CameraLook, LookRejected> {
-    let (gw, cells) = grid(s, opts, reference)?;
+    let (gw, mut cells) = grid(s, opts, reference)?;
+    align_preview(&mut cells, gw, s.baseline_exposure);
     fit_cells(&cells, gw, s.baseline_exposure)
+}
+
+/// Camera JPEGs can show a slightly tighter frame (lens correction, for example).
+/// Align only the fit proxy, never the developed crop. Search a bounded centered
+/// crop of at most 10%, and require a strong, substantially improved match.
+fn align_preview(cells: &mut [Cell], w: usize, exposure: f64) {
+    if w == 0 || cells.len() < w || !cells.len().is_multiple_of(w) {
+        return;
+    }
+    let h = cells.len() / w;
+    let gain = 2f64.powf(if exposure.is_finite() { exposure.clamp(-10.0, 10.0) } else { 0.0 });
+    let fallback = color::scale(&color::mul(&color::xyz_d50_to_prophoto(), &color::srgb_to_xyz_d50()), gain);
+    let step = (w / 64).max(1);
+    let score = |scale: f64| {
+        let mut pairs = Vec::new();
+        for y in (0..h).step_by(step) {
+            for x in (0..w).step_by(step) {
+                if (x + 2 * y) % 3 == 0 {
+                    continue;
+                }
+                let Some(c) = cells.get(y * w + x) else { continue };
+                let Some((cam, clipped)) = aligned_camera(cells, w, h, x, y, scale) else { continue };
+                if clipped || c.ref_clipped >= 0.01 || c.lum <= 0.002 || c.edge_weight <= 0.05 || cam.iter().any(|v| !v.is_finite() || *v <= 1e-4) {
+                    continue;
+                }
+                let lum = color::apply(&PRO_TO_XYZ_Y_ROW, color::apply(&fallback, cam))[0];
+                pairs.push((lum.max(0.0).sqrt(), c.lum.sqrt()));
+            }
+        }
+        if pairs.len() < 100 { f64::NAN } else { correlation(&pairs) }
+    };
+    let original = score(1.0);
+    if !original.is_finite() {
+        return;
+    }
+    let (mut best, mut scale) = (original, 1.0);
+    for i in 0..5 {
+        let s = 0.9 + 0.02 * i as f64;
+        let r = score(s);
+        if r > best {
+            (best, scale) = (r, s);
+        }
+    }
+    if scale < 1.0 {
+        let center = scale;
+        for i in -7..=7 {
+            let s = (center + 0.0025 * f64::from(i)).clamp(0.9, 1.0);
+            let r = score(s);
+            if r > best {
+                (best, scale) = (r, s);
+            }
+        }
+    }
+    if best < 0.9 || best < original + 0.05 || scale >= 1.0 {
+        return;
+    }
+    let aligned: Vec<_> = (0..cells.len()).map(|i| aligned_camera(cells, w, h, i % w, i / w, scale)).collect();
+    for (c, aligned) in cells.iter_mut().zip(aligned) {
+        if let Some((cam, clipped)) = aligned {
+            c.cam = cam;
+            c.cam_clipped = clipped;
+        }
+    }
+}
+
+/// Bilinear interpolation on cell centers, retaining clipping information from
+/// every participating cell. Coordinates remain inside the bounded fit grid.
+fn aligned_camera(cells: &[Cell], w: usize, h: usize, x: usize, y: usize, scale: f64) -> Option<([f64; 3], bool)> {
+    let coord = |i: usize, n: usize| ((i as f64 + 0.5 - n as f64 / 2.0) * scale + n as f64 / 2.0 - 0.5).clamp(0.0, n.saturating_sub(1) as f64);
+    let (sx, sy) = (coord(x, w), coord(y, h));
+    let (x0, y0) = (sx.floor() as usize, sy.floor() as usize);
+    let (fx, fy) = (sx - x0 as f64, sy - y0 as f64);
+    let mut cam = [0.0; 3];
+    let mut clipped = false;
+    for (dx, dy, weight) in [(0, 0, (1.0 - fx) * (1.0 - fy)), (1, 0, fx * (1.0 - fy)), (0, 1, (1.0 - fx) * fy), (1, 1, fx * fy)] {
+        if weight <= 0.0 {
+            continue;
+        }
+        let index = y0.saturating_add(dy).min(h.saturating_sub(1)).checked_mul(w)?.checked_add(x0.saturating_add(dx).min(w.saturating_sub(1)))?;
+        let c = cells.get(index)?;
+        clipped |= c.cam_clipped;
+        for (out, v) in cam.iter_mut().zip(c.cam) {
+            *out += weight * v;
+        }
+    }
+    Some((cam, clipped))
 }
 
 /// The upright fit grid: (width in cells, cells row-major).
@@ -815,6 +906,28 @@ mod tests {
         let plain = crate::develop_sensor(&s, &wb_opts()).unwrap();
         assert!(plain.warnings.iter().any(|w| w.contains("sRGB primaries")));
         assert_ne!(d.rgb, plain.rgb);
+    }
+
+    #[test]
+    fn tighter_camera_preview_aligns_for_color_without_changing_the_raw_crop() {
+        let (w, h) = (480, 320);
+        let (s, rgb) = shot(w, h, &true_matrix());
+        let (x0, y0, cw, ch) = (24, 16, 432, 288);
+        let mut tight = Vec::with_capacity(cw * ch * 3);
+        for y in y0..y0 + ch {
+            tight.extend_from_slice(&rgb[(y * w + x0) * 3..(y * w + x0 + cw) * 3]);
+        }
+        let reference = Reference { width: cw as u32, height: ch as u32, rgb: &tight };
+        let (gw, plain) = grid(&s, &wb_opts(), &reference).unwrap();
+        let before = fit_cells(&plain, gw, s.baseline_exposure);
+        let look = fit_look(&s, &wb_opts(), &reference).unwrap();
+        assert!(look.delta_e < 3.0, "{look:?}");
+        if let Ok(before) = before {
+            assert!(look.delta_e < before.delta_e * 0.5, "aligned {look:?}, before {before:?}");
+        }
+        let d = crate::develop_sensor(&s, &DevelopOptions { camera_look: Some(look), ..wb_opts() }).unwrap();
+        assert_eq!((d.width as usize, d.height as usize), (w, h));
+        assert_eq!(s.crop, crate::Rect::new(0, 0, w, h));
     }
 
     #[test]

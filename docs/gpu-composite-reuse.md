@@ -13,10 +13,12 @@ existing planner before this boundary. Only the accumulated backdrop is live the
 it into the checkpoint's slot is sufficient to execute the remaining passes. No checkpoint is
 placed inside a group, clipping unit or adjustment program.
 
-Blend-If currently returns `Unsupported` from the GPU planner and uses the existing CPU path.
-The same holds for Advanced Blending (on main since b0680fd): it must keep falling back to the
-CPU, or keep the checkpoint boundary rule — a later GPU implementation of advanced blending
-preserves the boundary invariant either way.
+Blend If runs on the GPU (#4395) within this rule: like channel restrictions, it reads only the
+backdrop from before its own unit (retained across the unit, released at its end), so nothing
+else is live at the boundary. Advanced Blending (on main since b0680fd) returns `Unsupported`
+from the GPU planner and uses the CPU path: it must keep falling back to the CPU, or keep the
+checkpoint boundary rule — a later GPU implementation of advanced blending preserves the
+boundary invariant either way.
 
 ## Invalidation
 

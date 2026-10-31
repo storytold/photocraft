@@ -150,6 +150,7 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         baseline_exposure: 0.0,
         gain_maps: Vec::new(),
         tone_curve: Vec::new(),
+        black_point: 0.0,
         warnings,
     })
 }

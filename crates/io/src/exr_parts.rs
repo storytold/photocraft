@@ -98,6 +98,12 @@ fn channel_base_split(name: &str) -> Option<(&str, &str)> {
     (!prefix.is_empty()).then_some((prefix, base))
 }
 
+/// The name a part is listed, selected and imported as: its `name` attribute, or
+/// `part <index>` when it has none (a single-part render usually carries no name).
+fn part_display_name(part: &codecs::ExrPartInfo) -> String {
+    part.name.clone().unwrap_or_else(|| format!("part {}", part.index))
+}
+
 /// Lists the entries of a multi-part or channel-grouped EXR for a chooser: flat parts in
 /// file order, then the channel groups, then the Cryptomatte layers as information. A file
 /// whose parts are all deep is refused (the deep decoder composites those).
@@ -113,7 +119,7 @@ pub fn entries(bytes: &[u8]) -> Result<Vec<Entry>, IoError> {
         }
         out.push(Entry {
             kind: EntryKind::Part,
-            name: part.name.clone().unwrap_or_else(|| format!("part {}", part.index)),
+            name: part_display_name(part),
             view: part.view.clone(),
             width: part.width,
             height: part.height,
@@ -175,7 +181,8 @@ fn layer_surface(img: &Image, max: &mut (u32, u32)) -> Result<(Surface, ColorMod
 }
 
 /// Imports the chosen entries as the layers of one document: parts whole, groups from their
-/// own channels, F16 kept losslessly as F32, the linear-light EXR values tagged linear sRGB.
+/// own channels, F16 kept losslessly as F32, the linear-light EXR values tagged linear sRGB
+/// or linear gray.
 /// `precomp` adds the additive sum of the file's AOV groups as a top layer and fails,
 /// naming the missing AOVs, when the light-path set is incomplete.
 pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult, IoError> {
@@ -186,8 +193,14 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     }
     let all_groups = groups(bytes)?;
     let view_passes = |view: &Option<String>| view.as_ref().is_none_or(|v| sel.view.eq_ignore_ascii_case("both") || v.eq_ignore_ascii_case(&sel.view));
-    let part_by_name =
-        |want: &str| info.iter().find(|p| !p.deep && p.name.as_deref() == Some(want)).ok_or_else(|| IoError::Unsupported(format!("no flat part named {want}")));
+    // A named part wins over an unnamed one listed under the same fallback name ("part 0").
+    let part_by_name = |want: &str| {
+        let flat = || info.iter().filter(|p| !p.deep);
+        flat()
+            .find(|p| p.name.as_deref() == Some(want))
+            .or_else(|| flat().find(|p| p.name.is_none() && part_display_name(p) == want))
+            .ok_or_else(|| IoError::Unsupported(format!("no flat part named {want}")))
+    };
     let mut chosen_parts: Vec<&codecs::ExrPartInfo> = Vec::new();
     for want in &sel.parts {
         let p = part_by_name(want)?;
@@ -213,8 +226,8 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
         return Err(IoError::Unsupported("no parts or groups selected".into()));
     }
 
-    // Decode each needed whole part once; groups come from their part's named channels.
-    let mut part_pixels: Vec<Option<Image>> = vec![None; info.len()];
+    // Each chosen part (deduplicated above) decodes once; groups come from their part's named
+    // channels.
     let mut layers: Vec<Layer> = Vec::new();
     let mut warnings: Vec<String> = Vec::new();
     let mut gray_only = true;
@@ -222,20 +235,13 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     let mut f16_seen = false;
 
     for part in &chosen_parts {
-        let img = match &part_pixels[part.index] {
-            Some(img) => img.clone(),
-            None => {
-                let img = codecs::decode_exr_part(bytes, part.index, &opts)?;
-                part_pixels[part.index] = Some(img.clone());
-                img
-            }
-        };
+        let img = codecs::decode_exr_part(bytes, part.index, &opts)?;
         if img.sample_type() == SampleType::F16 {
             f16_seen = true;
         }
         let (surface, mode) = layer_surface(&img, &mut max)?;
         gray_only &= mode == ColorMode::Grayscale;
-        layers.push(Layer::new(part.name.clone().unwrap_or_else(|| format!("part {}", part.index)), LayerContent::Raster(surface)));
+        layers.push(Layer::new(part_display_name(part), LayerContent::Raster(surface)));
     }
     for group in &chosen_groups {
         let mut names = group.channels.clone();
@@ -265,10 +271,9 @@ pub fn import(name: &str, bytes: &[u8], sel: &Selection) -> Result<ImportResult,
     let mode = if gray_only { ColorMode::Grayscale } else { ColorMode::Rgb };
     let mut doc = Document::new(name, Size::new(max.0, max.1), mode, DocSample::F32);
     doc.layers = layers;
-    if mode == ColorMode::Rgb {
-        // OpenEXR holds linear, scene-referred values: tag them linear sRGB, as File › Open does.
-        doc.icc_profile = Some(Builtin::LinearSrgb.profile().to_bytes());
-    }
+    // OpenEXR holds linear, scene-referred values (Y is linear luminance): use the profile
+    // matching the selected parts' mode, as File › Open does.
+    doc.icc_profile = Some(if gray_only { photocraft_cms::builtin::linear_gray().to_bytes() } else { Builtin::LinearSrgb.profile().to_bytes() });
     Ok(ImportResult { document: doc, warnings, source_read_only: false, preview_only: false })
 }
 

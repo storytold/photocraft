@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod bg_erase;
 pub mod brush;
+pub mod curve;
 pub mod dynamics;
 pub mod mixer;
 pub mod outline;
@@ -33,9 +34,10 @@ pub mod symmetry;
 pub mod tile;
 
 pub use brush::{
-    BrushPreset, BrushSettings, ColorDynamics, Control, DualBrush, Dynamic, MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern, PatternStyle, Pose, Scattering,
-    SectionLocks, ShapeDynamics, Smoothing, Texture, TipShape, Transfer,
+    BrushPreset, BrushSettings, ColorDynamics, Control, DualBrush, Dynamic, MAX_BRUSH_SIZE, MAX_SCATTER, MaskMode, Pattern, PatternStyle, Pose, PresetCaptures,
+    Scattering, SectionLocks, ShapeDynamics, Smoothing, Texture, TipShape, Transfer,
 };
+pub use curve::ResponseCurve;
 pub use mixer::MixerSettings;
 pub use render::{BrushContext, StrokeRenderer, UnionLive, grid_center, grid_square, render_stroke};
 pub use tile::{GrayTile, StoredTile};
@@ -138,42 +140,108 @@ pub fn dabs(stroke: &Stroke) -> Vec<Dab> {
     out
 }
 
-/// Opacity of a round tip at distance `d` from its centre, without edge anti-aliasing: 1 in the
-/// hard core (`hardness` of the radius), then a Gaussian-like fall to 0 at the radius:
-/// `(1 - t²)⁴`, which tracks `exp(-4.6 t²)` closely but is exact (no `exp`, the same on every
-/// platform), reaches exactly 0 at the edge and leaves it flat. A soft tip keeps most of its area
-/// faint, so a stroke of overlapping dabs (Flow builds up) stays about as soft as one dab, as in
-/// Photoshop; the old smoothstep kept so much near the centre that strokes came out hard.
+/// Photoshop's round tip, measured (Photoshop 27.11, single dabs at Spacing 1000 %, hardness 0–100
+/// at 40 px and checked at 100, 9 and 3 px): a solid core of radius `r0 · R`, then a Gaussian
+/// shoulder `exp(-((d − r0) / s)²)` of width `s · R`, both by hardness (0, 0.1, … 1). A soft tip
+/// reaches well past its nominal radius (hardness 0 is a Gaussian of σ ≈ 0.47 R: 8 % at 1.05 R).
+const TIP_SHAPE: [(f32, f32); 11] =
+    [(0.00, 0.664), (0.14, 0.58), (0.28, 0.50), (0.40, 0.44), (0.52, 0.36), (0.63, 0.29), (0.70, 0.24), (0.78, 0.19), (0.84, 0.15), (0.89, 0.11), (1.00, 0.0)];
+
+/// Photoshop's anti-aliased edge: the shoulder never narrows below this many pixels, and the core
+/// stays this far inside the radius (a hardness-100 tip is a disc with a ~1 px soft edge at any size).
+const TIP_EDGE_PX: f32 = 1.2;
+
+/// The core radius and shoulder width (both in pixels) of a round tip of `radius` and `hardness`.
+#[inline]
+pub fn tip_shape(radius: f32, hardness: f32) -> (f32, f32) {
+    let h = if hardness.is_nan() { 0.0 } else { hardness.clamp(0.0, 1.0) } * 10.0;
+    let i = (h.floor() as usize).min(9);
+    let t = h - i as f32;
+    let (a, b) = (TIP_SHAPE[i], TIP_SHAPE[i + 1]);
+    let (r0, s) = (a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t);
+    let radius = if radius.is_finite() { radius.max(0.0) } else { 0.0 };
+    // A tip of a few pixels keeps a narrower edge, so a small hard dab stays solid in the middle.
+    // Never sharper than a quarter pixel, the small-tip supersampling step.
+    let edge = TIP_EDGE_PX.min(0.3 * radius).max(0.25);
+    ((r0 * radius).min(radius - edge).max(0.0), (s * radius).max(edge).max(1e-3))
+}
+
+/// Dab-invariant round-tip geometry, shared by all pixels and subpixel samples.
+#[derive(Clone, Copy)]
+pub(crate) struct TipProfile {
+    core: f32,
+    shoulder: f32,
+    reach: f32,
+}
+
+impl TipProfile {
+    #[inline]
+    pub(crate) fn new(radius: f32, hardness: f32) -> Self {
+        let (core, shoulder) = tip_shape(radius, hardness);
+        Self { core, shoulder, reach: core + 2.6 * shoulder }
+    }
+
+    #[inline]
+    pub(crate) fn reach(self) -> f32 {
+        self.reach
+    }
+
+    #[inline]
+    pub(crate) fn falloff(self, d: f32) -> f32 {
+        if d <= self.core {
+            return 1.0;
+        }
+        // Keep division: multiplying by a cached reciprocal changes coverage bits.
+        let x = (d - self.core) / self.shoulder;
+        soft_exp(x * x)
+    }
+
+    #[inline]
+    pub(crate) fn coverage(self, d: f32) -> f32 {
+        if d.is_nan() || d >= self.reach + 0.5 {
+            return 0.0;
+        }
+        self.falloff(d)
+    }
+}
+
+/// `exp(-u)` as `(1 − u/64)⁶⁴` by six squarings: within 1/255 of `exp` where it matters, exact
+/// arithmetic (the same on every platform) and exactly 0 from `u = 64`.
+#[inline]
+fn soft_exp(u: f32) -> f32 {
+    let mut g = (1.0 - u / 64.0).clamp(0.0, 1.0);
+    for _ in 0..6 {
+        g *= g;
+    }
+    g
+}
+
+/// Opacity of a round tip at distance `d` from its centre, edge included (see [`tip_shape`]).
 #[inline]
 pub fn tip_falloff(d: f32, radius: f32, hardness: f32) -> f32 {
-    let inner = radius * hardness.clamp(0.0, 1.0);
-    if d <= inner || radius - inner < 1e-3 {
-        return 1.0;
-    }
-    let t = ((d - inner) / (radius - inner)).clamp(0.0, 1.0);
-    let s = 1.0 - t * t;
-    let s2 = s * s;
-    s2 * s2
+    TipProfile::new(radius, hardness).falloff(d)
+}
+
+/// How far from its centre a round tip still paints (where [`tip_falloff`] drops below ~0.1 %).
+#[inline]
+pub fn tip_reach(radius: f32, hardness: f32) -> f32 {
+    let (r0, s) = tip_shape(radius, hardness);
+    r0 + 2.6 * s
 }
 
 /// Distance from the centre where [`tip_falloff`] drops to 50 %: the contour Preferences ›
-/// Cursors › Normal Brush Tip outlines. It inverts `(1 - t²)⁴ = ½`, so `t = √(1 - ½^¼) ≈ 0.399`
-/// of the way from the hard core (`hardness · radius`) to the edge.
+/// Cursors › Normal Brush Tip outlines. `(1 − u/64)⁶⁴ = ½` at `u = 64 (1 − ½^(1/64))`.
 #[inline]
 pub fn half_coverage_radius(radius: f32, hardness: f32) -> f32 {
-    let h = if hardness.is_nan() { 0.0 } else { hardness.clamp(0.0, 1.0) };
-    let t = (1.0 - 0.5f32.sqrt().sqrt()).sqrt();
-    radius * (h + t * (1.0 - h))
+    let (r0, s) = tip_shape(radius, hardness);
+    let u = 64.0 * (1.0 - 0.5f32.powf(1.0 / 64.0));
+    r0 + s * u.sqrt()
 }
 
-/// Coverage of a round dab at distance `d` from its centre (anti-aliased edge, hardness falloff).
+/// Coverage of a round dab at distance `d` from its centre.
 #[inline]
 pub fn dab_coverage(d: f32, radius: f32, hardness: f32) -> f32 {
-    if d >= radius + 0.5 {
-        return 0.0;
-    }
-    let edge = ((radius + 0.5 - d).clamp(0.0, 1.0)).min(1.0);
-    edge * tip_falloff(d, radius, hardness)
+    TipProfile::new(radius, hardness).coverage(d)
 }
 
 /// Rasterize a stroke onto `target`, optionally limited by a selection (grayscale coverage surface).
@@ -229,7 +297,9 @@ mod tests {
         assert_eq!(dab_coverage(20.0, 10.0, 1.0), 0.0);
         let soft_mid = dab_coverage(5.0, 10.0, 0.0);
         assert!(soft_mid > 0.2 && soft_mid < 0.8);
-        assert!(dab_coverage(9.9, 10.0, 1.0) > 0.5);
+        // A hard tip is opaque to just inside its radius and gone 1 px outside it.
+        assert!(dab_coverage(8.5, 10.0, 1.0) > 0.99 && dab_coverage(9.5, 10.0, 1.0) > 0.5);
+        assert!(dab_coverage(11.0, 10.0, 1.0) < 0.05);
     }
 
     #[test]
@@ -279,6 +349,24 @@ mod tests {
         apply_stroke(&mut s, &stroke(&[(10.0, 10.0), (90.0, 10.0)], 8.0), None, true);
         assert_eq!(s.pixel(20, 10), vec![0.0, 0.0, 0.0, 1.0]);
         assert_eq!(s.pixel(70, 10)[3], 0.0);
+    }
+
+    #[test]
+    fn lock_transparency_blends_source_atop_on_semi_transparent_pixels() {
+        // Half-transparent white under a black stroke at 50%: the colour moves halfway (Photoshop's
+        // source-atop), not by the source-over weight 0.5 / 0.75 (#5783).
+        for f in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            for mode in [photocraft_color::BlendMode::Normal, photocraft_color::BlendMode::Multiply] {
+                let mut s = Surface::new(f);
+                s.fill_rect(Rect::new(0, 0, 100, 20), &[1.0, 1.0, 1.0, 0.5]);
+                let mut st = stroke(&[(10.0, 10.0), (90.0, 10.0)], 8.0);
+                st.brush.opacity = 0.5;
+                st.brush.mode = mode;
+                apply_stroke(&mut s, &st, None, true);
+                let p = s.rgba(50, 10);
+                assert!((p[0] - 0.5).abs() < 0.01 && (p[3] - 0.5).abs() < 0.01, "{f:?} {mode:?} {p:?}");
+            }
+        }
     }
 
     #[test]

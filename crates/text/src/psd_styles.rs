@@ -38,7 +38,12 @@ pub struct PsdStyleSheets {
 }
 
 fn k_of(dpi: f32) -> f32 {
-    72.0 / if dpi > 0.0 { dpi } else { 72.0 }
+    72.0 / if dpi.is_finite() && dpi > 0.0 { dpi } else { 72.0 }
+}
+
+/// A sheet index from EngineData. A negative or overflowing index is not a slot (#4429).
+fn sheet_index(v: i64) -> Option<usize> {
+    usize::try_from(v).ok()
 }
 
 fn names(set: Option<&E>) -> Vec<String> {
@@ -48,11 +53,25 @@ fn names(set: Option<&E>) -> Vec<String> {
 /// Index a run's sheet dictionary refers to (`Parent` index, else `Name`), skipping `normal`.
 fn reference(sheet: Option<&E>, set_names: &[String], normal: usize) -> Option<usize> {
     let s = sheet?;
-    let i = s.get("Parent").and_then(E::as_i64).map(|i| i as usize).or_else(|| {
+    let i = s.get("Parent").and_then(E::as_i64).and_then(sheet_index).or_else(|| {
         let n = s.get("Name").and_then(E::as_str)?;
         set_names.iter().position(|x| x == n)
     })?;
     (i != normal && i < set_names.len()).then_some(i)
+}
+
+/// Adds to `sheet[key]` (a dictionary) every entry of `resolved` it lacks; existing entries win.
+fn fill_missing(sheet: &mut E, key: &str, resolved: E) {
+    let E::Dict(all) = resolved else { return };
+    if sheet.get(key).is_none() {
+        sheet.set(key, E::dict());
+    }
+    let Some(E::Dict(have)) = sheet.get_mut(key) else { return };
+    for (k, v) in all {
+        if !have.iter().any(|(h, _)| *h == k) {
+            have.push((k, v));
+        }
+    }
 }
 
 /// Reads the style sheets of a `TySh` block. None when it has no engine data.
@@ -64,13 +83,13 @@ pub fn read_style_sheets(tysh: &[u8], dpi: f32) -> Option<PsdStyleSheets> {
     let fonts: Vec<String> = names(res.get("FontSet"));
     let sset = res.get("StyleSheetSet").and_then(E::as_array).unwrap_or(&[]);
     let pset = res.get("ParagraphSheetSet").and_then(E::as_array).unwrap_or(&[]);
-    let normal_c = res.get("TheNormalStyleSheet").and_then(E::as_i64).unwrap_or(0) as usize;
-    let normal_p = res.get("TheNormalParagraphSheet").and_then(E::as_i64).unwrap_or(0) as usize;
+    let normal_c = res.get("TheNormalStyleSheet").and_then(E::as_i64).and_then(sheet_index).unwrap_or(0);
+    let normal_p = res.get("TheNormalParagraphSheet").and_then(E::as_i64).and_then(sheet_index).unwrap_or(0);
     let empty = E::dict();
     let base_data = sset.get(normal_c).and_then(|s| s.get("StyleSheetData"));
-    let normal_char = char_style(None, base_data.unwrap_or(&empty), &fonts, k);
+    let normal_char = char_style(&[], base_data.unwrap_or(&empty), &fonts, k);
     let base_props = pset.get(normal_p).and_then(|s| s.get("Properties"));
-    let normal_para = para_style(None, base_props.unwrap_or(&empty), k);
+    let normal_para = para_style(&[], base_props.unwrap_or(&empty), k);
     let mut out = PsdStyleSheets { normal_char, normal_para, ..Default::default() };
     for (i, s) in sset.iter().enumerate() {
         if i == normal_c {
@@ -78,7 +97,7 @@ pub fn read_style_sheets(tysh: &[u8], dpi: f32) -> Option<PsdStyleSheets> {
         }
         let name = s.get("Name").and_then(E::as_str).unwrap_or("").to_string();
         let data = s.get("StyleSheetData").unwrap_or(&empty);
-        out.char_sheets.push((i, name, char_style(base_data, data, &fonts, k)));
+        out.char_sheets.push((i, name, char_style(&[base_data], data, &fonts, k)));
     }
     for (i, s) in pset.iter().enumerate() {
         if i == normal_p {
@@ -86,9 +105,9 @@ pub fn read_style_sheets(tysh: &[u8], dpi: f32) -> Option<PsdStyleSheets> {
         }
         let name = s.get("Name").and_then(E::as_str).unwrap_or("").to_string();
         let props = s.get("Properties").unwrap_or(&empty);
-        let dss = s.get("DefaultStyleSheet").and_then(E::as_i64).map(|i| i as usize).filter(|i| *i != normal_c);
-        let cs = dss.and_then(|d| sset.get(d)).map(|d| char_style(base_data, d.get("StyleSheetData").unwrap_or(&empty), &fonts, k));
-        out.para_sheets.push((i, name, para_style(base_props, props, k), cs));
+        let dss = s.get("DefaultStyleSheet").and_then(E::as_i64).and_then(sheet_index).filter(|i| *i != normal_c);
+        let cs = dss.and_then(|d| sset.get(d)).map(|d| char_style(&[base_data], d.get("StyleSheetData").unwrap_or(&empty), &fonts, k));
+        out.para_sheets.push((i, name, para_style(&[base_props], props, k), cs));
     }
     let snames = names(res.get("StyleSheetSet"));
     let pnames = names(res.get("ParagraphSheetSet"));
@@ -130,8 +149,8 @@ pub fn write_style_sheets(tysh: &[u8], layer: &TextLayer, styles: &TextStyles, d
     for key in ["ResourceDict", "DocumentResources"] {
         let Some(rd) = e.get_mut(key) else { continue };
         let mut fonts = names(rd.get("FontSet"));
-        let normal_c = rd.get("TheNormalStyleSheet").and_then(E::as_i64).unwrap_or(0) as usize;
-        let normal_p = rd.get("TheNormalParagraphSheet").and_then(E::as_i64).unwrap_or(0) as usize;
+        let normal_c = rd.get("TheNormalStyleSheet").and_then(E::as_i64).and_then(sheet_index).unwrap_or(0);
+        let normal_p = rd.get("TheNormalParagraphSheet").and_then(E::as_i64).and_then(sheet_index).unwrap_or(0);
         let keep_c = rd.get("StyleSheetSet").and_then(E::as_array).and_then(|a| a.get(normal_c).or(a.first())).cloned();
         let keep_p = rd.get("ParagraphSheetSet").and_then(E::as_array).and_then(|a| a.get(normal_p).or(a.first())).cloned();
         let mut font_index = |s: &CharStyle| {
@@ -168,8 +187,10 @@ pub fn write_style_sheets(tysh: &[u8], layer: &TextLayer, styles: &TextStyles, d
         rd.set("ParagraphSheetSet", E::Array(pset));
         rd.set("TheNormalStyleSheet", E::Int(0));
         rd.set("TheNormalParagraphSheet", E::Int(0));
-        rd.set("FontSet", E::Array(fonts.iter().map(|f| crate::psd::font_entry(f)).collect()));
+        let fontset = crate::psd::font_set(&fonts, rd.get("FontSet"));
+        rd.set("FontSet", fontset);
     }
+    let char_fonts = e.path(&["ResourceDict", "FontSet"]).or_else(|| e.path(&["DocumentResources", "FontSet"])).map(|f| names(Some(f))).unwrap_or_default();
     let char_ix = |id: Option<u32>| id.and_then(|id| styles.character.iter().position(|d| d.id == id)).map(|i| i as i64 + 1);
     let para_ix = |id: Option<u32>| id.and_then(|id| styles.paragraph.iter().position(|d| d.id == id)).map(|i| i as i64 + 1);
     let runs = layer.char_runs();
@@ -193,8 +214,15 @@ pub fn write_style_sheets(tysh: &[u8], layer: &TextLayer, styles: &TextStyles, d
             if let Some(sheet) = r.get_mut("StyleSheet") {
                 remove_key(sheet, "Parent");
                 remove_key(sheet, "Name");
-                if let Some(ix) = char_ix(run_at(start).and_then(|r| r.style.style_sheet)) {
+                let run = run_at(start);
+                if let Some(ix) = char_ix(run.and_then(|r| r.style.style_sheet)) {
                     sheet.set("Parent", E::Int(ix));
+                }
+                // The run's reference may be dropped or renumbered: write what it inherited
+                // too, so it keeps its look whatever sheet it now points to (#3795).
+                if let Some(run) = run {
+                    let fi = char_fonts.iter().position(|f| *f == postscript_for(&run.style)).unwrap_or(0);
+                    fill_missing(sheet, "StyleSheetData", style_sheet_data(&run.style, fi, k));
                 }
             }
         }
@@ -207,6 +235,9 @@ pub fn write_style_sheets(tysh: &[u8], layer: &TextLayer, styles: &TextStyles, d
                 remove_key(sheet, "Name");
                 if let Some(ix) = para_ix(paras.get(i).and_then(|p| p.style.style_sheet)) {
                     sheet.set("Parent", E::Int(ix));
+                }
+                if let Some(p) = paras.get(i) {
+                    fill_missing(sheet, "Properties", paragraph_properties(&p.style, k));
                 }
             }
         }
@@ -224,6 +255,14 @@ mod tests {
     use super::*;
     use photocraft_doc::text::{TextAlign, TextRun};
     use photocraft_doc::text_styles::{CharacterStyleDef, ParagraphStyleDef, diff_attrs};
+
+    #[test]
+    fn a_negative_sheet_index_is_not_a_slot_and_infinite_dpi_uses_72() {
+        assert_eq!(sheet_index(-1), None);
+        assert_eq!(sheet_index(2), Some(2));
+        assert_eq!(k_of(f32::INFINITY), 1.0);
+        assert_eq!(k_of(144.0), 0.5);
+    }
 
     #[test]
     fn named_sheets_round_trip() {

@@ -166,7 +166,14 @@ impl SwatchColor {
             .and_then(Value::as_array)
             .ok_or("a colour needs `values`")?
             .iter()
-            .map(|x| x.as_f64().filter(|f| f.is_finite()).map(|f| f as f32).ok_or("colour values must be finite numbers"))
+            // Beyond f32 range a value turns into inf as f32 (an HSB hue then wraps to NaN, which
+            // the prefs file can't store), so reject it here.
+            .map(|x| {
+                x.as_f64()
+                    .filter(|f| f.is_finite() && f.abs() <= f64::from(f32::MAX))
+                    .map(|f| f as f32)
+                    .ok_or("colour values must be finite numbers within f32 range")
+            })
             .collect::<Result<_, _>>()?;
         let need = |n: usize| if vals.len() == n { Ok(()) } else { Err(format!("a {model} colour has {n} values, got {}", vals.len())) };
         let pct = |v: f32| (v / 100.0).clamp(0.0, 1.0);
@@ -281,7 +288,9 @@ pub fn hex(c: [f32; 3]) -> String {
 
 // ------------------------------------------------------------------ defaults
 
-/// The default library: 40 colours in four groups (our own palette).
+/// The default library: 46 colours in five groups. "RGB" holds the exact primaries and
+/// secondaries (#FF0000, #00FF00, ...) as Photoshop's RGB group does; the other four are our own
+/// palette, whose "Pure" hues are vivid but not the pure channel values (#4302).
 pub fn builtin() -> Vec<Group<Swatch>> {
     let rgb = |n: &str, c: [u8; 3]| Swatch::new(n, SwatchColor::Rgb(c.map(|v| f32::from(v) / 255.0)));
     let grays = [
@@ -326,8 +335,19 @@ pub fn builtin() -> Vec<Group<Swatch>> {
     let row = |prefix: &str, cs: [[u8; 3]; 10]| -> Vec<Swatch> {
         hues.iter().zip(cs).map(|(h, c)| rgb(&if prefix.is_empty() { (*h).to_string() } else { format!("{prefix} {h}") }, c)).collect()
     };
+    // Right after Grays, near the top of the panel (Grays stays first: new swatches land there).
+    // Photoshop's order: red, yellow, green, cyan, blue, magenta.
+    let exact: [(&str, [u8; 3]); 6] = [
+        ("RGB Red", [255, 0, 0]),
+        ("RGB Yellow", [255, 255, 0]),
+        ("RGB Green", [0, 255, 0]),
+        ("RGB Cyan", [0, 255, 255]),
+        ("RGB Blue", [0, 0, 255]),
+        ("RGB Magenta", [255, 0, 255]),
+    ];
     vec![
         Group::new("Grays", grays.iter().map(|(n, v)| rgb(n, [*v; 3])).collect()),
+        Group::new("RGB", exact.iter().map(|(n, c)| rgb(n, *c)).collect()),
         Group::new("Pastel", row("Pastel", pastel)),
         Group::new("Pure", row("", pure)),
         Group::new("Dark", row("Dark", dark)),
@@ -339,15 +359,27 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_library_has_the_forty_colours() {
+    fn default_library_has_the_forty_six_colours() {
         let b = builtin();
-        assert_eq!(b.iter().map(|g| g.items.len()).sum::<usize>(), 40);
+        assert_eq!(b.iter().map(|g| g.items.len()).sum::<usize>(), 46);
         let names: Vec<&str> = b.iter().flat_map(|g| g.items.iter().map(|s| s.name.as_str())).collect();
         let mut uniq = names.clone();
         uniq.sort_unstable();
         uniq.dedup();
-        assert_eq!(uniq.len(), 40, "names are unique: {names:?}");
-        assert_eq!(b[2].items[0].color, SwatchColor::Rgb([230.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0]));
+        assert_eq!(uniq.len(), 46, "names are unique: {names:?}");
+        assert_eq!(b[3].name, "Pure");
+        assert_eq!(b[3].items[0].color, SwatchColor::Rgb([230.0 / 255.0, 40.0 / 255.0, 40.0 / 255.0]));
+    }
+
+    #[test]
+    fn the_rgb_group_holds_exact_primaries_and_secondaries() {
+        // #4302: picking green should give #00FF00, as in Photoshop's RGB group.
+        let b = builtin();
+        let g = &b[1];
+        assert_eq!(g.name, "RGB");
+        let conv = SwatchConv::builtin();
+        let hexes: Vec<String> = g.items.iter().map(|s| hex(conv.rgb(&s.color))).collect();
+        assert_eq!(hexes, ["#ff0000", "#ffff00", "#00ff00", "#00ffff", "#0000ff", "#ff00ff"]);
     }
 
     #[test]
@@ -403,6 +435,8 @@ mod tests {
             json!({"model": "rgb", "values": ["a", 2, 3]}),
             json!({"model": "xyz", "values": [1, 2, 3]}),
             json!({"model": "gray", "values": []}),
+            json!({"model": "hsb", "values": [1e39, 100, 100]}),
+            json!({"model": "rgb", "values": [0, -1e39, 0]}),
         ] {
             assert!(SwatchColor::from_param(&bad).is_err(), "{bad}");
         }

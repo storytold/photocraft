@@ -28,13 +28,13 @@
 //!   Bodies whose full profile is not measured yet can still carry a measured
 //!   image area (the D800E, the ILCE-7).
 //!
-//! Decoded today: DNG (uncompressed, lossless-JPEG and JPEG XL, strips and
+//! Decoded today: DNG (uncompressed, deflate, lossless-JPEG, lossy-JPEG and JPEG XL, strips and
 //! tiles, CFA and LinearRaw), CR2 (lossless JPEG with Canon slices), uncompressed or
 //! lossless-JPEG TIFF/EP raws (NEF, ARW, PEF… when not vendor-compressed),
 //! Nikon compressed NEF (lossless and lossy), Sony compressed ARW (cRAW),
-//! Panasonic RW2 (RawFormat 5), uncompressed Olympus ORF and uncompressed
-//! Fujifilm RAF (Bayer and X-Trans). Everything else reports
-//! [`RawError::Unsupported`].
+//! Panasonic RW2 (RawFormat 5 packed and RawFormat 3/4 vendor-compressed),
+//! uncompressed Olympus ORF and uncompressed Fujifilm RAF (Bayer and
+//! X-Trans). Everything else reports [`RawError::Unsupported`].
 //!
 //! The crate is standalone (no workspace dependencies), does no I/O, builds for
 //! `wasm32-unknown-unknown` and never panics on hostile input: sizes are
@@ -46,6 +46,7 @@
 mod cameras;
 mod color;
 mod cr2;
+mod cr3;
 mod demosaic;
 mod develop;
 mod dng;
@@ -60,10 +61,13 @@ mod par;
 mod preview;
 mod raf;
 mod rw2;
+mod saturation;
 mod sensor;
 mod sony;
+mod sony_metadata;
 mod tiff;
 mod tiffep;
+mod tone;
 
 #[cfg(feature = "testgen")]
 pub mod testgen;
@@ -73,14 +77,26 @@ pub use crate::demosaic::Demosaic;
 pub use crate::develop::{DevelopOptions, Developed, RawInfo, WhiteBalance, develop_sensor};
 pub use crate::error::RawError;
 pub use crate::look::{CameraLook, LookRejected, PROXY_EDGE, Reference, ToneCurve, fit_look};
-pub use crate::opcodes::GainMap;
-pub use crate::preview::{Preview, embedded_preview, embedded_previews};
+pub use crate::opcodes::{GainMap, MapPolynomial};
+pub use crate::preview::{DecodedPreview, Preview, PreviewColorSpace, embedded_jxl_preview, embedded_preview, embedded_preview_color_space, embedded_previews};
 pub use crate::sensor::{BlackLevels, Cfa, Rect, Sensor};
+pub use crate::tone::{Tone, retone};
 
 use crate::tiff::{Tiff, tag};
 
 /// Name of the output colour space of [`develop`].
 pub const OUTPUT_SPACE: &str = "ProPhoto RGB (ROMM primaries, D50, gamma 1.8)";
+
+/// The raw container's orientation, when recorded (CR3 metadata or TIFF IFD0).
+/// Useful for camera JPEGs that carry no orientation of their own.
+pub fn orientation(bytes: &[u8]) -> Option<u16> {
+    if bytes.get(4..12) == Some(b"ftypcrx ") {
+        return cr3::orientation(bytes);
+    }
+    let tiff = Tiff::new(bytes)?;
+    let ifd = tiff.ifd_at(tiff.first_ifd, 0)?;
+    tiff.tag_uint(&ifd, tag::ORIENTATION).filter(|o| (1..=8).contains(o)).map(|o| o as u16)
+}
 
 /// Camera raw container families.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -228,7 +244,7 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor, RawError> {
         _ => {
             let t = Tiff::new(bytes).ok_or(RawError::NotRaw)?;
             match format {
-                RawFormat::Dng => dng::decode(&t, limits),
+                RawFormat::Dng => dng::decode(&t, limits).map(lift_clipped),
                 RawFormat::Cr2 => cr2::decode(&t, limits),
                 RawFormat::Rw2 => rw2::decode(&t, limits),
                 RawFormat::Orf => orf::decode(&t, limits),
@@ -236,6 +252,13 @@ pub fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor, RawError> {
             }
         }
     }
+}
+
+/// DNG writers can state a white level the sensor never reaches; samples stuck at the real saturation
+/// point are raised to it so they clip together (see `saturation.rs`).
+fn lift_clipped(mut s: Sensor) -> Sensor {
+    s.lift_clipped_samples();
+    s
 }
 
 /// Decodes a lossless JPEG (T.81 process 14) stream into `(width, height,

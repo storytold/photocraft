@@ -45,20 +45,24 @@ pub struct ImageResource {
 }
 
 /// Fixed-point resolution info (resource 1005).
+///
+/// `h_res_fixed` and `v_res_fixed` are always pixels per inch (16.16 fixed).
+/// `h_res_unit` and `v_res_unit` only say how to display that number
+/// (1 = pixels/inch, 2 = pixels/cm) and do not rescale the stored value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ResolutionInfo {
-    /// Horizontal resolution, 16.16 fixed point (pixels per inch/cm).
+    /// Horizontal resolution, 16.16 fixed point, always pixels per inch.
     pub h_res_fixed: u32,
-    /// 1 = pixels per inch, 2 = pixels per cm.
+    /// Display unit for the horizontal resolution (1 = px/in, 2 = px/cm).
     pub h_res_unit: u16,
-    /// Display unit for width (1 in, 2 cm, 3 pt, 4 pica, 5 column).
+    /// Ruler unit for width (1 in, 2 cm, 3 pt, 4 pica, 5 column).
     pub width_unit: u16,
-    /// Vertical resolution, 16.16 fixed.
+    /// Vertical resolution, 16.16 fixed point, always pixels per inch.
     pub v_res_fixed: u32,
-    /// Vertical resolution unit.
+    /// Display unit for the vertical resolution (1 = px/in, 2 = px/cm).
     pub v_res_unit: u16,
-    /// Display unit for height.
+    /// Ruler unit for height (1 in, 2 cm, 3 pt, 4 pica, 5 column).
     pub height_unit: u16,
 }
 
@@ -68,11 +72,11 @@ impl ResolutionInfo {
         let f = (dpi * 65536.0).round().clamp(0.0, u32::MAX as f64) as u32;
         ResolutionInfo { h_res_fixed: f, h_res_unit: 1, width_unit: 1, v_res_fixed: f, v_res_unit: 1, height_unit: 1 }
     }
-    /// Horizontal resolution as float.
+    /// Horizontal resolution in pixels per inch.
     pub fn h_res(&self) -> f64 {
         f64::from(self.h_res_fixed) / 65536.0
     }
-    /// Vertical resolution as float.
+    /// Vertical resolution in pixels per inch.
     pub fn v_res(&self) -> f64 {
         f64::from(self.v_res_fixed) / 65536.0
     }
@@ -242,6 +246,16 @@ pub(crate) fn read_section(r: &mut Reader<'_>) -> Result<Vec<ImageResource>> {
     Ok(v)
 }
 
+/// Serialized size of the resource section [`write_section`] writes, its length field included.
+pub(crate) fn section_len(res: &[ImageResource]) -> u64 {
+    res.iter().fold(4u64, |n, r| {
+        let name = 1 + r.name.len().min(255);
+        let name = name + name % 2;
+        let data = r.data.len().saturating_add(r.data.len() % 2);
+        n.saturating_add((4 + 2 + name + 4) as u64).saturating_add(data as u64)
+    })
+}
+
 pub(crate) fn write_section(out: &mut Vec<u8>, res: &[ImageResource]) -> Result<()> {
     let at = out.begin_len(false);
     for r in res {
@@ -250,15 +264,16 @@ pub(crate) fn write_section(out: &mut Vec<u8>, res: &[ImageResource]) -> Result<
     out.end_len(at, false)
 }
 
-/// Builds the data for a 1057 version info resource.
+/// Builds the data for a 1057 version info resource, with the writer and reader names Photoshop
+/// 2026 writes ("Adobe Photoshop", "Adobe Photoshop 2026"), without a NUL terminator.
 pub fn version_info_resource(has_real_merged_data: bool) -> ImageResource {
     ImageResource::new(
         ids::VERSION_INFO,
         VersionInfo {
             version: 1,
             has_real_merged_data,
-            writer: UnicodeString::new_nul("Adobe Photoshop"),
-            reader: UnicodeString::new_nul("Adobe Photoshop CS6"),
+            writer: UnicodeString::new("Adobe Photoshop"),
+            reader: UnicodeString::new("Adobe Photoshop 2026"),
             file_version: 1,
         }
         .to_bytes(),
@@ -364,5 +379,18 @@ mod tests {
             }
             other => panic!("{other:?}"),
         }
+    }
+
+    /// Byte for byte what Photoshop 2026 writes (every Photoshop-authored oracle in the corpus):
+    /// u32 count + UTF-16BE, no NUL terminator.
+    #[test]
+    fn version_info_matches_photoshop_bytes() {
+        let mut want = vec![0, 0, 0, 1, 1];
+        for s in ["Adobe Photoshop", "Adobe Photoshop 2026"] {
+            want.extend_from_slice(&(s.len() as u32).to_be_bytes());
+            want.extend(s.encode_utf16().flat_map(u16::to_be_bytes));
+        }
+        want.extend_from_slice(&[0, 0, 0, 1]);
+        assert_eq!(version_info_resource(true).data, want);
     }
 }

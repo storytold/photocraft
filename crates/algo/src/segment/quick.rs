@@ -88,6 +88,19 @@ pub fn quick_select_with(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f3
 }
 
 pub(super) fn quick_select_using<const OPTIMIZED: bool>(sampler: &dyn Sampler, canvas: Rect, points: &[(f32, f32)], size: f32, t: &Tuning) -> Option<Region> {
+    quick_select_batched::<OPTIMIZED>(sampler, canvas, points, size, t, SPECULATE).map(|(region, _)| region)
+}
+
+/// [`quick_select_using`] cutting `batch` window sizes at a time (1: one after another). Also
+/// returns how many window sizes, smallest first, it took to find the kept one.
+pub(super) fn quick_select_batched<const OPTIMIZED: bool>(
+    sampler: &dyn Sampler,
+    canvas: Rect,
+    points: &[(f32, f32)],
+    size: f32,
+    t: &Tuning,
+    batch: usize,
+) -> Option<(Region, usize)> {
     if points.is_empty() || canvas.is_empty() {
         return None;
     }
@@ -107,8 +120,15 @@ pub(super) fn quick_select_using<const OPTIMIZED: bool>(sampler: &dyn Sampler, c
     let step = working_step(canvas.width() as usize, canvas.height() as usize) as i32;
     let rw = r / step as f32;
     // Work in a window around the stroke; grow it while the selection runs into its border.
-    let mut margin = (48.0f32).max(2.0 * rw) as i32 * step;
-    loop {
+    // The window's sides are free like the canvas' edges, so a selection that stays clear of
+    // them is kept; one that reaches a side inside the canvas is recomputed in a larger window.
+    // Index of the smallest window kept so far in this batch: larger ones stop cutting.
+    let kept = std::sync::atomic::AtomicUsize::new(usize::MAX);
+    let attempt = |index: usize, margin: i32| -> Attempt {
+        let cancel = || kept.load(std::sync::atomic::Ordering::Relaxed) < index;
+        if cancel() {
+            return Attempt::Cancelled;
+        }
         let snap0 = |v: i32, o: i32| o + (v - o).div_euclid(step) * step;
         let grown = bbox.inflate(margin).intersect(&canvas);
         let window = Rect::new(snap0(grown.x0, canvas.x0), snap0(grown.y0, canvas.y0), grown.x1, grown.y1);
@@ -118,13 +138,13 @@ pub(super) fn quick_select_using<const OPTIMIZED: bool>(sampler: &dyn Sampler, c
         let pts: Vec<(f32, f32)> = points.iter().map(|&(x, y)| ((x - window.x0 as f32) / s, (y - window.y0 as f32) / s)).collect();
         let seeds = stroke_mask(&pts, rw.max(0.5), lw, lh);
         if !seeds.iter().any(|v| *v) {
-            return None;
+            return Attempt::NoSeeds;
         }
-        // The window's sides are free like the canvas' edges, so a selection that stays clear of
-        // them is the best over the whole canvas too (outside the window it could only add cost).
-        // One that reaches a side inside the canvas is recomputed in a larger window.
+        if cancel() {
+            return Attempt::Cancelled;
+        }
         let inner = [window.x0 > canvas.x0, window.y0 > canvas.y0, window.x1 < canvas.x1, window.y1 < canvas.y1];
-        let low = select_working_using::<OPTIMIZED>(&img, &seeds, rw, t);
+        let Some(low) = select_working_using::<OPTIMIZED>(&img, &seeds, rw, t, &cancel) else { return Attempt::Cancelled };
         let touches = |side: usize| match side {
             0 => (0..lh).any(|y| low[y * lw]),
             1 => (0..lw).any(|x| low[x]),
@@ -132,21 +152,87 @@ pub(super) fn quick_select_using<const OPTIMIZED: bool>(sampler: &dyn Sampler, c
             _ => (0..lw).any(|x| low[(lh - 1) * lw + x]),
         };
         if (0..4).any(|k| inner[k] && touches(k)) {
-            margin = margin.saturating_mul(2);
-            continue;
+            return Attempt::Touches;
         }
-        let mask = upsample(&low, lw, lh, step as usize, window.width() as usize, window.height() as usize);
-        return super::trim_region(Region { bbox: window, mask });
+        kept.fetch_min(index, std::sync::atomic::Ordering::Relaxed);
+        Attempt::Done { window, low, lw, lh }
+    };
+    let mut margin = (48.0f32).max(2.0 * rw) as i32 * step;
+    let mut sizes = 0;
+    loop {
+        // The attempts don't depend on each other, so a few window sizes are cut at once and the
+        // first in growing order that stays clear of its sides is kept: the same result as trying
+        // them one after another, without waiting for the smaller ones to fail first. Once one is
+        // kept, the larger ones still cutting stop, so a stroke settled by a small window costs
+        // about what that window alone costs.
+        let batch = margins_to_try(margin, bbox, canvas, batch);
+        kept.store(usize::MAX, std::sync::atomic::Ordering::Relaxed);
+        #[cfg(not(target_arch = "wasm32"))]
+        let results: Vec<Attempt> = {
+            use rayon::prelude::*;
+            batch.par_iter().enumerate().map(|(i, &m)| attempt(i, m)).collect()
+        };
+        #[cfg(target_arch = "wasm32")]
+        let results: Vec<Attempt> = batch.iter().enumerate().map(|(i, &m)| attempt(i, m)).collect();
+        for result in results {
+            sizes += 1;
+            match result {
+                Attempt::NoSeeds => return None,
+                // Only a window larger than one already kept is cancelled, and that one comes
+                // first in this order, so a cancelled attempt is never reached.
+                Attempt::Touches | Attempt::Cancelled => continue,
+                Attempt::Done { window, low, lw, lh } => {
+                    let mask = upsample(&low, lw, lh, step as usize, window.width() as usize, window.height() as usize);
+                    return super::trim_region(Region { bbox: window, mask }).map(|region| (region, sizes));
+                }
+            }
+        }
+        let &last = batch.last()?;
+        margin = last.saturating_mul(2);
     }
+}
+
+/// One window size's outcome in [`quick_select_using`].
+enum Attempt {
+    /// The stroke misses the window.
+    NoSeeds,
+    /// The selection reaches a side of the window inside the canvas.
+    Touches,
+    /// A smaller window of the same batch was kept first.
+    Cancelled,
+    Done {
+        window: Rect,
+        low: Vec<bool>,
+        lw: usize,
+        lh: usize,
+    },
+}
+
+/// Window sizes cut together: most strokes settle within this many doublings.
+const SPECULATE: usize = 4;
+
+/// The next `count` margins from `margin`, doubling, stopping at the first one whose window
+/// already covers the whole canvas (a larger one would be the same window).
+pub(super) fn margins_to_try(margin: i32, bbox: Rect, canvas: Rect, count: usize) -> Vec<i32> {
+    let mut out = Vec::with_capacity(count.max(1));
+    let mut m = margin;
+    for _ in 0..count.max(1) {
+        out.push(m);
+        if bbox.inflate(m).intersect(&canvas) == canvas {
+            break;
+        }
+        m = m.saturating_mul(2);
+    }
+    out
 }
 
 /// The model at working resolution: `seeds` (the brush footprint, `radius` working pixels) are
 /// selected; returns the selection.
 pub fn select_working(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning) -> Vec<bool> {
-    select_working_using::<true>(img, seeds, radius, t)
+    select_working_using::<true>(img, seeds, radius, t, &|| false).unwrap_or_default()
 }
 
-fn select_working_using<const OPTIMIZED: bool>(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning) -> Vec<bool> {
+fn select_working_using<const OPTIMIZED: bool>(img: &RgbImage, seeds: &[bool], radius: f32, t: &Tuning, cancel: &dyn Fn() -> bool) -> Option<Vec<bool>> {
     let (w, h) = (img.w, img.h);
     let d = crate::selection::edt(seeds, w, h);
     let grow = (t.grow + t.grow_frac * radius).max(0.0);
@@ -154,7 +240,10 @@ fn select_working_using<const OPTIMIZED: bool>(img: &RgbImage, seeds: &[bool], r
     let fixed: Vec<u8> = d.iter().map(|d| if *d <= grow { HARD_FG } else { FREE }).collect();
     let (floor, sigma, k) = (t.floor, t.sigma.max(1e-4), t.k);
     let weight = move |d2: f32| floor + 1.0 / (1.0 + (d2.sqrt() / sigma).powf(k));
-    cut_levels::<OPTIMIZED>(img, &fixed, &cost_fg, &weight, 1.0, t.direct_px.max(1024))
+    if cancel() {
+        return None;
+    }
+    cut_levels::<OPTIMIZED>(img, &fixed, &cost_fg, &weight, 1.0, t.direct_px.max(1024), cancel)
 }
 
 /// Band half-width (pixels) re-cut at each finer level.
@@ -164,11 +253,19 @@ const BAND: f32 = 3.0;
 /// problem (colours averaged, pixel costs summed, cut weights doubled since a coarse side spans two
 /// fine ones) gives a boundary, and the full-size cut is redone only within `BAND` of it. Seeds
 /// stay foreground.
-fn cut_levels<const OPTIMIZED: bool>(img: &RgbImage, fixed: &[u8], cost_fg: &[f32], weight: &dyn Fn(f32) -> f32, scale: f32, direct_px: usize) -> Vec<bool> {
+fn cut_levels<const OPTIMIZED: bool>(
+    img: &RgbImage,
+    fixed: &[u8],
+    cost_fg: &[f32],
+    weight: &dyn Fn(f32) -> f32,
+    scale: f32,
+    direct_px: usize,
+    cancel: &dyn Fn() -> bool,
+) -> Option<Vec<bool>> {
     let (w, h) = (img.w, img.h);
     let zeros = vec![0.0f32; w * h];
     if w * h <= direct_px || w < 8 || h < 8 {
-        return super::grid_cut_weighted::<OPTIMIZED>(img, cost_fg, &zeros, fixed, |d2| scale * weight(d2));
+        return super::grid_cut_impl::<OPTIMIZED>(img, cost_fg, &zeros, fixed, |d2| scale * weight(d2), cancel, false);
     }
     let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
     let coarse_img = img.downsample(2);
@@ -183,7 +280,10 @@ fn cut_levels<const OPTIMIZED: bool>(img: &RgbImage, fixed: &[u8], cost_fg: &[f3
             }
         }
     }
-    let coarse = cut_levels::<OPTIMIZED>(&coarse_img, &cfix, &ccost, weight, scale * 2.0, direct_px);
+    let coarse = cut_levels::<OPTIMIZED>(&coarse_img, &cfix, &ccost, weight, scale * 2.0, direct_px, cancel)?;
+    if cancel() {
+        return None;
+    }
     let proj: Vec<bool> = (0..w * h).map(|i| coarse[(i / w / 2) * cw + (i % w) / 2]).collect();
     // Band: within BAND of the projected boundary.
     let edge: Vec<bool> = (0..w * h)
@@ -194,7 +294,7 @@ fn cut_levels<const OPTIMIZED: bool>(img: &RgbImage, fixed: &[u8], cost_fg: &[f3
         })
         .collect();
     if !edge.iter().any(|e| *e) {
-        return (0..w * h).map(|i| proj[i] || fixed[i] == HARD_FG).collect();
+        return Some((0..w * h).map(|i| proj[i] || fixed[i] == HARD_FG).collect());
     }
     let near = crate::selection::edt(&edge, w, h);
     let banded: Vec<u8> = (0..w * h)
@@ -210,7 +310,7 @@ fn cut_levels<const OPTIMIZED: bool>(img: &RgbImage, fixed: &[u8], cost_fg: &[f3
             }
         })
         .collect();
-    super::grid_cut_weighted::<OPTIMIZED>(img, cost_fg, &zeros, &banded, |d2| scale * weight(d2))
+    super::grid_cut_impl::<OPTIMIZED>(img, cost_fg, &zeros, &banded, |d2| scale * weight(d2), cancel, false)
 }
 
 /// Pixels within `radius` (working pixels) of the polyline `pts`, plus each point's own pixel.

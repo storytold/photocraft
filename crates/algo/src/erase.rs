@@ -18,7 +18,8 @@ pub fn magic_erase(target: &mut Surface, region: &Region, amount: f32, selection
     let amount = if amount.is_finite() { amount.clamp(0.0, 1.0) } else { 0.0 };
     let bbox = region.bbox;
     let bw = bbox.width() as usize;
-    if bbox.is_empty() || amount <= 0.0 || region.mask.len() != bw * bbox.height() as usize {
+    let Some(pixels) = bw.checked_mul(bbox.height() as usize) else { return Rect::EMPTY };
+    if bbox.is_empty() || amount <= 0.0 || region.mask.len() != pixels {
         return Rect::EMPTY;
     }
     let fmt = target.format();
@@ -145,6 +146,16 @@ mod tests {
         l.fill_rect(Rect::new(0, 0, 20, 20), &[1.0, 0.0, 0.0, 1.0]);
         magic_erase(&mut l, &region(Rect::new(0, 0, 20, 20), 255), 1.0, None, Some(&[1.0, 1.0, 1.0]));
         assert_eq!(l.rgba(5, 5), [1.0, 1.0, 1.0, 1.0]);
+    }
+
+    #[test]
+    fn oversized_region_mask_is_rejected_without_overflow() {
+        let mut s = Surface::new(PixelFormat::RGBA8);
+        s.fill_rect(Rect::new(0, 0, 1, 1), &[1.0, 0.0, 0.0, 1.0]);
+        let before = s.pixel(0, 0);
+        let oversized = Region { bbox: Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX), mask: vec![255] };
+        assert_eq!(magic_erase(&mut s, &oversized, 1.0, None, None), Rect::EMPTY);
+        assert_eq!(s.pixel(0, 0), before);
     }
 
     #[test]

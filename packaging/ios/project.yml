@@ -6,7 +6,7 @@ options:
 settings:
   base:
     CURRENT_PROJECT_VERSION: 1
-    MARKETING_VERSION: 0.7.0
+    MARKETING_VERSION: 0.17.0
     SWIFT_VERSION: 6.0
 targets:
   PhotoCraft:

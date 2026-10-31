@@ -155,7 +155,8 @@ impl PathData {
                 out.push(PsdSubpath {
                     closed: r.selector == selector::CLOSED_LENGTH,
                     operation: r.u16_at(2) as i16,
-                    knots: Vec::with_capacity(remaining.min(4096)),
+                    // No preallocation: the count is untrusted (u16) and PsdKnot is 56 bytes.
+                    knots: Vec::new(),
                 });
             } else if r.is_knot() {
                 let closed = r.selector <= 2;
@@ -259,6 +260,19 @@ mod tests {
             },
             PsdSubpath { closed: false, operation: 2, knots: vec![PsdKnot { linked: false, pre: (-0.5, 1.5), anchor: (0.0, 1.0), post: (0.0625, 0.9375) }] },
         ]
+    }
+
+    #[test]
+    fn subpaths_does_not_preallocate_from_untrusted_counts() {
+        let mut bytes = Vec::new();
+        for _ in 0..100_000 {
+            bytes.extend_from_slice(&selector::CLOSED_LENGTH.to_be_bytes());
+            bytes.extend_from_slice(&0xFFFFu16.to_be_bytes());
+            bytes.extend_from_slice(&[0u8; 22]);
+        }
+        let subs = PathData::from_bytes(&bytes).unwrap().subpaths();
+        assert_eq!(subs.len(), 100_000);
+        assert!(subs.iter().all(|s| s.knots.capacity() == 0));
     }
 
     #[test]

@@ -12,4 +12,7 @@ StartupNotify=false
 StartupWMClass=ai.storyteller.photocraft
 Categories=Graphics;2DGraphics;RasterGraphics;Photography;
 Keywords=photo;image;editor;psd;layers;retouch;paint;
-MimeType=application/x-photocraft;image/x-paintnet;image/openraster;image/vnd.adobe.photoshop;image/x-psd;image/x-psb;image/png;image/jpeg;image/tiff;image/webp;image/gif;image/bmp;image/x-tga;image/x-icon;image/vnd.microsoft.icon;image/x-portable-anymap;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/x-exr;image/vnd.radiance;image/avif;image/qoi;
+MimeType=application/x-photocraft;image/x-paintnet;image/openraster;application/x-krita;image/vnd.adobe.photoshop;image/x-psd;image/x-psb;image/png;image/jpeg;image/tiff;image/webp;image/gif;image/bmp;image/x-tga;image/x-icon;image/vnd.microsoft.icon;image/x-portable-anymap;image/x-portable-bitmap;image/x-portable-graymap;image/x-portable-pixmap;image/x-exr;image/vnd.radiance;image/avif;image/qoi;
+# AppRun registers the desktop entry and icons itself (#593); tell external
+# AppImage integrators (AppImageLauncher, appimaged) not to add a duplicate (#3623).
+X-AppImage-Integrate=false

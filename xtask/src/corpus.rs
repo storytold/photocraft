@@ -1,10 +1,16 @@
 //! `cargo xtask corpus [...]` (fetch test corpora) and `cargo xtask test-corpus [...]` (fetch,
 //! then run the corpus tests). Pins: `corpus_pins.rs`. Docs: `docs/development.md` › Test corpora.
 
-use std::path::PathBuf;
-use std::process::Command;
+use std::collections::BTreeMap;
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
 
-use crate::corpus_pins::{self, AG_PSD_COMMIT, HEIC_RS_COMMIT, OPENEXR_COMMIT, PHOTOCRAFT_CORPUS_COMMIT, PILLOW_HEIF_COMMIT, PNGSUITE_URL, PSD_TOOLS_COMMIT};
+use crate::corpus_pins::{
+    self, AG_PSD_COMMIT, HEIC_RS_COMMIT, OPENEXR_COMMIT, PHOTOCRAFT_CORPUS_COMMIT, PHOTOCRAFT_CORPUS_GIMP_COMMIT, PILLOW_HEIF_COMMIT, PNGSUITE_SHA256,
+    PNGSUITE_URL, PSD_TOOLS_COMMIT,
+};
 use crate::pinned::{PinnedCorpus, USER_AGENT};
 use crate::{cargo, root, run};
 
@@ -16,7 +22,8 @@ pub const PIXLS_CRATES: &[&str] = &["photocraft-raw"];
 /// Corpus crates with a `heif` feature: test-corpus enables it so the HEIF corpus tests run.
 const HEIF_CRATES: &[&str] = &["photocraft-codecs", "photocraft-io"];
 
-/// Paths whose changes make `test-corpus --changed` run (the file-format and rendering crates).
+/// Paths whose changes make `test-corpus --changed` run (the file-format and rendering crates,
+/// and the engine's `.atn` import and export).
 const CRITICAL: &[&str] = &[
     "crates/psd/",
     "crates/io/",
@@ -28,8 +35,9 @@ const CRITICAL: &[&str] = &[
     "crates/format/",
     "crates/affinity/",
     "crates/raw/",
+    "crates/engine/src/atn_cmds",
 ];
-/// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --photoshop [--local]] [--update-manifest]`
+/// `cargo xtask corpus [--all | --pngsuite | --download | --psd | --psd-tools | --heif | --exr | --pixls | --affinity | --atn | --photoshop [--local] | --gimp [--local]] [--update-manifest]`
 pub fn cmd(args: &[&str]) -> Result<(), String> {
     let update = args.contains(&"--update-manifest");
     let mut did = false;
@@ -64,11 +72,23 @@ pub fn cmd(args: &[&str]) -> Result<(), String> {
         corpus_pins::AFFINITY.fetch(update)?;
         did = true;
     }
+    if args.contains(&"--atn") {
+        corpus_pins::ATN.fetch(update)?;
+        did = true;
+    }
     if args.contains(&"--photoshop") {
         if args.contains(&"--local") {
             corpus_pins::PHOTOSHOP.fetch_local(&local_clone()?, update)?;
         } else {
             corpus_pins::PHOTOSHOP.fetch(update)?;
+        }
+        did = true;
+    }
+    if args.contains(&"--gimp") {
+        if args.contains(&"--local") {
+            corpus_pins::GIMP.fetch_local(&local_clone()?, update)?;
+        } else {
+            corpus_pins::GIMP.fetch(update)?;
         }
         did = true;
     }
@@ -90,7 +110,7 @@ fn local_clone() -> Result<PathBuf, String> {
 }
 
 /// Fetches every corpus that is missing or stale (verified ones are left alone). With `local`,
-/// `corpus/photoshop` is copied from the authoring clone of photocraft-corpus instead. With
+/// `corpus/photoshop` and `corpus/gimp` are copied from the authoring clone of photocraft-corpus instead. With
 /// `update`, every pinned corpus is refetched and its manifest rewritten (`--update-manifest`).
 pub fn fetch_all(local: bool, update: bool) -> Result<(), String> {
     fetch_pngsuite()?;
@@ -100,10 +120,11 @@ pub fn fetch_all(local: bool, update: bool) -> Result<(), String> {
 }
 
 /// Calls `fetch(corpus, from_clone, update)` for every pinned corpus; `from_clone` is set for
-/// `corpus/photoshop` when `local`.
+/// the photocraft-corpus sets (`corpus/photoshop`, `corpus/gimp`) when `local`.
 fn fetch_pinned(local: bool, update: bool, mut fetch: impl FnMut(&PinnedCorpus, bool, bool) -> Result<(), String>) -> Result<(), String> {
     for c in corpus_pins::ALL {
-        fetch(c, local && std::ptr::eq(*c, &corpus_pins::PHOTOSHOP), update)?;
+        let ours = std::ptr::eq(*c, &corpus_pins::PHOTOSHOP) || std::ptr::eq(*c, &corpus_pins::GIMP);
+        fetch(c, local && ours, update)?;
     }
     Ok(())
 }
@@ -119,7 +140,7 @@ fn status(present: bool) -> &'static str {
 fn list() {
     let corpus = root().join("corpus");
     let png = corpus.join("pngsuite");
-    let png_ok = pngsuite_count(&png) > 0;
+    let png_ok = verify_pngsuite(&png, PNGSUITE_MANIFEST).is_ok();
     println!(
         "Test corpora live under {} (gitignored, never committed). The corpus tests are opt-in
 (cargo feature `corpus`) and fail, not skip, when a corpus is missing. CI always runs them.
@@ -131,6 +152,9 @@ fn list() {
                      https://github.com/storytold/photocraft-corpus at {PHOTOCRAFT_CORPUS_COMMIT}
                      manifest xtask/photoshop-corpus.sha256. Fetch: --photoshop
                      (--photoshop --local copies from ../photocraft-corpus or $PHOTOCRAFT_CORPUS_REPO)
+  corpus/gimp/       [{}] our GIMP-authored XCF oracles with GIMP's PNG renderings (MIT OR Apache-2.0),
+                     from the same repository at {PHOTOCRAFT_CORPUS_GIMP_COMMIT}
+                     manifest xtask/gimp-corpus.sha256. Fetch: --gimp (--gimp --local copies from the clone)
   corpus/psd/        [{}] 170 small psd-tools + ag-psd files (MIT), psd-tools@{} and
                      ag-psd@{}, manifest xtask/psd-corpus.sha256. Fetch: --psd
   corpus/psd-tools/  [{}] the full psd-tools test set (MIT) at {PSD_TOOLS_COMMIT}
@@ -141,6 +165,8 @@ fn list() {
                      manifest xtask/exr-corpus.sha256. Fetch: --exr
   corpus/affinity/   [{}] public Affinity documents and #1606 samples (CC0, MIT), with PNG references;
                      manifest xtask/affinity-corpus.sha256. Fetch: --affinity
+  corpus/atn/        [{}] Photoshop Actions sets from seven public repositories (MIT, BSD, Unlicense);
+                     manifest xtask/atn-corpus.sha256. Fetch: --atn
   corpus/pngsuite/   [{}] PngSuite (public domain), {PNGSUITE_URL}. Fetch: --pngsuite
   corpus/pixls/      [opt-in] real camera raws from raw.pixls.us (public domain), one per decode
                      path plus the known-unsupported packed ORF. Fetch: --pixls (opt-in)
@@ -148,6 +174,7 @@ fn list() {
 Pins: xtask/src/corpus_pins.rs. Moving one: change it, then --<name> --update-manifest.",
         corpus.display(),
         status(corpus_pins::PHOTOSHOP.is_current()),
+        status(corpus_pins::GIMP.is_current()),
         status(corpus_pins::PSD_MIXED.is_current()),
         &PSD_TOOLS_COMMIT[..12],
         &AG_PSD_COMMIT[..12],
@@ -158,35 +185,217 @@ Pins: xtask/src/corpus_pins.rs. Moving one: change it, then --<name> --update-ma
         status(corpus_pins::EXR.is_current()),
         &OPENEXR_COMMIT[..12],
         status(corpus_pins::AFFINITY.is_current()),
+        status(corpus_pins::ATN.is_current()),
         status(png_ok),
     );
 }
 
-fn pngsuite_count(dir: &std::path::Path) -> usize {
-    std::fs::read_dir(dir).map(|d| d.flatten().filter(|e| e.path().extension().is_some_and(|x| x == "png")).count()).unwrap_or(0)
+const PNGSUITE_MANIFEST: &str = include_str!("../pngsuite.sha256");
+const PNGSUITE_MAX_ARCHIVE_BYTES: u64 = 1024 * 1024;
+const PNGSUITE_MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+static PNGSUITE_STAGE_ID: AtomicU64 = AtomicU64::new(0);
+
+/// Do not trust cached filenames, symlinks, or a file's size remaining unchanged during a read.
+fn pngsuite_bytes(path: &Path, limit: u64) -> Result<Vec<u8>, String> {
+    let meta = std::fs::symlink_metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() || meta.len() > limit {
+        return Err(format!("{}: expected a regular file of at most {limit} bytes", path.display()));
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|e| format!("{}: {e}", path.display()))?
+        .take(limit + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    if bytes.len() as u64 > limit {
+        return Err(format!("{}: exceeds {limit} bytes", path.display()));
+    }
+    Ok(bytes)
 }
 
-/// PngSuite: 175 PNGs from a fixed release archive (skipped when already present).
-fn fetch_pngsuite() -> Result<(), String> {
-    let corpus = root().join("corpus");
+fn verify_pngsuite(dir: &Path, manifest: &str) -> Result<(), String> {
+    let mut expected = BTreeMap::new();
+    for line in manifest.lines() {
+        let Some((hash, name)) = line.split_once("  ") else { return Err("pngsuite: invalid manifest line".into()) };
+        if hash.len() != 64
+            || !hash.bytes().all(|c| c.is_ascii_hexdigit())
+            || name.is_empty()
+            || name.contains("..")
+            || !name.bytes().all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c))
+            || expected.insert(name, hash).is_some()
+        {
+            return Err("pngsuite: invalid manifest entry".into());
+        }
+    }
+    if expected.is_empty() {
+        return Err("pngsuite: empty manifest".into());
+    }
+    let meta = std::fs::symlink_metadata(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    if !meta.is_dir() {
+        return Err(format!("{}: expected a regular directory", dir.display()));
+    }
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let mut seen = 0;
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("{}: {e}", dir.display()))?;
+        let name = entry.file_name();
+        let hash = name.to_str().and_then(|n| expected.get(n)).ok_or_else(|| format!("pngsuite: unexpected file {}", entry.path().display()))?;
+        let bytes = pngsuite_bytes(&entry.path(), PNGSUITE_MAX_FILE_BYTES)?;
+        if crate::sha256::hex(&bytes) != **hash {
+            return Err(format!("pngsuite: {}: sha256 mismatch", entry.path().display()));
+        }
+        seen += 1;
+    }
+    if seen != expected.len() {
+        return Err(format!("pngsuite: missing files ({seen} of {})", expected.len()));
+    }
+    Ok(())
+}
+
+struct PngSuiteStage {
+    path: PathBuf,
+    keep: bool,
+}
+
+impl PngSuiteStage {
+    fn new(corpus: &Path) -> Result<Self, String> {
+        std::fs::create_dir_all(corpus).map_err(|e| format!("create {}: {e}", corpus.display()))?;
+        for _ in 0..100 {
+            let id = PNGSUITE_STAGE_ID.fetch_add(1, Ordering::Relaxed);
+            let path = corpus.join(format!(".pngsuite-{}-{id}", std::process::id()));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path, keep: false }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {}
+                Err(e) => return Err(format!("create {}: {e}", path.display())),
+            }
+        }
+        Err("pngsuite: could not create a staging directory".into())
+    }
+}
+
+impl Drop for PngSuiteStage {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+/// Keep the old cache until the verified replacement is in place. On a failed rollback its
+/// backup remains in staging and the error names it, rather than deleting the only copy.
+fn install_pngsuite(
+    dest: &Path,
+    files: &Path,
+    backup: &Path,
+    backup_retained: &mut bool,
+    mut rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
+    let had_cache = match std::fs::symlink_metadata(dest) {
+        Ok(_) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => return Err(format!("{}: {e}", dest.display())),
+    };
+    if had_cache {
+        rename(dest, backup).map_err(|e| format!("pngsuite: preserve {}: {e}", dest.display()))?;
+        *backup_retained = true;
+    }
+    if let Err(e) = rename(files, dest) {
+        if had_cache && let Err(restore) = rename(backup, dest) {
+            return Err(format!("pngsuite: install failed ({e}); restore failed ({restore}); old cache retained at {}", backup.display()));
+        }
+        *backup_retained = false;
+        return Err(format!("pngsuite: install failed: {e}"));
+    }
+    *backup_retained = false;
+    Ok(())
+}
+
+fn fetch_pngsuite_in(
+    corpus: &Path,
+    archive_hash: &str,
+    manifest: &str,
+    download: impl FnOnce(&Path) -> Result<(), String>,
+    extract: impl FnOnce(&Path, &Path) -> Result<(), String>,
+    rename: impl FnMut(&Path, &Path) -> std::io::Result<()>,
+) -> Result<(), String> {
     let dest = corpus.join("pngsuite");
-    let have = pngsuite_count(&dest);
-    if have >= 175 {
-        println!("pngsuite: {have} PNG files in {} already", dest.display());
+    if verify_pngsuite(&dest, manifest).is_ok() {
+        println!("pngsuite: {} already matches its manifest", dest.display());
         return Ok(());
     }
-    std::fs::create_dir_all(&dest).map_err(|e| format!("create {}: {e}", dest.display()))?;
-    let tgz = corpus.join("PngSuite-2017jul19.tgz");
-    let mut curl = Command::new("curl");
-    curl.args(["-fsSL", "--retry", "3", "-A", USER_AGENT, "-o"]).arg(&tgz).arg(PNGSUITE_URL);
-    run(curl, &format!("curl {PNGSUITE_URL}"))?;
-    let mut tar = Command::new("tar");
-    tar.arg("-xzf").arg(&tgz).arg("-C").arg(&dest);
-    run(tar, "tar -xzf PngSuite-2017jul19.tgz")?;
-    let _ = std::fs::remove_file(&tgz);
-    let n = pngsuite_count(&dest);
-    println!("pngsuite: {n} PNG files in {}", dest.display());
-    if n == 0 { Err("no PNG files extracted".into()) } else { Ok(()) }
+    let mut stage = PngSuiteStage::new(corpus)?;
+    let archive = stage.path.join("archive.tgz");
+    download(&archive)?;
+    let bytes = pngsuite_bytes(&archive, PNGSUITE_MAX_ARCHIVE_BYTES)?;
+    if crate::sha256::hex(&bytes) != archive_hash {
+        return Err("pngsuite: archive sha256 mismatch; nothing extracted".into());
+    }
+    let files = stage.path.join("files");
+    std::fs::create_dir(&files).map_err(|e| format!("create {}: {e}", files.display()))?;
+    extract(&archive, &files)?;
+    verify_pngsuite(&files, manifest)?;
+    let backup = stage.path.join("previous");
+    install_pngsuite(&dest, &files, &backup, &mut stage.keep, rename)?;
+    println!("pngsuite: verified {}", dest.display());
+    Ok(())
+}
+
+/// Older curl versions cannot enforce --max-filesize for unknown-length responses. Write
+/// only the allowed prefix, then probe for excess without spooling that byte to disk.
+fn copy_pngsuite_download(reader: &mut impl Read, writer: &mut impl Write) -> std::io::Result<()> {
+    std::io::copy(&mut reader.take(PNGSUITE_MAX_ARCHIVE_BYTES), writer)?;
+    let mut extra = [0; 1];
+    loop {
+        match reader.read(&mut extra) {
+            Ok(0) => return Ok(()),
+            Ok(_) => return Err(std::io::Error::other(format!("pngsuite: archive exceeds {PNGSUITE_MAX_ARCHIVE_BYTES} bytes"))),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+fn finish_pngsuite_download(child: &mut Child, mut reader: impl Read, writer: &mut impl Write) -> Result<(), String> {
+    let result = copy_pngsuite_download(&mut reader, writer).map_err(|e| format!("pngsuite: download: {e}")).and_then(|()| {
+        let status = child.wait().map_err(|e| format!("pngsuite: wait for curl: {e}"))?;
+        if status.success() { Ok(()) } else { Err(format!("pngsuite: curl failed: {status}")) }
+    });
+    if result.is_err() {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    result
+}
+
+fn download_pngsuite(mut curl: Command, archive: &Path) -> Result<(), String> {
+    let mut file = std::fs::File::create(archive).map_err(|e| format!("create {}: {e}", archive.display()))?;
+    let mut child = curl.stdout(Stdio::piped()).spawn().map_err(|e| format!("pngsuite: start curl: {e}"))?;
+    let Some(stdout) = child.stdout.take() else {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("pngsuite: curl stdout unavailable".into());
+    };
+    finish_pngsuite_download(&mut child, stdout, &mut file)
+}
+
+/// PngSuite: fixed archive checked before tar; every cached file checked on each invocation.
+fn fetch_pngsuite() -> Result<(), String> {
+    fetch_pngsuite_in(
+        &root().join("corpus"),
+        PNGSUITE_SHA256,
+        PNGSUITE_MANIFEST,
+        |archive| {
+            let mut curl = Command::new("curl");
+            curl.args(["-fsSL", "--retry", "3", "--max-filesize", &PNGSUITE_MAX_ARCHIVE_BYTES.to_string(), "-A", USER_AGENT, "-o", "-", PNGSUITE_URL]);
+            download_pngsuite(curl, archive)
+        },
+        |archive, files| {
+            let mut tar = Command::new("tar");
+            tar.arg("-xzf").arg(archive).arg("-C").arg(files);
+            run(tar, "tar -xzf PngSuite-2017jul19.tgz")
+        },
+        |from, to| std::fs::rename(from, to),
+    )
 }
 
 /// Files changed relative to `origin/main` (committed, staged or not).
@@ -259,31 +468,4 @@ pub fn test_cmd(args: &[&str]) -> Result<(), String> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The flags each pinned corpus is fetched with by `fetch_all(local, update)`.
-    fn calls(local: bool, update: bool) -> Vec<(&'static str, bool)> {
-        let mut seen = Vec::new();
-        let r = fetch_pinned(local, update, |c, _, u| {
-            seen.push((c.name, u));
-            Ok(())
-        });
-        assert_eq!(r, Ok(()));
-        seen
-    }
-
-    #[test]
-    fn all_with_update_manifest_updates_every_pinned_corpus() {
-        for local in [false, true] {
-            let seen = calls(local, true);
-            assert_eq!(seen.len(), corpus_pins::ALL.len());
-            assert!(seen.iter().all(|(_, u)| *u), "--all --update-manifest dropped the flag: {seen:?}");
-        }
-    }
-
-    #[test]
-    fn all_without_update_manifest_only_verifies() {
-        assert!(calls(false, false).iter().all(|(_, u)| !*u));
-    }
-}
+mod tests;

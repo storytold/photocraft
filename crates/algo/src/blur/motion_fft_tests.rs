@@ -280,7 +280,7 @@ fn motion_fft_pipeline_supports_depths_models_edges_selections_and_tile_seams() 
                     for mask in [None, Some(&selection)] {
                         let mut expected_data = filtered.clone();
                         if let Some(mask) = mask {
-                            crate::mix_selection(&mut expected_data, rect, mask, &src);
+                            crate::mix_selection(&mut expected_data, rect, mask, &src, alpha);
                         }
                         let mut expected = source.clone();
                         expected.write_region(rect, &expected_data);
@@ -362,7 +362,7 @@ fn motion_fft_production_crosses_real_tile_seams_and_leaves_other_pixels_untouch
                 let mut expected = source.clone();
                 let mut data = filtered.clone();
                 if let Some(mask) = mask {
-                    crate::mix_selection(&mut data, area, mask, &src);
+                    crate::mix_selection(&mut data, area, mask, &src, true);
                 }
                 expected.write_region(area, &data);
                 let expected = Image::read(&expected, check);

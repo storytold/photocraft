@@ -119,6 +119,20 @@ impl<'a> File<'a> {
         Some(f)
     }
 
+    /// [`parse`](Self::parse), also taking a Panasonic RW2 raw, whose classic little-endian TIFF
+    /// header has 0x55 (`IIU\0`) in place of 42.
+    pub fn parse_raw(b: &'a [u8]) -> Option<Self> {
+        if let Some(f) = Self::parse(b) {
+            return Some(f);
+        }
+        let mut f = File { b, le: true, big: false, first_ifd: 0 };
+        if b.get(0..2)? != b"II" || f.u16_at(2)? != 0x55 {
+            return None;
+        }
+        f.first_ifd = u64::from(f.u32_at(4)?);
+        Some(f)
+    }
+
     /// Length of the header; no directory can start inside it.
     pub fn header_len(&self) -> u64 {
         if self.big { 16 } else { 8 }
@@ -143,6 +157,14 @@ impl<'a> File<'a> {
     pub fn u64_at(&self, at: u64) -> Option<u64> {
         let s: [u8; 8] = self.slice(at, 8)?.try_into().ok()?;
         Some(if self.le { u64::from_le_bytes(s) } else { u64::from_be_bytes(s) })
+    }
+
+    /// The declared entry count of the directory at `at`, before its table is parsed.
+    pub fn entry_count(&self, at: u64) -> Option<u64> {
+        if at < self.header_len() {
+            return None;
+        }
+        if self.big { self.u64_at(at) } else { self.u16_at(at).map(u64::from) }
     }
 
     /// The directory at `at`: its whole table, up to and including the next-IFD pointer, must
@@ -355,6 +377,10 @@ struct Walk<'a, 'f> {
     seen: HashSet<u64>,
     pages: Vec<TiffPage>,
     complete: bool,
+    /// Directory entries that may still be parsed. Real directory tables are disjoint, so their
+    /// total size is bounded by the file; overlapping tables (a hostile file) would otherwise
+    /// make every one of thousands of directories cost a full 65,535-entry parse.
+    entry_budget: u64,
 }
 
 impl Walk<'_, '_> {
@@ -366,6 +392,15 @@ impl Walk<'_, '_> {
                 self.complete = false;
                 return;
             }
+            let Some(n) = self.f.entry_count(at) else {
+                self.complete = false;
+                return;
+            };
+            if n > self.entry_budget {
+                self.complete = false;
+                return;
+            }
+            self.entry_budget -= n;
             let Some(ifd) = self.f.ifd(at) else {
                 self.complete = false;
                 return;
@@ -391,10 +426,37 @@ pub fn tiff_info(bytes: &[u8]) -> Result<TiffInfo, CodecError> {
 }
 
 pub(crate) fn info_of(f: &File<'_>) -> Result<TiffInfo, CodecError> {
-    let mut w = Walk { f, seen: HashSet::new(), pages: Vec::new(), complete: true };
+    let mut w = Walk { f, seen: HashSet::new(), pages: Vec::new(), complete: true, entry_budget: (f.b.len() as u64) / 12 + 64 };
     w.chain(f.first_ifd, None, 0);
     if w.pages.is_empty() {
         return Err(CodecError::malformed(Format::Tiff, "the first image directory is missing or cut off"));
     }
     Ok(TiffInfo { big_tiff: f.big, little_endian: f.le, pages: w.pages, complete: w.complete })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 10,000 directories 4 bytes apart, each declaring 65,535 overlapping entries: the walk must
+    /// stop after the file-size entry budget instead of parsing ~6.5e8 entries.
+    #[test]
+    fn overlapping_directory_tables_exhaust_the_entry_budget() {
+        let first = 8usize;
+        let table = 2 + 65_535 * 12 + 4;
+        let mut b = vec![0u8; first + table + 4 * 10_000];
+        b[..8].copy_from_slice(&[b'I', b'I', 42, 0, first as u8, 0, 0, 0]);
+        for i in 0..10_000usize {
+            let at = first + 4 * i;
+            b[at..at + 2].copy_from_slice(&u16::MAX.to_le_bytes());
+            let next_cell = at + 2 + 65_535 * 12;
+            let next = (first + 4 * (i + 1)) as u32;
+            if let Some(cell) = b.get_mut(next_cell..next_cell + 4) {
+                cell.copy_from_slice(&next.to_le_bytes());
+            }
+        }
+        let info = tiff_info(&b).expect("the first directory is readable");
+        assert!(!info.complete);
+        assert!(info.pages.len() < 200, "{} directories parsed", info.pages.len());
+    }
 }

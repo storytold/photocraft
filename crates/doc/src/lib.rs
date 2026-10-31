@@ -1,4 +1,4 @@
-//! The Photocraft document model: pure data, no rendering, no UI.
+//! The PhotoCraft document model: pure data, no rendering, no UI.
 //!
 //! Layer order: inside every group (and the root), `children[0]` is the **bottom** layer, matching
 //! compositing order and the PSD file order. UIs display the list reversed.
@@ -99,6 +99,32 @@ pub struct Locks {
 }
 
 impl Locks {
+    /// Set the lock a command names (`transparency`, `pixels`, `position`, `artboard`, `all`);
+    /// false for an unknown name. Lock Image Pixels includes Lock Transparent Pixels, so, as in
+    /// Photoshop, locking the pixels clears the transparency lock, and that one stays off while the
+    /// pixels are locked (#4892).
+    pub fn set(&mut self, key: &str, on: bool) -> bool {
+        match key {
+            "transparency" => self.transparency = on && !self.pixels,
+            "pixels" => {
+                self.pixels = on;
+                if on {
+                    self.transparency = false;
+                }
+            }
+            "position" => self.position = on,
+            "artboard" => self.artboard = on,
+            "all" => self.all = on,
+            _ => return false,
+        }
+        true
+    }
+
+    /// Whether any lock is set: Photoshop then shows the lock icon on the layer's row.
+    pub fn any(self) -> bool {
+        self.transparency || self.pixels || self.position || self.artboard || self.all
+    }
+
     pub fn union(self, o: Locks) -> Locks {
         Locks {
             transparency: self.transparency || o.transparency,
@@ -292,6 +318,10 @@ pub struct Group {
     pub expanded: bool,
     /// Set when this (top-level) group is an artboard: children are clipped to its rect.
     pub artboard: Option<Artboard>,
+    /// A Photoshop Frame's stroke (Properties › Stroke; PSD `vstk` on the frame group): drawn
+    /// along the group's enabled vector mask (the frame outline), above the framed content and
+    /// not clipped by the frame. Ignored without a vector mask.
+    pub frame_stroke: Option<ShapeStroke>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -633,9 +663,20 @@ pub struct Layer {
     pub advanced: AdvancedBlending,
     /// Layer › Video Layers frame stack (None for a normal layer).
     pub video: Option<VideoData>,
+    /// The layer's own XMP packet (Photoshop's `layer.xmpMetadata.rawData`), where scripts and
+    /// embedding apps keep data about the layer under their own namespaces. Copied by
+    /// [`Layer::duplicate`], as in Photoshop. PSD `shmd` › `cust` › `layerXMP`.
+    pub xmp: Option<Arc<str>>,
 }
 
 impl Layer {
+    /// Whether the layer has the Background's own properties: an unclipped pixel layer with
+    /// transparency and position locked. Only the bottom layer of a document with them is the
+    /// Background: use [`Document::background`] / [`Document::is_background`] to identify it.
+    pub fn has_background_traits(&self) -> bool {
+        self.locks.transparency && self.locks.position && !self.clipped && matches!(self.content, LayerContent::Raster(_))
+    }
+
     pub fn new(name: impl Into<String>, content: LayerContent) -> Self {
         Layer {
             id: LayerId::fresh(),
@@ -659,13 +700,14 @@ impl Layer {
             blend_if: BlendIf::default(),
             advanced: AdvancedBlending::default(),
             video: None,
+            xmp: None,
         }
     }
     pub fn raster(name: impl Into<String>, format: PixelFormat) -> Self {
         Self::new(name, LayerContent::Raster(Surface::new(format)))
     }
     pub fn group(name: impl Into<String>, children: Vec<Layer>) -> Self {
-        let mut l = Self::new(name, LayerContent::Group(Group { children, expanded: true, artboard: None }));
+        let mut l = Self::new(name, LayerContent::Group(Group { children, expanded: true, artboard: None, frame_stroke: None }));
         l.blend = BlendMode::PassThrough;
         l
     }
@@ -808,7 +850,10 @@ pub type PsdGlobalBlock = ([u8; 4], [u8; 4], Arc<Vec<u8>>);
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Metadata {
-    pub xmp: Option<String>,
+    /// The XMP packet as stored, kept as text so properties PhotoCraft doesn't model survive.
+    /// Shared like the other payloads here: cloning a document or a history state never copies
+    /// it (#4535).
+    pub xmp: Option<Arc<str>>,
     pub exif: Option<Arc<Vec<u8>>>,
     /// Free-form image text (PNG tEXt/zTXt/iTXt, TIFF ASCII tags), including duplicate keys.
     pub text: Vec<(String, String)>,
@@ -832,6 +877,10 @@ pub struct Document {
     pub layers: Vec<Layer>,
     pub channels: Vec<AlphaChannel>,
     pub guides: Guides,
+    /// The rulers' zero point in document pixels (`[x, y]`), dragged from the ruler corner. The
+    /// rulers, the Info panel and other position readouts measure from it; `[0, 0]` (the
+    /// image's top-left) is the default.
+    pub ruler_origin: [f64; 2],
     /// Active selection as a grayscale coverage surface (None = no selection).
     pub selection: Option<Surface>,
     pub metadata: Metadata,
@@ -875,6 +924,37 @@ pub struct Document {
     pub variables: Variables,
     /// Window › Timeline (None until a video timeline is created).
     pub timeline: Option<Timeline>,
+    /// How the document's lossy file was encoded (its JPEG quality, WebP lossy or lossless,
+    /// PNG stereo pairing), so a save writes it back the same way rather than at fixed defaults.
+    pub file_encoding: FileEncoding,
+}
+
+/// The encoder settings a document's file was opened or saved with: what File › Save and the
+/// Save As defaults reuse for that format. Empty for a new document or a file without lossy
+/// options. Qualities are on the codecs' 1–100 scale.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct FileEncoding {
+    /// JPEG quality (estimated from the file's quantisation tables on open).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub jpeg_quality: Option<u8>,
+    /// WebP: `Some(true)` lossless (VP8L), `Some(false)` lossy (VP8 at [`Self::webp_quality`]).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webp_lossless: Option<bool>,
+    /// Lossy WebP quality.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webp_quality: Option<u8>,
+    /// PNG stereo pairing (the `sTER` chunk's mode byte, PNG Extensions 1.4.0 §3.6): `Some(0)`
+    /// cross-fuse (right eye first), `Some(1)` diverging-fuse (left eye first). Both are
+    /// side by side; saving a stereo PNG keeps this eye-order mark (#6063).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub png_stereo: Option<u8>,
+}
+
+impl FileEncoding {
+    pub fn is_empty(&self) -> bool {
+        *self == FileEncoding::default()
+    }
 }
 
 /// Where a layer lives in the tree: indices from the root down.
@@ -893,6 +973,7 @@ impl Document {
             layers: Vec::new(),
             channels: Vec::new(),
             guides: Guides::default(),
+            ruler_origin: [0.0, 0.0],
             selection: None,
             metadata: Metadata::default(),
             global_light: GlobalLight::default(),
@@ -913,6 +994,7 @@ impl Document {
             slices: Slices::default(),
             variables: Variables::default(),
             timeline: None,
+            file_encoding: FileEncoding::default(),
         }
     }
 
@@ -933,12 +1015,17 @@ impl Document {
 
     /// Pixel format for new raster layers in this document.
     pub fn pixel_format(&self) -> PixelFormat {
-        let mode = match self.mode {
+        Self::pixel_format_for(self.mode, self.depth)
+    }
+
+    /// [`Self::pixel_format`] of a document in `mode` at `depth`.
+    pub fn pixel_format_for(mode: ColorMode, depth: SampleType) -> PixelFormat {
+        let mode = match mode {
             ColorMode::Indexed | ColorMode::Multichannel => ColorMode::Rgb,
             ColorMode::Bitmap | ColorMode::Duotone => ColorMode::Grayscale,
             m => m,
         };
-        PixelFormat::new(mode, self.depth, true)
+        PixelFormat::new(mode, depth, true)
     }
 
     pub fn bounds(&self) -> Rect {
@@ -1008,9 +1095,33 @@ impl Document {
         (1..=path.len()).filter_map(|n| self.layer_at(path.get(..n)?)).fold(Locks::default(), |a, l| a.union(l.locks))
     }
 
+    /// Whether the layer at `path` is shown: it and every group around it are visible.
+    pub fn shown_at(&self, path: &[usize]) -> bool {
+        (1..=path.len()).all(|n| path.get(..n).and_then(|p| self.layer_at(p)).is_some_and(|l| l.visible))
+    }
+
     /// [`Self::locks_at`] for the layer `id`.
     pub fn effective_locks(&self, id: LayerId) -> Locks {
         self.path_of(id).map_or_else(Locks::default, |p| self.locks_at(&p))
+    }
+
+    /// The Background layer, identified structurally as Photoshop does, never by its name (a file
+    /// from a German or Japanese Photoshop names it "Hintergrund" or "背景"): the bottom layer of
+    /// the stack, a pixel layer that is not clipped, with transparency and position locked (a PSD
+    /// stores it without a transparency channel and transparency-protected; File › New and opaque
+    /// flat files create it the same way).
+    pub fn background(&self) -> Option<&Layer> {
+        self.layers.first().filter(|l| Layer::has_background_traits(l))
+    }
+
+    /// [`Self::background`], mutably.
+    pub fn background_mut(&mut self) -> Option<&mut Layer> {
+        self.layers.first_mut().filter(|l| Layer::has_background_traits(l))
+    }
+
+    /// Whether `id` is the document's Background layer ([`Self::background`]).
+    pub fn is_background(&self, id: LayerId) -> bool {
+        self.background().is_some_and(|b| b.id == id)
     }
 
     pub fn layer(&self, id: LayerId) -> Option<&Layer> {
@@ -1085,6 +1196,16 @@ impl Document {
         id
     }
 
+    /// Insert `layer` directly below the layer `below` (or at the bottom of the root if None).
+    pub fn insert_below(&mut self, below: Option<LayerId>, layer: Layer) -> LayerId {
+        let id = layer.id;
+        match below.and_then(|b| self.path_of(b)).and_then(|path| self.siblings_mut(&path)) {
+            Some((sib, idx)) => sib.insert(idx, layer),
+            None => self.layers.insert(0, layer),
+        }
+        id
+    }
+
     pub fn remove(&mut self, id: LayerId) -> Option<Layer> {
         let path = self.path_of(id)?;
         let (sib, idx) = self.siblings_mut(&path)?;
@@ -1143,6 +1264,19 @@ mod tests {
     }
 
     #[test]
+    fn any_lock_counts_every_lock() {
+        assert!(!Locks::default().any());
+        let each = [
+            Locks { transparency: true, ..Locks::default() },
+            Locks { pixels: true, ..Locks::default() },
+            Locks { position: true, ..Locks::default() },
+            Locks { artboard: true, ..Locks::default() },
+            Locks { all: true, ..Locks::default() },
+        ];
+        assert!(each.iter().all(|k| k.any()));
+    }
+
+    #[test]
     fn unused_link_group_never_wraps() {
         let mut d = doc();
         assert_eq!(d.unused_link_group(), Some(1));
@@ -1176,6 +1310,30 @@ mod tests {
         assert_eq!(s.pixel(0, 0), vec![1.0, 1.0, 1.0, 1.0]);
         assert_eq!(s.pixel(99, 49), vec![1.0, 1.0, 1.0, 1.0]);
         assert_eq!(s.pixel(100, 0), vec![0.0; 4]);
+    }
+
+    /// The Background is the locked bottom pixel layer, whatever it is called.
+    #[test]
+    fn background_is_structural_not_named() {
+        let mut d = doc();
+        let id = d.layers[0].id;
+        assert!(d.is_background(id));
+        for name in ["Hintergrund", "背景", "Arrière-plan"] {
+            d.layers[0].name = name.into();
+            assert_eq!(d.background().map(|l| l.id), Some(id), "{name}");
+        }
+        // A layer called "Background" without the locks, or above the bottom, is not it.
+        let mut top = Layer::raster("Background", d.pixel_format());
+        top.locks.transparency = true;
+        top.locks.position = true;
+        let top_id = top.id;
+        d.layers.push(top);
+        assert!(!d.is_background(top_id));
+        d.layers[0].locks.position = false;
+        assert!(d.background().is_none());
+        d.layers[0].locks.position = true;
+        d.layers[0].clipped = true;
+        assert!(d.background_mut().is_none());
     }
 
     #[test]
@@ -1243,6 +1401,17 @@ mod tests {
         assert!(!d.shift(b, 1));
         assert_eq!(d.remove(a).unwrap().name, "A");
         assert!(d.layer(a).is_none());
+    }
+
+    #[test]
+    fn insert_below_lands_under_the_reference() {
+        let mut d = doc();
+        let bg = d.layers[0].id;
+        let a = d.insert_above(Some(bg), Layer::raster("A", d.pixel_format()));
+        let b = d.insert_below(Some(a), Layer::raster("B", d.pixel_format()));
+        let names: Vec<_> = d.layers.iter().map(|l| l.name.as_str()).collect();
+        assert_eq!(names, ["Background", "B", "A"]);
+        assert_eq!(d.layers[1].id, b);
     }
 
     #[test]
@@ -1349,7 +1518,7 @@ mod tests {
         assert_eq!(LayerContent::Adjustment(Adjustment::Invert).article(), "an");
         assert_eq!(LayerContent::Adjustment(Adjustment::Invert).kind_name(), "Adjustment");
         assert_eq!(LayerContent::Raster(Surface::new(PixelFormat::RGBA8)).article(), "a");
-        assert_eq!(LayerContent::Group(Group { children: Vec::new(), expanded: true, artboard: None }).article(), "a");
+        assert_eq!(LayerContent::Group(Group { children: Vec::new(), expanded: true, artboard: None, frame_stroke: None }).article(), "a");
     }
 }
 

@@ -133,6 +133,11 @@ fn parse_entries(data: &[u8]) -> Option<Vec<Entry>> {
     for _ in 0..count {
         let start = r.p;
         let len = r.u32()? as usize;
+        // The length counts itself and the type: anything shorter would put the cursor back on
+        // this entry, and a hostile count would then loop until memory runs out.
+        if len < 8 {
+            return None;
+        }
         let end = start.checked_add(len)?;
         let raw = data.get(start..end)?;
         let kind = r.take(4)?;
@@ -420,6 +425,22 @@ mod tests {
         // A readable block is not reported.
         d.metadata.psd_global_blocks = out;
         assert!(!anno_unreadable(&d));
+    }
+
+    /// An entry length below 8 (its own `u32` plus the type) put the cursor back on the same
+    /// entry, so a count of 0xFFFFFFFF looped ~4.3e9 times and ran out of memory.
+    #[test]
+    fn short_entry_length_is_unreadable_not_a_loop() {
+        for len in [0u8, 4, 7] {
+            for kind in [b"sndA", b"txtA"] {
+                let mut b = vec![0, 2, 0, 1, 0, 0, 0, 3, 0, 0, 0, len];
+                b.extend_from_slice(kind);
+                b.extend_from_slice(&[0; 64]);
+                assert!(parse_entries(&b).is_none(), "len {len} {kind:?}");
+            }
+        }
+        let hostile = [0, 2, 0, 1, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0, b's', b'n', b'd', b'A'];
+        assert!(parse_anno(&hostile).is_none());
     }
 
     #[test]

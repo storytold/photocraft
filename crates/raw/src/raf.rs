@@ -302,6 +302,7 @@ pub(crate) fn decode(bytes: &[u8], limits: &Limits) -> Result<Sensor> {
         baseline_exposure,
         gain_maps: Vec::new(),
         tone_curve: Vec::new(),
+        black_point: 0.0,
         warnings,
     })
 }

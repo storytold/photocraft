@@ -179,3 +179,28 @@ fn solver_workload_release_comparison() {
         }
     }
 }
+
+#[test]
+fn stranded_excess_terminates_and_matches_bk() {
+    // Source capacities far beyond f32 precision (ulp 32 at 3e8) next to small links: rounding
+    // strands excess on nodes a global relabel finds reachable from neither terminal. Those
+    // nodes (height u32::MAX) used to count as admissible for each other and pushed the excess
+    // back and forth forever (Remove Background never finished on some photos).
+    let mut g = Graph::with_capacity(6, 7);
+    for (i, &(s, t)) in [(33123824.0, 0.0), (347622050.0, 0.0), (0.0, 5539047.5), (76592.22, 0.0), (3514.0022, 0.0), (0.0, 13670.268)].iter().enumerate() {
+        g.add_tweights(i, s, t);
+    }
+    for (i, j, c) in [(0, 1, 0.0), (0, 3, 0.0007301044), (1, 2, 2.803e-42), (1, 4, 8.160078), (2, 5, 3.1224866e-7), (3, 4, 28.512966), (4, 5, 4.099367)] {
+        g.add_edge(i, j, c, c);
+    }
+    let mut bk = g.clone();
+    let checks = std::cell::Cell::new(0);
+    let cancel = || {
+        checks.set(checks.get() + 1);
+        checks.get() > 1000
+    };
+    let flow = g.push_relabel(&cancel).expect("push/relabel did not terminate");
+    let bk_flow = bk.maxflow_bk();
+    assert!((flow - bk_flow).abs() <= 1e-6 * bk_flow, "{flow} vs {bk_flow}");
+    assert_eq!((0..6).map(|i| g.in_source(i)).collect::<Vec<_>>(), (0..6).map(|i| bk.in_source(i)).collect::<Vec<_>>());
+}

@@ -44,6 +44,10 @@ impl UnicodeString {
     }
 }
 
+/// Four-character class and key ids Photoshop writes as length-4 strings, never as codes
+/// (`00000004 'warp'`, not `00000000 'warp'`).
+pub const STRING_IDS: [&str; 3] = ["warp", "list", "time"];
+
 /// A class / key / type identifier: a length-prefixed string, where a stored
 /// length of 0 means a 4-character code follows.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -57,10 +61,15 @@ pub enum Id {
 
 impl Id {
     /// Convenience constructor: 4-byte strings become [`Id::Code`], others
-    /// [`Id::Str`].
+    /// [`Id::Str`]. The four-character names Photoshop stores as length-4 strings
+    /// ([`STRING_IDS`]: `warp`, `list`, `time`) are [`Id::Str`] too: Photoshop treats the
+    /// string and the code as different keys and doesn't recognise the code form.
     pub fn new(s: &str) -> Self {
         let b = s.as_bytes();
-        if b.len() == 4 { Id::Code([b[0], b[1], b[2], b[3]]) } else { Id::Str(b.to_vec()) }
+        match b {
+            [a, b, c, d] if !STRING_IDS.contains(&s) => Id::Code([*a, *b, *c, *d]),
+            _ => Id::Str(b.to_vec()),
+        }
     }
     /// The identifier's bytes.
     pub fn as_bytes(&self) -> &[u8] {
@@ -140,10 +149,20 @@ pub enum ReferenceItem {
         /// Offset.
         offset: i32,
     },
-    /// `Idnt`
-    Identifier(u32),
-    /// `indx`
-    Index(u32),
+    /// `Idnt`: a class plus an identifier (Photoshop's layer ids in action references).
+    Identifier {
+        /// Class.
+        class: Class,
+        /// Identifier.
+        id: u32,
+    },
+    /// `indx`: a class plus a zero-based index.
+    Index {
+        /// Class.
+        class: Class,
+        /// Index.
+        index: u32,
+    },
     /// `name`
     Name {
         /// Class.
@@ -340,6 +359,15 @@ impl VersionedDescriptor {
     }
 }
 
+/// Most items preallocated for a file-declared count. `check_count` only
+/// guarantees a few bytes per item while parsed items are far larger, so the
+/// count must not drive the up-front reservation (or abort on allocation).
+const MAX_PREALLOC: usize = 4096;
+
+pub(crate) fn vec_for_count<T>(n: u32) -> Vec<T> {
+    Vec::with_capacity((n as usize).min(MAX_PREALLOC))
+}
+
 fn read_descriptor(r: &mut Reader<'_>, depth: usize) -> Result<Descriptor> {
     if depth > MAX_DEPTH {
         return Err(PsdError::LimitExceeded("descriptor nesting too deep"));
@@ -349,7 +377,7 @@ fn read_descriptor(r: &mut Reader<'_>, depth: usize) -> Result<Descriptor> {
     let n = r.u32()?;
     // Each item needs at least 5 (1-byte string key) + 4 (type) + 1 (bool).
     r.check_count(u64::from(n), 10)?;
-    let mut items = Vec::with_capacity(n as usize);
+    let mut items = vec_for_count(n);
     for _ in 0..n {
         let key = Id::read(r)?;
         let v = read_value(r, depth + 1)?;
@@ -371,7 +399,7 @@ fn read_typed_value(r: &mut Reader<'_>, ty: &[u8; 4], depth: usize) -> Result<Va
         b"obj " => {
             let n = r.u32()?;
             r.check_count(u64::from(n), 8)?;
-            let mut items = Vec::with_capacity(n as usize);
+            let mut items = vec_for_count(n);
             for _ in 0..n {
                 items.push(read_reference_item(r)?);
             }
@@ -382,7 +410,7 @@ fn read_typed_value(r: &mut Reader<'_>, ty: &[u8; 4], depth: usize) -> Result<Va
         b"VlLs" => {
             let n = r.u32()?;
             r.check_count(u64::from(n), 4)?;
-            let mut items = Vec::with_capacity(n as usize);
+            let mut items = vec_for_count(n);
             for _ in 0..n {
                 items.push(read_value(r, depth + 1)?);
             }
@@ -394,7 +422,7 @@ fn read_typed_value(r: &mut Reader<'_>, ty: &[u8; 4], depth: usize) -> Result<Va
             let unit = r.array()?;
             let n = r.u32()?;
             r.check_count(u64::from(n), 8)?;
-            let mut values = Vec::with_capacity(n as usize);
+            let mut values = vec_for_count(n);
             for _ in 0..n {
                 values.push(r.f64()?);
             }
@@ -436,8 +464,8 @@ fn read_reference_item(r: &mut Reader<'_>) -> Result<ReferenceItem> {
         b"Clss" => ReferenceItem::Class(Class::read(r)?),
         b"Enmr" => ReferenceItem::Enumerated { class: Class::read(r)?, type_id: Id::read(r)?, value: Id::read(r)? },
         b"rele" => ReferenceItem::Offset { class: Class::read(r)?, offset: r.i32()? },
-        b"Idnt" => ReferenceItem::Identifier(r.u32()?),
-        b"indx" => ReferenceItem::Index(r.u32()?),
+        b"Idnt" => ReferenceItem::Identifier { class: Class::read(r)?, id: r.u32()? },
+        b"indx" => ReferenceItem::Index { class: Class::read(r)?, index: r.u32()? },
         b"name" => ReferenceItem::Name { class: Class::read(r)?, name: UnicodeString::read(r)? },
         other => {
             return Err(PsdError::Unsupported(format!("reference item type {:?}", String::from_utf8_lossy(other))));
@@ -538,13 +566,15 @@ fn write_reference_item(it: &ReferenceItem, out: &mut Vec<u8>) {
             class.write(out);
             out.put_i32(*offset);
         }
-        ReferenceItem::Identifier(v) => {
+        ReferenceItem::Identifier { class, id } => {
             out.put(b"Idnt");
-            out.put_u32(*v);
+            class.write(out);
+            out.put_u32(*id);
         }
-        ReferenceItem::Index(v) => {
+        ReferenceItem::Index { class, index } => {
             out.put(b"indx");
-            out.put_u32(*v);
+            class.write(out);
+            out.put_u32(*index);
         }
         ReferenceItem::Name { class, name } => {
             out.put(b"name");
@@ -560,6 +590,22 @@ mod tests {
 
     fn class(name: &str, id: &str) -> Class {
         Class { name: UnicodeString::new(name), class_id: Id::new(id) }
+    }
+
+    #[test]
+    fn declared_counts_do_not_drive_preallocation() {
+        assert!(vec_for_count::<Value>(u32::MAX).capacity() <= MAX_PREALLOC);
+        // A 1M-item list of booleans parses (items grow the vector as needed).
+        let n = 1_000_000u32;
+        let mut data = n.to_be_bytes().to_vec();
+        for _ in 0..n {
+            data.extend_from_slice(b"bool\x01");
+        }
+        let mut r = Reader::new(&data);
+        match read_typed_value(&mut r, b"VlLs", 0).unwrap() {
+            Value::List(v) => assert_eq!(v.len(), n as usize),
+            other => panic!("expected list, got {other:?}"),
+        }
     }
 
     pub(crate) fn sample() -> Descriptor {
@@ -580,8 +626,8 @@ mod tests {
                     ReferenceItem::Class(class("", "Dcmn")),
                     ReferenceItem::Enumerated { class: class("", "Lyr "), type_id: Id::new("Ordn"), value: Id::new("Trgt") },
                     ReferenceItem::Offset { class: class("", "Lyr "), offset: -1 },
-                    ReferenceItem::Identifier(7),
-                    ReferenceItem::Index(2),
+                    ReferenceItem::Identifier { class: class("", "Lyr "), id: 7 },
+                    ReferenceItem::Index { class: class("\0", "Lyr "), index: 2 },
                     ReferenceItem::Name { class: class("", "Lyr "), name: UnicodeString::new("Bg") },
                 ]),
             )
@@ -607,6 +653,34 @@ mod tests {
         let p = Descriptor::from_bytes(&b).unwrap();
         assert_eq!(p, d);
         assert_eq!(p.to_bytes(), b);
+    }
+
+    /// `warp`, `list` and `time` are written as length-4 strings, as Photoshop writes them, both
+    /// as keys and as class ids; other four-character names stay codes. Reading accepts both
+    /// forms, and a code read from a file is written back as a code.
+    #[test]
+    fn photoshop_string_ids_are_written_as_strings() {
+        let str_id = |s: &str| [&[0, 0, 0, 4][..], s.as_bytes()].concat();
+        let code_id = |s: &str| [&[0, 0, 0, 0][..], s.as_bytes()].concat();
+        for name in STRING_IDS {
+            assert_eq!(Id::new(name), Id::Str(name.as_bytes().to_vec()));
+            let d = Descriptor::new(name).with(name, Value::Integer(1));
+            let b = d.to_bytes();
+            // Name (empty unicode string), then the class id; then the item count and the key.
+            assert_eq!(&b[4..12], &str_id(name)[..], "class {name}");
+            assert_eq!(&b[16..24], &str_id(name)[..], "key {name}");
+            let back = Descriptor::from_bytes(&b).unwrap();
+            assert_eq!(back, d);
+            assert!(back.class_id.is(name) && back.get(name).is_some());
+            // A file that wrote the code form keeps it, and lookups still find the key.
+            let mut coded = b.clone();
+            coded.splice(16..24, code_id(name));
+            let back = Descriptor::from_bytes(&coded).unwrap();
+            assert_eq!(back.get(name), Some(&Value::Integer(1)));
+            assert_eq!(back.to_bytes(), coded);
+        }
+        assert_eq!(Id::new("view"), Id::Code(*b"view"));
+        assert_eq!(Id::new("Txt "), Id::Code(*b"Txt "));
     }
 
     #[test]
@@ -731,8 +805,8 @@ pub(crate) mod proptests {
             arb_class().prop_map(ReferenceItem::Class),
             (arb_class(), arb_id(), arb_id()).prop_map(|(class, type_id, value)| ReferenceItem::Enumerated { class, type_id, value }),
             (arb_class(), any::<i32>()).prop_map(|(class, offset)| ReferenceItem::Offset { class, offset }),
-            any::<u32>().prop_map(ReferenceItem::Identifier),
-            any::<u32>().prop_map(ReferenceItem::Index),
+            (arb_class(), any::<u32>()).prop_map(|(class, id)| ReferenceItem::Identifier { class, id }),
+            (arb_class(), any::<u32>()).prop_map(|(class, index)| ReferenceItem::Index { class, index }),
             (arb_class(), arb_ustr()).prop_map(|(class, name)| ReferenceItem::Name { class, name }),
         ]
     }

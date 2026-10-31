@@ -40,8 +40,11 @@ fn main() -> eframe::Result {
             PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
             let picker_ctx = cc.egui_ctx.clone();
             let services = Services {
-                import: Some(Box::new(|name, bytes, depth| {
-                    photocraft_io::import_with_svg_group_depth(name, bytes, depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+                import: Some(Box::new(|name, bytes, options| {
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                        photocraft_io::import_with_options(name, bytes, options).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+                    }))
+                    .map_err(|_| "The image importer failed; the document was not opened.".to_string())?
                 })),
                 file_dialog: Some(Box::new(move |request, _, reply| scene::show_file_dialog(request, reply, &picker_ctx))),
                 ..Services::default()

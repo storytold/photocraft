@@ -26,6 +26,7 @@ use photocraft_geom::Rect;
 use photocraft_raster::Surface;
 use serde::{Deserialize, Serialize};
 
+use crate::photo_util::{BandChol, Csr};
 use crate::transform::Interp;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -744,170 +745,6 @@ fn band_order(pos: &[[f64; 2]], tris: &[[usize; 3]]) -> Vec<usize> {
     order
 }
 
-/// A compressed sparse row matrix (symmetric, used by CG).
-struct Csr {
-    rows: Vec<usize>,
-    cols: Vec<usize>,
-    vals: Vec<f64>,
-    diag: Vec<f64>,
-}
-
-impl Csr {
-    fn from_triplets(n: usize, mut t: Vec<(usize, usize, f64)>) -> Csr {
-        t.sort_by_key(|a| (a.0, a.1));
-        let mut rows = vec![0usize; n + 1];
-        let mut cols = Vec::with_capacity(t.len());
-        let mut vals: Vec<f64> = Vec::with_capacity(t.len());
-        let mut last = (usize::MAX, usize::MAX);
-        for (i, j, v) in t {
-            if (i, j) == last {
-                *vals.last_mut().unwrap_or(&mut 0.0) += v;
-                continue;
-            }
-            last = (i, j);
-            cols.push(j);
-            vals.push(v);
-            rows[i + 1] = cols.len();
-        }
-        for i in 0..n {
-            rows[i + 1] = rows[i + 1].max(rows[i]);
-        }
-        let mut diag = vec![1.0; n];
-        for (i, d) in diag.iter_mut().enumerate() {
-            for k in rows[i]..rows[i + 1] {
-                if cols[k] == i && vals[k] > 0.0 {
-                    *d = vals[k];
-                }
-            }
-        }
-        Csr { rows, cols, vals, diag }
-    }
-
-    fn mul(&self, x: &[f64], out: &mut [f64]) {
-        for (i, o) in out.iter_mut().enumerate() {
-            let mut s = 0.0;
-            for k in self.rows[i]..self.rows[i + 1] {
-                s += self.vals[k] * x[self.cols[k]];
-            }
-            *o = s;
-        }
-    }
-
-    /// Jacobi-preconditioned conjugate gradients, warm-started from `x`.
-    fn solve(&self, b: &[f64], x: &mut [f64]) {
-        let n = b.len();
-        let mut r = vec![0.0; n];
-        self.mul(x, &mut r);
-        for i in 0..n {
-            r[i] = b[i] - r[i];
-        }
-        let bn: f64 = b.iter().map(|v| v * v).sum::<f64>().sqrt().max(1e-30);
-        let mut z: Vec<f64> = r.iter().zip(&self.diag).map(|(r, d)| r / d).collect();
-        let mut p = z.clone();
-        let mut rz: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
-        let mut ap = vec![0.0; n];
-        for _ in 0..(4 * n).clamp(50, 2000) {
-            if r.iter().map(|v| v * v).sum::<f64>().sqrt() <= 1e-12 * bn {
-                break;
-            }
-            self.mul(&p, &mut ap);
-            let pap: f64 = p.iter().zip(&ap).map(|(a, b)| a * b).sum();
-            if pap.abs() < 1e-300 {
-                break;
-            }
-            let alpha = rz / pap;
-            for i in 0..n {
-                x[i] += alpha * p[i];
-                r[i] -= alpha * ap[i];
-            }
-            for i in 0..n {
-                z[i] = r[i] / self.diag[i];
-            }
-            let rz2: f64 = r.iter().zip(&z).map(|(a, b)| a * b).sum();
-            let beta = rz2 / rz;
-            rz = rz2;
-            for i in 0..n {
-                p[i] = z[i] + beta * p[i];
-            }
-        }
-    }
-}
-
-/// Banded Cholesky factor `A = L Lᵀ` (the mesh numbers its vertices in reverse Cuthill–McKee
-/// order, so the system's bandwidth is about one breadth-first front): factored once per pin
-/// set, then each global step is two triangular solves.
-struct BandChol {
-    n: usize,
-    p: usize,
-    /// Row `i` holds `L[i][i - p ..= i]`.
-    l: Vec<f64>,
-}
-
-impl BandChol {
-    /// `None` when the band would be too large (or the matrix isn't positive definite).
-    fn new(a: &Csr) -> Option<BandChol> {
-        let n = a.diag.len();
-        let mut p = 0;
-        for i in 0..n {
-            for k in a.rows[i]..a.rows[i + 1] {
-                p = p.max(i.abs_diff(a.cols[k]));
-            }
-        }
-        if n.saturating_mul(p + 1) > 40_000_000 {
-            return None;
-        }
-        let w = p + 1;
-        let mut l = vec![0.0f64; n * w];
-        for i in 0..n {
-            for k in a.rows[i]..a.rows[i + 1] {
-                let j = a.cols[k];
-                if j <= i {
-                    l[i * w + (j + p - i)] = a.vals[k];
-                }
-            }
-        }
-        for i in 0..n {
-            let lo = i.saturating_sub(p);
-            for j in lo..=i {
-                let jlo = j.saturating_sub(p).max(lo);
-                let mut s = l[i * w + (j + p - i)];
-                for k in jlo..j {
-                    s -= l[i * w + (k + p - i)] * l[j * w + (k + p - j)];
-                }
-                if i == j {
-                    if s <= 0.0 || !s.is_finite() {
-                        return None;
-                    }
-                    l[i * w + p] = s.sqrt();
-                } else {
-                    l[i * w + (j + p - i)] = s / l[j * w + p];
-                }
-            }
-        }
-        Some(BandChol { n, p, l })
-    }
-
-    #[allow(clippy::needless_range_loop)] // band index arithmetic reads clearer with indices
-    fn solve(&self, b: &[f64], x: &mut [f64]) {
-        let (n, p, w) = (self.n, self.p, self.p + 1);
-        let mut y = b.to_vec();
-        for i in 0..n {
-            let mut s = y[i];
-            for k in i.saturating_sub(p)..i {
-                s -= self.l[i * w + (k + p - i)] * y[k];
-            }
-            y[i] = s / self.l[i * w + p];
-        }
-        for i in (0..n).rev() {
-            let mut s = y[i];
-            for k in i + 1..(i + p + 1).min(n) {
-                s -= self.l[k * w + (i + p - k)] * x[k];
-            }
-            x[i] = s / self.l[i * w + p];
-        }
-    }
-}
-
 /// A pin bound to the mesh: barycentric weights on a triangle's vertices.
 #[derive(Clone, Debug)]
 struct Bound {
@@ -1277,11 +1114,18 @@ pub const MAX_WARP_PIXELS: f64 = (1u64 << 30) as f64;
 /// Applies a puppet warp to `src` (content inside `bounds`). `None` when the deformed mesh would
 /// span more than [`MAX_WARP_PIXELS`].
 pub fn puppet_warp(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp) -> Option<Surface> {
+    puppet_warp_with_mask(src, bounds, w, interp, None).map(|(out, _)| out)
+}
+
+/// [`puppet_warp`], also moving `mask` (a one-channel layer mask linked to `src`) with the same
+/// mesh, as Photoshop moves a linked mask with its layer (#4910). The mask is `None` in the
+/// result when none was given.
+pub fn puppet_warp_with_mask(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp, mask: Option<&Surface>) -> Option<(Surface, Option<Surface>)> {
     let (solver, v, order) = deform(src, bounds, w, ITERATIONS);
     // No triangles (an expansion that shrinks every pixel away): nothing to warp. Rendering the
     // empty mesh would drop every pixel of the layer.
     if solver.mesh.tris.is_empty() {
-        return Some(src.clone());
+        return Some((src.clone(), mask.cloned()));
     }
     let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
     for p in &v {
@@ -1291,7 +1135,57 @@ pub fn puppet_warp(src: &Surface, bounds: Rect, w: &PuppetWarp, interp: Interp) 
     if area.is_nan() || area > MAX_WARP_PIXELS {
         return None;
     }
-    Some(render(src, bounds, &solver.mesh, &v, &order, interp))
+    let out = render(src, bounds, &solver.mesh, &v, &order, interp);
+    Some((out, mask.map(|m| render_mask(m, &solver.mesh, &v, &order, interp))))
+}
+
+/// Moves a one-channel layer mask with a deformed mesh: the mask under the mesh is lifted,
+/// deformed like the layer's pixels and laid over the rest. The area the mesh leaves takes the
+/// mask's default value (as [`crate::warp::warp_mesh_gray`] leaves it); outside the mesh the
+/// mask keeps its values.
+pub fn render_mask(mask: &Surface, mesh: &PuppetMesh, deformed: &[[f64; 2]], order: &[usize], interp: Interp) -> Surface {
+    let mut out = mask.clone();
+    if mesh.tris.is_empty() || deformed.len() != mesh.verts.len() || mask.format().channels() != 1 {
+        return out;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for p in &mesh.verts {
+        (x0, y0, x1, y1) = (x0.min(p[0]), y0.min(p[1]), x1.max(p[0]), y1.max(p[1]));
+    }
+    if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
+        return out;
+    }
+    // The mesh's source area, a pixel wider so its edge samples stay inside.
+    let lim = f64::from(1 << 20);
+    let src = Rect::new(x0.max(-lim).floor() as i32 - 1, y0.max(-lim).floor() as i32 - 1, x1.min(lim).ceil() as i32 + 1, y1.min(lim).ceil() as i32 + 1);
+    if src.is_empty() {
+        return out;
+    }
+    let default = mask.default_pixel().first().copied().unwrap_or(0.0);
+    let fmt = mask.format();
+    let mut tmp = Surface::new(photocraft_color::PixelFormat::new(fmt.mode, fmt.sample, true));
+    tmp.write_region(src, &mask.read_region(src).iter().flat_map(|g| [*g, 1.0]).collect::<Vec<f32>>());
+    let tris: Vec<[usize; 3]> = order.iter().filter_map(|&t| mesh.tris.get(t).copied()).collect();
+    // Lift: where the undeformed mesh covers the mask, the mask takes its default value.
+    let still: Vec<([f64; 2], [f64; 2])> = mesh.verts.iter().map(|s| (*s, *s)).collect();
+    let lifted = crate::warp::warp_triangles(&tmp, src, &still, &tris, Interp::Nearest);
+    let b = lifted.content_bounds();
+    if !b.is_empty() {
+        let under = out.read_region(b);
+        let flat: Vec<f32> = lifted.read_region(b).as_chunks::<2>().0.iter().zip(&under).map(|(p, u)| default * p[1] + u * (1.0 - p[1])).collect();
+        out.write_region(b, &flat);
+    }
+    // Lay the deformed mask over what is left.
+    let moved: Vec<([f64; 2], [f64; 2])> = deformed.iter().zip(&mesh.verts).map(|(d, s)| (*d, *s)).collect();
+    let warped = crate::warp::warp_triangles(&tmp, src, &moved, &tris, interp);
+    let b = warped.content_bounds();
+    if !b.is_empty() {
+        let under = out.read_region(b);
+        let flat: Vec<f32> = warped.read_region(b).as_chunks::<2>().0.iter().zip(&under).map(|(p, u)| p[0] * p[1] + u * (1.0 - p[1])).collect();
+        out.write_region(b, &flat);
+    }
+    out.prune();
+    out
 }
 
 #[cfg(test)]
@@ -1432,6 +1326,33 @@ mod tests {
         assert!(puppet_warp(&s, b, &pin([-1e7, 62.0]), Interp::Bilinear).is_none());
         let near = puppet_warp(&s, b, &pin([70.0, 66.0]), Interp::Bilinear).expect("a near pin warps");
         assert!(!near.content_bounds().is_empty());
+    }
+
+    #[test]
+    fn a_linked_mask_moves_with_the_mesh_and_leaves_its_default_behind() {
+        // #4910. A hide-all mask (default 0) that reveals the bar's top (y 10..30): moved down by
+        // 8, the revealed patch moves along, what it left is hidden again, and the mask away
+        // from the puppet keeps its values.
+        let s = blob(SampleType::U8);
+        let b = s.content_bounds();
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut mask = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, sample, false), &[0.0]);
+            mask.fill_rect(Rect::new(20, 10, 36, 30), &[1.0]);
+            mask.fill_rect(Rect::new(90, 90, 94, 94), &[0.5]);
+            let w = PuppetWarp {
+                pins: vec![PuppetPin { src: [28.0, 30.0], dst: [28.0, 38.0], rotate: None, depth: 0 }],
+                mode: PuppetMode::Rigid,
+                density: PuppetDensity::Normal,
+                expansion: 2.0,
+            };
+            let (_, moved) = puppet_warp_with_mask(&s, b, &w, Interp::Bilinear, Some(&mask)).expect("warps");
+            let m = moved.expect("a mask in, a mask out");
+            let at = |x, y| m.sample_channel(x, y, 0);
+            assert!(at(28, 20) > 0.99 && at(28, 36) > 0.99, "{sample:?}: the revealed patch moved down");
+            assert!(at(28, 15) < 0.01, "{sample:?}: its old top is hidden again");
+            assert!((at(91, 91) - 0.5).abs() <= 1.0 / 255.0, "{sample:?}: away from the mesh nothing changes");
+            assert!(puppet_warp_with_mask(&s, b, &w, Interp::Bilinear, None).expect("warps").1.is_none());
+        }
     }
 
     #[test]

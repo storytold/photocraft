@@ -12,7 +12,9 @@
 //!   composites onto the result in its own mode, kept inside the base's shape (its alpha with
 //!   masks, times its opacity).
 //! - **Transparency Shapes Layer off.** The layer's effects and knockout cover the whole layer
-//!   (its masks still apply) instead of following its transparency.
+//!   (its masks still apply) instead of following its transparency. In the special eight
+//!   ([`crate::psblend::fill_is_special`]) the layer's own transparency then blends as Fill does
+//!   (`blend_layer_into` in `composite.rs`; measured in Photoshop, #5692).
 //! - **Layer / Vector Mask Hides Effects.** The effects are built from the layer without that
 //!   mask, and the mask is applied to the finished layer and effects.
 //!
@@ -75,7 +77,13 @@ pub fn advanced_active(layer: &Layer, clipped: &[Layer]) -> bool {
         return false;
     }
     let fx = effects::has_effects(layer);
-    a.knockout != Knockout::None || clips_individually(layer, clipped) || (a.blend_interior && fx) || (!a.transparency_shapes && fx) || hides_effects(layer)
+    // Transparency Shapes Layer off changes the special eight's blend itself (#5692).
+    let shapeless_blend = crate::psblend::fill_is_special(layer.blend) && !matches!(layer.content, LayerContent::Adjustment(_));
+    a.knockout != Knockout::None
+        || clips_individually(layer, clipped)
+        || (a.blend_interior && fx)
+        || (!a.transparency_shapes && (fx || shapeless_blend))
+        || hides_effects(layer)
 }
 
 /// Whether the layer's effects (or knockout) cover the whole layer: Transparency Shapes Layer
@@ -84,10 +92,10 @@ pub fn shapeless(layer: &Layer) -> bool {
     !layer.advanced.transparency_shapes && (layer.advanced.knockout != Knockout::None || effects::has_effects(layer))
 }
 
-/// The Background layer of a stack: the bottom layer, a locked, opaque-by-convention pixel layer
-/// named "Background" (how PSD import and File › New create it).
+/// Whether `l`, the bottom layer of a stack, is the Background: identified by its locks and kind,
+/// never by its (localized) name ([`photocraft_doc::Document::background`]).
 pub fn is_background(l: &Layer) -> bool {
-    l.name == "Background" && l.locks.transparency && !l.clipped && matches!(l.content, LayerContent::Raster(_))
+    l.has_background_traits()
 }
 
 /// What a deep knockout reveals over `rect`: the document's initial backdrop with its Background

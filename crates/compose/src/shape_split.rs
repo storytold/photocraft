@@ -8,7 +8,8 @@ use std::sync::{Mutex, OnceLock};
 
 use photocraft_color::{PixelFormat, SampleType};
 use photocraft_doc::vector::ShapeLayer;
-use photocraft_geom::Rect;
+use photocraft_doc::{Layer, LayerContent};
+use photocraft_geom::{Rect, TileCoord};
 use photocraft_raster::Surface;
 
 /// (fill, stroke), last use, and the shape's pixels the stroke was fitted to (kept alive so
@@ -21,6 +22,27 @@ fn cache() -> &'static Mutex<(HashMap<u64, Entry>, u64)> {
 }
 
 const CAPACITY: usize = 32;
+/// Most pixel bytes the split parts may hold (#4530): each entry is two canvas-sized surfaces,
+/// so 32 of them at 24 MP could hold several GB outside every memory budget.
+#[cfg(not(test))]
+const BUDGET: usize = 256 << 20;
+/// Small under test, so a few 512² shapes exercise the eviction.
+#[cfg(test)]
+const BUDGET: usize = 8 << 20;
+
+/// Pixel bytes of one entry's (fill, stroke) parts (the pinned shape pixels are the document's).
+fn entry_bytes(parts: &(Surface, Surface)) -> usize {
+    [&parts.0, &parts.1].iter().map(|s| s.tiles().map(|(_, t)| t.bytes().len()).sum::<usize>()).sum()
+}
+
+/// Drop every cached split (Edit › Purge › All), returning the parts' pixel bytes. Callers may
+/// still hold returned surfaces, so this is not a measure of freed process memory.
+pub fn purge_cache() -> usize {
+    let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
+    let bytes = c.0.values().map(|e| entry_bytes(&e.0)).sum();
+    c.0.clear();
+    bytes
+}
 
 /// (fill only, stroke only) of a stroked shape, rendered over `canvas` in RGBA at `depth`.
 /// `None` without a stroke. Where the shape's pixels
@@ -32,6 +54,7 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     (canvas.x0, canvas.y0, canvas.x1, canvas.y1).hash(&mut h);
     depth.hash(&mut h);
     format!("{:?}{:?}{:?}{:?}", sh.path, sh.fill, sh.stroke, sh.live).hash(&mut h);
+    (sh.density.to_bits(), sh.feather.to_bits()).hash(&mut h);
     if let Some(c) = &sh.cache {
         format!("{:?}{:?}", c.format(), c.default_pixel()).hash(&mut h);
         for (k, t) in c.tiles() {
@@ -56,14 +79,39 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
         fit_stroke(&parts.0, &mut parts.1, cache, canvas);
     }
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-    if c.0.len() >= CAPACITY
-        && let Some(old) = c.0.iter().min_by_key(|e| (e.1).1).map(|e| *e.0)
-    {
+    // Least recently used first, until the new entry fits both the count and the byte budget.
+    let new_bytes = entry_bytes(&parts);
+    loop {
+        let held: usize = c.0.values().map(|e| entry_bytes(&e.0)).sum();
+        if c.0.len() < CAPACITY && held.saturating_add(new_bytes) <= BUDGET {
+            break;
+        }
+        let Some(old) = c.0.iter().min_by_key(|e| (e.1).1).map(|e| *e.0) else { break };
         c.0.remove(&old);
+    }
+    if new_bytes > BUDGET {
+        // Larger than the whole budget on its own: use it, don't keep it.
+        return Some(parts);
     }
     let tick = c.1;
     c.0.insert(key, (parts.clone(), tick, sh.cache.clone()));
     Some(parts)
+}
+
+/// The stroke-only shape a Photoshop Frame's stroke draws: `Group::frame_stroke` along the
+/// group's enabled vector mask (the frame outline). `None` for other layers and for a frame
+/// without a visible stroke or a vector mask.
+pub fn frame_shape(layer: &Layer) -> Option<ShapeLayer> {
+    let LayerContent::Group(g) = &layer.content else { return None };
+    let stroke = g.frame_stroke.as_ref().filter(|s| s.width.is_finite() && s.width > 0.0 && s.opacity > 0.0)?;
+    let vm = layer.vector_mask.as_ref().filter(|m| m.enabled && !m.path.is_empty())?;
+    Some(ShapeLayer { path: vm.path.clone(), fill: None, stroke: Some(stroke.clone()), ..ShapeLayer::default() })
+}
+
+/// A Photoshop Frame's stroke ([`frame_shape`]) rendered over `canvas` in RGBA at `depth`, from
+/// the same cache as the shape strokes. It goes above the frame's (masked) content.
+pub fn frame_stroke(layer: &Layer, canvas: Rect, depth: SampleType) -> Option<Surface> {
+    split(&frame_shape(layer)?, canvas, depth).map(|(_, stroke)| stroke)
 }
 
 /// Fits the stroke part to the shape's own pixels: where they reach past the fill, the stroke
@@ -87,13 +135,42 @@ fn fit_stroke(fill: &Surface, stroke: &mut Surface, cache: &Surface, canvas: Rec
     if r.is_empty() {
         return;
     }
+    let float = stroke.format().sample == SampleType::F32;
+    // Tiles none of the three reaches read as the defaults; with transparent defaults the fit
+    // leaves the stroke's default pixel there, so those tiles are exact skips and we can scan
+    // just the union of the three surfaces' allocated tiles instead of every canvas tile (two
+    // sparse regions on a 300k×300k document would otherwise walk ~1.4M empty tiles). A
+    // non-transparent default is everywhere, so the scan falls back to the full rectangle.
+    let whole = r;
+    let bare_transparent = [fill, &*stroke, cache].iter().all(|s| s.default_pixel().iter().all(|v| *v == 0.0));
+    if bare_transparent {
+        let mut coords: Vec<TileCoord> = fill.tiles().map(|(c, _)| *c).chain(stroke.tiles().map(|(c, _)| *c)).chain(cache.tiles().map(|(c, _)| *c)).collect();
+        coords.sort_unstable();
+        coords.dedup();
+        for c in coords {
+            let r = c.rect().intersect(&whole);
+            if !r.is_empty() {
+                fit_stroke_rect(fill, stroke, cache, r, float);
+            }
+        }
+    } else {
+        for t in whole.tiles() {
+            let r = t.rect().intersect(&whole);
+            if !r.is_empty() {
+                fit_stroke_rect(fill, stroke, cache, r, float);
+            }
+        }
+    }
+}
+
+/// [`fit_stroke`] over one rectangle.
+fn fit_stroke_rect(fill: &Surface, stroke: &mut Surface, cache: &Surface, r: Rect, float: bool) {
     let n = r.width() as usize * r.height() as usize;
     let (mut f, mut s, mut c) = (vec![[0.0f32; 4]; n], vec![[0.0f32; 4]; n], vec![[0.0f32; 4]; n]);
     fill.read_rgba_into(r, &mut f);
     stroke.read_rgba_into(r, &mut s);
     cache.read_rgba_into(r, &mut c);
     let mut out = Vec::with_capacity(n * 4);
-    let float = stroke.format().sample == SampleType::F32;
     for ((fp, sp), cp) in f.iter().zip(&s).zip(&c) {
         let mut p = *sp;
         if fp[3] < 1.0 - 1e-3 {
@@ -116,4 +193,42 @@ fn fit_stroke(fill: &Surface, stroke: &mut Surface, cache: &Surface, canvas: Rec
         out.extend_from_slice(&p);
     }
     stroke.write_region(r, &out);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_color::Color;
+    use photocraft_doc::Fill;
+    use photocraft_doc::vector::{Path, ShapeStroke, Subpath};
+
+    fn shape(x: f64) -> ShapeLayer {
+        ShapeLayer {
+            path: Path::new(vec![Subpath::polygon(&[(x, 10.0), (x + 400.0, 10.0), (x + 400.0, 500.0), (x, 500.0)])]),
+            fill: Some(Fill::Solid(Color::rgb(0.2, 0.4, 0.6))),
+            stroke: Some(ShapeStroke { width: 6.0, ..ShapeStroke::default() }),
+            live: None,
+            cache: None,
+            psd_raw: None,
+            ..ShapeLayer::default()
+        }
+    }
+
+    fn held() -> usize {
+        cache().lock().unwrap_or_else(|e| e.into_inner()).0.values().map(|e| entry_bytes(&e.0)).sum()
+    }
+
+    /// The split cache stays within its byte budget, evicting the least recently used, and
+    /// Edit › Purge › All empties it (#4530).
+    #[test]
+    fn split_cache_keeps_to_its_budget_and_purges() {
+        let canvas = Rect::new(0, 0, 1024, 512);
+        for i in 0..6 {
+            let parts = split(&shape(f64::from(i) * 10.0), canvas, SampleType::U8).expect("stroked");
+            assert!(entry_bytes(&parts) > 0);
+            assert!(held() <= BUDGET, "shape {i}: {} bytes held", held());
+        }
+        // Other tests share the cache, so only what this test can rely on: a purge frees bytes.
+        assert!(purge_cache() > 0, "something to purge");
+    }
 }
