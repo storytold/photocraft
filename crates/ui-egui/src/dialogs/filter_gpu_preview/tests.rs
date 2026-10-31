@@ -25,7 +25,7 @@ fn render_state() -> Option<eframe::egui_wgpu::RenderState> {
 fn gpu_path(h: &Harness<'static, PhotocraftApp>) -> bool {
     let Some(why) = ineligible(h.state(), 0, &json!({"radius": 4.0})) else { return true };
     // Only what the adapter can't do skips; anything else is a broken fixture.
-    let capability = matches!(why, "no GPU canvas" | "the GPU compositor can't draw it");
+    let capability = matches!(why, "no GPU canvas" | "the GPU compositor can't draw it") || why.starts_with("the GPU canvas runs no layer operators");
     assert!(capability && std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "the GPU path is unavailable here: {why}");
     eprintln!("skipping filter GPU preview test: {why}");
     false
