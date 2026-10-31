@@ -784,16 +784,26 @@ pub(crate) fn color_eyedropper_armed(app: &PhotocraftApp) -> bool {
 /// Sample the merged image at document point (x, y) into the armed dialog's "From" colour.
 /// Returns true when the click was consumed, even off-image or over transparency, where nothing
 /// changes and the eyedropper stays armed (like the Curves picker).
-pub(crate) fn color_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
+/// With the Add to Sample eyedropper (or Shift) the click adds a sample, with Subtract from
+/// Sample (or Alt) it subtracts one, as in Photoshop and Select › Color Range (#6280).
+pub(crate) fn color_eyedropper_sample(app: &mut PhotocraftApp, x: f64, y: f64, mods: egui::Modifiers) -> bool {
     let Some(id) = app.ui.dialogs.last().filter(|d| color_eyedropper_owns(&d.fields)).map(|d| d.id) else {
         return false;
     };
-    if let Some(rgb) = crate::canvas::composite_color(app, x, y)
-        && let Some(d) = app.ui.dialog_mut(id)
-    {
-        d.fields.insert("color".into(), json!(crate::color_picker_ui::hex(rgb)));
-        // Where it was picked: Localized Color Clusters match the colour near this point (#4457).
-        d.fields.insert("points".into(), json!([[x.floor(), y.floor()]]));
+    let Some(rgb) = crate::canvas::composite_color(app, x, y) else { return true };
+    let Some(mut f) = app.ui.dialogs.last().map(|d| d.fields.clone()) else { return true };
+    let sample = !mods.shift && !mods.alt && f.get("__tool").and_then(Value::as_str).is_none_or(|t| t == "sample");
+    if sample {
+        f.insert("color".into(), json!(crate::color_picker_ui::hex(rgb)));
+    }
+    // Where it was picked: Localized Color Clusters match the colour near this point (#4457);
+    // added and subtracted samples go to `points` / `subtractPoints` in click order.
+    crate::color_range_ui::pick(app, &mut f, [x, y], mods);
+    if let Some(order) = f.get("__order").cloned() {
+        f.insert("order".into(), order);
+    }
+    if let Some(d) = app.ui.dialog_mut(id) {
+        d.fields = f;
     }
     true
 }
@@ -1035,9 +1045,19 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         // PhotoCraft's Color Picker, as everywhere else (#2144).
                         clicked = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), &name).clicked();
                         if eyedropper {
+                            // Photoshop's three eyedroppers (#6280), right to left here: Subtract
+                            // from Sample, Add to Sample, Eyedropper. Clicking the chosen one again
+                            // puts it away.
                             let armed = f.get(COLOR_EYEDROPPER).and_then(Value::as_bool).unwrap_or(false);
-                            if crate::icons::button(ui, "pipette", 24.0, armed, "Pick Color From Image").clicked() {
-                                f.insert(COLOR_EYEDROPPER.into(), json!(!armed));
+                            let tool = f.get("__tool").and_then(Value::as_str).unwrap_or("sample").to_string();
+                            for (id, badge, label) in
+                                [("subtract", "−", tl!("Subtract from Sample")), ("add", "+", tl!("Add to Sample")), ("sample", "", tl!("Pick Color From Image"))]
+                            {
+                                let on = armed && tool == id;
+                                if crate::color_range_ui::eyedropper(ui, badge, on, label).clicked() {
+                                    f.insert(COLOR_EYEDROPPER.into(), json!(!on));
+                                    f.insert("__tool".into(), json!(id));
+                                }
                             }
                         }
                         ui.label(egui::RichText::new(crate::color_picker_ui::hex(rgb)).color(t.text_dim).monospace());
