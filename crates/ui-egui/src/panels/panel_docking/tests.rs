@@ -891,3 +891,37 @@ fn the_native_dock_width_sizes_the_default_column() {
     assert_eq!(columns[0].width, 380.0);
     assert!(h.ctx.data_mut(|data| data.get_persisted::<egui::PanelState>(key)).is_none(), "taken once");
 }
+
+/// #10255: with Properties closed in a customized workspace, opening an adjustment layer's
+/// settings (its thumbnail's double-click, Layer Content Options) brings the panel back on its
+/// Properties tab, as Window › Properties does, instead of setting a flag the layout ignores.
+#[test]
+fn opening_an_adjustment_layers_settings_shows_a_closed_properties_panel() {
+    let mut app = app();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    app.ui.docking = Some(Workspace::new(legacy(&app)));
+    app.run("window.panel.close", json!({"panel": "properties"})).unwrap();
+    assert!(!lay(&app).contains(&"properties".to_string()), "closed");
+    crate::menus::invoke(&mut app, &egui::Context::default(), "layer.layerContentOptions", json!({})).unwrap();
+    assert!(lay(&app).contains(&"properties".to_string()), "{:?}", lay(&app));
+    assert!(panel_active(lay(&app), "properties"), "the Properties tab is in front: {:?}", lay(&app));
+    assert!(app.ui.panels.properties && app.ui.dock_tabs.properties == 0);
+}
+
+/// In the classic dock (no customized workspace), a hidden Properties tab is shown again, in
+/// front, with its group expanded.
+#[test]
+fn opening_an_adjustment_layers_settings_shows_a_hidden_properties_tab_in_the_classic_dock() {
+    let mut app = app();
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    app.run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    let pro = app.ui.theme.is_pro();
+    app.ui.dock.hide_tab(crate::dock::Group::Properties, 0, pro);
+    app.ui.dock.set_collapsed(crate::dock::Group::Properties, true);
+    let shown = |app: &PhotocraftApp| app.ui.dock.visible_tabs(crate::dock::Group::Properties, pro).iter().any(|(i, _)| *i == 0);
+    assert!(!shown(&app));
+    crate::menus::invoke(&mut app, &egui::Context::default(), "layer.layerContentOptions", json!({})).unwrap();
+    assert!(app.ui.docking.is_none() && shown(&app) && app.ui.panels.properties && app.ui.dock_tabs.properties == 0);
+    assert!(!app.ui.dock.is_collapsed(crate::dock::Group::Properties));
+}

@@ -364,8 +364,7 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
                 return Ok(json!({"dialog": dialog}));
             }
             let r = app.run(id, params)?;
-            app.ui.panels.properties = true;
-            app.ui.dock_tabs.properties = 0;
+            crate::panel_docking::show_properties(app);
             Ok(r)
         }
         // Edit › Stroke…: open its full options dialog when called from menus/context
