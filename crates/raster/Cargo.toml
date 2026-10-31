@@ -16,5 +16,10 @@ serde = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rayon = { workspace = true }
 
+# Installed RAM (`system::physical_memory`): the safe binding the desktop app already uses,
+# pinned to the same version.
+[target.'cfg(target_os = "windows")'.dependencies]
+winsafe = { version = "=0.0.29", default-features = false, features = ["kernel"] }
+
 [dev-dependencies]
 proptest = { workspace = true }
