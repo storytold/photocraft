@@ -105,10 +105,13 @@ const MAX_PEAK_PIXEL_BYTES: u64 = 3 << 29;
 const MAX_NODES: usize = 2_000;
 /// Nesting past which a subtree is rasterised instead of walked (bounded recursion).
 const MAX_RECURSION: usize = 200;
-/// Deepest element nesting accepted. The XML parser recurses once per level, so a file nested
-/// a few thousand deep (70 KB of `<g>`) overflows a 2 MB thread stack, an abort no guard can
-/// catch; real drawings stay under a hundred levels.
-pub const MAX_XML_DEPTH: usize = 512;
+/// Deepest element nesting accepted, shared with an embedded SVG. Parsing and converting a
+/// drawing recurse once per level, so a file nested a few thousand deep (70 KB of `<g>`)
+/// overflows a 2 MB thread stack, an abort no guard can catch; real drawings stay under a hundred
+/// levels. The cap has to fit a 1 MB stack, which is what Windows gives its main thread (where
+/// the CLI opens files) and what the browser build runs on: the release build (thin LTO, one
+/// codegen unit) needs about 2.7 KB a level, so 386 levels fit and 512 did not.
+pub const MAX_XML_DEPTH: usize = 256;
 /// Largest `.svgz` accepted once inflated (a 1.5 MB gzip can hold 1.5 GB of whitespace).
 pub const MAX_INFLATED_BYTES: u64 = 128 << 20;
 
