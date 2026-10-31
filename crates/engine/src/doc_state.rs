@@ -163,6 +163,11 @@ pub struct ToolState {
     /// preset stays "the current brush" so `brush.presets.update` can overwrite it); cleared when
     /// the brush is reset or the preset is gone.
     pub current_preset: Option<String>,
+    /// The presets the other tools' brushes were picked from, by tool (the shell's name for it):
+    /// a tool switch puts `current_preset` aside here and takes the incoming tool's back (#9014).
+    /// Renames and deletes keep them in step with the library like `current_preset`
+    /// ([`Self::rename_preset_refs`], [`Self::forget_missing_presets`]).
+    pub tool_presets: Vec<(String, String)>,
     /// Bumped whenever `brush` or `current_preset` changes ([`ToolState::brush_changed`]). The
     /// last-brush persistence watches it instead of comparing the brush itself, so an unchanged
     /// brush costs a counter compare per frame, not a clone and serialise.
@@ -211,6 +216,31 @@ impl ToolState {
         self.brush_rev = self.brush_rev.wrapping_add(1);
     }
 
+    /// Preset `old` is now called `new`: the current brush and the other tools' brushes picked
+    /// from it follow the new name.
+    pub fn rename_preset_refs(&mut self, old: &str, new: &str) {
+        for (_, name) in self.tool_presets.iter_mut().filter(|(_, n)| n.eq_ignore_ascii_case(old)) {
+            *name = new.to_string();
+        }
+        if self.current_preset.as_ref().is_some_and(|c| c.eq_ignore_ascii_case(old)) {
+            self.current_preset = Some(new.to_string());
+            self.brush_changed();
+        }
+    }
+
+    /// After presets were deleted: a brush picked from one no longer comes from a preset, so a
+    /// later preset of the same name is not taken for it.
+    pub fn forget_missing_presets(&mut self) {
+        let presets = &self.presets;
+        let exists = |n: &str| presets.iter().any(|p| p.name.eq_ignore_ascii_case(n));
+        self.tool_presets.retain(|(_, n)| exists(n));
+        if self.current_preset.as_deref().is_some_and(|c| !exists(c)) {
+            self.current_preset = None;
+            // The remembered brush names the preset it was picked from: the name went away.
+            self.brush_changed();
+        }
+    }
+
     /// Switch the edit target between layer pixels and a layer mask. Like Photoshop, the mask and
     /// the pixels keep separate app-wide foreground/background pairs: changing the target puts
     /// the current pair aside and brings back the other one, so colours picked while a mask is
@@ -243,6 +273,7 @@ impl Default for ToolState {
             mixer: Default::default(),
             brush_gesture: None,
             current_preset: None,
+            tool_presets: Vec::new(),
             brush_rev: 0,
             brush_saved_rev: 0,
             mask_targeted: false,
