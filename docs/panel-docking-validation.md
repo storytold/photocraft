@@ -40,7 +40,7 @@ Fresh results:
 |---|---|
 | Panel-filter regressions | 167 passed, 2 explicit benchmarks ignored |
 | Workspace integration | 9 passed |
-| Shared UI at `4f263ed` (`serde,native-windows,screen-testing`) | 590 unit, 10 integration, 8 doctests passed; 2 doctests ignored |
+| Shared UI at `9a97555` (`serde,native-windows,screen-testing`) | 590 unit, 10 integration, 8 doctests passed; 2 doctests ignored |
 | Desktop all-targets compile check, fmt, layers, wasm | passed; 31 layered crates, 24 wasm crates plus codecs/heif |
 | Four WGPU capture tests | passed; 444 fresh PNGs, three Pro themes at 100/125/150/200% |
 | Complete UI library, sequential | **4640 passed, 97 failed, 23 ignored** |
@@ -71,9 +71,23 @@ capture/seam assertions passed. Both after PNG assets were refreshed. The 13 GIF
 retain their documented 2026-10-31 source at `7005992d2`; they are illustrations,
 not a rerun of the newest code.
 
-Performance follow-up is recorded below when complete. The earlier 600-sample
-panel timing ran concurrently with the final capture and is not a controlled
-before/after comparison or a native/GPU latency measurement.
+`cargo xtask perf --quick` completed with exit 0: all eight benchmark runs
+succeeded. Its report identifies source `adaae9cd4` (documentation/PNG-only after
+the tested runtime above). Quick-mode full-size budgets are not applied and
+regression comparison is skipped: the checked-in baseline is for an Apple M4 Pro
+machine, while this run uses Windows/AMD64 with an RTX 3060. This is not evidence
+of unchanged full-document performance against a comparable baseline.
+
+A separate isolated panel-frame test measured 600 samples per phase: p50 idle
+2.2312 ms, hover 2.2424 ms, drag 2.4570 ms; drag p95 2.9631 ms. These are test-profile
+UI CPU-frame costs, not native FPS or GPU/input latency. The earlier timing ran
+concurrently with capture and is not used as a controlled comparison.
+
+The shared-only test lint was fixed at `9a97555` by enumerating edge anchors,
+without `unreachable!` or source lint allowances. Fresh full shared UI tests and
+fmt passed. A separate all-targets diagnostic Clippy run allowing only the known
+`nonminimal_bool` class passed (`-- -D warnings -A clippy::nonminimal_bool`);
+the standard strict run still fails at the unchanged source described above.
 
 Manual acceptance still refers to the contributor's earlier Windows EXE. The
 agent did not build or launch the product EXE. Physical native focus/IME,
