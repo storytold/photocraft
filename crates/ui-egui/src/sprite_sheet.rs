@@ -6,6 +6,7 @@ use serde_json::{Map, Value, json};
 use crate::PhotocraftApp;
 
 pub const COMMAND: &str = "file.export.spriteSheet";
+const MAX_TIMELINE_FRAMES: usize = 4_096;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TimelineFrame {
@@ -14,19 +15,23 @@ struct TimelineFrame {
 }
 
 impl TimelineFrame {
+    /// Creates a timeline entry with the default one-tick hold.
     fn new(frame: usize) -> Self {
         Self { frame, duration_ticks: 1 }
     }
 
+    /// Serializes the frame entry for the engine command payload.
     fn json(self) -> Value {
         json!({"frame": self.frame, "durationTicks": self.duration_ticks})
     }
 }
 
+/// Returns whether a command dialog belongs to the sprite-sheet exporter.
 pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key("__spriteSheet")
 }
 
+/// Opens the sprite-sheet export dialog when a document is active.
 pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     if app.session.active().is_none() {
         return Err("no document".into());
@@ -40,10 +45,12 @@ pub fn open(app: &mut PhotocraftApp) -> Result<u64, String> {
     fields.insert("frameHeight".into(), json!(32));
     fields.insert("columns".into(), json!(8));
     fields.insert("padding".into(), json!(0));
+    fields.insert("exportGif".into(), json!(false));
     fields.insert("path".into(), json!("Sprite Sheet.png"));
     Ok(app.ui.open_dialog(crate::state::DialogKind::Command, fields))
 }
 
+/// Renders exporter settings, synchronized timeline controls, and output options.
 pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>, dialog: u64) {
     ui.horizontal(|ui| {
         ui.label("Source");
@@ -60,14 +67,14 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     });
     ui.horizontal(|ui| {
         ui.label("Frame size");
-        number(ui, fields, "frameWidth", 1, 65_536);
-        number(ui, fields, "frameHeight", 1, 65_536);
+        number(ui, fields, "frameWidth", 1, 16_384);
+        number(ui, fields, "frameHeight", 1, 16_384);
     });
     ui.horizontal(|ui| {
         ui.label("Grid columns");
-        number(ui, fields, "columns", 1, 65_536);
+        number(ui, fields, "columns", 1, 16_384);
         ui.label("Padding");
-        number(ui, fields, "padding", 0, 65_536);
+        number(ui, fields, "padding", 0, 16_384);
     });
     ui.separator();
     preview(app, ui, fields, dialog);
@@ -88,6 +95,10 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
                 app.ui.status = e;
             }
         }
+        let mut export_gif = fields.get("exportGif").and_then(Value::as_bool).unwrap_or(false);
+        if ui.checkbox(&mut export_gif, "Export animated GIF alongside PNG").changed() {
+            fields.insert("exportGif".into(), json!(export_gif));
+        }
     });
 
     #[derive(Clone)]
@@ -97,6 +108,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         tick_count: u32,
     }
 
+    /// Renders the layout grid and keeps selected timeline entries valid for export.
     fn preview(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>, dialog: u64) {
         let frame_w = fields.get("frameWidth").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).unwrap_or(32);
         let frame_h = fields.get("frameHeight").and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).unwrap_or(32);
@@ -115,6 +127,10 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
             ui.label("No visible raster frames available.");
             return;
         }
+        if frame_count > MAX_TIMELINE_FRAMES {
+            ui.label(format!("This source contains {frame_count} frames; reduce the grid to at most {MAX_TIMELINE_FRAMES}."));
+            return;
+        }
         let selected_value = fields.entry("selectedFrames").or_insert_with(|| json!([])).clone();
         let mut selected_frames = selected_value
             .as_array()
@@ -131,6 +147,10 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
             })
             .filter(|item| item.frame < frame_count)
             .collect::<Vec<_>>();
+        let normalized = Value::Array(selected_frames.iter().copied().map(TimelineFrame::json).collect());
+        if fields.get("selectedFrames") != Some(&normalized) {
+            fields.insert("selectedFrames".into(), normalized);
+        }
         ui.label("Layout preview (click frames to add or remove them from playback order)");
         let cell_size = egui::vec2(48.0, 48.0);
         let rows = frame_count.div_ceil(columns);
@@ -218,6 +238,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
         timeline(ui, fields, dialog, &selected_frames, playback.step);
     }
 
+    /// Renders timeline thumbnails, duration controls, removal, and drag reordering.
     fn timeline(ui: &mut egui::Ui, fields: &mut Map<String, Value>, dialog: u64, selected: &[TimelineFrame], active_step: usize) {
         ui.add_space(6.0);
         ui.strong(format!("Animation Timeline ({} frames)", selected.len()));
@@ -292,6 +313,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
     }
 }
 
+/// Renders a bounded numeric exporter setting.
 fn number(ui: &mut egui::Ui, fields: &mut Map<String, Value>, key: &str, min: u32, max: u32) {
     let mut value = fields.get(key).and_then(Value::as_u64).and_then(|v| u32::try_from(v).ok()).unwrap_or(min);
     if ui.add(egui::DragValue::new(&mut value).range(min..=max)).changed() {
@@ -299,6 +321,7 @@ fn number(ui: &mut egui::Ui, fields: &mut Map<String, Value>, key: &str, min: u3
     }
 }
 
+/// Executes the command using the dialog's current synchronized field payload.
 pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
     fields.get("path").and_then(Value::as_str).filter(|p| !p.trim().is_empty()).ok_or("choose an output PNG path")?;
     let params = Value::Object(fields.iter().filter(|(key, _)| !key.starts_with("__")).map(|(key, value)| (key.clone(), value.clone())).collect());

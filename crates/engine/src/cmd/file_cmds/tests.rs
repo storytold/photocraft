@@ -47,6 +47,7 @@ fn sprite_sheet_grid_exports_padded_png() {
                 "columns": 2,
                 "padding": 1,
                 "fps": 8,
+                "exportGif": true,
                 "selectedFrames": [{"frame": 1, "durationTicks": 2}, {"frame": 0, "durationTicks": 1}]
             }),
         )
@@ -60,6 +61,28 @@ fn sprite_sheet_grid_exports_padded_png() {
     assert_eq!(metadata["frames"]["frame_0"]["frame"], json!({"x": 6, "y": 1, "w": 4, "h": 2}));
     assert_eq!(metadata["frames"]["frame_0"]["duration"], 250);
     assert_eq!(metadata["frames"]["frame_1"]["duration"], 125);
+    let gif = std::fs::read(join(&dir, "sheet.gif")).unwrap();
+    let gif_frames = photocraft_codecs::decode_gif_frames(&gif, &photocraft_codecs::DecodeOptions::default()).unwrap();
+    assert_eq!(gif_frames.len(), 2);
+    assert_eq!(gif_frames[0].delay_ms, 250);
+    assert_eq!(gif_frames[1].delay_ms, 120);
+}
+
+#[test]
+fn sprite_sheet_normalizes_output_extension_and_rejects_oversized_grids() {
+    let dir = tmp("sprite-sheet-safety");
+    let mut s = session(65, 65, 8);
+    let requested = join(&dir, "animation.json");
+    let result =
+        s.execute("file.export.spriteSheet", json!({"path": requested, "source": "grid", "frameWidth": 1, "frameHeight": 1, "columns": 8})).unwrap_err();
+    assert!(result.to_string().contains("exceeding safety limit"));
+
+    let mut s = session(8, 4, 8);
+    let requested = join(&dir, "animation.json");
+    let result = s.execute("file.export.spriteSheet", json!({"path": requested, "source": "grid", "frameWidth": 4, "frameHeight": 2, "columns": 2})).unwrap();
+    assert_eq!(result["path"], join(&dir, "animation.png"));
+    assert!(std::fs::metadata(join(&dir, "animation.png")).is_ok());
+    assert!(std::fs::metadata(join(&dir, "animation.json")).is_ok());
 }
 
 #[test]

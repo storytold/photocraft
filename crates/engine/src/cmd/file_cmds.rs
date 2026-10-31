@@ -350,7 +350,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Export Sprite Sheet…",
             &["File", "Export"],
             None,
-            r##"{"path":str (PNG destination; a companion .json is written beside it),"source":"layers|grid"="layers","frameWidth":px=32,"frameHeight":px=32,"columns":1..65536=8,"padding":px=0,"fps":1..240=8,"selectedFrames":[integer|{"frame":integer,"durationTicks":1..60},…]?} (selectedFrames controls Aseprite-compatible JSON order and per-frame duration; integers are one tick)"##,
+            r##"{"path":str (PNG destination; a companion .json is written beside it; exportGif also writes .gif),"source":"layers|grid"="layers","frameWidth":px=1..16384=32,"frameHeight":px=1..16384=32,"columns":1..16384=8,"padding":px=0..16384=0,"fps":1..240=8,"exportGif":bool=false,"selectedFrames":[integer|{"frame":integer,"durationTicks":1..60},…]?} (selectedFrames controls Aseprite-compatible JSON order and per-frame duration; integers are one tick; oversized grids are rejected above 4096 frames)"##,
             has_doc,
             export_sprite_sheet
         ),

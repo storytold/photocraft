@@ -4,12 +4,18 @@ use super::{
     ColorMode, Document, EngineError, Layer, LayerContent, LayerId, Rect, Result, Session, Surface, Value, flattened_checked, from_rgba_into, json, str_param,
 };
 use std::collections::BTreeMap;
+use std::fs::File;
+use std::io::{BufWriter, Write};
 use std::path::Path;
+
+use image::codecs::gif::{GifEncoder, Repeat};
+use image::{Delay, Frame as GifFrame};
 
 // ---------- Export ----------
 
 const SPRITE_SHEET_CMD: &str = "file.export.spriteSheet";
-const MAX_SPRITE_SHEET_DIMENSION: u32 = 65_536;
+const MAX_SPRITE_SHEET_DIMENSION: u32 = 16_384;
+const MAX_SPRITE_FRAME_COUNT: usize = 4_096;
 const MAX_SPRITE_FRAME_DURATION_TICKS: u32 = 60;
 
 #[derive(Clone, Copy)]
@@ -28,12 +34,21 @@ struct SpriteSheetMetadata {
     fps: u32,
 }
 
+struct SpriteGifConfig {
+    frame_width: u32,
+    frame_height: u32,
+    padding: u32,
+    columns: usize,
+    fps: u32,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SpriteSource {
     Layers,
     Grid,
 }
 
+/// Parses the requested sprite source and rejects unsupported source names.
 fn sprite_source(p: &Value) -> Result<SpriteSource> {
     match p.get("source").and_then(Value::as_str).unwrap_or("layers") {
         "layers" => Ok(SpriteSource::Layers),
@@ -42,6 +57,7 @@ fn sprite_source(p: &Value) -> Result<SpriteSource> {
     }
 }
 
+/// Reads a positive bounded sprite-sheet dimension parameter.
 fn positive_u32(p: &Value, key: &str, default: u32) -> Result<u32> {
     let value = p.get(key).and_then(Value::as_u64).unwrap_or(u64::from(default));
     u32::try_from(value).ok().filter(|v| *v > 0 && *v <= MAX_SPRITE_SHEET_DIMENSION).ok_or_else(|| EngineError::BadParams {
@@ -50,6 +66,7 @@ fn positive_u32(p: &Value, key: &str, default: u32) -> Result<u32> {
     })
 }
 
+/// Reads a non-negative bounded sprite-sheet spacing parameter.
 fn bounded_u32(p: &Value, key: &str, default: u32) -> Result<u32> {
     let value = p.get(key).and_then(Value::as_u64).unwrap_or(u64::from(default));
     u32::try_from(value).ok().filter(|v| *v <= MAX_SPRITE_SHEET_DIMENSION).ok_or_else(|| EngineError::BadParams {
@@ -58,6 +75,7 @@ fn bounded_u32(p: &Value, key: &str, default: u32) -> Result<u32> {
     })
 }
 
+/// Parses and validates the ordered timeline, defaulting to every source frame once.
 fn sprite_timeline(p: &Value, frame_count: usize) -> Result<Vec<SpriteTimelineFrame>> {
     let Some(values) = p.get("selectedFrames").and_then(Value::as_array) else {
         return Ok((0..frame_count).map(|frame| SpriteTimelineFrame { frame, duration_ticks: 1 }).collect());
@@ -95,14 +113,17 @@ fn sprite_timeline(p: &Value, frame_count: usize) -> Result<Vec<SpriteTimelineFr
     Ok(timeline)
 }
 
+/// Returns the metadata path associated with a normalized PNG path.
 fn sprite_sheet_json_path(path: &str) -> String {
     Path::new(path).with_extension("json").to_string_lossy().into_owned()
 }
 
+/// Extracts the portable image filename stored in metadata.
 fn sprite_sheet_image_name(path: &str) -> String {
     Path::new(path).file_name().and_then(|name| name.to_str()).unwrap_or("sprite-sheet.png").to_owned()
 }
 
+/// Writes Aseprite-compatible frame rectangles and durations beside the PNG.
 fn write_sprite_sheet_metadata(path: &str, image_path: &str, config: &SpriteSheetMetadata, timeline: &[SpriteTimelineFrame]) -> Result<()> {
     let base_tick_ms = 1000u32 / config.fps.max(1);
     let frames = timeline
@@ -149,7 +170,55 @@ fn write_sprite_sheet_metadata(path: &str, image_path: &str, config: &SpriteShee
     Ok(())
 }
 
+/// Encodes the ordered timeline as a looping GIF and flushes it to disk.
+fn encode_sprite_sheet_gif(output_path: &Path, sheet_png: &[u8], config: &SpriteGifConfig, timeline: &[SpriteTimelineFrame]) -> Result<()> {
+    if timeline.is_empty() {
+        return Err(EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: "cannot export GIF with an empty timeline".into() });
+    }
+    let sheet = image::load_from_memory_with_format(sheet_png, image::ImageFormat::Png)
+        .map_err(|e| EngineError::Other(format!("cannot decode sprite sheet for GIF export: {e}")))?
+        .into_rgba8();
+    let file = File::create(output_path).map_err(|e| EngineError::Other(format!("cannot create GIF output: {e}")))?;
+    let mut writer = BufWriter::new(file);
+    {
+        let mut encoder = GifEncoder::new(&mut writer);
+        encoder.set_repeat(Repeat::Infinite).map_err(|e| EngineError::Other(format!("cannot configure GIF repeat: {e}")))?;
+        let base_tick_ms = 1000u32 / config.fps.max(1);
+        for item in timeline {
+            let col = item.frame % config.columns;
+            let row = item.frame / config.columns;
+            let x = config
+                .padding
+                .checked_add(
+                    u32::try_from(col)
+                        .ok()
+                        .and_then(|col| col.checked_mul(config.frame_width.saturating_add(config.padding)))
+                        .ok_or_else(|| EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: "GIF frame x coordinate is too large".into() })?,
+                )
+                .ok_or_else(|| EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: "GIF frame x coordinate is too large".into() })?;
+            let y = config
+                .padding
+                .checked_add(
+                    u32::try_from(row)
+                        .ok()
+                        .and_then(|row| row.checked_mul(config.frame_height.saturating_add(config.padding)))
+                        .ok_or_else(|| EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: "GIF frame y coordinate is too large".into() })?,
+                )
+                .ok_or_else(|| EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: "GIF frame y coordinate is too large".into() })?;
+            let cropped = image::imageops::crop_imm(&sheet, x, y, config.frame_width, config.frame_height).to_image();
+            let delay = Delay::from_numer_denom_ms(item.duration_ticks.saturating_mul(base_tick_ms).max(20), 1);
+            encoder.encode_frame(GifFrame::from_parts(cropped, 0, 0, delay)).map_err(|e| EngineError::Other(format!("cannot encode GIF frame: {e}")))?;
+        }
+    }
+    writer.flush().map_err(|e| EngineError::Other(format!("cannot flush GIF output: {e}")))?;
+    Ok(())
+}
+
+/// Computes checked packed-sheet dimensions and enforces texture and frame limits.
 fn sprite_sheet_dimensions(count: usize, columns: usize, frame_w: u32, frame_h: u32, padding: u32) -> Result<(u32, u32)> {
+    if count == 0 || count > MAX_SPRITE_FRAME_COUNT {
+        return Err(EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: format!("sprite sheet must contain 1 to {MAX_SPRITE_FRAME_COUNT} frames") });
+    }
     let rows = count
         .checked_add(columns - 1)
         .and_then(|n| n.checked_div(columns))
@@ -171,8 +240,16 @@ fn sprite_sheet_dimensions(count: usize, columns: usize, frame_w: u32, frame_h: 
     Ok((width, height))
 }
 
+/// Exports source frames to PNG, Aseprite JSON, and optionally a looping GIF.
 pub fn export_sprite_sheet(s: &mut Session, p: &Value) -> Result<Value> {
-    let path = str_param(p, "path", SPRITE_SHEET_CMD)?;
+    let requested_path = str_param(p, "path", SPRITE_SHEET_CMD)?;
+    let requested = Path::new(requested_path);
+    let png_path = if requested.extension().and_then(|ext| ext.to_str()) == Some("png") { requested.to_path_buf() } else { requested.with_extension("png") };
+    let path = png_path.to_string_lossy().into_owned();
+    let json_path = png_path.with_extension("json");
+    if png_path == json_path {
+        return Err(EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: "PNG and JSON metadata destinations resolved to identical paths".into() });
+    }
     let source = sprite_source(p)?;
     let frame_w = positive_u32(p, "frameWidth", 32)?;
     let frame_h = positive_u32(p, "frameHeight", 32)?;
@@ -197,17 +274,31 @@ pub fn export_sprite_sheet(s: &mut Session, p: &Value) -> Result<Value> {
                 let mut one = (*doc).clone();
                 one.layers = vec![layer.clone()];
                 frames.push(flattened_checked(&one, fmt, SPRITE_SHEET_CMD)?);
+                if frames.len() > MAX_SPRITE_FRAME_COUNT {
+                    return Err(EngineError::BadParams {
+                        cmd: SPRITE_SHEET_CMD.into(),
+                        msg: format!("sprite sheet exceeds safety limit of {MAX_SPRITE_FRAME_COUNT} frames"),
+                    });
+                }
             }
         }
         SpriteSource::Grid => {
+            let bounds = doc.bounds();
             let frame_w_i =
                 i32::try_from(frame_w).map_err(|_| EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: "frame width is too large".into() })?;
             let frame_h_i =
                 i32::try_from(frame_h).map_err(|_| EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: "frame height is too large".into() })?;
-            let canvas = flattened_checked(&doc, fmt, SPRITE_SHEET_CMD)?;
-            let bounds = doc.bounds();
             let cols = (bounds.width().saturating_add(frame_w - 1) / frame_w).max(1) as usize;
             let rows = (bounds.height().saturating_add(frame_h - 1) / frame_h).max(1) as usize;
+            let count =
+                cols.checked_mul(rows).ok_or_else(|| EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: "grid frame count is too large".into() })?;
+            if count > MAX_SPRITE_FRAME_COUNT {
+                return Err(EngineError::BadParams {
+                    cmd: SPRITE_SHEET_CMD.into(),
+                    msg: format!("grid settings produce {count} frames, exceeding safety limit of {MAX_SPRITE_FRAME_COUNT}"),
+                });
+            }
+            let canvas = flattened_checked(&doc, fmt, SPRITE_SHEET_CMD)?;
             for row in 0..rows {
                 for col in 0..cols {
                     let x = bounds.x0 + (col as i32) * frame_w_i;
@@ -262,11 +353,17 @@ pub fn export_sprite_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     out.layers = vec![layer];
     let result = photocraft_io::export(&out, "sprite-sheet.png", &photocraft_io::ExportOptions::default())
         .map_err(|e| EngineError::Other(format!("cannot encode sprite sheet: {e}")))?;
-    write_file(path, &result.bytes)?;
+    write_file(&path, &result.bytes)?;
     let metadata = SpriteSheetMetadata { sheet_width: sheet_w, sheet_height: sheet_h, frame_width: frame_w, frame_height: frame_h, padding, columns, fps };
-    write_sprite_sheet_metadata(path, path, &metadata, &timeline)?;
+    write_sprite_sheet_metadata(&path, &path, &metadata, &timeline)?;
+    let export_gif = p.get("exportGif").and_then(Value::as_bool).unwrap_or(false);
+    let gif_path = png_path.with_extension("gif").to_string_lossy().into_owned();
+    if export_gif {
+        let gif_config = SpriteGifConfig { frame_width: frame_w, frame_height: frame_h, padding, columns, fps };
+        encode_sprite_sheet_gif(Path::new(&gif_path), &result.bytes, &gif_config, &timeline)?;
+    }
     Ok(
-        json!({"path": path, "metadataPath": sprite_sheet_json_path(path), "width": sheet_w, "height": sheet_h, "frames": frames.len(), "timelineFrames": timeline.len()}),
+        json!({"path": path, "metadataPath": json_path.to_string_lossy(), "gifPath": export_gif.then_some(gif_path), "width": sheet_w, "height": sheet_h, "frames": frames.len(), "timelineFrames": timeline.len()}),
     )
 }
 
