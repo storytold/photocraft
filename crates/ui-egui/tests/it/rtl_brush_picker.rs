@@ -13,7 +13,11 @@ use egui::{Event, Modifiers, PointerButton, Vec2, vec2};
 use egui_kittest::Harness;
 use egui_kittest::kittest::Queryable;
 use photocraft_engine::BrushSettings;
-use photocraft_ui_egui::{PhotocraftApp, brush_picker, direction::{self, Dir}, theme};
+use photocraft_ui_egui::{
+    PhotocraftApp, brush_picker,
+    direction::{self, Dir},
+    theme,
+};
 
 /// The picker's content size in the tests.
 fn content() -> Vec2 {
@@ -40,17 +44,15 @@ impl Picker {
         let grip = Rc::new(RefCell::new(None));
         let dragged = Rc::new(RefCell::new(None));
         let (f, g, d) = (frame.clone(), grip.clone(), dragged.clone());
-        let mut harness = Harness::builder()
-            .with_size(vec2(800.0, 600.0))
-            .build_ui(move |ui| {
-                let _dir = &guard;
-                let shown = egui::Frame::popup(ui.style()).show(ui, |ui| {
-                    brush_picker::body(ui, &mut brush, &[], None, &mut list, content());
-                });
-                *f.borrow_mut() = Some(shown.response.rect);
-                *g.borrow_mut() = Some(ui.scope_id().with("brush-picker-resize"));
-                *d.borrow_mut() = brush_picker::resize_grip(ui, shown.response.rect, content());
+        let mut harness = Harness::builder().with_size(vec2(800.0, 600.0)).build_ui(move |ui| {
+            let _dir = &guard;
+            let shown = egui::Frame::popup(ui.style()).show(ui, |ui| {
+                brush_picker::body(ui, &mut brush, &[], None, &mut list, content());
             });
+            *f.borrow_mut() = Some(shown.response.rect);
+            *g.borrow_mut() = Some(ui.scope_id().with("brush-picker-resize"));
+            *d.borrow_mut() = brush_picker::resize_grip(ui, shown.response.rect, content());
+        });
         harness.run_steps(2);
         // The fonts and the SVG icon loader, and the egui direction flag to match the scope's.
         PhotocraftApp::setup_context(&harness.ctx, Default::default());
@@ -61,12 +63,12 @@ impl Picker {
 
     /// The rect of the picker's frame.
     fn frame_rect(&self) -> egui::Rect {
-        self.frame.borrow().clone().expect("the picker's frame")
+        (*self.frame.borrow()).expect("the picker's frame")
     }
 
     /// The rect of the picker's resize grip.
     fn grip_rect(&self) -> egui::Rect {
-        let id = self.grip.borrow().clone().expect("the resize grip");
+        let id = (*self.grip.borrow()).expect("the resize grip");
         self.harness.ctx.read_response(id).expect("the grip's response").rect
     }
 }
