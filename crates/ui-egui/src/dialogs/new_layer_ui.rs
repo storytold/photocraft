@@ -77,16 +77,6 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 
 /// A single-line edit whose text reads right-to-left in a right-to-left UI (Arabic names align
 /// to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
-fn add_rtl_singleline(ui: &mut egui::Ui, text: &mut String, configure: impl FnOnce(egui::TextEdit<'_>) -> egui::TextEdit<'_>) -> egui::Response {
-    let edit = configure(egui::TextEdit::singleline(text));
-    if !crate::direction::is_rtl() {
-        return ui.add(edit);
-    }
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let mut layouter = crate::widgets::rtl_singleline_layouter(font);
-    ui.add(configure(crate::widgets::rtl_singleline(text, &mut layouter)))
-}
-
 /// The dialog's fields.
 fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let label_width = 64.0;
@@ -97,7 +87,7 @@ fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.horizontal(|ui| {
         let name_label = row_label(ui, tl!("Name:"));
         let mut name = f.get("name").and_then(Value::as_str).unwrap_or("").to_string();
-        let field = add_rtl_singleline(ui, &mut name, |e| e.desired_width(260.0)).labelled_by(name_label.id);
+        let field = crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(260.0)).labelled_by(name_label.id);
         if field.changed() {
             f.insert("name".into(), json!(name));
         }
