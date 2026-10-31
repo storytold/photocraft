@@ -144,16 +144,20 @@ fn selection_from(doc: &Document, ch: &AlphaChannel) -> Option<Surface> {
 }
 
 pub(super) fn quick_mask(s: &mut Session, p: &Value) -> Result<Value> {
-    let on = s.active().ok_or(EngineError::NoDocument)?.doc.quick_mask.is_some();
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let on = st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden;
     let want = p.get("on").and_then(Value::as_bool).unwrap_or(!on);
     if want == on {
         return Ok(json!({ "quickMask": on }));
     }
     let opts = s.quick_mask_options;
+    let prior_target = st.channel_view.target.clone();
     if want {
-        s.edit("Edit in Quick Mask", |doc, _| {
-            doc.quick_mask = Some(quick_mask_from(doc, &opts));
-            doc.quick_mask_unselected = doc.selection.is_none();
+        s.edit("Edit in Quick Mask", |doc, _st| {
+            if doc.quick_mask.is_none() {
+                doc.quick_mask = Some(quick_mask_from(doc, &opts));
+                doc.quick_mask_unselected = doc.selection.is_none();
+            }
             doc.selection = None;
             Ok(())
         })?;
@@ -162,12 +166,17 @@ pub(super) fn quick_mask(s: &mut Session, p: &Value) -> Result<Value> {
             st.channel_view.quick_mask_hidden = false;
         }
     } else {
+        // Exit Quick Mask: remove mask and restore selection
         s.edit("Exit Quick Mask", |doc, _| {
             if let Some(q) = doc.quick_mask.take() {
                 doc.selection = selection_from(doc, &q);
             }
             Ok(())
         })?;
+        // Restore prior target
+        if let Some(st) = s.active_mut() {
+            st.channel_view.target = prior_target;
+        }
     }
     Ok(json!({ "quickMask": want }))
 }

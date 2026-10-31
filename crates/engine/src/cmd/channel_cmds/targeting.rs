@@ -222,7 +222,7 @@ pub(crate) fn inject_target(s: &Session, id: &str, params: Value) -> Value {
     let Some(st) = s.active() else { return params };
     let t = match st.channel_view.target {
         ChannelTarget::Alpha(i) if i < st.doc.channels.len() => json!({ "channel": i }),
-        ChannelTarget::Composite if st.doc.quick_mask.is_some() => json!("quickMask"),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() && !st.channel_view.quick_mask_hidden => json!("quickMask"),
         ChannelTarget::LayerMask => json!("mask"),
         // Viewing the active layer's mask (⌥-click): pixel commands edit the mask.
         // A shown filter mask takes only the commands that edit it; the rest act on the smart object.
