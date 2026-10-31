@@ -104,6 +104,23 @@ fn alt_drag_duplicates_and_moves_the_copy_in_one_step() {
     assert_eq!(bounds(&app, st.active_layer.unwrap()), photocraft_geom::Rect::new(22, 8, 38, 24));
 }
 
+/// #9931: ⌘⌥-drag with the Zoom tool duplicates as the Move tool's ⌥-drag does, also when ⌘
+/// comes with the event (automation's `ui.pointer`) rather than being held first. (With a
+/// painting tool ⌥ is the Eyedropper, which wins.)
+#[test]
+fn cmd_alt_drag_with_the_zoom_tool_duplicates() {
+    let mut app = app_with_layer();
+    app.ui.tool = Tool::Zoom;
+    let orig = app.session.active().unwrap().active_layer.unwrap();
+    let n0 = app.session.active().unwrap().doc.layers.len();
+    drag(&mut app, &[[16.0, 16.0], [20.0, 16.0], [26.0, 21.0]], egui::Modifiers::COMMAND | egui::Modifiers::ALT);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layers.len(), n0 + 1, "one copy");
+    assert_eq!(bounds(&app, orig), photocraft_geom::Rect::new(8, 8, 24, 24), "original untouched");
+    assert_eq!(bounds(&app, st.active_layer.unwrap()), photocraft_geom::Rect::new(18, 13, 34, 29));
+    assert_eq!(app.ui.tool, Tool::Zoom);
+}
+
 /// Allow Non-Linear History: the copy's step moves the later states in front of it, and
 /// folding the copy and the move into one step must keep them.
 #[test]
@@ -245,13 +262,38 @@ fn cmd_arrows_nudge_the_layer_from_the_brush() {
     assert_eq!(bounds(&app, copy), photocraft_geom::Rect::new(9, 17, 25, 33));
 }
 
-/// #2474: tools where ⌘ means something else in Photoshop (Pen and path tools, Hand, Zoom,
+/// #9931: ⌘-arrows nudge the layer with the Zoom tool too.
+#[test]
+fn cmd_arrows_nudge_the_layer_from_the_zoom_tool() {
+    let mut app = app_with_layer();
+    app.ui.tool = Tool::Zoom;
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    assert!(press(&mut app, egui::Key::ArrowRight, CTRL));
+    assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(9, 8, 25, 24));
+    assert_eq!(app.ui.tool, Tool::Zoom);
+}
+
+/// #9931: the Modifier Keys panel's latched ⌘ makes plain arrows nudge as ⌘-arrows do.
+#[test]
+fn latched_cmd_arrows_nudge_the_layer() {
+    let mut app = app_with_layer();
+    app.ui.shell.sticky_command = true;
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    for tool in [Tool::Zoom, Tool::Brush] {
+        app.ui.tool = tool;
+        assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE), "{tool:?}");
+    }
+    assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(10, 8, 26, 24));
+    assert_eq!(app.session.tools.brush.angle, 0.0, "not the Brush's tip");
+}
+
+/// #2474: tools where ⌘ means something else in Photoshop (Pen and path tools, Hand,
 /// Crop, Type) keep ⌘-arrows away from the layer, as does an active Free Transform.
 #[test]
 fn cmd_arrows_leave_the_layer_alone_where_cmd_is_not_the_move_tool() {
     let mut app = app_with_layer();
     let id = app.session.active().unwrap().active_layer.unwrap();
-    for tool in [Tool::Pen, Tool::PathSelection, Tool::DirectSelection, Tool::Rectangle, Tool::Hand, Tool::Zoom, Tool::Crop, Tool::Type] {
+    for tool in [Tool::Pen, Tool::PathSelection, Tool::DirectSelection, Tool::Rectangle, Tool::Hand, Tool::Crop, Tool::Type] {
         app.ui.tool = tool;
         assert!(!press(&mut app, egui::Key::ArrowRight, CTRL), "{tool:?}");
         assert!(!press(&mut app, egui::Key::ArrowRight, MAC_CMD | egui::Modifiers::SHIFT), "{tool:?}");
