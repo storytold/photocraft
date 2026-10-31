@@ -33,6 +33,8 @@ fn options_bar_gutter() -> egui::Margin {
     if crate::direction::is_rtl() { egui::Margin { left: 2, ..Default::default() } } else { egui::Margin { right: 2, ..Default::default() } }
 }
 
+
+
 /// Options bar height: Preferences ▸ Workspace ▸ Enable Narrow Options Bar trims it, as in
 /// Photoshop, leaving the document more room.
 pub(super) fn options_bar_height(pro: bool, narrow: bool) -> f32 {
@@ -56,7 +58,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 // Font ink can extend beyond its advance width at fractional positions.
                 // Include its gutter in the container layout, including end-aligned actions.
                 egui::Frame::NONE.inner_margin(options_bar_gutter()).show(ui, |ui| {
-                    crate::direction::horizontal_centered(ui, |ui| {
+                    crate::direction::hscroll_row(ui, |ui| {
                         if t.pro {
                             crate::chrome_ui::home_button(app, ui);
                             widgets::vline(ui, 22.0);
@@ -921,24 +923,40 @@ mod tests {
         h
     }
 
+    /// With the bar narrower than its content, the strip's leading end sits at the reading-start
+    /// edge and the trailing end scrolls into view, in both directions.
     #[test]
-    fn probe_strip_geometry_narrow() {
+    fn options_bar_strip_trailing_end_scrolls_into_view_in_rtl() {
         use egui_kittest::kittest::Queryable;
-        for dir in [Dir::Ltr, Dir::Rtl] {
+        let strip = |dir: Dir| {
             let _scope = direction_scope(dir);
-            let h = options_bar_harness_sized(app_with(Tool::Brush), 460.0);
-            let mut rects: Vec<(f32, f32, String)> = h
-                .query_all_by_role(egui::accesskit::Role::Button)
-                .map(|n| {
-                    let r = n.rect();
-                    (r.min.x, r.max.x, format!("{n:?}").chars().take(70).collect())
-                })
-                .collect();
-            rects.sort_by(|a, b| a.0.total_cmp(&b.0));
-            eprintln!("dir={dir:?} width=460");
-            for (min, max, dbg) in &rects {
-                eprintln!("  [{min:7.1},{max:7.1}] {dbg}");
+            let mut h = options_bar_harness_sized(app_with(Tool::Brush), 460.0);
+            let rects = |h: &egui_kittest::Harness<'_, PhotocraftApp>| {
+                h.query_all_by_role(egui::accesskit::Role::Button).map(|n| n.rect()).collect::<Vec<_>>()
+            };
+            let before = rects(&h);
+            h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(230.0, 20.0)));
+            for _ in 0..4 {
+                h.input_mut().events.push(egui::Event::MouseWheel {
+                    source: egui::MouseWheelSource::Unknown,
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(-1500.0, 0.0),
+                    modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move,
+                });
+                h.run_steps(1);
             }
-        }
+            (before, rects(&h))
+        };
+        let (ltr_before, ltr_after) = strip(Dir::Ltr);
+        let ltr_lead = ltr_before.iter().map(|r| r.min.x).fold(f32::INFINITY, f32::min);
+        assert!(ltr_lead >= 5.0 && ltr_lead < 100.0, "LTR leading end at the left: {ltr_lead}");
+        let ltr_trail = ltr_after.iter().map(|r| r.max.x).fold(f32::NEG_INFINITY, f32::max);
+        assert!(ltr_trail <= 460.0, "LTR trailing end scrolled into view: {ltr_trail}");
+        let (rtl_before, rtl_after) = strip(Dir::Rtl);
+        let rtl_lead = rtl_before.iter().map(|r| r.max.x).fold(f32::NEG_INFINITY, f32::max);
+        assert!(rtl_lead > 400.0 && rtl_lead <= 455.0, "RTL leading end at the right: {rtl_lead}");
+        let rtl_trail = rtl_after.iter().map(|r| r.min.x).fold(f32::INFINITY, f32::min);
+        assert!(rtl_trail > -1.0, "RTL trailing end scrolled into view: {rtl_trail}");
     }
 }
