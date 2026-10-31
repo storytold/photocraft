@@ -990,10 +990,13 @@ fn with_driver_printable(p: &Value) -> Value {
 fn driver_printable(p: &Value) -> Option<Value> {
     let printer = printer_name(p).ok()?;
     let settings = printer_settings(p).ok()?;
-    let pg = with_spooler(|| craft_print::rgb::page(&printer, settings.as_ref())).ok()?;
+    let (pw, ph) = paper(p, "file.print").ok()?;
+    // The page of the settings as they will print: turned to the layout's orientation when the
+    // driver has its paper the other way round, as `print_windows` turns them (#7847), so a
+    // landscape layout on portrait settings fits the landscape page's area, borderless included.
+    let (_, pg) = with_spooler(|| settings_for_layout(&printer, settings, (pw, ph))).ok()?;
     // Only for the paper the driver is set to: a print laid out on another paper keeps the
     // fixed margin (and `print_windows` refuses it), as before.
-    let (pw, ph) = paper(p, "file.print").ok()?;
     if (pg.paper.0 - pw).abs() > 2.0 || (pg.paper.1 - ph).abs() > 2.0 {
         return None;
     }

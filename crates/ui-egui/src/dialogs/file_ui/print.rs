@@ -115,7 +115,8 @@ pub(super) fn turn_driver(app: &mut PhotocraftApp, f: &mut Map<String, Value>, l
 
 /// The turned settings and the paper they give, both from the one `file.print.page` answer, as
 /// `driver_page` takes a page: asking the driver again could fail and leave new settings with the
-/// old paper. An answer without both leaves the dialog as it was, with the reason shown.
+/// old paper. An answer without both leaves the dialog as it was, with the reason shown. The
+/// printable area comes from the same answer, so the old orientation's area is never kept (#7782).
 pub(super) fn take_turned_page(f: &mut Map<String, Value>, r: &Value) {
     let paper = r.get("paper").and_then(Value::as_array).and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)));
     let (Some(settings), Some((w, h))) = (r.get("printerSettings").and_then(Value::as_str), paper) else {
@@ -125,6 +126,10 @@ pub(super) fn take_turned_page(f: &mut Map<String, Value>, r: &Value) {
     f.insert("printerSettings".into(), json!(settings));
     f.insert("paper".into(), json!([w, h]));
     f.insert("orientation".into(), json!("portrait"));
+    match r.get("printable").filter(|v| v.is_array()) {
+        Some(area) => f.insert("printable".into(), area.clone()),
+        None => f.remove("printable"),
+    };
     f.remove("__pageError");
 }
 

@@ -360,6 +360,27 @@ fn printer_page_refuses_an_unknown_orientation() {
 /// landscape A4 layout, gets settings turned to landscape and a wide page; a portrait layout keeps
 /// the driver's own settings. Needs that printer, so it runs by hand:
 /// `cargo test -p photocraft-engine --lib a_portrait_driver -- --ignored`.
+/// #7782 with #7847: a fitted landscape print on a driver's portrait settings fits the printable
+/// area of the settings as they will print (turned, as `print_windows` turns them), not none
+/// because the portrait page's paper differs, which left the fixed margin and lost borderless.
+/// Needs "Microsoft Print to PDF", like the test below:
+/// `cargo test -p photocraft-engine --lib a_turned_print -- --ignored`.
+#[cfg(windows)]
+#[test]
+#[ignore]
+fn a_turned_print_fits_the_turned_printable_area() {
+    let printer = "Microsoft Print to PDF";
+    let defaults = craft_print::rgb::default_settings(printer).unwrap();
+    let a4 = craft_print::rgb::page(printer, Some(&defaults)).unwrap().paper;
+    let p = json!({"printer": printer, "paper": [a4.1, a4.0], "orientation": "portrait", "scaleToFit": true});
+    let area = driver_printable(&p).expect("the turned page's printable area");
+    let (w, h) = (area[2].as_f64().unwrap(), area[3].as_f64().unwrap());
+    assert!(w > h, "a landscape area for a landscape layout: {area}");
+    let portrait = json!({"printer": printer, "paper": [a4.0, a4.1], "orientation": "portrait", "scaleToFit": true});
+    let area = driver_printable(&portrait).expect("the page's own printable area");
+    assert!(area[3].as_f64().unwrap() > area[2].as_f64().unwrap(), "untouched for a portrait layout: {area}");
+}
+
 #[cfg(windows)]
 #[test]
 #[ignore]

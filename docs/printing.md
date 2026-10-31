@@ -67,7 +67,9 @@ settings, as Print Settings… would, and the paper and preview turn with them.
 turned settings as `printerSettings`, with the page they give. A print sent to a Windows printer
 whose layout is the driver's paper the other way round (a landscape layout, portrait settings)
 turns the settings to the layout before printing, rather than stopping with "the driver paper or
-orientation differs"; another paper is still refused.
+orientation differs"; another paper is still refused. Scale to Fit Media then fills the printable
+area of the turned settings, so a borderless paper stays borderless the other way round too, and
+the Orientation buttons take that area with the turned paper.
 
 ## Results
 

@@ -741,3 +741,15 @@ fn a_turn_takes_settings_and_paper_together() {
         assert!(f.get("__pageError").is_some(), "{partial}");
     }
 }
+
+/// #7782: a turn takes the printable area from the same answer, so the portrait area never stays
+/// behind on a landscape paper; an answer without one leaves no area.
+#[test]
+fn a_turn_takes_the_printable_area_too() {
+    let mut f = Map::new();
+    f.insert("printable".into(), json!([0.0, 0.0, 841.89, 1190.55]));
+    take_turned_page(&mut f, &json!({"printerSettings": "new", "paper": [1190.55, 841.89], "printable": [0.0, 0.0, 1190.55, 841.89]}));
+    assert_eq!(f.get("printable"), Some(&json!([0.0, 0.0, 1190.55, 841.89])));
+    take_turned_page(&mut f, &json!({"printerSettings": "newer", "paper": [841.89, 1190.55]}));
+    assert!(f.get("printable").is_none());
+}
