@@ -4550,3 +4550,30 @@ shape	Appearance	Apparence
 	Stop Color	Couleur du point
 	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Retouche IA…
+@id	edit.ai.codex	Retouche IA…
+	Describe your edit	Décrivez la retouche
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Le canevas visible et les instructions seront envoyés à Codex avec votre connexion ChatGPT. Le résultat sera ajusté au canevas et ajouté sur un nouveau calque.
+	Codex account has not been checked	Le compte Codex n’a pas été vérifié
+	Checking Codex connection…	Vérification de la connexion à Codex…
+	Complete ChatGPT sign-in in your browser	Terminez la connexion à ChatGPT dans votre navigateur
+	Connected to ChatGPT	Connecté à ChatGPT
+	ChatGPT plan	Abonnement ChatGPT
+	ChatGPT sign-in is required	Une connexion à ChatGPT est requise
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex utilise une autre méthode de connexion. Connectez-vous avec ChatGPT pour utiliser votre abonnement.
+	Cancelling sign-in…	Annulation de la connexion…
+	Sign-in cancelled	Connexion annulée
+	Could not verify the account. Check your connection or sign in again.	Impossible de vérifier le compte. Vérifiez votre connexion ou reconnectez-vous.
+	Connection details	Détails de la connexion
+	Sign in with ChatGPT	Se connecter avec ChatGPT
+	Open sign-in page	Ouvrir la page de connexion
+	Check connection	Vérifier la connexion
+	Cancel sign-in	Annuler la connexion
+	Copy sign-in link	Copier le lien de connexion
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Impossible d’ouvrir le navigateur. Réessayez ou collez le lien de connexion dans votre navigateur.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	La connexion est gérée par l’installation de Codex et partagée avec Codex. PhotoCraft ne conserve pas les jetons.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex est introuvable. Installez et ouvrez l’application de bureau Codex, puis vérifiez à nouveau la connexion.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Utilisez l’installation complète de Codex ; copier uniquement codex.exe peut omettre des composants de retouche d’images.
+	AI Edit	Retouche IA
+	Codex Account	Compte Codex

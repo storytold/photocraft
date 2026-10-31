@@ -4214,3 +4214,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Χρώμα στάσης
 	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
 	Edit Brush…	Επεξεργασία πινέλου…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Επεξεργασία με ΤΝ…
+@id	edit.ai.codex	Επεξεργασία με ΤΝ…
+	Describe your edit	Περιγράψτε την αλλαγή
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Ο ορατός καμβάς και η οδηγία θα σταλούν στο Codex μέσω της σύνδεσής σας στο ChatGPT. Το αποτέλεσμα προσαρμόζεται στον καμβά και προστίθεται ως νέο επίπεδο.
+	Codex account has not been checked	Ο λογαριασμός Codex δεν έχει ελεγχθεί
+	Checking Codex connection…	Έλεγχος σύνδεσης με το Codex…
+	Complete ChatGPT sign-in in your browser	Ολοκληρώστε τη σύνδεση στο ChatGPT στο πρόγραμμα περιήγησης
+	Connected to ChatGPT	Συνδεδεμένο στο ChatGPT
+	ChatGPT plan	Πρόγραμμα ChatGPT
+	ChatGPT sign-in is required	Απαιτείται σύνδεση στο ChatGPT
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Το Codex χρησιμοποιεί άλλη μέθοδο σύνδεσης. Συνδεθείτε μέσω ChatGPT για να χρησιμοποιήσετε τη συνδρομή σας.
+	Cancelling sign-in…	Ακύρωση σύνδεσης…
+	Sign-in cancelled	Η σύνδεση ακυρώθηκε
+	Could not verify the account. Check your connection or sign in again.	Δεν ήταν δυνατή η επαλήθευση του λογαριασμού. Ελέγξτε τη σύνδεση ή συνδεθείτε ξανά.
+	Connection details	Λεπτομέρειες σύνδεσης
+	Sign in with ChatGPT	Σύνδεση μέσω ChatGPT
+	Open sign-in page	Άνοιγμα σελίδας σύνδεσης
+	Check connection	Έλεγχος σύνδεσης
+	Cancel sign-in	Ακύρωση σύνδεσης
+	Copy sign-in link	Αντιγραφή συνδέσμου σύνδεσης
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Δεν ήταν δυνατό το άνοιγμα του προγράμματος περιήγησης. Δοκιμάστε ξανά ή επικολλήστε τον σύνδεσμο σύνδεσης στο πρόγραμμα περιήγησης.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Η εγκατεστημένη υποδομή του Codex διαχειρίζεται τη σύνδεση και τη μοιράζεται με το Codex. Το PhotoCraft δεν αποθηκεύει διακριτικά.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Το Codex δεν βρέθηκε. Εγκαταστήστε και ανοίξτε την εφαρμογή υπολογιστή Codex και ελέγξτε ξανά τη σύνδεση.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Χρησιμοποιήστε την πλήρη εγκατάσταση του Codex· η αντιγραφή μόνο του codex.exe ενδέχεται να παραλείψει στοιχεία επεξεργασίας εικόνων.
+	AI Edit	Επεξεργασία με ΤΝ
+	Codex Account	Λογαριασμός Codex

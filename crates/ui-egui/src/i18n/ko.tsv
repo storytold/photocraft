@@ -3734,3 +3734,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	정지점 색상
 	Shapes can't use patterns yet	모양에는 아직 패턴을 사용할 수 없습니다
 	Edit Brush…	브러시 편집…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI 편집…
+@id	edit.ai.codex	AI 편집…
+	Describe your edit	편집할 내용을 입력하세요
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	표시된 캔버스와 지침은 ChatGPT 로그인을 통해 Codex로 전송됩니다. 결과는 캔버스에 맞춰 새 레이어로 추가됩니다.
+	Codex account has not been checked	Codex 계정을 아직 확인하지 않았습니다
+	Checking Codex connection…	Codex 연결 확인 중…
+	Complete ChatGPT sign-in in your browser	브라우저에서 ChatGPT 로그인을 완료하세요
+	Connected to ChatGPT	ChatGPT에 연결됨
+	ChatGPT plan	ChatGPT 요금제
+	ChatGPT sign-in is required	ChatGPT 로그인이 필요합니다
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex가 다른 로그인 방식을 사용하고 있습니다. 구독을 사용하려면 ChatGPT로 로그인하세요.
+	Cancelling sign-in…	로그인 취소 중…
+	Sign-in cancelled	로그인이 취소되었습니다
+	Could not verify the account. Check your connection or sign in again.	계정을 확인할 수 없습니다. 연결을 확인하거나 다시 로그인하세요.
+	Connection details	연결 세부 정보
+	Sign in with ChatGPT	ChatGPT로 로그인
+	Open sign-in page	로그인 페이지 열기
+	Check connection	연결 확인
+	Cancel sign-in	로그인 취소
+	Copy sign-in link	로그인 링크 복사
+	Could not open your browser. Try again or copy the sign-in link into your browser.	브라우저를 열 수 없습니다. 다시 시도하거나 로그인 링크를 브라우저에 붙여 넣으세요.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	설치된 Codex가 로그인을 관리하며 로그인 상태를 Codex와 공유합니다. PhotoCraft는 토큰을 저장하지 않습니다.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex를 찾을 수 없습니다. Codex 데스크톱 앱을 설치하고 연 다음 연결을 다시 확인하세요.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Codex 설치 전체를 사용하세요. codex.exe만 복사하면 이미지 편집 구성 요소가 누락될 수 있습니다.
+	AI Edit	AI 편집
+	Codex Account	Codex 계정

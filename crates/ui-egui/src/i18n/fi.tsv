@@ -4770,3 +4770,30 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Tekoälymuokkaus…
+@id	edit.ai.codex	Tekoälymuokkaus…
+	Describe your edit	Kuvaile muokkaus
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Näkyvä kangas ja ohje lähetetään Codexille ChatGPT-kirjautumisellasi. Tulos sovitetaan kankaaseen ja lisätään uutena tasona.
+	Codex account has not been checked	Codex-tiliä ei ole vielä tarkistettu
+	Checking Codex connection…	Tarkistetaan Codex-yhteyttä…
+	Complete ChatGPT sign-in in your browser	Viimeistele ChatGPT-kirjautuminen selaimessa
+	Connected to ChatGPT	Yhdistetty ChatGPT:hen
+	ChatGPT plan	ChatGPT-tilaus
+	ChatGPT sign-in is required	ChatGPT-kirjautuminen vaaditaan
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex käyttää toista kirjautumistapaa. Kirjaudu ChatGPT:llä käyttääksesi tilaustasi.
+	Cancelling sign-in…	Peruutetaan kirjautumista…
+	Sign-in cancelled	Kirjautuminen peruutettu
+	Could not verify the account. Check your connection or sign in again.	Tiliä ei voitu vahvistaa. Tarkista yhteys tai kirjaudu uudelleen.
+	Connection details	Yhteyden tiedot
+	Sign in with ChatGPT	Kirjaudu ChatGPT:llä
+	Open sign-in page	Avaa kirjautumissivu
+	Check connection	Tarkista yhteys
+	Cancel sign-in	Peruuta kirjautuminen
+	Copy sign-in link	Kopioi kirjautumislinkki
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Selainta ei voitu avata. Yritä uudelleen tai liitä kirjautumislinkki selaimeen.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Asennettu Codex-ympäristö hallinnoi kirjautumista ja jakaa sen Codexin kanssa. PhotoCraft ei tallenna tunnisteita.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codexia ei löytynyt. Asenna ja avaa Codex-työpöytäsovellus ja tarkista yhteys uudelleen.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Käytä koko Codex-asennusta; pelkän codex.exe-tiedoston kopiointi voi jättää kuvanmuokkausosia pois.
+	AI Edit	Tekoälymuokkaus
+	Codex Account	Codex-tili

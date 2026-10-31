@@ -3545,3 +3545,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Volltonfarbe
 	Tint Color	Tönungsfarbe
 	Edit Brush…	Pinsel bearbeiten…
+# Codex image editing and account controls (original translations).
+	AI Edit…	KI-Bearbeitung…
+@id	edit.ai.codex	KI-Bearbeitung…
+	Describe your edit	Beschreiben Sie die Bearbeitung
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Die sichtbare Leinwand und die Anweisung werden mit Ihrer ChatGPT-Anmeldung an Codex gesendet. Das Ergebnis wird an die Leinwand angepasst und als neue Ebene hinzugefügt.
+	Codex account has not been checked	Das Codex-Konto wurde noch nicht geprüft
+	Checking Codex connection…	Codex-Verbindung wird geprüft…
+	Complete ChatGPT sign-in in your browser	Schließen Sie die ChatGPT-Anmeldung im Browser ab
+	Connected to ChatGPT	Mit ChatGPT verbunden
+	ChatGPT plan	ChatGPT-Abonnement
+	ChatGPT sign-in is required	ChatGPT-Anmeldung erforderlich
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex verwendet eine andere Anmeldemethode. Melden Sie sich mit ChatGPT an, um Ihr Abonnement zu nutzen.
+	Cancelling sign-in…	Anmeldung wird abgebrochen…
+	Sign-in cancelled	Anmeldung abgebrochen
+	Could not verify the account. Check your connection or sign in again.	Das Konto konnte nicht geprüft werden. Prüfen Sie die Verbindung oder melden Sie sich erneut an.
+	Connection details	Verbindungsdetails
+	Sign in with ChatGPT	Mit ChatGPT anmelden
+	Open sign-in page	Anmeldeseite öffnen
+	Check connection	Verbindung prüfen
+	Cancel sign-in	Anmeldung abbrechen
+	Copy sign-in link	Anmeldelink kopieren
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Der Browser konnte nicht geöffnet werden. Versuchen Sie es erneut oder fügen Sie den Anmeldelink im Browser ein.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Die Anmeldung wird von der installierten Codex-Laufzeit verwaltet und mit Codex geteilt. PhotoCraft speichert keine Tokens.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex wurde nicht gefunden. Installieren und öffnen Sie die Codex-Desktop-App und prüfen Sie dann die Verbindung erneut.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Verwenden Sie die vollständige Codex-Installation. Beim alleinigen Kopieren von codex.exe können Bildbearbeitungskomponenten fehlen.
+	AI Edit	KI-Bearbeitung
+	Codex Account	Codex-Konto

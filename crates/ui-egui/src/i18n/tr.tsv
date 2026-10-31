@@ -4248,3 +4248,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Durak Rengi
 	Shapes can't use patterns yet	Şekiller henüz desen kullanamaz
 	Edit Brush…	Fırçayı Düzenle…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Yapay zekâ ile düzenle…
+@id	edit.ai.codex	Yapay zekâ ile düzenle…
+	Describe your edit	Düzenlemeyi açıklayın
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Görünür tuval ve talimat, ChatGPT oturumunuz kullanılarak Codex’e gönderilir. Sonuç tuvale sığdırılır ve yeni katman olarak eklenir.
+	Codex account has not been checked	Codex hesabı henüz denetlenmedi
+	Checking Codex connection…	Codex bağlantısı denetleniyor…
+	Complete ChatGPT sign-in in your browser	Tarayıcınızda ChatGPT oturumunu açmayı tamamlayın
+	Connected to ChatGPT	ChatGPT’ye bağlı
+	ChatGPT plan	ChatGPT planı
+	ChatGPT sign-in is required	ChatGPT oturumu açılmalı
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex başka bir giriş yöntemi kullanıyor. Aboneliğinizi kullanmak için ChatGPT ile oturum açın.
+	Cancelling sign-in…	Oturum açma iptal ediliyor…
+	Sign-in cancelled	Oturum açma iptal edildi
+	Could not verify the account. Check your connection or sign in again.	Hesap doğrulanamadı. Bağlantınızı denetleyin veya yeniden oturum açın.
+	Connection details	Bağlantı ayrıntıları
+	Sign in with ChatGPT	ChatGPT ile oturum aç
+	Open sign-in page	Giriş sayfasını aç
+	Check connection	Bağlantıyı denetle
+	Cancel sign-in	Oturum açmayı iptal et
+	Copy sign-in link	Giriş bağlantısını kopyala
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Tarayıcı açılamadı. Yeniden deneyin veya giriş bağlantısını tarayıcınıza yapıştırın.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Oturum açma, kurulu Codex çalışma ortamı tarafından yönetilir ve Codex ile paylaşılır. PhotoCraft belirteçleri saklamaz.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex bulunamadı. Codex masaüstü uygulamasını yükleyip açın, ardından bağlantıyı yeniden denetleyin.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Tam Codex kurulumunu kullanın; yalnızca codex.exe dosyasını kopyalamak görsel düzenleme bileşenlerini dışarıda bırakabilir.
+	AI Edit	Yapay zekâ ile düzenleme
+	Codex Account	Codex hesabı

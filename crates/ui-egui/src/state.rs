@@ -498,6 +498,9 @@ pub struct UiState {
     /// Non-modal release-check window; readable and controllable through `ui.inspect`/`ui.set`.
     #[serde(default)]
     pub updates_open: bool,
+    /// Public connection state only; always rechecked after loading UI state.
+    #[serde(default, skip_deserializing)]
+    pub ai_account: crate::ai_account_ui::AccountUi,
     /// Pending GPU fallback warning, visible to automation.
     #[serde(default)]
     pub gpu_fallback_notice: Option<String>,
@@ -617,6 +620,7 @@ impl Default for UiState {
             status_error: false,
             notices: Vec::new(),
             updates_open: false,
+            ai_account: Default::default(),
             gpu_fallback_notice: None,
             kys_offer: None,
             slow_refresh_noticed: Vec::new(),

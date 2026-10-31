@@ -3537,3 +3537,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Solid Color	Warna Solid
 	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
+# Codex image editing and account controls (original translations).
+	AI Edit…	Edit AI…
+@id	edit.ai.codex	Edit AI…
+	Describe your edit	Jelaskan pengeditan
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	Kanvas yang terlihat dan instruksi akan dikirim ke Codex menggunakan login ChatGPT Anda. Hasilnya disesuaikan dengan kanvas dan ditambahkan sebagai lapisan baru.
+	Codex account has not been checked	Akun Codex belum diperiksa
+	Checking Codex connection…	Memeriksa koneksi Codex…
+	Complete ChatGPT sign-in in your browser	Selesaikan login ChatGPT di peramban
+	Connected to ChatGPT	Terhubung ke ChatGPT
+	ChatGPT plan	Paket ChatGPT
+	ChatGPT sign-in is required	Login ChatGPT diperlukan
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	Codex menggunakan metode login lain. Masuk dengan ChatGPT untuk menggunakan langganan Anda.
+	Cancelling sign-in…	Membatalkan login…
+	Sign-in cancelled	Login dibatalkan
+	Could not verify the account. Check your connection or sign in again.	Akun tidak dapat diverifikasi. Periksa koneksi atau masuk kembali.
+	Connection details	Detail koneksi
+	Sign in with ChatGPT	Masuk dengan ChatGPT
+	Open sign-in page	Buka halaman login
+	Check connection	Periksa koneksi
+	Cancel sign-in	Batalkan login
+	Copy sign-in link	Salin tautan login
+	Could not open your browser. Try again or copy the sign-in link into your browser.	Peramban tidak dapat dibuka. Coba lagi atau tempel tautan login ke peramban Anda.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	Login dikelola oleh instalasi Codex dan dibagikan dengan Codex. PhotoCraft tidak menyimpan token.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	Codex tidak ditemukan. Instal dan buka aplikasi desktop Codex, lalu periksa koneksi kembali.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Gunakan instalasi Codex yang lengkap; menyalin codex.exe saja dapat melewatkan komponen pengeditan gambar.
+	AI Edit	Pengeditan AI
+	Codex Account	Akun Codex

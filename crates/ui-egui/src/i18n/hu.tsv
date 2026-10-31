@@ -4434,3 +4434,30 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Színpont színe
 	Shapes can't use patterns yet	Az alakzatok még nem használhatnak mintákat
 	Edit Brush…	Ecset szerkesztése…
+# Codex image editing and account controls (original translations).
+	AI Edit…	AI-szerkesztés…
+@id	edit.ai.codex	AI-szerkesztés…
+	Describe your edit	Írja le a módosítást
+	The visible canvas and instruction will be sent to Codex using your ChatGPT sign-in. The result is fitted to the canvas and added as a new layer.	A látható vásznat és az utasítást a ChatGPT-bejelentkezésével küldjük el a Codexnek. Az eredményt a vászonhoz igazítjuk, és új rétegként adjuk hozzá.
+	Codex account has not been checked	A Codex-fiók még nincs ellenőrizve
+	Checking Codex connection…	Codex-kapcsolat ellenőrzése…
+	Complete ChatGPT sign-in in your browser	Fejezze be a ChatGPT-bejelentkezést a böngészőben
+	Connected to ChatGPT	Csatlakoztatva a ChatGPT-hez
+	ChatGPT plan	ChatGPT-előfizetés
+	ChatGPT sign-in is required	ChatGPT-bejelentkezés szükséges
+	Codex is using another login method. Sign in with ChatGPT to use your subscription.	A Codex más bejelentkezési módot használ. Az előfizetés használatához jelentkezzen be a ChatGPT-vel.
+	Cancelling sign-in…	Bejelentkezés megszakítása…
+	Sign-in cancelled	Bejelentkezés megszakítva
+	Could not verify the account. Check your connection or sign in again.	A fiók nem ellenőrizhető. Ellenőrizze a kapcsolatot, vagy jelentkezzen be újra.
+	Connection details	Kapcsolat részletei
+	Sign in with ChatGPT	Bejelentkezés a ChatGPT-vel
+	Open sign-in page	Bejelentkezési oldal megnyitása
+	Check connection	Kapcsolat ellenőrzése
+	Cancel sign-in	Bejelentkezés megszakítása
+	Copy sign-in link	Bejelentkezési hivatkozás másolása
+	Could not open your browser. Try again or copy the sign-in link into your browser.	A böngésző nem nyitható meg. Próbálja újra, vagy illessze be a bejelentkezési hivatkozást a böngészőbe.
+	Sign-in is managed by the installed Codex runtime and shared with Codex. PhotoCraft does not store tokens.	A bejelentkezést a telepített Codex-környezet kezeli és megosztja a Codexszel. A PhotoCraft nem tárol tokeneket.
+	Codex was not found. Install and open the Codex desktop app, then check the connection again.	A Codex nem található. Telepítse és nyissa meg a Codex asztali alkalmazást, majd ellenőrizze újra a kapcsolatot.
+	Use the complete Codex installation; copying codex.exe alone may omit image-editing components.	Használja a teljes Codex-telepítést; csak a codex.exe másolásakor hiányozhatnak a képszerkesztési összetevők.
+	AI Edit	AI-szerkesztés
+	Codex Account	Codex-fiók
