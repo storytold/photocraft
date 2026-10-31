@@ -269,8 +269,8 @@ fn group_insertion_marker_rect(rect: Rect, before: bool) -> Rect {
 #[cfg(test)]
 mod insertion_marker_tests {
     use super::{card_drop_hit, card_drop_hits, group_append_hit, group_drop_outline_rects, group_gap_drop_hits, group_gap_upper_anchor, group_header_drop_hit, group_insertion_marker_rect, root_append_hit};
-    use crate::pickers::picker_browser_model::{ContainerId, NodeId};
-    use crate::pickers::picker_browser_dragging::PointerRegion;
+    use crate::pickers::picker_browser_model::{ContainerId, DropPosition, HierarchyNode, NodeId, PickerBrowserHierarchy};
+    use crate::pickers::picker_browser_dragging::{DropIndicator, PointerRegion, resolve_drop_candidate};
     use egui::{Pos2, Rect};
 
     #[test]
@@ -317,6 +317,35 @@ mod insertion_marker_tests {
             assert_eq!(hit.region, PointerRegion::GroupBody);
             assert_eq!(hit.container, Some(ContainerId::Group(NodeId::from("group"))));
             assert_eq!(hit.indicator_rect, header);
+        }
+    }
+
+    #[test]
+    fn card_edge_indicators_cover_both_halves_in_grid_and_list_layouts() {
+        let card = Rect::from_min_max(Pos2::new(10.0, 30.0), Pos2::new(110.0, 70.0));
+        for grid in [false, true] {
+            let (leading_pointer, trailing_pointer) = if grid {
+                (Pos2::new(11.0, 50.0), Pos2::new(109.0, 50.0))
+            } else {
+                (Pos2::new(50.0, 31.0), Pos2::new(50.0, 69.0))
+            };
+            let leading = card_drop_hit(card, leading_pointer, grid, NodeId::from("card"), 2, 4);
+            let trailing = card_drop_hit(card, trailing_pointer, grid, NodeId::from("card"), 2, 4);
+            let halves = card_drop_hits(card, grid, NodeId::from("card"), 2, 4);
+
+            assert_eq!(leading.region, PointerRegion::LeadingEdge);
+            assert_eq!(trailing.region, PointerRegion::TrailingEdge);
+            assert_eq!(leading.indicator_rect, halves[0].indicator_rect);
+            assert_eq!(trailing.indicator_rect, halves[1].indicator_rect);
+            assert_eq!(leading.hit_rect, card);
+            assert_eq!(trailing.hit_rect, card);
+            assert_eq!(leading.indicator_rect.width(), if grid { 4.0 } else { card.width() });
+            assert_eq!(leading.indicator_rect.height(), if grid { card.height() } else { 4.0 });
+            assert_eq!(trailing.indicator_rect.width(), if grid { 4.0 } else { card.width() });
+            assert_eq!(trailing.indicator_rect.height(), if grid { card.height() } else { 4.0 });
+            assert_eq!(halves[0].hit_rect.union(halves[1].hit_rect), card);
+            assert_eq!(halves[0].order, 4);
+            assert_eq!(halves[1].order, 5);
         }
     }
 
@@ -376,6 +405,41 @@ mod insertion_marker_tests {
     }
 
     #[test]
+    fn six_pixel_append_gap_resolves_both_three_pixel_zones_for_many_positions_and_widths() {
+        for left in [0.0, 13.0, 127.0] {
+            for top in [0.0, 41.0, 900.0] {
+                for width in [1.0, 64.0, 200.0, 1024.0] {
+                    let gap = Rect::from_min_size(Pos2::new(left, top), egui::vec2(width, 6.0));
+                    let hits = group_gap_drop_hits(gap, NodeId::from("upper"), NodeId::from("lower"), 0, 1, 8);
+                    assert_eq!(hits.len(), 2);
+                    assert_eq!(hits[0].hit_rect, Rect::from_min_max(gap.min, Pos2::new(gap.right(), top + 3.0)));
+                    assert_eq!(hits[1].hit_rect, Rect::from_min_max(Pos2::new(left, top + 3.0), gap.max));
+                    assert_eq!(hits[0].indicator_rect, Rect::from_min_max(Pos2::new(left, top - 0.5), Pos2::new(gap.right(), top + 3.5)));
+                    assert_eq!(hits[1].indicator_rect, Rect::from_min_max(Pos2::new(left, top + 2.5), Pos2::new(gap.right(), top + 6.5)));
+                    assert_eq!(hits[0].depth, 0);
+                    assert_eq!(hits[1].depth, 1);
+                    assert_eq!(hits[0].order + 1, hits[1].order);
+
+                    let hierarchy = PickerBrowserHierarchy::new(vec![
+                        HierarchyNode::group("upper", vec![HierarchyNode::item("upper-card")]),
+                        HierarchyNode::group("lower", vec![HierarchyNode::item("lower-card")]),
+                        HierarchyNode::item("moving-card"),
+                    ])
+                    .unwrap();
+                    let upper = resolve_drop_candidate(&NodeId::from("moving-card"), &hits[0], &hierarchy).unwrap();
+                    let lower = resolve_drop_candidate(&NodeId::from("moving-card"), &hits[1], &hierarchy).unwrap();
+                    assert_eq!(upper.position, DropPosition::After { target: NodeId::from("upper") });
+                    assert_eq!(lower.position, DropPosition::Before { target: NodeId::from("lower") });
+                    assert_eq!(upper.indicator, DropIndicator::InsertionLine { rect: hits[0].indicator_rect });
+                    assert_eq!(lower.indicator, DropIndicator::InsertionLine { rect: hits[1].indicator_rect });
+                    assert!(upper.is_valid());
+                    assert!(lower.is_valid());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn group_gap_anchor_prefers_last_card_in_upper_group_and_falls_back_to_group() {
         use crate::pickers::picker_browser_model::{HierarchyNode as Node, PickerBrowserHierarchy};
         let hierarchy = PickerBrowserHierarchy::new(vec![
@@ -384,6 +448,27 @@ mod insertion_marker_tests {
         assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("inner")), (NodeId::from("last"), 2));
         let empty = PickerBrowserHierarchy::new(vec![Node::group("outer", vec![Node::group("empty", vec![])])]).unwrap();
         assert_eq!(group_gap_upper_anchor(&empty, &NodeId::from("empty")), (NodeId::from("empty"), 1));
+    }
+
+    #[test]
+    fn group_gap_upper_anchor_uses_the_last_direct_card_at_each_nesting_level() {
+        use crate::pickers::picker_browser_model::HierarchyNode as Node;
+
+        let hierarchy = PickerBrowserHierarchy::new(vec![
+            Node::group(
+                "root",
+                vec![
+                    Node::item("root-first"),
+                    Node::group("nested", vec![Node::item("nested-first"), Node::group("deep", vec![]), Node::item("nested-last")]),
+                    Node::item("root-last"),
+                ],
+            ),
+        ])
+        .unwrap();
+
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("root")), (NodeId::from("root-last"), 1));
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("nested")), (NodeId::from("nested-last"), 2));
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("deep")), (NodeId::from("deep"), 2));
     }
 
     #[test]

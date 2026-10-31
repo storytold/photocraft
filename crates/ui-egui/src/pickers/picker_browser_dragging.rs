@@ -351,6 +351,27 @@ mod tests {
     }
 
     #[test]
+    fn overlapping_drop_regions_always_select_exactly_one_deepest_latest_candidate() {
+        let pointer = Pos2::new(20.0, 25.0);
+        for depth_count in 1..=5 {
+            for order_count in 1..=5 {
+                let mut hits = Vec::new();
+                for depth in 0..depth_count {
+                    for order in 0..order_count {
+                        let mut candidate = hit(PointerRegion::LeadingEdge, Some("target"), None);
+                        candidate.depth = depth;
+                        candidate.order = order;
+                        hits.push(candidate);
+                    }
+                }
+                let expected = hits.iter().enumerate().max_by_key(|(_, candidate)| (candidate.depth, candidate.order)).map(|(index, _)| index);
+                assert_eq!(arbitrate_hit_index(pointer, &hits), expected, "depth_count={depth_count}, order_count={order_count}");
+                assert!(arbitrate_hit_index(Pos2::new(500.0, 500.0), &hits).is_none());
+            }
+        }
+    }
+
+    #[test]
     fn root_append_is_an_explicit_container_end_candidate() {
         let candidate = resolve_drop_candidate(
             &NodeId::from("card"),
@@ -408,6 +429,63 @@ mod tests {
 
         let empty = DragSession::new(NodeId::from("card"));
         assert_eq!(empty.commit_with(|_| Ok::<(), ()>(())), DropCommitResult::NoCandidate);
+    }
+
+    #[test]
+    fn every_source_and_drop_region_uses_model_validation_before_adapter_commit() {
+        let hierarchy = PickerBrowserHierarchy::new(vec![
+            HierarchyNode::group(
+                "A",
+                vec![HierarchyNode::item("a1"), HierarchyNode::group("B", vec![HierarchyNode::item("b1")]), HierarchyNode::item("a2")],
+            ),
+            HierarchyNode::item("root-card"),
+            HierarchyNode::group("C", vec![]),
+        ])
+        .unwrap();
+        fn collect_ids(nodes: &[HierarchyNode], output: &mut Vec<NodeId>) {
+            for node in nodes {
+                output.push(node.id().clone());
+                collect_ids(node.children(), output);
+            }
+        }
+        let mut ids = Vec::new();
+        collect_ids(hierarchy.roots(), &mut ids);
+
+        let mut hits = Vec::new();
+        for target in &ids {
+            hits.push(hit(PointerRegion::LeadingEdge, Some(&target.to_string()), None));
+            hits.push(hit(PointerRegion::TrailingEdge, Some(&target.to_string()), None));
+            if hierarchy.node(target).is_some_and(HierarchyNode::is_group) {
+                hits.push(hit(PointerRegion::GroupBody, None, Some(ContainerId::Group(target.clone()))));
+                hits.push(hit(PointerRegion::ContainerEnd, None, Some(ContainerId::Group(target.clone()))));
+            }
+        }
+        hits.push(hit(PointerRegion::ContainerEnd, None, Some(ContainerId::Root)));
+
+        for source in &ids {
+            for hit in &hits {
+                let Some(candidate) = resolve_drop_candidate(source, hit, &hierarchy) else { panic!("every well-formed hit region resolves") };
+                let model_accepts = hierarchy.validate_position(source, &candidate.position).is_ok();
+                assert_eq!(candidate.is_valid(), model_accepts, "source={source:?}, hit={hit:?}");
+
+                let mut session = DragSession::new(source.clone());
+                session.resolve(Pos2::new(20.0, 25.0), hit, &hierarchy);
+                let mut adapter_called = false;
+                let result = session.commit_with(|intent| {
+                    adapter_called = true;
+                    assert_eq!(&intent.source, source);
+                    assert_eq!(intent.position, candidate.position);
+                    Ok::<(), ()>(())
+                });
+                if model_accepts {
+                    assert_eq!(result, DropCommitResult::Committed, "source={source:?}, hit={hit:?}");
+                    assert!(adapter_called);
+                } else {
+                    assert!(matches!(result, DropCommitResult::Rejected(_)), "source={source:?}, hit={hit:?}");
+                    assert!(!adapter_called, "invalid candidates must not reach the adapter: source={source:?}, hit={hit:?}");
+                }
+            }
+        }
     }
 
     #[test]

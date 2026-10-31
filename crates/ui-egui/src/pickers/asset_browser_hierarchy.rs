@@ -121,6 +121,7 @@ fn hierarchy_level<'a, T>(items: Vec<HierarchyEntry<'a, T>>, prefix: &[String]) 
 #[cfg(test)]
 mod tests {
     use super::{HierarchyGroup, MAX_HIERARCHY_DEPTH, draw_hierarchy, hierarchy_tree};
+    use std::collections::BTreeSet;
 
     fn always_open<T>(_: &HierarchyGroup<'_, T>) -> bool {
         true
@@ -153,5 +154,116 @@ mod tests {
         output.textures_delta.clear();
 
         assert_eq!(*sequence.borrow(), ["cards:A,B", "group:Child", "cards:Child 1,Child 2", "cards:C,D"]);
+    }
+
+    #[test]
+    fn projection_preserves_interleaved_cards_and_nested_groups_in_first_seen_order() {
+        let items = [
+            (Vec::<String>::new(), "root-before"),
+            (vec!["A".to_string()], "a-before"),
+            (vec!["A".to_string(), "B".to_string()], "b-before"),
+            (vec!["A".to_string(), "B".to_string(), "C".to_string()], "c-leaf"),
+            (vec!["A".to_string(), "B".to_string()], "b-after"),
+            (vec!["A".to_string()], "a-after"),
+            (vec!["D".to_string()], "d-leaf"),
+            (Vec::new(), "root-after"),
+        ];
+        let tree = hierarchy_tree(items.iter().map(|(path, name)| (path.as_slice(), name)).collect(), MAX_HIERARCHY_DEPTH);
+        let ctx = egui::Context::default();
+        let sequence = std::cell::RefCell::new(Vec::new());
+        let mut is_open = always_open::<&str>;
+        let mut draw_group = |_: &mut egui::Ui, group: &HierarchyGroup<'_, &str>, _: bool, depth| {
+            sequence.borrow_mut().push(format!("group:{}:{depth}", group.path.join("/")));
+        };
+        let mut draw_items = |_: &mut egui::Ui, run: &[&&str], depth| {
+            sequence.borrow_mut().push(format!("cards:{depth}:{}", run.iter().map(|name| **name).collect::<Vec<_>>().join(",")));
+        };
+
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            draw_hierarchy(ui, &tree, 0, MAX_HIERARCHY_DEPTH, &mut is_open, &mut draw_group, &mut draw_items);
+        });
+        output.textures_delta.clear();
+
+        assert_eq!(
+            *sequence.borrow(),
+            [
+                "cards:0:root-before",
+                "group:A:0",
+                "cards:1:a-before",
+                "group:A/B:1",
+                "cards:2:b-before",
+                "group:A/B/C:2",
+                "cards:3:c-leaf",
+                "cards:2:b-after",
+                "cards:1:a-after",
+                "group:D:0",
+                "cards:1:d-leaf",
+                "cards:0:root-after",
+            ]
+        );
+    }
+
+    #[test]
+    fn every_nested_collapse_combination_only_traverses_open_ancestor_paths() {
+        let items = [
+            (Vec::<String>::new(), "root-before"),
+            (vec!["A".to_string()], "a-before"),
+            (vec!["A".to_string(), "B".to_string()], "b-before"),
+            (vec!["A".to_string(), "B".to_string(), "C".to_string()], "c-leaf"),
+            (vec!["A".to_string(), "B".to_string()], "b-after"),
+            (vec!["A".to_string()], "a-after"),
+            (vec!["D".to_string()], "d-leaf"),
+            (Vec::new(), "root-after"),
+        ];
+        let tree = hierarchy_tree(items.iter().map(|(path, name)| (path.as_slice(), name)).collect(), MAX_HIERARCHY_DEPTH);
+        let paths = ["A", "A/B", "A/B/C", "D"];
+
+        for mask in 0..(1usize << paths.len()) {
+            let open: BTreeSet<String> = paths.iter().enumerate().filter(|(index, _)| mask & (1 << index) != 0).map(|(_, path)| (*path).to_owned()).collect();
+            let groups_seen = std::cell::RefCell::new(Vec::new());
+            let items_seen = std::cell::RefCell::new(Vec::new());
+            let mut is_open = |group: &HierarchyGroup<'_, &str>| -> bool { open.contains(&group.path.join("/")) };
+            let mut draw_group = |_: &mut egui::Ui, group: &HierarchyGroup<'_, &str>, group_open: bool, depth| {
+                groups_seen.borrow_mut().push((group.path.join("/"), group_open, depth));
+            };
+            let mut draw_items = |_: &mut egui::Ui, run: &[&&str], depth| {
+                items_seen.borrow_mut().extend(run.iter().map(|name| (depth, (**name).to_owned())));
+            };
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                draw_hierarchy(ui, &tree, 0, MAX_HIERARCHY_DEPTH, &mut is_open, &mut draw_group, &mut draw_items);
+            });
+            output.textures_delta.clear();
+
+            let expected_groups = [("A", 0usize), ("A/B", 1usize), ("A/B/C", 2usize), ("D", 0usize)]
+            .into_iter()
+            .filter(|(path, _)| match *path {
+                "A" | "D" => true,
+                "A/B" => open.contains("A"),
+                "A/B/C" => open.contains("A") && open.contains("A/B"),
+                _ => false,
+            })
+            .map(|(path, depth)| (path.to_owned(), open.contains(path), depth))
+            .collect::<Vec<_>>();
+            assert_eq!(*groups_seen.borrow(), expected_groups, "collapse mask {mask:04b}");
+
+            let mut expected_items = vec![(0usize, "root-before".to_owned())];
+            if open.contains("A") {
+                expected_items.push((1usize, "a-before".to_owned()));
+                if open.contains("A/B") {
+                    expected_items.push((2usize, "b-before".to_owned()));
+                    if open.contains("A/B/C") {
+                        expected_items.push((3usize, "c-leaf".to_owned()));
+                    }
+                    expected_items.push((2usize, "b-after".to_owned()));
+                }
+                expected_items.push((1usize, "a-after".to_owned()));
+            }
+            if open.contains("D") {
+                expected_items.push((1usize, "d-leaf".to_owned()));
+            }
+            expected_items.push((0usize, "root-after".to_owned()));
+            assert_eq!(*items_seen.borrow(), expected_items, "collapse mask {mask:04b}");
+        }
     }
 }

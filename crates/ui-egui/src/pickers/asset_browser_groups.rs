@@ -83,7 +83,8 @@ pub(crate) fn inset_row_rect(rect: Rect, depth: usize) -> Rect {
 
 #[cfg(test)]
 mod tests {
-    use super::{inset_row_rect, row_indent};
+    use super::{group_open, inset_row_rect, row_indent};
+    use crate::pickers::picker_state::PresetUi;
     use egui::{Rect, pos2};
 
     #[test]
@@ -94,5 +95,25 @@ mod tests {
         assert_eq!(row_indent(1), 20.0);
         assert_eq!(row_indent(2), 40.0);
         assert_eq!(inset_row_rect(rect, 1), Rect::from_min_max(pos2(30.0, 20.0), pos2(210.0, 50.0)));
+    }
+
+    #[test]
+    fn every_root_group_toggle_combination_overrides_each_default_independently() {
+        let names = ["Gradients", "Favorites", "Recent", "Imported", "Custom"];
+        for all_groups_open in [false, true] {
+            for toggles in 0..(1usize << names.len()) {
+                let mut state = PresetUi::default();
+                for (index, name) in names.iter().enumerate() {
+                    if toggles & (1 << index) != 0 {
+                        state.toggled.insert(format!("gradients/{name}"));
+                    }
+                }
+                for (index, name) in names.iter().enumerate() {
+                    let default_open = index == 0 || all_groups_open;
+                    assert_eq!(group_open(&state, "gradients", index, name, all_groups_open), default_open != (toggles & (1 << index) != 0),
+                        "all_groups_open={all_groups_open}, toggle mask={toggles:05b}, group={name}");
+                }
+            }
+        }
     }
 }

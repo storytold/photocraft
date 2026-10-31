@@ -559,6 +559,40 @@ mod tests {
         nodes.iter().map(|node| node.id().to_string()).collect()
     }
 
+    fn mixed_tree() -> PickerBrowserHierarchy {
+        PickerBrowserHierarchy::new(vec![
+            Node::item("root-card-a"),
+            Node::group(
+                "root-group-a",
+                vec![
+                    Node::item("nested-card-a"),
+                    Node::group("nested-group-a", vec![Node::item("deep-card-a"), Node::item("deep-card-b")]),
+                    Node::item("nested-card-b"),
+                ],
+            ),
+            Node::group("root-group-b", vec![Node::item("nested-card-c"), Node::group("nested-group-b", vec![])]),
+            Node::item("root-card-b"),
+        ])
+        .unwrap()
+    }
+
+    fn all_ids(nodes: &[Node], output: &mut Vec<NodeId>) {
+        for node in nodes {
+            output.push(node.id().clone());
+            all_ids(node.children(), output);
+        }
+    }
+
+    fn assert_same_nodes(actual: &PickerBrowserHierarchy, expected: &[NodeId]) {
+        let mut actual_ids = Vec::new();
+        all_ids(actual.roots(), &mut actual_ids);
+        actual_ids.sort();
+        let mut expected_ids = expected.to_vec();
+        expected_ids.sort();
+        assert_eq!(actual_ids, expected_ids);
+        assert_eq!(actual.validate(), Ok(()));
+    }
+
     #[test]
     fn before_and_after_are_sibling_insertions_at_the_targets_parent() {
         let mut hierarchy = tree();
@@ -727,5 +761,124 @@ mod tests {
             .move_node(&NodeId::from("group-32"), &DropPosition::AppendTo { container: ContainerId::Root })
             .unwrap();
         assert_eq!(hierarchy.parent_of(&NodeId::from("group-32")), Some(ContainerId::Root));
+    }
+
+    #[test]
+    fn every_node_pair_supports_consistent_before_and_after_reordering_or_rejects_atomically() {
+        let original = mixed_tree();
+        let mut node_ids = Vec::new();
+        all_ids(original.roots(), &mut node_ids);
+
+        for source in &node_ids {
+            for target in &node_ids {
+                for position in [DropPosition::Before { target: target.clone() }, DropPosition::After { target: target.clone() }] {
+                    let mut hierarchy = original.clone();
+                    let result = hierarchy.move_node(source, &position);
+                    match result {
+                        Ok(()) => {
+                            let target_parent = hierarchy.parent_of(target).expect("target remains in the tree");
+                            assert_eq!(hierarchy.parent_of(source), Some(target_parent.clone()), "source={source:?}, target={target:?}, position={position:?}");
+                            let siblings = hierarchy.children_of(&target_parent).expect("target parent exists");
+                            let source_index = siblings.iter().position(|node| node.id() == source).expect("source is a sibling of target");
+                            let target_index = siblings.iter().position(|node| node.id() == target).expect("target remains a sibling");
+                            match position {
+                                DropPosition::Before { .. } => assert_eq!(source_index + 1, target_index, "source={source:?}, target={target:?}"),
+                                DropPosition::After { .. } => assert_eq!(target_index + 1, source_index, "source={source:?}, target={target:?}"),
+                                _ => unreachable!(),
+                            }
+                            assert_same_nodes(&hierarchy, &node_ids);
+                        }
+                        Err(_) => assert_eq!(hierarchy, original, "rejected source={source:?}, target={target:?}, position={position:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn every_node_can_be_prepend_or_append_moved_to_every_container_without_losing_structure() {
+        let original = mixed_tree();
+        let mut node_ids = Vec::new();
+        all_ids(original.roots(), &mut node_ids);
+        let containers = std::iter::once(ContainerId::Root)
+            .chain(node_ids.iter().filter(|id| original.node(id).is_some_and(Node::is_group)).cloned().map(ContainerId::Group))
+            .collect::<Vec<_>>();
+
+        for source in &node_ids {
+            for container in &containers {
+                let positions = match container {
+                    ContainerId::Root => vec![DropPosition::AppendTo { container: ContainerId::Root }],
+                    ContainerId::Group(group) => vec![DropPosition::PrependTo { group: group.clone() }, DropPosition::AppendTo { container: container.clone() }],
+                };
+                for position in positions {
+                    let mut hierarchy = original.clone();
+                    match hierarchy.move_node(source, &position) {
+                        Ok(()) => {
+                            assert_eq!(hierarchy.parent_of(source), Some(container.clone()), "source={source:?}, position={position:?}");
+                            let siblings = hierarchy.children_of(container).expect("valid destination container");
+                            match position {
+                                DropPosition::PrependTo { .. } => assert_eq!(siblings.first().map(Node::id), Some(source)),
+                                DropPosition::AppendTo { .. } => assert_eq!(siblings.last().map(Node::id), Some(source)),
+                                _ => unreachable!(),
+                            }
+                            assert_same_nodes(&hierarchy, &node_ids);
+                        }
+                        Err(_) => assert_eq!(hierarchy, original, "rejected source={source:?}, position={position:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn mixed_move_sequences_preserve_identity_parentage_and_order_across_operation_types() {
+        let mut hierarchy = mixed_tree();
+        let expected_ids = {
+            let mut ids = Vec::new();
+            all_ids(hierarchy.roots(), &mut ids);
+            ids
+        };
+
+        let moves = [
+            ("root-card-a", DropPosition::PrependTo { group: "root-group-a".into() }),
+            ("nested-group-a", DropPosition::After { target: "nested-card-b".into() }),
+            ("root-group-b", DropPosition::PrependTo { group: "nested-group-a".into() }),
+            ("deep-card-a", DropPosition::AppendTo { container: ContainerId::Root }),
+            ("nested-card-c", DropPosition::Before { target: "root-card-b".into() }),
+            ("root-group-a", DropPosition::AppendTo { container: ContainerId::Root }),
+            ("root-card-b", DropPosition::PrependTo { group: "nested-group-b".into() }),
+        ];
+
+        for (source, position) in moves {
+            hierarchy.move_node(&NodeId::from(source), &position).unwrap_or_else(|error| panic!("{source} -> {position:?}: {error:?}"));
+            assert_same_nodes(&hierarchy, &expected_ids);
+        }
+
+        assert_eq!(hierarchy.parent_of(&NodeId::from("root-card-a")), Some(ContainerId::Group("root-group-a".into())));
+        assert_eq!(hierarchy.parent_of(&NodeId::from("root-group-b")), Some(ContainerId::Group("nested-group-a".into())));
+        assert_eq!(hierarchy.parent_of(&NodeId::from("deep-card-a")), Some(ContainerId::Root));
+        assert_eq!(hierarchy.parent_of(&NodeId::from("root-group-a")), Some(ContainerId::Root));
+        assert_eq!(hierarchy.parent_of(&NodeId::from("root-card-b")), Some(ContainerId::Group("nested-group-b".into())));
+    }
+
+    #[test]
+    fn missing_sources_targets_and_containers_are_rejected_without_partial_mutation() {
+        let original = mixed_tree();
+        let invalid_positions = [
+            DropPosition::Before { target: "missing".into() },
+            DropPosition::After { target: "missing".into() },
+            DropPosition::PrependTo { group: "missing".into() },
+            DropPosition::AppendTo { container: ContainerId::Group("missing".into()) },
+            DropPosition::PrependTo { group: "root-card-a".into() },
+            DropPosition::AppendTo { container: ContainerId::Group("root-card-a".into()) },
+        ];
+
+        for source in [NodeId::from("missing"), NodeId::from("root-card-a"), NodeId::from("root-group-a")] {
+            for position in &invalid_positions {
+                let mut hierarchy = original.clone();
+                assert!(hierarchy.move_node(&source, position).is_err(), "source={source:?}, position={position:?}");
+                assert_eq!(hierarchy, original, "rejected moves must be atomic: source={source:?}, position={position:?}");
+            }
+        }
     }
 }
