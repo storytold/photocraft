@@ -144,6 +144,10 @@ pub struct ToolOptions {
     pub move_target: String,
     #[serde(default)]
     pub move_show_transform: bool,
+    /// Move tool and Properties › Align To: Canvas aligns the selected layers to the canvas;
+    /// off (Selection) to their own bounds, or an active selection's (#10337).
+    #[serde(default)]
+    pub move_align_to_canvas: bool,
     /// Last interpolation selected in the Transform options bar; unset follows General's default.
     #[serde(default)]
     pub transform_interpolation: Option<photocraft_engine::prefs::Interpolation>,
@@ -435,6 +439,7 @@ impl Default for ToolOptions {
             move_auto_select: true,
             move_target: default_move_target(),
             move_show_transform: false,
+            move_align_to_canvas: false,
             transform_interpolation: None,
             crop_ratio: String::new(),
             crop_custom_ratio_width: 0.0,

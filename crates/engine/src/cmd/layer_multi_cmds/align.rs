@@ -60,6 +60,18 @@ pub(super) fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
         }
         let target = match to.as_str() {
             "canvas" => doc.bounds(),
+            // Align To: Canvas with artboards, as in Photoshop: the artboard the layers share, so
+            // they stay on their board; the canvas when they are on none or on several (#10337).
+            "artboard" => {
+                // The same board for every layer, by identity: two boards can hold the same
+                // rectangle, and layers on either of them belong to neither alone.
+                let mut boards = items.iter().map(|(id, _)| board_of(doc, *id));
+                let first = boards.next().flatten();
+                match first.filter(|_| boards.all(|b| b == first)) {
+                    Some(board) => board_rect(doc, board).unwrap_or_else(|| doc.bounds()),
+                    None => doc.bounds(),
+                }
+            }
             "selection" => doc.selection.as_ref().map(|m| m.content_bounds()).ok_or_else(|| EngineError::Other("there is no selection to align to".into()))?,
             "auto" | "layers" => match (&doc.selection, sel.len()) {
                 // Photoshop: with an active selection, the layers align to its bounds (Layer › Align
@@ -70,7 +82,7 @@ pub(super) fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
                 (None, 1) if to == "auto" => items.first().map_or_else(|| doc.bounds(), |(id, _)| board_or_canvas(doc, *id)),
                 _ => items.iter().fold(Rect::EMPTY, |a, (_, b)| a.union(b)),
             },
-            other => return Err(bad(&cmd, format!("`to` must be auto|layers|selection|canvas, not `{other}`"))),
+            other => return Err(bad(&cmd, format!("`to` must be auto|layers|selection|canvas|artboard, not `{other}`"))),
         };
         if target.is_empty() {
             return Err(EngineError::Other("nothing to align to".into()));
@@ -92,10 +104,20 @@ pub(super) fn align(s: &mut Session, p: &Value, kind: &str) -> Result<Value> {
     Ok(json!({"moved": moved}))
 }
 
+/// The artboard holding `id`, if any. An artboard is not held by itself.
+fn board_of(doc: &Document, id: LayerId) -> Option<LayerId> {
+    doc.artboard_of(id).filter(|board| *board != id)
+}
+
+/// An artboard layer's rectangle.
+fn board_rect(doc: &Document, board: LayerId) -> Option<Rect> {
+    doc.layer(board)?.artboard().map(|a| a.rect)
+}
+
 /// The bounds a lone layer aligns to: the artboard holding it, else the canvas. An artboard
 /// itself aligns to the canvas.
 fn board_or_canvas(doc: &Document, id: LayerId) -> Rect {
-    doc.artboard_of(id).filter(|board| *board != id).and_then(|board| doc.layer(board)?.artboard().map(|a| a.rect)).unwrap_or_else(|| doc.bounds())
+    board_of(doc, id).and_then(|board| board_rect(doc, board)).unwrap_or_else(|| doc.bounds())
 }
 
 /// One move per layer (first wins), skipping layers nested in another moved layer.
