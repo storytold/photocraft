@@ -897,3 +897,45 @@ fn dragging_the_mask_thumbnail_onto_a_group_moves_or_copies_it() {
         assert_eq!(layer(&h, masked).mask.is_some(), copy, "copy: {copy}: the original stays only with ⌥");
     }
 }
+
+/// #10485: a layer mask dragged to the Layers list's bottom edge scrolls the list, as a layer
+/// drag does, so it can be dropped on a layer scrolled out of view. The list stayed put.
+#[test]
+fn dragging_a_mask_to_the_list_edge_scrolls_to_rows_out_of_view() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let target = s.execute("layer.new.layer", json!({"name": "Target"})).unwrap()["layer"].as_u64().unwrap();
+    for i in 0..40 {
+        s.execute("layer.new.layer", json!({"name": format!("Filler {i}")})).unwrap();
+    }
+    let masked = s.execute("layer.new.layer", json!({"name": "Masked"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": masked})).unwrap();
+    let mut h = harness(s, 0, 1.0, 290.0);
+    let window_bottom = h.ctx.content_rect().bottom();
+    assert!(h.get_by_label("Target").rect().top() > window_bottom, "the target starts out of view");
+    let from = mask_rect(&h, masked, MaskKind::Pixel).center();
+    let start = h.get_by_label("Masked").rect();
+    h.hover_at(from);
+    h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+    h.run_steps(1);
+    h.event(egui::Event::PointerMoved(from + vec2(0.0, 12.0)));
+    h.run_steps(2);
+    // Held at the bottom of the window, below the list's last visible row.
+    let bottom = pos2(from.x, window_bottom - 2.0);
+    for _ in 0..240 {
+        h.event(egui::Event::PointerMoved(bottom));
+        h.run_steps(1);
+    }
+    let moved = h.get_by_label("Masked").rect();
+    assert!(moved.top() < start.top() - 1.0, "the list scrolled down: {start:?} → {moved:?}");
+    let to = h.get_by_label("Target").rect().center();
+    assert!(to.y < window_bottom, "the target scrolled into view: {to:?}");
+    for k in 1..=4 {
+        h.event(egui::Event::PointerMoved(bottom + (to - bottom) * (k as f32 / 4.0)));
+        h.run_steps(1);
+    }
+    h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(3);
+    assert!(layer(&h, target).mask.is_some(), "the target has the mask");
+    assert!(layer(&h, masked).mask.is_none(), "moved, not copied");
+}
