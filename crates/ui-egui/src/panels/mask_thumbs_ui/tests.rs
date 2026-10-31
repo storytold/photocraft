@@ -869,3 +869,31 @@ fn selecting_an_adjustment_layer_from_another_layer_targets_its_mask() {
         assert!(!h.state().ui.mask_target && !h.state().ui.vector_mask_target, "{command}: a pixel layer targets its contents");
     }
 }
+
+/// #10485: dragging the layer mask's thumbnail onto a group's row moves the mask to the group, and
+/// ⌥ copies it, as in Photoshop. It had no effect.
+#[test]
+fn dragging_the_mask_thumbnail_onto_a_group_moves_or_copies_it() {
+    for copy in [false, true] {
+        let (mut s, masked, shape) = session();
+        let group = s.execute("layer.groupLayers", json!({"layer": shape, "name": "Grp"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.select", json!({"layer": masked})).unwrap();
+        let mut h = harness(s, 0, 1.0, 290.0);
+        let from = mask_rect(&h, masked, MaskKind::Pixel).center();
+        let to = h.get_by_label("Grp").rect().center();
+        let modifiers = if copy { Modifiers::ALT } else { Modifiers::NONE };
+        h.hover_at(from);
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers });
+        h.run_steps(1);
+        for k in 1..=8 {
+            h.event(egui::Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers });
+        h.run_steps(3);
+        assert!(layer(&h, group).mask.is_some(), "copy: {copy}: the group has the mask");
+        assert_eq!(layer(&h, masked).mask.is_some(), copy, "copy: {copy}: the original stays only with ⌥");
+    }
+}
