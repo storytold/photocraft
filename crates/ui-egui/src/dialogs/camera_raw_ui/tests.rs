@@ -324,9 +324,26 @@ fn dialog_drives_the_engine() {
     assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": "x"}}})).unwrap().is_err());
 }
 
+std::thread_local! {
+    /// Held by a test's thread from its first `raw_app` to the test's end.
+    static RAW_OPEN_TURN: std::cell::RefCell<Option<std::sync::MutexGuard<'static, ()>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// An app whose importer is the real one, opening a synthetic DNG.
+///
+/// Raw opens keep their decode in one process-wide list of two (`photocraft_io::raw`), so tests
+/// that open raws take turns: a parallel test's open would otherwise evict the decode another
+/// test is about to take. The turn is held until the test's thread ends (nextest runs each test
+/// in its own process, where this costs nothing).
 fn raw_app() -> (PhotocraftApp, Vec<u8>) {
     use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    RAW_OPEN_TURN.with(|held| {
+        let mut held = held.borrow_mut();
+        if held.is_none() {
+            *held = Some(TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        }
+    });
     let services = crate::Services {
         import: Some(Box::new(|name: &str, b: &[u8], opts: &photocraft_io::ImportOptions| {
             photocraft_io::import_with_options(name, b, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
@@ -382,6 +399,41 @@ fn pixels(app: &PhotocraftApp) -> Vec<f32> {
     (0..32).flat_map(|y| (0..48).map(move |x| (x, y))).flat_map(|(x, y)| s.rgba(x, y)).collect()
 }
 
+/// #9432: a raw open decodes the file once. The dialog's preview curve and Open's re-develop
+/// reuse the open's sensor data and look, give the pixels of decoding again, and let go of
+/// the sensor data when the dialog closes.
+#[test]
+fn a_raw_open_decodes_the_file_once_and_frees_it_with_the_dialog() {
+    use photocraft_io::raw::decodes_on_this_thread;
+    let ctx = egui::Context::default();
+    let develop = |reuse: bool, commit: bool| {
+        let (mut app, mut dng) = raw_app();
+        // Kept decodes are found by file contents: other tests open the same synthetic DNG.
+        dng.extend_from_slice(b"a_raw_open_decodes_the_file_once");
+        let before = decodes_on_this_thread();
+        app.open_bytes("IMG_0007.dng", &dng).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        let raw_open = app.camera_raw.as_mut().unwrap().raw_open.as_mut().unwrap();
+        let sensor = raw_open.decoded.as_ref().map(std::sync::Arc::downgrade).expect("the dialog holds the open's decode");
+        if !reuse {
+            raw_open.decoded = None;
+        }
+        assert!(sensor.upgrade().is_some() || !reuse);
+        let ui = if commit { json!({"set": {"exposure": 1.0, "temperature": 30}, "commit": true}) } else { json!({"cancel": true}) };
+        menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": ui})).unwrap().unwrap();
+        assert!(app.camera_raw.is_none());
+        assert!(sensor.upgrade().is_none(), "the sensor data is freed when the dialog is closed");
+        (decodes_on_this_thread() - before, if commit { pixels(&app) } else { Vec::new() })
+    };
+    let (decodes, reused) = develop(true, true);
+    assert_eq!(decodes, 1, "open, dialog and commit share one decode");
+    let (decodes, again) = develop(false, true);
+    assert_eq!(decodes, 2, "without the kept decode the commit decodes again");
+    assert_eq!(reused, again, "the same pixels either way");
+    assert_eq!(develop(true, false).0, 1, "Cancel decodes nothing more");
+}
+
 #[test]
 fn the_demosaic_method_is_chosen_at_open() {
     let (mut app, dng) = raw_app();
@@ -422,7 +474,7 @@ fn the_demosaic_method_is_chosen_at_open() {
     app.pending_raw_open.take();
     app.run("prefs.set", json!({"path": "rawDefaults.demosaic", "value": "ahd"})).unwrap();
     let document = app.session.active().unwrap().doc.id;
-    queue_open_dialog(&mut app, document, "IMG_0004.dng", None, Some(&dng), &warnings).unwrap();
+    queue_open_dialog(&mut app, document, "IMG_0004.dng", None, Some(&std::sync::Arc::new(dng.clone())), &warnings).unwrap();
     let raw = app.pending_raw_open.take().unwrap();
     use photocraft_io::raw::Demosaic;
     assert_eq!((raw.developed_with, raw.demosaic), (Demosaic::Bilinear, Demosaic::Bilinear));
@@ -558,7 +610,8 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
                 path: None,
                 bytes: None,
                 developed_with: Default::default(),
-                demosaic: Default::default()
+                demosaic: Default::default(),
+                decoded: None,
             }
         )
         .is_err()

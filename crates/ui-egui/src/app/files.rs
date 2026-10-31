@@ -69,7 +69,10 @@ impl PhotocraftApp {
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let opts = photocraft_io::ImportOptions {
+            keep_raw: self.session.prefs().raw_defaults.open_in_camera_raw,
+            ..photocraft_engine::jobs::import_options(self.session.prefs())
+        };
         let (mut doc, warnings, damaged) = if photocraft_io::is_psd(bytes) {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning.
