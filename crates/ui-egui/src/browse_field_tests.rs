@@ -81,3 +81,17 @@ fn image_processor_folders_are_chosen_with_browse() {
     assert_eq!(field(&h, "output"), Some(json!("/tmp/web")));
     assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }, FileDialogRequest::Folder { .. }]));
 }
+
+#[test]
+fn contact_sheet_can_select_multiple_image_files() {
+    let paths = vec!["/tmp/portrait.png".to_string(), "/tmp/landscape.jpg".to_string()];
+    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::Paths(paths.clone()))]);
+    let ctx = h.ctx.clone();
+    crate::menus::invoke(h.state_mut(), &ctx, "file.automate.contactSheetII", json!({})).unwrap();
+    h.run_steps(4);
+    assert_eq!(h.query_all_by_label("Browse…").count(), 2, "one picker for a source folder and one for selected files");
+    h.query_all_by_label("Browse…").nth(1).unwrap().click();
+    h.run_steps(4);
+    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Open { multiple: true, extensions: None, .. }]));
+    assert_eq!(field(&h, "selectedFiles"), Some(json!(paths)));
+}

@@ -153,6 +153,31 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
         for k in keys {
             let v = f.get(&k).cloned().unwrap_or(Value::Null);
+            if f.get("__command").and_then(Value::as_str) == Some("file.automate.contactSheetII")
+                && f.get("sheetPreset").and_then(Value::as_str).is_some_and(|preset| preset != "custom")
+                && matches!(k.as_str(), "units" | "width" | "height")
+            {
+                continue;
+            }
+            if f.get("__command").and_then(Value::as_str) == Some("file.automate.contactSheetII")
+                && f.get("layout").and_then(Value::as_str) == Some("native")
+                && matches!(k.as_str(), "columns" | "rows")
+            {
+                continue;
+            }
+            if k == "selectedFiles" && f.get("__command").and_then(Value::as_str) == Some("file.automate.contactSheetII") {
+                ui.label(tl!("Source Files"));
+                let count = v.as_array().map_or(0, Vec::len);
+                ui.horizontal(|ui| {
+                    ui.label(count.to_string());
+                    if crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
+                        browse = Some(k.clone());
+                    }
+                });
+                f.insert(k, v);
+                ui.end_row();
+                continue;
+            }
             if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
                 let label = ui.label(tl!("File Naming"));
                 let mut naming = v.as_str().unwrap_or_default().to_owned();
