@@ -866,8 +866,14 @@ fn trim(s: &mut Session, p: &Value) -> Result<Value> {
         "bottomRight" => buf.px.last().copied(),
         _ => None,
     };
+    // Transparency is judged on the image as stored at its depth: alpha under half a step rounds to 0.
+    let half_step = match d.doc.depth {
+        SampleType::U8 => Some(0.5 / 255.0),
+        SampleType::U16 => Some(0.5 / 65535.0),
+        SampleType::F32 => None,
+    };
     let differs = |q: [f32; 4]| match reference {
-        None => q[3] > 0.0,
+        None => half_step.map_or(q[3] > 0.0, |h| q[3] >= h),
         Some(r) => (0..4).any(|c| (q[c] * q[3] - r[c] * r[3]).abs() > 0.5 / 255.0 || (c == 3 && (q[3] - r[3]).abs() > 0.5 / 255.0)),
     };
     let mut b = Rect::EMPTY;

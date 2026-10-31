@@ -863,6 +863,28 @@ fn trim_based_on_top_left_colour() {
 }
 
 #[test]
+fn trim_transparent_drops_alpha_that_rounds_to_zero_at_the_depth() {
+    // A faint pixel at (0, 0) on a 40 % layer: alpha 1 step × 0.4 rounds to 0 at 8 and 16 bits
+    // (the stored image is transparent there), so Trim keeps only the opaque square. A 1/255
+    // pixel is 0.4 × 257 ≈ 103 steps at 16 bits and any alpha is content at 32 bits: kept.
+    for (depth, faint, keeps) in [(8, 1.0 / 255.0, false), (16, 1.0 / 65535.0, false), (16, 1.0 / 255.0, true), (32, 1.0 / 65535.0, true)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 100, "height": 100, "depth": depth, "background": "transparent"})).unwrap();
+        s.edit("paint", |doc, _| {
+            let surf = doc.layers[0].surface_mut().unwrap();
+            surf.fill_rect(Rect::new(40, 40, 50, 50), &[1.0, 0.0, 0.0, 1.0]);
+            surf.fill_rect(Rect::new(0, 0, 1, 1), &[1.0, 0.0, 0.0, faint]);
+            Ok(())
+        })
+        .unwrap();
+        s.execute("layer.setProps", json!({"layer": doc(&s).layers[0].id.0, "opacity": 0.4})).unwrap();
+        let r = s.execute("image.trim", json!({"basedOn": "transparent"})).unwrap();
+        let want = if keeps { json!({"x": 0, "y": 0, "width": 50, "height": 50}) } else { json!({"x": 40, "y": 40, "width": 10, "height": 10}) };
+        assert_eq!(r, want, "{depth}-bit, faint alpha {faint}");
+    }
+}
+
+#[test]
 fn thirty_two_bit_holds_linear_light() {
     // Photoshop 27.11: an 8-bit sRGB grey 128 becomes 0.2159 in 32 bits (and 32 → 0.0144),
     // and comes back unchanged; alpha keeps its value.
