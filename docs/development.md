@@ -571,7 +571,69 @@ How the web shell (`apps/photocraft-web/src/web.rs`) differs from desktop:
 - Headless Chrome on macOS (`--headless=new --enable-unsafe-webgpu`) gets a real WebGPU adapter.
 
 
+## Shared palette mapping backend
+
+Stock Indexed Color, GIF/PNG-8 Save for Web and animated GIF export retain their existing
+quantization paths. Explicit palette snapshots/catalog ids or advanced `mapping` settings opt into
+`photocraft_algo::palette_map`, which maps floating-point encoded-sRGB RGBA through an ordered
+`palette_map::Palette`. `Settings` selects nearest-colour, Bayer,
+clustered-dot, blue-noise, white-noise, Floyd–Steinberg, Sierra-family, Atkinson, Jarvis, Stucki,
+Burkes or Riemersma mapping. `AlphaMode` controls preserved, binary or dithered alpha, and the
+kernel accepts a document-space origin so pattern phases do not move when a region is rendered in
+tiles or previews.
+
+`Palette::validate()` checks normalized catalog/import snapshots. Mapping preserves bounded
+extended-sRGB comparison colours produced by ICC conversion rather than clipping them to the
+display gamut; this keeps distinct native-profile colours distinct when indexed exports disable
+conversion to sRGB. Alpha remains in `0..=1`.
+
+The catalog API is `photocraft_algo::palettes::{builtins, builtin, parse_gpl, parse_act}`.
+The bundled library contains only original algorithmically generated PhotoCraft palettes:
+black/white, a 256-entry grayscale ramp, and a six-level-per-channel RGB cube (216 entries).
+Their Rust implementation is MIT OR Apache-2.0, like the repository; the root `ATTRIBUTION.md`
+records this source. No historical GIMP palette files or copied catalog data are bundled.
+GPL and ACT imports remain bounded, preserve opaque-entry order and duplicates, and validate
+channel/count limits before use. An extended ACT's declared transparent slot is omitted from an
+opaque mapping palette; a transparent-only ACT is rejected. Classic 768-byte ACT files retain all
+256 entries. Import format support does not imply licensing rights over imported files.
+An out-of-range ACT transparency index means no transparency, including the `01 01`
+encoding used by 256-color tables; all used colors remain available.
+
+Engine adapters expose shared `Palette`/`Settings` resolution and legacy `dither`, `amount`,
+`ditherAmount`, `paletteId` and `paletteSnapshot` spellings in `crates/engine/src/palette_cmds.rs`.
+Indexed conversion keeps its 256-entry/transparency-slot rules and stores expanded RGB samples and
+`ColorTable` in the document's encoded RGB coordinates while retaining the document ICC bytes
+(including an untagged document). Advanced mapping is an explicit automation choice, not a
+replacement for stock dialog defaults or export quantization. Stock schema dialogs neither
+manufacture nor restore automation-only palette/mapping fields, including an implicit zero transparent
+index; stale remembered settings cannot turn an ordinary opaque conversion into advanced mapping.
+The stock palette and dither dropdowns retain their original choices; the adapter-only
+`blackWhite` generation preset and advanced dither method ids remain explicit automation inputs.
+No Palette Map filter command or UI is registered by this backend change.
+Color-dither strength scales only the color threshold, not the normalized rank used for alpha
+coverage. Mapped Save-for-Web generation shares the stock opaque-pixel sampling bound of
+`1 << 20`; Exact retains full-input color discovery, and fixed palettes need no sampling pass.
+A null/no-parameter Save-for-Web request retains its default estimate behavior without changing
+the document or saved export settings.
+Palette-helper validation errors report the invoking Indexed Color/Save-for-Web command,
+not the shared helper id.
+
+`crates/engine/examples/indexed_color_perf.rs` measures palette construction and the full Indexed
+preview with warmup plus repeated runs. Keep reports local, and compare runs built with the same
+release settings and machine class. The `generate_blue_noise` example regenerates the committed
+deterministic threshold tile when algorithm data changes; normal startup does not regenerate it.
+
 ## Indexed Color timings
+
+Indexed Color's stock path quantizes the composited image's encoded document-RGB samples directly,
+preserving alpha and the source document profile. Exact therefore retains encoded values such as
+Adobe RGB sample codes 100, 150 and 200; Indexed→RGB with no explicit destination expands the
+already-RGB storage without converting or retagging it. Advanced palette mapping uses CMS only for
+its sRGB comparison space: snapshot/catalog colours and document pixels are compared in encoded
+sRGB, then mapped pixels and the resulting colour table are converted back to the document RGB
+profile. The document ICC bytes remain unchanged.
+The stock dialog and quantizer are unchanged. No CMS transform or parallel conversion pass is
+needed for ordinary Indexed Color.
 
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
@@ -580,11 +642,8 @@ It prints JSON lines for 8, 16, 32, 64, 128 and 256 colours, with one warmup and
 runs per count, plus palette and pixel hashes for exact before/after comparisons. Input files
 stay local; do not publish personal images, palettes, or metadata with benchmark reports.
 
-The synthetic 24 MP lookup comparison is reproducible with
-`cargo test --release -p photocraft-algo indexed_diffusion_24mp_release_comparison -- --ignored --nocapture`.
-It alternates linear/accelerated lookup order and checks identical indices and pixels.
-For the 2026-10-09 local timings both binaries used `CARGO_PROFILE_RELEASE_LTO=false` and
-`CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16`; compare binaries built with the same settings.
+The output includes palette and pixel hashes for deterministic comparisons; compare measurements
+only between binaries built with the same release settings and machine class.
 
 On native desktop sessions, Indexed Color live previews calculate and flatten on one worker.
 The last preview remains visible while dragging; intermediate settings are coalesced, and only

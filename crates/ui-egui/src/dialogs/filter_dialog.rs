@@ -342,6 +342,12 @@ fn rememberable(kind: &Kind, value: &Value) -> bool {
     }
 }
 
+/// Adapter-only settings must not alter the stock Indexed Color or Save for Web workflow.
+fn hidden_automation_field(command: &str, key: &str) -> bool {
+    matches!(command, "image.mode.indexedColor" | "file.export.saveForWebLegacy")
+        && matches!(key, "paletteId" | "paletteSnapshot" | "reducePalette" | "mapping" | "transparentIndex")
+}
+
 fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &mut Map<String, Value>) {
     let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(command) else { return };
     // Select and Mask starts from its defaults unless Remember Settings was on, as in Photoshop
@@ -354,6 +360,9 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
         }
     }
     for p in parse_spec(spec) {
+        if hidden_automation_field(command, &p.key) {
+            continue;
+        }
         if let Some(v) = saved.get(&p.key).filter(|v| rememberable(&p.kind, v)) {
             fields.insert(p.key, v.clone());
         }
@@ -366,8 +375,11 @@ pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<Stri
         return;
     }
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
-    let mut saved: Map<String, Value> =
-        parse_spec(spec.params).into_iter().filter_map(|p| fields.get(&p.key).filter(|v| rememberable(&p.kind, v)).map(|v| (p.key, v.clone()))).collect();
+    let mut saved: Map<String, Value> = parse_spec(spec.params)
+        .into_iter()
+        .filter(|p| !hidden_automation_field(command, &p.key))
+        .filter_map(|p| fields.get(&p.key).filter(|v| rememberable(&p.kind, v)).map(|v| (p.key, v.clone())))
+        .collect();
     // Select and Mask with Remember Settings off keeps only that choice, so the next one starts
     // from the defaults (#9423).
     if command == crate::select_mask_view::COMMAND {
@@ -384,6 +396,9 @@ pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<Stri
 
 /// Schema-default values for one param of `command` (open and Alt+Reset share this).
 fn default_value(app: &PhotocraftApp, command: &str, p: &Param) -> Option<Value> {
+    if hidden_automation_field(command, &p.key) {
+        return None;
+    }
     Some(match &p.kind {
         Kind::Range { default, .. } if command == "image.mode.indexedColor" && p.key == "colors" => json!(default.round().clamp(2.0, 256.0) as u32),
         Kind::Range { default, .. } => json!(default),
@@ -597,6 +612,9 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
     fields.insert("__preview".into(), json!(true));
     fields.insert("__spec".into(), json!(spec));
     for p in parse_spec(spec) {
+        if hidden_automation_field(command, &p.key) {
+            continue;
+        }
         let v = match &p.kind {
             Kind::Range { default, .. } => json!(default),
             Kind::Choice { options, default } => {
@@ -822,6 +840,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         crate::select_mask_view::controls(ui, f);
     }
     for p in parse_spec(&spec) {
+        if hidden_automation_field(&cmd, &p.key) {
+            continue;
+        }
         if zoom_center::owns(&cmd, f) && matches!(p.key.as_str(), "centerX" | "centerY") {
             if p.key == "centerX" {
                 zoom_center::row(ui, f);
