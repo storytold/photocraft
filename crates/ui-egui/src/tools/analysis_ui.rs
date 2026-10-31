@@ -705,9 +705,11 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             // The table itself keeps its columns left-to-right in RTL: numeric data, not chrome.
             egui::ScrollArea::both().max_height(220.0).max_width(620.0).show(ui, |ui| {
                 // The fork's `Grid` cannot start under a right-to-left cursor; the table keeps
-                // its columns left-to-right in RTL, so it runs in an LTR scope.
-                crate::direction::ltr_vertical(ui, |ui| {
-                    egui::Grid::new("mlog-grid").striped(true).spacing(vec2(10.0, 2.0)).show(ui, |ui| {
+                // its columns left-to-right in RTL (numeric data), so it runs in an LTR scope.
+                // Striping comes from the visuals flag, which the grid reads when unset.
+                ui.visuals_mut().striped = true;
+                let ncols = cols.len().max(1);
+                crate::direction::ltr_grid(ui, "mlog-grid", ncols, vec2(10.0, 2.0), |ui| {
                         for c in &cols {
                             let name = photocraft_engine::analysis_cmds::COLUMNS.iter().find(|x| x.0 == *c).map_or(*c, |x| x.1);
                             ui.label(RichText::new(tl!(name)).color(t.text_dim).size(10.5).strong());
@@ -733,8 +735,8 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             }
                             ui.end_row();
                         }
-                    });
                 });
+                ui.visuals_mut().striped = false;
             });
         });
         app.ui.analysis.log_selected = sel;
@@ -998,3 +1000,39 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 #[cfg(test)]
 pub(crate) mod tests;
+
+#[cfg(test)]
+mod rtl_tests {
+    use super::*;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    /// The measurement-log table is a physical data grid: its header columns stay left-to-right
+    /// under RTL (numeric data, not chrome); only the surrounding rows mirror.
+    #[test]
+    fn mlog_table_columns_stay_physical_under_rtl() {
+        let header = |dir: crate::direction::Dir| {
+            let _dir = crate::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+            app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+            let mut row = Map::new();
+            row.insert("label".into(), json!("1"));
+            row.insert("source".into(), json!("ruler"));
+            app.session.analysis.log.push(photocraft_engine::analysis_cmds::LogRow { id: 1, values: row });
+            app.ui.analysis.measurement_log = true;
+            let mut h = Harness::builder().with_size(vec2(900.0, 700.0)).build_ui_state(
+                |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        windows(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            (h.get_by_label("Label").rect(), h.get_by_label("Source").rect())
+        };
+        let (ll, ls) = header(crate::direction::Dir::Ltr);
+        let (rl, rs) = header(crate::direction::Dir::Rtl);
+        assert!(ll.right() < ls.left() && rl.right() < rs.left(), "the header columns stay physical in both directions: {ll:?} {ls:?} vs {rl:?} {rs:?}");
+    }
+}
