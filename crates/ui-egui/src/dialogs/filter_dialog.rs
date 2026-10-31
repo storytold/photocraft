@@ -451,6 +451,42 @@ fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<S
     if command == REPLACE_COLOR {
         fields.insert(COLOR_EYEDROPPER.into(), json!(true));
     }
+    if command == COLOR_LOOKUP {
+        fields.insert(LUT_FOLDER.into(), json!(app.session.prefs().file_handling.lut_folder));
+    }
+}
+
+/// Image › Adjustments › Color Lookup: its 3D LUT menu lists the LUT folder's files after the
+/// built-in looks (#9754), as the adjustment layer's Properties do. `__lutFolder` is the folder
+/// (Preferences › File Handling › LUT Folder); a file picked from it goes to `file`, and
+/// `__folderLut` remembers that pick, so it stays a menu entry even once the file has left the
+/// folder.
+const COLOR_LOOKUP: &str = "image.adjustments.colorLookup";
+const LUT_FOLDER: &str = "__lutFolder";
+const FOLDER_LUT_PICK: &str = "__folderLut";
+
+/// The `lut` value to keep after the Color Lookup menu chose `cur`: a LUT folder file is set as
+/// `file` with `lut` at `none`. Leaving a folder file the menu showed (`was_folder`) for another
+/// entry clears `file`, so the built-in look or None applies instead of the old file.
+fn pick_folder_lut(f: &mut Map<String, Value>, cur: String, was_folder: bool) -> String {
+    if let Some(path) = cur.strip_prefix(crate::adjust_ui::FOLDER_LUT) {
+        f.insert("file".into(), json!(path));
+        f.insert(FOLDER_LUT_PICK.into(), json!(path));
+        return "none".into();
+    }
+    if was_folder {
+        f.insert("file".into(), json!(""));
+        f.remove(FOLDER_LUT_PICK);
+    }
+    cur
+}
+
+/// Whether the Color Lookup menu shows `file` as a LUT folder entry: it is in the folder's scan
+/// (`luts`), or it was picked from the menu and has left the folder since.
+fn shows_folder_lut(f: &Map<String, Value>, cur: &str, luts: &[(String, String)]) -> bool {
+    let file = f.get("file").and_then(Value::as_str).unwrap_or_default();
+    let picked = f.get(FOLDER_LUT_PICK).and_then(Value::as_str) == Some(file);
+    cur == "none" && !file.is_empty() && (picked || luts.iter().any(|(_, path)| path == file))
 }
 
 /// Assign Profile offers only the profiles the document's colour mode can take (#4951): the
@@ -922,7 +958,26 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                     if lists_installed && !opts.iter().any(|(v, _)| *v == cur) {
                         opts.push((cur.clone(), stem.as_str()));
                     }
+                    let folder_lut = cmd == COLOR_LOOKUP && p.key == "lut";
+                    let lut_folder = f.get(LUT_FOLDER).and_then(Value::as_str).filter(|d| folder_lut && !d.is_empty());
+                    let luts = lut_folder.map(|d| crate::adjust_ui::folder_luts(d, ui.ctx())).unwrap_or_default();
+                    let lut_keys: Vec<String> = luts.iter().map(|(_, path)| format!("{}{path}", crate::adjust_ui::FOLDER_LUT)).collect();
+                    opts.extend(lut_keys.iter().cloned().zip(luts.iter().map(|(name, _)| name.as_str())));
+                    // A folder file is kept as `lut: none` + `file`: show it by its name, also once
+                    // it has left the folder, so picking another entry still clears `file`.
+                    let file = f.get("file").and_then(Value::as_str).unwrap_or_default();
+                    let was_folder = shows_folder_lut(f, &cur, &luts);
+                    let gone_name = std::path::Path::new(file).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    if was_folder {
+                        cur = format!("{}{file}", crate::adjust_ui::FOLDER_LUT);
+                        if !opts.iter().any(|(v, _)| *v == cur) {
+                            opts.push((cur.clone(), gone_name.as_str()));
+                        }
+                    }
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut cur, &opts, 170.0);
+                    if folder_lut {
+                        cur = pick_folder_lut(f, cur, was_folder);
+                    }
                     if let Some(i) = cur.strip_prefix("channel:").filter(|_| depth).and_then(|i| i.parse::<usize>().ok()) {
                         f.insert("depthChannel".into(), json!(i));
                         cur = "channel".into();
