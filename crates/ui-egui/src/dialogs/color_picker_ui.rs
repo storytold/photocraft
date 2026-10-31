@@ -14,6 +14,9 @@ use crate::state::DialogKind;
 use crate::theme::Tokens;
 use crate::widgets;
 
+#[cfg(test)]
+mod shortcut_tests;
+
 /// Radio components, Photoshop order: H, S, B, R, G, B.
 pub const MODES: &[(&str, &str)] = &[("h", "H:"), ("s", "S:"), ("v", "B:"), ("r", "R:"), ("g", "G:"), ("b", "B:")];
 /// Lab radio components (Photoshop's right-hand column): L, a, b.

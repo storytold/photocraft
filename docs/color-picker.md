@@ -1,5 +1,7 @@
 # Color selection and screen sampling
 
+The foreground and background Color Pickers can be assigned keys in **Edit › Keyboard Shortcuts › Tools**. Both start unbound and open the same dialogs as the toolbar color chips, including when no document is open. Their shell command ids are `color.picker.foreground` and `color.picker.background`; the UI control channel can invoke them with `ui.menu.invoke`.
+
 Click the color swatch in the Type options bar or Character panel to open the full Color Picker. It offers the color field, component strip, HSB/RGB/Lab/CMYK and hex fields, and current/new swatches. Selecting characters targets that range; with no character selection, the active text layer is targeted. **OK** applies through `type.setStyle`; **Cancel** leaves the text and history unchanged. The foreground color is independent of this dialog.
 
 ## HUD Color Picker
