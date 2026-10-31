@@ -12,6 +12,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("align-edge-right", include_bytes!("../../../assets/icons/align-edge-right.svg")),
     ("align-edge-top", include_bytes!("../../../assets/icons/align-edge-top.svg")),
     ("align-edge-vcenter", include_bytes!("../../../assets/icons/align-edge-vcenter.svg")),
+    ("curve-smooth", include_bytes!("../../../assets/icons/curve-smooth.svg")),
     ("distribute-bottom", include_bytes!("../../../assets/icons/distribute-bottom.svg")),
     ("distribute-hcenter", include_bytes!("../../../assets/icons/distribute-hcenter.svg")),
     ("distribute-horizontal", include_bytes!("../../../assets/icons/distribute-horizontal.svg")),

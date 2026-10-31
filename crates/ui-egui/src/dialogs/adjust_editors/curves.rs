@@ -232,11 +232,10 @@ fn curves_mode_row(ui: &mut egui::Ui, v: &mut Value, key: &str, gray: bool) -> E
         if crate::icons::button(ui, "pencil", 24.0, pencil, tl!("Draw to modify the curve")).clicked() && !pencil {
             e.add(Edit::discrete(set_pencil(v, true, gray)));
         }
-        let label = crate::i18n::tr_ctx(crate::i18n::current(), "curves", "Smooth");
+        // An icon in the row, as Photoshop's Smooth (enabled while drawing with the pencil) (#9220).
         let smooth = ui
-            .add_enabled_ui(pencil, |ui| widgets::secondary_button(ui, label, 0.0))
+            .add_enabled_ui(pencil, |ui| crate::icons::button(ui, "curve-smooth", 24.0, false, tl!("Smooth the curve values")))
             .inner
-            .on_hover_text(tl!("Smooth the curve values"))
             .on_disabled_hover_text(tl!("Smooth the curve values"));
         if smooth.clicked() {
             let mut map = read_map(v, key);
