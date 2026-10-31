@@ -128,7 +128,9 @@ fn preview_drag_and_negative_fields_work_at_standard_and_retina_scale() {
             (moved_image.min - start_image.min - delta).length() < 0.1,
             "the visible image must stay under the pointer when Center turns off: {start_image:?} -> {moved_image:?}, delta {delta:?}"
         );
-        let k = (310.0 / start.paper.0).min(380.0 / start.paper.1);
+        // Derive the preview transform from the painted canvas: fitting follows the visible
+        // viewport, so the physical drag must not assume a fixed dialog size or inset.
+        let k = f64::from(start_image.width()) / start.rect.2;
         assert!((during["left"].as_f64().unwrap() * 72.0 - start.rect.0 - f64::from(delta.x) / k).abs() < 0.001);
         assert!((during["top"].as_f64().unwrap() * 72.0 - (start.paper.1 - start.rect.1 - start.rect.3) - f64::from(delta.y) / k).abs() < 0.001);
         h.event(Event::PointerButton { pos: from + delta, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
