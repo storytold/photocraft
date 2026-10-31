@@ -10,6 +10,7 @@ mod camera_raw_zoom;
 mod canvas_16f;
 mod checker_canvas;
 mod color_managed_canvas;
+mod color_ramp_marker;
 mod crop_beyond_canvas;
 mod crop_default_mode;
 mod crop_popup_keys;
