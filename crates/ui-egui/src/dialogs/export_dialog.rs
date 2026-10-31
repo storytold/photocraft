@@ -44,22 +44,6 @@ const SETTINGS: [&str; 14] = [
 
 /// A single-line edit whose text reads right-to-left in a right-to-left UI (Arabic preset names
 /// align to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
-fn add_rtl_singleline(ui: &mut egui::Ui, text: &mut String, configure: impl FnOnce(egui::TextEdit<'_>) -> egui::TextEdit<'_>) -> egui::Response {
-    let edit = configure(egui::TextEdit::singleline(text));
-    if !crate::direction::is_rtl() {
-        return ui.add(edit);
-    }
-    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let mut job = egui::text::LayoutJob::simple_singleline(buf.as_str().to_owned(), font, ui.visuals().text_color());
-        job.direction = egui::epaint::text::TextDirection::RightToLeft;
-        job.halign = egui::Align::Max;
-        job.keep_trailing_whitespace = true;
-        ui.fonts_mut(|f| f.layout_job(job))
-    };
-    ui.add(edit.align(egui::Align2::RIGHT_CENTER).layouter(&mut layouter))
-}
-
 fn settings_of(f: &Map<String, Value>) -> Map<String, Value> {
     SETTINGS.iter().filter_map(|k| f.get(*k).map(|v| ((*k).to_string(), v.clone()))).collect()
 }
@@ -877,7 +861,7 @@ fn preset_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String,
         let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         let label = ui.label(tl!("Preset Name"));
         let mut name = s(f, "__presetName");
-        add_rtl_singleline(ui, &mut name, |e| e.id_salt("export-preset-name").desired_width(160.0).char_limit(255)).labelled_by(label.id);
+        crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.id_salt("export-preset-name").desired_width(160.0).char_limit(255)).labelled_by(label.id);
         f.insert("__presetName".into(), json!(name));
         ui.horizontal(|ui| {
             if crate::widgets::secondary_button(ui, tl!("Save"), 70.0).clicked() || enter {
