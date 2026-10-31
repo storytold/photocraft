@@ -432,7 +432,14 @@ pub(crate) fn shape(doc: &photocraft_doc::Document, layer: &Layer, r: Rect) -> V
     if r.is_empty() {
         return Vec::new();
     }
-    par_map(bands(r, BAND), |band| photocraft_compose::layer_shape(doc, layer, band)).concat()
+    let parts = par_map(bands(r, BAND), |band| photocraft_compose::layer_shape(doc, layer, band));
+    let mut shape = Vec::with_capacity(parts.iter().map(Vec::len).sum());
+    // A band can be a pooled mask (Transparency Shapes Layer off): hand each back once copied.
+    for part in parts {
+        shape.extend_from_slice(&part);
+        photocraft_raster::scratch::give(part);
+    }
+    shape
 }
 
 /// Write `v` (row-major over `r`) into the region-sized `shape`.
