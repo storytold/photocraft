@@ -1,6 +1,6 @@
 //! The About window's credits: every contributor (GitHub login always; display and real names only
 //! with recorded consent) and the AI models that helped. The tables are baked into the binary by
-//! build.rs from contributors/contributors.json; nothing is
+//! build.rs from contributors/contributors.json (craftrules standards/contributors.md); nothing is
 //! read at run time. UI strings go through `tl!` (column abbreviations like `+LOC` stay as they are).
 
 use std::cmp::Ordering;
@@ -367,7 +367,9 @@ fn column_width<'a>(ui: &egui::Ui, header: &str, cells: impl Iterator<Item = &'a
 /// left whatever the direction, so the order is ours to set.
 fn visual_order<T: Copy, const N: usize>(columns: &[T; N]) -> [T; N] {
     let mut out = *columns;
-    if crate::text::direction::is_rtl() { out.reverse(); }
+    if crate::text::direction::is_rtl() {
+        out.reverse();
+    }
     out
 }
 
@@ -761,9 +763,7 @@ mod tests {
     /// The About dialog on its Contributors tab, table view, as drawn in the window.
     fn about_contributors_harness() -> egui_kittest::Harness<'static, crate::PhotocraftApp> {
         let app = crate::PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(1440.0, 900.0))
-            .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
         crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         let mut fields = serde_json::Map::new();
         fields.insert("tab".into(), serde_json::json!("contributors"));
