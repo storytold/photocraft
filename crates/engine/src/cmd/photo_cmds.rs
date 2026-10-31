@@ -21,7 +21,7 @@ use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::file_cmds::{file_name, flattened, import, list_images, read_file};
+use crate::file_cmds::{file_name, flattened, flattened_checked, import, list_images, read_file};
 use crate::{EngineError, Result, Session};
 
 /// Wall-clock timer for the `ms` fields of results (always 0 on the web, where
@@ -68,7 +68,7 @@ type Loaded = (Vec<Source>, PixelFormat, Option<std::sync::Arc<Vec<u8>>>);
 fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
     let mut out = Vec::new();
     let (mut fmt, mut icc) = (None, None);
-    let mut add = |name: String, d: Document| {
+    let mut add = |name: String, d: &Document| -> Result<()> {
         let source_fmt = d.pixel_format();
         // Registration and blending work in RGB, so the result is RGB.
         let output_fmt = *fmt.get_or_insert_with(|| {
@@ -82,11 +82,12 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
             icc = d.icc_profile.clone();
         }
         let info = d.metadata.exif.as_ref().map(|e| exif::read(e)).unwrap_or_default();
-        out.push(Source { name, surf: flattened(&d, output_fmt), w: d.size.width as usize, h: d.size.height as usize, exif: info });
+        out.push(Source { name, surf: flattened_checked(d, output_fmt, cmd)?, w: d.size.width as usize, h: d.size.height as usize, exif: info });
+        Ok(())
     };
     if p.get("useOpenDocuments").and_then(Value::as_bool).unwrap_or(false) {
         for d in s.documents() {
-            add(d.doc.name.clone(), (*d.doc).clone());
+            add(d.doc.name.clone(), &d.doc)?;
         }
     }
     let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")) {
@@ -97,7 +98,7 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
     for path in &paths {
         let bytes = read_file(path)?;
         let name = file_name(path);
-        add(name.clone(), import(&name, &bytes)?);
+        add(name.clone(), &import(&name, &bytes)?)?;
     }
     if out.is_empty() {
         return Err(bad(cmd, "pass \"paths\" (files or a folder) or \"useOpenDocuments\": true"));

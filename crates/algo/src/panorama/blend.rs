@@ -9,6 +9,10 @@ fn alloc_plane(len: usize) -> Result<Vec<f32>, AllocationError> {
     Ok(v)
 }
 
+fn plane_len(w: usize, h: usize, ch: usize) -> Result<usize, AllocationError> {
+    w.checked_mul(h).and_then(|n| n.checked_mul(ch)).ok_or(AllocationError::SizeOverflow)
+}
+
 // ---------- photometric ----------
 
 /// One image warped into the panorama: an axis-aligned region with colour channels and coverage.
@@ -344,11 +348,11 @@ fn par_zip_assign(a: &mut [f32], b: &[f32], f: impl Fn(f32, f32) -> f32 + Sync +
 // the one-thread loops they replace (rows never read each other's output), so the result is
 // bit for bit unchanged.
 
-pub(super) fn reduce(w: usize, h: usize, ch: usize, src: &[f32]) -> (usize, usize, Vec<f32>) {
+pub(super) fn reduce(w: usize, h: usize, ch: usize, src: &[f32]) -> Result<(usize, usize, Vec<f32>), AllocationError> {
     let (nw, nh) = (w.div_ceil(2), h.div_ceil(2));
     let k = [1.0f32, 4.0, 6.0, 4.0, 1.0];
     // Separable 5-tap binomial, then decimate.
-    let mut tmp = vec![0.0f32; nw * h * ch];
+    let mut tmp = alloc_plane(plane_len(nw, h, ch)?)?;
     par_rows(&mut tmp, nw, ch, |y, row| {
         let line = &src[y * w * ch..(y + 1) * w * ch];
         for x in 0..nw {
@@ -363,7 +367,7 @@ pub(super) fn reduce(w: usize, h: usize, ch: usize, src: &[f32]) -> (usize, usiz
             }
         }
     });
-    let mut out = vec![0.0f32; nw * nh * ch];
+    let mut out = alloc_plane(plane_len(nw, nh, ch)?)?;
     par_rows(&mut out, nw, ch, |y, row| {
         // Each output row is five source rows added in tap order: the same sum per element as
         // before (`0 + k0·a + k1·b + …`), but over whole rows so it vectorises.
@@ -377,21 +381,21 @@ pub(super) fn reduce(w: usize, h: usize, ch: usize, src: &[f32]) -> (usize, usiz
             *o /= 16.0;
         }
     });
-    (nw, nh, out)
+    Ok((nw, nh, out))
 }
 
-pub(super) fn expand(sw: usize, sh: usize, ch: usize, src: &[f32], w: usize, h: usize) -> Vec<f32> {
+pub(super) fn expand(sw: usize, sh: usize, ch: usize, src: &[f32], w: usize, h: usize) -> Result<Vec<f32>, AllocationError> {
     // Bilinear upsampling at half-pixel-aligned positions.
-    let mut out = vec![0.0f32; w * h * ch];
+    let mut out = alloc_plane(plane_len(w, h, ch)?)?;
     // Source columns and weights depend on x only: worked out once instead of for every row.
     // The clamped position is never negative, so truncating is `floor` (and spares the libm call).
-    let cols: Vec<(usize, usize, f32)> = (0..w)
-        .map(|x| {
-            let fx = ((x as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (sw - 1) as f32);
-            let x0 = fx as usize;
-            (x0 * ch, (x0 + 1).min(sw - 1) * ch, fx - x0 as f32)
-        })
-        .collect();
+    let mut cols = Vec::new();
+    cols.try_reserve_exact(w).map_err(|_| AllocationError::NotEnoughMemory { bytes: w.saturating_mul(std::mem::size_of::<(usize, usize, f32)>()) })?;
+    cols.extend((0..w).map(|x| {
+        let fx = ((x as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (sw - 1) as f32);
+        let x0 = fx as usize;
+        (x0 * ch, (x0 + 1).min(sw - 1) * ch, fx - x0 as f32)
+    }));
     par_rows(&mut out, w, ch, |y, row| {
         let fy = ((y as f32 + 0.5) / 2.0 - 0.5).clamp(0.0, (sh - 1) as f32);
         let y0 = fy as usize;
@@ -406,20 +410,20 @@ pub(super) fn expand(sw: usize, sh: usize, ch: usize, src: &[f32], w: usize, h: 
             }
         }
     });
-    out
+    Ok(out)
 }
 
 /// Fills pixels with zero `wt` from their surroundings (push-pull), so pyramid levels don't
 /// pull in black from outside an image.
-pub(super) fn push_pull(w: usize, h: usize, ch: usize, px: &mut [f32], wt: &[f32]) {
+pub(super) fn push_pull(w: usize, h: usize, ch: usize, px: &mut [f32], wt: &[f32]) -> Result<(), AllocationError> {
     if w <= 1 && h <= 1 {
-        return;
+        return Ok(());
     }
     let (nw, nh) = (w.div_ceil(2), h.div_ceil(2));
     // Coarse sums. A coarse row is fed by two fine rows; walking them in raster order adds each
     // coarse cell's (up to) four fine pixels in the order the serial scatter-add did, from zero.
-    let mut cpx = vec![0.0f32; nw * nh * ch];
-    let mut cw = vec![0.0f32; nw * nh];
+    let mut cpx = alloc_plane(plane_len(nw, nh, ch)?)?;
+    let mut cw = alloc_plane(plane_len(nw, nh, 1)?)?;
     par_rows(&mut cw, nw, 1, |cy, row| {
         for y in 2 * cy..(2 * cy + 2).min(h) {
             for (x, &a) in wt[y * w..(y + 1) * w].iter().enumerate() {
@@ -456,7 +460,7 @@ pub(super) fn push_pull(w: usize, h: usize, ch: usize, px: &mut [f32], wt: &[f32
         }
     }
     if cw.contains(&0.0) && cw.iter().any(|v| *v > 0.0) {
-        push_pull(nw, nh, ch, &mut cpx, &cw);
+        push_pull(nw, nh, ch, &mut cpx, &cw)?;
     }
     par_rows(px, w, ch, |y, row| {
         for x in 0..w {
@@ -470,6 +474,7 @@ pub(super) fn push_pull(w: usize, h: usize, ch: usize, px: &mut [f32], wt: &[f32
             }
         }
     });
+    Ok(())
 }
 
 /// One image's pyramid in [`multiband`]: the grid origin `(gx0, gy0)` at level 0, the Laplacian
@@ -551,6 +556,15 @@ pub fn try_multiband_batched(
 ) -> Result<(Vec<f32>, Vec<f32>), AllocationError> {
     let ch = imgs.first().map_or(1, |i| i.ch);
     let levels = levels.max(1);
+    let cost = |im: &RoiImage| band_cost(im, w, h, ch, levels);
+    if let Some(limit) = max_band_budget {
+        for im in imgs {
+            let bytes = cost(im);
+            if bytes > limit {
+                return Err(AllocationError::NotEnoughMemory { bytes });
+            }
+        }
+    }
     // Level sizes of the panorama.
     let mut sizes = vec![(w, h)];
     for _ in 1..levels {
@@ -566,8 +580,7 @@ pub fn try_multiband_batched(
         wsum.push(alloc_plane(wsum_len)?);
     }
     let grid = |im: &RoiImage| band_grid(im, w, h, levels);
-    let cost = |im: &RoiImage| band_cost(im, w, h, ch, levels);
-    let band = |k: usize| -> PyramidBand {
+    let band = |k: usize| -> Result<PyramidBand, AllocationError> {
         let im = &imgs[k];
         let (gx0, gy0, gw, gh) = grid(im);
         // Each grid pixel takes the image pixel that lands on it (every image pixel lands on at
@@ -576,7 +589,7 @@ pub fn try_multiband_batched(
             let (x, y) = (gx as i64 + gx0 as i64 - im.x0 as i64, gy as i64 + gy0 as i64 - im.y0 as i64);
             (x >= 0 && y >= 0 && (x as usize) < im.w && (y as usize) < im.h).then(|| y as usize * im.w + x as usize)
         };
-        let mut px = vec![0.0f32; gw * gh * ch];
+        let mut px = alloc_plane(plane_len(gw, gh, ch)?)?;
         par_rows(&mut px, gw, ch, |gy, row| {
             for gx in 0..gw {
                 if let Some(i) = src_of(gx, gy) {
@@ -584,7 +597,7 @@ pub fn try_multiband_batched(
                 }
             }
         });
-        let mut wt = vec![0.0f32; gw * gh];
+        let mut wt = alloc_plane(plane_len(gw, gh, 1)?)?;
         par_rows(&mut wt, gw, 1, |gy, row| {
             for (gx, o) in row.iter_mut().enumerate() {
                 if let Some(i) = src_of(gx, gy) {
@@ -593,7 +606,7 @@ pub fn try_multiband_batched(
             }
         });
         // Binary coverage straight from the alpha (0 outside the image), without a coverage plane.
-        let mut bin = vec![0.0f32; gw * gh];
+        let mut bin = alloc_plane(plane_len(gw, gh, 1)?)?;
         par_rows(&mut bin, gw, 1, |gy, row| {
             for (gx, o) in row.iter_mut().enumerate() {
                 if let Some(i) = src_of(gx, gy) {
@@ -601,7 +614,7 @@ pub fn try_multiband_batched(
                 }
             }
         });
-        push_pull(gw, gh, ch, &mut px, &bin);
+        push_pull(gw, gh, ch, &mut px, &bin)?;
         drop(bin);
         // Laplacian of the colours, Gaussian of the weights. Planes move into the pyramids rather
         // than being copied: with one image built at a time, a copy is a serial pass over it.
@@ -614,20 +627,20 @@ pub fn try_multiband_batched(
                 gau.push(cwt);
                 break;
             }
-            let (nw, nh, down) = reduce(cw, chh, ch, &cur);
-            let up = expand(nw, nh, ch, &down, cw, chh);
+            let (nw, nh, down) = reduce(cw, chh, ch, &cur)?;
+            let up = expand(nw, nh, ch, &down, cw, chh)?;
             // The Laplacian replaces the level's colours in place (`cur - up`, elementwise).
             par_zip_assign(&mut cur, &up, |a, b| a - b);
             drop(up);
             lap.push((cw, chh, cur));
-            let (_, _, wdown) = reduce(cw, chh, 1, &cwt);
+            let (_, _, wdown) = reduce(cw, chh, 1, &cwt)?;
             gau.push(cwt);
             cw = nw;
             chh = nh;
             cur = down;
             cwt = wdown;
         }
-        (gx0, gy0, lap, gau)
+        Ok((gx0, gy0, lap, gau))
     };
     // Build the bands a batch at a time and add each batch before building the next. Each pixel
     // adds the bands in the same order as the serial loop (per level, bands one after another;
@@ -637,12 +650,6 @@ pub fn try_multiband_batched(
     while start < imgs.len() {
         let mut end = start + 1;
         let c = cost(&imgs[start]);
-        if let Some(limit) = max_band_budget
-            && limit > 0
-            && c > limit
-        {
-            return Err(AllocationError::NotEnoughMemory { bytes: c });
-        }
         let mut bytes = c;
         while let Some(im) = imgs.get(end)
             && bytes.saturating_add(cost(im)) <= budget
@@ -650,7 +657,7 @@ pub fn try_multiband_batched(
             bytes = bytes.saturating_add(cost(im));
             end += 1;
         }
-        let bands = par_map(end - start, |j| band(start + j));
+        let bands = par_map(end - start, |j| band(start + j)).into_iter().collect::<Result<Vec<_>, _>>()?;
         for l in 0..levels {
             let pw = sizes[l].0;
             par_rows(&mut wsum[l], pw, 1, |py, row| {
@@ -713,7 +720,7 @@ pub fn try_multiband_batched(
     for l in (0..levels - 1).rev() {
         let (pw, ph) = sizes[l];
         let (sw, sh) = sizes[l + 1];
-        let up = expand(sw, sh, ch, &cur, pw, ph);
+        let up = expand(sw, sh, ch, &cur, pw, ph)?;
         // Add the upsampled coarser levels into this level's accumulator (`acc + up`, in place).
         let mut level = std::mem::take(&mut acc[l]);
         par_zip_assign(&mut level, &up, |a, b| a + b);

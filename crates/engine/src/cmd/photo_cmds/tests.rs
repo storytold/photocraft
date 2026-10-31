@@ -456,3 +456,13 @@ fn photomerge_memory_budget_precedence_and_defaults() {
     let _ = budget_from(None, Some("18446744073709551615"), None);
     let _ = budget_from(None, None, Some(u64::MAX));
 }
+
+#[test]
+fn photomerge_rejects_oversized_sparse_source_before_flattening() {
+    let mut s = Session::new();
+    s.add_document(Document::new("sparse", Size::new(100_000, 100_000), ColorMode::Rgb, SampleType::U8), None);
+    let err = load_sources(&s, &json!({"useOpenDocuments": true}), "file.automate.photomerge").err().expect("oversized canvas must be refused");
+    assert!(err.to_string().contains("too large to flatten"), "{err}");
+    assert_eq!(s.documents().len(), 1);
+    assert_eq!(s.active().unwrap().doc.name, "sparse");
+}
