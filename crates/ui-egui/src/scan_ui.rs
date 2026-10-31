@@ -208,7 +208,7 @@ fn acquire_now(app: &mut PhotocraftApp) {
         }
     };
     let pages = buffer.pages;
-    match photocraft_engine::scan_cmds::open_scanned(&mut app.session, scanned_image(&device.name, app.scan.mode, &buffer)) {
+    match photocraft_engine::scan_cmds::open_scanned(&mut app.session, scanned_image(&device.name, app.scan.mode, buffer)) {
         Ok(_) => {
             app.sync_views();
             app.scan.open = false;
@@ -221,18 +221,19 @@ fn acquire_now(app: &mut PhotocraftApp) {
     }
 }
 
-fn scanned_image(name: &str, mode: u8, buffer: &ScanBuffer) -> photocraft_engine::scan_cmds::ScannedImage {
+fn scanned_image(name: &str, mode: u8, buffer: ScanBuffer) -> photocraft_engine::scan_cmds::ScannedImage {
+    let ScanBuffer { width, height, rgba, resolution, .. } = buffer;
     let pixels = if mode == 0 {
-        photocraft_engine::scan_cmds::ScannedPixels::Rgba(buffer.rgba.clone())
+        photocraft_engine::scan_cmds::ScannedPixels::Rgba(rgba)
     } else {
-        let gray = buffer.rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
+        let gray = rgba.as_chunks::<4>().0.iter().map(|px| px[0]).collect();
         photocraft_engine::scan_cmds::ScannedPixels::Gray(gray)
     };
     photocraft_engine::scan_cmds::ScannedImage {
         name: if name.is_empty() { "Scan".into() } else { name.to_string() },
-        width: buffer.width,
-        height: buffer.height,
-        resolution_dpi: if buffer.resolution == 0 { 300.0 } else { buffer.resolution as f32 },
+        width,
+        height,
+        resolution_dpi: if resolution == 0 { 300.0 } else { resolution as f32 },
         pixels,
     }
 }

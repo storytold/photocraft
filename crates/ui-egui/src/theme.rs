@@ -334,6 +334,8 @@ impl Tokens {
                 tab_strip: Color32::from_rgb(196, 196, 196),
                 row_selected: Color32::from_rgb(210, 222, 240),
                 histogram_bg: Color32::from_rgb(40, 40, 40),
+                // Status text is `warning` on `chrome`. Pro's amber is about 1.3:1 on this gray.
+                warning: Color32::from_rgb(140, 72, 0),
                 ..Tokens::for_kind(ThemeKind::Pro)
             },
             ThemeKind::Pro => Tokens {

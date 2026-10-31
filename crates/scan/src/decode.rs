@@ -1,18 +1,27 @@
 //! Turn a scanner file (JPEG, PNG or TIFF) into 8-bit RGBA, then apply the requested mode.
 
+use image::ImageDecoder;
+
 use crate::{Error, Mode, ScanImage};
 
 /// Largest scan kept in memory: 128 megapixels, which is 512MB of RGBA.
 pub(crate) const MAX_PIXELS: u64 = 128 * 1024 * 1024;
 
 pub(crate) fn decode_scan(bytes: &[u8]) -> Result<ScanImage, Error> {
-    let img = image::load_from_memory(bytes).map_err(|e| Error::Platform(format!("the scan could not be read ({e})")))?;
-    let rgba = img.into_rgba8();
-    let (width, height) = rgba.dimensions();
+    // Dimensions come from the header. Rejecting first keeps a large gray scan from expanding
+    // into RGBA after it has already passed the decoder's own allocation budget.
+    let decoder = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|e| Error::Platform(format!("the scan could not be read ({e})")))?
+        .into_decoder()
+        .map_err(|e| Error::Platform(format!("the scan could not be read ({e})")))?;
+    let (width, height) = decoder.dimensions();
     let pixels = u64::from(width).checked_mul(u64::from(height)).ok_or_else(|| Error::Platform("the scan is too large".into()))?;
     if pixels > MAX_PIXELS {
         return Err(Error::Platform("the scan is too large".into()));
     }
+    let img = image::DynamicImage::from_decoder(decoder).map_err(|e| Error::Platform(format!("the scan could not be read ({e})")))?;
+    let rgba = img.into_rgba8();
     Ok(ScanImage { width, height, rgba: rgba.into_raw(), dpi: 0, pages: 1 })
 }
 
@@ -81,5 +90,19 @@ mod tests {
     #[test]
     fn garbage_is_an_error() {
         assert!(decode_scan(b"not an image").is_err());
+    }
+
+    /// A JPEG whose header claims more than [`MAX_PIXELS`]. Header parsing does not allocate the
+    /// bitmap, so the rejection happens before the pixels are decoded.
+    #[test]
+    fn an_oversized_header_is_rejected_before_the_pixels_are_decoded() {
+        // SOF0, one gray component, 20000×7000 = 140 megapixels, then SOS. No scan data: the
+        // decoder returns once it has read the start of scan.
+        let bytes = [
+            0xFF, 0xD8, 0xFF, 0xC0, 0x00, 0x0B, 0x08, 0x4E, 0x20, 0x1B, 0x58, 0x01, 0x01, 0x11, 0x00, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3F,
+            0x00,
+        ];
+        let err = decode_scan(&bytes).unwrap_err();
+        assert_eq!(err.to_string(), "the scan is too large");
     }
 }

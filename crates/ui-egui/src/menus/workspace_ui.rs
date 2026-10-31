@@ -133,6 +133,41 @@ fn open(app: &mut PhotocraftApp, kind: &str, f: Value) -> Result<Value, String> 
 /// Built-in workspace names (Window › Workspace presets).
 const PRESETS: [&str; 7] = ["Essentials", "CS4", "Photography", "Painting", "Pixel Art", "Graphic and Web", "Motion"];
 
+/// A workspace saved before CS4 was a preset can still be named `CS4`. That name would hide the
+/// preset and show up twice in the switcher. Move it to a free name, and keep the current
+/// workspace on that saved layout.
+pub fn migrate_preset_collisions(app: &mut PhotocraftApp) {
+    if !app.session.prefs().workspaces.contains_key("CS4") {
+        return;
+    }
+    let Some(name) = free_saved_cs4_name(&app.session.prefs().workspaces) else { return };
+    let current = app.ui.workspace == "CS4";
+    app.session.prefs.edit(|p| {
+        if let Some(ws) = p.workspaces.remove("CS4") {
+            p.workspaces.insert(name.clone(), ws);
+        }
+        if let Some(layout) = p.panel_layout.as_object_mut()
+            && layout.get("workspace").and_then(Value::as_str) == Some("CS4")
+        {
+            layout.insert("workspace".into(), json!(name));
+        }
+    });
+    if current {
+        app.ui.workspace = name;
+    }
+}
+
+fn free_saved_cs4_name(existing: &std::collections::BTreeMap<String, Value>) -> Option<String> {
+    let mut candidate = "CS4 (saved)".to_string();
+    for n in 2..10_000 {
+        if !PRESETS.contains(&candidate.as_str()) && !existing.contains_key(&candidate) {
+            return Some(candidate);
+        }
+        candidate = format!("CS4 (saved) {n}");
+    }
+    None
+}
+
 /// Run a shell command, or open its dialog. `None` when `id` isn't ours.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "view.thirtyTwoBitPreviewOptions" && no_params(params) {
@@ -251,6 +286,7 @@ fn delete_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String>
 }
 
 fn select_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
+    migrate_preset_collisions(app);
     let name = p.get("name").and_then(Value::as_str).ok_or("pass `name`")?.to_string();
     if PRESETS.contains(&name.as_str()) {
         app.ui.workspace = name.clone();
@@ -267,6 +303,7 @@ fn select_workspace(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String>
 
 /// Apply the current workspace when it is a saved one. Returns false for the built-in presets.
 pub fn apply_custom(app: &mut PhotocraftApp) -> bool {
+    migrate_preset_collisions(app);
     let Some(ws) = app.session.prefs().workspaces.get(&app.ui.workspace).cloned() else { return false };
     // Workspaces saved before the dock layout existed get the default heights.
     app.ui.dock = Default::default();
@@ -687,6 +724,41 @@ mod tests {
         let keys: Vec<String> = switcher_options(&app).into_iter().map(|(k, _)| k).collect();
         assert_eq!(keys[7..], ["Comp", "Retouch"]);
         assert!(keys.contains(&app.ui.workspace));
+    }
+
+    #[test]
+    fn a_saved_workspace_named_cs4_is_renamed_and_the_preset_sets_the_theme() {
+        let (mut app, ctx) = app();
+        app.ui.panels.history = false;
+        app.ui.panels.navigator = false;
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.newWorkspace", json!({"name": "Old"})).unwrap();
+        let saved = app.session.prefs().workspaces["Old"].clone();
+        app.session.prefs.edit(|p| {
+            p.workspaces.insert("CS4".into(), saved);
+            p.workspaces.insert("CS4 (saved)".into(), json!({"panels": {}}));
+            p.panel_layout = json!({"workspace": "CS4"});
+        });
+        app.ui.workspace = "CS4".into();
+        app.ui.theme = crate::theme::ThemeKind::ProMedium;
+        let before = app.session.prefs.rev();
+        migrate_preset_collisions(&mut app);
+        assert!(app.session.prefs.rev() > before);
+        assert!(!app.session.prefs().workspaces.contains_key("CS4"));
+        assert!(app.session.prefs().workspaces.contains_key("CS4 (saved)"));
+        assert!(app.session.prefs().workspaces["CS4 (saved) 2"]["panels"].get("history").is_some());
+        assert_eq!(app.ui.workspace, "CS4 (saved) 2");
+        assert_eq!(app.session.prefs().panel_layout["workspace"], "CS4 (saved) 2");
+        let rev = app.session.prefs.rev();
+        migrate_preset_collisions(&mut app);
+        assert_eq!(app.session.prefs.rev(), rev);
+        let keys: Vec<String> = switcher_options(&app).into_iter().map(|(k, _)| k).collect();
+        assert_eq!(keys.iter().filter(|k| k.as_str() == "CS4").count(), 1);
+        assert!(keys.iter().any(|k| k.as_str() == "CS4 (saved) 2"));
+        crate::menus::invoke(&mut app, &ctx, "window.workspace.select", json!({"name": "CS4"})).unwrap();
+        assert_eq!(app.ui.workspace, "CS4");
+        assert!(app.ui.panels.navigator && app.ui.panels.history);
+        assert_eq!(app.ui.theme, crate::theme::ThemeKind::Cs4);
+        assert!(app.session.prefs().workspaces.contains_key("CS4 (saved) 2"));
     }
 
     #[test]

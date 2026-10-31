@@ -46,6 +46,8 @@ struct State {
     step: Step,
     error: Option<String>,
     file: Option<PathBuf>,
+    /// Every file Image Capture wrote. `finish` reads the first; `Drop` removes the rest.
+    scanned: Vec<PathBuf>,
     pages: u32,
     dpi: u32,
     select_requested: bool,
@@ -64,6 +66,7 @@ impl State {
             step: Step::Browse,
             error: None,
             file: None,
+            scanned: Vec::new(),
             pages: 0,
             dpi,
             select_requested: false,
@@ -174,10 +177,11 @@ define_class!(
             let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut state = lock(self.ivars());
                 state.pages = state.pages.saturating_add(1);
-                if state.file.is_none()
-                    && let Some(path) = url_path(url)
-                {
-                    state.file = Some(path);
+                if let Some(path) = url_path(url) {
+                    if state.file.is_none() {
+                        state.file = Some(path.clone());
+                    }
+                    state.scanned.push(path);
                 }
             }));
         }
@@ -332,14 +336,25 @@ impl Session {
 impl Drop for Session {
     fn drop(&mut self) {
         let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            let id = self.with_state(|state| state.opened_id.clone());
+            let (id, close_requested, scanned) = self.with_state(|state| (state.opened_id.clone(), state.close_requested, state.scanned.clone()));
+            for path in &scanned {
+                // `finish` already removed the page it read. A missing file is fine.
+                let _ = std::fs::remove_file(path);
+            }
             // SAFETY: both pointers were set by this session. Clearing them before the delegate is
             // released stops Image Capture calling into a freed object. `stop` ends browsing.
+            // An opened session that never reached `close_session` is closed here. `fail` marks
+            // the step done without closing, so this is not gated on that step. `close_session`
+            // sets `close_requested` before its own request, so a session is not closed twice.
+            // The mutex was released above: Image Capture must not run while it is held.
             unsafe {
                 if let Some(id) = id.as_deref()
                     && let Some(device) = self.find(id)
                 {
                     device.setDelegate(None);
+                    if !close_requested {
+                        device.requestCloseSession();
+                    }
                 }
                 self.browser.setDelegate(None);
                 self.browser.stop();

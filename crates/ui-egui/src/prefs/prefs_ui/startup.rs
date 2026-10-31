@@ -57,6 +57,9 @@ pub fn load(app: &mut PhotocraftApp) {
     if !invalid.is_empty() {
         repair_invalid(app, &invalid);
     }
+    // After the saved revision is recorded, so a renamed workspace is written back.
+    // `dock::restore` has already put the remembered name in `ui.workspace`.
+    crate::workspace_ui::migrate_preset_collisions(app);
 }
 
 /// The save base after loading `stored`: what was loaded, with the keys the shift tool switch

@@ -228,12 +228,12 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
             app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
         }
-        // File > Import > Variable Data Sets… asks for the CSV (#8816); with a `path` the engine reads it itself.
         // File › Import › Scan… asks which scanner to use. With pixel params the engine opens them.
         "file.import.scan" if params.get("rgba").is_none() && params.get("gray").is_none() => {
             crate::scan_ui::open(app);
             Ok(json!({"dialog": "scan"}))
         }
+        // File > Import > Variable Data Sets… asks for the CSV (#8816); with a `path` the engine reads it itself.
         "file.import.variableDataSets" if params.get("path").and_then(Value::as_str).is_none() => {
             let doc = app.active_doc_id()?;
             let params = params.clone();

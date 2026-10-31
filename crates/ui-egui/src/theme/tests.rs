@@ -156,6 +156,8 @@ fn cs4_theme_is_a_light_pro_frame() {
     assert!(contrast(t.text_faint, t.card) >= 2.0, "faint text");
     assert!(contrast(t.accent_text, t.card) >= 3.0, "accent text");
     assert!(contrast(t.primary_text, t.primary_bg) >= 4.5, "primary button");
+    assert!(contrast(t.warning, t.chrome) >= 4.5, "warning on chrome: {}", contrast(t.warning, t.chrome));
+    assert_eq!(t.danger, Tokens::for_kind(ThemeKind::Pro).danger);
 }
 
 #[test]
