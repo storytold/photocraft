@@ -1,6 +1,7 @@
 use super::*;
 use photocraft_color::{PixelFormat, SampleType};
 mod ext;
+mod min_max;
 mod mosaic;
 mod selection_mix;
 
@@ -52,6 +53,7 @@ fn all_filters() -> Vec<FilterParams> {
         FilterParams::DustAndScratches { radius: 2.0, threshold: 10.0 },
         FilterParams::Minimum { radius: 1.0, preserve: Preserve::Squareness },
         FilterParams::Maximum { radius: 2.0, preserve: Preserve::Squareness },
+        FilterParams::Minimum { radius: 1.5, preserve: Preserve::Squareness },
         FilterParams::Minimum { radius: 2.5, preserve: Preserve::Roundness },
         FilterParams::Maximum { radius: 3.0, preserve: Preserve::Roundness },
         FilterParams::Offset { horizontal: 7, vertical: -3, undefined: UndefinedAreas::Wrap },
@@ -294,6 +296,17 @@ fn minimum_maximum_treat_cmyk_as_ink() {
                 assert!((mn.pixel(x, 15)[0] - want).abs() < 1e-6, "{depth:?} {preserve:?} Minimum C at x {x}: {:?}", mn.pixel(x, 15));
             }
             assert!(mn.pixel(6, 5)[4].abs() < 1e-6, "{depth:?} {preserve:?} Minimum shrinks alpha");
+            // r 0.5: half of the way to r 1, in the same polarity.
+            let tol = tolerance(depth);
+            let mx = run(&s, &FilterParams::Maximum { radius: 0.5, preserve });
+            assert!((mx.pixel(20, 15)[0] - 0.5).abs() <= tol, "{depth:?} {preserve:?} Maximum half-fades the line: {:?}", mx.pixel(20, 15));
+            assert!(mx.pixel(19, 15)[0].abs() <= tol, "{depth:?} {preserve:?} Maximum keeps paper: {:?}", mx.pixel(19, 15));
+            assert!((mx.pixel(5, 5)[4] - 0.5).abs() <= tol, "{depth:?} {preserve:?} Maximum half-grows alpha");
+            let mn = run(&s, &FilterParams::Minimum { radius: 0.5, preserve });
+            for (x, want) in [(18, 0.0), (19, 0.5), (20, 1.0), (21, 0.5), (22, 0.0)] {
+                assert!((mn.pixel(x, 15)[0] - want).abs() <= tol, "{depth:?} {preserve:?} Minimum C at x {x}: {:?}", mn.pixel(x, 15));
+            }
+            assert!((mn.pixel(6, 5)[4] - 0.5).abs() <= tol, "{depth:?} {preserve:?} Minimum half-shrinks alpha");
         }
     }
 }
@@ -304,17 +317,47 @@ fn maximum_roundness_grows_a_point_into_a_disc() {
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let mut s = flat(depth, R, [0.0, 0.0, 0.0, 1.0]);
         s.write_pixel(20, 15, &[1.0, 1.0, 1.0, 1.0]);
-        for radius in [1.0f32, 2.0, 3.5, 6.0] {
+        for radius in [1.0f32, 2.0, 6.0] {
             let round = run(&s, &FilterParams::Maximum { radius, preserve: Preserve::Roundness });
             let square = run(&s, &FilterParams::Maximum { radius, preserve: Preserve::Squareness });
-            let rs = radius.round() as i32;
+            let rs = radius as i32;
             for y in R.y0..R.y1 {
                 for x in R.x0..R.x1 {
                     let (dx, dy) = (x - 20, y - 15);
                     let in_disc = (dx * dx + dy * dy) as f32 <= radius * radius;
-                    assert_eq!(round.pixel(x, y)[0] > 0.5, in_disc, "{depth:?} r {radius} at {dx},{dy}");
-                    assert_eq!(square.pixel(x, y)[0] > 0.5, dx.abs() <= rs && dy.abs() <= rs, "{depth:?} r {radius} at {dx},{dy}");
+                    assert_eq!(round.pixel(x, y)[0], if in_disc { 1.0 } else { 0.0 }, "{depth:?} r {radius} at {dx},{dy}");
+                    let in_square = dx.abs() <= rs && dy.abs() <= rs;
+                    assert_eq!(square.pixel(x, y)[0], if in_square { 1.0 } else { 0.0 }, "{depth:?} r {radius} at {dx},{dy}");
                 }
+            }
+        }
+        // r 3.5 lies between the discs dx² + dy² ≤ 10 and ≤ 13 (no lattice point has 11 or 12),
+        // so the ring at 13 gets f = (3.5 − √10) / (√13 − √10) ≈ 0.76. The square is the 7×7 plus
+        // half of the 9×9 ring.
+        let f = (3.5 - 10f32.sqrt()) / (13f32.sqrt() - 10f32.sqrt());
+        let round = run(&s, &FilterParams::Maximum { radius: 3.5, preserve: Preserve::Roundness });
+        let square = run(&s, &FilterParams::Maximum { radius: 3.5, preserve: Preserve::Squareness });
+        for y in R.y0..R.y1 {
+            for x in R.x0..R.x1 {
+                let (dx, dy) = (x - 20, y - 15);
+                let d2 = dx * dx + dy * dy;
+                let want = if d2 <= 10 {
+                    1.0
+                } else if d2 == 13 {
+                    f
+                } else {
+                    0.0
+                };
+                assert!((round.pixel(x, y)[0] - want).abs() <= tolerance(depth), "{depth:?} round at {dx},{dy}: {:?}", round.pixel(x, y));
+                let ring = dx.abs().max(dy.abs());
+                let want = if ring <= 3 {
+                    1.0
+                } else if ring == 4 {
+                    0.5
+                } else {
+                    0.0
+                };
+                assert!((square.pixel(x, y)[0] - want).abs() <= tolerance(depth), "{depth:?} square at {dx},{dy}: {:?}", square.pixel(x, y));
             }
         }
     }
@@ -326,35 +369,69 @@ fn maximum_roundness_grows_a_point_into_a_disc() {
     assert_eq!(r1.pixel(21, 16)[0], 0.0);
 }
 
+/// How far a stored sample may be from an exact value at each depth.
+fn tolerance(depth: SampleType) -> f32 {
+    match depth {
+        SampleType::U8 => 1.0 / 255.0,
+        SampleType::U16 => 1.0 / 65535.0,
+        _ => 1e-6,
+    }
+}
+
 #[test]
-fn minimum_maximum_roundness_match_brute_force() {
-    // Exhaustive disc search on a textured image, both operators, a few radii (incl. fractional).
+fn minimum_maximum_match_brute_force() {
+    // Exhaustive search on a textured image, both operators and modes. A fractional radius is the
+    // blend between the hard element at the radius and the next larger one: the square of
+    // half-width floor(r) + 1, or the disc of the next sum of two squares. Integer radii are exact.
     let s = pattern(SampleType::F32, R);
     let img = s.read_region(R);
     let at = |x: i32, y: i32, c: usize| -> Option<f32> { R.contains(x, y).then(|| img[((y * 40 + x) * 4) as usize + c]) };
-    for radius in [1.0f32, 1.5, 2.9, 4.0] {
-        let ri = radius.floor() as i32;
+    let extreme = |x: i32, y: i32, c: usize, max: bool, inside: &dyn Fn(i32, i32) -> bool| {
+        let mut m = if max { f32::MIN } else { f32::MAX };
+        for dy in -9..=9 {
+            for dx in -9..=9 {
+                if inside(dx, dy)
+                    && let Some(v) = at(x + dx, y + dy, c)
+                {
+                    m = if max { m.max(v) } else { m.min(v) };
+                }
+            }
+        }
+        m
+    };
+    let sums: Vec<i32> = (0..10).flat_map(|a| (0..10).map(move |b| a * a + b * b)).collect();
+    for radius in [0.5f32, 1.0, 1.5, 2.2, 2.9, 4.0, 7.3] {
+        let k = radius.floor() as i32;
+        let n_lo = sums.iter().copied().filter(|n| *n as f32 <= radius * radius).max().unwrap();
+        let n_hi = sums.iter().copied().filter(|n| *n as f32 > radius * radius).min().unwrap();
+        let f_disc = (radius - (n_lo as f32).sqrt()) / ((n_hi as f32).sqrt() - (n_lo as f32).sqrt());
         for max in [false, true] {
-            let p = if max {
-                FilterParams::Maximum { radius, preserve: Preserve::Roundness }
-            } else {
-                FilterParams::Minimum { radius, preserve: Preserve::Roundness }
-            };
-            let got = run(&s, &p);
-            for y in R.y0 + ri..R.y1 - ri {
-                for x in R.x0 + ri..R.x1 - ri {
-                    for c in 0..3 {
-                        let mut want = if max { f32::MIN } else { f32::MAX };
-                        for dy in -ri..=ri {
-                            for dx in -ri..=ri {
-                                if (dx * dx + dy * dy) as f32 <= radius * radius
-                                    && let Some(v) = at(x + dx, y + dy, c)
-                                {
-                                    want = if max { want.max(v) } else { want.min(v) };
-                                }
+            for preserve in [Preserve::Squareness, Preserve::Roundness] {
+                let p = if max { FilterParams::Maximum { radius, preserve } } else { FilterParams::Minimum { radius, preserve } };
+                let got = run(&s, &p);
+                for y in R.y0 + k + 1..R.y1 - k - 1 {
+                    for x in R.x0 + k + 1..R.x1 - k - 1 {
+                        for c in 0..3 {
+                            let (lo, hi, f) = match preserve {
+                                Preserve::Squareness => (
+                                    extreme(x, y, c, max, &|dx, dy| dx.abs() <= k && dy.abs() <= k),
+                                    extreme(x, y, c, max, &|dx, dy| dx.abs() <= k + 1 && dy.abs() <= k + 1),
+                                    radius - k as f32,
+                                ),
+                                Preserve::Roundness => (
+                                    extreme(x, y, c, max, &|dx, dy| dx * dx + dy * dy <= n_lo),
+                                    extreme(x, y, c, max, &|dx, dy| dx * dx + dy * dy <= n_hi),
+                                    f_disc,
+                                ),
+                            };
+                            let v = got.pixel(x, y)[c];
+                            if radius.fract() == 0.0 {
+                                assert_eq!(v, lo, "r {radius} {preserve:?} max {max} at {x},{y} c{c}");
+                            } else {
+                                let want = lo + f * (hi - lo);
+                                assert!((v - want).abs() < 1e-6, "r {radius} {preserve:?} max {max} at {x},{y} c{c}: {v}, want {want}");
                             }
                         }
-                        assert!((got.pixel(x, y)[c] - want).abs() < 1e-6, "r {radius} max {max} at {x},{y} c{c}");
                     }
                 }
             }
