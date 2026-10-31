@@ -40,6 +40,10 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     if crate::adjust_preview::on_layer(app, idx) {
         return None;
     }
+    // Previewing on the GPU (a layer operator): no CPU preview.
+    if crate::filter_gpu_preview::on_gpu(app, idx) {
+        return None;
+    }
     let dialog = app.ui.dialogs.iter().position(|d| d.fields.contains_key("__filter"))?;
     crate::filter_dialog::refresh_match_color_sources(&app.session, &mut app.ui.dialogs[dialog].fields);
     let d = &app.ui.dialogs[dialog];
