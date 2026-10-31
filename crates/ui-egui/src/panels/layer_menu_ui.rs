@@ -73,7 +73,11 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         v.push(Some(("Rasterize Layers", "layer.rasterize.layer")));
     } else {
         match &l.content {
-            LayerContent::Text(_) => v.push(Some(("Rasterize Type", "layer.rasterize.type"))),
+            LayerContent::Text(_) => {
+                v.push(Some(("Rasterize Type", "layer.rasterize.type")));
+                v.push(Some((tl!("Create Work Path"), "type.createWorkPath")));
+                v.push(Some((tl!("Convert to Shape"), "type.convertToShape")));
+            }
             LayerContent::Shape(_) => v.push(Some(("Rasterize Layer", "layer.rasterize.shape"))),
             LayerContent::Smart(_) => {
                 v.push(Some((tl!("Edit Contents"), "layer.smartObjects.editContents")));
