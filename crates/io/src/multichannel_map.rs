@@ -113,9 +113,7 @@ pub(crate) fn document_to_psd(doc: &Document, force_psb: bool, size_limit: Optio
         warnings.push("document exceeds 30000 px; written as PSB".into());
     }
     let header = Header::new(version, doc.size.width, doc.size.height, channels.len().max(1) as u16, psd_depth(sample), PsdMode::Multichannel);
-    let image_data = ImageData::encode(Compression::Rle, &planes, &header)
-        .or_else(|_| ImageData::encode(Compression::Raw, &planes, &header))
-        .unwrap_or(ImageData::new(Compression::Raw, planes));
+    let image_data = crate::psd_export::merged_image_data(crate::psd_export::merged_compression(sample, Compression::Rle), planes, &header);
     let mut resources = vec![
         ImageResource::new(ids::RESOLUTION_INFO, ResolutionInfo::from_dpi(f64::from(doc.resolution_dpi)).to_bytes()),
         ImageResource::new(ids::GLOBAL_ANGLE, (doc.global_light.angle.round() as i32).to_be_bytes().to_vec()),

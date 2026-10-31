@@ -325,12 +325,8 @@ fn prepare_merged_planes<'a>(
     let channels = (cc + usize::from(has_alpha) + extra.len()) as u16;
     let mode = if duotone { PsdMode::Duotone } else { psd_mode(fmt.mode) };
     let header = Header::new(ex.version, doc.size.width, doc.size.height, channels, psd_depth(sample), mode);
-    let compression = if sample == SampleType::F32 { Compression::Raw } else { opts.merged_compression };
-    let image_data = ImageData::encode(compression, &planes, &header).or_else(|_| ImageData::encode(Compression::Raw, &planes, &header)).unwrap_or(ImageData {
-        compression: Compression::Raw,
-        data: planes,
-        stored: None,
-    });
+    let compression = if sample == SampleType::F32 { Compression::Raw } else { super::merged_compression(sample, opts.merged_compression) };
+    let image_data = super::merged_image_data(compression, planes, &header);
     ctl.progress(1.0);
     MergedExport { header, image_data, extra, has_alpha, quick_mask_id, real_merged }
 }

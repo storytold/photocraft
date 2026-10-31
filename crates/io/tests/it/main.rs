@@ -56,6 +56,7 @@ mod psd_import_file;
 mod psd_kerning;
 mod psd_layer_block_length;
 mod psd_maximize_compatibility;
+mod psd_merged_compression;
 mod psd_noise_fill_roundtrip;
 mod psd_recovery_generated;
 mod psd_roundtrip_bytes;
