@@ -592,6 +592,16 @@ pub fn cancel_stale(app: &mut PhotocraftApp) {
     let pending = app.ui.crop_rect.is_some() || app.crop.drag.is_some();
     // A frame made before any document was claimed (control channel, tests) is the active one's.
     if pending && app.crop.doc.is_some() && app.crop.doc != active {
+        // Default mode turned the frame's own view, which `cancel` doesn't reach: it turns the
+        // active one upright, and `ui.views` is still in the order of `view_docs` here (#9202).
+        if !crate::crop_mode::classic(app) {
+            let doc = app.crop.doc;
+            let synced = app.view_docs.iter().position(|d| Some(*d) == doc);
+            let i = synced.or_else(|| app.session.documents().iter().position(|st| Some(st.doc.id) == doc));
+            if let Some(v) = i.and_then(|i| app.ui.views.get_mut(i)) {
+                v.rotation = 0.0;
+            }
+        }
         cancel(app);
     }
     app.crop.doc = active;
