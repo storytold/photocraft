@@ -99,7 +99,7 @@ fn sample_hue_at(app: &mut PhotocraftApp, x: f64, y: f64) -> bool {
     };
     let Some(dialog) = app.ui.dialog_mut(id) else { return true };
     if let Value::Object(params) = params {
-        dialog.fields.retain(|key, _| key.starts_with("__"));
+        dialog.fields.retain(|key, _| key.starts_with("__") || key == "target");
         dialog.fields.extend(params);
     }
     true

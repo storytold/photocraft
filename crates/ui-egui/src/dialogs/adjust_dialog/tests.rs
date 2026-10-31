@@ -451,6 +451,41 @@ fn hue_saturation_dialog_eyedroppers_follow_photoshop() {
     crate::dialogs::confirm(h.state_mut(), id).unwrap();
 }
 
+/// CodeRabbit on #9267: a Hue/Saturation eyedropper pick keeps the dialog's captured `target`, so
+/// OK still edits the layer mask targeted when the dialog opened, not the pixels, even after the
+/// Channels panel retargets the composite.
+#[test]
+fn hue_saturation_dialog_eyedropper_keeps_the_target() {
+    let mut app = app_with_image();
+    app.run("layer.new.layer", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#b04020"})).unwrap();
+    app.run("layer.layerMask.revealAll", json!({})).unwrap();
+    app.ui.mask_target = true; // clicking the mask thumbnail in the Layers panel
+    let id = open(&mut app, "image.adjustments.hueSaturation").unwrap();
+    let dialog = app.ui.dialog_mut(id).unwrap();
+    assert_eq!(dialog.fields["target"], json!("mask"));
+    dialog.fields.insert("lightness".into(), json!(-100));
+    dialog.fields.insert(HUE_PICKER_RANGE.into(), json!("reds"));
+    dialog.fields.insert(CURVE_PICKER.into(), json!("sample"));
+    assert!(picker_armed(&app));
+    let reds = app.ui.dialog_mut(id).unwrap().fields["reds"]["range"].clone();
+    assert!(sample_at(&mut app, 8.0, 8.0));
+    let fields = &app.ui.dialog_mut(id).unwrap().fields;
+    assert_ne!(fields["reds"]["range"], reds, "the pick moved Reds");
+    assert_eq!(fields.get("target"), Some(&json!("mask")), "the pick keeps the target");
+    app.run("channel.target", json!({"channel": "composite"})).unwrap();
+    assert!(!app.layer_mask_targeted());
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    let st = app.session.active().unwrap();
+    let layer = st.doc.layer(st.active_layer.unwrap()).unwrap();
+    assert_eq!(layer.mask.as_ref().unwrap().surface.pixel(8, 8)[0], 0.0, "OK darkened the mask");
+    let pixels = match &layer.content {
+        photocraft_doc::LayerContent::Raster(p) => p.pixel(8, 8),
+        other => panic!("{other:?}"),
+    };
+    assert!(pixels[0] > 0.5, "and left the pixels alone: {pixels:?}");
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
