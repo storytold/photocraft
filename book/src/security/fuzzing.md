@@ -7,6 +7,7 @@ PhotoCraft already has `cargo-fuzz` workspaces next to its primary untrusted-for
 | `crates/psd` | `parse`, `descriptor` |
 | `crates/codecs` | `decode_any`, `decode_png`, `decode_jpeg`, `decode_tiff`, `decode_exr` |
 | `crates/format` | `load` |
+| `crates/ipp` | `reply` (a print server's raw reply, read a few bytes at a time), `message` (the IPP decoder) |
 
 The main CI workflow can run these targets through a manually dispatched fuzz job. It is not currently scheduled continuous fuzzing.
 
