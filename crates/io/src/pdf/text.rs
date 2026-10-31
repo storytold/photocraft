@@ -34,16 +34,30 @@ fn write_fill_color(out: &mut String, color: &photocraft_color::Color, mode: Col
     Some(())
 }
 
+/// Whether any glyph is thickened by faux bold or by a face lacking the weight: rendering
+/// emboldens those glyphs, but [`photocraft_text::render::glyph_outlines`] gives the regular outline.
+fn synthetic_bold(layout: &photocraft_text::TextLayout) -> bool {
+    layout
+        .glyphs
+        .iter()
+        .any(|g| layout.faces.get(g.face as usize).is_some_and(|f| f.embolden) || layout.styles.get(g.style as usize).is_some_and(|s| s.faux_bold))
+}
+
+/// Whether `layer` is laid out in straight horizontal lines with a finite transform and `dpi`.
+/// Path text is bent along its path when rendered, and the outlines written here are not.
+fn straight_horizontal(layer: &TextLayer, dpi: f32) -> bool {
+    layer.warp.is_none()
+        && !matches!(layer.shape, photocraft_doc::text::TextShape::Path { .. })
+        && layer.orientation == photocraft_doc::text::Orientation::Horizontal
+        && dpi.is_finite()
+        && dpi > 0.0
+        && layer.transform.m.iter().all(|v| v.is_finite())
+}
+
 /// Return PDF vector and invisible text operators for a directly representable text layer.
 /// Coordinates are in document pixels with y increasing down; the caller applies the CTM.
 pub(super) fn text_ops(layer: &TextLayer, mode: ColorMode, dpi: f32) -> Option<String> {
-    if layer.warp.is_some() || layer.orientation != photocraft_doc::text::Orientation::Horizontal {
-        return None;
-    }
-    if !dpi.is_finite() || dpi <= 0.0 {
-        return None;
-    }
-    if layer.transform.m.iter().any(|v| !v.is_finite()) {
+    if !straight_horizontal(layer, dpi) {
         return None;
     }
     let channels = match mode {
@@ -58,6 +72,9 @@ pub(super) fn text_ops(layer: &TextLayer, mode: ColorMode, dpi: f32) -> Option<S
 
     let mut engine = photocraft_text::TextEngine::new();
     let layout = engine.layout(layer, dpi);
+    if synthetic_bold(&layout) {
+        return None;
+    }
 
     for style in &layout.styles {
         let color = style.color.in_mode(mode);
@@ -218,6 +235,32 @@ mod tests {
             ..Default::default()
         };
         assert!(text_ops(&transparent, ColorMode::Rgb, 72.0).is_none());
+    }
+
+    #[test]
+    fn rejects_path_text_and_synthetic_bold() {
+        let on_path = TextLayer {
+            text: "Path".into(),
+            shape: photocraft_doc::text::TextShape::Path { path: Default::default(), start: 0.0, flip: false },
+            ..Default::default()
+        };
+        assert!(text_ops(&on_path, ColorMode::Rgb, 72.0).is_none());
+
+        let faux_bold = TextLayer {
+            text: "Bold".into(),
+            runs: vec![photocraft_doc::text::TextRun { len: 4, style: photocraft_doc::text::CharStyle { faux_bold: true, ..Default::default() } }],
+            ..Default::default()
+        };
+        assert!(text_ops(&faux_bold, ColorMode::Rgb, 72.0).is_none());
+
+        // A face without the requested weight is emboldened by font matching.
+        let plain = TextLayer { text: "Bold".into(), ..Default::default() };
+        let mut layout = photocraft_text::TextEngine::new().layout(&plain, 72.0);
+        assert!(!synthetic_bold(&layout));
+        for face in &mut layout.faces {
+            face.embolden = true;
+        }
+        assert!(synthetic_bold(&layout));
     }
 
     #[test]
