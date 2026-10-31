@@ -852,6 +852,134 @@ fn a_failing_zoomed_out_preview_holds_its_last_picture() {
     assert!(held_frames >= 1, "no frame came between the failure and the CPU preview: nothing was checked");
 }
 
+/// Opens Unsharp Mask's dialog (closing the harness's Gaussian Blur) with `params`, Preview on.
+fn open_unsharp(h: &mut Harness<'static, PhotocraftApp>, blur_dialog: u64, params: serde_json::Value) -> u64 {
+    crate::dialogs::cancel(h.state_mut(), blur_dialog).unwrap();
+    let id = crate::filter_dialog::open(h.state_mut(), UNSHARP).unwrap();
+    let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
+    for (k, v) in params.as_object().unwrap() {
+        d.fields.insert(k.clone(), v.clone());
+    }
+    d.fields.insert("__preview".into(), json!(true));
+    id
+}
+
+/// Phase 4: Unsharp Mask previews on the GPU at 100 %, matching the CPU preview, and it isn't
+/// the unsharpened image.
+#[test]
+fn unsharp_mask_previews_on_the_gpu() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, blur) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    let id = open_unsharp(&mut h, blur, json!({"amount": 200.0, "radius": 3.0, "threshold": 0.0}));
+    settle(&mut h, |app| on_gpu(app, 0));
+    assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "the CPU preview stands aside");
+    for params in [json!({"amount": 200.0, "radius": 3.0, "threshold": 0.0}), json!({"amount": 120.0, "radius": 8.0, "threshold": 4.0})] {
+        let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
+        for (k, v) in params.as_object().unwrap() {
+            d.fields.insert(k.clone(), v.clone());
+        }
+        h.run_steps(3);
+        assert!(on_gpu(h.state_mut(), 0));
+        let what = format!("unsharp {params}");
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, UNSHARP, &params, 1).unwrap())
+        };
+        let plain = h.state().session.active().unwrap().doc.clone();
+        let shown = probes_named(&mut h, Some(&what));
+        let (mut checked, mut differs) = (0, 0);
+        for (p, px) in &shown {
+            let (want, alpha) = expected_in(h.state(), &oracle, *p);
+            if alpha < 0.999 {
+                continue;
+            }
+            assert!(within(&want, *px), "{what}: at {p:?} the canvas shows {px:?}, the CPU {want:?}");
+            checked += 1;
+            differs += usize::from(!within(&expected_around(h.state(), &plain, *p, 0).0, *px));
+        }
+        assert!(checked >= 40 && differs >= 10, "{what}: {checked} probes checked, {differs} differ from the unsharpened image");
+    }
+}
+
+/// Zoomed out, Unsharp Mask's proxy texture matches the CPU's proxy preview exactly (as for the
+/// blur), its radius scaled by the factor and its amount and threshold as they are.
+#[test]
+fn unsharp_mask_previews_on_the_gpu_proxy() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, blur) = harness_sized(rs, 4.0, true, [3000, 2400]);
+    if !gpu_path(&h) {
+        return;
+    }
+    let params = json!({"amount": 250.0, "radius": 6.0, "threshold": 0.0});
+    open_unsharp(&mut h, blur, params.clone());
+    h.state_mut().ui.views[0].zoom = 0.25;
+    settle(&mut h, |app| app.filter_gpu_preview.as_ref().is_some_and(|p| p.proxy.as_ref().is_some_and(|g| g.drawn.is_some())));
+    assert!(on_gpu(h.state_mut(), 0), "the GPU previews zoomed out");
+    let (k, key, size) = gpu_proxy(h.state_mut(), 0).expect("the proxy");
+    assert_eq!(k, 2);
+    let oracle = {
+        let st = h.state().session.active().unwrap();
+        crate::filter_dialog::preview_document(&st.doc, st.active_layer, UNSHARP, &params, 2).unwrap()
+    };
+    let (_, tsize, texels) = h.state().gpu.as_ref().unwrap().read_texels(key).expect("the proxy texture");
+    assert_eq!(tsize, size);
+    let premul = |c: &[f32; 4]| [c[0] * c[3], c[1] * c[3], c[2] * c[3]];
+    let off = |cpu: &photocraft_compose::Buffer| {
+        cpu.px.iter().zip(&texels).map(|(c, g)| premul(c).iter().zip(g).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max)).fold(0.0, f32::max)
+    };
+    let worst = off(&photocraft_compose::flatten(&oracle));
+    assert!(worst <= 1.5 / 255.0, "the proxy texture is {:.2}/255 off the CPU's proxy preview", worst * 255.0);
+    let plain = off(&photocraft_compose::flatten(&crate::adjust_preview::proxy_base(&h.state().session.active().unwrap().doc, 2)));
+    assert!(plain > 10.0 / 255.0, "the unsharpened proxy is only {:.2}/255 off", plain * 255.0);
+}
+
+/// Phase 4: High Pass and Box Blur preview on the GPU at 100 %, matching the CPU preview.
+#[test]
+fn high_pass_and_box_blur_preview_on_the_gpu() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, mut open) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    for (command, params) in [(HIGH_PASS, json!({"radius": 6.0})), (BOX_BLUR, json!({"radius": 3.0})), (BOX_BLUR, json!({"radius": 12.0}))] {
+        crate::dialogs::cancel(h.state_mut(), open).unwrap();
+        open = crate::filter_dialog::open(h.state_mut(), command).unwrap();
+        {
+            let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == open).unwrap();
+            for (k, v) in params.as_object().unwrap() {
+                d.fields.insert(k.clone(), v.clone());
+            }
+            d.fields.insert("__preview".into(), json!(true));
+        }
+        settle(&mut h, |app| on_gpu(app, 0));
+        assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "{command}: the CPU preview stands aside");
+        let what = format!("{command} {params}");
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, command, &params, 1).unwrap())
+        };
+        let plain = h.state().session.active().unwrap().doc.clone();
+        let shown = probes_named(&mut h, Some(&what));
+        let (mut checked, mut differs) = (0, 0);
+        for (p, px) in &shown {
+            let (want, alpha) = expected_in(h.state(), &oracle, *p);
+            if alpha < 0.999 {
+                continue;
+            }
+            assert!(within(&want, *px), "{what}: at {p:?} the canvas shows {px:?}, the CPU {want:?}");
+            checked += 1;
+            differs += usize::from(!within(&expected_around(h.state(), &plain, *p, 0).0, *px));
+        }
+        assert!(checked >= 40 && differs >= 10, "{what}: {checked} probes checked, {differs} differ from the unfiltered image");
+    }
+}
+
 /// Only the main canvas gives the dialog's preview window its GPU view: an Arrange tile or a
 /// floating window (perhaps on another display) must not replace it.
 #[test]
