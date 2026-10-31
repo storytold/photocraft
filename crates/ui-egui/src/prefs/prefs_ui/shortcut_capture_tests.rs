@@ -560,3 +560,20 @@ fn a_tools_assigned_key_cycles_its_group_without_springing() {
     assert_ne!(app.ui.tool, Tool::Move, "B cycled the group");
     assert!(app.ui.spring.is_none(), "a cycle in the tool's own group is no temporary switch: {:?}", app.ui.spring);
 }
+
+/// Only main keys are shared: B added to the Move Tool as an alternate (Add Shortcut) is no group
+/// key, so it clashes with the Brush group's B as any shortcut does, and OK takes it from them
+/// (dispatch keeps one command per key, so two tools can't both have it as an alternate).
+#[test]
+fn a_tools_plain_alternate_is_no_shared_key() {
+    let (mut h, id) = dialog(1.0, "tools.select.move", "Move Tool");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("captureAlt".into(), json!(true));
+    capture_key(&mut h, id, Key::B, Modifiers::NONE);
+    assert_eq!(field(&h, id, "messageWarning"), json!(true), "{}", field(&h, id, "message"));
+    assert_eq!(field(&h, id, "alternates")["tools.select.move"], json!(["B"]));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    let app = h.state();
+    assert_eq!(crate::shortcuts::effective_alternates(app, "tools.select.move"), ["B"]);
+    assert_eq!(crate::tool_shortcuts::shortcut(app, crate::state::Tool::Brush), None, "the Brush lost B to the alternate");
+}

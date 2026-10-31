@@ -361,15 +361,17 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
                     continue;
                 }
                 for (other, _, _, def) in &items {
-                    if *other == id || super::shortcuts::shares_tool_key(&id, other, &norm) {
+                    if *other == id {
                         continue;
                     }
+                    // Tools keep a plain main key they share; an alternate holding it still loses it.
+                    let shared = super::shortcuts::shares_tool_key(&id, other, &norm, !is_alt);
                     let held = match ov.get(other) {
                         Some(s) if new => Some(s.as_str()),
                         Some(_) => None,
                         None => def.as_deref(),
                     };
-                    if held.and_then(prefs::normalize_shortcut).as_deref() == Some(norm.as_str()) {
+                    if !shared && held.and_then(prefs::normalize_shortcut).as_deref() == Some(norm.as_str()) {
                         ov.insert(other.clone(), String::new());
                     }
                     // Its further keys: the edited list when this assignment is new, else only
