@@ -19,6 +19,24 @@ fn barrel() -> std::sync::MutexGuard<'static, Tracker> {
     BARREL.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+type Wake = Box<dyn Fn() + Send + Sync>;
+
+/// Called when the tracker records a press or a click ([`set_wake`]).
+static WAKE: Mutex<Option<Wake>> = Mutex::new(None);
+
+/// Wake the UI when the barrel button is pressed or clicked: the driver's Right Click in the air
+/// can come with no window input at all, and [`take_buttons`] is read once a frame, so without a
+/// wake the click would wait for the next unrelated input. The app passes its repaint request.
+pub fn set_wake(wake: impl Fn() + Send + Sync + 'static) {
+    *WAKE.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(wake));
+}
+
+fn wake() {
+    if let Some(wake) = WAKE.lock().unwrap_or_else(PoisonError::into_inner).as_ref() {
+        wake();
+    }
+}
+
 #[repr(C)]
 struct POINT {
     x: i32,
@@ -135,10 +153,17 @@ unsafe extern "system" fn get_msg_proc(code: i32, w_param: usize, l_param: isize
                     let flags = pointer_message_flags | info.pointer_info.pointer_flags;
                     let is_barrel = is_barrel_pressed(Some(info.pen_flags), flags) || info.pointer_info.button_change_type == POINTER_CHANGE_SECONDBUTTON_DOWN;
                     let in_contact = msg.message != WM_POINTERUP && (flags & POINTER_FLAG_INCONTACT) != 0;
-                    let mut b = barrel();
-                    b.update(is_barrel, msg.time);
-                    // A pen without pressure reports zero: only a valid zero is a tipless contact.
-                    b.contact(in_contact, crate::pen_buttons::tip_pressed(in_contact, info.pen_mask, info.pressure));
+                    let news = {
+                        let mut b = barrel();
+                        let news = b.update(is_barrel, msg.time);
+                        // A pen without pressure reports zero: only a valid zero is a tipless contact.
+                        b.contact(in_contact, crate::pen_buttons::tip_pressed(in_contact, info.pen_mask, info.pressure));
+                        news
+                    };
+                    // After the tracker's lock is released: the wake may run the UI's repaint request.
+                    if news {
+                        wake();
+                    }
                 }
             }
             WM_POINTERLEAVE | WM_POINTERCAPTURECHANGED => barrel().leave(),

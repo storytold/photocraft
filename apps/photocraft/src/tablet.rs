@@ -52,8 +52,11 @@ pub fn right_button_service() -> Option<photocraft_ui_egui::RightButtonDownFn> {
 }
 
 /// The pen's barrel button for the UI's right-click (Windows): what it did since the last frame.
+/// A press or click repaints `ctx`, so a driver's Right Click with no window input is still taken.
 #[cfg(target_os = "windows")]
-pub fn pen_barrel_service() -> Option<photocraft_ui_egui::PenBarrelFn> {
+pub fn pen_barrel_service(ctx: &egui::Context) -> Option<photocraft_ui_egui::PenBarrelFn> {
+    let ctx = ctx.clone();
+    photocraft_tablet::windows::set_wake(move || ctx.request_repaint());
     Some(Box::new(|| {
         let b = photocraft_tablet::windows::take_buttons();
         photocraft_ui_egui::pen_barrel::BarrelInput { held: b.held, pressed: b.pressed, clicked: b.clicked, tipless: b.tipless }
@@ -61,7 +64,7 @@ pub fn pen_barrel_service() -> Option<photocraft_ui_egui::PenBarrelFn> {
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn pen_barrel_service() -> Option<photocraft_ui_egui::PenBarrelFn> {
+pub fn pen_barrel_service(_ctx: &egui::Context) -> Option<photocraft_ui_egui::PenBarrelFn> {
     None
 }
 

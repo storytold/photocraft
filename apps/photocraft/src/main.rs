@@ -667,7 +667,7 @@ fn main() -> eframe::Result {
             #[cfg(target_os = "linux")]
             tablet::spawn_x11(&app.stylus.feed, display);
             app.services.right_button_down = tablet::right_button_service();
-            app.services.pen_barrel = tablet::pen_barrel_service();
+            app.services.pen_barrel = tablet::pen_barrel_service(&cc.egui_ctx);
             // Paths on the command line (Linux/Windows file associations, `photocraft a.psd`).
             app.open_paths(&files);
             if !unreadable_paths.is_empty() {

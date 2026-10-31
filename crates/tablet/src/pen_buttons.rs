@@ -52,18 +52,22 @@ impl Tracker {
     pub const DEFAULT: Tracker = Tracker { down_at: None, pressed: false, clicked: false, contact: None, tipless: false };
 
     /// One pen event: the button's state at `time_ms` (a millisecond clock that may wrap, like
-    /// Windows' message time).
-    pub fn update(&mut self, barrel: bool, time_ms: u32) {
+    /// Windows' message time). Returns true when it recorded a press or a click: the UI has news to
+    /// take, even if the window got no input of its own for it (a driver's Right Click in the air).
+    pub fn update(&mut self, barrel: bool, time_ms: u32) -> bool {
         match (self.down_at, barrel) {
             (None, true) => {
                 self.down_at = Some(time_ms);
                 self.pressed = true;
+                true
             }
             (Some(at), false) => {
                 self.down_at = None;
-                self.clicked |= time_ms.wrapping_sub(at) <= CLICK_MS;
+                let click = time_ms.wrapping_sub(at) <= CLICK_MS;
+                self.clicked |= click;
+                click
             }
-            _ => {}
+            _ => false,
         }
     }
 
@@ -117,6 +121,19 @@ mod tests {
         t.update(false, 1120);
         assert_eq!(t.take(), Buttons { held: false, pressed: false, clicked: true, tipless: false });
         assert_eq!(t.take(), Buttons::default(), "the click is reported once");
+    }
+
+    #[test]
+    fn a_press_or_a_click_is_news_for_the_ui() {
+        // What the Windows hook wakes the UI for: a driver's Right Click in the air may come with
+        // no window input of its own, so nothing else would draw the frame that takes it.
+        let mut t = Tracker::default();
+        assert!(!t.update(false, 0), "nothing happened");
+        assert!(t.update(true, 10), "a press");
+        assert!(!t.update(true, 20), "still held");
+        assert!(t.update(false, 60), "a click");
+        assert!(t.update(true, 1000));
+        assert!(!t.update(false, 1000 + CLICK_MS + 1), "a long hold ends with no click");
     }
 
     #[test]
