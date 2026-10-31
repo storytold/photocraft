@@ -499,6 +499,32 @@ fn options_bar_fill_swatch_recolours_the_shape_just_drawn() {
     assert_eq!(shape(h.state()).fill, original.fill);
 }
 
+/// #8741: the options bar's Fill / Stroke swatch draws a rounded fill over its transparency
+/// checker, so the checker has to be rounded too. The square one painted light cells past the
+/// rounded corners, which read as specks on dark themes; the other colour swatches went to
+/// `checker_rounded` for the same reason in #3363.
+#[test]
+fn options_bar_swatch_checker_keeps_to_the_rounded_corners() {
+    let mut app = app("rgb", 8);
+    app.run("shape.create", json!({"rect": [20,20,80,60], "fill": "#80808080", "stroke": {"width": 4, "color": "#ee335580"}})).unwrap();
+    let h = harness(app, true);
+    let panel = h.ctx.global_style().visuals.panel_fill;
+    for label in ["Set shape fill type", "Set shape stroke type"] {
+        let swatch = h.get_by_label(label).rect();
+        let square: Vec<egui::Rect> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                // the harness's own panel background behind the widget is not the swatch's checker
+                egui::Shape::Rect(r) if swatch.contains_rect(r.rect) && r.corner_radius == egui::CornerRadius::ZERO && r.fill != panel => Some(r.rect),
+                _ => None,
+            })
+            .collect();
+        assert!(square.is_empty(), "{label}: square shapes inside the rounded swatch {swatch:?}: {square:?}");
+    }
+}
+
 fn test_gradient() -> photocraft_doc::Fill {
     photocraft_doc::Fill::Gradient {
         stops: vec![(0.0, photocraft_doc::Color::rgba(0.123456, 0.5, 0.75, 1.0)), (1.0, photocraft_doc::Color::rgba(0.9, 0.2, 0.1, 0.6))],
