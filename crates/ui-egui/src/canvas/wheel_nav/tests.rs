@@ -616,6 +616,30 @@ fn each_modifier_maps_like_photoshop() {
     assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "{pan:?} {zoom}");
     let (pan, zoom, _) = gesture(vec![vec![wheel(notch, CTRL)]], true, false);
     assert!(near(pan, Vec2::new(40.0, 0.0)) && zoom == 1.0, "⌘/Ctrl + wheel still scrolls sideways: {pan:?} {zoom}");
+
+    // #10488, as Windows sends it: winit reports a held Ctrl as BOTH `ctrl` and `command`, so a
+    // gesture condition that only asks for `!command` never fires there. Ctrl + ⌥ + wheel is a dead
+    // gesture today (nothing at all with Zoom with Scroll Wheel on, a plain vertical scroll with it
+    // off), so teaching it to zoom like ⌥ + wheel replaces no working behaviour.
+    let ctrl_alt = Modifiers { alt: true, ctrl: true, command: true, ..Modifiers::NONE };
+    let (pan, zoom, _) = one(ctrl_alt);
+    assert!(pan == Vec2::ZERO && (zoom - NOTCH).abs() < 1e-4, "Ctrl + ⌥ + wheel zooms 10%, at once: {pan:?} {zoom}");
+    // With the preference on the gesture swaps: ⌥ + wheel scrolls, so Ctrl + ⌥ + wheel scrolls too.
+    let (pan, zoom, _) = gesture(vec![vec![wheel(notch, ctrl_alt)]], true, false);
+    assert!(near(pan, Vec2::new(0.0, 40.0)) && zoom == 1.0, "with the preference on, Ctrl + ⌥ + wheel scrolls like ⌥: {pan:?} {zoom}");
+    // Animated Zoom on (the default): the notch is eased over its frames, ×1.1 in total.
+    let (pan, zoom, _) = gesture_with(vec![vec![wheel(notch, ctrl_alt)]], false, false, true);
+    assert!(pan == Vec2::ZERO && (zoom - NOTCH).abs() < 1e-4, "eased, one Ctrl + ⌥ notch is still ×1.1: {pan:?} {zoom}");
+    // A Windows touchpad pinch while ⌥ is held keeps folding into one pinch event: the fold looks at
+    // `ctrl` whatever else is held, and *replaces* the wheel event, so nothing is counted twice.
+    let (pan, zoom, _) = gesture(vec![vec![wheel(Vec2::new(0.0, 0.25), ctrl_alt)]], false, true);
+    let speed = egui::InputOptions::default().scroll_zoom_speed;
+    assert!(pan == Vec2::ZERO && (zoom - (speed * 40.0 * 0.25).exp()).abs() < 1e-4, "a fractional Ctrl + ⌥ step zooms once: {pan:?} {zoom}");
+    // macOS ⌘ + ⌥ (command set, ctrl not) is deliberately NOT the zoom gesture: it is left to egui's
+    // own scroll handling. Ctrl + ⌥ + ⇧ keeps its old behaviour too (`latest_shift` ignores ctrl), which
+    // means a continuous zoom with Animated Zoom on, and nothing with it off.
+    let (pan, zoom, _) = one(Modifiers { alt: true, ..CMD });
+    assert!(zoom == 1.0 && pan != Vec2::ZERO, "⌘ + ⌥ + wheel keeps scrolling: {pan:?} {zoom}");
 }
 
 #[test]
