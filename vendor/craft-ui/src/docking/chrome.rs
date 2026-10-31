@@ -237,12 +237,13 @@ impl<'a> FloatingFrame<'a> {
         let mut responses = Vec::new();
         let limits = PanelLimits { min: self.limits.min.max(vec2(40.0, RESIZE_BAND + TITLE_HEIGHT + 20.0)).min(self.limits.max), ..self.limits };
         let canceled = ui.input(|input| input.key_pressed(Key::Escape)) || crate::focus::lost(ui.ctx());
-        for (name, mut handle, direction) in handles(rect) {
-            if direction.x != 0.0 && !self.resize_axes[0] || direction.y != 0.0 && !self.resize_axes[1] {
-                continue;
-            }
+        for (name, mut handle, mut direction) in handles(rect) {
             if !self.reserve_top_resize_band && direction.y < 0.0 {
                 handle.max.y = (rect.top() + ui.ctx().pixels_per_point().recip()).min(rect.bottom());
+            }
+            direction = vec2(if self.resize_axes[0] { direction.x } else { 0.0 }, if self.resize_axes[1] { direction.y } else { 0.0 });
+            if direction == egui::Vec2::ZERO {
+                continue;
             }
             if !super::targets::usable(handle) {
                 continue;

@@ -22,6 +22,7 @@ pub(crate) type Workspace = craft_ui::docking::Workspace<String>;
 
 pub(crate) mod compat;
 mod contract;
+mod document_header;
 mod presentation;
 
 type Returns = std::collections::BTreeMap<String, Location<String>>;
@@ -84,7 +85,7 @@ pub(crate) const CANVAS: &str = "canvas";
 
 /// Every other panel may move, float and close; the workspace lock limits them all.
 fn permissions(id: &String) -> Permissions {
-    if id == CANVAS {
+    if id == CANVAS || id == document_header::ID {
         Permissions { accepts_splits: true, ..Permissions::PROTECTED }
     } else if presentation::is_spacer(id) {
         Permissions::PROTECTED
@@ -133,11 +134,14 @@ pub(crate) fn normalize(raw: &str) -> Option<&'static str> {
 }
 
 fn registered(id: &str) -> bool {
-    id == CANVAS || normalize(id) == Some(id)
+    id == CANVAS || id == document_header::ID || normalize(id) == Some(id)
 }
 
 pub(crate) fn valid(layout: &Layout<String>) -> bool {
-    layout.validate().is_ok() && layout.panels().iter().all(|id| registered(id)) && docked(layout).contains(&CANVAS.to_owned())
+    layout.validate().is_ok()
+        && layout.panels().iter().all(|id| registered(id))
+        && docked(layout).contains(&CANVAS.to_owned())
+        && document_header::valid(layout)
 }
 
 /// craft-ui's checks plus PhotoCraft's registry, for the layout and every hidden panel.
@@ -145,7 +149,7 @@ pub(crate) fn valid_workspace(workspace: &Workspace) -> bool {
     workspace.validate().is_ok()
         && valid(&workspace.layout)
         && workspace.saved.as_ref().is_none_or(valid)
-        && workspace.hidden.iter().all(|(id, at)| registered(id) && at.anchor.as_deref().is_none_or(registered))
+        && workspace.hidden.iter().all(|(id, at)| id != document_header::ID && registered(id) && at.anchor.as_deref().is_none_or(registered))
 }
 
 /// Read a saved `docking` workspace and where its floating panels dock back. Anything else,
@@ -279,7 +283,7 @@ fn collapsed_members(app: &PhotocraftApp, layout: &Layout<String>) -> std::colle
 }
 
 fn first_root(layout: &Layout<String>, except: &str) -> Option<String> {
-    docked(layout).panels().into_iter().find(|p| p.as_str() != except && p.as_str() != CANVAS).cloned()
+    docked(layout).panels().into_iter().find(|p| p.as_str() != except && p.as_str() != CANVAS && p.as_str() != document_header::ID).cloned()
 }
 
 /// Show `panel` if it is not in the layout: a closed panel at its recorded place, one never laid
@@ -611,6 +615,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     let mut commands = Vec::new();
     let strip = style.tab_height;
+    let document_header_height = if canonical.contains(&document_header::ID.to_owned()) { crate::canvas::document_header_height(app) } else { 0.0 };
     let bounds = ui.available_rect_before_wrap();
     dock = dock.float_bounds(bounds);
     presentation::prepare(ui.ctx(), app, &canonical, bounds);
@@ -626,7 +631,9 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         |id| PANELS.iter().find(|p| p.0 == id).map(|p| tl!(p.1).to_string()).unwrap_or_else(|| id.clone()),
         permissions,
         |id| {
-            if id == CANVAS {
+            if id == document_header::ID {
+                craft_ui::docking::PanelLimits { min: egui::vec2(200.0, document_header_height), max: egui::vec2(1_000_000.0, document_header_height) }
+            } else if id == CANVAS {
                 craft_ui::docking::PanelLimits { min: egui::vec2(200.0, 120.0), ..Default::default() }
             } else if presentation::is_spacer(id) {
                 craft_ui::docking::PanelLimits { min: egui::Vec2::ZERO, ..Default::default() }
@@ -1048,7 +1055,13 @@ pub(crate) fn rail_click(app: &mut PhotocraftApp, group: Group) {
 
 /// The docked tab groups, top to bottom, without the canvas.
 fn root_groups(layout: &Layout<String>) -> Vec<Vec<String>> {
-    layout.root.iter().flat_map(tree_groups).map(|group| group.panels).filter(|panels| !panels.iter().any(|id| id == CANVAS)).collect()
+    layout
+        .root
+        .iter()
+        .flat_map(tree_groups)
+        .map(|group| group.panels)
+        .filter(|panels| !panels.iter().any(|id| id == CANVAS || id == document_header::ID))
+        .collect()
 }
 
 /// `window.panel.group {panel, operation}`: PhotoCraft's commands for a panel's whole group.
@@ -1316,6 +1329,10 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         }
         if ui.ctx().viewport_id() == egui::ViewportId::ROOT {
             ui.ctx().data_mut(|data| data.get_temp_mut_or_default::<Vec<(String, egui::Rect)>>(bodies_id()).push((id.clone(), ui.max_rect())));
+        }
+        if id == document_header::ID {
+            crate::canvas::show_document_header(self.app, ui);
+            return;
         }
         if id == CANVAS {
             crate::panels::canvas_panel(self.app, ui);

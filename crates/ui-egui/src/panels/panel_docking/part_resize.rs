@@ -137,7 +137,14 @@ pub(super) fn show(app: &mut PhotocraftApp, ui: &egui::Ui, layout: &Layout<Strin
                 let x = if left { part.rect.left() } else { part.rect.right() - 3.0 };
                 // The right handle owns the intervening seam; the next left handle starts inside its own part.
                 let end = if left { x + 3.0 } else { part.rect.right() + ctx.pixels_per_point().recip() };
-                let band = Rect::from_min_max(pos2(x, part.rect.top() + HEADER + GRIP + 1.0), pos2(end, part.rect.bottom() - 1.0));
+                // Reserve the bottom edge, and its larger outer corners, for vertical input.
+                let bottom = if (part.rect.bottom() - frame.bottom()).abs() < 0.1 {
+                    let outer = if left { (part.rect.left() - frame.left()).abs() < 0.1 } else { (part.rect.right() - frame.right()).abs() < 0.1 };
+                    if outer { 12.0 } else { 4.0 }
+                } else {
+                    1.0
+                };
+                let band = Rect::from_min_max(pos2(x, part.rect.top() + HEADER + GRIP + 1.0), pos2(end, part.rect.bottom() - bottom));
                 if !band.is_positive() {
                     continue;
                 }

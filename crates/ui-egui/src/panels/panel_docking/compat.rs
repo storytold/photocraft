@@ -324,6 +324,26 @@ fn attach_edge(
 }
 
 fn set_collapsed(workspace: &mut Workspace, settings: &mut PanelPresentation, panel: &str, ids: &[String], iconic: bool, params: &Value) -> Result<(), String> {
+    let gap = finite(params, "gap", 1.0)?;
+    if !(0.0..=4.0).contains(&gap) {
+        return Err("invalid panel gap".into());
+    }
+    if iconic && let Some(window) = workspace.layout.floating.iter().find(|w| w.contains(panel) && !independent_window(w)) {
+        let size = [window.rect[2], window.rect[3]];
+        if normal_size(size) {
+            for id in window.panels() {
+                settings.floating_sizes.entry(id.clone()).or_insert(size);
+            }
+        }
+    }
+    if iconic
+        && params.get("normalSize").is_none()
+        && params.get("normalSizes").is_none()
+        && let Some(window) = workspace.layout.floating.iter().find(|w| w.contains(panel) && !independent_window(w))
+    {
+        let [x, y, w, h] = window.rect;
+        remember_normal_frame(&window.root, egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)), settings, gap, 0);
+    }
     if let Some(raw) = params.get("windowRect") {
         let rect: [f32; 4] = serde_json::from_value(raw.clone()).map_err(|e| format!("invalid window rect: {e}"))?;
         apply(workspace, Action::MoveFloating { panel: panel.into(), rect })?;
@@ -336,6 +356,30 @@ fn set_collapsed(workspace: &mut Workspace, settings: &mut PanelPresentation, pa
         for id in ids {
             settings.floating_sizes.insert(id.clone(), size);
         }
+    }
+    if iconic && let Some(raw) = params.get("normalSizes") {
+        let sizes = raw.as_object().ok_or("normalSizes must be an object")?;
+        if sizes.len() > ids.len() {
+            return Err("normalSizes names panels outside the group".into());
+        }
+        for (id, raw) in sizes {
+            let size: [f32; 2] = serde_json::from_value(raw.clone()).map_err(|e| format!("invalid normal size: {e}"))?;
+            if !ids.contains(id) || !normal_size(size) {
+                return Err("invalid normal size or panel".into());
+            }
+            settings.stacked_sizes.insert(id.clone(), size);
+        }
+    }
+
+    if !iconic
+        && let Some(window) = workspace.layout.floating.iter_mut().find(|w| w.contains(panel))
+        && !independent_window(window)
+        && window.panels().all(|p| settings.compact.contains(p))
+        && let restore_stacked = !matches!(window.root, Node::Tabs { .. })
+        && let Some([width, height]) = normal_frame(&mut window.root, settings, gap, restore_stacked, 0)
+    {
+        window.rect[2] = width;
+        window.rect[3] = height;
     }
 
     if !floats(&workspace.layout, panel) && !in_dock_column(&workspace.layout, panel) {
@@ -368,6 +412,61 @@ fn set_collapsed(workspace: &mut Workspace, settings: &mut PanelPresentation, pa
         }
     }
     Ok(())
+}
+
+fn normal_size(size: [f32; 2]) -> bool {
+    size.iter().all(|v| v.is_finite()) && (220.0..=100_000.0).contains(&size[0]) && (120.0..=100_000.0).contains(&size[1])
+}
+
+fn remember_normal_frame(node: &Node<String>, rect: egui::Rect, settings: &mut PanelPresentation, gap: f32, depth: usize) {
+    if depth > 64 {
+        return;
+    }
+    match node {
+        Node::Tabs { panels, .. } if !panels.iter().all(|p| settings.compact.contains(p)) && normal_size([rect.width(), rect.height()]) => {
+            for panel in panels {
+                settings.stacked_sizes.insert(panel.clone(), [rect.width(), rect.height()]);
+            }
+        }
+        Node::Split { axis, size, first, second } => {
+            if let Some(split) = craft_ui::layout::split_rect(rect, *axis, *size, gap, 0.0) {
+                remember_normal_frame(first, split.first, settings, gap, depth + 1);
+                remember_normal_frame(second, split.second, settings, gap, depth + 1);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Fit normal group sizes in the existing split tree; compact frame heights are not editor sizes.
+fn normal_frame(node: &mut Node<String>, settings: &PanelPresentation, gap: f32, restore_stacked: bool, depth: usize) -> Option<[f32; 2]> {
+    if depth > 64 {
+        return None;
+    }
+    match node {
+        Node::Tabs { panels, .. } if !panels.is_empty() => Some(panels.iter().fold([220.0_f32, 120.0_f32], |size, panel| {
+            let next = settings
+                .stacked_sizes
+                .get(panel)
+                .filter(|_| restore_stacked)
+                .or_else(|| settings.floating_sizes.get(panel))
+                .copied()
+                .filter(|s| normal_size(*s))
+                .unwrap_or([320.0, 400.0]);
+            [size[0].max(next[0]), size[1].max(next[1])]
+        })),
+        Node::Split { axis, size, first, second } => {
+            let a = normal_frame(first, settings, gap, restore_stacked, depth + 1)?;
+            let b = normal_frame(second, settings, gap, restore_stacked, depth + 1)?;
+            let horizontal = *axis == super::SplitAxis::Horizontal;
+            let extent_a = if horizontal { a[0] } else { a[1] };
+            let extent_b = if horizontal { b[0] } else { b[1] };
+            let total = extent_a + extent_b;
+            *size = super::SplitSize::Ratio(if total > 0.0 { extent_a / total } else { 0.5 });
+            Some(if horizontal { [(a[0] + b[0] + gap).min(1_000_000.0), a[1].max(b[1])] } else { [a[0].max(b[0]), (a[1] + b[1] + gap).min(1_000_000.0)] })
+        }
+        _ => None,
+    }
 }
 
 fn native_window(workspace: &mut Workspace, panel: &str, params: &Value) -> Result<(), String> {
@@ -430,6 +529,7 @@ fn read_presentation(raw: &Value) -> PanelPresentation {
         migrated: field(raw, "migrated").unwrap_or(false),
         flyouts: field(raw, "flyouts").unwrap_or_default(),
         floating_sizes: field(raw, "floating_sizes").unwrap_or_default(),
+        stacked_sizes: field(raw, "stacked_sizes").unwrap_or_default(),
         tools_size: field(raw, "tools_size").unwrap_or_default(),
         metrics_revision: field(raw, "metrics_revision").unwrap_or(if raw.get("metrics_revision").is_none() { 0 } else { 1 }),
     }
@@ -460,6 +560,7 @@ pub(crate) fn presentation(saved: &Value) -> PanelPresentation {
     p.floating_sizes.retain(|id, size| {
         normalize(id).is_some() && size.iter().all(|v| v.is_finite()) && (220.0..=100_000.0).contains(&size[0]) && (120.0..=100_000.0).contains(&size[1])
     });
+    p.stacked_sizes.retain(|id, size| normalize(id).is_some() && normal_size(*size));
     p.tools_size = p
         .tools_size
         .filter(|s| s.iter().all(|v| v.is_finite()) && (super::COMPACT_COLUMN_WIDTH..=240.0).contains(&s[0]) && (160.0..=100_000.0).contains(&s[1]));

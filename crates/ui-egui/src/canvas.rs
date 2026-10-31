@@ -105,6 +105,7 @@ pub(crate) use tabs::tab_title_at;
 #[cfg(test)]
 use tabs::{TEAR_OFF, pro_tab_title, tab_context_items, tab_drop_index, tab_move_target, tabs, torn_off};
 pub use tabs::{TabStrip, document_area, extra_windows};
+pub(crate) use tabs::{document_header_height, document_header_rect, show_document_header};
 use tabs::{dots, paint_dots};
 #[cfg(test)]
 use tabs::{main_canvas_document, move_target_after_filter};

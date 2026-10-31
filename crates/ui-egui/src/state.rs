@@ -214,6 +214,9 @@ pub struct PanelPresentation {
     pub flyouts: std::collections::BTreeMap<String, [f32; 2]>,
     /// Normal floating size, preserved while a panel fills a horizontal dock.
     pub floating_sizes: std::collections::BTreeMap<String, [f32; 2]>,
+    /// Visible group sizes within a floating split, separate from detached editor sizes.
+    #[serde(default)]
+    pub stacked_sizes: std::collections::BTreeMap<String, [f32; 2]>,
     pub tools_size: Option<[f32; 2]>,
     /// Version 1 narrows the old 44 pt default; later explicit 44 pt sizes remain personal.
     #[serde(default)]
@@ -228,6 +231,7 @@ impl Default for PanelPresentation {
             migrated: false,
             flyouts: Default::default(),
             floating_sizes: Default::default(),
+            stacked_sizes: Default::default(),
             tools_size: None,
             metrics_revision: 1,
         }

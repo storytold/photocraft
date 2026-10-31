@@ -20,6 +20,11 @@ frame handles while keeping vertical stock handles. It defaults to false;
 resize one column of a compound floating window without changing its neighbours'
 widths. No additional persistent layout tree is stored.
 
+Disabled resize axes are projected out of corner directions, so the other axis
+remains available there. The default two-axis behavior is unchanged. PhotoCraft
+reserves the outer bottom corners for this vertical input rather than registering
+a competing horizontal part handle over them.
+
 
 To restore the optional test inputs without adding fonts to PhotoCraft, use a
 separate checkout of the source revision above and copy only its

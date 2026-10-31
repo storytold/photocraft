@@ -114,6 +114,27 @@ the owning layer, clipped to that owner's rectangle.
 
 ## Restore and fallback
 
+A drop immediately below the document tab row creates one protected
+`__photocraft_document_tabs__` node in the same shared workspace. This separates
+the existing document-tab view from the canvas body; it does not add an arrangement
+tree. The existing canvas tab renderer supplies its widgets, overflow, selection,
+reordering and close behavior. A per-viewport, per-pass record prevents drawing
+the row twice. Old layouts remain unchanged until that placement is used. Repeated
+drops reuse the node; Home and hidden-tab modes give it no header height. The node
+cannot float, close, or share a tab group with user panels. Placements above the
+document row remain distinct from placements below it.
+
+Expanding a wholly compact floating stack restores its remembered normal group
+sizes into shared split ratios, then fits the outer frame to its viewport. A UI
+collapse supplies fitted per-group `normalSizes` and the physical-pixel `gap` to
+the existing group command; these inputs are validated before the atomic commit.
+Control-only collapse uses shared `split_rect` geometry when no fitted sizes are
+supplied. The size-only `stacked_sizes` cache remembers displayed group dimensions;
+`floating_sizes` keeps the independent editor size used for detaching and flyouts.
+Neither cache stores membership, order or positions. This preserves a previously resized stack rather than dividing a short
+compact frame among full editors. Bottom corners retain vertical resize input
+when horizontal sizing belongs to the host's independent part handles.
+
 An unsupported non-null workspace payload is retained verbatim together with its
 return locations, collapse/presentation metadata and Tools position, even if its
 version tag was not advanced. Rendering a fallback must not overwrite that payload.

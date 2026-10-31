@@ -1065,7 +1065,7 @@ fn full_landing(ctx: &egui::Context, layout: &Layout<String>, source: &str, whol
     bodies.sort_by_key(|(id, _)| !floats(layout, id));
     let rtl = crate::direction::is_rtl();
     let pixel = ctx.pixels_per_point().recip();
-    for (id, body) in bodies.into_iter().filter(|(id, _)| id != super::CANVAS && !is_spacer(id)) {
+    for (id, body) in bodies.into_iter().filter(|(id, _)| id != super::CANVAS && id != super::document_header::ID && !is_spacer(id)) {
         let members = group_members(layout, &id);
         if whole && members.iter().any(|id| id == source) {
             continue;
@@ -1171,7 +1171,10 @@ fn resolved_landing(ctx: &egui::Context, layout: &Layout<String>, source: &str, 
     if exclusive || full.is_some() {
         return full;
     }
-    landing(ctx, source, whole, p).or(full)
+    super::document_header::landing(ctx, p)
+        .map(|(target, marker)| Landing { target, marker, compact: false })
+        .or_else(|| landing(ctx, source, whole, p))
+        .or(full)
 }
 fn detached_target(app: &PhotocraftApp, layout: &Layout<String>, panel: &str, rect: Rect, bounds: Rect, pointer: Pos2) -> Target<String> {
     let mut action = Action::MoveGroup { panel: panel.into(), to: Target::Float { rect: Some([rect.left(), rect.top(), rect.width(), rect.height()]) } };
@@ -1363,12 +1366,16 @@ pub(super) fn drop_command(app: &mut PhotocraftApp, params: &Value) -> Result<Va
     let whole = params.get("whole").and_then(Value::as_bool).unwrap_or(false);
     let target: Target<String> = serde_json::from_value(params.get("to").cloned().ok_or("drop target is required")?).map_err(|e| e.to_string())?;
     let mut workspace = workspace_of(app)?;
+    if matches!(&target, Target::At { anchor, .. } if anchor == super::document_header::ID) {
+        super::document_header::ensure(&mut workspace.layout)?;
+    }
     let group_only = params.get("unit").and_then(Value::as_str) == Some("group");
     let ids = moving_ids(&workspace.layout, &panel, whole, group_only);
     let remainder = workspace.layout.floating.iter().find(|w| w.contains(&panel)).and_then(|w| w.panels().find(|id| !ids.contains(id)).cloned());
     let editor = params.get("editor").and_then(Value::as_bool).unwrap_or(false);
     let source_closed = super::collapsed_members(app, &workspace.layout).contains(&panel);
-    let horizontal_edge = matches!(&target, Target::At { placement: Placement::Edge(Zone::Top | Zone::Bottom), .. });
+    let horizontal_edge = matches!(&target, Target::At { placement: Placement::Edge(Zone::Top | Zone::Bottom), .. })
+        || matches!(&target, Target::At { anchor, placement: Placement::Split(Zone::Bottom) } if anchor == super::document_header::ID);
     let source_compact = !editor && compact_source(app, &workspace.layout, &panel);
     let compact = source_compact;
     let anchor = match &target {
@@ -2097,26 +2104,27 @@ pub(super) fn command_geometry(app: &PhotocraftApp, ctx: &egui::Context, params:
     }
     let Some(operation) = params.get("operation").and_then(Value::as_str).filter(|op| matches!(*op, "expand" | "collapse")) else { return };
     let expanding = operation == "expand";
-    let Some(panel) = params.get("panel").and_then(Value::as_str) else { return };
-    let Some(window) = app.ui.docking.as_ref().and_then(|w| w.layout.floating.iter().find(|w| w.contains(panel))) else { return };
+    let Some(panel) = params.get("panel").and_then(Value::as_str).map(str::to_owned) else { return };
+    let Some(window) = app.ui.docking.as_ref().and_then(|w| w.layout.floating.iter().find(|w| w.contains(&panel))) else { return };
+    params["gap"] = json!(ctx.pixels_per_point().recip());
     let groups = ctx.data(|d| d.get_temp::<Vec<(String, Rect)>>(key("group-rects"))).unwrap_or_default();
-    let Some(source) = groups.iter().find(|(p, _)| p == panel).map(|(_, r)| *r) else { return };
-    let width = app.ui.panel_presentation.widths.get(panel).copied().unwrap_or(COMPACT_COLUMN_WIDTH);
+    let Some(source) = groups.iter().find(|(p, _)| p == &panel).map(|(_, r)| *r) else { return };
+    let width = app.ui.panel_presentation.widths.get(&panel).copied().unwrap_or(COMPACT_COLUMN_WIDTH);
     if compat::independent_window(window) {
         let Some(mut frame) = groups.iter().filter(|(p, _)| window.contains(p)).map(|(_, r)| *r).reduce(Rect::union) else { return };
-        let next = if expanding { app.ui.panel_presentation.floating_sizes.get(panel).map_or(320.0, |size| size[0]) } else { width };
+        let next = if expanding { app.ui.panel_presentation.floating_sizes.get(&panel).map_or(320.0, |size| size[0]) } else { width };
         let delta = next - source.width();
-        if groups.iter().any(|(p, r)| p != panel && window.contains(p) && r.left() >= source.right() - 1.0 && r.y_range().intersects(source.y_range())) {
+        if groups.iter().any(|(p, r)| p != &panel && window.contains(p) && r.left() >= source.right() - 1.0 && r.y_range().intersects(source.y_range())) {
             frame = frame.translate(vec2(-delta, 0.0));
         }
         frame.max.x += delta;
         if expanding {
-            let height = app.ui.panel_presentation.floating_sizes.get(panel).map_or(400.0, |size| size[1]);
+            let height = app.ui.panel_presentation.floating_sizes.get(&panel).map_or(400.0, |size| size[1]);
             frame.max.y = frame.min.y + frame.height().max(height);
         } else {
             let mut compact: std::collections::HashSet<_> = app.ui.panel_presentation.compact.iter().cloned().collect();
             if let Some(workspace) = &app.ui.docking {
-                compact.extend(group_members(&workspace.layout, panel));
+                compact.extend(group_members(&workspace.layout, &panel));
             }
             if let Some(height) = compact_tree_height(&window.root, &compact, ctx.pixels_per_point().recip()) {
                 frame.max.y = frame.min.y + height;
@@ -2127,9 +2135,18 @@ pub(super) fn command_geometry(app: &PhotocraftApp, ctx: &egui::Context, params:
         }
         params["windowRect"] = json!([frame.left(), frame.top(), frame.width(), frame.height()]);
     } else if !expanding {
+        let normal_sizes: serde_json::Map<String, Value> = groups
+            .iter()
+            .filter(|(id, rect)| window.contains(id) && rect.width() >= 220.0 && rect.height() >= 120.0)
+            .map(|(id, rect)| (id.clone(), json!([rect.width(), rect.height()])))
+            .collect();
+        params["normalSizes"] = Value::Object(normal_sizes);
+        if let Some(frame) = groups.iter().filter(|(id, _)| window.contains(id)).map(|(_, rect)| *rect).reduce(Rect::union) {
+            params["windowRect"] = json!([frame.left(), frame.top(), frame.width(), frame.height()]);
+        }
         let neighbours = ctx.data(|d| d.get_temp::<Vec<Strip>>(key("strips"))).unwrap_or_default();
         if neighbours.iter().any(|s| s.first != panel && (s.rect.left() - source.right()).abs() <= 8.0 && s.rect.y_range().intersects(source.y_range())) {
-            let mut rect = window.rect;
+            let mut rect = params.get("windowRect").and_then(|v| serde_json::from_value::<[f32; 4]>(v.clone()).ok()).unwrap_or(window.rect);
             rect[0] = source.right() - width;
             params["windowRect"] = json!(rect);
         }

@@ -1,6 +1,9 @@
 //! Regressions from the contributor's native Windows review of 2026-10-31.
 use super::*;
 
+#[path = "native_height_tests.rs"]
+mod native_height_tests;
+
 fn horizontal_bar(edge: &str, closed: bool) -> Harness<'static, PhotocraftApp> {
     let mut app = full_pair();
     app.run("window.panel.edge", json!({"panel":"history","edge":edge,"individual":true,"collapsed":closed})).unwrap();
