@@ -329,12 +329,12 @@ fn preset_interactions(ui: &egui::Ui, resp: &egui::Response, r: egui::Rect, p: &
     } else if resp.clicked() {
         acts.push(Action::Select(p.name.clone()));
     }
-    resp.context_menu(|ui| {
-        if ui.button(tl!("Rename Brush…")).clicked() {
+    crate::menus::context_menu(&resp, |ui| {
+        if crate::menu_keys::menu_row(ui, tl!("Rename Brush…"), None, false, true).clicked() {
             acts.push(Action::BeginRename(Renaming { group: false, name: p.name.clone(), folder: Vec::new(), text: String::new() }));
             ui.close();
         }
-        if ui.button(tl!("Delete Brush")).clicked() {
+        if crate::menu_keys::menu_row(ui, tl!("Delete Brush"), None, false, true).clicked() {
             acts.push(Action::Delete(p.name.clone()));
             ui.close();
         }
@@ -797,12 +797,12 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], op
     if resp.clicked() {
         acts.push(Action::ToggleGroup(folder_view_key(label, folder)));
     }
-    resp.context_menu(|ui| {
-        if ui.button(tl!("Rename Group…")).clicked() {
+    crate::menus::context_menu(&resp, |ui| {
+        if crate::menu_keys::menu_row(ui, tl!("Rename Group…"), None, false, true).clicked() {
             acts.push(Action::BeginRename(Renaming { group: true, name: key.to_string(), folder: folder.to_vec(), text: String::new() }));
             ui.close();
         }
-        if ui.button(tl!("Delete Group")).clicked() {
+        if crate::menu_keys::menu_row(ui, tl!("Delete Group"), None, false, true).clicked() {
             acts.push(Action::DeleteGroup { group: key.to_string(), folder: folder.to_vec() });
             ui.close();
         }
