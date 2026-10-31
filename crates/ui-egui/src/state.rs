@@ -352,6 +352,10 @@ pub struct UiState {
     pub brush_tool: Tool,
     #[serde(default)]
     pub tool_brushes: Vec<(Tool, photocraft_engine::paint::BrushSettings)>,
+    /// The preset each of those tools' brushes was picked from, so the Brushes panel and the
+    /// Brush Preset picker mark it again when the tool comes back, as in Photoshop (#9014).
+    #[serde(default)]
+    pub tool_presets: Vec<(Tool, String)>,
     /// Pen path under construction.
     #[serde(default)]
     pub pen: Option<crate::vector_ui::PenPath>,
@@ -598,6 +602,7 @@ impl Default for UiState {
             selected_guide: None,
             brush_tool: Tool::Brush,
             tool_brushes: Vec::new(),
+            tool_presets: Vec::new(),
             clone_source: None,
             clone_offset: None,
             pattern_stamp_phase: None,
