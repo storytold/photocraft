@@ -102,8 +102,12 @@ pub fn shape_bounds(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2],
 pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
     if draws_path(&app.ui.tool_options) {
         // Path mode: the outline joins the work path (one more subpath), and no layer is made.
-        let Some(path) = shape_outline(app, tool, start, end, mods) else { return };
-        let r = app.run("path.set", json!({"name": "work", "op": "combine", "path": photocraft_engine::vector_cmds::path_json(&path)}));
+        let Some(outline) = shape_outline(app, tool, start, end, mods) else { return };
+        // Appended as it is rather than with `path.set`'s `op`, which would turn a custom
+        // shape's subtracted subpaths (holes) into combined ones.
+        let mut path = app.session.active().and_then(|st| st.doc.work_path.clone()).unwrap_or_default();
+        path.subpaths.extend(outline.subpaths);
+        let r = app.run("path.set", json!({"name": "work", "path": photocraft_engine::vector_cmds::path_json(&path)}));
         match r {
             Ok(_) => app.ui.selected_path = Some("work".into()),
             Err(e) => {

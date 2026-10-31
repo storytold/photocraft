@@ -527,6 +527,20 @@ fn path_mode_shape_drags_add_to_the_work_path() {
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1);
 }
 
+/// CodeRabbit on #9456: a Custom Shape's own subtracted subpaths (the Ring's hole) keep their
+/// operation when Path mode adds the shape to the work path, as in Photoshop.
+#[test]
+fn path_mode_custom_shape_keeps_its_subtracted_subpaths() {
+    use photocraft_doc::PathOp;
+    let mut app = app();
+    app.ui.tool_options.shape_mode = "path".into();
+    finish_shape(&mut app, Tool::Rectangle, [100.0, 100.0], [140.0, 130.0], egui::Modifiers::NONE);
+    app.ui.presets_ui.custom_shape = "Ring".into();
+    finish_shape(&mut app, Tool::CustomShape, [20.0, 20.0], [70.0, 70.0], egui::Modifiers::NONE);
+    let ops: Vec<PathOp> = app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths.iter().map(|s| s.op).collect();
+    assert_eq!(ops, [PathOp::Combine, PathOp::Combine, PathOp::Subtract], "the rectangle, the ring and its hole");
+}
+
 #[test]
 fn shift_pressed_during_a_shape_drag_constrains_it() {
     // #668: ⇧ only counted when held at the press; Photoshop constrains when it is pressed
