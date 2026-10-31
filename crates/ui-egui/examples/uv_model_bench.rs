@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
             app.ui.uv_workbench.open = true;
             app.ui.workspace = "3D".into();
-            photocraft_ui_egui::menus::apply_workspace(&mut app).unwrap();
+            photocraft_ui_egui::menus::apply_workspace(&mut app);
             if bare_mesh {
                 app.session.uv.bindings.fill(None);
                 app.session.uv.normal_bindings.fill(None);

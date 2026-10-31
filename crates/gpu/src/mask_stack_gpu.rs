@@ -541,7 +541,7 @@ impl MaskStackRenderer {
         shell_ids: &[u32],
         target: &wgpu::Texture,
     ) -> Result<(), String> {
-        self.render_cached(device, queue, stack, size, shell_ids, 0, 0, target)
+        self.render_cached_internal(device, queue, stack, size, shell_ids, 0, 0, target, None, true)
     }
 
     /// Reuse same-size input and intermediate textures. `owner_key` identifies a mask stack;
@@ -558,7 +558,7 @@ impl MaskStackRenderer {
         shell_key: u64,
         target: &wgpu::Texture,
     ) -> Result<(), String> {
-        self.render_cached_internal(device, queue, stack, size, shell_ids, owner_key, shell_key, target, None)
+        self.render_cached_internal(device, queue, stack, size, shell_ids, owner_key, shell_key, target, None, false)
     }
 
     /// Recompose the stack with a transient live GPU Paint map. The brush renderer must have been
@@ -592,6 +592,7 @@ impl MaskStackRenderer {
             shell_key,
             target,
             Some((paint_layer_index, output.as_ref(), dirty_regions)),
+            false,
         )
     }
 
@@ -606,6 +607,7 @@ impl MaskStackRenderer {
         shell_key: u64,
         target: &wgpu::Texture,
         brush_override: Option<(usize, &wgpu::Texture, &[Rect])>,
+        force_render: bool,
     ) -> Result<(), String> {
         let count = usize::try_from(size[0]).ok().and_then(|w| usize::try_from(size[1]).ok().and_then(|h| w.checked_mul(h)));
         if size.contains(&0)
@@ -644,7 +646,9 @@ impl MaskStackRenderer {
         let cache = self.cache.as_mut().ok_or("Mask-stack GPU cache initialization failed")?;
         cache.configure_blur_resources(device, size, has_blur);
         let stack_key = stack_config_key(stack);
-        let shell_changed = has_blur && cache.shell_key != Some(shell_key);
+        // The convenience `render` API does not receive stable cache keys, so it
+        // must refresh the shell map as well as recompose into the caller's target.
+        let shell_changed = has_blur && (force_render || cache.shell_key != Some(shell_key));
         if shell_changed {
             cache.shell = Some(upload_shell_ids(device, queue, size, shell_ids));
             cache.shell_key = Some(shell_key);
@@ -811,7 +815,7 @@ impl MaskStackRenderer {
         let config_changed = cache.stack_key != Some(stack_key);
         // `render_cached` keeps the caller's material target stable for the same owner key.
         // Avoid replaying the entire GPU stack when neither inputs nor configuration changed.
-        if !config_changed && !base_changed && !shell_changed && changed_regions.is_empty() {
+        if !force_render && !config_changed && !base_changed && !shell_changed && changed_regions.is_empty() {
             return Ok(());
         }
         let can_resume_blur_prefix = !config_changed

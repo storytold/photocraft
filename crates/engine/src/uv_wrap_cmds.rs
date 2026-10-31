@@ -251,7 +251,15 @@ fn stamp(s: &mut Session, p: &Value) -> Result<Value> {
     let mesh = s.uv.wrap_mesh.as_ref().cloned().ok_or_else(|| bad("Missing wrap topology"))?;
     let mut should_composite = false;
     for (sample, material) in stamps.into_iter().zip(materials) {
-        should_composite |= accumulate_stamp(s, &scene, &mesh, size, material, &mut stroke, sample)?;
+        match accumulate_stamp(s, &scene, &mesh, size, material, &mut stroke, sample) {
+            Ok(changed) => should_composite |= changed,
+            Err(error) => {
+                // A bad sample must not discard the stroke already accumulated for this
+                // gesture. Keeping it also preserves its original pre-surface and flow ceiling.
+                s.uv.wrapped_stroke = Some(stroke);
+                return Err(error);
+            }
+        }
     }
     if !should_composite || stroke.renderer.bounds().is_empty() {
         s.uv.wrapped_stroke = Some(stroke);

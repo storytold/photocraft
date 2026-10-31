@@ -1032,14 +1032,19 @@ fn pick_map_file(app: &mut PhotocraftApp, kind: &'static str, material: usize, c
                 app.ui.uv_workbench.uv_set = app.session.uv.uv_set;
                 // Reset scene resources, retaining the device attached at application startup.
                 // Dropping the renderer here silently selected CPU rasterization after every picker.
-                let mut gpu = app.uv_cache.gpu.take();
+                let mut previous_cache = std::mem::take(&mut app.uv_cache);
+                let mut gpu = previous_cache.gpu.take();
                 if let Some(renderer) = &mut gpu {
                     renderer.clear();
                 }
                 app.uv_cache = Cache {
                     gpu,
-                    lighting: std::mem::take(&mut app.uv_cache.lighting),
-                    thumbnails: std::mem::take(&mut app.uv_cache.thumbnails),
+                    library: std::mem::take(&mut previous_cache.library),
+                    project: std::mem::take(&mut previous_cache.project),
+                    workspace_views: std::mem::take(&mut previous_cache.workspace_views),
+                    parked_dock: previous_cache.parked_dock.take(),
+                    lighting: std::mem::take(&mut previous_cache.lighting),
+                    thumbnails: std::mem::take(&mut previous_cache.thumbnails),
                     ..Cache::default()
                 };
                 if kind == "project"

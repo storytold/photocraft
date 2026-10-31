@@ -397,6 +397,70 @@ fn gpu_mask_blur_matches_shell_aware_cpu_stack_without_crossing_islands() {
 }
 
 #[test]
+fn convenience_render_refreshes_a_new_target_and_shell_map() {
+    let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+    let Ok(adapter) = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions::default())) else {
+        eprintln!("skipping mask-stack target refresh test: no adapter");
+        return;
+    };
+    let Ok((device, queue)) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())) else {
+        eprintln!("skipping mask-stack target refresh test: no device");
+        return;
+    };
+    let size = [16, 8];
+    let rect = Rect::new(0, 0, size[0] as i32, size[1] as i32);
+    let first_shells = vec![1; (size[0] * size[1]) as usize];
+    let mut second_shells = vec![1; (size[0] * size[1]) as usize];
+    for y in 0..size[1] {
+        for x in 8..size[0] {
+            second_shells[(y * size[0] + x) as usize] = 2;
+        }
+    }
+    let mut paint_surface = Surface::new(PixelFormat::RGBA8);
+    paint_surface.write_region(Rect::new(7, 2, 8, 6), &[0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]);
+    let stack = Stack {
+        base: Surface::with_default(PixelFormat::GRAY8, &[0.5]),
+        layers: vec![
+            Paint {
+                name: "Paint".into(),
+                visible: true,
+                opacity: 1.0,
+                blend: photocraft_color::BlendMode::Normal,
+                surface: paint_surface,
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Paint,
+            },
+            Paint {
+                name: "Blur".into(),
+                visible: true,
+                opacity: 1.0,
+                blend: photocraft_color::BlendMode::Normal,
+                surface: Surface::new(PixelFormat::RGBA8),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Blur { radius: 2 },
+            },
+        ],
+        active: 1,
+    };
+    let first_target = create_test_target(&device, size);
+    let second_target = create_test_target(&device, size);
+    let mut renderer = MaskStackRenderer::new(&device);
+    renderer.render(&device, &queue, &stack, size, &first_shells, &first_target).unwrap();
+    renderer.render(&device, &queue, &stack, size, &second_shells, &second_target).unwrap();
+    let actual = read_gray(&device, &queue, &second_target, size);
+    let shell_map = photocraft_compose::mask_paint::ShellIdMap::new(rect, &second_shells).unwrap();
+    let expected = photocraft_compose::mask_paint::compose_stack_region_with_shell_ids(&stack, stack.layers.len(), rect, shell_map).unwrap();
+    for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        assert!((actual - expected).abs() < 0.004, "pixel {index}: GPU={actual}, CPU={expected}");
+    }
+}
+
+#[test]
 fn incremental_paint_tile_upload_matches_fresh_render_through_multiple_blurs() {
     let _lock = GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
