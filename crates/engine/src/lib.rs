@@ -242,6 +242,12 @@ pub struct Session {
     /// the same check a top-level request sees. `None` runs everything, which is what a local
     /// UI and `photocraft-cli run` do.
     pub authorize: Option<fn(&str, &serde_json::Value) -> Result<()>>,
+    /// The gate automation runs under in this process (the desktop's policy). An action
+    /// automation wrote ([`actions_cmds::Action::automation`]) plays under it when no gate is
+    /// installed, as when the user presses its key, so it never gets the user's file access.
+    /// `None` when there is no automation policy to keep (headless sessions gate everything
+    /// with `authorize`).
+    pub automation_gate: Option<fn(&str, &serde_json::Value) -> Result<()>>,
     /// A further route for File › Print when neither `lp` nor a CUPS server over IPP is
     /// reachable (the XDG Print portal in a Flatpak); see `print_cmds::Spooler`.
     pub print_spooler: Option<print_cmds::Spooler>,

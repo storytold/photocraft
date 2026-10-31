@@ -102,6 +102,21 @@ pub(crate) fn play(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Str
 /// `suspended` is the recording a paused part of the same call took ([`PausedPlayback::record`]); it comes
 /// back, with that named call journaled, only when the whole call ends.
 fn play_owned(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>) -> Result<Value, String> {
+    // An action automation wrote plays under automation's gate even when the user starts it (its
+    // key, the panel, Button Mode); nested calls, a paused step's dialog and the steps' own
+    // commands see that gate too.
+    let kept = actions_cmds::playback_plan(&app.session, params).ok().and_then(|(action, _)| actions_cmds::kept_gate(&app.session, &action));
+    if kept.is_some() {
+        app.session.authorize = kept;
+    }
+    let played = play_steps(app, params, suspended);
+    if kept.is_some() {
+        app.session.authorize = None;
+    }
+    played
+}
+
+fn play_steps(app: &mut PhotocraftApp, params: &Value, suspended: Option<Value>) -> Result<Value, String> {
     let (action, from) = match actions_cmds::playback_plan(&app.session, params) {
         Ok(plan) => plan,
         Err(e) => {

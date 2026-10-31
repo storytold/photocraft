@@ -811,6 +811,48 @@ fn play_checks_each_step_with_the_authorize_hook() {
     assert!(s.documents().is_empty(), "the refused step does not open a document");
 }
 
+/// An action automation loads or edits keeps automation's gate when the user plays it (its
+/// key, the panel), so a client confined to its roots can't plant file steps that later run
+/// with the user's access. The user's own actions, and sets the user loads, run as before.
+#[test]
+fn actions_automation_wrote_keep_its_gate_when_the_user_plays_them() {
+    fn deny_file(id: &str, _: &Value) -> Result<()> {
+        if id.starts_with("file.") { Err(EngineError::Other(format!("automation command `{id}` is disabled"))) } else { Ok(()) }
+    }
+    let open = || ("file.openAs".to_string(), json!({"path": "/outside/secret.png"}));
+    let mut s = Session::new();
+    s.automation_gate = Some(deny_file);
+    s.actions.list.push(Action::new("Mine", vec![open()]));
+    s.actions.list.push(Action::new("Edited", vec![("layer.new.layer".into(), json!({}))]));
+    let (atn, _) = crate::atn_cmds::export("Set", &[&Action::new("Planted", vec![open()])], &[], false).unwrap();
+    let data = photocraft_paint::tile::b64_encode(&atn);
+
+    // An automation client loads a set and inserts a step into an existing action.
+    s.authorize = Some(deny_file);
+    s.execute("actions.load", json!({"data": data})).unwrap();
+    s.execute("actions.insert", json!({"action": "Edited", "id": "file.openAs", "params": {"path": "/outside/secret.png"}, "at": 0})).unwrap();
+    s.authorize = None;
+    assert!(!s.actions.list[0].automation, "the user's own action is not marked");
+
+    for name in ["Planted", "Edited"] {
+        let r = s.execute("actions.play", json!({"action": name})).unwrap();
+        assert_eq!(r["failed"]["id"], "file.openAs", "{name}: {r}");
+        assert!(r["failed"]["error"].as_str().unwrap().contains("disabled"), "{name}: {r}");
+        assert!(s.authorize.is_none(), "{name}: the kept gate is removed after playback");
+    }
+    // Nested: the user's action calling a planted one still meets the gate.
+    s.actions.list.push(Action::new("Caller", vec![("actions.play".into(), json!({"action": "Planted"}))]));
+    let r = s.execute("actions.play", json!({"action": "Caller"})).unwrap();
+    assert!(r["failed"]["error"].as_str().unwrap().contains("disabled"), "{r}");
+
+    // The user's own action runs with the user's access (the file is missing, not refused).
+    let r = s.execute("actions.play", json!({"action": "Mine"})).unwrap();
+    assert!(!r["failed"]["error"].as_str().unwrap().contains("disabled"), "{r}");
+    // A set the user loads is theirs.
+    s.execute("actions.load", json!({"data": data, "set": "Loaded by the user"})).unwrap();
+    assert!(!s.actions.list.last().unwrap().automation);
+}
+
 #[test]
 fn append_delete_and_from_step() {
     let mut s = Session::new();

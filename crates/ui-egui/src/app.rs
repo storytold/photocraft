@@ -34,6 +34,8 @@ pub use thumbs::surface_fingerprint;
 impl PhotocraftApp {
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
+        // Actions automation wrote keep this gate when the user plays them (Batch included).
+        session.automation_gate = session.automation_gate.or(services.automation_authorize);
         let mut app = Self {
             session,
             ui: UiState::default(),
