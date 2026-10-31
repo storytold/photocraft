@@ -35,6 +35,10 @@ pub(super) fn document_to_psd_nested(doc: &Document, opts: &PsdExportOptions, de
 
 /// Export with a caller-selected PSD size limit; the test suite lowers it to exercise promotion.
 pub(super) fn document_to_psd_sized(doc: &Document, opts: &PsdExportOptions, depth: u32, ctl: &Interrupt, size_limit: u64) -> (PsdFile, Vec<String>) {
+    // Type with a free warp or distort is written as a Smart Object holding the type.
+    let mut type_warnings = Vec::new();
+    let smart_type = crate::type_smart::with_smart_type(doc, &mut type_warnings);
+    let doc = smart_type.as_ref().unwrap_or(doc);
     let layerless_limit = opts.size_limit_psb.then_some(size_limit);
     if doc.mode == ColorMode::Multichannel {
         return crate::multichannel_map::document_to_psd(doc, opts.force_psb, layerless_limit);
@@ -43,7 +47,7 @@ pub(super) fn document_to_psd_sized(doc: &Document, opts: &PsdExportOptions, dep
         return file;
     }
     let fmt = doc.pixel_format();
-    export_supported_document(doc, opts, depth, ctl, fmt, size_limit)
+    export_supported_document(doc, opts, depth, ctl, fmt, size_limit, type_warnings)
 }
 
 fn export_supported_document(
@@ -53,6 +57,7 @@ fn export_supported_document(
     ctl: &Interrupt,
     fmt: PixelFormat,
     size_limit: u64,
+    type_warnings: Vec<String>,
 ) -> (PsdFile, Vec<String>) {
     // A Duotone is written over its grey plate with its inks: the block it was imported with,
     // verbatim, while the inks are unedited, else one made from them (`duotone_map`). Photoshop
@@ -89,6 +94,7 @@ fn export_supported_document(
         patterns: doc.patterns.clone(),
         background: psd_background(doc),
     };
+    ex.warnings.extend(type_warnings);
     add_format_warnings(doc, opts, fmt, big, duotone_inks.is_some(), &mut ex.warnings);
     index_layer_ids_and_text(doc, &mut ex);
     // Progress: one unit per layer record, then the merged composite (#3389).

@@ -384,30 +384,22 @@ fn target(s: &Session, cmd: &str, p: &Value) -> Result<(LayerId, Rect)> {
     Ok((id, rect))
 }
 
-/// The Warp Text settings a transform warp gives a type layer: a preset style (or none) keeps the
-/// type editable, as Photoshop's Edit › Transform › Warp on type does (#3004).
-fn type_warp(cmd: &str, w: &Warp) -> Result<Option<photocraft_doc::text::TextWarp>> {
-    let clamp = |v: f64| if v.is_finite() { v.clamp(-100.0, 100.0) as f32 } else { 0.0 };
-    match w.style {
-        WarpStyle::None => Ok(None),
-        WarpStyle::Custom if w.is_identity() => Ok(None),
-        WarpStyle::Custom => Err(bad(cmd, "type can only take a warp style (arc, flag, …); a custom mesh needs rasterized type")),
-        WarpStyle::Cylinder => Err(bad(cmd, "type can only take a warp style (arc, flag, …); a cylinder needs rasterized type")),
-        s => Ok(Some(photocraft_doc::text::TextWarp {
-            style: s.psd_name().into(),
-            value: clamp(w.bend),
-            horizontal_distortion: clamp(w.h_distort),
-            vertical_distortion: clamp(w.v_distort),
-            horizontal: !w.vertical,
-        })),
-    }
-}
-
-/// Warp on a type layer sets its Warp Text style: one history step, and the type stays editable.
+/// Warp on a type layer keeps it editable: a style (or none) is its Warp Text, as in Photoshop
+/// (#3004); a custom mesh is kept on the type as a free warp ("Better Than PS",
+/// [`crate::type_distort`]). One history step.
 fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<Value> {
-    let tw = type_warp(cmd, w)?;
-    let unchanged = s.active().and_then(|d| d.doc.layer(id)).is_some_and(|l| matches!(&l.content, LayerContent::Text(t) if t.warp == tw));
-    if unchanged {
+    let free = s.prefs().type_.free_transforms_on_type;
+    let st = s.active().ok_or(EngineError::NoDocument)?;
+    let Some(LayerContent::Text(t)) = st.doc.layer(id).map(|l| &l.content) else { return Err(EngineError::Other("not a type layer".into())) };
+    let mut next = t.clone();
+    next.cache = None;
+    if !free && !w.is_identity() && (w.style == WarpStyle::Custom || w.style == WarpStyle::Cylinder || !next.distortions.is_empty()) {
+        return Err(bad(
+            cmd,
+            "as in Photoshop, type takes only a warp style (arc, flag, …); turn on Preferences › Type › Free Transforms on Type, or rasterize the type",
+        ));
+    }
+    if !crate::type_distort::set_warp(&mut next, w)? {
         return Ok(json!({"layer": id.0, "changed": false}));
     }
     s.edit("Warp", |doc, _| {
@@ -419,11 +411,12 @@ fn warp_type_layer(s: &mut Session, cmd: &str, id: LayerId, w: &Warp) -> Result<
             return Err(EngineError::Other(format!("layer \"{}\" is locked", l.name)));
         }
         let LayerContent::Text(t) = &mut l.content else { return Err(EngineError::Other("not a type layer".into())) };
-        t.warp = tw.clone();
+        t.warp = next.warp;
+        t.distortions = next.distortions;
         crate::type_cmds::refresh_at(dpi, format, t);
         Ok(())
     })?;
-    Ok(json!({"layer": id.0, "changed": true, "warp": tw}))
+    Ok(json!({"layer": id.0, "changed": true}))
 }
 
 fn apply(s: &mut Session, p: &Value, cmd: &str) -> Result<Value> {
@@ -650,7 +643,7 @@ fn grid(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 pub fn specs() -> Vec<CommandSpec> {
-    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist|cylinder","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"values":[left,bottom,right,top,topDepth,bottomDepth,wrap]? (cylinder: silhouettes and edges in document px, the ellipses' depths in half-axis units, wrap 0..1; horizontal only),"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest"} — on a type layer a style (or none) sets its Warp Text and the type stays editable"##;
+    const P: &str = r##"{"layer":id?,"rect":[x0,y0,x1,y1]? (warp box; default = layer content ∩ selection),"style":"custom|none|arc|arcLower|arcUpper|arch|bulge|shellLower|shellUpper|flag|wave|fish|rise|fisheye|inflate|squeeze|twist|cylinder","bend":%=50,"hDistort":%,"vDistort":%,"vertical":bool,"values":[left,bottom,right,top,topDepth,bottomDepth,wrap]? (cylinder: silhouettes and edges in document px, the ellipses' depths in half-axis units, wrap 0..1; horizontal only),"mesh":{"us":[0,…,1],"vs":[0,…,1],"points":[[x,y]…]} ((3c+1)×(3r+1) control points, row-major, document px; on a smart object `us`/`vs` span the source contents, so points equal to the placement are an identity warp even when it is skewed),"grid":[cols,rows]?,"warp":{full warp object}?,"interpolation":"bicubic|bilinear|nearest"} — on a type layer the type stays editable: a style (or none) is its Warp Text (a custom mesh is refused unless Preferences › Type › Free Transforms on Type is on, then: with no free transform yet a style (or none) is its Warp Text and a custom mesh replaces it; else the warp replaces its last free warp (none removes it) or goes on top of a Distort)"##;
     const S: &str = r##"{"warp":{…}? (the warp being edited; returned split),"rect":[x0,y0,x1,y1]?,"at":[x,y]? (document point; default = middle of the patch)} — without `warp`, edits the active smart object's warp. A 1×1 custom mesh is divided at the thirds first (the guides drawn on the default grid), so splitWarpCrosswise on an identity custom warp returns a 4×4 mesh (knots at 0, 1/3, 1/2, 2/3 and 1), not a 2×2. A preset is fitted as one patch and split without that step."##;
     const G: &str = r##"{"warp":{…}? (the warp being edited; returned with the new mesh),"rect":[x0,y0,x1,y1]?,"size":n|"default"|"3"|"4"|"5" (square patches, 1..=64; 1 and "default" are the single-patch grid)} — without `warp`/`style`/`mesh`, edits the active smart object's warp. The surface is kept and the new lines are real splits at i/n."##;
     vec![

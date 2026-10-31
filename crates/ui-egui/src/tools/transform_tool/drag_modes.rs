@@ -1,4 +1,4 @@
-use super::begin::moves_kind;
+use super::begin::{free_type, moves_kind};
 use super::pointer::{Gesture, Hit, carry_pivot};
 use super::{Homography, LayerContent, PhotocraftApp, TransformMode, TransformSession};
 
@@ -51,9 +51,10 @@ pub(super) fn handle_indicator(app: &PhotocraftApp, t: &TransformSession, h: Hit
 
 /// Editable type can be scaled, rotated and skewed but not distorted (#2630): the rule that greys
 /// Distort and Perspective in `enable_rules::disabled`, for the box's own layer. A box on a path,
-/// on the selection outline or on a lone mask or channel moves no type.
-fn distort_refused(app: &PhotocraftApp, t: &TransformSession) -> bool {
-    t.path.is_none() && !t.selection && t.target.is_none() && moves_kind(app, t, |c| matches!(c, LayerContent::Text(_)))
+/// on the selection outline or on a lone mask or channel moves no type. Preferences › Type › Free
+/// Transforms on Type (beyond Photoshop, off by default) lifts the rule.
+pub(super) fn distort_refused(app: &PhotocraftApp, t: &TransformSession) -> bool {
+    !free_type(app) && t.path.is_none() && !t.selection && t.target.is_none() && moves_kind(app, t, |c| matches!(c, LayerContent::Text(_)))
 }
 
 /// Where Distort and Perspective are refused ([`distort_refused`]), ⌘-drag and ⌘⌥⇧-drag of a

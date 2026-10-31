@@ -1,4 +1,4 @@
-use super::begin::{enter_warp, interpolation_preference, leave_warp, warps_type};
+use super::begin::{enter_warp, interpolation_preference, leave_warp, type_styles_only, warps_type};
 use super::commit::{cancel, commit};
 use super::pointer::point_on_quad;
 use super::warp::edit_session_warp;
@@ -362,8 +362,8 @@ fn warp_fields(app: &mut PhotocraftApp, ui: &mut egui::Ui, w: &Warp) {
     let lbl = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(s).color(tk.text_dim).size(12.0));
     };
-    // Type takes only the styles (#3004): Split and Grid are greyed, and there is no Custom.
-    let on_type = warps_type(app);
+    // A type layer's style with no free warp yet is its Warp Text: None takes it off.
+    let on_type = type_styles_only(app);
     // Split, Grid, then the warp style with its bend fields.
     ui.add_enabled_ui(!on_type, |ui| warp_mesh_fields(app, ui, w));
     crate::widgets::vline(ui, 22.0);

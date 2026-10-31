@@ -679,7 +679,7 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
 }
 
 /// The open transform moves an editable type layer as a whole (not a lone mask, channel, path or
-/// the selection). Its Warp is Warp Text: only the styles, and the type stays editable (#3004).
+/// the selection). Warping it keeps the type editable (#3004, `type_distort.rs`).
 pub fn warps_type(app: &PhotocraftApp) -> bool {
     let Some(t) = &app.ui.transform else { return false };
     if t.selection || t.target.is_some() || t.path.is_some() {
@@ -688,10 +688,25 @@ pub fn warps_type(app: &PhotocraftApp) -> bool {
     app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))
 }
 
-/// Warp on editable type, as in Photoshop: no rasterizing, no mesh to drag, just the warp styles
-/// of the options bar (Warp Text's). A box scaled or rotated first is applied first (that keeps
-/// type editable). The preview shows the type without its current Warp Text, under that style.
+/// Preferences › Type › Free Transforms on Type: beyond Photoshop, off by default.
+pub(super) fn free_type(app: &PhotocraftApp) -> bool {
+    app.session.prefs().type_.free_transforms_on_type
+}
+
+/// The open Warp moves editable type and the free transforms are off: as in Photoshop only the
+/// warp styles (Warp Text) apply, with no mesh to drag or split (#3004).
+pub(super) fn type_styles_only(app: &PhotocraftApp) -> bool {
+    warps_type(app) && !free_type(app)
+}
+
+/// Warp on editable type: no rasterizing. As in Photoshop the options bar's warp styles are the
+/// type's Warp Text; beyond Photoshop the mesh can be dragged and split too, and the result stays
+/// on the live type as a free warp (`type_distort::set_warp`). It starts from what it will
+/// replace (the Warp Text style, or the type's last free warp) over the type without it, so the
+/// preview doesn't bend twice. A box scaled or rotated first is applied first (that keeps type
+/// editable).
 fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    use photocraft_engine::type_distort::{WarpTarget, warp_target, without_warp_target};
     if app.ui.transform.as_ref().is_some_and(|t| t.quad != corners(t.rect)) {
         commit(app);
         if app.ui.transform.is_some() {
@@ -706,33 +721,44 @@ fn enter_type_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let (id, session) = (LayerId(t.layer), t.session);
     let doc = st.doc.clone();
     let Some(LayerContent::Text(text)) = doc.layer(id).map(|l| &l.content) else { return };
-    let current = text.warp.clone();
+    // Free transforms off: the style is the Warp Text, whatever free warps the type carries.
+    let target = if free_type(app) { warp_target(text) } else { WarpTarget::Style };
     let mut plain = (*doc).clone();
     if let Some(LayerContent::Text(tt)) = plain.layer_mut(id).map(|l| &mut l.content)
-        && current.is_some()
+        && target != WarpTarget::Append
     {
-        tt.warp = None;
+        *tt = if free_type(app) { without_warp_target(text) } else { photocraft_doc::TextLayer { warp: None, ..text.clone() } };
         photocraft_engine::type_cmds::refresh(&doc, tt);
     }
     let Some(b) = plain.layer(id).map(|l| photocraft_engine::transform_cmds::transform_bounds(&plain, l)).filter(|b| !b.is_empty()) else { return };
-    let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
-    if current.is_some()
-        && let Some(pv) = app.transform_preview.as_mut()
-    {
+    let (rect, warp) = match target {
+        WarpTarget::Style => {
+            let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
+            let current = text.warp.as_ref().and_then(|w| WarpStyle::parse(&w.style).filter(|s| s.is_preset()).map(|s| (w, s)));
+            let warp = current.map_or(Warp::none(rect), |(w, style)| Warp {
+                style,
+                bend: f64::from(w.value),
+                h_distort: f64::from(w.horizontal_distortion),
+                v_distort: f64::from(w.vertical_distortion),
+                vertical: !w.horizontal,
+                ..Warp::none(rect)
+            });
+            (rect, warp)
+        }
+        WarpTarget::Last(w) => (w.bounds, w),
+        WarpTarget::Append => {
+            let rect = [b.x0 as f64, b.y0 as f64, b.x1 as f64, b.y1 as f64];
+            (rect, Warp::custom(BezierMesh::identity(rect, 1, 1), rect))
+        }
+    };
+    let changed = plain.layer(id).map(|l| &l.content) != doc.layer(id).map(|l| &l.content) || t.rect != rect;
+    if changed && let Some(pv) = app.transform_preview.as_mut() {
         let max_side = ctx.input(|i| i.max_texture_side).max(app.gpu.as_ref().map_or(1, |g| g.max_texture_side()));
+        let r = photocraft_geom::Rect::new(rect[0].floor() as i32, rect[1].floor() as i32, rect[2].ceil() as i32, rect[3].ceil() as i32);
         // Read as the session's texels were: without the style when the box draws it itself.
-        let (image, uv) = preview_image(&plain, id, None, b, max_side, pv.styled.is_some());
+        let (image, uv) = preview_image(&plain, id, None, r, max_side, pv.styled.is_some());
         pv.texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     }
-    let warp =
-        current.as_ref().and_then(|w| WarpStyle::parse(&w.style).filter(|s| s.is_preset()).map(|s| (w, s))).map_or(Warp::none(rect), |(w, style)| Warp {
-            style,
-            bend: f64::from(w.value),
-            h_distort: f64::from(w.horizontal_distortion),
-            v_distort: f64::from(w.vertical_distortion),
-            vertical: !w.horizontal,
-            ..Warp::none(rect)
-        });
     if let Some(t) = app.ui.transform.as_mut() {
         t.rect = rect;
         t.quad = corners(rect);

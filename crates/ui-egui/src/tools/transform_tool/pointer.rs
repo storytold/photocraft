@@ -1,6 +1,6 @@
-use super::begin::{moving_layers, warps_type};
-use super::commit::{commit, committing, moves_type};
-use super::drag_modes::{apply_drag, apply_mode_drag, drag_mods, handle_indicator, mode_allows, mode_mods};
+use super::begin::{moving_layers, type_styles_only};
+use super::commit::{commit, committing};
+use super::drag_modes::{apply_drag, apply_mode_drag, distort_refused, drag_mods, handle_indicator, mode_allows, mode_mods};
 use super::warp::{quick_split_kind, split_cursor, surface_at, warp_hit, warp_pointer};
 use super::{
     CursorIcon, HANDLE_PX, Homography, LayerContent, PhotocraftApp, ToolEvent, TransformMode, TransformPreview, TransformSession, ViewXform, WarpStyle,
@@ -102,7 +102,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
                 commit(app);
                 return true;
             }
-            let type_layer = moves_type(app, &t);
+            let type_layer = distort_refused(app, &t);
             let adjusted = g.map(|g| drag_mods(app, &t, g.hit, mods));
             if let (Some(g), Some((mode, mods)), Some(s)) = (g, adjusted, app.ui.transform.as_mut())
                 && mode_allows(t.mode, g.hit)
@@ -275,7 +275,7 @@ pub fn cursor(app: &PhotocraftApp, xf: &ViewXform, p: [f64; 2], mods: egui::Modi
     let t = app.ui.transform.as_ref()?;
     let tol = handle_tolerance(app);
     if let Some(w) = &t.warp {
-        if warps_type(app) {
+        if type_styles_only(app) {
             return Some(CursorIcon::Default);
         }
         let armed = app.transform_preview.as_ref().and_then(|pv| pv.split_tool);

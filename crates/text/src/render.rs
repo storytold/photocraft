@@ -169,6 +169,7 @@ fn visible_color_passes(layout: &TextLayout, warp: Option<&Warp>) -> Vec<(Color,
 /// the outlines with `warp` first (in text space). Faux bold glyphs are drawn from their outline
 /// thickened by [`FAUX_BOLD_RADIUS`] ([`crate::embolden`]).
 fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_color: Option<&Color>, warp: Option<&Warp>) {
+    let after = warp.and_then(Warp::after_frame);
     for g in &layout.glyphs {
         let st = &layout.styles[g.style as usize];
         if only_color.is_some_and(|c| c != &st.color) {
@@ -191,7 +192,8 @@ fn draw(layout: &TextLayout, transform: &Xform, sink: &mut impl LineSink, only_c
                 Placement::Hidden => continue,
                 Placement::Frame(m) => {
                     glyph = Xform(m).mul(&glyph);
-                    bend = None;
+                    // Free transforms still bend the placed glyph.
+                    bend = after.as_ref();
                 }
             }
         }
@@ -278,11 +280,13 @@ fn glyph_center(layout: &TextLayout, g: &PlacedGlyph, font: &skrifa::FontRef, si
     f64::from(g.x) + f64::from(advance * hs) / 2.0
 }
 
-/// The deformation of a type layer: the path it runs along, or its Warp Text settings (None
-/// when neither applies).
+/// The deformation of a type layer: the path it runs along or its Warp Text settings, then its
+/// free Warp / Distort / Perspective ([`photocraft_doc::text::TypeDistortion`]). `None` when
+/// nothing bends it.
 pub fn layout_deform(layout: &TextLayout, layer: &photocraft_doc::TextLayer) -> Option<Warp> {
     let text_start = layout.bounds().map_or(0.0, |bounds| f64::from(bounds[0]));
-    Warp::on_path_with_text_start(&layer.shape, text_start).or_else(|| layout_warp(layout, layer.warp.as_ref()))
+    let base = Warp::on_path_with_text_start(&layer.shape, text_start).or_else(|| layout_warp(layout, layer.warp.as_ref()));
+    Warp::with_distortions(base, &layer.distortions)
 }
 
 /// The warp to apply to `layout` (None when `warp` is absent, `warpNone` or flat).
@@ -536,6 +540,7 @@ impl skrifa::outline::OutlinePen for Recorder<'_> {
 /// approximation for curves.
 pub fn outlines(layout: &TextLayout, transform: &Affine, warp: Option<&Warp>) -> Vec<Vec<PathEl>> {
     let mut glyphs = Vec::new();
+    let after = warp.and_then(Warp::after_frame);
     for g in &layout.glyphs {
         let face = &layout.faces[g.face as usize];
         let Ok(font) = skrifa::FontRef::from_index(face.font.data.as_ref(), face.font.index) else {
@@ -553,7 +558,8 @@ pub fn outlines(layout: &TextLayout, transform: &Affine, warp: Option<&Warp>) ->
                 Placement::Hidden => continue,
                 Placement::Frame(m) => {
                     glyph = Xform(m).mul(&glyph);
-                    bend = None;
+                    // Free transforms still bend the placed glyph.
+                    bend = after.as_ref();
                 }
             }
         }

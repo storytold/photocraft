@@ -39,6 +39,7 @@ pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;
 pub mod snap;
+pub mod type_distort;
 pub use variables_cmds::{export_data_sets_with, import_data_sets_text};
 pub use video_cmds::render_video_with;
 
