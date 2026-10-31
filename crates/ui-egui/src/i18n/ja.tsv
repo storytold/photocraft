@@ -4047,6 +4047,8 @@ curves	Smooth	スムーズ
 	There are too many sets: delete one first.	セットが多すぎます。先に 1 つ削除してください。
 	set name	セット名
 	{set} (modified)	{set}（変更あり）
+	Rotate View Left	表示を左に回転
+	Rotate View Right	表示を右に回転
 	Show file name in title	タイトルにファイル名を表示
 	50% Threshold	50% しきい値
 	Pattern Dither	パターンディザ

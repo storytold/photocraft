@@ -3385,6 +3385,8 @@ curves	Smooth	Haluskan
 	set name	nama set
 	{set} (modified)	{set} (diubah)
 	Random	Acak
+	Rotate View Left	Putar Tampilan ke Kiri
+	Rotate View Right	Putar Tampilan ke Kanan
 	Show file name in title	Tampilkan nama file di judul
 	50% Threshold	Threshold 50%
 	Pattern Dither	Dither Pola

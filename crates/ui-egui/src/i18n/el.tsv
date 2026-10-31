@@ -4073,6 +4073,8 @@ curves	Smooth	Εξομάλυνση
 	There are too many sets: delete one first.	Υπάρχουν πάρα πολλά σύνολα: διαγράψτε πρώτα ένα.
 	set name	όνομα συνόλου
 	{set} (modified)	{set} (τροποποιημένο)
+	Rotate View Left	Περιστροφή προβολής αριστερά
+	Rotate View Right	Περιστροφή προβολής δεξιά
 	Show file name in title	Εμφάνιση ονόματος αρχείου στον τίτλο
 	50% Threshold	Κατώφλι 50%
 	Pattern Dither	Πρόσμιξη μοτίβου

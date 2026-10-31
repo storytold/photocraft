@@ -3988,6 +3988,8 @@ curves	Smooth	Wygładź
 	There are too many sets: delete one first.	Zestawów jest za dużo: najpierw usuń jeden.
 	set name	nazwa zestawu
 	{set} (modified)	{set} (zmieniony)
+	Rotate View Left	Obróć widok w lewo
+	Rotate View Right	Obróć widok w prawo
 	Show file name in title	Pokaż nazwę pliku w tytule
 	50% Threshold	Próg 50%
 	Pattern Dither	Rozpraszanie wzorkiem

@@ -4074,6 +4074,8 @@ curves	Smooth	Згладити
 	There are too many sets: delete one first.	Забагато наборів: спершу видаліть один.
 	set name	назва набору
 	{set} (modified)	{set} (змінено)
+	Rotate View Left	Повернути вигляд ліворуч
+	Rotate View Right	Повернути вигляд праворуч
 	Show file name in title	Показувати ім’я файла в заголовку
 	50% Threshold	Поріг 50%
 	Pattern Dither	Візерунковий дизеринг
