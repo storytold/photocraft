@@ -132,7 +132,7 @@
 
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -3314,17 +3314,8 @@ curves	Smooth	Сгладить
 	Shadow Color	Цвет теней
 	Shadow Opacity	Непрозрачность теней
 	Check for Updates…	Проверить обновления…
-	PhotoCraft Updates	Обновления PhotoCraft
-	Checking for updates…	Проверка обновлений…
 	Open the release page to choose an installer for your system.	Откройте страницу выпуска и выберите установщик для своей системы.
-	Open Download Page	Открыть страницу загрузки
-	PhotoCraft is up to date.	Установлена последняя версия PhotoCraft.
-	Could not check for updates.	Не удалось проверить обновления.
-	Updates have not been checked yet.	Обновления ещё не проверялись.
-	Check Again	Проверить снова
 	Automatically Check for Updates	Автоматически проверять обновления
-	Installed version: {version}	Установленная версия: {version}
-	PhotoCraft {version} is available.	Доступна версия PhotoCraft {version}.
 	Use the embedded profile ({profile})	Использовать встроенный профиль ({profile})
 	Convert to the working space ({profile})	Преобразовать в рабочее пространство ({profile})
 	Remember this choice for future images	Запомнить этот выбор для следующих изображений
@@ -3925,6 +3916,9 @@ curves	Smooth	Сгладить
 	There is no color table to save.	Нет таблицы цветов для сохранения.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Сохранён {n} цвет в {file}|Сохранены {n} цвета в {file}|Сохранено {n} цветов в {file}
 	GPU adapter	Адаптер GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Содержимое AI/PDF/EPS будет редактироваться как SVG. Сохранение заменит встроенный источник; особенности исходного формата могут измениться.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Импортировать стили…
 	Export Selected Styles…	Экспортировать выбранные стили…
 	Export Styles…	Экспортировать стили…
@@ -4694,6 +4688,7 @@ shape	Appearance	Оформление
 	Font size presets	Наборы размеров шрифта
 	Leading presets	Наборы интерлиньяжа
 	Tracking presets	Наборы трекинга
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Недопустимое числовое значение. Требуется целое число от {min}% до {max}%. Вставлено предыдущее значение.
 	Color Aware	С учетом цвета
 	Decontaminate Colors	Очистить цвета
 	Edge Detection	Обнаружение краев
@@ -4710,4 +4705,9 @@ shape	Appearance	Оформление
 	Refine Hair needs hair detection, which isn't available yet	Для уточнения волос нужно распознавание волос, которое пока недоступно
 	Select and Mask was closed: its document is no longer the active one	Окно «Выделение и маска» закрыто: его документ больше не активен
 	Select and Mask was closed: another layer was selected	Окно «Выделение и маска» закрыто: выбран другой слой
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Недавно использованные цвета
+	Stop Color	Цвет контрольной точки
+	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
