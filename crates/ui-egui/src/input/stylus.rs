@@ -139,6 +139,8 @@ pub struct Stylus {
     peak: f32,
     /// The pen's touch contacts in the raw input, so a held pen is no press-and-hold right click.
     pub(crate) pen_contacts: PenContacts,
+    /// Pen presses made with the barrel button become right presses (`pen_barrel`).
+    pub(crate) barrel: crate::pen_barrel::BarrelRightClick,
     /// The egui frame [`Self::update_for_frame`] last ran in.
     updated_frame: Option<u64>,
     /// Tilt X, tilt Y, rotation of each point of the current drag (parallel to its points).
@@ -169,6 +171,7 @@ impl Default for Stylus {
             current: None,
             peak: 0.0,
             pen_contacts: PenContacts::default(),
+            barrel: Default::default(),
             updated_frame: None,
             stroke: Vec::new(),
             times: Vec::new(),

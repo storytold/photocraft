@@ -250,6 +250,12 @@ impl eframe::App for PhotocraftApp {
         if cfg!(any(target_os = "windows", target_os = "linux")) && self.session.prefs().enhanced_controls.zoom_with_trackpad_pinch {
             wheel_nav::fold_legacy_pinch(ctx, raw_input);
         }
+        // The pen's barrel button is the right button (Windows Ink drops it; pen_barrel.rs).
+        if let Some(read) = self.services.pen_barrel.as_mut() {
+            let input = read();
+            let modifiers = ctx.input(|i| i.modifiers);
+            self.stylus.barrel.apply(input, &mut raw_input.events, modifiers);
+        }
         self.inject_synthetic(ctx, raw_input);
         // After the control channel's own events (`ui.type`) join the OS's, before any widget.
         widgets::cap_text_events(&mut raw_input.events);

@@ -318,6 +318,8 @@ pub type CaptionStyleFn = Box<dyn Fn(&egui::Context) -> CaptionStyle>;
 
 /// Physical right mouse button or stylus barrel button down (Windows; read for brush resize).
 pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
+/// What the pen's barrel button did since the last frame (Windows; see `pen_barrel`).
+pub type PenBarrelFn = Box<dyn FnMut() -> crate::pen_barrel::BarrelInput>;
 
 /// Platform services injected by the app binary (file dialogs, codecs), keeping this crate free of
 /// I/O dependencies.
@@ -427,6 +429,9 @@ pub struct Services {
     pub caption_style: Option<CaptionStyleFn>,
     /// Physical right mouse button or pen barrel button currently down.
     pub right_button_down: Option<RightButtonDownFn>,
+    /// The pen's barrel button, read once a frame to turn pen presses made with it into
+    /// right-clicks (Windows, where winit drops it; `pen_barrel`). `None` elsewhere.
+    pub pen_barrel: Option<PenBarrelFn>,
     /// The persistent brush preset store, loading in the background (desktop; see
     /// `photocraft_engine::preset_store`). Attached to the session once it arrives; without
     /// one, brush presets are session-only unless the shell attached a store before startup.
