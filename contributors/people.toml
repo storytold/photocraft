@@ -285,7 +285,3 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
-
-[people.qvest-ssels]
-display_name = "tronicum"
-sync_github_name = false
