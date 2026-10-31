@@ -138,22 +138,6 @@ pub fn parse_spec(spec: &str) -> Vec<Param> {
 
 /// A single-line edit whose text reads right-to-left in a right-to-left UI (Arabic text aligns
 /// to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
-fn add_rtl_singleline(ui: &mut egui::Ui, text: &mut String, configure: impl FnOnce(egui::TextEdit<'_>) -> egui::TextEdit<'_>) -> egui::Response {
-    let edit = configure(egui::TextEdit::singleline(text));
-    if !crate::direction::is_rtl() {
-        return ui.add(edit);
-    }
-    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let mut job = egui::text::LayoutJob::simple_singleline(buf.as_str().to_owned(), font, ui.visuals().text_color());
-        job.direction = egui::epaint::text::TextDirection::RightToLeft;
-        job.halign = egui::Align::Max;
-        job.keep_trailing_whitespace = true;
-        ui.fonts_mut(|f| f.layout_job(job))
-    };
-    ui.add(edit.align(egui::Align2::RIGHT_CENTER).layouter(&mut layouter))
-}
-
 /// The number a range bound starts with, ignoring a unit or marker after it: `5000 px?` → 5000,
 /// `1000 %` → 1000. A bound that is not a number at all is `None`.
 fn leading_number(bound: &str) -> Option<f32> {
@@ -987,7 +971,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 let mut v = f.get(&p.key).and_then(Value::as_str).unwrap_or_default().to_string();
                 row(ui, |ui| {
                     let lp = ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
-                    add_rtl_singleline(ui, &mut v, |e| e.desired_width(200.0)).labelled_by(lp.id);
+                    crate::widgets::rtl_singleline_add(ui, &mut v, |e| e.desired_width(200.0)).labelled_by(lp.id);
                     // Install Plug-in…: pick the .wasm file instead of typing its path (#7531).
                     if cmd == "plugin.install" && p.key == "path" && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
                         f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(p.key));
