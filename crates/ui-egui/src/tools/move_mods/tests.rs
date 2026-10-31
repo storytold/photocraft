@@ -273,6 +273,20 @@ fn cmd_arrows_nudge_the_layer_from_the_zoom_tool() {
     assert_eq!(app.ui.tool, Tool::Zoom);
 }
 
+/// #9931: the Modifier Keys panel's latched ⌘ makes plain arrows nudge as ⌘-arrows do.
+#[test]
+fn latched_cmd_arrows_nudge_the_layer() {
+    let mut app = app_with_layer();
+    app.ui.shell.sticky_command = true;
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    for tool in [Tool::Zoom, Tool::Brush] {
+        app.ui.tool = tool;
+        assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE), "{tool:?}");
+    }
+    assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(10, 8, 26, 24));
+    assert_eq!(app.session.tools.brush.angle, 0.0, "not the Brush's tip");
+}
+
 /// #2474: tools where ⌘ means something else in Photoshop (Pen and path tools, Hand,
 /// Crop, Type) keep ⌘-arrows away from the layer, as does an active Free Transform.
 #[test]

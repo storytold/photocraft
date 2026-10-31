@@ -206,12 +206,14 @@ pub fn abandon(app: &mut PhotocraftApp) {
 /// was used.
 pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     use egui::{Key, Modifiers};
-    let cmd = ctx.input(|i| i.modifiers.command) && crate::hold_keys::cmd_nudges(app);
+    // The Modifier Keys panel's latched ⌘ makes the Move tool too, but isn't part of the key event.
+    let (held, physical) = ctx.input(|i| (crate::workspace_ui::sticky_mods(app, i.modifiers).command, i.modifiers.command));
+    let cmd = held && crate::hold_keys::cmd_nudges(app);
     if app.ui.tool != Tool::Move && app.ui.transform.is_none() && !cmd {
         return selection_arrow_keys(app, ctx) || crate::direct_select::arrow_keys(app, ctx) || brush_arrow_keys(app, ctx);
     }
     // `consume_key` never ignores an extra ⌘, so it is part of every pattern while it moves.
-    let base = if cmd { Modifiers::COMMAND } else { Modifiers::NONE };
+    let base = if cmd && physical { Modifiers::COMMAND } else { Modifiers::NONE };
     let keys = [(Key::ArrowLeft, -1.0, 0.0), (Key::ArrowRight, 1.0, 0.0), (Key::ArrowUp, 0.0, -1.0), (Key::ArrowDown, 0.0, 1.0)];
     for (key, ux, uy) in keys {
         // Most specific first: `consume_key` ignores extra ⇧ / ⌥ (`matches_logically`).
