@@ -448,12 +448,17 @@ fn the_preview_of_a_new_gradient_goes_inside_the_selected_artboard() {
     app.run("layer.new.artboard", json!({"x": 0, "y": 0, "width": 90, "height": 120, "name": "Board A"})).unwrap();
     let b = app.run("layer.new.artboard", json!({"x": 100, "y": 0, "width": 100, "height": 120, "name": "Board B"})).unwrap();
     let board = LayerId(b["layer"].as_u64().unwrap());
+    // Existing content on the board, so a preview at its bottom wouldn't pass.
+    app.run("layer.select", json!({"name": "Board B"})).unwrap();
+    app.run("layer.new.layer", json!({"name": "content"})).unwrap();
     app.run("layer.select", json!({"name": "Board B"})).unwrap();
     crate::canvas::tool_event(&mut app, ToolEvent::Down { x: 110.0, y: 60.0, pressure: 1.0 }, mods());
     crate::canvas::tool_event(&mut app, ToolEvent::Move { x: 190.0, y: 60.0, pressure: 1.0 }, mods());
     let (doc, _) = display_doc(&mut app, 0).expect("a preview while drawing");
     let top = |d: &Document| d.layer(board).and_then(photocraft_doc::Layer::children).and_then(<[photocraft_doc::Layer]>::last).map(|l| l.id);
     assert_eq!(top(&doc), Some(PREVIEW_LAYER), "the preview sits on top of Board B's contents");
+    let kids = doc.layer(board).and_then(photocraft_doc::Layer::children).map(<[photocraft_doc::Layer]>::len);
+    assert_eq!(kids, Some(2), "beside the board's existing layer");
     crate::canvas::tool_event(&mut app, ToolEvent::Up { x: 190.0, y: 60.0 }, mods());
     let committed = app.session.active().unwrap().active_layer;
     assert_eq!(top(&app.session.active().unwrap().doc), committed, "and so does the committed layer");
