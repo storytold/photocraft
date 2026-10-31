@@ -592,10 +592,9 @@ fn curve_deletion_reentry_keyboard_limits_and_controller_replacement_share_captu
     assert!(std::sync::Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc));
 }
 
-#[test]
-fn curve_gpu_paints_the_moved_handle_in_every_theme() {
+fn curve_gpu_paints_the_moved_handle_in_every_theme_part(part: usize) {
     let _gpu = gpu_lock();
-    for theme in ThemeKind::ALL {
+    for theme in ThemeKind::ALL.into_iter().skip(part).step_by(4) {
         let mut h = fixture_render(theme, true);
         let graph = open_curve(&mut h);
         set_curve(&mut h, json!([[0, 0], [128, 128], [255, 255]]));
@@ -616,6 +615,26 @@ fn curve_gpu_paints_the_moved_handle_in_every_theme() {
             after.save(std::path::Path::new(&dir).join(format!("{theme:?}.png"))).unwrap();
         }
     }
+}
+
+#[test]
+fn curve_gpu_paints_the_moved_handle_in_every_theme_part_0() {
+    curve_gpu_paints_the_moved_handle_in_every_theme_part(0);
+}
+
+#[test]
+fn curve_gpu_paints_the_moved_handle_in_every_theme_part_1() {
+    curve_gpu_paints_the_moved_handle_in_every_theme_part(1);
+}
+
+#[test]
+fn curve_gpu_paints_the_moved_handle_in_every_theme_part_2() {
+    curve_gpu_paints_the_moved_handle_in_every_theme_part(2);
+}
+
+#[test]
+fn curve_gpu_paints_the_moved_handle_in_every_theme_part_3() {
+    curve_gpu_paints_the_moved_handle_in_every_theme_part(3);
 }
 
 #[test]
@@ -664,12 +683,15 @@ fn pixel_hover_tracks_displayed_rgb_before_after_and_keeps_analysis_cached() {
     assert!(inspect(&h)["vectorscopeRect"].is_null());
 }
 
-#[test]
-fn pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_themes() {
+fn pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_themes_part(part: usize) {
     let _gpu = gpu_lock();
-    for theme in ThemeKind::ALL {
-        let mut h = fixture_render(theme, true);
+    let mut h = fixture_render(ThemeKind::Pro, true);
+    for theme in ThemeKind::ALL.into_iter().skip(part).step_by(4) {
         let ctx = h.ctx.clone();
+        h.state_mut().set_theme(&ctx, theme);
+        h.run_steps(3);
+        settle(&mut h);
+        assert_eq!(h.state().ui.theme, theme);
         menu(h.state_mut(), &ctx, json!({"ui":{"scope":{"vectorscope":true}}})).unwrap();
         h.run_steps(4);
         let histogram = rect(&h, "scopeRect");
@@ -728,6 +750,26 @@ fn pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_theme
 }
 
 #[test]
+fn pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_themes_part_0() {
+    pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_themes_part(0);
+}
+
+#[test]
+fn pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_themes_part_1() {
+    pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_themes_part(1);
+}
+
+#[test]
+fn pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_themes_part_2() {
+    pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_themes_part(2);
+}
+
+#[test]
+fn pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_themes_part_3() {
+    pixel_hover_gpu_badge_single_band_and_crosshair_appear_and_clear_in_all_themes_part(3);
+}
+
+#[test]
 fn sampler_list_replacement_and_operations_cannot_silently_cancel_each_other() {
     let mut h = fixture(ThemeKind::Pro);
     let ctx = h.ctx.clone();
@@ -739,11 +781,12 @@ fn sampler_list_replacement_and_operations_cannot_silently_cancel_each_other() {
     assert_eq!(r["scope"]["samplers"], json!([[0.5, 0.5]]));
 }
 
-/// Alt-drags the slider under the only visible `label` and returns the inspected dialog.
+/// Alt-drags the only visible slider named `label` and returns the inspected dialog.
 fn alt_drag_slider(h: &mut Harness<'_, PhotocraftApp>, label: &str) -> Value {
-    // The label sits above its 18 pt slider track.
-    let text = h.get_by_label(label).rect();
-    let at = pos2(text.left() + 80.0, text.bottom() + 12.0);
+    // The row also exposes a numeric SpinButton and a caption with the same name; the slider
+    // itself is the 18 pt track underneath them.
+    let track = h.get_by_role_and_label(egui::accesskit::Role::Slider, label).rect();
+    let at = pos2(track.left() + 80.0, track.center().y);
     let alt = Modifiers { alt: true, ..Modifiers::NONE };
     press(h, at, true, alt);
     for n in 1..=3 {

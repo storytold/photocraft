@@ -166,7 +166,13 @@ fn clicking_outside_a_dialog_keeps_it_open_and_the_canvas_pans_and_zooms() {
 
     // Scrolling over the canvas pans it.
     let c0 = h.state().ui.views[0].center;
-    h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -40.0), phase: egui::TouchPhase::Move, modifiers: Modifiers::NONE });
+    h.event(egui::Event::MouseWheel {
+        source: egui::MouseWheelSource::Unknown,
+        unit: egui::MouseWheelUnit::Point,
+        delta: vec2(0.0, -40.0),
+        phase: egui::TouchPhase::Move,
+        modifiers: Modifiers::NONE,
+    });
     h.run_steps(8);
     let c1 = h.state().ui.views[0].center;
     assert!(c1[1] > c0[1], "scroll pans under a dialog: {c0:?} -> {c1:?}");
@@ -421,7 +427,16 @@ fn command_click_under_curves_adds_one_point_per_press_not_per_frame() {
 /// with ⌘/Ctrl), one history step per press; ⌘/Ctrl+←/→ moves by word; Alt+Shift+→ extends
 /// the selection by a word.
 fn wheel(h: &Harness<'static, PhotocraftApp>, dy: f32, modifiers: Modifiers) {
-    h.event_modifiers(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Line, delta: vec2(0.0, dy), phase: egui::TouchPhase::Move, modifiers }, modifiers);
+    h.event_modifiers(
+        egui::Event::MouseWheel {
+            source: egui::MouseWheelSource::Unknown,
+            unit: egui::MouseWheelUnit::Line,
+            delta: vec2(0.0, dy),
+            phase: egui::TouchPhase::Move,
+            modifiers,
+        },
+        modifiers,
+    );
 }
 
 /// The document point under screen point `p` (no flip).
@@ -492,6 +507,8 @@ fn the_wheel_reaches_12800_percent_and_stops_dead_there() {
 #[test]
 fn alt_scroll_zooms_in_steps_around_the_pointer() {
     let mut h = harness();
+    // Animated Zoom off: a notch is one instant step (the default eases it, see the next test).
+    h.state_mut().session.edit_prefs(|p| p.general.animated_zoom = false);
     let r = h.state().last_canvas_rect;
     let p = pos2(r.center().x + 120.0, r.center().y - 70.0);
     h.hover_at(p);
@@ -533,6 +550,44 @@ fn alt_scroll_zooms_in_steps_around_the_pointer() {
     h.event(egui::Event::Zoom(1.25));
     h.run_steps(2);
     assert!((zoom(&h) / z2 - 1.25).abs() < 1e-3, "pinch zooms: {z2} -> {}", zoom(&h));
+}
+
+/// Animated Zoom on (the default): a notch eases in over several frames but is still ×1.1 in
+/// total, around the pointer.
+#[test]
+fn animated_alt_scroll_zoom_still_lands_on_one_step_around_the_pointer() {
+    let mut h = harness();
+    assert!(h.state().session.prefs().general.animated_zoom, "on by default");
+    let r = h.state().last_canvas_rect;
+    let p = pos2(r.center().x + 120.0, r.center().y - 70.0);
+    h.hover_at(p);
+    h.run_steps(2);
+    let (z0, d0) = (zoom(&h), doc_at(&h, p));
+    wheel(&h, 1.0, Modifiers::ALT);
+    h.run_steps(40);
+    let (z1, d1) = (zoom(&h), doc_at(&h, p));
+    assert!((z1 / z0 - 1.1).abs() < 1e-3, "one ⌥ notch is ×1.1: {z0} -> {z1}");
+    assert!((d1[0] - d0[0]).abs() < 0.05 && (d1[1] - d0[1]).abs() < 0.05, "centred on the pointer: {d0:?} -> {d1:?}");
+}
+
+/// Animated Zoom on: notches flicked past 12800 % stop there, and the first notch back zooms out
+/// at once by its ×1/1.1. The rest of the notches the limit swallowed must not eat it.
+#[test]
+fn the_first_animated_notch_back_from_the_limit_zooms_out() {
+    let mut h = harness();
+    {
+        let v = &mut h.state_mut().ui.views[0];
+        (v.zoom, v.fit_pending) = (crate::zoom_levels::MAX / 1.05, false);
+    }
+    let r = h.state().last_canvas_rect;
+    h.hover_at(r.center());
+    h.run_steps(2);
+    wheel(&h, 3.0, Modifiers::ALT);
+    h.step();
+    assert_eq!(zoom(&h), crate::zoom_levels::MAX, "the flick reaches the limit");
+    wheel(&h, -1.0, Modifiers::ALT);
+    h.run_steps(40);
+    assert!((zoom(&h) - crate::zoom_levels::MAX / 1.1).abs() < 1e-2, "one notch back: {}", zoom(&h));
 }
 
 #[test]
@@ -967,6 +1022,35 @@ fn paint_bucket_shows_a_bucket_cursor() {
     assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Crosshair, "Precise keeps the crosshair");
 }
 
+#[test]
+fn move_alt_copy_cursor_follows_the_latched_duplication_drag() {
+    let mut h = harness();
+    h.state_mut().run("shape.create", json!({"kind": "rect", "rect": [150, 100, 100, 100], "fill": "#ff0000"})).unwrap();
+    h.state_mut().ui.tool = crate::state::Tool::Move;
+    h.state_mut().ui.tool_options.move_show_transform = false;
+    let before = h.state().session.active().unwrap().doc.layers.len();
+    let p = h.state().last_canvas_rect.center();
+    h.hover_at(p);
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Copy);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before, "hovering never duplicates");
+    h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    let end = p + vec2(25.0, 15.0);
+    h.hover_at(end);
+    h.run_steps(2);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Copy, "releasing Alt does not undo an active copy");
+    h.event(egui::Event::PointerButton { pos: end, button: egui::PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+    h.run_steps(2);
+    assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::Default);
+    assert_eq!(h.state().session.active().unwrap().doc.layers.len(), before + 1);
+}
+
 /// The Hand tool, and Space held over another tool, show an open hand while hovering and a fist
 /// while they pan (#2196). The OS draws those everywhere but Windows, where winit maps `Grab` to
 /// the four-arrow move cursor, so the app hands it a bitmap there (`Crosshair` is the fallback).
@@ -1044,7 +1128,9 @@ fn hand_pointer_over_the_canvas_under_a_dialog() {
 fn esc_ends_a_pen_path_and_keeps_it() {
     let mut h = harness();
     h.state_mut().ui.tool = crate::state::Tool::Pen;
-    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3], [[150.0, 120.0]; 3]], ..Default::default() });
+    let owner = crate::vector_ui::capture_pen_owner(h.state());
+    h.state_mut().ui.pen =
+        Some(crate::vector_ui::PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3], [[150.0, 120.0]; 3]], owner, ..Default::default() });
     h.key_press(Key::Escape);
     h.run_steps(2);
     assert!(h.state().ui.pen.is_none(), "the Pen leaves drawing state");
@@ -1063,7 +1149,8 @@ fn esc_ends_a_pen_path_and_keeps_it() {
 fn pen_shows_the_close_path_pointer_over_the_first_anchor() {
     let mut h = harness();
     h.state_mut().ui.tool = crate::state::Tool::Pen;
-    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3]], ..Default::default() });
+    let owner = crate::vector_ui::capture_pen_owner(h.state());
+    h.state_mut().ui.pen = Some(crate::vector_ui::PenPath { knots: vec![[[50.0, 50.0]; 3], [[150.0, 50.0]; 3]], owner, ..Default::default() });
     let screen = |h: &Harness<'static, PhotocraftApp>, x: f32, y: f32| {
         let v = &h.state().ui.views[0];
         let c = h.state().last_canvas_rect.center();
@@ -1232,6 +1319,54 @@ fn move_tool_controls_rotate_from_just_outside_the_box() {
     let end = h.state().ui.transform.as_ref().map(|t| t.quad).expect("the drag opened Free Transform");
     let tilt = (end[1][1] - end[0][1]).atan2(end[1][0] - end[0][0]).to_degrees();
     assert!((tilt - 90.0).abs() < 8.0 || (tilt + 270.0).abs() < 8.0, "rotated about a quarter turn, got {tilt}° (zoom {zoom})");
+}
+
+#[test]
+fn assignable_pick_layer_shortcut_follows_transformed_canvas_without_editing() {
+    let mut h = harness();
+    let base = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut().run("layer.new.layer", json!({"name": "Paint"})).unwrap();
+    let paint = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut().run("select.rect", json!({"x": 100, "y": 100, "width": 40, "height": 40})).unwrap();
+    h.state_mut().run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    h.state_mut().run("select.deselect", json!({})).unwrap();
+    h.state_mut().run("layer.new.layer", json!({"name": "Empty"})).unwrap();
+    h.state_mut().run("prefs.set", json!({"path": "shortcuts.layer.selectUnderCursor", "value": "Cmd+Alt+K"})).unwrap();
+    h.state_mut().ui.tool = crate::state::Tool::Brush;
+    for (zoom, rotation, flip) in [(1.0, 0.0, false), (2.0, 37.0, true), (0.5, -90.0, false)] {
+        h.state_mut().ui.views[0].zoom = zoom;
+        h.state_mut().ui.views[0].rotation = rotation;
+        h.state_mut().ui.views[0].center = [180.0, 145.0];
+        h.state_mut().ui.view.flip_horizontal = flip;
+        h.run_steps(2);
+        for (point, expected) in [([120.0, 120.0], paint), ([155.0, 155.0], base)] {
+            let pos = crate::canvas::ViewXform::active(h.state()).unwrap().to_screen(point[0], point[1]);
+            let history = h.state().session.active().unwrap().history.past_len();
+            h.hover_at(pos);
+            h.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, Key::K);
+            h.run_steps(2);
+            assert_eq!(h.state().session.active().unwrap().active_layer, Some(expected));
+            assert_eq!(h.state().session.active().unwrap().history.past_len(), history, "picking never adds a document edit");
+            assert!(!h.state().session.journal.iter().any(|(id, _)| id == "paint.stroke"));
+        }
+    }
+    h.state_mut().run("layer.setProps", json!({"layer": paint.0, "visible": false})).unwrap();
+    let p = crate::canvas::ViewXform::active(h.state()).unwrap().to_screen(120.0, 120.0);
+    h.hover_at(p);
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, Key::K);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(base));
+    // Outside the document and modal dialogs preserve the current selection.
+    h.state_mut().run("layer.select", json!({"layer": paint.0})).unwrap();
+    h.hover_at(pos2(0.0, 0.0));
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, Key::K);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(paint));
+    open_dialog(&mut h);
+    h.hover_at(p);
+    h.key_press_modifiers(Modifiers::COMMAND | Modifiers::ALT, Key::K);
+    h.run_steps(2);
+    assert_eq!(h.state().session.active().unwrap().active_layer, Some(paint));
 }
 
 #[test]

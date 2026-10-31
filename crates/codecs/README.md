@@ -46,6 +46,7 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | OpenEXR | yes | yes | F16, F32 | Y, YA, RGB, RGBA | yes | no | no | no | no | no | no | `exr` |
 | Radiance HDR | yes | yes | F32 | RGB | no | no | no | no | no | no | yes (RGBE) | `image` |
 | FITS | yes | yes | U8, U16, F32 | Gray, RGB | no | no | no | no | no | yes (header cards) | no | built in |
+| JPEG XL (.jxl) | **no** (see #2868) | yes | U8, U16 | Gray, RGB, RGBA (GrayA expands to RGBA) | yes | no (bare codestream) | no | no | no | no | no | `zune-jpegxl` |
 | DPX | yes | yes | U8, U16 (10/12-bit code values read and written exactly through U16) | Gray, RGB, RGBA | yes | no | no | no | no | DPX header fields only (creator, project, copyright, creation time, transfer, colorimetric, frame position, frame rate, time code) | no | built in |
 | Cineon | yes | yes | U16 (10-bit code values read and written exactly through U16) | Gray, RGB | no | no | no | no | no | no | no | built in |
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
@@ -72,6 +73,17 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
 `encode_bmp_indexed` writes the inverse: indices plus a table as an 8-bit palette BMP.
 
 ## Documented asymmetries and limitations
+
+* **JPEG XL export.** Writes lossless 8/16-bit bare codestreams with `zune-jpegxl`.
+  Native layouts are Gray, RGB and RGBA. GrayA is expanded to RGBA at the
+  original depth. For 16-bit RGBA (including expanded GrayA), we correct
+  zune-jpegxl 0.5.2's extra-channel header, which otherwise describes the
+  16-bit alpha samples as 8-bit. This preserves alpha precision; the independent
+  jxl-oxide decoder test checks the actual gray and alpha samples. The expansion
+  is not a native GrayA layout. No ICC, EXIF, XMP or DPI container boxes are written; the
+  document pipeline converts tagged images to sRGB and reports metadata loss.
+  Reading remains in the separate #2868 PR. The `ASYMMETRIC_EXCEPTIONS`
+  entry stays until import is merged.
 
 * **DDS.** The top mip level of a 2D texture: uncompressed pixels described by channel masks
   (8, 16, 24 or 32 bits, RGB or luminance, with or without alpha) or BC1/BC2/BC3 (DXT1/DXT3/DXT5),
@@ -224,8 +236,14 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
     planar configuration 1 or 2.
   * Supports 1, 2 and 4-bit gray, 8/16/32/64-bit integers (32 and 64-bit are reduced to U16),
     F16, F32 and F64 (converted to F32), WhiteIsZero (#691: the tones are no longer inverted),
-    palette images (opened as RGB), associated alpha (made straight) and extra samples (dropped
-    unless the first is alpha).
+    palette images (opened as RGB) and associated alpha (made straight).
+  * Extra samples: the first alpha sample (ExtraSamples 1 or 2, wherever it sits) is the image's
+    alpha. Every other extra sample, such as a spot colour or a further alpha channel
+    (ExtraSamples 0), comes back in `Metadata::extra_samples`: one plane per sample in the
+    image's sample type, with its ExtraSamples value as `kind` (a reserved value above 2 reads as
+    0). At most `MAX_EXTRA_SAMPLES` (16) are kept, and they count against `Limits::max_alloc` with
+    the image: when the image fits but its extra samples don't, it opens without them and carries
+    `DecodeWarning::ExtraSamplesDropped`.
   * Every directory is reachable: `tiff_info` lists the main IFD chain and its SubIFDs (tag 330)
     with each page's size, kind (page, reduced-resolution copy, mask) and storage, walked with a
     seen-set, a depth limit and a 10 000-directory cap; `decode_tiff_page` opens any of them.
@@ -239,7 +257,11 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   * YCbCr, CIE Lab, signed integers and compressions that the `tiff` crate lacks (CCITT,
     JPEG-in-TIFF) return `Unsupported`.
 * **TIFF encode** writes classic TIFF, or BigTIFF when `EncodeOptions::tiff_bigtiff` is set or
-  the file could pass 4 GiB.
+  the file could pass 4 GiB. `Metadata::extra_samples` (up to 16) are written after the colour
+  and alpha samples, with their `kind` in the ExtraSamples tag (a reserved `kind` above 2 is
+  written as 0). Each plane must be exactly
+  `width × height × sample.bytes()` bytes; a plane of any other length, and more than 16 planes,
+  are encode errors rather than silently truncated or reinterpreted.
 * **EXR**
   * Multi-part files (a Maya/Arnold render writes one part per AOV) open the part that
     looks most like a colour image — RGBA beats RGB beats YA beats a single channel, so a
