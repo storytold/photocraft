@@ -62,3 +62,32 @@ fn re_placing_at_another_scale_re_renders_the_vector_source() {
     assert!(alpha(&surf, 268, 60) > 0.99 && alpha(&surf, 271, 60) < 0.01);
     assert!(red(&surf, 150, 81) < 0.02 && red(&surf, 150, 75) > 0.98 && red(&surf, 150, 87) > 0.98);
 }
+
+/// A `.pcraft` opens from its cached pixels and parses an embedded SVG source only on a later
+/// edit. A source whose DTD entity hides 20 000 nested groups from the depth check used to open
+/// clean and then overflow the stack on Image Size or a PSD save; both are an error or a fallback
+/// now. Run on a 2 MB stack, as the app's import and command threads are.
+#[test]
+fn a_pcraft_smart_object_with_a_hostile_svg_does_not_abort_a_later_edit() {
+    let deep = format!("{}{}", "<g>".repeat(20_000), "</g>".repeat(20_000));
+    let hostile = format!("<!DOCTYPE svg [<!ENTITY a \"{deep}\">]><svg xmlns=\"http://www.w3.org/2000/svg\" width=\"20\" height=\"10\">&a;</svg>");
+    std::thread::Builder::new()
+        .stack_size(2 * 1024 * 1024)
+        .spawn(move || {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 100, "height": 100, "background": "white"})).unwrap();
+            photocraft_engine::file_cmds::place_bytes(&mut s, "logo.svg", SVG.as_bytes().to_vec(), None, &json!({"scale": 100})).unwrap();
+            let mut doc = (*s.active().unwrap().doc).clone();
+            let LayerContent::Smart(sm) = &mut doc.layers.last_mut().unwrap().content else { panic!("smart object") };
+            sm.source = photocraft_doc::SmartSource::Embedded { file_name: "logo.svg".into(), bytes: std::sync::Arc::new(hostile.into_bytes()) };
+            let carrier = photocraft_format::save_to_bytes(&doc, &photocraft_format::SaveOptions::default()).unwrap();
+
+            photocraft_engine::file_cmds::open_bytes_as(&mut s, "carrier.pcraft", &carrier, None, None).unwrap();
+            let _ = s.execute("image.imageSize", json!({"width": 50, "height": 50}));
+            let dir = tempfile::tempdir().unwrap();
+            let _ = s.execute("file.saveACopy", json!({"path": dir.path().join("copy.psd").to_string_lossy()}));
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

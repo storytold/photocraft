@@ -316,7 +316,7 @@ fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Opti
                 Ok(std::borrow::Cow::Owned(xml)) if !xml.starts_with(&[0x1f, 0x8b]) => ("image/svg+xml", Arc::new(xml)),
                 _ => return None,
             };
-            if nesting_depth(&xml, depth_left) > depth_left {
+            if !nesting_depth(&xml, depth_left).is_ok_and(|depth| depth <= depth_left) {
                 return None;
             }
             return default_resolver(mime, xml, opts);
@@ -352,7 +352,7 @@ fn parse(bytes: &[u8]) -> Result<Parsed, IoError> {
 /// [`parse`] with the font database `fonts` supplies (the tests hand in an empty one).
 fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Result<Parsed, IoError> {
     let xml = inflate(bytes)?;
-    let depth = nesting_depth(&xml, MAX_XML_DEPTH);
+    let depth = nesting_depth(&xml, MAX_XML_DEPTH)?;
     if depth > MAX_XML_DEPTH {
         return Err(IoError::Svg(format!("elements are nested more than {MAX_XML_DEPTH} levels deep")));
     }
@@ -387,8 +387,10 @@ fn inflate(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
 /// The deepest element nesting in `xml`, stopping as soon as it passes `limit` (the result is
 /// then `limit + 1`). Comments, CDATA sections, processing instructions and the DOCTYPE add
 /// nothing; quoted attribute values may hold `>` or `/>`. Malformed markup is only counted
-/// loosely: the parser rejects it afterwards.
-pub(crate) fn nesting_depth(xml: &[u8], limit: usize) -> usize {
+/// loosely: the parser rejects it afterwards. The parser expands the DTD's entities after this
+/// count, so an entity holding markup (a `<`) is an error: it could nest deeper than anything
+/// counted here. A `&#60;` there stays text.
+pub(crate) fn nesting_depth(xml: &[u8], limit: usize) -> Result<usize, IoError> {
     let after = |from: usize, pat: &[u8]| -> usize {
         xml.get(from..).and_then(|s| s.windows(pat.len()).position(|w| w == pat)).map_or(xml.len(), |p| from.saturating_add(p).saturating_add(pat.len()))
     };
@@ -410,6 +412,44 @@ pub(crate) fn nesting_depth(xml: &[u8], limit: usize) -> usize {
         }
         (xml.len(), false)
     };
+    // The byte after the DOCTYPE starting at `from`: its internal subset `[...]` is walked
+    // declaration by declaration, so a quote in a comment there can't hide the markup after it.
+    let doctype_end = |from: usize| -> Result<usize, IoError> {
+        let (mut quote, mut j) = (None, from);
+        loop {
+            let Some(&b) = xml.get(j) else { return Ok(xml.len()) };
+            j = j.saturating_add(1);
+            match quote {
+                Some(q) if b == q => quote = None,
+                Some(_) => {}
+                None if b == b'"' || b == b'\'' => quote = Some(b),
+                None if b == b'>' => return Ok(j),
+                None if b == b'[' => break,
+                None => {}
+            }
+        }
+        while let Some(rest) = xml.get(j..).filter(|r| !r.is_empty()) {
+            j = if rest.starts_with(b"<!--") {
+                after(j.saturating_add(4), b"-->")
+            } else if rest.starts_with(b"<?") {
+                after(j.saturating_add(2), b"?>")
+            } else if rest.starts_with(b"<!ENTITY") {
+                let end = tag_end(j.saturating_add(2)).0;
+                if xml.get(j.saturating_add(2)..end).is_some_and(|decl| decl.contains(&b'<')) {
+                    return Err(IoError::Svg("the SVG's DTD declares an entity holding markup, which isn't supported".into()));
+                }
+                end
+            } else if rest.starts_with(b"<!") {
+                // The parser ends ELEMENT, ATTLIST and NOTATION at the first `>`, quotes or not.
+                after(j.saturating_add(2), b">")
+            } else if rest.starts_with(b"]") {
+                return Ok(tag_end(j.saturating_add(1)).0);
+            } else {
+                j.saturating_add(1)
+            };
+        }
+        Ok(xml.len())
+    };
     let (mut depth, mut deepest, mut i) = (0usize, 0usize, 0usize);
     while let Some(p) = xml.get(i..).and_then(|s| s.iter().position(|&b| b == b'<')) {
         let at = i.saturating_add(p);
@@ -420,6 +460,8 @@ pub(crate) fn nesting_depth(xml: &[u8], limit: usize) -> usize {
             after(at.saturating_add(9), b"]]>")
         } else if rest.starts_with(b"<?") {
             after(at.saturating_add(2), b"?>")
+        } else if rest.starts_with(b"<!DOCTYPE") {
+            doctype_end(at.saturating_add(9))?
         } else if rest.starts_with(b"<!") {
             tag_end(at.saturating_add(2)).0
         } else if rest.starts_with(b"</") {
@@ -431,13 +473,13 @@ pub(crate) fn nesting_depth(xml: &[u8], limit: usize) -> usize {
                 depth = depth.saturating_add(1);
                 deepest = deepest.max(depth);
                 if deepest > limit {
-                    return deepest;
+                    return Ok(deepest);
                 }
             }
             end
         };
     }
-    deepest
+    Ok(deepest)
 }
 
 /// The document canvas for a drawing: its size in px, scaled down to [`MAX_SIDE`] when needed.
