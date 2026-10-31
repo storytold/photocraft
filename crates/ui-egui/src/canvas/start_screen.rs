@@ -10,18 +10,6 @@ const HOME_BUTTON_WIDTH: f32 = 190.0;
 /// Space between the Home screen's two buttons.
 const HOME_BUTTON_GAP: f32 = 12.0;
 
-/// A row in the UI's reading order, like [`egui::Ui::horizontal`] but mirrored in a right-to-left
-/// UI. The Home card's body is centred, so its rows do not mirror on their own.
-fn reading_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
-    let size = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
-    ui.allocate_ui_with_layout(size, crate::direction::row(), add)
-}
-
-/// Where the "open source" note sits next to the title.
-fn note_x(note_box: Rect, rtl: bool) -> f32 {
-    if rtl { note_box.left() } else { note_box.left() + 10.0 }
-}
-
 pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let area = ui.available_rect_before_wrap();
@@ -44,16 +32,16 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let card = Rect::from_center_size(area.center(), egui::vec2(card_width, 330.0 + recent_h + stacked_h));
     ui.scope_builder(egui::UiBuilder::new().max_rect(card), |ui| {
         ui.vertical_centered(|ui| {
-            reading_row(ui, |ui| {
+            crate::direction::full_row(ui, |ui| {
                 let title = ui.painter().layout_no_wrap(tl!("PhotoCraft").into(), crate::theme::semibold(38.0), t.text);
                 let by = ui.painter().layout_no_wrap(tl!("open source").into(), egui::FontId::proportional(13.0), t.text_faint);
                 let total = title.size().x + by.size().x + 10.0;
                 ui.add_space(((card.width() - total) / 2.0).max(0.0));
                 let (r, _) = ui.allocate_exact_size(title.size(), Sense::hover());
                 ui.painter().galley(r.min, title, t.text);
-                let (r2, _) = ui.allocate_exact_size(egui::vec2(by.size().x + 10.0, r.height()), Sense::hover());
-                // The note hugs the title's trailing side: its left edge in a right-to-left UI.
-                let by_x = note_x(r2, crate::direction::is_rtl());
+                let _ = ui.allocate_exact_size(egui::vec2(by.size().x + 10.0, r.height()), Sense::hover());
+                // The note sits past the title's trailing side: 10 px plus the row's item gap.
+                let by_x = crate::direction::after_x(r, 10.0 + ui.spacing().item_spacing.x, by.size().x);
                 ui.painter().galley(egui::pos2(by_x, r.bottom() - by.size().y - 8.0), by, t.text_faint);
             });
             ui.add_space(6.0);
@@ -61,7 +49,7 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.add_space(22.0);
             let (mut new_clicked, mut open_clicked) = (false, false);
             if side_by_side {
-                reading_row(ui, |ui| {
+                crate::direction::full_row(ui, |ui| {
                     ui.add_space(((card.width() - 2.0 * button_width - HOME_BUTTON_GAP) / 2.0).max(0.0));
                     ui.spacing_mut().item_spacing.x = HOME_BUTTON_GAP;
                     new_clicked = crate::widgets::primary_button(ui, &new_label, button_width).clicked();
@@ -80,7 +68,7 @@ pub(super) fn start_screen(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let _ = app.open_dialog_file();
             }
             ui.add_space(22.0);
-            reading_row(ui, |ui| {
+            crate::direction::full_row(ui, |ui| {
                 let msg = start_screen_drop_hint(app);
                 let g = ui.painter().layout_no_wrap(msg.to_string(), egui::FontId::proportional(12.5), t.text_faint);
                 ui.add_space(((card.width() - g.size().x - 24.0) / 2.0).max(0.0));
@@ -133,18 +121,12 @@ struct RecentRow {
 /// Where a recent-file row's parts sit: the file icon at the reading start, the × at the reading
 /// end, and the file name and folder between them.
 fn recent_row(row: Rect, name_w: f32, hovered: bool) -> RecentRow {
-    let rtl = crate::direction::is_rtl();
-    let close = Rect::from_center_size(egui::pos2(if rtl { row.left() + 16.0 } else { row.right() - 16.0 }, row.center().y), egui::vec2(22.0, 22.0));
-    let end = if hovered {
-        if rtl { close.right() + 4.0 } else { close.left() - 4.0 }
-    } else if rtl {
-        row.left() + 10.0
-    } else {
-        row.right() - 10.0
-    };
-    let icon = Rect::from_center_size(egui::pos2(if rtl { row.right() - 16.0 } else { row.left() + 16.0 }, row.center().y), egui::vec2(16.0, 16.0));
-    let name_x = if rtl { row.right() - 32.0 - name_w } else { row.left() + 32.0 };
-    let folder_max = if rtl { (name_x - 14.0 - end).max(0.0) } else { (end - (name_x + name_w + 14.0)).max(0.0) };
+    let close = Rect::from_center_size(egui::pos2(crate::direction::end_x(row, 16.0), row.center().y), egui::vec2(22.0, 22.0));
+    let end = if hovered { crate::direction::start_x(close, -4.0) } else { crate::direction::end_x(row, 10.0) };
+    let icon = Rect::from_center_size(egui::pos2(crate::direction::start_x(row, 16.0), row.center().y), egui::vec2(16.0, 16.0));
+    let name_x = crate::direction::start_x_w(row, 32.0, name_w);
+    let name_rect = Rect::from_min_size(egui::pos2(name_x, row.top()), egui::vec2(name_w, row.height()));
+    let folder_max = (crate::direction::step() * (end - crate::direction::end_x(name_rect, 0.0)) - 14.0).max(0.0);
     RecentRow { close, end, icon, name_x, folder_max }
 }
 
@@ -155,7 +137,7 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let width = 380.0;
     let rtl = crate::direction::is_rtl();
-    reading_row(ui, |ui| {
+    crate::direction::full_row(ui, |ui| {
         // Line the heading up with the file icons.
         ui.add_space(((ui.available_width() - width) / 2.0).max(0.0) + 8.0);
         ui.label(egui::RichText::new(tl!("Recent")).font(crate::theme::semibold(12.5)).color(t.text_dim));
@@ -256,15 +238,16 @@ mod tests {
         let note_w = 60.0;
         let spacing = 8.0;
         let lead = (row_w - (title_w + note_w + 10.0)) / 2.0;
-        // The note box sits next to the title: to its right left-to-right, to its left right-to-left.
-        let ltr_box = Rect::from_min_size(egui::pos2(lead + title_w + spacing, 0.0), egui::vec2(note_w + 10.0, 20.0));
-        let rtl_box = Rect::from_min_size(egui::pos2(row_w - lead - title_w - spacing - note_w - 10.0, 0.0), egui::vec2(note_w + 10.0, 20.0));
+        // The note sits past the title's trailing side: 10 px plus the row's item gap.
+        let off = 10.0 + spacing;
         let (ltr_x, rtl_x) = {
             let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
-            let ltr_x = note_x(ltr_box, crate::direction::is_rtl());
+            let ltr_title = Rect::from_min_size(egui::pos2(lead, 0.0), egui::vec2(title_w, 20.0));
+            let ltr_x = crate::direction::after_x(ltr_title, off, note_w);
             let rtl_x = {
                 let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
-                note_x(rtl_box, crate::direction::is_rtl())
+                let rtl_title = Rect::from_min_size(egui::pos2(row_w - lead - title_w, 0.0), egui::vec2(title_w, 20.0));
+                crate::direction::after_x(rtl_title, off, note_w)
             };
             (ltr_x, rtl_x)
         };
