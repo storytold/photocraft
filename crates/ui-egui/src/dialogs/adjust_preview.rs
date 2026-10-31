@@ -351,6 +351,11 @@ pub fn proxy_base(base: &Document, k: u32) -> Document {
     d
 }
 
+/// The id a [`proxy_base`] gives layer `id`.
+pub fn proxy_layer(id: LayerId) -> LayerId {
+    LayerId(id.0 ^ PROXY_LAYER_BIT)
+}
+
 /// [`with_settings`] for a [`proxy_base`].
 pub fn proxy_with_settings(proxy: &Document, kind: &str, params: &Value) -> Result<Document, String> {
     set_adjustment(proxy, LayerId(PREVIEW_LAYER.0 ^ PROXY_LAYER_BIT), kind, params)

@@ -139,11 +139,13 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     let (vx1, vy1) = ((x0 + sw).min(doc.x), (y0 + sh).min(doc.y));
     let source = photocraft_geom::Rect::new(vx0.floor() as i32, vy0.floor() as i32, vx1.ceil() as i32, vy1.ceil() as i32);
     let gpu_view = crate::filter_gpu_preview::window_view(app, dialog, source).filter(|_| !holding);
-    if let Some(params) = gpu_view {
+    if let Some((params, k)) = gpu_view {
         crate::widgets::checker(&painter, dest, 8.0);
+        // A zoomed-out preview's texture is the proxy, `k` document pixels per texel.
+        let k = k.max(1) as f32;
         let view = crate::gpu_canvas::ViewParams {
-            zoom,
-            center: [(vx0 + vx1) / 2.0, (vy0 + vy1) / 2.0],
+            zoom: zoom * k,
+            center: [(vx0 + vx1) / 2.0 / k, (vy0 + vy1) / 2.0 / k],
             rotation: 0.0,
             shadow: false,
             pixel_grid: false,

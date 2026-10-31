@@ -388,8 +388,10 @@ fn paint_canvas(
     }
     if app.gpu.is_some()
         && gpu_ok
-        && let Some((k, key, preview_size)) =
-            ensure_adjust_proxy(app, idx, render_zoom).or_else(|| ensure_filter_preview(app, idx, ctx)).or_else(|| ensure_proxy_preview(app, idx, render_zoom))
+        && let Some((k, key, preview_size)) = ensure_adjust_proxy(app, idx, render_zoom)
+            .or_else(|| crate::filter_gpu_preview::gpu_proxy(app, idx))
+            .or_else(|| ensure_filter_preview(app, idx, ctx))
+            .or_else(|| ensure_proxy_preview(app, idx, render_zoom))
     {
         on_gpu = true;
         app.navigator_gpu.remove(&doc.id);
@@ -402,7 +404,15 @@ fn paint_canvas(
             // pixel more each way covers its half-pixel shift).
             let half = |p: u32, o: u32| i32::try_from((i64::from(p) - i64::from(o)).div_euclid(2)).unwrap_or(0);
             let shift = (half(preview_size[0], original_size[0]), half(preview_size[1], original_size[1]));
-            upload_filter_preview_view(app, key, visible_doc_rect(&xf).translate(shift.0, shift.1).inflate(1));
+            // Pattern Preview's copies sample the texture beyond the view: all of it then, as
+            // `ensure_gpu` does for blend previews.
+            let whole = |v: u32| i32::try_from(v).unwrap_or(i32::MAX);
+            let visible = if app.ui.view.pattern_preview {
+                photocraft_geom::Rect::new(0, 0, whole(preview_size[0]), whole(preview_size[1]))
+            } else {
+                visible_doc_rect(&xf).translate(shift.0, shift.1).inflate(1)
+            };
+            upload_filter_preview_view(app, key, visible);
         }
         let shown = filter_preview_display_doc(app, doc, key);
         let params = crate::gpu_canvas::ViewParams {
@@ -426,6 +436,8 @@ fn paint_canvas(
             hdr: hdr_preview(app, doc),
             offset: [0.0, 0.0],
         };
+        // The filter dialog's preview window draws a zoomed-out GPU preview from here too.
+        app.canvas_gpu.insert(doc.id, params);
         paint_gpu_view(painter, rect, params, &pattern);
     } else if gpu_ok && viewport_pages::show(app, ctx, idx, &xf, view.zoom) {
         // Too large for the document's texture set: the pages in view, rendered in the background.

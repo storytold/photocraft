@@ -708,6 +708,7 @@ pub(crate) fn retain_gpu_documents(app: &mut PhotocraftApp) {
             .flat_map(|st| [st.doc.id.0, st.doc.id.0 ^ (1u64 << 61), st.doc.id.0 ^ (1u64 << 62), super::viewport_pages::stream_key(st.doc.id.0)])
             .collect();
         live.extend(crate::adjust_preview::gpu_keys(app));
+        live.extend(crate::filter_gpu_preview::gpu_keys(app));
         gpu.retain(&live);
     }
     crate::background_redraw::retain(app);

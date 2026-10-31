@@ -1259,7 +1259,7 @@ pub(crate) fn smart_preview_factor(doc: &Document, command: &str, params: &Value
 }
 
 /// Scale the pixel-sized parameters of `command` down by the preview proxy factor `k`, keeping each above its minimum and negative lengths negative.
-fn scale_preview_params(command: &str, params: &mut Value, k: u32) {
+pub(crate) fn scale_preview_params(command: &str, params: &mut Value, k: u32) {
     if command == photocraft_engine::plugin_cmds::RUN {
         // A plug-in declares its pixel lengths (`"unit": "px"` in its manifest), and only those
         // are scaled: a 12 px shift previewed 4 times too wide at k = 4, and a unitless param that
