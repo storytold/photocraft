@@ -4417,3 +4417,25 @@ navigator	Zoom	Zoom
 	Select Layer Under Cursor	Seleccionar capa bajo el cursor
 	Drag to move the selected path	Arrastre para mover el trazado seleccionado
 	Edit Brush…	Editar pincel…
+
+# Frame Tool and other branch translations.
+	Drag to move the active shape's path or the Work Path	Arrastre para mover el trazado de la forma activa o el trazado de trabajo
+	This Layer:	Esta capa:
+	Move Up	Mover arriba
+	Move Down	Mover abajo
+	A frame supports affine transforms; select its image for perspective transforms	Un marco admite transformaciones afines; seleccione su imagen para transformaciones de perspectiva
+	A frame supports affine transforms; select its image to warp it	Un marco admite transformaciones afines; seleccione su imagen para deformarla
+	Convert to Frame…	Convertir en marco…
+	Create a new custom frame	Crear un nuevo marco personalizado
+	Create a new polygonal frame	Crear un nuevo marco poligonal
+	Create a new triangular frame	Crear un nuevo marco triangular
+	Fit Content to Frame	Ajustar contenido al marco
+	Fit Frame to Content	Ajustar marco al contenido
+	Frame coordinates must be finite and within 600000 pixels	Las coordenadas del marco deben ser finitas y estar dentro de 600000 píxeles
+	Import Image…	Importar imagen…
+	Invalid frame transform	Transformación de marco no válida
+	Invalid nested file drop	Soltado de archivo anidado no válido
+	New Frame	Nuevo marco
+	Replace Image…	Reemplazar imagen…
+	The frame is locked	El marco está bloqueado
+	The frame is unavailable	El marco no está disponible

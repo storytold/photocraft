@@ -145,9 +145,9 @@ use contents::{edit_contents, export_contents, is_smart_child, path_param, repla
 use filters::smart_mut;
 pub(crate) use filters::{add_smart_filter, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};
 use filters::{blending_options, delete_filter, edit_filters, move_filter, set_filter_params, set_filter_visible, smart, transfer_filters};
+pub(crate) use placing::{affine_homography, set_placement, shift_smart, transform_placement};
 use placing::{convert, detach_psd, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
-pub(crate) use placing::{set_placement, shift_smart, transform_placement};
 use rendering::refresh_or_fail;
 pub(crate) use rendering::source_box;
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};

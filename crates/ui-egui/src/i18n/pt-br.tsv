@@ -4432,3 +4432,24 @@ layerLabel	No Color	Sem cor
 	Select and Mask was closed: another layer was selected	Selecionar e mascarar foi fechado: outra camada foi selecionada
 	Drag to move the selected path	Arraste para mover o demarcador selecionado
 	Edit Brush…	Editar pincel…
+
+# Frame Tool and other branch translations.
+	Drag to move the active shape's path or the Work Path	Arraste para mover o demarcador da forma ativa ou o demarcador de trabalho
+	Move Up	Mover para cima
+	Move Down	Mover para baixo
+	A frame supports affine transforms; select its image for perspective transforms	Uma moldura permite transformações afins; selecione sua imagem para transformações de perspectiva
+	A frame supports affine transforms; select its image to warp it	Uma moldura permite transformações afins; selecione sua imagem para deformá-la
+	Convert to Frame…	Converter em moldura…
+	Create a new custom frame	Criar nova moldura personalizada
+	Create a new polygonal frame	Criar nova moldura poligonal
+	Create a new triangular frame	Criar nova moldura triangular
+	Fit Content to Frame	Ajustar conteúdo à moldura
+	Fit Frame to Content	Ajustar moldura ao conteúdo
+	Frame coordinates must be finite and within 600000 pixels	As coordenadas da moldura devem ser finitas e estar dentro de 600000 pixels
+	Import Image…	Importar imagem…
+	Invalid frame transform	Transformação de moldura inválida
+	Invalid nested file drop	Soltura de arquivo aninhada inválida
+	New Frame	Nova moldura
+	Replace Image…	Substituir imagem…
+	The frame is locked	A moldura está bloqueada
+	The frame is unavailable	A moldura não está disponível

@@ -4251,3 +4251,25 @@ cameraRaw	Dehaze	Odstranění oparu
 	Select and Mask was closed: another layer was selected	Vybrat a maskovat bylo zavřeno: byla vybrána jiná vrstva
 	Drag to move the selected path	Tažením přesunete vybranou cestu
 	Edit Brush…	Upravit štětec…
+
+# Frame Tool and other branch translations.
+	Drag to move the active shape's path or the Work Path	Tažením přesunete cestu aktivního tvaru nebo pracovní cestu
+	This Layer:	Tato vrstva:
+	Move Up	Přesunout nahoru
+	Move Down	Přesunout dolů
+	A frame supports affine transforms; select its image for perspective transforms	Rámeček podporuje afinní transformace; pro perspektivní transformace vyberte jeho obrázek
+	A frame supports affine transforms; select its image to warp it	Rámeček podporuje afinní transformace; pro pokřivení vyberte jeho obrázek
+	Convert to Frame…	Převést na rámeček…
+	Create a new custom frame	Vytvořit nový vlastní rámeček
+	Create a new polygonal frame	Vytvořit nový mnohoúhelníkový rámeček
+	Create a new triangular frame	Vytvořit nový trojúhelníkový rámeček
+	Fit Content to Frame	Přizpůsobit obsah rámečku
+	Fit Frame to Content	Přizpůsobit rámeček obsahu
+	Frame coordinates must be finite and within 600000 pixels	Souřadnice rámečku musí být konečné a v rozsahu 600000 pixelů
+	Import Image…	Importovat obrázek…
+	Invalid frame transform	Neplatná transformace rámečku
+	Invalid nested file drop	Neplatné vnořené přetažení souboru
+	New Frame	Nový rámeček
+	Replace Image…	Nahradit obrázek…
+	The frame is locked	Rámeček je zamčený
+	The frame is unavailable	Rámeček není dostupný

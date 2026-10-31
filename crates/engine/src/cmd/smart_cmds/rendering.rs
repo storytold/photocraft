@@ -2,7 +2,7 @@ use super::filters::smart;
 use super::source::{SourceImage, cache_get, cache_key, cache_put, source_bytes, source_image, source_surface_from_buffer, svg_source_image, vector_scale};
 use super::{
     Affine, Arc, BlendMode, Document, EngineError, Homography, JobCtx, Layer, LayerContent, LayerId, PixelFormat, Rect, Result, SmartFilter, SmartObject,
-    SmartSource, Stage, StageKey, Surface, Value, decode_source, other, stack_cache,
+    SmartSource, Stage, StageKey, Surface, Value, affine_homography, decode_source, other, placement, stack_cache,
 };
 
 /// Layer › Smart Objects › Stack Mode: the source's layers (or, when it holds a single group, the
@@ -163,11 +163,13 @@ pub(super) fn place(name: &str, bytes: &[u8], fmt: PixelFormat, sm: &SmartObject
             Some(p) => {
                 let [h0, h1, h2, h3, h4, h5, h6, h7, h8] = *p;
                 let h = Homography([h0 / k, h1 / k, h2, h3 / k, h4 / k, h5, h6 / k, h7 / k, h8]);
+                crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?;
                 photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, None)?
             }
             None => {
                 let [a, b, c, d, e, f] = sm.transform.m;
                 let t = Affine { m: [a / k, b / k, c / k, d / k, e, f] };
+                crate::transform_cmds::check_budget(img.bounds, &affine_homography(&t), "smart object", fmt)?;
                 photocraft_algo::warp::place_source(&img.surface, img.bounds, &t, None)?
             }
         });
@@ -176,9 +178,13 @@ pub(super) fn place(name: &str, bytes: &[u8], fmt: PixelFormat, sm: &SmartObject
         Some(mode) => stack_image(name, bytes, fmt, mode)?,
         None => source_image(name, bytes, fmt)?,
     };
+    // The placed stage is unclipped: a large enough placement (an image scaled to fill a huge
+    // frame) would otherwise fill memory before any allocation could fail.
+    let h = placement(sm);
+    crate::transform_cmds::check_budget(img.bounds, &h, "smart object", fmt)?;
     // Through the warp (source space) and the transform in one pass; whole-pixel moves are exact.
     Ok(match &sm.perspective {
-        Some(p) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &Homography(*p), sm.warp.as_ref())?,
+        Some(_) => photocraft_algo::warp::place_source_projective(&img.surface, img.bounds, &h, sm.warp.as_ref())?,
         None => photocraft_algo::warp::place_source(&img.surface, img.bounds, &sm.transform, sm.warp.as_ref())?,
     })
 }

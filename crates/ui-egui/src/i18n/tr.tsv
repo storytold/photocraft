@@ -4230,3 +4230,23 @@ cameraData	Lens	Lens
 	Underlying Layer:	Alttaki Katman:
 	Drag to move the selected path	Seçili yolu taşımak için sürükleyin
 	Edit Brush…	Fırçayı Düzenle…
+
+# Frame Tool and other branch translations.
+	Move Up	Yukarı taşı
+	Move Down	Aşağı taşı
+	A frame supports affine transforms; select its image for perspective transforms	Çerçeve afin dönüşümleri destekler; perspektif dönüşümleri için içindeki görüntüyü seçin
+	A frame supports affine transforms; select its image to warp it	Çerçeve afin dönüşümleri destekler; çarpıtmak için içindeki görüntüyü seçin
+	Convert to Frame…	Çerçeveye Dönüştür…
+	Create a new custom frame	Yeni özel çerçeve oluştur
+	Create a new polygonal frame	Yeni çokgen çerçeve oluştur
+	Create a new triangular frame	Yeni üçgen çerçeve oluştur
+	Fit Content to Frame	İçeriği Çerçeveye Sığdır
+	Fit Frame to Content	Çerçeveyi İçeriğe Sığdır
+	Frame coordinates must be finite and within 600000 pixels	Çerçeve koordinatları sonlu olmalı ve 600000 piksel sınırları içinde kalmalıdır
+	Import Image…	Görüntü İçe Aktar…
+	Invalid frame transform	Geçersiz çerçeve dönüşümü
+	Invalid nested file drop	Geçersiz iç içe dosya bırakma
+	New Frame	Yeni Çerçeve
+	Replace Image…	Görüntüyü Değiştir…
+	The frame is locked	Çerçeve kilitli
+	The frame is unavailable	Çerçeve kullanılamıyor
