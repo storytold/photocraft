@@ -392,8 +392,8 @@ what an agent can't finish alone.
 
 ### G10. Missing and partial file formats
 - **Missing:** JPEG Options' Matte, progressive Scans and size preview (FILE-215-19 partial), Photoshop PDF read and its vector/text/multi-page
-  write (FILE-215-10; a single flattened page saves via Save As / Save a Copy / CLI, #3401; #2541
-  closed without PDF import, which `crates/io/src/pdf.rs` still lists as open), AVIF read (#463) and default-build AVIF write, JPEG XL read
+  write (FILE-215-10; a single flattened page saves via Save As / Save a Copy / CLI, #3401; import
+  is tracked by #2838, with PR #6990 open), AVIF read (#463) and default-build AVIF write, JPEG XL read
   (lossless write landed), JPEG 2000 (#1047), DICOM and PCX write (both read),
   EPS/DCS, Pixar, WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
   Raw; spot plates beyond PSD and TIFF: spot ink preview in RGB/CMYK documents and PDF Separation

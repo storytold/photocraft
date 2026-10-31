@@ -40,7 +40,7 @@ XL read are missing (gap G10). Remaining: 320–540 h including PSD fidelity.
 | Portable Bit Map (PBM/PGM/PPM/PNM/PFM/PAM) | R/W | yes | yes | 8/16/32f |
 | FITS | R/W (FITS Liberator plug-in) | yes | yes | 8/16/32f gray or RGB, header cards kept; no fpack, no debayer |
 | Targa | R/W | yes | yes | 8-bit |
-| Photoshop PDF | R/W | no | yes, one flattened page (Save As / Save a Copy / CLI, #3401; also print and artboards-to-PDF) | No vector/text PDF, no multi-page save, no PDF presentation, layers are not preserved (FILE-215-10); read still missing, though #2541 is closed |
+| Photoshop PDF | R/W | no | yes, one flattened page (Save As / Save a Copy / CLI, #3401; also print and artboards-to-PDF) | No vector/text PDF, no multi-page save, no PDF presentation, layers are not preserved (FILE-215-10); read still missing (#2838, PR #6990 open) |
 | Photoshop EPS, DCS 1.0/2.0, EPS TIFF/PICT preview | R/W | no | no | |
 | Generic EPS / AI | R (rasterize) | no | no | |
 | SVG | R (rasterize) | yes, as editable shape layers or a vector smart object | no | Better than Photoshop for editing; gradients approximated (FILE-215-9) |
