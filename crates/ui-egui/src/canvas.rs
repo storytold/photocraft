@@ -68,10 +68,11 @@ pub(crate) use display::GPU_OUTPUT;
 use display::texture_key;
 pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
 use display::{checker, hdr_preview, sync_display_lut};
+#[cfg(test)]
+pub(crate) use drag::marquee_drag_ants;
+pub(crate) use drag::marquee_preview_px;
 pub use drag::{Drag, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
 pub(crate) use drag::{angle_readout, draw_readout, draw_value_readout};
-#[cfg(test)]
-pub(crate) use drag::{marquee_drag_ants, marquee_preview_px};
 #[cfg(test)]
 pub(crate) use filter_preview::committed_filter_preview;
 use filter_preview::{ensure_adjust_proxy, ensure_proxy_preview, filter_preview_display_doc};
