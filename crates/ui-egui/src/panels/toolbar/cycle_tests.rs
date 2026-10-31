@@ -160,6 +160,8 @@ fn flyout_open(h: &Harness<'_, PhotocraftApp>) -> bool {
 fn alt_hold_and_drag_keep_the_existing_flyout_gesture() {
     for drag in [false, true] {
         let mut h = harness();
+        crate::tool_memory::select(h.state_mut(), Tool::Brush);
+        h.run_steps(1);
         let at = h.get_by_label("Brush Tool  (B)").rect().center();
         pointer(&mut h, at, true, egui::Modifiers::ALT);
         if drag {
@@ -172,6 +174,168 @@ fn alt_hold_and_drag_keep_the_existing_flyout_gesture() {
         pointer(&mut h, at, false, egui::Modifiers::ALT);
         assert_eq!(h.state().ui.tool, Tool::Brush, "a flyout-owned release must not cycle");
         assert!(flyout_open(&h));
+    }
+}
+
+/// Reproduce both native and web pointer-emulation ordering for a single touch contact.
+fn touch(h: &mut Harness<'_, PhotocraftApp>, at: Pos2, phase: egui::TouchPhase, web: bool) {
+    let contact = egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    let events = match (phase, web) {
+        (egui::TouchPhase::Start, false) => vec![contact, egui::Event::PointerMoved(at), button(true)],
+        (egui::TouchPhase::Start, true) => vec![egui::Event::PointerMoved(at), button(true), contact],
+        (egui::TouchPhase::End, false) => vec![contact, button(false), egui::Event::PointerGone],
+        (egui::TouchPhase::End, true) => vec![button(false), egui::Event::PointerGone, contact],
+        (egui::TouchPhase::Cancel, false) => vec![contact, egui::Event::PointerGone],
+        (egui::TouchPhase::Cancel, true) => vec![contact],
+        _ => vec![contact, egui::Event::PointerMoved(at)],
+    };
+    h.input_mut().events.extend(events);
+    h.run_steps(1);
+}
+
+/// A normal touch end hides its pointer after release without breaking an ordinary tap pair.
+#[test]
+fn touch_double_taps_preserve_hand_and_zoom_view_actions() {
+    for web in [false, true] {
+        for tool in [Tool::Hand, Tool::Zoom] {
+            let mut h = harness();
+            h.state_mut().run("file.new", json!({"width": 8, "height": 8})).unwrap();
+            crate::tool_memory::select(h.state_mut(), tool);
+            h.state_mut().ui.views[0].fit_pending = false;
+            h.state_mut().ui.views[0].zoom = 0.5;
+            h.run_steps(1);
+            let at = h.get_by_label(if tool == Tool::Hand { "Hand Tool  (H)" } else { "Zoom Tool  (Z)" }).rect().center();
+            let original = h.state().session.active().unwrap().clone();
+            for pair in 0..2 {
+                touch(&mut h, at, egui::TouchPhase::Start, web);
+                touch(&mut h, at, egui::TouchPhase::End, web);
+                assert_eq!(h.state().ui.tool, tool);
+                assert_eq!(h.state().ui.views[0].fit_pending, pair == 1 && tool == Tool::Hand, "web={web}, tool={tool:?}");
+                assert_eq!(h.state().ui.views[0].zoom, if pair == 1 && tool == Tool::Zoom { 1.0 } else { 0.5 }, "web={web}, tool={tool:?}");
+            }
+            let doc = h.state().session.active().unwrap();
+            assert!(std::sync::Arc::ptr_eq(&doc.doc, &original.doc));
+            assert_eq!(doc.revision, original.revision);
+            assert_eq!(doc.history.entries(), original.history.entries());
+        }
+    }
+}
+
+/// Native/web cancellation without a primary release clears both a pending press and tap history.
+#[test]
+fn touch_cancellation_cannot_join_the_next_ordinary_pair() {
+    for web in [false, true] {
+        let mut h = harness();
+        h.state_mut().run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        crate::tool_memory::select(h.state_mut(), Tool::Zoom);
+        h.state_mut().ui.views[0].fit_pending = false;
+        h.state_mut().ui.views[0].zoom = 0.5;
+        h.run_steps(1);
+        let at = h.get_by_label("Zoom Tool  (Z)").rect().center();
+        touch(&mut h, at, egui::TouchPhase::Start, web);
+        touch(&mut h, at, egui::TouchPhase::End, web);
+        touch(&mut h, at, egui::TouchPhase::Start, web);
+        touch(&mut h, at, egui::TouchPhase::Cancel, web);
+        for pair in 0..2 {
+            touch(&mut h, at, egui::TouchPhase::Start, web);
+            touch(&mut h, at, egui::TouchPhase::End, web);
+            assert_eq!(h.state().ui.tool, Tool::Zoom);
+            assert_eq!(h.state().ui.views[0].zoom, if pair == 1 { 1.0 } else { 0.5 }, "web={web}");
+        }
+    }
+}
+
+/// Pointer disappearance after a held touch release must retain flyout ownership of that release.
+#[test]
+fn touch_end_selects_the_held_flyout_row() {
+    for web in [false, true] {
+        let mut h = harness();
+        crate::tool_memory::select(h.state_mut(), Tool::Brush);
+        h.run_steps(1);
+        let at = h.get_by_label("Brush Tool  (B)").rect().center();
+        touch(&mut h, at, egui::TouchPhase::Start, web);
+        h.run_steps(24);
+        assert!(flyout_open(&h));
+        let (key, _) = h.ctx.data(|d| d.get_temp::<(egui::Id, Rect)>(egui::Id::unique("tool-flyout"))).unwrap();
+        let area = h.ctx.memory(|m| m.area_rect(key.with("flyout"))).unwrap();
+        let margin = egui::Frame::popup(&h.ctx.global_style()).total_margin();
+        let gap = (area.height() - margin.top - margin.bottom - 4.0 * 26.0) / 3.0;
+        let pencil = pos2(area.center().x, area.top() + margin.top + 26.0 + gap + 13.0);
+        assert!(area.contains(pencil));
+        touch(&mut h, pencil, egui::TouchPhase::Move, web);
+        touch(&mut h, pencil, egui::TouchPhase::End, web);
+        assert_eq!(h.state().ui.tool, Tool::Pencil, "web={web}");
+        assert!(!flyout_open(&h));
+    }
+}
+
+/// A later cancelled contact cannot erase a completed double-tap or seed the following pair.
+#[test]
+fn touch_release_before_a_new_cancelled_press_keeps_its_own_result() {
+    for web in [false, true] {
+        let mut h = harness();
+        h.state_mut().run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        crate::tool_memory::select(h.state_mut(), Tool::Zoom);
+        h.state_mut().ui.views[0].fit_pending = false;
+        h.state_mut().ui.views[0].zoom = 0.5;
+        h.run_steps(1);
+        let at = h.get_by_label("Zoom Tool  (Z)").rect().center();
+        touch(&mut h, at, egui::TouchPhase::Start, web);
+        touch(&mut h, at, egui::TouchPhase::End, web);
+        touch(&mut h, at, egui::TouchPhase::Start, web);
+        let contact = |phase| egui::Event::Touch { device_id: egui::TouchDeviceId(1), id: egui::TouchId(1), phase, pos: at, force: None };
+        let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let events = if web {
+            vec![
+                button(false),
+                egui::Event::PointerGone,
+                contact(egui::TouchPhase::End),
+                button(true),
+                contact(egui::TouchPhase::Start),
+                contact(egui::TouchPhase::Cancel),
+            ]
+        } else {
+            vec![
+                contact(egui::TouchPhase::End),
+                button(false),
+                egui::Event::PointerGone,
+                contact(egui::TouchPhase::Start),
+                egui::Event::PointerMoved(at),
+                button(true),
+                contact(egui::TouchPhase::Cancel),
+                egui::Event::PointerGone,
+            ]
+        };
+        h.input_mut().events.extend(events);
+        h.run_steps(1);
+        assert_eq!(h.state().ui.tool, Tool::Zoom);
+        assert_eq!(h.state().ui.views[0].zoom, 1.0, "the earlier release completes its pair; web={web}");
+        h.state_mut().ui.views[0].zoom = 0.5;
+        for pair in 0..2 {
+            touch(&mut h, at, egui::TouchPhase::Start, web);
+            touch(&mut h, at, egui::TouchPhase::End, web);
+            assert_eq!(h.state().ui.views[0].zoom, if pair == 1 { 1.0 } else { 0.5 }, "the cancelled press cannot seed a pair; web={web}");
+        }
+    }
+}
+
+/// A standalone mouse disappearance still breaks the ordinary pair, unlike a touch-end suffix.
+#[test]
+fn standalone_pointer_gone_breaks_an_ordinary_view_pair() {
+    let mut h = harness();
+    h.state_mut().run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    h.state_mut().ui.views[0].fit_pending = false;
+    h.state_mut().ui.views[0].zoom = 0.5;
+    let at = h.get_by_label("Zoom Tool  (Z)").rect().center();
+    pointer(&mut h, at, true, egui::Modifiers::NONE);
+    pointer(&mut h, at, false, egui::Modifiers::NONE);
+    h.event(egui::Event::PointerGone);
+    h.run_steps(1);
+    for pair in 0..2 {
+        pointer(&mut h, at, true, egui::Modifiers::NONE);
+        pointer(&mut h, at, false, egui::Modifiers::NONE);
+        assert_eq!(h.state().ui.views[0].zoom, if pair == 1 { 1.0 } else { 0.5 });
     }
 }
 

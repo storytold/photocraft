@@ -100,10 +100,24 @@ struct ToolbarPlainClick {
     count: u8,
 }
 
-/// Classify a completed primary gesture before remembering a later press in the same frame.
-fn toolbar_primary_release(ui: &egui::Ui, id: egui::Id) -> Option<(Pos2, bool, Pos2)> {
+/// Keep a completed release separate from cancellation before or after it in the same frame.
+#[derive(Default)]
+struct ToolbarPointerInput {
+    release: Option<(Pos2, bool, Pos2)>,
+    interrupted_before_release: bool,
+    interrupted_after_release: bool,
+}
+
+/// Preserve release ownership through touch-end's immediate `PointerGone` suffix.
+/// Native and web integrations order their Touch metadata differently, but both emit the
+/// primary release immediately before PointerGone. Standalone disappearance, focus loss and
+/// Touch Cancel break the pair. A later cancellation clears future history after the earlier
+/// release is processed, rather than retroactively reclassifying that completed gesture.
+fn toolbar_primary_release(ui: &egui::Ui, id: egui::Id) -> ToolbarPointerInput {
     let mut press = ui.data(|d| d.get_temp::<(Pos2, bool)>(id));
-    let mut release = None;
+    let mut result = ToolbarPointerInput::default();
+    let mut interrupted = false;
+    let mut just_released = false;
     ui.input(|input| {
         for event in &input.events {
             match event {
@@ -111,14 +125,29 @@ fn toolbar_primary_release(ui: &egui::Ui, id: egui::Id) -> Option<(Pos2, bool, P
                     if *pressed {
                         press = Some((*pos, modifiers.alt));
                     } else {
-                        release = press.take().map(|(origin, alt)| (origin, alt, *pos));
+                        result.release = press.take().map(|(origin, alt)| (origin, alt, *pos));
+                        result.interrupted_before_release = interrupted;
+                        result.interrupted_after_release = false;
                     }
+                    just_released = !pressed;
                 }
-                egui::Event::PointerGone | egui::Event::WindowFocused(false) => press = None,
-                _ => {}
+                egui::Event::PointerGone if just_released => just_released = false,
+                egui::Event::PointerGone
+                | egui::Event::WindowFocused(false)
+                | egui::Event::Touch { phase: egui::TouchPhase::Cancel, .. }
+                | egui::Event::PointerButton { button: egui::PointerButton::Secondary | egui::PointerButton::Middle, .. } => {
+                    press = None;
+                    interrupted = true;
+                    result.interrupted_after_release = true;
+                    just_released = false;
+                }
+                _ => just_released = false,
             }
         }
     });
+    if result.release.is_none() {
+        result.interrupted_before_release = interrupted;
+    }
     ui.data_mut(|d| {
         if let Some(press) = press {
             d.insert_temp(id, press);
@@ -126,7 +155,7 @@ fn toolbar_primary_release(ui: &egui::Ui, id: egui::Id) -> Option<(Pos2, bool, P
             d.remove::<(Pos2, bool)>(id);
         }
     });
-    release
+    result
 }
 
 /// Apply egui's time/distance limits to ordinary releases, retaining its triple-click behavior.
@@ -181,26 +210,17 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing = vec2(2.0, 3.0);
             let flyout_id = egui::Id::unique("tool-flyout");
             let held_id = flyout_id.with("held");
-            let release = toolbar_primary_release(ui, flyout_id.with("primary-press"));
+            let pointer = toolbar_primary_release(ui, flyout_id.with("primary-press"));
+            let release = pointer.release;
             let plain_click_id = flyout_id.with("plain-click");
-            let interrupted = ui.input(|i| {
-                i.events.iter().any(|event| {
-                    matches!(
-                        event,
-                        egui::Event::PointerGone
-                            | egui::Event::WindowFocused(false)
-                            | egui::Event::PointerButton { button: egui::PointerButton::Secondary | egui::PointerButton::Middle, .. }
-                    )
-                })
-            });
-            let previous_plain_click = (!interrupted).then(|| ui.data(|d| d.get_temp::<ToolbarPlainClick>(plain_click_id))).flatten();
-            if ui.input(|i| i.pointer.primary_released()) || interrupted {
+            let previous_plain_click = (!pointer.interrupted_before_release).then(|| ui.data(|d| d.get_temp::<ToolbarPlainClick>(plain_click_id))).flatten();
+            if ui.input(|i| i.pointer.primary_released()) || pointer.interrupted_before_release {
                 // A release elsewhere, cancellation or flyout gesture breaks the ordinary pair.
                 ui.data_mut(|d| d.remove::<ToolbarPlainClick>(plain_click_id));
             }
             let new_press = ui.input(|i| i.pointer.any_pressed());
             let clear_held_after_release = ui.input(|i| i.pointer.primary_released());
-            if (new_press && !clear_held_after_release) || interrupted {
+            if (new_press && !clear_held_after_release) || pointer.interrupted_before_release {
                 ui.data_mut(|d| d.remove::<egui::Id>(held_id));
             }
             // No tool tooltips over an open flyout, or while a button is held to open one (#4450):
@@ -400,8 +420,11 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                     reveal_focused_control(ui);
                 });
-            if clear_held_after_release {
+            if clear_held_after_release || pointer.interrupted_after_release {
                 ui.data_mut(|d| d.remove::<egui::Id>(held_id));
+            }
+            if pointer.interrupted_after_release {
+                ui.data_mut(|d| d.remove::<ToolbarPlainClick>(plain_click_id));
             }
             ui.add_space(if t.pro { 8.0 } else { 14.0 });
             // Centred in the tool column as it is before the tools scroll: a scroll bar widens the
@@ -426,7 +449,14 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 {
                     let _ = crate::menus::invoke(app, &ctx, "select.editInQuickMaskMode", json!({}));
                 }
-                let sm = icons::button_with_icon_size_tip(ui, "app-window", bx, (bx * 0.52).round(), false, tl!("Change Screen Mode  (F)"), tool_tips);
+                // Greyed out while Cycle is unavailable (no document in Standard, #9349): its
+                // list would offer nothing else either.
+                let cycle_enabled = crate::view_cmds::is_enabled(app, "view.screenMode.cycle").unwrap_or(true);
+                let sm = ui
+                    .add_enabled_ui(cycle_enabled, |ui| {
+                        icons::button_with_icon_size_tip(ui, "app-window", bx, (bx * 0.52).round(), false, tl!("Change Screen Mode  (F)"), tool_tips)
+                    })
+                    .inner;
                 paint_toolbar_flyout_indicator(ui, &t, &sm);
 
                 // Right-click, or click and hold like the tool flyouts (#4444), lists the modes,
@@ -466,7 +496,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ("view.screenMode.fullScreen", tl!("Full Screen Mode")),
                     ] {
                         let on = crate::view_cmds::checked(app, id).unwrap_or(false);
-                        if ui.add(egui::Button::selectable(on, label)).clicked() {
+                        let enabled = crate::view_cmds::is_enabled(app, id).unwrap_or(true);
+                        if ui.add_enabled(enabled, egui::Button::selectable(on, label)).clicked() {
                             let _ = crate::menus::invoke(app, &ctx, id, json!({}));
                             ui.close();
                         }
