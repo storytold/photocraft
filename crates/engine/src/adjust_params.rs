@@ -593,7 +593,7 @@ impl CurvesEyedropper {
         }
     }
 
-    /// This picker's target in the session's `targetColors` preference (#10091).
+    /// This picker's target in the session's `targetColors` preference.
     pub fn target_in(self, s: &crate::Session) -> [f32; 3] {
         s.prefs().target_colors.rgb(self.target_key()).unwrap_or_else(|| self.default_target())
     }
@@ -837,8 +837,8 @@ fn set_levels_output(c: &mut LevelsChannel, target: f32, black: bool) {
     }
 }
 
-/// [`levels_eyedropper`] mapping the sample to `target` (0..1 levels; the picker's target colour,
-/// #10091) instead of Photoshop's default black, 128 gray or white. Set Black/White Point also set
+/// [`levels_eyedropper`] mapping the sample to `target` (0..1 levels; the picker's target colour)
+/// instead of Photoshop's default black, 128 gray or white. Set Black/White Point also set
 /// each channel's output black/white to the target's level in that channel; Set Gray Point keeps
 /// the sample's luma and gives it the target's cast (a neutral target removes the cast).
 pub fn levels_eyedropper_to(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], target: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
@@ -882,7 +882,7 @@ pub fn adjustment_eyedropper(kind: &str, base: &Value, picker: CurvesEyedropper,
     adjustment_eyedropper_to(kind, base, picker, sample, picker.default_target(), mode)
 }
 
-/// [`adjustment_eyedropper`] mapping the sample to `target` (the picker's target colour, #10091):
+/// [`adjustment_eyedropper`] mapping the sample to `target` (the picker's target colour):
 /// [`levels_eyedropper_to`] or [`curves_eyedropper_to`].
 pub fn adjustment_eyedropper_to(kind: &str, base: &Value, picker: CurvesEyedropper, sample: [f32; 3], target: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
     match kind {
@@ -899,10 +899,10 @@ pub fn curves_eyedropper(base: &Value, picker: CurvesEyedropper, sample: [f32; 3
     curves_eyedropper_to(base, picker, sample, picker.default_target(), mode)
 }
 
-/// [`curves_eyedropper`] mapping the sample to `target` (0..1 levels; the picker's target colour,
-/// #10091) instead of Photoshop's default black, 128 gray or white: Set Black/White Point end each
+/// [`curves_eyedropper`] mapping the sample to `target` (0..1 levels; the picker's target colour)
+/// instead of Photoshop's default black, 128 gray or white: Set Black/White Point end each
 /// channel curve at the target's level in that channel; Set Gray Point keeps the sample's luma and
-/// gives it the target's cast (a neutral target removes the cast, as before).
+/// gives it the target's cast (a neutral target removes the cast).
 pub fn curves_eyedropper_to(base: &Value, picker: CurvesEyedropper, sample: [f32; 3], target: [f32; 3], mode: ColorMode) -> Result<Adjustment> {
     check_eyedropper("curves eyedropper", picker, sample, mode)?;
     let target = check_target("curves eyedropper", target)?;
@@ -967,7 +967,7 @@ pub fn eyedropper_from_params(s: &crate::Session, kind: &str, p: &Value) -> Resu
 
 /// The colour an `eyedropper` param maps its sample to: `eyedropper.target` (`"#rrggbb"` or
 /// `[r, g, b]` in 0..1) when given, else the picker's target in the `targetColors` preference
-/// (#10091; black, 128 gray and white by default).
+/// (black, 128 gray and white by default).
 fn eyedropper_target(s: &crate::Session, picker: CurvesEyedropper, e: &Value) -> Result<[f32; 3]> {
     match e.get("target") {
         None | Some(Value::Null) => Ok(picker.target_in(s)),

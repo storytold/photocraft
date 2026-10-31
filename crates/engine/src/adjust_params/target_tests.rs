@@ -87,8 +87,8 @@ fn bad_target_colors_are_errors_not_panics() {
     }
 }
 
-/// The defaults behave exactly as before targets existed: an explicit default target and the
-/// preference at its default give the same adjustment as the plain eyedropper.
+/// The default targets give the same adjustment as the plain eyedropper: an explicit default target
+/// and the preference at its default.
 #[test]
 fn default_targets_leave_the_eyedroppers_unchanged() {
     let base = json!({"points": [[0, 8], [120, 150], [255, 245]], "red": [[0, 0], [100, 130], [255, 255]]});

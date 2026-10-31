@@ -1099,12 +1099,10 @@ impl LayerMaskOverlay {
     }
 }
 
-/// The target colours of the Levels and Curves Set Black / Gray / White Point eyedroppers
-/// (#10091), which Photoshop shares with Auto Color Correction Options › Target Colors: a click
-/// with an eyedropper maps the sampled pixel to its target. Double-clicking an eyedropper opens the
-/// Color Picker on its target ("Select target shadow color", …). As in Photoshop, one setting for
-/// every document, kept across restarts. Each is `#rrggbb`, read as the document's own RGB levels
-/// (the numbers the picker shows), not converted between colour spaces.
+/// The target colours of the Levels and Curves Set Black / Gray / White Point eyedroppers, which
+/// Photoshop shares with Auto Color Correction Options › Target Colors (#10091): a click with an
+/// eyedropper maps the sampled pixel to its target. One setting for every document. Each is
+/// `#rrggbb`, read as the document's own RGB levels, not converted between colour spaces.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct TargetColors {

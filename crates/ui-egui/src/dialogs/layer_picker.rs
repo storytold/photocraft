@@ -108,13 +108,12 @@ pub(crate) fn labels() -> [&'static str; 3] {
 }
 
 /// The target colour (0..1 RGB levels) that picker `point` ("black", "gray" or "white") maps a
-/// sample to: the `targetColors` preference (#10091).
+/// sample to: the `targetColors` preference.
 pub fn target_rgb(app: &PhotocraftApp, point: &str) -> Option<[f32; 3]> {
     eyedropper(point).map(|e| e.target_in(&app.session))
 }
 
-/// The three targets as the eyedropper buttons' swatches, in [`POINTS`] order. The swatch shows
-/// image levels (like the Curves gradient bars), not chrome, so it is the same in every theme.
+/// The three targets as the eyedropper buttons' swatches, in [`POINTS`] order.
 pub(crate) fn target_swatches(app: &PhotocraftApp) -> [egui::Color32; 3] {
     let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
     POINTS.map(|(_, e)| {
