@@ -76,7 +76,7 @@ impl TexKind {
             Role::Mask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
             Role::Mask if f.sample == SampleType::F32 => TexKind::R32F,
             Role::Mask => TexKind::R16F,
-            Role::Operator | Role::OperatorSource | Role::OperatorMask => TexKind::Rgba32F,
+            Role::Operator | Role::OperatorSource | Role::OperatorMask | Role::OperatorMap => TexKind::Rgba32F,
         }
     }
     pub(crate) fn format(self) -> wgpu::TextureFormat {
@@ -106,6 +106,9 @@ pub(crate) type ResidentRef = (usize, [i32; 4]);
 
 /// A page cell: the square `[x·page, (x+1)·page) × [y·page, (y+1)·page)` of document pixels.
 pub(crate) type Cell = (i32, i32);
+
+/// The cell key of an operator page shared by every cell (a whole-extent window, a map).
+pub(crate) const WHOLE: Cell = (i32::MIN, i32::MIN);
 
 /// A resident layer page.
 pub(crate) type ResKey = (LayerId, Role, Cell);

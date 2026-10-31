@@ -137,6 +137,8 @@ pub enum Role {
     OperatorSource,
     /// The selection an operator mixes its result by.
     OperatorMask,
+    /// An operator's other input (Displace's map).
+    OperatorMap,
 }
 
 /// A surface the pass needs on the GPU.

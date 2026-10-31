@@ -642,6 +642,131 @@ fn window_filters_the_gpu_cant_run_are_refused() {
     }
 }
 
+/// A 37×23 straight-RGBA displacement map: smooth red and green ramps with a few hard steps, so
+/// shifts vary across the layer and both the bilinear map read and the source sample matter.
+fn displace_map() -> photocraft_algo::Image {
+    let (w, h) = (37usize, 23usize);
+    let mut data = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let r = (x as f32 / (w - 1) as f32 * 0.9 + 0.05 + if x % 9 == 4 { 0.3 } else { 0.0 }).min(1.0);
+            let g = (1.0 - y as f32 / (h - 1) as f32) * 0.8 + 0.1;
+            data.extend_from_slice(&[r, g, 0.5, 1.0]);
+        }
+    }
+    photocraft_algo::Image { rect: Rect::new(0, 0, w as i32, h as i32), ch: 4, data }
+}
+
+/// Phase 4, multi-input: Displace as a layer operator (the map a second input, the source the
+/// layer's whole extent) against the CPU filter applied as the engine applies it.
+#[test]
+fn a_displace_operator_matches_the_cpu_filter() {
+    use photocraft_algo::UndefinedAreas;
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        eprintln!("skipping displace parity: no compute");
+        return;
+    }
+    let map = Arc::new(displace_map());
+    let texels: Arc<Vec<[f32; 4]>> = Arc::new(map.data.as_chunks::<4>().0.to_vec());
+    let mut failures = Vec::new();
+    let cases = [
+        (10.0, 10.0, true, UndefinedAreas::Wrap),
+        (-25.0, 40.0, false, UndefinedAreas::Wrap),
+        (30.0, -15.0, true, UndefinedAreas::Repeat),
+        (60.0, 60.0, false, UndefinedAreas::Transparent),
+    ];
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for &(horizontal, vertical, stretch, undefined) in &cases {
+            for (selection, keep_alpha) in [(false, false), (true, false), (false, true)] {
+                let (mut doc, id) = blur_doc(depth);
+                if selection {
+                    doc.selection = Some(feathered_selection());
+                }
+                let what = format!(
+                    "{depth:?} {horizontal}/{vertical} stretch {stretch} {undefined:?}{}{}",
+                    if selection { ", selection" } else { "" },
+                    if keep_alpha { ", lock transparency" } else { "" }
+                );
+                let params = FilterParams::Displace { horizontal, vertical, stretch, undefined, map: Some(map.clone()) };
+                let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+                let sel_bounds = doc.selection.as_ref().map(Surface::content_bounds);
+                let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
+                let area = photocraft_algo::output_area(&params, content, bounds, sel_bounds);
+                let extent = edge_extent(doc.bounds(), content);
+                let mut expected = doc.clone();
+                let surf = expected.layer_mut(id).unwrap().surface_mut().unwrap();
+                let before = surf.clone();
+                let mut result = photocraft_algo::apply_in_with(surf, &params, area, bounds, doc.selection.as_ref(), extent, &Interrupt::NONE).unwrap();
+                if keep_alpha {
+                    let r = result.tile_bounds().union(&before.tile_bounds());
+                    let (mut new, old) = (result.read_region(r), before.read_region(r));
+                    let ch = before.channels();
+                    for (n, o) in new.chunks_exact_mut(ch).zip(old.chunks_exact(ch)) {
+                        n[ch - 1] = o[ch - 1];
+                    }
+                    result.write_region(r, &new);
+                }
+                *surf = result;
+                let d = photocraft_gpu::DisplaceParams {
+                    map: texels.clone(),
+                    map_size: [37, 23],
+                    bounds,
+                    scale: [horizontal / 100.0 * 128.0, vertical / 100.0 * 128.0],
+                    stretch,
+                    undefined: match undefined {
+                        UndefinedAreas::Wrap => photocraft_gpu::Undefined::Wrap,
+                        UndefinedAreas::Repeat => photocraft_gpu::Undefined::Repeat,
+                        UndefinedAreas::Transparent => photocraft_gpu::Undefined::Transparent,
+                    },
+                };
+                let program = GaussianBlur::new(SeparableBlur::Displace(Arc::new(d)), extent, area, doc.selection.clone().map(Arc::new), keep_alpha, depth)
+                    .expect("a runnable displace");
+                let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) };
+                if let Err(e) = compare(&mut g, &doc, &op, &expected, tolerance(depth), &what) {
+                    failures.push(e);
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A program needing a texture past the device's size limit (here a Displace map wider than it)
+/// falls back to the CPU without a validation error. On the web, where errors arrive
+/// asynchronously, an error would take the device with it.
+#[test]
+fn a_displace_map_past_the_texture_limit_falls_back_without_an_error() {
+    let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let Ok(adapter) = pollster::block_on(wgpu::Instance::default().request_adapter(&wgpu::RequestAdapterOptions::default())) else { return };
+    let limits = wgpu::Limits { max_texture_dimension_2d: 256, ..adapter.limits() };
+    let descriptor = wgpu::DeviceDescriptor { required_limits: limits, ..Default::default() };
+    let Ok((device, queue)) = pollster::block_on(adapter.request_device(&descriptor)) else { return };
+    assert_eq!(device.limits().max_texture_dimension_2d, 256);
+    let Ok(mut comp) = Compositor::try_new_with_format(&device, wgpu::TextureFormat::Rgba32Float) else { return };
+    if !comp.operators_supported(&device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+    let d = photocraft_gpu::DisplaceParams {
+        map: Arc::new(vec![[0.5, 0.5, 0.5, 1.0]; 300]),
+        map_size: [300, 1],
+        bounds: doc.bounds(),
+        scale: [10.0, 10.0],
+        stretch: true,
+        undefined: photocraft_gpu::Undefined::Repeat,
+    };
+    let program = GaussianBlur::new(SeparableBlur::Displace(Arc::new(d)), edge_extent(doc.bounds(), content), content, None, false, doc.depth).unwrap();
+    comp.set_operators(doc.id, vec![LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) }]);
+    let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let result = photocraft_gpu::render_to_vec_stats(&mut comp, &device, &queue, &doc, doc.bounds());
+    let error = pollster::block_on(scope.pop());
+    assert!(error.is_none(), "no validation error: {error:?}");
+    let message = result.err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(message.contains("256 px limit"), "the refresh falls back to the CPU, saying why: {message:?}");
+}
+
 /// Closing the last document with operators frees their scratch textures (they were kept for the
 /// rest of the session).
 #[test]

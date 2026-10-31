@@ -97,6 +97,7 @@ impl Compositor {
         self.residents.clear();
         self.op_made.clear();
         self.op_pins.clear();
+        self.op_maps.clear();
         self.op_scratch = None;
         self.fx.clear();
         self.patterns.clear();
@@ -322,6 +323,7 @@ impl Compositor {
         let residents = &self.residents;
         self.op_made.retain(|k, _| residents.contains_key(k));
         self.op_pins.retain(|k, _| residents.contains_key(k));
+        self.op_maps.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|(id, _), e| e.doc != doc.id || e.last_used == frame || live.contains(id));
         stats.evicted += self.evict().0;
         self.temps.retain(|(_, used)| frame.saturating_sub(*used) < 240);

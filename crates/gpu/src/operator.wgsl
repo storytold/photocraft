@@ -202,6 +202,143 @@ fn convolve_pass(@builtin(global_invocation_id) g: vec3<u32>) {
     store(at, vec4<f32>(acc / weights[0] + vec3<f32>(weights[1]), here.w));
 }
 
+// ---- Displace (`distort2::displace`): each pixel samples the source where the map shifts it ----
+
+struct DisplacePass {
+    // The output, in document pixels: its size and where it starts.
+    size: vec2<u32>,
+    out_origin: vec2<i32>,
+    // The source window: where it starts in document pixels, and its size.
+    win_origin: vec2<i32>,
+    win_size: vec2<u32>,
+    // The filter's bounds (x0, y0, x1, y1), document pixels.
+    bounds: vec4<i32>,
+    map_size: vec2<u32>,
+    // The largest shift along each axis, pixels.
+    scale: vec2<f32>,
+    stretch: u32,
+    // 0 Transparent, 1 Repeat Edge Pixels, 2 Wrap Around.
+    edge: u32,
+    has_alpha: u32,
+    _pad: u32,
+}
+
+@group(0) @binding(0) var dsrc: texture_2d<f32>;
+@group(0) @binding(1) var dmap: texture_2d<f32>;
+@group(0) @binding(2) var dout: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(3) var<uniform> q: DisplacePass;
+
+// The map's red and green at map texel (x, y), clamped to the map.
+fn map_texel(x: i32, y: i32) -> vec2<f32> {
+    let c = clamp(vec2<i32>(x, y), vec2<i32>(0), vec2<i32>(q.map_size) - vec2<i32>(1));
+    return textureLoad(dmap, c, 0).xy;
+}
+
+// `distort2::map_sample`: bilinear, pixel centres at .5, as the CPU interpolates.
+fn map_sample(u: f32, v: f32) -> vec2<f32> {
+    let fx = u - 0.5;
+    let fy = v - 0.5;
+    let x0 = floor(fx);
+    let y0 = floor(fy);
+    let ax = fx - x0;
+    let ay = fy - y0;
+    let xi = i32(x0);
+    let yi = i32(y0);
+    let g00 = map_texel(xi, yi);
+    let g10 = map_texel(xi + 1, yi);
+    let g01 = map_texel(xi, yi + 1);
+    let g11 = map_texel(xi + 1, yi + 1);
+    let top = g00 + (g10 - g00) * ax;
+    let bot = g01 + (g11 - g01) * ax;
+    return top + (bot - top) * ay;
+}
+
+fn rem_euclid_i(v: i32, m: i32) -> i32 {
+    let r = v % m;
+    return select(r, r + m, r < 0);
+}
+
+// `Image::get_edge`: the source pixel at document (x, y), straight; past the bounds the
+// Undefined Areas rule.
+fn src_pixel(x: i32, y: i32) -> vec4<f32> {
+    let b = q.bounds;
+    var at = vec2<i32>(x, y);
+    let inside = x >= b.x && y >= b.y && x < b.z && y < b.w;
+    if !inside {
+        if q.edge == 0u {
+            return vec4<f32>(0.0);
+        } else if q.edge == 1u {
+            at = clamp(at, b.xy, b.zw - vec2<i32>(1));
+        } else {
+            at = b.xy + vec2<i32>(rem_euclid_i(x - b.x, max(b.z - b.x, 1)), rem_euclid_i(y - b.y, max(b.w - b.y, 1)));
+        }
+    }
+    let t = clamp(at - q.win_origin, vec2<i32>(0), vec2<i32>(q.win_size) - vec2<i32>(1));
+    return textureLoad(dsrc, t, 0);
+}
+
+// `Image::sample`: bilinear of the premultiplied pixels (centres at .5), back to straight.
+fn src_sample(x: f32, y: f32) -> vec4<f32> {
+    let fx = x - 0.5;
+    let fy = y - 0.5;
+    let x0 = floor(fx);
+    let y0 = floor(fy);
+    let ax = fx - x0;
+    let ay = fy - y0;
+    let xi = i32(x0);
+    let yi = i32(y0);
+    var acc = vec3<f32>(0.0);
+    var acc_a = 0.0;
+    let w = array<f32, 4>((1.0 - ax) * (1.0 - ay), ax * (1.0 - ay), (1.0 - ax) * ay, ax * ay);
+    let dx = array<i32, 4>(0, 1, 0, 1);
+    let dy = array<i32, 4>(0, 0, 1, 1);
+    for (var k = 0; k < 4; k++) {
+        let wgt = w[k];
+        if wgt <= 0.0 {
+            continue;
+        }
+        let p = src_pixel(xi + dx[k], yi + dy[k]);
+        let a = select(1.0, p.w, q.has_alpha != 0u);
+        acc += p.xyz * a * wgt;
+        acc_a += a * wgt;
+    }
+    if q.has_alpha == 0u {
+        return vec4<f32>(acc, 1.0);
+    }
+    if acc_a > 0.0 {
+        acc = acc / acc_a;
+    }
+    return vec4<f32>(acc, acc_a);
+}
+
+fn rem_euclid_f(v: f32, m: f32) -> f32 {
+    let r = v - m * trunc(v / m);
+    return select(r, r + abs(m), r < 0.0);
+}
+
+@compute @workgroup_size(8, 8)
+fn displace_pass(@builtin(global_invocation_id) g: vec3<u32>) {
+    if g.x >= q.size.x || g.y >= q.size.y {
+        return;
+    }
+    let b = q.bounds;
+    let x = f32(q.out_origin.x + i32(g.x)) + 0.5;
+    let y = f32(q.out_origin.y + i32(g.y)) + 0.5;
+    let lx = x - f32(b.x);
+    let ly = y - f32(b.y);
+    let mw = f32(q.map_size.x);
+    let mh = f32(q.map_size.y);
+    var u = rem_euclid_f(lx, mw);
+    var v = rem_euclid_f(ly, mh);
+    if q.stretch != 0u {
+        u = lx / f32(max(b.z - b.x, 1)) * mw;
+        v = ly / f32(max(b.w - b.y, 1)) * mh;
+    }
+    let m = map_sample(u, v);
+    let shift = (m - vec2<f32>(0.5)) * 2.0 * q.scale;
+    textureStore(dout, vec2<i32>(g.xy), src_sample(x + shift.x, y + shift.y));
+}
+
 // ---- The final pass: the filter's output as the layer's new pixels ----
 
 struct Finish {
