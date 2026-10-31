@@ -351,7 +351,7 @@ pub fn specs() -> Vec<CommandSpec> {
             &["File", "Export"],
             None,
             r##"{"path":str (PNG destination; a companion .json is written beside it),"source":"layers|grid"="layers","frameWidth":px=32,"frameHeight":px=32,"columns":1..65536=8,"padding":px=0,"fps":1..240=8,"selectedFrames":[integer|{"frame":integer,"durationTicks":1..60},…]?} (selectedFrames controls Aseprite-compatible JSON order and per-frame duration; integers are one tick)"##,
-            has_doc,
+            native_doc,
             export_sprite_sheet
         ),
         spec!(
