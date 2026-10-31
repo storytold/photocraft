@@ -156,25 +156,14 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         .focus
         .and_then(|job| opening.iter().position(|(open, _, _)| *open == job))
         .map_or_else(|| app.session.active_index().and_then(|doc| documents.iter().position(|&d| d == doc)).unwrap_or(0), |p| tab_count + p);
-    let rtl = crate::direction::is_rtl();
     let frame = egui::Frame::NONE.fill(t.canvas).inner_margin(egui::Margin { left: 8, right: 8, top: 6, bottom: 4 }).show(ui, |ui| {
         let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), tab_h), Sense::hover());
         let f = fit_doc_tabs(&natural, selected, row.width());
         // A right-to-left strip starts at its trailing edge: the first document sits at the right.
-        // The fit reserves the chevron's width, so the tabs never reach the reading end.
-        let mut x = if rtl { row.right() } else { row.left() };
-        let mut placed: Vec<(usize, Rect)> = Vec::with_capacity(f.shown.len());
-        for &(i, w) in &f.shown {
-            // The old horizontal layout put 4 pt between tabs; `w` carries it, the tab doesn't.
-            let w = (w - STUDIO_TAB_GAP).max(8.0);
-            let r = if rtl {
-                Rect::from_min_max(egui::pos2(x - w, row.top()), egui::pos2(x, row.bottom()))
-            } else {
-                Rect::from_min_size(egui::pos2(x, row.top()), egui::vec2(w, row.height()))
-            };
-            placed.push((i, r));
-            x = if rtl { r.left() - STUDIO_TAB_GAP } else { r.right() + STUDIO_TAB_GAP };
-        }
+        // The fit reserves the chevron's width, so the tabs never reach the reading end. The old
+        // horizontal layout put 4 pt between tabs; `w` carries it, the tab doesn't.
+        let shown: Vec<(usize, f32)> = f.shown.iter().map(|&(i, w)| (i, (w - STUDIO_TAB_GAP).max(8.0))).collect();
+        let (placed, _) = crate::tab_strip::place_strip(row, &shown, STUDIO_TAB_GAP);
         for &(i, r) in placed.iter().filter(|(i, _)| *i < tab_count) {
             let Some(&doc) = documents.get(i) else { continue };
             let Some(st) = app.session.documents().get(doc) else { continue };
@@ -205,7 +194,7 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
                 ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
             }
             let color = if sel { t.text } else { t.text_dim };
-            let (name_at, meta_at, xr) = studio_tab_layout(r, &name_g, &meta_g, rtl);
+            let (name_at, meta_at, xr) = studio_tab_layout(r, &name_g, &meta_g);
             ui.painter().galley_with_override_text_color(name_at, name_g.clone(), color);
             ui.painter().galley(meta_at, meta_g, t.text_faint);
             let xresp = ui.interact(xr, ui.scope_id().with(("dtabx", doc)), Sense::click());
@@ -243,7 +232,7 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
             } else if resp.hovered() {
                 ui.painter().rect_filled(r, t.radius_sm, t.hover.gamma_multiply(0.5));
             }
-            let (name_at, meta_at, xr) = studio_tab_layout(r, &name_g, &meta_g, rtl);
+            let (name_at, meta_at, xr) = studio_tab_layout(r, &name_g, &meta_g);
             ui.painter().galley_with_override_text_color(name_at, name_g.clone(), if sel { t.text } else { t.text_dim });
             ui.painter().galley(meta_at, meta_g, t.text_faint);
             crate::jobs_ui::tab_underline(ui, r, *frac, &t);
@@ -260,8 +249,7 @@ pub(super) fn tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         }
         if !f.overflow.is_empty() {
             // Pinned to the strip's reading end, as Photoshop's is, not after the last tab (#8290).
-            let left = if rtl { row.left() } else { (row.right() - crate::tab_strip::CHEVRON_W).max(row.left()) };
-            let r = Rect::from_min_size(egui::pos2(left, row.top()), egui::vec2(crate::tab_strip::CHEVRON_W, row.height()));
+            let r = crate::tab_strip::reading_end_rect(row, crate::tab_strip::CHEVRON_W);
             let labels: Vec<&str> = documents
                 .iter()
                 .filter_map(|&doc| app.session.documents().get(doc).map(|st| st.doc.name.as_str()))
@@ -398,9 +386,13 @@ fn float_torn_off(app: &mut PhotocraftApp, ctx: &egui::Context, tear_off: Option
     }
 }
 
-/// The shown tab whose middle is on the reading side of `x`: the neighbour the pointer is next to.
+/// The shown tab whose middle is on the reading side of `x` (or exactly at it): the neighbour
+/// the pointer is next to.
 fn neighbour(tabs: &[(usize, Rect)], x: f32) -> Option<&(usize, Rect)> {
-    if crate::direction::is_rtl() { tabs.iter().find(|(_, r)| r.center().x <= x) } else { tabs.iter().find(|(_, r)| r.center().x >= x) }
+    tabs.iter().find(|(_, r)| {
+        let c = r.center().x;
+        crate::direction::start_side(x, c) || (x - c).abs() < f32::EPSILON
+    })
 }
 
 /// Where a tab dragged to `x` would land: before the first shown tab whose middle is on the
@@ -418,14 +410,13 @@ pub(super) fn tab_move_target(from: usize, k: usize) -> usize {
 
 /// The insertion line shown while a tab is dragged to reorder it.
 fn tab_drop_line(ui: &egui::Ui, placed: &[(usize, Rect)], x: f32, t: &crate::theme::Tokens) {
-    let rtl = crate::direction::is_rtl();
     match neighbour(placed, x) {
         // The line stands between the pointer and its neighbour, on the neighbour's reading-start
         // edge: its right edge in a right-to-left strip.
-        Some(&(_, r)) => crate::widgets::drop_line(ui, r, rtl, true, t),
+        Some(&(_, r)) => crate::widgets::drop_line(ui, r, false, true, t),
         None => {
             if let Some(&(_, r)) = placed.last() {
-                crate::widgets::drop_line(ui, r, !rtl, true, t);
+                crate::widgets::drop_line(ui, r, true, true, t);
             }
         }
     }
@@ -536,17 +527,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     let f = fit_doc_tabs(&natural, selected, strip.width());
     // A right-to-left strip starts at its trailing edge: the first document sits at the right.
     // The fit reserves the chevron's width, so the tabs never reach the reading end.
-    let mut x = if rtl { strip.right() } else { strip.left() };
-    let mut placed: Vec<(usize, Rect)> = Vec::with_capacity(f.shown.len());
-    for &(i, w) in &f.shown {
-        let r = if rtl {
-            Rect::from_min_max(egui::pos2(x - w, strip.top()), egui::pos2(x, strip.bottom()))
-        } else {
-            Rect::from_min_size(egui::pos2(x, strip.top()), egui::vec2(w, strip.height()))
-        };
-        placed.push((i, r));
-        x = if rtl { r.left() } else { r.right() };
-    }
+    let (placed, _) = crate::tab_strip::place_strip(strip, &f.shown, 0.0);
     let mut doc_tabs = Vec::with_capacity(tab_count);
     let (mut focus_open, cancel_open) =
         pro_open_tabs(ui, ProOpenCtx { placed: &placed, tab_count, opening: &opening, titles: &titles, font: &font, rtl, mac, t: &t, focus: app.jobs.focus });
@@ -568,7 +549,8 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
         // The separator stands on the tab's trailing edge: its left one in a right-to-left strip.
         let (sep_a, sep_b) = if rtl { (r.left_top(), r.left_bottom()) } else { (r.right_top(), r.right_bottom()) };
         ui.painter().line_segment([sep_a, sep_b], Stroke::new(1.0, t.separator));
-        let (xr, at) = pro_tab_layout(r, g.size(), mac, rtl);
+        let xr = crate::tab_strip::tab_close_button(r, mac);
+        let at = egui::pos2(crate::tab_strip::tab_title_x(r, g.size().x, mac), r.center().y - g.size().y / 2.0);
         let xresp = ui.interact(xr, ui.scope_id().with(("ptabx", doc)), Sense::click());
         // Painted: name the tab and its × for accessibility (and so tests and agents can find them).
         resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, sel, g.text()));
@@ -595,8 +577,7 @@ fn pro_tabs(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> TabStrip {
     }
     if !f.overflow.is_empty() {
         // Pinned to the strip's reading end, as Photoshop's is, not after the last tab (#8290).
-        let left = if rtl { strip.left() } else { (strip.right() - crate::tab_strip::CHEVRON_W).max(strip.left()) };
-        let r = Rect::from_min_size(egui::pos2(left, strip.top()), egui::vec2(crate::tab_strip::CHEVRON_W, strip.height()));
+        let r = crate::tab_strip::reading_end_rect(strip, crate::tab_strip::CHEVRON_W);
         let labels: Vec<&str> = titles.iter().map(String::as_str).collect();
         let mut picked = None;
         // Like Photoshop's, the menu lists every open document, not only the hidden ones, and checks
@@ -652,7 +633,8 @@ fn pro_open_tabs(ui: &egui::Ui, ctx: ProOpenCtx<'_>) -> (Option<photocraft_engin
         let (sep_a, sep_b) = if rtl { (r.left_top(), r.left_bottom()) } else { (r.right_top(), r.right_bottom()) };
         ui.painter().line_segment([sep_a, sep_b], Stroke::new(1.0, t.separator));
         crate::jobs_ui::tab_underline(ui, r, *frac, t);
-        let (xr, at) = pro_tab_layout(r, g.size(), mac, rtl);
+        let xr = crate::tab_strip::tab_close_button(r, mac);
+        let at = egui::pos2(crate::tab_strip::tab_title_x(r, g.size().x, mac), r.center().y - g.size().y / 2.0);
         let xresp = ui.interact(xr, ui.scope_id().with(("ptabjobx", job.0)), Sense::click());
         xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Close")));
         crate::icons::paint(ui, xr, "x", 10.0, if xresp.hovered() { t.text } else { t.text_faint });
@@ -706,37 +688,21 @@ fn drop_slot_line(app: &mut PhotocraftApp, ui: &egui::Ui) {
     let at = app.services.cursor_pos.as_mut().and_then(|f| f(ui.ctx()));
     let crate::file_open::DropTarget::Tabs(slot) = app.drop_target(ui.ctx(), at) else { return };
     let Some(tabs) = app.tab_strip.as_ref().map(|s| &s.tabs) else { return };
-    let rtl = crate::direction::is_rtl();
     // The line stands on the reading-start edge of the tab the file opens before: its right edge in
-    // a right-to-left strip; past the last tab it stands on that tab's left edge.
-    let Some((r, after)) = tabs.iter().find(|(i, _)| *i == slot).map(|&(_, r)| (r, rtl)).or_else(|| tabs.last().map(|&(_, r)| (r, !rtl))) else {
+    // a right-to-left strip; past the last tab it stands after it in reading order.
+    let Some((r, after)) = tabs.iter().find(|(i, _)| *i == slot).map(|&(_, r)| (r, false)).or_else(|| tabs.last().map(|&(_, r)| (r, true))) else {
         return;
     };
     crate::widgets::drop_line(ui, r, after, true, &crate::theme::Tokens::get(ui.ctx()));
 }
 
-/// A Photoshop-style tab's close button and where its title starts. Photoshop puts the × after the
-/// title on Windows (and so Linux) and before it on macOS (#619); a right-to-left UI mirrors the
-/// pair and keeps the platform's order.
-fn pro_tab_layout(tab: Rect, title: egui::Vec2, mac: bool, rtl: bool) -> (Rect, egui::Pos2) {
-    let (x, title_x) = match (mac, rtl) {
-        (true, false) => (tab.left() + 13.0, tab.left() + 26.0),
-        (false, false) => (tab.right() - 13.0, tab.left() + 16.0),
-        (true, true) => (tab.right() - 13.0, tab.right() - 26.0 - title.x),
-        (false, true) => (tab.left() + 13.0, tab.right() - 16.0 - title.x),
-    };
-    (Rect::from_center_size(egui::pos2(x, tab.center().y), egui::vec2(14.0, 14.0)), egui::pos2(title_x, tab.center().y - title.y / 2.0))
-}
-
-/// A Studio tab's title, its meta and its ×: the title leads from the reading end and the × sits
-/// at the reading start, the mirror image of the left-to-right shape.
-fn studio_tab_layout(tab: Rect, name: &egui::Galley, meta: &egui::Galley, rtl: bool) -> (egui::Pos2, egui::Pos2, Rect) {
-    let (name_x, meta_x) = if rtl {
-        (tab.right() - 10.0 - name.size().x, tab.right() - 16.0 - name.size().x - meta.size().x)
-    } else {
-        (tab.left() + 10.0, tab.left() + 16.0 + name.size().x)
-    };
-    let x = if rtl { tab.left() + 12.0 } else { tab.right() - 12.0 };
+/// A Studio tab's title, its meta and its ×: the title leads from the reading start, the meta
+/// follows it, and the × sits at the reading end, mirrored as a whole in a right-to-left UI.
+fn studio_tab_layout(tab: Rect, name: &egui::Galley, meta: &egui::Galley) -> (egui::Pos2, egui::Pos2, Rect) {
+    let name_x = crate::direction::start_x_w(tab, 10.0, name.size().x);
+    let name_rect = Rect::from_min_size(egui::pos2(name_x, tab.top()), name.size());
+    let meta_x = crate::direction::after_x(name_rect, 6.0, meta.size().x);
+    let x = crate::direction::end_x(tab, 12.0);
     (
         egui::pos2(name_x, tab.center().y - name.size().y / 2.0),
         egui::pos2(meta_x, tab.center().y - meta.size().y / 2.0),

@@ -191,10 +191,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let bar = ui.available_rect_before_wrap();
     let warping = t.warp.is_some();
     let buttons_w = if warping { WARP_ACTIONS_W } else { ACTIONS_W };
-    let rtl = crate::direction::is_rtl();
-    let split = if rtl { (bar.left() + buttons_w).min(bar.right()) } else { (bar.right() - buttons_w).max(bar.left()) };
-    let fields =
-        if rtl { egui::Rect::from_min_max(egui::pos2(split, bar.top()), bar.max) } else { egui::Rect::from_min_max(bar.min, egui::pos2(split, bar.bottom())) };
+    let (fields, strip) = crate::direction::split_end(bar, buttons_w);
     let mut row = ui.new_child(egui::UiBuilder::new().id_salt("transform-fields").max_rect(fields).layout(crate::direction::row()));
     row.set_clip_rect(fields);
     if let Some(w) = t.warp.clone() {
@@ -205,12 +202,9 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         transform_fields(app, &mut row, &t);
     }
     crate::widgets::vline(&mut row, 22.0);
-    let start = if rtl { row.min_rect().left().max(split) } else { row.min_rect().right().min(split) };
-    let actions = if rtl {
-        egui::Rect::from_min_max(egui::pos2((start - buttons_w).max(bar.left()), bar.top()), egui::pos2(start, bar.bottom()))
-    } else {
-        egui::Rect::from_min_max(egui::pos2(start, bar.top()), egui::pos2(start + buttons_w, bar.bottom()))
-    };
+    let content_end = crate::direction::end_x(row.min_rect(), 0.0);
+    let start = if crate::direction::is_rtl() { content_end.max(strip.right()) } else { content_end.min(strip.left()) };
+    let actions = crate::direction::end_span(start, buttons_w, bar.top(), bar.bottom());
     let mut btns = ui.new_child(egui::UiBuilder::new().id_salt("transform-actions").max_rect(actions).layout(crate::direction::trailing()));
     transform_actions(app, &mut btns, warping, t.content_aware.is_none());
 }

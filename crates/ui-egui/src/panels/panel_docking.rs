@@ -1250,33 +1250,35 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
         let locked = self.app.session.prefs().workspace_locked;
         let resp = crate::icons::button(ui, "ellipsis", ui.available_height().min(28.0), false, tl!("Panel menu"));
         egui::Popup::menu(&resp).show(|ui| {
-            ui.set_min_width(180.0);
-            panel_menu(self.app, ui, active);
-            if ui.add_enabled(!locked, egui::Button::new(if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") })).clicked() {
-                self.commands.push(("window.panel.group", json!({"panel":active,"operation":if collapsed {"expand"} else {"collapse"}})));
-                ui.close();
-            }
-            if ui.add_enabled(!locked, egui::Button::new(if floating { tl!("Dock Panel") } else { tl!("Float Panel") })).clicked() {
-                self.commands.push((if floating { "window.panel.dock" } else { "window.panel.float" }, json!({"panel":active})));
-                ui.close();
-            }
-            if !floating {
-                let groups = self.app.ui.docking.as_ref().map(|workspace| root_groups(&workspace.layout)).unwrap_or_default();
-                let index = groups.iter().position(|g| g.contains(active));
-                for (operation, label, enabled) in
-                    [("up", tl!("Move Group Up"), index.is_some_and(|i| i > 0)), ("down", tl!("Move Group Down"), index.is_some_and(|i| i + 1 < groups.len()))]
-                {
-                    if ui.add_enabled(!locked && enabled, egui::Button::new(label)).clicked() {
-                        self.commands.push(("window.panel.group", json!({"panel":active,"operation":operation})));
-                        ui.close();
+            crate::menus::popup_body(ui, |ui| {
+                ui.set_min_width(180.0);
+                panel_menu(self.app, ui, active);
+                if crate::menu_keys::menu_row(ui, if collapsed { tl!("Expand Panel Group") } else { tl!("Collapse Panel Group") }, None, false, !locked).clicked() {
+                    self.commands.push(("window.panel.group", json!({"panel":active,"operation":if collapsed {"expand"} else {"collapse"}})));
+                    ui.close();
+                }
+                if crate::menu_keys::menu_row(ui, if floating { tl!("Dock Panel") } else { tl!("Float Panel") }, None, false, !locked).clicked() {
+                    self.commands.push((if floating { "window.panel.dock" } else { "window.panel.float" }, json!({"panel":active})));
+                    ui.close();
+                }
+                if !floating {
+                    let groups = self.app.ui.docking.as_ref().map(|workspace| root_groups(&workspace.layout)).unwrap_or_default();
+                    let index = groups.iter().position(|g| g.contains(active));
+                    for (operation, label, enabled) in
+                        [("up", tl!("Move Group Up"), index.is_some_and(|i| i > 0)), ("down", tl!("Move Group Down"), index.is_some_and(|i| i + 1 < groups.len()))]
+                    {
+                        if crate::menu_keys::menu_row(ui, label, None, false, !locked && enabled).clicked() {
+                            self.commands.push(("window.panel.group", json!({"panel":active,"operation":operation})));
+                            ui.close();
+                        }
                     }
                 }
-            }
-            ui.separator();
-            if ui.add_enabled(!locked, egui::Button::new(tl!("Close Tab Group"))).clicked() {
-                self.commands.push(("window.panel.group", json!({"panel":active,"operation":"close"})));
-                ui.close();
-            }
+                ui.separator();
+                if crate::menu_keys::menu_row(ui, tl!("Close Tab Group"), None, false, !locked).clicked() {
+                    self.commands.push(("window.panel.group", json!({"panel":active,"operation":"close"})));
+                    ui.close();
+                }
+            });
         });
     }
 }
@@ -1318,4 +1320,53 @@ fn panel_active(layout: &Layout<String>, panel: &str) -> bool {
         .flat_map(tree_groups)
         .find(|group| group.panels.iter().any(|id| id == panel))
         .is_some_and(|group| group.panels.get(group.active).is_some_and(|id| id == panel))
+}
+
+/// The group-header "..." popup's rows go through the shared popup body + `menu_row`: under RTL
+/// the row label hugs the popup's right edge, under LTR the left edge.
+#[cfg(test)]
+mod rtl_popup_tests {
+    #[test]
+    fn group_menu_rows_mirror_only_under_rtl() {
+        let texts = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+            let mut popup = egui::Rect::NOTHING;
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let btn = ui.button("ellipsis");
+                    let _ = egui::Popup::menu(&btn)
+                        .open_memory(Some(egui::SetOpenCommand::Bool(true)))
+                        .show(|ui| {
+                            crate::menus::popup_body(ui, |ui| {
+                                ui.set_min_width(180.0);
+                                let _ = crate::menu_keys::menu_row(ui, tl!("Dock Panel"), None, false, true);
+                                let _ = crate::menu_keys::menu_row(ui, tl!("Close Tab Group"), None, false, true);
+                            });
+                        })
+                        .inspect(|r| popup = r.response.rect);
+                });
+                texts = out
+                    .shapes
+                    .iter()
+                    .filter_map(|cs| match &cs.shape {
+                        egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                        _ => None,
+                    })
+                    .collect();
+                out.textures_delta.clear();
+            }
+            (popup, texts)
+        };
+        let (rtl_popup, rtl) = texts(crate::direction::Dir::Rtl);
+        let (ltr_popup, ltr) = texts(crate::direction::Dir::Ltr);
+        assert!(rtl_popup.is_positive() && ltr_popup.is_positive(), "the popups opened");
+        let at = |v: &[(String, egui::Rect)]| v.iter().find(|(t, _)| t.contains("Dock Panel")).map(|(_, r)| *r).unwrap_or(egui::Rect::NOTHING);
+        let row = at(&rtl);
+        assert!(rtl_popup.right() - row.right() < 32.0, "rtl: the row label hugs the popup's right edge: {row:?} in {rtl_popup:?}");
+        let row = at(&ltr);
+        assert!(row.left() - ltr_popup.left() < 32.0, "ltr: the row label hugs the popup's left edge: {row:?} in {ltr_popup:?}");
+    }
 }
