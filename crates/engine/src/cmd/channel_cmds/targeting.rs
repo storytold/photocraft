@@ -129,8 +129,12 @@ fn refuses_masks(id: &str) -> bool {
     matches!(id, crate::lens_cmds::LENS | crate::lens_cmds::WIDE | crate::vp_cmds::VP)
 }
 
-/// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
-/// layer needs a mask. None when another precondition applies.
+/// The precondition of `id` for the target in `p` (named by the caller or filled in from the
+/// Channels panel), when the target decides it: Lens Correction, Adaptive Wide Angle and Vanishing
+/// Point refuse any mask or channel; what edits a smart object's filter mask needs one; and what
+/// edits a targeted layer mask (`"target":"mask"`) needs the layer to have a mask, whatever its
+/// content, plus an RGB or Grayscale document for the Camera Raw Filter. None when the command's
+/// own precondition applies.
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
     match target_of(p) {
         // Photoshop greys these out on a targeted mask or channel, so a target named in the params
