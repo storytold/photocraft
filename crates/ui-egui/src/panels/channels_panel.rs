@@ -568,7 +568,7 @@ pub fn fit_thumb(cell: Rect, w: u32, h: u32) -> (Rect, Rect) {
 }
 
 fn item(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, label: &str, cmd: &str, p: Value) {
-    if ui.button(tl!(&label)).clicked() {
+    if crate::menu_keys::menu_row(ui, &tl!(label), None, false, true).clicked() {
         actions.push((cmd.into(), p));
         ui.close();
     }
@@ -577,31 +577,37 @@ fn item(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, label: &str, cmd:
 /// Channel Options › Color Indicates.
 fn indicates_items(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, channel: Value, current: ColorIndicates) {
     let masked = current == ColorIndicates::MaskedAreas;
-    let check = |on: bool, s: &str| if on { format!("✓ {s}") } else { s.to_string() };
-    item(ui, actions, &check(masked, "Color Indicates Masked Areas"), "channel.options", json!({ "channel": channel.clone(), "indicates": "masked" }));
-    item(ui, actions, &check(!masked, "Color Indicates Selected Areas"), "channel.options", json!({ "channel": channel, "indicates": "selected" }));
+    if crate::menu_keys::menu_row(ui, &tl!("Color Indicates Masked Areas"), None, masked, true).clicked() {
+        actions.push(("channel.options".into(), json!({ "channel": channel.clone(), "indicates": "masked" })));
+        ui.close();
+    }
+    if crate::menu_keys::menu_row(ui, &tl!("Color Indicates Selected Areas"), None, !masked, true).clicked() {
+        actions.push(("channel.options".into(), json!({ "channel": channel, "indicates": "selected" })));
+        ui.close();
+    }
 }
 
 /// Overlay colour presets (Channel Options › Color) and opacity.
 fn overlay_colors(ui: &mut egui::Ui, actions: &mut Vec<(String, Value)>, channel: Value) {
-    ui.menu_button(tl!("Overlay Color"), |ui| {
-        for (label, hex) in [
-            (tl!("Red"), "#ff0000"),
-            (tl!("Green"), "#00c000"),
-            (tl!("Blue"), "#0050ff"),
-            (tl!("Cyan"), "#00d0e0"),
-            (tl!("Magenta"), "#e000c0"),
-            (tl!("Yellow"), "#f0d000"),
-        ] {
-            if ui.button(tl!(&label)).clicked() {
+    crate::menus::menu_button(ui, tl!("Overlay Color"), |ui| {
+        for label in ["Red", "Green", "Blue", "Cyan", "Magenta", "Yellow"] {
+            let hex = match label {
+                "Red" => "#ff0000",
+                "Green" => "#00c000",
+                "Blue" => "#0050ff",
+                "Cyan" => "#00d0e0",
+                "Magenta" => "#e000c0",
+                _ => "#f0d000",
+            };
+            if crate::menu_keys::menu_row(ui, &tl!(label), None, false, true).clicked() {
                 actions.push(("channel.options".into(), json!({ "channel": channel.clone(), "color": hex })));
                 ui.close();
             }
         }
     });
-    ui.menu_button(tl!("Overlay Opacity"), |ui| {
+    crate::menus::menu_button(ui, tl!("Overlay Opacity"), |ui| {
         for o in [25, 50, 75, 100] {
-            if ui.button(format!("{o}%")).clicked() {
+            if crate::menu_keys::menu_row(ui, &format!("{o}%"), None, false, true).clicked() {
                 actions.push(("channel.options".into(), json!({ "channel": channel.clone(), "opacity": o })));
                 ui.close();
             }
