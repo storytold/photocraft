@@ -327,6 +327,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ui.add_space(8.0);
         ui.label(message);
         ui.add_space(12.0);
+        ui.spacing_mut().item_spacing.y = 0.0;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             if let Some(role) = crate::widgets::dialog_buttons(ui, &row) {
