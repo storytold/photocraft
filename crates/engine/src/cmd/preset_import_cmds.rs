@@ -59,7 +59,7 @@ fn file_bytes_within(p: &Value, cmd: &str, what: &str, max: u64) -> Result<(Vec<
 }
 
 /// The preset names in use, for naming new presets.
-struct UniqueNames {
+pub(crate) struct UniqueNames {
     /// Every name in use, ASCII-lowercased.
     taken: std::collections::HashSet<String>,
     /// The next number to try for each repeated name (lowercased).
@@ -67,12 +67,12 @@ struct UniqueNames {
 }
 
 impl UniqueNames {
-    fn new<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
+    pub(crate) fn new<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
         UniqueNames { taken: names.into_iter().map(str::to_ascii_lowercase).collect(), next: std::collections::HashMap::new() }
     }
 
     /// A name not in use (case-insensitive): `name`, `name 2`, `name 3`… It is in use from then on.
-    fn unique(&mut self, name: &str) -> String {
+    pub(crate) fn unique(&mut self, name: &str) -> String {
         let key = name.to_ascii_lowercase();
         if self.taken.insert(key.clone()) {
             return name.to_string();
@@ -332,6 +332,8 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
         None => "Imported Gradients".to_string(),
     };
     let grads = photocraft_psd::grd::parse(&bytes).map_err(|e| bad(cmd, format!("not a readable gradient file (.grd): {e}")))?;
+    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(true);
+    let mut taken = UniqueNames::new(s.presets.gradients.iter().filter(|g| !replace || g.name != group).flat_map(|g| g.items.iter().map(|i| i.name.as_str())));
     let mut warnings = Vec::new();
     let mut items = Vec::new();
     let (mut noise, mut midpoints) = (0, false);
@@ -349,7 +351,7 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
             opacity.clear();
         }
         let name = if g.name.trim().is_empty() { format!("Gradient {}", i + 1) } else { g.name.trim().to_string() };
-        items.push(GradientPreset { name, stops, opacity });
+        items.push(GradientPreset { name: taken.unique(&name), stops, opacity });
     }
     if noise > 0 {
         warnings.push(format!("{noise} noise gradients are not supported and were skipped"));
@@ -446,6 +448,42 @@ mod tests {
             assert!(s.execute("brush.presets.importAbr", p.clone()).is_err(), "{p}");
         }
         assert_eq!(s.tools.presets.len(), n);
+    }
+
+    #[test]
+    fn duplicate_gradient_names_remain_independently_selectable() {
+        use photocraft_psd::grd::{GrdColor, GrdGradient, GrdStop, write};
+        let gradients: Vec<_> = [0.2, 0.8]
+            .into_iter()
+            .map(|red| GrdGradient {
+                name: "Duplicate".into(),
+                stops: vec![
+                    GrdStop { location: 0.0, midpoint: 0.5, color: GrdColor::Rgb([red, 0.0, 0.0]) },
+                    GrdStop { location: 1.0, midpoint: 0.5, color: GrdColor::Rgb([1.0, 1.0, 1.0]) },
+                ],
+                ..Default::default()
+            })
+            .collect();
+        let data = photocraft_paint::tile::b64_encode(&write(&gradients));
+        let mut s = Session::new();
+        for _ in 0..2 {
+            let result = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Duplicates"})).unwrap();
+            assert_eq!(result["imported"], json!(["Duplicate", "Duplicate 2"]));
+        }
+        s.execute("gradient.presets.select", json!({"preset": "Duplicate"})).unwrap();
+        let first = s.presets.gradient.clone();
+        s.execute("gradient.presets.select", json!({"preset": "Duplicate 2"})).unwrap();
+        assert_ne!(first.stops, s.presets.gradient.stops);
+        let mut saved = s.presets.to_json(&s);
+        let groups = saved["gradients"].as_array_mut().unwrap();
+        let group = groups.iter_mut().find(|g| g["name"] == "Duplicates").unwrap();
+        group["items"][1]["name"] = json!("Duplicate");
+        s.load_presets_json(saved);
+        let restored = s.presets.gradients.iter().find(|g| g.name == "Duplicates").unwrap();
+        assert_eq!(restored.items[1].name, "Duplicate 2");
+        assert_eq!(s.presets.gradient.name, "Duplicate 2");
+        let result = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Other", "replace": false})).unwrap();
+        assert_eq!(result["imported"], json!(["Duplicate 3", "Duplicate 4"]));
     }
 
     #[test]
