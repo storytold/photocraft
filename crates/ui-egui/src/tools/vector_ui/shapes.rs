@@ -100,14 +100,15 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
     if draws_path(&app.ui.tool_options) {
         // Path mode: the outline joins the work path (one more subpath), and no layer is made.
         let Some(outline) = shape_outline(app, tool, start, end, mods) else { return };
-        // Appended as it is rather than with `path.set`'s `op`, which would turn a custom
-        // shape's subtracted subpaths (holes) into combined ones. A new work path takes the
-        // outline's fill rule.
+        // Appended here rather than with `path.set`'s `op`, which would turn a custom shape's
+        // subtracted subpaths (holes) into combined ones; the shape goes in as one component.
+        // A new work path takes the outline's fill rule.
         let mut path = app
             .session
             .active()
             .and_then(|st| st.doc.work_path.clone())
             .unwrap_or_else(|| photocraft_doc::vector::Path { fill_rule: outline.fill_rule, ..Default::default() });
+        let outline = as_one_component(&outline, path.fill_rule).unwrap_or(outline);
         path.subpaths.extend(outline.subpaths);
         let r = app.run("path.set", json!({"name": "work", "path": photocraft_engine::vector_cmds::path_json(&path)}));
         match r {
@@ -144,6 +145,48 @@ pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Valu
     geometry["fill"] = fill_param(app);
     geometry["stroke"] = stroke_param(app);
     app.run("shape.create", geometry)
+}
+
+/// A custom shape as one shape component, the way Photoshop adds it to a path: the subpaths
+/// after the first join it, holes wound against it so that `rule` cuts them, so its holes cut
+/// the shape only and not the work path under it. `None` for a single subpath, and when joined
+/// it would cover a different area (an intersect or exclude subpath, or a cut reaching past
+/// the shape, like the Crescent Moon's).
+fn as_one_component(outline: &photocraft_doc::vector::Path, rule: photocraft_doc::vector::FillRule) -> Option<photocraft_doc::vector::Path> {
+    use photocraft_doc::vector::{Path, PathOp, Subpath};
+    // Clockwise on screen (y down) or not, from the flattened outline's signed area.
+    let clockwise = |s: &Subpath| {
+        let pts = photocraft_vector::flatten_subpath(s, 0.25).pts;
+        let twice_area: f64 = pts.iter().zip(pts.iter().cycle().skip(1)).map(|(p, q)| p.0 * q.1 - q.0 * p.1).sum();
+        twice_area > 0.0
+    };
+    let (first, rest) = outline.subpaths.split_first()?;
+    if rest.is_empty() {
+        return None;
+    }
+    let outer = clockwise(first);
+    let mut joined = Path { fill_rule: rule, ..outline.clone() };
+    for s in &mut joined.subpaths[1..] {
+        let want = match s.op {
+            PathOp::Join => continue,
+            PathOp::Combine => outer,
+            PathOp::Subtract => !outer,
+            PathOp::Intersect | PathOp::Exclude => return None,
+        };
+        if clockwise(s) != want {
+            s.knots.reverse();
+            for k in &mut s.knots {
+                std::mem::swap(&mut k.in_ctrl, &mut k.out_ctrl);
+            }
+        }
+        s.op = PathOp::Join;
+    }
+    // Compare the two areas at a small fixed size.
+    const SIDE: f64 = 128.0;
+    let rect = photocraft_geom::Rect::from_xywh(0, 0, SIDE as u32, SIDE as u32);
+    let cover = |p: &Path| photocraft_vector::path_coverage(&photocraft_engine::presets::shapes::fit(p, [0.0, 0.0, SIDE, SIDE], true), rect);
+    let same = cover(outline).iter().zip(cover(&joined)).all(|(a, b)| (a - b).abs() <= 0.5);
+    same.then_some(joined)
 }
 
 /// The outline a Shape-tool drag draws, as a path (a custom shape fitted to the drag's box).
