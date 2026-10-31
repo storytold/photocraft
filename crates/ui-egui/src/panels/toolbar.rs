@@ -788,12 +788,21 @@ mod rtl_direction_tests {
         let rows: Vec<Rect> = ctx.viewport(|v| {
             v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.sense.senses_click() && w.rect.height() < 40.0 && w.rect.width() > menu.width() - 20.0).map(|w| w.rect).collect()
         });
+        if std::env::var("DBG_ROWS").is_ok() {
+            ctx.viewport(|v| {
+                for (_, w) in v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()) {
+                    if w.sense.senses_click() && w.rect.height() < 40.0 {
+                        eprintln!("DBG clickable h<40 rect={:?} id={:?}", w.rect, w.id);
+                    }
+                }
+            });
+            eprintln!("DBG menu={menu:?} rows={rows:?}");
+        }
         assert_eq!(rows.len(), 3, "the screen-mode list's three rows in {menu:?}");
         for r in &rows {
             assert!(menu.right() - r.right() < 12.0, "row hugs the reading start (right): {r:?} in {menu:?}");
         }
         let label_x = texts.iter().find(|(_, s)| s == tl!("Standard Screen Mode")).map(|(x, _)| *x).expect("the Standard row label");
-        eprintln!("DEBUG menu={menu:?} rows={rows:?} texts={texts:?}");
         assert!(label_x > menu.center().x, "the label leads from the right: {label_x} in {menu:?}");
     }
 
