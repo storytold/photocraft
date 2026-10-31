@@ -1,6 +1,6 @@
 use super::planes::{color_count, edit_mode, luminosity, read_plane, tone};
 use super::view::{color_names, composite_name};
-use super::{BlendMode, Document, EngineError, LayerContent, LayerId, Result, Session, Value, blend_channel, from_rgba, sel, to_rgba};
+use super::{BlendMode, Document, EngineError, LayerContent, LayerId, Result, Session, Value, blend_channel, from_rgba_into, sel, to_rgba};
 
 // ---------------------------------------------------------------------------------------------
 // Channel references
@@ -92,13 +92,21 @@ pub(super) fn native_pixels(doc: &Document, layer: Option<LayerId>) -> Result<(V
             }
             let raw = s.read_region(r);
             let sf = s.format();
-            Ok((raw.chunks_exact(sf.channels()).flat_map(|p| from_rgba(&fmt, to_rgba(&sf, p))).collect(), n))
+            Ok((native_of(&fmt, raw.chunks_exact(sf.channels()).map(|p| to_rgba(&sf, p))), n))
         }
-        None => {
-            let buf = photocraft_compose::render(doc, r);
-            Ok((buf.px.iter().flat_map(|p| from_rgba(&fmt, *p)).collect(), n))
-        }
+        None => Ok((native_of(&fmt, photocraft_compose::render(doc, r).px.into_iter()), n)),
     }
+}
+
+/// RGBA pixels in `fmt`'s channels, into one buffer: converting each pixel to a `Vec` of its own
+/// took 5 s over a 36 MP canvas (Apply Image's merged source, #5772).
+fn native_of(fmt: &photocraft_color::PixelFormat, px: impl ExactSizeIterator<Item = [f32; 4]>) -> Vec<f32> {
+    let n = fmt.channels();
+    let mut out = vec![0.0f32; px.len().saturating_mul(n)];
+    for (p, o) in px.zip(out.chunks_exact_mut(n)) {
+        from_rgba_into(fmt, p, o);
+    }
+    out
 }
 
 /// `"layer"` param of a source: a layer id, a layer name (the topmost of that name, as a loaded
@@ -273,7 +281,7 @@ impl Blending {
 
 /// A source spec from `p[key]`, or from flat `<prefix>Document` / `<prefix>Layer` /
 /// `<prefix>Channel` / `<prefix>Invert` keys (what the generic dialog form sends).
-pub(crate) fn source_spec(p: &Value, key: &str, prefix: &str) -> Option<Value> {
+pub fn source_spec(p: &Value, key: &str, prefix: &str) -> Option<Value> {
     if let Some(v) = p.get(key) {
         return Some(v.clone());
     }

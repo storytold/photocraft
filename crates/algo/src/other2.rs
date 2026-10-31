@@ -10,11 +10,16 @@ use crate::{Ctx, HsbModel};
 /// Custom: `Σ kernel·pixel / scale + offset/255` per colour channel (alpha
 /// kept). Kernels shorter than 25 entries are zero-padded. CMYK samples are
 /// ink, so there it runs on `1 - ink` and a positive offset brightens.
+/// Custom's 5×5 kernel as its non-zero taps `(dx, dy, weight)`, row by row: the order the sum
+/// runs in. Shared with the GPU's layer operators (`separable`).
+pub(crate) fn custom_taps(kernel: &[f32]) -> Vec<(i32, i32, f32)> {
+    (0..25).filter_map(|i| kernel.get(i).copied().filter(|v| *v != 0.0).map(|v| (i as i32 % 5 - 2, i as i32 / 5 - 2, v))).collect()
+}
+
 pub(crate) fn custom(src: &Image, out: Rect, ctx: &Ctx, kernel: &[f32], scale: f32, offset: f32) -> Vec<f32> {
     let n = src.ch;
     let cc = ncol(ctx, n);
-    let k: Vec<(i32, i32, f32)> =
-        (0..25).filter_map(|i| kernel.get(i).copied().filter(|v| *v != 0.0).map(|v| (i as i32 % 5 - 2, i as i32 / 5 - 2, v))).collect();
+    let k = custom_taps(kernel);
     let s = if scale == 0.0 { 1.0 } else { scale };
     let off = offset / 255.0;
     let sub = crate::fxutil::subtractive(ctx);

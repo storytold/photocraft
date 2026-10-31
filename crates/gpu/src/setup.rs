@@ -4,7 +4,8 @@ use super::kit::{Kit, SHADER, tex_entry, uniform_entry};
 use super::paging::{cell_rect, field_reaches, first_error, grid_rects};
 use super::textures::{FxEntry, Resident, Tex, TexKind};
 use super::{
-    Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Kernel, LayerContent, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, plan, prefix, timing,
+    Compositor, DeviceHealth, DocId, Document, Fault, HashMap, Kernel, LayerContent, LayerOperator, Plan, Rect, Role, TILE_SIZE, Unsupported, fx, operator,
+    plan, prefix, timing,
 };
 
 impl Compositor {
@@ -165,6 +166,15 @@ impl Compositor {
             cmyk: 0,
             health: None,
             timer: None,
+            operators: HashMap::new(),
+            op_kit: None,
+            op_made: HashMap::new(),
+            op_pins: HashMap::new(),
+            op_maps: HashMap::new(),
+            frame_ops: Vec::new(),
+            op_scratch: None,
+            scratch_making: 0,
+            frame_region: Rect::EMPTY,
         }
         .with_texture_limit(device_max)
     }
@@ -191,6 +201,10 @@ impl Compositor {
         self.residents.clear();
         self.fx.clear();
         self.temps.clear();
+        self.op_scratch = None;
+        self.op_made.clear();
+        self.op_pins.clear();
+        self.op_maps.clear();
         self.prefix.clear();
     }
 
@@ -318,6 +332,11 @@ impl Compositor {
         self.residents.values().map(Resident::bytes).sum()
     }
 
+    /// GPU memory held by the layer operators' scratch textures (bytes).
+    pub fn operator_scratch_bytes(&self) -> u64 {
+        self.op_scratch.as_ref().map_or(0, |(s, t)| u64::from(s[0]) * u64::from(s[1]) * 16 * t.len() as u64)
+    }
+
     /// GPU memory held by cached pattern textures (bytes).
     pub fn pattern_cache_bytes(&self) -> u64 {
         self.patterns.values().map(|p| p.bytes).sum()
@@ -400,6 +419,39 @@ impl Compositor {
         Ok(())
     }
 
+    /// Layer operators for `doc` (`operator.rs`): from the next render on, each listed layer's
+    /// content is its operator's output. Replaces any set before; an empty list clears them.
+    /// Renders of `doc` return [`Unsupported`] (so the caller draws the CPU preview, never the
+    /// layer unfiltered) when the device can't run them or their pages don't fit.
+    pub fn set_operators(&mut self, doc: DocId, operators: Vec<LayerOperator>) {
+        if operators.is_empty() {
+            self.clear_operators(doc);
+        } else {
+            self.operators.insert(doc, operators);
+        }
+    }
+
+    /// [`Self::set_operators`] with none: the layers show their own pixels again. With no
+    /// operator left anywhere, their scratch textures go too.
+    pub fn clear_operators(&mut self, doc: DocId) {
+        self.operators.remove(&doc);
+        if self.operators.is_empty() {
+            self.op_scratch = None;
+        }
+    }
+
+    /// Whether the layer operators' pipelines build on `device`, without a compositor (a test of
+    /// the operator shader against a backend's compiler, such as FXC on Direct3D 12).
+    pub fn operator_pipelines_build(device: &wgpu::Device) -> bool {
+        operator::OpKit::new(device).is_some()
+    }
+
+    /// Whether `device` can run layer operators (compute passes into float storage textures).
+    /// Builds their pipelines the first time, so a dialog can warm them as it opens.
+    pub fn operators_supported(&mut self, device: &wgpu::Device) -> bool {
+        self.op_kit.get_or_insert_with(|| operator::OpKit::new(device)).is_some()
+    }
+
     /// A pattern's texture must fit the device and the per-pattern cap; a larger one renders on
     /// the CPU compositor.
     fn check_pattern(&self, pat: &photocraft_doc::Pattern) -> Result<(), Unsupported> {
@@ -414,7 +466,16 @@ impl Compositor {
 
     /// Drop GPU textures of a closed document.
     pub fn forget_doc(&mut self, doc: DocId) {
+        self.operators.remove(&doc);
+        // The last document with operators: their scratch textures go too.
+        if self.operators.is_empty() {
+            self.op_scratch = None;
+        }
         self.residents.retain(|_, r| r.doc != doc);
+        let residents = &self.residents;
+        self.op_made.retain(|k, _| residents.contains_key(k));
+        self.op_pins.retain(|k, _| residents.contains_key(k));
+        self.op_maps.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|_, e| e.doc != doc);
         self.patterns.retain(|_, p| p.doc != doc);
         self.prefix.forget(doc);
@@ -430,6 +491,7 @@ impl Compositor {
             .chain(self.fx.values().map(|e| e.doc))
             .chain(self.patterns.values().map(|p| p.doc))
             .chain(self.prefix.doc())
+            .chain(self.operators.keys().copied())
             .filter(|d| !keep(*d))
             .collect();
         gone.sort_by_key(|d| d.0);
