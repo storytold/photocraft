@@ -383,7 +383,7 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
     if !presentation.is_empty() {
         pref_group(ui, "Presentation", |ui| {
             let ctx = ui.ctx().clone();
-            let label_w = max_label_width(ui, "interface", obj, &presentation);
+            let label_w = max_label_width(ui, obj, &presentation);
             crate::text::direction::settings_grid(ui, ("prefs-grid", "interface-presentation"), [14.0, 7.0], label_w, Some(150.0), |row| {
                 field_rows(&ctx, "interface", obj, presentation, lang, row)
             });
@@ -399,7 +399,7 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
             }
             if !other.is_empty() {
                 let ctx = ui.ctx().clone();
-                let label_w = max_label_width(ui, "interface", obj, &other);
+                let label_w = max_label_width(ui, obj, &other);
                 crate::text::direction::settings_grid(ui, ("prefs-grid", "interface-options"), [14.0, 7.0], label_w, Some(150.0), |row| {
                     field_rows(&ctx, "interface", obj, other, lang, row)
                 });
@@ -462,14 +462,14 @@ pub(super) fn section_fields(
     }
     keys.retain(|k| field_visible(section, obj, k, &query));
     let ctx = ui.ctx().clone();
-    let label_w = max_label_width(ui, section, obj, &keys);
+    let label_w = max_label_width(ui, obj, &keys);
     crate::text::direction::settings_grid(ui, ("prefs-grid", section), [14.0, 7.0], label_w, None, |row| field_rows(&ctx, section, obj, keys, lang, row));
 }
 
 /// The width of the widest row label, as the two-column grid's label column sizes to it in LTR
 /// (never below the grid's minimum cell width); [`crate::text::direction::settings_grid`] takes
 /// it as the RTL label column so both directions share one column geometry.
-fn max_label_width(ui: &egui::Ui, section: &str, obj: &Map<String, Value>, keys: &[String]) -> f32 {
+fn max_label_width(ui: &egui::Ui, obj: &Map<String, Value>, keys: &[String]) -> f32 {
     let font = egui::TextStyle::Body.resolve(ui.style());
     keys.iter()
         .filter(|k| !obj.get(*k).and_then(Value::as_bool).unwrap_or(false))
@@ -728,5 +728,41 @@ mod rtl_direction_tests {
             label.left() > search.left() + 150.0 && label.left() < search.center().x,
             "LTR: the settings label stays at the content column's left: {label:?} in {search:?}"
         );
+    }
+
+    /// Render `prefs_body` for `section` under `dir` with the real direction flag; return the
+    /// label<->editor gap of the field whose label is `needle` (its editor is the combobox
+    /// carrying the same accessible name).
+    fn probe_gap(section: &str, dir: Dir, needle: &str) -> f32 {
+        let _scope = crate::text::direction::direction_scope(dir);
+        let rtl = dir == Dir::Rtl;
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(1000.0, 700.0))
+            .with_context_setup(move |ctx| {
+                crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::Studio);
+                ctx.all_styles_mut(|s| s.right_to_left = rtl);
+            })
+            .build_ui_state(
+                |ui, f: &mut Map<String, Value>| {
+                    ui.with_layout(crate::text::direction::body_layout(), |ui| super::prefs_body(ui, f, None));
+                },
+                prefs_fields(section),
+            );
+        h.run_steps(6);
+        let label = h.query_all_by_role_and_label(Role::Label, needle).next().expect(needle).rect();
+        let editor = h.query_all_by_role_and_label(Role::ComboBox, needle).next().expect(needle).rect();
+        if dir == Dir::Rtl { label.left() - editor.right() } else { editor.left() - label.right() }
+    }
+
+    /// The per-row label<->editor gap of a settings row equals the LTR value in RTL too: the
+    /// direction-aware grid fixes the label column at the LTR width at the reading start, so
+    /// the gap is `label_w - label_width + 14` in both directions instead of the leftover row
+    /// width the fork's `Grid` gave the last column under RTL.
+    #[test]
+    fn prefs_label_editor_gap_matches_between_ltr_and_rtl() {
+        let ltr = probe_gap("general", Dir::Ltr, "Image interpolation");
+        let rtl = probe_gap("general", Dir::Rtl, "Image interpolation");
+        assert!((ltr - rtl).abs() < 1.5, "gap differs: LTR {ltr} vs RTL {rtl}");
+        assert!(ltr < 100.0 && rtl < 100.0, "the gap stays the grid's 14 px + label slack: LTR {ltr}, RTL {rtl}");
     }
 }
