@@ -1,0 +1,19 @@
+diff --git a/crates/egui-wgpu/src/winit.rs b/crates/egui-wgpu/src/winit.rs
+--- a/crates/egui-wgpu/src/winit.rs
++++ b/crates/egui-wgpu/src/winit.rs
+@@ -912,6 +912,14 @@
+             // wgpu doesn't document where vsync can happen. Maybe here?
+             let start = web_time::Instant::now();
+             render_state.queue.present(output_frame);
++            if std::env::var_os("PHOTOCRAFT_PROFILE_STARTUP").is_some() {
++                static PRESENTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++                let n = PRESENTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
++                if n <= 5 {
++                    let ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
++                    log::info!(target: "photocraft_profile", "STARTUP_PROFILE {ns} present_{n}");
++                }
++            }
+             vsync_sec += start.elapsed().as_secs_f32();
+         }
+
+# End of native startup timing probe.

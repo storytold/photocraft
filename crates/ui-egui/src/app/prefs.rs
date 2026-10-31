@@ -46,10 +46,31 @@ impl PhotocraftApp {
 }
 
 impl PhotocraftApp {
-    /// Install fonts, image loaders and the theme. Call from the app creator (and again for a
-    /// replacement Context) before the first `run_ui` so the very first frame renders and the
-    /// Type reset begin/end pass markers exist; otherwise `logic` does it and the first frame is
-    /// skipped, with the begin-pass marker necessarily starting on the following pass.
+    /// Prepare this app's context in the app creator, before the first egui pass.
+    ///
+    /// Font definitions take effect at the next begin-pass. Installing them here lets the first
+    /// UI pass draw the editor instead of presenting a blank font-setup frame. Saved UI scale,
+    /// language and font size are applied before registration, avoiding startup resizing and
+    /// another font rebuild. The host must supply native DPI before preparation, as eframe does.
+    /// Call again before the first pass of a replacement context. Hosts that omit this retain
+    /// the deferred setup in `logic_frame`.
+    pub fn prepare_first_frame(&mut self, ctx: &egui::Context) {
+        let zoom = crate::prefs_ui::display_zoom(self.session.prefs().interface.ui_scale, ctx.native_pixels_per_point());
+        // Initialize before begin-pass rather than queue a runtime zoom change: queued zoom
+        // rescales the previous content rect, which does not yet describe this new window.
+        ctx.options_mut(|options| options.zoom_factor = zoom);
+        theme::set_ui_font_size(ctx, self.session.prefs().interface.ui_font_size);
+        crate::i18n::sync_context(ctx, &self.session.prefs().interface.language);
+        Self::setup_context(ctx, self.ui.theme);
+        self.styled = true;
+        self.fonts_ready = false;
+    }
+
+    /// Install fonts, image loaders, theme and Type reset pass markers on a context.
+    ///
+    /// This only registers context resources. App creators should use [`Self::prepare_first_frame`]
+    /// to also mark the app as prepared; otherwise `logic_frame` repeats setup and skips its
+    /// first editor frame. Registration during a pass takes effect on the following pass.
     pub fn setup_context(ctx: &egui::Context, kind: theme::ThemeKind) {
         Self::install_type_reset_hooks(ctx);
         ctx.add_plugin(tool_cursor::CursorLifecycle);

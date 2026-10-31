@@ -71,7 +71,7 @@ mod startup;
 
 #[cfg(test)]
 use appearance::{DARK_THEME_OPTIONS, LIGHT_THEME_OPTIONS, display_scale, favorite_theme_groups, selected_theme};
-pub(crate) use appearance::{appearance_context_menu, cycle_appearance, step_brightness, sync_appearance};
+pub(crate) use appearance::{appearance_context_menu, cycle_appearance, display_zoom, step_brightness, sync_appearance};
 pub use appearance::{canvas_style, pasteboard_color};
 pub use dialogs::{
     PREFERENCES_SIZE, apply, confirm, invoke, is_preferences, open_mismatch, open_preferences, open_shortcuts, owns, preferences_changed, width,

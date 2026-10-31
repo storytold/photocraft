@@ -1,0 +1,66 @@
+diff --git a/apps/photocraft/src/main.rs b/apps/photocraft/src/main.rs
+--- a/apps/photocraft/src/main.rs
++++ b/apps/photocraft/src/main.rs
+@@ -507,8 +507,13 @@
+             };
+             #[cfg(not(target_os = "linux"))]
+             let session = Session::new();
++            if std::env::var_os("PHOTOCRAFT_PROFILE_DEFER_FONTS").is_some() {
++                PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
++            }
+             let mut app = PhotocraftApp::new(session, services);
+-            app.prepare_first_frame(&cc.egui_ctx);
++            if std::env::var_os("PHOTOCRAFT_PROFILE_DEFER_FONTS").is_none() {
++                app.prepare_first_frame(&cc.egui_ctx);
++            }
+             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
+             app.integrated_titlebar = cfg!(target_os = "macos");
+             app.custom_titlebar = custom_titlebar;
+diff --git a/crates/ui-egui/src/app/frame.rs b/crates/ui-egui/src/app/frame.rs
+--- a/crates/ui-egui/src/app/frame.rs
++++ b/crates/ui-egui/src/app/frame.rs
+@@ -168,6 +168,14 @@
+             // No editor was drawn this pass: end its IME context rather than keep a stale owner.
+             type_tool::sync_ime(self, &ctx);
+             return;
++        }
++        if std::env::var_os("PHOTOCRAFT_PROFILE_STARTUP").is_some() {
++            static EDITOR_PASSES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++            let n = EDITOR_PASSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
++            if n <= 5 {
++                let ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
++                log::info!(target: "photocraft_profile", "STARTUP_PROFILE {ns} editor_{n}");
++            }
+         }
+         let t0 = gpu_canvas::now_ms();
+         self.perf.frame_refresh_ms = 0.0;
+diff --git a/crates/ui-egui/src/theme.rs b/crates/ui-egui/src/theme.rs
+--- a/crates/ui-egui/src/theme.rs
++++ b/crates/ui-egui/src/theme.rs
+@@ -850,6 +850,14 @@
+
+ /// [`install_fonts`] with the CJK and other-script fallback fonts taken from `cjk` (tests swap the sources).
+ pub fn install_fonts_with(ctx: &egui::Context, cjk: crate::cjk_fonts::Sources) {
++    let profile_call = if std::env::var_os("PHOTOCRAFT_PROFILE_STARTUP").is_some() {
++        static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
++        Some(CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1)
++    } else { None };
++    if let Some(n) = profile_call {
++        let ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
++        log::info!(target: "photocraft_profile", "STARTUP_PROFILE {ns} fonts_{n}_begin");
++    }
+     // egui's default fonts stay last in the stack, for symbols and emoji Inter lacks.
+     let mut fonts = crate::egui_fonts::definitions();
+     // The bundled fonts are inflated on first use (photocraft_text::fonts). Should one ever fail
+@@ -904,6 +912,10 @@
+     // CJK, Thai, Arabic, Indic and other script fallback fonts (craft-fonts' Japanese ones if built in, then
+     // the system's) are registered on demand (cjk_fonts.rs).
+     crate::cjk_fonts::install_with(ctx, cjk);
++    if let Some(n) = profile_call {
++        let ns = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
++        log::info!(target: "photocraft_profile", "STARTUP_PROFILE {ns} fonts_{n}_end");
++    }
+ }
+
+ /// Has [`install_fonts`]'s stack reached the active fonts? When a host defers registration to
+# End of native startup timing probe.

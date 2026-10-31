@@ -41,8 +41,9 @@ pub fn check(app: &mut PhotocraftApp, ctx: &egui::Context) {
         ctx.request_repaint();
     }
     if app.started.is_some() {
-        // Frames 1–2 set up fonts; by frame 3 the window has presented, and a document open at
-        // launch has drawn its canvas (or the GPU path was abandoned).
+        // Deferred hosts may use frames 1–2 for font setup. Keep the conservative frame-3 wait
+        // even for prepared contexts, so the window has presented and a launch document has
+        // drawn its canvas (or the GPU path was abandoned).
         let drawn = app.session.documents().is_empty() || !app.perf.last_refresh.is_empty() || app.gpu.is_none();
         if app.frame >= 3 && (drawn || app.frame >= STARTED_MAX_FRAMES) {
             if let Some(hook) = app.started.take() {

@@ -113,6 +113,18 @@ Rust test and variable work on Windows with the native shell's environment-varia
 
 ## Fonts (craft-fonts)
 
+The desktop app calls `PhotocraftApp::prepare_first_frame` in its app creator, after loading
+preferences and before egui's first pass. This initializes saved UI zoom against the host's
+native DPI, and registers UI fonts with the saved language and font size early enough to draw
+the editor at the correct scale in the first presentation. Hosts that cannot prepare
+their context early retain deferred setup and skip their first editor pass. Type-tool system
+font discovery continues on its background thread.
+
+In a Windows RTX 4060 release comparison (20 fresh processes per mode, warm caches), preparing
+UI fonts early reduced median first-editor presentation from 487 to 460 ms; p95 fell from
+545 to 509 ms. The editor moved from presentation 2 to presentation 1. These are presentation
+API completion times, not display scanout; [raw samples and method](../perf/startup-first-frame-fonts.json).
+
 Font assets shared by the Crafting Apps live in [storytold/craft-fonts](https://github.com/storytold/craft-fonts), never in this repo: don't commit font files here (Inter and JetBrains Mono in `assets/fonts/` are the only exceptions; new fonts go to craft-fonts). The rules are in `craftrules/standards/fonts.md` in a sibling `craftrules` checkout (see below); that repository is not public, so outside contributors can ask a maintainer for the rules that apply to their change.
 
 craft-fonts is an **optional build input**, never a Cargo dependency:

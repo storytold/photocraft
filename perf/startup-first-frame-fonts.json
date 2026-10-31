@@ -1,0 +1,488 @@
+{
+  "base_revision": "5dd3bcdc38ace23783e963ecebeb0b8dff7dcc52",
+  "date": "2026-10-29",
+  "platform": "Windows x86_64-pc-windows-msvc",
+  "rust": "1.95.0",
+  "profile": "PhotoCraft 0.17.0; release; native default features",
+  "instrumented_executable_sha256": "8a97b86daa0a916491301c3cbc7eaedd0aeda1610cdbeafbd3b5eb443a48ab3f",
+  "gpu": {
+    "adapter": "NVIDIA GeForce RTX 4060",
+    "adapters": [
+      "NVIDIA GeForce RTX 4060",
+      "Microsoft Basic Render Driver",
+      "NVIDIA GeForce RTX 4060/PCIe/SSE2"
+    ],
+    "backend": "vulkan",
+    "canvas": "gpu",
+    "deviceType": "discreteGpu",
+    "driver": "NVIDIA 610.88",
+    "fallback": null,
+    "lost": null,
+    "preference": "auto",
+    "present": "autovsync, latency 1",
+    "selected": "auto",
+    "videoMemoryMb": 7956
+  },
+  "method": {
+    "samples_per_mode": 20,
+    "order": "Fresh processes in alternating baseline/fixed and fixed/baseline order; both modes warmed before collection.",
+    "settings": "Fresh isolated settings; empty workspace; automatic Vulkan selection; warm OS/driver caches; no forced cache eviction.",
+    "endpoint": "Windows GetProcessTimes process-creation FILETIME to return of wgpu Queue::present. This measures API presentation completion, not physical display scanout.",
+    "editor_endpoint": "A temporary timestamp immediately after the fonts-ready UI guard identifies the first editor pass; its next Queue::present is the first editor presentation.",
+    "control": "Same authenticated local control connection, ui.inspect calls, screenshots on run 1 and graceful app.quit in both modes.",
+    "comparison": "Same instrumented executable. Baseline uses a temporary environment flag to omit prepare_first_frame and retain the original deferred setup. Both modes retain the guarded DXGI fast path. The baseline flag was PHOTOCRAFT_PROFILE_DEFER_FONTS=1; it was absent in fixed runs. This temporary flag is not a production option.",
+    "presentation_difference": "Baseline first presents a blank font-setup frame, then the editor. Fixed first presents the editor. Compare first_editor_present_ms for equivalent useful content.",
+    "font_registration": "Sum of temporary theme::install_fonts_with entry/exit durations per process. Includes registration/inflation, not all glyph layout or GPU upload work.",
+    "probe_cleanup": "Temporary timing logs and the baseline switch were removed from production sources after collection.",
+    "limits": "One NVIDIA RTX 4060 Windows machine, empty-workspace startup. No claim about cold disk cache, other GPUs, or document/type font discovery speed.",
+    "reproduction": {
+      "measurement_version": "Historical first-frame-font candidate, before the subsequent review correction for non-default saved UI scale. Recorded samples and executable hash are unchanged.",
+      "candidate_source": "https://github.com/ChristianKleineidam/photocraft/commit/15b6466826558f93a655e81341f3bbbcb07f070d",
+      "candidate_branch": "ChristianKleineidam/photocraft:perf/font-startup-benchmarked",
+      "app_probe_patch": "probes/startup-fonts-app.patch",
+      "egui_probe_patch": "probes/startup-fonts-egui.patch",
+      "egui_revision": "6d518fc799681571963842f95b55a6b68431b15a",
+      "instructions": "Save the two probe patches from this report into a directory outside the checkout before switching to the archived source. Apply the egui patch inside the pinned egui dependency checkout. Substitute absolute paths, a fresh run directory, an unused localhost port, and a new random control token. Use Windows PowerShell for the environment commands. The recorded executable SHA identifies the measured binary, not a promise of bit-for-bit builds.",
+      "source_commands": [
+        "git fetch https://github.com/ChristianKleineidam/photocraft.git perf/font-startup-benchmarked",
+        "git switch --detach 15b6466826558f93a655e81341f3bbbcb07f070d",
+        "git apply --ignore-space-change <patch-directory>/startup-fonts-app.patch",
+        "git -C <pinned-egui-checkout> apply --ignore-space-change <patch-directory>/startup-fonts-egui.patch"
+      ],
+      "recorded_build_environment": {
+        "RUSTUP_HOME": "<workspace>/target/rustup-home",
+        "CARGO_HOME": "<workspace>/target/cargo-home",
+        "CARGO_TARGET_DIR": "<workspace>/target/release-build",
+        "CARGO_BUILD_JOBS": "2"
+      },
+      "build_commands": [
+        "rustup run 1.95.0 cargo clean --offline --release -p egui-wgpu",
+        "rustup run 1.95.0 cargo build --release --offline --locked -p photocraft",
+        "Copy-Item <workspace>/target/release-build/release/photocraft.exe <benchmark-directory>/font-profile.exe"
+      ],
+      "build_note": "Offline commands assume the locked dependencies are fetched. Explicit renderer cleaning is required because Cargo otherwise reuses cached immutable git-dependency artifacts.",
+      "cleared_environment_before_each_run": [
+        "WGPU_BACKEND",
+        "PHOTOCRAFT_CPU_CANVAS",
+        "PHOTOCRAFT_NO_GPU_TIMING",
+        "PHOTOCRAFT_PROFILE_STARTUP",
+        "PHOTOCRAFT_PROFILE_ORIGINAL_DX12",
+        "PHOTOCRAFT_PROFILE_DEFER_FONTS"
+      ],
+      "common_launch_environment": {
+        "PHOTOCRAFT_CONFIG_DIR": "<fresh-run-directory>/config",
+        "RUST_LOG": "warn,photocraft*=info",
+        "PHOTOCRAFT_PROFILE_STARTUP": "1",
+        "PHOTOCRAFT_CONTROL_TOKEN": "<fresh random 32-byte token encoded as 64 hex characters; not recorded>"
+      },
+      "baseline_environment_command": "$env:PHOTOCRAFT_PROFILE_DEFER_FONTS='1'",
+      "fixed_environment_command": "$env:PHOTOCRAFT_PROFILE_DEFER_FONTS=$null",
+      "launch_command_both_modes": "& '<benchmark-directory>/font-profile.exe' --control <unused-localhost-port> --automation-write-root '<fresh-run-directory>'",
+      "control_sequence": [
+        "auth with the per-run token",
+        "ui.inspect",
+        "wait until present_3 is logged, then 100 ms",
+        "ui.inspect",
+        "ui.screenshot on run 1 of each mode",
+        "app.quit"
+      ],
+      "timestamp_calculation": "Get process creation with Windows GetProcessTimes. Convert FILETIME ticks to Unix nanoseconds: (ticks - 116444736000000000) * 100. Subtract creation time from each STARTUP_PROFILE SystemTime timestamp. First editor presentation is the first present_N after editor_1.",
+      "sampling": "Four warmups, then rounds 1..20. Odd rounds baseline/fixed; even rounds fixed/baseline. Fresh process and settings for every sample."
+    }
+  },
+  "summary_ms": {
+    "baseline": {
+      "first_present_ms": {
+        "median": 449.157,
+        "p95": 503.519
+      },
+      "first_editor_present_ms": {
+        "median": 487.028,
+        "p95": 544.756
+      },
+      "font_registration_ms": {
+        "median": 3.923,
+        "p95": 4.502
+      },
+      "gpu_preflight_ms": {
+        "median": 7.45,
+        "p95": 8.89
+      }
+    },
+    "fixed": {
+      "first_present_ms": {
+        "median": 459.973,
+        "p95": 509.466
+      },
+      "first_editor_present_ms": {
+        "median": 459.973,
+        "p95": 509.466
+      },
+      "font_registration_ms": {
+        "median": 3.328,
+        "p95": 3.789
+      },
+      "gpu_preflight_ms": {
+        "median": 7.4,
+        "p95": 9.04
+      }
+    }
+  },
+  "paired_editor_savings_ms": {
+    "median": 30.349,
+    "faster_pairs": 19,
+    "total_pairs": 20
+  },
+  "samples": {
+    "baseline": [
+      {
+        "run": 1,
+        "first_present_ms": 486.4102,
+        "first_editor_present_ms": 525.6897,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.8258,
+        "gpu_preflight_ms": 7.45
+      },
+      {
+        "run": 2,
+        "first_present_ms": 455.0519,
+        "first_editor_present_ms": 495.1346,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 4.2877,
+        "gpu_preflight_ms": 7.3
+      },
+      {
+        "run": 3,
+        "first_present_ms": 481.1932,
+        "first_editor_present_ms": 520.1559,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 4.502,
+        "gpu_preflight_ms": 8.37
+      },
+      {
+        "run": 4,
+        "first_present_ms": 441.7274,
+        "first_editor_present_ms": 478.9458,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.963,
+        "gpu_preflight_ms": 7.15
+      },
+      {
+        "run": 5,
+        "first_present_ms": 462.6321,
+        "first_editor_present_ms": 503.1856,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 4.0583,
+        "gpu_preflight_ms": 8.82
+      },
+      {
+        "run": 6,
+        "first_present_ms": 457.3967,
+        "first_editor_present_ms": 497.0006,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.7817,
+        "gpu_preflight_ms": 8.89
+      },
+      {
+        "run": 7,
+        "first_present_ms": 558.4587,
+        "first_editor_present_ms": 599.4414,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 5.0959,
+        "gpu_preflight_ms": 7.63
+      },
+      {
+        "run": 8,
+        "first_present_ms": 503.5193,
+        "first_editor_present_ms": 544.756,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.8904,
+        "gpu_preflight_ms": 13.05
+      },
+      {
+        "run": 9,
+        "first_present_ms": 445.3197,
+        "first_editor_present_ms": 481.8701,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.8228,
+        "gpu_preflight_ms": 7.75
+      },
+      {
+        "run": 10,
+        "first_present_ms": 439.4224,
+        "first_editor_present_ms": 475.242,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.7449,
+        "gpu_preflight_ms": 7.81
+      },
+      {
+        "run": 11,
+        "first_present_ms": 448.8691,
+        "first_editor_present_ms": 485.2313,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 4.2015,
+        "gpu_preflight_ms": 7.32
+      },
+      {
+        "run": 12,
+        "first_present_ms": 449.387,
+        "first_editor_present_ms": 486.219,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.7486,
+        "gpu_preflight_ms": 7.29
+      },
+      {
+        "run": 13,
+        "first_present_ms": 460.9574,
+        "first_editor_present_ms": 500.4179,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.9389,
+        "gpu_preflight_ms": 6.99
+      },
+      {
+        "run": 14,
+        "first_present_ms": 442.8766,
+        "first_editor_present_ms": 479.2095,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.963,
+        "gpu_preflight_ms": 7.4
+      },
+      {
+        "run": 15,
+        "first_present_ms": 448.9273,
+        "first_editor_present_ms": 487.5076,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.9069,
+        "gpu_preflight_ms": 7.81
+      },
+      {
+        "run": 16,
+        "first_present_ms": 441.3954,
+        "first_editor_present_ms": 481.1111,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.8802,
+        "gpu_preflight_ms": 6.82
+      },
+      {
+        "run": 17,
+        "first_present_ms": 447.6875,
+        "first_editor_present_ms": 486.5486,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 4.0178,
+        "gpu_preflight_ms": 8.48
+      },
+      {
+        "run": 18,
+        "first_present_ms": 438.892,
+        "first_editor_present_ms": 475.6843,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.7516,
+        "gpu_preflight_ms": 6.94
+      },
+      {
+        "run": 19,
+        "first_present_ms": 454.2977,
+        "first_editor_present_ms": 500.8441,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 3.6031,
+        "gpu_preflight_ms": 7.45
+      },
+      {
+        "run": 20,
+        "first_present_ms": 448.6406,
+        "first_editor_present_ms": 484.0124,
+        "first_editor_presentation_index": 2,
+        "font_registration_ms": 4.3733,
+        "gpu_preflight_ms": 7.28
+      }
+    ],
+    "fixed": [
+      {
+        "run": 1,
+        "first_present_ms": 466.6784,
+        "first_editor_present_ms": 466.6784,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.3504,
+        "gpu_preflight_ms": 7.3
+      },
+      {
+        "run": 2,
+        "first_present_ms": 456.8819,
+        "first_editor_present_ms": 456.8819,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.2728,
+        "gpu_preflight_ms": 6.7
+      },
+      {
+        "run": 3,
+        "first_present_ms": 460.4128,
+        "first_editor_present_ms": 460.4128,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.4748,
+        "gpu_preflight_ms": 9.04
+      },
+      {
+        "run": 4,
+        "first_present_ms": 459.7185,
+        "first_editor_present_ms": 459.7185,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.4125,
+        "gpu_preflight_ms": 7.03
+      },
+      {
+        "run": 5,
+        "first_present_ms": 474.8789,
+        "first_editor_present_ms": 474.8789,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.6549,
+        "gpu_preflight_ms": 7.51
+      },
+      {
+        "run": 6,
+        "first_present_ms": 472.1024,
+        "first_editor_present_ms": 472.1024,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.3917,
+        "gpu_preflight_ms": 7.57
+      },
+      {
+        "run": 7,
+        "first_present_ms": 532.0001,
+        "first_editor_present_ms": 532.0001,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.789,
+        "gpu_preflight_ms": 6.94
+      },
+      {
+        "run": 8,
+        "first_present_ms": 509.4664,
+        "first_editor_present_ms": 509.4664,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 4.1318,
+        "gpu_preflight_ms": 8.84
+      },
+      {
+        "run": 9,
+        "first_present_ms": 464.6681,
+        "first_editor_present_ms": 464.6681,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.2935,
+        "gpu_preflight_ms": 11.79
+      },
+      {
+        "run": 10,
+        "first_present_ms": 457.5192,
+        "first_editor_present_ms": 457.5192,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.309,
+        "gpu_preflight_ms": 7.38
+      },
+      {
+        "run": 11,
+        "first_present_ms": 460.2283,
+        "first_editor_present_ms": 460.2283,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.2786,
+        "gpu_preflight_ms": 7.24
+      },
+      {
+        "run": 12,
+        "first_present_ms": 488.478,
+        "first_editor_present_ms": 488.478,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.3549,
+        "gpu_preflight_ms": 8.34
+      },
+      {
+        "run": 13,
+        "first_present_ms": 463.1174,
+        "first_editor_present_ms": 463.1174,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.3409,
+        "gpu_preflight_ms": 7.97
+      },
+      {
+        "run": 14,
+        "first_present_ms": 457.358,
+        "first_editor_present_ms": 457.358,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.2591,
+        "gpu_preflight_ms": 7.8
+      },
+      {
+        "run": 15,
+        "first_present_ms": 453.9494,
+        "first_editor_present_ms": 453.9494,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.2285,
+        "gpu_preflight_ms": 7.35
+      },
+      {
+        "run": 16,
+        "first_present_ms": 456.9675,
+        "first_editor_present_ms": 456.9675,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.3056,
+        "gpu_preflight_ms": 7.36
+      },
+      {
+        "run": 17,
+        "first_present_ms": 450.0607,
+        "first_editor_present_ms": 450.0607,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.2912,
+        "gpu_preflight_ms": 8.0
+      },
+      {
+        "run": 18,
+        "first_present_ms": 449.4639,
+        "first_editor_present_ms": 449.4639,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.3548,
+        "gpu_preflight_ms": 6.96
+      },
+      {
+        "run": 19,
+        "first_present_ms": 457.3149,
+        "first_editor_present_ms": 457.3149,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.2468,
+        "gpu_preflight_ms": 7.42
+      },
+      {
+        "run": 20,
+        "first_present_ms": 451.6214,
+        "first_editor_present_ms": 451.6214,
+        "first_editor_presentation_index": 1,
+        "font_registration_ms": 3.3154,
+        "gpu_preflight_ms": 6.99
+      }
+    ]
+  },
+  "correctness_verification": {
+    "status": "passed",
+    "first_editor_presentation": {
+      "baseline": 2,
+      "fixed": 1,
+      "verified_processes": 40
+    },
+    "adapter_check": "All 40 runs selected the same RTX 4060/Vulkan adapter and GPU canvas, with no fallback or lost device.",
+    "settled_screenshots": {
+      "capture": "ui.screenshot after at least present_3; this verifies settled appearance, not the contents of the first presentation.",
+      "width": 2880,
+      "height": 1800,
+      "baseline_sha256": "6d30790dbdaa7a525a5d5043379eb2bcf184c3880d639e6deb9963f8fd92ce32",
+      "fixed_sha256": "6d30790dbdaa7a525a5d5043379eb2bcf184c3880d639e6deb9963f8fd92ce32",
+      "byte_identical": true,
+      "visual_inspection": "passed; font rendering and editor layout matched"
+    },
+    "measured_development_checkout_tests": {
+      "passed": 200,
+      "failed": 0,
+      "existing_ignored": 1,
+      "new_font_regressions_passed": 4,
+      "includes_gpu_pr_10000": true
+    },
+    "data_integrity": "The original 40 timing samples and summary statistics have not been replaced or remeasured for the review fixes."
+  }
+}

@@ -167,11 +167,14 @@ pub(super) fn display_scale(pref: prefs::UiScale, native: Option<f32>) -> f32 {
     }
 }
 
-pub(super) fn sync_display_scale(app: &PhotocraftApp, ctx: &egui::Context) {
-    let native = ctx.native_pixels_per_point();
+/// Convert the absolute UI scale preference into zoom relative to the monitor's native DPI.
+pub(crate) fn display_zoom(pref: prefs::UiScale, native: Option<f32>) -> f32 {
     let native_scale = native.filter(|v| v.is_finite() && *v > 0.0).unwrap_or(1.0);
-    let scale = display_scale(app.session.prefs().interface.ui_scale, native);
-    ctx.set_zoom_factor(scale / native_scale);
+    display_scale(pref, native) / native_scale
+}
+
+pub(super) fn sync_display_scale(app: &PhotocraftApp, ctx: &egui::Context) {
+    ctx.set_zoom_factor(display_zoom(app.session.prefs().interface.ui_scale, ctx.native_pixels_per_point()));
 }
 
 /// Interface › Show Tooltips and Tools › Show Tooltips (either one off hides them): egui never

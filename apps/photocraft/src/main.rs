@@ -40,6 +40,8 @@ mod control_server;
 mod crash_guard;
 mod cursor;
 mod file_dialog_probe;
+#[cfg(test)]
+mod first_frame_fonts_tests;
 mod gpu_startup;
 #[cfg(target_os = "linux")]
 mod icon_theme;
@@ -337,6 +339,7 @@ fn write_start_marker(sentinel: &gpu_startup::SharedSentinel, plan: &gpu_startup
     }
 }
 
+/// Start the native editor with platform services and crash-safe graphics recovery.
 fn main() -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -517,8 +520,8 @@ fn main() -> eframe::Result {
             };
             #[cfg(not(target_os = "linux"))]
             let session = Session::new();
-            PhotocraftApp::install_type_reset_hooks(&cc.egui_ctx);
             let mut app = PhotocraftApp::new(session, services);
+            app.prepare_first_frame(&cc.egui_ctx);
             app.min_frame_ms = uncapped.then_some(1000.0 / 240.0);
             app.integrated_titlebar = cfg!(target_os = "macos");
             app.custom_titlebar = custom_titlebar;

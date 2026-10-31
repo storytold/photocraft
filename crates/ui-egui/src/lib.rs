@@ -438,7 +438,7 @@ pub struct PhotocraftApp {
     /// the frame the pointer leaves, so a long stationary hover never counts as elapsed time
     /// (#2022); set by `notices::show`.
     pub(crate) notices_hovered: bool,
-    /// Apply theme on first frame.
+    /// Context resources have been registered for this app, either early or in its first logic pass.
     styled: bool,
     /// Whether the window uses an integrated (transparent) macOS title bar.
     pub integrated_titlebar: bool,
@@ -448,6 +448,7 @@ pub struct PhotocraftApp {
     /// Last window title sent to the OS (`ViewportCommand::Title`, see `panels::sync_window_title`):
     /// sent again only when it changes, so idle frames don't spam the backend.
     last_window_title: String,
+    /// The registered UI font definitions can be used in this pass.
     fonts_ready: bool,
     /// Screen rect of the main canvas last frame (for overlays and the navigator).
     pub last_canvas_rect: egui::Rect,
