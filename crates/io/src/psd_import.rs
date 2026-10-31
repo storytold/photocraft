@@ -645,7 +645,7 @@ impl Ctx<'_> {
             }
             _ => stored,
         };
-        LayerContent::Smart(SmartObject {
+        let mut sm = SmartObject {
             contents_id,
             source: SmartSource::Linked { path: id },
             transform,
@@ -657,7 +657,9 @@ impl Ctx<'_> {
             warp,
             stack_mode: None,
             perspective,
-        })
+        };
+        crate::smart_map::pin_puppet_meshes(&mut sm);
+        LayerContent::Smart(sm)
     }
 
     /// Typed vector mask from `vsms`/`vmsk` (non-shape layers). A user mask that Photoshop
