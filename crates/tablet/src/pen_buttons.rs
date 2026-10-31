@@ -9,6 +9,18 @@
 /// the button held for something else (a right-drag), not a click.
 pub const CLICK_MS: u32 = 600;
 
+/// Windows' `PEN_MASK_PRESSURE`: the pen info's `pressure` is valid. Without it the device
+/// reports no pressure and `pressure` is zero whatever the tip does.
+pub const PEN_MASK_PRESSURE: u32 = 0x0000_0001;
+
+/// Whether a pen event's tip presses, for [`Tracker::contact`]: in contact with positive pressure,
+/// or in contact at all when the pen reports no pressure (`pen_mask` without
+/// [`PEN_MASK_PRESSURE`]). Only a valid zero pressure is a contact the tip doesn't press, so a pen
+/// without pressure still right-drags.
+pub fn tip_pressed(in_contact: bool, pen_mask: u32, pressure: u32) -> bool {
+    in_contact && (pen_mask & PEN_MASK_PRESSURE == 0 || pressure > 0)
+}
+
 /// What the barrel button did since the UI last asked ([`Tracker::take`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Buttons {
@@ -56,7 +68,7 @@ impl Tracker {
     }
 
     /// One pen event's contact: `in_contact` while the pen is down, `tip` when its tip presses
-    /// (pressure above zero). A contact the tip never presses is the driver's Right Click in the air.
+    /// ([`tip_pressed`]). A contact the tip never presses is the driver's Right Click in the air.
     pub fn contact(&mut self, in_contact: bool, tip: bool) {
         self.contact = match (self.contact, in_contact) {
             (None, true) => {
@@ -173,6 +185,48 @@ mod tests {
         assert!(!t.take().tipless, "the tip pressed after all");
         t.contact(true, false);
         assert!(!t.take().tipless, "and it stays a tap");
+    }
+
+    /// One contact of `events` pen events with this mask and pressure, as the Windows hook feeds
+    /// it, and what the take after it reports.
+    fn contact_of(events: usize, pen_mask: u32, pressure: u32) -> Buttons {
+        let mut t = Tracker::default();
+        for i in 0..events {
+            t.update(true, i as u32 * 8);
+            t.contact(true, tip_pressed(true, pen_mask, pressure));
+        }
+        t.take()
+    }
+
+    #[test]
+    fn a_pen_without_pressure_in_contact_presses_its_tip() {
+        // No PEN_MASK_PRESSURE: `pressure` is zero because the device doesn't report it. A real
+        // right-drag (the many moves past 12 pt that `pen_barrel` holds back for a tipless
+        // contact) must stay one, so the contact is a tap, never tipless.
+        assert!(tip_pressed(true, 0, 0));
+        assert!(!contact_of(40, 0, 0).tipless, "a right-drag, not the driver's click in the air");
+        // Other mask bits (rotation, tilt) without pressure change nothing.
+        assert!(!contact_of(40, 0b1110, 0).tipless);
+    }
+
+    #[test]
+    fn a_valid_zero_pressure_contact_is_tipless() {
+        // The driver's Right Click in the air: in contact, pressure reported and zero.
+        assert!(!tip_pressed(true, PEN_MASK_PRESSURE, 0));
+        assert!(contact_of(40, PEN_MASK_PRESSURE, 0).tipless);
+    }
+
+    #[test]
+    fn positive_pressure_in_contact_presses_the_tip() {
+        assert!(tip_pressed(true, PEN_MASK_PRESSURE, 1));
+        assert!(!contact_of(40, PEN_MASK_PRESSURE, 512).tipless);
+    }
+
+    #[test]
+    fn out_of_contact_the_tip_never_presses() {
+        for (mask, pressure) in [(0, 0), (PEN_MASK_PRESSURE, 0), (PEN_MASK_PRESSURE, 512)] {
+            assert!(!tip_pressed(false, mask, pressure), "mask {mask}, pressure {pressure}");
+        }
     }
 
     #[test]

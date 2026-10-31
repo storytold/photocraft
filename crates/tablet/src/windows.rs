@@ -137,7 +137,8 @@ unsafe extern "system" fn get_msg_proc(code: i32, w_param: usize, l_param: isize
                     let in_contact = msg.message != WM_POINTERUP && (flags & POINTER_FLAG_INCONTACT) != 0;
                     let mut b = barrel();
                     b.update(is_barrel, msg.time);
-                    b.contact(in_contact, info.pressure > 0);
+                    // A pen without pressure reports zero: only a valid zero is a tipless contact.
+                    b.contact(in_contact, crate::pen_buttons::tip_pressed(in_contact, info.pen_mask, info.pressure));
                 }
             }
             WM_POINTERLEAVE | WM_POINTERCAPTURECHANGED => barrel().leave(),
