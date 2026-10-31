@@ -386,7 +386,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let alt = crate::shortcuts::pretty("Alt");
         crate::analysis_ui::panel_window(app, ctx, "modifier-keys", tl!("Modifier Keys"), vec2(-420.0, 80.0), 150.0, |ui| {
             close = crate::analysis_ui::title_row(ui, tl!("Modifier Keys"));
-            ui.with_layout(crate::text::direction::row(), |ui| {
+            crate::text::direction::dialog_row(ui, |ui| {
                 for (label, on) in [(&*shift, &mut s.sticky_shift), (&*cmd, &mut s.sticky_command), (&*alt, &mut s.sticky_alt)] {
                     if ui.add(egui::Button::new(RichText::new(label).size(14.0)).selected(*on).min_size(vec2(40.0, 30.0))).clicked() {
                         *on = !*on;
@@ -408,7 +408,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let title = title(&kind);
     let names: Vec<String> = app.session.prefs().workspaces.keys().cloned().collect();
     let mut result: Option<bool> = None;
-    egui::Window::new(title).id(egui::Id::unique("shell-dialog")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
+    egui::Window::new(title).id(egui::Id::unique("shell-dialog")).title_bar(false).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, vec2(0.0, 0.0)).show(
         ctx,
         |ui| {
             crate::text::direction::window_body(ui, |ui| {
@@ -416,10 +416,10 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 crate::widgets::hairline(ui);
                 ui.add_space(6.0);
                 let text = |ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str| {
-                    ui.with_layout(crate::text::direction::row(), |ui| {
+                    crate::text::direction::dialog_row(ui, |ui| {
                         ui.label(RichText::new(tl!(&label)).color(t.text_dim).size(11.0));
                         let mut v = f.get(key).and_then(Value::as_str).unwrap_or("").to_string();
-                        if ui.add(egui::TextEdit::singleline(&mut v).desired_width(180.0)).accessible_name(tl!(label)).changed() {
+                        if crate::widgets::rtl_singleline_edit(ui, &mut v, 180.0, "").accessible_name(tl!(label)).changed() {
                             f.insert(key.into(), json!(v));
                         }
                     });
@@ -431,7 +431,7 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     }
                 };
                 let number = |ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, range: std::ops::RangeInclusive<f32>| {
-                    ui.with_layout(crate::text::direction::row(), |ui| {
+                    crate::text::direction::dialog_row(ui, |ui| {
                         ui.label(RichText::new(tl!(&label)).color(t.text_dim).size(11.0));
                         let mut v = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
                         if crate::widgets::slider(ui, &mut v, range.clone(), None).changed()
@@ -531,51 +531,6 @@ mod tests {
 
     fn app() -> (PhotocraftApp, egui::Context) {
         (PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default()), egui::Context::default())
-    }
-
-    #[test]
-    fn debug_window_size_probe() {
-        use egui_kittest::Harness;
-        for (name, body) in [
-            ("plain_label", 0u8),
-            ("horizontal", 1),
-            ("row_center", 2),
-            ("row_min", 3),
-        ] {
-            let mut h = Harness::builder().with_size(egui::vec2(900.0, 600.0)).build_ui_state(
-                |ui, body| {
-                    egui::Window::new("t")
-                        .id(egui::Id::unique("w"))
-                        .collapsible(false)
-                        .resizable(false)
-                        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-                        .show(ui.ctx(), |ui| match body {
-                            1 => {
-                                ui.horizontal(|ui| {
-                                    ui.label("a");
-                                });
-                            }
-                            2 => {
-                                ui.with_layout(crate::text::direction::row(), |ui| {
-                                    ui.label("a");
-                                });
-                            }
-                            3 => {
-                                ui.with_layout(egui::Layout::left_to_right(egui::Align::Min), |ui| {
-                                    ui.label("a");
-                                });
-                            }
-                            _ => {
-                                ui.label("a");
-                            }
-                        });
-                },
-                body,
-            );
-            h.run_steps(4);
-            let r = h.ctx.memory(|m| m.area_rect(egui::Id::unique("w"))).unwrap();
-            eprintln!("probe {name}: {r:?}");
-        }
     }
 
     #[test]
