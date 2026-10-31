@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use photocraft_cms::{ColorSpace, Transform};
+use photocraft_cms::{ColorSpace, TransformOptions};
 use photocraft_color::ColorMode;
 use photocraft_doc::Document;
 use photocraft_engine::color_cmds::ColorSettings;
@@ -847,56 +847,59 @@ fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 
 const INDEXED_MATTE_FOREGROUND: &str = "__indexedMatteForeground";
 const INDEXED_MATTE_BACKGROUND: &str = "__indexedMatteBackground";
+const INDEXED_MATTE_COLOR_ERROR: &str = "__indexedMatteColorError";
 
 /// Resolve a tool colour into the encoded samples used by Indexed Color's matte.
 ///
 /// The picker and command fields carry document RGB coordinates. Tool swatches are
 /// working-RGB coordinates, so only the named tool choices need this conversion here.
-fn indexed_matte_document_color(app: &PhotocraftApp, doc: &Document, color: [f32; 4]) -> [f32; 3] {
+fn indexed_matte_document_color(app: &PhotocraftApp, doc: &Document, color: [f32; 4]) -> Result<[f32; 3], String> {
     let destination = match photocraft_engine::color_cmds::mode_space(doc.mode) {
         ColorSpace::Rgb | ColorSpace::Gray => photocraft_engine::color_cmds::document_profile(doc),
         _ => photocraft_engine::color_cmds::composite_profile(doc),
     };
     let source = app.session.color.working(ColorMode::Rgb);
-    let Ok(transform) = Transform::new(&source, &destination, app.session.color.settings.intent(), app.session.color.settings.bpc) else {
-        return [color[0], color[1], color[2]];
-    };
+    let options = TransformOptions { intent: app.session.color.settings.intent(), bpc: app.session.color.settings.bpc, ..Default::default() };
+    let transform = photocraft_cms::transform::cached(&source, &destination, options).map_err(|e| e.to_string())?;
     let mut output = [0.0; 16];
     transform.eval(&color[..3], &mut output);
-    if destination.color_space == ColorSpace::Gray { [output[0]; 3] } else { [output[0], output[1], output[2]] }
+    let rgb = if destination.color_space == ColorSpace::Gray { [output[0]; 3] } else { [output[0], output[1], output[2]] };
+    if rgb.iter().any(|v| !v.is_finite()) {
+        return Err("cannot convert matte colour to finite document samples".into());
+    }
+    Ok(rgb.map(|v| v.clamp(0.0, 1.0)))
 }
 
 fn indexed_matte_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
-    let Some(doc) = app.session.active().map(|state| state.doc.clone()) else { return };
-    let foreground = indexed_matte_document_color(app, &doc, app.session.tools.foreground);
-    let background = indexed_matte_document_color(app, &doc, app.session.tools.background);
-    fields.insert(INDEXED_MATTE_FOREGROUND.into(), json!(crate::color_picker_ui::hex(foreground)));
-    fields.insert(INDEXED_MATTE_BACKGROUND.into(), json!(crate::color_picker_ui::hex(background)));
+    let Some(doc) = app.session.active().map(|state| state.doc.as_ref()) else { return };
+    for (key, color) in [(INDEXED_MATTE_FOREGROUND, app.session.tools.foreground), (INDEXED_MATTE_BACKGROUND, app.session.tools.background)] {
+        match indexed_matte_document_color(app, doc, color) {
+            Ok(rgb) => {
+                fields.insert(key.into(), json!(crate::color_picker_ui::hex(rgb)));
+            }
+            Err(error) => {
+                fields.insert(INDEXED_MATTE_COLOR_ERROR.into(), json!(error));
+            }
+        }
+    }
 }
 
-fn indexed_matte_seed(fields: &Map<String, Value>, value: &str) -> [f32; 3] {
+fn indexed_matte_seed(fields: &Map<String, Value>, value: &str) -> Option<[f32; 3]> {
     match value {
-        "foreground" => fields
-            .get(INDEXED_MATTE_FOREGROUND)
-            .and_then(Value::as_str)
-            .and_then(crate::color_picker_ui::parse_hex)
-            .unwrap_or([0.0; 3]),
-        "background" => fields
-            .get(INDEXED_MATTE_BACKGROUND)
-            .and_then(Value::as_str)
-            .and_then(crate::color_picker_ui::parse_hex)
-            .unwrap_or([1.0; 3]),
-        "black" => [0.0; 3],
-        "gray" => [128.0 / 255.0; 3],
-        "netscapeGray" => [192.0 / 255.0; 3],
-        _ => [1.0; 3],
+        "foreground" => fields.get(INDEXED_MATTE_FOREGROUND).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex),
+        "background" => fields.get(INDEXED_MATTE_BACKGROUND).and_then(Value::as_str).and_then(crate::color_picker_ui::parse_hex),
+        "black" => Some([0.0; 3]),
+        "gray" => Some([128.0 / 255.0; 3]),
+        "netscapeGray" => Some([192.0 / 255.0; 3]),
+        "none" | "white" => Some([1.0; 3]),
+        _ => crate::color_picker_ui::parse_hex(value),
     }
 }
 
 fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let value = fields.get("matte").and_then(Value::as_str).unwrap_or("none");
     let mut choice = if value.starts_with('#') { "custom" } else { value };
-    let color = crate::color_picker_ui::parse_hex(value).unwrap_or_else(|| indexed_matte_seed(fields, value));
+    let color = indexed_matte_seed(fields, value);
     let mut changed = false;
     let mut pick = false;
     ui.horizontal(|ui| {
@@ -913,27 +916,34 @@ fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
                 ("white", "White"),
                 ("black", "Black"),
                 ("gray", "50% Gray"),
-                ("netscapeGray", "Netscape Gray"),
+                ("netscapeGray", tl!("Netscape Gray")),
                 ("custom", "Other…"),
             ],
             170.0,
         );
-        if choice == "custom" {
+        if choice == "custom"
+            && let Some(color) = color
+        {
             let bytes = color.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
             pick = crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(bytes[0], bytes[1], bytes[2]), tl!("Matte")).clicked();
         }
     });
+    if color.is_none()
+        && let Some(error) = fields.get(INDEXED_MATTE_COLOR_ERROR).and_then(Value::as_str)
+    {
+        ui.colored_label(Tokens::get(ui.ctx()).danger, error);
+    }
     let custom = choice == "custom";
     if changed {
-        if custom {
+        if custom && let Some(color) = color {
             // Keep the previous matte until the picker confirms; the picker uses this only as
             // its initial document-encoded colour when switching from a named matte or None.
             fields.insert("__pickColorDefault".into(), json!(crate::color_picker_ui::hex(color)));
-        } else {
+        } else if !custom {
             fields.insert("matte".into(), json!(choice.to_owned()));
         }
     }
-    if custom && (changed || pick) {
+    if custom && color.is_some() && (changed || pick) {
         crate::color_picker_ui::request_field(fields, "matte", &crate::color_picker_ui::title_for("Matte"));
     }
 }
@@ -1264,6 +1274,7 @@ pub fn preview_document_with(
         photocraft_engine::channel_cmds::ChannelTarget::Composite,
         &[],
         &ColorSettings::default(),
+        None,
     )
 }
 
@@ -1271,6 +1282,8 @@ pub fn preview_document_with(
 /// `documents` are the open documents in session order: document params (Match Color's Source,
 /// Displace's map) index into them. `color` is the app's Edit › Color Settings: Assign and Convert
 /// to Profile's `working` is the working space chosen there, not the built-in default.
+/// `tool_colors` carries the caller's working-space foreground/background values; standalone
+/// previews without a session use the engine's default tool colors.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn preview_document_for_target(
     doc: &Document,
@@ -1282,6 +1295,7 @@ pub(crate) fn preview_document_for_target(
     target: photocraft_engine::channel_cmds::ChannelTarget,
     documents: &[Arc<Document>],
     color: &ColorSettings,
+    tool_colors: Option<([f32; 4], [f32; 4])>,
 ) -> Option<Document> {
     if command == crate::select_mask_view::COMMAND {
         return crate::select_mask_view::preview_document(doc, active, params, k, cancel);
@@ -1317,6 +1331,10 @@ pub(crate) fn preview_document_for_target(
     }
     let mut s = photocraft_engine::Session::new();
     s.color.settings = color.clone();
+    if let Some((foreground, background)) = tool_colors {
+        s.tools.foreground = foreground;
+        s.tools.background = background;
+    }
     s.set_inline_job_ctx(cancel.cloned());
     let doc_id = proxy.id;
     s.add_document(proxy, None);
@@ -1459,11 +1477,12 @@ pub struct FilterPreviewKey {
     pub command: String,
     pub params: Value,
     pub k: u32,
+    pub tool_colors: ([f32; 4], [f32; 4]),
 }
 
 impl FilterPreviewKey {
     /// Everything except the parameters: same dialog, document, revision, layer, channel target,
-    /// command and proxy factor.
+    /// command, proxy factor and tool colors.
     ///
     /// The canvas shows whatever this preview was computed for, so a result whose parameters are
     /// a few frames old still belongs on screen while a slider is moving; matching on everything
@@ -1485,6 +1504,7 @@ impl FilterPreviewKey {
             && self.active == other.active
             && self.target == other.target
             && self.command == other.command
+            && self.tool_colors == other.tool_colors
     }
 }
 

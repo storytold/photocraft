@@ -9,7 +9,7 @@
 
 use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShape, PaletteKind};
 use photocraft_algo::transform::{Homography, Interp};
-use photocraft_cms::{ColorSpace, Transform};
+use photocraft_cms::{ColorSpace, TransformOptions};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
@@ -266,21 +266,21 @@ fn working_matte_color(s: &Session, doc: &Document, color: [f32; 4]) -> Result<[
         _ => crate::color_cmds::composite_profile(doc),
     };
     let source = s.color.working(ColorMode::Rgb);
-    let transform = Transform::new(&source, &destination, s.color.settings.intent(), s.color.settings.bpc)
+    let options = TransformOptions { intent: s.color.settings.intent(), bpc: s.color.settings.bpc, ..Default::default() };
+    let transform = photocraft_cms::transform::cached(&source, &destination, options)
         .map_err(|e| bad("image.mode.indexedColor", format!("cannot convert matte colour: {e}")))?;
     let mut output = [0.0; 16];
     transform.eval(&color[..3], &mut output);
-    let matte = if destination.color_space == ColorSpace::Gray {
-        [output[0]; 3]
-    } else {
-        [output[0], output[1], output[2]]
-    };
-    Ok(matte)
+    let matte = if destination.color_space == ColorSpace::Gray { [output[0]; 3] } else { [output[0], output[1], output[2]] };
+    if matte.iter().any(|v| !v.is_finite()) {
+        return Err(bad("image.mode.indexedColor", "cannot convert matte colour to finite document samples"));
+    }
+    Ok(matte.map(|v| v.clamp(0.0, 1.0)))
 }
 
 fn indexed_matte(s: &Session, p: &Value) -> Result<Option<[f32; 3]>> {
     const CMD: &str = "image.mode.indexedColor";
-    let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     let matte = match p.get("matte") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::String(value)) => match value.as_str() {
@@ -289,8 +289,8 @@ fn indexed_matte(s: &Session, p: &Value) -> Result<Option<[f32; 3]>> {
             "black" => [0.0; 3],
             "gray" => [128.0 / 255.0; 3],
             "netscapeGray" => [192.0 / 255.0; 3],
-            "foreground" => working_matte_color(s, &doc, s.tools.foreground)?,
-            "background" => working_matte_color(s, &doc, s.tools.background)?,
+            "foreground" => working_matte_color(s, doc, s.tools.foreground)?,
+            "background" => working_matte_color(s, doc, s.tools.background)?,
             value if value.len() == 7 && value.starts_with('#') => p
                 .get("matte")
                 .and_then(parse_color)
@@ -755,7 +755,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.indexedColor",
             "Indexed Color…",
             ["Image", "Mode"],
-r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"matte":color,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; matte: none|foreground|background|white|black|gray|netscapeGray|#rrggbb; gray=50% Gray (#808080), netscapeGray=Netscape Gray (#c0c0c0))"##,
+            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"matte":color,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; matte: none|foreground|background|white|black|gray|netscapeGray|#rrggbb; gray=50% Gray (#808080), netscapeGray=Netscape Gray (#c0c0c0))"##,
             |s| mode_is(
                 s,
                 &[ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Indexed, ColorMode::Duotone, ColorMode::Cmyk, ColorMode::Lab],

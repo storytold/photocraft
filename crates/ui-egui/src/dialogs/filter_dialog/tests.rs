@@ -99,7 +99,7 @@ fn indexed_matte_tool_seeds_use_document_encoded_rgb() {
     session.execute("file.new", json!({"width": 2, "height": 2, "background": "transparent"})).unwrap();
     session.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
     session.execute("tools.setColors", json!({"foreground": "#3366cc", "background": "#cc6633"})).unwrap();
-    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    let app = PhotocraftApp::new(session, crate::Services::default());
     let mut fields = Map::new();
     indexed_matte_defaults(&app, &mut fields);
 
@@ -112,7 +112,10 @@ fn indexed_matte_tool_seeds_use_document_encoded_rgb() {
         transform.eval(&input, &mut output);
         let expected = crate::color_picker_ui::hex([output[0], output[1], output[2]]);
         assert_eq!(fields.get(key).and_then(Value::as_str), Some(expected.as_str()), "{key}");
-        assert_eq!(indexed_matte_seed(&fields, if key == INDEXED_MATTE_FOREGROUND { "foreground" } else { "background" }), crate::color_picker_ui::parse_hex(&expected).unwrap());
+        assert_eq!(
+            indexed_matte_seed(&fields, if key == INDEXED_MATTE_FOREGROUND { "foreground" } else { "background" }),
+            crate::color_picker_ui::parse_hex(&expected)
+        );
     }
 }
 /// Convert to Profile's and Proof Setup's `bpc` read "Bpc": spelled out.
@@ -131,6 +134,7 @@ fn key() -> FilterPreviewKey {
         command: "filter.blur.gaussianBlur".into(),
         params: json!({"radius": 4.0}),
         k: 1,
+        tool_colors: ([0.0, 0.0, 0.0, 1.0], [1.0; 4]),
     }
 }
 
@@ -153,6 +157,8 @@ fn same_target_ignores_parameters_but_nothing_else() {
         |k: &mut FilterPreviewKey| k.target = photocraft_engine::channel_cmds::ChannelTarget::LayerMask,
         |k: &mut FilterPreviewKey| k.command = "filter.blur.motionBlur".into(),
         |k: &mut FilterPreviewKey| k.k = 2,
+        |k: &mut FilterPreviewKey| k.tool_colors.0 = [0.2, 0.4, 0.8, 1.0],
+        |k: &mut FilterPreviewKey| k.tool_colors.1 = [0.8, 0.4, 0.2, 1.0],
     ] {
         let mut other = base.clone();
         break_it(&mut other);
@@ -678,6 +684,7 @@ fn smart_displace_preview_uses_the_map_document() {
             photocraft_engine::channel_cmds::ChannelTarget::Composite,
             &documents,
             &ColorSettings::default(),
+            None,
         )
         .unwrap_or_else(|| panic!("map {map}: no preview"));
         assert!(photocraft_compose::render(&preview, doc.bounds()).px == want, "map {map}: the preview differs from what OK applies");
@@ -720,6 +727,7 @@ fn match_color_preview_uses_the_source_document() {
             photocraft_engine::channel_cmds::ChannelTarget::Composite,
             &documents,
             &ColorSettings::default(),
+            None,
         )
         .unwrap_or_else(|| panic!("{label}: no preview"));
         let got = preview.layers[0].surface().unwrap().pixel(24, 16);
@@ -736,6 +744,7 @@ fn match_color_preview_uses_the_source_document() {
         photocraft_engine::channel_cmds::ChannelTarget::Composite,
         &documents,
         &ColorSettings::default(),
+        None,
     )
     .unwrap();
     let px = preview.layers[0].surface().unwrap().pixel(12, 8);
@@ -1673,12 +1682,8 @@ fn indexed_matte_dropdown_and_picker_change_the_applied_edge_color() {
     use egui::accesskit::Role;
     use egui_kittest::{Harness, kittest::Queryable};
 
-    for (choice, matte) in [
-        ("Black", [0.0, 0.0, 0.0]),
-        ("50% Gray", [128.0 / 255.0; 3]),
-        ("Netscape Gray", [192.0 / 255.0; 3]),
-        ("Other…", [0.0, 0.0, 1.0]),
-    ] {
+    for (choice, matte) in [("Black", [0.0, 0.0, 0.0]), ("50% Gray", [128.0 / 255.0; 3]), ("Netscape Gray", [192.0 / 255.0; 3]), ("Other…", [0.0, 0.0, 1.0])]
+    {
         let mut session = photocraft_engine::Session::new();
         session.execute("file.new", json!({"width": 2, "height": 1, "depth": 32, "background": "transparent"})).unwrap();
         session

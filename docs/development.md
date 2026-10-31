@@ -667,13 +667,18 @@ opens the picker without replacing the current matte; Cancel leaves that choice 
 OK commits the picked `#rrggbb` in document RGB coordinates. Automation accepts `matte` as
 `none`, `foreground`, `background`, `white`, `black`, `gray` (50% Gray, encoded
 `#808080`), `netscapeGray` (Netscape Gray, encoded `#c0c0c0`) or `#rrggbb`. Foreground/background
-tool colours are converted from the
-working RGB profile into the document profile before blending. A selected matte blends all
+tool colours are converted from the working RGB profile into the document profile and clipped
+to its encodable RGB range before blending. A selected matte blends all
 partially transparent edges; with Transparency on, fully clear pixels stay transparent.
 With Transparency off, the selected matte also fills clear pixels. None retains the existing
 hard-edged transparency/default flattening behavior. Indexed conversion retains the document's
 ICC profile and encoded RGB sample representation; matte colours are interpreted in the document
-RGB coordinate space. This follows Adobe's documented
+RGB coordinate space. Default Indexed → RGB expands the stored RGB samples without converting
+them to the working profile; an explicitly supplied destination profile still requests a CMS
+conversion. Inline and worker dialog previews inherit the current foreground/background tool
+colors, and changing those colors invalidates both cached frames and pending worker results,
+including when the preview proxy factor changes. A same-color frame at the old factor can
+remain visible during a drag until the new result arrives. This follows Adobe's documented
 [Indexed Color conversion options](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-modes/conversion-options-for-indexed-color-images.html).
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
