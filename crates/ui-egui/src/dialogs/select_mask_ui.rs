@@ -1919,8 +1919,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         painter.line_segment([panel_edge, panel_edge_b], Stroke::new(1.0, t.separator));
         let head = ERect::from_min_size(panel.min, vec2(PANEL_W, TAB_H));
         painter.line_segment([head.left_bottom(), head.right_bottom()], Stroke::new(1.0, t.separator));
-        let (head_text, head_align) =
-            if rtl { (head.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER) } else { (head.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER) };
+        let (head_text, head_align) = crate::direction::start_text_anchor(head, 12.0);
         painter.text(head_text, head_align, tl!("Properties"), FontId::proportional(12.0), t.text);
         let mut props = ui.new_child(
             egui::UiBuilder::new()
