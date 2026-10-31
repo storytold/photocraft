@@ -131,28 +131,16 @@ fn is_command_key(key: Key, mods: Modifiers) -> bool {
     mods.command || mods.ctrl || mods.mac_cmd || function_key
 }
 
-/// A key a focused text field uses with ⌘ / Ctrl: select all, copy, cut, paste, undo and redo,
-/// and caret movement and deletion by word or line. On macOS, Control (not ⌘) also gives egui's
-/// Emacs keys to the field (Control+W deletes a word, Control+E goes to the end of the line);
-/// where Ctrl is the command key (Windows, Linux) Ctrl+W, Ctrl+K… stay Photoshop's shortcuts.
+/// A key a focused text field uses with ⌘ / Ctrl: select all, copy, cut, paste, undo and redo
+/// (without Alt, which makes them shortcuts as [`crate::shortcut_dispatch::Focus::allows`] has
+/// it: ⌘⌥Z, ⌘⌥C), and caret movement and deletion by word or line. On macOS, Control (not ⌘)
+/// also gives egui's Emacs keys to the field (Control+W deletes a word, Control+E goes to the end
+/// of the line); where Ctrl is the command key (Windows, Linux) Ctrl+W, Ctrl+K… stay Photoshop's
+/// shortcuts.
 fn is_text_editing_key(key: Key, mods: Modifiers) -> bool {
-    let editing = matches!(
-        key,
-        Key::A
-            | Key::C
-            | Key::X
-            | Key::V
-            | Key::Z
-            | Key::Y
-            | Key::ArrowLeft
-            | Key::ArrowRight
-            | Key::ArrowUp
-            | Key::ArrowDown
-            | Key::Home
-            | Key::End
-            | Key::Backspace
-            | Key::Delete
-    );
+    let clipboard = !mods.alt && matches!(key, Key::A | Key::C | Key::X | Key::V | Key::Z | Key::Y);
+    let editing =
+        clipboard || matches!(key, Key::ArrowLeft | Key::ArrowRight | Key::ArrowUp | Key::ArrowDown | Key::Home | Key::End | Key::Backspace | Key::Delete);
     let emacs = mods.ctrl && !mods.command && matches!(key, Key::H | Key::K | Key::U | Key::W | Key::P | Key::N | Key::B | Key::F | Key::E);
     editing || emacs
 }
@@ -525,6 +513,12 @@ mod tests {
         }
         assert!(super::is_text_editing_key(Key::V, windows_ctrl) && super::is_text_editing_key(Key::V, Modifiers::COMMAND));
         assert!(!super::is_text_editing_key(Key::Num1, Modifiers::COMMAND));
+        // With Alt the letters are shortcuts (⌘⌥Z Toggle Last State, ⌘⌥C Canvas Size), as
+        // `Focus::allows` has it; Alt+arrows still move the caret by word.
+        for k in [Key::A, Key::C, Key::X, Key::V, Key::Z, Key::Y] {
+            assert!(!super::is_text_editing_key(k, Modifiers::COMMAND | Modifiers::ALT), "{k:?}");
+        }
+        assert!(super::is_text_editing_key(Key::ArrowLeft, Modifiers::ALT) && super::is_text_editing_key(Key::ArrowRight, Modifiers::COMMAND | Modifiers::ALT));
     }
 
     use super::*;

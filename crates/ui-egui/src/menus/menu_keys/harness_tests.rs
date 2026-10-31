@@ -447,6 +447,28 @@ fn a_command_shortcut_runs_from_the_help_search_field() {
     assert!(h.state().session.active().unwrap().doc.selection.is_none(), "and deselects");
 }
 
+/// #9314 review: an Alt-modified letter (⌘⌥C, Canvas Size) isn't one of the field's editing
+/// keys, as [`crate::shortcut_dispatch::Focus::allows`] has it, so it closes Help and runs.
+#[test]
+fn an_alt_modified_letter_shortcut_runs_from_the_help_search_field() {
+    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = app();
+        app.services.native_menu = None;
+        app
+    });
+    h.run_steps(4);
+    h.get_by_label("Help").click();
+    h.run_steps(4);
+    let field = egui::Id::unique("help-menu-search").with("field");
+    assert!(is_open(&h.ctx) && h.ctx.memory(|m| m.focused()) == Some(field), "Help is open with its field focused");
+    assert!(h.state().ui.dialogs.is_empty());
+    h.key_press_modifiers(egui::Modifiers::COMMAND | egui::Modifiers::ALT, egui::Key::C);
+    h.run_steps(3);
+    assert!(!is_open(&h.ctx), "⌘⌥C closes Help");
+    assert!(!h.state().ui.dialogs.is_empty(), "and opens Canvas Size");
+}
+
 /// Checked, unchecked and plain rows (and submenu headers) start their label at the same x, in
 /// any script: the checkmark column has a fixed width instead of padding characters (#5705).
 #[test]
