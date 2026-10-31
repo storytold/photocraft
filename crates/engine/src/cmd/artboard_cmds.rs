@@ -202,8 +202,8 @@ pub(crate) fn recorded_duplicate(s: &Session, mut p: Value) -> Value {
 /// contents, guides, paths…) right/down by its overhang, then the canvas grows to show it. An
 /// axis whose boards span more than the largest canvas, or a shift that would push pixels past
 /// the 32-bit range, stays unshifted: the board stays partly off-canvas, as one past the size
-/// limit does.
-pub(crate) fn fit_canvas(doc: &mut Document) {
+/// limit does. Returns the shift, for [`follow_shift`].
+pub(crate) fn fit_canvas(doc: &mut Document) -> (i32, i32) {
     let max = i64::from(crate::document_preset_cmds::MAX_DIMENSION);
     let boards: Vec<Rect> = doc.artboards().iter().map(|b| b.2.rect).collect();
     // The canvas and every board, per axis (`lo` ≤ 0 is the canvas origin or a board past it).
@@ -225,6 +225,20 @@ pub(crate) fn fit_canvas(doc: &mut Document) {
         // shapes against it, leaving them missing or clipped (#2389).
         crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::Shapes);
     }
+    (sx, sy)
+}
+
+/// Keep the Color Sampler points and the painting symmetry on their pixels after an edit shifted
+/// the document by `(dx, dy)` to show a board past the origin ([`fit_canvas`]), as Canvas Size's
+/// sampler map does (#9302). View state: no history step. The canvas only grew, so every point
+/// stays on it.
+pub(crate) fn follow_shift(s: &mut Session, (dx, dy): (i32, i32)) {
+    let Some(st) = s.active_mut().filter(|_| (dx, dy) != (0, 0)) else { return };
+    for p in &mut st.color_samplers {
+        *p = [p[0] + f64::from(dx), p[1] + f64::from(dy)];
+    }
+    let a = photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy));
+    st.symmetry = st.symmetry.take().and_then(|sym| sym.transform(&a));
 }
 
 fn next_artboard_name(doc: &Document) -> String {
@@ -289,14 +303,15 @@ fn new_artboard(s: &mut Session, p: &Value) -> Result<Value> {
     };
     let background = background_param(p, cmd)?.unwrap_or_default();
     let name = p.get("name").and_then(Value::as_str).filter(|n| !n.is_empty()).map(str::to_string);
-    let id = s.edit("New Artboard", |doc, active| {
+    let (id, shift) = s.edit("New Artboard", |doc, active| {
         let mut g = Layer::group(name.unwrap_or_else(|| next_artboard_name(doc)), vec![]);
         set_artboard(&mut g, Artboard { rect, background, preset });
         let id = doc.insert_above(None, g);
-        fit_canvas(doc);
+        let shift = fit_canvas(doc);
         *active = Some(id);
-        Ok(id)
+        Ok((id, shift))
     })?;
+    follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![id], Some(id), Some(id))?;
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
@@ -306,17 +321,18 @@ fn artboard_from_group(s: &mut Session, p: &Value) -> Result<Value> {
     let id = p.get("layer").and_then(Value::as_u64).map(LayerId).or(d.active_layer).ok_or(EngineError::Other("no active layer".into()))?;
     let canvas = d.doc.bounds();
     let background = background_param(p, "layer.new.artboardFromGroup")?.unwrap_or_default();
-    let rect = s.edit("Artboard from Group", |doc, active| {
+    let (rect, shift) = s.edit("Artboard from Group", |doc, active| {
         if !doc.layers.iter().any(|t| t.id == id && t.is_group() && t.artboard().is_none()) {
             return Err(EngineError::Other("artboards are made from a top-level layer group".into()));
         }
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
         let rect = crate::layer_multi_cmds::layer_bounds(l).unwrap_or(canvas);
         set_artboard(l, Artboard { rect, background, preset: String::new() });
-        fit_canvas(doc);
+        let shift = fit_canvas(doc);
         *active = Some(id);
-        Ok(rect)
+        Ok((rect, shift))
     })?;
+    follow_shift(s, shift);
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
 
@@ -349,7 +365,7 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
     // A size of the user's own (a post, a story…) from the layers' top left; 0 or none keeps
     // their bounds on that axis (#9087).
     let size = [int(p, "width").filter(|v| *v != 0), int(p, "height").filter(|v| *v != 0)];
-    let (gid, rect) = s.edit("Artboard from Layers", |doc, active| {
+    let (gid, rect, shift) = s.edit("Artboard from Layers", |doc, active| {
         let ids = crate::layer_multi_cmds::top_level(doc, &sel);
         if ids.is_empty() || ids.iter().any(|id| doc.artboard_of(*id).is_some()) {
             return Err(EngineError::Other("select layers that are not in an artboard".into()));
@@ -364,10 +380,11 @@ fn artboard_from_layers(s: &mut Session, p: &Value) -> Result<Value> {
         set_artboard(&mut g, Artboard { rect, background, preset: String::new() });
         let gid = doc.insert_above(None, g);
         crate::layer_multi_cmds::check_group_depth(doc, "Artboard from Layers")?;
-        fit_canvas(doc);
+        let shift = fit_canvas(doc);
         *active = Some(gid);
-        Ok((gid, rect))
+        Ok((gid, rect, shift))
     })?;
+    follow_shift(s, shift);
     crate::layer_multi_cmds::set_selection(s, vec![gid], Some(gid), Some(gid))?;
     Ok(json!({"layer": gid.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
@@ -406,7 +423,7 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
             ));
         }
     };
-    s.edit("Edit Artboard", |doc, _| {
+    let shift = s.edit("Edit Artboard", |doc, _| {
         if move_contents && (dx, dy) != (0, 0) {
             let snapshot = doc.clone();
             let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -428,9 +445,9 @@ fn set_props(s: &mut Session, p: &Value) -> Result<Value> {
             None if rect.width() != old.rect.width() || rect.height() != old.rect.height() => a.preset.clear(),
             None => {}
         }
-        fit_canvas(doc);
-        Ok(())
+        Ok(fit_canvas(doc))
     })?;
+    follow_shift(s, shift);
     Ok(json!({"layer": id.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
 
@@ -482,7 +499,7 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
     let grown = |len: u32, by: i32| (i64::from(len) + i64::from(by)).clamp(1, 300_000) as u32;
     let label = if duplicate { "Duplicate Artboard" } else { "New Artboard" };
     let add_copy = crate::commands::layer_panel_option(s, "addCopyToCopiedLayersAndGroups", true);
-    let (nid, rect) = s.edit(label, |doc, active| {
+    let (nid, rect, (fx, fy)) = s.edit(label, |doc, active| {
         if (sx, sy) != (0, 0) {
             crate::image_cmds::translate_doc(doc, cmd, sx, sy)?;
             doc.size = Size::new(grown(doc.size.width, sx), grown(doc.size.height, sy));
@@ -511,10 +528,11 @@ fn add_beside(s: &mut Session, p: &Value) -> Result<Value> {
             set_artboard(&mut g, Artboard { rect, background: src.background, preset: src.preset.clone() });
             doc.insert_above(Some(id), g)
         };
-        fit_canvas(doc);
+        let fitted = fit_canvas(doc);
         *active = Some(nid);
-        Ok((nid, rect))
+        Ok((nid, rect, fitted))
     })?;
+    follow_shift(s, (sx.saturating_add(fx), sy.saturating_add(fy)));
     crate::layer_multi_cmds::set_selection(s, vec![nid], Some(nid), Some(nid))?;
     Ok(json!({"layer": nid.0, "rect": [rect.x0, rect.y0, rect.width(), rect.height()]}))
 }
