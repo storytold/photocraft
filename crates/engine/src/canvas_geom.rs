@@ -67,8 +67,9 @@ fn map_fill(a: &Affine, f: &mut Fill) {
     }
 }
 
-/// Rebuilds a type layer's PSD `TySh` block for its current transform, keeping its pixels.
-fn retag_text(dpi: f32, t: &mut TextLayer) {
+/// Rebuilds a type layer's PSD `TySh` block for its current transform and colours, keeping its
+/// pixels.
+pub(crate) fn retag_text(dpi: f32, t: &mut TextLayer) {
     if t.psd_raw.is_none() {
         return;
     }
