@@ -218,7 +218,8 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
 
     // DNG 1.6 ProfileGainTableMap: the local tone mapping that phones (Samsung Expert RAW) rely on
     // for their default look. Without it the rendering is darker in the shadows.
-    if ifd0.has(tag::PROFILE_GAIN_TABLE_MAP) || raw.has(tag::PROFILE_GAIN_TABLE_MAP) {
+    let gain_table_map = ifd0.has(tag::PROFILE_GAIN_TABLE_MAP) || raw.has(tag::PROFILE_GAIN_TABLE_MAP);
+    if gain_table_map {
         warnings.push("DNG ProfileGainTableMap (local tone mapping) is not applied".to_string());
     }
 
@@ -272,6 +273,21 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
     if color.calibrations.is_empty() && (is_cfa || samples != 1) {
         warnings.push("the DNG has no colour matrix; colours are approximate".to_string());
     }
+    // The DNG specification applies ProfileGainTableMap first, in linear light, then this curve.
+    // Profiles that carry both (Apple ProRAW, Pixel) build the curve for gained data: without the
+    // map it crushes the shadows (an iPhone 12 Pro file: mean dE against its own preview 15.7 with
+    // no curve, 24.2 with it), so the curve waits until the map is applied.
+    let tone_curve = match ifd0.get(tag::PROFILE_TONE_CURVE) {
+        Some(_) if gain_table_map => {
+            warnings.push("DNG ProfileToneCurve is not applied without its ProfileGainTableMap".to_string());
+            Vec::new()
+        }
+        Some(e) => profile_tone_curve(&t.floats(e)).unwrap_or_else(|| {
+            warnings.push("malformed DNG ProfileToneCurve; no tone curve applied".to_string());
+            Vec::new()
+        }),
+        None => Vec::new(),
+    };
     let baseline_exposure = t.tag_floats(&ifd0, tag::BASELINE_EXPOSURE).first().copied().unwrap_or(0.0)
         + t.tag_floats(&raw, tag::BASELINE_EXPOSURE_OFFSET).first().copied().unwrap_or(0.0);
     let model = t.tag_ascii(&ifd0, tag::UNIQUE_CAMERA_MODEL).or_else(|| t.tag_ascii(&ifd0, tag::MODEL));
@@ -294,8 +310,81 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
         orientation: crate::tiff::orientation(t.tag_uint(&ifd0, tag::ORIENTATION)),
         baseline_exposure: if baseline_exposure.is_finite() { baseline_exposure.clamp(-10.0, 10.0) } else { 0.0 },
         gain_maps,
-        tone_curve: Vec::new(),
+        tone_curve,
         black_point: 0.0,
         warnings,
     })
+}
+
+/// DNG ProfileToneCurve (DNG 1.2.0.0): `[input, output]` pairs in linear gamma, both in 0–1,
+/// starting at (0, 0) and ending at (1, 1); the camera profile's default tone curve (Sigma,
+/// DJI and phone DNGs carry one). It is applied like a measured camera profile's curve
+/// ([`crate::Sensor::tone_curve`]: per channel, after exposure).
+/// The specification interpolates the samples with a cubic spline, so the curve is returned
+/// as that spline ([`spline_resampled`]), sampled densely enough that the log-linear
+/// interpolation of [`crate::develop::tone`] between samples follows it.
+/// `None` when the values are not such a curve: inputs must strictly increase and outputs must
+/// not decrease (the Camera Raw previews invert the curve).
+fn profile_tone_curve(v: &[f64]) -> Option<Vec<[f32; 2]>> {
+    let (pairs, rest) = v.as_chunks::<2>();
+    if pairs.len() < 2 || !rest.is_empty() {
+        return None;
+    }
+    let curve: Vec<[f32; 2]> = pairs.iter().map(|[x, y]| [*x as f32, *y as f32]).collect();
+    let in_range = curve.iter().flatten().all(|c| c.is_finite() && (0.0..=1.0).contains(c));
+    let increasing = curve.windows(2).all(|w| w[1][0] > w[0][0] && w[1][1] >= w[0][1]);
+    let (first, last) = (curve.first()?, curve.last()?);
+    let ends = first[0] == 0.0 && first[1] == 0.0 && last[0] == 1.0 && last[1] == 1.0;
+    let identity = curve.iter().all(|[x, y]| x == y);
+    (in_range && increasing && ends).then(|| if identity { Vec::new() } else { spline_resampled(&curve) })
+}
+
+/// Samples of the natural cubic spline (zero second derivative at both ends; the DNG
+/// specification asks for a cubic spline without naming end conditions) through `knots`, which
+/// have strictly increasing inputs: 1025 points spaced evenly in the square root of the input,
+/// so the shadows, where tone curves are steep, get most of them, plus the knots themselves at
+/// their own outputs. Outputs are clamped to 0–1 and made non-decreasing, since a spline can
+/// overshoot between knots.
+fn spline_resampled(knots: &[[f32; 2]]) -> Vec<[f32; 2]> {
+    let n = knots.len();
+    let x: Vec<f64> = knots.iter().map(|k| f64::from(k[0])).collect();
+    let y: Vec<f64> = knots.iter().map(|k| f64::from(k[1])).collect();
+    // Second derivatives m: a tridiagonal system (Thomas algorithm), m[0] = m[n-1] = 0.
+    let mut m = vec![0.0f64; n];
+    if n > 2 {
+        let mut c = vec![0.0f64; n];
+        let mut d = vec![0.0f64; n];
+        for i in 1..n - 1 {
+            let (h0, h1) = (x[i] - x[i - 1], x[i + 1] - x[i]);
+            let rhs = 6.0 * ((y[i + 1] - y[i]) / h1 - (y[i] - y[i - 1]) / h0);
+            let diag = 2.0 * (h0 + h1) - h0 * c[i - 1];
+            c[i] = h1 / diag;
+            d[i] = (rhs - h0 * d[i - 1]) / diag;
+        }
+        for i in (1..n - 1).rev() {
+            m[i] = d[i] - c[i] * m[i + 1];
+        }
+    }
+    let eval = |v: f64| -> f64 {
+        let i = x.partition_point(|&k| k <= v).clamp(1, n - 1);
+        let (x0, x1, h) = (x[i - 1], x[i], x[i] - x[i - 1]);
+        let (a, b) = ((x1 - v) / h, (v - x0) / h);
+        a * y[i - 1] + b * y[i] + ((a * a * a - a) * m[i - 1] + (b * b * b - b) * m[i]) * h * h / 6.0
+    };
+    const SAMPLES: usize = 1025;
+    let mut xs: Vec<f64> = (0..SAMPLES).map(|i| (i as f64 / (SAMPLES - 1) as f64).powi(2)).collect();
+    xs.extend(&x);
+    xs.sort_by(f64::total_cmp);
+    xs.dedup();
+    let mut out = Vec::with_capacity(xs.len());
+    let mut floor = 0.0f32;
+    for v in xs {
+        let o = match x.binary_search_by(|k| k.total_cmp(&v)) {
+            Ok(i) => y[i],
+            Err(_) => eval(v),
+        };
+        floor = floor.max(o.clamp(0.0, 1.0) as f32);
+        out.push([v as f32, floor]);
+    }
+    out
 }
