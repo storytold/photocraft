@@ -3,7 +3,6 @@
 
 use std::sync::mpsc::{Receiver, TryRecvError};
 
-use semver::Version;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -60,31 +59,6 @@ impl Updates {
         };
         true
     }
-}
-
-/// Interpret GitHub's latest-release response. Never trust a remote URL: construct the release
-/// page from a validated tag in our own repository. Build metadata doesn't affect precedence.
-pub fn parse_release(bytes: &[u8], current: &str) -> CheckResult {
-    #[derive(Deserialize)]
-    struct GithubRelease {
-        tag_name: String,
-        draft: bool,
-        prerelease: bool,
-    }
-    let release: GithubRelease = serde_json::from_slice(bytes).map_err(|e| format!("Invalid release response: {e}"))?;
-    if release.draft || release.prerelease {
-        return Ok(None);
-    }
-    let tag = &release.tag_name;
-    if tag.len() > 128 || !tag.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'+')) {
-        return Err("Invalid release tag".into());
-    }
-    let version = Version::parse(tag.strip_prefix('v').unwrap_or(tag)).map_err(|e| format!("Invalid release version: {e}"))?;
-    let current = Version::parse(current).map_err(|e| format!("Invalid installed version: {e}"))?;
-    if !version.pre.is_empty() || !version.cmp_precedence(&current).is_gt() {
-        return Ok(None);
-    }
-    Ok(Some(Release { version: version.to_string(), url: format!("{RELEASES}/tag/{tag}") }))
 }
 
 fn empty_params(p: &Value) -> Result<()> {
@@ -146,36 +120,6 @@ pub fn specs() -> Vec<CommandSpec> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn response(tag: &str) -> Vec<u8> {
-        serde_json::to_vec(&json!({"tag_name": tag, "draft": false, "prerelease": false, "html_url": "https://untrusted.example"})).unwrap()
-    }
-
-    #[test]
-    fn semantic_versions_and_trusted_links() {
-        let release = parse_release(&response("v0.10.0"), "0.9.0").unwrap().unwrap();
-        assert_eq!(release.version, "0.10.0");
-        assert_eq!(release.url, format!("{RELEASES}/tag/v0.10.0"));
-        for tag in ["v0.9.0", "v0.8.9", "v0.9.0+build.2", "v1.0.0-rc.1"] {
-            assert_eq!(parse_release(&response(tag), "0.9.0").unwrap(), None, "{tag}");
-        }
-        assert!(parse_release(&response("0.9.0"), "0.9.0-rc.1").unwrap().is_some());
-    }
-
-    #[test]
-    fn unpublished_and_hostile_responses() {
-        for flag in ["draft", "prerelease"] {
-            let mut v: Value = serde_json::from_slice(&response("v1.0.0")).unwrap();
-            v[flag] = json!(true);
-            assert_eq!(parse_release(&serde_json::to_vec(&v).unwrap(), "0.7.0").unwrap(), None);
-        }
-        for tag in ["", "latest", "v1.0.0/../evil", "v1.0.0?next=evil", "v1.0.0\n", "版本1.0.0", "999999999999999999999.0.0"] {
-            assert!(parse_release(&response(tag), "0.7.0").is_err(), "{tag}");
-        }
-        for bytes in [b"not JSON".as_slice(), b"{}", b"null", b"{\"tag_name\":42}"] {
-            assert!(parse_release(bytes, "0.7.0").is_err());
-        }
-    }
 
     #[test]
     fn commands_are_nonblocking_deduplicated_and_queryable_without_a_document() {
