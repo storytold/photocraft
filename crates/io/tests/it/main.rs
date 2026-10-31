@@ -30,6 +30,8 @@ mod gif_frames;
 mod guides_v2;
 mod heif;
 mod heif_unsupported;
+mod jxl;
+mod jxl_unsupported;
 mod krita_corpus;
 mod lab16;
 mod large_files;

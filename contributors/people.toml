@@ -282,3 +282,7 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.diegochagas]
+real_name = "Diego Chagas"
+display_name = "Diego Chagas"

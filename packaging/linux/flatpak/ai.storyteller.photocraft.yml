@@ -98,7 +98,7 @@ modules:
         CARGO_HOME: /run/build/photocraft/cargo
         CARGO_NET_OFFLINE: 'true'
     build-commands:
-      - cargo --offline build --release --locked -p photocraft --features heif
+      - cargo --offline build --release --locked -p photocraft --features heif,jxl
       - install -Dm755 target/release/photocraft /app/bin/photocraft
       - install -Dm644 NOTICE /app/share/doc/photocraft/NOTICE
       - install -Dm644 ATTRIBUTION.md /app/share/doc/photocraft/ATTRIBUTION.md

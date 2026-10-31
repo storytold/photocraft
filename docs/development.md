@@ -663,6 +663,7 @@ against committed **sha256 manifests**. All pins are in one place:
 |---|---|---|---|
 | `corpus/photoshop/` | 258 PSDs we authored with Photoshop: smart filters, layer-style effect shapes, the text engine, adjustments in every mode and depth | https://github.com/storytold/photocraft-corpus (ours, MIT OR Apache-2.0) | `xtask/photoshop-corpus.sha256` |
 | `corpus/gimp/` | 14 XCF files written by GIMP 3.2.6 with GIMP's merged rendering of each as a PNG (28 files), the oracles of the XCF reader | https://github.com/storytold/photocraft-corpus (ours, MIT OR Apache-2.0; its own pin) | `xtask/gimp-corpus.sha256` |
+| `corpus/jxl/` | 12 tiny JPEG XL files encoded by libjxl's `cjxl` from procedural images, plus the source JPEG of two of them (13 files, 7 KB), the oracles of the JPEG XL decoder (feature `jxl`) | https://github.com/storytold/photocraft-corpus (ours, MIT OR Apache-2.0; its own pin) | `xtask/jxl-corpus.sha256` |
 | `corpus/psd/` | 170 small psd-tools and ag-psd files, the mix most PSD tests use | psd-tools and ag-psd upstreams (MIT) | `xtask/psd-corpus.sha256` |
 | `corpus/psd-tools/` | the complete psd-tools test set (309 files) | psd-tools upstream (MIT) | `xtask/psd-tools-corpus.sha256` |
 | `corpus/heif/` | 9 small HEIC/HEIF files (checkerboards, RGB strips, a grid-tiled photo with EXIF/XMP, each with Apple's decode as `.ref.png`; a 10-bit RGBA file with its source PNG), for the `heif` feature | heic-rs (MIT OR Apache-2.0) and pillow-heif (BSD-3-Clause) upstreams | `xtask/heif-corpus.sha256` |
@@ -674,7 +675,7 @@ against committed **sha256 manifests**. All pins are in one place:
 ```sh
 cargo xtask corpus                 # where each corpus lives, its pin, present or missing
 cargo xtask corpus --all           # fetch everything missing or stale (cold: about 15 s; verified copies are left alone)
-cargo xtask test-corpus            # fetch, then cargo test --release --features corpus (+ heif on codecs, io) on psd, codecs, io, engine
+cargo xtask test-corpus            # fetch, then cargo test --release --features corpus (+ heif, jxl on codecs, io) on psd, codecs, io, engine
 cargo xtask test-corpus -p io      # narrow to one crate (repeat -p for more)
 cargo xtask test-corpus --changed  # only if psd, io, codecs, compose, gpu, text, format or affinity changed vs origin/main
 cargo xtask test-corpus -- --nocapture   # pass arguments to the test binaries (per-file tables)
@@ -685,8 +686,8 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 
 - The corpus tests sit behind the `corpus` cargo feature of `photocraft-psd`, `photocraft-codecs`,
   `photocraft-io` and `photocraft-engine`, so plain `cargo test` neither compiles nor needs them.
-  The HEIF ones also need the `heif` feature of `photocraft-codecs`/`photocraft-io` (test-corpus
-  turns it on).
+  The HEIF ones also need the `heif` feature of `photocraft-codecs`/`photocraft-io` and the JPEG XL
+  ones the `jxl` feature (test-corpus turns both on).
 - With the feature on, a missing corpus is a failure ("run `cargo xtask corpus --all`"), never a
   silent skip, and every floor is enforced.
 - If you touch psd, io, codecs, compose, gpu, text or format, run `cargo xtask test-corpus` before
@@ -703,7 +704,7 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
   and push there.
 - **Consuming copy:** `corpus/photoshop/` here. It is a plain directory: the pinned snapshot
   (downloaded as the codeload tarball of the pinned commit, then verified).
-- **Local mode:** `cargo xtask corpus --photoshop --local` copies `photoshop/` (and `--gimp --local` `gimp/`) from
+- **Local mode:** `cargo xtask corpus --photoshop --local` copies `photoshop/` (`--gimp` and `--jxl --local` the other sets) from
   `../photocraft-corpus` (or `PHOTOCRAFT_CORPUS_REPO=<path>`) instead of downloading. It warns when
   the clone's HEAD isn't the pin or its files differ from the manifest. Use it to test regenerated
   files before pushing: `cargo xtask test-corpus --local` copies them and runs every corpus test.
