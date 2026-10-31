@@ -604,6 +604,29 @@ fn esc_leaves_full_screen_with_the_crop_tool_showing_its_default_frame() {
     assert_eq!(app.ui.view.screen_mode, "standard");
 }
 
+/// #9275: a gesture on the default frame is something to cancel, so Esc in full screen cancels it
+/// (as in Standard Screen Mode) and full screen stays.
+#[test]
+fn esc_in_full_screen_cancels_a_crop_drag_on_the_default_frame() {
+    use crate::canvas::{ToolEvent, tool_event};
+    let none = egui::Modifiers::NONE;
+    // Inside draws a new box, on the corner handle resizes, outside turns.
+    for (what, from) in [("draw", [20.0, 20.0]), ("resize", [100.0, 80.0]), ("turn", [130.0, 110.0])] {
+        let (mut app, ctx) = app_with(1);
+        app.ui.tool = crate::Tool::Crop;
+        crate::crop_ui::ensure_frame(&mut app);
+        menu(&mut app, &ctx, "view.screenMode.fullScreen", json!({})).unwrap();
+        tool_event(&mut app, ToolEvent::Down { x: from[0], y: from[1], pressure: 1.0 }, none);
+        tool_event(&mut app, ToolEvent::Move { x: 60.0, y: 50.0, pressure: 1.0 }, none);
+        assert!(app.crop.drag.is_some() && app.crop.default_frame, "{what}: mid-gesture on the default frame");
+        press_esc(&mut app, &ctx);
+        assert_eq!(app.ui.view.screen_mode, "fullScreen", "{what}: Esc cancels the gesture, full screen stays");
+        assert!(app.crop.drag.is_none(), "{what}: the gesture is cancelled");
+        tool_event(&mut app, ToolEvent::Up { x: 60.0, y: 50.0 }, none);
+        assert!(!crate::crop_ui::pending(&app), "{what}: the release leaves no pending crop");
+    }
+}
+
 #[test]
 fn esc_leaves_full_screen_modes_unless_something_else_owns_it() {
     let (mut app, ctx) = app_with(1);
