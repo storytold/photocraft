@@ -419,33 +419,31 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     }
     if let Some(mut p) = edit {
         p["layer"] = json!(id.0);
-        
-match app.run("shape.edit", p) {
-    Ok(_) => {
-        // Remember recently used colors after a successful edit.
-        if let Some(rgb) = recent {
-            crate::paint_picker::remember(app, rgb);
-        }
 
-        // Only a successful Properties edit updates new-arrow defaults,
-        // and only while the user explicitly enables the checkbox.
-        let target = app.session.active().map(|st| (st.doc.id.0, id.0));
-        let linked = ui.ctx().data(|data| {
-            let state = data
-                .get_temp::<ArrowDefaultLink>(arrow_default_link_id())
-                .unwrap_or_default();
-            state.enabled && state.target == target
-        });
+        match app.run("shape.edit", p) {
+            Ok(_) => {
+                // Remember recently used colors after a successful edit.
+                if let Some(rgb) = recent {
+                    crate::paint_picker::remember(app, rgb);
+                }
 
-        if linked {
-            copy_arrow_to_tool_defaults(app, id);
+                // Only a successful Properties edit updates new-arrow defaults,
+                // and only while the user explicitly enables the checkbox.
+                let target = app.session.active().map(|st| (st.doc.id.0, id.0));
+                let linked = ui.ctx().data(|data| {
+                    let state = data.get_temp::<ArrowDefaultLink>(arrow_default_link_id()).unwrap_or_default();
+                    state.enabled && state.target == target
+                });
+
+                if linked {
+                    copy_arrow_to_tool_defaults(app, id);
+                }
+            }
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
         }
-    }
-    Err(e) => {
-        app.ui.status = e;
-        app.ui.status_error = true;
-    }
-}
         if !ui.input(|i| i.pointer.any_down()) {
             ui.data_mut(|d| {
                 let gesture = d.get_temp_mut_or_default::<(u64, u64)>(gesture_key);
