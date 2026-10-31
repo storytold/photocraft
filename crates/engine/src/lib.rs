@@ -166,7 +166,7 @@ pub use doc_state::{CopiedStyle, DocState, PRECHECKED, ToolState};
 pub use error::{EngineError, Result};
 pub use session::move_item;
 use session::restore_target;
-pub(crate) use session::{carry_visibility, fix_selection, visibility_changes};
+pub(crate) use session::{carry_outside_history, carry_visibility, fix_selection, visibility_changes};
 
 /// The pixels of a raster layer (typically one a command just created), as an error instead
 /// of a panic if the layer has none.

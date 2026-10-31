@@ -8,8 +8,9 @@ pub(crate) const LAYER_EDGES: Color32 = Color32::from_rgb(0x2d, 0x8c, 0xeb);
 /// View › Show › Layer Edges: the active layer's content bounds (cached per tile) where the canvas
 /// shows them. During a Move drag that is at the offset the image was drawn with this frame, so
 /// the outline moves in lockstep with the layer's pixels (#2413).
-pub(crate) fn layer_edges_rect(app: &PhotocraftApp, idx: usize) -> Option<photocraft_geom::Rect> {
-    if !app.ui.view.shows(app.ui.view.show.layer_edges) {
+pub(crate) fn layer_edges_rect(app: &PhotocraftApp, viewport: egui::ViewportId, idx: usize) -> Option<photocraft_geom::Rect> {
+    // Extras is per document window (an arranged document's own).
+    if !(app.window_toggles_in(viewport, idx).extras && app.ui.view.show.layer_edges) {
         return None;
     }
     let st = app.session.documents().get(idx)?;

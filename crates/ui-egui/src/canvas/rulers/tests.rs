@@ -790,7 +790,7 @@ fn a_guide_dragged_onto_a_ruler_is_deleted_through_the_canvas() {
                 center: v.center,
                 flip: app.ui.view.flip_horizontal,
                 rotation: v.rotation,
-                aspect: app.ui.view.display_aspect(),
+                aspect: app.display_aspect(),
             };
             xf.to_screen(x, y)
         };

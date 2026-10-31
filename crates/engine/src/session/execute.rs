@@ -223,24 +223,24 @@ impl Session {
         fix_selection(st);
         channel_cmds::fix_view(st);
         // A canvas-size change (crop, Canvas Size, Image Size, rotation) moves the Color Sampler
-        // points with their pixels and drops the ones that land outside the new canvas. View
-        // state: not a history step. A mapped edit (the four above) gives the exact map; any other
-        // size change falls back to dropping whatever is now outside.
+        // points with their pixels and drops the ones that land outside the new canvas. Not a
+        // history step. A mapped edit (the four above) gives the exact map; any other size change
+        // falls back to dropping whatever is now outside.
         let mut samplers_removed = 0;
-        if let Some(a) = sampler_map {
-            let bounds = st.doc.bounds();
-            let n = st.color_samplers.len();
-            st.color_samplers.retain_mut(|p| {
-                let q = a.apply(photocraft_geom::Point::new(p[0], p[1]));
-                *p = [q.x, q.y];
-                bounds.contains(q.x.floor() as i32, q.y.floor() as i32)
-            });
-            samplers_removed = n - st.color_samplers.len();
-        } else if st.doc.size != before.size {
-            let bounds = st.doc.bounds();
-            let n = st.color_samplers.len();
-            st.color_samplers.retain(|p| bounds.contains(p[0].floor() as i32, p[1].floor() as i32));
-            samplers_removed = n - st.color_samplers.len();
+        if !st.doc.color_samplers.is_empty() && (sampler_map.is_some() || st.doc.size != before.size) {
+            let doc = Arc::make_mut(&mut st.doc);
+            let bounds = doc.bounds();
+            let n = doc.color_samplers.len();
+            if let Some(a) = sampler_map {
+                doc.color_samplers.retain_mut(|p| {
+                    let q = a.apply(photocraft_geom::Point::new(p[0], p[1]));
+                    *p = [q.x, q.y];
+                    bounds.contains(q.x.floor() as i32, q.y.floor() as i32)
+                });
+            } else {
+                doc.color_samplers.retain(|p| bounds.contains(p[0].floor() as i32, p[1].floor() as i32));
+            }
+            samplers_removed = n - doc.color_samplers.len();
         }
         // The painting symmetry stays on its pixels too (Photoshop keeps it as a path).
         if let Some(a) = symmetry_map {

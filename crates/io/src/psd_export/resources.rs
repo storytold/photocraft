@@ -29,6 +29,23 @@ pub(crate) fn pascal_names_resource(names: &[&str]) -> Vec<u8> {
     v
 }
 
+/// View › Pixel Aspect Ratio (resource 1064). Photoshop writes it in every file, square or not, so
+/// a file read and saved again keeps it.
+pub(crate) fn pixel_aspect_resource(doc: &Document) -> ImageResource {
+    ImageResource::new(photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO, photocraft_psd::PixelAspectRatio::new(doc.pixel_aspect).to_bytes())
+}
+
+/// Color Sampler points as Photoshop writes them: the legacy 1038 and the current 1073, each
+/// point at the centre of its pixel. None when the document has no points.
+pub(crate) fn color_sampler_resources(doc: &Document) -> Vec<ImageResource> {
+    if doc.color_samplers.is_empty() {
+        return Vec::new();
+    }
+    let s = photocraft_psd::ColorSamplers { points: doc.color_samplers.iter().map(|p| p.map(|v| v + 0.5)).collect() };
+    use photocraft_psd::resources::ids;
+    vec![ImageResource::new(ids::COLOR_SAMPLERS_OLD, s.to_legacy_bytes()), ImageResource::new(ids::COLOR_SAMPLERS, s.to_bytes())]
+}
+
 pub(crate) fn guides_resource(doc: &Document) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&1u32.to_be_bytes());
@@ -88,6 +105,16 @@ pub(crate) fn path_resources(doc: &Document, warnings: &mut Vec<String>) -> Vec<
 
 /// Whether an imported (unmodelled) resource still describes the document and is written back.
 pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bool {
+    // The pixel aspect ratio and the Color Sampler points are the document's own
+    // (`pixel_aspect_resource`, `color_sampler_resources`), never a kept copy.
+    if matches!(
+        id,
+        photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO
+            | photocraft_psd::resources::ids::COLOR_SAMPLERS
+            | photocraft_psd::resources::ids::COLOR_SAMPLERS_OLD
+    ) {
+        return false;
+    }
     // Measurement scale / count resources: only while they still describe the document.
     if !crate::annotations_map::keep_resource(doc, id) {
         return false;

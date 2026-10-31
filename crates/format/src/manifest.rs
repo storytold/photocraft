@@ -49,6 +49,12 @@ pub struct DocM {
     /// The rulers' zero point in document pixels (absent in older files: the top-left).
     #[serde(default)]
     pub ruler_origin: [f64; 2],
+    /// View › Pixel Aspect Ratio, pixel width / height (absent in older files: square).
+    #[serde(default = "square_pixels")]
+    pub pixel_aspect: f64,
+    /// Color Sampler points in document pixels (absent in older files: none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_samplers: Vec<[f64; 2]>,
     pub selection: Option<SurfaceM>,
     pub metadata: MetadataM,
     pub global_light: GlobalLight,
@@ -365,6 +371,10 @@ fn is_zero_u32(v: &u32) -> bool {
 
 fn default_channel_color() -> Color {
     photocraft_doc::AlphaChannel::DEFAULT_COLOR
+}
+
+fn square_pixels() -> f64 {
+    1.0
 }
 
 fn default_channel_opacity() -> f32 {

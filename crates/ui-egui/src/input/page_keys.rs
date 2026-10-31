@@ -64,7 +64,7 @@ pub fn handle(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     }
     app.sync_views();
     let Some(doc_size) = app.session.active().map(|st| [st.doc.size.width as f32, st.doc.size.height as f32]) else { return false };
-    let (ppp, aspect, flip, overscroll) = (app.ppp, app.ui.view.display_aspect(), app.ui.view.flip_horizontal, app.session.prefs().tools.overscroll);
+    let (ppp, aspect, flip, overscroll) = (app.ppp, app.display_aspect(), app.ui.view.flip_horizontal, app.session.prefs().tools.overscroll);
     let ppp = if ppp.is_finite() && ppp > 0.0 { ppp } else { 1.0 };
     let Some(view) = app.ui.views.get_mut(i) else { return false };
     let zoom = view.zoom / ppp;

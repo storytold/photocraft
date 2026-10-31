@@ -43,10 +43,6 @@ pub struct DocState {
     /// A floating selection (`select.float`): the cut piece and where it floats, until dropped
     /// (view state: the document is unchanged until `select.drop`).
     pub floating: Option<float_cmds::Floating>,
-    /// Color Sampler points (`view.colorSamplers.*`, #1046): numbered sample positions in document
-    /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
-    /// to `.pcraft` or PSD, and not a history step.
-    pub color_samplers: Vec<[f64; 2]>,
     /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
     /// the document as opened. Kept for the session only, as in Photoshop: not history states,
     /// and not saved with the document.
@@ -102,7 +98,6 @@ impl DocState {
             fx_collapsed: Vec::new(),
             show_only: None,
             floating: None,
-            color_samplers: Vec::new(),
             snapshots: vec![first],
             next_snapshot: 1,
             source_snapshot: None,

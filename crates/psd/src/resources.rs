@@ -24,6 +24,12 @@ pub mod ids {
     pub const GLOBAL_ALTITUDE: u16 = 1049;
     /// Version info (has real merged data flag).
     pub const VERSION_INFO: u16 = 1057;
+    /// Pixel aspect ratio (`PixelAspectRatio` structure).
+    pub const PIXEL_ASPECT_RATIO: u16 = 1064;
+    /// Color Sampler points (`ColorSamplers`), the legacy version 1 record.
+    pub const COLOR_SAMPLERS_OLD: u16 = 1038;
+    /// Color Sampler points (`ColorSamplers`).
+    pub const COLOR_SAMPLERS: u16 = 1073;
     /// EXIF data 1.
     pub const EXIF: u16 = 1058;
     /// XMP metadata.
@@ -101,6 +107,124 @@ impl ResolutionInfo {
         v.put_u32(self.v_res_fixed);
         v.put_u16(self.v_res_unit);
         v.put_u16(self.height_unit);
+        v
+    }
+}
+
+/// Pixel aspect ratio (resource 1064): the width of a pixel over its height.
+///
+/// Version 2 is current; version 1 files stored NTSC and PAL ratios about 5 % off, but the
+/// number is still the ratio the file asked for.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct PixelAspectRatio {
+    /// Structure version (1 or 2).
+    pub version: u32,
+    /// Pixel width / height (1 = square).
+    pub ratio: f64,
+}
+
+impl PixelAspectRatio {
+    /// A version 2 record of `ratio`.
+    pub fn new(ratio: f64) -> Self {
+        PixelAspectRatio { version: 2, ratio }
+    }
+    /// Parses 12 bytes.
+    pub fn from_bytes(b: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(b);
+        Ok(PixelAspectRatio { version: r.u32()?, ratio: r.f64()? })
+    }
+    /// Serializes to 12 bytes.
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(12);
+        v.put_u32(self.version);
+        v.put_f64(self.ratio);
+        v
+    }
+}
+
+/// Color Sampler points (resources 1073 and, legacy, 1038): positions in document pixels, `[x, y]`.
+///
+/// Photoshop writes both. 1073 is version 3: per point a 2-byte record length (14), the vertical
+/// then horizontal position as 32-bit floats, a colour space (−1) and a 2-byte field (8).
+/// 1038 is version 1: the vertical then horizontal position in 1/32-pixel fixed point and the
+/// colour space. Photoshop stores the centre of the sampled pixel (`x + 0.5`); version 2 (floats
+/// and a depth, no record length) is read too.
+#[derive(Debug, Clone, PartialEq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ColorSamplers {
+    /// Positions `[x, y]` in document pixels, in sampler order (#1, #2, …).
+    pub points: Vec<[f64; 2]>,
+}
+
+impl ColorSamplers {
+    /// Parses resource 1073 (versions 1–3) or 1038 (version 1).
+    pub fn from_bytes(b: &[u8]) -> Result<Self> {
+        let mut r = Reader::new(b);
+        let version = r.u32()?;
+        let count = r.u32()?;
+        let min_record = match version {
+            1 => 10,
+            2 => 12,
+            3 => 14,
+            v => return Err(PsdError::Unsupported(format!("color samplers version {v}"))),
+        };
+        r.check_count(u64::from(count), min_record)?;
+        let mut points = Vec::with_capacity(usize::try_from(count).unwrap_or(0));
+        for _ in 0..count {
+            let float = |r: &mut Reader<'_>| r.u32().map(|v| f64::from(f32::from_bits(v)));
+            let (y, x) = match version {
+                1 => {
+                    let (y, x) = (r.i32()?, r.i32()?);
+                    r.skip(2)?;
+                    (f64::from(y) / 32.0, f64::from(x) / 32.0)
+                }
+                2 => {
+                    let (y, x) = (float(&mut r)?, float(&mut r)?);
+                    r.skip(4)?;
+                    (y, x)
+                }
+                _ => {
+                    let size = usize::from(r.u16()?);
+                    if size < 14 {
+                        return Err(PsdError::Invalid(format!("color sampler record of {size} bytes")));
+                    }
+                    let (y, x) = (float(&mut r)?, float(&mut r)?);
+                    r.skip(size - 10)?;
+                    (y, x)
+                }
+            };
+            points.push([x, y]);
+        }
+        Ok(ColorSamplers { points })
+    }
+
+    /// Resource 1073 as Photoshop writes it (version 3).
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(8 + 14 * self.points.len());
+        v.put_u32(3);
+        v.put_u32(u32::try_from(self.points.len()).unwrap_or(u32::MAX));
+        for &[x, y] in &self.points {
+            v.put_u16(14);
+            v.put_u32((y as f32).to_bits());
+            v.put_u32((x as f32).to_bits());
+            v.put_i16(-1);
+            v.put_u16(8);
+        }
+        v
+    }
+
+    /// The legacy resource 1038 (version 1), which Photoshop writes alongside 1073.
+    pub fn to_legacy_bytes(&self) -> Vec<u8> {
+        let mut v = Vec::with_capacity(8 + 10 * self.points.len());
+        v.put_u32(1);
+        v.put_u32(u32::try_from(self.points.len()).unwrap_or(u32::MAX));
+        for &[x, y] in &self.points {
+            // `as` saturates (and NaN is 0): an out-of-range point can't wrap.
+            v.put_i32((y * 32.0).round() as i32);
+            v.put_i32((x * 32.0).round() as i32);
+            v.put_i16(-1);
+        }
         v
     }
 }
@@ -290,6 +414,54 @@ mod tests {
         let back = read_section(&mut Reader::new(&out)).unwrap();
         assert_eq!(back, res);
         out
+    }
+
+    /// Resources 1073 and 1038 as Photoshop 2026 wrote them for samplers clicked on pixels
+    /// (10, 20), (150, 100) and (299, 199) of a 300 × 200 document.
+    const PS_1073: &str = "00000003 00000003 000e 41a40000 41280000 ffff 0008 000e 42c90000 43168000 ffff 0008 000e 43478000 4395c000 ffff 0008";
+    const PS_1038: &str = "00000001 00000003 00000290 00000150 ffff 00000c90 000012d0 ffff 000018f0 00002570 ffff";
+
+    fn hex(s: &str) -> Vec<u8> {
+        let s: String = s.split_whitespace().collect();
+        (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap()).collect()
+    }
+
+    #[test]
+    fn color_samplers_read_and_write_photoshops_bytes() {
+        let want = vec![[10.5, 20.5], [150.5, 100.5], [299.5, 199.5]];
+        let new = ColorSamplers::from_bytes(&hex(PS_1073)).unwrap();
+        assert_eq!(new.points, want);
+        assert_eq!(ColorSamplers::from_bytes(&hex(PS_1038)).unwrap().points, want);
+        assert_eq!(new.to_bytes(), hex(PS_1073));
+        assert_eq!(new.to_legacy_bytes(), hex(PS_1038));
+        // Version 2: floats and a depth, no record length.
+        let v2 = hex("00000002 00000001 41a40000 41280000 ffff 0008");
+        assert_eq!(ColorSamplers::from_bytes(&v2).unwrap().points, [[10.5, 20.5]]);
+    }
+
+    #[test]
+    fn damaged_color_samplers_are_errors_not_panics() {
+        for bad in [
+            "",
+            "00000003",
+            "00000003 ffffffff",
+            "00000009 00000000",
+            "00000003 00000001 0004 41a40000 41280000 ffff 0008",
+            "00000001 00000002 00000290 00000150 ffff",
+        ] {
+            assert!(ColorSamplers::from_bytes(&hex(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn pixel_aspect_ratio_round_trips_and_short_data_is_an_error() {
+        let par = PixelAspectRatio::new(0.9);
+        let bytes = par.to_bytes();
+        assert_eq!(bytes.len(), 12);
+        assert_eq!(&bytes[..4], &[0, 0, 0, 2]);
+        assert_eq!(PixelAspectRatio::from_bytes(&bytes).unwrap(), par);
+        assert!(PixelAspectRatio::from_bytes(&bytes[..11]).is_err());
+        assert!(PixelAspectRatio::from_bytes(&[]).is_err());
     }
 
     #[test]

@@ -1,9 +1,9 @@
 //! Color Sampler points (#1046): numbered colour readings pinned to canvas pixels and listed in
 //! the Info panel, so a fixed position can be compared instead of chasing the live pointer.
 //!
-//! Points are per-document view state ([`crate::DocState::color_samplers`]): they belong to their
-//! document, are discarded when it closes, and are not saved to `.pcraft` or PSD. Placing, moving
-//! and removing them changes no pixels and adds no History step, so they are not journaled. Each
+//! Points belong to their document ([`photocraft_doc::Document::color_samplers`]) and are saved
+//! with it, in `.pcraft` and PSD (resource 1073). Placing, moving and removing them changes no
+//! pixels and adds no History step (an undo keeps the current points), so they are not journaled. Each
 //! point reads one composite pixel (no averaging); its values match the Info panel's pointer
 //! readout (RGB 0–255 and colour-managed CMYK percentages, as in the Color Picker).
 
@@ -11,10 +11,10 @@ use photocraft_doc::Document;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
-use crate::{DocState, EngineError, Result, Session};
+use crate::{EngineError, Result, Session};
 
 /// Photoshop's Color Sampler limit: at most 10 points per document.
-pub const MAX_SAMPLERS: usize = 10;
+pub const MAX_SAMPLERS: usize = photocraft_doc::MAX_COLOR_SAMPLERS;
 
 fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
@@ -74,11 +74,11 @@ fn index_param(cmd: &str, p: &Value) -> Result<usize> {
     p.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()).ok_or_else(|| bad(cmd, "pass `index` (0-based)"))
 }
 
-/// Apply a Color Sampler change to the active document: view state, so no history step and no
-/// pixels. Bumps the revision (keeping a clean document clean) so UIs refresh.
-fn change<R>(s: &mut Session, f: impl FnOnce(&mut DocState) -> Result<R>) -> Result<R> {
+/// Apply a Color Sampler change to the active document's points: no history step and no pixels.
+/// Bumps the revision (keeping a clean document clean) so UIs refresh.
+fn change<R>(s: &mut Session, f: impl FnOnce(&mut Document) -> Result<R>) -> Result<R> {
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    let r = f(st)?;
+    let r = f(std::sync::Arc::make_mut(&mut st.doc))?;
     let clean = st.saved_revision == st.revision;
     st.revision += 1;
     if clean {
@@ -92,14 +92,14 @@ fn add(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "view.colorSamplers.add";
     let x = coord(CMD, p, "x")?;
     let y = coord(CMD, p, "y")?;
-    change(s, |st| {
-        let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
-        if st.color_samplers.len() >= MAX_SAMPLERS {
+    change(s, |doc| {
+        let pos = pixel(doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
+        if doc.color_samplers.len() >= MAX_SAMPLERS {
             return Err(EngineError::Other(format!("Color Sampler limit reached: at most {MAX_SAMPLERS} points per document")));
         }
-        st.color_samplers.push(pos);
-        let i = st.color_samplers.len() - 1;
-        Ok(json!({"index": i, "count": st.color_samplers.len(), "point": point_json(&st.doc, i, pos)}))
+        doc.color_samplers.push(pos);
+        let i = doc.color_samplers.len() - 1;
+        Ok(json!({"index": i, "count": doc.color_samplers.len(), "point": point_json(doc, i, pos)}))
     })
 }
 
@@ -108,41 +108,41 @@ fn move_point(s: &mut Session, p: &Value) -> Result<Value> {
     let i = index_param(CMD, p)?;
     let x = coord(CMD, p, "x")?;
     let y = coord(CMD, p, "y")?;
-    change(s, |st| {
-        let n = st.color_samplers.len();
+    change(s, |doc| {
+        let n = doc.color_samplers.len();
         if i >= n {
             return Err(bad(CMD, format!("no sample point {i} (the document has {n})")));
         }
-        let pos = pixel(&st.doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
-        st.color_samplers[i] = pos;
-        Ok(json!({"index": i, "point": point_json(&st.doc, i, pos)}))
+        let pos = pixel(doc, x, y).ok_or_else(|| EngineError::Other("the sample point is outside the canvas".into()))?;
+        doc.color_samplers[i] = pos;
+        Ok(json!({"index": i, "point": point_json(doc, i, pos)}))
     })
 }
 
 fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "view.colorSamplers.delete";
     let i = index_param(CMD, p)?;
-    change(s, |st| {
-        let n = st.color_samplers.len();
+    change(s, |doc| {
+        let n = doc.color_samplers.len();
         if i >= n {
             return Err(bad(CMD, format!("no sample point {i} (the document has {n})")));
         }
-        st.color_samplers.remove(i);
-        Ok(json!({"deleted": 1, "remaining": st.color_samplers.len()}))
+        doc.color_samplers.remove(i);
+        Ok(json!({"deleted": 1, "remaining": doc.color_samplers.len()}))
     })
 }
 
 fn clear(s: &mut Session, _p: &Value) -> Result<Value> {
-    change(s, |st| {
-        let n = st.color_samplers.len();
-        st.color_samplers.clear();
+    change(s, |doc| {
+        let n = doc.color_samplers.len();
+        doc.color_samplers.clear();
         Ok(json!({"deleted": n, "remaining": 0}))
     })
 }
 
 fn list(s: &mut Session, _p: &Value) -> Result<Value> {
     let st = s.active().ok_or(EngineError::NoDocument)?;
-    Ok(list_json(&st.doc, &st.color_samplers))
+    Ok(list_json(&st.doc, &st.doc.color_samplers))
 }
 
 pub fn specs() -> Vec<CommandSpec> {

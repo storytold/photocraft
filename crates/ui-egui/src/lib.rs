@@ -471,6 +471,8 @@ pub struct PhotocraftApp {
     /// The document `ui.selected_path` belongs to, as of the last [`Self::sync_views`]: a Paths
     /// panel selection never carries over to a same-named path in another tab.
     path_document: Option<(DocId, u64, std::sync::Weak<Document>)>,
+    /// The window whose settings (`state::WindowToggles`) are the live View menu values.
+    toggles_owner: Option<app::view::ToggleOwner>,
     pub fps: f32,
     pub(crate) last_frame_time: f64,
     thumbs: HashMap<(photocraft_doc::LayerId, u8), (u64, egui::TextureHandle)>,

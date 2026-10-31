@@ -230,7 +230,7 @@ fn perspective_crop(s: &mut Session, p: &Value) -> Result<Value> {
     let bg = s.tools.background;
     // The Color Sampler points follow their pixels through the homography, which the edit's
     // affine sampler map can't express: mapped here once the crop has gone through (#7760).
-    let samplers = s.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
+    let samplers = s.active().map(|d| d.doc.color_samplers.clone()).unwrap_or_default();
     let removed = s.samplers_removed;
     crate::analysis_cmds::compound(s, "Perspective Crop", |s| {
         if rasterize {
@@ -247,7 +247,7 @@ fn perspective_crop(s: &mut Session, p: &Value) -> Result<Value> {
     let kept = map_samplers(&samplers, &map, (w, h));
     s.samplers_removed = removed + (samplers.len() - kept.len());
     if let Some(d) = s.active_mut() {
-        d.color_samplers = kept;
+        std::sync::Arc::make_mut(&mut d.doc).color_samplers = kept;
     }
     let dpi = s.active().map(|d| d.doc.resolution_dpi);
     Ok(json!({"width": w, "height": h, "resolution": dpi, "corners": q}))
@@ -328,12 +328,12 @@ mod tests {
         let q = [[30.0, 12.0], [140.0, 25.0], [128.0, 110.0], [14.0, 95.0]];
         let (w, h) = (100.0, 80.0);
         let mut s = skewed_ramp(SampleType::U16, &q, w, h);
-        s.active_mut().unwrap().color_samplers = vec![[70.0, 60.0], [5.0, 5.0], [120.0, 40.0]];
+        std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).color_samplers = vec![[70.0, 60.0], [5.0, 5.0], [120.0, 40.0]];
         s.execute(CMD, json!({"corners": q, "width": w, "height": h})).unwrap();
         let to_out = Homography::rect_to_quad([0.0, 0.0, w, h], q).unwrap().inverse().unwrap();
         let st = s.active().unwrap();
-        assert_eq!(st.color_samplers.len(), 2, "(5, 5) lies outside the quad: {:?}", st.color_samplers);
-        for (p, old) in st.color_samplers.iter().zip([[70.0, 60.0], [120.0, 40.0]]) {
+        assert_eq!(st.doc.color_samplers.len(), 2, "(5, 5) lies outside the quad: {:?}", st.doc.color_samplers);
+        for (p, old) in st.doc.color_samplers.iter().zip([[70.0, 60.0], [120.0, 40.0]]) {
             let (u, v) = to_out.apply(old[0] + 0.5, old[1] + 0.5);
             assert!((p[0] + 0.5 - u).abs() < 1e-6 && (p[1] + 0.5 - v).abs() < 1e-6, "{old:?} -> {p:?}, want ({u:.2}, {v:.2})");
             let px = st.doc.layers[0].surface().unwrap().rgba(p[0].round() as i32, p[1].round() as i32);
@@ -373,7 +373,7 @@ mod tests {
         let mut s = skewed_ramp(SampleType::U8, &[[0.0, 0.0], [160.0, 0.0], [160.0, 120.0], [0.0, 120.0]], 160.0, 120.0);
         // A rejected crop leaves the Color Sampler points and the removed count alone.
         let samplers = vec![[5.0, 5.0], [150.0, 110.0]];
-        s.active_mut().unwrap().color_samplers = samplers.clone();
+        std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc).color_samplers = samplers.clone();
         s.samplers_removed = 2;
         for p in [
             json!({}),
@@ -392,7 +392,7 @@ mod tests {
             assert!(s.execute(CMD, p.clone()).is_err(), "{p}");
         }
         assert_eq!(s.active().unwrap().doc.size, Size::new(160, 120));
-        assert_eq!(s.active().unwrap().color_samplers, samplers);
+        assert_eq!(s.active().unwrap().doc.color_samplers, samplers);
         assert_eq!(s.take_samplers_removed(), 2);
     }
 }

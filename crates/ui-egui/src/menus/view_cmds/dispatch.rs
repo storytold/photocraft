@@ -1,6 +1,6 @@
 use super::arrange::{arrange, fit_layers};
 use super::dialogs::front;
-use super::options::{panel_state, panel_tab, pixel_aspect_ratio, screen_mode_commands, show_slot, snap_slot, was_maximized_id};
+use super::options::{active_aspect, aspect_preset, panel_state, panel_tab, pixel_aspect_ratio, screen_mode_commands, show_slot, snap_slot, was_maximized_id};
 use super::{FONT_PREVIEW, LANGUAGE, LAYOUTS, PIXEL_ASPECTS, PhotocraftApp, SCREEN_MODES, Show, SnapTo, Value, json};
 
 /// Ids handled here (live menu items).
@@ -88,6 +88,8 @@ pub(super) fn is_enabled_with_engine(app: &PhotocraftApp, id: &str, engine_enabl
         "view.screenMode.fullScreen" | "view.screenMode.fullScreenWithMenuBar" => doc,
         "view.twoHundredPercent" | "view.printSize" | "view.fitLayersOnScreen" | "view.rotateView" | "view.resetView" => doc,
         "view.fitArtboardOnScreen" => app.session.active().is_some_and(|d| d.doc.has_artboards()),
+        // Each document has its own pixel aspect ratio.
+        i if i.starts_with("view.pixelAspectRatio.") => doc,
         i if i.starts_with("window.arrange.") => match &i["window.arrange.".len()..] {
             "consolidateAllToTabs" => true,
             "floatInWindow" | "newWindowForDocument" => doc,
@@ -130,7 +132,7 @@ pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
         return SCREEN_MODES.contains(&k).then(|| o.screen_mode == k);
     }
     if let Some(k) = id.strip_prefix("view.pixelAspectRatio.") {
-        return PIXEL_ASPECTS.contains(&k).then(|| o.pixel_aspect == k);
+        return PIXEL_ASPECTS.contains(&k).then(|| active_aspect(app).and_then(aspect_preset) == Some(k));
     }
     if let Some(k) = id.strip_prefix("type.fontPreviewSize.") {
         return FONT_PREVIEW.contains(&k).then(|| o.font_preview_size == k);
@@ -300,6 +302,10 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
     if id == "view.resetView" {
         return crate::rotate_view::reset(app);
     }
+    if let Some(k) = id.strip_prefix("view.pixelAspectRatio.") {
+        let ratio = pixel_aspect_ratio(k);
+        return app.run("view.setPixelAspectRatio", json!({"ratio": ratio})).map(|_| json!({"pixelAspectRatio": ratio}));
+    }
     let o = &mut app.ui.view;
     if let Some(k) = id.strip_prefix("view.show.") {
         if k == "all" {
@@ -356,10 +362,6 @@ fn run(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p: &Value) -> Res
             ctx.send_viewport_cmd(command);
         }
         return Ok(json!({"screenMode": next}));
-    }
-    if let Some(k) = id.strip_prefix("view.pixelAspectRatio.") {
-        o.pixel_aspect = k.to_string();
-        return Ok(json!({"pixelAspectRatio": pixel_aspect_ratio(k)}));
     }
     if let Some(k) = id.strip_prefix("type.fontPreviewSize.") {
         o.font_preview_size = k.to_string();

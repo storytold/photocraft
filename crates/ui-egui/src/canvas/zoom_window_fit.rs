@@ -143,7 +143,7 @@ pub fn follow(
     let pinned = ctx.input(|i| i.viewport().maximized == Some(true) || i.viewport().fullscreen == Some(true));
     let layout = Layout {
         ppp: ctx.pixels_per_point(),
-        aspect: app.ui.view.display_aspect(),
+        aspect: app.display_aspect(),
         chrome: rect.size() - crate::rulers::content_rect(app, rect).size(),
         bars: if app.ui.view.shows_scrollbars() { crate::scrollbars::THICKNESS } else { 0.0 },
         flip: app.ui.view.flip_horizontal,

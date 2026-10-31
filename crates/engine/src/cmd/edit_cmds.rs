@@ -1009,6 +1009,27 @@ fn ruler_origin_cmd(s: &mut Session, p: Option<&Value>) -> Result<Value> {
     Ok(json!({"x": origin[0], "y": origin[1]}))
 }
 
+/// The pixel aspect ratios View › Pixel Aspect Ratio offers (its Custom dialog's range).
+const PIXEL_ASPECT_RANGE: std::ops::RangeInclusive<f64> = 0.1..=10.0;
+
+/// View › Pixel Aspect Ratio (`view.setPixelAspectRatio`): the document's pixel width over its
+/// height. Stored with the document (PSD resource 1064), so each document keeps its own; undoable
+/// like the guides. Setting the ratio it already has is not a step.
+fn pixel_aspect_cmd(s: &mut Session, p: &Value) -> Result<Value> {
+    let ratio = p
+        .get("ratio")
+        .and_then(Value::as_f64)
+        .filter(|r| PIXEL_ASPECT_RANGE.contains(r))
+        .ok_or_else(|| EngineError::Other("`ratio` must be a pixel width / height between 0.1 and 10".into()))?;
+    if s.active().ok_or(EngineError::NoDocument)?.doc.pixel_aspect != ratio {
+        s.edit("Pixel Aspect Ratio", |doc, _| {
+            doc.pixel_aspect = ratio;
+            Ok(())
+        })?;
+    }
+    Ok(json!({"ratio": ratio}))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {
@@ -1136,6 +1157,15 @@ pub fn specs() -> Vec<CommandSpec> {
         spec!("view.resetRulerOrigin", "Reset Ruler Origin", &[], None, "{} (zero point back at the image's top-left)", has_doc, |s, _| ruler_origin_cmd(
             s, None
         )),
+        spec!(
+            "view.setPixelAspectRatio",
+            "Pixel Aspect Ratio",
+            &[],
+            None,
+            r##"{"ratio":0.1..10} (the document's pixel width / height; View › Pixel Aspect Ratio Correction stretches the view by it)"##,
+            has_doc,
+            pixel_aspect_cmd
+        ),
     ]
 }
 

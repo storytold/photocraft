@@ -27,9 +27,7 @@ impl Session {
             }
             Some((mut d, layers)) => {
                 // Save As changes file identity outside history, just like the saved path.
-                if d.name != st.doc.name {
-                    Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
-                }
+                carry_outside_history(&st.doc, &mut d);
                 if keep_visibility {
                     carry_visibility(&st.doc, &mut d, &changed);
                 }
@@ -56,9 +54,7 @@ impl Session {
         st.coalesce = None;
         match st.history.redo(st.doc.clone()) {
             Some((mut d, layers)) => {
-                if d.name != st.doc.name {
-                    Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
-                }
+                carry_outside_history(&st.doc, &mut d);
                 if keep_visibility {
                     // The step being redone sets the visibility it changed again.
                     let changed = st.history.current_visibility().to_vec();
@@ -100,9 +96,7 @@ impl Session {
             }
             return undone;
         };
-        if d.name != st.doc.name {
-            Arc::make_mut(&mut d).name.clone_from(&st.doc.name);
-        }
+        carry_outside_history(&st.doc, &mut d);
         if keep_visibility {
             carry_visibility(&st.doc, &mut d, &changed);
         }
@@ -124,6 +118,17 @@ impl Session {
 /// states changed their visibility (Apply Layer Comp, a snapshot, a visibility change recorded
 /// while the option was on), so they keep the visibility `to` holds. Layers only one of them has
 /// keep theirs. Copies `to` only when something differs.
+/// What a document keeps across a step through history, which restores whole documents: its
+/// name (Save As changes file identity outside history) and its Color Sampler points (saved with
+/// the file but never a history step, as in Photoshop). Copies `to` only when something differs.
+pub(crate) fn carry_outside_history(from: &Document, to: &mut Arc<Document>) {
+    if to.name != from.name || to.color_samplers != from.color_samplers {
+        let d = Arc::make_mut(to);
+        d.name.clone_from(&from.name);
+        d.color_samplers.clone_from(&from.color_samplers);
+    }
+}
+
 pub(crate) fn carry_visibility(from: &Document, to: &mut Arc<Document>, stepped: &[LayerId]) {
     let visible: std::collections::HashMap<LayerId, bool> = from.walk().into_iter().map(|(_, _, l)| (l.id, l.visible)).collect();
     let changes: Vec<(LayerId, bool)> = to

@@ -198,7 +198,7 @@ fn dialogs_open_and_run_their_commands() {
 fn color_sampler_tool_places_moves_and_removes_points() {
     let (mut app, ctx) = app();
     app.ui.tool = Tool::ColorSampler;
-    let pts = |app: &PhotocraftApp| app.session.active().unwrap().color_samplers.clone();
+    let pts = |app: &PhotocraftApp| app.session.active().unwrap().doc.color_samplers.clone();
     down(&mut app, 20.0, 20.0, egui::Modifiers::NONE);
     up(&mut app, 20.0, 20.0);
     down(&mut app, 60.0, 40.0, egui::Modifiers::NONE);
@@ -255,7 +255,7 @@ fn color_sampler_readout_and_crop_removal_report() {
     assert!(l["samplers"][0]["rgb"].as_array().is_some_and(|a| a.len() == 3));
     // Cropping to the top-left drops the outside point and reports how many went.
     app.run("image.crop", json!({"x": 0, "y": 0, "width": 10, "height": 10})).unwrap();
-    assert_eq!(app.session.active().unwrap().color_samplers, vec![[5.0, 5.0]]);
+    assert_eq!(app.session.active().unwrap().doc.color_samplers, vec![[5.0, 5.0]]);
     assert!(app.ui.status.contains("removed"), "{}", app.ui.status);
     assert!(!app.ui.status_error);
 }
@@ -268,12 +268,12 @@ fn color_sampler_is_per_document_and_inert_without_one() {
     up(&mut app, 10.0, 10.0);
     // A second document starts empty; the first keeps its own point.
     app.run("file.new", json!({"width": 50, "height": 50})).unwrap();
-    assert!(app.session.active().unwrap().color_samplers.is_empty());
+    assert!(app.session.active().unwrap().doc.color_samplers.is_empty());
     down(&mut app, 20.0, 20.0, egui::Modifiers::NONE);
     up(&mut app, 20.0, 20.0);
-    assert_eq!(app.session.active().unwrap().color_samplers, vec![[20.0, 20.0]]);
+    assert_eq!(app.session.active().unwrap().doc.color_samplers, vec![[20.0, 20.0]]);
     app.run("document.activate", json!({"document": 0})).unwrap();
-    assert_eq!(app.session.active().unwrap().color_samplers, vec![[10.0, 10.0]]);
+    assert_eq!(app.session.active().unwrap().doc.color_samplers, vec![[10.0, 10.0]]);
     // With no document the tool says so (no dialog, no panic) and the commands error.
     let mut empty = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     empty.ui.tool = Tool::ColorSampler;

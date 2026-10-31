@@ -351,3 +351,31 @@ fn document_helpers_are_not_disturbed() {
     assert_eq!(pixel(&d, 3.9, 3.9), Some([3.0, 3.0]));
     assert_eq!(pixel(&d, 4.0, 0.0), None);
 }
+
+/// The points are the document's and saved with it, but never a history step (as in Photoshop):
+/// placing one adds no state, and Undo, Redo, a History click, deleting a state or bringing back
+/// a snapshot keeps the points as they are now.
+#[test]
+fn samplers_are_the_documents_and_stepping_through_history_keeps_them() {
+    let mut s = session();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("history.newSnapshot", json!({"name": "Before"})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let states = s.active().unwrap().history.entries();
+    s.execute("view.colorSamplers.add", json!({"x": 5, "y": 6})).unwrap();
+    s.execute("view.colorSamplers.add", json!({"x": 50, "y": 40})).unwrap();
+    assert_eq!(s.active().unwrap().history.entries(), states, "placing points is not a step");
+    let want = vec![[5.0, 6.0], [50.0, 40.0]];
+    assert_eq!(s.active().unwrap().doc.color_samplers, want);
+    let kept = |s: &Session, what: &str| assert_eq!(s.active().unwrap().doc.color_samplers, [[5.0, 6.0], [50.0, 40.0]], "{what}");
+    assert!(s.undo());
+    kept(&s, "undo");
+    assert!(s.redo());
+    kept(&s, "redo");
+    s.execute("history.selectState", json!({"state": 0})).unwrap();
+    kept(&s, "a History click");
+    s.execute("history.selectSnapshot", json!({"snapshot": 1})).unwrap();
+    kept(&s, "a snapshot");
+    s.execute("history.deleteState", json!({})).unwrap();
+    kept(&s, "deleting the current state");
+}

@@ -19,8 +19,11 @@ use crate::blocks;
 use crate::pixels::{interleave, max_sample, sample_for_depth, zero_sample};
 
 /// Resources that are mapped to document fields or regenerated on export.
-pub(crate) const MAPPED_RESOURCES: [u16; 19] = [
+pub(crate) const MAPPED_RESOURCES: [u16; 22] = [
     ids::GLOBAL_ANGLE,
+    ids::PIXEL_ASPECT_RATIO,
+    ids::COLOR_SAMPLERS,
+    ids::COLOR_SAMPLERS_OLD,
     ids::GLOBAL_ALTITUDE,
     ids::RESOLUTION_INFO,
     ids::ICC_PROFILE,
@@ -1063,6 +1066,24 @@ pub(crate) fn can_recover_layers(file: &PsdFile) -> bool {
     matches!(file.header.color_mode, PsdMode::Grayscale | PsdMode::Rgb | PsdMode::Cmyk | PsdMode::Lab) && file.header.depth != 1 && !file.layers().is_empty()
 }
 
+/// The Color Sampler points of resource `data` (`current`: 1073, else the legacy 1038, used only
+/// when there is no 1073): each on the pixel it samples (Photoshop stores its centre), those
+/// off the canvas dropped, at most Photoshop's ten. A damaged record leaves them as they are.
+fn color_samplers(data: &[u8], doc: &mut Document, current: bool) {
+    if !current && !doc.color_samplers.is_empty() {
+        return;
+    }
+    let Ok(s) = photocraft_psd::ColorSamplers::from_bytes(data) else { return };
+    let (w, h) = (f64::from(doc.size.width), f64::from(doc.size.height));
+    doc.color_samplers = s
+        .points
+        .iter()
+        .map(|p| p.map(f64::floor))
+        .filter(|[x, y]| x.is_finite() && y.is_finite() && *x >= 0.0 && *y >= 0.0 && *x < w && *y < h)
+        .take(photocraft_doc::MAX_COLOR_SAMPLERS)
+        .collect();
+}
+
 fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Document, layered: bool, multichannel: bool, warnings: &mut Vec<String>) -> bool {
     let header = &file.header;
     for resource in &file.resources {
@@ -1075,6 +1096,18 @@ fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Do
                 }
             }
             ids::ICC_PROFILE => doc.icc_profile = Some(Arc::new(resource.data.clone())),
+            // A ratio that can't be drawn (zero, negative, NaN) leaves the pixels square.
+            ids::PIXEL_ASPECT_RATIO => {
+                if let Ok(par) = photocraft_psd::PixelAspectRatio::from_bytes(&resource.data)
+                    && par.ratio.is_finite()
+                    && par.ratio > 0.0
+                {
+                    doc.pixel_aspect = par.ratio;
+                }
+            }
+            // Color Sampler points: 1073, else the legacy 1038 (Photoshop writes both).
+            ids::COLOR_SAMPLERS => color_samplers(&resource.data, doc, true),
+            ids::COLOR_SAMPLERS_OLD => color_samplers(&resource.data, doc, false),
             ids::XMP => doc.metadata.xmp = Some(String::from_utf8_lossy(&resource.data).into()),
             ids::EXIF => doc.metadata.exif = Some(Arc::new(resource.data.clone())),
             1032 => parse_guides(&resource.data, doc),

@@ -1241,6 +1241,30 @@ fn ruler_origin_is_set_reset_and_undoable() {
     assert!(empty.execute("view.resetRulerOrigin", json!({})).is_err());
 }
 
+/// #9950: the pixel aspect ratio belongs to the document: setting it changes only the active
+/// one, is a history step (none when unchanged), and bad params are refused untouched.
+#[test]
+fn pixel_aspect_ratio_is_the_active_documents_and_undoable() {
+    let mut s = session();
+    s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let first = s.documents()[0].doc.id;
+    assert_eq!(s.active().unwrap().doc.pixel_aspect, 1.0);
+    assert_eq!(s.execute("view.setPixelAspectRatio", json!({"ratio": 0.91})).unwrap(), json!({"ratio": 0.91}));
+    assert_eq!(s.active().unwrap().doc.pixel_aspect, 0.91);
+    assert!(s.documents().iter().filter(|d| d.doc.id != s.active().unwrap().doc.id).all(|d| d.doc.pixel_aspect == 1.0), "other documents keep theirs");
+    assert_ne!(s.active().unwrap().doc.id, first);
+    let steps = s.active().unwrap().history.entries();
+    s.execute("view.setPixelAspectRatio", json!({"ratio": 0.91})).unwrap();
+    assert_eq!(s.active().unwrap().history.entries(), steps, "the same ratio again is not a step");
+    s.undo();
+    assert_eq!(s.active().unwrap().doc.pixel_aspect, 1.0);
+    for bad in [json!({}), json!({"ratio": 0.0}), json!({"ratio": 0.05}), json!({"ratio": 11}), json!({"ratio": "2"}), json!(null), json!([2])] {
+        assert!(s.execute("view.setPixelAspectRatio", bad.clone()).is_err(), "{bad} is refused");
+    }
+    assert_eq!(s.active().unwrap().doc.pixel_aspect, 1.0);
+    assert!(Session::new().execute("view.setPixelAspectRatio", json!({"ratio": 2})).is_err());
+}
+
 /// The last guide added in `orientation` for `position`.
 fn new_guide(s: &mut Session, orientation: &str, position: Value) -> f64 {
     s.execute("view.newGuide", json!({"orientation": orientation, "position": position})).unwrap();

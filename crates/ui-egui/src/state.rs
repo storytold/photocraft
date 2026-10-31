@@ -144,6 +144,22 @@ pub struct View {
     pub(crate) display_camera: Option<(f32, [f32; 2])>,
     #[serde(skip)]
     pub(crate) zoom_transition: Option<ZoomTransition>,
+    /// The View menu settings this document's window keeps for itself, stored while another
+    /// document is active (the active one's are the live `ViewOptions`/`Extras` values). `None`
+    /// until it is first left: a new document starts from the settings in use, as in Photoshop.
+    #[serde(default)]
+    pub toggles: Option<WindowToggles>,
+}
+
+/// View menu settings Photoshop keeps per document window rather than for the whole app:
+/// Flip Horizontal, Extras (⌘H), Rulers (⌘R), Show › Grid and Show › Guides.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WindowToggles {
+    pub flip_horizontal: bool,
+    pub extras: bool,
+    pub rulers: bool,
+    pub grid: bool,
+    pub guides: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -179,6 +195,7 @@ impl Default for View {
             zoom_anchor: None,
             display_camera: None,
             zoom_transition: None,
+            toggles: None,
         }
     }
 }

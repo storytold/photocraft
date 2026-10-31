@@ -89,7 +89,7 @@ pub use header::{ColorMode, Header, Version};
 pub use image_data::ImageData;
 pub use layer::{BlendingRanges, ChannelData, LayerFlags, LayerInfo, LayerMask, LayerRecord, MaskData, MaskParameters, RealMask, Rect};
 pub use pixels::{GrayImage, Layer, RgbaImage};
-pub use resources::{ImageResource, ResolutionInfo, ResourceData};
+pub use resources::{ColorSamplers, ImageResource, PixelAspectRatio, ResolutionInfo, ResourceData};
 pub use rows::RowDecoder;
 #[cfg(any(unix, windows))]
 pub use source::FileSource;

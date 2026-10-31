@@ -424,7 +424,7 @@ fn xf(app: &PhotocraftApp) -> ViewXform {
         center: v.center,
         flip: app.ui.view.flip_horizontal,
         rotation: v.rotation,
-        aspect: app.ui.view.display_aspect(),
+        aspect: app.display_aspect(),
     }
 }
 
@@ -1207,7 +1207,7 @@ fn a_drag_just_outside_the_typed_text_moves_it() {
 fn the_move_reach_is_on_screen_and_leaves_other_type_alone() {
     let (mut app, id) = transform_app(false, false, Affine::translate(500.0, 350.0));
     app.ui.view.pixel_aspect_correction = true;
-    app.ui.view.pixel_aspect = "anamorphic2To1".into();
+    app.run("view.setPixelAspectRatio", serde_json::json!({"ratio": 2})).unwrap();
     let mut h = harness(1.0, app);
     h.run_steps(1);
     let f = crate::type_transform::frame(h.state_mut()).unwrap();

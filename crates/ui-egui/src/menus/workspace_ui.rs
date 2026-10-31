@@ -28,7 +28,7 @@ pub struct ShellUi {
     pub sticky_shift: bool,
     pub sticky_command: bool,
     pub sticky_alt: bool,
-    /// Custom pixel aspect ratios (the active one is `ViewOptions::pixel_aspect` = `custom:<ratio>:<name>`).
+    /// Saved custom pixel aspect ratios (each document's own ratio is `Document::pixel_aspect`).
     pub custom_pars: Vec<CustomPar>,
     /// Open dialog: (kind, fields). Kinds: newWorkspace, deleteWorkspace, customPar, preview32,
     /// extrasOptions.
@@ -49,9 +49,31 @@ const IDS: [&str; 7] = [
 /// [`saved_names`].
 pub const SAVED: &str = "window.workspace.saved.";
 
+/// View › Pixel Aspect Ratio items of saved custom ratios: `view.pixelAspectRatio.saved.<name>`.
+/// Names are unique, and naming the item keeps its id (and any shortcut or colour given to it)
+/// with its ratio when another one is deleted.
+pub const SAVED_PAR: &str = "view.pixelAspectRatio.saved.";
+
 /// Menu ids handled here (live menu items).
 pub fn handles(id: &str) -> bool {
-    IDS.contains(&id) || id.starts_with(SAVED)
+    IDS.contains(&id) || id.starts_with(SAVED) || id.starts_with(SAVED_PAR)
+}
+
+fn saved_par<'a>(app: &'a PhotocraftApp, id: &str) -> Option<&'a CustomPar> {
+    let name = id.strip_prefix(SAVED_PAR)?;
+    app.ui.shell.custom_pars.iter().find(|c| c.name == name)
+}
+
+/// A saved ratio as a document stores it: to the dialog's three decimals.
+fn custom_ratio(c: &CustomPar) -> f64 {
+    (f64::from(c.ratio) * 1000.0).round() / 1000.0
+}
+
+/// The saved ratio View › Pixel Aspect Ratio ticks for the active document: the first with its
+/// ratio, unless a preset has that ratio (one tick in the submenu).
+fn shown_saved(app: &PhotocraftApp) -> Option<&CustomPar> {
+    let r = crate::view_cmds::active_aspect(app).filter(|r| crate::view_cmds::aspect_preset(*r).is_none())?;
+    app.ui.shell.custom_pars.iter().find(|c| crate::view_cmds::same_aspect(custom_ratio(c), r))
 }
 
 /// Saved workspace names, in menu order.
@@ -84,9 +106,13 @@ pub fn switcher_options(app: &PhotocraftApp) -> Vec<(String, String)> {
 pub fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     match id {
         i if i.starts_with(SAVED) => Some(saved_name(app, i).is_some_and(|n| n == app.ui.workspace)),
+        i if i.starts_with(SAVED_PAR) => Some(saved_par(app, i).zip(shown_saved(app)).is_some_and(|(c, shown)| c.name == shown.name)),
         "window.panel.modifierKeys" => Some(app.ui.shell.modifier_keys),
         "window.workspace.lockWorkspace" => Some(app.session.prefs().workspace_locked),
-        "view.pixelAspectRatio.custom" => Some(app.ui.view.pixel_aspect.starts_with("custom:")),
+        // A ratio that is neither a preset nor saved (a saved one checks its own item instead).
+        "view.pixelAspectRatio.custom" => {
+            Some(crate::view_cmds::active_aspect(app).is_some_and(|r| crate::view_cmds::aspect_preset(r).is_none()) && shown_saved(app).is_none())
+        }
         _ => None,
     }
 }
@@ -95,6 +121,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
     Some(match id {
         "window.workspace.deleteWorkspace" => !app.session.prefs().workspaces.is_empty(),
         "view.thirtyTwoBitPreviewOptions" => app.session.is_enabled(id),
+        // The ratio is the active document's.
+        "view.pixelAspectRatio.custom" => app.session.active().is_some(),
+        i if i.starts_with(SAVED_PAR) => app.session.active().is_some(),
         i if handles(i) => true,
         _ => return None,
     })
@@ -178,6 +207,13 @@ pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<
         i if i.starts_with(SAVED) => match saved_name(app, i) {
             Some(name) => select_workspace(app, &json!({"name": name})),
             None => Err(format!("no saved workspace for `{i}`")),
+        },
+        i if i.starts_with(SAVED_PAR) => match saved_par(app, i) {
+            Some(c) => {
+                let name = c.name.clone();
+                custom_par(app, &json!({"select": name}))
+            }
+            None => Err(format!("no custom pixel aspect ratio for `{i}`")),
         },
         "view.pixelAspectRatio.custom" if no_params(params) => open(app, "customPar", json!({"name": "", "ratio": 1.0})),
         "view.pixelAspectRatio.custom" => custom_par(app, params),
@@ -288,8 +324,9 @@ pub fn apply_custom(app: &mut PhotocraftApp) -> bool {
 }
 
 /// Custom Pixel Aspect Ratio: `{name, ratio}` adds (or updates) and selects; `{delete: name}`
-/// removes; `{select: name}` selects a saved one.
+/// removes; `{select: name}` selects a saved one. Selecting sets the active document's ratio.
 fn custom_par(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
+    let has_doc = app.session.active().is_some();
     let s = &mut app.ui.shell;
     if let Some(n) = p.get("delete").and_then(Value::as_str) {
         let before = s.custom_pars.len();
@@ -297,10 +334,10 @@ fn custom_par(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
         if s.custom_pars.len() == before {
             return Err(format!("no custom pixel aspect ratio \"{n}\""));
         }
-        if app.ui.view.pixel_aspect.ends_with(&format!(":{n}")) {
-            app.ui.view.pixel_aspect = "square".into();
-        }
         return Ok(json!({"deleted": n}));
+    }
+    if !has_doc {
+        return Err("no document: a pixel aspect ratio is a document's".into());
     }
     let c = if let Some(n) = p.get("select").and_then(Value::as_str) {
         s.custom_pars.iter().find(|c| c.name == n).cloned().ok_or_else(|| format!("no custom pixel aspect ratio \"{n}\""))?
@@ -317,7 +354,7 @@ fn custom_par(app: &mut PhotocraftApp, p: &Value) -> Result<Value, String> {
         }
         c
     };
-    app.ui.view.pixel_aspect = format!("custom:{}:{}", c.ratio, c.name);
+    app.run("view.setPixelAspectRatio", json!({"ratio": custom_ratio(&c)}))?;
     Ok(json!({"pixelAspectRatio": c.ratio, "name": c.name}))
 }
 
@@ -433,9 +470,11 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(tl!(&label)).color(t.text_dim).size(11.0));
                     let mut v = f.get(key).and_then(Value::as_f64).unwrap_or(0.0) as f32;
-                    if crate::widgets::slider(ui, &mut v, range.clone(), None).changed()
-                        | crate::widgets::value_field(ui, &mut v, range, "", 60.0).accessible_name(tl!(&label)).changed()
-                    {
+                    // The slider fills what it is given: leave the field its room, or the row
+                    // overflows and the auto-sized window widens by it every frame (#9950).
+                    let track = (ui.available_width() - 60.0 - ui.spacing().item_spacing.x).max(40.0);
+                    let slid = ui.allocate_ui(vec2(track, ui.spacing().interact_size.y), |ui| crate::widgets::slider(ui, &mut v, range.clone(), None)).inner;
+                    if slid.changed() | crate::widgets::value_field(ui, &mut v, range, "", 60.0).accessible_name(tl!(&label)).changed() {
                         f.insert(key.into(), json!(v));
                     }
                 });
@@ -461,6 +500,9 @@ fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
                     }
                 }
                 "customPar" => {
+                    // The Factor slider fills its available width: a fixed width keeps it from
+                    // growing the auto-sized window every frame (#9950), as for preview32 below.
+                    ui.set_width((ctx.content_rect().width() - 32.0).clamp(0.0, 320.0));
                     text(ui, &mut f, "name", tl!("Name:"));
                     number(ui, &mut f, "ratio", tl!("Factor:"), 0.1..=10.0);
                 }
@@ -720,17 +762,23 @@ mod tests {
     #[test]
     fn custom_pixel_aspect_ratio_and_extras_options() {
         let (mut app, ctx) = app();
+        app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+        let ratio = |app: &PhotocraftApp| app.session.active().unwrap().doc.pixel_aspect;
         let inv = |app: &mut PhotocraftApp, id: &str, p: Value| crate::menus::invoke(app, &ctx, id, p);
         assert_eq!(inv(&mut app, "view.pixelAspectRatio.custom", json!({})).unwrap()["dialog"], "customPar");
         inv(&mut app, "view.pixelAspectRatio.custom", json!({"name": "Cinema", "ratio": 1.25})).unwrap();
-        assert_eq!(crate::view_cmds::pixel_aspect_ratio(&app.ui.view.pixel_aspect), 1.25);
-        assert_eq!(checked(&app, "view.pixelAspectRatio.custom"), Some(true));
+        assert_eq!(ratio(&app), 1.25);
+        // The saved ratio's own item carries the tick, not the dialog item.
+        assert_eq!(checked(&app, "view.pixelAspectRatio.custom"), Some(false));
+        assert_eq!(checked(&app, &format!("{SAVED_PAR}Cinema")), Some(true));
         assert!(inv(&mut app, "view.pixelAspectRatio.custom", json!({"name": "x", "ratio": 50})).is_err());
         inv(&mut app, "view.pixelAspectRatio.square", json!({})).unwrap();
         inv(&mut app, "view.pixelAspectRatio.custom", json!({"select": "Cinema"})).unwrap();
-        assert_eq!(crate::view_cmds::pixel_aspect_ratio(&app.ui.view.pixel_aspect), 1.25);
+        assert_eq!(ratio(&app), 1.25);
+        // Deleting a saved ratio leaves the document's own ratio: Custom carries the tick now.
         inv(&mut app, "view.pixelAspectRatio.custom", json!({"delete": "Cinema"})).unwrap();
-        assert_eq!(app.ui.view.pixel_aspect, "square");
+        assert_eq!(ratio(&app), 1.25);
+        assert_eq!(checked(&app, "view.pixelAspectRatio.custom"), Some(true));
         // Show Extras Options.
         assert_eq!(inv(&mut app, "view.show.showExtrasOptions", json!({})).unwrap()["dialog"], "extrasOptions");
         let (kind, mut f) = app.ui.shell.dialog.clone().unwrap();
@@ -808,5 +856,67 @@ mod tests {
         crate::menus::invoke(&mut app, &ctx, id, p).unwrap();
         let d = app.session.active().unwrap().doc.id;
         assert_eq!(app.session.color.hdr[&d].exposure, 1.5);
+    }
+    /// #9950: the Factor slider filled the auto-sized window, which then grew every frame until
+    /// it was wider than the screen, pushing OK and Cancel off it.
+    #[test]
+    fn custom_pixel_aspect_ratio_window_fits_and_stops_growing() {
+        use egui_kittest::{Harness, kittest::Queryable};
+
+        for (size, scale) in [(vec2(760.0, 480.0), 1.0), (vec2(1600.0, 900.0), 1.0), (vec2(420.0, 360.0), 2.0)] {
+            for theme in crate::theme::ThemeKind::ALL {
+                let (mut app, _) = app();
+                app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+                let mut h = Harness::builder().with_size(size).with_pixels_per_point(scale).build_ui_state(|ui, app| windows(app, ui.ctx()), app);
+                PhotocraftApp::setup_context(&h.ctx, theme);
+                let ctx = h.ctx.clone();
+                crate::menus::invoke(h.state_mut(), &ctx, "view.pixelAspectRatio.custom", json!({})).unwrap();
+                h.run_steps(4);
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+                let first = h.ctx.memory(|m| m.area_rect(egui::Id::unique("shell-dialog"))).unwrap();
+                h.run_steps(20);
+                let last = h.ctx.memory(|m| m.area_rect(egui::Id::unique("shell-dialog"))).unwrap();
+                assert!(screen.contains_rect(last), "{theme:?} at {size:?}: dialog {last:?} must fit");
+                assert!((last.width() - first.width()).abs() < 1.0, "{theme:?}: width grew from {first:?} to {last:?}");
+                for label in ["Name:", "Factor:", "OK", "Cancel"] {
+                    let node = h.query_all_by_label(label).next().unwrap_or_else(|| panic!("{label} in the dialog"));
+                    let rect = node.rect();
+                    assert!(last.contains_rect(rect) && screen.contains_rect(rect), "{label} must remain visible: {rect:?}");
+                }
+            }
+        }
+    }
+
+    /// #9950: a saved custom ratio was never offered again. View › Pixel Aspect Ratio lists the
+    /// saved ratios after the presets, checks the one in use and selects one when chosen.
+    #[test]
+    fn saved_pixel_aspect_ratios_are_listed_checked_and_selectable() {
+        let (mut app, ctx) = app();
+        app.run("file.new", json!({"width": 20, "height": 20})).unwrap();
+        let par_items = |app: &PhotocraftApp| {
+            crate::menus::menu_items(app).into_iter().filter(|i| i.path == ["View", "Pixel Aspect Ratio"] && i.id != "---").collect::<Vec<_>>()
+        };
+        assert!(!par_items(&app).iter().any(|i| i.id.starts_with(SAVED_PAR)));
+        crate::menus::invoke(&mut app, &ctx, "view.pixelAspectRatio.custom", json!({"name": "Cinema", "ratio": 1.25})).unwrap();
+        crate::menus::invoke(&mut app, &ctx, "view.pixelAspectRatio.custom", json!({"name": "Scope", "ratio": 2.4})).unwrap();
+        let items = par_items(&app);
+        let last_preset = items.iter().position(|i| i.id == "view.pixelAspectRatio.anamorphic2To1").unwrap();
+        let saved: Vec<(&str, Option<bool>, bool)> = items[last_preset + 1..].iter().map(|i| (i.label.as_str(), i.checked, i.enabled)).collect();
+        assert_eq!(saved, [("Cinema (1.25)", Some(false), true), ("Scope (2.4)", Some(true), true)]);
+        assert!(crate::menus::is_live(&format!("{SAVED_PAR}Cinema")));
+        crate::menus::invoke(&mut app, &ctx, "view.pixelAspectRatio.square", json!({})).unwrap();
+        let cinema = par_items(&app).into_iter().find(|i| i.label == "Cinema (1.25)").unwrap();
+        crate::menus::invoke(&mut app, &ctx, &cinema.id, json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.pixel_aspect, 1.25);
+        assert_eq!(checked(&app, &cinema.id), Some(true));
+        assert_eq!(crate::menus::checked(&app, "view.pixelAspectRatio.square"), Some(false));
+        // Deleting a ratio leaves the others' items with their own ratios; a deleted one's item
+        // is an error, not another ratio.
+        let scope = par_items(&app).into_iter().find(|i| i.label == "Scope (2.4)").unwrap();
+        crate::menus::invoke(&mut app, &ctx, "view.pixelAspectRatio.custom", json!({"delete": "Cinema"})).unwrap();
+        assert!(crate::menus::invoke(&mut app, &ctx, &cinema.id, json!({})).is_err());
+        assert_eq!(par_items(&app).into_iter().find(|i| i.label == "Scope (2.4)").map(|i| i.id), Some(scope.id.clone()));
+        crate::menus::invoke(&mut app, &ctx, &scope.id, json!({})).unwrap();
+        assert_eq!(app.session.active().unwrap().doc.pixel_aspect, 2.4);
     }
 }

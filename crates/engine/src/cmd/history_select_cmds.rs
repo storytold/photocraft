@@ -65,10 +65,8 @@ fn select_state(s: &mut Session, p: &Value) -> Result<Value> {
     let Some(layers) = layers else {
         return Err(EngineError::Other("the history can't step right now".into()));
     };
-    // Save As changes file identity outside history, as Edit › Undo keeps it.
-    if doc.name != start.name {
-        std::sync::Arc::make_mut(&mut doc).name.clone_from(&start.name);
-    }
+    // Save As changes file identity outside history, as Edit › Undo keeps it (and the samplers).
+    crate::carry_outside_history(&start, &mut doc);
     let damage = crate::layer_multi_cmds::step_damage(&start, &doc);
     st.doc = doc;
     // Stepping only over selection changes keeps a clean document clean (#6865).

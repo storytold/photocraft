@@ -40,6 +40,138 @@ fn place_embedded_enablement_does_not_require_native_doc() {
     }
 }
 
+/// #9950: View › Pixel Aspect Ratio is each document's, as in Photoshop: choosing a ratio
+/// stretches only the active document, the submenu ticks the active document's ratio, and the
+/// Correction toggle stays one switch for every document.
+#[test]
+fn pixel_aspect_ratio_is_each_documents_own() {
+    let (mut app, ctx) = app_with(2);
+    let (first, second) = (app.session.documents()[0].doc.id, app.session.documents()[1].doc.id);
+    let select = |app: &mut PhotocraftApp, id| {
+        let i = app.session.documents().iter().position(|d| d.doc.id == id).unwrap();
+        app.session.set_active(i);
+    };
+    select(&mut app, first);
+    menu(&mut app, &ctx, "view.pixelAspectRatio.d1DvPal", json!({})).unwrap();
+    assert_eq!(app.display_aspect(), 1.09_f32);
+    select(&mut app, second);
+    assert_eq!(app.session.active().unwrap().doc.pixel_aspect, 1.0, "the other document keeps square pixels");
+    assert_eq!(app.display_aspect(), 1.0);
+    assert_eq!(checked(&app, "view.pixelAspectRatio.square"), Some(true));
+    assert_eq!(checked(&app, "view.pixelAspectRatio.d1DvPal"), Some(false));
+    menu(&mut app, &ctx, "view.pixelAspectRatio.anamorphic2To1", json!({})).unwrap();
+    select(&mut app, first);
+    assert_eq!(checked(&app, "view.pixelAspectRatio.d1DvPal"), Some(true), "the tick follows the active document");
+    assert_eq!(app.display_aspect_of(Some(1)), 2.0);
+    // Correction off shows every document square; their ratios are kept.
+    menu(&mut app, &ctx, "view.pixelAspectRatioCorrection", json!({})).unwrap();
+    assert_eq!((app.display_aspect_of(Some(0)), app.display_aspect_of(Some(1))), (1.0, 1.0));
+    assert_eq!(app.session.active().unwrap().doc.pixel_aspect, 1.09);
+    // Undo puts the ratio back, like any document change.
+    app.session.undo();
+    assert_eq!(app.session.active().unwrap().doc.pixel_aspect, 1.0);
+    // With no document the ratios are unavailable rather than an error later.
+    let (empty, _) = app_with(0);
+    assert_eq!(is_enabled(&empty, "view.pixelAspectRatio.d1DvPal"), Some(false));
+    assert_eq!(checked(&empty, "view.pixelAspectRatio.square"), Some(false));
+}
+
+/// Flip Horizontal, Extras, Rulers and Show › Grid / Guides belong to each document window, as in
+/// Photoshop: switching documents brings back each one's own, an arranged document is drawn with
+/// its own flip, and a new document starts from the settings in use.
+#[test]
+fn flip_extras_rulers_grid_and_guides_are_per_document_window() {
+    let (mut app, ctx) = app_with(2);
+    let switch = |app: &mut PhotocraftApp, i: usize| {
+        app.session.set_active(i);
+        app.sync_views();
+    };
+    switch(&mut app, 0);
+    let start = app.window_toggles();
+    // Extras last: showing the grid or guides turns Extras back on, as in Photoshop.
+    for id in ["view.flipHorizontal", "view.rulers", "view.show.grid", "view.show.guides", "view.extras"] {
+        menu(&mut app, &ctx, id, json!({})).unwrap();
+    }
+    let changed = app.window_toggles();
+    assert_eq!(
+        changed,
+        crate::state::WindowToggles {
+            flip_horizontal: !start.flip_horizontal,
+            extras: !start.extras,
+            rulers: !start.rulers,
+            grid: !start.grid,
+            guides: !start.guides
+        }
+    );
+    switch(&mut app, 1);
+    assert_eq!(app.window_toggles(), start, "the other document keeps its own");
+    assert_eq!(app.window_toggles_of(0), changed, "an arranged tile draws the first with its own");
+    let full = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(200.0, 100.0));
+    let inset = |rulers| crate::rulers::content_rect_with(rulers, full);
+    assert_ne!(inset(app.window_toggles_of(0).rulers), inset(app.window_toggles_of(1).rulers), "each tile keeps its own rulers");
+    assert_eq!(checked(&app, "view.flipHorizontal"), Some(start.flip_horizontal));
+    switch(&mut app, 0);
+    assert_eq!(app.window_toggles(), changed, "and coming back restores them");
+    // A new document opens with the settings in use.
+    app.run("file.new", json!({"width": 10, "height": 10})).unwrap();
+    app.sync_views();
+    assert_eq!(app.window_toggles(), changed);
+    // Closing the active document hands the live settings to the one that becomes active.
+    switch(&mut app, 1);
+    assert_eq!(app.window_toggles(), start);
+}
+
+/// Two windows on one document (Window › Arrange › New Window for Document) keep their own View
+/// menu settings, as in Photoshop: a new window starts with its source's, and the settings
+/// changed in one, while it has focus, leave the other alone.
+#[test]
+fn two_windows_of_one_document_keep_their_own_view_settings() {
+    let (mut app, ctx) = app_with(1);
+    app.sync_views();
+    let start = app.window_toggles();
+    let wid = menu(&mut app, &ctx, "window.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+    let extra = crate::canvas::doc_window_viewport(wid);
+    let focus = |app: &mut PhotocraftApp, on: bool| {
+        app.ui.windows.iter_mut().for_each(|w| w.focused = on && w.id == wid);
+        app.sync_views();
+    };
+    focus(&mut app, true);
+    assert_eq!(app.window_toggles(), start, "the new window starts with its source's settings");
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    menu(&mut app, &ctx, "view.rulers", json!({})).unwrap();
+    let flipped = app.window_toggles();
+    assert_ne!(flipped, start);
+    assert_eq!(app.window_toggles_in(egui::ViewportId::ROOT, 0), start, "the main window's canvas keeps its own");
+    focus(&mut app, false);
+    assert_eq!(app.window_toggles(), start, "back in the main window, its settings are live again");
+    assert_eq!(app.window_toggles_in(extra, 0), flipped, "the extra window still draws with its own");
+    focus(&mut app, true);
+    assert_eq!(app.window_toggles(), flipped);
+    // A third window opened from the focused extra window starts with that window's settings.
+    let third = menu(&mut app, &ctx, "window.newWindowForDocument", json!({})).unwrap()["window"].as_u64().unwrap();
+    assert_eq!(app.ui.windows.iter().find(|w| w.id == third).and_then(|w| w.view.toggles), Some(flipped));
+}
+
+/// Float All in Windows gives each document's window that document's own View settings, not
+/// the active one's.
+#[test]
+fn floating_every_document_keeps_each_ones_view_settings() {
+    let (mut app, ctx) = app_with(2);
+    app.session.set_active(0);
+    app.sync_views();
+    menu(&mut app, &ctx, "view.flipHorizontal", json!({})).unwrap();
+    let first = app.window_toggles();
+    app.session.set_active(1);
+    app.sync_views();
+    let second = app.window_toggles();
+    assert_ne!(first, second);
+    menu(&mut app, &ctx, "window.arrange.floatAllInWindows", json!({})).unwrap();
+    for (doc, want) in [(0, first), (1, second)] {
+        let w = app.ui.windows.iter().find(|w| w.document == doc).unwrap();
+        assert_eq!(w.view.toggles, Some(want), "document {doc}'s window");
+    }
+}
+
 #[test]
 fn show_snap_extras_and_screen_modes_are_state() {
     let (mut app, ctx) = app_with(1);
@@ -78,7 +210,7 @@ fn show_snap_extras_and_screen_modes_are_state() {
     assert!(app.ui.view.hides_chrome() && app.ui.view.hides_tabs());
     assert_eq!(checked(&app, "view.screenMode.fullScreen"), Some(true));
     menu(&mut app, &ctx, "view.pixelAspectRatio.anamorphic2To1", json!({})).unwrap();
-    assert_eq!(pixel_aspect_ratio(&app.ui.view.pixel_aspect), 2.0);
+    assert_eq!(app.session.active().unwrap().doc.pixel_aspect, 2.0);
     // State serializes with the rest of the UI (control channel).
     let v = serde_json::to_value(&app.ui).unwrap();
     assert_eq!(v["view"]["screen_mode"], "fullScreen");

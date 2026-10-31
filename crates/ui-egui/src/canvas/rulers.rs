@@ -129,7 +129,13 @@ impl GuideDrag {
 
 /// Canvas area left after the rulers.
 pub fn content_rect(app: &PhotocraftApp, rect: Rect) -> Rect {
-    if app.ui.extras.rulers { Rect::from_min_max(rect.min + vec2(RULER, RULER), rect.max) } else { rect }
+    content_rect_with(app.ui.extras.rulers, rect)
+}
+
+/// [`content_rect`] for a window whose rulers are shown (`rulers`) or not: each document window
+/// has its own.
+pub fn content_rect_with(rulers: bool, rect: Rect) -> Rect {
+    if rulers { Rect::from_min_max(rect.min + vec2(RULER, RULER), rect.max) } else { rect }
 }
 
 /// Whether the screen point `p` is over a ruler, inside the full canvas rect `full`. A guide let go

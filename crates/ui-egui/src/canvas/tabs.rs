@@ -723,13 +723,18 @@ pub(super) fn open_on_double_click(app: &mut PhotocraftApp, ui: &egui::Ui, area:
     }
 }
 
+/// The viewport of extra window `id`.
+pub fn doc_window_viewport(id: u64) -> egui::ViewportId {
+    egui::ViewportId::from_hash_of(("docwin", id))
+}
+
 /// Extra OS windows showing documents (multi-window / multi-monitor).
 pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let wins = app.ui.windows.clone();
     for w in wins.into_iter().filter(|w| w.open) {
         let Some(st) = app.session.documents().get(w.document) else { continue };
         let title = format!("{} — window {}", st.doc.name, w.id);
-        let vid = egui::ViewportId::from_hash_of(("docwin", w.id));
+        let vid = doc_window_viewport(w.id);
         let mut builder = crate::os_window::builder().with_title(title).with_inner_size([800.0, 600.0]);
         if let Some([x, y]) = w.position {
             builder = builder.with_position([x, y]);
