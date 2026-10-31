@@ -191,8 +191,19 @@ impl ToolState {
     pub fn remember_cmyk(&mut self, rgb: [f32; 3], cmyk: [f32; 4]) {
         self.cmyk_picks.retain(|(c, _)| *c != rgb);
         self.cmyk_picks.push((rgb, cmyk));
-        let extra = self.cmyk_picks.len().saturating_sub(Self::CMYK_PICKS);
-        self.cmyk_picks.drain(..extra);
+        // Evict history, not an active tool colour: a foreground edit must not throw away the
+        // background's inks, or a later background fill converts the sRGB stand-in (#9037).
+        let fg = [self.foreground[0], self.foreground[1], self.foreground[2]];
+        let bg = [self.background[0], self.background[1], self.background[2]];
+        let other = self.other_colors;
+        while self.cmyk_picks.len() > Self::CMYK_PICKS {
+            let Some(oldest) = self.cmyk_picks.iter().position(|(c, _)| {
+                *c != rgb && *c != fg && *c != bg && !other.iter().any(|o| [o[0], o[1], o[2]] == *c)
+            }) else {
+                break;
+            };
+            self.cmyk_picks.remove(oldest);
+        }
     }
 
     /// The inks `rgb` was picked as, if it was picked as CMYK.
@@ -274,3 +285,31 @@ pub struct CopiedStyle {
 /// Cut aren't: whether they have anything to copy (a selection over transparent pixels, a group
 /// or fill layer) is known only when they run.
 pub const PRECHECKED: &[&str] = &["layer.new.layer", "layer.new.group", "layer.new.groupFromLayers", "layer.new.layerFromBackground"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inactive_target_pair_cmyk_survives_eviction() {
+        let mut t = ToolState::default();
+        // Mask target active: record a mask foreground pick.
+        t.target_mask(true);
+        let mask = [0.2, 0.3, 0.4, 1.0];
+        t.foreground = mask;
+        t.remember_cmyk([mask[0], mask[1], mask[2]], [0.0, 1.0, 0.0, 0.0]);
+        // Pixel target active: record a pixel foreground pick.
+        t.target_mask(false);
+        let pixel = [0.8, 0.1, 0.1, 1.0];
+        t.foreground = pixel;
+        t.remember_cmyk([pixel[0], pixel[1], pixel[2]], [0.0, 1.0, 1.0, 0.0]);
+        // Mask target active again: the pixel pair is now the inactive pair.
+        t.target_mask(true);
+        for i in 0..8 {
+            let bg = [i as f32 / 10.0, 0.5, 0.5, 1.0];
+            t.background = bg;
+            t.remember_cmyk([bg[0], bg[1], bg[2]], [1.0, 0.0, 0.0, 0.0]);
+        }
+        assert_eq!(t.picked_cmyk([pixel[0], pixel[1], pixel[2]]), Some([0.0, 1.0, 1.0, 0.0]));
+    }
+}

@@ -159,6 +159,13 @@ fn apply_values(app: &mut PhotocraftApp, ui: &egui::Ui, model: Model, v: [f32; 4
     let background = app.ui.color_panel.background;
     let rgb = model.to_rgb(v);
     set_color(app, ui.ctx(), background, rgb);
+    if model == Model::Cmyk {
+        // Keep the inks as typed (#9037): the foreground is stored as sRGB, and converting its
+        // stand-in back through the document profile gives a different CMYK value (100 % K
+        // filled as a rich black). Fill, brush and stroke reuse the pick.
+        let inks = v.map(|x| if x.is_finite() { (x / 100.0).clamp(0.0, 1.0) } else { 0.0 });
+        app.session.tools.remember_cmyk(rgb, inks);
+    }
     ui.data_mut(|d| d.insert_temp(values_key(model, background), v));
     if model == Model::Hsb && v[2] > 0.5 {
         ui.data_mut(|d| d.insert_temp(field_key(background), (v[0] / 360.0, v[1] / 100.0)));
