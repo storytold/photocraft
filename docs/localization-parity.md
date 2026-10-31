@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-29 · **Last updated:** 2026-10-29 · **Change:** minor (coverage re-measured on current main, 2,202 keys; Arabic UI catalog at 100%; Hindi partial; previously minor: Arabic paragraph direction buttons, #6793) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** minor (coverage re-measured on current main, 2,208 keys; Arabic 99.7%; Hindi partial; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
@@ -9,7 +9,7 @@ Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 **How measured.** `cargo xtask i18n-coverage` (`xtask/src/i18n_coverage.rs`) defines the key
 universe: `tl!("…")` literals and `trn(` plurals in `ui-egui` (tests excluded), menu-catalog
 labels and path segments, `menus.rs` UI commands, and engine `CommandSpec` labels and menu paths:
-**2,202 English keys** on 2026-10-29 (1,982 on 2026-10-22, 1,918 on 2026-10-21, 1,772 on 2026-10-12, 1,608 on 2026-10-10). Each catalog (`crates/ui-egui/src/i18n/<code>.tsv`)
+**2,208 English keys** on 2026-10-31 (2,202 on 2026-10-29, 1,982 on 2026-10-22, 1,918 on 2026-10-21, 1,772 on 2026-10-12, 1,608 on 2026-10-10). Each catalog (`crates/ui-egui/src/i18n/<code>.tsv`)
 is checked against that universe by the xtask itself; "rows" are the non-comment, non-blank lines
 of the `.tsv`. Catalogs hold more rows than the universe because they also translate dynamic `tl!(expr)` strings (~159 call
 sites the tool can't enumerate). **Not covered anywhere:** engine error and status messages and
@@ -23,10 +23,10 @@ installed per Creative Cloud install, here `en_US`). It has no Hindi, Arabic, In
 Vietnamese UI; Arabic and Hebrew users get English "Middle East" builds with the World-Ready
 composer, and its text engine handles RTL, Devanagari and Indic scripts.
 
-**Summary.** 2 of the 12 key languages at 100% of measured keys (English, Arabic), 9 at 99.3–99.4%
-(Simplified Chinese, Spanish, French, Portuguese (Brazil), Indonesian, Japanese, German, Korean,
-Vietnamese; 13–16 keys each still show in English; status `partial` also because of the engine
-messages), Hindi partial (321 of 2,202, 14.6%), plus the other shipped languages below. Weighted by
+**Summary.** 1 of the 12 key languages at 100% of measured keys (English), 10 at 99.0–99.7%
+(Arabic at 99.7%; Simplified Chinese, Spanish, French, Portuguese (Brazil), Indonesian, Japanese,
+German, Korean, Vietnamese at 99.0–99.3%, 16–21 keys each still show in English; status `partial` also
+because of the engine messages), Hindi partial (323 of 2,208, 14.6%), plus the other shipped languages below. Weighted by
 speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorded only for Italian,
 2026-10-12).
 
@@ -34,30 +34,35 @@ speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorde
 
 | Language | Code | UI strings (measured keys) | Catalog rows | Dialogs / tooltips / help | Script support | Native review | Status | To `full` |
 |---|---|---|---:|---|---|---|---|---:|
-| English | `en` | 2,202 / 2,202 (100%) | source | all | Latin | – | full | 0 h |
-| Simplified Chinese | `zh-hans` | 2,186 / 2,202 (99.3%) | 3,071 | dialogs, tooltips yes; engine messages English | CJK fonts (lazy loader), IME preedit/commit, vertical type | no | partial | 8–12 h |
-| Spanish | `es` | 2,189 / 2,202 (99.4%) | 4,336 | as above; complete dynamic UI key set | Latin | no | partial | 6–10 h |
-| Hindi | `hi` | 321 / 2,202 (14.6%) | 534 | Top menus, toolbox tools, Camera Raw, dialogs, plurals | Devanagari shaping in the text engine (parley/HarfRust); no Devanagari fallback font (TYPE-218-3) | no | partial | 15–20 h |
-| Arabic | `ar` | 2,202 / 2,202 (100%) | 3,429 | as above; combined from the community catalogs with one term per concept | Arabic shaping and bidi in the UI (egui 0.37) and the text engine, Arabic fallback font; RTL shell layout but not inside panels (DIST-220-4), paragraph direction buttons but no visual RTL caret (TYPE-218-2 partial) | no | partial | 15–25 h |
-| French | `fr` | 2,189 / 2,202 (99.4%) | 4,425 | as above | Latin | no | partial | 6–10 h |
-| Portuguese (Brazil) | `pt-br` | 2,189 / 2,202 (99.4%) | 4,318 | as above | Latin; every `pt` locale uses it | no | partial | 6–10 h |
-| Indonesian | `id` | 2,188 / 2,202 (99.4%) | 3,413 | as above | Latin | no | partial | 6–10 h |
-| Japanese | `ja` | 2,188 / 2,202 (99.4%) | 4,041 | as above | CJK fonts, IME (Windows IME broken, #590), vertical type (tategaki) | no | partial | 10–16 h |
-| German | `de` | 2,186 / 2,202 (99.3%) | 3,410 | as above | Latin | no | partial | 6–10 h |
-| Korean | `ko` | 2,186 / 2,202 (99.3%) | 3,610 | as above; terminology from Photoshop's Korean UI ([notes](localization-ko.md)) | Hangul fonts, IME | no | partial | 6–10 h |
-| Vietnamese | `vi` | 2,188 / 2,202 (99.4%) | 3,844 | as above | Latin with stacked diacritics (shaping supported) | no | partial | 6–10 h |
+| English | `en` | 2,208 / 2,208 (100%) | source | all | Latin | – | full | 0 h |
+| Simplified Chinese | `zh-hans` | 2,188 / 2,208 (99.1%) | 3,077 | dialogs, tooltips yes; engine messages English | CJK fonts (lazy loader), IME preedit/commit, vertical type | no | partial | 8–12 h |
+| Spanish | `es` | 2,192 / 2,208 (99.3%) | 4,341 | as above; complete dynamic UI key set | Latin | no | partial | 6–10 h |
+| Hindi | `hi` | 323 / 2,208 (14.6%) | 536 | Top menus, toolbox tools, Camera Raw, dialogs, plurals | Devanagari shaping in the text engine (parley/HarfRust); no Devanagari fallback font (TYPE-218-3) | no | partial | 15–20 h |
+| Arabic | `ar` | 2,201 / 2,208 (99.7%) | 3,431 | as above; combined from the community catalogs with one term per concept | Arabic shaping and bidi in the UI (egui 0.37) and the text engine, Arabic fallback font; RTL shell layout but not inside panels (DIST-220-4), paragraph direction buttons but no visual RTL caret (TYPE-218-2 partial) | no | partial | 15–25 h |
+| French | `fr` | 2,191 / 2,208 (99.2%) | 4,429 | as above | Latin | no | partial | 6–10 h |
+| Portuguese (Brazil) | `pt-br` | 2,192 / 2,208 (99.3%) | 4,323 | as above | Latin; every `pt` locale uses it | no | partial | 6–10 h |
+| Indonesian | `id` | 2,189 / 2,208 (99.1%) | 3,420 | as above | Latin | no | partial | 6–10 h |
+| Japanese | `ja` | 2,190 / 2,208 (99.2%) | 4,045 | as above | CJK fonts, IME (Windows IME broken, #590), vertical type (tategaki) | no | partial | 10–16 h |
+| German | `de` | 2,187 / 2,208 (99.0%) | 3,414 | as above | Latin | no | partial | 6–10 h |
+| Korean | `ko` | 2,188 / 2,208 (99.1%) | 3,617 | as above; terminology from Photoshop's Korean UI ([notes](localization-ko.md)) | Hangul fonts, IME | no | partial | 6–10 h |
+| Vietnamese | `vi` | 2,190 / 2,208 (99.2%) | 3,852 | as above | Latin with stacked diacritics (shaping supported) | no | partial | 6–10 h |
 
 ## Other shipped languages
 
-11 more, measured 2026-10-29, status `partial` for the same reason. All but 13–16 of the 2,202 measured keys are translated:
-Traditional Chinese `zh-hant` (3,025 rows), Russian `ru` (4,487; also every dynamic label the
-other catalogs translate, [notes](localization-ru.md)), Ukrainian `uk` (4,014), Czech `cs` (4,105),
-Polish `pl` (4,000), Greek `el` (4,108), Dutch `nl` (4,185), Hungarian `hu` (4,336), Italian `it` (4,487;
+15 more, measured 2026-10-31, status `partial` for the same reason. Swedish, Finnish, Danish and Norwegian Bokmål miss 2 of the 2,208 measured keys; the other eleven miss 16–20:
+Traditional Chinese `zh-hant` (3,031 rows), Russian `ru` (4,491; also every dynamic label the
+other catalogs translate, [notes](localization-ru.md)), Ukrainian `uk` (4,020), Czech `cs` (4,109),
+Polish `pl` (4,007), Greek `el` (4,115), Dutch `nl` (4,192), Hungarian `hu` (4,341), Italian `it` (4,492;
 also every dynamic label the other catalogs translate; reviewed by a native speaker,
-[notes](localization-it.md)), Turkish `tr` (4,180 rows). Serbian `sr` (4,424 rows, Latin script,
-Ekavian, added 2026-10-12) covers all but 13
-measured keys and the union of the other catalogs' dynamic labels; its one/few/many plurals reuse
-the Russian rule.
+[notes](localization-it.md)), Turkish `tr` (4,187 rows). Serbian `sr` (4,430 rows, Latin script,
+Ekavian, added 2026-10-12) covers the union of the other catalogs' dynamic labels; its one/few/many plurals reuse
+the Russian rule. Swedish `sv` (4,559 rows, added 2026-10-28) covers the
+other catalogs' dynamic labels; combined from the community catalogs in #5985 and #9536 with one
+term per concept; the contested terms follow a native speaker's questionnaire answers. Finnish
+`fi` (4,559 rows, combined from #5666 and #6961), Danish `da` (4,559 rows, based on #7267 and
+completed for the current UI) and Norwegian Bokmål `nb` (4,559 rows, combined from #8072 and #9025;
+`no` and `nn` locales resolve to it), all added 2026-10-29, cover the same labels with one term per
+concept; none has had a native-speaker review yet.
 
 Czech UI follow-up (2026-10-11): status and notice wrappers, hardware labels, brush and
 transform accessibility names, rasterization prompts, profile mismatch messages and preset
@@ -99,4 +104,6 @@ engine localization or native review is complete.
 | 2026-10-21 | minor | Re-measured current main: 1,918 keys, 1,904 for French, Indonesian, Korean, Polish and Simplified Chinese; catalog rows recounted |
 | 2026-10-22 | minor | Arabic row: paragraph direction has Auto / Left-to-right / Right-to-left buttons in the Paragraph panel and Type options bar (#6793); the visual RTL caret is still missing (TYPE-218-2 partial) |
 | 2026-10-28 | minor | Arabic (`ar`) UI catalog: every measured key, six plural forms; layer names and the title bar no longer reversed on egui 0.37 |
-| 2026-10-29 | minor | Re-measured current main with `cargo xtask i18n-coverage`: 2,202 keys; Arabic at 100% (replaces "none"); Simplified Chinese, Spanish, French, Portuguese (Brazil), Indonesian, Japanese, German, Korean and Vietnamese at 2,186–2,189 (13–16 new keys still in English); Hindi 321; catalog rows recounted |
+| 2026-10-29 | minor | Swedish (`sv`) UI catalog: every measured key plus the dynamic labels, combined from #5985 and #9536 |
+| 2026-10-29 | minor | Finnish (`fi`), Danish (`da`) and Norwegian Bokmål (`nb`) UI catalogs: every measured key plus the dynamic labels, combined from #5666, #6961, #7267, #8072 and #9025 |
+| 2026-10-31 | minor | Re-measured current main with `cargo xtask i18n-coverage`: 2,208 keys; Arabic at 99.7% (2,201; replaces "none"); Swedish, Finnish, Danish and Norwegian Bokmål at 2,206; Simplified Chinese, Spanish, French, Portuguese (Brazil), Indonesian, Japanese, German, Korean and Vietnamese at 2,187–2,192 (16–21 keys still in English); Hindi 323; catalog rows recounted |

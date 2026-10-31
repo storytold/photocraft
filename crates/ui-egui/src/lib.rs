@@ -7,12 +7,22 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// PhotoCraft as craft-update knows it, with its 128 px icon and accent colour: the update
+/// prompt shows both, and an AppImage's menu entry gets the icon.
+#[cfg(not(target_arch = "wasm32"))]
+pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
+    icon_png: Some(include_bytes!("../../../assets/app-icon/hicolor/128x128/apps/ai.storyteller.photocraft.png")),
+    accent: Some([0x2f, 0x7b, 0xf5]),
+    ..craft_update::suite::PHOTOCRAFT
+};
+
 /// Translate a string literal into the current UI language: `tl!("Image Size…")`.
 macro_rules! tl {
     ($s:expr) => {
         $crate::i18n::t($s)
     };
 }
+mod brush_mode_menu;
 pub mod canvas;
 pub mod control;
 pub mod dialogs;
@@ -31,6 +41,7 @@ pub mod menu_catalog;
 pub mod menus;
 pub mod monitor_status;
 pub mod notices;
+pub mod os_window;
 pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
@@ -198,6 +209,7 @@ pub use panels::brushes_tab;
 pub use panels::channels_panel;
 pub use panels::chrome_ui;
 pub use panels::clip_line_ui;
+pub use panels::color_hud;
 pub use panels::color_panel_ui;
 pub use panels::comps_ui;
 pub use panels::doc_props_ui;
@@ -272,6 +284,7 @@ pub use tools::move_hover;
 pub use tools::move_lock;
 pub use tools::move_mods;
 pub use tools::object_finder;
+use tools::path_components;
 pub use tools::perspective_crop_ui;
 pub use tools::perspective_ui;
 pub use tools::puppet_ui;
@@ -331,6 +344,9 @@ pub struct PhotocraftApp {
     monitors: monitor_status::State,
     checker: Option<egui::TextureHandle>,
     drag: Option<canvas::Drag>,
+    /// An owned vector drag was cancelled (`canvas::cancel_stale_vector_drag`): the rest of its
+    /// pointer events go nowhere.
+    pub(crate) cancelled_vector_drag: bool,
     /// A Move-tool press landed on a locked layer: the first pointer move shows Photoshop's
     /// message (`move_lock`), a plain click shows nothing.
     pub(crate) move_blocked: bool,
@@ -452,6 +468,9 @@ pub struct PhotocraftApp {
     pub(crate) drop_places: std::collections::VecDeque<file_open::DropPlace>,
     /// The document each of `ui.views` belongs to, as of the last [`Self::sync_views`].
     view_docs: Vec<DocId>,
+    /// The document `ui.selected_path` belongs to, as of the last [`Self::sync_views`]: a Paths
+    /// panel selection never carries over to a same-named path in another tab.
+    path_document: Option<(DocId, u64, std::sync::Weak<Document>)>,
     pub fps: f32,
     pub(crate) last_frame_time: f64,
     thumbs: HashMap<(photocraft_doc::LayerId, u8), (u64, egui::TextureHandle)>,
@@ -851,3 +870,9 @@ mod browse_field_tests;
 mod options_hit_area_tests;
 #[cfg(test)]
 mod select_and_mask_button_tests;
+
+#[cfg(test)]
+mod saved_path_edit_tests;
+
+#[cfg(test)]
+mod pen_path_ownership_tests;
