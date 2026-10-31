@@ -198,7 +198,20 @@ pub fn abandon(app: &mut PhotocraftApp) {
     }
 }
 
-/// Arrow keys with the Move tool (or while Free Transform is active): nudge 1 px, ⇧ 10 px;
+/// The document pixels one plain arrow press moves layers by with the Move tool: one screen
+/// pixel, as in Photoshop (#9511). Zoomed out that is several document pixels (2 at 50 %, 4 at
+/// 25 %; 1 at 66.7 %: whole pixels only), zoomed in still one. ⇧'s 10 px don't scale. Free
+/// Transform keeps 1 px.
+fn screen_pixel_step(app: &PhotocraftApp) -> f64 {
+    let zoom = f64::from(app.current_zoom());
+    if app.ui.transform.is_some() || !zoom.is_finite() || zoom <= 0.0 {
+        return 1.0;
+    }
+    (1.0 / zoom + 1e-6).floor().clamp(1.0, 1000.0)
+}
+
+/// Arrow keys with the Move tool (or while Free Transform is active): nudge one screen pixel
+/// (1 px at 100 %, [`screen_pixel_step`]), ⇧ 10 px;
 /// ⌥ duplicates the layers first. ⌘-arrows (Ctrl off the Mac) do the same from most other tools,
 /// where ⌘ is the temporary Move tool (`hold_keys::cmd_nudges`, #2474). Returns true when a key
 /// was used.
@@ -215,7 +228,7 @@ pub fn arrow_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
         // Most specific first: `consume_key` ignores extra ⇧ / ⌥ (`matches_logically`).
         for mods in [Modifiers::SHIFT | Modifiers::ALT, Modifiers::SHIFT, Modifiers::ALT, Modifiers::NONE] {
             if ctx.input_mut(|i| i.consume_key(base | mods, key)) {
-                let k = if mods.shift { 10.0 } else { 1.0 };
+                let k = if mods.shift { 10.0 } else { screen_pixel_step(app) };
                 app.nudge_bundle.now = ctx.input(|i| i.time);
                 nudge(app, ux * k, uy * k, mods.alt);
                 return true;

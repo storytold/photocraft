@@ -499,3 +499,19 @@ fn free_transform_nudges_bundle_into_one_undo_step() {
     app.run("edit.undo", json!({})).unwrap();
     assert_eq!(quad(&app), moved(2.0, 0.0));
 }
+
+/// #9511: as in Photoshop, a plain arrow nudge is one screen pixel, so zoomed out it moves the
+/// layer several document pixels (floor of 1 / zoom: 4 at 25 %, 2 at 50 %, 1 at 66.7 %, 1 at
+/// 100 % and above); ⇧ is 10 document pixels at any zoom.
+#[test]
+fn a_nudge_is_one_screen_pixel() {
+    for (zoom, step) in [(0.25, 4), (0.5, 2), (2.0 / 3.0, 1), (1.0, 1), (2.0, 1)] {
+        let mut app = app_with_layer();
+        let id = app.session.active().unwrap().active_layer.unwrap();
+        app.ui.views[0].zoom = zoom;
+        assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+        assert_eq!(left_edge(&app, id), 8 + step, "→ at {zoom}");
+        assert!(press(&mut app, egui::Key::ArrowLeft, egui::Modifiers::SHIFT));
+        assert_eq!(left_edge(&app, id), 8 + step - 10, "⇧← at {zoom}");
+    }
+}
