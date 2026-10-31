@@ -507,6 +507,7 @@ impl Compositor {
                     keep_alpha: blur.keep_alpha,
                     levels: operator::levels(blur.depth),
                     has_alpha: fmt.alpha,
+                    combine: blur.combine,
                 },
             );
             self.recorded += 1;

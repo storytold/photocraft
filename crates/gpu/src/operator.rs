@@ -120,6 +120,21 @@ pub struct LayerOperator {
     pub program: Arc<dyn OperatorProgram>,
 }
 
+/// How a [`GaussianBlur`]'s result is made from the blurred and the source pixels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Combine {
+    /// The blur itself (Gaussian Blur).
+    Blur,
+    /// Unsharp Mask (`photocraft_algo` `sharpen::exact`): per colour channel, with
+    /// `d = source - blurred`, `source + amount * d` where `|d| + 1e-6 >= threshold`, else the
+    /// source; a fully transparent source pixel and its alpha stay. `amount` is a fraction
+    /// (Amount / 100), `threshold` a fraction of 1 (Threshold / 255).
+    Unsharp { amount: f32, threshold: f32 },
+    /// High Pass (`photocraft_algo` `sharpen::high_pass`): per colour channel
+    /// `0.5 + source - blurred`; the source's alpha, fully transparent pixels untouched.
+    HighPass,
+}
+
 /// Gaussian Blur (or any separable blur) of a raster layer, exactly as the filter runs on the CPU
 /// (`photocraft_algo::apply_in_with`): the edge pixels repeat at `extent`, only `area` changes,
 /// the selection mixes the result with the source, Lock Transparency keeps the source's alpha,
@@ -132,6 +147,7 @@ pub struct GaussianBlur {
     pub(crate) selection: Option<Arc<Surface>>,
     pub(crate) keep_alpha: bool,
     pub(crate) depth: SampleType,
+    pub(crate) combine: Combine,
     key: u64,
 }
 
@@ -158,7 +174,27 @@ impl GaussianBlur {
         (extent, area, keep_alpha, depth as u8).hash(&mut h);
         // The selection by identity: a dialog session holds one.
         selection.as_ref().map(|s| Arc::as_ptr(s) as usize).hash(&mut h);
-        Some(GaussianBlur { blur, extent, area, selection, keep_alpha, depth, key: h.finish() })
+        Some(GaussianBlur { blur, extent, area, selection, keep_alpha, depth, combine: Combine::Blur, key: h.finish() })
+    }
+
+    /// The same blur combined with the source as Unsharp Mask does: `amount` and `threshold` as
+    /// the filter's own (Amount in percent, Threshold in levels). `None` for values that aren't
+    /// finite.
+    pub fn unsharp(self, amount: f32, threshold: f32) -> Option<Self> {
+        if !amount.is_finite() || !threshold.is_finite() {
+            return None;
+        }
+        let combine = Combine::Unsharp { amount: amount / 100.0, threshold: threshold / 255.0 };
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.key, 2u8, amount.to_bits(), threshold.to_bits()).hash(&mut h);
+        Some(GaussianBlur { combine, key: h.finish(), ..self })
+    }
+
+    /// The same blur as High Pass combines it with the source.
+    pub fn high_pass(self) -> Self {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.key, 3u8).hash(&mut h);
+        GaussianBlur { combine: Combine::HighPass, key: h.finish(), ..self }
     }
 
     /// How far the blur reads outside an output pixel.
@@ -488,6 +524,7 @@ pub(crate) struct FinishParams {
     pub keep_alpha: bool,
     pub levels: f32,
     pub has_alpha: bool,
+    pub combine: Combine,
 }
 
 /// Record the finishing pass: the blurred window mixed into `out` as the layer's new pixels.
@@ -522,11 +559,21 @@ pub(crate) fn record_finish(
         u32::from(f.keep_alpha),
         f.levels.to_bits(),
         u32::from(f.has_alpha),
-        0,
+        match f.combine {
+            Combine::Blur => 0,
+            Combine::Unsharp { .. } => 1,
+            Combine::HighPass => 2,
+        },
         f.blur_offset[0],
         f.blur_offset[1],
-        0,
-        0,
+        match f.combine {
+            Combine::Unsharp { amount, .. } => amount.to_bits(),
+            Combine::Blur | Combine::HighPass => 0,
+        },
+        match f.combine {
+            Combine::Unsharp { threshold, .. } => threshold.to_bits(),
+            Combine::Blur | Combine::HighPass => 0,
+        },
     ]);
     let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("pc_operator_finish"),

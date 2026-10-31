@@ -229,20 +229,20 @@ fn scratch_textures_go_with_the_last_operator() {
     assert_eq!(g.comp.operator_scratch_bytes(), 0, "no operator left: no scratch");
 }
 
-/// Closing the last document with operators frees their scratch textures (they were kept for the
-/// rest of the session).
+/// Two operators on one layer would share its pages (the second taking the first's output): the
+/// render refuses them, and the caller previews on the CPU.
 #[test]
-fn scratch_textures_go_with_the_last_operator_document() {
+fn two_operators_on_one_layer_fail_the_render() {
     let Some(mut g) = gpu() else { return };
     if !g.comp.operators_supported(&g.device) {
         return;
     }
     let (doc, id) = blur_doc(SampleType::U8);
-    g.comp.set_operators(doc.id, vec![operator(&doc, id, 6.0, false)]);
-    photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
-    assert!(g.comp.operator_scratch_bytes() > 0, "the passes made their scratch");
-    g.comp.forget_doc(doc.id);
-    assert_eq!(g.comp.operator_scratch_bytes(), 0, "the last operator document closed");
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 4.0, false), operator(&doc, id, 12.0, false)]);
+    let e = photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(e.contains("two layer operators on one layer"), "{e:?}");
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 4.0, false)]);
+    assert!(photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_ok(), "one is fine");
 }
 
 #[test]
@@ -418,4 +418,146 @@ fn a_mask_operator_on_a_combined_or_disabled_mask_is_refused() {
     g.comp.set_operators(doc.id, vec![op]);
     let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap_err();
     assert!(e.to_string().contains("mask operator"), "{e}");
+}
+
+/// Phase 4 of #5772: Unsharp Mask as a layer operator (the exact blur, then its combine) against
+/// the filter applied on the CPU as the engine applies it, composited by the CPU. At a positive
+/// threshold a last-bit difference in the blur sum can flip whether a pixel sharpens at all, so
+/// a few such pixels (at most 0.1 %) may differ there; nothing else may.
+#[test]
+fn an_unsharp_mask_operator_matches_the_cpu_filter() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        eprintln!("skipping unsharp mask parity: no compute");
+        return;
+    }
+    let mut failures = Vec::new();
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for (amount, radius, threshold) in [(50.0, 1.0, 0.0), (150.0, 4.0, 0.0), (300.0, 12.0, 0.0), (80.0, 2.5, 6.0), (500.0, 40.0, 20.0)] {
+            for selection in [false, true] {
+                let (mut doc, id) = blur_doc(depth);
+                if selection {
+                    doc.selection = Some(feathered_selection());
+                }
+                let what = format!("{depth:?} amount {amount} radius {radius} threshold {threshold}{}", if selection { ", selection" } else { "" });
+                let params = FilterParams::UnsharpMask { amount, radius, threshold };
+                // As the engine applies it (`filters.rs`).
+                let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+                let sel_bounds = doc.selection.as_ref().map(Surface::content_bounds);
+                let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
+                let area = photocraft_algo::output_area(&params, content, bounds, sel_bounds);
+                let extent = edge_extent(doc.bounds(), content);
+                let mut expected = doc.clone();
+                let surf = expected.layer_mut(id).unwrap().surface_mut().unwrap();
+                *surf = photocraft_algo::apply_in_with(surf, &params, area, bounds, doc.selection.as_ref(), extent, &Interrupt::NONE).unwrap();
+                let Some(Separable::Kernel(k)) = Separable::of(&params) else { panic!("{what}: the exact kernel") };
+                let program = GaussianBlur::new(SeparableBlur::Kernel(k), extent, area, doc.selection.clone().map(Arc::new), false, depth)
+                    .and_then(|b| b.unsharp(amount, threshold))
+                    .expect("a runnable unsharp mask");
+                let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) };
+                let rect = doc.bounds();
+                let cpu = photocraft_compose::render(&expected, rect);
+                for (label, comp) in [("", &mut g.comp), (" (paged)", &mut g.paged)] {
+                    comp.set_operators(doc.id, vec![op.clone()]);
+                    let out = match photocraft_gpu::render_to_vec_stats(comp, &g.device, &g.queue, &doc, rect) {
+                        Ok((out, _)) => out,
+                        Err(e) => {
+                            failures.push(format!("{what}{label}: {e}"));
+                            continue;
+                        }
+                    };
+                    let tol = tolerance(depth);
+                    let off: Vec<usize> = cpu
+                        .px
+                        .iter()
+                        .zip(&out)
+                        .enumerate()
+                        .filter(|(_, (c, o))| (0..4).any(|k| (c[k] * c[3] - o[k] * o[3]).abs() > tol))
+                        .map(|(i, _)| i)
+                        .collect();
+                    let allowed = if threshold > 0.0 { cpu.px.len() / 1000 } else { 0 };
+                    if off.len() > allowed {
+                        let i = off[0];
+                        let w = rect.width() as usize;
+                        failures.push(format!(
+                            "{what}{label}: {} pixels off (allowed {allowed}), first at ({}, {}): cpu {:?} gpu {:?}",
+                            off.len(),
+                            i % w,
+                            i / w,
+                            cpu.px[i],
+                            out[i]
+                        ));
+                    }
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Phase 4: Box Blur (a uniform kernel up to radius 4, one box pass beyond) and High Pass (the
+/// exact blur as `0.5 + source - blurred`) as layer operators, against the CPU filters applied
+/// as the engine applies them.
+#[test]
+fn box_blur_and_high_pass_operators_match_the_cpu_filters() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        eprintln!("skipping box blur / high pass parity: no compute");
+        return;
+    }
+    let mut failures = Vec::new();
+    let cases = [
+        FilterParams::BoxBlur { radius: 2.0 },
+        FilterParams::BoxBlur { radius: 9.0 },
+        FilterParams::BoxBlur { radius: 40.0 },
+        FilterParams::HighPass { radius: 1.5 },
+        FilterParams::HighPass { radius: 10.0 },
+        FilterParams::HighPass { radius: 60.0 },
+    ];
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for params in &cases {
+            for selection in [false, true] {
+                let (mut doc, id) = blur_doc(depth);
+                if selection {
+                    doc.selection = Some(feathered_selection());
+                }
+                let what = format!("{depth:?} {params:?}{}", if selection { ", selection" } else { "" });
+                let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+                let sel_bounds = doc.selection.as_ref().map(Surface::content_bounds);
+                let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
+                let area = photocraft_algo::output_area(params, content, bounds, sel_bounds);
+                let extent = edge_extent(doc.bounds(), content);
+                let mut expected = doc.clone();
+                let surf = expected.layer_mut(id).unwrap().surface_mut().unwrap();
+                *surf = photocraft_algo::apply_in_with(surf, params, area, bounds, doc.selection.as_ref(), extent, &Interrupt::NONE).unwrap();
+                let blur = match Separable::of(params).expect("a separable blur") {
+                    Separable::Kernel(k) => SeparableBlur::Kernel(k),
+                    Separable::Boxes(b) => SeparableBlur::Boxes(b),
+                };
+                let program = GaussianBlur::new(blur, extent, area, doc.selection.clone().map(Arc::new), false, depth).expect("a runnable blur");
+                let program = if matches!(params, FilterParams::HighPass { .. }) { program.high_pass() } else { program };
+                let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) };
+                if let Err(e) = compare(&mut g, &doc, &op, &expected, tolerance(depth), &what) {
+                    failures.push(e);
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Closing the last document with operators frees their scratch textures (they were kept for the
+/// rest of the session).
+#[test]
+fn scratch_textures_go_with_the_last_operator_document() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 6.0, false)]);
+    photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+    assert!(g.comp.operator_scratch_bytes() > 0, "the passes made their scratch");
+    g.comp.forget_doc(doc.id);
+    assert_eq!(g.comp.operator_scratch_bytes(), 0, "the last operator document closed");
 }
