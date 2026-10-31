@@ -53,6 +53,7 @@ pub use gradient_bake::{Method as GradientMethod, bake as bake_gradient};
 mod duotone_map;
 mod kra;
 pub mod linked;
+pub mod memory;
 mod multichannel_map;
 mod ora;
 mod palette_map;
@@ -74,6 +75,7 @@ mod text_import;
 pub mod text_styles_map;
 pub mod tiff_layers;
 pub mod vector_map;
+pub mod vector_preview;
 mod xcf;
 pub mod xml;
 
