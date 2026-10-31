@@ -5,17 +5,27 @@
 use photocraft_doc::Path;
 use photocraft_geom::Rect;
 
-/// Gaussian sigma of a mask feather of `px` pixels (Properties › Feather): the feather itself.
-/// Blurred with exactly that variance, psd-tools mask-parameters-no-real-channel.psd (6 px vector
-/// and 3 px pixel feather) matches Photoshop within 1.5 levels and layer_mask_data.psd's
-/// feathered edges are 27 % → 4 % off (the rest are its shapes' antialiased edges).
+/// Gaussian sigma of a mask feather of `px` pixels (Properties › Feather): the feather itself,
+/// widened by [`SMALL_FEATHER_VARIANCE`] for the small ones. Blurred with that variance,
+/// psd-tools mask-parameters-no-real-channel.psd (6 px vector and 3 px pixel feather) matches
+/// Photoshop within 1.5 levels and layer_mask_data.psd's feathered edges are 27 % → 4 % off (the
+/// rest are its shapes' antialiased edges).
 pub fn feather_sigma(px: f32) -> f32 {
-    if px.is_finite() { (px * FEATHER_SIGMA).clamp(0.0, MAX_FEATHER_SIGMA) } else { 0.0 }
+    if px.is_finite() && px > 0.0 {
+        let px = px.min(MAX_FEATHER_SIGMA);
+        (px * px + SMALL_FEATHER_VARIANCE * px.min(1.0)).sqrt().min(MAX_FEATHER_SIGMA)
+    } else {
+        0.0
+    }
 }
 
-const FEATHER_SIGMA: f32 = 1.0;
+/// Photoshop's small feathers spread wider than sigma = feather: measured on a binary edge, a
+/// 1 px feather has the variance 1.18, not 1, and from 1 to 10 px sigma² = feather² + 1/6 keeps
+/// its edge within 2 levels (sigma = feather was 8 off at 1 px, #9476). Below 1 px the extra
+/// variance shrinks with the feather, so a tiny feather still barely blurs.
+const SMALL_FEATHER_VARIANCE: f32 = 1.0 / 6.0;
 /// Photoshop's feather tops out at 1000 px.
-const MAX_FEATHER_SIGMA: f32 = 1000.0 * FEATHER_SIGMA;
+const MAX_FEATHER_SIGMA: f32 = 1000.0;
 
 /// `r` grown by a feather of Gaussian `sigma`: how far the blur carries a mask's edge (three
 /// sigmas and two pixels, beyond which it is constant to well under a level).
@@ -316,6 +326,32 @@ mod tests {
             // Three boxes are not quite a Gaussian: within 2.5 levels (whole boxes: 4.6).
             assert!((f64::from(got) - want).abs() < 0.01, "{i}: {got} vs Gaussian {want}");
         }
+    }
+
+    /// #9476: Photoshop's Properties › Feather on a synthetic 256×128 mask, white on x 64..192,
+    /// y 32..96: row 64 from x 60 and the pixel (64, 33), as 8-bit levels. Sigma = feather was up
+    /// to 8 levels off at 1 px.
+    #[test]
+    fn small_feathers_spread_as_photoshops_do() {
+        let cases: [(f32, [u8; 8], u8); 3] = [
+            (1.0, [0, 2, 20, 80, 175, 235, 253, 255], 161),
+            (1.5, [3, 14, 43, 95, 160, 212, 241, 252], 133),
+            (2.0, [12, 29, 60, 104, 151, 195, 226, 243], 116),
+        ];
+        let (w, h) = (256usize, 128usize);
+        for (feather, row, corner) in cases {
+            let mut v: Vec<f32> = (0..w * h).map(|i| if (64..192).contains(&(i % w)) && (32..96).contains(&(i / w)) { 1.0 } else { 0.0 }).collect();
+            gaussian(&mut v, w, h, feather_sigma(feather));
+            let level = |x: usize, y: usize| (v[y * w + x] * 255.0).round() as i32;
+            for (x, &want) in (60..).zip(&row) {
+                assert!((level(x, 64) - i32::from(want)).abs() <= 2, "{feather} px at x {x}: {} vs Photoshop {want}", level(x, 64));
+            }
+            assert!((level(64, 33) - i32::from(corner)).abs() <= 2, "{feather} px at (64, 33): {} vs Photoshop {corner}", level(64, 33));
+        }
+        assert_eq!(feather_sigma(0.0), 0.0);
+        assert_eq!(feather_sigma(f32::NAN), 0.0);
+        assert!(feather_sigma(0.01) < 0.1, "a tiny feather barely blurs");
+        assert!((feather_sigma(1000.0) - 1000.0).abs() < 1e-3);
     }
 
     #[test]
