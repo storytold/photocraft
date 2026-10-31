@@ -8,8 +8,8 @@ use super::steps_doc::{
     place_from, place_to, profile_from, profile_to, purge_from, purge_to, reset_from, reset_to, save_from, save_to, stop_from, stop_to,
 };
 use super::steps_image::{
-    GALLERY_IDS, REFINE_EDGE, RIPPLE_SIZE, SMART_BRUSH, apply_image_from, apply_image_to, color_range_from, color_range_to, gallery_from, gallery_to,
-    has_refine_strokes, radial_blur_from, radial_blur_to, refine_edge_to, transform_from, transform_to,
+    GALLERY_IDS, REFINE_EDGE, RIPPLE_SIZE, SMART_BRUSH, apply_image_from, apply_image_to, camera_raw_from, color_range_from, color_range_to, gallery_from,
+    gallery_to, has_refine_strokes, radial_blur_from, radial_blur_to, refine_edge_to, transform_from, transform_to,
 };
 use super::steps_layer::{
     STROKE, apply_comp_from, apply_comp_to, clear_from, clear_to, delete_from, delete_to, duplicate_from, duplicate_to, fill_from, fill_to, flip_from, flip_to,
@@ -251,6 +251,9 @@ pub(super) const EVENTS: &[Event] = &[
     ev!("Crst", "crystallize", "Crystallize", "filter.pixelate.crystallize", &[F("ClSz", "cellSize", Kind::ExactLong)]),
     ev!("Dfs ", "diffuse", "Diffuse", "filter.stylize.diffuse", &[F("Md  ", "mode", Kind::Enum("DfsM", DIFFUSE_MODE)), F("FlRs", "seed", Kind::Long)]),
     Event { code: "GEfc", name: "filterGallery", label: "Filter Gallery", ids: GALLERY_IDS, from: gallery_from, to: gallery_to },
+    // Import only: what Photoshop needs in a written step (process version, the full settings
+    // set) is unverified, so Save Actions still refuses `filter.cameraRaw`.
+    Event { code: "", name: "Adobe Camera Raw Filter", label: "Camera Raw Filter", ids: &[], from: camera_raw_from, to: |_, _| None },
     // Adjustments (Image › Adjustments).
     Event {
         code: "",
