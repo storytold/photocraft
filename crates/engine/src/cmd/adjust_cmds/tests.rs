@@ -817,6 +817,19 @@ fn replace_color_subtract_only_starts_from_the_from_colour() {
     assert_eq!(rgba(&s, 24, 16), b0, "the subtracted blue is left alone");
 }
 
+/// #10443 review: a `null` From colour means the foreground, for the subtract-only matcher too.
+#[test]
+fn replace_color_subtract_only_reads_a_null_colour_as_the_foreground() {
+    let (red, blue) = ([0.85, 0.1, 0.1, 1.0], [0.1, 0.15, 0.85, 1.0]);
+    let mut s = session(8, "rgb");
+    paint(&mut s, |x, _| if x < 16 { red } else { blue });
+    s.tools.foreground = red;
+    let r0 = rgba(&s, 4, 16);
+    let p = json!({"color": null, "hue": 120, "fuzziness": 40, "points": [], "subtractPoints": [[24, 16]]});
+    s.execute("image.adjustments.replaceColor", p).unwrap();
+    assert_ne!(rgba(&s, 4, 16), r0, "the foreground (red) is replaced");
+}
+
 #[test]
 fn replace_color_refuses_malformed_subtract_points() {
     let mut s = session(8, "rgb");

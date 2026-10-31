@@ -446,10 +446,9 @@ fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
         let mut q = json!({"points": p.get("points").cloned().unwrap_or(Value::Array(Vec::new())), "fuzziness": fuzz});
         // With no Add samples, the subtraction starts from the dialog's From colour, not the
         // foreground; with them, the samples alone span the range, as in Color Range.
-        if points.is_empty()
-            && let Some(color) = p.get("color")
-        {
-            q["color"] = color.clone();
+        // Forwarded as resolved (a `null` or missing colour is the foreground), as RGB 0..1.
+        if points.is_empty() {
+            q["color"] = json!([c[0], c[1], c[2]]);
         }
         for key in ["subtractPoints", "order", "localized", "range"] {
             if let Some(v) = p.get(key) {
