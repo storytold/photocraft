@@ -846,6 +846,7 @@ impl Session {
         // being recorded, nor move the recording mark past the entries it is about to replace.
         let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.recording.take() } else { None };
         let before = self.active().map(|st| st.doc.clone());
+        let docs_before = self.docs.len();
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
@@ -865,7 +866,7 @@ impl Session {
             self.hint_before = None;
         }
         let pending = self.jobs.pending.take();
-        match (r, pending) {
+        let out = match (r, pending) {
             (Err(e), Some(job)) => {
                 job.ctx.cancel();
                 Err(e)
@@ -882,8 +883,8 @@ impl Session {
                 Ok(Started::Job(jid))
             }
             (Ok(v), None) => {
-                if let Some(before) = before {
-                    self.add_relayout_damage(&before);
+                if let Some(before) = &before {
+                    self.add_relayout_damage(before);
                 }
                 if let Some((doc_id, layer_id)) = new_fx_target
                     && let Some(st) = self.active_mut()
@@ -899,7 +900,14 @@ impl Session {
                 self.after_command(id, params, spec.journal, Some(nested_from), pre_selected.as_deref());
                 Ok(Started::Done(v))
             }
+        };
+        // A closed document's freed buffers went to the scratch pool (`before` kept the active
+        // one alive until here): hand them back to the OS (#10479).
+        if self.docs.len() < docs_before {
+            drop(before);
+            photocraft_raster::scratch::release();
         }
+        out
     }
 
     /// Grows the damage a command reported for the pixels it changed by what effects laid out

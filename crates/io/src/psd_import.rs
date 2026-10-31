@@ -316,6 +316,13 @@ impl Ctx<'_> {
                 crate::pixels::lab16_chroma(&mut bytes, self.cc + 1, true);
             }
             surf.write_interleaved(Rect::new(r.left, r.top + b0 as i32, r.right, r.top + b1 as i32), &bytes);
+            // The band's buffers go back to the scratch pool for the next band (and the next
+            // import): each is a fresh page-faulted mmap otherwise.
+            drop(refs);
+            photocraft_raster::scratch::give(bytes);
+            for plane in planes.into_iter().flatten().flatten() {
+                photocraft_raster::scratch::give(plane);
+            }
         }
         surf.prune();
         // A white background, a solid fill's cache: one tile per value, shared across layers.

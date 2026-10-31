@@ -1,6 +1,6 @@
-use super::content::{channel_weights, empty_in, recycle_buffer, render_content, restore_channels, scratch_buffer, surface_to_buffer};
+use super::content::{channel_weights, empty_in, render_content, restore_channels, surface_to_buffer};
 use super::ctx::Ctx;
-use super::extents::{effects_frame, mask_k, mask_vals, shapeless_stroke_bounds};
+use super::extents::{effects_frame, mask_k, mask_vals, recycle_mask, shapeless_stroke_bounds};
 use super::fx_cache::effect_maps;
 use super::{BlendMode, Buffer, Fill, Layer, LayerContent, Rect, Surface, advanced, blend, effects, psblend, shape_split};
 
@@ -339,6 +339,7 @@ pub(crate) fn composite_pixel_layer(layer: &Layer, surf: &Surface, backdrop: &mu
         }
         blend_span_fill(dst, &row, rect.x0, y, layer.blend, layer.opacity, layer.fill_opacity, gamma);
     }
+    recycle_mask(mv);
 }
 
 pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: &mut Buffer, cx: &Ctx, scope: advanced::Scope) {
@@ -425,9 +426,10 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
     if let LayerContent::Adjustment(adj) = &layer.content {
         let mv = mask_vals(layer, rect, cx);
         if mv.as_ref().is_some_and(|values| values.iter().all(|&value| opacity * value <= 0.0)) {
+            recycle_mask(mv);
             return;
         }
-        let mut adjusted = scratch_buffer(rect);
+        let mut adjusted = Buffer::transparent(rect);
         adjusted.px.copy_from_slice(&backdrop.px);
         cx.apply_adjustment(adj, &mut adjusted);
         // Clipped layers onto an adjustment are uncommon; they composite atop the adjusted result.
@@ -455,7 +457,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
                 None => blend_back(&mut backdrop.px, &adjusted.px, std::iter::repeat(k), layer.blend, fill),
             }
         }
-        recycle_buffer(adjusted);
+        recycle_mask(mv);
         return;
     }
 
@@ -512,7 +514,6 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
     let Some(mut content) = render_content(layer, rect, cx) else { return };
     advanced::composite_clipped(clipped, &mut content, cx);
     blend_layer_into(backdrop, &content, layer, cx, text_gamma(layer));
-    recycle_buffer(content);
 }
 
 /// A layer with effects (and its clipping group) onto `backdrop`.
@@ -689,6 +690,7 @@ fn blend_layer_into(backdrop: &mut Buffer, src: &Buffer, layer: &Layer, cx: &Ctx
         let alpha = (s[3] / m).clamp(0.0, 1.0);
         *b = psblend::composite_fill(mode, *b, [s[0], s[1], s[2], m], opacity, fill * alpha, gamma);
     }
+    recycle_mask(mv);
 }
 
 /// [`blend_into_g`] for a layer's own `opacity` and `fill`: Fill is part of the blend for
