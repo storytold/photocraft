@@ -195,6 +195,27 @@ fn new_layer_without_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) -> boo
     true
 }
 
+/// Make Selection from Path's shortcut (⌘↩ by default) with ⇧ adds the path to the selection, with
+/// ⌥ subtracts it and with both intersects, as in Photoshop (#7726): those chords and their
+/// `mode`s, none when the shortcut has ⇧ or ⌥ already. [`crate::shortcut_dispatch::dispatch_pressed`]
+/// runs them in order with the frame's other shortcuts, and a press a binding matches keeps its
+/// binding.
+pub fn path_selection_chords(app: &PhotocraftApp) -> Vec<(KeyboardShortcut, &'static str)> {
+    let Some(base) = effective_shortcut(app, PATH_TO_SELECTION, default_shortcut(PATH_TO_SELECTION).as_deref()).and_then(|s| parse(&s)) else {
+        return Vec::new();
+    };
+    if base.modifiers.shift || base.modifiers.alt {
+        return Vec::new();
+    }
+    [(true, true, "intersect"), (true, false, "add"), (false, true, "subtract")]
+        .into_iter()
+        .map(|(shift, alt, mode)| (KeyboardShortcut::new(Modifiers { shift, alt, ..base.modifiers }, base.logical_key), mode))
+        .collect()
+}
+
+/// Layer › Make Selection from Path's command, whose ⇧ / ⌥ chords are [`path_selection_chords`].
+pub const PATH_TO_SELECTION: &str = "path.toSelection";
+
 fn nav_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     let Some(id) = nav_shortcut(app, ctx) else { return false };
     if crate::menus::is_enabled(app, id) {
@@ -761,7 +782,8 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     if new_layer_without_dialog(app, ctx) {
         return true;
     }
-    // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]).
+    // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]), and
+    // ⇧⌘↩ / ⌥⌘↩ / ⇧⌥⌘↩ (the path added to, subtracted from or intersected with the selection).
     if crate::shortcut_dispatch::dispatch_pressed(app, ctx, focus, editing) {
         return true;
     }
