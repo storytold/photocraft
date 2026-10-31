@@ -59,7 +59,8 @@ pub fn header(ui: &mut egui::Ui, layer: &Layer) {
     let kind = kind_label(layer);
     let kind_g = ui.painter().layout_no_wrap(tl!(&kind).to_owned(), egui::FontId::proportional(11.0), t.text_faint);
     let kind_w = kind_g.size().x;
-    // The name takes what's left between the icon and the kind (elided when long).
+    // The name takes what's left between the icon and the kind (elided when long). The header
+    // stays physical: the icon and name keep the left, the kind the right, in both directions.
     let name_x = r.left() + 26.0;
     let name_w = (r.right() - kind_w - 8.0 - name_x).max(0.0);
     let mut job = egui::text::LayoutJob::simple_singleline(layer.name.clone(), theme::medium(12.5), t.text);
@@ -77,38 +78,9 @@ pub fn header(ui: &mut egui::Ui, layer: &Layer) {
 /// start (the right end in a right-to-left UI). Returns whether it's open.
 /// Every Properties section uses this, so headers look and behave alike.
 pub fn section(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
-    let t = Tokens::get(ui.ctx());
-    let key = egui::Id::unique(("props-section", id));
-    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(true);
-    ui.add_space(theme::ROW_GAP);
-    widgets::hairline(ui);
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), SECTION_H), Sense::click());
-    if resp.hovered() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    let rtl = crate::direction::is_rtl();
-    // The chevron leads the title at the reading start: the right end in a right-to-left UI.
-    let chevron_x = if rtl { r.right() - 7.0 } else { r.left() + 7.0 };
-    crate::icons::paint(
-        ui,
-        Rect::from_center_size(pos2(chevron_x, r.center().y), vec2(12.0, 12.0)),
-        if open { "chevron-down" } else { "chevron-right" },
-        11.0,
-        t.text_dim,
-    );
-    let (title_x, title_align) = if rtl { (r.right() - 18.0, egui::Align2::RIGHT_CENTER) } else { (r.left() + 18.0, egui::Align2::LEFT_CENTER) };
-    ui.painter().text(pos2(title_x, r.center().y), title_align, tl!(title), theme::semibold(12.0), t.text);
-    if resp.clicked() {
-        open = !open;
-        ui.data_mut(|d| d.insert_temp(key, open));
-    }
-    let label = title.to_string();
-    resp.widget_info(move || egui::WidgetInfo::selected(egui::Role::DisclosureTriangle, true, open, &label));
-    record(ui.ctx(), title, r);
-    if open {
-        ui.add_space(theme::ROW_GAP / 2.0);
-    }
-    open
+    let ir = widgets::section_header(ui, id, title, SECTION_H, true);
+    record(ui.ctx(), title, ir.response.rect);
+    ir.inner
 }
 
 /// Section headers drawn this pass, top to bottom (title, rect), for tests and `ui.inspect`.
