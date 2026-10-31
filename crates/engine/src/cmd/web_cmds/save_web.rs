@@ -193,14 +193,12 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let all = slices::resolve(&doc);
     let pick = p.get("slices").and_then(Value::as_str).unwrap_or("all");
     let numbers: Option<Vec<u64>> = p.get("numbers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect());
-    let chosen: Vec<&ResolvedSlice> = all
-        .iter()
-        .filter(|r| match (&numbers, pick) {
-            (Some(n), _) => n.contains(&(r.number as u64)),
-            (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
-            _ => true,
-        })
-        .collect();
+    let picked = |r: &ResolvedSlice| match (&numbers, pick) {
+        (Some(n), _) => n.contains(&(r.number as u64)),
+        (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
+        _ => true,
+    };
+    let chosen: Vec<&ResolvedSlice> = all.iter().filter(|r| picked(r)).collect();
     let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
     // `folder` (with no `path` or `dir`): the whole image into that folder under the document's
@@ -265,11 +263,18 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     };
     // Slices never overlap here: one covered by later slices comes as its visible pieces (see
     // `slices::resolve`), each its own image and cell, as Photoshop's subslices. A no-image cell's
-    // text goes into its first piece only.
+    // text goes into its first piece only. In the HTML, a slice that isn't exported stays as an
+    // empty cell, so the exported ones keep their place in the table.
     let mut texted = std::collections::HashSet::new();
-    for r in &chosen {
+    for r in &all {
         let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
         if piece.is_empty() {
+            continue;
+        }
+        if !picked(r) {
+            if html {
+                cells.push((piece, String::new(), String::new()));
+            }
             continue;
         }
         let stored = r.id.and_then(|id| doc.slices.get(id));

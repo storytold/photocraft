@@ -1417,3 +1417,23 @@ fn folder_saves_under_the_documents_own_name() {
     assert_eq!(r["files"], json!([format!("{dir}/named.png")]));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn selected_slices_keep_their_place_in_the_html_table() {
+    // CodeRabbit review on PR #10557: exporting only the right of two slices put its image in
+    // the table's first column, on the left. Unexported slices stay as empty cells.
+    let dir = tmp("selected-html");
+    let mut s = session(8);
+    s.execute("slice.new", json!({"rect": [0, 0, 32, 48], "name": "left"})).unwrap();
+    s.execute("slice.new", json!({"rect": [32, 0, 32, 48], "name": "right"})).unwrap();
+    let right = photocraft_doc::slices::resolve(&s.active().unwrap().doc).iter().find(|r| r.name == "right").unwrap().number;
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": dir, "html": true, "numbers": [right]})).unwrap();
+    let files: Vec<&str> = r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().rsplit('/').next().unwrap()).collect();
+    assert_eq!(files, ["right.png"]);
+    let page = std::fs::read_to_string(r["html"].as_str().unwrap()).unwrap();
+    let row = &page[page.find("<tr>").unwrap()..page.find("</tr>").unwrap()];
+    let cells: Vec<&str> = row.split("<td").skip(1).collect();
+    assert!(cells.len() >= 2, "{row}");
+    assert!(!cells[0].contains("images/right.png"), "the right slice is in column 0:\n{row}");
+    assert!(cells[1].contains("images/right.png"), "column 1:\n{row}");
+}
