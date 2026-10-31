@@ -738,6 +738,83 @@ fn save_dialogs_remember_where_each_document_was_last_saved() {
     app.poll_file_dialog(&ctx, None);
 }
 
+/// #9656: Save As and the export dialogs start in the open document's folder by default; with
+/// Save As to Original Folder off they start in the folder last saved to, for any document.
+#[test]
+fn save_as_starts_in_the_document_folder_unless_original_folder_is_off() {
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    app.session.active_mut().unwrap().path = Some(joined("/clients/a", "design.psd"));
+    let suggested = |open: &Open| match &open.borrow()[0].0 {
+        FileDialogRequest::Save { suggested } => suggested.clone(),
+        other => panic!("save dialog expected, got {other:?}"),
+    };
+    let ask = |app: &mut PhotocraftApp, open: &Open, id: &str, answer_with: Option<&str>| {
+        menus::invoke(app, &ctx, id, json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        let asked = suggested(open);
+        answer(open, answer_with.map(|p| FileDialogAnswer::SaveTo(p.into())));
+        app.poll_file_dialog(&ctx, None);
+        asked
+    };
+    // The default: Save As offers the document's own path, and nothing is remembered across documents.
+    assert!(app.session.prefs().file_handling.save_as_to_original_folder);
+    assert_eq!(ask(&mut app, &open, "file.saveAs", Some(&joined("/exports", "design.psd"))), joined("/clients/a", "design.psd"));
+    assert_eq!(app.session.prefs().file_handling.last_save_folder, Path::new("/exports").to_string_lossy());
+    app.session.active_mut().unwrap().path = Some(joined("/clients/a", "design.psd"));
+    assert_eq!(ask(&mut app, &open, "file.saveAs", None), joined("/clients/a", "design.psd"));
+    // Off: the name stays, the folder is the one last saved to.
+    app.run("prefs.set", json!({"path": "fileHandling.saveAsToOriginalFolder", "value": false})).unwrap();
+    assert_eq!(ask(&mut app, &open, "file.saveAs", None), joined("/exports", "design.psd"));
+    // A bare export name follows the same rule, for a document that was never saved there.
+    app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/exports", "result.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+    // Nothing remembered yet: fall back to the document's folder.
+    app.run("prefs.set", json!({"path": "fileHandling.lastSaveFolder", "value": ""})).unwrap();
+    assert_eq!(ask(&mut app, &open, "file.saveAs", None), joined("/clients/a", "design.psd"));
+    app.pick_save("result.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/clients/a", "result.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
+}
+
+/// #9656: with Save As to Original Folder off, File › Save of a flat file that asks for a name
+/// still offers the document's own file; only Save As moves to the remembered folder.
+#[test]
+fn plain_save_keeps_the_documents_file_when_original_folder_is_off() {
+    let ctx = egui::Context::default();
+    let path = "/pics/My image.jpg";
+    let (mut app, open, _) = jpeg_app(None, false);
+    app.opened_from(path);
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false, "fileHandling.lastSaveFolder": "/exports"}})).unwrap();
+    for (id, expected) in [("file.save", path.to_string()), ("file.saveAs", joined("/exports", "My image.jpg"))] {
+        menus::invoke(&mut app, &ctx, id, json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if *suggested == expected), "{id}");
+        answer(&open, None);
+        app.poll_file_dialog(&ctx, None);
+    }
+}
+
+/// The same for a document opened by a relative path: File › Save keeps `design.jpg`, which
+/// a bare name would otherwise move to the remembered folder.
+#[test]
+fn plain_save_keeps_a_relative_document_path_when_original_folder_is_off() {
+    let ctx = egui::Context::default();
+    let (mut app, open, _) = jpeg_app(None, false);
+    app.opened_from("design.jpg");
+    app.run("image.adjustments.invert", json!({})).unwrap();
+    app.run("prefs.set", json!({"values": {"fileHandling.saveAsToOriginalFolder": false, "fileHandling.lastSaveFolder": "/exports"}})).unwrap();
+    menus::invoke(&mut app, &ctx, "file.save", json!({})).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert!(matches!(&open.borrow()[0].0, FileDialogRequest::Save { suggested } if suggested == "design.jpg"));
+}
+
 #[test]
 fn save_suggestions_preserve_explicit_directories_and_untitled_names() {
     let (mut app, open, _) = app();
