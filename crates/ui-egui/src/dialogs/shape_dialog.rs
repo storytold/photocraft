@@ -152,8 +152,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     result
 }
 
-/// The label column: 96 pt holds every English label; a longer translation widens it up to
-/// [`LABEL_MAX_W`] and elides past that (#9635).
+/// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and a cap.
 const LABEL_MIN_W: f32 = 96.0;
 const LABEL_MAX_W: f32 = 200.0;
 /// Every label in the column, measured in the current language.

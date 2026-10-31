@@ -123,14 +123,13 @@ fn drawn_texts(out: &egui::FullOutput) -> Vec<(String, egui::Rect, bool)> {
 }
 
 /// #9635: the shared dialog label column is as wide as its widest label, between the English
-/// width and a cap, and a label wider than the column elides inside it instead of running out of
-/// the dialog on the left (the right-aligned copies painted it from `right - 6` leftwards).
+/// width and a cap, and a label wider than the column elides inside it.
 #[test]
 fn column_label_stays_inside_its_column() {
     let ctx = egui::Context::default();
     crate::theme::install_fonts(&ctx);
     crate::theme::apply(&ctx, crate::theme::ThemeKind::ALL[0]);
-    // Canvas extension color in German (#9634): far wider than any column here.
+    // German "Canvas extension color": far wider than any column here.
     let long = "Farbe der Zeichenflächenerweiterung:";
     let mut col = egui::Rect::NOTHING;
     let mut out = ctx.run_ui(Default::default(), |ui| {

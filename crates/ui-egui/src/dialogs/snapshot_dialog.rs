@@ -31,8 +31,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     app.run(COMMAND, json!({"name": f.get("name"), "from": f.get("from")}))
 }
 
-/// The label column: 64 pt holds the English labels; a longer translation widens it up to
-/// [`LABEL_MAX_W`] (what the 260 pt name field leaves of the dialog) and elides past that (#9635).
+/// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and what the 260 pt name field leaves of the dialog.
 const LABEL_MIN_W: f32 = 64.0;
 const LABEL_MAX_W: f32 = 160.0;
 /// Every label in the column, measured in the current language.

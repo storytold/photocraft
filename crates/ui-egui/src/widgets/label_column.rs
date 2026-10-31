@@ -1,5 +1,4 @@
-//! The right-aligned label column in front of a dialog's fields ("Width:", "Contents:"…), shared
-//! by the dialogs that each carried their own copy (#9635, the same bug as #9634 in Image Size).
+//! The right-aligned label column in front of a dialog's fields ("Width:", "Contents:"…).
 //!
 //! The column is as wide as its widest label in the current language, between the English width a
 //! dialog was laid out for and a cap that still leaves room for its fields; a label wider than the

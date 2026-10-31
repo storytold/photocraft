@@ -94,8 +94,7 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     app.run(COMMAND, params(f))
 }
 
-/// The label column: 84 pt holds the English labels; a longer translation widens it up to
-/// [`LABEL_MAX_W`] (what the 200 pt name field leaves of the dialog) and elides past that (#9635).
+/// Label column bounds for [`crate::widgets::label_column_width`]: the English labels' width, and what the 200 pt name field leaves of the dialog.
 const LABEL_MIN_W: f32 = 84.0;
 const LABEL_MAX_W: f32 = 200.0;
 /// Every label these dialogs put in the column, so Channel Options, Layer Mask Display Options

@@ -1,8 +1,6 @@
-//! #9635: the dialogs that each had their own fixed-width, right-aligned `label()` (Create
-//! Rectangle/Polygon, Fill with its Blending section, Stroke, Channel Options, Layer Mask Display
-//! Options, New Spot Channel, New Snapshot) draw every label inside the dialog in every language.
-//! The copies painted a label from the column's right edge leftwards with nothing bounding it, so a
-//! longer translation ("Довільний візерунок:", "Коэффициент звезды:") ran out on the left.
+//! #9635: the dialogs that use the shared label column (Create Rectangle/Polygon, Fill with its
+//! Blending section, Stroke, Channel Options, Layer Mask Display Options, New Spot Channel, New
+//! Snapshot) draw every label inside the dialog in every language.
 
 use serde_json::{Map, Value, json};
 
@@ -52,8 +50,7 @@ fn cases(app: &mut PhotocraftApp) -> Vec<(String, Map<String, Value>, Body)> {
     cases
 }
 
-/// #9635: in every language, no text a dialog body draws starts left of the dialog's edge, where a
-/// right-aligned label too wide for its column used to overrun.
+/// In every language, no text a dialog body draws starts left of the dialog's edge.
 #[test]
 fn translated_labels_stay_inside_the_dialog() {
     let mut app = app();
@@ -82,7 +79,6 @@ fn translated_labels_stay_inside_the_dialog() {
                 })
                 .collect();
             assert!(!texts.is_empty(), "{name} {}: draws its labels", lang.code());
-            // The copies' overrun was on the left, past the dialog's edge.
             for (text, r) in texts.iter().filter(|(_, r)| r.left() < room.left() - 0.5) {
                 failures.push(format!("{name} {}: {text:?} at {r:?} starts left of the dialog's {room:?}", lang.code()));
             }
