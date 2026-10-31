@@ -171,3 +171,14 @@ or server interoperability is claimed. Before submitting, run the affected-crate
 Clippy, the layer/WASM checks required by `AGENTS.md`, and review both default-local and
 registered-provider flows. Browser editing checks and backend integration need their own
 results. This document describes the intended contract, not a validation record.
+
+For an offscreen visual check without a browser or a storage service, the existing snapshot
+example accepts `--file-provider-preview`. It uses three synthetic resources and does not
+fetch files or persist anything:
+
+```sh
+cargo run -p photocraft-ui-egui --example snapshot -- --out target/provider-home.png --size 1440x900 --scale 1 --safe-gpu --file-provider-preview
+```
+
+Omit the last flag for the default-local Home. This preview checks layout only; it is not a
+provider persistence or browser interoperability test.
