@@ -1372,6 +1372,50 @@ fn automation_save_passes_targa_bits_without_asking() {
     assert_eq!(written.borrow().len(), 3, "a bad tgaBits writes nothing");
 }
 
+/// #8064: `app.save` takes `maximizeCompatibility` for a PSD/PSB's merged image over Preferences ›
+/// File Handling; unset, the preference decides. Anything but a boolean writes nothing.
+#[test]
+fn app_save_takes_maximize_compatibility() {
+    use std::cell::RefCell;
+    use std::rc::Rc;
+    let asked: Rc<RefCell<Vec<bool>>> = Rc::default();
+    let written: Rc<RefCell<Vec<String>>> = Rc::default();
+    let (a, w) = (asked.clone(), written.clone());
+    let services = crate::Services {
+        export: Some(Box::new(move |_d: &photocraft_doc::Document, _p: &str, s: &crate::ExportSettings| {
+            a.borrow_mut().push(s.psd_maximize_compatibility);
+            Ok((b"out".to_vec(), Vec::new()))
+        })),
+        automation_write: Some(Box::new(move |path: &str, _b: &[u8]| {
+            w.borrow_mut().push(path.to_string());
+            Ok(())
+        })),
+        ..Default::default()
+    };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    let ctx = egui::Context::default();
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let saves = [
+        json!({"path": "a.psd"}),
+        json!({"path": "b.psd", "maximizeCompatibility": false}),
+        json!({"path": "c.psd", "maximizeCompatibility": true}),
+        json!({"path": "d.psd", "maximizeCompatibility": null}),
+    ];
+    for params in &saves {
+        let r = call(&mut app, &ctx, "app.save", params.clone());
+        assert_eq!(r["result"]["path"], params["path"], "{r}");
+    }
+    app.session.edit_prefs(|p| p.file_handling.maximize_psd_compatibility = photocraft_engine::prefs::Ask::Never);
+    for params in [json!({"path": "e.psd"}), json!({"path": "f.psd", "maximizeCompatibility": true})] {
+        let r = call(&mut app, &ctx, "app.save", params.clone());
+        assert_eq!(r["result"]["path"], params["path"], "{r}");
+    }
+    assert_eq!(*asked.borrow(), [true, false, true, true, false, true]);
+    let r = call(&mut app, &ctx, "app.save", json!({"path": "g.psd", "maximizeCompatibility": "no"}));
+    assert!(r["error"].as_str().unwrap().contains("maximizeCompatibility"), "{r}");
+    assert_eq!(written.borrow().len(), 6, "a bad maximizeCompatibility writes nothing");
+}
+
 /// `app.save` takes JPEG Options (`quality` 0–12, `jpegFormat`) and never stops at the prompt;
 /// a value it can't read is an error that writes nothing.
 #[test]

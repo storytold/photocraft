@@ -663,6 +663,24 @@ fn dds_converts_both_ways_with_the_compression_asked_for() {
     }
 }
 
+/// #8064: `--no-maximize-compatibility` writes a layered PSD/PSB with Photoshop's placeholder
+/// instead of the merged image, flagged in resource 1057; without it, the real image.
+#[test]
+fn no_maximize_compatibility_writes_the_psd_placeholder() {
+    let d = tmp("maximize-compat");
+    let a = d.join("a.png");
+    write_png(&a, 32, 16, 3);
+    for (args, ext, real) in
+        [(&[][..], "psd", true), (&["--no-maximize-compatibility"][..], "psd", false), (&["--no-maximize-compatibility"][..], "psb", false)]
+    {
+        let out = d.join(format!("a.{ext}"));
+        ok(bin().arg("run").arg(&a).args(["--cmd", "layer.new.layer"]).arg("--out").arg(&out).args(args));
+        let psd = photocraft_psd::PsdFile::from_bytes(&std::fs::read(&out).unwrap()).unwrap();
+        assert_eq!(psd.has_real_merged_data(), Some(real), "{args:?} {ext}");
+    }
+    std::fs::remove_dir_all(d).unwrap();
+}
+
 /// `--tga-bits` picks a TGA's bits per pixel (byte 16 of its header); anything but 24 or 32 is a
 /// usage error and nothing is written.
 #[test]
