@@ -573,7 +573,11 @@ pub(crate) fn family_picker_in(
                 changed = **f != *current;
                 current.clone_from(f);
                 photocraft_text::served::request(f);
-                edit.text = (*shown).to_string();
+                // While a query is active the field keeps the typed text, so Enter's full-name
+                // match still resolves to the family the user named, not the stepped row.
+                if edit.query.is_empty() {
+                    edit.text = (*shown).to_string();
+                }
                 edit.row = Some(next);
                 selected = Some(next);
                 stepped = Some(next);
@@ -908,26 +912,24 @@ mod rtl_tests {
     }
 
     /// The font menu's chrome mirrors in a right-to-left UI: the class list moves to the
-    /// reading-start side (the right) with the filter buttons above it, and the search field
-    /// and Clear All to the other side. The font rows stay physical, as each row's sample is
-    /// painted at its right edge.
+    /// reading-start side (the right) of the font list, and the filter buttons read before
+    /// Clear All. The font rows stay physical, as each row's sample is painted at its right edge.
     #[test]
     fn the_font_menu_chrome_mirrors_in_rtl() {
         for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
             let rtl = dir == crate::direction::Dir::Rtl;
             let _scope = crate::direction::direction_scope(dir);
             let mut h = picker_harness(dir);
-            h.query_all_by_role(Role::ComboBox).next().unwrap().click();
+            h.get_by_role(Role::TextInput).click();
             h.run();
             let popup = h.ctx.memory(|m| m.area_rect(h.state().popup)).expect("the font menu is open");
-            let search = h.get_by_role(Role::TextInput).rect();
             let classes = h.get_by_label("All Classes").rect();
+            let buttons = h.get_by_label("Show Variable Fonts").rect();
             let clear = h.get_by_label("Clear All").rect();
             let row = h.get_by_label("Family 00").rect();
             assert!(popup.contains_rect(row), "{dir:?}: the font rows stay inside the menu: {row:?} in {popup:?}");
             assert_eq!(classes.center().x > row.center().x, rtl, "{dir:?}: class list {classes:?} vs font row {row:?} in {popup:?}");
-            assert_eq!(search.center().x > classes.center().x, !rtl, "{dir:?}: search {search:?} vs class list {classes:?}");
-            assert_eq!(clear.center().x < search.center().x, rtl, "{dir:?}: Clear All {clear:?} vs search {search:?}");
+            assert_eq!(clear.center().x < buttons.center().x, rtl, "{dir:?}: Clear All {clear:?} vs filter buttons {buttons:?}");
             if rtl {
                 assert!(classes.right() > popup.right() - 140.0, "{dir:?}: the class list hugs the right: {classes:?} in {popup:?}");
             } else {
@@ -954,8 +956,11 @@ mod rtl_tests {
                     ui.with_layout(crate::direction::body_layout(), |ui| {
                         ui.horizontal(|ui| {
                             let label = ui.label("Weight");
-                            let field =
-                                ui.with_layout(crate::direction::trailing(), |ui| crate::widgets::value_field(ui, &mut s.value, 100.0..=900.0, "", 74.0)).inner;
+                            let field = ui
+                                .with_layout(crate::direction::trailing(), |ui| {
+                                    crate::widgets::value_field(ui, &mut s.value, 100.0..=900.0, "", 74.0).accessible_name("Weight")
+                                })
+                                .inner;
                             s.label = label.rect;
                             s.field = field.rect;
                         });
