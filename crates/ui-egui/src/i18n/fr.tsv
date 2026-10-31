@@ -3447,6 +3447,9 @@ curves	Smooth	Lisser
 	There is no color table to save.	Il n’y a aucune table de couleurs à enregistrer.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} couleur enregistrée dans {file}|{n} couleurs enregistrées dans {file}
 	GPU adapter	Adaptateur GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Le contenu AI/PDF/EPS sera modifié au format SVG. L’enregistrement remplace la source incorporée ; les propriétés propres au format peuvent changer.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Importer des styles…
 	Export Selected Styles…	Exporter les styles sélectionnés…
 	Export Styles…	Exporter les styles…
@@ -4524,6 +4527,7 @@ shape	Appearance	Apparence
 	Font size presets	Tailles de police prédéfinies
 	Leading presets	Interlignages prédéfinis
 	Tracking presets	Approches prédéfinies
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entrée numérique non valide. Un entier compris entre {min}% et {max}% est requis. La valeur précédente a été insérée.
 	Color Aware	Selon la couleur
 	Decontaminate Colors	Décontaminer les couleurs
 	Edge Detection	Détection des contours
@@ -4540,4 +4544,9 @@ shape	Appearance	Apparence
 	Refine Hair needs hair detection, which isn't available yet	Améliorer les cheveux nécessite une détection des cheveux, pas encore disponible
 	Select and Mask was closed: its document is no longer the active one	Sélectionner et masquer a été fermé : son document n’est plus le document actif
 	Select and Mask was closed: another layer was selected	Sélectionner et masquer a été fermé : un autre calque a été sélectionné
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Couleurs récemment utilisées
+	Stop Color	Couleur du point
+	Shapes can't use patterns yet	Les formes ne peuvent pas encore utiliser de motifs
 	Edit Brush…	Modifier le pinceau…
