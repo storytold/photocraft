@@ -499,7 +499,7 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
     if is_psd_input(name, bytes) {
         return import_psd(name, ctl, damaged, |want, recover| PsdFile::from_bytes_and_merged_recovering(bytes, want, recover));
     }
-    flat::import_flat(name, bytes)
+    flat::import_flat_with(name, bytes, ctl)
 }
 
 /// Extension names can be wrong (for example, an image downloaded as WebP and renamed `.svg`).
