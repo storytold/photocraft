@@ -387,6 +387,56 @@ fn crop_to_explicit_rect_can_extend_canvas() {
     assert_eq!(doc(&s).layers[1].surface().unwrap().pixel(20, 5), vec![1.0, 0.0, 0.0, 1.0]);
 }
 
+/// A rectangle that is passed but invalid is refused, not replaced by the selection (#9279).
+#[test]
+fn crop_refuses_a_bad_explicit_rect_instead_of_cropping_to_the_selection() {
+    let bad = [
+        json!({"x": 10, "y": 10, "width": 0, "height": 50}),
+        json!({"x": 10, "y": 10, "width": 20, "height": 0}),
+        json!({"x": 10, "y": 10, "width": -50, "height": 50}),
+        json!({"x": 10, "y": 10, "width": "100", "height": 50}),
+        json!({"x": 10, "y": 10, "width": true, "height": 50}),
+        json!({"width": 20, "height": 10}),
+        json!({"x": 1, "y": 1}),
+        json!({"x": 1, "y": null, "width": 20, "height": 10}),
+        json!({"height": 10}),
+    ];
+    for p in bad {
+        for selection in [true, false] {
+            let mut s = session();
+            if selection {
+                s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+            }
+            let (size, past) = (doc(&s).size, s.active().unwrap().history.past_len());
+            let err = s.execute("image.crop", p.clone()).unwrap_err();
+            assert!(matches!(err, EngineError::BadParams { .. }), "{p} (selection: {selection}): {err:?}");
+            assert_eq!(doc(&s).size, size, "{p} (selection: {selection})");
+            assert_eq!(doc(&s).selection.is_some(), selection, "{p}: the selection stays");
+            assert_eq!(s.active().unwrap().history.past_len(), past, "{p} (selection: {selection})");
+        }
+    }
+    // No rectangle at all (or every side null) still crops to the selection.
+    for p in [json!({}), json!({"x": null, "y": null, "width": null, "height": null})] {
+        let mut s = session();
+        s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+        s.execute("image.crop", p.clone()).unwrap();
+        assert_eq!(doc(&s).size, Size::new(20, 10), "{p}");
+    }
+    // Whole-number floats, as the Crop tool sends them, are a valid rectangle.
+    let mut s = session();
+    s.execute("select.rect", json!({"x": 5, "y": 2, "width": 20, "height": 10})).unwrap();
+    s.execute("image.crop", json!({"x": 1.0, "y": 1.0, "width": 30.0, "height": 15.0})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(30, 15));
+    // Fractional pixels round, like the rectangle's `x`/`y` and every other pixel param
+    // (`commands::int`); a side that rounds to 0 is refused.
+    let mut s = session();
+    s.execute("image.crop", json!({"x": 0.4, "y": 0.6, "width": 20.6, "height": 9.5})).unwrap();
+    assert_eq!(doc(&s).size, Size::new(21, 10));
+    let err = s.execute("image.crop", json!({"x": 0, "y": 0, "width": 0.4, "height": 5})).unwrap_err();
+    assert!(matches!(err, EngineError::BadParams { .. }), "{err:?}");
+    assert_eq!(doc(&s).size, Size::new(21, 10));
+}
+
 #[test]
 fn crop_extension_fills_the_background_with_the_background_colour() {
     let mut shrink = Session::new();
