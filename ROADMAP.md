@@ -2,10 +2,11 @@
 
 **Stage: alpha** · next: beta, ~30 points (ready for real work ~45% → ~75%, with reliable PSD) and ~1,100–1,800 h away
 
-> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-17 · **Change:** minor (Object Finder retains large enclosed foregrounds (#6548); Russian catalog covers every dynamic label; previously minor: oracle floor 145 of 258 and 953 open issues, as in gaps.md and on GitHub; toolbox count 56 of 68, 12 missing) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-17 · **Last updated:** 2026-10-30 · **Change:** minor (measured numbers brought up to `main`: menus 631, no missing tools, oracle floor 190 of 258, 2,331 open issues, language coverage of 2,208 keys; weighted estimates not recomputed; previously minor: Object Finder retains large enclosed foregrounds (#6548); Russian catalog covers every dynamic label) · **Target:** Adobe Photoshop 2026
 
 PhotoCraft's one-page summary of how close it is to Adobe Photoshop 2026 (27.11.0, measured from
-the installed app on 2026-10-10) at version 0.6.0. Detail: [target-app parity](docs/target-app-parity.md)
+the installed app on 2026-10-10) at version 0.6.0, the last full assessment. The current release
+is 0.17.0; percentages marked estimated date from that assessment. Detail: [target-app parity](docs/target-app-parity.md)
 (methodology, weights, evidence), [gaps](docs/gaps.md) (the ranked work list),
 [roadmap](docs/roadmap.md) (milestones, current focus), [scorecard](docs/scorecard.md) and
 [menu checklist](docs/parity-checklist.md) (both generated and measured),
@@ -19,7 +20,7 @@ About 80% of the work parallelizes.
 
 | | Value | Kind |
 |---|---|---|
-| **Feature breadth** | **~76%** | partly measured: menus 628/628, tools 56/68, panels 30/35, formats 13+4 of 31 |
+| **Feature breadth** | **~76%** | partly measured on 2026-10-10 and not re-weighted since: today menus 631/631, tools 68/68 (some partial), panels 30/35, formats 13+4 of 31 |
 | **Ready for real work** | **~45%** (40–50%) | estimated: weighted by dimension below |
 | Mainstream practitioner | ~43% (38–48%) | estimated: weekly areas of a typical pro, with discounts ([method](docs/target-app-parity.md#mainstream-practitioner-43)) |
 | Essentials user | ~61% (55–67%) | estimated: core features only ([method](docs/target-app-parity.md#essentials-user-61)) |
@@ -40,8 +41,9 @@ the one above. About 80% parallelizes (independent crates and command modules); 
 architecture and the PSD writer are the serial parts.
 
 **Why alpha.** Core workflows (open, layer, select, paint, adjust, filter, type, save) work end to
-end, and breadth is high, but 953 issues are open (2026-10-13), 22 of 25 performance budgets
-are missed, and PSDs we write are not yet reliably accepted by Photoshop (#1281, #2469). Beta
+end, and breadth is high, but 2,331 issues are open (2026-10-30), 22 of 25 performance budgets
+are missed (2026-10-05 baseline, taken on a contended machine, so indicative only), and PSDs we
+write are not yet reliably accepted by Photoshop (#1281, #2469). Beta
 needs ~75% ready and no blocking PSD gap. The [alpha gate](docs/roadmap.md#alpha-gate) passes: all six core workflows
 (retouch, composite, cut-out, design, paint, PSD exchange) complete end to end and save and reopen;
 four are partial in depth, none blocked.
@@ -86,35 +88,35 @@ Rows and evidence: [target-app-parity › Feature areas](docs/target-app-parity.
 
 ## Languages
 
-Measured with the `cargo xtask i18n-coverage` key universe (1,608 keys). `partial` everywhere
+Measured with `cargo xtask i18n-coverage` on 2026-10-30 (2,208 keys). `partial` everywhere
 because engine messages are still English. Detail: [localization-parity](docs/localization-parity.md).
 
 | Language | Code | UI strings | Status |
 |---|---|---:|---|
 | English | `en` | 100% | full |
-| Simplified Chinese | `zh-hans` | 100% | partial |
-| Spanish | `es` | 100% | partial |
-| Hindi | `hi` | 0% | none |
-| Arabic | `ar` | 0% (RTL shell only) | none |
-| French | `fr` | 100% | partial |
-| Portuguese (Brazil) | `pt-br` | 100% | partial |
-| Indonesian | `id` | 100% | partial |
-| Japanese | `ja` | 100% | partial |
-| German | `de` | 100% | partial |
-| Korean | `ko` | 100% | partial |
-| Vietnamese | `vi` | 0% | none |
+| Simplified Chinese | `zh-hans` | 99.1% | partial |
+| Spanish | `es` | 99.3% | partial |
+| Hindi | `hi` | 14.6% | partial |
+| Arabic | `ar` | 99.7% | partial |
+| French | `fr` | 99.2% | partial |
+| Portuguese (Brazil) | `pt-br` | 99.3% | partial |
+| Indonesian | `id` | 99.1% | partial |
+| Japanese | `ja` | 99.2% | partial |
+| German | `de` | 99.0% | partial |
+| Korean | `ko` | 99.1% | partial |
+| Vietnamese | `vi` | 99.2% | partial |
 
-Also shipped: Traditional Chinese, Russian (every dynamic label, [notes](docs/localization-ru.md)), Ukrainian, Czech, Polish, Greek, Dutch, Italian (8).
+Also shipped: Traditional Chinese, Russian ([notes](docs/localization-ru.md)), Ukrainian, Czech, Polish, Greek, Dutch, Italian, Danish, Finnish, Hungarian, Norwegian Bokmål, Serbian, Swedish, Turkish (15).
 
 ## Upcoming
 
 | Rank | Milestone | Estimate |
 |---|---|---:|
-| 1 | PSD that Photoshop trusts: Save As corruption, Photoshop re-open check, Photoshop-oracle floor 145 → 200+ of 258 | 150–250 h |
+| 1 | PSD that Photoshop trusts: Save As corruption, Photoshop re-open check, Photoshop-oracle floor 190 → 200+ of 258 | 150–250 h |
 | 2 | Performance budgets: the 22 over-budget scenarios and the 150-layer GPU crash | 200–350 h |
 | 3 | User bug backlog to under 100 open | 250–400 h |
 | 4 | Brush and transform feel (brush-parity, ui-parity rows) | 160–290 h |
-| 5 | The 12 missing tools | 60–100 h |
+| 5 | Tools that landed as partial (none is missing) | 60–100 h |
 
 Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
@@ -122,6 +124,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Entry |
 |---|---|
+| 2026-10-30 | Measured numbers brought up to `main`; weighted estimates still from the 2026-10-10 assessment |
 | 2026-10-17 | Object Finder classifies background by boundary coverage, retaining large enclosed foregrounds and rejecting surrounding backdrop (#6548); learned segmentation remains open (#2788) |
 | 2026-10-10 | Full re-measure against Photoshop 2026 27.11.0 (installed bundle inspected): breadth ~76%, ready ~45%, alpha. Progress docs reorganized (`parity.md` → `parity-checklist.md`, `parity-estimate.md` merged into `target-app-parity.md`). 0.6.0 released. |
 | 2026-10-09 | Remove tool, Rotate View, crop rotation; OpenRaster and Paint.NET; 39 Affinity documents in the corpus |
@@ -136,6 +139,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-30 | minor | Measured numbers match `main`: menus 631/631 (`docs/parity-checklist.md`), no missing tools (gaps.md G6, 68 `Tool` variants), oracle floor 190 of 258 (`crates/io/tests/it/corpus.rs`), 2,331 open issues, language coverage of 2,208 keys (`cargo xtask i18n-coverage`). Percentages and hours unchanged |
 | 2026-10-17 | minor | Object Finder retains large enclosed foregrounds (#6548) |
 | 2026-10-13 | minor | Focus item 1 quoted the oracle floor as 133 of 256; it is 145 of 258 (`crates/io/tests/it/corpus.rs`, gaps.md G1). Open issues 579 → 953 (2026-10-13) |
 | 2026-10-15 | minor | Russian catalog covers every dynamic UI label the other catalogs translate |
