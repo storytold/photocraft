@@ -2202,6 +2202,7 @@ fn stroke_effects_on_filled_and_stroked_shapes() {
     }
 }
 
+/// Whole-level gray rounds half down at Blend If cutoffs; fractional gray retains its precision.
 #[test]
 fn blend_if_gray_rounding_at_whole_levels() {
     use photocraft_doc::BlendRange;
