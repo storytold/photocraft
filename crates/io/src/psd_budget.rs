@@ -26,6 +26,11 @@ fn overflow() -> IoError {
     IoError::Unsupported("PSD import pixel memory estimate overflow".into())
 }
 
+// inflate_checked uses at least 8 KiB per stream, even for a one-pixel plane.
+fn inflate_scratch(plane_bytes: u64, channels: u64) -> Result<u64, IoError> {
+    mul(plane_bytes.saturating_add(1).clamp(8192, 1 << 20), channels)
+}
+
 fn mul(a: u64, b: u64) -> Result<u64, IoError> {
     a.checked_mul(b).ok_or_else(overflow)
 }
@@ -87,7 +92,7 @@ pub(crate) fn check(file: &PsdFile, limit: u64) -> Result<(), IoError> {
                 budget.surface(rec.rect, cc + 1, sample)?;
                 // Whole ZIP planes + band planes + interleave + temporary float pixels.
                 // Counting a full layer for each band buffer also covers a single very wide row.
-                let workspace = mul(pixels, mul(cc + 1, sample * 3 + 4)?)?;
+                let workspace = mul(pixels, mul(cc + 1, sample * 3 + 4)?)?.checked_add(inflate_scratch(mul(pixels, sample)?, cc + 1)?).ok_or_else(overflow)?;
                 // RLE row indexes live beside decoded planes.
                 budget.scratch(workspace.checked_add(mul(hh as u64 + 1, (cc + 1) * 8)?).ok_or_else(overflow)?);
             }
@@ -99,7 +104,8 @@ pub(crate) fn check(file: &PsdFile, limit: u64) -> Result<(), IoError> {
                     let (w, hh) = rect.size()?;
                     budget.surface(rect, 1, sample)?;
                     // The layer's ZIP decoders have been dropped before record_mask runs.
-                    budget.scratch(mul(mul(w as u64, hh as u64)?, sample * 3 + 4)?);
+                    let pixels = mul(w as u64, hh as u64)?;
+                    budget.scratch(mul(pixels, sample * 3 + 4)?.checked_add(inflate_scratch(mul(pixels, sample)?, 1)?).ok_or_else(overflow)?);
                 }
             }
         }
@@ -118,7 +124,7 @@ pub(crate) fn check(file: &PsdFile, limit: u64) -> Result<(), IoError> {
         budget.retain(merged)?;
         // Include float expansion/readback and RGBA fallback, even for packed bitmap input.
         let converted = mul(pixels, mul(channels.max(cc + 1), sample * 3 + 12)?)?;
-        budget.scratch(converted);
+        budget.scratch(converted.checked_add(inflate_scratch(merged, 1)?).ok_or_else(overflow)?);
     }
     budget.check(limit)
 }

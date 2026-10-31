@@ -671,8 +671,8 @@ ordinary imports instead of opening partial content.
 
 This is the first part of #8593. The allowance covers the main pixel paths, not total process
 RSS: encoded input, parser metadata, patterns, smart-filter caches, embedded smart-object
-contents, and text preparation are outside it and retain their existing limits. Joining these
-paths to a shared budget and streaming whole-plane masks are follow-up work. An accepted
+contents, generated vector caches, and text preparation are outside it and retain their
+existing limits. Joining these paths to a shared budget and streaming whole-plane masks are follow-up work. An accepted
 estimate does not guarantee allocation success on a memory-constrained host.
 
 ## Test corpora
