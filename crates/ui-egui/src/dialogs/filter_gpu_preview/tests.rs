@@ -980,6 +980,62 @@ fn high_pass_and_box_blur_preview_on_the_gpu() {
     }
 }
 
+/// Phase 4: Minimum (Preserve Squareness), Maximum (Preserve Roundness) and Custom preview on
+/// the GPU at 100 %, matching the CPU preview; a disc past the GPU's limit keeps the CPU's.
+#[test]
+fn minimum_maximum_and_custom_preview_on_the_gpu() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, mut open) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    let blur_more = json!([0, 0, 0, 0, 0, 0, 1, 2, 1, 0, 0, 2, 2, 2, 0, 0, 1, 2, 1, 0, 0, 0, 0, 0, 0]);
+    let cases = [
+        (MINIMUM, json!({"radius": 5.0, "preserve": "squareness"}), true),
+        (MAXIMUM, json!({"radius": 9.0, "preserve": "roundness"}), true),
+        (CUSTOM, json!({"kernel": blur_more, "scale": 14, "offset": 0}), true),
+        (MAXIMUM, json!({"radius": 40.0, "preserve": "roundness"}), true),
+        (MAXIMUM, json!({"radius": 150.0, "preserve": "roundness"}), false),
+    ];
+    for (command, params, gpu) in cases {
+        crate::dialogs::cancel(h.state_mut(), open).unwrap();
+        open = crate::filter_dialog::open(h.state_mut(), command).unwrap();
+        {
+            let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == open).unwrap();
+            for (k, v) in params.as_object().unwrap() {
+                d.fields.insert(k.clone(), v.clone());
+            }
+            d.fields.insert("__preview".into(), json!(true));
+        }
+        let what = format!("{command} {params}");
+        if !gpu {
+            settle(&mut h, |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some()));
+            assert!(!on_gpu(h.state_mut(), 0), "{what}: a disc past the GPU's limit previews on the CPU");
+            continue;
+        }
+        settle(&mut h, |app| on_gpu(app, 0));
+        assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "{what}: the CPU preview stands aside");
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, command, &params, 1).unwrap())
+        };
+        let plain = h.state().session.active().unwrap().doc.clone();
+        let shown = probes_named(&mut h, Some(&what));
+        let (mut checked, mut differs) = (0, 0);
+        for (p, px) in &shown {
+            let (want, alpha) = expected_in(h.state(), &oracle, *p);
+            if alpha < 0.999 {
+                continue;
+            }
+            assert!(within(&want, *px), "{what}: at {p:?} the canvas shows {px:?}, the CPU {want:?}");
+            checked += 1;
+            differs += usize::from(!within(&expected_around(h.state(), &plain, *p, 0).0, *px));
+        }
+        assert!(checked >= 40 && differs >= 10, "{what}: {checked} probes checked, {differs} differ from the unfiltered image");
+    }
+}
+
 /// Only the main canvas gives the dialog's preview window its GPU view: an Arrange tile or a
 /// floating window (perhaps on another display) must not replace it.
 #[test]

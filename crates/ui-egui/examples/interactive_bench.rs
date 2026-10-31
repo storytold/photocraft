@@ -341,10 +341,7 @@ fn main() {
             let content = doc.layer(target).and_then(|l| l.surface()).map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY);
             let area = photocraft_algo::output_area(&fp, content, doc.bounds(), None);
             let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
-            let blur = match photocraft_algo::separable::Separable::of(&fp).expect("a blur") {
-                photocraft_algo::separable::Separable::Kernel(k) => photocraft_gpu::SeparableBlur::Kernel(k),
-                photocraft_algo::separable::Separable::Boxes(b) => photocraft_gpu::SeparableBlur::Boxes(b),
-            };
+            let blur = photocraft_ui_egui::filter_gpu_preview::gpu_blur(photocraft_algo::separable::Separable::of(&fp).expect("a blur"));
             let program = photocraft_gpu::GaussianBlur::new(blur, extent, area, None, false, doc.depth).expect("a runnable blur");
             photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
         };
@@ -400,6 +397,55 @@ fn main() {
             std::hint::black_box(photocraft_algo::apply(surf, &fp, photocraft_algo::output_area(&fp, content, doc.bounds(), None), doc.bounds(), None));
             println!("  (the CPU's Unsharp Mask r {radius} over the whole layer: {:.0} ms)", ms(t));
         }
+        // Minimum, Maximum and Custom (Phase 4): the window filters, per slider step.
+        let window = |fp: &photocraft_algo::FilterParams| {
+            let content = doc.layer(target).and_then(|l| l.surface()).map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY);
+            let area = photocraft_algo::output_area(fp, content, doc.bounds(), None);
+            let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
+            let blur = photocraft_ui_egui::filter_gpu_preview::gpu_blur(photocraft_algo::separable::Separable::of(fp).expect("a window filter"));
+            let program = photocraft_gpu::GaussianBlur::new(blur, extent, area, None, false, doc.depth).expect("a runnable filter");
+            photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
+        };
+        let blur_more = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 1.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 1.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+        // A filter's params a slider step `d` away.
+        type ParamsAt = Box<dyn Fn(f32) -> photocraft_algo::FilterParams>;
+        let windows: [(&str, ParamsAt); 5] = [
+            (
+                "Minimum r 10 (square)",
+                Box::new(|d| photocraft_algo::FilterParams::Minimum { radius: 10.0 + d, preserve: photocraft_algo::Preserve::Squareness }),
+            ),
+            ("Maximum r 10 (round)", Box::new(|d| photocraft_algo::FilterParams::Maximum { radius: 10.0 + d, preserve: photocraft_algo::Preserve::Roundness })),
+            ("Maximum r 40 (round)", Box::new(|d| photocraft_algo::FilterParams::Maximum { radius: 40.0 + d, preserve: photocraft_algo::Preserve::Roundness })),
+            (
+                "Maximum r 100 (round)",
+                Box::new(|d| photocraft_algo::FilterParams::Maximum { radius: 100.0 + d, preserve: photocraft_algo::Preserve::Roundness }),
+            ),
+            (
+                "Custom (Blur More's kernel)",
+                Box::new(move |d| photocraft_algo::FilterParams::Custom { kernel: blur_more.clone(), scale: 14.0 + d, offset: 0.0 }),
+            ),
+        ];
+        for (name, params) in &windows {
+            if let Some(g) = &mut b.gpu {
+                g.comp.set_operators(doc.id, vec![window(&params(0.0))]);
+            }
+            let first = b.render(&doc, view);
+            println!("  (GPU-resident {name}: first frame with the window upload {first:.1} ms)");
+            let mut step = 0;
+            b.time(&format!("{name} dialog preview (GPU resident)"), |b| {
+                step += 1;
+                if let Some(g) = &mut b.gpu {
+                    g.comp.set_operators(doc.id, vec![window(&params((step % 2) as f32))]);
+                }
+                b.render(&doc, view)
+            });
+            let surf = doc.layer(target).and_then(|l| l.surface()).expect("surface");
+            let fp = params(0.0);
+            let content = surf.content_bounds();
+            let t = Instant::now();
+            std::hint::black_box(photocraft_algo::apply(surf, &fp, photocraft_algo::output_area(&fp, content, doc.bounds(), None), doc.bounds(), None));
+            println!("  (the CPU's {name} over the whole layer: {:.0} ms)", ms(t));
+        }
         if let Some(g) = &mut b.gpu {
             g.comp.clear_operators(doc.id);
         }
@@ -417,10 +463,7 @@ fn main() {
                 let content = proxy.layer(ptarget).and_then(|l| l.surface()).map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY);
                 let area = photocraft_algo::output_area(&fp, content, proxy.bounds(), None);
                 let extent = photocraft_algo::separable::edge_extent(proxy.bounds(), content);
-                let blur = match photocraft_algo::separable::Separable::of(&fp).expect("a blur") {
-                    photocraft_algo::separable::Separable::Kernel(k) => photocraft_gpu::SeparableBlur::Kernel(k),
-                    photocraft_algo::separable::Separable::Boxes(b) => photocraft_gpu::SeparableBlur::Boxes(b),
-                };
+                let blur = photocraft_ui_egui::filter_gpu_preview::gpu_blur(photocraft_algo::separable::Separable::of(&fp).expect("a blur"));
                 let program = photocraft_gpu::GaussianBlur::new(blur, extent, area, None, false, proxy.depth).expect("a runnable blur");
                 photocraft_gpu::LayerOperator { layer: ptarget, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
             };

@@ -12,6 +12,17 @@ use photocraft_raster::{Interrupt, Surface};
 
 use super::*;
 
+/// algo's description of a CPU filter as the GPU operator's.
+fn gpu_blur(s: Separable) -> SeparableBlur {
+    match s {
+        Separable::Kernel(k) => SeparableBlur::Kernel(k),
+        Separable::Boxes(b) => SeparableBlur::Boxes(b),
+        Separable::Extreme { radius, max } => SeparableBlur::Extreme { radius, max },
+        Separable::Disc { half_widths, max } => SeparableBlur::Disc { half_widths, max },
+        Separable::Convolve { taps, scale, offset } => SeparableBlur::Convolve { taps, scale, offset },
+    }
+}
+
 /// Gaussian Blur of `radius` on `layer` of `doc`, as the engine applies it (`filters.rs`): the
 /// output area, the edge extent, the selection's mix and Lock Transparency.
 fn filtered(doc: &Document, layer: LayerId, radius: f32, keep_alpha: bool) -> Document {
@@ -49,10 +60,7 @@ fn geometry(doc: &Document, layer: LayerId, radius: f32) -> (Rect, Rect, Rect) {
 /// The same blur as a layer operator.
 fn operator(doc: &Document, layer: LayerId, radius: f32, keep_alpha: bool) -> LayerOperator {
     let (area, extent, _) = geometry(doc, layer, radius);
-    let blur = match Separable::of(&FilterParams::GaussianBlur { radius }).unwrap() {
-        Separable::Kernel(k) => SeparableBlur::Kernel(k),
-        Separable::Boxes(b) => SeparableBlur::Boxes(b),
-    };
+    let blur = gpu_blur(Separable::of(&FilterParams::GaussianBlur { radius }).unwrap());
     let selection = doc.selection.clone().map(Arc::new);
     let program = GaussianBlur::new(blur, extent, area, selection, keep_alpha, doc.depth).expect("a runnable blur");
     LayerOperator { layer, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) }
@@ -255,6 +263,12 @@ fn blur_descriptions_the_passes_cant_run_are_refused() {
     assert!(GaussianBlur::new(SeparableBlur::Boxes(vec![4001]), r, r, None, false, SampleType::U8).is_none(), "reach past the limit");
     assert!(GaussianBlur::new(SeparableBlur::Kernel(vec![1.0]), Rect::EMPTY, r, None, false, SampleType::U8).is_none(), "no extent");
     assert!(GaussianBlur::new(SeparableBlur::Boxes(vec![5, 5, 7]), r, r, None, false, SampleType::U8).is_some());
+    // Per-pixel work past what a refresh should take (`MAX_AXIS_TAPS`): long kernels and wide squares.
+    let taps = photocraft_gpu::MAX_AXIS_TAPS;
+    assert!(GaussianBlur::new(SeparableBlur::Kernel(vec![1.0 / taps as f32; taps]), r, r, None, false, SampleType::U8).is_some(), "at the limit");
+    assert!(GaussianBlur::new(SeparableBlur::Kernel(vec![0.001; taps + 2]), r, r, None, false, SampleType::U8).is_none(), "a longer kernel");
+    let square = |radius: u32| GaussianBlur::new(SeparableBlur::Extreme { radius, max: true }, r, r, None, false, SampleType::U8);
+    assert!(square((taps / 2) as u32).is_some() && square((taps / 2) as u32 + 1).is_none(), "squares past radius 300");
 }
 
 /// What operators can't draw exactly fails the render (the caller previews on the CPU): a
@@ -385,10 +399,7 @@ fn a_mask_blur_operator_matches_the_cpu_filter() {
                 let what =
                     format!("mask, {depth:?} radius {radius}{}{}", if selection { ", selection" } else { "" }, if hide { "" } else { ", reveal-all mask" });
                 let (expected, area, extent) = mask_filtered(&doc, id, radius);
-                let blur = match Separable::of(&FilterParams::GaussianBlur { radius }).unwrap() {
-                    Separable::Kernel(k) => SeparableBlur::Kernel(k),
-                    Separable::Boxes(b) => SeparableBlur::Boxes(b),
-                };
+                let blur = gpu_blur(Separable::of(&FilterParams::GaussianBlur { radius }).unwrap());
                 let program = GaussianBlur::new(blur, extent, area, doc.selection.clone().map(Arc::new), false, depth).expect("a runnable blur");
                 let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Mask, program: Arc::new(program) };
                 if let Err(e) = compare(&mut g, &doc, &op, &expected, tolerance(depth), &what) {
@@ -530,10 +541,7 @@ fn box_blur_and_high_pass_operators_match_the_cpu_filters() {
                 let mut expected = doc.clone();
                 let surf = expected.layer_mut(id).unwrap().surface_mut().unwrap();
                 *surf = photocraft_algo::apply_in_with(surf, params, area, bounds, doc.selection.as_ref(), extent, &Interrupt::NONE).unwrap();
-                let blur = match Separable::of(params).expect("a separable blur") {
-                    Separable::Kernel(k) => SeparableBlur::Kernel(k),
-                    Separable::Boxes(b) => SeparableBlur::Boxes(b),
-                };
+                let blur = gpu_blur(Separable::of(params).expect("a separable blur"));
                 let program = GaussianBlur::new(blur, extent, area, doc.selection.clone().map(Arc::new), false, depth).expect("a runnable blur");
                 let program = if matches!(params, FilterParams::HighPass { .. }) { program.high_pass() } else { program };
                 let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) };
@@ -544,6 +552,94 @@ fn box_blur_and_high_pass_operators_match_the_cpu_filters() {
         }
     }
     assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Phase 4: Minimum and Maximum (over a square and over a disc) and Custom as layer operators,
+/// against the CPU filters applied as the engine applies them. They work on the straight values,
+/// so a layer's transparent margin and Lock Transparency are both covered.
+#[test]
+fn minimum_maximum_and_custom_operators_match_the_cpu_filters() {
+    use photocraft_algo::Preserve;
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        eprintln!("skipping minimum / maximum / custom parity: no compute");
+        return;
+    }
+    let mut failures = Vec::new();
+    // Blur More's kernel, an edge kernel with a scale and offset, and one with a single tap.
+    let blur_more = vec![0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 2.0, 1.0, 0.0, 0.0, 2.0, 2.0, 2.0, 0.0, 0.0, 1.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0];
+    let mut edges = vec![0.0; 25];
+    for (i, w) in [(6, -1.0), (7, -1.0), (8, -1.0), (11, -1.0), (12, 9.0), (13, -1.0), (16, -1.0), (17, -1.0), (18, -1.0), (2, 1.0), (22, -1.0)] {
+        edges[i] = w;
+    }
+    let mut corner = vec![0.0; 25];
+    corner[24] = 1.0;
+    let cases = [
+        FilterParams::Minimum { radius: 1.0, preserve: Preserve::Squareness },
+        FilterParams::Maximum { radius: 6.4, preserve: Preserve::Squareness },
+        FilterParams::Minimum { radius: 3.0, preserve: Preserve::Roundness },
+        FilterParams::Maximum { radius: 7.5, preserve: Preserve::Roundness },
+        FilterParams::Maximum { radius: 0.4, preserve: Preserve::Roundness },
+        // Discs whose steps run many half-widths, wider than the layer's margin.
+        FilterParams::Minimum { radius: 25.0, preserve: Preserve::Roundness },
+        FilterParams::Maximum { radius: 60.0, preserve: Preserve::Roundness },
+        FilterParams::Custom { kernel: blur_more, scale: 14.0, offset: 0.0 },
+        FilterParams::Custom { kernel: edges, scale: 2.0, offset: 30.0 },
+        FilterParams::Custom { kernel: corner, scale: 0.0, offset: -10.0 },
+    ];
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        for params in &cases {
+            for (selection, keep_alpha) in [(false, false), (true, false), (false, true)] {
+                let (mut doc, id) = blur_doc(depth);
+                if selection {
+                    doc.selection = Some(feathered_selection());
+                }
+                let what = format!("{depth:?} {params:?}{}{}", if selection { ", selection" } else { "" }, if keep_alpha { ", lock transparency" } else { "" });
+                let content = doc.layer(id).unwrap().surface().unwrap().content_bounds();
+                let sel_bounds = doc.selection.as_ref().map(Surface::content_bounds);
+                let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
+                let area = photocraft_algo::output_area(params, content, bounds, sel_bounds);
+                let extent = edge_extent(doc.bounds(), content);
+                let mut expected = doc.clone();
+                let surf = expected.layer_mut(id).unwrap().surface_mut().unwrap();
+                let before = surf.clone();
+                let mut result = photocraft_algo::apply_in_with(surf, params, area, bounds, doc.selection.as_ref(), extent, &Interrupt::NONE).unwrap();
+                if keep_alpha {
+                    // As the engine keeps the old alpha (`filters.rs`).
+                    let r = result.tile_bounds().union(&before.tile_bounds());
+                    let (mut new, old) = (result.read_region(r), before.read_region(r));
+                    let ch = before.channels();
+                    for (n, o) in new.chunks_exact_mut(ch).zip(old.chunks_exact(ch)) {
+                        n[ch - 1] = o[ch - 1];
+                    }
+                    result.write_region(r, &new);
+                }
+                *surf = result;
+                let blur = gpu_blur(Separable::of(params).expect("a window filter"));
+                let program = GaussianBlur::new(blur, extent, area, doc.selection.clone().map(Arc::new), keep_alpha, depth).expect("a runnable filter");
+                let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) };
+                if let Err(e) = compare(&mut g, &doc, &op, &expected, tolerance(depth), &what) {
+                    failures.push(e);
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A disc past the GPU's limit, or a Custom kernel with nothing finite to divide by, is refused:
+/// the preview stays on the CPU.
+#[test]
+fn window_filters_the_gpu_cant_run_are_refused() {
+    let area = Rect::new(0, 0, 10, 10);
+    let disc = |r: usize| SeparableBlur::Disc { half_widths: vec![1; 2 * r + 1], max: true };
+    assert!(GaussianBlur::new(disc(photocraft_gpu::MAX_DISC_RADIUS), area, area, None, false, SampleType::U8).is_some());
+    assert!(GaussianBlur::new(disc(photocraft_gpu::MAX_DISC_RADIUS + 1), area, area, None, false, SampleType::U8).is_none());
+    let convolve = |scale: f32, offset: f32| SeparableBlur::Convolve { taps: vec![(0, 0, 1.0)], scale, offset };
+    assert!(GaussianBlur::new(convolve(1.0, 0.0), area, area, None, false, SampleType::U8).is_some());
+    for (scale, offset) in [(0.0, 0.0), (f32::NAN, 0.0), (1.0, f32::INFINITY)] {
+        assert!(GaussianBlur::new(convolve(scale, offset), area, area, None, false, SampleType::U8).is_none(), "{scale} {offset}");
+    }
 }
 
 /// Closing the last document with operators frees their scratch textures (they were kept for the

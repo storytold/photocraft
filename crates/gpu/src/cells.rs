@@ -455,19 +455,21 @@ impl Compositor {
                 None => self.create_layer_texture(device, &desc("pc_operator_output", region), ok, bytes(region), stats)?,
             };
             let size = [sub.width(), sub.height()];
-            if self.op_scratch.as_ref().is_none_or(|(s, _)| s[0] < size[0] || s[1] < size[1]) {
+            let count = operator::scratch_count(&blur.blur);
+            if self.op_scratch.as_ref().is_none_or(|(s, t)| s[0] < size[0] || s[1] < size[1] || t.len() < count) {
                 let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
-                // Within the budget and its fallback, as layer pages are: the old pair goes first,
-                // room is made for the whole new pair, and each texture counts once made.
+                // Within the budget and its fallback, as layer pages are: the old set goes first,
+                // room is made for the whole new set, and each texture counts once made.
                 self.op_scratch = None;
                 let each = bytes(Rect::from_xywh(0, 0, grown[0], grown[1]));
-                let (n, dropped) = self.evict_residents(self.resident_budget, each.saturating_mul(2), Some(ok));
+                let (n, dropped) = self.evict_residents(self.resident_budget, each.saturating_mul(count as u64), Some(ok));
                 stats.evicted += n;
                 self.admit_freed = self.admit_freed.saturating_add(dropped);
-                let mut made = Vec::with_capacity(2);
-                for label in ["pc_operator_a", "pc_operator_b"] {
-                    let texture = self.create_budgeted(device, &operator::float_desc(label, grown[0], grown[1]), each, Some(ok), stats);
-                    let Some(texture) = texture else {
+                let mut made = Vec::with_capacity(count);
+                for i in 0..count {
+                    let label = format!("pc_operator_scratch{i}");
+                    let desc = operator::float_desc(&label, grown[0], grown[1]);
+                    let Some(texture) = self.create_budgeted(device, &desc, each, Some(ok), stats) else {
                         self.scratch_making = 0;
                         return None;
                     };
@@ -475,8 +477,7 @@ impl Compositor {
                     made.push(texture);
                 }
                 self.scratch_making = 0;
-                let [a, b]: [wgpu::Texture; 2] = made.try_into().ok()?;
-                self.op_scratch = Some((grown, [a, b]));
+                self.op_scratch = Some((grown, made));
             }
             let Some(source) = self.residents.get(&wk).map(|r| r.texture.clone()) else {
                 // Evicted making room for the output: the refresh goes to the CPU.

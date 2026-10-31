@@ -43,8 +43,15 @@ pub const HIGH_PASS: &str = "filter.other.highPass";
 /// Box Blur: a uniform kernel or one box pass.
 pub const BOX_BLUR: &str = "filter.blur.boxBlur";
 
+/// Minimum and Maximum: an extreme over a square or a disc (`SeparableBlur::Extreme`, `Disc`).
+pub const MINIMUM: &str = "filter.other.minimum";
+pub const MAXIMUM: &str = "filter.other.maximum";
+
+/// Custom: a 5×5 convolution (`SeparableBlur::Convolve`).
+pub const CUSTOM: &str = "filter.other.custom";
+
 /// The filters this path previews.
-pub const COMMANDS: [&str; 4] = [COMMAND, UNSHARP, HIGH_PASS, BOX_BLUR];
+pub const COMMANDS: [&str; 7] = [COMMAND, UNSHARP, HIGH_PASS, BOX_BLUR, MINIMUM, MAXIMUM, CUSTOM];
 
 /// One filter dialog's GPU preview session.
 pub struct FilterGpuPreview {
@@ -243,10 +250,7 @@ fn blur_for(
     let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
     let area = photocraft_algo::output_area(&fp, content, bounds, sel_bounds);
     let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
-    let blur = match photocraft_algo::separable::Separable::of(&fp)? {
-        photocraft_algo::separable::Separable::Kernel(k) => SeparableBlur::Kernel(k),
-        photocraft_algo::separable::Separable::Boxes(b) => SeparableBlur::Boxes(b),
-    };
+    let blur = gpu_blur(photocraft_algo::separable::Separable::of(&fp)?);
     // Lock Transparency keeps a layer's alpha; a mask has none.
     let keep_alpha = on == OperatorTarget::Content && doc.effective_locks(target).transparency;
     let op = GaussianBlur::new(blur, extent, area, selection, keep_alpha, depth)?;
@@ -257,6 +261,18 @@ fn blur_for(
         _ => op,
     };
     Some((op, area.intersect(&doc.bounds())))
+}
+
+/// algo's description of a CPU filter (`photocraft_algo::separable`) as the GPU operator's.
+pub fn gpu_blur(s: photocraft_algo::separable::Separable) -> SeparableBlur {
+    use photocraft_algo::separable::Separable;
+    match s {
+        Separable::Kernel(k) => SeparableBlur::Kernel(k),
+        Separable::Boxes(b) => SeparableBlur::Boxes(b),
+        Separable::Extreme { radius, max } => SeparableBlur::Extreme { radius, max },
+        Separable::Disc { half_widths, max } => SeparableBlur::Disc { half_widths, max },
+        Separable::Convolve { taps, scale, offset } => SeparableBlur::Convolve { taps, scale, offset },
+    }
 }
 
 /// Bring the session up to date for document `idx` (the active one) and return it.
