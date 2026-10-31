@@ -320,6 +320,45 @@ fn main() {
         std::hint::black_box(photocraft_compose::flatten(&p));
         println!("  (the flatten the window no longer repeats: {:.1} ms)", ms(t));
     }
+    // The same preview resident on the GPU (#5772, Phase 1): a layer operator blurs the layer's
+    // pages and the compositor draws a 1920×1080 view of it. Per slider change, waited on.
+    if b.gpu.is_some() {
+        let st = s.active().expect("doc");
+        let (doc, target) = (st.doc.clone(), st.active_layer.expect("layer"));
+        let view = Rect::from_xywh(w as i32 / 2 - 960, h as i32 / 2 - 540, 1920, 1080);
+        let operator = |radius: f32| {
+            let fp = photocraft_algo::FilterParams::GaussianBlur { radius };
+            let content = doc.layer(target).and_then(|l| l.surface()).map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY);
+            let area = photocraft_algo::output_area(&fp, content, doc.bounds(), None);
+            let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
+            let blur = match photocraft_algo::separable::Separable::of(&fp).expect("a blur") {
+                photocraft_algo::separable::Separable::Kernel(k) => photocraft_gpu::SeparableBlur::Kernel(k),
+                photocraft_algo::separable::Separable::Boxes(b) => photocraft_gpu::SeparableBlur::Boxes(b),
+            };
+            let program = photocraft_gpu::GaussianBlur::new(blur, extent, area, None, false, doc.depth).expect("a runnable blur");
+            photocraft_gpu::LayerOperator { layer: target, program: std::sync::Arc::new(program) }
+        };
+        for radius in [40.0f32, 250.0] {
+            // The session's first frame uploads the windows the blur reads.
+            if let Some(g) = &mut b.gpu {
+                g.comp.set_operators(doc.id, vec![operator(radius)]);
+            }
+            let first = b.render(&doc, view);
+            println!("  (GPU-resident preview r {radius}: first frame with the window upload {first:.1} ms)");
+            let mut step = 0;
+            b.time(&format!("Gaussian Blur dialog preview r {radius} (GPU resident)"), |b| {
+                step += 1;
+                // A slider step: a slightly different radius each time.
+                if let Some(g) = &mut b.gpu {
+                    g.comp.set_operators(doc.id, vec![operator(radius + (step % 2) as f32 * 0.5)]);
+                }
+                b.render(&doc, view)
+            });
+        }
+        if let Some(g) = &mut b.gpu {
+            g.comp.clear_operators(doc.id);
+        }
+    }
     // Image › Adjustments dialog preview, per settings change (#77). Before: the command re-run
     // on a downsampled proxy (plus its flatten for upload). After: the document with a temporary
     // clipped adjustment layer, recomposited over the target's area by the canvas compositor.
