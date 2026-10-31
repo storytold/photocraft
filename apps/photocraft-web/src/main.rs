@@ -6,10 +6,10 @@
 //!
 //! Differences from the desktop app:
 //! - no TCP control server (browsers can't listen on sockets);
-//! - File → Open uses the browser file picker; bytes arrive asynchronously through
-//!   `Services::inbox`;
+//! - file pickers return browser file contents asynchronously through `Services::file_dialog`;
+//!   this includes File → Open and commands such as Place Embedded;
 //! - saving/exporting triggers a browser download;
-//! - dropped files are read asynchronously by `web::WebShell` and delivered through the inbox.
+//! - dropped files are read asynchronously by `web::WebShell` and delivered through `Services::inbox`.
 //!
 //! URL query flags: `?cpu` forces the CPU canvas path (same as `PHOTOCRAFT_CPU_CANVAS=1`);
 //! `?webgl` forces the WebGL2 backend instead of WebGPU.

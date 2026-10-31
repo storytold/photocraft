@@ -17,8 +17,7 @@ fn missing_paths(paths: &[String]) -> Vec<String> {
         .iter()
         .filter(|path| {
             // Permission and transient I/O errors do not prove a file was deleted.
-            // NotFound on the file while its parent is also gone is an unplugged drive or
-            // unmounted share, not a deleted file — keep the recent entry.
+            // NotFound on the file while its parent is also gone is an unplugged drive, not a deleted file.
             let p = std::path::Path::new(path.as_str());
             std::fs::metadata(p).is_err_and(|err| err.kind() == std::io::ErrorKind::NotFound)
                 && p.parent().is_some_and(|parent| std::fs::metadata(parent).is_ok())
@@ -28,7 +27,6 @@ fn missing_paths(paths: &[String]) -> Vec<String> {
 }
 
 fn apply(app: &mut PhotocraftApp, checked: &[String], missing: &[String]) {
-    // A newer list may include a file recreated or reopened while the worker was checking it.
     if app.ui.recent_files != checked {
         return;
     }
