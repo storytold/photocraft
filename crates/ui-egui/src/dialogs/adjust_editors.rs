@@ -259,9 +259,6 @@ mod tests {
         assert_eq!(track_stops(&cx(false), &stops), None);
     }
 
-    /// #9252: Photoshop 2025's zone drags on a colour range (measured on Reds): the fully-on span
-    /// moves all four handles, each fade its own two; a side stops at the other and the range
-    /// never passes a turn.
     /// #9272 review: at the narrowest Properties panel (a 230-point bar) a 30° zone is ~19 points
     /// wide; a press in its middle grabs the zone, not a handle, while each handle stays grabbable.
     #[test]
@@ -286,6 +283,9 @@ mod tests {
         assert_eq!(hue_range_handle_at(reds, reds[2] - 1.0, w), Some(2));
     }
 
+    /// #9252: Photoshop 2025's zone drags on a colour range (measured on Reds): the fully-on span
+    /// moves all four handles, each fade its own two; a side stops at the other and the range
+    /// never passes a turn.
     #[test]
     fn hue_range_zones_move_their_handles() {
         let reds = [-45.0, -15.0, 15.0, 45.0];
