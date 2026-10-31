@@ -266,19 +266,27 @@ impl PhotocraftApp {
             let fmt = doc.pixel_format();
             let colors = fmt.mode.color_channels();
             let mut texs = vec![make(&|p| egui::Color32::from_rgb(p[0], p[1], p[2]), "composite")];
+            let inks = (fmt.mode == photocraft_doc::ColorMode::Cmyk).then(|| ink_thumbnail(&doc, 56, w, h));
             if colors > 1 {
                 for k in 0..colors {
-                    let cmyk = fmt.mode == photocraft_doc::ColorMode::Cmyk;
-                    texs.push(make(
-                        &|p| {
-                            let rgba = [p[0], p[1], p[2], 255].map(|v| f32::from(v) / 255.0);
-                            let x = photocraft_raster::from_rgba(&fmt, rgba)[k];
-                            let g = if cmyk { 1.0 - x } else { x };
+                    let mut px = vec![egui::Color32::TRANSPARENT; side * side];
+                    let (ox, oy) = ((side - w) / 2, (side - h) / 2);
+                    for y in 0..h {
+                        for x in 0..w {
+                            let i = y * w + x;
+                            let g = match &inks {
+                                // Ink channels read dark where there is ink.
+                                Some(inks) => 1.0 - inks[i][k],
+                                None => {
+                                    let p = &comp.pixels[i * 4..i * 4 + 4];
+                                    photocraft_raster::from_rgba(&fmt, [p[0], p[1], p[2], 255].map(|v| f32::from(v) / 255.0))[k]
+                                }
+                            };
                             let byte = (g.clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
-                            channel_tint(fmt.mode, k, byte, show_color)
-                        },
-                        &format!("c{k}"),
-                    ));
+                            px[(y + oy) * side + x + ox] = channel_tint(fmt.mode, k, byte, show_color);
+                        }
+                    }
+                    texs.push((format!("chan-c{k}"), egui::ColorImage::new([side, side], px)));
                 }
             }
             // Alpha channels and the Quick Mask, sampled at thumbnail resolution.
@@ -312,6 +320,18 @@ impl PhotocraftApp {
         }
         self.channel_thumbs.as_ref().map(|(_, _, _, t)| t.iter().map(|t| t.id()).collect()).unwrap_or_default()
     }
+}
+
+/// The inks of a CMYK document's `w`×`h` channel thumbnails, row by row: the document's own
+/// inks, not the RGB thumbnail separated again (#8359). Sampled at the thumbnail's pixel centres,
+/// from the same proxy as the composite thumbnail on large documents.
+fn ink_thumbnail(doc: &Document, max_side: u32, w: usize, h: usize) -> Vec<[f32; 4]> {
+    let proxy = photocraft_compose::thumbnail_proxy(doc, max_side);
+    let src = proxy.as_ref().unwrap_or(doc);
+    let (sw, sh) = (src.size.width.max(1) as f32, src.size.height.max(1) as f32);
+    let xs: Vec<i32> = (0..w).map(|x| ((x as f32 + 0.5) * sw / w as f32) as i32).collect();
+    let ys: Vec<i32> = (0..h).map(|y| ((y as f32 + 0.5) * sh / h as f32) as i32).collect();
+    crate::canvas::channel_view::ink_samples(src, &xs, &ys)
 }
 
 /// Whether `new` differs from `old` at most in its selection, so every composite and channel
@@ -362,5 +382,26 @@ mod channel_tint_tests {
         assert_eq!(channel_tint(Cmyk, 3, 0, true), Color32::BLACK);
         assert_eq!(channel_tint(Grayscale, 0, 77, true), Color32::from_gray(77));
         assert_eq!(channel_tint(Rgb, 0, 77, false), Color32::from_gray(77));
+    }
+}
+
+#[cfg(test)]
+mod ink_thumbnail_tests {
+    use super::ink_thumbnail;
+    use photocraft_engine::Session;
+    use serde_json::json;
+
+    /// Rich black 100/100/100/0 keeps its inks in the channel thumbnails: no K (#8359).
+    #[test]
+    fn cmyk_channel_thumbnails_show_the_document_inks() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 120, "height": 60, "mode": "cmyk"})).unwrap();
+        s.execute("tools.setColors", json!({"foregroundCmyk": [1.0, 1.0, 1.0, 0.0]})).unwrap();
+        s.execute("edit.fillForeground", json!({})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        let (w, h) = photocraft_compose::thumbnail_size(doc, 56);
+        let inks = ink_thumbnail(doc, 56, w as usize, h as usize);
+        assert_eq!(inks.len(), (w * h) as usize);
+        assert!(inks.iter().all(|p| p.iter().zip([1.0, 1.0, 1.0, 0.0]).all(|(a, b)| (a - b).abs() < 0.01)), "{:?}", inks[0]);
     }
 }
