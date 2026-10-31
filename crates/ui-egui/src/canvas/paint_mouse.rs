@@ -92,6 +92,9 @@ pub struct Buttons {
     pub dragged: bool,
     pub stopped: bool,
     pub clicked: bool,
+    /// The modifiers that decide this frame's right-click: those held when the button went down
+    /// (egui reports the click on release), plus the latched Modifier Keys.
+    pub right_mods: egui::Modifiers,
 }
 
 /// Tools with the options-bar brush chip, which opens the Brush Preset picker.
@@ -142,7 +145,8 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
     // ⌘/Ctrl+right-click lists the layers under the pointer instead (layer_pick_ui.rs, #307).
     let layer_menu = crate::layer_pick_ui::is_gesture(tool, mods);
     // Decided by the modifiers held when the button went down, not by those of the release frame that reports the click.
-    let mode_menu = crate::brush_mode_menu::is_gesture(tool, crate::workspace_ui::sticky_mods(app, crate::brush_mode_menu::gesture_mods(&response.ctx, mods)));
+    let right_mods = crate::workspace_ui::sticky_mods(app, crate::brush_mode_menu::gesture_mods(&response.ctx, mods));
+    let mode_menu = crate::brush_mode_menu::is_gesture(tool, right_mods);
     if mode_menu && !resizing && app.drag.is_none() {
         app.secondary_erase = false;
         if response.secondary_clicked()
@@ -155,6 +159,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
             dragged: response.dragged_by(PointerButton::Primary),
             stopped: response.drag_stopped_by(PointerButton::Primary),
             clicked: response.clicked(),
+            right_mods,
         };
     }
     let erase = right_erases(app, tool) && !resize_start && !resizing && !layer_menu;
@@ -189,6 +194,7 @@ pub fn canvas_buttons(app: &mut PhotocraftApp, response: &Response, tool: Tool) 
         dragged: response.dragged_by(PointerButton::Primary) || (right_drag && right_dragged),
         stopped: response.drag_stopped_by(PointerButton::Primary) || (right_drag && right_stopped),
         clicked: response.clicked() || erase_click,
+        right_mods,
     }
 }
 
