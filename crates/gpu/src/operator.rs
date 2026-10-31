@@ -70,6 +70,33 @@ pub enum SeparableBlur {
     /// Lens Blur (`photocraft_algo` `blur2::lens_blur`): an iris-shaped mean over per-row prefix
     /// sums, its size per pixel by depth, with highlights boosted first and noise added after.
     Lens(Arc<LensParams>),
+    /// Image › Apply Image (`photocraft_engine::channel_cmds::apply_image_pixel`): a source, read
+    /// at each output pixel, blended onto the layer by the opacity times a weight.
+    Apply(Arc<ApplyParams>),
+}
+
+/// What [`SeparableBlur::Apply`] needs besides the layer: its inputs are document surfaces, read
+/// over each output cell and held by identity (a dialog session holds them).
+#[derive(Debug, PartialEq)]
+pub struct ApplyParams {
+    pub blend: ApplyBlend,
+    /// The opacity as a fraction.
+    pub opacity: f32,
+    /// Preserve Transparency.
+    pub preserve: bool,
+    /// The source: its colour planes as channels (one plane serves every colour channel).
+    pub source: Arc<Surface>,
+    /// The mask times the selection (channel 0), or `None` for neither.
+    pub weight: Option<Arc<Surface>>,
+}
+
+/// Apply Image's blending: a separable layer mode, or Add and Subtract with their scale and
+/// offset (the offset as a fraction).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ApplyBlend {
+    Mode(photocraft_color::BlendMode),
+    Add { scale: f32, offset: f32 },
+    Subtract { scale: f32, offset: f32 },
 }
 
 /// An iris's rows: `(dy, dx0, dx1)`, inclusive.
@@ -244,6 +271,8 @@ impl SeparableBlur {
             SeparableBlur::Convolve { taps, .. } => taps.iter().map(|&(dx, dy, _)| dx.unsigned_abs().max(dy.unsigned_abs()) as usize).max().unwrap_or(0),
             // Reads its whole window ([`SeparableBlur::whole`]).
             SeparableBlur::Remap(_) => 0,
+            // A point operation.
+            SeparableBlur::Apply(_) => 0,
             SeparableBlur::Lens(l) => l
                 .levels
                 .iter()
@@ -282,6 +311,13 @@ impl SeparableBlur {
                     && l.levels.len() <= MAX_LENS_LEVELS
                     && l.levels.iter().all(|(rows, count)| !rows.is_empty() && count.is_finite() && *count > 0.0)
                     && [l.boost, l.threshold, l.focal, l.noise].iter().all(|v| v.is_finite())
+            }
+            SeparableBlur::Apply(a) => {
+                a.opacity.is_finite()
+                    && match a.blend {
+                        ApplyBlend::Mode(m) => m.is_separable(),
+                        ApplyBlend::Add { scale, offset } | ApplyBlend::Subtract { scale, offset } => scale.is_finite() && scale != 0.0 && offset.is_finite(),
+                    }
             }
         }
     }
@@ -411,6 +447,12 @@ impl GaussianBlur {
                 };
                 let levels: Vec<(&IrisRows, u32)> = l.levels.iter().map(|(rows, count)| (rows, count.to_bits())).collect();
                 (8u8, levels, [l.boost, l.threshold, l.focal, l.noise].map(f32::to_bits), depth, l.invert, l.gaussian, l.mono, l.seed).hash(&mut h)
+            }
+            // The settings, and the inputs by identity.
+            SeparableBlur::Apply(a) => {
+                let (code, scale, offset) = apply_blend_words(a.blend);
+                let weight = a.weight.as_ref().map(|w| Arc::as_ptr(w) as usize);
+                (9u8, code, scale.to_bits(), offset.to_bits(), a.opacity.to_bits(), a.preserve, Arc::as_ptr(&a.source) as usize, weight).hash(&mut h)
             }
         }
         (extent, area, keep_alpha, depth as u8).hash(&mut h);
@@ -556,6 +598,7 @@ pub(crate) struct OpKit {
     disc_layout: wgpu::BindGroupLayout,
     displace_layout: wgpu::BindGroupLayout,
     lens_layout: wgpu::BindGroupLayout,
+    apply_layout: wgpu::BindGroupLayout,
     finish_layout: wgpu::BindGroupLayout,
     kernel: wgpu::ComputePipeline,
     boxes: wgpu::ComputePipeline,
@@ -565,6 +608,7 @@ pub(crate) struct OpKit {
     displace: wgpu::ComputePipeline,
     lens_prefix: wgpu::ComputePipeline,
     lens_mean: wgpu::ComputePipeline,
+    apply: wgpu::ComputePipeline,
     finish: wgpu::ComputePipeline,
 }
 
@@ -634,6 +678,11 @@ impl OpKit {
                 label: Some("pc_operator_lens"),
                 entries: &[tex(0), tex(1), tex(2), storage(3), uniform(4), buffer(5)],
             });
+            // Apply Image: the layer window, the source and the weight in, the result out.
+            let apply_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("pc_operator_apply"),
+                entries: &[tex(0), tex(1), tex(2), storage(3), uniform(4)],
+            });
             let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("pc_operator_finish"),
                 entries: &[tex(0), tex(1), tex(2), storage(3), uniform(4)],
@@ -661,12 +710,14 @@ impl OpKit {
             let displace = pipeline(&displace_layout, "remap_pass");
             let lens_prefix = pipeline(&lens_layout, "lens_prefix");
             let lens_mean = pipeline(&lens_layout, "lens_mean");
+            let apply = pipeline(&apply_layout, "apply_pass");
             let finish = pipeline(&finish_layout, "finish");
             OpKit {
                 blur_layout,
                 disc_layout,
                 displace_layout,
                 lens_layout,
+                apply_layout,
                 finish_layout,
                 kernel,
                 boxes,
@@ -676,6 +727,7 @@ impl OpKit {
                 displace,
                 lens_prefix,
                 lens_mean,
+                apply,
                 finish,
             }
         });
@@ -754,11 +806,13 @@ pub(crate) fn record_blur<'s>(
         SeparableBlur::Boxes(b) => [0u32, 1].iter().flat_map(|&axis| (0..b.len()).map(move |i| (i, axis))).collect(),
         // One 2D pass (a disc has its own, `record_disc`; Displace `record_displace`).
         SeparableBlur::Disc { .. } | SeparableBlur::Convolve { .. } => vec![(0, 0)],
-        SeparableBlur::Remap(_) | SeparableBlur::Lens(_) => return None,
+        SeparableBlur::Remap(_) | SeparableBlur::Lens(_) | SeparableBlur::Apply(_) => return None,
     };
     let weights: Vec<u8> = match blur {
         SeparableBlur::Kernel(k) => k.iter().flat_map(|w| w.to_le_bytes()).collect(),
-        SeparableBlur::Boxes(_) | SeparableBlur::Extreme { .. } | SeparableBlur::Remap(_) | SeparableBlur::Lens(_) => 0f32.to_le_bytes().to_vec(),
+        SeparableBlur::Boxes(_) | SeparableBlur::Extreme { .. } | SeparableBlur::Remap(_) | SeparableBlur::Lens(_) | SeparableBlur::Apply(_) => {
+            0f32.to_le_bytes().to_vec()
+        }
         SeparableBlur::Disc { half_widths, .. } if half_widths.is_empty() => 0f32.to_le_bytes().to_vec(),
         SeparableBlur::Disc { half_widths, .. } => half_widths.iter().flat_map(|w| (*w as f32).to_le_bytes()).collect(),
         // [scale, offset, (dx, dy, weight)...]
@@ -788,7 +842,7 @@ pub(crate) fn record_blur<'s>(
             // Only the empty disc (radius under 1) comes here: a copy.
             SeparableBlur::Disc { max, .. } => (0, f32::from(u8::from(*max)), &kit.extreme),
             SeparableBlur::Convolve { taps, .. } => (taps.len() as u32, 0.0, &kit.convolve),
-            SeparableBlur::Remap(_) | SeparableBlur::Lens(_) => return None,
+            SeparableBlur::Remap(_) | SeparableBlur::Lens(_) | SeparableBlur::Apply(_) => return None,
         };
         let (ox, oy) = if n == 0 { (origin[0], origin[1]) } else { (0, 0) };
         let pre = blur.premultiplies();
@@ -1021,6 +1075,86 @@ pub(crate) fn record_lens<'s>(
         pass.dispatch_workgroups(groups[0].max(1), groups[1].max(1), 1);
     }
     Some(dst)
+}
+
+/// [`ApplyBlend`] as the pass's words: the mode's index (`plan::mode_index`), or -1 for Add and
+/// -2 for Subtract; and the scale and offset.
+fn apply_blend_words(b: ApplyBlend) -> (i32, f32, f32) {
+    match b {
+        ApplyBlend::Mode(m) => (crate::plan::mode_index(m), 1.0, 0.0),
+        ApplyBlend::Add { scale, offset } => (-1, scale, offset),
+        ApplyBlend::Subtract { scale, offset } => (-2, scale, offset),
+    }
+}
+
+/// Record Apply Image over the `size` window starting at `origin` in `source` (the output's own
+/// pixels: a point operation reads nothing around them), reading the source `input` and the
+/// `weight` (`None`: 1 everywhere) at the same pixels, into `scratch[0]`. `format` is the
+/// layer's: its colour channels and whether it has alpha.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_apply<'s>(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    kit: &OpKit,
+    a: &ApplyParams,
+    source: &wgpu::Texture,
+    origin: [u32; 2],
+    size: [u32; 2],
+    input: &wgpu::Texture,
+    weight: Option<&wgpu::Texture>,
+    format: photocraft_color::PixelFormat,
+    scratch: &'s [wgpu::Texture],
+) -> Option<&'s wgpu::Texture> {
+    use wgpu::util::DeviceExt;
+    let dst = scratch.first()?;
+    let (code, scale, offset) = apply_blend_words(a.blend);
+    let flags = u32::from(format.alpha) | u32::from(a.preserve) << 1 | u32::from(weight.is_some()) << 2;
+    let colors = format.mode.color_channels() as u32;
+    let params = words(&[size[0], size[1], origin[0], origin[1], code as u32, flags, colors, a.opacity.to_bits(), scale.to_bits(), offset.to_bits(), 0, 0]);
+    let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("pc_operator_apply"),
+        contents: &params,
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let stand_in;
+    let weight = match weight {
+        Some(w) => w,
+        None => {
+            stand_in = float_texture(device, "pc_operator_apply_weight", 1, 1);
+            &stand_in
+        }
+    };
+    let views = [source, input, weight, dst].map(|t| t.create_view(&Default::default()));
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("pc_operator_apply"),
+        layout: &kit.apply_layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&views[0]) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[1]) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[2]) },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(&views[3]) },
+            wgpu::BindGroupEntry { binding: 4, resource: params.as_entire_binding() },
+        ],
+    });
+    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("pc_operator_apply"), timestamp_writes: None });
+    pass.set_pipeline(&kit.apply);
+    pass.set_bind_group(0, &group, &[]);
+    pass.dispatch_workgroups(size[0].div_ceil(8).max(1), size[1].div_ceil(8).max(1), 1);
+    drop(pass);
+    Some(dst)
+}
+
+/// A document surface's pixels over `r` as texels: its channels in order, a single channel in
+/// every component (Lens Blur's depth and Apply Image's weight read the first).
+pub(crate) fn read_input(s: &Surface, r: Rect) -> Vec<[f32; 4]> {
+    let ch = s.channels().max(1);
+    s.read_region(r)
+        .chunks_exact(ch)
+        .map(|p| {
+            let at = |i: usize| p.get(i).or(p.first()).copied().unwrap_or(0.0);
+            [at(0), at(1), at(2), at(3)]
+        })
+        .collect()
 }
 
 /// Little-endian bytes of uniform words.

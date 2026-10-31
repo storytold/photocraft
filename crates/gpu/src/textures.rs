@@ -76,7 +76,7 @@ impl TexKind {
             Role::Mask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
             Role::Mask if f.sample == SampleType::F32 => TexKind::R32F,
             Role::Mask => TexKind::R16F,
-            Role::Operator | Role::OperatorSource | Role::OperatorMask | Role::OperatorMap => TexKind::Rgba32F,
+            Role::Operator | Role::OperatorSource | Role::OperatorMask | Role::OperatorMap | Role::OperatorWeight => TexKind::Rgba32F,
         }
     }
     pub(crate) fn format(self) -> wgpu::TextureFormat {

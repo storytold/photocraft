@@ -824,6 +824,217 @@ fn lens_mean(@builtin(global_invocation_id) g: vec3<u32>) {
     textureStore(lout, at + vec2<i32>(lp.store_offset), px);
 }
 
+// ---- Apply Image (`channel_cmds::apply_image_pixel`) ----
+
+struct ApplyPass {
+    // The output, and where it starts in `asrc` (the inputs start at the output).
+    size: vec2<u32>,
+    origin: vec2<u32>,
+    // `plan::mode_index`, or -1 Add, -2 Subtract.
+    blend: i32,
+    // 1 alpha, 2 Preserve Transparency, 4 a weight.
+    flags: u32,
+    colors: u32,
+    opacity: f32,
+    scale: f32,
+    offset: f32,
+    _pad: vec2<u32>,
+}
+
+@group(0) @binding(0) var asrc: texture_2d<f32>;
+@group(0) @binding(1) var ainput: texture_2d<f32>;
+@group(0) @binding(2) var aweight: texture_2d<f32>;
+@group(0) @binding(3) var aout: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var<uniform> ap: ApplyPass;
+
+// `photocraft_color::blend` (`blend_channel`: integer depths, Linear Dodge and Divide clip at 1).
+fn pc_color_burn(cb: f32, cs: f32) -> f32 {
+    if cb >= 1.0 {
+        return 1.0;
+    }
+    if cs <= 0.0 {
+        return 0.0;
+    }
+    return 1.0 - min((1.0 - cb) / cs, 1.0);
+}
+
+fn pc_color_dodge(cb: f32, cs: f32) -> f32 {
+    if cb <= 0.0 {
+        return 0.0;
+    }
+    if cs >= 1.0 {
+        return 1.0;
+    }
+    return min(cb / (1.0 - cs), 1.0);
+}
+
+fn pc_hard_light(cb: f32, cs: f32) -> f32 {
+    if cs <= 0.5 {
+        return cb * 2.0 * cs;
+    }
+    let s = 2.0 * cs - 1.0;
+    return cb + s - cb * s;
+}
+
+fn pc_soft_light(cb: f32, cs: f32) -> f32 {
+    if cs <= 0.5 {
+        return 2.0 * cb * cs + cb * cb * (1.0 - 2.0 * cs);
+    }
+    let b = max(cb, 0.0);
+    var d = sqrt(b);
+    if b <= 0.25 {
+        d = ((16.0 * b - 12.0) * b + 4.0) * b;
+    }
+    return 2.0 * cb * (1.0 - cs) + d * (2.0 * cs - 1.0);
+}
+
+fn pc_vivid_light_hard_mix(cb: f32, cs: f32) -> f32 {
+    let edge = 1e-4;
+    if cs <= 0.5 {
+        if cb >= 1.0 - edge {
+            return 1.0;
+        }
+        if cs <= 0.0 {
+            return 0.0;
+        }
+        return 1.0 - min((1.0 - cb) / (2.0 * cs), 1.0);
+    }
+    if cb <= edge {
+        return 0.0;
+    }
+    if cs >= 1.0 {
+        return 1.0;
+    }
+    return min(cb / (2.0 * (1.0 - cs)), 1.0);
+}
+
+fn pc_blend(mode: i32, cb: f32, cs: f32) -> f32 {
+    switch mode {
+        case 3: { return min(cb, cs); }
+        case 4: { return cb * cs; }
+        case 5: { return pc_color_burn(cb, cs); }
+        case 6: { return max(cb + cs - 1.0, 0.0); }
+        case 8: { return max(cb, cs); }
+        case 9: { return cb + cs - cb * cs; }
+        case 10: { return pc_color_dodge(cb, cs); }
+        case 11: { return min(cb + cs, 1.0); }
+        case 13: { return pc_hard_light(cs, cb); }
+        case 14: { return pc_soft_light(cb, cs); }
+        case 15: { return pc_hard_light(cb, cs); }
+        case 16: {
+            if cs <= 0.0 {
+                return 0.0;
+            }
+            if cs >= 1.0 {
+                return 1.0;
+            }
+            if cs <= 0.5 {
+                return pc_color_burn(cb, 2.0 * cs);
+            }
+            return pc_color_dodge(cb, 2.0 * (cs - 0.5));
+        }
+        case 17: { return clamp(cb + 2.0 * cs - 1.0, 0.0, 1.0); }
+        case 18: {
+            if cs <= 0.5 {
+                return min(cb, 2.0 * cs);
+            }
+            return max(cb, 2.0 * cs - 1.0);
+        }
+        case 19: { return select(0.0, 1.0, pc_vivid_light_hard_mix(cb, cs) >= 0.5 - 1e-6); }
+        case 20: { return abs(cb - cs); }
+        case 21: { return cb + cs - 2.0 * cb * cs; }
+        case 22: { return max(cb - cs, 0.0); }
+        case 23: {
+            if cs <= 0.0 {
+                return select(1.0, 0.0, cb <= 0.0);
+            }
+            return min(cb / cs, 1.0);
+        }
+        case 28: {
+            if cs >= 1.0 {
+                return 1.0;
+            }
+            return min(cb * cb / (1.0 - cs), 1.0);
+        }
+        case 29: {
+            if cb >= 1.0 {
+                return 1.0;
+            }
+            return min(cs * cs / (1.0 - cb), 1.0);
+        }
+        case 30: { return 1.0 - abs(1.0 - cb - cs); }
+        case 31: {
+            let b = u32(round(clamp(cb, 0.0, 1.0) * 255.0));
+            let s = u32(round(clamp(cs, 0.0, 1.0) * 255.0));
+            return f32(b ^ s) / 255.0;
+        }
+        case 32: {
+            if cs <= 0.0 {
+                return 0.0;
+            }
+            return max(1.0 - (1.0 - cb) / cs, 0.0);
+        }
+        case 33: {
+            if cs >= 1.0 {
+                return 1.0;
+            }
+            return min(cb / (1.0 - cs), 1.0);
+        }
+        default: { return cs; }
+    }
+}
+
+// `Blending::apply`.
+fn apply_blending(cb: f32, cs: f32) -> f32 {
+    var v = 0.0;
+    if ap.blend == -1 {
+        v = (cb + cs) / ap.scale + ap.offset;
+    } else if ap.blend == -2 {
+        v = (cb - cs) / ap.scale + ap.offset;
+    } else {
+        v = pc_blend(ap.blend, cb, cs);
+    }
+    return clamp(v, 0.0, 1.0);
+}
+
+// One colour channel `b` of the layer with the source's `t` blended on (`apply_image_pixel`).
+fn apply_channel(b: f32, t: f32, w: f32, base_a: f32, out_a: f32, preserve: bool) -> f32 {
+    let blended = t + (apply_blending(b, t) - t) * base_a;
+    return select((w * blended + base_a * (1.0 - w) * b) / out_a, b + (blended - b) * w, preserve);
+}
+
+@compute @workgroup_size(8, 8)
+fn apply_pass(@builtin(global_invocation_id) g: vec3<u32>) {
+    if g.x >= ap.size.x || g.y >= ap.size.y {
+        return;
+    }
+    let at = vec2<i32>(g.xy);
+    var px = textureLoad(asrc, at + vec2<i32>(ap.origin), 0);
+    let top = textureLoad(ainput, at, 0);
+    let alpha = (ap.flags & 1u) != 0u;
+    let preserve = (ap.flags & 2u) != 0u;
+    var w = ap.opacity;
+    if (ap.flags & 4u) != 0u {
+        w = ap.opacity * textureLoad(aweight, at, 0).x;
+    }
+    let base_a = select(1.0, clamp(px.w, 0.0, 1.0), alpha);
+    if preserve {
+        w = w * base_a;
+    }
+    if w > 0.0 {
+        let out_a = select(w + base_a * (1.0 - w), base_a, preserve);
+        // Each channel by name: no vector component chosen at run time (see the header).
+        let r = apply_channel(px.x, top.x, w, base_a, out_a, preserve);
+        var c = vec3<f32>(r);
+        // A Grayscale layer's one channel stands for all three.
+        if ap.colors > 1u {
+            c = vec3<f32>(r, apply_channel(px.y, top.y, w, base_a, out_a, preserve), apply_channel(px.z, top.z, w, base_a, out_a, preserve));
+        }
+        px = vec4<f32>(c, select(px.w, out_a, alpha));
+    }
+    textureStore(aout, at, px);
+}
+
 // ---- The final pass: the filter's output as the layer's new pixels ----
 
 struct Finish {

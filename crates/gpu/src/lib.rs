@@ -62,8 +62,8 @@ use photocraft_raster::{Surface, Tile};
 pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use health::{DeviceHealth, Fault};
 pub use operator::{
-    Combine, GaussianBlur, LayerOperator, LensDepth, LensParams, MAX_AXIS_TAPS, MAX_DISC_RADIUS, Mapping, OperatorInput, OperatorProgram, OperatorTarget,
-    RemapParams, SeparableBlur, Undefined,
+    ApplyBlend, ApplyParams, Combine, GaussianBlur, LayerOperator, LensDepth, LensParams, MAX_AXIS_TAPS, MAX_DISC_RADIUS, Mapping, OperatorInput,
+    OperatorProgram, OperatorTarget, RemapParams, SeparableBlur, Undefined,
 };
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};

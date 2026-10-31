@@ -137,8 +137,10 @@ pub enum Role {
     OperatorSource,
     /// The selection an operator mixes its result by.
     OperatorMask,
-    /// An operator's other input (Displace's map).
+    /// An operator's other input (Displace's map, Lens Blur's depth, Apply Image's source).
     OperatorMap,
+    /// Apply Image's weight (its mask times the selection).
+    OperatorWeight,
 }
 
 /// A surface the pass needs on the GPU.

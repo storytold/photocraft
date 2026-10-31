@@ -534,6 +534,12 @@ impl Compositor {
         }
     }
 
+    /// Whether the layer operators' pipelines build on `device`, without a compositor (a test of
+    /// the operator shader against a backend's compiler, such as FXC on Direct3D 12).
+    pub fn operator_pipelines_build(device: &wgpu::Device) -> bool {
+        operator::OpKit::new(device).is_some()
+    }
+
     /// Whether `device` can run layer operators (compute passes into float storage textures).
     /// Builds their pipelines the first time, so a dialog can warm them as it opens.
     pub fn operators_supported(&mut self, device: &wgpu::Device) -> bool {
