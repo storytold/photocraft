@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-29 · **Change:** minor (Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-31 · **Change:** minor (Azerbaijani and Romanian UI catalogs; native review and Rust/offscreen verification pending; Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
@@ -62,6 +62,14 @@ completed for the current UI) and Norwegian Bokmål `nb` (4,552 rows, combined f
 `no` and `nn` locales resolve to it), all added 2026-10-29, cover the same keys with one term per
 concept; none has had a native-speaker review yet.
 
+Azerbaijani `az` (Latin script) and Romanian `ro` were added 2026-10-31, bringing the runtime
+registry to 29 languages including English. Each catalog has 4,566 entries, including the
+existing dynamic-label key union and 32 plural messages. Romanian uses one/few/other integer
+forms, including `20 de straturi`; Azerbaijani uses one/other. Both have complete menu keys,
+regional locale matching and English fallback. Native-speaker review and Rust/offscreen
+verification remain pending; this does not raise the estimated readiness percentage or close
+G13. [Terminology, provenance and validation limits](localization-az-ro.md).
+
 Czech UI follow-up (2026-10-11): status and notice wrappers, hardware labels, brush and
 transform accessibility names, rasterization prompts, profile mismatch messages and preset
 counts now translate at their render/assignment sites. Navigator's zoom level uses a context
@@ -86,6 +94,7 @@ engine localization or native review is complete.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | Azerbaijani and Romanian UI catalogs, 4,566 entries each; regional tags and plural rules; native review and Rust/offscreen verification pending; readiness estimates unchanged |
 | 2026-10-10 | major | First version, measured from the catalogs with the `i18n-coverage` rules |
 | 2026-10-10 | minor | Right-to-left shell layout (menu bar, title, options and status bars, toolbox and dock sides) |
 | 2026-10-11 | minor | Czech dynamic status/notice and hardware text, render labels and Navigator zoom context; engine messages remain English |

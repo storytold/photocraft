@@ -28,12 +28,38 @@ fn requested_languages_resolve_regional_preferences() {
         ("id-ID", "id"),
         ("vi-VN", "vi"),
         ("sr-RS", "sr"),
+        ("az-Latn-AZ", "az"),
+        ("ro-RO", "ro"),
+        ("ro-MD", "ro"),
     ] {
         assert_eq!(Lang::from_pref(tag), lang(code), "{tag}");
     }
     assert_eq!(lang_from_tag("ko_KR.UTF-8"), Some(lang("ko")));
     assert_eq!(lang_from_tag("FR-fr"), Some(lang("fr")));
     assert_eq!(lang_from_tag("ko"), Some(lang("ko")));
+}
+
+#[test]
+fn azerbaijani_and_romanian_draw_after_switching_and_restore_after_restart() {
+    for (code, file) in [("az", "Fayl"), ("ro", "Fișier")] {
+        with_language(Lang::EN, || {
+            let mut h = harness();
+            h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": code})).expect("choose language");
+            h.run_steps(4);
+            assert_eq!(current(), lang(code));
+            assert_eq!(tr(current(), "File"), file);
+            assert!(drawn_text(&h).iter().any(|text| *text == file_title(lang(code))));
+            let saved = h.state().session.prefs_to_json();
+            h.state_mut().run("prefs.set", json!({"path": "interface.language", "value": "en"})).expect("switch back");
+            h.run_steps(4);
+            assert_eq!(current(), Lang::EN);
+            let services = Services { load_prefs: Some(Box::new(move || Some(saved.clone()))), ..Default::default() };
+            let restarted = harness_with_services(services);
+            assert_eq!(restarted.state().session.prefs().interface.language, code);
+            assert_eq!(current(), lang(code));
+            assert!(drawn_text(&restarted).iter().any(|text| *text == file_title(lang(code))));
+        });
+    }
 }
 
 #[test]
@@ -242,6 +268,8 @@ fn first_launch_renders_the_system_language_without_overwriting_auto() {
         ("fi-FI", "fi"),
         ("da-DK", "da"),
         ("nb-NO", "nb"),
+        ("az-AZ", "az"),
+        ("ro-MD", "ro"),
     ] {
         system::with_system_tags(&[tag], || {
             with_language(Lang::EN, || {

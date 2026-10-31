@@ -117,6 +117,18 @@ fn plural_polish(n: u64) -> usize {
     }
 }
 
+/// Romanian integer counts (CLDR): 1 → one; 0 or n % 100 in 1–19 → few; otherwise other.
+/// The `other` form uses the linking preposition "de" (20 de straturi, 100 de straturi).
+fn plural_romanian(n: u64) -> usize {
+    if n == 1 {
+        0
+    } else if n == 0 || (1..=19).contains(&(n % 100)) {
+        1
+    } else {
+        2
+    }
+}
+
 /// Arabic (CLDR): 0 → zero, 1 → one, 2 → two, n % 100 in 3–10 → few, in 11–99 → many, else other.
 fn plural_arabic(n: u64) -> usize {
     match (n, n % 100) {
@@ -201,7 +213,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 29] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -232,6 +244,10 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "hu", name: "Magyar", source: catalog!("hu"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Turkish; `tr`, `tr-TR` and `tr_TR` locales resolve here.
     LangInfo { code: "tr", name: "Türkçe", source: catalog!("tr"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
+    // Azerbaijani (Latin script); regional and explicit Latin-script tags resolve here.
+    LangInfo { code: "az", name: "Azərbaycanca", source: catalog!("az"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Romanian; ro-RO and ro-MD share the catalog, with one/few/other integer plurals.
+    LangInfo { code: "ro", name: "Română", source: catalog!("ro"), plural: plural_romanian, complete_menus: true, catalog: OnceLock::new() },
     // Vietnamese; `vi-VN` resolves here.
     LangInfo { code: "vi", name: "Tiếng Việt", source: catalog!("vi"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     // Hindi; `hi`, `hi-IN` locales resolve here.

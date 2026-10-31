@@ -33,6 +33,15 @@ contextual, command-ID and plural translations; missing entries fall back to Eng
 | Suomi | `fi` | one / other (partitive after every count but 1) |
 | Dansk | `da` | one / other |
 | Norsk bokmål | `nb` | one / other |
+| Azərbaycanca | `az` | one (1) / other (all other integer counts) |
+| Română | `ro` | one (1) / few (0 or n % 100 in 1–19, except 1) / other |
+
+Azerbaijani (`az`, Latin script) and Romanian (`ro`) are registered with complete menu catalogs.
+Regional tags such as `az-AZ`, `az-Latn-AZ`, `ro-RO` and `ro-MD` select them. Their catalogs
+include the existing catalogs' dynamic labels, contextual translations and plural messages;
+Romanian uses the linking preposition **de** for counts such as 20 and 100. Machine-assisted
+drafts have edited core terminology; native-speaker review is pending. See
+[`localization-az-ro.md`](localization-az-ro.md) for terminology, provenance and validation limits.
 
 Languages registered with `complete_menus` cover the current menu labels, `tl!` literals, blend
 mode names, and generated preference labels. A string a catalog lacks shows in English:
