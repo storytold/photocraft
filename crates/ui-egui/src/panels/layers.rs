@@ -6,6 +6,11 @@ use super::layer_row::{RowSel, layer_row};
 use super::options_bar::{LAYER_PCT_W, body_text_width, pct_action, scrub_pct_label};
 use super::{BlendMode, Layer, LayerId, MaskKind, PhotocraftApp, Rect, Sense, Tokens, Value, empty, icons, json, label, pos2, theme, vec2, widgets};
 
+#[cfg(feature = "uv-workbench")]
+fn requested_mask_view(explicit_view: Option<bool>, target_enabled: bool) -> Option<bool> {
+    explicit_view.or((!target_enabled).then_some(false))
+}
+
 // ----------------------------------------------------------------------------- layers
 
 /// The simple themes' single lock button. On the Background it converts the layer to a normal
@@ -105,6 +110,10 @@ fn inactive_blend_rows(ui: &mut egui::Ui, pro: bool) {
 }
 
 pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    #[cfg(feature = "uv-workbench")]
+    if crate::uv_library::layers_drop(app, ui) {
+        ui.disable();
+    }
     // A new active layer opens its parent groups and is scrolled into view (#152).
     let reveal = crate::layer_reveal::track(app, ui.ctx());
     let Some(st) = app.session.active() else {
@@ -287,6 +296,16 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let row = RowSel { selected: selection.contains(&l.id), primary: active == Some(l.id), multi: selection.len() > 1 };
                 let top = ui.cursor().top();
                 drawn.push((l.id, layer_row(app, &ctx, ui, &doc, l, depth, row, &mut actions)));
+                #[cfg(feature = "uv-workbench")]
+                {
+                    let paint_top = ui.cursor().top();
+                    crate::uv_mask_paint::rows(app, ui, l, &mut actions);
+                    if ui.cursor().top() > paint_top
+                        && let Some((_, area)) = drawn.last_mut()
+                    {
+                        area.max.y = ui.cursor().top().max(area.max.y);
+                    }
+                }
                 if reveal == Some(l.id) {
                     crate::layer_reveal::scroll_to_row(ui, top);
                 }
@@ -512,10 +531,50 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         }
         if id == "ui.maskTarget" {
             app.end_filter_mask_view();
-            app.ui.mask_target = p.as_bool().unwrap_or(false);
+            let enabled = p.get("enabled").and_then(Value::as_bool).or_else(|| p.as_bool()).unwrap_or(false);
+            #[cfg(feature = "uv-workbench")]
+            let explicit_view = p.get("show").and_then(Value::as_bool);
+            #[cfg(feature = "uv-workbench")]
+            let select_active_effect = p.get("select_active_effect").and_then(Value::as_bool).unwrap_or(false);
+            app.ui.mask_target = enabled;
             app.ui.vector_mask_target = false;
             app.ui.filter_mask_target = None;
+            #[cfg(feature = "uv-workbench")]
+            if app.ui.mask_target
+                && !select_active_effect
+                && let Some((doc, layer)) = app.session.active().and_then(|st| st.active_layer.map(|layer| (st.doc.id.0, layer.0)))
+            {
+                crate::uv_mask_paint::clear_effect_selection(&ctx, doc, layer);
+            }
             app.sync_mask_targets();
+            #[cfg(feature = "uv-workbench")]
+            if app.ui.workspace == "3D" {
+                let mask_view = app.session.active().and_then(photocraft_engine::mask_view_cmds::current);
+                let show = requested_mask_view(explicit_view, app.ui.mask_target);
+                if show == Some(true) {
+                    if let Err(error) = app.run("view.layerMask", json!({"mode":"gray"})) {
+                        app.ui.uv_workbench.status = error;
+                    }
+                } else if show == Some(false)
+                    && mask_view.is_some()
+                    && let Err(error) = app.run("view.layerMask", json!({"mode":"off"}))
+                {
+                    app.ui.uv_workbench.status = error;
+                }
+                // Mask Paint sublayers remain the brush target when their Properties are open,
+                // while the model and 2D canvas show the ordinary composite. Keep the engine's
+                // paint target on the mask, but move the display channel back to Composite.
+                if explicit_view == Some(false) && enabled {
+                    if let Err(error) = app.run("channel.target.composite", json!({})) {
+                        app.ui.uv_workbench.status = error;
+                    }
+                    app.ui.mask_target = true;
+                    app.session.tools.target_mask(true);
+                }
+                if select_active_effect {
+                    crate::uv_mask_paint::show_active_effect_properties(app, &ctx);
+                }
+            }
             continue;
         }
         if id == "ui.vectorMaskTarget" {
@@ -548,7 +607,24 @@ pub(super) fn layers(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             continue;
         }
+        #[cfg(feature = "uv-workbench")]
+        let reordered_mask_effect = id == "uv.maskPaint.modify" && p.get("to").is_some();
         let _ = app.run(&id, p);
+        #[cfg(feature = "uv-workbench")]
+        if app.ui.workspace == "3D" {
+            if id == "uv.maskPaint.select" {
+                crate::uv_mask_paint::show_active_effect_properties(app, &ctx);
+            } else if id == "uv.maskPaint.add" {
+                // Creation changes the active effect in the engine. Mirror that identity in UI
+                // state so the Properties panel immediately follows the newly created effect.
+                crate::uv_mask_paint::show_active_effect_properties(app, &ctx);
+            } else if reordered_mask_effect {
+                // Reordering can change the active effect's index; follow its engine identity.
+                crate::uv_mask_paint::show_active_effect_properties(app, &ctx);
+            } else if id == "layer.select" {
+                app.ui.dock_tabs.properties = 2;
+            }
+        }
     }
 }
 

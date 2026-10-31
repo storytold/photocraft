@@ -253,7 +253,7 @@ fn fs(@builtin(position) pos: vec4<f32>) -> @location(0) vec4<f32> {
 }
 "#;
 
-pub(super) const MIP_WGSL: &str = r#"
+pub(crate) const MIP_WGSL: &str = r#"
 @group(0) @binding(0) var src: texture_2d<f32>;
 @group(0) @binding(1) var samp: sampler;
 

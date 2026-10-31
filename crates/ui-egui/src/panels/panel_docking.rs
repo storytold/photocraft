@@ -29,6 +29,10 @@ const PANELS: &[(&str, &str, Group)] = &[
     ("patterns", "Patterns", Group::Color),
     ("properties", "Properties", Group::Properties),
     ("adjustments", "Adjustments", Group::Properties),
+    #[cfg(feature = "uv-workbench")]
+    ("uvWorkbench", "3D / UV", Group::Properties),
+    #[cfg(feature = "uv-workbench")]
+    ("uvImages", "Images", Group::Properties),
     ("character", "Character", Group::Character),
     ("paragraph", "Paragraph", Group::Character),
     ("navigator", "Navigator", Group::Navigator),
@@ -161,6 +165,43 @@ fn legacy(app: &PhotocraftApp) -> Layout<String> {
     legacy_layout(app, false)
 }
 
+/// The layout this workspace exposes in the current UI mode. UV panels stay in the saved layout
+/// while the 2D workspace is active, so changing workspaces never loses their location or hidden
+/// state. The renderer receives only a disposable projection.
+fn scoped_layout(app: &PhotocraftApp, layout: Layout<String>) -> Layout<String> {
+    #[cfg(feature = "uv-workbench")]
+    {
+        let mut layout = layout;
+        if app.ui.workspace != "3D" {
+            for panel in ["uvWorkbench", "uvImages"] {
+                if layout.contains(&panel.to_owned()) {
+                    let _ = layout.apply(Action::Close { panel: panel.to_owned() });
+                }
+            }
+        }
+        layout
+    }
+    #[cfg(not(feature = "uv-workbench"))]
+    {
+        let _ = app;
+        layout
+    }
+}
+
+#[cfg(feature = "uv-workbench")]
+fn uv_panel(panel: &str) -> bool {
+    matches!(panel, "uvWorkbench" | "uvImages")
+}
+
+#[cfg(not(feature = "uv-workbench"))]
+fn uv_panel(_panel: &str) -> bool {
+    false
+}
+
+fn panel_visible_in_workspace(app: &PhotocraftApp, panel: &str) -> bool {
+    !uv_panel(panel) || app.ui.workspace == "3D"
+}
+
 /// The native dock's arrangement as a craft-ui layout: the canvas beside one dock column of the
 /// shown groups, top to bottom, with their tab order, selected tab and user-set heights. The
 /// Studio themes float Properties over the canvas's top right corner. `all` includes the groups
@@ -171,7 +212,7 @@ fn legacy_layout(app: &PhotocraftApp, all: bool) -> Layout<String> {
     let mut floating = Vec::new();
     for group in app.ui.dock.order().into_iter().filter(|g| all || g.shown(&app.ui.panels)) {
         let labels = group.tabs(pro);
-        let visible = if all { group.tabs(pro).iter().copied().enumerate().collect() } else { app.ui.dock.visible_tabs(group, pro) };
+        let visible = if all { group.tabs(pro).iter().copied().enumerate().collect() } else { crate::dock::visible_tabs(app, group, pro) };
         let panels: Vec<String> = visible.iter().filter_map(|(_, label)| normalize(label).map(str::to_owned)).collect();
         if panels.is_empty() {
             continue;
@@ -225,6 +266,11 @@ fn commit(app: &mut PhotocraftApp, workspace: Workspace, mut returns: Returns) {
     app.ui.docking_returns = returns;
     app.ui.panels.dock = true;
     sync_visibility(app);
+    #[cfg(feature = "uv-workbench")]
+    {
+        app.ui.uv_workbench.open =
+            app.ui.workspace == "3D" && app.ui.docking.as_ref().is_some_and(|workspace| workspace.layout.contains(&"uvWorkbench".to_owned()));
+    }
 }
 
 fn floats(layout: &Layout<String>, panel: &str) -> bool {
@@ -242,7 +288,7 @@ fn collapsed_members(app: &PhotocraftApp, layout: &Layout<String>) -> std::colle
         let group = panels.first().and_then(|id| PANELS.iter().find(|p| p.0 == id)).map(|p| p.2);
         if let Some(group) = group.filter(|group| app.ui.dock.is_collapsed(*group)) {
             let pro = app.ui.theme.is_pro();
-            let native: Vec<_> = app.ui.dock.visible_tabs(group, pro).iter().filter_map(|(_, name)| normalize(name)).collect();
+            let native: Vec<_> = crate::dock::visible_tabs(app, group, pro).iter().filter_map(|(_, name)| normalize(name)).collect();
             if panels.len() == native.len() && panels.iter().all(|panel| native.contains(&panel.as_str())) {
                 collapsed.extend(panels.iter().cloned());
             }
@@ -348,6 +394,16 @@ fn closes(command: &DockCommand<String>) -> bool {
     )
 }
 
+#[cfg(feature = "uv-workbench")]
+fn contains_uv_panel_name(value: &Value) -> bool {
+    match value {
+        Value::String(name) => uv_panel(name),
+        Value::Array(values) => values.iter().any(contains_uv_panel_name),
+        Value::Object(fields) => fields.values().any(contains_uv_panel_name),
+        _ => false,
+    }
+}
+
 pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     if id == "window.panel.group" {
         return Some(group_command(app, params));
@@ -381,7 +437,7 @@ pub(crate) fn command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Opti
 pub(crate) fn checked(app: &PhotocraftApp, id: &str) -> Option<bool> {
     let workspace = app.ui.docking.as_ref()?;
     let panel = id.strip_prefix("window.panel.").or_else(|| id.strip_prefix("window.toggle.")).and_then(normalize)?;
-    Some(workspace.layout.contains(&panel.to_string()))
+    Some(panel_visible_in_workspace(app, panel) && workspace.layout.contains(&panel.to_string()))
 }
 
 /// Parse a docking command id and its params as craft-ui's [`DockCommand`] and run it. Panels
@@ -407,8 +463,16 @@ fn dock_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<Val
             }
         }
     }
+    #[cfg(feature = "uv-workbench")]
+    let direct_uv_panel = ["panel", "anchor", "before", "target"].iter().any(|key| fields.get(*key).and_then(Value::as_str).is_some_and(uv_panel));
     fields.insert("command".into(), json!(id));
     let command: DockCommand<String> = serde_json::from_value(Value::Object(fields)).map_err(|error| error.to_string())?;
+    #[cfg(feature = "uv-workbench")]
+    let references_uv_panel = direct_uv_panel || serde_json::to_value(&command).is_ok_and(|value| contains_uv_panel_name(&value));
+    #[cfg(feature = "uv-workbench")]
+    if app.ui.workspace != "3D" && references_uv_panel && id != "window.panel.close" {
+        return Err("3D / UV panels are only available in the 3D workspace".into());
+    }
     run(app, command)
 }
 
@@ -416,6 +480,33 @@ fn dock_command(app: &mut PhotocraftApp, id: &str, params: &Value) -> Result<Val
 fn run(app: &mut PhotocraftApp, command: DockCommand<String>) -> Result<Value, String> {
     if command.is_app_owned() {
         return app_owned(app, command);
+    }
+    #[cfg(feature = "uv-workbench")]
+    if app.ui.workspace != "3D" {
+        if let DockCommand::CloseOthers { panel } = &command {
+            if app.session.prefs().workspace_locked {
+                return Err("workspace is locked".into());
+            }
+            let mut workspace = workspace_of(app)?;
+            let visible = scoped_layout(app, workspace.layout.clone());
+            let members = group_members(&visible, panel);
+            if !members.contains(panel) {
+                return Err("panel is hidden".into());
+            }
+            for member in members.into_iter().filter(|member| member != panel) {
+                workspace.apply(Action::Close { panel: member }, permissions).map_err(|e| e.to_string())?;
+            }
+            commit(app, workspace, app.ui.docking_returns.clone());
+            return Ok(json!({"panel": panel, "closedOthers": true}));
+        }
+        let group_close = match &command {
+            DockCommand::CloseGroup { panel } | DockCommand::Layout { action: Action::CloseGroup { panel } } => Some(panel.as_str()),
+            DockCommand::UiDock(craft_ui::docking::UiDock::Action { action: Action::CloseGroup { panel } }) => Some(panel.as_str()),
+            _ => None,
+        };
+        if let Some(panel) = group_close {
+            return group_command(app, &json!({"panel": panel, "operation": "close"}));
+        }
     }
     if let DockCommand::Lock { locked } = command {
         let on = locked.unwrap_or(!app.session.prefs().workspace_locked);
@@ -551,6 +642,7 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         Some(workspace) => workspace.layout.clone(),
         None => legacy(app),
     };
+    let layout = scoped_layout(app, layout);
     let collapsed = collapsed_members(app, &layout);
     let layout = presented(layout, &collapsed);
     let fillers = fillers(&layout);
@@ -660,8 +752,7 @@ pub(crate) fn native_viewports(app: &PhotocraftApp, ctx: &egui::Context) -> Vec<
     if !ctx.embed_viewports()
         && let Some(workspace) = &app.ui.docking
     {
-        return workspace
-            .layout
+        return scoped_layout(app, workspace.layout.clone())
             .floating
             .iter()
             .filter(|window| window.id != PROPERTIES_WINDOW)
@@ -872,7 +963,7 @@ pub(crate) mod probe {
 
     /// The panels of the tab group holding `panel`, in tab order.
     pub(crate) fn group_of(app: &PhotocraftApp, panel: &str) -> Vec<String> {
-        let layout = app.ui.docking.as_ref().map_or_else(|| legacy(app), |workspace| workspace.layout.clone());
+        let layout = scoped_layout(app, app.ui.docking.as_ref().map_or_else(|| legacy(app), |workspace| workspace.layout.clone()));
         group_members(&layout, panel)
     }
 
@@ -969,7 +1060,8 @@ fn reveal_group(app: &mut PhotocraftApp, panel: &str) {
 
 pub(crate) fn rail_on(app: &PhotocraftApp, group: Group) -> bool {
     app.ui.docking.as_ref().is_some_and(|workspace| {
-        let layout = &workspace.layout;
+        let projected = scoped_layout(app, workspace.layout.clone());
+        let layout = &projected;
         let collapsed = collapsed_members(app, layout);
         PANELS.iter().filter(|p| p.2 == group).any(|p| layout.contains(&p.0.to_owned()) && !collapsed.contains(p.0))
     })
@@ -977,10 +1069,20 @@ pub(crate) fn rail_on(app: &PhotocraftApp, group: Group) -> bool {
 
 pub(crate) fn rail_click(app: &mut PhotocraftApp, group: Group) {
     let Some(workspace) = app.ui.docking.as_ref() else { return };
-    let layout = &workspace.layout;
+    let projected = scoped_layout(app, workspace.layout.clone());
+    let layout = &projected;
     let floating = PANELS.iter().filter(|p| p.2 == group).any(|p| floats(layout, p.0));
     let existing = PANELS.iter().find(|p| p.2 == group && layout.contains(&p.0.to_owned())).map(|p| p.0);
-    let panel = existing.or_else(|| group.tabs(app.ui.theme.is_pro()).get(*group.tab_mut(&mut app.ui.dock_tabs)).and_then(|label| normalize(label)));
+    let panel = existing
+        .filter(|panel| panel_visible_in_workspace(app, panel))
+        .or_else(|| {
+            group
+                .tabs(app.ui.theme.is_pro())
+                .get(*group.tab_mut(&mut app.ui.dock_tabs))
+                .and_then(|label| normalize(label))
+                .filter(|panel| panel_visible_in_workspace(app, panel))
+        })
+        .or_else(|| group.tabs(app.ui.theme.is_pro()).iter().filter_map(|label| normalize(label)).find(|panel| panel_visible_in_workspace(app, panel)));
     if let Some(panel) = panel {
         let result = if existing.is_some() && rail_on(app, group) {
             if floating {
@@ -1006,6 +1108,9 @@ fn root_groups(layout: &Layout<String>) -> Vec<Vec<String>> {
 fn group_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, String> {
     let panel = params.get("panel").and_then(Value::as_str).and_then(normalize).ok_or("panel must name a registered panel")?;
     let operation = params.get("operation").and_then(Value::as_str).ok_or("operation is required")?;
+    if !panel_visible_in_workspace(app, panel) && operation != "close" {
+        return Err("3D / UV panels are only available in the 3D workspace".into());
+    }
     if app.session.prefs().workspace_locked {
         return Err("workspace is locked".into());
     }
@@ -1017,8 +1122,23 @@ fn group_command(app: &mut PhotocraftApp, params: &Value) -> Result<Value, Strin
     let mut collapsed = collapsed_members(app, &workspace.layout);
     match operation {
         "close" => {
-            workspace.apply(Action::CloseGroup { panel: panel.to_owned() }, permissions).map_err(|e| e.to_string())?;
-            collapsed.retain(|id| !members.contains(id));
+            if uv_panel(panel) && app.ui.workspace != "3D" {
+                workspace.apply(Action::Close { panel: panel.to_owned() }, permissions).map_err(|e| e.to_string())?;
+                collapsed.remove(panel);
+                commit(app, workspace, app.ui.docking_returns.clone());
+                return Ok(json!({"closed": [panel]}));
+            }
+            let visible_layout = scoped_layout(app, workspace.layout.clone());
+            let visible_members = group_members(&visible_layout, panel);
+            if app.ui.workspace != "3D" && members.iter().any(|id| uv_panel(id)) {
+                for member in &visible_members {
+                    workspace.apply(Action::Close { panel: member.clone() }, permissions).map_err(|e| e.to_string())?;
+                }
+                collapsed.retain(|id| !visible_members.contains(id));
+            } else {
+                workspace.apply(Action::CloseGroup { panel: panel.to_owned() }, permissions).map_err(|e| e.to_string())?;
+                collapsed.retain(|id| !members.contains(id));
+            }
         }
         "collapse" => collapsed.extend(members.iter().cloned()),
         "expand" => collapsed.retain(|id| !members.contains(id)),
@@ -1119,6 +1239,15 @@ pub(crate) fn prepare_legacy_update(
         for &&(id, label, _) in &group_panels {
             let explicitly_hidden = dock.is_some_and(|d| d.hidden_tabs.get(&group).is_some_and(|names| names.iter().any(|name| name == label)));
             let explicitly_shown = dock.is_some() && !explicitly_hidden;
+            if !panel_visible_in_workspace(app, id) {
+                // Group visibility describes the tabs rendered in this workspace. A UV tab
+                // parked outside 3D must retain its saved visible/hidden state when an ordinary
+                // Properties group is closed; only an explicit per-tab hide applies to it.
+                if explicitly_hidden {
+                    workspace.set_visible(id.to_owned(), false, None, permissions).map_err(|e| e.to_string())?;
+                }
+                continue;
+            }
             if visibility == Some(false) || explicitly_hidden {
                 workspace.set_visible(id.to_owned(), false, None, permissions).map_err(|e| e.to_string())?;
             } else if visibility == Some(true) || explicitly_shown {
@@ -1136,7 +1265,21 @@ pub(crate) fn prepare_legacy_update(
                 Group::Layers => tabs.layers,
                 Group::Brushes => tabs.brushes,
             };
-            let id = group.tabs(pro).get(index).and_then(|label| normalize(label)).ok_or("dockTabs index is outside the panel group")?;
+            let visible_tabs = if let Some(dock) = dock {
+                dock.visible_tabs(group, pro)
+            } else if visibility == Some(true) {
+                group.tabs(pro).iter().copied().enumerate().collect::<Vec<_>>()
+            } else {
+                crate::dock::visible_tabs(app, group, pro)
+            };
+            let id = visible_tabs
+                .iter()
+                .find(|(tab, _)| *tab == index)
+                .and_then(|(_, label)| normalize(label))
+                .ok_or("dockTabs index is outside the visible panel group")?;
+            if !panel_visible_in_workspace(app, id) {
+                return Err("dockTabs selected a panel outside the current workspace".into());
+            }
             if visibility == Some(false) {
                 return Err("cannot select a tab in a hidden group".into());
             }

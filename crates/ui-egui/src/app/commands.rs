@@ -6,6 +6,34 @@ use super::{
 impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        #[cfg(feature = "uv-workbench")]
+        if id == "select.deselect" && !self.ui.uv_workbench.selected_polygons.is_empty() {
+            let can_deselect = self.session.is_enabled("select.deselect");
+            crate::uv_ui::clear_polygon_selection(self);
+            if self.session.active().is_none_or(|st| st.doc.selection.is_none()) && !can_deselect {
+                return Ok(Value::Null);
+            }
+        }
+        #[cfg(feature = "uv-workbench")]
+        if matches!(id, "edit.undo" | "edit.redo") {
+            crate::uv_ui::finish_paint(self);
+        }
+
+        #[cfg(feature = "uv-workbench")]
+        if id == "uv.maskPaint.preview.cancel" {
+            self.uv_mask_paint_preview = None;
+            return Ok(Value::Null);
+        }
+
+        #[cfg(feature = "uv-workbench")]
+        let mut params = params;
+        #[cfg(feature = "uv-workbench")]
+        if id.starts_with("paint.")
+            && let Some(key) = &self.uv_paint_key
+            && let Some(params) = params.as_object_mut()
+        {
+            params.insert("coalesce".into(), json!(key));
+        }
         if let Some(result) = delete_layer_prompt::intercept(self, id, &params) {
             return result;
         }
@@ -17,7 +45,45 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
-        let result = self.run_command(id, params);
+        #[cfg(feature = "uv-workbench")]
+        let mut skip_command = false;
+        #[cfg(not(feature = "uv-workbench"))]
+        let skip_command = false;
+        let mut result = Ok(Value::Null);
+        #[cfg(feature = "uv-workbench")]
+        if let Some(commit) = crate::uv_mask_paint_preview::pending(self) {
+            let target = self.session.documents().iter().position(|st| st.doc.id == commit.doc);
+            if let Some(target) = target {
+                if self.session.documents().get(target).is_none_or(|st| st.revision != commit.revision) {
+                    result = Err("The mask Paint preview is stale. Press Escape to discard it.".into());
+                    skip_command = true;
+                } else {
+                    let exact_ui_commit = id == "uv.maskPaint.modify" && params == commit.params();
+                    let previous = self.session.active_index();
+                    if previous != Some(target) && !self.session.set_active(target) {
+                        result = Err("The mask Paint preview document is unavailable".into());
+                        skip_command = true;
+                    } else {
+                        result = self.run_command("uv.maskPaint.modify", commit.params());
+                        if let Some(previous) = previous.filter(|previous| *previous != target) {
+                            self.session.set_active(previous);
+                        }
+                        if result.is_ok() {
+                            crate::uv_mask_paint_preview::clear(self, commit);
+                            skip_command = exact_ui_commit;
+                        } else {
+                            skip_command = true;
+                        }
+                    }
+                }
+            } else {
+                self.uv_mask_paint_preview = None;
+                log::warn!("canceled mask Paint opacity preview because its document was closed");
+            }
+        }
+        if !skip_command {
+            result = self.run_command(id, params);
+        }
         if gate.is_some() {
             self.session.authorize = None;
         }
@@ -30,6 +96,13 @@ impl PhotocraftApp {
                 self.ui.vector_mask_target = t == ChannelTarget::VectorMask;
             }
             self.sync_mask_targets();
+        }
+        #[cfg(feature = "uv-workbench")]
+        if result.is_ok() && id == "select.deselect" {
+            self.ui.uv_workbench.overlap.clear();
+            crate::uv_ui::clear_polygon_selection(self);
+            self.ui.uv_workbench.status.clear();
+            self.uv_cache.mask_settings_pending = false;
         }
         result
     }

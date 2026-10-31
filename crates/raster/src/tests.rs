@@ -810,3 +810,17 @@ fn content_bounds_with_tile_skipping() {
     s.fill_rect(Rect::new(-700, 4000, -699, 4001), &[0.5]);
     assert_eq!(s.content_bounds(), Rect::new(-700, 0, 2000, 4001));
 }
+#[test]
+fn changing_default_preserves_tiles_and_is_copy_on_write() {
+    let mut surface = Surface::with_default(PixelFormat::GRAY8, &[0.25]);
+    surface.write_pixel(2, 3, &[0.75]);
+    let clone = surface.clone();
+
+    surface.set_default_pixel(&[0.5]);
+
+    assert_eq!(surface.pixel(2, 3), vec![191.0 / 255.0]);
+    assert_eq!(surface.pixel(300, 3), vec![128.0 / 255.0]);
+    assert_eq!(clone.pixel(2, 3), vec![191.0 / 255.0]);
+    assert_eq!(clone.pixel(300, 3), vec![64.0 / 255.0]);
+    assert_eq!(clone.default_pixel(), vec![64.0 / 255.0]);
+}

@@ -21,6 +21,19 @@ fn bad(msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: "edit.transform".into(), msg: msg.into() }
 }
 
+fn has_linked_mask_paint_stack(layer: &Layer) -> bool {
+    let mut pending = vec![layer];
+    while let Some(layer) = pending.pop() {
+        if layer.mask.as_ref().is_some_and(|mask| mask.linked && mask.paint.is_some()) {
+            return true;
+        }
+        if let LayerContent::Group(group) = &layer.content {
+            pending.extend(group.children.iter());
+        }
+    }
+    false
+}
+
 /// Layers a transform moves as a whole, even with a selection: groups, and the kinds that keep the
 /// transform instead of pixels (type, shapes, smart objects). Only pixel layers move just the
 /// selected pixels.
@@ -819,6 +832,26 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     };
     if let Some(missing) = ids.iter().find(|id| st.doc.layer(**id).is_none()) {
         return Err(EngineError::NoLayer(*missing));
+    }
+    // Refuse transforms that would target a flattened cache of an editable mask stack. Check
+    // every layer in a multi-layer transform before scheduling the worker so it cannot partially
+    // mutate a selection and then fail on a later layer.
+    let target = crate::channel_cmds::target_of(p);
+    let checked_ids: Vec<LayerId> = if ids.is_empty() { id.into_iter().collect() } else { ids.clone() };
+    for layer_id in checked_ids {
+        let Some(layer) = st.doc.layer(layer_id) else { continue };
+        let unsupported = match target {
+            crate::channel_cmds::Target::Mask => {
+                layer.mask.as_ref().is_some_and(|mask| mask.paint.is_some())
+                    || (layer.mask.as_ref().is_some_and(|mask| mask.linked) && layer.is_group() && has_linked_mask_paint_stack(layer))
+            }
+            crate::channel_cmds::Target::Pixels if layer.is_group() => has_linked_mask_paint_stack(layer),
+            crate::channel_cmds::Target::Pixels => layer.mask.as_ref().is_some_and(|mask| mask.linked && mask.paint.is_some()),
+            _ => false,
+        };
+        if unsupported {
+            return Err(EngineError::Other("Free Transform cannot move the flattened cache of an editable mask Paint stack".into()));
+        }
     }
     let rect = match p.get("rect").and_then(Value::as_array) {
         Some(r) if r.len() == 4 => {

@@ -192,6 +192,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
                 linked: false,
                 density: 0.75,
                 feather: 0.0,
+                paint: None,
             }),
             warp: Some(photocraft_geom::warp::Warp::custom(photocraft_geom::warp::BezierMesh::identity([0.0, 0.0, 48.0, 24.0], 2, 1), [0.0, 0.0, 48.0, 24.0])),
             stack_mode: Some(photocraft_doc::StackMode::Median),

@@ -1,0 +1,12 @@
+PhotoCraft 2D and 3D/UV UI captures
+
+Copyright (c) 2026 PhotoCraft contributors
+
+These are original, unedited native PhotoCraft renders using the synthetic
+geometry and pixels in crates/uv/tests/fixtures. The captures are provided for
+project documentation under MIT OR Apache-2.0 (see the repository licenses).
+Existing PhotoCraft/ArtCraft branding retains its upstream terms; this does
+not grant a separate license to the logos or trademarks.
+
+uv-workspace-before-2d.png: the ordinary Essentials texture editor.
+uv-workspace-after-3d-2d.png: a synthetic painted mesh, UV view and clone preview.

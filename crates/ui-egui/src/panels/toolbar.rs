@@ -49,14 +49,25 @@ fn slot_tool(ui: &egui::Ui, current: Tool, slot: &[Tool], key: egui::Id) -> Tool
 /// slot keeps only its visible tools, so its flyout lists just those; a slot with none left is
 /// dropped, and so is a section with no slots. Each slot carries its index in `TOOL_SECTIONS`,
 /// so its remembered tool and flyout stay put when other slots are hidden.
+#[cfg(test)]
 pub(super) fn visible_sections(hidden: &[String]) -> Vec<Vec<(usize, Vec<Tool>)>> {
+    visible_sections_for_workspace(hidden, false)
+}
+
+/// Crop tools operate on the 2D document bounds and have no useful target in the 3D workspace.
+fn visible_sections_for_workspace(hidden: &[String], is_3d: bool) -> Vec<Vec<(usize, Vec<Tool>)>> {
     let hidden: Vec<Tool> = hidden.iter().map(String::as_str).filter_map(Tool::from_name).collect();
     let mut index = 0usize;
     let mut sections = Vec::new();
     for section in TOOL_SECTIONS {
         let mut slots = Vec::new();
         for slot in section.iter() {
-            let tools: Vec<Tool> = slot.iter().copied().filter(|tool| !hidden.contains(tool)).collect();
+            let tools: Vec<Tool> = slot
+                .iter()
+                .copied()
+                .filter(|tool| !hidden.contains(tool))
+                .filter(|tool| !is_3d || !matches!(tool, Tool::Crop | Tool::PerspectiveCrop))
+                .collect();
             if !tools.is_empty() {
                 slots.push((index, tools));
             }
@@ -81,9 +92,14 @@ pub(super) fn tool_flyout_release(row: Rect, pointer: Option<Pos2>, released: bo
 }
 
 pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    // Workspace may have been restored from preferences without passing through the selector.
+    // Don't leave an image-cropping tool selected when its toolbar group is hidden in 3D.
+    if app.ui.workspace == "3D" && matches!(app.ui.tool, Tool::Crop | Tool::PerspectiveCrop) {
+        app.ui.tool = Tool::Move;
+    }
     let t = Tokens::get(ui.ctx());
     let (w1, bx, m) = if t.pro { (40.0, 30.0, 5i8) } else { (50.0, 36.0, 7i8) };
-    let sections = visible_sections(&app.session.prefs().toolbar.hidden);
+    let sections = visible_sections_for_workspace(&app.session.prefs().toolbar.hidden, app.ui.workspace == "3D");
     // Two columns when the header chevron asks for them; a column that doesn't fit scrolls.
     let double = app.ui.panels.toolbar_double;
     let w = if double { w1 + bx + 2.0 } else { w1 };
@@ -158,6 +174,8 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     let key = egui::Id::unique(("tool-slot", *slot_index));
                                     let tool = slot_tool(ui, app.ui.tool, slot, key);
                                     let sel = slot.contains(&app.ui.tool);
+                                    #[cfg(feature = "uv-workbench")]
+                                    let sel = sel && !app.ui.uv_workbench.select_shells;
                                     let tip = match crate::tool_shortcuts::shortcut(app, tool) {
                                         Some(sc) => format!("{}  ({})", tl!(tool.label()), crate::shortcuts::pretty(&sc)),
                                         None => tl!(tool.label()).to_string(),
@@ -296,6 +314,10 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                     }
                                 }
                             });
+                            #[cfg(feature = "uv-workbench")]
+                            if row.iter().any(|(_, slot)| slot.contains(&Tool::RectMarquee)) {
+                                crate::uv_workspace::shell_tool(app, ui, bx);
+                            }
                         }
                     }
                     if icons::button(ui, "ellipsis", bx, false, tl!("Edit Toolbar…")).clicked() {

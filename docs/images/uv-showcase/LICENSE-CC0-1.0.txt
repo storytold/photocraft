@@ -1,0 +1,12 @@
+ORBIT-07 PhotoCraft screenshot captures
+
+The original PhotoCraft screenshots in this directory that show the ORBIT-07
+sample model are dedicated to the public domain under the Creative Commons CC0
+1.0 Universal Public Domain Dedication.
+
+https://creativecommons.org/publicdomain/zero/1.0/
+
+The ORBIT-07 model and texture maps shown in these screenshots are separately
+licensed under CC0 1.0; their notice is in docs/samples/uv-workbench/orbit-07/.
+This notice does not apply to overview.png, which has its own CC BY 4.0 license,
+or to PhotoCraft trademarks and branding.

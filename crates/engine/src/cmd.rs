@@ -351,17 +351,38 @@ fn build() -> Vec<CommandSpec> {
             })?;
             Ok(Value::Null)
         }),
-        cmd!("select.deselect", "Deselect", ["Select"], Some("Cmd+D"), "{}", has_selection, |s, _| {
-            // Nothing selected: nothing to do and no history step, as in Photoshop (#6744).
-            if s.active().is_none_or(|d| d.doc.selection.is_none()) {
-                return Ok(Value::Null);
+        cmd!(
+            "select.deselect",
+            "Deselect",
+            ["Select"],
+            Some("Cmd+D"),
+            "{}",
+            |s| {
+                #[cfg(feature = "uv-workbench")]
+                if crate::uv_cmds::has_selection(s) {
+                    return Ok(());
+                }
+                has_selection(s)
+            },
+            |s, _| {
+                #[cfg(feature = "uv-workbench")]
+                if s.active().is_none() && crate::uv_cmds::has_selection(s) {
+                    crate::uv_cmds::deselect(s)?;
+                    return Ok(Value::Null);
+                }
+
+                // Native no-selection deselect must not create a history step.
+                if s.active().is_some_and(|d| d.doc.selection.is_some()) {
+                    s.edit("Deselect", |doc, _| {
+                        doc.selection = None;
+                        Ok(())
+                    })?;
+                }
+                #[cfg(feature = "uv-workbench")]
+                crate::uv_cmds::deselect(s)?;
+                Ok(Value::Null)
             }
-            s.edit("Deselect", |doc, _| {
-                doc.selection = None;
-                Ok(())
-            })?;
-            Ok(Value::Null)
-        }),
+        ),
         cmd!("select.inverse", "Inverse", ["Select"], Some("Cmd+Shift+I"), "{}", has_selection, |s, _| {
             s.edit("Inverse", |doc, _| {
                 let old = doc.selection.take().unwrap_or_else(|| Surface::new(photocraft_color::PixelFormat::GRAY8));
@@ -1327,6 +1348,20 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::rasterize_style_cmds::specs());
     v.extend(crate::variables_cmds::specs());
     v.extend(crate::plugin_cmds::specs());
+    #[cfg(feature = "uv-workbench")]
+    v.extend(crate::uv_cmds::specs());
+    #[cfg(feature = "uv-workbench")]
+    v.extend(crate::uv_mask_paint_cmds::specs());
+    #[cfg(feature = "uv-workbench")]
+    v.extend(crate::uv_wrap_cmds::specs());
+    #[cfg(feature = "uv-workbench")]
+    v.extend(crate::uv_texture_save_cmds::specs());
+    #[cfg(feature = "uv-workbench")]
+    v.extend(crate::uv_asset_cmds::specs());
+    #[cfg(feature = "uv-workbench")]
+    v.extend(crate::uv_workspace_cmds::specs());
+    #[cfg(feature = "uv-workbench")]
+    v.extend(crate::uv_reload_cmds::specs());
     v.extend(crate::group_view_cmds::specs());
     v.extend(crate::fx_view_cmds::specs());
     v.extend(crate::fx_visibility_cmds::specs());

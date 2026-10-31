@@ -1,7 +1,7 @@
 use super::batch::{batch_kernel, batch_op_words, op_words, submit_batch};
 use super::consts::{FLUSH_OPS, MAP32, STRIDE};
 use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tiles, words};
-use super::kit::{Bound, FrameRes, texture_group, uniform_group};
+use super::kit::{Bound, BoundMask, FrameRes, texture_group, uniform_group};
 use super::paging::cell_rect;
 use super::textures::{CachedPattern, Cell, ChunkOut, ResKey, Resident, ResidentRef, Stats, Tex, TexKind};
 use super::{Arc, Compositor, DocId, HashMap, I, Kernel, Pattern, Plan, Rect, Role, Surface, TILE_SIZE, TileCoord, plan};
@@ -22,8 +22,9 @@ impl Compositor {
         first_pass: usize,
         stats: &mut Stats,
     ) -> Bound {
-        let cr = cell_rect(cell, self.page);
-        let mut views: Vec<(Option<ResidentRef>, Option<ResidentRef>)> = Vec::with_capacity(plan.passes.len());
+        let source_halo = plan.mask_halo.div_ceil(TILE_SIZE as u32).saturating_mul(TILE_SIZE as u32) as i32;
+        let cr = cell_rect(cell, self.page).inflate(source_halo);
+        let mut views: Vec<(Option<ResidentRef>, Option<BoundMask>)> = Vec::with_capacity(plan.passes.len());
         let mut keys: Vec<ResKey> = Vec::new();
         let mut maps = Vec::with_capacity(plan.passes.len());
         for (i, p) in plan.passes.iter().enumerate() {
@@ -40,14 +41,15 @@ impl Compositor {
                         (keys.len() - 1, r)
                     },
                 );
-            let mask = p
-                .mask
-                .as_ref()
-                .and_then(|m| self.sync(device, queue, encoder, doc, (m.layer, Role::Mask, cell), m.surface.get(), ma.intersect(&cr), stats))
-                .map(|(k, r)| {
-                    keys.push(k);
-                    (keys.len() - 1, r)
-                });
+            let mask = p.mask.as_ref().and_then(|m| match &m.source {
+                plan::MaskSource::Surface(surface) => {
+                    self.sync(device, queue, encoder, doc, (m.layer, Role::Mask, cell), surface.get(), ma.intersect(&cr), stats).map(|(k, r)| {
+                        keys.push(k);
+                        BoundMask::Resident((keys.len() - 1, r))
+                    })
+                }
+                plan::MaskSource::Slot(slot) => Some(BoundMask::Slot(*slot)),
+            });
             views.push((tex, mask));
             maps.push(p.map.and_then(|m| {
                 let f = plan.fx.get(m.fx)?;
@@ -87,6 +89,8 @@ impl Compositor {
         if chunks.is_empty() {
             return;
         }
+        let halo = plan.mask_halo as i32;
+        let work_chunks: Vec<Rect> = chunks.iter().map(|chunk| chunk.inflate(halo)).collect();
         // Chunks may hold different checkpoints: bind from the lowest one any of them resumes at.
         let first_pass = checkpoint
             .and_then(|_| chunks.iter().map(|c| self.prefix.restore_point(*c).map(|r| r.pass_end)).try_fold(usize::MAX, |m, p| Some(m.min(p?))))
@@ -98,10 +102,14 @@ impl Compositor {
         }
 
         // Chunk pool.
+        let pool_side = self.chunk.saturating_add(plan.mask_halo.saturating_mul(2));
+        if self.pool.first().is_some_and(|(texture, _)| texture.size().width != pool_side) {
+            self.pool.clear();
+        }
         while self.pool.len() < plan.slots as usize {
             let t = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("pc_compose_chunk"),
-                size: wgpu::Extent3d { width: self.chunk, height: self.chunk, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d { width: pool_side, height: pool_side, depth_or_array_layers: 1 },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -120,7 +128,7 @@ impl Compositor {
         // the length, device capacity and dynamic offsets before any GPU work for this frame.
         let op_base = chunks.len() as u64 * STRIDE;
         let mut data = vec![0u8; (op_base + plan.passes.len() as u64 * STRIDE) as usize];
-        for (i, c) in chunks.iter().enumerate() {
+        for (i, c) in work_chunks.iter().enumerate() {
             let w = words(&[I(c.x0), I(c.y0), I(c.width() as i32), I(c.height() as i32)]);
             data[i * STRIDE as usize..][..w.len()].copy_from_slice(&w);
         }
@@ -133,9 +141,9 @@ impl Compositor {
             let run = runs.get(i).copied().unwrap_or(1);
             let w = if run > 1 {
                 let extras: Vec<_> = (i + 1..i + run).filter_map(|j| Some((plan.passes.get(j)?, bound.views.get(j).and_then(|v| v.0).map(|t| t.1)))).collect();
-                batch_op_words(p, tex.map(|t| t.1), mask.map(|m| m.1), &extras)
+                batch_op_words(p, tex.map(|t| t.1), mask.and_then(BoundMask::rect), &extras)
             } else {
-                op_words(p, tex.map(|t| t.1), mask.map(|m| m.1), map)
+                op_words(p, tex.map(|t| t.1), mask.and_then(BoundMask::rect), map)
             };
             let off = (op_base + i as u64 * STRIDE) as usize;
             data[off..][..w.len()].copy_from_slice(&w);
@@ -161,10 +169,13 @@ impl Compositor {
             let slot = |s: Option<u32>| s.map_or(dummy, |s| &self.pool[s as usize].1);
             let (tex, mask) = &bound.views[i];
             let tv = tex.map_or(slot(p.d), |(k, _)| resident_views[k]);
-            let mv = mask.map_or(dummy, |(k, _)| resident_views[k]);
+            let mv = mask.map_or(dummy, |m| match m {
+                BoundMask::Resident((k, _)) => resident_views[k],
+                BoundMask::Slot(slot) => &self.pool[slot as usize].1,
+            });
             let lv = fr.luts.get(i).and_then(Option::as_ref).map_or(dummy, |(_, v)| v);
             let map = bound.maps[i].as_ref().map_or(dummy, |(v, _)| v);
-            let pat = fr.patterns.get(i).and_then(Option::as_ref).unwrap_or(dummy);
+            let pat = fr.mask_fills.get(i).and_then(Option::as_ref).or_else(|| fr.patterns.get(i).and_then(Option::as_ref)).unwrap_or(dummy);
             let run = runs.get(i).copied().unwrap_or(1);
             if run > 1 {
                 // The extra layers' pixels in tex_b, tex_c and map_tex (`batch_layer`).
@@ -176,6 +187,7 @@ impl Compositor {
         }
 
         for (ci, c) in chunks.iter().enumerate() {
+            let work = work_chunks[ci];
             let mut resume = 0;
             if let Some(cp) = checkpoint.and_then(|_| self.prefix.restore_point(*c))
                 && let Some((dst, _)) = self.pool.get(cp.slot as usize)
@@ -213,13 +225,13 @@ impl Compositor {
                 }
                 let scissor = match p.clip {
                     Some(clip) => {
-                        let r = clip.intersect(c);
+                        let r = clip.intersect(&work);
                         if r.is_empty() {
                             continue;
                         }
-                        Rect::new(r.x0 - c.x0, r.y0 - c.y0, r.x1 - c.x0, r.y1 - c.y0)
+                        Rect::new(r.x0 - work.x0, r.y0 - work.y0, r.x1 - work.x0, r.y1 - work.y0)
                     }
-                    None => Rect::new(0, 0, c.width() as i32, c.height() as i32),
+                    None => Rect::new(0, 0, work.width() as i32, work.height() as i32),
                 };
                 match p.kernel {
                     Kernel::CopyRect | Kernel::CopyFull => {
@@ -296,7 +308,7 @@ impl Compositor {
                 self.prefix.capture(device, encoder, *c, src, cp);
             }
             let (t, v) = &self.pool[plan.root as usize];
-            sink(encoder, ChunkOut { rect: *c, texture: t, view: v });
+            sink(encoder, ChunkOut { rect: *c, origin: [halo as u32, halo as u32], texture: t, view: v });
         }
     }
 

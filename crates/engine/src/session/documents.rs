@@ -103,7 +103,16 @@ impl Session {
     /// Identity-dependent callers must read the admitted document at the returned index.
     pub fn add_document(&mut self, mut doc: Document, path: Option<String>) -> usize {
         // Persisted IDs can overlap the allocator, so check every replacement too.
-        while self.docs.iter().any(|st| st.doc.id == doc.id) {
+        while self.docs.iter().any(|st| st.doc.id == doc.id) || {
+            #[cfg(feature = "uv-workbench")]
+            {
+                self.uv_workspace.parked.iter().any(|st| st.doc.id == doc.id)
+            }
+            #[cfg(not(feature = "uv-workbench"))]
+            {
+                false
+            }
+        } {
             doc.id = photocraft_doc::DocId::fresh();
         }
         let mut st = DocState::new(doc, path);

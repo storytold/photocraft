@@ -637,6 +637,7 @@ impl LiveDab {
             params: self.params,
             seed: None,
             points: self.points,
+            breaks: Vec::new(),
             surface,
             bounds: self.bounds,
         })

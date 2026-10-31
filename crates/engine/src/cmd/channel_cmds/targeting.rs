@@ -79,7 +79,7 @@ pub(crate) fn read_target_surface<'a>(doc: &'a Document, layer: Option<LayerId>,
         }
         Target::Mask => {
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
-            doc.layer(id).and_then(|l| l.mask.as_ref()).map(|m| &m.surface).ok_or(EngineError::NoLayer(id))
+            doc.layer(id).and_then(|l| l.mask.as_ref()).map(|m| m.paint_surface()).ok_or(EngineError::NoLayer(id))
         }
         Target::FilterMask => {
             let id = layer.ok_or_else(|| EngineError::Other("no active layer".into()))?;
@@ -118,7 +118,7 @@ fn edits_mask(id: &str) -> bool {
 }
 
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
-/// layer needs a mask. None when another precondition applies.
+/// layer needs a mask, and non-brush edits cannot write into an editable Paint stack.
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
     match target_of(p) {
         // The commands that paint, fill, filter or adjust the filter mask need a smart object with
@@ -126,11 +126,75 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
         Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
             Some(crate::active_layer_of(s).and_then(crate::smart_cmds::filter_mask_paintable))
         }
-        Target::Mask if edits_mask(id) => {
-            Some(crate::active_layer_of(s).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) }))
+        Target::Mask if edits_mask(id) || follows_target(id) => {
+            Some(crate::active_layer_of(s).and_then(|l| {
+                let mask = l.mask.as_ref().ok_or_else(|| "the active layer has no layer mask".to_string())?;
+                // Brush, Pencil and tangent-wrap write to the selected Paint layer's RGBA
+                // surface. Copy reads the flattened mask and leaves the editable stack intact.
+                // Other routed commands write a grayscale surface and would discard its effect
+                // semantics; brush tools must also reject a selected Fill/Levels/Blur effect.
+                let paint_stroke = matches!(id, "paint.stroke" | "paint.pencil" | "paint.uvWrap")
+                    && mask
+                        .paint
+                        .as_ref()
+                        .and_then(|stack| stack.layers.get(stack.active))
+                        .is_some_and(|layer| matches!(&layer.kind, photocraft_doc::mask_paint::EffectKind::Paint));
+                if mask.paint.is_some() && id != "edit.copy" && !paint_stroke {
+                    return Err("Select a Paint sublayer before using Brush, Pencil or tangent-wrap on an editable mask stack".into());
+                }
+                Ok(())
+            }))
         }
         _ => None,
     }
+}
+
+/// Geometry commands that transform the flattened mask surface but do not yet carry editable
+/// mask Paint data through the same transform. Refuse before running them against a cloned doc.
+pub(crate) fn mask_stack_geometry_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
+    let changes_document_geometry = matches!(
+        id,
+        "image.imageSize"
+            | "image.canvasSize"
+            | "image.crop"
+            | "image.trim"
+            | "image.rotation.arbitrary"
+            | "image.imageRotation.flipCanvasHorizontal"
+            | "image.imageRotation.flipCanvasVertical"
+            | "image.imageRotation.180"
+            | "image.imageRotation.90cw"
+            | "image.imageRotation.90ccw"
+    );
+    let changes_layer_geometry = id == "layer.translate";
+    if !changes_document_geometry && !changes_layer_geometry {
+        return None;
+    }
+    let has_editable_mask_stack = s.active().is_some_and(|state| {
+        let walk = state.doc.walk();
+        if changes_document_geometry {
+            return walk.iter().any(|(_, _, layer)| layer.mask.as_ref().is_some_and(|mask| mask.paint.is_some()));
+        }
+
+        // `layer.translate` may move an explicit layer, a multi-selection or its linked layers.
+        // Include descendants of moved groups. A stack is affected only if its mask moves with
+        // the pixels, or if the command explicitly moves that layer's unlinked mask by itself.
+        let roots = crate::commands::explicit_layer(s, p).ok().flatten().map(|id| vec![id]).unwrap_or_else(|| crate::layer_multi_cmds::selected(s));
+        if roots.is_empty() {
+            return false;
+        }
+        let moved = crate::layer_multi_cmds::move_targets(&state.doc, &roots);
+        let moved_paths: Vec<_> = walk.iter().filter(|(_, _, layer)| moved.contains(&layer.id)).map(|(path, _, _)| path.to_vec()).collect();
+        let moves_mask = target_of(p) == Target::Mask;
+        walk.iter().any(|(path, _, layer)| {
+            let mask_moves_with_layer = moved_paths.iter().any(|moved_path| path.starts_with(moved_path.as_slice()));
+            layer
+                .mask
+                .as_ref()
+                .is_some_and(|mask| mask.paint.is_some() && ((mask_moves_with_layer && mask.linked) || (moves_mask && roots.contains(&layer.id))))
+        })
+    });
+    has_editable_mask_stack
+        .then(|| Err("This geometry change is disabled while the affected editable mask Paint stack exists; preserve or remove the stack first".into()))
 }
 
 /// Whether command `id` edits the targeted channel or mask when its params name no `"target"`
@@ -168,6 +232,7 @@ pub fn follows_filter_mask(id: &str) -> bool {
 
 /// The paint and retouch tools that follow the targeted channel or mask.
 const PAINT_IDS: &[&str] = &[
+    "paint.uvWrap",
     "paint.stroke",
     "paint.pencil",
     "paint.bucket",
@@ -197,7 +262,7 @@ pub(crate) fn routed(id: &str) -> bool {
     id.starts_with("filter.")
         || id == "plugin.run"
         || id.starts_with("image.adjustments.")
-        || matches!(id, "edit.fill" | "image.applyImage")
+        || matches!(id, "paint.uvWrap" | "edit.fill" | "image.applyImage")
         || crate::fill_key_cmds::IDS.contains(&id)
         || PAINT_IDS.contains(&id)
         // Pasting into a targeted mask or channel (#1035); Copy takes a targeted mask (#2928).

@@ -14,6 +14,7 @@ pub mod analysis;
 pub mod blend_if;
 pub mod comps;
 pub mod effects;
+pub mod mask_paint;
 pub mod mode;
 pub mod pattern;
 pub mod slices;
@@ -249,11 +250,13 @@ pub struct LayerMask {
     pub linked: bool,
     pub density: f32,
     pub feather: f32,
+    /// Optional non-destructive paint stack used by the experimental UV workspace.
+    pub paint: Option<mask_paint::Stack>,
 }
 
 impl LayerMask {
     pub fn reveal_all() -> Self {
-        Self { surface: Surface::with_default(PixelFormat::GRAY8, &[1.0]), enabled: true, linked: true, density: 1.0, feather: 0.0 }
+        Self { surface: Surface::with_default(PixelFormat::GRAY8, &[1.0]), enabled: true, linked: true, density: 1.0, feather: 0.0, paint: None }
     }
     pub fn hide_all() -> Self {
         Self { surface: Surface::with_default(PixelFormat::GRAY8, &[0.0]), ..Self::reveal_all() }

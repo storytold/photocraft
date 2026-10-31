@@ -17,6 +17,7 @@ fn empty_layer_and_mask_channels_use_raw_without_a_payload() {
                     linked: true,
                     density: 1.0,
                     feather: 0.0,
+                    paint: None,
                 });
                 doc.layers.push(masked);
                 let bytes = export(&doc, ext, &ExportOptions::default()).unwrap().bytes;

@@ -6,6 +6,10 @@ use super::{CornerRadius, Layer, LayerContent, LayerId, PhotocraftApp, Rect, Ric
 /// tabs: Properties (`properties_body`: document, layer, adjustment and mask properties) and
 /// Adjustments (`adjustments_grid`).
 pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
+    #[cfg(feature = "uv-workbench")]
+    if app.ui.workspace == "3D" && matches!(app.ui.dock_tabs.properties, 2 | 3) {
+        return;
+    }
     if app.ui.docking.is_some() {
         return;
     }
@@ -36,7 +40,7 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.set_width(width - 28.0);
             // Properties | Adjustments, as on the docked group (#7265).
             let group = crate::dock::Group::Properties;
-            let visible = app.ui.dock.visible_tabs(group, false);
+            let visible = crate::dock::visible_tabs(app, group, false);
             let indices: Vec<usize> = visible.iter().map(|(i, _)| *i).collect();
             let tabs: Vec<&str> = visible.iter().map(|(_, name)| *name).collect();
             let mut sel = indices.iter().position(|i| *i == app.ui.dock_tabs.properties).unwrap_or(0);
@@ -142,6 +146,10 @@ pub(super) fn properties_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 fn properties_body_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
+    #[cfg(feature = "uv-workbench")]
+    if crate::uv_mask_paint::levels_properties(app, ui) || crate::uv_mask_paint::fill_properties(app, ui) || crate::uv_mask_paint::simple_properties(app, ui) {
+        return;
+    }
     let Some(st) = app.session.active() else {
         empty(ui, tl!("No properties"));
         return;

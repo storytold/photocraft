@@ -107,6 +107,10 @@ pub(crate) const GPU_OUTPUT: u32 = u32::MAX;
 
 /// The document to render: the committed one, or a clone with the live adjustment preview applied.
 pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Arc<Document>, u64) {
+    #[cfg(feature = "uv-workbench")]
+    if let Some(shown) = crate::uv_mask_paint_preview::display_doc(app, idx) {
+        return shown;
+    }
     if let Some(shown) = crate::type_panels_ui::color_picker::display_doc(app, idx) {
         return shown;
     }

@@ -1034,6 +1034,41 @@ fn move_rotate_and_distort() {
 }
 
 #[test]
+#[cfg(feature = "uv-workbench")]
+fn mask_fill_transform_commands_preserve_parent_and_do_not_open_apply_session() {
+    let mut session = photocraft_engine::Session::new();
+    session.execute("uv.workspace.activate", json!({"active":true})).unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
+    session.execute("uv.model.import", json!({"path":source})).unwrap();
+    session.execute("uv.texture.create", json!({"width":32,"height":32})).unwrap();
+    session.execute("edit.fill", json!({"color":"#649ecf"})).unwrap();
+    session.execute("layer.layerMask.revealAll", json!({})).unwrap();
+    session.execute("uv.maskPaint.add", json!({"kind":"fill","value":0.5})).unwrap();
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    app.ui.workspace = "3D".into();
+    app.ui.mask_target = false;
+    app.sync_views();
+    let ctx = egui::Context::default();
+    let st = app.session.active().unwrap();
+    let layer = st.active_layer.unwrap();
+    let before = st.doc.layer(layer).unwrap().surface().unwrap().read_region(st.doc.bounds());
+    let layer_count = st.doc.layers.len();
+    // A transform opened before choosing the Fill is cancelled without touching pixels.
+    begin(&mut app, &ctx).unwrap();
+    assert!(app.ui.transform.is_some());
+    app.ui.mask_target = true;
+    crate::uv_mask_paint::select_effect(&ctx, app.session.active().unwrap().doc.id.0, layer.0, 0);
+    for command in ["edit.freeTransform", "edit.transform.rotate", "edit.transform.scale", "edit.freeTransformCopy", "edit.transform.warp"] {
+        crate::menus::invoke(&mut app, &ctx, command, json!({})).unwrap();
+        assert!(app.ui.transform.is_none(), "{command} opened a native Apply session");
+        assert!(app.transform_preview.is_none());
+        let st = app.session.active().unwrap();
+        assert_eq!(st.doc.layers.len(), layer_count, "{command} duplicated the parent");
+        assert_eq!(st.doc.layer(layer).unwrap().surface().unwrap().read_region(st.doc.bounds()), before, "{command} changed parent pixels");
+    }
+}
+
+#[test]
 fn begin_and_commit_through_the_engine() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 64, "height": 64})).unwrap();

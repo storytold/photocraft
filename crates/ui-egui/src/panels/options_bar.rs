@@ -40,6 +40,21 @@ pub(super) fn options_bar_height(pro: bool, narrow: bool) -> f32 {
 }
 
 pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
+    #[cfg(feature = "uv-workbench")]
+    if app.ui.transform.is_none() && app.ui.workspace == "3D" && app.ui.uv_workbench.select_shells && app.session.uv.scene.is_some() {
+        egui::Panel::top("options_bar").exact_size(36.0).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.menu_button(tl!("UV shell selection"), |ui| {
+                    ui.set_max_width(360.0);
+                    crate::uv_ui::shell_settings(app, ui);
+                });
+                ui.separator();
+                ui.weak(tl!("Click to select · Shift to add · Ctrl to subtract"));
+            });
+        });
+        return;
+    }
+
     let t = Tokens::get(ui.ctx());
     let narrow = app.session.prefs().workspace.narrow_options_bar();
     egui::Panel::top("options_bar")

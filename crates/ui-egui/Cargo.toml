@@ -7,7 +7,11 @@ license.workspace = true
 [lints]
 workspace = true
 
+[features]
+uv-workbench = ["photocraft-engine/uv-workbench", "dep:photocraft-uv"]
+
 [dependencies]
+photocraft-uv = { workspace = true, optional = true }
 craft-print = { workspace = true }
 craft-ui = { workspace = true }
 photocraft-geom = { workspace = true }

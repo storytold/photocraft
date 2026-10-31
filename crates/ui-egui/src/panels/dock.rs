@@ -105,6 +105,10 @@ pub(crate) fn dock_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, group: crate
         // (#6000); only the tab order differs between themes.
         (Group::Color, tab) if group.tabs(pro).get(tab) == Some(&"Color") => crate::color_panel_ui::panel(app, ui),
         (Group::Color, _) => crate::swatches_ui::panel(app, ui),
+        #[cfg(feature = "uv-workbench")]
+        (Group::Properties, 2) => crate::uv_ui::panel(app, ui),
+        #[cfg(feature = "uv-workbench")]
+        (Group::Properties, 3) => crate::uv_library::panel(app, ui),
         (Group::Properties, 0) => properties_body(app, ui),
         (Group::Properties, _) => adjustments_grid(app, ui),
         (Group::Character, tab) => crate::type_tool::character_panel(app, ui, tab == 1),

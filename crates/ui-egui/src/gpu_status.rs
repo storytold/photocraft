@@ -103,16 +103,45 @@ pub fn check_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// Seconds between attempts to save unsaved work for recovery after the window's device was lost.
 pub const RECOVERY_RETRY_SECS: f64 = 2.0;
 
+fn recovery_documents(app: &PhotocraftApp) -> Vec<&photocraft_engine::DocState> {
+    let mut documents: Vec<_> = app.session.documents().iter().collect();
+    #[cfg(feature = "uv-workbench")]
+    documents.extend(app.session.uv_workspace.parked());
+    let mut seen = std::collections::HashSet::new();
+    documents.retain(|state| seen.insert(state.doc.id));
+    documents
+}
+
 /// Write every document with unsaved changes to crash recovery, whatever the autosave timer and
 /// preference, and wait until the writes finished (see `Services::flush_autosaves`). `Ok` only when
 /// each of them is known to be on disk.
 fn save_for_recovery(app: &mut PhotocraftApp) -> Result<(), String> {
-    let jobs: Vec<_> = app.session.documents().iter().filter(|d| d.is_dirty()).map(|d| (d.doc.clone(), d.revision, d.path.clone())).collect();
+    // Keep the preview untouched when it is stale or unavailable, but still attempt recovery
+    // writes for every canonical dirty document. The caller will keep the window open if the
+    // preview could not be committed, so it can be resolved after a later retry.
+    let mut failed: Vec<(u64, String)> = Vec::new();
+    #[cfg(feature = "uv-workbench")]
+    if let Some(commit) = crate::uv_mask_paint_preview::pending(app) {
+        match app.session.documents().iter().find(|state| state.doc.id == commit.doc) {
+            None => failed.push((commit.doc.0, "mask Paint opacity preview document is unavailable".into())),
+            Some(state) if state.revision != commit.revision => failed.push((commit.doc.0, "mask Paint opacity preview is stale".into())),
+            Some(_) => {
+                if let Err(error) = app.run("uv.maskPaint.modify", commit.params()) {
+                    failed.push((commit.doc.0, format!("mask Paint opacity preview: {error}")));
+                }
+            }
+        }
+    }
+
+    let jobs: Vec<_> = recovery_documents(app).into_iter().filter(|d| d.is_dirty()).map(|d| (d.doc.clone(), d.revision, d.path.clone())).collect();
     if jobs.is_empty() {
-        return Ok(());
+        return if failed.is_empty() {
+            Ok(())
+        } else {
+            Err(format!("couldn't save for recovery: {}", failed.into_iter().map(|(_, why)| why).collect::<Vec<_>>().join("; ")))
+        };
     }
     // (document id, why) for each document not known to be saved.
-    let mut failed: Vec<(u64, String)> = Vec::new();
     let Some(save) = app.services.autosave.as_mut() else { return Err("no crash-recovery autosave".into()) };
     for (doc, revision, path) in &jobs {
         if let Err(e) = save(doc, *revision, path.as_deref()) {
@@ -300,6 +329,149 @@ pub fn show_fallback(app: &mut PhotocraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "uv-workbench")]
+    fn paint_opacity_recovery_app(services: crate::Services) -> (PhotocraftApp, photocraft_doc::LayerId) {
+        use photocraft_color::PixelFormat;
+        use photocraft_doc::{
+            LayerMask,
+            mask_paint::{EffectKind, Paint, Stack},
+        };
+        use photocraft_raster::Surface;
+
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        session.uv.scene = Some(std::sync::Arc::new(photocraft_uv::Scene::default()));
+        let state = session.active_mut().unwrap();
+        let layer = state.active_layer.unwrap();
+        let mut mask = LayerMask::hide_all();
+        mask.paint = Some(Stack {
+            base: Surface::with_default(PixelFormat::GRAY8, &[0.2]),
+            layers: vec![Paint {
+                name: "Recovery opacity".into(),
+                visible: true,
+                opacity: 1.0,
+                blend: photocraft_color::BlendMode::Normal,
+                surface: Surface::with_default(PixelFormat::RGBA8, &[1.0, 0.0, 0.0, 0.5]),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Paint,
+            }],
+            active: 0,
+        });
+        std::sync::Arc::make_mut(&mut state.doc).layer_mut(layer).unwrap().mask = Some(mask);
+        let app = PhotocraftApp::new(session, services);
+        (app, layer)
+    }
+
+    #[cfg(feature = "uv-workbench")]
+    #[test]
+    fn recovery_commits_clean_transient_opacity_before_capturing_snapshot() {
+        use std::{cell::RefCell, rc::Rc};
+
+        let snapshots = Rc::new(RefCell::new(Vec::<(u64, u64, std::sync::Arc<photocraft_doc::Document>)>::new()));
+        let autosaved = snapshots.clone();
+        let flushed = snapshots.clone();
+        let services = crate::Services {
+            autosave: Some(Box::new(move |doc, revision, _| {
+                autosaved.borrow_mut().push((doc.id.0, revision, doc.clone()));
+                Ok(())
+            })),
+            flush_autosaves: Some(Box::new(move || flushed.borrow().iter().map(|(doc, revision, _)| (*doc, *revision, Ok(()))).collect())),
+            ..Default::default()
+        };
+        let (mut app, layer) = paint_opacity_recovery_app(services);
+        assert!(!app.session.active().unwrap().is_dirty(), "fixture starts clean");
+        crate::uv_mask_paint_preview::set(&mut app, layer, 0, 0.5);
+        assert!(app.uv_mask_paint_preview.is_some());
+        assert!(!app.session.active().unwrap().is_dirty(), "transient opacity alone is not canonical document state");
+
+        save_for_recovery(&mut app).unwrap();
+
+        assert!(app.uv_mask_paint_preview.is_none(), "recovery must commit and clear the transient preview");
+        let state = app.session.active().unwrap();
+        assert!(state.is_dirty(), "the committed opacity must make recovery save the document");
+        let captured = snapshots.borrow();
+        let [(doc_id, revision, snapshot)] = captured.as_slice() else { panic!("expected one autosave snapshot") };
+        assert_eq!(*doc_id, state.doc.id.0);
+        assert_eq!(*revision, state.revision, "autosave must record the post-commit revision");
+        assert_eq!(snapshot.layer(layer).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].opacity, 0.5);
+
+        let mask = snapshot.layer(layer).unwrap().mask.as_ref().unwrap();
+        let stack = mask.paint.as_ref().unwrap();
+        let base = stack.base.default_pixel()[0];
+        let source = stack.layers[0].surface.default_pixel();
+        let alpha = source[3] * 0.5;
+        let expected = source[0] * alpha + base * (1.0 - alpha);
+        assert!((mask.surface.default_pixel()[0] - expected).abs() < 1.0 / 255.0, "recovery snapshot must contain the flattened mask for opacity 0.5");
+    }
+
+    #[cfg(feature = "uv-workbench")]
+    #[test]
+    fn stale_opacity_preview_fails_recovery_without_losing_pending_value() {
+        use std::{cell::RefCell, rc::Rc};
+
+        let save_count = Rc::new(RefCell::new(0));
+        let writes = save_count.clone();
+        let services = crate::Services {
+            autosave: Some(Box::new(move |_, _, _| {
+                *writes.borrow_mut() += 1;
+                Ok(())
+            })),
+            flush_autosaves: Some(Box::new(Vec::new)),
+            ..Default::default()
+        };
+        let (mut app, layer) = paint_opacity_recovery_app(services);
+        crate::uv_mask_paint_preview::set(&mut app, layer, 0, 0.5);
+        app.session.active_mut().unwrap().revision += 1;
+
+        let error = save_for_recovery(&mut app).unwrap_err();
+
+        assert!(error.contains("stale"), "{error}");
+        assert_eq!(crate::uv_mask_paint_preview::pending(&app).unwrap().opacity, 0.5, "failed recovery must keep the pending value in memory");
+        assert_eq!(*save_count.borrow(), 1, "a stale preview must not block the canonical dirty document's recovery write");
+    }
+
+    #[cfg(feature = "uv-workbench")]
+    #[test]
+    fn recovery_saves_dirty_documents_from_both_workspace_banks_once() {
+        use std::{cell::RefCell, rc::Rc};
+
+        let snapshots = Rc::new(RefCell::new(Vec::<(u64, u64)>::new()));
+        let autosaved = snapshots.clone();
+        let flushed = snapshots.clone();
+        let services = crate::Services {
+            autosave: Some(Box::new(move |doc, revision, _| {
+                autosaved.borrow_mut().push((doc.id.0, revision));
+                Ok(())
+            })),
+            flush_autosaves: Some(Box::new(move || flushed.borrow().iter().map(|(id, revision)| (*id, *revision, Ok(()))).collect())),
+            ..Default::default()
+        };
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width":8,"height":8})).unwrap();
+        let parked_id = session.active().unwrap().doc.id.0;
+        session.active_mut().unwrap().revision += 1;
+        session.uv.scene = Some(std::sync::Arc::new(photocraft_uv::Scene::default()));
+        session.execute("uv.workspace.activate", json!({"active":true})).unwrap();
+        assert!(session.documents().is_empty());
+        assert_eq!(session.uv_workspace.parked().len(), 1);
+
+        session.execute("file.new", json!({"width":8,"height":8})).unwrap();
+        let active_id = session.active().unwrap().doc.id.0;
+        session.active_mut().unwrap().revision += 1;
+        let mut app = PhotocraftApp::new(session, services);
+        let revisions = recovery_documents(&app).into_iter().map(|state| (state.doc.id.0, state.revision, state.history.past_len())).collect::<Vec<_>>();
+
+        save_for_recovery(&mut app).unwrap();
+
+        let mut written = snapshots.borrow().iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        written.sort_unstable();
+        assert_eq!(written, vec![active_id, parked_id].into_iter().collect::<std::collections::BTreeSet<_>>().into_iter().collect::<Vec<_>>());
+        let after = recovery_documents(&app).into_iter().map(|state| (state.doc.id.0, state.revision, state.history.past_len())).collect::<Vec<_>>();
+        assert_eq!(after, revisions, "recovery autosave must not alter documents or history");
+    }
 
     #[test]
     fn system_info_copy_and_api_stay_english_in_czech_ui() {

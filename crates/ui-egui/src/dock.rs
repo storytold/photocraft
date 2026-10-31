@@ -107,6 +107,9 @@ impl Group {
             // Photoshop Essentials: Color | Swatches | Gradients | Patterns.
             Group::Color if pro => &["Color", "Swatches", "Gradients", "Patterns"],
             Group::Color => &["Swatches", "Color", "Gradients", "Patterns"],
+            #[cfg(feature = "uv-workbench")]
+            Group::Properties => &["Properties", "Adjustments", "3D / UV", "Images"],
+            #[cfg(not(feature = "uv-workbench"))]
             Group::Properties => &["Properties", "Adjustments"],
             Group::Character => &["Character", "Paragraph"],
             Group::Navigator => &["Navigator", "Histogram", "Info"],
@@ -319,12 +322,27 @@ pub fn rail_click(app: &mut PhotocraftApp, g: Group, docked: bool) {
     }
 }
 
+/// Visible native tabs for the active workspace; stored tab identities remain stable.
+pub(crate) fn visible_tabs(app: &PhotocraftApp, g: Group, pro: bool) -> Vec<(usize, &'static str)> {
+    let tabs = app.ui.dock.visible_tabs(g, pro);
+    #[cfg(feature = "uv-workbench")]
+    {
+        let mut tabs = tabs;
+        if g == Group::Properties && app.ui.workspace != "3D" {
+            tabs.retain(|(index, _)| *index < 2);
+        }
+        tabs
+    }
+    #[cfg(not(feature = "uv-workbench"))]
+    tabs
+}
+
 /// A tab strip's Close: hide `tab` of `g`, and the group with its last tab. When the selected
 /// tab closes, the next one on the strip (or the previous one, for the last) is selected.
 pub(crate) fn close_tab(app: &mut PhotocraftApp, g: Group, tab: usize, pro: bool) {
-    let shown_before = app.ui.dock.visible_tabs(g, pro);
+    let shown_before = visible_tabs(app, g, pro);
     app.ui.dock.hide_tab(g, tab, pro);
-    let remaining = app.ui.dock.visible_tabs(g, pro);
+    let remaining = visible_tabs(app, g, pro);
     if remaining.is_empty() {
         *g.shown_mut(&mut app.ui.panels) = false;
     } else if *g.tab_mut(&mut app.ui.dock_tabs) == tab {
@@ -340,6 +358,10 @@ pub(crate) fn close_tab(app: &mut PhotocraftApp, g: Group, tab: usize, pro: bool
 /// What `prefs.panelLayout` holds: the live layout and open panels.
 pub(crate) fn snapshot(app: &PhotocraftApp) -> Value {
     let mut layout = json!({"workspace": app.ui.workspace, "panels": app.ui.panels, "dockTabs": app.ui.dock_tabs, "dock": app.ui.dock, "timelineOpen": app.ui.timeline.open, "docking": app.ui.docking, "dockingReturns": app.ui.docking_returns, "dockingCollapsed": app.ui.docking_collapsed});
+    #[cfg(feature = "uv-workbench")]
+    {
+        layout["uvView"] = crate::uv_workspace::preferences(app);
+    }
     keep_newer(app, &mut layout);
     layout
 }
@@ -398,8 +420,15 @@ pub fn restore(app: &mut PhotocraftApp) {
     // workspace must not leave it open on a fresh launch, especially with no document.
     // Explicit workspace switches still use `apply` and keep their stored panel visibility.
     app.ui.panels.brush_settings = false;
+    #[cfg(feature = "uv-workbench")]
+    crate::uv_workspace::restore_preferences(app, saved.get("uvView"));
     if let Some(ws) = saved.get("workspace").and_then(Value::as_str) {
         app.ui.workspace = ws.to_string();
+        #[cfg(feature = "uv-workbench")]
+        if ws == "3D" {
+            app.ui.uv_workbench.open = true;
+            app.ui.dock_tabs.properties = 2;
+        }
     }
 }
 

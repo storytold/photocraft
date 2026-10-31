@@ -38,7 +38,7 @@ fn mask(rects: &[(Rect, f32)], default: f32, density: f32, enabled: bool) -> Lay
     for (r, v) in rects {
         surface.fill_rect(*r, &[*v]);
     }
-    LayerMask { surface, enabled, linked: true, density, feather: 0.0 }
+    LayerMask { surface, enabled, linked: true, density, feather: 0.0, paint: None }
 }
 
 /// An 8-bit sample as stored.

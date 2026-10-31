@@ -327,7 +327,7 @@ impl Builder {
         if let Some(mask) = &n.pixel_mask
             && let Some(surface) = self.mask(mask, to_doc)
         {
-            l.mask = Some(LayerMask { surface, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+            l.mask = Some(LayerMask { surface, enabled: true, linked: true, density: 1.0, feather: 0.0, paint: None });
         }
         Some(l)
     }

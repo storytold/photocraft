@@ -34,6 +34,8 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
         "graphicAndWeb" => "Graphic and Web",
         "pixelArt" => "Pixel Art",
         "motion" => "Motion",
+        #[cfg(feature = "uv-workbench")]
+        "threeD" => "3D",
         _ => return None,
     })
 }
@@ -58,6 +60,28 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
 
 /// [`invoke`] without the unsaved-changes prompt, for once the user has already answered it.
 fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    #[cfg(feature = "uv-workbench")]
+    if let Some(result) = crate::uv_workspace::menu(app, id) {
+        return Some(result);
+    }
+    #[cfg(feature = "uv-workbench")]
+    if id == "window.uvWorkbench" {
+        return Some((|| {
+            let is_open = app.ui.workspace == "3D"
+                && app.ui.docking.as_ref().map_or(app.ui.uv_workbench.open, |workspace| workspace.layout.contains(&"uvWorkbench".to_owned()));
+            if !is_open {
+                crate::uv_ui::reveal(app)?;
+            } else if app.ui.docking.is_some() {
+                crate::panel_docking::command(app, "window.panel.close", &json!({"panel":"uvWorkbench"}))
+                    .ok_or("native UV panel close command was unavailable")??;
+                app.ui.uv_workbench.open = false;
+            } else {
+                app.ui.dock_tabs.properties = 0;
+                app.ui.uv_workbench.open = false;
+            }
+            Ok(json!({"open": app.ui.uv_workbench.open}))
+        })());
+    }
     if let Some(tool) = crate::tool_shortcuts::tool(id) {
         crate::tool_memory::select(app, tool);
         return Some(Ok(json!({"tool": tool})));
@@ -170,11 +194,18 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
         return Some(invoke(app, ctx, alias, params.clone()));
     }
     if let Some(ws) = workspace_name(id) {
-        // Reset re-applies the current workspace; Essentials is the default layout.
-        match (ws, id) {
-            (_, "window.workspace.resetWorkspace") => {}
-            ("", _) => app.ui.workspace = "Essentials".into(),
-            (name, _) => app.ui.workspace = name.into(),
+        // Reset re-applies the current layout. All actual preset changes use the same
+        // document-bank transition as the workspace switcher before replacing the layout.
+        if id != "window.workspace.resetWorkspace" {
+            let name = if ws.is_empty() { "Essentials" } else { ws };
+            #[cfg(feature = "uv-workbench")]
+            {
+                return Some(crate::workspace_ui::select_workspace_named(app, name.to_string()));
+            }
+            #[cfg(not(feature = "uv-workbench"))]
+            {
+                app.ui.workspace = name.into();
+            }
         }
         apply_workspace(app);
         return Some(Ok(json!({"workspace": app.ui.workspace})));
@@ -606,6 +637,9 @@ fn invoke_view_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, p
         | "edit.transform.skew"
         | "edit.transform.distort"
         | "edit.transform.perspective" => Some((|| {
+            if crate::transform_tool::route_to_mask_fill(app, ctx) {
+                return Ok(json!({"transform": null, "maskFill": true}));
+            }
             if app.ui.transform.as_ref().is_some_and(|transform| transform.content_aware.is_some()) {
                 return Err(crate::transform_tool::CAS_ONLY_SCALES.into());
             }
@@ -791,11 +825,23 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
         _ => (false, true, true, false, true),
     };
     p.navigator = nav;
-    p.color = color;
+    // Keep the base 3D workspace focused on model and UV panels. The Color panel remains
+    // available through Window › Color and in the other built-in workspaces.
+    p.color = color && app.ui.workspace != "3D";
     p.layers = layers;
     p.history = history;
     p.properties = props;
     p.character = app.ui.workspace == "Graphic and Web";
+    #[cfg(feature = "uv-workbench")]
+    {
+        app.ui.uv_workbench.open = app.ui.workspace == "3D";
+        if app.ui.workspace == "3D" {
+            app.ui.dock_tabs.properties = 2;
+        }
+        if app.ui.workspace == "3D" && app.uv_cache.parked_dock.is_none() {
+            app.ui.uv_workbench.view_3d = true;
+        }
+    }
     // Timeline is a floating panel, not a dock group. Showing it does not create or edit
     // a document timeline; changing away from Motion closes it just like its Close button.
     app.ui.timeline.open = app.ui.workspace == "Motion";

@@ -1,14 +1,17 @@
 use super::*;
 
 /// A run joins `LayerBlend` passes that only feed each other, at most `BATCH` of them, and
-/// never ends in the slot it reads from.
+/// never ends in a slot the lead pass reads from.
 fn check_runs(p: &Plan<'_>) -> Vec<usize> {
     let runs = batch_runs(p);
     assert_eq!(runs.len(), p.passes.len());
     for (i, &k) in runs.iter().enumerate() {
         assert!((1..=BATCH).contains(&k), "pass {i}: run {k}");
         if k > 1 {
-            assert_ne!(Some(p.passes[i + k - 1].dst), p.passes[i].a, "run at {i} renders into its input");
+            let dst = p.passes[i + k - 1].dst;
+            let lead = &p.passes[i];
+            assert!(![lead.a, lead.b, lead.c, lead.d].contains(&Some(dst)), "run at {i} renders into a sampled input");
+            assert!(!lead.mask.as_ref().is_some_and(|m| matches!(m.source, plan::MaskSource::Slot(s) if s == dst)), "run at {i} renders into its mask input");
             for j in i + 1..i + k {
                 assert_eq!(p.passes[j].kernel, Kernel::LayerBlend);
                 assert_eq!(p.passes[j].a, Some(p.passes[j - 1].dst), "run at {i}: pass {j} doesn't read the one before");
@@ -47,7 +50,26 @@ fn plain_layers_batch_and_runs_stop_where_a_pass_must_stand_alone() {
     let resumable = p.checkpoints.iter().filter(|c| c.pass_end > 1 && starts[c.pass_end]).count();
     assert!(resumable >= 2 && resumable < p.checkpoints.len(), "{resumable} of {:?}", p.checkpoints);
     // A masked or Dissolve layer, or a clipped one, never joins a run as an extra layer.
-    d.layers[3].mask = Some(LayerMask::hide_all());
+    let mut mask = LayerMask::reveal_all();
+    let base = mask.surface.clone();
+    mask.paint = Some(photocraft_doc::mask_paint::Stack {
+        base,
+        layers: (0..8)
+            .map(|i| photocraft_doc::mask_paint::Paint {
+                name: format!("paint {i}"),
+                visible: true,
+                opacity: 1.0,
+                blend: BlendMode::Normal,
+                surface: photocraft_raster::Surface::new(d.pixel_format()),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: photocraft_doc::mask_paint::EffectKind::Paint,
+            })
+            .collect(),
+        active: 0,
+    });
+    d.layers[3].mask = Some(mask);
     d.layers[6].blend = BlendMode::Dissolve;
     d.layers[9].clipped = true;
     check_runs(&plan::plan(&d).unwrap());
@@ -387,4 +409,12 @@ fn colour_managed_tiles_match_the_per_pixel_conversion() {
 #[test]
 fn grid_rounds_out() {
     assert_eq!(tile_grid(Rect::new(0, 0, 300, 256)), Rect::new(0, 0, 512, 256));
+}
+#[test]
+fn mask_fill_source_memory_is_bounded_before_upload() {
+    assert_eq!(setup::mask_fill_source_bytes([4096, 4096], 16_384).unwrap(), 64 << 20);
+    assert_eq!(setup::mask_fill_source_bytes([8192, 8192], 16_384).unwrap(), 256 << 20);
+    for size in [[0, 1], [1, 0], [8193, 8192], [8192, 8193], [u32::MAX, 1]] {
+        assert!(setup::mask_fill_source_bytes(size, 16_384).is_err(), "{size:?}");
+    }
 }

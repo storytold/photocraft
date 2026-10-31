@@ -52,6 +52,56 @@ fn old_effect_snapshots_need_no_interpolation_record() {
 }
 
 #[test]
+fn legacy_scalar_mask_blend_roundtrips_in_native_documents() {
+    use photocraft_color::PixelFormat;
+    use photocraft_doc::{
+        LayerMask,
+        mask_paint::{EffectKind, Paint, Stack},
+    };
+    use photocraft_raster::Surface;
+
+    let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
+    let layer = doc.layers.first_mut().unwrap();
+    let base = Surface::with_default(PixelFormat::GRAY8, &[0.0]);
+    let mut mask = LayerMask::hide_all();
+    mask.surface = base.clone();
+    mask.paint = Some(Stack {
+        base,
+        layers: vec![
+            Paint {
+                name: "Legacy scalar blend".into(),
+                visible: true,
+                opacity: 0.7,
+                blend: photocraft_color::BlendMode::ColorBurn,
+                surface: Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.0]),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Paint,
+            },
+            Paint {
+                name: "Multiply Blur".into(),
+                visible: true,
+                opacity: 0.45,
+                blend: photocraft_color::BlendMode::Multiply,
+                surface: Surface::with_default(PixelFormat::RGBA8, &[0.0, 0.0, 0.0, 0.0]),
+                fill_map: None,
+                fill_map_size: [0, 0],
+                fill_bounds: None,
+                kind: EffectKind::Blur { radius: 8 },
+            },
+        ],
+        active: 0,
+    });
+    layer.mask = Some(mask);
+    let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
+    let loaded = load_from_bytes(&bytes).unwrap();
+    assert_eq!(loaded, doc, "older supported scalar mask blends remain lossless");
+    let mask = loaded.layers[0].mask.as_ref().unwrap();
+    assert_eq!(mask.paint.as_ref().unwrap().layers[1].blend, photocraft_color::BlendMode::Multiply);
+}
+
+#[test]
 fn custom_shape_stroke_roundtrip_keeps_every_style_field() {
     for mode in MODES {
         for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {

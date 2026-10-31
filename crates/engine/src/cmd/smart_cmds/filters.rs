@@ -54,7 +54,7 @@ fn smart_mut_of(l: &mut Layer) -> Result<&mut SmartObject> {
 }
 
 fn mask_from_selection(sel: &Surface) -> LayerMask {
-    LayerMask { surface: sel.clone(), enabled: true, linked: true, density: 1.0, feather: 0.0 }
+    LayerMask { surface: sel.clone(), enabled: true, linked: true, density: 1.0, feather: 0.0, paint: None }
 }
 
 /// Appends a smart filter (from a `filter.*` command) and re-renders. A selection becomes the

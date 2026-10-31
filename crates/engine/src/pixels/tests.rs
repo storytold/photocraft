@@ -454,6 +454,57 @@ fn a_selection_with_a_nonzero_default_over_distant_blocks_is_refused() {
     assert!(adjust_mask(&mut m, &Adjustment::Invert, Some(&sel)).is_err());
 }
 
+#[test]
+fn selected_adjustment_skips_zero_coverage_tiles_without_changing_pixels_at_any_depth() {
+    for depth in SampleType::ALL {
+        let fmt = PixelFormat { mode: ColorMode::Rgb, sample: depth, alpha: true };
+        let mut original = Surface::new(fmt);
+        original.fill_rect(Rect::from_xywh(0, 0, 1024, 1024), &[0.25, 0.5, 0.75, 1.0]);
+        let mut selection = Surface::new(PixelFormat::GRAY8);
+        selection.fill_rect(Rect::from_xywh(20, 20, 32, 32), &[0.5]);
+        selection.write_pixel(900, 900, &[0.0]); // Allocated empty mask tile inside the bounds.
+        let expected = one_pass(&original, &Adjustment::Invert, Some(&selection), ColorMode::Rgb);
+        let mut got = original.clone();
+        adjust_surface(&mut got, &Adjustment::Invert, Some(&selection), ColorMode::Rgb).unwrap();
+        assert!(same_pixels(&got, &expected));
+        for (coord, tile) in original.tiles().filter(|(coord, _)| coord.tx != 0 || coord.ty != 0) {
+            assert!(std::sync::Arc::ptr_eq(tile, got.tile(*coord).unwrap()), "unselected tile copied at {depth:?}");
+        }
+    }
+}
+#[test]
+#[ignore = "explicit 24MP selected adjustment benchmark"]
+fn benchmark_uv_selected_adjustment_24mp() {
+    let fmt = PixelFormat::RGBA8;
+    let mut original = Surface::new(fmt);
+    original.fill_rect(Rect::from_xywh(0, 0, 6000, 4000), &[0.25, 0.5, 0.75, 1.0]);
+    let mut selection = Surface::new(PixelFormat::GRAY8);
+    selection.fill_rect(Rect::from_xywh(20, 20, 32, 32), &[0.5]);
+    let mut baseline = original.clone();
+    let start = Instant::now();
+    let r = baseline.content_bounds();
+    use rayon::prelude::*;
+    let done: Vec<_> = baseline
+        .take_tiles(r)
+        .into_par_iter()
+        .flat_map_iter(|(coord, tile)| {
+            let mut one = Surface::new(fmt);
+            one.put_tiles([(coord, tile)]);
+            let tr = coord.rect().intersect(&r);
+            let out = adjusted(&one, tr, &Adjustment::Invert, Some(&selection), ColorMode::Rgb);
+            one.write_region(tr, &out);
+            one.take_tiles(coord.rect())
+        })
+        .collect();
+    baseline.put_tiles(done);
+    let before = start.elapsed();
+    let mut got = original.clone();
+    let start = Instant::now();
+    adjust_surface(&mut got, &Adjustment::Invert, Some(&selection), ColorMode::Rgb).unwrap();
+    let after = start.elapsed();
+    assert!(same_pixels(&got, &baseline));
+    println!("24MP selected adjustment: old tile processing {before:?}, skip empty selection {after:?}");
+}
 /// #9483: a destructive edit with full coverage writes its result exactly, even over huge 32-bit
 /// values (`o + (a − o)·k` gave 0 for a 0.5 result over 1e8, and 0.125 for 0.1 over 1e6).
 #[test]

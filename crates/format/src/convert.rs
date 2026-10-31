@@ -12,8 +12,8 @@ use photocraft_geom::{TILE_SIZE, TileCoord};
 use photocraft_raster::{Surface, Tile, decode_pixel, encode_pixel};
 
 use crate::manifest::{
-    ChannelM, CompAppearanceM, CompStateM, ContentM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM, MetadataM, NamedPathM, PatternM,
-    SmartSourceM, SurfaceM, TileRef,
+    ChannelM, CompAppearanceM, CompStateM, ContentM, DocM, EffectsM, FillCacheM, Hash, LayerCompM, LayerM, MaskM, MaskPaintLayerM, MaskPaintM, MetadataM,
+    NamedPathM, PatternM, SmartSourceM, SurfaceM, TileRef,
 };
 use crate::{FormatError, Result};
 
@@ -99,6 +99,44 @@ pub(crate) fn tile_len(format: &PixelFormat) -> usize {
     (TILE_SIZE * TILE_SIZE) as usize * format.bytes_per_pixel()
 }
 
+fn validate_mask_paint_bounds(kind: &photocraft_doc::mask_paint::EffectKind, bounds: Option<[i32; 4]>) -> Result<()> {
+    match (kind, bounds) {
+        (photocraft_doc::mask_paint::EffectKind::Fill { .. }, Some([x0, y0, x1, y1])) if x1 > x0 && y1 > y0 => Ok(()),
+        (photocraft_doc::mask_paint::EffectKind::Fill { .. }, None) => Ok(()),
+        (photocraft_doc::mask_paint::EffectKind::Fill { .. }, Some(_)) => Err(FormatError::corrupt("invalid mask Paint Fill bounds")),
+        (_, None) => Ok(()),
+        (_, Some(_)) => Err(FormatError::corrupt("Fill bounds are only valid on Fill effects")),
+    }
+}
+
+fn valid_mask_paint_blend(mode: photocraft_color::BlendMode) -> bool {
+    // Older local mask-stack files stored these scalar modes. Keep loading them even though new
+    // commands expose the smaller, more predictable MASK_BLEND_MODES set.
+    matches!(
+        mode,
+        photocraft_color::BlendMode::Normal
+            | photocraft_color::BlendMode::Darken
+            | photocraft_color::BlendMode::Multiply
+            | photocraft_color::BlendMode::ColorBurn
+            | photocraft_color::BlendMode::LinearBurn
+            | photocraft_color::BlendMode::Lighten
+            | photocraft_color::BlendMode::Screen
+            | photocraft_color::BlendMode::ColorDodge
+            | photocraft_color::BlendMode::LinearDodge
+            | photocraft_color::BlendMode::Overlay
+            | photocraft_color::BlendMode::SoftLight
+            | photocraft_color::BlendMode::HardLight
+            | photocraft_color::BlendMode::VividLight
+            | photocraft_color::BlendMode::LinearLight
+            | photocraft_color::BlendMode::PinLight
+            | photocraft_color::BlendMode::HardMix
+            | photocraft_color::BlendMode::Difference
+            | photocraft_color::BlendMode::Exclusion
+            | photocraft_color::BlendMode::Subtract
+            | photocraft_color::BlendMode::Divide
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Save
 // ---------------------------------------------------------------------------
@@ -178,6 +216,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
                 linked: m.linked,
                 density: m.density,
                 feather: m.feather,
+                paint: mask_paint_m(m, sink),
             }),
             warp: s.warp.clone(),
             stack_mode: s.stack_mode,
@@ -199,6 +238,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             linked: m.linked,
             density: m.density,
             feather: m.feather,
+            paint: mask_paint_m(m, sink),
         }),
         vector_mask: l.vector_mask.clone(),
         effects: EffectsM {
@@ -373,6 +413,100 @@ impl Loader<'_> {
         Ok(s)
     }
 
+    fn mask_paint(&mut self, m: &MaskM) -> Result<Option<photocraft_doc::mask_paint::Stack>> {
+        let Some(s) = &m.paint else { return Ok(None) };
+        if s.layers.len() > 256 || s.active >= s.layers.len() {
+            return Err(crate::FormatError::Corrupt("invalid mask paint stack".into()));
+        }
+        let base = self.surface(&s.base)?;
+        if base.channels() != 1 {
+            return Err(FormatError::corrupt("mask paint base must be grayscale"));
+        }
+        let mut layers = Vec::new();
+        for p in &s.layers {
+            let surface = self.surface(&p.surface)?;
+            if surface.format().mode != photocraft_color::ColorMode::Rgb
+                || !surface.format().alpha
+                || surface.format().sample != base.format().sample
+                || !p.opacity.is_finite()
+                || !(0.0..=1.0).contains(&p.opacity)
+            {
+                return Err(crate::FormatError::Corrupt("invalid mask paint layer".into()));
+            }
+            if !valid_mask_paint_blend(p.blend) {
+                return Err(FormatError::corrupt("invalid grayscale mask blend mode"));
+            }
+            let kind = match p.kind.as_str() {
+                "paint" => photocraft_doc::mask_paint::EffectKind::Paint,
+                "fill" if p.value.is_finite() && (0.0..=1.0).contains(&p.value) && p.rotation.is_finite() => photocraft_doc::mask_paint::EffectKind::Fill {
+                    value: p.value,
+                    rotation: p.rotation,
+                    repeat_u: p.repeat_u,
+                    repeat_v: p.repeat_v,
+                    mirror_u: p.mirror_u,
+                    mirror_v: p.mirror_v,
+                },
+                "levels"
+                    if p.input_black.is_finite()
+                        && p.input_white.is_finite()
+                        && p.output_black.is_finite()
+                        && p.output_white.is_finite()
+                        && p.gamma.is_finite()
+                        && (0.0..=1.0).contains(&p.input_black)
+                        && (0.0..=1.0).contains(&p.input_white)
+                        && (0.0..=1.0).contains(&p.output_black)
+                        && (0.0..=1.0).contains(&p.output_white)
+                        && (0.01..=100.0).contains(&p.gamma)
+                        && p.input_black < p.input_white
+                        && p.output_black <= p.output_white =>
+                {
+                    photocraft_doc::mask_paint::EffectKind::Levels {
+                        input_black: p.input_black,
+                        gamma: p.gamma,
+                        input_white: p.input_white,
+                        output_black: p.output_black,
+                        output_white: p.output_white,
+                    }
+                }
+                "blur" if (1..=64).contains(&p.radius) => photocraft_doc::mask_paint::EffectKind::Blur { radius: p.radius },
+                _ => return Err(FormatError::corrupt("invalid mask paint effect")),
+            };
+            if !matches!(
+                &kind,
+                photocraft_doc::mask_paint::EffectKind::Paint
+                    | photocraft_doc::mask_paint::EffectKind::Fill { .. }
+                    | photocraft_doc::mask_paint::EffectKind::Blur { .. }
+            ) && p.blend != photocraft_color::BlendMode::Normal
+            {
+                return Err(FormatError::corrupt("mask blend mode does not apply to Levels effects"));
+            }
+            validate_mask_paint_bounds(&kind, p.fill_bounds)?;
+            let fill_map = self.opt_surface(&p.fill_map)?;
+            layers.push(photocraft_doc::mask_paint::Paint {
+                name: p.name.clone(),
+                visible: p.visible,
+                opacity: p.opacity,
+                blend: p.blend,
+                surface,
+                fill_map,
+                fill_map_size: p.fill_map_size,
+                fill_bounds: p.fill_bounds,
+                kind,
+            });
+        }
+        let blur_radius_sum = layers
+            .iter()
+            .filter_map(|layer| match &layer.kind {
+                photocraft_doc::mask_paint::EffectKind::Blur { radius } => Some(u32::from(*radius)),
+                _ => None,
+            })
+            .fold(0u32, u32::saturating_add);
+        if blur_radius_sum > u32::from(photocraft_doc::mask_paint::MAX_BLUR_RADIUS_SUM) {
+            return Err(FormatError::corrupt("mask paint Blur radius sum exceeds 512 pixels"));
+        }
+        Ok(Some(photocraft_doc::mask_paint::Stack { base, layers, active: s.active }))
+    }
+
     fn opt_surface(&mut self, m: &Option<SurfaceM>) -> Result<Option<Surface>> {
         m.as_ref().map(|s| self.surface(s)).transpose()
     }
@@ -506,6 +640,7 @@ impl Loader<'_> {
                             linked: mm.linked,
                             density: mm.density,
                             feather: mm.feather,
+                            paint: self.mask_paint(mm)?,
                         }),
                         None => None,
                     },
@@ -516,9 +651,14 @@ impl Loader<'_> {
             }
         };
         let mask = match &m.mask {
-            Some(mm) => {
-                Some(LayerMask { surface: self.surface(&mm.surface)?, enabled: mm.enabled, linked: mm.linked, density: mm.density, feather: mm.feather })
-            }
+            Some(mm) => Some(LayerMask {
+                surface: self.surface(&mm.surface)?,
+                enabled: mm.enabled,
+                linked: mm.linked,
+                density: mm.density,
+                feather: mm.feather,
+                paint: self.mask_paint(mm)?,
+            }),
             None => None,
         };
         let fill_cache = match &m.fill_cache {
@@ -682,6 +822,28 @@ impl Loader<'_> {
     }
 }
 
+#[cfg(test)]
+mod mask_paint_bounds_tests {
+    use super::*;
+
+    #[test]
+    fn loader_rejects_inverted_fill_and_bounds_on_non_fill_layers() {
+        let fill =
+            photocraft_doc::mask_paint::EffectKind::Fill { value: 0.5, rotation: 0.0, repeat_u: false, repeat_v: false, mirror_u: false, mirror_v: false };
+        assert!(validate_mask_paint_bounds(&fill, Some([0, 0, 0, 2])).is_err());
+        assert!(validate_mask_paint_bounds(&photocraft_doc::mask_paint::EffectKind::Paint, Some([0, 0, 1, 1])).is_err());
+        assert!(validate_mask_paint_bounds(&fill, Some([i32::MIN, i32::MIN, i32::MAX, i32::MAX])).is_ok());
+    }
+
+    #[test]
+    fn loader_keeps_legacy_scalar_mask_blend_values_readable() {
+        assert!(valid_mask_paint_blend(photocraft_color::BlendMode::ColorBurn));
+        assert!(valid_mask_paint_blend(photocraft_color::BlendMode::Overlay));
+        assert!(!valid_mask_paint_blend(photocraft_color::BlendMode::Hue));
+        assert!(!valid_mask_paint_blend(photocraft_color::BlendMode::Luminosity));
+    }
+}
+
 /// Advance the global id counter past `max` so ids loaded from a file never
 /// collide with ids minted later in this process. Returns `false` if `max`
 /// is implausibly far ahead (the caller then remaps ids instead).
@@ -695,6 +857,62 @@ pub(crate) fn reserve_ids_through(max: u64) -> bool {
     }
     photocraft_doc::ensure_ids_above(max);
     true
+}
+
+fn mask_paint_m(m: &LayerMask, sink: &mut dyn Sink) -> Option<MaskPaintM> {
+    m.paint.as_ref().map(|s| MaskPaintM {
+        base: surface_m(&s.base, sink),
+        active: s.active,
+        layers: s
+            .layers
+            .iter()
+            .map(|p| {
+                let (kind, value, rotation, radius, input_black, gamma, input_white, output_black, output_white) = match &p.kind {
+                    photocraft_doc::mask_paint::EffectKind::Paint => ("paint", 1.0, 0.0, 8, 0.0, 1.0, 1.0, 0.0, 1.0),
+                    photocraft_doc::mask_paint::EffectKind::Fill { value, rotation, .. } => ("fill", *value, *rotation, 8, 0.0, 1.0, 1.0, 0.0, 1.0),
+                    photocraft_doc::mask_paint::EffectKind::Blur { radius } => ("blur", 1.0, 0.0, *radius, 0.0, 1.0, 1.0, 0.0, 1.0),
+                    photocraft_doc::mask_paint::EffectKind::Levels { input_black, gamma, input_white, output_black, output_white } => {
+                        ("levels", 1.0, 0.0, 8, *input_black, *gamma, *input_white, *output_black, *output_white)
+                    }
+                };
+                MaskPaintLayerM {
+                    name: p.name.clone(),
+                    visible: p.visible,
+                    opacity: p.opacity,
+                    blend: p.blend,
+                    surface: surface_m(&p.surface, sink),
+                    fill_map: p.fill_map.as_ref().map(|map| surface_m(map, sink)),
+                    fill_map_size: p.fill_map_size,
+                    fill_bounds: p.fill_bounds,
+                    rotation,
+                    repeat_u: match &p.kind {
+                        photocraft_doc::mask_paint::EffectKind::Fill { repeat_u, .. } => *repeat_u,
+                        _ => true,
+                    },
+                    repeat_v: match &p.kind {
+                        photocraft_doc::mask_paint::EffectKind::Fill { repeat_v, .. } => *repeat_v,
+                        _ => true,
+                    },
+                    mirror_u: match &p.kind {
+                        photocraft_doc::mask_paint::EffectKind::Fill { mirror_u, .. } => *mirror_u,
+                        _ => false,
+                    },
+                    mirror_v: match &p.kind {
+                        photocraft_doc::mask_paint::EffectKind::Fill { mirror_v, .. } => *mirror_v,
+                        _ => false,
+                    },
+                    kind: kind.into(),
+                    value,
+                    radius,
+                    input_black,
+                    gamma,
+                    input_white,
+                    output_black,
+                    output_white,
+                }
+            })
+            .collect(),
+    })
 }
 
 #[cfg(test)]

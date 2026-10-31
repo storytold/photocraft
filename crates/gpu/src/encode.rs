@@ -1,10 +1,14 @@
+use std::sync::Arc;
+
 use super::batch::{batch_runs, run_starts, submit_batch, tile_grid};
 use super::consts::{FLUSH_BYTES, FLUSH_OPS, FLUSH_WORK, PATTERN_IDLE_FRAMES};
 use super::convert::lut_texture;
 use super::kit::FrameRes;
 use super::paging::{OVER_BUDGET, cell_rect, first_error, grid_rect_count, grid_rects, lru_victims, scoped_work, uniform_buffer_len};
-use super::textures::{ChunkOut, FxKey, ResKey, Resident, Stats};
-use super::{Compositor, Document, LayerId, Plan, Rect, Surface, Unsupported, plan, timing};
+use super::textures::{CachedMaskFill, ChunkOut, FxKey, ResKey, Resident, Stats, Tex};
+use super::{Compositor, DocId, Document, LayerId, Plan, Rect, Surface, TILE_SIZE, Unsupported, plan, timing};
+
+type PatternCacheLruItem = (u64, Option<String>, Option<(DocId, LayerId, u16)>, u64);
 
 impl Compositor {
     /// Composite `region` of `doc`. Each finished chunk is passed to `sink` while its encoder is
@@ -95,6 +99,7 @@ impl Compositor {
         self.residents.clear();
         self.fx.clear();
         self.patterns.clear();
+        self.mask_fills.clear();
         self.temps.clear();
         self.pool.clear();
     }
@@ -140,6 +145,7 @@ impl Compositor {
         if region.is_empty() {
             return Ok(stats);
         }
+        self.configure_mask_halo(plan.mask_halo)?;
         let page = self.page;
         let mut cells = grid_rects(region, page);
         // Check every actual page cell before uploads, submissions or sink output. A later
@@ -166,7 +172,7 @@ impl Compositor {
         // for every render of this plan, so a layer's bits don't depend on the cache: renders
         // capture and resume only where a run starts.
         let runs = batch_runs(&plan);
-        let checkpoint = if flush {
+        let checkpoint = if flush && plan.mask_halo == 0 {
             let starts = run_starts(&runs);
             let resumable: Vec<_> = plan.checkpoints.iter().filter(|c| starts.get(c.pass_end).copied().unwrap_or(false)).copied().collect();
             self.prefix.prepare(doc, &resumable)
@@ -183,7 +189,7 @@ impl Compositor {
                 self.sync_fx(device, queue, encoder, doc, f, (f.layer.id, None), f.region, &mut stats)?;
             }
         }
-        let fr = self.frame_res(device, queue, canvas, &plan);
+        let fr = self.frame_res(device, queue, canvas, &plan, &mut stats);
 
         // Page cells; every other frame in reverse, so a repeated full refresh of a document
         // larger than the budget starts with the pages still resident.
@@ -215,7 +221,12 @@ impl Compositor {
             }
             let chunks = grid_rects(part, self.chunk);
             stats.chunks += chunks.len();
-            work += part.width() as u64 * part.height() as u64 * plan.passes.len() as u64;
+            let halo = plan.mask_halo as i32;
+            let padded_pixels = chunks.iter().fold(0u64, |total, chunk| {
+                let work = chunk.inflate(halo);
+                total.saturating_add(u64::from(work.width()) * u64::from(work.height()))
+            });
+            work = work.saturating_add(padded_pixels.saturating_mul(plan.passes.len() as u64));
             let mut batch = flush.then_some(&mut last_submit);
             self.run_cell(device, queue, encoder, doc.id, &plan, &runs, &paged, cell, &fr, &chunks, checkpoint, &mut stats, sink, &mut batch);
             // The device was lost in a submit inside the cell: issue no more work.
@@ -283,11 +294,40 @@ impl Compositor {
         let frame = self.frame;
         let live: std::collections::HashSet<LayerId> = doc.walk().into_iter().map(|(_, _, l)| l.id).collect();
         self.residents.retain(|(id, _, _), r| r.doc != doc.id || r.last_used == frame || live.contains(id));
+        self.mask_fills.retain(|(id, layer, _), p| *id != doc.id || p.last_used == frame || live.contains(layer));
         self.fx.retain(|(id, _), e| e.doc != doc.id || e.last_used == frame || live.contains(id));
         stats.evicted += self.evict().0;
         self.temps.retain(|(_, used)| frame.saturating_sub(*used) < 240);
         self.evict_patterns();
         Ok(stats)
+    }
+
+    /// Keep padded Blur work areas inside the device's texture limit. Source residents are
+    /// tile-aligned, so their margin rounds up to whole source tiles; output work uses the exact
+    /// Gaussian support. A smaller page leaves room for that source margin on small adapters.
+    fn configure_mask_halo(&mut self, halo: u32) -> Result<(), Unsupported> {
+        let tile = TILE_SIZE as u32;
+        let source_halo = halo.div_ceil(tile).saturating_mul(tile);
+        let source_side = self.max_dim.saturating_sub(source_halo.saturating_mul(2));
+        let work_side = self.max_dim.saturating_sub(halo.saturating_mul(2));
+        if source_side < tile || work_side < tile {
+            return Err(Unsupported(format!("Mask Blur halo {halo}px needs a padded source/work texture larger than the GPU limit {}px", self.max_dim)));
+        }
+        let requested_page = self.max_dim.min(super::consts::PAGE);
+        let page_cap = requested_page.min(source_side);
+        let page = 1u32 << (31 - page_cap.leading_zeros());
+        let chunk = super::consts::CHUNK.min(page).min(work_side);
+        if page != self.page || chunk != self.chunk {
+            self.page = page;
+            self.chunk = chunk;
+            self.prefix.set_step(chunk);
+            self.prefix.clear();
+            self.pool.clear();
+            self.residents.clear();
+            self.fx.clear();
+            self.temps.clear();
+        }
+        Ok(())
     }
 
     /// Drop the pattern textures no frame has painted with for [`PATTERN_IDLE_FRAMES`] frames,
@@ -296,16 +336,27 @@ impl Compositor {
     fn evict_patterns(&mut self) {
         let frame = self.frame;
         self.patterns.retain(|_, p| frame.saturating_sub(p.last_used) < PATTERN_IDLE_FRAMES);
-        let mut total = self.pattern_cache_bytes();
+        self.mask_fills.retain(|_, p| frame.saturating_sub(p.last_used) < PATTERN_IDLE_FRAMES);
+        let mut total = self.pattern_cache_bytes().saturating_add(self.mask_fill_cache_bytes());
         if total > self.pattern_budget {
-            let mut lru: Vec<(u64, String, u64)> =
-                self.patterns.iter().filter(|(_, p)| p.last_used != frame).map(|(k, p)| (p.last_used, k.clone(), p.bytes)).collect();
-            lru.sort_unstable();
-            for (_, key, bytes) in lru {
+            let mut lru: Vec<PatternCacheLruItem> = self
+                .patterns
+                .iter()
+                .filter(|(_, p)| p.last_used != frame)
+                .map(|(k, p)| (p.last_used, Some(k.clone()), None, p.bytes))
+                .chain(self.mask_fills.iter().filter(|(_, p)| p.last_used != frame).map(|(k, p)| (p.last_used, None, Some(*k), p.bytes)))
+                .collect();
+            lru.sort_unstable_by_key(|item| item.0);
+            for (_, pattern, fill, bytes) in lru {
                 if total <= self.pattern_budget {
                     break;
                 }
-                self.patterns.remove(&key);
+                if let Some(key) = pattern {
+                    self.patterns.remove(&key);
+                }
+                if let Some(key) = fill {
+                    self.mask_fills.remove(&key);
+                }
                 total = total.saturating_sub(bytes);
             }
         }
@@ -408,16 +459,85 @@ impl Compositor {
     }
 
     /// Per-frame resources of `plan`: the tile area of each pass's surfaces, its LUT and pattern.
-    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>) -> FrameRes {
+    fn frame_res(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, canvas: Rect, plan: &Plan<'_>, stats: &mut Stats) -> FrameRes {
         let grid = tile_grid(canvas);
         let area = |s: &Surface| s.tile_bounds().intersect(&grid);
         let areas = plan
             .passes
             .iter()
-            .map(|p| (p.tex.as_ref().map_or(Rect::EMPTY, |t| area(t.surface.get())), p.mask.as_ref().map_or(Rect::EMPTY, |m| area(m.surface.get()))))
+            .map(|p| {
+                (
+                    p.tex.as_ref().map_or(Rect::EMPTY, |t| area(t.surface.get())),
+                    p.mask
+                        .as_ref()
+                        .and_then(|m| match &m.source {
+                            plan::MaskSource::Surface(surface) => Some(area(surface.get())),
+                            plan::MaskSource::Slot(_) => None,
+                        })
+                        .unwrap_or(Rect::EMPTY),
+                )
+            })
             .collect();
         let luts = plan.passes.iter().map(|p| p.lut.as_ref().map(|rows| lut_texture(device, queue, rows))).collect();
         let patterns = plan.passes.iter().map(|p| p.pattern.map(|pat| self.pattern_view(device, queue, pat))).collect();
-        FrameRes { areas, luts, patterns }
+        let mask_fills = plan.passes.iter().map(|p| p.mask_fill.as_ref().map(|fill| self.mask_fill_view(device, queue, fill, stats))).collect();
+        FrameRes { areas, luts, patterns, mask_fills }
+    }
+
+    fn mask_fill_view(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, fill: &plan::MaskFillUse<'_>, stats: &mut Stats) -> wgpu::TextureView {
+        let surface = fill.surface;
+        let fingerprint = surface.tiles().fold((u64::from(fill.size[0]) << 32) | u64::from(fill.size[1]), |acc, (coord, tile)| {
+            acc.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ (Arc::as_ptr(tile) as usize as u64) ^ ((coord.tx as u64) << 20) ^ coord.ty as u64
+        });
+        let default_bits = surface.default_pixel().iter().map(|v| v.to_bits()).collect::<Vec<_>>();
+        let key = (self.pattern_doc, fill.layer, fill.index);
+        let frame = self.frame;
+        if let Some(cached) = self.mask_fills.get_mut(&key)
+            && cached.fingerprint == fingerprint
+            && cached.format == surface.format()
+            && cached.default_bits == default_bits
+        {
+            cached.last_used = frame;
+            return cached.texture.view.clone();
+        }
+        let (width, height) = (fill.size[0], fill.size[1]);
+        let row_width = width.div_ceil(64) * 64;
+        let texture = Tex::new(
+            device,
+            "pc_mask_fill_source",
+            row_width,
+            height,
+            wgpu::TextureFormat::R32Float,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        );
+        let channels = surface.channels().max(1);
+        for y in (0..height).step_by(64) {
+            let rows = (height - y).min(64);
+            let pixels = surface.read_region(Rect::new(0, y as i32, width as i32, (y + rows) as i32));
+            let mut data = vec![0_u8; row_width as usize * rows as usize * 4];
+            for (source, destination) in pixels.chunks_exact(width as usize * channels).zip(data.chunks_exact_mut(row_width as usize * 4)) {
+                for (pixel, bytes) in source.chunks_exact(channels).zip(destination.as_chunks_mut::<4>().0) {
+                    *bytes = pixel.first().copied().unwrap_or(0.0).to_le_bytes();
+                }
+            }
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d { x: 0, y, z: 0 },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &data,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row_width * 4), rows_per_image: Some(rows) },
+                wgpu::Extent3d { width: row_width, height: rows, depth_or_array_layers: 1 },
+            );
+        }
+        let bytes = u64::from(row_width) * u64::from(height) * 4;
+        stats.mask_fill_uploads = stats.mask_fill_uploads.saturating_add(1);
+        stats.mask_fill_bytes_uploaded = stats.mask_fill_bytes_uploaded.saturating_add(bytes);
+        let view = texture.view.clone();
+        let pin = surface.tiles().map(|(_, tile)| Arc::downgrade(tile)).collect();
+        self.mask_fills.insert(key, CachedMaskFill { fingerprint, _pin: pin, format: surface.format(), default_bits, texture, last_used: frame, bytes });
+        view
     }
 }

@@ -58,6 +58,8 @@ pub mod zoom_hold;
 pub mod zoom_levels;
 pub mod zoom_window_fit;
 
+#[cfg(feature = "uv-workbench")]
+pub(crate) use cursors::eyedropper_color;
 #[cfg(test)]
 pub(crate) use cursors::eyedropper_ring_colors;
 pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_cursor, pen_cursor, pencil_cursor_rect, pencil_tip_is_round, pipette_cursor};
@@ -95,13 +97,26 @@ pub use selection::{SelCursor, selection_cursor};
 pub(crate) use selection::{floating_outline, selection_drag_delta};
 #[cfg(test)]
 use start_screen::start_screen_drop_hint;
+#[cfg(feature = "uv-workbench")]
+pub(crate) use strokes::break_live_stroke_path;
+#[cfg(feature = "uv-workbench")]
+pub(crate) use strokes::break_native_uv_mask_segment;
+#[cfg(feature = "uv-workbench")]
+pub(crate) use strokes::clone_preview_texture;
+pub(crate) use strokes::feed_live_stroke;
 pub use strokes::paint_target;
 pub(crate) use strokes::{ClonePreviewCache, CommittedStroke, LiveStroke, cancel_mixer_on_context_change, freehand_tool, spread_ms, strokes_live};
-use strokes::{HOLD_REPEAT_MS, draw_clone_preview, feed_live_stroke, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure};
+use strokes::{HOLD_REPEAT_MS, draw_clone_preview, pointer_button_modifiers, pointer_moves, stroke_wants_time, tap_at_peak_pressure};
 #[cfg(test)]
 pub(crate) use strokes::{SPOT_HEALING_TRAIL, live_retouch_points};
+#[cfg(feature = "uv-workbench")]
+pub(crate) use strokes::{
+    complete_native_mask_gpu_release, fail_native_mask_gpu_brush, native_mask_gpu_brush_active, native_mask_gpu_input, request_native_mask_gpu_release,
+};
 pub(crate) use tabs::arranged_cells;
 pub(crate) use tabs::tab_title_at;
+#[cfg(feature = "uv-workbench")]
+pub(crate) use tabs::uv_documents;
 #[cfg(test)]
 use tabs::{TEAR_OFF, pro_tab_title, tab_context_items, tab_drop_index, tab_move_target, tabs, torn_off};
 pub use tabs::{TabStrip, document_area, extra_windows};
@@ -217,6 +232,7 @@ struct CanvasPaintInput<'a> {
     render_zoom: f32,
     target_xf: ViewXform,
     pixel_grid: bool,
+    opaque_fill_preview: bool,
 }
 
 struct SelectionPaintInput<'a> {
@@ -365,14 +381,18 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
     // A flipped or pixel-aspect-corrected view draws through the CPU path (the GPU canvas shader
     // has no mirroring or non-square pixels). Rotation stays on the GPU: it is a view uniform.
     let gpu_ok = crate::gpu_canvas::gpu_view_ok(flip, view.rotation, aspect);
-    if app.gpu.is_some() {
+    if app.gpu.is_some() && !input.opaque_fill_preview {
         if gpu_ok {
             crate::render_path::view_ok(app, doc.id.0);
         } else {
             crate::render_path::view_cpu(app, doc.id.0);
         }
     }
-    if app.gpu.is_some()
+    if input.opaque_fill_preview {
+        // The opaque Gray Fill preview covers the canonical image. Keep its GPU cache untouched
+        // until the transient mask preview is committed.
+        app.navigator_gpu.remove(&doc.id);
+    } else if app.gpu.is_some()
         && gpu_ok
         && let Some((k, key, preview_size)) =
             ensure_adjust_proxy(app, idx, render_zoom).or_else(|| ensure_filter_preview(app, idx, ctx)).or_else(|| ensure_proxy_preview(app, idx, render_zoom))
@@ -403,7 +423,7 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
             offset: [0.0, 0.0],
         };
         paint_gpu_view(painter, rect, params, &pattern);
-    } else if gpu_ok && ensure_gpu(app, ctx, idx, redraw_focus(&target_xf, &xf)) {
+    } else if !input.opaque_fill_preview && gpu_ok && ensure_gpu(app, ctx, idx, redraw_focus(&target_xf, &xf)) {
         on_gpu = true;
         app.perf.gpu = true;
         // Shadow, checkerboard, document and pixel grid in one custom shader (gpu_canvas.rs).
@@ -430,7 +450,7 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
             app.navigator_gpu.remove(&doc.id);
         }
         paint_gpu_view(painter, rect, params, &pattern);
-    } else {
+    } else if !input.opaque_fill_preview {
         app.navigator_gpu.remove(&doc.id);
         // A document too large for one full-resolution texture also gets the part in view at
         // the screen's resolution, drawn over the reduced whole (#7568).
@@ -553,6 +573,7 @@ struct CanvasNavigationInput<'a> {
     ctx: &'a egui::Context,
     response: &'a egui::Response,
     free_hover: bool,
+    fill_hovered: bool,
     wheel_owner: egui::Id,
     xf: ViewXform,
     ppp: f32,
@@ -564,7 +585,7 @@ fn update_canvas_navigation(app: &mut PhotocraftApp, view: &mut View, input: Can
     // The wheel also scrolls over the scrollbars drawn on top of the canvas (last frame's hover).
     let bars_id = egui::Id::unique(("pc-canvas-bars-hover", input.idx));
     let over_bars = input.ctx.data(|d| d.get_temp::<bool>(bars_id)).unwrap_or(false);
-    let nav_hovered = input.response.hovered() || input.free_hover || over_bars;
+    let nav_hovered = input.response.hovered() || input.free_hover || over_bars || input.fill_hovered;
     // Interface › Enable Animations off: the wheel moves the canvas without a glide (#5721).
     // General › Animated Zoom: the wheel zoom eases over the frames of a notch, or is one instant step.
     // Enhanced Controls › Enable Gestures off: two fingers on a touch screen neither zoom nor
@@ -1631,6 +1652,10 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     let bars_id = input.bars_id;
     let layer_edges = input.layer_edges;
     let camera = input.camera;
+    #[cfg(feature = "uv-workbench")]
+    let uv_surface_drag = app.ui.workspace == "3D" && app.uv_paint_key.is_some();
+    #[cfg(not(feature = "uv-workbench"))]
+    let uv_surface_drag = false;
     app.tool_override = None;
     if let Some(b) = layer_edges_rect(app, idx) {
         painter.set(layer_edges, egui::Shape::rect_stroke(xf.doc_rect(b), 0, Stroke::new(1.0, LAYER_EDGES), egui::StrokeKind::Outside));
@@ -1638,6 +1663,7 @@ fn finish_canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut Vie
     // A tool drag held past the canvas edge scrolls the view toward the pointer (#4183); the
     // drag's next move then extends into what scrolled in.
     if primary
+        && !uv_surface_drag
         && app.drag.is_some()
         && tool != Tool::Hand
         && !middle
@@ -1831,7 +1857,17 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     let xf = ViewXform { zoom: display_view.zoom / ppp, center: display_view.center, ..target_xf }.pixel_aligned_for(app, ppp);
     let pixel_grid = app.ui.view.shows(app.ui.view.show.pixel_grid);
     let response = ui.allocate_rect(rect, Sense::click_and_drag());
-    let stroke_dismissal = primary && crate::shape_stroke_ui::dismiss_from_canvas(app, &response);
+    let stroke_dismissal =
+        (primary && crate::shape_stroke_ui::dismiss_from_canvas(app, &response)) || app.brush_resize.is_some_and(|resize| resize.screen) || {
+            #[cfg(feature = "uv-workbench")]
+            {
+                app.uv_paint_key.is_some()
+            }
+            #[cfg(not(feature = "uv-workbench"))]
+            {
+                false
+            }
+        };
     let painter = ui.painter_at(rect);
 
     match crate::prefs_ui::pasteboard_color(app) {
@@ -1860,19 +1896,37 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         render_zoom,
         target_xf,
         pixel_grid,
+        opaque_fill_preview: {
+            #[cfg(feature = "uv-workbench")]
+            {
+                crate::uv_mask_paint_preview::current_fill_gray_mask(app, idx)
+            }
+            #[cfg(not(feature = "uv-workbench"))]
+            {
+                false
+            }
+        },
     };
     let painted = if crop_camera { None } else { Some(paint_canvas(app, ui, &display_view, xf, &paint_input)) };
     let img_rect = xf.doc_rect(doc.bounds());
+    #[cfg(feature = "uv-workbench")]
+    let (uv_toolbar, fill_owns_pointer) = crate::uv_ui::canvas_overlay(app, ui, &xf, idx, primary);
+    #[cfg(not(feature = "uv-workbench"))]
+    let (_uv_toolbar, fill_owns_pointer): (Option<Rect>, bool) = (None, false);
 
     // Under an open dialog the canvas widget is inert, but the image still pans and zooms.
     let under_dialog = !app.ui.dialogs.is_empty();
     let free_hover = under_dialog && crate::dialogs::free_pointer_over(&ctx, rect).is_some();
+    #[cfg(feature = "uv-workbench")]
+    let fill_hovered = !under_dialog && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| uv_toolbar.is_some_and(|r| r.contains(p)));
+    #[cfg(not(feature = "uv-workbench"))]
+    let fill_hovered = false;
     // A press on the canvas while a tool letter is held makes that tool temporary (#2672).
     if !under_dialog && ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p))) {
         crate::spring_tools::note_canvas_press(app);
     }
     let bars_id = egui::Id::unique(("pc-canvas-bars-hover", idx));
-    update_canvas_navigation(app, &mut view, CanvasNavigationInput { ctx: &ctx, response: &response, free_hover, wheel_owner, xf, ppp, idx });
+    update_canvas_navigation(app, &mut view, CanvasNavigationInput { ctx: &ctx, response: &response, free_hover, fill_hovered, wheel_owner, xf, ppp, idx });
 
     // Pen pressure/tilt for this frame's tool events (mouse = 1.0), unless Preferences › Tools ›
     // Use Tablet Pressure is off; the pen's eraser end selects the Eraser.
@@ -1885,6 +1939,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     crate::magnetic_lasso_ui::frame(app);
     // A Properties Levels/Curves eyedropper left behind by a tool or layer switch is dropped.
     crate::layer_picker::prune(app);
+    #[cfg(feature = "uv-workbench")]
+    crate::uv_mask_paint::prune_levels_picker(app, &ctx);
     // Held keys (hold_keys.rs): Space repositions a crop frame, marquee, lasso or shape being
     // drawn; otherwise Space is the Hand and ⌘Space / ⌥Space the Zoom tool while held.
     let reposition = crate::hold_keys::reposition_held(app, &ctx);
@@ -1903,7 +1959,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         d.reposition = reposition;
         drawing = true;
     }
-    let temporary = crate::hold_keys::for_frame(app, &ctx, drawing || crate::type_transform::active(app));
+    // In the UV workspace Ctrl+right is normalized to the brush-size gesture on the 2D canvas.
+    // Command would otherwise take over the brush as the temporary Move tool before that gesture
+    // reaches `paint_mouse`; keep the brush tool for the gesture's entire lifetime.
+    let uv_right_resize = app.brush_resize.is_some_and(|resize| resize.secondary)
+        || ui.input(|i| i.pointer.secondary_down() && crate::brush_resize::is_right_gesture_in_space(app, crate::workspace_ui::sticky_mods(app, i.modifiers)));
+    let temporary = if uv_right_resize { None } else { crate::hold_keys::for_frame(app, &ctx, drawing || crate::type_transform::active(app)) };
     let space_pan = temporary == Some(crate::hold_keys::Temporary::Hand);
     let middle = ui.input(|i| i.pointer.middle_down());
     let tool = match temporary {
@@ -1911,6 +1972,12 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         None if middle => Tool::Hand,
         None => app.ui.tool,
     };
+    #[cfg(feature = "uv-workbench")]
+    let fill_manipulator_active = crate::uv_ui::fill_manipulator_active(app, &ctx, idx);
+    #[cfg(feature = "uv-workbench")]
+    if fill_manipulator_active && fill_owns_pointer {
+        crate::transform_tool::route_to_mask_fill(app, &ctx);
+    }
     // ⌘ held: this frame's gestures go to the Move tool (`PhotocraftApp::active_tool`). The Hand
     // and Zoom never reach `tool_event`, so only the Move needs the state machine to know.
     app.tool_override = (temporary == Some(crate::hold_keys::Temporary::Move)).then_some(Tool::Move);
@@ -1973,8 +2040,64 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
         view.center[1] -= d.y;
         // The tool cursors below are skipped while panning: the fist is set here (#2196).
         ctx.set_cursor_icon(crate::tool_cursor::hand(&ctx, true));
-    } else if primary && !stroke_dismissal && temporary.is_none() && !middle && crate::layer_picker::armed(app).is_some() {
-        layer_picker_eyedropper(app, ui, &ctx, &response, &xf);
+    } else if primary && !stroke_dismissal && !middle && fill_owns_pointer {
+        // The mask Fill overlay owns this gesture; don't send it to the active canvas tool.
+    } else if primary
+        && !stroke_dismissal
+        && temporary.is_none()
+        && !middle
+        && (crate::layer_picker::armed(app).is_some() || {
+            #[cfg(feature = "uv-workbench")]
+            {
+                crate::uv_mask_paint::levels_picker_active(app, &ctx)
+            }
+            #[cfg(not(feature = "uv-workbench"))]
+            {
+                false
+            }
+        })
+    {
+        let mask_picker = {
+            #[cfg(feature = "uv-workbench")]
+            {
+                crate::uv_mask_paint::levels_picker_active(app, &ctx)
+            }
+            #[cfg(not(feature = "uv-workbench"))]
+            {
+                false
+            }
+        };
+        if mask_picker {
+            if response.hovered()
+                && let Some(p) = ui.input(|i| i.pointer.hover_pos())
+            {
+                if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+                    ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
+                } else {
+                    ctx.set_cursor_icon(pipette_cursor(&ctx, p));
+                }
+            }
+            #[cfg(feature = "uv-workbench")]
+            if response.is_pointer_button_down_on()
+                && ui.input(|i| i.pointer.primary_pressed())
+                && let Some(p) = ui.input(|i| i.pointer.interact_pos())
+            {
+                crate::uv_mask_paint::sample_levels_at(app, &ctx, xf.to_doc(p));
+            }
+        } else {
+            layer_picker_eyedropper(app, ui, &ctx, &response, &xf);
+        }
+    } else if primary && !stroke_dismissal && temporary.is_none() && !middle && {
+        #[cfg(feature = "uv-workbench")]
+        {
+            crate::uv_ui::canvas_input(app, ui, &xf, &response, idx, uv_toolbar)
+        }
+        #[cfg(not(feature = "uv-workbench"))]
+        {
+            false
+        }
+    } {
+        // UV shell selection owns this gesture; the active tool resumes in Paint mode.
     } else if primary && !stroke_dismissal {
         let input = CanvasToolInput {
             ctx: &ctx,
@@ -2684,4 +2807,244 @@ fn polygon_edge_scroll(app: &PhotocraftApp, ctx: &egui::Context, idx: usize, rec
     let delta = xf.unmap_vec(velocity) * dt.min(0.05) / zoom;
     view.center[0] += delta.x;
     view.center[1] += delta.y;
+}
+
+#[cfg(all(test, feature = "uv-workbench"))]
+mod fill_canvas_gesture_tests {
+    use super::*;
+
+    #[test]
+    fn canvas_fill_resize_owns_move_tool_gesture_and_commits_one_mask_edit() {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../uv/tests/fixtures/two-shells.obj");
+        let mut session = photocraft_engine::Session::new();
+        session.execute("uv.workspace.activate", json!({"active":true})).unwrap();
+        session.execute("uv.model.import", json!({"path":source})).unwrap();
+        session.execute("uv.texture.create", json!({"channel":"opacity","width":32,"height":32})).unwrap();
+        session.execute("layer.layerMask.hideAll", json!({})).unwrap();
+        session.execute("uv.maskPaint.add", json!({"kind":"fill","value":1.0})).unwrap();
+        let mut app = PhotocraftApp::new(session, crate::Services::default());
+        app.sync_views();
+        app.ui.workspace = "3D".into();
+        app.ui.mask_target = false;
+        app.ui.tool = Tool::Move;
+        let ctx = egui::Context::default();
+        crate::transform_tool::begin(&mut app, &ctx).expect("test starts from an open parent transform");
+        app.ui.mask_target = true;
+        app.session.edit_prefs(|prefs| {
+            prefs.general.zoom_with_scroll_wheel = true;
+            prefs.interface.enable_animations = false;
+        });
+        let doc_id = app.session.active().unwrap().doc.id;
+        let canvas_idx = app.session.active_index().unwrap();
+        let layer_id = app.session.active().unwrap().active_layer.unwrap();
+        crate::uv_mask_paint::select_effect(&ctx, doc_id.0, layer_id.0, 0);
+        let original = app.session.active().unwrap().doc.layer(layer_id).unwrap().surface().cloned();
+        let original_mask = app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().surface.clone();
+        let initial_bounds = app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].fill_bounds;
+        let history = app.session.active().unwrap().history.past_len();
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 300.0));
+        let view = std::cell::RefCell::new(View { zoom: 8.0, center: [16.0, 16.0], fit_pending: false, fill_pending: false, ..View::default() });
+        let frame = |app: &mut PhotocraftApp, events: Vec<egui::Event>| {
+            app.last_canvas_rect = rect;
+            let input = egui::RawInput { screen_rect: Some(rect), events, ..Default::default() };
+            let mut current = view.borrow().clone();
+            let mut out = ctx.run_ui(input, |ui| current = canvas_view(app, ui, canvas_idx, rect, current.clone(), true));
+            // `canvas_view` receives the view by value, while `ViewXform::active` reads the
+            // app's stored view. Keep the test harness' returned camera in sync so simulated
+            // handle events use the geometry the canvas actually drew.
+            if let Some(stored) = app.ui.views.get_mut(canvas_idx) {
+                *stored = current.clone();
+            }
+            *view.borrow_mut() = current;
+            out.textures_delta.clear();
+        };
+        frame(&mut app, Vec::new());
+        assert!(app.ui.transform.is_some(), "merely selecting Fill must not cancel Free Transform");
+        assert!(app.transform_preview.is_some(), "the native transform preview remains active until the Fill overlay captures input");
+        assert_eq!(app.session.active().unwrap().doc.id, doc_id);
+        let xf = ViewXform::active(&app).expect("canvas view mapping");
+        let outside_fill = xf.to_screen(35.0, 16.0);
+        assert!(xf.rect.contains(outside_fill), "outside-Fill click must still be inside the canvas");
+        let press = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        frame(&mut app, vec![egui::Event::PointerMoved(outside_fill)]);
+        frame(&mut app, vec![press(outside_fill, true)]);
+        frame(&mut app, vec![press(outside_fill, false)]);
+        assert!(app.ui.transform.is_some(), "clicking outside the Fill bounds must not cancel Free Transform");
+        assert!(app.transform_preview.is_some());
+        let start = xf.to_screen(32.0, 32.0); // lower-right Fill handle
+        let end = xf.to_screen(26.0, 28.0);
+        assert!(xf.rect.contains(start), "Fill handle must be visible for the input regression: {xf:?}, {start:?}");
+        assert!(xf.rect.contains(end), "resize endpoint must be on the canvas: {xf:?}, {end:?}");
+        frame(&mut app, vec![egui::Event::PointerMoved(start)]);
+        frame(&mut app, vec![press(start, true)]);
+        assert!(app.ui.transform.is_none(), "capturing the Fill handle cancels native Free Transform");
+        assert!(app.transform_preview.is_none());
+        frame(&mut app, vec![egui::Event::PointerMoved(xf.to_screen(30.0, 30.0))]);
+        frame(&mut app, vec![egui::Event::PointerMoved(xf.to_screen(29.0, 29.0))]);
+        frame(&mut app, vec![egui::Event::PointerMoved(end)]);
+        assert_eq!(crate::uv_mask_paint_preview::fill_transform(&app, layer_id, 0, initial_bounds.unwrap(), 0.0), ([0, 0, 26, 28], 0.0));
+        let (shown, key) = crate::uv_mask_paint_preview::display_doc(&mut app, canvas_idx).expect("canonical document remains available during Fill resize");
+        assert_eq!(key, 0, "the Fill snapshot does not materialize a full-resolution document during the gesture");
+        assert_eq!(shown.layer(layer_id).unwrap().mask.as_ref().unwrap().surface, original_mask, "canonical mask pixels remain unchanged before release");
+        assert_eq!(shown.layer(layer_id).unwrap().surface(), original.as_ref(), "the raster layer is unchanged during the gesture");
+        let sample_started = std::time::Instant::now();
+        let sample_deadline = sample_started + std::time::Duration::from_secs(2);
+        let mut fake_now = sample_started;
+        let current_key = crate::uv_mask_paint_preview::current_fill_key(&app, canvas_idx).expect("current Fill transform key");
+        let mut proxy = None;
+        while proxy.as_ref().is_none_or(|proxy: &crate::uv_mask_paint_preview::FillMaskProxy| proxy.key != current_key) {
+            let (next_proxy, _) = crate::uv_mask_paint_preview::fill_mask_proxy_at(&mut app, canvas_idx, fake_now);
+            proxy = next_proxy;
+            if proxy.as_ref().is_some_and(|proxy| proxy.key == current_key) {
+                break;
+            }
+            assert!(std::time::Instant::now() < sample_deadline, "the live Fill mask proxy completes within two seconds");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+            fake_now += std::time::Duration::from_millis(50);
+        }
+        let proxy = proxy.expect("current Fill mask proxy");
+        assert_eq!(proxy.key, current_key, "proxy samples the exact current transform");
+        let pixel = |x: usize, y: usize| proxy.values[y * proxy.size[0] as usize + x];
+        assert!(pixel(4, 4) > 0.95, "the current resize proxy contains the Fill interior");
+        assert!(pixel(30, 30) < 0.01, "the current resize proxy excludes pixels beyond the Fill bounds");
+        let canonical = app.session.active().unwrap().doc.layer(layer_id).unwrap();
+        assert_eq!(canonical.mask.as_ref().unwrap().surface, original_mask, "proxy sampling never mutates canonical mask pixels");
+        assert_eq!(canonical.mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].fill_bounds, initial_bounds, "proxy sampling never commits Fill bounds");
+        assert_eq!(app.session.active().unwrap().history.past_len(), history, "preview does not add history");
+        frame(&mut app, vec![press(end, false)]);
+        let stack = app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap();
+        assert_eq!(stack.layers[0].fill_bounds, Some([0, 0, 26, 28]));
+        assert_eq!(app.session.active().unwrap().history.past_len(), history + 1, "the release adds one Fill edit");
+        assert_eq!(app.session.active().unwrap().doc.layer(layer_id).unwrap().surface(), original.as_ref());
+        let rotated_history = app.session.active().unwrap().history.past_len();
+        let current_xf = ViewXform::active(&app).expect("canvas view mapping after resize");
+        let rotated_corners = crate::uv_ui::fill_corners([0, 0, 26, 28], 0.0).map(|[x, y]| current_xf.to_screen(x, y));
+        let rotate_start = crate::uv_ui::fill_rotation_handle(rotated_corners, current_xf.rect);
+        let rotate_end = rotate_start + vec2(24.0, 0.0);
+        frame(&mut app, vec![egui::Event::PointerMoved(rotate_start)]);
+        frame(&mut app, vec![press(rotate_start, true)]);
+        frame(&mut app, vec![egui::Event::PointerMoved(rotate_end)]);
+        assert_eq!(crate::uv_mask_paint_preview::fill_transform(&app, layer_id, 0, [0, 0, 26, 28], 0.0).0, [0, 0, 26, 28]);
+        assert!(crate::uv_mask_paint_preview::fill_transform(&app, layer_id, 0, [0, 0, 26, 28], 0.0).1 > 0.0, "rotation updates transient Fill parameters");
+        let (shown, key) = crate::uv_mask_paint_preview::display_doc(&mut app, canvas_idx).expect("canonical document remains available during rotation");
+        assert_eq!(key, 0);
+        assert_eq!(shown.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].fill_bounds, Some([0, 0, 26, 28]));
+        frame(&mut app, vec![press(rotate_end, false)]);
+        assert_eq!(app.session.active().unwrap().history.past_len(), rotated_history + 1, "rotation commits as one Fill edit");
+        assert_eq!(app.session.active().unwrap().doc.layer(layer_id).unwrap().surface(), original.as_ref());
+        let zoom_before = view.borrow().zoom;
+        let fill_point = current_xf.to_screen(10.0, 10.0);
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(fill_point),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, 40.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_ne!(view.borrow().zoom, zoom_before, "wheel zoom remains available over the Fill overlay");
+        let zoom_before = view.borrow().zoom;
+        let outside_fill = rect.right_center() - vec2(20.0, 0.0);
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(outside_fill),
+                egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: vec2(0.0, 40.0),
+                    phase: egui::TouchPhase::Move,
+                    source: egui::MouseWheelSource::Unknown,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+        );
+        assert_ne!(view.borrow().zoom, zoom_before, "wheel zoom also works outside the Fill bounds");
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(
+            app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].fill_bounds,
+            Some([0, 0, 26, 28])
+        );
+        app.run("edit.undo", json!({})).unwrap();
+        assert_eq!(
+            app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].fill_bounds,
+            initial_bounds
+        );
+        assert_eq!(app.session.active().unwrap().doc.layer(layer_id).unwrap().surface(), original.as_ref());
+        let move_history = app.session.active().unwrap().history.past_len();
+        let xf = ViewXform::active(&app).unwrap();
+        let start = xf.to_screen(16.0, 16.0);
+        let end = xf.to_screen(21.0, 19.0);
+        let primary = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        frame(&mut app, vec![egui::Event::PointerMoved(start)]);
+        frame(&mut app, vec![primary(start, true)]);
+        frame(&mut app, vec![egui::Event::PointerMoved(end)]);
+        assert_eq!(
+            crate::uv_mask_paint_preview::fill_transform(&app, layer_id, 0, initial_bounds.unwrap(), 0.0).0,
+            [5, 3, 37, 35],
+            "left drag updates transient Fill bounds before release"
+        );
+        let (shown, key) = crate::uv_mask_paint_preview::display_doc(&mut app, canvas_idx).expect("canonical document remains available during move");
+        assert_eq!(key, 0);
+        assert_eq!(shown.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].fill_bounds, initial_bounds);
+        assert_eq!(shown.layer(layer_id).unwrap().surface(), original.as_ref());
+        assert_eq!(app.session.active().unwrap().history.past_len(), move_history);
+        frame(
+            &mut app,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+        );
+        assert!(app.uv_mask_paint_preview.is_none(), "Escape drops the live transform preview");
+        assert_eq!(app.session.active().unwrap().history.past_len(), move_history, "Escape does not add an undo entry");
+        assert_eq!(
+            app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].fill_bounds,
+            initial_bounds
+        );
+        frame(&mut app, vec![primary(end, false)]);
+
+        frame(&mut app, vec![egui::Event::PointerMoved(start)]);
+        frame(&mut app, vec![primary(start, true)]);
+        frame(&mut app, vec![egui::Event::PointerMoved(end)]);
+        frame(&mut app, vec![primary(end, false)]);
+        assert_eq!(app.session.active().unwrap().history.past_len(), move_history + 1);
+        assert!(app.ui.transform.is_none() && app.transform_preview.is_none());
+        let committed_bounds = app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].fill_bounds;
+        let click_history = app.session.active().unwrap().history.past_len();
+        let xf = ViewXform::active(&app).unwrap();
+        let click = xf.to_screen(20.0, 20.0);
+        frame(&mut app, vec![egui::Event::PointerMoved(click)]);
+        frame(&mut app, vec![primary(click, true)]);
+        frame(&mut app, vec![primary(click, false)]);
+        assert_eq!(app.session.active().unwrap().history.past_len(), click_history, "a click without movement adds no undo entry");
+        assert_eq!(
+            app.session.active().unwrap().doc.layer(layer_id).unwrap().mask.as_ref().unwrap().paint.as_ref().unwrap().layers[0].fill_bounds,
+            committed_bounds
+        );
+        let outside_release_history = app.session.active().unwrap().history.past_len();
+        let current_xf = ViewXform::active(&app).unwrap();
+        let current_bounds = committed_bounds.expect("committed Fill has spatial bounds");
+        let center = current_xf.to_screen((current_bounds[0] + current_bounds[2]) as f32 * 0.5, (current_bounds[1] + current_bounds[3]) as f32 * 0.5);
+        let outside = rect.right_bottom() + vec2(30.0, 30.0);
+        frame(&mut app, vec![egui::Event::PointerMoved(center)]);
+        frame(&mut app, vec![primary(center, true)]);
+        frame(&mut app, vec![egui::Event::PointerMoved(outside)]);
+        frame(&mut app, vec![primary(outside, false)]);
+        assert_eq!(
+            app.session.active().unwrap().history.past_len(),
+            outside_release_history + 1,
+            "release outside the canvas commits the owned Fill move once"
+        );
+        assert!(app.ui.transform.is_none() && app.transform_preview.is_none(), "outside release never opens or leaves a parent transform");
+        assert!(app.uv_mask_paint_preview.is_none(), "outside release clears the transient Fill gesture");
+        assert_eq!(app.session.active().unwrap().doc.layer(layer_id).unwrap().surface(), original.as_ref());
+    }
 }

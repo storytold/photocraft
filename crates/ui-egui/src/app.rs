@@ -35,6 +35,12 @@ impl PhotocraftApp {
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
         let mut app = Self {
+            #[cfg(feature = "uv-workbench")]
+            uv_cache: Default::default(),
+            #[cfg(feature = "uv-workbench")]
+            uv_mask_paint_preview: None,
+            #[cfg(feature = "uv-workbench")]
+            uv_paint_key: None,
             session,
             ui: UiState::default(),
             services,
@@ -71,6 +77,10 @@ impl PhotocraftApp {
             secondary_erase: false,
             held_erase: false,
             defer_live_stroke: false,
+            #[cfg(feature = "uv-workbench")]
+            native_uv_surface_input: false,
+            #[cfg(feature = "uv-workbench")]
+            native_uv_mask_gpu_disabled: false,
             press_stroke: false,
             last_stroke_end: None,
             brush_resize: None,

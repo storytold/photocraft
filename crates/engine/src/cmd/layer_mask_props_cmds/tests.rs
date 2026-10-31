@@ -16,7 +16,7 @@ fn session(depth: SampleType, adjustment: bool) -> (Session, LayerId, LayerId) {
         if adjustment { Layer::new("Adjustment", LayerContent::Adjustment(Adjustment::Invert)) } else { Layer::raster("Pixels", doc.pixel_format()) };
     let mut surface = Surface::with_default(PixelFormat::new(ColorMode::Grayscale, depth, false), &[1.0]);
     surface.fill_rect(Rect::new(1, 2, 5, 6), &[0.25]);
-    layer.mask = Some(LayerMask { surface, enabled: !adjustment, linked: false, density: 1.0, feather: 0.0 });
+    layer.mask = Some(LayerMask { surface, enabled: !adjustment, linked: false, density: 1.0, feather: 0.0, paint: None });
     let path = Path { inverted: true, ..Default::default() };
     layer.vector_mask = Some(VectorMask::new(path));
     let id = layer.id;
@@ -79,7 +79,7 @@ fn property_commands_update_rendered_edges_without_rewriting_the_mask() {
             let mut surface = Surface::new(PixelFormat::new(ColorMode::Grayscale, depth, false));
             surface.fill_rect(Rect::new(0, 0, 32, 8), &[1.0]);
             let raw = surface.clone();
-            layer.mask = Some(LayerMask { surface, enabled: true, linked: true, density: 1.0, feather: 0.0 });
+            layer.mask = Some(LayerMask { surface, enabled: true, linked: true, density: 1.0, feather: 0.0, paint: None });
             let id = layer.id;
             doc.layers.push(layer);
             let mut s = Session::new();

@@ -438,6 +438,14 @@ fn apply_data_set_is_judged_by_the_values_it_applies() {
 #[test]
 fn automation_rejects_ambient_path_commands_and_preferences() {
     for (id, params) in [
+        ("uv.model.import", serde_json::json!({"path": "/outside/model.fbx"})),
+        ("uv.model.reimport", serde_json::json!({})),
+        ("uv.model.checkSource", serde_json::json!({})),
+        ("uv.texture.open", serde_json::json!({"path": "/outside/texture.png"})),
+        ("uv.project.save", serde_json::json!({"path": "/outside/model.pcuv"})),
+        ("uv.project.load", serde_json::json!({"path": "/outside/model.pcuv"})),
+        ("uv.asset.import", serde_json::json!({"path": "/outside/image.png"})),
+        ("file.uv.saveAllTextures", serde_json::json!({})),
         ("brush.presets.importAbr", serde_json::json!({"path": "/outside/set.abr"})),
         ("brush.presets.importImage", serde_json::json!({"path": "/outside/tip.png"})),
         ("gradient.presets.importGrd", serde_json::json!({"path": "/outside/set.grd"})),

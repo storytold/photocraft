@@ -6,11 +6,19 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if id == "layer.selectUnderCursor" {
         return app.session.active().is_some() && app.drag.is_none() && app.brush_resize.is_none();
     }
+    #[cfg(feature = "uv-workbench")]
+    if let Some(enabled) = crate::uv_workspace::is_enabled(app, id) {
+        return enabled;
+    }
     if crate::tool_shortcuts::tool(id).is_some() {
         return true;
     }
     if id == "ui.symmetryTransform" {
         return crate::symmetry_ui::can_transform(app);
+    }
+    #[cfg(feature = "uv-workbench")]
+    if id == "edit.undo" && crate::uv_ui::pending_paint(app) {
+        return true;
     }
     // Draft Pen points can be undone even when the document has no History entries.
     if id == "edit.undo" && app.ui.pen.as_ref().is_some_and(|pen| !pen.knots.is_empty()) {
@@ -50,6 +58,8 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
         return e;
     }
     match id {
+        #[cfg(feature = "uv-workbench")]
+        "window.uvWorkbench" => true,
         "window.panel.activate" | "window.panel.layout" | "ui.dock" => true,
         "window.panel.group"
         | "window.panel.move"

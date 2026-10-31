@@ -8,6 +8,7 @@ description = "PhotoCraft: an open-source, native image editor"
 build = "build.rs"
 
 [features]
+uv-workbench = ["photocraft-ui-egui/uv-workbench"]
 # Open HEIC/HEIF photos (the optional photocraft-heif crate). Not default so distributors choose
 # it; official builds (CI, packaging/, release) build with `--features heif`.
 heif = ["photocraft-codecs/heif"]

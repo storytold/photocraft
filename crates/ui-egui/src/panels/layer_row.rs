@@ -241,7 +241,26 @@ pub(super) fn layer_row(
     if let Some(p) = thumb_load {
         actions.push(("select.loadSelection".into(), p));
     } else if let Some(cmd) = mask_toggle {
+        #[cfg(feature = "uv-workbench")]
+        let gray_view_for_this_mask = app.session.active().and_then(|st| st.channel_view.layer_mask).is_some_and(|view| gray_view_matches_layer(view, l.id));
+        #[cfg(feature = "uv-workbench")]
+        if app.ui.workspace == "3D"
+            && ui.input(|i| i.modifiers.alt)
+            && resp.interact_pointer_pos().and_then(|p| masks.hit(p)) == Some(crate::mask_thumbs_ui::MaskKind::Pixel)
+            && !gray_view_for_this_mask
+        {
+            crate::uv_mask_paint::clear_effect_selection(ctx, doc.id.0, l.id.0);
+            crate::uv_mask_paint::expand_effects(ctx, doc.id.0, l.id.0);
+        }
         actions.push(cmd);
+        #[cfg(feature = "uv-workbench")]
+        if app.ui.workspace == "3D"
+            && ui.input(|i| i.modifiers.alt)
+            && resp.interact_pointer_pos().and_then(|p| masks.hit(p)) == Some(crate::mask_thumbs_ui::MaskKind::Pixel)
+            && !gray_view_for_this_mask
+        {
+            actions.push(("ui.maskTarget".into(), json!({"enabled":true,"show":true})));
+        }
     } else if resp.clicked() && !eye_resp.clicked() && !toggled && !fx_toggled && !masks.clicked {
         select_row_on_click(app, ui, &rc, actions);
     }
@@ -405,19 +424,38 @@ fn select_row_on_click(app: &mut PhotocraftApp, ui: &egui::Ui, rc: &RowCtx<'_>, 
         let mask = if v.filter { "filter" } else { "layer" };
         actions.push((photocraft_engine::mask_view_cmds::ID.into(), json!({"layer": l.id.0, "mode": "off", "mask": mask})));
     }
-    let content_less = matches!(l.content, LayerContent::Adjustment(_) | LayerContent::Fill(_));
+    let content_less = matches!(l.content, LayerContent::Adjustment(_) | LayerContent::Fill(_)) && l.mask.is_some();
+    let mask_by_row = content_less && !on_thumb;
+    #[cfg(not(feature = "uv-workbench"))]
+    let content_click = on_thumb || !row.primary;
+    #[cfg(feature = "uv-workbench")]
+    let content_click = if app.ui.workspace == "3D" { on_thumb } else { on_thumb || !row.primary };
+    #[cfg(feature = "uv-workbench")]
+    if app.ui.workspace == "3D" && !on_mask && !mask_by_row {
+        crate::uv_mask_paint::collapse_effects(ctx);
+    }
     if on_vector {
         // The vector mask thumbnail targets the vector mask: the path tools edit it and the
         // Paths panel selects the layer's path.
         app.ui.selected_path = Some("layer".into());
         actions.push(("ui.vectorMaskTarget".into(), json!(true)));
-    } else if on_mask || (content_less && l.mask.is_some() && !on_thumb) {
+    } else if on_mask || mask_by_row {
         if on_mask {
             // The mask thumbnail also switches Properties to the mask (#3369).
             app.ui.properties_layer = None;
         }
+        #[cfg(feature = "uv-workbench")]
+        if app.ui.workspace == "3D" && on_mask {
+            // Open the editable effect stack while keeping its active effect selected in Properties;
+            // the dispatcher preserves the mask paint target and shows the ordinary composite.
+            crate::uv_mask_paint::expand_effects(ctx, doc.id.0, l.id.0);
+            actions.push(("ui.maskTarget".into(), json!({"enabled":true,"show":false,"select_active_effect":true})));
+        } else {
+            actions.push(("ui.maskTarget".into(), json!(true)));
+        }
+        #[cfg(not(feature = "uv-workbench"))]
         actions.push(("ui.maskTarget".into(), json!(true)));
-    } else if on_thumb || !row.primary {
+    } else if content_click {
         actions.push(("ui.maskTarget".into(), json!(false)));
     }
     // ⌥-click the layer thumbnail: fit the layer on screen, as Photoshop does.
@@ -441,7 +479,9 @@ fn handle_row_double_click(app: &mut PhotocraftApp, ctx: &egui::Context, rc: &Ro
             }
         } else if let Some(kind) = pos.and_then(|p| masks.hit(p)) {
             match kind {
-                crate::mask_thumbs_ui::MaskKind::Pixel => actions.push(("ui.maskTarget".into(), json!(true))),
+                crate::mask_thumbs_ui::MaskKind::Pixel => {
+                    actions.push(("ui.maskTarget".into(), json!({"enabled":true,"show":false,"select_active_effect":true})))
+                }
                 crate::mask_thumbs_ui::MaskKind::Vector => actions.push(("ui.vectorMaskTarget".into(), json!(true))),
             }
             if let Some((cmd, val)) = crate::mask_thumbs_ui::double_click_command(app, kind) {
@@ -545,4 +585,24 @@ fn draw_layer_thumb(app: &mut PhotocraftApp, ctx: &egui::Context, ui: &egui::Ui,
     };
     p.rect_stroke(rect, CornerRadius::same(if t.pro { 0 } else { 5 }), stroke, StrokeKind::Outside);
     crate::smart_ui::thumb_badge(ui, l, rect);
+}
+
+#[cfg(feature = "uv-workbench")]
+fn gray_view_matches_layer(view: photocraft_engine::mask_view_cmds::LayerMaskView, layer: photocraft_doc::LayerId) -> bool {
+    view.layer == layer && !view.filter && view.mode == photocraft_engine::mask_view_cmds::MaskViewMode::Gray
+}
+
+#[cfg(all(test, feature = "uv-workbench"))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alt_mask_view_toggle_only_suppresses_reenable_for_the_same_gray_layer_mask() {
+        let layer = photocraft_doc::LayerId(7);
+        let view = |layer, filter, mode| photocraft_engine::mask_view_cmds::LayerMaskView { layer, filter, mode };
+        assert!(gray_view_matches_layer(view(layer, false, photocraft_engine::mask_view_cmds::MaskViewMode::Gray), layer));
+        assert!(!gray_view_matches_layer(view(photocraft_doc::LayerId(8), false, photocraft_engine::mask_view_cmds::MaskViewMode::Gray), layer));
+        assert!(!gray_view_matches_layer(view(layer, false, photocraft_engine::mask_view_cmds::MaskViewMode::Overlay), layer));
+        assert!(!gray_view_matches_layer(view(layer, true, photocraft_engine::mask_view_cmds::MaskViewMode::Gray), layer));
+    }
 }

@@ -300,7 +300,17 @@ impl LiveRetouch {
         let bounds = self.bounds();
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.id, &self.params)?;
         let surface = surf.clone();
-        Ok(crate::brush_cmds::LiveCommit { mixer: None, cmd: self.cmd, base: self.base, params: self.params, seed: None, points: self.points, surface, bounds })
+        Ok(crate::brush_cmds::LiveCommit {
+            mixer: None,
+            cmd: self.cmd,
+            base: self.base,
+            params: self.params,
+            seed: None,
+            points: self.points,
+            breaks: Vec::new(),
+            surface,
+            bounds,
+        })
     }
 
     /// Render more points; returns the rectangle that changed. Each changed area is redrawn from
