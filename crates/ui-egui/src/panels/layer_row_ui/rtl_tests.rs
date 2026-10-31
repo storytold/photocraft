@@ -76,3 +76,40 @@ fn row_children_share_one_leading_and_one_trailing_edge_in_both_directions() {
         assert!(with_indicators >= 1, "{dir:?}: the styled layer drew its indicators");
     }
 }
+
+/// The Layers flyout's rows (`panel_menu`) go through `menu_row`/`menus::menu_button`, so under
+/// RTL the row labels hug the popup's reading-start (right) edge; LTR keeps them at the left.
+#[test]
+fn panel_menu_rows_hug_the_reading_start_edge() {
+    let rects = |dir: Dir| -> Vec<(String, egui::Rect)> {
+        let _scope = direction_scope(dir);
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let strip = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), vec2(220.0, 120.0));
+            let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down_justified(egui::Align::Min)));
+            crate::menus::popup_body(&mut strip_ui, |ui| {
+                let _ = crate::menu_keys::menu_row(ui, "New Layer…", None, false, true);
+                let _ = crate::menu_keys::menu_row(ui, "Panel Options…", None, false, true);
+            });
+        });
+        let v = out
+            .shapes
+            .iter()
+            .filter_map(|cs| match &cs.shape {
+                egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), ts.visual_bounding_rect())),
+                _ => None,
+            })
+            .collect();
+        out.textures_delta.clear();
+        v
+    };
+    let at = |v: &[(String, egui::Rect)], s: &str| v.iter().find(|(t, _)| t.contains(s)).map(|(_, r)| *r).unwrap_or(egui::Rect::ZERO);
+    let ltr = rects(Dir::Ltr);
+    let rtl = rects(Dir::Rtl);
+    let (l, r) = (at(&ltr, "New Layer"), at(&rtl, "New Layer"));
+    assert!(l.is_positive() && r.is_positive(), "the row label is drawn both ways: {l:?} {r:?}");
+    assert!(l.left() < 20.0 + 40.0, "ltr: the label hugs the left edge: {l:?}");
+    assert!(r.right() > 240.0 - 40.0, "rtl: the label hugs the right edge: {r:?}");
+    assert!(r.right() > l.right() + 10.0, "rtl: the label sits at the reading start: ltr {l:?} rtl {r:?}");
+}
