@@ -376,7 +376,7 @@ impl PhotocraftApp {
 
     /// Whether saving the active document to `path` writes a copy. `tiff_layers` is the TIFF
     /// Options answer: `Some(false)` discards the layers and saves a copy.
-    fn saves_copy(&self, path: &str, tiff_layers: Option<bool>) -> Result<bool, String> {
+    pub(crate) fn saves_copy(&self, path: &str, tiff_layers: Option<bool>) -> Result<bool, String> {
         // A flat file that can't hold the document (its layers, or the layered file it lives in)
         // is written as a copy, as in Photoshop: the document keeps its file, so Save still
         // writes the layered original and the edits stay unsaved (#2550).
