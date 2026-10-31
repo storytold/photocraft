@@ -220,7 +220,9 @@ pub fn rgb_to_hsb_sextant(rgb: [f32; 3]) -> [f32; 3] {
     let h = if d <= 0.0 {
         0.0
     } else if mx == rgb[0] {
-        ((rgb[1] - rgb[2]) / d).rem_euclid(6.0)
+        let h = ((rgb[1] - rgb[2]) / d).rem_euclid(6.0);
+        // A tiny negative quotient rounds up to exactly 6.0, which is hue 0.
+        if h >= 6.0 { 0.0 } else { h }
     } else if mx == rgb[1] {
         (rgb[2] - rgb[0]) / d + 2.0
     } else {
@@ -258,6 +260,12 @@ pub fn rgb_to_hsb(rgb: [f32; 3]) -> [f32; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hsb_hue_stays_below_360_for_reds_leaning_to_blue() {
+        let h = rgb_to_hsb([1.0, 0.0, 1e-9])[0];
+        assert!((0.0..360.0).contains(&h), "hue {h}");
+    }
 
     #[test]
     fn srgb_roundtrip() {
