@@ -358,6 +358,13 @@ pub(crate) fn clear_channel(doc: &mut Document, target: &Value, background: [f32
     crate::fill_cmds::fill_color(surf, area, [background[0], background[1], background[2], 1.0], sel.as_ref())
 }
 
+/// Whether a filter would edit a mask or channel instead of the layer's pixels: a targeted layer
+/// mask, alpha channel or Quick Mask (what [`inject_target`] adds to a filter's params). Photoshop
+/// greys out Lens Correction, Adaptive Wide Angle and Vanishing Point then (#10457).
+pub(crate) fn filters_target_a_channel(s: &Session) -> bool {
+    inject_target(s, "filter.liquify", Value::Null).get("target").is_some()
+}
+
 /// The active document targets an alpha channel or is in Quick Mask mode, so pixel commands
 /// work without a pixel layer.
 pub(crate) fn edits_channel(s: &Session) -> bool {

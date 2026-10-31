@@ -274,6 +274,16 @@ fn filterable(s: &Session) -> std::result::Result<(), String> {
     }
 }
 
+/// Lens Correction and Adaptive Wide Angle: a filterable layer, and not a targeted mask or channel,
+/// where Photoshop greys them out (#10457).
+fn lens_enabled(s: &Session) -> std::result::Result<(), String> {
+    filterable(s)?;
+    if crate::channel_cmds::filters_target_a_channel(s) {
+        return Err("not available while a mask or channel is targeted".into());
+    }
+    Ok(())
+}
+
 fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
     filterable(s)?;
     let d = s.active().ok_or("no document open")?;
@@ -294,6 +304,18 @@ fn run_filter(s: &mut Session, cmd: &str, label: &str, stored: Value, float_bg: 
     s.edit(label, |doc: &mut Document, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
+        // A targeted layer mask, alpha channel or Quick Mask is filtered instead of the layer, as
+        // Photoshop's Camera Raw Filter does (#10457; Lens Correction and Adaptive Wide Angle are
+        // disabled then).
+        if crate::channel_cmds::target_of(&stored) != crate::channel_cmds::Target::Pixels {
+            let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(id), &stored)? else { return Ok(()) };
+            let out = f(surf, canvas);
+            *surf = match &selection {
+                Some(sel) => mix_by_selection(surf, &out, sel),
+                None => out,
+            };
+            return Ok(());
+        }
         let locks = doc.effective_locks(id);
         let background = doc.is_background(id);
         let l = doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?;
@@ -453,7 +475,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &["Filter"],
             shortcut: Some("Cmd+Shift+R"),
             params: LENS_DOC,
-            enabled: filterable,
+            enabled: lens_enabled,
             run: lens_correction,
             journal: true,
         },
@@ -463,7 +485,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &["Filter"],
             shortcut: Some("Cmd+Alt+Shift+A"),
             params: r##"{"model":"auto|fisheye|perspective|fullSpherical","focalLength":0..200=0,"cropFactor":0.1..10=1,"scale":50..150=100,"constraints":[{"a":[x,y],"b":[x,y],"orientation":"free|horizontal|vertical"}]}"##,
-            enabled: filterable,
+            enabled: lens_enabled,
             run: adaptive_wide_angle,
             journal: true,
         },

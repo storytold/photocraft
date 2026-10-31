@@ -473,3 +473,52 @@ fn unlocked_or_position_locked_smart_objects_take_distortions() {
         }
     }
 }
+
+/// #10457: with a layer mask (or the Quick Mask) targeted, Photoshop applies Liquify, Filter
+/// Gallery and Camera Raw Filter to the mask and greys out Lens Correction, Adaptive Wide Angle and
+/// Vanishing Point. They all edited the layer's pixels.
+#[test]
+fn dialog_filters_follow_a_targeted_mask_as_photoshops_do() {
+    let mask_of = |s: &Session| {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.read_region(st.doc.bounds())
+    };
+    let masked = || {
+        let mut s = session(8);
+        s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+        // Reveal Selection uses the selection up, as in Photoshop.
+        assert!(s.active().unwrap().doc.selection.is_none());
+        s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+        s
+    };
+    let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+    let edits = [
+        (LIQUIFY, stroke.clone()),
+        ("filter.filterGallery", json!({"effects": [{"filter": "spatter", "params": {}}]})),
+        (crate::lens_cmds::RAW, json!({"exposure": -1.5})),
+    ];
+    for (id, params) in edits {
+        let mut s = masked();
+        let (pixels, mask) = (active_surface(&s), mask_of(&s));
+        s.execute(id, params).unwrap();
+        assert_eq!(active_surface(&s), pixels, "{id}: the layer's pixels are untouched");
+        assert_ne!(mask_of(&s), mask, "{id}: the mask is filtered");
+    }
+    for id in [crate::lens_cmds::LENS, crate::lens_cmds::WIDE, crate::vp_cmds::VP] {
+        let mut s = masked();
+        assert!(s.execute(id, json!({})).is_err(), "{id} is disabled on a targeted mask");
+        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+        assert!(s.is_enabled(id), "{id} is enabled on the layer again");
+    }
+    // Quick Mask: Liquify deforms it, not the layer.
+    let mut s = session(8);
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    let pixels = active_surface(&s);
+    let quick = |s: &Session| s.active().unwrap().doc.quick_mask.as_ref().unwrap().surface.read_region(s.active().unwrap().doc.bounds());
+    let before = quick(&s);
+    s.execute(LIQUIFY, stroke).unwrap();
+    assert_eq!(active_surface(&s), pixels, "Quick Mask: the layer's pixels are untouched");
+    assert_ne!(quick(&s), before, "Quick Mask: deformed");
+}
