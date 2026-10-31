@@ -143,6 +143,7 @@ echo "==> assembling $APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 # Executable and icon carry the display name (CFBundleExecutable / CFBundleIconFile).
 cp "$WORK/bin/photocraft" "$APP/Contents/MacOS/PhotoCraft"
+cp "$WORK/bin/photocraft-cli" "$APP/Contents/MacOS/photocraft-cli"
 cp "$ROOT/assets/app-icon/photocraft.icns" "$APP/Contents/Resources/PhotoCraft.icns"
 mkdir -p "$APP/Contents/Frameworks"
 ditto "$SPARKLE_ROOT/Sparkle.framework" "$APP/Contents/Frameworks/Sparkle.framework"
@@ -171,7 +172,8 @@ if ! otool -l "$APP/Contents/MacOS/PhotoCraft" | grep -Fq '@executable_path/../F
 fi
 
 # Sign inside-out: nested code first, then the bundle itself (no --deep on the final signature).
-# Today the only nested code is the main executable; frameworks/helpers would be signed here too.
+# The bundled CLI is nested executable code; sign it before sealing the app bundle.
+sign --options runtime --identifier ai.storyteller.photocraft-cli "$APP/Contents/MacOS/photocraft-cli"
 sign --options runtime --entitlements "$HERE/entitlements.plist" "$APP/Contents/MacOS/PhotoCraft"
 # Sparkle contains nested XPC services and helper apps; sign those with the same Developer ID.
 sign --deep --options runtime "$APP/Contents/Frameworks/Sparkle.framework"
