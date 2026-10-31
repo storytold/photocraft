@@ -156,14 +156,14 @@ fn smart_object_cylinder_is_stored_in_source_space() {
     let LayerContent::Smart(sm) = &s.active().unwrap().doc.layers[1].content else { panic!("smart") };
     let inv = crate::smart_cmds::placement(sm).inverse().unwrap();
     assert!((w.values[0] - inv.apply(-15.0, 10.0).0).abs() < 1e-9 && (w.values[2] - inv.apply(85.0, 10.0).0).abs() < 1e-9, "{:?}", w.values);
-    // Rotated: a custom mesh with the same shape.
+    // Rotated: a custom mesh, fitted over the source box (#10325).
     let mut s = session(8);
     s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
     s.execute("edit.transform", json!({"rotate": 30})).unwrap();
     s.execute("layer.smartObjects.warp", json!({"style": "cylinder", "values": CYL, "rect": [10, 10, 60, 40]})).unwrap();
     let w = stored(&s);
     assert_eq!(w.style, WarpStyle::Custom);
-    assert_eq!(w.mesh.as_ref().map(|m| (m.nx(), m.ny())), Some((13, 4)));
+    assert_eq!(w.mesh.as_ref().map(|m| (m.nx(), m.ny())), Some((13, 13)));
 }
 
 /// Warp mode shows a stored cylinder as its mesh, and Enter commits that mesh untouched: the
@@ -457,4 +457,39 @@ fn a_cancelled_warp_stops_in_a_selected_linked_mask() {
     let ctl = Interrupt::cancel_only(&|| true);
     let r = warp_layer(Some(&sel), Locks::default(), &mut l, &w, rect, Interp::Bicubic, None, &ctl);
     assert!(matches!(r, Err(EngineError::Cancelled)), "{r:?}");
+}
+
+/// Committing a custom warp or a cylinder on a sheared smart object keeps the placement: the
+/// stored warp sends each source point where the document warp sends the point it is placed at
+/// (#10325).
+#[test]
+fn warp_on_a_sheared_smart_object_keeps_the_placement() {
+    let mut s = session(8);
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    let (id, r) = {
+        let st = s.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        (l.id, warp_bounds(&st.doc, l))
+    };
+    let [x0, y0, x1, y1] = rect_f(r);
+    let quad = [[x0, y0], [x1, y0 + 10.0], [x1, y1 + 10.0], [x0, y1]];
+    s.execute("edit.transform", json!({"layer": id.0, "rect": [x0, y0, x1, y1], "quad": quad})).unwrap();
+    let (rect, b) = (Rect::new(r.x0, r.y0, r.x1, r.y1 + 10), [x0, y0, x1, y1 + 10.0]);
+    let mesh = BezierMesh::fit(&|u, v| [b[0] + u * (b[2] - b[0]) + 8.0 * v * (1.0 - v), b[1] + v * (b[3] - b[1])], vec![0.0, 1.0], vec![0.0, 1.0]);
+    let cylinder = Warp::cylinder(&[b[0], b[3], b[2], b[1], 0.3, 0.3, 0.5], b).unwrap();
+    for w in [Warp::custom(mesh, b), cylinder] {
+        let mut layer = s.active().unwrap().doc.layer(id).unwrap().clone();
+        warp_layer(None, Locks::default(), &mut layer, &w, rect, Interp::Bicubic, None, &Interrupt::NONE).unwrap();
+        let LayerContent::Smart(sm) = &layer.content else { panic!() };
+        let stored = sm.warp.as_ref().unwrap();
+        let inv = crate::smart_cmds::placement(sm).inverse().unwrap();
+        for (u, v) in [(0.2, 0.2), (0.5, 0.5), (0.8, 0.3), (0.3, 0.9)] {
+            let p = [x0 + u * (x1 - x0), y0 + u * 10.0 + v * (y1 - y0)];
+            let src = hom_apply(&inv, p);
+            let (wx, wy) = w.map(p[0], p[1]);
+            let want = hom_apply(&inv, [wx, wy]);
+            let got = stored.map(src[0], src[1]);
+            assert!((got.0 - want[0]).abs() < 0.5 && (got.1 - want[1]).abs() < 0.5, "{:?} ({u}, {v}): {got:?} vs {want:?}", w.style);
+        }
+    }
 }
