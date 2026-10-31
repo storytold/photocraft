@@ -91,7 +91,9 @@ pub fn leave_for_shortcut(ctx: &egui::Context) -> bool {
 pub fn close_for_shortcut(ctx: &egui::Context) -> bool {
     let menu = crate::menu_nav::is_open(ctx);
     let list = crate::widgets::dropdown_list_open(ctx);
-    let popup = egui::Popup::is_any_open(ctx);
+    let pass = ctx.cumulative_pass_nr();
+    let own = ctx.data(|d| d.get_temp::<u64>(own_popup_id())).is_some_and(|seen| seen + 2 >= pass);
+    let popup = egui::Popup::is_any_open(ctx) || own;
     let typing = ctx.text_edit_focused();
     let shortcut = ctx.input(|i| {
         i.events.iter().any(
@@ -112,9 +114,36 @@ pub fn close_for_shortcut(ctx: &egui::Context) -> bool {
     }
     if popup {
         egui::Popup::close_all(ctx);
+        ctx.data_mut(|d| {
+            d.remove::<u64>(own_popup_id());
+            d.insert_temp(closed_id(), pass);
+        });
     }
     ctx.request_repaint();
     true
+}
+
+fn own_popup_id() -> Id {
+    Id::unique("pc-own-popup-open")
+}
+
+fn closed_id() -> Id {
+    Id::unique("pc-popups-closed-for-shortcut")
+}
+
+/// A popup that keeps its open state itself (`Popup::open_bool`, `Popup::open(true)`), which
+/// [`egui::Popup::is_any_open`] and [`egui::Popup::close_all`] don't see, calls this each frame
+/// it stays open, so that [`close_for_shortcut`] closes it too: it closes itself when
+/// [`popups_closed`] says so.
+pub fn own_popup_shown(ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(own_popup_id(), pass));
+}
+
+/// [`close_for_shortcut`] closed the popups in this frame: one that keeps its own open state
+/// closes now, ahead of the shortcut.
+pub fn popups_closed(ctx: &egui::Context) -> bool {
+    ctx.data(|d| d.get_temp::<u64>(closed_id())) == Some(ctx.cumulative_pass_nr())
 }
 
 /// A command shortcut was pressed this frame ([`is_command_key`]).
