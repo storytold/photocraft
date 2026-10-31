@@ -254,7 +254,9 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
     ms in release). Image data cut off by the end of the file decodes with
     `DecodeWarning::Truncated`; a file far too small for its declared size (more than any
     compression could expand) is refused before allocating.
-  * YCbCr, CIE Lab, signed integers and compressions that the `tiff` crate lacks (CCITT,
+  * YCbCr with three 8- or 16-bit samples decodes to RGB. YCbCr with other sample counts or
+    bit depths returns `Unsupported`.
+  * CIE Lab, signed integers and compressions that the `tiff` crate lacks (CCITT,
     JPEG-in-TIFF) return `Unsupported`.
 * **TIFF encode** writes classic TIFF, or BigTIFF when `EncodeOptions::tiff_bigtiff` is set or
   the file could pass 4 GiB. `Metadata::extra_samples` (up to 16) are written after the colour

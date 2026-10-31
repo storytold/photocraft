@@ -166,6 +166,7 @@ mod bands;
 mod decode;
 mod encode;
 mod tags;
+mod ycbcr;
 
 pub(crate) use decode::{decode, decode_page, orientation};
 pub(crate) use encode::encode;
