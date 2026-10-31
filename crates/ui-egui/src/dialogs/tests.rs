@@ -628,22 +628,47 @@ fn rtl_footer_buttons_mirror_and_hug_the_reading_end() {
     assert!(cancel.left() - frame.left() < 40.0, "the group hugs the reading end: {cancel:?} in {frame:?}");
 }
 
-/// RTL: the About pills read from the right, the first tab at the reading start.
+/// RTL: the About pills read from the right, the first tab at the reading start, and the
+/// about blurb's galley hugs the dialog's reading-start edge — the right edge in RTL, the
+/// left edge in LTR (the LTR twin keeps the default left placement).
 #[test]
 fn rtl_about_tabs_read_from_the_right() {
     use egui_kittest::{Harness, kittest::Queryable};
-    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
-    let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-    let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
-    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
-    h.state_mut().ui.open_dialog(DialogKind::About, serde_json::Map::new());
-    h.run_steps(4);
-    let about = h.get_by_label("About").rect();
-    let contributors = h.get_by_label("Contributors").rect();
-    let models = h.get_by_label("Models").rect();
-    assert!(about.right() > contributors.right() && contributors.right() > models.right(), "reading order right to left: {about:?} {contributors:?} {models:?}");
-    let frame = rects(&h.ctx)[0];
-    assert!(frame.right() - about.right() < 40.0, "the first pill starts at the reading start: {about:?} in {frame:?}");
+    let blurb = "PhotoCraft — an open-source, native image editor written in Rust.";
+    for dir in [crate::text::direction::Dir::Ltr, crate::text::direction::Dir::Rtl] {
+        let _rtl = crate::text::direction::direction_scope(dir);
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, app| show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.state_mut().ui.open_dialog(DialogKind::About, serde_json::Map::new());
+        h.run_steps(4);
+        let about = h.get_by_label("About").rect();
+        let contributors = h.get_by_label("Contributors").rect();
+        let models = h.get_by_label("Models").rect();
+        let frame = rects(&h.ctx)[0];
+        if dir == crate::text::direction::Dir::Rtl {
+            assert!(
+                about.right() > contributors.right() && contributors.right() > models.right(),
+                "reading order right to left: {about:?} {contributors:?} {models:?}"
+            );
+            assert!(frame.right() - about.right() < 40.0, "the first pill starts at the reading start: {about:?} in {frame:?}");
+        }
+        fn blurb_edges(shape: &egui::Shape, text: &str, edges: &mut Vec<(f32, f32)>) {
+            match shape {
+                egui::Shape::Text(t) if t.galley.job.text == text => edges.push((t.pos.x, t.pos.x + t.galley.rect.right())),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| blurb_edges(s, text, edges)),
+                _ => {}
+            }
+        }
+        let mut edges = Vec::new();
+        h.output().shapes.iter().for_each(|s| blurb_edges(&s.shape, blurb, &mut edges));
+        let (left, right) = edges.into_iter().next().unwrap_or_else(|| panic!("`{blurb}` painted"));
+        if dir == crate::text::direction::Dir::Rtl {
+            assert!(frame.right() - right < 40.0, "the blurb hugs the reading start: right {right} in {frame:?}");
+        } else {
+            assert!(left - frame.left() < 40.0, "LTR unchanged: blurb left {left} in {frame:?}");
+        }
+    }
 }
 
 /// RTL twin of the picker's inset checks: the vertical insets, the fit and the mirrored margin

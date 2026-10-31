@@ -86,11 +86,17 @@ fn rtl_checkbox_box_leads_on_the_right_and_click_targets_flip() {
     };
     let probe = |dir: crate::text::direction::Dir, box_before_label: bool| -> (egui::Rect, bool) {
         let _dir = crate::text::direction::direction_scope(dir);
-        let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0)).build_ui_state(|ui, on: &mut bool| { super::checkbox(ui, on, "Show Transform Controls"); }, false);
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0)).build_ui_state(
+            |ui, on: &mut bool| {
+                super::checkbox(ui, on, "Show Transform Controls");
+            },
+            false,
+        );
         h.run_steps(2);
         let label = h.get_by_label("Show Transform Controls").rect();
         let at = if box_before_label { egui::pos2(label.left() - 13.0, label.center().y) } else { egui::pos2(label.right() + 13.0, label.center().y) };
-        click(&mut h, at);        (label, *h.state())
+        click(&mut h, at);
+        (label, *h.state())
     };
     let (label, on) = probe(crate::text::direction::Dir::Ltr, true);
     assert!(on, "LTR: the box before the label toggles ({label:?})");
@@ -124,7 +130,12 @@ fn rtl_toggle_switch_leads_on_the_right_and_the_knob_starts_at_the_reading_start
     let probe = |dir: crate::text::direction::Dir| -> (f32, bool) {
         let _dir = crate::text::direction::direction_scope(dir);
         let rtl = dir == crate::text::direction::Dir::Rtl;
-        let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0)).build_ui_state(|ui, on: &mut bool| { super::toggle(ui, on, "Use Graphics Processor"); }, false);
+        let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0)).build_ui_state(
+            |ui, on: &mut bool| {
+                super::toggle(ui, on, "Use Graphics Processor");
+            },
+            false,
+        );
         h.run_steps(2);
         let mut circles = Vec::new();
         knob(&h.output().shapes, &mut circles);
@@ -392,7 +403,8 @@ fn rtl_text_field_aligns_hint_and_value_at_the_reading_start() {
     }
     let probe = |dir: crate::text::direction::Dir, mono: bool, text: &str, needle: &str| -> (egui::Rect, f32) {
         let _dir = crate::text::direction::direction_scope(dir);
-        let mut h = Harness::builder().with_size(egui::vec2(300.0, 80.0))
+        let mut h = Harness::builder()
+            .with_size(egui::vec2(300.0, 80.0))
             .build_ui_state(|ui, s: &mut String| drop(super::text_field(ui, egui::Id::unique("tf"), s, "hint text", 200.0, mono)), text.to_string());
         crate::PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
         h.run_steps(2);

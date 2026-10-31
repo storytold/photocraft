@@ -8,10 +8,8 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
         return checkbox(ui, on, label);
     }
     // A `horizontal`-shaped row: `interact_size.y` tall, so a tall parent can't stretch it.
-    let mut resp = ui.allocate_ui_with_layout(
-        vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y),
-        crate::text::direction::row(),
-        |ui| {
+    let mut resp = ui
+        .allocate_ui_with_layout(vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::text::direction::row(), |ui| {
             let (rect, resp) = ui.allocate_exact_size(vec2(30.0, 17.0), Sense::click());
             let how_on = ui.ctx().animate_bool(resp.id, *on);
             let bg = if *on { t.accent } else { t.field_border };
@@ -22,18 +20,14 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             }
             // The switch reads off at the row's start and on at its end: in a right-to-left UI
             // the knob travels left as it turns on.
-            let (off_x, on_x) = if crate::text::direction::is_rtl() {
-                (rect.right() - 8.5, rect.left() + 8.5)
-            } else {
-                (rect.left() + 8.5, rect.right() - 8.5)
-            };
+            let (off_x, on_x) =
+                if crate::text::direction::is_rtl() { (rect.right() - 8.5, rect.left() + 8.5) } else { (rect.left() + 8.5, rect.right() - 8.5) };
             let x = egui::lerp(off_x..=on_x, how_on);
             ui.painter().circle_filled(pos2(x, rect.center().y), 6.5, Color32::WHITE);
             ui.label(egui::RichText::new(tl!(label)).color(if *on { t.text } else { t.text_dim }));
             resp
-        },
-    )
-    .inner;
+        })
+        .inner;
     if resp.clicked() {
         *on = !*on;
         resp.mark_changed();
@@ -229,10 +223,8 @@ fn button_impl_h(ui: &mut Ui, label: &str, min_width: f32, height: Option<f32>, 
 pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     // A `horizontal`-shaped row: `interact_size.y` tall, so a tall parent can't stretch it.
-    let (mut resp, label_resp) = ui.allocate_ui_with_layout(
-        vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y),
-        crate::text::direction::row(),
-        |ui| {
+    let (mut resp, label_resp) = ui
+        .allocate_ui_with_layout(vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::text::direction::row(), |ui| {
             ui.spacing_mut().item_spacing.x = 6.0;
             let (rect, resp) = ui.allocate_exact_size(vec2(14.0, 14.0), Sense::CLICK);
             let resp = resp.on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -243,9 +235,8 @@ pub fn checkbox(ui: &mut Ui, on: &mut bool, label: &str) -> Response {
             let pressed = resp.is_pointer_button_down_on() || l.is_pointer_button_down_on();
             check_box(ui.painter(), rect, *on, resp.hovered() || l.hovered(), pressed, &t);
             (resp.union(l.clone()), l)
-        },
-    )
-    .inner;
+        })
+        .inner;
     if resp.clicked() {
         *on = !*on;
         resp.mark_changed();
