@@ -3525,3 +3525,6 @@ curves	Smooth	Haluskan
 	Select and Mask was closed: another layer was selected	Seleksi dan Mask ditutup: layer lain dipilih
 	Select Layer Under Cursor	Pilih Lapisan di Bawah Kursor
 	Edit Brush…	Edit Kuas…
+
+# JPEG Options: the size the file will have (#7843)
+	Estimated file size	Perkiraan ukuran file

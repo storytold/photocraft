@@ -3524,3 +3524,6 @@ curves	Smooth	Glätten
 	Select and Mask was closed: its document is no longer the active one	Auswählen und maskieren wurde geschlossen: Das zugehörige Dokument ist nicht mehr aktiv
 	Select and Mask was closed: another layer was selected	Auswählen und maskieren wurde geschlossen: Es wurde eine andere Ebene ausgewählt
 	Edit Brush…	Pinsel bearbeiten…
+
+# JPEG Options: the size the file will have (#7843)
+	Estimated file size	Geschätzte Dateigröße

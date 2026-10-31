@@ -4575,3 +4575,6 @@ shape	Appearance	Izgled
 	Select Layer Under Cursor	Izaberi sloj ispod kursora
 	Drag to move the selected path	Prevucite da pomerite izabranu putanju
 	Edit Brush…	Uredi četkicu…
+
+# JPEG Options: the size the file will have (#7843)
+	Estimated file size	Procenjena veličina datoteke

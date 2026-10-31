@@ -4262,3 +4262,6 @@ curves	Smooth	Vloeiend maken
 	Select and Mask was closed: another layer was selected	Selecteren en maskeren is gesloten: er is een andere laag geselecteerd
 	Select Layer Under Cursor	Laag onder cursor selecteren
 	Edit Brush…	Penseel bewerken…
+
+# JPEG Options: the size the file will have (#7843)
+	Estimated file size	Geschatte bestandsgrootte

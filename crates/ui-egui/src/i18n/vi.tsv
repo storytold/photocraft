@@ -4002,3 +4002,6 @@ curves	Smooth	Làm mượt
 	Select and Mask was closed: another layer was selected	Đã đóng Chọn và Mặt nạ: một lớp khác đã được chọn
 	Select Layer Under Cursor	Chọn lớp dưới con trỏ
 	Edit Brush…	Chỉnh sửa cọ…
+
+# JPEG Options: the size the file will have (#7843)
+	Estimated file size	Kích thước tệp ước tính

@@ -4205,3 +4205,6 @@ curves	Smooth	Εξομάλυνση
 	Select and Mask was closed: another layer was selected	Η Επιλογή και μάσκα έκλεισε: επιλέχθηκε άλλο επίπεδο
 	Select Layer Under Cursor	Επιλογή επιπέδου κάτω από τον δρομέα
 	Edit Brush…	Επεξεργασία πινέλου…
+
+# JPEG Options: the size the file will have (#7843)
+	Estimated file size	Εκτιμώμενο μέγεθος αρχείου
