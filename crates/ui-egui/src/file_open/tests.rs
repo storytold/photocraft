@@ -806,6 +806,9 @@ fn open_documents_as_tabs_preference_controls_floating_windows() {
     app.run("file.new", json!({"width": 100, "height": 100})).unwrap();
     assert_eq!(app.ui.windows.len(), 2);
     assert_eq!(app.ui.windows[1].document, 1);
+    // #9728: each opens in its own floating window only, not as a tab as well.
+    assert!(app.ui.windows.iter().all(|w| w.floating), "floating windows: {:?}", app.ui.windows.iter().map(|w| w.floating).collect::<Vec<_>>());
+    assert!((0..2).all(|d| crate::view_cmds::document_is_floating(&app, d)), "no document is also a tab");
 
     // Opening with preference true docks into tabs, creating no new floating window
     app.session.edit_prefs(|p| p.workspace.open_documents_as_tabs = true);
