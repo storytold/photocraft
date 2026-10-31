@@ -50,6 +50,29 @@ pub(crate) fn pixel_aspect_resource(doc: &Document) -> ImageResource {
     ImageResource::new(photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO, photocraft_psd::PixelAspectRatio::new(doc.pixel_aspect).to_bytes())
 }
 
+/// Color Sampler points as Photoshop writes them: the legacy 1038 and the current 1073, each
+/// point at the centre of its pixel. A document with no points writes only the records that
+/// couldn't be read when it opened, as they came.
+pub(crate) fn color_sampler_resources(doc: &Document) -> Vec<ImageResource> {
+    if doc.color_samplers.is_empty() {
+        use photocraft_psd::resources::ids;
+        return doc
+            .metadata
+            .psd_resources
+            .iter()
+            .filter(|(id, _, data)| matches!(*id, ids::COLOR_SAMPLERS | ids::COLOR_SAMPLERS_OLD) && photocraft_psd::ColorSamplers::from_bytes(data).is_err())
+            .map(|(id, name, data)| {
+                let mut kept = ImageResource::new(*id, data.to_vec());
+                kept.name = name.clone().into_bytes();
+                kept
+            })
+            .collect();
+    }
+    let s = photocraft_psd::ColorSamplers { points: doc.color_samplers.iter().map(|p| p.map(|v| v + 0.5)).collect() };
+    use photocraft_psd::resources::ids;
+    vec![ImageResource::new(ids::COLOR_SAMPLERS_OLD, s.to_legacy_bytes()), ImageResource::new(ids::COLOR_SAMPLERS, s.to_bytes())]
+}
+
 pub(crate) fn guides_resource(doc: &Document) -> Vec<u8> {
     let mut v = Vec::new();
     v.extend_from_slice(&1u32.to_be_bytes());
@@ -109,8 +132,14 @@ pub(crate) fn path_resources(doc: &Document, warnings: &mut Vec<String>) -> Vec<
 
 /// Whether an imported (unmodelled) resource still describes the document and is written back.
 pub(crate) fn keep_imported_resource(doc: &Document, id: u16, data: &[u8]) -> bool {
-    // The pixel aspect ratio is the document's own (`pixel_aspect_resource`), never a kept copy.
-    if id == photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO {
+    // The pixel aspect ratio and the Color Sampler points are the document's own: only
+    // `pixel_aspect_resource` and `color_sampler_resources` write these records.
+    if matches!(
+        id,
+        photocraft_psd::resources::ids::PIXEL_ASPECT_RATIO
+            | photocraft_psd::resources::ids::COLOR_SAMPLERS
+            | photocraft_psd::resources::ids::COLOR_SAMPLERS_OLD
+    ) {
         return false;
     }
     // Measurement scale / count resources: only while they still describe the document.
