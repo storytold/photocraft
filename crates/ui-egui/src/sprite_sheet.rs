@@ -131,6 +131,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
             })
             .filter(|item| item.frame < frame_count)
             .collect::<Vec<_>>();
+        if selected_value.as_array().is_some_and(|stored| stored.len() != selected_frames.len()) {
+            fields.insert("selectedFrames".into(), Value::Array(selected_frames.iter().copied().map(TimelineFrame::json).collect()));
+        }
         ui.label("Layout preview (click frames to add or remove them from playback order)");
         let cell_size = egui::vec2(48.0, 48.0);
         let rows = frame_count.div_ceil(columns);
