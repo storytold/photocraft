@@ -1179,6 +1179,9 @@ pub struct Preferences {
     /// targets that differ from their defaults, saved as the user toggles them and restored at
     /// launch, as Photoshop keeps them between sessions (#3762). JSON owned by the shell.
     pub view_extras: Value,
+    /// Recently Used Colors (`"#rrggbb"`, newest first), shown by the shape Fill and Stroke
+    /// popovers and kept between sessions as in Photoshop. Owned by the shell.
+    pub recent_colors: Vec<String>,
     /// File › Scripts › Script Events Manager: event → script bindings.
     pub script_events: crate::automate_cmds::ScriptEvents,
     /// Layer Mask Display Options: the layer mask rubylith's colour and opacity.
