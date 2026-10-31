@@ -263,6 +263,12 @@ pub fn paint(
     }
     nav.clamp(rect.size(), source * scale);
     let image = egui::Rect::from_min_size(rect.center() - nav.center * source * scale, source * scale);
+    // The checkerboard is under the image only, as in Photoshop; the pane around it is the
+    // caller's grey (#2362). Only its visible part is drawn, however far the image is zoomed.
+    let shown = rect.intersect(image).intersect(ui.clip_rect());
+    if shown.is_positive() {
+        crate::widgets::checker(&ui.painter().with_clip_rect(shown), shown, 8.0);
+    }
     ui.painter().with_clip_rect(rect.intersect(ui.clip_rect())).image(
         tex.id(),
         image,
@@ -409,6 +415,36 @@ mod tests {
         h.run_steps(3);
         assert!(Arc::ptr_eq(&before, &cached(&h.ctx)), "picker drag must not re-encode");
         assert_eq!(h.state().1, [0, 255, 0, 255, 0, 0, 255, 255]);
+    }
+
+    /// #2362: as in Photoshop, the checkerboard is drawn under the image only, not across the
+    /// whole pane: a 40 × 20 image at 100 % in a 200 × 100 pane gets a checkerboard of its size.
+    #[test]
+    fn the_checkerboard_is_under_the_image_only() {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 200.0)).build_ui_state(
+            |ui, state: &mut (Map<String, Value>, egui::Rect)| {
+                let img = egui::ColorImage::new([40, 20], vec![egui::Color32::TRANSPARENT; 40 * 20]);
+                let tex = ui.ctx().load_texture("fixture", img, egui::TextureOptions::LINEAR);
+                let (r, response) = ui.allocate_exact_size(egui::vec2(200.0, 100.0), egui::Sense::drag());
+                state.1 = r;
+                paint(ui, r, &response, &tex, egui::vec2(40.0, 20.0), &mut state.0);
+            },
+            (serde_json::from_value::<Map<String, Value>>(json!({"__zoom": 1.0})).unwrap(), egui::Rect::NOTHING),
+        );
+        h.run_steps(2);
+        let pane = h.state().1;
+        let light: Vec<egui::Rect> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|c| match &c.shape {
+                egui::Shape::Rect(r) if r.fill == egui::Color32::from_gray(250) => Some(r.rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(light.len(), 1, "one checkerboard: {light:?}");
+        let image = egui::Rect::from_center_size(pane.center(), egui::vec2(40.0, 20.0));
+        assert!((light[0].min - image.min).length() < 0.5 && (light[0].max - image.max).length() < 0.5, "{:?} vs the image {image:?}", light[0]);
     }
 
     #[test]
