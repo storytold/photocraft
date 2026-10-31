@@ -4,6 +4,11 @@
 //! a session-tagged preview key (`preview_session`). A slider change re-runs the blur on the GPU;
 //! nothing is read back or flattened on the CPU.
 //!
+//! Zoomed out, the preview runs on a reduced proxy of the document (Phase 2): the CPU preview's
+//! factor `k`, its document and layer ids flipped (`adjust_preview::proxy_base`), the blur's
+//! lengths scaled by `k` as the CPU preview scales them, composited into the proxy's own texture
+//! and drawn scaled by `k` ([`gpu_proxy`]).
+//!
 //! Anything this path can't preview exactly stays on the CPU preview (`canvas::ensure_filter_preview`),
 //! unchanged: see [`ineligible`]. If the GPU fails to draw it (out of memory, a device fault), the
 //! session switches to the CPU preview for the rest of the dialog ([`failed`]): the layer is never
@@ -53,6 +58,23 @@ pub struct FilterGpuPreview {
     /// The document part the dialog's preview window shows (it joins the damage). Set while the
     /// dialog draws, with the app borrowed shared.
     window: std::cell::Cell<Option<Rect>>,
+    /// Zoomed out: the reduced proxy the preview runs on instead.
+    proxy: Option<FilterProxy>,
+}
+
+/// A zoomed-out session's proxy of the document: reduced by `k`, with its own ids.
+struct FilterProxy {
+    k: u32,
+    base: Arc<Document>,
+    target: LayerId,
+    selection: Option<Arc<photocraft_raster::Surface>>,
+    measured: Measured,
+    /// The settings hash shown and its operator (on `base`).
+    shown: Option<(u64, LayerOperator)>,
+    /// The settings hash last composited into the proxy's texture.
+    drawn: Option<u64>,
+    /// Where the proxy's previews change it (proxy pixels).
+    region: Rect,
 }
 
 /// The open filter dialog this path could preview: (dialog id, params, Preview on).
@@ -93,13 +115,14 @@ pub fn ineligible(app: &PhotocraftApp, idx: usize, params: &Value) -> Option<&'s
         return Some("the layer is locked");
     }
     // Zoomed out the preview runs on a reduced proxy (a later phase); at 100 % every pixel.
-    if crate::canvas::filter_preview_factor(app, doc, COMMAND, params) != 1 {
-        return Some("zoomed out");
+    if crate::canvas::filter_preview_factor(app, doc, COMMAND, params) > 1 && !photocraft_compose::proxy::proxy_faithful(doc) {
+        return Some("zoomed out, and a proxy can't show this document");
     }
     if !gpu_view(app, idx) {
         return Some("the view is mirrored or pixel-aspect corrected");
     }
-    if !gpu.supports(doc) || !gpu.operators_supported() {
+    // A canvas past the texture budget draws on the CPU, which can't show operators.
+    if !gpu.fits_canvas(doc) || !gpu.supports(doc) || !gpu.operators_supported() {
         return Some("the GPU compositor can't draw it");
     }
     None
@@ -183,6 +206,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         p.committing = false;
         p.shown = None;
         clear_operators(app, doc_id);
+        hide_proxy(app);
         return None;
     }
     // Another document's OK: its session stays as it is while the job applies (this document
@@ -198,6 +222,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             p.shown = None;
         }
         clear_operators(app, doc);
+        hide_proxy(app);
     }
     if app.session.active_index() != Some(idx) {
         return None;
@@ -207,7 +232,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         hide(app);
         return None;
     };
-    let target = st.active_layer?;
+    let target = app.session.documents().get(idx)?.active_layer?;
     let session = hash(&[&doc_id.0.to_le_bytes(), &revision.to_le_bytes(), &target.0.to_le_bytes(), &dialog_id.to_le_bytes()]);
     if app.filter_gpu_preview.as_ref().is_none_or(|p| p.s.session != session || p.s.doc != doc_id) {
         if let Some(reason) = ineligible(app, idx, &params) {
@@ -234,6 +259,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             held: None,
             committing: false,
             window: std::cell::Cell::new(None),
+            proxy: None,
         });
     }
     // The GPU canvas can stop drawing this document mid-session (a smaller canvas budget, a
@@ -263,8 +289,8 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         }
         return app.filter_gpu_preview.as_ref();
     }
-    // Still zoomed in (the view's zoom picks the factor) on a GPU view: else the CPU preview.
-    if crate::canvas::filter_preview_factor(app, &app.session.documents().get(idx)?.doc, COMMAND, &params) != 1 || !gpu_view(app, idx) {
+    // On a GPU view only: else the CPU preview.
+    if !gpu_view(app, idx) {
         hide(app);
         return None;
     }
@@ -273,6 +299,19 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         hide(app);
         return app.filter_gpu_preview.as_ref();
     }
+    // Zoomed out (the view's zoom picks the factor): the reduced proxy previews.
+    let k = crate::canvas::filter_preview_factor(app, &app.session.documents().get(idx)?.doc, COMMAND, &params);
+    if k > 1 {
+        hide_main(app);
+        // Checked here too: the session may have started at 100 %, where it didn't matter.
+        if !photocraft_compose::proxy::proxy_faithful(&app.session.documents().get(idx)?.doc) {
+            hide_proxy(app);
+            return None;
+        }
+        return update_proxy(app, idx, k, &params, h);
+    }
+    hide_proxy(app);
+    let p = app.filter_gpu_preview.as_ref()?;
     if p.shown.as_ref().is_none_or(|(sh, _)| *sh != h) {
         let st = app.session.documents().get(idx)?;
         let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured) else {
@@ -292,25 +331,126 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
     app.filter_gpu_preview.as_ref()
 }
 
-/// Register the session's shown operator again: after Retry GPU, the new canvas has none (they
-/// lived in the old one's resources), and with unchanged settings `update` wouldn't set them.
+/// Register the session's shown operators again: after Retry GPU, the new canvas has none (they
+/// lived in the old one's resources), and with unchanged settings `update` wouldn't set them. The
+/// zoomed-out proxy's texture is drawn again too.
 pub(crate) fn rebind(app: &mut PhotocraftApp) {
     // A failed session's operators are gone and stay so: one that failed only because the canvas
     // couldn't draw it builds them again in `update` once the new canvas can.
-    let Some(p) = app.filter_gpu_preview.as_ref().filter(|p| !p.failed) else { return };
-    if let (Some(gpu), Some((_, op))) = (app.gpu.as_ref(), p.shown.as_ref()) {
+    let Some(gpu) = app.gpu.clone() else { return };
+    let Some(p) = app.filter_gpu_preview.as_mut().filter(|p| !p.failed) else { return };
+    if let Some((_, op)) = p.shown.as_ref() {
         gpu.set_operators(p.s.doc, vec![op.clone()]);
+    }
+    if let Some(g) = p.proxy.as_mut() {
+        if let Some((_, op)) = g.shown.as_ref() {
+            gpu.set_operators(g.base.id, vec![op.clone()]);
+        }
+        g.drawn = None;
     }
 }
 
-/// Show nothing for the session (its operators cleared on its own document), keeping it for the
-/// canvas's switch back.
+/// Show nothing for the session (its operators cleared), keeping it for the canvas's switch back.
 fn hide(app: &mut PhotocraftApp) {
+    hide_main(app);
+    hide_proxy(app);
+}
+
+/// [`hide`] the full-size preview only (its operators cleared on the session's own document).
+fn hide_main(app: &mut PhotocraftApp) {
     let Some(p) = app.filter_gpu_preview.as_mut() else { return };
     if p.shown.take().is_some() {
         let doc = p.s.doc;
         clear_operators(app, doc);
     }
+}
+
+/// [`hide`] the zoomed-out proxy's preview only (its operators cleared on the proxy).
+fn hide_proxy(app: &mut PhotocraftApp) {
+    let Some(g) = app.filter_gpu_preview.as_mut().and_then(|p| p.proxy.as_mut()) else { return };
+    if g.shown.take().is_some() {
+        let doc = g.base.id;
+        clear_operators(app, doc);
+    }
+}
+
+/// The zoomed-out preview at factor `k` for settings `params` (hash `h`): the session's proxy,
+/// made once per factor, with the blur's lengths scaled by `k` on its copy of the target, exactly
+/// as the CPU preview runs it on its proxy.
+fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Value, h: u64) -> Option<&'a FilterGpuPreview> {
+    let p = app.filter_gpu_preview.as_ref()?;
+    let (session_target, stale) = (p.target, p.proxy.as_ref().is_none_or(|g| g.k != k));
+    if stale {
+        hide_proxy(app);
+        let st = app.session.documents().get(idx)?;
+        let gpu = app.gpu.as_ref()?;
+        let base = crate::adjust_preview::proxy_base(&st.doc, k);
+        let target = crate::adjust_preview::proxy_layer(session_target);
+        if !gpu.supports(&base) {
+            return None;
+        }
+        let measured = Measured::of(&base, target)?;
+        let selection = base.selection.clone().map(Arc::new);
+        let region = Rect::EMPTY;
+        let g = FilterProxy { k, base: Arc::new(base), target, selection, measured, shown: None, drawn: None, region };
+        app.filter_gpu_preview.as_mut()?.proxy = Some(g);
+    }
+    let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
+    if g.shown.as_ref().is_none_or(|(sh, _)| *sh != h) {
+        let mut scaled = params.clone();
+        crate::filter_dialog::scale_preview_params(COMMAND, &mut scaled, k);
+        let Some((blur, region)) = blur_for(&g.base, g.target, &scaled, g.selection.clone(), g.measured) else {
+            // A reach past the GPU's limit: the CPU preview for these settings.
+            hide_proxy(app);
+            return None;
+        };
+        let op = LayerOperator { layer: g.target, program: Arc::new(blur) };
+        if let Some(gpu) = app.gpu.as_ref() {
+            gpu.set_operators(g.base.id, vec![op.clone()]);
+        }
+        let g = app.filter_gpu_preview.as_mut()?.proxy.as_mut()?;
+        g.region = g.region.union(&region);
+        g.shown = Some((h, op));
+    }
+    app.filter_gpu_preview.as_ref()
+}
+
+/// The zoomed-out preview of document `idx` for the canvas: its proxy composited into the proxy's
+/// own texture (the changed area on a settings change), as (factor, texture key, size), drawn
+/// scaled by the factor. `None` at 100 % (see [`display_doc`]) or when the GPU doesn't preview.
+pub fn gpu_proxy(app: &mut PhotocraftApp, idx: usize) -> Option<(u32, u64, [u32; 2])> {
+    let p = update(app, idx)?;
+    if p.failed {
+        return None;
+    }
+    let g = p.proxy.as_ref()?;
+    let (h, _) = g.shown.as_ref()?;
+    let (k, base, h, damage, stale) = (g.k, g.base.clone(), *h, g.drawn.map(|_| g.region), g.drawn != Some(*h));
+    let (key, size) = (base.id.0, [base.size.width, base.size.height]);
+    let gpu = app.gpu.clone()?;
+    if stale || !gpu.has(key, size) {
+        let doc = app.session.documents().get(idx)?.doc.clone();
+        let (display, _) = crate::canvas::canvas_display(app, &doc, None);
+        let r = gpu.refresh(key, &base, damage.filter(|_| gpu.has(key, size)), display.as_deref());
+        if r.kind == crate::gpu_canvas::REFRESH_OPERATOR_FAILED {
+            failed(app, doc.id, None);
+            return None;
+        }
+        app.perf.record(if r.kind.starts_with("gpu") { "gpu-filter-proxy" } else { "filter-proxy" }, r.px, r.composite_ms, r.upload_ms);
+        if let Some(t) = r.gpu {
+            app.perf.record_gpu(t);
+        }
+        if let Some(g) = app.filter_gpu_preview.as_mut().and_then(|p| p.proxy.as_mut()) {
+            g.drawn = Some(h);
+        }
+    }
+    Some((k, key, size))
+}
+
+/// The proxy's texture key, to keep it alive while the session previews zoomed out.
+pub fn gpu_keys(app: &PhotocraftApp) -> Option<u64> {
+    let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
+    g.shown.as_ref().map(|_| g.base.id.0)
 }
 
 fn clear_operators(app: &PhotocraftApp, doc: DocId) {
@@ -335,7 +475,7 @@ pub fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>
 
 /// Whether the open filter dialog previews on the GPU (so the CPU preview must stand aside).
 pub fn on_gpu(app: &mut PhotocraftApp, idx: usize) -> bool {
-    update(app, idx).is_some_and(|p| !p.failed && (p.shown.is_some() || p.committing))
+    update(app, idx).is_some_and(|p| !p.failed && (p.shown.is_some() || p.committing || p.proxy.as_ref().is_some_and(|g| g.shown.is_some())))
 }
 
 /// The GPU couldn't draw document `doc`'s preview (`gpu_canvas::REFRESH_OPERATOR_FAILED`): preview
@@ -351,18 +491,18 @@ pub fn failed(app: &mut PhotocraftApp, doc: DocId, texture: Option<u64>) {
         p.committing = false;
     }
     clear_operators(app, doc);
+    hide_proxy(app);
 }
 
 /// OK was pressed: `running` when the filter is applying as a background job (the preview stays
 /// until it lands), else the session ends.
 pub fn confirmed(app: &mut PhotocraftApp, running: bool) {
     let Some(p) = app.filter_gpu_preview.as_mut() else { return };
-    if running && p.shown.is_some() && !p.failed {
+    let showing = p.shown.is_some() || p.proxy.as_ref().is_some_and(|g| g.shown.is_some());
+    if running && showing && !p.failed {
         p.committing = true;
     } else {
-        let doc = p.s.doc;
-        p.shown = None;
-        clear_operators(app, doc);
+        hide(app);
     }
 }
 
@@ -393,12 +533,18 @@ pub fn uncovered(app: &mut PhotocraftApp, doc: DocId, key: u64, visible: Rect) -
 /// The canvas's GPU view of the document the dialog `dialog` previews on the GPU, for its preview
 /// window to draw from the same texture, after noting `rect` (the document part the window shows)
 /// so the canvas composites the preview there too. `None` while the GPU path isn't showing.
-pub fn window_view(app: &PhotocraftApp, dialog: u64, rect: Rect) -> Option<crate::gpu_canvas::ViewParams> {
-    let p = app.filter_gpu_preview.as_ref().filter(|p| p.dialog == dialog && p.shown.is_some() && !p.failed)?;
+pub fn window_view(app: &PhotocraftApp, dialog: u64, rect: Rect) -> Option<(crate::gpu_canvas::ViewParams, u32)> {
+    let p = app.filter_gpu_preview.as_ref().filter(|p| p.dialog == dialog && !p.failed)?;
+    // Zoomed out: the proxy's texture, which holds its whole preview, at its factor.
+    if let Some(g) = p.proxy.as_ref().filter(|g| g.shown.is_some() && g.drawn == g.shown.as_ref().map(|(h, _)| *h)) {
+        let params = *app.canvas_gpu.get(&p.s.doc)?;
+        return (params.doc == g.base.id.0).then_some((params, g.k));
+    }
+    p.shown.as_ref()?;
     p.window.set(Some(rect));
     let params = *app.canvas_gpu.get(&p.s.doc)?;
     let st = app.session.documents().iter().find(|st| st.doc.id == p.s.doc)?;
-    ([st.doc.size.width, st.doc.size.height] == params.doc_size).then_some(params)
+    ([st.doc.size.width, st.doc.size.height] == params.doc_size && params.doc == p.s.doc.0).then_some((params, 1))
 }
 
 /// The preview key the canvas texture of document `doc` shows while it previews (the window draws
