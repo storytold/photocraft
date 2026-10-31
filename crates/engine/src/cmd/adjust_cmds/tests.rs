@@ -754,6 +754,95 @@ fn replace_color_localized_clusters_only_change_the_colour_near_the_sample() {
     assert!(err.to_string().contains("bad point"), "{err}");
 }
 
+/// #6280: Add to Sample and Subtract from Sample, as in Photoshop: several picked colours are
+/// all replaced, and a subtracted one is left alone, matching as Select › Color Range does for
+/// the same samples.
+#[test]
+fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
+    // Red on the left (x < 16), blue in the middle, green on the right (x ≥ 32).
+    let (red, blue, green) = ([0.85, 0.1, 0.1, 1.0], [0.1, 0.15, 0.85, 1.0], [0.1, 0.8, 0.15, 1.0]);
+    let mut s = session(8, "rgb");
+    paint(&mut s, |x, _| {
+        if x < 16 {
+            red
+        } else if x < 32 {
+            blue
+        } else {
+            green
+        }
+    });
+    let before = (rgba(&s, 4, 16), rgba(&s, 24, 16), rgba(&s, 40, 16));
+    let shift = |extra: Value| {
+        let mut p = json!({"fuzziness": 40, "hue": 120, "saturation": 20});
+        p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
+        p
+    };
+    // Red and blue sampled (one added): both change, green doesn't.
+    s.execute("image.adjustments.replaceColor", shift(json!({"color": "#d91a1a", "points": [[4, 16], [24, 16]]}))).unwrap();
+    assert!(changed(rgba(&s, 4, 16), before.0) > 0.1, "red is replaced");
+    assert!(changed(rgba(&s, 24, 16), before.1) > 0.1, "the added blue is replaced");
+    assert_eq!(rgba(&s, 40, 16), before.2, "green wasn't sampled");
+    // The same coverage as Select › Color Range for the same clicks.
+    s.execute("edit.undo", json!({})).unwrap();
+    s.execute("select.colorRange", json!({"points": [[4, 16], [24, 16]], "fuzziness": 40})).unwrap();
+    let sel = doc(&s).selection.clone().unwrap();
+    for x in [4, 24, 40] {
+        let want = sel.read_region(Rect::from_xywh(x, 16, 1, 1))[0];
+        assert!((want > 0.5) == (x < 32), "Color Range at {x}: {want}");
+    }
+    s.execute("select.deselect", json!({})).unwrap();
+    // Red sampled, blue then subtracted: only red changes.
+    s.execute("image.adjustments.replaceColor", shift(json!({"points": [[4, 16]], "subtractPoints": [[24, 16]], "order": ["+", "-"]}))).unwrap();
+    assert!(changed(rgba(&s, 4, 16), before.0) > 0.1);
+    assert_eq!(rgba(&s, 24, 16), before.1, "the subtracted blue stays");
+    assert_eq!(rgba(&s, 40, 16), before.2);
+    // Bad samples are refused, naming this command.
+    let err = s.execute("image.adjustments.replaceColor", shift(json!({"points": [[4, 16]], "subtractPoints": [[999, 16]]}))).unwrap_err();
+    assert!(err.to_string().contains("replaceColor") && err.to_string().contains("outside"), "{err}");
+}
+
+/// A malformed `subtractPoints` is refused even with one sample, where the single-colour path
+/// would otherwise ignore it (CodeRabbit review on #10443).
+/// #10443 review: with only Subtract from Sample clicks, the dialog's From colour is what the
+/// subtraction starts from, not the foreground (black here), so the red is still replaced.
+#[test]
+fn replace_color_subtract_only_starts_from_the_from_colour() {
+    let (red, blue) = ([0.85, 0.1, 0.1, 1.0], [0.1, 0.15, 0.85, 1.0]);
+    let mut s = session(8, "rgb");
+    paint(&mut s, |x, _| if x < 16 { red } else { blue });
+    let (r0, b0) = (rgba(&s, 4, 16), rgba(&s, 24, 16));
+    let p = json!({"color": "#d91a1a", "hue": 120, "fuzziness": 40, "points": [], "subtractPoints": [[24, 16]]});
+    s.execute("image.adjustments.replaceColor", p).unwrap();
+    assert_ne!(rgba(&s, 4, 16), r0, "the From colour (red) is replaced");
+    assert_eq!(rgba(&s, 24, 16), b0, "the subtracted blue is left alone");
+}
+
+/// #10443 review: a `null` From colour means the foreground, for the subtract-only matcher too.
+#[test]
+fn replace_color_subtract_only_reads_a_null_colour_as_the_foreground() {
+    let (red, blue) = ([0.85, 0.1, 0.1, 1.0], [0.1, 0.15, 0.85, 1.0]);
+    let mut s = session(8, "rgb");
+    paint(&mut s, |x, _| if x < 16 { red } else { blue });
+    s.tools.foreground = red;
+    let r0 = rgba(&s, 4, 16);
+    let p = json!({"color": null, "hue": 120, "fuzziness": 40, "points": [], "subtractPoints": [[24, 16]]});
+    s.execute("image.adjustments.replaceColor", p).unwrap();
+    assert_ne!(rgba(&s, 4, 16), r0, "the foreground (red) is replaced");
+}
+
+#[test]
+fn replace_color_refuses_malformed_subtract_points() {
+    let mut s = session(8, "rgb");
+    paint(&mut s, |_, _| [0.85, 0.1, 0.1, 1.0]);
+    for points in [json!([]), json!([[4, 16]])] {
+        let p = json!({"color": "#d91a1a", "hue": 120, "points": points, "subtractPoints": "invalid"});
+        let err = s.execute("image.adjustments.replaceColor", p).unwrap_err();
+        assert!(err.to_string().contains("replaceColor") && err.to_string().contains("subtractPoints"), "{err}");
+    }
+    // An empty list is no subtraction: the single-colour path.
+    s.execute("image.adjustments.replaceColor", json!({"color": "#d91a1a", "hue": 120, "points": [[4, 16]], "subtractPoints": []})).unwrap();
+}
+
 /// #6095: ⌘I in Quick Mask inverts the whole mask, not only where it was white, so leaving Quick
 /// Mask selects everything but the original rectangle, whichever way the colour reads. With
 /// Color Indicates Selected Areas and nothing selected, it selects everything. A black alpha

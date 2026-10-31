@@ -409,6 +409,33 @@ fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
     // Localized Color Clusters, as in Select › Color Range: the colour only matches within Range
     // (a percentage of the canvas's longer side) of where it was picked.
     let points = sample_points(p).map_err(|m| bad(CMD, m))?;
+    // Several samples (Add to Sample / Subtract from Sample, #6280): the colours match as
+    // Select › Color Range's do for the same clicks, through its own matcher.
+    // A malformed `subtractPoints` is refused here, as malformed `points` are, rather than read as
+    // no subtraction by the single-colour path.
+    let subtracted = match p.get("subtractPoints") {
+        None => false,
+        Some(v) => !v.as_array().ok_or_else(|| bad(CMD, "`subtractPoints` must be [[x, y], …]"))?.is_empty(),
+    };
+    if subtracted || points.len() > 1 {
+        let mut q = json!({"points": p.get("points").cloned().unwrap_or(Value::Array(Vec::new())), "fuzziness": fuzz});
+        // With no Add samples, the subtraction starts from the dialog's From colour, not the
+        // foreground; with them, the samples alone span the range, as in Color Range.
+        // Forwarded as resolved (a `null` or missing colour is the foreground), as RGB 0..1.
+        if points.is_empty() {
+            q["color"] = json!([c[0], c[1], c[2]]);
+        }
+        for key in ["subtractPoints", "order", "localized", "range"] {
+            if let Some(v) = p.get(key) {
+                q[key] = v.clone();
+            }
+        }
+        let samples = crate::selection_cmds::ColorRangeSamples::new(s, &q).map_err(|e| bad(CMD, e.to_string()))?;
+        return rgba_edit(s, "Replace Color", p, |px, r| {
+            let mask = samples.coverage(px, r.width() as usize, 1.0, [r.x0 as f32, r.y0 as f32]);
+            tone::replace_color_masked(px, &mask, h, sat, l);
+        });
+    }
     let localized = if p.get("localized").and_then(Value::as_bool).unwrap_or(false) {
         if points.is_empty() {
             return Err(bad(CMD, "localized clusters need eyedropper `points` (where the colour was picked)"));
@@ -562,7 +589,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.adjustments.replaceColor",
             "Replace Color…",
             ["Image", "Adjustments"],
-            r##"{"localized":bool=false,"color":color,"fuzziness":0..200=40,"range":0..100=100,"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"points":[[x,y],…]?} (color: "#rrggbb", default the foreground colour; Localized Color Clusters: "points" where the colour was picked, "range" % of the longer side)"##,
+            r##"{"localized":bool=false,"color":color,"fuzziness":0..200=40,"range":0..100=100,"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"points":[[x,y],…]?,"subtractPoints":[[x,y],…]?,"order":["+"|"-",…]?} (color: "#rrggbb", default the foreground colour; Localized Color Clusters: "points" where the colour was picked, "range" % of the longer side; several "points" (Add to Sample) or any "subtractPoints" (Subtract from Sample) match as select.colorRange does for the same samples, "order" the click order)"##,
             has_pixels,
             replace_color
         ),
