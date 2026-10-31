@@ -910,3 +910,21 @@ bench = "interactive_bench"
 row = "Gaussian Blur dialog preview r 250 (GPU resident, zoomed out)"
 budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 4.6 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
+
+[[scenario]]
+id = "P93"
+title = "Unsharp Mask dialog slider step r 4, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Unsharp Mask dialog preview r 4 (GPU resident)"
+budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 4.0 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
+
+[[scenario]]
+id = "P94"
+title = "Unsharp Mask dialog slider step r 40, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Unsharp Mask dialog preview r 40 (GPU resident)"
+budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 9.3 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
