@@ -21,25 +21,23 @@ fn cache() -> &'static Mutex<(HashMap<u64, Entry>, u64)> {
     C.get_or_init(|| Mutex::new((HashMap::new(), 0)))
 }
 
-const CAPACITY: usize = 32;
-/// Most pixel bytes the split parts may hold (#4530): each entry is two canvas-sized surfaces,
-/// so 32 of them at 24 MP could hold several GB outside every memory budget.
+/// Pixel-byte budget for split parts and their pinned source surfaces (#4530).
 #[cfg(not(test))]
 const BUDGET: usize = 256 << 20;
 /// Small under test, so a few 512² shapes exercise the eviction.
 #[cfg(test)]
 const BUDGET: usize = 8 << 20;
 
-/// Pixel bytes of one entry's (fill, stroke) parts (the pinned shape pixels are the document's).
-fn entry_bytes(parts: &(Surface, Surface)) -> usize {
-    [&parts.0, &parts.1].iter().map(|s| s.tiles().map(|(_, t)| t.bytes().len()).sum::<usize>()).sum()
+/// Pixel bytes retained by the parts and their source; overflow makes the entry oversized.
+fn entry_bytes(parts: &(Surface, Surface), source: Option<&Surface>) -> usize {
+    [&parts.0, &parts.1].into_iter().chain(source).flat_map(|s| s.tiles().map(|(_, t)| t.bytes().len())).fold(0, usize::saturating_add)
 }
 
-/// Drop every cached split (Edit › Purge › All), returning the parts' pixel bytes. Callers may
+/// Drop every cached split (Edit › Purge › All), returning its retained pixel bytes. Callers may
 /// still hold returned surfaces, so this is not a measure of freed process memory.
 pub fn purge_cache() -> usize {
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-    let bytes = c.0.values().map(|e| entry_bytes(&e.0)).sum();
+    let bytes = c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum();
     c.0.clear();
     bytes
 }
@@ -78,20 +76,20 @@ pub fn split(sh: &ShapeLayer, canvas: Rect, depth: SampleType) -> Option<(Surfac
     if let Some(cache) = &sh.cache {
         fit_stroke(&parts.0, &mut parts.1, cache, canvas);
     }
+    let new_bytes = entry_bytes(&parts, sh.cache.as_ref());
+    // Don't cache entries that hold no pixels or exceed the byte budget.
+    if new_bytes == 0 || new_bytes > BUDGET {
+        return Some(parts);
+    }
     let mut c = cache().lock().unwrap_or_else(|e| e.into_inner());
-    // Least recently used first, until the new entry fits both the count and the byte budget.
-    let new_bytes = entry_bytes(&parts);
+    // Least recently used first, until the new entry fits the byte budget.
     loop {
-        let held: usize = c.0.values().map(|e| entry_bytes(&e.0)).sum();
-        if c.0.len() < CAPACITY && held.saturating_add(new_bytes) <= BUDGET {
+        let held: usize = c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum();
+        if held.saturating_add(new_bytes) <= BUDGET {
             break;
         }
         let Some(old) = c.0.iter().min_by_key(|e| (e.1).1).map(|e| *e.0) else { break };
         c.0.remove(&old);
-    }
-    if new_bytes > BUDGET {
-        // Larger than the whole budget on its own: use it, don't keep it.
-        return Some(parts);
     }
     let tick = c.1;
     c.0.insert(key, (parts.clone(), tick, sh.cache.clone()));
@@ -215,7 +213,7 @@ mod tests {
     }
 
     fn held() -> usize {
-        cache().lock().unwrap_or_else(|e| e.into_inner()).0.values().map(|e| entry_bytes(&e.0)).sum()
+        cache().lock().unwrap_or_else(|e| e.into_inner()).0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum()
     }
 
     /// The split cache stays within its byte budget, evicting the least recently used, and
@@ -225,7 +223,7 @@ mod tests {
         let canvas = Rect::new(0, 0, 1024, 512);
         for i in 0..6 {
             let parts = split(&shape(f64::from(i) * 10.0), canvas, SampleType::U8).expect("stroked");
-            assert!(entry_bytes(&parts) > 0);
+            assert!(entry_bytes(&parts, None) > 0);
             assert!(held() <= BUDGET, "shape {i}: {} bytes held", held());
         }
         // Other tests share the cache, so only what this test can rely on: a purge frees bytes.
