@@ -80,6 +80,7 @@ pub fn choices(path: &str) -> Option<&'static [&'static str]> {
         "interface.canvasBorder" => CanvasBorder::NAMES,
         "interface.uiScale" => UiScale::NAMES,
         "interface.uiFontSize" => UiFontSize::NAMES,
+        "workspace.unsavedChangesPrompt" => UnsavedPrompt::NAMES,
         "historyLog.destination" => LogDestination::NAMES,
         "historyLog.detail" => LogDetail::NAMES,
         "fileHandling.imagePreviews" | "fileHandling.maximizePsdCompatibility" => Ask::NAMES,

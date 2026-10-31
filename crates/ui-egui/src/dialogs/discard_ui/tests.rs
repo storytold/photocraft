@@ -367,6 +367,62 @@ fn one_dialog_shows_every_key_in_the_same_style() {
     });
 }
 
+/// The Workspace preference asks Photoshop's classic Don't Save / Cancel / Save on Windows and
+/// Linux too, with the Mac wording and shortcuts, but the platform's button order: Save stays
+/// the default (focused, taken by Enter) and the letters show even though macOS hides them.
+#[test]
+fn the_workspace_preference_asks_dont_save_cancel_save_on_windows_too() {
+    let mut app = app_with_docs(3);
+    for (i, path) in ["/pics/a.psd", "/pics/b.psd", "/pics/c.psd"].into_iter().enumerate() {
+        make_dirty(&mut app, i);
+        app.session.active_mut().unwrap().path = Some(path.into());
+    }
+    let written = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+    let w = written.clone();
+    app.services.export = Some(Box::new(|_: &photocraft_doc::Document, _: &str, _: &crate::ExportSettings| Ok((b"out".to_vec(), Vec::new()))));
+    app.services.write = Some(Box::new(move |p: &str, _: &[u8]| {
+        w.borrow_mut().push(p.to_string());
+        Ok(())
+    }));
+    app.session.edit_prefs(|prefs| prefs.workspace.unsaved_changes_prompt = UnsavedPrompt::DontSave);
+    let mut h = prompt_for(app, "file.closeAll", egui::os::OperatingSystem::Windows);
+    let labels = ["(S)ave", "(D)on't Save", "(C)ancel"];
+    // The wording and shortcuts are the Mac ones, but the order stays the platform's:
+    // `dialog_buttons` puts the default first on Windows either way.
+    assert_eq!(drawn_order(&h, labels), labels);
+    assert_eq!(focused(&h, &labels), Some("(S)ave"), "Save stays the default answer");
+    h.key_press(Key::D);
+    h.run_steps(2);
+    assert_eq!(docs_left(&h), Some(2), "D takes Don't Save");
+    h.key_press(Key::Enter);
+    h.run_steps(2);
+    assert_eq!(docs_left(&h), Some(1), "Enter takes Save, which writes and closes");
+    assert_eq!(*written.borrow(), ["/pics/b.psd"]);
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().discard.is_none());
+    assert_eq!(h.state().session.documents().len(), 1, "Esc keeps the unanswered document");
+    assert!(h.state().session.documents()[0].is_dirty());
+}
+
+/// The preference's Save answer with no path to write back to opens the save dialog; backing
+/// out of it keeps the prompt (with Save focused again), and Esc then closes nothing.
+#[test]
+fn the_preference_save_opens_the_save_dialog_and_escaping_cancels_cleanly() {
+    let mut h = prompt_on(egui::os::OperatingSystem::Windows);
+    h.state_mut().session.edit_prefs(|prefs| prefs.workspace.unsaved_changes_prompt = UnsavedPrompt::DontSave);
+    let (show, asked) = crate::file_dialog::fake(vec![None]);
+    h.state_mut().services.file_dialog = Some(show);
+    h.key_press(Key::Enter);
+    h.run_steps(3);
+    assert_eq!(asked.borrow().len(), 1, "Enter took Save, which asks for a path");
+    assert_eq!(docs_left(&h), Some(2), "cancelling the save dialog keeps the prompt");
+    h.key_press(Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().discard.is_none());
+    assert_eq!(h.state().session.documents().len(), 2, "Esc closed nothing");
+}
+
 #[test]
 fn macos_asks_dont_save_cancel_save_with_the_default_last() {
     let mut h = prompt_on(egui::os::OperatingSystem::Mac);

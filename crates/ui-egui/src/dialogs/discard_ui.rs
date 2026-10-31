@@ -7,6 +7,7 @@
 
 use egui::Key;
 use photocraft_doc::DocId;
+use photocraft_engine::prefs::UnsavedPrompt;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -292,22 +293,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     // The answers in the platform's words; `dialog_buttons` puts them in its order. Windows (and
-    // Linux) ask Yes / No / Cancel with Y, N and Esc, as Photoshop does there; macOS asks
-    // Don't Save / Cancel / Save. Esc always cancels (the modal closes on it).
-    // Yes/No already show Y/N. Cancel gets C on every platform (#4582). macOS still hides the
-    // letters and keeps the shortcut.
-    let cancel = (ButtonRole::Cancel, "Cancel", Some(Key::C), 84.0, Answer::Cancel);
-    let buttons = if reverts {
-        vec![(ButtonRole::Default, "Revert", Some(Key::R), 84.0, Answer::Discard), cancel]
-    } else if mac {
-        vec![
-            (ButtonRole::Default, "Save", Some(Key::S), 84.0, Answer::Save),
-            (ButtonRole::Alternate, "Don't Save", Some(Key::D), 100.0, Answer::Discard),
-            cancel,
-        ]
-    } else {
-        vec![(ButtonRole::Default, "Yes", Some(Key::Y), 84.0, Answer::Save), (ButtonRole::Alternate, "No", Some(Key::N), 84.0, Answer::Discard), cancel]
-    };
+    // Linux) ask Yes / No / Cancel with Y, N and Esc, as Photoshop does there, unless the user
+    // chose Photoshop's classic Don't Save / Cancel / Save (Workspace preferences); macOS always
+    // asks the latter. Esc always cancels (the modal closes on it).
+    let style = if mac || app.session.prefs().workspace.unsaved_changes_prompt == UnsavedPrompt::DontSave { Style::DontSave } else { Style::YesNo };
+    let buttons = style.buttons(reverts);
     let mut answer = ctx.input_mut(|i| buttons.iter().find(|b| b.2.is_some_and(|k| i.consume_key(egui::Modifiers::NONE, k))).map(|b| b.4));
     let labels = button_labels(mac, &buttons.iter().map(|b| (b.1, b.2)).collect::<Vec<_>>());
     let row: Vec<DialogButton> =
@@ -403,6 +393,35 @@ enum Answer {
     Save,
     Discard,
     Cancel,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Style {
+    /// Yes / No / Cancel with Y, N and C.
+    YesNo,
+    /// Photoshop's classic Don't Save / Cancel / Save with D, C and S.
+    DontSave,
+}
+
+impl Style {
+    fn buttons(self, reverts: bool) -> Vec<(ButtonRole, &'static str, Option<Key>, f32, Answer)> {
+        // Yes/No already show Y/N. Cancel gets C on every platform (#4582). macOS still hides the
+        // letters and keeps the shortcut.
+        let cancel = (ButtonRole::Cancel, "Cancel", Some(Key::C), 84.0, Answer::Cancel);
+        if reverts {
+            return vec![(ButtonRole::Default, "Revert", Some(Key::R), 84.0, Answer::Discard), cancel];
+        }
+        match self {
+            Self::YesNo => {
+                vec![(ButtonRole::Default, "Yes", Some(Key::Y), 84.0, Answer::Save), (ButtonRole::Alternate, "No", Some(Key::N), 84.0, Answer::Discard), cancel]
+            }
+            Self::DontSave => vec![
+                (ButtonRole::Default, "Save", Some(Key::S), 84.0, Answer::Save),
+                (ButtonRole::Alternate, "Don't Save", Some(Key::D), 100.0, Answer::Discard),
+                cancel,
+            ],
+        }
+    }
 }
 
 /// macOS keeps the plain button wording even though the keyboard shortcuts still work.

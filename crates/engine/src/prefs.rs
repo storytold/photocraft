@@ -109,6 +109,7 @@ choice!(FontPreview { Off = "off", Small = "small", Medium = "medium", Large = "
 choice!(RawColorSpace { Srgb = "srgb", AdobeRgb = "adobeRgb", ProPhoto = "proPhoto", DisplayP3 = "displayP3" } default AdobeRgb);
 choice!(RawDepth { Eight = "8", Sixteen = "16" } default Sixteen);
 choice!(RawSharpen { None = "none", Screen = "screen", Glossy = "glossy", Matte = "matte" } default None);
+choice!(UnsavedPrompt { Default = "default", DontSave = "dontSave" } default Default);
 choice!(
     /// How a raw file's colour filter array is filled in when it is developed: AHD
     /// (Hirakawa–Parks) keeps edges cleanest, Malvar–He–Cutler is sharp and fast, bilinear is the
@@ -349,6 +350,7 @@ pub struct Workspace {
     pub large_tabs: bool,
     pub enable_narrow_options_bar: bool,
     pub remember_workspace_changes: bool,
+    pub unsaved_changes_prompt: UnsavedPrompt,
 }
 
 impl Default for Workspace {
@@ -361,6 +363,7 @@ impl Default for Workspace {
             large_tabs: false,
             enable_narrow_options_bar: false,
             remember_workspace_changes: true,
+            unsaved_changes_prompt: UnsavedPrompt::Default,
         }
     }
 }

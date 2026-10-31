@@ -1672,6 +1672,8 @@ cameraRaw	Shadows	Vùng tối
 	PhotoCraft — an open-source, native image editor written in Rust.	PhotoCraft — trình chỉnh sửa ảnh gốc mã nguồn mở viết bằng Rust.
 	Version {version}	Phiên bản {version}
 	Unsaved changes	Thay đổi chưa lưu
+	Unsaved changes prompt	Hộp thoại thay đổi chưa lưu
+	Don't Save / Cancel / Save	Không lưu / Hủy / Lưu
 	Answer the unsaved-changes prompt first	Hãy trả lời hộp thoại thay đổi chưa lưu trước
 	Do you want to save the changes you made to “{name}” before closing?	Bạn có muốn lưu các thay đổi trên “{name}” trước khi đóng không?
 	Do you want to save the changes you made to “{name}” before quitting?	Bạn có muốn lưu các thay đổi trên “{name}” trước khi thoát không?
