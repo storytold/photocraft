@@ -191,13 +191,17 @@ impl PhotocraftApp {
             FileDialogAnswer::SaveTo(path) => {
                 let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
-                if let Some(doc) = doc
-                    && let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty())
-                {
-                    app.save_dirs.insert(doc, dir.to_path_buf());
+                let dir = doc.zip(Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty()).map(Path::to_path_buf));
+                // An export's folder only once it has exported: a failed one doesn't move where
+                // the next export starts.
+                if !export && let Some((doc, dir)) = dir.clone() {
+                    app.save_dirs.insert(doc, dir);
                 }
                 let exported = then(app, path.clone())?;
                 if export {
+                    if let Some((doc, dir)) = dir {
+                        app.save_dirs.insert(doc, dir);
+                    }
                     app.remember_export_folder(&path);
                 }
                 Ok(exported)

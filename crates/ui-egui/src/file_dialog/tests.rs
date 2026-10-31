@@ -1532,6 +1532,12 @@ fn exports_start_in_the_last_exported_folder() {
     answer(&open, Some(FileDialogAnswer::SaveTo(joined(&renders_text, "a.png"))));
     app.poll_file_dialog(&ctx, None);
     assert_eq!(remembered(&app), "");
+    // ...and the next export still starts beside the document, not in the failed export's folder.
+    app.pick_export("a.png", |_, _| Ok(Value::Null)).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    assert_eq!(suggested(&open), joined("/proj", "a.png"));
+    answer(&open, None);
+    app.poll_file_dialog(&ctx, None);
     // A successful export is remembered...
     app.pick_export("a.png", |_, _| Ok(Value::Null)).unwrap();
     app.poll_file_dialog(&ctx, None);
