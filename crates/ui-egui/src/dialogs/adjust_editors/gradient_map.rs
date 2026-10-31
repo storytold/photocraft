@@ -184,10 +184,12 @@ fn gradient_map_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
                 ui.with_layout(crate::direction::body_layout(), |ui| {
                     let gear = crate::icons::button(ui, "settings", 24.0, false, tl!("Gradient Preset Options"));
                     egui::containers::menu::SubMenu::new().show(ui, &gear, |ui| {
-                        if ui.button(tl!("Import .GRD")).clicked() {
-                            e.import_gradients = true;
-                            ui.close();
-                        }
+                        crate::direction::popup_body(ui, |ui| {
+                            if crate::menu_keys::menu_row(ui, &tl!("Import .GRD"), None, false, true).clicked() {
+                                e.import_gradients = true;
+                                ui.close();
+                            }
+                        });
                     });
                     ui.separator();
                     for g in &cx.gradients {
