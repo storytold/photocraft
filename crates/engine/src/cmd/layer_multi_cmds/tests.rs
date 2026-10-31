@@ -1488,3 +1488,81 @@ fn translate_can_carry_the_selection_in_the_same_step() {
         assert_eq!(state(&s), before, "dx {dx}: and changes nothing");
     }
 }
+
+/// View › Pattern Preview (`"wrap": true`): samples that leave the canvas come back on the
+/// opposite edge, and a move of exactly one canvas is not a history step.
+#[test]
+fn translate_wrap_folds_pixels_back_into_the_canvas() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let id = rect_layer(&mut s, Rect::new(0, 1, 1, 2));
+    s.edit("paint", |doc, _| {
+        doc.layer_mut(id).unwrap().surface_mut().unwrap().fill_rect(Rect::new(7, 1, 8, 2), &[0.0, 0.0, 1.0, 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let px = |s: &Session, x, y| doc(s).layer(id).unwrap().surface().unwrap().pixel(x, y);
+    s.execute("layer.translate", json!({"dx": 2, "dy": 0})).unwrap();
+    assert!(px(&s, 9, 1)[2] > 0.9, "without wrap the blue column leaves the canvas");
+    s.undo();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.translate", json!({"dx": 8, "dy": -4, "wrap": true})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "a whole tile is no move");
+    assert!(px(&s, 0, 1)[0] > 0.9, "red stayed");
+    s.execute("layer.translate", json!({"dx": 2, "dy": -1, "wrap": true})).unwrap();
+    let red = px(&s, 2, 0);
+    assert!(red[0] > 0.9 && red[3] > 0.9, "red wrapped onto the row above: {red:?}");
+    let blue = px(&s, 1, 0);
+    assert!(blue[2] > 0.9 && blue[3] > 0.9, "blue wrapped from x=7 to x=1: {blue:?}");
+    assert!(px(&s, 0, 1)[3] < 0.1 && px(&s, 9, 1)[3] < 0.1, "the old and the off-canvas spots are empty");
+    let before = (px(&s, 2, 0), s.active().unwrap().history.past_len());
+    assert!(s.execute("layer.translate", json!({"dx": 1, "wrap": "yes"})).is_err());
+    assert_eq!((px(&s, 2, 0), s.active().unwrap().history.past_len()), before, "a bad wrap changes nothing");
+}
+
+/// Pattern Preview folding is only for raster samples. A shape keeps the raw delta, including a
+/// step of -1, and a move of exactly one canvas is history unless every target is raster.
+#[test]
+fn translate_wrap_moves_a_shape_by_the_raw_delta() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let id = LayerId(s.execute("shape.create", json!({"kind": "rect", "rect": [2, 1, 3, 2]})).unwrap()["layer"].as_u64().unwrap());
+    let xy = |s: &Session| {
+        let LayerContent::Shape(sh) = &doc(s).layer(id).unwrap().content else { panic!("shape") };
+        let photocraft_doc::LiveShape::Rect { rect, .. } = sh.live.as_ref().expect("live rect") else { panic!("rect") };
+        [rect[0], rect[1]]
+    };
+    s.execute("layer.translate", json!({"dx": -1, "dy": 0, "wrap": true})).unwrap();
+    assert_eq!(xy(&s), [1.0, 1.0], "dx -1 stays -1, not width-1");
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.translate", json!({"dx": 8, "dy": 0, "wrap": true})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps + 1, "a full canvas still moves a shape");
+    assert_eq!(xy(&s), [9.0, 1.0]);
+
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let id = rect_layer(&mut s, Rect::new(0, 0, 1, 1));
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.translate", json!({"dx": 8, "dy": -4, "wrap": true})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "raster samples fold back onto themselves");
+    assert!(doc(&s).layer(id).unwrap().surface().unwrap().pixel(0, 0)[0] > 0.9);
+    s.execute("layer.groupLayers", json!({})).unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.translate", json!({"dx": 8, "dy": 0, "wrap": true})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "a group of only rasters folds away too");
+
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 4, "background": "transparent"})).unwrap();
+    let id = rect_layer(&mut s, Rect::new(1, 1, 2, 2));
+    s.execute("layer.layerMask.hideAll", json!({})).unwrap();
+    s.execute("layer.layerMask.linked", json!({"linked": false})).unwrap();
+    s.edit("mask", |doc, _| {
+        doc.layer_mut(id).unwrap().mask.as_mut().unwrap().surface.fill_rect(Rect::new(0, 0, 1, 1), &[1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let steps = s.active().unwrap().history.past_len();
+    s.execute("layer.translate", json!({"dx": 8, "dy": 0, "wrap": true, "target": "mask"})).unwrap();
+    assert_eq!(s.active().unwrap().history.past_len(), steps, "a mask moved alone folds away");
+    assert!(doc(&s).layer(id).unwrap().mask.as_ref().unwrap().surface.sample_channel(0, 0, 0) > 0.9);
+}

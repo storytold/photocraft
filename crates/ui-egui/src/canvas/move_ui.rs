@@ -71,6 +71,8 @@ pub(crate) struct MovePreview {
     shown: Option<Arc<Document>>,
     /// Shows a floating selection (`select.float`): offsets are the piece's, from where it was cut.
     floating: bool,
+    /// View › Pattern Preview: pixels wrap, so a partial damage rect would leave the far edge stale.
+    pattern: bool,
 }
 
 impl MovePreview {
@@ -85,9 +87,22 @@ impl MovePreview {
         self.offsets.get(i).copied()
     }
     fn area(&self, d: (i32, i32)) -> Option<Rect> {
+        if self.pattern {
+            return Some(self.canvas);
+        }
         let b = self.bounds?;
         Some(if b.is_empty() { b } else { b.translate(d.0, d.1).inflate(1).intersect(&self.canvas) })
     }
+}
+
+/// `layer.translate` params, plus `"wrap": true` while View › Pattern Preview is on.
+pub(crate) fn pattern_wrap(app: &PhotocraftApp, mut args: serde_json::Value) -> serde_json::Value {
+    if app.ui.view.pattern_preview
+        && let Some(obj) = args.as_object_mut()
+    {
+        obj.insert("wrap".into(), json!(true));
+    }
+    args
 }
 
 /// The whole-pixel offset of the current Move drag on document `idx`, if one is under way.
@@ -140,7 +155,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
         let canvas = doc.bounds();
         let moving = with_descendants(&doc, &ids);
         let bounds = bounds.map(|b| moving.iter().filter_map(|id| shape_reach(doc.layer(*id)?, canvas)).fold(b, |acc, r| acc.union(&r)));
-        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false });
+        let pattern = app.ui.view.pattern_preview;
+        app.move_preview = Some(MovePreview { doc: doc_id, revision, ids, moving, bounds, canvas, offsets: Vec::new(), shown: None, floating: false, pattern });
     }
     let p = app.move_preview.as_mut()?;
     if offset == (0, 0) && p.offsets.is_empty() {
@@ -148,7 +164,8 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Do
     }
     if p.offsets.last() != Some(&offset) {
         let t0 = crate::gpu_canvas::now_ms();
-        match photocraft_engine::layer_multi_cmds::moved_target(&doc, &p.ids, offset.0, offset.1, mask_target) {
+        let wrap = app.ui.view.pattern_preview.then_some(doc.bounds());
+        match photocraft_engine::layer_multi_cmds::moved_wrapping(&doc, &p.ids, offset.0, offset.1, mask_target, wrap) {
             Ok(d) => {
                 // Duotone documents display through their inks.
                 let d = photocraft_engine::mode_cmds::display_document(&d).unwrap_or(d);
@@ -223,6 +240,7 @@ fn floating_doc(app: &mut PhotocraftApp, idx: usize) -> Option<(Arc<Document>, u
             offsets: Vec::new(),
             shown: None,
             floating: true,
+            pattern: false,
         });
     }
     if offset == (0, 0) && app.move_preview.as_ref().is_none_or(|p| p.offsets.is_empty()) {
@@ -284,13 +302,14 @@ pub(crate) fn finish(app: &mut PhotocraftApp, dx: f64, dy: f64) {
     // Within the range the preview and the ΔX/ΔY readout show (`drag_offset`), so the release
     // commits the offset they showed even at the lowest zoom of a huge document.
     let (dx, dy) = (dx.clamp(-1e7, 1e7), dy.clamp(-1e7, 1e7));
-    // Only when the canvas shows this very offset (else it recomposites everything once).
+    // The raw drag, including a whole number of canvases. `layer.translate` drops that only
+    // when every target is raster samples folding back onto themselves.
     let at = (dx as i32, dy as i32);
     let shown = app.move_preview.take().filter(|p| p.shown.is_some() && p.offsets.last() == Some(&at));
     if dx == 0.0 && dy == 0.0 {
         return;
     }
-    if app.run("layer.translate", json!({"dx": dx, "dy": dy, "selection": carries_selection(app)})).is_err() {
+    if app.run("layer.translate", pattern_wrap(app, json!({"dx": dx, "dy": dy, "selection": carries_selection(app)}))).is_err() {
         return;
     }
     let Some(p) = shown else { return };

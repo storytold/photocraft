@@ -178,11 +178,17 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = LABEL_GAP;
                 if let Some(v) = field(ui, "x", ("X", "W"), "X", bb[0] as f32, w, (u, dw), 0.5) {
-                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": (v - bb[0] as f32).round() as i32, "dy": 0})));
+                    run.push((
+                        "layer.translate".into(),
+                        crate::move_ui::pattern_wrap(app, json!({"layer": layer.id.0, "dx": (v - bb[0] as f32).round() as i32, "dy": 0})),
+                    ));
                 }
                 ui.add_space(LINK_W + LABEL_GAP);
                 if let Some(v) = field(ui, "y", ("Y", "H"), "Y", bb[1] as f32, w, (u, dh), 0.5) {
-                    run.push(("layer.translate".into(), json!({"layer": layer.id.0, "dx": 0, "dy": (v - bb[1] as f32).round() as i32})));
+                    run.push((
+                        "layer.translate".into(),
+                        crate::move_ui::pattern_wrap(app, json!({"layer": layer.id.0, "dx": 0, "dy": (v - bb[1] as f32).round() as i32})),
+                    ));
                 }
             });
             ui.add_space(ROW_GAP);
