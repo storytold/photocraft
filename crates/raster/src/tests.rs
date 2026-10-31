@@ -1,3 +1,45 @@
+/// Encoded exports preserve sparse defaults and allocated pixels, including float bit patterns.
+#[test]
+fn sparse_encoded_exports_preserve_default_and_tile_bytes() {
+    for mode in [
+        ColorMode::Bitmap,
+        ColorMode::Grayscale,
+        ColorMode::Indexed,
+        ColorMode::Rgb,
+        ColorMode::Cmyk,
+        ColorMode::Lab,
+        ColorMode::Multichannel,
+        ColorMode::Duotone,
+    ] {
+        for sample in SampleType::ALL {
+            for alpha in [false, true] {
+                let fmt = PixelFormat::new(mode, sample, alpha);
+                for default in [0.0, 0.25, -0.0, f32::from_bits(0x7fc12345)] {
+                    let mut surface = Surface::with_default(fmt, &vec![default; fmt.channels()]);
+                    let pixel: Vec<_> = (0..fmt.channels()).map(|c| (c + 1) as f32 / 8.0).collect();
+                    let written = [(-259, -1), (-1, 0), (0, 0), (255, 1), (256, 256)];
+                    for (x, y) in written {
+                        surface.write_pixel(x, y, &pixel);
+                    }
+                    let mut encoded = vec![0; fmt.bytes_per_pixel()];
+                    encode_pixel(&fmt, &pixel, &mut encoded);
+                    for r in [Rect::EMPTY, Rect::new(-270, -2, 270, 3), Rect::new(255, 255, 258, 258), Rect::new(800, 800, 803, 802)] {
+                        let mut expected = surface.default_pixel.repeat(r.width() as usize * r.height() as usize);
+                        for (x, y) in written {
+                            if r.contains(x, y) {
+                                let offset = ((y - r.y0) as usize * r.width() as usize + (x - r.x0) as usize) * fmt.bytes_per_pixel();
+                                expected[offset..offset + encoded.len()].copy_from_slice(&encoded);
+                            }
+                        }
+                        assert_eq!(surface.to_interleaved(r), expected, "{fmt:?}, default {default:?}, {r:?}");
+                        assert_eq!(surface.try_to_interleaved(r).expect("small export"), expected, "{fmt:?}, default {default:?}, {r:?}");
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Manually compare allocating reads with the previous implementation.
 #[test]
 #[ignore = "manual 24 MP release benchmark"]
