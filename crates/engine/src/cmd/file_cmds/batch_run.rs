@@ -176,6 +176,9 @@ fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/.hidden"), "png");
 }
 
+/// Process each input independently and collect failures without discarding earlier successes.
+/// A callback that writes its own saved checkpoint returns true; otherwise the final active
+/// document and its current layer targeting are captured together for the default output save.
 fn process_outputs<'a>(
     s: &Session,
     outputs: impl IntoIterator<Item = (&'a str, String)>,
@@ -196,7 +199,7 @@ fn process_outputs<'a>(
             scratch.add_document(doc, Some(path.to_string()));
             if !f(&mut scratch, &out)? {
                 let d = scratch.active().ok_or(EngineError::NoDocument)?;
-                save_doc(&d.doc, &out, save)?;
+                save_doc(&d.save_snapshot(), &out, save)?;
             }
             Ok(())
         })();
@@ -244,6 +247,9 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
     (batch_save_point(id) || !crate::actions_cmds::shell_save_command(id)) && !crate::actions_cmds::shell_view_command(id)
 }
 
+/// Replay an action in isolated input sessions, redirecting recorded saves to the batch destination.
+/// Save checkpoints retain the document and selection together when later steps close it or switch
+/// documents. If that document remains active, its final state is written after successful playback.
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
     let mut steps =
@@ -307,7 +313,7 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
             let mut saved: Option<Arc<Document>> = None;
             for (id, params) in &steps {
                 if batch_save_point(id) {
-                    saved = Some(scratch.active().ok_or(EngineError::NoDocument)?.doc.clone());
+                    saved = Some(scratch.active().ok_or(EngineError::NoDocument)?.save_snapshot());
                     continue;
                 }
                 let r = scratch.execute(id, params.clone())?;

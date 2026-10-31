@@ -62,20 +62,30 @@ pub(super) fn close_others(s: &mut Session, p: &Value) -> Result<Value> {
 
 /// File › Revert: reload the saved file as one history step (undoable, like Photoshop's
 /// "Revert" history state); the document is clean afterwards.
+/// Consume imported targeting before the edit, then attach the complete selected set to the new
+/// history state so Undo and Redo restore the pre-Revert and saved targets respectively.
 pub(super) fn revert(s: &mut Session) -> Result<Value> {
     let path = s.active().and_then(|d| d.path.clone()).ok_or(EngineError::Other("the document has never been saved".into()))?;
     let bytes = read_file(&path)?;
-    let fresh = import_opened(s, &file_name(&path), &bytes)?;
+    let mut fresh = import_opened(s, &file_name(&path), &bytes)?;
+    let target = fresh.take_saved_layer_selection();
     s.edit("Revert", |doc, active| {
         let (id, name) = (doc.id, doc.name.clone());
         *doc = fresh;
         // Keep the identity (colour state, views and caches are keyed by it) and the tab name.
         doc.id = id;
         doc.name = name;
-        *active = doc.top_layer();
+        *active = target.active;
         Ok(())
     })?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
+    st.active_layer = target.active;
+    st.selected_layers = target.selected;
+    st.layer_anchor = target.active;
+    crate::channel_cmds::fix_view(st);
+    // The edit recorded the pre-Revert target already; Redo must restore the imported set too.
+    let layers = st.layer_target();
+    st.history.set_current_layers(layers);
     st.saved_revision = st.revision;
     Ok(json!({"path": path, "layers": st.doc.layers.len()}))
 }

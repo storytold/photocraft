@@ -107,7 +107,7 @@ pub const RECOVERY_RETRY_SECS: f64 = 2.0;
 /// preference, and wait until the writes finished (see `Services::flush_autosaves`). `Ok` only when
 /// each of them is known to be on disk.
 fn save_for_recovery(app: &mut PhotocraftApp) -> Result<(), String> {
-    let jobs: Vec<_> = app.session.documents().iter().filter(|d| d.is_dirty()).map(|d| (d.doc.clone(), d.revision, d.path.clone())).collect();
+    let jobs: Vec<_> = app.session.documents().iter().filter(|d| d.is_dirty()).map(|d| (d.save_snapshot(), d.revision, d.path.clone())).collect();
     if jobs.is_empty() {
         return Ok(());
     }
@@ -300,6 +300,36 @@ pub fn show_fallback(app: &mut PhotocraftApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Emergency recovery must serialize current targeting without replacing live state.
+    /// Admission of the native recovery bytes must consume that targeting into the session.
+    #[test]
+    fn emergency_recovery_captures_the_current_layer_target() {
+        use std::sync::{Arc, Mutex};
+        let bytes = Arc::new(Mutex::new(Vec::new()));
+        let captured = bytes.clone();
+        let services = crate::Services {
+            autosave: Some(Box::new(move |doc, _, _| {
+                *captured.lock().unwrap() = photocraft_format::save_to_bytes(doc, &Default::default()).map_err(|e| e.to_string())?;
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 2, "height": 1, "background": "white"})).unwrap();
+        app.run("layer.new.layer", json!({"name": "Top"})).unwrap();
+        app.run("layer.select", json!({"name": "Background"})).unwrap();
+        let st = app.session.active().unwrap();
+        let (live, active, revision) = (st.doc.clone(), st.active_layer, st.revision);
+        save_for_recovery(&mut app).unwrap();
+        let mut recovered = photocraft_engine::Session::new();
+        recovered.add_document(photocraft_io::import("recovery.pcraft", &bytes.lock().unwrap()).unwrap().document, None);
+        assert_eq!(recovered.active().unwrap().active_layer, active);
+        let st = app.session.active().unwrap();
+        assert!(Arc::ptr_eq(&live, &st.doc));
+        assert_eq!(st.revision, revision);
+        assert!(st.is_dirty() && st.doc.saved_layer_selection.is_none());
+    }
 
     #[test]
     fn system_info_copy_and_api_stay_english_in_czech_ui() {

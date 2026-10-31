@@ -581,7 +581,7 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
 /// and saved state are untouched. An action being recorded keeps it as a `file.saveACopy` step
 /// with its path (#4373).
 fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
-    let doc = app.session.active().ok_or("no document")?.doc.clone();
+    let doc = app.session.active().ok_or("no document")?.save_snapshot();
     let stem = doc.name.rsplit_once('.').map_or(doc.name.as_str(), |(a, _)| a);
     // "<name> copy.psd", or with Preferences › File Handling › Do not append "copy" to filename
     // when saving a copy the document's own name (only the extension may change), as in

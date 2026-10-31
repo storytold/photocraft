@@ -214,8 +214,10 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
 /// destructure is exhaustive, so a new `Document` field fails to compile until it is classified
 /// here — compared when it composites, or explicitly ignored (the pixel-irrelevant allowlist:
 /// identity, name, selection, guides, paths, layer comps, annotations, automation state).
+/// Saved layer targeting is serialization transport and has no effect on compositing damage.
 fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
     let Document {
+        saved_layer_selection: _,
         id: _,
         name: _,
         size,
@@ -316,8 +318,10 @@ fn video_frames_equal(a: &VideoData, b: &VideoData) -> bool {
 /// plus every frame of a video layer, whose own equality is shallow); every other field compares
 /// structurally, where copy-on-write `Arc`s of `Eq` data short-circuit on pointer identity. The
 /// destructure is exhaustive, so a new `Document` field fails to compile until it is classified.
+/// Saved layer targeting is also ignored: capturing a view-state save cannot dirty the document.
 pub fn selection_only_change(a: &Document, b: &Document) -> bool {
     let Document {
+        saved_layer_selection: _,
         id,
         name,
         size: _,

@@ -255,11 +255,13 @@ impl Headless {
 
     /// Save (`.pcraft` or any export format by extension). With no path,
     /// saves to the document's own path.
+    /// Capture the indexed document's pixels and layer targeting together, including when it is
+    /// inactive. A failed write leaves its path, saved revision and live document unchanged.
     pub fn save(&mut self, index: Option<usize>, path: Option<&Path>, format: Option<&str>, opts: &ExportOptions) -> Result<Value, AutomationError> {
         let i = self.doc_index(index)?;
         let (stored_path, doc) = {
             let state = &self.session.documents()[i];
-            (state.path.clone(), state.doc.clone())
+            (state.path.clone(), state.save_snapshot())
         };
         let target: PathBuf = match (path, stored_path.as_deref()) {
             (Some(p), _) => p.to_path_buf(),

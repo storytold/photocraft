@@ -281,7 +281,7 @@ fn autosave(app: &mut PhotocraftApp) {
         .documents()
         .iter()
         .filter(|d| d.is_dirty() && app.prefs_rt.autosaved.get(&d.doc.id) != Some(&d.revision) && !app.prefs_rt.autosave_pending.contains_key(&d.doc.id))
-        .map(|d| (d.doc.clone(), d.revision, d.path.clone()))
+        .map(|d| (d.save_snapshot(), d.revision, d.path.clone()))
         .collect();
     for (doc, rev, path) in jobs {
         if let Some(save) = app.services.autosave.as_mut() {

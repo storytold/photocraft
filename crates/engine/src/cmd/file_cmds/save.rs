@@ -211,6 +211,9 @@ pub(crate) fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) ->
     Ok(warnings)
 }
 
+/// Write the current document and selection without changing its path, history or saved revision.
+/// Flattening replaces the output tree, so its source targeting is discarded. Replacing the
+/// document's own file requires the caller's explicit `overwrite` parameter.
 pub(super) fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", "file.saveACopy")?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
@@ -223,12 +226,14 @@ pub(super) fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
             msg: "`path` is the document's own file, so the copy would replace it: choose another path, or pass \"overwrite\": true".into(),
         });
     }
-    let mut doc = (*d.doc).clone();
+    let mut doc = d.save_snapshot();
     if p.get("layers").and_then(Value::as_bool) == Some(false) {
         // "Layers" unchecked in Save a Copy: write the flattened image.
+        let doc = std::sync::Arc::make_mut(&mut doc);
         let fmt = doc.pixel_format();
-        let px = flattened_checked(&doc, fmt, "file.saveACopy")?;
+        let px = flattened_checked(doc, fmt, "file.saveACopy")?;
         doc.layers = vec![Layer::new("Background", LayerContent::Raster(px))];
+        doc.saved_layer_selection = None;
     }
     let warnings = save_doc(&doc, &path, SaveOpts::from_params(s, p, "file.saveACopy")?)?;
     Ok(json!({"path": path, "warnings": warnings}))

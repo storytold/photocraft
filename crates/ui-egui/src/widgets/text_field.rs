@@ -14,6 +14,7 @@ pub const INPUT_EVENT_LIMIT: usize = 1 << 20;
 /// boundary) before any widget sees it, so no text field -- whatever its own limit -- has to
 /// lay out an 8 GB paste (#2150).
 pub fn cap_text_events(events: &mut [egui::Event]) {
+    /// Truncates at the event's character limit and reports whether text was removed.
     fn cut(text: &mut String) -> bool {
         let Some((end, _)) = text.char_indices().nth(INPUT_EVENT_LIMIT) else { return false };
         text.truncate(end);
@@ -26,7 +27,8 @@ pub fn cap_text_events(events: &mut [egui::Event]) {
             }
             // The highlighted range indexes the old text; past the cut it would point nowhere.
             egui::Event::Ime(egui::ImeEvent::Preedit { text, active_range_chars }) => {
-                if cut(text) && active_range_chars.as_ref().is_some_and(|r| r.end > INPUT_EVENT_LIMIT) {
+                let truncated = cut(text);
+                if truncated && active_range_chars.as_ref().is_some_and(|r| r.end > INPUT_EVENT_LIMIT) {
                     *active_range_chars = None;
                 }
             }
