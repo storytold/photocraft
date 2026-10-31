@@ -7,6 +7,7 @@ const CS: fn() -> Lang = || Lang::from_code("cs").expect("cs registered");
 const ID: fn() -> Lang = || Lang::from_code("id").expect("id registered");
 const VI: fn() -> Lang = || Lang::from_code("vi").expect("vi registered");
 const HI: fn() -> Lang = || Lang::from_code("hi").expect("hi registered");
+const KA: fn() -> Lang = || Lang::from_code("ka").expect("ka registered");
 
 #[test]
 fn hindi_tags_resolve() {
@@ -16,6 +17,20 @@ fn hindi_tags_resolve() {
     assert_eq!(HI().name(), "हिन्दी");
     assert_eq!(Lang::from_pref("hi"), HI());
     assert_eq!(Lang::from_pref("HI"), HI());
+}
+
+#[test]
+fn georgian_tags_resolve() {
+    for tag in ["ka", "ka-GE", "ka_GE", "ka_GE.UTF-8"] {
+        assert_eq!(lang_from_tag(tag), Some(KA()), "{tag}");
+    }
+    assert_eq!(KA().name(), "ქართული");
+    assert_eq!(Lang::from_pref("ka"), KA());
+    assert_eq!(Lang::from_pref("KA"), KA());
+    assert_eq!(tr(KA(), "Layer"), "შრე");
+    assert_eq!(tr(KA(), "File"), "ფაილი");
+    assert_eq!(trn(KA(), 1, "{n} layer", "{n} layers"), "შრე: 1");
+    assert_eq!(trn(KA(), 3, "{n} layer", "{n} layers"), "შრე: 3");
 }
 
 #[test]
