@@ -34,6 +34,8 @@ pub enum OperatorInput {
     TargetContent,
     /// The selection the filter is limited to.
     Selection,
+    /// Displace's map (another document's composite).
+    Map,
 }
 
 /// A reduction pass a program needs before its per-pixel work (histograms, min/max): reserved for
@@ -60,6 +62,39 @@ pub enum SeparableBlur {
     /// A convolution of the straight colour values: the sum of `weight * texel(dx, dy)` over the
     /// taps in order, divided by `scale` and offset by `offset`; alpha stays.
     Convolve { taps: Vec<(i32, i32, f32)>, scale: f32, offset: f32 },
+    /// Displace (`photocraft_algo` `distort2::displace`): each pixel samples the source where the
+    /// map shifts it. It can read anywhere inside `bounds` (and wraps or repeats past them), so
+    /// it reads the layer's whole extent ([`SeparableBlur::whole`]) rather than a reach.
+    Displace(Arc<DisplaceParams>),
+}
+
+/// What [`SeparableBlur::Displace`] needs besides the source.
+#[derive(Debug, PartialEq)]
+pub struct DisplaceParams {
+    /// The map's straight RGBA texels, row by row (`photocraft_compose::flatten` of the map
+    /// document): red shifts horizontally, green vertically. Shared by a dialog session's steps:
+    /// its identity keys the GPU's copy.
+    pub map: Arc<Vec<[f32; 4]>>,
+    pub map_size: [u32; 2],
+    /// The filter's bounds (the selection's, else the canvas): the map is stretched over or
+    /// tiled from them, and the undefined areas are past them.
+    pub bounds: Rect,
+    /// The largest shift along each axis in pixels (Scale / 100 × 128).
+    pub scale: [f32; 2],
+    /// Stretch to Fit, else Tile.
+    pub stretch: bool,
+    pub undefined: Undefined,
+}
+
+/// Displace's Undefined Areas (`photocraft_algo` `image::Edge`): what a sample past the bounds
+/// reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Undefined {
+    Transparent,
+    /// Repeat Edge Pixels.
+    Repeat,
+    /// Wrap Around.
+    Wrap,
 }
 
 /// Most taps a [`SeparableBlur::Convolve`] may have (Custom's 5×5).
@@ -89,8 +124,16 @@ impl SeparableBlur {
             SeparableBlur::Extreme { radius, .. } => *radius as usize,
             SeparableBlur::Disc { half_widths, .. } => (half_widths.iter().copied().max().unwrap_or(0) as usize).max(half_widths.len() / 2),
             SeparableBlur::Convolve { taps, .. } => taps.iter().map(|&(dx, dy, _)| dx.unsigned_abs().max(dy.unsigned_abs()) as usize).max().unwrap_or(0),
+            // Reads its whole window ([`SeparableBlur::whole`]).
+            SeparableBlur::Displace(_) => 0,
         };
         i32::try_from(reach).unwrap_or(i32::MAX)
+    }
+
+    /// Whether the passes read the layer's whole extent rather than the output grown by a reach:
+    /// one window for every cell, uploaded once.
+    pub fn whole(&self) -> bool {
+        matches!(self, SeparableBlur::Displace(_))
     }
 
     /// Whether the passes premultiply what they read (the blurs, as the CPU blurs do); the window
@@ -108,6 +151,10 @@ impl SeparableBlur {
             SeparableBlur::Disc { half_widths, .. } => half_widths.is_empty() || (half_widths.len() % 2 == 1 && half_widths.len() / 2 <= MAX_DISC_RADIUS),
             SeparableBlur::Convolve { taps, scale, offset } => {
                 taps.len() <= MAX_TAPS && taps.iter().all(|t| t.2.is_finite()) && scale.is_finite() && *scale != 0.0 && offset.is_finite()
+            }
+            SeparableBlur::Displace(d) => {
+                let [w, h] = d.map_size;
+                w > 0 && h > 0 && d.map.len() as u64 == u64::from(w) * u64::from(h) && d.scale.iter().all(|s| s.is_finite()) && !d.bounds.is_empty()
             }
         }
     }
@@ -195,6 +242,9 @@ pub struct GaussianBlur {
 /// The inputs of a [`GaussianBlur`].
 const BLUR_INPUTS: &[OperatorInput] = &[OperatorInput::TargetContent, OperatorInput::Selection];
 
+/// The inputs of a Displace.
+const DISPLACE_INPUTS: &[OperatorInput] = &[OperatorInput::TargetContent, OperatorInput::Selection, OperatorInput::Map];
+
 /// The longest reach a blur may have: its window is a page cell grown by the reach on each side.
 pub const MAX_REACH: i32 = 1024;
 
@@ -215,6 +265,10 @@ impl GaussianBlur {
             SeparableBlur::Disc { half_widths, max } => (5u8, half_widths, max).hash(&mut h),
             SeparableBlur::Convolve { taps, scale, offset } => {
                 (6u8, taps.iter().map(|&(dx, dy, w)| (dx, dy, w.to_bits())).collect::<Vec<_>>(), scale.to_bits(), offset.to_bits()).hash(&mut h)
+            }
+            // The settings, and the map by identity (a dialog session holds one).
+            SeparableBlur::Displace(d) => {
+                (7u8, Arc::as_ptr(&d.map) as usize, d.map_size, d.bounds, d.scale.map(f32::to_bits), d.stretch, d.undefined).hash(&mut h)
             }
         }
         (extent, area, keep_alpha, depth as u8).hash(&mut h);
@@ -254,10 +308,14 @@ impl OperatorProgram for GaussianBlur {
         self.key
     }
     fn inputs(&self) -> &[OperatorInput] {
-        BLUR_INPUTS
+        if self.blur.whole() { DISPLACE_INPUTS } else { BLUR_INPUTS }
     }
     fn source_region(&self, out: Rect) -> Rect {
-        if out.is_empty() { Rect::EMPTY } else { out.inflate(self.reach()).intersect(&self.extent) }
+        match () {
+            _ if out.is_empty() => Rect::EMPTY,
+            _ if self.blur.whole() => self.extent,
+            _ => out.inflate(self.reach()).intersect(&self.extent),
+        }
     }
     fn changed_area(&self) -> Rect {
         self.area.intersect(&self.extent)
@@ -354,12 +412,14 @@ const BOX_SEGMENT: u32 = 64;
 pub(crate) struct OpKit {
     blur_layout: wgpu::BindGroupLayout,
     disc_layout: wgpu::BindGroupLayout,
+    displace_layout: wgpu::BindGroupLayout,
     finish_layout: wgpu::BindGroupLayout,
     kernel: wgpu::ComputePipeline,
     boxes: wgpu::ComputePipeline,
     extreme: wgpu::ComputePipeline,
     disc: wgpu::ComputePipeline,
     convolve: wgpu::ComputePipeline,
+    displace: wgpu::ComputePipeline,
     finish: wgpu::ComputePipeline,
 }
 
@@ -418,6 +478,11 @@ impl OpKit {
                 label: Some("pc_operator_disc"),
                 entries: &[tex(0), tex(1), storage(2), storage(3), uniform(4), buffer(5)],
             });
+            // Displace: the source window and the map in, the displaced output out.
+            let displace_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("pc_operator_displace"),
+                entries: &[tex(0), tex(1), storage(2), uniform(3)],
+            });
             let finish_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("pc_operator_finish"),
                 entries: &[tex(0), tex(1), tex(2), storage(3), uniform(4)],
@@ -442,8 +507,9 @@ impl OpKit {
             let extreme = pipeline(&blur_layout, "extreme_pass");
             let disc = pipeline(&disc_layout, "disc_step");
             let convolve = pipeline(&blur_layout, "convolve_pass");
+            let displace = pipeline(&displace_layout, "displace_pass");
             let finish = pipeline(&finish_layout, "finish");
-            OpKit { blur_layout, disc_layout, finish_layout, kernel, boxes, extreme, disc, convolve, finish }
+            OpKit { blur_layout, disc_layout, displace_layout, finish_layout, kernel, boxes, extreme, disc, convolve, displace, finish }
         });
         match error {
             None => Some(kit),
@@ -518,12 +584,13 @@ pub(crate) fn record_blur<'s>(
     let axes: Vec<(usize, u32)> = match blur {
         SeparableBlur::Kernel(_) | SeparableBlur::Extreme { .. } => vec![(0, 0), (0, 1)],
         SeparableBlur::Boxes(b) => [0u32, 1].iter().flat_map(|&axis| (0..b.len()).map(move |i| (i, axis))).collect(),
-        // One 2D pass (a disc has its own, `record_disc`).
+        // One 2D pass (a disc has its own, `record_disc`; Displace `record_displace`).
         SeparableBlur::Disc { .. } | SeparableBlur::Convolve { .. } => vec![(0, 0)],
+        SeparableBlur::Displace(_) => return None,
     };
     let weights: Vec<u8> = match blur {
         SeparableBlur::Kernel(k) => k.iter().flat_map(|w| w.to_le_bytes()).collect(),
-        SeparableBlur::Boxes(_) | SeparableBlur::Extreme { .. } => 0f32.to_le_bytes().to_vec(),
+        SeparableBlur::Boxes(_) | SeparableBlur::Extreme { .. } | SeparableBlur::Displace(_) => 0f32.to_le_bytes().to_vec(),
         SeparableBlur::Disc { half_widths, .. } if half_widths.is_empty() => 0f32.to_le_bytes().to_vec(),
         SeparableBlur::Disc { half_widths, .. } => half_widths.iter().flat_map(|w| (*w as f32).to_le_bytes()).collect(),
         // [scale, offset, (dx, dy, weight)...]
@@ -553,6 +620,7 @@ pub(crate) fn record_blur<'s>(
             // Only the empty disc (radius under 1) comes here: a copy.
             SeparableBlur::Disc { max, .. } => (0, f32::from(u8::from(*max)), &kit.extreme),
             SeparableBlur::Convolve { taps, .. } => (taps.len() as u32, 0.0, &kit.convolve),
+            SeparableBlur::Displace(_) => return None,
         };
         let (ox, oy) = if n == 0 { (origin[0], origin[1]) } else { (0, 0) };
         let pre = blur.premultiplies();
@@ -586,6 +654,76 @@ pub(crate) fn record_blur<'s>(
         }
     }
     ping.get(last % 2)
+}
+
+/// Record Displace's pass: the output over `out` (document pixels) from the source `window`
+/// (document pixels, the layer's whole extent) and the `map` texture, into `scratch[0]`.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn record_displace<'s>(
+    device: &wgpu::Device,
+    encoder: &mut wgpu::CommandEncoder,
+    kit: &OpKit,
+    d: &DisplaceParams,
+    source: &wgpu::Texture,
+    window: Rect,
+    map: &wgpu::Texture,
+    out: Rect,
+    has_alpha: bool,
+    scratch: &'s [wgpu::Texture],
+) -> Option<&'s wgpu::Texture> {
+    use wgpu::util::DeviceExt;
+    let dst = scratch.first()?;
+    let i = |v: i32| v as u32;
+    let b = d.bounds;
+    let edge = match d.undefined {
+        Undefined::Transparent => 0u32,
+        Undefined::Repeat => 1,
+        Undefined::Wrap => 2,
+    };
+    let params = words(&[
+        out.width(),
+        out.height(),
+        i(out.x0),
+        i(out.y0),
+        i(window.x0),
+        i(window.y0),
+        window.width(),
+        window.height(),
+        i(b.x0),
+        i(b.y0),
+        i(b.x1),
+        i(b.y1),
+        d.map_size[0],
+        d.map_size[1],
+        d.scale[0].to_bits(),
+        d.scale[1].to_bits(),
+        u32::from(d.stretch),
+        edge,
+        u32::from(has_alpha),
+        0,
+    ]);
+    let params = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("pc_operator_displace"),
+        contents: &params,
+        usage: wgpu::BufferUsages::UNIFORM,
+    });
+    let views = [source, map, dst].map(|t| t.create_view(&Default::default()));
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("pc_operator_displace"),
+        layout: &kit.displace_layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&views[0]) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&views[1]) },
+            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&views[2]) },
+            wgpu::BindGroupEntry { binding: 3, resource: params.as_entire_binding() },
+        ],
+    });
+    let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("pc_operator_displace"), timestamp_writes: None });
+    pass.set_pipeline(&kit.displace);
+    pass.set_bind_group(0, &group, &[]);
+    pass.dispatch_workgroups(out.width().div_ceil(8), out.height().div_ceil(8), 1);
+    drop(pass);
+    Some(dst)
 }
 
 /// Scratch textures a description's passes need: a disc four (the horizontal extreme and the

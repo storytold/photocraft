@@ -3,9 +3,10 @@ use super::consts::{FLUSH_OPS, MAP32, STRIDE};
 use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tiles, words};
 use super::kit::{Bound, FrameRes, texture_group, uniform_group};
 use super::paging::{OVER_BUDGET, cell_rect};
-use super::textures::{CachedPattern, Cell, ChunkOut, ResKey, Resident, ResidentRef, Stats, Tex, TexKind};
+use super::textures::{CachedPattern, Cell, ChunkOut, ResKey, Resident, ResidentRef, Stats, Tex, TexKind, WHOLE};
 use super::{
-    Arc, Compositor, DocId, HashMap, I, Kernel, LayerOperator, OperatorTarget, Pattern, Plan, Rect, Role, Surface, TILE_SIZE, Tile, TileCoord, operator, plan,
+    Arc, Compositor, DocId, HashMap, I, Kernel, LayerOperator, OperatorTarget, Pattern, Plan, Rect, Role, SeparableBlur, Surface, TILE_SIZE, Tile, TileCoord,
+    operator, plan,
 };
 
 impl Compositor {
@@ -336,13 +337,17 @@ impl Compositor {
             return None;
         }
         let operator::Program::Separable(blur) = op.program.program();
-        let (wk, ok, mk) = ((op.layer, Role::OperatorSource, cell), (op.layer, Role::Operator, cell), (op.layer, Role::OperatorMask, cell));
+        // A program that reads the whole extent has one window for every cell (uploaded once).
+        let whole = blur.blur.whole();
+        let source_cell = if whole { WHOLE } else { cell };
+        let (wk, ok, mk) = ((op.layer, Role::OperatorSource, source_cell), (op.layer, Role::Operator, cell), (op.layer, Role::OperatorMask, cell));
         // The cell's source window stays the same while the view moves (uploaded once) and while
         // a slider drag's reach still fits it; when it outgrows it, the new one has headroom, so
         // a drag doesn't upload every window again at each step. The blur and its output cover
         // only the part this refresh draws.
         let needed = region.inflate(blur.reach());
         let window = match self.residents.get(&wk).map(|r| r.region) {
+            _ if whole => blur.extent.union(&region),
             Some(held) if held.contains_rect(&needed) => held,
             _ => region.inflate(operator::apron(blur.reach().saturating_add(blur.reach() / 4))),
         };
@@ -350,7 +355,15 @@ impl Compositor {
         if region.is_empty() {
             return None;
         }
-        let sub = region.inflate(operator::apron(blur.reach())).intersect(&window);
+        let sub = if whole { region } else { region.inflate(operator::apron(blur.reach())).intersect(&window) };
+        // A texture past the device's size limit is a validation error, and on the web (where errors
+        // arrive asynchronously) one that takes the device with it: such a program previews on the
+        // CPU (a whole-extent window, or Displace's map, wider than the limit).
+        let max = device.limits().max_texture_dimension_2d;
+        if !fits_device(&blur.blur, max, window, sub) {
+            self.layer_alloc = Some(format!("a layer operator needs a texture past the GPU's {max} px limit; full refresh on the CPU"));
+            return None;
+        }
         let usage = wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST;
         let desc = |label, r: Rect| wgpu::TextureDescriptor {
             label: Some(label),
@@ -438,6 +451,29 @@ impl Compositor {
                 changed = true;
             }
         }
+        // Displace's map, once per map (shared by every cell).
+        let map_key = (op.layer, Role::OperatorMap, WHOLE);
+        if let SeparableBlur::Displace(d) = &blur.blur {
+            let print = {
+                let mut h = std::collections::hash_map::DefaultHasher::new();
+                std::hash::Hash::hash(&(Arc::as_ptr(&d.map) as usize, d.map_size), &mut h);
+                std::hash::Hasher::finish(&h)
+            };
+            let r = Rect::from_xywh(0, 0, d.map_size[0], d.map_size[1]);
+            if fresh(self, &map_key, r, print) {
+                touch(self, &map_key);
+            } else {
+                let texture = self.create_layer_texture(device, &desc("pc_operator_map", r), map_key, bytes(r), stats)?;
+                operator::write_texels(queue, &texture, r.width(), r.height(), &d.map);
+                self.staged += bytes(r);
+                stats.bytes_uploaded += bytes(r) as usize;
+                let resident = self.operator_resident(texture, r, surface, doc);
+                self.residents.insert(map_key, resident);
+                self.op_made.insert(map_key, print);
+                self.op_maps.insert(map_key, Arc::clone(&d.map));
+                changed = true;
+            }
+        }
         // The output: redrawn when the program, the window or the selection changed.
         let print = {
             let mut h = std::collections::hash_map::DefaultHasher::new();
@@ -490,7 +526,13 @@ impl Compositor {
             });
             let (Some(Some(kit)), Some((_, scratch))) = (self.op_kit.as_ref(), self.op_scratch.as_ref()) else { return None };
             let origin = [(sub.x0 - window.x0) as u32, (sub.y0 - window.y0) as u32];
-            let blurred = operator::record_blur(device, encoder, kit, &blur.blur, &source, origin, size, scratch)?;
+            let blurred = match &blur.blur {
+                SeparableBlur::Displace(d) => {
+                    let map = self.residents.get(&map_key).map(|r| r.texture.clone())?;
+                    operator::record_displace(device, encoder, kit, d, &source, window, &map, region, surface.format().alpha, scratch)?
+                }
+                other => operator::record_blur(device, encoder, kit, other, &source, origin, size, scratch)?,
+            };
             let fmt = surface.format();
             operator::record_finish(
                 device,
@@ -517,7 +559,7 @@ impl Compositor {
             self.op_made.insert(ok, print);
             stats.operator_cells += 1;
         }
-        for k in [wk, ok, mk] {
+        for k in [wk, ok, mk, map_key] {
             if let Some(r) = self.residents.get_mut(&k) {
                 r.last_used = self.frame;
                 r.stamp = self.stamp;
@@ -768,4 +810,15 @@ impl Compositor {
         self.temps.push((t, frame));
         v
     }
+}
+
+/// Whether every texture `blur`'s passes need over source `window` and output part `sub` is
+/// within `max` px a side: the window, the output and Displace's map.
+fn fits_device(blur: &SeparableBlur, max: u32, window: Rect, sub: Rect) -> bool {
+    let map_size = match blur {
+        SeparableBlur::Displace(d) => d.map_size,
+        _ => [1, 1],
+    };
+    let fits = |w: u32, h: u32| w <= max && h <= max;
+    fits(window.width(), window.height()) && fits(sub.width(), sub.height()) && fits(map_size[0], map_size[1])
 }

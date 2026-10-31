@@ -61,7 +61,10 @@ use photocraft_raster::{Surface, Tile};
 
 pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use health::{DeviceHealth, Fault};
-pub use operator::{Combine, GaussianBlur, LayerOperator, MAX_AXIS_TAPS, MAX_DISC_RADIUS, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur};
+pub use operator::{
+    Combine, DisplaceParams, GaussianBlur, LayerOperator, MAX_AXIS_TAPS, MAX_DISC_RADIUS, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur,
+    Undefined,
+};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 
@@ -138,6 +141,9 @@ pub struct Compositor {
     /// The selection each operator mask page was made from: held while the page is, so no other
     /// selection can take its address (which the page's fingerprint hashes).
     op_pins: HashMap<ResKey, Arc<Surface>>,
+    /// The maps operator pages were made from: held so no other map can take the address the
+    /// page's fingerprint hashes.
+    op_maps: HashMap<ResKey, Arc<Vec<[f32; 4]>>>,
     /// The operators of the document the current refresh draws.
     frame_ops: Vec<LayerOperator>,
     /// The operator passes' scratch textures (two, or four for a disc), reused from cell to cell

@@ -259,6 +259,7 @@ impl Compositor {
             op_kit: None,
             op_made: HashMap::new(),
             op_pins: HashMap::new(),
+            op_maps: HashMap::new(),
             frame_ops: Vec::new(),
             op_scratch: None,
             scratch_making: 0,
@@ -292,6 +293,7 @@ impl Compositor {
         self.op_scratch = None;
         self.op_made.clear();
         self.op_pins.clear();
+        self.op_maps.clear();
         self.prefix.clear();
     }
 
@@ -561,6 +563,7 @@ impl Compositor {
         let residents = &self.residents;
         self.op_made.retain(|k, _| residents.contains_key(k));
         self.op_pins.retain(|k, _| residents.contains_key(k));
+        self.op_maps.retain(|k, _| residents.contains_key(k));
         self.fx.retain(|_, e| e.doc != doc);
         self.patterns.retain(|_, p| p.doc != doc);
         self.prefix.forget(doc);
