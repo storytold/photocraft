@@ -217,9 +217,10 @@ fn fibers_fill_an_empty_layer() {
 #[test]
 fn displace_reads_another_document() {
     let mut s = session();
-    // Map document: a flat colour that shifts 3 px right at 25 % (see the algo test).
+    // Map document: a flat colour that shifts 3 px right at 25 % (see the algo test): level 140,
+    // 12 over Photoshop's zero.
     s.execute("file.new", json!({"width": 8, "height": 8, "depth": 32})).unwrap();
-    let v = 0.5 + 3.0 / 64.0;
+    let v = 140.0 / 255.0;
     s.edit("map", |doc, _| {
         let bg = doc.layers[0].id;
         doc.layer_mut(bg).unwrap().surface_mut().unwrap().fill_rect(Rect::new(0, 0, 8, 8), &[v, 0.5, 0.5, 1.0]);

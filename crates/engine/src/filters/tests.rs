@@ -548,3 +548,54 @@ fn filter_without_output_is_cancelled_only_when_the_job_was() {
     let surface = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
     assert!(filter_output(Some(surface), true).is_ok());
 }
+
+/// #10444: without a selection, Displace frames the canvas and the layer's pixels past it.
+/// Photoshop 2025, a 256×256 layer whose red is x and green is y, the canvas cropped to its
+/// top-left 128×128: Displace (10 %, stretched horizontal ramp map) moves these pixels of row 64
+/// by (dx, 0). The canvas alone was the frame: the map stretched over half the layer, twice as
+/// strong, and edge pixels repeated at the canvas edge.
+#[test]
+fn displace_frames_the_layers_pixels_past_the_canvas() {
+    let ramp = |s: &mut Session, w: i32, layer: bool| {
+        s.edit("ramp", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            for y in 0..w {
+                for x in 0..w {
+                    let (r, g) = (x as f32 / 255.0, if layer { y as f32 / 255.0 } else { 128.0 / 255.0 });
+                    surf.write_pixel(x, y, &[r, g, 0.0, 1.0]);
+                }
+            }
+            Ok(())
+        })
+        .unwrap();
+    };
+    let shifted = |s: &Session, x: i32| {
+        let d = s.active().unwrap();
+        let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+        let px = match &l.content {
+            LayerContent::Smart(sm) => sm.cache.as_ref().unwrap().read_region(photocraft_geom::Rect::new(x, 64, x + 1, 65)),
+            _ => l.surface().unwrap().read_region(photocraft_geom::Rect::new(x, 64, x + 1, 65)),
+        };
+        ((px[0] * 255.0).round() as i32 - x, (px[1] * 255.0).round() as i32 - 64)
+    };
+    let distorted = |smart: bool, id: &str, params: Value| {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 256, "height": 256})).unwrap();
+        ramp(&mut s, 256, false);
+        s.execute("file.new", json!({"width": 256, "height": 256, "background": "transparent"})).unwrap();
+        ramp(&mut s, 256, true);
+        s.execute("image.canvasSize", json!({"width": 128, "height": 128, "anchor": "topLeft"})).unwrap();
+        if smart {
+            s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        }
+        s.execute(id, params).unwrap();
+        s
+    };
+    for smart in [false, true] {
+        let s = distorted(smart, "filter.distort.displace", json!({"horizontal": 10, "vertical": 0, "fit": "stretch", "mapDocument": 0}));
+        for (x, dx) in [(12, -12), (60, -7), (120, -1)] {
+            let (gx, gy) = shifted(&s, x);
+            assert!((gx - dx).abs() <= 1 && gy == 0, "Displace (smart object: {smart}) at x {x}: ({gx}, {gy}), Photoshop ({dx}, 0)");
+        }
+    }
+}

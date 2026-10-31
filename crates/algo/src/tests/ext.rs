@@ -774,7 +774,8 @@ fn ntsc_limits_saturated_colours_only() {
 #[test]
 fn displace_shifts_by_map_and_shear_by_curve() {
     let s = pattern(SampleType::F32, R);
-    let v = 0.5 + 3.0 / 64.0;
+    // Level 140: 12 levels over Photoshop's zero (128), a 128th each of 25 % of 128 px = 3 px.
+    let v = 140.0 / 255.0;
     let out = run(
         &s,
         &FilterParams::Displace { horizontal: 25.0, vertical: 0.0, stretch: false, undefined: UndefinedAreas::Wrap, map: Some(map_image([v, 0.5, 0.5, 1.0])) },
@@ -784,6 +785,29 @@ fn displace_shifts_by_map_and_shear_by_curve() {
     }
     let sh = run(&s, &FilterParams::Shear { points: vec![[0.0, 0.1], [1.0, 0.1]], undefined: UndefinedAreas::Wrap });
     assert_eq!(sh.pixel(10, 4), s.pixel(8, 4));
+}
+
+/// #10444: Photoshop 2025, Displace at 100 % with constant maps on a synthetic image: level 160
+/// moves 32 px and level 96 moves -32 px, level 128 not at all.
+#[test]
+fn displace_moves_one_pixel_per_level_from_128_at_100_percent() {
+    let s = pattern(SampleType::F32, R);
+    for (level, dx) in [(160.0f32, 32i32), (96.0, -32), (128.0, 0)] {
+        let out = run(
+            &s,
+            &FilterParams::Displace {
+                horizontal: 100.0,
+                vertical: 0.0,
+                stretch: true,
+                undefined: UndefinedAreas::Wrap,
+                map: Some(map_image([level / 255.0, 0.5, 0.5, 1.0])),
+            },
+        );
+        let w = R.width() as i32;
+        for x in 0..w {
+            assert_eq!(out.pixel(x, 7), s.pixel((x + dx).rem_euclid(w), 7), "level {level} at x={x}");
+        }
+    }
 }
 
 #[test]

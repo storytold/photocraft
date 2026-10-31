@@ -24,8 +24,15 @@ fn map_sample(map: &Image, u: f32, v: f32, c: usize) -> f32 {
     top + (bot - top) * ay
 }
 
+/// A map value's shift as a fraction of the full one: Photoshop's zero is level 128, and each level
+/// is one 128th, so at 100 % a level moves one pixel (160 moves 32 px, 255 moves 127, 0 moves
+/// -128). Mid-grey as 127.5 with 255ths moved 160 by 32.6 px (#10444).
+fn shift(m: f32) -> f32 {
+    (m * 255.0 - 128.0) / 128.0
+}
+
 /// Displace: the map's first channel shifts pixels horizontally and its
-/// second (or first, for one-channel maps) vertically; mid-gray = no shift.
+/// second (or first, for one-channel maps) vertically; level 128 = no shift.
 /// The map is stretched over the bounds or tiled from their top-left.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn displace(src: &Image, out: Rect, ctx: &Ctx, scale: (f32, f32), stretch: bool, undefined: UndefinedAreas, map: Option<&Image>) -> Vec<f32> {
@@ -39,8 +46,8 @@ pub(crate) fn displace(src: &Image, out: Rect, ctx: &Ctx, scale: (f32, f32), str
     remap(src, out, ctx, edge_of(undefined), |x, y| {
         let (lx, ly) = (x - b.x0 as f32, y - b.y0 as f32);
         let (u, v) = if stretch { (lx / bw * mw, ly / bh * mh) } else { (lx.rem_euclid(mw), ly.rem_euclid(mh)) };
-        let dx = (map_sample(map, u, v, 0) - 0.5) * 2.0 * sx;
-        let dy = (map_sample(map, u, v, vc) - 0.5) * 2.0 * sy;
+        let dx = shift(map_sample(map, u, v, 0)) * sx;
+        let dy = shift(map_sample(map, u, v, vc)) * sy;
         (x + dx, y + dy)
     })
 }
