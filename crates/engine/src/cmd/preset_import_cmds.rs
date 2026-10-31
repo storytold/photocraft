@@ -180,6 +180,8 @@ fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io
         let mut b = pr.brush.clone().picked_over(&s.tools.brush);
         s.load_brush_tips(&mut b).map_err(|e| bad("brush.presets.importAbr", e))?;
         s.tools.brush = b;
+        // The picked preset is current, like Define Brush Preset's (an unnamed Update targets it).
+        s.tools.current_preset = Some(first.clone());
         s.tools.brush_changed();
     }
     // Distinct folder paths the file brought (its Photoshop folders, nested inside `group`).
@@ -492,6 +494,19 @@ mod tests {
         assert!(photocraft_paint::presets::find(&s.tools.presets, "9 px Round").is_some(), "re-imported under the same name");
         let refs: Vec<_> = s.tools.tool_presets.iter().map(|(t, n)| format!("{t}:{n}")).collect();
         assert_eq!(refs, ["Pencil:Hard Round"], "the built-in Hard Round stays; the replaced 9 px Round is forgotten");
+    }
+
+    /// #10433 review: a selected import becomes the current preset, so an unnamed Update Brush
+    /// targets it, including after a re-import replaced the group the old current preset was in.
+    #[test]
+    fn a_selected_import_is_the_current_preset() {
+        let mut s = Session::new();
+        let data = photocraft_paint::tile::b64_encode(&abr_v2());
+        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "select": true})).unwrap();
+        assert_eq!(s.tools.current_preset.as_deref(), Some("Hard Round 2"));
+        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "select": true})).unwrap();
+        assert_eq!(s.tools.current_preset.as_deref(), Some("Hard Round 2"), "the replacement, not None");
+        s.execute("brush.presets.update", json!({})).unwrap();
     }
 
     #[test]
