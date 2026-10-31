@@ -11,6 +11,9 @@ use crate::noise::hash01;
 
 /// Max channels per pixel we keep on the stack (CMYK + alpha + spare).
 pub(crate) const MAXC: usize = 8;
+/// Scratch a column gather may hold: L2-resident, so the transposed strip stays hot while it is
+/// read back. Larger strips evict it and lose the point of gathering.
+const STRIP_BYTES: usize = 64 * 1024;
 
 /// The context's model as an `f32` format (for colour conversions).
 #[inline]
@@ -165,9 +168,64 @@ fn box_rows_n(buf: &mut [f32], w: usize, n: usize, r: usize) {
     }
 }
 
-/// Same as [`box_rows_n`] over columns (no transpose; walks with a stride).
+/// Same as [`box_rows_n`] over columns (no transpose of the whole buffer; gathers a strip).
+///
+/// A column walk reads one sample per row at a stride of `w * n`, so every sample pulls its own
+/// cache line and uses `n * 4` of its 64 bytes: on a 1122-wide RGBA buffer that is 8x the
+/// image's traffic. Gathering `STRIP_BYTES` worth of neighbouring columns into a transposed
+/// scratch first replaces that with one line read per row, and the running sum then walks
+/// contiguous runs. `box_line_n`'s rule holds per column too: outside `r` of the ends both taps
+/// are in range, so only the ends clamp.
 fn box_cols_n(buf: &mut [f32], w: usize, h: usize, n: usize, r: usize) {
-    if r == 0 || h == 0 || buf.len() < w.saturating_mul(h).saturating_mul(n) {
+    if r == 0 || h == 0 || n == 0 || buf.len() < w.saturating_mul(h).saturating_mul(n) {
+        return;
+    }
+    // Columns per gather, from the scratch budget. Below 2 the gather costs more than it saves.
+    let strip = (STRIP_BYTES / (n * h * 4)).clamp(0, w);
+    if strip < 2 {
+        box_cols_strided(buf, w, h, n, r);
+        return;
+    }
+    let norm = 1.0 / (2 * r + 1) as f64;
+    let first = r.min(h);
+    let last = h.saturating_sub(r + 1).max(first);
+    let mut scratch: Vec<f32> = Vec::with_capacity(strip * n * h);
+    let mut x0 = 0;
+    while x0 < w {
+        let sx = strip.min(w - x0);
+        let runs = sx * n;
+        // Transposed gather: run `k` (column `x0 + k / n`, channel `k % n`) is contiguous.
+        scratch.clear();
+        scratch.resize(runs * h, 0.0);
+        for y in 0..h {
+            let base = (y * w + x0) * n;
+            for k in 0..runs {
+                scratch[k * h + y] = buf[base + k];
+            }
+        }
+        for k in 0..runs {
+            let src = &scratch[k * h..][..h];
+            let (col, ch) = (k / n, k % n);
+            // f64 sums, as in `box_line_n`: the result must not depend on the walk's direction.
+            let mut acc: f64 = (-(r as isize)..=r as isize).map(|y| src[y.clamp(0, h as isize - 1) as usize] as f64).sum();
+            for y in 0..h {
+                buf[(y * w + x0 + col) * n + ch] = (acc * norm) as f32;
+                if y >= first && y < last {
+                    acc += src[y + r + 1] as f64 - src[y - r] as f64;
+                } else {
+                    let hi = (y + r + 1).min(h - 1);
+                    let lo = y.saturating_sub(r);
+                    acc += src[hi] as f64 - src[lo] as f64;
+                }
+            }
+        }
+        x0 += sx;
+    }
+}
+
+/// The column walk one sample at a time, kept for the widths one contiguous gather cannot hold.
+fn box_cols_strided(buf: &mut [f32], w: usize, h: usize, n: usize, r: usize) {
+    if r == 0 || h == 0 || n == 0 {
         return;
     }
     let norm = 1.0 / (2 * r + 1) as f64;
@@ -288,7 +346,7 @@ pub(crate) fn add_sample_premul(src: &Image, x: f32, y: f32, clip: Rect, alpha: 
 
 #[cfg(test)]
 mod tests {
-    use super::{box_line_n, box_rows_n};
+    use super::{box_cols_n, box_cols_strided, box_line_n, box_rows_n};
 
     /// The pre-split row pass, kept verbatim as the reference: one clamped accumulator per
     /// channel, stepped with `clamp(x + r + 1) - clamp(x - r)`.
@@ -356,6 +414,41 @@ mod tests {
                 let b = &got[row * w * n..(row + 1) * w * n];
                 assert_eq!(bits(b), bits(&reference_line(a, w, n, r)), "w {w} h {h} n {n} r {r} row {row}");
             }
+        }
+    }
+
+    /// A buffer with structure, so a wrong tap shows up and not just a flat field.
+    fn ramp(w: usize, h: usize, n: usize) -> Vec<f32> {
+        (0..w * h * n).map(|i| ((i * 37 % 251) as f32) / 251.0).collect()
+    }
+
+    /// The strip gather must produce the strided walk's bytes: same taps, same order.
+    #[test]
+    fn cols_match_the_strided_walk() {
+        for (w, h, n, r) in [(1, 1, 1, 1), (7, 5, 2, 2), (324, 324, 2, 9), (61, 1122, 4, 79), (0, 4, 2, 1), (5, 0, 2, 1), (33, 17, 4, 0), (9, 9, 4, 100)] {
+            let mut a = ramp(w, h, n);
+            let mut b = a.clone();
+            box_cols_n(&mut a, w, h, n, r);
+            box_cols_strided(&mut b, w, h, n, r);
+            let bits = |v: &Vec<f32>| v.iter().map(|x| x.to_bits()).collect::<Vec<_>>();
+            assert_eq!(bits(&a), bits(&b), "{w}x{h}x{n} r{r} diverged");
+        }
+    }
+
+    /// `cargo test -p photocraft-algo --release --lib -- --nocapture cols_timing`
+    #[test]
+    fn cols_timing() {
+        for (w, h, n, r) in [(324, 324, 2, 9), (1122, 1122, 2, 79), (1122, 786, 2, 79)] {
+            let mut buf = ramp(w, h, n);
+            let mut out = [0.0f64; 2];
+            for (k, f) in [(0usize, box_cols_strided as fn(&mut [f32], usize, usize, usize, usize)), (1, box_cols_n)] {
+                let t = std::time::Instant::now();
+                for _ in 0..5 {
+                    f(&mut buf, w, h, n, r);
+                }
+                out[k] = t.elapsed().as_secs_f64() * 200.0;
+            }
+            println!("{w}x{h}x{n} r{r}: strided {:.3} ms, strip {:.3} ms ({:.2}x)", out[0], out[1], out[0] / out[1]);
         }
     }
 }
