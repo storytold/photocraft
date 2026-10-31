@@ -790,7 +790,7 @@ mod rtl_direction_tests {
         });
         if std::env::var("DBG_ROWS").is_ok() {
             ctx.viewport(|v| {
-                for (_, w) in v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()) {
+                for w in v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()) {
                     if w.sense.senses_click() && w.rect.height() < 40.0 {
                         eprintln!("DBG clickable h<40 rect={:?} id={:?}", w.rect, w.id);
                     }
