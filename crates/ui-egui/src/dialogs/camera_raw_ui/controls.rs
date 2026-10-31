@@ -241,6 +241,13 @@ impl CameraRawDialog {
     }
 }
 
+/// The hand-painted chrome title band, based in the UI's direction like the app title bar.
+fn chrome_title_job(title: String, font: FontId, color: Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::simple_singleline(title, font, color);
+    job.direction = crate::text::direction::text_direction();
+    job
+}
+
 /// The dialog's contents over the whole of `ctx`'s window. `own_window`: the OS window already
 /// shows the title, so none is painted.
 fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
@@ -277,7 +284,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         if !own_window {
             painter.rect_filled(title, 0.0, t.dock);
             painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
-            painter.text(title.center(), Align2::CENTER_CENTER, d.window_title(), FontId::proportional(13.0), t.text);
+            let galley = painter.layout_job(chrome_title_job(d.window_title(), FontId::proportional(13.0), t.text));
+            painter.galley(Align2::CENTER_CENTER.anchor_size(title.center(), galley.size()).min, galley, t.text);
         }
         let ok_label = if d.target == Target::OpenRaw { tl!("Open") } else { tl!("OK") };
         let footer_h = 48.0;
@@ -635,5 +643,17 @@ mod tests {
         let ltr_mid = screen.right() - PANEL_W / 2.0;
         assert!(rtl_caption.center().x > rtl_mid, "the caption is at the panel's right edge: {rtl_caption:?}");
         assert!(ltr_caption.center().x < ltr_mid, "the caption is at the panel's left edge: {ltr_caption:?}");
+    }
+
+    #[test]
+    fn chrome_title_job_bases_its_direction_on_the_ui_direction() {
+        use crate::text::direction::{Dir, direction_scope};
+        let font = FontId::proportional(13.0);
+        let _ltr = direction_scope(Dir::Ltr);
+        let ltr = chrome_title_job("Camera Raw".to_owned(), font.clone(), Color32::WHITE);
+        assert_eq!(ltr.direction, egui::epaint::text::TextDirection::LeftToRight);
+        let _rtl = direction_scope(Dir::Rtl);
+        let rtl = chrome_title_job("Camera Raw".to_owned(), font, Color32::WHITE);
+        assert_eq!(rtl.direction, egui::epaint::text::TextDirection::RightToLeft);
     }
 }
