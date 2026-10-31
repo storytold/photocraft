@@ -772,3 +772,24 @@ fn artboard_rows_have_no_thumbnail_and_a_shorter_row() {
         assert!(b.name.is_some(), "{theme}: the board's name is shown");
     }
 }
+
+/// A board with a mask keeps its mask thumbnail, and so what clicking and dragging it does: only the
+/// board's own thumbnail is left out, and the row keeps a layer's height to fit the mask (#10218).
+#[test]
+fn a_masked_artboard_row_keeps_its_mask_thumbnail() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+    let layer = s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+    let board = s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": board})).unwrap();
+    let h = harness(s, 1.0, "pro", 320.0);
+    let rows = recorded(&h.ctx);
+    let row = |id: u64| rows.iter().find(|r| r.layer == id).unwrap_or_else(|| panic!("row for {id}"));
+    let (b, l) = (row(board), row(layer));
+    assert!(b.thumbnail.is_none(), "still no board thumbnail");
+    let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, board).expect("the board's mask thumbnail is drawn");
+    let mask = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).expect("a pixel mask thumbnail").1;
+    assert!(b.row.contains_rect(mask), "the mask thumbnail sits in the board's row");
+    assert_eq!(b.row.height(), l.row.height(), "a layer's height, so the mask thumbnail fits");
+}
