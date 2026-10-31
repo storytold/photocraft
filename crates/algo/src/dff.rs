@@ -117,6 +117,55 @@ pub fn upsample_bilinear(g: &[f32], dw: usize, dh: usize, w: usize, h: usize, k:
     out
 }
 
+/// Evaluate the working-grid guided coefficients directly at full-resolution guide pixels.
+/// The caller supplies nonempty `w × h` guide data and `ceil(w/k) × ceil(h/k)` coefficients,
+/// with `k > 1`, as produced by `block_mean` and `GuidedFilter::coeffs`. Samples use the same
+/// block centres, border clamp and horizontal-then-vertical arithmetic as `upsample_bilinear`;
+/// interpolate each coefficient before evaluating `a * guide + b` (these do not commute).
+/// Only the output plane is allocated; the two full-resolution coefficient planes are avoided.
+/// Empty dimensions return zeros; inconsistent internal rows/samples are left zero defensively.
+fn upsample_depth(a: &[f32], b: &[f32], guide: &[f32], w: usize, h: usize, k: usize) -> Vec<f32> {
+    let k = k.max(1);
+    let (dw, dh) = (w.div_ceil(k), h.div_ceil(k));
+    let mut out = vec![0.0f32; guide.len()];
+    if dw == 0 || dh == 0 {
+        return out;
+    }
+    let inv = 1.0 / k as f32;
+    par_rows(&mut out, w, 1, |y, row| {
+        let fy = ((y as f32 + 0.5) * inv - 0.5).clamp(0.0, (dh - 1) as f32);
+        let y0 = fy as usize;
+        let y1 = (y0 + 1).min(dh - 1);
+        let ty = fy - y0 as f32;
+        // Rows and samples are bounded by the working-grid dimensions above. Checked lookups
+        // also keep this private helper from introducing an indexing panic on inconsistent data.
+        let (Some(a0), Some(a1), Some(b0), Some(b1), Some(g)) = (
+            a.get(y0 * dw..y0 * dw + dw),
+            a.get(y1 * dw..y1 * dw + dw),
+            b.get(y0 * dw..y0 * dw + dw),
+            b.get(y1 * dw..y1 * dw + dw),
+            guide.get(y * w..y * w + row.len()),
+        ) else {
+            return;
+        };
+        for (x, (o, g)) in row.iter_mut().zip(g).enumerate() {
+            let fx = ((x as f32 + 0.5) * inv - 0.5).clamp(0.0, (dw - 1) as f32);
+            let x0 = fx as usize;
+            let x1 = (x0 + 1).min(dw - 1);
+            let tx = fx - x0 as f32;
+            let sample = |r0: &[f32], r1: &[f32]| -> Option<f32> {
+                let top = *r0.get(x0)? + (*r0.get(x1)? - *r0.get(x0)?) * tx;
+                let bot = *r1.get(x0)? + (*r1.get(x1)? - *r1.get(x0)?) * tx;
+                Some(top + (bot - top) * ty)
+            };
+            if let (Some(a), Some(b)) = (sample(a0, a1), sample(b0, b1)) {
+                *o = a * g + b;
+            }
+        }
+    });
+    out
+}
+
 /// Box means over a `(2r + 1)²` window clamped to the plane (partial windows at the borders use
 /// their own count): a horizontal moving sum per row in parallel, then a vertical moving sum
 /// carried down the rows as one accumulator row.
@@ -857,9 +906,7 @@ pub fn depth_from_focus(luma: &[&[f32]], guide: &[f32], w: usize, h: usize, p: &
         up.filter(&depth_w)
     } else {
         let (a, b) = up.coeffs(&depth_w);
-        let a = upsample_bilinear(&a, dw, dh, w, h, k);
-        let b = upsample_bilinear(&b, dw, dh, w, h, k);
-        (0..w * h).map(|i| a[i] * guide[i] + b[i]).collect()
+        upsample_depth(&a, &b, guide, w, h, k)
     };
     let depth = depth.into_iter().map(|v| v.clamp(0.0, max_d)).collect();
     let conf = if k == 1 { conf } else { upsample_bilinear(&conf, dw, dh, w, h, k) };
@@ -870,9 +917,83 @@ pub fn depth_from_focus(luma: &[&[f32]], guide: &[f32], w: usize, h: usize, p: &
 mod tests {
     use super::*;
 
+    /// Deterministic finite fixtures for the numeric reference comparisons.
     fn lcg(seed: &mut u64) -> f32 {
         *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         ((*seed >> 33) % 10000) as f32 / 10000.0
+    }
+
+    /// The pre-fusion path materialises each interpolated coefficient independently. Keep
+    /// this reference separate so a change to the fused sampling cannot validate itself.
+    fn separate_upsample_depth(a: &[f32], b: &[f32], guide: &[f32], w: usize, h: usize, k: usize) -> Vec<f32> {
+        let (dw, dh) = (w.div_ceil(k), h.div_ceil(k));
+        let a = upsample_bilinear(a, dw, dh, w, h, k);
+        let b = upsample_bilinear(b, dw, dh, w, h, k);
+        (0..w * h).map(|i| a[i] * guide[i] + b[i]).collect()
+    }
+
+    /// Compare raw and clamped bits, including signed zero, rather than hiding arithmetic
+    /// reassociation or early clamping behind a tolerance. Values span both clamp boundaries.
+    fn assert_upsample_bits(a: &[f32], b: &[f32], guide: &[f32], w: usize, h: usize, k: usize) {
+        let want = separate_upsample_depth(a, b, guide, w, h, k);
+        let got = upsample_depth(a, b, guide, w, h, k);
+        assert_eq!(got.len(), want.len());
+        for (i, (got, want)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(got.to_bits(), want.to_bits(), "raw {w}×{h} k={k} pixel {i}");
+            assert_eq!(got.clamp(0.0, 2.0).to_bits(), want.clamp(0.0, 2.0).to_bits(), "clamped {w}×{h} k={k} pixel {i}");
+        }
+    }
+
+    /// Partial edge blocks, rectangular and degenerate working grids retain block-centre
+    /// coordinates and operation order at the default scale and both smaller/larger scales.
+    #[test]
+    fn fused_upsample_matches_separate_planes_bit_for_bit() {
+        let mut seed = 31;
+        for (w, h) in [(1usize, 1usize), (1, 19), (23, 1), (3, 5), (17, 9), (48, 31), (257, 3)] {
+            for scale in [0, 1, 2, 3, 8] {
+                let k = 1 << scale;
+                let n = w.div_ceil(k) * h.div_ceil(k);
+                let guide: Vec<f32> = (0..w * h).map(|_| 4.0 * lcg(&mut seed) - 2.0).collect();
+                for (av, bv) in [(0.0, -0.0), (-0.0, 0.0), (1.0, -2.0), (-3.0, 4.0), (1e-30, -1e-30), (1e20, -1e20)] {
+                    assert_upsample_bits(&vec![av; n], &vec![bv; n], &guide, w, h, k);
+                }
+                for _ in 0..8 {
+                    let a: Vec<f32> = (0..n).map(|_| 20.0 * lcg(&mut seed) - 10.0).collect();
+                    let b: Vec<f32> = (0..n).map(|_| 20.0 * lcg(&mut seed) - 10.0).collect();
+                    assert_upsample_bits(&a, &b, &guide, w, h, k);
+                }
+            }
+        }
+    }
+
+    /// Interpolating already evaluated depth loses the full-resolution guide; clamping
+    /// coefficients or coarse depth before interpolation likewise changes the answer.
+    #[test]
+    fn fused_upsample_evaluates_after_interpolation() {
+        let (w, h, k) = (4, 1, 2);
+        let (a, b) = ([2.0, -2.0], [-1.0, 3.0]);
+        let guide = [0.0, 1.0, 0.0, 1.0];
+        let depth = upsample_depth(&a, &b, &guide, w, h, k);
+        assert_eq!(depth, [-1.0, 1.0, 2.0, 1.0]);
+        let coarse = [0.0, 2.0]; // a * block_mean(guide) + b
+        assert_ne!(depth, upsample_bilinear(&coarse, 2, 1, w, h, k));
+        assert_upsample_bits(&a, &b, &guide, w, h, k);
+    }
+
+    /// Native row scheduling must not change any arithmetic, including when work is split
+    /// over several workers; the serial reference uses the pre-fusion evaluation order.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn fused_upsample_is_independent_of_thread_count() {
+        let (w, h, k) = (97usize, 65usize, 2usize);
+        let mut seed = 47;
+        let n = w.div_ceil(k) * h.div_ceil(k);
+        let a: Vec<f32> = (0..n).map(|_| lcg(&mut seed) - 0.5).collect();
+        let b: Vec<f32> = (0..n).map(|_| lcg(&mut seed) - 0.5).collect();
+        let guide: Vec<f32> = (0..w * h).map(|_| lcg(&mut seed)).collect();
+        for threads in [1, 2, 4] {
+            rayon::ThreadPoolBuilder::new().num_threads(threads).build().unwrap().install(|| assert_upsample_bits(&a, &b, &guide, w, h, k));
+        }
     }
 
     #[test]
