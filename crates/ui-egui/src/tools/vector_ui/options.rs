@@ -176,6 +176,8 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     };
     let t = Tokens::get(ui.ctx());
     let mut edit: Option<Value> = None;
+    // A swatch picked in a Fill/Stroke popover joins the Recently Used Colors once the edit took it.
+    let mut recent: Option<[f32; 3]> = None;
     let doc_id = app.session.active().map(|st| st.doc.id);
     let key = |k: &str| format!("shape-{doc_id:?}-{}-{k}", id.0);
     let gesture_key = ui.scope_id().with(key("paint-gesture"));
@@ -184,9 +186,11 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     // The shared collapsible section headers (#155).
     // Prefs "Appearance" is theme chrome (Giao diện); shape fill/stroke is Diện mạo.
     if crate::props_layout::section(ui, "appearance", crate::i18n::tr_ctx(crate::i18n::current(), "shape", "Appearance")) {
+        let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+        let lib = crate::paint_picker::library(&app.session, ui.ctx());
+        let mut picks: Vec<(bool, PaintChange)> = Vec::new();
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(tl!("Fill")).color(t.text_dim).size(12.0));
-            let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
             let mut gradients = GradientChoices {
                 presets: &app.session.presets.gradients,
                 current: &app.session.presets.gradient,
@@ -194,24 +198,32 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 fg,
                 bg,
             };
-            if let Some(change) = swatch(ui, sh.fill.as_ref(), fg, tl!("Set shape fill type"), &mut gradients) {
-                let fill = match change {
-                    PaintChange::None => Value::Null,
-                    PaintChange::Color(color) => json!(color),
-                    PaintChange::Gradient(g) => paint_param(&g),
+            if let Some(change) = swatch(ui, &lib, sh.fill.as_ref(), fg, tl!("Set shape fill type"), &mut gradients) {
+                let fill = match &change {
+                    PaintChange::None => Some(Value::Null),
+                    PaintChange::Color(color) => Some(json!(color)),
+                    PaintChange::Gradient(g) => Some(paint_param(g)),
+                    PaintChange::OpenPicker => None,
                 };
-                edit = Some(json!({"fill": fill, "coalesce": coalesce("fill")}));
+                if let Some(fill) = fill {
+                    edit = Some(json!({"fill": fill, "coalesce": coalesce("fill")}));
+                }
+                picks.push((false, change));
             }
             ui.add_space(12.0);
             ui.label(egui::RichText::new(tl!("Stroke")).color(t.text_dim).size(12.0));
-            if let Some(change) = swatch(ui, sh.stroke.as_ref().map(|s| &s.paint), fg, tl!("Set shape stroke type"), &mut gradients) {
+            if let Some(change) = swatch(ui, &lib, sh.stroke.as_ref().map(|s| &s.paint), fg, tl!("Set shape stroke type"), &mut gradients) {
                 let width = enabled_stroke_width(sh.stroke.as_ref().map_or(0.0, |s| s.width));
-                let stroke = match change {
-                    PaintChange::None => Value::Null,
-                    PaintChange::Color(color) => json!({"color": color, "width": width}),
-                    PaintChange::Gradient(g) => json!({"color": paint_param(&g), "width": width}),
+                let stroke = match &change {
+                    PaintChange::None => Some(Value::Null),
+                    PaintChange::Color(color) => Some(json!({"color": color, "width": width})),
+                    PaintChange::Gradient(g) => Some(json!({"color": paint_param(g), "width": width})),
+                    PaintChange::OpenPicker => None,
                 };
-                edit = Some(json!({"stroke": stroke, "coalesce": coalesce("stroke")}));
+                if let Some(stroke) = stroke {
+                    edit = Some(json!({"stroke": stroke, "coalesce": coalesce("stroke")}));
+                }
+                picks.push((true, change));
             }
             let mut w = sh.stroke.as_ref().map_or(0.0, |s| s.width);
             if crate::widgets::value_field(ui, &mut w, 0.0..=288.0, "px", 60.0).accessible_name(tl!("Stroke:")).changed() && (sh.stroke.is_some() || w > 0.0) {
@@ -235,6 +247,16 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
                 stroke["width"] = json!(3.0);
             }
             edit = Some(json!({"stroke": stroke, "coalesce": change.coalesce}));
+        }
+        for (is_stroke, change) in picks {
+            match change {
+                PaintChange::OpenPicker => {
+                    let which = if is_stroke { crate::shape_fill_ui::Paint::Stroke } else { crate::shape_fill_ui::Paint::Fill };
+                    crate::shape_fill_ui::open_paint(app, which, Some(id), false, fg);
+                }
+                PaintChange::Color(c) => recent = Some([c[0], c[1], c[2]]),
+                PaintChange::None | PaintChange::Gradient(_) => {}
+            }
         }
     }
     if let Some(live) = &sh.live
@@ -315,9 +337,16 @@ pub fn shape_properties(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: photocra
     }
     if let Some(mut p) = edit {
         p["layer"] = json!(id.0);
-        if let Err(e) = app.run("shape.edit", p) {
-            app.ui.status = e;
-            app.ui.status_error = true;
+        match app.run("shape.edit", p) {
+            Ok(_) => {
+                if let Some(rgb) = recent {
+                    crate::paint_picker::remember(app, rgb);
+                }
+            }
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
         }
         if !ui.input(|i| i.pointer.any_down()) {
             ui.data_mut(|d| {
