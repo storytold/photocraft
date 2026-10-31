@@ -81,8 +81,9 @@ pub fn leave_for_shortcut(ctx: &egui::Context) -> bool {
     true
 }
 
-/// A command shortcut (⌘1, ⌘D, F7…) pressed while a menu or a dropdown list is open closes it,
-/// so the shortcut runs in the same press, as with Photoshop's menus (#9065). Keys the menu or
+/// A command shortcut (⌘1, ⌘D, F7…) pressed while a menu, a dropdown list or another popup (a
+/// panel's options menu, a picker) is open closes it, so the shortcut runs in the same press, as
+/// with Photoshop's menus and panel flyouts (#9065). Keys the menu or
 /// list uses (arrows, ↩, Esc, letters) keep driving it, and a field in it that has the keyboard
 /// (Help › Search, focused whenever Help opens) keeps its editing keys (⌘A, ⌘V…); any other
 /// shortcut also takes the focus from the field so it isn't held back as typing. True when one
@@ -90,13 +91,14 @@ pub fn leave_for_shortcut(ctx: &egui::Context) -> bool {
 pub fn close_for_shortcut(ctx: &egui::Context) -> bool {
     let menu = crate::menu_nav::is_open(ctx);
     let list = crate::widgets::dropdown_list_open(ctx);
+    let popup = egui::Popup::is_any_open(ctx);
     let typing = ctx.text_edit_focused();
     let shortcut = ctx.input(|i| {
         i.events.iter().any(
             |e| matches!(e, Event::Key { key, pressed: true, modifiers, .. } if is_command_key(*key, *modifiers) && !(typing && is_text_editing_key(*key, *modifiers))),
         )
     });
-    if !(menu || list) || !shortcut {
+    if !(menu || list || popup) || !shortcut {
         return false;
     }
     if typing && let Some(id) = ctx.memory(|m| m.focused()) {
@@ -107,6 +109,9 @@ pub fn close_for_shortcut(ctx: &egui::Context) -> bool {
     }
     if list {
         crate::widgets::close_dropdown_list(ctx);
+    }
+    if popup {
+        egui::Popup::close_all(ctx);
     }
     ctx.request_repaint();
     true
