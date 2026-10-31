@@ -144,7 +144,8 @@ pub(super) fn row(
         egui::Popup::from_response(&arrow).open_bool(&mut open).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             crate::press_menu::above_parent_ui(parent_layer, ui);
             ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-            egui::Grid::new(("contour-presets", effect, key)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+            // Preset swatches are data, not a reading row: the strip keeps its order in an LTR scope.
+            crate::direction::ltr_grid(ui, ("contour-presets", effect, key), 4, vec2(4.0, 4.0), |ui| {
                 for (i, (name, _)) in CONTOURS.iter().enumerate() {
                     let preset = photocraft_engine::layer_style::builtin_contour(name).unwrap_or_default();
                     let (r, resp) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
@@ -163,7 +164,8 @@ pub(super) fn row(
             // The user's own contours follow the standard ones (Contour Editor › New…).
             if !user.is_empty() {
                 ui.add_space(4.0);
-                egui::Grid::new(("contour-user", effect, key)).spacing(vec2(4.0, 4.0)).show(ui, |ui| {
+                // The user's own swatches follow the same physical order.
+                crate::direction::ltr_grid(ui, ("contour-user", effect, key), 4, vec2(4.0, 4.0), |ui| {
                     for (i, u) in user.iter().enumerate() {
                         let (r, resp) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
                         draw(ui.painter(), r, u, t.text, &t);
@@ -683,5 +685,42 @@ mod row_tests {
         assert!(rtl_contour.top() - rtl_above < 12.0, "RTL: same band, not the remaining column height: {rtl_contour:?}");
         assert!(rtl_aa.right() < rtl_contour.left(), "RTL: the label sits at the reading start: {rtl_contour:?} {rtl_aa:?}");
         assert!((ltr_contour.top() - rtl_contour.top()).abs() < 2.0, "the mirroring moves x, not y: {ltr_contour:?} {rtl_contour:?}");
+    }
+}
+
+/// The preset strips are data: `ltr_grid` keeps their cells in physical left-to-right order,
+/// at the same coordinates, in both directions; only the popup's rows mirror.
+#[cfg(test)]
+mod grid_tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+
+    #[test]
+    fn the_preset_strip_stays_physical_ltr_in_rtl() {
+        let cells = |dir: Dir| {
+            let _dir = direction_scope(dir);
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 200.0)).build_ui_state(
+                |ui, rects: &mut Vec<egui::Rect>| {
+                    crate::direction::ltr_grid(ui, "contour-presets-test", 4, vec2(4.0, 4.0), |ui| {
+                        for _ in 0..4 {
+                            let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
+                            rects.push(r);
+                        }
+                    });
+                },
+                Vec::new(),
+            );
+            h.run_steps(2);
+            h.state().clone()
+        };
+        let ltr = cells(Dir::Ltr);
+        let rtl = cells(Dir::Rtl);
+        assert_eq!(ltr.len(), 4);
+        for i in 1..ltr.len() {
+            assert!(ltr[i - 1].right() <= ltr[i].left() + 0.5, "LTR: the cells advance left to right: {ltr:?}");
+        }
+        for (a, b) in ltr.iter().zip(&rtl) {
+            assert!((a.left() - b.left()).abs() < 0.5 && (a.top() - b.top()).abs() < 0.5, "the strip keeps its physical placement in RTL: {a:?} {b:?}");
+        }
     }
 }
