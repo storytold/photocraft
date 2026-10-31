@@ -46,6 +46,31 @@ pub fn class_name(name: &str) -> String {
     }
 }
 
+/// `s` as a double-quoted CSS string, escaped as CSSOM serializes one: `"` and `\` get a
+/// backslash, control characters (line breaks among them) become hex escapes, NUL becomes U+FFFD.
+pub fn quoted(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '\0' => out.push('\u{FFFD}'),
+            '\u{1}'..='\u{1F}' | '\u{7F}' => out.push_str(&format!("\\{:x} ", u32::from(c))),
+            '"' | '\\' => {
+                out.push('\\');
+                out.push(c);
+            }
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// The image Photoshop names after a layer, as a `url()`.
+fn image(l: &Layer) -> String {
+    format!("url({})", quoted(&format!("{}.png", l.name)))
+}
+
 fn rgb(c: &photocraft_color::Color) -> String {
     let [r, g, b] = c.to_rgb().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
     format!("rgb({r}, {g}, {b})")
@@ -78,7 +103,7 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
                 _ => "justify",
             };
             props.push(("font-size", format!("{}px", number(f64::from(size_pt) * px_per_pt))));
-            props.push(("font-family", format!("\"{}\"", family.replace('"', "'"))));
+            props.push(("font-family", quoted(family)));
             props.push(("color", rgb(&color)));
             props.push(("line-height", number(line_height)));
             props.push(("text-align", align.into()));
@@ -87,7 +112,7 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
         }
         LayerContent::Shape(sh) => match &sh.fill {
             Some(Fill::Solid(c)) => props.push(("background-color", rgb(c))),
-            _ => props.push(("background-image", format!("url(\"{}.png\")", l.name))),
+            _ => props.push(("background-image", image(l))),
         },
         LayerContent::Fill(f) => {
             // A fill layer without a shape covers the canvas.
@@ -96,10 +121,10 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
             }
             match f {
                 Fill::Solid(c) => props.push(("background-color", rgb(c))),
-                _ => props.push(("background-image", format!("url(\"{}.png\")", l.name))),
+                _ => props.push(("background-image", image(l))),
             }
         }
-        _ => props.push(("background-image", format!("url(\"{}.png\")", l.name))),
+        _ => props.push(("background-image", image(l))),
     }
     if bounds.is_empty() {
         return None;

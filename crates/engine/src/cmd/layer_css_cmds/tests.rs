@@ -91,6 +91,23 @@ fn class_names_never_start_with_a_digit() {
     }
 }
 
+/// Names go into quoted CSS strings: a `"`, a backslash or a line break in one is escaped, so the
+/// string doesn't end early and keeps the name (Photoshop writes them unescaped, which breaks
+/// the rule). Ordinary names are written as before.
+#[test]
+fn names_in_quoted_values_are_escaped() {
+    let css = session("Say \"hi\"").execute(ID, json!({})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.contains("  background-image: url(\"Say \\\"hi\\\".png\");\n"), "{css}");
+    let css = session("a\\b\nc").execute(ID, json!({})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.contains("  background-image: url(\"a\\\\b\\a c.png\");\n"), "{css}");
+    let doc = session("Box").active().unwrap().doc.clone();
+    let mut cache = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+    cache.fill_rect(Rect::new(49, 28, 120, 52), &[0.0, 0.0, 0.0, 1.0]);
+    let text = photocraft_doc::TextLayer { font_family: "My \"Font\"".into(), size_pt: 24.0, cache: Some(cache), ..Default::default() };
+    let css = rule(&doc, 3, &Layer::new("Title", LayerContent::Text(text))).unwrap_or_default();
+    assert!(css.contains("  font-family: \"My \\\"Font\\\"\";\n"), "{css}");
+}
+
 #[test]
 fn bad_params_and_layers_without_css_are_errors() {
     let mut s = session("Box");
