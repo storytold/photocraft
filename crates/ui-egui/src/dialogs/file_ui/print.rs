@@ -155,22 +155,6 @@ pub(super) fn driver_page(f: &mut Map<String, Value>) -> bool {
 /// Points per unit for the Position and Size fields.
 /// A single-line edit whose text reads right-to-left in a right-to-left UI; a left-to-right UI
 /// keeps egui's default edit, unchanged.
-fn add_rtl_singleline(ui: &mut egui::Ui, text: &mut String, configure: impl FnOnce(egui::TextEdit<'_>) -> egui::TextEdit<'_>) -> egui::Response {
-    let edit = configure(egui::TextEdit::singleline(text));
-    if !crate::direction::is_rtl() {
-        return ui.add(edit);
-    }
-    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let mut job = egui::text::LayoutJob::simple_singleline(buf.as_str().to_owned(), font, ui.visuals().text_color());
-        job.direction = egui::epaint::text::TextDirection::RightToLeft;
-        job.halign = egui::Align::Max;
-        job.keep_trailing_whitespace = true;
-        ui.fonts_mut(|f| f.layout_job(job))
-    };
-    ui.add(edit.align(egui::Align2::RIGHT_CENTER).layouter(&mut layouter))
-}
-
 fn unit_pt(units: &str) -> f64 {
     match units {
         "mm" => 72.0 / 25.4,
@@ -649,7 +633,7 @@ pub(super) fn print_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map
             head(ui, tl!("Save as PDF"));
             ui.horizontal(|ui| {
                 let mut out = s(f, "output", "");
-                if add_rtl_singleline(ui, &mut out, |e| e.hint_text(tl!("(print to the printer)")).desired_width(240.0)).changed() {
+                if crate::widgets::rtl_singleline_add(ui, &mut out, |e| e.hint_text(tl!("(print to the printer)")).desired_width(240.0)).changed() {
                     f.insert("output".into(), json!(out));
                 }
                 browse = ui.button(tl!("Browse…")).clicked();
