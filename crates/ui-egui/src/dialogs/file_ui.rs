@@ -281,6 +281,18 @@ mod web_playback_tests {
         app
     }
 
+    type Downloads = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>;
+
+    fn capture_downloads(app: &mut PhotocraftApp) -> Downloads {
+        let files = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = files.clone();
+        app.services.write = Some(Box::new(move |path, bytes| {
+            captured.borrow_mut().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        files
+    }
+
     /// Save for Web offers the slices selected in its preview as an export choice.
     #[test]
     fn save_for_web_offers_selected_slices() {
@@ -329,12 +341,7 @@ mod web_playback_tests {
         let scale = (pane.width() / 32.0).min(pane.height() / 16.0);
         click_preview(&mut h, pane.center() + egui::vec2(8.0 * scale, 0.0), egui::Modifiers::NONE);
         assert_eq!(h.state().1["__selectedSlices"], json!([2]));
-        let downloads = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let captured = downloads.clone();
-        h.state_mut().0.services.write = Some(Box::new(move |path, bytes| {
-            captured.borrow_mut().push((path.to_string(), bytes.to_vec()));
-            Ok(())
-        }));
+        let downloads = capture_downloads(&mut h.state_mut().0);
         for html in [false, true] {
             for (mode, count) in [("selected", 1), ("all", 2)] {
                 h.state_mut().1.insert("slices".into(), json!(mode));
@@ -370,6 +377,64 @@ mod web_playback_tests {
         assert!(!h.state().0.ui.dialogs.iter().find(|d| d.id == next).unwrap().fields.contains_key("numbers"));
     }
 
+    /// An explicit selection must not silently omit a slice or write partial output.
+    #[test]
+    fn save_for_web_rejects_selected_images_that_shrink_to_zero() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 100, "height": 10})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 99, 10], "name": "wide"})).unwrap();
+        app.run("slice.new", json!({"rect": [99, 0, 1, 10], "name": "thin"})).unwrap();
+        let downloads = capture_downloads(&mut app);
+        let mut fields: Map<String, Value> =
+            serde_json::from_value(json!({"format": "png24", "slices": "selected", "__selectedSlices": [1, 2], "percent": 10})).unwrap();
+        for html in [false, true] {
+            fields.insert("html".into(), json!(html));
+            let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
+            p["dir"] = json!(".");
+            assert!(download_for_web(&mut app, p).is_err(), "a selected image becomes zero pixels wide");
+            assert!(downloads.borrow().is_empty(), "validate before writing the wide slice");
+            assert!(app.session.file_menu.last_web.is_none());
+        }
+        fields.insert("html".into(), json!(false));
+        for (mode, percent, count) in [("selected", 100, 2), ("all", 10, 1)] {
+            fields.insert("slices".into(), json!(mode));
+            fields.insert("percent".into(), json!(percent));
+            let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
+            p["dir"] = json!(".");
+            download_for_web(&mut app, p).unwrap();
+            assert_eq!(downloads.borrow().len(), count, "{mode}: {percent}%");
+            downloads.borrow_mut().clear();
+        }
+    }
+
+    /// No-image slices need HTML; mixed image/text selections can still export images only.
+    #[test]
+    fn save_for_web_no_image_selection_needs_html() {
+        let mut app = sliced_app();
+        app.run("slice.new", json!({"rect": [0, 0, 32, 16], "kind": "noImage", "cellText": "Text"})).unwrap();
+        app.services.file_dialog = Some(Box::new(|_, _, _| panic!("invalid selection must not open a picker")));
+        let mut fields: Map<String, Value> =
+            serde_json::from_value(json!({"format": "png24", "slices": "selected", "__selectedSlices": [1], "html": false})).unwrap();
+        assert!(web_confirm(&mut app, &fields).is_err());
+        assert!(!app.file_dialog_open());
+        let downloads = capture_downloads(&mut app);
+        fields.insert("html".into(), json!(true));
+        let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
+        p["dir"] = json!(".");
+        download_for_web(&mut app, p).unwrap();
+        assert_eq!(downloads.borrow().len(), 1);
+        assert!(downloads.borrow()[0].0.ends_with(".html"));
+        downloads.borrow_mut().clear();
+        app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "image"})).unwrap();
+        fields.insert("html".into(), json!(false));
+        fields.insert("__selectedSlices".into(), json!([1, 2]));
+        let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
+        p["dir"] = json!(".");
+        download_for_web(&mut app, p).unwrap();
+        assert_eq!(downloads.borrow().len(), 1);
+        assert!(downloads.borrow()[0].0.ends_with("image.png"));
+    }
+
     /// Partial HTML keeps empty rows/columns at export size and omits unselected text.
     #[test]
     fn save_for_web_selected_html_preserves_scaled_layout() {
@@ -383,12 +448,7 @@ mod web_playback_tests {
         fields.extend(
             serde_json::from_value::<Map<String, Value>>(json!({"format": "png24", "slices": "selected", "__selectedSlices": [4], "html": true})).unwrap(),
         );
-        let downloads = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let captured = downloads.clone();
-        app.services.write = Some(Box::new(move |path, bytes| {
-            captured.borrow_mut().push((path.to_string(), bytes.to_vec()));
-            Ok(())
-        }));
+        let downloads = capture_downloads(&mut app);
         for (percent, side) in [(50, 8), (100, 16)] {
             let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
             p["percent"] = json!(percent);
@@ -508,12 +568,7 @@ mod web_playback_tests {
         h.key_press(egui::Key::Space);
         h.run_steps(2);
         assert_eq!(h.state().1["__selectedSlices"], json!([2]));
-        let downloads = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let captured = downloads.clone();
-        h.state_mut().0.services.write = Some(Box::new(move |path, bytes| {
-            captured.borrow_mut().push((path.to_string(), bytes.to_vec()));
-            Ok(())
-        }));
+        let downloads = capture_downloads(&mut h.state_mut().0);
         let mut p = web::web_params(&h.state().1, &h.state().0.session.active().unwrap().doc).unwrap();
         p["dir"] = json!(".");
         download_for_web(&mut h.state_mut().0, p).unwrap();

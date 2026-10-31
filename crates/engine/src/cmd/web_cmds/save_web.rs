@@ -167,6 +167,7 @@ fn remember_web_settings(s: &mut Session, cmd: &str, settings: &Value) {
     });
 }
 
+/// Estimate or save a web export, checking selected image sizes before any write.
 fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
     if let Some(authorize) = s.authorize {
@@ -227,6 +228,9 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
     let trusted_slice_html = p.get("trustedSliceHtml").and_then(Value::as_bool).unwrap_or(false);
     let base = portable_generated_stem(single.map(stem).unwrap_or_else(|| slices::base_name(&doc)));
+    if numbers.is_some() && all.iter().any(|r| chosen(r) && r.kind != SliceKind::NoImage && scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds()).is_empty()) {
+        return Err(other("A selected image slice is empty at this export size"));
+    }
     let mut files = Vec::new();
     let mut cells: Vec<(Rect, String, String)> = Vec::new();
     let mut total = 0usize;

@@ -583,7 +583,7 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
     })
 }
 
-/// Validate selected numbers against the document and translate them to the export filter.
+/// Validate the selection and output options, then build the command's numbered filter.
 pub(super) fn web_params(fields: &Map<String, Value>, doc: &photocraft_doc::Document) -> Result<Value, String> {
     let mut p = params(fields);
     if p["slices"] == "selected" {
@@ -592,6 +592,13 @@ pub(super) fn web_params(fields: &Map<String, Value>, doc: &photocraft_doc::Docu
         let slices = photocraft_doc::slices::resolve(doc);
         if numbers.iter().any(|n| n.as_u64().is_none_or(|n| !slices.iter().any(|slice| u64::try_from(slice.number).ok() == Some(n)))) {
             return Err("Invalid selected slice number".into());
+        }
+        if !b(fields, "html", true)
+            && !slices
+                .iter()
+                .any(|slice| slice.kind != photocraft_doc::SliceKind::NoImage && numbers.iter().any(|n| n.as_u64() == u64::try_from(slice.number).ok()))
+        {
+            return Err("Selected slices contain no images; enable HTML output".into());
         }
         p["slices"] = json!("all");
         p["numbers"] = json!(numbers);
