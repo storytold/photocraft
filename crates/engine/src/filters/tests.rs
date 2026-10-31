@@ -599,3 +599,37 @@ fn displace_frames_the_layers_pixels_past_the_canvas() {
         }
     }
 }
+
+/// A layer with one pixel a million pixels past the canvas: Displace frames the canvas and that
+/// pixel, but reads only the pixels its map can reach around the canvas, not the gap, and the
+/// canvas comes out as with a near pixel.
+#[test]
+fn displace_reads_no_gap_to_a_far_off_canvas_pixel() {
+    let canvas = photocraft_geom::Rect::new(0, 0, 48, 32);
+    let displaced = |far_x: i32| {
+        let mut s = session();
+        s.edit("pattern and far pixel", |doc, active| {
+            let surf = doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap();
+            for y in 0..32 {
+                for x in 0..48 {
+                    surf.write_pixel(x, y, &[x as f32 / 47.0, y as f32 / 31.0, ((x + y) % 5) as f32 / 4.0, 1.0]);
+                }
+            }
+            surf.write_pixel(far_x, 5, &[1.0, 0.0, 0.0, 1.0]);
+            Ok(())
+        })
+        .unwrap();
+        let before = active_pixels(&s);
+        // The map: a white document, the full shift right and down (4 % of 128 px).
+        s.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+        s.set_active(0);
+        s.execute("filter.distort.displace", json!({"horizontal": 4, "vertical": 4, "fit": "tile", "undefinedAreas": "repeat", "mapDocument": 1})).unwrap();
+        let d = s.active().unwrap();
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap();
+        assert_eq!(surf.content_bounds().x1, far_x + 1, "the far pixel stays");
+        let after = surf.read_region(canvas);
+        assert_ne!(after, before, "displaced");
+        after
+    };
+    assert_eq!(displaced(1_000_000), displaced(48 + 100));
+}

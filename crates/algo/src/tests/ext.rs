@@ -858,6 +858,59 @@ fn displace_reads_half_as_zero_on_deeper_maps() {
     }
 }
 
+/// A layer with a pixel far past the canvas frames Displace over the canvas and that pixel
+/// (#10444), but the map moves pixels by at most the full shift: only the canvas grown by it is
+/// read, not the gap to the pixel, and the canvas's pixels come out as with a near one.
+#[test]
+fn displace_reads_only_the_pixels_its_map_reaches() {
+    let displace = |undefined| FilterParams::Displace {
+        horizontal: 10.0,
+        vertical: 10.0,
+        stretch: false,
+        undefined,
+        map: Some(map_image([100.0 / 255.0, 150.0 / 255.0, 0.5, 1.0])),
+        map_8bit: true,
+    };
+    let with_pixel_at = |x: i32| {
+        let mut s = pattern(SampleType::F32, R);
+        s.write_pixel(x, 3, &[1.0, 0.0, 0.0, 1.0]);
+        s
+    };
+    let (far, near) = (with_pixel_at(1_000_000), with_pixel_at(R.x1 + 100));
+    for undefined in [UndefinedAreas::Wrap, UndefinedAreas::Repeat, UndefinedAreas::Transparent] {
+        let p = displace(undefined);
+        let frame = R.union(&far.content_bounds());
+        // 10 % of 128 px, and the bilinear neighbours.
+        assert_eq!(crate::global_source(&far, &p, R, frame).rect, R.inflate(15), "{undefined:?}");
+        // Wrapping reads the far side, where the pixels differ.
+        if undefined != UndefinedAreas::Wrap {
+            let run = |s: &Surface| apply_in(s, &p, R, R.union(&s.content_bounds()), None, R.union(&s.content_bounds())).read_region(R);
+            assert_eq!(run(&far), run(&near), "{undefined:?}");
+        }
+    }
+}
+
+/// [`distort2::displace_source`] fills in the frame's undefined areas as sampling the whole frame
+/// with them did: wrapping reads the frame's far side, repeating its edge, transparency nothing.
+#[test]
+fn displace_source_fills_in_the_frames_undefined_areas() {
+    let mut s = pattern(SampleType::F32, R);
+    s.write_pixel(90, 3, &[1.0, 0.0, 0.0, 1.0]);
+    let frame = R.union(&s.content_bounds());
+    let full = Image::read(&s, frame);
+    for undefined in [UndefinedAreas::Wrap, UndefinedAreas::Repeat, UndefinedAreas::Transparent] {
+        let src = crate::distort2::displace_source(&s, R, frame, (10.0, -10.0), undefined);
+        assert_eq!(src.rect, R.inflate(15));
+        let edge = crate::other::edge_of(undefined);
+        for y in src.rect.y0..src.rect.y1 {
+            for x in src.rect.x0..src.rect.x1 {
+                let want: Vec<f32> = (0..src.ch).map(|c| full.get_edge(x, y, c, edge, frame)).collect();
+                assert_eq!(src.px(x, y), want.as_slice(), "{undefined:?} at ({x}, {y})");
+            }
+        }
+    }
+}
+
 #[test]
 fn wind_streaks_downwind_from_edges() {
     let mut s = flat(SampleType::F32, R, BLACK);
