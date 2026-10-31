@@ -1,7 +1,9 @@
 use super::PhotocraftApp;
 use std::hash::{DefaultHasher, Hash, Hasher};
 
-// Sampling misses changed channels even in a 1x1 image: include the complete OS image.
+/// Hash dimensions and the complete RGBA payload for a process-local freshness check.
+/// Sampling can miss changed channels even in a 1×1 image. This finite signature is a
+/// comparison hint, not a persistent identifier or a guarantee against hash collisions.
 fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
     let mut sig = DefaultHasher::new();
     w.hash(&mut sig);
@@ -75,7 +77,8 @@ impl PhotocraftApp {
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
         surface.prune();
-        self.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds: r, layers: None, resolution: None, source: None });
+        self.session.clipboard =
+            Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None });
         self.os_clip_sig = Some(sig);
         self.clip_external = true;
         self.clip_unmirrored = false;

@@ -69,19 +69,19 @@ mod paths;
 mod shape;
 mod vector_mask;
 
-pub(crate) use params::{layer_id, nums, pt};
+pub(crate) use params::{layer_id, nums, op_from, pt};
 pub use params::{parse_path, parse_stroke, path_json};
 pub use paths::STROKE_PATH_TOOLS;
 use paths::{
-    clipping_path_clear, clipping_path_set, path_delete, path_fill, path_rename, path_set, path_stroke, path_to_selection, path_transform, paths_list,
-    resolve_path, select_to_work_path,
+    clipping_path_clear, clipping_path_set, path_delete, path_fill, path_rename, path_set, path_stroke, path_to_selection, path_to_selection_with_mode,
+    path_transform, paths_list, resolve_path, select_to_work_path,
 };
 pub(crate) use paths::{is_work, path_mut};
+pub(crate) use shape::{bake_path, map_path, map_shape, shift_shape, with_shape};
 use shape::{
     can_paste_shape_fill, can_paste_shape_stroke, combine_shapes, copy_shape_fill, copy_shape_stroke, has_shape_fill, has_shape_stroke, merge_components,
     paste_shape_fill, paste_shape_stroke, selection_to_shape, shape_create, shape_edit, shape_info, shape_rasterize,
 };
-pub(crate) use shape::{map_path, map_shape, shift_shape, with_shape};
 pub use shape::{preview_shape_stroke, refresh_shape, shape_path, transform_shape, translate_vectors};
 use vector_mask::{toggle_vector_mask, vector_mask_add, vector_mask_delete, vector_mask_edit, vector_mask_info, vector_mask_rasterize, with};
 
@@ -207,6 +207,27 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true,"mode":"replace|add|subtract|intersect"="replace"}"##,
             enabled: has_doc,
             run: path_to_selection,
+            journal: true,
+        },
+        // ⌘⇧↩ / Ctrl+Shift+Enter adds the path to the selection, ⌘⌥↩ / Ctrl+Alt+Enter subtracts it.
+        CommandSpec {
+            id: "path.addToSelection",
+            label: "Add Path to Selection",
+            menu: &[],
+            shortcut: Some("Cmd+Shift+Enter"),
+            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "add")"##,
+            enabled: has_doc,
+            run: |s, p| path_to_selection_with_mode(s, p, "add"),
+            journal: true,
+        },
+        CommandSpec {
+            id: "path.subtractFromSelection",
+            label: "Subtract Path from Selection",
+            menu: &[],
+            shortcut: Some("Cmd+Alt+Enter"),
+            params: r##"{"name":str|"work"|"layer"="work","feather":px=0,"antiAlias":bool=true} (path.toSelection with mode "subtract")"##,
+            enabled: has_doc,
+            run: |s, p| path_to_selection_with_mode(s, p, "subtract"),
             journal: true,
         },
         spec!("select.toWorkPath", "Make Work Path", [], r##"{"tolerance":0.5..10 px=2} → {subpaths,knots}"##, has_selection, select_to_work_path),

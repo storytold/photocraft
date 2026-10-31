@@ -460,6 +460,8 @@ fn targeting_a_mask_swaps_to_its_own_colour_pair() {
 }
 
 /// Changed pixels must win even when dimensions and all formerly sampled bytes match.
+/// Exercise imported and mirrored clips through each paste route, checking exact RGBA,
+/// one explicit OS read and normal history behavior, including repeated unchanged pastes.
 #[test]
 fn changed_os_clipboard_pixels_reach_every_paste_route() {
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -497,7 +499,8 @@ fn changed_os_clipboard_pixels_reach_every_paste_route() {
                 if mirrored {
                     let bounds = photocraft_geom::Rect::new(7, 9, 7 + w as i32, 9 + h as i32);
                     let surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, bounds, &before);
-                    app.session.clipboard = Some(photocraft_engine::edit_cmds::Clip { surface, bounds, layers: None, resolution: None, source: None });
+                    app.session.clipboard =
+                        Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds, layers: None, resolution: None, source: None });
                     app.export_os_clipboard();
                     assert!(!app.clip_external && !app.clip_unmirrored);
                 } else {
@@ -557,6 +560,8 @@ fn changed_os_clipboard_pixels_reach_every_paste_route() {
     assert!(stale.is_empty(), "stale pasted pixels or classification: {stale:?}");
 }
 
+/// An unchanged RGBA8 OS mirror must preserve the editable 16-bit/float internal copy,
+/// including shape layers, source position and resolution through paste and new-document routes.
 #[test]
 fn unchanged_os_mirrors_preserve_rich_high_depth_copies() {
     for depth in [16, 32] {
@@ -606,6 +611,8 @@ fn unchanged_os_mirrors_preserve_rich_high_depth_copies() {
     }
 }
 
+/// Equal bytes with different dimensions are a new image; malformed or empty payloads
+/// clear stale imported content and remain a quiet no-op without adding history.
 #[test]
 fn clipboard_dimensions_and_invalid_images_keep_existing_paste_policy() {
     let (os, reads) = (OsClip::default(), Arc::default());

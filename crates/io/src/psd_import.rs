@@ -75,6 +75,8 @@ pub(crate) struct Ctx<'a> {
     pub smart_contents: std::collections::HashMap<String, SmartContentsId>,
     /// Source sizes of `PlLd`-only placed layers, by source id (read once per embedded file).
     pub plld_sizes: std::collections::HashMap<String, Option<(f64, f64)>>,
+    /// Shared vector previews are hashed/parsed once, under a per-file work budget.
+    pub vector_previews: crate::vector_preview::ImportCache,
     /// Cancellation and progress for background opens (checked per layer record).
     pub ctl: photocraft_raster::Interrupt<'a>,
     /// Layer records decoded so far, out of `total` (progress).
@@ -498,7 +500,7 @@ impl Ctx<'_> {
             let parsed = (!block.is_foreign_order())
                 .then(|| {
                     photocraft_text::psd::text_layer_from_tysh(&block.data, self.dpi).or_else(|| {
-                        let (text, transform) = blocks::parse_tysh(&block.data).unwrap_or_default();
+                        let (text, transform) = blocks::parse_tysh(&block.data)?;
                         photocraft_text::psd::transform_is_safe(&transform).then(|| TextLayer { text, transform, ..Default::default() })
                     })
                 })
@@ -645,9 +647,17 @@ impl Ctx<'_> {
             }
             _ => stored,
         };
+        // The global blocks' data lives in `self.global` (an owned open moves it out of the file).
+        let vector_preview = rec.block(&crate::vector_preview::PSD_KEY).and_then(|block| {
+            let global = &self.global;
+            self.vector_previews.decode(&id, &block.data, || {
+                crate::linked::embedded_payload_in_blocks(global.iter().map(|(_, key, data)| (key, data.as_slice())), &id).map(|(_, source)| source)
+            })
+        });
         LayerContent::Smart(SmartObject {
             contents_id,
             source: SmartSource::Linked { path: id },
+            vector_preview,
             transform,
             smart_filters: stack.filters,
             cache: Some(cache),
@@ -1122,6 +1132,7 @@ fn read_initial_metadata(file: &PsdFile, global: &[PsdGlobalBlock], doc: &mut Do
         ));
     }
     doc.patterns = crate::pattern_map::from_global_blocks(doc);
+    warnings.extend(crate::pattern_map::unpaintable_warnings(&doc.patterns));
     doc.notes = crate::annotations_map::notes_from_blocks(doc);
     if crate::annotations_map::anno_unreadable(doc) {
         warnings.push("the notes (Anno block) could not be read; they are kept unchanged on PSD save unless a note is added".into());
@@ -1190,6 +1201,7 @@ fn psd_to_document_global(
         unfiltered_bytes: 0,
         smart_contents: Default::default(),
         plld_sizes: Default::default(),
+        vector_previews: Default::default(),
         ctl: *ctl,
         done: 0,
         uniform: Default::default(),
