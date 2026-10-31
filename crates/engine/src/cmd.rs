@@ -238,6 +238,7 @@ fn registry() -> &'static Registry {
 
 // ---------- the table ----------
 
+/// Assembles built-in and module command specs for the shared engine, CLI and UI registry.
 #[allow(clippy::too_many_lines)]
 fn build() -> Vec<CommandSpec> {
     let mut v = vec![

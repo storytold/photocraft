@@ -46,6 +46,7 @@ pub(super) fn document_to_psd_sized(doc: &Document, opts: &PsdExportOptions, dep
     export_supported_document(doc, opts, depth, ctl, fmt, size_limit)
 }
 
+/// Builds PSD layer and composite data for a supported pixel format, collecting export warnings and reporting progress.
 fn export_supported_document(
     doc: &Document,
     opts: &PsdExportOptions,

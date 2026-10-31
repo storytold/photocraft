@@ -6,10 +6,12 @@ use crate::PhotocraftApp;
 
 const NEW: &str = "__pluginPresetNew";
 
+/// Recognizes the private New Preset dialog marker rather than a plug-in's own preset parameter.
 pub(super) fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(NEW)
 }
 
+/// Reports whether installed manifest presets let the host manage the preset choice.
 pub(super) fn manages_preset(fields: &Map<String, Value>) -> bool {
     fields.get("id").and_then(Value::as_str).and_then(photocraft_plugins::registry::get).is_some_and(|p| !p.manifest().preset_values.is_empty())
 }
@@ -29,10 +31,13 @@ pub(super) fn remember_choices(app: &mut PhotocraftApp, fields: &Map<String, Val
     }
 }
 
+/// Prefers the natural built-in preset, then the first built-in; empty means no built-in baseline.
 fn default_selection(m: &photocraft_plugins::Manifest) -> String {
     m.preset_values.get_key_value("natural").or_else(|| m.preset_values.first_key_value()).map(|(k, _)| format!("builtin:{k}")).unwrap_or_default()
 }
 
+/// Restores independent view switches and the selected preset, falling back if that preset disappeared.
+/// Unsaved slider drafts are not restored.
 pub(super) fn restore_choices(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     let Some(plugin) = fields.get("id").and_then(Value::as_str).and_then(photocraft_plugins::registry::get) else { return };
     let saved = app.session.prefs().dialogs.get(&format!("plugin.choices.{}", plugin.id())).and_then(Value::as_object);
@@ -49,6 +54,8 @@ pub(super) fn restore_choices(app: &PhotocraftApp, fields: &mut Map<String, Valu
     }
 }
 
+/// Resolves built-in or saved values for editing without replacing independent switches or Skin Smooth samples.
+/// Host-managed presets run in manual mode so subsequent slider edits take effect.
 fn values(app: &PhotocraftApp, fields: &Map<String, Value>, selection: &str) -> Option<Map<String, Value>> {
     let plugin = fields.get("id").and_then(Value::as_str).and_then(photocraft_plugins::registry::get)?;
     let m = plugin.manifest();
@@ -71,6 +78,7 @@ fn values(app: &PhotocraftApp, fields: &Map<String, Value>, selection: &str) -> 
     Some(values)
 }
 
+/// Applies an available preset and records its clean Reset baseline; returns false for an unavailable selection.
 fn select(app: &PhotocraftApp, fields: &mut Map<String, Value>, selection: &str) -> bool {
     if selection.is_empty() {
         for key in ["__pluginPreset", "__presetValues", "__presetDirty"] {
@@ -86,21 +94,25 @@ fn select(app: &PhotocraftApp, fields: &mut Map<String, Value>, selection: &str)
     true
 }
 
+/// Restores the currently selected preset, preserving switches and photo samples excluded from its baseline.
 pub(super) fn reset(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     let selection = fields.get("__pluginPreset").and_then(Value::as_str).unwrap_or_default().to_string();
     select(app, fields, &selection);
 }
 
+/// Marks the selected baseline modified when editable values differ, ignoring a host-managed preset selector.
 pub(super) fn sync_values(fields: &mut Map<String, Value>) {
     let Some(baseline) = fields.get("__presetValues").and_then(Value::as_object) else { return };
     let dirty = baseline.iter().any(|(k, v)| (k != "preset" || !manages_preset(fields)) && !same_value(fields.get(k), Some(v)));
     fields.insert("__presetDirty".into(), json!(dirty));
 }
 
+/// Treats numerically equal JSON integers and floats alike when comparing a draft with its baseline.
 fn same_value(a: Option<&Value>, b: Option<&Value>) -> bool {
     a == b || a.zip(b).is_some_and(|(a, b)| a.as_f64().is_some() && a.as_f64() == b.as_f64())
 }
 
+/// Draws built-in and saved presets with Reset, New and Delete actions; repairs selections removed elsewhere.
 pub(super) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>, parent: u64) {
     let Some(plugin) = fields.get("id").and_then(Value::as_str).and_then(photocraft_plugins::registry::get) else { return };
     let m = plugin.manifest();
@@ -183,6 +195,7 @@ pub(super) fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<
     ui.separator();
 }
 
+/// Rejects invalid or duplicate names and save dialogs whose parent filter no longer exists.
 pub(super) fn validate_new(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result<(), String> {
     let name = fields.get("name").and_then(Value::as_str).unwrap_or_default().trim();
     if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
@@ -201,6 +214,7 @@ pub(super) fn validate_new(app: &PhotocraftApp, fields: &Map<String, Value>) -> 
     Ok(())
 }
 
+/// Draws the preset name editor, focusing it once and displaying validation feedback without saving.
 pub(super) fn new_body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let mut name = fields.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
     ui.label(tl!("Preset name"));
@@ -217,6 +231,7 @@ pub(super) fn new_body(app: &PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<
     }
 }
 
+/// Validates and saves the draft, then selects its saved baseline in the still-open parent filter dialog.
 pub(super) fn confirm_new(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<Value, String> {
     validate_new(app, fields)?;
     let result = app.run("plugin.preset.save", json!({"id":fields.get("id"), "name":fields.get("name"), "params":fields.get("params")}))?;

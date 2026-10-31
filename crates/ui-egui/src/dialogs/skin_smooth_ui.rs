@@ -13,22 +13,26 @@ use crate::{PhotocraftApp, filter_dialog::FilterPreviewKey, theme::Tokens, widge
 const POSITIVE: &str = "positiveColors";
 const NEGATIVE: &str = "negativeColors";
 
+/// Enables this UI only for the installed Skin Smooth plug-in with the expected skinsmooth.v2 contract.
 pub(crate) fn owns(f: &Map<String, Value>) -> bool {
     f.get("__command").and_then(Value::as_str) == Some("plugin.run")
         && f.get("id").and_then(Value::as_str) == Some("local.skinsmooth.skin-smooth")
         && photocraft_plugins::registry::get("local.skinsmooth.skin-smooth").is_some_and(|p| p.manifest().accelerator == "skinsmooth.v2")
 }
 
+/// Reads a bounded normalized RGB group, treating malformed or absent dialog data as empty.
 fn colors(f: &Map<String, Value>, key: &str) -> Vec<[f32; 3]> {
     f.get(key).and_then(|v| serde_json::from_value(v.clone()).ok()).filter(|c: &Vec<[f32; 3]>| valid_samples(c)).unwrap_or_default()
 }
 
+/// Identifies the document revision, layer and channel/mask target to invalidate photo-specific samples.
 fn source(app: &PhotocraftApp) -> Value {
     app.session.active().map_or(Value::Null, |st| {
         json!([st.doc.id, st.revision, st.active_layer, st.channel_view.target, app.layer_mask_targeted(), app.filter_mask_targeted()])
     })
 }
 
+/// Binds a fresh dialog to its source and clears samples, sampler state, mask visibility and prior errors.
 pub(crate) fn bind(app: &PhotocraftApp, f: &mut Map<String, Value>) {
     f.insert("__skinSource".into(), source(app));
     for key in [POSITIVE, NEGATIVE] {
@@ -59,6 +63,8 @@ pub(crate) fn tick(app: &mut PhotocraftApp) {
     }
 }
 
+/// Returns a sampleable RGB raster layer under the host's sRGB policy.
+/// Rejects channel/mask targets and masked or clipped ancestors whose visible weight is not represented.
 fn supported(app: &PhotocraftApp) -> Result<LayerId, &'static str> {
     let st = app.session.active().ok_or("Open an RGB image to sample skin colours.")?;
     if st.channel_view.target != ChannelTarget::Composite || st.doc.quick_mask.is_some() || app.layer_mask_targeted() || app.filter_mask_targeted() {
@@ -80,6 +86,7 @@ fn supported(app: &PhotocraftApp) -> Result<LayerId, &'static str> {
     }
 }
 
+/// Edits a percent control with a slider and numeric field; double-click restores its default.
 fn row(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, default: f32, min: f32) {
     let label = crate::filter_dialog::label(key);
     let mut value = f.get(key).and_then(Value::as_f64).unwrap_or(f64::from(default)) as f32;
@@ -100,6 +107,7 @@ fn row(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, default: f32, m
     f.insert(key.into(), json!((value * 10.0).round() / 10.0));
 }
 
+/// Displays encoded source RGB samples directly, avoiding a second gamma conversion.
 fn swatches(ui: &mut egui::Ui, f: &Map<String, Value>, key: &str, label: &str, empty: &str) {
     let samples = colors(f, key);
     ui.horizontal_wrapped(|ui| {
@@ -125,6 +133,7 @@ fn swatches(ui: &mut egui::Ui, f: &Map<String, Value>, key: &str, label: &str, e
     });
 }
 
+/// Draws smoothing, tone and skin-range controls, disabling sampling when the source cannot be represented.
 pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.label(egui::RichText::new(tl!("Smoothing")).strong());
     for (key, default) in [("fine", 45.0), ("medium", 25.0), ("large", 10.0), ("detail", 20.0)] {
@@ -183,6 +192,7 @@ pub(crate) fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     }
 }
 
+/// Edits read-only mask visibility independently of filter Preview and the pixels committed by OK.
 pub(crate) fn mask_switch(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let mut show = f.get("__skinMask").and_then(Value::as_bool).unwrap_or(false);
     ui.add_enabled_ui(supported(app).is_ok(), |ui| {
@@ -193,6 +203,7 @@ pub(crate) fn mask_switch(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
     f.insert("__skinMask".into(), json!(show));
 }
 
+/// Allows sampling only for the current source and top Skin Smooth dialog with Skin Only enabled.
 pub(crate) fn armed(app: &PhotocraftApp) -> bool {
     supported(app).is_ok()
         && app.ui.dialogs.last().is_some_and(|d| {
@@ -203,6 +214,8 @@ pub(crate) fn armed(app: &PhotocraftApp) -> bool {
         })
 }
 
+/// Samples original layer pixels at document coordinates, never the composite or displayed mask.
+/// Shift adds, Alt subtracts; the Sample tool replaces both groups. Invalid or transparent picks return false.
 pub(crate) fn pick(app: &mut PhotocraftApp, at: [f64; 2], mods: egui::Modifiers) -> bool {
     if !armed(app) || at.iter().any(|v| !v.is_finite()) {
         return false;
@@ -244,6 +257,7 @@ pub(crate) fn pick(app: &mut PhotocraftApp, at: [f64; 2], mods: egui::Modifiers)
     true
 }
 
+/// Displays the armed sampler cursor and consumes canvas input, even when a pick is rejected.
 pub(crate) fn canvas_eyedropper(app: &mut PhotocraftApp, ctx: &egui::Context, over: egui::Pos2, press: Option<[f64; 2]>) -> bool {
     if !armed(app) {
         return false;
@@ -286,6 +300,7 @@ pub(crate) struct MaskPreview {
     worker: super::filter_preview_worker::Worker,
 }
 
+/// Reports active background mask work belonging to the requested dialog.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn busy_for(app: &PhotocraftApp, dialog: u64) -> bool {
     app.skin_smooth_mask.as_ref().is_some_and(|p| p.worker.busy_for(dialog))
@@ -327,6 +342,7 @@ fn mask_buffer(doc: &Document, layer: LayerId, f: &Map<String, Value>, region: R
     Some(buffer)
 }
 
+/// Uploads a computed mask or records its error, retaining the request key to avoid retrying the same failure.
 fn publish(preview: &mut MaskPreview, ctx: &egui::Context, key: FilterPreviewKey, buffer: Option<photocraft_compose::Buffer>) {
     preview.key = Some(key.clone());
     let Some(buffer) = buffer else {
@@ -350,6 +366,8 @@ fn publish(preview: &mut MaskPreview, ctx: &egui::Context, key: FilterPreviewKey
     );
 }
 
+/// Returns a current mask texture, document rectangle and clipped UVs for its owning view only.
+/// The docked main view or undocked floating view owns the bounded worker; duplicate views cannot supersede it.
 pub(crate) fn overlay(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,

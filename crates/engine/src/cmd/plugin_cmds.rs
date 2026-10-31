@@ -22,6 +22,7 @@ fn bad(cmd: &str, msg: impl Into<String>) -> EngineError {
     EngineError::BadParams { cmd: cmd.into(), msg: msg.into() }
 }
 
+/// Preserves cancellation as an engine cancellation; other plug-in errors become diagnostic messages.
 fn err(e: photocraft_plugins::Error) -> EngineError {
     if e == photocraft_plugins::Error::Cancelled { EngineError::Cancelled } else { EngineError::Other(e.to_string()) }
 }
@@ -104,6 +105,7 @@ fn plugin_by_id(cmd: &str, p: &Value) -> Result<std::sync::Arc<Plugin>> {
     registry::get(id).ok_or_else(|| err(photocraft_plugins::Error::NotFound(id.into())))
 }
 
+/// Identifies filters whose Skin Smooth algorithm interprets ABI pixels as encoded sRGB.
 fn requires_srgb(plugin: &Plugin) -> bool {
     plugin.id() == "local.skinsmooth.skin-smooth" || plugin.manifest().accelerator == "skinsmooth.v2"
 }
@@ -132,6 +134,7 @@ pub fn skin_smooth_color_supported(doc: &photocraft_doc::Document) -> std::resul
     if supported { Ok(()) } else { Err("Skin Smooth supports sRGB profiles only. Convert the document to sRGB first.") }
 }
 
+/// Rejects unsupported Skin Smooth document profiles before filtering or reusing smart-filter stages.
 pub(crate) fn check_color(doc: &photocraft_doc::Document, params: &Value) -> Result<()> {
     if let Some(plugin) = params.get("id").and_then(Value::as_str).and_then(registry::get)
         && requires_srgb(&plugin)
@@ -141,6 +144,7 @@ pub(crate) fn check_color(doc: &photocraft_doc::Document, params: &Value) -> Res
     Ok(())
 }
 
+/// Validates parameters, then stages a cancellable layer, channel or smart-filter edit as one undo step.
 fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let plugin = plugin_by_id(RUN, p)?;
     let params = plugin_params(p);

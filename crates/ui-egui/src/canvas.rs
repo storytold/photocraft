@@ -322,6 +322,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
     }
 }
 
+/// Paints the document and canvas overlays, including filter and read-only mask previews, in display order.
 fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXform, input: &CanvasPaintInput<'_>) -> (bool, egui::layers::ShapeIdx, Rect) {
     let ctx = input.ctx;
     let rect = input.rect;
@@ -646,6 +647,7 @@ struct DialogCanvasInput<'a> {
     img_rect: Rect,
 }
 
+/// Routes canvas gestures to the open dialog's sampler or controls while preserving pan and zoom gestures.
 fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<'_>) {
     let sticky_alt = app.ui.shell.sticky_alt;
     let zoom_out = |alt: bool| match input.temporary {

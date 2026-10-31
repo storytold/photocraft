@@ -5,6 +5,7 @@ use photocraft_geom::Rect;
 const INVERT: &[u8] = include_bytes!("../../../../plugins/tests/fixtures/invert.wasm");
 const INVERT_ID: &str = "org.photocraft.example.invert";
 
+/// Uses a non-returning module to verify background cancellation preserves both pixels and revision.
 #[test]
 fn background_plugin_runs_commit_once_and_cancel_without_editing() {
     let id = "test.background-plugin";
@@ -355,6 +356,7 @@ fn preference_folder_is_loaded() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+/// Round-trips preferences to prove preset namespaces survive restart and malformed command inputs are rejected.
 #[test]
 fn presets_survive_restart_and_are_isolated_and_validated() {
     let plugin = photocraft_plugins::Plugin::load(
@@ -382,6 +384,7 @@ fn presets_survive_restart_and_are_isolated_and_validated() {
     assert_eq!(restart.execute("plugin.preset.list", json!({"id":id})).unwrap(), json!({}));
 }
 
+/// Checks that rejected profiles leave no edit, while sRGB filtering preserves alpha, selection bounds and undo/redo.
 #[test]
 fn skin_smooth_checks_icc_before_editing_at_every_depth() {
     use photocraft_cms::builtin::Builtin;
@@ -429,6 +432,7 @@ fn skin_smooth_smart_rerender_checks_profile_before_using_cached_stages() {
     assert!(crate::smart_cmds::render(&state.doc, sm).is_err());
 }
 
+/// Compares untagged and explicitly host-tagged pixels without assigning a profile as a filtering side effect.
 #[test]
 fn untagged_skin_smooth_matches_the_same_pixels_tagged_with_the_host_default() {
     use std::sync::Arc;

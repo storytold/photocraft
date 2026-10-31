@@ -138,6 +138,7 @@ pub struct Manifest {
     pub accelerator: String,
 }
 
+/// Keeps live preview enabled for older manifests that omit previewDefault.
 fn preview_enabled() -> bool {
     true
 }
@@ -154,6 +155,8 @@ impl Manifest {
         Ok(man)
     }
 
+    /// Rejects invalid metadata, parameter schemas and preset definitions before installation.
+    /// Presets may reference declared filter parameters only, never host routing or preset selection.
     fn validate(&self) -> Result<()> {
         if !self.accelerator.is_empty() && !valid_id(&self.accelerator) {
             return Err(Error::Manifest("invalid accelerator algorithm".into()));
@@ -469,6 +472,7 @@ fn valid_key(k: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// Exercises malformed sample shapes, out-of-range values and group limits at the manifest boundary.
     #[test]
     fn colour_samples_are_bounded_normalized_rgb_and_hidden_json_controls() {
         let m = Manifest::parse(br#"{"id":"test.colors","name":"Colours","kind":"filter","params":{"colors":{"type":"colors"}}}"#).unwrap();
@@ -709,6 +713,7 @@ mod tests {
         assert!(with_name(&"é".repeat(64)).is_ok());
         assert!(with_name(&"é".repeat(65)).is_err());
     }
+    /// Protects legacy preview defaults while preventing preset metadata from injecting host routing fields.
     #[test]
     fn preview_default_is_compatible_and_presets_cannot_change_host_fields() {
         let mut value = json!({"id":"test.metadata","name":"Test","kind":"filter"});

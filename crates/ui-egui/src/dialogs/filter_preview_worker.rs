@@ -35,6 +35,7 @@ pub(crate) struct Worker {
 }
 
 impl Drop for Worker {
+    /// Signals cancellation without blocking the UI while the worker releases its captured document.
     fn drop(&mut self) {
         if let Some(running) = &self.running {
             running.job.cancel();
@@ -47,10 +48,12 @@ impl Worker {
         self.running.is_some()
     }
 
+    /// Reports uncancelled work owned by this dialog, excluding a stale job already asked to stop.
     pub fn busy_for(&self, dialog: u64) -> bool {
         self.running.as_ref().is_some_and(|r| r.key.dialog == dialog && !r.job.cancelled())
     }
 
+    /// Reports whether the current job was cancelled, so callers can discard even an already-computed result.
     pub fn cancelled(&self) -> bool {
         self.running.as_ref().is_some_and(|r| r.job.cancelled())
     }

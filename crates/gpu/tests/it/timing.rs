@@ -177,6 +177,7 @@ fn an_unmeasured_compositor_reports_nothing() {
     assert_eq!(comp.take_gpu_timing(), None, "no measurement is reported rather than a wrong one");
 }
 
+/// Forces batched submission through a small residency budget to verify the refresh reports all measured spans.
 #[test]
 fn a_refresh_that_submits_several_times_is_one_measurement() {
     let _lock = crate::GPU_LOCK.lock().unwrap_or_else(std::sync::PoisonError::into_inner);

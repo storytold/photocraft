@@ -3,15 +3,18 @@
 
 pub const MAX_SAMPLES: usize = 16;
 
+/// Accepts at most 16 finite RGB samples with every channel in 0..=1; empty groups are valid.
 pub fn valid_samples(samples: &[[f32; 3]]) -> bool {
     samples.len() <= MAX_SAMPLES && samples.iter().flatten().all(|v| v.is_finite() && (0.0..=1.0).contains(v))
 }
 
+/// Interpolates between ordered, distinct endpoints, clamping values outside the interval.
 fn smoothstep(a: f32, b: f32, x: f32) -> f32 {
     let t = ((x - a) / (b - a)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }
 
+/// Returns Cb/Cr coordinates from encoded RGB channels in 0..=255, not normalized RGB.
 pub fn chroma([r, g, b]: [f32; 3]) -> [f32; 2] {
     [128.0 - 0.168736 * r - 0.331264 * g + 0.5 * b, 128.0 + 0.5 * r - 0.418688 * g - 0.081312 * b]
 }
@@ -36,6 +39,7 @@ pub fn weight(rgb: [f32; 3], tolerance: f32, positive: &[[f32; 3]], negative: &[
 mod tests {
     use super::*;
 
+    /// Checks that repeated picks cannot strengthen the mask and exclusions retain shadow/highlight protection.
     #[test]
     fn sampled_ranges_union_subtract_and_keep_luma_protection() {
         let skin = [0.7, 0.48, 0.36];

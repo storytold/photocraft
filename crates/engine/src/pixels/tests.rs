@@ -272,6 +272,7 @@ fn invert_in_a_lab_document_mirrors_l_a_and_b() {
     }
 }
 
+/// Compares tile-wise mixing with a per-pixel selection oracle, preserving channels the filter did not change.
 #[test]
 fn mixing_through_a_selection_matches_sampling_it_per_pixel() {
     // A rectangle across tile edges (negative x included), a selection with fractional

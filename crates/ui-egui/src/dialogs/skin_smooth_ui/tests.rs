@@ -64,6 +64,7 @@ fn duplicate_windows_cannot_replace_the_canonical_mask_request() {
     assert!(!paint(&mut app, duplicate, other));
 }
 
+/// Inspects painted swatch colours directly to catch double gamma encoding independently of display rendering.
 #[test]
 fn sample_swatch_shows_encoded_source_rgb_without_a_second_gamma_conversion() {
     let ctx = egui::Context::default();
@@ -74,6 +75,7 @@ fn sample_swatch_shows_encoded_source_rgb_without_a_second_gamma_conversion() {
     assert!(output.shapes.iter().any(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.fill == Color32::from_rgb(128,64,32))));
 }
 
+/// Uses dimensions indivisible by the proxy factor to catch mask rectangles extending past the canvas.
 #[test]
 fn proxy_mask_clips_partial_pixels_to_the_document_edge() {
     let mut app = app();
@@ -102,6 +104,7 @@ fn control_pointer_samples_and_does_not_paint_through_the_dialog() {
     assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
 }
 
+/// Supersedes a pending mask, retries the cancelled request and verifies dialog cancellation releases preview state.
 #[test]
 fn background_mask_discards_stale_samples_and_cancel_releases_it() {
     let mut app = app();
@@ -168,6 +171,7 @@ fn eyedroppers_read_original_layer_under_mask_and_never_modify_document() {
     assert_eq!(revision, app.session.active().unwrap().revision);
 }
 
+/// Checks translated source coverage against alpha and selection, then verifies exclusions also leave WASM output unchanged.
 #[test]
 fn mask_matches_selection_alpha_offset_and_filter_weights_at_every_depth() {
     let plugin = photocraft_plugins::Plugin::load(include_bytes!("../../../../plugins/tests/fixtures/skin-smooth.wasm"), Default::default()).unwrap();
@@ -233,6 +237,7 @@ fn view_switches_invalidate_mask_samples_and_presets_do_not_store_samples() {
     assert!(!app.ui.dialogs[0].fields.contains_key("__skinMask"));
 }
 
+/// Toggles Preview and Mask independently to prove OK commits colour filtering rather than grayscale mask pixels.
 #[test]
 fn mask_is_independent_of_preview_and_ok_only_applies_smoothing_with_undo() {
     for preview in [false, true] {
@@ -260,6 +265,7 @@ fn mask_is_independent_of_preview_and_ok_only_applies_smoothing_with_undo() {
     }
 }
 
+/// Checks footer reachability across themes and window sizes while preserving independent Mask and Preview switches.
 #[test]
 fn sampling_controls_and_fixed_footer_fit_all_themes_and_small_windows() {
     for theme in crate::theme::ThemeKind::ALL {
@@ -288,6 +294,7 @@ fn sampling_controls_and_fixed_footer_fit_all_themes_and_small_windows() {
     }
 }
 
+/// Exercises both a valid non-sRGB profile and malformed ICC bytes at the sampling and mask boundaries.
 #[test]
 fn non_srgb_sources_disable_sampling_and_mask() {
     let mut app = app();
@@ -302,6 +309,7 @@ fn non_srgb_sources_disable_sampling_and_mask() {
     }
 }
 
+/// Leaves ICC data absent to verify sampling and a nonzero mask follow the host's default-profile policy.
 #[test]
 fn untagged_skin_sampling_and_mask_follow_the_host_default_profile() {
     let mut app = app();

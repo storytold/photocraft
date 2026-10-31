@@ -18,6 +18,7 @@ pub struct Band<'a> {
 
 /// A host implementation of a manifest's explicitly requested algorithm.
 pub trait Accelerator: Send + Sync {
+    /// Returns the exact versioned manifest algorithm id this host implementation accepts.
     fn algorithm(&self) -> &str;
     /// `false` requests WASM fallback. The host restores the original band first.
     /// Check `ctl` during waits too: it includes the operation deadline and sibling failures.
@@ -34,16 +35,19 @@ pub struct Scope {
     _thread: std::marker::PhantomData<std::rc::Rc<()>>,
 }
 
+/// Installs an accelerator on this thread until the returned guard drops; nested scopes restore their predecessor.
 pub fn scope(accelerator: Option<Arc<dyn Accelerator>>) -> Scope {
     Scope { previous: CURRENT.with(|a| a.replace(accelerator)), _thread: Default::default() }
 }
 
 impl Drop for Scope {
+    /// Restores the previous thread-local accelerator, including an explicitly disabled outer scope.
     fn drop(&mut self) {
         CURRENT.with(|a| a.replace(self.previous.take()));
     }
 }
 
+/// Clones this thread's accelerator; worker threads must install their own scope.
 pub fn current() -> Option<Arc<dyn Accelerator>> {
     CURRENT.with(|a| a.borrow().clone())
 }

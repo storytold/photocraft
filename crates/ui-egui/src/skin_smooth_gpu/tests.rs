@@ -7,6 +7,7 @@ use serde_json::json;
 
 const WASM: &[u8] = include_bytes!("../../../plugins/tests/fixtures/skin-smooth.wasm");
 
+/// Compares sample unions, exclusions and tolerance extremes against WASM at every depth, requiring actual GPU execution.
 #[test]
 fn sampled_colour_ranges_match_gpu_and_wasm_including_subtract_only() {
     let _gpu_lock = photocraft_testkit::gpu_lock();
@@ -63,6 +64,7 @@ fn backend() -> Arc<Backend> {
     })
 }
 
+/// Uses a multi-band image and translated layers to catch seam/edge differences while requiring exact alpha preservation.
 #[test]
 fn gpu_bands_match_wasm_for_depths_offsets_seams_selection_and_alpha() {
     let _gpu_lock = photocraft_testkit::gpu_lock();
@@ -113,6 +115,7 @@ fn gpu_bands_match_wasm_for_depths_offsets_seams_selection_and_alpha() {
     assert!(!backend.failed.load(Ordering::Relaxed));
 }
 
+/// Marks the shared device unhealthy to verify fallback matches WASM and explicit cancellation is still reported.
 #[test]
 fn failed_device_falls_back_and_cancel_commits_no_partial_output() {
     let _gpu_lock = photocraft_testkit::gpu_lock();
@@ -128,6 +131,7 @@ fn failed_device_falls_back_and_cancel_commits_no_partial_output() {
     assert!(matches!(plugin.apply_with(&input, rect, None, &json!({}), &Interrupt::cancel_only(&|| true)), Err(Error::Cancelled)));
 }
 
+/// Cancels only after GPU submission to verify no band mutation and permanent WASM fallback for the retired pass.
 #[test]
 fn pending_readback_cancellation_retires_the_pass_before_fallback() {
     use std::sync::atomic::AtomicUsize;
@@ -150,6 +154,7 @@ fn pending_readback_cancellation_retires_the_pass_before_fallback() {
     assert!(!backend.filter(band, &Interrupt::NONE).unwrap(), "later requests must use WASM");
 }
 
+/// Holds the pass mutex until the cancelled waiter returns, proving cancellation does not depend on acquiring it.
 #[test]
 fn cancellation_does_not_wait_for_another_gpu_invocations_mutex() {
     use std::sync::atomic::AtomicUsize;
@@ -221,6 +226,8 @@ fn session_jobs_preview_and_cpu_preference_route_to_the_correct_backend() {
     assert_ne!(px(&s), original);
 }
 
+/// Opt-in hardware benchmark comparing full/viewport GPU timings and sampled output against WASM.
+/// Run alone with nocapture; SKIN_SMOOTH_BENCH_RGBA optionally supplies a 5760-by-3840 RGBA8 image.
 #[test]
 #[ignore = "GPU performance: run alone on a hardware adapter with --nocapture"]
 fn skin_smooth_gpu_benchmark() {
@@ -285,6 +292,7 @@ fn skin_smooth_gpu_benchmark() {
     }
 }
 
+/// Supplies contradictory slider values to prove both backends use built-in preset values and preserve alpha.
 #[test]
 fn built_in_presets_override_sliders_on_gpu_and_wasm() {
     let _gpu_lock = photocraft_testkit::gpu_lock();

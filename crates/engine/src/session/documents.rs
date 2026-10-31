@@ -14,6 +14,7 @@ pub fn move_item<T>(v: &mut Vec<T>, i: usize, to: usize) -> Option<usize> {
 }
 
 impl Session {
+    /// Returns the session accelerator unless the rendering preference explicitly selects CPU processing.
     pub fn effective_plugin_accelerator(&self) -> Option<std::sync::Arc<dyn photocraft_plugins::acceleration::Accelerator>> {
         if self.prefs().performance.effective_rendering_mode() == crate::prefs::RenderingMode::Cpu { None } else { self.plugin_accelerator.clone() }
     }

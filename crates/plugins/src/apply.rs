@@ -192,6 +192,8 @@ impl Plugin {
         Ok(out)
     }
 
+    /// Runs one padded band under the shared deadline, restoring its original pixels before WASM fallback.
+    /// Returns only its interior, with finite-value sanitization and selection blending.
     fn run_band(&self, c: &BandCtx, band: Rect, deadline: &Deadline) -> Result<Vec<f32>> {
         deadline.check()?;
         let n = c.fmt.channels();

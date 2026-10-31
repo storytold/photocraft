@@ -93,6 +93,7 @@ pub(crate) struct Deadline<'a> {
 }
 
 impl<'a> Deadline<'a> {
+    /// Starts one run's shared abort state and native wall-clock budget; WASM remains bounded by fuel.
     pub(crate) fn new(limits: &Limits, interrupt: photocraft_raster::Interrupt<'a>) -> Self {
         #[cfg(target_arch = "wasm32")]
         let _ = limits;
@@ -108,6 +109,7 @@ impl<'a> Deadline<'a> {
         // generic cancellation error, even when results are collected in a different order.
         self.abort.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert(error);
     }
+    /// Checks caller cancellation, then the shared failure and native deadline; records timeout for sibling bands.
     pub(crate) fn check(&self) -> Result<()> {
         if self.interrupt.cancelled() {
             return Err(Error::Cancelled);
@@ -326,6 +328,7 @@ impl Live {
     }
 }
 
+/// Supplies temporary metadata while load reads and validates the module's actual manifest.
 fn placeholder_manifest() -> Manifest {
     Manifest {
         id: String::new(),

@@ -11,6 +11,7 @@ use serde_json::json;
 
 const INVERT: &[u8] = include_bytes!("fixtures/invert.wasm");
 
+/// Exercises both full colour groups across multiple bands under default limits, including alpha preservation.
 #[test]
 fn skin_smooth_maximum_colour_groups_fit_the_normal_wasm_budget() {
     let plugin = Plugin::load(include_bytes!("fixtures/skin-smooth.wasm"), Limits::default()).unwrap();
@@ -41,6 +42,7 @@ fn unchanged_f32_pixels_remain_exact_under_a_feathered_selection() {
     assert_eq!(result.read_region(area), input.read_region(area));
 }
 
+/// Uses a deliberately destructive accelerator that declines the band to verify fallback restores original input.
 #[test]
 fn host_acceleration_is_scoped_and_failed_bands_restart_from_original() {
     use photocraft_plugins::acceleration::{self, Accelerator, Band};
@@ -70,6 +72,7 @@ fn host_acceleration_is_scoped_and_failed_bands_restart_from_original() {
     assert!(acceleration::current().is_none());
 }
 
+/// Defers cancellation past setup into a non-returning pc_filter fuel slice, proving bounded exit without editing input.
 #[test]
 fn cancellation_interrupts_wasm_and_discards_partial_results() {
     use photocraft_raster::Interrupt;
@@ -89,6 +92,7 @@ fn cancellation_interrupts_wasm_and_discards_partial_results() {
     assert_eq!(input.read_region(Rect::new(0, 0, 16, 16)), before);
 }
 
+/// Makes a native accelerator wait for the shared deadline and verifies the result remains a time-budget error.
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn native_waits_receive_the_plugin_deadline_and_preserve_its_error() {
@@ -102,6 +106,7 @@ fn native_waits_receive_the_plugin_deadline_and_preserve_its_error() {
         fn algorithm(&self) -> &str {
             "test.v1"
         }
+        /// Simulates a native wait that must observe the host deadline after modifying its private working band.
         fn filter(&self, band: Band<'_>, ctl: &Interrupt<'_>) -> photocraft_plugins::Result<bool> {
             band.pixels.fill(0.0);
             let stop = Instant::now() + Duration::from_secs(2);
@@ -127,6 +132,7 @@ fn native_waits_receive_the_plugin_deadline_and_preserve_its_error() {
     assert_eq!(input.read_region(rect), before);
 }
 
+/// Uses many small bands to verify progress never goes backwards and successful completion reports one.
 #[test]
 fn band_progress_finishes_at_one() {
     use std::sync::Mutex;
@@ -544,6 +550,7 @@ fn a_fifo_in_place_of_a_module_file_does_not_block_loading() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Calls raw WASM exports with forged buffer ranges and malformed JSON to verify rejection without pixel corruption.
 #[test]
 fn skin_smooth_abi_only_accepts_its_owned_allocations() {
     let engine = wasmi::Engine::default();

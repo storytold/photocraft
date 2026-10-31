@@ -1609,6 +1609,7 @@ fn replace_color_localized_color_clusters() {
     assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
     assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
 }
+/// Compares a regional preview against a full-run oracle at every depth; final application must omit the preview region.
 #[test]
 fn plugin_viewport_preserves_selection_alpha_and_final_full_run() {
     use photocraft_color::{PixelFormat, SampleType};

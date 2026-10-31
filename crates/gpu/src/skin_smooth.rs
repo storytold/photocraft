@@ -21,6 +21,7 @@ pub struct SkinSmoothParams {
 }
 
 impl SkinSmoothParams {
+    /// Checks finite control ranges and bounded normalized colour samples before GPU uniform upload.
     fn valid(&self) -> bool {
         [self.fine, self.medium, self.large, self.detail, self.redness, self.tolerance].iter().all(|v| v.is_finite() && (0.0..=100.0).contains(v))
             && self.brightness.is_finite()
@@ -53,6 +54,7 @@ pub struct SkinSmooth {
 }
 
 impl SkinSmooth {
+    /// Builds Skin Smooth pipelines and uniforms, returning Unsupported for insufficient limits or pipeline errors.
     pub fn new(device: &wgpu::Device) -> Result<Self, Unsupported> {
         let limits = device.limits();
         if limits.max_storage_buffers_per_shader_stage < 5 || limits.max_compute_workgroup_size_x < 64 || limits.max_compute_invocations_per_workgroup < 64 {
@@ -122,6 +124,7 @@ impl SkinSmooth {
         }
     }
 
+    /// Allocates power-of-two working/readback capacity for a count already bounded by filter validation.
     fn allocate(&self, device: &wgpu::Device, count: usize) -> Buffers {
         let capacity = count.next_power_of_two();
         let storage = |label, bytes| {

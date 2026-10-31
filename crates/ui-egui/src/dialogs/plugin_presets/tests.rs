@@ -74,6 +74,7 @@ fn selected_builtin_survives_edits_and_reset_preserves_switches() {
     assert_eq!(m.manifest().preset_values["soft"]["fine"], 70, "built-ins were not changed");
 }
 
+/// Drives the preset controls through cancel, save, Reset and delete while proving no document revision is committed.
 #[test]
 fn merged_menu_new_cancel_save_reset_and_delete() {
     let mut h = harness(egui::vec2(1280.0, 800.0), crate::theme::ThemeKind::ALL[0]);
@@ -145,6 +146,7 @@ fn preset_and_switches_survive_cancel_and_reload_without_saving_drafts() {
     assert_eq!(fields["__preview"], true);
 }
 
+/// Exercises name validation and a vanished parent so the UI cannot silently overwrite a preset.
 #[test]
 fn duplicate_names_and_orphaned_save_dialogs_do_not_overwrite_presets() {
     let mut h = harness(egui::vec2(1280.0, 800.0), crate::theme::ThemeKind::ALL[0]);
@@ -185,6 +187,7 @@ fn missing_saved_selection_falls_back_and_saved_selection_keeps_independent_skin
     assert_eq!(app.ui.dialogs[0].fields["skinOnly"], false);
 }
 
+/// Checks action visibility with short windows and maximum-length names across every theme.
 #[test]
 fn preset_header_and_new_dialog_fit_all_themes_and_short_windows() {
     for theme in crate::theme::ThemeKind::ALL {

@@ -10,6 +10,7 @@ use photocraft_plugins::{Error, Result};
 use photocraft_raster::Interrupt;
 use serde_json::Value;
 
+/// Creates a shared native accelerator for a non-software adapter with sufficient storage bindings.
 pub(crate) fn create(rs: &eframe::egui_wgpu::RenderState, health: DeviceHealth) -> Option<Arc<dyn Accelerator>> {
     // A software adapter consumes CPU rather than accelerating the filter.
     if rs.adapter.get_info().device_type == wgpu::DeviceType::Cpu || rs.device.limits().max_storage_buffers_per_shader_stage < 5 {
@@ -34,6 +35,7 @@ struct Backend {
     reported: AtomicBool,
 }
 
+/// Reads resolved manifest values into GPU parameters; the compute pass validates their ranges.
 fn settings(p: &Value) -> Option<SkinSmoothParams> {
     let n = |key| p.get(key).and_then(Value::as_f64).map(|v| v as f32);
     Some(SkinSmoothParams {
@@ -52,6 +54,8 @@ fn settings(p: &Value) -> Option<SkinSmoothParams> {
 }
 
 // Same verified-edge trimming as the WASM algorithm; off-canvas texture is retained.
+/// Trims only overlap pixels verified to repeat canvas edges, preserving genuine off-canvas layer content.
+/// Returns exclusive right/bottom bounds, or the full band when image metadata is unavailable.
 fn bounds(px: &[[f32; 4]], w: usize, h: usize, p: &Value) -> (usize, usize, usize, usize) {
     let Some(g) = p.get("_image") else { return (0, 0, w, h) };
     let (Some(x), Some(y), Some(cw), Some(ch), Some(ov)) =
@@ -73,10 +77,14 @@ fn bounds(px: &[[f32; 4]], w: usize, h: usize, p: &Value) -> (usize, usize, usiz
 }
 
 impl Accelerator for Backend {
+    /// Selects the versioned Skin Smooth contract required by the host's algorithm match.
     fn algorithm(&self) -> &str {
         "skinsmooth.v2"
     }
 
+    /// Filters supported SDR RGB bands, returning false to request WASM when native processing is unavailable.
+    /// Mutex/readback waits observe the caller's interrupt; a failed or interrupted readback retires the pass.
+    /// Copies results into the band only after success and a final cancellation check.
     fn filter(&self, band: Band<'_>, ctl: &Interrupt<'_>) -> Result<bool> {
         if ctl.cancelled() {
             return Err(Error::Cancelled);

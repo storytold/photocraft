@@ -6,6 +6,7 @@ use crate::commands::CommandSpec;
 use crate::presets::{always, bad, req_str};
 use crate::{Result, Session};
 
+/// Validates the plug-in id before deriving its isolated preference key; installation is not required.
 fn key(cmd: &str, p: &Value) -> Result<String> {
     let id = req_str(p, "id", cmd)?;
     if !photocraft_plugins::manifest::valid_id(id) {
@@ -14,6 +15,7 @@ fn key(cmd: &str, p: &Value) -> Result<String> {
     Ok(format!("plugin.presets.{id}"))
 }
 
+/// Borrows the trimmed preset name, rejecting empty, control-containing or overlong names.
 fn name<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
     let name = req_str(p, "name", cmd)?.trim();
     if name.is_empty() || name.chars().count() > 64 || name.chars().any(char::is_control) {
@@ -22,11 +24,14 @@ fn name<'a>(cmd: &str, p: &'a Value) -> Result<&'a str> {
     Ok(name)
 }
 
+/// Returns this plug-in id's saved preset object, or an empty object when no usable entry exists.
 fn list(s: &mut Session, p: &Value) -> Result<Value> {
     let key = key("plugin.preset.list", p)?;
     Ok(s.prefs().dialogs.get(&key).filter(|v| v.is_object()).cloned().unwrap_or(json!({})))
 }
 
+/// Stores manifest-resolved parameters, excluding Skin Smooth photo samples.
+/// Existing names are replaced; a plug-in may keep at most 64 distinct presets.
 fn save(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "plugin.preset.save";
     let key = key(CMD, p)?;
@@ -50,6 +55,7 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"name": name}))
 }
 
+/// Resolves a saved preset against the currently installed manifest, rejecting stale invalid values.
 fn load(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "plugin.preset.load";
     let key = key(CMD, p)?;
@@ -61,6 +67,7 @@ fn load(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(Value::Object(resolved))
 }
 
+/// Deletes an existing named preset without changing document pixels or history.
 fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "plugin.preset.remove";
     let key = key(CMD, p)?;
@@ -75,6 +82,7 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"removed": name}))
 }
 
+/// Exposes preset persistence through engine commands shared by the UI and automation.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {
