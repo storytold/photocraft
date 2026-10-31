@@ -19,13 +19,27 @@ pub enum Separable {
 }
 
 impl Separable {
-    /// The blur `params` runs on the CPU, or `None` for a filter that isn't one (only Gaussian
-    /// Blur so far). Small radii use the exact kernel, larger ones three box passes.
+    /// The blur `params` runs on the CPU, or `None` for a filter that isn't one (Gaussian Blur,
+    /// Box Blur, and the blur inside Unsharp Mask and High Pass). Gaussian Blur's small radii use
+    /// the exact kernel and larger ones three box passes; Box Blur's small radii a uniform kernel
+    /// and larger ones one box pass; Unsharp Mask and High Pass always blur with the exact kernel
+    /// (`sharpen`).
     pub fn of(params: &FilterParams) -> Option<Self> {
         match *params {
             FilterParams::GaussianBlur { radius } => Some(match blur::box_widths(params) {
                 Some(boxes) => Separable::Boxes(boxes),
                 None => Separable::Kernel(blur::gaussian_blur_kernel(radius)),
+            }),
+            FilterParams::UnsharpMask { radius, .. } | FilterParams::HighPass { radius } if radius.is_finite() && radius >= 0.0 => {
+                Some(Separable::Kernel(blur::gaussian_kernel(radius)))
+            }
+            // `blur::boxed`.
+            FilterParams::BoxBlur { radius } if radius.is_finite() => Some(match blur::box_widths(params) {
+                Some(boxes) => Separable::Boxes(boxes),
+                None => {
+                    let r = radius.max(0.0).round() as usize;
+                    Separable::Kernel(vec![1.0 / (2 * r + 1) as f32; 2 * r + 1])
+                }
             }),
             _ => None,
         }
@@ -100,7 +114,7 @@ mod tests {
             let Halo::Radius(halo) = params.halo() else { panic!("a Gaussian has a radius halo") };
             assert!(blur.reach() <= halo, "radius {radius}: reach {} past the halo {halo}", blur.reach());
         }
-        assert_eq!(Separable::of(&FilterParams::BoxBlur { radius: 9.0 }), None, "not a Gaussian (yet)");
+        assert_eq!(Separable::of(&FilterParams::Median { radius: 9.0 }), None, "not a separable blur");
         assert_eq!(Separable::Boxes(vec![usize::MAX, 3]).reach(), i32::MAX, "saturates");
     }
 
@@ -187,5 +201,29 @@ mod tests {
         assert_eq!(OperatorRegion { reach: 5, extent }.input(Rect::new(400, 400, 410, 410)), Rect::EMPTY, "out of reach of the extent");
         assert_eq!(OperatorRegion { reach: -3, extent }.input(Rect::new(10, 10, 20, 20)), Rect::new(10, 10, 20, 20));
         assert_eq!(edge_extent(extent, Rect::new(-10, 50, 20, 60)), Rect::new(-10, 0, 300, 200));
+    }
+
+    /// Unsharp Mask's blur is always the exact kernel `sharpen::exact` uses, whatever the radius
+    /// (Gaussian Blur's larger radii are box passes); a radius that isn't one has none.
+    #[test]
+    fn unsharp_mask_blurs_with_the_exact_kernel() {
+        for radius in [0.5f32, 4.0, 40.0, 250.0] {
+            let p = FilterParams::UnsharpMask { amount: 100.0, radius, threshold: 0.0 };
+            assert_eq!(Separable::of(&p), Some(Separable::Kernel(blur::gaussian_kernel(radius))), "radius {radius}");
+        }
+        for radius in [-1.0, f32::NAN, f32::INFINITY] {
+            assert_eq!(Separable::of(&FilterParams::UnsharpMask { amount: 100.0, radius, threshold: 0.0 }), None);
+            assert_eq!(Separable::of(&FilterParams::HighPass { radius }), None);
+        }
+        assert_eq!(Separable::of(&FilterParams::HighPass { radius: 40.0 }), Some(Separable::Kernel(blur::gaussian_kernel(40.0))));
+    }
+
+    /// Box Blur as `blur::boxed` runs it: a uniform kernel up to radius 4, one box pass beyond.
+    #[test]
+    fn box_blur_is_a_uniform_kernel_then_one_box() {
+        assert_eq!(Separable::of(&FilterParams::BoxBlur { radius: 2.4 }), Some(Separable::Kernel(vec![0.2; 5])));
+        assert_eq!(Separable::of(&FilterParams::BoxBlur { radius: 0.0 }), Some(Separable::Kernel(vec![1.0])));
+        assert_eq!(Separable::of(&FilterParams::BoxBlur { radius: 10.0 }), Some(Separable::Boxes(vec![21])));
+        assert_eq!(Separable::of(&FilterParams::BoxBlur { radius: f32::NAN }), None);
     }
 }
