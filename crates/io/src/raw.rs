@@ -10,7 +10,7 @@
 //! fit is not clearly better.
 
 use std::borrow::Cow;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use photocraft_cms::{Builtin, Intent, Profile, Transform};
 use photocraft_codecs::{self as codecs, ChannelLayout, Format, Image, SampleType};
@@ -80,12 +80,31 @@ pub struct RawTuning {
 /// no as-shot white balance: Temperature / Tint were then not applied, and the caller keeps
 /// them as RGB adjustments.
 pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<(ImportResult, bool), IoError> {
+    import_raw_tuned_inner(name, bytes, tuning, None)
+}
+
+/// [`import_raw_tuned`] from what the open already learned about `bytes` ([`take_kept_decode`],
+/// [`RawDecode::new`]): the same pixels without decoding the file and fitting its look again.
+/// A `decode` of another file is ignored.
+pub fn import_raw_tuned_from(name: &str, bytes: &[u8], tuning: &RawTuning, decode: &RawDecode) -> Result<(ImportResult, bool), IoError> {
+    import_raw_tuned_inner(name, bytes, tuning, Some(decode))
+}
+
+fn import_raw_tuned_inner(name: &str, bytes: &[u8], tuning: &RawTuning, decode: Option<&RawDecode>) -> Result<(ImportResult, bool), IoError> {
     let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
     let exposure = f64::from(tuning.exposure);
     if !exposure.is_finite() || !(-10.0..=10.0).contains(&exposure) {
         return Err(IoError::Raw(RawError::Malformed(format!("exposure {} EV is out of range", tuning.exposure))));
     }
-    let sensor = photocraft_raw::decode(bytes, &limits()).map_err(IoError::Raw)?;
+    let fresh;
+    let decode = match decode.filter(|d| d.is_of(bytes)) {
+        Some(d) => d,
+        None => {
+            fresh = RawDecode::new(bytes)?;
+            &fresh
+        }
+    };
+    let sensor = &decode.sensor;
     let slider = |v: f32| if v.is_finite() { v.clamp(-100.0, 100.0) } else { 0.0 };
     let tone = photocraft_raw::Tone {
         shadows: slider(tuning.shadows),
@@ -96,7 +115,7 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
     };
     // The colour rendering the default open used (a look fitted to the camera's JPEG for files
     // without colour calibration), so re-developing changes only what the sliders change.
-    let camera_look = default_look(bytes, &sensor);
+    let camera_look = decode.look.clone();
     let mut opts = DevelopOptions { limits: limits(), exposure, demosaic: tuning.demosaic, tone, camera_look, ..Default::default() };
     let wb_applied = match sensor.camera_wb {
         Some(m) => {
@@ -106,7 +125,7 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
         }
         None => false,
     };
-    let dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
+    let dev = photocraft_raw::develop_sensor(sensor, &opts).map_err(IoError::Raw)?;
     let wb = if wb_applied {
         format!("as-shot white balance, temperature {:+.0}, tint {:+.0}", tuning.temperature, tuning.tint)
     } else {
@@ -126,11 +145,114 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
 /// this crate decodes). For previews of the open-time raw-stage sliders
 /// ([`photocraft_raw::retone`]), in linear-light knots.
 pub fn tone_curve(bytes: &[u8]) -> Vec<[f32; 2]> {
-    let Ok(sensor) = photocraft_raw::decode(bytes, &limits()) else { return Vec::new() };
-    match default_look(bytes, &sensor) {
-        Some(look) => look.tone.as_ref().map(look_knots).unwrap_or_default(),
-        None => sensor.tone_curve,
+    RawDecode::new(bytes).map(|d| d.tone_curve).unwrap_or_default()
+}
+
+/// A raw file decoded once for the open-time Camera Raw dialog: the sensor data, the look fitted
+/// to the camera's JPEG (for a file without colour calibration, see [`default_look`]) and the
+/// tone curve the default develop uses. The dialog's preview and its Open re-develop
+/// ([`import_raw_tuned_from`]) share one instead of decoding and fitting the file again each
+/// (the sensor is 2 bytes per pixel: drop it when the dialog closes).
+pub struct RawDecode {
+    fingerprint: Fingerprint,
+    sensor: Sensor,
+    look: Option<CameraLook>,
+    tone_curve: Vec<[f32; 2]>,
+}
+
+impl std::fmt::Debug for RawDecode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // Not the sensor data: tens of millions of samples.
+        f.debug_struct("RawDecode").field("fingerprint", &self.fingerprint).field("look", &self.look.is_some()).finish_non_exhaustive()
     }
+}
+
+impl RawDecode {
+    /// Decodes `bytes` and fits its look, as a default open does.
+    pub fn new(bytes: &[u8]) -> Result<RawDecode, IoError> {
+        let sensor = decode_sensor(bytes)?;
+        let look = default_look(bytes, &sensor);
+        Ok(RawDecode::from_parts(bytes, sensor, look))
+    }
+
+    fn from_parts(bytes: &[u8], sensor: Sensor, look: Option<CameraLook>) -> RawDecode {
+        let tone_curve = match &look {
+            Some(look) => look.tone.as_ref().map(look_knots).unwrap_or_default(),
+            None => sensor.tone_curve.clone(),
+        };
+        RawDecode { fingerprint: Fingerprint::of(bytes), sensor, look, tone_curve }
+    }
+
+    /// The tone curve a default develop uses, as [`tone_curve`] returns it.
+    pub fn tone_curve(&self) -> &[[f32; 2]] {
+        &self.tone_curve
+    }
+
+    /// `true` if this was decoded from `bytes`.
+    fn is_of(&self, bytes: &[u8]) -> bool {
+        self.fingerprint == Fingerprint::of(bytes)
+    }
+}
+
+/// The sensor data of `bytes` under the shared limits.
+fn decode_sensor(bytes: &[u8]) -> Result<Sensor, IoError> {
+    DECODES.with(|n| n.set(n.get() + 1));
+    photocraft_raw::decode(bytes, &limits()).map_err(IoError::Raw)
+}
+
+thread_local! {
+    static DECODES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many raw files this thread has decoded so far (for tests that count decodes).
+#[doc(hidden)]
+pub fn decodes_on_this_thread() -> usize {
+    DECODES.with(std::cell::Cell::get)
+}
+
+/// A file's length and a 64-bit digest of its bytes: tells the file a [`RawDecode`] was made
+/// from from any other (not a cryptographic hash).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Fingerprint(usize, u64);
+
+impl Fingerprint {
+    fn of(bytes: &[u8]) -> Fingerprint {
+        const K: u64 = 0x9E37_79B9_7F4A_7C15;
+        let mix = |lane: u64, word: u64| (lane ^ word).wrapping_mul(K).rotate_left(29);
+        let mut lanes = [0x243F_6A88_85A3_08D3u64, 0x1319_8A2E_0370_7344, 0xA409_3822_299F_31D0, 0x082E_FA98_EC4E_6C89];
+        let (blocks, rest) = bytes.as_chunks::<32>();
+        let mut absorb = |block: &[u8; 32]| {
+            for (lane, word) in lanes.iter_mut().zip(block.as_chunks::<8>().0) {
+                *lane = mix(*lane, u64::from_le_bytes(*word));
+            }
+        };
+        blocks.iter().for_each(&mut absorb);
+        let mut tail = [0u8; 32];
+        tail[..rest.len()].copy_from_slice(rest);
+        absorb(&tail);
+        let digest = lanes.iter().fold(bytes.len() as u64, |acc, &lane| mix(acc, lane));
+        Fingerprint(bytes.len(), digest)
+    }
+}
+
+/// The decodes of the last opens that await their Camera Raw dialog (see
+/// [`ImportOptions::keep_raw`](crate::ImportOptions::keep_raw)): at most two, so several raws
+/// opened at once each find theirs, and the oldest goes first. The dialog takes its own out.
+static KEPT: Mutex<Vec<Arc<RawDecode>>> = Mutex::new(Vec::new());
+
+const KEPT_MAX: usize = 2;
+
+fn kept() -> std::sync::MutexGuard<'static, Vec<Arc<RawDecode>>> {
+    KEPT.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Hands over (removes) the decode a default open of exactly `bytes` kept for its dialog, if it
+/// is still there. Whoever takes it owns the sensor data: dropping it frees it.
+pub fn take_kept_decode(bytes: &[u8]) -> Option<Arc<RawDecode>> {
+    let want = Fingerprint::of(bytes);
+    let mut kept = kept();
+    let at = kept.iter().position(|d| d.fingerprint == want)?;
+    Some(kept.remove(at))
 }
 
 /// A fitted look's tone curve as knots for [`photocraft_raw::retone`] (which reads them
@@ -198,6 +320,12 @@ pub fn import_raw_demosaic(name: &str, bytes: &[u8], demosaic: Demosaic) -> Resu
     import_raw_with(name, bytes, &DevelopOptions { limits: limits(), demosaic, ..Default::default() })
 }
 
+/// [`import_raw_demosaic`] that also keeps the sensor data and the fitted look for the file's
+/// Camera Raw dialog ([`take_kept_decode`]).
+pub fn import_raw_demosaic_keeping(name: &str, bytes: &[u8], demosaic: Demosaic) -> Result<ImportResult, IoError> {
+    import_raw_with_inner(name, bytes, &DevelopOptions { limits: limits(), demosaic, ..Default::default() }, true)
+}
+
 /// Smallest preview long edge preferred for the colour fit (a smaller preview decodes faster;
 /// the fit grid is at most `PROXY_EDGE` cells and wants about two pixels per cell).
 const FIT_PREVIEW_EDGE: u32 = 2 * photocraft_raw::PROXY_EDGE as u32;
@@ -243,18 +371,47 @@ pub fn fit_preview_look(raw: &[u8], sensor: &Sensor, opts: &DevelopOptions) -> R
     photocraft_raw::fit_look(sensor, opts, &Reference { width: w, height: h, rgb: &rgb }).map_err(|e| e.to_string())
 }
 
+/// A sensor and the look fitted to it, as [`develop_fitted`] hands them back.
+type Kept = (Sensor, Option<CameraLook>);
+
 /// Decodes and develops; a file without colour calibration gets a look fitted to its preview.
-fn develop_fitted(bytes: &[u8], opts: &DevelopOptions) -> Result<photocraft_raw::Developed, RawError> {
-    let sensor = photocraft_raw::decode(bytes, &opts.limits)?;
+/// With `keep`, also hands back the sensor and the look it fitted (the default look, when
+/// `opts` named none) instead of freeing them.
+fn develop_fitted(bytes: &[u8], opts: &DevelopOptions, keep: bool) -> Result<(photocraft_raw::Developed, Option<Kept>), RawError> {
+    // The sensor (and the look fitted to it) the preview stages of this open already made.
+    let (sensor, predecoded_look) = match take_predecoded(bytes, opts) {
+        Some((sensor, look)) => (sensor, Some(look)),
+        None => {
+            let sensor = decode_sensor(bytes).map_err(|e| match e {
+                IoError::Raw(e) => e,
+                e => RawError::Malformed(e.to_string()),
+            })?;
+            (sensor, None)
+        }
+    };
     let mut opts = Cow::Borrowed(opts);
-    if opts.camera_look.is_none()
-        && sensor.color.calibrations.is_empty()
-        && !sensor.is_monochrome()
-        && let Ok(look) = fit_preview_look(bytes, &sensor, &opts)
-    {
-        opts.to_mut().camera_look = Some(look);
+    let named_look = opts.camera_look.is_some();
+    if opts.camera_look.is_none() {
+        let look = match predecoded_look {
+            Some(look) => look,
+            None => fitted_look(bytes, &sensor, &opts),
+        };
+        if let Some(look) = look {
+            opts.to_mut().camera_look = Some(look);
+        }
     }
-    photocraft_raw::develop_sensor(&sensor, &opts)
+    let dev = photocraft_raw::develop_sensor(&sensor, &opts)?;
+    let kept = (keep && !named_look).then(|| (sensor, opts.into_owned().camera_look));
+    Ok((dev, kept))
+}
+
+/// The look [`develop_fitted`] fits for a file without colour calibration (none when the file
+/// has calibration, is monochrome or the fit does not hold).
+fn fitted_look(bytes: &[u8], sensor: &Sensor, opts: &DevelopOptions) -> Option<CameraLook> {
+    if !sensor.color.calibrations.is_empty() || sensor.is_monochrome() {
+        return None;
+    }
+    fit_preview_look(bytes, sensor, opts).ok()
 }
 
 /// In the import note of a raw developed from its sensor data with the default settings (not of
@@ -274,9 +431,20 @@ pub fn developed_demosaic(warnings: &[String]) -> Option<Demosaic> {
 /// Develops a raw file with explicit settings. Without `opts.camera_look`, a file without
 /// colour calibration gets one fitted to its embedded JPEG when that clearly helps.
 pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Result<ImportResult, IoError> {
+    import_raw_with_inner(name, bytes, opts, false)
+}
+
+fn import_raw_with_inner(name: &str, bytes: &[u8], opts: &DevelopOptions, keep: bool) -> Result<ImportResult, IoError> {
     let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
-    match develop_fitted(bytes, opts) {
-        Ok(dev) => {
+    match develop_fitted(bytes, opts, keep) {
+        Ok((dev, kept_parts)) => {
+            if let Some((sensor, look)) = kept_parts {
+                let mut kept = kept();
+                if kept.len() == KEPT_MAX {
+                    kept.remove(0);
+                }
+                kept.push(Arc::new(RawDecode::from_parts(bytes, sensor, look)));
+            }
             let summary = format!("{DEVELOPED_NOTE} ({} demosaic, as-shot white balance)", opts.demosaic.id());
             developed_document(name, bytes, format, dev, &summary)
         }
@@ -305,6 +473,77 @@ pub fn import_raw_with(name: &str, bytes: &[u8], opts: &DevelopOptions) -> Resul
             Ok(r)
         }
         Err(e) => Err(IoError::Raw(e)),
+    }
+}
+
+// ------------------------------------------------------------------------------ progressive open
+
+/// What the preview stages of an interactive open learned, for the full develop that follows on
+/// the same thread: the file, the demosaic method it fits with, the sensor and the fitted look.
+struct Predecoded {
+    fingerprint: Fingerprint,
+    demosaic: Demosaic,
+    sensor: Sensor,
+    look: Option<CameraLook>,
+}
+
+thread_local! {
+    static PREDECODED: std::cell::RefCell<Option<Predecoded>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Hands the full develop the sensor and look the preview stages made for `bytes`, once. Another
+/// file or demosaic method, or `opts` that name a look, finds nothing (and drops the stash).
+fn take_predecoded(bytes: &[u8], opts: &DevelopOptions) -> Option<(Sensor, Option<CameraLook>)> {
+    let p = PREDECODED.with(|p| p.borrow_mut().take())?;
+    (p.demosaic == opts.demosaic && opts.camera_look.is_none() && p.fingerprint == Fingerprint::of(bytes)).then_some((p.sensor, p.look))
+}
+
+/// Long edge a preview JPEG should have at least to be worth showing: the smallest such preview
+/// decodes fastest, else the largest.
+const FIRST_PAINT_EDGE: u32 = 1920;
+
+/// The camera's embedded JPEG as a document, upright and tagged with its own colour space (8-bit
+/// sRGB or Adobe RGB, unlike the 16-bit ProPhoto of a develop). `None` without a decodable one.
+fn jpeg_preview(name: &str, bytes: &[u8]) -> Option<ImportResult> {
+    let previews = photocraft_raw::embedded_previews(bytes);
+    let long = |p: &photocraft_raw::Preview| p.width.max(p.height);
+    let pick = previews.iter().filter(|p| long(p) >= FIRST_PAINT_EDGE).min_by_key(|p| long(p)).or_else(|| previews.iter().max_by_key(|p| long(p)))?;
+    let img = upright_preview(bytes, pick.jpeg, &limits()).ok()?;
+    let profile = preview_profile(bytes, img.icc.as_deref()).ok()?;
+    let mut r = image_to_document(name, &img).ok()?;
+    if let (Some(p), None) = (profile, &img.icc) {
+        r.document.icc_profile = Some(Arc::new(p.to_bytes().to_vec()));
+    }
+    Some(r)
+}
+
+/// The half-size develop of `bytes` as a document ([`photocraft_raw::develop_half`]), with the
+/// colour rendering the full develop will use. The decoded sensor and look stay behind for that
+/// full develop ([`develop_fitted`]) on this thread, so the file is decoded once.
+fn half_preview(name: &str, bytes: &[u8], demosaic: Demosaic) -> Option<ImportResult> {
+    let opts = DevelopOptions { limits: limits(), demosaic, ..Default::default() };
+    let sensor = decode_sensor(bytes).ok()?;
+    let look = fitted_look(bytes, &sensor, &opts);
+    let half = photocraft_raw::develop_half(&sensor, &DevelopOptions { camera_look: look.clone(), ..opts });
+    let format = photocraft_raw::identify(bytes).map(|f| f.name()).unwrap_or("camera raw");
+    let r = half.ok().and_then(|dev| developed_document(name, bytes, format, dev, "half-size preview").ok());
+    PREDECODED.with(|p| *p.borrow_mut() = Some(Predecoded { fingerprint: Fingerprint::of(bytes), demosaic, sensor, look }));
+    r
+}
+
+/// The first-paint stages of opening a raw, each handed to `publish` as it is ready: the camera's
+/// embedded JPEG (when there is one), then the half-size develop. A stage that fails (no JPEG, a
+/// corrupt one, a CFA the half-size develop does not support) is skipped silently; the full
+/// develop ([`import_raw_demosaic`]) reports real errors. Call it on the thread that then runs
+/// the full develop: that one reuses the sensor decoded here. `cancelled` is polled between stages.
+pub fn publish_previews(name: &str, bytes: &[u8], demosaic: Demosaic, publish: &mut dyn FnMut(ImportResult), cancelled: &dyn Fn() -> bool) {
+    if let Some(r) = jpeg_preview(name, bytes) {
+        publish(r);
+    }
+    if !cancelled()
+        && let Some(r) = half_preview(name, bytes, demosaic)
+    {
+        publish(r);
     }
 }
 
@@ -370,5 +609,110 @@ mod tests {
         let p3_icc = Builtin::DisplayP3.profile().to_bytes().to_vec();
         assert!(preview_profile(&srgb, Some(p3_icc.as_slice())).unwrap().unwrap().same_colors(Builtin::DisplayP3.profile()));
         assert!(preview_profile(&adobe, Some(b"not an ICC profile")).is_err());
+    }
+
+    // ---- progressive open
+
+    use photocraft_raw::testgen::{DngSpec, RafSpec, Val, XTRANS, baseline_jpeg, mosaic, mosaic_cfa, scene};
+
+    fn dng_bytes() -> Vec<u8> {
+        let (w, h) = (48, 32);
+        DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 30000)).build()
+    }
+
+    /// The DNG with a real JPEG (`jw` x `jh`) appended and referenced as IFD0's JPEGInterchangeFormat.
+    fn dng_with_jpeg(jw: usize, jh: usize) -> Vec<u8> {
+        let (w, h) = (48, 32);
+        let jpeg = baseline_jpeg(&vec![90u8; jw * jh * 3], jw, jh, 3);
+        let spec = |at: u32| {
+            let mut s = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 30000));
+            s.ifd0_extra = vec![(513, Val::Long(vec![at])), (514, Val::Long(vec![jpeg.len() as u32]))];
+            s
+        };
+        let at = spec(0).build().len() as u32;
+        let mut bytes = spec(at).build();
+        assert_eq!(bytes.len() as u32, at);
+        bytes.extend_from_slice(&jpeg);
+        bytes
+    }
+
+    fn previews_of(bytes: &[u8]) -> Vec<ImportResult> {
+        let mut out = Vec::new();
+        publish_previews("p.dng", bytes, Demosaic::default(), &mut |r| out.push(r), &|| false);
+        out
+    }
+
+    fn size(r: &ImportResult) -> (u32, u32) {
+        (r.document.size.width, r.document.size.height)
+    }
+
+    fn png(r: &ImportResult) -> Vec<u8> {
+        crate::export(&r.document, "x.png", &Default::default()).unwrap().bytes
+    }
+
+    #[test]
+    fn a_raw_without_a_jpeg_shows_the_half_size_develop_first() {
+        let p = previews_of(&dng_bytes());
+        assert_eq!(p.len(), 1);
+        assert_eq!(size(&p[0]), (24, 16));
+        assert!(p[0].document.icc_profile.is_some(), "16-bit ProPhoto, tagged");
+        assert!(!p[0].warnings.iter().any(|w| w.contains(DEVELOPED_NOTE)), "a preview is not a default open");
+    }
+
+    #[test]
+    fn a_raw_with_a_jpeg_shows_it_first_then_the_half_size_develop() {
+        let p = previews_of(&dng_with_jpeg(40, 30));
+        assert_eq!(p.iter().map(size).collect::<Vec<_>>(), vec![(40, 30), (24, 16)]);
+    }
+
+    #[test]
+    fn a_corrupt_jpeg_falls_through_to_the_next_stage() {
+        let mut bytes = dng_with_jpeg(40, 30);
+        let n = bytes.len();
+        // Keep the header (so it is found) and destroy the entropy-coded data.
+        bytes[n - 60..n - 2].fill(0xAB);
+        let p = previews_of(&bytes);
+        assert_eq!(p.iter().map(size).collect::<Vec<_>>(), vec![(24, 16)]);
+    }
+
+    #[test]
+    fn x_trans_previews_at_a_third_and_a_cfa_the_half_size_develop_cannot_do_falls_through() {
+        let (w, h) = (30, 18);
+        let raf = RafSpec::new(w, h, mosaic_cfa(&scene(w, h), w, &XTRANS, 6, 256, 16383), XTRANS.to_vec()).build();
+        let p = previews_of(&raf);
+        // The RAF's tiny stand-in JPEG does not decode: only the 3x3-binned develop is left.
+        assert_eq!(p.iter().map(size).collect::<Vec<_>>(), vec![(10, 6)]);
+        // A repeat the half-size develop does not support is an error there; the preview stage skips it.
+        let mut s = photocraft_raw::decode(&raf, &limits()).unwrap();
+        s.cfa.as_mut().unwrap().height = 3;
+        s.cfa.as_mut().unwrap().colors.truncate(18);
+        assert!(matches!(photocraft_raw::develop_half(&s, &DevelopOptions::default()), Err(RawError::Unsupported(_))));
+    }
+
+    #[test]
+    fn the_full_develop_after_the_previews_is_identical_and_decodes_once() {
+        for bytes in [dng_bytes(), dng_with_jpeg(40, 30)] {
+            let plain = import_raw_demosaic("a.dng", &bytes, Demosaic::default()).unwrap();
+            let before = decodes_on_this_thread();
+            drop(previews_of(&bytes));
+            let full = import_raw_demosaic("a.dng", &bytes, Demosaic::default()).unwrap();
+            assert_eq!(decodes_on_this_thread() - before, 1, "the preview's decode is reused");
+            assert_eq!(png(&plain), png(&full));
+            assert_eq!(plain.warnings, full.warnings);
+            // The stash is used up: a later open decodes afresh.
+            let before = decodes_on_this_thread();
+            import_raw_demosaic("a.dng", &bytes, Demosaic::default()).unwrap();
+            assert_eq!(decodes_on_this_thread() - before, 1);
+        }
+    }
+
+    #[test]
+    fn the_stash_is_not_used_for_another_file_or_method() {
+        let (a, b) = (dng_bytes(), dng_with_jpeg(40, 30));
+        drop(previews_of(&a));
+        let before = decodes_on_this_thread();
+        let full = import_raw_demosaic("b.dng", &b, Demosaic::default()).unwrap();
+        assert_eq!(decodes_on_this_thread() - before, 1);
+        assert_eq!(png(&full), png(&import_raw_demosaic("b.dng", &b, Demosaic::default()).unwrap()));
     }
 }
