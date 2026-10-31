@@ -1,6 +1,6 @@
 use super::consts::STRIDE;
 use super::textures::Cell;
-use super::{DeviceHealth, FieldKind, HashMap, Rect, Unsupported, fx};
+use super::{DeviceHealth, Document, FieldKind, HashMap, LayerId, LayerOperator, Rect, Unsupported, fx};
 
 /// Document pixels of page cell `c`.
 pub(crate) fn cell_rect(c: Cell, page: u32) -> Rect {
@@ -57,6 +57,37 @@ pub(crate) fn field_reaches(progs: &[fx::MapProgram]) -> HashMap<FieldKind, i32>
         *w = (*w).max(*r);
     }
     want
+}
+
+/// How deeply `layers` nest groups, counted up to one past [`photocraft_doc::MAX_GROUP_DEPTH`].
+pub(crate) fn group_depth(layers: &[photocraft_doc::Layer], depth: usize) -> usize {
+    if depth > photocraft_doc::MAX_GROUP_DEPTH {
+        return depth;
+    }
+    layers.iter().filter_map(|l| l.children()).map(|c| group_depth(c, depth + 1)).max().unwrap_or(depth)
+}
+
+/// One fingerprint per root layer of `doc` for the layer operators on it or inside it (0: none),
+/// for the stack-prefix cache (`Prefix::prepare`).
+pub(crate) fn operator_fingerprints(doc: &Document, ops: &[LayerOperator]) -> Vec<u64> {
+    if ops.is_empty() {
+        return Vec::new();
+    }
+    fn holds(l: &photocraft_doc::Layer, id: LayerId, depth: usize) -> bool {
+        l.id == id || (depth < 256 && l.children().is_some_and(|c| c.iter().any(|c| holds(c, id, depth + 1))))
+    }
+    doc.layers
+        .iter()
+        .map(|root| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            let mut any = false;
+            for o in ops.iter().filter(|o| holds(root, o.layer, 0)) {
+                std::hash::Hash::hash(&(o.layer.0, o.program.key()), &mut h);
+                any = true;
+            }
+            if any { std::hash::Hasher::finish(&h) | 1 } else { 0 }
+        })
+        .collect()
 }
 
 /// Why a refresh whose layer pages don't fit GPU memory is drawn on the CPU.
