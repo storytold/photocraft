@@ -60,6 +60,8 @@ pub fn params(f: &Map<String, Value>) -> Value {
     Value::Object(KEYS.iter().filter_map(|k| f.get(*k).map(|v| (k.to_string(), v.clone()))).collect())
 }
 
+/// OK: runs `edit.stroke` with the dialog's settings and, when it succeeds, remembers them for
+/// the next time the dialog opens.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let remembered = params(f);
     let result = app.run(COMMAND, remembered.clone());
@@ -76,6 +78,8 @@ const LABEL_MAX_W: f32 = 240.0;
 /// The labels above the Blending section, measured with its own in the current language.
 const LABELS: [&str; 3] = ["Width:", "Color:", "Location:"];
 
+/// The Stroke (Width, Color) and Location sections and the shared Blending section, all their
+/// labels in one column measured over [`LABELS`] and the Blending labels together.
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     let labels: Vec<&str> = LABELS.iter().chain(&crate::dialog_blend_ui::LABELS).copied().map(crate::i18n::t).collect();

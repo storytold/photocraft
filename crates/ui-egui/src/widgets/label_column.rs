@@ -14,6 +14,7 @@ pub const LABEL_COLUMN_GAP: f32 = 6.0;
 /// Height of a label column row (a field's).
 const ROW_H: f32 = 22.0;
 
+/// The font a column label is drawn in, and measured with by [`label_column_width`].
 fn label_font() -> egui::FontId {
     egui::FontId::proportional(12.0)
 }

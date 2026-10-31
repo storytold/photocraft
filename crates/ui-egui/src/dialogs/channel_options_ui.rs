@@ -89,6 +89,7 @@ pub fn params(f: &Map<String, Value>) -> Value {
     Value::Object(p)
 }
 
+/// OK: runs `channel.options` with the dialog's settings ([`params`]).
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     app.run(COMMAND, params(f))
 }
@@ -101,6 +102,7 @@ const LABEL_MAX_W: f32 = 200.0;
 /// and New Spot Channel share one width in a language.
 const LABELS: [&str; 2] = ["Name:", "Color:"];
 
+/// A row's label in the shared column, sized for every one of [`LABELS`] in the current language.
 fn label(ui: &mut egui::Ui, text: &str) {
     let w = crate::widgets::label_column_width(ui, &LABELS.map(crate::i18n::t), LABEL_MIN_W, LABEL_MAX_W);
     crate::widgets::column_label(ui, text, w);

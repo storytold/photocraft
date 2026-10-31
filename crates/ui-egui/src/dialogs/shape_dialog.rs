@@ -159,6 +159,8 @@ const LABEL_MAX_W: f32 = 200.0;
 /// Every label in the column, measured in the current language.
 const LABELS: [&str; 5] = ["Width:", "Height:", "Radius:", "Sides:", "Star Ratio:"];
 
+/// The dialog's rows (Width and Height, then Radius, or Sides and Star Ratio for a polygon),
+/// their labels in one column measured over [`LABELS`] so a longer translation never overruns.
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     let kind = f.get(MARK).and_then(Value::as_str).unwrap_or("").to_string();

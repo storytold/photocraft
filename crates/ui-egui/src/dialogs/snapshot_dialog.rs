@@ -26,6 +26,7 @@ pub fn open(app: &mut PhotocraftApp) -> Option<u64> {
     Some(app.ui.open_dialog(crate::state::DialogKind::Command, f))
 }
 
+/// OK: takes the snapshot with `history.newSnapshot`, passing the Name and From fields.
 pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     app.run(COMMAND, json!({"name": f.get("name"), "from": f.get("from")}))
 }
@@ -34,8 +35,11 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
 /// [`LABEL_MAX_W`] (what the 260 pt name field leaves of the dialog) and elides past that (#9635).
 const LABEL_MIN_W: f32 = 64.0;
 const LABEL_MAX_W: f32 = 160.0;
+/// Every label in the column, measured in the current language.
 const LABELS: [&str; 2] = ["Name:", "From:"];
 
+/// The Name field (focused and selected when the dialog opens) and the From menu, their labels
+/// in one column measured over [`LABELS`].
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     let label_w = crate::widgets::label_column_width(ui, &LABELS.map(crate::i18n::t), LABEL_MIN_W, LABEL_MAX_W);

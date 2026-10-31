@@ -124,6 +124,9 @@ fn dim_field(ui: &mut egui::Ui, text: &str) {
     ui.painter().text(r.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, text, crate::theme::mono(12.0), t.text_faint);
 }
 
+/// The Properties panel for the document itself (no layer selected): the Canvas section (size,
+/// orientation, resolution, mode, depth, fill), then Rulers & Grids and Guides, with the field
+/// labels in one column wide enough for their translation. Edits run as engine commands.
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else { return };

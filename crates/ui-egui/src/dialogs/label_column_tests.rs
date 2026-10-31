@@ -14,6 +14,7 @@ const ROOM_W: f32 = 440.0;
 
 type Body = fn(&PhotocraftApp, &mut egui::Ui, &mut Map<String, Value>);
 
+/// An app with a small document and a saved selection, so every dialog in [`cases`] can open.
 fn app() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
     app.run("file.new", json!({"width": 64, "height": 48, "background": "white"})).unwrap();
@@ -22,6 +23,7 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// The fields of the dialog `id` that an `open` just returned.
 fn dialog_fields(app: &mut PhotocraftApp, id: Option<u64>) -> Map<String, Value> {
     app.ui.dialog_mut(id.unwrap()).unwrap().fields.clone()
 }
@@ -50,6 +52,8 @@ fn cases(app: &mut PhotocraftApp) -> Vec<(String, Map<String, Value>, Body)> {
     cases
 }
 
+/// #9635: in every language, no text a dialog body draws starts left of the dialog's edge, where a
+/// right-aligned label too wide for its column used to overrun.
 #[test]
 fn translated_labels_stay_inside_the_dialog() {
     let mut app = app();
