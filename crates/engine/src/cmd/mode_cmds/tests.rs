@@ -43,6 +43,28 @@ fn colours(d: &Document) -> std::collections::HashSet<[u8; 3]> {
     set
 }
 
+fn indexed_pixels(d: &Document) -> Vec<[f32; 4]> {
+    let mut pixels = vec![[0.0; 4]; d.size.width as usize * d.size.height as usize];
+    d.layers[0].surface().unwrap().read_rgba_into(d.bounds(), &mut pixels);
+    for pixel in &mut pixels {
+        if pixel[3] == 0.0 {
+            *pixel = [0.0; 4];
+        }
+    }
+    pixels
+}
+
+fn assert_opaque_palette_snapshot(result: &serde_json::Value, table: &photocraft_doc::ColorTable) -> Vec<[f32; 3]> {
+    let transparent = table.transparent.expect("Indexed conversion must reserve a transparent slot") as usize;
+    assert_eq!(transparent, table.colors.len() - 1, "synthetic transparency must remain the final table entry");
+    assert_eq!(result["colors"].as_u64(), Some(table.colors.len() as u64));
+    assert_eq!(result["transparentIndex"].as_u64(), Some(transparent as u64));
+    let snapshot: photocraft_algo::palette_map::Palette = serde_json::from_value(result["paletteSnapshot"].clone()).unwrap();
+    let snapshot_colors = snapshot.colors.iter().map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect::<Vec<_>>();
+    assert_eq!(snapshot_colors, table.colors[..transparent].to_vec(), "paletteSnapshot must contain only the opaque persisted palette");
+    snapshot.colors
+}
+
 #[test]
 fn rotate_arbitrary_grows_canvas_and_keeps_background() {
     for depth in [8, 16, 32] {
@@ -436,6 +458,100 @@ fn indexed_non_black_white_generation_keeps_existing_total_count_semantics() {
     assert_eq!(result["colors"], 2);
     assert_eq!(table.colors.len(), 2, "one opaque entry plus one transparency slot");
     assert_eq!(table.transparent, Some(1));
+}
+
+#[test]
+fn review_indexed_stock_generated_snapshot_is_opaque_and_replay_stable() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 1, "depth": depth, "mode": "rgb", "background": "transparent"})).unwrap();
+        paint(&mut s, |x, _| match x {
+            0 => [1.0, 0.0, 0.0, 1.0],
+            1 => [0.0, 1.0, 0.0, 1.0],
+            2 => [0.0, 0.0, 1.0, 1.0],
+            _ => [0.0; 4],
+        });
+        let params = json!({
+            "palette": "selective",
+            "colors": 4,
+            "forced": "none",
+            "dither": "none",
+            "transparency": true
+        });
+        let result = s.execute("image.mode.indexedColor", params.clone()).unwrap();
+        let first_table = doc(&s).color_table.clone().unwrap();
+        let first_pixels = indexed_pixels(doc(&s));
+        let first_snapshot = assert_opaque_palette_snapshot(&result, &first_table);
+
+        let mut replay = params;
+        replay["paletteSnapshot"] = result["paletteSnapshot"].clone();
+        let replay_result = s.execute("image.mode.indexedColor", replay).unwrap();
+        let replay_snapshot = assert_opaque_palette_snapshot(&replay_result, doc(&s).color_table.as_ref().unwrap());
+        assert_eq!(replay_snapshot, first_snapshot, "{depth}-bit: replay changed the opaque palette");
+        assert_eq!(indexed_pixels(doc(&s)), first_pixels, "{depth}-bit: replay changed indexed pixels");
+    }
+}
+
+#[test]
+fn review_indexed_advanced_fixed_snapshot_is_opaque_and_replay_stable() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4, "height": 1, "depth": depth, "mode": "rgb", "background": "transparent"})).unwrap();
+        paint(&mut s, |x, _| match x {
+            0 => [1.0, 0.0, 0.0, 1.0],
+            1 => [0.0, 1.0, 0.0, 1.0],
+            2 => [0.0, 0.0, 1.0, 1.0],
+            _ => [0.0; 4],
+        });
+        let params = json!({
+            "paletteSnapshot": {
+                "name": "fixed",
+                "colors": [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
+            },
+            "mapping": {"method": "none"},
+            "transparency": true
+        });
+        let result = s.execute("image.mode.indexedColor", params.clone()).unwrap();
+        let first_table = doc(&s).color_table.clone().unwrap();
+        let first_pixels = indexed_pixels(doc(&s));
+        let first_snapshot = assert_opaque_palette_snapshot(&result, &first_table);
+
+        let mut replay = params;
+        replay["paletteSnapshot"] = result["paletteSnapshot"].clone();
+        let replay_result = s.execute("image.mode.indexedColor", replay).unwrap();
+        let replay_snapshot = assert_opaque_palette_snapshot(&replay_result, doc(&s).color_table.as_ref().unwrap());
+        assert_eq!(replay_snapshot, first_snapshot, "{depth}-bit: replay changed the opaque palette");
+        assert_eq!(indexed_pixels(doc(&s)), first_pixels, "{depth}-bit: replay changed indexed pixels");
+    }
+}
+
+#[test]
+fn review_indexed_advanced_fixed_256_palette_reduces_before_snapshot_and_replays() {
+    let fixed_colors: Vec<[f32; 3]> = (0..256).map(|i| [i as f32 / 255.0, ((i * 73) % 256) as f32 / 255.0, ((i * 151 + 17) % 256) as f32 / 255.0]).collect();
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 17, "height": 16, "depth": 8, "mode": "rgb", "background": "transparent"})).unwrap();
+    paint(&mut s, |x, y| {
+        let index = y as usize * 17 + x as usize;
+        if let Some([r, g, b]) = fixed_colors.get(index) { [*r, *g, *b, 1.0] } else { [0.0; 4] }
+    });
+    let params = json!({
+        "paletteSnapshot": {"name": "fixed 256", "colors": fixed_colors},
+        "mapping": {"method": "none"},
+        "reducePalette": true,
+        "transparency": true
+    });
+    let result = s.execute("image.mode.indexedColor", params.clone()).unwrap();
+    let first_table = doc(&s).color_table.clone().unwrap();
+    let first_pixels = indexed_pixels(doc(&s));
+    assert_eq!(result["colors"], 256);
+    let first_snapshot = assert_opaque_palette_snapshot(&result, &first_table);
+
+    let mut replay = params;
+    replay["paletteSnapshot"] = result["paletteSnapshot"].clone();
+    let replay_result = s.execute("image.mode.indexedColor", replay).unwrap();
+    let replay_snapshot = assert_opaque_palette_snapshot(&replay_result, doc(&s).color_table.as_ref().unwrap());
+    assert_eq!(replay_snapshot, first_snapshot, "replay changed the reduced opaque palette");
+    assert_eq!(indexed_pixels(doc(&s)), first_pixels, "replay changed indexed pixels after the 256→255 reduction");
 }
 
 #[test]

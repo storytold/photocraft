@@ -445,6 +445,10 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
                     other => other,
                 })?;
             }
+        }
+        // Replayable snapshots contain the final opaque palette, never our reserved alpha slot.
+        let snapshot = palette.clone();
+        if needs_transparency {
             transparent = if advanced {
                 crate::palette_cmds::append_transparency(&mut palette)
             } else if palette.colors.len() < 256 {
@@ -464,7 +468,6 @@ fn indexed_color(s: &mut Session, raw: &Value) -> Result<Value> {
             let pal: Vec<[u8; 3]> = palette.colors.iter().map(|c| c.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8)).collect();
             quantize::quantize(&mut px, doc.size.width as usize, &pal, dither, amount, transparent);
         }
-        let snapshot = palette.clone();
         if advanced_cms {
             let transform = photocraft_cms::cached(srgb, &source_profile, mapping_options)
                 .map_err(|e| bad(CMD, format!("could not convert advanced Indexed mapping to document RGB: {e}")))?;

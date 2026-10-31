@@ -607,6 +607,10 @@ Indexed conversion keeps its 256-entry/transparency-slot rules and stores expand
 replacement for stock dialog defaults or export quantization. Stock schema dialogs neither
 manufacture nor restore automation-only palette/mapping fields, including an implicit zero transparent
 index; stale remembered settings cannot turn an ordinary opaque conversion into advanced mapping.
+Returned Indexed `paletteSnapshot` data is captured after any deliberate opaque-palette reduction
+and before an automatically appended transparency slot. Reusing that snapshot does not turn the
+reserved slot into an opaque colour or grow the palette. Explicit `transparentIndex` handling is
+unchanged.
 The stock palette and dither dropdowns retain their original choices; the adapter-only
 `blackWhite` generation preset and advanced dither method ids remain explicit automation inputs.
 No Palette Map filter command or UI is registered by this backend change.
