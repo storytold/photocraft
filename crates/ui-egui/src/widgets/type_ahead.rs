@@ -20,17 +20,25 @@ pub fn list_open(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<u64>(open_id())).is_some_and(|seen| seen.saturating_add(2) >= pass)
 }
 
+/// Close the open dropdown list now, ahead of this frame's drawing.
+pub fn close_list(ctx: &egui::Context) {
+    egui::Popup::close_all(ctx);
+    ctx.data_mut(|d| d.remove::<u64>(open_id()));
+}
+
 /// The keys of the open list of dropdown `id`, called while drawing the list, before its rows:
 /// the index of the option this frame's typing picks (its text events are consumed), if any. ↩
 /// closes the list. `current` is the option the list now shows; `labels` are as displayed.
 pub fn keys(ui: &mut Ui, id: Id, current: Option<usize>, labels: &[&str]) -> Option<usize> {
     let pass = ui.ctx().cumulative_pass_nr();
+    // Before marking it: a list closed by `close_list` and opened again within two passes.
+    let was_open = list_open(ui.ctx());
     ui.data_mut(|d| d.insert_temp(open_id(), pass));
     let key = id.with("type-ahead");
     // A list opened anew starts with no letters typed.
     let shown_id = key.with("pass");
     ui.data_mut(|d| {
-        if d.get_temp::<u64>(shown_id).is_none_or(|seen| seen.saturating_add(2) < pass) {
+        if !was_open || d.get_temp::<u64>(shown_id).is_none_or(|seen| seen.saturating_add(2) < pass) {
             d.remove::<(String, f64)>(key);
         }
         d.insert_temp(shown_id, pass);
@@ -165,6 +173,32 @@ mod tests {
         type_key(&h, egui::Key::M, "m");
         h.run();
         assert_eq!(*h.state(), 3);
+    }
+
+    /// #9314 review: a list closed by [`super::close_list`] (a command shortcut) and opened again
+    /// right away forgets the letters typed before: "d" then, reopened, "a" is Alpha, not "da".
+    #[test]
+    fn a_list_reopened_right_after_close_list_starts_a_new_prefix() {
+        let labels = ["Alpha", "Dark", "Dawn"];
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
+            move |ui, (open, picked): &mut (bool, Option<usize>)| {
+                if *open && let Some(i) = super::keys(ui, egui::Id::unique("list"), Some(0), &labels) {
+                    *picked = Some(i);
+                }
+            },
+            (true, None),
+        );
+        h.run_steps(1);
+        type_key(&h, egui::Key::D, "d");
+        h.run_steps(1);
+        assert_eq!(h.state().1, Some(1), "d picks Dark");
+        super::close_list(&h.ctx);
+        h.state_mut().0 = false;
+        h.run_steps(1);
+        h.state_mut().0 = true;
+        type_key(&h, egui::Key::A, "a");
+        h.run_steps(1);
+        assert_eq!(h.state().1, Some(0), "a starts over: Alpha");
     }
 
     #[test]

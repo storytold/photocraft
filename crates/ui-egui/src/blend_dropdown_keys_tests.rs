@@ -91,3 +91,32 @@ fn letters_pick_blend_modes_in_the_open_list_without_switching_tools() {
     h.run_steps(2);
     assert!(h.state().ui.tool != Tool::Move, "M picks a marquee tool once the list is closed");
 }
+
+/// #9065: a command shortcut pressed with the Blend Mode list open closes the list and runs, as
+/// with Photoshop's menus (⌘1 there closes an open panel or menu bar menu and zooms to 100%).
+/// Letters and arrows stay the list's (the tests above).
+#[test]
+fn a_command_shortcut_closes_the_open_list_and_runs() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 3000, "height": 2000})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app
+    });
+    h.run_steps(6);
+    assert_ne!(h.state().ui.views[0].zoom, 1.0, "the document starts fitted, not at 100%");
+    let named = |n: &egui_kittest::Node<'_>| {
+        let a = n.accesskit_node();
+        a.value().as_deref() == Some("Normal") || a.label().as_deref() == Some("Normal")
+    };
+    h.query_all_by_role(Role::ComboBox).find(|n| named(n)).expect("the Layers panel's Blend Mode dropdown").click();
+    h.run_steps(2);
+    assert!(crate::widgets::dropdown_list_open(&h.ctx), "the list is open");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num1);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.views[0].zoom, 1.0, "⌘1 (100%) runs with the list open");
+    assert!(!crate::widgets::dropdown_list_open(&h.ctx), "and closes the list");
+    let st = h.state().session.active().unwrap();
+    assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().blend, BlendMode::Normal, "the mode is unchanged");
+}

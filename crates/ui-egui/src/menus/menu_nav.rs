@@ -107,6 +107,16 @@ pub fn is_open(ctx: &egui::Context) -> bool {
     ctx.data(|d| d.get_temp::<u64>(open_id())).is_some_and(|seen| seen + 2 >= pass)
 }
 
+/// Close the open menu now, ahead of this frame's drawing: its popups and the mark [`is_open`]
+/// reads.
+pub fn close(ctx: &egui::Context) {
+    egui::Popup::close_all(ctx);
+    ctx.data_mut(|d| {
+        d.remove::<u64>(open_id());
+        d.remove::<Nav>(nav_id());
+    });
+}
+
 impl Nav {
     /// Last frame's state, reset when another top-level menu (or none) is open now.
     pub fn load(ctx: &egui::Context) -> Nav {
