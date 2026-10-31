@@ -762,7 +762,15 @@ fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
     // Red on the left (x < 16), blue in the middle, green on the right (x ≥ 32).
     let (red, blue, green) = ([0.85, 0.1, 0.1, 1.0], [0.1, 0.15, 0.85, 1.0], [0.1, 0.8, 0.15, 1.0]);
     let mut s = session(8, "rgb");
-    paint(&mut s, |x, _| if x < 16 { red } else if x < 32 { blue } else { green });
+    paint(&mut s, |x, _| {
+        if x < 16 {
+            red
+        } else if x < 32 {
+            blue
+        } else {
+            green
+        }
+    });
     let before = (rgba(&s, 4, 16), rgba(&s, 24, 16), rgba(&s, 40, 16));
     let shift = |extra: Value| {
         let mut p = json!({"fuzziness": 40, "hue": 120, "saturation": 20});

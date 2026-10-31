@@ -1050,9 +1050,11 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                             // puts it away.
                             let armed = f.get(COLOR_EYEDROPPER).and_then(Value::as_bool).unwrap_or(false);
                             let tool = f.get("__tool").and_then(Value::as_str).unwrap_or("sample").to_string();
-                            for (id, badge, label) in
-                                [("subtract", "−", tl!("Subtract from Sample")), ("add", "+", tl!("Add to Sample")), ("sample", "", tl!("Pick Color From Image"))]
-                            {
+                            for (id, badge, label) in [
+                                ("subtract", "−", tl!("Subtract from Sample")),
+                                ("add", "+", tl!("Add to Sample")),
+                                ("sample", "", tl!("Pick Color From Image")),
+                            ] {
                                 let on = armed && tool == id;
                                 if crate::color_range_ui::eyedropper(ui, badge, on, label).clicked() {
                                     f.insert(COLOR_EYEDROPPER.into(), json!(!on));
