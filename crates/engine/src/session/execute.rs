@@ -166,6 +166,9 @@ impl Session {
             let d = self.active().ok_or_else(|| "no document open".to_string())?;
             return if d.selected_layers().is_empty() { Err("no layer selected".into()) } else { Ok(()) };
         }
+        if let Some(why) = bitmap_mode_refusal(self, spec.id, params) {
+            return Err(why.into());
+        }
         channel_cmds::mask_target_enabled(self, spec.id, params).unwrap_or_else(|| (spec.enabled)(self))
     }
 
@@ -368,5 +371,50 @@ impl Session {
         }
         let Some(st) = self.active_mut() else { return };
         st.last_damage = Some(st.last_damage.map_or(rect, |d| d.intersect(&rect)));
+    }
+}
+
+/// A Bitmap document holds only black and white, so Photoshop greys out its filters and its
+/// Image › Adjustments, all but Invert (#10484). Catalogue queries still answer.
+fn bitmap_mode_refusal(s: &Session, id: &str, params: &Value) -> Option<&'static str> {
+    let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments."))
+        && id != "image.adjustments.invert"
+        && !id.ends_with(".list")
+        && params.get("list").and_then(Value::as_bool) != Some(true);
+    (edits && s.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Bitmap)).then_some("not available in Bitmap mode")
+}
+
+#[cfg(test)]
+mod bitmap_mode_tests {
+    use serde_json::json;
+
+    use crate::Session;
+
+    /// #10484: Photoshop 2025 on a Bitmap document refuses Gaussian Blur, Add Noise, Levels and
+    /// Brightness/Contrast, and runs Invert. They all ran.
+    #[test]
+    fn bitmap_documents_refuse_filters_and_adjustments_but_invert() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 16, "height": 16, "mode": "grayscale"})).unwrap();
+        s.edit("mode", |doc, _| {
+            doc.mode = photocraft_color::ColorMode::Bitmap;
+            Ok(())
+        })
+        .unwrap();
+        for id in ["filter.blur.gaussianBlur", "filter.noise.addNoise", "image.adjustments.levels", "image.adjustments.brightnessContrast"] {
+            assert!(!s.is_enabled(id), "{id} is greyed out");
+            let e = s.execute(id, json!({})).unwrap_err().to_string();
+            assert!(e.contains("Bitmap mode"), "{id}: {e}");
+        }
+        assert!(s.is_enabled("image.adjustments.invert"));
+        s.execute("image.adjustments.invert", json!({})).unwrap();
+        assert!(s.execute("filter.filterGallery", json!({"list": true})).is_ok(), "a catalogue query still answers");
+        // Grayscale again: the filters are back.
+        s.edit("mode", |doc, _| {
+            doc.mode = photocraft_color::ColorMode::Grayscale;
+            Ok(())
+        })
+        .unwrap();
+        assert!(s.is_enabled("filter.blur.gaussianBlur"));
     }
 }
