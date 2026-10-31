@@ -56,7 +56,7 @@
 
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -3943,17 +3943,8 @@ navigator	Zoom	Zvětšení
 	Kept {name}: written by another application	Soubor {name} ponechán: zapsala ho jiná aplikace
 	Shadow Tint	Odstín stínů
 	Check for Updates…	Zkontrolovat aktualizace…
-	PhotoCraft Updates	Aktualizace PhotoCraft
-	Checking for updates…	Kontrola aktualizací…
 	Open the release page to choose an installer for your system.	Otevřete stránku vydání a vyberte instalační program pro svůj systém.
-	Open Download Page	Otevřít stránku ke stažení
-	PhotoCraft is up to date.	PhotoCraft je aktuální.
-	Could not check for updates.	Aktualizace se nepodařilo zkontrolovat.
-	Updates have not been checked yet.	Aktualizace ještě nebyly zkontrolovány.
-	Check Again	Zkontrolovat znovu
 	Automatically Check for Updates	Automaticky kontrolovat aktualizace
-	Installed version: {version}	Nainstalovaná verze: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} je k dispozici.
 	Paints from the History panel's source state	Maluje ze zdrojového stavu panelu Historie
 	Sets the source for the history brush	Nastaví zdroj pro štětec historie
 	Highlight Mode	Režim světel

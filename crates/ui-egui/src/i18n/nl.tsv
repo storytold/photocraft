@@ -4085,17 +4085,8 @@ curves	Smooth	Vloeiend maken
 	Kept {name}: written by another application	{name} behouden: geschreven door een andere toepassing
 	Shadow Tint	Schaduwtint
 	Check for Updates…	Controleren op updates…
-	PhotoCraft Updates	PhotoCraft-updates
-	Checking for updates…	Controleren op updates…
 	Open the release page to choose an installer for your system.	Open de releasepagina om een installatieprogramma voor uw systeem te kiezen.
-	Open Download Page	Downloadpagina openen
-	PhotoCraft is up to date.	PhotoCraft is bijgewerkt.
-	Could not check for updates.	Kan niet controleren op updates.
-	Updates have not been checked yet.	Er is nog niet op updates gecontroleerd.
-	Check Again	Opnieuw controleren
 	Automatically Check for Updates	Automatisch op updates controleren
-	Installed version: {version}	Geïnstalleerde versie: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} is beschikbaar.
 	Paints from the History panel's source state	Schildert vanuit de bronstatus van het deelvenster Geschiedenis
 	Sets the source for the history brush	Stelt de bron voor het historiepenseel in
 	Highlight Mode	Hooglichtmodus

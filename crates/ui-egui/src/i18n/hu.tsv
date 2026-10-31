@@ -4226,17 +4226,8 @@ cameraRaw	Yellow	Sárga
 	Shadow Color	Árnyék színe
 	Shadow Opacity	Árnyék fedettsége
 	Check for Updates…	Frissítések keresése…
-	PhotoCraft Updates	PhotoCraft-frissítések
-	Checking for updates…	Frissítések keresése…
 	Open the release page to choose an installer for your system.	Nyissa meg a kiadás oldalát, és válassza ki a rendszerének megfelelő telepítőt.
-	Open Download Page	Letöltési oldal megnyitása
-	PhotoCraft is up to date.	A PhotoCraft naprakész.
-	Could not check for updates.	Nem sikerült ellenőrizni a frissítéseket.
-	Updates have not been checked yet.	A frissítések még nem lettek ellenőrizve.
-	Check Again	Újraellenőrzés
 	Automatically Check for Updates	Frissítések automatikus keresése
-	Installed version: {version}	Telepített verzió: {version}
-	PhotoCraft {version} is available.	Elérhető a PhotoCraft {version}.
 	Use the embedded profile ({profile})	A beágyazott profil használata ({profile})
 	Convert to the working space ({profile})	Átalakítás a munkaszíntérbe ({profile})
 	Remember this choice for future images	A választás megjegyzése a későbbi képekhez

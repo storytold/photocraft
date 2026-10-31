@@ -41,7 +41,7 @@
 
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -4524,17 +4524,8 @@ shape	Appearance	Izgled
 	Not rendered: this adjustment ({key}) is kept as imported.	Није приказано: ово прилагођавање ({key}) је задржано онако како је увезено.
 	Print preview image	Print preview image
 	Check for Updates…	Proveri ažuriranja…
-	PhotoCraft Updates	Ažuriranja za PhotoCraft
-	Checking for updates…	Provera ažuriranja…
 	Open the release page to choose an installer for your system.	Otvorite stranicu izdanja da biste izabrali instalacioni program za svoj sistem.
-	Open Download Page	Otvori stranicu za preuzimanje
-	PhotoCraft is up to date.	PhotoCraft je ažuran.
-	Could not check for updates.	Nije moguće proveriti ažuriranja.
-	Updates have not been checked yet.	Ažuriranja još nisu proverena.
-	Check Again	Proveri ponovo
 	Automatically Check for Updates	Automatski proveravaj ažuriranja
-	Installed version: {version}	Instalirana verzija: {version}
-	PhotoCraft {version} is available.	Dostupan je PhotoCraft {version}.
 	Hue Cube	Kocka nijanse
 	Brightness Cube	Kocka osvetljenosti
 	Color Wheel	Točak boja

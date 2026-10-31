@@ -41,7 +41,7 @@
 
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -2944,17 +2944,8 @@ curves	Smooth	平滑
 	Kept {name}: written by another application	已保留 {name}：由其他應用程式寫入
 	Shadow Tint	陰影色調
 	Check for Updates…	檢查更新…
-	PhotoCraft Updates	PhotoCraft 更新
-	Checking for updates…	正在檢查更新…
 	Open the release page to choose an installer for your system.	開啟發佈頁，選擇適合您系統的安裝程式。
-	Open Download Page	開啟下載頁面
-	PhotoCraft is up to date.	PhotoCraft 已是最新版本。
-	Could not check for updates.	無法檢查更新。
-	Updates have not been checked yet.	尚未檢查更新。
-	Check Again	重新檢查
 	Automatically Check for Updates	自動檢查更新
-	Installed version: {version}	已安裝版本：{version}
-	PhotoCraft {version} is available.	PhotoCraft {version} 已發佈。
 	Paints from the History panel's source state	從步驟記錄面板的來源狀態繪畫
 	Sets the source for the history brush	設定步驟記錄筆刷的來源
 	Highlight Mode	亮部模式

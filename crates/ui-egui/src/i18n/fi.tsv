@@ -2630,7 +2630,7 @@ cameraRaw	Roughness	Karheus
 	Frequency	Taajuus
 	Use tablet pressure to change pen width	Muuta kynän leveyttä piirtopöydän paineella
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 	About	Tietoja
 	Contributors	Tekijät
 	Models	Mallit
@@ -3279,17 +3279,8 @@ curves	Smooth	Tasoita
 	Shadow Opacity	Varjon peittävyys
 # PhotoCraft release checks.
 	Check for Updates…	Tarkista päivitykset…
-	PhotoCraft Updates	PhotoCraftin päivitykset
-	Checking for updates…	Tarkistetaan päivityksiä…
 	Open the release page to choose an installer for your system.	Avaa julkaisusivu ja valitse järjestelmällesi sopiva asennusohjelma.
-	Open Download Page	Avaa lataussivu
-	PhotoCraft is up to date.	PhotoCraft on ajan tasalla.
-	Could not check for updates.	Päivityksiä ei voitu tarkistaa.
-	Updates have not been checked yet.	Päivityksiä ei ole vielä tarkistettu.
-	Check Again	Tarkista uudelleen
 	Automatically Check for Updates	Tarkista päivitykset automaattisesti
-	Installed version: {version}	Asennettu versio: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} on saatavilla.
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Käytä upotettua profiilia ({profile})
 	Convert to the working space ({profile})	Muunna työavaruuteen ({profile})
@@ -4724,7 +4715,6 @@ shape	Appearance	Ulkoasu
 	Level:	Sävytaso:
 	Percentile:	Persentiili:
 	Refine Edge…	Tarkenna reunaa…
-	Release Notes	Julkaisutiedot
 	Remember Settings	Muista asetukset
 	Reset Essentials	Nollaa Perusteet
 	Rounded Rectangle Tool	Pyöristetyn suorakulmion työkalu
@@ -4735,7 +4725,6 @@ shape	Appearance	Ulkoasu
 	Tile Horizontally	Allekkain
 	Tile Vertically	Rinnakkain
 	Uncached Refresh	Päivitä ilman välimuistia
-	Update and Restart	Päivitä ja käynnistä uudelleen
 	Warming Filter (81)	Lämmityssuodatin (81)
 	Warming Filter (LBA)	Lämmityssuodatin (LBA)
 @plural	{n} document|{n} documents	{n} asiakirja|{n} asiakirjaa
