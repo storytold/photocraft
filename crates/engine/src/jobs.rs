@@ -623,7 +623,7 @@ impl Session {
                         ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl))
                     }
                     (None, Some(p)) => ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, ctl)),
-                    (None, None) => unreachable!("an open source is bytes or a path"),
+                    (None, None) => return Err(EngineError::Other("open source is neither bytes nor a path".into())),
                 }
                 .map_err(|e| match e {
                     photocraft_io::IoError::Cancelled => EngineError::Cancelled,
