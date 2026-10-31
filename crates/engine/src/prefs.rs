@@ -183,6 +183,78 @@ impl Unit {
         let unit = if suffix.is_empty() { None } else { Some(Unit::from_suffix(suffix)?) };
         Some((v, unit))
     }
+    /// A length typed as Photoshop's numeric fields take arithmetic (#10440): lengths and numbers
+    /// joined by `+`, `-`, `*` and `/`, e.g. "100% / 3", "100% - 50px", "1in + 10", "2 * 50 px".
+    /// `*` and `/` bind tighter, and `−` (U+2212) is a minus. A number without a unit added or
+    /// subtracted takes the first operand's unit (Photoshop: "1in + 10" is 11 in), or `default`
+    /// when the first has none; one multiplied or divided is a plain number. `to_px` converts a
+    /// value in a unit. `None` when the text is over 1024 bytes (the numeric fields' cap) or isn't
+    /// such an expression, multiplies two lengths, divides by a length or by zero, or the result
+    /// isn't finite.
+    pub fn eval_length(text: &str, default: Unit, to_px: impl Fn(f64, Unit) -> f64) -> Option<f64> {
+        if text.len() > 1024 {
+            return None;
+        }
+        let text = text.replace('−', "-");
+        // Tokens: operators, and operands (a number with an optional unit suffix).
+        let mut ops = Vec::new();
+        let mut operands: Vec<(f64, Option<Unit>)> = Vec::new();
+        let mut rest = text.trim();
+        let mut want_operand = true;
+        while !rest.is_empty() {
+            if want_operand {
+                let num_end = rest
+                    .char_indices()
+                    .find(|&(i, c)| !(c.is_ascii_digit() || matches!(c, '.' | ',') || (i == 0 && matches!(c, '-' | '+'))))
+                    .map_or(rest.len(), |(i, _)| i);
+                let after = &rest[num_end..];
+                let unit_end = after.find(['+', '-', '*', '/']).unwrap_or(after.len());
+                let (v, unit) = Unit::parse_length(&rest[..num_end + unit_end])?;
+                operands.push((v, unit));
+                rest = after[unit_end..].trim_start();
+                want_operand = false;
+            } else {
+                let op = rest.chars().next()?;
+                if !matches!(op, '+' | '-' | '*' | '/') {
+                    return None;
+                }
+                ops.push(op);
+                rest = rest[1..].trim_start();
+                want_operand = true;
+            }
+        }
+        if want_operand || operands.is_empty() {
+            return None;
+        }
+        let first_unit = operands[0].1.unwrap_or(default);
+        // Fold the products and quotients into terms: (sum of px for unit factors, scalar, has a unit).
+        let mut terms: Vec<(char, f64, Option<Unit>)> = Vec::new();
+        let (mut sign, mut value, mut unit) = ('+', operands[0].0, operands[0].1);
+        for (op, (v, u)) in ops.iter().zip(operands.iter().skip(1)) {
+            match op {
+                '*' => {
+                    if unit.is_some() && u.is_some() {
+                        return None;
+                    }
+                    value *= v;
+                    unit = unit.or(*u);
+                }
+                '/' => {
+                    if u.is_some() || *v == 0.0 {
+                        return None;
+                    }
+                    value /= v;
+                }
+                _ => {
+                    terms.push((sign, value, unit));
+                    (sign, value, unit) = (*op, *v, *u);
+                }
+            }
+        }
+        terms.push((sign, value, unit));
+        let px: f64 = terms.iter().map(|&(s, v, u)| if s == '-' { -1.0 } else { 1.0 } * to_px(v, u.unwrap_or(first_unit))).sum();
+        px.is_finite().then_some(px)
+    }
     /// The unit a typed suffix names, in any case: `px`, `in` or `"`, `cm`, `mm`, `pt`, `pc` or
     /// `pica`, `%`, and their long forms (`pixels`, `inches`, `centimetres`…). The one table every
     /// length field reads.
