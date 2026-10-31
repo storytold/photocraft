@@ -201,10 +201,9 @@ fn prefs_body(ui: &mut egui::Ui, f: &mut Map<String, Value>, system: Option<egui
         } else {
             egui::Rect::from_min_max(row.left_top(), egui::pos2(row.left() + SIDEBAR_W, row.bottom()))
         };
-        ui.scope_builder(
-            egui::UiBuilder::new().max_rect(sidebar).layout(egui::Layout::top_down(egui::Align::Min)),
-            |ui| prefs_sidebar(ui, t, &found, &mut section, &values),
-        );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(sidebar).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+            prefs_sidebar(ui, t, &found, &mut section, &values)
+        });
         // The settings fill the dialog's resizable area down to the button row (#7420). Sizing them
         // from the window instead left a resized dialog with empty space and the buttons mid-way.
         // The area grows to fit its content, so this must never ask for more than it was given.
@@ -274,13 +273,7 @@ pub(super) fn has_visible_fields(values: &Value, section: &str) -> bool {
 }
 
 /// The section list column of the Preferences dialog.
-fn prefs_sidebar(
-    ui: &mut egui::Ui,
-    t: Tokens,
-    found: &[(&'static str, &'static str)],
-    section: &mut String,
-    values: &Value,
-) {
+fn prefs_sidebar(ui: &mut egui::Ui, t: Tokens, found: &[(&'static str, &'static str)], section: &mut String, values: &Value) {
     ui.set_width(SIDEBAR_W);
     if found.is_empty() {
         ui.label(RichText::new(tl!("No matching settings")).color(t.text_dim));
@@ -369,21 +362,25 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
     let grid = |id: &str| egui::Grid::new(("prefs-grid", id.to_string())).num_columns(2).spacing([14.0, 7.0]).min_col_width(150.0);
     if rows.any() || !appearance.is_empty() {
         pref_group(ui, "Appearance", |ui| {
-            grid("interface-appearance").show(ui, |ui| {
-                appearance_rows(ui, obj, system, rows);
-                field_rows(ui, "interface", obj, appearance, lang);
+            grid_scope(ui, |ui| {
+                grid("interface-appearance").show(ui, |ui| {
+                    appearance_rows(ui, obj, system, rows);
+                    field_rows(ui, "interface", obj, appearance, lang);
+                });
             });
         });
     }
     if !presentation.is_empty() {
         pref_group(ui, "Presentation", |ui| {
-            grid("interface-presentation").show(ui, |ui| field_rows(ui, "interface", obj, presentation, lang));
+            grid_scope(ui, |ui| grid("interface-presentation").show(ui, |ui| field_rows(ui, "interface", obj, presentation, lang)));
         });
     }
     if !checks.is_empty() || !other.is_empty() {
         pref_group(ui, "Options", |ui| {
-            egui::Grid::new("prefs-grid-interface-checks").num_columns(2).spacing([0.0, 7.0]).show(ui, |ui| field_rows(ui, "interface", obj, checks, lang));
-            grid("interface-options").show(ui, |ui| field_rows(ui, "interface", obj, other, lang));
+            grid_scope(ui, |ui| {
+                egui::Grid::new("prefs-grid-interface-checks").num_columns(2).spacing([0.0, 7.0]).show(ui, |ui| field_rows(ui, "interface", obj, checks, lang))
+            });
+            grid_scope(ui, |ui| grid("interface-options").show(ui, |ui| field_rows(ui, "interface", obj, other, lang)));
         });
     }
 }
@@ -441,23 +438,26 @@ pub(super) fn section_fields(
         memory_usage_row(ui, obj);
     }
     keys.retain(|k| field_visible(section, obj, k, &query));
-    egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang));
+    grid_scope(ui, |ui| egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang)));
 }
 
 /// A `Grid` cell whose content hugs the cell's reading-start edge: the fork's `Grid` aligns
 /// every cell left, which leaves the right-to-left reading start of a label column ragged.
 fn reading_start_cell<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    if crate::text::direction::is_rtl() {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), add).inner
-    } else {
-        add(ui)
-    }
+    ui.with_layout(crate::text::direction::row(), add).inner
 }
 
 /// The dimmed label of a settings row, aligned to its cell's reading-start edge so labels of
 /// different lengths line up there in a right-to-left UI too.
 fn field_label(ui: &mut egui::Ui, t: Tokens, label: &str) -> egui::Response {
     reading_start_cell(ui, |ui| ui.label(RichText::new(tl!(label)).color(t.text_dim)))
+}
+
+/// The fork's `Grid` cannot place its cells under a right-to-left cursor, so a grid inside the
+/// mirrored content column runs in an explicit left-to-right scope; `grid_cells` emits the
+/// cells in reading order. A no-op in LTR, where that is the inherited layout already.
+pub(super) fn grid_scope<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    ui.with_layout(egui::Layout::top_down(egui::Align::Min), add).inner
 }
 
 /// One grid row per setting in `keys` (already filtered by `field_visible`). Cells emit in
@@ -493,13 +493,9 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                     }
                 };
                 if crate::text::direction::is_rtl() {
-                    crate::text::direction::grid_cells(
-                        ui,
-                        editor,
-                        |ui| {
-                            ui.label("");
-                        },
-                    );
+                    crate::text::direction::grid_cells(ui, editor, |ui| {
+                        ui.label("");
+                    });
                 } else {
                     crate::text::direction::grid_cells(
                         ui,
@@ -571,7 +567,7 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                         field_label(ui, t, &label);
                     },
                     |ui| {
-                        ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(tl!(&label));
+                        crate::widgets::rtl_singleline_edit(ui, &mut s, 260.0, "").accessible_name(tl!(&label));
                     },
                 );
                 obj.insert(k, json!(s));
@@ -651,7 +647,7 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                                     let mut on = d.get("enabled").and_then(Value::as_bool).unwrap_or(false);
                                     let mut path = d.get("path").and_then(Value::as_str).unwrap_or("").to_string();
                                     crate::widgets::checkbox(ui, &mut on, tl!("Enabled"));
-                                    ui.add(egui::TextEdit::singleline(&mut path).desired_width(240.0)).accessible_name(tl!("Path"));
+                                    crate::widgets::rtl_singleline_edit(ui, &mut path, 240.0, "").accessible_name(tl!("Path"));
                                     *d = json!({"enabled": on, "path": path});
                                 });
                             }
@@ -714,13 +710,15 @@ mod rtl_direction_tests {
         let mut h = Harness::builder()
             .with_size(egui::vec2(1000.0, 700.0))
             .with_context_setup(|ctx| crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::Studio))
-            .build_ui_state(|ui, f: &mut Map<String, Value>| super::prefs_body(ui, f, None), prefs_fields(section));
+            .build_ui_state(
+                |ui, f: &mut Map<String, Value>| {
+                    // The dialog host draws every page inside the body layout (fields::body).
+                    ui.with_layout(crate::text::direction::body_layout(), |ui| super::prefs_body(ui, f, None));
+                },
+                prefs_fields(section),
+            );
         h.run_steps(4);
-        let search = h
-            .query_all_by_role(Role::TextInput)
-            .map(|n| n.rect())
-            .min_by(|a, b| a.top().total_cmp(&b.top()))
-            .expect("the search field");
+        let search = h.query_all_by_role(Role::TextInput).map(|n| n.rect()).min_by(|a, b| a.top().total_cmp(&b.top())).expect("the search field");
         let label = h.query_all_by_role_and_label(Role::Label, needle).next().expect(needle).rect();
         (search, label)
     }
@@ -745,10 +743,10 @@ mod rtl_direction_tests {
         );
     }
 
-    /// RTL: a page's settings rows (Scratch Disks) start at the content column's right edge.
+    /// RTL: a page's settings rows start at the content column's reading-start (right) edge.
     #[test]
-    fn rtl_prefs_scratch_disks_rows_sit_at_the_reading_start() {
-        let (search, label) = probe("scratchDisks", Dir::Rtl, "Scratch disks");
+    fn rtl_prefs_field_labels_sit_at_the_reading_start() {
+        let (search, label) = probe("general", Dir::Rtl, "Image interpolation");
         assert!(
             label.right() > search.center().x && label.right() < search.right() - 150.0,
             "RTL: the settings label hugs the content column's right edge: {label:?} in {search:?}"
@@ -757,8 +755,8 @@ mod rtl_direction_tests {
 
     /// LTR twin: the same rows keep the content column's left edge.
     #[test]
-    fn ltr_prefs_scratch_disks_rows_keep_the_left_edge() {
-        let (search, label) = probe("scratchDisks", Dir::Ltr, "Scratch disks");
+    fn ltr_prefs_field_labels_keep_the_left_edge() {
+        let (search, label) = probe("general", Dir::Ltr, "Image interpolation");
         assert!(
             label.left() > search.left() + 150.0 && label.left() < search.center().x,
             "LTR: the settings label stays at the content column's left: {label:?} in {search:?}"
