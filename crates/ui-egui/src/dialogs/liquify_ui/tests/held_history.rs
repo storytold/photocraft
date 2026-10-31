@@ -1,5 +1,7 @@
 use super::*;
 
+/// Dispatch shortcuts before rendering the preview, matching the desktop frame order.
+/// Preserve focus across frames unless an explicit focus event changes it.
 fn history_frame(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui::Event>) {
     let focused = events
         .iter()
@@ -14,10 +16,14 @@ fn history_frame(app: &mut PhotocraftApp, ctx: &egui::Context, events: Vec<egui:
     out.textures_delta.clear();
 }
 
+/// Build an unmodified primary transition so resize or pan modifiers cannot leak
+/// into the ordinary-stroke fixtures.
 fn button(p: Pos2, pressed: bool) -> egui::Event {
     egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE }
 }
 
+/// Drive the real Undo or Redo shortcut with command modifiers, rather than
+/// calling dialog history helpers directly.
 fn history_key(redo: bool) -> egui::Event {
     egui::Event::Key {
         key: egui::Key::Z,
@@ -28,6 +34,8 @@ fn history_key(redo: bool) -> egui::Event {
     }
 }
 
+/// Open a deterministic textured layer and settle the preview before gestures.
+/// The small brush keeps the two independent stroke regions distinguishable.
 fn prepared() -> (PhotocraftApp, egui::Context) {
     let ctx = egui::Context::default();
     let mut app = app_with_layer();
@@ -38,6 +46,8 @@ fn prepared() -> (PhotocraftApp, egui::Context) {
     (app, ctx)
 }
 
+/// Feed physical press, movement and optional release in separate frames.
+/// Omitting release leaves the primary button held through history navigation.
 fn stroke(app: &mut PhotocraftApp, ctx: &egui::Context, start: Pos2, end: Pos2, release: bool) {
     history_frame(app, ctx, vec![egui::Event::PointerMoved(start)]);
     history_frame(app, ctx, vec![button(start, true)]);
@@ -47,6 +57,8 @@ fn stroke(app: &mut PhotocraftApp, ctx: &egui::Context, start: Pos2, end: Pos2, 
     }
 }
 
+/// Protect the original failure: shortcut Undo closes stroke B, then the same
+/// render must restore A without beginning another stroke or clearing Redo.
 #[test]
 fn undo_during_a_held_stroke_does_not_restart_it_in_the_show_frame() {
     let (mut app, ctx) = prepared();
@@ -68,11 +80,15 @@ fn undo_during_a_held_stroke_does_not_restart_it_in_the_show_frame() {
     assert!(d.cur.is_none(), "Undo must leave the interrupted stroke closed");
 }
 
+/// Capture both the deformation field and rendered proxy pixels, so correct
+/// history counts cannot conceal an incorrect visible restoration.
 fn snapshot(app: &PhotocraftApp) -> (LiquifyField, Vec<[u8; 4]>) {
     let d = app.distort.liquify.as_ref().unwrap();
     (d.field.clone(), d.out.clone())
 }
 
+/// Require exact field/pixel restoration, closed brush state and history counts.
+/// Independent stroke replay must also reconstruct the current deformation field.
 fn assert_snapshot(app: &PhotocraftApp, expected: &(LiquifyField, Vec<[u8; 4]>), strokes: usize, redo: usize) {
     let d = app.distort.liquify.as_ref().unwrap();
     assert_eq!(d.field, expected.0);
@@ -82,6 +98,8 @@ fn assert_snapshot(app: &PhotocraftApp, expected: &(LiquifyField, Vec<[u8; 4]>),
     assert_eq!(d.field, LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes));
 }
 
+/// Keep restored pixels and Redo stable through held movement and timed dabs.
+/// Repeated Undo/Redo must replay exactly for both motion and stationary tools.
 #[test]
 fn held_motion_stationary_ticks_and_repeated_history_preserve_redo_and_replay() {
     for tool in ["forwardWarp", "twirlCw"] {
@@ -115,6 +133,8 @@ fn held_motion_stationary_ticks_and_repeated_history_preserve_redo_and_replay() 
     }
 }
 
+/// Release anywhere must end suppression; one later physical gesture creates
+/// one stroke and clears Redo as an intentional edit.
 #[test]
 fn releasing_inside_or_outside_allows_one_new_intentional_stroke() {
     for release in [pos2(450.0, 365.0), pos2(1100.0, 750.0)] {
@@ -132,6 +152,8 @@ fn releasing_inside_or_outside_allows_one_new_intentional_stroke() {
     }
 }
 
+/// A new physical press after release in the Undo frame is an intentional edit,
+/// so it must create one fresh stroke instead of remaining suppressed.
 #[test]
 fn a_release_and_new_press_in_the_history_frame_starts_one_new_stroke() {
     let (mut app, ctx) = prepared();
@@ -146,6 +168,8 @@ fn a_release_and_new_press_in_the_history_frame_starts_one_new_stroke() {
     assert_eq!(d.field, LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes));
 }
 
+/// Two physical gestures sharing a frame must remain separate in history.
+/// Undoing the second must restore the exact first-stroke field and pixels.
 #[test]
 fn a_release_and_new_press_without_history_records_two_separate_brush_strokes() {
     let (mut app, ctx) = prepared();
@@ -167,6 +191,8 @@ fn a_release_and_new_press_without_history_records_two_separate_brush_strokes() 
     assert_snapshot(&app, &a, 1, 1);
 }
 
+/// Keep same-frame lasso gestures as two polygons with an unfrozen gap.
+/// Undo must remove only the second polygon, preserving the first mask region.
 #[test]
 fn a_release_and_new_press_without_history_keeps_lasso_polygons_separate() {
     let (mut app, ctx) = prepared();
@@ -194,6 +220,8 @@ fn a_release_and_new_press_without_history_keeps_lasso_polygons_separate() {
     assert_eq!(d.field.freeze_at(75.5, 40.0), 0.0);
 }
 
+/// A press owned by the properties pane cannot restart preview painting.
+/// Only a subsequent deliberate preview gesture may consume Redo.
 #[test]
 fn a_new_press_in_properties_does_not_resume_the_interrupted_preview_stroke() {
     let (mut app, ctx) = prepared();
@@ -214,6 +242,8 @@ fn a_new_press_in_properties_does_not_resume_the_interrupted_preview_stroke() {
     assert!(app.distort.liquify.as_ref().unwrap().redo.is_empty());
 }
 
+/// Leaving and regaining focus while held must preserve the undone image and
+/// Redo; release followed by a fresh preview press still paints normally.
 #[test]
 fn leaving_the_preview_and_losing_focus_do_not_resume_an_interrupted_hold() {
     let (mut app, ctx) = prepared();
@@ -231,6 +261,8 @@ fn leaving_the_preview_and_losing_focus_do_not_resume_an_interrupted_hold() {
     assert_eq!(app.distort.liquify.as_ref().unwrap().strokes.len(), 1);
 }
 
+/// Cancel discards the preview and OK contributes exactly one document edit.
+/// A reopened dialog must not inherit the interrupted gesture from its predecessor.
 #[test]
 fn interrupted_history_can_cancel_or_commit_without_extra_document_history() {
     for commit_dialog in [false, true] {
@@ -261,6 +293,8 @@ fn interrupted_history_can_cancel_or_commit_without_extra_document_history() {
     }
 }
 
+/// Empty history navigation is harmless, while a same-frame first press still
+/// works; Redo with no saved stroke closes an active brush without restarting it.
 #[test]
 fn empty_history_and_redo_during_an_active_stroke_are_safe() {
     let (mut app, ctx) = prepared();
@@ -280,6 +314,8 @@ fn empty_history_and_redo_during_an_active_stroke_are_safe() {
     assert_snapshot(&app, &painted, 1, 0);
 }
 
+/// Changing tools during an interrupted hold cannot create a lasso implicitly.
+/// A later deliberate lasso gesture still freezes its polygon and clears Redo.
 #[test]
 fn interrupted_brush_does_not_turn_into_a_lasso_and_a_new_lasso_still_works() {
     let (mut app, ctx) = prepared();
@@ -302,6 +338,8 @@ fn interrupted_brush_does_not_turn_into_a_lasso_and_a_new_lasso_still_works() {
     assert_eq!(d.field, LiquifyField::from_strokes(d.canvas, d.cell, &d.strokes));
 }
 
+/// A same-frame release and resize press must resize rather than paint.
+/// Movement, stationary ticks and release must preserve restored pixels and Redo.
 #[test]
 fn a_release_and_fresh_resize_press_in_one_frame_preserves_redo_without_painting() {
     let (mut app, ctx) = prepared();
@@ -327,6 +365,8 @@ fn a_release_and_fresh_resize_press_in_one_frame_preserves_redo_without_painting
     assert_snapshot(&app, &a, 1, 1);
 }
 
+/// A same-frame release and Space-drag must pan the preview without painting
+/// or consuming Redo, including subsequent stationary repaint ticks.
 #[test]
 fn a_release_and_fresh_pan_press_in_one_frame_preserves_redo_without_painting() {
     let (mut app, ctx) = prepared();
@@ -349,6 +389,8 @@ fn a_release_and_fresh_pan_press_in_one_frame_preserves_redo_without_painting() 
     assert_snapshot(&app, &a, 1, 1);
 }
 
+/// Resize and pan retain their normal behavior after interrupted painting.
+/// Releasing a secondary resize button cannot release the still-held primary gesture.
 #[test]
 fn brush_resize_and_pan_still_work_after_an_interrupted_hold() {
     let (mut app, ctx) = prepared();

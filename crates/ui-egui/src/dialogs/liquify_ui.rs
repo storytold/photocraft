@@ -27,6 +27,68 @@ const LEFT_W: f32 = 48.0;
 const RIGHT_W: f32 = 292.0;
 const REDO_STACK_LIMIT: usize = 100;
 
+/// Native component sampling keeps the other components and opacity at the destination. Work
+/// stays bounded by the dirty proxy/viewport rectangle; a dab never scans the full source.
+#[allow(clippy::too_many_arguments)]
+fn render_components(
+    source: &Surface,
+    source_bounds: Rect,
+    field: &LiquifyField,
+    scale: f64,
+    target: &Value,
+    bounds: Rect,
+    dirty: Rect,
+    out: &mut [[u8; 4]],
+) -> bool {
+    let Ok(Some(colors)) = photocraft_engine::color_channels::explicit(&json!({"target":target}), source.format().mode.color_channels()) else { return false };
+    let width = bounds.width() as usize;
+    if source_bounds.is_empty() || bounds.is_empty() || !scale.is_finite() || scale <= 0.0 || width.checked_mul(bounds.height() as usize) != Some(out.len()) {
+        return false;
+    }
+    let fmt = source.format();
+    let mut native = vec![0.0; fmt.channels()];
+    let dirty = dirty.intersect(&bounds);
+    for y in dirty.y0..dirty.y1 {
+        for x in dirty.x0..dirty.x1 {
+            let px = f64::from(field.bounds.x0) + (f64::from(x.saturating_sub(source_bounds.x0)) + 0.5) * scale;
+            let py = f64::from(field.bounds.y0) + (f64::from(y.saturating_sub(source_bounds.y0)) + 0.5) * scale;
+            let displacement = field.sample(px, py);
+            let sx = (f64::from(x) + displacement[0] / scale).clamp(f64::from(source_bounds.x0), f64::from(source_bounds.x1 - 1));
+            let sy = (f64::from(y) + displacement[1] / scale).clamp(f64::from(source_bounds.y0), f64::from(source_bounds.y1 - 1));
+            let (x0, y0) = (sx.floor() as i32, sy.floor() as i32);
+            let (fx, fy) = ((sx - f64::from(x0)) as f32, (sy - f64::from(y0)) as f32);
+            let taps = [
+                (x0, y0, (1.0 - fx) * (1.0 - fy)),
+                (x0.saturating_add(1).min(source_bounds.x1 - 1), y0, fx * (1.0 - fy)),
+                (x0, y0.saturating_add(1).min(source_bounds.y1 - 1), (1.0 - fx) * fy),
+                (x0.saturating_add(1).min(source_bounds.x1 - 1), y0.saturating_add(1).min(source_bounds.y1 - 1), fx * fy),
+            ];
+            let alpha_index = fmt.mode.color_channels();
+            let alpha = |tx, ty| if fmt.alpha { source.sample_channel(tx, ty, alpha_index) } else { 1.0 };
+            let warped_alpha: f32 = taps.iter().map(|(tx, ty, w)| alpha(*tx, *ty) * w).sum();
+            for (channel, value) in native.iter_mut().enumerate() {
+                *value = if colors.contains(channel) {
+                    if warped_alpha > 0.0 {
+                        taps.iter().map(|(tx, ty, w)| source.sample_channel(*tx, *ty, channel) * alpha(*tx, *ty) * w).sum::<f32>() / warped_alpha
+                    } else {
+                        0.0
+                    }
+                } else {
+                    source.sample_channel(x, y, channel)
+                };
+            }
+            let rgba = photocraft_raster::to_rgba(&fmt, &native);
+            let a = rgba[3].clamp(0.0, 1.0);
+            let encoded = [rgba[0] * a, rgba[1] * a, rgba[2] * a, a].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            let index = (y - bounds.y0) as usize * width + (x - bounds.x0) as usize;
+            if let Some(pixel) = out.get_mut(index) {
+                *pixel = encoded;
+            }
+        }
+    }
+    true
+}
+
 /// Options shown in the properties panel (and settable over the control channel).
 #[derive(Clone, Debug)]
 pub struct LiquifyOpts {
@@ -127,7 +189,12 @@ impl LiquifyOpts {
             };
         }
         if let Some(t) = v.get("tool") {
-            self.tool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
+            let tool: LiquifyTool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
+            // Strokes can twirl counterclockwise, but no tool does: hold Alt with Twirl Clockwise.
+            if !LiquifyTool::ALL.contains(&tool) {
+                return Err(format!("{t} is not a Liquify tool: choose twirlCw and hold Alt (Option) to twirl counterclockwise"));
+            }
+            self.tool = tool;
         }
         Ok(())
     }
@@ -170,6 +237,8 @@ pub struct LiquifyDialog {
     lasso: Option<(bool, Vec<[f64; 2]>)>,
     proxy: ProxyImage,
     source: Surface,
+    target: Value,
+    native_proxy: Option<Surface>,
     out: Vec<[u8; 4]>,
     tex: Option<TextureHandle>,
     /// Proxy pixels to re-render and upload (x0, y0, x1, y1).
@@ -339,6 +408,9 @@ impl LiquifyDialog {
         self.render_dirty();
     }
 
+    /// Records an active brush before undoing one stroke and rebuilding the preview.
+    /// The interruption latch prevents the same held pointer from starting a new stroke
+    /// and clearing the bounded Redo stack on the next render.
     fn undo(&mut self) {
         self.brush_interrupted |= self.cur.is_some();
         self.end();
@@ -351,6 +423,9 @@ impl LiquifyDialog {
         }
     }
 
+    /// Finishes any active brush, then replays one available Redo stroke.
+    /// Even an empty Redo request closes the active brush; held motion stays suppressed
+    /// until release or a genuine new preview press.
     fn redo(&mut self) {
         self.brush_interrupted |= self.cur.is_some();
         self.end();
@@ -373,7 +448,13 @@ impl LiquifyDialog {
     /// Re-renders the dirty proxy pixels into `out` (the texture upload happens in `show`).
     fn render_dirty(&mut self) {
         if let Some(r) = self.dirty {
-            self.proxy.render(&self.field, r, &mut self.out);
+            if let Some(source) = &self.native_proxy {
+                let bounds = Rect::new(0, 0, self.proxy.w as i32, self.proxy.h as i32);
+                let dirty = Rect::new(r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
+                render_components(source, bounds, &self.field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out);
+            } else {
+                self.proxy.render(&self.field, r, &mut self.out);
+            }
         }
     }
 
@@ -423,7 +504,11 @@ impl LiquifyDialog {
             return;
         }
         let started = crate::gpu_canvas::now_ms();
-        let rendered = ProxyImage::render_full_resolution(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch);
+        let rendered = if self.native_proxy.is_some() {
+            render_components(&self.source, self.canvas, &self.field, 1.0, &self.target, bounds, dirty, &mut self.view_out)
+        } else {
+            ProxyImage::render_full_resolution(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch)
+        };
         if !rendered {
             self.view_bounds = None;
             self.view_tex = None;
@@ -460,9 +545,12 @@ impl LiquifyDialog {
 
     fn upload(&mut self, ctx: &egui::Context) {
         let (w, h) = (self.proxy.w, self.proxy.h);
+        if self.tex.is_none() {
+            self.dirty = Some([0, 0, w, h]);
+            self.render_dirty();
+        }
         match (&mut self.tex, self.dirty.take()) {
             (None, _) => {
-                self.proxy.render(&self.field, [0, 0, w, h], &mut self.out);
                 let img = egui::ColorImage::new([w, h], self.out.iter().map(|p| Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])).collect());
                 self.tex = Some(ctx.load_texture("liquify-proxy", img, egui::TextureOptions::LINEAR));
             }
@@ -495,7 +583,7 @@ impl LiquifyDialog {
 
 /// Opens the dialog on the active layer.
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    let (layer, surf, _) = crate::distort_ui::active_filter_target(app)?;
     let canvas = app.session.active().ok_or("no document")?.doc.bounds();
     open_on(app, ctx, layer, surf, Vec::new(), auto_cell(canvas), None)
 }
@@ -520,6 +608,9 @@ pub fn open_smart_filter(app: &mut PhotocraftApp, ctx: &egui::Context, layer: La
     open_on(app, ctx, layer, surf, strokes, cell, Some(index))
 }
 
+/// Opens a fresh preview over the supplied surface and replays its recorded strokes.
+/// Gesture and Redo state start empty for each dialog; document or colour-target errors
+/// are returned before installing the new workspace.
 fn open_on(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
@@ -533,6 +624,9 @@ fn open_on(
     let canvas = st.doc.bounds();
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
+    let target = if smart_filter.is_some() { json!("pixels") } else { crate::distort_ui::colour_set_target(app) };
+    let colors = photocraft_engine::color_channels::explicit(&json!({"target":target}), surf.format().mode.color_channels()).map_err(|e| e.to_string())?;
+    let native_proxy = colors.map(|_| crate::gallery_ui::reduce(&surf, canvas, proxy.scale as u32));
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
     let mut d = LiquifyDialog {
@@ -549,6 +643,8 @@ fn open_on(
         lasso: None,
         proxy,
         source: surf,
+        target,
+        native_proxy,
         out,
         tex: None,
         dirty: None,
@@ -612,7 +708,7 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<(), String> {
     if d.strokes.is_empty() {
         return Ok(());
     }
-    let p = json!({"strokes": d.strokes, "meshSize": d.cell, "layer": d.layer.0});
+    let p = crate::distort_ui::with_filter_target(json!({"strokes": d.strokes, "meshSize": d.cell, "layer": d.layer.0}), &d.target);
     app.run("filter.liquify", p).map(|_| ())
 }
 
@@ -658,8 +754,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     Ok(d.describe())
 }
 
-/// Photoshop's Alt (Option) variant of a Liquify brush: the twirls reverse direction and Pucker
-/// and Bloat swap. Other tools are unchanged.
+/// The Alt (Option) variant of a Liquify brush: Twirl Clockwise twirls counterclockwise (the
+/// reference application has no separate counterclockwise tool) and Pucker and Bloat swap.
+/// Other tools are unchanged.
 fn alt_tool(t: LiquifyTool) -> LiquifyTool {
     match t {
         LiquifyTool::TwirlCw => LiquifyTool::TwirlCcw,
@@ -679,22 +776,23 @@ fn brush_circle_at(resize: Option<(Pos2, f32, f32)>, hover: Option<Pos2>) -> Opt
 
 /// Alt+right-drag, and Control+Alt-drag, change the Liquify brush instead of painting (#4702).
 fn brush_resize_gesture(mods: egui::Modifiers, secondary: bool) -> bool {
-    mods.alt && (secondary || mods.ctrl)
+    if secondary { crate::brush_resize::is_right_gesture(mods) } else { crate::brush_resize::is_gesture(mods) }
 }
 
 /// Horizontal motion sets the diameter (the circle's edge follows the pointer). Vertical motion
 /// sets density, Liquify's edge falloff, over the same 200 px travel the canvas uses for hardness.
-fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32) -> (f32, f32) {
-    let dx = if dx.is_finite() { dx } else { 0.0 };
-    let dy = if dy.is_finite() { dy } else { 0.0 };
-    let size = (start_size + dx).round().clamp(1.0, 15000.0);
-    let density = (start_density + dy * 100.0 / crate::brush_resize::HARDNESS_TRAVEL).clamp(0.0, 100.0);
-    (size, (density * 10.0).round() / 10.0)
+fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32, zoom: f32) -> (f32, f32) {
+    // Liquify stores density as 0–100; the shared brush gesture works on normalized hardness.
+    // Use the same zoom-corrected screen movement and size limits as the main canvas.
+    let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    let (size, density) = crate::brush_resize::resized((start_size, start_density / 100.0), f64::from(dx / zoom), f64::from(dy / zoom), zoom);
+    (size, (density * 100.0).round())
 }
 
 /// Pointer in document coordinates (from the preview or the control channel). Alt at
 /// pointer-down subtracts from the freeze mask (lasso), reverses a twirl and swaps Pucker/Bloat;
-/// Shift adds to the mask, same as no modifier.
+/// Shift adds to the mask, same as no modifier. Explicit Down and Up events clear the
+/// history-interruption latch; an intentional new Down may therefore clear Redo normally.
 pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) {
     let now = crate::gpu_canvas::now_ms();
     let Some(d) = app.distort.liquify.as_mut() else { return };
@@ -801,7 +899,6 @@ fn tool_icon(t: LiquifyTool) -> &'static str {
         LiquifyTool::Reconstruct => "brush-cleaning",
         LiquifyTool::Smooth => "droplet",
         LiquifyTool::TwirlCw => "rotate-cw",
-        LiquifyTool::TwirlCcw => "undo-2",
         LiquifyTool::Pucker => "scan",
         LiquifyTool::Bloat => "maximize-2",
         LiquifyTool::PushLeft => "chevrons-left",
@@ -954,6 +1051,28 @@ fn apply_preview_wheel(
     }
 }
 
+/// Returns a release when the previous gesture is ready to end, using its last
+/// recorded document point or the origin when no active point remains.
+/// A frame that already queued a fresh stroke owns that stroke's matching release;
+/// an interrupted brush must not synthesize another release while primary stays held.
+fn preview_release_event(d: &LiquifyDialog, response: &egui::Response, primary_down: bool, primary_released: bool, began_stroke: bool) -> Option<ToolEvent> {
+    let lasso_up = d.lasso.is_some() && !primary_down;
+    let released_gesture = primary_released && (d.cur.is_some() || d.lasso.is_some());
+    if !began_stroke
+        && !(d.brush_interrupted && primary_down)
+        && (response.drag_stopped() || released_gesture || lasso_up || (d.cur.is_some() && !primary_down))
+    {
+        let q = d.lasso.as_ref().and_then(|(_, pts)| pts.last().copied()).or_else(|| d.cur.as_ref().map(|(_, l)| [l[0], l[1]])).unwrap_or_default();
+        Some(ToolEvent::Up { x: q[0], y: q[1] })
+    } else {
+        None
+    }
+}
+
+/// Renders the modal preview after shortcut dispatch, keeping physical gestures separate.
+/// A fresh press may start a stroke even after a same-frame release; continued held motion
+/// after history navigation cannot restart painting or consume Redo. Pan and resize keep
+/// their own input routes, and resizing requests another frame for the brush outline.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
@@ -1159,9 +1278,27 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // started, so only its size changes (#7884).
         if let Some(hp) = brush_circle_at(d.brush_resize, resp.hover_pos()) {
             if d.opts.tool != LiquifyTool::LassoMask {
+                let center = d.brush_resize.map_or(hp, |(anchor, _, _)| anchor);
                 let r = d.opts.size * 0.5 * d.zoom;
-                clip.circle_stroke(hp, r, Stroke::new(1.5, Color32::BLACK));
-                clip.circle_stroke(hp, r, Stroke::new(0.75, Color32::WHITE));
+                if d.brush_resize.is_some() {
+                    crate::brush_resize::liquify_tip_preview(
+                        &clip,
+                        center,
+                        r,
+                        d.opts.density / 100.0,
+                        Color32::from_rgba_unmultiplied(t.accent.r(), t.accent.g(), t.accent.b(), 110),
+                    );
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                    crate::canvas::draw_readout(
+                        ui.ctx(),
+                        "liquify-brush-resize-readout",
+                        hp,
+                        [tl!("Diameter:"), tl!("Density:")],
+                        [format!("{} px", d.opts.size.round() as i64), format!("{}%", d.opts.density.round() as i64)],
+                    );
+                }
+                clip.circle_stroke(center, r, Stroke::new(1.5, Color32::BLACK));
+                clip.circle_stroke(center, r, Stroke::new(0.75, Color32::WHITE));
             }
             d.hover = Some(to_doc(d, area, hp));
         }
@@ -1195,13 +1332,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             if let (Some((anchor, size0, dens0)), Some(p)) = (d.brush_resize, pointer_pos) {
                 let delta = p - anchor;
-                let (size, density) = resized_brush(size0, dens0, delta.x, delta.y);
+                let (size, density) = resized_brush(size0, dens0, delta.x, delta.y, d.zoom);
                 d.opts.size = size;
                 d.opts.density = density;
             }
             if (resp.drag_stopped() && !fresh_primary) || !ui.input(|i| i.pointer.any_down()) {
                 d.brush_resize = None;
             }
+            ctx.request_repaint();
         } else if pan && (fresh_primary || resp.dragged()) {
             let dl = resp.drag_delta();
             d.center = [d.center[0] - f64::from(dl.x / d.zoom), d.center[1] - f64::from(dl.y / d.zoom)];
@@ -1245,15 +1383,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ctx.request_repaint();
             }
         }
-        let lasso_up = d.lasso.is_some() && !primary_down;
-        let released_gesture = primary_released && (d.cur.is_some() || d.lasso.is_some());
-        if !began_stroke
-            && !(d.brush_interrupted && primary_down)
-            && (resp.drag_stopped() || released_gesture || lasso_up || (d.cur.is_some() && !primary_down))
-        {
-            let q = d.lasso.as_ref().and_then(|(_, pts)| pts.last().copied()).or_else(|| d.cur.as_ref().map(|(_, l)| [l[0], l[1]])).unwrap_or_default();
-            events.push(ToolEvent::Up { x: q[0], y: q[1] });
-        }
+        events.extend(preview_release_event(d, &resp, primary_down, primary_released, began_stroke));
     });
     for ev in events {
         pointer(app, ev, mods);
