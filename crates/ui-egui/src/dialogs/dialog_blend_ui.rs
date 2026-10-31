@@ -3,7 +3,7 @@
 //! Both commands support the same layer blend modes, opacity and transparency lock.
 //! Keeping one widget and validation implementation prevents their options diverging.
 
-use egui::{Align2, Sense, pos2, vec2};
+use egui::{Sense, vec2};
 use serde_json::{Map, Value, json};
 
 use crate::theme::Tokens;
@@ -51,14 +51,10 @@ pub fn body(ui: &mut egui::Ui, fields: &mut Map<String, Value>, prefix: &str) {
 /// left-to-right UI, its left edge in a right-to-left one (the row mirrors under the host's
 /// `body_layout`, so the caption box sits at the reading start and the field beside it toward
 /// the reading end).
-fn caption_anchor(r: egui::Rect, rtl: bool) -> (egui::Pos2, Align2) {
-    if rtl { (pos2(r.left() + 6.0, r.center().y), Align2::LEFT_CENTER) } else { (pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER) }
-}
-
 fn label(ui: &mut egui::Ui, text: &str) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(112.0, 22.0), Sense::hover());
-    let (pos, align) = caption_anchor(r, crate::direction::is_rtl());
+    let (pos, align) = crate::direction::end_text_anchor(r, 6.0);
     ui.painter().text(pos, align, text, egui::FontId::proportional(12.0), t.text_dim);
 }
 
@@ -72,6 +68,7 @@ pub(crate) fn mode_key(m: photocraft_color::BlendMode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use egui::Align2;
 
     /// The caption hugs the control beside it: the box's right edge in a left-to-right row,
     /// its left edge in a mirrored one — the old fixed right-edge paint left the caption
@@ -79,10 +76,13 @@ mod tests {
     #[test]
     fn the_caption_anchor_follows_the_direction() {
         let r = egui::Rect::from_min_size(egui::pos2(10.0, 0.0), vec2(112.0, 22.0));
-        let (ltr_pos, ltr_align) = caption_anchor(r, false);
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let (ltr_pos, ltr_align) = crate::direction::end_text_anchor(r, 6.0);
         assert!(matches!(ltr_align, Align2::RIGHT_CENTER));
         assert!((ltr_pos.x - (r.right() - 6.0)).abs() < 0.01);
-        let (rtl_pos, rtl_align) = caption_anchor(r, true);
+        drop(_ltr);
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let (rtl_pos, rtl_align) = crate::direction::end_text_anchor(r, 6.0);
         assert!(matches!(rtl_align, Align2::LEFT_CENTER));
         assert!((rtl_pos.x - (r.left() + 6.0)).abs() < 0.01);
     }
@@ -100,7 +100,7 @@ mod tests {
                 ui.with_layout(crate::direction::body_layout(), |ui| {
                     ui.horizontal(|ui| {
                         let (cap, _) = ui.allocate_exact_size(vec2(112.0, 22.0), Sense::hover());
-                        let (pos, align) = caption_anchor(cap, crate::direction::is_rtl());
+                        let (pos, align) = crate::direction::end_text_anchor(cap, 6.0);
                         ui.painter().text(pos, align, "Mode:", egui::FontId::proportional(12.0), egui::Color32::WHITE);
                         let (field, _) = ui.allocate_exact_size(vec2(170.0, 22.0), Sense::hover());
                         rects = (cap, field);
