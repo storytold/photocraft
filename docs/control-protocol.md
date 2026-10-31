@@ -206,6 +206,18 @@ their usual file access. Source replacement, relinking and export commands remai
 double-clicking its thumbnail in Layers. Text input, Commit and Cancel use the existing Type tool
 editing session; non-type layers return an error without changing the tool or document.
 
+### Selected colour channel sets
+
+`channel.target {"colors":[0,2]}` selects native colour components. Shift-click is
+`channel.target {"channel":{"color":1},"extend":true}`: toggle that component,
+starting from all colour components when the composite is selected. Masks and saved
+channels cannot join a colour set. All components selected becomes the composite.
+Channel inspection adds `selectedColors`; the legacy primary `target` remains.
+Applicable drawing, adjustment, clipboard and filter commands follow the selected
+set, or accept `"target":{"colors":[0,2]}` explicitly. Invalid or empty sets fail
+without a document edit. Move/transform on partial sets and Camera Raw on a partial
+set return an unsupported error. See [selected colour editing](multi-channel-editing.md).
+
 ### Command list replies
 
 `engine.commands` (control channel and `serve`), the engine command `command.list` and the MCP
