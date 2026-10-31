@@ -495,6 +495,21 @@ fn a_position_locked_layer_keeps_its_canvas_position_between_artboards() {
     assert_eq!(content(&s, red), Rect::new(10, 10, 30, 30));
 }
 
+/// A layer whose position is locked only through the board it leaves (the lock is on the board,
+/// not the layer) is not moved either: it was locked when the drag began (#10489 review).
+#[test]
+fn a_layer_locked_through_its_board_keeps_its_canvas_position_between_artboards() {
+    let mut s = session(8);
+    let (red, a, b) = two_boards(&mut s);
+    s.execute("layer.select", json!({"layer": a.0})).unwrap();
+    s.execute("layer.lockLayers", json!({"position": true})).unwrap();
+    assert!(!doc(&s).layer(red).unwrap().locks.position, "the layer itself is unlocked");
+    assert!(doc(&s).effective_locks(red).position, "but locked through its board");
+    s.execute("layer.moveTo", json!({"layer": red.0, "target": b.0, "position": "into"})).unwrap();
+    assert_eq!(doc(&s).artboard_of(red), Some(b));
+    assert_eq!(content(&s, red), Rect::new(10, 10, 30, 30));
+}
+
 #[test]
 fn duplicate_artboard_lands_beside_the_original_with_its_contents() {
     // #1531: the copy sat exactly on the original, so nothing visible happened.
