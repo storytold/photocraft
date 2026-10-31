@@ -334,19 +334,40 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if answer.is_none() && ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, Key::Enter)) {
         answer = buttons.iter().find(|b| b.0 == ButtonRole::Default).map(|b| b.4);
     }
-    if let Some(answer) = answer {
-        apply(app, ctx, doc, answer);
+    if let Some(answer) = answer
+        && let Err(e) = apply(app, ctx, doc, answer)
+    {
+        app.ui.status = e;
+        app.ui.status_error = true;
     }
 }
 
-/// Acts on the answer about `doc`, the document the prompt is asking about.
-fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answer) {
+/// Acts on the answer about `doc`, the document the prompt is asking about. Save is refused
+/// when automation may not run File › Save (see [`authorize_save`]); the prompt stays up.
+fn apply(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId, answer: Answer) -> Result<(), String> {
     match answer {
         Answer::Cancel => app.discard = None,
         Answer::Discard => advance(app, ctx),
-        Answer::Save if save(app, ctx, doc) => advance(app, ctx),
-        Answer::Save => {}
+        Answer::Save => {
+            authorize_save(app)?;
+            if save(app, ctx, doc) {
+                advance(app, ctx);
+            }
+        }
     }
+    Ok(())
+}
+
+/// Save writes the document back over its own file, as File › Save does, so automation (a
+/// control request's gate or synthetic input) is judged for `file.save` before it runs: a client
+/// allowed to close a document can't use the prompt to write a file its policy keeps it from.
+fn authorize_save(app: &PhotocraftApp) -> Result<(), String> {
+    if (app.automation_input || app.session.authorize.is_some())
+        && let Some(authorize) = app.services.automation_command.as_ref()
+    {
+        authorize("file.save", &json!({}))?;
+    }
+    Ok(())
 }
 
 /// The id `ui.inspect` lists the prompt under; `ui.dialog.confirm` and `ui.dialog.cancel` answer
@@ -394,7 +415,7 @@ pub fn answer_control(app: &mut PhotocraftApp, ctx: &egui::Context, choice: &str
             return Err(format!("unknown choice `{other}`: {choices}"));
         }
     };
-    apply(app, ctx, doc, answer);
+    apply(app, ctx, doc, answer)?;
     Ok(json!({"open": app.discard.is_some(), "fileDialog": app.file_dialog_open()}))
 }
 
