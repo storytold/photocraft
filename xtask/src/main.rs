@@ -10,14 +10,14 @@ mod ico;
 mod layers;
 mod perf;
 mod pinned;
-mod psd_write_oracle;
 mod scorecard;
-mod sha256;
 mod stats;
 mod version;
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitCode, Stdio};
+
+use xtask::{psd_write_oracle, sha256};
 
 const USAGE: &str = "\
 usage: cargo xtask <command>

@@ -27,6 +27,16 @@ pub fn session(s: &Session) -> Value {
 }
 
 pub fn document(d: &DocState) -> Value {
+    document_with(d, false)
+}
+
+/// [`document`] plus every text run and paragraph run, anti-aliasing and the full serialized
+/// layer-effect settings, for format round-trip checks (`photocraft-cli info --detail`).
+pub fn document_detail(d: &DocState) -> Value {
+    document_with(d, true)
+}
+
+fn document_with(d: &DocState, detail: bool) -> Value {
     let doc = &d.doc;
     let selected = d.selected_layers();
     let instances = smart_instances(&doc.layers);
@@ -43,7 +53,7 @@ pub fn document(d: &DocState) -> Value {
         "isolatedLayers": d.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>(),
         "hasSelection": doc.selection.is_some(),
         "selectionBounds": doc.selection.as_ref().map(|s| { let r = s.content_bounds(); [r.x0, r.y0, r.width() as i32, r.height() as i32] }),
-        "layers": doc.layers.iter().rev().map(|l| layer_sel(l, &selected, &instances, Some(&doc.metadata))).collect::<Vec<_>>(),
+        "layers": doc.layers.iter().rev().map(|l| layer_sel(l, &selected, &instances, Some(&doc.metadata), detail)).collect::<Vec<_>>(),
         "history": d.history.entries(),
         "historySource": crate::history_source_cmds::source_json(d),
         "snapshots": d.snapshots.iter().map(|snap| json!({"id": snap.id, "name": snap.name})).collect::<Vec<_>>(),
@@ -69,7 +79,13 @@ pub fn document(d: &DocState) -> Value {
 
 /// Layer tree top-to-bottom (display order). Smart object instances are counted within `l`.
 pub fn layer(l: &Layer) -> Value {
-    layer_sel(l, &[], &smart_instances(std::slice::from_ref(l)), None)
+    layer_sel(l, &[], &smart_instances(std::slice::from_ref(l)), None, false)
+}
+
+/// [`layer`] plus every text run and paragraph run, anti-aliasing and the full serialized
+/// layer-effect settings, for format round-trip checks (`photocraft-cli info --detail`).
+pub fn layer_detail(l: &Layer) -> Value {
+    layer_sel(l, &[], &smart_instances(std::slice::from_ref(l)), None, true)
 }
 
 /// How many smart objects in `layers`, groups included, share each contents identity.
@@ -87,7 +103,13 @@ fn smart_instances(layers: &[Layer]) -> HashMap<SmartContentsId, usize> {
 }
 
 /// [`layer`] with a `selected` flag on every node (Layers panel multi-selection).
-fn layer_sel(l: &Layer, selected: &[photocraft_doc::LayerId], instances: &HashMap<SmartContentsId, usize>, meta: Option<&photocraft_doc::Metadata>) -> Value {
+fn layer_sel(
+    l: &Layer,
+    selected: &[photocraft_doc::LayerId],
+    instances: &HashMap<SmartContentsId, usize>,
+    meta: Option<&photocraft_doc::Metadata>,
+    detail: bool,
+) -> Value {
     let bounds = l.surface().map(|s| {
         let r = s.content_bounds();
         [r.x0, r.y0, r.width() as i32, r.height() as i32]
@@ -112,7 +134,7 @@ fn layer_sel(l: &Layer, selected: &[photocraft_doc::LayerId], instances: &HashMa
     });
     match &l.content {
         LayerContent::Group(g) => {
-            v["children"] = Value::Array(g.children.iter().rev().map(|c| layer_sel(c, selected, instances, meta)).collect());
+            v["children"] = Value::Array(g.children.iter().rev().map(|c| layer_sel(c, selected, instances, meta, detail)).collect());
             v["expanded"] = json!(g.expanded);
             if let Some(a) = &g.artboard {
                 v["artboard"] = json!({"rect": [a.rect.x0, a.rect.y0, a.rect.width(), a.rect.height()], "background": a.background.name(), "preset": a.preset});
@@ -152,14 +174,12 @@ fn layer_sel(l: &Layer, selected: &[photocraft_doc::LayerId], instances: &HashMa
             v["smartContents"] = json!({"id": sm.contents_id.0, "instances": instances.get(&sm.contents_id).copied().unwrap_or(1)});
         }
         LayerContent::Text(t) => {
-            v["text"] = json!({
-                "text": t.text,
-                "font": t.font_family,
-                "sizePt": t.size_pt,
-                "antialias": serde_json::to_value(t.antialias).unwrap_or(Value::Null),
-                "runs": serde_json::to_value(t.char_runs()).unwrap_or(Value::Null),
-                "paragraphs": serde_json::to_value(t.paragraph_runs()).unwrap_or(Value::Null),
-            });
+            v["text"] = json!({"text": t.text, "font": t.font_family, "sizePt": t.size_pt});
+            if detail {
+                v["text"]["antialias"] = serde_json::to_value(t.antialias).unwrap_or(Value::Null);
+                v["text"]["runs"] = serde_json::to_value(t.char_runs()).unwrap_or(Value::Null);
+                v["text"]["paragraphs"] = serde_json::to_value(t.paragraph_runs()).unwrap_or(Value::Null);
+            }
         }
         _ => {}
     }
@@ -188,8 +208,10 @@ fn layer_sel(l: &Layer, selected: &[photocraft_doc::LayerId], instances: &HashMa
         v["effects"] = json!({
             "enabled": l.effects.enabled,
             "items": l.effects.items.iter().map(|e| json!({"kind": e.label(), "enabled": e.enabled()})).collect::<Vec<_>>(),
-            "data": serde_json::to_value(&l.effects.items).unwrap_or(Value::Null),
         });
+        if detail {
+            v["effects"]["data"] = serde_json::to_value(&l.effects.items).unwrap_or(Value::Null);
+        }
     }
     // Video layer (Layer › Video Layers): the frame stack behind the displayed content.
     if let Some(vid) = &l.video {
@@ -221,7 +243,13 @@ mod tests {
         lyr.effects.enabled = true;
         lyr.effects.items.push(photocraft_doc::Effect::default_drop_shadow());
 
-        let inspected = layer(&lyr);
+        let plain = layer(&lyr);
+        for key in ["antialias", "runs", "paragraphs"] {
+            assert!(plain["text"].get(key).is_none(), "{key}");
+        }
+        assert!(plain["effects"].get("data").is_none());
+
+        let inspected = layer_detail(&lyr);
         let text_json = &inspected["text"];
         assert_eq!(text_json["text"], "Hi");
         assert_eq!(text_json["font"], "Fixture Sans");
