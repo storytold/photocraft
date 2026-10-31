@@ -44,6 +44,7 @@ pub mod bounds;
 mod camera_raw;
 mod fx;
 pub mod health;
+pub mod operator;
 pub mod plan;
 mod prefix;
 pub mod timing;
@@ -60,6 +61,10 @@ use photocraft_raster::{Surface, Tile};
 
 pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use health::{DeviceHealth, Fault};
+pub use operator::{
+    Combine, GaussianBlur, LayerOperator, MAX_AXIS_TAPS, MAX_DISC_RADIUS, Mapping, OperatorInput, OperatorProgram, OperatorTarget, RemapParams, SeparableBlur,
+    Undefined,
+};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 
@@ -125,6 +130,32 @@ pub struct Compositor {
     /// Timestamp queries measuring how long the GPU spends on a refresh (see
     /// [`Compositor::measure_gpu_time`]); `None` = not measured.
     timer: Option<timing::GpuTimer>,
+    /// Layer operators per document ([`Compositor::set_operators`]).
+    operators: HashMap<DocId, Vec<LayerOperator>>,
+    /// The operators' compute pipelines: `None` until first needed, `Some(None)` when the device
+    /// can't run them.
+    op_kit: Option<Option<operator::OpKit>>,
+    /// What each operator page (`Role::Operator*`) was made from: a fingerprint of the program,
+    /// its window and the source tiles it read. A page with another fingerprint is redrawn.
+    op_made: HashMap<ResKey, u64>,
+    /// The selection each operator mask page was made from: held while the page is, so no other
+    /// selection can take its address (which the page's fingerprint hashes).
+    op_pins: HashMap<ResKey, Arc<Surface>>,
+    /// The maps operator pages were made from: held so no other map can take the address the
+    /// page's fingerprint hashes.
+    op_maps: HashMap<ResKey, Arc<Vec<[f32; 4]>>>,
+    /// The operators of the document the current refresh draws.
+    frame_ops: Vec<LayerOperator>,
+    /// The operator passes' scratch textures (two, or four for a disc), reused from cell to cell
+    /// and step to step (made anew each time, they cost their allocation and clearing on every
+    /// slider step).
+    op_scratch: Option<([u32; 2], Vec<wgpu::Texture>)>,
+    /// Bytes of a scratch set being made (the textures made so far): counted against the
+    /// resident budget with `op_scratch` until the set is complete.
+    scratch_making: u64,
+    /// The part of the canvas the current refresh draws (tile aligned): operators compute only
+    /// their output there.
+    frame_region: Rect,
 }
 use W::{F, I, U};
 
