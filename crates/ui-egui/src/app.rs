@@ -166,6 +166,7 @@ impl PhotocraftApp {
             doc_hist_preview: None,
             hist_job: None,
             hist_uncached: None,
+            hist_sel_key: None,
             gpu: None,
             window_device: None,
             window_lost: false,
