@@ -1,5 +1,5 @@
 use super::{
-    Align2, Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, Sense, Stroke, TextureHandle, Tokens, Tool, Value,
+    Color32, CornerRadius, Ev, FontId, GroupView, ItemView, PhotocraftApp, Place, Pos2, Rect, Sense, Stroke, TextureHandle, Tokens, Tool, Value,
     browser, canvas_drop_rect, empty, generic, json, paint_gradient, pattern_texture, pos2, run, shape_texture, style_texture, vec2,
 };
 
@@ -105,16 +105,6 @@ pub fn patterns_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 // ------------------------------------------------------------------ floating panels
 
-/// The x of a floating preset window: the cascade runs from the canvas's reading-end edge
-/// (right in a left-to-right UI, left in a right-to-left one).
-fn float_window_x(canvas: Rect, width: f32, offset: f32, rtl: bool) -> f32 {
-    if rtl {
-        (canvas.left() + 16.0 + offset).min(canvas.right() - 8.0 - width).max(canvas.left() + 8.0)
-    } else {
-        (canvas.right() - width - 16.0 - offset).max(canvas.left() + 8.0)
-    }
-}
-
 fn float_window(
     app: &mut PhotocraftApp,
     ctx: &egui::Context,
@@ -134,7 +124,7 @@ fn float_window(
     let canvas = canvas_drop_rect(app);
     let mut close = false;
     // The cascade offsets run from the canvas's reading-end edge: right in LTR, left in RTL.
-    let x = float_window_x(canvas, width, offset, crate::direction::is_rtl());
+    let x = crate::direction::float_window_x(canvas, width, 16.0, -offset);
     egui::Window::new(title)
         .id(egui::Id::unique(("preset-window", key)))
         .title_bar(false)
@@ -154,9 +144,11 @@ fn float_window(
                         if key == "styles" {
                             let resp = crate::icons::button(ui, "ellipsis", 20.0, false, tl!("Panel menu"));
                             egui::Popup::menu(&resp).show(|ui| {
-                                crate::widgets::style_spectrum_popup_menu(ui);
-                                ui.set_min_width(180.0);
-                                styles_menu(app, ui);
+                                crate::menus::popup_body(ui, |ui| {
+                                    crate::widgets::style_spectrum_popup_menu(ui);
+                                    ui.set_min_width(180.0);
+                                    styles_menu(app, ui);
+                                });
                             });
                         }
                     });
@@ -371,7 +363,7 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let resp = resp.on_hover_text(&cur);
     egui::Popup::menu(&resp).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         ui.set_width(232.0);
-        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+        crate::menus::popup_body(ui, |ui| egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             for g in &groups {
                 ui.label(egui::RichText::new(&g.name).color(t.text_dim).size(11.0));
                 ui.horizontal_wrapped(|ui| {
@@ -399,7 +391,7 @@ pub fn shape_picker(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     }
                 });
             }
-        });
+        }));
     });
 }
 
@@ -486,7 +478,8 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Some((_, key, mut text)) = app.ui.presets_ui.renaming.clone().filter(|r| r.0 == "toolPresets") {
         ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
             let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
+            let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+            let r = ui.add(crate::widgets::rtl_singleline(&mut text, &mut layouter).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -514,11 +507,9 @@ pub fn tool_presets_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             let icon = Tool::from_name(tool).map(crate::icons::tool_icon).unwrap_or("settings");
             // Icon at the reading start, name after it (left in LTR, right in RTL).
-            let (icon_x, text_x, halign) = if crate::direction::is_rtl() {
-                (r.right() - 14.0, r.right() - 30.0, Align2::RIGHT_CENTER)
-            } else {
-                (r.left() + 14.0, r.left() + 30.0, Align2::LEFT_CENTER)
-            };
+            let icon_x = crate::direction::start_x(r, 14.0);
+            let text_x = crate::direction::start_x(r, 30.0);
+            let halign = crate::direction::start_align();
             crate::icons::paint(ui, Rect::from_center_size(pos2(icon_x, r.center().y), vec2(16.0, 16.0)), icon, 13.0, t.icon);
             ui.painter().text(pos2(text_x, r.center().y), halign, name, FontId::proportional(11.5), t.text);
             if resp.clicked() {
@@ -769,25 +760,14 @@ pub fn clone_sample_point(app: &PhotocraftApp, at: Option<[f64; 2]>) -> Option<[
 mod tests {
     use super::*;
 
-    /// The floating preset panels cascade from the canvas's reading-end edge: the right in a
-    /// left-to-right UI, the left in a right-to-left one.
-    #[test]
-    fn floating_windows_open_at_the_reading_end_edge() {
-        let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
-        assert_eq!(float_window_x(canvas, 250.0, 0.0, false), 734.0);
-        assert_eq!(float_window_x(canvas, 250.0, 280.0, false), 454.0);
-        assert_eq!(float_window_x(canvas, 250.0, 0.0, true), 16.0);
-        assert_eq!(float_window_x(canvas, 250.0, 280.0, true), 296.0);
-        // A narrow canvas keeps the window on it.
-        let narrow = Rect::from_min_size(pos2(0.0, 0.0), vec2(200.0, 700.0));
-        assert_eq!(float_window_x(narrow, 250.0, 0.0, true), 8.0);
-    }
-
-    /// Kittest twin of `float_window_x`: the floating Styles window opens at the canvas's
-    /// reading-end edge, and its close box sits at the header row's reading end.
+    /// Kittest twin of `direction::float_window_x`: the floating Styles window opens on the canvas's
+    /// reading-end half, and its close box sits at the header row's reading end. egui clamps
+    /// the area into the harness screen during its sizing pass, so expectations are relative
+    /// to the rendered window rect rather than absolute pixels.
     #[test]
     fn the_styles_window_opens_at_the_reading_end_edge() {
-        use egui_kittest::{Harness, kittest::Queryable};
+        use egui::accesskit::Role;
+        use egui_kittest::{Harness, kittest::{NodeT, Queryable}};
         let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
         let open = |rtl: bool| {
             let dir = if rtl { crate::direction::Dir::Rtl } else { crate::direction::Dir::Ltr };
@@ -796,44 +776,32 @@ mod tests {
             app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
             app.ui.presets_ui.styles = true;
             app.last_canvas_rect = canvas;
-            let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).build_ui_state(|ui, app| {
-                windows(app, ui.ctx());
-            }, app);
-            h.run_steps(3);
-            h.get_by_label("Close").rect()
+            let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).build_ui_state(
+                |ui, app| {
+                    // The fonts are installed after the harness's first frame: paint only once they are active.
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        windows(app, ui.ctx());
+                    }
+                },
+                app,
+            );
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            h.run_steps(4);
+            let window = h
+                .query_all(egui_kittest::kittest::by().role(Role::Window).include_labels())
+                .find(|n| n.accesskit_node().label().as_deref() == Some("Styles"))
+                .expect("the Styles window is open")
+                .rect();
+            (window, h.get_by_label("Close").rect())
         };
-        let x_ltr = float_window_x(canvas, 250.0, 0.0, false);
-        let x_rtl = float_window_x(canvas, 250.0, 0.0, true);
-        let close_ltr = open(false);
-        assert!(close_ltr.left() > 900.0, "LTR: the window cascades from the canvas's right edge ({close_ltr:?})");
-        assert!(close_ltr.left() > x_ltr + 200.0, "LTR: the close box hugs the header row's right end ({close_ltr:?})");
-        let close_rtl = open(true);
-        assert!(close_rtl.left() < 60.0, "RTL: the window opens at the canvas's left edge ({close_rtl:?})");
-        assert!(close_rtl.right() < x_rtl + 60.0, "RTL: the close box hugs the header row's left end ({close_rtl:?})");
+        let (win_ltr, close_ltr) = open(false);
+        assert!(win_ltr.center().x > canvas.center().x, "LTR: the window opens from the canvas's right edge: {win_ltr:?}");
+        assert!(win_ltr.left() >= canvas.left() && win_ltr.right() <= canvas.right(), "LTR: the window stays on the canvas: {win_ltr:?}");
+        assert!(close_ltr.left() > win_ltr.center().x && win_ltr.right() - close_ltr.right() < 24.0, "LTR: the close box hugs the header row's right end: {close_ltr:?} in {win_ltr:?}");
+        let (win_rtl, close_rtl) = open(true);
+        assert!(win_rtl.center().x < canvas.center().x, "RTL: the window opens from the canvas's left edge: {win_rtl:?}");
+        assert!(win_rtl.left() >= canvas.left() && win_rtl.right() <= canvas.right(), "RTL: the window stays on the canvas: {win_rtl:?}");
+        assert!(close_rtl.right() < win_rtl.center().x && close_rtl.left() - win_rtl.left() < 24.0, "RTL: the close box hugs the header row's left end: {close_rtl:?} in {win_rtl:?}");
     }
 
-    #[test]
-    fn probe_styles_window_header() {
-        use egui_kittest::{Harness, kittest::{NodeT, Queryable}};
-        let canvas = Rect::from_min_size(pos2(0.0, 0.0), vec2(1000.0, 700.0));
-        let _scope = crate::direction::direction_scope(crate::direction::Dir::Ltr);
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
-        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
-        app.ui.presets_ui.styles = true;
-        app.last_canvas_rect = canvas;
-        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).build_ui_state(|ui, app| { windows(app, ui.ctx()); }, app);
-        h.run_steps(3);
-        eprintln!("probe is_rtl={} style_rtl={}", crate::direction::is_rtl(), h.ctx.style_of(egui::Theme::Dark).right_to_left);
-        for n in h.query_all_by_label("Close") {
-            eprintln!("probe Close rect={:?} role={:?}", n.rect(), n.accesskit_node().role());
-        }
-        for n in h.query_all_by_label("Styles") {
-            eprintln!("probe Styles rect={:?} role={:?}", n.rect(), n.accesskit_node().role());
-        }
-        for s in &h.output().shapes {
-            if let egui::Shape::Text(t) = &s.shape {
-                eprintln!("probe text {:?} pos={:?}", t.galley.job.text, t.pos);
-            }
-        }
-    }
 }

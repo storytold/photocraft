@@ -270,7 +270,7 @@ pub(crate) fn pattern_picker(app: &PhotocraftApp, ui: &mut egui::Ui, selected: &
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Patterns")));
     let mut picked = None;
     egui::Popup::menu(&resp).show(|ui| {
-        picked = pattern_grid(app, ui, selected);
+        picked = crate::menus::popup_body(ui, |ui| pattern_grid(app, ui, selected));
     });
     picked
 }
@@ -385,11 +385,10 @@ fn draw_group_header(ui: &mut egui::Ui, group: &GroupView, context: GroupHeaderC
     }
     // Triangle, folder and name anchor from the reading-start edge (left in LTR, right in RTL);
     // the closed chevron points along the reading direction via the icon-flip table.
-    let (tri_x, fold_x, name_x, halign) = if crate::direction::is_rtl() {
-        (rect.right() - 9.0, rect.right() - 25.0, rect.right() - 37.0, Align2::RIGHT_CENTER)
-    } else {
-        (rect.left() + 9.0, rect.left() + 25.0, rect.left() + 37.0, Align2::LEFT_CENTER)
-    };
+    let tri_x = crate::direction::start_x(rect, 9.0);
+    let fold_x = crate::direction::start_x(rect, 25.0);
+    let name_x = crate::direction::start_x(rect, 37.0);
+    let halign = crate::direction::start_align();
     let triangle = Rect::from_center_size(pos2(tri_x, rect.center().y), vec2(12.0, 12.0));
     crate::icons::paint(ui, triangle, if open { "chevron-down" } else { "chevron-right" }, 10.0, tokens.text_dim);
     let folder = Rect::from_center_size(pos2(fold_x, rect.center().y), vec2(14.0, 14.0));
@@ -438,7 +437,8 @@ pub(crate) fn browser(
         let mut done = None;
         ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
             let name_label = ui.label(egui::RichText::new(tl!("Name:")).color(t.text_dim).size(11.5));
-            let r = ui.add(egui::TextEdit::singleline(&mut text).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
+            let mut layouter = crate::widgets::rtl_singleline_layouter(FontId::default());
+            let r = ui.add(crate::widgets::rtl_singleline(&mut text, &mut layouter).desired_width(ui.available_width() - 4.0)).labelled_by(name_label.id);
             if !r.has_focus() && !r.lost_focus() {
                 r.request_focus();
             }
@@ -514,7 +514,7 @@ pub(crate) fn browser(
                             ui.painter().rect_filled(r, 0.0, t.hover.gamma_multiply(0.5));
                         }
                         // List rows: thumbnail at the reading start, name after it (left in LTR).
-                        let (tr, name_x, halign) = list_row_slots(r, crate::direction::is_rtl());
+                        let (tr, name_x, halign) = list_row_slots(r);
                         thumb(ui, tr, gi, ii);
                         ui.painter().text(pos2(name_x, r.center().y), halign, &it.name, FontId::proportional(11.5), t.text);
                     } else {
@@ -658,12 +658,12 @@ fn grid_origin_x(area: Rect, pad: f32, cell: egui::Vec2, gap: f32, cols: usize, 
 
 /// A list row's thumbnail rect and the x its name is drawn at: the thumbnail sits at the reading
 /// start (left in a left-to-right UI, right in a right-to-left one) and the name follows it.
-fn list_row_slots(row: Rect, rtl: bool) -> (Rect, f32, Align2) {
-    if rtl {
-        (Rect::from_min_size(pos2(row.right() - 44.0, row.top() + 2.0), vec2(20.0, 20.0)), row.right() - 52.0, Align2::RIGHT_CENTER)
-    } else {
-        (Rect::from_min_size(row.min + vec2(24.0, 2.0), vec2(20.0, 20.0)), row.left() + 52.0, Align2::LEFT_CENTER)
-    }
+fn list_row_slots(row: Rect) -> (Rect, f32, Align2) {
+    (
+        crate::direction::start_rect(row, vec2(24.0, 2.0), vec2(20.0, 20.0)),
+        crate::direction::start_x(row, 52.0),
+        crate::direction::start_align(),
+    )
 }
 
 /// The folder (by library index) a header dragged to `y` lands before (`None` = last). `headers`
@@ -988,11 +988,17 @@ mod tests {
     #[test]
     fn a_list_row_keeps_its_thumbnail_at_the_reading_start() {
         let row = Rect::from_min_size(pos2(10.0, 0.0), vec2(240.0, 24.0));
-        let (thumb, name_x, halign) = list_row_slots(row, false);
+        let (thumb, name_x, halign) = {
+            let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+            list_row_slots(row)
+        };
         assert_eq!(thumb.left(), row.left() + 24.0);
         assert_eq!(name_x, row.left() + 52.0);
         assert_eq!(halign, Align2::LEFT_CENTER);
-        let (thumb, name_x, halign) = list_row_slots(row, true);
+        let (thumb, name_x, halign) = {
+            let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+            list_row_slots(row)
+        };
         assert_eq!(thumb.right(), row.right() - 24.0, "in RTL the thumbnail hugs the right edge");
         assert_eq!(name_x, row.right() - 52.0);
         assert_eq!(halign, Align2::RIGHT_CENTER);
