@@ -30,7 +30,7 @@
 # Command-id override: under Edit > Purge a bare "Deshacer" reads as an action, not the history.
 # Rendering mode and recovery
 # Camera Raw: contextual controls and window title
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
 # Shared screen eyedropper and text Color Picker (#1128).
@@ -4239,17 +4239,8 @@ navigator	Zoom	Zoom
 	Kept {name}: written by another application	Se conservó {name}: lo escribió otra aplicación
 	Shadow Tint	Tinte de sombras
 	Check for Updates…	Buscar actualizaciones…
-	PhotoCraft Updates	Actualizaciones de PhotoCraft
-	Checking for updates…	Buscando actualizaciones…
 	Open the release page to choose an installer for your system.	Abra la página de la versión para elegir un instalador para su sistema.
-	Open Download Page	Abrir página de descarga
-	PhotoCraft is up to date.	PhotoCraft está actualizado.
-	Could not check for updates.	No se pudieron buscar actualizaciones.
-	Updates have not been checked yet.	Aún no se han buscado actualizaciones.
-	Check Again	Comprobar de nuevo
 	Automatically Check for Updates	Buscar actualizaciones automáticamente
-	Installed version: {version}	Versión instalada: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} está disponible.
 	Paints from the History panel's source state	Pinta a partir del estado de origen del panel Historia
 	Sets the source for the history brush	Establece el origen del pincel de historia
 	Highlight Mode	Modo de luces

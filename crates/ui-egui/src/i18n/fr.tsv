@@ -47,7 +47,7 @@
 
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -3333,17 +3333,8 @@ curves	Smooth	Lisser
 	Kept {name}: written by another application	{name} conservé : écrit par une autre application
 	Shadow Tint	Teinte des ombres
 	Check for Updates…	Rechercher des mises à jour…
-	PhotoCraft Updates	Mises à jour de PhotoCraft
-	Checking for updates…	Recherche de mises à jour…
 	Open the release page to choose an installer for your system.	Ouvrez la page de la version pour choisir un programme d’installation pour votre système.
-	Open Download Page	Ouvrir la page de téléchargement
-	PhotoCraft is up to date.	PhotoCraft est à jour.
-	Could not check for updates.	Impossible de rechercher des mises à jour.
-	Updates have not been checked yet.	Les mises à jour n’ont pas encore été vérifiées.
-	Check Again	Vérifier à nouveau
 	Automatically Check for Updates	Rechercher automatiquement des mises à jour
-	Installed version: {version}	Version installée : {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} est disponible.
 	Paints from the History panel's source state	Peint à partir de l'état source du panneau Historique
 	Sets the source for the history brush	Définit la source du pinceau d'historique
 	Highlight Mode	Mode des tons clairs

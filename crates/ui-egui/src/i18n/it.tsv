@@ -54,7 +54,7 @@
 # Strings added on main after this catalog was written (2026-10).
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 # Layer Style > Blending Options (Advanced Blending)
 
 # Swatches panel
@@ -4289,17 +4289,8 @@ navigator	Zoom	Zoom
 	Kept {name}: written by another application	{name} mantenuto: scritto da un’altra applicazione
 	Shadow Tint	Tinta ombre
 	Check for Updates…	Cerca aggiornamenti…
-	PhotoCraft Updates	Aggiornamenti di PhotoCraft
-	Checking for updates…	Ricerca aggiornamenti…
 	Open the release page to choose an installer for your system.	Apri la pagina della versione per scegliere un programma di installazione per il tuo sistema.
-	Open Download Page	Apri pagina di download
-	PhotoCraft is up to date.	PhotoCraft è aggiornato.
-	Could not check for updates.	Impossibile cercare aggiornamenti.
-	Updates have not been checked yet.	Gli aggiornamenti non sono ancora stati verificati.
-	Check Again	Controlla di nuovo
 	Automatically Check for Updates	Cerca automaticamente aggiornamenti
-	Installed version: {version}	Versione installata: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} è disponibile.
 	Paints from the History panel's source state	Dipinge dallo stato di origine del pannello Cronologia
 	Sets the source for the history brush	Imposta l'origine del pennello storia
 	Highlight Mode	Metodo luci

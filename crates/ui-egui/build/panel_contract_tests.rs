@@ -13,7 +13,7 @@ fn local_adapter_matches_the_workspace_pins() {
 #[test]
 fn updated_framework_pins_cannot_silently_use_the_old_adapter() {
     let (root, local) = manifests();
-    for revision in ["92d392cff132eaf53e13afff77f38b5c11b73aa0", "6d518fc799681571963842f95b55a6b68431b15a"] {
+    for revision in ["c5a1cbfb5f9049f9270955caffb5bee5997aebf7", "6d518fc799681571963842f95b55a6b68431b15a"] {
         let changed = root.replace(revision, "0000000000000000000000000000000000000001");
         assert!(panel_contract::compatible(&changed, &local).unwrap_err().contains("Reconcile"));
     }

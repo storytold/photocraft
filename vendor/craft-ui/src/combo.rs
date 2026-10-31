@@ -527,7 +527,8 @@ impl<'a> Menu<'a> {
         let remeasure_id = id.with("craft-remeasure");
         let remeasure = ctx.data_mut(|d| d.remove_temp::<bool>(remeasure_id)).unwrap_or(false);
         let (align, settled) = side(&popup, remeasure);
-        // At most two remeasures per open, so a footer that changes height on every pass settles.
+        // At most two remeasures in a row, so a footer that changes height on every pass settles.
+        // A pass where the footer keeps its height clears the count.
         let count_id = id.with("craft-remeasures");
         if ctx.read_response(id).is_none() {
             ctx.data_mut(|d| d.remove::<u8>(count_id));
@@ -571,12 +572,19 @@ impl<'a> Menu<'a> {
                     let top = ui.cursor().top();
                     let f = footer(ui);
                     let height = ui.min_rect().bottom() - top;
-                    if footer_height.is_none_or(|h| (h - height).abs() > 0.5) && remeasures < 2 {
+                    let changed = footer_height.is_none_or(|h| (h - height).abs() > 0.5);
+                    if !changed && remeasures > 0 {
+                        ui.data_mut(|d| d.remove::<u8>(count_id));
+                    }
+                    if changed {
+                        // Recorded even past the cap, so "unchanged" means unchanged since the last pass.
+                        ui.data_mut(|d| d.insert_temp(footer_id, height));
+                    }
+                    if changed && remeasures < 2 {
                         // The list took the wrong room: lay the menu out again next pass. Not a
                         // discarded pass: the header's side effects (focusing a search field on
                         // open) would run twice.
                         ui.data_mut(|d| {
-                            d.insert_temp(footer_id, height);
                             d.insert_temp(remeasure_id, true);
                             d.insert_temp(count_id, remeasures + 1);
                         });

@@ -3794,17 +3794,8 @@ curves	Smooth	Làm mượt
 	Kept {name}: written by another application	Đã giữ {name}: do ứng dụng khác ghi
 	Shadow Tint	Sắc độ bóng tối
 	Check for Updates…	Kiểm tra bản cập nhật…
-	PhotoCraft Updates	Bản cập nhật PhotoCraft
-	Checking for updates…	Đang kiểm tra bản cập nhật…
 	Open the release page to choose an installer for your system.	Mở trang phát hành để chọn bộ cài đặt cho hệ thống của bạn.
-	Open Download Page	Mở trang tải xuống
-	PhotoCraft is up to date.	PhotoCraft đã được cập nhật.
-	Could not check for updates.	Không thể kiểm tra bản cập nhật.
-	Updates have not been checked yet.	Chưa kiểm tra bản cập nhật.
-	Check Again	Kiểm tra lại
 	Automatically Check for Updates	Tự động kiểm tra bản cập nhật
-	Installed version: {version}	Phiên bản đã cài: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} đã có sẵn.
 	Paints from the History panel's source state	Vẽ từ trạng thái nguồn của bảng Lịch sử
 	Sets the source for the history brush	Đặt nguồn cho cọ lịch sử
 	Highlight Mode	Chế độ vùng sáng

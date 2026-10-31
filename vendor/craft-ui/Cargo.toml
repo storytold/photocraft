@@ -15,8 +15,8 @@ dbg_macro = "warn"
 todo = "warn"
 
 [dependencies]
-craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
-craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "92d392cff132eaf53e13afff77f38b5c11b73aa0" }
+craft-fonts-build = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
 egui = { version = "0.37", default-features = false }
 epaint = { version = "0.37", default-features = false }
 log = "0.4"
@@ -67,7 +67,7 @@ egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 [package.metadata.photocraft-panel-contract]
-source-revision = "92d392cff132eaf53e13afff77f38b5c11b73aa0"
+source-revision = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
 egui-revision = "6d518fc799681571963842f95b55a6b68431b15a"
 
 [workspace]

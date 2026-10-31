@@ -1,4 +1,11 @@
-Source: https://github.com/storytold/craft-libs/tree/92d392cff132eaf53e13afff77f38b5c11b73aa0/crates/ui
+Source: https://github.com/storytold/craft-libs/tree/c5a1cbfb5f9049f9270955caffb5bee5997aebf7/crates/ui
+
+Reconciled with PhotoCraft main on 2026-10-31. The revision update changes
+`combo.rs`, `combo/tests.rs`, `docking/command_tests.rs` and `text.rs`; these four
+files are copied unchanged from the new source. The six local docking patch files
+do not intersect that update. All other 76 vendored source files match the new
+revision, with the same optional test-input exclusions. Dependency pins and the
+build-time revision contract advance together; egui's revision is unchanged.
 
 Local review patch: exclusive iconic-column host hook, fitted column reporting, host-owned resize chrome, a separate optional side-dock gap, keyboard-only empty-header focus, and dock seam handles registered after their sibling canvas. Other split/row handles retain their geometry and input. Modified source files: docking/surface.rs, docking/chrome.rs and docking/render/{dock,floating,group,mod}.rs. FloatingFrame also offers an opt-out for its separate top resize gutter; edge handles remain available. No Cargo checkout modifications. Remaining craft-libs crates keep the immutable revision. Font binaries are excluded. Replace this snapshot with an immutable upstream revision after API acceptance.
 
