@@ -285,7 +285,15 @@ fn lens_enabled(s: &Session) -> std::result::Result<(), String> {
 }
 
 fn raw_enabled(s: &Session) -> std::result::Result<(), String> {
-    filterable(s)?;
+    // A targeted alpha channel or Quick Mask is filtered instead of the layer (#10457).
+    if !crate::channel_cmds::edits_channel(s) {
+        filterable(s)?;
+    }
+    raw_mode(s)
+}
+
+/// Camera Raw Filter needs an RGB or Grayscale document, on a layer or a mask.
+pub(crate) fn raw_mode(s: &Session) -> std::result::Result<(), String> {
     let d = s.active().ok_or("no document open")?;
     match d.doc.mode {
         ColorMode::Rgb | ColorMode::Grayscale => Ok(()),

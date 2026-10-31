@@ -119,6 +119,10 @@ fn edits_mask(id: &str) -> bool {
         || id == crate::distort_cmds::LIQUIFY
 }
 
+fn has_mask(s: &Session) -> std::result::Result<(), String> {
+    crate::active_layer_of(s).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) })
+}
+
 /// Filters that work on a layer's pixels only: Lens Correction, Adaptive Wide Angle and Vanishing
 /// Point, which Photoshop greys out while a mask or channel is targeted (#10457).
 fn refuses_masks(id: &str) -> bool {
@@ -137,9 +141,10 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
         Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
             Some(crate::active_layer_of(s).and_then(crate::smart_cmds::filter_mask_paintable))
         }
-        Target::Mask if edits_mask(id) => {
-            Some(crate::active_layer_of(s).and_then(|l| if l.mask.is_some() { Ok(()) } else { Err("the active layer has no layer mask".into()) }))
-        }
+        Target::Mask if edits_mask(id) => Some(has_mask(s)),
+        // The Camera Raw Filter filters a targeted mask too (#10457), in the document modes it
+        // takes on a layer.
+        Target::Mask if id == crate::lens_cmds::RAW => Some(has_mask(s).and_then(|()| crate::lens_cmds::raw_mode(s))),
         _ => None,
     }
 }
