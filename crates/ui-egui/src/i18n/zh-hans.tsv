@@ -3187,3 +3187,14 @@ curves	Smooth	平滑
 	Select and Mask was closed: another layer was selected	已关闭“选择与蒙版”：已选择另一个图层
 	Drag to move the selected path	拖动以移动选中的路径
 	Edit Brush…	编辑画笔…
+	Actual Color	实际颜色
+	Web Color	Web 颜色
+	HSB Color	HSB 颜色
+	HSL Color	HSL 颜色
+	Total Ink	油墨总量
+	Spot Channels	专色通道
+	Alpha Channels	Alpha 通道
+	Info Panel Options	信息面板选项
+	Readouts	读数
+	Total Spot Ink	专色油墨总量
+	Include in Total Spot Ink	计入专色油墨总量

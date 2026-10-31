@@ -224,7 +224,7 @@ pub fn rich_doc(mode: ColorMode, depth: SampleType) -> Document {
     alpha.opacity = 0.35;
     alpha.indicates = photocraft_doc::ColorIndicates::SelectedAreas;
     d.channels.push(alpha);
-    d.channels.push(AlphaChannel { spot: Some((Color::rgb(1.0, 0.0, 0.5), 0.7)), ..AlphaChannel::new("Spot", ch.clone()) });
+    d.channels.push(AlphaChannel { spot: Some((Color::rgb(1.0, 0.0, 0.5), 0.7)), total_ink: false, ..AlphaChannel::new("Spot", ch.clone()) });
     d.quick_mask = Some(AlphaChannel::new("Quick Mask", ch));
     d.quick_mask_unselected = true;
     let mut pat = Surface::new(PixelFormat::new(photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U16, true));

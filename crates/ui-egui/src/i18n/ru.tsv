@@ -4702,3 +4702,10 @@ shape	Appearance	Оформление
 	Select and Mask was closed: its document is no longer the active one	Окно «Выделение и маска» закрыто: его документ больше не активен
 	Select and Mask was closed: another layer was selected	Окно «Выделение и маска» закрыто: выбран другой слой
 	Edit Brush…	Изменить кисть…
+	HSL Color	HSL
+	Spot Channels	Плашечные каналы
+	Alpha Channels	Альфа-каналы
+	Info Panel Options	Параметры панели «Инфо»
+	Readouts	Показания
+	Total Spot Ink	Суммарное покрытие плашечными красками
+	Include in Total Spot Ink	Учитывать в суммарном покрытии плашечными красками

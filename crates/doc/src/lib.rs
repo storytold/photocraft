@@ -828,6 +828,10 @@ pub struct AlphaChannel {
     /// Overlay opacity (0..1).
     pub opacity: f32,
     pub indicates: ColorIndicates,
+    /// Counted by the Info panel's Total Spot Ink readout (Channel Options › Include in Total
+    /// Spot Ink). Off for a spot channel that is not an ink, such as the shirt under a
+    /// separation, which is solid everywhere. Only spot channels are counted either way.
+    pub total_ink: bool,
 }
 
 impl AlphaChannel {
@@ -835,7 +839,7 @@ impl AlphaChannel {
     pub const DEFAULT_COLOR: Color = Color::rgb(1.0, 0.0, 0.0);
 
     pub fn new(name: impl Into<String>, surface: Surface) -> Self {
-        Self { name: name.into(), surface, spot: None, color: Self::DEFAULT_COLOR, opacity: 0.5, indicates: ColorIndicates::MaskedAreas }
+        Self { name: name.into(), surface, spot: None, color: Self::DEFAULT_COLOR, opacity: 0.5, indicates: ColorIndicates::MaskedAreas, total_ink: true }
     }
 
     /// Overlay coverage (0..1, before opacity) for channel value `v`: spot channels show ink

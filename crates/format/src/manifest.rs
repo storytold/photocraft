@@ -357,6 +357,13 @@ pub struct ChannelM {
     pub opacity: f32,
     #[serde(default)]
     pub indicates: photocraft_doc::ColorIndicates,
+    /// Counted by the Total Spot Ink readout (older files: every channel).
+    #[serde(default = "default_true")]
+    pub total_ink: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn is_zero_u32(v: &u32) -> bool {
@@ -399,6 +406,7 @@ mod channel_tests {
         assert_eq!(c.color, photocraft_doc::AlphaChannel::DEFAULT_COLOR);
         assert_eq!(c.opacity, 0.5);
         assert_eq!(c.indicates, photocraft_doc::ColorIndicates::MaskedAreas);
+        assert!(c.total_ink, "older files count every spot channel");
     }
 }
 

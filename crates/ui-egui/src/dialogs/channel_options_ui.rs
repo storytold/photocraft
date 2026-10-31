@@ -45,14 +45,14 @@ pub fn fields(app: &PhotocraftApp, channel: &Value) -> Option<Map<String, Value>
         f.insert("opacity".into(), json!((o.alpha() * 100.0).round()));
         return Some(f);
     }
-    let (name, indicates, color, percent) = if channel.as_str() == Some("quickMask") {
+    let (name, indicates, color, percent, total_ink) = if channel.as_str() == Some("quickMask") {
         let o = app.session.quick_mask_options;
-        (None, kind(o.indicates), o.color, o.opacity)
+        (None, kind(o.indicates), o.color, o.opacity, true)
     } else {
         let ch = doc.channels.get(usize::try_from(channel.as_u64()?).ok()?)?;
         match ch.spot {
-            Some((ink, solidity)) => (Some(ch.name.clone()), "spot", ink, solidity),
-            None => (Some(ch.name.clone()), kind(ch.indicates), ch.color, ch.opacity),
+            Some((ink, solidity)) => (Some(ch.name.clone()), "spot", ink, solidity, ch.total_ink),
+            None => (Some(ch.name.clone()), kind(ch.indicates), ch.color, ch.opacity, ch.total_ink),
         }
     };
     let mut f = Map::new();
@@ -60,12 +60,17 @@ pub fn fields(app: &PhotocraftApp, channel: &Value) -> Option<Map<String, Value>
     f.insert("__command".into(), json!(COMMAND));
     f.insert("__label".into(), json!(if name.is_some() { "Channel Options…" } else { "Quick Mask Options…" }));
     f.insert("channel".into(), channel.clone());
-    if let Some(n) = name {
+    if let Some(n) = &name {
         f.insert("name".into(), json!(n));
     }
     f.insert("indicates".into(), json!(indicates));
     f.insert("color".into(), json!(hex(color.to_rgb())));
     f.insert("opacity".into(), json!((percent.clamp(0.0, 1.0) * 100.0).round()));
+    if name.is_some() {
+        // Include in Total Spot Ink: only spot channels are counted, but the flag is kept on
+        // every alpha channel, so a channel made spot in this dialog starts as it was.
+        f.insert("totalInk".into(), json!(total_ink));
+    }
     Some(f)
 }
 
@@ -80,7 +85,7 @@ pub fn open(app: &mut PhotocraftApp, channel: &Value) -> Option<u64> {
 pub fn params(f: &Map<String, Value>) -> Value {
     let spot = f.get("indicates").and_then(Value::as_str) == Some("spot");
     let mut p = Map::new();
-    for key in ["channel", "name", "indicates", "color"] {
+    for key in ["channel", "name", "indicates", "color", "totalInk"] {
         if let Some(v) = f.get(key) {
             p.insert(key.into(), v.clone());
         }
@@ -150,6 +155,17 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
             f.insert("opacity".into(), json!(pct.round()));
         }
     });
+    // A spot channel that is not an ink (the shirt under a separation) stays out of the Info
+    // panel's Total Spot Ink readout.
+    if spot && !quick {
+        ui.horizontal(|ui| {
+            label(ui, "");
+            let mut on = f.get("totalInk").and_then(Value::as_bool).unwrap_or(true);
+            if ui.checkbox(&mut on, tl!("Include in Total Spot Ink")).changed() {
+                f.insert("totalInk".into(), json!(on));
+            }
+        });
+    }
 }
 
 /// Layer Mask Display Options: Color and Opacity, as Photoshop's dialog has them.

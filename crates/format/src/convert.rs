@@ -223,8 +223,16 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
 
 fn channel_m(c: &AlphaChannel, sink: &mut dyn Sink) -> ChannelM {
     // Destructured so a new `AlphaChannel` field fails to compile here until it is saved.
-    let AlphaChannel { name, surface, spot, color, opacity, indicates } = c;
-    ChannelM { name: name.clone(), surface: surface_m(surface, sink), spot: *spot, color: *color, opacity: *opacity, indicates: *indicates }
+    let AlphaChannel { name, surface, spot, color, opacity, indicates, total_ink } = c;
+    ChannelM {
+        name: name.clone(),
+        surface: surface_m(surface, sink),
+        spot: *spot,
+        color: *color,
+        opacity: *opacity,
+        indicates: *indicates,
+        total_ink: *total_ink,
+    }
 }
 
 pub(crate) fn doc_m(d: &Document, sink: &mut dyn Sink) -> DocM {
@@ -678,7 +686,15 @@ impl Loader<'_> {
     }
 
     fn channel(&mut self, c: &ChannelM) -> Result<AlphaChannel> {
-        Ok(AlphaChannel { name: c.name.clone(), surface: self.surface(&c.surface)?, spot: c.spot, color: c.color, opacity: c.opacity, indicates: c.indicates })
+        Ok(AlphaChannel {
+            name: c.name.clone(),
+            surface: self.surface(&c.surface)?,
+            spot: c.spot,
+            color: c.color,
+            opacity: c.opacity,
+            indicates: c.indicates,
+            total_ink: c.total_ink,
+        })
     }
 }
 
