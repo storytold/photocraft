@@ -27,6 +27,10 @@ pub struct ActionsUi {
     /// Photoshop's Button Mode: each action is a coloured button, and a click plays it.
     #[serde(default)]
     pub button_mode: bool,
+    /// The set whose folder row was clicked last (or New Set made), while no action is selected:
+    /// New Action records into it, as Photoshop's does into the selected set (#7535).
+    #[serde(skip)]
+    pub selected_set: Option<String>,
     #[serde(skip)]
     reveal_recording: Option<(usize, usize)>,
     /// The action whose name is being edited in place (double-click on its name).
@@ -253,11 +257,24 @@ pub(crate) fn run_view(app: &mut PhotocraftApp, id: &str, params: Value) -> Resu
     Ok(Value::Null)
 }
 
+/// The set New Action records into: the selected action's, else the selected set folder's.
+fn new_action_set(app: &PhotocraftApp) -> Option<String> {
+    match app.ui.actions.selected.and_then(|i| app.session.actions.list.get(i)) {
+        Some(action) => action.set.clone(),
+        None => app.ui.actions.selected_set.clone().filter(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set)),
+    }
+}
+
 fn begin_recording(app: &mut PhotocraftApp, append: bool) {
     if app.session.actions.recording.is_some() {
         return;
     }
-    let params = if append { app.ui.actions.selected.map_or(json!({}), |i| json!({"action": i})) } else { json!({}) };
+    // Recording appends to the selected action; with none (a set folder selected, say) it makes a
+    // new action like New Action does, in the selected set.
+    let params = match app.ui.actions.selected {
+        Some(i) if append => json!({"action": i}),
+        _ => new_action_set(app).map_or(json!({}), |set| json!({"set": set})),
+    };
     let Ok(v) = app.run("actions.record", params) else { return };
     let Some(i) = v.get("index").and_then(Value::as_u64).and_then(|n| usize::try_from(n).ok()) else { return };
     app.ui.actions.selected = Some(i);
@@ -266,6 +283,10 @@ fn begin_recording(app: &mut PhotocraftApp, append: bool) {
         app.ui.actions.expanded.resize(i + 1, false);
     }
     app.ui.actions.expanded[i] = true;
+    // Its set too: a click that selected the set's folder row may have collapsed it.
+    if let Some(set) = app.session.actions.list.get(i).and_then(|a| a.set.as_ref()) {
+        app.ui.actions.collapsed_sets.retain(|c| c != set);
+    }
 }
 
 pub(crate) fn report_play(app: &mut PhotocraftApp, v: &Value) {
@@ -411,10 +432,12 @@ fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
     app.pick_file_bytes_filtered(&["atn"], |app, name, bytes| load_bytes(app, &name, &bytes))
 }
 
-/// Save Actions…: the selected action's set (every action of it), or every action when none
-/// came from a set, as a `.atn` file Photoshop loads.
+/// Save Actions…: the selected action's set (every action of it), else the selected set folder,
+/// or every action when none came from a set, as a `.atn` file Photoshop loads.
 fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, String> {
-    let set = set.or_else(|| selected_action(app).and_then(|a| a.set.clone()));
+    let selected_set = app.ui.actions.selected.is_none().then(|| app.ui.actions.selected_set.clone()).flatten();
+    let selected_set = selected_set.filter(|set| photocraft_engine::actions_edit_cmds::set_names(&app.session).contains(set));
+    let set = set.or(selected_set).or_else(|| selected_action(app).and_then(|a| a.set.clone()));
     let params = match &set {
         Some(set) => json!({"set": set, "skipUnsupported": true}),
         None => json!({"skipUnsupported": true}),
@@ -448,6 +471,40 @@ fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, St
 }
 
 const INSERT_STOP: &str = "__insertStop";
+
+/// The field marking a New Set… dialog.
+const NEW_SET: &str = "__actionsNewSet";
+
+pub fn owns_new_set(fields: &serde_json::Map<String, Value>) -> bool {
+    fields.contains_key(NEW_SET)
+}
+
+/// New Set…: name an empty set folder (Photoshop's default "Set N").
+fn new_set_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
+    let names = photocraft_engine::actions_edit_cmds::set_names(&app.session);
+    let name = (1u32..).map(|n| format!("Set {n}")).find(|n| !names.contains(n)).unwrap_or_default();
+    let fields = json!({NEW_SET: true, "__command": "actions.newSet", "__label": "New Set", "name": name});
+    let id = app.ui.open_dialog(crate::state::DialogKind::Command, fields.as_object().cloned().unwrap_or_default());
+    Ok(json!({"dialog": id}))
+}
+
+pub fn new_set_body(ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>) {
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Name:"));
+        let mut name = fields.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
+        ui.add(egui::TextEdit::singleline(&mut name).desired_width(220.0)).labelled_by(label.id);
+        fields.insert("name".into(), json!(name));
+    });
+}
+
+/// Make the set and select it, so New Action records into it.
+pub fn new_set_confirm(app: &mut PhotocraftApp, fields: &serde_json::Map<String, Value>) -> Result<Value, String> {
+    let r = app.run("actions.newSet", json!({"name": fields.get("name").cloned().unwrap_or(Value::Null)}))?;
+    app.ui.actions.selected_set = r["set"].as_str().map(str::to_string);
+    app.ui.actions.selected = None;
+    app.ui.actions.selected_step = None;
+    Ok(r)
+}
 
 pub fn owns_insert_stop(fields: &serde_json::Map<String, Value>) -> bool {
     fields.contains_key(INSERT_STOP)
@@ -640,6 +697,9 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if ui.add_enabled(!recording, egui::Button::new(tl!("New Action…"))).clicked() {
         act = Some("new");
     }
+    if ui.button(tl!("New Set…")).clicked() {
+        act = Some("newSet");
+    }
     if ui.add_enabled(any, egui::Button::new(tl!("Play"))).clicked() {
         act = Some("play");
     }
@@ -686,6 +746,7 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             Ok(Value::Null)
         }
         "load" => load_dialog(app),
+        "newSet" => new_set_dialog(app),
         "stop" => insert_stop_dialog(app),
         _ => save_dialog(app, None),
     };
@@ -837,10 +898,12 @@ struct SetHeaderResult {
     save: bool,
 }
 
-fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, tokens: &Tokens) -> SetHeaderResult {
+fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, selected: bool, tokens: &Tokens) -> SetHeaderResult {
     let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, !collapsed, set));
-    if response.hovered() {
+    if selected {
+        ui.painter().rect_filled(rect, 0.0, tokens.row_selected);
+    } else if response.hovered() {
         ui.painter().rect_filled(rect, 0.0, tokens.hover.gamma_multiply(0.5));
     }
     let triangle = Rect::from_center_size(pos2(rect.left() + 12.0, rect.center().y), vec2(8.0, 8.0));
@@ -869,6 +932,20 @@ fn draw_set_header(ui: &mut egui::Ui, set: &str, count: u64, collapsed: bool, to
         }
     });
     SetHeaderResult { toggled, save }
+}
+
+/// The sets New Set made that hold no action yet: empty folder rows after the rest. Returns the
+/// set whose row was clicked.
+fn draw_empty_sets(app: &PhotocraftApp, ui: &mut egui::Ui, rows: &[Row], t: &Tokens) -> Option<String> {
+    let mut clicked = None;
+    for set in app.session.actions.sets.iter().filter(|set| !rows.iter().any(|r| r.set.as_ref() == Some(*set))) {
+        let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_set.as_ref() == Some(set);
+        let collapsed = app.ui.actions.collapsed_sets.contains(set);
+        if draw_set_header(ui, set, 0, collapsed, selected, t).toggled {
+            clicked = Some(set.clone());
+        }
+    }
+    clicked
 }
 
 fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index: usize, name: &str, swatch: &str) {
@@ -978,7 +1055,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 shown_set = Some(set);
                 let collapsed = app.ui.actions.collapsed_sets.iter().any(|c| c == set);
                 let count = rows.iter().filter(|r| r.set.as_deref() == Some(set)).count() as u64;
-                let result = draw_set_header(ui, set, count, collapsed, &t);
+                let selected = app.ui.actions.selected.is_none() && app.ui.actions.selected_set.as_deref() == Some(set);
+                let result = draw_set_header(ui, set, count, collapsed, selected, &t);
                 if result.toggled {
                     set_toggled = Some(set.to_string());
                 }
@@ -1082,6 +1160,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 dialog_toggled = dialog_toggled.or(events.dialog_toggled);
             }
         }
+        set_toggled = set_toggled.take().or_else(|| draw_empty_sets(app, ui, &rows, &t));
     });
     if let Some((action, step)) = toggled {
         let _ = app.run("actions.toggle", json!({"action": action, "step": step}));
@@ -1090,6 +1169,10 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         let _ = app.run("actions.dialog", json!({"action": action, "step": step}));
     }
     if let Some(set) = set_toggled {
+        // A click on a set's folder row also selects the set, for New Action.
+        app.ui.actions.selected = None;
+        app.ui.actions.selected_step = None;
+        app.ui.actions.selected_set = Some(set.clone());
         match app.ui.actions.collapsed_sets.iter().position(|c| *c == set) {
             Some(i) => {
                 app.ui.actions.collapsed_sets.remove(i);
@@ -1129,6 +1212,12 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         play.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Play selection")));
         if play.clicked() {
             play_idx = playback_selection(app);
+        }
+        if crate::icons::button(ui, "folder", 24.0, false, tl!("Create new set")).clicked()
+            && let Err(e) = new_set_dialog(app)
+        {
+            app.ui.status = e;
+            app.ui.status_error = true;
         }
         if crate::icons::button(ui, "plus", 24.0, false, tl!("Create new action")).clicked() && !recording_now {
             begin_recording(app, false);

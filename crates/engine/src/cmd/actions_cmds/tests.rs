@@ -1176,3 +1176,18 @@ fn arrange_that_cannot_move_is_a_noop_in_playback() {
     assert_eq!(played["ran"], 0, "{played}");
     assert!(played["failed"].is_object(), "{played}");
 }
+
+/// #10459 review: recording into an existing set keeps that set's exact name, even one with
+/// surrounding spaces (from an older actions.json); a new set name is trimmed.
+#[test]
+fn record_keeps_an_existing_sets_exact_name() {
+    let mut s = Session::new();
+    s.actions.list.push(Action { set: Some(" Web ".into()), ..Action::new("Old", Vec::new()) });
+    s.execute("actions.record", json!({"name": "New", "set": " Web "})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    let set_of = |s: &Session, n: &str| s.actions.list.iter().find(|a| a.name == n).and_then(|a| a.set.clone());
+    assert_eq!(set_of(&s, "New").as_deref(), Some(" Web "), "the existing set");
+    s.execute("actions.record", json!({"name": "Fresh", "set": "  Print  "})).unwrap();
+    s.execute("actions.stop", json!({})).unwrap();
+    assert_eq!(set_of(&s, "Fresh").as_deref(), Some("Print"), "a new set is trimmed");
+}

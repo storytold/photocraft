@@ -655,6 +655,136 @@ fn set_folders_group_actions_and_collapse() {
     assert!(h.query_by_label("Sharpen").is_some());
 }
 
+/// #7535: the folder button (and the panel menu's New Set…) names an empty set, shown as a folder
+/// row with no actions; New Action then records into it, as into any selected set.
+#[test]
+fn new_set_makes_an_empty_folder_that_new_action_records_into() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let mut retouch = Action::new("Sharpen", vec![]);
+    retouch.set = Some("Retouch".into());
+    app.session.actions.list.push(retouch);
+    let mut h = Harness::builder().with_size(vec2(360.0, 400.0)).build_ui_state(|ui, app| panel(app, ui), app);
+    h.run_steps(2);
+    h.get_by_label("Create new set").click();
+    h.run_steps(2);
+    let id = h.state().ui.dialogs.last().map(|d| d.id).expect("the New Set dialog");
+    let d = h.state_mut().ui.dialog_mut(id).unwrap();
+    assert!(owns_new_set(&d.fields));
+    assert_eq!(d.fields["name"], "Set 1");
+    d.fields.insert("name".into(), json!("Web"));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    // An empty folder row, selected.
+    assert!(h.query_by_label("Web").is_some());
+    assert_eq!(h.state().ui.actions.selected_set.as_deref(), Some("Web"));
+    h.get_by_label("Create new action").click();
+    h.run_steps(2);
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    let list = &h.state().session.actions.list;
+    assert_eq!((list[1].name.as_str(), list[1].set.as_deref()), ("Action 2", Some("Web")));
+    // With an action selected, New Action records into that action's set.
+    h.state_mut().ui.actions.selected = Some(0);
+    h.run_steps(2);
+    h.get_by_label("Create new action").click();
+    h.run_steps(2);
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    assert_eq!(h.state().session.actions.list[2].set.as_deref(), Some("Retouch"));
+}
+
+/// #7535: with a set's folder row selected and no action, Start Recording (like the Record button)
+/// has no action to append to, so it records a new action into that set, as New Action does.
+#[test]
+fn start_recording_with_a_set_selected_records_a_new_action_into_it() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let mut retouch = Action::new("Sharpen", vec![]);
+    retouch.set = Some("Retouch".into());
+    app.session.actions.list.push(retouch);
+    app.run("actions.newSet", json!({"name": "Web"})).unwrap();
+    let mut h = Harness::builder().with_size(vec2(360.0, 600.0)).build_ui_state(
+        |ui, app| {
+            panel_menu(app, ui);
+            panel(app, ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    h.get_by_label("Web").click();
+    h.run_steps(2);
+    assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_set.as_deref()), (None, Some("Web")));
+    h.get_by_label("Start Recording").click();
+    h.run_steps(2);
+    h.state_mut().run("actions.stop", json!({})).unwrap();
+    let list = &h.state().session.actions.list;
+    assert_eq!(list.len(), 2);
+    assert_eq!(list[1].set.as_deref(), Some("Web"));
+}
+
+/// A click on an expanded set's folder row selects it and collapses it; recording into it (New
+/// Action or Start Recording) expands the set again, so the new action and its steps show.
+#[test]
+fn recording_into_a_collapsed_set_expands_it() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    for label in ["Create new action", "Start Recording"] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        let mut retouch = Action::new("Sharpen", vec![]);
+        retouch.set = Some("Retouch".into());
+        app.session.actions.list.push(retouch);
+        let mut h = Harness::builder().with_size(vec2(360.0, 600.0)).build_ui_state(
+            |ui, app| {
+                panel_menu(app, ui);
+                panel(app, ui);
+            },
+            app,
+        );
+        h.run_steps(2);
+        h.get_by_label("Retouch").click();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.actions.collapsed_sets, ["Retouch"], "{label}");
+        assert!(h.query_by_label("Sharpen").is_none(), "{label}");
+        h.get_by_label(label).click();
+        h.run_steps(2);
+        assert!(h.state().ui.actions.collapsed_sets.is_empty(), "{label}");
+        assert_eq!(h.state().ui.actions.selected, Some(1), "{label}");
+        assert!(h.query_by_label("Action 2").is_some(), "{label}");
+        h.state_mut().run("actions.stop", json!({})).unwrap();
+    }
+}
+
+/// Save Actions… after a click on set B's folder row saves set B, not the first action's set.
+#[test]
+fn save_actions_with_a_set_selected_saves_that_set() {
+    use egui_kittest::{Harness, kittest::Queryable};
+    let (file_dialog, asked) = crate::file_dialog::fake(vec![None]);
+    let services = crate::Services { file_dialog: Some(file_dialog), ..Default::default() };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+    app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+    for (name, set) in [("Sharpen", "Retouch"), ("Resize", "Web")] {
+        let mut action = Action::new(name, vec![("layer.new.layer".into(), json!({}))]);
+        action.set = Some(set.into());
+        app.session.actions.list.push(action);
+    }
+    let mut h = Harness::builder().with_size(vec2(360.0, 600.0)).build_ui_state(
+        |ui, app| {
+            panel_menu(app, ui);
+            panel(app, ui);
+        },
+        app,
+    );
+    h.run_steps(2);
+    h.get_by_label("Web").click();
+    h.run_steps(2);
+    assert_eq!((h.state().ui.actions.selected, h.state().ui.actions.selected_set.as_deref()), (None, Some("Web")));
+    h.get_by_label("Save Actions…").click();
+    h.run_steps(2);
+    h.state_mut().poll_file_dialog(&egui::Context::default(), None);
+    assert!(matches!(asked.borrow().as_slice(), [crate::file_dialog::FileDialogRequest::Save { suggested }] if suggested == "Web.atn"), "{:?}", asked.borrow());
+}
+
 #[test]
 fn moving_an_action_next_to_another_set_joins_it() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
