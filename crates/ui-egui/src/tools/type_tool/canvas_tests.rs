@@ -2179,7 +2179,7 @@ mod multi_layer_formatting {
         let (app, ids) = fixture();
         let before = ids.map(|id| style(&app, id, 0));
         let mut h = controls(app, false);
-        h.get_all_by_role(Role::ComboBox).next().unwrap().click();
+        h.get_all_by_role(Role::TextInput).next().unwrap().click();
         h.run();
         h.get_by_role(Role::TextInput).type_text("JetBrains");
         h.key_press(egui::Key::ArrowDown);
@@ -2202,7 +2202,7 @@ mod multi_layer_formatting {
             assert_eq!(style(h.state(), ids[i], 0), expected, "family changes preserve each peer's face and metrics");
         }
         assert_eq!(style(h.state(), ids[2], 0), before[2]);
-        h.get_all_by_role(Role::ComboBox).nth(2).unwrap().click();
+        h.get_all_by_role(Role::ComboBox).find(|n| n.value().as_deref() == Some("Smooth")).unwrap().click();
         h.run();
         h.get_by_label("Sharp").click();
         h.run();
@@ -2215,6 +2215,57 @@ mod multi_layer_formatting {
         }
         assert_eq!(text(h.state(), ids[2]).orientation, Orientation::Horizontal);
         assert_ne!(text(h.state(), ids[2]).antialias, AntiAlias::Sharp);
+    }
+
+    /// The family field and the style menu describe the selected run, not the layer's first run
+    /// (#9024), whichever way the selection was made; without a selection the first run shows, and
+    /// without a type target the tool defaults. Showing them never adds history. "Mé Regular" has
+    /// a two-byte `é`, so a byte offset taken for a character offset picks the wrong run.
+    #[test]
+    fn options_bar_font_and_style_follow_the_selected_run() {
+        let mut app = new_app();
+        let id = LayerId(
+            app.run("type.create", json!({"text": "Mé Regular", "font": "Inter", "fontStyle": "Medium", "size": 20, "x": 300, "y": 420})).unwrap()["layer"]
+                .as_u64()
+                .unwrap(),
+        );
+        app.run("type.setStyle", json!({"layer": id.0, "range": [3, 10], "font": "JetBrains Mono", "fontStyle": "Regular"})).unwrap();
+        assert_eq!((style(&app, id, 0).font_family.as_str(), style(&app, id, 5).font_family.as_str()), ("Inter", "JetBrains Mono"));
+        let edit = |anchor: usize, caret: usize| crate::state::TextEdit {
+            layer: id.0,
+            document: None,
+            caret,
+            anchor,
+            session: "s".into(),
+            created: false,
+            mask: false,
+            dragging: false,
+            resize: None,
+            preedit: None,
+        };
+        let mut h = controls(app, false);
+        let shown = |h: &Harness<'static, PhotocraftApp>| {
+            (h.get_all_by_role(Role::TextInput).next().and_then(|n| n.value()).unwrap_or_default(), h.get_by_role_and_label(Role::ComboBox, "Style").value())
+        };
+        let steps = super::history_len(&h);
+        let (inter, mono) = (("Inter".to_string(), Some("Medium".to_string())), ("JetBrains Mono".to_string(), Some("Regular".to_string())));
+        for (anchor, caret, want) in [(3, 10, &mono), (10, 3, &mono), (0, 2, &inter), (2, 0, &inter)] {
+            h.state_mut().ui.text_edit = Some(edit(anchor, caret));
+            h.run_steps(4);
+            assert_eq!(&shown(&h), want, "selection {anchor}..{caret}");
+        }
+        // Ending the edit keeps the whole-layer rule: the layer is still selected, its style is the
+        // first run's (Medium) and, the runs using two families, the family field is blank.
+        h.state_mut().ui.text_edit = None;
+        h.run_steps(4);
+        assert_eq!(shown(&h), (String::new(), inter.1.clone()), "no edit: first run's style, mixed family blank");
+        assert_eq!(super::history_len(&h), steps, "displaying the controls adds no history");
+        // Control: no type target shows the tool defaults.
+        h.state_mut().run("layer.new.layer", json!({})).unwrap();
+        h.state_mut().ui.tool_options.type_font = "JetBrains Mono".into();
+        h.state_mut().ui.tool_options.type_style = "Regular".into();
+        h.run_steps(4);
+        assert_eq!(shown(&h), mono, "no type target: the tool defaults");
     }
 
     /// Other engines registering fonts and the served catalog growing (tests running in parallel)
@@ -2239,7 +2290,7 @@ mod multi_layer_formatting {
         );
         PhotocraftApp::setup_context(&h.ctx, Default::default());
         h.run_steps(4);
-        h.get_all_by_role(Role::ComboBox).next().unwrap().click();
+        h.get_all_by_role(Role::TextInput).next().unwrap().click();
         // The font menu's search caret repaints every pass; step a bounded number of times.
         h.run_steps(2);
         h.run_steps(2);
@@ -2254,9 +2305,9 @@ mod multi_layer_formatting {
         let pick = super::super::styles("Inter").into_iter().find(|s| s != "Regular" && s != "Bold Italic").expect("Inter has several styles");
         assert_ne!(app.ui.tool_options.type_style, pick);
         let mut h = controls(app, true);
-        h.get_all_by_role(Role::ComboBox).next().unwrap().click();
+        h.get_all_by_role(Role::TextInput).next().unwrap().click();
         h.run();
-        h.get_all_by_role(Role::TextInput).find(|n| n.is_focused()).expect("the search field has the focus").type_text("Inter");
+        h.get_all_by_role(Role::TextInput).find(|n| n.is_focused()).expect("the family field has the focus").type_text("Inter");
         h.run();
         h.get_all_by_label("Show Styles").next().unwrap().click();
         h.run();

@@ -229,6 +229,7 @@ fn show_modal<T>(
     ctx: &egui::Context,
     id: egui::Id,
     resizable: Option<(egui::Vec2, egui::Vec2, egui::Vec2)>,
+    fixed: Option<egui::Vec2>,
     interactive: bool,
     contents: impl FnOnce(&mut egui::Ui) -> T,
 ) -> egui::ModalResponse<T> {
@@ -237,7 +238,12 @@ fn show_modal<T>(
         if !interactive {
             ui.disable();
         }
-        if let Some((size, min, max)) = resizable {
+        if let Some(size) = fixed {
+            egui::Resize::default().id(id.with("resize")).with_stroke(false).fixed_size(size).show(ui, |ui| {
+                ui.set_clip_rect(ui.clip_rect().expand(8.0));
+                contents(ui)
+            })
+        } else if let Some((size, min, max)) = resizable {
             // No stroke: Resize outlines its contents 2 points out, an inner box inside the
             // dialog's frame that left the title and buttons flush against it (#8199).
             egui::Resize::default().id(id.with("resize")).with_stroke(false).default_size(size.min(max)).min_size(min).max_size(max).show(ui, contents)
@@ -324,7 +330,14 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
         _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
-        _ if fields.contains_key("__form") => crate::view_cmds::form_body(ui, fields),
+        _ if fields.contains_key("__form") => {
+            if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
+                let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
+                egui::ScrollArea::vertical().id_salt(("file-info-body", d.id)).max_height(room).show(ui, |ui| crate::view_cmds::form_body(ui, fields));
+            } else {
+                crate::view_cmds::form_body(ui, fields);
+            }
+        }
         _ => {}
     }
     outcome
@@ -349,7 +362,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
             }
         }
         DialogKind::About => {
-            // Tabs About · Contributors · Models (craftrules standards/contributors.md). The
+            // Tabs About · Contributors · Models. The
             // tab is a dialog field, so automation can switch it with `ui.dialog.set`.
             let tab = about_tab(fields);
             let mut chosen = tab;
@@ -367,7 +380,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
             about_tab_body(app, ui, chosen);
         }
         DialogKind::Command => outcome = command_body(app, ui, d, fields, id, interactive),
-        DialogKind::LayerStyle => crate::layer_style::body(app, ui, fields),
+        DialogKind::LayerStyle => outcome = crate::layer_style::body_with_response(app, ui, fields, interactive),
         DialogKind::Error => {
             ui.label(fields.get("message").and_then(Value::as_str).unwrap_or("Error"));
         }
@@ -584,7 +597,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             (remembered.unwrap_or(size), min, resizable_max(ctx, &fields, min))
         });
         let mut given = None;
-        let modal = show_modal(modal, ctx, id, resize, interactive, |ui| {
+        let fixed = (d.kind == DialogKind::LayerStyle)
+            .then(|| egui::vec2(800.0, 550.0).min((ctx.content_rect().size() - egui::vec2(40.0, 40.0)).max(egui::vec2(640.0, 360.0))));
+        let modal = show_modal(modal, ctx, id, resize, fixed, interactive, |ui| {
             sizing = ui.is_sizing_pass();
             let available = ui.available_size();
             given = Some(available);
@@ -611,7 +626,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_min_width(700.0);
             }
             ui.set_max_width(wide.unwrap_or_else(|| default_max_width(&d, compact, curves, about_tabs, available.x)));
-            if web {
+            if web || fixed.is_some() {
                 ui.set_max_width(available.x);
                 ui.set_min_size(available);
             } else if let Some(w) = crate::file_ui::dialog_width(&d.fields) {
@@ -625,7 +640,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_max_width(360.0);
             }
             if color_picker {
-                ui.set_width(crate::color_picker_ui::CONTENT_WIDTH);
+                ui.set_width(crate::color_picker_ui::content_width(ui));
             }
             let label = egui::Label::new(egui::RichText::new(&title).font(crate::theme::semibold(15.0))).selectable(false);
             let t = if crate::color_picker_ui::owns(&fields) { ui.add_sized(egui::vec2(ui.available_width(), 22.0), label).rect } else { ui.add(label).rect };
@@ -651,7 +666,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             if let Some(Value::String(key)) = fields.remove(BROWSE_FIELD) {
                 browse_field(app, d.id, &fields, &key);
             }
-            if crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) {
+            if d.kind == DialogKind::LayerStyle || crate::guide_layout_ui::owns(&fields) || crate::brush_preset_dialog::owns(&fields) {
                 // These dialogs own their right-side actions and validate Enter themselves.
             } else if crate::color_picker_ui::owns(&fields) {
                 if interactive && outcome.is_none() && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
@@ -689,7 +704,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.data_mut(|m| m.insert_persisted(size_id(place), size));
         }
         // Pin once laid out at its real size (the first frame is an invisible sizing pass).
-        if !sizing && (web || pinned.is_none() || drag != egui::Vec2::ZERO) {
+        if !sizing && (web || fixed.is_some() || pinned.is_none() || drag != egui::Vec2::ZERO) {
             let screen = ctx.content_rect();
             // Keep the whole dialog (and so its title bar) on screen.
             let room = (screen.size() - modal.response.rect.size()).max(egui::Vec2::ZERO);
@@ -771,6 +786,11 @@ fn about_tab_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, tab: &str) {
 
 /// The dialog title as shown: [`title`] in the UI language.
 fn display_title(d: &Dialog) -> String {
+    match d.fields.get("__colorPicker").and_then(Value::as_str) {
+        Some("foreground") => return crate::color_picker_ui::fixed_title("Color Picker (Foreground Color)", "Foreground Color"),
+        Some("background") => return crate::color_picker_ui::fixed_title("Color Picker (Background Color)", "Background Color"),
+        _ => {}
+    }
     if crate::smart_filter_dialog::owns(&d.fields) {
         return crate::smart_filter_dialog::title(&d.fields);
     }
@@ -1122,6 +1142,7 @@ pub mod rasterize_prompt;
 pub mod replace_prompt;
 pub(super) mod rgb_histogram;
 pub mod screen_picker;
+pub mod select_mask_ui;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
 pub(super) mod sizing;

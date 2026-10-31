@@ -127,7 +127,12 @@ impl LiquifyOpts {
             };
         }
         if let Some(t) = v.get("tool") {
-            self.tool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
+            let tool: LiquifyTool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
+            // Strokes can twirl counterclockwise, but no tool does: hold Alt with Twirl Clockwise.
+            if !LiquifyTool::ALL.contains(&tool) {
+                return Err(format!("{t} is not a Liquify tool: choose twirlCw and hold Alt (Option) to twirl counterclockwise"));
+            }
+            self.tool = tool;
         }
         Ok(())
     }
@@ -653,8 +658,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     Ok(d.describe())
 }
 
-/// Photoshop's Alt (Option) variant of a Liquify brush: the twirls reverse direction and Pucker
-/// and Bloat swap. Other tools are unchanged.
+/// The Alt (Option) variant of a Liquify brush: Twirl Clockwise twirls counterclockwise (the
+/// reference application has no separate counterclockwise tool) and Pucker and Bloat swap.
+/// Other tools are unchanged.
 fn alt_tool(t: LiquifyTool) -> LiquifyTool {
     match t {
         LiquifyTool::TwirlCw => LiquifyTool::TwirlCcw,
@@ -674,17 +680,17 @@ fn brush_circle_at(resize: Option<(Pos2, f32, f32)>, hover: Option<Pos2>) -> Opt
 
 /// Alt+right-drag, and Control+Alt-drag, change the Liquify brush instead of painting (#4702).
 fn brush_resize_gesture(mods: egui::Modifiers, secondary: bool) -> bool {
-    mods.alt && (secondary || mods.ctrl)
+    if secondary { crate::brush_resize::is_right_gesture(mods) } else { crate::brush_resize::is_gesture(mods) }
 }
 
 /// Horizontal motion sets the diameter (the circle's edge follows the pointer). Vertical motion
 /// sets density, Liquify's edge falloff, over the same 200 px travel the canvas uses for hardness.
-fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32) -> (f32, f32) {
-    let dx = if dx.is_finite() { dx } else { 0.0 };
-    let dy = if dy.is_finite() { dy } else { 0.0 };
-    let size = (start_size + dx).round().clamp(1.0, 15000.0);
-    let density = (start_density + dy * 100.0 / crate::brush_resize::HARDNESS_TRAVEL).clamp(0.0, 100.0);
-    (size, (density * 10.0).round() / 10.0)
+fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32, zoom: f32) -> (f32, f32) {
+    // Liquify stores density as 0–100; the shared brush gesture works on normalized hardness.
+    // Use the same zoom-corrected screen movement and size limits as the main canvas.
+    let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    let (size, density) = crate::brush_resize::resized((start_size, start_density / 100.0), f64::from(dx / zoom), f64::from(dy / zoom), zoom);
+    (size, (density * 100.0).round())
 }
 
 /// Pointer in document coordinates (from the preview or the control channel). Alt at
@@ -794,7 +800,6 @@ fn tool_icon(t: LiquifyTool) -> &'static str {
         LiquifyTool::Reconstruct => "brush-cleaning",
         LiquifyTool::Smooth => "droplet",
         LiquifyTool::TwirlCw => "rotate-cw",
-        LiquifyTool::TwirlCcw => "undo-2",
         LiquifyTool::Pucker => "scan",
         LiquifyTool::Bloat => "maximize-2",
         LiquifyTool::PushLeft => "chevrons-left",
@@ -1152,9 +1157,27 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // started, so only its size changes (#7884).
         if let Some(hp) = brush_circle_at(d.brush_resize, resp.hover_pos()) {
             if d.opts.tool != LiquifyTool::LassoMask {
+                let center = d.brush_resize.map_or(hp, |(anchor, _, _)| anchor);
                 let r = d.opts.size * 0.5 * d.zoom;
-                clip.circle_stroke(hp, r, Stroke::new(1.5, Color32::BLACK));
-                clip.circle_stroke(hp, r, Stroke::new(0.75, Color32::WHITE));
+                if d.brush_resize.is_some() {
+                    crate::brush_resize::liquify_tip_preview(
+                        &clip,
+                        center,
+                        r,
+                        d.opts.density / 100.0,
+                        Color32::from_rgba_unmultiplied(t.accent.r(), t.accent.g(), t.accent.b(), 110),
+                    );
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                    crate::canvas::draw_readout(
+                        ui.ctx(),
+                        "liquify-brush-resize-readout",
+                        hp,
+                        [tl!("Diameter:"), tl!("Density:")],
+                        [format!("{} px", d.opts.size.round() as i64), format!("{}%", d.opts.density.round() as i64)],
+                    );
+                }
+                clip.circle_stroke(center, r, Stroke::new(1.5, Color32::BLACK));
+                clip.circle_stroke(center, r, Stroke::new(0.75, Color32::WHITE));
             }
             d.hover = Some(to_doc(d, area, hp));
         }
@@ -1175,13 +1198,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             if let (Some((anchor, size0, dens0)), Some(p)) = (d.brush_resize, resp.interact_pointer_pos()) {
                 let delta = p - anchor;
-                let (size, density) = resized_brush(size0, dens0, delta.x, delta.y);
+                let (size, density) = resized_brush(size0, dens0, delta.x, delta.y, d.zoom);
                 d.opts.size = size;
                 d.opts.density = density;
             }
             if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
                 d.brush_resize = None;
             }
+            ctx.request_repaint();
         } else if pan && resp.dragged() {
             let dl = resp.drag_delta();
             d.center = [d.center[0] - f64::from(dl.x / d.zoom), d.center[1] - f64::from(dl.y / d.zoom)];
