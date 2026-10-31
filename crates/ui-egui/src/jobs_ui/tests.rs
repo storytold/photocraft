@@ -1105,23 +1105,23 @@ fn the_progress_bar_fill_mirrors() {
     let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(100.0, 8.0));
     {
         let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
-        let fill = super::bar_fill(rect, Some(0.4), 0.0);
+        let fill = crate::widgets::progress_fill(rect, 0.4, rect.height());
         assert!((fill.left() - 0.0).abs() < 0.01 && (fill.right() - 40.0).abs() < 0.01, "LTR: {fill:?}");
     }
     {
         let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
-        let fill = super::bar_fill(rect, Some(0.4), 0.0);
+        let fill = crate::widgets::progress_fill(rect, 0.4, rect.height());
         assert!((fill.left() - 60.0).abs() < 0.01 && (fill.right() - 100.0).abs() < 0.01, "RTL: {fill:?}");
     }
     // The indeterminate segment slides toward the reading end: left in LTR, right in RTL.
     {
         let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
-        let fill = super::bar_fill(rect, None, 0.3125);
+        let fill = crate::widgets::progress_travel(rect, 0.3125);
         assert!((fill.left() - 2.5).abs() < 0.01 && (fill.right() - 32.5).abs() < 0.01, "LTR: {fill:?}");
     }
     {
         let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
-        let fill = super::bar_fill(rect, None, 0.3125);
+        let fill = crate::widgets::progress_travel(rect, 0.3125);
         assert!((fill.left() - 67.5).abs() < 0.01 && (fill.right() - 97.5).abs() < 0.01, "RTL: {fill:?}");
     }
     // A track that does not start at the origin: the RTL segment mirrors the LTR one about the
@@ -1129,11 +1129,11 @@ fn the_progress_bar_fill_mirrors() {
     let track = egui::Rect::from_min_size(egui::pos2(1100.0, 0.0), egui::vec2(140.0, 8.0));
     let ltr_fill = {
         let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
-        super::bar_fill(track, None, 0.3125)
+        crate::widgets::progress_travel(track, 0.3125)
     };
     let rtl_fill = {
         let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
-        super::bar_fill(track, None, 0.3125)
+        crate::widgets::progress_travel(track, 0.3125)
     };
     assert!(rtl_fill.left() >= track.left() && rtl_fill.right() <= track.right(), "RTL: the segment stays inside the track: {rtl_fill:?} in {track:?}");
     let mirrored_left = track.left() + track.right() - ltr_fill.right();
@@ -1149,13 +1149,13 @@ fn the_tab_progress_underline_mirrors() {
     let line = egui::Rect::from_min_size(egui::pos2(1100.0, 20.0), egui::vec2(140.0, 2.0));
     {
         let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
-        let fill = super::tab_fill(line, 0.4);
+        let fill = crate::widgets::progress_fill(line, 0.4, 0.0);
         assert!((fill.left() - line.left()).abs() < 0.01, "LTR: the underline starts at the line's left: {fill:?}");
         assert!((fill.width() - line.width() * 0.4).abs() < 0.01, "LTR: the underline keeps its width: {fill:?}");
     }
     {
         let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
-        let fill = super::tab_fill(line, 0.4);
+        let fill = crate::widgets::progress_fill(line, 0.4, 0.0);
         assert!((fill.right() - line.right()).abs() < 0.01, "RTL: the underline ends at the line's right: {fill:?}");
         assert!((fill.width() - line.width() * 0.4).abs() < 0.01, "RTL: the underline keeps its width: {fill:?}");
     }
