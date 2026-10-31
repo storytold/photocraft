@@ -720,35 +720,29 @@ fn statistics(ui: &mut egui::Ui, h: &Histograms, mode: ColorMode, channel: HistC
         (tl!("Pixels:"), s.pixels.to_string(), tl!("Cache Level:"), h.level.max(1).to_string()),
     ];
     let mono = crate::theme::mono(11.5);
-    // The grid gets a scope of its own: under the right-to-left body layout the grid's inner
-    // row mirrors and starts at an infinite x, off the panel. The scope takes the space left
-    // below the graph, not the body's whole rect, which starts at the top of the panel.
-    let grid_rect = ui.available_rect_before_wrap();
-    ui.scope_builder(egui::UiBuilder::new().max_rect(grid_rect).layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
-        egui::Grid::new("hist-stats").num_columns(4).spacing(vec2(6.0, 2.0)).show(ui, |ui| {
-            for (k1, v1, k2, v2) in &rows {
-                // The pairs swap places in a right-to-left UI: the first pair reads first,
-                // from the right.
-                let mut pairs = [(k1, v1), (k2, v2)];
-                if crate::direction::is_rtl() {
-                    pairs.reverse();
-                }
-                for (k, v) in pairs {
-                    crate::direction::grid_cells(
-                        ui,
-                        |ui| {
-                            ui.with_layout(crate::direction::trailing(), |ui| {
-                                ui.label(egui::RichText::new(*k).color(t.text_dim).size(11.5));
-                            });
-                        },
-                        |ui| {
-                            ui.label(egui::RichText::new(v.as_str()).font(mono.clone()).color(t.text));
-                        },
-                    );
-                }
-                ui.end_row();
+    // The grid runs in an LTR scope (the fork's placer never sees an RTL cursor); the pairs
+    // still swap places in a right-to-left UI: the first pair reads first, from the right.
+    crate::direction::ltr_grid(ui, "hist-stats", 4, vec2(6.0, 2.0), |ui| {
+        for (k1, v1, k2, v2) in &rows {
+            let mut pairs = [(k1, v1), (k2, v2)];
+            if crate::direction::is_rtl() {
+                pairs.reverse();
             }
-        });
+            for (k, v) in pairs {
+                crate::direction::grid_cells(
+                    ui,
+                    |ui| {
+                        ui.with_layout(crate::direction::trailing(), |ui| {
+                            ui.label(egui::RichText::new(*k).color(t.text_dim).size(11.5));
+                        });
+                    },
+                    |ui| {
+                        ui.label(egui::RichText::new(v.as_str()).font(mono.clone()).color(t.text));
+                    },
+                );
+            }
+            ui.end_row();
+        }
     });
 }
 
