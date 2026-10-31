@@ -175,19 +175,19 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Points along the bar, away from the zoom field.
     icons::paint(ui, r, "chevron-right", 11.0, t.text_dim);
     let resp = resp.on_hover_text(tl!("Show"));
-    egui::Popup::menu(&resp)
-        .align(crate::direction::below())
-        .show(|ui| {
+    egui::Popup::menu(&resp).align(crate::direction::below()).show(|ui| {
+        crate::menus::popup_body(ui, |ui| {
             crate::widgets::style_spectrum_popup_menu(ui);
             ui.set_min_width(200.0);
             for (key, label) in STATUS_INFO {
                 let on = app.ui.chrome.status_info == *key;
-                if ui.add(egui::Button::selectable(on, *label)).clicked() {
+                if crate::menu_keys::menu_row(ui, label, None, on, true).clicked() {
                     app.ui.chrome.status_info = (*key).to_string();
                     ui.close();
                 }
             }
         });
+    });
     status_message(app, ui, &t);
 }
 
@@ -589,5 +589,52 @@ mod tests {
         for (k, _) in STATUS_INFO {
             assert!(!status_info_text(&d, k, "x", "p").is_empty());
         }
+    }
+
+    /// The status-info popup's rows go through the shared popup body + `menu_row`: under RTL the
+    /// checked row's label hugs the popup's right edge, under LTR the left edge.
+    #[test]
+    fn status_info_popup_rows_mirror_only_under_rtl() {
+        let texts = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == crate::direction::Dir::Rtl);
+            let mut popup = egui::Rect::NOTHING;
+            let mut texts = Vec::new();
+            for _ in 0..3 {
+                let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    let btn = ui.button("show");
+                    let _ = egui::Popup::menu(&btn)
+                        .open_memory(Some(egui::SetOpenCommand::Bool(true)))
+                        .show(|ui| {
+                            crate::menus::popup_body(ui, |ui| {
+                                ui.set_min_width(200.0);
+                                for (_, label) in STATUS_INFO {
+                                    let _ = crate::menu_keys::menu_row(ui, label, None, false, true);
+                                }
+                            });
+                        })
+                        .inspect(|r| popup = r.response.rect);
+                });
+                texts = out
+                    .shapes
+                    .iter()
+                    .filter_map(|cs| match &cs.shape {
+                        egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                        _ => None,
+                    })
+                    .collect();
+                out.textures_delta.clear();
+            }
+            (popup, texts)
+        };
+        let (rtl_popup, rtl) = texts(crate::direction::Dir::Rtl);
+        let (ltr_popup, ltr) = texts(crate::direction::Dir::Ltr);
+        assert!(rtl_popup.is_positive() && ltr_popup.is_positive(), "the popups opened");
+        let at = |v: &[(String, egui::Rect)]| v.iter().find(|(t, _)| t.contains("Efficiency")).map(|(_, r)| *r).unwrap_or(egui::Rect::NOTHING);
+        let row = at(&rtl);
+        assert!(rtl_popup.right() - row.right() < 32.0, "rtl: the row label hugs the popup's right edge: {row:?} in {rtl_popup:?}");
+        let row = at(&ltr);
+        assert!(row.left() - ltr_popup.left() < 32.0, "ltr: the row label hugs the popup's left edge: {row:?} in {ltr_popup:?}");
     }
 }
