@@ -366,7 +366,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
                 app.ui.status_error = true;
                 return;
             }
-            if !sets_source && crate::rasterize_prompt::intercept(app, tool, x, y, pressure) {
+            if !sets_source && (crate::rasterize_prompt::intercept(app, tool, x, y, pressure) || refuse_group(app, tool)) {
                 return;
             }
             // ⌘ with a selection tool is the Move tool for the drag: outside the selection (or
@@ -597,6 +597,21 @@ fn hidden_target(app: &PhotocraftApp, tool: Tool) -> Option<&'static str> {
         _ => return None,
     };
     photocraft_engine::hidden_target::refusal(&app.session, cmd, &json!({}))
+}
+
+/// A press with `tool` that would paint the pixels of a group (the active layer, with neither its
+/// mask, an alpha channel nor the Quick Mask targeted): a group has none, so refuse it with
+/// Photoshop's message instead of drawing a stroke that vanishes on release with only a
+/// status-bar note (#10074). Returns whether it was refused.
+fn refuse_group(app: &mut PhotocraftApp, tool: Tool) -> bool {
+    let group = crate::rasterize_prompt::paints_pixels(app, tool)
+        && paint_target(app) == json!("pixels")
+        && app.session.active().and_then(|st| st.doc.layer(st.active_layer?)).is_some_and(photocraft_doc::Layer::is_group);
+    if group {
+        let message = crate::i18n::fmt(tl!("Could not use the {tool} because the target layer is a group."), &[("tool", tl!(tool.label()))]);
+        app.ui.open_dialog(crate::state::DialogKind::Error, json!({"message": message}).as_object().cloned().unwrap_or_default());
+    }
+    group
 }
 
 /// Is document point `p` inside the active document's selection?
