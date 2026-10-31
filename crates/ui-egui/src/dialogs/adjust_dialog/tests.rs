@@ -467,6 +467,14 @@ fn curves_auto_on_a_fully_transparent_layer_changes_nothing() {
     assert_eq!(after["points"], points);
 }
 
+/// CodeRabbit on #9237: the same for Levels' Auto, whose points Curves' Auto shares.
+#[test]
+fn levels_auto_on_a_fully_transparent_layer_changes_nothing() {
+    let (before, after) = auto_on_a_transparent_layer("levels", "inBlack", json!(20.0));
+    assert_eq!(after, before);
+    assert_eq!(after["inBlack"], json!(20.0));
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
