@@ -41,7 +41,7 @@ fn channel_eyes_reuse_composite_until_pixels_change() {
     app.sync_views();
     let ctx = egui::Context::default();
     app.run("channel.setVisible", json!({"channel": "red", "visible": false})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert!(ensure(&mut app, &ctx, 0, None).is_some());
     let id = app.session.active().unwrap().doc.id.0;
     let first = app.channel_views.get_mut(&id).unwrap().source.as_mut().unwrap();
     let original_sample = first.pixels[0];
@@ -49,19 +49,19 @@ fn channel_eyes_reuse_composite_until_pixels_change() {
     first.pixels[0] = [0.0, 1.0, 0.0, 1.0];
 
     app.run("channel.setVisible", json!({"channel": "green", "visible": false})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert!(ensure(&mut app, &ctx, 0, None).is_some());
     let reused = app.channel_views.get(&id).unwrap().source.as_ref().unwrap();
     assert_eq!(reused.pixels[0], [0.0, 1.0, 0.0, 1.0], "visibility does not recompose the pixels");
 
     app.run("edit.fill", json!({"color": "#e02010"})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert!(ensure(&mut app, &ctx, 0, None).is_some());
     // A partial damage upload discards the source; a full redraw may replace it.
     // In either case, cached samples must never refer to the pre-edit pixels.
     if let Some(source) = app.channel_views.get(&id).unwrap().source.as_ref() {
         assert_ne!(source.pixels[0], original_sample, "a full redraw replaces stale pixels");
     }
     app.run("channel.setVisible", json!({"channel": "red", "visible": true})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert!(ensure(&mut app, &ctx, 0, None).is_some());
     let refreshed = app.channel_views.get(&id).unwrap().source.as_ref().unwrap();
     let st = app.session.active().unwrap();
     assert_eq!(refreshed.revision, st.revision);
@@ -75,7 +75,7 @@ fn channel_eyes_reuse_composite_until_pixels_change() {
         1,
         Look::default(),
         st.active_layer,
-        CompositeSource { cached: Some(&refreshed.pixels), fresh: &mut unused },
+        CompositeSource { cached: Some(&refreshed.pixels), fresh: &mut unused, screen: &Screen::default() },
     )
     .unwrap();
     assert_eq!(actual, expected, "reused pixels must preserve channel colours");
@@ -285,15 +285,15 @@ fn ensure_honours_show_channels_in_color() {
     app.sync_views();
     app.run("channel.target", json!({"channel": "green"})).unwrap();
     let ctx = egui::Context::default();
-    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert!(ensure(&mut app, &ctx, 0, None).is_some());
     let key_off = app.channel_views.values().next().unwrap().key;
     app.session.execute("prefs.set", json!({"values": {"interface.showChannelsInColor": true}})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert!(ensure(&mut app, &ctx, 0, None).is_some());
     let key_on = app.channel_views.values().next().unwrap().key;
     assert_ne!(key_off, key_on, "the preference changes the cached view key");
     // So do the Layer Mask Display Options.
     app.session.execute("channel.options", json!({"channel": "mask", "color": "#00ff00", "opacity": 70})).unwrap();
-    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert!(ensure(&mut app, &ctx, 0, None).is_some());
     assert_ne!(app.channel_views.values().next().unwrap().key, key_on, "the overlay options change the cached view key");
 }
 
@@ -387,16 +387,83 @@ fn spot_eyes_overprint_the_composite() {
                         let w = [q(w[0]), q(w[1]), q(w[2])];
                         assert_eq!([got.r(), got.g(), got.b()], w, "{mode:?} {depth:?} s {sa}/{sb} swapped {swapped} x {x}");
                     }
-                    // Only the visible ink prints.
+                    // Only the visible ink prints; where it has none the canvas shows through.
                     v.set_alpha_visible(1, false);
                     let one = render(&doc, &v, doc.bounds(), 1, Look::default(), None).unwrap();
                     let mut want = photocraft_compose::Buffer { rect: doc.bounds(), px: composite(&doc, doc.bounds(), 1) };
                     photocraft_compose::multichannel::overprint(&mut want, &doc, |i| i == 0);
-                    assert_eq!([one[0].r(), one[0].g(), one[0].b()], [q(want.px[0][0]), q(want.px[0][1]), q(want.px[0][2])]);
+                    let (solid, bare) = if swapped { (2, 0) } else { (0, 2) };
+                    let w = want.px[solid];
+                    assert_eq!([one[solid].r(), one[solid].g(), one[solid].b()], [q(w[0]), q(w[1]), q(w[2])]);
+                    assert_eq!(one[bare], Color32::TRANSPARENT);
                 }
             }
         }
     }
+}
+
+/// Only inked pixels replace the canvas: where every visible spot is 0 the overlay stays
+/// transparent, so the normal (colour-managed, full-resolution) canvas shows there, and an empty
+/// spot channel renders no composite at all.
+#[test]
+fn uninked_pixels_leave_the_canvas_alone() {
+    for factor in [1, 2] {
+        let mut doc = spot_doc(ColorMode::Rgb, photocraft_color::SampleType::U8, 1.0, 1.0);
+        doc.size = photocraft_geom::Size::new(4, 2);
+        let fmt = doc.channels[0].surface.format();
+        let mut sparse = Surface::new(fmt);
+        sparse.write_pixel(0, 0, &[1.0]);
+        doc.channels[0].surface = sparse;
+        doc.channels[1].surface = Surface::new(fmt);
+        let mut v = ChannelView::default();
+        v.set_alpha_visible(0, true);
+        v.set_alpha_visible(1, true);
+        let px = render(&doc, &v, doc.bounds(), factor, Look::default(), None).unwrap();
+        assert_eq!(px[0], Color32::from_rgb(0, q(0.6), q(0.65)), "/{factor}: solid teal where the ink is");
+        assert!(px[1..].iter().all(|p| *p == Color32::TRANSPARENT), "/{factor}: {px:?}");
+        // Only the empty spot shown: nothing to print, and no composite rendered for it.
+        v.set_alpha_visible(0, false);
+        let mut fresh = None;
+        let px = render_with_source(
+            &doc,
+            &v,
+            doc.bounds(),
+            factor,
+            Look::default(),
+            None,
+            CompositeSource { cached: None, fresh: &mut fresh, screen: &Screen::default() },
+        )
+        .unwrap();
+        assert!(px.iter().all(|p| *p == Color32::TRANSPARENT));
+        assert!(fresh.is_none(), "/{factor}: an empty spot needs no composite");
+    }
+}
+
+/// Printed inks go through the canvas display transform (monitor profile, Proof Colors), as the
+/// canvas around them does.
+#[test]
+fn printed_inks_follow_the_display_transform() {
+    use photocraft_cms::{Builtin, TransformOptions};
+    let doc = spot_doc(ColorMode::Rgb, photocraft_color::SampleType::U8, 1.0, 1.0);
+    let mut v = ChannelView::default();
+    v.set_alpha_visible(0, true);
+    let plain = render(&doc, &v, doc.bounds(), 1, Look::default(), None).unwrap();
+    let t = photocraft_cms::transform::cached(Builtin::Srgb.profile(), Builtin::DisplayP3.profile(), TransformOptions::default()).unwrap();
+    let screen = Screen { encode_srgb: false, transform: Some(t.clone()) };
+    let shown =
+        render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { cached: None, fresh: &mut None, screen: &screen }).unwrap();
+    // x 0: solid teal; x 2: no ink of channel 0, so transparent either way.
+    let mut teal = [0.0f32, 0.6, 0.65, 1.0];
+    t.apply(&mut teal, 4);
+    assert_ne!(plain[0], shown[0]);
+    assert_eq!(shown[0], Color32::from_rgb(q(teal[0]), q(teal[1]), q(teal[2])));
+    assert_eq!((plain[2], shown[2]), (Color32::TRANSPARENT, Color32::TRANSPARENT));
+    // A linear composite is sRGB-encoded on its way to the screen.
+    let encoded = Screen { encode_srgb: true, transform: None };
+    let shown =
+        render_with_source(&doc, &v, doc.bounds(), 1, Look::default(), None, CompositeSource { cached: None, fresh: &mut None, screen: &encoded }).unwrap();
+    let enc = photocraft_color::convert::linear_to_srgb;
+    assert_eq!(shown[0], Color32::from_rgb(0, q(enc(0.6)), q(enc(0.65))));
 }
 
 /// Alpha channels and Quick Mask still tint, over the printed inks.
@@ -431,7 +498,7 @@ fn spot_edits_refresh_the_overlay() {
         let st = app.session.active().unwrap();
         render(&st.doc, &st.channel_view, st.doc.bounds(), 1, Look::default(), st.active_layer).map(|px| px[0])
     };
-    assert!(ensure(&mut app, &ctx, 0).is_some());
+    assert!(ensure(&mut app, &ctx, 0, None).is_some());
     assert_eq!(pixel(&app), Some(Color32::from_rgb(0, 255, 255)), "solid transparent cyan over white");
     let edits = [
         ("channel.options", json!({"channel": spot, "color": "#ff00ff"})),
@@ -443,7 +510,7 @@ fn spot_edits_refresh_the_overlay() {
     let mut last = pixel(&app);
     for (cmd, params) in edits {
         app.run(cmd, params.clone()).unwrap();
-        let shown = ensure(&mut app, &ctx, 0);
+        let shown = ensure(&mut app, &ctx, 0, None);
         let now = pixel(&app);
         assert_ne!(now, last, "{cmd} {params}");
         let revision = app.session.active().unwrap().revision;
@@ -508,8 +575,13 @@ fn proxy_composite_matches_the_full_resolution_one() {
                 let mut small = doc.clone();
                 small.channels.iter_mut().for_each(|c| c.surface = photocraft_compose::proxy::downsample(&c.surface, factor));
                 photocraft_compose::multichannel::overprint(&mut want, &small, |_| true);
+                let sw = want.rect.width();
+                let inked = |i: usize| {
+                    let (x, y) = ((i as u32 % sw) as i32, (i as u32 / sw) as i32);
+                    small.channels.iter().any(|c| c.surface.pixel(x, y).first().is_some_and(|v| *v > 0.0))
+                };
                 for (i, (g, w)) in got.iter().zip(&want.px).enumerate() {
-                    let w = Color32::from_rgba_premultiplied(q(w[0]), q(w[1]), q(w[2]), 255);
+                    let w = if inked(i) { Color32::from_rgba_premultiplied(q(w[0]), q(w[1]), q(w[2]), 255) } else { Color32::TRANSPARENT };
                     assert!(g.to_array().iter().zip(w.to_array()).all(|(a, b)| a.abs_diff(b) <= 1), "{mode:?} {depth:?} /{factor} px {i}: {g:?} != {w:?}");
                 }
             }

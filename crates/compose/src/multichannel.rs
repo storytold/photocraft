@@ -10,7 +10,10 @@
 //! transparent black ink, like the reference editor shows it. Its value is stored as-is
 //! (1 = selected, white in the Channels panel), so its ink is `1 − value`.
 
-use photocraft_cms::{Builtin, ColorSpace, Profile, TransformOptions};
+use std::sync::Arc;
+
+use photocraft_cms::{Builtin, ColorSpace, Profile, Transform, TransformOptions};
+use photocraft_color::convert::CmykSpace;
 use photocraft_color::{Color, ColorMode};
 use photocraft_doc::{AlphaChannel, Document};
 use photocraft_geom::Rect;
@@ -28,12 +31,9 @@ pub struct Ink {
 
 impl Ink {
     /// The ink of channel `ch` of `doc`: a spot channel's colour and solidity, an alpha channel's
-    /// transparent black.
+    /// transparent black. Printing several inks, build one [`InkSpace`] and use [`InkSpace::ink`].
     pub fn of(doc: &Document, ch: &AlphaChannel) -> Ink {
-        match ch.spot {
-            Some((color, solidity)) => Ink { rgb: ink_rgb(doc, color), solidity: solidity.clamp(0.0, 1.0), alpha: false },
-            None => Ink { rgb: [0.0; 3], solidity: 0.0, alpha: true },
-        }
+        InkSpace::of(doc).ink(ch)
     }
 
     /// Print this ink with channel values `values` (one per pixel) over the opaque `px`.
@@ -53,35 +53,63 @@ impl Ink {
     }
 }
 
-/// The display colour of spot colour `color` in `doc`'s composite space: RGB colours as stored,
-/// CMYK ones through the document's CMYK profile (the built-in coated CMYK otherwise), and
-/// CMYK, Lab and gray colours of an RGB document converted from sRGB into its own profile.
-pub fn ink_rgb(doc: &Document, color: Color) -> [f32; 3] {
-    if matches!(color.mode, ColorMode::Rgb | ColorMode::Indexed | ColorMode::Multichannel) {
-        return color.to_rgb();
+/// How spot colours of one document map into its composite space. Build it once per render:
+/// the document's profiles are parsed here, not per ink or per damage rect.
+pub struct InkSpace {
+    cmyk: Option<Arc<CmykSpace>>,
+    /// sRGB → an RGB document's own profile, when that differs from sRGB.
+    to_own: Option<Arc<Transform>>,
+}
+
+impl InkSpace {
+    pub fn of(doc: &Document) -> InkSpace {
+        let to_own = if doc.mode == ColorMode::Rgb {
+            doc.icc_profile
+                .as_ref()
+                .and_then(|b| Profile::parse(b).ok())
+                .filter(|p| p.color_space == ColorSpace::Rgb && !p.same_colors(Builtin::Srgb.profile()))
+                .and_then(|own| photocraft_cms::transform::cached(Builtin::Srgb.profile(), &own, TransformOptions::default()).ok())
+        } else {
+            None
+        };
+        InkSpace { cmyk: crate::cmyk_space(doc), to_own }
     }
-    let space = crate::cmyk_space(doc);
-    let mut rgb = photocraft_color::convert::with_cmyk_space(space.as_ref(), || color.to_rgb());
-    if doc.mode == ColorMode::Rgb
-        && let Some(own) = doc.icc_profile.as_ref().and_then(|b| Profile::parse(b).ok()).filter(|p| p.color_space == ColorSpace::Rgb)
-        && !own.same_colors(Builtin::Srgb.profile())
-        && let Ok(t) = photocraft_cms::transform::cached(Builtin::Srgb.profile(), &own, TransformOptions::default())
-    {
-        t.apply(&mut rgb, 3);
+
+    /// The ink of channel `ch`: a spot channel's colour and solidity, an alpha channel's
+    /// transparent black.
+    pub fn ink(&self, ch: &AlphaChannel) -> Ink {
+        match ch.spot {
+            Some((color, solidity)) => Ink { rgb: self.rgb(color), solidity: solidity.clamp(0.0, 1.0), alpha: false },
+            None => Ink { rgb: [0.0; 3], solidity: 0.0, alpha: true },
+        }
     }
-    rgb.map(|v| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) })
+
+    /// The display colour of spot colour `color` in the composite space: RGB colours as stored,
+    /// CMYK ones through the document's CMYK profile (the built-in coated CMYK otherwise), and
+    /// CMYK, Lab and gray colours of an RGB document converted from sRGB into its own profile.
+    pub fn rgb(&self, color: Color) -> [f32; 3] {
+        if matches!(color.mode, ColorMode::Rgb | ColorMode::Indexed | ColorMode::Multichannel) {
+            return color.to_rgb();
+        }
+        let mut rgb = photocraft_color::convert::with_cmyk_space(self.cmyk.as_ref(), || color.to_rgb());
+        if let Some(t) = &self.to_own {
+            t.apply(&mut rgb, 3);
+        }
+        rgb.map(|v| if v.is_nan() { 0.0 } else { v.clamp(0.0, 1.0) })
+    }
 }
 
 /// Print the channels `visible(i)` picks from `doc.channels` (in panel order) as inks over the
 /// opaque `buf`, reading them over `buf.rect`.
 pub fn overprint(buf: &mut Buffer, doc: &Document, visible: impl Fn(usize) -> bool) {
     let rect = buf.rect;
+    let space = InkSpace::of(doc);
     let mut vals = Vec::new();
     for (i, ch) in doc.channels.iter().enumerate() {
         if !visible(i) {
             continue;
         }
-        let ink = Ink::of(doc, ch);
+        let ink = space.ink(ch);
         // An empty alpha channel (all black) is solid black ink, so it can't be skipped.
         if !ink.alpha && ch.surface.content_bounds().intersect(&rect).is_empty() {
             continue;
@@ -122,8 +150,9 @@ pub fn thumbnail_with_inks(doc: &Document, max_side: u32) -> Buffer {
     if spots.is_empty() || w == 0 || h == 0 || buf.px.len() != w as usize * h as usize {
         return buf;
     }
+    let space = InkSpace::of(doc);
     let inks: Vec<(Ink, Vec<f32>)> =
-        spots.into_iter().filter_map(|i| doc.channels.get(i)).map(|ch| (Ink::of(doc, ch), reduce(&ch.surface, doc.bounds(), w, h))).collect();
+        spots.into_iter().filter_map(|i| doc.channels.get(i)).map(|ch| (space.ink(ch), reduce(&ch.surface, doc.bounds(), w, h))).collect();
     // Only pixels with ink are matted over white (the inks print on paper); the rest keep their
     // transparency.
     for (k, p) in buf.px.iter_mut().enumerate() {
@@ -310,9 +339,9 @@ mod tests {
         let cyan = Color { mode: ColorMode::Cmyk, c: [1.0, 0.0, 0.0, 0.0], alpha: 1.0 };
         let space = crate::cmyk_space(&doc);
         let want = photocraft_color::convert::with_cmyk_space(space.as_ref(), || cyan.to_rgb());
-        assert_eq!(ink_rgb(&doc, cyan), want.map(|v| v.clamp(0.0, 1.0)));
+        assert_eq!(InkSpace::of(&doc).rgb(cyan), want.map(|v| v.clamp(0.0, 1.0)));
         // RGB inks are taken as stored.
-        assert_eq!(ink_rgb(&doc, Color::rgb(0.1, 0.2, 0.3)), [0.1, 0.2, 0.3]);
+        assert_eq!(InkSpace::of(&doc).rgb(Color::rgb(0.1, 0.2, 0.3)), [0.1, 0.2, 0.3]);
     }
 
     /// The thumbnail prints the spot inks over the composite (matted over white).
