@@ -654,7 +654,11 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
     crate::direction::ltr(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 10.0;
         ui.vertical(|ui| {
-            egui::Grid::new("cp-hsb-rgb").min_row_height(0.0).num_columns(4).spacing([4.0, 2.0]).show(ui, |ui| {
+            // ltr_grid's Grid takes an unset min_row_height from interact_size.y; the 3 pt
+            // spacer rows need the old explicit 0.0, so zero the interact height around it.
+            let interact_y = ui.spacing().interact_size.y;
+            ui.spacing_mut().interact_size.y = 0.0;
+            crate::direction::ltr_grid(ui, "cp-hsb-rgb", 4, vec2(4.0, 2.0), |ui| {
                 let vals = [hsv[0], hsv[1] * 100.0, hsv[2] * 100.0, rgb[0] * 255.0, rgb[1] * 255.0, rgb[2] * 255.0];
                 let units = ["°", "%", "%", "", "", ""];
                 let ranges = [0.0..=360.0, 0.0..=100.0, 0.0..=100.0, 0.0..=255.0, 0.0..=255.0, 0.0..=255.0];
@@ -685,6 +689,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                     }
                 }
             });
+            ui.spacing_mut().interact_size.y = interact_y;
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 6.0;
                 ui.label(egui::RichText::new("#").color(t.text_dim));
@@ -730,7 +735,10 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 }
             });
         });
-        egui::Grid::new("cp-lab-cmyk").min_row_height(0.0).num_columns(4).spacing([4.0, 2.0]).show(ui, |ui| {
+        // Same min_row_height(0.0) substitute as the grid above.
+        let interact_y = ui.spacing().interact_size.y;
+        ui.spacing_mut().interact_size.y = 0.0;
+        crate::direction::ltr_grid(ui, "cp-lab-cmyk", 4, vec2(4.0, 2.0), |ui| {
             for (i, (v, range)) in [(lab[0], 0.0..=100.0), (lab[1], -128.0..=127.0), (lab[2], -128.0..=127.0)].into_iter().enumerate() {
                 let (key, label) = LAB_MODES[i];
                 if radio(ui, mode == key, label) {
@@ -761,6 +769,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                 ui.end_row();
             }
         });
+        ui.spacing_mut().interact_size.y = interact_y;
     });
     if let Some(m) = new_mode {
         f.insert("__mode".into(), json!(m));
