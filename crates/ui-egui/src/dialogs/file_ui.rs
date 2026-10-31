@@ -290,6 +290,142 @@ mod web_playback_tests {
         assert!(h.query_by_label("Selected Slices").is_some(), "offer individual slices, not only All and All User Slices");
     }
 
+    /// A click, unlike a drag, selects the slice under its image position.
+    fn click_preview(h: &mut Harness<'static, (PhotocraftApp, Map<String, Value>)>, at: egui::Pos2, modifiers: egui::Modifiers) {
+        // Queue these in one frame; Harness::event would give each event its own frame.
+        h.input_mut().events.extend([
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers },
+        ]);
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers });
+        h.step();
+    }
+
+    /// The first preview pane's clickable bounds, in egui points.
+    fn preview_rect(h: &Harness<'static, (PhotocraftApp, Map<String, Value>)>) -> egui::Rect {
+        let r = h.state().1["__previewRects"][0].as_array().unwrap();
+        egui::Rect::from_min_max(
+            egui::pos2(r[0].as_f64().unwrap() as f32, r[1].as_f64().unwrap() as f32),
+            egui::pos2(r[2].as_f64().unwrap() as f32, r[3].as_f64().unwrap() as f32),
+        )
+    }
+
+    /// Preview selection reaches the real encoder, while All Slices ignores the selection.
+    #[test]
+    fn save_for_web_exports_the_slices_clicked_in_the_preview() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 16, 16], "name": "left"})).unwrap();
+        app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "right"})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.extend(serde_json::from_value::<Map<String, Value>>(json!({"format": "png24", "__view": "original", "html": false})).unwrap());
+        let mut h = harness(app, fields);
+        let pane = preview_rect(&h);
+        let scale = (pane.width() / 32.0).min(pane.height() / 16.0);
+        click_preview(&mut h, pane.center() + egui::vec2(8.0 * scale, 0.0), egui::Modifiers::NONE);
+        assert_eq!(h.state().1["__selectedSlices"], json!([2]));
+        let downloads = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = downloads.clone();
+        h.state_mut().0.services.write = Some(Box::new(move |path, bytes| {
+            captured.borrow_mut().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        for (mode, count) in [("selected", 1), ("all", 2)] {
+            h.state_mut().1.insert("slices".into(), json!(mode));
+            let mut p = web::web_params(&h.state().1).unwrap();
+            p["dir"] = json!(".");
+            download_for_web(&mut h.state_mut().0, p).unwrap();
+            let files = downloads.borrow();
+            assert_eq!(files.len(), count, "{mode}");
+            if mode == "selected" {
+                assert!(files[0].0.ends_with("right.png"));
+                let image = photocraft_codecs::decode(&files[0].1).unwrap();
+                assert_eq!((image.width(), image.height()), (16, 16));
+            }
+            drop(files);
+            downloads.borrow_mut().clear();
+        }
+        // A previous export's numbers must not silently filter the next document.
+        h.state_mut().0.session.file_menu.last_web = Some(json!({"format": "png24", "numbers": [2]}));
+        let next = open_web(&mut h.state_mut().0);
+        assert!(!h.state().0.ui.dialogs.iter().find(|d| d.id == next).unwrap().fields.contains_key("numbers"));
+    }
+
+    /// Resizing, zoom and pan keep selection aligned; dragging still pans instead of selecting.
+    #[test]
+    fn save_for_web_slice_selection_follows_zoom_and_pan() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 16, 16]})).unwrap();
+        app.run("slice.new", json!({"rect": [16, 0, 16, 16]})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.extend(
+            serde_json::from_value::<Map<String, Value>>(
+                json!({"format": "png24", "__view": "optimized", "percent": 200, "__zoom": 32, "__center": [0.6, 0.55]}),
+            )
+            .unwrap(),
+        );
+        let mut h = harness(app, fields);
+        let pane = preview_rect(&h);
+        // Export is 64 × 32 at 32 points per pixel, centred on (0.6, 0.55).
+        let at = |x: f32| pane.center() + (egui::vec2(x / 32.0, 0.5) - egui::vec2(0.6, 0.55)) * egui::vec2(2048.0, 1024.0);
+        click_preview(&mut h, at(20.0), egui::Modifiers::NONE);
+        assert_eq!(h.state().1["__selectedSlices"], json!([2]));
+        // Keep the initial selection separate from the following double-click, not a triple-click.
+        h.run_steps(4);
+        let selected_view = h.state().1["__center"].clone();
+        click_preview(&mut h, at(15.0), egui::Modifiers::SHIFT);
+        assert_eq!(h.state().1["__selectedSlices"], json!([2, 1]));
+        click_preview(&mut h, at(15.0), egui::Modifiers::SHIFT);
+        assert_eq!(h.state().1["__selectedSlices"], json!([2]));
+        assert!(h.ctx.input(|input| input.pointer.button_double_clicked(egui::PointerButton::Primary)), "exercise a real double-click");
+        assert_eq!(h.state().1["__zoom"].as_f64(), Some(32.0), "rapid Shift-clicks must not fit the image");
+        assert_eq!(h.state().1["__center"], selected_view);
+        let before = h.state().1["__center"].clone();
+        h.event(egui::Event::ModifiersChanged(egui::Modifiers::NONE));
+        h.event(egui::Event::PointerMoved(pane.center()));
+        h.event(egui::Event::PointerButton { pos: pane.center(), button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        let moved = pane.center() + egui::vec2(20.0, 16.0);
+        h.event(egui::Event::PointerMoved(moved));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: moved, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(2);
+        assert_ne!(h.state().1["__center"], before);
+        assert_eq!(h.state().1["__selectedSlices"], json!([2]), "a pan must not change selection");
+    }
+
+    /// Without slices, Shift-double-click retains the existing fit-to-view gesture.
+    #[test]
+    fn save_for_web_without_slices_keeps_shift_double_click_to_fit() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.extend(serde_json::from_value::<Map<String, Value>>(json!({"format": "png24", "__view": "original", "__zoom": 32})).unwrap());
+        let mut h = harness(app, fields);
+        let at = preview_rect(&h).center();
+        click_preview(&mut h, at, egui::Modifiers::SHIFT);
+        click_preview(&mut h, at, egui::Modifiers::SHIFT);
+        assert!(h.ctx.input(|input| input.pointer.button_double_clicked(egui::PointerButton::Primary)), "exercise a real double-click");
+        assert!(h.state().1["__zoom"].is_null(), "fit remains available when there are no slices to select");
+    }
+
+    /// Selected mode refuses an empty or malformed selection before opening a picker or saving.
+    #[test]
+    fn save_for_web_selected_slices_need_a_selection() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
+        for selected in [json!([]), json!([0]), json!([-1]), json!(["2"])] {
+            let fields = serde_json::from_value(json!({"slices": "selected", "__selectedSlices": selected})).unwrap();
+            assert!(web_confirm(&mut app, &fields).is_err());
+        }
+    }
+
     /// WebP (#6391): Quality until Lossless is ticked; 4-Up halves a lossy quality like JPEG's.
     #[test]
     fn webp_settings_show_quality_until_lossless() {
