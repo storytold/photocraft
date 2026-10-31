@@ -508,6 +508,45 @@ fn grayscale_curves_preset_over_stale_lab_records_changes_the_image() {
     assert!(after < before - 0.05, "Darker darkened the midtones: {before} -> {after}");
 }
 
+/// CodeRabbit on #9234: a grayscale document's Curves recalled with an RGB document's Red curve
+/// (⌥⌘M after Curves there) renders only the Gray curve it shows: the Preset menu does not read
+/// Default over a Red curve that still changes the image, and Darker gives Darker's gray.
+#[test]
+fn grayscale_curves_preset_over_a_recalled_red_curve_renders_the_preset_alone() {
+    let darker = |app: &mut PhotocraftApp| {
+        app.run("file.new", json!({"width": 32, "height": 24, "mode": "grayscale"})).unwrap();
+        app.run("edit.fill", json!({"color": "#808080"})).unwrap();
+    };
+    let gray = |app: &mut PhotocraftApp| app.run("document.pixel", json!({"x": 8, "y": 8})).unwrap()[0].as_f64().unwrap();
+    // Darker's gray, from a Curves with no channel curves.
+    let mut app = app_in_mode("grayscale");
+    darker(&mut app);
+    app.run("image.adjustments.curves", json!({"points": [[0.0, 0.0], [128.0, 104.0], [255.0, 255.0]]})).unwrap();
+    let expected = gray(&mut app);
+    let mut app = app_in_mode("rgb");
+    let id = open(&mut app, "image.adjustments.curves").unwrap();
+    app.ui.dialog_mut(id).unwrap().fields.insert("red".into(), json!([[0.0, 0.0], [64.0, 230.0], [255.0, 255.0]]));
+    let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+    remember(&mut app, &fields);
+    app.ui.dialogs.clear();
+    darker(&mut app);
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open_last(h.state_mut(), "image.adjustments.curves").unwrap();
+    assert_eq!(h.state().ui.dialogs[0].fields["red"][1], json!([64.0, 230.0]), "recalled with the Red curve");
+    h.run_steps(4);
+    h.query_all_by_role(egui::accesskit::Role::ComboBox).next().unwrap().click();
+    h.run_steps(2);
+    h.get_by_label("Darker").click();
+    h.run_steps(3);
+    let preset = h.query_all_by_role(egui::accesskit::Role::ComboBox).next().and_then(|n| n.accesskit_node().value().map(|s| s.to_string()));
+    assert_eq!(preset.as_deref(), Some("Darker"), "the menu shows the preset");
+    assert_eq!(h.state().ui.dialogs[0].fields["red"], json!([[0.0, 0.0], [255.0, 255.0]]), "the preset straightens the Red curve");
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let after = gray(h.state_mut());
+    assert!((after - expected).abs() < 1.0 / 255.0, "Darker alone renders {expected}, got {after}");
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {

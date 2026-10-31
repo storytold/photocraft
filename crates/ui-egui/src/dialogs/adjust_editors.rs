@@ -130,17 +130,25 @@ pub fn curves_space(v: &Value, gray: bool) -> ToneSpace {
 }
 
 /// Grayscale Curves settings put in the tone space [`curves_space`] edits: another mode's channel
-/// records (CMYK inks, Lab `lightness`, `a`, `b`) give way to straight `red`, `green` and `blue`,
-/// as a grayscale document's own Curves have. The engine picks the space from those keys and reads
-/// a Lab `lightness` over `points`, so the Gray curve the editor shows is the one that renders.
+/// records (CMYK inks, Lab `lightness`, `a`, `b`) and bent `red`, `green` or `blue` curves (from
+/// an RGB document's Curves) give way to straight `red`, `green` and `blue`, as a grayscale
+/// document's own Curves have. The engine picks the space from those keys, reads a Lab
+/// `lightness` over `points`, and renders each RGB channel's curve on the gray image, so the Gray
+/// curve the editor shows is the only one that renders.
 pub fn gray_curves(v: &mut Value) {
     const STALE: [&str; 7] = ["cyan", "magenta", "yellow", "black", "lightness", "a", "b"];
-    let Some(o) = v.as_object_mut().filter(|o| STALE.iter().any(|k| o.contains_key(*k))) else { return };
+    let rgb = adjust_params::channel_keys(ToneSpace::Rgb);
+    let straight = |key: &str| {
+        let c = curves::read_curve(v, key);
+        c.first() == Some(&[0.0, 0.0]) && c.last() == Some(&[255.0, 255.0]) && c.iter().all(|p| (p[0] - p[1]).abs() < 0.01)
+    };
+    let bent = rgb.iter().any(|key| !straight(key));
+    let Some(o) = v.as_object_mut().filter(|o| bent || STALE.iter().any(|k| o.contains_key(*k))) else { return };
     for key in STALE {
         o.remove(key);
     }
-    for key in adjust_params::channel_keys(ToneSpace::Rgb) {
-        o.entry(*key).or_insert_with(|| json!([[0.0, 0.0], [255.0, 255.0]]));
+    for key in rgb {
+        o.insert((*key).into(), json!([[0.0, 0.0], [255.0, 255.0]]));
     }
 }
 
