@@ -1,6 +1,6 @@
 # Brush and painting parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-30 · **Change:** minor (Shift+right-click menu for every painting tool: Edit Brush… and the tool's own Mode list; Brush Shift+right-click Mode picker and Escape dismissal; Art History Brush row added as partial, 8 of 10 styles, TOOL-213-20, #1610; hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; Mode for Clone Stamp, Pattern Stamp, History Brush, Healing and Paint Bucket; named, stateful Brush Settings locks and visible keyboard focus; independent Brush Pose tilt-axis overrides; Transfer Wetness/Mix tool applicability; dragged preset tip preview; Hue Jitter amount track; Brush Settings minimum fields follow their Control; checkbox-only rows and non-destructive Smoothing switch; shaped-tip cursor follows the view; Color Replacement is a live toolbar tool; no brush-feel estimate changed; 2026-10-11: Pattern Stamp and Background Eraser draw live, TOOL-213-7) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** major (open rows re-checked at 0.18.0; brush budgets from the new nightly baseline; earlier changes are in the revision history) · **Target:** Adobe Photoshop 2026
 
 Painting is where Photoshop users notice differences first, so it gets its own checklist: the
 brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
@@ -9,7 +9,7 @@ brush engine (`crates/paint/src/brush.rs`), the Brush Settings UI
 [`ui-parity.md`](ui-parity.md).
 
 **Summary (estimated):** breadth ~90% (every Brush Settings section and option exists), ready for
-real work ~55%. The engine models what Photoshop models; the gaps are feel (latency, pressure
+real work ~60%. The engine models what Photoshop models; the gaps are feel (latency, pressure
 response, edge quality, smoothing), a few missing options, and live previews for retouch tools.
 Remaining: 100–180 h (gap G4 in [`gaps.md`](gaps.md)). Human: feel must be checked on real
 tablets against Photoshop side by side.
@@ -34,7 +34,7 @@ tablets against Photoshop side by side.
 | Smoothing: amount, Pulled String, Stroke Catch-up, Catch-up on End, Adjust for Zoom | done | `brush.rs:428-438` |
 | Section locks | done | #174; `brush_panel_tests.rs` verifies section-specific accessible names and locked state for all 12 controls in 14 themes, plus visible themed focus, Tab blur, Space activation, minimal command patches and replay without selecting or enabling a section. |
 | Noise, Wet Edges, Build-up, Smoothing and Protect Texture: checkbox-only rows keep the selected controls open | done | `brush_panel_tests.rs`, #4283; Smoothing enable/disable preserves its amount and options, including imported ABR tool settings |
-| Brush tip from an image file | missing | TOOL-213-12 |
+| Brush tip from an image file | done | TOOL-213-12 |
 | Erodible, Airbrush and Bristle tips (Photoshop's special tips) | partial | not audited in detail; "3D-based brushes don't work" (#1660) |
 | Anti-aliasing off for brushes | missing | #1666 (Pencil is the aliased path) |
 
@@ -44,8 +44,8 @@ tablets against Photoshop side by side.
 |---|---|---|
 | Pressure drives size/opacity/flow per sample (no shared pressure within a frame) | done | #2112 |
 | Global pressure curve in Preferences | done | #2195 |
-| Per-control pressure curves | missing | TOOL-213-11 |
-| Quick taps keep their pressure | partial | #1967 fixed one case; tap paints a full blob (#1798), tap sensitivity (#1933) |
+| Per-control pressure curves | done | TOOL-213-11 |
+| Quick taps keep their pressure | done | #1967, #1798, #1933 |
 | Smooth pressure on Windows | partial | "jumpy" (#2046) |
 | Tilt and rotation drive angle/roundness | partial | macOS, X11, web; not Windows; rotation not applied (#1301) |
 | Eraser end of the pen switches to Eraser | partial | macOS; flipped Wacom on Windows not (#2285) |
@@ -55,15 +55,15 @@ tablets against Photoshop side by side.
 | Behaviour | Status | Evidence |
 |---|---|---|
 | No seams, hard edges stay hard, zero-scatter defaults, ABR tips never black | done | TOOL-213-13 |
-| Smooth line weight along a pressure ramp | partial | stair-steps (#1776); 2026-10-23: the five hard-round built-in presets use 5% spacing (#8842), with rendered 150 px outline and pressure-opacity continuity regressions at 8/16/32-bit and 0/49% smoothing. Other brush-feel gaps remain open. |
+| Smooth line weight along a pressure ramp | done | pressure follows every sample, not the frame's last (#1776); the five hard-round built-in presets use 5% spacing (#8842), with rendered 150 px outline and pressure-opacity continuity regressions at 8/16/32-bit and 0/49% smoothing |
 | Interpolation and smoothing match Photoshop | partial | #2138, #2057 |
 | Soft-edge falloff matches Photoshop's curve | partial | #2149, #1619 |
 | Brush preview and cursor crisp, not pixelated | partial | #1433 |
-| Cursor outline equals the painted footprint at every zoom | partial | #1761, #2364; shaped tips trace their outline (#3467), turned and flipped with a rotated or flipped view |
-| Latency: dab to screen within a frame | partial | budgets P13/P16/P33 over (scorecard); big-brush lag #2619, #1994; cursor lag #2566, #1343 |
+| Cursor outline equals the painted footprint at every zoom | done | #1761, #2364; shaped tips trace their outline (#3467), turned and flipped with a rotated or flipped view |
+| Latency: dab to screen within a frame | partial | budgets P16 and P32 met on all five baseline nights, P13 at the median, P33 over (scorecard, 2026-10-31; P16 went over once in eight nightlies, P13 once in the five); big-brush lag #2619, #1994; cursor lag #1343 |
 | No hitch at mouse-up on a long stroke | not measurable | P32 needs a frame harness |
 | Live stroke for Brush and Eraser | done | |
-| Live stroke for every brush-based retouch tool | partial | TOOL-213-7: all live but the Mixer Brush (PR #3627); Spot Healing shows the area it heals and heals on release, as Photoshop does |
+| Live stroke for every brush-based retouch tool | partial | TOOL-213-7: all live, the Mixer Brush too (#3627); Spot Healing shows the area it heals and heals on release, as Photoshop does |
 | No OS arrow cursor over the canvas with a pen | partial | TOOL-213-14 |
 
 ## Gestures and cursors
@@ -87,14 +87,14 @@ tablets against Photoshop side by side.
 |---|---|
 | Vertical, Horizontal, Dual axis, Diagonal | done |
 | From a path (Make Symmetry Path) | done |
-| Wavy, Circle, Spiral, Parallel Lines, Radial, Mandala | missing (#2659) |
+| Wavy, Circle, Spiral, Parallel Lines, Radial, Mandala | missing (`SymmetryMode` has Vertical, Horizontal, Dual, Diagonal; #2659 closed with those in every theme) |
 
 ## Brush-based tools
 
 | Tool | Status | Notes |
 |---|---|---|
 | Brush, Pencil (aliased, Auto Erase), Eraser (Brush/Pencil/Block) | done | Pencil 1 px quality #2139 |
-| Mixer Brush (Wet, Load, Mix, Flow, Sample All Layers, Current Brush Load with Load Brush and Clean Brush, automatic Load and Clean) | partial | No live result while dragging, no Alt-click loading (#2247) |
+| Mixer Brush (Wet, Load, Mix, Flow, Sample All Layers, Current Brush Load with Load Brush and Clean Brush, automatic Load and Clean) | partial | no Alt-click loading (#2247) |
 | Clone Stamp (mode, opacity, flow, aligned, sample, overlay) | partial | Clone Source W/H link and Alt target cursor (TOOL-213-8) |
 | Pattern Stamp (mode, aligned, impressionist) | done | |
 | History Brush (mode) | done | |
@@ -111,7 +111,7 @@ tablets against Photoshop side by side.
 | Behaviour | Status | Evidence |
 |---|---|---|
 | .abr import (v1/v2/v6) and export, persistent presets, folders | done | `psd/src/abr.rs` |
-| Brushes panel: drag a folder into a folder | missing | #2014 |
+| Brushes panel: drag a folder into a folder | done | #2014 |
 | Dragged brush preset preview | done | Cached, translucent tip thumbnail plus name in panel list/grid and the preset picker; `ui-egui/src/brushes_tab.rs`, real pointer-drag test in `brushes_tab_tests.rs` (#4225, partial) |
 | Tool presets (.tpl) | partial | Tool Presets panel exists; .tpl import not found |
 | Import 500 brushes without blocking the UI | not run | P24 |
@@ -120,6 +120,7 @@ tablets against Photoshop side by side.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | major | Open rows re-checked at 0.18.0: image tips, per-control curves, taps, line weight, cursor footprint and folder drag done; Mixer Brush's live stroke counted (#3627); symmetry modes stay missing though #2659 closed; latency row on the 2026-10-31 baseline; summary ~55 → ~60% |
 | 2026-10-25 | minor | Art History Brush row added as partial (8 of 10 styles, TOOL-213-20, #1610). No brush-feel estimate changed. |
 | 2026-10-23 | minor | Hard-round built-in presets use 5% spacing (#8842); rendered large-tip outline and pressure-opacity continuity tests cover 8/16/32-bit and 0/49% smoothing. Other presets and user settings retain their spacing; percentages and estimates unchanged. |
 | 2026-10-14 | minor | Brush Pose tilt overrides are independent end to end (#3825 partial); ABR flags, legacy JSON/commands, presets and three pixel depths covered; no readiness percentage or estimate changed |

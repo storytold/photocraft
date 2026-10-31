@@ -404,7 +404,7 @@ issue = 211
 bench = "perf_scenarios"
 row = "Select Subject 24 MP (repeat)"
 budget_ms = 100
-enforce = false  # #2865: met (repeats answer from the last mask, 7-10 ms p95, was 270-370 ms); enforce once the baseline is refreshed
+enforce = true  # #2865: met (repeats answer from the last mask); worst p95 14.2 ms over the five nightlies of the 2026-10-31 baseline
 
 [[scenario]]
 id = "P30"
@@ -434,7 +434,7 @@ target = "≤ 16 ms (no hitch at mouse-up)"
 bench = "perf_scenarios"
 row = "brush release: 600-point stroke, 200 px soft, 24 MP"
 budget_ms = 16
-enforce = false  # measurable since the release commits the live stroke's pixels; awaiting a baseline run
+enforce = true  # measurable since the release commits the live stroke's pixels; worst p95 10.5 ms over eight nightlies (2026-10-21 to 10-31)
 
 [[scenario]]
 id = "P33"

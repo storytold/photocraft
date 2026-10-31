@@ -29,16 +29,16 @@ note = "file_dialog.rs last_used_dir: open dialogs ask with initial_dir (the mos
 [[item]]
 id = "UI-217-4"
 target = "Preferences all take effect; recent files persist and honour recent_file_count (#204)"
-status = "missing"
+status = "partial"
 issue = 217
-note = "See the prefs audit and BUG-204-*"
+note = "Recent files persist and honour recent_file_count (BUG-204-4/5 done); 170 of 182 preferences are read, 12 still do nothing (prefs audit above)"
 
 [[item]]
 id = "UI-217-5"
 target = "Panel groups can float (menu + drag out of the dock) and are restored at launch"
-status = "missing"
+status = "done"
 issue = 217
-note = "No floating groups in dock.rs/panels.rs"
+note = "panel_docking.rs on craft-ui's docking: panels and groups drag out of the dock or float by command, into windows of their own that dock back (panel_commands_group_split_reorder_float_and_restore_without_duplicates, a_tab_dropped_on_the_canvas_floats_there_and_redocks); dock.rs persists the layout with the workspace"
 
 [[item]]
 id = "UI-217-6"

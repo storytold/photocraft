@@ -1,6 +1,6 @@
 # File-format parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-24 · **Change:** minor (PSD Filter Gallery: Halftone Pattern dot/circle/line settings survive PSD/PSB saves (#8940); Save for Web writes WebP, lossy or lossless, #6391; Photoshop's `MTrn` merged-transparency marker, from a layered TIFF saved with Save Transparency, marks the merged transparency, #8877; layered TIFF writes the TySh text version and descriptor in PSD big-endian order while the header, matrix, warp and bounds keep container order, #9098; layered TIFF writes Photoshop's 14-byte global layer mask, so Photoshop opens the layers instead of only the composite, #9095; legacy PSD point text placed from the layout ink box after font resolution, #6094; `.atn`: a recorded Save As imports with its format and file (`file.saveAs`, `file.saveACopy` for As a Copy) instead of as a plain Save that wrote over the played file, #7102; folder destinations stop playback until #5430; `.asl` layer style libraries read and written, #1051; JPEG Options on File › Save, Save As and Save a Copy, FILE-215-19 partial (no Matte, progressive Scans or size preview); 32-bit Hue/Saturation unclipped and Colorize as Photoshop does them, Photoshop-oracle floor 190/258, #5781; JPEG Options on Save As and Save a Copy, FILE-215-19; TIFF compression for scripted saves, `tiffCompression`, #5301; the Nikon D4 white level follows the sample depth (12 and 14 bit), #5978; Apply Layer Comp action mapping, #7101; Cineon write: 10-bit gray/RGB; animated WebP frames load into video layers, #1198; Photoshop mixed-order TIFF type geometry, #4758; DDS textures save: uncompressed or BC1–BC3, optional mip chain, DDS Options in Save As (#1327); PSD smart filters: 53 filters (39 more: Pinch, Polar Coordinates, Ripple, Spherize, Twirl, Wave, ZigZag, Invert, Blur, Surface Blur, Smart Sharpen, Diffuse, Wind, Offset, Mezzotint, Clouds, Difference Clouds, Fibers, Lens Flare and others) plus Hue/Saturation and Perspective Warp mapped both ways, #6296, #6298, #6300, #6302, #6304, #6314, #6316, #6267, #6268, FILE-215-2; large-file fixtures: a 20 MP layered PSD, a 150-layer layout, a 2 GB PSD and a 4.4 GB PSB generated at test time and round-tripped, FILE-216-2 done, #5107; earlier: smart objects keep Photoshop's Cylinder warp through re-renders and saves, #4112; PNG `sTER` stereo pairing kept on save, #6063; PDF write one flattened page via Save As / Save a Copy / CLI, #3401; CMYK Invert, Posterize and Threshold on the inks; smart filter masks on PSD open and save; Photoshop-oracle floor 188/258; lossy DNG, compression 34892, decodes with its levels and LinearizationTable applied to the stored 8-bit samples, FILE-215-11; CMYK Hue/Saturation and Color Balance keep the black ink; CMYK Posterize on the stored values, psd-tools oracle floor 242/309; CMYK adjustment layers composite on the document's inks; Photoshop-oracle floor 165/258; CMYK Brightness/Contrast on the inks, CMYK Threshold's luma; modern Brightness/Contrast's brightness curve; Photoshop-oracle floor 151/258; Lab documents composite on their stored L, a, b; Photoshop-oracle floor 152/258; Levels on whole levels at every step with Photoshop's shadow toe; Photoshop-oracle floor 146/258, psd-tools 238/309; 32-bit adjustments unclipped; Photoshop-oracle floor 149/258; mask feathers blur with their exact variance; Threshold splits on Photoshop's luminosity; a pass-through clipping base with an adjustment renders isolated; psd-tools oracle floor 240/309; 16-bit Posterize as Photoshop bins it; psd-tools oracle floor 241/309; Gradient Map luminosity; Photoshop-oracle floor 147/258; PSD: `Mt16`/`Mt32` merged transparency read; palette PNGs open in Indexed Color mode, #4804; 16-bit Lab Invert; Photoshop-oracle floor 145/258; `.atn` import maps 112 events; DDS textures open, #1327; DPX read and write, #1049; #2465 fixed: CS2 placed layers with only a `PlLd` block open their contents; Photoshop Actions `.atn` read and write; `.shc` contour files read and write; earlier the same day: indexed BMP palette mode; Save keeps a JPEG's quality and a WebP's encoding; Amiga IFF write: 24-plane ILBM, Save As `.iff`; PSD stores spot channels as Photoshop does, ink 0 = solid, and numbers them in 1053, #7415 split; TIFF writes and reads alpha and spot channels as extra samples with Photoshop's channel resources, PSD output unchanged, FILE-215-7, FILE-215-17's TIFF part, #7415; Photoshop's `MTrn` merged-transparency marker, from a layered TIFF saved with Save Transparency, marks the merged transparency) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** major (format table re-checked against `crates/codecs/src/format.rs` at 0.18.0: 15 + 7 of 31; corpus counts measured; earlier changes are in the revision history) · **Target:** Adobe Photoshop 2026
 
 **PSD Filter Gallery (#8940, 2026-10-23):** Halftone Pattern maps its size, contrast and dot/circle/line pattern as editable settings on import and export, with the reference application's descriptor keys (`HlSz`, `Cntr`, `ScrT`: `ScrD`/`ScrC`/`ScrL`). PSD/PSB round trips pass at 8/16/32 bits. This does not claim pixel equivalence for the existing renderer. Unknown or malformed settings remain verbatim on import.
 
@@ -13,11 +13,11 @@ dispatch), `crates/psd`, `crates/raw`, `crates/heif`, `crates/affinity`. More de
 [raster formats](../book/src/formats/raster-formats.md), [PSD/PSB](../book/src/formats/psd-psb.md),
 [OpenRaster](ora.md), [Paint.NET](pdn.md).
 
-**Summary.** By count, 13 of Photoshop's 31 formats are fully supported in the directions Photoshop supports them, 4 partially (48%,
-measured). Weighted by use (PSD/PSB 40%, JPEG 15%, PNG 15%, TIFF 10%, camera raw 8%, WebP/AVIF/
-HEIF/JXL 6%, PDF 3%, everything else 3%), presence is ~80% and ready-for-real-work ~60%: PSD
-is broad but not yet reliable against Photoshop (gap G1), and Photoshop PDF, AVIF read and JPEG
-XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
+**Summary.** By count, 15 of Photoshop's 31 formats are fully supported in the directions Photoshop supports them, 7 partially (60%,
+measured 2026-10-31; FITS and Cloud PSD aren't counted). Weighted by use (PSD/PSB 40%, JPEG 15%, PNG 15%, TIFF 10%, camera raw 8%, WebP/AVIF/
+HEIF/JXL 6%, PDF 3%, everything else 3%), presence is ~80% and ready-for-real-work ~65%: PSD
+is broad but not yet reliable against Photoshop (gap G1; oracles 190/258, layer effects 3/37), and Photoshop PDF read, AVIF read and JPEG
+XL read are missing (gap G10). Remaining: 320–540 h including PSD fidelity.
 
 ## Photoshop's formats
 
@@ -33,21 +33,21 @@ XL are missing (gap G10). Remaining: 300–500 h including PSD fidelity.
 | BMP | R/W | yes | yes | 8-bit; palette BMPs open in Indexed Color mode and Indexed Color documents save as palette BMPs (no transparency) |
 | WebP | R/W | yes | yes | Lossless and our own lossy VP8 encoder; ICC/EXIF/XMP; Save keeps an opened file lossy (at its quality) or lossless (#2399); Save for Web (Legacy) writes it too, lossy at its Quality or lossless, a format Photoshop's legacy dialog lacks (#6391). File › Open keeps an animation's first frame; New Video Layer from File and Video Frames to Layers take every frame, with the timeline rate from the durations (#1198) |
 | AVIF | R/W | no (#463) | optional feature, off by default | |
-| JPEG XL | R/W | inside DNG only | no | |
+| JPEG XL | R/W | inside DNG only | lossless, 8/16-bit, bare codestream (no ICC/EXIF/XMP) | Pure-Rust zune-jpegxl writer; reading `.jxl` files is tracked separately |
 | HEIF/HEIC | R/W(HEIF) | yes (pure-Rust heic-rs, `heif` feature, on in releases) | no | 8/16-bit |
 | OpenEXR | R/W | yes | yes | f16/f32; deep EXR and Cryptomatte readers (`corpus/exr`) |
 | Radiance HDR | R/W | yes | yes | f32 |
 | Portable Bit Map (PBM/PGM/PPM/PNM/PFM/PAM) | R/W | yes | yes | 8/16/32f |
 | FITS | R/W (FITS Liberator plug-in) | yes | yes | 8/16/32f gray or RGB, header cards kept; no fpack, no debayer |
 | Targa | R/W | yes | yes | 8-bit |
-| Photoshop PDF | R/W | no (#2541) | yes, one flattened page (Save As / Save a Copy / CLI, #3401; also print and artboards-to-PDF) | No vector/text PDF, no multi-page save, no PDF presentation, layers are not preserved (FILE-215-10); read still missing (#2541) |
+| Photoshop PDF | R/W | no | yes, one flattened page (Save As / Save a Copy / CLI, #3401; also print and artboards-to-PDF) | No vector/text PDF, no multi-page save, no PDF presentation, layers are not preserved (FILE-215-10); read still missing (#2838, PR #6990 open) |
 | Photoshop EPS, DCS 1.0/2.0, EPS TIFF/PICT preview | R/W | no | no | |
 | Generic EPS / AI | R (rasterize) | no | no | |
 | SVG | R (rasterize) | yes, as editable shape layers or a vector smart object | no | Better than Photoshop for editing; gradients approximated (FILE-215-9) |
 | JPEG 2000 | R/W | no (#1047) | no | |
 | Cineon / DPX | R (DPX), R/W (CIN) | DPX: luma, RGB, RGBA at 8/10/12/16 bits, both byte orders (#1049); Cineon: 10-bit gray/RGB | DPX: 8/10/12/16 bits (`dpxBits`, `--dpx-bits`); Cineon: 10-bit log gray/RGB (Save As `.cin`) | Writes DPX, which Photoshop only reads; header fields (creator, project, copyright, transfer, frame rate, time code…) round-trip; a Cineon frame saved as Cineon keeps its 10-bit code values; no RLE |
 | DICOM | R/W | yes (#1048) | no | Read-only, uncompressed syntaxes: MONOCHROME1/2, RGB, YBR_FULL |
-| PCX | R/W | no | no | |
+| PCX | R/W | yes | no | Opens legacy paint and clipart assets; writing is not planned (`ASYMMETRIC_EXCEPTIONS`) |
 | Pixar | R/W | no | no | |
 | Amiga IFF | R/W | yes | yes (Save As `.iff`) | Read: 1–8 planes with CMAP and 24-plane RGB, stored and ByteRun1; write: 24-plane ILBM, ByteRun1, alpha as a 1-bit mask plane, 8-bit only |
 | Wireless Bitmap | R/W | no | no | |
@@ -144,6 +144,7 @@ remaining gaps in #1606 stay tracked with per-sample corpus ceilings.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | major | Table re-checked against the capability table: JPEG XL write and PCX read recorded, DPX, Cineon and Amiga IFF counted as supported, DICOM, PCX and JPEG XL as partial: 13 + 4 → 15 + 7 of 31 (48 → 60% by count). Ready ~60 → ~65% on oracles 190/258; remaining 320–540 h |
 | 2026-10-24 | minor | Layered TIFF: the `LMsk` block in tag 37724 carries Photoshop's default global layer mask (14 bytes) instead of none; with an empty block Photoshop read only the composite (#9095). PSD output unchanged |
 | 2026-10-24 | minor | Layered TIFF writes the TySh text version and descriptor in PSD big-endian order while retaining container order for the block header, transform matrix, warp section and bounds (#9098); the mixed-order read path remains covered by #4758/#4771. |
 | 2026-10-23 | minor | PSD: spot channels are stored and read as Photoshop 27.11's PSDs store them (ink 0 = solid; all 7 of its spot PSDs store the 100/25/75/0 % columns as 0/191/64/255), and resource 1053 numbers the extra channels 3, 4, 5, … after 0 for the merged transparency. A PSD with spot channels whose 1057 is exactly what PhotoCraft 0.1.0–0.16.0 wrote, and with no 1053 or one kept from an opened Photoshop file that doesn't list every channel, is read as those versions stored it (straight past the channels that 1053 lists), so it keeps its ink. Multichannel is unchanged (#7415 split, part 4) |

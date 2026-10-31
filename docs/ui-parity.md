@@ -1,6 +1,6 @@
 # UI parity: tools, handles, modifiers and feel
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-29 · **Change:** minor (Free Transform of several selected layers, #6501; Path Operations fixes: the first component keeps combining, a hidden component selection is left alone, a dragged live shape stays live, a refused Pen draft ends once; Pen, Freeform Pen, Curvature Pen and Path Selection Path Operations menu, which changes selected components, `+` / `-` keys, #1397; the Pen carries on an open shape or vector mask path; selection-aware font controls, pending caret fonts and focused commit, plus direct font-name editing with a compact no-match message, #9338; New Group dialog and button modifiers; new layers go into an open active group and join a clipping mask, except that type, shapes, pastes and placed files go above a group whose lock would refuse them; Color panel Hue and Brightness Cube show the out-of-gamut ⚠ and nearest printable colour when the field is at least 53 pt tall, #8672; 12 of 181 preferences do nothing, from the scorecard; Art History Brush in the History group of the Y flyout, partial, TOOL-213-20, #1610; Histogram panel: Compact / Expanded / All Channels views, Luminosity and Colors channels, Source, range statistics, Uncached Refresh, live adjustment overlay, Cache Levels preference; the font menu opens on the current family, marked in the recent group when it is a recent one, #9160; Type options bar alignment and direction follow the target paragraph; a swatch click recolours selected type and shape layers with any tool, #9238; UI scale presets done: 105–120% steps, #3222; ⇧⌥ blend mode letters; painting tool Mode menus; ⌥ + an adjustment's shortcut reopens it at its last settings, ⌥⌘L / ⌥⌘M, #8900; Crop default mode: moving the image under the box snaps the frame's edges and centre, #8580; View › Extras hides the Move transform controls, #6699; adjustment clipping stays visible in compact Properties, #5231; Color panel modes from its panel menu, the same in every theme, UI-217-17, #6000; a picked colour recolours the selected type and shapes; Hand tool ⌘ / ⌥ are Zoom In / Zoom Out while held, #6434; the wheel steps value fields, #5473; a dragged guide shows its X or Y beside the pointer, #7680; Type options bar "T" icon scrubs the font size, #6437; Move tool: dragged selected pixels take their own outline as the selection, #7538; artboard backgrounds remain below child Free Transform previews; ⌫/Delete removes the selected smart filter, #4751; Object Finder foreground/background discrimination (#6548); rounded triangle, polygon and star corners; shape Fill/Stroke popovers accept hex RGB values, #6176; a guide let go over either ruler is removed, #6286; Crop rows corrected: saved crop presets and Delete Cropped Pixels off are done, #6562; marching ants in device pixels, #7489; Animated Zoom: holding the Zoom tool zooms continuously, #6210; shape Density and Feather, TOOL-214-12, #5846; Pen Auto Add/Delete on the path being drawn, #6140; Show Transform Controls frames every selected layer; guide keys and clicks; menu bar from the keyboard, #4988; Crop tool Content-Aware Fill; on-canvas corner radius widgets, TOOL-214-12; Curvature Pen edits the active path; Clip Thumbnails to Layer Bounds; Pen ⇧ 45°; last selected tool restored at launch; Layers panel filter-type dropdown with Kind, Name and Mode, #5048; Free Transform box and marching ants follow the selection, #5297; History: the trash deletes the selected snapshot, rows drag onto the trash, #5324; smart filter reordering by drag; smart object perspective row corrected to done, #426; Free Transform H/V skew fields; toolbar tool shortcuts can be reassigned; ⇧-dragged guides land on ruler ticks; layer and selection keys; tool keys; spring-loaded tool letters; type formatting keys; Pen Auto Add/Delete, #4144; smart filter rows; stale missing-tool rows corrected: Color Replacement, Red Eye and the Add/Delete Anchor Point pair are live toolbar tools, Frame landed; no percentage changed; selection-modifier and ⌥-wheel rows match their tests; Properties › Transform shows a shape's path geometry, without its stroke) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** major (every open row re-checked against the code and its issues at 0.18.0, 29 rows closed; earlier changes are in the revision history) · **Target:** Adobe Photoshop 2026
 
 How PhotoCraft's direct manipulation compares with Photoshop 2026 (27.11.0): the toolbox, the
 handles and modifier keys of each gesture, nudging, snapping, numeric precision, navigation,
@@ -12,11 +12,11 @@ Status: **done** (behaves as in Photoshop, with a test), **partial** (exists, di
 **missing**. Evidence is a file under `crates/ui-egui/src/` unless another path is given, a
 scorecard id, or an issue. Modifier names are macOS first (⌘ ⌥ ⇧); Windows/Linux use Ctrl and Alt.
 
-**Summary (estimated, weights = how often the gesture is used):** ~40% ready. Tools 56/68
-present (82%, measured). Free Transform modifiers and Crop are close to Photoshop; the gaps are
-in the long tail of modifiers, in-transform UI, spring-loaded tools, panels and preferences.
-Remaining: 60–110 h for transforms and modifiers (gap G5), 60–100 h for tools (G6), 150–250 h
-for panels and workspace (G9).
+**Summary (estimated, weights = how often the gesture is used):** ~45% ready. Tools 68/68
+present (100%, measured; 9 of 45 checklist rows are partial in depth). Free Transform modifiers
+and Crop are close to Photoshop; the gaps are in the long tail of modifiers, press-and-hold
+flyouts, panels and preferences. Remaining: 50–90 h for transforms and modifiers (gap G5), 15–50 h
+for tool depth (G6), 120–200 h for panels and workspace (G9).
 
 ## Tools
 
@@ -50,7 +50,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Toolbar behaviour | Status | Evidence |
 |---|---|---|
 | Letter shortcuts, ⇧+letter cycles the group, "Use Shift Key for Tool Switch" (on by default, as in Photoshop) | done | `shortcuts.rs:413` |
-| Group remembers the last tool used | partial | L always resets to Lasso (#2608) |
+| Group remembers the last tool used | done | #2608, #2625 |
 | Press-and-hold or click-drag opens the flyout | missing | right-click only (#2301) |
 | Edit Toolbar customization | done | `edit.toolbar` |
 | Last selected tool restored after quitting and relaunching; temporary tool switches excluded | done | `tool_memory.rs`; `prefs_ui::tests::selected_tool_survives_a_restart_without_option_changes`, `selected_tool_excludes_temporary_switches` |
@@ -71,19 +71,19 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Several layers selected: one box frames them all and moves every one (pixels, type, shapes, smart objects, groups), one history step; with a selection each pixel layer's selected pixels move; Transform Again repeats on them | partial | #6501, `transform_tool.rs` (`begin_several`), `transform_several_tests.rs`, engine `edit.transform` `layers` (`transform_multi_tests.rs`); the Background is left out, as Show Transform Controls leaves it; Warp and splits are greyed for several layers; the preview moves their styles past the frame and follows opacity, fill, visibility and style edits made while the box is open (`styles_past_the_frame_move_with_the_box`, `hiding_or_fading_a_moving_layer_shows_in_the_preview_at_once`), but draws the layers stacked between the moving ones under them (the commit keeps every layer's place) |
 | Options bar H/V skew fields | done | `transform_tool.rs` (`Parts`, `skew_about_pivot`): W/H, angle and skew read as Photoshop decomposes the box; `skew_fields_lean_the_box_about_the_reference_point` |
 | Interpolation in the options bar | partial | Bicubic/Bilinear/Nearest; no Bicubic Smoother/Sharper/Automatic, Preserve Details |
-| Commit/cancel buttons in the options bar | missing | #2442 |
-| Right-click menu during transform (Scale, Rotate, Skew, Distort, Perspective, Warp, flips, rotates) | missing | TOOL-214-5 |
+| Commit/cancel buttons in the options bar | done | #2442; `tools/symmetry_ui/tests.rs` |
+| Right-click menu during transform (Scale, Rotate, Skew, Distort, Perspective, Warp, flips, rotates) | done | TOOL-214-5 |
 | Arrow keys nudge the box 1 px, ⇧ 10 px | done | `move_mods.rs` |
-| Preview keeps layer order, blend mode and mask | partial | mask yes (BUG-205-2); order/blend not (#2439) |
+| Preview keeps layer order, blend mode and mask | partial | mask BUG-205-2; blend #2439, #2480; Normal layers above stay above (`tools/transform_tool/preview.rs` `Above`), but an adjustment or non-Normal layer above, and what's above it, draw under the box until commit; several moving layers as in the row above |
 | Preview clipped to the canvas, follows edits while open | done | #2201, #2099 |
-| Hand (space) mid-transform doesn't interrupt it | partial | #2302 |
+| Hand (space) mid-transform doesn't interrupt it | done | #2302, #2327 |
 | Blend mode / opacity edits while transforming | missing | #1384 |
-| Locked layer refused before the drag | missing | fails only at commit (#2585) |
+| Locked layer refused before the drag | done | #2585, #2609 |
 | Transform a copy (⌥⌘T), step and repeat (⌥⇧⌘T) | done | 2026-10-07 |
-| Transform a targeted alpha channel | missing | BUG-207-4 |
+| Transform a targeted alpha channel | done | BUG-207-4 |
 | Smart object perspective (non-affine) | done | FILE-215-6; #579 fixed by #426: Distort / Perspective keep a projective placement, re-rendered from the source, read and written as the PSD `nonAffineTransform` |
 | Type-layer transform while editing (⌘ held), no ⌘-corner distort on type | done | `ui-design.md` |
-| Puppet Warp mesh follows the outline | missing | block grid (TOOL-214-6) |
+| Puppet Warp mesh follows the outline | done | TOOL-214-6 |
 
 ## Move tool and nudging
 
@@ -92,19 +92,19 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Arrow 1 px, ⇧-arrow 10 px for layers | done | `move_mods.rs` |
 | Arrow nudge of a selection outline (selection tools) | done | #1502 |
 | Arrow nudge of the crop box, X swaps orientation | done | TOOL-214-19 |
-| Arrow nudge of path points with Direct Selection | missing | no arrow handling in `direct_select.rs` |
-| ⌘-arrow nudges the layer from any tool | missing | #2474 |
+| Arrow nudge of path points with Direct Selection | done | #4486; `tools/direct_select.rs` `arrow_keys` |
+| ⌘-arrow nudges the layer from any tool | done | #2474, #2556 |
 | ⌥-drag duplicates, ⇧ constrains to 45° | done | `move_mods.rs` |
 | Dragging selected pixels shrinks the selection to them (the selection limited to where the layer has pixels, so moving again leaves no edge behind) as the drag starts, also with ⌥; the move box, snapping and Show Transform Controls use the moved pixels' bounds | done | #7538, `canvas.rs` `floating_outline` and `transform_controls_rect`, `snap_ui.rs` `follow_cut`, engine `float_cmds.rs` `CutParts::outline` |
 | With several layers selected and a selection, the Move tool moves the layers whole and the selection with them (ants follow the drag; one Move step) | done | #7538, `move_ui.rs` `carries_selection`, engine `layer.translate` `selection` |
-| Auto-Select with hover outline, box-select layers, double-click fit | missing | TOOL-214-4 |
-| Auto-Select bounding box and snapping follow the picked layer | partial | follow the previous layer (#2666) |
+| Auto-Select with hover outline, box-select layers, double-click fit | partial | hover outline and box-select done; double-click fit open (TOOL-214-4) |
+| Auto-Select bounding box and snapping follow the picked layer | done | #2666, #2675 |
 | View › Extras (⌘H) hides the Move tool's transform controls; Show Transform Controls keeps its setting | done | `canvas.rs` `transform_controls_layers`, `hiding_extras_hides_the_move_transform_controls` (#6699) |
 | Several layers selected (⇧-click adds, box-select): Show Transform Controls frames them all, with every selected shape's outline, and its handles transform them all | done | `canvas.rs` `transform_controls_layers`, `several_selected_layers_share_one_frame_that_transforms_them_all`; `move_auto_select_tests.rs`; #6501 |
-| ⌘-drag temporary Move shows the box and snaps | partial | #2681 |
+| ⌘-drag temporary Move shows the box and snaps | done | #2681, #2684 |
 | ⌘-right-click layer list under the pointer | done | `layer_pick_ui.rs` |
 | Double-click type to edit it (caret at the pointer, Type tool) | done | #1132, `type_tool::edit_at` |
-| Moving a selection on a mask moves the mask, not the pixels | partial | #2468 |
+| Moving a selection on a mask moves the mask, not the pixels | done | #2468 |
 
 ## Selection modifiers
 
@@ -113,11 +113,11 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | ⇧ square/circle, ⌥ from centre, live W × H readout (marquee) | done | `marquee_tests.rs` |
 | ⇧ add, ⌥ subtract, ⇧⌥ intersect from modifiers at press | done | tested for the marquee (add, subtract, ⇧⌥ intersect: `marquee_tests.rs`), Lasso (all three: `lasso_ui/tests.rs`) and Polygonal Lasso (`polygon_lasso_tests.rs`) (BUG-208-4) |
 | Space repositions the marquee while dragging | done | `hold_keys.rs` |
-| Polygonal Lasso ⇧ snaps to 45° | missing | #2352 |
-| Autoscroll at the window edge while selecting | missing | #2231 |
-| Single-pixel rows and columns kept on release | partial | #2391 |
-| Esc deselects / ⌘Z undoes the last selection | partial | #2674, #1432 |
-| Select › Modify live preview | missing | #1752 |
+| Polygonal Lasso ⇧ snaps to 45° | done | #2352, #2396 |
+| Autoscroll at the window edge while selecting | done | #2231; `canvas/canvas_autoscroll.rs` |
+| Single-pixel rows and columns kept on release | done | #2391 |
+| Esc deselects / ⌘Z undoes the last selection | done | #2674, #1432 |
+| Select › Modify live preview | done | as in Photoshop: a value dialog, no live preview, the selection updates on OK (#1752 closed as no gap) |
 | Marching ants as Photoshop draws them: device pixels, every edge equally thick (1 px at 100 %, 2 px up to 200 %), black/white dashes 4× the thickness, slanted dash ends, same look for drag previews and committed selections | done | `ants.rs`, `tests/it/marching_ants_pixels.rs` (#7489) |
 
 ## Pen, paths and shapes
@@ -134,8 +134,8 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | On-canvas corner-radius handles on live shapes | done: every selected live rectangle, triangle, polygon and star shows a widget at each arc centre with Path Selection, the Rectangle, Triangle and Polygon tools and Move with Show Transform Controls; a drag rounds every corner of every selected shape to the same radius, ⌥ one corner of a rectangle (a triangle or polygon has one radius), with the corner radius cursor and an `R:` readout, previewed and committed as one history step (`corner_radius.rs`, `corner_radius_tests.rs`) | TOOL-214-12 |
 | Shape stroke controls (dash, caps, joins, align) | done | TOOL-1053-1, [`shape-strokes.md`](shape-strokes.md) |
 | Shape options-bar Fill/Stroke hex input | done | #6176; `vector_ui.rs`, `vector_paint_tests.rs`: typed and pasted hex, partial/invalid input, alpha retention, next-shape defaults and selected-shape Undo |
-| Rotated shape selection hints correct | partial | #2512 |
-| Curved shape bounds exact | partial | one pixel too wide (#2537) |
+| Rotated shape selection hints correct | done | #2512 |
+| Curved shape bounds exact | done | #2537 |
 
 ## Crop
 
@@ -167,11 +167,11 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | ⇧-drag a guide out of a ruler: it lands on the nearest ruler tick | done | `rulers.rs` `snap_to_tick` (#3770) |
 | A dragged guide shows its position beside the pointer (X for vertical, Y for horizontal, in the ruler unit) | done | `rulers.rs` `guide_drag_readout` (#7680) |
 | ⌥ while dragging a guide (out of a ruler, or with the Move tool) turns it; a guide dropped on either ruler is deleted | done | `rulers.rs` `GuideDrag::track`, `view.moveGuide` `toOrientation` (#5034) |
-| Status bar follows the ruler unit | partial | #2602 |
+| Status bar follows the ruler unit | partial | #2602 closed; not confirmed in the code |
 | Ruler corner and gaps drawn as Photoshop | partial | #2600, #2601, #2551 |
-| Guides stored as f64 | missing | `Vec<f32>` (UI-217-20) |
+| Guides stored as f64 | done | UI-217-20 |
 | Geometry precision | partial | `geom::Point` f64, paths f64; paint internals mostly f32 |
-| Numeric fields: arithmetic, scrubby labels | partial | units in expressions and double-click reset missing (UI-217-13) |
+| Numeric fields: arithmetic, scrubby labels | done | UI-217-13 |
 | Wheel steps a value field, ⇧ ×10: clicked into, wherever the pointer is; not clicked, a gesture that starts over it | partial | `field_wheel.rs` (#5473, #4061). Photoshop: a field takes the wheel once clicked into (shortcut guides, user reports); whether the pointer must stay over it is unconfirmed. Stepping on hover alone is Photopea's, kept deliberately |
 | Font-name field: click selects the full name; typing searches in place | done | `type_tool.rs` `family_picker_in`, `type_font_picker_tests.rs` (#9338): one editable name above the list; unmatched queries show a compact message; Enter or a row applies to the selected characters even when the family matches their representative; both controls show the selected span and leave mixed families blank; caret font choices affect subsequent typing; Ctrl/Cmd+Enter accepts a valid pending font query and commits from a focused field; Escape/outside click discards pending text; existing navigation and previews retained |
 | Type options bar: drag the "T" icon to change the font size | done | `type_tool.rs` `options_bar`: the icon scrubs the size field like the Character panel's icons (Shift x10, Alt fine), at layer or selection scope, one history step per drag, within 1–1296 pt (#6437) |
@@ -187,13 +187,13 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Scrubby zoom | done | `zoom_tool.rs` |
 | Flick panning | done | `flick_pan.rs` (Preferences › Tools › Enable Flick Panning) |
 | Animated zoom | done | `canvas.rs`, `zoom_tool.rs`, `zoom_hold.rs`; discrete Zoom clicks and View zoom controls ease over 220 ms with anchored transitions and immediate direct navigation (#566); holding a Zoom press still past 0.3 s zooms continuously about the press point (2 doublings a second, ⌥ out) until release (#6210); General › Animated Zoom (default on) controls both behaviors; off snaps discrete zoom immediately, including when disabled mid-transition |
-| Double-click Zoom tool = 100%, double-click Hand = fit | partial | Zoom missing (#2508) |
+| Double-click Zoom tool = 100%, double-click Hand = fit | done | #2508, #2527 |
 | ⌥-wheel zoom around the pointer | partial | ×1.1 per notch, measured on Photoshop (#1718; `wheel_nav.rs`, `input_tests.rs`); #217 asked for ~5 % steps (UI-217-18) |
 | Wheel, smooth scrolling and pinch as in Photoshop | partial | #2485, #2463, #1989 |
 | Trackpad rotate drives Rotate View | done | `rotate_view.rs:136` |
-| Zoom levels to 3200% and beyond | partial | #1813 |
+| Zoom levels to 3200% and beyond | done | to 12800 % (`canvas/zoom_levels.rs`, #1813, #1718) |
 | Physical 100% at any display scale | done | #1943 |
-| ⌃Tab / ⌃⇧Tab switch document tabs | missing | #2340 |
+| ⌃Tab / ⌃⇧Tab switch document tabs | done | #2340, #2353 |
 
 ## Keyboard shortcuts
 
@@ -219,26 +219,26 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 30 of 35 Window-menu panels exist (measured). Missing: Libraries, Comments, Contextual Task Bar,
 Discover, Generative variations. Dock tabs: Layers, Channels, Paths, History, Actions, Layer
 Comps, Properties, Adjustments, Navigator, Histogram, Info, Color, Swatches, Character,
-Paragraph; the rest open as in-app floating windows.
+Paragraph; the rest open as in-app floating windows, and any group can float in a window of its own.
 
 | Behaviour | Status | Evidence |
 |---|---|---|
 | Character and Paragraph controls without a type target | done | #5556; persistent Type tool defaults feed new point, box and mask text; existing text still edits in its selected scope (`type_tool.rs`, `type_tool_tests.rs`) |
-| Panel groups float and tear off into OS windows | missing | UI-217-5, #1828, #1213 |
-| Drag panels to reorder and regroup | partial | #2272, #2305 |
-| Docked resize pushes the neighbour | partial | #2573 |
+| Panel groups float and tear off into OS windows | done | UI-217-5; `panels/panel_docking.rs`, layout saved with the workspace; follow-ups in #1379 |
+| Drag panels to reorder and regroup | done | UI-217-5, #2272 |
+| Docked resize pushes the neighbour | done | #2573 |
 | Color panel modes from its panel menu (Hue Cube, Brightness Cube, Color Wheel, Grayscale/RGB/HSB/CMYK/Lab/Web Color sliders), colour ramp (RGB/CMYK Spectrum, Grayscale Ramp, Current Colors, Make Ramp Web Safe; Shift-click cycles, Alt-click picks the other colour), Copy Color as HTML / Hex Code; the out-of-gamut ⚠ with the nearest printable colour under the chips (sliders always; the cubes when the field is at least 53 pt tall); the same in every theme | done | `color_panel_ui.rs`, `color_panel_tests.rs`; UI-217-17, #2569, #6000, #8672 |
 | A colour picked in the Color or Swatches panel or the Color Picker recolours the selection: selected characters while editing; every selected type layer with a Type tool; every selected shape's fill with a shape, Pen or path selection tool; only the foreground with other tools, the Move tool too; a swatch click recolours the selected type layers and shape fills whatever the tool (#9238); one history step (a Color panel drag too) | done: `apply_color.rs`, `apply_color_tests.rs` | |
 | Window size and dock width remembered | done | UI-217-2 |
 | Histogram panel: Compact (the default, of the entire image), Expanded and All Channels views (the channel kept across them); RGB/CMYK/Lab/Gray channels, Luminosity and Colors (overlaid, mixed where they overlap); Show Channels in Color and Show Statistics; Source (Entire Image, Selected Layer, Adjustment Composite) for multilayer documents; Mean, Std Dev, Median, Pixels, Level, Count, Percentile and Cache Level for the pointer level or a dragged range; the cached-data warning, Uncached Refresh (menu, button, warning click, double-click); the adjusted histogram over the original while an adjustment previews; Cache Levels 1–8 in Preferences › Performance; Color Sampler levels marked on the graph | partial | `histogram_panel.rs`, `histogram_panel_tests.rs`, `tone.rs`; differs: filter dialogs that preview on the CPU proxy aren't counted live, a selection doesn't limit the histogram yet, with Source Selected Layer an adjustment dialog's preview isn't counted, and new strings are English-only so far |
 | Command palette with recents | done | UI-217-7 |
 | Menu bar from the keyboard: Alt / F10 focus the bar, ← → ↓ ↩ drive it, Alt+letter opens a menu, underlined mnemonics run items | done | `menu_keys.rs`, #4988; macOS uses the native bar |
-| Every preference takes effect | partial | 12 of 181 do nothing (scorecard, 2026-10-27) |
+| Every preference takes effect | partial | 12 of 182 do nothing (scorecard, 2026-10-31) |
 | UI scale presets | done | UI-217-9; 75–125% in 5% steps (#2492, #3222) |
 | History snapshots: camera button, New Snapshot dialog (⌥-click: Name, From), the first snapshot (the document as opened), snapshot rows (click returns and selects, rename, delete; the trash deletes the selected snapshot, and a snapshot or state dragged onto it, #5324), `history.*Snapshot` commands | partial | `history_cmds.rs`, `snapshot_rows` in `panels.rs`, `snapshot_dialog.rs`; the snapshot History Options and History Brush sources to come (#2966) |
-| Themes: Photoshop's four greys | partial | five themes; #2661 |
+| Themes: Photoshop's four greys | done | Pro, Medium, Light Gray and Light among fourteen themes (UI-217-11, #2661) |
 | Document tabs: overflow, context menu, reorder | done | UI-217-6; middle-click close #2570 |
-| Layers panel: wheel steps blend modes, drop on New/Trash | partial | UI-217-14 |
+| Layers panel: wheel steps blend modes, drop on New/Trash | done | UI-217-14 |
 | Layers panel New Group button: click with 2+ layers selected groups them (CC 2014+), ⇧-click groups, one layer gives an empty group, ⌥-click opens the New Group dialog, ⌘-click adds the group below the active layer | done | #2561, `new_group_button_tests.rs` |
 | New Group dialog (Name, Color, Mode, Opacity) for Layer › New › Group… / Group from Layers…, the Layers panel menu and the row menu; ⌘G stays immediate | done | `dialogs/new_group_ui.rs`, `dialogs/new_group_ui/tests.rs` |
 | Groups made from layers (⌘G, New Group button, Group from Layers) start collapsed; selecting a layer inside opens the group | done | `group_options.rs` tests, `new_group_button_tests.rs` |
@@ -255,6 +255,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | major | Open rows re-checked at 0.18.0: 29 rows moved to done against issues, commits or scorecard rows, and to partial where only part landed. #2602 stays partial (closed, not confirmed in the code); the filter-type dropdown stays partial though #5048 closed (three of nine modes). Summary ~40 → ~45%, tools 56 → 68 of 68; estimates G5 50–90 h, G6 15–50 h, G9 120–200 h |
 | 2026-10-27 | minor | Every preference takes effect: 12 of 181 do nothing, the scorecard's count with integration batch 9 (#9775) on main; new layers go above a group whose lock would refuse them (#4329) |
 | 2026-10-25 | minor | Path Operations fixes (#7648 review): the first component keeps combining, the Pen leaves a component selection it doesn't show alone, a live shape dragged with Path Selection stays live, and a refused Pen draft becomes the Work Path on Esc or a tool switch instead of being retried every frame; no percentage changed |
 | 2026-10-24 | minor | Path Selection selects path components and has the Path Operations menu; the menu and `+` / `-` change the selected components' operation (`path.setOperation`); the Pen carries on an open shape layer or vector mask path from its endpoint (#1397 feedback); row stays partial until the Shape tools have the menu; no percentage changed |
