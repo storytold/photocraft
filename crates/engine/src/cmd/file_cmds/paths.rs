@@ -206,7 +206,7 @@ pub(crate) fn join(dir: &str, name: &str) -> String {
 /// before its first dot, so the file or folder is usable on Windows, wherever it was written.
 pub(crate) fn sanitize(name: &str) -> String {
     let s: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, '-' | '_' | ' ' | '.') { c } else { '_' }).collect();
-    let s = s.trim().trim_matches('.').to_string();
+    let s = s.trim_matches(|c: char| c == '.' || c.is_whitespace()).to_string();
     if s.is_empty() { "layer".into() } else { portable_device_name(s) }
 }
 
