@@ -620,6 +620,10 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Lower the native palettes first, then bring the modal's main window above them once.
     // Leave focus with another application when PhotoCraft is in the background.
     if opening_modal && !native_viewports(app, ui.ctx()).is_empty() && ui.input(|i| i.focused || i.raw.viewports.values().any(|v| v.focused == Some(true))) {
+        // egui's Focus command is a no-op when the main window already has focus.
+        if let Some(raise) = app.services.raise_window.as_mut() {
+            raise();
+        }
         ui.ctx().send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
     }
     if let Some(error) = output.error.take() {

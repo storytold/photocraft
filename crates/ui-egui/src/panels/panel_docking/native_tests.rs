@@ -411,6 +411,9 @@ fn save_options_block_floating_windows_immediately() {
 #[test]
 fn a_background_save_prompt_does_not_take_focus() {
     let mut desktop = Desktop::new(app_with_document());
+    let raises = Rc::new(std::cell::Cell::new(0));
+    let calls = raises.clone();
+    desktop.h.state_mut().services.raise_window = Some(Box::new(move || calls.set(calls.get() + 1)));
     desktop.h.state_mut().run("window.panel.float", json!({"panel": "info"})).unwrap();
     desktop.steps(3);
     let viewport = desktop.window_of("info").unwrap();
@@ -421,6 +424,28 @@ fn a_background_save_prompt_does_not_take_focus() {
     desktop.steps(4);
     assert_eq!(desktop.host.borrow().windows[&viewport].level, egui::WindowLevel::Normal);
     assert!(desktop.host.borrow().focus_requests.is_empty());
+    assert_eq!(raises.get(), 0);
+}
+
+/// Opening a modal raises the root once whether the root or a native panel has focus.
+#[test]
+fn a_modal_raises_the_main_window_even_when_it_already_has_focus() {
+    for main_focused in [true, false] {
+        let mut desktop = Desktop::new(app_with_document());
+        desktop.h.state_mut().run("window.panel.float", json!({"panel": "info"})).unwrap();
+        desktop.steps(3);
+        let viewport = desktop.window_of("info").unwrap();
+        desktop.host.borrow_mut().focus = (!main_focused).then_some(viewport);
+        let raises = Rc::new(std::cell::Cell::new(0));
+        let calls = raises.clone();
+        desktop.h.state_mut().services.raise_window = Some(Box::new(move || calls.set(calls.get() + 1)));
+        crate::jpeg_options_ui::park(desktop.h.state_mut(), "test.jpg".into(), false, "file.saveAs").unwrap();
+        desktop.steps(1);
+        assert_eq!(raises.get(), 1, "main focused: {main_focused}");
+        assert_eq!(desktop.host.borrow().windows[&viewport].level, egui::WindowLevel::Normal);
+        desktop.steps(3);
+        assert_eq!(raises.get(), 1, "raise only on opening");
+    }
 }
 
 #[derive(Debug)]
