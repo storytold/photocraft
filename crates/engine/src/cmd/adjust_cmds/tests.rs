@@ -803,6 +803,20 @@ fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
 
 /// A malformed `subtractPoints` is refused even with one sample, where the single-colour path
 /// would otherwise ignore it (CodeRabbit review on #10443).
+/// #10443 review: with only Subtract from Sample clicks, the dialog's From colour is what the
+/// subtraction starts from, not the foreground (black here), so the red is still replaced.
+#[test]
+fn replace_color_subtract_only_starts_from_the_from_colour() {
+    let (red, blue) = ([0.85, 0.1, 0.1, 1.0], [0.1, 0.15, 0.85, 1.0]);
+    let mut s = session(8, "rgb");
+    paint(&mut s, |x, _| if x < 16 { red } else { blue });
+    let (r0, b0) = (rgba(&s, 4, 16), rgba(&s, 24, 16));
+    let p = json!({"color": "#d91a1a", "hue": 120, "fuzziness": 40, "points": [], "subtractPoints": [[24, 16]]});
+    s.execute("image.adjustments.replaceColor", p).unwrap();
+    assert_ne!(rgba(&s, 4, 16), r0, "the From colour (red) is replaced");
+    assert_eq!(rgba(&s, 24, 16), b0, "the subtracted blue is left alone");
+}
+
 #[test]
 fn replace_color_refuses_malformed_subtract_points() {
     let mut s = session(8, "rgb");
