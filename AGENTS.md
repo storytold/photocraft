@@ -31,7 +31,7 @@ crates/
   doc                        L1 document model (layers, masks, adjustments, effects, smart objects: pure data)
   ops paint algo text vector L2 history, brush engine, imaging algorithms, type engine, paths/shapes
   compose gpu format         L3 CPU compositor (the oracle), wgpu compositor, .pcraft native format
-  io plugins                 L4 document <-> PSD / flat formats; sandboxed WebAssembly plug-ins
+  io plugins gmic            L4 document <-> PSD / flat formats; sandboxed WebAssembly plug-ins; G'MIC via a user-installed `gmic`
   engine                     L5 Session + command registry (every action is a command)
   ui-egui automation         L6 egui shell (thin: all actions go through the engine); MCP server
   testkit                    test helpers

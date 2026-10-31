@@ -3746,6 +3746,40 @@ cameraRaw	Masking	Маскування
 	Color Dodge (Paint.NET)	Освітлення основи (Paint.NET)
 	Pro Medium	Pro Medium
 	Studio Light	Studio Light
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	Про плагіни…
+	About Plug-ins	Про плагіни
+	G'MIC	G'MIC
+	G'MIC Command…	Команда G'MIC…
+	Locate G'MIC…	Вказати G'MIC…
+	Refresh Filters	Оновити фільтри
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Додайте плагін командою «Установити плагін…» або покладіть файли .wasm у теку, задану в Налаштування › Плагіни. Щоб написати власний, почніть із прикладу на Rust у examples/plugins/invert-rs.
+	Choose Check Again to look for G'MIC.	Виберіть «Перевірити знову», щоб знайти G'MIC.
+	Download G'MIC…	Завантажити G'MIC…
+	Filter List Unavailable	Список фільтрів недоступний
+	G'MIC Not Found	G'MIC не знайдено
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC — окрема безкоштовна програма для обробки зображень із сотнями фільтрів. PhotoCraft використовує копію, установлену на цьому комп'ютері; до складу PhotoCraft вона не входить.
+	G'MIC was not found on this computer.	G'MIC не знайдено на цьому комп'ютері.
+	G'MIC {version} found: {path}	Знайдено G'MIC {version}: {path}
+	Loading Filters…	Завантаження фільтрів…
+	Loading the filter list… (the first time takes about a minute)	Завантаження списку фільтрів… (уперше це триває близько хвилини)
+	Looking for G'MIC…	Пошук G'MIC…
+	No plug-ins are installed.	Плагіни не встановлено.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	Плагіни PhotoCraft — це ізольовані фільтри WebAssembly: один файл .wasm працює в macOS, Windows, Linux і в браузері. Плагін бачить лише пікселі, які обробляє; він не може читати файли й користуватися мережею.
+	The filter list couldn't be loaded: {error}	Не вдалося завантажити список фільтрів: {error}
+	Using G'MIC	Робота з G'MIC
+	Writing plug-ins	Створення плагінів
+	{count} filters in Filter › G'MIC	Фільтрів у Фільтр › G'MIC: {count}
+	G'MIC executable	Виконуваний файл G'MIC
+	G'MIC needs the desktop app: the web version can't start other programs.	Для G'MIC потрібен настільний застосунок: вебверсія не може запускати інші програми.
+	Install it with Homebrew, then choose Check Again:	Установіть його через Homebrew, потім виберіть «Перевірити знову»:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Завантажте версію для командного рядка (gmic-…-cli-win64.zip) з gmic.eu, розпакуйте її, потім виберіть «Вказати G'MIC…» і вкажіть gmic.exe.
+	Install the gmic package, then choose Check Again:	Установіть пакет gmic, потім виберіть «Перевірити знову»:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Установіть пакет gmic менеджером пакетів або завантажте його з gmic.eu, потім виберіть «Перевірити знову».
+	About G'MIC…	Про G'MIC…
+	Plug-in Preferences…	Налаштування плагінів…
+
 	Stroke Options	Параметри обведення
 	Solid	Суцільне
 	Dashed	Штрихове

@@ -3766,6 +3766,40 @@ cameraRaw	Whites	Beyazlar
 	XOR	XOR
 	Color Burn (Paint.NET)	Renk Yakma (Paint.NET)
 	Color Dodge (Paint.NET)	Renk Soldurma (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	Eklentiler Hakkında…
+	About Plug-ins	Eklentiler Hakkında
+	G'MIC	G'MIC
+	G'MIC Command…	G'MIC Komutu…
+	Locate G'MIC…	G'MIC'i Bul…
+	Refresh Filters	Filtreleri Yenile
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Eklentiyi Yükle… ile bir tane ekleyin veya .wasm dosyalarını Tercihler › Eklentiler'de ayarlanan klasöre koyun. Kendi eklentinizi yazmak için examples/plugins/invert-rs içindeki Rust örneğinden başlayın.
+	Choose Check Again to look for G'MIC.	G'MIC'i aramak için Yeniden Denetle'yi seçin.
+	Download G'MIC…	G'MIC'i İndir…
+	Filter List Unavailable	Filtre Listesi Kullanılamıyor
+	G'MIC Not Found	G'MIC Bulunamadı
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC, yüzlerce filtresi olan ayrı ve ücretsiz bir görüntü işleme programıdır. PhotoCraft bu bilgisayarda kurulu kopyayı çalıştırır; G'MIC PhotoCraft'a dahil değildir.
+	G'MIC was not found on this computer.	G'MIC bu bilgisayarda bulunamadı.
+	G'MIC {version} found: {path}	G'MIC {version} bulundu: {path}
+	Loading Filters…	Filtreler Yükleniyor…
+	Loading the filter list… (the first time takes about a minute)	Filtre listesi yükleniyor… (ilk seferde yaklaşık bir dakika sürer)
+	Looking for G'MIC…	G'MIC aranıyor…
+	No plug-ins are installed.	Kurulu eklenti yok.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	PhotoCraft eklentileri yalıtılmış WebAssembly filtreleridir: tek bir .wasm dosyası macOS, Windows, Linux ve web'de çalışır. Bir eklenti yalnızca filtrelediği pikselleri görür; dosya okuyamaz ve ağı kullanamaz.
+	The filter list couldn't be loaded: {error}	Filtre listesi yüklenemedi: {error}
+	Using G'MIC	G'MIC'i Kullanma
+	Writing plug-ins	Eklenti Yazma
+	{count} filters in Filter › G'MIC	Filtre › G'MIC içinde {count} filtre
+	G'MIC executable	G'MIC yürütülebilir dosyası
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC masaüstü uygulamasını gerektirir: web sürümü başka programları başlatamaz.
+	Install it with Homebrew, then choose Check Again:	Homebrew ile kurun, ardından Yeniden Denetle'yi seçin:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Komut satırı sürümünü (gmic-…-cli-win64.zip) gmic.eu adresinden indirin, arşivden çıkarın, ardından G'MIC'i Bul…'u seçip gmic.exe dosyasını seçin.
+	Install the gmic package, then choose Check Again:	gmic paketini kurun, ardından Yeniden Denetle'yi seçin:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	gmic paketini paket yöneticinizle kurun veya gmic.eu adresinden indirin, ardından Yeniden Denetle'yi seçin.
+	About G'MIC…	G'MIC Hakkında…
+	Plug-in Preferences…	Eklenti Tercihleri…
+
 	Pro Medium	Pro Orta
 	Studio Light	Stüdyo Açık
 	Stroke Options	Kontur Seçenekleri

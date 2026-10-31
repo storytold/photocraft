@@ -3064,6 +3064,40 @@ fontWeight	Italic	Miring
 	XOR	XOR
 	Color Burn (Paint.NET)	Color Burn (Paint.NET)
 	Color Dodge (Paint.NET)	Color Dodge (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	Tentang Plug-in…
+	About Plug-ins	Tentang Plug-in
+	G'MIC	G'MIC
+	G'MIC Command…	Perintah G'MIC…
+	Locate G'MIC…	Cari G'MIC…
+	Refresh Filters	Segarkan Filter
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Tambahkan dengan Pasang Plug-in…, atau taruh berkas .wasm di folder yang diatur di Preferensi › Plug-in. Untuk membuat sendiri, mulailah dari contoh Rust di examples/plugins/invert-rs.
+	Choose Check Again to look for G'MIC.	Pilih Periksa Lagi untuk mencari G'MIC.
+	Download G'MIC…	Unduh G'MIC…
+	Filter List Unavailable	Daftar Filter Tidak Tersedia
+	G'MIC Not Found	G'MIC Tidak Ditemukan
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC adalah program pengolah gambar terpisah dan gratis dengan ratusan filter. PhotoCraft menjalankan salinan yang terpasang di komputer ini; G'MIC tidak disertakan dalam PhotoCraft.
+	G'MIC was not found on this computer.	G'MIC tidak ditemukan di komputer ini.
+	G'MIC {version} found: {path}	G'MIC {version} ditemukan: {path}
+	Loading Filters…	Memuat Filter…
+	Loading the filter list… (the first time takes about a minute)	Memuat daftar filter… (pertama kali butuh sekitar satu menit)
+	Looking for G'MIC…	Mencari G'MIC…
+	No plug-ins are installed.	Tidak ada plug-in yang terpasang.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	Plug-in PhotoCraft adalah filter WebAssembly yang terisolasi: satu berkas .wasm berjalan di macOS, Windows, Linux, dan web. Plug-in hanya melihat piksel yang difilternya; plug-in tidak bisa membaca berkas atau memakai jaringan.
+	The filter list couldn't be loaded: {error}	Daftar filter tidak dapat dimuat: {error}
+	Using G'MIC	Menggunakan G'MIC
+	Writing plug-ins	Membuat plug-in
+	{count} filters in Filter › G'MIC	{count} filter di Filter › G'MIC
+	G'MIC executable	Program G'MIC
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC memerlukan aplikasi desktop: versi web tidak dapat menjalankan program lain.
+	Install it with Homebrew, then choose Check Again:	Pasang dengan Homebrew, lalu pilih Periksa Lagi:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Unduh versi baris perintah (gmic-…-cli-win64.zip) dari gmic.eu, ekstrak, lalu pilih Cari G'MIC… dan pilih gmic.exe.
+	Install the gmic package, then choose Check Again:	Pasang paket gmic, lalu pilih Periksa Lagi:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Pasang paket gmic dengan pengelola paket Anda, atau unduh dari gmic.eu, lalu pilih Periksa Lagi.
+	About G'MIC…	Tentang G'MIC…
+	Plug-in Preferences…	Preferensi Plug-in…
+
 	Stroke Options	Opsi goresan
 	Solid	Utuh
 	Dashed	Putus-putus

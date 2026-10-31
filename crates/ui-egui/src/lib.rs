@@ -195,6 +195,7 @@ pub use menus::menu_nav;
 pub use menus::native_menu;
 pub use menus::parity;
 pub use menus::plugin_ui;
+pub use menus::plugins_ui;
 pub use menus::view_cmds;
 pub use menus::workspace_ui;
 pub use panels::actions;

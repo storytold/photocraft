@@ -2667,6 +2667,40 @@ fontWeight	Italic	Cursiva
 	XOR	XOR
 	Color Burn (Paint.NET)	Subexposición de color (Paint.NET)
 	Color Dodge (Paint.NET)	Sobreexposición de color (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	Acerca de los complementos…
+	About Plug-ins	Acerca de los complementos
+	G'MIC	G'MIC
+	G'MIC Command…	Comando de G'MIC…
+	Locate G'MIC…	Buscar G'MIC…
+	Refresh Filters	Actualizar filtros
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Añade uno con Instalar complemento…, o coloca archivos .wasm en la carpeta indicada en Preferencias › Complementos. Para escribir el tuyo, parte del ejemplo en Rust de examples/plugins/invert-rs.
+	Choose Check Again to look for G'MIC.	Elige Volver a comprobar para buscar G'MIC.
+	Download G'MIC…	Descargar G'MIC…
+	Filter List Unavailable	Lista de filtros no disponible
+	G'MIC Not Found	No se encontró G'MIC
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC es un programa de procesamiento de imágenes independiente y gratuito, con cientos de filtros. PhotoCraft usa la copia instalada en este equipo; no se incluye con PhotoCraft.
+	G'MIC was not found on this computer.	No se encontró G'MIC en este equipo.
+	G'MIC {version} found: {path}	G'MIC {version} encontrado: {path}
+	Loading Filters…	Cargando filtros…
+	Loading the filter list… (the first time takes about a minute)	Cargando la lista de filtros… (la primera vez tarda alrededor de un minuto)
+	Looking for G'MIC…	Buscando G'MIC…
+	No plug-ins are installed.	No hay complementos instalados.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	Los complementos de PhotoCraft son filtros WebAssembly aislados: un mismo archivo .wasm funciona en macOS, Windows, Linux y la web. Un complemento solo ve los píxeles que filtra; no puede leer archivos ni usar la red.
+	The filter list couldn't be loaded: {error}	No se pudo cargar la lista de filtros: {error}
+	Using G'MIC	Usar G'MIC
+	Writing plug-ins	Crear complementos
+	{count} filters in Filter › G'MIC	{count} filtros en Filtro › G'MIC
+	G'MIC executable	Ejecutable de G'MIC
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC necesita la aplicación de escritorio: la versión web no puede iniciar otros programas.
+	Install it with Homebrew, then choose Check Again:	Instálalo con Homebrew y luego elige Volver a comprobar:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Descarga la versión de línea de comandos (gmic-…-cli-win64.zip) de gmic.eu, descomprímela y luego elige Buscar G'MIC… y selecciona gmic.exe.
+	Install the gmic package, then choose Check Again:	Instala el paquete gmic y luego elige Volver a comprobar:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Instala el paquete gmic con tu gestor de paquetes o descárgalo de gmic.eu, y luego elige Volver a comprobar.
+	About G'MIC…	Acerca de G'MIC…
+	Plug-in Preferences…	Preferencias de complementos…
+
 	Stroke Options	Opciones de trazo
 	Solid	Continuo
 	Dashed	Discontinuo

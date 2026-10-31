@@ -126,6 +126,7 @@ pub use cmd::perspective_crop_cmds;
 pub use cmd::photo_cmds;
 pub use cmd::pick_cmds;
 pub use cmd::plugin_cmds;
+pub use cmd::gmic_cmds;
 pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
 pub use cmd::rasterize_style_cmds;

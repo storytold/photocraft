@@ -1541,6 +1541,40 @@ fontWeight	Thin	Hajszálvékony
 	Color Decontaminate	Színszennyeződés eltávolítása
 	Color Dodge	Színderítés
 	Color Dodge (Paint.NET)	Színderítés (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	A bővítmények névjegye…
+	About Plug-ins	A bővítmények névjegye
+	G'MIC	G'MIC
+	G'MIC Command…	G'MIC-parancs…
+	Locate G'MIC…	G'MIC megkeresése…
+	Refresh Filters	Szűrők frissítése
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Telepítsen egyet a Bővítmény telepítése… paranccsal, vagy tegyen .wasm fájlokat a Beállítások › Bővítmények pontban megadott mappába. Saját bővítmény írásához induljon ki az examples/plugins/invert-rs Rust-példából.
+	Choose Check Again to look for G'MIC.	A G'MIC kereséséhez válassza az Újraellenőrzés lehetőséget.
+	Download G'MIC…	G'MIC letöltése…
+	Filter List Unavailable	A szűrőlista nem érhető el
+	G'MIC Not Found	A G'MIC nem található
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	A G'MIC egy különálló, ingyenes képfeldolgozó program több száz szűrővel. A PhotoCraft a számítógépre telepített példányt futtatja; a G'MIC nem része a PhotoCraftnak.
+	G'MIC was not found on this computer.	A G'MIC nem található ezen a számítógépen.
+	G'MIC {version} found: {path}	G'MIC {version} megtalálva: {path}
+	Loading Filters…	Szűrők betöltése…
+	Loading the filter list… (the first time takes about a minute)	A szűrőlista betöltése… (az első alkalommal körülbelül egy percig tart)
+	Looking for G'MIC…	G'MIC keresése…
+	No plug-ins are installed.	Nincs telepített bővítmény.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	A PhotoCraft-bővítmények elkülönített WebAssembly-szűrők: egyetlen .wasm fájl működik macOS-en, Windowson, Linuxon és a weben. A bővítmény csak az általa szűrt képpontokat látja; nem olvashat fájlokat és nem használhatja a hálózatot.
+	The filter list couldn't be loaded: {error}	A szűrőlista nem tölthető be: {error}
+	Using G'MIC	A G'MIC használata
+	Writing plug-ins	Bővítmények írása
+	{count} filters in Filter › G'MIC	{count} szűrő a Szűrő › G'MIC menüben
+	G'MIC executable	G'MIC programfájl
+	G'MIC needs the desktop app: the web version can't start other programs.	A G'MIC-hez az asztali alkalmazás szükséges: a webes változat nem tud más programokat indítani.
+	Install it with Homebrew, then choose Check Again:	Telepítse Homebrew-val, majd válassza az Újraellenőrzés lehetőséget:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Töltse le a parancssoros változatot (gmic-…-cli-win64.zip) a gmic.eu oldalról, csomagolja ki, majd válassza a G'MIC megkeresése… lehetőséget, és jelölje ki a gmic.exe fájlt.
+	Install the gmic package, then choose Check Again:	Telepítse a gmic csomagot, majd válassza az Újraellenőrzés lehetőséget:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Telepítse a gmic csomagot a csomagkezelővel, vagy töltse le a gmic.eu oldalról, majd válassza az Újraellenőrzés lehetőséget.
+	About G'MIC…	A G'MIC névjegye…
+	Plug-in Preferences…	Bővítménybeállítások…
+
 	Color indicates	A szín jelöli
 	Color Indicates Masked Areas	A szín a maszkolt területeket jelöli
 	Color Indicates Selected Areas	A szín a kijelölt területeket jelöli

@@ -113,7 +113,8 @@ mod tests {
                 "help.checkForUpdates",
                 "---",
                 "help.systemInfo",
-                "help.about"
+                "help.about",
+                "help.aboutPlugins"
             ]
         );
         for (id, _) in COMMANDS {

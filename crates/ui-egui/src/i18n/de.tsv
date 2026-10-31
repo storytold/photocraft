@@ -2692,6 +2692,40 @@ fontWeight	Italic	Kursiv
 	XOR	XOR
 	Color Burn (Paint.NET)	Farbig nachbelichten (Paint.NET)
 	Color Dodge (Paint.NET)	Farbig abwedeln (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	Über Plug-ins…
+	About Plug-ins	Über Plug-ins
+	G'MIC	G'MIC
+	G'MIC Command…	G'MIC-Befehl…
+	Locate G'MIC…	G'MIC suchen…
+	Refresh Filters	Filter aktualisieren
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Fügen Sie eines mit „Plug-in installieren…“ hinzu oder legen Sie .wasm-Dateien in den Ordner aus Voreinstellungen › Plug-ins. Für eigene Plug-ins beginnen Sie mit dem Rust-Beispiel in examples/plugins/invert-rs.
+	Choose Check Again to look for G'MIC.	Wählen Sie „Erneut prüfen“, um nach G'MIC zu suchen.
+	Download G'MIC…	G'MIC herunterladen…
+	Filter List Unavailable	Filterliste nicht verfügbar
+	G'MIC Not Found	G'MIC nicht gefunden
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC ist ein eigenständiges, kostenloses Bildbearbeitungsprogramm mit Hunderten von Filtern. PhotoCraft verwendet die auf diesem Computer installierte Version; G'MIC ist nicht in PhotoCraft enthalten.
+	G'MIC was not found on this computer.	G'MIC wurde auf diesem Computer nicht gefunden.
+	G'MIC {version} found: {path}	G'MIC {version} gefunden: {path}
+	Loading Filters…	Filter werden geladen…
+	Loading the filter list… (the first time takes about a minute)	Filterliste wird geladen… (beim ersten Mal dauert das etwa eine Minute)
+	Looking for G'MIC…	G'MIC wird gesucht…
+	No plug-ins are installed.	Es sind keine Plug-ins installiert.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	PhotoCraft-Plug-ins sind abgeschottete WebAssembly-Filter: Eine .wasm-Datei funktioniert unter macOS, Windows, Linux und im Web. Ein Plug-in sieht nur die Pixel, die es filtert; es kann keine Dateien lesen und nicht auf das Netzwerk zugreifen.
+	The filter list couldn't be loaded: {error}	Die Filterliste konnte nicht geladen werden: {error}
+	Using G'MIC	G'MIC verwenden
+	Writing plug-ins	Plug-ins schreiben
+	{count} filters in Filter › G'MIC	{count} Filter unter Filter › G'MIC
+	G'MIC executable	G'MIC-Programm
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC benötigt die Desktop-App: Die Webversion kann keine anderen Programme starten.
+	Install it with Homebrew, then choose Check Again:	Installieren Sie es mit Homebrew und wählen Sie dann „Erneut prüfen“:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Laden Sie die Kommandozeilenversion (gmic-…-cli-win64.zip) von gmic.eu herunter, entpacken Sie sie, wählen Sie dann „G'MIC suchen…“ und wählen Sie gmic.exe aus.
+	Install the gmic package, then choose Check Again:	Installieren Sie das Paket gmic und wählen Sie dann „Erneut prüfen“:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Installieren Sie das Paket gmic mit Ihrer Paketverwaltung oder laden Sie es von gmic.eu herunter, und wählen Sie dann „Erneut prüfen“.
+	About G'MIC…	Über G'MIC…
+	Plug-in Preferences…	Plug-in-Voreinstellungen…
+
 	Stroke Options	Konturoptionen
 	Solid	Durchgezogen
 	Dashed	Gestrichelt

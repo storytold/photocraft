@@ -2655,6 +2655,40 @@ fontWeight	Italic	Kurzíva
 	XOR	XOR
 	Color Burn (Paint.NET)	Ztmavit barvy (Paint.NET)
 	Color Dodge (Paint.NET)	Zesvětlit barvy (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	O zásuvných modulech…
+	About Plug-ins	O zásuvných modulech
+	G'MIC	G'MIC
+	G'MIC Command…	Příkaz G'MIC…
+	Locate G'MIC…	Najít G'MIC…
+	Refresh Filters	Obnovit filtry
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Přidejte modul pomocí Instalovat zásuvný modul… nebo vložte soubory .wasm do složky nastavené v Předvolby › Zásuvné moduly. Chcete-li napsat vlastní, začněte příkladem v Rustu v examples/plugins/invert-rs.
+	Choose Check Again to look for G'MIC.	Zvolte Zkontrolovat znovu a vyhledejte G'MIC.
+	Download G'MIC…	Stáhnout G'MIC…
+	Filter List Unavailable	Seznam filtrů není k dispozici
+	G'MIC Not Found	G'MIC nenalezen
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC je samostatný bezplatný program pro zpracování obrazu se stovkami filtrů. PhotoCraft používá kopii nainstalovanou v tomto počítači; není součástí PhotoCraftu.
+	G'MIC was not found on this computer.	G'MIC nebyl v tomto počítači nalezen.
+	G'MIC {version} found: {path}	Nalezen G'MIC {version}: {path}
+	Loading Filters…	Načítání filtrů…
+	Loading the filter list… (the first time takes about a minute)	Načítání seznamu filtrů… (poprvé to trvá asi minutu)
+	Looking for G'MIC…	Hledání G'MIC…
+	No plug-ins are installed.	Nejsou nainstalovány žádné zásuvné moduly.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	Zásuvné moduly PhotoCraftu jsou izolované filtry WebAssembly: jeden soubor .wasm funguje v macOS, Windows, Linuxu i na webu. Zásuvný modul vidí jen pixely, které filtruje; nemůže číst soubory ani používat síť.
+	The filter list couldn't be loaded: {error}	Seznam filtrů nelze načíst: {error}
+	Using G'MIC	Používání G'MIC
+	Writing plug-ins	Psaní zásuvných modulů
+	{count} filters in Filter › G'MIC	{count} filtrů v Filtr › G'MIC
+	G'MIC executable	Spustitelný soubor G'MIC
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC vyžaduje desktopovou aplikaci: webová verze nemůže spouštět jiné programy.
+	Install it with Homebrew, then choose Check Again:	Nainstalujte jej pomocí Homebrew a pak zvolte Zkontrolovat znovu:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Stáhněte verzi pro příkazový řádek (gmic-…-cli-win64.zip) z gmic.eu, rozbalte ji, pak zvolte Najít G'MIC… a vyberte gmic.exe.
+	Install the gmic package, then choose Check Again:	Nainstalujte balíček gmic a pak zvolte Zkontrolovat znovu:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Nainstalujte balíček gmic správcem balíčků nebo jej stáhněte z gmic.eu a pak zvolte Zkontrolovat znovu.
+	About G'MIC…	O G'MIC…
+	Plug-in Preferences…	Předvolby zásuvných modulů…
+
 	Stroke Options	Volby tahu
 	Solid	Plný
 	Dashed	Čárkovaný

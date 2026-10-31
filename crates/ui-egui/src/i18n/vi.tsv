@@ -2919,6 +2919,40 @@ fontWeight	Italic	Nghiêng
 	XOR	XOR
 	Color Burn (Paint.NET)	Trộn màu tối (Paint.NET)
 	Color Dodge (Paint.NET)	Trộn màu sáng (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	Giới thiệu plug-in…
+	About Plug-ins	Giới thiệu plug-in
+	G'MIC	G'MIC
+	G'MIC Command…	Lệnh G'MIC…
+	Locate G'MIC…	Tìm G'MIC…
+	Refresh Filters	Làm mới bộ lọc
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Thêm một plug-in bằng Cài plug-in…, hoặc đặt tệp .wasm vào thư mục được đặt trong Tùy chọn › Plug-in. Để tự viết, hãy bắt đầu từ ví dụ Rust trong examples/plugins/invert-rs.
+	Choose Check Again to look for G'MIC.	Chọn Kiểm tra lại để tìm G'MIC.
+	Download G'MIC…	Tải xuống G'MIC…
+	Filter List Unavailable	Không có danh sách bộ lọc
+	G'MIC Not Found	Không tìm thấy G'MIC
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC là một chương trình xử lý ảnh miễn phí, riêng biệt, có hàng trăm bộ lọc. PhotoCraft chạy bản được cài trên máy tính này; G'MIC không đi kèm PhotoCraft.
+	G'MIC was not found on this computer.	Không tìm thấy G'MIC trên máy tính này.
+	G'MIC {version} found: {path}	Đã tìm thấy G'MIC {version}: {path}
+	Loading Filters…	Đang tải bộ lọc…
+	Loading the filter list… (the first time takes about a minute)	Đang tải danh sách bộ lọc… (lần đầu mất khoảng một phút)
+	Looking for G'MIC…	Đang tìm G'MIC…
+	No plug-ins are installed.	Chưa cài plug-in nào.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	Plug-in của PhotoCraft là các bộ lọc WebAssembly chạy cách ly: một tệp .wasm hoạt động trên macOS, Windows, Linux và web. Plug-in chỉ thấy các điểm ảnh mà nó lọc; nó không thể đọc tệp hay dùng mạng.
+	The filter list couldn't be loaded: {error}	Không thể tải danh sách bộ lọc: {error}
+	Using G'MIC	Dùng G'MIC
+	Writing plug-ins	Viết plug-in
+	{count} filters in Filter › G'MIC	{count} bộ lọc trong Bộ lọc › G'MIC
+	G'MIC executable	Tệp thực thi G'MIC
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC cần ứng dụng máy tính: bản web không thể khởi chạy chương trình khác.
+	Install it with Homebrew, then choose Check Again:	Cài bằng Homebrew, rồi chọn Kiểm tra lại:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Tải bản dòng lệnh (gmic-…-cli-win64.zip) từ gmic.eu, giải nén, rồi chọn Tìm G'MIC… và chọn gmic.exe.
+	Install the gmic package, then choose Check Again:	Cài gói gmic, rồi chọn Kiểm tra lại:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Cài gói gmic bằng trình quản lý gói, hoặc tải xuống từ gmic.eu, rồi chọn Kiểm tra lại.
+	About G'MIC…	Giới thiệu G'MIC…
+	Plug-in Preferences…	Tùy chọn plug-in…
+
 	Dashed	Đứt quãng
 	Dotted	Chấm
 	Butt / Flat	Phẳng

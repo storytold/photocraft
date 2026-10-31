@@ -90,6 +90,10 @@ real_name = "Ahmed Moussa"
 display_name = "Ahmed Moussa"
 sync_github_name = false
 
+[people.thomasmeadows]
+real_name = "Thomas Meadows"
+sync_github_name = true
+
 [people.alexanderalber]
 real_name = "Alexander Alber"
 display_name = "Alexander Alber"

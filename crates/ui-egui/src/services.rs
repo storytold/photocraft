@@ -390,6 +390,9 @@ pub struct Services {
     /// Photoshop's live keyboard shortcut set, imported once at first launch (`kys_import`).
     pub photoshop_shortcuts: Option<PhotoshopShortcutsFn>,
     pub system_theme: Option<SystemThemeFn>,
+    /// Look for G'MIC (`gmic`) when the Filter menu or About Plug-ins is shown, and load its
+    /// filter list in the background (desktop app; off in tests and on the web).
+    pub detect_gmic: bool,
     /// The native window is connected directly to a Wayland compositor.
     pub is_wayland: bool,
     /// On Wayland, the shell command that starts this install under XWayland, where native file

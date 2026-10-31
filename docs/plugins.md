@@ -5,7 +5,8 @@ arbitrary machine code and cannot work in the browser build. Instead, plug-ins a
 modules** run in a sandbox. One `.wasm` file works on macOS, Windows, Linux and the web.
 
 This page is the contract for plug-in authors and the reference for the host
-(`crates/plugins`, the `plugin.*` commands in `crates/engine/src/plugin_cmds.rs`).
+(`crates/plugins`, the `plugin.*` commands in `crates/engine/src/plugin_cmds.rs`). G'MIC filters,
+which run through a separately installed `gmic` program, are described in [gmic.md](gmic.md).
 
 ## Using plug-ins
 
@@ -18,7 +19,9 @@ This page is the contract for plug-in authors and the reference for the host
 | `plugin.reload` | `{"path": "folder"}` (default: the preference folder) | Loads every `*.wasm` in a folder; a bad module is reported and skipped. |
 
 In the app, installed filters appear under **Filter › Plug-ins** (with a generated dialog and live
-preview when they have parameters), next to **Install Plug-in…**.
+preview when they have parameters), next to **Install Plug-in…** and **About Plug-ins…**. About Plug-ins (also in Help) explains
+plug-ins, lists the installed ones, links here, and covers G'MIC (Filter › G'MIC, see
+[gmic.md](gmic.md)).
 
 **Preference folder.** Edit › Preferences › Plug-ins › *Use Additional Plug-ins Folder* plus
 *Additional Plug-ins Folder*: when both are set, every `*.wasm` in that folder (not recursive) is

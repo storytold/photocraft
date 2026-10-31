@@ -3059,6 +3059,40 @@ fontWeight	Italic	Italique
 	XOR	XOR
 	Color Burn (Paint.NET)	Densité couleur + (Paint.NET)
 	Color Dodge (Paint.NET)	Densité couleur − (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	À propos des extensions…
+	About Plug-ins	À propos des extensions
+	G'MIC	G'MIC
+	G'MIC Command…	Commande G'MIC…
+	Locate G'MIC…	Localiser G'MIC…
+	Refresh Filters	Actualiser les filtres
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Ajoutez-en une avec Installer une extension…, ou placez des fichiers .wasm dans le dossier défini dans Préférences › Extensions. Pour écrire la vôtre, partez de l'exemple Rust dans examples/plugins/invert-rs.
+	Choose Check Again to look for G'MIC.	Choisissez Vérifier à nouveau pour rechercher G'MIC.
+	Download G'MIC…	Télécharger G'MIC…
+	Filter List Unavailable	Liste des filtres indisponible
+	G'MIC Not Found	G'MIC introuvable
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC est un programme de traitement d'images distinct et gratuit, avec des centaines de filtres. PhotoCraft utilise la copie installée sur cet ordinateur ; elle n'est pas fournie avec PhotoCraft.
+	G'MIC was not found on this computer.	G'MIC est introuvable sur cet ordinateur.
+	G'MIC {version} found: {path}	G'MIC {version} trouvé : {path}
+	Loading Filters…	Chargement des filtres…
+	Loading the filter list… (the first time takes about a minute)	Chargement de la liste des filtres… (la première fois prend environ une minute)
+	Looking for G'MIC…	Recherche de G'MIC…
+	No plug-ins are installed.	Aucune extension n'est installée.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	Les extensions PhotoCraft sont des filtres WebAssembly isolés : un même fichier .wasm fonctionne sous macOS, Windows, Linux et sur le web. Une extension ne voit que les pixels qu'elle filtre ; elle ne peut ni lire de fichiers ni utiliser le réseau.
+	The filter list couldn't be loaded: {error}	Impossible de charger la liste des filtres : {error}
+	Using G'MIC	Utiliser G'MIC
+	Writing plug-ins	Écrire des extensions
+	{count} filters in Filter › G'MIC	{count} filtres dans Filtre › G'MIC
+	G'MIC executable	Exécutable G'MIC
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC nécessite l'application de bureau : la version web ne peut pas lancer d'autres programmes.
+	Install it with Homebrew, then choose Check Again:	Installez-le avec Homebrew, puis choisissez Vérifier à nouveau :
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Téléchargez la version en ligne de commande (gmic-…-cli-win64.zip) depuis gmic.eu, décompressez-la, puis choisissez Localiser G'MIC… et sélectionnez gmic.exe.
+	Install the gmic package, then choose Check Again:	Installez le paquet gmic, puis choisissez Vérifier à nouveau :
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Installez le paquet gmic avec votre gestionnaire de paquets ou téléchargez-le depuis gmic.eu, puis choisissez Vérifier à nouveau.
+	About G'MIC…	À propos de G'MIC…
+	Plug-in Preferences…	Préférences des extensions…
+
 	Stroke Options	Options du contour
 	Solid	Continu
 	Dashed	Tirets

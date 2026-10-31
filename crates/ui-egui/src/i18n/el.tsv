@@ -3747,6 +3747,40 @@ fontWeight	Thin	Πολύ λεπτά
 	XOR	XOR
 	Color Burn (Paint.NET)	Κάψιμο χρώματος (Paint.NET)
 	Color Dodge (Paint.NET)	Φωτισμός χρώματος (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	Σχετικά με τα πρόσθετα…
+	About Plug-ins	Σχετικά με τα πρόσθετα
+	G'MIC	G'MIC
+	G'MIC Command…	Εντολή G'MIC…
+	Locate G'MIC…	Εντοπισμός του G'MIC…
+	Refresh Filters	Ανανέωση φίλτρων
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	Προσθέστε ένα με την Εγκατάσταση προσθέτου… ή βάλτε αρχεία .wasm στον φάκελο που ορίζεται στις Προτιμήσεις › Πρόσθετα. Για να γράψετε το δικό σας, ξεκινήστε από το παράδειγμα σε Rust στο examples/plugins/invert-rs.
+	Choose Check Again to look for G'MIC.	Επιλέξτε Νέος έλεγχος για να αναζητηθεί το G'MIC.
+	Download G'MIC…	Λήψη G'MIC…
+	Filter List Unavailable	Η λίστα φίλτρων δεν είναι διαθέσιμη
+	G'MIC Not Found	Το G'MIC δεν βρέθηκε
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	Το G'MIC είναι ένα ξεχωριστό, δωρεάν πρόγραμμα επεξεργασίας εικόνας με εκατοντάδες φίλτρα. Το PhotoCraft χρησιμοποιεί το αντίγραφο που είναι εγκατεστημένο σε αυτόν τον υπολογιστή· δεν περιλαμβάνεται στο PhotoCraft.
+	G'MIC was not found on this computer.	Το G'MIC δεν βρέθηκε σε αυτόν τον υπολογιστή.
+	G'MIC {version} found: {path}	Βρέθηκε το G'MIC {version}: {path}
+	Loading Filters…	Φόρτωση φίλτρων…
+	Loading the filter list… (the first time takes about a minute)	Φόρτωση της λίστας φίλτρων… (την πρώτη φορά διαρκεί περίπου ένα λεπτό)
+	Looking for G'MIC…	Αναζήτηση του G'MIC…
+	No plug-ins are installed.	Δεν υπάρχουν εγκατεστημένα πρόσθετα.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	Τα πρόσθετα του PhotoCraft είναι απομονωμένα φίλτρα WebAssembly: ένα αρχείο .wasm λειτουργεί σε macOS, Windows, Linux και στον ιστό. Ένα πρόσθετο βλέπει μόνο τα pixel που φιλτράρει· δεν μπορεί να διαβάσει αρχεία ούτε να χρησιμοποιήσει το δίκτυο.
+	The filter list couldn't be loaded: {error}	Δεν ήταν δυνατή η φόρτωση της λίστας φίλτρων: {error}
+	Using G'MIC	Χρήση του G'MIC
+	Writing plug-ins	Συγγραφή προσθέτων
+	{count} filters in Filter › G'MIC	{count} φίλτρα στο Φίλτρο › G'MIC
+	G'MIC executable	Εκτελέσιμο G'MIC
+	G'MIC needs the desktop app: the web version can't start other programs.	Το G'MIC χρειάζεται την εφαρμογή υπολογιστή: η έκδοση ιστού δεν μπορεί να εκκινήσει άλλα προγράμματα.
+	Install it with Homebrew, then choose Check Again:	Εγκαταστήστε το με το Homebrew και μετά επιλέξτε Νέος έλεγχος:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	Κατεβάστε την έκδοση γραμμής εντολών (gmic-…-cli-win64.zip) από το gmic.eu, αποσυμπιέστε την, μετά επιλέξτε Εντοπισμός του G'MIC… και διαλέξτε το gmic.exe.
+	Install the gmic package, then choose Check Again:	Εγκαταστήστε το πακέτο gmic και μετά επιλέξτε Νέος έλεγχος:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	Εγκαταστήστε το πακέτο gmic με τη διαχείριση πακέτων ή κατεβάστε το από το gmic.eu και μετά επιλέξτε Νέος έλεγχος.
+	About G'MIC…	Σχετικά με το G'MIC…
+	Plug-in Preferences…	Προτιμήσεις προσθέτων…
+
 	Stroke Options	Επιλογές περιγράμματος
 	Solid	Συνεχές
 	Dashed	Διακεκομμένο

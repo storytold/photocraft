@@ -361,6 +361,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
                 ui.ctx().copy_text(crate::gpu_status::system_info(app).join("\n"));
             }
         }
+        DialogKind::About if crate::plugins_ui::is_about(fields) => crate::plugins_ui::about_body(app, ui),
         DialogKind::About => {
             // Tabs About · Contributors · Models. The
             // tab is a dialog field, so automation can switch it with `ui.dialog.set`.
@@ -621,7 +622,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 ui.set_min_width(800.0);
             }
             // The About window: room for the contributor table, the same width on every tab.
-            let about_tabs = d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) != Some(true);
+            let about_tabs =
+                d.kind == DialogKind::About && d.fields.get("systemInfo").and_then(Value::as_bool) != Some(true) && !crate::plugins_ui::is_about(&d.fields);
             if about_tabs {
                 ui.set_min_width(700.0);
             }
@@ -810,6 +812,7 @@ pub fn title(d: &Dialog) -> String {
     match d.kind {
         DialogKind::NewDocument => "New Document".into(),
         DialogKind::About if d.fields.get("systemInfo").and_then(Value::as_bool) == Some(true) => "System Info".into(),
+        DialogKind::About if crate::plugins_ui::is_about(&d.fields) => "About Plug-ins".into(),
         DialogKind::About => "About PhotoCraft".into(),
         DialogKind::LayerStyle => "Layer Style".into(),
         DialogKind::Command => d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command").trim_end_matches('…').to_string(),

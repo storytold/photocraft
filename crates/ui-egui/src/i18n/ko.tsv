@@ -3244,6 +3244,40 @@ fontWeight	Italic	기울임
 	XOR	XOR
 	Color Burn (Paint.NET)	색상 번 (Paint.NET)
 	Color Dodge (Paint.NET)	색상 닷지 (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	플러그인 정보…
+	About Plug-ins	플러그인 정보
+	G'MIC	G'MIC
+	G'MIC Command…	G'MIC 명령…
+	Locate G'MIC…	G'MIC 위치 지정…
+	Refresh Filters	필터 새로 고침
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	플러그인 설치…로 추가하거나 환경 설정 › 플러그인에서 지정한 폴더에 .wasm 파일을 넣으세요. 직접 만들려면 examples/plugins/invert-rs의 Rust 예제로 시작하세요.
+	Choose Check Again to look for G'MIC.	다시 확인을 선택하면 G'MIC을 찾습니다.
+	Download G'MIC…	G'MIC 다운로드…
+	Filter List Unavailable	필터 목록을 사용할 수 없음
+	G'MIC Not Found	G'MIC을 찾을 수 없음
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC은 수백 개의 필터를 갖춘 별도의 무료 이미지 처리 프로그램입니다. PhotoCraft는 이 컴퓨터에 설치된 G'MIC을 사용하며, PhotoCraft에 포함되어 있지 않습니다.
+	G'MIC was not found on this computer.	이 컴퓨터에서 G'MIC을 찾을 수 없습니다.
+	G'MIC {version} found: {path}	G'MIC {version} 찾음: {path}
+	Loading Filters…	필터 불러오는 중…
+	Loading the filter list… (the first time takes about a minute)	필터 목록을 불러오는 중… (처음에는 1분 정도 걸립니다)
+	Looking for G'MIC…	G'MIC 찾는 중…
+	No plug-ins are installed.	설치된 플러그인이 없습니다.
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	PhotoCraft 플러그인은 샌드박스에서 실행되는 WebAssembly 필터입니다. .wasm 파일 하나가 macOS, Windows, Linux, 웹에서 모두 작동합니다. 플러그인은 처리하는 픽셀만 볼 수 있으며 파일을 읽거나 네트워크를 사용할 수 없습니다.
+	The filter list couldn't be loaded: {error}	필터 목록을 불러올 수 없습니다: {error}
+	Using G'MIC	G'MIC 사용하기
+	Writing plug-ins	플러그인 만들기
+	{count} filters in Filter › G'MIC	필터 › G'MIC의 필터 {count}개
+	G'MIC executable	G'MIC 실행 파일
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC은 데스크톱 앱이 필요합니다. 웹 버전은 다른 프로그램을 실행할 수 없습니다.
+	Install it with Homebrew, then choose Check Again:	Homebrew로 설치한 다음 다시 확인을 선택하세요:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	gmic.eu에서 명령줄 버전(gmic-…-cli-win64.zip)을 다운로드해 압축을 푼 다음 G'MIC 위치 지정…을 선택하고 gmic.exe를 고르세요.
+	Install the gmic package, then choose Check Again:	gmic 패키지를 설치한 다음 다시 확인을 선택하세요:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	패키지 관리자로 gmic 패키지를 설치하거나 gmic.eu에서 다운로드한 다음 다시 확인을 선택하세요.
+	About G'MIC…	G'MIC 정보…
+	Plug-in Preferences…	플러그인 환경 설정…
+
 	Stroke Options	획 옵션
 	Solid	실선
 	Dashed	파선

@@ -2632,6 +2632,40 @@ fontWeight	Italic	斜體
 	XOR	XOR
 	Color Burn (Paint.NET)	加深顏色 (Paint.NET)
 	Color Dodge (Paint.NET)	加亮顏色 (Paint.NET)
+
+# Filter › G'MIC and About Plug-ins (docs/gmic.md).
+	About Plug-ins…	關於增效模組…
+	About Plug-ins	關於增效模組
+	G'MIC	G'MIC
+	G'MIC Command…	G'MIC 指令…
+	Locate G'MIC…	指定 G'MIC 位置…
+	Refresh Filters	重新整理濾鏡
+	Add one with Install Plug-in…, or put .wasm files in the folder set in Preferences › Plug-ins. To write your own, start from the Rust example in examples/plugins/invert-rs.	使用「安裝增效模組…」加入,或把 .wasm 檔案放進偏好設定 › 增效模組中設定的資料夾。若要自行撰寫,可從 examples/plugins/invert-rs 中的 Rust 範例開始。
+	Choose Check Again to look for G'MIC.	選擇「重新檢查」以尋找 G'MIC。
+	Download G'MIC…	下載 G'MIC…
+	Filter List Unavailable	無法使用濾鏡清單
+	G'MIC Not Found	找不到 G'MIC
+	G'MIC is a separate, free image-processing program with hundreds of filters. PhotoCraft runs the copy installed on this computer; it isn't included with PhotoCraft.	G'MIC 是一個獨立的免費影像處理程式,提供數百種濾鏡。PhotoCraft 使用這台電腦上安裝的 G'MIC;PhotoCraft 本身並未包含它。
+	G'MIC was not found on this computer.	在這台電腦上找不到 G'MIC。
+	G'MIC {version} found: {path}	已找到 G'MIC {version}:{path}
+	Loading Filters…	正在載入濾鏡…
+	Loading the filter list… (the first time takes about a minute)	正在載入濾鏡清單…(第一次大約需要一分鐘)
+	Looking for G'MIC…	正在尋找 G'MIC…
+	No plug-ins are installed.	尚未安裝任何增效模組。
+	PhotoCraft plug-ins are sandboxed WebAssembly filters: one .wasm file works on macOS, Windows, Linux and the web. A plug-in only sees the pixels it filters; it can't read files or use the network.	PhotoCraft 增效模組是在沙箱中執行的 WebAssembly 濾鏡:同一個 .wasm 檔案可在 macOS、Windows、Linux 與網頁版中使用。增效模組只能看到它要處理的像素,無法讀取檔案,也無法使用網路。
+	The filter list couldn't be loaded: {error}	無法載入濾鏡清單:{error}
+	Using G'MIC	使用 G'MIC
+	Writing plug-ins	撰寫增效模組
+	{count} filters in Filter › G'MIC	濾鏡 › G'MIC 中有 {count} 個濾鏡
+	G'MIC executable	G'MIC 執行檔
+	G'MIC needs the desktop app: the web version can't start other programs.	G'MIC 需要桌面版應用程式:網頁版無法啟動其他程式。
+	Install it with Homebrew, then choose Check Again:	使用 Homebrew 安裝,然後選擇「重新檢查」:
+	Download the command-line version (gmic-…-cli-win64.zip) from gmic.eu, unzip it, then choose Locate G'MIC… and pick gmic.exe.	從 gmic.eu 下載命令列版本(gmic-…-cli-win64.zip)並解壓縮,然後選擇「指定 G'MIC 位置…」並選取 gmic.exe。
+	Install the gmic package, then choose Check Again:	安裝 gmic 套件,然後選擇「重新檢查」:
+	Install the gmic package with your package manager, or download it from gmic.eu, then choose Check Again.	使用套件管理員安裝 gmic 套件,或從 gmic.eu 下載,然後選擇「重新檢查」。
+	About G'MIC…	關於 G'MIC…
+	Plug-in Preferences…	增效模組偏好設定…
+
 	Stroke Options	筆畫選項
 	Solid	實線
 	Dashed	虛線
