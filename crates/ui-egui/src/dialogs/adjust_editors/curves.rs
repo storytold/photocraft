@@ -265,19 +265,29 @@ fn channel_for_key(event: &egui::Event) -> Option<usize> {
         egui::Key::Num6 => Some(4),
         _ => None,
     };
-    physical_key.and_then(digit).or_else(|| digit(*key))
+    digit(physical_key.unwrap_or(*key))
 }
 
-/// Consumes this frame's Alt/Option+2..6 presses and selects that entry of the channel popup.
+/// Consumes this frame's Alt/Option+2..6 presses, and the character Option types right after
+/// each one on macOS, and selects that entry of the channel popup.
 fn select_channel_by_key(ui: &egui::Ui, id: egui::Id, count: usize) {
     let picked = ui.input_mut(|i| {
         let mut last = None;
-        i.events.retain(|e| match channel_for_key(e) {
-            Some(n) => {
+        let mut typed = false;
+        i.events.retain(|e| match (channel_for_key(e), e) {
+            (Some(n), _) => {
                 last = Some(n);
+                typed = true;
                 false
             }
-            None => true,
+            (None, egui::Event::Text(_)) if typed => {
+                typed = false;
+                false
+            }
+            _ => {
+                typed = false;
+                true
+            }
         });
         last
     });
@@ -633,5 +643,30 @@ mod channel_key_tests {
         let panel = cx(false, false);
         let (ch, left) = frame(&ctx, &mut json!({}), &panel, vec![press(Key::Num3, Modifiers::ALT)]);
         assert_eq!((ch, left), (0, 1));
+    }
+
+    #[test]
+    fn the_physical_key_decides_when_it_is_known() {
+        let ctx = egui::Context::default();
+        let cx = cx(true, false);
+        let remapped = Event::Key { key: Key::Num3, physical_key: Some(Key::Q), pressed: true, repeat: false, modifiers: Modifiers::ALT };
+        assert_eq!(frame(&ctx, &mut json!({}), &cx, vec![remapped]), (0, 1));
+        let logical_only = Event::Key { key: Key::Num3, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT };
+        assert_eq!(frame(&ctx, &mut json!({}), &cx, vec![logical_only]), (1, 0));
+    }
+
+    #[test]
+    fn the_character_option_types_is_consumed_with_the_key() {
+        let ctx = egui::Context::default();
+        let cx = cx(true, false);
+        let mut left = Vec::new();
+        let events = vec![press(Key::Num4, Modifiers::ALT), Event::Text("¢".into()), Event::Text("7".into())];
+        let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+            curves(ui, &mut json!({}), &cx);
+            left = ui.input(|i| i.events.clone());
+        });
+        output.textures_delta.clear();
+        assert_eq!(left, vec![Event::Text("7".into())]);
+        assert_eq!(ctx.data(|d| d.get_temp::<usize>(cx.mem.with("curves-ch"))), Some(2));
     }
 }
