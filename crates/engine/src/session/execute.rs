@@ -381,7 +381,8 @@ fn bitmap_mode_refusal(s: &Session, id: &str, params: &Value) -> Option<&'static
     let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments.") || id == crate::plugin_cmds::RUN)
         && id != "image.adjustments.invert"
         && !id.ends_with(".list")
-        && params.get("list").and_then(Value::as_bool) != Some(true);
+        // Only the Filter Gallery answers `{"list": true}` with its catalogue; other commands ignore it.
+        && !(id == "filter.filterGallery" && params.get("list").and_then(Value::as_bool) == Some(true));
     (edits && s.active().is_some_and(|st| st.doc.mode == photocraft_color::ColorMode::Bitmap)).then_some("not available in Bitmap mode")
 }
 
@@ -417,5 +418,31 @@ mod bitmap_mode_tests {
         })
         .unwrap();
         assert!(s.is_enabled("filter.blur.gaussianBlur"));
+    }
+
+    /// `{"list": true}` answers a catalogue only where the command has one (the Filter Gallery);
+    /// HDR Toning ignored it and edited the Bitmap document.
+    #[test]
+    fn bitmap_documents_refuse_a_list_param_on_commands_without_a_catalogue() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 16, "height": 16, "mode": "grayscale", "background": "white"})).unwrap();
+        s.execute("image.mode.bitmap", json!({"method": "threshold"})).unwrap();
+        let steps = s.active().unwrap().history.past_len();
+        let list = json!({"list": true});
+        for spec in crate::commands::command_specs() {
+            let id = spec.id;
+            let edits = (id.starts_with("filter.") || id.starts_with("image.adjustments."))
+                && !matches!(id, "image.adjustments.invert" | "filter.filterGallery")
+                && !id.ends_with(".list");
+            if edits {
+                let why = s.disabled_reason_with(id, &list);
+                assert!(why.as_deref().is_some_and(|w| w.contains("Bitmap mode")), "{id} with {{\"list\": true}}: {why:?}");
+            }
+        }
+        let e = s.execute("image.adjustments.hdrToning", json!({"list": true, "exposure": 1})).unwrap_err().to_string();
+        assert!(e.contains("Bitmap mode"), "{e}");
+        assert_eq!(s.active().unwrap().history.past_len(), steps, "no edit");
+        assert!(s.execute("filter.filterGallery", list).unwrap()["filters"].is_array(), "the gallery catalogue still answers");
+        assert!(s.execute("image.adjustments.colorLookup.list", json!({})).is_ok());
     }
 }
