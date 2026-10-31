@@ -27,7 +27,8 @@
 
 use std::collections::HashMap;
 use std::num::NonZeroU64;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use eframe::egui_wgpu::{self, CallbackResources, CallbackTrait, RenderState, ScreenDescriptor};
 use eframe::wgpu;
@@ -48,7 +49,7 @@ mod texels;
 #[cfg(all(test, target_os = "linux"))]
 use budget::nvidia_video_memory;
 pub use budget::{
-    DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, canvas_budget, canvas_texture_bytes, memory_budget,
+    DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, WARMING, canvas_budget, canvas_texture_bytes, memory_budget,
     physical_memory, video_memory, vram_share,
 };
 #[cfg(test)]
@@ -63,7 +64,7 @@ use doc_textures::init_buffer;
 use doc_textures::{mip_count, mip_damage};
 pub use perf::{GpuInfo, Perf, backend_name, now_ms};
 pub use resources::CanvasStyle;
-use resources::{DocTextures, Resources, identity_lut_bytes, lut_bind_group};
+use resources::{DocTextures, Resources, Warm, identity_lut_bytes, lut_bind_group};
 #[cfg(test)]
 use setup::device_limits_for;
 use setup::texture_buffer;
@@ -166,6 +167,10 @@ pub struct GpuCanvas {
     /// Camera Raw's preview pass, built the first time the dialog asks (#6419).
     camera_raw: crate::camera_raw_gpu::Slot,
     camera_raw_started: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    /// The background compositor build's generation: it changes when the build finishes, so the
+    /// app knows the GPU compositor is ready and redraws what the CPU drew (see
+    /// [`GpuCanvas::warm_up`]).
+    warm_gen: Arc<AtomicU64>,
 }
 
 /// Whether `regenerate_mips` builds each level in a scratch texture and copies it back: on
@@ -223,7 +228,34 @@ impl GpuCanvas {
             rs.target_format,
             vram.map_or_else(|| "unknown".to_owned(), |b| format!("{} MB", b >> 20))
         );
-        Self { rs: rs.clone(), tile, high, health, vram, canvas_budget: budget, camera_raw: Default::default(), camera_raw_started: Default::default() }
+        Self { rs: rs.clone(), tile, high, health, vram, canvas_budget: budget, camera_raw: Default::default(), camera_raw_started: Default::default(), warm_gen: Arc::new(AtomicU64::new(0)) }
+    }
+
+    /// Build the GPU compositor in the background: on DX12, FXC compiles its ~33 pipelines one at
+    /// a time, so building them on the UI thread froze the app for seconds the first time a
+    /// document was opened (#6419, #8733). The canvas draws on the CPU until the compositor is
+    /// ready, and the app redraws then (see [`GpuCanvas::warm_generation`]).
+    ///
+    /// Does nothing where there are no threads (the browser build) or when the canvas has no
+    /// resources: the compositor is then built on the UI thread, as it always was.
+    pub fn warm_up(&self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let acc_format = photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter);
+            let device = self.rs.device.clone();
+            let mut r = self.rs.renderer.write();
+            if let Some(res) = r.callback_resources.get_mut::<Resources>() {
+                res.start_warm_up(device, acc_format, Arc::clone(&self.warm_gen), ctx.clone());
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = ctx;
+    }
+
+    /// The background compositor build's generation: it changes when the build finishes, so the
+    /// app can redraw what the CPU drew and move the document to the GPU (0: no build ran).
+    pub fn warm_generation(&self) -> u64 {
+        self.warm_gen.load(Ordering::Relaxed)
     }
 
     /// The device's health flag (shared with the wgpu compositor and the paint callback).
@@ -601,13 +633,26 @@ impl GpuCanvas {
         }
         let mut comp = match res.compositor.take() {
             Some(c) => c,
-            None => match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)) {
-                Ok(c) => c,
-                Err(e) => {
+            None => match res.take_warm_compositor() {
+                // Built in the background: the app's first document doesn't wait for it.
+                Warm::Ready(c) => c,
+                Warm::Failed(e) => {
                     // `render_path::note` logs it, once, as this document's reason.
                     res.compositor_failed = Some(e.clone());
                     return Err(e);
                 }
+                // Still building: the CPU compositor draws this frame, and the app redraws on the
+                // GPU once it is ready (see [`GpuCanvas::warm_generation`]).
+                Warm::Building => return Err(photocraft_gpu::Unsupported(WARMING.into())),
+                // No background build (the browser, or no thread): build it here, as it always was.
+                Warm::Absent => match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        // `render_path::note` logs it, once, as this document's reason.
+                        res.compositor_failed = Some(e.clone());
+                        return Err(e);
+                    }
+                },
             },
         };
         comp.set_health(self.health.clone());
@@ -785,7 +830,16 @@ impl GpuCanvas {
                 out.gpu = stats.gpu_time;
                 return out;
             }
-            Err(e) => out.fallback = Some(self.reason(doc, e)),
+            Err(e) => {
+                if e.0 == WARMING {
+                    // The compositor is still being built in the background: the CPU draws this
+                    // refresh and the app redraws on the GPU once the build is done. Not a fault,
+                    // so no reason is recorded.
+                    out.warming = true;
+                } else {
+                    out.fallback = Some(self.reason(doc, e));
+                }
+            }
         }
         let px = region.width() as u64 * region.height() as u64;
         if defer && px >= DEFER_PX && self.prepare_texture(key, doc).is_some() {

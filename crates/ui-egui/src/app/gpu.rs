@@ -33,6 +33,21 @@ impl PhotocraftApp {
         self.prefs_rt.gpu_style = None;
     }
 
+    /// Build the GPU compositor in the background, so the first document doesn't wait for its
+    /// pipelines to compile: on DX12, FXC compiles them one at a time, which froze the app for
+    /// seconds the first time a file was opened (#6419, #8733). The canvas draws with the CPU
+    /// compositor until the build is done, and redraws on the GPU then.
+    ///
+    /// Does nothing without a GPU canvas (and in the browser, which has no threads).
+    pub fn warm_up_gpu_compositor(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(gpu) = &self.gpu {
+            gpu.warm_up(ctx);
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = ctx;
+    }
+
     /// Whether the document canvas currently draws on the GPU (false on the CPU path, and after
     /// the device was lost).
     pub fn gpu_active(&self) -> bool {

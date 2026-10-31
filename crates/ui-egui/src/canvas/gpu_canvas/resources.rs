@@ -26,6 +26,9 @@ pub(super) struct Resources {
     pub(super) compositor: Option<photocraft_gpu::Compositor>,
     /// Why the wgpu compositor couldn't be created (then the CPU compositor is used).
     pub(super) compositor_failed: Option<photocraft_gpu::Unsupported>,
+    /// The compositor the background thread builds (see [`GpuCanvas::warm_up`]): `None` when no
+    /// build was started, and the compositor is built on the UI thread instead.
+    pub(super) compositor_warm: Option<std::sync::Arc<std::sync::Mutex<WarmSlot<photocraft_gpu::Compositor>>>>,
     /// The device's health: the paint callback issues no GPU work once it's lost.
     pub(super) health: photocraft_gpu::DeviceHealth,
     /// GPU memory the compositor may hold (`None`: its default), and the document area the
@@ -360,6 +363,7 @@ impl Resources {
             separate_mip_targets: false,
             compositor: None,
             compositor_failed: None,
+            compositor_warm: None,
             health: photocraft_gpu::DeviceHealth::new(),
             compositor_budget: None,
             layer_fit: None,
@@ -379,5 +383,104 @@ impl Resources {
     /// The mip-chain pipeline for `format` tiles.
     pub(super) fn mip_pipeline(&self, format: wgpu::TextureFormat) -> Option<&wgpu::RenderPipeline> {
         if format == FORMAT_HIGH { self.mip_pipeline_high.as_ref() } else { Some(&self.mip_pipeline) }
+    }
+
+    /// Start the background build of the compositor (see [`GpuCanvas::warm_up`]): the thread
+    /// compiles its pipelines off the UI thread and leaves the compositor in the slot.
+    ///
+    /// Only one build runs: a second call does nothing.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn start_warm_up(&mut self, device: wgpu::Device, acc_format: wgpu::TextureFormat, generation: std::sync::Arc<std::sync::atomic::AtomicU64>, ctx: egui::Context) {
+        if self.compositor_warm.is_some() {
+            return;
+        }
+        let slot = std::sync::Arc::new(std::sync::Mutex::new(WarmSlot::building()));
+        let shared = std::sync::Arc::clone(&slot);
+        let spawned = std::thread::Builder::new().name("compositor-pipelines".into()).spawn(move || {
+            let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| photocraft_gpu::Compositor::try_new_with_format(&device, acc_format))).unwrap_or_else(|_| {
+                log::warn!("building the compositor's pipelines panicked; the CPU compositor is used");
+                Err(photocraft_gpu::Unsupported("the compositor's pipelines panicked".into()))
+            });
+            {
+                let mut guard = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                match built {
+                    Ok(c) => {
+                        log::info!("GPU compositor: built in the background");
+                        guard.ready = Some(c);
+                    }
+                    Err(e) => {
+                        log::warn!("GPU compositor: the background build failed: {e}");
+                        guard.failed = Some(e);
+                    }
+                }
+                guard.building = false;
+            }
+            // The app redraws what the CPU drew, so the document moves to the GPU.
+            generation.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ctx.request_repaint();
+        });
+        if spawned.is_err() {
+            // No thread (the system refused one): the compositor is built on the UI thread, as it
+            // always was.
+            let mut guard = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            guard.building = false;
+        }
+        self.compositor_warm = Some(slot);
+    }
+
+    /// The compositor the background thread built, if it is ready (see [`Warm`]).
+    pub(super) fn take_warm_compositor(&mut self) -> Warm<photocraft_gpu::Compositor> {
+        let Some(slot) = &self.compositor_warm else { return Warm::Absent };
+        let mut guard = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        guard.take()
+    }
+}
+
+/// The compositor a background thread builds (see [`GpuCanvas::warm_up`]).
+///
+/// On DX12, FXC compiles the compositor's ~33 pipelines one at a time, which took seconds on the
+/// UI thread and froze the app the first time a document was opened (#6419, #8733). The thread
+/// builds them in the background; until it is done the canvas draws with the CPU compositor.
+pub(super) struct WarmSlot<T> {
+    /// The compositor the thread built (taken once, by the UI thread).
+    ready: Option<T>,
+    /// Why the thread couldn't build one (the CPU compositor is used from then on).
+    failed: Option<photocraft_gpu::Unsupported>,
+    /// Whether the thread is still building it.
+    building: bool,
+}
+
+/// What the background build holds.
+pub(super) enum Warm<T> {
+    /// The compositor is ready.
+    Ready(T),
+    /// It couldn't be built: the CPU compositor is used from then on.
+    Failed(photocraft_gpu::Unsupported),
+    /// It is still being built: the CPU compositor draws until it is ready.
+    Building,
+    /// No build is running: the compositor is built on the UI thread, as it always was.
+    Absent,
+}
+
+impl<T> WarmSlot<T> {
+    /// A slot whose build is running.
+    fn building() -> Self {
+        Self { ready: None, failed: None, building: true }
+    }
+
+    /// Take the compositor the thread built, if there is one.
+    fn take(&mut self) -> Warm<T> {
+        if let Some(c) = self.ready.take() {
+            // Handed over: the build is over, whatever else the slot says.
+            self.building = false;
+            return Warm::Ready(c);
+        }
+        if let Some(e) = &self.failed {
+            return Warm::Failed(e.clone());
+        }
+        if self.building {
+            return Warm::Building;
+        }
+        Warm::Absent
     }
 }

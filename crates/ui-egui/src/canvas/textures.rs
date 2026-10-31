@@ -175,6 +175,7 @@ pub(crate) fn ensure_texture_in_view(
         texture_opaque: false,
         grid: None,
         detail: Vec::new(),
+        warm_gen: 0,
     });
     if cache.tex_revision != revision || cache.texture.is_none() || cache.tex_preview_key != preview_key {
         let t0 = crate::gpu_canvas::now_ms();
@@ -507,9 +508,16 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         texture_opaque: false,
         grid: None,
         detail: Vec::new(),
+        warm_gen: 0,
     });
     let present = cache.on_gpu && gpu.has(id.0, size);
     let current = cache.revision == revision && cache.preview_key == preview_key;
+    // The background GPU-compositor build's generation: it changes when the build finishes, so
+    // the document can be redrawn on the GPU (#6419, #8733). Read here: `app` is borrowed
+    // mutably below.
+    let warm_gen = gpu.warm_generation();
+    let warmed = warm_gen != cache.warm_gen;
+    let drawn = cache.on_gpu;
     // GPU Memory or Memory Usage changed with nothing to redraw: the new budget, and whether the
     // layers fit it, show at once (the status bar's GPU Memory Full).
     if present && app.perf.gpu_budget_allowance != budget_allowance(app) {
@@ -536,8 +544,19 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
         // Blend previews keep offscreen pixels untouched until the view reaches them.
         // Use the normal refresh path so CPU fallback and pending redraws stay synchronized.
         damage = crate::blend_preview::uncovered(app, id, revision, raw_key, blend_visible);
-        if damage.is_none() {
+        if damage.is_none() && !warmed {
             return true;
+        }
+    }
+    if warmed {
+        // The GPU compositor finished building in the background (it was still warming up when
+        // this document was drawn, so the CPU compositor drew it): redraw it on the GPU, so the
+        // document doesn't stay on the slower CPU compositor until the next edit (#6419, #8733).
+        if let Some(c) = app.canvases.get_mut(&(id, GPU_OUTPUT)) {
+            c.warm_gen = warm_gen;
+        }
+        if drawn {
+            damage = Some(doc.bounds());
         }
     }
     // Display textures for a canvas this large would not fit the GPU: the reduced CPU canvas
@@ -586,7 +605,7 @@ pub(super) fn ensure_gpu(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     if r.kind != crate::gpu_canvas::REFRESH_DEFERRED {
         app.perf.record_refresh(&r);
     }
-    if r.kind == "full" {
+    if r.kind == "full" && !r.warming {
         crate::notices::slow_cpu_refresh(app, id.0, r.composite_ms + r.upload_ms, r.fallback.as_ref());
     }
     if r.kind.starts_with("gpu") {
