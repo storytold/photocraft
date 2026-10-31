@@ -492,22 +492,43 @@ pub fn form_grid(
     caption_w: f32,
     rows: impl FnOnce(&mut dyn FnMut(&str, &mut dyn FnMut(&mut egui::Ui, egui::Id))),
 ) {
+    two_col_grid(ui, id, spacing, caption_w, None, |grid_rows| {
+        let mut adapt = |caption: &str, editor: &mut dyn FnMut(&mut egui::Ui, egui::Id)| grid_rows(egui::WidgetText::from(caption), editor);
+        rows(&mut adapt);
+    });
+}
+
+/// The shared body of [`form_grid`] and [`settings_grid`]; see [`settings_grid`] for the RTL
+/// geometry. `rows` calls `row(caption, editor)` once per row.
+fn two_col_grid(
+    ui: &mut egui::Ui,
+    id: impl egui::AsIdSalt,
+    spacing: [f32; 2],
+    caption_w: f32,
+    min_col_width: Option<f32>,
+    rows: impl FnOnce(&mut dyn FnMut(egui::WidgetText, &mut dyn FnMut(&mut egui::Ui, egui::Id))),
+) {
     if is_rtl() {
         ui.with_layout(body_layout(), |ui| {
             ui.spacing_mut().item_spacing = egui::vec2(spacing[0], spacing[1]);
-            let mut row = |caption: &str, editor: &mut dyn FnMut(&mut egui::Ui, egui::Id)| {
-                if caption.is_empty() {
+            let label_w = caption_w.max(min_col_width.unwrap_or(0.0));
+            let mut row = |caption: egui::WidgetText, editor: &mut dyn FnMut(&mut egui::Ui, egui::Id)| {
+                if caption.text().is_empty() {
                     dialog_row(ui, |ui| editor(ui, egui::Id::NULL));
                 } else {
                     let caption_id = std::cell::Cell::new(egui::Id::NULL);
-                    settings_row(ui, caption_w, |ui| caption_id.set(ui.label(caption).id), |ui| editor(ui, caption_id.get()));
+                    settings_row(ui, label_w, |ui| caption_id.set(ui.label(caption).id), |ui| editor(ui, caption_id.get()));
                 }
             };
             rows(&mut row);
         });
     } else {
-        egui::Grid::new(id).num_columns(2).spacing(spacing).show(ui, |ui| {
-            let mut row = |caption: &str, editor: &mut dyn FnMut(&mut egui::Ui, egui::Id)| {
+        let mut grid = egui::Grid::new(id).num_columns(2).spacing(spacing);
+        if let Some(w) = min_col_width {
+            grid = grid.min_col_width(w);
+        }
+        grid.show(ui, |ui| {
+            let mut row = |caption: egui::WidgetText, editor: &mut dyn FnMut(&mut egui::Ui, egui::Id)| {
                 let caption_id = ui.label(caption).id;
                 editor(ui, caption_id);
                 ui.end_row();
@@ -515,6 +536,27 @@ pub fn form_grid(
             rows(&mut row);
         });
     }
+}
+
+/// A two-column settings grid of label/editor rows, direction-aware. LTR: a plain
+/// `egui::Grid` (byte-identical layout). RTL: hand rows via [`settings_row`] under
+/// [`body_layout`]: the fork's `Grid` gives its last column the remaining width, which
+/// detaches a right-aligned label from its editor in a mirrored grid, while the hand rows
+/// keep the label column fixed at `label_w` hugging the reading start, so the
+/// label<->editor gap equals the LTR formula (`label_w - label_width + spacing.x`) in both
+/// directions. Pass `label_w` as the LTR label column width (the widest label, or
+/// `min_col_width` where the grid sets one). `rows` calls `row(label, editor)` once per
+/// row; the editor closure receives the label's Id for accessibility labeling. An empty
+/// label draws a bare editor hugging the reading start.
+pub fn settings_grid(
+    ui: &mut egui::Ui,
+    id: impl egui::AsIdSalt,
+    spacing: [f32; 2],
+    label_w: f32,
+    min_col_width: Option<f32>,
+    rows: impl FnOnce(&mut dyn FnMut(egui::WidgetText, &mut dyn FnMut(&mut egui::Ui, egui::Id))),
+) {
+    two_col_grid(ui, id, spacing, label_w, min_col_width, rows)
 }
 
 /// An `egui::Grid` in an LTR scope ([`ltr_vertical`]) so the fork's placer never sees an RTL
