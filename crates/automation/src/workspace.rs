@@ -78,10 +78,15 @@ impl AuthorizedWorkspace {
     ///
     /// Replacing a file carries its extended attributes — macOS Finder tags, Linux `user.*` —
     /// onto the file that takes its place (#7095), through the two open descriptors rather than
-    /// their paths, so nothing here reaches outside the write root to finish a write. The rest
-    /// of what [`photocraft_format::atomic_write`] preserves does not follow: its permission
-    /// step is tracked in #4963, and the Windows `ReplaceFileW` swap is path-based, which this
-    /// path may not use.
+    /// their paths. The rest of what [`photocraft_format::atomic_write`] preserves does not
+    /// follow: its permission step is tracked in #4963, and the Windows `ReplaceFileW` swap is
+    /// path-based, which this path may not use.
+    ///
+    /// Nothing here reaches outside the write root. Below a Windows UNC root
+    /// (`\\wsl.localhost\...`, any network share) the capability's own rename and remove cannot
+    /// reach their target at all (#10317, see [`is_unc_root`]), so there the bytes go straight
+    /// into the target through the capability instead ([`write_in_place`]): not crash-safe on
+    /// such a root, but never outside it and never a stranded temporary file.
     ///
     /// The parent directory must already exist. `cap-std` performs path
     /// resolution and file creation relative to the held directory handle, so
@@ -105,6 +110,10 @@ impl AuthorizedWorkspace {
             return Err(AutomationError::BadRequest(format!(
                 "automation write refused: `{path}` already exists and is not an image or document file PhotoCraft writes; save to a new name"
             )));
+        }
+        #[cfg(windows)]
+        if is_unc_root(root) {
+            return write_in_place(root, &relative, bytes).map_err(|e| file_error("write", path, e));
         }
         let parent = relative.parent().map(Path::to_path_buf).unwrap_or_default();
         let tmp = parent.join(photocraft_format::atomic::temp_name(&leaf));
@@ -130,7 +139,7 @@ impl AuthorizedWorkspace {
         });
         let renamed = written.and_then(|()| photocraft_format::atomic::retry_rename(RenameRetry::platform(), || root.dir.rename(&tmp, &root.dir, &relative)));
         if let Err(e) = renamed {
-            let _ = root.dir.remove_file(&tmp);
+            let _ = remove_file_in(&root.dir, &tmp);
             return Err(file_error("write", path, e));
         }
         // Flush the directory entry (Unix); best effort, the new bytes are already in place.
@@ -208,6 +217,138 @@ fn open_root(path: Option<&Path>, authority: &str) -> Result<Option<RootCapabili
     let dir = Dir::open_ambient_dir(&absolute, ambient_authority())
         .map_err(|e| AutomationError::Io(format!("cannot open automation {authority} root `{}`: {e}", path.display())))?;
     Ok(Some(RootCapability { dir: Arc::new(dir), path: absolute, configured_path }))
+}
+
+/// `cap-std`'s Windows `rename`, `remove_file` and `create_dir` do not run relative to the held
+/// handle: they append the request to the handle's own path and call `std::fs`
+/// (sunfishcode/cap-std#348), and that path is read back without its `\\?\` prefix. Below a
+/// drive root the result still resolves; below a UNC root (`\\?\UNC\wsl.localhost\...`, any
+/// network share) it becomes the relative `UNC\wsl.localhost\...` and each of those steps
+/// fails with `ERROR_PATH_NOT_FOUND`, so a save left only its temporary file behind (#10317).
+/// Opening a file or directory and `stat` are handle-relative and work below any root.
+///
+/// Whether the root is such a UNC root, judged by the canonical root path's prefix: trusted
+/// launch configuration, never the request.
+#[cfg(windows)]
+fn is_unc_root(root: &RootCapability) -> bool {
+    matches!(root.path.components().next(), Some(Component::Prefix(p)) if matches!(p.kind(), Prefix::VerbatimUNC(..) | Prefix::UNC(..)))
+}
+
+/// Write `bytes` straight into `relative` through the capability, for a root where the
+/// temporary file cannot be renamed into place (see [`is_unc_root`]). Not crash-safe: a crash
+/// mid-write leaves a truncated target. Every step is relative to the held handle, so a link in
+/// the path is refused exactly as elsewhere, and nothing is left beside the target.
+#[cfg(windows)]
+fn write_in_place(root: &RootCapability, relative: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    let mut file = root.dir.open_with(relative, &options)?.into_std();
+    file.write_all(bytes)?;
+    photocraft_format::atomic::sync_file(&file)
+}
+
+/// Remove the file `name` relative to `dir`. On Windows the capability's own `remove_file`
+/// reports every file below a UNC root missing (see [`is_unc_root`]); then the file is deleted
+/// through a handle opened relative to `dir` instead ([`delete_on_close`]).
+fn remove_file_in(dir: &Dir, name: &Path) -> std::io::Result<()> {
+    let removed = dir.remove_file(name);
+    #[cfg(windows)]
+    if removed.as_ref().is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) {
+        return delete_on_close(dir, name);
+    }
+    removed
+}
+
+/// Delete `name` by opening it relative to `dir` with `FILE_FLAG_DELETE_ON_CLOSE` and dropping
+/// the handle. The open resolves against the held directory like every other open, so it
+/// cannot reach outside it. `FILE_FLAG_OPEN_REPARSE_POINT` makes a link at `name` the thing
+/// deleted rather than its target, as `remove_file` does; a directory is refused and a missing
+/// name reports `NotFound`, both as `remove_file` would.
+#[cfg(windows)]
+fn delete_on_close(dir: &Dir, name: &Path) -> std::io::Result<()> {
+    use cap_std::fs::OpenOptionsExt;
+    const FILE_FLAG_DELETE_ON_CLOSE: u32 = 0x0400_0000;
+    const FILE_FLAG_OPEN_REPARSE_POINT: u32 = 0x0020_0000;
+    let mut options = OpenOptions::new();
+    options.read(true).custom_flags(FILE_FLAG_DELETE_ON_CLOSE | FILE_FLAG_OPEN_REPARSE_POINT);
+    dir.open_with(name, &options).map(drop)
+}
+
+/// Make `relative` a directory below the write root, with its missing ancestors. Through the
+/// capability wherever that works; below a Windows UNC root its `create_dir_all` reports
+/// `NotFound` whether or not the directory exists (see [`is_unc_root`]), so there an existing
+/// directory is accepted by opening it through the handle and a missing one is made by
+/// [`create_dir_all_unc`].
+fn ensure_export_dir(root: &RootCapability, relative: &Path) -> std::io::Result<()> {
+    let created = root.dir.create_dir_all(relative);
+    #[cfg(windows)]
+    if created.as_ref().is_err_and(|e| e.kind() == std::io::ErrorKind::NotFound) && is_unc_root(root) {
+        return match root.dir.open_dir(relative) {
+            Ok(_) => Ok(()),
+            Err(_) => create_dir_all_unc(root, relative),
+        };
+    }
+    created
+}
+
+/// Directory creation is the one step `cap-std` has no handle-relative form of on Windows (it
+/// never opens with `FILE_DIRECTORY_FILE`), so below a UNC root an absent component is made
+/// with `std::fs::create_dir` on the canonical root path — trusted launch configuration, never
+/// the request. The walk ([`held_directory_chain`]) descends one component at a time and keeps
+/// a handle open on every ancestor it has verified through its parent's handle. `cap-std`
+/// opens directories without `FILE_SHARE_DELETE` precisely so that they cannot be renamed or
+/// deleted underneath its sandboxed path lookups, and the held chain pins the ancestors here
+/// the same way: an ancestor cannot be swapped for a link while the walk is below it, so the
+/// one ambient `create_dir` can only add a new, empty directory inside the directory its held
+/// parent handle names. Something that appears under the component's name between the check
+/// and `create_dir` makes `create_dir` fail with `AlreadyExists`, which is reported, never
+/// resolved. No file is ever written, renamed or removed ambiently.
+#[cfg(windows)]
+fn create_dir_all_unc(root: &RootCapability, relative: &Path) -> std::io::Result<()> {
+    held_directory_chain(root, relative).map(drop)
+}
+
+/// Open each component of `relative` through the handle of its parent, creating an absent one
+/// first as described at [`create_dir_all_unc`]. The returned handles, outermost first, keep
+/// every directory on the way pinned for as long as they are held.
+#[cfg(windows)]
+fn held_directory_chain(root: &RootCapability, relative: &Path) -> std::io::Result<Vec<Dir>> {
+    let mut chain: Vec<Dir> = Vec::new();
+    let mut ancestor = PathBuf::new();
+    for component in relative.components() {
+        ancestor.push(component);
+        let parent = chain.last().unwrap_or(&root.dir);
+        let dir = open_or_create_plain_dir(parent, Path::new(component.as_os_str()), &ancestor, &root.path.join(&ancestor))?;
+        chain.push(dir);
+    }
+    Ok(chain)
+}
+
+/// Open `name`, one component of `parent`, when it is a plain directory; when it is absent,
+/// create it at `ambient` (its path below the canonical root, which `parent` is a handle to)
+/// and open what is there now. `ancestor` names the component relative to the root in errors.
+#[cfg(windows)]
+fn open_or_create_plain_dir(parent: &Dir, name: &Path, ancestor: &Path, ambient: &Path) -> std::io::Result<Dir> {
+    match open_plain_dir(parent, name, ancestor) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            std::fs::create_dir(ambient)?;
+            open_plain_dir(parent, name, ancestor)
+        }
+        opened => opened,
+    }
+}
+
+/// Open `name` in `parent` only if it is a plain directory — not a link, which ambient
+/// resolution would follow out of the root, and not a file.
+#[cfg(windows)]
+fn open_plain_dir(parent: &Dir, name: &Path, ancestor: &Path) -> std::io::Result<Dir> {
+    let meta = parent.symlink_metadata(name)?;
+    if meta.is_dir() && !meta.is_symlink() {
+        parent.open_dir(name)
+    } else {
+        let message = format!("`{}` is not a plain directory below the root", ancestor.display());
+        Err(std::io::Error::new(std::io::ErrorKind::PermissionDenied, message))
+    }
 }
 
 /// Both root spellings refer to the capability opened at startup. Do not resolve an untrusted
@@ -500,16 +641,21 @@ pub(crate) struct ExportSequence {
 }
 
 impl AuthorizedWorkspace {
+    /// Open the export directory `path` below the write root as its own capability, creating it
+    /// (and missing ancestors) first; see [`ensure_export_dir`]. Every file the sequence then
+    /// writes or removes goes through that held directory handle.
     pub(crate) fn export_sequence(&self, path: &str) -> Result<ExportSequence, AutomationError> {
         let relative = request_path(path, self.write.as_ref())?;
         let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
-        root.dir.create_dir_all(&relative).map_err(|e| file_error("mkdir", path, e))?;
+        ensure_export_dir(root, &relative).map_err(|e| file_error("mkdir", path, e))?;
         let dir = root.dir.open_dir(&relative).map_err(|e| file_error("open export directory", path, e))?;
         Ok(ExportSequence { dir, created: Vec::new() })
     }
 }
 
 impl ExportSequence {
+    /// Create `name` (a single path component) in the export directory and write `bytes` to
+    /// it. An existing entry of that name, link or file, is a collision and is refused.
     pub(crate) fn write(&mut self, name: &str, bytes: &[u8]) -> Result<(), AutomationError> {
         let relative = relative_path(name)?;
         if relative.components().count() != 1 {
@@ -523,18 +669,26 @@ impl ExportSequence {
         file.write_all(bytes).and_then(|()| file.sync_all()).map_err(|e| file_error("write export", name, e))
     }
 
+    /// Keep every file written so far: nothing is removed on cleanup or drop.
     pub(crate) fn commit(&mut self) {
         self.created.clear();
     }
 
+    /// Remove every file written since the last [`commit`](Self::commit), each through the held
+    /// directory handle (see [`remove_file_in`]). A file already gone is fine; any other failure
+    /// is reported, and that name stays listed for a later attempt.
     pub(crate) fn cleanup(&mut self) -> Result<(), AutomationError> {
         let mut failed = Vec::new();
-        self.created.retain(|name| match self.dir.remove_file(name) {
-            Ok(()) => false,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
-            Err(e) => {
-                failed.push(format!("{name}: {e}"));
-                true
+        let (dir, created) = (&self.dir, &mut self.created);
+        created.retain(|name| {
+            let removed = remove_file_in(dir, Path::new(name));
+            match removed {
+                Ok(()) => false,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+                Err(e) => {
+                    failed.push(format!("{name}: {e}"));
+                    true
+                }
             }
         });
         if failed.is_empty() { Ok(()) } else { Err(AutomationError::Io(format!("export cleanup failed: {}", failed.join("; ")))) }
@@ -542,6 +696,7 @@ impl ExportSequence {
 }
 
 impl Drop for ExportSequence {
+    /// Remove whatever was not committed, best effort.
     fn drop(&mut self) {
         // Also cover an escaped rendering panic; normal errors report cleanup failures above.
         let _ = self.cleanup();
