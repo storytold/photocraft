@@ -241,7 +241,7 @@ pub(super) fn moves_kind(app: &PhotocraftApp, t: &TransformSession, kind: fn(&La
     app.session.active().is_some_and(|st| moving_layers(t).iter().any(|id| st.doc.layer(*id).is_some_and(|l| kind(&l.content))))
 }
 
-/// Why Warp refuses with several layers selected.
+/// Why a shared warp containing editable type is refused.
 pub const WARP_ONE_LAYER: &str = "Warp works on one layer at a time: select a single layer";
 
 /// Free Transform on a copy (⌥⌘T, no menu item): duplicates the active layer (with a selection,
@@ -622,13 +622,13 @@ pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
     if app.ui.transform.as_ref().is_some_and(|t| t.content_aware.is_some()) {
         return Err(CAS_ONLY_SCALES.into());
     }
-    if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty()) {
+    if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty() && super::commit::moves_type(app, t)) {
         return Err(WARP_ONE_LAYER.into());
     }
     let fresh = app.ui.transform.is_none();
     if fresh {
         begin(app, ctx)?;
-        if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty()) {
+        if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty() && super::commit::moves_type(app, t)) {
             cancel(app);
             return Err(WARP_ONE_LAYER.into());
         }
@@ -646,18 +646,20 @@ pub fn begin_warp(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), St
 /// gets its own Warp Text style instead ([`enter_type_warp`]).
 pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Several layers keep the box (#6501), even when the active one is type.
-    if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty()) {
+    if app.ui.transform.as_ref().is_some_and(|t| !t.layers.is_empty() && super::commit::moves_type(app, t)) {
         return;
     }
     if app.ui.transform.as_ref().is_some_and(|t| t.warp.is_none()) && warps_type(app) {
         return enter_type_warp(app, ctx);
     }
-    let existing =
-        app.session.active().and_then(|d| d.doc.layer(LayerId(app.ui.transform.as_ref()?.layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space));
+    let existing = app.session.active().and_then(|d| {
+        let t = app.ui.transform.as_ref().filter(|t| t.layers.is_empty())?;
+        d.doc.layer(LayerId(t.layer)).and_then(photocraft_engine::warp_cmds::smart_warp_doc_space)
+    });
     let Some(t) = app.ui.transform.as_mut() else { return };
     // Warp moves layers and paths (#3027): a lone mask or channel keeps the box, and so do
     // several layers (#6501).
-    if t.warp.is_some() || t.target.is_some() || !t.layers.is_empty() {
+    if t.warp.is_some() || t.target.is_some() {
         return;
     }
     if t.quad == corners(t.rect)
@@ -682,7 +684,7 @@ pub fn enter_warp(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// the selection). Its Warp is Warp Text: only the styles, and the type stays editable (#3004).
 pub fn warps_type(app: &PhotocraftApp) -> bool {
     let Some(t) = &app.ui.transform else { return false };
-    if t.selection || t.target.is_some() || t.path.is_some() {
+    if t.selection || t.target.is_some() || t.path.is_some() || !t.layers.is_empty() {
         return false;
     }
     app.session.active().and_then(|st| st.doc.layer(LayerId(t.layer))).is_some_and(|l| matches!(l.content, LayerContent::Text(_)))

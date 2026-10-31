@@ -137,7 +137,7 @@ pub fn disabled(app: &crate::PhotocraftApp, id: &str) -> bool {
                 | "edit.transform.splitWarpCrosswise"
                 | "edit.transform.splitWarpHorizontally"
                 | "edit.transform.splitWarpVertically"
-                | "edit.transform.removeWarpSplit" => true,
+                | "edit.transform.removeWarpSplit" => text,
                 "edit.transform.distort" | "edit.transform.perspective" => text,
                 _ => false,
             };
