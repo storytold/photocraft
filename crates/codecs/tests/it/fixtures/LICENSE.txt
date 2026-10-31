@@ -1,0 +1,5 @@
+vp8-mixed.webp is an original synthetic test reference, generated from the
+procedural RGB pattern in ../webp_lossy.rs and encoded by PhotoCraft.
+
+It is licensed under MIT OR Apache-2.0, at your option. The full license texts
+are in ../../../../../LICENSE-MIT and ../../../../../LICENSE-APACHE.

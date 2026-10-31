@@ -138,3 +138,21 @@ fn hard_edges_and_text_like_content_keep_their_structure() {
     assert!(wrong * 100 < total * 2, "{wrong} of {total} pixels flipped side of mid-gray");
     assert!(psnr(&img, &back) > 30.0, "{:.1}", psnr(&img, &back));
 }
+
+/// Keeps reference bytes stable across mixed prediction modes and padded macroblock edges.
+#[test]
+fn mixed_macroblocks_and_padded_edges_keep_their_encoded_bytes() {
+    let (w, h) = (49u32, 35u32);
+    let mut data = Vec::with_capacity((w * h * 3) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let v = if (x / 16 + y / 16).is_multiple_of(2) { 180 } else { ((x * 19 + y * 31) % 256) as u8 };
+            data.extend_from_slice(&[v, v.saturating_add(12), v.saturating_sub(17)]);
+        }
+    }
+    let img = Image::from_u8(w, h, ChannelLayout::Rgb, data).unwrap();
+    let bytes = encode(&img, Format::WebP, &lossy(0)).unwrap();
+    // Recorded before removing the luma backup. Mixed whole-block and B_PRED decisions
+    // exercise the reconstruction passed to neighboring blocks, including padded edges.
+    assert_eq!(bytes.as_slice(), include_bytes!("fixtures/vp8-mixed.webp"));
+}
