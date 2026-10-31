@@ -133,6 +133,17 @@ impl PsdFile {
         want: impl FnOnce(&PsdFile) -> bool,
         recover: impl FnOnce(&PsdFile) -> bool,
     ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
+        Self::from_bytes_and_merged_preflight(data, |file| Ok(want(file)), recover)
+    }
+
+    /// Parses with a fallible pixel preflight after layer records are available and before
+    /// the merged image is read, validated or decoded. A preflight error is always fatal;
+    /// `recover` only handles damage encountered after an accepted preflight.
+    pub fn from_bytes_and_merged_preflight(
+        data: &[u8],
+        want: impl FnOnce(&PsdFile) -> Result<bool>,
+        recover: impl FnOnce(&PsdFile) -> bool,
+    ) -> Result<(Self, Option<Result<Vec<u8>>>)> {
         let mut r = Reader::new(data);
         let header = Header::read(&mut r)?;
         let psb = header.version.is_psb();
@@ -202,7 +213,7 @@ impl PsdFile {
             image_data,
             write_as_psb: false,
         };
-        let want = want(&file);
+        let want = want(&file)?;
         let merged = file.read_merged_section(&mut r, want, recover)?;
         Ok((file, merged))
     }
@@ -847,5 +858,23 @@ mod write_tests {
             other.global_blocks.push(TaggedBlock::new(key, Vec::new()));
             assert!(!other.merged_has_alpha(), "{}", String::from_utf8_lossy(&key));
         }
+    }
+    #[test]
+    fn preflight_refusal_precedes_merged_validation_and_cannot_be_recovered() {
+        let file = testgen::small(Version::Psd, Compression::Zip);
+        let mut bytes = file.to_bytes().unwrap();
+        bytes.truncate(bytes.len() - file.image_data.data.len() - 2);
+        let recover_called = std::cell::Cell::new(false);
+        let preflight = |_: &PsdFile| Err(PsdError::LimitExceeded("test import budget"));
+        let recover = |_: &PsdFile| {
+            recover_called.set(true);
+            true
+        };
+        assert!(matches!(PsdFile::from_bytes_and_merged_preflight(&bytes, preflight, recover), Err(PsdError::LimitExceeded("test import budget"))));
+        assert!(matches!(
+            PsdFile::from_source_and_merged_preflight(crate::Source::new(bytes), preflight, recover),
+            Err(PsdError::LimitExceeded("test import budget"))
+        ));
+        assert!(!recover_called.get());
     }
 }
