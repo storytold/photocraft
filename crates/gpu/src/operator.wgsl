@@ -114,9 +114,13 @@ struct Finish {
     levels: f32,
     // 1: the source has an alpha channel (else results keep alpha 1, as the CPU stores none).
     has_alpha: u32,
-    _pad: u32,
+    // 0: the blur itself; 1: Unsharp Mask's combine; 2: High Pass's (operator.rs `Combine`).
+    mode: u32,
     // Where the output starts inside the blurred window (which covers only part of the source's).
     blur_offset: vec2<u32>,
+    // Unsharp Mask: Amount / 100 and Threshold / 255.
+    amount: f32,
+    threshold: f32,
 }
 
 @group(0) @binding(0) var source: texture_2d<f32>;
@@ -146,6 +150,24 @@ fn finish(@builtin(global_invocation_id) g: vec3<u32>) {
         return;
     }
     var v = textureLoad(blurred, at + vec2<i32>(f.blur_offset), 0);
+    if f.mode == 1u {
+        // Unsharp Mask (`sharpen::exact::run`): the blurred value is already straight, with the
+        // CPU's unpremultiply cut-off. A fully transparent source pixel stays as it is.
+        if f.has_alpha != 0u && orig.w <= 0.0 {
+            v = orig;
+        } else {
+            let d = orig.xyz - v.xyz;
+            let sharpen = abs(d) + vec3<f32>(1e-6) >= vec3<f32>(f.threshold);
+            v = vec4<f32>(select(orig.xyz, orig.xyz + f.amount * d, sharpen), orig.w);
+        }
+    } else if f.mode == 2u {
+        // High Pass (`sharpen::high_pass`).
+        if f.has_alpha != 0u && orig.w <= 0.0 {
+            v = orig;
+        } else {
+            v = vec4<f32>(vec3<f32>(0.5) + (orig.xyz - v.xyz), orig.w);
+        }
+    }
     // The selection mix (`mix_selection` in photocraft-algo).
     var k = 1.0;
     if f.sel_size.x > 0u {

@@ -160,6 +160,12 @@ impl Compositor {
                 return Err(Unsupported("a mask operator on a disabled or vector-combined mask (previewed on the CPU)".into()));
             }
         }
+        // An operator's pages are keyed by its layer: a second one on the same layer (its content
+        // and its mask, say) would take the first one's output.
+        let mut layers = std::collections::HashSet::new();
+        if ops.iter().any(|o| !layers.insert(o.layer)) {
+            return Err(Unsupported("two layer operators on one layer (previewed on the CPU)".into()));
+        }
         let plan = plan::plan_with(doc, ops.iter().map(|o| o.layer).collect())?;
         self.frame_ops = ops.clone();
         self.check_fx(doc, &plan)?;
