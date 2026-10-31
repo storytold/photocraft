@@ -29,15 +29,59 @@ fn preview(app: &mut PhotocraftApp, settings: Value) -> u64 {
     select_mask_ui::control(app, &json!({"waitPreview": true})).unwrap()["selectedProxyPixels"].as_u64().unwrap()
 }
 
-/// Count the committed mask at the same pixel positions as the preview.
+/// Count preview blocks containing committed coverage of at least one half.
 fn selected(mask: &Surface, k: usize) -> u64 {
     let mut count = 0;
     for y in (0..600).step_by(k) {
         for x in (0..3600).step_by(k) {
-            count += u64::from(mask.sample_channel(x, y, 0) >= 0.5);
+            let coverage =
+                (y..(y + k as i32).min(600)).flat_map(|sy| (x..(x + k as i32).min(3600)).map(move |sx| mask.sample_channel(sx, sy, 0))).fold(0.0_f32, f32::max);
+            count += u64::from(coverage >= 0.5);
         }
     }
     count
+}
+
+/// Read the actual Black & White preview texture without a GPU or a test-only app API.
+fn preview_image(app: &mut PhotocraftApp, ctx: &egui::Context, settings: Value) -> egui::ColorImage {
+    let input = || egui::RawInput {
+        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1600.0, 900.0))),
+        max_texture_side: Some(8192),
+        ..Default::default()
+    };
+    // Publish the device limit before computing the full-size preview.
+    ctx.run_ui(input(), |ui| select_mask_ui::show(app, ui.ctx())).textures_delta.clear();
+    preview(app, settings);
+    let mut output = ctx.run_ui(input(), |ui| select_mask_ui::show(app, ui.ctx()));
+    let manager = ctx.tex_manager();
+    let manager = manager.read();
+    let image = output
+        .textures_delta
+        .set
+        .iter()
+        .find_map(|(id, delta)| {
+            if manager.meta(*id).is_some_and(|meta| meta.name == "select-mask-preview") {
+                let egui::ImageData::Color(image) = &delta.last()?.image;
+                Some((**image).clone())
+            } else {
+                None
+            }
+        })
+        .expect("the requested selection preview was uploaded");
+    output.textures_delta.clear();
+    image
+}
+
+/// Check every visible coverage position against blocks of the committed mask.
+fn assert_coverage_positions(image: &egui::ColorImage, mask: &Surface, k: usize) {
+    assert_eq!(image.size, [3600_usize.div_ceil(k), 600_usize.div_ceil(k)]);
+    for y in 0..image.size[1] {
+        for x in 0..image.size[0] {
+            let (x0, y0) = ((x * k) as i32, (y * k) as i32);
+            let covered = (y0..(y0 + k as i32).min(600)).any(|sy| (x0..(x0 + k as i32).min(3600)).any(|sx| mask.sample_channel(sx, sy, 0) > 0.0));
+            assert_eq!(image.pixels[y * image.size[0] + x].r() > 0, covered, "coverage at ({x}, {y}), scale {k}");
+        }
+    }
 }
 
 /// With refinement disabled, both preview sizes show the selection that OK commits.
@@ -45,13 +89,16 @@ fn selected(mask: &Surface, k: usize) -> u64 {
 fn quick_selection_agrees_with_ok_at_both_preview_qualities() {
     for depth in [8, 16, 32] {
         let mut app = app(depth);
-        let low = preview(&mut app, json!({"size": 30, "stroke": {"points": [[1800.0, 300.0]]}}));
-        let high = preview(&mut app, json!({"highQualityPreview": true}));
-        assert_eq!(preview(&mut app, json!({"highQualityPreview": false})), low, "switching back reuses the same selection");
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        let low = preview_image(&mut app, &ctx, json!({"view": "blackWhite", "size": 30, "stroke": {"points": [[1800.0, 300.0]]}}));
+        let high = preview_image(&mut app, &ctx, json!({"highQualityPreview": true}));
+        let low_again = preview_image(&mut app, &ctx, json!({"highQualityPreview": false}));
+        assert_eq!(low.pixels, low_again.pixels, "switching back keeps the same selection");
         select_mask_ui::commit(&mut app).unwrap();
         let mask = app.session.active().unwrap().doc.selection.as_ref().unwrap();
-        assert_eq!(high, selected(mask, 1), "{depth}-bit full-size preview agrees with OK");
-        assert_eq!(low, selected(mask, 3), "{depth}-bit reduced preview samples the same selection as OK");
+        assert_coverage_positions(&high, mask, 1);
+        assert_coverage_positions(&low, mask, 3);
     }
 }
 
@@ -66,7 +113,8 @@ fn brush_edits_and_undo_keep_the_cached_selection_in_document_coordinates() {
     assert_eq!(preview(&mut app, json!({"undo": true})), first);
     assert_eq!(preview(&mut app, json!({"redo": true})), both);
     let inverted = preview(&mut app, json!({"invert": true}));
-    assert_eq!(inverted, 1200 * 200 - both);
+    assert!(inverted >= 1200 * 200 - both, "boundary blocks can contain both selected and unselected pixels");
+    assert!(inverted < 1200 * 200, "fully selected blocks become empty");
     select_mask_ui::commit(&mut app).unwrap();
     assert_eq!(inverted, selected(app.session.active().unwrap().doc.selection.as_ref().unwrap(), 3));
 }
@@ -91,4 +139,42 @@ fn reduced_preview_edits_the_targeted_layer_mask() {
     assert_eq!(low, selected(mask, 3));
     assert_eq!(high, selected(mask, 1));
     assert!(st.doc.selection.is_none(), "output to the layer mask consumes the document selection");
+}
+
+/// A one-pixel edit between the proxy's sample positions remains visible.
+#[test]
+fn reduced_preview_keeps_a_one_pixel_brush_edit() {
+    let mut app = app(8);
+    let low = preview(&mut app, json!({"tool": "brush", "size": 1, "stroke": {"points": [[1.5, 1.5]]}}));
+    let high = preview(&mut app, json!({"highQualityPreview": true}));
+    select_mask_ui::commit(&mut app).unwrap();
+    let mask = app.session.active().unwrap().doc.selection.as_ref().unwrap();
+    assert!(mask.sample_channel(1, 1, 0) >= 0.5);
+    assert_eq!(high, 1);
+    assert_eq!(low, 1, "the edited pixel must survive reduction");
+}
+
+/// Implicit coverage survives sparse tiles and the last, partially filled preview block.
+#[test]
+fn reduced_preview_preserves_nonzero_defaults_and_empty_blocks() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.run("file.new", json!({"width": 6401, "height": 5, "depth": 16})).unwrap();
+    app.session
+        .edit("sparse mask", |doc, _| {
+            let mut mask = Surface::with_default(
+                photocraft_color::PixelFormat { sample: photocraft_color::SampleType::U16, ..photocraft_color::PixelFormat::GRAY8 },
+                &[0.75],
+            );
+            mask.fill_rect(Rect::new(0, 0, 5, 5), &[0.0]);
+            mask.write_pixel(8, 1, &[0.0]);
+            doc.selection = Some(mask);
+            Ok(())
+        })
+        .unwrap();
+    select_mask_ui::open(&mut app).unwrap();
+    // A pair cancels, retaining the original sparse mask while exercising edited-mask reduction.
+    select_mask_ui::control(&mut app, &json!({"invert": true})).unwrap();
+    select_mask_ui::control(&mut app, &json!({"invert": true})).unwrap();
+    assert_eq!(preview(&mut app, json!({"showOriginal": true})), 1280, "one empty block, one partial hole, and the last partial block");
+    assert_eq!(preview(&mut app, json!({"highQualityPreview": true})), 6401 * 5 - 26);
 }

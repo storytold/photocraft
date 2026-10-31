@@ -1162,6 +1162,55 @@ fn sparse_preview_ants(surface: &Surface, area: Rect, k: f32) -> Option<Vec<[[f3
     Some(edges)
 }
 
+/// Reduce a selection by maximum coverage, so thin edits survive between proxy sample points.
+/// Visit stored tiles rather than a full-size buffer; only the bounded preview is dense.
+fn reduced_selection(surface: &Surface, canvas: Rect, k: u32) -> Result<Surface, String> {
+    if k <= 1 {
+        return Ok(surface.clone());
+    }
+    let (w, h) = (canvas.width().div_ceil(k) as usize, canvas.height().div_ceil(k) as usize);
+    let len = w.checked_mul(h).filter(|n| *n <= PROXY_SIDE * PROXY_SIDE).ok_or("selection preview is too large")?;
+    let outside = surface.default_pixel().first().copied().unwrap_or(0.0).clamp(0.0, 1.0);
+    let mut coverage = vec![0.0_f32; len];
+    // A nonzero default contributes wherever a block includes pixels outside stored tiles.
+    let mut stored = if outside > 0.0 { vec![0_u64; len] } else { Vec::new() };
+    for (coord, _) in surface.tiles() {
+        let area = coord.rect().intersect(&canvas);
+        if area.is_empty() {
+            continue;
+        }
+        let values = photocraft_algo::selection::mask_from_surface(Some(surface), area);
+        for (y, row) in values.chunks_exact(area.width() as usize).enumerate() {
+            let oy = ((area.y0 - canvas.y0) as u32 + y as u32) / k;
+            for (x, value) in row.iter().enumerate() {
+                let ox = ((area.x0 - canvas.x0) as u32 + x as u32) / k;
+                let i = oy as usize * w + ox as usize;
+                if let Some(v) = coverage.get_mut(i) {
+                    *v = v.max(*value);
+                }
+                if let Some(n) = stored.get_mut(i) {
+                    *n += 1;
+                }
+            }
+        }
+    }
+    for (i, count) in stored.into_iter().enumerate() {
+        let (x, y) = ((i % w) as u64, (i / w) as u64);
+        let k = u64::from(k);
+        let width = u64::from(canvas.width()).saturating_sub(x * k).min(k);
+        let height = u64::from(canvas.height()).saturating_sub(y * k).min(k);
+        if count < width * height
+            && let Some(v) = coverage.get_mut(i)
+        {
+            *v = v.max(outside);
+        }
+    }
+    let mut out = Surface::with_default(surface.format(), &surface.default_pixel());
+    out.write_region(Rect::new(0, 0, w as i32, h as i32), &coverage);
+    out.prune();
+    Ok(out)
+}
+
 /// Apply tool edits at full resolution so preview quality cannot change their selection, then
 /// reduce the mask for edge refinement and display. Completed edits reuse the cached selection.
 fn compute(job: Job, cancel: Option<&photocraft_engine::jobs::JobCtx>) -> Result<(Shown, BaseCache, Arc<Document>), String> {
@@ -1195,7 +1244,10 @@ fn compute(job: Job, cancel: Option<&photocraft_engine::jobs::JobCtx>) -> Result
         cache = BaseCache { k, revision: job.revision, edits: job.edits.clone(), base: base.clone() };
         let base = select_mask_edits::apply(&job.doc, layer, base, edits.get(job.edits.len()..).unwrap_or_default());
         // Nothing selected is an empty selection, not "use the layer mask".
-        doc.selection = Some(base.map_or_else(|| Surface::new(photocraft_color::PixelFormat::GRAY8), |s| crate::proxy::downsample(&s, k)));
+        doc.selection = Some(match base {
+            Some(s) => reduced_selection(&s, job.doc.bounds(), k)?,
+            None => Surface::new(photocraft_color::PixelFormat::GRAY8),
+        });
         if let Some(o) = params.as_object_mut() {
             o.remove("target");
         }
