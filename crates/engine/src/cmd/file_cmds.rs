@@ -33,7 +33,7 @@ pub(crate) use batch_run::{BatchInput, batch_inputs, batch_keeps_step, batch_sav
 #[cfg(test)]
 pub(crate) use batch_run::{MAX_SUBFOLDER_DEPTH, list_images_tree};
 use batch_run::{batch, same_format};
-pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with};
+pub use export::{LayerExportReport, SkippedExportLayer, bake_cube, export_layers_report_with, export_layers_with, export_sprite_sheet};
 use export::{color_lookup_tables, layers_to_files, push_unique};
 use info::file_info;
 pub use info::{CAMERA_FIELDS, camera_data, read_file_info, write_file_info};
@@ -344,6 +344,15 @@ pub fn specs() -> Vec<CommandSpec> {
             r##"{"dir":folder,"format":"png|jpg|psd|tiff|…"="png","prefix":str=document name,"visibleOnly":bool=true,"trim":bool=false,"quality":0..12?,"jpegFormat":"baseline|optimized|progressive"?,"tiffLayers":bool=false,"tiffCompression":"none|lzw|zip"?,"tgaBits":24|32?,"dpxBits":8|10|12|16? (DPX: bits per sample; unset, 8 for an 8-bit document, else 16),"ddsCompression":"none|bc1|bc2|bc3"="none" (DDS: uncompressed, or block compression; BC1 keeps alpha on or off),"ddsMipmaps":bool=false (DDS: also write the full mip chain)} → {files}"##,
             native_doc,
             layers_to_files
+        ),
+        spec!(
+            "file.export.spriteSheet",
+            "Export Sprite Sheet…",
+            &["File", "Export"],
+            None,
+            r##"{"path":str (PNG destination; a companion .json is written beside it),"source":"layers|grid"="layers","frameWidth":px=32,"frameHeight":px=32,"columns":1..65536=8,"padding":px=0,"fps":1..240=8,"selectedFrames":[integer|{"frame":integer,"durationTicks":1..60},…]?} (selectedFrames controls Aseprite-compatible JSON order and per-frame duration; integers are one tick)"##,
+            has_doc,
+            export_sprite_sheet
         ),
         spec!(
             "file.export.colorLookupTables",
