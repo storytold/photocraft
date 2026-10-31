@@ -375,13 +375,7 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                     }
                 }
                 if !matches!(fmt.as_str(), "png24" | "webp") || !b(f, "transparency", true) {
-                    ui.horizontal(|ui| {
-                        let matte_label = ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
-                        let mut m = s(f, "matte", "#ffffff");
-                        if ui.add(egui::TextEdit::singleline(&mut m).desired_width(80.0)).labelled_by(matte_label.id).changed() {
-                            f.insert("matte".into(), json!(m));
-                        }
-                    });
+                    ui.horizontal(|ui| matte_field(ui, f));
                 }
                 ui.add_space(6.0);
                 check(ui, f, "convertToSrgb", tl!("Convert to sRGB"), true);
@@ -418,6 +412,32 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
             });
         });
     });
+}
+
+/// Save for Web's Matte: `#rrggbb` or `none`. While it has focus the field shows exactly what is
+/// typed and only a whole colour reaches the settings, so the previews never see a partial one
+/// such as `#1111` mid-type (#8830); what is not a colour snaps back when focus leaves.
+fn matte_field(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
+    let t = Tokens::get(ui.ctx());
+    let label = ui.label(egui::RichText::new(tl!("Matte")).color(t.text_dim));
+    let id = ui.make_persistent_id("web-matte");
+    let typed = if ui.memory(|m| m.has_focus(id)) { ui.data(|d| d.get_temp::<String>(id)) } else { None };
+    let mut text = typed.unwrap_or_else(|| s(f, "matte", "#ffffff"));
+    let resp = ui.add(egui::TextEdit::singleline(&mut text).id(id).desired_width(80.0)).labelled_by(label.id);
+    if resp.has_focus() {
+        ui.data_mut(|d| d.insert_temp(id, text.clone()));
+    } else {
+        ui.data_mut(|d| d.remove::<String>(id));
+    }
+    if !resp.changed() {
+        return;
+    }
+    let matte = crate::color_picker_ui::parse_hex(&text)
+        .map(crate::color_picker_ui::hex)
+        .or_else(|| text.trim().eq_ignore_ascii_case("none").then(|| "none".to_string()));
+    if let Some(matte) = matte {
+        f.insert("matte".into(), json!(matte));
+    }
 }
 
 /// A size row in a two-column grid: the label, then a field showing `shown`. Returns the typed
