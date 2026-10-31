@@ -188,9 +188,13 @@ impl Unit {
     /// `*` and `/` bind tighter, and `−` (U+2212) is a minus. A number without a unit added or
     /// subtracted takes the first operand's unit (Photoshop: "1in + 10" is 11 in), or `default`
     /// when the first has none; one multiplied or divided is a plain number. `to_px` converts a
-    /// value in a unit. `None` when the text isn't such an expression, multiplies two lengths,
-    /// divides by a length or by zero, or the result isn't finite.
+    /// value in a unit. `None` when the text is over 1024 bytes (the numeric fields' cap) or isn't
+    /// such an expression, multiplies two lengths, divides by a length or by zero, or the result
+    /// isn't finite.
     pub fn eval_length(text: &str, default: Unit, to_px: impl Fn(f64, Unit) -> f64) -> Option<f64> {
+        if text.len() > 1024 {
+            return None;
+        }
         let text = text.replace('−', "-");
         // Tokens: operators, and operands (a number with an optional unit suffix).
         let mut ops = Vec::new();

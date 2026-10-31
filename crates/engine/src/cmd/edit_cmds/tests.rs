@@ -1329,6 +1329,19 @@ fn guide_position_arithmetic_takes_the_unicode_minus() {
     }
 }
 
+/// Text longer than the numeric fields' 1024-byte cap is refused before it is tokenised.
+#[test]
+fn guide_position_arithmetic_is_capped_at_1024_bytes() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 400, "resolution": 72})).unwrap();
+    let fits = format!("{}100", "0 + ".repeat(255));
+    assert_eq!(fits.len(), 1023);
+    assert_eq!(new_guide(&mut s, "vertical", json!(fits)), 100.0);
+    let long = format!("{}100", "0 + ".repeat(256));
+    let err = s.execute("view.newGuide", json!({"orientation": "vertical", "position": long})).unwrap_err();
+    assert!(err.to_string().contains("not a length"), "{err}");
+}
+
 #[test]
 fn new_guides_keep_their_own_colour_through_moves_deletes_and_undo() {
     let mut s = Session::new();
