@@ -36,6 +36,7 @@ impl PhotocraftApp {
         session.updates.check = services.check_updates.take();
         let mut app = Self {
             session,
+            artboard_overview: Default::default(),
             ui: UiState::default(),
             services,
             canvases: HashMap::new(),

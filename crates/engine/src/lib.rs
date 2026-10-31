@@ -35,6 +35,7 @@ pub mod prefs;
 pub mod preset_store;
 pub mod presets;
 pub mod proof_sim;
+pub mod responsive_template_cmds;
 pub mod select_mask_edits;
 pub mod shell_commands;
 pub mod shortcut_sets;

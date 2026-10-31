@@ -120,6 +120,8 @@ struct Ex {
     guides: photocraft_doc::Guides,
     /// Layer comps to regenerate into each layer's `cmls`; None = preserved data still matches.
     comps: Option<(Vec<photocraft_doc::LayerComp>, Option<photocraft_doc::LayerComp>)>,
+    /// Explicit semantic artboard roles, keyed by document layer id.
+    semantic_roles: std::collections::HashMap<photocraft_doc::LayerId, String>,
     /// Smart objects: embedded files and filter caches for the global blocks.
     smart: SmartOut,
     /// The document's patterns, which Pattern Fill layers are rendered from.
@@ -591,6 +593,8 @@ impl Ex {
             crate::comps_map::set_cmls(&mut raw, crate::comps_map::write_cmls(comps, last.as_ref(), l, id));
         }
         self.layer_xmp_block(l, &mut raw);
+        let role = self.semantic_roles.get(&l.id).map(String::as_str).filter(|role| *role != "auto");
+        crate::comps_map::set_artboard_role(&mut raw, role);
         regenerated.into_iter().chain(raw).map(|(k, d)| TaggedBlock::new(k, d)).collect()
     }
 

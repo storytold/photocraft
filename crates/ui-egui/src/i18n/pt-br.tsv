@@ -4242,6 +4242,9 @@ layerLabel	No Color	Sem cor
 @plural	Imported {n} style from {file}|Imported {n} styles from {file}	{n} estilo importado de {file}|{n} estilos importados de {file}
 @plural	Exported {n} style to {file}|Exported {n} styles to {file}	{n} estilo exportado para {file}|{n} estilos exportados para {file}
 	Confirm or cancel the open action step dialog first	Confirme ou cancele primeiro a caixa de diálogo aberta da etapa da ação
+# Actions: a step dialog holds a suspended recording (#7365)
+
+# Channels panel menu: channel commands, spot channels, Quick Mask, Color Indicates
 	New Channel…	Novo canal…
 	Duplicate Channel	Duplicar canal
 	Delete Channel	Excluir canal
@@ -4254,6 +4257,8 @@ layerLabel	No Color	Sem cor
 	Exit Quick Mask	Sair da máscara rápida
 	Color Indicates Masked Areas	A cor indica áreas mascaradas
 	Color Indicates Selected Areas	A cor indica áreas selecionadas
+
+# Layer Style › Blending Options: advanced blending and Blend If
 	General Blending	Mesclagem geral
 	Shallow	Raso
 	Deep	Profundo
@@ -4263,6 +4268,8 @@ layerLabel	No Color	Sem cor
 	Layer Mask Hides Effects	A máscara de camada oculta os efeitos
 	Vector Mask Hides Effects	A máscara vetorial oculta os efeitos
 	This Layer:	Esta camada:
+
+# Canvas right-click menus: pasteboard color, paths and shapes
 	Dark Gray	Cinza-escuro
 	Medium Gray	Cinza médio
 	Select Custom Color…	Selecionar cor personalizada…
@@ -4281,14 +4288,20 @@ layerLabel	No Color	Sem cor
 	Paste Complete Stroke	Colar traçado completo
 	Make Symmetry Path	Criar demarcador de simetria
 	Disable Symmetry Path	Desativar demarcador de simetria
+
+# Color Picker titles
 	Color Picker (Foreground Color)	Seletor de cores (Cor de primeiro plano)
 	Color Picker (Background Color)	Seletor de cores (Cor de fundo)
 	Pick Color From Image	Escolher cor da imagem
+
+# Rasterize prompts
 	This layer must be rasterized before proceeding.	Esta camada precisa ser rasterizada antes de continuar.
 	This type layer must be rasterized before proceeding. Its text will no longer be editable. Rasterize the type?	Esta camada de texto precisa ser rasterizada antes de continuar. O texto não poderá mais ser editado. Rasterizar o texto?
 	This shape layer must be rasterized before proceeding. It will no longer be editable as a shape. Rasterize the shape?	Esta camada de forma precisa ser rasterizada antes de continuar. Ela não poderá mais ser editada como forma. Rasterizar a forma?
 	This Smart Object must be rasterized before proceeding. Its contents will no longer be editable. Rasterize the Smart Object?	Este objeto inteligente precisa ser rasterizado antes de continuar. O conteúdo não poderá mais ser editado. Rasterizar o objeto inteligente?
 	This fill layer must be rasterized before proceeding. Its fill content will no longer be editable. Rasterize the layer?	Esta camada de preenchimento precisa ser rasterizada antes de continuar. O conteúdo do preenchimento não poderá mais ser editado. Rasterizar a camada?
+
+# GPU and display status (status bar, System Info)
 	Graphics adapter: {adapter}	Adaptador gráfico: {adapter}
 	Backend: {backend} ({type})	Backend: {backend} ({type})
 	Driver: {driver}	Driver: {driver}
@@ -4316,6 +4329,8 @@ layerLabel	No Color	Sem cor
 	previous reading kept; the last re-read failed: {reason}	leitura anterior mantida; a última releitura falhou: {reason}
 	The canvas is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	A tela de pintura é exibida como sRGB. Escolha um perfil de monitor em Editar › Configurações de cores.
 	The canvas on {display} is shown as sRGB. Choose a monitor profile in Edit › Color Settings.	A tela de pintura em {display} é exibida como sRGB. Escolha um perfil de monitor em Editar › Configurações de cores.
+
+# Status messages
 	Nothing to paste: the clipboard holds no image	Nada para colar: a área de transferência não contém imagem
 	Opened {url}	Aberto: {url}
 	Preferences saved	Preferências salvas
@@ -4352,6 +4367,8 @@ layerLabel	No Color	Sem cor
 	This adjustment ({key}) is kept as imported and can't be edited yet.	Este ajuste ({key}) é mantido como foi importado e ainda não pode ser editado.
 	{shortcut} assigned.	{shortcut} atribuído.
 	{shortcut} is already in use by {commands} and will be removed from it when you click OK.	{shortcut} já está em uso por {commands} e será removido de lá quando você clicar em OK.
+
+# Panels and small controls
 	Grid view	Visualização em grade
 	List view	Visualização em lista
 	New Brush Preset	Nova predefinição de pincel
@@ -4364,6 +4381,8 @@ layerLabel	No Color	Sem cor
 	Apply {option}: {state}	Aplicar {option}: {state}
 	on	ativado
 	off	desativado
+
+# Liquify tools (tooltips)
 	Forward Warp	Deformação para frente
 	Twirl Clockwise	Torcer no sentido horário
 	Twirl Counterclockwise	Torcer no sentido anti-horário
@@ -4379,6 +4398,9 @@ layerLabel	No Color	Sem cor
 	Pro Light	Pro claro
 	Resize Windows to Fit	Redimensionar janelas para caber
 	EXR	EXR
+
+
+# Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Direção automática do parágrafo
 	Left-to-right paragraph direction	Direção do parágrafo da esquerda para a direita
 	Right-to-left paragraph direction	Direção do parágrafo da direita para a esquerda
@@ -4399,6 +4421,85 @@ layerLabel	No Color	Sem cor
 	Grayscale Ramp	Rampa de tons de cinza
 	Current Colors	Cores atuais
 	Make Ramp Web Safe	Tornar rampa segura para a Web
+
+# Print preview image (#8236)
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Visão geral das pranchetas · Todos os formatos
+	Artboard Overview	Visão geral das pranchetas
+	Overview · all formats	Ver todos os formatos
+	Responsive layout role	Função do layout responsivo
+	artboards	pranchetas
+	This document has no artboards yet.	Este documento ainda não tem pranchetas.
+	Select on canvas	Selecionar na tela
+	Reflow	Refluxo
+	Responsive variants	Variantes responsivas
+	Semantic reflow	Refluxo semântico
+	Proportional fit	Ajuste proporcional
+	Semantic reflow · keep type size	Refluxo semântico · manter tamanho do texto
+	Proportional fit · scale all	Ajuste proporcional · redimensionar tudo
+	suggested	sugerido
+	Set as master	Definir como mestre
+	Switch variant	Alternar variante
+	Variant	Variante
+	Badge	Selo
+	Price	Preço
+	Disclaimer	Aviso legal
+	Image mark	Marca da imagem
+	Size limits in pixels (0 = none)	Limites de tamanho em pixels (0 = nenhum)
+	Maximum size must be at least the minimum size	O tamanho máximo deve ser pelo menos igual ao mínimo
+	Safe area	Área segura
+	Insets as a fraction of artboard size	Margens como fração do tamanho da prancheta
+	Reset to master rule	Redefinir para a regra mestre
+	Update variants	Atualizar variantes
+	Variant name	Nome da variante
+	Arrow keys navigate; Enter selects and zooms	As setas navegam; Enter seleciona e amplia
+	Review findings	Revisar ocorrências
+	Results are capped; some findings are omitted	Os resultados são limitados; algumas ocorrências foram omitidas
+	No findings to review	Nenhuma ocorrência para revisar
+	Safe Areas	Áreas seguras
+	Responsive Template…	Modelo responsivo…
+	Text reflow	Refluxo do texto
+	Rewrap	Refluir
+	Rewrap with auto height	Refluir com altura automática
+	Rewrap and shrink	Refluir e reduzir
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Avisos responsivos
+	All findings	Todas as ocorrências
+	Outside artboard	Fora da prancheta
+	Semantic collision	Colisão semântica
+	Safe-area violation	Violação da área segura
+	Review all findings	Revisar todas as ocorrências
+	Filter findings	Filtrar ocorrências
+	From file	Do arquivo
+	Suggested	Sugestão
+	Suggested role	Função sugerida
+	Apply role to similar layers	Aplicar função a camadas semelhantes
+	Layer name or text	Nome da camada ou texto
+	Layer name	Nome da camada
+	Text layer	Camada de texto
+	Covers most of artboard	Cobre a maior parte da prancheta
+	Shape layer	Camada de forma
+	No strong role signal	Sem sinal forte de função
+	Explicit role	Função explícita
+	Layer unavailable	Camada indisponível
+	Master layers removed from variant: {count}	Camadas mestre removidas da variante: {count}
+	Overrides dropped because their layers no longer exist: {count}	Substituições removidas porque as camadas não existem mais: {count}
+	Previous Artboard Variant	Variante anterior da prancheta
+	Next Artboard Variant	Próxima variante da prancheta
+	Select {name} ({layer})	Selecionar {name} ({layer})
+	Could not select conflict layer	Não foi possível selecionar a camada em conflito
+	The conflict layer no longer exists	A camada em conflito não existe mais
+	Layout review: {findings} findings on {boards} artboards.	Revisão do layout: {findings} problemas em {boards} pranchetas.
+	Some artboards could not be checked and count as affected.	Algumas pranchetas não puderam ser verificadas e são consideradas afetadas.
+	Skip artboards with findings or incomplete checks	Ignorar pranchetas com problemas ou verificações incompletas
+	No layout findings on {boards} artboards.	Nenhum problema de layout em {boards} pranchetas.
+	Some artboard checks were incomplete; they count as affected.	Algumas verificações de pranchetas ficaram incompletas e são consideradas afetadas.
+@plural	files|Saved for Web: {n} file	Arquivos: {n}|Salvo para Web: {n} arquivo
+	Select and Mask was closed: its document is no longer the active one	Selecionar e mascarar foi fechado: o documento dele não está mais ativo
+	Select and Mask was closed: another layer was selected	Selecionar e mascarar foi fechado: outra camada foi selecionada
+# Art History Brush (#213).
 	The path was kept as the Work Path	O demarcador foi mantido como demarcador de trabalho
 	The path was discarded	O demarcador foi descartado
 	Art History Brush Tool	Ferramenta Pincel do histórico da arte
@@ -4428,7 +4529,5 @@ layerLabel	No Color	Sem cor
 	View Mode	Modo de exibição
 	Object Aware needs a segmentation model, which isn't available yet	Com reconhecimento de objeto requer um modelo de segmentação, ainda não disponível
 	Refine Hair needs hair detection, which isn't available yet	Refinar cabelo requer detecção de cabelo, ainda não disponível
-	Select and Mask was closed: its document is no longer the active one	Selecionar e mascarar foi fechado: o documento dele não está mais ativo
-	Select and Mask was closed: another layer was selected	Selecionar e mascarar foi fechado: outra camada foi selecionada
 	Drag to move the selected path	Arraste para mover o demarcador selecionado
 	Edit Brush…	Editar pincel…

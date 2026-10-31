@@ -4195,6 +4195,9 @@ cameraRaw	Dehaze	Odstranění oparu
 	Pro Light	Pro (světlý)
 	Resize Windows to Fit	Přizpůsobit velikost oken
 	EXR	EXR
+
+
+# Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Automatický směr odstavce
 	Left-to-right paragraph direction	Směr odstavce zleva doprava
 	Right-to-left paragraph direction	Směr odstavce zprava doleva
@@ -4216,6 +4219,86 @@ cameraRaw	Dehaze	Odstranění oparu
 	Grayscale Ramp	Přechod stupňů šedi
 	Current Colors	Aktuální barvy
 	Make Ramp Web Safe	Omezit pruh na webové barvy
+
+# Print preview image (#8236)
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Přehled kreslicích pláten · všechny formáty
+	Artboard Overview	Přehled kreslicích pláten
+	Overview · all formats	Zobrazit všechny formáty
+	Responsive layout role	Role responzivního rozvržení
+	artboards	kreslicích pláten
+	This document has no artboards yet.	Tento dokument zatím nemá žádná kreslicí plátna.
+	Select on canvas	Vybrat na plátně
+	Reflow	Přizpůsobení rozvržení
+	Responsive variants	Responzivní varianty
+	Semantic reflow	Sémantické přizpůsobení
+	Proportional fit	Proporcionální přizpůsobení
+	Semantic reflow · keep type size	Sémantické přizpůsobení · zachovat velikost písma
+	Proportional fit · scale all	Proporcionální přizpůsobení · škálovat vše
+	suggested	navrženo
+	Set as master	Nastavit jako hlavní
+	Switch variant	Přepnout variantu
+	Variant	Varianta
+	Badge	Odznak
+	Price	Cena
+	Disclaimer	Vyloučení odpovědnosti
+	Image mark	Značka obrázku
+	Size limits in pixels (0 = none)	Omezení velikosti v pixelech (0 = žádné)
+	Maximum size must be at least the minimum size	Maximální velikost musí být alespoň minimální velikost
+	Safe area	Bezpečná oblast
+	Insets as a fraction of artboard size	Odsazení jako zlomek velikosti kreslicího plátna
+	Reset to master rule	Obnovit pravidlo předlohy
+	Update variants	Aktualizovat varianty
+	Variant name	Název varianty
+	Arrow keys navigate; Enter selects and zooms	Šipky navigují; Enter vybere a přiblíží
+	Review findings	Zobrazit nálezy
+	Results are capped; some findings are omitted	Výsledky jsou omezené; některé nálezy jsou skryté
+	No findings to review	Žádné nálezy ke kontrole
+	Safe Areas	Bezpečné oblasti
+	Responsive Template…	Responzivní šablona…
+	Text reflow	Zalomit text
+	Rewrap	Znovu zalomit
+	Rewrap with auto height	Znovu zalomit s automatickou výškou
+	Rewrap and shrink	Znovu zalomit a zmenšit
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Responzivní upozornění
+	All findings	Všechna zjištění
+	Outside artboard	Mimo plátno
+	Semantic collision	Sémantický střet
+	Safe-area violation	Porušení bezpečné oblasti
+	Review all findings	Zobrazit všechna zjištění
+	Filter findings	Filtrovat zjištění
+	From file	Ze souboru
+	Suggested	Návrh
+	Suggested role	Navržená role
+	Apply role to similar layers	Použít roli na podobné vrstvy
+	Layer name or text	Název vrstvy nebo text
+	Layer name	Název vrstvy
+	Text layer	Textová vrstva
+	Covers most of artboard	Pokrývá většinu plátna
+	Shape layer	Tvarová vrstva
+	No strong role signal	Žádný výrazný signál role
+	Explicit role	Explicitní role
+	Layer unavailable	Vrstva není k dispozici
+	Master layers removed from variant: {count}	Hlavní vrstvy odebrané z varianty: {count}
+	Overrides dropped because their layers no longer exist: {count}	Vypuštěná přepsání, protože jejich vrstvy už neexistují: {count}
+	Previous Artboard Variant	Předchozí varianta kreslicího plátna
+	Next Artboard Variant	Další varianta kreslicího plátna
+	Select {name} ({layer})	Vybrat {name} ({layer})
+	Could not select conflict layer	Konfliktní vrstvu nelze vybrat
+	The conflict layer no longer exists	Konfliktní vrstva již neexistuje
+	Layout review: {findings} findings on {boards} artboards.	Kontrola rozvržení: {findings} nálezů na {boards} plátnech.
+	Some artboards could not be checked and count as affected.	Některá plátna nebylo možné zkontrolovat a jsou považována za problematická.
+	Skip artboards with findings or incomplete checks	Přeskočit plátna s nálezy nebo neúplnou kontrolou
+	No layout findings on {boards} artboards.	Na {boards} plátnech nebyly nalezeny problémy s rozvržením.
+	Some artboard checks were incomplete; they count as affected.	Některé kontroly pláten nebyly úplné a jsou považovány za problematické.
+
+@plural	files|Saved for Web: {n} file	Souborů: {n}|Souborů: {n}|Uloženo pro web: {n} souborů
+	Select and Mask was closed: its document is no longer the active one	Vybrat a maskovat bylo zavřeno: jeho dokument již není aktivní
+	Select and Mask was closed: another layer was selected	Vybrat a maskovat bylo zavřeno: byla vybrána jiná vrstva
+# Art History Brush (#213).
 	The path was kept as the Work Path	Cesta byla zachována jako pracovní cesta
 	The path was discarded	Cesta byla zahozena
 	Art History Brush	Štětec umělecké historie
@@ -4247,7 +4330,5 @@ cameraRaw	Dehaze	Odstranění oparu
 	View Mode	Režim zobrazení
 	Object Aware needs a segmentation model, which isn't available yet	Režim Podle objektů vyžaduje segmentační model, který zatím není k dispozici
 	Refine Hair needs hair detection, which isn't available yet	Upřesnit vlasy vyžaduje detekci vlasů, která zatím není k dispozici
-	Select and Mask was closed: its document is no longer the active one	Vybrat a maskovat bylo zavřeno: jeho dokument již není aktivní
-	Select and Mask was closed: another layer was selected	Vybrat a maskovat bylo zavřeno: byla vybrána jiná vrstva
 	Drag to move the selected path	Tažením přesunete vybranou cestu
 	Edit Brush…	Upravit štětec…

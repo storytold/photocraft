@@ -84,6 +84,14 @@ fn export_supported_document(
         records: Vec::new(),
         warnings: Vec::new(),
         guides: doc.guides.clone(),
+        semantic_roles: doc
+            .metadata
+            .text
+            .iter()
+            .filter_map(|(key, role)| {
+                key.strip_prefix(crate::comps_map::ARTBOARD_ROLE_PREFIX)?.parse::<u64>().ok().map(|id| (photocraft_doc::LayerId(id), role.clone()))
+            })
+            .collect(),
         comps: (!crate::comps_map::comps_unchanged(doc)).then(|| (doc.layer_comps.clone(), doc.last_document_state.clone())),
         smart: SmartOut::new(doc, depth),
         patterns: doc.patterns.clone(),

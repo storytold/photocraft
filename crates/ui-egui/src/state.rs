@@ -430,6 +430,9 @@ pub struct UiState {
     /// Which chip the Color panel edits, and how it shows the colour.
     #[serde(default)]
     pub color_panel: ColorPanelState,
+    /// Responsive-artboard findings filter (0 all, 1 overflow, 2 collisions, 3 safe areas).
+    #[serde(default)]
+    pub responsive_findings_filter: u8,
     /// The Color panel options as last synced with the preferences: a stored value that differs
     /// from it was changed outside the panel (`prefs.set`, a reset) and is taken, not overwritten.
     #[serde(skip)]
@@ -514,6 +517,7 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         Self {
+            responsive_findings_filter: 0,
             tool: Tool::Brush,
             group_tools: Vec::new(),
             spring: None,

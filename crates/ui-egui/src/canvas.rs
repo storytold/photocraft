@@ -526,6 +526,7 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
         }
         if primary {
             crate::artboard_ui::draw_frames(app, painter, &xf);
+            crate::artboard_ui::draw_responsive_markers(app, painter, &xf);
         }
     }
 

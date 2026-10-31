@@ -286,6 +286,7 @@ impl PhotocraftApp {
         }
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
         let docking = (chrome && self.ui.panels.dock) || tabbed_in;
+        crate::artboard_overview::refresh_canvas_diagnostics(self);
         if docking {
             panels::dock_area(self, ui);
         } else {
@@ -296,6 +297,7 @@ impl PhotocraftApp {
             });
             panels::properties_window(self, &ctx);
         }
+        crate::artboard_overview::show(self, &ctx);
         brush_panel::window(self, &ctx);
         preset_panels::windows(self, &ctx);
         gradient_ui::editor_window(self, &ctx);

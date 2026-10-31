@@ -3929,6 +3929,7 @@ curves	Smooth	Сгладить
 	Pro Light Gray	Светло-серая Pro
 	Pro Light	Светлая Pro
 	Resize Windows to Fit	Подгонять размер окон
+
 	EXR	EXR
 	Increase Brush Size	Увеличить размер кисти
 	Increase Type Size	Увеличить размер текста
@@ -4605,6 +4606,9 @@ curves	Smooth	Сгладить
 	↑↓ navigate   ↵ run   esc close	↑↓ навигация   ↵ выполнить   esc закрыть
 	✓ Color Indicates Masked Areas	✓ Цветом обозначены маскированные области
 	✓ Color Indicates Selected Areas	✓ Цветом обозначены выделенные области
+
+
+# Dynamic command-id, plural, and contextual labels (fourth pass).
 @id	edit.clear	Очистить
 @id	edit.purge.undo	Данные отмены
 @id	edit.stroke	Обвести…
@@ -4650,6 +4654,8 @@ layers	Fill	Заливка
 layers	Fill:	Заливка:
 navigator	Zoom	Масштаб
 shape	Appearance	Оформление
+
+# Paragraph direction (TYPE-218-2)
 	Automatic paragraph direction	Автоматическое направление абзаца
 	Left-to-right paragraph direction	Направление абзаца слева направо
 	Right-to-left paragraph direction	Направление абзаца справа налево
@@ -4670,6 +4676,85 @@ shape	Appearance	Оформление
 	Grayscale Ramp	Шкала градаций серого
 	Current Colors	Текущие цвета
 	Make Ramp Web Safe	Сделать шкалу безопасной для web
+
+# Print preview image (#8236)
+# Responsive artboard workflow translations.
+	Artboard Overview · All formats	Обзор монтажных областей · Все форматы
+	Artboard Overview	Обзор монтажных областей
+	Overview · all formats	Показать все форматы
+	Responsive layout role	Роль адаптивного макета
+	artboards	монтажных областей
+	This document has no artboards yet.	В этом документе пока нет монтажных областей.
+	Select on canvas	Выбрать на холсте
+	Reflow	Перекомпоновка
+	Responsive variants	Адаптивные варианты
+	Semantic reflow	Семантическая перекомпоновка
+	Proportional fit	Пропорциональное вписывание
+	Semantic reflow · keep type size	Семантическая перекомпоновка · сохранить размер текста
+	Proportional fit · scale all	Пропорциональное вписывание · масштабировать всё
+	suggested	предложено
+	Set as master	Установить как мастер
+	Switch variant	Переключить вариант
+	Variant	Вариант
+	Badge	Значок
+	Price	Цена
+	Disclaimer	Отказ от ответственности
+	Image mark	Знак изображения
+	Size limits in pixels (0 = none)	Ограничения размера в пикселях (0 = нет)
+	Maximum size must be at least the minimum size	Максимальный размер должен быть не меньше минимального
+	Safe area	Безопасная область
+	Insets as a fraction of artboard size	Отступы как доля размера монтажной области
+	Reset to master rule	Сбросить до правила главного макета
+	Update variants	Обновить варианты
+	Variant name	Название варианта
+	Arrow keys navigate; Enter selects and zooms	Стрелки перемещают; Enter выбирает и увеличивает
+	Review findings	Просмотреть замечания
+	Results are capped; some findings are omitted	Число результатов ограничено; часть замечаний скрыта
+	No findings to review	Нет замечаний для просмотра
+	Safe Areas	Безопасные области
+	Responsive Template…	Адаптивный шаблон…
+	Text reflow	Перенос текста
+	Rewrap	Перенос строк
+	Rewrap with auto height	Перенос строк с авто-высотой
+	Rewrap and shrink	Перенос строк и уменьшение
+	Responsive variants updated with conflicts	Responsive variants updated with conflicts
+	These local layers were preserved: {layers}	These local layers were preserved: {layers}
+	More preserved layers are listed in the command result.	More preserved layers are listed in the command result.
+	Responsive Warnings	Предупреждения адаптивной компоновки
+	All findings	Все результаты
+	Outside artboard	За пределами монтажной области
+	Semantic collision	Семантическое пересечение
+	Safe-area violation	Нарушение безопасной области
+	Review all findings	Просмотреть все замечания
+	Filter findings	Фильтр замечаний
+	From file	Из файла
+	Suggested	Предложение
+	Suggested role	Предлагаемая роль
+	Apply role to similar layers	Применить роль к похожим слоям
+	Layer name or text	Имя слоя или текст
+	Layer name	Имя слоя
+	Text layer	Текстовый слой
+	Covers most of artboard	Покрывает большую часть монтажной области
+	Shape layer	Слой-фигура
+	No strong role signal	Нет явного сигнала роли
+	Explicit role	Явная роль
+	Layer unavailable	Слой недоступен
+	Master layers removed from variant: {count}	Слои образца, удалённые из варианта: {count}
+	Overrides dropped because their layers no longer exist: {count}	Переопределения удалены, поскольку их слоёв больше нет: {count}
+	Previous Artboard Variant	Предыдущий вариант монтажной области
+	Next Artboard Variant	Следующий вариант монтажной области
+	Select {name} ({layer})	Выбрать {name} ({layer})
+	Could not select conflict layer	Не удалось выбрать конфликтующий слой
+	The conflict layer no longer exists	Конфликтующий слой больше не существует
+	Layout review: {findings} findings on {boards} artboards.	Проверка макета: {findings} замечаний на {boards} монтажных областях.
+	Some artboards could not be checked and count as affected.	Некоторые монтажные области не удалось проверить; они считаются проблемными.
+	Skip artboards with findings or incomplete checks	Пропуск областей с замечаниями или неполной проверкой
+	No layout findings on {boards} artboards.	На {boards} монтажных областях проблем с макетом не обнаружено.
+	Some artboard checks were incomplete; they count as affected.	Некоторые проверки областей не завершены; они считаются проблемными.
+@plural	files|Saved for Web: {n} file	Файлов: {n}|Файла: {n}|Сохранено для веба: {n} файлов
+	Select and Mask was closed: its document is no longer the active one	Окно «Выделение и маска» закрыто: его документ больше не активен
+	Select and Mask was closed: another layer was selected	Окно «Выделение и маска» закрыто: выбран другой слой
+# Art History Brush (#213).
 	The path was kept as the Work Path	Контур сохранён как рабочий контур
 	The path was discarded	Контур удалён
 	Art History Brush Tool	Инструмент «Кисть истории искусств»
@@ -4699,6 +4784,4 @@ shape	Appearance	Оформление
 	View Mode	Режим просмотра
 	Object Aware needs a segmentation model, which isn't available yet	Для режима «С учетом объектов» нужна модель сегментации, которая пока недоступна
 	Refine Hair needs hair detection, which isn't available yet	Для уточнения волос нужно распознавание волос, которое пока недоступно
-	Select and Mask was closed: its document is no longer the active one	Окно «Выделение и маска» закрыто: его документ больше не активен
-	Select and Mask was closed: another layer was selected	Окно «Выделение и маска» закрыто: выбран другой слой
 	Edit Brush…	Изменить кисть…
