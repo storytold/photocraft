@@ -642,3 +642,65 @@ fn each_chip_keeps_its_own_hue_on_black() {
     let [r, g, b] = srgb_bytes(h.state().session.tools.foreground);
     assert!(g > 200 && r < 64 && b < 64, "the foreground's green, not the background's blue: {:?}", [r, g, b]);
 }
+
+/// The inline HSB model edits the same colour and remembers hue while the colour is black.
+#[test]
+fn color_readout_hsb_fields_keep_hue_on_black() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.tools.foreground = [0.0, 0.0, 0.0, 1.0];
+    let mut h = field_harness(app);
+    h.get_by_label("HSB").click();
+    h.run_steps(2);
+    for (field, typed) in [(0, "120"), (1, "100"), (2, "100")] {
+        h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(field).unwrap().click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        for ch in typed.chars() {
+            h.event(egui::Event::Text(ch.to_string()));
+            h.run_steps(1);
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    assert_eq!(srgb_bytes(h.state().session.tools.foreground), [0, 255, 0]);
+}
+
+/// The HSB readout edits the active background chip without changing the foreground.
+#[test]
+fn color_readout_hsb_fields_edit_the_active_background_chip() {
+    use egui_kittest::kittest::Queryable;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.tools.foreground = [1.0, 0.0, 0.0, 1.0];
+    app.session.tools.background = [0.0, 0.0, 0.0, 1.0];
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(360.0, 120.0)).build_ui_state(
+        |ui, app: &mut PhotocraftApp| {
+            let mut color = app.session.tools.background;
+            if color_readout(ui, ui.id().with(("color-field", true)), &mut color, true) {
+                app.session.tools.background = color;
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.run_steps(2);
+    h.get_by_label("HSB").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("H").is_some(), "HSB fields replace RGB fields");
+    assert!(h.query_by_label("R").is_none(), "RGB fields are hidden in HSB mode");
+    for (field, typed) in [(0, "120"), (1, "100"), (2, "100")] {
+        h.query_all_by_role(egui::accesskit::Role::SpinButton).nth(field).unwrap().click();
+        h.run_steps(1);
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.run_steps(1);
+        for ch in typed.chars() {
+            h.event(egui::Event::Text(ch.to_string()));
+            h.run_steps(1);
+        }
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+    }
+    assert_eq!(srgb_bytes(h.state().session.tools.background), [0, 255, 0]);
+    assert_eq!(srgb_bytes(h.state().session.tools.foreground), [255, 0, 0]);
+}
