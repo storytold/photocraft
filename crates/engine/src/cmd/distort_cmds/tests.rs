@@ -598,3 +598,15 @@ fn liquify_deforms_an_adjustment_layers_targeted_mask() {
     let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
     filters_an_adjustment_layers_mask(LIQUIFY, &stroke);
 }
+
+/// #10457 (CodeRabbit on #10469): an adjustment layer's targeted mask takes the Camera Raw Filter as
+/// it takes the other filters (#780). It still needs an RGB or Grayscale document.
+#[test]
+fn camera_raw_filters_an_adjustment_layers_targeted_mask() {
+    filters_an_adjustment_layers_mask(crate::lens_cmds::RAW, &json!({"exposure": -1.5}));
+    let mut s = adjustment_with_mask("cmyk");
+    let raw = crate::lens_cmds::RAW;
+    assert!(!s.is_enabled_with(raw, &json!({"target": "mask"})), "Camera Raw: not in CMYK, even on a mask");
+    s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    assert!(!s.is_enabled(raw), "Camera Raw: not in CMYK, even on a targeted mask");
+}
