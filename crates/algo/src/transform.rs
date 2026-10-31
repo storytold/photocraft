@@ -4,15 +4,16 @@
 //! rotate, skew and flips are affine special cases; Distort and Perspective use the full
 //! homography. Warping is an inverse mapping with premultiplied-alpha sampling (nearest, bilinear
 //! or Photoshop's Keys bicubic), processed per destination tile (in parallel on native) so memory stays
-//! bounded by the tile working set. Large reductions are pre-filtered with a proper resize first,
-//! so shrinking a layer doesn't alias.
+//! bounded by the tile working set. Bicubic reductions are pre-filtered with a proper resize
+//! first, so shrinking a layer doesn't alias; an affine map reduces each axis by its own scale, so
+//! an axis that doesn't shrink stays sharp.
 
 use photocraft_color::PixelFormat;
 use photocraft_geom::Rect;
 use photocraft_raster::{Interrupt, Surface};
 use serde::{Deserialize, Serialize};
 
-use crate::resample::{Resample, resize_surface};
+use crate::resample::{resize_surface_per_axis, scaled_rect};
 
 /// 3×3 projective matrix, row-major: `[x', y', w'] = H · [x, y, 1]`.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -131,6 +132,17 @@ impl Homography {
         let (c, d) = (self.apply(x, y - e), self.apply(x, y + e));
         let (jx, jy) = ((b.0 - a.0, b.1 - a.1), (d.0 - c.0, d.1 - c.1));
         (jx.0 * jy.1 - jx.1 * jy.0).abs().sqrt()
+    }
+
+    /// The map's Jacobian at `(x, y)`, `[∂X/∂x, ∂X/∂y, ∂Y/∂x, ∂Y/∂y]`, exact (an affine map gives
+    /// the same matrix everywhere). Its columns' lengths are how far a step of one source pixel
+    /// along x, and one along y, moves in the destination, which [`Self::local_scale`]'s area
+    /// measure can't tell apart.
+    pub(crate) fn jacobian(&self, x: f64, y: f64) -> [f64; 4] {
+        let m = &self.0;
+        let w = self.w(x, y);
+        let (px, py) = self.apply(x, y);
+        [(m[0] - m[6] * px) / w, (m[1] - m[7] * px) / w, (m[3] - m[6] * py) / w, (m[4] - m[7] * py) / w]
     }
 }
 
@@ -293,6 +305,70 @@ fn corner_bounds(corners: &[(f64, f64); 4]) -> Option<Rect> {
     Some(Rect::new(bx0, by0, bx1, by1))
 }
 
+/// The factors a Bicubic warp pre-reduces its source by along x and along y, 1 for an axis that
+/// doesn't shrink. An affine map (scale, skew, rotation) reduces the source the same everywhere, so
+/// each axis gets its own factor, the length of its Jacobian column: one factor for both axes
+/// (√|det J|) blurred an axis the map keeps 1:1 while it squashes the other, and filtered the
+/// squashed axis for less than its reduction (#4864). A map that squashes along a slant (a rotated
+/// squash, or a skew that also flattens) shrinks a direction between the axes far more than either
+/// axis, which no axis-aligned prefilter follows; there both axes come down together until the
+/// warp shrinks no direction below what the one factor leaves it, or below 50 % (where a 4×4
+/// kernel starts to alias), whichever is lower. Where the one factor leaves more than 50 %, the
+/// pair keeps more detail than it does, with a little more room to alias along the slant. A
+/// perspective map (a Distort) reduces each part of the source by a different amount, which no
+/// single prefilter follows either, so it keeps the one factor at the source point that matters,
+/// as before.
+fn prefilter_scales(h: &Homography, src_rect: Rect, clip: Option<Rect>) -> (f64, f64) {
+    let r = [f64::from(src_rect.x0), f64::from(src_rect.y0), f64::from(src_rect.x1), f64::from(src_rect.y1)];
+    // With a clip, the scale that matters is the one at the source point landing in the clip's centre.
+    let (cx, cy) = match clip.and_then(|c| Some((c, h.inverse()?))) {
+        Some((c, inv)) => inv.apply((f64::from(c.x0) + f64::from(c.x1)) / 2.0, (f64::from(c.y0) + f64::from(c.y1)) / 2.0),
+        None => ((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0),
+    };
+    // `resize_surface_per_axis` copies an axis whose scale is exactly 1; 1/64 bounds the filter's width.
+    let snap = |f: f64| if f > 0.0 && f < 0.999 { f.max(1.0 / 64.0) } else { 1.0 };
+    let one = snap(h.local_scale(cx, cy));
+    // Affine when w is the same over the whole source. A Distort's quad can leave the projective
+    // terms at rounding level, so this compares w itself rather than testing them for zero.
+    let w0 = h.w(cx, cy);
+    let affine =
+        w0.is_finite() && w0 != 0.0 && [(r[0], r[1]), (r[2], r[1]), (r[2], r[3]), (r[0], r[3])].iter().all(|&(x, y)| (h.w(x, y) - w0).abs() <= 1e-9 * w0.abs());
+    let j = h.jacobian(cx, cy);
+    if !affine || !j.iter().all(|e| e.is_finite()) {
+        return (one, one);
+    }
+    let (fx, fy) = (snap(j[0].hypot(j[2])), snap(j[1].hypot(j[3])));
+    // A uniform scale, turned or not, keeps the one factor: its column lengths differ from it only
+    // by rounding, which would otherwise pick the order of the two passes.
+    if (fx - one).abs() <= 1e-9 * one && (fy - one).abs() <= 1e-9 * one {
+        return (one, one);
+    }
+    // The warp is left `J · diag(1/fx, 1/fy)`. Along a slant both columns stay long while the map
+    // squashes the direction between them, so both axes come down together until the warp shrinks
+    // no direction below √(σmin / σmax), what the one factor √|det J| leaves, or below 50 %,
+    // whichever is lower. A map that collapses (c = 0) reduces nothing, as before.
+    let (hi, lo) = singular_values(j);
+    let (_, left) = singular_values([j[0] / fx, j[1] / fy, j[2] / fx, j[3] / fy]);
+    let target = if hi > 0.0 { (lo / hi).sqrt().min(0.5) } else { 0.0 };
+    let c = if target > 0.0 && left.is_finite() { left / target } else { 0.0 };
+    if c < 1.0 { (snap(fx * c), snap(fy * c)) } else { (fx, fy) }
+}
+
+/// The singular values of the 2×2 matrix `[a, b, c, d]` (row-major), largest first: how far a
+/// unit step is stretched along the map's strongest and weakest directions. 0 for a matrix that
+/// isn't finite.
+fn singular_values(j: [f64; 4]) -> (f64, f64) {
+    // Scaled by the largest entry, so the squares can't overflow.
+    let m = j.iter().fold(0.0f64, |m, v| m.max(v.abs()));
+    if !(m > 0.0 && m.is_finite()) {
+        return (0.0, 0.0);
+    }
+    let [a, b, c, d] = j.map(|v| v / m);
+    let (f, det) = (a * a + b * b + c * c + d * d, (a * d - b * c).abs());
+    let hi = ((f + (f * f - 4.0 * det * det).max(0.0).sqrt()) / 2.0).sqrt();
+    (hi * m, if hi > 0.0 { det / hi * m } else { 0.0 })
+}
+
 /// A cancelled `ctl` skips the remaining tiles; the caller discards the result.
 fn warp(
     src: &Surface,
@@ -317,24 +393,19 @@ fn warp(
     }
     let mut h = *h;
     let mut src_rect = src_rect;
-    // Pre-reduce for large downscales (bicubic alone aliases below ~50%). With a clip, the scale
-    // that matters is the one at the source point landing in the clip's centre.
-    let (cx, cy) = match clip.and_then(|c| Some((c, h.inverse()?))) {
-        Some((c, inv)) => inv.apply((c.x0 as f64 + c.x1 as f64) / 2.0, (c.y0 as f64 + c.y1 as f64) / 2.0),
-        None => ((f64::from(src_rect.x0) + f64::from(src_rect.x1)) / 2.0, (f64::from(src_rect.y0) + f64::from(src_rect.y1)) / 2.0),
-    };
-    let scale = h.local_scale(cx, cy);
     let reduced;
     // Photoshop reduces with its Bicubic widened by 1 / scale (as Image Size does), so the source is
-    // brought down by the whole local scale first and the warp samples it at about 1:1; a plain
-    // 4×4 kernel at 50 % aliased (Photoshop 27.11 Free Transform, 50 % of an impulse image).
-    // Bilinear samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
-    if interp == Interp::Bicubic && scale < 0.999 && scale > 0.0 {
-        let f = scale.max(1.0 / 64.0);
-        reduced = resize_surface(src, f, f, Resample::Bicubic);
-        src = &reduced;
-        h = h.mul(&Homography([1.0 / f, 0.0, 0.0, 0.0, 1.0 / f, 0.0, 0.0, 0.0, 1.0]));
-        src_rect = crate::resample::scaled_rect(src_rect, f, f);
+    // brought down by the local scale first and the warp samples it at about 1:1; a plain 4×4
+    // kernel at 50 % aliased (Photoshop 27.11 Free Transform, 50 % of an impulse image). Bilinear
+    // samples the source directly, as Photoshop's does (exact at 50 % without a prefilter).
+    if interp == Interp::Bicubic {
+        let (fx, fy) = prefilter_scales(&h, src_rect, clip);
+        if fx < 1.0 || fy < 1.0 {
+            reduced = resize_surface_per_axis(src, fx, fy);
+            src = &reduced;
+            h = h.mul(&Homography([1.0 / fx, 0.0, 0.0, 0.0, 1.0 / fy, 0.0, 0.0, 0.0, 1.0]));
+            src_rect = scaled_rect(src_rect, fx, fy);
+        }
     }
     let Some(inv) = h.inverse() else { return Ok(out) };
     // Destination bounds: the warped corners (plus a pixel for filter support).
