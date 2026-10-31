@@ -45,10 +45,12 @@ dx² + dy² ≤ n_lo the radius selects and the disc of the next sum of two squa
 (r − √n_lo) / (√n_hi − √n_lo). This is our model, not a measurement of Photoshop's output at
 fractional radii, which we have no oracle for yet.
 
-The ladder keeps every integer radius (and every Roundness radius that lands on √n) bit-identical,
-so recorded actions and smart filters at those radii render as before. It is continuous and
-monotone in the radius, the same for Minimum and Maximum, and costs one small extra pass: the next
-square is the current one grown by a 3×3 square, and the next disc adds a shell of a few offsets.
+The ladder keeps every integer radius bit-identical, so recorded actions and smart filters at
+those radii render as before. It is continuous and monotone in the radius and the same for Minimum
+and Maximum. The next square is the current one grown by a 3×3 square, so Squareness costs about
+5–20% more at a fractional radius. The next disc adds a ring of a few offsets, one shifted-row pass
+each, so Roundness costs up to about twice as much at small radii (where the disc itself is only a
+few rows) and about 20% more from r 5.
 We rejected per-offset coverage weights (an anti-aliased kernel): they change integer radii too,
 need an anchor value that min/max morphology does not define, and lose the separable O(1) square.
 

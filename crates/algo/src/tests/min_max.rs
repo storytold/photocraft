@@ -83,8 +83,8 @@ fn smallest_and_largest_radii() {
             assert!((out.pixel(21, 16)[0] - diagonal).abs() <= tolerance(depth), "{depth:?} {preserve:?}: {:?}", out.pixel(21, 16));
         }
     }
-    // The dialog's top end: 499.5 needs the element at 500, which the halo covers. On a small
-    // layer both reach the whole layer from every pixel of it.
+    // The dialog's top end runs without a panic or a hang. On a layer this small both radii
+    // reach the whole layer from every pixel, so they agree.
     let small = Rect::new(0, 0, 6, 5);
     let s = pattern(SampleType::F32, small);
     for preserve in [Preserve::Squareness, Preserve::Roundness] {

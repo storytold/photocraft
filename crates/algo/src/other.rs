@@ -68,6 +68,8 @@ pub(crate) struct DiscStep {
     pub f: f32,
 }
 
+/// The [`DiscStep`] for `radius`, from integer lattice arithmetic (the radius is clamped to
+/// `0 ..= 500`, NaN taken as 0).
 pub(crate) fn disc_step(radius: f32) -> DiscStep {
     let r = if radius.is_finite() { radius.clamp(0.0, MAX_RADIUS) } else { 0.0 };
     let r2 = f64::from(r) * f64::from(r);
@@ -82,7 +84,7 @@ pub(crate) fn disc_step(radius: f32) -> DiscStep {
     let mut shell = Vec::new();
     for dy in -(ri as i64 + 1)..=ri as i64 + 1 {
         let Some(rest) = n_hi.checked_sub(dy.unsigned_abs().pow(2)) else { continue };
-        let h = isqrt(rest);
+        let h = rest.isqrt();
         if h * h == rest {
             shell.push((h as i32, dy as i32));
             if h > 0 {
@@ -96,31 +98,11 @@ pub(crate) fn disc_step(radius: f32) -> DiscStep {
     DiscStep { n_lo, n_hi, shell, f }
 }
 
-/// The largest `h` with `h² + dy² ≤ r2`. `r2` is a squared f32, exact in f64, so the test is exact.
+/// The largest `h` with `h² + dy² ≤ r2`. `r2` is a squared f32, exact in f64, and for an integer
+/// `h`, `h² ≤ rest` exactly when `h² ≤ floor(rest)`, so the test is exact.
 fn half_width(r2: f64, dy: u64) -> u64 {
     let rest = r2 - (dy * dy) as f64;
-    if rest.is_nan() || rest < 0.0 {
-        return 0;
-    }
-    let mut h = rest.sqrt() as u64;
-    while ((h + 1) * (h + 1)) as f64 <= rest {
-        h += 1;
-    }
-    while h > 0 && (h * h) as f64 > rest {
-        h -= 1;
-    }
-    h
-}
-
-fn isqrt(v: u64) -> u64 {
-    let mut h = (v as f64).sqrt() as u64;
-    while (h + 1) * (h + 1) <= v {
-        h += 1;
-    }
-    while h > 0 && h * h > v {
-        h -= 1;
-    }
-    h
+    if rest >= 0.0 { (rest.floor() as u64).isqrt() } else { 0 }
 }
 
 /// The half-widths of a disc of `radius` (Preserve: Roundness), one per row `dy` in
@@ -155,9 +137,13 @@ fn fold_shell(src: &Image, out: Rect, shell: &[(i32, i32)], max: bool, res: &mut
             } else {
                 (stride, &[][..])
             };
-            for (i, d) in dst.iter_mut().enumerate() {
-                let v = i.checked_sub(lead).and_then(|j| inside.get(j)).copied().unwrap_or(0.0);
-                *d = pick(*d, v);
+            let (head, rest) = dst.split_at_mut(lead.min(stride));
+            let (mid, tail) = rest.split_at_mut(inside.len().min(rest.len()));
+            for d in head.iter_mut().chain(tail) {
+                *d = pick(*d, 0.0);
+            }
+            for (d, v) in mid.iter_mut().zip(inside) {
+                *d = pick(*d, *v);
             }
         }
     }
@@ -540,26 +526,43 @@ mod tests {
     }
 
     /// Radii whose next ring has several lattice representations (25 = 5² + 0² = 4² + 3², …):
-    /// every f32 just below and above the threshold moves each sample one way only.
+    /// for every f32 just below and above the threshold the step matches the lattice, its weight
+    /// only grows within a step, and a sample whose extreme sits on the ring moves one way only.
     #[test]
     fn roundness_is_monotone_around_multi_representation_radii() {
-        let img = noise(Rect::new(-20, -20, 21, 21), 1);
         let out = Rect::new(0, 0, 1, 1);
-        for n in [25u32, 50, 65, 85, 125, 169, 325] {
+        for n in [25i32, 50, 65, 85, 125, 169, 325] {
             let centre = (n as f32).sqrt().to_bits();
+            let mut prev_step: Option<(f32, DiscStep)> = None;
+            for bits in centre - 3000..=centre + 3000 {
+                let r = f32::from_bits(bits);
+                let step = disc_step(r);
+                assert_eq!((step.n_lo, step.n_hi), lattice_step(r), "n {n} r {r}");
+                assert!((0.0..=1.0).contains(&step.f), "n {n} r {r}: f {}", step.f);
+                if let Some((pr, p)) = &prev_step
+                    && p.n_lo == step.n_lo
+                {
+                    assert!(step.f >= p.f, "n {n}: f {} at r {pr}, {} at r {r}", p.f, step.f);
+                }
+                prev_step = Some((r, step));
+            }
+            // The ring point with the smallest |dx|, the last one a lopsided rule would admit,
+            // holds the extreme.
+            let (dx, dy) = (0..=n.isqrt()).find_map(|dx| (n - dx * dx).checked_isqrt().filter(|dy| dy * dy == n - dx * dx).map(|dy| (dx, dy))).unwrap();
             for max in [false, true] {
+                let mut img = Image::new(Rect::new(-20, -20, 21, 21), 1);
+                img.data.fill(if max { 0.0 } else { 1.0 });
+                img.data[((dy + 20) * 41 + dx + 20) as usize] = if max { 1.0 } else { 0.0 };
                 let mut prev: Option<(f32, f32)> = None;
                 for bits in centre - 3000..=centre + 3000 {
                     let r = f32::from_bits(bits);
-                    let step = disc_step(r);
-                    assert!((0.0..=1.0).contains(&step.f), "n {n} r {r}: f {}", step.f);
                     let v = min_max_preserve(&img, out, r, max, Preserve::Roundness, false)[0];
-                    assert!(v.is_finite(), "n {n} r {r}");
                     if let Some((pr, pv)) = prev {
                         assert!(if max { v >= pv } else { v <= pv }, "n {n} max {max}: r {pr} gives {pv}, r {r} gives {v}");
                     }
                     prev = Some((r, v));
                 }
+                assert_eq!(prev.map(|p| p.1), Some(if max { 1.0 } else { 0.0 }), "n {n} max {max}");
             }
         }
     }
