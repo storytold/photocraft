@@ -1,0 +1,69 @@
+# AUR package: builds PhotoCraft from the release tag's source on the user's machine.
+# Mirrors the staging in packaging/linux/package.sh.
+# Maintainer: PhotoCraft maintainers <photocraft@storyteller.ai>
+pkgname=photocraft
+pkgver=0.2.0
+# Upstream version as tagged (pkgver drops the "-" of pre-releases; see ../update.sh).
+_version=0.2.0
+pkgrel=1
+# Commit the v$_version tag points at, baked into the About box (crates/engine/src/build_info.rs).
+# The source tarball has no .git, so it can't be read at build time.
+_commit=ad863217386440ca968fccc9bfff65ba24e61142
+_appid=ai.storyteller.photocraft
+pkgdesc="Open-source, native image editor that works the way Photoshop users expect"
+arch=(x86_64 aarch64)
+url="https://github.com/storytold/photocraft"
+license=('MIT OR Apache-2.0')
+# See photocraft-bin/PKGBUILD: windowing and GPU libraries are dlopen()ed, so list them by hand.
+depends=(
+  glibc
+  gcc-libs
+  libxkbcommon
+  libxkbcommon-x11
+  wayland
+  libx11
+  libxcb
+  libxcursor
+  libxi
+  vulkan-icd-loader
+  libglvnd
+  hicolor-icon-theme
+)
+makedepends=(cargo)
+optdepends=(
+  'vulkan-driver: GPU compositing through Vulkan'
+  'xdg-desktop-portal: native file dialogs'
+)
+source=("$pkgname-$_version.tar.gz::$url/archive/refs/tags/v$_version.tar.gz")
+sha256sums=('aa6d2222b0d6d5c1f404031d23c6cd3da38154c764f4a66180995de2090fc7e9')
+
+prepare() {
+  cd "$pkgname-$_version"
+  export RUSTUP_TOOLCHAIN=stable
+  cargo fetch --locked --target "$(rustc --print host-tuple)"
+}
+
+build() {
+  cd "$pkgname-$_version"
+  export RUSTUP_TOOLCHAIN=stable
+  export CARGO_TARGET_DIR=target
+  export PHOTOCRAFT_BUILD_SHA="$_commit"
+  export PHOTOCRAFT_BUILD_DATE="$(date -u -d "@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y-%m-%d)"
+  cargo build --frozen --release -p photocraft -p photocraft-cli
+}
+
+package() {
+  cd "$pkgname-$_version"
+  local _linux=packaging/linux
+  install -Dm755 target/release/photocraft target/release/photocraft-cli -t "$pkgdir/usr/bin/"
+  install -Dm644 "$_linux/$_appid.desktop" -t "$pkgdir/usr/share/applications/"
+  install -Dm644 "$_linux/$_appid.mime.xml" "$pkgdir/usr/share/mime/packages/$_appid.xml"
+  install -dm755 "$pkgdir/usr/share/metainfo"
+  sed -e "s/@VERSION@/$_version/g" \
+    -e "s/@DATE@/$(date -u -d "@${SOURCE_DATE_EPOCH:-$(date +%s)}" +%Y-%m-%d)/g" \
+    "$_linux/$_appid.metainfo.xml.in" >"$pkgdir/usr/share/metainfo/$_appid.metainfo.xml"
+  install -dm755 "$pkgdir/usr/share/icons"
+  cp -R --no-preserve=ownership assets/app-icon/hicolor "$pkgdir/usr/share/icons/"
+  install -Dm644 README.md -t "$pkgdir/usr/share/doc/$pkgname/"
+  install -Dm644 LICENSE-MIT LICENSE-APACHE -t "$pkgdir/usr/share/licenses/$pkgname/"
+}
