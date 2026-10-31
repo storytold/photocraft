@@ -256,6 +256,7 @@ fn pngsuite_corpus_rows_match_the_whole_decode() {
         let rows = decode_png_rows::<CodecError>(
             &bytes,
             &opts,
+            256,
             &mut |h| {
                 header = Some(*h);
                 Ok(true)

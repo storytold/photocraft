@@ -249,6 +249,7 @@ fn rows_arrive_in_tile_row_groups_and_match_the_whole_decode() {
         let extras = codecs::decode_png_rows::<codecs::CodecError>(
             &bytes,
             &codecs::DecodeOptions::default(),
+            TILE_SIZE as u32,
             &mut |h| {
                 assert_eq!((h.width, h.height, h.layout, h.sample), (70, 600, img.layout(), img.sample_type()));
                 Ok(true)
@@ -267,6 +268,25 @@ fn rows_arrive_in_tile_row_groups_and_match_the_whole_decode() {
 }
 
 #[test]
+fn rows_arrive_in_groups_of_the_height_the_caller_asks_for() {
+    let bytes = Png::new(9, 30, 2, 8).bytes();
+    let img = codecs::decode(&bytes).unwrap();
+    // A group of 0 counts as 1; one taller than the image hands over every row at once.
+    for (group, want) in [(7, vec![0, 7, 14, 21, 28]), (0, (0..30).collect()), (1, (0..30).collect()), (30, vec![0]), (u32::MAX, vec![0])] {
+        let (mut got, mut starts) = (Vec::new(), Vec::new());
+        let extras = codecs::decode_png_rows::<codecs::CodecError>(&bytes, &codecs::DecodeOptions::default(), group, &mut |_| Ok(true), &mut |y0, rows| {
+            starts.push(y0);
+            got.extend_from_slice(rows);
+            Ok(())
+        })
+        .unwrap();
+        assert!(extras.is_some());
+        assert_eq!(starts, want, "group {group}");
+        assert!(got == img.data(), "group {group}");
+    }
+}
+
+#[test]
 fn interlaced_and_animated_files_do_not_stream_and_open_as_before() {
     let img = Image::from_raw(97, 63, ChannelLayout::Rgb, CSample::U8, (0..97 * 63 * 3).map(|i| (i * 7 % 251) as u8).collect()).unwrap();
     let interlaced = codecs::encode(&img, Format::Png, &codecs::EncodeOptions { png_interlaced: true, ..Default::default() }).unwrap();
@@ -279,6 +299,7 @@ fn interlaced_and_animated_files_do_not_stream_and_open_as_before() {
     let r = codecs::decode_png_rows::<codecs::CodecError>(
         &bytes,
         &codecs::DecodeOptions::default(),
+        TILE_SIZE as u32,
         &mut |_| {
             called.store(1, Ordering::Relaxed);
             Ok(true)
@@ -362,6 +383,7 @@ fn files_too_small_for_their_size_are_refused_before_any_tile_exists() {
         let r = codecs::decode_png_rows::<codecs::CodecError>(
             bytes,
             &codecs::DecodeOptions::default(),
+            TILE_SIZE as u32,
             &mut |_| {
                 called.fetch_add(1, Ordering::Relaxed);
                 Ok(true)
