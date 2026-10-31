@@ -173,6 +173,9 @@ impl PhotocraftApp {
     /// (a flat file): confirming the document's own file is recorded as a `file.save` step,
     /// which writes whichever file the action is played on, not as a Save As to a fixed path.
     pub(crate) fn save_dialog_flow(&mut self, path: Option<String>, choices: FormatChoices, plain_save: bool) -> Result<Value, String> {
+        if self.smart_svg.modal_open() {
+            return Err("Answer Edit SVG Contents before starting a save".into());
+        }
         if self.save_options_open() {
             return Err(SAVE_OPTIONS_OPEN.into());
         }
@@ -251,6 +254,9 @@ impl PhotocraftApp {
 
     /// [`Self::save_as_with`] once the path is known.
     pub(crate) fn save_to(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
+        if self.smart_svg.modal_open() {
+            return Err("Answer Edit SVG Contents before starting a save".into());
+        }
         if let (Some(provider), Some(doc)) = (self.services.file_provider.as_ref(), self.session.active())
             && !doc.is_dirty()
             && choices == FormatChoices::default()
