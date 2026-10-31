@@ -189,8 +189,16 @@ pub fn status_bar_pro(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     status_message(app, ui, &t);
 }
 
+/// Whether layers that don't fit the GPU memory budget are the budget's choice rather than a
+/// shortage: the GPU shares system memory (`perf.timings.gpuInfo.sharedMemory`) and GPU Memory is
+/// Automatic. A larger budget would then copy the layers into the same memory again (#9007), so
+/// the status bar and the slow-redraw notice don't suggest one (#9010).
+pub fn cpu_redraws_by_design(app: &PhotocraftApp) -> bool {
+    app.perf.gpu_info.shared_memory && app.session.prefs().performance.gpu_memory_mb == 0
+}
+
 /// What the status bar says about the active document's render path: its label, tooltip and
-/// the command a click runs, or None on the GPU.
+/// the command a click runs (empty: the label is a note and links nowhere), or None on the GPU.
 pub(crate) fn render_path_label(app: &PhotocraftApp) -> Option<(&'static str, String, &'static str)> {
     let doc = app.session.active().map(|st| st.doc.id.0)?;
     let reason = app.render_path.current(doc);
@@ -204,6 +212,19 @@ pub(crate) fn render_path_label(app: &PhotocraftApp) -> Option<(&'static str, St
         Some(_) => None,
         None => fit,
     };
+    if let Some((needed, _)) = over
+        && cpu_redraws_by_design(app)
+    {
+        // By design (#9010): a faint note, with no link to a GPU Memory that would copy the
+        // layers into the same memory again.
+        let tip = crate::i18n::fmt(
+            tl!(
+                "This GPU uses the computer's own memory, so the layers ({needed}) aren't copied to it a second time: edits in view draw on the GPU, and edits that redraw the whole document use the CPU in the background."
+            ),
+            &[("needed", &fmt_bytes(needed))],
+        );
+        return Some((tl!("Shared GPU memory: redraws on the CPU"), tip, ""));
+    }
     if let Some((needed, budget)) = over {
         let tip = crate::i18n::fmt(
             tl!(
@@ -220,10 +241,16 @@ pub(crate) fn render_path_label(app: &PhotocraftApp) -> Option<(&'static str, St
 
 /// The active document is drawn on the CPU (`render_path`): say so in the status bar, with the
 /// reason in the tooltip. "GPU Memory Full" opens Preferences › Performance; any other reason,
-/// "CPU Rendering", opens Help › System Info.
+/// "CPU Rendering", opens Help › System Info. Where the GPU shares system memory and GPU Memory is
+/// Automatic the CPU redraws are by design ([`cpu_redraws_by_design`]): a faint note says so,
+/// with no link.
 pub fn render_path_status(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let Some((label, tip, command)) = render_path_label(app) else { return };
     let t = Tokens::get(ui.ctx());
+    if command.is_empty() {
+        ui.add(egui::Label::new(RichText::new(label).color(t.text_faint).size(12.0))).on_hover_text(tip);
+        return;
+    }
     let resp = ui.add(egui::Label::new(RichText::new(label).color(t.warning).size(12.0)).sense(Sense::click())).on_hover_text(tip);
     if resp.clicked() {
         crate::shortcut_dispatch::dispatch(app, ui.ctx(), command);
@@ -371,6 +398,41 @@ mod tests {
             let open = h.state().ui.dialogs.iter().any(|d| d.fields.get("section") == Some(&json!("performance")));
             assert!(open, "{theme:?}: Preferences › Performance opens");
         }
+    }
+
+    /// #9010: where the GPU shares system memory, layers left off the GPU are the Automatic
+    /// budget's choice (#9007), so the status bar says the redraws use the CPU, faintly and with
+    /// no link to a GPU Memory that would copy them again. GPU Memory set by hand gets the usual
+    /// warning.
+    #[test]
+    fn status_bar_explains_cpu_redraws_on_shared_gpu_memory() {
+        use egui_kittest::{Harness, kittest::Queryable};
+        let mut h = Harness::builder().with_size(vec2(1400.0, 700.0)).with_max_steps(64).build_eframe(|cc| {
+            PhotocraftApp::setup_context(&cc.egui_ctx, crate::theme::ThemeKind::Pro);
+            PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default())
+        });
+        h.state_mut().run("file.new", json!({"width": 800, "height": 600})).unwrap();
+        h.state_mut().sync_views();
+        h.run_steps(4);
+        let doc = h.state().session.active().unwrap().doc.id.0;
+        h.state_mut().perf.gpu_layer_fit = Some(crate::gpu_canvas::LayerFit { doc, needed: 3 << 30, budget: 192 << 20 });
+        h.state_mut().perf.gpu_info.shared_memory = true;
+        h.run_steps(2);
+        assert!(h.query_by_label("GPU Memory Full").is_none(), "no shortage to fix in Preferences");
+        h.get_by_label("Shared GPU memory: redraws on the CPU").click();
+        h.run_steps(4);
+        let open = h.state().ui.dialogs.iter().any(|d| d.fields.get("section") == Some(&json!("performance")));
+        assert!(!open, "the note links nowhere");
+        // GPU Memory set by hand: the budget is the user's, so a shortage is one.
+        h.state_mut().run("prefs.set", json!({"path": "performance.gpuMemoryMb", "value": 2048})).unwrap();
+        h.run_steps(2);
+        assert!(h.query_by_label("Shared GPU memory: redraws on the CPU").is_none());
+        assert!(h.query_by_label("GPU Memory Full").is_some());
+        // A card with its own memory: the usual warning.
+        h.state_mut().run("prefs.set", json!({"path": "performance.gpuMemoryMb", "value": 0})).unwrap();
+        h.state_mut().perf.gpu_info.shared_memory = false;
+        h.run_steps(2);
+        assert!(h.query_by_label("GPU Memory Full").is_some());
     }
 
     /// A reason other than the memory budget is what the status bar shows, even while the

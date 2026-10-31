@@ -572,6 +572,10 @@ fn over_budget_fallback_shows_working_set_and_budget() {
     let layer = app.session.active().expect("document").active_layer.expect("layer");
     settle(&mut g);
     assert!(on_gpu_canvas(&g), "the document fits the GPU");
+    // A card with its own memory: where the GPU shares system memory (Apple silicon, integrated
+    // graphics) layers over an Automatic budget are by design and say so instead (#9010).
+    g.observer.set_shares_system_memory(false);
+    g.harness.state_mut().perf.gpu_info.shared_memory = false;
     g.observer.set_memory_budget(48 << 20);
     g.harness.state_mut().run("layer.setProps", json!({"layer": layer.0, "visible": false})).expect("hide");
     g.harness.step();
