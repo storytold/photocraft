@@ -1,4 +1,4 @@
-use super::options::solid_paint;
+use super::options::{draws_path, solid_paint};
 use super::overlay::path_lines;
 use super::{Affine, Color32, PhotocraftApp, Tokens, Tool, ToolOptions, Value, ViewXform, json, paint_param};
 
@@ -97,6 +97,19 @@ pub fn shape_bounds(o: &ToolOptions, tool: Tool, start: [f64; 2], end: [f64; 2],
 
 /// Finish a Shape-tool drag: ⇧ constrains proportions, ⌥ draws from the centre.
 pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) {
+    if draws_path(&app.ui.tool_options) {
+        // Path mode: the outline joins the work path (one more subpath), and no layer is made.
+        let Some(path) = shape_outline(app, tool, start, end, mods) else { return };
+        let r = app.run("path.set", json!({"name": "work", "op": "combine", "path": photocraft_engine::vector_cmds::path_json(&path)}));
+        match r {
+            Ok(_) => app.ui.selected_path = Some("work".into()),
+            Err(e) => {
+                app.ui.status = e;
+                app.ui.status_error = true;
+            }
+        }
+        return;
+    }
     let Some(mut p) = shape_geometry(&app.ui.tool_options, tool, start, end, mods) else { return };
     if tool == Tool::CustomShape {
         // ⇧ keeps the shape's proportions (the rect is already squared).
@@ -124,22 +137,29 @@ pub fn create_shape(app: &mut PhotocraftApp, mut geometry: Value) -> Result<Valu
     app.run("shape.create", geometry)
 }
 
-/// The preview and command both use the full float tool colours, including transparent paint.
-pub(super) fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::ShapeLayer> {
-    let o = &app.ui.tool_options;
-    let geometry = shape_geometry(o, tool, start, end, mods)?;
-    let path = if tool == Tool::CustomShape {
+/// The outline a Shape-tool drag draws, as a path (a custom shape fitted to the drag's box).
+fn shape_outline(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::vector::Path> {
+    let geometry = shape_geometry(&app.ui.tool_options, tool, start, end, mods)?;
+    if tool == Tool::CustomShape {
         let rect = geometry.get("rect").and_then(|r| serde_json::from_value::<[f64; 4]>(r.clone()).ok())?;
         let groups = photocraft_engine::presets::shapes::all_groups(&app.session);
         let shape = groups.iter().flat_map(|g| &g.items).find(|s| s.name == app.ui.presets_ui.shape())?;
-        photocraft_engine::presets::shapes::fit(&shape.path, rect, mods.shift)
+        Some(photocraft_engine::presets::shapes::fit(&shape.path, rect, mods.shift))
     } else {
-        photocraft_engine::vector_cmds::shape_path(&geometry).ok()?
-    };
+        photocraft_engine::vector_cmds::shape_path(&geometry).ok()
+    }
+}
+
+/// The preview and command both use the full float tool colours, including transparent paint.
+/// In Path mode only the outline shows, as the drag draws no layer.
+pub(super) fn shape_preview(app: &PhotocraftApp, tool: Tool, start: [f64; 2], end: [f64; 2], mods: egui::Modifiers) -> Option<photocraft_doc::ShapeLayer> {
+    let o = &app.ui.tool_options;
+    let path = shape_outline(app, tool, start, end, mods)?;
+    let paint = !draws_path(o);
     Some(photocraft_doc::ShapeLayer {
         path,
-        fill: o.shape_fill.then(|| tool_paint(app, false)),
-        stroke: (o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, tool_paint(app, true))),
+        fill: (paint && o.shape_fill).then(|| tool_paint(app, false)),
+        stroke: (paint && o.stroke_width > 0.0).then(|| o.shape_stroke.stroke(o.stroke_width, tool_paint(app, true))),
         ..Default::default()
     })
 }

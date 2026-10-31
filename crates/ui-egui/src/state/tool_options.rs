@@ -96,6 +96,9 @@ pub struct ToolOptions {
     /// draws it as "combine"), "combine", "subtract", "intersect" or "exclude".
     #[serde(default = "default_pen_path_op")]
     pub pen_path_op: String,
+    /// Shape tools: "shape" (a shape layer) or "path" (the work path), as Photoshop's tool mode
+    /// (#9453). Shape by default, where the Pen's own mode defaults to Path.
+    pub shape_mode: String,
     /// Shape tools: fill with the foreground colour, stroke width (0 = none), rectangle corner
     /// radius, polygon sides, line weight.
     pub shape_fill: bool,
@@ -415,6 +418,7 @@ impl Default for ToolOptions {
             enhance_edge: false,
             vector_mode: "path".into(),
             pen_path_op: default_pen_path_op(),
+            shape_mode: "shape".into(),
             shape_fill: true,
             stroke_width: 0.0,
             shape_stroke: Default::default(),
