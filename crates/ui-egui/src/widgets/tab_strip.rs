@@ -414,4 +414,41 @@ mod tests {
         assert!((tab_title_x(tab, 40.0, true) - 154.0).abs() < 1e-4, "mac rtl");
         assert!((tab_title_x(tab, 40.0, false) - 164.0).abs() < 1e-4, "win rtl");
     }
+
+    /// The tab strip's popups (the overflow list and the tab context menu) go through
+    /// `menu_row`, so under RTL the row labels hug the popup's reading-start (right) edge —
+    /// including a checked row's gutter — and LTR keeps them at the left.
+    #[test]
+    fn tab_popup_rows_hug_the_reading_start_edge() {
+        use crate::direction::{Dir, direction_scope};
+        let rects = |dir: Dir| -> Vec<(String, egui::Rect)> {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let strip = Rect::from_min_size(pos2(20.0, 20.0), vec2(220.0, 120.0));
+                let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down_justified(egui::Align::Min)));
+                crate::menus::popup_body(&mut strip_ui, |ui| {
+                    let _ = crate::menu_keys::menu_row(ui, "Layers", None, true, true);
+                    let _ = crate::menu_keys::menu_row(ui, "Close", None, false, true);
+                });
+            });
+            let v = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), ts.visual_bounding_rect())),
+                    _ => None,
+                })
+                .collect();
+            out.textures_delta.clear();
+            v
+        };
+        let at = |v: &[(String, egui::Rect)], s: &str| v.iter().find(|(t, _)| t.contains(s)).map(|(_, r)| *r).unwrap_or(Rect::ZERO);
+        let (l, r) = (at(&rects(Dir::Ltr), "Close"), at(&rects(Dir::Rtl), "Close"));
+        assert!(l.is_positive() && r.is_positive(), "the row label is drawn both ways: {l:?} {r:?}");
+        assert!(l.left() < 20.0 + 40.0, "ltr: the label hugs the left edge: {l:?}");
+        assert!(r.right() > 240.0 - 40.0, "rtl: the label hugs the right edge: {r:?}");
+        assert!(r.right() > l.right() + 10.0, "rtl: the label sits at the reading start: ltr {l:?} rtl {r:?}");
+    }
 }
