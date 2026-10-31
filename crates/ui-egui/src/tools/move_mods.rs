@@ -208,8 +208,11 @@ fn screen_pixel_step(app: &PhotocraftApp) -> f64 {
     if app.ui.transform.is_some() || !zoom.is_finite() || zoom <= 0.0 {
         return 1.0;
     }
-    // A relative margin: the f32 zoom is a hair off its rung (0.1 % is 1 / 999.99995).
-    (1.0 / zoom * (1.0 + 1e-6)).floor().max(1.0)
+    // A ladder rung is a hair off in f32 (0.1 % is 1 / 999.99995): snap a reciprocal within f32
+    // precision of a whole number to it, and floor any other zoom (0.3333334 is 2, not 3).
+    let (r, whole) = (1.0 / zoom, (1.0 / zoom).round());
+    let steps = if (r - whole).abs() <= r * f64::from(f32::EPSILON) { whole } else { r.floor() };
+    steps.max(1.0)
 }
 
 /// Arrow keys with the Move tool (or while Free Transform is active): nudge one screen pixel

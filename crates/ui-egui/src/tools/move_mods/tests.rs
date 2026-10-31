@@ -523,7 +523,9 @@ fn a_nudge_is_one_screen_pixel() {
 #[test]
 fn a_nudge_is_one_screen_pixel_below_a_tenth_of_a_percent() {
     let lowest = crate::zoom_levels::min([12_000, 12_000]);
-    for (zoom, step) in [(0.002, 500), (0.001, 1000), (0.0005, 2000), (lowest, 6000)] {
+    // 0.3333334 is just above a third, off the ladder (pinch, Zoom tool drag): 2.9999994 screen
+    // pixels' worth floors to 2, while the ladder's own f32 third still gives 3 (#10438 review).
+    for (zoom, step) in [(0.002, 500), (0.001, 1000), (0.0005, 2000), (lowest, 6000), (0.333_333_4, 2), (1.0 / 3.0, 3)] {
         let mut app = app_with_layer();
         let id = app.session.active().unwrap().active_layer.unwrap();
         app.ui.views[0].zoom = zoom;
