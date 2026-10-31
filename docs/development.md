@@ -652,6 +652,29 @@ photos are public domain, not committed; download them at 1920 px wide into `<di
 size the cases were placed for (Commons rounds it to 1920). Timing on a 24 MP document through the
 command: `cargo run --release -p photocraft-engine --example remove_bench`.
 
+## PSD import pixel memory limits
+
+PSD/PSB imports preflight layer, user-mask, merged-image and extra-channel pixel storage
+before merged-image validation or decoding. The conservative estimate sums retained tile
+storage (including padding and negative offsets) and the largest decode/conversion workspace.
+It does not credit uniform-tile sharing or pruning, so some files that could fit after decoding
+are refused. Valid off-canvas pixels are preserved; oversized layers are rejected rather than
+clipped. Defaults are 2 GiB on native targets and 1 GiB on wasm. Applications can lower the
+allowance with `ImportOptions::psd_max_pixel_bytes`; values above the default are capped.
+The source-only convenience API uses the default; `import_file_for_open_with` honours options.
+
+An over-budget ordinary or interactive import returns `IoError::PsdImportBudget` with the
+estimated and allowed byte counts; damaged-file recovery never bypasses that error. The legacy
+`psd_to_document` conversion APIs cannot return an error, so they return an empty document and
+an explicit warning on preflight refusal. Layer and mask pixel allocation failures also fail
+ordinary imports instead of opening partial content.
+
+This is the first part of #8593. The allowance covers the main pixel paths, not total process
+RSS: encoded input, parser metadata, patterns, smart-filter caches, embedded smart-object
+contents, generated vector caches, and text preparation are outside it and retain their
+existing limits. Joining these paths to a shared budget and streaming whole-plane masks are follow-up work. An accepted
+estimate does not guarantee allocation success on a memory-constrained host.
+
 ## Test corpora
 
 Real files are our best oracles, but they are large binaries, so they never go into this
