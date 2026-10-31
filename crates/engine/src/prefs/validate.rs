@@ -140,7 +140,7 @@ pub fn is_color(path: &str) -> bool {
     if choices(path).is_some() || path.starts_with("shortcuts.") || path.starts_with("alternateShortcuts.") || path.starts_with("menus.") {
         return false;
     }
-    if path == "layerMaskOverlay.color" {
+    if path == "layerMaskOverlay.color" || path.strip_prefix("targetColors.").is_some_and(|k| super::TargetColors::KEYS.contains(&k)) {
         return true;
     }
     let leaf = path.rsplit('.').next().unwrap_or(path);

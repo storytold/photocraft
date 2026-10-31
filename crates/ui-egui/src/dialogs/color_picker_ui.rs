@@ -803,6 +803,10 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
         set_field(&mut d.fields, field, json!(color))?;
         return Ok(json!({ "color": color }));
     }
+    // A Levels or Curves eyedropper's target colour.
+    if let Some(r) = crate::layer_picker::confirm_target(app, target, color) {
+        return r.map(|_| json!({ "color": color }));
+    }
     if target == "cropShield" {
         crate::crop_shield::set_custom_color(app, color)?;
         return Ok(json!({ "color": color }));
