@@ -27,6 +27,8 @@ schemars = "1"
 getrandom = { workspace = true }
 cap-std = "4"
 clap = { workspace = true }
+# Structured logs of the task tools (stderr; stdout carries the MCP protocol).
+tracing = "0.1"
 
 [dev-dependencies]
 # Synthetic camera raws (#7789).

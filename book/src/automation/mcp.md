@@ -32,6 +32,14 @@ the server starts.
 
 Tools cover session/document operations, command discovery and execution, batching, and—when bridged—UI inspection and control. Tool schemas improve correctness but are not authorization boundaries.
 
+Headless mode also offers typed task tools for everyday edits, so an agent needs no command ids:
+`open_image`, `inspect_image`, `save_image`, `export_image`, `resize_image`, `crop_image`,
+`rotate_image`, `flip_image`, `adjust_brightness`, `adjust_contrast`, `adjust_saturation`,
+`apply_blur`, `apply_sharpen`, `remove_background`, `add_text`, `manage_layers` and
+`batch_process` (a folder at a time). They reply with structured JSON and never replace an
+existing file unless `overwrite` is true. Arguments, limits, logging (`PHOTOCRAFT_LOG`) and
+Claude Code / Codex configuration are in [`docs/mcp.md`](../../../docs/mcp.md#task-tools).
+
 ## From an installed release
 
 The release packages ship `photocraft-cli` alongside the desktop app, so no build is needed:

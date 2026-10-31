@@ -9,7 +9,7 @@ use rmcp::service::RequestContext;
 
 const DOCUMENT: &str = "photocraft://document";
 const COMMANDS: &str = "photocraft://commands";
-const INSTRUCTIONS: &str = "PhotoCraft image editor. Start with doc_new/doc_open, discover ids and parameter docs with command_list, edit with command_run or command_batch (one history step per command). Inspect with doc_inspect and render_preview; doc_save writes native .pcraft or exports by extension. File paths are relative to the read/write roots granted at launch. ui_inspect/ui_screenshot and other ui_* tools require bridge mode. Read photocraft://document and photocraft://commands for live JSON state.";
+const INSTRUCTIONS: &str = "PhotoCraft image editor. Start with doc_new/doc_open, discover ids and parameter docs with command_list, edit with command_run or command_batch (one history step per command). Inspect with doc_inspect and render_preview; doc_save writes native .pcraft or exports by extension. File paths are relative to the read/write roots granted at launch. ui_inspect/ui_screenshot and other ui_* tools require bridge mode. Read photocraft://document and photocraft://commands for live JSON state. Task tools (headless): open_image, inspect_image, resize_image, crop_image, rotate_image, flip_image, adjust_brightness, adjust_contrast, adjust_saturation, apply_blur, apply_sharpen, remove_background, add_text, manage_layers, save_image, export_image and batch_process take typed arguments and reply with structured JSON; save_image, export_image and batch_process never replace an existing file unless overwrite is true.";
 
 fn annotated(mut tool: Tool) -> Tool {
     let words = tool.name.replace('_', " ");
@@ -17,9 +17,9 @@ fn annotated(mut tool: Tool) -> Tool {
     let title = chars.next().map(|c| c.to_uppercase().collect::<String>() + chars.as_str()).unwrap_or_default();
     let read = matches!(
         tool.name.as_ref(),
-        "command_list" | "doc_inspect" | "session_list" | "render_preview" | "doc_render_preview" | "ui_inspect" | "ui_screenshot"
+        "command_list" | "doc_inspect" | "session_list" | "render_preview" | "doc_render_preview" | "ui_inspect" | "ui_screenshot" | "inspect_image"
     );
-    let additive = matches!(tool.name.as_ref(), "doc_new" | "doc_open" | "doc_place");
+    let additive = matches!(tool.name.as_ref(), "doc_new" | "doc_open" | "doc_place" | "open_image");
     tool.title = Some(title.clone());
     tool.annotations = Some(ToolAnnotations::from_raw(Some(title), Some(read), Some(!read && !additive), Some(read), Some(false)));
     Arc::make_mut(&mut tool.input_schema).insert("additionalProperties".into(), json!(false));

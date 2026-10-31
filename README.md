@@ -242,8 +242,9 @@ photocraft-cli batch --actions grade.json --in ./raw --out ./graded
 # Every subcommand explains itself
 photocraft-cli batch --help
 
-# Let an agent drive it over MCP (headless, or bridged to the running app)
-photocraft-cli mcp
+# Let an agent drive it over MCP (headless, or bridged to the running app): typed task tools
+# (resize_image, remove_background, batch_process, …) plus every engine command; see docs/mcp.md
+photocraft-cli mcp --automation-read-root ./photos --automation-write-root ./out
 ```
 
 The desktop app also offers an authenticated, loopback-only control channel (`photocraft --control`) for inspecting UI state, driving tools with pointer events, and taking offscreen screenshots. Every image in this README was rendered that way. See [`docs/control-protocol.md`](docs/control-protocol.md).

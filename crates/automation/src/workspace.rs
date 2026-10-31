@@ -498,6 +498,17 @@ fn command_error(id: &str) -> AutomationError {
     AutomationError::BadRequest(format!("automation command `{id}` uses ambient filesystem paths and is disabled; use capability-scoped document methods"))
 }
 
+/// Whether a request names the root directory itself: `.`, or the root's own absolute spelling.
+/// (`request_path` refuses both, as they name no file.)
+fn names_root(path: &str, root: &RootCapability) -> bool {
+    let requested = Path::new(path);
+    path == "."
+        || (requested.is_absolute()
+            && path_beneath_root(requested, &root.configured_path)
+                .or_else(|| path_beneath_root(requested, &root.path))
+                .is_some_and(|mut rest| rest.next().is_none()))
+}
+
 /// An export owns only files it created through this held directory capability. Refuse
 /// collisions (including symlinks) so cancellation cannot delete or replace an earlier export.
 pub(crate) struct ExportSequence {
@@ -512,6 +523,53 @@ impl AuthorizedWorkspace {
         root.dir.create_dir_all(&relative).map_err(|e| file_error("mkdir", path, e))?;
         let dir = root.dir.open_dir(&relative).map_err(|e| file_error("open export directory", path, e))?;
         Ok(ExportSequence { dir, created: Vec::new() })
+    }
+
+    /// Whether something already exists at `path` below the write root (a dangling link
+    /// counts), so a task tool can refuse to replace it unless asked to. The path is validated
+    /// exactly as [`write`](Self::write) validates it.
+    pub(crate) fn write_target_exists(&self, path: &str) -> Result<bool, AutomationError> {
+        let relative = request_path(path, self.write.as_ref())?;
+        let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
+        Ok(root.dir.symlink_metadata(&relative).is_ok())
+    }
+
+    /// Create `path` (and its parents) as a directory below the write root.
+    pub(crate) fn create_write_dir(&self, path: &str) -> Result<(), AutomationError> {
+        let root = self.write.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: write authority is absent")))?;
+        // The root itself already exists.
+        if names_root(path, root) {
+            return Ok(());
+        }
+        let relative = request_path(path, Some(root))?;
+        root.dir.create_dir_all(&relative).map_err(|e| file_error("mkdir", path, e))
+    }
+
+    /// The regular files directly inside `dir` below the read root, as `(name, bytes)` sorted by
+    /// name. Subdirectories, links that leave the root and non-UTF-8 names are skipped; at most
+    /// `limit` names are returned, and `truncated` says whether more were left out.
+    pub(crate) fn list_read_dir(&self, dir: &str, limit: usize) -> Result<(Vec<(String, u64)>, bool), AutomationError> {
+        let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
+        let handle = if names_root(dir, root) { root.dir.open_dir(".") } else { root.dir.open_dir(request_path(dir, Some(root))?) };
+        let handle = handle.map_err(|e| file_error("open directory", dir, e))?;
+        let mut files = Vec::new();
+        let mut truncated = false;
+        for entry in handle.entries().map_err(|e| file_error("list directory", dir, e))? {
+            let Ok(entry) = entry else { continue };
+            let Ok(name) = entry.file_name().into_string() else { continue };
+            // `metadata` follows links through the capability: a link out of the root fails here.
+            let Ok(meta) = handle.metadata(&name) else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            if files.len() >= limit {
+                truncated = true;
+                break;
+            }
+            files.push((name, meta.len()));
+        }
+        files.sort();
+        Ok((files, truncated))
     }
 }
 

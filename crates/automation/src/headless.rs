@@ -57,6 +57,14 @@ impl Headless {
         untrusted(Filesystem::Workspace(workspace))
     }
 
+    /// The capability-scoped workspace, when this session was granted one (MCP and `serve`).
+    pub(crate) fn workspace(&self) -> Option<&AuthorizedWorkspace> {
+        match &self.filesystem {
+            Filesystem::Workspace(workspace) => Some(workspace),
+            Filesystem::Denied | Filesystem::TrustedLocal => None,
+        }
+    }
+
     /// Apply background jobs that finished since the last request, so every request (save,
     /// export, inspect, preview, `session.list`, commands) sees their result. Cheap when no job
     /// runs. The JSON-lines server and the MCP server call it before each request.
@@ -75,7 +83,7 @@ impl Headless {
     /// Run `body` with document `index` active (the active one when `None`), then make the
     /// previously active document active again, on success and on error alike: an `index`
     /// targets one call and must not retarget the next automation command (#7025).
-    fn on_doc<T>(&mut self, index: Option<usize>, body: impl FnOnce(&mut Self) -> Result<T, AutomationError>) -> Result<T, AutomationError> {
+    pub(crate) fn on_doc<T>(&mut self, index: Option<usize>, body: impl FnOnce(&mut Self) -> Result<T, AutomationError>) -> Result<T, AutomationError> {
         let i = self.doc_index(index)?;
         let previously_active = self.session.active_index();
         if previously_active != Some(i) && !self.session.set_active(i) {

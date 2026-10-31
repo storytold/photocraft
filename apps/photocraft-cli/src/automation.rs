@@ -62,7 +62,23 @@ pub(crate) fn serve(a: &ServeArgs, err: &mut dyn Write) -> Result {
     }
 }
 
+/// `PHOTOCRAFT_LOG=error|warn|info|debug|trace` turns on the MCP server's logs (task tool calls,
+/// timings, batch failures) on stderr. Unset: no logging, as before. stdout is never used: it
+/// carries the MCP protocol.
+fn init_logging(err: &mut dyn Write) {
+    let Some(level) = std::env::var("PHOTOCRAFT_LOG").ok().filter(|v| !v.trim().is_empty()) else { return };
+    match level.trim().parse::<tracing_subscriber::filter::LevelFilter>() {
+        Ok(filter) => {
+            let _ = tracing_subscriber::fmt().with_max_level(filter).with_writer(std::io::stderr).with_ansi(false).try_init();
+        }
+        Err(_) => {
+            let _ = writeln!(err, "photocraft-cli: ignoring PHOTOCRAFT_LOG={level:?} (use error, warn, info, debug, trace or off)");
+        }
+    }
+}
+
 pub(crate) fn mcp(a: &McpArgs, err: &mut dyn Write) -> Result {
+    init_logging(err);
     let server = match &a.bridge {
         Some(addr) => {
             if a.bridge_from_env {

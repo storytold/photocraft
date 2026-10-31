@@ -1,0 +1,12 @@
+# Add to ~/.codex/config.toml (see docs/mcp.md › Task tools › Client configuration).
+# Replace the roots with absolute folders; the write root can be a dedicated output folder.
+[mcp_servers.photocraft]
+command = "photocraft-cli"   # or the absolute path of photocraft-cli(.exe)
+args = [
+  "mcp",
+  "--automation-read-root", "/work/project",
+  "--automation-write-root", "/work/project/out",
+]
+env = { PHOTOCRAFT_LOG = "warn" }   # logs go to stderr; unset for none
+# batch_process over a large folder can take minutes
+tool_timeout_sec = 600
