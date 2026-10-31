@@ -391,16 +391,22 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         ] {
                             let on = crate::view_cmds::checked(app, id).unwrap_or(false);
                             let enabled = crate::view_cmds::is_enabled(app, id).unwrap_or(true);
-                            // Plain Button packs its atoms LTR whatever the direction flag; the
-                            // menu-row atom pins the label to the row's reading start under RTL.
-                            let row = crate::menus::menu_keys::menu_row_button_atom(label.into(), None, ui.style().right_to_left)
-                                .selected(on)
-                                .frame_when_inactive(on)
-                                .frame(true);
-                            if ui.add_enabled(enabled, row).clicked() {
-                                let _ = crate::menus::invoke(app, &ctx, id, json!({}));
-                                ui.close();
-                            }
+                            // Each row is a full-width reading-order row: the popup body pins
+                            // top_down_justified(Align::Min), which stays left-to-right whatever the
+                            // direction flag, so under RTL the button itself would anchor at the left
+                            // and the atom's leading grow would not move the label. Plain Button also
+                            // packs its atoms LTR; the menu-row atom pins the label to the row's
+                            // reading start once the row lays out right-to-left.
+                            crate::direction::full_row(ui, |ui| {
+                                let row = crate::menus::menu_keys::menu_row_button_atom(label.into(), None, ui.style().right_to_left)
+                                    .selected(on)
+                                    .frame_when_inactive(on)
+                                    .frame(true);
+                                if ui.add_enabled(enabled, row).clicked() {
+                                    let _ = crate::menus::invoke(app, &ctx, id, json!({}));
+                                    ui.close();
+                                }
+                            });
                         }
                     };
                     crate::menus::popup_body(ui, rows);
