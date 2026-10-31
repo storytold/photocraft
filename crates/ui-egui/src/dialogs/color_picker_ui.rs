@@ -416,7 +416,7 @@ fn flat_grid_mesh(rect: Rect, n: usize, color: impl Fn(f32, f32) -> [f32; 3]) ->
 
 /// Room for both component columns, including units, without overflowing the title's width; with
 /// the frame and title the window fits Photoshop's (about 534 x 376 points).
-pub(crate) const CONTENT_WIDTH: f32 = 488.0;
+pub(crate) const CONTENT_WIDTH: f32 = 498.0;
 /// Translated action labels can be substantially wider than their English equivalents.
 pub(crate) fn content_width(ui: &egui::Ui) -> f32 {
     let labels = ["OK", "Cancel", "Add to Swatches"];
@@ -435,8 +435,6 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
     ui.spacing_mut().item_spacing.y = 4.0;
     let mut outcome = None;
     let rtl = crate::direction::is_rtl();
-    // The full body width, read where the fork reports it correctly (before the mirrored row).
-    let full_w = ui.available_size_before_wrap().x;
     // Reading order: the colour field sits at the reading start, the values follow it.
     crate::direction::dialog_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 12.0;
@@ -447,17 +445,10 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) -> Option<bool> {
             });
             ui.add_space(8.0);
             let mut web = f.get("__webOnly").and_then(Value::as_bool).unwrap_or(false);
-            // In a right-to-left row the fork's available-width read inside the nested row comes
-            // back short, which would shrink the checkbox's row and with it the frame; bound it.
-            let check = if rtl {
-                let w = ui.available_size_before_wrap().x.min(full_w);
-                ui.allocate_ui_with_layout(egui::vec2(w, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
-                    widgets::checkbox(ui, &mut web, tl!("Only Web Colors"))
-                })
-                .inner
-            } else {
-                widgets::checkbox(ui, &mut web, tl!("Only Web Colors"))
-            };
+            // A plain checkbox in both directions: it takes its natural width, and bounding its
+            // row to a ballooned available-width read in a right-to-left fork would widen the
+            // fork and with it the frame.
+            let check = widgets::checkbox(ui, &mut web, tl!("Only Web Colors"));
             if check.changed() {
                 f.insert("__webOnly".into(), json!(web));
                 set_rgb(f, current(f).rgb, Keep::Nothing);
@@ -929,8 +920,6 @@ mod rtl_tests {
     fn rtl_picker_mirrors_the_action_stack_and_swatch_pair() {
         let (lf, lok, lcancel, lcur) = picker_frame(crate::direction::Dir::Ltr);
         let (rf, rok, rcancel, rcur) = picker_frame(crate::direction::Dir::Rtl);
-        eprintln!("DBG LTR frame={lf:?} ok={lok:?} cancel={lcancel:?} cur={lcur:?}");
-        eprintln!("DBG RTL frame={rf:?} ok={rok:?} cancel={rcancel:?} cur={rcur:?}");
         assert!((rf.width() - lf.width()).abs() < 1.0, "the frame keeps its width: {rf:?} vs {lf:?}");
         assert!((lok.left() - lcancel.left()).abs() < 1.0 && (rok.left() - rcancel.left()).abs() < 1.0, "a flush stack in both directions: {lok:?} {rok:?}");
         assert!(
