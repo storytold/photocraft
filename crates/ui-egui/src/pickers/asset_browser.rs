@@ -28,7 +28,6 @@ use crate::theme::Tokens;
 pub(crate) const MIN_THUMB: f32 = 20.0;
 const GROUP_HEADER_HEIGHT: f32 = 30.0;
 const GROUP_DRAG_GHOST_OPACITY: f32 = 0.4;
-const HIT_DEBUG_KEY: &str = "preset-browser-hit-debug";
 const HIT_DEBUG_LABEL_HEIGHT: f32 = 9.0;
 
 fn hit_debug_label_position(hit: &DropHitRegion) -> Pos2 {
@@ -1678,37 +1677,19 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 canonical_drop_hits.borrow_mut().push((root_append_hit(root_end_rect, indicator, hit_index), root_end_response));
             }
         });
-    let hit_debug_id = egui::Id::new((HIT_DEBUG_KEY, panel));
-    {
-        let painter = ui.painter().clone().with_layer_id(egui::LayerId::new(egui::Order::Foreground, hit_debug_id));
-        for (hit, _) in canonical_drop_hits.borrow().iter() {
-            let gap_hit = hit.hit_rect.height() <= 6.1 && hit.hit_rect.width() > 10.0;
-            let (color, label) = match hit.region {
-                PointerRegion::GroupBody => (egui::Color32::from_rgb(35, 145, 255), "HEADER → PREPEND"),
-                PointerRegion::ContainerEnd if gap_hit => (egui::Color32::from_rgb(190, 90, 245), "GAP → APPEND UPPER LEVEL"),
-                PointerRegion::ContainerEnd if hit.container == Some(ContainerId::Root) => (egui::Color32::from_rgb(245, 80, 80), "ROOT → APPEND"),
-                PointerRegion::ContainerEnd => (egui::Color32::from_rgb(255, 175, 35), "INDENT → APPEND"),
-                PointerRegion::LeadingEdge if gap_hit => (egui::Color32::from_rgb(60, 220, 130), "GAP → LOWER LEVEL"),
-                PointerRegion::TrailingEdge if gap_hit => (egui::Color32::from_rgb(190, 90, 245), "GAP → AFTER UPPER SIBLING"),
-                PointerRegion::LeadingEdge => (egui::Color32::from_rgb(60, 220, 130), "CARD → BEFORE"),
-                PointerRegion::TrailingEdge => (egui::Color32::from_rgb(190, 90, 245), "CARD → AFTER"),
-            };
-            painter.rect_filled(hit.hit_rect, 0.0, color.gamma_multiply(0.11));
-            painter.rect_stroke(hit.hit_rect, 0.0, Stroke::new(1.5, color.gamma_multiply(0.5)), egui::StrokeKind::Inside);
-            painter.text(hit_debug_label_position(hit), Align2::LEFT_TOP, label, FontId::proportional(HIT_DEBUG_LABEL_HEIGHT), color.gamma_multiply(0.5));
-        }
-        let legend = Rect::from_min_size(ui.clip_rect().left_top() + vec2(6.0, 6.0), vec2(190.0, 22.0));
-        painter.rect_filled(legend, 2.0, egui::Color32::from_black_alpha(105));
-        painter.text(legend.center(), Align2::CENTER_CENTER, "HIT AREAS  •  DEBUG OVERLAY ON", FontId::proportional(11.0), egui::Color32::WHITE.gamma_multiply(0.5));
-    }
     let mut hierarchy_drop_feedback = None;
     if canonical_hierarchy_drag {
         if let Some(pointer) = ui.ctx().pointer_interact_pos() {
             let hits: Vec<DropHitRegion> = canonical_drop_hits.borrow().iter().map(|(hit, _)| hit.clone()).collect();
             if let Some(index) = arbitrate_hit_index(pointer, &hits)
-                && let Some((_, target_response)) = canonical_drop_hits.borrow().get(index)
+                && canonical_drop_hits.borrow().get(index).is_some()
             {
-                let hovered = target_response.dnd_hover_payload::<AssetDrag>().map(|payload| payload.as_ref().clone());
+                // The canonical hit rectangles are arbitrated independently of egui's topmost
+                // hovered response. A valid geometric hit can therefore belong to a response
+                // that egui does not consider hovered (notably later root-group headers).
+                // Read the active drag from the global payload and use the winning hit above as
+                // the sole authority for the destination.
+                let hovered = egui::DragAndDrop::payload::<AssetDrag>(ui.ctx()).map(|payload| payload.as_ref().clone());
                 if let Some(dragged) = hovered.as_ref()
                 && let Some(source) = source_node_for_drag(dragged, panel, &hierarchy_identities)
                 {
