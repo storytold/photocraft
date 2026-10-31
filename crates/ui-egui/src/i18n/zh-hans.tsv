@@ -2303,8 +2303,8 @@ cameraRaw	Blending	混合
 	Subtract from selection  ({key})	从选区中减去  （{key}）
 	↑↓ navigate   {key} run   esc close	↑↓ 导航   {key} 运行   esc 关闭
 @plural	{n} layer|{n} layers	{n} 个图层
-	Collapse group  ({key}-click: all groups)	折叠组  （按 {key} 单击：所有组）
-	Expand group  ({key}-click: all groups)	展开组  （按 {key} 单击：所有组）
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	折叠组  （按 {alt} 单击：连同嵌套组 · 按 {cmd} 单击：连同同级组）
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	展开组  （按 {alt} 单击：连同嵌套组 · 按 {cmd} 单击：连同同级组）
 	Hide the layer's effects  ({key}-click: all layers)	隐藏图层效果  （按 {key} 单击：所有图层）
 	Show the layer's effects  ({key}-click: all layers)	显示图层效果  （按 {key} 单击：所有图层）
 	System Info…	系统信息…

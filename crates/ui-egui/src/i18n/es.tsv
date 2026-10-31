@@ -2150,7 +2150,7 @@
 	Collapse	Contraer
 	Collapse All Groups	Contraer todos los grupos
 	Collapse Panel Group	Contraer grupo de paneles
-	Collapse group  ({key}-click: all groups)	Contraer grupo  ({key}-clic: todos los grupos)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Contraer grupo  ({alt}-clic: con los grupos anidados · {cmd}-clic: con los grupos del mismo nivel)
 	Create new brush from the current settings	Crear un pincel nuevo con los ajustes actuales
 	Create new brush from these settings	Crear un pincel nuevo con estos ajustes
 	Update the current brush with these settings	Actualizar el pincel actual con estos ajustes
@@ -2158,7 +2158,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	Arrastre la flecha para fijar el ángulo y los puntos para fijar la redondez
 	Expand	Expandir
 	Expand Panel Group	Expandir grupo de paneles
-	Expand group  ({key}-click: all groups)	Expandir grupo  ({key}-clic: todos los grupos)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Expandir grupo  ({alt}-clic: con los grupos anidados · {cmd}-clic: con los grupos del mismo nivel)
 	Fade steps	Pasos de desvanecimiento
 	Hide the layer's effects  ({key}-click: all layers)	Ocultar los efectos de la capa  ({key}-clic: todas las capas)
 	Import Brushes… (.abr or image)	Importar pinceles… (.abr o imagen)

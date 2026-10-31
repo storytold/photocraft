@@ -109,16 +109,78 @@ fn clicking_a_triangle_toggles_its_group_at_every_ui_scale() {
     }
 }
 
+fn new_layer(s: &mut photocraft_engine::Session, cmd: &str, p: serde_json::Value) -> u64 {
+    s.execute(cmd, p).unwrap()["layer"].as_u64().unwrap()
+}
+
+/// Background, `A { A1 { x }, A2 { y } }`, `B { B1 { z } }` and `top`, every group open.
+fn siblings() -> photocraft_engine::Session {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    let x = new_layer(&mut s, "layer.new.layer", json!({"name": "x"}));
+    let a1 = new_layer(&mut s, "layer.groupLayers", json!({"layer": x, "name": "A1"}));
+    let a = new_layer(&mut s, "layer.groupLayers", json!({"layer": a1, "name": "A"}));
+    // `layer.new.layer` lands above the active layer, in its parent.
+    s.execute("layer.select", json!({"layer": a1})).unwrap();
+    let y = new_layer(&mut s, "layer.new.layer", json!({"name": "y"}));
+    new_layer(&mut s, "layer.groupLayers", json!({"layer": y, "name": "A2"}));
+    s.execute("layer.select", json!({"layer": a})).unwrap();
+    let z = new_layer(&mut s, "layer.new.layer", json!({"name": "z"}));
+    let b1 = new_layer(&mut s, "layer.groupLayers", json!({"layer": z, "name": "B1"}));
+    let b = new_layer(&mut s, "layer.groupLayers", json!({"layer": b1, "name": "B"}));
+    s.execute("layer.select", json!({"layer": b})).unwrap();
+    s.execute("layer.new.layer", json!({"name": "top"})).unwrap();
+    s.execute("layer.setExpanded", json!({"all": true, "expanded": true})).unwrap();
+    s
+}
+
+/// Which of A, A1, A2, B, B1 are open.
+fn open(h: &Harness<'_, PhotocraftApp>) -> [bool; 5] {
+    ["A", "A1", "A2", "B", "B1"].map(|name| group(h, name).1)
+}
+
 #[test]
-fn alt_click_toggles_every_group() {
-    let mut h = harness_with(layered(), 1.0);
-    let p = triangle(&mut h, "outer").unwrap();
+fn alt_click_toggles_the_group_and_every_group_inside_it() {
+    let mut h = harness_with(siblings(), 1.0);
+    let p = triangle(&mut h, "A").unwrap();
     click(&mut h, p, Modifiers::ALT);
-    assert!(!group(&h, "outer").1 && !group(&h, "inner").1, "⌥-click closes all groups");
-    let p = triangle(&mut h, "outer").unwrap();
+    assert_eq!(open(&h), [false, false, false, true, true], "⌥-click closes A and its nested groups, not B");
+    let p = triangle(&mut h, "A").unwrap();
     click(&mut h, p, Modifiers::ALT);
-    assert!(group(&h, "outer").1 && group(&h, "inner").1, "⌥-click opens all groups");
-    assert!(triangle(&mut h, "inner").is_some());
+    assert_eq!(open(&h), [true; 5], "⌥-click opens them all again");
+    assert!(triangle(&mut h, "A1").is_some() && triangle(&mut h, "A2").is_some());
+}
+
+#[test]
+fn command_click_toggles_the_group_and_the_groups_beside_it() {
+    let mut h = harness_with(siblings(), 1.0);
+    let active = h.state().session.active().unwrap().active_layer;
+    let p = triangle(&mut h, "A").unwrap();
+    click(&mut h, p, Modifiers::COMMAND);
+    assert_eq!(open(&h), [false, true, true, false, true], "⌘-click closes A and B; their nested groups keep their state");
+    assert_eq!(h.state().session.active().unwrap().active_layer, active, "⌘-click on a triangle doesn't select the row");
+    let p = triangle(&mut h, "B").unwrap();
+    click(&mut h, p, Modifiers::COMMAND);
+    assert_eq!(open(&h), [true; 5]);
+    // Inside A, the siblings are A's other groups.
+    let p = triangle(&mut h, "A2").unwrap();
+    click(&mut h, p, Modifiers::COMMAND);
+    assert_eq!(open(&h), [true, false, false, true, true]);
+}
+
+#[test]
+fn alt_command_click_toggles_the_level_and_everything_inside_it() {
+    let mut h = harness_with(siblings(), 1.0);
+    let p = triangle(&mut h, "A1").unwrap();
+    click(&mut h, p, Modifiers::ALT | Modifiers::COMMAND);
+    assert_eq!(open(&h), [true, false, false, true, true], "a nested level leaves A and B open");
+    // On a top-level group it reaches every group in the document.
+    let p = triangle(&mut h, "B").unwrap();
+    click(&mut h, p, Modifiers::ALT | Modifiers::COMMAND);
+    assert_eq!(open(&h), [false; 5]);
+    let p = triangle(&mut h, "A").unwrap();
+    click(&mut h, p, Modifiers::ALT | Modifiers::COMMAND);
+    assert_eq!(open(&h), [true; 5]);
 }
 
 #[test]

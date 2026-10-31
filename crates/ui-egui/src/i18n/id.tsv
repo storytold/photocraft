@@ -2162,7 +2162,7 @@
 	Collapse	Ciutkan
 	Collapse All Groups	Ciutkan Semua Grup
 	Collapse Panel Group	Ciutkan Grup Panel
-	Collapse group  ({key}-click: all groups)	Ciutkan grup  ({key}-klik: semua grup)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Ciutkan grup  ({alt}-klik: beserta grup bersarang · {cmd}-klik: beserta grup setingkat)
 	Create new brush from the current settings	Buat kuas baru dari pengaturan saat ini
 	Create new brush from these settings	Buat kuas baru dari pengaturan ini
 	Update the current brush with these settings	Perbarui kuas saat ini dengan pengaturan ini
@@ -2170,7 +2170,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	Seret panah untuk mengatur sudut, titik untuk mengatur kebulatan
 	Expand	Bentangkan
 	Expand Panel Group	Bentangkan Grup Panel
-	Expand group  ({key}-click: all groups)	Bentangkan grup  ({key}-klik: semua grup)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Bentangkan grup  ({alt}-klik: beserta grup bersarang · {cmd}-klik: beserta grup setingkat)
 	Fade steps	Langkah pudar
 	Hide the layer's effects  ({key}-click: all layers)	Sembunyikan efek layer  ({key}-klik: semua layer)
 	Import Brushes… (.abr or image)	Impor Kuas… (.abr atau gambar)

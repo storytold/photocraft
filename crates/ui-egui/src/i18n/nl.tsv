@@ -2123,7 +2123,7 @@
 	Collapse	Samenvouwen
 	Collapse All Groups	Alle groepen samenvouwen
 	Collapse Panel Group	Paneelgroep samenvouwen
-	Collapse group  ({key}-click: all groups)	Groep samenvouwen  ({key}-klik: alle groepen)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Groep samenvouwen  ({alt}-klik: met geneste groepen · {cmd}-klik: met groepen op hetzelfde niveau)
 	Create new brush from the current settings	Nieuw penseel maken van de huidige instellingen
 	Create new brush from these settings	Nieuw penseel maken van deze instellingen
 	Update the current brush with these settings	Huidig penseel bijwerken met deze instellingen
@@ -2131,7 +2131,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	Sleep de pijl om de hoek in te stellen, de stippen om de rondheid in te stellen
 	Expand	Uitvouwen
 	Expand Panel Group	Paneelgroep uitvouwen
-	Expand group  ({key}-click: all groups)	Groep uitvouwen  ({key}-klik: alle groepen)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Groep uitvouwen  ({alt}-klik: met geneste groepen · {cmd}-klik: met groepen op hetzelfde niveau)
 	Fade steps	Afzwakstappen
 	Hide the layer's effects  ({key}-click: all layers)	De effecten van de laag verbergen  ({key}-klik: alle lagen)
 	Import Brushes… (.abr or image)	Penselen importeren… (.abr of afbeelding)

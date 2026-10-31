@@ -1076,8 +1076,8 @@
 	Collapse	Thu gọn
 	Expand	Mở rộng
 	Collapse All Groups	Thu gọn mọi nhóm
-	Collapse group  ({key}-click: all groups)	Thu gọn nhóm  ({key}-bấm: mọi nhóm)
-	Expand group  ({key}-click: all groups)	Mở rộng nhóm  ({key}-bấm: mọi nhóm)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Thu gọn nhóm  ({alt}-bấm: cùng các nhóm lồng bên trong · {cmd}-bấm: cùng các nhóm cùng cấp)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Mở rộng nhóm  ({alt}-bấm: cùng các nhóm lồng bên trong · {cmd}-bấm: cùng các nhóm cùng cấp)
 	Hide the layer's effects  ({key}-click: all layers)	Ẩn hiệu ứng lớp  ({key}-bấm: mọi lớp)
 	Show the layer's effects  ({key}-click: all layers)	Hiện hiệu ứng lớp  ({key}-bấm: mọi lớp)
 	Link the mask to the layer	Liên kết mặt nạ với lớp

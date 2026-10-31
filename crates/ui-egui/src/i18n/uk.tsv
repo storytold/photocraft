@@ -884,8 +884,8 @@
 	Unlock: picking a preset replaces these settings	Розблокувати: вибір набору замінює ці параметри
 	Show the layer's effects  ({key}-click: all layers)	Показати ефекти шару  ({key}+клацання: усі шари)
 	Hide the layer's effects  ({key}-click: all layers)	Приховати ефекти шару  ({key}+клацання: усі шари)
-	Expand group  ({key}-click: all groups)	Розгорнути групу  ({key}+клацання: усі групи)
-	Collapse group  ({key}-click: all groups)	Згорнути групу  ({key}+клацання: усі групи)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Розгорнути групу  ({alt}+клацання: разом із вкладеними групами · {cmd}+клацання: разом із групами того самого рівня)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Згорнути групу  ({alt}+клацання: разом із вкладеними групами · {cmd}+клацання: разом із групами того самого рівня)
 	Effects	Ефекти
 	Blending	Накладання
 	Blend If	Накладати, якщо

@@ -2311,7 +2311,7 @@
 	Clouds	Σύννεφα
 	Coated CMYK	CMYK για επιχρισμένο χαρτί
 	Collapse	Σύμπτυξη
-	Collapse group  ({key}-click: all groups)	Σύμπτυξη ομάδας  ({key}-κλικ: όλες οι ομάδες)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Σύμπτυξη ομάδας  ({alt}-κλικ: μαζί με τις ένθετες ομάδες · {cmd}-κλικ: μαζί με τις ομάδες του ίδιου επιπέδου)
 	Color & Swatches	Χρώμα και δείγματα
 	Color Blindness — Deuteranopia-type	Αχρωματοψία — τύπος δευτερανωπίας
 	Color Blindness — Protanopia-type	Αχρωματοψία — τύπος πρωτανωπίας
@@ -2479,7 +2479,7 @@
 	Erase	Διαγραφή
 	Essentials	Βασικά
 	Exact	Ακριβές
-	Expand group  ({key}-click: all groups)	Ανάπτυξη ομάδας  ({key}-κλικ: όλες οι ομάδες)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Ανάπτυξη ομάδας  ({alt}-κλικ: μαζί με τις ένθετες ομάδες · {cmd}-κλικ: μαζί με τις ομάδες του ίδιου επιπέδου)
 	Expand…	Επέκταση…
 	Expansion:	Επέκταση:
 	Export Contents	Εξαγωγή περιεχομένων

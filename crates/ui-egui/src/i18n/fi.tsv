@@ -759,8 +759,8 @@
 	Unlock: picking a preset replaces these settings	Avaa lukitus: esiasetuksen valitseminen korvaa nämä asetukset
 	Show the layer's effects  ({key}-click: all layers)	Näytä tason tehosteet  ({key}-napsautus: kaikki tasot)
 	Hide the layer's effects  ({key}-click: all layers)	Piilota tason tehosteet  ({key}-napsautus: kaikki tasot)
-	Expand group  ({key}-click: all groups)	Laajenna ryhmä  ({key}-napsautus: kaikki ryhmät)
-	Collapse group  ({key}-click: all groups)	Tiivistä ryhmä  ({key}-napsautus: kaikki ryhmät)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Laajenna ryhmä  ({alt}-napsautus: sisäkkäisten ryhmien kanssa · {cmd}-napsautus: saman tason ryhmien kanssa)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Tiivistä ryhmä  ({alt}-napsautus: sisäkkäisten ryhmien kanssa · {cmd}-napsautus: saman tason ryhmien kanssa)
 	Effects	Tehosteet
 	Blending	Sekoitus
 	Blend If	Sekoita, jos

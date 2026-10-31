@@ -2195,7 +2195,7 @@
 	Collapse	Comprimi
 	Collapse All Groups	Comprimi tutti i gruppi
 	Collapse Panel Group	Comprimi gruppo pannelli
-	Collapse group  ({key}-click: all groups)	Comprimi gruppo ({key}-clic: tutti i gruppi)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Comprimi gruppo ({alt}-clic: con i gruppi nidificati · {cmd}-clic: con i gruppi allo stesso livello)
 	Create new brush from the current settings	Crea nuovo pennello da impostazioni correnti
 	Create new brush from these settings	Crea nuovo pennello da queste impostazioni
 	Update the current brush with these settings	Aggiorna il pennello attuale con queste impostazioni
@@ -2203,7 +2203,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	Trascina la freccia per impostare l'angolo, i puntini per la rotondità
 	Expand	Espandi
 	Expand Panel Group	Espandi gruppo pannelli
-	Expand group  ({key}-click: all groups)	Espandi gruppo ({key}-clic: tutti i gruppi)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Espandi gruppo ({alt}-clic: con i gruppi nidificati · {cmd}-clic: con i gruppi allo stesso livello)
 	Fade steps	Passi dissolvenza
 	Hide the layer's effects  ({key}-click: all layers)	Nascondi effetti livello ({key}-clic: tutti i livelli)
 	Import Brushes… (.abr)	Importa pennelli… (.abr)

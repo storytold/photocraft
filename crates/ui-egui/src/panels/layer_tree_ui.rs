@@ -1,10 +1,11 @@
 //! Layers panel tree: the rows in display order (top of the stack first, each group directly
 //! above its contents) and the groups' disclosure triangles (#126).
 //!
-//! Clicking a triangle opens or closes the group; ⌥-click sets every group in the document to
-//! the new state (Photoshop). The state is the group's `expanded` flag, document data saved in
-//! `.pcraft` and as the PSD section divider's open/closed folder type, toggled through
-//! `layer.setExpanded` (a view change: no history step).
+//! Clicking a triangle opens or closes the group. As in Photoshop, ⌥-click also sets every group
+//! inside it, ⌘-click the groups beside it (same parent), and ⌥⌘-click both, so on a top-level
+//! group it reaches every group in the document. The state is the group's `expanded` flag,
+//! document data saved in `.pcraft` and as the PSD section divider's open/closed folder type,
+//! toggled through `layer.setExpanded` (a view change: no history step).
 
 use egui::{Rect, Sense, Shape, Stroke, pos2, vec2};
 use photocraft_doc::{Document, Layer, LayerContent};
@@ -70,12 +71,17 @@ pub fn disclosure(ui: &mut egui::Ui, row: Rect, x: &mut f32, l: &Layer, actions:
     *x += TRIANGLE_W;
     let clicked = resp.clicked();
     if clicked {
-        let all = ui.input(|i| i.modifiers.alt);
-        actions.push(("layer.setExpanded".into(), json!({"layer": l.id.0, "expanded": !g.expanded, "all": all})));
+        let (nested, siblings) = ui.input(|i| (i.modifiers.alt, i.modifiers.command));
+        actions.push(("layer.setExpanded".into(), json!({"layer": l.id.0, "expanded": !g.expanded, "nested": nested, "siblings": siblings})));
     }
     let (verb, name) = (if g.expanded { tl!("Collapse") } else { tl!("Expand") }, l.name.clone());
-    let tip = if g.expanded { tl!("Collapse group  ({key}-click: all groups)") } else { tl!("Expand group  ({key}-click: all groups)") };
-    let resp = resp.on_hover_text(crate::i18n::fmt(tip, &[("key", &crate::shortcuts::pretty("Alt"))]));
+    let tip = if g.expanded {
+        tl!("Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)")
+    } else {
+        tl!("Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)")
+    };
+    let (alt, cmd) = (crate::shortcuts::pretty("Alt"), crate::shortcuts::pretty("Cmd"));
+    let resp = resp.on_hover_text(crate::i18n::fmt(tip, &[("alt", &alt), ("cmd", &cmd)]));
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, format!("{verb} group {name}")));
     clicked
 }

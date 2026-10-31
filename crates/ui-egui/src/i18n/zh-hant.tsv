@@ -2197,7 +2197,7 @@
 	Collapse	收合
 	Collapse All Groups	收合所有群組
 	Collapse Panel Group	收合面板群組
-	Collapse group  ({key}-click: all groups)	收合群組 ({key}+按一下：全部群組)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	收合群組 ({alt}+按一下：連同巢狀群組 · {cmd}+按一下：連同同層群組)
 	Create new brush from the current settings	以目前設定建立新筆刷
 	Create new brush from these settings	以這些設定建立新筆刷
 	Update the current brush with these settings	以這些設定更新目前筆刷
@@ -2205,7 +2205,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	拖曳箭頭設定角度，拖曳圓點設定圓度
 	Expand	展開
 	Expand Panel Group	展開面板群組
-	Expand group  ({key}-click: all groups)	展開群組 ({key}+按一下：全部群組)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	展開群組 ({alt}+按一下：連同巢狀群組 · {cmd}+按一下：連同同層群組)
 	Fade steps	淡出步數
 	Hide the layer's effects  ({key}-click: all layers)	隱藏圖層效果 ({key}+按一下：所有圖層)
 	Import Brushes… (.abr or image)	匯入筆刷… (.abr 或影像)

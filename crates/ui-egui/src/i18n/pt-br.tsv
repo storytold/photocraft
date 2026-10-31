@@ -2148,7 +2148,7 @@
 	Collapse	Recolher
 	Collapse All Groups	Recolher todos os grupos
 	Collapse Panel Group	Recolher grupo de painéis
-	Collapse group  ({key}-click: all groups)	Recolher grupo  ({key}-clique: todos os grupos)
+	Collapse group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Recolher grupo  ({alt}-clique: com os grupos aninhados · {cmd}-clique: com os grupos do mesmo nível)
 	Create new brush from the current settings	Criar novo pincel a partir das configurações atuais
 	Create new brush from these settings	Criar novo pincel a partir destas configurações
 	Update the current brush with these settings	Atualizar o pincel atual com estas configurações
@@ -2156,7 +2156,7 @@
 	Drag the arrow to set the angle, the dots to set the roundness	Arraste a seta para definir o ângulo e os pontos para definir o arredondamento
 	Expand	Expandir
 	Expand Panel Group	Expandir grupo de painéis
-	Expand group  ({key}-click: all groups)	Expandir grupo  ({key}-clique: todos os grupos)
+	Expand group  ({alt}-click: with nested groups · {cmd}-click: with sibling groups)	Expandir grupo  ({alt}-clique: com os grupos aninhados · {cmd}-clique: com os grupos do mesmo nível)
 	Fade steps	Etapas de atenuação
 	Hide the layer's effects  ({key}-click: all layers)	Ocultar os efeitos da camada  ({key}-clique: todas as camadas)
 	Import Brushes… (.abr or image)	Importar pincéis… (.abr ou imagem)
