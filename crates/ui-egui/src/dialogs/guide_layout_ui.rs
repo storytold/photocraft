@@ -184,7 +184,19 @@ pub fn preview(app: &PhotocraftApp, doc: &Document) -> Option<(Guides, Color32)>
 
 fn check(ui: &mut egui::Ui, f: &mut Map<String, Value>, key: &str, label: &str, fallback: bool) -> bool {
     let mut value = on(f, key, fallback);
-    if widgets::checkbox(ui, &mut value, label).changed() {
+    // In a right-to-left UI the fork's available-width read inside `widgets::checkbox` balloons,
+    // which would stretch this row (and the column around it) to the full body width; bound the
+    // row to its natural width there.
+    let resp = if crate::direction::is_rtl() {
+        let w = label_width(ui, &[tl!(label)]) + 20.0 + ui.spacing().item_spacing.x;
+        ui.allocate_ui_with_layout(egui::vec2(w, ui.spacing().interact_size.y), egui::Layout::top_down(egui::Align::Min), |ui| {
+            widgets::checkbox(ui, &mut value, label)
+        })
+        .inner
+    } else {
+        widgets::checkbox(ui, &mut value, label)
+    };
+    if resp.changed() {
         f.insert(key.into(), json!(value));
     }
     value
@@ -231,9 +243,15 @@ fn group<R>(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
 }
 
 /// A column whose rows follow the UI direction: in a right-to-left UI its blocks sit at the
-/// reading start and the rows inside it mirror.
+/// reading start and the rows inside it mirror. `Align::Min` in both directions: left-to-right
+/// `body_layout` is already `Min`, and in a right-to-left UI a `Max` cross align would seed this
+/// scope's min_rect at its full max_rect width, ballooning the column past its content.
 fn column<R>(ui: &mut egui::Ui, content: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), content).inner
+    // In a right-to-left UI the rows right-align (`Max`): a mirrored row hugs the column's
+    // reading-start edge the way a left-to-right row hugs the left. Every right-to-left column
+    // is width-capped by its caller, so the `Max` seed cannot balloon past that cap.
+    let cross = if crate::direction::is_rtl() { egui::Align::Max } else { egui::Align::Min };
+    ui.scope_builder(egui::UiBuilder::new().layout(egui::Layout::top_down(cross)), content).inner
 }
 
 /// The width of the widest of `labels`, so the editors of a settings column line up.
@@ -242,17 +260,30 @@ fn label_width(ui: &egui::Ui, labels: &[&str]) -> f32 {
     labels.iter().map(|l| ui.painter().layout_no_wrap((*l).to_owned(), font.clone(), Color32::WHITE).size().x).fold(0.0, f32::max)
 }
 
-/// A label beside an editor, in reading order: the label at the reading start, the editor
-/// toward the reading end. The label column keeps `label_w`, so the editors line up the way
-/// the grid they replace lined them up.
-fn settings_line(ui: &mut egui::Ui, label_w: f32, label: &str, editor: impl FnOnce(&mut egui::Ui, egui::Response)) -> egui::Response {
-    let halign = if crate::direction::is_rtl() { egui::Align::Max } else { egui::Align::Min };
-    crate::direction::dialog_row(ui, |ui| {
-        let response = ui.add_sized(egui::vec2(label_w, ui.spacing().interact_size.y), egui::Label::new(label).halign(halign));
-        editor(ui, response.clone());
-        response
-    })
-    .inner
+/// The width an axis group box needs: its widest row (a settings line) plus the frame margin.
+fn group_w(ui: &egui::Ui, rows: bool) -> f32 {
+    let size_label = if rows { tl!("Height") } else { tl!("Width") };
+    let label_w = label_width(ui, &[tl!("Number"), size_label, tl!("Spacing")]);
+    let row_w = label_w + ui.spacing().item_spacing.x + 68.0;
+    let title = if rows { tl!("Rows") } else { tl!("Columns") };
+    row_w.max(label_width(ui, &[title]) + 24.0) + 16.0
+}
+
+/// The natural width of the fields column: the widest row `main_fields` draws. The
+/// right-to-left body row needs it to keep its left-to-right width, so the action rail
+/// stays on its mirror axis.
+fn fields_w(ui: &egui::Ui) -> f32 {
+    let sp = ui.spacing().item_spacing.x;
+    let header = label_width(ui, &[tl!("Preset:"), tl!("Target:")]) + sp + 222.0;
+    let color_row = label_width(ui, &[tl!("Color:")]) + sp + 174.0 + sp + 24.0;
+    let color = 16.0 + label_width(ui, &[tl!("Color")]).max(color_row);
+    let axes = group_w(ui, false) + 4.0 + group_w(ui, true);
+    let labels = [tl!("Top:"), tl!("Left:"), tl!("Bottom:"), tl!("Right:")];
+    let refs: Vec<&str> = labels.iter().map(|s| &**s).collect();
+    let pair_w = label_width(ui, &refs).max(64.0);
+    let margins = 16.0 + (4.0 * pair_w + 3.0 * sp).max(label_width(ui, &[tl!("Margin")]) + 26.0);
+    let checks = label_width(ui, &[tl!("Center Columns"), tl!("Clear Existing Guides")]) + 26.0;
+    header.max(color).max(axes).max(margins).max(checks)
 }
 
 fn axis(ui: &mut egui::Ui, f: &mut Map<String, Value>, rows: bool) {
@@ -268,28 +299,14 @@ fn axis(ui: &mut egui::Ui, f: &mut Map<String, Value>, rows: bool) {
         }
         ui.add_space(6.0);
         ui.add_enabled_ui(enabled, |ui| {
-            if crate::direction::is_rtl() {
-                // The fork's `Grid` is not ready for right-to-left layouts (its available width
-                // goes NaN), so the rows are drawn by hand in reading order, keeping the grid's
-                // 6 pt row spacing.
-                ui.spacing_mut().item_spacing.y = 6.0;
-                let label_w = label_width(ui, &[tl!("Number"), size_label, tl!("Spacing")]);
-                settings_line(ui, label_w, tl!("Number"), |ui, _| number(ui, f, count, "Number", true));
-                settings_line(ui, label_w, size_label, |ui, label| optional(ui, f, size, label.id));
-                settings_line(ui, label_w, tl!("Spacing"), |ui, _| number(ui, f, gap, "Spacing", false));
-            } else {
-                egui::Grid::new(count).spacing([8.0, 6.0]).show(ui, |ui| {
-                    ui.label(tl!("Number"));
-                    number(ui, f, count, "Number", true);
-                    ui.end_row();
-                    let size_label_resp = ui.label(size_label);
-                    optional(ui, f, size, size_label_resp.id);
-                    ui.end_row();
-                    ui.label(tl!("Spacing"));
-                    number(ui, f, gap, "Spacing", false);
-                    ui.end_row();
-                });
-            }
+            // A two-column caption/editor form: the fork's `Grid` cannot run under a mirrored
+            // body, so `form_grid` hand-draws the rows in reading order in a right-to-left UI.
+            let label_w = label_width(ui, &[tl!("Number"), size_label, tl!("Spacing")]);
+            crate::direction::form_grid(ui, count, [8.0, 6.0], label_w, |row| {
+                row(tl!("Number"), &mut |ui, _| number(ui, f, count, "Number", true));
+                row(size_label, &mut |ui, label| optional(ui, f, size, label));
+                row(tl!("Spacing"), &mut |ui, _| number(ui, f, gap, "Spacing", false));
+            });
         });
     });
 }
@@ -326,56 +343,32 @@ fn apply_preset(f: &mut Map<String, Value>, preset: &str) {
 
 fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let before: Map<String, Value> = f.iter().filter(|(key, _)| !key.starts_with("__preview")).map(|(k, v)| (k.clone(), v.clone())).collect();
-    if crate::direction::is_rtl() {
-        // The fork's `Grid` is not ready for right-to-left layouts (its available width goes
-        // NaN), so the rows are drawn by hand in reading order.
+    // A two-column caption/editor form: the fork's `Grid` cannot run under a mirrored body, so
+    // `form_grid` hand-draws the rows in reading order in a right-to-left UI.
+    let label_w = label_width(ui, &[tl!("Preset:"), tl!("Target:")]);
+    crate::direction::form_grid(ui, "guide-header", [8.0, 6.0], label_w, |row| {
         let mut preset = f.get("__preset").and_then(Value::as_str).unwrap_or("custom").to_string();
+        row(tl!("Preset:"), &mut |ui, _| {
+            if widgets::dropdown(ui, "guide-preset", tl!("Preset:"), &mut preset, &presets(), 222.0) {
+                f.insert("__preset".into(), json!(preset));
+                apply_preset(f, &preset);
+            }
+        });
         let mut target = f.get("target").and_then(Value::as_str).unwrap_or("document").to_string();
         let mut options = vec![("document".to_string(), "Document")];
         if !photocraft_engine::guide_layout::selected_artboards(&app.session).is_empty() {
             options.push(("selectedArtboards".into(), "Selected Artboards"));
         }
-        let label_w = label_width(ui, &[tl!("Preset:"), tl!("Target:")]);
-        // The hand-drawn rows keep the grid's 6 pt row spacing; the rest of the body does not.
-        let row_gap = ui.spacing().item_spacing.y;
-        ui.spacing_mut().item_spacing.y = 6.0;
-        settings_line(ui, label_w, tl!("Preset:"), |ui, _| {
-            if widgets::dropdown(ui, "guide-preset", tl!("Preset:"), &mut preset, &presets(), 222.0) {
-                f.insert("__preset".into(), json!(preset));
-                apply_preset(f, &preset);
-            }
-        });
-        settings_line(ui, label_w, tl!("Target:"), |ui, _| {
+        row(tl!("Target:"), &mut |ui, _| {
             if widgets::dropdown(ui, "guide-target", tl!("Target"), &mut target, &options, 222.0) {
                 f.insert("target".into(), json!(target));
             }
         });
-        ui.spacing_mut().item_spacing.y = row_gap;
-    } else {
-        egui::Grid::new("guide-header").spacing([8.0, 6.0]).show(ui, |ui| {
-            ui.label(tl!("Preset:"));
-            let mut preset = f.get("__preset").and_then(Value::as_str).unwrap_or("custom").to_string();
-            if widgets::dropdown(ui, "guide-preset", tl!("Preset:"), &mut preset, &presets(), 222.0) {
-                f.insert("__preset".into(), json!(preset));
-                apply_preset(f, &preset);
-            }
-            ui.end_row();
-            ui.label(tl!("Target:"));
-            let mut target = f.get("target").and_then(Value::as_str).unwrap_or("document").to_string();
-            let mut options = vec![("document".to_string(), "Document")];
-            if !photocraft_engine::guide_layout::selected_artboards(&app.session).is_empty() {
-                options.push(("selectedArtboards".into(), "Selected Artboards"));
-            }
-            if widgets::dropdown(ui, "guide-target", tl!("Target"), &mut target, &options, 222.0) {
-                f.insert("target".into(), json!(target));
-            }
-            ui.end_row();
-        });
-    }
+    });
     ui.add_space(10.0);
     group(ui, |ui| {
         ui.label(tl!("Color"));
-        ui.horizontal(|ui| {
+        let color_row = |ui: &mut egui::Ui| {
             ui.label(tl!("Color:"));
             let mut color = f.get("color").and_then(Value::as_str).unwrap_or("#4affff").to_string();
             let colors = color_options(&color);
@@ -386,14 +379,40 @@ fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
             if widgets::color_swatch_button(ui, shown, tl!("Guide color")).clicked() {
                 crate::color_picker_ui::request(f, tl!("Guide color"));
             }
-        });
+        };
+        if crate::direction::is_rtl() {
+            // A fixed width, mirrored: a plain `horizontal` allocates the fork's ballooned
+            // available width in a right-to-left scope and would widen the whole dialog.
+            let w = label_width(ui, &[tl!("Color:")]) + ui.spacing().item_spacing.x + 174.0 + ui.spacing().item_spacing.x + 24.0;
+            ui.allocate_ui_with_layout(egui::vec2(w, ui.spacing().interact_size.y), egui::Layout::right_to_left(egui::Align::Min), color_row);
+        } else {
+            ui.horizontal(color_row);
+        }
     });
     ui.add_space(10.0);
-    ui.horizontal_top(|ui| {
-        axis(ui, f, false);
-        ui.add_space(4.0);
-        axis(ui, f, true);
-    });
+    if crate::direction::is_rtl() {
+        // A mirrored row scope capped to its natural width, anchored at the column's
+        // reading-start edge: an uncapped scope balloons its min_rect to the full column
+        // width in this fork, which would push the action rail off its mirror axis. Each
+        // group box gets the width it needs, so the pair matches the left-to-right row.
+        let w = group_w(ui, false) + 4.0 + group_w(ui, true);
+        let right = ui.max_rect().right();
+        let top = ui.next_widget_position().y;
+        let row_rect = egui::Rect::from_min_size(egui::pos2(right - w, top), egui::vec2(w, ui.available_height()));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
+            let w = group_w(ui, false);
+            ui.allocate_ui_with_layout(egui::vec2(w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| axis(ui, f, false));
+            ui.add_space(4.0);
+            let w = group_w(ui, true);
+            ui.allocate_ui_with_layout(egui::vec2(w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| axis(ui, f, true));
+        });
+    } else {
+        ui.horizontal_top(|ui| {
+            axis(ui, f, false);
+            ui.add_space(4.0);
+            axis(ui, f, true);
+        });
+    }
     ui.add_space(10.0);
     group(ui, |ui| {
         let enabled = check(ui, f, "__marginEnabled", tl!("Margin"), true);
@@ -409,12 +428,16 @@ fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
             };
             let labels = [tl!("Top:"), tl!("Left:"), tl!("Bottom:"), tl!("Right:")];
             if crate::direction::is_rtl() {
-                // Same row as left-to-right, in reading order: each pair keeps its natural
-                // width, so the row never balloons past the column (the fork's RTL
-                // available-width read inside the mirrored group comes back huge).
-                ui.with_layout(crate::direction::row(), |ui| {
+                // Same row as left-to-right, in reading order. Each pair gets an explicit width:
+                // a bare `ui.vertical` scope in a right-to-left row is seeded at the row's full
+                // remaining width by the fork, which would balloon the group past the column.
+                let label_refs: Vec<&str> = labels.iter().map(|s| &**s).collect();
+                let pair_w = label_width(ui, &label_refs).max(64.0);
+                let w = 4.0 * pair_w + 3.0 * ui.spacing().item_spacing.x;
+                let h = 2.0 * ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+                ui.allocate_ui_with_layout(egui::vec2(w, h), egui::Layout::right_to_left(egui::Align::Min), |ui| {
                     for (value, label) in margins.iter_mut().zip(labels) {
-                        ui.vertical(|ui| pair(ui, value, label));
+                        ui.allocate_ui_with_layout(egui::vec2(pair_w, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| pair(ui, value, label));
                     }
                 });
             } else {
@@ -440,6 +463,9 @@ fn main_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
     }
 }
 
+/// The action rail's width: the OK / Cancel buttons are this wide.
+const RAIL_W: f32 = 96.0;
+
 /// Own the action rail as well as the body, so OK/Cancel/Preview follow Photoshop's arrangement.
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, interactive: bool) -> Option<bool> {
     let before = (params(f), on(f, "__preview", true), f.get("color").cloned());
@@ -447,26 +473,64 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
     // The host keeps its `top_down(Align::Min)` layout, so the body mirrors itself: in a
     // right-to-left UI its blocks sit at the reading start and its rows read right to left.
     ui.with_layout(crate::direction::body_layout(), |ui| {
-        ui.horizontal_top(|ui| {
+        let row = |ui: &mut egui::Ui| {
             // A vertical scope, not `ui.vertical`: the latter pins `Align::Min`, which keeps the
-            // rows inside it left-to-right even in a right-to-left UI.
+            // rows inside it left-to-right even in a right-to-left UI. The column keeps its
+            // natural width in both directions — a wider right-to-left column would push the
+            // action rail off its mirror axis.
             column(ui, |ui| {
                 main_fields(app, ui, f);
+                ui.min_rect()
             });
             ui.add_space(12.0);
             column(ui, |ui| {
                 let valid = validate(app, f).is_ok();
-                if ui.add_enabled_ui(valid, |ui| widgets::primary_button(ui, tl!("OK"), 96.0)).inner.clicked() {
+                if ui.add_enabled_ui(valid, |ui| widgets::primary_button(ui, tl!("OK"), RAIL_W)).inner.clicked() {
                     outcome = Some(true);
                 }
                 ui.add_space(4.0);
-                if widgets::secondary_button(ui, tl!("Cancel"), 96.0).clicked() {
+                if widgets::secondary_button(ui, tl!("Cancel"), RAIL_W).clicked() {
                     outcome = Some(false);
                 }
                 ui.add_space(6.0);
                 check(ui, f, "__preview", tl!("Preview"), true);
+                ui.min_rect()
             });
-        });
+            ui.min_rect()
+        };
+        if crate::direction::is_rtl() {
+            // A natural-width mirrored row anchored at the body's right (reading-start) edge:
+            // the fields column keeps its left-to-right width and the rail sits at the
+            // reading end exactly where the left-to-right row mirrors it.
+            let fields_w = fields_w(ui);
+            let w = fields_w + 12.0 + ui.spacing().item_spacing.x + RAIL_W;
+            let right = ui.max_rect().right();
+            let top = ui.next_widget_position().y;
+            let row_rect = egui::Rect::from_min_size(egui::pos2(right - w, top), egui::vec2(w, ui.available_height()));
+            ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect).layout(egui::Layout::right_to_left(egui::Align::Min)), |ui| {
+                // Cross `Max`: the rows right-align inside the width-capped column, so each row's
+                // reading-start edge sits at the column's right edge, mirroring the left-to-right
+                // column's left edge. `Min` would left-align them and leave slack at the reading start.
+                ui.allocate_ui_with_layout(egui::vec2(fields_w, 0.0), egui::Layout::top_down(egui::Align::Max), |ui| {
+                    main_fields(app, ui, f);
+                });
+                ui.add_space(12.0);
+                ui.allocate_ui_with_layout(egui::vec2(RAIL_W, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    let valid = validate(app, f).is_ok();
+                    if ui.add_enabled_ui(valid, |ui| widgets::primary_button(ui, tl!("OK"), RAIL_W)).inner.clicked() {
+                        outcome = Some(true);
+                    }
+                    ui.add_space(4.0);
+                    if widgets::secondary_button(ui, tl!("Cancel"), RAIL_W).clicked() {
+                        outcome = Some(false);
+                    }
+                    ui.add_space(6.0);
+                    check(ui, f, "__preview", tl!("Preview"), true);
+                });
+            });
+        } else {
+            ui.horizontal_top(row);
+        }
         match calculate(app, f) {
             Ok(guides) => {
                 f.insert("__previewGuides".into(), json!(guides));
