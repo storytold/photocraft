@@ -141,6 +141,26 @@ fn global_light_blending_options_scale_effects() {
 }
 
 #[test]
+fn scale_effects_scales_the_bevel_texture_with_the_pattern_overlay() {
+    let mut s = session(8, "rgb");
+    paint(&mut s, disc);
+    s.execute("layer.layerStyle.patternOverlay", json!({"scale": 100})).unwrap();
+    s.execute("layer.layerStyle.bevelEmboss", json!({"texture": "Bubbles", "textureScale": 100})).unwrap();
+    s.execute("layer.layerStyle.scaleEffects", json!({"scale": 50})).unwrap();
+    let fx = &active(&s).effects.items;
+    let overlay = fx.iter().find_map(|e| match e {
+        Effect::PatternOverlay { scale, .. } => Some(*scale),
+        _ => None,
+    });
+    let texture = fx.iter().find_map(|e| match e {
+        Effect::BevelEmboss(b) => b.texture.as_ref().map(|t| t.scale),
+        _ => None,
+    });
+    // Both patterns tile at half size, so a texture aligned with the overlay stays aligned.
+    assert_eq!((overlay, texture), (Some(0.5), Some(0.5)));
+}
+
+#[test]
 fn global_light_rejects_numbers_beyond_f32() {
     let mut s = session(8, "rgb");
     // In-range values still wrap into -180..=180 and clamp to 0..=90.
