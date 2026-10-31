@@ -47,6 +47,7 @@ impl PhotocraftApp {
             monitors: Default::default(),
             checker: None,
             drag: None,
+            drag_canvas: None,
             cancelled_vector_drag: false,
             move_blocked: false,
             tool_override: None,
