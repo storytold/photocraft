@@ -337,3 +337,15 @@ fn refused_edit_shows_the_error_and_typed_fields_in_the_dialog() {
     assert!(h.query_by_label("guide edits are denied").is_none());
     assert_eq!(guides(h.state()).1, vec![10.0, 20.0]);
 }
+
+/// #10440: a leading bare number gets the ruler unit after a Unicode minus (U+2212) as after "-",
+/// so "5.08 − 2.54" with centimetre rulers is 2.54 cm, not 2.54 px.
+#[test]
+fn the_ruler_unit_goes_on_a_bare_number_before_a_unicode_minus() {
+    let (mut app, ctx) = app("cm");
+    let d = open(&mut app, &ctx);
+    set(&mut app, d, "vertical", "5.08 − 2.54");
+    crate::dialogs::confirm(&mut app, d).unwrap();
+    let (_, vertical) = guides(&app);
+    assert!(vertical.len() == 1 && (vertical[0] - 100.0).abs() < 1e-6, "{vertical:?}");
+}

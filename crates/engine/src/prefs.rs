@@ -185,12 +185,13 @@ impl Unit {
     }
     /// A length typed as Photoshop's numeric fields take arithmetic (#10440): lengths and numbers
     /// joined by `+`, `-`, `*` and `/`, e.g. "100% / 3", "100% - 50px", "1in + 10", "2 * 50 px".
-    /// `*` and `/` bind tighter. A number without a unit added or subtracted takes the first
-    /// operand's unit (Photoshop: "1in + 10" is 11 in), or `default` when the first has none;
-    /// one multiplied or divided is a plain number. `to_px` converts a value in a unit. `None`
-    /// when the text isn't such an expression, multiplies two lengths, divides by a length or by
-    /// zero, or the result isn't finite.
+    /// `*` and `/` bind tighter, and `−` (U+2212) is a minus. A number without a unit added or
+    /// subtracted takes the first operand's unit (Photoshop: "1in + 10" is 11 in), or `default`
+    /// when the first has none; one multiplied or divided is a plain number. `to_px` converts a
+    /// value in a unit. `None` when the text isn't such an expression, multiplies two lengths,
+    /// divides by a length or by zero, or the result isn't finite.
     pub fn eval_length(text: &str, default: Unit, to_px: impl Fn(f64, Unit) -> f64) -> Option<f64> {
+        let text = text.replace('−', "-");
         // Tokens: operators, and operands (a number with an optional unit suffix).
         let mut ops = Vec::new();
         let mut operands: Vec<(f64, Option<Unit>)> = Vec::new();

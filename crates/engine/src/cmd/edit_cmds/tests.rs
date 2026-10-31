@@ -1318,6 +1318,17 @@ fn guide_positions_take_arithmetic() {
     }
 }
 
+/// The Unicode minus (U+2212, what some keyboards and pasted text give) is a minus, as in the
+/// numeric fields' own evaluator.
+#[test]
+fn guide_position_arithmetic_takes_the_unicode_minus() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 400, "resolution": 72})).unwrap();
+    for (text, px) in [("100% − 50px", 550.0), ("−50px + 100", 50.0), ("1in − −10", 792.0), ("−100", -100.0)] {
+        assert!((new_guide(&mut s, "vertical", json!(text)) - px).abs() < 1e-6, "{text}");
+    }
+}
+
 #[test]
 fn new_guides_keep_their_own_colour_through_moves_deletes_and_undo() {
     let mut s = Session::new();

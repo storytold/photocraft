@@ -214,13 +214,14 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 /// the engine to read (or refuse, keeping the dialog open). Custom… sends its "#rrggbb".
 pub fn params(app: &PhotocraftApp, f: &Map<String, Value>) -> Value {
     let orientation = f.get("orientation").and_then(Value::as_str).unwrap_or("horizontal");
-    let typed = f.get("position").and_then(Value::as_str).unwrap_or_default().trim();
-    let position = match Unit::parse_length(typed) {
-        Some((_, None)) => with_unit(typed, ruler_unit(app)),
-        Some(_) => typed.to_string(),
+    // A Unicode minus (U+2212) is a minus, as the engine reads it.
+    let typed = f.get("position").and_then(Value::as_str).unwrap_or_default().trim().replace('−', "-");
+    let position = match Unit::parse_length(&typed) {
+        Some((_, None)) => with_unit(&typed, ruler_unit(app)),
+        Some(_) => typed,
         // Arithmetic (#10440): a first number without a unit is in the ruler unit, as in
         // Photoshop ("300 / 2" is 150 px with pixel rulers); the engine evaluates the rest.
-        None => unit_on_first_number(typed, ruler_unit(app)),
+        None => unit_on_first_number(&typed, ruler_unit(app)),
     };
     let color = f.get("color").and_then(Value::as_str).filter(|c| is_color_name(c)).unwrap_or(DEFAULT_COLOR);
     let color = if color == CUSTOM { custom_color(f) } else { color.to_string() };
