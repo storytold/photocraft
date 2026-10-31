@@ -335,7 +335,7 @@ mod web_playback_tests {
         }));
         for (mode, count) in [("selected", 1), ("all", 2)] {
             h.state_mut().1.insert("slices".into(), json!(mode));
-            let mut p = web::web_params(&h.state().1).unwrap();
+            let mut p = web::web_params(&h.state().1, &h.state().0.session.active().unwrap().doc).unwrap();
             p["dir"] = json!(".");
             download_for_web(&mut h.state_mut().0, p).unwrap();
             let files = downloads.borrow();
@@ -420,10 +420,61 @@ mod web_playback_tests {
     fn save_for_web_selected_slices_need_a_selection() {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
-        for selected in [json!([]), json!([0]), json!([-1]), json!(["2"])] {
+        app.run("slice.new", json!({"rect": [0, 0, 16, 16], "name": "left"})).unwrap();
+        app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "right"})).unwrap();
+        app.services.file_dialog = Some(Box::new(|_, _, _| panic!("invalid selection must not open the picker")));
+        app.services.write = Some(Box::new(|_, _| panic!("invalid selection must not write files")));
+        for selected in [json!([]), json!([0]), json!([-1]), json!(["2"]), json!([1.5]), json!([999]), json!([1, 999])] {
             let fields = serde_json::from_value(json!({"slices": "selected", "__selectedSlices": selected})).unwrap();
             assert!(web_confirm(&mut app, &fields).is_err());
+            assert!(!app.file_dialog_open());
         }
+    }
+
+    /// Keyboard selection shares the preview's state and exports the chosen file.
+    #[test]
+    fn save_for_web_selects_slices_with_tab_and_space() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 16, 16], "name": "left"})).unwrap();
+        app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "right"})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.extend(
+            serde_json::from_value::<Map<String, Value>>(json!({"format": "png24", "__view": "original", "html": false, "slices": "selected"})).unwrap(),
+        );
+        let mut h = harness(app, fields);
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Slices").focus();
+        h.run_steps(2);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "01: left").is_focused());
+        h.key_press(egui::Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().1["__selectedSlices"], json!([1]));
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "02: right").is_focused());
+        h.key_press(egui::Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().1["__selectedSlices"], json!([1, 2]));
+        h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+        h.run_steps(2);
+        h.key_press(egui::Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().1["__selectedSlices"], json!([2]));
+        let downloads = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = downloads.clone();
+        h.state_mut().0.services.write = Some(Box::new(move |path, bytes| {
+            captured.borrow_mut().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        let mut p = web::web_params(&h.state().1, &h.state().0.session.active().unwrap().doc).unwrap();
+        p["dir"] = json!(".");
+        download_for_web(&mut h.state_mut().0, p).unwrap();
+        let files = downloads.borrow();
+        assert_eq!(files.len(), 1);
+        assert!(files[0].0.ends_with("right.png"));
     }
 
     /// WebP (#6391): Quality until Lossless is ticked; 4-Up halves a lossy quality like JPEG's.

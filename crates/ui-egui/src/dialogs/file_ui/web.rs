@@ -417,7 +417,8 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                 web_size(ui, f, &doc);
                 if !doc.slices.is_empty() {
                     let revision = app.session.active().map_or(0, |st| st.revision);
-                    let nslices = web_preview::slice_layout(ui, &doc, revision).len();
+                    let slices = web_preview::slice_layout(ui, &doc, revision);
+                    let nslices = slices.len();
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(crate::i18n::trn(crate::i18n::current(), nslices as u64, "{n} slice", "{n} slices")).color(t.text_dim));
                     check(ui, f, "html", tl!("Save HTML and Images"), true);
@@ -431,6 +432,28 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                         150.0,
                     );
                     ui.add(egui::Label::new(egui::RichText::new(tl!("Click slices in the preview. Shift-click selects more.")).weak()).wrap());
+                    if s(f, "slices", "all") == "selected" {
+                        ui.label(tl!("Select slices:"));
+                        let mut selected: Vec<usize> = f
+                            .get("__selectedSlices")
+                            .and_then(Value::as_array)
+                            .into_iter()
+                            .flatten()
+                            .filter_map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()))
+                            .collect();
+                        egui::ScrollArea::vertical().id_salt("web-slice-selection").max_height(120.0).show(ui, |ui| {
+                            for slice in slices.iter() {
+                                let mut picked = selected.contains(&slice.number);
+                                if crate::widgets::checkbox(ui, &mut picked, &format!("{:02}: {}", slice.number, slice.name)).changed() {
+                                    selected.retain(|n| *n != slice.number);
+                                    if picked {
+                                        selected.push(slice.number);
+                                    }
+                                    f.insert("__selectedSlices".into(), json!(selected));
+                                }
+                            }
+                        });
+                    }
                 }
             });
         });
@@ -533,12 +556,13 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
         }
         Ok(())
     };
-    let mut p = web_params(f)?;
+    let doc = app.session.active().ok_or("no document")?.doc.clone();
+    let mut p = web_params(f, &doc)?;
     authorize(&p)?;
     // Confirmation may follow a field edit without an intervening frame (Enter or automation).
     let mut fields = f.clone();
     web_preview::prepare_table(app, &mut fields)?;
-    let prepared = web_params(&fields)?;
+    let prepared = web_params(&fields, &doc)?;
     if prepared != p {
         // The policy must also approve the actual palette-bearing export parameters.
         authorize(&prepared)?;
@@ -547,7 +571,6 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
     if p.get("path").is_some() || p.get("dir").is_some() {
         return save_for_web(app, p);
     }
-    let doc = app.session.active().ok_or("no document")?.doc.clone();
     let has_slices = !doc.slices.is_empty();
     let html = b(f, "html", true);
     let st = WebSettings::from_params(&p, "file.export.saveForWebLegacy").map_err(|e| e.to_string())?;
@@ -566,13 +589,14 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
     })
 }
 
-/// Translate the dialog's selected-slice mode to the command's existing numbered filter.
-pub(super) fn web_params(fields: &Map<String, Value>) -> Result<Value, String> {
+/// Validate selected numbers against the document and translate them to the export filter.
+pub(super) fn web_params(fields: &Map<String, Value>, doc: &photocraft_doc::Document) -> Result<Value, String> {
     let mut p = params(fields);
     if p["slices"] == "selected" {
         let numbers = fields.get("__selectedSlices").and_then(Value::as_array).filter(|numbers| !numbers.is_empty());
-        let numbers = numbers.ok_or("Select one or more slices in the preview")?;
-        if numbers.iter().any(|n| n.as_u64().is_none_or(|n| n == 0)) {
+        let numbers = numbers.ok_or("Select one or more slices")?;
+        let slices = photocraft_doc::slices::resolve(doc);
+        if numbers.iter().any(|n| n.as_u64().is_none_or(|n| !slices.iter().any(|slice| u64::try_from(slice.number).ok() == Some(n)))) {
             return Err("Invalid selected slice number".into());
         }
         p["slices"] = json!("all");
