@@ -343,8 +343,8 @@ fn profile_tone_curve(v: &[f64]) -> Option<Vec<[f32; 2]>> {
 /// specification asks for a cubic spline without naming end conditions) through `knots`, which
 /// have strictly increasing inputs: 1025 points spaced evenly in the square root of the input,
 /// so the shadows, where tone curves are steep, get most of them, plus the knots themselves at
-/// their own outputs. Outputs are clamped to 0–1 and made non-decreasing, since a spline can
-/// overshoot between knots.
+/// their own outputs. A spline can overshoot between knots, so each sample is kept between its
+/// two knots' outputs (and in 0–1, non-decreasing).
 fn spline_resampled(knots: &[[f32; 2]]) -> Vec<[f32; 2]> {
     let n = knots.len();
     let x: Vec<f64> = knots.iter().map(|k| f64::from(k[0])).collect();
@@ -369,7 +369,10 @@ fn spline_resampled(knots: &[[f32; 2]]) -> Vec<[f32; 2]> {
         let i = x.partition_point(|&k| k <= v).clamp(1, n - 1);
         let (x0, x1, h) = (x[i - 1], x[i], x[i] - x[i - 1]);
         let (a, b) = ((x1 - v) / h, (v - x0) / h);
-        a * y[i - 1] + b * y[i] + ((a * a * a - a) * m[i - 1] + (b * b * b - b) * m[i]) * h * h / 6.0
+        let s = a * y[i - 1] + b * y[i] + ((a * a * a - a) * m[i - 1] + (b * b * b - b) * m[i]) * h * h / 6.0;
+        // A spline overshoots between steep and flat knots (a shoulder): keep each sample between
+        // its two knots' outputs, so no knot is raised and the curve stays non-decreasing.
+        s.clamp(y[i - 1].min(y[i]), y[i - 1].max(y[i]))
     };
     const SAMPLES: usize = 1025;
     let mut xs: Vec<f64> = (0..SAMPLES).map(|i| (i as f64 / (SAMPLES - 1) as f64).powi(2)).collect();

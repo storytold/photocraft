@@ -1235,4 +1235,23 @@ fn profile_tone_curve_is_interpolated_with_a_cubic_spline() {
     let s = sensor(&spec.build());
     assert!(s.tone_curve.iter().all(|p| (0.0..=1.0).contains(&p[1])));
     assert!(s.tone_curve.windows(2).all(|w| w[1][1] >= w[0][1]));
+    // A shoulder (steep rise, then almost flat): the spline overshoots between 0.05 and 0.3
+    // to about 0.71, above the next knot's 0.45. Every file point keeps its own output, and
+    // samples between two knots stay between their outputs.
+    let spec = DngSpec { ifd0_extra: vec![(50940, Val::Double(vec![0.0, 0.0, 0.05, 0.4, 0.3, 0.45, 1.0, 1.0]))], ..DngSpec::cfa(8, 8, vec![500; 64]) };
+    let s = sensor(&spec.build());
+    for knot in [[0.0, 0.0], [0.05, 0.4], [0.3, 0.45], [1.0, 1.0]] {
+        assert!(s.tone_curve.contains(&knot), "{knot:?} not kept");
+    }
+    for p in &s.tone_curve {
+        let (lo, hi) = if p[0] <= 0.05 {
+            (0.0, 0.4)
+        } else if p[0] <= 0.3 {
+            (0.4, 0.45)
+        } else {
+            (0.45, 1.0)
+        };
+        assert!((lo..=hi).contains(&p[1]), "{p:?} outside its knots' outputs");
+    }
+    assert!(s.tone_curve.windows(2).all(|w| w[1][1] >= w[0][1]));
 }
