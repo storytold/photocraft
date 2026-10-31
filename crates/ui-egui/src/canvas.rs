@@ -2295,6 +2295,47 @@ mod rotation_preview_isolation_tests {
         assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
     }
 
+    /// Image › Apply Image previews on the canvas before OK, as its command applies (#5772): its
+    /// form has a Preview checkbox, and Cancel leaves the document as it was.
+    #[test]
+    fn apply_image_previews_on_the_canvas() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.session
+            .edit("Fixture", |doc, _| {
+                let s = doc.layers[0].surface_mut().unwrap();
+                for x in 0..32 {
+                    s.fill_rect(photocraft_geom::Rect::new(x, 0, x + 1, 32), &[x as f32 / 31.0, 0.5, 1.0 - x as f32 / 31.0, 1.0]);
+                }
+                Ok(())
+            })
+            .unwrap();
+        let before = app.session.active().unwrap().doc.clone();
+        let ctx = egui::Context::default();
+        let opened = crate::view_cmds::invoke(&mut app, &ctx, "image.applyImage", &json!({})).expect("ours").unwrap();
+        let dialog = opened["dialog"].as_u64().expect("the Apply Image dialog");
+        let fields = &mut app.ui.dialogs.last_mut().unwrap().fields;
+        assert_eq!(fields.get("__preview"), Some(&json!(true)), "Apply Image has a Preview checkbox, on");
+        fields.insert("blending".into(), json!("difference"));
+        fields.insert("opacity".into(), json!(60.0));
+        let params = crate::filter_dialog::params_of(fields);
+        ensure_filter_preview(&mut app, 0, &ctx).expect("a canvas preview");
+        let shown = app.filter_preview.as_ref().and_then(|p| p.result.clone()).expect("the preview's document");
+        let mut s = photocraft_engine::Session::new();
+        s.add_document((*before).clone(), None);
+        s.execute("image.applyImage", params).unwrap();
+        let (want, got) = (photocraft_compose::flatten(&s.active().unwrap().doc), photocraft_compose::flatten(&shown));
+        assert_eq!(want.px, got.px, "the preview is the command's result");
+        assert_ne!(got.px, photocraft_compose::flatten(&before).px, "and differs from the document");
+        assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc), "nothing applied before OK");
+        app.ui.dialogs.last_mut().unwrap().fields.insert("__preview".into(), json!(false));
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none(), "Preview off shows the document");
+        crate::dialogs::cancel(&mut app, dialog).unwrap();
+        assert!(ensure_filter_preview(&mut app, 0, &ctx).is_none(), "Cancel ends the preview");
+        assert!(std::sync::Arc::ptr_eq(&before, &app.session.active().unwrap().doc));
+    }
+
     fn assert_filter_preview_target(target: photocraft_engine::channel_cmds::ChannelTarget) {
         for depth in [8, 16, 32] {
             let mut session = photocraft_engine::Session::new();

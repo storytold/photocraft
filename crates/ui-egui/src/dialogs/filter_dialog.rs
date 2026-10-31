@@ -1083,6 +1083,15 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 }
 
+/// Whether a dialog with fields `f` previews its command on the canvas: the filter dialogs, and a
+/// `__form` dialog that opts in with `__canvasPreview` (Image › Apply Image, as in Photoshop).
+pub(crate) fn previews_on_canvas(f: &Map<String, Value>) -> bool {
+    f.contains_key("__filter") || f.get(CANVAS_PREVIEW).and_then(Value::as_bool) == Some(true)
+}
+
+/// A `__form` dialog's opt-in to the canvas preview ([`previews_on_canvas`]).
+pub(crate) const CANVAS_PREVIEW: &str = "__canvasPreview";
+
 /// A new seed for a dialog's Random button: 0..=30000 (what the field takes), never `current`.
 /// `entropy` varies per click (the input time); the process's random hasher keys mix it.
 fn random_seed(entropy: u64, current: i64) -> i64 {

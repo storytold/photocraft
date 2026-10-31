@@ -1354,6 +1354,233 @@ fn lens_blur_previews_on_the_gpu() {
     assert!(worst <= 1.5 / 255.0, "the lens-blurred proxy is {:.2}/255 off the CPU's proxy preview", worst * 255.0);
 }
 
+/// Phase 4: Apply Image as a layer operator (built as the preview builds it, `blur_for`) against
+/// the engine's command, both composited (GPU against CPU): blend modes, Add and Subtract with
+/// scale and offset, opacity, a mask channel, a feathered selection, Preserve Transparency, an
+/// inverted and a single-channel source, a source layer; 8/16/32-bit and Grayscale.
+#[test]
+fn apply_image_operator_matches_the_command() {
+    use photocraft_color::{ColorMode, PixelFormat, SampleType};
+    use photocraft_doc::{AlphaChannel, Document, Layer};
+    use photocraft_geom::{Rect, Size};
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (device, queue) = (&rs.device, &rs.queue);
+    let Ok(mut comp) = photocraft_gpu::Compositor::try_new_with_format(device, eframe::wgpu::TextureFormat::Rgba32Float) else {
+        assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "no compositor");
+        return;
+    };
+    if !comp.operators_supported(device) {
+        assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "no operators");
+        return;
+    }
+    let rnd = |seed: u32, i: u32| {
+        let mut h = seed.wrapping_mul(0x9e37_79b9) ^ i.wrapping_mul(0x85eb_ca6b);
+        h ^= h >> 13;
+        h = h.wrapping_mul(0xc2b2_ae35);
+        h ^= h >> 16;
+        (h & 0xffff) as f32 / 65535.0
+    };
+    // A noise layer over `rect`, its alpha at least `min_alpha`.
+    let noise = |name: &str, fmt: PixelFormat, rect: Rect, seed: u32, min_alpha: f32| {
+        let mut l = Layer::raster(name, fmt);
+        let ch = fmt.channels();
+        let n = rect.width() as usize * rect.height() as usize;
+        let data: Vec<f32> = (0..n * ch)
+            .map(|i| {
+                let v = rnd(seed, i as u32);
+                if fmt.alpha && i % ch == ch - 1 { min_alpha + (1.0 - min_alpha) * v } else { v }
+            })
+            .collect();
+        l.surface_mut().unwrap().write_region(rect, &data);
+        l
+    };
+    let doc_of = |mode: ColorMode, depth: SampleType| {
+        let fmt = PixelFormat::new(mode, depth, true);
+        let mut d = Document::new("apply", Size::new(240, 160), mode, depth);
+        d.layers.push(noise("bg", fmt, Rect::new(0, 0, 240, 160), 1, 1.0));
+        let target = noise("target", fmt, Rect::new(30, 20, 210, 140), 2, 0.0);
+        let id = target.id;
+        d.layers.push(target);
+        d.layers.push(noise("other", fmt, Rect::new(0, 0, 240, 160), 3, 0.5));
+        let mut m = photocraft_raster::Surface::new(PixelFormat::GRAY8);
+        m.write_region(d.bounds(), &(0..240 * 160).map(|i| (i % 240) as f32 / 239.0).collect::<Vec<_>>());
+        d.channels.push(AlphaChannel::new("Ramp", m));
+        (d, id)
+    };
+    let feathered = || {
+        let mut s = photocraft_raster::Surface::new(PixelFormat::GRAY8);
+        let data: Vec<f32> = (0..240 * 160)
+            .map(|i| {
+                let (x, y) = ((i % 240) as f32, (i / 240) as f32);
+                (1.5 - (((x - 150.0) / 60.0).powi(2) + ((y - 80.0) / 50.0).powi(2)).sqrt()).clamp(0.0, 1.0)
+            })
+            .collect();
+        s.write_region(Rect::new(0, 0, 240, 160), &data);
+        s
+    };
+    let cases = [
+        json!({"blending": "multiply"}),
+        json!({"blending": "screen", "opacity": 60}),
+        json!({"blending": "overlay", "sourceInvert": true}),
+        json!({"blending": "softLight", "maskChannel": "Ramp"}),
+        json!({"blending": "colorDodge", "sourceLayer": "other"}),
+        json!({"blending": "colorBurn", "preserveTransparency": true}),
+        json!({"blending": "difference", "sourceChannel": "Green", "opacity": 75}),
+        json!({"blending": "add", "scale": 1.5, "offset": 20}),
+        json!({"blending": "subtract", "scale": 1.2, "offset": -30, "maskChannel": "Ramp", "maskInvert": true}),
+        json!({"blending": "linearBurn", "sourceChannel": "Ramp"}),
+        json!({"blending": "hardLight", "sourceLayer": "other", "sourceChannel": "transparency", "preserveTransparency": true, "opacity": 50}),
+    ];
+    let mut failures = Vec::new();
+    for (mode, depth) in
+        [(ColorMode::Rgb, SampleType::U8), (ColorMode::Rgb, SampleType::U16), (ColorMode::Rgb, SampleType::F32), (ColorMode::Grayscale, SampleType::U8)]
+    {
+        for params in &cases {
+            // Grayscale has no Green.
+            if mode == ColorMode::Grayscale && params.get("sourceChannel") == Some(&json!("Green")) {
+                continue;
+            }
+            for selection in [false, true] {
+                let (mut doc, id) = doc_of(mode, depth);
+                if selection {
+                    doc.selection = Some(feathered());
+                }
+                let what = format!("{mode:?} {depth:?} {params}{}", if selection { ", selection" } else { "" });
+                let doc = std::sync::Arc::new(doc);
+                let mut s = photocraft_engine::Session::new();
+                s.add_document((*doc).clone(), None);
+                s.select_layer(id).unwrap();
+                if let Err(e) = s.execute(APPLY_IMAGE, params.clone()) {
+                    failures.push(format!("{what}: the command failed: {e}"));
+                    continue;
+                }
+                let rect = doc.bounds();
+                let cpu = photocraft_compose::render(&s.active().unwrap().doc, rect);
+                let measured = Measured::of(&doc, id, APPLY_IMAGE, OperatorTarget::Content).unwrap();
+                let apply = apply_inputs(&doc, id, params).and_then(|i| apply_params(params, i)).map(std::sync::Arc::new);
+                let Some((blur, _)) = blur_for(&doc, id, params, None, measured, Inputs { apply, ..Default::default() }) else {
+                    failures.push(format!("{what}: no operator"));
+                    continue;
+                };
+                let op = LayerOperator { layer: id, target: OperatorTarget::Content, program: std::sync::Arc::new(blur) };
+                comp.set_operators(doc.id, vec![op]);
+                let out = match photocraft_gpu::render_to_vec_stats(&mut comp, device, queue, &doc, rect) {
+                    Ok((out, _)) => out,
+                    Err(e) => {
+                        failures.push(format!("{what}: {e}"));
+                        continue;
+                    }
+                };
+                comp.clear_operators(doc.id);
+                let tol = if depth == SampleType::U8 { 1.5 / 255.0 } else { 1.0 / 255.0 };
+                let worst = cpu
+                    .px
+                    .iter()
+                    .zip(&out)
+                    .enumerate()
+                    .map(|(i, (c, g))| ((0..4).map(|k| (c[k] * c[3] - g[k] * g[3]).abs()).fold(0.0f32, f32::max), i))
+                    .fold((0.0, 0), |a, b| if b.0 > a.0 { b } else { a });
+                if worst.0 > tol {
+                    let w = rect.width() as usize;
+                    failures.push(format!(
+                        "{what}: {:.2}/255 off at ({}, {}): cpu {:?} gpu {:?}",
+                        worst.0 * 255.0,
+                        worst.1 % w,
+                        worst.1 / w,
+                        cpu.px[worst.1],
+                        out[worst.1]
+                    ));
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// Phase 4: Image › Apply Image previews on the GPU, at 100 % and zoomed out, matching the CPU
+/// preview; its source and weight are made once per source and mask, not per settings change.
+#[test]
+fn apply_image_previews_on_the_gpu() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, blur) = harness_sized(rs, 4.0, true, [3000, 2400]);
+    if !gpu_path(&h) {
+        return;
+    }
+    crate::dialogs::cancel(h.state_mut(), blur).unwrap();
+    let ctx = h.ctx.clone();
+    let opened = crate::view_cmds::invoke(h.state_mut(), &ctx, APPLY_IMAGE, &json!({})).expect("ours").unwrap();
+    let id = opened["dialog"].as_u64().unwrap();
+    let set = |h: &mut Harness<'static, PhotocraftApp>, params: &Value| {
+        let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == id).unwrap();
+        for (k, v) in params.as_object().unwrap() {
+            d.fields.insert(k.clone(), v.clone());
+        }
+    };
+    // One input build at a time: a source change while a build runs waits for it (each holds the
+    // canvas's planes), rather than starting a second one beside it.
+    on_gpu(h.state_mut(), 0);
+    let pending = |h: &Harness<'static, PhotocraftApp>| h.state().filter_gpu_preview.as_ref().and_then(|p| p.apply_pending.as_ref().map(|(k, _)| k.clone()));
+    let first = pending(&h).expect("the first build runs off the UI thread");
+    set(&mut h, &json!({"sourceInvert": true}));
+    on_gpu(h.state_mut(), 0);
+    assert_eq!(pending(&h), Some(first), "the second waits for the first");
+    set(&mut h, &json!({"sourceInvert": false}));
+    let cases = [
+        json!({"blending": "difference", "opacity": 70.0}),
+        json!({"blending": "screen", "sourceInvert": true}),
+        json!({"blending": "add", "scale": 1.4, "offset": 10}),
+    ];
+    let mut sources = Vec::new();
+    for params in &cases {
+        set(&mut h, params);
+        settle(&mut h, |app| on_gpu(app, 0));
+        assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "{params}: the CPU preview stands aside");
+        let what = format!("Apply Image {params}");
+        let fields = crate::filter_dialog::params_of(&h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields);
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, APPLY_IMAGE, &fields, 1).unwrap())
+        };
+        let plain = h.state().session.active().unwrap().doc.clone();
+        let shown = probes_named(&mut h, Some(&what));
+        let (mut checked, mut differs) = (0, 0);
+        for (p, px) in &shown {
+            let (want, alpha) = expected_in(h.state(), &oracle, *p);
+            if alpha < 0.999 {
+                continue;
+            }
+            assert!(within(&want, *px), "{what}: at {p:?} the canvas shows {px:?}, the CPU {want:?}");
+            checked += 1;
+            differs += usize::from(!within(&expected_around(h.state(), &plain, *p, 0).0, *px));
+        }
+        assert!(checked >= 40 && differs >= 10, "{what}: {checked} probes checked, {differs} differ from the image");
+        let p = h.state().filter_gpu_preview.as_ref().unwrap();
+        sources.push(p.applies.iter().map(|(_, (source, _))| std::sync::Arc::as_ptr(source) as usize).collect::<Vec<_>>());
+    }
+    // The source is made once per source: the inverted one replaced the first, and Add (still
+    // inverted: the fields stay) kept it.
+    assert!(sources.iter().all(|s| s.len() == 1), "one source at a time: {sources:?}");
+    assert!(sources[0] != sources[1] && sources[1] == sources[2], "{sources:?}");
+    // Zoomed out: the proxy, against the CPU's proxy preview.
+    h.state_mut().ui.views[0].zoom = 0.25;
+    settle(&mut h, |app| app.filter_gpu_preview.as_ref().is_some_and(|p| p.proxy.as_ref().is_some_and(|g| g.drawn.is_some())));
+    assert!(on_gpu(h.state_mut(), 0), "zoomed out on the GPU");
+    let (k, key, size) = gpu_proxy(h.state_mut(), 0).expect("the proxy");
+    assert_eq!(k, 2);
+    let fields = crate::filter_dialog::params_of(&h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields);
+    let oracle = {
+        let st = h.state().session.active().unwrap();
+        crate::filter_dialog::preview_document(&st.doc, st.active_layer, APPLY_IMAGE, &fields, 2).unwrap()
+    };
+    let (_, tsize, texels) = h.state().gpu.as_ref().unwrap().read_texels(key).expect("the proxy texture");
+    assert_eq!(tsize, size);
+    let cpu = photocraft_compose::flatten(&oracle);
+    let worst = cpu.px.iter().zip(&texels).map(|(c, g)| (0..3).map(|i| (c[i] * c[3] - g[i]).abs()).fold(0.0f32, f32::max)).fold(0.0, f32::max);
+    assert!(worst <= 1.5 / 255.0, "the applied proxy is {:.2}/255 off the CPU's proxy preview", worst * 255.0);
+}
+
 /// The canvas budget shrinking mid-session (the canvas then draws on the CPU, which can't show the
 /// operator): the session fails over to the CPU preview instead of hiding it, with its operator
 /// cleared (nothing stale for the canvas to draw once it fits again), and is back on the GPU when

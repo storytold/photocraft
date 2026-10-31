@@ -57,6 +57,10 @@ pub const DISPLACE: &str = "filter.distort.displace";
 /// (the layer mask or an alpha channel) a second input.
 pub const LENS_BLUR: &str = "filter.blur.lensBlur";
 
+/// Image › Apply Image: a point operation blending a source onto the layer (`SeparableBlur::Apply`),
+/// the source and its weight (the mask times the selection) its other inputs.
+pub const APPLY_IMAGE: &str = "image.applyImage";
+
 /// The distort filters that are a mapping (`photocraft_algo::separable::Warp`).
 pub const DISTORTS: [&str; 8] = [
     "filter.distort.twirl",
@@ -70,7 +74,7 @@ pub const DISTORTS: [&str; 8] = [
 ];
 
 /// The filters this path previews.
-pub const COMMANDS: [&str; 17] = [
+pub const COMMANDS: [&str; 18] = [
     COMMAND,
     UNSHARP,
     HIGH_PASS,
@@ -88,6 +92,7 @@ pub const COMMANDS: [&str; 17] = [
     DISTORTS[6],
     DISTORTS[7],
     LENS_BLUR,
+    APPLY_IMAGE,
 ];
 
 /// Displace's map as the GPU uploads it: straight RGBA texels and their size.
@@ -98,6 +103,23 @@ type MapKey = (DocId, u64, Option<u64>, u32);
 
 /// What a session's Lens Blur depth map was read from: the factor, `depthMap` and `depthChannel`.
 type DepthKey = (u32, String);
+
+/// Apply Image's source and weight surfaces.
+type ApplyInputs = (Arc<photocraft_raster::Surface>, Option<Arc<photocraft_raster::Surface>>);
+
+/// What Apply Image's inputs were made from: the factor, and the source and mask params.
+type ApplyKey = (u32, String);
+
+/// The other inputs a session's operator reads besides the target's pixels.
+#[derive(Default)]
+struct Inputs {
+    /// Displace's map.
+    map: Option<Map>,
+    /// Lens Blur's depth map.
+    depth: Option<Arc<photocraft_raster::Surface>>,
+    /// Apply Image's settings and inputs.
+    apply: Option<Arc<photocraft_gpu::ApplyParams>>,
+}
 
 /// One filter dialog's GPU preview session.
 pub struct FilterGpuPreview {
@@ -135,6 +157,14 @@ pub struct FilterGpuPreview {
     /// Lens Blur's depth maps (full size and the proxy's), read once each: their identity keys
     /// the GPU's copy.
     depths: Vec<(DepthKey, Arc<photocraft_raster::Surface>)>,
+    /// Apply Image's inputs (full size and the proxy's), made once per source and mask: the
+    /// factor and those params.
+    applies: Vec<(ApplyKey, ApplyInputs)>,
+    /// Apply Image's inputs being made off the UI thread (a merged source takes about a second
+    /// at 36 MP): the CPU preview shows meanwhile.
+    apply_pending: Option<(ApplyKey, std::sync::mpsc::Receiver<Option<ApplyInputs>>)>,
+    /// Inputs that couldn't be made: those settings preview on the CPU.
+    apply_failed: Option<ApplyKey>,
 }
 
 /// The Navigator's picture while the filter previews on the GPU: the CPU preview's own filter
@@ -163,7 +193,7 @@ struct FilterProxy {
 
 /// The open filter dialog this path could preview: (dialog id, its command, params, Preview on).
 fn dialog(app: &PhotocraftApp) -> Option<(u64, &'static str, Value, bool)> {
-    let d = app.ui.dialogs.iter().find(|d| d.fields.contains_key("__filter"))?;
+    let d = app.ui.dialogs.iter().find(|d| crate::filter_dialog::previews_on_canvas(&d.fields))?;
     let command = d.fields.get("__command").and_then(Value::as_str).and_then(|c| COMMANDS.into_iter().find(|k| *k == c))?;
     if d.fields.contains_key("__smartFilter") || crate::select_mask_view::owns(&d.fields) {
         return None;
@@ -190,6 +220,10 @@ pub fn ineligible(app: &PhotocraftApp, idx: usize, params: &Value) -> Option<&'s
     }
     let Some(target) = st.active_layer else { return Some("no active layer") };
     let Some(layer) = doc.layer(target) else { return Some("no active layer") };
+    // Apply Image onto a layer mask blends one plane (`channel_cmds::apply_image`): the CPU's.
+    if command(app) == APPLY_IMAGE && (targets(app) == OperatorTarget::Mask || params.get("target").is_some()) {
+        return Some("Apply Image onto a mask or a channel");
+    }
     if targets(app) == OperatorTarget::Mask {
         // The operator replaces the pixel mask the compositor samples: an enabled one, not
         // combined with vector masks first, and not shown on its own (the ⌥-click view).
@@ -294,10 +328,17 @@ fn blur_for(
     params: &Value,
     selection: Option<Arc<photocraft_raster::Surface>>,
     measured: Measured,
-    map: Option<Map>,
-    depth_map: Option<Arc<photocraft_raster::Surface>>,
+    inputs: Inputs,
 ) -> Option<(GaussianBlur, Rect)> {
     let Measured { command, on, content, selection: sel_bounds, depth } = measured;
+    let Inputs { map, depth: depth_map, apply } = inputs;
+    // Apply Image (`channel_cmds::apply_image`): over the canvas, its selection in its weight (it
+    // mixes inside the blend), the layer's alpha its own business.
+    if command == APPLY_IMAGE {
+        let extent = photocraft_algo::separable::edge_extent(doc.bounds(), content);
+        let op = GaussianBlur::new(SeparableBlur::Apply(apply?), extent, doc.bounds(), None, false, depth)?;
+        return Some((op, doc.bounds()));
+    }
     let fp = photocraft_engine::filters::params_for(command, params)?;
     let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
     let area = photocraft_algo::output_area(&fp, content, bounds, sel_bounds);
@@ -405,6 +446,119 @@ fn lens_depth(app: &mut PhotocraftApp, idx: usize, command: &str, params: &Value
     let depth = Arc::new(surface);
     app.filter_gpu_preview.as_mut()?.depths.push((key, Arc::clone(&depth)));
     Some(depth)
+}
+
+/// Apply Image's source and weight for `params` on `target` of `doc`, as the engine reads them
+/// (`channel_cmds::apply_image_planes`), as surfaces over the canvas (32-bit: the weight is a
+/// product, and a vector mask's source antialiased).
+pub fn apply_inputs(doc: &Arc<Document>, target: LayerId, params: &Value) -> Option<ApplyInputs> {
+    let mut s = photocraft_engine::Session::new();
+    s.add_document((**doc).clone(), None);
+    s.select_layer(target).ok()?;
+    let (planes, weight) = photocraft_engine::channel_cmds::apply_image_planes(&s, params).ok()?;
+    let area = doc.bounds();
+    let surface = |planes: &[Vec<f32>]| -> Option<photocraft_raster::Surface> {
+        let n = planes.len();
+        let mode = if n == 1 { photocraft_color::ColorMode::Grayscale } else { photocraft_color::ColorMode::Rgb };
+        let fmt = photocraft_color::PixelFormat::new(mode, photocraft_color::SampleType::F32, false);
+        if fmt.channels() != n {
+            return None;
+        }
+        let len = planes.first()?.len();
+        let mut data = Vec::with_capacity(len.checked_mul(n)?);
+        for i in 0..len {
+            data.extend(planes.iter().map(|p| p.get(i).copied().unwrap_or(0.0)));
+        }
+        let mut s = photocraft_raster::Surface::new(fmt);
+        s.write_region(area, &data);
+        Some(s)
+    };
+    let source = Arc::new(surface(&planes)?);
+    let weight = match weight {
+        Some(w) => Some(Arc::new(surface(std::slice::from_ref(&w))?)),
+        None => None,
+    };
+    Some((source, weight))
+}
+
+/// Apply Image's settings in `params` with its inputs, as the GPU operator's.
+pub fn apply_params(params: &Value, (source, weight): ApplyInputs) -> Option<photocraft_gpu::ApplyParams> {
+    use photocraft_engine::channel_cmds::Blending;
+    let (blending, opacity, preserve) = photocraft_engine::channel_cmds::apply_image_settings(params).ok()?;
+    let blend = match blending {
+        Blending::Mode(m) => photocraft_gpu::ApplyBlend::Mode(m),
+        Blending::Add { scale, offset } => photocraft_gpu::ApplyBlend::Add { scale, offset },
+        Blending::Subtract { scale, offset } => photocraft_gpu::ApplyBlend::Subtract { scale, offset },
+    };
+    Some(photocraft_gpu::ApplyParams { blend, opacity, preserve, source, weight })
+}
+
+/// Apply Image's operator settings for `params` at factor `k` (the session's document, or its
+/// proxy), its inputs made once per session, source, mask and factor. `None` for another command.
+fn apply_for(app: &mut PhotocraftApp, idx: usize, command: &str, params: &Value, k: u32) -> Option<Arc<photocraft_gpu::ApplyParams>> {
+    if command != APPLY_IMAGE {
+        return None;
+    }
+    let spec = |key: &str| photocraft_engine::channel_cmds::source_spec(params, key, key).unwrap_or(Value::Null).to_string();
+    let key = (k, format!("{}|{}", spec("source"), spec("mask")));
+    let p = app.filter_gpu_preview.as_mut()?;
+    if p.apply_failed.as_ref() == Some(&key) {
+        return None;
+    }
+    let inputs = match p.applies.iter().find(|(ak, _)| *ak == key) {
+        Some((_, inputs)) => inputs.clone(),
+        None => {
+            let made = match p.apply_pending.take() {
+                Some((pk, rx)) if pk == key => match rx.try_recv() {
+                    Ok(made) => made,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        p.apply_pending = Some((pk, rx));
+                        return None;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => None,
+                },
+                // A build for another source or mask still running: one at a time (each holds the
+                // canvas's planes, about a gigabyte at 36 MP), so this one waits for it to finish.
+                Some((pk, rx)) if matches!(rx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)) => {
+                    p.apply_pending = Some((pk, rx));
+                    return None;
+                }
+                // None yet, or the other one is done: make this one.
+                _ => {
+                    let (doc, target) = match &p.proxy {
+                        Some(g) if k > 1 => (Arc::clone(&g.base), g.target),
+                        _ if k > 1 => return None,
+                        _ => (app.session.documents().get(idx)?.doc.clone(), p.target),
+                    };
+                    if cfg!(not(target_arch = "wasm32")) && app.background_jobs {
+                        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                        let params = params.clone();
+                        let spawned = std::thread::Builder::new().name("apply-image-inputs".into()).spawn(move || {
+                            let made = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| apply_inputs(&doc, target, &params))).ok().flatten();
+                            let _ = tx.send(made);
+                        });
+                        let p = app.filter_gpu_preview.as_mut()?;
+                        match spawned {
+                            Ok(_) => p.apply_pending = Some((key, rx)),
+                            Err(_) => p.apply_failed = Some(key),
+                        }
+                        return None;
+                    }
+                    apply_inputs(&doc, target, params)
+                }
+            };
+            let p = app.filter_gpu_preview.as_mut()?;
+            let Some(inputs) = made else {
+                p.apply_failed = Some(key);
+                return None;
+            };
+            // One source per factor: a new source or mask replaces the old (they are large).
+            p.applies.retain(|(ak, _)| ak.0 != k);
+            p.applies.push((key, inputs.clone()));
+            inputs
+        }
+    };
+    Some(Arc::new(apply_params(params, inputs)?))
 }
 
 /// algo's Lens Blur (`photocraft_algo::separable::Lens`) as the GPU operator's, with its depth
@@ -534,7 +688,13 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         let made = Measured::of(&st.doc, target, command, targets(app)).and_then(|measured| {
             let made = make_map(app, command, &params, 1, &[]);
             let st = app.session.documents().get(idx)?;
-            let (_, region) = blur_for(&st.doc, target, &params, selection.clone(), measured, made.as_ref().map(|(_, m)| m.clone()), None)?;
+            // Apply Image changes the whole canvas: its inputs aren't needed for the region.
+            let region = if command == APPLY_IMAGE {
+                st.doc.bounds()
+            } else {
+                let inputs = Inputs { map: made.as_ref().map(|(_, m)| m.clone()), ..Default::default() };
+                blur_for(&st.doc, target, &params, selection.clone(), measured, inputs)?.1
+            };
             Some((measured, made, region))
         });
         let Some((measured, made, region)) = made else {
@@ -559,6 +719,9 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             nav: None,
             maps: made.into_iter().collect(),
             depths: Vec::new(),
+            applies: Vec::new(),
+            apply_pending: None,
+            apply_failed: None,
         });
     }
     // The GPU canvas can stop drawing this document mid-session (a smaller canvas budget, a
@@ -618,13 +781,19 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         }
         let map = displace_map(app, command, &params, 1);
         let depth = lens_depth(app, idx, command, &params, 1);
+        let apply = apply_for(app, idx, command, &params, 1);
+        // Apply Image's inputs still being made (a build pending): the CPU preview meanwhile, not a
+        // refusal. A build that failed has none pending, and is one.
+        let waiting = command == APPLY_IMAGE && apply.is_none() && app.filter_gpu_preview.as_ref().is_some_and(|p| p.apply_pending.is_some());
         let p = app.filter_gpu_preview.as_ref()?;
         let st = app.session.documents().get(idx)?;
-        let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured, map, depth) else {
+        let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured, Inputs { map, depth, apply }) else {
             // Settings the GPU can't run (a reach past its limit, Displace without a map): the
             // CPU preview for them, without building again every frame.
             hide(app);
-            app.filter_gpu_refused = Some((session, h));
+            if !waiting {
+                app.filter_gpu_refused = Some((session, h));
+            }
             return None;
         };
         app.filter_gpu_refused = None;
@@ -636,8 +805,18 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         // A larger radius changes more: the switch recomposites the larger area.
         p.s.region = p.s.region.union(&region);
         p.shown = Some((h, op));
+        release_cpu_preview(app);
     }
     app.filter_gpu_preview.as_ref()
+}
+
+/// The GPU shows the session's dialog: the CPU preview that showed while it couldn't (Apply
+/// Image's inputs being made, settings past its reach) is released (a whole proxy document).
+fn release_cpu_preview(app: &mut PhotocraftApp) {
+    let dialog = app.filter_gpu_preview.as_ref().map(|p| p.dialog);
+    if app.filter_preview.as_ref().is_some_and(|c| Some(c.key.dialog) == dialog && !c.committing) {
+        app.filter_preview = None;
+    }
 }
 
 /// Register the session's shown operators again: after Retry GPU, the new canvas has none (they
@@ -717,11 +896,15 @@ fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Val
         let command = g.measured.command;
         let map = displace_map(app, command, &scaled, k);
         let depth = lens_depth(app, idx, command, &scaled, k);
+        let apply = apply_for(app, idx, command, &scaled, k);
+        let waiting = command == APPLY_IMAGE && apply.is_none() && app.filter_gpu_preview.as_ref().is_some_and(|p| p.apply_pending.is_some());
         let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
-        let Some((blur, region)) = blur_for(&g.base, g.target, &scaled, g.selection.clone(), g.measured, map, depth) else {
+        let Some((blur, region)) = blur_for(&g.base, g.target, &scaled, g.selection.clone(), g.measured, Inputs { map, depth, apply }) else {
             // A reach past the GPU's limit: the CPU preview for these settings.
             hide_proxy(app);
-            app.filter_gpu_refused = Some(refused);
+            if !waiting {
+                app.filter_gpu_refused = Some(refused);
+            }
             return None;
         };
         app.filter_gpu_refused = None;
@@ -732,6 +915,7 @@ fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Val
         let g = app.filter_gpu_preview.as_mut()?.proxy.as_mut()?;
         g.region = g.region.union(&region);
         g.shown = Some((h, op));
+        release_cpu_preview(app);
     }
     app.filter_gpu_preview.as_ref()
 }
