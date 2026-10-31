@@ -85,20 +85,23 @@ impl std::fmt::Debug for Plugin {
 
 /// When a run must stop: a wall-clock deadline (native) and a flag shared by parallel bands.
 #[derive(Clone)]
-pub(crate) struct Deadline {
+pub(crate) struct Deadline<'a> {
     #[cfg(not(target_arch = "wasm32"))]
     at: std::time::Instant,
     abort: Arc<Mutex<Option<Error>>>,
+    interrupt: photocraft_raster::Interrupt<'a>,
 }
 
-impl Deadline {
-    pub(crate) fn new(limits: &Limits) -> Self {
+impl<'a> Deadline<'a> {
+    /// Starts one run's shared abort state and native wall-clock budget; WASM remains bounded by fuel.
+    pub(crate) fn new(limits: &Limits, interrupt: photocraft_raster::Interrupt<'a>) -> Self {
         #[cfg(target_arch = "wasm32")]
         let _ = limits;
         Self {
             #[cfg(not(target_arch = "wasm32"))]
             at: std::time::Instant::now() + std::time::Duration::from_millis(limits.wall_time_ms),
             abort: Arc::new(Mutex::new(None)),
+            interrupt,
         }
     }
     pub(crate) fn abort(&self, error: Error) {
@@ -106,7 +109,11 @@ impl Deadline {
         // generic cancellation error, even when results are collected in a different order.
         self.abort.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert(error);
     }
-    fn check(&self) -> Result<()> {
+    /// Checks caller cancellation, then the shared failure and native deadline; records timeout for sibling bands.
+    pub(crate) fn check(&self) -> Result<()> {
+        if self.interrupt.cancelled() {
+            return Err(Error::Cancelled);
+        }
         if let Some(error) = self.abort.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
             return Err(error);
         }
@@ -189,7 +196,7 @@ impl Plugin {
             )));
         }
         let mut p = Plugin { manifest: placeholder_manifest(), engine, module, limits, size: bytes.len(), source: None };
-        let deadline = Deadline::new(&p.limits);
+        let deadline = Deadline::new(&p.limits, photocraft_raster::Interrupt::NONE);
         let mut live = p.instantiate(&deadline)?;
         let version: TypedFunc<(), i32> = live.func("pc_abi_version")?;
         let v = p.call(&mut live, &version, (), p.limits.fuel_base, &deadline)?;
@@ -321,6 +328,7 @@ impl Live {
     }
 }
 
+/// Supplies temporary metadata while load reads and validates the module's actual manifest.
 fn placeholder_manifest() -> Manifest {
     Manifest {
         id: String::new(),
@@ -332,5 +340,8 @@ fn placeholder_manifest() -> Manifest {
         params: Vec::new(),
         overlap: 0,
         area: crate::Area::Content,
+        preview_default: true,
+        preset_values: Default::default(),
+        accelerator: String::new(),
     }
 }

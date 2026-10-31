@@ -184,6 +184,7 @@ pub fn apply_filter_to_surface(
     bounds: photocraft_geom::Rect,
     selection: Option<&photocraft_raster::Surface>,
     canvas: photocraft_geom::Rect,
+    ctl: &photocraft_raster::Interrupt<'_>,
 ) -> Result<Option<photocraft_raster::Surface>> {
     // Replays bypass command dispatch; nested paths must still obey the requesting session's
     // authority, including adjustment LUTs and plug-ins, before any resolver can read them.
@@ -202,7 +203,7 @@ pub fn apply_filter_to_surface(
     }
     // WebAssembly plug-in smart filters (plugin_cmds).
     if id == crate::plugin_cmds::RUN {
-        return Ok(crate::plugin_cmds::apply_to_surface(id, params, surf, selection, canvas));
+        return crate::plugin_cmds::apply_to_surface(id, params, surf, selection, canvas, ctl);
     }
     let Some(mut fp) = params_for(id, params) else { return Ok(None) };
     // A map that can no longer be read (moved or deleted since) leaves the pixels alone, like an

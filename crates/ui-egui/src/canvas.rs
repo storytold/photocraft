@@ -322,6 +322,7 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
     }
 }
 
+/// Paints the document and canvas overlays, including filter and read-only mask previews, in display order.
 fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXform, input: &CanvasPaintInput<'_>) -> (bool, egui::layers::ShapeIdx, Rect) {
     let ctx = input.ctx;
     let rect = input.rect;
@@ -338,6 +339,9 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
     let render_zoom = input.render_zoom;
     let target_xf = input.target_xf;
     let pixel_grid = input.pixel_grid;
+    if primary {
+        ctx.data_mut(|data| data.insert_temp(egui::Id::unique(("plugin-preview-region", doc.id)), visible_doc_rect(&xf)));
+    }
 
     let point_zoom = view.zoom / ppp;
     let drop_shadow = border == photocraft_engine::prefs::CanvasBorder::DropShadow;
@@ -489,6 +493,9 @@ fn paint_canvas(app: &mut PhotocraftApp, ui: &egui::Ui, view: &View, xf: ViewXfo
         }
     }
     crate::color_range_ui::paint_selection_preview(app, ctx, painter, doc.id, img_rect, flip);
+    if let Some((texture, area, uv)) = crate::dialogs::skin_smooth_ui::overlay(app, ctx, doc.id, visible_doc_rect(&xf)) {
+        paint_mapped_image_at(painter, &xf, texture, uv, [area.x0 as f32, area.y0 as f32], [area.width() as f32, area.height() as f32], Color32::WHITE);
+    }
     // Artboards: pasteboard between the boards, outlines and names (artboard_ui.rs).
     if doc.has_artboards() {
         let t = crate::theme::Tokens::get(ctx);
@@ -640,6 +647,7 @@ struct DialogCanvasInput<'a> {
     img_rect: Rect,
 }
 
+/// Routes canvas gestures to the open dialog's sampler or controls while preserving pan and zoom gestures.
 fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<'_>) {
     let sticky_alt = app.ui.shell.sticky_alt;
     let zoom_out = |alt: bool| match input.temporary {
@@ -656,6 +664,7 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
     let picking = input.primary && (crate::color_picker_ui::top(app).is_some() || curves_picking || replace_picking);
     let range_picking =
         input.primary && app.ui.dialogs.last().is_some_and(|d| crate::color_range_ui::owns(&d.fields) && crate::color_range_ui::controls(&d.fields).sampling);
+    let skin_picking = input.primary && crate::dialogs::skin_smooth_ui::armed(app);
     // Select and Mask's Refine Edge Brush paints on the image.
     let refine_brushing =
         input.primary && app.ui.dialogs.last().is_some_and(|d| crate::select_mask_view::owns(&d.fields) && crate::select_mask_view::brush_on(&d.fields));
@@ -678,7 +687,8 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         .flatten()
         .map(|m| crate::workspace_ui::sticky_mods(app, m))
         .filter(|m| m.command);
-    let dialog_hand = app.ui.tool == Tool::Hand && !picking && !range_picking && !refine_brushing && !pinning && !shadow_drag && curve_point_press.is_none();
+    let dialog_hand =
+        app.ui.tool == Tool::Hand && !picking && !range_picking && !skin_picking && !refine_brushing && !pinning && !shadow_drag && curve_point_press.is_none();
     // ⌘Space / ⌥Space zoom under the dialog as they do without one, before Space pans (#6460).
     // With the Hand tool, ⌘ alone is Zoom In (#6434); under Curves that press is the dialog's
     // point (#7325), not a zoom.
@@ -756,7 +766,9 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
         let press = crate::dialogs::free_press(input.ctx, input.rect)
             .filter(|p| input.img_rect.contains(*p) && input.ctx.input(|i| i.pointer.primary_pressed() || i.pointer.delta() != egui::Vec2::ZERO))
             .map(|q| input.xf.to_doc(q));
-        crate::color_range_ui::canvas_eyedropper(app, input.ctx, p, press);
+        if !crate::dialogs::skin_smooth_ui::canvas_eyedropper(app, input.ctx, p, press) {
+            crate::color_range_ui::canvas_eyedropper(app, input.ctx, p, press);
+        }
     }
 }
 
