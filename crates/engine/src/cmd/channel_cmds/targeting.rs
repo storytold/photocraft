@@ -116,6 +116,8 @@ fn edits_mask(id: &str) -> bool {
         // Copying a targeted mask (#2928).
         || matches!(id, "edit.copy" | "edit.cut" | "edit.clear")
         || crate::fill_key_cmds::IDS.contains(&id)
+        // Liquify deforms a targeted mask (#10457).
+        || id == crate::distort_cmds::LIQUIFY
 }
 
 /// Filters that work on a layer's pixels only: Lens Correction, Adaptive Wide Angle and Vanishing
