@@ -373,7 +373,10 @@ fn keyboard_shortcuts_list_commands_in_the_selected_language() {
             h.run_steps(3);
             let text = drawn_text(&h);
             assert!(text.iter().any(|text| text == tr(pt, "File")), "{filter}: the menu heading must be translated");
-            assert!(text.iter().any(|text| text.trim() == label), "{filter}: the command must be translated: {text:?}");
+            // The All view shows each row with its menu path, e.g. "Arquivo › Salvar como…".
+            let row = format!("{} › {label}", tr(pt, "File"));
+            assert!(text.iter().any(|text| text.trim() == row), "{filter}: the command must be translated: {text:?}");
+            assert!(!text.iter().any(|text| text.trim().ends_with("Save As…")), "{filter}: no English command labels");
         }
     });
 }

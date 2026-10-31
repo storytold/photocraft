@@ -126,7 +126,7 @@ pub(super) fn settings_height(available: f32, item_spacing: f32, button_height: 
 pub fn width(fields: &Map<String, Value>, available: f32) -> Option<f32> {
     match fields.get("__prefsui").and_then(Value::as_str)? {
         "prefs" => Some(available.max(380.0)),
-        "shortcuts" => Some(720.0),
+        "shortcuts" => Some(available.min(720.0)),
         _ => Some(460.0),
     }
 }
