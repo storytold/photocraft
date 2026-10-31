@@ -3916,6 +3916,9 @@ curves	Smooth	Сгладить
 	There is no color table to save.	Нет таблицы цветов для сохранения.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Сохранён {n} цвет в {file}|Сохранены {n} цвета в {file}|Сохранено {n} цветов в {file}
 	GPU adapter	Адаптер GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Содержимое AI/PDF/EPS будет редактироваться как SVG. Сохранение заменит встроенный источник; особенности исходного формата могут измениться.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Импортировать стили…
 	Export Selected Styles…	Экспортировать выбранные стили…
 	Export Styles…	Экспортировать стили…
@@ -4685,6 +4688,7 @@ shape	Appearance	Оформление
 	Font size presets	Наборы размеров шрифта
 	Leading presets	Наборы интерлиньяжа
 	Tracking presets	Наборы трекинга
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Недопустимое числовое значение. Требуется целое число от {min}% до {max}%. Вставлено предыдущее значение.
 	Color Aware	С учетом цвета
 	Decontaminate Colors	Очистить цвета
 	Edge Detection	Обнаружение краев
@@ -4853,4 +4857,9 @@ shape	Appearance	Оформление
 	Refining mask preview…	Уточнение предпросмотра маски…
 	This project does not contain its HDR/EXR environment map. Choose the map again.	В проекте нет встроенной карты окружения HDR/EXR. Выберите её заново.
 	Legacy blend mode	Устаревший режим наложения
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Недавно использованные цвета
+	Stop Color	Цвет контрольной точки
+	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…

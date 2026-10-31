@@ -96,8 +96,12 @@ The other built-in ICC profiles and the generated LUT looks are produced by code
 | `docs/brand/` (all files) | ArtCraft name, wordmark and mark | ArtCraft Team | getartcraft.com | Not open source; trademarks of the ArtCraft Team, [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt) |
 | `docs/images/photocraft-*.jpg` | PhotoCraft screenshots | PhotoCraft contributors (UI) | Rendered offscreen with the `snapshot` example | MIT OR Apache-2.0 (UI); the artwork in each is public domain, listed below |
 | `docs/images/preferences-apply-*.png` | Preferences before and after adding Apply (no artwork) | PhotoCraft contributors | PhotoCraft control-channel capture and offscreen `snapshot` example | MIT OR Apache-2.0 |
+| `docs/images/embedded-vector-editor-en.png` | Embedded AI/PDF/EPS conversion warning and editor chooser (no artwork) | Don Omondi | Offscreen `smart_svg_ui::tests::capture_embedded_vector_conversion_prompt` with authored bytes and mock services | MIT OR Apache-2.0 |
+| `docs/images/embedded-vector-tabs-linux.png` | Shared VectorCraft window after a portal editor save and ordinary document launch | Don Omondi | Local Linux GUI acceptance with authored orange rectangle/blue circle SVGs; no private artwork | MIT OR Apache-2.0 |
 | `docs/images/gradient-overlay-method-*.png` | Gradient Overlay Method selector, before and after (synthetic gradient) | @oRE-o | Rendered offscreen with the `snapshot` example; no external artwork | MIT OR Apache-2.0 |
 | `docs/images/cpu-pixel-alignment/*.png` | CPU canvas pixel alignment, before and after #8321 | PhotoCraft contributors | Original synthetic noise rendered with the offscreen `snapshot` example; see the adjacent README | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
+| `docs/images/multi-channel-editing/{curves,curves-choices,levels,drawing,mask-view-before,mask-view-after}.png` | Selected colour channel editing (synthetic gradient) | @hidoba | Original synthetic gradient rendered with the offscreen `snapshot` example; adjacent JSON scripts | MIT OR Apache-2.0, adjacent `LICENSE-MIT` and `LICENSE-APACHE` |
+| `docs/images/multi-channel-editing/great-wave.jpg`, `rgb.png`, `cmyk.png`, `lab.png`, `gallery-channel-preview-{before,after}.png` | *The Great Wave off Kanagawa*, c. 1830–1832, and PhotoCraft channel-selection captures | Katsushika Hokusai (artwork); PhotoCraft contributors (UI) | [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Tsunami_by_hokusai_19th_century.jpg), Metropolitan Museum reproduction; adjacent JSON capture scripts | Public domain artwork (PD-Art), adjacent `LICENSE-PUBLIC-DOMAIN.txt`; UI/scripts MIT OR Apache-2.0 |
 
 Artwork shown in the screenshots (all public domain, via Wikimedia Commons; details in
 [`docs/images/SOURCES.md`](docs/images/SOURCES.md)):
@@ -165,3 +169,11 @@ Binary distributions using these dependencies must retain the applicable license
 copyright notices. The retained MIT and ISC texts include the notices supplied by the
 packages; MIT is an available licensing option for glam and fbxcel. This section does not
 replace the notices required for other PhotoCraft dependencies.
+## Embedded-vector editor source
+
+The external SVG watcher, engine/UI handoff and bounded SVG rendering in this change
+are adapted from Skyfuller1303’s MIT OR Apache-2.0 implementation in
+[PhotoCraft #3409](https://github.com/storytold/photocraft/pull/3409), commit
+`897f20072762fdf0eb688adcdb8d8cda7b38ce66`. Don Omondi’s embedded AI/PDF/EPS
+extension and current-main integration build on that source. Clipboard and unrelated
+Shape Tools changes from that branch are not included.

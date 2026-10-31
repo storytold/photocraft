@@ -226,6 +226,11 @@ pub struct UiState {
     /// Inline type editing session, if any.
     #[serde(default)]
     pub text_edit: Option<TextEdit>,
+    /// Whether the text being edited overflows its paragraph box (the box's lower-right handle
+    /// shows the overflow "+").
+    /// Read by automation while a session edits that box; never written to settings.
+    #[serde(skip)]
+    pub type_box_overflow: bool,
     /// Font for subsequent typing at this caret, separate from existing character runs.
     #[serde(default)]
     pub type_insertion_style: Option<TypeInsertionStyle>,
@@ -520,7 +525,7 @@ pub struct UiState {
 impl Default for UiState {
     fn default() -> Self {
         Self {
-            tool: Tool::Brush,
+            tool: Tool::Move,
             #[cfg(feature = "uv-workbench")]
             uv_workbench: Default::default(),
             group_tools: Vec::new(),
@@ -528,6 +533,7 @@ impl Default for UiState {
             recent_files: Vec::new(),
             recent_fonts: Vec::new(),
             text_edit: None,
+            type_box_overflow: false,
             type_insertion_style: None,
             caret_blink_time: 0.0,
             text_edit_return_tool: None,
@@ -780,7 +786,7 @@ mod tests {
     fn ui_state_serializes() {
         let s = UiState::default();
         let v = serde_json::to_value(&s).unwrap();
-        assert_eq!(v["tool"], "Brush");
+        assert_eq!(v["tool"], "Move");
         let back: UiState = serde_json::from_value(v).unwrap();
         assert_eq!(back, s);
     }

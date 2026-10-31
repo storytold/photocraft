@@ -3,6 +3,7 @@ use super::{
     Arc, Document, EngineError, LayerId, Result, Session, Value, brush_cmds, channel_cmds, commands, hidden_target, jobs, layer_multi_cmds, retouch_cmds,
     smart_cmds,
 };
+use crate::color_channels;
 
 /// Compare surfaces without walking pixel bytes in unchanged COW tiles. Surface mutation always
 /// replaces a shared tile `Arc`; comparing bytes is needed only for tiles whose storage changed
@@ -168,6 +169,9 @@ impl Session {
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
+        if let Some(why) = color_channels::refusal(self, id, &run_params) {
+            return Err(EngineError::Disabled(id.into(), why));
+        }
         if let Err(why) = self.explicit_layer_enabled(spec, params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
@@ -206,6 +210,9 @@ impl Session {
 
     /// The command's own precondition for a call with `params` (their target filled in).
     fn precondition(&self, spec: &commands::CommandSpec, params: &Value) -> std::result::Result<(), String> {
+        if let Some(why) = color_channels::refusal(self, spec.id, params) {
+            return Err(why);
+        }
         if self.names_existing_layer(spec.id, params) {
             return Ok(());
         }
@@ -394,8 +401,8 @@ impl Session {
                 photocraft_compose::mask_paint::refresh_changes_in_canvas(mask, old, mask_canvas);
             }
         }
-        if let (Some(k), Some(id)) = (restrict, active) {
-            channel_cmds::restrict_to_color(&before, &mut doc, id, k);
+        if let Some(restrict) = restrict {
+            channel_cmds::restrict_to_color(&before, &mut doc, restrict.layer, restrict.colors)?;
         }
         if let Some(id) = filter_mask_layer {
             smart_cmds::refresh_after_filter_mask_edit(&mut doc, id)?;

@@ -339,6 +339,30 @@ fn fallible_region_write_rejects_bad_input_without_mutating_surface() {
 }
 
 #[test]
+fn fallible_interleaved_write_matches_the_infallible_one_and_rejects_bad_lengths() {
+    for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+        // Across tile edges, at a negative origin.
+        let r = Rect::new(-3, 250, 300, 517);
+        let bytes: Vec<u8> = (0..r.width() as usize * r.height() as usize * fmt.bytes_per_pixel()).map(|i| (i * 31 % 251) as u8).collect();
+        let mut a = Surface::new(fmt);
+        a.write_interleaved(r, &bytes);
+        let mut b = Surface::new(fmt);
+        b.try_write_interleaved(r, &bytes).unwrap();
+        assert_eq!(a, b);
+        let before = b.clone();
+        let got = bytes.len() - 1;
+        assert_eq!(b.try_write_interleaved(r, &bytes[1..]), Err(AllocationError::LengthMismatch { expected: bytes.len(), got }));
+        assert_eq!(b, before);
+        // Tiles an undo snapshot shares are copied, not written through.
+        let again: Vec<u8> = bytes.iter().map(|v| v ^ 0x5a).collect();
+        b.try_write_interleaved(r, &again).unwrap();
+        a.write_interleaved(r, &again);
+        assert_eq!(a, b);
+        assert_eq!(before.to_interleaved(r), bytes);
+    }
+}
+
+#[test]
 fn fallible_tile_edits_move_weakly_cached_pixels_and_copy_shared_pixels() {
     for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
         let mut surface = Surface::new(fmt);
