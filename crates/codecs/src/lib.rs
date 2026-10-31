@@ -115,7 +115,7 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
 
 /// Decodes a PNG a group of rows at a time, for a caller that builds its own pixel storage and
 /// never needs the whole decoded image. `begin` gets the [`PngHeader`] once and returns whether to go on, then `rows(y0, data)`
-/// gets whole rows `y0..` (up to 256 of them, native-endian) in final order, holding exactly the
+/// gets whole rows `y0..` (`group` of them, fewer in the last call; native-endian) in final order, holding exactly the
 /// samples [`decode`] would return. The result is the metadata, complete once the file is read.
 ///
 /// `Ok(None)`, with no row delivered, means the rows can't be had in final order (an
@@ -126,10 +126,11 @@ pub fn decode_as_with(format: Format, bytes: &[u8], opts: &DecodeOptions) -> Res
 pub fn decode_png_rows<E: From<CodecError>>(
     bytes: &[u8],
     opts: &DecodeOptions,
+    group: u32,
     begin: &mut dyn FnMut(&PngHeader) -> Result<bool, E>,
     rows: &mut PngRowSink<'_, E>,
 ) -> Result<Option<PngExtras>, E> {
-    png::decode_rows(bytes, &opts.limits, begin, rows)
+    png::decode_rows(bytes, &opts.limits, group, begin, rows)
 }
 
 /// The upright pixel size [`decode`] would return, read from the file's header without decoding

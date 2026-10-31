@@ -422,7 +422,9 @@ fn import_png_streamed(name: &str, bytes: &[u8], ctl: &Interrupt, min_bytes: u64
         ctl.progress(0.02 + 0.53 * (y0 + n) as f32 / h.max(1) as f32);
         Ok(())
     };
-    let Some(extras) = codecs::decode_png_rows::<IoError>(bytes, &codecs::DecodeOptions::default(), &mut begin, &mut rows)? else { return Ok(None) };
+    let Some(extras) = codecs::decode_png_rows::<IoError>(bytes, &codecs::DecodeOptions::default(), TILE_SIZE as u32, &mut begin, &mut rows)? else {
+        return Ok(None);
+    };
     ctl.check().map_err(|_| IoError::Cancelled)?;
     let Some(Stream { surface, header, .. }) = state.into_inner() else { return Ok(None) };
     if extras.orientation != 1 {

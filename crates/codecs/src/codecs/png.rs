@@ -156,14 +156,10 @@ pub struct PngHeader {
 /// Where [`decode_rows`] sends rows: the index of the first, then whole rows.
 pub type PngRowSink<'a, E> = dyn FnMut(u32, &[u8]) -> Result<(), E> + 'a;
 
-/// Rows per group [`decode_rows`] hands over: one tile row of a document (`TILE_SIZE`, which this
-/// layer-0 crate can't name).
-const ROW_GROUP: u32 = 256;
-
 /// Decodes a PNG a group of rows at a time, so the caller never needs the whole decoded image:
 /// `begin` gets the header once and says whether to go on (after the same size and plausibility checks [`decode`] makes),
-/// then `rows(y0, data)` gets whole rows `y0..` in final order, as many as one tile row,
-/// native-endian, exactly the samples [`decode`] would return. Returns the extras once the file
+/// then `rows(y0, data)` gets whole rows `y0..` in final order, `group` of them at a time (the
+/// last group may be shorter; a `group` of 0 counts as 1), native-endian, exactly the samples [`decode`] would return. Returns the extras once the file
 /// has been read to its end, or `None` (having called neither closure) when the rows can't be
 /// had in final order: an interlaced (Adam7) file, and an APNG, whose first frame may be a
 /// sub-rectangle. A damaged file fails with the error [`decode`] gives, after however many rows
@@ -172,9 +168,11 @@ const ROW_GROUP: u32 = 256;
 pub(crate) fn decode_rows<E: From<CodecError>>(
     bytes: &[u8],
     limits: &Limits,
+    group: u32,
     begin: &mut dyn FnMut(&PngHeader) -> Result<bool, E>,
     rows: &mut PngRowSink<'_, E>,
 ) -> Result<Option<PngExtras>, E> {
+    let group = group.max(1);
     let mut input = Cursor::new(bytes);
     let Opened { mut reader, layout, sample, images } = open(&mut input, limits)?;
     let upright = reader.info().exif_metadata.as_deref().is_none_or(|e| crate::orientation::exif_orientation(e) == 1);
@@ -189,10 +187,10 @@ pub(crate) fn decode_rows<E: From<CodecError>>(
     if !begin(&PngHeader { width, height, layout, sample })? {
         return Ok(None);
     }
-    let mut buf = alloc_zeroed::<u8>(line.checked_mul(ROW_GROUP.min(height) as usize).ok_or_else(|| err("image too large"))?)?;
+    let mut buf = alloc_zeroed::<u8>(line.checked_mul(group.min(height) as usize).ok_or_else(|| err("image too large"))?)?;
     let mut y0 = 0;
     while y0 < height {
-        let n = ROW_GROUP.min(height - y0) as usize;
+        let n = group.min(height - y0) as usize;
         for row in buf.chunks_exact_mut(line.max(1)).take(n) {
             if reader.read_row(row).map_err(map_png_err)?.is_none() {
                 return Err(err("the image data ends before the last row").into());
