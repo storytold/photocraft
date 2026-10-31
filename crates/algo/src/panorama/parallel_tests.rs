@@ -285,13 +285,13 @@ fn reduce_and_expand_match_the_serial_code() {
         for ch in [1usize, 3, 4] {
             let src = noise(w * h * ch, n as u64 * 7 + ch as u64);
             let (nw, nh, got) = reduce(w, h, ch, &src).unwrap();
-            let (rw, rh, want) = ref_reduce(w, h, ch, &src).unwrap();
+            let (rw, rh, want) = ref_reduce(w, h, ch, &src);
             assert_eq!((nw, nh), (rw, rh));
             assert_eq!(bits(&got), bits(&want), "reduce {w}x{h}x{ch}");
             // Expand back to the original size and to sizes that are not twice the source's.
             for (ew, eh) in [(w, h), (2 * nw, 2 * nh), (2 * nw - 1, 2 * nh + 1), (w + 3, h + 5)] {
                 let got = expand(nw, nh, ch, &want, ew, eh).unwrap();
-                let want_up = ref_expand(nw, nh, ch, &want, ew, eh).unwrap();
+                let want_up = ref_expand(nw, nh, ch, &want, ew, eh);
                 assert_eq!(bits(&got), bits(&want_up), "expand {nw}x{nh}x{ch} to {ew}x{eh}");
             }
         }
