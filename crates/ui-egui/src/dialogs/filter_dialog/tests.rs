@@ -1589,6 +1589,27 @@ fn replace_color_shift_and_alt_clicks_add_and_subtract_samples() {
     assert_eq!((field(&app, "points"), field(&app, "subtractPoints")), (json!([[7.0, 7.0]]), json!([])));
 }
 
+/// Reset (Alt+Cancel) forgets the click order with the samples, so samples added afterwards
+/// carry an order that fits them and the command takes it (CodeRabbit review on #10443).
+#[test]
+fn replace_color_reset_forgets_the_click_order() {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 16, "height": 16, "background": "#00ff00"})).unwrap();
+    let mut app = PhotocraftApp::new(s, crate::Services::default());
+    let id = open(&mut app, REPLACE_COLOR).unwrap();
+    assert!(color_eyedropper_sample(&mut app, 2.0, 2.0, egui::Modifiers::NONE));
+    assert!(color_eyedropper_sample(&mut app, 9.0, 9.0, egui::Modifiers::ALT));
+    let mut fields = app.ui.dialogs.last().unwrap().fields.clone();
+    reset_fields(&app, &mut fields);
+    app.ui.dialog_mut(id).unwrap().fields = fields;
+    assert!(color_eyedropper_sample(&mut app, 5.0, 5.0, egui::Modifiers::SHIFT));
+    assert!(color_eyedropper_sample(&mut app, 7.0, 7.0, egui::Modifiers::SHIFT));
+    let f = app.ui.dialogs.last().unwrap().fields.clone();
+    assert_eq!(f["order"], json!(["+", "+"]), "{f:?}");
+    let p = json!({"color": f["color"], "points": f["points"], "order": f["order"], "hue": 30});
+    app.session.execute(REPLACE_COLOR, p).unwrap();
+}
+
 /// #4143: the eyedropper button disarms and re-arms the canvas picker (#6279: it opens armed).
 #[test]
 fn replace_color_dialog_arms_the_eyedropper_button() {

@@ -509,6 +509,8 @@ pub fn reset_fields(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
     // Drop user params; keep private `__` chrome (and fixed keys outside the schema for `__spec`).
     let schema_keys: std::collections::HashSet<String> = parse_spec(&spec).into_iter().map(|p| p.key).collect();
     fields.retain(|k, _| k.starts_with("__") || !schema_keys.contains(k));
+    // The eyedroppers' click order goes with the samples just dropped (Replace Color, #6280).
+    fields.remove("__order");
     for p in parse_spec(&spec) {
         if let Some(v) = default_value(app, &command, &p) {
             fields.insert(p.key, v);
