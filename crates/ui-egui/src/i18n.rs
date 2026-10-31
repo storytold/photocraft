@@ -102,6 +102,12 @@ fn plural_pt(n: u64) -> usize {
     usize::from(n > 1)
 }
 
+/// Persian/Farsi: 0 and 1 take the singular, everything else the plural (CLDR's "one" category
+/// covers i = 0, 1).
+fn plural_fa(n: u64) -> usize {
+    usize::from(n > 1)
+}
+
 /// Polish: 1 → one; 2–4, except 12–14 → few; everything else → many.
 fn plural_polish(n: u64) -> usize {
     let last = n % 10;
@@ -199,7 +205,7 @@ fn expand(packed: &str, keys: &[&str]) -> Result<String, String> {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 27] = [
+pub static LANGUAGES: [LangInfo; 30] = [
     LangInfo { code: "en", name: "English", source: b"", plural: plural_one_other, complete_menus: false, catalog: OnceLock::new() },
     LangInfo { code: "ja", name: "日本語", source: catalog!("ja"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
     LangInfo { code: "zh-hans", name: "简体中文", source: catalog!("zh-hans"), plural: plural_none, complete_menus: true, catalog: OnceLock::new() },
@@ -247,6 +253,15 @@ pub static LANGUAGES: [LangInfo; 27] = [
     // Norwegian Bokmål; `nb-NO`, and the macrolanguage `no` and Nynorsk `nn` from POSIX locales,
     // resolve here (see `candidates`).
     LangInfo { code: "nb", name: "Norsk bokmål", source: catalog!("nb"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Farsi/Persian; `fa-ir` and `fa_IR` resolve here.
+    LangInfo { code: "fa", name: "فارسی", source: catalog!("fa"), plural: plural_fa, complete_menus: true, catalog: OnceLock::new() },
+    // Urdu; written right to left like Arabic and Farsi (`dir_for_code`). CLDR plural: one|other,
+    // same simple rule as Farsi and Hindi.
+    LangInfo { code: "ur", name: "اردو", source: catalog!("ur"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
+    // Hebrew; `he-il` and `he_IL` resolve here. The chrome mirrors right to left (`dir_for_code`),
+    // like Arabic, Farsi and Urdu. Modern Hebrew software UI collapses CLDR's one/two/many/other
+    // into a plain one|other, so this uses `plural_one_other`.
+    LangInfo { code: "he", name: "עברית", source: catalog!("he"), plural: plural_one_other, complete_menus: true, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
