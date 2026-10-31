@@ -18,6 +18,240 @@ use objc2_ui_kit::{
 };
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
+use objc2::runtime::{AnyClass, ProtocolObject};
+use objc2_foundation::{NSError, NSString, NSURL};
+use objc2_photos_ui::{PHPickerConfiguration, PHPickerConfigurationAssetRepresentationMode, PHPickerFilter, PHPickerResult};
+use objc2_ui_kit::{
+    UIAlertAction, UIAlertActionStyle, UIAlertController, UIAlertControllerStyle, UIDocumentPickerDelegate, UIDocumentPickerViewController, UIViewController,
+};
+use photocraft_ui_egui::{FileDialogAnswer, FileDialogReply, FileDialogRequest};
+use std::sync::{Arc, Mutex};
+
+// extern_protocol also emits an undocumented internal unsafe helper trait.
+#[allow(clippy::missing_safety_doc)]
+mod photo_protocol {
+    use super::*;
+    objc2::extern_protocol!(
+        /// iOS signature omitted by objc2-photos-ui 0.3.2's macOS-only controller binding.
+        ///
+        /// # Safety
+        /// Implementations must provide the SDK's required callback on the main thread,
+        /// with borrowed picker/results valid only for the duration of the callback.
+        #[name = "PHPickerViewControllerDelegate"]
+        pub(super) unsafe trait IosPhotosDelegate: NSObjectProtocol + MainThreadOnly {
+            /// Receives the user's selection.
+            ///
+            /// # Safety
+            /// UIKit must supply valid borrowed objects on the main thread.
+            #[unsafe(method(picker:didFinishPicking:))]
+            fn photos(&self, picker: &UIViewController, results: &NSArray<PHPickerResult>);
+        }
+    );
+}
+use photo_protocol::IosPhotosDelegate;
+
+thread_local! {
+    static PICK_REPLY: RefCell<Option<FileDialogReply>> = const { RefCell::new(None) };
+    static PICK_DELEGATE: RefCell<Option<Retained<ImagePickerDelegate>>> = const { RefCell::new(None) };
+    static PICK_SOURCE: RefCell<Option<bool>> = const { RefCell::new(None) };
+}
+
+fn finish_pick(answer: Option<FileDialogAnswer>) {
+    let reply = PICK_REPLY.with(|slot| slot.borrow_mut().take());
+    if let Some(reply) = reply {
+        reply.send(answer);
+    }
+}
+
+fn loaded_answer(result: Result<(String, Vec<u8>), String>) -> FileDialogAnswer {
+    match result {
+        Ok((name, bytes)) => FileDialogAnswer::Contents(name, bytes),
+        Err(e) => FileDialogAnswer::Unavailable(e),
+    }
+}
+
+define_class!(
+    // SAFETY: No custom ivars or Drop; UIKit calls this NSObject delegate on the main thread.
+    #[unsafe(super = NSObject)]
+    #[thread_kind = MainThreadOnly]
+    #[name = "PhotoCraftImagePickerDelegate"]
+    struct ImagePickerDelegate;
+    // SAFETY: NSObjectProtocol has no additional requirements.
+    unsafe impl NSObjectProtocol for ImagePickerDelegate {}
+    // SAFETY: Exact UIKit document picker callback signatures, main thread only.
+    unsafe impl UIDocumentPickerDelegate for ImagePickerDelegate {
+        #[unsafe(method(documentPickerWasCancelled:))]
+        fn cancelled(&self, _picker: &UIDocumentPickerViewController) {
+            finish_pick(None);
+        }
+        #[unsafe(method(documentPicker:didPickDocumentsAtURLs:))]
+        fn documents(&self, _picker: &UIDocumentPickerViewController, urls: &NSArray<NSURL>) {
+            let path = urls.iter().next().and_then(|url| url.path()).map(|p| p.to_string());
+            let Some(path) = path else {
+                finish_pick(None);
+                return;
+            };
+            let reply = PICK_REPLY.with(|slot| slot.borrow_mut().take());
+            if let Some(reply) = reply {
+                let shared = Arc::new(Mutex::new(Some(reply)));
+                let worker = shared.clone();
+                let result = std::thread::Builder::new().name("ipad-image-open".into()).spawn(move || {
+                    let answer = loaded_answer(crate::picked_file::read_path(&path));
+                    if let Some(reply) = worker.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+                        reply.send(Some(answer));
+                    }
+                });
+                if let Err(e) = result
+                    && let Some(reply) = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take()
+                {
+                    reply.send(Some(FileDialogAnswer::Unavailable(e.to_string())));
+                }
+            }
+        }
+    }
+    // SAFETY: The required PhotosUI callback is registered as a protocol implementation,
+    // with the exact iOS SDK signature and main-thread-only objects.
+    unsafe impl IosPhotosDelegate for ImagePickerDelegate {
+        #[unsafe(method(picker:didFinishPicking:))]
+        fn photos(&self, picker: &UIViewController, results: &NSArray<PHPickerResult>) {
+            picker.dismissViewControllerAnimated_completion(true, None);
+            let Some(result) = results.iter().next() else {
+                finish_pick(None);
+                return;
+            };
+            let reply = PICK_REPLY.with(|slot| slot.borrow_mut().take());
+            let Some(reply) = reply else { return };
+            let shared = Arc::new(Mutex::new(Some(reply)));
+            let handler = block2::RcBlock::new(move |url: *mut NSURL, error: *mut NSError| {
+                // SAFETY: NSItemProvider borrows URL/error for the completion's duration. The
+                // temporary file is read here before returning, never passed to another worker.
+                let result = unsafe {
+                    if !error.is_null() {
+                        Err("Could not download the selected photo. Check your connection and try again.".into())
+                    } else {
+                        url.as_ref()
+                            .and_then(|u| u.path())
+                            .ok_or_else(|| "No image file was returned.".to_string())
+                            .and_then(|p| crate::picked_file::read_path(&p.to_string()))
+                    }
+                };
+                if let Some(reply) = shared.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take() {
+                    reply.send(Some(loaded_answer(result)));
+                }
+            });
+            // SAFETY: SDK-defined provider API; callback owns only Send Rust state, and reads
+            // the temporary URL only while valid. Compatible representation requests an image.
+            unsafe {
+                result.itemProvider().loadFileRepresentationForTypeIdentifier_completionHandler(&NSString::from_str("public.image"), &handler);
+            }
+        }
+    }
+);
+
+fn picker_parent() -> Option<Retained<UIViewController>> {
+    WINDOW.with(|slot| slot.borrow().as_ref().and_then(|window| window.rootViewController()))
+}
+
+pub fn show_file_dialog(request: FileDialogRequest, reply: FileDialogReply, ctx: &eframe::egui::Context) {
+    let FileDialogRequest::Open { extensions, .. } = request else {
+        reply.send(Some(FileDialogAnswer::Unavailable("Saving and folder selection are not yet supported on iPad.".into())));
+        return;
+    };
+    let Some(mtm) = MainThreadMarker::new() else {
+        reply.send(None);
+        return;
+    };
+    let Some(parent) = picker_parent() else {
+        reply.send(Some(FileDialogAnswer::Unavailable("The iPad window is not ready.".into())));
+        return;
+    };
+    if parent.presentedViewController().is_some() {
+        reply.send(Some(FileDialogAnswer::Unavailable("Close the current system dialog first.".into())));
+        return;
+    }
+    PICK_REPLY.with(|slot| *slot.borrow_mut() = Some(reply));
+    if extensions.is_some() {
+        PICK_SOURCE.with(|slot| *slot.borrow_mut() = Some(false));
+        ctx.request_repaint();
+        return;
+    }
+    let alert =
+        UIAlertController::alertControllerWithTitle_message_preferredStyle(Some(&NSString::from_str("Open image")), None, UIAlertControllerStyle::Alert, mtm);
+    for (title, source) in [("Photos", Some(true)), ("Files", Some(false)), ("Cancel", None)] {
+        let ctx = ctx.clone();
+        let handler = block2::RcBlock::new(move |_: std::ptr::NonNull<UIAlertAction>| {
+            if let Some(source) = source {
+                PICK_SOURCE.with(|slot| *slot.borrow_mut() = Some(source));
+                ctx.request_repaint();
+            } else {
+                finish_pick(None);
+            }
+        });
+        alert.addAction(&UIAlertAction::actionWithTitle_style_handler(
+            Some(&NSString::from_str(title)),
+            if source.is_none() { UIAlertActionStyle::Cancel } else { UIAlertActionStyle::Default },
+            Some(&handler),
+            mtm,
+        ));
+    }
+    alert.setModalInPresentation(true);
+    parent.presentViewController_animated_completion(&alert, true, None);
+}
+
+pub fn poll_file_picker(ctx: &eframe::egui::Context) {
+    if !PICK_SOURCE.with(|slot| slot.borrow().is_some()) {
+        return;
+    }
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(parent) = picker_parent() else {
+        PICK_SOURCE.with(|s| s.borrow_mut().take());
+        finish_pick(None);
+        return;
+    };
+    if parent.presentedViewController().is_some() {
+        ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        return;
+    }
+    let photos = PICK_SOURCE.with(|slot| slot.borrow_mut().take()).unwrap_or(false);
+    PICK_DELEGATE.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if slot.is_none() {
+            // SAFETY: Inherited NSObject initializer; no ivars requiring initialization.
+            *slot = Some(unsafe { msg_send![ImagePickerDelegate::alloc(mtm), init] });
+        }
+        let Some(delegate) = slot.as_ref() else { return };
+        if photos {
+            let Some(class) = AnyClass::get(c"PHPickerViewController") else {
+                finish_pick(Some(FileDialogAnswer::Unavailable("Photos picker is unavailable.".into())));
+                return;
+            };
+            // SAFETY: PhotosUI iOS SDK declares PHPickerViewController as UIViewController.
+            // objc2 0.3.2 only exposes the macOS controller binding, so use its documented iOS
+            // initializer/delegate selectors here. All objects stay on the main thread.
+            let picker: Retained<UIViewController> = unsafe {
+                let config = PHPickerConfiguration::new();
+                config.setFilter(Some(&PHPickerFilter::imagesFilter()));
+                config.setSelectionLimit(1);
+                config.setPreferredAssetRepresentationMode(PHPickerConfigurationAssetRepresentationMode::Compatible);
+                let allocated: objc2::rc::Allocated<UIViewController> = msg_send![class, alloc];
+                let picker: Retained<UIViewController> = msg_send![allocated, initWithConfiguration: &*config];
+                let _: () = msg_send![&*picker, setDelegate: ProtocolObject::<dyn IosPhotosDelegate>::from_ref(&**delegate)];
+                picker
+            };
+            picker.setModalInPresentation(true);
+            parent.presentViewController_animated_completion(&picker, true, None);
+        } else {
+            // SAFETY: Apple's immutable UTTypeData global is available on supported iPadOS.
+            let types = NSArray::from_slice(&[unsafe { objc2_uniform_type_identifiers::UTTypeData }]);
+            let picker = UIDocumentPickerViewController::initForOpeningContentTypes_asCopy(UIDocumentPickerViewController::alloc(mtm), &types, true);
+            picker.setDelegate(Some(ProtocolObject::from_ref(&**delegate)));
+            picker.setAllowsMultipleSelection(false);
+            picker.setModalInPresentation(true);
+            parent.presentViewController_animated_completion(&picker, true, None);
+        }
+    });
+}
+
 thread_local! {
     // Retain the existing winit window across scene disconnection/reconnection. No second
     // renderer, event loop, or window is created, and UIKit objects never cross threads.
@@ -119,6 +353,8 @@ define_class!(
 /// Register the name referenced by Info.plist before winit enters UIApplicationMain.
 pub fn register() {
     let _ = SceneDelegate::class();
+    // Validate required Objective-C delegate methods during startup, not on first Open.
+    let _ = ImagePickerDelegate::class();
 }
 
 /// Attach the exact window owned by eframe, rather than selecting a keyboard/system window.

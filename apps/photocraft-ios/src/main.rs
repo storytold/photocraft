@@ -8,11 +8,15 @@
 #[cfg(any(target_os = "ios", test))]
 mod hover;
 #[cfg(any(target_os = "ios", test))]
+mod picked_file;
+#[cfg(any(target_os = "ios", test))]
 mod safe_area;
 #[cfg(target_os = "ios")]
 mod scene;
 #[cfg(target_os = "ios")]
 mod shell;
+#[cfg(any(target_os = "ios", test))]
+mod touch_guard;
 
 #[cfg(target_os = "ios")]
 fn main() -> eframe::Result {
@@ -34,13 +38,21 @@ fn main() -> eframe::Result {
             scene::attach_window(cc)?;
             scene::install_pencil_hover(cc, &cc.egui_ctx)?;
             PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
-            let mut app = PhotocraftApp::new(Session::new(), Services::default());
+            let picker_ctx = cc.egui_ctx.clone();
+            let services = Services {
+                import: Some(Box::new(|name, bytes, depth| {
+                    photocraft_io::import_with_svg_group_depth(name, bytes, depth).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+                })),
+                file_dialog: Some(Box::new(move |request, _, reply| scene::show_file_dialog(request, reply, &picker_ctx))),
+                ..Services::default()
+            };
+            let mut app = PhotocraftApp::new(Session::new(), services);
             app.set_theme(&cc.egui_ctx, ThemeKind::Pro);
             if let Some(render_state) = cc.wgpu_render_state.clone() {
                 log::info!("photocraft-ios: wgpu backend {:?}", render_state.adapter.get_info().backend);
                 app.set_wgpu(render_state);
             }
-            Ok(Box::new(shell::IosShell(app)))
+            Ok(Box::new(shell::IosShell(app, Default::default())))
         }),
     )
 }

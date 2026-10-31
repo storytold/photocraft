@@ -85,6 +85,11 @@ xcodebuild -project packaging/ios/PhotoCraft.xcodeproj \
 
 ## Current scope
 
+On the canvas, fingers navigate/zoom and Apple Pencil draws. The iOS input wrapper suppresses
+the first finger's emulated mouse press before a second finger arrives, retaining raw touches
+for pinch zoom. Buttons and popup menus remain finger-operable. This relies on winit's iPad
+force metadata (Pencil: present, including zero; finger: absent); validate on other hardware.
+
 The native app shell, Rust UI and Metal renderer build for iPadOS device and simulator targets.
 On 2026-10-22, a signed Debug build was installed and launched on a physical M4 iPad Pro running
 iPadOS 27.2 beta. The user confirmed visible editor UI, touch input and Apple Pencil pressure.
@@ -98,9 +103,12 @@ The tester confirmed hover movement works, but the brush outline is not visible.
 brush preview as incomplete. Hover distance, tilt and barrel roll are not yet used to alter it.
 
 Reference: [Apple's Pencil hover guide](https://developer.apple.com/documentation/uikit/adopting-hover-support-for-apple-pencil).
-System Files integration, document sharing and a touch-adapted workspace remain follow-ups;
-until the Files service lands, the app can create and edit new documents but cannot open or save
-through the iPadOS document picker.
+File > Open now offers Photos or Files (including iCloud providers). One selected image is
+loaded into a new document using its contents, without retaining a temporary path or modifying
+the original. Photos uses the system PHPicker, without broad photo-library authorization;
+Files imports a local copy. Reads are limited to 128 MiB and errors/cancellation are reported
+through the existing asynchronous dialog service. The native picker integration requires
+physical-device confirmation. Save/export/share and a touch-adapted workspace remain follow-ups.
 
 ## UIKit scene compatibility
 

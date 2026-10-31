@@ -9,6 +9,14 @@ APP = ROOT.parent.parent / "apps" / "photocraft-ios"
 
 
 class PackagingTests(unittest.TestCase):
+    def test_ios_photos_required_callback_is_registered_with_protocol(self):
+        # objc2 aborts class registration when a required protocol method is only
+        # registered as an inherent method (the shipped macOS binding is incomplete on iOS).
+        bridge = (APP / "src/scene.rs").read_text()
+        implementation = bridge.split("unsafe impl IosPhotosDelegate for ImagePickerDelegate", 1)[1]
+        self.assertIn('#[unsafe(method(picker:didFinishPicking:))]', implementation.split("\n);", 1)[0])
+        self.assertIn("let _ = ImagePickerDelegate::class();", bridge)
+
     def test_scene_manifest_matches_registered_rust_class(self):
         with (ROOT / "Info.plist").open("rb") as source:
             manifest = plistlib.load(source)["UIApplicationSceneManifest"]
