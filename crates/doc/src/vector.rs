@@ -303,10 +303,14 @@ pub enum LiveShape {
         rect: [f64; 4],
     },
     /// Regular polygon or star inscribed in `rect`; `star_ratio` = inner/outer radius (1 = polygon).
+    /// `corner_radius` rounds every vertex (0 = sharp), each within what its edges allow; the
+    /// Triangle tool draws a 3-sided one.
     Polygon {
         rect: [f64; 4],
         sides: u32,
         star_ratio: f64,
+        #[serde(default)]
+        corner_radius: f64,
     },
     /// Line from `from` to `to` drawn as a filled bar `weight` px thick.
     Line {
@@ -370,6 +374,15 @@ mod tests {
         assert_eq!(p.control_bounds(), Some((1.0, 2.0, 5.0, 9.0)));
         let t = p.transform(&Affine::translate(1.0, 1.0));
         assert_eq!(t.control_bounds(), Some((2.0, 3.0, 6.0, 10.0)));
+    }
+
+    #[test]
+    fn a_polygon_saved_before_corner_radii_loads_sharp() {
+        let old = r#"{"kind":"polygon","rect":[0.0,0.0,10.0,10.0],"sides":3,"star_ratio":1.0}"#;
+        let back: LiveShape = serde_json::from_str(old).unwrap();
+        assert_eq!(back, LiveShape::Polygon { rect: [0.0, 0.0, 10.0, 10.0], sides: 3, star_ratio: 1.0, corner_radius: 0.0 });
+        let round = LiveShape::Polygon { rect: [0.0; 4], sides: 6, star_ratio: 1.0, corner_radius: 4.5 };
+        assert_eq!(serde_json::from_str::<LiveShape>(&serde_json::to_string(&round).unwrap()).unwrap(), round);
     }
 
     #[test]
