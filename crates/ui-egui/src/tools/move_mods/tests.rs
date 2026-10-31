@@ -104,6 +104,23 @@ fn alt_drag_duplicates_and_moves_the_copy_in_one_step() {
     assert_eq!(bounds(&app, st.active_layer.unwrap()), photocraft_geom::Rect::new(22, 8, 38, 24));
 }
 
+/// #9931: ⌘⌥-drag with the Zoom tool duplicates as the Move tool's ⌥-drag does, also when ⌘
+/// comes with the event (automation's `ui.pointer`) rather than being held first. (With a
+/// painting tool ⌥ is the Eyedropper, which wins.)
+#[test]
+fn cmd_alt_drag_with_the_zoom_tool_duplicates() {
+    let mut app = app_with_layer();
+    app.ui.tool = Tool::Zoom;
+    let orig = app.session.active().unwrap().active_layer.unwrap();
+    let n0 = app.session.active().unwrap().doc.layers.len();
+    drag(&mut app, &[[16.0, 16.0], [20.0, 16.0], [26.0, 21.0]], egui::Modifiers::COMMAND | egui::Modifiers::ALT);
+    let st = app.session.active().unwrap();
+    assert_eq!(st.doc.layers.len(), n0 + 1, "one copy");
+    assert_eq!(bounds(&app, orig), photocraft_geom::Rect::new(8, 8, 24, 24), "original untouched");
+    assert_eq!(bounds(&app, st.active_layer.unwrap()), photocraft_geom::Rect::new(18, 13, 34, 29));
+    assert_eq!(app.ui.tool, Tool::Zoom);
+}
+
 /// Allow Non-Linear History: the copy's step moves the later states in front of it, and
 /// folding the copy and the move into one step must keep them.
 #[test]

@@ -1068,6 +1068,22 @@ fn latched_modifier_keys_zoom_with_the_hand_tool() {
     assert_eq!(held_tool(h.state(), &h.ctx), None, "only the Hand's ⌥ zooms");
 }
 
+/// #9931: the Modifier Keys panel's latched ⌘ makes the Zoom tool the Move tool too, so a click
+/// moves the layer and does not zoom.
+#[test]
+fn latched_command_with_the_zoom_tool_is_the_move_tool() {
+    let mut h = harness(Tool::Zoom);
+    let id = with_layer(&mut h);
+    let z0 = h.state().ui.views[0].zoom;
+    h.state_mut().ui.shell.sticky_command = true;
+    h.run_steps(1);
+    assert_eq!(held_tool(h.state(), &h.ctx), Some(Temporary::Move));
+    drag_with(&mut h, Modifiers::NONE, 130.0, 130.0, 170.0, 150.0);
+    assert_eq!(bounds(&h, id), Rect::new(140, 120, 200, 180), "the layer moved by (40, 20)");
+    assert_eq!(h.state().ui.views[0].zoom, z0, "no zoom");
+    assert_eq!(h.state().ui.tool, Tool::Zoom);
+}
+
 /// A Hand press made without a modifier stays the Hand through its release: ⌘ or ⌥ pressed
 /// before letting go (without moving past the drag threshold) doesn't zoom on the release.
 #[test]

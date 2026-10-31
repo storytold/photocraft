@@ -115,9 +115,10 @@ pub fn cmd_nudges(app: &PhotocraftApp) -> bool {
         && !(selecting && (!app.ui.polygon.is_empty() || app.ui.magnetic.active()))
 }
 
-/// Is ⌘ alone (no other temporary key) making the Move tool now?
+/// Is ⌘ alone (no other temporary key) making the Move tool now? The Modifier Keys panel's
+/// latched ⌘ counts, as it does for the press itself (`canvas::event_tool`).
 fn cmd_move_held(app: &PhotocraftApp, i: &InputState) -> bool {
-    i.modifiers.command && cmd_moves(app.ui.tool) && app.ui.transform.is_none() && app.ui.text_edit.is_none()
+    crate::workspace_ui::sticky_mods(app, i.modifiers).command && cmd_moves(app.ui.tool) && app.ui.transform.is_none() && app.ui.text_edit.is_none()
 }
 
 /// The Hand tool's own modifiers (#6434): ⌘ (Ctrl off the Mac) held is Zoom In, ⌥ (with or
