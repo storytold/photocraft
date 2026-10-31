@@ -44,6 +44,21 @@ fn main() -> Result<(), String> {
         closed.push(start.elapsed().as_secs_f64() * 1000.0);
     }
     rows.push(row("closed selection", &closed, None, None));
+    // Same small stroke on 24 MP and huge sparse canvases exposes canvas-wide finalization work.
+    for (name, bounds) in
+        [("partial fill small stroke 24MP", Rect::new(0, 0, 6000, 4000)), ("partial fill small stroke huge sparse", Rect::new(0, 0, 500_000, 500_000))]
+    {
+        let points = [[20., 20.], [100., 20.], [100., 100.], [20., 100.], [20., 20.]];
+        let mut timings = Vec::new();
+        for _ in 0..if quick { 3 } else { 5 } {
+            let mut stroke = StrokeMask::new(Options { size: 10.0, opacity: 0.5, ..Default::default() }, bounds).map_err(str::to_owned)?;
+            stroke.append(&points).map_err(str::to_owned)?;
+            let start = Instant::now();
+            black_box(stroke.finish().map_err(str::to_owned)?);
+            timings.push(start.elapsed().as_secs_f64() * 1000.0);
+        }
+        rows.push(row(name, &timings, None, None));
+    }
     let data = report(
         "selection_brush_bench",
         json!({"quick":quick,"width":w,"height":h,"brush_size":60,"hardness":70,"opacity":100,"samples":n,"presentation_included":false}),

@@ -94,3 +94,8 @@ exactly at both document and reduced display scales, in Add and Subtract modes.
 closed fill at 24 MP in its full release run. Its raster timings exclude presentation and
 must not be reported as UI FPS. A 4K/30 FPS claim additionally requires measured input-to-frame
 or presented-frame evidence on a stated machine; it is not inferred from this benchmark.
+
+Partial-opacity closed fills scale only the clipped polygon bounds, within the same
+64 MP fill budget, rather than enumerating the canvas. Regression coverage compares
+a small closed fill on ordinary and billion-pixel-wide sparse canvases; the benchmark
+also reports small-stroke finalization on 24 MP and 500,000-square sparse canvases.

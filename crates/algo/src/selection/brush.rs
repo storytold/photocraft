@@ -103,7 +103,8 @@ impl StrokeMask {
         let points: Vec<(f32, f32)> = self.points.iter().map(|p| (p[0] as f32, p[1] as f32)).collect();
         let fill = polygon_surface(&points, self.canvas).ok_or("closed stroke exceeds the painted tile budget")?;
         let opacity = self.options.opacity;
-        let fill = if opacity == 1.0 { fill } else { combine_surfaces(&fill, &fill, self.canvas, |a, _| a * opacity) };
+        // The fill budget bounds this region; opacity scaling must not enumerate the canvas.
+        let fill = if opacity == 1.0 { fill } else { combine_surfaces(&fill, &fill, bounds.intersect(&self.canvas), |a, _| a * opacity) };
         Ok(combine_sparse(&self.mask, &fill, self.canvas, f32::max))
     }
 
@@ -216,6 +217,22 @@ mod tests {
         assert!((mask(&closed, options).sample_channel(60, 60, 0) - 0.5).abs() < 0.01);
         assert_eq!(mask(&closed, Options { opacity: 0.0, ..options }).tile_count(), 0);
     }
+    #[test]
+    /// A small partially opaque fill has identical coverage on ordinary and huge sparse canvases.
+    fn selection_brush_partial_fill_stays_local_on_huge_canvas() {
+        let options = Options { size: 10.0, opacity: 0.5, ..Default::default() };
+        let points = [[20., 20.], [100., 20.], [100., 100.], [20., 100.], [20., 20.]];
+        let expected = mask(&points, options);
+        let mut stroke = StrokeMask::new(options, Rect::new(0, 0, 1_000_000_000, 1_000_000_000)).unwrap();
+        stroke.append(&points).unwrap();
+        let actual = stroke.finish().unwrap();
+        assert_eq!(actual.tile_count(), expected.tile_count());
+        assert_eq!(actual.content_bounds(), expected.content_bounds());
+        let region = Rect::new(0, 0, 150, 150);
+        assert_eq!(actual.read_region(region), expected.read_region(region));
+        assert_eq!(actual.sample_channel(999_999_999, 999_999_999, 0), 0.0);
+    }
+
     #[test]
     /// Check sparse long segments and graceful rejection of non-finite input.
     fn selection_brush_huge_diagonal_is_sparse_and_bad_numbers_are_rejected() {
