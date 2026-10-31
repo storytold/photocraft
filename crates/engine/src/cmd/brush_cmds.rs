@@ -722,19 +722,9 @@ impl LiveStroke {
                 self.union_live = Some((live, passes));
                 return Ok(dmg);
             }
-            let mut dmg = Rect::EMPTY;
             let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
-            if !old.is_empty() {
-                // Back to the stroke without the previous tail.
-                surf.write_region(old, &self.pre.read_region(old));
-                self.renderer.mark_dirty(old);
-                dmg = old;
-            }
-            dmg = dmg.union(&self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false));
-            if let Some(mut tail) = self.renderer.tail_preview() {
-                self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
-                dmg = dmg.union(&self.tail);
-            }
+            let (dmg, tail) = self.renderer.composite_live(old, &self.pre, surf, self.sel.as_ref(), self.lock);
+            self.tail = tail;
             Ok(dmg)
         })?;
         // The preview shows the pixels the commit keeps (see `stroke_with`).
