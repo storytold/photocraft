@@ -258,7 +258,7 @@ fn common_color(app: &crate::PhotocraftApp, l: &Layer, on_set: bool) -> Option<L
 }
 
 fn color_menu(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool, actions: &mut Vec<(String, Value)>) {
-    use egui::containers::menu::{SubMenu, SubMenuButton};
+    use egui::containers::menu::SubMenu;
     let rtl = ui.style().right_to_left;
     let label = tl!("Color");
     // The row mirrors like any menu row: under RTL the label hugs the row's right edge and the
@@ -268,9 +268,7 @@ fn color_menu(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: 
     } else {
         egui::RichText::new(label).into()
     };
-    let button = egui::Button::new(text);
-    let button = if rtl { button.left_text(SubMenuButton::arrow_atom(None)) } else { button.right_text(SubMenuButton::arrow_atom(None)) };
-    let response = ui.add(button);
+    let response = ui.add(crate::menu_keys::submenu_row_button(text, rtl));
     SubMenu::new().show(ui, &response, |ui| color_choices(app, ui, l, on_set, actions));
 }
 
@@ -307,11 +305,8 @@ fn color_button(ui: &mut egui::Ui, color: LabelColor, checked: bool) -> egui::Re
     // edge (the reading start), the swatch and the name to its left.
     let check = Atom::custom(check_id, vec2(14.0, 16.0));
     let swatch = Atom::custom(swatch_id, vec2(16.0, 16.0));
-    let button = if ui.style().right_to_left {
-        egui::Button::new((Atom::grow(), name, swatch, check)).atom_ui(ui)
-    } else {
-        egui::Button::new((check, swatch, name, Atom::grow())).atom_ui(ui)
-    };
+    let atoms = egui::IntoAtoms::into_atoms((check, swatch, name, Atom::grow()));
+    let button = egui::Button::new(crate::menu_keys::mirror_atoms(atoms, ui.style().right_to_left)).atom_ui(ui);
     if checked && let Some(rect) = button.rect(check_id) {
         crate::icons::paint(ui, rect, "check", 14.0, t.icon);
     }

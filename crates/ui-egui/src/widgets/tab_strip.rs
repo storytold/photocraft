@@ -22,6 +22,53 @@ pub fn elided(ui: &Ui, text: &str, font: egui::FontId, color: egui::Color32, max
     ui.painter().layout_job(job)
 }
 
+/// Place strip items `(index, width)` in `area` from the reading-start edge with `gap` between
+/// them — the left edge left-to-right, the right edge right-to-left — and return the placed rects
+/// (same order as `shown`) and the cursor x after the last item.
+pub fn place_strip(area: Rect, shown: &[(usize, f32)], gap: f32) -> (Vec<(usize, Rect)>, f32) {
+    let rtl = crate::direction::is_rtl();
+    let mut x = crate::direction::start_x(area, 0.0);
+    let mut placed = Vec::with_capacity(shown.len());
+    for &(i, w) in shown {
+        let r = if rtl {
+            Rect::from_min_max(pos2(x - w, area.top()), pos2(x, area.bottom()))
+        } else {
+            Rect::from_min_size(pos2(x, area.top()), vec2(w, area.height()))
+        };
+        x = if rtl { r.left() - gap } else { r.right() + gap };
+        placed.push((i, r));
+    }
+    (placed, x)
+}
+
+/// The overflow chevron's slot right after the last tab placed at cursor `x` (`cw` wide).
+pub fn chevron_at(area: Rect, x: f32, cw: f32) -> Rect {
+    if crate::direction::is_rtl() {
+        Rect::from_min_max(pos2(area.left(), area.top()), pos2((area.left() + cw).min(x), area.bottom()))
+    } else {
+        Rect::from_min_size(pos2(x, area.top()), vec2(cw, area.height()))
+    }
+}
+
+/// A `cw`-wide slot pinned to the strip's reading end (the left edge right-to-left), full height.
+pub fn reading_end_rect(area: Rect, cw: f32) -> Rect {
+    let left = if crate::direction::is_rtl() { area.left() } else { (area.right() - cw).max(area.left()) };
+    Rect::from_min_size(pos2(left, area.top()), vec2(cw, area.height()))
+}
+
+/// A tab's close button: 14x14, centred vertically, 13 pt from the tab's reading-start edge on
+/// macOS and from its reading-end edge elsewhere (Photoshop's platform order, mirrored).
+pub fn tab_close_button(tab: Rect, mac: bool) -> Rect {
+    let x = if mac { crate::direction::start_x(tab, 13.0) } else { crate::direction::end_x(tab, 13.0) };
+    Rect::from_center_size(pos2(x, tab.center().y), vec2(14.0, 14.0))
+}
+
+/// The x a tab title `title_w` wide starts at: 26 pt from the reading-start edge on macOS (the ×
+/// leads), 16 pt elsewhere.
+pub fn tab_title_x(tab: Rect, title_w: f32, mac: bool) -> f32 {
+    crate::direction::start_x_w(tab, if mac { 26.0 } else { 16.0 }, title_w)
+}
+
 /// Context-menu action chosen on a dock tab.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TabContextAction {
@@ -72,7 +119,6 @@ fn tabs_in(
     font: egui::FontId,
     pad: f32,
     min_w: f32,
-    rtl: bool,
     active: impl Fn(usize) -> bool,
     mut paint_tab: impl FnMut(&Ui, Rect, usize, &str, std::sync::Arc<egui::Galley>, &Response, bool),
 ) -> Option<TabContextAction> {
@@ -85,16 +131,12 @@ fn tabs_in(
     // A right-to-left strip reads from the right edge; the overflow chevron keeps its slot at
     // the reading end (the left), which `fit` has already reserved in the tab budget.
     let chev = (!f.overflow.is_empty() && f.overflow_width > 0.0).then_some(f.overflow_width);
-    let mut x = if rtl { area.right() } else { area.left() };
+    let (placed_shown, x) = place_strip(area, &f.shown, 0.0);
     let mut context = None;
-    for &(i, w) in &f.shown {
+    for &(i, r) in &placed_shown {
+        let w = r.width();
         let Some(name) = translated_tabs.get(i) else { continue };
         let panel_id = panel_ids[i];
-        let r = if rtl {
-            Rect::from_min_max(pos2(x - w, area.top()), pos2(x, area.bottom()))
-        } else {
-            Rect::from_min_size(pos2(x, area.top()), vec2(w, area.height()))
-        };
         // The padding gives way (down to a third) before the label is cut.
         let galley = elided(ui, name, font.clone(), t.text, (w - pad / 3.0).max(1.0));
         let cut = galley.size().x + pad + 0.5 < natural.get(i).copied().unwrap_or(0.0) && galley.size().x + pad / 3.0 >= w - 0.5;
@@ -119,14 +161,9 @@ fn tabs_in(
                 ui.close();
             }
         });
-        x = if rtl { r.left() } else { r.right() };
     }
     if let Some(cw) = chev {
-        let r = if rtl {
-            Rect::from_min_max(pos2(area.left(), area.top()), pos2((area.left() + cw).min(x), area.bottom()))
-        } else {
-            Rect::from_min_size(pos2(x, area.top()), vec2(cw, area.height()))
-        };
+        let r = chevron_at(area, x, cw);
         let mut picked = None;
         overflow_button(ui, id.with("tab-overflow"), r, tl!("More panels"), translated_tabs, &f.overflow, None, &mut picked);
         if let Some(i) = picked {
@@ -151,7 +188,6 @@ pub fn pill_tabs(ui: &mut Ui, id: egui::Id, area: Rect, tabs: &[&str], selected:
         theme::medium(12.5),
         20.0,
         44.0,
-        rtl,
         |i| i == sel,
         |ui, r, _, _, galley, resp, active| {
             // 2 pt between pills, as the old horizontal layout had; mirrored, the gap falls on
@@ -279,7 +315,6 @@ mod tests {
                     egui::FontId::proportional(12.0),
                     20.0,
                     44.0,
-                    dir == crate::direction::Dir::Rtl,
                     |i| i == 0,
                     |_ui, r, i, _name, _galley, _resp, _active| rects.push((i, r)),
                 );
@@ -321,5 +356,62 @@ mod tests {
         assert!(ltr_chevron.right() <= area.right() + 0.5, "LTR keeps the chevron at the right end: {ltr_chevron:?}");
         let max_right = ltr.iter().map(|(_, r)| r.right()).fold(f32::NEG_INFINITY, f32::max);
         assert!(max_right <= ltr_chevron.left() + 0.5, "no tab runs under the chevron: {ltr:?}");
+    }
+
+    /// `place_strip` walks from the reading-start edge with the gap between items, and returns
+    /// the cursor after the last one.
+    #[test]
+    fn place_strip_places_from_the_reading_start() {
+        let area = Rect::from_min_size(pos2(100.0, 50.0), vec2(300.0, 24.0));
+        let shown = [(0usize, 60.0f32), (1, 70.0), (2, 50.0)];
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let (placed, x) = place_strip(area, &shown, 4.0);
+        assert_eq!(placed.len(), 3);
+        assert!((placed[0].1.left() - 100.0).abs() < 1e-4 && (placed[0].1.width() - 60.0).abs() < 1e-4, "{:?}", placed[0].1);
+        assert!((placed[1].1.left() - 164.0).abs() < 1e-4, "gap after the first tab: {:?}", placed[1].1);
+        assert!((x - 292.0).abs() < 1e-4, "cursor after the last tab: {x}");
+        drop(_ltr);
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let (placed, x) = place_strip(area, &shown, 4.0);
+        assert!((placed[0].1.right() - 400.0).abs() < 1e-4 && (placed[0].1.width() - 60.0).abs() < 1e-4, "first tab hugs the right edge: {:?}", placed[0].1);
+        assert!((placed[1].1.right() - 336.0).abs() < 1e-4, "gap on the reading side: {:?}", placed[1].1);
+        assert!((x - 208.0).abs() < 1e-4, "cursor past the last tab: {x}");
+    }
+
+    /// The chevron slot follows the last tab left-to-right and clamps to the strip's left edge
+    /// right-to-left; `reading_end_rect` pins to the reading end in both directions.
+    #[test]
+    fn chevron_and_reading_end_slots() {
+        let area = Rect::from_min_size(pos2(100.0, 50.0), vec2(300.0, 24.0));
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let c = chevron_at(area, 380.0, CHEVRON_W);
+        assert!((c.left() - 380.0).abs() < 1e-4 && (c.width() - CHEVRON_W).abs() < 1e-4, "{c:?}");
+        let e = reading_end_rect(area, CHEVRON_W);
+        assert!((e.right() - 400.0).abs() < 1e-4, "ltr end slot at the right: {e:?}");
+        drop(_ltr);
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let c = chevron_at(area, 110.0, CHEVRON_W);
+        assert!((c.left() - 100.0).abs() < 1e-4 && (c.right() - 110.0).abs() < 1e-4, "clamped to the cursor: {c:?}");
+        let c = chevron_at(area, 150.0, CHEVRON_W);
+        assert!((c.left() - 100.0).abs() < 1e-4 && (c.width() - CHEVRON_W).abs() < 1e-4, "full slot at the reading end: {c:?}");
+        let e = reading_end_rect(area, CHEVRON_W);
+        assert!((e.left() - 100.0).abs() < 1e-4, "rtl end slot at the left: {e:?}");
+    }
+
+    /// `tab_close_button`/`tab_title_x` reproduce the platform x table in both directions.
+    #[test]
+    fn tab_close_and_title_x() {
+        let tab = Rect::from_min_size(pos2(100.0, 50.0), vec2(120.0, 26.0));
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        assert!((tab_close_button(tab, true).center().x - 113.0).abs() < 1e-4, "mac ltr");
+        assert!((tab_close_button(tab, false).center().x - 207.0).abs() < 1e-4, "win ltr");
+        assert!((tab_title_x(tab, 40.0, true) - 126.0).abs() < 1e-4, "mac ltr");
+        assert!((tab_title_x(tab, 40.0, false) - 116.0).abs() < 1e-4, "win ltr");
+        drop(_ltr);
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        assert!((tab_close_button(tab, true).center().x - 207.0).abs() < 1e-4, "mac rtl");
+        assert!((tab_close_button(tab, false).center().x - 113.0).abs() < 1e-4, "win rtl");
+        assert!((tab_title_x(tab, 40.0, true) - 154.0).abs() < 1e-4, "mac rtl");
+        assert!((tab_title_x(tab, 40.0, false) - 164.0).abs() < 1e-4, "win rtl");
     }
 }
