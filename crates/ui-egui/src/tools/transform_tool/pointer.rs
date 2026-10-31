@@ -100,6 +100,12 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
             // keep their existing behavior.
             if matches!(ev, ToolEvent::Up { .. }) && g.is_some_and(|g| accepts_outside_click(g, [x, y], tol)) {
                 commit(app);
+                // The Move tool's click that accepted the box also picks what is under it
+                // (Auto-Select), rather than needing a second click (#8208).
+                if app.ui.transform.is_none() && app.ui.tool == crate::state::Tool::Move {
+                    crate::canvas::tool_event(app, ToolEvent::Down { x, y, pressure: 1.0 }, mods);
+                    crate::canvas::tool_event(app, ToolEvent::Up { x, y }, mods);
+                }
                 return true;
             }
             let type_layer = moves_type(app, &t);
