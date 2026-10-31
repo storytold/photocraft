@@ -551,6 +551,17 @@ fn lens_filters_and_vanishing_point_refuse_an_explicit_mask_target() {
     }
 }
 
+/// #10457: a set of colour channels is still the layer's pixels, so the lens filters and Vanishing
+/// Point stay enabled there; only a mask or channel greys them out.
+#[test]
+fn lens_filters_and_vanishing_point_stay_enabled_on_a_colour_set() {
+    let mut s = session(8);
+    s.execute("channel.target", json!({"colors": [0, 2]})).unwrap();
+    for id in [crate::lens_cmds::LENS, crate::lens_cmds::WIDE, crate::vp_cmds::VP] {
+        assert!(s.is_enabled(id), "{id} is enabled on a colour set: {:?}", s.disabled_reason(id));
+    }
+}
+
 /// A levels adjustment layer whose mask reveals a 30×20 block, in a document of `mode`.
 fn adjustment_with_mask(mode: &str) -> Session {
     let mut s = Session::new();
