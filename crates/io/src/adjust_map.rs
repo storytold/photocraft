@@ -347,6 +347,58 @@ pub(crate) fn retarget_gradient_map(data: &mut [u8], target: &Adjustment, channe
     }
 }
 
+/// Points an imported `vibA` block at `target`, an [`Adjustment::Vibrance`]: the sliders the
+/// model carries are set in the file's own descriptor (a 0 omitted, as Photoshop writes it), and
+/// every other key is kept. Photoshop (27.11 in #8838) marks its newer Vibrance method with
+/// `useLegacy` false and keeps temperature and tint in the same descriptor; a regenerated block
+/// has no method key, which Photoshop reads as the legacy method, so an edited layer changed its
+/// look on reopening. The
+/// result is padded to 4 bytes inside the block, as Photoshop pads it (anything after the
+/// descriptor is that padding: [`parse_vibrance`] reads nothing there). `false` leaves `data`
+/// untouched.
+pub(crate) fn retarget_vibrance(data: &mut Vec<u8>, target: &Adjustment) -> bool {
+    let Adjustment::Vibrance { vibrance, saturation } = target else { return false };
+    let Some(mut desc) = versioned(data) else { return false };
+    // Photoshop's key order: a key absent from the file goes after the ones listed before it.
+    let sliders = [("vibrance", *vibrance), ("Strt", *saturation)];
+    for (i, (key, value)) in sliders.iter().enumerate() {
+        let value = i32::from(clamp_i16(value.clamp(-100.0, 100.0)));
+        let at = desc.items.iter().position(|(k, _)| k.is(key));
+        match (at, value) {
+            (Some(at), 0) => {
+                desc.items.remove(at);
+            }
+            (Some(at), v) => {
+                if let Some(item) = desc.items.get_mut(at) {
+                    item.1 = Value::Integer(v);
+                }
+            }
+            (None, 0) => {}
+            (None, v) => {
+                let at = desc.items.iter().rposition(|(k, _)| sliders.iter().take(i).any(|(p, _)| k.is(p))).map_or(0, |p| p + 1);
+                desc.items.insert(at, (photocraft_psd::descriptor::Id::new(key), Value::Integer(v)));
+            }
+        }
+    }
+    let mut out = VersionedDescriptor::new(desc).to_bytes();
+    out.resize(out.len().next_multiple_of(4), 0);
+    *data = out;
+    true
+}
+
+/// `true` when a `vibA` block selects Photoshop's newer Vibrance method (`useLegacy` false). The
+/// layer opens as a Vibrance and keeps the method on save ([`retarget_vibrance`]), but PhotoCraft
+/// previews it with the legacy method. An unreadable block is `false`: it opens unsupported.
+pub(crate) fn is_newer_vibrance(data: &[u8]) -> bool {
+    versioned(data).is_some_and(|d| matches!(d.get("useLegacy"), Some(Value::Boolean(false))))
+}
+
+/// The open note for a layer [`is_newer_vibrance`] holds, so its legacy-method preview is not
+/// mistaken for Photoshop's look (#8838).
+pub(crate) fn newer_vibrance_warning(layer: &str) -> String {
+    format!("layer \"{layer}\": its Vibrance uses Photoshop's newer method, which PhotoCraft previews with the legacy method; the method is kept when saved")
+}
+
 /// `true` for a `grdm` block exactly as older PhotoCraft builds wrote it: [`write_gradient_map`]'s
 /// output without the two padding bytes, which makes Photoshop refuse the file (#8070). Blocks
 /// from other writers, whatever their length, are not matched.

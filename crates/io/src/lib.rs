@@ -158,7 +158,8 @@ pub(crate) fn unequal_resolution_warning(x: f64, y: f64) -> Option<String> {
 
 /// Warnings about a loaded document's layers that render without their stored effect, for
 /// sources that carry no import warnings of their own (a crafted `.pcraft`): a Color Lookup
-/// whose table can't be applied silently renders as the identity instead (#1763).
+/// whose table can't be applied silently renders as the identity instead (#1763), and a Vibrance
+/// from Photoshop's newer method previews with the legacy one (#8838).
 pub fn open_warnings(doc: &Document) -> Vec<String> {
     let mut out = Vec::new();
     // Iterative, so no document's nesting can make this recurse.
@@ -176,6 +177,11 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
                     out.push(format!("layer \"{}\": its Color Lookup has no usable table for a {size}³ lookup; the layer renders without the lookup", l.name))
                 }
             }
+        }
+        if matches!(l.content, LayerContent::Adjustment(Adjustment::Vibrance { .. }))
+            && l.psd_blocks.iter().any(|(k, d)| k == b"vibA" && adjust_map::is_newer_vibrance(d))
+        {
+            out.push(adjust_map::newer_vibrance_warning(&l.name));
         }
         if let Some(children) = l.children() {
             stack.extend(children.iter().rev());

@@ -633,6 +633,100 @@ fn vibrance_golden_block() {
     assert!(matches!(parse(b"vibA", &v, None, Channels::Rgb), Adjustment::Unsupported { .. }));
 }
 
+/// A `vibA` block shaped as Photoshop writes it: a one-NUL name and padding to 4 bytes.
+fn photoshop_vib(items: &[(&str, Value)]) -> Vec<u8> {
+    let mut d = Descriptor::new("null");
+    d.name = photocraft_psd::descriptor::UnicodeString::new_nul("");
+    for (k, v) in items {
+        d = d.with(k, v.clone());
+    }
+    let mut b = vdesc(d);
+    b.resize(b.len().next_multiple_of(4), 0);
+    b
+}
+
+/// A `vibA` block's keys and values in stored order, to check what an edit kept and where.
+fn vib_keys(data: &[u8]) -> Vec<(String, Value)> {
+    versioned(data).unwrap().items.into_iter().map(|(k, v)| (String::from_utf8_lossy(k.as_bytes()).into_owned(), v)).collect()
+}
+
+/// Editing the sliders rewrites only them in the file's own `vibA` descriptor, so Photoshop's
+/// method switch and the keys the model doesn't carry survive the save (#8838).
+#[test]
+fn vibrance_edit_keeps_the_files_method_and_other_keys() {
+    // Photoshop's newer method: editing the slider must not drop `useLegacy` false.
+    let legacy_off = ("useLegacy", Value::Boolean(false));
+    let original = photoshop_vib(&[("vibrance", Value::Integer(28)), ("Strt", Value::Integer(-7)), legacy_off.clone()]);
+    assert_eq!(original.len() % 4, 0);
+    let target = Adjustment::Vibrance { vibrance: 29.0, saturation: -7.0 };
+    let mut data = original.clone();
+    assert!(retarget_vibrance(&mut data, &target));
+    assert_eq!(data.len() % 4, 0, "padded to 4 inside the block, as Photoshop pads it");
+    assert_eq!(parse(b"vibA", &data, None, Channels::Rgb), target);
+    assert_eq!(
+        vib_keys(&data),
+        [("vibrance".to_string(), Value::Integer(29)), ("Strt".to_string(), Value::Integer(-7)), ("useLegacy".to_string(), Value::Boolean(false))]
+    );
+    // Only the slider's value changed: the name, class and every other byte are the file's.
+    let unchanged = Adjustment::Vibrance { vibrance: 28.0, saturation: -7.0 };
+    let mut same = original.clone();
+    assert!(retarget_vibrance(&mut same, &unchanged));
+    assert_eq!(same, original);
+
+    // Keys the file doesn't have are inserted in Photoshop's order; a slider set to 0 is
+    // omitted, as Photoshop omits it. Unknown keys (temperature, tint) stay as they were.
+    let tint = ("tint", Value::Integer(12));
+    let mut data = photoshop_vib(&[legacy_off.clone(), tint.clone()]);
+    assert!(retarget_vibrance(&mut data, &Adjustment::Vibrance { vibrance: 40.0, saturation: 15.0 }));
+    let keys: Vec<String> = vib_keys(&data).into_iter().map(|(k, _)| k).collect();
+    assert_eq!(keys, ["vibrance", "Strt", "useLegacy", "tint"]);
+    let mut data = photoshop_vib(&[("vibrance", Value::Integer(5)), legacy_off.clone()]);
+    assert!(retarget_vibrance(&mut data, &Adjustment::Vibrance { vibrance: 5.0, saturation: -30.0 }));
+    let keys: Vec<String> = vib_keys(&data).into_iter().map(|(k, _)| k).collect();
+    assert_eq!(keys, ["vibrance", "Strt", "useLegacy"]);
+    assert!(retarget_vibrance(&mut data, &Adjustment::Vibrance { vibrance: 0.0, saturation: 0.0 }));
+    assert_eq!(vib_keys(&data), [("useLegacy".to_string(), Value::Boolean(false))]);
+    assert_eq!(parse(b"vibA", &data, None, Channels::Rgb), Adjustment::Vibrance { vibrance: 0.0, saturation: 0.0 });
+    // Out-of-range and non-finite sliders are clamped as the writer clamps them.
+    assert!(retarget_vibrance(&mut data, &Adjustment::Vibrance { vibrance: 250.0, saturation: f32::NAN }));
+    assert_eq!(parse(b"vibA", &data, None, Channels::Rgb), Adjustment::Vibrance { vibrance: 100.0, saturation: 0.0 });
+
+    // Another adjustment, an unreadable block or a truncated one: untouched, and no panic.
+    let mut data = original.clone();
+    assert!(!retarget_vibrance(&mut data, &Adjustment::Invert));
+    assert_eq!(data, original);
+    let (_, full) = VersionedDescriptor::parse_prefix(&original).unwrap();
+    for n in 0..full {
+        let mut cut = original[..n].to_vec();
+        assert!(!retarget_vibrance(&mut cut, &target), "{n} bytes");
+        assert_eq!(cut, original[..n]);
+    }
+    let mut v17 = original.clone();
+    v17[3] = 17;
+    let before = v17.clone();
+    assert!(!retarget_vibrance(&mut v17, &target));
+    assert_eq!(v17, before);
+}
+
+/// Only an explicit `useLegacy` false is Photoshop's newer Vibrance method: a missing key is how
+/// legacy layers (and PhotoCraft's own) are stored, and anything unreadable is not guessed.
+#[test]
+fn newer_vibrance_method_is_an_explicit_use_legacy_false() {
+    let sliders = [("vibrance", Value::Integer(28)), ("Strt", Value::Integer(-7))];
+    let with = |m: Option<Value>| photoshop_vib(&[sliders.as_slice(), m.map(|v| ("useLegacy", v)).as_slice()].concat());
+    assert!(is_newer_vibrance(&with(Some(Value::Boolean(false)))));
+    assert!(!is_newer_vibrance(&with(Some(Value::Boolean(true)))));
+    assert!(!is_newer_vibrance(&with(None)));
+    assert!(!is_newer_vibrance(&with(Some(Value::Integer(0)))), "a non-boolean switch is not read as one");
+    assert!(!is_newer_vibrance(&write(&Adjustment::Vibrance { vibrance: 10.0, saturation: 5.0 })[0].1), "PhotoCraft writes the legacy method");
+    let newer = with(Some(Value::Boolean(false)));
+    for n in 0..newer.len() {
+        let _ = is_newer_vibrance(&newer[..n]);
+    }
+    assert!(!is_newer_vibrance(&[]));
+    assert!(newer_vibrance_warning("Vibrance 1").starts_with("layer \"Vibrance 1\": its Vibrance uses Photoshop's newer method"));
+}
+
 #[test]
 fn black_white_golden_block() {
     let tint = Descriptor::new("RGBC").with("Rd  ", Value::Double(255.0)).with("Grn ", Value::Double(127.5)).with("Bl  ", Value::Double(0.0));

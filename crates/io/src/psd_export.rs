@@ -463,6 +463,12 @@ impl Ex {
                         && raw.iter_mut().any(|(k, d)| {
                             k == b"grdm" && !adjust_map::is_unpadded_photocraft_gradient_map(d) && adjust_map::retarget_gradient_map(d, a, channels)
                         }));
+                // An edited Vibrance keeps the file's own descriptor with its sliders updated, so
+                // Photoshop's method switch (`useLegacy`), temperature and tint survive instead of
+                // the layer reopening with the legacy method (#8838).
+                let keep = keep
+                    || (matches!(a, photocraft_doc::Adjustment::Vibrance { .. })
+                        && raw.iter_mut().any(|(k, d)| k == b"vibA" && adjust_map::retarget_vibrance(d, a)));
                 // An adjustment type no mapper knows (#6575) is its block: kept verbatim, and
                 // never written a second time beside a stale copy.
                 let own = match a {

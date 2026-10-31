@@ -489,6 +489,9 @@ impl Ctx<'_> {
                     if light { "Light" } else { adjust_map::label(k) }
                 ));
             }
+            if matches!(adj, photocraft_doc::Adjustment::Vibrance { .. }) && adjust_map::is_newer_vibrance(&data) {
+                self.warn(adjust_map::newer_vibrance_warning(&name));
+            }
             LayerContent::Adjustment(adj)
         } else if let Some(block) = rec.block(b"TySh") {
             // Only canonical type data with a safe transform can become a text layer. A retained
