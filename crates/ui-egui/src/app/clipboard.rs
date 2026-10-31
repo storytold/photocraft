@@ -67,12 +67,16 @@ impl PhotocraftApp {
             return Ok(false);
         };
         let sig = clip_signature(w, h, &bytes);
-        if self.os_clip_sig == Some(sig) && self.session.clipboard.is_some() {
+        // The unchanged OS image is stale when an internal clip has replaced it since (our
+        // unexported pixel copy or a path component): importing would paste superseded content.
+        if self.os_clip_sig == Some(sig) && (self.session.clipboard.is_some() || self.session.path_clipboard.is_some()) {
             return Ok(false);
         }
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);
         let mut surface = photocraft_raster::Surface::from_interleaved(photocraft_color::PixelFormat::RGBA8, r, &bytes);
         surface.prune();
+        // One clipboard: imported pixels replace a path clip, like a path clip replaces them.
+        self.session.path_clipboard = None;
         self.session.clipboard =
             Some(photocraft_engine::edit_cmds::Clip { components: None, surface, bounds: r, layers: None, resolution: None, source: None });
         self.os_clip_sig = Some(sig);
