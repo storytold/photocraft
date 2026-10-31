@@ -492,6 +492,28 @@ async fn headless_doc_save_takes_maximize_compatibility() {
     cleanup(&dir);
 }
 
+/// #8064: `doc_export_layers` takes `maximizeCompatibility` too, for PSD/PSB layer files.
+#[tokio::test(flavor = "multi_thread")]
+async fn headless_doc_export_layers_takes_maximize_compatibility() {
+    let dir = tmp("export-layers-maximize-compat");
+    let client = connect(headless_in(&dir)).await;
+    call(&client, "doc_new", json!({"width": 16, "height": 16, "background": "white", "name": "card"})).await;
+    for (sub, params, real) in
+        [("on", json!({"dir": "on", "format": "psd"}), true), ("off", json!({"dir": "off", "format": "psd", "maximizeCompatibility": false}), false)]
+    {
+        let result = json_of(&call(&client, "doc_export_layers", params.clone()).await);
+        assert_eq!(result["count"], 1, "{params}: {result}");
+        let file = result["files"][0].as_str().unwrap();
+        assert!(file.starts_with(sub), "{file}");
+        let bytes = std::fs::read(dir.join(file)).unwrap();
+        assert_eq!(photocraft_psd::PsdFile::from_bytes(&bytes).unwrap().has_real_merged_data(), Some(real), "{params}");
+    }
+    let r = call(&client, "doc_export_layers", json!({"dir": "bad", "format": "psd", "maximizeCompatibility": "no"})).await;
+    assert_eq!(r.is_error, Some(true), "{}", text(&r));
+    client.cancel().await.unwrap();
+    cleanup(&dir);
+}
+
 /// #8064: `maximizeCompatibility` reaches the app's `app.save` through the bridge; unset, nothing
 /// is sent and the app's preference decides.
 #[tokio::test(flavor = "multi_thread")]

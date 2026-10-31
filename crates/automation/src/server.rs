@@ -105,6 +105,10 @@ pub struct ExportLayersParams {
     /// Encoder quality, 0..12, for the formats that take one.
     #[serde(default)]
     pub quality: Option<f64>,
+    /// PSD/PSB: write the real merged image (Photoshop's Maximize Compatibility); false writes
+    /// Photoshop's white placeholder. Unset: the engine's Preferences › File Handling decides.
+    #[serde(default, rename = "maximizeCompatibility")]
+    pub maximize_compatibility: Option<bool>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -715,6 +719,9 @@ impl PhotocraftMcp {
         }
         if let Some(v) = p.quality {
             opts.insert("quality".into(), json!(v));
+        }
+        if let Some(v) = p.maximize_compatibility {
+            opts.insert("maximizeCompatibility".into(), json!(v));
         }
         let opts = Value::Object(opts);
         // Bridge mode runs the app on this machine, which writes its own paths like any command.
