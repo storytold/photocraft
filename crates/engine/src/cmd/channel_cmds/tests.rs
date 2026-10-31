@@ -1185,3 +1185,68 @@ fn layers_panel_mask_target_isolates_the_curve_channel() {
     let row = isolated_curve_channel_for(s.active().unwrap(), true).expect("quick mask wins");
     assert_eq!((row.name.as_str(), row.gray), ("Quick Mask", Some(GraySurface::QuickMask)));
 }
+
+/// #10152: Channel Options keeps the grey a channel shows, as Photoshop does. An alpha channel
+/// (white inside the rectangle, black around it) turned into a spot channel prints where it was
+/// black, so the ink lands around the rectangle, not on it; turning it back restores the alpha
+/// channel exactly, and one Undo takes back the conversion.
+#[test]
+fn turning_an_alpha_channel_into_a_spot_channel_keeps_its_tone() {
+    let mut s = session();
+    rect(&mut s, 0, 0, 10, 10, "replace");
+    s.execute("channel.new", json!({"fill": "selection"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "white inside, black around");
+    s.execute("channel.options", json!({"channel": 0, "indicates": "spot", "color": "#ff0000", "solidity": 100})).unwrap();
+    assert!(doc(&s).channels[0].spot.is_some());
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (0.0, 1.0), "ink where the channel was black");
+    // Changing only the spot's options keeps its ink.
+    s.execute("channel.options", json!({"channel": 0, "color": "#00ff00"})).unwrap();
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (0.0, 1.0));
+    s.execute("channel.options", json!({"channel": 0, "indicates": "masked"})).unwrap();
+    assert!(doc(&s).channels[0].spot.is_none());
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "back to the alpha channel it was");
+    s.undo();
+    s.undo();
+    s.undo();
+    assert!(doc(&s).channels[0].spot.is_none());
+    assert_eq!((chan(&s, 0, 5, 5), chan(&s, 0, 20, 15)), (1.0, 0.0), "Undo takes the conversion back");
+}
+
+/// #10152 at every depth, with the greys of a feathered edge: each pixel's ink is one minus the
+/// tone it had, within the depth's step, and turning it back gives that tone again.
+#[test]
+fn an_alpha_to_spot_conversion_keeps_intermediate_greys_at_every_depth() {
+    for depth in [8, 16, 32] {
+        let mut s = session_depth(depth);
+        rect(&mut s, 0, 0, 20, 20, "replace");
+        s.execute("select.modify.feather", json!({"radius": 4})).unwrap();
+        s.execute("channel.new", json!({"fill": "selection"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        let row = |s: &Session| (0..40).map(|x| chan(s, 0, x, 10)).collect::<Vec<f32>>();
+        let tone = row(&s);
+        assert!(tone.iter().any(|v| *v > 0.05 && *v < 0.95), "depth {depth}: a feathered edge has greys, {tone:?}");
+        let step = if depth == 8 { 1.5 / 255.0 } else { 1e-4 };
+        s.execute("channel.options", json!({"channel": 0, "indicates": "spot"})).unwrap();
+        for (x, (ink, t)) in row(&s).iter().zip(&tone).enumerate() {
+            assert!((ink - (1.0 - t)).abs() <= step, "depth {depth}, x {x}: ink {ink} for tone {t}");
+        }
+        s.execute("channel.options", json!({"channel": 0, "indicates": "masked"})).unwrap();
+        for (x, (back, t)) in row(&s).iter().zip(&tone).enumerate() {
+            assert!((back - t).abs() <= step, "depth {depth}, x {x}: {back} back for {t}");
+        }
+    }
+}
+
+/// The conversion turns the whole channel, tile by tile: every row of a tall channel, the last one
+/// included.
+#[test]
+fn an_alpha_to_spot_conversion_turns_every_row_of_a_tall_channel() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 8, "height": 600})).unwrap();
+    s.execute("channel.new", json!({"fill": "white"})).unwrap();
+    s.execute("channel.options", json!({"channel": 0, "indicates": "spot"})).unwrap();
+    for y in [0, 255, 256, 511, 512, 599] {
+        assert_eq!(chan(&s, 0, 3, y), 0.0, "row {y}: white tone is bare paper");
+    }
+}

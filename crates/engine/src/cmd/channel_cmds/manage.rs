@@ -314,7 +314,19 @@ pub(super) fn options(s: &mut Session, p: &Value) -> Result<Value> {
     };
     match r {
         ChanRef::Alpha(i) if i < doc.channels.len() => {
-            s.edit("Channel Options", |doc, _| apply(&mut doc.channels[i]))?;
+            s.edit("Channel Options", |doc, _| {
+                let ch = doc.channels.get_mut(i).ok_or_else(|| bad(cmd, "missing or unknown `channel`"))?;
+                let was_spot = ch.spot.is_some();
+                apply(ch)?;
+                // A channel keeps the grey it shows, as in Photoshop: turning an alpha channel
+                // (stored as tone) into a spot channel (stored as ink) puts ink where it is dark,
+                // and back again (#10152). Tile by tile, every tile the channel keeps (also past
+                // the canvas, which a later canvas size can show) and its empty background.
+                if was_spot != ch.spot.is_some() {
+                    ch.surface.map_color(|v| 1.0 - v);
+                }
+                Ok(())
+            })?;
         }
         ChanRef::QuickMask => {
             // Quick Mask Options persist for the session; the live Quick Mask follows them.
