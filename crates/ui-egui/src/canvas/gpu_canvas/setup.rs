@@ -43,6 +43,9 @@ pub struct Refresh {
     /// leaves out layer-tile uploads (`uploads` above counts them), so a first refresh of a
     /// document under-reports by more than the few per cent of a warm one.
     pub gpu: Option<photocraft_gpu::GpuTiming>,
+    /// Counters from this successful GPU composite; absent on CPU/fallback paths.
+    /// The contained GPU timestamp, like `gpu`, may describe an earlier submission.
+    pub gpu_stats: Option<photocraft_gpu::Stats>,
     /// Why the wgpu compositor wasn't used.
     pub fallback: Option<CpuReason>,
 }

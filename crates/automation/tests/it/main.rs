@@ -14,3 +14,4 @@ mod native_save_name;
 mod openraster;
 mod raw_defaults;
 mod smart_filter_authorization;
+mod xcf_native_workflows;

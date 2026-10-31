@@ -39,13 +39,18 @@ use info::file_info;
 pub use info::{CAMERA_FIELDS, camera_data, read_file_info, write_file_info};
 #[cfg(test)]
 use info::{exposure_text, find_element};
-pub use open::{PLACE_EMBEDDED, open_bytes_as, place_bytes, raw_defaults};
+pub use open::{PLACE_EMBEDDED, historical_xcf_sample_order, open_bytes_as, open_bytes_as_with_sample_order, place_bytes, raw_defaults};
 use open::{close_all, close_others, open_as, place, revert};
-pub(crate) use open::{import, tag_exr_colorspace};
+pub(crate) use open::{import, raw_resolution, tag_exr_colorspace, tag_exr_colorspace_with_policy};
 use paths::is_file;
 #[cfg(test)]
 use paths::openable_name;
-pub use paths::{extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, same_file, saves_in_place, template_name, untitled_name};
+#[cfg(not(target_arch = "wasm32"))]
+pub use paths::same_open_files;
+pub use paths::{
+    check_import_destination, extension, holds, holds_at, is_template, layered_extension, list_images, losses_at, same_file, saves_in_place, template_name,
+    untitled_name,
+};
 pub(crate) use paths::{file_name, forward_slashes, is_windows_device_name, join, portable_device_name, read_file, sanitize, stem, write_file};
 use processing::{conditional_mode_change, fit_image, flatten_all_effects, flatten_all_masks, image_processor, load_files_into_stack};
 use save::save_a_copy;
@@ -106,6 +111,7 @@ impl crate::DocState {
             Arc::make_mut(&mut self.doc).name = name;
         }
         self.path = Some(path);
+        self.source_read_only = false;
         self.saved_revision = self.revision;
     }
 }
@@ -201,6 +207,7 @@ fn clear_canvas_guides(s: &mut Session) -> Result<Value> {
 
 // ---------- registry ----------
 
+/// Register file, copy, batch and processor contracts, including explicit historical open continuation.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {
@@ -208,6 +215,16 @@ pub fn specs() -> Vec<CommandSpec> {
         };
     }
     vec![
+        CommandSpec {
+            id: "file.open",
+            label: "Open…",
+            menu: &["File"],
+            shortcut: Some("Cmd+O"),
+            params: r#"{"path":string?,"historicalXcfSampleOrder":"little-endian"|"big-endian"?,"heldHistoricalXcfOpen":uint?,"cancel":bool=false,"interactive":bool=false}"#,
+            enabled: |_| Ok(()),
+            journal: false,
+            run: crate::jobs::open_command,
+        },
         spec!("file.closeAll", "Close All", &["File"], Some("Cmd+Alt+W"), "{}", has_doc, |s, _| close_all(s)),
         spec!(
             "file.closeOthers",
@@ -250,7 +267,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Open As…",
             &["File"],
             Some("Cmd+Alt+Shift+O"),
-            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format)}"##,
+            r##"{"path":str,"as":"psd|png|jpg|tiff|…"? (decode as this format),"historicalXcfSampleOrder":"little-endian"|"big-endian"?}"##,
             native,
             open_as
         ),
@@ -259,7 +276,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Place Embedded…",
             &["File"],
             None,
-            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?}"##,
+            r##"{"path":str,"scale":%? (default: fit when larger than the canvas),"fit":bool? (default: Preferences > General > Resize Image During Place),"smartObject":bool? (default: Preferences > General > Always Create Smart Objects When Placing),"center":[x,y]?,"historicalXcfSampleOrder":"little-endian"|"big-endian"?}"##,
             native_doc,
             |s, p| place(s, p, false)
         ),

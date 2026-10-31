@@ -1945,20 +1945,26 @@ mod multi_layer_formatting {
         // The lazily populated font popup introduces widgets in successive passes. egui 0.37
         // styles each new widget on its following pass; keep a bounded settle assertion while
         // allowing those additional passes (the loaded menu requires six under parallel tests).
-        let mut h = Harness::builder().with_size(vec2(1100.0, 800.0)).with_max_steps(8).build_ui_state(
-            move |ui, app| {
-                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                    if properties {
-                        ui.set_width(340.0);
-                        super::super::type_properties(app, ui);
-                    } else {
-                        ui.horizontal(|ui| super::super::options_bar(app, ui));
+        // Apply the app theme before the harness's deterministic visuals disable caret blinking.
+        let mut h = Harness::builder()
+            .with_size(vec2(1100.0, 800.0))
+            .with_max_steps(8)
+            .with_context_setup(|ctx| {
+                PhotocraftApp::setup_context(ctx, Default::default());
+            })
+            .build_ui_state(
+                move |ui, app| {
+                    if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                        if properties {
+                            ui.set_width(340.0);
+                            super::super::type_properties(app, ui);
+                        } else {
+                            ui.horizontal(|ui| super::super::options_bar(app, ui));
+                        }
                     }
-                }
-            },
-            app,
-        );
-        PhotocraftApp::setup_context(&h.ctx, Default::default());
+                },
+                app,
+            );
         h.run_steps(4);
         h
     }

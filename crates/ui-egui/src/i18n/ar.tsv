@@ -3545,3 +3545,35 @@ curves	Smooth	تنعيم
 	The path was kept as the Work Path	تم الاحتفاظ بالمسار كمسار عمل
 	The path was discarded	تم تجاهل المسار
 	Edit Brush…	تحرير الفرشاة…
+
+# Native XCF import report
+	Import Conversion Report	تقرير تحويل الاستيراد
+	Import-time outcomes. Editing uses native PhotoCraft rules.	نتائج الاستيراد. يخضع التحرير لقواعد PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	تم الاحتفاظ بتنسيق أحدث للتقرير. لا يمكن عرض تفاصيله.
+	No conversion report was recorded.	لم يُسجَّل تقرير تحويل.
+	No entries on this page.	لا توجد إدخالات في هذه الصفحة.
+	Layer mask	قناع الطبقة
+	Source item	عنصر المصدر
+	{first}–{last} of {total}	{first}–{last} من {total}
+	Native equivalent	مكافئ بإمكانات PhotoCraft
+	Native approximation	تقريب بإمكانات PhotoCraft
+	Retained, not applied	محتفَظ به، غير مطبَّق
+	Nonessential data skipped	تم تجاوز البيانات غير الضرورية
+	Unknown outcome	نتيجة غير معروفة
+	Native rules	قواعد PhotoCraft
+	Native capability limit	حد إمكانات PhotoCraft
+	Conversion not implemented	التحويل غير منفَّذ
+	Resource unavailable	المورد غير متاح
+	Invalid optional data	بيانات اختيارية غير صالحة
+	Retention limit	حد الاحتفاظ
+	Precision conversion	تحويل دقة التمثيل
+	Unknown reason	سبب غير معروف
+	Native layer {id} (removed; historical reference)	طبقة PhotoCraft ‏{id} (أزيلت؛ مرجع تاريخي)
+	Native layer: {name}	طبقة PhotoCraft: ‏{name}
+	Alpha Percentile	مئين ألفا
+	Alpha Weighted	مرجّح بألفا
+	Color Percentile	المئين اللوني
+	Connectivity	الاتصالية
+	Disc	قرص
+	Each	كلٌّ على حدة
+	Value	القيمة

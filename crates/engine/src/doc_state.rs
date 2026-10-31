@@ -15,8 +15,10 @@ pub struct DocState {
     /// Anchor of ⇧-click range selection (the last plainly or ⌘-clicked layer).
     pub layer_anchor: Option<LayerId>,
     pub path: Option<String>,
-    /// An Affinity document (or its preview) must not acquire the native source as its Save path.
+    /// An import-only document must not acquire its source as its Save path.
     pub source_read_only: bool,
+    /// Runtime-only writeback protection, never native document data or a resource permission.
+    pub protected_import_source: Option<String>,
     /// Increments on every change; UIs re-render when it moves.
     pub revision: u64,
     pub saved_revision: u64,
@@ -47,6 +49,9 @@ pub struct DocState {
     /// pixel coordinates. Per-document view state: discarded when the document closes, never saved
     /// to `.pcraft` or PSD, and not a history step.
     pub color_samplers: Vec<[f64; 2]>,
+    /// One-time Paths panel handoff from an import; the shell consumes it on installation.
+    /// Never serialized or reconstructed from historical conversion metadata.
+    pub initial_path_selection: Option<usize>,
     /// History panel snapshots, oldest first (`history.newSnapshot`, #2966): the first (id 0) is
     /// the document as opened. Kept for the session only, as in Photoshop: not history states,
     /// and not saved with the document.
@@ -90,6 +95,7 @@ impl DocState {
             layer_anchor: active_layer,
             path,
             source_read_only: false,
+            protected_import_source: None,
             revision: 1,
             saved_revision: 1,
             pcraft_cache: Default::default(),
@@ -103,6 +109,7 @@ impl DocState {
             show_only: None,
             floating: None,
             color_samplers: Vec::new(),
+            initial_path_selection: None,
             snapshots: vec![first],
             next_snapshot: 1,
             source_snapshot: None,

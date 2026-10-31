@@ -1279,6 +1279,126 @@ fn color_lookup_table_bakes_the_adjustment_stack() {
     assert!(std::fs::read_to_string(&path).unwrap().contains("LUT_3D_SIZE 17"));
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+/// Import original XCF bytes through a misleading writable suffix, then add editable pixels and a LUT-compatible adjustment.
+fn protected_export_fixture(path: &std::path::Path) -> (Session, Vec<u8>, LayerId) {
+    let mut bytes = b"gimp xcf v007\0".to_vec();
+    for value in [1u32, 1, 0, 150, 0, 0, 0, 0] {
+        bytes.extend(value.to_be_bytes());
+    }
+    std::fs::write(path, &bytes).unwrap();
+    let name = path.to_str().unwrap();
+    let mut session = Session::new();
+    open_bytes_as(&mut session, name, &bytes, None, Some(name.into())).unwrap();
+    assert!(session.active().unwrap().source_read_only);
+    assert_eq!(session.active().unwrap().protected_import_source.as_deref(), Some(name));
+    session.execute("layer.new.layer", json!({"name":"Original pixels"})).unwrap();
+    let layer = session.active().unwrap().active_layer.unwrap();
+    session.execute("edit.fill", json!({"color":"#ff0000"})).unwrap();
+    session.execute("layer.newAdjustmentLayer.invert", json!({})).unwrap();
+    (session, bytes, layer)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+/// LUT and single-layer exports refuse the protected source and its aliases without touching history; distinct files still export.
+fn export_writers_preserve_import_only_source_and_hardlink_aliases() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("protected.png");
+    let alias = directory.path().join("alias.png");
+    let (mut session, original, layer) = protected_export_fixture(&source);
+    std::fs::hard_link(&source, &alias).unwrap();
+    let state = session.active().unwrap();
+    let before = (state.doc.clone(), state.revision, state.history.entries());
+    for (command, output) in [("file.export.colorLookupTables", "normal.cube"), ("layer.quickExportAsPng", "quick.png"), ("layer.exportAs", "layer.png")] {
+        for path in [&source, &alias] {
+            let error = session.execute(command, json!({"path":path,"layer":layer.0,"size":2})).unwrap_err();
+            assert!(error.to_string().contains("import-only source"), "{command}: {error}");
+            assert_eq!(std::fs::read(path).unwrap(), original);
+        }
+        let path = directory.path().join(output);
+        session.execute(command, json!({"path":path,"layer":layer.0,"size":2})).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        if output.ends_with("cube") {
+            assert!(std::str::from_utf8(&bytes).unwrap().contains("LUT_3D_SIZE 2"));
+        } else {
+            let decoded = photocraft_io::import(output, &bytes).unwrap().document;
+            assert_eq!(photocraft_compose::flatten(&decoded).px, vec![[1.0, 0.0, 0.0, 1.0]]);
+        }
+    }
+    let state = session.active().unwrap();
+    assert!(Arc::ptr_eq(&before.0, &state.doc));
+    assert_eq!((state.revision, state.history.entries()), (before.1, before.2));
+    assert!(state.source_read_only && state.path.is_none());
+    assert_eq!(std::fs::read(source).unwrap(), original);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+/// A protected alias in a later layer output is rejected before any earlier output is written; legal streaming exports remain unchanged.
+fn layer_file_export_preflights_all_destinations_before_writing() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("protected.png");
+    let (mut session, original, _) = protected_export_fixture(&source);
+    session.execute("layer.new.layer", json!({"name":"Second pixels"})).unwrap();
+    session.execute("edit.fill", json!({"color":"#00ff00"})).unwrap();
+    let params = json!({"dir":directory.path(),"prefix":"guard","format":"png"});
+    let report = export_layers_report_with(&session, &params, |_, _| Ok(())).unwrap();
+    assert_eq!(report.files.len(), 2);
+    let first = directory.path().join(&report.files[0]);
+    let protected_output = directory.path().join(&report.files[1]);
+    std::fs::hard_link(&source, &protected_output).unwrap();
+    let state = session.active().unwrap();
+    let before = (state.doc.clone(), state.revision, state.history.entries());
+    let error = session.execute("file.export.layersToFiles", params.clone()).unwrap_err();
+    assert!(error.to_string().contains("import-only source"));
+    assert!(!first.exists(), "a later refusal must not leave earlier layer files");
+    assert_eq!(std::fs::read(&protected_output).unwrap(), original);
+    let legal = directory.path().join("legal");
+    std::fs::create_dir(&legal).unwrap();
+    let result = session.execute("file.export.layersToFiles", json!({"dir":legal,"prefix":"guard","format":"png"})).unwrap();
+    assert_eq!(result["files"].as_array().unwrap().len(), 2);
+    for name in report.files {
+        let bytes = std::fs::read(legal.join(&name)).unwrap();
+        assert_eq!(photocraft_io::import(&name, &bytes).unwrap().document.size, photocraft_geom::Size::new(1, 1));
+    }
+    let state = session.active().unwrap();
+    assert!(Arc::ptr_eq(&before.0, &state.doc));
+    assert_eq!((state.revision, state.history.entries()), (before.1, before.2));
+    assert_eq!(std::fs::read(source).unwrap(), original);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+/// Smart contents cannot overwrite the protected parent source through either direct-byte or converted export branches.
+fn smart_contents_export_preserves_protected_source_for_native_and_converted_outputs() {
+    let directory = tempfile::tempdir().unwrap();
+    let source = directory.path().join("protected.png");
+    let alias = directory.path().join("alias.pcraft");
+    let (mut session, original, layer) = protected_export_fixture(&source);
+    std::fs::hard_link(&source, &alias).unwrap();
+    session.execute("filter.convertForSmartFilters", json!({"layer":layer.0})).unwrap();
+    let id = session.active().unwrap().active_layer.unwrap();
+    let state = session.active().unwrap();
+    let before = (state.doc.clone(), state.revision, state.history.entries());
+    for path in [&source, &alias] {
+        let error = session.execute("layer.smartObjects.exportContents", json!({"layer":id.0,"path":path})).unwrap_err();
+        assert!(error.to_string().contains("import-only source"));
+        assert_eq!(std::fs::read(path).unwrap(), original);
+    }
+    for (name, converted) in [("contents.pcraft", false), ("contents.png", true)] {
+        let path = directory.path().join(name);
+        let result = session.execute("layer.smartObjects.exportContents", json!({"layer":id.0,"path":path})).unwrap();
+        assert_eq!(result["converted"], converted);
+        let bytes = std::fs::read(path).unwrap();
+        assert_eq!(photocraft_compose::flatten(&photocraft_io::import(name, &bytes).unwrap().document).px, vec![[1.0, 0.0, 0.0, 1.0]]);
+    }
+    let state = session.active().unwrap();
+    assert!(Arc::ptr_eq(&before.0, &state.doc));
+    assert_eq!((state.revision, state.history.entries()), (before.1, before.2));
+    assert_eq!(std::fs::read(source).unwrap(), original);
+}
+
 #[test]
 fn cube_export_uses_only_selected_adjustments_in_document_order() {
     let mut s = session(8, 8, 8);

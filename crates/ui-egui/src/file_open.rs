@@ -8,6 +8,15 @@
 use crate::{PhotocraftApp, notices};
 use photocraft_engine::file_cmds::{is_template, untitled_name};
 
+/// Consume the native import's one-time path selection after installing its view.
+pub(crate) fn apply_initial_path(app: &mut PhotocraftApp) {
+    let selected =
+        app.session.active_mut().and_then(|st| st.initial_path_selection.take().and_then(|index| st.doc.paths.get(index).map(|path| path.name.clone())));
+    if let Some(name) = selected {
+        app.ui.selected_path = Some(name);
+    }
+}
+
 /// A request from the operating system, delivered by the platform shell through
 /// [`Services::os_events`](crate::Services::os_events).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +49,8 @@ pub(crate) enum DropPlace {
     /// Read by the shell itself (the browser reads dropped files asynchronously): its name and
     /// contents, delivered through [`Services::place_inbox`](crate::Services::place_inbox).
     Bytes(String, Vec<u8>),
+    /// An asynchronous path placement must publish its actual layer before opening a transform or placing the next file.
+    Pending { job: photocraft_engine::jobs::JobId, document: photocraft_doc::DocId },
 }
 
 /// `warnings` from an import, plus one for each font family the active document's type uses that
@@ -108,6 +119,11 @@ impl PhotocraftApp {
     /// Record that the active document was just opened from `path`: File › Save writes back to it
     /// (unless it's a template or derivative preview) and it goes to the top of Open Recent.
     pub(crate) fn opened_from(&mut self, path: &str) {
+        if let Some(st) = self.session.active_mut()
+            && st.source_read_only
+        {
+            st.protected_import_source = Some(path.to_string());
+        }
         if !is_template(path)
             && let Some(st) = self.session.active_mut()
             && !st.source_read_only
@@ -192,7 +208,12 @@ impl PhotocraftApp {
     pub(crate) fn show_if_open(&mut self, path: &str) -> bool {
         let canon = canonical(path);
         let same = |p: &str| same_file(p, path, canon.as_deref());
-        if let Some(i) = self.session.documents().iter().position(|d| d.path.as_deref().is_some_and(same)) {
+        if let Some(i) = self
+            .session
+            .documents()
+            .iter()
+            .position(|d| d.path.as_deref().is_some_and(same) || (d.source_read_only && d.protected_import_source.as_deref().is_some_and(same)))
+        {
             self.session.set_active(i);
             self.jobs.focus = None;
         } else if let Some(o) = self.jobs.opens.iter().find(|o| o.path.as_deref().is_some_and(|p| !is_template(p) && same(p))) {
@@ -304,7 +325,11 @@ impl PhotocraftApp {
     /// transform is in progress (so several files are placed and transformed one after another).
     pub(crate) fn place_next_dropped(&mut self, ctx: &egui::Context) {
         while self.ui.transform.is_none() {
+            if matches!(self.drop_places.front(), Some(DropPlace::Pending { .. })) {
+                return;
+            }
             let Some(next) = self.drop_places.pop_front() else { return };
+            let document = self.session.active().map(|state| state.doc.id);
             let (name, placed) = match next {
                 DropPlace::File(f) if f.path().is_absolute() => {
                     (dropped_name(&f), path_text(f.path(), false).and_then(|path| self.run("file.placeEmbedded", serde_json::json!({"path": path}))))
@@ -318,16 +343,55 @@ impl PhotocraftApp {
                     let placed = self.place_bytes(&name, bytes, None);
                     (name, placed)
                 }
+                DropPlace::Pending { .. } => return,
             };
             match placed {
-                Ok(_) => {
-                    if let Err(e) = crate::transform_tool::begin_placed(self, ctx) {
-                        self.ui.status = e;
+                Ok(result) => {
+                    if let Some(document) = document {
+                        if let Some(job) = result.get("job").and_then(serde_json::Value::as_u64) {
+                            self.drop_places.push_front(DropPlace::Pending { job: photocraft_engine::jobs::JobId(job), document });
+                            return;
+                        }
+                        self.begin_dropped_place(ctx, document, &result);
                     }
                 }
                 Err(e) => self.failed(crate::i18n::fmt(tl!("Couldn't place {name}: {error}"), &[("name", &name), ("error", &e)])),
             }
         }
+    }
+
+    /// Start a dropped file's transform only on the published layer in its still-active document; never steal another tab's focus.
+    fn begin_dropped_place(&mut self, ctx: &egui::Context, document: photocraft_doc::DocId, result: &serde_json::Value) {
+        let layer = result.get("layer").and_then(serde_json::Value::as_u64).map(photocraft_doc::LayerId);
+        if self.ui.transform.is_some()
+            || !self.session.active().is_some_and(|state| {
+                state.doc.id == document && layer.is_some_and(|layer| state.active_layer == Some(layer) && state.doc.layer(layer).is_some())
+            })
+        {
+            return;
+        }
+        if let Err(error) = crate::transform_tool::begin_placed(self, ctx) {
+            self.ui.status = error;
+        }
+    }
+
+    /// Consume only this drop queue's completed Place job; failures and cancellation advance without inventing a layer or transform.
+    pub(crate) fn on_dropped_place_job(&mut self, ctx: &egui::Context, event: &photocraft_engine::jobs::JobEvent) -> Option<&'static str> {
+        let Some(DropPlace::Pending { job, document }) = self.drop_places.front() else { return None };
+        if *job != event.id {
+            return None;
+        }
+        let document = *document;
+        self.drop_places.pop_front();
+        if self.session.active().is_none_or(|state| state.doc.id != document) && !self.drop_places.is_empty() {
+            self.drop_places.clear();
+            return matches!(&event.outcome, photocraft_engine::jobs::JobOutcome::Done(_))
+                .then_some("Remaining dropped files were not placed because their target document is no longer active.");
+        }
+        if let photocraft_engine::jobs::JobOutcome::Done(result) = &event.outcome {
+            self.begin_dropped_place(ctx, document, result);
+        }
+        None
     }
 
     /// Place a file's bytes as a smart object layer (File › Place; `linked`: Place Linked, to that

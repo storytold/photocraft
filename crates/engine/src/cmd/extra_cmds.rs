@@ -263,23 +263,23 @@ fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Filter › Blur › Average: the selection (or layer) filled with its mean colour.
+fn has_average_target(s: &Session) -> std::result::Result<(), String> {
+    if matches!(&active_layer(s)?.content, LayerContent::Smart(_)) { crate::filters::has_filterable_layer(s) } else { has_pixels(s) }
+}
+/// Route Smart content through native replay and replace raster colors with the selection-weighted mean using the
+/// ordinary pixel-edit path.
 fn average(s: &mut Session, p: &Value) -> Result<Value> {
+    if matches!(&active_layer(s).map_err(EngineError::Other)?.content, LayerContent::Smart(_)) {
+        return crate::filters::run_filter(s, "filter.blur.average", p);
+    }
     map_pixels(s, "Average", p, |_, px, cover| {
-        let (mut sum, mut wsum, mut asum, mut n) = ([0f64; 3], 0f64, 0f64, 0f64);
+        let mut mean = photocraft_algo::average::Mean::default();
         for (p, &k) in px.iter().zip(cover) {
-            let w = (p[3] * k) as f64;
-            for c in 0..3 {
-                sum[c] += p[c] as f64 * w;
-            }
-            wsum += w;
-            asum += (p[3] * k) as f64;
-            n += k as f64;
+            mean.push(*p, k);
         }
-        if wsum <= 0.0 {
-            return;
+        if let Some(avg) = mean.rgba() {
+            px.fill(avg);
         }
-        let avg = [(sum[0] / wsum) as f32, (sum[1] / wsum) as f32, (sum[2] / wsum) as f32, (asum / n.max(1e-9)) as f32];
-        px.fill(avg);
     })
 }
 
@@ -796,6 +796,8 @@ pub(crate) fn rasterize_all(s: &mut Session) -> Result<Value> {
 
 // ---------- registry ----------
 
+/// Register auxiliary native editing, filter and layer-style commands with their existing menu identities and parameter
+/// contracts.
 pub fn specs() -> Vec<CommandSpec> {
     macro_rules! spec {
         ($id:expr, $label:expr, $menu:expr, $sc:expr, $params:expr, $enabled:expr, $run:expr) => {
@@ -1053,7 +1055,7 @@ pub fn specs() -> Vec<CommandSpec> {
             has_layer,
             show_only
         ),
-        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_pixels, average),
+        spec!("filter.blur.average", "Average", &["Filter", "Blur"], None, "{}", has_average_target, average),
     ]
 }
 

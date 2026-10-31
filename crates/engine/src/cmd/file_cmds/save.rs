@@ -1,4 +1,4 @@
-use super::paths::{same_file, write_file};
+use super::paths::{check_import_destination, same_file, write_file};
 use super::{Document, EngineError, Layer, LayerContent, Result, Session, Value, f64_param, flattened_checked, json, str_param};
 
 /// Whether saving `doc` as a TIFF writes Photoshop layer data (anything beyond a lone
@@ -211,9 +211,11 @@ pub(crate) fn save_doc(doc: &Document, path: &str, save: impl Into<SaveOpts>) ->
     Ok(warnings)
 }
 
+/// Export a source-safe copy with explicit destructive-overwrite consent, preserving the open document's identity.
 pub(super) fn save_a_copy(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", "file.saveACopy")?.to_string();
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    check_import_destination(d, &path)?;
     // A copy over the document's own file replaces it, and a flat or lossy format can't be
     // undone, so it takes an explicit `overwrite` (#7437). The desktop dialog writes through the
     // shell, after the OS has confirmed the replace.

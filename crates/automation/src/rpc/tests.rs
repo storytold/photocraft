@@ -946,10 +946,13 @@ fn tcp_connections_must_authenticate_before_the_deadline_whatever_they_send() {
     line.clear();
     reader.read_line(&mut line).unwrap();
     assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["id"], "a");
+    // Keep both client handles alive until the server observes FIN. Closing a duplicated
+    // socket first can turn this graceful-EOF assertion into a Windows connection reset.
+    s.shutdown(std::net::Shutdown::Write).unwrap();
+    let results = server.join().unwrap();
     drop(reader);
     drop(s);
 
-    let results = server.join().unwrap();
     let (slow_result, slow_time) = &results[0];
     assert!(matches!(slow_result, Err(std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock)), "{slow_result:?}");
     assert!(*slow_time < Duration::from_secs(3), "the trickle did not extend the deadline: {slow_time:?}");

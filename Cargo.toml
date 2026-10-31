@@ -53,6 +53,9 @@ clap_mangen = { version = "0.3.3", features = ["env"] }
 arc-swap = "1"
 bytemuck = { version = "1", features = ["derive"] }
 flate2 = { version = "1.1.10", default-features = false, features = ["zlib-rs", "runtime_detection"] }
+# Bounded XCF wrapper decoders: no unsafe/C/parallel or XZ encoder features.
+crabz2 = { version = "=0.7.0", default-features = false, features = ["std"] }
+lzma-rust2 = { version = "=0.23.0", default-features = false, features = ["std", "xz"] }
 image = { version = "0.25", default-features = false }
 # Baseline-JPEG decode of lossy DNG tiles (compression 34892), shared with zune-jpeg.
 zune-core = "0.5"

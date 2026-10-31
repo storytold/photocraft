@@ -1,5 +1,7 @@
-use super::open::import_at_raw_ppi;
-use super::paths::{extension, file_name, join, list_images, read_file, stem};
+use super::open::{import_result, raw_resolution};
+#[cfg(all(test, not(target_arch = "wasm32")))]
+use super::paths::openable_name;
+use super::paths::{check_import_destination, compound_xcf_name, extension, file_name, join, list_images, read_file, stem};
 use super::processing::parse_steps;
 use super::save::{SaveOpts, save_doc};
 use super::{Arc, Document, EngineError, Result, Session, Value, batch_naming, json, str_param};
@@ -143,15 +145,26 @@ pub(crate) fn process_tree(
 /// Save As offers for a raw. An input whose file name has no extension (a dot in a folder name
 /// doesn't count) is saved as PNG.
 pub(super) fn same_format(path: &str) -> String {
-    const IMPORT_ONLY: &[&str] =
-        &["pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "gz", "psdt"];
+    const IMPORT_ONLY: &[&str] = &[
+        "pdn", "kra", "krz", "af", "afdesign", "afphoto", "afpub", "heic", "heif", "hif", "svg", "svgz", "cin", "pcx", "xpm", "xcf", "xcfgz", "xcfbz2",
+        "xcfxz", "gz", "psdt",
+    ];
     let ext = extension(path).unwrap_or_else(|| "png".into());
     let no_writer = photocraft_codecs::from_extension(&ext).is_some_and(|f| !f.caps().write);
-    if photocraft_io::raw::EXTENSIONS.contains(&ext.as_str()) || IMPORT_ONLY.contains(&ext.as_str()) || no_writer { "psd".into() } else { ext }
+    if compound_xcf_name(&file_name(path).to_ascii_lowercase())
+        || photocraft_io::raw::EXTENSIONS.contains(&ext.as_str())
+        || IMPORT_ONLY.contains(&ext.as_str())
+        || no_writer
+    {
+        "psd".into()
+    } else {
+        ext
+    }
 }
 
 #[cfg(test)]
 #[test]
+/// Writable and import-only suffixes choose the right output format without treating folder dots as extensions.
 fn same_format_takes_the_file_names_extension() {
     assert_eq!(same_format("/in/a.PNG"), "png");
     assert_eq!(same_format("/in/IMG_0001.ARW"), "psd");
@@ -170,12 +183,28 @@ fn same_format_takes_the_file_names_extension() {
     }
     assert_eq!(same_format("/in/a.pam"), "pam");
     assert_eq!(same_format("/in/a.dds"), "dds");
+    for source in ["a.xcf", "a.XCF.GZ", "a.xcfgz", "a.xcf.bz2", "a.xcfbz2", "a.xcf.xz", "a.xcfxz"] {
+        assert_eq!(same_format(source), "psd", "{source} is import-only");
+    }
     // No extension in the file name: PNG, not the path after a dot in a folder name.
     assert_eq!(same_format("/in/v1.2/scan"), "png");
     assert_eq!(same_format("C:\\in.d\\scan"), "png");
     assert_eq!(same_format("/in/.hidden"), "png");
 }
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+#[test]
+/// Supported compound XCF names are discoverable without admitting unrelated compressed archives.
+fn batch_discovery_accepts_xcf_wrappers_without_claiming_unrelated_archives() {
+    for source in ["a.XCF.GZ", "a.xcfgz", "a.XCF.BZ2", "a.xcfbz2", "a.xcf.xz", "a.xcfxz"] {
+        assert!(openable_name(source), "{source}");
+    }
+    for other in ["a.gz", "a.bz2", "a.xz", "a.xcf.zip", "a.xcf.bz2.tmp"] {
+        assert!(!openable_name(other), "{other}");
+    }
+}
+
+/// Process scratch documents with captured raw defaults, inherited authority and source-safe output paths.
 fn process_outputs<'a>(
     s: &Session,
     outputs: impl IntoIterator<Item = (&'a str, String)>,
@@ -191,11 +220,21 @@ fn process_outputs<'a>(
         let r = (|| -> Result<()> {
             written.check(&out).map_err(EngineError::Other)?;
             let bytes = read_file(path)?;
+            let mut imported = import_result(&file_name(path), &bytes)?;
+            raw_resolution(raw_ppi, &imported.warnings, &mut imported.document);
             let mut scratch = Session::new();
-            let doc = import_at_raw_ppi(raw_ppi, &file_name(path), &bytes)?;
-            scratch.add_document(doc, Some(path.to_string()));
+            scratch.authorize = s.authorize;
+            scratch.prepare_imported_document(&mut imported.document, &crate::jobs::JobCtx::new())?;
+            scratch.add_document(imported.document, (!imported.source_read_only).then(|| path.to_string()));
+            if let Some(state) = scratch.active_mut() {
+                state.source_read_only = imported.source_read_only;
+                state.protected_import_source = imported.source_read_only.then(|| path.to_string());
+                // Check before the action can close the source or switch documents.
+                check_import_destination(state, &out)?;
+            }
             if !f(&mut scratch, &out)? {
                 let d = scratch.active().ok_or(EngineError::NoDocument)?;
+                check_import_destination(d, &out)?;
                 save_doc(&d.doc, &out, save)?;
             }
             Ok(())

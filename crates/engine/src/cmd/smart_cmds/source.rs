@@ -1,10 +1,12 @@
+use super::rendering::prepared_source_image;
 use std::sync::PoisonError;
 
+use crate::jobs::render_proof::{self, Proof};
 use photocraft_geom::TILE_SIZE;
 
 use super::{
-    Arc, ColorMode, Document, Layer, LayerContent, LayerId, Metadata, Mutex, PixelFormat, Rect, Result, SampleType, Session, SmartObject, SmartSource, Surface,
-    base_name, decode_source, json, other,
+    Arc, ColorMode, Document, EngineError, JobCtx, Layer, LayerContent, LayerId, Metadata, Mutex, PixelFormat, Rect, Result, SampleType, Session, SmartObject,
+    SmartSource, Surface, base_name, json, other,
 };
 
 /// A linked file's bytes; `None` when it is missing or its path is not followed
@@ -32,7 +34,7 @@ pub fn source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<V
 }
 
 /// Memory-only resolution also covers Photoshop's embedded files addressed by a `Linked` UUID.
-fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<Vec<u8>>)> {
+pub(crate) fn embedded_source_bytes(meta: &Metadata, src: &SmartSource) -> Option<(String, Arc<Vec<u8>>)> {
     match src {
         SmartSource::Embedded { file_name, bytes } => Some((file_name.clone(), bytes.clone())),
         SmartSource::Linked { path } => photocraft_io::linked::find_linked_file(meta, path).map(|f| (f.file_name, Arc::new(f.bytes))),
@@ -76,12 +78,13 @@ struct CacheEntry {
     key: CacheKey,
     image: SourceImage,
     decodes: u32,
+    authorization: Proof,
     /// The surface's real tile bytes, counted once when it is cached.
     bytes: usize,
 }
 
-/// Decoded source composites by content hash, most recent last. Re-filtering or re-transforming
-/// a smart object never decodes its contents again.
+/// Decoded source composites by content hash, most recent last. A complete authorization proof
+/// rechecks stored commands under the current authority without decoding nested contents again.
 static SOURCE_CACHE: Mutex<Vec<CacheEntry>> = Mutex::new(Vec::new());
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -103,43 +106,36 @@ pub(super) fn cache_key(bytes: &[u8], fmt: PixelFormat) -> CacheKey {
     (*blake3::hash(bytes).as_bytes(), fmt)
 }
 
-pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
-    let mut c = cache();
-    let i = c.iter().position(|e| e.key == *key)?;
-    let e = c.remove(i);
-    let img = e.image.clone();
-    c.push(e);
-    Some(img)
+pub(super) fn cache_put(key: CacheKey, image: SourceImage, authorization: Option<Proof>, decoded: bool) {
+    cache_put_within(key, image, authorization, decoded, CACHE_BYTES);
 }
 
-pub(super) fn cache_put(key: CacheKey, image: SourceImage) {
-    cache_put_within(key, image, CACHE_BYTES);
-}
-
-/// [`cache_put`] with `limit` as the byte budget.
-fn cache_put_within(key: CacheKey, image: SourceImage, limit: usize) {
-    let bytes = super::stack_cache::surface_bytes(&image.surface);
+/// Use upstream's actual tile-byte budget while retaining source admission and decode diagnostics.
+fn cache_put_within(key: CacheKey, image: SourceImage, authorization: Option<Proof>, decoded: bool, limit: usize) {
+    let Some(authorization) = authorization else { return };
+    let Some(bytes) = super::stack_cache::surface_bytes(&image.surface).checked_add(authorization.bytes()) else { return };
     let mut c = cache();
     let decodes = match c.iter().position(|e| e.key == key) {
-        Some(i) => c.remove(i).decodes + 1,
-        None => 1,
+        Some(i) => c.remove(i).decodes.saturating_add(u32::from(decoded)),
+        None => u32::from(decoded),
     };
     if bytes > limit {
         return;
     }
-    c.push(CacheEntry { key, image, decodes, bytes });
+    c.push(CacheEntry { key, image, decodes, authorization, bytes });
     while c.len() > CACHE_ENTRIES || c.iter().map(|e| e.bytes).sum::<usize>() > limit {
         c.remove(0);
     }
 }
 
-/// How many times these contents were decoded at this pixel format (0 = never / evicted).
+/// Successful source-image decodes since this cache entry was created (zero for seeded composites or evicted entries).
+/// Direct uncached [`decode_source`] calls are excluded; the diagnostic saturates at `u32::MAX`.
 pub fn source_decode_count(bytes: &[u8], fmt: PixelFormat) -> u32 {
     let key = cache_key(bytes, fmt);
     cache().iter().find(|e| e.key == key).map(|e| e.decodes).unwrap_or(0)
 }
 
-/// Bytes held by cached source composites.
+/// Bytes held by cached source composites and their retained authorization evidence.
 pub fn source_cache_bytes() -> usize {
     cache().iter().map(|e| e.bytes).sum()
 }
@@ -297,7 +293,7 @@ pub fn svg_source_image(bytes: &[u8], fmt: PixelFormat, scale: f64) -> Result<So
     }
     let buf = photocraft_io::svg::rasterize(bytes, scale as f32).map_err(|e| other(format!("can't render the SVG smart object: {e}")))?;
     let img = SourceImage { surface: Arc::new(buffer_to_surface(&buf, fmt)), bounds: buf.rect };
-    cache_put(key, img.clone());
+    cache_put(key, img.clone(), Some(Proof::default()), true);
     Ok(img)
 }
 
@@ -312,15 +308,91 @@ pub(super) fn vector_scale(sm: &SmartObject) -> f64 {
     ((k * 16.0).ceil() / 16.0).clamp(1.0 / 16.0, 64.0)
 }
 
-/// The composited source image of `bytes` in pixel format `fmt` (decoded once, then cached).
+/// The composited source image in `fmt`, rechecking stored-command authority before cache reuse.
 pub fn source_image(file_name: &str, bytes: &[u8], fmt: PixelFormat) -> Result<SourceImage> {
-    let key = cache_key(bytes, fmt);
-    if let Some(img) = cache_get(&key) {
-        return Ok(img);
+    source_image_in(file_name, bytes, fmt, &JobCtx::new())
+}
+
+/// Prepare one externally supplied source; nested contents share the preparer's ledger rather than re-entering here.
+pub(super) fn decode_source_in(file_name: &str, bytes: &[u8], ctx: &JobCtx) -> Result<Document> {
+    decode_source_admitted_in(file_name, bytes, ctx)
+}
+
+/// Decode and prepare a cold source; an enclosing recording retains original auto-action authorization too.
+pub(super) fn decode_source_admitted_in(file_name: &str, bytes: &[u8], ctx: &JobCtx) -> Result<Document> {
+    ctx.check()?;
+    crate::allocation::checkpoint("importing document")?;
+    let imported = ctx
+        .stage(0.0, 0.5, "Decoding Smart contents", |ctl| photocraft_io::import_with_options_and_interrupt(file_name, bytes, &Default::default(), ctl))
+        .map_err(|e| if ctx.cancelled() { EngineError::Cancelled } else { other(format!("can't read smart object contents \"{file_name}\": {e}")) })?;
+    if imported.preview_only {
+        return Err(other(format!(
+            "{file_name}: only this Affinity file's embedded preview could be read; open it with File › Open to see the warning, or export PSD or PNG from Affinity before using it here"
+        )));
     }
-    let doc = decode_source(file_name, bytes)?;
-    let img = SourceImage { surface: Arc::new(flattened_source(&doc, fmt)?), bounds: doc.bounds() };
-    cache_put(key, img.clone());
+    let mut doc = imported.document;
+    crate::import_prepare::prepare_imported_document(&mut doc, ctx)?;
+    Ok(doc)
+}
+
+/// Only command-free raw conversion seeds may supply an empty proof; Smart-bearing seeds need preparation first.
+pub(super) fn source_without_stored_commands(doc: &Document, ctx: &JobCtx) -> Result<bool> {
+    let mut groups = vec![doc.layers.iter()];
+    while let Some(children) = groups.last_mut() {
+        ctx.check()?;
+        let Some(layer) = children.next() else {
+            groups.pop();
+            continue;
+        };
+        if groups.len() > photocraft_doc::MAX_GROUP_DEPTH + 1 {
+            return Ok(false);
+        }
+        if matches!(layer.content, LayerContent::Smart(_)) {
+            return Ok(false);
+        }
+        if let Some(children) = layer.children() {
+            groups.push(children.iter());
+        }
+    }
+    Ok(true)
+}
+
+/// Never hold the cache mutex while calling a host's gate; it may inspect or purge the cache.
+pub(super) fn cache_get_authorized(key: &CacheKey, ctx: &JobCtx) -> Result<Option<SourceImage>> {
+    let cached = {
+        let mut cache = cache();
+        let Some(index) = cache.iter().position(|entry| entry.key == *key) else { return Ok(None) };
+        let entry = cache.remove(index);
+        let cached = (entry.image.clone(), entry.authorization.clone());
+        cache.push(entry);
+        cached
+    };
+    let (image, authorization) = cached;
+    authorization.authorize(ctx)?;
+    Ok(Some(image))
+}
+
+/// Unconditional lookup for command-free SVG rasterizations and cache-accounting tests.
+pub(super) fn cache_get(key: &CacheKey) -> Option<SourceImage> {
+    let mut c = cache();
+    let i = c.iter().position(|e| e.key == *key)?;
+    let e = c.remove(i);
+    let img = e.image.clone();
+    c.push(e);
+    Some(img)
+}
+
+/// Check stored source authority before consulting a process-wide rendered-source cache.
+pub(super) fn source_image_in(file_name: &str, bytes: &[u8], fmt: PixelFormat, ctx: &JobCtx) -> Result<SourceImage> {
+    ctx.check()?;
+    let key = cache_key(bytes, fmt);
+    if let Some(image) = cache_get_authorized(&key, ctx)? {
+        return Ok(image);
+    }
+    let recording = render_proof::start()?;
+    let doc = decode_source_admitted_in(file_name, bytes, ctx)?;
+    let img = prepared_source_image(&doc, fmt, None, ctx)?;
+    cache_put(key, img.clone(), recording.finish(), true);
     Ok(img)
 }
 
@@ -339,9 +411,9 @@ mod tests {
         let key = cache_key(b"oversize", PixelFormat::RGBA8);
         let img = image(256);
         let bytes = super::super::stack_cache::surface_bytes(&img.surface);
-        cache_put_within(key, img.clone(), bytes - 1);
+        cache_put_within(key, img.clone(), Some(Proof::default()), true, bytes - 1);
         assert!(cache_get(&key).is_none(), "{bytes} bytes against a limit of {}", bytes - 1);
-        cache_put_within(key, img, bytes);
+        cache_put_within(key, img, Some(Proof::default()), true, bytes);
         assert!(cache_get(&key).is_some());
     }
 
@@ -363,5 +435,20 @@ mod tests {
         let bytes = super::super::stack_cache::surface_bytes(&img.surface);
         // 8-bit RGBA is 4 bytes a pixel (plus the default pixel), not the 16 of an f32 estimate.
         assert!((256 * 256 * 4..256 * 256 * 5).contains(&bytes), "{bytes}");
+    }
+
+    #[test]
+    fn authorization_parameters_are_charged_against_the_source_cache_limit() {
+        let recording = render_proof::start().unwrap();
+        crate::jobs::authorize_render_command("filter.unknown", &json!({"payload":"x".repeat(8192)})).unwrap();
+        let proof = recording.finish().unwrap();
+        assert!(proof.bytes() >= 8192);
+        let img = image(64);
+        let bytes = super::super::stack_cache::surface_bytes(&img.surface) + proof.bytes();
+        let key = cache_key(b"proof accounting", PixelFormat::RGBA8);
+        cache_put_within(key, img.clone(), Some(proof.clone()), true, bytes - 1);
+        assert!(cache_get(&key).is_none());
+        cache_put_within(key, img, Some(proof), true, bytes);
+        assert!(cache_get(&key).is_some());
     }
 }

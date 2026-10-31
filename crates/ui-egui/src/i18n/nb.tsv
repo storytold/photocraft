@@ -4769,3 +4769,35 @@ cameraRaw	White Balance: As Shot	Hvitbalanse: som fotografert
 	The path was discarded	Banen ble forkastet
 	The path was kept as the Work Path	Banen ble beholdt som arbeidsbane
 	Edit Brush…	Rediger pensel…
+
+# Native XCF import report
+	Import Conversion Report	Rapport for importkonvertering
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Resultater ved import. Redigering følger PhotoCrafts innebygde regler.
+	A newer report format is retained. Its details cannot be displayed.	Et nyere rapportformat er beholdt. Detaljene kan ikke vises.
+	No conversion report was recorded.	Ingen konverteringsrapport ble registrert.
+	No entries on this page.	Ingen oppføringer på denne siden.
+	Layer mask	Lagmaske
+	Source item	Kildeelement
+	{first}–{last} of {total}	{first}–{last} av {total}
+	Native equivalent	Innebygd ekvivalent
+	Native approximation	Innebygd tilnærming
+	Retained, not applied	Beholdt, ikke anvendt
+	Nonessential data skipped	Ikke-vesentlige data ble hoppet over
+	Unknown outcome	Ukjent resultat
+	Native rules	Innebygde regler
+	Native capability limit	Begrensning i innebygd funksjon
+	Conversion not implemented	Konvertering ikke implementert
+	Resource unavailable	Ressursen er utilgjengelig
+	Invalid optional data	Ugyldige valgfrie data
+	Retention limit	Bevaringsgrense
+	Precision conversion	Presisjonskonvertering
+	Unknown reason	Ukjent årsak
+	Native layer {id} (removed; historical reference)	Innebygd lag {id} (fjernet; historisk referanse)
+	Native layer: {name}	Innebygd lag: {name}
+	Alpha Percentile	Alfapersentil
+	Alpha Weighted	Alfavektet
+	Color Percentile	Fargepersentil
+	Connectivity	Konnektivitet
+	Disc	Skive
+	Each	Hver
+	Value	Verdi

@@ -4251,3 +4251,35 @@ cameraRaw	Dehaze	Odstranění oparu
 	Select and Mask was closed: another layer was selected	Vybrat a maskovat bylo zavřeno: byla vybrána jiná vrstva
 	Drag to move the selected path	Tažením přesunete vybranou cestu
 	Edit Brush…	Upravit štětec…
+
+# Native XCF import report
+	Import Conversion Report	Zpráva o převodu při importu
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Výsledky v okamžiku importu. Úpravy používají nativní pravidla PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	Byla zachována zpráva v novějším formátu. Její podrobnosti nelze zobrazit.
+	No conversion report was recorded.	Nebyla zaznamenána žádná zpráva o převodu.
+	No entries on this page.	Na této stránce nejsou žádné položky.
+	Layer mask	Maska vrstvy
+	Source item	Zdrojová položka
+	{first}–{last} of {total}	{first}–{last} z {total}
+	Native equivalent	Nativní ekvivalent
+	Native approximation	Nativní aproximace
+	Retained, not applied	Zachováno, nepoužito
+	Nonessential data skipped	Nepodstatná data přeskočena
+	Unknown outcome	Neznámý výsledek
+	Native rules	Nativní pravidla
+	Native capability limit	Omezení nativních funkcí
+	Conversion not implemented	Převod není implementován
+	Resource unavailable	Prostředek není dostupný
+	Invalid optional data	Neplatná volitelná data
+	Retention limit	Limit uchovávání
+	Precision conversion	Převod přesnosti
+	Unknown reason	Neznámý důvod
+	Native layer {id} (removed; historical reference)	Nativní vrstva {id} (odstraněna; historický odkaz)
+	Native layer: {name}	Nativní vrstva: {name}
+	Alpha Percentile	Percentil alfa
+	Alpha Weighted	Vážené alfou
+	Color Percentile	Barevný percentil
+	Connectivity	Sousednost
+	Disc	Kruhové okolí
+	Each	Každý kanál
+	Value	Hodnota

@@ -23,7 +23,9 @@ fn app_with(answers: Vec<Option<FileDialogAnswer>>) -> (PhotocraftApp, Written) 
                 return Err("not an image".into());
             }
             let warnings = if name.contains("warn") { vec!["Adjustment layer \"Curves 1\" was flattened".to_string()] } else { Vec::new() };
-            Ok((Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), warnings))
+            let mut result = crate::test_import_result(Document::new(name, Size::new(4, 4), ColorMode::Rgb, SampleType::U8), warnings);
+            result.source_read_only = photocraft_io::affinity::is_affinity(bytes);
+            Ok(result)
         })),
         export: Some(Box::new(|_doc: &Document, path: &str, _s: &crate::ExportSettings| {
             let warnings = if path.ends_with(".png") { vec!["Layers were flattened".to_string()] } else { Vec::new() };
@@ -694,14 +696,171 @@ fn drag_and_drop_in_the_running_app() {
     pointer.set(h.state().drop_canvas_rect.expect("the canvas is shown").center());
     h.input_mut().dropped_files.push(dropped(file, Err("read from the path".into())));
     h.run_steps(2);
+    let started = std::time::Instant::now();
+    while h.state().session.has_jobs() {
+        assert!(started.elapsed() < std::time::Duration::from_secs(30), "Place worker timed out");
+        h.step();
+    }
     assert_eq!(h.state().session.documents().len(), 3, "no new document");
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers + 1);
     assert_eq!(h.state().ui.transform.as_ref().and_then(|t| t.made), Some(crate::state::MadeLayer::Place));
+    assert_eq!(h.state().ui.transform.as_ref().map(|t| t.layer), h.state().session.active().unwrap().active_layer.map(|id| id.0));
     h.key_press(egui::Key::Escape);
     h.run_steps(2);
     assert!(h.state().ui.transform.is_none());
     assert_eq!(h.state().session.active().unwrap().doc.layers.len(), layers, "Esc takes the place back");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Hold native Place work and its completed event separately: only successful UI publication may bind the new layer, never the old layer or another tab.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn pending_dropped_place_waits_for_publication_and_preserves_cancel_failure_and_tab_identity() {
+    use photocraft_engine::jobs::Started;
+    use std::sync::Arc;
+    for outcome in 0..5 {
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width":4,"height":3,"background":"white"})).unwrap();
+        let original = session.active().unwrap().doc.clone();
+        let old_layer = session.active().unwrap().active_layer.unwrap();
+        let history = session.active().unwrap().history.past_len();
+        let mut app = PhotocraftApp::new(session, Services::default());
+        let ctx = egui::Context::default();
+        let (release, held) = std::sync::mpsc::channel();
+        let Started::Job(job) = app
+            .session
+            .start_job(
+                "file.placeEmbedded",
+                json!({}),
+                "Place Embedded",
+                true,
+                move |ctx| {
+                    held.recv().map_err(|error| photocraft_engine::EngineError::Other(error.to_string()))?;
+                    ctx.check()?;
+                    if matches!(outcome, 3 | 4) {
+                        return Err(photocraft_engine::EngineError::Other("deliberately refused Place work".into()));
+                    }
+                    Ok(())
+                },
+                |session, ()| {
+                    let layer = session.edit("Place Embedded", |doc, active| {
+                        let mut layer = photocraft_doc::Layer::raster("Published placed layer", doc.pixel_format());
+                        layer.surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(0, 0, 4, 3), &[1., 0., 0., 1.]);
+                        let id = doc.insert_above(*active, layer);
+                        *active = Some(id);
+                        Ok(id)
+                    })?;
+                    Ok(json!({"layer":layer.0}))
+                },
+            )
+            .unwrap()
+        else {
+            panic!("native gated worker")
+        };
+        app.drop_places.push_front(DropPlace::Pending { job, document: original.id });
+        app.place_next_dropped(&ctx);
+        assert!(app.ui.transform.is_none(), "a pending Place must not transform the old layer");
+        assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+        assert_eq!(app.session.active().unwrap().history.past_len(), history);
+        let other = if matches!(outcome, 1 | 4) {
+            app.session.execute("file.new", json!({"width":2,"height":2,"background":"white"})).unwrap();
+            app.drop_places.push_back(DropPlace::Bytes("must-not-enter-other-tab.png".into(), png_bytes(1, 1)));
+            Some(app.session.active().unwrap().doc.clone())
+        } else {
+            None
+        };
+        if outcome == 2 {
+            assert!(app.session.cancel_job(job));
+        }
+        release.send(()).unwrap();
+        let result = app.session.wait_job(job);
+        assert_eq!(result.is_ok(), outcome < 2);
+        // Applying the worker is distinct from processing the shell's completion event.
+        assert!(app.ui.transform.is_none());
+        assert!(matches!(app.drop_places.front(), Some(DropPlace::Pending { .. })));
+        crate::jobs_ui::tick(&mut app, &ctx);
+        assert!(app.drop_places.is_empty(), "every terminal outcome releases the drop queue");
+        if outcome == 0 {
+            let placed = app.session.active().unwrap().active_layer.unwrap();
+            assert_ne!(placed, old_layer);
+            let transform = app.ui.transform.as_ref().unwrap();
+            assert_eq!(transform.layer, placed.0);
+            assert_eq!(transform.made, Some(crate::state::MadeLayer::Place));
+            crate::transform_tool::cancel(&mut app);
+            assert_eq!(*app.session.active().unwrap().doc, *original);
+            assert_eq!(app.session.active().unwrap().history.past_len(), history);
+            assert!(!app.session.active().unwrap().history.can_redo());
+        } else {
+            assert!(app.ui.transform.is_none());
+            if let Some(other) = other {
+                assert_dropped_place_after_tab_switch(&mut app, &ctx, &original, &other, history, outcome == 1);
+            } else {
+                assert!(Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+                assert_eq!(app.session.active().unwrap().history.past_len(), history);
+            }
+        }
+        app.session.join_cancelled_jobs();
+    }
+}
+
+/// A completion may retain its own successful edit, but cannot focus or place queued files into
+/// another tab; a refused worker must retain both documents and expose its primary error.
+#[cfg(not(target_arch = "wasm32"))]
+fn assert_dropped_place_after_tab_switch(
+    app: &mut PhotocraftApp,
+    ctx: &egui::Context,
+    original: &std::sync::Arc<photocraft_doc::Document>,
+    other: &std::sync::Arc<photocraft_doc::Document>,
+    history: usize,
+    succeeded: bool,
+) {
+    use std::sync::Arc;
+    assert!(Arc::ptr_eq(other, &app.session.active().unwrap().doc), "completion cannot steal another tab");
+    if succeeded {
+        assert!(app.ui.status.contains("target document is no longer active"));
+    } else {
+        assert!(app.ui.status_error, "a switched target must not hide the worker failure");
+        assert!(app.ui.status.contains("deliberately refused Place work"));
+    }
+    app.place_next_dropped(ctx);
+    assert!(Arc::ptr_eq(other, &app.session.active().unwrap().doc), "remaining drop files cannot migrate to another tab");
+    let placed = app.session.documents().iter().find(|state| state.doc.id == original.id).unwrap();
+    if succeeded {
+        assert_eq!(placed.doc.layers.len(), original.layers.len() + 1, "the successful placement and its history remain intact");
+        assert_eq!(placed.history.past_len(), history + 1);
+    } else {
+        assert!(Arc::ptr_eq(&placed.doc, original), "failed work leaves its original target intact too");
+        assert_eq!(placed.history.past_len(), history);
+    }
+}
+
+/// A real path drop returns a worker handle before UI polling; it must reserve its queue position without binding a transform to the existing layer.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn asynchronous_path_drop_reserves_the_queue_before_any_layer_is_published() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("placed.png");
+    std::fs::write(&path, png_bytes(4, 3)).unwrap();
+    let mut session = photocraft_engine::Session::new();
+    session.execute("file.new", json!({"width":8,"height":6,"background":"white"})).unwrap();
+    let original = session.active().unwrap().doc.clone();
+    let mut app = PhotocraftApp::new(session, Services::default());
+    app.background_jobs = true;
+    app.drop_places.push_back(DropPlace::File(dropped(path, Err("use the actual path".into()))));
+    let ctx = egui::Context::default();
+    app.place_next_dropped(&ctx);
+    let Some(DropPlace::Pending { job, .. }) = app.drop_places.front() else { panic!("worker must reserve its queue position") };
+    let job = *job;
+    assert!(app.ui.transform.is_none());
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+    app.place_next_dropped(&ctx);
+    assert!(app.ui.transform.is_none());
+    assert!(app.session.cancel_job(job));
+    crate::jobs_ui::tick(&mut app, &ctx);
+    assert!(app.drop_places.is_empty());
+    assert!(app.ui.transform.is_none());
+    assert!(std::sync::Arc::ptr_eq(&original, &app.session.active().unwrap().doc));
+    app.session.join_cancelled_jobs();
 }
 
 #[test]
@@ -1017,11 +1176,12 @@ fn opening_type_in_a_missing_font_warns() {
     let already = warning.clone();
     let services = Services {
         import: Some(Box::new(move |name: &str, _bytes: &[u8], _opts: &photocraft_io::ImportOptions| {
-            Ok(match name {
+            let (document, warnings) = match name {
                 "installed.psd" => (installed.clone(), Vec::new()),
                 "warned.psd" => (with_missing.clone(), vec![already.clone()]),
                 _ => (with_missing.clone(), Vec::new()),
-            })
+            };
+            Ok(crate::test_import_result(document, warnings))
         })),
         ..Default::default()
     };

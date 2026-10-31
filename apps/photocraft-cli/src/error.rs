@@ -7,6 +7,8 @@ use crate::actions::ActionsError;
 /// Why a subcommand failed: printed as `error: {e}`, exit 1.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum CliError {
+    #[error("the output is the import-only source; choose another native or export destination")]
+    ImportOnlySource,
     #[error(transparent)]
     Automation(#[from] AutomationError),
     #[error(transparent)]
@@ -32,6 +34,12 @@ pub(crate) enum CliError {
     OutIsInput(PathBuf),
     #[error("--out {} is the --in folder, so the results would replace the originals: choose another --out folder, or pass --in-place to overwrite them", .0.display())]
     OutIsIn(PathBuf),
+    /// A batch must not replace an unread selected input, including through a filesystem alias.
+    #[error("batch output {} is another selected input {}; choose a different output folder, format or name", output.display(), input.display())]
+    OutIsSelectedInput { output: PathBuf, input: PathBuf },
+    /// Identity inspection must succeed before the batch can safely start writing.
+    #[error("could not inspect batch file {}: {source}", path.display())]
+    InspectBatchFile { path: PathBuf, source: std::io::Error },
     /// Another input already wrote this output ([`photocraft_engine::file_cmds::OutputClaims::check`]).
     #[error("{0}")]
     OutputClaimed(String),

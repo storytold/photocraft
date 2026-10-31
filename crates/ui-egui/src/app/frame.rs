@@ -1,3 +1,5 @@
+use crate::import_report;
+
 use super::{
     PhotocraftApp, analysis_ui, brush_panel, brush_picker, camera_raw_ui, canvas, dds_options_ui, dialogs, discard_ui, distort_ui, field_wheel, file_open,
     gpu_canvas, gpu_status, gradient_ui, i18n, jobs_ui, jpeg_options_ui, kys_import, last_brush, layers_panel_ui, monitor_status, native_menu, notices,
@@ -319,6 +321,7 @@ impl PhotocraftApp {
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);
         updates_ui::show(self, &ctx);
+        import_report::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
         kys_import::show_offer(self, &ctx);
         if self.titlebar_modal_drag(chrome) {

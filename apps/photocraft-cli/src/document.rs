@@ -26,13 +26,20 @@ fn refuse_overwriting_input(in_place: bool, input: &Path, output: &Path) -> Resu
     Ok(())
 }
 
+/// Prepare imported native contents before direct export, preserving import-only source identity and forwarding
+/// warnings.
 pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let (input, output) = (&a.input, &a.output);
     let opts = ExportOptions::from(&a.export);
     refuse_overwriting_input(a.in_place, input, output)?;
-    let mut o = files::open(input)?;
+    let mut o = files::open_with_sample_order(input, a.import.historical_xcf_sample_order)?;
+    if o.source_read_only && photocraft_engine::file_cmds::same_file(input, output) {
+        return Err(CliError::ImportOnlySource);
+    }
     // Preferences › Raw Defaults › Resolution at its default, as `run` and `info` open a raw.
-    photocraft_engine::file_cmds::raw_defaults(&photocraft_engine::Session::new(), &o.warnings, &mut o.document);
+    let session = photocraft_engine::Session::new();
+    photocraft_engine::file_cmds::raw_defaults(&session, &o.warnings, &mut o.document);
+    session.prepare_imported_document(&mut o.document, &photocraft_engine::jobs::JobCtx::new())?;
     warn_all(err, &o.warnings);
     warn_all(err, &missing_font_warnings(&o.document));
     let ws = files::save(&o.document, output, a.export.format.as_deref(), &opts, None)?;
@@ -40,10 +47,12 @@ pub(crate) fn convert(a: &ConvertArgs, _out: &mut dyn Write, err: &mut dyn Write
     Ok(())
 }
 
+/// Inspect a normally opened document with import warnings while omitting session-only history noise from CLI
+/// output.
 pub(crate) fn info(a: &InfoArgs, out: &mut dyn Write) -> Result {
     let file = &a.file;
     let mut h = Headless::trusted_local();
-    let opened = h.open(file)?;
+    let opened = h.open_with_sample_order(file, a.import.historical_xcf_sample_order)?;
     let mut doc = h.inspect(None)?;
     let mut warnings = opened["warnings"].as_array().cloned().unwrap_or_default();
     if let Some(st) = h.session.active() {
@@ -72,6 +81,8 @@ fn command_list(a: &RunArgs) -> Result<Vec<(String, Value)>> {
     Ok(cmds)
 }
 
+/// Open or create a native document, execute requested commands and export under source protection with
+/// deduplicated warnings.
 pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) -> Result {
     let opts = ExportOptions::from(&a.export);
     let mut h = Headless::trusted_local();
@@ -86,7 +97,7 @@ pub(crate) fn run_cmds(a: &RunArgs, out: &mut dyn Write, err: &mut dyn Write) ->
         if let Some(out) = &a.out {
             refuse_overwriting_input(a.in_place, file, out)?;
         }
-        let o = h.open(file)?;
+        let o = h.open_with_sample_order(file, a.import.historical_xcf_sample_order)?;
         let ws: Vec<String> = serde_json::from_value(o["warnings"].clone()).unwrap_or_default();
         warn_all(err, &ws);
         reported_fonts.extend(ws);

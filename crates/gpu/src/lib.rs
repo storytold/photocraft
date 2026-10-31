@@ -9,7 +9,7 @@
 //!   is re-uploaded only when its `Arc` changed (a brush stroke uploads just the touched 256²
 //!   tiles; undo swaps pointers back and uploads only what differs). RGBA8 tiles upload with
 //!   zero conversion. Pages over a byte budget are evicted least recently used first.
-//! - **Planner** ([`plan`]). The layer tree becomes a linear list of passes over abstract
+//! - **Planner** ([`plan()`]). The layer tree becomes a linear list of passes over abstract
 //!   chunk-sized buffers (blend with every Photoshop mode, opacity × fill, masks, clipping groups,
 //!   pass-through vs isolated groups, adjustments, solid / gradient fills, layer effects).
 //! - **Layer effects** (`fx.rs`). Each effect layer's maps (shadow, glow, satin, bevel, stroke
@@ -142,7 +142,7 @@ mod setup;
 mod textures;
 
 #[cfg(test)]
-use batch::{BATCH, batch_kernel, batch_op_words, batch_runs, op_words, run_starts, tile_grid};
+use batch::{BATCH, batch_kernel, batch_layout, batch_op_words, batch_runs, capture_starts, op_words, run_starts, tile_grid};
 #[cfg(test)]
 use consts::OP_UNIFORM;
 pub use consts::{ACC_FORMAT, CHUNK, FX_BUDGET, PAGE, PATTERN_BUDGET, PATTERN_IDLE_FRAMES, RESIDENT_BUDGET};

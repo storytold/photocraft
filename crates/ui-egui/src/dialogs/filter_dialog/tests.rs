@@ -1609,3 +1609,34 @@ fn replace_color_localized_color_clusters() {
     assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
     assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
 }
+
+#[test]
+/// Require discrete preview scaling to divide native rank support exactly, preserve JSON numeric representation and
+/// leave topology filters at full resolution.
+fn discrete_native_rank_proxy_preserves_radius_support_and_json_number_kind() {
+    let command = "filter.other.percentile";
+    for (radius, requested, expected) in [(4, 4, 4), (4, 3, 2), (5, 4, 1), (6, 4, 3), (7, 4, 1), (8, 4, 4)] {
+        let mut params = json!({"radius":radius,"colorPercentile":37,"alphaPercentile":83,"shape":"disc"});
+        let factor = preview_factor(command, &params, requested);
+        assert_eq!(factor, expected);
+        scale_preview_params(command, &mut params, factor);
+        assert_eq!(params["radius"].as_u64(), Some(radius as u64 / u64::from(factor)));
+        assert_eq!(params["radius"].as_u64().unwrap() * u64::from(factor), radius as u64);
+        assert_eq!(params["colorPercentile"], 37);
+        assert_eq!(params["alphaPercentile"], 83);
+    }
+    for radius in [json!(1.5), json!(0), json!(501), json!(null)] {
+        assert_eq!(preview_factor(command, &json!({"radius":radius}), 4), 1, "invalid native inputs must not be repaired by proxy scaling");
+    }
+    let mut numeric = json!({"radius":4.0});
+    let factor = preview_factor(command, &numeric, 3);
+    assert_eq!(factor, 2);
+    scale_preview_params(command, &mut numeric, factor);
+    assert_eq!(numeric["radius"].as_f64(), Some(2.0));
+    let mut legacy = json!({"radius":8});
+    scale_preview_params("filter.blur.gaussianBlur", &mut legacy, 4);
+    assert_eq!(legacy["radius"], json!(2.0), "established continuous native previews retain floating JSON values");
+    for command in ["filter.noise.channelNoise", "filter.other.convolution", "filter.other.fillHoles"] {
+        assert_eq!(preview_factor(command, &json!({}), 4), 1, "fixed pixel/connected topology must use actual native resolution");
+    }
+}

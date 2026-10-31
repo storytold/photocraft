@@ -541,6 +541,7 @@ struct PanelSet {
     panels: Option<crate::state::Panels>,
     mask_target: Option<bool>,
     updates_open: Option<bool>,
+    import_report: Option<bool>,
     vector_mask_target: Option<bool>,
     filter_mask_target: Option<bool>,
     selection_mode: Option<u64>,
@@ -561,6 +562,7 @@ impl PanelSet {
             panels: merged_object(&app.ui.panels, p.get("panels"), "panels")?,
             mask_target: bool_field(p, "maskTarget")?,
             updates_open: bool_field(p, "updatesOpen")?,
+            import_report: bool_field(p, "importReport")?,
             vector_mask_target: bool_field(p, "vectorMaskTarget")?,
             filter_mask_target: filter_mask_target_param(app, p)?,
             selection_mode: uint_field(p, "selectionMode")?,
@@ -609,6 +611,13 @@ impl PanelSet {
         }
         if let Some(open) = self.updates_open {
             app.ui.updates_open = open;
+        }
+        if let Some(show) = self.import_report {
+            if show {
+                crate::import_report::open(app);
+            } else {
+                app.ui.import_report = Default::default();
+            }
         }
         if let Some(m) = self.vector_mask_target {
             app.end_filter_mask_view();
@@ -1366,7 +1375,7 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     let p = &req.params;
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
-            Some(path) => app_open(app, path),
+            Some(path) => app_open(app, path, p),
             None => err("missing `path`"),
         },
         "app.save" => match crate::FormatChoices::from_params(p, "app.save") {
@@ -1385,7 +1394,11 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     })
 }
 
-fn app_open(app: &mut PhotocraftApp, path: &str) -> Outcome {
+fn app_open(app: &mut PhotocraftApp, path: &str, p: &Value) -> Outcome {
+    let order = match photocraft_engine::file_cmds::historical_xcf_sample_order(p, "app.open") {
+        Ok(order) => order,
+        Err(error) => return err(error.to_string()),
+    };
     if let Some(outcome) = open_pcraft_directory(app, path) {
         return outcome;
     }
@@ -1395,7 +1408,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str) -> Outcome {
     };
     wrap(opened.and_then(|(name, bytes)| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes(&name, &bytes)?;
+        let warnings = app.open_automation_bytes_with_sample_order(&name, &bytes, order)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);

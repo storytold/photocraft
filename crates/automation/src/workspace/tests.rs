@@ -878,3 +878,275 @@ fn absolute_paths_are_checked_against_the_authority_s_own_root() {
     let none = AuthorizedWorkspace::default();
     assert!(none.read(&target.to_string_lossy()).is_err());
 }
+
+#[test]
+/// Only a typed existing-held decision bypasses desktop ambient-open denial; no locator or unrecognized control is accepted.
+fn desktop_historical_continuation_gate_accepts_only_strict_held_capabilities() {
+    for params in [
+        serde_json::json!({"heldHistoricalXcfOpen":1,"historicalXcfSampleOrder":"little-endian","interactive":true}),
+        serde_json::json!({"heldHistoricalXcfOpen":2,"historicalXcfSampleOrder":"big-endian"}),
+        serde_json::json!({"heldHistoricalXcfOpen":3,"cancel":true}),
+    ] {
+        assert!(super::authorize_desktop_engine_step("file.open", &params).is_ok());
+        assert!(super::authorize_engine_step("file.open", &params).is_err(), "headless authority is not expanded");
+    }
+    for params in [
+        serde_json::json!({"path":"outside.xcf"}),
+        serde_json::json!({"heldHistoricalXcfOpen":1,"historicalXcfSampleOrder":"little-endian","path":"outside.xcf"}),
+        serde_json::json!({"heldHistoricalXcfOpen":1,"cancel":true,"path":"outside.xcf"}),
+        serde_json::json!({"heldHistoricalXcfOpen":1,"historicalXcfSampleOrder":"big-endian","as":"xcf"}),
+        serde_json::json!({"heldHistoricalXcfOpen":1,"historicalXcfSampleOrder":"big-endian","unknown":null}),
+        serde_json::json!({"heldHistoricalXcfOpen":0,"cancel":true}),
+        serde_json::json!({"heldHistoricalXcfOpen":"1","cancel":true}),
+        serde_json::json!({"heldHistoricalXcfOpen":1,"cancel":false}),
+        serde_json::json!({"heldHistoricalXcfOpen":1,"cancel":true,"historicalXcfSampleOrder":"big-endian"}),
+        serde_json::json!({"heldHistoricalXcfOpen":1,"historicalXcfSampleOrder":"native"}),
+        serde_json::json!({"heldHistoricalXcfOpen":1,"historicalXcfSampleOrder":"big-endian","interactive":false}),
+        serde_json::json!({"heldHistoricalXcfOpen":1}),
+    ] {
+        assert!(super::authorize_desktop_engine_step("file.open", &params).is_err(), "denied {params}");
+    }
+}
+
+#[test]
+/// Distinguish equal relative names across roots while detecting real aliases and preserving removed-source
+/// protection.
+fn import_source_identity_respects_separate_read_and_write_roots() {
+    let (inside, outside, _) = roots("import-source-identity");
+    std::fs::write(inside.join("source.xcf"), b"source").unwrap();
+    std::fs::write(outside.join("source.xcf"), b"other").unwrap();
+    std::fs::hard_link(inside.join("source.xcf"), outside.join("alias.pcraft")).unwrap();
+    let workspace = AuthorizedWorkspace::new(Some(&inside), Some(&outside)).unwrap();
+    assert!(!workspace.is_import_source("source.xcf", "source.xcf").unwrap(), "equal relative names in separate roots are distinct");
+    assert!(workspace.is_import_source("source.xcf", "alias.pcraft").unwrap());
+    assert!(!workspace.is_import_source("source.xcf", "new.pcraft").unwrap());
+    assert!(workspace.is_import_source("../outside/source.xcf", "new.pcraft").is_err());
+    assert!(workspace.is_import_source("source.xcf", "../inside/source.xcf").is_err());
+    std::fs::remove_file(inside.join("source.xcf")).unwrap();
+    assert!(!workspace.is_import_source("source.xcf", "new.pcraft").unwrap());
+    let same_root = AuthorizedWorkspace::new(Some(&inside), Some(&inside)).unwrap();
+    assert!(same_root.is_import_source("source.xcf", "source.xcf").unwrap(), "the original path stays protected after removal");
+}
+
+#[test]
+/// Reject source/destination directories before opening them and preserve missing-file and alias semantics.
+fn import_source_identity_refuses_nonregular_candidates_and_preserves_missing_paths() {
+    let (inside, _, workspace) = roots("import-source-nonregular");
+    std::fs::write(inside.join("source.xcf"), b"source").unwrap();
+    std::fs::hard_link(inside.join("source.xcf"), inside.join("alias.pcraft")).unwrap();
+    std::fs::create_dir(inside.join("directory")).unwrap();
+    for (source, destination, role) in [("directory", "source.xcf", "source"), ("source.xcf", "directory", "destination")] {
+        let error = workspace.is_import_source(source, destination).unwrap_err().to_string();
+        assert!(error.contains(&format!("inspect {role}")) && error.contains("not a regular file"), "{error}");
+    }
+    assert!(!workspace.is_import_source("missing.xcf", "source.xcf").unwrap());
+    assert!(!workspace.is_import_source("source.xcf", "missing.pcraft").unwrap());
+    assert!(workspace.is_import_source("source.xcf", "alias.pcraft").unwrap());
+    assert!(workspace.is_import_source("source.xcf", "source.xcf").unwrap());
+    assert_eq!(std::fs::read(inside.join("source.xcf")).unwrap(), b"source");
+    assert!(inside.join("directory").is_dir());
+}
+
+#[test]
+/// Headless save rejects nonregular identity candidates before creating output and leaves the protected document untouched.
+fn headless_save_rejects_nonregular_import_identity_without_publishing_output() {
+    let (inside, _, workspace) = roots("headless-import-identity-nonregular");
+    let mut source = b"gimp xcf v003\0".to_vec();
+    for value in [1u32, 1, 0, 0, 0, 0, 0] {
+        source.extend_from_slice(&value.to_be_bytes());
+    }
+    std::fs::write(inside.join("source.xcf"), &source).unwrap();
+    std::fs::create_dir(inside.join("directory")).unwrap();
+    let mut headless = crate::Headless::with_workspace(workspace);
+    headless.open(Path::new("source.xcf")).unwrap();
+    let before = headless.session.active().unwrap().doc.clone();
+    let history = headless.session.active().unwrap().history.past_len();
+    let error = headless.save(None, Some(Path::new("directory")), Some("pcraft"), &Default::default()).unwrap_err().to_string();
+    assert!(error.contains("inspect destination") && error.contains("not a regular file"), "{error}");
+    std::fs::remove_file(inside.join("source.xcf")).unwrap();
+    std::fs::create_dir(inside.join("source.xcf")).unwrap();
+    let error = headless.save(None, Some(Path::new("new.pcraft")), Some("pcraft"), &Default::default()).unwrap_err().to_string();
+    assert!(error.contains("inspect source") && error.contains("not a regular file"), "{error}");
+    let state = headless.session.active().unwrap();
+    assert!(Arc::ptr_eq(&before, &state.doc));
+    assert_eq!(state.history.past_len(), history);
+    assert!(state.source_read_only);
+    assert_eq!(state.protected_import_source.as_deref(), Some("source.xcf"));
+    assert!(!inside.join("new.pcraft").exists());
+    assert!(inside.join("directory").is_dir());
+    assert!(inside.join("source.xcf").is_dir());
+    assert!(temp_files(&inside).is_empty());
+}
+
+/// Exercise the actual render RPC with a protected nonactive XCF document in either filesystem authority mode.
+fn render_import_source_protection_scenario(trusted: bool) {
+    let (inside, _, workspace) = roots(if trusted { "render-import-trusted" } else { "render-import-workspace" });
+    let mut source = b"gimp xcf v003\0".to_vec();
+    for value in [1u32, 1, 0, 0, 0, 0, 0] {
+        source.extend_from_slice(&value.to_be_bytes());
+    }
+    // Signature dispatch must protect import-only data even when its suffix normally permits PNG overwrite.
+    std::fs::write(inside.join("source.png"), &source).unwrap();
+    std::fs::hard_link(inside.join("source.png"), inside.join("alias.png")).unwrap();
+    let requested = |name: &str| if trusted { inside.join(name).to_string_lossy().into_owned() } else { name.to_owned() };
+    let mut headless = if trusted { crate::Headless::trusted_local() } else { crate::Headless::with_workspace(workspace) };
+    headless.handle("doc.open", serde_json::json!({"path":requested("source.png")})).unwrap();
+    assert!(headless.session.active().unwrap().source_read_only);
+    headless.handle("doc.new", serde_json::json!({"width":2,"height":2})).unwrap();
+    assert_eq!(headless.session.active_index(), Some(1));
+    let before: Vec<_> = headless.session.documents().iter().map(|state| (state.doc.clone(), state.history.past_len(), state.path.clone())).collect();
+    for name in ["source.png", "alias.png"] {
+        let error = headless.handle("doc.render", serde_json::json!({"index":0,"path":requested(name),"maxSide":0})).unwrap_err().to_string();
+        assert!(error.contains("import-only source"), "{error}");
+        assert_eq!(headless.session.active_index(), Some(1), "explicit rendering must not select its document");
+        assert_eq!(std::fs::read(inside.join(name)).unwrap(), source);
+    }
+    headless.handle("doc.render", serde_json::json!({"index":0,"path":requested("new.png"),"maxSide":0})).unwrap();
+    let rendered = std::fs::read(inside.join("new.png")).unwrap();
+    assert!(rendered.starts_with(b"\x89PNG\r\n\x1a\n"));
+    assert_eq!(headless.session.active_index(), Some(1));
+    headless.session.set_active(0);
+    let error = headless.handle("doc.render", serde_json::json!({"path":requested("alias.png"),"maxSide":0})).unwrap_err().to_string();
+    assert!(error.contains("import-only source"), "{error}");
+    let error = headless.write_render(Path::new(&requested("source.png")), &rendered).unwrap_err().to_string();
+    assert!(error.contains("import-only source"), "the public active-document wrapper must retain protection: {error}");
+    for (state, (doc, history, path)) in headless.session.documents().iter().zip(&before) {
+        assert!(Arc::ptr_eq(doc, &state.doc));
+        assert_eq!(state.history.past_len(), *history);
+        assert_eq!(&state.path, path);
+    }
+    let state = &headless.session.documents()[0];
+    assert!(state.source_read_only);
+    assert_eq!(state.protected_import_source.as_deref(), Some(requested("source.png").as_str()));
+    assert_eq!(std::fs::read(inside.join("source.png")).unwrap(), source);
+    assert_eq!(std::fs::read(inside.join("alias.png")).unwrap(), source);
+    assert!(temp_files(&inside).is_empty());
+}
+
+#[test]
+/// Render output cannot replace actual XCF source bytes or hardlink aliases, including when the rendered tab is not active.
+fn headless_render_protects_import_sources_and_aliases_for_requested_document() {
+    for trusted in [false, true] {
+        render_import_source_protection_scenario(trusted);
+    }
+}
+
+#[cfg(unix)]
+#[test]
+/// Identity guards reject source/destination FIFOs and in-root FIFO links without waiting for a peer to open the pipe.
+fn import_source_identity_refuses_fifos_before_opening_either_candidate() {
+    let (inside, _, workspace) = roots("import-source-fifo");
+    std::fs::write(inside.join("source.xcf"), b"source").unwrap();
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    rustix::fs::mkfifoat(rustix::fs::CWD, inside.join("pipe"), rustix::fs::Mode::RUSR | rustix::fs::Mode::WUSR).unwrap();
+    // Rustix 1.1.5 does not expose mkfifoat on Apple targets. Other Unix targets
+    // must provide the standard command and fail clearly rather than skip this regression.
+    #[cfg(not(any(target_os = "linux", target_os = "android")))]
+    assert!(std::process::Command::new("mkfifo").arg(inside.join("pipe")).status().expect("cannot create FIFO fixture with mkfifo").success());
+    std::os::unix::fs::symlink("pipe", inside.join("link")).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for name in ["pipe", "link"] {
+            for (source, destination) in [(name, "source.xcf"), ("source.xcf", name)] {
+                tx.send(workspace.is_import_source(source, destination).map_err(|error| error.to_string())).unwrap();
+            }
+        }
+    });
+    for _ in 0..4 {
+        let result = rx.recv_timeout(std::time::Duration::from_secs(5)).expect("identity inspection blocked on a FIFO");
+        let error = result.unwrap_err();
+        assert!(error.contains("not a regular file"), "{error}");
+    }
+    assert_eq!(std::fs::read(inside.join("source.xcf")).unwrap(), b"source");
+}
+
+#[test]
+/// Check file identity across overlapping capability roots without treating unrelated missing paths as aliases.
+fn import_source_identity_recognizes_overlapping_roots_and_missing_paths() {
+    let (inside, _, _) = roots("import-source-overlap");
+    let sub = inside.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    std::fs::write(sub.join("source.xcf"), b"source").unwrap();
+    let workspace = AuthorizedWorkspace::new(Some(&inside), Some(&sub)).unwrap();
+    assert!(workspace.is_import_source("sub/source.xcf", "source.xcf").unwrap());
+    assert!(!workspace.is_import_source("sub/source.xcf", "new.pcraft").unwrap());
+    assert!(!workspace.is_import_source("sub/missing.xcf", "source.xcf").unwrap());
+}
+
+#[cfg(windows)]
+#[test]
+/// Fail closed when Windows denies identity inspection of a source that overlaps the authorized write root.
+fn denied_import_source_inspection_blocks_saves_through_overlapping_roots() {
+    use std::process::Command;
+
+    struct DeniedRead {
+        file: PathBuf,
+        sid: String,
+    }
+    impl DeniedRead {
+        /// Restore only the temporary fixture file's denied read permission after the identity check.
+        fn restore(&self) {
+            let output = Command::new("icacls.exe").arg(&self.file).arg("/remove:d").arg(format!("*{}", self.sid)).output().unwrap();
+            assert!(output.status.success(), "cannot restore temporary fixture read access");
+        }
+    }
+    impl Drop for DeniedRead {
+        /// Remove the fixture's explicit deny rule even when an assertion exits early, without changing
+        /// directory ACLs.
+        fn drop(&mut self) {
+            // Restore even if an assertion fails; never alter a directory ACL.
+            let _ = Command::new("icacls.exe").arg(&self.file).arg("/remove:d").arg(format!("*{}", self.sid)).output();
+        }
+    }
+
+    let (inside, _, _) = roots("import-source-denied");
+    let sub = inside.join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let source = sub.join("source.xcf");
+    let mut bytes = b"gimp xcf v003\0".to_vec();
+    for value in [1u32, 1, 0, 0, 0, 0, 0] {
+        bytes.extend_from_slice(&value.to_be_bytes());
+    }
+    std::fs::write(&source, &bytes).unwrap();
+    let workspace = AuthorizedWorkspace::new(Some(&inside), Some(&sub)).unwrap();
+    let mut headless = crate::Headless::with_workspace(workspace.clone());
+    headless.open(Path::new("sub/source.xcf")).unwrap();
+    assert!(headless.session.active().unwrap().source_read_only);
+    let before = headless.session.active().unwrap().doc.clone();
+    let history = headless.session.active().unwrap().history.past_len();
+
+    let identity = Command::new("whoami.exe").args(["/user", "/fo", "csv", "/nh"]).output().unwrap();
+    assert!(identity.status.success());
+    let sid = String::from_utf8_lossy(&identity.stdout)
+        .split(',')
+        .map(|part| part.trim().trim_matches('"'))
+        .find(|part| part.starts_with("S-1-") && part.bytes().all(|byte| byte.is_ascii_digit() || byte == b'S' || byte == b'-'))
+        .unwrap()
+        .to_string();
+    let denied = DeniedRead { file: source.clone(), sid };
+    // Deny only read-data on this owned temporary file. Directory permissions
+    // and deletion/replacement rights stay intact, matching the reported case.
+    assert!(source.starts_with(&inside));
+    let output = Command::new("icacls.exe").arg(&source).arg("/deny").arg(format!("*{}:(RD)", denied.sid)).output().unwrap();
+    assert!(output.status.success(), "cannot deny read-data on temporary fixture");
+    assert_eq!(std::fs::File::open(&source).unwrap_err().kind(), std::io::ErrorKind::PermissionDenied);
+    let error = workspace.is_import_source("sub/source.xcf", "source.xcf").unwrap_err().to_string();
+    assert!(error.contains("inspect source") && error.contains("PermissionDenied"), "{error}");
+    for destination in ["source.xcf", "converted.pcraft"] {
+        let error = headless.save(None, Some(Path::new(destination)), Some("pcraft"), &Default::default()).unwrap_err().to_string();
+        assert!(error.contains("inspect source") && error.contains("PermissionDenied"), "{error}");
+        let current = headless.session.active().unwrap();
+        assert!(Arc::ptr_eq(&before, &current.doc));
+        assert_eq!(current.history.past_len(), history);
+        assert!(current.source_read_only);
+        assert_eq!(current.protected_import_source.as_deref(), Some("sub/source.xcf"));
+        assert_eq!(std::fs::read_dir(&sub).unwrap().count(), 1, "inspection failure must precede output creation");
+    }
+    denied.restore();
+    drop(denied);
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+    assert!(workspace.is_import_source("sub/source.xcf", "source.xcf").unwrap());
+    headless.save(None, Some(Path::new("converted.pcraft")), None, &Default::default()).unwrap();
+    assert!(sub.join("converted.pcraft").is_file());
+    assert_eq!(std::fs::read(&source).unwrap(), bytes);
+}

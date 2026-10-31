@@ -31,6 +31,8 @@ use crate::{EngineError, Result, Session};
 
 type Authorization = fn(&str, &Value) -> Result<()>;
 
+pub(crate) mod render_proof;
+
 thread_local! {
     // Smart-filter rendering has no Session argument. Carry the requesting session's gate
     // through synchronous rendering and explicitly reinstall it on background workers.
@@ -63,7 +65,8 @@ pub(crate) fn authorize_render_command(id: &str, params: &Value) -> Result<()> {
     match RENDER_AUTHORIZATION.with(std::cell::Cell::get) {
         Some(gate) => gate(id, params),
         None => Ok(()),
-    }
+    }?;
+    render_proof::record(id, params)
 }
 
 /// Whether the work on this thread is done for an untrusted session (a gate is installed).
@@ -295,7 +298,14 @@ pub struct Jobs {
     draining: Vec<std::thread::JoinHandle<()>>,
     /// The context inline job work runs under (see [`Session::set_inline_job_ctx`]).
     inline: Option<JobCtx>,
+    historical_xcf: Vec<historical_xcf_open::Held>,
+    next_historical_xcf: u64,
 }
+
+#[path = "historical_xcf_open.rs"]
+mod historical_xcf_open;
+
+pub(crate) use historical_xcf_open::command as open_command;
 
 const RECENT: usize = 16;
 
@@ -326,30 +336,44 @@ pub enum Started {
 /// Commands that never edit the active document, allowed while a job runs on it.
 fn independent_of_document(id: &str) -> bool {
     const PREFIXES: &[&str] = &["jobs.", "tools.", "view.", "window.", "help.", "brush.presets.", "gradient.presets."];
-    const IDS: &[&str] = &["file.new", "file.close", "file.closeAll", "edit.preferences", "edit.colorSettings", "edit.keyboardShortcuts", "edit.menus"];
+    const IDS: &[&str] =
+        &["file.new", "file.open", "file.close", "file.closeAll", "edit.preferences", "edit.colorSettings", "edit.keyboardShortcuts", "edit.menus"];
     PREFIXES.iter().any(|p| id.starts_with(p)) || IDS.contains(&id)
 }
 
-#[cfg(not(target_arch = "wasm32"))]
-fn import_path(
-    name: &str,
-    path: &str,
-    opts: &photocraft_io::ImportOptions,
-    ctl: &photocraft_raster::Interrupt,
-) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
-    // Bounded reads, and a clear error for a file larger than memory (#375); a PSD/PSB is
-    // parsed from the open file instead of being read whole.
-    photocraft_io::import_file_for_open_with(name, std::path::Path::new(path), opts, ctl)
+/// An open source either keeps encoded bytes for a possible XCF decision or streams PSD channels.
+enum AcquiredOpenSource {
+    Bytes(Arc<Vec<u8>>),
+    #[cfg(any(unix, windows))]
+    Psd(photocraft_psd::Source),
 }
 
-#[cfg(target_arch = "wasm32")]
-fn import_path(
-    _: &str,
-    path: &str,
-    _: &photocraft_io::ImportOptions,
-    _: &photocraft_raster::Interrupt,
-) -> std::result::Result<(photocraft_io::ImportResult, bool), photocraft_io::IoError> {
-    Err(photocraft_io::IoError::Read(format!("cannot open paths on the web: {path}")))
+/// Sniff exactly the upstream PSD signature without retaining the entire PSD file. Other formats
+/// keep one bounded byte snapshot, which a historical XCF decision can reuse without reopening.
+#[cfg(any(unix, windows))]
+fn acquire_open_path(name: &str, path: &str, ctl: &Interrupt) -> std::result::Result<AcquiredOpenSource, photocraft_io::IoError> {
+    let read_failed = |error: std::io::Error| photocraft_io::IoError::Read(format!("{path}: {error}"));
+    ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
+    let source = photocraft_psd::FileSource::open(std::path::Path::new(path)).map_err(read_failed)?;
+    let native = name
+        .rsplit(['/', '\\'])
+        .next()
+        .and_then(|name| name.rsplit_once('.'))
+        .is_some_and(|(base, ext)| !base.is_empty() && ext.eq_ignore_ascii_case(photocraft_format::EXTENSION));
+    let mut magic = [0u8; 4];
+    if !native && photocraft_psd::ReadAt::read_at(&source, 0, &mut magic).is_ok() && photocraft_io::is_psd(&magic) {
+        return Ok(AcquiredOpenSource::Psd(photocraft_psd::Source::new(source)));
+    }
+    drop(source);
+    let bytes = photocraft_format::read_file(std::path::Path::new(path)).map_err(read_failed)?;
+    ctl.check().map_err(|_| photocraft_io::IoError::Cancelled)?;
+    Ok(AcquiredOpenSource::Bytes(Arc::new(bytes)))
+}
+
+/// Filesystem paths are unavailable in browser builds; callers must supply encoded bytes.
+#[cfg(not(any(unix, windows)))]
+fn acquire_open_path(_: &str, path: &str, _: &Interrupt) -> std::result::Result<AcquiredOpenSource, photocraft_io::IoError> {
+    Err(photocraft_io::IoError::Read(format!("cannot open paths on this platform: {path}")))
 }
 
 /// Run a job-capable command's heavy part. `work` runs on a worker thread when the command was
@@ -514,6 +538,7 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
+        historical_xcf_sample_order: None,
     }
 }
 
@@ -552,70 +577,25 @@ impl Session {
         self.start_open_inner(name, source, true)
     }
 
+    /// Start a user open on a worker while retaining source-path identity and allowing an explicit historical
+    /// sample-order prompt.
+    pub fn start_open_for_user_with_path(&mut self, name: &str, source: OpenSource, path: Option<String>) -> Result<Started> {
+        historical_xcf_open::interactive(self, name, source, path, true)
+    }
+
+    /// Use the same interactive open transaction synchronously and refuse an unexpected background-job result.
+    pub fn open_for_user_inline(&mut self, name: &str, source: OpenSource, path: Option<String>) -> Result<Value> {
+        match historical_xcf_open::interactive(self, name, source, path, false)? {
+            Started::Done(value) => Ok(value),
+            Started::Job(_) => Err(EngineError::Other("inline file open unexpectedly started a job".into())),
+        }
+    }
+
     /// Decodes a file in a job and optionally holds damaged PSD content for
     /// interactive confirmation while leaving headless opens non-interactive.
     fn start_open_inner(&mut self, name: &str, source: OpenSource, confirm_damage: bool) -> Result<Started> {
-        let label = format!("Opening {name}");
-        let name_w = name.to_string();
-        let name_a = name.to_string();
-        let opts = import_options(self.prefs());
-        self.start_job(
-            OPEN_JOB,
-            json!({"name": name}),
-            &label,
-            false,
-            move |ctx| {
-                ctx.progress(0.0, "Reading");
-                let imported = match source {
-                    OpenSource::Bytes(bytes) => {
-                        ctx.check()?;
-                        ctx.progress(0.02, "Decoding");
-                        ctx.stage(0.02, 0.95, "Decoding", |ctl| photocraft_io::import_for_open_with(&name_w, &bytes, &opts, ctl))
-                    }
-                    // A PSD/PSB is decoded straight from the file, which is never read whole.
-                    OpenSource::Path(p) => ctx.stage(0.0, 0.95, "Decoding", |ctl| import_path(&name_w, &p, &opts, ctl)),
-                }
-                .map_err(|e| match e {
-                    photocraft_io::IoError::Cancelled => EngineError::Cancelled,
-                    e => EngineError::Other(e.to_string()),
-                })?;
-                ctx.progress(0.95, "Preparing layers");
-                warm_layer_bounds(&imported.0.document, || ctx.check())?;
-                // Type layers need the shared text engine, whose first use waits for the
-                // installed-font scan started at launch (minutes on some machines). Wait here,
-                // so the shell's missing-font check after the open finds it ready instead of
-                // freezing the window (#7332).
-                if crate::type_extra_cmds::has_type_layers(&imported.0.document) {
-                    ctx.progress(0.97, "Loading fonts");
-                    let _ = photocraft_text::shared();
-                    ctx.check()?;
-                }
-                Ok(imported)
-            },
-            move |s, (mut r, damaged): (photocraft_io::ImportResult, bool)| {
-                // File Handling's ACEScg option, before the colour prompt looks at the profile.
-                crate::file_cmds::tag_exr_colorspace(s, &name_a, &mut r.document);
-                crate::file_cmds::raw_defaults(s, &r.warnings, &mut r.document);
-                // Ask When Opening: held back until the prompt is answered (`take_held_open`). A
-                // developed raw has no embedded profile to ask about.
-                let raw = r.warnings.iter().any(|w| w.contains(photocraft_io::raw::DEVELOPED_NOTE));
-                let damaged = confirm_damage && damaged;
-                let question = s.color.open_question(&r.document).filter(|_| !raw);
-                if damaged || question.is_some() {
-                    let held = s.hold_open(r.document, r.source_read_only);
-                    return Ok(json!({"held": held, "name": name_a, "warnings": r.warnings, "color": question, "damaged": damaged}));
-                }
-                let (index, color) = s.open_document(r.document, None);
-                // Persisted IDs can collide: report the identity the session actually admitted.
-                let id = s.documents().get(index).ok_or(EngineError::NoDocument)?.doc.id;
-                if let Some(st) = s.active_mut() {
-                    st.source_read_only = r.source_read_only;
-                }
-                Ok(json!({"document": index, "docId": id.0, "name": name_a, "warnings": r.warnings, "color": color}))
-            },
-        )
+        historical_xcf_open::start(self, name, source, confirm_damage)
     }
-
     /// Start a job that isn't an engine command (opening a file, a shell operation, a test's fake
     /// job): `work` runs on a worker, `apply` on this thread when [`Session::poll_jobs`] or
     /// [`Session::wait_job`] picks the result up. `command` and `params` identify it in

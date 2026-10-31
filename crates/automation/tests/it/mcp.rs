@@ -543,6 +543,7 @@ fn write_image(dir: &std::path::Path, name: &str, format: photocraft_codecs::For
 }
 
 #[tokio::test(flavor = "multi_thread")]
+/// Require preview-only Affinity opening to expose its warning and prevent saving over the original import source.
 async fn affinity_preview_warns_and_requires_a_new_save_path() {
     let dir = tmp("affinity-preview");
     let png = write_image(&dir, "preview.png", photocraft_codecs::Format::Png);
@@ -575,7 +576,10 @@ async fn affinity_preview_warns_and_requires_a_new_save_path() {
         assert!(text(&refused).contains("pass `path`"), "{}", text(&refused));
         let native = call(&client, "doc_save", json!({"path": "source.af"})).await;
         assert_eq!(native.is_error, Some(true));
-        assert!(text(&native).contains("Affinity export"));
+        // The original source is refused before encoding; another .af destination is still
+        // rejected by the unsupported-export check.
+        let reason = if name == "source.af" { "import-only source" } else { "Affinity export" };
+        assert!(text(&native).contains(reason), "{}", text(&native));
         assert_eq!(std::fs::read(dir.join(name)).unwrap(), bytes);
     }
     json_of(&call(&client, "doc_save", json!({"path": "copy.pcraft"})).await);

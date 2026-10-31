@@ -37,6 +37,8 @@ pub fn has_extension(name: &str) -> bool {
     name.rsplit(['/', '\\']).next().and_then(|n| n.rsplit_once('.')).is_some_and(|(_, ext)| EXTENSIONS.iter().any(|e| ext.eq_ignore_ascii_case(e)))
 }
 
+/// Translate readable Affinity layers into native data with prepared text and conversion warnings.
+/// Unreadable native content falls back to the bounded embedded preview; the source remains read only.
 pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
     match photocraft_affinity::read(bytes, photocraft_affinity::Limits::default()) {
         Ok(d) => {
@@ -49,7 +51,7 @@ pub(crate) fn import(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> 
             let mut document = b.doc;
             crate::text_import::prepare(&mut document, None);
             // Save never writes back over the Affinity file.
-            Ok(ImportResult { document, warnings, source_read_only: true, preview_only: false })
+            Ok(ImportResult { initial_view: None, document, warnings, source_read_only: true, preview_only: false })
         }
         Err(native) => preview(name, bytes, &native),
     }

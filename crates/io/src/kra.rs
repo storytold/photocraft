@@ -275,6 +275,8 @@ fn preview(name: &str, zip: &ZipReader<'_>, why: String) -> Result<ImportResult>
     Ok(r)
 }
 
+/// Validate the Krita archive and bounded canvas, then import supported native layers, profile and resolution.
+/// Unsupported color spaces use preview fallback, and the original document remains read only.
 pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<ImportResult> {
     let zip = ZipReader::new(bytes).map_err(|e| invalid(e.to_string()))?;
     let mime = zip.read_by_name("mimetype", 256).map_err(|e| invalid(e.to_string()))?;
@@ -338,5 +340,5 @@ pub(crate) fn import(name: &str, bytes: &[u8], ctl: &Interrupt<'_>) -> Result<Im
     if image.children().any(|n| n.has_tag_name("assistants") || n.has_tag_name("ReferenceImages")) {
         reader.warnings.note("drawing assistants and reference images were left out");
     }
-    Ok(ImportResult { document, warnings: reader.warnings.finish(), source_read_only: true, preview_only: false })
+    Ok(ImportResult { initial_view: None, document, warnings: reader.warnings.finish(), source_read_only: true, preview_only: false })
 }

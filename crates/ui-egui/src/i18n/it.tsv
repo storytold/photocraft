@@ -4617,3 +4617,35 @@ shape	Appearance	Aspetto
 	Select and Mask was closed: its document is no longer the active one	Seleziona e maschera è stato chiuso: il suo documento non è più quello attivo
 	Select and Mask was closed: another layer was selected	Seleziona e maschera è stato chiuso: è stato selezionato un altro livello
 	Edit Brush…	Modifica pennello…
+
+# Native XCF import report
+	Import Conversion Report	Rapporto di conversione all’importazione
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Risultati al momento dell’importazione. La modifica segue le regole native di PhotoCraft.
+	A newer report format is retained. Its details cannot be displayed.	È conservato un rapporto in un formato più recente. Non è possibile mostrarne i dettagli.
+	No conversion report was recorded.	Non è stato registrato alcun rapporto di conversione.
+	No entries on this page.	Nessuna voce in questa pagina.
+	Layer mask	Maschera di livello
+	Source item	Elemento sorgente
+	{first}–{last} of {total}	{first}–{last} di {total}
+	Native equivalent	Equivalente nativo
+	Native approximation	Approssimazione nativa
+	Retained, not applied	Conservato, non applicato
+	Nonessential data skipped	Dati non essenziali ignorati
+	Unknown outcome	Risultato sconosciuto
+	Native rules	Regole native
+	Native capability limit	Limite delle funzionalità native
+	Conversion not implemented	Conversione non implementata
+	Resource unavailable	Risorsa non disponibile
+	Invalid optional data	Dati facoltativi non validi
+	Retention limit	Limite di conservazione
+	Precision conversion	Conversione della precisione
+	Unknown reason	Motivo sconosciuto
+	Native layer {id} (removed; historical reference)	Livello nativo {id} (rimosso; riferimento storico)
+	Native layer: {name}	Livello nativo: {name}
+	Alpha Percentile	Percentile alfa
+	Alpha Weighted	Ponderato per alfa
+	Color Percentile	Percentile colore
+	Connectivity	Connettività
+	Disc	Disco
+	Each	Ciascuno
+	Value	Valore

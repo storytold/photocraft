@@ -163,6 +163,7 @@ fn restore_layout_smart_objects(s: &mut photocraft_engine::Session) -> Result<()
     Ok(())
 }
 
+/// Run the selected procedural layout workload and report its measurements without requiring personal image input.
 fn main() {
     reexec_with_gpu_sync();
     let args: Vec<String> = std::env::args().collect();

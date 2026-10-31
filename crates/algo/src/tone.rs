@@ -5,7 +5,7 @@
 //! convert any colour model / bit depth to RGBA first (as `Image › Adjustments` does for the
 //! per-pixel adjustments). Formulas are documented approximations of Photoshop's behaviour,
 //! derived from its manual and observation, not from its implementation; Shadows/Highlights is
-//! measured on Photoshop (see [`shadows_highlights`]).
+//! measured on Photoshop (see [`shadows_highlights()`]).
 
 use photocraft_color::convert::{lab_to_srgb, srgb_to_lab};
 use serde::{Deserialize, Serialize};
@@ -213,6 +213,9 @@ pub struct HdrToning {
     /// Toning curve on luminance, (input, output) in 0..=1; empty = identity.
     pub curve: Vec<(f32, f32)>,
 }
+
+pub mod auto_levels;
+pub mod checked_hdr;
 
 impl Default for HdrToning {
     fn default() -> Self {

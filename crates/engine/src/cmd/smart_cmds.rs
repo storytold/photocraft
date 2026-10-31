@@ -70,7 +70,7 @@ pub fn encode_source(doc: &Document) -> Result<Vec<u8>> {
 
 /// Decodes smart-object contents (a `.pcraft` bundle, PSD/PSB, or any flat image format).
 pub fn decode_source(file_name: &str, bytes: &[u8]) -> Result<Document> {
-    crate::file_cmds::import(file_name, bytes).map_err(|e| other(format!("can't read smart object contents \"{file_name}\": {e}")))
+    decode_source_in(file_name, bytes, &JobCtx::new())
 }
 
 fn base_name(path: &str) -> String {
@@ -143,19 +143,20 @@ pub use contents::{commit_child, contents_of, replace_contents_bytes, replace_co
 use contents::{edit_contents, export_contents, is_smart_child, path_param, replace_contents, set_source, update_all};
 #[cfg(test)]
 use filters::smart_mut;
-pub(crate) use filters::{add_smart_filter, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};
+pub(crate) use filters::{add_smart_filter, add_smart_filter_in, filter_mask_paintable, filter_mask_surface, refresh_after_filter_mask_edit};
 use filters::{blending_options, delete_filter, edit_filters, move_filter, set_filter_params, set_filter_visible, smart, transfer_filters};
 use placing::{convert, detach_psd, shift_layer, via_copy};
 pub use placing::{layer_to_smart, layers_to_smart, placement};
 pub(crate) use placing::{set_placement, shift_smart, transform_placement};
 use rendering::refresh_or_fail;
-pub(crate) use rendering::source_box;
 pub use rendering::{apply_smart_filters, purge_stack_cache, refresh, refresh_layer, render, render_below_filter, stack_cache_bytes, stack_image};
 #[cfg(test)]
 use rendering::{blend_surfaces, place, render_in};
+pub(crate) use rendering::{prepare_layer_with_source, prepared_source_image, render_below_filter_with_source, source_box};
+use source::decode_source_in;
 pub use source::{SourceImage, purge_source_cache, source_bytes, source_cache_bytes, source_decode_count, source_image, svg_source_image};
 use source::{authorize_source, authorized_source_bytes};
-pub(crate) use source::{restore_unrendered, take_caches};
+pub(crate) use source::{embedded_source_bytes, restore_unrendered, take_caches};
 
 const SO: &[&str] = &["Layer", "Smart Objects"];
 const SF: &[&str] = &["Layer", "Smart Filter"];

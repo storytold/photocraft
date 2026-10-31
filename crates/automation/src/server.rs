@@ -50,6 +50,9 @@ pub struct DocIndex {
 pub struct OpenParams {
     /// Path beneath the configured automation read root: relative (forward slashes) or absolute.
     pub path: String,
+    /// Explicit byte order for historical high-depth XCF7–11: little-endian or big-endian.
+    #[serde(default, rename = "historicalXcfSampleOrder")]
+    pub historical_xcf_sample_order: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, JsonSchema)]
@@ -329,6 +332,7 @@ pub struct MenuParams {
 pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
+    /// importReport (bool, opens or closes the read-only import conversion report),
     /// vectorMaskTarget, filterMaskTarget (paint the active smart object's filter mask), selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic, solarizedDark, adwaita, adwaitaDark, breezeLight, breezeDark, softLight, softDark), brushSection, brushTab,
     /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
@@ -528,6 +532,16 @@ impl PhotocraftMcp {
         &self,
         f: impl FnOnce(&mut Headless) -> Result<T, AutomationError> + Send + 'static,
     ) -> Option<Result<T, AutomationError>> {
+        self.headless_op_with_poll(true, f).await
+    }
+
+    /// Cancellation discards queued worker results before publication; normal calls first
+    /// synchronize completed jobs, as the desktop's ordinary frame boundary does.
+    async fn headless_op_with_poll<T: Send + 'static>(
+        &self,
+        poll: bool,
+        f: impl FnOnce(&mut Headless) -> Result<T, AutomationError> + Send + 'static,
+    ) -> Option<Result<T, AutomationError>> {
         let Backend::Headless(h) = &*self.backend else {
             return None;
         };
@@ -538,7 +552,9 @@ impl PhotocraftMcp {
                 // of the document (`Session::edit`), so the session is still
                 // consistent: keep serving instead of failing every later call.
                 let mut g = h.lock().unwrap_or_else(PoisonError::into_inner);
-                g.sync_jobs();
+                if poll {
+                    g.sync_jobs();
+                }
                 f(&mut g)
             })
             .await
@@ -629,15 +645,24 @@ impl PhotocraftMcp {
     }
 
     #[tool(description = "Open an image or document file and make it active. Returns index, size and import warnings.")]
+    /// Validate explicit historical order and open through the authorized headless backend or the GUI bridge.
     async fn doc_open(&self, Parameters(p): Parameters<OpenParams>) -> Result<CallToolResult, McpError> {
         let path = PathBuf::from(&p.path);
-        if let Some(r) = self.headless_op(move |h| h.open(&path)).await {
+        let mut params = json!({"path": p.path});
+        if let Some(order) = p.historical_xcf_sample_order {
+            params["historicalXcfSampleOrder"] = json!(order);
+        }
+        let order = match photocraft_engine::file_cmds::historical_xcf_sample_order(&params, "doc_open") {
+            Ok(order) => order,
+            Err(error) => return to_result(Err(error.into())),
+        };
+        if let Some(r) = self.headless_op(move |h| h.open_with_sample_order(&path, order)).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
             return Ok(no_backend());
         };
-        to_result(b.call("app.open", json!({"path": p.path})).await)
+        to_result(b.call("app.open", params).await)
     }
 
     #[tool(
@@ -1028,9 +1053,10 @@ fn bridge_only_headless(name: &str) -> Result<CallToolResult, McpError> {
 }
 
 impl PhotocraftMcp {
+    /// Start a normally authorized engine command in headless mode or forward it through the available GUI bridge.
     async fn run_command(&self, id: String, params: Value, wait: bool) -> Result<CallToolResult, McpError> {
         let (id2, params2) = (id.clone(), params.clone());
-        if let Some(r) = self.headless_op(move |h| h.command_start(&id2, params2, wait)).await {
+        if let Some(r) = self.headless_op_with_poll(id != "jobs.cancel", move |h| h.command_start(&id2, params2, wait)).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {
@@ -1042,7 +1068,7 @@ impl PhotocraftMcp {
     /// `jobs.list` / `jobs.cancel` in either backend; `read` picks the bridge's retry rule.
     async fn jobs_call(&self, method: &'static str, params: Value, read: bool) -> Result<CallToolResult, McpError> {
         let p2 = params.clone();
-        if let Some(r) = self.headless_op(move |h| h.command_start(method, p2, true)).await {
+        if let Some(r) = self.headless_op_with_poll(method != "jobs.cancel", move |h| h.command_start(method, p2, true)).await {
             return to_result(r);
         }
         let Some(b) = self.bridge_client() else {

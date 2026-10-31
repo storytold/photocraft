@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 
 use crate::{DocState, Session};
 
+/// Describe open-document identities, active state and toolbox colors without exposing document payloads.
 pub fn session(s: &Session) -> Value {
     json!({
         "active": s.active_index(),
@@ -17,6 +18,7 @@ pub fn session(s: &Session) -> Value {
             "width": d.doc.size.width,
             "height": d.doc.size.height,
             "dirty": d.is_dirty(),
+            "sourceReadOnly": d.source_read_only,
             "revision": d.revision,
         })).collect::<Vec<_>>(),
         "foreground": s.tools.foreground,
@@ -26,6 +28,8 @@ pub fn session(s: &Session) -> Value {
     })
 }
 
+/// Expose editable native state and historical conversion summary for inspection without executing retained source
+/// data.
 pub fn document(d: &DocState) -> Value {
     let doc = &d.doc;
     let selected = d.selected_layers();
@@ -33,11 +37,13 @@ pub fn document(d: &DocState) -> Value {
     json!({
         "name": doc.name,
         "path": &d.path,
+        "sourceReadOnly": d.source_read_only,
         "width": doc.size.width,
         "height": doc.size.height,
         "mode": format!("{:?}", doc.mode),
         "depth": doc.depth.bits(),
         "resolution": doc.resolution_dpi,
+        "importConversion": crate::import_report_cmds::summary(doc.metadata.import_conversion.as_ref()),
         "activeLayer": d.active_layer.map(|l| l.0),
         "selectedLayers": selected.iter().map(|l| l.0).collect::<Vec<_>>(),
         "isolatedLayers": d.isolated_layers.iter().map(|l| l.0).collect::<Vec<_>>(),

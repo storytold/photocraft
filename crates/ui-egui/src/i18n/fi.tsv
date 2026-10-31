@@ -4770,3 +4770,35 @@ cameraRaw	White Balance: As Shot	Valkotasapaino: kuvauksen mukainen
 	The path was discarded	Polku hylättiin
 	The path was kept as the Work Path	Polku säilytettiin työpolkuna
 	Edit Brush…	Muokkaa sivellintä…
+
+# Native XCF import report
+	Import Conversion Report	Tuonnin muunnosraportti
+	Import-time outcomes. Editing uses native PhotoCraft rules.	Tuonnin tulokset. Muokkaus noudattaa PhotoCraftin natiiveja sääntöjä.
+	A newer report format is retained. Its details cannot be displayed.	Uudempimuotoinen raportti on säilytetty. Sen tietoja ei voida näyttää.
+	No conversion report was recorded.	Muunnosraporttia ei tallennettu.
+	No entries on this page.	Tällä sivulla ei ole merkintöjä.
+	Layer mask	Tasomaski
+	Source item	Lähdekohde
+	{first}–{last} of {total}	{first}–{last} / {total}
+	Native equivalent	Natiivi vastine
+	Native approximation	Likimääräinen natiivivastine
+	Retained, not applied	Säilytetty, ei käytössä
+	Nonessential data skipped	Epäolennaiset tiedot ohitettu
+	Unknown outcome	Tuntematon tulos
+	Native rules	Natiivit säännöt
+	Native capability limit	Natiivitoiminnon rajoitus
+	Conversion not implemented	Muunnosta ei ole toteutettu
+	Resource unavailable	Resurssi ei ole käytettävissä
+	Invalid optional data	Virheelliset valinnaiset tiedot
+	Retention limit	Säilytysraja
+	Precision conversion	Esitystarkkuuden muunnos
+	Unknown reason	Tuntematon syy
+	Native layer {id} (removed; historical reference)	Natiivi taso {id} (poistettu; historiallinen viite)
+	Native layer: {name}	Natiivi taso: {name}
+	Alpha Percentile	Alfaprosentiili
+	Alpha Weighted	Alfapainotettu
+	Color Percentile	Väriprosentiili
+	Connectivity	Yhdistyvyys
+	Disc	Kiekko
+	Each	Jokainen
+	Value	Arvo

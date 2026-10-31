@@ -90,14 +90,19 @@ impl Headless {
 
     /// Open a file and make it the active document.
     pub fn open(&mut self, path: &Path) -> Result<Value, AutomationError> {
+        self.open_with_sample_order(path, None)
+    }
+
+    /// Open using a caller-selected byte order for historical XCF7–11 samples.
+    pub fn open_with_sample_order(&mut self, path: &Path, order: Option<photocraft_io::HistoricalXcfSampleOrder>) -> Result<Value, AutomationError> {
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
         let mut o = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: read authority is absent".into())),
-            Filesystem::TrustedLocal => files::open(path)?,
+            Filesystem::TrustedLocal => files::open_with_sample_order(path, order)?,
             Filesystem::Workspace(workspace) => {
                 let bytes = workspace.read(requested)?;
                 let name = path.file_name().and_then(|name| name.to_str()).unwrap_or(requested);
-                files::open_bytes(name, &bytes)?
+                files::open_bytes_with_sample_order(name, &bytes, order)?
             }
         };
         // Preferences › Raw Defaults › Resolution, as the app's File › Open applies it.
@@ -109,10 +114,10 @@ impl Headless {
             }
             None => Some(requested.to_string()),
         };
-        let index = self.session.add_document(o.document, path.filter(|_| !o.source_read_only));
-        if let Some(st) = self.session.active_mut() {
-            st.source_read_only = o.source_read_only;
+        if let Some(view) = &o.initial_view {
+            view.validate(&o.document)?;
         }
+        let (index, color) = self.install_imported_document(o.document, path, o.source_read_only, o.initial_view)?;
         let d = &self.session.documents()[index];
         let mut warnings = o.warnings;
         warnings.extend(photocraft_engine::type_extra_cmds::missing_font_warnings(&d.doc));
@@ -123,7 +128,35 @@ impl Headless {
             "height": d.doc.size.height,
             "layers": d.doc.layer_count(),
             "warnings": warnings,
+            "color": color,
+            "importConversion": photocraft_engine::import_report_cmds::summary(d.doc.metadata.import_conversion.as_ref()),
         }))
+    }
+
+    /// Protect the admitted source before applying its view; roll back admission and restore the
+    /// previous document by identity if the prepared document cannot accept the view.
+    fn install_imported_document(
+        &mut self,
+        document: photocraft_doc::Document,
+        path: Option<String>,
+        source_read_only: bool,
+        initial_view: Option<photocraft_io::NativeInitialView>,
+    ) -> Result<(usize, Value), AutomationError> {
+        let previous = self.session.active().map(|state| state.doc.id);
+        let protected = path.as_ref().filter(|_| source_read_only).cloned();
+        let (index, color) = self.session.open_imported_document(document, path.filter(|_| !source_read_only), &photocraft_engine::jobs::JobCtx::new())?;
+        if let Some(state) = self.session.active_mut() {
+            state.source_read_only = source_read_only;
+            state.protected_import_source = protected;
+        }
+        if let Err(error) = self.session.apply_import_initial_view(initial_view) {
+            self.session.close(index);
+            if let Some(previous) = previous.and_then(|id| self.session.documents().iter().position(|state| state.doc.id == id)) {
+                self.session.set_active(previous);
+            }
+            return Err(error.into());
+        }
+        Ok((index, color))
     }
 
     /// Place a file into a document as a Smart Object layer: the capability-scoped counterpart
@@ -282,6 +315,7 @@ impl Headless {
             }
         };
         let target_text = target.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
+        self.check_import_destination(i, target_text)?;
         let mut warnings = match &self.filesystem {
             Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => {
@@ -317,9 +351,31 @@ impl Headless {
         Ok(json!({ "path": target.to_string_lossy(), "warnings": warnings }))
     }
 
-    /// Write rendered bytes through the configured write authority.
+    /// Reject replacing this document's import-only source or its filesystem aliases before any output is created.
+    fn check_import_destination(&self, index: usize, target: &str) -> Result<(), AutomationError> {
+        if let Some(source) = self.session.documents().get(index).and_then(|st| st.protected_import_source.as_deref()) {
+            let protected = match &self.filesystem {
+                Filesystem::TrustedLocal => file_cmds::same_file(source, target),
+                Filesystem::Workspace(workspace) => workspace.is_import_source(source, target)?,
+                Filesystem::Denied => return Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
+            };
+            if protected {
+                return Err(AutomationError::BadRequest("the destination is the import-only source; choose a different native or export path".into()));
+            }
+        }
+        Ok(())
+    }
+
+    /// Write rendered bytes for the active document through the configured write authority.
     pub fn write_render(&self, path: &Path, bytes: &[u8]) -> Result<(), AutomationError> {
+        self.write_render_for(None, path, bytes)
+    }
+
+    /// Write rendered bytes for the requested document, preserving its imported source even when another tab is active.
+    pub fn write_render_for(&self, index: Option<usize>, path: &Path, bytes: &[u8]) -> Result<(), AutomationError> {
+        let i = self.doc_index(index)?;
         let requested = path.to_str().ok_or_else(|| AutomationError::BadRequest("automation paths must be valid UTF-8".into()))?;
+        self.check_import_destination(i, requested)?;
         match &self.filesystem {
             Filesystem::Denied => Err(AutomationError::BadRequest("automation filesystem access is not granted: write authority is absent".into())),
             Filesystem::TrustedLocal => photocraft_format::atomic_write(path, bytes).map_err(|error| AutomationError::Io(error.to_string())),
@@ -381,7 +437,10 @@ impl Headless {
             authorize_engine_command(id, &params)?;
         }
         // Background jobs that finished since the last request (or batch step) are applied first.
-        self.sync_jobs();
+        // Cancellation instead discards a pending result before it can publish a document.
+        if id != "jobs.cancel" {
+            self.sync_jobs();
+        }
         if wait {
             return Ok(self.session.execute(id, params)?);
         }
@@ -435,5 +494,129 @@ fn exported(dir: &str, written: photocraft_engine::Result<Vec<String>>, outputs:
             outputs.cleanup()?;
             Err(error.into())
         }
+    }
+}
+
+#[cfg(test)]
+mod transactional_import_tests {
+    use std::sync::Arc;
+
+    use super::*;
+    use photocraft_io::{NativeImportTarget, NativeInitialView};
+
+    struct SourceFixture(PathBuf, Vec<u8>);
+
+    impl SourceFixture {
+        /// Keep an independent minimal XCF on disk so both admission outcomes can prove the
+        /// import-only source remains byte-identical rather than merely checking session flags.
+        fn new() -> Self {
+            let mut bytes = b"gimp xcf v003\0".to_vec();
+            for value in [1u32, 1, 0, 0, 0, 0, 0] {
+                bytes.extend_from_slice(&value.to_be_bytes());
+            }
+            let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+            let path = std::env::temp_dir().join(format!("photocraft-transactional-open-{}-{stamp}.xcf", std::process::id()));
+            std::fs::write(&path, &bytes).unwrap();
+            Self(path, bytes)
+        }
+
+        /// Decode through the normal importer, then let each test supply its independent view hint.
+        fn decoded(&self) -> files::Opened {
+            files::open(&self.0).unwrap()
+        }
+    }
+
+    impl Drop for SourceFixture {
+        /// Remove only the source created by this test after all unchanged-byte assertions finish.
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    /// An invalid post-preparation view must remove the admitted document without replacing any
+    /// existing document identity, selection, history revision, source path, or active-tab choice.
+    fn invalid_import_view_rolls_back_empty_and_multi_document_sessions() {
+        let source = SourceFixture::new();
+        for existing in [0, 3] {
+            let mut headless = Headless::trusted_local();
+            for _ in 0..existing {
+                headless.session.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+            }
+            if existing != 0 {
+                assert!(headless.session.set_active(0));
+                headless.session.active_mut().unwrap().color_samplers = vec![[1.0, 1.0]];
+            }
+            let active = headless.session.active().map(|state| state.doc.id);
+            let before: Vec<_> = headless
+                .session
+                .documents()
+                .iter()
+                .map(|state| {
+                    (
+                        Arc::clone(&state.doc),
+                        state.path.clone(),
+                        state.source_read_only,
+                        state.protected_import_source.clone(),
+                        state.revision,
+                        state.saved_revision,
+                        state.active_layer,
+                        state.selected_layers.clone(),
+                        state.color_samplers.clone(),
+                    )
+                })
+                .collect();
+            let mut opened = source.decoded();
+            assert!(opened.source_read_only);
+            if let Some(id) = active {
+                // Admission must re-key a colliding imported identity, then rollback must still
+                // resolve the original active document rather than the discarded import.
+                opened.document.id = id;
+            }
+            let view = NativeInitialView { target: NativeImportTarget::AlphaChannel(usize::MAX), ..Default::default() };
+            let error = headless.install_imported_document(opened.document, Some(source.0.to_str().unwrap().into()), true, Some(view)).unwrap_err();
+            assert!(error.to_string().contains("target alpha channel is absent"));
+            assert_eq!(headless.session.documents().len(), existing);
+            assert_eq!(headless.session.active().map(|state| state.doc.id), active);
+            assert_eq!(headless.session.active_index(), if existing == 0 { None } else { Some(0) });
+            for (state, before) in headless.session.documents().iter().zip(before) {
+                assert!(Arc::ptr_eq(&state.doc, &before.0));
+                assert_eq!(
+                    (
+                        state.path.clone(),
+                        state.source_read_only,
+                        state.protected_import_source.clone(),
+                        state.revision,
+                        state.saved_revision,
+                        state.active_layer,
+                        state.selected_layers.clone(),
+                        state.color_samplers.clone()
+                    ),
+                    (before.1, before.2, before.3, before.4, before.5, before.6, before.7, before.8)
+                );
+            }
+            assert!(headless.writers.is_empty());
+            assert_eq!(std::fs::read(&source.0).unwrap(), source.1);
+        }
+    }
+
+    #[test]
+    /// A valid view remains applied to the new active document while the XCF path is protected
+    /// and withheld as a native Save target; successful admission never writes the source.
+    fn successful_import_view_keeps_source_protection() {
+        let source = SourceFixture::new();
+        let opened = source.decoded();
+        let mut headless = Headless::trusted_local();
+        let path = source.0.to_str().unwrap().to_owned();
+        let view = NativeInitialView { samplers: vec![[0.0, 0.0]], ..Default::default() };
+        let (index, _) = headless.install_imported_document(opened.document, Some(path.clone()), opened.source_read_only, Some(view)).unwrap();
+        assert_eq!(headless.session.active_index(), Some(index));
+        assert_eq!(headless.session.documents().len(), 1);
+        let state = headless.session.active().unwrap();
+        assert!(state.source_read_only);
+        assert_eq!(state.protected_import_source.as_deref(), Some(path.as_str()));
+        assert!(state.path.is_none());
+        assert_eq!(state.color_samplers, vec![[0.0, 0.0]]);
+        assert_eq!(std::fs::read(&source.0).unwrap(), source.1);
     }
 }

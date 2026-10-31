@@ -13,6 +13,7 @@ pub mod build_info;
 mod canvas_geom;
 mod channel_clip;
 mod clip_group;
+pub mod coverage_cmds;
 mod crop_fill;
 pub mod display_color;
 pub mod doc_path;
@@ -20,7 +21,11 @@ pub mod filters;
 pub mod filters_ext;
 mod group_options;
 pub mod guide_layout;
+pub mod hdr_filter;
 pub mod hidden_target;
+mod import_native_actions;
+pub mod import_prepare;
+pub mod import_report_cmds;
 pub mod inspect;
 pub mod installed_profiles;
 pub mod jobs;
@@ -181,6 +186,22 @@ pub(crate) fn active_layer_of(s: &Session) -> std::result::Result<&photocraft_do
     d.active_layer.and_then(|id| d.doc.layer(id)).ok_or_else(|| "no active layer".into())
 }
 
+/// A decoded import waiting for confirmation, with the request-time policy that described its color prompt.
+/// This transient handoff is not serialized and grants no authority to source metadata.
+pub struct HeldImportedDocument {
+    /// Native document data retained until the user answers or cancels the pending open.
+    pub document: Document,
+    /// Whether native saving must avoid overwriting the imported source format.
+    pub source_read_only: bool,
+    /// Validated one-time native view state applied only after the document is admitted.
+    pub initial_view: Option<photocraft_io::NativeInitialView>,
+    /// The color settings used to describe the pending question; answers use this snapshot rather than newer session settings.
+    /// Absent for legacy holds that did not capture a color policy.
+    pub color_settings: Option<color_cmds::ColorSettings>,
+    /// Whether the captured open policy ignores EXIF profile tags; absent for legacy holds using the current preference.
+    pub ignore_exif_profile_tag: Option<bool>,
+}
+
 #[derive(Default)]
 pub struct Session {
     docs: Vec<DocState>,
@@ -272,10 +293,8 @@ pub struct Session {
     /// A finished live stroke offered to the `paint.stroke` / `paint.pencil` that commits it
     /// ([`Session::offer_live_stroke`]).
     pub(crate) live_commit: Option<brush_cmds::LiveCommit>,
-    /// Documents a background open decoded but held back until the user answers the profile
-    /// prompt ([`ColorState::open_question`](color_cmds::ColorState::open_question)): `(id,
-    /// document, source read-only)`. The shell takes them with [`Session::take_held_open`].
-    held_opens: Vec<(u64, Document, bool)>,
+    /// Decoded imports awaiting confirmation, including the request-time color policy.
+    held_opens: Vec<(u64, HeldImportedDocument)>,
     next_held_open: u64,
     /// The document before the latest [`Session::edit`] of the running command, which
     /// [`Session::hint_damage`] checks a hint against. Set by `edit`, taken by `hint_damage`,
