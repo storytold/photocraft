@@ -996,4 +996,15 @@ mod rtl_layout {
         assert_stats_on_the_panel(&ltr);
         assert_stats_on_the_panel(&rtl);
     }
+
+    /// The statistics grid emits its pairs in reading order: the Mean pair reads first from the
+    /// left in LTR, from the right in RTL (stats: Mean, Std Dev, Median, Pixels | Level, Count, …).
+    #[test]
+    fn stats_grid_pairs_follow_reading_order() {
+        let ltr = measure(Dir::Ltr);
+        let rtl = measure(Dir::Rtl);
+        let (mean, level) = (0, 4);
+        assert!(ltr.stats[mean].center().x < ltr.stats[level].center().x, "ltr: Mean: left of Level:: {:?} {:?}", ltr.stats[mean], ltr.stats[level]);
+        assert!(rtl.stats[mean].center().x > rtl.stats[level].center().x, "rtl: Mean: right of Level:: {:?} {:?}", rtl.stats[mean], rtl.stats[level]);
+    }
 }
