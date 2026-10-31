@@ -1025,15 +1025,13 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                 ui.label(egui::RichText::new(label(&p.key)).color(t.text_dim));
                 // The fork's `Grid` cannot start under a right-to-left cursor, so the value
                 // cells run in an LTR scope (the grid is data, not a reading row).
-                crate::direction::ltr_vertical(ui, |ui| {
-                    egui::Grid::new(format!("flt-grid-{cmd}-{}", p.key)).spacing([4.0, 4.0]).show(ui, |ui| {
-                        for (i, v) in vals.iter_mut().enumerate() {
-                            crate::widgets::value_field(ui, v, -999.0..=999.0, "", 44.0).accessible_name(format!("{} {}", label(&p.key), i + 1));
-                            if (i + 1) % side == 0 {
-                                ui.end_row();
-                            }
+                crate::direction::ltr_grid(ui, format!("flt-grid-{cmd}-{}", p.key), side, egui::vec2(4.0, 4.0), |ui| {
+                    for (i, v) in vals.iter_mut().enumerate() {
+                        crate::widgets::value_field(ui, v, -999.0..=999.0, "", 44.0).accessible_name(format!("{} {}", label(&p.key), i + 1));
+                        if (i + 1) % side == 0 {
+                            ui.end_row();
                         }
-                    });
+                    }
                 });
                 f.insert(p.key, json!(vals.iter().map(|v| v.round() as i64).collect::<Vec<_>>()));
             }
@@ -1427,6 +1425,37 @@ mod rtl_tests {
             let field = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Radius");
             assert_eq!(caption.rect().right() < field.rect().left(), caption_first, "{dir:?}");
         }
+    }
+
+    /// The Custom filter's kernel matrix is data: its cells keep physical left-to-right order
+    /// at the same coordinates in both directions, while the caption mirrors with the body.
+    #[test]
+    fn the_kernel_grid_stays_physical_ltr_and_its_caption_mirrors() {
+        use egui_kittest::kittest::Queryable;
+        let cells = |dir| {
+            let _direction = crate::text::direction::direction_scope(dir);
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+            let mut h = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(1280.0, 800.0))
+                .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            crate::filter_dialog::open(h.state_mut(), "filter.other.custom").unwrap();
+            h.run_steps(4);
+            let caption = h.get_by(|n| n.role() == egui::accesskit::Role::Label && n.value().as_deref() == Some("Kernel")).rect();
+            let first = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Kernel 1").rect();
+            let last = h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Kernel 25").rect();
+            (caption, first, last)
+        };
+        let (ltr_cap, ltr_first, ltr_last) = cells(crate::text::direction::Dir::Ltr);
+        assert!(ltr_first.left() < ltr_last.left(), "LTR: kernel cell 1 sits left of cell 25: {ltr_first:?} {ltr_last:?}");
+        assert!(ltr_cap.left() < ltr_first.left() + 50.0, "LTR: the caption hugs the left: {ltr_cap:?} {ltr_first:?}");
+        let (rtl_cap, rtl_first, rtl_last) = cells(crate::text::direction::Dir::Rtl);
+        assert!(
+            (rtl_first.left() - ltr_first.left()).abs() < 0.5 && (rtl_last.left() - ltr_last.left()).abs() < 0.5,
+            "the kernel grid stays physical LTR: {ltr_first:?} {rtl_first:?} {ltr_last:?} {rtl_last:?}"
+        );
+        assert!(rtl_cap.right() > ltr_cap.right() + 100.0, "RTL: the caption hugs the reading start: {ltr_cap:?} {rtl_cap:?}");
     }
 }
 
