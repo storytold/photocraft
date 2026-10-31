@@ -134,13 +134,12 @@ pub(super) fn layer_row(
     let t = Tokens::get(ctx);
     // The Layers Panel Options thumbnail size controls rows and both layer/mask thumbnails.
     let (base, row_h) = crate::layers_panel_ui::thumbnail_geometry(app.ui.layers_panel_options.thumbnail_size, t.pro);
-    let artboard = l.artboard().is_some();
-    // A board with a mask keeps a full-height row: its mask thumbnails (and what clicking and
-    // dragging them does) stay; only the board's own thumbnail is left out. Never taller than a
-    // layer's row: with thumbnails off every row is already compact.
-    let masked = l.mask.is_some() || l.vector_mask.is_some();
-    let row_h = if artboard && !masked { row_h.min(ARTBOARD_ROW_H) } else { row_h };
-    let base = if artboard && !masked { 0.0 } else { base };
+    // A board's row is a compact heading with no thumbnail, never taller than a layer's (with
+    // thumbnails off every row is already compact). A board with a mask keeps its usual row,
+    // thumbnail and all: the thumbnail is what clicks go back to from the mask, what ends the mask
+    // view, what carries the target brackets, and what spaces the mask's chain from the triangle.
+    let compact = l.artboard().is_some() && l.mask.is_none() && l.vector_mask.is_none();
+    let (base, row_h) = if compact { (0.0, row_h.min(ARTBOARD_ROW_H)) } else { (base, row_h) };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
     // With thumbnails off no mask thumbnail is drawn, so none may keep catching drags from older frames.
     if base == 0.0 {
@@ -181,14 +180,8 @@ pub(super) fn layer_row(
         + if l.is_group() { crate::layer_tree_ui::TRIANGLE_W } else { 0.0 }
         + if l.clipped { 12.0 } else { 0.0 }
         + crate::layer_row_ui::reserved_width(l);
-    // `ms`: the thumbnails' size (masks too); `ts`: the layer thumbnail's, none on a board.
-    let ms = if base == 0.0 { 0.0 } else { crate::mask_thumbs_ui::thumb_size(l, base, rect.width() - others) };
-    let ts = if artboard { 0.0 } else { ms };
-    // A board has no layer thumbnail, but its mask chain still needs the gap one leaves: the chain
-    // starts a little left of `x`, and without the gap it reached into the disclosure triangle's
-    // hit area, so a click there toggled the mask link instead of opening the board.
-    let layer_thumb = if ts == 0.0 { 6.0 } else { ts + 6.0 };
-    let fixed = others + if ms == 0.0 { 0.0 } else { layer_thumb + crate::mask_thumbs_ui::width(l, ms) };
+    let ts = if base == 0.0 { 0.0 } else { crate::mask_thumbs_ui::thumb_size(l, base, rect.width() - others) };
+    let fixed = others + if ts == 0.0 { 0.0 } else { ts + 6.0 + crate::mask_thumbs_ui::width(l, ts) };
     // A layer inside a group (or an artboard) indents one step more than its depth, past the
     // triangle's column, so it sits right of its parent: with only its depth its thumbnail lined
     // up under the group's, hiding the hierarchy. Top-level rows don't move.
@@ -203,11 +196,9 @@ pub(super) fn layer_row(
     if ts > 0.0 {
         draw_layer_thumb(app, ctx, ui, doc, l, thumb, row.primary);
         x += ts + 6.0;
-    } else if ms > 0.0 {
-        x += 6.0;
     }
     // With thumbnails disabled the labels and disclosure controls remain interactive.
-    let masks = if ms > 0.0 { crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ms, actions) } else { Default::default() };
+    let masks = if ts > 0.0 { crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ts, actions) } else { Default::default() };
     let rc = RowCtx { l, doc, row, rect, ts, thumb, resp: &resp, masks: &masks };
     paint_target_brackets(app, &painter, &t, &rc);
     // Right-hand indicators first; the name gets what is left and ends in "…" (#144).
@@ -364,8 +355,7 @@ fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Token
     let vector_rect = rc.masks.thumb(crate::mask_thumbs_ui::MaskKind::Vector);
     // Photoshop frames the targeted thumbnail (pixels, mask or vector mask) of the active layer
     // with corner brackets.
-    // A board has no layer thumbnail but may have mask thumbnails: brackets go on whichever is shown.
-    if rc.row.primary {
+    if rc.row.primary && rc.ts > 0.0 {
         let target = if app.ui.filter_mask_target == Some(l.id.0) && app.filter_mask_targeted() {
             // The Smart Filters row's filter mask thumbnail carries the brackets.
             None
@@ -376,7 +366,7 @@ fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Token
         } else {
             Some(thumb)
         };
-        if let Some(r) = target.filter(|r| r.width() > 0.0) {
+        if let Some(r) = target {
             crate::mask_thumbs_ui::paint_brackets(painter, r, t.text);
         }
     }
@@ -451,9 +441,7 @@ fn select_row_on_click(app: &mut PhotocraftApp, ui: &egui::Ui, rc: &RowCtx<'_>, 
             app.ui.properties_layer = None;
         }
         actions.push(("ui.maskTarget".into(), json!(true)));
-    } else if on_thumb || !row.primary || l.artboard().is_some() {
-        // A board has no thumbnail to click back to: a click on its row, off its masks, targets
-        // the board again.
+    } else if on_thumb || !row.primary {
         actions.push(("ui.maskTarget".into(), json!(false)));
     }
     // ⌥-click the layer thumbnail: fit the layer on screen, as Photoshop does.

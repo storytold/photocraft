@@ -773,10 +773,10 @@ fn artboard_rows_have_no_thumbnail_and_a_shorter_row() {
     }
 }
 
-/// A board with a mask keeps its mask thumbnail, and so what clicking and dragging it does: only the
-/// board's own thumbnail is left out, and the row keeps a layer's height to fit the mask (#10218).
+/// A board with a mask keeps its usual row, thumbnail and all, so the mask thumbnail and
+/// everything the board's thumbnail does on a masked layer still work there (#10218).
 #[test]
-fn a_masked_artboard_row_keeps_its_mask_thumbnail() {
+fn a_masked_artboard_row_keeps_its_thumbnail_and_mask_thumbnail() {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
     let layer = s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap()["layer"].as_u64().unwrap();
@@ -787,18 +787,21 @@ fn a_masked_artboard_row_keeps_its_mask_thumbnail() {
     let rows = recorded(&h.ctx);
     let row = |id: u64| rows.iter().find(|r| r.layer == id).unwrap_or_else(|| panic!("row for {id}"));
     let (b, l) = (row(board), row(layer));
-    assert!(b.thumbnail.is_none(), "still no board thumbnail");
-    let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, board).expect("the board's mask thumbnail is drawn");
+    assert!(b.thumbnail.is_some(), "a masked board keeps its thumbnail");
+    let (thumbs, chains) = crate::mask_thumbs_ui::recorded(&h.ctx, board).expect("the board's mask thumbnail is drawn");
     let mask = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).expect("a pixel mask thumbnail").1;
     assert!(b.row.contains_rect(mask), "the mask thumbnail sits in the board's row");
-    assert_eq!(b.row.height(), l.row.height(), "a layer's height, so the mask thumbnail fits");
+    assert_eq!(b.row.height(), l.row.height(), "a layer's height");
+    // The triangle's widget is its whole hit area; the chain sits clear of it.
+    let hit = h.get_by_label("Collapse group Board").rect();
+    let chain = chains.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).expect("a mask chain").1;
+    assert!(chain.left() >= hit.right(), "the chain ({chain:?}) is clear of the triangle's hit area ({hit:?})");
 }
 
-/// A masked board's row: the mask chain stays clear of the disclosure triangle (a click there opens
-/// or closes the board, it doesn't unlink the mask), and once the mask is targeted, a click on the
-/// row off the mask targets the board again, since a board has no thumbnail to click back to.
+/// On a masked board, as on any masked layer: ⌥-clicking the mask thumbnail shows the mask, and
+/// clicking the board's thumbnail ends the mask view and targets the board.
 #[test]
-fn a_masked_artboard_row_keeps_the_triangle_clear_and_retargets_the_board() {
+fn a_masked_artboards_thumbnail_retargets_it_and_ends_the_mask_view() {
     let mut s = photocraft_engine::Session::new();
     s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
     s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap();
@@ -807,17 +810,22 @@ fn a_masked_artboard_row_keeps_the_triangle_clear_and_retargets_the_board() {
     s.execute("layer.layerMask.revealAll", json!({"layer": board})).unwrap();
     s.execute("layer.select", json!({"layer": board})).unwrap();
     let mut h = harness(s, 1.0, "pro", 320.0);
-    // The triangle's widget is its whole hit area.
-    let hit = h.get_by_label("Collapse group Board").rect();
-    let (thumbs, chains) = crate::mask_thumbs_ui::recorded(&h.ctx, board).expect("mask thumbnail drawn");
-    let chain = chains.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).expect("a mask chain").1;
-    assert!(chain.left() >= hit.right(), "the chain ({chain:?}) is clear of the triangle's hit area ({hit:?})");
-
-    // Target the mask, then click the board's name: the board is targeted again.
+    let (thumbs, _) = crate::mask_thumbs_ui::recorded(&h.ctx, board).expect("mask thumbnail drawn");
     let mask = thumbs.iter().find(|(k, _)| *k == crate::mask_thumbs_ui::MaskKind::Pixel).unwrap().1;
-    click(&mut h, mask.center());
-    assert!(h.state().ui.mask_target, "clicking the mask thumbnail targets the mask");
-    let name = recorded(&h.ctx).iter().find(|r| r.layer == board).and_then(|r| r.name).expect("the board's name");
-    click(&mut h, name.center());
-    assert!(!h.state().ui.mask_target, "a click on the row off the mask targets the board");
+    let viewing = |h: &Harness<'_, PhotocraftApp>| h.state().session.active().and_then(photocraft_engine::mask_view_cmds::current).is_some();
+    // ⌥-click the mask thumbnail: the mask is shown.
+    h.hover_at(mask.center());
+    h.event(egui::Event::ModifiersChanged(Modifiers::ALT));
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: mask.center(), button: PointerButton::Primary, pressed: true, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    h.event(egui::Event::PointerButton { pos: mask.center(), button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(3);
+    assert!(viewing(&h), "⌥-click shows the mask");
+    let thumb = recorded(&h.ctx).iter().find(|r| r.layer == board).and_then(|r| r.thumbnail).expect("the board's thumbnail");
+    click(&mut h, thumb.center());
+    assert!(!h.state().ui.mask_target, "the board is targeted again");
+    assert!(!viewing(&h), "and the mask view ends");
 }
