@@ -32,3 +32,37 @@ documents `ERROR_UNABLE_TO_MOVE_REPLACEMENT` as leaving the replaced file delete
 replacement under its temporary name — a failed save that loses the user's document. With a
 backup name the same failure leaves both files alone, and the one failure that does move things
 (`ERROR_UNABLE_TO_MOVE_REPLACEMENT_2`) is unwound in `atomic/meta.rs`.
+
+## 2026-10-31: fractional Minimum / Maximum radius (#10474)
+
+Filter › Other › Minimum and Maximum take a radius from 0.2 to 500 px, but the kernels only had
+whole structuring elements: Squareness rounded the radius, and Roundness changed only where r²
+crossed a sum of two squares, so 0.2 to 0.9 px did nothing. A fractional radius now blends from
+the exact result at the radius toward the result with the next larger element, by how far the
+radius has moved between the two. For Squareness that is the square of half-width floor(r) and
+the one of floor(r) + 1, with weight r − floor(r). For Roundness it is the hard disc
+dx² + dy² ≤ n_lo the radius selects and the disc of the next sum of two squares n_hi, with weight
+(r − √n_lo) / (√n_hi − √n_lo). This is our model, not a measurement of Photoshop's output at
+fractional radii, which we have no oracle for yet.
+
+The ladder keeps every integer radius (and every Roundness radius that lands on √n) bit-identical,
+so recorded actions and smart filters at those radii render as before. It is continuous and
+monotone in the radius, the same for Minimum and Maximum, and costs one small extra pass: the next
+square is the current one grown by a 3×3 square, and the next disc adds a shell of a few offsets.
+We rejected per-offset coverage weights (an anti-aliased kernel): they change integer radii too,
+need an anchor value that min/max morphology does not define, and lose the separable O(1) square.
+
+Two rules make the ladder sound. The disc's row half-width is the largest h with h² + dy² ≤ r²,
+tested exactly in f64 (an f32 radius squared is exact there). The old `+ 1e-4` epsilon on the
+half-width let points of one ring enter at slightly different radii, which made the ladder step
+backwards in narrow windows below radii like 5 and √50; at integer radii the exact test gives the
+same half-widths. And with alpha, colour blends premultiplied: a straight blend would pull the
+colour of transparent pixels into the half-transparent fringe (a grey edge around a white shape on
+an empty layer). Infinite HDR samples snap to the nearer end rather than producing NaN.
+
+Fractional radii now render differently, which is the fix. Squareness radii in [k, k + 0.5) are
+stronger than before (1.4 was the 3×3 square and is now 40% of the way to 5×5), and radii in
+[k + 0.5, k + 1) are weaker (1.6 was the full 5×5 and is now 60% of the way there). A GPU path
+must use the same rule: `other::square_step`, `other::disc_step` and `other::disc_half_widths`
+give the elements and the weight, and `other::blend` the per-sample arithmetic (with alpha, colour
+uses the premultiplied weight).
