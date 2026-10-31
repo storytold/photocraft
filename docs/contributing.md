@@ -10,6 +10,7 @@
 - **Style:** `cargo fmt`, and `cargo clippy -- -D warnings`. Match surrounding code. Comments explain *why*.
 - **UI:** use `theme::Tokens` and `widgets::*`. Verify visually (offscreen `snapshot` example or the control channel) before submitting, and attach before/after screenshots to PRs.
 - **Commits:** small, focused, with a clear subject line.
+- **Claim before you work (#3561):** before writing code for a GitHub issue, say so in a one-line comment on it (for example "I'm working on this") and search open PRs for `#N` (`gh pr list --repo storytold/photocraft --state all --search "\"#N\""`). If an open PR already addresses it, pick a different one. A claim without a commit after 24 hours is up for grabs again, so a maintainer can un-claim stale ones. Several open PRs can "fix" the same issue when the comment went unseen, which costs reviewer time — the check takes seconds.
 
 ## Adding a command
 
