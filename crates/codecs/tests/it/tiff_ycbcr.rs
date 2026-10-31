@@ -83,6 +83,18 @@ fn reference_black_white_sets_the_code_range() {
 }
 
 #[test]
+fn weights_that_do_not_sum_to_one_keep_grays_neutral() {
+    // 0.25 each (sum 0.75): TIFF 6.0's full inverse would scale green's Y by (1 − Lr − Lb) / Lg
+    // = 2 and give mid gray G 255 (clamped). Like libtiff, green keeps Y, so gray stays gray, and
+    // the weights still set the chroma terms: R = Y + 1.5·Cr, B = Y + 1.5·Cb.
+    let weights = [rational(1, 4), rational(1, 4), rational(1, 4)];
+    let dir = strips(2, 1, 8, 3, 6, 1, &[128, 128, 128, 128, 64, 192]).tag(SUBSAMPLING, SHORT, &[1, 1]).tag(YCBCR_COEFFICIENTS, RATIONAL, &weights);
+    let img = decode(&build(true, false, &[dir], &[0]).bytes).unwrap();
+    // Green for the second pixel: 128 − (Lb·1.5/Lg)·Cb − (Lr·1.5/Lg)·Cr = 128 + 96 − 96.
+    assert_eq!(rgb(&img), [128, 128, 128, 224, 128, 32]);
+}
+
+#[test]
 fn ycbcr_coefficients_set_the_luma_weights() {
     // Weights 0.25, 0.5, 0.25 with Cb −64 and Cr +64: R = Y + 1.5·Cr, B = Y + 1.5·Cb, and G keeps Y
     // (BT.601 would give R 218 and B 15).
