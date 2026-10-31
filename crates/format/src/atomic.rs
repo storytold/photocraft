@@ -21,6 +21,8 @@
 //! - **Network shares (macOS):** `sync_all` asks for a full flush to the disk's platters
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
+//! - **Orphans:** after a successful save, [`sweep_stale_temps`] removes temp files an earlier
+//!   interrupted save of the same file left beside it, once their owner process is gone (#6604).
 //!
 //! On the web there is no file system: writes go through the platform services (downloads), so
 //! this module is never reached there; on `wasm32` every call returns the `std` "unsupported"
@@ -209,11 +211,8 @@ pub fn atomic_write_with(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, byt
 pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &Path, bytes: &[u8], progress: &dyn Fn(f32)) -> io::Result<()> {
     let target = resolve_symlink(path).map_err(|e| context(e, format!("cannot save {}", path.display())))?;
     let name = target.file_name().ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, format!("{}: not a file path", path.display())))?;
-    let dir = match target.parent() {
-        Some(d) if !d.as_os_str().is_empty() => d.to_path_buf(),
-        _ => PathBuf::from("."),
-    };
-    std::fs::create_dir_all(&dir).map_err(|e| context(e, format!("cannot create the folder {}", dir.display())))?;
+    let dir = sibling_dir(&target);
+    std::fs::create_dir_all(dir).map_err(|e| context(e, format!("cannot create the folder {}", dir.display())))?;
     if fs.is_readonly(&target) {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("cannot save {}: the file is read-only; {UNCHANGED}", path.display())));
     }
@@ -232,7 +231,7 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
             Err(e) => {
                 // A partial temp file may exist; the destination was never touched.
                 let _ = fs.remove(&candidate);
-                return Err(write_error(e, path, &dir));
+                return Err(write_error(e, path, dir));
             }
         }
     }
@@ -260,9 +259,11 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
     // so the caller keeps the document unsaved and its recovery data instead of discarding them
     // on a save that may not last.
     #[cfg(windows)]
-    fs.sync_dir(&dir).map_err(|e| publication_error(e, path))?;
+    fs.sync_dir(dir).map_err(|e| publication_error(e, path))?;
     #[cfg(not(windows))]
-    dir_synced(fs.sync_dir(&dir)).map_err(|e| unconfirmed_error(e, path))?;
+    dir_synced(fs.sync_dir(dir)).map_err(|e| unconfirmed_error(e, path))?;
+    // The save succeeded: clear any temp files an earlier interrupted save of this file left (#6604).
+    sweep_stale_temps(&target);
     Ok(())
 }
 
@@ -384,6 +385,15 @@ fn resolve_symlink(path: &Path) -> io::Result<PathBuf> {
     Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{}: too many levels of symbolic links", path.display())))
 }
 
+/// The directory to write beside `path`: its parent, or the current directory for a bare
+/// relative name (`doc.psd`'s parent is the empty path, which no file call accepts).
+fn sibling_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(d) if !d.as_os_str().is_empty() => d,
+        _ => Path::new("."),
+    }
+}
+
 /// A unique hidden temporary file name to write beside `file` before renaming over it.
 pub fn temp_name(file: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -391,6 +401,83 @@ pub fn temp_name(file: &str) -> String {
     // Keep the name short: a long file name plus the suffix must stay under NAME_MAX.
     let stem: String = file.chars().take(64).collect();
     format!(".{stem}.{}-{n}.pcsave.tmp", std::process::id())
+}
+
+/// How long a foreign temporary file must have been untouched before a save may remove it where
+/// no PID probe exists (Windows). Far longer than any save takes, so another instance's
+/// in-progress write is never mistaken for an orphan (#6604).
+#[cfg(not(unix))]
+const STALE_TEMP_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Best-effort removal of the temporary files an interrupted save left beside `path` (#6604).
+///
+/// Removes only regular files named exactly like this file's atomic-write temps (see
+/// [`temp_name`]) whose owner process is gone: on Unix the PID in the name is probed with the
+/// null signal; elsewhere (no PID probe without a new dependency) only files untouched for
+/// [`STALE_TEMP_AGE`] go. This process's own temps are never touched (a concurrent save may be
+/// mid-write), nor are symlinks, directories or names that do not match. Errors are ignored:
+/// cleanup must never fail a save.
+pub fn sweep_stale_temps(path: &Path) {
+    let Some(name) = path.file_name().and_then(|n| n.to_str()) else { return };
+    // `temp_name` truncates the file name to 64 chars: a name of 64 chars or more can share its
+    // temp prefix with another destination, so sweeping could delete that file's orphan. Skip
+    // the ambiguous case; the temps stay until the file they belong to is saved again.
+    if name.chars().count() >= 64 {
+        return;
+    }
+    let dir = sibling_dir(path);
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    // Below 64 chars the name is `temp_name`'s stem unchanged (see the guard above).
+    let stem = name;
+    let prefix = format!(".{stem}.");
+    for e in rd.flatten() {
+        let entry_name = e.file_name();
+        let Some(rest) = entry_name.to_str().and_then(|n| n.strip_prefix(&prefix)).and_then(|n| n.strip_suffix(".pcsave.tmp")) else { continue };
+        // `{pid}-{n}`: anything else (a longer stem sharing this prefix, a hand-made name) stays.
+        let Some((pid, seq)) = rest.split_once('-') else { continue };
+        let Ok(pid) = pid.parse::<u32>() else { continue };
+        if seq.is_empty() || !seq.bytes().all(|b| b.is_ascii_digit()) || !e.file_type().is_ok_and(|ft| ft.is_file()) {
+            continue;
+        }
+        let tmp = e.path();
+        if temp_is_stale(pid, &tmp) {
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+}
+
+/// Whether a temp file owned by `pid` may be removed while saving beside it.
+fn temp_is_stale(pid: u32, path: &Path) -> bool {
+    if pid == std::process::id() {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        let _ = path;
+        !pid_is_running(pid)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        std::fs::symlink_metadata(path)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| std::time::SystemTime::now().duration_since(t).ok())
+            .is_some_and(|age| age >= STALE_TEMP_AGE)
+    }
+}
+
+/// Whether process `pid` exists right now. `kill(pid, 0)` only checks: success or `EPERM` means
+/// the process exists (it may belong to another user), `ESRCH` means it is gone. Any other error
+/// (e.g. a seccomp-filtered errno) and a PID that is not a valid `pid_t` are treated as running:
+/// keeping a file we cannot judge is the safe call.
+#[cfg(unix)]
+fn pid_is_running(pid: u32) -> bool {
+    let Some(p) = i32::try_from(pid).ok().and_then(rustix::process::Pid::from_raw) else { return true };
+    match rustix::process::test_kill_process(p) {
+        Ok(()) => true,
+        Err(e) => e != rustix::io::Errno::SRCH,
+    }
 }
 
 fn context(e: io::Error, msg: String) -> io::Error {
