@@ -268,13 +268,13 @@ fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     use crate::state::LayersPanelDialog;
 
     let has_doc = app.session.active().is_some();
-    if ui.add_enabled(has_doc, egui::Button::new(tl!("New Layer…"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("New Layer…"), None, false, has_doc).clicked() {
         app.ui.layers_panel_dialog = Some(LayersPanelDialog::NewLayer(String::new()));
         ui.close();
     }
     // New Group… and New Group from Layers… open the New Group dialog, like their Layer › New twins.
     for (label, id) in [(tl!("New Group…"), crate::new_group_ui::NEW_GROUP), (tl!("New Group from Layers…"), crate::new_group_ui::FROM_LAYERS)] {
-        if ui.add_enabled(crate::menus::is_enabled(app, id), egui::Button::new(label)).clicked() {
+        if crate::menu_keys::menu_row(ui, label, None, false, crate::menus::is_enabled(app, id)).clicked() {
             let ctx = ui.ctx().clone();
             if let Err(e) = crate::menus::invoke(app, &ctx, id, json!({})) {
                 app.ui.status = e;
@@ -286,7 +286,7 @@ fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     ui.separator();
     run_menu_command(app, ui, tl!("Flatten Image"), "layer.flattenImage");
     ui.separator();
-    if ui.add_enabled(app.session.is_enabled("layer.lockLayers"), egui::Button::new(tl!("Lock Layers…"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Lock Layers…"), None, false, app.session.is_enabled("layer.lockLayers")).clicked() {
         app.ui.layers_panel_dialog = Some(LayersPanelDialog::LockLayers { transparency: false, pixels: false, position: false, artboard: false, all: true });
         ui.close();
     }
@@ -300,7 +300,7 @@ fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     ui.separator();
     run_menu_command(app, ui, tl!("New Artboard…"), "layer.new.artboard");
     ui.separator();
-    ui.menu_button(tl!("Filter Options"), |ui| {
+    crate::menus::menu_button(ui, tl!("Filter Options"), |ui| {
         let mut show = app.ui.layers_panel_options.show_filters;
         if ui.checkbox(&mut show, tl!("Show")).changed() {
             app.ui.layers_panel_options.show_filters = show;
@@ -311,9 +311,9 @@ fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     // Animation Options control Photoshop's frame-unification buttons. PhotoCraft's Layers
     // panel does not expose those buttons; do not offer nonfunctional toggles.
     ui.add_enabled_ui(false, |ui| {
-        ui.menu_button(tl!("Animation Options"), |_ui| {});
+        crate::menus::menu_button(ui, tl!("Animation Options"), |_ui| {});
     });
-    if ui.button(tl!("Panel Options…")).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Panel Options…"), None, false, true).clicked() {
         let mut options = app.ui.layers_panel_options.clone();
         options.thumbnail_contents = crate::layers_panel_ui::thumbnail_contents(app);
         app.ui.layers_panel_dialog = Some(LayersPanelDialog::PanelOptions(options));
@@ -322,7 +322,7 @@ fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     ui.separator();
     // Preserve PhotoCraft's existing group disclosure action when expanding the flyout.
     let can_collapse = app.session.is_enabled("layer.setExpanded");
-    if ui.add_enabled(can_collapse, egui::Button::new(tl!("Collapse All Groups"))).clicked() {
+    if crate::menu_keys::menu_row(ui, tl!("Collapse All Groups"), None, false, can_collapse).clicked() {
         if let Err(e) = app.run("layer.setExpanded", json!({"all": true, "expanded": false})) {
             app.ui.status = e;
             app.ui.status_error = true;
