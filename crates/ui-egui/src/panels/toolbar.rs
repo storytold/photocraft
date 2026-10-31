@@ -44,6 +44,13 @@ fn slot_tool(ui: &egui::Ui, current: Tool, slot: &[Tool], key: egui::Id) -> Tool
     ui.data(|d| d.get_temp::<Tool>(key)).filter(|t| slot.contains(t)).unwrap_or(slot[0])
 }
 
+/// The tool after `tool` in its toolbar slot, wrapping to the first: what an ⌥-click on the
+/// slot's button picks. `tool` itself when it isn't in the slot.
+fn next_in_slot(slot: &[Tool], tool: Tool) -> Tool {
+    let Some(i) = slot.iter().position(|t| *t == tool) else { return tool };
+    slot.get(i + 1).or_else(|| slot.first()).copied().unwrap_or(tool)
+}
+
 /// [`TOOL_SECTIONS`] without the tools hidden in Edit › Toolbar (`hidden` holds tool names: the
 /// dialog writes `Tool` debug names, `edit.toolbar` takes any name `Tool::from_name` reads). A
 /// slot keeps only its visible tools, so its flyout lists just those; a slot with none left is
@@ -168,7 +175,9 @@ pub fn toolbar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                                         paint_toolbar_flyout_indicator(ui, &t, &resp);
                                     }
                                     if resp.clicked() && ui.data(|d| d.get_temp::<egui::Id>(held_id)) != Some(key) {
-                                        crate::tool_memory::select(app, tool);
+                                        // ⌥-click steps to the slot's next tool, wrapping, as in Photoshop (#6701).
+                                        let pick = if ui.input(|i| i.modifiers.alt) { next_in_slot(slot, tool) } else { tool };
+                                        crate::tool_memory::select(app, pick);
                                     }
                                     // Double-clicking the Hand tool fits the image on screen (Photoshop).
                                     if resp.double_clicked() && tool == Tool::Hand {
@@ -575,5 +584,66 @@ pub(super) fn color_chips(app: &mut PhotocraftApp, ui: &mut egui::Ui, two_column
 fn chip_command(app: &mut PhotocraftApp, id: &str) {
     if app.run(id, json!({})).is_ok() {
         crate::type_tool::foreground_changed(app);
+    }
+}
+
+#[cfg(test)]
+mod alt_click_tests {
+    use egui::Modifiers;
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    use super::*;
+
+    fn harness(tool: Tool) -> Harness<'static, PhotocraftApp> {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+        app.ui.tool = tool;
+        let mut h = Harness::builder().with_size(vec2(300.0, 900.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                toolbar(app, ui);
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        h.run_steps(4);
+        h
+    }
+
+    /// The toolbar button now showing `tool` (its tooltip label starts with the tool's name).
+    fn alt_click(h: &mut Harness<'static, PhotocraftApp>, tool: Tool) {
+        h.get_by_label_contains(tl!(tool.label())).click_modifiers(Modifiers::ALT);
+        h.run_steps(3);
+    }
+
+    /// #6701: as in Photoshop, ⌥-click on a toolbar button steps to the next tool of its slot and
+    /// wraps (Crop → Perspective Crop → Slice → Slice Select → Crop). On another slot's button it
+    /// steps from that slot's shown tool (Lasso → Polygonal Lasso).
+    #[test]
+    fn alt_click_steps_through_the_slot() {
+        let mut h = harness(Tool::Crop);
+        for want in [Tool::PerspectiveCrop, Tool::Slice, Tool::SliceSelect, Tool::Crop] {
+            let shown = h.state().ui.tool;
+            alt_click(&mut h, shown);
+            assert_eq!(h.state().ui.tool, want, "⌥-click on {shown:?}");
+        }
+        alt_click(&mut h, Tool::Lasso);
+        assert_eq!(h.state().ui.tool, Tool::PolygonLasso);
+        // A plain click selects the button's tool.
+        h.get_by_label_contains(tl!(Tool::Crop.label())).click();
+        h.run_steps(3);
+        assert_eq!(h.state().ui.tool, Tool::Crop);
+    }
+
+    #[test]
+    fn next_in_slot_wraps_and_ignores_strangers() {
+        let slot = [Tool::Crop, Tool::PerspectiveCrop];
+        assert_eq!(next_in_slot(&slot, Tool::Crop), Tool::PerspectiveCrop);
+        assert_eq!(next_in_slot(&slot, Tool::PerspectiveCrop), Tool::Crop);
+        assert_eq!(next_in_slot(&slot, Tool::Brush), Tool::Brush);
+        assert_eq!(next_in_slot(&[], Tool::Brush), Tool::Brush);
     }
 }
