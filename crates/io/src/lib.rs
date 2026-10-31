@@ -409,7 +409,7 @@ fn import_psd(
     let preflight_error = std::cell::RefCell::new(None);
     let parsed = parse(
         &|file| {
-            let checked = psd_import::check_group_depth(file).map_err(IoError::from).and_then(|()| psd_budget::check(file, pixel_limit));
+            let checked = psd_import::check_group_depth(file).and_then(|()| psd_budget::check(file, pixel_limit));
             if let Err(error) = checked {
                 *preflight_error.borrow_mut() = Some(error);
                 return Err(PsdError::LimitExceeded("PSD import preflight refused the file"));
