@@ -1151,6 +1151,8 @@ pub struct Preferences {
     /// The Color panel's options (what it shows, its ramp, Web colors, which chip it edits),
     /// kept across restarts as Photoshop keeps them. JSON owned by the shell.
     pub color_panel: Value,
+    /// Action-set folders shown collapsed in the Actions panel, restored at launch.
+    pub collapsed_action_sets: Vec<String>,
     /// The last choices of dialogs that remember them across restarts, by command id (Edit ›
     /// Fill…: `"edit.fill"` → its params). JSON owned by the shell.
     pub dialogs: BTreeMap<String, Value>,

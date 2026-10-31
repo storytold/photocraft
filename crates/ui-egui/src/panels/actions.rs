@@ -913,6 +913,7 @@ fn action_context_menu(app: &mut PhotocraftApp, response: &egui::Response, index
     });
 }
 
+/// Draws the Actions panel and remembers set-folder disclosure changes.
 pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let recording = app.session.actions.recording;
@@ -1096,6 +1097,8 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             None => app.ui.actions.collapsed_sets.push(set),
         }
+        let collapsed = app.ui.actions.collapsed_sets.clone();
+        app.session.prefs.edit(|p| p.collapsed_action_sets = collapsed);
     }
     if let Some(set) = save_set
         && let Err(e) = save_dialog(app, Some(set))
