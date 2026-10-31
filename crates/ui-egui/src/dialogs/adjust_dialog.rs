@@ -116,7 +116,7 @@ pub fn add_point_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64
         Some(c) => (0, c.key),
         None => {
             let ch: usize = ctx.data(|d| d.get_temp(dialog_mem("curves").with("curves-ch"))).unwrap_or(0);
-            let chans = adjust_editors::tone_channels(adjust_editors::space_of(&values), gray);
+            let chans = adjust_editors::tone_channels(adjust_editors::curves_space(&values, gray), gray);
             (ch, chans.get(ch).map_or("", |c| c.key))
         }
     };
@@ -352,7 +352,9 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
                 Some(surface) => HistSource::Channel { layer: id, surface },
                 None => HistSource::Layer(id),
             };
-            Some(tone::histograms(app, source, adjust_editors::space_of(&values)))
+            // Curves on a grayscale document draws its Gray curve over the gray histogram (bin 0).
+            let space = if kind == "curves" { adjust_editors::curves_space(&values, gray) } else { adjust_editors::space_of(&values) };
+            Some(tone::histograms(app, source, space))
         }
         _ => None,
     };
