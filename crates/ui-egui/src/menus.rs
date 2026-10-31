@@ -27,7 +27,7 @@ pub use invoke::{apply_workspace, invoke};
 pub(crate) use invoke::{invoke_unguarded, panel_alias};
 pub(crate) use items::ItemCache;
 pub use items::{MenuItem, is_live, menu_items};
-pub use render::alt_click;
+pub use render::{alt_click, context_menu, menu_button};
 pub(crate) use render::popup_body;
 #[cfg(test)]
 use render::submenu_enabled;
