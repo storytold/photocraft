@@ -846,7 +846,7 @@ impl Session {
         // being recorded, nor move the recording mark past the entries it is about to replace.
         let recording = if spec.journal && crate::actions_cmds::replayable(id) { self.actions.recording.take() } else { None };
         let before = self.active().map(|st| st.doc.clone());
-        let docs_before = self.docs.len();
+        let docs_before: Vec<_> = self.docs.iter().map(|st| st.doc.id).collect();
         // Last-resort guard (AGENTS.md, Never crash): a command that panics anyway fails with an
         // error instead of taking the app down. `edit` only commits a document after its closure
         // returns, so the documents are unchanged.
@@ -902,8 +902,9 @@ impl Session {
             }
         };
         // A closed document's freed buffers went to the scratch pool (`before` kept the active
-        // one alive until here): hand them back to the OS (#10479).
-        if self.docs.len() < docs_before {
+        // one alive until here): hand them back to the OS (#10479). Compared by id, since Split
+        // and Merge Channels close documents while opening others.
+        if docs_before.iter().any(|id| !self.docs.iter().any(|st| st.doc.id == *id)) {
             drop(before);
             photocraft_raster::scratch::release();
         }
