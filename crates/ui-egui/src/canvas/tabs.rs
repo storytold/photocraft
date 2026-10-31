@@ -659,7 +659,7 @@ fn drop_slot_line(app: &mut PhotocraftApp, ui: &egui::Ui) {
     if ui.input(|i| i.raw.hovered_files.is_empty()) {
         return;
     }
-    let at = app.services.cursor_pos.as_mut().and_then(|f| f(ui.ctx()));
+    let at = app.cursor_pos(ui.ctx());
     let crate::file_open::DropTarget::Tabs(slot) = app.drop_target(ui.ctx(), at) else { return };
     let Some(tabs) = app.tab_strip.as_ref().map(|s| &s.tabs) else { return };
     let Some((r, after)) = tabs.iter().find(|(i, _)| *i == slot).map(|&(_, r)| (r, false)).or_else(|| tabs.last().map(|&(_, r)| (r, true))) else {
