@@ -20,6 +20,10 @@
 //! save holds an OS file lock on `save.lock` throughout, so two writers (or two
 //! processes) saving one bundle take turns instead of removing each other's objects.
 //!
+//! Where a bundle lives is a [`BundleStore`]: [`ZipStore`] and [`DirStore`] are built in, and
+//! [`PcraftWriter::save_to`] / [`load_bytes_source`] save to and load from any other (object
+//! storage, say) implemented outside this crate.
+//!
 //! This crate sits at L3 next to the compositor, so it does not render.
 //! Callers pass previews in [`SaveOptions`]; `photocraft-io` does that.
 #![forbid(unsafe_code)]
@@ -47,7 +51,7 @@ pub use autosave::{Autosaver, RecoveryEntry, discard_recovery, list_recovery, re
 pub use convert::MAX_GROUP_DEPTH;
 pub use manifest::{FORMAT_VERSION, Manifest};
 pub use read::read_file;
-pub use store::{ByteSource, DEFAULT_REVERIFY_BUDGET, PcraftWriter, SaveStats, read_entry};
+pub use store::{BundleObject, BundleStore, ByteSource, DEFAULT_REVERIFY_BUDGET, DirStore, PcraftWriter, SaveStats, Stored, ZipStore, read_entry};
 
 /// File extension of the native format.
 pub const EXTENSION: &str = "pcraft";
