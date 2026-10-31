@@ -328,6 +328,9 @@ pub(crate) fn image_surface(img: &Image, target_layout: ChannelLayout, csample: 
         ChannelLayout::Lab | ChannelLayout::LabA => ColorMode::Lab,
         _ => ColorMode::Rgb,
     };
+    // The surface stores 16-bit float as 32-bit float, so an F16 target converts to F32 (copying
+    // two-byte samples, or a two-byte opaque alpha, into it would be wrong).
+    let csample = if csample == CSample::F16 { CSample::F32 } else { csample };
     let depth = match csample {
         CSample::U8 => SampleType::U8,
         CSample::U16 => SampleType::U16,
@@ -1588,6 +1591,23 @@ mod fused_tile_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_f16_target_is_stored_as_f32_with_opaque_alpha() {
+        for &layout in &[ChannelLayout::Rgb, ChannelLayout::Rgba] {
+            for &sample in &[CSample::F16, CSample::F32] {
+                let img = image(257, 3, layout, sample);
+                let f16 = image_surface(&img, ChannelLayout::Rgba, CSample::F16).unwrap();
+                let f32 = image_surface(&img, ChannelLayout::Rgba, CSample::F32).unwrap();
+                assert_same(&f16, &f32, &format!("{layout:?} {sample:?} to an F16 target"));
+            }
+        }
+        let img = image(2, 2, ChannelLayout::Rgb, CSample::F32);
+        let s = image_surface(&img, ChannelLayout::Rgba, CSample::F16).unwrap();
+        let (_, tile) = s.tiles().next().unwrap();
+        let alpha = f32::from_ne_bytes(tile.bytes()[12..16].try_into().unwrap());
+        assert_eq!(alpha, 1.0);
     }
 
     #[test]
