@@ -162,6 +162,7 @@ impl CallbackTrait for CanvasCallback {
         Vec::new()
     }
 
+    /// Draw this view's visible tiles inside the clipped canvas.
     fn paint(&self, info: egui::PaintCallbackInfo, pass: &mut wgpu::RenderPass<'static>, resources: &CallbackResources) {
         let Some(res) = resources.get::<Resources>() else { return };
         if !res.health.is_ok() {

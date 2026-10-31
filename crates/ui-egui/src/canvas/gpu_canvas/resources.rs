@@ -231,6 +231,7 @@ fn pipeline(
 }
 
 impl Resources {
+    /// Create the shared canvas pipelines, layouts and display resources.
     pub(super) fn new(device: &wgpu::Device, queue: &wgpu::Queue, target: wgpu::TextureFormat, high: bool) -> Self {
         let module =
             device.create_shader_module(wgpu::ShaderModuleDescriptor { label: Some("pc_canvas"), source: wgpu::ShaderSource::Wgsl(CANVAS_WGSL.into()) });

@@ -8,6 +8,7 @@ use serde_json::json;
 
 type Harness = egui_kittest::Harness<'static, PhotocraftApp>;
 
+/// Build the application harness for GPU and CPU canvas comparisons.
 fn harness() -> Option<Harness> {
     let built = std::panic::catch_unwind(|| {
         egui_kittest::Harness::builder().with_size(egui::vec2(1000.0, 700.0)).with_pixels_per_point(1.0).with_max_steps(64).wgpu().build_eframe(|cc| {
