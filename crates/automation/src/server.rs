@@ -106,7 +106,8 @@ pub struct ExportLayersParams {
     #[serde(default)]
     pub quality: Option<f64>,
     /// PSD/PSB: write the real merged image (Photoshop's Maximize Compatibility); false writes
-    /// Photoshop's white placeholder. Unset: the engine's Preferences › File Handling decides.
+    /// Photoshop's white placeholder (Bitmap, Indexed Color and Duotone documents still write the
+    /// real image). Unset: the engine's Preferences › File Handling decides.
     #[serde(default, rename = "maximizeCompatibility")]
     pub maximize_compatibility: Option<bool>,
 }
@@ -197,7 +198,8 @@ pub struct SaveParams {
     pub dds_mipmaps: bool,
     /// PSD/PSB: write the real merged image (Photoshop's Maximize Compatibility). false writes
     /// Photoshop's white placeholder instead: a smaller file and a faster save, but readers that
-    /// show only the merged image see white. Unset: the real image (in bridge mode, the app's
+    /// show only the merged image see white. Bitmap, Indexed Color and Duotone documents still
+    /// write the real image. Unset: the real image (in bridge mode, the app's
     /// Preferences › File Handling decides).
     #[serde(default, rename = "maximizeCompatibility")]
     pub maximize_compatibility: Option<bool>,
