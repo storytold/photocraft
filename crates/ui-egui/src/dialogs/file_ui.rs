@@ -273,6 +273,23 @@ mod web_playback_tests {
         h
     }
 
+    /// Save for Web offers the slices selected in its preview as an export choice.
+    #[test]
+    fn save_for_web_offers_selected_slices() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 16, 16], "name": "left"})).unwrap();
+        app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "right"})).unwrap();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("format".into(), json!("png24"));
+        fields.insert("__view".into(), json!("original"));
+        let mut h = harness(app, fields);
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Slices").click();
+        h.run_steps(2);
+        assert!(h.query_by_label("Selected Slices").is_some(), "offer individual slices, not only All and All User Slices");
+    }
+
     /// WebP (#6391): Quality until Lossless is ticked; 4-Up halves a lossy quality like JPEG's.
     #[test]
     fn webp_settings_show_quality_until_lossless() {
