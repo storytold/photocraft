@@ -119,13 +119,6 @@ fn not_smart(s: &Session) -> std::result::Result<(), String> {
     if active_smart(s).is_ok() { Err("the layer is already a smart object".into()) } else { Ok(()) }
 }
 
-/// Convert to Smart Object: refused only when the single targeted layer is already a smart
-/// object. A multi-layer selection can still be combined (nesting any smart object in it).
-fn convertible_to_smart(s: &Session) -> std::result::Result<(), String> {
-    convertible(s)?;
-    if crate::layer_multi_cmds::selected(s).len() <= 1 { not_smart(s) } else { Ok(()) }
-}
-
 macro_rules! spec {
     ($id:literal, $label:literal, $menu:expr, $params:literal, $en:expr, $run:expr) => {
         CommandSpec { id: $id, label: $label, menu: $menu, shortcut: None, params: $params, enabled: $en, run: $run, journal: true }
@@ -167,7 +160,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Convert to Smart Object",
             SO,
             r##"{"layer":id?} (default: combine selected layers)"##,
-            convertible_to_smart,
+            convertible,
             convert
         ),
         spec!(

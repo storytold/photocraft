@@ -223,12 +223,86 @@ fn empty_layer_cannot_be_converted() {
 }
 
 #[test]
-fn convert_to_smart_object_is_disabled_for_a_layer_that_is_already_smart() {
+fn converting_a_smart_object_wraps_it_in_another_smart_object() {
     let mut s = session(8);
     paint(&mut s);
-    assert!(s.is_enabled("layer.smartObjects.convertToSmartObject"));
     convert(&mut s);
-    assert!(!s.is_enabled("layer.smartObjects.convertToSmartObject"));
+    let inner_id = s.active().unwrap().active_layer.unwrap();
+    let before = flat(&s);
+
+    // Photoshop keeps Convert to Smart Object enabled on a smart object and nests it (#10378).
+    assert!(s.is_enabled("layer.smartObjects.convertToSmartObject"));
+    let outer_id = LayerId(convert(&mut s));
+    assert_ne!(outer_id, inner_id);
+    let sm = active_smart(&s);
+    let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("not embedded") };
+    let inner = decode_source(file_name, bytes).unwrap();
+    assert!(inner.layers.iter().any(|l| matches!(l.content, LayerContent::Smart(_))), "the wrapped contents keep the smart object");
+    assert!(max_diff(&flat(&s), &before) < 1e-6, "wrapping does not change the render");
+    s.undo();
+    assert!(max_diff(&flat(&s), &before) < 1e-6);
+}
+
+#[test]
+fn converting_a_smart_object_with_open_contents_editor_is_refused() {
+    let mut s = session(8);
+    paint(&mut s);
+    convert(&mut s);
+    let smart_id = s.active().unwrap().active_layer.unwrap();
+    let child = s.execute("layer.smartObjects.editContents", json!({})).unwrap()["document"].as_u64().unwrap() as usize;
+
+    // Back in the parent, wrapping would move the layer into the new object's contents and strand
+    // the open editor's commit path, so the command refuses rather than losing its edits.
+    s.set_active(0);
+    let err = s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap_err().to_string();
+    assert!(err.contains("Edit Contents"), "{err}");
+    assert!(matches!(s.active().unwrap().doc.layer(smart_id).unwrap().content, LayerContent::Smart(_)), "the refused convert keeps the layer");
+    assert_eq!(s.smart_links.len(), 1, "the editor link is still live");
+
+    s.set_active(child);
+    s.execute("file.close", json!({})).unwrap();
+    s.set_active(0);
+    convert(&mut s);
+    let sm = active_smart(&s);
+    let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("not embedded") };
+    let inner = decode_source(file_name, bytes).unwrap();
+    assert!(inner.layers.iter().any(|l| matches!(l.content, LayerContent::Smart(_))), "closing the editor lets the wrap proceed");
+}
+
+/// Photoshop 2026 keeps a converted layer's whole Blend If and its channel exclusions
+/// (`brst`) on the layer inside the contents — the smart layer carries defaults — and lets
+/// the composite change where those settings blended with the old backdrop (verified by
+/// parsing a PSD Photoshop itself saved after Convert to Smart Object).
+#[test]
+fn convert_to_smart_object_keeps_backdrop_dependent_blending_inside() {
+    let mut s = session(8);
+    paint(&mut s);
+    s.edit("blend-if", |doc, active| {
+        let l = doc.layer_mut(active.unwrap()).unwrap();
+        let mut bi = photocraft_doc::BlendIf::default();
+        let mut under = photocraft_doc::BlendRange::FULL;
+        under.black = [100, 140];
+        bi.set(0, [photocraft_doc::BlendRange::FULL, under]);
+        l.blend_if = bi;
+        l.excluded_channels = 0b100;
+        Ok(())
+    })
+    .unwrap();
+
+    convert(&mut s);
+    {
+        let d = s.active().unwrap();
+        let l = d.doc.layer(d.active_layer.unwrap()).unwrap();
+        assert!(l.blend_if.is_default(), "the smart layer keeps default Blend If");
+        assert_eq!(l.excluded_channels, 0, "the smart layer excludes no channels");
+    }
+    let sm = active_smart(&s);
+    let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("not embedded") };
+    let inner = decode_source(file_name, bytes).unwrap();
+    assert_eq!(inner.layers.len(), 1);
+    let inner_l = &inner.layers[0];
+    assert_eq!(inner_l.blend_if.get(0)[1].black, [100, 140], "the underlying range stays on the inner layer");
+    assert_eq!(inner_l.excluded_channels, 0b100, "the channel exclusion stays on the inner layer");
 }
 
 #[test]
