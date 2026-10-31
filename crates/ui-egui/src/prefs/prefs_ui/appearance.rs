@@ -124,30 +124,40 @@ pub(super) fn favorite_theme_groups(favorites: &[SavedTheme]) -> (Vec<ThemeKind>
 }
 
 /// Right-click menu on the top-right appearance button. A plain click still cycles modes.
+/// The body scopes itself through `popup_body` (as `menus::context_menu` does at the call
+/// site) so the rows mirror in a right-to-left UI.
 pub(crate) fn appearance_context_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
-    if ui.button(tl!("Appearance Settings…")).clicked() {
-        open_preferences(app, "interface");
+    crate::direction::popup_body(ui, |ui| {
+        if crate::menu_keys::menu_row(ui, tl!("Appearance Settings…"), None, false, true).clicked() {
+            open_preferences(app, "interface");
+            ui.close();
+        }
+        let (light, dark) = favorite_theme_groups(&app.session.prefs().interface.favorite_themes);
+        let has_light = !light.is_empty();
+        if !light.is_empty() || !dark.is_empty() {
+            ui.separator();
+        }
+        for kind in light {
+            theme_menu_row(app, ui, kind);
+        }
+        if has_light && !dark.is_empty() {
+            ui.separator();
+        }
+        for kind in dark {
+            theme_menu_row(app, ui, kind);
+        }
+    });
+}
+
+/// A theme row that keeps the selectable highlight, mirrored through the shared row atom.
+fn theme_menu_row(app: &mut PhotocraftApp, ui: &mut egui::Ui, kind: ThemeKind) {
+    let on = app.ui.theme == kind;
+    if ui
+        .add(crate::menu_keys::menu_row_button_atom(tl!(kind.label()).into(), None, ui.style().right_to_left).selected(on))
+        .clicked()
+    {
+        app.set_theme(ui.ctx(), kind);
         ui.close();
-    }
-    let (light, dark) = favorite_theme_groups(&app.session.prefs().interface.favorite_themes);
-    let has_light = !light.is_empty();
-    if !light.is_empty() || !dark.is_empty() {
-        ui.separator();
-    }
-    for kind in light {
-        if ui.selectable_label(app.ui.theme == kind, tl!(kind.label())).clicked() {
-            app.set_theme(ui.ctx(), kind);
-            ui.close();
-        }
-    }
-    if has_light && !dark.is_empty() {
-        ui.separator();
-    }
-    for kind in dark {
-        if ui.selectable_label(app.ui.theme == kind, tl!(kind.label())).clicked() {
-            app.set_theme(ui.ctx(), kind);
-            ui.close();
-        }
     }
 }
 
