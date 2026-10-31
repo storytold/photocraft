@@ -246,6 +246,43 @@ fn pencil_1px_line_is_the_same_whichever_way_and_however_smoothed() {
     assert_eq!(sampled, pixels((1.5, 1.5), (20.5, 9.5), 0.0));
 }
 
+#[test]
+fn pencil_1px_freehand_line_never_breaks_where_it_turns() {
+    // #8040: each segment of a freehand stroke samples its own line, so where the stroke turned
+    // the last pixel of one segment and the first of the next could sit two pixels apart.
+    let b = BrushSettings { aliased: true, hardness: 1.0, size: 1.0, ..brush() };
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    let mut rnd = || {
+        seed ^= seed << 13;
+        seed ^= seed >> 7;
+        seed ^= seed << 17;
+        (seed >> 11) as f64 / (1u64 << 53) as f64
+    };
+    for _ in 0..300 {
+        let mut pts = vec![StrokePoint::new(20.0 + rnd() * 8.0, 20.0 + rnd() * 8.0, 1.0)];
+        for _ in 0..6 {
+            let l = *pts.last().unwrap();
+            let (dx, dy) = ((rnd() - 0.5) * 6.0, (rnd() - 0.5) * 6.0);
+            pts.push(StrokePoint::new((l.x + dx).clamp(1.0, 46.0), (l.y + dy).clamp(1.0, 46.0), 1.0));
+        }
+        let s = paint(&b, &pts, 48, 48);
+        let painted: Vec<(i32, i32)> = (0..48).flat_map(|y| (0..48).map(move |x| (x, y))).filter(|&(x, y)| s.rgba(x, y)[3] > 0.0).collect();
+        // Every painted pixel is reachable from the first through 8-connected neighbours.
+        let mut reached = vec![painted[0]];
+        let mut i = 0;
+        while i < reached.len() {
+            let (x, y) = reached[i];
+            for &q in &painted {
+                if (q.0 - x).abs() <= 1 && (q.1 - y).abs() <= 1 && !reached.contains(&q) {
+                    reached.push(q);
+                }
+            }
+            i += 1;
+        }
+        let path: Vec<(f64, f64)> = pts.iter().map(|p| (p.x, p.y)).collect();
+        assert_eq!(reached.len(), painted.len(), "the line breaks along {path:?}");
+    }
+}
 // ---------- spacing ----------
 
 #[test]
@@ -273,6 +310,58 @@ fn stroke_has_no_seams() {
             for x in 40..=160 {
                 let a = s.rgba(x, y)[3];
                 assert!(a > 0.99, "spacing {spacing} seam at ({x},{y}): {a}");
+            }
+        }
+    }
+}
+
+#[test]
+fn hard_round_presets_have_smooth_large_stroke_outlines() {
+    // #8842: the centre can be solid while widely spaced discs scallop the outline.
+    // Measure the rendered 50% edge of a 150 px stroke, including its sub-pixel position.
+    for preset in crate::presets::builtin().into_iter().filter(|p| p.name.starts_with("Hard Round")) {
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            for smoothing in [0.0, 0.49] {
+                let mut b = preset.brush.clone();
+                b.size = 150.0;
+                b.smoothing.amount = smoothing;
+                let mut s = Surface::new(fmt);
+                render_stroke(&mut s, &b, &line(100.0, 800.0, 120.0), None, false, 1.0);
+                let (mut min, mut max) = (f32::INFINITY, f32::NEG_INFINITY);
+                for x in 220..680 {
+                    let edge = (0..120)
+                        .find_map(|y| {
+                            let (a, next) = (s.rgba(x, y)[3], s.rgba(x, y + 1)[3]);
+                            (a <= 0.5 && next > 0.5).then(|| y as f32 + (0.5 - a) / (next - a))
+                        })
+                        .expect("a full-pressure stroke has a half-coverage edge");
+                    min = min.min(edge);
+                    max = max.max(edge);
+                }
+                assert!(max - min < 0.25, "{} {fmt:?} smoothing {smoothing}: scalloped edge spans {} px", preset.name, max - min);
+            }
+        }
+    }
+}
+
+#[test]
+fn hard_round_presets_have_continuous_pressure_opacity_tapers() {
+    // #8842 also shows nested disc boundaries when pressure controls opacity and size.
+    // A smooth input ramp must not turn into several-percent steps between adjacent pixels.
+    let points: Vec<_> =
+        (0..=100).map(|i| StrokePoint { time: i as f64 * 8.0, ..StrokePoint::new(100.0 + i as f64 * 7.0, 120.0, 0.95 - i as f32 * 0.009) }).collect();
+    for preset in crate::presets::builtin().into_iter().filter(|p| p.name.starts_with("Hard Round")) {
+        for fmt in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            for smoothing in [0.0, 0.49] {
+                let mut b = preset.brush.clone();
+                b.size = 150.0;
+                b.pressure_opacity = true;
+                b.smoothing.amount = smoothing;
+                let mut s = Surface::new(fmt);
+                render_stroke(&mut s, &b, &points, None, false, 1.0);
+                assert!(s.rgba(200, 120)[3] > 0.7 && s.rgba(699, 120)[3] < 0.3, "{}: the stroke must still taper", preset.name);
+                let max_jump = (200..699).map(|x| (s.rgba(x + 1, 120)[3] - s.rgba(x, 120)[3]).abs()).fold(0.0f32, f32::max);
+                assert!(max_jump < 0.02, "{} {fmt:?} smoothing {smoothing}: opacity jumps by {max_jump}", preset.name);
             }
         }
     }
@@ -1153,6 +1242,41 @@ fn blend_mode_and_dissolve() {
 }
 
 #[test]
+fn behind_preserves_native_channels_and_respects_alpha_selection_and_locks() {
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk, ColorMode::Lab] {
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let fmt = PixelFormat::new(mode, sample, true);
+            let b = BrushSettings { size: 12.0, behind: true, opacity: 0.5, color: [0.1, 0.3, 0.8, 1.0], ..brush() };
+            let mut s = Surface::new(fmt);
+            let native = photocraft_raster::from_rgba(&fmt, [0.8, 0.2, 0.1, 0.5]);
+            s.fill_rect(Rect::new(0, 0, 12, 12), &native);
+            let before = s.pixel(6, 6);
+            let mut selection = Surface::new(PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false));
+            selection.fill_rect(Rect::new(0, 0, 8, 12), &[0.5]);
+            render_stroke(&mut s, &b, &[StrokePoint::new(6.0, 6.0, 1.0)], Some(&selection), false, 1.0);
+            let source = photocraft_raster::from_rgba(&fmt, b.color);
+            let a = fmt.channels() - 1;
+            let under = 0.25 * (1.0 - before[a]);
+            let alpha = before[a] + under;
+            let got = s.pixel(6, 6);
+            assert!((got[a] - alpha).abs() < 0.005, "{fmt:?}: {got:?}");
+            for c in 0..a {
+                let expected = (before[c] * before[a] + source[c] * under) / alpha;
+                assert!((got[c] - expected).abs() < 0.005, "{fmt:?} channel {c}: {got:?}, expected {expected}");
+            }
+            assert_eq!(s.pixel(9, 6), before, "outside selection");
+            let locked = s.clone();
+            render_stroke(&mut s, &b, &[StrokePoint::new(6.0, 6.0, 1.0)], None, true, 1.0);
+            assert_eq!(s.read_region(Rect::new(0, 0, 12, 12)), locked.read_region(Rect::new(0, 0, 12, 12)), "locked transparency");
+            s.fill_rect(Rect::new(0, 0, 12, 12), &photocraft_raster::from_rgba(&fmt, [0.8, 0.2, 0.1, 1.0]));
+            let opaque = s.pixel(6, 6);
+            render_stroke(&mut s, &b, &[StrokePoint::new(6.0, 6.0, 1.0)], None, false, 1.0);
+            assert_eq!(s.pixel(6, 6), opaque, "opaque pixels");
+        }
+    }
+}
+
+#[test]
 fn presets_render_and_round_trip() {
     let presets = crate::presets::builtin();
     assert!(presets.len() >= 12);
@@ -1227,6 +1351,7 @@ fn live_union_of_passes_matches_merging_the_finished_passes_after_every_chunk() 
     brushes.push(b);
     brushes.push(BrushSettings { wet_edges: true, ..base.clone() });
     brushes.push(BrushSettings { mode: BlendMode::Dissolve, ..base.clone() });
+    brushes.push(BrushSettings { behind: true, ..base.clone() });
     brushes.push(BrushSettings { erase: true, ..base.clone() });
     let mut b = base.clone();
     b.texture.enabled = true;
@@ -1688,6 +1813,106 @@ fn an_aliased_stroke_at_partial_opacity_is_one_flat_colour() {
     }
 }
 
+/// Large tips rasterize, accumulate and composite in parallel (rows of a dab, tiles of a stroke);
+/// the pixels are the ones the serial path gives, with 8-bit dithering, a selection, Dissolve and
+/// per-dab colour included.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn large_tips_render_the_same_in_parallel_and_serially() {
+    let mut sel = Surface::new(PixelFormat::GRAY8);
+    sel.fill_rect(Rect::new(0, 0, 900, 700), &[1.0]);
+    sel.fill_rect(Rect::new(300, 0, 400, 700), &[0.0]);
+    let strokes: Vec<(BrushSettings, Vec<StrokePoint>)> = vec![
+        (BrushSettings { size: 700.0, hardness: 0.0, flow: 0.6, color: [0.9, 0.2, 0.1, 1.0], ..brush() }, line(200.0, 700.0, 350.0)),
+        (
+            BrushSettings { size: 420.0, hardness: 1.0, opacity: 0.5, mode: BlendMode::Dissolve, color: [0.1, 0.5, 0.9, 1.0], ..brush() },
+            line(150.0, 750.0, 300.0),
+        ),
+        (
+            BrushSettings {
+                size: 500.0,
+                hardness: 0.3,
+                color_dynamics: ColorDynamics { enabled: true, hue_jitter: 0.5, per_tip: true, ..Default::default() },
+                color: [0.2, 0.8, 0.3, 1.0],
+                ..brush()
+            },
+            line(100.0, 800.0, 400.0),
+        ),
+    ];
+    let render = |parallel_from: usize| -> Vec<Vec<f32>> {
+        crate::render::set_parallel_min_pixels(parallel_from);
+        strokes
+            .iter()
+            .map(|(b, pts)| {
+                let mut s = Surface::new(PixelFormat::RGBA8);
+                s.fill_rect(Rect::new(0, 0, 900, 700), &[0.5, 0.5, 0.5, 1.0]);
+                let (mut with_sel, mut plain) = (s.clone(), s);
+                render_stroke(&mut with_sel, b, pts, Some(&sel), false, 1.0);
+                render_stroke(&mut plain, b, pts, None, false, 1.0);
+                let mut px = with_sel.read_region(Rect::new(0, 0, 900, 700));
+                px.extend(plain.read_region(Rect::new(0, 0, 900, 700)));
+                px
+            })
+            .collect()
+    };
+    // The threshold is process-wide: put the default back however the test ends, a panic
+    // inside a render included.
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::render::set_parallel_min_pixels(crate::render::DEFAULT_PARALLEL_MIN_PIXELS);
+        }
+    }
+    let _restore = Restore;
+    let parallel = render(0);
+    let serial = render(usize::MAX);
+    for (i, (p, s)) in parallel.iter().zip(&serial).enumerate() {
+        assert_eq!(p.len(), s.len());
+        let diff = p.iter().zip(s).filter(|(a, b)| a != b).count();
+        assert_eq!(diff, 0, "stroke {i}: {diff} pixels differ between the parallel and the serial render");
+        assert!(p.iter().any(|v| (*v - 0.5).abs() > 0.1), "stroke {i} painted something");
+    }
+}
+
+/// A CMYK document with its own profile: blend modes other than Normal convert each pixel through
+/// that profile, which is active per thread, so a stroke composited in parallel gives the pixels the
+/// serial path gives (the workers enter the caller's CMYK space too).
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_parallel_composite_converts_through_the_documents_cmyk_profile() {
+    use photocraft_cms::synth::{CmykParams, cmyk_profile};
+    use photocraft_color::convert::{CmykSpace, with_cmyk_space};
+    let profile =
+        cmyk_profile(&CmykParams { description: "Brush Test CMYK".into(), tvi: [0.26, 0.26, 0.26, 0.3], grid_a2b: 5, grid_b2a: 9, ..Default::default() });
+    let bytes = profile.to_bytes();
+    let Some(space) = CmykSpace::for_profile(Some(&bytes)) else { panic!("the synthetic profile is a CMYK space") };
+    let fmt = PixelFormat::new(ColorMode::Cmyk, SampleType::U16, true);
+    // A 40 px Multiply line over 1100 px dirties more than 16 tiles: the composite's batch is
+    // worth the threads at the default threshold, and always at threshold 0.
+    let b = BrushSettings { size: 40.0, hardness: 0.5, mode: BlendMode::Multiply, color: [0.2, 0.4, 0.9, 1.0], ..brush() };
+    let pts = line(40.0, 1140.0, 60.0);
+    let full = Rect::new(0, 0, 1200, 120);
+    let render = |parallel_from: usize| -> Vec<f32> {
+        crate::render::set_parallel_min_pixels(parallel_from);
+        let mut s = Surface::new(fmt);
+        s.fill_rect(full, &[0.1, 0.5, 0.3, 0.05, 1.0]);
+        with_cmyk_space(Some(&space), || render_stroke(&mut s, &b, &pts, None, false, 1.0));
+        s.read_region(full)
+    };
+    struct Restore;
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            crate::render::set_parallel_min_pixels(crate::render::DEFAULT_PARALLEL_MIN_PIXELS);
+        }
+    }
+    let _restore = Restore;
+    let parallel = render(0);
+    let serial = render(usize::MAX);
+    let diff = parallel.iter().zip(&serial).filter(|(a, b)| a != b).count();
+    assert_eq!(diff, 0, "{diff} samples differ between the parallel and the serial composite in a profiled CMYK document");
+    assert!(serial.chunks(5).any(|p| (p[1] - 0.5).abs() > 0.05), "the stroke painted something");
+}
+
 /// Photoshop (measured): a 100 px brush with a 20 px Dual Brush tip resized to 50 / 2 / 1 px has a
 /// 10 / 0.4 / 0.2 px dual tip, unrounded and with no floor, and back at 100 px it is 20 px again; past
 /// 5000 px the dual tip is capped there and the proportion is lost (#4809).
@@ -1734,4 +1959,39 @@ fn resizing_with_bad_sizes_leaves_the_dual_tip_alone() {
     b.size = 100.0;
     b.resize_with_dual_brush(50.0);
     assert_eq!(b.dual_brush.size, 20.0);
+}
+
+/// `touches` is true wherever `coverage_at` can be above 0, false only where it is 0 for sure.
+#[test]
+fn touches_covers_every_pixel_with_coverage() {
+    let b = BrushSettings { size: 6.0, ..brush() };
+    let mut r = StrokeRenderer::new(&b, None, 1.0);
+    r.push(&line(100.0, 300.0, 200.0));
+    r.finish();
+    for y in (0..400).step_by(3) {
+        for x in (0..500).step_by(3) {
+            if r.coverage_at(x, y) > 0.0 {
+                assert!(r.touches(Rect::new(x, y, x + 1, y + 1)), "({x}, {y})");
+            }
+        }
+    }
+    // Across the origin and tile edges (64 px): every pixel, both sides of each edge.
+    let mut o = StrokeRenderer::new(&b, None, 1.0);
+    o.push(&[StrokePoint::new(-70.0, -70.0, 1.0), StrokePoint::new(70.0, 70.0, 1.0)]);
+    o.finish();
+    for y in -140..140 {
+        for x in -140..140 {
+            if o.coverage_at(x, y) > 0.0 {
+                assert!(o.touches(Rect::new(x, y, x + 1, y + 1)), "({x}, {y})");
+            }
+        }
+    }
+    assert!(!o.touches(Rect::new(-128, 64, -64, 128)), "a tile the diagonal misses");
+    assert!(!o.touches(Rect::new(-200, -200, -128, -128)), "ends exactly at a tile edge");
+    assert!(o.touches(Rect::new(-200, -200, -127, -127)), "one pixel into the next tile");
+    assert!(r.touches(Rect::new(150, 199, 151, 201)));
+    assert!(!r.touches(Rect::new(0, 0, 50, 50)), "far from the stroke");
+    assert!(!r.touches(Rect::new(400, 400, 400, 400)), "empty");
+    assert!(r.touches(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX)), "huge, without a huge scan");
+    assert!(!r.touches(Rect::new(1_000_000, 1_000_000, i32::MAX, i32::MAX)));
 }

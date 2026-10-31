@@ -329,7 +329,7 @@ pub struct MenuParams {
 pub struct UiSetParams {
     /// Fields for the control method `ui.set`: tool, panels, dock, dockTabs, dockWidth, colorPanel
     /// ({background: bool} picks which swatch the Color panel edits), maskTarget,
-    /// vectorMaskTarget, selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
+    /// vectorMaskTarget, filterMaskTarget (paint the active smart object's filter mask), selectionMode, zoom, center, rotation (view angle in degrees), fit, theme (pro, proMedium, studio,
     /// studioLight, classic, solarizedDark, adwaita, adwaitaDark, breezeLight, breezeDark, softLight, softDark), brushSection, brushTab,
     /// brushesView, brushPicker ([x, y] opens the Brush Preset picker there, null closes it),
     /// brushPickerName, brushPickerStroke, brushPickerTip (the picker card's parts, at least one
@@ -342,7 +342,9 @@ pub struct UiSetParams {
     /// cropOverlayOrientation (0..3), cropShield (an object patching show_cropped_area, enabled,
     /// color ("matchCanvas" or "custom"), custom_color ([r, g, b]), opacity (0..100),
     /// auto_adjust, classic_mode and auto_center_preview), cropFill (background or contentAware,
-    /// the Crop tool's Fill), shapeStroke (an object patching width, align, cap, join, miterLimit,
+    /// the Crop tool's Fill), penMode (path or shape, the Pen tools' mode), penPathOp (newLayer,
+    /// combine, subtract, intersect or exclude: how the next Pen path joins the selected shape
+    /// layer or path), shapeStroke (an object patching width, align, cap, join, miterLimit,
     /// dashes, dashOffset and opacity; null disables the stroke). Shape stroke fields use
     /// `shape.edit` names and units; colour comes from `tools.setColors`. camTransformOnDrop (bool,
     /// the Content-Aware Move tool's Transform On Drop). tileGrid (bool, a developer overlay of the
@@ -350,8 +352,14 @@ pub struct UiSetParams {
     /// "mode"), kinds (a list of layer kinds), name (matches part of the layer name) and mode (a
     /// blend mode name) for the Layers panel filter). strokeTrace (true, false, "stderr" or "off":
     /// the stroke latency trace at runtime; a CSV file is set at launch with --stroke-trace, not
-    /// over this channel). updatesOpen (bool, the Help › Check for Updates window). Other fields
-    /// are an error.
+    /// over this channel). updatesOpen (bool, the Help › Check for Updates window).
+    /// histogramPanel (an object patching view ("compact", "expanded" or "allChannels"), channel
+    /// ("composite", "red", "green", "blue", "cyan", "magenta", "yellow", "black", "a", "b",
+    /// "luminosity" or "colors"), showChannelsInColor, showStatistics and source ("entireImage",
+    /// "selectedLayer" or "adjustmentComposite") for the Histogram panel), histogramRange ([from,
+    /// to] levels 0..255 whose Count and Percentile the panel shows, or null) and histogramRefresh
+    /// (true: an Uncached Refresh); `ui.inspect` reports them and the statistics under
+    /// `histogram`. Other fields are an error.
     pub fields: Value,
 }
 

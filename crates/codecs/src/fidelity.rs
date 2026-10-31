@@ -31,7 +31,7 @@ pub enum FidelityWarning {
     RangeClipped,
     /// Non-opaque alpha will be discarded.
     AlphaDiscarded,
-    /// Alpha will be reduced to fully transparent / fully opaque (GIF).
+    /// Alpha will be reduced to fully transparent / fully opaque (GIF, DDS BC1, IFF).
     AlphaBinarized,
     /// CMYK data will be converted (naively, not colour-managed) to another model.
     CmykConverted {
@@ -227,7 +227,8 @@ pub fn fidelity_warnings_with(image: &Image, format: Format, opts: &EncodeOption
     if sl.has_alpha() && !p.layout.has_alpha() && image.has_translucency() {
         w.push(W::AlphaDiscarded);
     }
-    let binary_alpha = format == Format::Gif || (format == Format::Dds && opts.dds.compression == DdsCompression::Bc1);
+    // An IFF/ILBM mask plane holds one bit per pixel.
+    let binary_alpha = matches!(format, Format::Gif | Format::Iff) || (format == Format::Dds && opts.dds.compression == DdsCompression::Bc1);
     if binary_alpha && p.layout.has_alpha() && image.has_translucency() {
         w.push(W::AlphaBinarized);
     }
