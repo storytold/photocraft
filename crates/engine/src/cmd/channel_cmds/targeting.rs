@@ -117,10 +117,19 @@ fn edits_mask(id: &str) -> bool {
         || crate::fill_key_cmds::IDS.contains(&id)
 }
 
+/// Filters that work on a layer's pixels only: Lens Correction, Adaptive Wide Angle and Vanishing
+/// Point, which Photoshop greys out while a mask or channel is targeted (#10457).
+fn refuses_masks(id: &str) -> bool {
+    matches!(id, crate::lens_cmds::LENS | crate::lens_cmds::WIDE | crate::vp_cmds::VP)
+}
+
 /// The precondition of `id` when `p` targets the active layer's mask (`"target":"mask"`): the
 /// layer needs a mask. None when another precondition applies.
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
     match target_of(p) {
+        // Photoshop greys these out on a targeted mask or channel, so a target named in the params
+        // is refused as one from the Channels panel is (#10457).
+        t if t != Target::Pixels && refuses_masks(id) => Some(Err("not available while a mask or channel is targeted".into())),
         // The commands that paint, fill, filter or adjust the filter mask need a smart object with
         // smart filters, not a pixel layer. Paste keeps its own check (something to paste).
         Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
