@@ -400,12 +400,12 @@ fn draw_group_header(ui: &mut egui::Ui, group: &GroupView, context: GroupHeaderC
             state.toggled.insert(key);
         }
     }
-    response.context_menu(|ui| {
-        if ui.button(tl!("Rename Group…")).clicked() {
+    crate::menus::context_menu(&response, |ui| {
+        if crate::menu_keys::menu_row(ui, tl!("Rename Group…"), None, false, true).clicked() {
             state.renaming = Some((panel.to_string(), format!("group:{}", group.name), group.name.clone()));
             ui.close();
         }
-        if ui.button(tl!("Delete Group")).clicked() {
+        if crate::menu_keys::menu_row(ui, tl!("Delete Group"), None, false, true).clicked() {
             events.push(Ev::DeleteGroup(group.name.clone()));
             ui.close();
         }
@@ -556,18 +556,18 @@ pub(crate) fn browser(
                     {
                         dropped = Some((it.key.clone(), pp));
                     }
-                    resp.context_menu(|ui| {
-                        if ui.button(tl!("Rename…")).clicked() {
+                    crate::menus::context_menu(&resp, |ui| {
+                        if crate::menu_keys::menu_row(ui, tl!("Rename…"), None, false, true).clicked() {
                             st.renaming = Some((panel.to_string(), it.key.clone(), it.name.clone()));
                             ui.close();
                         }
-                        if ui.button(tl!("Delete")).clicked() {
+                        if crate::menu_keys::menu_row(ui, tl!("Delete"), None, false, true).clicked() {
                             ev.push(Ev::Delete(it.key.clone()));
                             ui.close();
                         }
-                        ui.menu_button(tl!("Move to"), |ui| {
+                        crate::menus::menu_button(ui, tl!("Move to"), |ui| {
                             for gname in group_names.iter().filter(|n| **n != g.name) {
-                                if ui.button(gname).clicked() {
+                                if crate::menu_keys::menu_row(ui, gname, None, false, true).clicked() {
                                     ev.push(Ev::Move(it.key.clone(), gname.clone()));
                                     ui.close();
                                 }
