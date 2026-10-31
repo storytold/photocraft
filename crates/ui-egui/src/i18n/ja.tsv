@@ -4181,3 +4181,19 @@ curves	Smooth	スムーズ
 	Select and Mask was closed: another layer was selected	「選択とマスク」を閉じました: 別のレイヤーが選択されました
 	Drag to move the selected path	ドラッグして選択したパスを移動
 	Edit Brush…	ブラシを編集…
+
+# Latest UI additions (Histogram, GPU status, Updates, Layer Styles)
+	Artboards	アートボード
+	CPU Rendering	CPU レンダリング
+	Calculating…	計算中…
+	Click to refresh histogram with uncached data	キャッシュされていないデータでヒストグラムを更新
+	Count:	カウント:
+	Drawn on the CPU: {reason}. Click for System Info.	CPU で描画: {reason}。システム情報を表示するにはクリックしてください。
+	Level:	レベル:
+	Percentile:	パーセンタイル:
+	Release Notes	リリースノート
+	Show Channels in Color	カラーでチャンネルを表示
+	Show Statistics	統計を表示
+	Source:	ソース:
+	Uncached Refresh	キャッシュなしで更新
+	Update and Restart	更新して再起動

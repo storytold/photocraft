@@ -961,9 +961,9 @@ fn channel_names_of(f: &Map<String, Value>) -> Vec<String> {
 fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
     let t = Tokens::get(ui.ctx());
     let num = |p: &Value, k: &str, d: f64| p.get(k).and_then(Value::as_f64).unwrap_or(d) as f32;
-    widgets::section_label(ui, "General Blending");
+    widgets::section_label(ui, tl!("General Blending"));
     ui.horizontal(|ui| {
-        widgets::row_label(ui, "Blend Mode", LABEL_W);
+        widgets::row_label(ui, tl!("Blend Mode"), LABEL_W);
         let mut cur = p.get("blend").and_then(Value::as_str).unwrap_or("Normal").to_string();
         // Photoshop's modes, plus the layer's own Paint.NET mode when it has one (an imported .pdn).
         let own = photocraft_color::BlendMode::PAINT_NET_MODES.into_iter().find(|m| m.label() == cur);
@@ -973,13 +973,13 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         }
     });
     let mut v = num(p, "opacity", 100.0);
-    if widgets::slider_line(ui, "Opacity", LABEL_W, &mut v, 0.0..=100.0, "%").changed() {
+    if widgets::slider_line(ui, tl!("Opacity"), LABEL_W, &mut v, 0.0..=100.0, "%").changed() {
         p["opacity"] = json!(v.round());
     }
     widgets::hairline(ui);
-    widgets::section_label(ui, "Advanced Blending");
+    widgets::section_label(ui, tl!("Advanced Blending"));
     let mut v = num(p, "fillOpacity", 100.0);
-    if widgets::slider_line(ui, "Fill Opacity", LABEL_W, &mut v, 0.0..=100.0, "%").changed() {
+    if widgets::slider_line(ui, tl!("Fill Opacity"), LABEL_W, &mut v, 0.0..=100.0, "%").changed() {
         p["fillOpacity"] = json!(v.round());
     }
     // Channels: one check box per colour channel (checked = blends).

@@ -347,7 +347,7 @@ impl CraftFontProvider {
             if !cjk::font_face_is_readable(source.bytes(), index) {
                 continue;
             }
-            if !scripts::face_covers(source.bytes(), index, c) {
+            if !scripts::face_covers(source.bytes(), index, c) || !scripts::face_has_glyph_outline(source.bytes(), index, c) {
                 continue;
             }
             return Some(self.system_insert_face(file.path, index, source));
@@ -444,7 +444,10 @@ impl FontProvider for CraftFontProvider {
 /// testing any face of a collection would select a face whose glyphs egui never uses. Test face
 /// 0 here, exactly like the lazy loader's `load_embedded_faces`.
 fn craft_face_installs_coverage(face: &CraftFont, c: char) -> bool {
-    !face.bytes.is_empty() && cjk::font_face_is_readable(face.bytes, 0) && scripts::face_covers(face.bytes, 0, c)
+    !face.bytes.is_empty()
+        && cjk::font_face_is_readable(face.bytes, 0)
+        && scripts::face_covers(face.bytes, 0, c)
+        && scripts::face_has_glyph_outline(face.bytes, 0, c)
 }
 
 /// The best injected craft face declaring `iso` that really covers `c` in the face
@@ -675,8 +678,9 @@ impl CjkFallback {
         }
         let order = self.order();
         let scripts: Vec<CjkScript> = std::iter::once(kind.preferred(&order)).chain(order).collect();
+        let mut failed = Vec::new();
         for s in scripts {
-            if self.tried.contains(&s) {
+            if self.tried.contains(&s) || failed.contains(&s) {
                 continue;
             }
             let embedded = if manifest_baseline { self.load_embedded_manifest(s, c) } else { self.load_embedded(s, c) };
@@ -693,7 +697,12 @@ impl CjkFallback {
             if fontconfig_pending {
                 return None;
             }
-            self.tried.push(s);
+            failed.push(s);
+        }
+        for s in failed {
+            if !self.tried.contains(&s) {
+                self.tried.push(s);
+            }
         }
         if !self.last_resort_tried {
             self.last_resort_tried = true;
@@ -760,7 +769,12 @@ impl CjkFallback {
 
     /// The first of `faces` that really covers `c`, registered from its static bytes.
     fn load_embedded_faces(&mut self, faces: Vec<&'static CraftFont>, c: char) -> Option<(String, FontData)> {
-        let f = faces.into_iter().find(|f| !f.bytes.is_empty() && cjk::font_face_is_readable(f.bytes, 0) && scripts::face_covers(f.bytes, 0, c))?;
+        let f = faces.into_iter().find(|f| {
+            !f.bytes.is_empty()
+                && cjk::font_face_is_readable(f.bytes, 0)
+                && scripts::face_covers(f.bytes, 0, c)
+                && scripts::face_has_glyph_outline(f.bytes, 0, c)
+        })?;
         let path = PathBuf::from(format!("craft-fonts/{} {}", f.family, f.style));
         if self.loaded.contains(&path) {
             return None;
@@ -798,7 +812,7 @@ impl CjkFallback {
             if !cjk::font_face_is_readable(&bytes, index) {
                 continue;
             }
-            if !scripts::face_covers(&bytes, index, c) {
+            if !scripts::face_covers(&bytes, index, c) || !scripts::face_has_glyph_outline(&bytes, index, c) {
                 continue;
             }
             self.loaded.push(f.path.clone());

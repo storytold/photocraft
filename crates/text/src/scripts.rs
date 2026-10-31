@@ -280,8 +280,52 @@ pub fn covering_face(bytes: &[u8], c: char) -> Option<u32> {
     }
 }
 
-/// Whether face `index` of `bytes` (a font or collection) maps `c` in its character map.
+/// An [`OutlinePen`](skrifa::outline::OutlinePen) that counts the contours drawn into a glyph.
+#[derive(Default)]
+struct ContourCount(usize);
+
+impl skrifa::outline::OutlinePen for ContourCount {
+    /// Starts a new contour at (`_x`, `_y`) without incrementing the drawable segment count.
+    fn move_to(&mut self, _x: f32, _y: f32) {}
+    /// Appends a straight line segment.
+    fn line_to(&mut self, _x: f32, _y: f32) {
+        self.0 = self.0.saturating_add(1);
+    }
+    /// Appends a quadratic Bézier curve segment.
+    fn quad_to(&mut self, _cx0: f32, _cy0: f32, _x: f32, _y: f32) {
+        self.0 = self.0.saturating_add(1);
+    }
+    /// Appends a cubic Bézier curve segment.
+    fn curve_to(&mut self, _cx0: f32, _cy0: f32, _cx1: f32, _cy1: f32, _x: f32, _y: f32) {
+        self.0 = self.0.saturating_add(1);
+    }
+    /// Closes the current contour.
+    fn close(&mut self) {}
+}
+
+/// Whether `font` really contains a drawable outline for character `c` (or is whitespace).
+/// Fonts whose character map maps `c` but lack an outline or produce no contours return `false`.
+pub fn font_has_glyph_outline(font: &skrifa::FontRef<'_>, c: char) -> bool {
+    if c.is_whitespace() {
+        return true;
+    }
+    use skrifa::MetadataProvider;
+
+    let Some(id) = font.charmap().map(c) else { return false };
+    let Some(outline) = font.outline_glyphs().get(id) else { return false };
+    let mut pen = ContourCount::default();
+    let settings = skrifa::outline::DrawSettings::unhinted(skrifa::instance::Size::unscaled(), skrifa::instance::LocationRef::default());
+    outline.draw(settings, &mut pen).is_ok() && pen.0 > 0
+}
+
+/// Whether face `index` of `bytes` really contains an outline for character `c` (or is whitespace).
+/// Fonts whose character map maps `c` but lack an outline or whose outline has no contours (empty/ghost glyphs) return `false`.
 /// `false` for an out-of-range face or data that doesn't parse. Never panics.
+pub fn face_has_glyph_outline(bytes: &[u8], index: u32, c: char) -> bool {
+    let Ok(font) = skrifa::FontRef::from_index(bytes, index) else { return false };
+    font_has_glyph_outline(&font, c)
+}
+
 pub fn face_covers(bytes: &[u8], index: u32, c: char) -> bool {
     use skrifa::MetadataProvider;
 
@@ -349,6 +393,20 @@ mod tests {
         assert_eq!(names(Script::Tamil), ["Nirmala.ttc", "Lohit-Tamil.ttf"]);
         assert!(names(Script::Ethiopic).is_empty());
         assert!(candidates(Script::Thai, &[]).is_empty());
+    }
+
+    /// Verifies that `face_has_glyph_outline` checks drawable contours, treats whitespace as valid,
+    /// and rejects empty or corrupt fonts.
+    #[test]
+    fn face_has_glyph_outline_checks_drawable_contours_and_whitespace() {
+        let inter = crate::fonts::INTER_REGULAR.as_slice();
+        assert!(face_has_glyph_outline(inter, 0, 'A'));
+        assert!(face_has_glyph_outline(inter, 0, ' '));
+        assert!(face_has_glyph_outline(inter, 0, '\t'));
+        assert!(!face_has_glyph_outline(inter, 0, 'ส'));
+        assert!(!face_has_glyph_outline(inter, 1, 'A'));
+        assert!(!face_has_glyph_outline(b"", 0, 'A'));
+        assert!(!face_has_glyph_outline(b"", 0, ' '));
     }
 
     #[test]

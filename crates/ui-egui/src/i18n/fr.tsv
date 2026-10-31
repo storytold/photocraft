@@ -4541,3 +4541,18 @@ shape	Appearance	Apparence
 	Select and Mask was closed: its document is no longer the active one	Sélectionner et masquer a été fermé : son document n’est plus le document actif
 	Select and Mask was closed: another layer was selected	Sélectionner et masquer a été fermé : un autre calque a été sélectionné
 	Edit Brush…	Modifier le pinceau…
+
+# Latest UI additions (Histogram, GPU status, Updates, Layer Styles)
+	CPU Rendering	Rendu processeur
+	Calculating…	Calcul en cours…
+	Click to refresh histogram with uncached data	Cliquer pour actualiser l'histogramme avec des données non mises en cache
+	Count:	Nombre :
+	Drawn on the CPU: {reason}. Click for System Info.	Dessiné sur le processeur : {reason}. Cliquez pour afficher les informations système.
+	Level:	Niveau :
+	Percentile:	Centile :
+	Release Notes	Notes de version
+	Show Channels in Color	Afficher les couches en couleur
+	Show Statistics	Afficher les statistiques
+	Source:	Source :
+	Uncached Refresh	Actualisation non mise en cache
+	Update and Restart	Mettre à jour et redémarrer
