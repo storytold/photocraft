@@ -2240,6 +2240,32 @@ fn ui_set_mask_target_ends_a_filter_mask_view() {
     assert_eq!(sm.filter_mask.as_ref().unwrap().value(20, 20), 1.0, "not into the filter mask");
 }
 
+/// `ui.set {"infoPanel": {"readouts": [...]}}` picks the Info panel's readouts (any order, read
+/// back in menu order), keeps them with the preferences and reports them in `ui.inspect`; an
+/// unknown readout or field changes nothing.
+#[test]
+fn ui_set_info_panel_readouts() {
+    use crate::info_panel_options::Readout;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    assert_eq!(app.ui.info_panel.readouts, vec![Readout::ActualColor, Readout::Cmyk]);
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"infoPanel": {"readouts": ["spotChannels", "grayscale", "grayscale"]}}))["ok"], true);
+    assert_eq!(app.ui.info_panel.readouts, vec![Readout::Grayscale, Readout::SpotChannels]);
+    assert_eq!(app.session.prefs().dialogs.get("infoPanel").unwrap()["readouts"], json!(["grayscale", "spotChannels"]));
+    assert_eq!(call(&mut app, &ctx, "ui.inspect", json!({}))["result"]["infoPanel"]["readouts"], json!(["grayscale", "spotChannels"]));
+    for bad in [
+        json!({"infoPanel": {"readouts": ["nope"]}}),
+        json!({"infoPanel": {"nope": true}}),
+        json!({"infoPanel": "grayscale"}),
+        json!({"infoPanel": {"readouts": "grayscale"}}),
+    ] {
+        assert_eq!(call(&mut app, &ctx, "ui.set", bad.clone())["ok"], false, "{bad}");
+        assert_eq!(app.ui.info_panel.readouts, vec![Readout::Grayscale, Readout::SpotChannels], "{bad} changed nothing");
+    }
+    assert_eq!(call(&mut app, &ctx, "ui.set", json!({"infoPanel": {"readouts": []}}))["ok"], true);
+    assert!(app.ui.info_panel.readouts.is_empty());
+}
+
 fn shift_right(app: &mut PhotocraftApp, ctx: &egui::Context, tool: &str) {
     call(
         app,
