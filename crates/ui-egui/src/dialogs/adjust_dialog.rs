@@ -127,6 +127,9 @@ pub fn add_point_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64
     }
     let Some(sample) = crate::canvas::composite_color(app, x, y) else { return true };
     let gray = adjust_editors::is_gray(mode);
+    if gray {
+        adjust_editors::gray_curves(&mut values);
+    }
     let (shown, shown_key) = match &isolated {
         Some(c) if c.components.is_some() => {
             let ch: usize = ctx.data(|d| d.get_temp(dialog_mem("curves").with("curves-ch"))).unwrap_or(0);

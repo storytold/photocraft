@@ -1,6 +1,6 @@
 use super::{
-    Color32, CurveUi, Edit, EditorCx, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, ToneSpace, Value, adjust_params, curve_edit, curves_space, json,
-    label, pos2, space_of, tone, vec2, widgets,
+    Color32, CurveUi, Edit, EditorCx, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, ToneSpace, Value, adjust_params, curve_edit, curves_space,
+    gray_curves, json, label, pos2, space_of, tone, vec2, widgets,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -321,7 +321,10 @@ fn curves_preset_row(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
 pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
     // A grayscale document edits its one Gray curve, `points`, whatever channel keys of another
-    // mode its settings still hold.
+    // mode its settings still hold; an edit drops those keys so the image follows.
+    if cx.gray {
+        gray_curves(v);
+    }
     let space = curves_space(v, cx.gray);
     let channels = editor_channels(cx, space);
     // The Preset menu (#9221): PhotoCraft's own curves for common looks, Custom once edited.

@@ -123,13 +123,28 @@ pub struct EditorCx {
     pub isolated_curve: Option<photocraft_engine::channel_cmds::IsolatedCurveChannel>,
 }
 
-/// The Levels/Curves channel space the values address.
 /// The tone space a Curves editor works in: a grayscale document's is always its one Gray curve
 /// (`points`), whatever channel keys of another mode its settings still hold.
 pub fn curves_space(v: &Value, gray: bool) -> ToneSpace {
     if gray { ToneSpace::Rgb } else { space_of(v) }
 }
 
+/// Grayscale Curves settings put in the tone space [`curves_space`] edits: another mode's channel
+/// records (CMYK inks, Lab `lightness`, `a`, `b`) give way to straight `red`, `green` and `blue`,
+/// as a grayscale document's own Curves have. The engine picks the space from those keys and reads
+/// a Lab `lightness` over `points`, so the Gray curve the editor shows is the one that renders.
+pub fn gray_curves(v: &mut Value) {
+    const STALE: [&str; 7] = ["cyan", "magenta", "yellow", "black", "lightness", "a", "b"];
+    let Some(o) = v.as_object_mut().filter(|o| STALE.iter().any(|k| o.contains_key(*k))) else { return };
+    for key in STALE {
+        o.remove(key);
+    }
+    for key in adjust_params::channel_keys(ToneSpace::Rgb) {
+        o.entry(*key).or_insert_with(|| json!([[0.0, 0.0], [255.0, 255.0]]));
+    }
+}
+
+/// The Levels/Curves channel space the values address.
 pub fn space_of(v: &Value) -> ToneSpace {
     if v.get("cyan").is_some() || v.get("black").is_some() {
         ToneSpace::Cmyk
