@@ -165,12 +165,15 @@ This bridge is independent of the proposed embedding API in [PR #2263](https://g
 It does not install or replace `window.photocraft`. Taking an embedding/export snapshot and
 marking it clean is not a substitute for a durable provider acknowledgement.
 
-The source and regression fixtures are a candidate implementation. Compilation, native and
-WASM checks, and visual review have not yet been run for this branch. No upstream acceptance
-or server interoperability is claimed. Before submitting, run the affected-crate tests,
-Clippy, the layer/WASM checks required by `AGENTS.md`, and review both default-local and
-registered-provider flows. Browser editing checks and backend integration need their own
-results. This document describes the intended contract, not a validation record.
+This is a candidate integration for upstream review, not a bundled storage service. Protocol
+and native UI regressions live in `crates/ui-egui/src/file_providers/tests.rs` and
+`crates/ui-egui/src/file_provider_tests.rs`. They cover captured revisions, account changes,
+read correlation, local saves and cancellation without depending on a storage server.
+
+Changes to this bridge follow the affected-crate tests, Clippy, layer/WASM checks and visual
+review required by `AGENTS.md`. Review both default-local and registered-provider flows.
+Browser editing and a real storage backend need their own end-to-end results: a passing codec
+or protocol fixture does not establish server durability, authentication or interoperability.
 
 For an offscreen visual check without a browser or a storage service, the existing snapshot
 example accepts `--file-provider-preview`. It uses three synthetic resources and does not
