@@ -90,6 +90,10 @@ struct Bench {
     /// Rows this machine can't time, by a part of their names, and why: `cargo xtask perf`
     /// reports them as not run rather than missing.
     skipped: Vec<Value>,
+    /// Rows that couldn't be timed, and why (`context.errors`, which `cargo xtask perf` reports).
+    errors: Vec<(String, String)>,
+    /// A GPU-only render's failure during the row being timed ([`Bench::render_gpu`]).
+    gpu_error: Option<String>,
 }
 
 impl Bench {
@@ -122,6 +126,22 @@ impl Bench {
         t.elapsed().as_secs_f64() * 1000.0
     }
 
+    /// A GPU-resident row's composite: the GPU compositor's only. A failure is recorded for the
+    /// row (and reported), not timed as the CPU composite [`Bench::render`] falls back to.
+    fn render_gpu(&mut self, doc: &Document, region: Rect) -> f64 {
+        let t = Instant::now();
+        let Some(g) = &mut self.gpu else {
+            self.gpu_error.get_or_insert_with(|| "no GPU".into());
+            return 0.0;
+        };
+        if let Err(e) = g.comp.render(&g.device, &g.queue, doc, region, |_, _| {}) {
+            self.gpu_error.get_or_insert_with(|| e.to_string());
+            return 0.0;
+        }
+        let _ = g.device.poll(wgpu::PollType::Wait { submission_index: None, timeout: None });
+        t.elapsed().as_secs_f64() * 1000.0
+    }
+
     /// Times `f` (`reps` runs after a cold one); `f` returns its own breakdown-free total in ms.
     fn time(&mut self, name: &str, mut f: impl FnMut(&mut Self) -> f64) {
         if self.only.as_ref().is_some_and(|o| !name.contains(o.as_str())) {
@@ -129,6 +149,7 @@ impl Bench {
             return;
         }
         self.rss.reset();
+        self.gpu_error = None;
         let cold = f(self);
         let faults0 = photocraft_testkit::perf::minor_faults();
         let mut v: Vec<f64> = (0..self.reps).map(|_| f(self)).collect();
@@ -136,6 +157,11 @@ impl Bench {
         // Counted over the whole of `f`, so it includes untimed setup and cleanup (an undo, an
         // extra refresh), not only the work the milliseconds measure.
         let faults = faults0.zip(photocraft_testkit::perf::minor_faults()).map(|(a, b)| b.saturating_sub(a) / self.reps as u64);
+        if let Some(e) = self.gpu_error.take() {
+            println!("{name:<44} failed on the GPU: {e}");
+            self.errors.push((name.to_string(), e));
+            return;
+        }
         self.extra.push((v.clone(), self.rss.peak(), faults));
         v.sort_by(f64::total_cmp);
         let med = v[v.len() / 2];
@@ -189,6 +215,8 @@ fn main() {
         extra: Vec::new(),
         rss: photocraft_testkit::perf::RssSampler::start(std::time::Duration::from_millis(2)),
         skipped: Vec::new(),
+        errors: Vec::new(),
+        gpu_error: None,
     };
     println!("document {w}×{h} ({:.1} MP), 8-bit RGB, {} reps, {}", (w * h) as f64 / 1e6, reps, if b.gpu.is_some() { "GPU canvas" } else { "CPU canvas" });
 
@@ -350,7 +378,7 @@ fn main() {
             if let Some(g) = &mut b.gpu {
                 g.comp.set_operators(doc.id, vec![operator(radius)]);
             }
-            let first = b.render(&doc, view);
+            let first = b.render_gpu(&doc, view);
             println!("  (GPU-resident preview r {radius}: first frame with the window upload {first:.1} ms)");
             let mut step = 0;
             b.time(&format!("Gaussian Blur dialog preview r {radius} (GPU resident)"), |b| {
@@ -360,7 +388,7 @@ fn main() {
                 if let Some(g) = &mut b.gpu {
                     g.comp.set_operators(doc.id, vec![operator(radius + (step % 2) as f32 * 4.0)]);
                 }
-                b.render(&doc, view)
+                b.render_gpu(&doc, view)
             });
         }
         // Unsharp Mask (Phase 4): the exact blur and its combine, per slider step.
@@ -379,7 +407,7 @@ fn main() {
             if let Some(g) = &mut b.gpu {
                 g.comp.set_operators(doc.id, vec![unsharp(radius)]);
             }
-            let first = b.render(&doc, view);
+            let first = b.render_gpu(&doc, view);
             println!("  (GPU-resident Unsharp Mask r {radius}: first frame with the window upload {first:.1} ms)");
             let mut step = 0;
             b.time(&format!("Unsharp Mask dialog preview r {radius} (GPU resident)"), |b| {
@@ -387,7 +415,7 @@ fn main() {
                 if let Some(g) = &mut b.gpu {
                     g.comp.set_operators(doc.id, vec![unsharp(radius + (step % 2) as f32)]);
                 }
-                b.render(&doc, view)
+                b.render_gpu(&doc, view)
             });
             // What the CPU preview runs instead at 100 %: the filter over the whole layer.
             let surf = doc.layer(target).and_then(|l| l.surface()).expect("surface");
@@ -429,7 +457,7 @@ fn main() {
             if let Some(g) = &mut b.gpu {
                 g.comp.set_operators(doc.id, vec![window(&params(0.0))]);
             }
-            let first = b.render(&doc, view);
+            let first = b.render_gpu(&doc, view);
             println!("  (GPU-resident {name}: first frame with the window upload {first:.1} ms)");
             let mut step = 0;
             b.time(&format!("{name} dialog preview (GPU resident)"), |b| {
@@ -437,7 +465,7 @@ fn main() {
                 if let Some(g) = &mut b.gpu {
                     g.comp.set_operators(doc.id, vec![window(&params((step % 2) as f32))]);
                 }
-                b.render(&doc, view)
+                b.render_gpu(&doc, view)
             });
             let surf = doc.layer(target).and_then(|l| l.surface()).expect("surface");
             let fp = params(0.0);
@@ -466,7 +494,7 @@ fn main() {
         if let Some(g) = &mut b.gpu {
             g.comp.set_operators(doc.id, vec![displace(12.8)]);
         }
-        let first = b.render(&doc, view);
+        let first = b.render_gpu(&doc, view);
         println!("  (GPU-resident Displace: first frame with the whole-extent window and map upload {first:.1} ms)");
         let mut step = 0;
         b.time("Displace dialog preview 10 % (GPU resident)", |b| {
@@ -474,7 +502,7 @@ fn main() {
             if let Some(g) = &mut b.gpu {
                 g.comp.set_operators(doc.id, vec![displace(12.8 + (step % 2) as f32)]);
             }
-            b.render(&doc, view)
+            b.render_gpu(&doc, view)
         });
         {
             let surf = doc.layer(target).and_then(|l| l.surface()).expect("surface");
@@ -528,7 +556,7 @@ fn main() {
                 if let Some(g) = &mut b.gpu {
                     g.comp.set_operators(doc.id, vec![distort(&params((step % 2) as f32))]);
                 }
-                b.render(&doc, view)
+                b.render_gpu(&doc, view)
             });
             let surf = doc.layer(target).and_then(|l| l.surface()).expect("surface");
             let t = Instant::now();
@@ -565,7 +593,7 @@ fn main() {
             if let Some(g) = &mut b.gpu {
                 g.comp.set_operators(doc.id, vec![lens_operator(30.0 + (step % 2) as f32)]);
             }
-            b.render(&doc, view)
+            b.render_gpu(&doc, view)
         });
         {
             let surf = doc.layer(target).and_then(|l| l.surface()).expect("surface");
@@ -573,6 +601,39 @@ fn main() {
             let t = Instant::now();
             std::hint::black_box(photocraft_algo::apply(surf, &fp, photocraft_algo::output_area(&fp, content, doc.bounds(), None), doc.bounds(), None));
             println!("  (the CPU's Lens Blur r 30 over the whole layer: {:.0} ms)", ms(t));
+        }
+        // Apply Image: the merged image onto the layer in Overlay, per opacity step; its source is
+        // made once per dialog session (timed here once).
+        let t = Instant::now();
+        let inputs = photocraft_ui_egui::filter_gpu_preview::apply_inputs(&doc, target, &json!({})).expect("the source");
+        println!("  (Apply Image's source, made once per session: {:.0} ms)", ms(t));
+        let apply = |opacity: f64| {
+            let a = photocraft_ui_egui::filter_gpu_preview::apply_params(&json!({"blending": "overlay", "opacity": opacity}), inputs.clone())
+                .expect("the settings");
+            let program =
+                photocraft_gpu::GaussianBlur::new(photocraft_gpu::SeparableBlur::Apply(std::sync::Arc::new(a)), extent, doc.bounds(), None, false, doc.depth)
+                    .expect("a runnable apply image");
+            photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
+        };
+        if let Some(g) = &mut b.gpu {
+            g.comp.set_operators(doc.id, vec![apply(80.0)]);
+        }
+        let first = b.render_gpu(&doc, view);
+        println!("  (GPU-resident Apply Image: first frame with the source upload {first:.1} ms)");
+        let mut step = 0;
+        b.time("Apply Image (Overlay) dialog preview (GPU resident)", |b| {
+            step += 1;
+            if let Some(g) = &mut b.gpu {
+                g.comp.set_operators(doc.id, vec![apply(80.0 + (step % 2) as f64)]);
+            }
+            b.render_gpu(&doc, view)
+        });
+        {
+            let mut cpu = Session::new();
+            cpu.add_document((*doc).clone(), None);
+            let t = Instant::now();
+            exec(&mut cpu, "image.applyImage", json!({"blending": "overlay", "opacity": 80}));
+            println!("  (the CPU's Apply Image over the whole layer: {:.0} ms)", ms(t));
         }
         if let Some(g) = &mut b.gpu {
             g.comp.clear_operators(doc.id);
@@ -599,7 +660,7 @@ fn main() {
                 if let Some(g) = &mut b.gpu {
                     g.comp.set_operators(proxy.id, vec![proxy_operator(radius)]);
                 }
-                let first = b.render(&proxy, proxy.bounds());
+                let first = b.render_gpu(&proxy, proxy.bounds());
                 println!("  (GPU-resident proxy preview k {k} r {radius}: first frame with the window upload {first:.1} ms)");
                 let mut step = 0;
                 b.time(&format!("Gaussian Blur dialog preview r {radius} (GPU resident, zoomed out)"), |b| {
@@ -607,7 +668,7 @@ fn main() {
                     if let Some(g) = &mut b.gpu {
                         g.comp.set_operators(proxy.id, vec![proxy_operator(radius + (step % 2) as f32 * 4.0)]);
                     }
-                    b.render(&proxy, proxy.bounds())
+                    b.render_gpu(&proxy, proxy.bounds())
                 });
             }
             if let Some(g) = &mut b.gpu {
@@ -840,7 +901,7 @@ fn main() {
             .collect();
         std::fs::write(
             &out,
-            serde_json::to_string_pretty(&json!({"width": w, "height": h, "gpu": b.gpu.is_some(), "rows": rows, "context": {"skipped": b.skipped}})).unwrap(),
+            serde_json::to_string_pretty(&json!({"width": w, "height": h, "gpu": b.gpu.is_some(), "rows": rows, "context": {"skipped": b.skipped, "errors": b.errors.iter().map(|(n, e)| json!({"name": n, "error": e})).collect::<Vec<_>>()}})).unwrap(),
         )
         .expect("write json");
     }
