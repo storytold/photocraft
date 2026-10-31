@@ -91,3 +91,42 @@ fn gradient_selection_respects_text_locks_and_tool_only_selection() {
         assert!(s.active().unwrap().doc.layer(id).unwrap().effects.items.is_empty());
     }
 }
+
+/// A new visible overlay leaves a hidden overlay's saved settings untouched.
+#[test]
+fn gradient_selection_keeps_hidden_overlay_when_adding_visible_one() {
+    let (mut s, id) = text_session();
+    s.execute("layer.layerStyle.gradientOverlay", json!({"angle": 37, "from": "#00ff00", "to": "#ffffff"})).unwrap();
+    s.execute("layer.setEffectsVisible", json!({"index": 0, "visible": false})).unwrap();
+    let before = s.active().unwrap().doc.layer(id).unwrap().effects.items.clone();
+    s.execute("gradient.presets.select", json!({"stops": [[0, "#ff0000"], [1, "#0000ff"]]})).unwrap();
+    let after = &s.active().unwrap().doc.layer(id).unwrap().effects.items;
+    assert_eq!(after[0], before[0], "the hidden overlay keeps its settings and stays hidden");
+    assert_eq!(after.len(), 2, "add a visible overlay instead of changing the hidden one");
+    assert!(matches!(&after[1], Effect::GradientOverlay { common, gradient, .. }
+        if common.enabled && gradient.stops == vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))]));
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.layer(id).unwrap().effects.items, before);
+}
+
+/// A hidden overlay before the visible one must not receive the preset change.
+#[test]
+fn gradient_selection_updates_visible_overlay_after_hidden_one() {
+    let (mut s, id) = text_session();
+    s.execute("layer.layerStyle.gradientOverlay", json!({"angle": 37, "from": "#00ff00", "to": "#ffffff"})).unwrap();
+    s.execute("layer.setEffectsVisible", json!({"index": 0, "visible": false})).unwrap();
+    s.execute("layer.layerStyle.gradientOverlay", json!({"add": true, "angle": 73, "opacity": 45, "style": "radial"})).unwrap();
+    let before = s.active().unwrap().doc.layer(id).unwrap().effects.items.clone();
+    s.execute("gradient.presets.select", json!({"stops": [[0, "#ff0000"], [1, "#0000ff"]]})).unwrap();
+    let after = &s.active().unwrap().doc.layer(id).unwrap().effects.items;
+    assert_eq!(after.len(), 2, "reuse the existing visible overlay");
+    assert_eq!(after[0], before[0], "the hidden overlay stays untouched");
+    let mut expected = before[1].clone();
+    if let Effect::GradientOverlay { gradient, interpolation, .. } = &mut expected {
+        gradient.stops = vec![(0.0, Color::rgb(1.0, 0.0, 0.0)), (1.0, Color::rgb(0.0, 0.0, 1.0))];
+        *interpolation = None;
+    }
+    assert_eq!(after[1], expected, "the visible overlay changes without resetting its geometry");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(s.active().unwrap().doc.layer(id).unwrap().effects.items, before);
+}

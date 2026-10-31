@@ -461,7 +461,7 @@ fn text_gradient(s: &mut Session, id: photocraft_doc::LayerId, g: &GradientPrese
         let stops = stops.into_iter().map(|(t, c)| (t, c.in_mode(doc.mode))).collect();
         let layer = doc.layer_mut(id).ok_or(crate::EngineError::NoLayer(id))?;
         if let Some(Effect::GradientOverlay { gradient, interpolation, .. }) =
-            layer.effects.items.iter_mut().find(|e| matches!(e, Effect::GradientOverlay { .. }))
+            layer.effects.items.iter_mut().find(|e| matches!(e, Effect::GradientOverlay { common, .. } if common.enabled))
         {
             gradient.stops = stops;
             gradient.opacity_stops = opacity_stops;
