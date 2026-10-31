@@ -196,46 +196,25 @@ fn new_layer_without_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) -> boo
 }
 
 /// Make Selection from Path's shortcut (⌘↩ by default) with ⇧ adds the path to the selection, with
-/// ⌥ subtracts it and with both intersects, as in Photoshop (#7726). A combination bound to
-/// something else keeps its binding.
-fn path_selection_chords(app: &mut PhotocraftApp, ctx: &egui::Context, focus: crate::shortcut_dispatch::Focus) -> bool {
-    const TO_SELECTION: &str = "path.toSelection";
-    let Some(base) = effective_shortcut(app, TO_SELECTION, default_shortcut(TO_SELECTION).as_deref()).and_then(|s| parse(&s)) else {
-        return false;
+/// ⌥ subtracts it and with both intersects, as in Photoshop (#7726): those chords and their
+/// `mode`s, none when the shortcut has ⇧ or ⌥ already. [`crate::shortcut_dispatch::dispatch_pressed`]
+/// runs them in order with the frame's other shortcuts, and a press a binding matches keeps its
+/// binding.
+pub fn path_selection_chords(app: &PhotocraftApp) -> Vec<(KeyboardShortcut, &'static str)> {
+    let Some(base) = effective_shortcut(app, PATH_TO_SELECTION, default_shortcut(PATH_TO_SELECTION).as_deref()).and_then(|s| parse(&s)) else {
+        return Vec::new();
     };
     if base.modifiers.shift || base.modifiers.alt {
-        return false;
+        return Vec::new();
     }
-    let mut bound: Option<Vec<(String, KeyboardShortcut)>> = None;
-    for (shift, alt, mode) in [(true, true, "intersect"), (true, false, "add"), (false, true, "subtract")] {
-        let mut sc = base;
-        sc.modifiers.shift = shift;
-        sc.modifiers.alt = alt;
-        let pressed =
-            ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if key_matches(&sc, *key, *modifiers))));
-        if !pressed || !focus.allows(&sc) {
-            continue;
-        }
-        // A press a binding matches by the dispatcher's rules stays the binding's, even one not
-        // written as `sc`: off the Mac, Ctrl+Shift+Enter is also ⇧⌘↩.
-        let bound = bound.get_or_insert_with(|| crate::shortcut_dispatch::bindings(app));
-        let free = |key: Key, mods: Modifiers| key_matches(&sc, key, mods) && !bound.iter().any(|(_, b)| key_matches(b, key, mods));
-        let consumed = ctx.input_mut(|i| {
-            let before = i.events.len();
-            i.events.retain(|e| !matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if free(*key, *modifiers)));
-            i.events.len() != before
-        });
-        if !consumed {
-            continue;
-        }
-        if let Err(e) = crate::vector_ui::path_to_selection(app, json!({"mode": mode})) {
-            app.ui.status = e;
-            app.ui.status_error = true;
-        }
-        return true;
-    }
-    false
+    [(true, true, "intersect"), (true, false, "add"), (false, true, "subtract")]
+        .into_iter()
+        .map(|(shift, alt, mode)| (KeyboardShortcut::new(Modifiers { shift, alt, ..base.modifiers }, base.logical_key), mode))
+        .collect()
 }
+
+/// Layer › Make Selection from Path's command, whose ⇧ / ⌥ chords are [`path_selection_chords`].
+pub const PATH_TO_SELECTION: &str = "path.toSelection";
 
 fn nav_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     let Some(id) = nav_shortcut(app, ctx) else { return false };
@@ -803,11 +782,8 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     if new_layer_without_dialog(app, ctx) {
         return true;
     }
-    // ⇧⌘↩ / ⌥⌘↩ / ⇧⌥⌘↩: the path added to, subtracted from or intersected with the selection.
-    if !editing && path_selection_chords(app, ctx, focus) {
-        return true;
-    }
-    // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]).
+    // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]), and
+    // ⇧⌘↩ / ⌥⌘↩ / ⇧⌥⌘↩ (the path added to, subtracted from or intersected with the selection).
     if crate::shortcut_dispatch::dispatch_pressed(app, ctx, focus, editing) {
         return true;
     }

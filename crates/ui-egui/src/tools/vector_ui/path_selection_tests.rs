@@ -544,3 +544,27 @@ fn a_binding_matching_the_same_press_keeps_it_from_the_chord() {
     assert_eq!(log, ["select.inverse"]);
     assert!((selected_area(&h) - 14000.0).abs() < 0.5, "inverted, not added to: {} px", selected_area(&h));
 }
+
+/// The chords run in order with the frame's other shortcuts (#440): ⌘D then ⇧⌘↩ in one frame
+/// leaves the path alone selected, and ⇧⌘↩ then ⌘D nothing. Pushed straight into the input,
+/// since `Harness::event` runs a frame per event.
+#[test]
+fn chords_run_in_order_with_other_shortcuts_in_the_same_frame() {
+    let shift = Modifiers { shift: true, ..command() };
+    for (keys, area) in [([(Key::D, command()), (Key::Enter, shift)], 2000.0), ([(Key::Enter, shift), (Key::D, command())], 0.0)] {
+        let mut h = harness();
+        h.state_mut().run("path.set", json!({"name": "work", "path": rect_path(80.0, 40.0, 100.0, 20.0)})).unwrap();
+        h.state_mut().run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 60, "antiAlias": false})).unwrap();
+        h.state_mut().ui.tool = Tool::Brush;
+        h.run_steps(2);
+        let events = &mut h.input_mut().events;
+        for (key, m) in keys {
+            events.push(Event::ModifiersChanged(m));
+            events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: m });
+            events.push(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers: m });
+        }
+        events.push(Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(3);
+        assert!((selected_area(&h) - area).abs() < 0.5, "{keys:?}: {} px, wanted {area}: {}", selected_area(&h), h.state().ui.status);
+    }
+}

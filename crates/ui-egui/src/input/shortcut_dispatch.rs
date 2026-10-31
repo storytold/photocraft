@@ -232,22 +232,36 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         return false;
     }
     const TEXT_OWNED: [&str; 6] = ["edit.copy", "edit.cut", "edit.paste", "edit.copyMerged", "select.all", "edit.pasteSpecial.pasteInPlace"];
+    let all = bindings(app);
     let table: Vec<(String, KeyboardShortcut)> =
-        bindings(app).into_iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).collect();
+        all.iter().filter(|(id, sc)| focus.allows(sc) && !(editing && TEXT_OWNED.contains(&id.as_str()))).cloned().collect();
+    // ⇧ / ⌥ with Make Selection from Path's key combine the path with the selection (#7726).
+    let chords: Vec<(KeyboardShortcut, &str)> =
+        if editing { Vec::new() } else { crate::shortcuts::path_selection_chords(app).into_iter().filter(|(sc, _)| focus.allows(sc)).collect() };
     let command = |e: &egui::Event| match e {
         egui::Event::Key { key, physical_key, pressed: true, modifiers, .. } => {
             let by_position = physical_key
                 .filter(|p| POSITIONAL.contains(p))
                 .and_then(|p| table.iter().find(|(_, sc)| sc.modifiers.command && sc.logical_key == p && key_matches(sc, p, *modifiers)));
-            let bound =
-                by_position.or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers))).map(|(id, _)| (id.clone(), *key == Key::Tab, false));
+            let bound = by_position
+                .or_else(|| table.iter().find(|(_, sc)| key_matches(sc, *key, *modifiers)))
+                .map(|(id, _)| (id.clone(), *key == Key::Tab, false, None));
             // Photoshop: ⌥ added to an adjustment's own key opens it at its last settings (⌥⌘L,
             // ⌥⌘M, #8900), unless that key is bound to something else.
-            bound.or_else(|| {
-                let plain = egui::Modifiers { alt: false, ..*modifiers };
-                let last = modifiers.alt.then(|| table.iter().find(|(id, sc)| crate::adjust_dialog::has_dialog(id) && key_matches(sc, *key, plain))).flatten();
-                last.map(|(id, _)| (id.clone(), false, true))
-            })
+            bound
+                .or_else(|| {
+                    let plain = egui::Modifiers { alt: false, ..*modifiers };
+                    let last =
+                        modifiers.alt.then(|| table.iter().find(|(id, sc)| crate::adjust_dialog::has_dialog(id) && key_matches(sc, *key, plain))).flatten();
+                    last.map(|(id, _)| (id.clone(), false, true, None))
+                })
+                .or_else(|| {
+                    // A press any binding matches stays the binding's, even one this focus leaves
+                    // alone, or one not written as the chord (Ctrl+Shift+Enter is ⇧⌘↩ off the Mac).
+                    let free = !all.iter().any(|(_, sc)| key_matches(sc, *key, *modifiers));
+                    let chord = chords.iter().find(|(sc, _)| free && key_matches(sc, *key, *modifiers));
+                    chord.map(|(_, mode)| (crate::shortcuts::PATH_TO_SELECTION.to_string(), false, false, Some(*mode)))
+                })
         }
         _ => None,
     };
@@ -258,7 +272,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
             i.events.remove(at);
             Some(hit)
         });
-        let Some((id, tab, last)) = next else { break };
+        let Some((id, tab, last, mode)) = next else { break };
         if tab {
             // egui already read this Tab as "focus the next widget" (Photoshop's Tab hides the
             // panels instead, #1313): the shortcut took it, so cancel that move.
@@ -266,7 +280,7 @@ pub fn dispatch_pressed(app: &mut PhotocraftApp, ctx: &egui::Context, focus: Foc
         }
         let id = clip_key_command(app, delete_key_command(app, id));
         let owner = key_owner(app, ctx);
-        dispatch_as(app, ctx, &id, last);
+        dispatch_as(app, ctx, &id, last, mode.map_or_else(|| json!({}), |mode| json!({"mode": mode})));
         ran = true;
         if key_owner(app, ctx) != owner {
             break;
@@ -359,11 +373,12 @@ fn label(id: &str) -> String {
 
 /// Run a shortcut's command like its menu item (dialogs included), or say why it can't run.
 pub fn dispatch(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str) {
-    dispatch_as(app, ctx, id, false);
+    dispatch_as(app, ctx, id, false, json!({}));
 }
 
-/// [`dispatch`]; with `last`, an adjustment dialog opens at its last confirmed settings.
-fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: bool) {
+/// [`dispatch`]; with `last`, an adjustment dialog opens at its last confirmed settings. `params`
+/// go to a command run directly (the mode of a Make Selection from Path chord).
+fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: bool, params: serde_json::Value) {
     let action = id.strip_prefix(crate::actions::SHORTCUT_PREFIX);
     let command_id = if action.is_some() { "actions.play" } else { id };
     let outcome = if !crate::menus::is_enabled(app, command_id) {
@@ -390,7 +405,7 @@ fn dispatch_as(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, last: boo
             }
             Ok(serde_json::Value::Null)
         } else {
-            crate::menus::invoke(app, ctx, id, json!({}))
+            crate::menus::invoke(app, ctx, id, params)
         };
         match r {
             Ok(_) => Outcome::Ran,
