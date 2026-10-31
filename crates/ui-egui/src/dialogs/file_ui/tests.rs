@@ -475,6 +475,74 @@ fn save_for_web_authorizes_generated_palette_before_opening_a_picker() {
     }
 }
 
+/// #8830: an invalid Matte (`#1111`, empty; set here the way `ui.dialog.set` would) makes the
+/// preview's encode fail, and the error the dialog shows must not widen it.
+#[test]
+fn save_for_web_keeps_its_width_while_the_matte_is_invalid() {
+    let (mut app, _) = app();
+    let id = open_web(&mut app);
+    app.ui.dialog_mut(id).unwrap().fields.insert("format".into(), json!("png8"));
+    app.ui.dialog_mut(id).unwrap().fields.insert("matte".into(), json!("#111111"));
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1100.0)).build_ui_state(
+        |ui, app| {
+            if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                crate::dialogs::show(app, ui.ctx());
+            }
+        },
+        app,
+    );
+    PhotocraftApp::setup_context(&h.ctx, Default::default());
+    h.run_steps(5);
+    let dialog = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.ctx.data(|m| m.get_temp::<Vec<egui::Rect>>(egui::Id::unique("pc-dialog-rects"))).unwrap()[0];
+    let before = dialog(&h);
+    for matte in ["#1111", "", "#22222", "#111111"] {
+        h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("matte".into(), json!(matte));
+        h.run_steps(4);
+        let after = dialog(&h);
+        assert_eq!(after.width(), before.width(), "matte {matte:?}: before {before:?}, after {after:?}");
+    }
+}
+
+/// #8830: a typed Matte reaches the settings only once it is a whole colour (or `none`), so the
+/// previews never see a partial one such as `#1111` while the user is still typing, and the dialog
+/// does not resize under them (the report: "the whole interface jumps wider").
+#[test]
+fn save_for_web_matte_takes_only_whole_colours() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let (app, _) = app();
+    let (mut h, id) = web_size_dialog(app);
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("format".into(), json!("png8"));
+    h.run_steps(3);
+    let matte = |h: &egui_kittest::Harness<'static, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["matte"].clone();
+    let dialog =
+        |h: &egui_kittest::Harness<'static, PhotocraftApp>| h.ctx.data(|m| m.get_temp::<Vec<egui::Rect>>(egui::Id::unique("pc-dialog-rects"))).unwrap()[0];
+    let before = dialog(&h);
+    let field = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| n.accesskit_node().value().as_deref() == Some("#ffffff"))
+        .map(|n| n.rect())
+        .expect("the Matte field");
+    h.hover_at(field.center());
+    h.run_steps(1);
+    h.drag_at(field.center());
+    h.run_steps(1);
+    h.drop_at(field.center());
+    h.run_steps(2);
+    for (typed, want) in [("#1111", "#ffffff"), ("", "#ffffff"), ("#22222g", "#ffffff"), ("#2A2a2A", "#2a2a2a"), ("None", "none")] {
+        h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+        h.key_press(egui::Key::Backspace);
+        if !typed.is_empty() {
+            h.event(egui::Event::Text(typed.into()));
+        }
+        h.run_steps(2);
+        let now = dialog(&h);
+        assert_eq!((now.width(), now.height()), (before.width(), before.height()), "typing {typed:?} resized the dialog: {before:?} -> {now:?}");
+        assert_eq!(matte(&h), json!(want), "typed {typed:?}");
+        let shown = h.query_all_by_role(egui::accesskit::Role::TextInput).any(|n| n.accesskit_node().value().unwrap_or_default() == typed);
+        assert!(shown, "the field shows {typed:?} as typed");
+    }
+}
+
 #[test]
 fn web_preview_grows_with_resize_and_accepts_zoom_and_pan() {
     let (mut app, _) = app();
