@@ -280,7 +280,7 @@ fn upload(
 }
 
 /// The pixels of `buf` inside `region` (transparent if `buf` doesn't hold them all).
-fn crop(buf: &photocraft_compose::Buffer, region: photocraft_geom::Rect) -> photocraft_compose::Buffer {
+pub(crate) fn crop(buf: &photocraft_compose::Buffer, region: photocraft_geom::Rect) -> photocraft_compose::Buffer {
     let r = region.intersect(&buf.rect);
     let stride = buf.rect.width() as usize;
     let (dx, w) = ((r.x0 - buf.rect.x0) as usize, r.width() as usize);

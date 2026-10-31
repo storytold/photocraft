@@ -1348,6 +1348,9 @@ pub struct FilterPreview {
     /// preview peaks lower and frees more on Cancel than flattening the result again on the UI
     /// thread did; the composite alone would only add this memory.
     pub flat: Option<Arc<photocraft_compose::Buffer>>,
+    /// The part of `result` (its pixels) on the GPU canvas texture. At 100 % only what the view
+    /// shows is uploaded, and pans add to it (`canvas::upload_filter_preview_view`, #5772).
+    pub uploaded: photocraft_geom::Rect,
     /// OK was pressed and the filter runs as a background job: the preview stays on screen until
     /// the job lands, so the canvas doesn't flash the unfiltered image in between.
     pub committing: bool,
