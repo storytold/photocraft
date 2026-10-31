@@ -467,7 +467,7 @@ fn settings(f: &Map<String, Value>) -> ExportSettings {
         tga_bits: if fmt == "tga" { tga_bits(f) } else { None },
         embed_icc: f.get("embedProfile").and_then(Value::as_bool).unwrap_or(true),
         // Metadata: None drops EXIF as well as XMP; JPEG, PNG and TIFF keep the resolution. A
-        // missing key keeps them, which is what Export As wrote before the choice existed.
+        // missing key keeps EXIF, which is what Export As wrote before the choice existed.
         embed_metadata: metadata != "none",
         ..Default::default()
     }

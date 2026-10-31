@@ -43,14 +43,37 @@ fn webp_with_exif_resolution_imports_at_it_and_psd_save_follows_the_document() {
     assert_eq!(back.metadata.exif.as_deref().and_then(|e| exif_resolution(e)), Some((240.0, 240.0)));
 }
 
-/// A 300 ppi document opened from a TIFF of `layout` and `sample`, with EXIF and XMP.
+/// Big-endian EXIF with one camera tag: Make "NIKON".
+fn make_exif() -> Vec<u8> {
+    let mut v = b"MM\0*".to_vec();
+    v.extend_from_slice(&8u32.to_be_bytes());
+    v.extend_from_slice(&1u16.to_be_bytes());
+    v.extend_from_slice(&0x010Fu16.to_be_bytes());
+    v.extend_from_slice(&2u16.to_be_bytes());
+    v.extend_from_slice(&6u32.to_be_bytes());
+    v.extend_from_slice(&26u32.to_be_bytes());
+    v.extend_from_slice(&0u32.to_be_bytes());
+    v.extend_from_slice(b"NIKON\0");
+    v
+}
+
+/// The IFD0 tags of a TIFF-structured EXIF block, with or without the JPEG `Exif\0\0` prefix.
+fn ifd0_tags(exif: &[u8]) -> Vec<u16> {
+    let exif = exif.strip_prefix(b"Exif\0\0").unwrap_or(exif);
+    let big = exif.starts_with(b"MM");
+    let u16_at = |i: usize| if big { u16::from_be_bytes([exif[i], exif[i + 1]]) } else { u16::from_le_bytes([exif[i], exif[i + 1]]) };
+    let ifd = exif[4..8].try_into().map(|b| if big { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) }).unwrap() as usize;
+    (0..u16_at(ifd) as usize).map(|n| u16_at(ifd + 2 + n * 12)).collect()
+}
+
+/// A 300 ppi document opened from a TIFF of `layout` and `sample`, with camera EXIF and XMP.
 fn tagged_document(layout: ChannelLayout, sample: SampleType) -> photocraft_doc::Document {
     let n = 6 * 4 * layout.channels();
     let img = Image::from_raw(6, 4, layout, SampleType::U8, (0..n).map(|i| (i * 11) as u8).collect()).unwrap().convert(layout, sample);
     let tiff = photocraft_codecs::encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
     let mut doc = import("source.tif", &tiff).unwrap().document;
     doc.resolution_dpi = 300.0;
-    doc.metadata.exif = Some(camera_exif().into());
+    doc.metadata.exif = Some(make_exif().into());
     doc.metadata.xmp = Some("<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".into());
     doc
 }
@@ -72,7 +95,13 @@ fn export_with_metadata_off_keeps_the_document_resolution() {
             assert_eq!(back.meta.dpi, Some((300.0, 300.0)), "{what}");
             assert!(back.meta.xmp.is_none(), "{what}");
             // CMYK JPEG holds the resolution in an EXIF block without the source's tags.
-            assert!(back.meta.exif.is_none() || (layout, *ext) == (Cmyk, "jpg"), "{what}");
+            if (layout, *ext) == (Cmyk, "jpg") {
+                let mut tags = ifd0_tags(back.meta.exif.as_deref().unwrap());
+                tags.sort_unstable();
+                assert_eq!(tags, [282, 283, 296], "{what}");
+            } else {
+                assert!(back.meta.exif.is_none(), "{what}");
+            }
         }
     }
 }

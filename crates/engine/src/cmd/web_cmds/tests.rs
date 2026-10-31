@@ -306,7 +306,7 @@ fn png24_writes_the_resolution_only_with_metadata() {
     let dir = tmp("png24_resolution");
     let mut s = session(8);
     s.execute("file.fileInfo", json!({"copyright": "© Example"})).unwrap();
-    for (metadata, phys) in [("none", false), ("copyright", true)] {
+    for (metadata, phys) in [("none", false), ("copyright", true), ("all", true)] {
         let path = format!("{dir}/{metadata}.png");
         s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": path, "metadata": metadata})).unwrap();
         let bytes = std::fs::read(&path).unwrap();
