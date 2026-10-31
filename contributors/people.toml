@@ -282,3 +282,8 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.SimoneRecchia]
+real_name = "Simone Recchia"
+display_name = "Simone Recchia"
+sync_github_name = false

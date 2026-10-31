@@ -4181,3 +4181,9 @@ curves	Smooth	スムーズ
 	Select and Mask was closed: another layer was selected	「選択とマスク」を閉じました: 別のレイヤーが選択されました
 	Drag to move the selected path	ドラッグして選択したパスを移動
 	Edit Brush…	ブラシを編集…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	カラーピッカー
+	Recently Used Colors	最近使用したカラー
+	Stop Color	分岐点のカラー
+	Shapes can't use patterns yet	シェイプではまだパターンを使用できません

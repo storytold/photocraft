@@ -4575,3 +4575,8 @@ shape	Appearance	Izgled
 	Select Layer Under Cursor	Izaberi sloj ispod kursora
 	Drag to move the selected path	Prevucite da pomerite izabranu putanju
 	Edit Brush…	Uredi četkicu…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Nedavno korišćene boje
+	Stop Color	Boja tačke
+	Shapes can't use patterns yet	Oblici još ne mogu da koriste šare

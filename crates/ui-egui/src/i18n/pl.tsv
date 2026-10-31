@@ -4123,3 +4123,9 @@ curves	Smooth	Wygładź
 	Select and Mask was closed: another layer was selected	Zamknięto Zaznacz i maskuj: wybrano inną warstwę
 	Select Layer Under Cursor	Zaznacz warstwę pod kursorem
 	Edit Brush…	Edytuj pędzel…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	Próbnik kolorów
+	Recently Used Colors	Ostatnio używane kolory
+	Stop Color	Kolor punktu
+	Shapes can't use patterns yet	Kształty nie mogą jeszcze używać wzorków

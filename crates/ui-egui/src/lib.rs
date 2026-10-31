@@ -284,6 +284,7 @@ pub use tools::move_hover;
 pub use tools::move_lock;
 pub use tools::move_mods;
 pub use tools::object_finder;
+use tools::paint_picker;
 use tools::path_components;
 pub use tools::perspective_crop_ui;
 pub use tools::perspective_ui;
@@ -557,6 +558,9 @@ pub struct PhotocraftApp {
     pub(crate) pattern_fill_preview: Option<pattern_fill_ui::Preview>,
     /// Shape fill Color Picker preview (shape_fill_ui).
     pub(crate) shape_fill_preview: Option<shape_fill_ui::Preview>,
+    /// Colours a colour swatch widget's Color Picker returned with OK, waiting for the widget to
+    /// take them next frame (`color_picker_ui::widget_tick`): (widget id, sRGB).
+    pub(crate) widget_colors: Vec<(u64, [f32; 3])>,
     /// Liquify dialog, Puppet Warp and Perspective Warp sessions (distort_ui).
     pub(crate) distort: distort_ui::Distort,
     /// Gradient tool live-mode drags and previews (gradient_ui).

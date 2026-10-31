@@ -4262,3 +4262,8 @@ curves	Smooth	Vloeiend maken
 	Select and Mask was closed: another layer was selected	Selecteren en maskeren is gesloten: er is een andere laag geselecteerd
 	Select Layer Under Cursor	Laag onder cursor selecteren
 	Edit Brush…	Penseel bewerken…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Recent gebruikte kleuren
+	Stop Color	Kleur van het punt
+	Shapes can't use patterns yet	Vormen kunnen nog geen patronen gebruiken

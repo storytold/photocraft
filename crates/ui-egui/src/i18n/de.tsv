@@ -3524,3 +3524,11 @@ curves	Smooth	Glätten
 	Select and Mask was closed: its document is no longer the active one	Auswählen und maskieren wurde geschlossen: Das zugehörige Dokument ist nicht mehr aktiv
 	Select and Mask was closed: another layer was selected	Auswählen und maskieren wurde geschlossen: Es wurde eine andere Ebene ausgewählt
 	Edit Brush…	Pinsel bearbeiten…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	Farbwähler
+	Recently Used Colors	Zuletzt verwendete Farben
+	Stop Color	Farbe der Farbunterbrechung
+	Shapes can't use patterns yet	Formen können noch keine Muster verwenden
+	Solid Color	Volltonfarbe
+	Tint Color	Tönungsfarbe

@@ -4417,3 +4417,8 @@ navigator	Zoom	Zoom
 	Select Layer Under Cursor	Seleccionar capa bajo el cursor
 	Drag to move the selected path	Arrastre para mover el trazado seleccionado
 	Edit Brush…	Editar pincel…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Colores usados recientemente
+	Stop Color	Color de la parada
+	Shapes can't use patterns yet	Las formas aún no pueden usar motivos

@@ -4002,3 +4002,9 @@ curves	Smooth	Làm mượt
 	Select and Mask was closed: another layer was selected	Đã đóng Chọn và Mặt nạ: một lớp khác đã được chọn
 	Select Layer Under Cursor	Chọn lớp dưới con trỏ
 	Edit Brush…	Chỉnh sửa cọ…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	Bộ chọn màu
+	Recently Used Colors	Màu dùng gần đây
+	Stop Color	Màu điểm dừng
+	Shapes can't use patterns yet	Hình chưa thể dùng mẫu tô

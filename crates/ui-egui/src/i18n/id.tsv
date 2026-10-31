@@ -3525,3 +3525,11 @@ curves	Smooth	Haluskan
 	Select and Mask was closed: another layer was selected	Seleksi dan Mask ditutup: layer lain dipilih
 	Select Layer Under Cursor	Pilih Lapisan di Bawah Kursor
 	Edit Brush…	Edit Kuas…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	Pemilih Warna
+	Recently Used Colors	Warna yang Baru Digunakan
+	Stop Color	Warna Titik
+	Shapes can't use patterns yet	Bentuk belum dapat memakai pola
+	Solid Color	Warna Solid
+	Tint Color	Warna Tint

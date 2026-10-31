@@ -4432,3 +4432,8 @@ layerLabel	No Color	Sem cor
 	Select and Mask was closed: another layer was selected	Selecionar e mascarar foi fechado: outra camada foi selecionada
 	Drag to move the selected path	Arraste para mover o demarcador selecionado
 	Edit Brush…	Editar pincel…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Cores usadas recentemente
+	Stop Color	Cor da parada
+	Shapes can't use patterns yet	Formas ainda não podem usar padrões

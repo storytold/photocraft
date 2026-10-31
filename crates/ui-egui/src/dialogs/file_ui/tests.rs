@@ -483,6 +483,7 @@ fn web_preview_grows_with_resize_and_accepts_zoom_and_pan() {
     app.ui.dialog_mut(id).unwrap().fields.insert("__view".into(), json!("optimized"));
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1100.0)).build_ui_state(
         |ui, app| {
+            crate::color_picker_ui::widget_tick(app, ui.ctx());
             if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
                 crate::dialogs::show(app, ui.ctx());
             }
@@ -528,13 +529,15 @@ fn web_preview_grows_with_resize_and_accepts_zoom_and_pan() {
     h.run_steps(3);
     assert_ne!(h.state().ui.dialogs[0].fields["__center"], json!([0.5, 0.5]));
     assert_eq!(h.state().session.active().unwrap().revision, revision);
-    // Enter while editing a swatch must not export and close the parent dialog.
+    // A colour table swatch opens the Color Picker over the dialog; Enter confirms the picker
+    // only: it must not export and close the parent dialog.
     h.state_mut().ui.dialogs[0].fields.insert("format".into(), json!("gif"));
     h.run_steps(4);
     use egui_kittest::kittest::Queryable;
     h.get_by_role(egui::accesskit::Role::ColorWell).click();
     h.run_steps(3);
-    assert!(egui::Popup::is_any_open(&h.ctx));
+    assert_eq!(h.state().ui.dialogs.len(), 2);
+    assert!(crate::color_picker_ui::owns(&h.state().ui.dialogs[1].fields));
     h.key_press(egui::Key::Enter);
     h.run_steps(3);
     assert_eq!(h.state().ui.dialogs.len(), 1);

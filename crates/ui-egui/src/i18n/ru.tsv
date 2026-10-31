@@ -4702,3 +4702,8 @@ shape	Appearance	Оформление
 	Select and Mask was closed: its document is no longer the active one	Окно «Выделение и маска» закрыто: его документ больше не активен
 	Select and Mask was closed: another layer was selected	Окно «Выделение и маска» закрыто: выбран другой слой
 	Edit Brush…	Изменить кисть…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Недавно использованные цвета
+	Stop Color	Цвет контрольной точки
+	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры

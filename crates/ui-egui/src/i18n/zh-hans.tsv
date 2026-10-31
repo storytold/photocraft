@@ -3187,3 +3187,11 @@ curves	Smooth	平滑
 	Select and Mask was closed: another layer was selected	已关闭“选择与蒙版”：已选择另一个图层
 	Drag to move the selected path	拖动以移动选中的路径
 	Edit Brush…	编辑画笔…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	拾色器
+	Recently Used Colors	最近使用的颜色
+	Stop Color	色标颜色
+	Shapes can't use patterns yet	形状暂不支持图案
+	Solid Color	纯色
+	Tint Color	色调颜色

@@ -153,6 +153,7 @@ impl PhotocraftApp {
             solid_fill_preview: None,
             pattern_fill_preview: None,
             shape_fill_preview: None,
+            widget_colors: Vec::new(),
             distort: Default::default(),
             gradient: Default::default(),
             camera_raw: None,

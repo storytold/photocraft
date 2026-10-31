@@ -4205,3 +4205,8 @@ curves	Smooth	Εξομάλυνση
 	Select and Mask was closed: another layer was selected	Η Επιλογή και μάσκα έκλεισε: επιλέχθηκε άλλο επίπεδο
 	Select Layer Under Cursor	Επιλογή επιπέδου κάτω από τον δρομέα
 	Edit Brush…	Επεξεργασία πινέλου…
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Χρώματα που χρησιμοποιήθηκαν πρόσφατα
+	Stop Color	Χρώμα στάσης
+	Shapes can't use patterns yet	Τα σχήματα δεν μπορούν ακόμη να χρησιμοποιούν μοτίβα
