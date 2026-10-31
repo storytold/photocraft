@@ -112,6 +112,11 @@ pub(super) fn paint_clipping_indicator(painter: &egui::Painter, at: Pos2, color:
     painter.add(egui::Shape::line(vec![at + vec2(2.0, 0.0), tip, at + vec2(8.0, 0.0)], stroke));
 }
 
+/// Height of an artboard's row. Photoshop sets artboards apart from layers and groups in the
+/// Layers panel: a shorter row with the name in bold and no thumbnail (a board is a canvas, not a
+/// folder), so the boards read as headings over their layers (#10218).
+pub(super) const ARTBOARD_ROW_H: f32 = 26.0;
+
 /// One row of the Layers panel for `l`, `depth` levels inside groups or artboards: it paints the
 /// row, queues what a click or drag on it asks for in `actions`, and returns the row's rect.
 #[allow(clippy::too_many_arguments)]
@@ -129,6 +134,9 @@ pub(super) fn layer_row(
     let t = Tokens::get(ctx);
     // The Layers Panel Options thumbnail size controls rows and both layer/mask thumbnails.
     let (base, row_h) = crate::layers_panel_ui::thumbnail_geometry(app.ui.layers_panel_options.thumbnail_size, t.pro);
+    let artboard = l.artboard().is_some();
+    // Never taller than a layer's row: with thumbnails off every row is already compact.
+    let (base, row_h) = if artboard { (0.0, row_h.min(ARTBOARD_ROW_H)) } else { (base, row_h) };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
     // With thumbnails off no mask thumbnail is drawn, so none may keep catching drags from older frames.
     if base == 0.0 {
@@ -160,6 +168,10 @@ pub(super) fn layer_row(
         app.hover_layer = Some(l.id);
     }
     paint_row_background(&painter, &t, l, rect, selected, is_hovered);
+    if artboard && !selected && !is_hovered {
+        // A faint band behind the board's row, so where each board starts stands out in a long list.
+        painter.rect_filled(rect, if t.pro { 0.0 } else { t.radius }, t.hover.gamma_multiply(0.35));
+    }
     let mut x = rect.left() + 6.0;
     let eye_resp = eye_column(app, ui, l, row, rect, actions);
     // Everything but the thumbnails, the indentation and the name, so a narrow panel squeezes
@@ -360,7 +372,15 @@ fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Token
 fn paint_row_name(painter: &egui::Painter, t: &Tokens, rc: &RowCtx<'_>, x: f32, name_right: f32) -> Option<Rect> {
     let (l, doc, rect, ts, selected) = (rc.l, rc.doc, rc.rect, rc.ts, rc.row.selected);
     let name_color = if l.visible { t.text } else { t.text_faint };
-    let font = if selected && !t.pro { theme::medium(13.0) } else { egui::FontId::proportional(if t.pro { 12.0 } else { 13.0 }) };
+    let size = if t.pro { 12.0 } else { 13.0 };
+    let font = if l.artboard().is_some() {
+        // Artboards are named in bold, as in Photoshop.
+        theme::semibold(size)
+    } else if selected && !t.pro {
+        theme::medium(13.0)
+    } else {
+        egui::FontId::proportional(size)
+    };
     // Photoshop before 2026 set the Background layer's name in italics; 2026 sets it upright.
     let italic = !t.pro && doc.is_background(l.id);
     // Photoshop rows show only the name; the kind sub-label is a Studio-theme addition.

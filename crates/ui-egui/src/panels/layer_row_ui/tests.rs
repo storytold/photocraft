@@ -742,3 +742,33 @@ fn a_hidden_layers_eye_box_paints_nothing() {
         assert_eq!(in_eye_box(hidden), 0, "{theme}: a hidden layer's eye box is left empty");
     }
 }
+
+/// #10218: an artboard's row is set apart from layers and groups, as in Photoshop: shorter, with no
+/// thumbnail (a board isn't a folder), while a plain group keeps its folder thumbnail.
+#[test]
+fn artboard_rows_have_no_thumbnail_and_a_shorter_row() {
+    // A board holding a layer, and a plain group beside it; returns their ids.
+    let make = || {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
+        let layer = s.execute("layer.new.layer", json!({"name": "Inside"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("edit.fill", json!({"contents": "color", "color": "#336699"})).unwrap();
+        let board = s.execute("layer.new.artboardFromLayers", json!({"name": "Board"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.new.layer", json!({"name": "Loose"})).unwrap();
+        let group = s.execute("layer.groupLayers", json!({"name": "Folder"})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("layer.setExpanded", json!({"all": true, "expanded": true})).unwrap();
+        (s, board, layer, group)
+    };
+    for theme in ["pro", "studio"] {
+        let (s, board, layer, group) = make();
+        let h = harness(s, 1.0, theme, 320.0);
+        let rows = recorded(&h.ctx);
+        let row = |id: u64| rows.iter().find(|r| r.layer == id).unwrap_or_else(|| panic!("{theme}: row for {id}"));
+        let (b, l, g) = (row(board), row(layer), row(group));
+        assert!(b.thumbnail.is_none(), "{theme}: the artboard has no thumbnail");
+        assert!(g.thumbnail.is_some(), "{theme}: a plain group keeps its folder thumbnail");
+        assert!(l.thumbnail.is_some(), "{theme}: a layer keeps its thumbnail");
+        assert!(b.row.height() < l.row.height(), "{theme}: the artboard row is shorter ({} vs {})", b.row.height(), l.row.height());
+        assert!(b.name.is_some(), "{theme}: the board's name is shown");
+    }
+}
