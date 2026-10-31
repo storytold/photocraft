@@ -224,9 +224,17 @@ impl Affine {
             return None;
         }
         let [a, b, c, d, e, f] = self.m;
-        // `hypot` does not overflow where `a * a + b * b` would; a zero column gives 0 <= 0.
-        let columns = a.hypot(b) * c.hypot(d);
-        if det.abs() <= 1e-12 * columns {
+        // Scale each column by its largest component first. The sine of the angle between the
+        // columns is then `det' / (|col1'| * |col2'|)` with every term in a safe range, whereas
+        // multiplying the raw column lengths overflows for finite, invertible inputs such as
+        // `[1e154, 1e154, 1e154, 1.5e154]`. A zero column (largest component 0) is singular.
+        let (s1, s2) = (a.abs().max(b.abs()), c.abs().max(d.abs()));
+        if s1 == 0.0 || s2 == 0.0 {
+            return None;
+        }
+        let (a1, b1, c1, d1) = (a / s1, b / s1, c / s2, d / s2);
+        let sine = (a1 * d1 - b1 * c1) / (a1.hypot(b1) * c1.hypot(d1));
+        if sine.abs() <= 1e-12 {
             return None;
         }
         let inv = 1.0 / det;
@@ -406,6 +414,20 @@ mod tests {
         assert!(Affine { m: [1.0, 0.0, 1.0, 1e-13, 0.0, 0.0] }.inverse().is_none());
         // ...while a modest shear stays invertible.
         assert!(Affine { m: [1.0, 0.0, 1.0, 1e-6, 0.0, 0.0] }.inverse().is_some());
+    }
+
+    #[test]
+    fn affine_inverse_does_not_overflow_on_huge_finite_columns() {
+        // The product of the raw column lengths is `inf` here, yet the matrix is invertible
+        // (det ~ 5e307, finite) and the old absolute test accepted it.
+        let t = Affine { m: [1e154, 1e154, 1e154, 1.5e154, 0.0, 0.0] };
+        let inv = t.inverse().unwrap_or(Affine::IDENTITY);
+        assert_ne!(inv, Affine::IDENTITY);
+        assert!(inv.m.iter().all(|v| v.is_finite()));
+        // Rank-1 matrices of the same magnitude are still singular.
+        assert!(Affine { m: [1e154, 1e154, 2e154, 2e154, 0.0, 0.0] }.inverse().is_none());
+        // And so is a zero column of any magnitude next to a huge one.
+        assert!(Affine { m: [0.0, 0.0, 1e300, 1e300, 0.0, 0.0] }.inverse().is_none());
     }
 
     #[test]
