@@ -28,6 +28,9 @@ pub(crate) struct SaveOpts {
     /// DDS: the compression and whether to write the mip chain (`"ddsCompression"`,
     /// `"ddsMipmaps"`); unset, uncompressed without mipmaps.
     pub dds: photocraft_io::DdsOptions,
+    /// PDF: spot channels as overprinting Separation plates (`"pdfSpotPlates"`); on unless the
+    /// params say `false`.
+    pub pdf_spot_plates: bool,
     /// PSD/PSB: embed the thumbnail resource (Preferences › File Handling › Image Previews).
     pub image_previews: bool,
     /// PSD/PSB: write the real merged image (Preferences › File Handling › Maximize PSD and PSB
@@ -45,6 +48,7 @@ impl Default for SaveOpts {
             dpx_bits: None,
             tiff_compression: None,
             dds: photocraft_io::DdsOptions::default(),
+            pdf_spot_plates: true,
             image_previews: true,
             psd_maximize_compatibility: true,
         }
@@ -67,6 +71,7 @@ impl SaveOpts {
             dpx_bits: dpx_bits_param(p, cmd)?,
             tiff_compression: tiff_compression_param(p, cmd)?,
             dds: dds_param(p, cmd)?.unwrap_or_default(),
+            pdf_spot_plates: pdf_spot_plates_param(p, cmd)?,
             image_previews: file_handling.image_previews != crate::prefs::Ask::Never,
             psd_maximize_compatibility: file_handling.maximize_psd_compatibility != crate::prefs::Ask::Never,
         })
@@ -81,6 +86,15 @@ impl SaveOpts {
 impl From<Option<f64>> for SaveOpts {
     fn from(quality: Option<f64>) -> Self {
         SaveOpts { quality, ..Default::default() }
+    }
+}
+
+/// Whether a PDF save in `p` writes spot plates (`"pdfSpotPlates": bool`; absent or null: yes).
+/// Anything else is a bad parameter of command `cmd`.
+pub fn pdf_spot_plates_param(p: &Value, cmd: &str) -> Result<bool> {
+    match p.get("pdfSpotPlates") {
+        None | Some(Value::Null) => Ok(true),
+        Some(v) => v.as_bool().ok_or_else(|| EngineError::BadParams { cmd: cmd.into(), msg: format!("`pdfSpotPlates` must be true or false, got {v}") }),
     }
 }
 
@@ -176,6 +190,7 @@ pub(crate) fn encode(doc: &Document, path: &str, save: impl Into<SaveOpts>) -> R
     let mut opts = photocraft_io::ExportOptions {
         tiff_layers: save.tiff_layers,
         tga_bits: save.tga_bits,
+        pdf_spot_plates: save.pdf_spot_plates,
         image_previews: save.image_previews,
         psd_maximize_compatibility: save.psd_maximize_compatibility,
         // Linked files a PSD embeds are resolved against the document being worked on.

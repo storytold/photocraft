@@ -126,8 +126,13 @@ impl Headless {
             "doc.new" => self.command_run("file.new", p),
             "doc.save" => {
                 let tga_bits = photocraft_engine::file_cmds::tga_bits_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
-                let mut opts =
-                    photocraft_io::ExportOptions { tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false), tga_bits, ..Default::default() };
+                let pdf_spot_plates = photocraft_engine::file_cmds::pdf_spot_plates_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
+                let mut opts = photocraft_io::ExportOptions {
+                    tiff_layers: p.get("tiffLayers").and_then(Value::as_bool).unwrap_or(false),
+                    tga_bits,
+                    pdf_spot_plates,
+                    ..Default::default()
+                };
                 opts.encode.dpx_bits = photocraft_engine::file_cmds::dpx_bits_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?;
                 opts.encode.dds = photocraft_engine::file_cmds::dds_param(&p, "doc.save").map_err(|e| bad(e.to_string()))?.unwrap_or_default();
                 match p.get("quality") {

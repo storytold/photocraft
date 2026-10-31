@@ -191,6 +191,10 @@ pub struct SaveParams {
     /// DDS: also write the full mip chain, each level a box filter of the one above.
     #[serde(default, rename = "ddsMipmaps")]
     pub dds_mipmaps: bool,
+    /// PDF: write the spot channels as overprinting Separation plates after the flattened image
+    /// (a Multichannel document as plates alone). On by default; false writes the image only.
+    #[serde(default, rename = "pdfSpotPlates")]
+    pub pdf_spot_plates: Option<bool>,
     #[serde(default)]
     pub index: Option<usize>,
 }
@@ -1080,6 +1084,7 @@ impl PhotocraftMcp {
                 p.quality.is_some().then_some("quality"),
                 p.tiff_layers.then_some("tiffLayers"),
                 dpx_bits.is_some().then_some("dpxBits"),
+                p.pdf_spot_plates.is_some().then_some("pdfSpotPlates"),
                 p.index.is_some().then_some("index"),
             ]
             .into_iter()
@@ -1105,7 +1110,12 @@ impl PhotocraftMcp {
         }
         let Some(r) = self
             .headless_op(move |h| {
-                let mut opts = photocraft_io::ExportOptions { tiff_layers: p.tiff_layers, tga_bits, ..Default::default() };
+                let mut opts = photocraft_io::ExportOptions {
+                    tiff_layers: p.tiff_layers,
+                    tga_bits,
+                    pdf_spot_plates: p.pdf_spot_plates.unwrap_or(true),
+                    ..Default::default()
+                };
                 opts.encode.dpx_bits = dpx_bits;
                 opts.encode.dds = photocraft_io::DdsOptions { compression: dds_compression.unwrap_or_default(), mipmaps: p.dds_mipmaps };
                 if let Some(q) = p.quality {
