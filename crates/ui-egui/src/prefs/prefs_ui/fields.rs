@@ -365,22 +365,45 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
             grid_scope(ui, |ui| {
                 grid("interface-appearance").show(ui, |ui| {
                     appearance_rows(ui, obj, system, rows);
-                    field_rows(ui, "interface", obj, appearance, lang);
+                    if !appearance.is_empty() {
+                        // The theme rows above are owned by appearance.rs; the canvas rows go
+                        // through the same live grid via a row adapter, unchanged in both directions.
+                        let ctx = ui.ctx().clone();
+                        let mut row = |caption: egui::WidgetText, editor: &mut dyn FnMut(&mut egui::Ui, egui::Id)| {
+                            let cap = std::cell::Cell::new(egui::Id::NULL);
+                            crate::text::direction::grid_cells(ui, |ui| cap.set(ui.label(caption).id), |ui| editor(ui, cap.get()));
+                            ui.end_row();
+                        };
+                        field_rows(&ctx, "interface", obj, appearance, lang, &mut row);
+                    }
                 });
             });
         });
     }
     if !presentation.is_empty() {
         pref_group(ui, "Presentation", |ui| {
-            grid_scope(ui, |ui| grid("interface-presentation").show(ui, |ui| field_rows(ui, "interface", obj, presentation, lang)));
+            let ctx = ui.ctx().clone();
+            let label_w = max_label_width(ui, "interface", obj, &presentation);
+            crate::text::direction::settings_grid(ui, ("prefs-grid", "interface-presentation"), [14.0, 7.0], label_w, Some(150.0), |row| {
+                field_rows(&ctx, "interface", obj, presentation, lang, row)
+            });
         });
     }
     if !checks.is_empty() || !other.is_empty() {
         pref_group(ui, "Options", |ui| {
-            grid_scope(ui, |ui| {
-                egui::Grid::new("prefs-grid-interface-checks").num_columns(2).spacing([0.0, 7.0]).show(ui, |ui| field_rows(ui, "interface", obj, checks, lang))
-            });
-            grid_scope(ui, |ui| grid("interface-options").show(ui, |ui| field_rows(ui, "interface", obj, other, lang)));
+            if !checks.is_empty() {
+                let ctx = ui.ctx().clone();
+                crate::text::direction::settings_grid(ui, "prefs-grid-interface-checks", [0.0, 7.0], 0.0, None, |row| {
+                    field_rows(&ctx, "interface", obj, checks, lang, row)
+                });
+            }
+            if !other.is_empty() {
+                let ctx = ui.ctx().clone();
+                let label_w = max_label_width(ui, "interface", obj, &other);
+                crate::text::direction::settings_grid(ui, ("prefs-grid", "interface-options"), [14.0, 7.0], label_w, Some(150.0), |row| {
+                    field_rows(&ctx, "interface", obj, other, lang, row)
+                });
+            }
         });
     }
 }
@@ -438,19 +461,26 @@ pub(super) fn section_fields(
         memory_usage_row(ui, obj);
     }
     keys.retain(|k| field_visible(section, obj, k, &query));
-    grid_scope(ui, |ui| egui::Grid::new(("prefs-grid", section)).num_columns(2).spacing([14.0, 7.0]).show(ui, |ui| field_rows(ui, section, obj, keys, lang)));
+    let ctx = ui.ctx().clone();
+    let label_w = max_label_width(ui, section, obj, &keys);
+    crate::text::direction::settings_grid(ui, ("prefs-grid", section), [14.0, 7.0], label_w, None, |row| field_rows(&ctx, section, obj, keys, lang, row));
+}
+
+/// The width of the widest row label, as the two-column grid's label column sizes to it in LTR
+/// (never below the grid's minimum cell width); [`crate::text::direction::settings_grid`] takes
+/// it as the RTL label column so both directions share one column geometry.
+fn max_label_width(ui: &egui::Ui, section: &str, obj: &Map<String, Value>, keys: &[String]) -> f32 {
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    keys.iter()
+        .filter(|k| !obj.get(*k).and_then(Value::as_bool).unwrap_or(false))
+        .map(|k| ui.painter().layout_no_wrap(tl!(&humanize(k)).to_string(), font.clone(), egui::Color32::PLACEHOLDER).size().x)
+        .fold(ui.spacing().interact_size.x, f32::max)
 }
 
 /// A `Grid` cell whose content hugs the cell's reading-start edge: the fork's `Grid` aligns
 /// every cell left, which leaves the right-to-left reading start of a label column ragged.
 fn reading_start_cell<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     ui.with_layout(crate::text::direction::row(), add).inner
-}
-
-/// The dimmed label of a settings row, aligned to its cell's reading-start edge so labels of
-/// different lengths line up there in a right-to-left UI too.
-fn field_label(ui: &mut egui::Ui, t: Tokens, label: &str) -> egui::Response {
-    reading_start_cell(ui, |ui| ui.label(RichText::new(tl!(label)).color(t.text_dim)))
 }
 
 /// The fork's `Grid` cannot place its cells under a right-to-left cursor, so a grid inside the
@@ -460,24 +490,32 @@ pub(super) fn grid_scope<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -
     ui.with_layout(egui::Layout::top_down(egui::Align::Min), add).inner
 }
 
-/// One grid row per setting in `keys` (already filtered by `field_visible`). Cells emit in
-/// reading order through [`crate::text::direction::grid_cells`]: the fork's `Grid` placer is
-/// direction-blind, so the column order is chosen here. Label cells hug the reading start
-/// ([`reading_start_cell`]); the other cells keep egui's default alignment, which leaves the
-/// left-to-right layout unchanged.
-fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, keys: Vec<String>, lang: crate::i18n::Lang) {
-    let t = Tokens::get(ui.ctx());
+/// One row per setting in `keys` (already filtered by `field_visible`), emitted through `row`
+/// as `row(label, editor)` in reading order; the grid helper places the cells, so the label
+/// column keeps its fixed width at the reading start in both directions and the
+/// label<->editor gap matches LTR. Checkbox rows pass an empty label so the bare editor hugs
+/// the reading start. The editor closure receives the label's Id for accessibility labeling.
+fn field_rows(
+    ctx: &egui::Context,
+    section: &str,
+    obj: &mut Map<String, Value>,
+    keys: Vec<String>,
+    lang: crate::i18n::Lang,
+    row: &mut dyn FnMut(egui::WidgetText, &mut dyn FnMut(&mut egui::Ui, egui::Id)),
+) {
+    let t = Tokens::get(ctx);
     for k in keys {
         let path = format!("{section}.{k}");
         let v = obj.get(&k).cloned().unwrap_or(Value::Null);
         let human = humanize(&k);
         let label = tl!(&human).to_string();
+        let caption: egui::WidgetText = RichText::new(tl!(&label)).color(t.text_dim).into();
         match &v {
             Value::Bool(b) => {
                 let mut b = *b;
                 // The checkbox hugs the row's reading-start edge, as in Photoshop; the empty
-                // cell takes the other column.
-                let editor = |ui: &mut egui::Ui| {
+                // label takes the other column.
+                row(egui::WidgetText::from(""), &mut |ui: &mut egui::Ui, _cap| {
                     if read_at_launch(&path) {
                         reading_start_cell(ui, |ui| {
                             let align = if crate::text::direction::is_rtl() { egui::Align::Max } else { egui::Align::Min };
@@ -491,116 +529,70 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                             crate::widgets::checkbox(ui, &mut b, &label);
                         })
                     }
-                };
-                if crate::text::direction::is_rtl() {
-                    crate::text::direction::grid_cells(ui, editor, |ui| {
-                        ui.label("");
-                    });
-                } else {
-                    crate::text::direction::grid_cells(
-                        ui,
-                        |ui| {
-                            ui.label("");
-                        },
-                        editor,
-                    );
-                }
+                });
                 obj.insert(k, json!(b));
             }
             Value::String(s) if path == "interface.language" => {
-                crate::text::direction::grid_cells(
-                    ui,
-                    |ui| {
-                        field_label(ui, t, &label);
-                    },
-                    |ui| {
-                        let mut pairs: Vec<(String, &str)> = vec![("auto".into(), tl!("Auto"))];
-                        pairs.extend(crate::i18n::Lang::for_picker().into_iter().map(|l| (l.code().to_string(), l.name())));
-                        let mut cur = s.clone();
-                        crate::widgets::dropdown(ui, &format!("pref-{path}"), tl!(&label), &mut cur, &pairs, 220.0);
-                        obj.insert(k, json!(cur));
-                    },
-                );
+                row(caption, &mut |ui, _cap| {
+                    let mut pairs: Vec<(String, &str)> = vec![("auto".into(), tl!("Auto"))];
+                    pairs.extend(crate::i18n::Lang::for_picker().into_iter().map(|l| (l.code().to_string(), l.name())));
+                    let mut cur = s.clone();
+                    crate::widgets::dropdown(ui, &format!("pref-{path}"), tl!(&label), &mut cur, &pairs, 220.0);
+                    obj.insert(k.clone(), json!(cur));
+                });
             }
             Value::String(s) if prefs::choices(&path).is_some() => {
                 let opts = prefs::choices(&path).unwrap_or(&[]);
                 let labels: Vec<String> = opts.iter().map(|o| choice_label(o)).collect();
                 let pairs: Vec<(String, &str)> = opts.iter().map(|o| o.to_string()).zip(labels.iter().map(String::as_str)).collect();
                 let mut cur = s.clone();
-                crate::text::direction::grid_cells(
-                    ui,
-                    |ui| {
-                        field_label(ui, t, &label);
-                    },
-                    |ui| {
-                        crate::widgets::dropdown(ui, &format!("pref-{path}"), tl!(&label), &mut cur, &pairs, 220.0);
-                        obj.insert(k, json!(cur));
-                    },
-                );
+                row(caption, &mut |ui, _cap| {
+                    crate::widgets::dropdown(ui, &format!("pref-{path}"), tl!(&label), &mut cur, &pairs, 220.0);
+                    obj.insert(k.clone(), json!(cur));
+                });
             }
             Value::String(s) if prefs::is_color(&path) => {
                 let c = prefs::parse_hex(s).unwrap_or([128, 128, 128]);
                 let mut rgb = c;
-                crate::text::direction::grid_cells(
-                    ui,
-                    |ui| {
-                        field_label(ui, t, &label);
-                    },
-                    |ui| {
-                        ui.horizontal(|ui| {
-                            // PhotoCraft's Color Picker, as everywhere else (#2144).
-                            if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), &label).clicked() {
-                                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(PICK_ID), (path.clone(), label.clone())));
-                            }
-                            hex_field(ui, &path, &mut rgb);
-                        });
-                    },
-                );
+                row(caption, &mut |ui, _cap| {
+                    ui.horizontal(|ui| {
+                        // PhotoCraft's Color Picker, as everywhere else (#2144).
+                        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), &label).clicked() {
+                            ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(PICK_ID), (path.clone(), label.clone())));
+                        }
+                        hex_field(ui, &path, &mut rgb);
+                    });
+                });
                 obj.insert(k, json!(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])));
                 let _ = color_of(s);
             }
             Value::String(s) => {
                 let mut s = s.clone();
-                crate::text::direction::grid_cells(
-                    ui,
-                    |ui| {
-                        field_label(ui, t, &label);
-                    },
-                    |ui| {
-                        crate::widgets::rtl_singleline_edit(ui, &mut s, 260.0, "").accessible_name(tl!(&label));
-                    },
-                );
+                row(caption, &mut |ui, _cap| {
+                    crate::widgets::rtl_singleline_edit(ui, &mut s, 260.0, "").accessible_name(tl!(&label));
+                });
                 obj.insert(k, json!(s));
             }
             Value::Number(n) => {
                 let (lo, hi) = prefs::range(&path).unwrap_or((-1e9, 1e9));
-                // A right-to-left grid emits the editor cell first, so the label's id is only
-                // known once both cells are in; the field is named after the row is built.
-                let mut label_id = None;
-                let mut editor = None;
                 let mut int_value = None;
                 let mut float_value = None;
-                crate::text::direction::grid_cells(
-                    ui,
-                    |ui| {
-                        label_id = Some(field_label(ui, t, &label).id);
-                    },
-                    |ui| {
-                        if n.is_u64() || n.is_i64() {
-                            let mut x = n.as_i64().unwrap_or(0);
-                            editor = Some(ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num)));
-                            int_value = Some(x);
-                        } else {
-                            let mut x = n.as_f64().unwrap_or(0.0);
-                            editor =
-                                Some(ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num)));
-                            float_value = Some(x);
-                        }
-                    },
-                );
-                if let (Some(label_id), Some(editor)) = (label_id, editor) {
-                    editor.labelled_by(label_id);
-                }
+                row(caption, &mut |ui, cap| {
+                    let resp = if n.is_u64() || n.is_i64() {
+                        let mut x = n.as_i64().unwrap_or(0);
+                        let resp = ui.add(egui::DragValue::new(&mut x).range(lo as i64..=hi as i64).custom_parser(crate::widgets::parse_num));
+                        int_value = Some(x);
+                        resp
+                    } else {
+                        let mut x = n.as_f64().unwrap_or(0.0);
+                        let resp = ui.add(egui::DragValue::new(&mut x).range(lo..=hi).speed(0.1).max_decimals(3).custom_parser(crate::widgets::parse_num));
+                        float_value = Some(x);
+                        resp
+                    };
+                    if cap != egui::Id::NULL {
+                        resp.labelled_by(cap);
+                    }
+                });
                 if let Some(x) = int_value {
                     obj.insert(k, json!(x));
                 } else if let Some(x) = float_value {
@@ -608,76 +600,51 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 }
                 // A row of its own, so the label stays level with its field.
                 if read_at_launch(&path) {
-                    ui.end_row();
-                    crate::text::direction::grid_cells(
-                        ui,
-                        |ui| {
-                            ui.label("");
-                        },
-                        |ui| {
-                            ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
-                        },
-                    );
+                    row(egui::WidgetText::from(""), &mut |ui, _cap| {
+                        ui.label(RichText::new(tl!("Applies at next launch.")).color(t.text_dim));
+                    });
                 }
             }
             Value::Array(_) if path == "tools.pressureCurve" => {
-                crate::text::direction::grid_cells(
-                    ui,
-                    |ui| {
-                        field_label(ui, t, &label);
-                    },
-                    |ui| {
-                        if let Some(next) = crate::pressure_curve_ui::editor(ui, &v) {
-                            obj.insert(k.clone(), next);
-                        }
-                    },
-                );
+                row(caption, &mut |ui, _cap| {
+                    if let Some(next) = crate::pressure_curve_ui::editor(ui, &v) {
+                        obj.insert(k.clone(), next);
+                    }
+                });
             }
             Value::Array(items) if k == "disks" => {
                 let mut items = items.clone();
-                crate::text::direction::grid_cells(
-                    ui,
-                    |ui| {
-                        field_label(ui, t, "Scratch disks");
-                    },
-                    |ui| {
-                        ui.vertical(|ui| {
-                            for d in &mut items {
-                                ui.horizontal(|ui| {
-                                    let mut on = d.get("enabled").and_then(Value::as_bool).unwrap_or(false);
-                                    let mut path = d.get("path").and_then(Value::as_str).unwrap_or("").to_string();
-                                    crate::widgets::checkbox(ui, &mut on, tl!("Enabled"));
-                                    crate::widgets::rtl_singleline_edit(ui, &mut path, 240.0, "").accessible_name(tl!("Path"));
-                                    *d = json!({"enabled": on, "path": path});
-                                });
-                            }
-                            if ui.small_button(tl!("Add disk")).clicked() {
-                                items.push(json!({"enabled": true, "path": ""}));
-                            }
-                        });
-                    },
-                );
+                let caption: egui::WidgetText = RichText::new(tl!("Scratch disks")).color(t.text_dim).into();
+                row(caption, &mut |ui, _cap| {
+                    ui.vertical(|ui| {
+                        for d in &mut items {
+                            ui.horizontal(|ui| {
+                                let mut on = d.get("enabled").and_then(Value::as_bool).unwrap_or(false);
+                                let mut path = d.get("path").and_then(Value::as_str).unwrap_or("").to_string();
+                                crate::widgets::checkbox(ui, &mut on, tl!("Enabled"));
+                                crate::widgets::rtl_singleline_edit(ui, &mut path, 240.0, "").accessible_name(tl!("Path"));
+                                *d = json!({"enabled": on, "path": path});
+                            });
+                        }
+                        if ui.small_button(tl!("Add disk")).clicked() {
+                            items.push(json!({"enabled": true, "path": ""}));
+                        }
+                    });
+                });
                 obj.insert(k, Value::Array(items));
             }
             Value::Array(items) => {
                 let count = crate::i18n::trn(lang, items.len() as u64, "{n} item", "{n} items");
                 let clear = !items.is_empty();
-                crate::text::direction::grid_cells(
-                    ui,
-                    |ui| {
-                        field_label(ui, t, &label);
-                    },
-                    |ui| {
-                        ui.label(RichText::new(count).color(t.text_faint));
-                        if clear && ui.small_button(tl!("Clear")).clicked() {
-                            obj.insert(k.clone(), json!([]));
-                        }
-                    },
-                );
+                row(caption, &mut |ui, _cap| {
+                    ui.label(RichText::new(count.clone()).color(t.text_faint));
+                    if clear && ui.small_button(tl!("Clear")).clicked() {
+                        obj.insert(k.clone(), json!([]));
+                    }
+                });
             }
             _ => continue,
         }
-        ui.end_row();
     }
 }
 
