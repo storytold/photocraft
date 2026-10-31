@@ -68,6 +68,8 @@ pub struct Input {
     pub zoom_delta: f32,
     /// ⌥/Alt was held for the wheel gesture in progress.
     pub alt: bool,
+    /// ⌘/Ctrl was held for a whole mouse-wheel notch of the opt-in zoom (and not ⇧ or ⌥).
+    pub command: bool,
     /// ⇧/Shift was held for the wheel gesture in progress (snap zoom).
     pub shift: bool,
     /// Preferences › General › Zoom with Scroll Wheel.
@@ -105,19 +107,21 @@ pub fn classify(i: Input) -> Option<Wheel> {
         if steps == 0 { None } else { Some(Wheel::SnapZoom(steps)) }
     };
     let scroll_finite = i.scroll.x.is_finite() && i.scroll.y.is_finite();
-    match (i.alt, i.zoom_with_wheel) {
+    match (i.alt, i.command, i.zoom_with_wheel) {
         // ⇧ + ⌥ + scroll: snap to the zoom ladder instead of continuous ×1.1.
-        (true, false) if i.shift => snap(i.raw.y + i.raw.x),
+        (true, _, false) if i.shift => snap(i.raw.y + i.raw.x),
         // ⌥ + scroll: continuous ×1.1 zoom. Animated Zoom on: follow the smoothed delta across frames.
-        (true, false) if i.animated_zoom && scroll_finite => step(i.scroll.y + i.scroll.x),
+        (true, _, false) if i.animated_zoom && scroll_finite => step(i.scroll.y + i.scroll.x),
         // Animated Zoom off: one instant step from the wheel events. The smoothed tail is ignored.
-        (true, false) if !i.animated_zoom => step(i.raw.y + i.raw.x),
+        (true, _, false) if !i.animated_zoom => step(i.raw.y + i.raw.x),
+        // Opt-in ⌘/Ctrl + a whole mouse notch: ×1.1 around the pointer (#5363). Instant, even when
+        // Animated Zoom is on. Fractional Ctrl + wheel is a pinch and does not set `command`.
+        (_, true, _) => step(i.raw.y + i.raw.x),
         // ⇧ + scroll wheel with the preference on: snap to the zoom ladder.
-        // Some systems deliver Shift+wheel as horizontal (delta in x, y = 0).
-        (false, true) if i.shift => snap(i.raw.y + i.raw.x),
-        // ⌘/Ctrl folds the wheel into x: those still scroll sideways.
-        (false, true) if i.animated_zoom && scroll_finite && i.scroll.y != 0.0 => step(i.scroll.y),
-        (false, true) if !i.animated_zoom && (i.raw.y != 0.0 || i.scroll.y != 0.0) => step(i.raw.y),
+        (false, false, true) if i.shift => snap(i.raw.y + i.raw.x),
+        // ⌘/Ctrl folds the wheel into x: those still scroll sideways unless the mapping above matched.
+        (false, false, true) if i.animated_zoom && scroll_finite && i.scroll.y != 0.0 => step(i.scroll.y),
+        (false, false, true) if !i.animated_zoom && (i.raw.y != 0.0 || i.scroll.y != 0.0) => step(i.raw.y),
         _ if !scroll_finite || i.scroll == Vec2::ZERO => None,
         _ => Some(Wheel::Pan(i.scroll)),
     }
@@ -189,6 +193,10 @@ pub fn fold_legacy_pinch(ctx: &Context, raw: &mut RawInput) {
 
 fn alt_id() -> Id {
     Id::unique("pc-wheel-alt")
+}
+
+fn command_id() -> Id {
+    Id::unique("pc-wheel-command")
 }
 
 fn shift_id() -> Id {
@@ -336,7 +344,31 @@ fn mark_unsmoothed(ctx: &Context, events: Vec<(MouseWheelUnit, Vec2, Modifiers, 
 /// accumulator per viewport. `hovered` gates accumulation: only the viewport receiving
 /// navigation may add raw input to the snap residual.
 pub fn read(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, animated_zoom: bool, owner: Id, hovered: bool) -> Option<Wheel> {
-    read_with(ctx, zoom_with_wheel, pinch_zooms, animated_zoom, owner, hovered, true, true)
+    read_opts(ctx, zoom_with_wheel, pinch_zooms, animated_zoom, owner, hovered, ReadOpts::plain())
+}
+
+/// How [`read_opts`] treats this frame, beyond the zoom and pinch preferences.
+#[derive(Clone, Copy, Debug)]
+pub struct ReadOpts {
+    /// Glide a plain pan over several frames. Off, the whole notch lands in the frame it arrives.
+    pub smooth: bool,
+    /// Preferences › Enhanced Controls › Enable Gestures. Off, a touch-screen pinch does nothing.
+    pub touch_gestures: bool,
+    /// `general.wheelActionCtrl = zoomContinuous`: a whole Ctrl/Cmd notch zooms ×1.1.
+    pub ctrl_wheel_zooms: bool,
+}
+
+impl ReadOpts {
+    /// Smoothed pan, touch gestures on, Ctrl/Cmd still a sideways pan.
+    pub fn plain() -> Self {
+        Self { smooth: true, touch_gestures: true, ctrl_wheel_zooms: false }
+    }
+}
+
+/// Ctrl or Cmd + a whole mouse-wheel notch (line units, no fraction).
+fn ctrl_mouse_notch(unit: MouseWheelUnit, delta: Vec2, m: Modifiers) -> bool {
+    let command = m.command || m.ctrl || m.mac_cmd;
+    unit == MouseWheelUnit::Line && command && !m.alt && !m.shift && delta.x.fract() == 0.0 && delta.y.fract() == 0.0 && (delta.x != 0.0 || delta.y != 0.0)
 }
 
 /// [`read`], choosing how a plain wheel scroll pans: `smooth` glides it over a few frames (egui's
@@ -357,14 +389,21 @@ pub fn read_with(
     smooth: bool,
     touch_gestures: bool,
 ) -> Option<Wheel> {
+    read_opts(ctx, zoom_with_wheel, pinch_zooms, animated_zoom, owner, hovered, ReadOpts { smooth, touch_gestures, ctrl_wheel_zooms: false })
+}
+
+/// [`read`] with [`ReadOpts`]. `ctrl_wheel_zooms` turns a whole Ctrl/Cmd notch into an instant ×1.1.
+#[allow(clippy::too_many_arguments)]
+pub fn read_opts(ctx: &Context, zoom_with_wheel: bool, pinch_zooms: bool, animated_zoom: bool, owner: Id, hovered: bool, opts: ReadOpts) -> Option<Wheel> {
+    let ReadOpts { smooth, touch_gestures, ctrl_wheel_zooms } = opts;
     let notch = ctx.options(|o| o.input_options.line_scroll_speed);
 
-    // --- Modifier tracking (always runs for all callers) ---
-    let (scroll, zoom_delta, latest_alt, latest_shift, wheel, page) = ctx.input(|i| {
+    let (scroll, zoom_delta, latest_alt, latest_command, latest_shift, wheel, page) = ctx.input(|i| {
         let wheel = wheel_events(i);
         let latest_alt = wheel.last().map(|(_, _, m, _)| m.alt && !m.command && !m.ctrl);
         let latest_shift = wheel.last().map(|(_, _, m, _)| m.shift && !m.command && !m.ctrl);
-        (i.smooth_scroll_delta, pinch_factor(i, touch_gestures), latest_alt, latest_shift, wheel, i.content_rect().height())
+        let latest_command = if ctrl_wheel_zooms { wheel.last().map(|(unit, delta, m, _)| ctrl_mouse_notch(*unit, *delta, *m)) } else { wheel.last().map(|_| false) };
+        (i.smooth_scroll_delta, pinch_factor(i, touch_gestures), latest_alt, latest_command, latest_shift, wheel, i.content_rect().height())
     });
     let wheel = mark_unsmoothed(ctx, wheel);
     let alt = match latest_alt {
@@ -373,6 +412,17 @@ pub fn read_with(
             a
         }
         None => ctx.data(|d| d.get_temp::<bool>(alt_id())).unwrap_or(false),
+    };
+    let command = if !ctrl_wheel_zooms {
+        false
+    } else {
+        match latest_command {
+            Some(c) => {
+                ctx.data_mut(|d| d.insert_temp(command_id(), c));
+                c
+            }
+            None => ctx.data(|d| d.get_temp::<bool>(command_id())).unwrap_or(false),
+        }
     };
     let shift = match latest_shift {
         Some(s) => {
@@ -397,6 +447,8 @@ pub fn read_with(
                 m.alt && m.shift && !m.command && !m.ctrl
             } else if alt {
                 m.alt && !m.shift && !m.command && !m.ctrl
+            } else if command {
+                (m.command || m.ctrl || m.mac_cmd) && !m.alt && !m.shift
             } else if shift {
                 m.shift && !m.alt && !m.command && !m.ctrl
             } else {
@@ -471,7 +523,7 @@ pub fn read_with(
         // Zoom-mode input: ⌥ + wheel, or the plain wheel with Zoom with Scroll Wheel. With Animated
         // Zoom on it eases from this mode's own wheel events: egui's smoothed delta has no notion of
         // modifiers, so it would also carry the unfinished tail of a pan notch into the zoom.
-        let wheel_zooms = !shift && (alt != zoom_with_wheel);
+        let wheel_zooms = !command && !shift && (alt != zoom_with_wheel);
         let scroll = if animated_zoom && wheel_zooms {
             // Eased as egui eases a wheel: what it leaves unsmoothed (a trackpad) zooms at once.
             let along = |v: Vec2| if alt { v.y + v.x } else { v.y };
@@ -483,9 +535,9 @@ pub fn read_with(
         } else {
             ctx.data_mut(|d| d.remove::<ZoomEase>(zoom_ease_id(owner)));
             // Unsmoothed, a plain scroll pans by this frame's own wheel events (none: no tail).
-            if smooth || alt || shift { scroll } else { raw }
+            if smooth || alt || shift || command { scroll } else { raw }
         };
-        classify(Input { scroll, raw, zoom_delta, alt, shift, zoom_with_wheel, pinch_zooms, animated_zoom, notch })
+        classify(Input { scroll, raw, zoom_delta, alt, command, shift, zoom_with_wheel, pinch_zooms, animated_zoom, notch })
     }
 }
 

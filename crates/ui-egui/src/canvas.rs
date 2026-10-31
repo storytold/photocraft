@@ -570,15 +570,18 @@ fn update_canvas_navigation(app: &mut PhotocraftApp, view: &mut View, input: Can
     // Enhanced Controls › Enable Gestures off: two fingers on a touch screen neither zoom nor
     // turn the view (#204); the mouse and trackpad are unaffected.
     let touch_gestures = app.session.prefs().enhanced_controls.touch_gestures;
-    let wheel = crate::wheel_nav::read_with(
+    let wheel = crate::wheel_nav::read_opts(
         input.ctx,
         app.session.prefs().general.zoom_with_scroll_wheel,
         app.session.prefs().enhanced_controls.zoom_with_trackpad_pinch,
         app.session.prefs().general.animated_zoom,
         input.wheel_owner,
         nav_hovered,
-        app.session.prefs().interface.enable_animations,
-        touch_gestures,
+        crate::wheel_nav::ReadOpts {
+            smooth: app.session.prefs().interface.enable_animations,
+            touch_gestures,
+            ctrl_wheel_zooms: app.session.prefs().general.ctrl_wheel_zooms(),
+        },
     );
     if nav_hovered {
         let pointer = input.ctx.input(|i| i.pointer.hover_pos());
@@ -1796,15 +1799,18 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     });
     let direct_input = pointer_here
         || (hover_here
-            && crate::wheel_nav::read_with(
+            && crate::wheel_nav::read_opts(
                 &ctx,
                 app.session.prefs().general.zoom_with_scroll_wheel,
                 app.session.prefs().enhanced_controls.zoom_with_trackpad_pinch,
                 app.session.prefs().general.animated_zoom,
                 wheel_owner,
                 hover_here,
-                app.session.prefs().interface.enable_animations,
-                app.session.prefs().enhanced_controls.touch_gestures,
+                crate::wheel_nav::ReadOpts {
+                    smooth: app.session.prefs().interface.enable_animations,
+                    touch_gestures: app.session.prefs().enhanced_controls.touch_gestures,
+                    ctrl_wheel_zooms: app.session.prefs().general.ctrl_wheel_zooms(),
+                },
             )
             .is_some());
     if direct_input {

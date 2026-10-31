@@ -22,6 +22,26 @@ fn defaults_match_photoshop() {
     }
 }
 
+/// Ctrl/Cmd + wheel stays a sideways pan until the user picks continuous zoom (#5363).
+#[test]
+fn ctrl_wheel_zoom_is_opt_in_and_round_trips() {
+    let mut s = session();
+    assert_eq!(s.prefs().general.wheel_action_ctrl, WheelAction::Default);
+    assert!(!s.prefs().general.ctrl_wheel_zooms());
+    assert_eq!(s.execute("prefs.get", json!({"path": "general.wheelActionCtrl"})).unwrap(), json!("photoshop"));
+    s.execute("prefs.set", json!({"path": "general.wheelActionCtrl", "value": "zoomContinuous"})).unwrap();
+    assert!(s.prefs().general.ctrl_wheel_zooms());
+    let mut restored = Session::new();
+    restored.load_prefs_json(&s.prefs_to_json()).unwrap();
+    assert_eq!(restored.prefs().general.wheel_action_ctrl, WheelAction::Zoom);
+    let mut legacy = Session::new();
+    legacy.load_prefs_json(r#"{"general": {"zoomWithScrollWheel": true}}"#).unwrap();
+    assert_eq!(legacy.prefs().general.wheel_action_ctrl, WheelAction::Default);
+    assert!(legacy.prefs().general.zoom_with_scroll_wheel);
+    assert!(s.execute("prefs.set", json!({"path": "general.wheelActionCtrl", "value": "scrollVertical"})).is_err());
+    assert!(s.prefs().general.ctrl_wheel_zooms());
+}
+
 #[test]
 fn intermediate_ui_scale_presets_survive_restart() {
     let mut s = Session::new();

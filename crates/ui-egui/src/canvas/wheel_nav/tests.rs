@@ -3,7 +3,7 @@ use egui::TouchPhase;
 use super::*;
 
 fn input(scroll: Vec2, alt: bool) -> Input {
-    Input { scroll, raw: scroll, zoom_delta: 1.0, alt, shift: false, zoom_with_wheel: false, pinch_zooms: true, animated_zoom: true, notch: 40.0 }
+    Input { scroll, raw: scroll, zoom_delta: 1.0, alt, command: false, shift: false, zoom_with_wheel: false, pinch_zooms: true, animated_zoom: true, notch: 40.0 }
 }
 
 fn wheel(delta: Vec2, modifiers: Modifiers) -> Event {
@@ -37,6 +37,31 @@ fn gesture_with(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool, an
             Some(Wheel::Zoom(f)) => zoom *= f,
             Some(Wheel::SnapZoom(n)) => snaps += n,
             None => {}
+        });
+        out.textures_delta.clear();
+    }
+    (pan, zoom, snaps)
+}
+
+fn gesture_mapped(frames: Vec<Vec<Event>>, zoom_with_wheel: bool, legacy: bool, ctrl_wheel_zooms: bool) -> (Vec2, f32, i32) {
+    let owner = Id::unique("test-gesture-mapped");
+    let ctx = Context::default();
+    configure(&ctx);
+    let (mut pan, mut zoom, mut snaps) = (Vec2::ZERO, 1.0, 0i32);
+    let mut frames = frames.into_iter();
+    for n in 0..60 {
+        let mut raw = RawInput { time: Some(f64::from(n) / 60.0), predicted_dt: 1.0 / 60.0, events: frames.next().unwrap_or_default(), ..Default::default() };
+        if legacy {
+            fold_legacy_pinch(&ctx, &mut raw);
+        }
+        let mut out = ctx.run_ui(raw, |ui| {
+            let opts = ReadOpts { ctrl_wheel_zooms, ..ReadOpts::plain() };
+            match read_opts(ui.ctx(), zoom_with_wheel, true, false, owner, true, opts) {
+                Some(Wheel::Pan(d)) => pan += d,
+                Some(Wheel::Zoom(f)) => zoom *= f,
+                Some(Wheel::SnapZoom(n)) => snaps += n,
+                None => {}
+            }
         });
         out.textures_delta.clear();
     }
@@ -619,6 +644,23 @@ fn each_modifier_maps_like_photoshop() {
 }
 
 #[test]
+fn ctrl_wheel_zoom_mapping_zooms_a_whole_notch_and_ignores_the_tail() {
+    let notch = Vec2::new(0.0, 1.0);
+    for m in [CTRL, CMD, Modifiers::CTRL] {
+        let (pan, zoom, snaps) = gesture_mapped(vec![vec![wheel(notch, m)]], false, false, true);
+        assert_eq!(snaps, 0, "{m:?}");
+        assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "{m:?} + wheel zooms: {pan:?} {zoom}");
+        let (pan, zoom, _) = gesture_mapped(vec![vec![wheel(notch, m)]], true, false, true);
+        assert!(pan == Vec2::ZERO && (zoom - 1.1).abs() < 1e-4, "still zooms with Zoom with Scroll Wheel ({m:?}): {pan:?} {zoom}");
+    }
+    let (pan, zoom, _) = gesture_mapped(vec![vec![wheel(Vec2::new(0.0, 0.25), CTRL)], vec![wheel(Vec2::new(0.0, 0.5), CTRL)]], false, true, true);
+    let speed = egui::InputOptions::default().scroll_zoom_speed;
+    assert!(pan == Vec2::ZERO && (zoom - (speed * 40.0 * 0.75).exp()).abs() < 1e-4, "a fraction stays a pinch: {pan:?} {zoom}");
+    let (pan, zoom, _) = gesture_mapped(vec![vec![wheel(Vec2::new(0.0, 0.25), CTRL)]], false, false, true);
+    assert!(zoom == 1.0 && near(pan, Vec2::new(10.0, 0.0)), "an unfolded fraction pans sideways: {pan:?} {zoom}");
+}
+
+#[test]
 fn pinch_zooms_and_ctrl_wheel_pans() {
     // macOS trackpad and browsers: the pinch is its own event.
     let (pan, zoom, _) = gesture(vec![vec![Event::Zoom(1.1)], vec![Event::Zoom(1.1)]], false, false);
@@ -705,6 +747,7 @@ fn hostile_numbers_never_produce_a_bad_zoom() {
                         raw: Vec2::new(0.0, s),
                         zoom_delta: zd,
                         alt,
+                        command: false,
                         shift: false,
                         zoom_with_wheel: !alt,
                         pinch_zooms: true,
@@ -722,6 +765,7 @@ fn hostile_numbers_never_produce_a_bad_zoom() {
                             raw: Vec2::new(0.0, s),
                             zoom_delta: zd,
                             alt: false,
+                            command: false,
                             shift: false,
                             zoom_with_wheel: true,
                             pinch_zooms: true,
