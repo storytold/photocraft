@@ -888,8 +888,8 @@ fn the_outline_keeps_its_previews_scale_while_high_quality_is_toggled() {
     assert_eq!(doc, vec![([30, 15], [30, 45]), ([30, 15], [60, 15]), ([30, 45], [60, 45]), ([60, 15], [60, 45])]);
 }
 
-/// An inverted selection (selected by default) is outlined along the canvas border too, as
-/// Photoshop does, on a canvas past the old ants' 4 MP limit.
+/// An inverted selection (selected by default) is outlined along the canvas border too, on a
+/// canvas past the old ants' 4 MP limit.
 #[test]
 fn an_inverted_selection_outlines_the_canvas_border() {
     let area = Rect::new(0, 0, 3000, 2000);
