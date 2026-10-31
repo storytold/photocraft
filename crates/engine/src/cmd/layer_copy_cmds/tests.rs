@@ -88,6 +88,80 @@ fn places_the_copies_centred_on_the_canvas_on_a_point_or_offset() {
     assert_eq!(doc(&s, 1).layers.len(), 4);
 }
 
+/// #9681: like Photoshop's Paste, a centred copy centres what the layer mask shows, not the hidden
+/// pixels under it. The 10×10 square at x 4..14 keeps x ≥ 9 (or x < 7) visible.
+#[test]
+fn a_centred_copy_centres_the_part_its_mask_shows() {
+    let shown = |keep: Value, mask: Option<Value>| {
+        let (mut s, paint) = two_docs(40, 30, 8);
+        s.execute("select.rect", keep).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+        if let Some(m) = mask {
+            s.execute("layer.layerMask.enabled", m).unwrap();
+        }
+        let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+        bounds(&s, 1, copied(&r))
+    };
+    let right = json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false});
+    // Visible x 9..14 (5 px) centred on the 60-wide canvas: 27.5..32.5, rounded to 28..33.
+    assert_eq!(shown(right.clone(), None), Rect::new(23, 20, 33, 30), "the unmasked square sits 5 px left of its visible part");
+    let left = json!({"x": 0, "y": 0, "width": 7, "height": 30, "antiAlias": false});
+    // Visible x 4..7 (3 px) centred: 28.5..31.5, rounded to 29..32.
+    assert_eq!(shown(left, None), Rect::new(29, 20, 39, 30));
+    // A disabled mask hides nothing, so the whole square is centred.
+    assert_eq!(shown(right, Some(json!({"enabled": false}))), Rect::new(25, 20, 35, 30));
+}
+
+/// #10422 review: the centre is that of the pixels the mask shows, not of the mask's opening.
+/// A second square at x 30..34 sits outside the mask; the opening (x 0..20) also covers empty
+/// pixels right of the first square, which mustn't pull the centre right.
+#[test]
+fn a_centred_copy_ignores_empty_pixels_the_mask_reveals() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 4, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    // The shown square (x 4..14, y 6..16) lands centred on the 60×50 canvas: dx 21, dy 14.
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 55, 30));
+}
+
+/// #10422 review: a feathered mask shows pixels as far out as the compositor carries its blur
+/// (three sigmas and two pixels), so a 3 px feather on an opening at x 9 still shows x 4..9.
+#[test]
+fn a_feathered_masks_shown_part_reaches_as_far_as_its_blur() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    s.edit("feather", |d, _| {
+        d.layer_mut(paint).and_then(|l| l.mask.as_mut()).expect("mask").feather = 3.0;
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    // The whole square (x 4..14) is within the blur's reach, so it is centred as a whole.
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 35, 30));
+}
+
+/// #10422 review: a feathered opening that starts past the ink still shows it through its blur,
+/// so the shown part is measured on the blurred mask, not on the mask's own pixels.
+#[test]
+fn a_feathered_opening_beside_the_ink_still_shows_it() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 15, "y": 0, "width": 25, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    s.edit("feather", |d, _| {
+        d.layer_mut(paint).and_then(|l| l.mask.as_mut()).expect("mask").feather = 3.0;
+        Ok(())
+    })
+    .unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+    // The blur reaches back over the whole square (x 4..14), which is centred as a whole, rather
+    // than the source canvas's centre standing in for an empty measure.
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(25, 20, 35, 30));
+}
+
 #[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);
