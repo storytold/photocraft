@@ -357,3 +357,110 @@ fn transform_control_hit_keeps_move_interior_free_and_has_rotation_band() {
     assert!(!transform_controls_hit(r, r.center()));
     assert!(!transform_controls_hit(r, pos2(60.0, 4.0)));
 }
+
+#[test]
+fn move_transform_control_drag_is_one_history_step() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 80, 40], "fill": "#ff0000"})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    let xf =
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    assert!(transform_controls_rect(&app, &xf).is_none(), "off: no controls");
+    app.ui.tool_options.move_show_transform = true;
+    let r = transform_controls_rect(&app, &xf).unwrap();
+    let history = |app: &PhotocraftApp| app.session.active().unwrap().history.entries().len();
+    let before = history(&app);
+    let ctx = egui::Context::default();
+    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+    let (x, y) = (f64::from(r.right()), f64::from(r.bottom()));
+    tool_event(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: x + 10.0, y: y + 5.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: x + 20.0, y: y + 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: x + 20.0, y: y + 10.0 }, egui::Modifiers::NONE);
+    assert_eq!(history(&app), before, "nothing commits while the box is open");
+    crate::transform_tool::commit(&mut app);
+    assert!(app.ui.transform.is_none());
+    assert_eq!(history(&app), before + 1, "one step");
+    let r = transform_controls_rect(&app, &xf).unwrap();
+    assert_eq!((r.left(), r.top(), r.right(), r.bottom()), (20.0, 30.0, 120.0, 80.0), "scaled by the corner");
+}
+
+#[test]
+fn move_transform_controls_frame_several_selected_layers_together() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 40, 20], "fill": "#ff0000"})).unwrap();
+    let a = app.session.active().unwrap().active_layer.unwrap();
+    app.session.execute("shape.create", json!({"kind": "rect", "rect": [100, 90, 40, 30], "fill": "#0000ff"})).unwrap();
+    let b = app.session.active().unwrap().active_layer.unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::Move;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    app.ui.tool_options.move_show_transform = true;
+    let xf =
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    let r = transform_controls_rect(&app, &xf).unwrap();
+    assert_eq!((r.left(), r.top(), r.right(), r.bottom()), (100.0, 90.0, 140.0, 120.0), "one layer: its own box");
+    app.session.execute("layer.select", json!({"layer": a.0, "mode": "add"})).unwrap();
+    app.sync_views();
+    let r = transform_controls_rect(&app, &xf).unwrap();
+    assert_eq!((r.left(), r.top(), r.right(), r.bottom()), (20.0, 30.0, 140.0, 120.0), "both layers in one box");
+    let history = |app: &PhotocraftApp| app.session.active().unwrap().history.entries().len();
+    let before = history(&app);
+    let ctx = egui::Context::default();
+    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+    let t = app.ui.transform.as_ref().expect("Free Transform opened");
+    assert_eq!(t.rect, [20.0, 30.0, 140.0, 120.0]);
+    assert_eq!(t.layers.len(), 2, "around both layers");
+    let (x, y) = (f64::from(r.right()), f64::from(r.bottom()));
+    tool_event(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: x + 30.0, y: y + 22.5, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: x + 30.0, y: y + 22.5 }, egui::Modifiers::NONE);
+    crate::transform_tool::commit(&mut app);
+    assert_eq!(history(&app), before + 1, "one step for both layers");
+    let st = app.session.active().unwrap();
+    let bb = |id| photocraft_engine::transform_cmds::transform_bounds(&st.doc, st.doc.layer(id).unwrap());
+    // Scaled 1.25x from the box's top-left (20, 30): b's left edge 100 -> 120, a stays put.
+    assert_eq!((bb(a).x0, bb(a).y0), (20, 30), "a keeps the anchored corner");
+    let nb = bb(b);
+    assert_eq!((nb.x0, nb.y0, nb.x1), (120, 105, 170), "b scaled with the box: {nb:?}");
+    assert!((142..=143).contains(&nb.y1), "{nb:?}");
+}
+
+#[test]
+fn path_selection_bounding_box_transforms_the_path_in_one_step() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("file.new", json!({"width": 200, "height": 200})).unwrap();
+    app.session.execute("shape.create", json!({"kind": "rect", "rect": [20, 30, 80, 40], "fill": "#ff0000"})).unwrap();
+    app.sync_views();
+    app.ui.tool = Tool::PathSelection;
+    app.ui.extras.snap = false;
+    app.ui.view.show.smart_guides = false;
+    let xf =
+        ViewXform { rect: Rect::from_min_size(Pos2::ZERO, vec2(200.0, 200.0)), zoom: 1.0, center: [100.0, 100.0], flip: false, rotation: 0.0, aspect: 1.0 };
+    assert!(transform_controls_rect(&app, &xf).is_none(), "off by default");
+    app.ui.tool_options.path_show_bounding_box = true;
+    let r = transform_controls_rect(&app, &xf).expect("the shape's path box");
+    assert_eq!((r.left(), r.top(), r.right(), r.bottom()), (20.0, 30.0, 100.0, 70.0));
+    let history = |app: &PhotocraftApp| app.session.active().unwrap().history.entries().len();
+    let before = history(&app);
+    let ctx = egui::Context::default();
+    assert!(begin_transform_controls_at(&mut app, &ctx, &xf, r.right_bottom()));
+    assert!(app.ui.transform.is_some(), "Free Transform Path opened");
+    let (x, y) = (f64::from(r.right()), f64::from(r.bottom()));
+    tool_event(&mut app, ToolEvent::Down { x, y, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Move { x: x + 20.0, y: y + 10.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    tool_event(&mut app, ToolEvent::Up { x: x + 20.0, y: y + 10.0 }, egui::Modifiers::NONE);
+    crate::transform_tool::commit(&mut app);
+    assert_eq!(history(&app), before + 1, "one step");
+    let r = transform_controls_rect(&app, &xf).unwrap();
+    assert_eq!((r.left(), r.top(), r.right(), r.bottom()), (20.0, 30.0, 120.0, 80.0));
+    // Other tools never show it.
+    app.ui.tool = Tool::DirectSelection;
+    assert!(transform_controls_rect(&app, &xf).is_none());
+}

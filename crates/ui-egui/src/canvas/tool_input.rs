@@ -160,6 +160,7 @@ fn filter_event_before_tool(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::
     if crate::direct_select::pointer(app, ev, mods) {
         return None;
     }
+    crate::vector_ui::path_selection_pick(app, ev);
     // Add / Delete Anchor Point tools (#1044).
     if crate::anchor_tools::pointer(app, ev, mods) {
         return None;
@@ -295,6 +296,18 @@ fn handle_move_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tool: Tool, mods:
     false
 }
 
+fn pick_path_layer_on_press(app: &mut PhotocraftApp, x: f64, y: f64) {
+    if !crate::vector_ui::path_picks(app) {
+        return;
+    }
+    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
+    if let Some(st) = app.session.active()
+        && let Some(id) = crate::vector_ui::pick_shape_at(&st.doc, [x, y], tol)
+    {
+        let _ = app.run("layer.select", json!({"layer": id.0}));
+    }
+}
+
 fn consumes_cancelled_vector_event(app: &mut PhotocraftApp, ev: ToolEvent) -> bool {
     cancel_stale_vector_drag(app);
     if app.cancelled_vector_drag {
@@ -413,12 +426,7 @@ pub fn tool_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers)
             }
             match tool {
                 Tool::PathSelection => {
-                    let tol = 6.0 / f64::from(app.point_zoom().max(0.01));
-                    if let Some(st) = app.session.active()
-                        && let Some(id) = crate::vector_ui::pick_shape_at(&st.doc, [x, y], tol)
-                    {
-                        let _ = app.run("layer.select", json!({"layer": id.0}));
-                    }
+                    pick_path_layer_on_press(app, x, y);
                     // The component pressed is selected, so the drag moves it (and the others selected).
                     crate::path_components::press(app, [x, y], mods.shift);
                 }

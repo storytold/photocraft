@@ -157,6 +157,8 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
     }
     match tool {
         Tool::Move => reset!(move_auto_select, move_target, move_show_transform, transform_interpolation),
+        Tool::PathSelection => reset!(path_show_bounding_box, path_select_all),
+        Tool::Artboard => reset!(artboard_auto_select, artboard_target),
         Tool::RectMarquee | Tool::EllipseMarquee => reset!(feather, anti_alias, marquee_style, marquee_width, marquee_height, marquee_unit),
         // The single-pixel marquees are never anti-aliased: Feather is their only option.
         Tool::SingleRowMarquee | Tool::SingleColumnMarquee => reset!(feather),
@@ -222,13 +224,11 @@ pub fn option_keys(tool: Tool) -> &'static [&'static str] {
         | Tool::Hand
         | Tool::RotateView
         | Tool::HistoryBrush
-        | Tool::PathSelection
         | Tool::DirectSelection
         | Tool::SliceSelect
         | Tool::AddAnchorPoint
         | Tool::DeleteAnchorPoint
         | Tool::ConvertPoint
-        | Tool::Artboard
         | Tool::Frame => &[],
     }
 }

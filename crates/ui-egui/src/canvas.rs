@@ -998,7 +998,7 @@ fn handle_canvas_tool_stroke(
     if buttons.started
         && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p)).or(response.interact_pointer_pos())
     {
-        if tool == Tool::Move && app.ui.transform.is_none() {
+        if matches!(tool, Tool::Move | Tool::PathSelection) && app.ui.transform.is_none() {
             begin_transform_controls_at(app, ctx, xf, p);
         }
         let d = xf.to_doc(p);
@@ -1163,7 +1163,7 @@ fn handle_canvas_tool_clicks(
                 }
             }
             _ => {
-                if tool == Tool::Move && app.ui.transform.is_none() {
+                if matches!(tool, Tool::Move | Tool::PathSelection) && app.ui.transform.is_none() {
                     begin_transform_controls_at(app, ctx, xf, p);
                 }
                 // If this tool was not handled on pointer-down, fall back to a
@@ -1278,6 +1278,7 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     let resizing = crate::brush_resize::draw(app, painter, xf);
     draw_transform_controls(app, painter, xf);
     crate::move_hover::draw(app, painter, xf, idx, response.hover_pos());
+    crate::layer_hover::draw(app, painter, xf, idx);
     crate::object_finder::draw(app, painter, xf, idx, response.hover_pos());
     crate::layer_pick_ui::show(app, ctx);
     let shown = app.ui.views.get(idx).cloned();

@@ -22,6 +22,7 @@ mod curvature;
 mod options;
 mod overlay;
 mod path_ops;
+pub(crate) use path_ops::{PICK_PX, path_picks, path_selection_pick, shape_at};
 mod paths_panel;
 mod pen;
 mod shapes;

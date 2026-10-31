@@ -28,6 +28,16 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         crate::widgets::vline(ui, 22.0);
     }
     let o = &mut app.ui.tool_options;
+    if tool == Tool::PathSelection {
+        lbl(ui, tl!("Select:"));
+        let mut all = if o.path_select_all { "all".to_string() } else { "active".to_string() };
+        let opts = [("active".to_string(), tl!("Active Layers")), ("all".to_string(), tl!("All Layers"))];
+        crate::widgets::dropdown(ui, "path-select-layers", tl!("Select:"), &mut all, &opts, 110.0);
+        o.path_select_all = all == "all";
+        crate::widgets::vline(ui, 22.0);
+        crate::widgets::checkbox(ui, &mut o.path_show_bounding_box, tl!("Show Bounding Box"));
+        crate::widgets::vline(ui, 22.0);
+    }
     if tool == Tool::PathSelection && target.is_none() {
         lbl(ui, if app.ui.vector_mask_target { "Drag to move the targeted vector mask" } else { tl!("Drag to move the selected path") });
         return true;

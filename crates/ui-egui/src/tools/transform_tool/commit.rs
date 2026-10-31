@@ -65,7 +65,13 @@ pub fn commit(app: &mut PhotocraftApp) {
         if w.is_identity() && !type_layer {
             return;
         }
-        app.run("edit.transform.warp", json!({"layer": t.layer, "rect": t.rect, "warp": w, "interpolation": t.interpolation}))
+        let mut p = json!({"rect": t.rect, "warp": w, "interpolation": t.interpolation});
+        if t.layers.is_empty() {
+            p["layer"] = json!(t.layer);
+        } else {
+            p["layers"] = json!(t.layers);
+        }
+        app.run("edit.transform.warp", p)
     } else {
         if t.quad == corners(t.rect) {
             return; // untouched: nothing to do and no history step; a ⌥⌘T copy or a place stays
@@ -301,14 +307,14 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         SAVE_FOR_WEB => Some(false),
         // Rotate and Flip turn the box (not while warping, where the mesh is the box).
         _ if box_preset(id).is_some() => Some(t.warp.is_none()),
-        // One box over several layers doesn't warp (#6501).
+        // Editable type among shared targets cannot take a mesh warp.
         "edit.transform.warp"
         | "layer.smartObjects.warp"
         | "edit.transform.splitWarpCrosswise"
         | "edit.transform.splitWarpHorizontally"
         | "edit.transform.splitWarpVertically"
         | "edit.transform.removeWarpSplit"
-            if !t.layers.is_empty() =>
+            if !t.layers.is_empty() && moves_type(app, t) =>
         {
             Some(false)
         }

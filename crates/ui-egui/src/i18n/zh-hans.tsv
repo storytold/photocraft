@@ -3187,3 +3187,5 @@ curves	Smooth	平滑
 	Select and Mask was closed: another layer was selected	已关闭“选择与蒙版”：已选择另一个图层
 	Drag to move the selected path	拖动以移动选中的路径
 	Edit Brush…	编辑画笔…
+	Show Bounding Box	显示定界框
+	Active Layers	现用图层

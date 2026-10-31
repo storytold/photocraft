@@ -60,6 +60,7 @@ impl PhotocraftApp {
             menu_cache: None,
             move_preview: None,
             move_hover: None,
+            panel_hover: None,
             move_distance: None,
             object_finder: None,
             blend_preview: None,
