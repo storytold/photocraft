@@ -282,14 +282,15 @@ what an agent can't finish alone.
   Horizontal, Dual and Diagonal; #2659 closed with the four available in every theme, not with new modes).
 - **Done since the re-measure:** an image file as a brush tip (TOOL-213-12), per-control pressure
   curves (TOOL-213-11), the Mixer Brush's live stroke (#3627), pressure on every sample instead of
-  the frame's last (#1776), quick taps at their own pressure (#1798, #1933). Budgets P13, P16 and P32
-  are met on the nightly baseline; P33 (brush on A4 300 ppi CMYK) is not.
+  the frame's last (#1776), quick taps at their own pressure (#1798, #1933). Budgets P16 and P32
+  hold on the nightly baseline and P13 at its median; P33 (brush on A4 300 ppi CMYK) does not.
 - **Detail:** [`brush-parity.md`](brush-parity.md).
 - **Estimate:** 100–180 h. **Human:** checking feel on real tablets.
 
 ### G5. Transform, handles and modifiers
 - **Missing:** the full interpolation list; blend mode/opacity edits during
-  a transform (#1384); pinch and smooth-scrolling behaviour (#2463, #1989);
+  a transform (#1384); preview order under an adjustment or non-Normal layer and between several
+  moving layers; pinch and smooth-scrolling behaviour (#2463, #1989);
   toolbar press-and-hold flyouts (#2301).
 - **Done since the re-measure (2026-10-10 to 12):** right-click menu during Free Transform
   (TOOL-214-5); commit/cancel buttons in the options bar (#2442); transform keeps the layer's
@@ -361,16 +362,21 @@ what an agent can't finish alone.
   24 MP photo to 90 % width takes 556 ms instead of 2013 ms (3.6×), and the whole P28 row takes
   1.64 s instead of 3.28 s, within its 3 s budget. Smaller images on the full-resolution search
   are 1.65–2.3× faster. Output is bit-identical wherever the energy stays a number (pinned
-  hashes); NaN and infinities are now deterministic. The 2026-10-31 baseline has the row at
-  1.2 s (was 954 s in 2026-10-05's), within budget. Most of the row is now
-  `read_region`/`write_region` plumbing. [Method and ranges](seam-carving-performance.md).
+  hashes); NaN and infinities are now deterministic. The 2026-10-31 baseline has the row at a
+  median of 1.2 s (954 s in 2026-10-05's), but each nightly takes one sample and two of the five
+  were over the 3 s budget (1.1–5.9 s), so the budget isn't established as met. Most of the row is
+  now `read_region`/`write_region` plumbing. [Method and ranges](seam-carving-performance.md).
 - **Measured 2026-10-31:** `perf/baseline.json` is now the median of five nightly runs (2026-10-27
   to 10-31) on the `macos-15` runner, a 3-core Apple M1 VM with a paravirtual GPU, under load.
-  **16 of the 40 measured budgets are met and 24 are not;** 14 rows are not in the baseline yet
+  **16 of the 40 measured budgets are met at that median and 24 are not; only 10 were met on all
+  five nights** (P12, P13, P26, P27, P28 and P51 each went over on at least one). 14 rows are not
+  in the baseline yet
   (new CPU-compositor rows, in only three of the five runs), 4 aren't measurable, 21 are track-only.
   It replaces 2026-10-05's single run on a heavily loaded M4 Pro (3 of 25), so the two aren't
   directly comparable, and single nights swing between 12 and 18 budgets met. P12's 150-layer GPU
-  crash is gone (22 ms p95, budget 30). P29 and P32 now fail the nightly if they break. P16 stays
+  crash has not recurred in eight nightlies on that runner; `c75160659` catches the validation
+  error, but it hasn't been re-run on the M4 Pro where it crashed. P29 and P32 now fail the nightly
+  if they break. P16 stays
   unenforced: it went over budget again on 2026-10-26. P29 is met because repeats answer from the
   last mask (#2865): a first Select Subject is not what it measures.
 - **Missing:** the 24 over-budget scenarios. Worst first: layer opacity and hide among 150
@@ -420,7 +426,7 @@ what an agent can't finish alone.
 ## Localization gaps
 
 ### G13. Hindi, RTL and engine messages
-- **Missing:** the rest of the Hindi catalog (14.7% of 2,199 keys, measured 2026-10-31; the other 11
+- **Missing:** the rest of the Hindi catalog (14.7% of 2,199 keys translated, about 85.3% left, measured 2026-10-31; the other 11
   key languages are at 99%+, Arabic and Vietnamese landed since the re-measure); right-to-left
   layout inside panels, dialogs, menus and tabs (the shell mirrors); engine error and status messages in
   English in every language; browser-locale detection on the web; Japanese IME on
@@ -449,7 +455,7 @@ what an agent can't finish alone.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-31 | major | Re-checked against `main` at 0.18.0. G1: measured counts equal the floors; 34 of 68 Photoshop failures are layer effects; #2469 closed. G2: new nightly baseline, 16 of 40 budgets met, P12 crash gone, estimate 200–350 → 150–280 h. G3: 2,351 open, ~1,760 actionable, 250–400 → 750–1,200 h. G4: stale tip, pressure-curve and Mixer rows removed. G5: 60–110 → 50–90 h. G6 renamed Tool depth (0 missing), 60–100 → 15–50 h. G7: 80–140 → 60–110 h. G9: floating panels and themes landed, 150–250 → 120–200 h. G10: JPEG XL write, PCX and DICOM read, DPX, Cineon and IFF counted. G12: 80–150 → 70–130 h. G13: Arabic and Vietnamese landed, Hindi 14.7%, 80–140 → 60–110 h. G17: stale issues corrected |
+| 2026-10-31 | major | Re-checked against `main` at 0.18.0. G1: measured counts equal the floors; 34 of 68 Photoshop failures are layer effects; #2469 closed. G2: new nightly baseline, 16 of 40 budgets met at the median (10 every night), P12 crash not seen on the VM runner, estimate 200–350 → 150–280 h. G3: 2,351 open, ~1,760 actionable, 250–400 → 750–1,200 h. G4: stale tip, pressure-curve and Mixer rows removed. G5: 60–110 → 50–90 h. G6 renamed Tool depth (0 missing), 60–100 → 15–50 h. G7: 80–140 → 60–110 h. G9: floating panels and themes landed, 150–250 → 120–200 h. G10: JPEG XL write, PCX and DICOM read, DPX, Cineon and IFF counted. G12: 80–150 → 70–130 h. G13: Arabic and Vietnamese landed, Hindi 14.7%, 80–140 → 60–110 h. G17: stale issues corrected |
 | 2026-10-27 | minor | Smooth/Feather command reads and replacement use selection bounds plus blur reach; full-canvas reference and release comparisons extended; percentages and scorecard budgets unchanged |
 | 2026-10-27 | minor | G9: 12 of 181 preferences do nothing, the scorecard's count with integration batch 9 (#9775) on main; no estimate changed |
 | 2026-10-26 | minor | Expand/Contract/Border distance work, mask reads and replacement cropped to nonzero bounds; bounded distances for radii ≤5; 36 MP exact-output comparisons improve 1.54–37.82× across eight cases; percentages, estimates and scorecard budgets unchanged |

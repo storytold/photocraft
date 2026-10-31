@@ -50,7 +50,7 @@ Remaining: 60–110 h, plus native-speaker review (recorded only for Italian, 20
 15 more, each at 99%+ of the 2,199 measured keys on 2026-10-31, status `partial` for the same
 reason. Row counts below are from when each landed or was last noted. Traditional Chinese `zh-hant` (2,329 rows), Russian `ru` (4,227 keys; also every dynamic label the
 other catalogs translate, [notes](localization-ru.md)), Ukrainian `uk` (3,375), Czech `cs` (3,522),
-Polish `pl` (3,366), Greek `el` (3,481), Dutch `nl` (3,568), Italian `it` (4,164; also every dynamic label the
+Polish `pl` (3,366), Greek `el` (3,481), Dutch `nl` (3,568), Hungarian `hu` (4,362, added 2026-10-12), Italian `it` (4,164; also every dynamic label the
 other catalogs translate; reviewed by a native speaker, [notes](localization-it.md)). Turkish `tr`
 (3,731 rows) also covers every measured key. Serbian `sr` (4,022 rows, Latin script, Ekavian, added 2026-10-12) covers every
 measured key and the union of the other catalogs' dynamic labels; its one/few/many plurals reuse

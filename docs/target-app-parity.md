@@ -23,8 +23,8 @@ the measured checklists are [`scorecard.md`](scorecard.md) (`cargo xtask scoreca
 | Remaining to **full parity** (~95–100%) | **~2,600–4,500 Opus 5.5 agent-hours** | estimated; includes AI and ecosystem, which need owner decisions |
 
 Since the 2026-10-10 re-measure (breadth ~76%, ready ~45%, 1,100–1,800 h to beta) the measured
-rows moved a lot: all 68 tools exist, the 150-layer GPU crash is gone, 16 of 40 measured budgets
-are met, and 11 of the 12 key languages are at 99%+. The estimates moved less, because open issues
+rows moved a lot: all 68 tools exist, the 150-layer GPU crash hasn't recurred on the nightly runner,
+16 of 40 measured budgets are met at the median, and 11 of the 12 key languages are at 99%+. The estimates moved less, because open issues
 went from 579 to 2,351: the hours to beta went **up** even though readiness rose.
 
 These numbers replace the 2026-10-03 estimate (82% "of the way", 140–220 agent-hours to 95%,
@@ -83,7 +83,7 @@ Weights reflect what a working Photoshop user depends on (photographers, retouch
 | Features in depth (tools, layers, selections, type, filters, transforms) | 25% | 60% | 650–1,100 | Scorecard checklists: Tools 36 done / 9 partial / 0 missing (20 / 15 / 6 at the last count), Type 5 / 5 / 0, Automation 5 / 2 / 4. No tool missing; Select and Mask is a workspace since 2026-10-23; Content-Aware Fill and Path Blur are still parameter dialogs; type on a path partial; paragraph direction buttons exist but the visual RTL caret is missing | [gaps.md](gaps.md) |
 | UI / UX fidelity and feel | 15% | 45% | 500–850 | 562 actionable UI issues; Workspace checklist 16 / 7 / 0 (5 / 7 / 11 on 2026-10-10); 12 of 182 preferences do nothing (was 27 of 156); floating panel windows, 14 themes and the full Color panel landed; press-and-hold flyouts still missing; brush lag and pressure jumps reported | [ui-parity.md](ui-parity.md), [brush-parity.md](brush-parity.md) |
 | File formats and fidelity | 15% | 65% | 320–540 | PSD oracle on Photoshop-authored files 190/258 (74%, was 52%; layer effects 3/37); io corpus 148/170 (87%); psd-tools 249/309 (81%); round trips ~100% of corpus; but users report Photoshop refusing our files (#1281); 15 + 7 of 31 formats; no Photoshop PDF read, EPS, JPEG 2000, JPEG XL read, AVIF read, CR3 | [file-format-parity.md](file-format-parity.md) |
-| Performance | 10% | 45% | 150–280 | 16 of 40 measured budgets met (baseline 2026-10-31, median of five nightlies on a loaded 3-core VM; not comparable to 2026-10-05's 3 of 25). The 150-layer nudge no longer crashes (P12, 22 ms p95); 150 full-canvas layers on the app's GPU budget ~6 s (P60, P61); users report big-brush and cursor lag (#2619, #1343, #1994) | [scorecard.md](scorecard.md#performance) |
+| Performance | 10% | 45% | 150–280 | 16 of 40 measured budgets met at the median of five nightlies on a loaded 3-core VM, 10 on all five (baseline 2026-10-31; not comparable to 2026-10-05's 3 of 25). The 150-layer nudge hasn't crashed in eight nightlies there (P12; `c75160659` catches the validation error), not re-run on the M4 Pro; 150 full-canvas layers on the app's GPU budget ~6 s (P60, P61); users report big-brush and cursor lag (#2619, #1343, #1994) | [scorecard.md](scorecard.md#performance) |
 | Stability | 10% | 45% | 250–400 | Never-crash lints on 30/30 crates, `panic_hunt` in the gate, atomic saves; freezes and GPU panics closed (#2518, #2020, #1215), but 81 actionable issues name a crash, freeze or failed start, and no-GPU start still fails on some machines (#2412). Not moved: the fixes and the new reports roughly cancel | [gaps.md](gaps.md) |
 | Hardware | 5% | 55% | 70–130 | GPU compositor (wgpu) pages past the texture limit; panels in their own windows; monitor profile detected on macOS and Linux (colord), not Windows; pen pressure on all desktops but tilt/rotation not on Windows, Wayland pen broken (#2622), no HDR/EDR output | [hardware-parity.md](hardware-parity.md) |
 | Localization | 5% | 65% | 60–110 | 11 of the 12 key languages at 99%+ of 2,199 measured UI keys, Hindi 14.7%; 27 UI languages; RTL shell only, panel interiors stay left to right; engine messages English | [localization-parity.md](localization-parity.md) |
@@ -119,7 +119,7 @@ Discounts for what still stops real work (estimated, each with evidence):
 | Discount | Factor | Evidence |
 |---|---:|---|
 | Interaction fidelity | ×0.93 | 562 actionable UI issues; press-and-hold flyouts missing ([ui-parity.md](ui-parity.md)); brush lag and pressure reports ([brush-parity.md](brush-parity.md)) |
-| Stability and speed on real machines | ×0.90 | 16 of 40 measured budgets met; 81 actionable crash or freeze reports; GPU start failures (#2412); 132 actionable performance issues |
+| Stability and speed on real machines | ×0.90 | 16 of 40 measured budgets met at the median, 10 every night; 81 actionable crash or freeze reports; GPU start failures (#2412); 132 actionable performance issues |
 | Exchanging files with Photoshop users | ×0.93 | Photoshop-authored oracle 190/258, layer effects 3/37; exports refused by Photoshop (#1281); smart-filter re-render 5/30 |
 
 **60% × 0.93 × 0.90 × 0.93 ≈ 47%** (range 42–52), estimated.
@@ -149,7 +149,7 @@ workflows, PSD exchange edge cases, and everything excluded above.
 | New / open a photo | 10% | 90% | |
 | Select (marquee, lasso, magic wand, object) | 10% | 75% | |
 | Move and Free Transform | 10% | 70% | commit and cancel buttons in the options bar (#2442, closed) |
-| Brush and eraser | 10% | 75% | budgets P13 and P16 met; lag with big brushes (#2619) |
+| Brush and eraser | 10% | 75% | budgets P13 (at the median) and P16 met; lag with big brushes (#2619) |
 | Undo, History | 8% | 90% | |
 | Basic adjustments (brightness, levels, curves, hue/saturation) | 8% | 80% | |
 | Crop and straighten | 6% | 85% | |
@@ -173,7 +173,7 @@ parity for the area and are already contained in the dimension rows above.
 |---|---:|---:|---|
 | Layers, groups, masks, blend modes, smart objects, layer styles | 65% | 150–250 | Broad and GPU-accelerated. Open: a single pixel layer copies its pixels without its mask and styles (UI-217-23: smart object, type, shape, group, fill and adjustment layers and multi-layer selections copy and paste whole), smart-object perspective (FILE-215-6), a user contour library (FILE-215-15). Multi-layer Smart Object conversion (#2052, #2651), Stamp Visible (UI-217-22) and mask targeting by command (#2458) are done |
 | Selections, Select and Mask, channels | 60% | 120–200 | All selection tools, single row/column marquee included (#2837). Select and Mask is Photoshop's workspace with its own tools (Quick Selection, Refine Edge Brush, Brush, Object Selection, Lasso, Polygonal Lasso), view modes and six outputs (TOOL-214-1, #7069, #8148), no Refine Hair (#2671), Object Aware or Presets; Select Subject/Sky classical, repeats within budget from the last mask (P29, #2865) |
-| Painting and brush engine | 60% | 150–250 | Every Brush Settings section exists, with image tips and per-control pressure curves; brush budgets P13, P16 and P32 met, P33 not; feel is the gap: lag on big brushes, pressure jumps, smoothing and edge quality reports ([brush-parity.md](brush-parity.md)) |
+| Painting and brush engine | 60% | 150–250 | Every Brush Settings section exists, with image tips and per-control pressure curves; brush budgets P16 and P32 met, P13 at the median, P33 not; feel is the gap: lag on big brushes, pressure jumps, smoothing and edge quality reports ([brush-parity.md](brush-parity.md)) |
 | Retouching (healing, clone, patch, remove, content-aware) | 55% | 100–180 | Remove tool non-generative; Content-Aware Fill has no workspace (TOOL-214-15); every brush-based retouch tool draws live, with Spot Healing and Remove computing on release as in Photoshop (TOOL-213-7) |
 | Transform, warp, puppet, perspective, liquify | 60% | 100–180 | Free Transform modifiers right, with a right-click transform menu (TOOL-214-5), commit and cancel buttons, H/V skew fields and several selected layers at once (#6501); Puppet Warp mesh follows the object outline (TOOL-214-6); Liquify called "useless" by a user (#2606) and over budget (P30) |
 | Adjustments and filters | 70% | 120–200 | All present; smart-filter re-render matches Photoshop on 5 of 30 files; Filter Gallery looks approximate; no Neural Filters |

@@ -1,6 +1,6 @@
 # UI parity: tools, handles, modifiers and feel
 
-> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** major (every open row re-checked against the code and its issues at 0.18.0, 30 rows closed; earlier changes are in the revision history) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** major (every open row re-checked against the code and its issues at 0.18.0, 29 rows closed; earlier changes are in the revision history) · **Target:** Adobe Photoshop 2026
 
 How PhotoCraft's direct manipulation compares with Photoshop 2026 (27.11.0): the toolbox, the
 handles and modifier keys of each gesture, nudging, snapping, numeric precision, navigation,
@@ -74,7 +74,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 | Commit/cancel buttons in the options bar | done | #2442; `tools/symmetry_ui/tests.rs` |
 | Right-click menu during transform (Scale, Rotate, Skew, Distort, Perspective, Warp, flips, rotates) | done | TOOL-214-5 |
 | Arrow keys nudge the box 1 px, ⇧ 10 px | done | `move_mods.rs` |
-| Preview keeps layer order, blend mode and mask | done | mask BUG-205-2; order and blend #2439, #2480 |
+| Preview keeps layer order, blend mode and mask | partial | mask BUG-205-2; blend #2439, #2480; Normal layers above stay above (`tools/transform_tool/preview.rs` `Above`), but an adjustment or non-Normal layer above, and what's above it, draw under the box until commit; several moving layers as in the row above |
 | Preview clipped to the canvas, follows edits while open | done | #2201, #2099 |
 | Hand (space) mid-transform doesn't interrupt it | done | #2302, #2327 |
 | Blend mode / opacity edits while transforming | missing | #1384 |
@@ -255,7 +255,7 @@ Paragraph; the rest open as in-app floating windows, and any group can float in 
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-31 | major | Open rows re-checked at 0.18.0: 30 rows moved to done against issues, commits or scorecard rows, and to partial where only part landed. #2602 stays partial (closed, not confirmed in the code); the filter-type dropdown stays partial though #5048 closed (three of nine modes). Summary ~40 → ~45%, tools 56 → 68 of 68; estimates G5 50–90 h, G6 15–50 h, G9 120–200 h |
+| 2026-10-31 | major | Open rows re-checked at 0.18.0: 29 rows moved to done against issues, commits or scorecard rows, and to partial where only part landed. #2602 stays partial (closed, not confirmed in the code); the filter-type dropdown stays partial though #5048 closed (three of nine modes). Summary ~40 → ~45%, tools 56 → 68 of 68; estimates G5 50–90 h, G6 15–50 h, G9 120–200 h |
 | 2026-10-27 | minor | Every preference takes effect: 12 of 181 do nothing, the scorecard's count with integration batch 9 (#9775) on main; new layers go above a group whose lock would refuse them (#4329) |
 | 2026-10-25 | minor | Path Operations fixes (#7648 review): the first component keeps combining, the Pen leaves a component selection it doesn't show alone, a live shape dragged with Path Selection stays live, and a refused Pen draft becomes the Work Path on Esc or a tool switch instead of being retried every frame; no percentage changed |
 | 2026-10-24 | minor | Path Selection selects path components and has the Path Operations menu; the menu and `+` / `-` change the selected components' operation (`path.setOperation`); the Pen carries on an open shape layer or vector mask path from its endpoint (#1397 feedback); row stays partial until the Shape tools have the menu; no percentage changed |

@@ -60,7 +60,7 @@ tablets against Photoshop side by side.
 | Soft-edge falloff matches Photoshop's curve | partial | #2149, #1619 |
 | Brush preview and cursor crisp, not pixelated | partial | #1433 |
 | Cursor outline equals the painted footprint at every zoom | done | #1761, #2364; shaped tips trace their outline (#3467), turned and flipped with a rotated or flipped view |
-| Latency: dab to screen within a frame | partial | budgets P13, P16 and P32 met, P33 over (scorecard, 2026-10-31; P16 went over once in eight nightlies); big-brush lag #2619, #1994; cursor lag #1343 |
+| Latency: dab to screen within a frame | partial | budgets P16 and P32 met on all five baseline nights, P13 at the median, P33 over (scorecard, 2026-10-31; P16 went over once in eight nightlies, P13 once in the five); big-brush lag #2619, #1994; cursor lag #1343 |
 | No hitch at mouse-up on a long stroke | not measurable | P32 needs a frame harness |
 | Live stroke for Brush and Eraser | done | |
 | Live stroke for every brush-based retouch tool | partial | TOOL-213-7: all live, the Mixer Brush too (#3627); Spot Healing shows the area it heals and heals on release, as Photoshop does |

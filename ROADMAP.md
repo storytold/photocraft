@@ -43,7 +43,7 @@ architecture and the PSD writer are the serial parts.
 **Why alpha.** Core workflows (open, layer, select, paint, adjust, filter, type, save) work end to
 end, and breadth is high, but 2,351 issues are open (2026-10-31; ~1,760 once labelled duplicates,
 needs-info, spam and already-fixed reports are set aside, 50 of them critical), 24 of the 40
-measured performance budgets are missed, and PSDs we write are not yet reliably accepted by
+measured performance budgets are missed (only 10 are met every night), and PSDs we write are not yet reliably accepted by
 Photoshop (#1281). Beta needs ~75% ready and no blocking PSD gap. The
 [alpha gate](docs/roadmap.md#alpha-gate) passes: all six core workflows (retouch, composite, cut-out,
 design, paint, PSD exchange) complete end to end and save and reopen; four are partial in depth,
@@ -58,7 +58,7 @@ none blocked.
 | File formats | 65% (presence ~80%) | 320–540 | [file-format-parity](docs/file-format-parity.md) |
 | Hardware (GPU, pen, displays) | 55% | 70–130 | [hardware-parity](docs/hardware-parity.md) |
 | Localization | 65% | 60–110 | [localization-parity](docs/localization-parity.md) |
-| Performance | 45% (16/40 measured budgets met) | 150–280 | [scorecard](docs/scorecard.md#performance) |
+| Performance | 45% (16/40 measured budgets met at the median, 10 every night) | 150–280 | [scorecard](docs/scorecard.md#performance) |
 | Stability | 45% | 250–400 | [gaps](docs/gaps.md#g3-user-reported-bug-backlog) |
 | Platforms | 80% | 30–60 | [scorecard](docs/scorecard.md#distribution) |
 | Ecosystem / plug-ins / scripting | 15% | 250–450 | [gaps](docs/gaps.md#g16-plug-in-compatibility) |
@@ -126,7 +126,7 @@ Detail and the next releases: [docs/roadmap.md](docs/roadmap.md).
 
 | Date | Entry |
 |---|---|
-| 2026-10-31 | Full re-measure at 0.18.0: breadth ~79%, ready ~52%, alpha. Tools 68/68, P12's 150-layer GPU crash gone, performance baseline moved to the nightly runner (16 of 40 budgets met), 27 UI languages. Open issues 2,351 |
+| 2026-10-31 | Full re-measure at 0.18.0: breadth ~79%, ready ~52%, alpha. Tools 68/68, P12's 150-layer GPU crash no longer seen on the nightly runner, performance baseline moved to that runner (16 of 40 budgets met at the median), 27 UI languages. Open issues 2,351 |
 | 2026-10-30 | 0.18.0 |
 | 2026-10-23 | Select and Mask becomes Photoshop's workspace (#7069, #8148) |
 | 2026-10-17 | Object Finder classifies background by boundary coverage, retaining large enclosed foregrounds and rejecting surrounding backdrop (#6548); learned segmentation remains open (#2788) |
