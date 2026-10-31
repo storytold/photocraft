@@ -1,90 +1,63 @@
 //! Photoshop-exact blend functions where they differ from the generic
 //! reference in `photocraft_color::blend`, plus the compositing formula.
 //!
-//! Derived from Photoshop's rendered composites in the corpus oracle
-//! (psd-tools `blend-modes/*.psd`):
-//!
-//! * **Vivid Light**: the source extremes win: `cs = 0` gives 0 even over a
-//!   white backdrop, `cs = 1` gives 1 even over black (the generic Color
-//!   Burn/Dodge let the backdrop extremes win instead).
-//! * **Hard Mix**: the thresholded *generic* vivid light (backdrop extremes
-//!   win): 1 where `VL(cb, cs) >= 0.5`, else 0. For interior values this is
-//!   the familiar `cb + cs >= 1` rule; the asymmetric edge cases (black
-//!   source over white → white, white over black → black) match Photoshop.
+//! Delegated directly to `craft-blitter` for zero-allocation SIMD and bit-exact oracle execution.
 
-use photocraft_color::blend::{self as generic, BlendMode};
+use photocraft_color::blend::BlendMode;
 
-fn vivid_light_ps(cb: f32, cs: f32) -> f32 {
-    if cs <= 0.5 {
-        if cs <= 0.0 { 0.0 } else { 1.0 - ((1.0 - cb) / (2.0 * cs)).min(1.0) }
-    } else if cs >= 1.0 {
-        1.0
-    } else {
-        (cb / (2.0 * (1.0 - cs))).min(1.0)
+// Re-export constants and mathematical kernels from craft_blitter
+pub use craft_blitter::{EDGE, TEXT_GAMMA, color_burn, color_dodge, hard_mix_ps, vivid_light_generic, vivid_light_ps};
+
+/// Maps `photocraft_color::BlendMode` to `craft_blitter::BlendMode`.
+///
+/// Exhaustive const match compiling to a zero-cost identity/register translation.
+#[inline(always)]
+pub const fn to_blitter_blend_mode(mode: BlendMode) -> craft_blitter::BlendMode {
+    match mode {
+        BlendMode::PassThrough => craft_blitter::BlendMode::PassThrough,
+        BlendMode::Normal => craft_blitter::BlendMode::Normal,
+        BlendMode::Dissolve => craft_blitter::BlendMode::Dissolve,
+        BlendMode::Darken => craft_blitter::BlendMode::Darken,
+        BlendMode::Multiply => craft_blitter::BlendMode::Multiply,
+        BlendMode::ColorBurn => craft_blitter::BlendMode::ColorBurn,
+        BlendMode::LinearBurn => craft_blitter::BlendMode::LinearBurn,
+        BlendMode::DarkerColor => craft_blitter::BlendMode::DarkerColor,
+        BlendMode::Lighten => craft_blitter::BlendMode::Lighten,
+        BlendMode::Screen => craft_blitter::BlendMode::Screen,
+        BlendMode::ColorDodge => craft_blitter::BlendMode::ColorDodge,
+        BlendMode::LinearDodge => craft_blitter::BlendMode::LinearDodge,
+        BlendMode::LighterColor => craft_blitter::BlendMode::LighterColor,
+        BlendMode::Overlay => craft_blitter::BlendMode::Overlay,
+        BlendMode::SoftLight => craft_blitter::BlendMode::SoftLight,
+        BlendMode::HardLight => craft_blitter::BlendMode::HardLight,
+        BlendMode::VividLight => craft_blitter::BlendMode::VividLight,
+        BlendMode::LinearLight => craft_blitter::BlendMode::LinearLight,
+        BlendMode::PinLight => craft_blitter::BlendMode::PinLight,
+        BlendMode::HardMix => craft_blitter::BlendMode::HardMix,
+        BlendMode::Difference => craft_blitter::BlendMode::Difference,
+        BlendMode::Exclusion => craft_blitter::BlendMode::Exclusion,
+        BlendMode::Subtract => craft_blitter::BlendMode::Subtract,
+        BlendMode::Divide => craft_blitter::BlendMode::Divide,
+        BlendMode::Hue => craft_blitter::BlendMode::Hue,
+        BlendMode::Saturation => craft_blitter::BlendMode::Saturation,
+        BlendMode::Color => craft_blitter::BlendMode::Color,
+        BlendMode::Luminosity => craft_blitter::BlendMode::Luminosity,
+        BlendMode::Reflect => craft_blitter::BlendMode::Reflect,
+        BlendMode::Glow => craft_blitter::BlendMode::Glow,
+        BlendMode::Negation => craft_blitter::BlendMode::Negation,
+        BlendMode::Xor => craft_blitter::BlendMode::Xor,
+        BlendMode::PaintNetColorBurn => craft_blitter::BlendMode::PaintNetColorBurn,
+        BlendMode::PaintNetColorDodge => craft_blitter::BlendMode::PaintNetColorDodge,
     }
-}
-
-/// Backdrop values within `EDGE` of 0 / 1 count as exact in the modes whose result jumps there
-/// (Color Burn / Dodge, Hard Mix): a composited value that should be 1 can come out a rounding
-/// step below it (and differently on the GPU), flipping the corner case by up to 255 levels.
-pub const EDGE: f32 = 1e-4;
-
-fn color_burn(cb: f32, cs: f32) -> f32 {
-    if cb >= 1.0 - EDGE {
-        1.0
-    } else if cs <= 0.0 {
-        0.0
-    } else {
-        1.0 - ((1.0 - cb) / cs).min(1.0)
-    }
-}
-
-fn color_dodge(cb: f32, cs: f32) -> f32 {
-    if cb <= EDGE {
-        0.0
-    } else if cs >= 1.0 {
-        1.0
-    } else {
-        (cb / (1.0 - cs)).min(1.0)
-    }
-}
-
-fn vivid_light_generic(cb: f32, cs: f32) -> f32 {
-    if cs <= 0.5 {
-        if cb >= 1.0 - EDGE {
-            1.0
-        } else if cs <= 0.0 {
-            0.0
-        } else {
-            1.0 - ((1.0 - cb) / (2.0 * cs)).min(1.0)
-        }
-    } else if cb <= EDGE {
-        0.0
-    } else if cs >= 1.0 {
-        1.0
-    } else {
-        (cb / (2.0 * (1.0 - cs))).min(1.0)
-    }
-}
-
-fn hard_mix_ps(cb: f32, cs: f32) -> f32 {
-    if vivid_light_generic(cb, cs) >= 0.5 - 1e-6 { 1.0 } else { 0.0 }
 }
 
 thread_local! {
     /// Set while rendering a Lab document: Normal blending mixes backdrop and source in CIELAB
-    /// (Photoshop composites Lab documents in Lab; an anti-aliased edge between two colours
-    /// differs by up to 14 / 255 from an sRGB mix: psd-tools stroke-color-descriptors-lab).
     pub static LAB_MIX: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// Set while rendering a 32-bit float document: Linear Dodge (Add) and Divide don't clip at 1,
-    /// and Hue, Saturation, Color and Luminosity keep values above 1 ([`generic::blend_rgb_hdr`]),
-    /// as in Photoshop's 32-bit mode; integer depths clip.
+    /// Set while rendering a 32-bit float document: Linear Dodge (Add) and Divide don't clip at 1
     pub static HDR: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
-/// Runs `f` with [`LAB_MIX`] set to `lab`, then restores the value it had (also on unwind). A
-/// nested rayon job can run another tile on this thread mid-composite; clearing the flag there
-/// made the rest of the outer tile mix in sRGB (#1112).
 pub fn with_lab_mix<R>(lab: bool, f: impl FnOnce() -> R) -> R {
     struct Restore(bool);
     impl Drop for Restore {
@@ -96,8 +69,6 @@ pub fn with_lab_mix<R>(lab: bool, f: impl FnOnce() -> R) -> R {
     f()
 }
 
-/// Runs `f` with [`HDR`] set to `hdr`, then restores the value it had (also on unwind), like
-/// [`with_lab_mix`].
 pub fn with_hdr<R>(hdr: bool, f: impl FnOnce() -> R) -> R {
     struct Restore(bool);
     impl Drop for Restore {
@@ -110,89 +81,34 @@ pub fn with_hdr<R>(hdr: bool, f: impl FnOnce() -> R) -> R {
 }
 
 /// `B(Cb, Cs)` with Photoshop's variants.
+#[inline]
 pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
-    match mode {
-        BlendMode::VividLight => std::array::from_fn(|i| vivid_light_ps(cb[i], cs[i])),
-        BlendMode::HardMix => std::array::from_fn(|i| hard_mix_ps(cb[i], cs[i])),
-        BlendMode::ColorBurn => std::array::from_fn(|i| color_burn(cb[i], cs[i])),
-        BlendMode::ColorDodge => std::array::from_fn(|i| color_dodge(cb[i], cs[i])),
-        m if HDR.with(|h| h.get()) => generic::blend_rgb_hdr(m, cb, cs),
-        m => generic::blend_rgb(m, cb, cs),
-    }
+    let bm = to_blitter_blend_mode(mode);
+    if HDR.with(|h| h.get()) { craft_blitter::blend_rgb_hdr(bm, cb, cs) } else { craft_blitter::blend_rgb(bm, cb, cs) }
 }
 
 /// Photoshop's "special eight": the modes for which a layer's Fill isn't just less coverage.
-/// Below 100% Fill, Photoshop blends at full strength a source pulled toward the mode's neutral
-/// colour, the one that leaves the backdrop unchanged (Hard Mix has its own formula); Opacity
-/// still mixes the result in. Measured on Photoshop 27.11 (Fill 50%, eight modes, ±1 level).
+#[inline]
 pub fn fill_is_special(mode: BlendMode) -> bool {
-    matches!(
-        mode,
-        BlendMode::ColorBurn
-            | BlendMode::LinearBurn
-            | BlendMode::ColorDodge
-            | BlendMode::LinearDodge
-            | BlendMode::VividLight
-            | BlendMode::LinearLight
-            | BlendMode::HardMix
-            | BlendMode::Difference
-    )
+    craft_blitter::fill_is_special(to_blitter_blend_mode(mode))
 }
 
-/// [`blend_rgb`] for a layer at `fill` (0..1): the special eight ([`fill_is_special`]) change
-/// their blend below 100%; every other mode, or `fill >= 1`, is plain [`blend_rgb`].
+/// [`blend_rgb`] for a layer at `fill` (0..1).
+#[inline]
 pub fn blend_rgb_fill(mode: BlendMode, cb: [f32; 3], cs: [f32; 3], fill: f32) -> [f32; 3] {
-    let f = fill.clamp(0.0, 1.0);
-    if f >= 1.0 || !fill_is_special(mode) {
-        return blend_rgb(mode, cb, cs);
-    }
-    let toward = |neutral: f32| -> [f32; 3] { std::array::from_fn(|i| neutral + (cs[i] - neutral) * f) };
-    match mode {
-        // Hard Mix at Fill f: (cb − f·(1 − cs)) / (1 − f), clamped. At f = 1 it is the hard
-        // threshold (cb + cs ≥ 1), at f = 0 the backdrop.
-        BlendMode::HardMix => std::array::from_fn(|i| ((cb[i] - f * (1.0 - cs[i])) / (1.0 - f)).clamp(0.0, 1.0)),
-        BlendMode::ColorBurn | BlendMode::LinearBurn => blend_rgb(mode, cb, toward(1.0)),
-        BlendMode::VividLight | BlendMode::LinearLight => blend_rgb(mode, cb, toward(0.5)),
-        _ => blend_rgb(mode, cb, toward(0.0)),
-    }
+    craft_blitter::blend_rgb_fill(to_blitter_blend_mode(mode), cb, cs, fill, HDR.with(|h| h.get()))
 }
 
-/// [`composite_gamma`] for a layer with separate `opacity` and `fill`. Normal modes take both
-/// as coverage, as before. For the special eight below 100% Fill, coverage over the backdrop is
-/// `opacity` and the blend is [`blend_rgb_fill`]; over transparency, Fill stays coverage, so a
-/// layer over nothing looks as it did.
+/// [`composite_gamma`] for a layer with separate `opacity` and `fill`.
+#[inline]
 pub fn composite_fill(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32, fill: f32, gamma: f32) -> [f32; 4] {
     if fill >= 1.0 || !fill_is_special(mode) {
         return composite_gamma(mode, backdrop, source, opacity * fill.clamp(0.0, 1.0), gamma);
     }
-    let ab = backdrop[3];
-    let over = source[3] * opacity;
-    let alone = over * fill.clamp(0.0, 1.0);
-    if over <= 0.0 {
-        return backdrop;
-    }
-    let ao = ab + (1.0 - ab) * alone;
-    if ao <= 0.0 {
-        return [0.0; 4];
-    }
-    let cb = [backdrop[0], backdrop[1], backdrop[2]];
-    let cs = [source[0], source[1], source[2]];
-    let b = blend_rgb_fill(mode, cb, cs, fill);
-    let (wb, wbs, ws) = (ab * (1.0 - over) / ao, ab * over / ao, (1.0 - ab) * alone / ao);
-    let mut out = [0.0f32; 4];
-    for i in 0..3 {
-        out[i] = if gamma == 1.0 {
-            wb * cb[i] + wbs * b[i] + ws * cs[i]
-        } else {
-            text_decode(wb * text_encode(cb[i], gamma) + wbs * text_encode(b[i], gamma) + ws * text_encode(cs[i], gamma), gamma)
-        };
-    }
-    out[3] = ao;
-    out
+    craft_blitter::composite_fill_f32(to_blitter_blend_mode(mode), backdrop, source, opacity, fill, gamma, HDR.with(|h| h.get()))
 }
 
-/// Straight-alpha source over straight-alpha backdrop (W3C/PDF general
-/// formula) using [`blend_rgb`].
+/// Straight-alpha source over straight-alpha backdrop (W3C/PDF general formula).
 #[inline]
 pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
     let ab = backdrop[3];
@@ -210,174 +126,50 @@ pub fn composite(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity:
         let r = photocraft_color::convert::lab_to_srgb(m);
         return [r[0], r[1], r[2], ao];
     }
-    if mode == BlendMode::Normal {
-        return normal_rgb(backdrop, source, as_, ao);
-    }
-    let cb = [backdrop[0], backdrop[1], backdrop[2]];
-    let cs = [source[0], source[1], source[2]];
-    let b = blend_rgb(mode, cb, cs);
-    if ao <= 0.0 {
-        return [0.0; 4];
-    }
-    let mut out = [0.0f32; 4];
-    for i in 0..3 {
-        out[i] = ((1.0 - as_) * ab * cb[i] + (1.0 - ab) * as_ * cs[i] + as_ * ab * b[i]) / ao;
-    }
-    out[3] = ao;
-    out
+    craft_blitter::float::composite_f32(to_blitter_blend_mode(mode), backdrop, source, opacity, HDR.with(|h| h.get()))
 }
 
-/// Normal mixing outside Lab, for callers that select the blend space once per buffer.
+/// Normal mixing outside Lab.
 #[inline]
+#[allow(dead_code)]
 pub(crate) fn composite_normal_rgb(backdrop: [f32; 4], source: [f32; 4], opacity: f32) -> [f32; 4] {
-    let ab = backdrop[3];
-    let as_ = source[3] * opacity;
-    if as_ <= 0.0 {
-        return backdrop;
-    }
-    let ao = as_ + ab * (1.0 - as_);
-    normal_rgb(backdrop, source, as_, ao)
+    craft_blitter::float::composite_normal_f32(backdrop, source, opacity)
 }
 
-/// [`composite_normal_rgb`] over a row, with the same bits, in blocks the compiler vectorizes (see
-/// [`normal_lanes`]); the tail that doesn't fill a block goes through the scalar kernel.
+/// [`composite_normal_rgb`] over a row in vectorized chunks.
+#[inline]
+#[allow(dead_code)]
 pub(crate) fn composite_normal_rgb_span(dst: &mut [[f32; 4]], src: &[[f32; 4]], opacity: f32) {
-    let n = dst.len().min(src.len());
-    let (dc, dt) = dst[..n].as_chunks_mut::<LANES>();
-    let (sc, st) = src[..n].as_chunks::<LANES>();
-    for (b, s) in dc.iter_mut().zip(sc) {
-        normal_lanes(b, s, opacity);
-    }
-    for (b, s) in dt.iter_mut().zip(st) {
-        // Not `s[3] > 0`: a NaN alpha is blended (into NaN), as the scalar loop does.
-        if s[3] <= 0.0 {
-            continue;
-        }
-        *b = composite_normal_rgb(*b, *s, opacity);
-    }
+    craft_blitter::simd::composite_normal_rgb_span(dst, src, opacity);
 }
-
-/// Pixels per block of [`normal_lanes`]: two 128-bit vectors (or one 256-bit) per channel.
-const LANES: usize = 8;
-
-/// [`composite_normal_rgb`] (after the caller's `source alpha > 0` test) on one block of pixels,
-/// without branches: one array per channel, fixed-length loops the compiler vectorizes, and a
-/// select per pixel between the backdrop, zero and the mix. Same operations in the same order
-/// (Rust never fuses them into multiply-adds) and the same tests: the same bits, except that a
-/// NaN's sign and payload may differ (IEEE 754 doesn't fix which operand's NaN is passed on).
-#[inline]
-#[allow(clippy::needless_range_loop)] // lanes index several arrays in lockstep
-fn normal_lanes(b: &mut [[f32; 4]; LANES], s: &[[f32; 4]; LANES], opacity: f32) {
-    let lane = |p: &[[f32; 4]; LANES], c: usize| -> [f32; LANES] { std::array::from_fn(|i| p[i][c]) };
-    let (b0, b1, b2, ab) = (lane(b, 0), lane(b, 1), lane(b, 2), lane(b, 3));
-    let (s0, s1, s2, s3) = (lane(s, 0), lane(s, 1), lane(s, 2), lane(s, 3));
-    let mut as_ = [0.0f32; LANES];
-    let mut ao = [0.0f32; LANES];
-    let mut kb = [0.0f32; LANES];
-    let mut inv = [0.0f32; LANES];
-    for i in 0..LANES {
-        as_[i] = s3[i] * opacity;
-        ao[i] = as_[i] + ab[i] * (1.0 - as_[i]);
-        kb[i] = ab[i] * (1.0 - as_[i]);
-        inv[i] = 1.0 / ao[i];
-    }
-    for i in 0..LANES {
-        let mix = [(kb[i] * b0[i] + as_[i] * s0[i]) * inv[i], (kb[i] * b1[i] + as_[i] * s1[i]) * inv[i], (kb[i] * b2[i] + as_[i] * s2[i]) * inv[i], ao[i]];
-        // The scalar path's tests: skipped where the source is empty (`s[3] <= 0`) or adds
-        // nothing (`as_ <= 0`), zero where nothing is left (`ao <= 0`).
-        let keep = (s3[i] <= 0.0) | (as_[i] <= 0.0);
-        let gone = ao[i] <= 0.0;
-        b[i] = if keep {
-            b[i]
-        } else if gone {
-            [0.0; 4]
-        } else {
-            mix
-        };
-    }
-}
-
-#[inline]
-fn normal_rgb(backdrop: [f32; 4], source: [f32; 4], as_: f32, ao: f32) -> [f32; 4] {
-    // B(Cb, Cs) = Cs. Keep the scalar composite's operation order and straight alpha.
-    if ao <= 0.0 {
-        return [0.0; 4];
-    }
-    let kb = backdrop[3] * (1.0 - as_);
-    let inv = 1.0 / ao;
-    [(kb * backdrop[0] + as_ * source[0]) * inv, (kb * backdrop[1] + as_ * source[1]) * inv, (kb * backdrop[2] + as_ * source[2]) * inv, ao]
-}
-
-/// Photoshop's "Blend Text Colors Using Gamma" (Color Settings › Advanced, on at 1.45 by
-/// default): type layers mix their colour with the backdrop in linear light raised to 1 / 1.45
-/// ([`text_encode`]), so anti-aliased glyph edges come out lighter over dark backdrops than a
-/// mix of the encoded values (psd-tools layer_effects.psd: a 69 % edge pixel of a blue overlay
-/// over grey is 57/255 in red, an encoded mix gives 40).
-pub const TEXT_GAMMA: f32 = 1.45;
 
 static TEXT_GAMMA_SETTING: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0x3fb9_999a); // 1.45f32
 
-/// Sets Color Settings › "Blend Text Colors Using Gamma" (1 = off). It is an application
-/// setting, not stored in documents (1 here means switched off: a plain mix of the encoded
-/// values). Values are clamped to Photoshop's 1.00–2.20.
-///
-/// The value is process-wide: a test that changes it races every concurrently running test
-/// that composites a type layer, so such tests belong in their own test binary (see
-/// `crates/engine/tests/text_gamma.rs`).
 pub fn set_text_gamma(gamma: f32) {
     let g = if gamma.is_finite() { gamma.clamp(1.0, 2.2) } else { TEXT_GAMMA };
     TEXT_GAMMA_SETTING.store(g.to_bits(), std::sync::atomic::Ordering::Relaxed);
 }
 
-/// The current text blending gamma (see [`set_text_gamma`]; 1 = off).
 pub fn text_gamma() -> f32 {
     f32::from_bits(TEXT_GAMMA_SETTING.load(std::sync::atomic::Ordering::Relaxed))
 }
 
-/// Into the text blending space: linear light raised to `1 / gamma`. Gamma 2.2 is close to
-/// mixing the encoded values, lower settings approach linear light. Fitted on psd-tools
-/// layer_effects.psd (a blue colour overlay's glyph edges over grey, every coverage level within
-/// 0.6/255; a plain `v^1.45` power mix is 6/255 too light at 94 % coverage) and ag-psd
-/// float-color.
 #[inline]
 pub fn text_encode(v: f32, gamma: f32) -> f32 {
-    photocraft_color::convert::srgb_to_linear(v.max(0.0)).powf(1.0 / gamma)
+    craft_blitter::blend::text_encode(v, gamma)
 }
 
-/// Inverse of [`text_encode`].
 #[inline]
 pub fn text_decode(v: f32, gamma: f32) -> f32 {
-    photocraft_color::convert::linear_to_srgb(v.max(0.0).powf(gamma))
+    craft_blitter::blend::text_decode(v, gamma)
 }
 
-/// [`composite`] with the coverage mix done in the text blending space of `gamma`
-/// ([`text_encode`]; `gamma == 1` is [`composite`], the setting switched off).
 #[inline]
 pub fn composite_gamma(mode: BlendMode, backdrop: [f32; 4], source: [f32; 4], opacity: f32, gamma: f32) -> [f32; 4] {
     if gamma == 1.0 {
         return composite(mode, backdrop, source, opacity);
     }
-    let ab = backdrop[3];
-    let as_ = source[3] * opacity;
-    if as_ <= 0.0 {
-        return backdrop;
-    }
-    let ao = as_ + ab * (1.0 - as_);
-    if ao <= 0.0 {
-        return [0.0; 4];
-    }
-    let cb = [backdrop[0], backdrop[1], backdrop[2]];
-    let cs = [source[0], source[1], source[2]];
-    let b = blend_rgb(mode, cb, cs);
-    let (wb, ws, wbs) = ((1.0 - as_) * ab / ao, (1.0 - ab) * as_ / ao, as_ * ab / ao);
-    let g = |v: f32| text_encode(v, gamma);
-    let ginv = |v: f32| text_decode(v, gamma);
-    let mut out = [0.0f32; 4];
-    for i in 0..3 {
-        out[i] = ginv(wb * g(cb[i]) + ws * g(cs[i]) + wbs * g(b[i]));
-    }
-    out[3] = ao;
-    out
+    craft_blitter::float::composite_gamma_f32(to_blitter_blend_mode(mode), backdrop, source, opacity, gamma, HDR.with(|h| h.get()))
 }
 
 #[cfg(test)]
@@ -397,6 +189,7 @@ mod tests {
     }
 
     use super::*;
+    use photocraft_color::blend as generic;
 
     /// Photoshop 27.11, measured: Background #c89664, a layer #64b4dc at Fill 50% (128/255),
     /// Opacity 100%, in each of the special eight. Values are the composite at 8 bits.

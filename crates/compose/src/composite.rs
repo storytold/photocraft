@@ -640,26 +640,60 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
     let Some(content) = render_content(layer, rect, cx) else { return };
     let opacity = layer.opacity * layer.fill_opacity;
     let gamma = text_gamma(layer);
-    for (i, p) in base.px.iter_mut().enumerate() {
-        let alpha = p[3];
-        if alpha <= 0.0 {
-            continue;
-        }
-        let s = content.px[i];
-        if layer.blend == BlendMode::Dissolve {
-            // Clipping preserves the opaque base's alpha. Dissolve still selects source
-            // pixels by spatial coverage instead of continuously mixing the colours (#3052).
-            let x = rect.x0 + (i as i32 % rect.width() as i32);
-            let y = rect.y0 + (i as i32 / rect.width() as i32);
-            if dissolve_noise(x, y) < s[3] * opacity {
-                *p = [s[0], s[1], s[2], alpha];
+    let bmode = psblend::to_blitter_blend_mode(layer.blend);
+    let hdr = psblend::HDR.with(|h| h.get());
+    if layer.blend == BlendMode::Dissolve || psblend::LAB_MIX.with(|l| l.get()) {
+        for (i, p) in base.px.iter_mut().enumerate() {
+            let alpha = p[3];
+            if alpha <= 0.0 {
+                continue;
             }
-            continue;
+            let s = content.px[i];
+            if layer.blend == BlendMode::Dissolve {
+                // Clipping preserves the opaque base's alpha. Dissolve still selects source
+                // pixels by spatial coverage instead of continuously mixing the colours (#3052).
+                let x = rect.x0 + (i as i32 % rect.width() as i32);
+                let y = rect.y0 + (i as i32 / rect.width() as i32);
+                if dissolve_noise(x, y) < s[3] * opacity {
+                    *p = [s[0], s[1], s[2], alpha];
+                }
+                continue;
+            }
+            // Blend as if the base were opaque, then keep the base's alpha.
+            let r = blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma);
+            *p = [r[0], r[1], r[2], alpha];
         }
-        // Blend as if the base were opaque, then keep the base's alpha.
-        let r = blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma);
-        *p = [r[0], r[1], r[2], alpha];
+    } else {
+        let sanitized = if content.px.iter().any(|p| p[3].is_nan()) {
+            let mut copy = content.px.clone();
+            for pixel in &mut copy {
+                if pixel[3].is_nan() {
+                    pixel[3] = 0.0;
+                }
+            }
+            Some(copy)
+        } else {
+            None
+        };
+        let src = sanitized.as_deref().unwrap_or(&content.px);
+        craft_blitter::blit_rgba32f_opts(&mut base.px, src, bmode, opacity, 1.0, gamma, hdr, craft_blitter::AlphaMode::Straight, true);
     }
+}
+
+fn blit_rgba32f_gamma_sanitized(dst: &mut [[f32; 4]], src: &[[f32; 4]], mode: BlendMode, opacity: f32, fill: f32, gamma: f32) {
+    let sanitized = if src.iter().any(|p| p[3].is_nan()) {
+        let mut copy = src.to_vec();
+        for pixel in &mut copy {
+            if pixel[3].is_nan() {
+                pixel[3] = 0.0;
+            }
+        }
+        Some(copy)
+    } else {
+        None
+    };
+    let src = sanitized.as_deref().unwrap_or(src);
+    craft_blitter::blit_rgba32f_gamma(dst, src, psblend::to_blitter_blend_mode(mode), opacity, fill, gamma, psblend::HDR.with(|h| h.get()));
 }
 
 /// Blend an isolated layer buffer into the backdrop.
@@ -694,6 +728,10 @@ fn blend_layer_into(backdrop: &mut Buffer, src: &Buffer, layer: &Layer, cx: &Ctx
 /// [`blend_into_g`] for a layer's own `opacity` and `fill`: Fill is part of the blend for
 /// Photoshop's special eight ([`psblend::composite_fill`]), plain coverage otherwise.
 pub(crate) fn blend_into_fill(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, opacity: f32, fill: f32, gamma: f32) {
+    if mode != BlendMode::Dissolve && !psblend::LAB_MIX.with(|m| m.get()) {
+        blit_rgba32f_gamma_sanitized(&mut backdrop.px, &src.px, mode, opacity, fill, gamma);
+        return;
+    }
     for_rows(backdrop, src, |dst, s, x0, y| blend_span_fill(dst, s, x0, y, mode, opacity, fill, gamma));
 }
 
@@ -714,14 +752,14 @@ fn for_rows(backdrop: &mut Buffer, src: &Buffer, mut f: impl FnMut(&mut [[f32; 4
 /// [`blend_into_fill`] of one row: `dst` and `src` start at pixel (`x0`, `y`).
 #[allow(clippy::too_many_arguments)]
 fn blend_span_fill(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode: BlendMode, opacity: f32, fill: f32, gamma: f32) {
+    if mode != BlendMode::Dissolve && !psblend::LAB_MIX.with(|m| m.get()) {
+        blit_rgba32f_gamma_sanitized(dst, src, mode, opacity, fill, gamma);
+        return;
+    }
     if fill >= 1.0 || !psblend::fill_is_special(mode) {
         return blend_span_g(dst, src, x0, y, mode, opacity * fill, gamma);
     }
-    for (b, s) in dst.iter_mut().zip(src) {
-        if s[3] > 0.0 {
-            *b = psblend::composite_fill(mode, *b, *s, opacity, fill, gamma);
-        }
-    }
+    blit_rgba32f_gamma_sanitized(dst, src, mode, opacity, fill, gamma);
 }
 
 /// [`blend_into_g`] of one row: `dst` and `src` start at pixel (`x0`, `y`).

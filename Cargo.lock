@@ -1348,6 +1348,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-blitter"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=8217c7c86eb4997e4d492bacac2bfc923ee58f3b#8217c7c86eb4997e4d492bacac2bfc923ee58f3b"
+dependencies = [
+ "rayon",
+]
+
+[[package]]
 name = "craft-docpath"
 version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
@@ -5124,6 +5132,7 @@ dependencies = [
 name = "photocraft-compose"
 version = "0.18.0"
 dependencies = [
+ "craft-blitter",
  "criterion",
  "photocraft-cms",
  "photocraft-color",
