@@ -60,6 +60,19 @@ mkdir -p "$WORK/$NAME/app"
 cp -R "$BOOT/." "$WORK/$NAME/"
 # The boot module imports the app's glue by this name (it can't know Trunk's content hash).
 cp "$GLUE" "$WORK/$NAME/app/photocraft-web.js"
+# The glue imports wasm-bindgen's snippets (inline JS from crates such as eframe) relative to
+# itself, as ./snippets/<crate>-<hash>/…, so they ship next to it in app/ (issue #10017). The
+# boot module's own snippets, copied with $BOOT above, stay at the top for it.
+if [[ -d "$APP/snippets" ]]; then
+  cp -R "$APP/snippets" "$WORK/$NAME/app/"
+fi
+# A snippet the glue imports but the site lacks stops the app before it starts: fail here instead.
+while IFS= read -r snippet; do
+  [[ -f "$WORK/$NAME/app/$snippet" ]] || {
+    echo "error: app/photocraft-web.js imports ./$snippet, which is missing from app/" >&2
+    exit 1
+  }
+done < <(grep -oE "\./snippets/[^'\"]+" "$GLUE" | sed 's#^\./##' | sort -u)
 # The parts keep the content hash, so they can be cached forever. Their extension is one no
 # server knows: a server that recognised gzip might decode it or label it, and the page inflates
 # the parts itself.
