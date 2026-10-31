@@ -194,8 +194,9 @@ impl PhotocraftApp {
     }
 
     /// [`Self::save_as`] with the format choices already made, which skip their prompts:
-    /// `file.save` and `file.saveAs` with `tgaBits` (no Targa Options), `ddsCompression` or
-    /// `ddsMipmaps` (no DDS Options), or `quality` or `jpegFormat` (no JPEG Options).
+    /// `file.save` and `file.saveAs` with `tgaBits` (no Targa Options), `bmpBits` (no BMP
+    /// Options), `ddsCompression` or `ddsMipmaps` (no DDS Options), or `quality` or `jpegFormat`
+    /// (no JPEG Options).
     pub fn save_as_with(&mut self, path: Option<String>, choices: FormatChoices) -> Result<Value, String> {
         self.save_dialog_flow(path, choices, false)
     }
