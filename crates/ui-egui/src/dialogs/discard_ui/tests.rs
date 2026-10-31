@@ -188,6 +188,17 @@ fn mnemonic_labels_bracket_the_key() {
     assert_eq!(button_label(false, "保存", Some(Key::S)), "保存 (S)");
 }
 
+/// In a right-to-left UI the key hint sits at the reading end (the visual left, where buttons lay
+/// text out left-to-right), not fused onto the front of the label; left-to-right is unchanged.
+#[test]
+fn rtl_button_labels_move_an_appended_hint_to_the_reading_end() {
+    let _rtl = crate::text::direction::direction_scope(crate::text::direction::Dir::Rtl);
+    assert_eq!(button_label(false, "Yes", Some(Key::Y)), "(Y)es", "the inline form is already at the reading start");
+    assert_eq!(button_label(false, "Guardar", Some(Key::S)), "(S) Guardar");
+    let _ltr = crate::text::direction::direction_scope(crate::text::direction::Dir::Ltr);
+    assert_eq!(button_label(false, "Guardar", Some(Key::S)), "Guardar (S)", "left-to-right output is byte-identical");
+}
+
 type Prompted = egui_kittest::Harness<'static, PhotocraftApp>;
 
 /// The unsaved-changes prompt for `command` over `app`'s dirty documents, as `os` draws it (with
