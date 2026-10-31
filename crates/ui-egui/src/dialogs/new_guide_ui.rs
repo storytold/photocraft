@@ -102,8 +102,8 @@ fn convert_position(app: &PhotocraftApp, position: &str, from: Unit, to: Unit, v
     if !px.is_finite() || !converted.is_finite() {
         return None;
     }
-    let number = format!("{converted:.12}");
-    Some(with_unit(number.trim_end_matches('0').trim_end_matches('.'), to))
+    // Display preserves the f64 value without exponent notation, which parse_length rejects.
+    Some(with_unit(&converted.to_string(), to))
 }
 
 /// "0 cm", "0 px", "0 %": a value in `unit` as the field shows it, with a space before the unit
