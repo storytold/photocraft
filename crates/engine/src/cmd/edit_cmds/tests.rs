@@ -1292,6 +1292,32 @@ fn guide_positions_take_photoshop_units() {
     assert_eq!(s.active().unwrap().doc.guides.horizontal[0], 50.0);
 }
 
+/// #10440: the position takes arithmetic as Photoshop's New Guide field does. Measured in
+/// Photoshop 2025 on a 600 × 400, 72 ppi document: "100% / 3" → 200, "100% - 50px" → 550,
+/// "300 / 2" → 150 (pixels), "1in + 10" → 792 (the bare 10 is in the first operand's unit).
+#[test]
+fn guide_positions_take_arithmetic() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 600, "height": 400, "resolution": 72})).unwrap();
+    for (text, px) in [
+        ("100% / 3", 200.0),
+        ("100% - 50px", 550.0),
+        ("300 / 2", 150.0),
+        ("1in + 10", 792.0),
+        ("2 * 50 px", 100.0),
+        ("10 + 2 * 3", 16.0),
+        ("-50px + 100", 50.0),
+    ] {
+        assert!((new_guide(&mut s, "vertical", json!(text)) - px).abs() < 1e-6, "{text}");
+    }
+    // Horizontal guides take percent of the height.
+    assert!((new_guide(&mut s, "horizontal", json!("50% + 10px")) - 210.0).abs() < 1e-6);
+    for bad in ["100% /", "1in * 2in", "10 / 0", "10 / 2px", "5 ^ 2", "+", "50% 3"] {
+        let err = s.execute("view.newGuide", json!({"orientation": "vertical", "position": bad})).unwrap_err();
+        assert!(err.to_string().contains("not a length"), "{bad}: {err}");
+    }
+}
+
 #[test]
 fn new_guides_keep_their_own_colour_through_moves_deletes_and_undo() {
     let mut s = Session::new();

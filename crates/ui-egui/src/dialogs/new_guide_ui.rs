@@ -82,6 +82,18 @@ fn with_unit(value: &str, unit: Unit) -> String {
     format!("{value} {}", unit.suffix())
 }
 
+/// `typed` with `unit` after its first number when that number has none ("300 / 2" with pixel
+/// rulers → "300 px / 2"); anything else as typed.
+fn unit_on_first_number(typed: &str, unit: Unit) -> String {
+    let end = typed
+        .char_indices()
+        .find(|&(i, c)| !(c.is_ascii_digit() || matches!(c, '.' | ',') || (i == 0 && matches!(c, '-' | '+'))))
+        .map_or(typed.len(), |(i, _)| i);
+    let (number, rest) = typed.split_at(end);
+    let bare = !number.is_empty() && rest.trim_start().starts_with(['+', '-', '*', '/']);
+    if bare { format!("{} {}{rest}", number, unit.suffix()) } else { typed.to_string() }
+}
+
 /// `px` (document pixels) in the ruler unit, as the field shows it: "14.11 cm". Percent is of the
 /// active document's width for a vertical guide and its height for a horizontal one.
 fn in_ruler_unit(app: &PhotocraftApp, px: f64, vertical: bool) -> String {
@@ -205,7 +217,10 @@ pub fn params(app: &PhotocraftApp, f: &Map<String, Value>) -> Value {
     let typed = f.get("position").and_then(Value::as_str).unwrap_or_default().trim();
     let position = match Unit::parse_length(typed) {
         Some((_, None)) => with_unit(typed, ruler_unit(app)),
-        _ => typed.to_string(),
+        Some(_) => typed.to_string(),
+        // Arithmetic (#10440): a first number without a unit is in the ruler unit, as in
+        // Photoshop ("300 / 2" is 150 px with pixel rulers); the engine evaluates the rest.
+        None => unit_on_first_number(typed, ruler_unit(app)),
     };
     let color = f.get("color").and_then(Value::as_str).filter(|c| is_color_name(c)).unwrap_or(DEFAULT_COLOR);
     let color = if color == CUSTOM { custom_color(f) } else { color.to_string() };
@@ -291,3 +306,17 @@ pub fn edit_preview<'a>(app: &'a PhotocraftApp, doc: &photocraft_doc::Document) 
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod arithmetic_tests {
+    use super::{Unit, unit_on_first_number};
+
+    /// #10440: a first number without a unit is in the ruler unit, the rest goes to the engine.
+    #[test]
+    fn a_leading_bare_number_gets_the_ruler_unit() {
+        assert_eq!(unit_on_first_number("300 / 2", Unit::Pixels), "300 px / 2");
+        assert_eq!(unit_on_first_number("3+1in", Unit::Centimeters), "3 cm+1in");
+        assert_eq!(unit_on_first_number("100% / 3", Unit::Pixels), "100% / 3");
+        assert_eq!(unit_on_first_number("abc", Unit::Pixels), "abc");
+    }
+}
