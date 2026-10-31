@@ -5,22 +5,27 @@
 //! Saturation, the tone curves, the Color Mixer, Color Grading, the vignette and grain. Their
 //! constants and tables come from [`photocraft_algo::camera_raw::per_pixel`], which the CPU
 //! develop builds its own from, so both evaluate the same maths; the curves and the Whites and
-//! Blacks rows are rows of one `R32Float` texture. Settings with a spatial stage (Dehaze, Shadows
-//! and Highlights, Texture, Clarity, Detail) have no [`PerPixel`] and stay on the CPU.
+//! Blacks rows are rows of one `R32Float` texture. Shadows and Highlights run before it as the
+//! passes of `camera_raw_tone.rs`, which then also measure the image's points for Whites and
+//! Blacks; this pass applies their change. Settings with another spatial stage (Dehaze, Texture,
+//! Clarity, Detail) have no [`PerPixel`] and stay on the CPU.
 //!
-//! The pipeline is built on demand ([`CameraRawDevelop::new`]), not with the compositor (#6419).
-//! It renders into `Rgba32Float`; [`CameraRawDevelop::supported`] says whether the adapter can.
+//! The pipelines are built on demand ([`CameraRawDevelop::new`]), not with the compositor
+//! (#6419). They render into `Rgba32Float`, `R32Float` and `Rgba32Uint`;
+//! [`CameraRawDevelop::supported`] says whether the adapter can.
 
+use photocraft_algo::camera_raw::local_tone::LOG_FLOOR;
 use photocraft_algo::camera_raw::{CURVE_LUT, PerPixel, VignetteStyle, WB_STEPS};
 
 use crate::Unsupported;
+use crate::camera_raw_tone::{ToneFrame, TonePipelines, WB_ROW};
 
 /// The pass's WGSL source.
 pub const CAMERA_RAW_SHADER: &str = include_str!("camera_raw.wgsl");
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Float;
-/// `Params` in the shader: 19 rows of 16 bytes.
-const PARAMS_SIZE: u64 = 19 * 16;
+/// `Params` in the shader: 21 rows of 16 bytes.
+const PARAMS_SIZE: u64 = 21 * 16;
 /// Rows of the table texture: parametric, master, red, green, blue curves; Whites, Blacks.
 const LUT_ROWS: u32 = 7;
 const LUT_WIDTH: u32 = CURVE_LUT as u32;
@@ -53,6 +58,11 @@ impl Image {
 /// The Camera Raw preview pass and its textures (reused while the size stays).
 pub struct CameraRawDevelop {
     pipeline: wgpu::RenderPipeline,
+    /// `fs_log` and `fs_points`: Shadows and Highlights' input, Whites and Blacks' cells after it.
+    log: wgpu::RenderPipeline,
+    points: wgpu::RenderPipeline,
+    tone: TonePipelines,
+    tone_frame: Option<ToneFrame>,
     layout: wgpu::BindGroupLayout,
     params: wgpu::Buffer,
     luts: wgpu::Texture,
@@ -64,9 +74,11 @@ pub struct CameraRawDevelop {
 }
 
 impl CameraRawDevelop {
-    /// Whether `adapter` can render the pass's `Rgba32Float` output.
+    /// Whether `adapter` can render the passes' `Rgba32Float`, `R32Float` and `Rgba32Uint` targets.
     pub fn supported(adapter: &wgpu::Adapter) -> bool {
-        adapter.get_texture_format_features(FORMAT).allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
+        [FORMAT, wgpu::TextureFormat::R32Float, wgpu::TextureFormat::Rgba32Uint]
+            .iter()
+            .all(|f| adapter.get_texture_format_features(*f).allowed_usages.contains(wgpu::TextureUsages::RENDER_ATTACHMENT))
     }
 
     /// Builds the pipeline. A shader or pipeline the driver can't build is an `Err`, so the
@@ -97,6 +109,9 @@ impl CameraRawDevelop {
                 },
                 crate::tex_entry(1),
                 crate::tex_entry(2),
+                crate::tex_entry(3),
+                crate::tex_entry(4),
+                crate::camera_raw_tone::uint_entry(5),
             ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -104,22 +119,27 @@ impl CameraRawDevelop {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("pc_camera_raw"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs"),
-                targets: &[Some(wgpu::ColorTargetState { format: FORMAT, blend: None, write_mask: wgpu::ColorWrites::ALL })],
-                compilation_options: Default::default(),
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline_for = |entry: &str, format: wgpu::TextureFormat| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState { module: &module, entry_point: Some("vs"), buffers: &[], compilation_options: Default::default() },
+                primitive: wgpu::PrimitiveState::default(),
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some(entry),
+                    targets: &[Some(wgpu::ColorTargetState { format, blend: None, write_mask: wgpu::ColorWrites::ALL })],
+                    compilation_options: Default::default(),
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let pipeline = pipeline_for("fs", FORMAT);
+        let log = pipeline_for("fs_log", wgpu::TextureFormat::R32Float);
+        let points = pipeline_for("fs_points", FORMAT);
         let params = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("pc_camera_raw_params"),
             size: PARAMS_SIZE,
@@ -133,12 +153,17 @@ impl CameraRawDevelop {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R32Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            // Whites and Blacks' rows are rendered in when Shadows and Highlights measure the points.
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
         let luts_view = luts.create_view(&Default::default());
         CameraRawDevelop {
             pipeline,
+            log,
+            points,
+            tone: TonePipelines::build(device),
+            tone_frame: None,
             layout,
             params,
             luts,
@@ -181,7 +206,20 @@ impl CameraRawDevelop {
             );
             src.key = key;
         }
-        queue.write_buffer(&self.params, 0, &params(size, stages));
+        let tone = match &stages.local_tone {
+            Some(t) => {
+                let frame = match self.tone_frame.take() {
+                    Some(f) if f.size() == size => f,
+                    _ => ToneFrame::new(device, size)?,
+                };
+                let [slot_in, slot_out] = ToneFrame::last_slots(t);
+                let edge = self.tone_frame.insert(frame).points().2;
+                self.tone.write(queue, t, stages.measure_whites_blacks);
+                Some([slot_in, slot_out, edge, 0])
+            }
+            None => None,
+        };
+        queue.write_buffer(&self.params, 0, &params(size, stages, tone));
         queue.write_texture(
             wgpu::TexelCopyTextureInfo { texture: &self.luts, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
             bytemuck::cast_slice(&tables(stages)),
@@ -193,33 +231,34 @@ impl CameraRawDevelop {
             _ => Image::new(device, "pc_camera_raw_target", size, wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC),
         };
         let target = self.target.insert(target);
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("pc_camera_raw"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.params.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&src.view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.luts_view) },
-            ],
-        });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        let (dummy, dummy_uint) = (self.tone.dummy(), self.tone.dummy_uint());
+        let group = |log_in: &wgpu::TextureView, log_out: &wgpu::TextureView, stats: &wgpu::TextureView| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("pc_camera_raw"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &target.view,
-                    depth_slice: None,
-                    resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-                multiview_mask: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &group, &[]);
-            pass.draw(0..3, 0..1);
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: self.params.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&src.view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(&self.luts_view) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(log_in) },
+                    wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(log_out) },
+                    wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(stats) },
+                ],
+            })
+        };
+        let mut main = group(dummy, dummy, dummy_uint);
+        if let (Some(tone), Some(frame)) = (&stages.local_tone, self.tone_frame.as_mut()) {
+            // The input's log luminance, then the filter on it.
+            pass(encoder, &self.log, &main, frame.log_in());
+            let measure = stages.measure_whites_blacks.is_some();
+            frame.encode_tone(device, queue, &self.tone, encoder, tone, measure, &self.luts_view);
+            main = group(frame.log_in(), frame.log_out(), frame.stats());
+            if measure {
+                pass(encoder, &self.points, &main, frame.points().0);
+                frame.encode_whites_blacks(&self.tone, encoder, tone);
+            }
         }
+        pass(encoder, &self.pipeline, &main, &target.view);
         Ok(&target.texture)
     }
 
@@ -313,6 +352,26 @@ impl CameraRawDevelop {
     }
 }
 
+/// One full-frame pass of `pipeline` into `target`.
+fn pass(encoder: &mut wgpu::CommandEncoder, pipeline: &wgpu::RenderPipeline, group: &wgpu::BindGroup, target: &wgpu::TextureView) {
+    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        label: Some("pc_camera_raw"),
+        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+            view: target,
+            depth_slice: None,
+            resolve_target: None,
+            ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+        })],
+        depth_stencil_attachment: None,
+        timestamp_writes: None,
+        occlusion_query_set: None,
+        multiview_mask: None,
+    });
+    pass.set_pipeline(pipeline);
+    pass.set_bind_group(0, group, &[]);
+    pass.draw(0..3, 0..1);
+}
+
 fn check_size(device: &wgpu::Device, source: &[[f32; 4]], [w, h]: [u32; 2]) -> Result<(), Unsupported> {
     let max = device.limits().max_texture_dimension_2d;
     if w == 0 || h == 0 || w > max || h > max {
@@ -327,12 +386,14 @@ fn check_size(device: &wgpu::Device, source: &[[f32; 4]], [w, h]: [u32; 2]) -> R
 /// Flags of `Params.flags`, in the shader's bit order.
 fn flags(s: &PerPixel) -> u32 {
     let wb = s.whites_blacks.as_ref();
+    // Measured after Shadows and Highlights, the amounts keep the sliders' signs.
+    let measured = s.measure_whites_blacks;
     let on = [
         s.gains.is_some(),
         s.contrast.is_some(),
-        wb.is_some_and(|w| w.whites.is_some()),
-        wb.is_some_and(|w| w.blacks.is_some()),
-        wb.is_some_and(|w| w.per_channel),
+        wb.is_some_and(|w| w.whites.is_some()) || measured.is_some_and(|[w, _]| w != 0.0),
+        wb.is_some_and(|w| w.blacks.is_some()) || measured.is_some_and(|[_, b]| b != 0.0),
+        wb.is_some_and(|w| w.per_channel) || measured.is_some_and(|[w, b]| w > 0.0 || b < 0.0),
         s.presence.is_some(),
         s.parametric.is_some(),
         s.point[0].is_some(),
@@ -344,12 +405,13 @@ fn flags(s: &PerPixel) -> u32 {
         s.vignette.is_some(),
         s.grain.is_some(),
         s.clamp,
+        s.local_tone.is_some(),
     ];
     on.iter().enumerate().fold(0, |f, (bit, on)| if *on { f | 1 << bit } else { f })
 }
 
-/// The shader's `Params` for a `size` image.
-fn params(size: [u32; 2], s: &PerPixel) -> Vec<u8> {
+/// The shader's `Params` for a `size` image; `tone` is `Params.tone` when Shadows and Highlights run.
+fn params(size: [u32; 2], s: &PerPixel, tone: Option<[u32; 4]>) -> Vec<u8> {
     let g = s.gains.unwrap_or([1.0; 3]);
     let presence = s.presence.unwrap_or_default();
     let hsl = s.hsl.unwrap_or_default();
@@ -382,6 +444,8 @@ fn params(size: [u32; 2], s: &PerPixel) -> Vec<u8> {
     let seed = grain.map_or(0, |gr| gr.seed);
     let fine = seed.wrapping_add(7);
     out.extend([seed as u32, (seed >> 32) as u32, fine as u32, (fine >> 32) as u32].iter().flat_map(|v| v.to_le_bytes()));
+    out.extend(tone.unwrap_or_default().iter().flat_map(|v| v.to_le_bytes()));
+    out.extend([LOG_FLOOR, 0.0, 0.0, 0.0].iter().flat_map(|v| v.to_le_bytes()));
     out
 }
 
@@ -414,5 +478,5 @@ fn tables(s: &PerPixel) -> Vec<f32> {
     t
 }
 
-// The Whites and Blacks rows fit a table row.
-const _: () = assert!(WB_STEPS <= CURVE_LUT);
+// The Whites and Blacks rows fit a table row, at the rows the tone passes render them into.
+const _: () = assert!(WB_STEPS <= CURVE_LUT && WB_ROW == 5 && LUT_ROWS == WB_ROW + 2);

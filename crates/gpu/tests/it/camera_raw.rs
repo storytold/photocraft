@@ -113,9 +113,16 @@ fn image(w: usize, h: usize, depth: Depth) -> Vec<[f32; 4]> {
 
 /// Develops `p` both ways and returns the largest channel difference.
 fn compare(g: &mut Gpu, p: &CameraRaw, depth: Depth) -> f32 {
-    let (w, h) = (171, 113);
+    compare_at(g, p, depth, (171, 113))
+}
+
+fn compare_at(g: &mut Gpu, p: &CameraRaw, depth: Depth, (w, h): (usize, usize)) -> f32 {
+    compare_image(g, p, depth, &image(w, h, depth), (w, h))
+}
+
+fn compare_image(g: &mut Gpu, p: &CameraRaw, depth: Depth, src: &[[f32; 4]], (w, h): (usize, usize)) -> f32 {
     let float = matches!(depth, Depth::Float);
-    let src = image(w, h, depth);
+    let src = src.to_vec();
     let mut cpu = src.clone();
     develop(&mut cpu, w, h, p, float);
     let points = white_black_points(&src, w, h, p);
@@ -324,8 +331,7 @@ fn identity_leaves_pixels_alone_and_spatial_settings_have_no_pass() {
     assert_eq!(out, src, "the CPU develop returns early, unclipped");
     for spatial in [
         CameraRaw { dehaze: 10.0, ..Default::default() },
-        CameraRaw { shadows: 10.0, ..Default::default() },
-        CameraRaw { highlights: -10.0, ..Default::default() },
+        CameraRaw { shadows: 10.0, clarity: 5.0, ..Default::default() },
         CameraRaw { texture: 10.0, ..Default::default() },
         CameraRaw { clarity: 10.0, ..Default::default() },
         CameraRaw { sharpen_amount: 10.0, ..Default::default() },
@@ -334,8 +340,16 @@ fn identity_leaves_pixels_alone_and_spatial_settings_have_no_pass() {
     ] {
         assert!(spatial.spatial() && per_pixel(&spatial, 64, 32, false, Some((0.0, 1.0))).is_none(), "{spatial:?}");
     }
-    // Whites and Blacks need the image's points.
+    // Whites and Blacks need the image's points, unless Shadows and Highlights measure them.
     assert!(per_pixel(&CameraRaw { whites: 10.0, ..Default::default() }, 64, 32, false, None).is_none());
+    let toned = per_pixel(&CameraRaw { whites: 10.0, shadows: 20.0, ..Default::default() }, 64, 32, false, None).unwrap();
+    assert!(toned.local_tone.is_some() && toned.whites_blacks.is_none() && toned.measure_whites_blacks == Some([10.0, 0.0]));
+    // Wider than the filter's working copy, the develop filters a reduced copy: the CPU's.
+    assert!(per_pixel(&CameraRaw { shadows: 20.0, ..Default::default() }, 1601, 32, false, None).is_none());
+    // At 2 pixels on the short side the pass's pyramid has one level: the CPU's too.
+    for (w, h) in [(2, 2), (40, 2), (2, 40)] {
+        assert!(per_pixel(&CameraRaw { highlights: -20.0, ..Default::default() }, w, h, false, None).is_none(), "{w}×{h}");
+    }
 }
 
 #[test]
@@ -367,4 +381,94 @@ fn bad_sizes_and_faulted_devices_are_errors() {
     assert!(g.dev.develop(&g.device, &g.queue, Some(&health), &px, None, [4, 4], &stages).is_err());
     // And the pass still works afterwards.
     assert!(g.dev.develop(&g.device, &g.queue, Some(&DeviceHealth::new()), &px, None, [4, 4], &stages).is_ok());
+}
+
+#[test]
+fn shadows_and_highlights() {
+    let sets = [
+        CameraRaw { shadows: 50.0, ..Default::default() },
+        CameraRaw { shadows: -70.0, ..Default::default() },
+        CameraRaw { highlights: -50.0, ..Default::default() },
+        CameraRaw { highlights: 60.0, ..Default::default() },
+        CameraRaw { shadows: 100.0, highlights: -100.0, ..Default::default() },
+        CameraRaw { shadows: 35.0, highlights: -45.0, encoding_gamma: 1.8, ..Default::default() },
+    ];
+    // The test image gives the filter work: each setting moves some pixel by over 2 %.
+    for p in &sets {
+        let src = image(171, 113, Depth::Sixteen);
+        let mut out = src.clone();
+        develop(&mut out, 171, 113, p, false);
+        let moved = out.iter().zip(&src).flat_map(|(a, b)| (0..3).map(move |c| (a[c] - b[c]).abs())).fold(0.0f32, f32::max);
+        assert!(moved > 0.02, "{p:?} moves pixels by at most {moved}");
+    }
+    check("shadows/highlights", &sets);
+}
+
+#[test]
+fn shadows_and_highlights_on_tiny_odd_and_flat_frames() {
+    let Some(mut g) = gpu() else { return };
+    let p = CameraRaw { shadows: 60.0, highlights: -40.0, whites: 20.0, ..Default::default() };
+    // A frame 2 pixels on a side has a one-level pyramid: `per_pixel` sends it to the CPU, and
+    // the pass still refuses stages built for it elsewhere.
+    for (w, h) in [(2, 2), (40, 2)] {
+        assert!(per_pixel(&p, w, h, false, None).is_none(), "{w}×{h}");
+        let stages = per_pixel(&p, 3, 3, false, None).unwrap();
+        assert!(g.dev.develop(&g.device, &g.queue, None, &image(w, h, Depth::Eight), None, [w as u32, h as u32], &stages).is_err());
+    }
+    for size in [(3, 3), (5, 3), (37, 23), (300, 7)] {
+        for depth in DEPTHS {
+            let d = compare_at(&mut g, &p, depth, size);
+            eprintln!("shadows/highlights {size:?} {depth:?}: max |GPU - CPU| = {d:.2e}");
+        }
+    }
+    // A flat frame has no range to filter.
+    let flat = vec![[0.4, 0.35, 0.3, 1.0]; 64 * 48];
+    for depth in DEPTHS {
+        compare_image(&mut g, &p, depth, &flat, (64, 48));
+    }
+}
+
+#[test]
+fn shadows_and_highlights_with_per_pixel_stages() {
+    let mut hsl = [0.0; 8];
+    hsl[1] = 35.0;
+    hsl[5] = -50.0;
+    let all = CameraRaw {
+        temperature: 25.0,
+        tint: 10.0,
+        exposure: 0.3,
+        contrast: 25.0,
+        shadows: 45.0,
+        highlights: -55.0,
+        whites: 20.0,
+        blacks: -15.0,
+        vibrance: 30.0,
+        saturation: 10.0,
+        curve_darks: 20.0,
+        point_curve: vec![[0.0, 8.0], [255.0, 250.0]],
+        hsl_hue: hsl,
+        hsl_sat: hsl,
+        hsl_lum: hsl,
+        grade_shadows: Wheel { hue: 210.0, sat: 25.0, lum: 0.0 },
+        vignette_amount: -30.0,
+        grain_amount: 20.0,
+        pixel_scale: 0.2,
+        ..Default::default()
+    };
+    check(
+        "shadows/highlights + per pixel",
+        &[
+            all.clone(),
+            // Whites and Blacks measured after the filter, both directions.
+            CameraRaw { shadows: 60.0, whites: 70.0, blacks: -45.0, ..Default::default() },
+            CameraRaw { highlights: -60.0, whites: -60.0, blacks: 50.0, exposure: -0.4, ..Default::default() },
+            CameraRaw { shadows: 30.0, highlights: -30.0, whites: 40.0, blacks: -30.0, encoding_gamma: 1.8, ..Default::default() },
+        ],
+    );
+    // At the dialog's proxy size.
+    let Some(mut g) = gpu() else { return };
+    for depth in DEPTHS {
+        let d = compare_at(&mut g, &all, depth, (858, 572));
+        eprintln!("shadows/highlights + per pixel 858x572 {depth:?}: max |GPU - CPU| = {d:.2e}");
+    }
 }
