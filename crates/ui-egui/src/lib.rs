@@ -48,6 +48,7 @@ pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
+mod scan_ui;
 pub mod screenshot;
 pub mod state;
 pub mod texel_guard;
@@ -255,7 +256,7 @@ pub use services::{
     CaptionStyleFn, ClipboardGetFn, ClipboardSetFn, ClipboardUnreadableFn, CursorPosFn, DiscardAutosaveFn, EncodePngFn, ExportFn, ExportSettings,
     ExternalSvgEditor, ExternalSvgSession, ExternalVectorSave, ExternalVectorSource, FileStamp, FileStampFn, FormatChoices, ImportFn, Inbox, LoadTextFn,
     OpenExternalSvgFn, OpenUrlFn, OsEventsFn, PhotoshopShortcutsFn, QuitFn, RecoverFn, Recoverable, RightButtonDownFn, SameFileFn, SaveFileFn, SaveTextFn,
-    Services, SystemThemeFn, WindowFrameFn, WriteFn,
+    ScanAcquireFn, ScanBuffer, ScanDevice, ScanListFn, ScanRequest, Services, SystemThemeFn, WindowFrameFn, WriteFn,
 };
 pub use text::bidi_text;
 pub use text::cjk_fonts;
@@ -703,6 +704,8 @@ pub struct PhotocraftApp {
     last_frame_start_ms: f64,
     /// Background job bookkeeping: opening tabs, control replies waiting on a job.
     pub jobs: jobs_ui::JobsUi,
+    /// File › Import › Scan… (not saved; the scan itself becomes a document).
+    pub(crate) scan: scan_ui::ScanUi,
     #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
     live_tokens: theme::live::LiveTokens,
 }

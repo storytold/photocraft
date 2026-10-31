@@ -70,6 +70,7 @@ pub fn switcher_options(app: &PhotocraftApp) -> Vec<(String, String)> {
     // in the UI language.
     let presets = [
         ("Essentials", tl!("Essentials")),
+        ("CS4", tl!("CS4")),
         ("Photography", tl!("Photography")),
         ("Painting", tl!("Painting")),
         ("Graphic and Web", tl!("Graphic and Web")),
@@ -130,7 +131,7 @@ fn open(app: &mut PhotocraftApp, kind: &str, f: Value) -> Result<Value, String> 
 }
 
 /// Built-in workspace names (Window › Workspace presets).
-const PRESETS: [&str; 6] = ["Essentials", "Photography", "Painting", "Pixel Art", "Graphic and Web", "Motion"];
+const PRESETS: [&str; 7] = ["Essentials", "CS4", "Photography", "Painting", "Pixel Art", "Graphic and Web", "Motion"];
 
 /// Run a shell command, or open its dialog. `None` when `id` isn't ours.
 pub fn menu(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -684,7 +685,7 @@ mod tests {
         }
         // The top-bar switcher lists them after the presets.
         let keys: Vec<String> = switcher_options(&app).into_iter().map(|(k, _)| k).collect();
-        assert_eq!(keys[6..], ["Comp", "Retouch"]);
+        assert_eq!(keys[7..], ["Comp", "Retouch"]);
         assert!(keys.contains(&app.ui.workspace));
     }
 

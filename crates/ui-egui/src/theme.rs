@@ -15,6 +15,8 @@
 //!
 //! - **Pro (Light Gray)** and **Pro (Light)**: Photoshop's third and fourth interface brightness
 //!   levels (#B8B8B8 and #F0F0F0 panels) with the Pro layout (#2661).
+//! - **CS4**: a light-gray application frame with a blue accent and a medium-gray canvas, in the
+//!   Pro layout, for people who want the Photoshop CS4-era look.
 //!
 //! Widgets read [`Tokens::get`] instead of hard-coding colours, so every theme applies everywhere.
 
@@ -34,6 +36,8 @@ pub enum ThemeKind {
     ProLightGray,
     /// Photoshop's fourth (lightest) interface brightness: #F0F0F0 panels (#2661).
     ProLight,
+    /// Light-gray panels, a blue accent and a medium-gray canvas: the Photoshop CS4-era frame.
+    Cs4,
     Studio,
     StudioLight,
     Classic,
@@ -55,11 +59,12 @@ pub enum ThemeKind {
 }
 
 impl ThemeKind {
-    pub const ALL: [ThemeKind; 14] = [
+    pub const ALL: [ThemeKind; 15] = [
         ThemeKind::Pro,
         ThemeKind::ProMedium,
         ThemeKind::ProLightGray,
         ThemeKind::ProLight,
+        ThemeKind::Cs4,
         ThemeKind::Studio,
         ThemeKind::StudioLight,
         ThemeKind::Classic,
@@ -77,6 +82,7 @@ impl ThemeKind {
             ThemeKind::ProMedium => "Pro (Medium Gray)",
             ThemeKind::ProLightGray => "Pro (Light Gray)",
             ThemeKind::ProLight => "Pro (Light)",
+            ThemeKind::Cs4 => "CS4",
             ThemeKind::Studio => "Studio (Dark)",
             ThemeKind::StudioLight => "Studio (Light)",
             ThemeKind::Classic => "Classic",
@@ -97,6 +103,7 @@ impl ThemeKind {
             ThemeKind::ProMedium => "proMedium",
             ThemeKind::ProLightGray => "proLightGray",
             ThemeKind::ProLight => "proLight",
+            ThemeKind::Cs4 => "cs4",
             ThemeKind::Studio => "studio",
             ThemeKind::StudioLight => "studioLight",
             ThemeKind::Classic => "classic",
@@ -111,7 +118,7 @@ impl ThemeKind {
     }
     /// Photoshop-grammar layout (tab strips, flat panels): the four Pro brightness levels.
     pub fn is_pro(self) -> bool {
-        matches!(self, ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::ProLightGray | ThemeKind::ProLight)
+        matches!(self, ThemeKind::Pro | ThemeKind::ProMedium | ThemeKind::ProLightGray | ThemeKind::ProLight | ThemeKind::Cs4)
     }
     /// Whether this theme belongs to the dark appearance family.
     pub fn is_dark(self) -> bool {
@@ -140,6 +147,7 @@ impl ThemeKind {
             "promedium" | "promediumgray" | "medium" | "mediumgray" => Some(ThemeKind::ProMedium),
             "prolightgray" | "lightgray" | "mediumlight" => Some(ThemeKind::ProLightGray),
             "prolight" | "prolightest" | "lightest" | "light" => Some(ThemeKind::ProLight),
+            "cs4" | "photoshopcs4" => Some(ThemeKind::Cs4),
             "studio" | "studiodark" => Some(ThemeKind::Studio),
             "studiolight" => Some(ThemeKind::StudioLight),
             "classic" | "win2000" | "retro" => Some(ThemeKind::Classic),
@@ -290,6 +298,42 @@ impl Tokens {
                 shadow: Color32::from_black_alpha(50),
                 tab_strip: Color32::from_rgb(226, 226, 226),
                 row_selected: Color32::from_rgb(204, 204, 204),
+                ..Tokens::for_kind(ThemeKind::Pro)
+            },
+            // CS4-era frame: light-gray chrome, a classic blue accent, nearly square corners.
+            ThemeKind::Cs4 => Tokens {
+                kind,
+                chrome: Color32::from_rgb(212, 212, 212),
+                canvas: Color32::from_rgb(128, 128, 128),
+                canvas_dot: Color32::from_rgb(128, 128, 128),
+                dock: Color32::from_rgb(198, 198, 198),
+                card: Color32::from_rgb(220, 220, 220),
+                card_border: Color32::from_rgb(168, 168, 168),
+                field: Color32::WHITE,
+                field_border: Color32::from_rgb(160, 160, 160),
+                hover: Color32::from_rgb(200, 200, 200),
+                pressed: Color32::from_rgb(176, 176, 176),
+                text: Color32::from_rgb(20, 20, 20),
+                text_dim: Color32::from_rgb(55, 55, 55),
+                text_faint: Color32::from_rgb(90, 90, 90),
+                icon: Color32::from_rgb(40, 40, 40),
+                accent: Color32::from_rgb(49, 106, 197),
+                accent_soft: Color32::from_rgb(196, 210, 232),
+                accent_border: Color32::from_rgb(49, 106, 197),
+                accent_text: Color32::from_rgb(0, 51, 128),
+                separator: Color32::from_rgb(160, 160, 160),
+                shadow: Color32::from_black_alpha(60),
+                primary_bg: Color32::from_rgb(49, 106, 197),
+                primary_text: Color32::WHITE,
+                radius_sm: 1.0,
+                radius: 1.0,
+                radius_lg: 2.0,
+                bevel: false,
+                pro: true,
+                round_chips: false,
+                tab_strip: Color32::from_rgb(196, 196, 196),
+                row_selected: Color32::from_rgb(210, 222, 240),
+                histogram_bg: Color32::from_rgb(40, 40, 40),
                 ..Tokens::for_kind(ThemeKind::Pro)
             },
             ThemeKind::Pro => Tokens {

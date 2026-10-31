@@ -34,6 +34,7 @@ pub(super) fn workspace_name(id: &str) -> Option<&'static str> {
         "graphicAndWeb" => "Graphic and Web",
         "pixelArt" => "Pixel Art",
         "motion" => "Motion",
+        "cs4" => "CS4",
         _ => return None,
     })
 }
@@ -100,6 +101,9 @@ fn invoke_early_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
     }
     // Workspace New/Delete/Lock, Modifier Keys, custom pixel aspect, Extras/32-bit options.
     if let Some(r) = crate::workspace_ui::menu(app, id, params) {
+        if id == "window.workspace.select" && app.ui.workspace == "CS4" {
+            app.set_theme(ctx, crate::theme::ThemeKind::Cs4);
+        }
         return Some(r);
     }
     // Window › Gradients, Patterns, Styles, Shapes, Tool Presets, Clone Source.
@@ -177,6 +181,10 @@ fn invoke_shell_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str,
             (name, _) => app.ui.workspace = name.into(),
         }
         apply_workspace(app);
+        // The CS4 workspace is the CS4-era frame as well as its panel set. Reset keeps the theme.
+        if ws == "CS4" {
+            app.set_theme(ctx, crate::theme::ThemeKind::Cs4);
+        }
         return Some(Ok(json!({"workspace": app.ui.workspace})));
     }
     None
@@ -221,6 +229,11 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
         }
         // File > Import > Variable Data Sets… asks for the CSV (#8816); with a `path` the engine reads it itself.
+        // File › Import › Scan… asks which scanner to use. With pixel params the engine opens them.
+        "file.import.scan" if params.get("rgba").is_none() && params.get("gray").is_none() => {
+            crate::scan_ui::open(app);
+            Ok(json!({"dialog": "scan"}))
+        }
         "file.import.variableDataSets" if params.get("path").and_then(Value::as_str).is_none() => {
             let doc = app.active_doc_id()?;
             let params = params.clone();
@@ -680,6 +693,7 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
         | "window.theme.proMedium"
         | "window.theme.proLightGray"
         | "window.theme.proLight"
+        | "window.theme.cs4"
         | "window.theme.studio"
         | "window.theme.studioLight"
         | "window.theme.classic"
@@ -797,6 +811,8 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
         // Color includes Swatches; Navigator keeps the pixel canvas easy to inspect.
         "Pixel Art" => (true, true, true, false, false),
         "Motion" => (false, false, true, false, true),
+        // CS4's default column: Navigator, Color, Adjustments (Properties), Layers and History.
+        "CS4" => (true, true, true, true, true),
         _ => (false, true, true, false, true),
     };
     p.navigator = nav;

@@ -5,8 +5,9 @@ use photocraft_ui_egui::dock::{self, Group};
 use photocraft_ui_egui::{PhotocraftApp, menus};
 use serde_json::{Value, json};
 
-const PRESETS: [(&str, &str, &[Group], bool); 6] = [
+const PRESETS: [(&str, &str, &[Group], bool); 7] = [
     ("essentials", "Essentials", &[Group::Color, Group::Properties, Group::Layers], false),
+    ("cs4", "CS4", &[Group::Color, Group::Properties, Group::Navigator, Group::History, Group::Layers], false),
     ("photography", "Photography", &[Group::Properties, Group::Navigator, Group::History, Group::Layers], false),
     ("painting", "Painting", &[Group::Color, Group::Layers], false),
     ("graphicAndWeb", "Graphic and Web", &[Group::Properties, Group::Character, Group::Layers], false),

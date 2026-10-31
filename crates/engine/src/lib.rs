@@ -135,6 +135,7 @@ pub use cmd::render_cmds;
 pub use cmd::retouch_cmds;
 pub use cmd::sample_cmds;
 pub use cmd::sampler_cmds;
+pub use cmd::scan_cmds;
 pub use cmd::select_extra_cmds;
 pub use cmd::selection_cmds;
 pub use cmd::slice_cmds;
