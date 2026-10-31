@@ -130,6 +130,7 @@ pub(crate) fn import_layered(name: &str, img: &Image, layers: &[u8]) -> Result<I
     });
     // The same nesting limit as opening a PSD (#2940).
     crate::psd_import::check_group_depth(&file)?;
+    crate::psd_budget::check(&file, crate::DEFAULT_PSD_IMPORT_PIXEL_BYTES)?;
     // Spot planes are read in Photoshop's polarity (0 = solid ink), as from a PSD. The importer's
     // rule for PSDs from earlier PhotoCraft versions never applies: those versions stored no
     // extra samples in a TIFF, and a TIFF with them carries 1053.
