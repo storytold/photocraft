@@ -49,7 +49,7 @@
 
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -4001,17 +4001,8 @@ curves	Smooth	スムーズ
 	Kept {name}: written by another application	{name} はそのままにしました: 別のアプリケーションが書き込んだファイルです
 	Shadow Tint	シャドウの色かぶり補正
 	Check for Updates…	アップデートを確認…
-	PhotoCraft Updates	PhotoCraft のアップデート
-	Checking for updates…	アップデートを確認中…
 	Open the release page to choose an installer for your system.	リリースページでお使いのシステム用のインストーラーを選択してください。
-	Open Download Page	ダウンロードページを開く
-	PhotoCraft is up to date.	PhotoCraft は最新です。
-	Could not check for updates.	アップデートを確認できませんでした。
-	Updates have not been checked yet.	まだアップデートを確認していません。
-	Check Again	再確認
 	Automatically Check for Updates	アップデートを自動的に確認
-	Installed version: {version}	インストール済みのバージョン: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} が利用可能です。
 	Paints from the History panel's source state	ヒストリーパネルのソース状態からペイントします
 	Sets the source for the history brush	ヒストリーブラシのソースを設定します
 	Highlight Mode	ハイライトモード
@@ -4189,3 +4180,4 @@ curves	Smooth	スムーズ
 	Select and Mask was closed: its document is no longer the active one	「選択とマスク」を閉じました: 対象のドキュメントがアクティブではなくなりました
 	Select and Mask was closed: another layer was selected	「選択とマスク」を閉じました: 別のレイヤーが選択されました
 	Drag to move the selected path	ドラッグして選択したパスを移動
+	Edit Brush…	ブラシを編集…

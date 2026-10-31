@@ -405,20 +405,19 @@ fn select_row_on_click(app: &mut PhotocraftApp, ui: &egui::Ui, rc: &RowCtx<'_>, 
         let mask = if v.filter { "filter" } else { "layer" };
         actions.push((photocraft_engine::mask_view_cmds::ID.into(), json!({"layer": l.id.0, "mode": "off", "mask": mask})));
     }
-    let adjustment = matches!(l.content, LayerContent::Adjustment(_));
-    let fill_mask = matches!(l.content, LayerContent::Fill(_)) && l.mask.is_some();
+    let content_less = matches!(l.content, LayerContent::Adjustment(_) | LayerContent::Fill(_));
     if on_vector {
         // The vector mask thumbnail targets the vector mask: the path tools edit it and the
         // Paths panel selects the layer's path.
         app.ui.selected_path = Some("layer".into());
         actions.push(("ui.vectorMaskTarget".into(), json!(true)));
-    } else if on_mask || (fill_mask && !on_thumb) {
+    } else if on_mask || (content_less && l.mask.is_some() && !on_thumb) {
         if on_mask {
             // The mask thumbnail also switches Properties to the mask (#3369).
             app.ui.properties_layer = None;
         }
         actions.push(("ui.maskTarget".into(), json!(true)));
-    } else if on_thumb || adjustment || !row.primary {
+    } else if on_thumb || !row.primary {
         actions.push(("ui.maskTarget".into(), json!(false)));
     }
     // ⌥-click the layer thumbnail: fit the layer on screen, as Photoshop does.
