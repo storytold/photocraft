@@ -1,5 +1,6 @@
 //! The browser shell: web `Services`, drag-and-drop, and the eframe web runner.
 
+use crate::file_ingest::{Admission, Delivery, PlacementHold, RoutedDelivery, Source};
 use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
@@ -84,12 +85,17 @@ pub fn start() {
                     PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
                     let inbox: Inbox = Arc::default();
                     let place_inbox: Inbox = Arc::default();
+                    let admission = Admission::default();
+                    let dropped = Arc::default();
                     let served: Served = Arc::default();
                     load_font_manifest(served.clone(), cc.egui_ctx.clone());
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    let mut app = PhotocraftApp::new(
+                        session,
+                        services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag), admission.clone()),
+                    );
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -103,7 +109,19 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, ui_language: "" }))
+                    Ok(Box::new(WebShell {
+                        app,
+                        inbox,
+                        place_inbox,
+                        admission,
+                        dropped,
+                        placement: PlacementHold::default(),
+                        unsaved,
+                        served,
+                        database,
+                        presets,
+                        ui_language: "",
+                    }))
                 }),
             )
             .await;
@@ -262,12 +280,17 @@ async fn fetch_bytes(url: &str, integrity: Option<&str>) -> Result<Vec<u8>, Stri
 
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously,
 /// so the app's own drop path can't handle them) and feed them through the inboxes.
+type DroppedDelivery = Result<RoutedDelivery, String>;
+
 struct WebShell {
     app: PhotocraftApp,
     /// Dropped files to open as documents.
     inbox: Inbox,
-    /// Dropped files to place on the active document's canvas.
     place_inbox: Inbox,
+    admission: Admission,
+    dropped: Arc<Mutex<Option<DroppedDelivery>>>,
+    /// Admission lease for bytes still queued in `app.drop_places`.
+    placement: PlacementHold,
     /// Read by the `beforeunload` listener ([`guard_unload`]).
     unsaved: Arc<AtomicBool>,
     served: Served,
@@ -349,30 +372,43 @@ impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         if !dropped.is_empty() {
-            let names: Vec<String> =
-                dropped.iter().map(|f| f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into())).collect();
-            // Decided now, where the drop landed: on the document's canvas the files are placed
-            // as layers (as on the desktop), elsewhere opened.
-            let places = self.app.dropped_on_canvas(ctx, &names);
-            let files: Vec<_> = dropped.into_iter().zip(names).zip(places).collect();
-            let (inbox, place_inbox) = (self.inbox.clone(), self.place_inbox.clone());
-            let ctx = ctx.clone();
-            // One after another, so they open or place in the order they were dropped.
-            wasm_bindgen_futures::spawn_local(async move {
-                for ((f, name), place) in files {
-                    match f.bytes_async().await {
-                        Ok(bytes) => {
-                            let queue = if place { &place_inbox } else { &inbox };
-                            queue.lock().unwrap_or_else(PoisonError::into_inner).push((name, bytes));
-                            ctx.request_repaint();
-                        }
-                        Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
-                    }
+            let sources: Vec<_> = dropped.into_iter().map(Dropped).collect();
+            let names: Vec<_> = sources.iter().map(Source::name).collect();
+            match self.admission.admit(sources) {
+                Ok(batch) => {
+                    // Capture placement at drop time, before asynchronous reads move the pointer.
+                    let places = self.app.dropped_on_canvas(ctx, &names);
+                    let arrived = self.dropped.clone();
+                    let ctx = ctx.clone();
+                    wasm_bindgen_futures::spawn_local(async move {
+                        *arrived.lock().unwrap_or_else(|e| e.into_inner()) = Some(batch.read().await.and_then(|delivery| delivery.route(&places)));
+                        ctx.request_repaint();
+                    });
                 }
-            });
+                Err(error) => {
+                    self.app.ui.status = error;
+                    self.app.ui.status_error = true;
+                }
+            }
+        }
+        let arrived = self.dropped.lock().unwrap_or_else(|e| e.into_inner()).take();
+        match arrived {
+            Some(Ok(RoutedDelivery { open, place, lease })) => {
+                self.inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(open);
+                self.place_inbox.lock().unwrap_or_else(|e| e.into_inner()).extend(place);
+                self.placement.store(lease);
+            }
+            Some(Err(error)) => {
+                self.app.ui.status = error;
+                self.app.ui.status_error = true;
+            }
+            None => {}
         }
         self.serve_fonts(ctx);
         self.app.logic_frame(ctx, frame);
+        // logic_frame moves place_inbox into drop_places and may place only the first file
+        // before a transform pauses the rest. The inboxes being empty is not consumption.
+        self.placement.release_if_idle(self.app.has_pending_drop_places());
         self.save_presets(ctx);
         self.app.finish_type_reset_logic(ctx);
     }
@@ -407,7 +443,39 @@ impl eframe::App for WebShell {
     }
 }
 
-fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
+struct Picked(rfd::FileHandle);
+impl Source for Picked {
+    fn name(&self) -> String {
+        self.0.file_name()
+    }
+    fn size(&self) -> Option<f64> {
+        Some(self.0.inner().size())
+    }
+    async fn read(self) -> Result<Vec<u8>, String> {
+        // Read via Blob's fallible promise instead of rfd's infallible read wrapper.
+        read_browser_file(self.0.inner()).await
+    }
+}
+
+struct Dropped(egui::DroppedFileHandle);
+impl Source for Dropped {
+    fn name(&self) -> String {
+        self.0.path().file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| "dropped".into())
+    }
+    fn size(&self) -> Option<f64> {
+        self.0.web_file().map(|file| file.size())
+    }
+    async fn read(self) -> Result<Vec<u8>, String> {
+        self.0.bytes_async().await
+    }
+}
+
+async fn read_browser_file(file: &web_sys::File) -> Result<Vec<u8>, String> {
+    let buffer = wasm_bindgen_futures::JsFuture::from(file.array_buffer()).await.map_err(|e| format!("{e:?}"))?;
+    Ok(js_sys::Uint8Array::new(&buffer).to_vec())
+}
+
+fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::CursorPosFn, admission: Admission) -> Services {
     Services {
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
@@ -416,40 +484,45 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
-        file_dialog: Some(Box::new(|request, _parent, reply| match request {
-            // The browser's file picker hands over the files' contents, not paths. File › Open
-            // asks for several files (`multiple`), each opened in its own tab.
-            FileDialogRequest::Open { multiple, extensions, .. } => wasm_bindgen_futures::spawn_local(async move {
-                let dialog = if let Some(exts) = extensions {
-                    rfd::AsyncFileDialog::new().add_filter("Supported Files", &exts)
-                } else {
-                    rfd::AsyncFileDialog::new().add_filter("All Formats", OPEN_EXTS).add_filter("SVG", SVG_EXTS)
-                };
-                let answer = if multiple {
-                    match dialog.pick_files().await {
-                        Some(picked) if !picked.is_empty() => {
-                            let mut files = Vec::with_capacity(picked.len());
-                            for file in picked {
-                                files.push((file.file_name(), file.read().await));
-                            }
-                            Some(FileDialogAnswer::ContentsMany(files))
+        file_dialog: Some(Box::new(move |request, _parent, reply| {
+            let admission = admission.clone();
+            match request {
+                // The browser's file picker hands over the files' contents, not paths. File › Open
+                // asks for several files (`multiple`), each opened in its own tab.
+                FileDialogRequest::Open { multiple, extensions, .. } => wasm_bindgen_futures::spawn_local(async move {
+                    let dialog = if let Some(exts) = extensions {
+                        rfd::AsyncFileDialog::new().add_filter("Supported Files", &exts)
+                    } else {
+                        rfd::AsyncFileDialog::new().add_filter("All Formats", OPEN_EXTS).add_filter("SVG", SVG_EXTS)
+                    };
+                    let picked = if multiple { dialog.pick_files().await } else { dialog.pick_file().await.map(|file| vec![file]) };
+                    let Some(picked) = picked.filter(|files| !files.is_empty()) else {
+                        reply.send(None);
+                        return;
+                    };
+                    let result = match admission.admit(picked.into_iter().map(Picked).collect()) {
+                        Ok(batch) => batch.read().await,
+                        Err(error) => Err(error),
+                    };
+                    match result {
+                        Ok(Delivery { files, lease }) => {
+                            let answer = if multiple {
+                                Some(FileDialogAnswer::ContentsMany(files))
+                            } else {
+                                files.into_iter().next().map(|(name, bytes)| FileDialogAnswer::Contents(name, bytes))
+                            };
+                            reply.send_with_guard(answer, lease);
                         }
-                        _ => None,
+                        Err(error) => reply.send(Some(FileDialogAnswer::Unavailable(error))),
                     }
-                } else {
-                    match dialog.pick_file().await {
-                        Some(file) => Some(FileDialogAnswer::Contents(file.file_name(), file.read().await)),
-                        None => None,
-                    }
-                };
-                reply.send(answer);
-            }),
-            // Browser folder handles cannot be represented as filesystem paths for engine commands.
-            FileDialogRequest::Folder { .. } => reply.send(None),
-            // No save dialog on the web: the suggested name becomes the download name.
-            FileDialogRequest::Save { suggested } => {
-                let name = std::path::Path::new(&suggested).file_name().map_or_else(|| suggested.clone(), |n| n.to_string_lossy().to_string());
-                reply.send(Some(FileDialogAnswer::SaveTo(name)));
+                }),
+                // Browser folder handles cannot be represented as filesystem paths for engine commands.
+                FileDialogRequest::Folder { .. } => reply.send(None),
+                // No save dialog on the web: the suggested name becomes the download name.
+                FileDialogRequest::Save { suggested } => {
+                    let name = std::path::Path::new(&suggested).file_name().map_or_else(|| suggested.clone(), |n| n.to_string_lossy().to_string());
+                    reply.send(Some(FileDialogAnswer::SaveTo(name)));
+                }
             }
         })),
         write: Some(Box::new(|path: &str, bytes: &[u8]| download(path, bytes))),
