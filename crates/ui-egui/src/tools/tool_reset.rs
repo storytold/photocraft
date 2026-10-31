@@ -97,7 +97,7 @@ fn reset_all(app: &mut PhotocraftApp) {
     app.ui.tool_options = ToolOptions::default();
     app.ui.artboard_tool = Default::default();
     app.ui.selection_mode = 0;
-    app.ui.tool_presets.clear();
+    app.session.tools.tool_presets.clear();
     reset_session_brush(app);
     // Every other painting tool gets its own starting brush. Left without one, it would take the
     // live brush when picked (`sync_tool_brush`), and the tools' starting tips differ (#11810).
