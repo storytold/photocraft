@@ -124,11 +124,17 @@ fn captured_pen_paint_preserves_float_colour_and_alpha_after_toolbar_changes() {
         app.ui.tool_options.stroke_width = 3.0;
         let foreground = [0.12345, 0.34567, 0.56789, 0.375];
         let background = [0.76543, 0.54321, 0.32109, 0.625];
+        // A closed shape takes the tool's own Fill and Stroke colours (#6695); an open one is
+        // stroked with the foreground.
         app.session.tools.foreground = foreground;
         app.session.tools.background = background;
+        app.ui.tool_options.shape_fill_color = foreground;
+        app.ui.tool_options.shape_stroke_color = background;
         click(&mut app, 30.0, 60.0);
         app.session.tools.foreground = [1.0; 4];
         app.session.tools.background = [0.0; 4];
+        app.ui.tool_options.shape_fill_color = [1.0; 4];
+        app.ui.tool_options.shape_stroke_color = [0.0; 4];
         click(&mut app, 130.0, 60.0);
         if closed {
             click(&mut app, 90.0, 130.0);
