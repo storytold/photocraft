@@ -396,6 +396,8 @@
 	Match Color…	カラーを一致…
 	Replace Color…	色を置き換え…
 	Equalize	平均化
+	Equalize Selected Area Only	選択範囲のみ平均化
+	Equalize Entire Image Based On Selected Area	選択範囲に基づいて画像全体を平均化
 	Auto Tone	自動トーン補正
 	Auto Contrast	自動コントラスト
 	Auto Color	自動カラー補正

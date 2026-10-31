@@ -361,6 +361,8 @@
 	Match Color…	Corresponder cores…
 	Replace Color…	Substituir cor…
 	Equalize	Equalizar
+	Equalize Selected Area Only	Equalizar somente a área selecionada
+	Equalize Entire Image Based On Selected Area	Equalizar a imagem inteira com base na área selecionada
 	Auto Tone	Tom automático
 	Auto Contrast	Contraste automático
 	Auto Color	Cor automática

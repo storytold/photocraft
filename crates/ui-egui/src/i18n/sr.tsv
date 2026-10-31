@@ -387,6 +387,8 @@
 	Match Color…	Uskladi boje…
 	Replace Color…	Zameni boju…
 	Equalize	Izjednači
+	Equalize Selected Area Only	Izjednači samo selekciju
+	Equalize Entire Image Based On Selected Area	Izjednači celu sliku prema selekciji
 	Auto Tone	Automatski ton
 	Auto Contrast	Automatski kontrast
 	Auto Color	Automatske boje

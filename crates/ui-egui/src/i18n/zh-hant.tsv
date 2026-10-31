@@ -377,6 +377,8 @@
 	Match Color…	符合顏色…
 	Replace Color…	取代顏色…
 	Equalize	均勻分佈
+	Equalize Selected Area Only	僅均勻分佈選取範圍
+	Equalize Entire Image Based On Selected Area	依據選取範圍均勻分佈整個影像
 	Auto Tone	自動色調
 	Auto Contrast	自動對比
 	Auto Color	自動色彩

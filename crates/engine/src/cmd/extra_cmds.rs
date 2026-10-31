@@ -76,12 +76,18 @@ pub(crate) fn step_key(s: &Session, what: &str) -> String {
 /// Quick Mask or the layer mask (`Session::execute` fills that in from the Channels panel), that
 /// grayscale surface is rewritten instead, as the core filters do (#935).
 fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
+    map_pixels_in(s, label, p, false, f)
+}
+
+/// [`map_pixels`], or with `whole` the whole canvas: `f` still gets the selection coverage, and
+/// every pixel takes its result in full.
+fn map_pixels_in(s: &mut Session, label: &str, p: &Value, whole: bool, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
     let id = layer_param(s, &Value::Null)?;
     let channel = crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels;
     s.edit(label, |doc, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
-        let area = selection.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas));
+        let area = if whole { canvas } else { selection.as_ref().map_or(canvas, |m| m.content_bounds().intersect(&canvas)) };
         let (surf, lock_alpha) = if channel {
             let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(id), p)? else { return Ok(()) };
             (surf, false)
@@ -109,7 +115,7 @@ fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut
         f(area, &mut px, &cover);
         let mut enc = [0.0f32; 8];
         for (i, out) in raw.chunks_exact_mut(n).enumerate() {
-            let k = cover[i];
+            let k = if whole { 1.0 } else { cover[i] };
             if k <= 0.0 {
                 continue;
             }
@@ -230,9 +236,16 @@ fn stroke(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Histogram equalization, like Photoshop's: one CDF over the R, G and B values of
-/// the selected pixels, applied to every channel.
+/// the selected pixels, applied to every channel. With a selection, `selectedAreaOnly: false`
+/// applies the selection's mapping to the layer within the canvas (Photoshop's Equalize Entire
+/// Image Based On Selected Area).
 fn equalize(s: &mut Session, p: &Value) -> Result<Value> {
-    map_pixels(s, "Equalize", p, |_, px, cover| {
+    let whole = match p.get("selectedAreaOnly") {
+        None | Some(Value::Null) => false,
+        Some(Value::Bool(only)) => !only,
+        Some(_) => return Err(EngineError::BadParams { cmd: "image.adjustments.equalize".into(), msg: "selectedAreaOnly must be true or false".into() }),
+    };
+    map_pixels_in(s, "Equalize", p, whole, |_, px, cover| {
         let mut hist = [0f64; 256];
         for (p, &k) in px.iter().zip(cover) {
             if k > 0.0 && p[3] > 0.0 {
@@ -861,7 +874,15 @@ pub fn specs() -> Vec<CommandSpec> {
             })?;
             Ok(json!({"selected": true}))
         }),
-        spec!("image.adjustments.equalize", "Equalize", &["Image", "Adjustments"], None, "{}", has_pixels, equalize),
+        spec!(
+            "image.adjustments.equalize",
+            "Equalize",
+            &["Image", "Adjustments"],
+            None,
+            r#"{"selectedAreaOnly":bool=true (with a selection, false equalizes the layer within the canvas by the selection's histogram)}"#,
+            has_pixels,
+            equalize
+        ),
         spec!("image.revealAll", "Reveal All", &["Image"], None, "{}", has_doc, |s, _| {
             let d = s.active().ok_or(EngineError::NoDocument)?;
             let all = reveal_all_bounds(&d.doc);

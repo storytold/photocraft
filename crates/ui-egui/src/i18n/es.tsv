@@ -340,6 +340,8 @@
 	Match Color…	Igualar color…
 	Replace Color…	Reemplazar color…
 	Equalize	Ecualizar
+	Equalize Selected Area Only	Ecualizar solo la selección
+	Equalize Entire Image Based On Selected Area	Ecualizar toda la imagen según la selección
 	Auto Tone	Tono automático
 	Auto Contrast	Contraste automático
 	Auto Color	Color automático

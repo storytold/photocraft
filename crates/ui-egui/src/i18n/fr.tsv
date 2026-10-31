@@ -365,6 +365,8 @@
 	Match Color…	Faire correspondre la couleur…
 	Replace Color…	Remplacer la couleur…
 	Equalize	Égaliser
+	Equalize Selected Area Only	Égaliser uniquement la sélection
+	Equalize Entire Image Based On Selected Area	Égaliser toute l'image d'après la sélection
 	Auto Tone	Tonalité automatique
 	Auto Contrast	Contraste automatique
 	Auto Color	Couleur automatique

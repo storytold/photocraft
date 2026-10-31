@@ -755,6 +755,8 @@
 	Channel Mixer	Μείκτης καναλιών
 	Desaturate	Αφαίρεση κορεσμού
 	Equalize	Εξισορρόπηση
+	Equalize Selected Area Only	Εξισορρόπηση μόνο της επιλεγμένης περιοχής
+	Equalize Entire Image Based On Selected Area	Εξισορρόπηση ολόκληρης της εικόνας βάσει της επιλεγμένης περιοχής
 	Auto Tone	Αυτόματη διόρθωση τόνων
 	Auto Contrast	Αυτόματη αντίθεση
 	Auto Color	Αυτόματη διόρθωση χρωμάτων

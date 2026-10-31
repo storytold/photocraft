@@ -330,6 +330,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::blur_pins::owns(fields) => crate::blur_pins::body(ui, fields),
         _ if fields.contains_key("__filter") => filter_body(app, ui, d, fields, id),
         _ if crate::new_guide_ui::owns(fields) => crate::new_guide_ui::body(ui, fields),
+        _ if crate::equalize_ui::owns(fields) => crate::equalize_ui::body(ui, fields),
         _ if fields.contains_key("__form") => {
             if fields.get("__command").and_then(Value::as_str) == Some("file.fileInfo") {
                 let room = (ui.ctx().content_rect().height() - DIALOG_CHROME).max(120.0);
@@ -844,6 +845,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::variables_ui::owns,
     crate::file_ui::owns,
     crate::new_guide_ui::owns,
+    crate::equalize_ui::owns,
     crate::color_picker_ui::owns,
     crate::color_range_ui::owns,
     crate::prefs_ui::owns,
@@ -1060,15 +1062,18 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     Ok(Value::Null)
 }
 
-/// Open the parameter dialog of `command`: the adjustment editor for `image.adjustments.*`, the
-/// schema dialog for filters, the Color Range dialog for `select.colorRange`, otherwise a bare
-/// confirm dialog.
+/// Open the parameter dialog of `command`: the Equalize choices when there is a selection, the
+/// adjustment editor for `image.adjustments.*`, the schema dialog for filters, the Color Range
+/// dialog for `select.colorRange`, otherwise a bare confirm dialog.
 pub fn open_command_dialog(app: &mut PhotocraftApp, command: &str, label: &str) -> u64 {
     if command == "view.newGuideLayout" {
         return crate::guide_layout_ui::open(app);
     }
     if command == crate::stroke_ui::COMMAND {
         return crate::stroke_ui::open(app);
+    }
+    if command == crate::equalize_ui::COMMAND && crate::equalize_ui::asks(app) {
+        return crate::equalize_ui::open(app);
     }
     if crate::new_group_ui::fronts(command) {
         return crate::new_group_ui::open(app, command);
@@ -1116,6 +1121,7 @@ pub mod disk_change_prompt;
 pub mod distort_ui;
 pub mod duplicate_layer_ui;
 pub mod edit_history;
+pub mod equalize_ui;
 pub mod export_dialog;
 pub mod file_ui;
 pub mod fill_ui;

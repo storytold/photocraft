@@ -362,6 +362,8 @@
 	Match Color…	색상 일치…
 	Replace Color…	색상 대체…
 	Equalize	균일화
+	Equalize Selected Area Only	선택 영역만 균일화
+	Equalize Entire Image Based On Selected Area	선택 영역을 기준으로 전체 이미지 균일화
 	Auto Tone	자동 톤
 	Auto Contrast	자동 대비
 	Auto Color	자동 색상

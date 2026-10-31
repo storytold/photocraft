@@ -295,6 +295,8 @@
 	Match Color…	Rengi Eşleştir…
 	Replace Color…	Rengi Değiştir…
 	Equalize	Eşitle
+	Equalize Selected Area Only	Yalnızca Seçili Alanı Eşitle
+	Equalize Entire Image Based On Selected Area	Tüm Görüntüyü Seçili Alana Göre Eşitle
 	Auto Tone	Otomatik Ton
 	Auto Contrast	Otomatik Kontrast
 	Auto Color	Otomatik Renk

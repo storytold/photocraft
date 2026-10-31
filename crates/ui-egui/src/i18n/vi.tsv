@@ -403,6 +403,8 @@
 	Enable Vector Mask	Bật mặt nạ vector
 	Entropy	Entropy
 	Equalize	Cân bằng histogram
+	Equalize Entire Image Based On Selected Area	Cân bằng histogram toàn bộ hình ảnh theo vùng chọn
+	Equalize Selected Area Only	Chỉ cân bằng histogram vùng chọn
 	Exclude Overlapping Shapes	Loại phần chồng hình
 	Export Contents…	Xuất nội dung…
 	Exposure…	Phơi sáng…

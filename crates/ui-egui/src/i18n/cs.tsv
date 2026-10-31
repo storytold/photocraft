@@ -403,6 +403,8 @@
 	Match Color…	Přizpůsobit barvy…
 	Replace Color…	Nahradit barvu…
 	Equalize	Vyrovnat
+	Equalize Selected Area Only	Vyrovnat pouze výběr
+	Equalize Entire Image Based On Selected Area	Vyrovnat celý obraz podle výběru
 	Auto Tone	Automatický tón
 	Auto Contrast	Automatický kontrast
 	Auto Color	Automatické barvy

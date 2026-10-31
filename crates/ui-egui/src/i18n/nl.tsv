@@ -328,6 +328,8 @@
 	Match Color…	Kleur afstemmen…
 	Replace Color…	Kleur vervangen…
 	Equalize	Egaliseren
+	Equalize Selected Area Only	Alleen geselecteerd gebied egaliseren
+	Equalize Entire Image Based On Selected Area	Hele afbeelding egaliseren op basis van geselecteerd gebied
 	Auto Tone	Automatische tooncorrectie
 	Auto Contrast	Automatisch contrast
 	Auto Color	Automatische kleur

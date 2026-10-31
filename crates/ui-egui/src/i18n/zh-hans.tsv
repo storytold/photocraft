@@ -378,6 +378,8 @@
 	Match Color…	匹配颜色…
 	Replace Color…	替换颜色…
 	Equalize	色调均化
+	Equalize Selected Area Only	仅色调均化选区
+	Equalize Entire Image Based On Selected Area	基于选区色调均化整个图像
 	Auto Tone	自动色调
 	Auto Contrast	自动对比度
 	Auto Color	自动颜色

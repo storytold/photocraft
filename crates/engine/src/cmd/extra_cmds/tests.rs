@@ -473,6 +473,64 @@ fn equalize_spreads_values() {
     }
 }
 
+/// Equalize with a selection: by default only the selected pixels change, as Photoshop's
+/// Equalize Selected Area Only; `selectedAreaOnly: false` maps the layer within the canvas by the
+/// selected pixels' histogram, as its Equalize Entire Image Based On Selected Area.
+#[test]
+fn equalize_entire_image_based_on_the_selected_area() {
+    let setup = |depth: u32| {
+        let mut s = session(depth);
+        paint_square(&mut s, Rect::new(0, 0, 30, 15), [0.4, 0.4, 0.4, 1.0]);
+        paint_square(&mut s, Rect::new(0, 15, 30, 30), [0.5, 0.5, 0.5, 1.0]);
+        // Darker than anything selected: the selection's mapping sends it to black.
+        paint_square(&mut s, Rect::new(30, 0, 40, 30), [0.3, 0.3, 0.3, 1.0]);
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 30})).unwrap();
+        s
+    };
+    for depth in [8, 16, 32] {
+        for params in [json!({}), json!({"selectedAreaOnly": true}), json!({"selectedAreaOnly": null})] {
+            let mut s = setup(depth);
+            s.execute("image.adjustments.equalize", params.clone()).unwrap();
+            let inside = (pixel(&s, 1, 1)[0], pixel(&s, 1, 20)[0]);
+            assert!(inside.0 < 0.05 && inside.1 > 0.95, "{depth} {params}: inside {inside:?}");
+            let outside = [pixel(&s, 25, 1)[0], pixel(&s, 25, 20)[0], pixel(&s, 35, 1)[0]];
+            assert!(outside.iter().zip([0.4, 0.5, 0.3]).all(|(v, want)| (v - want).abs() < 0.01), "{depth} {params}: outside {outside:?}");
+        }
+        let mut s = setup(depth);
+        s.execute("image.adjustments.equalize", json!({"selectedAreaOnly": false})).unwrap();
+        for (x, y, want_light) in [(1, 1, false), (1, 20, true), (25, 1, false), (25, 20, true), (35, 1, false), (35, 20, false)] {
+            let v = pixel(&s, x, y)[0];
+            assert!(if want_light { v > 0.95 } else { v < 0.05 }, "{depth}: ({x}, {y}) = {v}");
+        }
+        assert!(doc(&s).selection.is_some(), "{depth}: the selection stays");
+        s.undo();
+        let undone = [pixel(&s, 1, 1)[0], pixel(&s, 25, 20)[0], pixel(&s, 35, 1)[0]];
+        assert!(undone.iter().zip([0.4, 0.5, 0.3]).all(|(v, want)| (v - want).abs() < 0.01), "{depth}: one undo step {undone:?}");
+    }
+}
+
+/// Without a selection, `selectedAreaOnly: false` gives the same pixels as plain Equalize.
+#[test]
+fn equalize_entire_image_without_a_selection_is_plain_equalize() {
+    let run = |params: Value| {
+        let mut s = session(8);
+        paint_square(&mut s, Rect::new(0, 0, 40, 15), [0.4, 0.4, 0.4, 1.0]);
+        paint_square(&mut s, Rect::new(0, 15, 40, 30), [0.5, 0.5, 0.5, 1.0]);
+        s.execute("image.adjustments.equalize", params).unwrap();
+        active(&s).surface().unwrap().read_region(Rect::new(0, 0, 40, 30))
+    };
+    assert_eq!(run(json!({"selectedAreaOnly": false})), run(json!({})));
+}
+
+#[test]
+fn equalize_refuses_a_selected_area_only_that_is_not_a_boolean() {
+    for bad in [json!("false"), json!(0), json!([true]), json!({})] {
+        let mut s = session(8);
+        let e = s.execute("image.adjustments.equalize", json!({"selectedAreaOnly": bad})).unwrap_err().to_string();
+        assert!(e.contains("selectedAreaOnly"), "{bad}: {e}");
+    }
+}
+
 /// A selection masks Clouds but doesn't change their size: inside it they are the canvas's
 /// clouds, as when Clouds sized itself by the document (before it became a filter).
 #[test]

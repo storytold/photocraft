@@ -426,9 +426,10 @@ fn a_selective_color_step_in_the_scalar_form_keeps_its_values() {
     assert_eq!(range(&nulled, "reds"), [35.0, 0.0, 0.0, 0.0], "{nulled}");
 }
 
-/// A setting Photoshop's event has no field for is dropped by export, and the step then plays back
+/// A setting the exported event has no field for is dropped by export, and the step then plays back
 /// as a different edit: Crystallize's `seed` (#7668), Radial Blur's centre, Minimum's and
-/// Maximum's `preserve`. Such a step is refused, as one with no equivalent event already is.
+/// Maximum's `preserve`, Equalize's `selectedAreaOnly`. Such a step is refused, as one with no
+/// equivalent event already is.
 #[test]
 fn a_setting_the_event_cannot_hold_is_refused() {
     for (id, params) in [
@@ -436,6 +437,7 @@ fn a_setting_the_event_cannot_hold_is_refused() {
         ("filter.blur.radialBlur", json!({"amount": 10, "centerX": 0.25, "centerY": 0.5})),
         ("filter.other.minimum", json!({"radius": 4, "preserve": "roundness"})),
         ("filter.other.maximum", json!({"radius": 4, "preserve": "roundness"})),
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": false})),
     ] {
         let mut s = Session::new();
         s.actions.list.push(Action::new("A", vec![(id.into(), params)]));
@@ -465,6 +467,8 @@ fn settings_at_the_value_the_event_plays_still_export() {
         // review).
         ("filter.other.minimum", json!({"radius": 4, "preserve": "Squareness"})),
         ("filter.other.maximum", json!({"radius": 4, "preserve": "Roundness"})),
+        ("image.adjustments.equalize", json!({"selectedAreaOnly": true})),
+        ("image.adjustments.equalize", json!({})),
     ] {
         let mut s = Session::new();
         s.actions.list.push(Action::new("A", vec![(id.into(), params.clone())]));
