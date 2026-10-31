@@ -1267,6 +1267,93 @@ fn distort_filters_preview_on_the_gpu() {
     }
 }
 
+/// Phase 4: Lens Blur previews on the GPU at 100 %, matching the CPU preview, with each depth
+/// source: none (with Specular Highlights), the layer's transparency, its layer mask and an
+/// alpha channel (the second inputs, read as the engine reads them), and noise.
+#[test]
+fn lens_blur_previews_on_the_gpu() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    // Big enough for a reduced proxy when zoomed out.
+    let (mut h, mut open) = harness_sized(rs, 4.0, true, [3000, 2400]);
+    if !gpu_path(&h) {
+        return;
+    }
+    h.state_mut()
+        .session
+        .edit("Depth", |doc, _| {
+            let (w, ht) = (doc.bounds().width(), doc.bounds().height());
+            let across: Vec<f32> = (0..w * ht).map(|i| (i % w) as f32 / w as f32).collect();
+            let down: Vec<f32> = (0..w * ht).map(|i| (i / w) as f32 / ht as f32).collect();
+            let mut mask = photocraft_doc::LayerMask::reveal_all();
+            mask.surface.write_region(doc.bounds(), &across);
+            // Disabled, so it doesn't hide the layer: Lens Blur reads its depth all the same.
+            mask.enabled = false;
+            doc.layers[0].mask = Some(mask);
+            let mut s = photocraft_raster::Surface::new(photocraft_color::PixelFormat::GRAY8);
+            s.write_region(doc.bounds(), &down);
+            doc.channels.push(photocraft_doc::AlphaChannel::new("Depth", s));
+            Ok(())
+        })
+        .unwrap();
+    let cases = [
+        json!({"radius": 25, "shape": "hexagon", "brightness": 60, "threshold": 120, "depthMap": "none"}),
+        json!({"radius": 20, "shape": "pentagon", "bladeCurvature": 40, "depthMap": "transparency", "focalDistance": 0}),
+        json!({"radius": 30, "shape": "octagon", "rotation": 30, "depthMap": "layerMask", "focalDistance": 0}),
+        json!({"radius": 15, "depthMap": "channel", "depthChannel": 0, "focalDistance": 60, "invert": true, "noise": 30, "distribution": "gaussian", "seed": 4}),
+    ];
+    for params in cases.clone() {
+        crate::dialogs::cancel(h.state_mut(), open).unwrap();
+        open = crate::filter_dialog::open(h.state_mut(), LENS_BLUR).unwrap();
+        {
+            let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == open).unwrap();
+            for (k, v) in params.as_object().unwrap() {
+                d.fields.insert(k.clone(), v.clone());
+            }
+            d.fields.insert("__preview".into(), json!(true));
+        }
+        settle(&mut h, |app| on_gpu(app, 0));
+        assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "{params}: the CPU preview stands aside");
+        let what = format!("Lens Blur {params}");
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, LENS_BLUR, &params, 1).unwrap())
+        };
+        let plain = h.state().session.active().unwrap().doc.clone();
+        let shown = probes_named(&mut h, Some(&what));
+        let (mut checked, mut differs) = (0, 0);
+        for (p, px) in &shown {
+            let (want, alpha) = expected_in(h.state(), &oracle, *p);
+            if alpha < 0.999 {
+                continue;
+            }
+            assert!(within(&want, *px), "{what}: at {p:?} the canvas shows {px:?}, the CPU {want:?}");
+            checked += 1;
+            differs += usize::from(!within(&expected_around(h.state(), &plain, *p, 0).0, *px));
+        }
+        assert!(checked >= 40 && differs >= 10, "{what}: {checked} probes checked, {differs} differ from the unblurred image");
+    }
+    // Zoomed out: the proxy, its depth channel reduced the same way, against the CPU's proxy
+    // preview (the last case's settings).
+    let last = cases.last().unwrap().clone();
+    h.state_mut().ui.views[0].zoom = 0.25;
+    settle(&mut h, |app| app.filter_gpu_preview.as_ref().is_some_and(|p| p.proxy.as_ref().is_some_and(|g| g.drawn.is_some())));
+    assert!(on_gpu(h.state_mut(), 0), "zoomed out on the GPU");
+    let depths = h.state().filter_gpu_preview.as_ref().unwrap().depths.iter().map(|(k, _)| k.0).collect::<Vec<_>>();
+    assert!(depths.contains(&2), "the proxy's depth map: {depths:?}");
+    let (k, key, size) = gpu_proxy(h.state_mut(), 0).expect("the proxy");
+    assert_eq!(k, 2);
+    let oracle = {
+        let st = h.state().session.active().unwrap();
+        crate::filter_dialog::preview_document(&st.doc, st.active_layer, LENS_BLUR, &last, 2).unwrap()
+    };
+    let (_, tsize, texels) = h.state().gpu.as_ref().unwrap().read_texels(key).expect("the proxy texture");
+    assert_eq!(tsize, size);
+    let cpu = photocraft_compose::flatten(&oracle);
+    let worst = cpu.px.iter().zip(&texels).map(|(c, g)| (0..3).map(|i| (c[i] * c[3] - g[i]).abs()).fold(0.0f32, f32::max)).fold(0.0, f32::max);
+    assert!(worst <= 1.5 / 255.0, "the lens-blurred proxy is {:.2}/255 off the CPU's proxy preview", worst * 255.0);
+}
+
 /// The canvas budget shrinking mid-session (the canvas then draws on the CPU, which can't show the
 /// operator): the session fails over to the CPU preview instead of hiding it, with its operator
 /// cleared (nothing stale for the canvas to draw once it fits again), and is back on the GPU when

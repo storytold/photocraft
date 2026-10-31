@@ -53,6 +53,10 @@ pub const CUSTOM: &str = "filter.other.custom";
 /// Displace: the source sampled where an open document's map shifts it.
 pub const DISPLACE: &str = "filter.distort.displace";
 
+/// Lens Blur: an iris-shaped mean sized per pixel by depth (`SeparableBlur::Lens`), its depth map
+/// (the layer mask or an alpha channel) a second input.
+pub const LENS_BLUR: &str = "filter.blur.lensBlur";
+
 /// The distort filters that are a mapping (`photocraft_algo::separable::Warp`).
 pub const DISTORTS: [&str; 8] = [
     "filter.distort.twirl",
@@ -66,7 +70,7 @@ pub const DISTORTS: [&str; 8] = [
 ];
 
 /// The filters this path previews.
-pub const COMMANDS: [&str; 16] = [
+pub const COMMANDS: [&str; 17] = [
     COMMAND,
     UNSHARP,
     HIGH_PASS,
@@ -83,6 +87,7 @@ pub const COMMANDS: [&str; 16] = [
     DISTORTS[5],
     DISTORTS[6],
     DISTORTS[7],
+    LENS_BLUR,
 ];
 
 /// Displace's map as the GPU uploads it: straight RGBA texels and their size.
@@ -90,6 +95,9 @@ type Map = (Arc<Vec<[f32; 4]>>, [u32; 2]);
 
 /// What a session's map was made from: the map document, its revision, `mapLayer`, the factor.
 type MapKey = (DocId, u64, Option<u64>, u32);
+
+/// What a session's Lens Blur depth map was read from: the factor, `depthMap` and `depthChannel`.
+type DepthKey = (u32, String);
 
 /// One filter dialog's GPU preview session.
 pub struct FilterGpuPreview {
@@ -124,6 +132,9 @@ pub struct FilterGpuPreview {
     nav: Option<NavigatorProxy>,
     /// Displace's maps (full size and the proxy's), made once each.
     maps: Vec<(MapKey, Map)>,
+    /// Lens Blur's depth maps (full size and the proxy's), read once each: their identity keys
+    /// the GPU's copy.
+    depths: Vec<(DepthKey, Arc<photocraft_raster::Surface>)>,
 }
 
 /// The Navigator's picture while the filter previews on the GPU: the CPU preview's own filter
@@ -284,6 +295,7 @@ fn blur_for(
     selection: Option<Arc<photocraft_raster::Surface>>,
     measured: Measured,
     map: Option<Map>,
+    depth_map: Option<Arc<photocraft_raster::Surface>>,
 ) -> Option<(GaussianBlur, Rect)> {
     let Measured { command, on, content, selection: sel_bounds, depth } = measured;
     let fp = photocraft_engine::filters::params_for(command, params)?;
@@ -305,6 +317,8 @@ fn blur_for(
                 },
             }))
         }
+        // `blur2::lens_blur`, its depth map read by the caller.
+        photocraft_algo::FilterParams::LensBlur { .. } => SeparableBlur::Lens(Arc::new(gpu_lens(photocraft_algo::separable::Lens::of(&fp)?, depth_map))),
         // The other distort filters: their mapping as the CPU works it out (`Warp`).
         _ => match photocraft_algo::separable::Warp::of(&fp, bounds) {
             Some((warp, edge)) => SeparableBlur::Remap(Arc::new(photocraft_gpu::RemapParams { mapping: gpu_warp(warp), bounds, undefined: gpu_edge(edge) })),
@@ -360,6 +374,61 @@ fn displace_map(app: &mut PhotocraftApp, command: &str, params: &Value, k: u32) 
         p.maps.push((key, map.clone()));
     }
     Some(map)
+}
+
+/// Lens Blur's depth map for `params` at factor `k` (the session's document, or its proxy): the
+/// target's layer mask, or the alpha channel `depthChannel` names, as the engine reads them
+/// (`filters_ext::resolve`, `resolve_in_layer`). `None` for another filter or depth source, or
+/// none to read (the CPU then reads no depth either). Read once per session, source and factor.
+fn lens_depth(app: &mut PhotocraftApp, idx: usize, command: &str, params: &Value, k: u32) -> Option<Arc<photocraft_raster::Surface>> {
+    if command != LENS_BLUR {
+        return None;
+    }
+    let source = params.get("depthMap").and_then(Value::as_str)?;
+    let channel = params.get("depthChannel").cloned().unwrap_or(Value::Null);
+    let key = (k, format!("{source}:{channel}"));
+    let p = app.filter_gpu_preview.as_ref()?;
+    if let Some((_, d)) = p.depths.iter().find(|(dk, _)| *dk == key) {
+        return Some(Arc::clone(d));
+    }
+    let (doc, target) = match &p.proxy {
+        Some(g) if k > 1 => (Arc::clone(&g.base), g.target),
+        _ if k > 1 => return None,
+        _ => (app.session.documents().get(idx)?.doc.clone(), p.target),
+    };
+    let surface = match source {
+        // Filtering the mask itself reads no depth (`run_filter` filters it as a channel).
+        "layerMask" if p.measured.on == OperatorTarget::Content => doc.layer(target)?.mask.as_ref()?.surface.clone(),
+        "channel" => photocraft_engine::edit_menu_cmds::channel_mask(&doc, &channel)?.clone(),
+        _ => return None,
+    };
+    let depth = Arc::new(surface);
+    app.filter_gpu_preview.as_mut()?.depths.push((key, Arc::clone(&depth)));
+    Some(depth)
+}
+
+/// algo's Lens Blur (`photocraft_algo::separable::Lens`) as the GPU operator's, with its depth
+/// map for a Layer Mask or Channel source (none to read: the whole iris, as on the CPU).
+pub fn gpu_lens(l: photocraft_algo::separable::Lens, map: Option<Arc<photocraft_raster::Surface>>) -> photocraft_gpu::LensParams {
+    use photocraft_algo::DepthSource;
+    use photocraft_gpu::LensDepth;
+    let depth = match (l.depth, map) {
+        (DepthSource::None, _) | (DepthSource::LayerMask | DepthSource::Channel, None) => LensDepth::None,
+        (DepthSource::Transparency, _) => LensDepth::Transparency,
+        (DepthSource::LayerMask | DepthSource::Channel, Some(m)) => LensDepth::Map(m),
+    };
+    photocraft_gpu::LensParams {
+        levels: l.levels.into_iter().map(|(rows, count)| (rows, count as f32)).collect(),
+        boost: l.boost,
+        threshold: l.threshold,
+        depth,
+        invert: l.invert,
+        focal: l.focal,
+        noise: l.noise,
+        gaussian: l.gaussian,
+        mono: l.mono,
+        seed: l.seed,
+    }
 }
 
 /// algo's description of a distort filter's mapping (`photocraft_algo::separable::Warp`) as the
@@ -465,7 +534,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
         let made = Measured::of(&st.doc, target, command, targets(app)).and_then(|measured| {
             let made = make_map(app, command, &params, 1, &[]);
             let st = app.session.documents().get(idx)?;
-            let (_, region) = blur_for(&st.doc, target, &params, selection.clone(), measured, made.as_ref().map(|(_, m)| m.clone()))?;
+            let (_, region) = blur_for(&st.doc, target, &params, selection.clone(), measured, made.as_ref().map(|(_, m)| m.clone()), None)?;
             Some((measured, made, region))
         });
         let Some((measured, made, region)) = made else {
@@ -489,6 +558,7 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             proxy: None,
             nav: None,
             maps: made.into_iter().collect(),
+            depths: Vec::new(),
         });
     }
     // The GPU canvas can stop drawing this document mid-session (a smaller canvas budget, a
@@ -547,9 +617,10 @@ fn update(app: &mut PhotocraftApp, idx: usize) -> Option<&FilterGpuPreview> {
             return None;
         }
         let map = displace_map(app, command, &params, 1);
+        let depth = lens_depth(app, idx, command, &params, 1);
         let p = app.filter_gpu_preview.as_ref()?;
         let st = app.session.documents().get(idx)?;
-        let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured, map) else {
+        let Some((blur, region)) = blur_for(&st.doc, p.target, &params, p.selection.clone(), p.measured, map, depth) else {
             // Settings the GPU can't run (a reach past its limit, Displace without a map): the
             // CPU preview for them, without building again every frame.
             hide(app);
@@ -645,8 +716,9 @@ fn update_proxy<'a>(app: &'a mut PhotocraftApp, idx: usize, k: u32, params: &Val
         crate::filter_dialog::scale_preview_params(g.measured.command, &mut scaled, k);
         let command = g.measured.command;
         let map = displace_map(app, command, &scaled, k);
+        let depth = lens_depth(app, idx, command, &scaled, k);
         let g = app.filter_gpu_preview.as_ref()?.proxy.as_ref()?;
-        let Some((blur, region)) = blur_for(&g.base, g.target, &scaled, g.selection.clone(), g.measured, map) else {
+        let Some((blur, region)) = blur_for(&g.base, g.target, &scaled, g.selection.clone(), g.measured, map, depth) else {
             // A reach past the GPU's limit: the CPU preview for these settings.
             hide_proxy(app);
             app.filter_gpu_refused = Some(refused);
