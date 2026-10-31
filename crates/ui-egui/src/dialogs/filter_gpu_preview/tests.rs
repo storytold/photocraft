@@ -440,6 +440,228 @@ fn another_active_document_leaves_the_committing_session() {
     assert!(!h.state().gpu.as_ref().unwrap().has_operators(doc), "the applied document's operator is gone");
 }
 
+/// An opaque cover layer over the stripes, masked by 30 px bands (the blurred mask shows the
+/// stripes through soft band edges), made active with its mask targeted.
+fn masked_cover(h: &mut Harness<'static, PhotocraftApp>) -> photocraft_doc::LayerId {
+    let size = h.state().session.active().unwrap().doc.size;
+    let (w, ht) = (size.width as i32, size.height as i32);
+    let cover = h
+        .state_mut()
+        .session
+        .edit("Cover", |doc, _| {
+            let mut l = photocraft_doc::Layer::raster("cover", doc.pixel_format());
+            let s = l.surface_mut().unwrap();
+            s.fill_rect(doc.bounds(), &[0.15, 0.2, 0.85, 1.0]);
+            let mut mask = photocraft_doc::LayerMask::reveal_all();
+            for y in (0..ht).step_by(60) {
+                mask.surface.write_region(photocraft_geom::Rect::new(0, y, w, y + 30), &vec![0.0; w as usize * 30]);
+            }
+            l.mask = Some(mask);
+            let id = l.id;
+            doc.layers.push(l);
+            Ok(id)
+        })
+        .unwrap();
+    h.state_mut().session.active_mut().unwrap().active_layer = Some(cover);
+    h.state_mut().ui.mask_target = true;
+    cover
+}
+
+/// Zoomed out with the mask targeted, the proxy's mask runs the operator: its texture matches
+/// the CPU's proxy preview of the mask filter.
+#[test]
+fn a_targeted_layer_mask_previews_on_the_gpu_proxy() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, id) = harness_sized(rs, 4.0, true, [3000, 2400]);
+    masked_cover(&mut h);
+    h.run_steps(2);
+    if !gpu_path(&h) {
+        return;
+    }
+    h.state_mut().ui.views[0].zoom = 0.25;
+    settle(&mut h, |app| app.filter_gpu_preview.as_ref().is_some_and(|p| p.proxy.as_ref().is_some_and(|g| g.drawn.is_some())));
+    assert!(on_gpu(h.state_mut(), 0), "the GPU previews zoomed out");
+    assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "no CPU preview");
+    let op = h.state().filter_gpu_preview.as_ref().and_then(|p| p.proxy.as_ref()?.shown.as_ref()).map(|(_, op)| op.target);
+    assert_eq!(op, Some(OperatorTarget::Mask));
+    for radius in [4.0, 12.0] {
+        set_radius(&mut h, id, radius);
+        h.run_steps(4);
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            crate::filter_dialog::preview_document(&st.doc, st.active_layer, COMMAND, &json!({"radius": radius, "target": "mask"}), 2).unwrap()
+        };
+        let (_, key, size) = gpu_proxy(h.state_mut(), 0).expect("the proxy");
+        let (_, tsize, texels) = h.state().gpu.as_ref().unwrap().read_texels(key).expect("the proxy texture");
+        assert_eq!(tsize, size);
+        let cpu = photocraft_compose::flatten(&oracle);
+        let worst = cpu.px.iter().zip(&texels).enumerate().fold((0.0f32, 0usize), |w, (i, (c, g))| {
+            let d = (0..3).map(|k| (c[k] * c[3] - g[k]).abs()).fold(0.0, f32::max);
+            if d > w.0 { (d, i) } else { w }
+        });
+        let (x, y) = (worst.1 % size[0] as usize, worst.1 / size[0] as usize);
+        assert!(
+            worst.0 <= 1.5 / 255.0,
+            "mask radius {radius}: the proxy texture is {:.2}/255 off the CPU's proxy preview at ({x},{y}): cpu {:?} gpu {:?}",
+            worst.0 * 255.0,
+            cpu.px[worst.1],
+            texels[worst.1]
+        );
+        // And the unfiltered proxy is not within that: the check sees the mask filter.
+        let plain = photocraft_compose::flatten(&crate::adjust_preview::proxy_base(&h.state().session.active().unwrap().doc, 2));
+        let off = plain.px.iter().zip(&texels).map(|(c, g)| (0..3).map(|k| (c[k] * c[3] - g[k]).abs()).fold(0.0, f32::max)).fold(0.0, f32::max);
+        assert!(off > 10.0 / 255.0, "mask radius {radius}: the unfiltered proxy is only {:.2}/255 off", off * 255.0);
+    }
+}
+
+/// Phase 3: with the Layers panel targeting a layer's mask, Gaussian Blur previews on the GPU as
+/// an operator on the mask, and the canvas matches the CPU preview of the mask filter.
+#[test]
+fn a_targeted_layer_mask_previews_on_the_gpu() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, id) = harness(rs, 4.0, true);
+    let cover = masked_cover(&mut h);
+    h.run_steps(2);
+    if !gpu_path(&h) {
+        return;
+    }
+    assert_eq!(targets(h.state()), OperatorTarget::Mask);
+    settle(&mut h, |app| on_gpu(app, 0));
+    assert!(h.state().filter_preview.as_ref().is_none_or(|p| p.result.is_none()), "the CPU preview stands aside");
+    let op = h.state().filter_gpu_preview.as_ref().and_then(|p| p.shown.as_ref()).map(|(_, op)| op.target);
+    assert_eq!(op, Some(OperatorTarget::Mask));
+    for radius in [4.0, 12.0] {
+        set_radius(&mut h, id, radius);
+        h.run_steps(3);
+        assert!(on_gpu(h.state_mut(), 0));
+        let what = format!("mask radius {radius}");
+        let oracle = {
+            let st = h.state().session.active().unwrap();
+            std::sync::Arc::new(
+                crate::filter_dialog::preview_document(&st.doc, st.active_layer, COMMAND, &json!({"radius": radius, "target": "mask"}), 1).unwrap(),
+            )
+        };
+        let shown = probes_named(&mut h, Some(&what));
+        let mut checked = 0;
+        for (p, px) in &shown {
+            let (want, alpha) = expected_in(h.state(), &oracle, *p);
+            if alpha < 0.999 {
+                continue;
+            }
+            assert!(within(&want, *px), "{what}: at {p:?} the canvas shows {px:?}, the CPU {want:?}");
+            checked += 1;
+        }
+        assert!(checked >= 40, "{what}: only {checked} probes");
+        // The unfiltered mask differs at the probes: the comparison means something.
+        let plain = h.state().session.active().unwrap().doc.clone();
+        let differs = shown.iter().filter(|(p, px)| !within(&expected_around(h.state(), &plain, *p, 0).0, *px)).count();
+        assert!(differs >= 10, "{what}: only {differs} probes differ from the unfiltered mask");
+    }
+    // The layer's pixels are untouched: OK applies the filter to the mask.
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    let doc = h.state().session.active().unwrap().doc.id;
+    if let Some(job) = h.state().session.job_on(doc).map(|j| j.id) {
+        h.state_mut().session.wait_job(job).unwrap();
+    }
+    h.run_steps(3);
+    let st = h.state().session.active().unwrap();
+    let l = st.doc.layer(cover).unwrap();
+    let px = l.surface().unwrap().pixel(1000, 15);
+    assert!(px.iter().zip([0.15, 0.2, 0.85, 1.0]).all(|(a, b)| (a - b).abs() < 1.0 / 255.0), "the layer's pixels: {px:?}");
+    let m = l.mask.as_ref().unwrap().surface.pixel(1000, 30)[0];
+    assert!(m > 0.2 && m < 0.8, "the mask edge is blurred: {m}");
+}
+
+/// A targeted mask the GPU can't stand in for keeps the CPU preview: disabled, feathered (the
+/// compositor combines it first), or shown on its own (⌥-click).
+#[test]
+fn masks_the_gpu_cant_take_keep_the_cpu_preview() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, _) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    let p = json!({"radius": 4.0});
+    let set_mask = |h: &mut Harness<'static, PhotocraftApp>, f: &dyn Fn(&mut photocraft_doc::LayerMask)| {
+        h.state_mut()
+            .session
+            .edit("Mask", |doc, active| {
+                let l = doc.layer_mut(active.unwrap()).unwrap();
+                let mut m = photocraft_doc::LayerMask::reveal_all();
+                f(&mut m);
+                l.mask = Some(m);
+                Ok(())
+            })
+            .unwrap();
+    };
+    h.state_mut().ui.mask_target = true;
+    set_mask(&mut h, &|_| {});
+    assert_eq!(ineligible(h.state(), 0, &p), None, "a plain mask");
+    set_mask(&mut h, &|m| m.enabled = false);
+    assert!(ineligible(h.state(), 0, &p).is_some_and(|w| w.contains("disabled")));
+    set_mask(&mut h, &|m| m.feather = 3.0);
+    assert!(ineligible(h.state(), 0, &p).is_some_and(|w| w.contains("feathered")));
+    set_mask(&mut h, &|_| {});
+    for id in [photocraft_engine::mask_view_cmds::ID, photocraft_engine::mask_view_cmds::OVERLAY_ID] {
+        h.state_mut().run(id, json!({})).unwrap();
+        assert!(h.state().session.active().unwrap().channel_view.layer_mask.is_some(), "{id}");
+        assert_eq!(ineligible(h.state(), 0, &p), Some("the layer mask is viewed on its own"), "{id}");
+        h.state_mut().run(id, json!({})).unwrap();
+        assert_eq!(ineligible(h.state(), 0, &p), None, "{id} off");
+    }
+}
+
+/// Phase 3: while the GPU previews, the Navigator shows the filtered picture (the operator only
+/// filters the canvas), close to the CPU's full-size preview reduced to the Navigator's size.
+#[test]
+fn the_navigator_shows_the_gpu_preview() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, _) = harness(rs, 30.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    settle(&mut h, |app| on_gpu(app, 0));
+    let (nav, key) = navigator_doc(h.state_mut(), 0).expect("the Navigator's picture");
+    // The Navigator's texture is built from it.
+    let ctx = h.ctx.clone();
+    crate::canvas::navigator_texture(h.state_mut(), &ctx, 0).expect("the Navigator texture");
+    let (_, display_key) = crate::canvas::canvas_display(h.state(), &nav, None);
+    let id = h.state().session.active().unwrap().doc.id;
+    assert_eq!(h.state().navigator_textures.get(&id).map(|c| c.1), Some(key ^ display_key));
+    let side = crate::canvas::NAVIGATOR_SIDE;
+    let shown = photocraft_compose::thumbnail_buffer(&nav, side);
+    let st = h.state().session.active().unwrap();
+    let full = crate::filter_dialog::preview_document(&st.doc, st.active_layer, COMMAND, &json!({"radius": 30.0}), 1).unwrap();
+    let want = photocraft_compose::thumbnail_buffer(&full, side);
+    let plain = photocraft_compose::thumbnail_buffer(&st.doc, side);
+    assert_eq!((shown.rect.width(), shown.rect.height()), (want.rect.width(), want.rect.height()));
+    // Per pixel, the largest premultiplied difference; then (worst, mean).
+    let diff = |a: &photocraft_compose::Buffer, b: &photocraft_compose::Buffer| {
+        let d: Vec<f32> = a.px.iter().zip(&b.px).map(|(x, y)| (0..4).map(|k| (x[k] * x[3] - y[k] * y[3]).abs()).fold(0.0f32, f32::max)).collect();
+        (d.iter().copied().fold(0.0, f32::max), d.iter().sum::<f32>() / d.len().max(1) as f32)
+    };
+    // The proxy filters a reduced copy, as the CPU's zoomed-out preview does: at radius 30 the
+    // full size runs box passes and the proxy (radius 10) an exact kernel, a few levels apart.
+    let ((worst, mean), (_, plain_mean)) = (diff(&shown, &want), diff(&plain, &want));
+    assert!(
+        mean < 6.0 / 255.0 && worst < 24.0 / 255.0,
+        "the Navigator is off the full-size preview: mean {:.1}/255, worst {:.1}/255",
+        mean * 255.0,
+        worst * 255.0
+    );
+    assert!(plain_mean > 4.0 * mean, "the unfiltered thumbnail is only {:.1}/255 off on average (Navigator {:.1})", plain_mean * 255.0, mean * 255.0);
+    // A slider change updates it.
+    let dialog = h.state().ui.dialogs.last().unwrap().id;
+    set_radius(&mut h, dialog, 4.0);
+    h.run_steps(3);
+    let (_, key4) = navigator_doc(h.state_mut(), 0).unwrap();
+    assert_ne!(key4, key);
+}
+
 /// A session started at 100 % on a document whose reduced proxy isn't faithful (a vector mask on
 /// another layer) leaves the GPU when the view zooms out, rather than preview on that proxy.
 #[test]
@@ -504,6 +726,153 @@ fn pattern_preview_uploads_the_whole_cpu_filter_preview() {
     h.run_steps(3);
     let p = h.state().filter_preview.as_ref().unwrap();
     assert!(p.uploaded.contains_rect(&whole), "uploaded {:?} of {:?}", p.uploaded, whole);
+}
+
+/// Select and Mask at 100 % on the GPU canvas: the worker skips the whole composite (each view
+/// change is a new result) and the canvas renders the part it shows, matching the preview.
+#[test]
+fn select_and_mask_at_100_percent_renders_only_what_the_view_shows() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, id) = harness(rs, 4.0, true);
+    if !gpu_path(&h) {
+        return;
+    }
+    crate::dialogs::cancel(h.state_mut(), id).unwrap();
+    h.state_mut().run("select.rect", json!({"x": 300, "y": 200, "width": 1200, "height": 900, "ellipse": true})).unwrap();
+    let sm = crate::filter_dialog::open(h.state_mut(), crate::select_mask_view::COMMAND).unwrap();
+    {
+        let d = h.state_mut().ui.dialogs.iter_mut().find(|d| d.id == sm).unwrap();
+        d.fields.insert("__preview".into(), json!(true));
+        d.fields.insert("__view".into(), json!("onBlack"));
+    }
+    settle(&mut h, |app| app.filter_preview.as_ref().is_some_and(|p| p.result.is_some() && !p.uploaded.is_empty()));
+    let p = h.state().filter_preview.as_ref().unwrap();
+    assert_eq!(p.key.command, crate::select_mask_view::COMMAND);
+    assert_eq!(p.key.k, 1);
+    assert!(p.flat.is_none(), "no whole composite of the view");
+    let result = p.result.clone().unwrap();
+    assert!(!p.uploaded.contains_rect(&result.bounds()), "only the view's part went up");
+    let shown = probes_named(&mut h, Some("select and mask on black"));
+    let mut checked = 0;
+    for (pt, px) in &shown {
+        let (want, alpha) = expected_in(h.state(), &result, *pt);
+        if alpha < 0.999 {
+            continue;
+        }
+        assert!(within(&want, *px), "at {pt:?} the canvas shows {px:?}, the preview {want:?}");
+        checked += 1;
+    }
+    assert!(checked >= 40, "only {checked} probes");
+    // On Black darkens outside the selection: the probes see the view, not the plain image.
+    let plain = h.state().session.active().unwrap().doc.clone();
+    let differs = shown.iter().filter(|(pt, px)| !within(&expected_around(h.state(), &plain, *pt, 0).0, *px)).count();
+    assert!(differs >= 10, "only {differs} probes differ from the plain image");
+}
+
+/// Hardening: the GPU fails while previewing a targeted mask; no frame shows the mask unfiltered
+/// where the blur changes it, and the CPU preview takes over.
+#[test]
+fn a_failing_mask_preview_falls_back_to_the_cpu_preview() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, id) = harness(rs, 4.0, true);
+    masked_cover(&mut h);
+    h.run_steps(2);
+    if !gpu_path(&h) {
+        return;
+    }
+    settle(&mut h, |app| on_gpu(app, 0));
+    h.state().gpu.as_ref().unwrap().fail_operators(true);
+    set_radius(&mut h, id, 12.0);
+    let mask_oracle = |app: &PhotocraftApp, r: f64| {
+        let st = app.session.active().unwrap();
+        std::sync::Arc::new(crate::filter_dialog::preview_document(&st.doc, st.active_layer, COMMAND, &json!({"radius": r, "target": "mask"}), 1).unwrap())
+    };
+    let (raw_doc, r4_doc, r12_doc) = (oracle(h.state(), None), mask_oracle(h.state(), 4.0), mask_oracle(h.state(), 12.0));
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        h.step();
+        for (p, px) in probes(&mut h) {
+            let (raw, alpha) = expected_around(h.state(), &raw_doc, p, 0);
+            let (r4, _) = expected_in(h.state(), &r4_doc, p);
+            let (r12, _) = expected_in(h.state(), &r12_doc, p);
+            let apart = |b: &[(u8, u8); 3]| (0..3).any(|c| b[c].0 > raw[c].1.saturating_add(12) || raw[c].0 > b[c].1.saturating_add(12));
+            if alpha > 0.999 && apart(&r4) && apart(&r12) {
+                assert!(!within(&raw, px), "a frame shows the mask unfiltered at {p:?}: {px:?}");
+            }
+        }
+        if h.state().filter_preview.as_ref().is_some_and(|p| p.result.is_some()) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "the CPU preview never took over");
+    }
+    assert!(!on_gpu(h.state_mut(), 0), "the session stays on the CPU");
+}
+
+/// Hardening: the GPU fails zoomed out. Until the CPU's proxy preview is ready the canvas holds
+/// the GPU proxy's last picture (never the document unfiltered), and so does the Navigator; then
+/// the CPU preview shows.
+#[test]
+fn a_failing_zoomed_out_preview_holds_its_last_picture() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let (mut h, id) = harness_sized(rs, 4.0, true, [3000, 2400]);
+    if !gpu_path(&h) {
+        return;
+    }
+    h.state_mut().ui.views[0].zoom = 0.25;
+    settle(&mut h, |app| app.filter_gpu_preview.as_ref().is_some_and(|p| p.proxy.as_ref().is_some_and(|g| g.drawn.is_some())));
+    let (nav_before, _) = navigator_doc(h.state_mut(), 0).expect("the Navigator's picture");
+    h.state().gpu.as_ref().unwrap().fail_operators(true);
+    set_radius(&mut h, id, 12.0);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    let mut held_frames = 0;
+    loop {
+        h.step();
+        let ready = h.state().filter_preview.as_ref().is_some_and(|p| p.result.is_some());
+        if ready {
+            break;
+        }
+        let failed = h.state().filter_gpu_preview.as_ref().is_some_and(|p| p.failed);
+        if failed {
+            // Held: the canvas draws the GPU proxy's texture, the Navigator its last picture.
+            assert!(held_proxy(h.state_mut(), 0).is_some(), "an unfiltered frame between the failure and the CPU preview");
+            let (nav, _) = navigator_doc(h.state_mut(), 0).expect("the Navigator holds its picture");
+            assert!(std::sync::Arc::ptr_eq(&nav, &nav_before));
+            held_frames += 1;
+        }
+        assert!(std::time::Instant::now() < deadline, "the CPU preview never took over");
+    }
+    assert!(h.state().filter_gpu_preview.as_ref().is_some_and(|p| p.failed), "the GPU failed");
+    h.run_steps(3);
+    assert!(!on_gpu(h.state_mut(), 0));
+    assert!(gpu_proxy(h.state_mut(), 0).is_none() && held_proxy(h.state_mut(), 0).is_none(), "the CPU preview shows now");
+    assert!(navigator_doc(h.state_mut(), 0).is_none(), "the Navigator shows the CPU preview");
+    assert!(held_frames >= 1, "no frame came between the failure and the CPU preview: nothing was checked");
+}
+
+/// Only the main canvas gives the dialog's preview window its GPU view: an Arrange tile or a
+/// floating window (perhaps on another display) must not replace it.
+#[test]
+fn only_the_main_canvas_gives_the_preview_window_its_view() {
+    let _guard = photocraft_testkit::gpu_lock();
+    let Some(rs) = render_state() else { return };
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.set_wgpu(rs);
+    app.run("file.new", json!({"width": 640, "height": 480})).unwrap();
+    let doc = app.session.active().unwrap().doc.id;
+    let ctx = egui::Context::default();
+    let view = app.ui.views[0].clone();
+    let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0));
+    for primary in [false, true] {
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            crate::canvas::canvas_view(&mut app, ui, 0, rect, view.clone(), primary);
+        });
+        output.textures_delta.clear();
+        assert!(app.perf.gpu, "drawn on the GPU canvas");
+        assert_eq!(app.canvas_gpu.contains_key(&doc), primary, "primary {primary}");
+    }
 }
 
 /// The canvas budget shrinking mid-session (the canvas then draws on the CPU, which can't show the

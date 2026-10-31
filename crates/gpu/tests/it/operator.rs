@@ -55,7 +55,7 @@ fn operator(doc: &Document, layer: LayerId, radius: f32, keep_alpha: bool) -> La
     };
     let selection = doc.selection.clone().map(Arc::new);
     let program = GaussianBlur::new(blur, extent, area, selection, keep_alpha, doc.depth).expect("a runnable blur");
-    LayerOperator { layer, program: Arc::new(program) }
+    LayerOperator { layer, target: photocraft_gpu::OperatorTarget::Content, program: Arc::new(program) }
 }
 
 /// The GPU render of `doc` with `op` (whole textures, then pages) against the CPU render of
@@ -213,6 +213,38 @@ fn outputs_are_reused_until_the_operator_changes() {
     }
 }
 
+/// The operators' scratch textures go when the last operator does (they grew to the largest
+/// window and stayed for the rest of the session).
+#[test]
+fn scratch_textures_go_with_the_last_operator() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 6.0, false)]);
+    photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+    assert!(g.comp.operator_scratch_bytes() > 0, "the passes made their scratch");
+    g.comp.set_operators(doc.id, Vec::new());
+    assert_eq!(g.comp.operator_scratch_bytes(), 0, "no operator left: no scratch");
+}
+
+/// Closing the last document with operators frees their scratch textures (they were kept for the
+/// rest of the session).
+#[test]
+fn scratch_textures_go_with_the_last_operator_document() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (doc, id) = blur_doc(SampleType::U8);
+    g.comp.set_operators(doc.id, vec![operator(&doc, id, 6.0, false)]);
+    photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap();
+    assert!(g.comp.operator_scratch_bytes() > 0, "the passes made their scratch");
+    g.comp.forget_doc(doc.id);
+    assert_eq!(g.comp.operator_scratch_bytes(), 0, "the last operator document closed");
+}
+
 #[test]
 fn blur_descriptions_the_passes_cant_run_are_refused() {
     let r = Rect::new(0, 0, 10, 10);
@@ -307,4 +339,83 @@ fn operators_in_over_deep_documents_fail_the_render() {
     doc.layers.push(nest);
     g.comp.set_operators(doc.id, vec![op]);
     assert!(photocraft_gpu::render_to_vec(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).is_err());
+}
+
+/// Gaussian Blur of `radius` on the mask of `layer`, as the engine applies a filter with the mask
+/// targeted (`channel_surface_for_filter`): the content is the canvas and the mask's pixels, and
+/// the result rounds to the mask's own depth.
+fn mask_filtered(doc: &Document, layer: LayerId, radius: f32) -> (Document, Rect, Rect) {
+    let mut out = doc.clone();
+    let params = FilterParams::GaussianBlur { radius };
+    let mask = &doc.layer(layer).unwrap().mask.as_ref().unwrap().surface;
+    let content = doc.bounds().union(&mask.content_bounds());
+    let sel_bounds = doc.selection.as_ref().map(Surface::content_bounds);
+    let bounds = sel_bounds.filter(|b| !b.is_empty()).unwrap_or(doc.bounds());
+    let area = photocraft_algo::output_area(&params, content, bounds, sel_bounds);
+    let extent = edge_extent(doc.bounds(), content);
+    let m = &mut out.layer_mut(layer).unwrap().mask.as_mut().unwrap().surface;
+    *m = photocraft_algo::apply_in_with(m, &params, area, bounds, doc.selection.as_ref(), extent, &Interrupt::NONE).unwrap();
+    (out, area, extent)
+}
+
+/// Phase 3 of #5772: a filter with the layer mask targeted runs as an operator on the mask, and
+/// matches the CPU filter of the mask composited by the CPU.
+#[test]
+fn a_mask_blur_operator_matches_the_cpu_filter() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        eprintln!("skipping mask operator parity: no compute");
+        return;
+    }
+    let mut failures = Vec::new();
+    for depth in [SampleType::U8, SampleType::U16] {
+        for radius in [0.8, 4.0, 12.0, 40.0] {
+            for (selection, hide) in [(false, true), (true, true), (false, false)] {
+                let (mut doc, id) = blur_doc(depth);
+                // A hard-edged mask: a revealed rectangle on a hidden canvas, or a hidden one on a
+                // revealed canvas (whose default is white).
+                let mut mask = if hide { photocraft_doc::LayerMask::hide_all() } else { photocraft_doc::LayerMask::reveal_all() };
+                mask.surface = Surface::with_default(PixelFormat { sample: depth, ..PixelFormat::GRAY8 }, &[if hide { 0.0 } else { 1.0 }]);
+                let r = Rect::new(90, 60, 210, 140);
+                mask.surface.write_region(r, &vec![if hide { 1.0 } else { 0.0 }; (r.width() * r.height()) as usize]);
+                doc.layer_mut(id).unwrap().mask = Some(mask);
+                if selection {
+                    doc.selection = Some(feathered_selection());
+                }
+                let what =
+                    format!("mask, {depth:?} radius {radius}{}{}", if selection { ", selection" } else { "" }, if hide { "" } else { ", reveal-all mask" });
+                let (expected, area, extent) = mask_filtered(&doc, id, radius);
+                let blur = match Separable::of(&FilterParams::GaussianBlur { radius }).unwrap() {
+                    Separable::Kernel(k) => SeparableBlur::Kernel(k),
+                    Separable::Boxes(b) => SeparableBlur::Boxes(b),
+                };
+                let program = GaussianBlur::new(blur, extent, area, doc.selection.clone().map(Arc::new), false, depth).expect("a runnable blur");
+                let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Mask, program: Arc::new(program) };
+                if let Err(e) = compare(&mut g, &doc, &op, &expected, tolerance(depth), &what) {
+                    failures.push(e);
+                }
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
+}
+
+/// A mask the compositor combines with vector masks first (or a disabled one) is refused, so the
+/// preview stays on the CPU rather than show the unfiltered mask.
+#[test]
+fn a_mask_operator_on_a_combined_or_disabled_mask_is_refused() {
+    let Some(mut g) = gpu() else { return };
+    if !g.comp.operators_supported(&g.device) {
+        return;
+    }
+    let (mut doc, id) = blur_doc(SampleType::U8);
+    let mut mask = photocraft_doc::LayerMask::hide_all();
+    mask.enabled = false;
+    doc.layer_mut(id).unwrap().mask = Some(mask);
+    let (_, area, extent) = (0, doc.bounds(), doc.bounds());
+    let program = GaussianBlur::new(SeparableBlur::Kernel(vec![0.25, 0.5, 0.25]), extent, area, None, false, SampleType::U8).unwrap();
+    let op = LayerOperator { layer: id, target: photocraft_gpu::OperatorTarget::Mask, program: Arc::new(program) };
+    g.comp.set_operators(doc.id, vec![op]);
+    let e = photocraft_gpu::render_to_vec_stats(&mut g.comp, &g.device, &g.queue, &doc, doc.bounds()).unwrap_err();
+    assert!(e.to_string().contains("mask operator"), "{e}");
 }
