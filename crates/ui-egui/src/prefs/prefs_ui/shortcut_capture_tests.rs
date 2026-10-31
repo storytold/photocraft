@@ -509,10 +509,8 @@ impl crate::native_menu::Backend for Menu {
     }
 }
 
-/// #8965 on macOS: AppKit swallows a key equivalent whose menu item is disabled (no action and
-/// no key-down for the window), and the menu bar's items are disabled under a dialog. So while
-/// a shortcut field waits for keys the items with a key stay enabled, their key equivalents come
-/// back as the key press, and the field records it; afterwards the items are disabled again.
+/// #8965 on macOS: while a shortcut field waits for keys, the menu items with a key stay enabled,
+/// so their key equivalents reach the field and are recorded; afterwards the items are disabled again.
 #[test]
 fn the_mac_menu_bar_hands_its_keys_to_a_waiting_shortcut_field() {
     use crate::native_menu::{Chord, Event as MenuEvent, NativeMenu};
