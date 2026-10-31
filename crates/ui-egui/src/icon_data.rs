@@ -80,6 +80,7 @@ pub static ICONS: &[(&str, &[u8])] = &[
     ("info", include_bytes!("../../../assets/icons/info.svg")),
     ("lasso", include_bytes!("../../../assets/icons/lasso.svg")),
     ("lasso-magnetic", include_bytes!("../../../assets/icons/lasso-magnetic.svg")),
+    ("lasso-polygon", include_bytes!("../../../assets/icons/lasso-polygon.svg")),
     ("lasso-select", include_bytes!("../../../assets/icons/lasso-select.svg")),
     ("layer-mask", include_bytes!("../../../assets/icons/layer-mask.svg")),
     ("layers", include_bytes!("../../../assets/icons/layers.svg")),
