@@ -959,4 +959,39 @@ mod tests {
         let rtl_trail = rtl_after.iter().map(|r| r.min.x).fold(f32::INFINITY, f32::min);
         assert!(rtl_trail > -1.0, "RTL trailing end scrolled into view: {rtl_trail}");
     }
+
+    /// The tool icon's context menu goes through `menus::context_menu` + `menu_row`, so under
+    /// RTL the row labels hug the popup's reading-start (right) edge; LTR keeps them at the left.
+    #[test]
+    fn tool_icon_context_menu_rows_hug_the_reading_start_edge() {
+        let rects = |dir: Dir| -> Vec<(String, egui::Rect)> {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let strip = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(220.0, 120.0));
+                let mut strip_ui = ui.new_child(egui::UiBuilder::new().max_rect(strip).layout(egui::Layout::top_down_justified(egui::Align::Min)));
+                crate::menus::popup_body(&mut strip_ui, |ui| {
+                    let _ = crate::menu_keys::menu_row(ui, "Reset Tool", None, false, true);
+                    let _ = crate::menu_keys::menu_row(ui, "Reset All Tools", None, false, true);
+                });
+            });
+            let v = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), ts.visual_bounding_rect())),
+                    _ => None,
+                })
+                .collect();
+            out.textures_delta.clear();
+            v
+        };
+        let at = |v: &[(String, egui::Rect)], s: &str| v.iter().find(|(t, _)| t.contains(s)).map(|(_, r)| *r).unwrap_or(egui::Rect::ZERO);
+        let (l, r) = (at(&rects(Dir::Ltr), "Reset Tool"), at(&rects(Dir::Rtl), "Reset Tool"));
+        assert!(l.is_positive() && r.is_positive(), "the row label is drawn both ways: {l:?} {r:?}");
+        assert!(l.left() < 20.0 + 40.0, "ltr: the label hugs the left edge: {l:?}");
+        assert!(r.right() > 240.0 - 40.0, "rtl: the label hugs the right edge: {r:?}");
+        assert!(r.right() > l.right() + 10.0, "rtl: the label sits at the reading start: ltr {l:?} rtl {r:?}");
+    }
 }
