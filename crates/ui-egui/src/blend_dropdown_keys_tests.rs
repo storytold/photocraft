@@ -120,3 +120,27 @@ fn a_command_shortcut_closes_the_open_list_and_runs() {
     let st = h.state().session.active().unwrap();
     assert_eq!(st.doc.layer(st.active_layer.unwrap()).unwrap().blend, BlendMode::Normal, "the mode is unchanged");
 }
+
+/// #9065 (CodeRabbit on #9314): with the Layers panel's options menu open, a command shortcut
+/// closes the menu and runs, as Photoshop's panel flyout does (⌘1 there closes it and zooms to
+/// 100%).
+#[test]
+fn a_command_shortcut_closes_the_open_panel_menu_and_runs() {
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_max_steps(64).build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 3000, "height": 2000})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app
+    });
+    h.run_steps(6);
+    assert_ne!(h.state().ui.views[0].zoom, 1.0, "the document starts fitted, not at 100%");
+    let group = crate::panel_docking::probe::group_rect(h.state(), &h.ctx, "layers").expect("layers group");
+    h.query_all_by_label("Panel menu").find(|n| group.contains(n.rect().center())).expect("the Layers panel menu").click();
+    h.run_steps(2);
+    assert!(h.query_by_label("Collapse All Groups").is_some(), "the Layers panel menu is open");
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::Num1);
+    h.run_steps(3);
+    assert_eq!(h.state().ui.views[0].zoom, 1.0, "⌘1 (100%) runs with the menu open");
+    assert!(h.query_by_label("Collapse All Groups").is_none(), "and closes the menu");
+}

@@ -504,7 +504,7 @@ fn preflight_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     // once Alt or F10 put the keyboard on it (#4988), and an open dropdown list, whose letters
     // pick an option rather than a tool (#1481). A command shortcut (⌘D, F7…) takes the keyboard
     // off the bar first and runs, as with a native menu bar (#6573), and closes an open menu or
-    // list and runs, as Photoshop's menus do (#9065).
+    // list (or a panel's options menu, any popup) and runs, as Photoshop's menus do (#9065).
     crate::menu_keys::leave_for_shortcut(ctx);
     if app.ui.dialogs.is_empty() && app.discard.is_none() && crate::type_tool::commit_shortcut(app, ctx) {
         return false;
