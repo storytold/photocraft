@@ -45,6 +45,8 @@ pub struct Stats {
     pub layers_batched: usize,
     /// Batched passes drawn with Normal's code alone (`fs_layerbatch_normal`), summed over chunks.
     pub normal_batches: usize,
+    /// Page cells whose layer-operator output was (re)computed.
+    pub operator_cells: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,6 +63,8 @@ pub(crate) enum TexKind {
     R16F,
     /// 32-bit masks as R32F.
     R32F,
+    /// Layer operator windows and outputs (`operator.rs`): straight RGBA in floats.
+    Rgba32F,
 }
 
 impl TexKind {
@@ -72,6 +76,7 @@ impl TexKind {
             Role::Mask if f == PixelFormat::GRAY8 => TexKind::R8Direct,
             Role::Mask if f.sample == SampleType::F32 => TexKind::R32F,
             Role::Mask => TexKind::R16F,
+            Role::Operator | Role::OperatorSource | Role::OperatorMask => TexKind::Rgba32F,
         }
     }
     pub(crate) fn format(self) -> wgpu::TextureFormat {
@@ -81,6 +86,7 @@ impl TexKind {
             TexKind::R8Direct => wgpu::TextureFormat::R8Unorm,
             TexKind::R16F => wgpu::TextureFormat::R16Float,
             TexKind::R32F => wgpu::TextureFormat::R32Float,
+            TexKind::Rgba32F => wgpu::TextureFormat::Rgba32Float,
         }
     }
     pub(crate) fn bytes_per_pixel(self) -> usize {
@@ -90,6 +96,7 @@ impl TexKind {
             TexKind::R8Direct => 1,
             TexKind::R16F => 2,
             TexKind::R32F => 4,
+            TexKind::Rgba32F => 16,
         }
     }
 }
