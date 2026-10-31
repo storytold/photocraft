@@ -2,7 +2,7 @@
 //! selected. Canvas size and orientation, resolution, colour mode and bit depth, and the
 //! Rulers & Grids toggles. Every edit dispatches an engine or view command, so the panel stays thin.
 
-use egui::{Align2, Rect, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Align2, RichText, Sense, Stroke, StrokeKind, pos2, vec2};
 use photocraft_doc::{ColorMode, Document, Layer, LayerId, SampleType};
 use serde_json::{Value, json};
 
@@ -69,26 +69,7 @@ pub fn canvas_resize_params(old: (u32, u32), new_w: Option<f32>, new_h: Option<f
 
 /// Collapsible section header with a chevron, Photoshop Properties style. Returns whether it is open.
 fn section(ui: &mut egui::Ui, id: &str, title: &str) -> bool {
-    let t = Tokens::get(ui.ctx());
-    let key = egui::Id::unique(("doc-props-section", id));
-    let mut open = ui.data(|d| d.get_temp::<bool>(key)).unwrap_or(true);
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
-    let rtl = crate::direction::is_rtl();
-    let chev_x = if rtl { r.right() - 7.0 } else { r.left() + 7.0 };
-    icons::paint(
-        ui,
-        Rect::from_center_size(pos2(chev_x, r.center().y), vec2(12.0, 12.0)),
-        if open { "chevron-down" } else { "chevron-right" },
-        11.0,
-        t.text_dim,
-    );
-    let (tx, anchor) = if rtl { (r.right() - 18.0, Align2::RIGHT_CENTER) } else { (r.left() + 18.0, Align2::LEFT_CENTER) };
-    ui.painter().text(pos2(tx, r.center().y), anchor, title, crate::theme::semibold(12.0), t.text);
-    if resp.clicked() {
-        open = !open;
-        ui.data_mut(|d| d.insert_temp(key, open));
-    }
-    open
+    crate::widgets::section_header(ui, id, title, 22.0, false).inner
 }
 
 /// Right-aligned field label in a fixed-width column.
@@ -131,13 +112,6 @@ fn dim_field(ui: &mut egui::Ui, text: &str) {
     ui.painter().text(p, anchor, text, crate::theme::mono(12.0), t.text_faint);
 }
 
-/// A row in reading order: the panel's rows live in a top-down body, so each one pins its own
-/// direction (left-to-right draws exactly as `ui.horizontal` did).
-fn reading_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
-    let size = vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
-    ui.allocate_ui_with_layout(size, crate::direction::row(), add)
-}
-
 pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let Some(st) = app.session.active() else { return };
@@ -145,7 +119,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let has_bg = st.doc.layers.first().is_some_and(|l| is_background(&st.doc, l));
     let lu = crate::layer_props_ui::LenUnit::of(app);
     let mut run: Vec<(String, Value)> = Vec::new();
-    reading_row(ui, |ui| {
+    crate::direction::full_row(ui, |ui| {
         let (r, _) = ui.allocate_exact_size(vec2(24.0, 24.0), Sense::hover());
         ui.painter().rect_stroke(r, t.radius_sm, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
         icons::paint(ui, r, "file", 15.0, t.icon);
@@ -158,7 +132,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if section(ui, "canvas", tl!("Canvas")) {
         let link_key = egui::Id::unique("doc-props-link");
         let linked = ui.data(|d| d.get_temp::<bool>(link_key)).unwrap_or(false);
-        reading_row(ui, |ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
                 ui.add_space(14.0);
@@ -167,7 +141,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 }
             });
             ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
-                reading_row(ui, |ui| {
+                crate::direction::full_row(ui, |ui| {
                     stacked_label(ui, "W", &["W", "H"], 18.0, 4.0);
                     if let Some(v) = committed_field(ui, "w", "Width", w as f32, lu) {
                         run.extend(canvas_resize_params((w, h), Some(v), None, linked).map(|p| ("image.canvasSize".to_string(), p)));
@@ -175,7 +149,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     stacked_label(ui, "X", &["X", "Y"], 22.0, 4.0);
                     dim_field(ui, "0 px");
                 });
-                reading_row(ui, |ui| {
+                crate::direction::full_row(ui, |ui| {
                     stacked_label(ui, "H", &["W", "H"], 18.0, 4.0);
                     if let Some(v) = committed_field(ui, "h", "Height", h as f32, lu) {
                         run.extend(canvas_resize_params((w, h), None, Some(v), linked).map(|p| ("image.canvasSize".to_string(), p)));
@@ -185,7 +159,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 });
             });
         });
-        reading_row(ui, |ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.add_space(label_w + 6.0);
             ui.spacing_mut().item_spacing.x = 2.0;
             let portrait = h > w;
@@ -197,12 +171,12 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
         });
         ui.add_space(2.0);
-        reading_row(ui, |ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.add_space(label_w + 6.0);
             ui.label(RichText::new(crate::i18n::fmt(tl!("Resolution: {dpi} pixels/inch"), &[("dpi", &widgets::fmt_num(dpi as f64))])).color(t.text));
         });
         ui.add_space(2.0);
-        reading_row(ui, |ui| {
+        crate::direction::full_row(ui, |ui| {
             field_label(ui, tl!("Mode"), label_w);
             let mut m = mode;
             let opts: Vec<(ColorMode, &str)> = MODES.iter().map(|(m, l, _)| (*m, *l)).collect();
@@ -212,7 +186,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 run.push(((*id).to_string(), Value::Null));
             }
         });
-        reading_row(ui, |ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.add_space(label_w + 8.0);
             let mut d = depth;
             let opts: Vec<(SampleType, &str, &str)> =
@@ -223,7 +197,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 run.push(((*id).to_string(), Value::Null));
             }
         });
-        reading_row(ui, |ui| {
+        crate::direction::full_row(ui, |ui| {
             field_label(ui, tl!("Fill"), label_w);
             let (r, _) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::hover());
             ui.painter().rect_stroke(r, 0.0, Stroke::new(1.0, t.field_border), StrokeKind::Inside);
@@ -238,7 +212,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     widgets::hairline(ui);
     ui.add_space(2.0);
     if section(ui, "rulers", tl!("Rulers & Grids")) {
-        reading_row(ui, |ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.x = 6.0;
             let pixel_grid = crate::view_cmds::checked(app, "view.show.pixelGrid").unwrap_or(false);
@@ -263,7 +237,7 @@ pub fn properties(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     widgets::hairline(ui);
     ui.add_space(2.0);
     if section(ui, "guides", tl!("Guides")) {
-        reading_row(ui, |ui| {
+        crate::direction::full_row(ui, |ui| {
             ui.add_space(8.0);
             ui.spacing_mut().item_spacing.x = 6.0;
             for (icon, tip, id) in [
