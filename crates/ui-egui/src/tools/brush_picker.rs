@@ -388,11 +388,7 @@ fn gear_menu(ui: &mut egui::Ui, current: Option<&str>, presets: &[BrushPreset], 
     let gear = named(icons::button(ui, "settings", 24.0, false, tl!("Brush Preset Options")), "Brush Preset Options");
     // The menu hangs 30 pt off the gear's own edge, on the reading end; the align fallbacks still
     // keep it on screen near the window's edge.
-    let offset = if crate::direction::is_rtl() { -30.0 } else { 30.0 };
-    let anchor = match egui::PopupAnchor::from(&gear) {
-        egui::PopupAnchor::ParentRect(rect) => egui::PopupAnchor::ParentRect(rect.translate(vec2(offset, 0.0))),
-        other => other,
-    };
+    let anchor = crate::direction::popup_anchor_reading_end(&gear, 30.0);
     egui::Popup::menu(&gear).anchor(anchor).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
         crate::direction::popup_body(ui, |ui| gear_menu_body(ui, current, presets, st, picks))
     });
