@@ -20,7 +20,7 @@ fn filter_dialog_with_preview(background: bool) -> (PhotocraftApp, u64) {
         k: 1,
         tool_colors: (app.session.tools.foreground, app.session.tools.background),
     };
-    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key, result: result.map(std::sync::Arc::new), committing: false });
+    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key, result: result.map(std::sync::Arc::new), flat: None, committing: false });
     (app, id)
 }
 

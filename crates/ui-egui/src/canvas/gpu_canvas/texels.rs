@@ -21,14 +21,26 @@ pub(super) fn texel_bytes(format: wgpu::TextureFormat) -> u64 {
     if format == FORMAT_HIGH { 8 } else { 4 }
 }
 
-/// Straight-alpha f32 RGBA → premultiplied texels of `format`.
-pub(super) fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
+/// Straight-alpha f32 RGBA → premultiplied texels of `format` (public for `interactive_bench`):
+/// one of the canvas's two formats, RGBA8 or RGBA16F. `None` for any other format, whose texels
+/// these wouldn't be.
+pub fn texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Option<Vec<u8>> {
+    if format != FORMAT && format != FORMAT_HIGH {
+        return None;
+    }
+    let mut out = Vec::new();
+    texels_into(format, px, &mut out);
+    Some(out)
+}
+
+/// [`texels`] for the canvas's own textures, whose format is always one of the two.
+pub(super) fn canvas_texels(format: wgpu::TextureFormat, px: &[[f32; 4]]) -> Vec<u8> {
     let mut out = Vec::new();
     texels_into(format, px, &mut out);
     out
 }
 
-/// [`texels`] into `out` (resized; reusing it across bands saves page-faulting a fresh buffer).
+/// [`canvas_texels`] into `out` (resized; reusing it across bands saves page-faulting a fresh buffer).
 pub(super) fn texels_into(format: wgpu::TextureFormat, px: &[[f32; 4]], out: &mut Vec<u8>) {
     fn rgba8(src: &[[f32; 4]], dst: &mut [u8]) {
         for (o, p) in dst.as_chunks_mut::<4>().0.iter_mut().zip(src) {
