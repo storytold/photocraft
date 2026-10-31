@@ -142,46 +142,18 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let labels = f.get("__labels").cloned().unwrap_or(Value::Null);
     let keys = form_keys(f);
     let mut browse: Option<String> = None;
-    if crate::direction::is_rtl() {
-        // The fork's `Grid` cannot run under a mirrored body: its cursor only advances
-        // left-to-right, so the placer's available width goes NaN and egui panics. The same
-        // rows are drawn by hand in reading order instead: the caption at the reading start in
-        // a fixed-width column, the editor toward the reading end.
-        ui.with_layout(crate::direction::body_layout(), |ui| {
-            ui.spacing_mut().item_spacing = egui::vec2(12.0, 6.0);
-            for k in &keys {
-                if !form_field_renders(f, k) {
-                    continue;
-                }
-                let caption = form_caption_text(f, k, &labels);
-                if caption.is_empty() {
-                    // A bare checkbox has no caption: it hugs the reading start.
-                    crate::direction::dialog_row(ui, |ui| form_editor(ui, f, k, &choices, &labels, egui::Id::NULL, &mut browse));
-                } else {
-                    let caption_id = std::cell::Cell::new(egui::Id::NULL);
-                    crate::direction::settings_row(
-                        ui,
-                        FORM_CAPTION_W,
-                        |ui| caption_id.set(ui.label(&caption).id),
-                        |ui| form_editor(ui, f, k, &choices, &labels, caption_id.get(), &mut browse),
-                    );
-                }
+    // RTL hands the rows out in reading order (the fork's `Grid` cannot run under a mirrored
+    // body); LTR is the plain two-column grid. The caption column width is shared either way.
+    crate::direction::form_grid(ui, "form-dialog", [12.0, 6.0], FORM_CAPTION_W, |row| {
+        for k in &keys {
+            if !form_field_renders(f, k) {
+                continue;
             }
-            camera_data(ui, f);
-        });
-    } else {
-        egui::Grid::new("form-dialog").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            for k in &keys {
-                if form_field_renders(f, k) {
-                    let caption = form_caption_text(f, k, &labels);
-                    let caption_id = ui.label(&caption).id;
-                    form_editor(ui, f, k, &choices, &labels, caption_id, &mut browse);
-                    ui.end_row();
-                }
-            }
-        });
-        camera_data(ui, f);
-    }
+            let caption = form_caption_text(f, k, &labels);
+            row(&caption, &mut |ui, caption_id| form_editor(ui, f, k, &choices, &labels, caption_id, &mut browse));
+        }
+    });
+    camera_data(ui, f);
     if let Some(key) = browse {
         f.insert(crate::dialogs::BROWSE_FIELD.into(), json!(key));
     }
@@ -211,20 +183,13 @@ fn form_caption_text(f: &Map<String, Value>, k: &str, labels: &Value) -> String 
 
 /// One `__form` field's editor cell, drawn after the caption in reading order. The `Grid` (LTR)
 /// and the mirrored rows (RTL) both draw from here; the caller ends the row.
-fn form_editor(
-    ui: &mut egui::Ui,
-    f: &mut Map<String, Value>,
-    k: &str,
-    choices: &Value,
-    labels: &Value,
-    caption_id: egui::Id,
-    browse: &mut Option<String>,
-) {
+fn form_editor(ui: &mut egui::Ui, f: &mut Map<String, Value>, k: &str, choices: &Value, labels: &Value, caption_id: egui::Id, browse: &mut Option<String>) {
     let label = |key: &str| labels.get(key).and_then(Value::as_str).map_or_else(|| label_of(key), str::to_string);
     let v = f.get(k).cloned().unwrap_or(Value::Null);
     if k == "naming" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
         let mut naming = v.as_str().unwrap_or_default().to_owned();
-        ui.add(egui::TextEdit::singleline(&mut naming).desired_width(260.0).hint_text("{name}"))
+        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+        ui.add(crate::widgets::rtl_singleline(&mut naming, &mut layouter).desired_width(260.0).hint_text("{name}"))
             .labelled_by(caption_id)
             .on_hover_text("{name} · {serial} · {date} (UTC)");
         f.insert(k.to_string(), json!(naming));
@@ -260,7 +225,8 @@ fn form_editor(
                 }
                 None => {
                     ui.horizontal(|ui| {
-                        ui.add(egui::TextEdit::singleline(&mut s).desired_width(260.0)).accessible_name(label(k));
+                        let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
+                        ui.add(crate::widgets::rtl_singleline(&mut s, &mut layouter).desired_width(260.0)).accessible_name(label(k));
                         // A folder field gets the system folder picker (#7942, #9357).
                         if crate::dialogs::is_folder_field(k) && crate::widgets::secondary_button(ui, tl!("Browse…"), 0.0).clicked() {
                             *browse = Some(k.to_string());
@@ -293,28 +259,17 @@ fn camera_data(ui: &mut egui::Ui, f: &Map<String, Value>) {
     ui.add_space(10.0);
     ui.label(egui::RichText::new(tl!("Camera Data")).font(crate::theme::semibold(13.0)));
     ui.add_space(4.0);
-    if crate::direction::is_rtl() {
-        // The fork's `Grid` cannot run under a mirrored body (see `form_body`): the rows are
-        // drawn by hand in reading order, each caption in the shared fixed-width column.
+    // Same shape as `form_body` (see its note on the mirrored grid), read-only editors.
+    crate::direction::form_grid(ui, "form-camera-data", [12.0, 4.0], CAMERA_CAPTION_W, |row| {
         for (key, label) in photocraft_engine::file_cmds::CAMERA_FIELDS {
             if let Some(v) = camera.get(key).and_then(Value::as_str) {
                 let caption = crate::i18n::tr_ctx(crate::i18n::current(), "cameraData", label);
-                crate::direction::settings_row(ui, CAMERA_CAPTION_W, |ui| { ui.label(caption); }, |ui| {
+                row(&caption, &mut |ui, _caption_id| {
                     ui.add(egui::Label::new(v).selectable(true));
                 });
             }
         }
-    } else {
-        egui::Grid::new("form-camera-data").num_columns(2).spacing([12.0, 4.0]).show(ui, |ui| {
-            for (key, label) in photocraft_engine::file_cmds::CAMERA_FIELDS {
-                if let Some(v) = camera.get(key).and_then(Value::as_str) {
-                    ui.label(crate::i18n::tr_ctx(crate::i18n::current(), "cameraData", label));
-                    ui.add(egui::Label::new(v).selectable(true));
-                    ui.end_row();
-                }
-            }
-        });
-    }
+    });
 }
 
 /// Folder the batch dialogs start from: next to the active document, else the working directory.
@@ -724,9 +679,7 @@ mod rtl_tests {
         let _dir = crate::direction::direction_scope(dir);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
         app.run("file.new", json!({"width": 16, "height": 16})).unwrap();
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(1280.0, 800.0))
-            .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         let ctx = h.ctx.clone();
         crate::menus::invoke(h.state_mut(), &ctx, "select.loadSelection", json!({})).unwrap();
@@ -749,8 +702,14 @@ mod rtl_tests {
         let ltr_frame = frame(&ltr);
         let ltr_drop = ltr.get_by_value("New").rect();
         let ltr_invert = ltr.get_by_label("Invert").rect();
-        assert!((ltr_invert.left() - ltr_drop.left()).abs() < 0.5, "LTR: the checkbox and the dropdown share the grid's editor column: {ltr_invert:?} vs {ltr_drop:?}");
-        assert!(ltr_invert.left() - ltr_frame.left() >= 40.0, "LTR: the empty caption cell keeps the grid's 40 pt caption column: {ltr_invert:?} in {ltr_frame:?}");
+        assert!(
+            (ltr_invert.left() - ltr_drop.left()).abs() < 0.5,
+            "LTR: the checkbox and the dropdown share the grid's editor column: {ltr_invert:?} vs {ltr_drop:?}"
+        );
+        assert!(
+            ltr_invert.left() - ltr_frame.left() >= 40.0,
+            "LTR: the empty caption cell keeps the grid's 40 pt caption column: {ltr_invert:?} in {ltr_frame:?}"
+        );
 
         let rtl = load_selection(crate::direction::Dir::Rtl);
         let rtl_frame = frame(&rtl);
@@ -778,9 +737,7 @@ mod rtl_tests {
         app.run("actions.record", json!({"name": "Invert"})).unwrap();
         app.run("image.adjustments.invert", json!({})).unwrap();
         app.run("actions.stop", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder()
-            .with_size(egui::vec2(1280.0, 800.0))
-            .build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1280.0, 800.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
         PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
         let ctx = h.ctx.clone();
         crate::menus::invoke(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
