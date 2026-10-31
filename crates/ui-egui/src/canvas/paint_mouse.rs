@@ -46,9 +46,15 @@ pub fn sync_tool_brush(app: &mut PhotocraftApp) {
             BrushSettings { smoothing: first_smoothing(), mode: photocraft_color::BlendMode::Normal, opacity, ..current }
         }
     };
-    // The picked preset was the outgoing tool's brush: forget it, so Update Brush can't overwrite
-    // that preset with this tool's brush.
-    app.session.tools.current_preset = None;
+    // The picked preset belongs to the outgoing tool's brush: keep it with that tool, and take the
+    // incoming tool's own (none for a brush not picked from a preset), so Update Brush can't
+    // overwrite one tool's preset with another tool's brush.
+    let outgoing = app.ui.brush_tool;
+    app.ui.tool_presets.retain(|(t, _)| *t != outgoing);
+    if let Some(name) = app.session.tools.current_preset.take() {
+        app.ui.tool_presets.push((outgoing, name));
+    }
+    app.session.tools.current_preset = app.ui.tool_presets.iter().find(|(t, _)| *t == tool).map(|(_, n)| n.clone());
     app.session.tools.brush_changed();
     app.ui.brush_tool = tool;
 }
