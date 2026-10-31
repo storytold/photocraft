@@ -1720,3 +1720,238 @@ mod streamed_png_tests {
         assert!(streams_png(&doc(117_504, 22_464, SampleType::U8)));
     }
 }
+
+#[cfg(test)]
+mod fused_tile_tests {
+    use super::*;
+    use std::collections::BTreeMap;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// The band-at-a-time conversion `image_surface` used before it wrote straight into the
+    /// tiles, kept as the oracle. `band_bytes` is [`BAND_BYTES`] in production; the test makes it
+    /// small so the bands are crossed at test sizes.
+    fn banded_surface(img: &Image, target_layout: ChannelLayout, csample: CSample, band_bytes: usize) -> Surface {
+        let mode = match target_layout {
+            ChannelLayout::Gray | ChannelLayout::GrayA => ColorMode::Grayscale,
+            ChannelLayout::Cmyk | ChannelLayout::CmykA => ColorMode::Cmyk,
+            ChannelLayout::Lab | ChannelLayout::LabA => ColorMode::Lab,
+            _ => ColorMode::Rgb,
+        };
+        let depth = match csample {
+            CSample::U8 => SampleType::U8,
+            CSample::U16 => SampleType::U16,
+            _ => SampleType::F32,
+        };
+        let (w, h) = img.dimensions();
+        let mut s = Surface::new(PixelFormat::new(mode, depth, true));
+        if img.layout() == target_layout && img.sample_type() == csample {
+            s.write_interleaved(Rect::new(0, 0, w as i32, h as i32), img.data());
+        } else {
+            let row = img.data().len() / (h.max(1) as usize);
+            let band = (band_bytes / row.max(1)).max(1);
+            for (i, rows) in img.data().chunks(row.max(1) * band).enumerate() {
+                let n = (rows.len() / row.max(1)) as u32;
+                let part = Image::from_raw(w, n, img.layout(), img.sample_type(), rows.to_vec()).unwrap().convert(target_layout, csample);
+                let y0 = (i * band) as i32;
+                s.write_interleaved(Rect::new(0, y0, w as i32, y0 + n as i32), part.data());
+            }
+        }
+        s
+    }
+
+    /// Deterministic samples with the extremes (0, max, 1.0, negatives, out of range floats) mixed in.
+    fn sample_bytes(sample: CSample, n: usize) -> Vec<u8> {
+        let mut out = Vec::new();
+        for i in 0..n {
+            let h = (i as u32).wrapping_mul(2_654_435_761) >> 7;
+            match sample {
+                CSample::U8 => out.push(match i % 11 {
+                    0 => 0,
+                    1 => u8::MAX,
+                    _ => h as u8,
+                }),
+                CSample::U16 => out.extend_from_slice(
+                    &(match i % 11 {
+                        0 => 0,
+                        1 => u16::MAX,
+                        _ => h as u16,
+                    })
+                    .to_ne_bytes(),
+                ),
+                CSample::F16 => out.extend_from_slice(
+                    &(match i % 11 {
+                        0 => 0x0000,
+                        1 => 0x3c00, // 1.0
+                        2 => 0xbc00, // -1.0
+                        3 => 0x4000, // 2.0
+                        _ => (h as u16) & 0x7bff,
+                    })
+                    .to_ne_bytes(),
+                ),
+                CSample::F32 => out.extend_from_slice(
+                    &(match i % 11 {
+                        0 => 0.0,
+                        1 => 1.0,
+                        2 => -0.5,
+                        3 => 3.0,
+                        _ => (h % 1024) as f32 / 1023.0,
+                    })
+                    .to_ne_bytes(),
+                ),
+            }
+        }
+        out
+    }
+
+    fn image(w: u32, h: u32, layout: ChannelLayout, sample: CSample) -> Image {
+        let n = w as usize * h as usize * layout.channels();
+        Image::from_raw(w, h, layout, sample, sample_bytes(sample, n)).unwrap()
+    }
+
+    fn target(layout: ChannelLayout, sample: CSample) -> (ChannelLayout, CSample) {
+        let layout = match layout {
+            ChannelLayout::Gray | ChannelLayout::GrayA => ChannelLayout::GrayA,
+            ChannelLayout::Rgb | ChannelLayout::Rgba => ChannelLayout::Rgba,
+            ChannelLayout::Cmyk | ChannelLayout::CmykA => ChannelLayout::CmykA,
+            ChannelLayout::Lab | ChannelLayout::LabA => ChannelLayout::LabA,
+        };
+        (layout, if sample == CSample::F16 { CSample::F32 } else { sample })
+    }
+
+    fn assert_same(a: &Surface, b: &Surface, what: &str) {
+        assert_eq!(a.format(), b.format(), "{what}: format");
+        assert_eq!(a.default_bytes(), b.default_bytes(), "{what}: default pixel");
+        let tiles = |s: &Surface| s.tiles().map(|(c, t)| ((c.tx, c.ty), t.clone())).collect::<BTreeMap<_, _>>();
+        let (ta, tb) = (tiles(a), tiles(b));
+        assert_eq!(ta.keys().collect::<Vec<_>>(), tb.keys().collect::<Vec<_>>(), "{what}: tile set");
+        assert!(ta == tb, "{what}: tile bytes");
+    }
+
+    #[test]
+    fn fused_write_equals_the_banded_conversion() {
+        let layouts = [
+            ChannelLayout::Gray,
+            ChannelLayout::GrayA,
+            ChannelLayout::Rgb,
+            ChannelLayout::Rgba,
+            ChannelLayout::Cmyk,
+            ChannelLayout::CmykA,
+            ChannelLayout::Lab,
+            ChannelLayout::LabA,
+        ];
+        let samples = [CSample::U8, CSample::U16, CSample::F16, CSample::F32];
+        for &(w, h) in &[(1, 1), (1, 300), (255, 3), (257, 257), (513, 260)] {
+            for &layout in &layouts {
+                for &sample in &samples {
+                    let img = image(w, h, layout, sample);
+                    let (tl, ts) = target(layout, sample);
+                    let fused = image_surface(&img, tl, ts).unwrap();
+                    // The band sizes: a band per row, a few rows, and the whole image.
+                    for band in [1, 5000, BAND_BYTES] {
+                        assert_same(&fused, &banded_surface(&img, tl, ts, band), &format!("{w}x{h} {layout:?} {sample:?} band {band}"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn an_f16_target_is_stored_as_f32_with_opaque_alpha() {
+        for &layout in &[ChannelLayout::Rgb, ChannelLayout::Rgba] {
+            for &sample in &[CSample::F16, CSample::F32] {
+                let img = image(257, 3, layout, sample);
+                let f16 = image_surface(&img, ChannelLayout::Rgba, CSample::F16).unwrap();
+                let f32 = image_surface(&img, ChannelLayout::Rgba, CSample::F32).unwrap();
+                assert_same(&f16, &f32, &format!("{layout:?} {sample:?} to an F16 target"));
+            }
+        }
+        let img = image(2, 2, ChannelLayout::Rgb, CSample::F32);
+        let s = image_surface(&img, ChannelLayout::Rgba, CSample::F16).unwrap();
+        let (_, tile) = s.tiles().next().unwrap();
+        let alpha = f32::from_ne_bytes(tile.bytes()[12..16].try_into().unwrap());
+        assert_eq!(alpha, 1.0);
+    }
+
+    #[test]
+    fn zero_sized_images_give_an_empty_surface() {
+        for &(w, h) in &[(0, 0), (0, 5), (5, 0)] {
+            let img = image(w, h, ChannelLayout::Rgb, CSample::U8);
+            let s = image_surface(&img, ChannelLayout::Rgba, CSample::U8).unwrap();
+            assert_eq!(s.tile_count(), 0);
+        }
+    }
+
+    fn pixels(w: u32, h: u32, alpha: bool) -> Image {
+        let layout = if alpha { ChannelLayout::Rgba } else { ChannelLayout::Rgb };
+        let mut data = sample_bytes(CSample::U8, w as usize * h as usize * layout.channels());
+        if alpha {
+            data.as_chunks_mut::<4>().0.iter_mut().enumerate().for_each(|(i, p)| p[3] = if i % 3 == 0 { 0 } else { 200 });
+        }
+        Image::from_raw(w, h, layout, CSample::U8, data).unwrap()
+    }
+
+    fn doc_pixels(r: &ImportResult) -> Vec<u8> {
+        let LayerContent::Raster(s) = &r.document.layers[0].content else { panic!("not a raster layer") };
+        s.to_interleaved(r.document.bounds())
+    }
+
+    #[test]
+    fn opaque_and_alpha_files_open_as_background_and_layer_0() {
+        for format in [Format::Png, Format::Jpeg] {
+            for alpha in [false, true] {
+                if alpha && format == Format::Jpeg {
+                    continue;
+                }
+                let img = pixels(300, 270, alpha);
+                let bytes = codecs::encode(&img, format, &codecs::EncodeOptions::default()).unwrap();
+                let r = import_flat("t", &bytes).unwrap();
+                let layer = &r.document.layers[0];
+                assert_eq!(layer.name, if alpha { "Layer 0" } else { "Background" }, "{format:?}");
+                assert_eq!(layer.locks.transparency, !alpha);
+                // The pixels are the decoded ones with an opaque alpha added.
+                let decoded = codecs::decode(&bytes).unwrap();
+                let want = banded_surface(&decoded, ChannelLayout::Rgba, CSample::U8, BAND_BYTES).to_interleaved(r.document.bounds());
+                assert_eq!(doc_pixels(&r), want, "{format:?} alpha {alpha}");
+                if format == Format::Png && alpha {
+                    assert_eq!(decoded.data(), img.data(), "lossless");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_cancelled_open_fails_with_cancelled() {
+        let img = pixels(64, 64, false);
+        let bytes = codecs::encode(&img, Format::Png, &codecs::EncodeOptions::default()).unwrap();
+        let yes = || true;
+        let r = import_flat_with("t", &bytes, &Interrupt::cancel_only(&yes));
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+        // Cancelled only once the decode is over: the tiles are not built.
+        let calls = AtomicU32::new(0);
+        let after_decode = || calls.fetch_add(1, Ordering::Relaxed) >= 1;
+        let r = import_flat_with("t", &bytes, &Interrupt::cancel_only(&after_decode));
+        assert!(matches!(r, Err(IoError::Cancelled)), "{:?}", r.map(|_| ()));
+    }
+
+    #[test]
+    fn progress_is_reported_and_never_goes_backwards() {
+        let bytes = codecs::encode(&pixels(64, 64, false), Format::Png, &codecs::EncodeOptions::default()).unwrap();
+        let seen = std::sync::Mutex::new(Vec::new());
+        let no = || false;
+        let progress = |f: f32| seen.lock().unwrap().push(f);
+        import_flat_with("t", &bytes, &Interrupt::new(&no, &progress)).unwrap();
+        let seen = seen.into_inner().unwrap();
+        assert!(seen.len() >= 2 && seen.windows(2).all(|w| w[0] <= w[1]), "{seen:?}");
+    }
+
+    #[test]
+    fn truncated_files_still_fail_or_warn_without_panicking() {
+        let png = codecs::encode(&pixels(40, 40, false), Format::Png, &codecs::EncodeOptions::default()).unwrap();
+        let jpeg = codecs::encode(&pixels(40, 40, false), Format::Jpeg, &codecs::EncodeOptions::default()).unwrap();
+        assert!(import_flat("t", png.get(..20).unwrap_or_default()).is_err(), "header-only PNG");
+        assert!(import_flat("t", jpeg.get(..8).unwrap_or_default()).is_err(), "short JPEG");
+        for cut in [png.len() / 2, png.len() - 5] {
+            let _ = import_flat("t", png.get(..cut).unwrap_or_default());
+        }
+    }
+}
