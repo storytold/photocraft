@@ -3942,6 +3942,13 @@ navigator	Zoom	Zvětšení
 	Could not write {name}: {error}	Nelze zapsat {name}: {error}
 	Kept {name}: written by another application	Soubor {name} ponechán: zapsala ho jiná aplikace
 	Shadow Tint	Odstín stínů
+
+# Custom shape set import
+	Import Shapes…	Importovat tvary…
+	Choose a custom shape file (.csh).	Vyberte soubor vlastních tvarů (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Počet tvarů importovaných z {file}: {n}|Počet tvarů importovaných z {file}: {n}|Počet tvarů importovaných z {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Počet tvarů importovaných z {group}: {n}|Počet tvarů importovaných z {group}: {n}|Počet tvarů importovaných z {group}: {n}
+
 	Check for Updates…	Zkontrolovat aktualizace…
 	Open the release page to choose an installer for your system.	Otevřete stránku vydání a vyberte instalační program pro svůj systém.
 	Automatically Check for Updates	Automaticky kontrolovat aktualizace

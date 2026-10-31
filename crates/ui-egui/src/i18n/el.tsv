@@ -4025,6 +4025,13 @@ curves	Smooth	Εξομάλυνση
 	Could not write {name}: {error}	Αδυναμία εγγραφής του {name}: {error}
 	Kept {name}: written by another application	Το {name} διατηρήθηκε: γράφτηκε από άλλη εφαρμογή
 	Shadow Tint	Χροιά σκιών
+
+# Custom shape set import
+	Import Shapes…	Εισαγωγή σχημάτων…
+	Choose a custom shape file (.csh).	Επιλέξτε ένα αρχείο προσαρμοσμένων σχημάτων (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Αριθμός σχημάτων που εισήχθησαν από {file}: {n}|Αριθμός σχημάτων που εισήχθησαν από {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Αριθμός σχημάτων που εισήχθησαν από {group}: {n}|Αριθμός σχημάτων που εισήχθησαν από {group}: {n}
+
 	Check for Updates…	Έλεγχος ενημερώσεων…
 	Open the release page to choose an installer for your system.	Ανοίξτε τη σελίδα της έκδοσης για να επιλέξετε πρόγραμμα εγκατάστασης για το σύστημά σας.
 	Automatically Check for Updates	Αυτόματος έλεγχος ενημερώσεων

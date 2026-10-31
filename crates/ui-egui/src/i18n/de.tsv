@@ -3341,6 +3341,13 @@ curves	Smooth	Glätten
 	Could not write {name}: {error}	{name} konnte nicht geschrieben werden: {error}
 	Kept {name}: written by another application	{name} beibehalten: von einer anderen Anwendung geschrieben
 	Shadow Tint	Schattentönung
+
+# Custom shape set import
+	Import Shapes…	Formen importieren…
+	Choose a custom shape file (.csh).	Wählen Sie eine Datei mit eigenen Formen (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Anzahl der aus {file} importierten Formen: {n}|Anzahl der aus {file} importierten Formen: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Anzahl der aus {group} importierten Formen: {n}|Anzahl der aus {group} importierten Formen: {n}
+
 	Check for Updates…	Nach Updates suchen…
 	Open the release page to choose an installer for your system.	Öffnen Sie die Versionsseite und wählen Sie ein Installationspaket für Ihr System.
 	Automatically Check for Updates	Automatisch nach Updates suchen

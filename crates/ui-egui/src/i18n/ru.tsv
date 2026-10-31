@@ -3280,6 +3280,13 @@ curves	Smooth	Сгладить
 	Gray Value (Median)	Уровень серого (медиана)
 	Integrated Density	Интегральная плотность
 	Length	Длина
+
+# Custom shape set import
+	Import Shapes…	Импортировать фигуры…
+	Choose a custom shape file (.csh).	Выберите файл произвольных фигур (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Количество фигур, импортированных из {file}: {n}|Количество фигур, импортированных из {file}: {n}|Количество фигур, импортированных из {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Количество фигур, импортированных из {group}: {n}|Количество фигур, импортированных из {group}: {n}|Количество фигур, импортированных из {group}: {n}
+
 	Show Favorite Fonts	Показать избранные шрифты
 	No favorite fonts yet: click the star beside a font to add it.	Избранных шрифтов пока нет: нажмите на звёздочку рядом со шрифтом, чтобы добавить его.
 	Favorite fonts	Избранные шрифты

@@ -4000,6 +4000,13 @@ curves	Smooth	スムーズ
 	Could not write {name}: {error}	{name} を書き込めません: {error}
 	Kept {name}: written by another application	{name} はそのままにしました: 別のアプリケーションが書き込んだファイルです
 	Shadow Tint	シャドウの色かぶり補正
+
+# Custom shape set import
+	Import Shapes…	シェイプを読み込み…
+	Choose a custom shape file (.csh).	カスタムシェイプファイル (.csh) を選択してください。
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	{file} から読み込んだシェイプ数: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	{group} から読み込んだシェイプ数: {n}
+
 	Check for Updates…	アップデートを確認…
 	Open the release page to choose an installer for your system.	リリースページでお使いのシステム用のインストーラーを選択してください。
 	Automatically Check for Updates	アップデートを自動的に確認

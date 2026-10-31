@@ -16,6 +16,8 @@ use crate::commands::CommandSpec;
 use crate::vector_cmds::path_json;
 use crate::{EngineError, Result, Session};
 
+mod csh;
+
 /// Group listing Edit › Define Custom Shape results (`EditState::custom_shapes`).
 pub const CUSTOM_GROUP: &str = "Custom Shapes";
 
@@ -428,6 +430,7 @@ fn reset(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        csh::spec(),
         CommandSpec {
             id: "shape.presets.list",
             label: "Shape Presets",

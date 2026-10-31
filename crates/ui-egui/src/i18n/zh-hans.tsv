@@ -2982,6 +2982,13 @@ curves	Smooth	平滑
 	Could not write {name}: {error}	无法写入 {name}：{error}
 	Kept {name}: written by another application	已保留 {name}：由其他应用程序写入
 	Shadow Tint	阴影色调
+
+# Custom shape set import
+	Import Shapes…	导入形状…
+	Choose a custom shape file (.csh).	请选择自定义形状文件 (.csh)。
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	从 {file} 导入的形状数量：{n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	从 {group} 导入的形状数量：{n}
+
 	Check for Updates…	检查更新…
 	Open the release page to choose an installer for your system.	打开发布页，选择适合您系统的安装包。
 	Automatically Check for Updates	自动检查更新

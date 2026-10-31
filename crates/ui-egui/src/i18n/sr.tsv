@@ -4358,6 +4358,13 @@ shape	Appearance	Izgled
 	Slab Serif	Плочасти серифи
 	TrueType font	TrueType фонт
 	Variable font	Варијабилни фонт
+
+# Custom shape set import
+	Import Shapes…	Uvezi oblike…
+	Choose a custom shape file (.csh).	Izaberite datoteku prilagođenih oblika (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Broj oblika uvezenih iz {file}: {n}|Broj oblika uvezenih iz {file}: {n}|Broj oblika uvezenih iz {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Broj oblika uvezenih iz {group}: {n}|Broj oblika uvezenih iz {group}: {n}|Broj oblika uvezenih iz {group}: {n}
+
 	Highlight Mode	Режим осветљења
 	Highlight Color	Боја осветљења
 	Highlight Opacity	Непрозирност осветљења

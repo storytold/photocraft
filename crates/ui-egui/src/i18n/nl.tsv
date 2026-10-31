@@ -4084,6 +4084,13 @@ curves	Smooth	Vloeiend maken
 	Could not write {name}: {error}	Kan {name} niet schrijven: {error}
 	Kept {name}: written by another application	{name} behouden: geschreven door een andere toepassing
 	Shadow Tint	Schaduwtint
+
+# Custom shape set import
+	Import Shapes…	Vormen importeren…
+	Choose a custom shape file (.csh).	Kies een bestand met aangepaste vormen (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Aantal uit {file} geïmporteerde vormen: {n}|Aantal uit {file} geïmporteerde vormen: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Aantal uit {group} geïmporteerde vormen: {n}|Aantal uit {group} geïmporteerde vormen: {n}
+
 	Check for Updates…	Controleren op updates…
 	Open the release page to choose an installer for your system.	Open de releasepagina om een installatieprogramma voor uw systeem te kiezen.
 	Automatically Check for Updates	Automatisch op updates controleren
