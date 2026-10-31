@@ -108,6 +108,9 @@ pub fn menu_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) -> f32 {
                 buttons.push(title);
             }
             edge = crate::direction::row_end_edge(buttons.iter().map(|b| b.rect), edge);
+            if let (Some(first), Some(last)) = (buttons.first(), buttons.last()) {
+                crate::zoom_field::set_menu_bar_rect(ui.ctx(), first.rect.union(last.rect));
+            }
             switch_on_hover(ui.ctx(), &buttons);
             // The keys' lists stay in logical menu order (File first): the arrows step to the
             // menu on the side they point at, which `horizontal_nav_keys` swaps in a
