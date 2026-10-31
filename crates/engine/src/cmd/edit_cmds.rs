@@ -34,6 +34,10 @@ pub struct Clip {
     /// The document the pixels were copied from: Paste keeps them in place only there, and
     /// centres them in any other (#8945). None for an image from another app.
     pub source: Option<DocId>,
+    /// The artboard the pixels were copied from (its id and rect at the time), when they came
+    /// from one: Paste into another board of the same document keeps their place on the board
+    /// ([`board_shift`], #8788). None outside boards, across several, or for a copied board.
+    pub board: Option<(LayerId, Rect)>,
 }
 
 /// Photoshop's layer-based copy (CC 2018 on): with no selection, Copy takes the active layer
@@ -198,7 +202,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     };
     let mut out = Surface::new(with_alpha);
     if area.is_empty() {
-        return Ok(Clip { surface: out, bounds: Rect::EMPTY, layers: None, resolution: None, source: None });
+        return Ok(Clip { surface: out, bounds: Rect::EMPTY, layers: None, resolution: None, source: None, board: None });
     }
     // Only the selected area is read: converting the whole layer (a 24 MP Background gaining
     // alpha) cost about a second per Layer via Copy (#668).
@@ -220,7 +224,7 @@ fn lift(src: &Surface, sel: Option<&Surface>, canvas: Rect) -> Result<Clip> {
     out.put_tiles(shared);
     out.prune();
     let bounds = out.content_bounds();
-    Ok(Clip { surface: out, bounds, layers: None, resolution: None, source: None })
+    Ok(Clip { surface: out, bounds, layers: None, resolution: None, source: None, board: None })
 }
 
 /// [`lift`] over one rectangle: `src`'s pixels with alpha (`n` channels), the selection
@@ -302,9 +306,54 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
     let b = clip.bounds;
-    let clip = Clip { resolution: Some(d.doc.resolution_dpi), source: Some(d.doc.id), ..clip };
+    let board = source_board(d, merged, b);
+    let clip = Clip { resolution: Some(d.doc.resolution_dpi), source: Some(d.doc.id), board, ..clip };
     s.clipboard = Some(clip);
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
+}
+
+/// The artboard a Copy took its pixels from (#8788): the board the copied layer sits in (every
+/// copied layer's, when several are selected), or for Copy Merged the board under the middle of
+/// the copied area. None outside boards, when the copied layers span several, or when a board
+/// itself was copied (a pasted board is placed as a board, not on another one).
+fn source_board(d: &crate::DocState, merged: bool, bounds: Rect) -> Option<(LayerId, Rect)> {
+    let board = if merged {
+        let (cx, cy) = (bounds.x0 / 2 + bounds.x1 / 2, bounds.y0 / 2 + bounds.y1 / 2);
+        d.doc.artboards().into_iter().rev().find(|(_, _, b)| b.rect.contains(cx, cy)).map(|(id, _, _)| id)?
+    } else {
+        let active = d.active_layer?;
+        let ids = match d.selected_layers() {
+            several if several.len() > 1 => several,
+            _ => vec![active],
+        };
+        let mut boards = ids.iter().map(|id| d.doc.layer(*id).filter(|l| l.artboard().is_none()).and_then(|_| d.doc.artboard_of(*id)));
+        let first = boards.next()??;
+        if !boards.all(|b| b == Some(first)) {
+            return None;
+        }
+        first
+    };
+    Some((board, d.doc.layer(board)?.artboard()?.rect))
+}
+
+/// Paste into another artboard than the one the pixels were copied from (#8788): they keep
+/// their place on the board, moved by the offset between the two boards' origins, as a layer
+/// dragged between boards does. Copying a design from one board and pasting it with another
+/// board's layer selected puts it at the same spot there, instead of where it was on the first
+/// board (outside the second, which hid it) or in the middle of the view. Only within one
+/// document, and not for Paste Into / Outside (`"clampToCanvas": false`), which centre on the
+/// selection. `active` is the layer the paste lands beside; the board is its board.
+pub(crate) fn board_shift(clip: &Clip, doc: &Document, active: Option<LayerId>, p: &Value) -> Option<(i32, i32)> {
+    if p.get("clampToCanvas").and_then(Value::as_bool) == Some(false) || clip.source != Some(doc.id) {
+        return None;
+    }
+    let (from, src) = clip.board?;
+    let to = doc.artboard_of(active?)?;
+    if to == from {
+        return None;
+    }
+    let dst = doc.layer(to)?.artboard()?.rect;
+    Some((dst.x0.checked_sub(src.x0)?, dst.y0.checked_sub(src.y0)?))
 }
 
 /// Copy the targeted layer mask (`"target":"mask"`, #2928) or smart-filter mask
@@ -349,7 +398,7 @@ fn copy_mask(s: &mut Session, filter: bool) -> Result<Value> {
     }
     let b = bounds;
     let (resolution, source) = (Some(d.doc.resolution_dpi), Some(d.doc.id));
-    s.clipboard = Some(Clip { surface, bounds: b, layers: None, resolution, source });
+    s.clipboard = Some(Clip { surface, bounds: b, layers: None, resolution, source, board: None });
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()], "target": if filter { "filterMask" } else { "mask" }}))
 }
 
@@ -393,7 +442,7 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
     }
     let canvas = d.doc.bounds();
     let fmt = d.doc.pixel_format();
-    let (dx, dy) = paste_offset(&clip, d.doc.id, canvas, p, in_place);
+    let (dx, dy) = board_shift(&clip, &d.doc, d.active_layer, p).unwrap_or_else(|| paste_offset(&clip, d.doc.id, canvas, p, in_place));
     if let Some(layers) = clip.layers.as_deref().filter(|_| crate::layer_copy_cmds::layered(d.doc.mode)) {
         return paste_layers(s, layers, dx, dy);
     }
