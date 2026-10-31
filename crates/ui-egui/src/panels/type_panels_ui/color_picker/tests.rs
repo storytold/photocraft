@@ -31,7 +31,8 @@ fn preview_is_cached_cancel_is_clean_and_ok_is_one_undo_step_at_all_depths() {
             let (x, y) =
                 (0..160).flat_map(|y| (0..320).map(move |x| (x, y))).find(|&(x, y)| original_pixels.get(x, y)[3] > 0.1).expect("fixture renders visible text");
             let picker = open(&mut app, kind, id).unwrap();
-            set(&mut app, picker, "#00ff00");
+            let picked = if depth == 32 { json!([0.12345, 2.0, -0.25]) } else { json!("#00ff00") };
+            app.ui.dialog_mut(picker).unwrap().fields.insert("color".into(), picked.clone());
             let (shown, key) = canvas::display_doc(&mut app, 0);
             let again = canvas::display_doc(&mut app, 0);
             assert!(Arc::ptr_eq(&shown, &again.0));
@@ -46,7 +47,7 @@ fn preview_is_cached_cancel_is_clean_and_ok_is_one_undo_step_at_all_depths() {
             assert!(app.text_style_preview.is_none());
             assert!(Arc::ptr_eq(&canvas::display_doc(&mut app, 0).0, &doc));
             let picker = open(&mut app, kind, id).unwrap();
-            set(&mut app, picker, "#00ff00");
+            app.ui.dialog_mut(picker).unwrap().fields.insert("color".into(), picked);
             let shown = canvas::display_doc(&mut app, 0).0;
             dialogs::confirm(&mut app, picker).unwrap();
             let st = app.session.active().unwrap();
@@ -57,7 +58,8 @@ fn preview_is_cached_cancel_is_clean_and_ok_is_one_undo_step_at_all_depths() {
             app.run("edit.undo", json!({})).unwrap();
             assert_eq!(serde_json::to_value(&app.session.active().unwrap().doc.text_styles).unwrap(), serde_json::to_value(&doc.text_styles).unwrap());
             app.run("edit.redo", json!({})).unwrap();
-            assert_eq!(color(&app.session.active().unwrap().doc, kind, id).unwrap().to_rgb(), [0.0, 1.0, 0.0]);
+            let expected = if depth == 32 { [0.12345, 2.0, -0.25] } else { [0.0, 1.0, 0.0] };
+            assert_eq!(color(&app.session.active().unwrap().doc, kind, id).unwrap().to_rgb(), expected);
         }
     }
 }
@@ -65,14 +67,15 @@ fn preview_is_cached_cancel_is_clean_and_ok_is_one_undo_step_at_all_depths() {
 #[test]
 fn no_op_keeps_precise_imported_color_and_returning_to_original_removes_preview() {
     let (mut app, id) = fixture(Kind::Character, 32);
-    app.run("type.characterStyle.set", json!({"id":id,"attrs":{"color":photocraft_doc::Color::rgba(0.12345,0.67891,0.33333,0.45678)}})).unwrap();
+    app.run("type.characterStyle.set", json!({"id":id,"attrs":{"color":photocraft_doc::Color::rgba(0.12345,2.0,-0.25,0.45678)}})).unwrap();
     let before = app.session.active().unwrap().doc.clone();
     let history = app.session.active().unwrap().history.past_len();
     let picker = open(&mut app, Kind::Character, id).unwrap();
-    let original = fields(&app, picker)["color"].as_str().unwrap().to_string();
+    let original = fields(&app, picker)["color"].clone();
+    assert_eq!(color_picker_ui::current(&fields(&app, picker)).rgb, [0.12345, 2.0, -0.25]);
     set(&mut app, picker, "#ffffff");
     canvas::display_doc(&mut app, 0);
-    set(&mut app, picker, &original);
+    app.ui.dialog_mut(picker).unwrap().fields.insert("color".into(), original);
     assert!(Arc::ptr_eq(&canvas::display_doc(&mut app, 0).0, &before));
     assert!(app.text_style_preview.is_none());
     dialogs::confirm(&mut app, picker).unwrap();

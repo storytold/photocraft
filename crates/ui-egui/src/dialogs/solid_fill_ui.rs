@@ -57,13 +57,14 @@ pub(crate) fn owns_new(f: &Map<String, Value>) -> bool {
         && f.get("__params").and_then(|p| p.get("document")).and_then(Value::as_u64).is_some()
 }
 
+/// Create in the bound document, keeping the picker's colour precision and CMYK inks.
 pub(crate) fn confirm_new(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     let expected = f.get("__params").and_then(|p| p.get("document")).and_then(Value::as_u64).ok_or("missing Solid Color document")?;
     let st = app.session.active().ok_or("no document open")?;
     if st.doc.id.0 != expected {
         return Err("the target document is no longer active".into());
     }
-    let color = f.get("color").and_then(Value::as_str).ok_or("missing Solid Color colour")?;
+    let color = color_picker_ui::color_value(f).ok_or("missing Solid Color colour")?;
     // CMYK typed into the picker stays those inks in a CMYK document (#8568).
     app.run("layer.newFillLayer.solidColor", json!({"color": color, "cmyk": color_picker_ui::picked_cmyk(f)}))
 }
@@ -90,13 +91,20 @@ pub(crate) fn thumbnail_color(app: &PhotocraftApp, document: DocId, layer: Layer
 }
 
 /// The colour the picker would commit to a fill of `original` in a `mode` document, built as the
-/// engine builds it: the picked hex, and in a CMYK document the inks it was picked as (#8568).
+/// engine builds it: picked RGB at its original precision, and in a CMYK document the inks it
+/// was picked as (#8568). The source fill's alpha stays unchanged.
 /// `None` while the picker still shows the fill as it is ([`is_edit`]).
 fn picked_color(f: &Map<String, Value>, original: Color, mode: photocraft_color::ColorMode) -> Option<Color> {
     if !is_edit(f, original, mode) {
         return None;
     }
-    let color = cmds::color_param(f.get("color")?, original, mode).ok()?;
+    let value = f.get("color")?;
+    let color = if value.is_array() && color_picker_ui::color_value(f)?.is_array() {
+        let [r, g, b] = color_picker_ui::parse_color(value)?;
+        Color::rgba(r, g, b, original.alpha).in_mode(mode)
+    } else {
+        cmds::color_param(value, original, mode).ok()?
+    };
     Some(color_picker_ui::picked_cmyk(f).filter(|_| mode == photocraft_color::ColorMode::Cmyk).map_or(color, |c| Color {
         mode: photocraft_color::ColorMode::Cmyk,
         c,
@@ -110,7 +118,7 @@ fn picked_color(f: &Map<String, Value>, original: Color, mode: photocraft_color:
 fn is_edit(f: &Map<String, Value>, original: Color, mode: photocraft_color::ColorMode) -> bool {
     let cmyk = photocraft_color::ColorMode::Cmyk;
     let inks_differ = mode == cmyk && color_picker_ui::picked_cmyk(f).is_some_and(|k| original.mode != cmyk || original.c != k);
-    f.get("color") != f.get("__orig") || inks_differ
+    !color_picker_ui::unchanged(f) || inks_differ
 }
 
 /// No-op OK preserves imported high-precision / non-RGB colour values rather than quantising
@@ -128,9 +136,11 @@ pub(crate) fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result
     if !is_edit(f, *original, st.doc.mode) {
         return Ok(json!({"layer": layer.0, "unchanged": true}));
     }
-    let color = f.get("color").cloned().ok_or("missing color")?;
+    // Use the same stored Color as the preview. The engine's RGB-array form is SDR-only;
+    // its stored-Color form keeps finite HDR components and the fill's original alpha.
+    let color = picked_color(f, *original, st.doc.mode).ok_or("invalid Solid Color colour")?;
     let object = params.as_object_mut().ok_or("invalid Solid Color target")?;
-    object.insert("color".into(), color);
+    object.insert("color".into(), json!(color));
     if let Some(inks) = color_picker_ui::picked_cmyk(f) {
         object.insert("cmyk".into(), json!(inks));
     }

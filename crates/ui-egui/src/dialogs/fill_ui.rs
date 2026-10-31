@@ -36,17 +36,12 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
 }
 
-fn hex(c: [f32; 4]) -> String {
-    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
-}
-
 /// A remembered value, if it is one the dialog can show (a corrupt preference is ignored).
 fn valid(app: &PhotocraftApp, key: &str, v: &Value) -> bool {
     match key {
         "contents" => v.as_str().is_some_and(|c| CONTENTS.iter().any(|(k, _)| *k == c)),
         "mode" | "opacity" | "preserveTransparency" => crate::dialog_blend_ui::valid(key, v),
-        "color" => v.as_str().is_some_and(|h| h.len() == 7 && h.starts_with('#') && h.get(1..).is_some_and(|d| d.chars().all(|c| c.is_ascii_hexdigit()))),
+        "color" => crate::color_picker_ui::parse_color(v).is_some(),
         "pattern" => v.as_str().is_some_and(|p| app.session.patterns.items.iter().any(|q| q.id == p)),
         "colorAdaptation" => v.is_boolean(),
         _ => false,
@@ -60,7 +55,8 @@ pub fn default_fields(app: &PhotocraftApp) -> Map<String, Value> {
     f.insert("__command".into(), json!(COMMAND));
     f.insert("__label".into(), json!("Fill"));
     f.insert("contents".into(), json!("foreground"));
-    f.insert("color".into(), json!(hex(app.session.tools.foreground)));
+    let fg = app.session.tools.foreground;
+    f.insert("color".into(), crate::color_picker_ui::document_color(app, [fg[0], fg[1], fg[2]]));
     if let Some(p) = app.session.patterns.items.first() {
         f.insert("pattern".into(), json!(p.id));
     }
@@ -80,6 +76,10 @@ pub fn fields(app: &PhotocraftApp) -> Map<String, Value> {
                 f.insert(k.into(), v.clone());
             }
         }
+    }
+    // A saved float colour is shown through legacy hex when reopening in an integer document.
+    if let Some(rgb) = f.get("color").and_then(crate::color_picker_ui::parse_color) {
+        f.insert("color".into(), crate::color_picker_ui::document_color(app, rgb));
     }
     f
 }
@@ -143,11 +143,6 @@ fn get_str(f: &Map<String, Value>, k: &str, d: &str) -> String {
     f.get(k).and_then(Value::as_str).unwrap_or(d).to_string()
 }
 
-fn parse_hex(h: &str) -> [u8; 3] {
-    let d = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok()).unwrap_or(0);
-    [d(1), d(3), d(5)]
-}
-
 /// The dialog body.
 pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
@@ -168,8 +163,8 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
             ui.horizontal(|ui| {
                 label(ui, tl!("Color:"));
                 // Photoshop shows no swatch; this one reopens the Color Picker on the colour.
-                let rgb = parse_hex(&get_str(f, "color", "#000000"));
-                if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), tl!("Fill color")).clicked() {
+                let rgb = f.get("color").and_then(crate::color_picker_ui::parse_color).unwrap_or([0.0; 3]);
+                if crate::widgets::color_swatch_button(ui, crate::color_picker_ui::c32(rgb), tl!("Fill color")).clicked() {
                     crate::color_picker_ui::request(f, tl!("Color Picker (Fill Color)"));
                 }
             });

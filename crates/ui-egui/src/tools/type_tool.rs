@@ -94,11 +94,6 @@ fn byte_of(text: &str, ci: usize) -> usize {
     photocraft_text::byte_index(text, ci)
 }
 
-fn hex(c: [f32; 4]) -> String {
-    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
-}
-
 fn session_key(app: &mut PhotocraftApp) -> String {
     format!("type-{}", app.ui.alloc_id())
 }

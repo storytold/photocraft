@@ -23,11 +23,6 @@ use serde_json::json;
 use crate::PhotocraftApp;
 use crate::state::Tool;
 
-fn hex(c: [f32; 4]) -> String {
-    let b = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02x}{:02x}{:02x}", b(c[0]), b(c[1]), b(c[2]))
-}
-
 /// Does a new foreground recolour selected shape layers with `tool`?
 fn recolours_shapes(tool: Tool) -> bool {
     crate::vector_ui::is_shape_tool(tool)
@@ -141,7 +136,8 @@ fn recolour(app: &mut PhotocraftApp, gesture: Option<String>, any_tool: bool) {
     };
     let result = (|| {
         if !texts.is_empty() {
-            app.run("type.setStyle", json!({"layers": texts, "color": hex(fg), "coalesce": key}))?;
+            let color = crate::color_picker_ui::document_color(app, [fg[0], fg[1], fg[2]]);
+            app.run("type.setStyle", json!({"layers": texts, "color": color, "coalesce": key}))?;
         }
         shapes.iter().try_for_each(|(id, alpha)| app.run("shape.edit", json!({"layer": id, "fill": [fg[0], fg[1], fg[2], alpha], "coalesce": key})).map(|_| ()))
     })();

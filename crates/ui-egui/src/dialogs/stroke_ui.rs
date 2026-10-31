@@ -16,15 +16,11 @@ pub fn owns(fields: &Map<String, Value>) -> bool {
     fields.contains_key(MARK)
 }
 
-fn hex(c: [f32; 4]) -> String {
-    let to_byte = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
-    format!("#{:02x}{:02x}{:02x}", to_byte(c[0]), to_byte(c[1]), to_byte(c[2]))
-}
-
+/// Accept remembered options only within their field domains, including finite float RGB.
 fn valid(key: &str, v: &Value) -> bool {
     match key {
         "width" => v.as_f64().is_some_and(|x| x.is_finite() && (1.0..=250.0).contains(&x)),
-        "color" => v.as_str().is_some_and(|h| h.len() == 7 && h.starts_with('#') && h[1..].bytes().all(|b| b.is_ascii_hexdigit())),
+        "color" => crate::color_picker_ui::parse_color(v).is_some(),
         "location" => v.as_str().is_some_and(|s| LOCATIONS.iter().any(|(id, _)| *id == s)),
         _ => crate::dialog_blend_ui::valid(key, v),
     }
@@ -37,7 +33,8 @@ pub fn fields(app: &PhotocraftApp) -> Map<String, Value> {
     f.insert("__command".into(), json!(COMMAND));
     f.insert("__label".into(), json!("Stroke…"));
     f.insert("width".into(), json!(1.0));
-    f.insert("color".into(), json!(hex(app.session.tools.foreground)));
+    let fg = app.session.tools.foreground;
+    f.insert("color".into(), crate::color_picker_ui::document_color(app, [fg[0], fg[1], fg[2]]));
     f.insert("location".into(), json!("center"));
     f.insert("mode".into(), json!("normal"));
     f.insert("opacity".into(), json!(100.0));
@@ -48,6 +45,10 @@ pub fn fields(app: &PhotocraftApp) -> Map<String, Value> {
                 f.insert(key.into(), value.clone());
             }
         }
+    }
+    // Keep stored float values for float documents and the legacy hex domain for integer ones.
+    if let Some(rgb) = f.get("color").and_then(crate::color_picker_ui::parse_color) {
+        f.insert("color".into(), crate::color_picker_ui::document_color(app, rgb));
     }
     f
 }
@@ -90,10 +91,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
     ui.horizontal(|ui| {
         label(ui, tl!("Color:"));
-        let current = f.get("color").and_then(Value::as_str).unwrap_or("#000000");
-        let rgb = [1usize, 3, 5].map(|i| current.get(i..i + 2).and_then(|b| u8::from_str_radix(b, 16).ok()).unwrap_or(0));
+        let rgb = f.get("color").and_then(crate::color_picker_ui::parse_color).unwrap_or([0.0; 3]);
         // As in Photoshop, the swatch opens the Color Picker on the stroke colour.
-        if crate::widgets::color_swatch_button(ui, egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]), tl!("Stroke color")).clicked() {
+        if crate::widgets::color_swatch_button(ui, crate::color_picker_ui::c32(rgb), tl!("Stroke color")).clicked() {
             crate::color_picker_ui::request(f, tl!("Color Picker (Stroke Color)"));
         }
     });
