@@ -26,7 +26,7 @@
 
 use std::sync::Arc;
 
-use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
+use egui::{Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_doc::{DocId, Document, LayerId};
 use photocraft_engine::select_mask_edits::{self, MAX_EDIT_POINTS, MAX_EDITS};
 use photocraft_engine::smartselect_cmds::{MAX_STROKE_POINTS, MAX_STROKES};
