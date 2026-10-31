@@ -12,6 +12,10 @@
 //! 3. Blended with frequency-tuned saliency (R. Achanta, S. Hemami, F. Estrada and
 //!    S. Süsstrunk, "Frequency-tuned Salient Region Detection", CVPR 2009): distance of the
 //!    lightly blurred CIELAB image from its mean colour.
+//!    When the local sharpness map (the one behind Select › Focus Area) splits the picture into
+//!    a sharp part and a blurred part, it joins the colour terms with up to an equal share, so a
+//!    sharp subject stands out from a blurred backdrop of the same colours (#6570). A map with no
+//!    such split (a landscape, a scan, flat shapes) changes nothing.
 //! 4. Otsu's threshold on the saliency map seeds a GrabCut trimap (low-saliency border pixels
 //!    are definite background); the result is cleaned (small islands dropped).
 //! 5. A second GrabCut whose background model only knows the backdrop: a colour model fitted
@@ -248,12 +252,79 @@ pub fn saliency(img: &super::RgbImage) -> Vec<f32> {
     let smax = s.iter().copied().fold(f32::MIN, f32::max);
     let srange = (smax - smin).max(1e-6);
     let mut out: Vec<f32> = sp.labels.iter().zip(&ft).map(|(l, f)| 0.75 * (s[*l as usize] - smin) / srange + 0.25 * f / ftmax).collect();
+    blend_sharpness(&mut out, img, &sp.labels, &wbg);
     let (lo, hi) = out.iter().fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
     let r = (hi - lo).max(1e-6);
     for v in &mut out {
         *v = (*v - lo) / r;
     }
     out
+}
+
+/// How much of the saliency the sharpness map may take (an equal share with the colour terms).
+const SHARPNESS_SHARE: f32 = 0.5;
+
+/// How strongly `sharp` (`0..=1`) splits the picture into a sharp and a blurred part: `0` for a
+/// map with no such split, up to `1`. The split is Otsu's: the share of the map's variance the
+/// two classes explain, counted only while neither class is a sliver of the picture (an edge ring
+/// around a flat shape is not a sharp subject).
+pub(crate) fn focus_split(sharp: &[f32]) -> f32 {
+    let n = sharp.len() as f64;
+    if sharp.is_empty() {
+        return 0.0;
+    }
+    let t = otsu(sharp);
+    let (mut hi, mut sum_hi, mut sum, mut sum_sq) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
+    for &v in sharp {
+        let v = f64::from(v.clamp(0.0, 1.0));
+        sum += v;
+        sum_sq += v * v;
+        if v >= f64::from(t) {
+            hi += 1.0;
+            sum_hi += v;
+        }
+    }
+    let lo = n - hi;
+    let frac = hi / n;
+    if !(0.12..=0.75).contains(&frac) || lo <= 0.0 {
+        return 0.0;
+    }
+    let (mean, mean_hi, mean_lo) = (sum / n, sum_hi / hi, (sum - sum_hi) / lo);
+    let variance = (sum_sq / n - mean * mean).max(1e-9);
+    let between = (hi * (mean_hi - mean).powi(2) + lo * (mean_lo - mean).powi(2)) / n;
+    let eta = (between / variance) as f32;
+    // Two classes explain at most 0.64 of a bell-shaped map's variance and 0.75 of a flat one's;
+    // a real sharp subject on a blurred backdrop explains about 0.9.
+    ((eta - 0.8) / 0.12).clamp(0.0, 1.0)
+}
+
+/// Blends the per-superpixel mean sharpness into `out` (`0..=1`, re-normalised after), weighted by
+/// [`focus_split`]. Regions that touch the frame keep their background penalty (`wbg`).
+fn blend_sharpness(out: &mut [f32], img: &super::RgbImage, labels: &[u32], wbg: &[f32]) {
+    let sharp = super::focus::sharpness(img, 0.0);
+    let share = SHARPNESS_SHARE * focus_split(&sharp);
+    if share <= 0.0 || sharp.len() != out.len() || labels.len() != out.len() {
+        return;
+    }
+    let n = wbg.len();
+    let (mut sum, mut cnt) = (vec![0.0f32; n], vec![0.0f32; n]);
+    for (l, v) in labels.iter().zip(&sharp) {
+        if let (Some(s), Some(c)) = (sum.get_mut(*l as usize), cnt.get_mut(*l as usize)) {
+            *s += v;
+            *c += 1.0;
+        }
+    }
+    for (o, l) in out.iter_mut().zip(labels) {
+        let l = *l as usize;
+        let mean = sum.get(l).zip(cnt.get(l)).map_or(0.0, |(s, c)| s / c.max(1.0));
+        let penalty = 1.0 - 0.5 * wbg.get(l).copied().unwrap_or(0.0);
+        *o = (1.0 - share) * *o + share * mean * penalty;
+    }
+    let (lo, hi) = out.iter().fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(*v), b.max(*v)));
+    let r = (hi - lo).max(1e-6);
+    for v in out.iter_mut() {
+        *v = (*v - lo) / r;
+    }
 }
 
 fn blur_lab(img: &super::RgbImage) -> super::RgbImage {
