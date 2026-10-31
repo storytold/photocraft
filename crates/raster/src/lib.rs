@@ -263,6 +263,52 @@ fn convert_tiles(tiles: &mut [(TileCoord, Arc<Tile>)], r: Rect, data: &[f32], w:
     }
 }
 
+/// Fills one tile of [`Surface::try_write_rows_with`]: makes it writable, then calls `fill` for
+/// each row of `r` inside it.
+fn fill_tile<F>(slot: &mut (TileCoord, Option<Arc<Tile>>), r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F) -> Result<(), AllocationError>
+where
+    F: Fn(i32, i32, &mut [u8]) + Sync,
+{
+    let (tc, tile) = slot;
+    match tile {
+        None => *tile = Some(Arc::new(Tile::try_filled(format, default_pixel)?)),
+        Some(t) => {
+            if Arc::get_mut(t).is_none() {
+                *t = Arc::new(t.try_clone()?);
+            }
+        }
+    }
+    let data = tile.as_mut().and_then(Arc::get_mut).ok_or(AllocationError::SizeOverflow)?;
+    let bpp = format.bytes_per_pixel();
+    let tr = tc.rect().intersect(&r);
+    let span = tr.width() as usize * bpp;
+    for y in tr.y0..tr.y1 {
+        let row = (y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize;
+        if let Some(dst) = row.checked_mul(bpp).and_then(|o| data.data.get_mut(o..o.checked_add(span)?)) {
+            fill(y, tr.x0, dst);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn fill_tiles<F>(tiles: &mut [(TileCoord, Option<Arc<Tile>>)], r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F) -> Result<(), AllocationError>
+where
+    F: Fn(i32, i32, &mut [u8]) + Sync,
+{
+    use rayon::prelude::*;
+    tiles.par_iter_mut().try_for_each(|slot| fill_tile(slot, r, format, default_pixel, fill))
+}
+
+/// Serial counterpart, for the web build.
+#[cfg(target_arch = "wasm32")]
+fn fill_tiles<F>(tiles: &mut [(TileCoord, Option<Arc<Tile>>)], r: Rect, format: &PixelFormat, default_pixel: &[u8], fill: &F) -> Result<(), AllocationError>
+where
+    F: Fn(i32, i32, &mut [u8]) + Sync,
+{
+    tiles.iter_mut().try_for_each(|slot| fill_tile(slot, r, format, default_pixel, fill))
+}
+
 fn decode_tile_row_rgba(fmt: &PixelFormat, t: &Tile, base: usize, dst: &mut [[f32; 4]], row: &mut Vec<f32>) {
     let n = fmt.channels();
     match (fmt.mode, fmt.sample, fmt.alpha) {
@@ -871,6 +917,41 @@ impl Surface {
                 t.data[dst..dst + span].copy_from_slice(&bytes[src..src + span]);
             }
         }
+    }
+
+    /// Fills `r` row by row, straight into the tiles: `fill(y, x0, dst)` writes the pixels of row
+    /// `y` from column `x0` into `dst`, the tile's bytes for that span (`dst.len()` is a whole
+    /// number of pixels in the surface's format). Lets a caller convert from its own buffer
+    /// without staging a copy of the region first.
+    ///
+    /// Tiles are filled on all cores (serially on the web), so `fill` must not depend on call
+    /// order. Missing tiles start as the default pixel and tiles another surface still shares
+    /// are copied first (copy-on-write), both allocated fallibly. An empty `r` writes nothing.
+    /// On an error the surface stays valid but `r` may be partly written.
+    ///
+    /// Like [`Surface::write_region_par`] this enters Rayon, so don't call it from a `OnceLock`
+    /// initializer.
+    pub fn try_write_rows_with<F>(&mut self, r: Rect, fill: F) -> Result<(), AllocationError>
+    where
+        F: Fn(i32, i32, &mut [u8]) + Sync,
+    {
+        if r.is_empty() {
+            return Ok(());
+        }
+        let count = usize::try_from(r.tile_count()).map_err(|_| AllocationError::SizeOverflow)?;
+        let bytes = count.checked_mul(std::mem::size_of::<(TileCoord, Option<Arc<Tile>>)>()).ok_or(AllocationError::SizeOverflow)?;
+        let mut tiles: Vec<(TileCoord, Option<Arc<Tile>>)> = Vec::new();
+        tiles.try_reserve_exact(count).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
+        tiles.extend(r.tiles().map(|c| (c, self.tiles.remove(&c))));
+        let (format, default_pixel) = (self.format, &self.default_pixel);
+        let result = fill_tiles(&mut tiles, r, &format, default_pixel, &fill);
+        // Give every tile back, filled or not, so a failure leaves the surface whole.
+        for (c, t) in tiles {
+            if let Some(t) = t {
+                self.tiles.insert(c, t);
+            }
+        }
+        result
     }
 
     /// Read `r` as interleaved encoded bytes in the surface's format.
