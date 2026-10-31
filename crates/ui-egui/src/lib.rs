@@ -127,6 +127,7 @@ pub use dialogs::color_picker_ui;
 pub use dialogs::color_range_ui;
 pub use dialogs::color_table_ui;
 pub use dialogs::credits;
+pub use dialogs::dds_import_ui;
 pub use dialogs::dds_options_ui;
 pub use dialogs::delete_layer_prompt;
 pub use dialogs::dialog_alt_reset;
@@ -666,6 +667,8 @@ pub struct PhotocraftApp {
     pub(crate) jpeg_options: Option<jpeg_options_ui::Prompt>,
     /// A save to a DDS texture parked behind the DDS Options prompt (see `dds_options_ui`).
     pub(crate) dds_options: Option<dds_options_ui::Prompt>,
+    /// DDS opens parked behind the DDS Import prompt, in order (see `dds_import_ui`).
+    pub(crate) dds_imports: std::collections::VecDeque<dds_import_ui::Prompt>,
     /// Files read but not opened yet: the first waits on its profile prompt, the rest behind it
     /// (see `open_prompt`).
     pub(crate) held_opens: std::collections::VecDeque<open_prompt::Held>,

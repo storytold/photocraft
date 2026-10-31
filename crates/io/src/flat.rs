@@ -8,18 +8,21 @@ use photocraft_doc::{AlphaChannel, Document, Layer, LayerContent};
 use photocraft_geom::{Rect, Size, TILE_SIZE};
 use photocraft_raster::Surface;
 
-use crate::{ExportOptions, ExportResult, ImportResult, IoError, TgaBits, XmpEmbed};
+use crate::{ExportOptions, ExportResult, ImportOptions, ImportResult, IoError, TgaBits, XmpEmbed};
 
 /// Bytes per band when converting or exporting a band of rows at a time.
 const BAND_BYTES: usize = 32 << 20;
 
 /// Decodes a flat image into a single-layer document; a TIFF with Photoshop layer data opens
-/// layered (see [`crate::tiff_layers`]).
-pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
+/// layered (see [`crate::tiff_layers`]), a DDS per `opts`' import answers (see [`import_dds`]).
+pub fn import_flat(name: &str, bytes: &[u8], opts: &ImportOptions) -> Result<ImportResult, IoError> {
     // Detected once; every step below branches on it.
     let format = codecs::detect(bytes);
     if format == Some(Format::Tiff) {
         return import_tiff_page(name, bytes, None);
+    }
+    if format == Some(Format::Dds) {
+        return import_dds(name, bytes, opts);
     }
     let img = codecs::decode_as(format.ok_or(codecs::CodecError::UnknownFormat)?, bytes)?;
     // A palette BMP, PNG or GIF opens in Indexed Color mode with its colour table, as in
@@ -223,6 +226,101 @@ pub fn tga_alpha_channel_to_transparency(doc: &mut Document) {
     doc.channels.clear();
 }
 
+/// The image with its alpha channel, or dropped to opaque when the DDS import answer routes
+/// the alpha to a document channel instead (see [`import_dds`]).
+fn dds_alpha<'a>(img: &'a Image, alpha: bool) -> std::borrow::Cow<'a, Image> {
+    if alpha { std::borrow::Cow::Borrowed(img) } else { img.converted(img.layout().without_alpha(), img.sample_type()) }
+}
+
+/// Whether `img`'s alpha is fully opaque everywhere, a band of rows at a time. An all-opaque
+/// alpha holds no data: routing it to a channel would add an all-white "Alpha 1" to every
+/// opaque texture (a BC1 file reports an alpha channel whether or not a block uses it).
+fn alpha_is_opaque(img: &Image) -> Result<bool, IoError> {
+    if !img.layout().has_alpha() {
+        return Ok(true);
+    }
+    let ch = img.layout().channels();
+    let (w, h) = img.dimensions();
+    let row = img.data().len() / (h.max(1) as usize);
+    for rows in img.data().chunks(row.max(1) * (BAND_BYTES / row.max(1)).max(1)) {
+        let n = (rows.len() / row.max(1)) as u32;
+        let vals = Image::from_raw(w, n, img.layout(), img.sample_type(), rows.to_vec())?.to_normalized();
+        if vals.chunks_exact(ch).any(|px| px.last().copied().unwrap_or(1.0) != 1.0) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// Flip a decoded texture image's rows (the GL-vs-D3D origin toggle).
+fn flip_dds_image(img: &mut Image) {
+    let (_, h) = img.dimensions();
+    let row_len = img.data().len() / (h as usize).max(1);
+    let data = img.data_mut();
+    for y in 0..(h as usize) / 2 {
+        for x in 0..row_len {
+            data.swap(y * row_len + x, (h as usize - 1 - y) * row_len + x);
+        }
+    }
+}
+
+/// A DDS texture per `opts`' import answers: its alpha channel kept as the layer's
+/// transparency or routed to an "Alpha 1" document channel (game textures often carry data
+/// such as specular maps in alpha rather than transparency; the NVIDIA/Intel plug-ins' "load
+/// transparency as alpha channel"), its mip chain as one "Mip N" layer per level or the top
+/// level only, and its rows flipped when asked. The channel answer opens the texture opaque,
+/// as a Targa opens — nothing is discarded — but an alpha that is the same value everywhere
+/// holds no data and opens neither channel nor transparency. With a mip chain, only the top
+/// level's alpha becomes the channel.
+fn import_dds(name: &str, bytes: &[u8], opts: &ImportOptions) -> Result<ImportResult, IoError> {
+    let levels = if opts.dds.mips_as_layers {
+        codecs::decode_dds_levels(bytes, &codecs::DecodeOptions::default())?
+    } else {
+        vec![codecs::decode_as(Format::Dds, bytes)?]
+    };
+    import_dds_levels(name, levels, bytes, opts)
+}
+
+/// The level images of a DDS texture as a document: the alpha, mip and flip import answers as
+/// in [`import_dds`], `bytes` for the saved [`file_encoding`].
+fn import_dds_levels(name: &str, mut levels: Vec<Image>, bytes: &[u8], opts: &ImportOptions) -> Result<ImportResult, IoError> {
+    if opts.dds.flip {
+        for img in levels.iter_mut() {
+            flip_dds_image(img);
+        }
+    }
+    let raw_top = levels.first().ok_or_else(|| IoError::Unsupported("the DDS texture declares no mip levels".into()))?;
+    let to_channel = opts.dds.alpha_as_channel && !alpha_is_opaque(raw_top)?;
+    // The top level keeps its alpha when the channel path reads it; the answer decides the
+    // rest — transparency (keep) or channel (strip opaque).
+    let top = dds_alpha(raw_top, !opts.dds.alpha_as_channel || to_channel);
+    let mut r = image_to_document(name, &top)?;
+    if to_channel {
+        tga_alpha_to_channel(&mut r.document)?;
+    }
+    r.document.file_encoding = file_encoding_as(Some(Format::Dds), bytes);
+    if levels.len() == 1 {
+        return Ok(r);
+    }
+    let (_, target_layout, _, csample, _) = image_kind(&top);
+    if let Some(l) = r.document.layers.first_mut() {
+        l.name = "Mip 0".to_string();
+        // The channel answer's opaque Background becomes a normal "Mip 0" layer like the rest.
+        l.locks.transparency = false;
+        l.locks.position = false;
+    }
+    for (i, img) in levels.iter().enumerate().skip(1) {
+        let mut s = image_surface(img, target_layout, csample)?;
+        s.prune();
+        let mut l = Layer::new(format!("Mip {i}"), LayerContent::Raster(s));
+        // Hidden like the plug-ins' mip layers: a visible Mip N would composite over Mip 0 and
+        // change the texture the document shows (and a flattened export writes back).
+        l.visible = false;
+        r.document.layers.push(l);
+    }
+    Ok(r)
+}
+
 /// Opens one page of a TIFF or BigTIFF file: `None` is the page Photoshop opens (the first
 /// full-resolution one), `Some(i)` an index into [`codecs::tiff_info`]'s pages (every IFD and
 /// SubIFD). A page with Photoshop layer data opens layered.
@@ -246,24 +344,31 @@ pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result
 
 /// A decoded flat image as a single-layer document: a locked "Background" when it is opaque, a
 /// normal "Layer 0" when it has transparency.
-pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult, IoError> {
-    // What the decoder noticed (frames or pages left out, data ending early) comes first.
-    let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
+/// The document mode, surface layout and depth a decoded `img` imports as; `warn` is the
+/// F16→F32 note.
+fn image_kind(img: &Image) -> (ColorMode, ChannelLayout, SampleType, CSample, Option<&'static str>) {
     let (mode, target_layout) = match img.layout() {
         ChannelLayout::Gray | ChannelLayout::GrayA => (ColorMode::Grayscale, ChannelLayout::GrayA),
         ChannelLayout::Rgb | ChannelLayout::Rgba => (ColorMode::Rgb, ChannelLayout::Rgba),
         ChannelLayout::Cmyk | ChannelLayout::CmykA => (ColorMode::Cmyk, ChannelLayout::CmykA),
         ChannelLayout::Lab | ChannelLayout::LabA => (ColorMode::Lab, ChannelLayout::LabA),
     };
-    let (depth, csample) = match img.sample_type() {
-        CSample::U8 => (SampleType::U8, CSample::U8),
-        CSample::U16 => (SampleType::U16, CSample::U16),
-        CSample::F16 => {
-            warnings.push("16-bit float samples are stored as 32-bit float".to_string());
-            (SampleType::F32, CSample::F32)
-        }
-        CSample::F32 => (SampleType::F32, CSample::F32),
+    let (depth, csample, warn) = match img.sample_type() {
+        CSample::U8 => (SampleType::U8, CSample::U8, None),
+        CSample::U16 => (SampleType::U16, CSample::U16, None),
+        CSample::F16 => (SampleType::F32, CSample::F32, Some("16-bit float samples are stored as 32-bit float")),
+        CSample::F32 => (SampleType::F32, CSample::F32, None),
     };
+    (mode, target_layout, depth, csample, warn)
+}
+
+pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult, IoError> {
+    // What the decoder noticed (frames or pages left out, data ending early) comes first.
+    let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
+    let (mode, target_layout, depth, csample, warn) = image_kind(img);
+    if let Some(w) = warn {
+        warnings.push(w.to_string());
+    }
     let (w, h) = img.dimensions();
     let mut doc = Document::new(name, Size::new(w, h), mode, depth);
     let mut s = image_surface(img, target_layout, csample)?;

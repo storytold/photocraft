@@ -242,14 +242,20 @@ impl PhotocraftApp {
 
     /// File › Open: opens every chosen file, reporting each failure (see [`Self::open_paths`]).
     pub fn open_dialog_file(&mut self) -> Result<Value, String> {
+        self.open_dialog_file_opts(None)
+    }
+
+    /// [`Self::open_dialog_file`] opening each pick with the DDS import answers `file.open` was
+    /// scripted (`ddsAlphaChannel`/`ddsMipmaps`/`ddsFlip`); `None` is the ordinary prompt-asking open.
+    pub(crate) fn open_dialog_file_opts(&mut self, dds: Option<photocraft_io::DdsImport>) -> Result<Value, String> {
         let initial_dir = last_used_dir(&self.ui.recent_files);
-        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, |app, answer| {
+        self.ask_file(FileDialogRequest::Open { multiple: true, initial_dir, extensions: None }, move |app, answer| {
             match answer {
                 FileDialogAnswer::Paths(paths) => {
-                    app.open_paths(&paths);
+                    app.open_paths_opts(&paths, dds);
                 }
-                FileDialogAnswer::Contents(name, bytes) => app.open_contents(vec![(name, bytes)]),
-                FileDialogAnswer::ContentsMany(files) => app.open_contents(files),
+                FileDialogAnswer::Contents(name, bytes) => app.open_contents_opts(vec![(name, bytes)], dds),
+                FileDialogAnswer::ContentsMany(files) => app.open_contents_opts(files, dds),
                 FileDialogAnswer::FolderTo(_) => return Err(UNEXPECTED.into()),
                 FileDialogAnswer::SaveTo(_) | FileDialogAnswer::Unavailable(_) => return Err(UNEXPECTED.into()),
             }
@@ -258,14 +264,32 @@ impl PhotocraftApp {
     }
 
     /// Opens each picked file's contents as its own document, in name order (like
-    /// [`Self::open_paths`]), reporting each failure.
-    fn open_contents(&mut self, mut files: Vec<(String, Vec<u8>)>) {
+    /// [`Self::open_paths`]), reporting each failure; `dds` is the import answers `file.open`
+    /// was scripted.
+    fn open_contents_opts(&mut self, mut files: Vec<(String, Vec<u8>)>, dds: Option<photocraft_io::DdsImport>) {
         files.sort_by(|a, b| crate::file_open::natural_cmp(&a.0, &b.0));
-        for (name, bytes) in files {
-            if let Err(e) = self.open_bytes(&name, &bytes) {
-                self.open_failed(&name, &e);
+        let batch = crate::jobs_ui::begin_batch(self);
+        for (seq, (name, bytes)) in files.iter().enumerate() {
+            let order = crate::jobs_ui::OpenOrder { batch, seq };
+            let pending = self.jobs.opens.len();
+            let parked = self.dds_imports.len();
+            match self.open_bytes_opts(name, bytes, None, dds) {
+                Ok(_) => {
+                    if self.dds_imports.len() > parked {
+                        if let Some(prompt) = self.dds_imports.back_mut() {
+                            prompt.order = Some(order);
+                        }
+                    } else {
+                        match self.jobs.opens.get_mut(pending) {
+                            Some(tab) => tab.order = Some(order),
+                            None => crate::jobs_ui::opened_in_order(&mut self.jobs, order),
+                        }
+                    }
+                }
+                Err(e) => self.open_failed(name, &e),
             }
         }
+        crate::jobs_ui::end_batch(self);
     }
 
     /// Run `next` on the result of the open dialog's action once it is answered; its result

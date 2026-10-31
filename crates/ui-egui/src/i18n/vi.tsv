@@ -4002,3 +4002,12 @@ curves	Smooth	Làm mượt
 	Select and Mask was closed: another layer was selected	Đã đóng Chọn và Mặt nạ: một lớp khác đã được chọn
 	Select Layer Under Cursor	Chọn lớp dưới con trỏ
 	Edit Brush…	Chỉnh sửa cọ…
+# DDS Import (#8632)
+	DDS Import	Nhập DDS
+	Load transparency as alpha channel	Tải độ trong suốt thành kênh alpha
+	Mipmaps as separate layers	Mipmap thành các lớp riêng
+	Flip vertically	Lật dọc
+	Open cancelled	Đã hủy mở
+	Open failed: {error}	Mở thất bại: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} mức mip

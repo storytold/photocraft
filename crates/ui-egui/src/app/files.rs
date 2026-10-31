@@ -58,18 +58,37 @@ impl PhotocraftApp {
     /// [`Self::open_bytes`] for a file read from `path` (File › Save writes back there; it goes
     /// to Open Recent), when known.
     pub(crate) fn open_bytes_from(&mut self, name: &str, bytes: &[u8], path: Option<&str>) -> Result<Vec<String>, String> {
+        self.open_bytes_opts(name, bytes, path, None)
+    }
+
+    /// [`Self::open_bytes_from`] with the DDS import answers (`ddsAlphaChannel`/`ddsMipmaps`/
+    /// `ddsFlip`); `None` parks the open behind the DDS Import prompt when the texture has
+    /// choices to make (#8632).
+    pub(crate) fn open_bytes_opts(
+        &mut self,
+        name: &str,
+        bytes: &[u8],
+        path: Option<&str>,
+        dds: Option<photocraft_io::DdsImport>,
+    ) -> Result<Vec<String>, String> {
         if let Some(r) = preset_files_ui::open(self, name, bytes) {
             return r.map(|()| Vec::new());
         }
+        if dds.is_none() && crate::dds_import_ui::park_bytes(self, name.to_string(), path.map(str::to_string), bytes) {
+            return Ok(Vec::new());
+        }
         let name = &self.open_name(name);
+        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        if let Some(d) = dds {
+            opts.dds = d;
+        }
         // Decoded on a worker: a tab with progress appears now, the document when it's ready
         // (warnings are shown then).
         if self.background_jobs {
-            jobs_ui::start_open(self, name, path.map(str::to_string), jobs_ui::bytes(bytes))?;
+            jobs_ui::start_open_opts(self, name, path.map(str::to_string), jobs_ui::bytes(bytes), dds)?;
             return Ok(Vec::new());
         }
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
         let (mut doc, warnings, damaged) = if photocraft_io::is_psd(bytes) {
             // Read PSD damage as structured information in the same decode, not by
             // retrying an error or matching the text of a compatibility warning.
@@ -112,13 +131,18 @@ impl PhotocraftApp {
     /// Returns the import warnings (also shown to the user). Brush and gradient
     /// files go to the preset libraries, as for interactive opens.
     pub fn open_automation_bytes(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
+        self.open_automation_bytes_opts(name, bytes, None)
+    }
+
+    /// [`Self::open_automation_bytes`] with the DDS import answers `app.open` params gave.
+    pub fn open_automation_bytes_opts(&mut self, name: &str, bytes: &[u8], dds: Option<photocraft_io::DdsImport>) -> Result<Vec<String>, String> {
         let events_enabled = self.session.prefs().script_events.enabled;
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = false);
         }
         let result = match preset_files_ui::open(self, name, bytes) {
             Some(r) => r.map(|()| Vec::new()),
-            None => self.import_automation_document(name, bytes),
+            None => self.import_automation_document(name, bytes, dds),
         };
         if events_enabled {
             self.session.edit_prefs(|prefs| prefs.script_events.enabled = true);
@@ -128,9 +152,12 @@ impl PhotocraftApp {
 
     /// The document half of [`open_automation_bytes`](Self::open_automation_bytes): no script
     /// events and no Color Settings policy (which may read user-configured profile paths).
-    fn import_automation_document(&mut self, name: &str, bytes: &[u8]) -> Result<Vec<String>, String> {
+    fn import_automation_document(&mut self, name: &str, bytes: &[u8], dds: Option<photocraft_io::DdsImport>) -> Result<Vec<String>, String> {
         let import = self.services.import.as_ref().ok_or("no importer configured")?;
-        let opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        let mut opts = photocraft_engine::jobs::import_options(self.session.prefs());
+        if let Some(d) = dds {
+            opts.dds = d;
+        }
         let (mut doc, warnings) = import(name, bytes, &opts)?;
         photocraft_engine::file_cmds::raw_defaults(&self.session, &warnings, &mut doc);
         // The caller records the path it read from.

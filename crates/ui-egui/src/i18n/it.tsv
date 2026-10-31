@@ -4617,3 +4617,12 @@ shape	Appearance	Aspetto
 	Select and Mask was closed: its document is no longer the active one	Seleziona e maschera è stato chiuso: il suo documento non è più quello attivo
 	Select and Mask was closed: another layer was selected	Seleziona e maschera è stato chiuso: è stato selezionato un altro livello
 	Edit Brush…	Modifica pennello…
+# DDS Import (#8632)
+	DDS Import	Importa DDS
+	Load transparency as alpha channel	Carica trasparenza come canale alfa
+	Mipmaps as separate layers	Mipmap come livelli separati
+	Flip vertically	Capovolgi verticalmente
+	Open cancelled	Apertura annullata
+	Open failed: {error}	Apertura non riuscita: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} livello mip|{n} livelli mip

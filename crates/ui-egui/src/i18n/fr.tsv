@@ -4541,3 +4541,12 @@ shape	Appearance	Apparence
 	Select and Mask was closed: its document is no longer the active one	Sélectionner et masquer a été fermé : son document n’est plus le document actif
 	Select and Mask was closed: another layer was selected	Sélectionner et masquer a été fermé : un autre calque a été sélectionné
 	Edit Brush…	Modifier le pinceau…
+# DDS Import (#8632)
+	DDS Import	Importation DDS
+	Load transparency as alpha channel	Charger la transparence en canal alpha
+	Mipmaps as separate layers	Mipmaps en calques séparés
+	Flip vertically	Retourner verticalement
+	Open cancelled	Ouverture annulée
+	Open failed: {error}	Échec de l'ouverture : {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} niveau mip|{n} niveaux mip

@@ -4181,3 +4181,12 @@ curves	Smooth	スムーズ
 	Select and Mask was closed: another layer was selected	「選択とマスク」を閉じました: 別のレイヤーが選択されました
 	Drag to move the selected path	ドラッグして選択したパスを移動
 	Edit Brush…	ブラシを編集…
+# DDS Import (#8632)
+	DDS Import	DDS インポート
+	Load transparency as alpha channel	透明部分をアルファチャンネルとして読み込む
+	Mipmaps as separate layers	ミップマップを個別のレイヤーとして
+	Flip vertically	垂直に反転
+	Open cancelled	開くのをキャンセルしました
+	Open failed: {error}	開くのに失敗しました: {error}
+	{name} ({width} × {height})	{name}（{width} × {height}）
+@plural	{n} mip level|{n} mip levels	{n} MIPレベル

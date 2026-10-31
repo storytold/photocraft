@@ -1,8 +1,11 @@
-use photocraft_io::ExportOptions;
+use photocraft_io::{DdsImport, ExportOptions, ImportOptions};
 use serde_json::Value;
 use std::io::Write;
 
-use crate::{Result, args::ExportArgs};
+use crate::{
+    Result,
+    args::{ExportArgs, ImportArgs},
+};
 
 /// The `--format` family's options. A bad value never gets here: clap refused it.
 impl From<&ExportArgs> for ExportOptions {
@@ -27,6 +30,17 @@ impl From<&ExportArgs> for ExportOptions {
         }
         o.encode.dds.mipmaps = a.dds_mipmaps;
         o
+    }
+}
+
+/// The DDS open choices `--dds-alpha-channel`, `--dds-mips-as-layers` and `--dds-load-flip`
+/// make; every other import stays at its default.
+impl From<&ImportArgs> for ImportOptions {
+    fn from(a: &ImportArgs) -> Self {
+        ImportOptions {
+            dds: DdsImport { alpha_as_channel: a.dds_alpha_channel, mips_as_layers: a.dds_mips_as_layers, flip: a.dds_load_flip },
+            ..Default::default()
+        }
     }
 }
 

@@ -188,6 +188,7 @@ impl PhotocraftApp {
             targa_options: None,
             jpeg_options: None,
             dds_options: None,
+            dds_imports: Default::default(),
             held_opens: Default::default(),
             allow_close: false,
             stylus: Default::default(),

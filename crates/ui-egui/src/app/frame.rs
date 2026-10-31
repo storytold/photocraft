@@ -313,6 +313,7 @@ impl PhotocraftApp {
         targa_options_ui::show(self, &ctx);
         jpeg_options_ui::show(self, &ctx);
         dds_options_ui::show(self, &ctx);
+        crate::dds_import_ui::show(self, &ctx);
         distort_ui::show(self, &ctx);
         camera_raw_ui::show(self, &ctx);
         wide_angle_ui::show(self, &ctx);

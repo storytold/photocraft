@@ -1,8 +1,8 @@
 //! DirectDraw Surface (DDS) textures, after Microsoft's public DDS documentation ("DDS",
 //! "DDS_HEADER", "DDS_PIXELFORMAT", "DDS_HEADER_DXT10").
 //!
-//! Reading: the top mip level of a 2D texture, either uncompressed (8 to 32 bits per pixel
-//! described by channel masks, RGB or luminance) or block-compressed BC1/BC2/BC3
+//! Reading: a 2D texture, its top mip level or the whole chain, either uncompressed (8 to 32
+//! bits per pixel described by channel masks, RGB or luminance) or block-compressed BC1/BC2/BC3
 //! (DXT1/DXT3/DXT5), with or without the DX10 header. Cubemaps, texture arrays and volume
 //! textures are refused rather than flattened to one face or slice.
 //!
@@ -80,6 +80,7 @@ impl Field {
     }
 }
 
+#[derive(Clone, Copy)]
 enum Encoding {
     /// Uncompressed: bytes per pixel, then red (or luminance), green, blue and alpha.
     Masks {
@@ -106,6 +107,26 @@ impl Encoding {
             return Err(bad("the pixel format has no colour channel masks"));
         }
         Ok(Encoding::Masks { bytes: bits as usize / 8, gray, fields })
+    }
+
+    /// The compression a save could write this encoding back as; `None` when the file's
+    /// form isn't writable.
+    fn compression(&self) -> Option<DdsCompression> {
+        Some(match self {
+            Encoding::Masks { .. } => DdsCompression::None,
+            Encoding::Bc1 => DdsCompression::Bc1,
+            Encoding::Bc2 => DdsCompression::Bc2,
+            Encoding::Bc3 => DdsCompression::Bc3,
+        })
+    }
+
+    /// Whether the encoding carries an alpha channel the decode reads. BC1 counts: it can
+    /// hold 1-bit transparency.
+    fn has_alpha(&self) -> bool {
+        match self {
+            Encoding::Masks { fields, .. } => fields[3].is_some(),
+            _ => true,
+        }
     }
 
     fn layout(&self) -> ChannelLayout {
@@ -191,7 +212,26 @@ fn dx10_encoding(b: &[u8]) -> Result<Encoding, CodecError> {
     }
 }
 
-pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
+/// The parsed header: the encoding, where its pixel data starts, the top level's dimensions,
+/// the declared mip count and the stored row pitch (which is the top level's only).
+struct Parsed<'a> {
+    encoding: Encoding,
+    data: &'a [u8],
+    width: u32,
+    height: u32,
+    levels: u32,
+    pitch: Option<u32>,
+}
+
+impl Parsed<'_> {
+    /// The mip count that can actually exist for this size — the declared field is hostile
+    /// input, and the chain ends at 1×1.
+    fn mip_count(&self) -> u32 {
+        self.levels.min(self.width.max(self.height).max(1).ilog2() + 1)
+    }
+}
+
+fn parse(b: &[u8]) -> Result<Parsed<'_>, CodecError> {
     if !b.starts_with(b"DDS ") {
         return Err(bad("missing the `DDS ` signature"));
     }
@@ -207,12 +247,58 @@ pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
     }
     let dx10 = le32(b, 80)? & DDPF_FOURCC != 0 && &le32(b, 84)?.to_le_bytes() == b"DX10";
     let (encoding, start) = if dx10 { (dx10_encoding(b)?, HEADER + DX10_HEADER) } else { (legacy_encoding(b)?, HEADER) };
-    let layout = encoding.layout();
-    limits.check(width, height, layout, SampleType::U8)?;
+    let levels = if flags & DDSD_MIPMAPCOUNT != 0 { le32(b, 28)?.max(1) } else { 1 };
     // The same header field is a total level size for BC, but a row stride when DDSD_PITCH is set.
     let pitch = if flags & DDSD_PITCH != 0 { Some(le32(b, 20)?) } else { None };
-    let (row_pitch, size) = encoding.level_layout(width, height, pitch)?;
-    let data = b.get(start..).and_then(|d| d.get(..size)).ok_or_else(|| bad(format!("truncated pixel data: {size} bytes needed")))?;
+    Ok(Parsed { encoding, data: b.get(start..).unwrap_or_default(), width, height, levels, pitch })
+}
+
+pub(crate) fn decode(b: &[u8], limits: &Limits) -> Result<Image, CodecError> {
+    level_image(&parse(b)?, 0, limits)
+}
+
+/// Every declared mip level as an image, largest first; [`decode`] reads the top one. The
+/// chain ends at 1×1, so a header claiming more levels than reduce to it reads that many —
+/// the field is hostile input, and each level re-walks the ones before it.
+pub(crate) fn decode_levels(b: &[u8], limits: &Limits) -> Result<Vec<Image>, CodecError> {
+    let p = parse(b)?;
+    (0..p.mip_count()).map(|i| level_image(&p, i, limits)).collect()
+}
+
+/// The image of mip `index` (`0` is the top level). Levels are stored largest first and,
+/// except the top level's stored pitch, tightly packed.
+fn level_image(p: &Parsed, index: u32, limits: &Limits) -> Result<Image, CodecError> {
+    let mut at = 0usize;
+    let (mut w, mut h) = (p.width, p.height);
+    for i in 0..index {
+        let pitch = if i == 0 { p.pitch } else { None };
+        let (_, size) = p.encoding.level_layout(w, h, pitch)?;
+        at = at.checked_add(size).ok_or_else(|| bad("pixel data size overflow"))?;
+        w = (w / 2).max(1);
+        h = (h / 2).max(1);
+    }
+    let pitch = if index == 0 { p.pitch } else { None };
+    let (row_pitch, size) = p.encoding.level_layout(w, h, pitch)?;
+    limits.check(w, h, p.encoding.layout(), SampleType::U8)?;
+    let data = p.data.get(at..).and_then(|d| d.get(..size)).ok_or_else(|| bad(format!("truncated pixel data: {size} bytes needed")))?;
+    decode_image(p.encoding, data, w, h, row_pitch)
+}
+
+/// What File › Open's DDS prompt asks about, read from the header without decoding — and the
+/// encoding a save could write back, for the options dialog's match-source defaults.
+pub(crate) fn info(b: &[u8]) -> Result<crate::options::DdsInfo, CodecError> {
+    let p = parse(b)?;
+    Ok(crate::options::DdsInfo {
+        width: p.width,
+        height: p.height,
+        levels: p.mip_count(),
+        alpha: p.encoding.has_alpha(),
+        compression: p.encoding.compression(),
+    })
+}
+
+fn decode_image(encoding: Encoding, data: &[u8], width: u32, height: u32, row_pitch: usize) -> Result<Image, CodecError> {
+    let layout = encoding.layout();
     let (w, h) = (width as usize, height as usize);
     let channels = layout.channels();
     let row_size = w.checked_mul(channels).ok_or_else(|| bad("pixel size overflow"))?;

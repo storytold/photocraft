@@ -4575,3 +4575,12 @@ shape	Appearance	Izgled
 	Select Layer Under Cursor	Izaberi sloj ispod kursora
 	Drag to move the selected path	Prevucite da pomerite izabranu putanju
 	Edit Brush…	Uredi četkicu…
+# DDS Import (#8632)
+	DDS Import	Uvoz DDS
+	Load transparency as alpha channel	Učitaj providnost kao alfa kanal
+	Mipmaps as separate layers	Mipmape kao zasebni slojevi
+	Flip vertically	Obrni vertikalno
+	Open cancelled	Otvaranje otkazano
+	Open failed: {error}	Otvaranje nije uspelo: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} mip nivo|{n} mip nivoa|{n} mip nivoa

@@ -3143,3 +3143,12 @@ curves	Smooth	平滑
 	Select and Mask was closed: another layer was selected	已關閉「選取並遮住」：已選取另一個圖層
 	Drag to move the selected path	拖曳以移動選取的路徑
 	Edit Brush…	編輯筆刷…
+# DDS Import (#8632)
+	DDS Import	DDS 匯入
+	Load transparency as alpha channel	將透明度載入為 Alpha 通道
+	Mipmaps as separate layers	Mipmap 作為單獨圖層
+	Flip vertically	垂直翻轉
+	Open cancelled	已取消開啟
+	Open failed: {error}	開啟失敗：{error}
+	{name} ({width} × {height})	{name}（{width} × {height}）
+@plural	{n} mip level|{n} mip levels	{n} 個 Mip 層級

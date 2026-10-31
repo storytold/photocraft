@@ -3524,3 +3524,12 @@ curves	Smooth	Glätten
 	Select and Mask was closed: its document is no longer the active one	Auswählen und maskieren wurde geschlossen: Das zugehörige Dokument ist nicht mehr aktiv
 	Select and Mask was closed: another layer was selected	Auswählen und maskieren wurde geschlossen: Es wurde eine andere Ebene ausgewählt
 	Edit Brush…	Pinsel bearbeiten…
+# DDS Import (#8632)
+	DDS Import	DDS-Import
+	Load transparency as alpha channel	Transparenz als Alphakanal laden
+	Mipmaps as separate layers	Mipmaps als eigene Ebenen
+	Flip vertically	Vertikal spiegeln
+	Open cancelled	Öffnen abgebrochen
+	Open failed: {error}	Öffnen fehlgeschlagen: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} Mip-Level|{n} Mip-Levels

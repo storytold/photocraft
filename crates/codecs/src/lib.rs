@@ -41,7 +41,8 @@ pub use crate::image::{
     MAX_EXTRA_SAMPLES, Metadata, SampleType,
 };
 pub use crate::options::{
-    DdsCompression, DdsOptions, DecodeOptions, DpxBits, EncodeOptions, ExrCompression, JpegFormat, Limits, PngCompression, PngStereo, TiffCompression,
+    DdsCompression, DdsImport, DdsInfo, DdsOptions, DecodeOptions, DpxBits, EncodeOptions, ExrCompression, JpegFormat, Limits, PngCompression, PngStereo,
+    TiffCompression,
 };
 pub use crate::orientation::{exif_orientation, upright_exif, upright_xmp};
 pub use crate::resolution::{exif_resolution, export_exif, export_xmp, photoshop_resolution, xmp_resolution};
@@ -169,6 +170,19 @@ pub fn decode_tiff_page(bytes: &[u8], page: usize, opts: &DecodeOptions) -> Resu
 /// [`MAX_GIF_FRAMES`] and `opts.limits` for what is refused.
 pub fn decode_gif_frames(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<AnimationFrame>, CodecError> {
     crate::codecs::gif_frames::decode(bytes, opts)
+}
+
+/// Decodes every declared mip level of a DDS texture, largest first; [`decode`] reads the top
+/// level only. Level pixels are read as the file stores them (the top level's pitch applies to
+/// level 0); a level that ends before its size fails the whole decode.
+pub fn decode_dds_levels(bytes: &[u8], opts: &DecodeOptions) -> Result<Vec<Image>, CodecError> {
+    dds::decode_levels(bytes, &opts.limits)
+}
+
+/// A DDS texture's dimensions, mip count and whether it carries alpha, read from the header
+/// without decoding: what File › Open's DDS prompt asks about.
+pub fn dds_info(bytes: &[u8]) -> Result<DdsInfo, CodecError> {
+    dds::info(bytes)
 }
 
 /// Decodes every frame of a WebP (a still one yields one frame with a 0 delay, as [`decode`]

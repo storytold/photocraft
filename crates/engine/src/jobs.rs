@@ -514,6 +514,7 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     photocraft_io::ImportOptions {
         max_group_depth: prefs.file_handling.rasterize_svg_groups_deeper_than as usize,
         demosaic: prefs.raw_defaults.demosaic.method(),
+        ..Default::default()
     }
 }
 
@@ -542,23 +543,28 @@ impl Session {
     /// result is `{held, name, warnings, color}` (`color` the question): take it with
     /// [`Session::take_held_open`] once answered.
     pub fn start_open(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_inner(name, source, false)
+        self.start_open_inner(name, source, import_options(self.prefs()), false)
     }
 
     /// Interactive opening: hold a damaged PSD until the user answers a damage
     /// confirmation, without changing import or subsequent save behaviour.
     /// Headless callers keep using [`Self::start_open`].
     pub fn start_open_for_user(&mut self, name: &str, source: OpenSource) -> Result<Started> {
-        self.start_open_inner(name, source, true)
+        self.start_open_inner(name, source, import_options(self.prefs()), true)
+    }
+
+    /// [`Self::start_open_for_user`] with `opts` as the import options: File › Open's DDS prompt
+    /// answers go through here, replacing the preferences' DDS defaults.
+    pub fn start_open_with_options(&mut self, name: &str, source: OpenSource, opts: photocraft_io::ImportOptions) -> Result<Started> {
+        self.start_open_inner(name, source, opts, true)
     }
 
     /// Decodes a file in a job and optionally holds damaged PSD content for
     /// interactive confirmation while leaving headless opens non-interactive.
-    fn start_open_inner(&mut self, name: &str, source: OpenSource, confirm_damage: bool) -> Result<Started> {
+    fn start_open_inner(&mut self, name: &str, source: OpenSource, opts: photocraft_io::ImportOptions, confirm_damage: bool) -> Result<Started> {
         let label = format!("Opening {name}");
         let name_w = name.to_string();
         let name_a = name.to_string();
-        let opts = import_options(self.prefs());
         self.start_job(
             OPEN_JOB,
             json!({"name": name}),

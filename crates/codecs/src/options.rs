@@ -270,6 +270,36 @@ pub struct DdsOptions {
     pub mipmaps: bool,
 }
 
+/// How a DDS texture opens.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct DdsImport {
+    /// Where the texture's alpha goes: the layer's transparency (the default), or an "Alpha 1"
+    /// document channel preserving it as editable data — game textures often carry data such
+    /// as specular maps in alpha rather than transparency (the NVIDIA/Intel plug-ins' "load
+    /// transparency as alpha channel").
+    pub alpha_as_channel: bool,
+    /// A layer per mip level (the Intel Texture Works plugin's choice), not the top level only.
+    pub mips_as_layers: bool,
+    /// Flip rows vertically on open (the GIMP plug-in's "load flipped" toggle for textures
+    /// written for the opposite GL/D3D origin convention).
+    pub flip: bool,
+}
+
+/// What [`crate::dds_info`] reports about a DDS texture, from its header alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DdsInfo {
+    /// The top mip level's size.
+    pub width: u32,
+    pub height: u32,
+    /// The declared mip count (1 = the top level only).
+    pub levels: u32,
+    /// The encoding carries an alpha channel.
+    pub alpha: bool,
+    /// The compression a save could write back; `None` when the encoding has no writable
+    /// form.
+    pub compression: Option<DdsCompression>,
+}
+
 /// Options for [`crate::encode`].
 #[derive(Debug, Clone)]
 pub struct EncodeOptions {

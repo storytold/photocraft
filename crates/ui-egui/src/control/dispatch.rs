@@ -1366,7 +1366,10 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     let p = &req.params;
     Some(match req.method.as_str() {
         "app.open" => match str_param(p, "path") {
-            Some(path) => app_open(app, path),
+            Some(path) => match crate::dds_import_ui::params(p) {
+                Ok(dds) => app_open(app, path, dds),
+                Err(e) => err(e),
+            },
             None => err("missing `path`"),
         },
         "app.save" => match crate::FormatChoices::from_params(p, "app.save") {
@@ -1385,7 +1388,7 @@ fn app_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReques
     })
 }
 
-fn app_open(app: &mut PhotocraftApp, path: &str) -> Outcome {
+fn app_open(app: &mut PhotocraftApp, path: &str, dds: Option<photocraft_io::DdsImport>) -> Outcome {
     if let Some(outcome) = open_pcraft_directory(app, path) {
         return outcome;
     }
@@ -1395,7 +1398,7 @@ fn app_open(app: &mut PhotocraftApp, path: &str) -> Outcome {
     };
     wrap(opened.and_then(|(name, bytes)| {
         let name = app.open_name(&name);
-        let warnings = app.open_automation_bytes(&name, &bytes)?;
+        let warnings = app.open_automation_bytes_opts(&name, &bytes, dds)?;
         // Brushes/gradients go to the preset libraries: no document, no Open Recent entry.
         if !crate::preset_files_ui::is_preset_file(&name) {
             app.opened_from(path);

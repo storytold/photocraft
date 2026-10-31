@@ -4123,3 +4123,12 @@ curves	Smooth	Wygładź
 	Select and Mask was closed: another layer was selected	Zamknięto Zaznacz i maskuj: wybrano inną warstwę
 	Select Layer Under Cursor	Zaznacz warstwę pod kursorem
 	Edit Brush…	Edytuj pędzel…
+# DDS Import (#8632)
+	DDS Import	Import DDS
+	Load transparency as alpha channel	Wczytaj przezroczystość jako kanał alfa
+	Mipmaps as separate layers	Mipmapy jako osobne warstwy
+	Flip vertically	Odwróć w pionie
+	Open cancelled	Otwieranie anulowane
+	Open failed: {error}	Otwieranie nie powiodło się: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} poziom mip|{n} poziomy mip|{n} poziomów mip

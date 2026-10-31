@@ -585,3 +585,12 @@ cameraRaw	Yellow	पीला
 	Select and Mask was closed: its document is no longer the active one	चयन और मास्क बंद कर दिया गया: उसका दस्तावेज़ अब सक्रिय नहीं है
 	Select and Mask was closed: another layer was selected	चयन और मास्क बंद कर दिया गया: दूसरी लेयर चुनी गई
 	Edit Brush…	ब्रश संपादित करें…
+# DDS Import (#8632)
+	DDS Import	DDS इम्पोर्ट
+	Load transparency as alpha channel	पारदर्शिता को ऐल्फ़ा चैनल के रूप में लोड करें
+	Mipmaps as separate layers	मिपमैप्स को अलग लेयर्स के रूप में
+	Flip vertically	लंबवत पलटें
+	Open cancelled	खोलना रद्द किया गया
+	Open failed: {error}	खोलने में विफल: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} मिप स्तर|{n} मिप स्तर

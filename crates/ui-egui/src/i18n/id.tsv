@@ -3525,3 +3525,12 @@ curves	Smooth	Haluskan
 	Select and Mask was closed: another layer was selected	Seleksi dan Mask ditutup: layer lain dipilih
 	Select Layer Under Cursor	Pilih Lapisan di Bawah Kursor
 	Edit Brush…	Edit Kuas…
+# DDS Import (#8632)
+	DDS Import	Impor DDS
+	Load transparency as alpha channel	Muat transparansi sebagai kanal alfa
+	Mipmaps as separate layers	Mipmap sebagai lapisan terpisah
+	Flip vertically	Balik vertikal
+	Open cancelled	Buka dibatalkan
+	Open failed: {error}	Gagal membuka: {error}
+	{name} ({width} × {height})	{name} ({width} × {height})
+@plural	{n} mip level|{n} mip levels	{n} level mip
