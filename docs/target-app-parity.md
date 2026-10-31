@@ -90,8 +90,7 @@ Weights reflect what a working Photoshop user depends on (photographers, retouch
 ## Mainstream practitioner: ~43%
 
 The same question for the typical professional Photoshop user (photographer, retoucher,
-designer), not the whole product. Method: craftrules `standards/progress-docs.md`. Areas a
-professional uses weekly (the [alpha-gate](roadmap.md#alpha-gate) workflows plus their everyday
+designer), not the whole product. Areas a professional uses weekly (the [alpha-gate](roadmap.md#alpha-gate) workflows plus their everyday
 tools), depth from the [feature areas](#feature-areas) table. Left out: AI, plug-ins and
 scripting, Libraries/cloud, video, specialist hardware (tilt, Touch Bar), languages.
 

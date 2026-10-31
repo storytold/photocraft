@@ -362,7 +362,7 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
             }
         }
         DialogKind::About => {
-            // Tabs About · Contributors · Models (craftrules standards/contributors.md). The
+            // Tabs About · Contributors · Models. The
             // tab is a dialog field, so automation can switch it with `ui.dialog.set`.
             let tab = about_tab(fields);
             let mut chosen = tab;

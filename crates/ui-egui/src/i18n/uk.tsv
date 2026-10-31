@@ -123,7 +123,7 @@
 
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -4028,17 +4028,8 @@ curves	Smooth	Згладити
 	Kept {name}: written by another application	{name} залишено без змін: записаний іншою програмою
 	Shadow Tint	Відтінок тіней
 	Check for Updates…	Перевірити оновлення…
-	PhotoCraft Updates	Оновлення PhotoCraft
-	Checking for updates…	Перевірка оновлень…
 	Open the release page to choose an installer for your system.	Відкрийте сторінку випуску й виберіть інсталятор для своєї системи.
-	Open Download Page	Відкрити сторінку завантаження
-	PhotoCraft is up to date.	PhotoCraft оновлено до останньої версії.
-	Could not check for updates.	Не вдалося перевірити оновлення.
-	Updates have not been checked yet.	Оновлення ще не перевірялися.
-	Check Again	Перевірити знову
 	Automatically Check for Updates	Автоматично перевіряти оновлення
-	Installed version: {version}	Встановлена версія: {version}
-	PhotoCraft {version} is available.	Доступна версія PhotoCraft {version}.
 	Paints from the History panel's source state	Малює з вихідного стану панелі «Історія»
 	Sets the source for the history brush	Задає джерело для пензля історії
 	Highlight Mode	Режим світлих тонів

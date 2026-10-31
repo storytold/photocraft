@@ -2629,7 +2629,7 @@ cameraRaw	Roughness	Ruhet
 	Frequency	Frekvens
 	Use tablet pressure to change pen width	Bruk trykk fra tegnebrett til å endre pennbredden
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 	About	Om
 	Contributors	Bidragsytere
 	Models	Modeller
@@ -3278,17 +3278,8 @@ curves	Smooth	Jevn ut
 	Shadow Opacity	Skyggedekkevne
 # PhotoCraft release checks.
 	Check for Updates…	Se etter oppdateringer…
-	PhotoCraft Updates	PhotoCraft-oppdateringer
-	Checking for updates…	Ser etter oppdateringer…
 	Open the release page to choose an installer for your system.	Åpne utgivelsessiden for å velge en installasjonspakke for systemet ditt.
-	Open Download Page	Åpne nedlastingssiden
-	PhotoCraft is up to date.	PhotoCraft er oppdatert.
-	Could not check for updates.	Kunne ikke se etter oppdateringer.
-	Updates have not been checked yet.	Oppdateringer er ikke sjekket ennå.
-	Check Again	Sjekk igjen
 	Automatically Check for Updates	Se etter oppdateringer automatisk
-	Installed version: {version}	Installert versjon: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} er tilgjengelig.
 # Embedded Profile Mismatch: profile names beside the choices, Remember this choice
 	Use the embedded profile ({profile})	Bruk den innebygde profilen ({profile})
 	Convert to the working space ({profile})	Konverter til arbeidsfargerommet ({profile})
@@ -4723,7 +4714,6 @@ shape	Appearance	Utseende
 	Level:	Nivå:
 	Percentile:	Persentil:
 	Refine Edge…	Forbedre kant…
-	Release Notes	Versjonsmerknader
 	Remember Settings	Husk innstillinger
 	Reset Essentials	Tilbakestill grunnleggende
 	Rounded Rectangle Tool	Verktøy for avrundet rektangel
@@ -4734,7 +4724,6 @@ shape	Appearance	Utseende
 	Tile Horizontally	Side om side vannrett
 	Tile Vertically	Side om side loddrett
 	Uncached Refresh	Oppdater uten buffer
-	Update and Restart	Oppdater og start på nytt
 	Warming Filter (81)	Oppvarmingsfilter (81)
 	Warming Filter (LBA)	Oppvarmingsfilter (LBA)
 @plural	{n} document|{n} documents	{n} dokument|{n} dokumenter

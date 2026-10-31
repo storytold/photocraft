@@ -3942,17 +3942,8 @@ curves	Smooth	Wygładź
 	Kept {name}: written by another application	Zachowano {name}: zapisany przez inną aplikację
 	Shadow Tint	Tinta cieni
 	Check for Updates…	Sprawdź aktualizacje…
-	PhotoCraft Updates	Aktualizacje PhotoCraft
-	Checking for updates…	Sprawdzanie aktualizacji…
 	Open the release page to choose an installer for your system.	Otwórz stronę wydania, aby wybrać instalator dla swojego systemu.
-	Open Download Page	Otwórz stronę pobierania
-	PhotoCraft is up to date.	PhotoCraft jest aktualny.
-	Could not check for updates.	Nie udało się sprawdzić aktualizacji.
-	Updates have not been checked yet.	Aktualizacje nie zostały jeszcze sprawdzone.
-	Check Again	Sprawdź ponownie
 	Automatically Check for Updates	Automatycznie sprawdzaj aktualizacje
-	Installed version: {version}	Zainstalowana wersja: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} jest dostępny.
 	Paints from the History panel's source state	Maluje ze stanu źródłowego panelu Historia
 	Sets the source for the history brush	Ustawia źródło dla pędzla historii
 	Highlight Mode	Tryb świateł
