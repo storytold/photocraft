@@ -330,7 +330,7 @@ impl Resources {
         };
         let encode_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("pc_encode"),
-            entries: &[unfilterable, uniform_entry(1, 16, wgpu::ShaderStages::FRAGMENT, false)],
+            entries: &[unfilterable, uniform_entry(1, 16, wgpu::ShaderStages::FRAGMENT, true)],
         });
         let encode_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("pc_encode"),
