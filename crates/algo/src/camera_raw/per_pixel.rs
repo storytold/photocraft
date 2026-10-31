@@ -206,7 +206,7 @@ pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) ->
 /// stages don't run it), or Whites or Blacks is set without `points`. The points themselves
 /// leave Calibration out, so a caller may cache them across Calibration changes.
 pub fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<(f32, f32)>) -> Option<PerPixel> {
-    if p.spatial() || !p.calibration_neutral() {
+    if p.profile != super::ColorProfile::Standard || p.spatial() || !p.calibration_neutral() {
         return None;
     }
     let identity = p.is_identity();

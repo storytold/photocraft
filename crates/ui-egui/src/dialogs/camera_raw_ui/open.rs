@@ -1,6 +1,6 @@
 use super::convert::{apply_raw_conversions, open_pixels, output_sharpening, raw_conversions};
 use super::sidecar::{read_sidecar, write_sidecar};
-use super::{CameraRaw, LayerId, PhotocraftApp, Rect, Value, json};
+use super::{CameraRaw, LayerId, PhotocraftApp, RawWhiteBalance, Rect, Value, json};
 
 /// Opens the dialog on the active layer.
 /// Where OK writes: a new filter on the layer, or an existing smart filter (by index).
@@ -30,6 +30,10 @@ pub struct RawOpen {
     pub developed_with: photocraft_io::raw::Demosaic,
     /// The method chosen in the dialog: Open re-develops when it differs from `developed_with`.
     pub demosaic: photocraft_io::raw::Demosaic,
+    /// Balance used to develop the current baseline. Changing it reopens the source RAW.
+    pub balance: RawWhiteBalance,
+    /// Sliders preserved when a balance change replaces the baseline document.
+    pub settings: Option<CameraRaw>,
 }
 
 /// Should an interactive open of `name` show the open-time Camera Raw dialog? `warnings` are
@@ -68,6 +72,8 @@ pub fn queue_open_dialog(
         bytes: bytes.map(|b| std::sync::Arc::new(b.to_vec())),
         developed_with: method,
         demosaic: method,
+        balance: RawWhiteBalance::AsShot,
+        settings: None,
     });
     Ok(())
 }
@@ -93,6 +99,10 @@ pub(super) fn open_raw(app: &mut PhotocraftApp, ctx: &egui::Context, raw: RawOpe
             )
         };
         app.ui.status_error = false;
+    }
+    if let Some(kept) = &raw.settings {
+        params = kept.clone();
+        from_sidecar = true;
     }
     open_pixels(app, ctx, layer, surf, params, Coverage::None, Target::OpenRaw)?;
     // Camera Raw Defaults › Apply auto tone: a file without its own settings opens with Auto.
@@ -151,6 +161,8 @@ pub struct Redevelop {
     /// The job is the final Camera Raw step (`filter.cameraRaw`), not the re-develop: when it
     /// lands the Camera Raw Defaults' conversions follow and the document is marked unmodified.
     filter_step: bool,
+    /// This job changes the baseline and reopens the dialog instead of accepting it.
+    reopen_balance: bool,
     /// The Camera Raw Defaults the open started with, for the conversions after the filter step.
     defaults: photocraft_engine::prefs::RawDefaults,
 }
@@ -170,6 +182,7 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
     let index = document_index(app, raw.document).ok_or("the raw document was closed")?;
     write_sidecar(app, raw, params, loaded);
     let tuning = photocraft_io::raw::RawTuning {
+        white_balance: raw.balance,
         temperature: params.temperature,
         tint: params.tint,
         exposure: params.exposure,
@@ -181,7 +194,7 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         dehaze: params.dehaze,
     };
     // The open itself: the default settings, developed with the method it was opened with.
-    let as_opened = photocraft_io::raw::RawTuning { demosaic: raw.developed_with, ..Default::default() };
+    let as_opened = photocraft_io::raw::RawTuning { white_balance: raw.balance, demosaic: raw.developed_with, ..Default::default() };
     // Without the file the raw-stage settings stay RGB adjustments, like the filter's.
     let source = match (&raw.bytes, &raw.path) {
         (Some(b), _) => Some(photocraft_engine::jobs::OpenSource::Bytes(b.clone())),
@@ -225,7 +238,7 @@ pub(super) fn commit_open_raw(app: &mut PhotocraftApp, params: &CameraRaw, raw: 
         }
         photocraft_engine::jobs::Started::Job(job) => {
             let defaults = app.session.prefs().raw_defaults.clone();
-            app.raw_redevelop.push(Redevelop { job, params: params.clone(), raw: raw.clone(), filter_step: false, defaults });
+            app.raw_redevelop.push(Redevelop { job, params: params.clone(), raw: raw.clone(), filter_step: false, reopen_balance: false, defaults });
             app.ui.status = label;
             app.ui.status_error = false;
             Ok(json!({"job": job.0, "pending": true}))
@@ -324,7 +337,7 @@ fn finish_open_raw(
             && let Some(job) = r.get("job").and_then(Value::as_u64)
         {
             let job = photocraft_engine::jobs::JobId(job);
-            app.raw_redevelop.push(Redevelop { job, params: rest.clone(), raw: raw.clone(), filter_step: true, defaults: d.clone() });
+            app.raw_redevelop.push(Redevelop { job, params: rest.clone(), raw: raw.clone(), filter_step: true, reopen_balance: false, defaults: d.clone() });
             result["filter"] = r;
             mark_unmodified(app, index);
             return Ok(result);
@@ -349,7 +362,16 @@ pub fn opened_without_dialog(app: &mut PhotocraftApp, index: usize, name: &str, 
     }
     let Some(document) = app.session.documents().get(index).map(|st| st.doc.id) else { return };
     let method = photocraft_io::raw::developed_demosaic(warnings).unwrap_or_else(|| app.session.prefs().raw_defaults.demosaic.method());
-    let raw = RawOpen { document, name: name.to_string(), path: path.map(str::to_string), bytes: None, developed_with: method, demosaic: method };
+    let raw = RawOpen {
+        document,
+        name: name.to_string(),
+        path: path.map(str::to_string),
+        bytes: None,
+        developed_with: method,
+        demosaic: method,
+        balance: RawWhiteBalance::AsShot,
+        settings: None,
+    };
     let mut params = CameraRaw::default();
     let sidecar = path.and_then(read_sidecar).map(|(loaded, _, _)| loaded);
     if let Some(loaded) = &sidecar {
@@ -402,11 +424,133 @@ fn mark_unmodified(app: &mut PhotocraftApp, index: usize) {
     app.sync_views();
 }
 
+/// Only work for this open-time source can replace the dialog's current baseline.
+pub(super) fn raw_dialog_busy(app: &PhotocraftApp) -> bool {
+    app.camera_raw
+        .as_ref()
+        .filter(|d| d.target == Target::OpenRaw)
+        .and_then(|d| d.raw_open.as_ref())
+        .is_some_and(|raw| app.raw_redevelop.iter().any(|job| job.raw.document == raw.document))
+}
+
+/// A preset is part of RAW development, not a relative RGB filter. Re-develop the original
+/// bytes on the normal job worker, then rebuild both the proxy and full-resolution preview
+/// from that same baseline. Failed/cancelled jobs leave the current dialog and image intact.
+pub(super) fn change_balance(app: &mut PhotocraftApp, balance: RawWhiteBalance) -> Result<Value, String> {
+    if raw_dialog_busy(app) {
+        return Err(tl!("A RAW development is already running").into());
+    }
+    let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    let mut raw = d.raw_open.clone().ok_or(tl!("White-balance presets require an open RAW file"))?;
+    if raw.balance == balance {
+        return Ok(json!({"whiteBalance": balance.id(), "changed": false}));
+    }
+    let params = d.params.clone();
+    let source = match (&raw.bytes, &raw.path) {
+        (Some(b), _) => photocraft_engine::jobs::OpenSource::Bytes(b.clone()),
+        #[cfg(not(target_arch = "wasm32"))]
+        (None, Some(p)) => photocraft_engine::jobs::OpenSource::Path(p.clone()),
+        _ => return Err(tl!("The original RAW file is unavailable").into()),
+    };
+    let (doc_id, name, demosaic) = (raw.document, raw.name.clone(), raw.developed_with);
+    let label = tl!("Updating RAW white balance").to_string();
+    raw.balance = balance;
+    let work = move |ctx: &photocraft_engine::jobs::JobCtx| -> photocraft_engine::Result<(photocraft_io::ImportResult, bool)> {
+        ctx.progress(0.0, "Reading");
+        let bytes = match source {
+            photocraft_engine::jobs::OpenSource::Bytes(b) => b,
+            #[cfg(not(target_arch = "wasm32"))]
+            photocraft_engine::jobs::OpenSource::Path(p) => {
+                std::sync::Arc::new(std::fs::read(p).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))?)
+            }
+            #[cfg(target_arch = "wasm32")]
+            photocraft_engine::jobs::OpenSource::Path(_) => {
+                return Err(photocraft_engine::EngineError::Other("RAW file paths are unavailable in the browser; open the file as bytes".into()));
+            }
+        };
+        let tuning = photocraft_io::raw::RawTuning { white_balance: balance, demosaic, ..Default::default() };
+        photocraft_io::raw::import_raw_tuned(&name, &bytes, &tuning).map_err(|e| photocraft_engine::EngineError::Other(e.to_string()))
+    };
+    let apply = move |s: &mut photocraft_engine::Session, (r, wb)| replace_raw_document(s, doc_id, r, wb);
+    let started = if app.background_jobs {
+        let previous_active = app.session.active_index();
+        let raw_index = document_index(app, doc_id).ok_or("the raw document was closed")?;
+        app.session.set_active(raw_index);
+        let started =
+            app.session.start_job("cameraRaw.whiteBalance", json!({"whiteBalance": balance.id()}), &label, true, work, apply).map_err(|e| e.to_string());
+        if let Some(index) = previous_active {
+            app.session.set_active(index);
+        }
+        started?
+    } else {
+        let v = work(&photocraft_engine::jobs::JobCtx::new()).and_then(|r| apply(&mut app.session, r)).map_err(|e| e.to_string())?;
+        photocraft_engine::jobs::Started::Done(v)
+    };
+    match started {
+        photocraft_engine::jobs::Started::Done(v) => {
+            finish_balance_change(app, raw, &params, &v)?;
+            Ok(json!({"whiteBalance": balance.id(), "changed": true}))
+        }
+        photocraft_engine::jobs::Started::Job(job) => {
+            app.raw_redevelop.push(Redevelop {
+                job,
+                params,
+                raw,
+                filter_step: false,
+                reopen_balance: true,
+                defaults: app.session.prefs().raw_defaults.clone(),
+            });
+            app.ui.status = label;
+            app.ui.status_error = false;
+            Ok(json!({"job": job.0, "pending": true}))
+        }
+    }
+}
+
+/// Rebuilds the dialog only if its source is still open, preserving the latest slider edits.
+fn finish_balance_change(app: &mut PhotocraftApp, mut raw: RawOpen, _params: &CameraRaw, v: &Value) -> Result<(), String> {
+    let id = v.get("docId").and_then(Value::as_u64).map(photocraft_doc::DocId).ok_or("the re-develop returned no document identity")?;
+    document_index(app, id).ok_or("the re-developed document was closed")?;
+    for view in app.view_docs.iter_mut().filter(|id| **id == raw.document) {
+        *view = id;
+    }
+    let latest = app.camera_raw.as_ref().and_then(|d| d.raw_open.as_ref().filter(|r| r.document == raw.document).map(|_| d.params.clone()));
+    let Some(latest) = latest else {
+        if let Some(index) = document_index(app, id) {
+            let _ = app.session.close(index);
+        }
+        app.sync_views();
+        return Ok(());
+    };
+    raw.document = id;
+    raw.settings = Some(latest);
+    let warnings: Vec<String> =
+        v.get("warnings").and_then(Value::as_array).map(|a| a.iter().filter_map(|w| w.as_str().map(str::to_string)).collect()).unwrap_or_default();
+    crate::notices::io_warnings(app, &format!("Opened {}", raw.name), &warnings);
+    app.camera_raw = None;
+    app.pending_raw_open = Some(raw);
+    app.sync_views();
+    Ok(())
+}
+
 /// A finished background re-develop ([`REDEVELOP_JOB`]) or open-time Camera Raw step. `true`
 /// when the event was one of those (handled here).
 pub fn on_redevelop_event(app: &mut PhotocraftApp, e: &photocraft_engine::jobs::JobEvent) -> bool {
     let Some(at) = app.raw_redevelop.iter().position(|r| r.job == e.id) else { return false };
     let pending = app.raw_redevelop.remove(at);
+    if pending.reopen_balance {
+        match &e.outcome {
+            photocraft_engine::jobs::JobOutcome::Done(v) => {
+                if let Err(err) = finish_balance_change(app, pending.raw, &pending.params, v) {
+                    crate::notices::error(app, err);
+                }
+            }
+            photocraft_engine::jobs::JobOutcome::Failed(err) => crate::notices::error(app, err.clone()),
+            photocraft_engine::jobs::JobOutcome::Cancelled => {}
+        }
+        return true;
+    }
+
     if pending.filter_step {
         // The Camera Raw Defaults' conversions follow the Camera Raw step, whatever its outcome:
         // the document still opens in the workflow's colour space and depth.

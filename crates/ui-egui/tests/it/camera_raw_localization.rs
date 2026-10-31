@@ -4,6 +4,91 @@ use egui_kittest::{Harness, kittest::Queryable};
 use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui, control, i18n, theme::ThemeKind};
 use serde_json::json;
 
+/// Checks profile labels in the plain catalog used by dropdowns, guarding against context-only translations.
+#[test]
+fn raw_balance_menu_in_italian_labels_match_the_plain_ui_catalog() {
+    let lang = i18n::Lang::from_code("it").unwrap();
+    // tl! and widgets::dropdown read the plain catalog. Checking only tr_ctx
+    // could pass while the actual dialog still displayed the English labels.
+    for (source, expected) in [
+        ("PhotoCraft Standard", "PhotoCraft Standard"),
+        ("PhotoCraft Color", "PhotoCraft Colori"),
+        ("PhotoCraft Vivid", "PhotoCraft Intenso"),
+        ("PhotoCraft Landscape", "PhotoCraft Paesaggio"),
+        ("PhotoCraft Portrait", "PhotoCraft Ritratto"),
+        ("PhotoCraft Monochrome", "PhotoCraft Monocromatico"),
+        ("Original PhotoCraft looks; not Adobe profiles", "Look originali PhotoCraft; diversi dai profili Adobe"),
+    ] {
+        assert_eq!(i18n::tr(lang, source), expected, "actual UI label: {source}");
+        assert_eq!(i18n::tr_ctx(lang, "cameraRaw", source), expected, "render-test label: {source}");
+    }
+}
+
+/// Drives the Italian RAW menus through Tungsten and Monochrome selections.
+/// An optional output directory captures each native menu state for visual review.
+#[test]
+fn raw_balance_menu_in_italian() {
+    use photocraft_raw::testgen::{DngSpec, mosaic, scene};
+    let _gpu = photocraft_testkit::gpu_lock();
+    let output = std::env::var_os("PHOTOCRAFT_BALANCE_SNAPSHOT_DIR");
+    let builder = Harness::builder().with_step_dt(1.0 / 60.0).with_size(vec2(1440.0, 1000.0));
+    let builder = if output.is_some() { builder.wgpu() } else { builder };
+    let mut h = builder.build_eframe(|cc| {
+        PhotocraftApp::setup_context(&cc.egui_ctx, ThemeKind::Pro);
+        let services = photocraft_ui_egui::Services {
+            import: Some(Box::new(|name, bytes, opts| {
+                photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.session.prefs.edit(|p| p.interface.language = "it".into());
+        let mut spec = DngSpec::cfa(48, 32, mosaic(&scene(48, 32), 48, [0, 1, 1, 2], 0, 30000));
+        spec.as_shot_neutral = Some([0.5, 1.0, 0.7]);
+        app.open_bytes("Prova bilanciamento.dng", &spec.build()).unwrap();
+        app
+    });
+    h.run_steps(8);
+    let tr = |s| i18n::tr_ctx(i18n::Lang::from_code("it").unwrap(), "cameraRaw", s);
+    h.get_by_role_and_label(Role::DisclosureTriangle, tr("Light")).click();
+    h.run_steps(12);
+    h.get_by_role_and_label(Role::DisclosureTriangle, tr("Color")).click();
+    h.run_steps(12);
+    assert!(h.query_by_role_and_label(Role::ComboBox, tr("White Balance")).is_some());
+    h.get(egui_kittest::kittest::By::new().role(Role::ComboBox).value(tr("As Shot"))).click();
+    h.run_steps(16);
+    for label in ["As Shot", "Auto", "Daylight", "Cloudy", "Shade", "Tungsten", "Fluorescent", "Flash"] {
+        assert!(h.query_all_by_label(tr(label)).next().is_some(), "missing preset {label}");
+    }
+    if let Some(output) = &output {
+        std::fs::create_dir_all(output).unwrap();
+        h.render().unwrap().save(std::path::Path::new(output).join("bilanciamento-italiano.png")).unwrap();
+    }
+    h.get_by_label(tr("Tungsten")).click();
+    h.run_steps(16);
+    let ctx = h.ctx.clone();
+    assert_eq!(control::inspect(h.state(), &ctx)["cameraRaw"]["openingRaw"]["whiteBalance"], "tungsten");
+    if let Some(output) = &output {
+        h.render().unwrap().save(std::path::Path::new(output).join("tungsteno-selezionato.png")).unwrap();
+    }
+    h.get(egui_kittest::kittest::By::new().role(Role::ComboBox).value(tr("PhotoCraft Standard"))).click();
+    h.run_steps(16);
+    for label in ["PhotoCraft Standard", "PhotoCraft Color", "PhotoCraft Vivid", "PhotoCraft Landscape", "PhotoCraft Portrait", "PhotoCraft Monochrome"] {
+        assert!(h.query_all_by_label(tr(label)).next().is_some(), "missing profile {label}");
+    }
+    if let Some(output) = &output {
+        h.render().unwrap().save(std::path::Path::new(output).join("profili-italiano.png")).unwrap();
+    }
+    h.get_by_label(tr("PhotoCraft Monochrome")).click();
+    h.run_steps(16);
+    let state = control::inspect(h.state(), &ctx)["cameraRaw"].clone();
+    assert_eq!(state["params"]["profile"], "monochrome");
+    assert_eq!(state["openingRaw"]["whiteBalance"], "tungsten");
+    if let Some(output) = &output {
+        h.render().unwrap().save(std::path::Path::new(output).join("monocromatico-italiano.png")).unwrap();
+    }
+}
+
 #[test]
 fn all_registered_languages_render_camera_raw_and_switch_without_resetting_view_or_filter() {
     // On Linux some scripts arrive through the background Fontconfig lookup. Kittest's strict

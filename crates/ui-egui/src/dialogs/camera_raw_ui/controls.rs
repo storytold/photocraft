@@ -1,8 +1,8 @@
-use super::open::{Target, cancel, commit_open_raw, open_raw, raw_stage};
+use super::open::{Target, cancel, change_balance, commit_open_raw, open_raw, raw_dialog_busy, raw_stage};
 use super::sidecar::{load_settings, report_file_error, save_settings};
 use super::{
-    Align2, BANDS, CameraRaw, CameraRawDialog, Color32, ERect, FontId, PANEL_W, PhotocraftApp, Pos2, Sense, Stroke, Tokens, ToneZone, Value, Wheel, curve_lut,
-    json, pos2, vec2, widgets,
+    Align2, BANDS, CameraRaw, CameraRawDialog, Color32, ColorProfile, ERect, FontId, PANEL_W, PhotocraftApp, Pos2, RawWhiteBalance, Sense, Stroke, Tokens,
+    ToneZone, Value, Wheel, curve_lut, json, pos2, vec2, widgets,
 };
 
 const RAW_UNDO_LIMIT: usize = 40;
@@ -48,8 +48,13 @@ fn history_keys(d: &mut CameraRawDialog, ctx: &egui::Context) {
     }
 }
 
+/// Accepts a new filter, an edited smart filter or the open-time RAW development.
+/// Acceptance waits only for background development that can replace this dialog's own RAW source.
 pub(super) fn commit(app: &mut PhotocraftApp) -> Result<Value, String> {
     let d = app.camera_raw.as_ref().ok_or(tl!("Camera Raw isn't open"))?;
+    if raw_dialog_busy(app) {
+        return Err(tl!("A RAW development is already running").into());
+    }
     let result = match d.target {
         Target::NewFilter => {
             let mut p = d.command_params();
@@ -241,6 +246,8 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     let screen = ctx.content_rect();
     let current_display = app.session.active().and_then(|st| app.session.color.canvas_display(&st.doc).ok());
     let mut action: Option<&str> = None;
+    let mut balance_change = None;
+    let balance_busy = raw_dialog_busy(app);
     egui::Area::new(egui::Id::unique("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
@@ -335,6 +342,23 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             let proxy = &d.proxy;
             let alt = &mut d.scope.alt_tone;
             let (ts, tn) = (temp_stops(), tint_stops());
+            widgets::section_label(ui, tl!("Profile"));
+            let mut profile = p.profile.id().to_string();
+            let profiles = [
+                ("standard".into(), tl!("PhotoCraft Standard")),
+                ("color".into(), tl!("PhotoCraft Color")),
+                ("vivid".into(), tl!("PhotoCraft Vivid")),
+                ("landscape".into(), tl!("PhotoCraft Landscape")),
+                ("portrait".into(), tl!("PhotoCraft Portrait")),
+                ("monochrome".into(), tl!("PhotoCraft Monochrome")),
+            ];
+            if widgets::dropdown(ui, "cr-color-profile", tl!("Profile"), &mut profile, &profiles, 260.0)
+                && let Some(selected) = ColorProfile::from_id(&profile)
+            {
+                p.profile = selected;
+                dirty = true;
+            }
+            ui.label(egui::RichText::new(tl!("Original PhotoCraft looks; not Adobe profiles")).small().color(t.text_faint));
             section(ui, "Light", true, |ui| {
                 // Auto: Camera Raw's one-click tone from the histogram; the sliders show what it
                 // chose, so each can be adjusted afterwards.
@@ -350,7 +374,31 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 tone_row(ui, &mut dirty, alt, ToneZone::Blacks, &mut p.blacks);
             });
             section(ui, "Color", false, |ui| {
-                widgets::section_label(ui, tl!("White Balance: As Shot"));
+                if let Some(raw) = d.raw_open.as_ref() {
+                    widgets::section_label(ui, tl!("White Balance"));
+                    let mut selected = raw.balance.id().to_string();
+                    let options = [
+                        ("asShot".into(), tl!("As Shot")),
+                        ("auto".into(), tl!("Auto")),
+                        ("daylight".into(), tl!("Daylight")),
+                        ("cloudy".into(), tl!("Cloudy")),
+                        ("shade".into(), tl!("Shade")),
+                        ("tungsten".into(), tl!("Tungsten")),
+                        ("fluorescent".into(), tl!("Fluorescent")),
+                        ("flash".into(), tl!("Flash")),
+                    ];
+                    ui.add_enabled_ui(!balance_busy, |ui| {
+                        if widgets::dropdown(ui, "cr-white-balance", tl!("White Balance"), &mut selected, &options, 260.0) {
+                            balance_change = RawWhiteBalance::from_id(&selected);
+                        }
+                    });
+                    ui.label(egui::RichText::new(tl!("Illuminant presets are approximate without camera calibration")).small().color(t.text_faint));
+                    if balance_busy {
+                        ui.spinner();
+                    }
+                } else {
+                    widgets::section_label(ui, tl!("White Balance: As Shot"));
+                }
                 row(ui, &mut dirty, "Temperature", &mut p.temperature, -100.0..=100.0, Some(&ts));
                 row(ui, &mut dirty, "Tint", &mut p.tint, -100.0..=100.0, Some(&tn));
                 row(ui, &mut dirty, "Vibrance", &mut p.vibrance, -100.0..=100.0, None);
@@ -495,6 +543,12 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
             d.params = edited;
         }
     });
+    if let Some(balance) = balance_change {
+        if let Err(e) = change_balance(app, balance) {
+            crate::notices::error(app, e);
+        }
+        return;
+    }
     crate::camera_raw_scope_ui::persist(app, ctx);
     if ctx.input(|i| i.key_pressed(egui::Key::Y))
         && let Some(d) = app.camera_raw.as_mut()

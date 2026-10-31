@@ -20,6 +20,8 @@ pub enum WhiteBalance {
     AsShot,
     /// Grey-world estimate from the image.
     Auto,
+    /// Illuminant chromaticity (CIE xy). Camera calibration is used when available.
+    Illuminant([f64; 2]),
     /// Explicit R, G, B multipliers applied to the camera channels.
     Multipliers([f64; 3]),
 }
@@ -163,6 +165,21 @@ fn normalize(n: [f64; 3]) -> Option<[f64; 3]> {
     (m > 0.0 && n.iter().all(|v| v.is_finite() && *v > 1e-4)).then(|| n.map(|v| v / m))
 }
 
+/// Resolves recorded DNG or camera metadata with the same precedence and validation as development.
+fn as_shot_neutral(s: &Sensor) -> Option<[f64; 3]> {
+    s.color
+        .as_shot_neutral
+        .or_else(|| s.color.as_shot_white_xy.and_then(|xy| s.color.xy_to_neutral(xy)))
+        .or_else(|| s.camera_wb.map(|m| m.map(|v| 1.0 / v)))
+        .and_then(normalize)
+}
+
+/// Recorded as-shot sensor gains, including DNG AsShotNeutral and AsShotWhiteXY.
+/// Returns `None` for missing or invalid metadata instead of estimating a balance.
+pub fn as_shot_white_balance_multipliers(s: &Sensor) -> Option<[f64; 3]> {
+    as_shot_neutral(s).map(|n| n.map(|v| 1.0 / v))
+}
+
 /// The camera-space neutral (max component 1) for `opts.white_balance`, as
 /// [`develop_sensor`] uses it (the same white balance [`crate::fit_look`] balances with).
 pub(crate) fn resolve_neutral(s: &Sensor, opts: &DevelopOptions, sc: &Scale, warnings: &mut Vec<String>) -> Result<[f64; 3]> {
@@ -171,14 +188,8 @@ pub(crate) fn resolve_neutral(s: &Sensor, opts: &DevelopOptions, sc: &Scale, war
         return Ok([1.0; 3]);
     }
     // White balance: camera-space neutral, max component 1.
-    let as_shot = s
-        .color
-        .as_shot_neutral
-        .or_else(|| s.color.as_shot_white_xy.and_then(|xy| s.color.xy_to_neutral(xy)))
-        .or_else(|| s.camera_wb.map(|m| m.map(|v| 1.0 / v)))
-        .and_then(normalize);
     Ok(match opts.white_balance {
-        WhiteBalance::AsShot => match as_shot {
+        WhiteBalance::AsShot => match as_shot_neutral(s) {
             Some(n) => n,
             None => {
                 warnings.push("no as-shot white balance in the file; estimated automatically (grey world)".into());
@@ -186,20 +197,39 @@ pub(crate) fn resolve_neutral(s: &Sensor, opts: &DevelopOptions, sc: &Scale, war
             }
         },
         WhiteBalance::Auto => grey_world(s, sc),
+        WhiteBalance::Illuminant(xy) => {
+            if xy.iter().any(|v| !v.is_finite() || *v <= 0.0) || xy[0] + xy[1] >= 1.0 {
+                return Err(RawError::Malformed("invalid white-balance chromaticity".into()));
+            }
+            match s.color.xy_to_neutral(xy) {
+                Some(n) => n,
+                None => {
+                    warnings.push("illuminant white balance is approximate: no camera colour calibration; using sRGB primaries".into());
+                    let xyz_to_rgb = color::invert(&color::rgb_to_xyz(color::REC709, color::D65_XY))
+                        .ok_or_else(|| RawError::Malformed("white-balance reference matrix is singular".into()))?;
+                    normalize(color::apply(&xyz_to_rgb, color::xy_to_xyz(xy)))
+                        .ok_or_else(|| RawError::Malformed("illuminant is outside the camera colour model".into()))?
+                }
+            }
+        }
         WhiteBalance::Multipliers(m) => {
             normalize(m.map(|v| 1.0 / v)).ok_or_else(|| RawError::Malformed("white-balance multipliers must be positive".into()))?
         }
     })
 }
 
-/// Develops sensor data.
-pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
-    develop(s, opts, true)
+/// Resolves a balance choice to sensor-channel gains, with the same validation and warnings
+/// used by development. Importers can add relative fine tuning without developing twice.
+pub fn white_balance_multipliers(s: &Sensor, choice: WhiteBalance) -> Result<([f64; 3], Vec<String>)> {
+    validate_sensor(s)?;
+    let opts = DevelopOptions { white_balance: choice, ..Default::default() };
+    let mut warnings = Vec::new();
+    let neutral = resolve_neutral(s, &opts, &Scale::new(s), &mut warnings)?;
+    Ok((neutral.map(|v| 1.0 / v), warnings))
 }
 
-/// [`develop_sensor`]; `allow_fused` false keeps the full-frame path (what the tests compare the
-/// fused one against).
-fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Developed> {
+/// Rejects invalid crop bounds, sample counts and CFA layouts before development or white-balance calculations.
+fn validate_sensor(s: &Sensor) -> Result<()> {
     let c = s.crop;
     let samples = s.width.checked_mul(s.height).and_then(|n| n.checked_mul(s.samples));
     if c.is_empty()
@@ -224,6 +254,18 @@ fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Devel
     {
         return Err(RawError::malformed("invalid sensor CFA pattern"));
     }
+    Ok(())
+}
+
+/// Develops sensor data.
+pub fn develop_sensor(s: &Sensor, opts: &DevelopOptions) -> Result<Developed> {
+    develop(s, opts, true)
+}
+
+/// The unfused path is retained as a test oracle for banded development.
+fn develop(s: &Sensor, opts: &DevelopOptions, allow_fused: bool) -> Result<Developed> {
+    validate_sensor(s)?;
+    let c = s.crop;
     let bayer = s.cfa.as_ref().is_none_or(|cfa| cfa.is_bayer());
     // The default rendering (no Dehaze, no local tone, no black point) needs no statistic of
     // the whole frame: demosaic and encode band by band, with no full RGB frame (the same

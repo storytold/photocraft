@@ -57,7 +57,9 @@ use crate::photo_util::{hash01, linear_to_srgb, par_rows, srgb_to_linear};
 
 mod local_tone;
 mod per_pixel;
+mod profiles;
 mod whites_blacks;
+pub use profiles::ColorProfile;
 
 pub use per_pixel::{CURVE_LUT, Grade, Grain, PerPixel, Vignette, VignetteStyle, WB_STEPS, WhitesBlacks, per_pixel, white_black_points};
 
@@ -106,6 +108,8 @@ impl Wheel {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct CameraRaw {
+    /// Original PhotoCraft artistic look, independent of the adjustment sliders.
+    pub profile: ColorProfile,
     // Basic
     pub temperature: f32,
     pub tint: f32,
@@ -179,8 +183,10 @@ pub struct CameraRaw {
 }
 
 impl Default for CameraRaw {
+    /// Neutral controls and the Standard look preserve the existing Camera Raw rendering.
     fn default() -> Self {
         CameraRaw {
+            profile: ColorProfile::Standard,
             temperature: 0.0,
             tint: 0.0,
             exposure: 0.0,
@@ -641,7 +647,8 @@ impl CameraRaw {
     }
     /// True when every control is neutral (the filter is an identity).
     pub fn is_identity(&self) -> bool {
-        self.wb_neutral()
+        self.profile == ColorProfile::Standard
+            && self.wb_neutral()
             && self.calibration_neutral()
             && self.tone_neutral()
             && self.dehaze == 0.0
@@ -745,7 +752,8 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
         whites_blacks::apply(px, w, xw, xb, enc);
     }
     // 4–7: per-pixel colour stages.
-    let need_color = p.vibrance != 0.0 || p.saturation != 0.0 || !p.curves_neutral() || !p.hsl_neutral() || !p.grade_neutral();
+    let need_color =
+        p.profile != ColorProfile::Standard || p.vibrance != 0.0 || p.saturation != 0.0 || !p.curves_neutral() || !p.hsl_neutral() || !p.grade_neutral();
     if need_color {
         let par = (!(p.curve_highlights == 0.0 && p.curve_lights == 0.0 && p.curve_darks == 0.0 && p.curve_shadows == 0.0)).then(|| parametric_lut(p, 1024));
         let pts = |c: &Vec<[f32; 2]>| (!is_linear(c)).then(|| curve_lut(c, 1024));
@@ -755,7 +763,7 @@ pub fn develop(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, float: bo
         let Grade { tints, lums, blend, balance: bal } = Grade::new(p);
         par_rows(px, w, 1, |_, row| {
             for q in row.iter_mut() {
-                let mut c = [q[0], q[1], q[2]];
+                let mut c = p.profile.apply([q[0], q[1], q[2]]);
                 if p.vibrance != 0.0 || p.saturation != 0.0 {
                     let l = luma(c);
                     let (mx, mn) = (c[0].max(c[1]).max(c[2]), c[0].min(c[1]).min(c[2]));

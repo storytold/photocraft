@@ -1,7 +1,7 @@
 use super::controls::{commit, redo_edit, remember_edit, undo_edit};
-use super::open::{cancel, open, open_smart_filter};
+use super::open::{cancel, change_balance, open, open_smart_filter};
 use super::sidecar::{load_settings, save_settings};
-use super::{CameraRaw, LayerId, PhotocraftApp, Value, json};
+use super::{CameraRaw, LayerId, PhotocraftApp, RawWhiteBalance, Value, json};
 
 /// Menu / control-channel entry point. `None` when the call isn't for this dialog.
 pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Value) -> Option<Result<Value, String>> {
@@ -32,6 +32,15 @@ pub fn menu(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: &Val
     let Some(fields) = ui.as_object() else {
         return Some(Err("Camera Raw ui must be an object".into()));
     };
+    if let Some(value) = ui.get("whiteBalance") {
+        if fields.len() != 1 {
+            return Some(Err("whiteBalance must be sent on its own".into()));
+        }
+        return Some(match value.as_str().and_then(RawWhiteBalance::from_id) {
+            Some(balance) => change_balance(app, balance),
+            None => Err("unknown RAW white-balance preset".into()),
+        });
+    }
     for (key, value) in fields {
         match key.as_str() {
             "set" | "scope" | "view" | "demosaic" => {}

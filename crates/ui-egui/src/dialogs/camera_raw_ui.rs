@@ -15,13 +15,14 @@
 //! settings files, see [`photocraft_io::camera_raw_xmp`]) through the file dialog.
 
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
-use photocraft_algo::camera_raw::{CameraRaw, Wheel, curve_lut};
+use photocraft_algo::camera_raw::{CameraRaw, ColorProfile, Wheel, curve_lut};
 use photocraft_algo::histogram::RgbHistogram;
 
 use crate::camera_raw_scope_ui::{MAX_SAMPLERS, ToneZone};
 
 use photocraft_doc::LayerId;
 use photocraft_geom::Rect;
+use photocraft_io::raw::RawWhiteBalance;
 use serde_json::{Value, json};
 
 use crate::PhotocraftApp;
@@ -35,6 +36,8 @@ mod open;
 mod proxy;
 mod sidecar;
 
+#[cfg(test)]
+use controls::commit;
 pub use controls::show;
 #[cfg(test)]
 use convert::open_pixels;
@@ -46,6 +49,8 @@ pub use open::{
     without_develop_note,
 };
 use open::{Target, non_defaults};
+#[cfg(test)]
+use open::{cancel, change_balance};
 use proxy::{ProxyFrame, ProxyJob};
 pub use sidecar::sidecar_path;
 #[cfg(test)]
@@ -119,6 +124,7 @@ pub struct CameraRawDialog {
 }
 
 impl CameraRawDialog {
+    /// Exports dialog, RAW source, preview and histogram state for UI inspection and control-channel clients.
     pub fn describe(&self, view: &crate::state::CameraRawScopeState, navigation: &crate::state::CameraRawPreviewState) -> Value {
         let h = self.histogram();
         let mut result = json!({"layer": self.layer.0, "params": serde_json::to_value(&self.params).unwrap_or(Value::Null), "proxy": [self.pw, self.ph],
@@ -130,7 +136,8 @@ impl CameraRawDialog {
             Target::SmartFilter(index) => Some(index),
             Target::NewFilter | Target::OpenRaw => None,
         });
-        result["openingRaw"] = json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id()})));
+        result["openingRaw"] =
+            json!(self.raw_open.as_ref().map(|r| json!({"name": r.name, "path": r.path, "demosaic": r.demosaic.id(), "whiteBalance": r.balance.id()})));
         result["view"] = json!(navigation);
         result["sourceSize"] = json!([self.full_w, self.full_h]);
         result["previewPending"] = json!(self.render_pending());

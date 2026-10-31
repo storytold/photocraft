@@ -526,6 +526,7 @@ fn a_raw_opens_and_redevelops_at_the_raw_defaults_resolution() {
     assert_eq!(app.session.active().unwrap().doc.resolution_dpi, 240.0, "automation open");
 }
 
+/// Checks Cancel closes an open-time RAW and the open-dialog preference is respected for later imports.
 #[test]
 fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
     let (mut app, dng) = raw_app();
@@ -558,7 +559,9 @@ fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
                 path: None,
                 bytes: None,
                 developed_with: Default::default(),
-                demosaic: Default::default()
+                demosaic: Default::default(),
+                balance: RawWhiteBalance::AsShot,
+                settings: None
             }
         )
         .is_err()
@@ -1021,4 +1024,210 @@ fn save_and_load_settings_round_trip_through_xmp_files() {
     menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"loadSettings": true}})).unwrap().unwrap();
     frame(&mut app);
     assert_eq!(app.camera_raw.as_ref().unwrap().params.clarity, 25.0);
+}
+
+/// Checks look changes retain slider values, reject unknown names atomically and support undo/redo.
+#[test]
+fn camera_raw_profiles_preserve_sliders_support_undo_and_reject_unknown_values() {
+    let (mut app, ctx) = worker_app();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"exposure":0.75,"tint":12}}})).unwrap().unwrap();
+    for profile in ColorProfile::ALL {
+        let out = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"profile":profile.id()}}})).unwrap().unwrap();
+        assert_eq!(out["params"]["profile"], profile.id());
+        let p = &app.camera_raw.as_ref().unwrap().params;
+        assert_eq!((p.exposure, p.tint), (0.75, 12.0));
+    }
+    let kept = app.camera_raw.as_ref().unwrap().params.clone();
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"profile":"Adobe Color"}}})).unwrap().is_err());
+    assert_eq!(app.camera_raw.as_ref().unwrap().params, kept);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"undo":true}})).unwrap().unwrap();
+    assert_eq!(app.camera_raw.as_ref().unwrap().params.profile, ColorProfile::Portrait);
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"redo":true}})).unwrap().unwrap();
+    assert_eq!(app.camera_raw.as_ref().unwrap().params, kept);
+}
+
+/// Rebuilds presets from the source RAW while retaining controls and the selected look.
+/// Returning to As Shot restores the baseline; accepting an unchanged preset avoids redundant development.
+#[test]
+fn raw_balance_presets_rebuild_the_preview_preserve_sliders_and_commit_the_selected_balance() {
+    let (mut app, bytes) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("balance.dng", &bytes).unwrap();
+    let raw = app.pending_raw_open.take().unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let original = app.camera_raw.as_ref().unwrap().proxy.clone();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"set":{"contrast":12,"profile":"landscape"}}})).unwrap().unwrap();
+    for preset in RawWhiteBalance::ALL {
+        let result = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"whiteBalance":preset.id()}})).unwrap().unwrap();
+        assert!(result.get("pending").is_none());
+        if let Some(raw) = app.pending_raw_open.take() {
+            open_raw(&mut app, &ctx, raw).unwrap();
+        }
+        let d = app.camera_raw.as_ref().unwrap();
+        assert_eq!(d.params.contrast, 12.0);
+        assert_eq!(d.params.profile, ColorProfile::Landscape);
+        assert_eq!(d.raw_open.as_ref().unwrap().balance, preset);
+        assert_eq!(app.session.documents().len(), 1);
+        if preset == RawWhiteBalance::Tungsten {
+            assert_ne!(d.proxy, original, "preset must change actual source pixels");
+        }
+    }
+    let before = app.camera_raw.as_ref().unwrap().params.clone();
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"whiteBalance":"unknown"}})).unwrap().is_err());
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui":{"whiteBalance":"auto","commit":true}})).unwrap().is_err());
+    assert_eq!(app.camera_raw.as_ref().unwrap().params, before);
+    // Returning to As Shot restores the original baseline, with no cumulative RGB edits.
+    change_balance(&mut app, RawWhiteBalance::AsShot).unwrap();
+    let raw = app.pending_raw_open.take().unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    assert_eq!(app.camera_raw.as_ref().unwrap().proxy, original);
+    change_balance(&mut app, RawWhiteBalance::Tungsten).unwrap();
+    let raw = app.pending_raw_open.take().unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let expected = app.session.active().unwrap().doc.clone();
+    app.camera_raw.as_mut().unwrap().params = CameraRaw::default();
+    let result = commit(&mut app).unwrap();
+    assert_eq!(result["redeveloped"], false, "the displayed baseline already has this preset");
+    assert!(std::sync::Arc::ptr_eq(&expected, &app.session.active().unwrap().doc));
+    open(&mut app, &ctx).unwrap();
+    assert!(change_balance(&mut app, RawWhiteBalance::Auto).is_err(), "RGB filters do not silently approximate RAW presets");
+}
+
+/// Checks edits survive a background balance change and Cancel cannot reopen the closed RAW document.
+#[test]
+fn raw_balance_background_job_keeps_edits_and_can_be_cancelled() {
+    let (mut app, bytes) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("balance.dng", &bytes).unwrap();
+    let raw = app.pending_raw_open.take().unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    app.background_jobs = true;
+    change_balance(&mut app, RawWhiteBalance::Cloudy).unwrap();
+    assert!(!app.raw_redevelop.is_empty());
+    assert!(change_balance(&mut app, RawWhiteBalance::Auto).is_err());
+    assert!(commit(&mut app).is_err());
+    // Sliders edited while a job runs must survive the reopened dialog.
+    app.camera_raw.as_mut().unwrap().params.exposure = 0.75;
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.raw_redevelop.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.raw_redevelop.is_empty());
+    let raw = app.pending_raw_open.take().unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    assert_eq!(app.camera_raw.as_ref().unwrap().params.exposure, 0.75);
+    assert_eq!(app.camera_raw.as_ref().unwrap().raw_open.as_ref().unwrap().balance, RawWhiteBalance::Cloudy);
+    change_balance(&mut app, RawWhiteBalance::Shade).unwrap();
+    cancel(&mut app);
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.raw_redevelop.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.raw_redevelop.is_empty());
+    assert!(app.pending_raw_open.is_none() && app.camera_raw.is_none());
+    assert!(app.session.documents().is_empty(), "a cancelled opening must stay closed");
+}
+
+/// A balance worker belongs to its RAW source, so closing another active document must not cancel it.
+#[test]
+fn raw_balance_background_job_survives_closing_another_active_document() {
+    let (mut app, bytes) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("balance.dng", &bytes).unwrap();
+    let raw = app.pending_raw_open.take().unwrap();
+    let source = raw.document;
+    open_raw(&mut app, &ctx, raw).unwrap();
+    app.camera_raw.as_mut().unwrap().params.exposure = 0.75;
+    // Another window can activate a document while the RAW dialog stays open.
+    app.session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let other = app.session.active().unwrap().doc.id;
+    let previous_active = app.session.active_index();
+    app.background_jobs = true;
+    let result = change_balance(&mut app, RawWhiteBalance::Cloudy).unwrap();
+    assert_eq!(result["pending"], true);
+    assert_eq!(app.session.active_index(), previous_active, "starting work must restore the active tab");
+    assert_eq!(app.session.active().unwrap().doc.id, other);
+    let job = app.raw_redevelop[0].job;
+    assert_eq!(app.session.job(job).unwrap().document, Some(source));
+    assert!(app.session.job_on(other).is_none());
+    // Do not poll first: closing the active document must leave the queued RAW result intact.
+    app.session.execute("file.close", json!({})).unwrap();
+    assert!(document_index(&app, other).is_none());
+    assert!(document_index(&app, source).is_some());
+    assert_eq!(app.session.job(job).unwrap().state, "running");
+    for _ in 0..3000 {
+        crate::jobs_ui::tick(&mut app, &ctx);
+        if app.raw_redevelop.is_empty() && !app.session.has_jobs() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(app.raw_redevelop.is_empty() && !app.session.has_jobs(), "the balance job never finished");
+    assert_eq!(app.session.jobs_with_recent().into_iter().find(|info| info.id == job).unwrap().state, "done");
+    let raw = app.pending_raw_open.take().unwrap();
+    open_raw(&mut app, &ctx, raw).unwrap();
+    let dialog = app.camera_raw.as_ref().unwrap();
+    assert_eq!(dialog.raw_open.as_ref().unwrap().balance, RawWhiteBalance::Cloudy);
+    assert_eq!(dialog.params.exposure, 0.75);
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(document_index(&app, source).is_none(), "the RAW baseline was replaced");
+}
+
+/// A stale RAW dialog must neither start a worker on another document nor change its active tab.
+#[test]
+fn raw_balance_background_job_rejects_a_closed_source_document() {
+    let (mut app, bytes) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("balance.dng", &bytes).unwrap();
+    let raw = app.pending_raw_open.take().unwrap();
+    let source = raw.document;
+    open_raw(&mut app, &ctx, raw).unwrap();
+    app.session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    let other = app.session.active().unwrap().doc.id;
+    let index = document_index(&app, source).unwrap();
+    app.session.execute("file.close", json!({"document": index})).unwrap();
+    app.background_jobs = true;
+    assert_eq!(change_balance(&mut app, RawWhiteBalance::Cloudy).unwrap_err(), "the raw document was closed");
+    assert_eq!(app.session.active().unwrap().doc.id, other);
+    assert_eq!(app.session.documents().len(), 1);
+    assert!(!app.session.has_jobs() && app.raw_redevelop.is_empty());
+}
+
+/// An unrelated RAW job must not prevent accepting a normal or smart filter.
+#[test]
+fn camera_raw_filter_commit_works_while_another_document_develops() {
+    for smart in [false, true] {
+        let (mut app, bytes) = raw_app();
+        let ctx = egui::Context::default();
+        app.open_bytes("pending.dng", &bytes).unwrap();
+        let raw = app.pending_raw_open.take().unwrap();
+        open_raw(&mut app, &ctx, raw).unwrap();
+        app.background_jobs = true;
+        change_balance(&mut app, RawWhiteBalance::Cloudy).unwrap();
+        assert!(!app.raw_redevelop.is_empty());
+        // Switch to an unrelated document without dispatching the pending completion.
+        app.camera_raw = None;
+        app.background_jobs = false;
+        app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        app.run("edit.fill", json!({"color": "#406080"})).unwrap();
+        if smart {
+            app.run("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+            app.run("filter.cameraRaw", json!({"contrast": 5})).unwrap();
+            let layer = app.session.active().unwrap().active_layer.unwrap();
+            open_smart_filter(&mut app, &ctx, layer, 0).unwrap();
+        } else {
+            open(&mut app, &ctx).unwrap();
+        }
+        app.camera_raw.as_mut().unwrap().params.contrast = 15.0;
+        assert!(commit(&mut app).is_ok(), "smart={smart}");
+        assert!(app.camera_raw.is_none());
+        assert!(!app.raw_redevelop.is_empty(), "the unrelated completion remains queued");
+    }
 }

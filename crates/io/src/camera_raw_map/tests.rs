@@ -322,3 +322,12 @@ fn unsupported_or_malformed_exports_report_errors() {
     let wrong = Descriptor::new("filterFX").with("filterID", Value::Integer(1));
     assert!(export_item(&json!({TEMPLATE_KEY: to_hex(&wrong.to_bytes())})).is_err());
 }
+
+/// Rejects PSD export of custom looks instead of silently claiming an unsupported Adobe profile mapping.
+#[test]
+fn photocraft_looks_are_never_silently_exported_as_adobe_profiles() {
+    assert!(export_item(&json!({"profile":"standard"})).is_ok());
+    for profile in ["color", "vivid", "landscape", "portrait", "monochrome"] {
+        assert!(export_item(&json!({"profile":profile})).unwrap_err().contains("profile"));
+    }
+}

@@ -53,6 +53,7 @@ fn upright_preview(raw: &[u8], jpeg: &[u8], limits: &photocraft_raw::Limits) -> 
 /// developed RGB pixels, and the demosaic method.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RawTuning {
+    pub white_balance: RawWhiteBalance,
     /// −100…100, as `photocraft_algo::camera_raw::CameraRaw::temperature`.
     pub temperature: f32,
     /// −100…100, as `CameraRaw::tint`.
@@ -71,6 +72,74 @@ pub struct RawTuning {
     pub texture: f32,
     /// −100…100, as `CameraRaw::dehaze`.
     pub dehaze: f32,
+}
+
+/// Presets prefer the camera's own fixed white-balance coefficients when supported.
+/// Otherwise they use published CIE illuminant xy coordinates. They are not an emulation
+/// of Adobe's rendering. F2 is the fallback cool-white fluorescent preset.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum RawWhiteBalance {
+    #[default]
+    AsShot,
+    Auto,
+    Daylight,
+    Cloudy,
+    Shade,
+    Tungsten,
+    Fluorescent,
+    Flash,
+}
+
+impl RawWhiteBalance {
+    pub const ALL: [Self; 8] = [Self::AsShot, Self::Auto, Self::Daylight, Self::Cloudy, Self::Shade, Self::Tungsten, Self::Fluorescent, Self::Flash];
+
+    /// Stable preset identifier used by the RAW dialog and control channel; UI labels are localized separately.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::AsShot => "asShot",
+            Self::Auto => "auto",
+            Self::Daylight => "daylight",
+            Self::Cloudy => "cloudy",
+            Self::Shade => "shade",
+            Self::Tungsten => "tungsten",
+            Self::Fluorescent => "fluorescent",
+            Self::Flash => "flash",
+        }
+    }
+
+    /// Parses a registered RAW balance identifier without accepting arbitrary illuminant names.
+    pub fn from_id(id: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|v| v.id() == id)
+    }
+
+    /// Maps a preset to a decoder choice, using CIE xy white points for fixed illuminants.
+    fn choice(self) -> WhiteBalance {
+        match self {
+            Self::AsShot => WhiteBalance::AsShot,
+            Self::Auto => WhiteBalance::Auto,
+            Self::Daylight | Self::Flash => WhiteBalance::Illuminant([0.33242, 0.34743]), // D55
+            Self::Cloudy => WhiteBalance::Illuminant([0.31271, 0.32902]),                 // D65
+            Self::Shade => WhiteBalance::Illuminant([0.29902, 0.31485]),                  // D75
+            Self::Tungsten => WhiteBalance::Illuminant([0.44757, 0.40745]),               // A
+            Self::Fluorescent => WhiteBalance::Illuminant([0.37208, 0.37529]),            // F2
+        }
+    }
+
+    /// Prefers supported camera coefficients for fixed presets, falling back to the illuminant choice.
+    /// As Shot and Auto keep their normal decoder behavior.
+    fn choice_from_file(self, bytes: &[u8]) -> WhiteBalance {
+        use photocraft_raw::CameraWhiteBalance as Camera;
+        let preset = match self {
+            Self::Daylight => Camera::Daylight,
+            Self::Cloudy => Camera::Cloudy,
+            Self::Shade => Camera::Shade,
+            Self::Tungsten => Camera::Tungsten,
+            Self::Fluorescent => Camera::Fluorescent,
+            Self::Flash => Camera::Flash,
+            Self::AsShot | Self::Auto => return self.choice(),
+        };
+        photocraft_raw::camera_white_balance(bytes, preset).map(WhiteBalance::Multipliers).unwrap_or_else(|| self.choice())
+    }
 }
 
 /// Develops a raw file with `tuning` applied at the raw stage: Exposure as develop exposure,
@@ -98,17 +167,33 @@ pub fn import_raw_tuned(name: &str, bytes: &[u8], tuning: &RawTuning) -> Result<
     // without colour calibration), so re-developing changes only what the sliders change.
     let camera_look = default_look(bytes, &sensor);
     let mut opts = DevelopOptions { limits: limits(), exposure, demosaic: tuning.demosaic, tone, camera_look, ..Default::default() };
-    let wb_applied = match sensor.camera_wb {
-        Some(m) => {
+    let as_shot_wb = photocraft_raw::as_shot_white_balance_multipliers(&sensor);
+    let (base_wb, balance_warnings) = if tuning.white_balance != RawWhiteBalance::AsShot {
+        let (m, warnings) = photocraft_raw::white_balance_multipliers(&sensor, tuning.white_balance.choice_from_file(bytes)).map_err(IoError::Raw)?;
+        (Some(m), warnings)
+    } else {
+        (as_shot_wb, Vec::new())
+    };
+    let wb_applied = match (base_wb, as_shot_wb.is_some()) {
+        (Some(m), true) => {
             let g = wb_gains(tuning.temperature, tuning.tint);
             opts.white_balance = WhiteBalance::Multipliers([m[0] * g[0], m[1] * g[1], m[2] * g[2]]);
             true
         }
-        None => false,
+        (Some(m), false) => {
+            // A preset still sets the baseline, but without as-shot metadata the
+            // public import contract leaves the relative sliders to the RGB filter.
+            opts.white_balance = WhiteBalance::Multipliers(m);
+            false
+        }
+        (None, _) => false,
     };
-    let dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
+    let mut dev = photocraft_raw::develop_sensor(&sensor, &opts).map_err(IoError::Raw)?;
+    dev.warnings.extend(balance_warnings);
     let wb = if wb_applied {
-        format!("as-shot white balance, temperature {:+.0}, tint {:+.0}", tuning.temperature, tuning.tint)
+        format!("{} white balance, relative temperature {:+.0}, tint {:+.0}", tuning.white_balance.id(), tuning.temperature, tuning.tint)
+    } else if tuning.white_balance != RawWhiteBalance::AsShot {
+        format!("{} white balance; relative temperature and tint kept as RGB adjustments", tuning.white_balance.id())
     } else {
         "estimated white balance".into()
     };
@@ -329,6 +414,151 @@ fn jxl_preview_image(raw: &[u8], p: photocraft_raw::DecodedPreview) -> Result<Im
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Checks identifier round-trips and physically valid chromaticities for every fixed illuminant.
+    #[test]
+    fn raw_balance_presets_have_stable_ids_and_physical_illuminants() {
+        for preset in RawWhiteBalance::ALL {
+            assert_eq!(RawWhiteBalance::from_id(preset.id()), Some(preset));
+            if let WhiteBalance::Illuminant(xy) = preset.choice() {
+                assert!(xy.iter().all(|v| v.is_finite() && *v > 0.0));
+                assert!(xy[0] + xy[1] < 1.0);
+            }
+        }
+        assert_eq!(RawWhiteBalance::default(), RawWhiteBalance::AsShot);
+        assert!(RawWhiteBalance::from_id("Adobe Color").is_none());
+    }
+
+    /// Missing as-shot metadata must not consume the RGB temperature/tint sliders.
+    #[test]
+    fn raw_presets_without_camera_balance_keep_relative_sliders_for_rgb() {
+        use photocraft_raw::testgen::{Cr2Spec, mosaic, scene};
+        let (w, h) = (48, 16);
+        for camera_balance in [None, Some([2048, 1024, 1024, 1536])] {
+            let bytes = Cr2Spec {
+                width: w,
+                height: h,
+                data: mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 12000),
+                precision: 14,
+                components: 2,
+                slices: vec![24, 24],
+                borders: None,
+                wb_rggb: camera_balance,
+                orientation: 1,
+                model_id: None,
+            }
+            .build();
+            assert_eq!(photocraft_raw::decode(&bytes, &limits()).unwrap().camera_wb.is_some(), camera_balance.is_some());
+            let mut daylight = None;
+            for preset in RawWhiteBalance::ALL {
+                let base = RawTuning { white_balance: preset, ..Default::default() };
+                let (normal, applied) = import_raw_tuned("balance.cr2", &bytes, &base).unwrap();
+                let (adjusted, adjusted_applied) = import_raw_tuned("balance.cr2", &bytes, &RawTuning { temperature: 25.0, tint: -15.0, ..base }).unwrap();
+                assert_eq!(applied, camera_balance.is_some(), "{preset:?}");
+                assert_eq!(adjusted_applied, applied);
+                let pixels = crate::document_to_image(&normal.document, &mut Vec::new()).unwrap();
+                let adjusted_pixels = crate::document_to_image(&adjusted.document, &mut Vec::new()).unwrap();
+                if camera_balance.is_none() {
+                    assert_eq!(pixels.data(), adjusted_pixels.data(), "{preset:?}: relative sliders must be deferred");
+                    if preset == RawWhiteBalance::Daylight {
+                        daylight = Some(pixels.data().to_vec());
+                    }
+                    if preset == RawWhiteBalance::Tungsten {
+                        assert_ne!(daylight.as_deref().unwrap(), pixels.data(), "the preset must still change the baseline");
+                    }
+                } else {
+                    assert_ne!(pixels.data(), adjusted_pixels.data(), "{preset:?}: sensor gains must still apply");
+                }
+            }
+        }
+    }
+
+    /// DNG as-shot tags must enable sensor-stage sliders for every preset; missing or invalid tags must not.
+    #[test]
+    fn dng_as_shot_balance_applies_relative_sliders_at_the_sensor_stage() {
+        use photocraft_raw::testgen::{DngSpec, Val, mosaic, scene};
+        let (w, h) = (16, 16);
+        for metadata in ["neutral", "white_xy", "missing", "invalid"] {
+            let mut spec = DngSpec::cfa(w, h, mosaic(&scene(w, h), w, [0, 1, 1, 2], 0, 12000));
+            spec.color_matrix1 = Some((21, [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]));
+            match metadata {
+                "neutral" => spec.as_shot_neutral = Some([0.5, 1.0, 0.75]),
+                "white_xy" => spec.ifd0_extra.push((50729, Val::Rational(vec![(31271, 100000), (32902, 100000)]))),
+                "invalid" => spec.as_shot_neutral = Some([0.0, 1.0, 0.75]),
+                _ => {}
+            }
+            let bytes = spec.build();
+            let sensor = photocraft_raw::decode(&bytes, &limits()).unwrap();
+            assert!(sensor.camera_wb.is_none());
+            let valid = matches!(metadata, "neutral" | "white_xy");
+            assert_eq!(photocraft_raw::as_shot_white_balance_multipliers(&sensor).is_some(), valid);
+            for preset in RawWhiteBalance::ALL {
+                let base = RawTuning { white_balance: preset, ..Default::default() };
+                let (normal, applied) = import_raw_tuned("balance.dng", &bytes, &base).unwrap();
+                let adjusted_tuning = RawTuning { temperature: 25.0, tint: -15.0, ..base };
+                let (adjusted, adjusted_applied) = import_raw_tuned("balance.dng", &bytes, &adjusted_tuning).unwrap();
+                assert_eq!(applied, valid, "{metadata}: {preset:?}");
+                assert_eq!(adjusted_applied, valid);
+                let normal_pixels = crate::document_to_image(&normal.document, &mut Vec::new()).unwrap();
+                let adjusted_pixels = crate::document_to_image(&adjusted.document, &mut Vec::new()).unwrap();
+                if valid {
+                    assert_ne!(normal_pixels.data(), adjusted_pixels.data(), "{metadata}: {preset:?}");
+                    // Compare against development using the selected, resolved baseline with sensor gains.
+                    let (baseline, _) = photocraft_raw::white_balance_multipliers(&sensor, preset.choice()).unwrap();
+                    let gains = wb_gains(adjusted_tuning.temperature, adjusted_tuning.tint);
+                    let expected = photocraft_raw::develop_sensor(
+                        &sensor,
+                        &DevelopOptions { white_balance: WhiteBalance::Multipliers(std::array::from_fn(|c| baseline[c] * gains[c])), ..Default::default() },
+                    )
+                    .unwrap();
+                    let expected = developed_document("balance.dng", &bytes, "DNG", expected, "test").unwrap();
+                    let expected_pixels = crate::document_to_image(&expected.document, &mut Vec::new()).unwrap();
+                    assert_eq!(adjusted_pixels.data(), expected_pixels.data(), "{metadata}: {preset:?}");
+                    if preset == RawWhiteBalance::AsShot {
+                        let expected = photocraft_raw::develop_sensor(&sensor, &DevelopOptions::default()).unwrap();
+                        let expected = developed_document("balance.dng", &bytes, "DNG", expected, "test").unwrap();
+                        let expected_pixels = crate::document_to_image(&expected.document, &mut Vec::new()).unwrap();
+                        assert_eq!(normal_pixels.data(), expected_pixels.data(), "neutral sliders preserve the default rendering");
+                    }
+                } else {
+                    assert_eq!(normal_pixels.data(), adjusted_pixels.data(), "{metadata}: {preset:?}: defer relative sliders");
+                }
+            }
+        }
+    }
+
+    /// Checks Canon preset precedence and confirms missing metadata, Auto and As Shot retain their fallback choices.
+    #[test]
+    fn camera_presets_take_precedence_without_changing_auto_or_missing_metadata() {
+        use photocraft_raw::testgen::{TiffBuilder, Val};
+        let mut words = vec![0u16; 168];
+        words[0] = 14;
+        let presets = [
+            (RawWhiteBalance::Daylight, 133),
+            (RawWhiteBalance::Shade, 138),
+            (RawWhiteBalance::Cloudy, 143),
+            (RawWhiteBalance::Tungsten, 148),
+            (RawWhiteBalance::Fluorescent, 153),
+            (RawWhiteBalance::Flash, 163),
+        ];
+        for (i, (_, offset)) in presets.iter().enumerate() {
+            words[*offset..*offset + 5].copy_from_slice(&[1800 + i as u16 * 100, 1024, 1024, 1500, 5000]);
+        }
+        let mut t = TiffBuilder::default();
+        let main = t.ifd(vec![]);
+        let mn = t.ifd(vec![(0x4001, Val::Short(words))]);
+        let exif = t.ifd(vec![(0x927c, Val::IfdBytes(mn))]);
+        t.ifds[main] = vec![(0x8769, Val::Ifds(vec![exif]))];
+        t.cr2_raw_ifd = Some(t.ifd(vec![]));
+        t.chain = vec![main];
+        let bytes = t.build();
+        for (i, (preset, _)) in presets.iter().enumerate() {
+            assert_eq!(preset.choice_from_file(&bytes), WhiteBalance::Multipliers([(1800.0 + i as f64 * 100.0) / 1024.0, 1.0, 1500.0 / 1024.0]));
+            assert_eq!(preset.choice_from_file(&[]), preset.choice());
+        }
+        assert_eq!(RawWhiteBalance::Auto.choice_from_file(&bytes), WhiteBalance::Auto);
+        assert_eq!(RawWhiteBalance::AsShot.choice_from_file(&bytes), WhiteBalance::AsShot);
+    }
 
     #[test]
     fn the_developed_note_says_which_demosaic_method_was_used() {
