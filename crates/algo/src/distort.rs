@@ -141,16 +141,23 @@ fn shape(t: WaveType, phase: f32) -> f32 {
     }
 }
 
-/// Wave: displace `src` over `out` by the average of `w.generators` seeded waves (at most `MAX_WAVE_GENERATORS`) along each axis.
-pub(crate) fn wave(src: &Image, out: Rect, ctx: &Ctx, w: WaveSpec) -> Vec<f32> {
+/// Wave's seeded generators `(wavelength, amplitude, phase x, phase y)`, at most
+/// `MAX_WAVE_GENERATORS`. Shared with the GPU's layer operators (`separable::Warp`).
+pub(crate) fn wave_generators(w: &WaveSpec) -> Vec<(f32, f32, f32, f32)> {
     let n = w.generators.clamp(1, MAX_WAVE_GENERATORS);
     let lerp = |(a, b): (f32, f32), t: f32| a + (b - a).max(0.0) * t;
-    let gens: Vec<(f32, f32, f32, f32)> = (0..n)
+    (0..n)
         .map(|i| {
             let r = |k: u32| hash01(i as i32, k as i32, 7, w.seed);
             (lerp(w.wavelength, r(1)).max(1.0), lerp(w.amplitude, r(2)), r(3) * std::f32::consts::TAU, r(4) * std::f32::consts::TAU)
         })
-        .collect();
+        .collect()
+}
+
+/// Wave: displace `src` over `out` by the average of `w.generators` seeded waves (at most `MAX_WAVE_GENERATORS`) along each axis.
+pub(crate) fn wave(src: &Image, out: Rect, ctx: &Ctx, w: WaveSpec) -> Vec<f32> {
+    let gens = wave_generators(&w);
+    let n = gens.len() as u32;
     let b = ctx.bounds;
     remap(src, out, ctx, edge_of(w.undefined), |x, y| {
         let (lx, ly) = (x - b.x0 as f32, y - b.y0 as f32);

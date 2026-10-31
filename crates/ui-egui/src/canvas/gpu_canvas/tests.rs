@@ -397,3 +397,35 @@ fn shaders_validate() {
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
 }
+
+/// The public `texels` serves the canvas's two formats only: another format's texels would
+/// have the wrong layout and length (#8848).
+#[test]
+fn texels_refuse_formats_the_canvas_does_not_use() {
+    let px = [[1.0, 0.5, 0.0, 0.5]];
+    assert_eq!(texels(FORMAT, &px), Some(vec![128, 64, 0, 128]));
+    assert_eq!(texels(FORMAT_HIGH, &px).map(|t| t.len()), Some(8));
+    for other in [wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Rgba32Float, wgpu::TextureFormat::Rgba8UnormSrgb] {
+        assert_eq!(texels(other, &px), None, "{other:?}");
+    }
+}
+
+/// #5772: converting a part straight from a composite gives the texels of a copy of that part,
+/// in both texture formats and across the threaded size, and refuses a part it doesn't cover.
+#[test]
+fn texels_of_a_part_match_the_texels_of_a_copy() {
+    use super::texels::canvas_texels;
+    let rect = photocraft_geom::Rect::new(-5, 3, 995, 803);
+    let px = (0..rect.width() * rect.height()).map(|i| [(i % 251) as f32 / 250.0, (i % 7) as f32 / 3.0 - 0.5, f32::NAN, (i % 13) as f32 / 12.0]).collect();
+    let buf = photocraft_compose::Buffer { rect, px };
+    for format in [FORMAT, FORMAT_HIGH] {
+        for part in [photocraft_geom::Rect::new(0, 3, 1, 4), photocraft_geom::Rect::new(10, 20, 700, 790), rect] {
+            let copy = crate::filter_preview_ui::crop(&buf, part);
+            assert_eq!(texels_of_part(format, &buf, part), Some(canvas_texels(format, &copy.px)), "{format:?} {part:?}");
+        }
+        assert_eq!(texels_of_part(format, &buf, rect.inflate(1)), None, "not covered");
+        assert_eq!(texels_of_part(format, &buf, photocraft_geom::Rect::EMPTY), None);
+        let short = photocraft_compose::Buffer { rect, px: vec![[0.0; 4]; 10] };
+        assert_eq!(texels_of_part(format, &short, photocraft_geom::Rect::new(0, 700, 10, 800)), None, "a short buffer");
+    }
+}
