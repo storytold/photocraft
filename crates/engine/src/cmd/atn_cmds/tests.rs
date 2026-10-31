@@ -836,6 +836,27 @@ fn bucket_keeps_an_explicit_color_through_atn() {
     }
 }
 
+/// A Stroke step that leaves settings at their defaults still writes them (#8303): Photoshop
+/// opens the Stroke dialog for a descriptor without its blend mode, even with dialogs off.
+#[test]
+fn stroke_writes_the_defaults_it_leaves_out() {
+    let exported = |params: Value| export_item("edit.stroke", &params, "S").and_then(|item| item.descriptor).unwrap();
+    let d = exported(json!({"width": 2, "location": "inside", "color": "#d03060", "opacity": 63}));
+    assert_eq!(get_enum(&d, "Md  ").as_deref(), Some("Nrml"), "{d:?}");
+    assert_eq!(get_enum(&d, "Lctn").as_deref(), Some("Insd"), "an explicit setting is kept");
+    assert_eq!(get_num(&d, "Opct"), Some(63.0));
+    let d = exported(json!({"width": 2}));
+    assert_eq!(get_enum(&d, "Lctn").as_deref(), Some("Cntr"), "{d:?}");
+    assert_eq!(get_num(&d, "Opct"), Some(100.0));
+    assert_eq!(get_enum(&d, "Md  ").as_deref(), Some("Nrml"));
+    assert!(get_bool(&d, "PrsT") == Some(false), "{d:?}");
+    // An explicit mode is kept, and the step imports back to the same stroke.
+    let p = json!({"width": 3, "location": "outside", "mode": "Multiply", "opacity": 40, "color": "#000000", "preserveTransparency": true});
+    let d = exported(p.clone());
+    let Mapped::Steps(steps) = (event_for(&AtnEvent::Code(*b"Strk")).unwrap().from)(&d) else { panic!("{d:?}") };
+    assert_eq!(steps[0].1, json!({"width": 3.0, "location": "outside", "mode": "Multiply", "opacity": 40.0, "color": "#000000", "preserveTransparency": true}));
+}
+
 /// `image.adjustments.photoFilter` exported to .atn and imported back → its params, or None.
 fn photo_filter_round_trip(params: Value) -> Option<Value> {
     let item = export_item("image.adjustments.photoFilter", &params, "S")?;
