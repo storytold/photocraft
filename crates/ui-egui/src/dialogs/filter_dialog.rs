@@ -1301,6 +1301,21 @@ fn add_source_documents(s: &mut photocraft_engine::Session, doc_id: photocraft_d
 pub struct FilterPreview {
     pub key: FilterPreviewKey,
     pub result: Option<Arc<Document>>,
+    /// `result` flattened, as the worker composited it for the canvas upload. The preview window
+    /// shows it rather than flattening the result again on the UI thread (#5772).
+    ///
+    /// Memory trade-off: this keeps a float composite of the preview alive for as long as the
+    /// preview is, including while the Preview box is off: 16 bytes a preview pixel, so with no
+    /// proxy (canvas at 100 %) about 384 MB at 24 MP and 552 MiB at 7360×4912. While a new result
+    /// replaces it, the old and new composites can briefly coexist. It is dropped with the
+    /// preview (Cancel, or once OK's job lands). Keeping it only pays off together with the
+    /// window's textures cropped to its view (`filter_preview_ui::crop_around`): with both, the
+    /// preview peaks lower and frees more on Cancel than flattening the result again on the UI
+    /// thread did; the composite alone would only add this memory.
+    pub flat: Option<Arc<photocraft_compose::Buffer>>,
+    /// The part of `result` (its pixels) on the GPU canvas texture. At 100 % only what the view
+    /// shows is uploaded, and pans add to it (`canvas::upload_filter_preview_view`, #5772).
+    pub uploaded: photocraft_geom::Rect,
     /// OK was pressed and the filter runs as a background job: the preview stays on screen until
     /// the job lands, so the canvas doesn't flash the unfiltered image in between.
     pub committing: bool,
