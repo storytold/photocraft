@@ -17,6 +17,8 @@ mod recovery_tests;
 /// Everything File › Open reads: PhotoCraft, Photoshop, OpenRaster, Krita and Affinity documents, flat images, and
 /// Photoshop brushes (.abr), gradients (.grd), layer styles (.asl), swatches (.aco, .act, .ase) and keyboard shortcut sets
 /// (.kys), which go to the preset libraries and Edit › Keyboard Shortcuts.
+/// Production All Formats uses `*` (#5126); this list is for case-glob tests only.
+#[cfg(test)]
 const OPEN_EXTS: &[&str] = &[
     "pcraft", "pdn", "ora", "xcf", "xcfgz", "gz", "kra", "krz", "psd", "psb", "psdt", "png", "jpg", "jpeg", "tif", "tiff", "webp", "gif", "bmp", "dib", "tga",
     "ico", "qoi", "exr", "hdr", "pbm", "pgm", "ppm", "pnm", "pam", "pfm", "pcx", "dds", "xpm", "fits", "fit", "fts", "dpx", "cin", "dcm", "dicom", "dc3",
@@ -36,9 +38,9 @@ fn open_filter_extensions(extensions: &[&str]) -> Vec<String> {
 }
 
 /// File › Open's file types after All Formats, as Photoshop lists them: one per format, so a folder
-/// of mixed files can be narrowed to one kind (#6337). Together they cover every extension of
-/// [`OPEN_EXTS`]. An explicit SVG filter also keeps vector artwork discoverable when a native
-/// picker defaults to another filter.
+/// of mixed files can be narrowed to one kind (#6337). Together they cover every openable extension.
+/// An explicit SVG filter also keeps vector artwork discoverable when a native picker defaults to
+/// another filter.
 const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("PhotoCraft", &["pcraft"]),
     ("Photoshop", &["psd", "psb", "psdt"]),
@@ -76,10 +78,17 @@ const OPEN_FILTERS: &[(&str, &[&str])] = &[
     ("Keyboard Shortcuts", &["kys"]),
 ];
 
+/// All Formats must not dump every openable extension into one COMDLG/rfd spec: the native
+/// dropdown then concatenates `*.pcraft;*.pdn;…` into the combo label and hangs on Windows (#5126).
+/// `*` shows every file; named filters above still narrow by type.
+fn all_formats_extensions() -> Vec<String> {
+    vec!["*".into()]
+}
+
 fn open_filters() -> Vec<(&'static str, Vec<String>)> {
-    std::iter::once(("All Formats", open_filter_extensions(OPEN_EXTS)))
-        .chain(OPEN_FILTERS.iter().map(|(name, exts)| (*name, open_filter_extensions(exts))))
-        .collect()
+    let mut filters = vec![("All Formats", all_formats_extensions())];
+    filters.extend(OPEN_FILTERS.iter().map(|(name, exts)| (*name, open_filter_extensions(exts))));
+    filters
 }
 
 /// File › Save As formats: (filter name, extensions). The filter matching the suggested name's
