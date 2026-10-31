@@ -154,21 +154,62 @@ fn brush_settings_are_remembered_between_uses() {
     assert!(open(&mut app, &ctx).is_ok());
 }
 
-/// Follow-up to #1494 / #1484: Alt is captured at stroke-down and stays recorded
-/// through undo, redo and deterministic Liquify field reconstruction.
-/// #9547: Twirl Counterclockwise draws Twirl Clockwise's arrow mirrored, not the Undo arrow,
-/// and every Liquify tool's icon exists.
+/// The reference application's Liquify has Twirl Clockwise only: no Twirl Counterclockwise
+/// tool on the strip or a shortcut, and a script or saved setting naming it is refused with a
+/// clear error instead of selecting it (Alt with Twirl Clockwise twirls counterclockwise).
 #[test]
-fn twirl_counterclockwise_has_its_own_mirrored_icon() {
-    assert_eq!(tool_icon(LiquifyTool::TwirlCcw), "rotate-ccw");
-    let svg = |name: &str| crate::icon_data::ICONS.iter().find(|(n, _)| *n == name).map(|(_, b)| String::from_utf8_lossy(b).into_owned());
-    let (cw, ccw) = (svg("rotate-cw").unwrap(), svg("rotate-ccw").expect("the rotate-ccw icon"));
-    assert!(ccw.contains("M3 12a9 9 0 1 0 9-9") && cw.contains("M21 12a9 9 0 1 1-9-9"), "mirror images");
-    for t in [LiquifyTool::ForwardWarp, LiquifyTool::TwirlCw, LiquifyTool::TwirlCcw, LiquifyTool::Pucker, LiquifyTool::Bloat] {
-        assert!(svg(tool_icon(t)).is_some(), "{t:?}: {}", tool_icon(t));
+fn the_tool_strip_has_no_twirl_counterclockwise() {
+    assert!(!LiquifyTool::ALL.contains(&LiquifyTool::TwirlCcw));
+    assert!(LiquifyTool::ALL.contains(&LiquifyTool::TwirlCw));
+    for t in LiquifyTool::ALL {
+        assert_ne!(tl!(t.label()), tl!("Twirl Counterclockwise"), "{t:?}");
+        let svg = crate::icon_data::ICONS.iter().any(|(n, _)| *n == tool_icon(t));
+        assert!(svg, "{t:?}: {}", tool_icon(t));
     }
+    assert_eq!(shortcut(LiquifyTool::TwirlCw), "C");
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    control(&mut app, &json!({"tool": "pucker"})).unwrap();
+    let err = control(&mut app, &json!({"tool": "twirlCcw"})).unwrap_err();
+    assert!(err.contains("twirlCw") && err.contains("Alt"), "{err}");
+    assert_eq!(app.distort.liquify.as_ref().unwrap().opts.tool, LiquifyTool::Pucker, "the tool stays");
+    // A preference saved by an older version that names it opens, and on another tool.
+    cancel(&mut app);
+    app.session.prefs.edit(|p| p.dialogs.insert(REMEMBERED.into(), json!({"tool": "twirlCcw", "density": 70})));
+    open(&mut app, &ctx).unwrap();
+    let o = &app.distort.liquify.as_ref().unwrap().opts;
+    assert_ne!(o.tool, LiquifyTool::TwirlCcw);
+    assert_eq!(o.density, 70.0, "the rest of the saved settings still apply");
 }
 
+/// Alt held with Twirl Clockwise twirls the other way: at the same point, the displacement a
+/// dab leaves points the opposite way from one without Alt.
+#[test]
+fn alt_with_twirl_clockwise_twirls_counterclockwise() {
+    let ctx = egui::Context::default();
+    let displacement = |mods: egui::Modifiers| {
+        let mut app = app_with_layer();
+        open(&mut app, &ctx).unwrap();
+        control(&mut app, &json!({"tool": "twirlCw", "size": 40, "rate": 80})).unwrap();
+        pointer(&mut app, ToolEvent::Down { x: 60.0, y: 40.0, pressure: 1.0 }, mods);
+        for _ in 0..4 {
+            pointer(&mut app, ToolEvent::Move { x: 60.0, y: 40.0, pressure: 1.0 }, mods);
+        }
+        pointer(&mut app, ToolEvent::Up { x: 60.0, y: 40.0 }, mods);
+        let d = app.distort.liquify.as_ref().unwrap();
+        assert_eq!(d.opts.tool, LiquifyTool::TwirlCw);
+        // Right of the centre: clockwise (y down) moves content down, so it samples from above.
+        d.field.sample(70.0, 40.0)
+    };
+    let (plain, alt) = (displacement(egui::Modifiers::NONE), displacement(egui::Modifiers::ALT));
+    assert!(plain[1] < -0.1, "clockwise samples from above: {plain:?}");
+    assert!(alt[1] > 0.1, "Alt twirls counterclockwise and samples from below: {alt:?}");
+    assert!((plain[1] + alt[1]).abs() < 0.05 * plain[1].abs(), "the same twirl, mirrored: {plain:?} vs {alt:?}");
+}
+
+/// Follow-up to #1494 / #1484: Alt is captured at stroke-down and stays recorded
+/// through undo, redo and deterministic Liquify field reconstruction.
 #[test]
 fn alt_reversed_twirl_survives_replay_undo_and_redo() {
     let ctx = egui::Context::default();
@@ -374,7 +415,6 @@ fn alt_reverses_twirl_and_swaps_pucker_and_bloat() {
     };
     for (tool, plain, alt) in [
         ("twirlCw", LiquifyTool::TwirlCw, LiquifyTool::TwirlCcw),
-        ("twirlCcw", LiquifyTool::TwirlCcw, LiquifyTool::TwirlCw),
         ("pucker", LiquifyTool::Pucker, LiquifyTool::Bloat),
         ("bloat", LiquifyTool::Bloat, LiquifyTool::Pucker),
         ("forwardWarp", LiquifyTool::ForwardWarp, LiquifyTool::ForwardWarp),

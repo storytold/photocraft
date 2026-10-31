@@ -66,7 +66,9 @@ fn brush_mode_control_routes_modifiers_and_reports_choices_without_history() {
         ("brush", json!({"shift": true, "alt": true}), "erase"),
         ("brush", json!({"shift": true, "ctrl": true}), if cfg!(target_os = "macos") { "erase" } else { "layer" }),
         ("brush", json!({"shift": true, "command": true}), "layer"),
-        ("pencil", json!({"shift": true}), "preset"),
+        ("pencil", json!({"shift": true}), "mode"),
+        ("eraser", json!({"shift": true}), "mode"),
+        ("spotHealing", json!({"shift": true}), "preset"),
     ] {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
@@ -85,7 +87,7 @@ fn brush_mode_control_routes_modifiers_and_reports_choices_without_history() {
                 assert!(app.drag.is_none() && !app.secondary_erase);
                 assert_eq!(app.session.active().unwrap().history.past_len(), history);
                 let inspect = inspect(&app, &ctx);
-                assert_eq!(inspect["brushModeMenu"]["choices"], json!(crate::brush_mode_menu::choices().iter().map(|(_, label)| *label).collect::<Vec<_>>()));
+                assert_eq!(inspect["brushModeMenu"]["choices"], json!(crate::brush_mode_menu::labels(app.ui.tool)));
                 let journal = app.session.journal.len();
                 call(
                     &mut app,
@@ -2236,4 +2238,63 @@ fn ui_set_mask_target_ends_a_filter_mask_view() {
     assert_eq!(l.mask.as_ref().unwrap().value(20, 20), 0.0, "the stroke went into the layer mask");
     let photocraft_doc::LayerContent::Smart(sm) = &l.content else { panic!("smart object") };
     assert_eq!(sm.filter_mask.as_ref().unwrap().value(20, 20), 1.0, "not into the filter mask");
+}
+
+fn shift_right(app: &mut PhotocraftApp, ctx: &egui::Context, tool: &str) {
+    call(
+        app,
+        ctx,
+        "ui.pointer",
+        json!({"tool": tool, "button": "right", "shift": true,
+        "events": [{"kind": "down", "x": 20, "y": 20}, {"kind": "up", "x": 20, "y": 20}]}),
+    );
+}
+
+/// `ui.context.choose` picks a Shift+right-click row by label; a bad or greyed one is an error
+/// that changes nothing.
+#[test]
+fn shift_right_menu_choose_rejects_bad_choices_and_sets_the_tool() {
+    let ctx = egui::Context::default();
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64, "background": "white"})).unwrap();
+    // Nothing open yet.
+    assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id": "Multiply"}))["ok"], false);
+    shift_right(&mut app, &ctx, "brush");
+    let menu = inspect(&app, &ctx)["brushModeMenu"].clone();
+    assert_eq!(menu["tool"], json!("Brush"));
+    assert_eq!(menu["mode"], json!("Normal"));
+    assert_eq!(menu["items"][0], json!({"label": "Edit Brush…", "enabled": true, "checked": false}));
+    assert_eq!(menu["items"][1], json!({"separator": true}));
+    // The Background has no transparency: Behind and Clear are greyed.
+    assert!(menu["items"].as_array().unwrap().iter().any(|i| *i == json!({"label": "Clear", "enabled": false, "checked": false})));
+    let journal = app.session.journal.len();
+    for bad in [json!({"id": "Bogus"}), json!({"id": "Clear"}), json!({"id": "Behind"}), json!({"id": 3}), json!({}), json!({"id": "Desaturate"})] {
+        let reply = call(&mut app, &ctx, "ui.context.choose", bad.clone());
+        assert_eq!(reply["ok"], false, "{bad}: {reply}");
+        assert!(app.ui.brush_mode_menu.is_some(), "{bad}: a bad choice leaves the menu open");
+    }
+    assert_eq!(app.session.journal.len(), journal, "bad choices change nothing");
+    assert!(!app.ui.tool_options.brush_clear && !app.session.tools.brush.behind);
+    assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id": "Multiply"}))["ok"], true);
+    assert!(app.ui.brush_mode_menu.is_none());
+    assert_eq!(app.session.tools.brush.mode, photocraft_doc::BlendMode::Multiply);
+    assert_eq!(app.session.journal.last().unwrap(), &("tools.setBrush".into(), json!({"brush": {"mode": "Multiply", "behind": false}})));
+    // Another tool's rows.
+    shift_right(&mut app, &ctx, "eraser");
+    assert_eq!(inspect(&app, &ctx)["brushModeMenu"]["choices"], json!(["Brush", "Pencil", "Block"]));
+    assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id": "Multiply"}))["ok"], false);
+    assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id": "Pencil"}))["ok"], true);
+    assert_eq!(app.ui.tool_options.eraser_mode, "pencil");
+    shift_right(&mut app, &ctx, "cloneStamp");
+    let reply = call(&mut app, &ctx, "ui.context.choose", json!({"id": "Edit Brush…"}));
+    assert_eq!(reply["ok"], true, "{reply}");
+    assert!(app.ui.brush_picker.is_some() && app.ui.brush_mode_menu.is_none());
+    // A tool change closes the menu: its rows are no longer chosen.
+    shift_right(&mut app, &ctx, "dodge");
+    app.ui.tool = crate::state::Tool::Sponge;
+    assert_eq!(call(&mut app, &ctx, "ui.context.choose", json!({"id": "Saturate"}))["ok"], false);
+    assert_eq!(app.ui.tool_options.sponge_mode, "desaturate");
+    // Magic Eraser has no menu.
+    shift_right(&mut app, &ctx, "magicEraser");
+    assert!(inspect(&app, &ctx)["brushModeMenu"].is_null());
 }
