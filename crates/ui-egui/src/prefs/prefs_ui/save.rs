@@ -336,7 +336,14 @@ fn history_log(app: &mut PhotocraftApp) {
             prefs::LogDetail::Detailed => text.push_str(&format!("{label}  {id} {params}\n")),
         }
     }
-    if !text.is_empty() {
-        let _ = append(&hl.file_path, &text);
+    if !text.is_empty()
+        && let Err(e) = append(&hl.file_path, &text)
+    {
+        // Keep the batch consumed: the append may already have written part of it.
+        app.ui.status = format!("{} ({}): {e}", tl!("History Log"), hl.file_path);
+        app.ui.status_error = true;
     }
 }
+
+#[cfg(test)]
+mod history_log_tests;
