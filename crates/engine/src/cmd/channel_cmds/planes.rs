@@ -8,7 +8,9 @@ use super::{ColorMode, DocState, Document, PixelFormat, Rect, Surface, Value};
 pub struct IsolatedCurveChannel {
     /// Channels-panel name, including a custom alpha name or "{layer} Mask".
     pub name: String,
-    /// Tone parameter key: empty = composite; otherwise `red`/`green`/…
+    /// A partial colour selection exposes its combined entry and individual components.
+    pub components: Option<crate::color_channels::ColorChannels>,
+    /// Curves param key: empty = composite `points`; otherwise `red`/`green`/…
     pub key: &'static str,
     /// Index into the tone-space histograms (composite = 0 for RGB/CMYK).
     pub hist: usize,
@@ -52,53 +54,65 @@ pub fn isolated_curve_channel_for(st: &DocState, layers_panel_mask: bool) -> Opt
 /// panel state (notably when an Action opens a recorded step's dialog).
 pub fn isolated_curve_channel_with_params(st: &DocState, layers_panel_mask: bool, params: &Value) -> Option<IsolatedCurveChannel> {
     let doc = &st.doc;
-    let mode = edit_mode(doc);
-    let target = if params.get("target").is_some() {
-        match target_of(params) {
-            Target::Mask => ChannelTarget::LayerMask,
-            Target::FilterMask => return filter_mask_curve_channel(st),
-            Target::Alpha(i) => ChannelTarget::Alpha(i),
-            Target::QuickMask => {
-                doc.quick_mask.as_ref()?;
-                return Some(IsolatedCurveChannel {
-                    name: "Quick Mask".into(),
-                    key: "",
-                    hist: 0,
-                    tint: false,
-                    translate: true,
-                    gray: Some(GraySurface::QuickMask),
-                });
-            }
-            // Explicit pixel commands retain the engine's single-colour restriction, but
-            // bypass implicit Quick Mask and Layers-panel mask targeting.
-            Target::Pixels => match st.channel_view.target {
-                ChannelTarget::Color(k) => ChannelTarget::Color(k),
-                _ => return None,
-            },
+    if params.get("target").is_some() {
+        if let Some(colors) = crate::color_channels::explicit(params, color_count(doc)).ok().flatten() {
+            return curve_channel_for_colors(doc, colors);
         }
-    } else {
-        st.channel_view.target
-    };
-    match target {
-        ChannelTarget::Color(k) => {
-            let names = color_names(mode);
-            let keys = crate::adjust_params::channel_keys(crate::adjust_params::default_space(mode));
-            let name = names.get(k)?.to_string();
-            let key = *keys.get(k)?;
-            let hist = if matches!(mode, ColorMode::Lab) { k } else { k.saturating_add(1) };
-            Some(IsolatedCurveChannel { name, key, hist, tint: true, translate: true, gray: None })
-        }
+        return match target_of(params) {
+            Target::Mask => layer_mask_curve_channel(st),
+            Target::FilterMask => filter_mask_curve_channel(st),
+            Target::Alpha(i) => doc.channels.get(i).map(|c| IsolatedCurveChannel {
+                name: c.name.clone(),
+                components: None,
+                key: "",
+                hist: 0,
+                tint: false,
+                translate: false,
+                gray: Some(GraySurface::Alpha(i)),
+            }),
+            Target::QuickMask => doc.quick_mask.as_ref().map(|_| IsolatedCurveChannel {
+                name: "Quick Mask".into(),
+                components: None,
+                key: "",
+                hist: 0,
+                tint: false,
+                translate: true,
+                gray: Some(GraySurface::QuickMask),
+            }),
+            // An explicit pixel target bypasses the Channels panel, including its colour set.
+            Target::Pixels => None,
+        };
+    }
+    if (matches!(st.channel_view.target, ChannelTarget::Color(_)) || (st.channel_view.target == ChannelTarget::Composite && doc.quick_mask.is_none()))
+        && crate::mask_view_cmds::current(st).is_some_and(|v| v.filter)
+    {
+        return filter_mask_curve_channel(st);
+    }
+    if matches!(st.channel_view.target, ChannelTarget::Color(_)) && (crate::mask_view_cmds::current(st).is_some() || layers_panel_mask) {
+        return layer_mask_curve_channel(st);
+    }
+    if let Some(colors) = st.channel_view.color_selection(color_count(doc)) {
+        return curve_channel_for_colors(doc, colors);
+    }
+    match st.channel_view.target {
         ChannelTarget::Alpha(i) => doc.channels.get(i).map(|c| IsolatedCurveChannel {
             name: c.name.clone(),
+            components: None,
             key: "",
             hist: 0,
             tint: false,
             translate: false,
             gray: Some(GraySurface::Alpha(i)),
         }),
-        ChannelTarget::Composite if doc.quick_mask.is_some() => {
-            Some(IsolatedCurveChannel { name: "Quick Mask".into(), key: "", hist: 0, tint: false, translate: true, gray: Some(GraySurface::QuickMask) })
-        }
+        ChannelTarget::Composite if doc.quick_mask.is_some() => Some(IsolatedCurveChannel {
+            name: "Quick Mask".into(),
+            components: None,
+            key: "",
+            hist: 0,
+            tint: false,
+            translate: true,
+            gray: Some(GraySurface::QuickMask),
+        }),
         ChannelTarget::LayerMask => layer_mask_curve_channel(st),
         ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some_and(|v| v.filter) => filter_mask_curve_channel(st),
         ChannelTarget::Composite if crate::mask_view_cmds::current(st).is_some() || layers_panel_mask => layer_mask_curve_channel(st),
@@ -106,11 +120,33 @@ pub fn isolated_curve_channel_with_params(st: &DocState, layers_panel_mask: bool
     }
 }
 
-fn layer_mask_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
+/// Tone editor descriptor for captured native colour targets, without cloning document history.
+pub fn curve_channel_for_colors(doc: &Document, colors: crate::color_channels::ColorChannels) -> Option<IsolatedCurveChannel> {
+    let mode = edit_mode(doc);
+    let names = color_names(mode);
+    if colors.len() > 1 {
+        let name = colors.indices().filter_map(|i| names.get(i)).filter_map(|n| n.chars().next()).collect();
+        return Some(IsolatedCurveChannel { name, components: Some(colors), key: "", hist: 0, tint: false, translate: false, gray: None });
+    }
+    let k = colors.indices().next()?;
+    let keys = crate::adjust_params::channel_keys(crate::adjust_params::default_space(mode));
+    Some(IsolatedCurveChannel {
+        name: names.get(k)?.to_string(),
+        components: None,
+        key: keys.get(k)?,
+        hist: if mode == ColorMode::Lab { k } else { k.saturating_add(1) },
+        tint: true,
+        translate: true,
+        gray: None,
+    })
+}
+
+/// The active layer mask's tone descriptor, independent of the selected colour rows.
+pub fn layer_mask_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> {
     let layer = st.active_layer.and_then(|id| st.doc.layer(id))?;
     layer.mask.as_ref()?;
     let name = format!("{} Mask", layer.name);
-    Some(IsolatedCurveChannel { name, key: "", hist: 0, tint: false, translate: false, gray: Some(GraySurface::LayerMask) })
+    Some(IsolatedCurveChannel { name, components: None, key: "", hist: 0, tint: false, translate: false, gray: Some(GraySurface::LayerMask) })
 }
 
 /// The Curves target when the active smart object's filter mask is targeted (its thumbnail on the
@@ -119,7 +155,7 @@ pub fn filter_mask_curve_channel(st: &DocState) -> Option<IsolatedCurveChannel> 
     let layer = st.active_layer.and_then(|id| st.doc.layer(id))?;
     crate::smart_cmds::filter_mask_paintable(layer).ok()?;
     let name = format!("{} Filter Mask", layer.name);
-    Some(IsolatedCurveChannel { name, key: "", hist: 0, tint: false, translate: false, gray: Some(GraySurface::FilterMask) })
+    Some(IsolatedCurveChannel { name, components: None, key: "", hist: 0, tint: false, translate: false, gray: Some(GraySurface::FilterMask) })
 }
 
 pub(super) fn edit_mode(doc: &Document) -> ColorMode {

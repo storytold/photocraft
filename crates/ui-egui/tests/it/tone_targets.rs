@@ -571,6 +571,10 @@ fn last_tone_settings_preserve_compatible_colour_controls_and_reject_bad_setting
                 let mut h = harness(app);
                 let id = adjust_dialog::open_last(h.state_mut(), &command).unwrap();
                 h.run_steps(4);
+                // Main captures the selected native component in each modal. Recall preserves
+                // that address alongside the settings, while preferences remain address-free.
+                let mut expected = expected;
+                expected["target"] = json!({"colors":[0]});
                 assert_eq!(params(&h), expected, "{mode:?} {kind}: {last}");
                 dialogs::cancel(h.state_mut(), id).unwrap();
                 assert!(std::sync::Arc::ptr_eq(&original, &h.state().session.active().unwrap().doc));

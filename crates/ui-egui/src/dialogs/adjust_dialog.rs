@@ -120,6 +120,9 @@ pub fn add_point_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64
     if values.get("pencil").and_then(Value::as_bool) == Some(true) {
         return true;
     }
+    if values.get("target").is_some_and(|target| matches!(target.as_str(), Some("mask" | "filterMask" | "quickMask")) || target.get("channel").is_some()) {
+        return true;
+    }
     let Some(mode) = app.session.active().map(|s| s.doc.mode) else { return true };
     if !matches!(mode, photocraft_doc::ColorMode::Rgb | photocraft_doc::ColorMode::Grayscale) {
         app.ui.status = tl!("Unavailable in this color mode").into();
@@ -133,6 +136,12 @@ pub fn add_point_at(app: &mut PhotocraftApp, ctx: &egui::Context, x: f64, y: f64
     let Some(sample) = crate::canvas::composite_color(app, x, y) else { return true };
     let gray = adjust_editors::is_gray(mode);
     let (shown, shown_key) = match &isolated {
+        Some(c) if c.components.is_some() => {
+            let ch: usize = ctx.data(|d| d.get_temp(dialog_mem("curves").with("curves-ch"))).unwrap_or(0);
+            let keys = photocraft_engine::adjust_params::channel_keys(adjust_editors::space_of(&values));
+            let key = ch.checked_sub(1).and_then(|i| c.components.and_then(|colors| colors.indices().nth(i))).and_then(|i| keys.get(i)).copied().unwrap_or("");
+            (ch, key)
+        }
         Some(c) => (0, c.key),
         None => {
             let ch: usize = ctx.data(|d| d.get_temp(dialog_mem("curves").with("curves-ch"))).unwrap_or(0);
@@ -290,7 +299,13 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
 /// Seed an Action's dialog only after resolving its recorded target, so document-space
 /// defaults cannot overwrite the target's neutral grayscale values.
 pub(crate) fn open_with_params(app: &mut PhotocraftApp, command: &str, params: &Value) -> Option<u64> {
-    let params = app.with_mask_target(command, params.clone());
+    let mut params = app.with_mask_target(command, params.clone());
+    if params.get("target").is_none()
+        && let Some(colors) = photocraft_engine::color_channels::selected(&app.session)
+        && let Some(object) = params.as_object_mut()
+    {
+        object.insert("target".into(), colors.params());
+    }
     open_fields(app, command, params.as_object().cloned().unwrap_or_default())
 }
 
@@ -342,6 +357,12 @@ fn open_fields(app: &mut PhotocraftApp, command: &str, mut fields: Map<String, V
     Some(app.ui.open_dialog(crate::state::DialogKind::Command, fields))
 }
 
+/// Whether the dialog's captured target is a set of several Lab components, whose Levels and
+/// Curves settings are kept as a separate combined record.
+fn combined_lab_target(fields: &Map<String, Value>) -> bool {
+    photocraft_engine::color_channels::explicit(&crate::filter_dialog::params_of(fields), 3).ok().flatten().is_some_and(|c| c.len() > 1)
+}
+
 /// Opens the dialog for `command` at the settings last confirmed in it (Photoshop's ⌥ plus the
 /// adjustment's shortcut, ⌥⌘L / ⌥⌘M, #8900), or at the neutral ones when there are none or they
 /// don't fit the current colour mode.
@@ -363,7 +384,25 @@ pub fn open_last(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
     ) {
         return Some(id);
     }
-    if let (Some(dialog), Value::Object(values)) = (app.ui.dialog_mut(id), photocraft_engine::adjust_params::to_params(&adjustment)) {
+    let mut restored = photocraft_engine::adjust_params::to_params(&adjustment);
+    // The target `open` captured, as `remember` reads it: a viewed layer mask wins over the
+    // Channels panel's colour set, so its settings are restored as saved.
+    let captured_set = app.ui.dialog_mut(id).is_some_and(|d| combined_lab_target(&d.fields));
+    if mode == photocraft_doc::ColorMode::Lab && matches!(kind, "levels" | "curves") && captured_set {
+        // The parser validates all records, but ordinary Lab serialization aliases the master
+        // to Lightness. A partial set keeps the separately saved combined record.
+        let neutral = photocraft_engine::adjust_params::default_for(kind, photocraft_doc::ColorMode::Grayscale)
+            .ok()
+            .map(|a| photocraft_engine::adjust_params::to_params(&a))
+            .unwrap_or(Value::Null);
+        let combined = if last.get("__combinedLab").and_then(Value::as_bool) == Some(true) { &last } else { &neutral };
+        for key in ["points", "inBlack", "inWhite", "gamma", "outBlack", "outWhite"] {
+            if let Some(value) = combined.get(key) {
+                restored[key] = value.clone();
+            }
+        }
+    }
+    if let (Some(dialog), Value::Object(values)) = (app.ui.dialog_mut(id), restored) {
         keep_context(&mut dialog.fields);
         dialog.fields.extend(values);
     }
@@ -382,6 +421,12 @@ pub(crate) fn remember(app: &mut PhotocraftApp, fields: &Map<String, Value>) {
         for key in ["target", "layer", "document"] {
             settings.remove(key);
         }
+    }
+    if app.session.active().is_some_and(|st| st.doc.mode == photocraft_doc::ColorMode::Lab)
+        && combined_lab_target(fields)
+        && matches!(command.strip_prefix(PREFIX), Some("levels" | "curves"))
+    {
+        values["__combinedLab"] = json!(true);
     }
     app.session.prefs.edit(|prefs| prefs.dialogs.insert(command.into(), values));
 }
@@ -437,7 +482,13 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, fields: &mut Map<String,
             // describes it, not the colour layers beneath (#5335).
             let source = match gray_plane {
                 Some(surface) => HistSource::Channel { layer: id, surface },
-                None => HistSource::Layer(id),
+                None => {
+                    if let Some(colors) = isolated_curve.as_ref().and_then(|c| c.components) {
+                        HistSource::Colors { layer: id, colors }
+                    } else {
+                        HistSource::Layer(id)
+                    }
+                }
             };
             Some(tone::histograms(app, source, adjust_editors::space_of(&values)))
         }

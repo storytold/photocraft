@@ -308,3 +308,30 @@ fn gray_tone_records_do_not_leak_from_rgb_channels() {
         }
     }
 }
+
+/// Explicit colour sets and pixel commands must not inherit an unrelated gray-panel target.
+#[test]
+fn explicit_tone_descriptors_resolve_colour_sets_before_panel_state() {
+    use photocraft_engine::channel_cmds::{GraySurface, isolated_curve_channel_with_params};
+    for mode in [ColorMode::Rgb, ColorMode::Lab, ColorMode::Cmyk] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            for target in [ChannelTarget::Alpha(0), ChannelTarget::LayerMask, ChannelTarget::Color(1)] {
+                let mut s = session(mode, depth);
+                let st = s.active_mut().unwrap();
+                st.channel_view.target = target;
+                st.channel_view.selected_colors = vec![0, 1];
+                let colors = isolated_curve_channel_with_params(st, true, &json!({"target":{"colors":[0,2]}})).unwrap();
+                assert_eq!(colors.components.unwrap().indices().collect::<Vec<_>>(), [0, 2]);
+                assert!(colors.gray.is_none());
+                assert!(isolated_curve_channel_with_params(st, true, &json!({"target":"pixels"})).is_none());
+                let scalar = isolated_curve_channel_with_params(st, true, &json!({"target":{"channel":0}})).unwrap();
+                assert_eq!(scalar.name, "Spot ink");
+                assert_eq!(scalar.gray, Some(GraySurface::Alpha(0)));
+                assert!(scalar.components.is_none());
+                let mask = isolated_curve_channel_with_params(st, false, &json!({"target":"mask"})).unwrap();
+                assert_eq!(mask.gray, Some(GraySurface::LayerMask));
+                assert!(mask.components.is_none());
+            }
+        }
+    }
+}

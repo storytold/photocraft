@@ -1,4 +1,4 @@
-use super::curves::{ToneChannel, bar_color, channel_picker, channel_picker_opts, gradient_bar, hist_color, tone_channels};
+use super::curves::{ToneChannel, bar_color, editor_channel_picker, editor_channels, gradient_bar, hist_color};
 use super::{Color32, Edit, EditorCx, Sense, Stroke, StrokeKind, Tokens, Value, json, label, pos2, round, space_of, tone, vec2, widgets};
 
 // ---------------------------------------------------------------------------------------------
@@ -6,7 +6,7 @@ use super::{Color32, Edit, EditorCx, Sense, Stroke, StrokeKind, Tokens, Value, j
 
 type Lv = [f32; 5]; // in_black, gamma, in_white, out_black, out_white (0–255, gamma as is)
 
-fn read_levels(v: &Value, key: &str) -> Lv {
+pub(super) fn read_levels(v: &Value, key: &str) -> Lv {
     let o = if key.is_empty() { Some(v) } else { v.get(key) };
     let g = |k: &str, d: f32| o.and_then(|o| o.get(k)).and_then(Value::as_f64).map_or(d, |x| x as f32);
     [g("inBlack", 0.0), g("gamma", 1.0), g("inWhite", 255.0), g("outBlack", 0.0), g("outWhite", 255.0)]
@@ -63,23 +63,16 @@ pub(super) fn nearest(xs: &[f32], x: f32) -> Option<u8> {
 /// Edit the selected Levels record using its own channel label, histogram and Auto endpoints.
 pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let t = Tokens::get(ui.ctx());
-    let chans = tone_channels(space_of(v), cx.gray);
-    let isolated = cx.isolated_curve.as_ref();
+    let channels = editor_channels(cx, space_of(v));
     let mut ch = 0;
     let mut auto = false;
     ui.horizontal(|ui| {
-        ch = if let Some(iso) = isolated {
-            channel_picker_opts(ui, cx.mem.with("levels-ch"), &[(0, iso.name.as_str())], tl!("Channel:"), iso.translate)
-        } else {
-            channel_picker(ui, cx.mem.with("levels-ch"), chans, tl!("Channel:"))
-        };
+        ch = editor_channel_picker(ui, cx.mem.with("levels-ch"), &channels);
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).clicked();
         });
     });
-    let chan =
-        if let Some(iso) = isolated { ToneChannel { key: iso.key, label: "" } } else { chans.get(ch).copied().unwrap_or(ToneChannel { key: "", label: "" }) };
-    let hist_i = isolated.map_or(ch, |c| c.hist);
+    let (chan, _, hist_i) = channels.get(ch).cloned().unwrap_or((ToneChannel { key: "", label: "" }, String::new(), 0));
     let mut l = read_levels(v, chan.key);
     let mut e = Edit::default();
     let mut changed = false;

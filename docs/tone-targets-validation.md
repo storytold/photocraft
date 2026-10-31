@@ -122,6 +122,21 @@ Validation on Linux with `PHOTOCRAFT_FULL_SWEEP=1` and CI's pinned craft-fonts i
 
 Current evidence is retained in `plan/merge-main-20261030/` (gitignored).
 
+## Main integration and review (2026-11-01)
+
+Current main integrated: `1f984bffb` (PhotoCraft 0.18.0; 225 incoming commits). Resolved conflicts with main's selected-colour-set work by retaining its shared Levels/Curves editor, captured native targets, combined Lab recall and preview routing alongside this PR's explicit scalar target resolution, gray defaults, named controls and native gray sampling. Explicit whole-pixel commands follow main's rule and bypass the selected colour set. Both control-protocol additions are preserved.
+
+Added two regression functions for explicit native-colour-set and whole-pixel addressing beside selected alpha/mask targets: 27 engine metadata cases across RGB/Lab/CMYK and 8/16/32-bit data, plus six dialog initialization/reset cases. The incoming Lab mask-recall regression now requires neutral fields and rejects hidden Lightness records. A new captured-space assertion uses the shared resolver. No CI workflow differs from main.
+
+Validation on Linux with `PHOTOCRAFT_FULL_SWEEP=1` and CI's pinned craft-fonts input:
+
+- Full engine/UI `cargo test`: **7,672 passed, 0 failed, 43 normally ignored**, including doctest builds. Tests ran with `--test-threads=1` because of the parallel font-test interference recorded on 2026-10-30; no assertions were changed or tests skipped to accommodate that limitation. No current parallel-suite result is claimed.
+- The ignored full-registry adversarial command test passed separately. Strict engine/UI all-target Clippy (`-D warnings`), formatting, layering and wasm passed. The changed-corpus check correctly skipped because no corpus-critical paths differ from integrated main.
+- Six fresh offscreen captures were inspected: named alpha and explicit filter-mask Levels/Curves, plus both new Lab subset dialogs. The final scoped integration review found no further actionable issues in the merged changes.
+- Historical before/after benchmarks and broader workspace results remain dated. No new benchmark, broader-workspace or Windows/macOS result is claimed for this merge.
+
+Current evidence is retained in `plan/merge-main-20261031/` (gitignored; work began on 2026-10-31).
+
 ## 24 MP release comparison
 
 Dense synthetic 6000 × 4000 RGB8 raster layer, raster mask, saved alpha channel and Quick Mask, each filled with 25% gray. The central selection is a 3000 × 2000 rectangle at 0.5 coverage. Proxy factor 4 (1500 × 1000). AMD Ryzen 7 9700X, 16 logical CPUs, Ubuntu 26.04.1, Rust 1.99.0, default optimized release profile (thin LTO).
