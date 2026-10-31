@@ -28,6 +28,75 @@ use crate::{ImportResult, IoError};
 pub const MAX_SIDE: u32 = 16_384;
 /// A rasterised fallback layer or a smart-object render never exceeds this many pixels.
 const MAX_RASTER_PIXELS: u64 = 24_000_000;
+/// Largest decoded byte size (RGBA8) accepted for an embedded raster image before resvg decodes
+/// it. resvg/tiny-skia allocate the full intrinsic image before any destination-size scaling,
+/// so a highly compressed PNG or WebP could otherwise trigger gigabyte-scale allocation and
+/// decompression that the destination pixmap's size check never sees.
+const MAX_EMBEDDED_IMAGE_BYTES: u64 = MAX_RASTER_PIXELS * 4;
+
+/// The IHDR width/height of a PNG, read directly from its header (no decoding): the signature
+/// (8 bytes), the IHDR chunk's length and type (8 bytes), then big-endian width and height.
+fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    let sig = data.get(0..8)?;
+    if sig != [0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A] {
+        return None;
+    }
+    if data.get(12..16)? != b"IHDR" {
+        return None;
+    }
+    let w = u32::from_be_bytes(data.get(16..20)?.try_into().ok()?);
+    let h = u32::from_be_bytes(data.get(20..24)?.try_into().ok()?);
+    Some((w, h))
+}
+
+/// Intrinsic dimensions of a raster image resvg can embed, from its header alone, for formats
+/// where decoding allocates the full image before any destination scaling (PNG, WebP).
+/// Returns `Some(Some((w, h)))` when the format is PNG/WebP and its header parses cleanly,
+/// `Some(None)` when the format is PNG/WebP (by MIME or magic bytes under `"text/plain"`)
+/// and its header is malformed, or `None` for other formats.
+/// A JPEG's size from its frame header (the first SOF marker), without decoding anything.
+fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    let mut i = 2;
+    loop {
+        if *data.get(i)? != 0xFF {
+            return None;
+        }
+        let marker = *data.get(i + 1)?;
+        match marker {
+            0xFF => i += 1,
+            // SOF0..SOF15, but for DHT (C4), JPG (C8) and DAC (CC).
+            0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
+                let h = u16::from_be_bytes([*data.get(i + 5)?, *data.get(i + 6)?]);
+                let w = u16::from_be_bytes([*data.get(i + 7)?, *data.get(i + 8)?]);
+                return Some((u32::from(w), u32::from(h)));
+            }
+            // Start of scan or end of image before any frame header.
+            0xD8..=0xDA => return None,
+            0x01 | 0xD0..=0xD7 => i += 2,
+            _ => i += 2 + usize::from(u16::from_be_bytes([*data.get(i + 2)?, *data.get(i + 3)?])),
+        }
+    }
+}
+
+fn embedded_image_dimensions(mime: &str, data: &[u8]) -> Option<Option<(u32, u32)>> {
+    match mime {
+        "image/png" => Some(png_dimensions(data)),
+        "image/webp" | "image/gif" => Some(photocraft_codecs::probe_size(data).ok()),
+        "image/jpeg" | "image/jpg" => Some(jpeg_dimensions(data)),
+        "text/plain" => {
+            if data.starts_with(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]) {
+                Some(png_dimensions(data))
+            } else if (data.get(0..4) == Some(b"RIFF") && data.get(8..12) == Some(b"WEBP")) || data.starts_with(b"GIF8") {
+                Some(photocraft_codecs::probe_size(data).ok())
+            } else if data.starts_with(&[0xFF, 0xD8, 0xFF]) {
+                Some(jpeg_dimensions(data))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
 /// Aggregate memory for retained fallback surfaces in the document's pixel format.
 const MAX_PIXEL_BYTES: u64 = 1 << 30;
 /// Estimated peak during raster conversion (retained surfaces + RGBA8 pixmap + f32 staging + tiles).
@@ -65,20 +134,200 @@ fn fonts() -> Arc<usvg::fontdb::Database> {
         }
         #[cfg(not(target_arch = "wasm32"))]
         db.load_system_fonts();
+        resolve_generic_families(&mut db, system_generic_family);
         Arc::new(db)
     })
     .clone()
 }
 
+/// Installed families that stand in for each generic one, best first: the metric-compatible
+/// Liberation and Croscore fonts, then common Linux defaults, then the bundled craft fonts.
+const SANS_SERIF: &[&str] = &["Liberation Sans", "Arimo", "Helvetica", "DejaVu Sans", "Noto Sans", photocraft_text::fonts::DEFAULT_FAMILY];
+const SERIF: &[&str] = &["Liberation Serif", "Tinos", "Times", "DejaVu Serif", "Noto Serif"];
+const MONOSPACE: &[&str] = &["Liberation Mono", "Cousine", "Courier", "DejaVu Sans Mono", "Noto Sans Mono", photocraft_text::fonts::MONO_FAMILY];
+
+/// Points the generic families (`sans-serif`, `serif`, `monospace`, `cursive`, `fantasy`) at
+/// fonts the database holds. fontdb names Windows fonts for them (Arial, Times New Roman,
+/// Courier New…): on a system without those, every family of a usual
+/// `font-family="Arial, Helvetica, sans-serif"` misses, and usvg drops the text although
+/// hundreds of fonts are installed, where a browser sets it in a fallback font. A generic whose
+/// font is installed is left alone. Otherwise the system's choice (`system`, Fontconfig on Linux)
+/// wins when the database has it, then the first installed stand-in, then the sans-serif choice,
+/// then any font at all.
+fn resolve_generic_families(db: &mut usvg::fontdb::Database, system: impl Fn(&str) -> Option<String>) {
+    use usvg::fontdb::Family;
+    let has = |db: &usvg::fontdb::Database, name: &str| db.faces().any(|f| f.families.iter().any(|(n, _)| n.eq_ignore_ascii_case(name)));
+    let Some(any) = db.faces().find_map(|f| f.families.first()).map(|(n, _)| n.clone()) else { return };
+    let mut sans = None;
+    for (generic, css, stand_ins) in [
+        (Family::SansSerif, "sans-serif", SANS_SERIF),
+        (Family::Serif, "serif", SERIF),
+        (Family::Monospace, "monospace", MONOSPACE),
+        (Family::Cursive, "cursive", &[][..]),
+        (Family::Fantasy, "fantasy", &[][..]),
+    ] {
+        let current = db.family_name(&generic).to_string();
+        let pick = if has(db, &current) {
+            current
+        } else {
+            system(css)
+                .filter(|n| has(db, n))
+                .or_else(|| stand_ins.iter().find(|n| has(db, n)).map(|n| n.to_string()))
+                .or_else(|| sans.clone())
+                .unwrap_or_else(|| any.clone())
+        };
+        match generic {
+            Family::SansSerif => db.set_sans_serif_family(pick.clone()),
+            Family::Serif => db.set_serif_family(pick.clone()),
+            Family::Monospace => db.set_monospace_family(pick.clone()),
+            Family::Cursive => db.set_cursive_family(pick.clone()),
+            _ => db.set_fantasy_family(pick.clone()),
+        }
+        if generic == Family::SansSerif {
+            sans = Some(pick);
+        }
+    }
+}
+
+/// The family Fontconfig sets a generic family in (`fc-match sans-serif`), as the rest of the
+/// desktop does; `None` without Fontconfig.
+#[cfg(all(target_os = "linux", not(target_arch = "wasm32")))]
+fn system_generic_family(generic: &str) -> Option<String> {
+    let out = std::process::Command::new("fc-match").args(["--format=%{family[0]}", generic]).output().ok()?;
+    let name = String::from_utf8(out.stdout).ok()?;
+    Some(name.trim().to_string()).filter(|n| out.status.success() && !n.is_empty())
+}
+
+#[cfg(not(all(target_os = "linux", not(target_arch = "wasm32"))))]
+fn system_generic_family(_generic: &str) -> Option<String> {
+    None
+}
+
+/// Most font file bytes [`in_memory`] keeps; past it a face stays on disk (slow, still right).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_CACHED_FONT_BYTES: usize = 256 << 20;
+
+/// `id`, or the same face loaded from memory when the database names a file for it. fontdb
+/// re-reads a system font's whole file for every glyph usvg outlines (about a millisecond a
+/// character with Times New Roman), so a short entity-expanded text could keep an import busy
+/// for minutes. Each file is read once per process; the parse's own database copy then holds
+/// every face of that file from memory.
+#[cfg(not(target_arch = "wasm32"))]
+fn in_memory(id: usvg::fontdb::ID, db: &mut Arc<usvg::fontdb::Database>) -> usvg::fontdb::ID {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, PoisonError};
+    use usvg::fontdb::Source;
+    type Files = (HashMap<PathBuf, Arc<Vec<u8>>>, usize);
+    static FILES: OnceLock<Mutex<Files>> = OnceLock::new();
+    static LOADING: Mutex<()> = Mutex::new(());
+    let Some((Source::File(path), index)) = db.face_source(id) else { return id };
+    let files = || FILES.get_or_init(Mutex::default).lock().unwrap_or_else(PoisonError::into_inner);
+    let fits = |files: &Files, len: usize| files.1.saturating_add(len) <= MAX_CACHED_FONT_BYTES;
+    let cached = files().0.get(&path).cloned();
+    // One miss at a time, so imports wanting the same file read it once: a second one waits
+    // here, then takes the bytes the first one kept.
+    let loading = cached.is_none().then(|| LOADING.lock().unwrap_or_else(PoisonError::into_inner));
+    let cached = cached.or_else(|| files().0.get(&path).cloned());
+    let bytes = match cached {
+        Some(b) => b,
+        None => {
+            // The size first: a file past the budget isn't read at all, on this lookup or the next.
+            let Ok(len) = std::fs::metadata(&path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)) else { return id };
+            if !fits(&files(), len) {
+                return id;
+            }
+            let Ok(b) = std::fs::read(&path) else { return id };
+            let b = Arc::new(b);
+            // The face has to load from the bytes before they're kept or the file's faces leave
+            // the database: a file replaced or cut short since fontdb indexed it stays on disk.
+            let mut probe = usvg::fontdb::Database::new();
+            let ids = probe.load_font_source(Source::Binary(b.clone()));
+            if !ids.iter().any(|&n| probe.face_source(n).is_some_and(|(_, i)| i == index)) {
+                return id;
+            }
+            let mut files = files();
+            if !fits(&files, b.len()) {
+                return id;
+            }
+            files.1 = files.1.saturating_add(b.len());
+            files.0.insert(path.clone(), b.clone());
+            b
+        }
+    };
+    drop(loading);
+    let db = Arc::make_mut(db);
+    let same_file: Vec<_> = db.faces().filter(|f| matches!(&f.source, Source::File(p) if *p == path)).map(|f| f.id).collect();
+    // Last first: fontdb's slots are reused last-freed-first, so the file's faces come back in
+    // their old places and order, and the fallback search (first face with the character)
+    // still finds the face it finds on disk.
+    for f in same_file.into_iter().rev() {
+        db.remove_face(f);
+    }
+    let loaded = db.load_font_source(Source::Binary(bytes));
+    loaded.into_iter().find(|&n| db.face_source(n).is_some_and(|(_, i)| i == index)).unwrap_or(id)
+}
+
+/// usvg's font choice, with the chosen faces read from memory ([`in_memory`]).
+fn font_resolver() -> usvg::FontResolver<'static> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let select = usvg::FontResolver::default_font_selector();
+        let fallback = usvg::FontResolver::default_fallback_selector();
+        usvg::FontResolver {
+            select_font: Box::new(move |font, db| select(font, db).map(|id| in_memory(id, db))),
+            select_fallback: Box::new(move |c, used, db| fallback(c, used, db).map(|id| in_memory(id, db))),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    usvg::FontResolver::default()
+}
+
 /// Parse options for an untrusted drawing. `<image href>` resolves only `data:` URLs: a file path
 /// or relative href is never read, so opening an SVG cannot pull local files (`/etc/...`,
 /// `~/.ssh/...`) into the document. Embedded SVG images get no `<image>` resolution at all
-/// (`usvg` already blanks it for sub-SVGs).
-fn options(fontdb: Arc<usvg::fontdb::Database>) -> usvg::Options<'static> {
+/// (`usvg` already blanks it for sub-SVGs). An embedded SVG may nest `depth_left` levels: it is
+/// parsed on top of the drawing's own recursion, so the two depths share [`MAX_XML_DEPTH`].
+fn options(fontdb: Arc<usvg::fontdb::Database>, depth_left: usize) -> usvg::Options<'static> {
+    let default_resolver = usvg::ImageHrefResolver::default_data_resolver();
+    let resolve_data: usvg::ImageHrefDataResolverFn<'static> = Box::new(move |mime, data, opts| {
+        // Reject embedded images whose decoded RGBA storage would exceed the budget before
+        // resvg (which allocates the full intrinsic image before any destination scaling) ever
+        // sees them. Formats without a cheap header probe fall through unchanged; their decode
+        // path is bounded elsewhere or accepted as-is, matching the previous behavior.
+        let probed = embedded_image_dimensions(mime, &data);
+        if let Some(probed) = probed {
+            let (w, h) = probed?;
+            let decoded = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(4);
+            if decoded > MAX_EMBEDDED_IMAGE_BYTES {
+                return None;
+            }
+        }
+        // An embedded SVG (`image/svg+xml`, or `text/plain` that isn't one of the raster
+        // formats probed above) is parsed by the default resolver with none of `parse_with`'s
+        // checks, so they run here. It can itself be gzip-compressed (SVGZ-in-data-URL), and the
+        // default resolver's sub-SVG loader would decompress again with no byte limit of its
+        // own: hand it our bounded inflate's output instead, which no longer starts with the
+        // gzip magic. Nesting deeper than `depth_left` drops the image rather than overflowing
+        // the parser's stack.
+        if mime == "image/svg+xml" || (mime == "text/plain" && probed.is_none()) {
+            let (mime, xml) = match inflate(&data) {
+                Ok(std::borrow::Cow::Borrowed(_)) => (mime, Arc::clone(&data)),
+                Ok(std::borrow::Cow::Owned(xml)) if !xml.starts_with(&[0x1f, 0x8b]) => ("image/svg+xml", Arc::new(xml)),
+                _ => return None,
+            };
+            if nesting_depth(&xml, depth_left) > depth_left {
+                return None;
+            }
+            return default_resolver(mime, xml, opts);
+        }
+        default_resolver(mime, data, opts)
+    });
     usvg::Options {
         resources_dir: None,
-        image_href_resolver: usvg::ImageHrefResolver { resolve_data: usvg::ImageHrefResolver::default_data_resolver(), resolve_string: Box::new(|_, _| None) },
+        image_href_resolver: usvg::ImageHrefResolver { resolve_data, resolve_string: Box::new(|_, _| None) },
         fontdb,
+        font_resolver: font_resolver(),
         ..usvg::Options::default()
     }
 }
@@ -103,14 +352,19 @@ fn parse(bytes: &[u8]) -> Result<Parsed, IoError> {
 /// [`parse`] with the font database `fonts` supplies (the tests hand in an empty one).
 fn parse_with(bytes: &[u8], fonts: fn() -> Arc<usvg::fontdb::Database>) -> Result<Parsed, IoError> {
     let xml = inflate(bytes)?;
-    if nesting_depth(&xml, MAX_XML_DEPTH) > MAX_XML_DEPTH {
+    let depth = nesting_depth(&xml, MAX_XML_DEPTH);
+    if depth > MAX_XML_DEPTH {
         return Err(IoError::Svg(format!("elements are nested more than {MAX_XML_DEPTH} levels deep")));
     }
     let has_text = xml.windows(4).any(|w| w == b"text");
     let fontdb = if has_text { fonts() } else { Arc::new(usvg::fontdb::Database::new()) };
     let fontless_text = has_text && fontdb.faces().next().is_none();
-    let opt = options(fontdb);
-    let tree = usvg::Tree::from_data(&xml, &opt).map_err(|e| IoError::Svg(e.to_string()))?;
+    let opt = options(fontdb, MAX_XML_DEPTH.saturating_sub(depth));
+    // Parse the already-bounded-and-decoded text with from_str, not from_data: from_data
+    // re-checks the gzip magic and would decompress a second time without our size limit if
+    // the inflated content happened to start with a nested gzip stream.
+    let text = std::str::from_utf8(&xml).map_err(|_| IoError::Svg("the SVG is not valid UTF-8".into()))?;
+    let tree = usvg::Tree::from_str(text, &opt).map_err(|e| IoError::Svg(e.to_string()))?;
     Ok(Parsed { tree, fontless_text })
 }
 
@@ -122,7 +376,7 @@ fn inflate(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
         return Ok(std::borrow::Cow::Borrowed(bytes));
     }
     let mut out = Vec::new();
-    let mut reader = flate2::read::MultiGzDecoder::new(bytes).take(MAX_INFLATED_BYTES.saturating_add(1));
+    let mut reader = flate2::bufread::MultiGzDecoder::new(bytes).take(MAX_INFLATED_BYTES.saturating_add(1));
     reader.read_to_end(&mut out).map_err(|e| IoError::Svg(format!("the compressed SVG couldn't be inflated: {e}")))?;
     if u64::try_from(out.len()).unwrap_or(u64::MAX) > MAX_INFLATED_BYTES {
         return Err(IoError::Svg(format!("the compressed SVG inflates past {} MB", MAX_INFLATED_BYTES >> 20)));
@@ -134,7 +388,7 @@ fn inflate(bytes: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, IoError> {
 /// then `limit + 1`). Comments, CDATA sections, processing instructions and the DOCTYPE add
 /// nothing; quoted attribute values may hold `>` or `/>`. Malformed markup is only counted
 /// loosely: the parser rejects it afterwards.
-fn nesting_depth(xml: &[u8], limit: usize) -> usize {
+pub(crate) fn nesting_depth(xml: &[u8], limit: usize) -> usize {
     let after = |from: usize, pat: &[u8]| -> usize {
         xml.get(from..).and_then(|s| s.windows(pat.len()).position(|w| w == pat)).map_or(xml.len(), |p| from.saturating_add(p).saturating_add(pat.len()))
     };
@@ -253,14 +507,47 @@ fn import_parsed_with_budget(name: &str, parsed: Parsed, max_group_depth: usize,
 pub fn rasterize(bytes: &[u8], scale: f32) -> Result<photocraft_compose::Buffer, IoError> {
     let tree = parse(bytes)?.tree;
     let cv = canvas(&tree, &mut Vec::new());
-    let k = cv.scale * scale.clamp(1.0 / 64.0, 64.0);
+    let pixmap = render(&tree, cv.scale * scale.clamp(1.0 / 64.0, 64.0))?;
+    let rect = Rect::new(0, 0, pixmap.width() as i32, pixmap.height() as i32);
+    let px = pixmap.pixels().iter().map(|p| rgba(p.demultiply())).collect();
+    Ok(photocraft_compose::Buffer { rect, px })
+}
+
+/// The whole drawing at one pixel per SVG unit, scaled down to fit [`MAX_SIDE`] a side and
+/// [`MAX_RASTER_PIXELS`] in all: its width, height and straight-alpha RGBA8 pixels. Paste uses it
+/// for a drawing copied as SVG markup.
+pub fn rasterize_rgba8(bytes: &[u8]) -> Result<(u32, u32, Vec<u8>), IoError> {
+    let tree = parse(bytes)?.tree;
+    let cv = canvas(&tree, &mut Vec::new());
+    let (w, h) = (f64::from(tree.size().width() * cv.scale), f64::from(tree.size().height() * cv.scale));
+    // The largest k ≤ 1 with (w·k + 2)(h·k + 2) ≤ the limit: `render` rounds each side up, and
+    // f32 rounding can add one more pixel.
+    let max = MAX_RASTER_PIXELS as f64;
+    let fit = if (w + 2.0) * (h + 2.0) <= max {
+        1.0
+    } else {
+        let (a, b) = (w * h, 2.0 * (w + h));
+        (-b + (b * b - 4.0 * a * (4.0 - max)).sqrt()) / (2.0 * a)
+    };
+    let pixmap = render(&tree, cv.scale * fit as f32)?;
+    let px = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+    Ok((pixmap.width(), pixmap.height(), px))
+}
+
+/// `tree` drawn at `k` pixels per SVG unit on a transparent pixmap whose sides round up.
+fn render(tree: &usvg::Tree, k: f32) -> Result<tiny_skia::Pixmap, IoError> {
     let side = |v: f32| ((v * k).ceil() as u32).max(1);
     let (w, h) = (side(tree.size().width()), side(tree.size().height()));
     let mut pixmap = pixmap(w, h).ok_or_else(|| IoError::Svg(format!("{w} × {h} px is too large to rasterise")))?;
-    resvg::render(&tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
-    let rect = Rect::new(0, 0, w as i32, h as i32);
-    let px = pixmap.pixels().iter().map(|p| rgba(p.demultiply())).collect();
-    Ok(photocraft_compose::Buffer { rect, px })
+    resvg::render(tree, tiny_skia::Transform::from_scale(k, k), &mut pixmap.as_mut());
+    Ok(pixmap)
 }
 
 /// A transparent pixmap, or `None` past [`MAX_RASTER_PIXELS`].
@@ -427,7 +714,7 @@ impl Conv {
                     }
                     return;
                 }
-                let mut l = Layer::new(self.name(g.id(), 1), LayerContent::Group(Group { children, expanded: false, artboard: None }));
+                let mut l = Layer::new(self.name(g.id(), 1), LayerContent::Group(Group { children, expanded: false, artboard: None, frame_stroke: None }));
                 l.opacity = g.opacity().get();
                 l.blend = blend(g.blend_mode());
                 l.vector_mask = clip;
@@ -454,7 +741,7 @@ impl Conv {
                 } else {
                     t.id().to_string()
                 };
-                out.push(Layer::new(name, LayerContent::Group(Group { children, expanded: false, artboard: None })));
+                out.push(Layer::new(name, LayerContent::Group(Group { children, expanded: false, artboard: None, frame_stroke: None })));
             }
         }
     }
@@ -535,7 +822,25 @@ impl Conv {
             _ => FillRule::NonZero,
         };
         let mut sh = ShapeLayer { path: Path { subpaths, fill_rule, inverted: false }, fill, stroke, ..Default::default() };
-        sh.cache = Some(photocraft_vector::render_shape(&sh, self.fmt, self.canvas));
+        // The pixel cache is optional, so it is charged like any other retained raster and left
+        // out (the shape renders from its path) once the budget is spent: compact geometry can
+        // cover the whole canvas in every one of thousands of shapes.
+        let b = data.bounds();
+        let reach = sh.stroke.as_ref().map_or(0.0, |s| s.width);
+        let area = Rect::new(
+            (b.left() - reach).floor() as i32,
+            (b.top() - reach).floor() as i32,
+            (b.right() + reach).ceil() as i32,
+            (b.bottom() + reach).ceil() as i32,
+        )
+        .intersect(&self.canvas);
+        let pixels = u64::from(area.width()) * u64::from(area.height());
+        if self.can_retain_pixels(pixels) {
+            sh.cache = Some(photocraft_vector::render_shape(&sh, self.fmt, self.canvas));
+            let bytes = pixels * self.fmt.bytes_per_pixel() as u64;
+            self.pixel_budget -= bytes;
+            self.retained_pixel_bytes += bytes;
+        }
         Some(Layer::new(self.name(p.id(), 0), LayerContent::Shape(sh)))
     }
 
@@ -724,169 +1029,4 @@ fn knots(path: &tiny_skia::Path) -> Vec<Subpath> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn sniffing_accepts_svg_and_rejects_other_xml() {
-        assert!(is_svg(b"<svg xmlns=\"http://www.w3.org/2000/svg\"/>"));
-        assert!(is_svg("\u{feff}<?xml version=\"1.0\"?>\n<!-- hi -->\n<svg/>".as_bytes()));
-        assert!(is_svg(b"<!DOCTYPE svg PUBLIC \"-//W3C//DTD SVG 1.1//EN\" \"x\"><svg/>"));
-        assert!(!is_svg(b"<?xml version=\"1.0\"?><x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>"));
-        assert!(!is_svg(b"\x89PNG\r\n"));
-        assert!(!is_svg(b""));
-    }
-
-    #[test]
-    fn quadratics_become_cubics_and_closing_merges_the_start_knot() {
-        let mut pb = tiny_skia::PathBuilder::new();
-        pb.move_to(0.0, 0.0);
-        pb.quad_to(5.0, 10.0, 10.0, 0.0);
-        pb.line_to(0.0, 0.0);
-        pb.close();
-        pb.move_to(20.0, 20.0);
-        pb.line_to(30.0, 20.0);
-        let path = pb.finish().unwrap();
-        let sp = knots(&path);
-        assert_eq!(sp.len(), 2);
-        assert!(sp[0].closed && !sp[1].closed);
-        // The explicit line back to the start was merged into the first knot.
-        assert_eq!(sp[0].knots.len(), 2);
-        let (a, b) = (&sp[0].knots[0], &sp[0].knots[1]);
-        assert!((a.out_ctrl.x - 10.0 / 3.0).abs() < 1e-9 && (a.out_ctrl.y - 20.0 / 3.0).abs() < 1e-9);
-        assert!((b.in_ctrl.x - 20.0 / 3.0).abs() < 1e-9 && (b.in_ctrl.y - 20.0 / 3.0).abs() < 1e-9);
-        assert_eq!(b.anchor, Point::new(10.0, 0.0));
-        assert_eq!(sp[1].knots.len(), 2);
-    }
-
-    #[test]
-    fn text_without_any_font_is_reported_not_silently_dropped() {
-        // No font at all (a bare CI image): usvg drops the <text> while parsing, so nothing
-        // reaches the conversion; the reader still has to say why the text is missing.
-        fn no_fonts() -> Arc<usvg::fontdb::Database> {
-            Arc::new(usvg::fontdb::Database::new())
-        }
-        let svg = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"120\" height=\"60\"><text x=\"5\" y=\"45\" font-size=\"48\">II</text></svg>";
-        let parsed = parse_with(svg, no_fonts).unwrap();
-        assert!(parsed.fontless_text);
-        let r = import_parsed("t", parsed, MAX_GROUP_DEPTH).unwrap();
-        assert!(r.document.layers.is_empty());
-        assert!(r.warnings.iter().any(|w| w.contains("font")), "{:?}", r.warnings);
-        // A drawing without text never loads or misses fonts.
-        let parsed =
-            parse_with(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><rect width=\"10\" height=\"10\"/></svg>", no_fonts).unwrap();
-        assert!(!parsed.fontless_text);
-        let r = import_parsed("t", parsed, MAX_GROUP_DEPTH).unwrap();
-        assert!(r.warnings.iter().all(|w| !w.contains("font")), "{:?}", r.warnings);
-    }
-
-    /// #4266: a group clipped by one path (the PhotoCraft icon's rounded square) stays editable
-    /// shapes with the clip as its vector mask, and looks as resvg draws the drawing; a clip of
-    /// two shapes is still rasterised, with the warning.
-    #[test]
-    fn a_single_path_clip_becomes_the_groups_vector_mask() {
-        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
-            <defs><clipPath id="c"><rect x="4" y="4" width="40" height="40" rx="10"/></clipPath></defs>
-            <g transform="translate(8 6)" clip-path="url(#c)">
-              <rect width="64" height="64" fill="#2f7bf5"/>
-              <circle cx="40" cy="40" r="20" fill="#efe9dc"/>
-            </g></svg>"##;
-        let r = import_svg("t", svg).unwrap();
-        assert!(r.warnings.iter().all(|w| !w.contains("clip-path")), "{:?}", r.warnings);
-        let [group] = r.document.layers.as_slice() else { panic!("one group: {:?}", r.document.layers.len()) };
-        let LayerContent::Group(g) = &group.content else { panic!("a group") };
-        assert_eq!(g.children.len(), 2);
-        assert!(g.children.iter().all(|c| matches!(c.content, LayerContent::Shape(_))), "editable shapes");
-        let mask = group.vector_mask.as_ref().expect("the clip as a vector mask");
-        let xs: Vec<f64> = mask.path.subpaths.iter().flat_map(|s| s.knots.iter().map(|k| k.anchor.x)).collect();
-        let (lo, hi) = (xs.iter().copied().fold(f64::MAX, f64::min), xs.iter().copied().fold(f64::MIN, f64::max));
-        assert!((lo - 12.0).abs() < 1e-3 && (hi - 52.0).abs() < 1e-3, "in the group's space: {lo}..{hi}");
-        // Pixel for pixel what resvg draws, but for anti-aliasing along the edges.
-        let ours = photocraft_compose::flatten(&r.document).to_rgba8().pixels;
-        let tree = parse(svg).unwrap().tree;
-        let mut pm = tiny_skia::Pixmap::new(64, 64).unwrap();
-        resvg::render(&tree, tiny_skia::Transform::default(), &mut pm.as_mut());
-        let theirs: Vec<u8> = pm
-            .pixels()
-            .iter()
-            .flat_map(|p| {
-                let c = p.demultiply();
-                [c.red(), c.green(), c.blue(), c.alpha()]
-            })
-            .collect();
-        let off = ours.chunks(4).zip(theirs.chunks(4)).filter(|(a, b)| a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 48)).count();
-        assert!(off < 64, "{off} pixels differ");
-        // The report's file: PhotoCraft's own icon opens without the clip-path warning.
-        let icon = import_svg("photocraft.svg", include_bytes!("../../../assets/app-icon/photocraft.svg")).unwrap();
-        assert!(icon.warnings.iter().all(|w| !w.contains("clip-path")), "{:?}", icon.warnings);
-        assert!(icon.document.layers.iter().any(|l| l.vector_mask.is_some()), "its rounded square is a vector mask");
-        // Two shapes in the clip: rasterised, and said so.
-        let two = br##"<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64">
-            <defs><clipPath id="c"><rect width="20" height="20"/><rect x="30" width="20" height="20"/></clipPath></defs>
-            <g clip-path="url(#c)"><rect width="64" height="64"/><rect width="9" height="9" fill="red"/></g></svg>"##;
-        let r = import_svg("t", two).unwrap();
-        assert!(r.warnings.iter().any(|w| w.contains("clip-path")), "{:?}", r.warnings);
-    }
-
-    #[test]
-    fn rasterized_groups_stop_at_the_aggregate_pixel_budget() {
-        let mut svg = String::from("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"256\" height=\"256\">");
-        svg.push_str("<defs><mask id=\"m\"><rect width=\"256\" height=\"256\" fill=\"white\"/></mask></defs>");
-        for i in 0..8 {
-            svg.push_str(&format!("<g id=\"g{i}\" mask=\"url(#m)\"><rect width=\"256\" height=\"256\" fill=\"#00ff00\"/></g>"));
-        }
-        svg.push_str("</svg>");
-        // Enough for one retained 256×256 RGBA8 surface, not eight of them.
-        let budget = 256u64 * 256 * 4;
-        let result = import_parsed_with_budget("budget", parse(svg.as_bytes()).unwrap(), MAX_GROUP_DEPTH, budget).unwrap();
-        assert_eq!(result.document.layers.len(), 1, "one U8 surface fills the retained-byte allowance");
-        assert_eq!(result.document.layers[0].name, "g0");
-        assert!(result.warnings.iter().any(|warning| warning.contains("pixel memory")), "{:?}", result.warnings);
-    }
-
-    #[test]
-    fn oversized_raster_does_not_consume_budget_for_later_layers() {
-        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="5100" height="4800">
-            <defs>
-              <mask id="big" maskUnits="userSpaceOnUse" x="0" y="0" width="5100" height="4800">
-                <rect width="5100" height="4800" fill="white"/>
-              </mask>
-              <mask id="small-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="32" height="32">
-                <rect width="32" height="32" fill="white"/>
-              </mask>
-            </defs>
-            <g id="oversized" mask="url(#big)"><rect width="5100" height="4800" fill="red"/></g>
-            <g id="small" mask="url(#small-mask)"><rect width="32" height="32" fill="blue"/></g>
-        </svg>"##;
-        let result = import_parsed_with_budget("budget", parse(svg).unwrap(), MAX_GROUP_DEPTH, 64 * 64 * 4).unwrap();
-        assert_eq!(result.document.layers.len(), 1, "the oversized group must not debit the budget");
-        assert_eq!(result.document.layers[0].name, "small");
-        assert!(result.warnings.iter().any(|w| w.contains("too large to rasterise")), "{:?}", result.warnings);
-        assert!(!result.warnings.iter().any(|w| w.contains("pixel memory budget")), "{:?}", result.warnings);
-    }
-
-    #[test]
-    fn skipped_expensive_raster_does_not_hide_a_smaller_one() {
-        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256">
-            <defs>
-              <mask id="big"><rect width="256" height="256" fill="white"/></mask>
-              <mask id="little"><rect width="16" height="16" fill="white"/></mask>
-            </defs>
-            <g id="large" mask="url(#big)"><rect width="256" height="256" fill="red"/></g>
-            <g id="small" mask="url(#little)"><rect width="16" height="16" fill="blue"/></g>
-        </svg>"##;
-        let result = import_parsed_with_budget("budget", parse(svg).unwrap(), MAX_GROUP_DEPTH, 32 * 32 * 4).unwrap();
-        assert_eq!(result.document.layers.len(), 1);
-        assert_eq!(result.document.layers[0].name, "small");
-        assert!(result.warnings.iter().any(|w| w.contains("some rasterised elements were omitted")), "{:?}", result.warnings);
-    }
-
-    #[test]
-    fn huge_drawings_scale_to_the_side_limit() {
-        let tree = parse(b"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 100000 50000\"/>").unwrap().tree;
-        let mut w = Vec::new();
-        let cv = canvas(&tree, &mut w);
-        assert_eq!((cv.size.width, cv.size.height), (MAX_SIDE, MAX_SIDE / 2));
-        assert_eq!(w.len(), 1);
-    }
-}
+mod tests;

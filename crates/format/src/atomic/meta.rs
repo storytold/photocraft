@@ -12,7 +12,7 @@
 //! | extended attributes (Finder tags, `user.*`) | `copy_xattrs` | `copy_xattrs` | — |
 //! | "downloaded from the internet" | `com.apple.quarantine`, an xattr | — | `Zone.Identifier`, a named stream kept by [`replace_existing`] |
 //! | access-control list | `copy_acl` (`exacl`) | not carried over (see below) | DACL, kept by [`replace_existing`] |
-//! | creation time | not carried over (#6603) | — | kept by [`replace_existing`] |
+//! | creation time | `copy_created` (#9388) | — | kept by [`replace_existing`] |
 //!
 //! Everything here except [`replace_existing`] is **best effort and never touches the file's
 //! bytes**: a save that cannot carry a piece of metadata across is still a save, because a
@@ -22,7 +22,7 @@
 //!
 //! Not carried over, and why: Linux POSIX ACLs live in `system.posix_acl_access`, which
 //! `listxattr` does not report, so copying the listed attributes misses them; they would need
-//! their own step. macOS creation time needs `setattrlist`, which has no safe wrapper here.
+//! their own step.
 
 use std::io;
 use std::path::Path;
@@ -32,17 +32,17 @@ use std::os::fd::BorrowedFd;
 
 /// Largest attribute-name list [`copy_xattrs`] will read. Names are short; a file with a
 /// megabyte of them is not something a save should spend memory on.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 const MAX_XATTR_NAMES: usize = 1 << 20;
 
 /// Largest single attribute value [`copy_xattrs`] will carry over. Finder tags and `user.*`
 /// attributes are tens of bytes; a resource fork can be large, and past this it is not worth
 /// holding a copy of it in memory during a save.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 const MAX_XATTR_VALUE: usize = 16 << 20;
 
 /// First read size for an attribute list or value; grown on `ERANGE`.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 const XATTR_CHUNK: usize = 4 << 10;
 
 /// Copy, best effort, everything [`crate::atomic::atomic_write`] should carry from the file it
@@ -59,6 +59,13 @@ pub fn copy_metadata(from: &Path, to: &Path) -> io::Result<()> {
     #[cfg(not(unix))]
     let attributes = Ok(());
 
+    // The creation time before the ACL: it needs the destination open for writing, which a
+    // copied ACL denying its owner write access would refuse.
+    #[cfg(target_os = "macos")]
+    let created = copy_created(from, to);
+    #[cfg(not(target_os = "macos"))]
+    let created = Ok(());
+
     #[cfg(target_os = "macos")]
     let acl = copy_acl(from, to);
     #[cfg(not(target_os = "macos"))]
@@ -67,7 +74,35 @@ pub fn copy_metadata(from: &Path, to: &Path) -> io::Result<()> {
     // A save over a 0600 file must not widen it to whatever the process default is.
     let permissions = std::fs::metadata(from).and_then(|m| std::fs::set_permissions(to, m.permissions()));
 
-    attributes.and(acl).and(permissions)
+    attributes.and(acl).and(created).and(permissions)
+}
+
+/// The creation time ("Created" in Finder) of the file being replaced, onto the file replacing
+/// it: the rename leaves a new file born at the time of the save, where Photoshop keeps the
+/// original's (#9388). The rename keeps the time set here.
+#[cfg(target_os = "macos")]
+fn copy_created(from: &Path, to: &Path) -> io::Result<()> {
+    let old = std::fs::File::open(from)?;
+    let new = std::fs::OpenOptions::new().write(true).open(to)?;
+    copy_created_file(&old, &new)
+}
+
+/// [`copy_created`] through two open files rather than their paths, for the automation write
+/// path's capability-checked handles (see [`copy_xattrs`]). `to` must be open for writing.
+/// Nothing to do outside macOS: Windows keeps the time in [`replace_existing`], and Linux has no
+/// settable creation time.
+pub fn copy_created_file(from: &std::fs::File, to: &std::fs::File) -> io::Result<()> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::os::macos::fs::FileTimesExt;
+        let created = from.metadata()?.created()?;
+        to.set_times(std::fs::FileTimes::new().set_created(created))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (from, to);
+        Ok(())
+    }
 }
 
 /// [`copy_metadata`]'s extended-attribute step, by path: open both files and hand the
@@ -92,7 +127,7 @@ fn copy_xattrs_at(from: &Path, to: &Path) -> io::Result<()> {
 /// `com.apple.rootless` on macOS and `security.*` on Linux belong to the system and refuse to
 /// be written by an ordinary process, and failing a document save over one would be absurd.
 /// `Err` means the attribute *list* could not be read, so nothing was copied.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 pub fn copy_xattrs(from: BorrowedFd<'_>, to: BorrowedFd<'_>) -> io::Result<()> {
     use rustix::fs::{XattrFlags, fsetxattr};
 
@@ -106,9 +141,16 @@ pub fn copy_xattrs(from: BorrowedFd<'_>, to: BorrowedFd<'_>) -> io::Result<()> {
     Ok(())
 }
 
+/// [`copy_xattrs`] where rustix offers no extended-attribute calls (FreeBSD and the other BSDs):
+/// nothing is copied, as on Windows.
+#[cfg(all(unix, not(any(target_os = "linux", target_os = "android", target_vendor = "apple"))))]
+pub fn copy_xattrs(_from: BorrowedFd<'_>, _to: BorrowedFd<'_>) -> io::Result<()> {
+    Ok(())
+}
+
 /// Attributes that describe how the *old* file's bytes are stored rather than anything about
 /// the document, and so must never be pinned onto a file holding different bytes.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 fn skip_xattr(name: &[u8]) -> bool {
     // `com.apple.decmpfs` marks a file whose data lives compressed inside the attribute itself.
     // The kernel hides it from a plain `listxattr` and refuses to set it, but a file claiming
@@ -117,7 +159,7 @@ fn skip_xattr(name: &[u8]) -> bool {
 }
 
 /// The NUL-separated attribute names of `fd`.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 fn list_xattrs(fd: BorrowedFd<'_>) -> io::Result<Vec<u8>> {
     let mut buf = vec![0u8; XATTR_CHUNK];
     loop {
@@ -137,7 +179,7 @@ fn list_xattrs(fd: BorrowedFd<'_>) -> io::Result<Vec<u8>> {
 /// The value of one attribute, or `None` if it cannot be read or is larger than
 /// [`MAX_XATTR_VALUE`]. A missing value is normal: another process may remove an attribute
 /// between the listing and the read.
-#[cfg(unix)]
+#[cfg(any(target_os = "linux", target_os = "android", target_vendor = "apple"))]
 fn read_xattr(fd: BorrowedFd<'_>, name: &[u8]) -> Option<Vec<u8>> {
     let mut buf = vec![0u8; XATTR_CHUNK];
     loop {
