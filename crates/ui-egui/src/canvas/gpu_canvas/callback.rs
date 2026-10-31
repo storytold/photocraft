@@ -200,7 +200,7 @@ impl CallbackTrait for CanvasCallback {
             if x1 < cx0 || y1 < cy0 || x0 > cx1 || y0 > cy1 {
                 continue;
             }
-            pass.set_bind_group(1, &t.bind_group, &[]);
+            pass.set_bind_group(1, &t.bind_group, &[0]);
             pass.draw(0..6, 0..1);
         }
     }
