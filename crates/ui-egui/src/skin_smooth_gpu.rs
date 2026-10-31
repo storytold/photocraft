@@ -115,7 +115,23 @@ impl Accelerator for Backend {
             packed = (top..bottom).flat_map(|y| rgba.get(y * w + left..y * w + right).unwrap_or(&[]).iter().copied()).collect();
             packed.as_slice()
         };
-        let mut lock = self.pass.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut lock = loop {
+            if ctl.cancelled() {
+                return Err(Error::Cancelled);
+            }
+            if self.failed.load(Ordering::Relaxed) || !self.health.is_ok() {
+                return Ok(false);
+            }
+            match self.pass.try_lock() {
+                Ok(lock) => break lock,
+                Err(std::sync::TryLockError::Poisoned(error)) => break error.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
+        };
+        // Another invocation may have retired the pass while this one waited for its lock.
+        if self.failed.load(Ordering::Relaxed) {
+            return Ok(false);
+        }
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if lock.is_none() {
                 *lock = Some(SkinSmooth::new(&self.device)?);
@@ -131,13 +147,18 @@ impl Accelerator for Backend {
             )
         }))
         .unwrap_or_else(|_| Err(photocraft_gpu::Unsupported("Skin Smooth GPU runtime failed".into())));
+        if result.is_err() {
+            // Submitted GPU work cannot be cancelled. Retire its resources instead of reusing
+            // a possibly still-mapped buffer; wgpu retains in-flight resources until completion.
+            self.failed.store(true, Ordering::Relaxed);
+            *lock = None;
+        }
         if ctl.cancelled() {
             return Err(Error::Cancelled);
         }
         let out = match result {
             Ok(out) => out,
             Err(error) => {
-                self.failed.store(true, Ordering::Relaxed);
                 log::warn!("{error}; Skin Smooth uses WASM");
                 return Ok(false);
             }

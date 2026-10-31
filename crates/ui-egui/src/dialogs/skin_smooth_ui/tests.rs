@@ -22,6 +22,49 @@ fn field(app: &mut PhotocraftApp, key: &str, value: Value) {
 }
 
 #[test]
+fn duplicate_windows_cannot_replace_the_canonical_mask_request() {
+    let mut app = app();
+    app.background_jobs = false;
+    field(&mut app, "__skinMask", json!(true));
+    let doc = app.session.active().unwrap().doc.clone();
+    let id = app.ui.alloc_id();
+    app.ui.windows.push(crate::state::DocWindow { id, document: 0, view: app.ui.views[0].clone(), open: true, floating: false, focused: true, position: None });
+    let duplicate = egui::ViewportId::from_hash_of(("docwin", id));
+    let ctx = egui::Context::default();
+    let paint = |app: &mut PhotocraftApp, viewport_id, rect| {
+        let mut shown = false;
+        let mut input = egui::RawInput { viewport_id, ..Default::default() };
+        input.viewports.entry(viewport_id).or_default();
+        ctx.run_ui(input, |ui| {
+            shown = overlay(app, ui.ctx(), doc.id, rect).is_some();
+        })
+        .textures_delta
+        .clear();
+        shown
+    };
+    assert!(paint(&mut app, egui::ViewportId::ROOT, doc.bounds()));
+    let key = app.skin_smooth_mask.as_ref().unwrap().key.clone();
+    let other = Rect::new(8, 4, 24, 20);
+    assert!(!paint(&mut app, duplicate, other));
+    assert_eq!(app.skin_smooth_mask.as_ref().unwrap().key, key);
+    let window_id = egui::Id::unique("canvas-doc-window");
+    ctx.data_mut(|d| d.insert_temp(window_id, duplicate));
+    assert!(!paint(&mut app, egui::ViewportId::ROOT, other), "embedded duplicates share ROOT but cannot own the mask");
+    ctx.data_mut(|d| d.remove::<egui::ViewportId>(window_id));
+    // Undocking transfers ownership, independent of focus; closing the window restores it.
+    app.ui.windows[0].floating = true;
+    app.ui.windows[0].focused = false;
+    assert!(!paint(&mut app, egui::ViewportId::ROOT, doc.bounds()));
+    assert!(paint(&mut app, duplicate, other));
+    ctx.data_mut(|d| d.insert_temp(window_id, duplicate));
+    assert!(paint(&mut app, egui::ViewportId::ROOT, other), "an embedded floating window must still show its mask");
+    ctx.data_mut(|d| d.remove::<egui::ViewportId>(window_id));
+    app.ui.windows[0].open = false;
+    assert!(paint(&mut app, egui::ViewportId::ROOT, doc.bounds()));
+    assert!(!paint(&mut app, duplicate, other));
+}
+
+#[test]
 fn sample_swatch_shows_encoded_source_rgb_without_a_second_gamma_conversion() {
     let ctx = egui::Context::default();
     PhotocraftApp::setup_context(&ctx, Default::default());

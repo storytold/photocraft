@@ -20,6 +20,7 @@ pub struct Band<'a> {
 pub trait Accelerator: Send + Sync {
     fn algorithm(&self) -> &str;
     /// `false` requests WASM fallback. The host restores the original band first.
+    /// Check `ctl` during waits too: it includes the operation deadline and sibling failures.
     fn filter(&self, band: Band<'_>, ctl: &Interrupt<'_>) -> Result<bool>;
 }
 

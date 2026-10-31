@@ -80,11 +80,51 @@ fn cancellation_interrupts_wasm_and_discards_partial_results() {
     let input = surface(PixelFormat::RGBA8, 16, 16);
     let before = input.read_region(Rect::new(0, 0, 16, 16));
     let checks = AtomicUsize::new(0);
-    let cancel = || checks.fetch_add(1, Ordering::Relaxed) >= 3;
+    // Four setup checks precede the first OutOfFuel check inside pc_filter.
+    let cancel = || checks.fetch_add(1, Ordering::Relaxed) >= 4;
     let start = Instant::now();
     assert!(matches!(plugin.apply_with(&input, Rect::new(0, 0, 16, 16), None, &json!({}), &Interrupt::cancel_only(&cancel)), Err(Error::Cancelled)));
     assert!(start.elapsed() < Duration::from_secs(3));
+    assert!(checks.load(Ordering::Relaxed) > 4, "cancellation must reach pc_filter");
     assert_eq!(input.read_region(Rect::new(0, 0, 16, 16)), before);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn native_waits_receive_the_plugin_deadline_and_preserve_its_error() {
+    use photocraft_plugins::acceleration::{self, Accelerator, Band};
+    use photocraft_raster::Interrupt;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct Waiting(AtomicBool);
+    impl Accelerator for Waiting {
+        fn algorithm(&self) -> &str {
+            "test.v1"
+        }
+        fn filter(&self, band: Band<'_>, ctl: &Interrupt<'_>) -> photocraft_plugins::Result<bool> {
+            band.pixels.fill(0.0);
+            let stop = Instant::now() + Duration::from_secs(2);
+            while Instant::now() < stop {
+                if ctl.cancelled() {
+                    self.0.store(true, Ordering::Relaxed);
+                    return Err(Error::Cancelled);
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err(Error::Failed("native wait did not receive the deadline".into()))
+        }
+    }
+    let bytes = module(r#"{"id":"test.deadline","name":"Test","kind":"filter","accelerator":"test.v1"}"#, 1, "(i32.const 0)", "");
+    let plugin = Plugin::load(&bytes, Limits { wall_time_ms: 100, ..Default::default() }).unwrap();
+    let input = surface(PixelFormat::RGBA8, 16, 16);
+    let rect = Rect::new(0, 0, 16, 16);
+    let before = input.read_region(rect);
+    let waiting = Arc::new(Waiting(AtomicBool::new(false)));
+    let _scope = acceleration::scope(Some(waiting.clone()));
+    assert!(matches!(plugin.apply(&input, rect, None, &json!({})), Err(Error::Limit(reason)) if reason == "time budget"));
+    assert!(waiting.0.load(Ordering::Relaxed), "the native wait must observe the deadline");
+    assert_eq!(input.read_region(rect), before);
 }
 
 #[test]

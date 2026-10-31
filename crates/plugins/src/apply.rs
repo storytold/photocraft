@@ -211,14 +211,19 @@ impl Plugin {
         }
         let pbytes = serde_json::to_vec(&params).map_err(|e| Error::Params(e.to_string()))?;
         let orig_full = data.clone();
+        // Native waits must observe the same deadline and sibling failures as WASM fuel slices.
+        let cancelled = || deadline.check().is_err();
+        let progress = |p| c.ctl.progress(p);
+        let ctl = Interrupt::new(&cancelled, &progress);
         let accelerated = match c.accelerator.filter(|_| c.accelerator_active.load(Ordering::Relaxed)) {
             Some(a) => std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                a.filter(crate::acceleration::Band { pixels: &mut data, size: [iw, ih], channels: n, format: format_code(c.fmt), params: &params }, &c.ctl)
+                a.filter(crate::acceleration::Band { pixels: &mut data, size: [iw, ih], channels: n, format: format_code(c.fmt), params: &params }, &ctl)
             }))
-            .unwrap_or(Ok(false))?,
-            None => false,
+            .unwrap_or(Ok(false)),
+            None => Ok(false),
         };
         deadline.check()?;
+        let accelerated = accelerated?;
         if !accelerated {
             c.accelerator_active.store(false, Ordering::Relaxed);
             data.copy_from_slice(&orig_full);

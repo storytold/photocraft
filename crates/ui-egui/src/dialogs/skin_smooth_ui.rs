@@ -356,6 +356,19 @@ pub(crate) fn overlay(
     doc_id: photocraft_doc::DocId,
     visible: Rect,
 ) -> Option<(egui::TextureId, Rect, egui::Rect)> {
+    // Duplicate document windows must not supersede the single mask worker's viewport.
+    // The docked document owns it; when undocked, its floating window owns it instead.
+    let active = app.session.active_index()?;
+    let owner = app
+        .ui
+        .windows
+        .iter()
+        .find(|w| w.open && w.floating && w.document == active)
+        .map_or(egui::ViewportId::ROOT, |w| egui::ViewportId::from_hash_of(("docwin", w.id)));
+    let viewport = ctx.data(|d| d.get_temp::<egui::ViewportId>(egui::Id::unique("canvas-doc-window"))).unwrap_or_else(|| ctx.viewport_id());
+    if viewport != owner {
+        return None;
+    }
     let d = app.ui.dialogs.last()?;
     if !owns(&d.fields) || d.fields.get("__skinMask") != Some(&json!(true)) || d.fields.get("__skinSource") != Some(&source(app)) {
         return None;

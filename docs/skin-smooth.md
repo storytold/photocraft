@@ -26,6 +26,10 @@ Filter previews run on one background worker with cancellation of stale requests
 
 Mask has a separate worker and texture, limited to at most 1M visible/proxy pixels and does not run smoothing. Its request identity covers the source revision/target, dialog, samples, tolerance, Skin Only, viewport and scale. Closed dialogs and invalid sources cancel work; stale results cannot paint over another request. It does not write pixels, selection or history.
 
+The main document view owns Show Mask. After undocking a document, its floating window owns it instead. Additional New Window views show the normal image and cannot replace that view's mask request.
+
+Native GPU waits and lock contention observe the plug-in operation's cancellation and time budget. Cancelling an unfinished GPU readback retires the accelerator for the rest of the app session; later requests use WASM. Submitted GPU work is not forcibly stopped, and its resources remain managed by wgpu until completion.
+
 ## Verification
 
 Relevant sources: [GPU adapter](../crates/ui-egui/src/skin_smooth_gpu.rs), [compute implementation](../crates/gpu/src/skin_smooth.rs), [plug-in band processing](../crates/plugins/src/apply.rs), [preview worker](../crates/ui-egui/src/dialogs/filter_preview_worker.rs) and [Mask UI](../crates/ui-egui/src/dialogs/skin_smooth_ui.rs).

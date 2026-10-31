@@ -156,7 +156,8 @@ impl SkinSmooth {
     }
 
     /// Filters normalized straight-alpha SDR RGBA. At most 1M pixels (~88 MiB GPU storage).
-    /// Cancellation is checked before submission and after the bounded band completes.
+    /// `ctl` must include the caller's time budget; readback polls observe it without a fence wait.
+    /// An interrupted readback drops its buffers, leaving wgpu to retain in-flight resources.
     #[cfg(not(target_arch = "wasm32"))]
     #[allow(clippy::too_many_arguments)]
     pub fn filter(
@@ -261,11 +262,26 @@ impl SkinSmooth {
         }
         dispatch(5, 0, count as u32)?;
         enc.copy_buffer_to_buffer(&b.result, 0, &b.readback, 0, count * 16);
-        let submission = queue.submit([enc.finish()]);
+        queue.submit([enc.finish()]);
         let slice = b.readback.slice(..count * 16);
-        slice.map_async(wgpu::MapMode::Read, |_| {});
-        if !health.wait(device, Some(submission)) {
-            return Err(Unsupported("Skin Smooth GPU failed".into()));
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        slice.map_async(wgpu::MapMode::Read, move |result| {
+            let _ = tx.send(result);
+        });
+        loop {
+            if ctl.cancelled() || !health.is_ok() {
+                self.buffers = None;
+                return Err(Unsupported("Skin Smooth cancelled or GPU unavailable".into()));
+            }
+            health.poll(device);
+            match rx.try_recv() {
+                Ok(Ok(())) => break,
+                Ok(Err(_)) | Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.buffers = None;
+                    return Err(Unsupported("Skin Smooth GPU readback failed".into()));
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => std::thread::sleep(std::time::Duration::from_millis(1)),
+            }
         }
         let data = slice.get_mapped_range().map_err(|e| Unsupported(format!("Skin Smooth readback: {e}")))?;
         let out = bytemuck::try_cast_slice::<u8, [f32; 4]>(&data).map_err(|e| Unsupported(format!("Skin Smooth pixels: {e}")))?.to_vec();

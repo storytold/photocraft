@@ -129,6 +129,63 @@ fn failed_device_falls_back_and_cancel_commits_no_partial_output() {
 }
 
 #[test]
+fn pending_readback_cancellation_retires_the_pass_before_fallback() {
+    use std::sync::atomic::AtomicUsize;
+    let _gpu_lock = photocraft_testkit::gpu_lock();
+    let backend = backend();
+    let plugin = Plugin::load(WASM, Limits::default()).unwrap();
+    let params = Value::Object(plugin.manifest().resolve_params(&json!({"preset":"manual","brightness":15})).unwrap());
+    let mut pixels = [0.7, 0.48, 0.36, 1.0].repeat(16);
+    let before = pixels.clone();
+    let checks = AtomicUsize::new(0);
+    // Entry, lock acquisition and pre-submit succeed; cancel only in the readback wait.
+    let cancel = || checks.fetch_add(1, Ordering::Relaxed) >= 3;
+    let band = Band { pixels: &mut pixels, size: [4, 4], channels: 4, format: 8 | 256 | (3 << 16), params: &params };
+    assert!(matches!(backend.filter(band, &Interrupt::cancel_only(&cancel)), Err(Error::Cancelled)));
+    assert!(checks.load(Ordering::Relaxed) > 3);
+    assert_eq!(pixels, before);
+    assert!(backend.failed.load(Ordering::Relaxed));
+    assert!(backend.pass.lock().unwrap().is_none());
+    let band = Band { pixels: &mut pixels, size: [4, 4], channels: 4, format: 8 | 256 | (3 << 16), params: &params };
+    assert!(!backend.filter(band, &Interrupt::NONE).unwrap(), "later requests must use WASM");
+}
+
+#[test]
+fn cancellation_does_not_wait_for_another_gpu_invocations_mutex() {
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
+    let _gpu_lock = photocraft_testkit::gpu_lock();
+    let backend = backend();
+    let plugin = Plugin::load(WASM, Limits::default()).unwrap();
+    let params = Value::Object(plugin.manifest().resolve_params(&json!({"preset":"manual","brightness":15})).unwrap());
+    let mut pixels = [0.7, 0.48, 0.36, 1.0].repeat(16);
+    let checks = AtomicUsize::new(0);
+    let cancelled = AtomicBool::new(false);
+    let (waiting_tx, waiting_rx) = std::sync::mpsc::sync_channel(1);
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+    let cancel = || {
+        if checks.fetch_add(1, Ordering::Relaxed) == 2 {
+            let _ = waiting_tx.send(());
+        }
+        cancelled.load(Ordering::Relaxed)
+    };
+    let held = backend.pass.lock().unwrap();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let band = Band { pixels: &mut pixels, size: [4, 4], channels: 4, format: 8 | 256 | (3 << 16), params: &params };
+            let _ = done_tx.send(backend.filter(band, &Interrupt::cancel_only(&cancel)));
+        });
+        let waiting = waiting_rx.recv_timeout(Duration::from_secs(2));
+        cancelled.store(true, Ordering::Relaxed);
+        let stopped = done_rx.recv_timeout(Duration::from_secs(2));
+        drop(held); // Release even on failure so a regression cannot strand the test thread.
+        assert!(waiting.is_ok(), "the request must reach the contended mutex");
+        assert!(matches!(stopped, Ok(Err(Error::Cancelled))), "cancel must finish while the lock is held");
+    });
+    assert!(!backend.failed.load(Ordering::Relaxed), "a cancelled waiter must not retire another request's pass");
+}
+
+#[test]
 fn session_jobs_preview_and_cpu_preference_route_to_the_correct_backend() {
     let _gpu_lock = photocraft_testkit::gpu_lock();
     use photocraft_engine::{Session, jobs::Started, prefs::RenderingMode};

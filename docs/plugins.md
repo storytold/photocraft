@@ -216,6 +216,8 @@ shader source from WASM: only a trusted host implementation can run. `Session.pl
 is injected by the shell, scoped per operation and explicitly carried onto workers and preview
 sessions. Headless sessions default to WASM; the CPU rendering preference overrides the accelerator.
 
+The interrupt passed to an accelerator includes the plug-in execution deadline and sibling failures, not just user cancellation. Accelerators must check it while waiting for locks or device completion. Skin Smooth polls readback without an unbounded fence wait and retires its pass on an interrupted readback before allowing later requests to fall back to WASM.
+
 The Smooth implementation uses bounded compute bands, shared pipelines/storage and an affine prefix
 scan of the original edge-aware recurrence. It preserves straight alpha, masks and host encoding,
 then returns pixels through the existing transactional edit/undo path. A declined or failed GPU
