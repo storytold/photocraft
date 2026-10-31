@@ -801,6 +801,21 @@ fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
     assert!(err.to_string().contains("replaceColor") && err.to_string().contains("outside"), "{err}");
 }
 
+/// A malformed `subtractPoints` is refused even with one sample, where the single-colour path
+/// would otherwise ignore it (CodeRabbit review on #10443).
+#[test]
+fn replace_color_refuses_malformed_subtract_points() {
+    let mut s = session(8, "rgb");
+    paint(&mut s, |_, _| [0.85, 0.1, 0.1, 1.0]);
+    for points in [json!([]), json!([[4, 16]])] {
+        let p = json!({"color": "#d91a1a", "hue": 120, "points": points, "subtractPoints": "invalid"});
+        let err = s.execute("image.adjustments.replaceColor", p).unwrap_err();
+        assert!(err.to_string().contains("replaceColor") && err.to_string().contains("subtractPoints"), "{err}");
+    }
+    // An empty list is no subtraction: the single-colour path.
+    s.execute("image.adjustments.replaceColor", json!({"color": "#d91a1a", "hue": 120, "points": [[4, 16]], "subtractPoints": []})).unwrap();
+}
+
 /// #6095: ⌘I in Quick Mask inverts the whole mask, not only where it was white, so leaving Quick
 /// Mask selects everything but the original rectangle, whichever way the colour reads. With
 /// Color Indicates Selected Areas and nothing selected, it selects everything. A black alpha

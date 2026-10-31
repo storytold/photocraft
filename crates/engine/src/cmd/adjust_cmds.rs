@@ -436,7 +436,12 @@ fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
     let points = sample_points(p).map_err(|m| bad(CMD, m))?;
     // Several samples (Add to Sample / Subtract from Sample, #6280): the colours match as
     // Select › Color Range's do for the same clicks, through its own matcher.
-    let subtracted = p.get("subtractPoints").and_then(Value::as_array).is_some_and(|a| !a.is_empty());
+    // A malformed `subtractPoints` is refused here, as malformed `points` are, rather than read as
+    // no subtraction by the single-colour path.
+    let subtracted = match p.get("subtractPoints") {
+        None => false,
+        Some(v) => !v.as_array().ok_or_else(|| bad(CMD, "`subtractPoints` must be [[x, y], …]"))?.is_empty(),
+    };
     if subtracted || points.len() > 1 {
         let mut q = json!({"points": p.get("points").cloned().unwrap_or(Value::Array(Vec::new())), "fuzziness": fuzz});
         for key in ["subtractPoints", "order", "localized", "range"] {
