@@ -1098,6 +1098,9 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
     }
     b = merge_brush(&b, &patch, cmd)?;
     validate_brush(&b, cmd)?;
+    // Loading a stored tip can fail. Finish preparing the brush before changing its identity or
+    // foreground colour, so a failed pick leaves the entire current brush state intact.
+    s.load_brush_tips(&mut b).map_err(|e| bad(cmd, e))?;
     // The picked preset stays "the current brush" across later edits, so `brush.presets.update`
     // knows what to overwrite. Only once the brush is accepted: a failed call leaves no state
     // behind (a `reset` wins over a `preset`, as it replaces the whole brush).
@@ -1110,8 +1113,6 @@ pub(crate) fn set_brush(s: &mut Session, p: &Value) -> Result<Value> {
             s.tools.foreground = c;
         }
     }
-    // The tool's brush always paints with full tips: load a library preset's from the store.
-    s.load_brush_tips(&mut b).map_err(|e| bad(cmd, e))?;
     let before = std::mem::replace(&mut s.tools.brush, b);
     // A coalesced gesture (one slider drag) journals as one call: remember the brush it started from.
     let key = p.get("coalesce").and_then(Value::as_str).filter(|_| p.get("preset").is_none() && p.get("reset").is_none());
