@@ -256,13 +256,13 @@ fn comp_dnd(ui: &mut egui::Ui, ctx: &RowCtx<'_>, rect: Rect, resp: &egui::Respon
 fn comp_context_menu(resp: &egui::Response, ctx: &RowCtx<'_>, c: &photocraft_doc::LayerComp, index: usize) -> (Option<u32>, Option<(&'static str, Value)>) {
     let mut select = None;
     let mut action = None;
-    resp.context_menu(|ui| {
-        if ui.add_enabled(index > 0, egui::Button::new(tl!("Move Up"))).clicked() {
+    crate::menus::context_menu(&resp, |ui| {
+        if crate::menu_keys::menu_row(ui, tl!("Move Up"), None, false, index > 0).clicked() {
             action = Some(("layerComp.reorder", json!({"comp":c.id, "index":index.saturating_sub(1)})));
             select = Some(c.id);
             ui.close();
         }
-        if ui.add_enabled(index + 1 < ctx.doc.layer_comps.len(), egui::Button::new(tl!("Move Down"))).clicked() {
+        if crate::menu_keys::menu_row(ui, tl!("Move Down"), None, false, index + 1 < ctx.doc.layer_comps.len()).clicked() {
             action = Some(("layerComp.reorder", json!({"comp":c.id, "index":index + 1})));
             select = Some(c.id);
             ui.close();
