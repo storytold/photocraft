@@ -3916,6 +3916,9 @@ curves	Smooth	Сгладить
 	There is no color table to save.	Нет таблицы цветов для сохранения.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	Сохранён {n} цвет в {file}|Сохранены {n} цвета в {file}|Сохранено {n} цветов в {file}
 	GPU adapter	Адаптер GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Содержимое AI/PDF/EPS будет редактироваться как SVG. Сохранение заменит встроенный источник; особенности исходного формата могут измениться.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Импортировать стили…
 	Export Selected Styles…	Экспортировать выбранные стили…
 	Export Styles…	Экспортировать стили…
@@ -4687,6 +4690,7 @@ shape	Appearance	Оформление
 	Tracking presets	Наборы трекинга
 
 	The GPU compositor is still being prepared	The GPU compositor is still being prepared
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Недопустимое числовое значение. Требуется целое число от {min}% до {max}%. Вставлено предыдущее значение.
 	Color Aware	С учетом цвета
 	Decontaminate Colors	Очистить цвета
 	Edge Detection	Обнаружение краев
@@ -4703,4 +4707,9 @@ shape	Appearance	Оформление
 	Refine Hair needs hair detection, which isn't available yet	Для уточнения волос нужно распознавание волос, которое пока недоступно
 	Select and Mask was closed: its document is no longer the active one	Окно «Выделение и маска» закрыто: его документ больше не активен
 	Select and Mask was closed: another layer was selected	Окно «Выделение и маска» закрыто: выбран другой слой
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Recently Used Colors	Недавно использованные цвета
+	Stop Color	Цвет контрольной точки
+	Shapes can't use patterns yet	Фигуры пока не могут использовать узоры
 	Edit Brush…	Изменить кисть…
