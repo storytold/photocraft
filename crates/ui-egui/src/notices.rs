@@ -223,10 +223,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut dismiss_id = None;
     // Clear the status bar (~24 px) and leave the dock's edge some air. The stack hugs the
     // reading-end corner: lower-right, lower-left in a right-to-left UI.
-    let (anchor, x_off) = if crate::direction::is_rtl() { (egui::Align2::LEFT_BOTTOM, 16.0) } else { (egui::Align2::RIGHT_BOTTOM, -16.0) };
+    let (anchor, off) = crate::direction::end_corner_anchor(true, 16.0, -36.0);
     let area = egui::Area::new(egui::Id::unique("photocraft-notices"))
         .order(egui::Order::Foreground)
-        .anchor(anchor, egui::vec2(x_off, -36.0))
+        .anchor(anchor, off)
         .interactable(true)
         .show(ctx, |ui| {
             ui.set_max_width(360.0);

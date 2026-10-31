@@ -636,42 +636,12 @@ pub fn bar(ui: &egui::Ui, rect: Rect, frac: Option<f32>, t: &Tokens) {
     p.rect_filled(rect, r, t.field);
     p.rect_stroke(rect, r, Stroke::new(1.0, t.field_border), egui::StrokeKind::Inside);
     let time = ui.input(|i| i.time) as f32;
-    let fill = bar_fill(rect, frac, time);
+    let fill = match frac {
+        Some(f) => crate::widgets::progress_fill(rect, f, rect.height()),
+        None => crate::widgets::progress_travel(rect, time),
+    };
     if fill.width() > 0.0 {
         p.rect_filled(fill, r, t.accent);
-    }
-}
-
-/// The accent fill inside a progress bar: it grows from the left in a left-to-right UI and from
-/// the right in a right-to-left one; the indeterminate segment travels the other way.
-fn bar_fill(rect: Rect, frac: Option<f32>, time: f32) -> Rect {
-    let rtl = crate::direction::is_rtl();
-    match frac {
-        Some(f) => {
-            let w = (rect.width() * f.clamp(0.0, 1.0)).max(rect.height());
-            if rtl {
-                Rect::from_min_max(egui::pos2(rect.right() - w, rect.top()), egui::pos2(rect.right(), rect.bottom()))
-            } else {
-                Rect::from_min_size(rect.min, vec2(w, rect.height()))
-            }
-        }
-        None => {
-            let w = rect.width() * 0.3;
-            let x = rect.left() + ((time * 0.8).fract() * (rect.width() + w)) - w;
-            let x = if rtl { rect.left() + rect.right() - x - w } else { x };
-            Rect::from_min_max(egui::pos2(x.max(rect.left()), rect.top()), egui::pos2((x + w).min(rect.right()), rect.bottom()))
-        }
-    }
-}
-
-/// The accent underline inside a tab's progress line: it grows from the left in a left-to-right
-/// UI and from the right in a right-to-left one.
-fn tab_fill(line: Rect, frac: f32) -> Rect {
-    let w = line.width() * frac.clamp(0.0, 1.0);
-    if crate::direction::is_rtl() {
-        Rect::from_min_max(egui::pos2(line.right() - w, line.top()), egui::pos2(line.right(), line.bottom()))
-    } else {
-        Rect::from_min_size(line.min, vec2(w, line.height()))
     }
 }
 
@@ -897,7 +867,7 @@ pub fn open_tabs(app: &PhotocraftApp) -> Vec<(JobId, String, f32)> {
 pub fn tab_underline(ui: &egui::Ui, r: Rect, frac: f32, t: &Tokens) {
     let line = Rect::from_min_max(egui::pos2(r.left() + 4.0, r.bottom() - 3.0), egui::pos2(r.right() - 4.0, r.bottom() - 1.0));
     ui.painter().rect_filled(line, 1.0, t.field_border);
-    ui.painter().rect_filled(tab_fill(line, frac), 1.0, t.accent);
+    ui.painter().rect_filled(crate::widgets::progress_fill(line, frac, 0.0), 1.0, t.accent);
 }
 
 /// Jobs for `ui.inspect`.
