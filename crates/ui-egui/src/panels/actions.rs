@@ -1097,7 +1097,7 @@ pub fn panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
             }
             None => app.ui.actions.collapsed_sets.push(set),
         }
-        let collapsed = app.ui.actions.collapsed_sets.clone();
+        let collapsed = app.ui.actions.collapsed_sets.iter().cloned().map(|name| (name, true)).collect();
         app.session.prefs.edit(|p| p.collapsed_action_sets = collapsed);
     }
     if let Some(set) = save_set

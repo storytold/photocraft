@@ -1,12 +1,17 @@
 use super::{JobEvent, JobOutcome, PhotocraftApp, Started, Value, json, prefs};
 
-/// View › Rulers follows `unitsAndRulers.showRulers` when the preference changes (at launch, from
-/// `prefs.set` or a reset), so documents open with the rulers as last set.
-pub(super) fn sync_rulers(app: &mut PhotocraftApp) {
+/// Restore saved rulers and Action-folder disclosures at launch and after preference changes.
+pub(super) fn sync_view_state(app: &mut PhotocraftApp) {
     let want = app.session.prefs().units_and_rulers.show_rulers;
     if app.prefs_rt.show_rulers != Some(want) {
         app.ui.extras.rulers = want;
         app.prefs_rt.show_rulers = Some(want);
+    }
+    let rev = app.session.prefs.rev();
+    if app.prefs_rt.action_sets_rev != Some(rev) {
+        app.ui.actions.collapsed_sets =
+            app.session.prefs().collapsed_action_sets.iter().filter(|(_, collapsed)| **collapsed).map(|(name, _)| name.clone()).collect();
+        app.prefs_rt.action_sets_rev = Some(rev);
     }
 }
 
@@ -42,10 +47,9 @@ pub fn load(app: &mut PhotocraftApp) {
     }
     crate::dock::restore(app);
     crate::color_panel_ui::restore(app);
-    app.ui.actions.collapsed_sets = app.session.prefs().collapsed_action_sets.clone();
     crate::brush_picker::restore(app);
     crate::last_brush::restore(app);
-    sync_rulers(app);
+    sync_view_state(app);
     crate::tool_memory::restore(app);
     crate::view_cmds::restore(app);
     app.sync_recent();

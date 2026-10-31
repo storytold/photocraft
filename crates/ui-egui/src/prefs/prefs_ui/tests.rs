@@ -613,6 +613,41 @@ fn stored(store: &Arc<Mutex<Option<String>>>) -> Value {
 }
 
 #[test]
+fn action_folder_choices_merge_between_instances() {
+    let store = Arc::new(Mutex::new(None));
+    let (mut a, mut b) = (app_on(&store, Arc::default()), app_on(&store, Arc::default()));
+    let ctx = egui::Context::default();
+    a.run("prefs.set", json!({"values": {"collapsedActionSets": {"Retouch": true}}})).unwrap();
+    tick(&mut a, &ctx);
+    b.run("prefs.set", json!({"values": {"collapsedActionSets": {"Portrait": true}}})).unwrap();
+    tick(&mut b, &ctx);
+    assert_eq!(stored(&store)["collapsedActionSets"], json!({"Retouch": true, "Portrait": true}));
+    let restored = app_on(&store, Arc::default());
+    assert_eq!(restored.ui.actions.collapsed_sets, ["Portrait", "Retouch"]);
+
+    // Reopening a folder here must keep the other instance's independent collapse.
+    a.run("prefs.reset", json!({"path": "collapsedActionSets"})).unwrap();
+    tick(&mut a, &ctx);
+    assert_eq!(stored(&store)["collapsedActionSets"], json!({"Portrait": true}));
+    assert_eq!(app_on(&store, Arc::default()).ui.actions.collapsed_sets, ["Portrait"]);
+}
+
+#[test]
+fn action_folder_disclosures_follow_preference_changes() {
+    let (mut app, _) = app_with_store();
+    let ctx = egui::Context::default();
+    app.run("prefs.set", json!({"values": {"collapsedActionSets": {"Retouch": true, "Portrait": false}}})).unwrap();
+    tick(&mut app, &ctx);
+    assert_eq!(app.ui.actions.collapsed_sets, ["Retouch"]);
+    app.run("prefs.reset", json!({"path": "collapsedActionSets"})).unwrap();
+    tick(&mut app, &ctx);
+    assert!(app.ui.actions.collapsed_sets.is_empty());
+    app.run("prefs.set", json!({"values": {"collapsedActionSets": {"Portrait": true}}})).unwrap();
+    tick(&mut app, &ctx);
+    assert_eq!(app.ui.actions.collapsed_sets, ["Portrait"]);
+}
+
+#[test]
 fn a_wrongly_typed_value_resets_only_itself_and_is_repaired_on_disk() {
     // #6611: one bad value used to reset every preference, on every launch.
     let saved = json!({
