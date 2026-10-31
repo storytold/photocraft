@@ -550,3 +550,51 @@ fn lens_filters_and_vanishing_point_refuse_an_explicit_mask_target() {
         assert_eq!(mask_of(&s), mask, "{id}: the mask is untouched");
     }
 }
+
+/// A levels adjustment layer whose mask reveals a 30×20 block, in a document of `mode`.
+fn adjustment_with_mask(mode: &str) -> Session {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 80, "height": 60, "mode": mode})).unwrap();
+    s.execute("layer.newAdjustmentLayer.levels", json!({})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    s
+}
+
+/// An adjustment layer's mask (the active layer's), and the Quick Mask, over the canvas.
+fn adjustment_mask(s: &Session) -> Vec<f32> {
+    let st = s.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.read_region(st.doc.bounds())
+}
+
+/// Checks that dialog filter `id` with `params` filters an adjustment layer's mask, whether it is
+/// targeted in the Channels panel or named in the params, and the Quick Mask over one.
+fn filters_an_adjustment_layers_mask(id: &str, params: &Value) {
+    let mut s = adjustment_with_mask("rgb");
+    assert!(!s.is_enabled(id), "{id}: no pixels to filter on the layer itself");
+    let mut explicit = params.clone();
+    explicit["target"] = json!("mask");
+    assert!(s.is_enabled_with(id, &explicit), "{id}: enabled on a mask named in its params");
+    s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    assert!(s.is_enabled(id), "{id}: enabled on the targeted mask");
+    let mask = adjustment_mask(&s);
+    s.execute(id, params.clone()).unwrap();
+    assert_ne!(adjustment_mask(&s), mask, "{id}: the mask is filtered");
+    // The Quick Mask, with the adjustment layer active.
+    let mut s = adjustment_with_mask("rgb");
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("select.editInQuickMaskMode", json!({})).unwrap();
+    assert!(s.is_enabled(id), "{id}: enabled in Quick Mask on an adjustment layer");
+    let quick = |s: &Session| s.active().unwrap().doc.quick_mask.as_ref().unwrap().surface.read_region(s.active().unwrap().doc.bounds());
+    let before = quick(&s);
+    s.execute(id, params.clone()).unwrap();
+    assert_ne!(quick(&s), before, "{id}: the Quick Mask is filtered");
+}
+
+/// #10457 (CodeRabbit on #10469): an adjustment layer's targeted mask takes Liquify as it takes the
+/// other filters (#780), though the layer has no pixels of its own.
+#[test]
+fn liquify_deforms_an_adjustment_layers_targeted_mask() {
+    let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+    filters_an_adjustment_layers_mask(LIQUIFY, &stroke);
+}
