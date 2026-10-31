@@ -1803,10 +1803,12 @@ fn satin_and_bevel_stay_inside_shape() {
 
 /// #7360: a gloss contour that starts high (Rolling Slope - Descending, as the reporter's PSD
 /// uses) left a bevelled shape's flat face at the full Overlay highlight, (255, 40, 42) on a
-/// (151, 22, 23) fill, where Photoshop leaves the face at the fill colour. The contour maps the
-/// shading, so the flat face stays neutral and only the slopes are shaded.
+/// (151, 22, 23) fill. The contour maps the shading, with the unmapped flat shading
+/// `sin(altitude)` as the neutral, so the face only takes what the contour moves 0.5 by:
+/// Rolling Slope maps it to 0.55, a 0.09 highlight, (161, 24, 25). Photoshop's own composite of
+/// the reporter's repro has the glyph's face at 151–161 in red, not the exact fill.
 #[test]
-fn a_gloss_contour_leaves_the_flat_face_of_a_bevel_unlit() {
+fn a_gloss_contour_leaves_the_flat_face_of_a_bevel_near_its_fill() {
     let fill = [151.0 / 255.0, 22.0 / 255.0, 23.0 / 255.0, 1.0];
     let rolling = photocraft_doc::Contour::Custom {
         name: "Rolling Slope - Descending".into(),
@@ -1844,12 +1846,69 @@ fn a_gloss_contour_leaves_the_flat_face_of_a_bevel_unlit() {
     };
     let d = render(rolling);
     for (x, y) in [(20, 20), (16, 22), (24, 16)] {
-        let p = px(&d, x, y);
-        assert!(close4(p, fill), "flat face ({x},{y}) keeps the fill: {:?}", p.map(|v| (v * 255.0).round()));
+        let p = px(&d, x, y).map(|v| (v * 255.0).round());
+        assert!((158.0..=164.0).contains(&p[0]) && (22.0..=26.0).contains(&p[1]), "flat face ({x},{y}) near the fill: {p:?}");
     }
     let linear = render(photocraft_doc::Contour::Linear);
     assert!(close4(px(&linear, 20, 20), fill), "Linear leaves the flat face too");
     assert!(!close4(px(&d, 20, 11), fill), "the slopes are still shaded");
+}
+
+/// A deep bevel under a high light with a descending gloss contour (altitude 69, 358 %, Rolling
+/// Slope - Descending, Screen white 78 %) keeps a red shape red at every depth: the slopes are
+/// shaded around the unmapped `sin(altitude)`, so only the steepest pixels facing away glint.
+/// Mapped through the contour, that neutral fell to 0.16 and the whole shape rendered white.
+#[test]
+fn a_high_light_descending_gloss_keeps_the_face_its_colour_at_every_depth() {
+    let red = [0.6, 0.0, 0.0, 1.0];
+    let rolling = photocraft_doc::Contour::Custom {
+        name: "Rolling Slope - Descending".into(),
+        points: [(0.0078, 1.0), (0.2078, 0.3922), (0.3804, 0.4196), (0.7020, 0.6), (0.9882, 0.0)]
+            .iter()
+            .map(|&(input, output)| CurvePoint { input, output })
+            .collect(),
+        corners: vec![],
+    };
+    let mut first: Option<Vec<[f32; 4]>> = None;
+    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let mut d = Document::with_background("t", Size::new(80, 80), ColorMode::Rgb, depth, Color::BLACK);
+        let mut l = Layer::raster("bar", d.pixel_format());
+        l.surface_mut().unwrap().fill_rect(Rect::new(20, 10, 60, 70), &red);
+        l.effects.items = vec![Effect::BevelEmboss(photocraft_doc::Bevel {
+            enabled: true,
+            style: photocraft_doc::BevelStyle::InnerBevel,
+            technique: photocraft_doc::BevelTechnique::Smooth,
+            depth: 3.58,
+            up: true,
+            size: 16.0,
+            soften: 0.0,
+            angle: 180.0,
+            altitude: 69.0,
+            use_global_light: false,
+            gloss_contour: rolling.clone(),
+            gloss_anti_alias: false,
+            highlight: FxCommon::new(photocraft_color::BlendMode::Screen, 0.78),
+            highlight_color: Color::WHITE,
+            shadow: FxCommon::new(photocraft_color::BlendMode::Multiply, 0.09),
+            shadow_color: Color::BLACK,
+            contour: None,
+            texture: None,
+        })];
+        d.layers.push(l);
+        // The slope facing the light, the middle, and a slope pixel facing away short of its glint.
+        let got: Vec<[f32; 4]> = [(23, 40), (30, 40), (40, 40), (50, 40)].iter().map(|&(x, y)| px(&d, x, y)).collect();
+        for (p, at) in got.iter().zip([23, 30, 40, 50]) {
+            assert!(p[0] > 0.5 && p[1] < 0.05 && p[2] < 0.05, "{depth:?} x={at}: still red, not washed white: {p:?}");
+        }
+        match &first {
+            None => first = Some(got),
+            Some(f) => {
+                for (a, b) in f.iter().zip(&got) {
+                    assert!(a.iter().zip(b).all(|(x, y)| (x - y).abs() <= 3.0 / 255.0), "{depth:?} agrees with 8-bit: {a:?} vs {b:?}");
+                }
+            }
+        }
+    }
 }
 
 #[test]

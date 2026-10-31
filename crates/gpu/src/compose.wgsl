@@ -1542,8 +1542,9 @@ fn bevel_part(p: vec2<i32>, depth: f32, region: f32) -> f32 {
     let shade = (n.x * op.p0.x + n.y * op.p0.y + n.z * op.p0.z) / len;
     let se = op.p0.w;
     var k = shade - se;
-    // effects::bevel_maps: the gloss contour maps the shading, a flat face's as the neutral (#7360).
-    if (op.p1.w > 0.5) { k = lut(0, shade) - lut(0, se); }
+    // effects::bevel_maps: the gloss contour maps the shading; a flat face's unmapped shading
+    // stays the neutral (#7360).
+    if (op.p1.w > 0.5) { k = lut(0, shade) - se; }
     var v = 0.0;
     if (op.p1.z > 0.5) {
         if (k <= 0.0) { v = clamp(-k / max(se, 1e-3), 0.0, 1.0) * region; }
