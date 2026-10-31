@@ -1,11 +1,11 @@
 //! Layer › Copy CSS (#9372): CSS for the selected layers, written as Photoshop writes it. The
 //! command returns the text; the shell puts it on the clipboard.
 //!
-//! Each layer is a class named after it (characters CSS doesn't allow in a name become `_`):
-//! a type layer gives its font, colour, line height and alignment, a solid shape or fill layer
-//! its colour, any other layer an image named after it; then the opacity when it isn't 100 %,
-//! the absolute position (and size, except for type), and its place in the stack as `z-index`,
-//! counted from the bottom layer as 1.
+//! Each layer is a class named after it (punctuation and spaces become `_`, and a leading digit
+//! gets a `_` in front): a type layer gives its font, colour, line height and alignment, a solid
+//! shape or fill layer its colour, any other layer an image named after it; then the opacity when
+//! it isn't 100 %, the absolute position (and size, except for type), and its place in the stack
+//! as `z-index`, counted from the bottom layer as 1.
 
 use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId, text::TextAlign};
 use serde_json::{Value, json};
@@ -32,10 +32,18 @@ pub fn number(v: f64) -> String {
     if s == "-0" { "0".into() } else { s.to_string() }
 }
 
-/// The class name for a layer: its name with every character CSS doesn't allow in a name as `_`.
+/// The class name for a layer: its name with every character other than a letter, digit or `_`
+/// as `_` (a hyphen too, as Photoshop does), and a `_` in front when it starts with a digit,
+/// which a class selector can't.
 pub fn class_name(name: &str) -> String {
-    let s: String = name.chars().map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-    if s.is_empty() { "layer".into() } else { s }
+    let s: String = name.chars().map(|c| if c.is_alphanumeric() || c == '_' { c } else { '_' }).collect();
+    if s.is_empty() {
+        "layer".into()
+    } else if s.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("_{s}")
+    } else {
+        s
+    }
 }
 
 fn rgb(c: &photocraft_color::Color) -> String {

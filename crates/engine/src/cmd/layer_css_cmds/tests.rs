@@ -81,6 +81,16 @@ fn numbers_and_names_are_written_as_photoshop_does() {
     assert_eq!(class_name(""), "layer");
 }
 
+/// Photoshop 2025: a class can't start with a digit, so a layer named "2nd Box" gets a `_` in
+/// front; a hyphen becomes `_` like the other punctuation ("-2x" is `._2x`, "my-box" `.my_box`).
+#[test]
+fn class_names_never_start_with_a_digit() {
+    for (name, class) in [("2nd Box", "._2nd_Box {\n"), ("-2x", "._2x {\n"), ("my-box", ".my_box {\n")] {
+        let css = session(name).execute(ID, json!({})).unwrap()["css"].as_str().unwrap().to_string();
+        assert!(css.starts_with(class), "{name}: {css}");
+    }
+}
+
 #[test]
 fn bad_params_and_layers_without_css_are_errors() {
     let mut s = session("Box");
