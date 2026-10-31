@@ -44,7 +44,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     if crate::filter_gpu_preview::on_gpu(app, idx) {
         return None;
     }
-    let dialog = app.ui.dialogs.iter().position(|d| d.fields.contains_key("__filter"))?;
+    let dialog = app.ui.dialogs.iter().position(|d| crate::filter_dialog::previews_on_canvas(&d.fields))?;
     crate::filter_dialog::refresh_match_color_sources(&app.session, &mut app.ui.dialogs[dialog].fields);
     let d = &app.ui.dialogs[dialog];
     crate::filter_dialog::validate_match_color_destination(app, &d.fields).ok()?;
