@@ -138,6 +138,7 @@ impl Compositor {
             residents: HashMap::new(),
             fx: HashMap::new(),
             prefix: prefix::Prefix::default(),
+            suffix: suffix::Suffix::default(),
             temps: Vec::new(),
             patterns: HashMap::new(),
             pattern_mode: photocraft_color::ColorMode::Rgb,
@@ -192,6 +193,7 @@ impl Compositor {
         self.fx.clear();
         self.temps.clear();
         self.prefix.clear();
+        self.suffix.clear();
     }
 
     /// The page side layer surfaces are stored in.
@@ -227,6 +229,7 @@ impl Compositor {
         self.lent = 0;
         self.exact_resident = false;
         self.lend();
+        self.fit_composite_caches();
     }
 
     /// Record that a render needs `needed` bytes of layer pages and return the resident budget
@@ -263,7 +266,7 @@ impl Compositor {
 
     /// Bytes held by reusable lower-stack chunks, within the overall cache allowance.
     pub fn composite_cache_bytes(&self) -> u64 {
-        self.prefix.bytes()
+        self.prefix.bytes().saturating_add(self.suffix.bytes())
     }
 
     /// Cap lower-stack reuse (default at most 512 MiB); zero disables it. The released allowance
@@ -272,6 +275,15 @@ impl Compositor {
         let caches = self.fx_budget.saturating_add(self.prefix.budget());
         self.prefix.set_budget(bytes.min(caches));
         self.fx_budget = caches.saturating_sub(self.prefix.budget());
+        self.fit_composite_caches();
+    }
+
+    /// The stack-above cache shares the lower-stack allowance: when a smaller allowance no longer
+    /// holds both, drop it, as the lower-stack cache drops itself (`Prefix::set_budget`).
+    fn fit_composite_caches(&mut self) {
+        if self.prefix.bytes().saturating_add(self.suffix.bytes()) > self.prefix.budget() {
+            self.suffix.clear();
+        }
     }
 
     /// Bytes of the layer pages a render of `region` needs resident (each layer and mask
@@ -418,6 +430,7 @@ impl Compositor {
         self.fx.retain(|_, e| e.doc != doc);
         self.patterns.retain(|_, p| p.doc != doc);
         self.prefix.forget(doc);
+        self.suffix.forget(doc);
     }
 
     /// [`Self::forget_doc`] for every document `keep` rejects: what the compositor holds for
@@ -430,6 +443,7 @@ impl Compositor {
             .chain(self.fx.values().map(|e| e.doc))
             .chain(self.patterns.values().map(|p| p.doc))
             .chain(self.prefix.doc())
+            .chain(self.suffix.doc())
             .filter(|d| !keep(*d))
             .collect();
         gone.sort_by_key(|d| d.0);
@@ -449,6 +463,7 @@ impl Compositor {
             .chain(self.fx.values().map(|e| e.doc))
             .chain(self.patterns.values().map(|p| p.doc))
             .chain(self.prefix.doc())
+            .chain(self.suffix.doc())
             .collect();
         docs.sort_by_key(|d| d.0);
         docs.dedup();
