@@ -131,6 +131,11 @@ pub fn answer(app: &mut PhotocraftApp, action: Option<&str>) -> Result<Value, St
     let Some(action) = action else {
         let dropped = app.held_opens.len();
         let name = app.held_opens.front().map(|h| h.name.clone()).unwrap_or_default();
+        if let Some(provider) = app.services.file_provider.as_ref() {
+            for held in &app.held_opens {
+                provider.abandon_opening_document(held.doc.id, None);
+            }
+        }
         app.held_opens.clear();
         for job in app.jobs.opens.iter().map(|o| o.job).collect::<Vec<_>>() {
             app.session.cancel_job(job);
@@ -224,7 +229,11 @@ pub(crate) fn answer_damage(app: &mut PhotocraftApp, accept: bool) -> Result<Val
     if accept {
         front.damage_pending = false;
     } else {
-        app.held_opens.pop_front();
+        if let Some(held) = app.held_opens.pop_front()
+            && let Some(provider) = app.services.file_provider.as_ref()
+        {
+            provider.abandon_opening_document(held.doc.id, None);
+        }
         app.ui.status = crate::i18n::fmt(tl!("Cancelled opening {name}"), &[("name", &name)]);
         app.ui.status_error = false;
     }
@@ -239,10 +248,14 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
         return Err("damaged PSD cannot be opened before confirmation".into());
     }
     let Held { mut doc, read_only, damage_pending: _, name, path, warnings, bytes, slot, question, policy_applied } = held;
+    let supplied_document = doc.id;
     let index = if question.is_some() || policy_applied {
         if let Some(action) = action
             && let Err(e) = app.session.color.resolve_open(&mut doc, action)
         {
+            if let Some(provider) = app.services.file_provider.as_ref() {
+                provider.abandon_opening_document(supplied_document, Some(&e.to_string()));
+            }
             app.open_failed(&name, &e.to_string());
             return Err(e.to_string());
         }
@@ -252,6 +265,9 @@ fn open(app: &mut PhotocraftApp, held: Held, action: Option<&str>) -> Result<Val
     };
     // add_document may remap a persisted ID already owned by another open document.
     let document = app.session.documents().get(index).map(|st| st.doc.id).ok_or("the opened document is missing")?;
+    if let Some(provider) = app.services.file_provider.as_ref() {
+        provider.remap_opening_document(supplied_document, document);
+    }
     if let Some(st) = app.session.active_mut() {
         st.source_read_only = read_only;
     }

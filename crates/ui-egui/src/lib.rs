@@ -29,6 +29,7 @@ pub mod dialogs;
 pub mod dock;
 pub mod file_dialog;
 pub mod file_open;
+pub mod file_providers;
 pub mod frame_stages;
 pub mod gpu_status;
 pub mod i18n;
@@ -876,3 +877,6 @@ mod saved_path_edit_tests;
 
 #[cfg(test)]
 mod pen_path_ownership_tests;
+
+#[cfg(test)]
+mod file_provider_tests;

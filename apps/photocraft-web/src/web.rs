@@ -89,7 +89,14 @@ pub fn start() {
                     let (session, warnings) = crate::preset_bridge::session(presets.clone());
                     preset_warnings.extend(warnings);
                     let drag = listen_drag(&pen_target);
-                    let mut app = PhotocraftApp::new(session, services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag)));
+                    let file_provider = photocraft_ui_egui::file_providers::Host::default();
+                    if let Err(error) = crate::file_providers::install(file_provider.clone(), cc.egui_ctx.clone()) {
+                        log::error!("file-provider API unavailable: {error:?}");
+                    }
+                    let mut app = PhotocraftApp::new(
+                        session,
+                        services(inbox.clone(), place_inbox.clone(), drag_pos_service(pen_target.clone(), drag), file_provider.clone()),
+                    );
                     if !preset_warnings.is_empty() {
                         photocraft_ui_egui::notices::post(&mut app, i18n::t("Some brush presets could not be loaded"), preset_warnings, true, None);
                     }
@@ -103,7 +110,7 @@ pub fn start() {
                     }
                     let unsaved = Arc::new(AtomicBool::new(false));
                     guard_unload(unsaved.clone());
-                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, ui_language: "" }))
+                    Ok(Box::new(WebShell { app, inbox, place_inbox, unsaved, served, database, presets, ui_language: "", file_provider }))
                 }),
             )
             .await;
@@ -275,6 +282,7 @@ struct WebShell {
     presets: crate::preset_bridge::Bridge,
     /// The interface language whose served script font was last asked for.
     ui_language: &'static str,
+    file_provider: photocraft_ui_egui::file_providers::Host,
 }
 
 impl WebShell {
@@ -402,13 +410,21 @@ impl eframe::App for WebShell {
             });
         }
         self.app.ui_frame(ui, frame);
+        crate::file_providers::publish(&self.file_provider);
         self.save_presets(ui.ctx());
         self.app.finish_type_reset_pass(ui.ctx());
     }
 }
 
-fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::CursorPosFn) -> Services {
+fn services(
+    inbox: Inbox,
+    place_inbox: Inbox,
+    cursor_pos: photocraft_ui_egui::CursorPosFn,
+    file_provider: photocraft_ui_egui::file_providers::Host,
+) -> Services {
+    let save_provider = file_provider.clone();
     Services {
+        file_provider: Some(file_provider),
         screen_pick: screen_color_service(),
         import: Some(Box::new(|name: &str, bytes: &[u8], opts: &photocraft_io::ImportOptions| {
             photocraft_io::import_with_options(name, bytes, opts).map(|r| (r.document, r.warnings)).map_err(|e| e.to_string())
@@ -416,7 +432,7 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
         export: Some(Box::new(|doc: &Document, path: &str, settings: &photocraft_ui_egui::ExportSettings| {
             photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
         })),
-        file_dialog: Some(Box::new(|request, _parent, reply| match request {
+        file_dialog: Some(Box::new(move |request, _parent, reply| match request {
             // The browser's file picker hands over the files' contents, not paths. File › Open
             // asks for several files (`multiple`), each opened in its own tab.
             FileDialogRequest::Open { multiple, extensions, .. } => wasm_bindgen_futures::spawn_local(async move {
@@ -446,7 +462,8 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
             }),
             // Browser folder handles cannot be represented as filesystem paths for engine commands.
             FileDialogRequest::Folder { .. } => reply.send(None),
-            // No save dialog on the web: the suggested name becomes the download name.
+            FileDialogRequest::Save { suggested } if save_provider.wants_dialog() => save_provider.dialog(suggested, reply),
+            // Without an active provider, retain the browser's original download flow.
             FileDialogRequest::Save { suggested } => {
                 let name = std::path::Path::new(&suggested).file_name().map_or_else(|| suggested.clone(), |n| n.to_string_lossy().to_string());
                 reply.send(Some(FileDialogAnswer::SaveTo(name)));

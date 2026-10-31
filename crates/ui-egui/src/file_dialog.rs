@@ -150,10 +150,24 @@ impl PhotocraftApp {
     pub(crate) fn pick_save(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
         let mut suggested = std::path::PathBuf::from(suggested);
         let doc = self.session.active().map(|d| d.doc.id);
+        if self.save_options_open() && self.services.file_provider.as_ref().is_some_and(|provider| doc.is_some_and(|doc| provider.prepared_for(doc))) {
+            // A shortcut such as Save a Copy must not inherit another save's prepared
+            // provider destination while that save is still asking for format options.
+            return Err(crate::SAVE_OPTIONS_OPEN.into());
+        }
+        if let Some(provider) = self.services.file_provider.as_ref() {
+            provider.prepare_dialog(doc);
+        }
+        let provider_dialog = self.services.file_provider.as_ref().is_some_and(|provider| provider.wants_dialog());
+        if provider_dialog {
+            // A provider receives a display filename, never a remembered local directory.
+            suggested = std::path::PathBuf::from(display_name(&suggested.to_string_lossy()));
+        }
         // Closed documents' folders are no longer needed.
         let open: Vec<_> = self.session.documents().iter().map(|d| d.doc.id).collect();
         self.save_dirs.retain(|id, _| open.contains(id));
-        if suggested.parent().is_some_and(|p| p.as_os_str().is_empty())
+        if !provider_dialog
+            && suggested.parent().is_some_and(|p| p.as_os_str().is_empty())
             && let Some(dir) = doc
                 .and_then(|d| self.save_dirs.get(&d).cloned())
                 .or_else(|| self.session.active().and_then(|d| d.path.as_deref()).and_then(|p| std::path::Path::new(p).parent()).map(Path::to_path_buf))
@@ -169,7 +183,8 @@ impl PhotocraftApp {
             FileDialogAnswer::SaveTo(path) => {
                 let path = saved_path(app, &path, suggested_ext.as_deref());
                 // The web answers a download name, which has no folder to remember.
-                if let Some(doc) = doc
+                if !provider_dialog
+                    && let Some(doc) = doc
                     && let Some(dir) = Path::new(&path).parent().filter(|p| !p.as_os_str().is_empty())
                 {
                     app.save_dirs.insert(doc, dir.to_path_buf());
@@ -178,7 +193,7 @@ impl PhotocraftApp {
             }
             _ => Err(UNEXPECTED.into()),
         })?;
-        if let Some(p) = self.file_dialog.as_mut() {
+        if !provider_dialog && let Some(p) = self.file_dialog.as_mut() {
             p.saved_path = Some(Box::new(move |app, path| saved_path(app, path, ext.as_deref())));
         }
         Ok(asked)

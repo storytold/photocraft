@@ -323,6 +323,9 @@ pub type RightButtonDownFn = Box<dyn Fn() -> bool + Send + Sync>;
 /// I/O dependencies.
 #[derive(Default)]
 pub struct Services {
+    /// Optional external file provider. Without an explicit connection, file operations keep
+    /// using the platform's existing dialogs and writer.
+    pub file_provider: Option<crate::file_providers::Host>,
     /// User-initiated desktop/browser pixel sampling.
     pub screen_pick: Option<screen_picker::Service>,
     /// Decode a file's bytes into a document (PSD, PNG, JPEG, …).

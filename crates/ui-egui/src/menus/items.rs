@@ -138,7 +138,11 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
     }
     // File › Open Recent: a dynamic submenu of recently opened files (inserted after "Open As…").
     if let Some(after) = items.iter().position(|i| i.id == "file.openAs") {
-        let rp: Vec<String> = vec!["File".into(), "Open Recent".into()];
+        let hosted = app.services.file_provider.as_ref().is_some_and(|provider| provider.connected());
+        let mut rp: Vec<String> = vec!["File".into(), "Open Recent".into()];
+        if hosted {
+            rp.push("Local Recent Files".into());
+        }
         let mut recent: Vec<MenuItem> = app
             .ui
             .recent_files
@@ -161,6 +165,44 @@ pub fn menu_items(app: &PhotocraftApp) -> Vec<MenuItem> {
             checked: None,
             color: None,
         });
+        if hosted && cfg!(target_arch = "wasm32") {
+            recent.clear();
+            recent.push(MenuItem {
+                id: "file.localRecentHint".into(),
+                label: "Use Open to choose a file from this device".into(),
+                path: rp,
+                shortcut: None,
+                enabled: false,
+                checked: None,
+                color: None,
+            });
+        }
+        if let Some(provider) = app.services.file_provider.as_ref().filter(|provider| provider.enabled()) {
+            let path = vec!["File".into(), "Open Recent".into(), provider.provider_label().unwrap_or_else(|| "File Provider".into())];
+            let resources = provider.resources();
+            if resources.is_empty() {
+                recent.push(MenuItem {
+                    id: "file.providerRecentEmpty".into(),
+                    label: "No recent files from this provider".into(),
+                    path: path.clone(),
+                    shortcut: None,
+                    enabled: false,
+                    checked: None,
+                    color: None,
+                });
+            }
+            for resource in resources {
+                recent.push(MenuItem {
+                    id: format!("file.openProviderRecent.{}", resource.id),
+                    label: resource.name,
+                    path: path.clone(),
+                    shortcut: None,
+                    enabled: true,
+                    checked: None,
+                    color: None,
+                });
+            }
+        }
         for (k, it) in recent.into_iter().enumerate() {
             items.insert(after + 1 + k, it);
         }

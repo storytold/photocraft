@@ -61,7 +61,14 @@ fn discarded(app: &PhotocraftApp, id: &str, params: &Value) -> (Option<DocId>, V
         Some(Reach::All) => (0..docs.len()).collect(),
         None => Vec::new(),
     };
-    let dirty = affected.into_iter().filter_map(|i| docs.get(i)).filter(|d| d.is_dirty()).map(|d| d.doc.id).collect();
+    let dirty = affected
+        .into_iter()
+        .filter_map(|i| docs.get(i))
+        .filter(|d| {
+            d.is_dirty() || app.services.file_provider.as_ref().is_some_and(|provider| provider.pending_for(d.doc.id) || provider.prepared_for(d.doc.id))
+        })
+        .map(|d| d.doc.id)
+        .collect();
     (target.and_then(|i| docs.get(i)).map(|d| d.doc.id), dirty)
 }
 
@@ -114,7 +121,8 @@ impl PhotocraftApp {
     /// Whether closing now would lose work: a document has unsaved changes and closing wasn't
     /// confirmed. The web build has the browser ask before leaving the page while this holds (#1380).
     pub fn has_unsaved_work(&self) -> bool {
-        !self.allow_close && self.session.documents().iter().any(|d| d.is_dirty())
+        !self.allow_close
+            && (self.session.documents().iter().any(|d| d.is_dirty()) || self.services.file_provider.as_ref().is_some_and(|provider| provider.busy()))
     }
 }
 
@@ -223,11 +231,7 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
     match saved {
         // A Save Document script may have edited the document after it was written: still dirty.
         // A write the platform can't confirm (a web download) leaves it dirty too, and counts.
-        Ok(_) => {
-            !app.save_options_open()
-                && !app.saving()
-                && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
-        }
+        Ok(_) => !app.save_options_open() && !app.saving() && saved_enough_to_close(app, doc),
         // Backing out of the file dialog is the user's choice, not an error.
         Err(e) if e == crate::file_dialog::CANCELLED => false,
         Err(e) => {
@@ -244,11 +248,19 @@ fn save(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) -> bool {
 pub(crate) fn saved_document(app: &mut PhotocraftApp, ctx: &egui::Context, doc: DocId) {
     // Still the prompt that asked (quitting may have replaced it meanwhile).
     if !app.save_options_open()
+        && !app.services.file_provider.as_ref().is_some_and(|provider| provider.pending_for(doc))
         && app.discard.as_ref().and_then(|p| p.docs.first()) == Some(&doc)
-        && index_of(app, doc).is_some_and(|i| app.services.write_unconfirmed || !app.session.documents()[i].is_dirty())
+        && saved_enough_to_close(app, doc)
     {
         advance(app, ctx);
     }
+}
+
+/// A local browser download keeps its existing close behaviour. A document bound to an
+/// external provider must be clean at the acknowledged revision; a later edit still asks.
+fn saved_enough_to_close(app: &PhotocraftApp, doc: DocId) -> bool {
+    let Some(state) = app.session.documents().iter().find(|state| state.doc.id == doc) else { return false };
+    !state.is_dirty() || (app.services.write_unconfirmed && !app.services.file_provider.as_ref().is_some_and(|provider| provider.bound(doc)))
 }
 
 /// A save failure as reported ("cancelled" stays as it is: it isn't reported).
