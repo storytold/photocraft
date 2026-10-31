@@ -3,6 +3,7 @@
 mod cli;
 mod man_and_completions;
 mod orientation;
+mod psd_write_oracle;
 
 /// Nextest archives relocate binaries; plain Cargo keeps the compile-time path valid.
 fn binary() -> std::ffi::OsString {
