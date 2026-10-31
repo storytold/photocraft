@@ -442,3 +442,15 @@ pub(super) fn target_slot(s: &mut Session, slot: usize) -> Result<Value> {
     target(s, t);
     Ok(list(s))
 }
+
+/// The channel the Channels panel targets, as the commands that read it from the session rather
+/// than from their params (Copy, Clear) see it: an alpha channel, or the Quick Mask while it is on
+/// (#10476 review). `None` when they act on the layer.
+pub(crate) fn panel_target(s: &Session) -> Option<Target> {
+    let st = s.active()?;
+    match st.channel_view.target {
+        ChannelTarget::Alpha(i) if i < st.doc.channels.len() => Some(Target::Alpha(i)),
+        ChannelTarget::Composite if st.doc.quick_mask.is_some() => Some(Target::QuickMask),
+        _ => None,
+    }
+}
