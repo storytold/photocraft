@@ -365,8 +365,8 @@ fn bench_gallery_preview() {
     }
 }
 
-/// The effect-layer list is no longer capped at its old 190 px: a tall dialog gives it more rows,
-/// a short one keeps the old height, and the settings keep room above it (#10335).
+/// #10335: the effect-layer list grows with the dialog: a tall column gives it more than the 190 px
+/// minimum, a short one keeps the minimum, and the settings keep room above it.
 #[test]
 fn effect_layer_list_grows_with_the_dialog_height() {
     let (_, short) = column_heights(400.0);
