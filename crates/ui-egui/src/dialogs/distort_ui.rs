@@ -61,12 +61,17 @@ impl Distort {
 
 /// The active layer's pixels (a pixel layer, or a smart object's rendering) and its id.
 pub(crate) fn active_pixels(app: &PhotocraftApp) -> Result<(LayerId, Surface, bool), String> {
+    active_pixels_ref(app).map(|(id, surf, smart)| (id, surf.clone(), smart))
+}
+
+/// [`active_pixels`] without the copy, for checks.
+fn active_pixels_ref(app: &PhotocraftApp) -> Result<(LayerId, &Surface, bool), String> {
     let st = app.session.active().ok_or("no document")?;
     let id = st.active_layer.ok_or("no active layer")?;
     let l = st.doc.layer(id).ok_or("no layer")?;
     match &l.content {
-        LayerContent::Raster(s) => Ok((id, s.clone(), false)),
-        LayerContent::Smart(sm) => sm.cache.clone().map(|c| (id, c, true)).ok_or_else(|| "the smart object has no pixels".to_string()),
+        LayerContent::Raster(s) => Ok((id, s, false)),
+        LayerContent::Smart(sm) => sm.cache.as_ref().map(|c| (id, c, true)).ok_or_else(|| "the smart object has no pixels".to_string()),
         other => Err(format!("needs a pixel layer or smart object (active layer is {} {} layer)", other.article(), other.kind_name())),
     }
 }
@@ -79,7 +84,7 @@ pub(crate) fn dialog_can_open(app: &PhotocraftApp, id: &str) -> Result<(), Strin
     if id == photocraft_engine::lens_cmds::RAW {
         photocraft_engine::commands::find(id).map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
     }
-    active_pixels(app).map(|_| ())
+    active_pixels_ref(app).map(|_| ())
 }
 
 /// The document with layer `id` hidden (what shows behind a live preview of that layer).
