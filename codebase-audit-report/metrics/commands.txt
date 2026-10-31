@@ -1,0 +1,38 @@
++ scc --exclude-dir target,.git,.claude,corpus,node_modules,dist,../../../tmp/claude-0/-home-user-photocraft-study/01d51361-962b-5e2c-9310-a16c058e391c/scratchpad/report .
++ scc --exclude-dir target,.git,.claude,corpus,node_modules,dist,../../../tmp/claude-0/-home-user-photocraft-study/01d51361-962b-5e2c-9310-a16c058e391c/scratchpad/report --by-file -f csv .
++ metrics metrics/scc-by-file.csv . metrics/
++ cargo xtask layers
++ cargo metadata --format-version 1 --no-deps
++ cargo clippy --workspace --message-format=json -- -W clippy::pedantic -W clippy::unwrap_used -W clippy::expect_used -W clippy::panic -W clippy::indexing_slicing -W clippy::todo -W clippy::unimplemented -W clippy::unreachable
++ cargo test -p photocraft-affinity -- --list --format terse
++ cargo test -p photocraft-algo -- --list --format terse
++ cargo test -p photocraft-automation -- --list --format terse
++ cargo test -p photocraft-cms -- --list --format terse
++ cargo test -p photocraft-codecs -- --list --format terse
++ cargo test -p photocraft-color -- --list --format terse
++ cargo test -p photocraft-compose -- --list --format terse
++ cargo test -p photocraft-doc -- --list --format terse
++ cargo test -p photocraft-engine -- --list --format terse
++ cargo test -p photocraft-format -- --list --format terse
++ cargo test -p photocraft-geom -- --list --format terse
++ cargo test -p photocraft-gpu -- --list --format terse
++ cargo test -p photocraft-heif -- --list --format terse
++ cargo test -p photocraft-io -- --list --format terse
++ cargo test -p photocraft-ops -- --list --format terse
++ cargo test -p photocraft-paint -- --list --format terse
++ cargo test -p photocraft-plugins -- --list --format terse
++ cargo test -p photocraft-psd -- --list --format terse
++ cargo test -p photocraft-raster -- --list --format terse
++ cargo test -p photocraft-raw -- --list --format terse
++ cargo test -p photocraft-tablet -- --list --format terse
++ cargo test -p photocraft-testkit -- --list --format terse
++ cargo test -p photocraft-text -- --list --format terse
++ cargo test -p photocraft-ui-egui -- --list --format terse
++ cargo test -p photocraft-vector -- --list --format terse
++ cargo test -p photocraft -- --list --format terse
++ cargo test -p photocraft-cli -- --list --format terse
++ cargo test -p xtask -- --list --format terse
++ testlist metrics/test-list.txt .
++ cargo run -q -p photocraft-cli -- commands --json
++ fpcount metrics/commands.json
++ sizing metrics/sizing-inputs.txt metrics/category-language.tsv > metrics/sizing.md

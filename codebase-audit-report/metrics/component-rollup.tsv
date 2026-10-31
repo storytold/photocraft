@@ -1,0 +1,75 @@
+component	category	files	loc	types	fns	cc	qmarks	hottest	hottest_cc
+Excluded: JSON	Excluded	4	3801	0	0	0	0		0
+Excluded: License	Excluded	2	167	0	0	0	0		0
+Excluded: Markdown	Excluded	102	8784	0	0	0	0		0
+Excluded: Plain Text	Excluded	12	960	0	0	0	0		0
+Excluded: SVG	Excluded	151	2227	0	0	0	0		0
+Excluded: book/	Excluded	1	27	0	0	0	0		0
+Excluded: generated Rust	Excluded	1	46	1	0	1	0	crates/raw/src/tone/tables.rs	1
+apps/photocraft	System	24	4022	33	232	879	166	apps/photocraft/src/screen_color.rs	104
+apps/photocraft (tests)	DevOps/Test	25	2627	1	186	307	2	apps/photocraft/src/services.rs	57
+apps/photocraft-cli	System	2	530	2	26	95	51	apps/photocraft-cli/src/lib.rs	94
+apps/photocraft-cli (tests)	DevOps/Test	3	937	0	49	102	0	apps/photocraft-cli/tests/cli.rs	76
+apps/photocraft-web	System	6	886	6	43	167	60	apps/photocraft-web/src/web.rs	78
+apps/photocraft-web (tests)	DevOps/Test	2	212	0	13	16	0	apps/photocraft-web/src/preset_bridge.rs	14
+build: Cargo manifests + build.rs	DevOps/Test	40	1323	0	15	58	24	crates/ui-egui/build.rs	32
+build: repo root config	DevOps/Test	4	72	0	0	6	0	Dockerfile	6
+ci: .github	DevOps/Test	8	466	0	0	0	0		0
+crates/affinity	System	12	2837	41	141	705	290	crates/affinity/src/model.rs	121
+crates/affinity (tests)	DevOps/Test	5	508	0	33	69	1	crates/affinity/src/tests.rs	49
+crates/algo	System	107	33115	235	1361	7879	661	crates/algo/src/inpaint.rs	435
+crates/algo (tests)	DevOps/Test	89	13127	1	694	2645	28	crates/algo/src/segment/tests.rs	146
+crates/automation	System	12	2586	38	163	529	148	crates/automation/src/server.rs	146
+crates/automation (tests)	DevOps/Test	18	3614	4	182	362	2	crates/automation/tests/mcp.rs	125
+crates/cms	System	13	3484	26	191	866	126	crates/cms/src/profile.rs	201
+crates/cms (tests)	DevOps/Test	9	1065	0	64	189	0	crates/cms/tests/cms.rs	125
+crates/codecs	System	36	10325	80	489	2563	696	crates/codecs/src/codecs/tiff.rs	306
+crates/codecs (tests)	DevOps/Test	51	8121	12	623	1510	10	crates/codecs/tests/deep_exr.rs	136
+crates/color	System	3	695	7	58	220	4	crates/color/src/blend.rs	156
+crates/color (tests)	DevOps/Test	3	460	0	29	108	0	crates/color/src/blend.rs	80
+crates/compose	System	14	5419	32	345	1506	15	crates/compose/src/effects.rs	480
+crates/compose (tests)	DevOps/Test	18	5402	1	347	812	3	crates/compose/src/tests.rs	332
+crates/doc	System	15	2997	113	227	558	24	crates/doc/src/lib.rs	185
+crates/doc (tests)	DevOps/Test	14	829	0	66	91	0	crates/doc/src/lib.rs	32
+crates/engine	System	136	56306	210	3059	12308	4128	crates/engine/src/atn_cmds.rs	774
+crates/engine (tests)	DevOps/Test	198	43983	7	2494	5294	129	crates/engine/src/retouch_cmds/tests.rs	305
+crates/format	System	10	2804	54	231	533	203	crates/format/src/store.rs	195
+crates/format (tests)	DevOps/Test	17	2486	9	167	266	6	crates/format/tests/roundtrip.rs	70
+crates/geom	System	2	994	9	77	316	0	crates/geom/src/warp.rs	270
+crates/geom (tests)	DevOps/Test	2	365	0	24	88	0	crates/geom/src/warp.rs	79
+crates/gpu	System	7	5403	39	204	1202	58	crates/gpu/src/plan.rs	340
+crates/gpu (tests)	DevOps/Test	10	3281	1	139	379	19	crates/gpu/tests/parity.rs	215
+crates/heif	System	1	112	4	9	19	3	crates/heif/src/lib.rs	19
+crates/heif (tests)	DevOps/Test	1	36	0	4	8	0	crates/heif/src/lib.rs	8
+crates/io	System	35	13002	51	663	3264	971	crates/io/src/psd_export.rs	394
+crates/io (tests)	DevOps/Test	97	15565	8	865	2152	21	crates/io/tests/flat.rs	128
+crates/ops	System	2	269	4	27	65	2	crates/ops/src/lib.rs	44
+crates/ops (tests)	DevOps/Test	2	495	0	21	55	0	crates/ops/src/lib.rs	41
+crates/paint	System	15	4488	53	229	943	6	crates/paint/src/render.rs	261
+crates/paint (tests)	DevOps/Test	13	2072	0	124	335	0	crates/paint/src/brush_tests.rs	207
+crates/plugins	System	5	846	12	50	175	52	crates/plugins/src/manifest.rs	71
+crates/plugins (tests)	DevOps/Test	4	450	0	26	48	0	crates/plugins/tests/abi.rs	31
+crates/psd	System	29	7733	93	516	1746	1082	crates/psd/src/tiff.rs	345
+crates/psd (tests)	DevOps/Test	48	5981	2	419	848	31	crates/psd/tests/swatch_malformed.rs	105
+crates/raster	System	2	906	7	71	209	21	crates/raster/src/lib.rs	197
+crates/raster (tests)	DevOps/Test	2	478	0	27	77	0	crates/raster/src/lib.rs	75
+crates/raw	System	26	7173	66	323	1682	293	crates/raw/src/testgen.rs	233
+crates/raw (tests)	DevOps/Test	31	3681	3	235	562	2	crates/raw/tests/dng.rs	84
+crates/tablet	System	5	443	10	25	82	11	crates/tablet/src/xi.rs	29
+crates/tablet (tests)	DevOps/Test	5	302	0	26	43	1	crates/tablet/src/appkit.rs	17
+crates/testkit	DevOps/Test	3	192	2	19	26	8	crates/testkit/src/perf.rs	21
+crates/text	System	16	5749	55	318	1434	149	crates/text/src/layout.rs	287
+crates/text (tests)	DevOps/Test	18	3155	0	185	424	0	crates/text/src/tests.rs	220
+crates/ui-egui	System	229	82376	424	4082	20699	1463	crates/ui-egui/src/canvas.rs	1434
+crates/ui-egui (tests)	DevOps/Test	312	75302	33	4278	9061	229	crates/ui-egui/src/panels.rs	232
+crates/vector	System	8	2137	13	129	588	24	crates/vector/src/trace.rs	124
+crates/vector (tests)	DevOps/Test	9	1009	0	75	139	0	crates/vector/src/tests.rs	59
+devops: .cargo/	DevOps/Test	1	2	0	0	0	0		0
+devops: .config/	DevOps/Test	1	5	0	0	0	0		0
+devops: contributors/	DevOps/Test	1	102	0	0	0	0		0
+devops: examples/	DevOps/Test	2	64	0	5	16	0	examples/plugins/invert-rs/src/lib.rs	16
+devops: packaging/	DevOps/Test	24	1776	0	0	244	0	packaging/linux/apprun-test.sh	36
+devops: perf/	DevOps/Test	1	451	0	0	1	0	perf/budgets.toml	1
+devops: scorecard/	DevOps/Test	8	1072	0	0	20	0	scorecard/tools.toml	7
+devops: scripts/	DevOps/Test	2	91	0	0	3	0	scripts/layered_tiff_fixtures.py	3
+xtask	DevOps/Test	12	4393	30	232	832	171	xtask/src/perf.rs	166
