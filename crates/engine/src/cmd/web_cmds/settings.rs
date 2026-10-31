@@ -1,5 +1,6 @@
 use super::optimizer::to8;
 use super::{Dither, PaletteKind, Result, Value, bad, json};
+use crate::EngineError;
 use photocraft_algo::palette_map::{Method, Palette, Settings};
 
 // ---------- settings ----------

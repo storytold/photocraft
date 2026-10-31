@@ -2,8 +2,8 @@
 //!
 //! This module owns command-facing compatibility and the Indexed format's palette rules. The
 //! actual mapping kernel is [`photocraft_algo::palette_map`]; callers exchange ordered encoded-sRGB
-//! palettes and floating-point RGBA pixels with that kernel. Palette Map's surface/ICC adapter is
-//! intentionally implemented by its later feature change, not here.
+//! palettes and floating-point RGBA pixels with that kernel. Indexed advanced mapping performs
+//! its document-profile/sRGB adaptation at the command boundary; stock quantization does not.
 
 use photocraft_algo::palette_map::{self, AlphaMode, Method, Palette, Settings};
 use photocraft_doc::ColorTable;

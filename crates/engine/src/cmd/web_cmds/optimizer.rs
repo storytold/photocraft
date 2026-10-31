@@ -335,7 +335,7 @@ pub fn optimize(
                 transparent_index = t;
                 let mut palette = Palette { name: "Export".into(), colors: pal.iter().map(|c| c.map(|v| f32::from(v) / 255.0)).collect() };
                 if let Some(profile) = &profile {
-                    convert_palette(&mut palette, profile, photocraft_cms::Builtin::Srgb.profile())?;
+                    convert_palette(&mut palette, profile, craft_cms::Builtin::Srgb.profile())?;
                 }
                 convert_working_rgb(&mut work, profile.as_ref())?;
                 let mapped = photocraft_algo::palette_map::render(&mut work, w, &palette, &mapping, [rect.x0, rect.y0], t).map_err(other)?;
@@ -430,7 +430,7 @@ fn stock_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool)
     Ok(pal)
 }
 
-fn mapped_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool, profile: Option<&photocraft_cms::Profile>) -> Result<Vec<[u8; 3]>> {
+fn mapped_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool, profile: Option<&craft_cms::Profile>) -> Result<Vec<[u8; 3]>> {
     let capacity = 256 - usize::from(transparent);
     let fixed = st.color_table.is_some() || st.palette_snapshot.is_some();
     // BlackWhite has two opaque entries, independently of the total indexed colour count.
@@ -471,7 +471,7 @@ fn mapped_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool
         // Snapshots are sRGB; encode their entries in the export document's profile.
         let mut palette = palette;
         if let Some(profile) = profile {
-            convert_palette(&mut palette, photocraft_cms::Builtin::Srgb.profile(), profile)?;
+            convert_palette(&mut palette, craft_cms::Builtin::Srgb.profile(), profile)?;
         }
         palette.colors.iter().map(|color| color.map(to8)).collect()
     } else {
@@ -497,29 +497,37 @@ fn mapped_indexed_palette(work: &[[f32; 4]], st: &WebSettings, transparent: bool
 }
 
 /// Save for Web has already converted its source to RGB, but may retain a non-sRGB profile.
-fn indexed_profile(icc: Option<&[u8]>) -> Result<Option<photocraft_cms::Profile>> {
+fn indexed_profile(icc: Option<&[u8]>) -> Result<Option<craft_cms::Profile>> {
     let Some(bytes) = icc else { return Ok(None) };
-    let profile = photocraft_cms::Profile::parse(bytes).map_err(other)?;
-    if profile.color_space != photocraft_cms::ColorSpace::Rgb {
+    let profile = craft_cms::Profile::parse(bytes).map_err(other)?;
+    if profile.color_space != craft_cms::ColorSpace::Rgb {
         return Err(other("indexed export requires an RGB source profile"));
     }
     Ok(Some(profile))
 }
 
-fn convert_working_rgb(pixels: &mut [[f32; 4]], source: Option<&photocraft_cms::Profile>) -> Result<()> {
+fn convert_working_rgb(pixels: &mut [[f32; 4]], source: Option<&craft_cms::Profile>) -> Result<()> {
     let Some(source) = source else { return Ok(()) };
-    let target = photocraft_cms::Builtin::Srgb.profile();
+    let target = craft_cms::Builtin::Srgb.profile();
     if source.content_hash() != target.content_hash() {
-        let transform = photocraft_cms::transform::cached(source, target, Default::default()).map_err(other)?;
-        transform.apply(pixels.as_flattened_mut(), 4);
+        let transform = craft_cms::transform::cached(source, target, Default::default()).map_err(other)?;
+        let mut converted = [0.0f32; 16];
+        for pixel in pixels {
+            transform.eval(&pixel[..3], &mut converted).map_err(other)?;
+            pixel[..3].copy_from_slice(&converted[..3]);
+        }
     }
     Ok(())
 }
 
-fn convert_palette(palette: &mut Palette, source: &photocraft_cms::Profile, target: &photocraft_cms::Profile) -> Result<()> {
+fn convert_palette(palette: &mut Palette, source: &craft_cms::Profile, target: &craft_cms::Profile) -> Result<()> {
     if source.content_hash() != target.content_hash() {
-        let transform = photocraft_cms::transform::cached(source, target, Default::default()).map_err(other)?;
-        transform.apply(palette.colors.as_flattened_mut(), 3);
+        let transform = craft_cms::transform::cached(source, target, Default::default()).map_err(other)?;
+        let mut converted = [0.0f32; 16];
+        for color in &mut palette.colors {
+            transform.eval(&color[..], &mut converted).map_err(other)?;
+            color.copy_from_slice(&converted[..3]);
+        }
     }
     Ok(())
 }

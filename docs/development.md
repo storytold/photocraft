@@ -742,11 +742,12 @@ encoding used by 256-color tables; all used colors remain available.
 
 Engine adapters expose shared `Palette`/`Settings` resolution and legacy `dither`, `amount`,
 `ditherAmount`, `paletteId` and `paletteSnapshot` spellings in `crates/engine/src/palette_cmds.rs`.
-Indexed conversion keeps its 256-entry/transparency-slot rules and stores expanded sRGB samples
-plus `ColorTable`. Advanced mapping is an explicit automation choice, not a replacement for stock
-dialog defaults or export quantization. Stock schema dialogs neither manufacture nor restore
-automation-only palette/mapping fields, including an implicit zero transparent index; stale
-remembered settings cannot turn an ordinary opaque conversion into advanced mapping.
+Indexed conversion keeps its 256-entry/transparency-slot rules and stores expanded RGB samples and
+`ColorTable` in the document's encoded RGB coordinates while retaining the document ICC bytes
+(including an untagged document). Advanced mapping is an explicit automation choice, not a
+replacement for stock dialog defaults or export quantization. Stock schema dialogs neither
+manufacture nor restore automation-only palette/mapping fields, including an implicit zero transparent
+index; stale remembered settings cannot turn an ordinary opaque conversion into advanced mapping.
 The stock palette and dither dropdowns retain their original choices; the adapter-only
 `blackWhite` generation preset and advanced dither method ids remain explicit automation inputs.
 No Palette Map filter command or UI is registered by this backend change.
@@ -784,16 +785,18 @@ colors, and changing those colors invalidates both cached frames and pending wor
 including when the preview proxy factor changes. A same-color frame at the old factor can
 remain visible during a drag until the new result arrives. This follows Adobe's documented
 [Indexed Color conversion options](https://helpx.adobe.com/photoshop/desktop/adjust-color/color-modes/conversion-options-for-indexed-color-images.html).
-Indexed Color converts the composited image from its composite ICC profile to encoded sRGB
-before palette construction and quantization, preserving alpha. The resulting expanded RGB
-samples and color table are tagged sRGB. Untagged/sRGB input retains the identity fast path;
-the stock dialog and quantizer are unchanged.
-Non-identity transforms reuse the cached CMS transform. Native composites of at least 16,384
-pixels convert in parallel with per-worker scratch; smaller images and WebAssembly retain the
-serial path. Both paths preserve alpha and the same RGB/gray channel routing.
-The conversion honors Color Settings rendering intent and black-point compensation. The
-relative-color identity shortcut is not used for absolute-colorimetric profiles with a
-different media white.
+
+Indexed Color's stock path quantizes the composited image's encoded document-RGB samples directly,
+preserving alpha and the source document profile. Exact therefore retains encoded values such as
+Adobe RGB sample codes 100, 150 and 200; Indexed→RGB with no explicit destination expands the
+already-RGB storage without converting or retagging it. Advanced palette mapping uses CMS only for
+its sRGB comparison space: snapshot/catalog colours and document pixels are compared in encoded
+sRGB, then mapped pixels and the resulting colour table are converted back to the document RGB
+profile. The document ICC bytes remain unchanged. Advanced mapping honors Color Settings
+rendering intent and black-point compensation; its relative-color identity shortcut is not used
+for absolute-colorimetric profiles with a different media white.
+The stock dialog and quantizer are unchanged. No CMS transform or parallel conversion pass is
+needed for ordinary Indexed Color.
 `cargo run --release -p photocraft-engine --example indexed_color_perf -- image.png` measures
 palette construction, Floyd–Steinberg diffusion, and the complete full-resolution CPU preview
 path (proxy copy, engine command, result composition; excludes GPU upload/presentation).
