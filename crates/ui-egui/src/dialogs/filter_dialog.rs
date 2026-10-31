@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use photocraft_cms::{ColorSpace, Transform};
+use photocraft_color::ColorMode;
 use photocraft_doc::Document;
 use photocraft_engine::color_cmds::ColorSettings;
 use photocraft_engine::installed_profiles::InstalledProfile;
@@ -429,6 +431,9 @@ fn default_value(app: &PhotocraftApp, command: &str, p: &Param) -> Option<Value>
 
 /// Command-specific open defaults (ruler straighten, warp from layer, …), not remembered prefs.
 fn apply_command_defaults(app: &PhotocraftApp, command: &str, fields: &mut Map<String, Value>) {
+    if command == "image.mode.indexedColor" {
+        indexed_matte_defaults(app, fields);
+    }
     if command == "image.rotation.arbitrary" {
         straighten_defaults(app, fields);
     }
@@ -840,10 +845,58 @@ fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 }
 
+const INDEXED_MATTE_FOREGROUND: &str = "__indexedMatteForeground";
+const INDEXED_MATTE_BACKGROUND: &str = "__indexedMatteBackground";
+
+/// Resolve a tool colour into the encoded samples used by Indexed Color's matte.
+///
+/// The picker and command fields carry document RGB coordinates. Tool swatches are
+/// working-RGB coordinates, so only the named tool choices need this conversion here.
+fn indexed_matte_document_color(app: &PhotocraftApp, doc: &Document, color: [f32; 4]) -> [f32; 3] {
+    let destination = match photocraft_engine::color_cmds::mode_space(doc.mode) {
+        ColorSpace::Rgb | ColorSpace::Gray => photocraft_engine::color_cmds::document_profile(doc),
+        _ => photocraft_engine::color_cmds::composite_profile(doc),
+    };
+    let source = app.session.color.working(ColorMode::Rgb);
+    let Ok(transform) = Transform::new(&source, &destination, app.session.color.settings.intent(), app.session.color.settings.bpc) else {
+        return [color[0], color[1], color[2]];
+    };
+    let mut output = [0.0; 16];
+    transform.eval(&color[..3], &mut output);
+    if destination.color_space == ColorSpace::Gray { [output[0]; 3] } else { [output[0], output[1], output[2]] }
+}
+
+fn indexed_matte_defaults(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+    let Some(doc) = app.session.active().map(|state| state.doc.clone()) else { return };
+    let foreground = indexed_matte_document_color(app, &doc, app.session.tools.foreground);
+    let background = indexed_matte_document_color(app, &doc, app.session.tools.background);
+    fields.insert(INDEXED_MATTE_FOREGROUND.into(), json!(crate::color_picker_ui::hex(foreground)));
+    fields.insert(INDEXED_MATTE_BACKGROUND.into(), json!(crate::color_picker_ui::hex(background)));
+}
+
+fn indexed_matte_seed(fields: &Map<String, Value>, value: &str) -> [f32; 3] {
+    match value {
+        "foreground" => fields
+            .get(INDEXED_MATTE_FOREGROUND)
+            .and_then(Value::as_str)
+            .and_then(crate::color_picker_ui::parse_hex)
+            .unwrap_or([0.0; 3]),
+        "background" => fields
+            .get(INDEXED_MATTE_BACKGROUND)
+            .and_then(Value::as_str)
+            .and_then(crate::color_picker_ui::parse_hex)
+            .unwrap_or([1.0; 3]),
+        "black" => [0.0; 3],
+        "gray" => [128.0 / 255.0; 3],
+        "netscapeGray" => [192.0 / 255.0; 3],
+        _ => [1.0; 3],
+    }
+}
+
 fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     let value = fields.get("matte").and_then(Value::as_str).unwrap_or("none");
     let mut choice = if value.starts_with('#') { "custom" } else { value };
-    let color = crate::color_picker_ui::parse_hex(value).unwrap_or([1.0; 3]);
+    let color = crate::color_picker_ui::parse_hex(value).unwrap_or_else(|| indexed_matte_seed(fields, value));
     let mut changed = false;
     let mut pick = false;
     ui.horizontal(|ui| {
@@ -859,6 +912,8 @@ fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
                 ("background", "Background Color"),
                 ("white", "White"),
                 ("black", "Black"),
+                ("gray", "50% Gray"),
+                ("netscapeGray", "Netscape Gray"),
                 ("custom", "Other…"),
             ],
             170.0,
@@ -872,7 +927,7 @@ fn indexed_matte_row(ui: &mut egui::Ui, fields: &mut Map<String, Value>) {
     if changed {
         if custom {
             // Keep the previous matte until the picker confirms; the picker uses this only as
-            // its initial colour when switching from a named matte or None.
+            // its initial document-encoded colour when switching from a named matte or None.
             fields.insert("__pickColorDefault".into(), json!(crate::color_picker_ui::hex(color)));
         } else {
             fields.insert("matte".into(), json!(choice.to_owned()));

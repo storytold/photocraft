@@ -90,6 +90,31 @@ fn display_names_are_not_split_like_camel_case_keys() {
     assert_eq!(source_label("centerX"), "Center X");
 }
 
+#[test]
+fn indexed_matte_tool_seeds_use_document_encoded_rgb() {
+    use photocraft_cms::Transform;
+
+    let mut session = photocraft_engine::Session::new();
+    session.color.settings.working_rgb = "display-p3".into();
+    session.execute("file.new", json!({"width": 2, "height": 2, "background": "transparent"})).unwrap();
+    session.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+    session.execute("tools.setColors", json!({"foreground": "#3366cc", "background": "#cc6633"})).unwrap();
+    let mut app = PhotocraftApp::new(session, crate::Services::default());
+    let mut fields = Map::new();
+    indexed_matte_defaults(&app, &mut fields);
+
+    let doc = app.session.active().unwrap().doc.clone();
+    let source = app.session.color.working(ColorMode::Rgb);
+    let destination = photocraft_engine::color_cmds::document_profile(&doc);
+    let transform = Transform::new(&source, &destination, app.session.color.settings.intent(), app.session.color.settings.bpc).unwrap();
+    for (key, input) in [(INDEXED_MATTE_FOREGROUND, [0.2, 0.4, 0.8]), (INDEXED_MATTE_BACKGROUND, [0.8, 0.4, 0.2])] {
+        let mut output = [0.0; 16];
+        transform.eval(&input, &mut output);
+        let expected = crate::color_picker_ui::hex([output[0], output[1], output[2]]);
+        assert_eq!(fields.get(key).and_then(Value::as_str), Some(expected.as_str()), "{key}");
+        assert_eq!(indexed_matte_seed(&fields, if key == INDEXED_MATTE_FOREGROUND { "foreground" } else { "background" }), crate::color_picker_ui::parse_hex(&expected).unwrap());
+    }
+}
 /// Convert to Profile's and Proof Setup's `bpc` read "Bpc": spelled out.
 #[test]
 fn black_point_compensation_is_spelled_out() {
@@ -1648,7 +1673,12 @@ fn indexed_matte_dropdown_and_picker_change_the_applied_edge_color() {
     use egui::accesskit::Role;
     use egui_kittest::{Harness, kittest::Queryable};
 
-    for (choice, blue) in [("Black", 0.0), ("Other…", 0.25)] {
+    for (choice, matte) in [
+        ("Black", [0.0, 0.0, 0.0]),
+        ("50% Gray", [128.0 / 255.0; 3]),
+        ("Netscape Gray", [192.0 / 255.0; 3]),
+        ("Other…", [0.0, 0.0, 1.0]),
+    ] {
         let mut session = photocraft_engine::Session::new();
         session.execute("file.new", json!({"width": 2, "height": 1, "depth": 32, "background": "transparent"})).unwrap();
         session
@@ -1682,7 +1712,8 @@ fn indexed_matte_dropdown_and_picker_change_the_applied_edge_color() {
         assert_eq!(doc.mode, photocraft_color::ColorMode::Indexed);
         let surface = doc.layers[0].surface().unwrap();
         let edge = surface.rgba(0, 0);
-        assert!((edge[0] - 0.75).abs() <= 1.0 / 255.0 && edge[1] == 0.0 && (edge[2] - blue).abs() <= 1.0 / 255.0 && edge[3] == 1.0, "{choice}: {edge:?}");
+        let expected = [0.75 + 0.25 * matte[0], 0.25 * matte[1], 0.25 * matte[2]];
+        assert!(edge.iter().zip(expected).all(|(got, want)| (got - want).abs() <= 1.0 / 255.0) && edge[3] == 1.0, "{choice}: {edge:?} vs {expected:?}");
         assert_eq!(surface.rgba(1, 0)[3], 0.0);
     }
 }

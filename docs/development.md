@@ -662,11 +662,14 @@ except Place, which is a job that `poll_jobs` steps on the UI thread (a *coopera
 ## Indexed Color timings
 
 The stock Indexed Color dialog exposes Matte: None, Foreground Color, Background Color,
-White, Black and Other… (the shared Color Picker). Choosing Other… opens the picker without
-replacing the current matte; Cancel leaves that choice unchanged, and OK commits the picked
-`#rrggbb`. Automation accepts `matte` as `none`, `foreground`, `background`,
-`white`, `black` or `#rrggbb`. A selected matte blends all partially transparent
-edges; with Transparency on, fully clear pixels stay transparent.
+White, Black, 50% Gray, Netscape Gray and Other… (the shared Color Picker). Choosing Other…
+opens the picker without replacing the current matte; Cancel leaves that choice unchanged, and
+OK commits the picked `#rrggbb` in document RGB coordinates. Automation accepts `matte` as
+`none`, `foreground`, `background`, `white`, `black`, `gray` (50% Gray, encoded
+`#808080`), `netscapeGray` (Netscape Gray, encoded `#c0c0c0`) or `#rrggbb`. Foreground/background
+tool colours are converted from the
+working RGB profile into the document profile before blending. A selected matte blends all
+partially transparent edges; with Transparency on, fully clear pixels stay transparent.
 With Transparency off, the selected matte also fills clear pixels. None retains the existing
 hard-edged transparency/default flattening behavior. Indexed conversion retains the document's
 ICC profile and encoded RGB sample representation; matte colours are interpreted in the document

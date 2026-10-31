@@ -9,6 +9,7 @@
 
 use photocraft_algo::quantize::{self, BitmapMethod, Dither, Forced, HalftoneShape, PaletteKind};
 use photocraft_algo::transform::{Homography, Interp};
+use photocraft_cms::{ColorSpace, Transform};
 use photocraft_color::{ColorMode, PixelFormat, SampleType};
 use photocraft_doc::adjust::CurvePoint;
 use photocraft_doc::{ColorTable, Document, Duotone, DuotoneInk, Layer, LayerContent, LayerId, Size};
@@ -255,23 +256,47 @@ fn parse_dither(s: &str) -> Option<Dither> {
     })
 }
 
+/// Convert a tool colour from the working RGB space into the samples used by the
+/// flattened document. RGB and Indexed documents keep their own document profile;
+/// grayscale output is a scalar sample replicated into the flattened RGB view.
+fn working_matte_color(s: &Session, doc: &Document, color: [f32; 4]) -> Result<[f32; 3]> {
+    let destination = match crate::color_cmds::mode_space(doc.mode) {
+        ColorSpace::Rgb | ColorSpace::Gray => crate::color_cmds::document_profile(doc),
+        // CMYK and Lab flatten through the compositor's sRGB view on the pinned main path.
+        _ => crate::color_cmds::composite_profile(doc),
+    };
+    let source = s.color.working(ColorMode::Rgb);
+    let transform = Transform::new(&source, &destination, s.color.settings.intent(), s.color.settings.bpc)
+        .map_err(|e| bad("image.mode.indexedColor", format!("cannot convert matte colour: {e}")))?;
+    let mut output = [0.0; 16];
+    transform.eval(&color[..3], &mut output);
+    let matte = if destination.color_space == ColorSpace::Gray {
+        [output[0]; 3]
+    } else {
+        [output[0], output[1], output[2]]
+    };
+    Ok(matte)
+}
+
 fn indexed_matte(s: &Session, p: &Value) -> Result<Option<[f32; 3]>> {
     const CMD: &str = "image.mode.indexedColor";
-    let rgba = |color: [f32; 4]| [color[0], color[1], color[2]];
+    let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let matte = match p.get("matte") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::String(value)) => match value.as_str() {
             "none" => return Ok(None),
             "white" => [1.0; 3],
             "black" => [0.0; 3],
-            "foreground" => rgba(s.tools.foreground),
-            "background" => rgba(s.tools.background),
+            "gray" => [128.0 / 255.0; 3],
+            "netscapeGray" => [192.0 / 255.0; 3],
+            "foreground" => working_matte_color(s, &doc, s.tools.foreground)?,
+            "background" => working_matte_color(s, &doc, s.tools.background)?,
             value if value.len() == 7 && value.starts_with('#') => p
                 .get("matte")
                 .and_then(parse_color)
-                .ok_or_else(|| bad(CMD, "matte must be none, foreground, background, white, black or #rrggbb"))?
+                .ok_or_else(|| bad(CMD, "matte must be none, foreground, background, white, black, gray, netscapeGray or #rrggbb"))?
                 .map(|v| f32::from(v) / 255.0),
-            _ => return Err(bad(CMD, "matte must be none, foreground, background, white, black or #rrggbb")),
+            _ => return Err(bad(CMD, "matte must be none, foreground, background, white, black, gray, netscapeGray or #rrggbb")),
         },
         _ => return Err(bad(CMD, "matte must be a colour string")),
     };
@@ -730,7 +755,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.mode.indexedColor",
             "Indexed Color…",
             ["Image", "Mode"],
-            r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"matte":color,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; matte: none|foreground|background|white|black|#rrggbb)"##,
+r##"{"palette":"selective|perceptual|adaptive|exact|systemMac|systemWindows|web|uniform"="selective","colors":2..256=256,"forced":"blackWhite|none|primaries|web"="blackWhite","transparency":bool=true,"matte":color,"dither":"diffusion|none|pattern|noise"="diffusion","amount":0..100=75} (flattens; matte: none|foreground|background|white|black|gray|netscapeGray|#rrggbb; gray=50% Gray (#808080), netscapeGray=Netscape Gray (#c0c0c0))"##,
             |s| mode_is(
                 s,
                 &[ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Indexed, ColorMode::Duotone, ColorMode::Cmyk, ColorMode::Lab],

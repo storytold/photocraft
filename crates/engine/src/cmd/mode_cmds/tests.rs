@@ -288,6 +288,67 @@ fn indexed_matte_blends_edges_without_replacing_clear_pixels() {
 }
 
 #[test]
+fn indexed_matte_converts_working_rgb_to_document_profile_at_every_depth() {
+    use photocraft_cms::Transform;
+
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.color.settings.working_rgb = "display-p3".into();
+        s.execute("file.new", json!({"width": 2, "height": 1, "depth": depth, "background": "transparent"})).unwrap();
+        s.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+        s.execute("tools.setColors", json!({"foreground": "#3366cc"})).unwrap();
+        paint(&mut s, |x, _| if x == 0 { [1.0, 0.0, 0.0, 0.5] } else { [0.0; 4] });
+
+        let source = s.color.working(ColorMode::Rgb);
+        let destination = crate::color_cmds::document_profile(doc(&s));
+        let transform = Transform::new(&source, &destination, s.color.settings.intent(), s.color.settings.bpc).unwrap();
+        let mut converted = [0.0; 16];
+        transform.eval(&[0.2, 0.4, 0.8], &mut converted);
+        let expected = [0.5 + 0.5 * converted[0], 0.5 * converted[1], 0.5 * converted[2]];
+
+        s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "matte": "foreground"})).unwrap();
+        let edge = doc(&s).layers[0].surface().unwrap().rgba(0, 0);
+        for (got, want) in edge[..3].iter().zip(expected) {
+            assert!((got - want).abs() <= 2.0 / 255.0, "{depth}-bit: {edge:?} vs {expected:?}");
+        }
+        assert_eq!(edge[3], 1.0);
+    }
+}
+
+#[test]
+fn indexed_matte_hex_stays_in_document_rgb_coordinates() {
+    for depth in [8, 16, 32] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 1, "height": 1, "depth": depth, "background": "transparent"})).unwrap();
+        s.execute("edit.assignProfile", json!({"profile": "adobe-rgb-compat"})).unwrap();
+        paint(&mut s, |_| [1.0, 0.0, 0.0, 0.5]);
+        s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "matte": "#3366cc"})).unwrap();
+        let edge = doc(&s).layers[0].surface().unwrap().rgba(0, 0);
+        let expected = [0.5 + 0.5 * 0.2, 0.5 * 0.4, 0.5 * 0.8];
+        for (got, want) in edge[..3].iter().zip(expected) {
+            assert!((got - want).abs() <= 2.0 / 255.0, "{depth}-bit: {edge:?} vs {expected:?}");
+        }
+        assert_eq!(edge[3], 1.0);
+    }
+}
+
+#[test]
+fn indexed_matte_named_gray_choices_use_their_document_samples() {
+    for (matte, channel) in [("gray", 128.0 / 255.0), ("netscapeGray", 192.0 / 255.0)] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 1, "height": 1, "depth": 32, "background": "transparent"})).unwrap();
+        paint(&mut s, |_| [1.0, 0.0, 0.0, 0.5]);
+        s.execute("image.mode.indexedColor", json!({"palette": "exact", "forced": "none", "dither": "none", "matte": matte})).unwrap();
+        let edge = doc(&s).layers[0].surface().unwrap().rgba(0, 0);
+        assert!((edge[0] - 0.5).abs() <= 2.0 / 255.0, "{matte}: {edge:?}");
+        for value in edge[1..3].iter() {
+            assert!((*value - channel * 0.5).abs() <= 2.0 / 255.0, "{matte}: {edge:?}");
+        }
+        assert_eq!(edge[3], 1.0);
+    }
+}
+
+#[test]
 fn indexed_matte_without_transparency_fills_clear_pixels_and_rejects_bad_input_atomically() {
     let mut s = Session::new();
     s.execute("file.new", json!({"width": 2, "height": 1, "background": "transparent"})).unwrap();
