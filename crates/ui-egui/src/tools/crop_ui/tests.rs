@@ -808,6 +808,126 @@ fn the_stylus_eraser_and_a_gesture_in_progress_keep_the_frame_pending() {
     assert_eq!(app.session.active().unwrap().doc.size, Size::new(200, 100));
 }
 
+/// A tool key pressed while a drag on the frame is held (⇧C to Perspective Crop): the next
+/// tool's events end the gesture, even a tool that takes every event before the Crop tool's
+/// handler, and leaving then commits the frame as it does for any other tool (#3368).
+#[test]
+fn a_tool_switch_during_a_drag_ends_it_and_commits_the_frame() {
+    for tool in [Tool::PerspectiveCrop, Tool::Ruler, Tool::Slice, Tool::Frame, Tool::Artboard, Tool::Brush] {
+        let mut app = app(SampleType::U8);
+        ensure_frame(&mut app);
+        drag(&mut app, &[[20.0, 20.0], [120.0, 80.0]], NONE);
+        tool_event(&mut app, ToolEvent::Down { x: 60.0, y: 50.0, pressure: 1.0 }, NONE);
+        assert!(app.crop.drag.is_some());
+        app.ui.tool = tool;
+        tool_event(&mut app, ToolEvent::Move { x: 70.0, y: 50.0, pressure: 1.0 }, NONE);
+        tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 50.0 }, NONE);
+        assert!(app.crop.drag.is_none(), "{tool:?}");
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, None, "{tool:?}");
+        assert_eq!(app.session.active().unwrap().doc.size, Size::new(100, 60), "{tool:?}");
+    }
+}
+
+/// The same mid-drag tool switch on the untouched default frame: a box drawn over it, or the
+/// frame resized by a handle, is an edit and commits on leave; a box too small to keep goes back
+/// to the default frame, which leaving drops (#9223).
+#[test]
+fn a_tool_switch_during_a_drag_on_the_default_frame_keeps_the_edit() {
+    let cases: [(&[[f64; 2]], Size); 3] = [
+        (&[[20.0, 20.0], [120.0, 80.0]], Size::new(100, 60)),
+        (&[[200.0, 100.0], [150.0, 80.0]], Size::new(150, 80)),
+        (&[[20.0, 20.0], [20.0, 20.0]], Size::new(200, 100)),
+    ];
+    for (path, size) in cases {
+        for tool in [Tool::PerspectiveCrop, Tool::Brush] {
+            let mut app = app(SampleType::U8);
+            ensure_frame(&mut app);
+            assert!(app.crop.default_frame);
+            tool_event(&mut app, ToolEvent::Down { x: path[0][0], y: path[0][1], pressure: 1.0 }, NONE);
+            tool_event(&mut app, ToolEvent::Move { x: path[1][0], y: path[1][1], pressure: 1.0 }, NONE);
+            assert!(app.crop.drag.is_some());
+            app.ui.tool = tool;
+            tool_event(&mut app, ToolEvent::Move { x: 70.0, y: 50.0, pressure: 1.0 }, NONE);
+            tool_event(&mut app, ToolEvent::Up { x: 70.0, y: 50.0 }, NONE);
+            assert!(app.crop.drag.is_none(), "{tool:?} {path:?}");
+            ensure_frame(&mut app);
+            assert_eq!(app.ui.crop_rect, None, "{tool:?} {path:?}");
+            assert_eq!(app.session.active().unwrap().doc.size, size, "{tool:?} {path:?}");
+        }
+    }
+}
+
+/// Real egui input: a tool picked while a box is being drawn over the untouched default frame
+/// (a tool key mid-drag) commits that box on leaving, whichever tool it is; the canvas ends the
+/// gesture before the frame sees the switch, also for the Hand, whose events never reach
+/// `tool_event` (#9223).
+#[test]
+fn a_tool_switch_during_a_real_drag_commits_the_drawn_box() {
+    use egui::{Event, PointerButton, pos2};
+    for tool in [Tool::Brush, Tool::PerspectiveCrop, Tool::Hand] {
+        let mut a = app(SampleType::U8);
+        a.sync_views();
+        let v = &mut a.ui.views[0];
+        (v.zoom, v.center, v.fit_pending, v.doc_size, v.rotation) = (2.0, [100.0, 50.0], false, [200, 100], 0.0);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(600.0, 400.0)).build_ui_state(
+            |ui, app: &mut PhotocraftApp| {
+                let v = app.ui.views[0].clone();
+                crate::canvas::canvas_view(app, ui, 0, ui.max_rect(), v, true);
+            },
+            a,
+        );
+        h.run_steps(2);
+        assert!(h.state().crop.default_frame, "{tool:?}");
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        let p0 = pos2(200.0, 150.0);
+        h.event(Event::PointerMoved(p0));
+        h.event(button(p0, true));
+        h.step();
+        for p in [pos2(220.0, 170.0), pos2(260.0, 190.0)] {
+            h.event(Event::PointerMoved(p));
+            h.step();
+        }
+        assert!(h.state().crop.drag.is_some(), "{tool:?}");
+        h.state_mut().ui.tool = tool;
+        h.event(Event::PointerMoved(pos2(270.0, 195.0)));
+        h.step();
+        h.event(button(pos2(270.0, 195.0), false));
+        h.run_steps(2);
+        let st = h.state();
+        assert!(st.crop.drag.is_none(), "{tool:?}");
+        assert_eq!(st.ui.crop_rect, None, "{tool:?}");
+        assert_eq!(st.session.active().unwrap().doc.size, Size::new(30, 20), "{tool:?}: the drawn 60x40 screen px at 200%");
+    }
+}
+
+/// A press inside the untouched default frame that never moves draws nothing, so the frame
+/// stays the default one and leaving drops it: no crop to the selection's bounds, released or
+/// cut short by a tool switch (#9223).
+#[test]
+fn a_press_that_never_moves_leaves_the_default_frame_untouched() {
+    for switch in [false, true] {
+        let mut app = app(SampleType::U8);
+        app.run("select.rect", json!({"x": 10, "y": 20, "width": 30, "height": 40})).unwrap();
+        ensure_frame(&mut app);
+        assert_eq!(app.ui.crop_rect, Some([10.0, 20.0, 40.0, 60.0]));
+        let steps = app.session.active().unwrap().history.past_len();
+        tool_event(&mut app, ToolEvent::Down { x: 25.0, y: 40.0, pressure: 1.0 }, NONE);
+        if switch {
+            app.ui.tool = Tool::Brush;
+            end_drag_on_leave(&mut app);
+        } else {
+            tool_event(&mut app, ToolEvent::Up { x: 25.0, y: 40.0 }, NONE);
+            assert!(app.crop.default_frame, "a click is no edit");
+            app.ui.tool = Tool::Brush;
+        }
+        ensure_frame(&mut app);
+        let st = app.session.active().unwrap();
+        assert_eq!((st.doc.size, st.history.past_len()), (Size::new(200, 100), steps), "switch: {switch}");
+        assert_eq!(app.ui.crop_rect, None, "switch: {switch}");
+    }
+}
+
 /// Image › Crop with a pending crop commits the frame (the one Image item Photoshop keeps).
 #[test]
 fn image_crop_menu_commits_a_pending_crop() {
