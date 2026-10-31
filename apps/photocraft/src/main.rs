@@ -76,8 +76,7 @@ mod window_frame;
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
 
-/// Matches the `.desktop` file and hicolor icon name, so Wayland docks pick up the icon.
-const APP_ID: &str = "ai.storyteller.photocraft";
+use photocraft_ui_egui::os_window::APP_ID;
 
 /// Windows and Linux: no OS title bar; the app's top bar is the title bar, with its own caption
 /// buttons and edge resizing (`photocraft_ui_egui::titlebar`), as Photoshop does on Windows. macOS
@@ -646,7 +645,14 @@ fn main() -> eframe::Result {
             // Caps Lock state (X11/Windows/macOS; `None` on native Wayland): the canvas shows the
             // precise crosshair for painting tools while it is toggled on (#1758).
             app.services.caps_lock = caps_lock::service(cc);
-            app.services.screen_pick = screen_color::service(cc, app.services.is_wayland);
+            // Pick through the portal on a Wayland desktop even when the window went through
+            // Xwayland (a pen, or the X11 display-server preference): Xwayland's root window has
+            // no desktop pixels to read (#8977).
+            #[cfg(target_os = "linux")]
+            let portal = screen_color::uses_portal(native_session);
+            #[cfg(not(target_os = "linux"))]
+            let portal = false;
+            app.services.screen_pick = screen_color::service(cc, portal);
             // Tablet pressure/tilt/eraser (winit drops them): the macOS monitor and the X11 reader
             // write into the stylus feed. The monitor goes in here, not before the event loop:
             // AppKit's shared application only exists once winit created it (#759).

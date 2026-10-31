@@ -51,6 +51,9 @@ fn engine_methods(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlReq
 
 fn context_choose(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Outcome {
     let Some(id) = str_param(p, "id") else { return err("missing `id`") };
+    if app.ui.canvas_tool_menu.is_none() && app.ui.brush_mode_menu.is_some() {
+        return mode_menu_choose(app, ctx, id);
+    }
     let Some(menu) = app.ui.canvas_tool_menu.as_ref() else { return err("no canvas context menu is open") };
     if !crate::canvas_tool_menu::available(app, menu, id) {
         return err("context action is unavailable");
@@ -64,6 +67,22 @@ fn context_choose(app: &mut PhotocraftApp, ctx: &egui::Context, p: &Value) -> Ou
     }
     crate::canvas_tool_menu::choose(app, ctx, id);
     ok(json!({"command": id, "dialog": app.ui.dialogs.last().map(|d| d.id)}))
+}
+
+/// A row of the painting tools' Shift+right-click menu, by its English label (`brushModeMenu.choices`).
+fn mode_menu_choose(app: &mut PhotocraftApp, ctx: &egui::Context, label: &str) -> Outcome {
+    let item = match crate::brush_mode_menu::find(app, label) {
+        Ok(item) => item,
+        Err(e) => return err(e),
+    };
+    if let Some((command, params)) = crate::brush_mode_menu::engine_call(app, app.ui.tool, item)
+        && let Some(authorize) = app.services.automation_command.as_ref()
+        && let Err(error) = authorize(command, &params)
+    {
+        return err(error);
+    }
+    crate::brush_mode_menu::choose(app, ctx, item);
+    ok(json!({"choice": label, "brushPicker": app.ui.brush_picker.is_some()}))
 }
 
 fn execute_command(app: &mut PhotocraftApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {

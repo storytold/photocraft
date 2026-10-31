@@ -127,7 +127,12 @@ impl LiquifyOpts {
             };
         }
         if let Some(t) = v.get("tool") {
-            self.tool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
+            let tool: LiquifyTool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
+            // Strokes can twirl counterclockwise, but no tool does: hold Alt with Twirl Clockwise.
+            if !LiquifyTool::ALL.contains(&tool) {
+                return Err(format!("{t} is not a Liquify tool: choose twirlCw and hold Alt (Option) to twirl counterclockwise"));
+            }
+            self.tool = tool;
         }
         Ok(())
     }
@@ -653,8 +658,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     Ok(d.describe())
 }
 
-/// Photoshop's Alt (Option) variant of a Liquify brush: the twirls reverse direction and Pucker
-/// and Bloat swap. Other tools are unchanged.
+/// The Alt (Option) variant of a Liquify brush: Twirl Clockwise twirls counterclockwise (the
+/// reference application has no separate counterclockwise tool) and Pucker and Bloat swap.
+/// Other tools are unchanged.
 fn alt_tool(t: LiquifyTool) -> LiquifyTool {
     match t {
         LiquifyTool::TwirlCw => LiquifyTool::TwirlCcw,
@@ -794,8 +800,6 @@ fn tool_icon(t: LiquifyTool) -> &'static str {
         LiquifyTool::Reconstruct => "brush-cleaning",
         LiquifyTool::Smooth => "droplet",
         LiquifyTool::TwirlCw => "rotate-cw",
-        // Twirl Clockwise's arrow mirrored: `undo-2` read as Undo (#9547).
-        LiquifyTool::TwirlCcw => "rotate-ccw",
         LiquifyTool::Pucker => "scan",
         LiquifyTool::Bloat => "maximize-2",
         LiquifyTool::PushLeft => "chevrons-left",

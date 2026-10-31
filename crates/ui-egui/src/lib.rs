@@ -41,6 +41,7 @@ pub mod menu_catalog;
 pub mod menus;
 pub mod monitor_status;
 pub mod notices;
+pub mod os_window;
 pub mod panels;
 pub mod preset_files_ui;
 pub mod proxy;

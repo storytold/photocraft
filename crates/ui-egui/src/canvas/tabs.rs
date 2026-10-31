@@ -730,7 +730,7 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let Some(st) = app.session.documents().get(w.document) else { continue };
         let title = format!("{} — window {}", st.doc.name, w.id);
         let vid = egui::ViewportId::from_hash_of(("docwin", w.id));
-        let mut builder = egui::ViewportBuilder::default().with_title(title).with_inner_size([800.0, 600.0]);
+        let mut builder = crate::os_window::builder().with_title(title).with_inner_size([800.0, 600.0]);
         if let Some([x, y]) = w.position {
             builder = builder.with_position([x, y]);
         }
