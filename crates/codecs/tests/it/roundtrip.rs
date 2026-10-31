@@ -142,6 +142,35 @@ mod dds {
 }
 mod qoi {
     cases!(Format::Qoi);
+
+    /// Borrowed input must produce the same bytes as the previous DynamicImage writer.
+    #[test]
+    fn encoded_bytes_match_dynamic_image() {
+        for layout in [ChannelLayout::Rgb, ChannelLayout::Rgba] {
+            for (width, height) in [(1, 1), (63, 1), (64, 2), (37, 23)] {
+                for varied in [false, true] {
+                    let mut img = Image::new(width, height, layout, SampleType::U8).unwrap();
+                    for (i, value) in img.data_mut().iter_mut().enumerate() {
+                        *value = if varied { (i.wrapping_mul(73) ^ (i / 7)) as u8 } else { 127 };
+                    }
+                    let original = img.clone();
+                    let dynamic = if layout == ChannelLayout::Rgb {
+                        image::DynamicImage::ImageRgb8(image::RgbImage::from_raw(width, height, img.data().to_vec()).unwrap())
+                    } else {
+                        image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(width, height, img.data().to_vec()).unwrap())
+                    };
+                    let mut expected = std::io::Cursor::new(Vec::new());
+                    dynamic.write_to(&mut expected, image::ImageFormat::Qoi).unwrap();
+                    assert_eq!(
+                        encode(&img, Format::Qoi, &EncodeOptions::default()).unwrap(),
+                        expected.into_inner(),
+                        "{layout:?} {width}x{height} varied={varied}"
+                    );
+                    assert_eq!(img, original, "encoding must not alter the source");
+                }
+            }
+        }
+    }
 }
 mod exr {
     cases!(Format::OpenExr);

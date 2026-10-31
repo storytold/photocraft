@@ -251,6 +251,7 @@ fn to_dynamic(img: &Image) -> Result<DynamicImage, CodecError> {
     })
 }
 
+/// Encode a planned image, passing QOI pixels directly without a temporary image copy.
 pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let fmt = image_format(f).ok_or_else(|| CodecError::unsupported(f, "not handled by image backend"))?;
     if let Some((mw, mh)) = f.max_dimensions()
@@ -262,6 +263,16 @@ pub(crate) fn encode(f: Format, src: &Image, plan: Plan, opts: &EncodeOptions) -
     // Targa is written by our encoder: the image crate's RLE packets cross scanlines (#6382).
     if f == Format::Tga {
         return super::tga::encode(&img);
+    }
+    if f == Format::Qoi {
+        let color = match (img.layout(), img.sample_type()) {
+            (ChannelLayout::Rgb, SampleType::U8) => image::ColorType::Rgb8,
+            (ChannelLayout::Rgba, SampleType::U8) => image::ColorType::Rgba8,
+            _ => return Err(CodecError::InvalidImage("QOI requires RGB8 or RGBA8 pixels".into())),
+        };
+        let mut cursor = Cursor::new(Vec::new());
+        image::write_buffer_with_format(&mut cursor, img.data(), img.width(), img.height(), color, fmt).map_err(|e| CodecError::encode(f, e))?;
+        return Ok(cursor.into_inner());
     }
     let dynimg = to_dynamic(&img)?;
     let mut cursor = Cursor::new(Vec::new());
