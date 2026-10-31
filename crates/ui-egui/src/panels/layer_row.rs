@@ -112,6 +112,11 @@ pub(super) fn paint_clipping_indicator(painter: &egui::Painter, at: Pos2, color:
     painter.add(egui::Shape::line(vec![at + vec2(2.0, 0.0), tip, at + vec2(8.0, 0.0)], stroke));
 }
 
+/// Height of an artboard's row. Photoshop sets artboards apart from layers and groups in the
+/// Layers panel: a shorter row with the name in bold and no thumbnail (a board is a canvas, not a
+/// folder), so the boards read as headings over their layers (#10218).
+pub(super) const ARTBOARD_ROW_H: f32 = 26.0;
+
 /// One row of the Layers panel for `l`, `depth` levels inside groups or artboards: it paints the
 /// row, queues what a click or drag on it asks for in `actions`, and returns the row's rect.
 #[allow(clippy::too_many_arguments)]
@@ -129,6 +134,13 @@ pub(super) fn layer_row(
     let t = Tokens::get(ctx);
     // The Layers Panel Options thumbnail size controls rows and both layer/mask thumbnails.
     let (base, row_h) = crate::layers_panel_ui::thumbnail_geometry(app.ui.layers_panel_options.thumbnail_size, t.pro);
+    let artboard = l.artboard().is_some();
+    // A board with a mask keeps a full-height row: its mask thumbnails (and what clicking and
+    // dragging them does) stay; only the board's own thumbnail is left out. Never taller than a
+    // layer's row: with thumbnails off every row is already compact.
+    let masked = l.mask.is_some() || l.vector_mask.is_some();
+    let row_h = if artboard && !masked { row_h.min(ARTBOARD_ROW_H) } else { row_h };
+    let base = if artboard && !masked { 0.0 } else { base };
     let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), row_h), Sense::click_and_drag());
     // With thumbnails off no mask thumbnail is drawn, so none may keep catching drags from older frames.
     if base == 0.0 {
@@ -169,8 +181,14 @@ pub(super) fn layer_row(
         + if l.is_group() { crate::layer_tree_ui::TRIANGLE_W } else { 0.0 }
         + if l.clipped { 12.0 } else { 0.0 }
         + crate::layer_row_ui::reserved_width(l);
-    let ts = if base == 0.0 { 0.0 } else { crate::mask_thumbs_ui::thumb_size(l, base, rect.width() - others) };
-    let fixed = others + if ts == 0.0 { 0.0 } else { ts + 6.0 + crate::mask_thumbs_ui::width(l, ts) };
+    // `ms`: the thumbnails' size (masks too); `ts`: the layer thumbnail's, none on a board.
+    let ms = if base == 0.0 { 0.0 } else { crate::mask_thumbs_ui::thumb_size(l, base, rect.width() - others) };
+    let ts = if artboard { 0.0 } else { ms };
+    // A board has no layer thumbnail, but its mask chain still needs the gap one leaves: the chain
+    // starts a little left of `x`, and without the gap it reached into the disclosure triangle's
+    // hit area, so a click there toggled the mask link instead of opening the board.
+    let layer_thumb = if ts == 0.0 { 6.0 } else { ts + 6.0 };
+    let fixed = others + if ms == 0.0 { 0.0 } else { layer_thumb + crate::mask_thumbs_ui::width(l, ms) };
     // A layer inside a group (or an artboard) indents one step more than its depth, past the
     // triangle's column, so it sits right of its parent: with only its depth its thumbnail lined
     // up under the group's, hiding the hierarchy. Top-level rows don't move.
@@ -185,9 +203,11 @@ pub(super) fn layer_row(
     if ts > 0.0 {
         draw_layer_thumb(app, ctx, ui, doc, l, thumb, row.primary);
         x += ts + 6.0;
+    } else if ms > 0.0 {
+        x += 6.0;
     }
     // With thumbnails disabled the labels and disclosure controls remain interactive.
-    let masks = if ts > 0.0 { crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ts, actions) } else { Default::default() };
+    let masks = if ms > 0.0 { crate::mask_thumbs_ui::paint(app, ctx, ui, &painter, doc, l, &mut x, rect.center().y, ms, actions) } else { Default::default() };
     let rc = RowCtx { l, doc, row, rect, ts, thumb, resp: &resp, masks: &masks };
     paint_target_brackets(app, &painter, &t, &rc);
     // Right-hand indicators first; the name gets what is left and ends in "…" (#144).
@@ -292,6 +312,11 @@ fn paint_row_background(painter: &egui::Painter, t: &Tokens, l: &Layer, rect: Re
         painter.rect_filled(rect, t.radius, t.hover.gamma_multiply(0.5));
         painter.rect_filled(rect, t.radius, t.accent.gamma_multiply(0.12));
     }
+    if l.artboard().is_some() && !selected && !is_hovered {
+        // A faint band behind a board's row, so where each board starts stands out in a long
+        // list. Under the label colour and the dividers, which keep their look on every row.
+        painter.rect_filled(rect, if t.pro { 0.0 } else { t.radius }, t.hover.gamma_multiply(0.35));
+    }
     let eye_cell = eye_cell(rect);
     if let Some((_, background)) = t.layer_label_colors(l.label) {
         painter.rect_filled(eye_cell, 0.0, background);
@@ -339,7 +364,8 @@ fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Token
     let vector_rect = rc.masks.thumb(crate::mask_thumbs_ui::MaskKind::Vector);
     // Photoshop frames the targeted thumbnail (pixels, mask or vector mask) of the active layer
     // with corner brackets.
-    if rc.row.primary && rc.ts > 0.0 {
+    // A board has no layer thumbnail but may have mask thumbnails: brackets go on whichever is shown.
+    if rc.row.primary {
         let target = if app.ui.filter_mask_target == Some(l.id.0) && app.filter_mask_targeted() {
             // The Smart Filters row's filter mask thumbnail carries the brackets.
             None
@@ -350,7 +376,7 @@ fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Token
         } else {
             Some(thumb)
         };
-        if let Some(r) = target {
+        if let Some(r) = target.filter(|r| r.width() > 0.0) {
             crate::mask_thumbs_ui::paint_brackets(painter, r, t.text);
         }
     }
@@ -360,7 +386,15 @@ fn paint_target_brackets(app: &PhotocraftApp, painter: &egui::Painter, t: &Token
 fn paint_row_name(painter: &egui::Painter, t: &Tokens, rc: &RowCtx<'_>, x: f32, name_right: f32) -> Option<Rect> {
     let (l, doc, rect, ts, selected) = (rc.l, rc.doc, rc.rect, rc.ts, rc.row.selected);
     let name_color = if l.visible { t.text } else { t.text_faint };
-    let font = if selected && !t.pro { theme::medium(13.0) } else { egui::FontId::proportional(if t.pro { 12.0 } else { 13.0 }) };
+    let size = if t.pro { 12.0 } else { 13.0 };
+    let font = if l.artboard().is_some() {
+        // Artboards are named in bold, as in Photoshop.
+        theme::semibold(size)
+    } else if selected && !t.pro {
+        theme::medium(13.0)
+    } else {
+        egui::FontId::proportional(size)
+    };
     // Photoshop before 2026 set the Background layer's name in italics; 2026 sets it upright.
     let italic = !t.pro && doc.is_background(l.id);
     // Photoshop rows show only the name; the kind sub-label is a Studio-theme addition.
@@ -417,7 +451,9 @@ fn select_row_on_click(app: &mut PhotocraftApp, ui: &egui::Ui, rc: &RowCtx<'_>, 
             app.ui.properties_layer = None;
         }
         actions.push(("ui.maskTarget".into(), json!(true)));
-    } else if on_thumb || !row.primary {
+    } else if on_thumb || !row.primary || l.artboard().is_some() {
+        // A board has no thumbnail to click back to: a click on its row, off its masks, targets
+        // the board again.
         actions.push(("ui.maskTarget".into(), json!(false)));
     }
     // ⌥-click the layer thumbnail: fit the layer on screen, as Photoshop does.
