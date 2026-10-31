@@ -18,6 +18,21 @@
 //!   needs the folder to be writable, so without this check Linux and macOS would silently replace
 //!   a `chmod 444` file while Windows refuses; now every platform refuses, as Photoshop does, and
 //!   the user saves a copy with Save As.
+//! - **Hard links (Unix):** a file with more than one link is rewritten in place once the new
+//!   bytes are safely in the temporary file, so every link sees the save (#6602); a rename would
+//!   give this path a new inode and leave the other links on the old content. The link count is
+//!   read from the opened, locked file, so the file checked is the file written. While another
+//!   save holds the file (an exclusive lock), the save renames as usual. Where the file system
+//!   can clone (APFS `fclonefileat`, Btrfs/XFS `FICLONE`), the old bytes are first cloned to a
+//!   hidden `.pcsave.bak` beside the file, which costs no space until the file is rewritten and
+//!   is removed after the flush; a crash mid-write leaves it there to recover from. An in-place
+//!   write that fails partway is an error, never a rename: renaming would cut this path off
+//!   from links that now hold half-written bytes and report success. The error names the
+//!   temporary file (the complete new document) and the backup, if there is one.
+//! - **Hard links on Windows:** NTFS hard links still get the rename, so the other links keep
+//!   the old content. std's link count is unstable there (`number_of_links`), and reading it
+//!   with winsafe's `GetFileInformationByHandle` from the `File` being written would need
+//!   `unsafe` to borrow its handle, which this crate does not use.
 //! - **Network shares (macOS):** `sync_all` asks for a full flush to the disk's platters
 //!   (`F_FULLFSYNC`), which SMB shares and some virtual file systems refuse while a plain `fsync`
 //!   works. [`sync_file`] falls back to the plain one there (#1336).
@@ -48,6 +63,14 @@ pub trait AtomicFs {
         let _ = path;
         false
     }
+    /// If the existing file at `path` has other hard links (#6602), overwrite it with `bytes` in
+    /// place, keeping its inode, and flush it; first clone its old bytes to `backup` where the
+    /// file system can. [`InPlace::Skipped`] touched nothing; an error means the write began and
+    /// the file may be partly overwritten. By default nothing is hard-linked.
+    fn write_in_place(&self, path: &Path, bytes: &[u8], backup: &Path) -> io::Result<InPlace> {
+        let _ = (path, bytes, backup);
+        Ok(InPlace::Skipped)
+    }
     /// Create `tmp` (it must not exist), write all of `bytes` and flush it ([`sync_file`]).
     fn write_new(&self, tmp: &Path, bytes: &[u8]) -> io::Result<()>;
     /// [`write_new`](Self::write_new), reporting the fraction of `bytes` written so far to
@@ -72,6 +95,16 @@ pub trait AtomicFs {
     fn replace_existing(&self, from: &Path, to: &Path) -> io::Result<()> {
         self.rename(from, to)
     }
+}
+
+/// What [`AtomicFs::write_in_place`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InPlace {
+    /// Nothing was touched: the file has one link, isn't a regular file, or another save holds
+    /// it. The caller renames as usual.
+    Skipped,
+    /// Every link has the new bytes, flushed.
+    Written,
 }
 
 /// The real file system.
@@ -136,6 +169,78 @@ impl AtomicFs for RealFs {
     fn is_readonly(&self, path: &Path) -> bool {
         std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().readonly())
     }
+    fn write_in_place(&self, path: &Path, bytes: &[u8], backup: &Path) -> io::Result<InPlace> {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+            // Read too: cloning needs it. No-follow: a symlink swapped in after the path was
+            // resolved is not written through.
+            let nofollow = rustix::fs::OFlags::NOFOLLOW.bits() as i32;
+            let Ok(mut f) = std::fs::OpenOptions::new().read(true).write(true).custom_flags(nofollow).open(path) else {
+                return Ok(InPlace::Skipped);
+            };
+            // Two saves writing the same inode at once could interleave their writes and
+            // `set_len`. Whoever doesn't get the lock renames, which can't corrupt anything.
+            if f.try_lock().is_err() {
+                return Ok(InPlace::Skipped);
+            }
+            // The link count of the file just opened, not of whatever the path named earlier.
+            if !f.metadata().is_ok_and(|m| m.is_file() && m.nlink() > 1) {
+                return Ok(InPlace::Skipped);
+            }
+            // ponytail: no backup where the file system can't clone; a full copy would be a third
+            // copy of the document on exactly the disks that are short of space.
+            let _ = clone_backup(&f, backup);
+            // Write over the old bytes, then cut off any tail, rather than truncating first: a
+            // write that fails early leaves the file mostly as it was, not empty.
+            f.write_all(bytes)?;
+            f.set_len(u64::try_from(bytes.len()).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "file too large"))?)?;
+            sync_file(&f)?;
+            Ok(InPlace::Written)
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (path, bytes, backup);
+            Ok(InPlace::Skipped)
+        }
+    }
+}
+
+/// Clone `src`'s bytes to a new file `backup` and flush it, where the file system shares blocks
+/// (APFS, Btrfs, XFS): nearly free, and only the blocks the save rewrites get copies. Elsewhere
+/// an error, and no file is left behind.
+#[cfg(unix)]
+fn clone_backup(src: &std::fs::File, backup: &Path) -> io::Result<()> {
+    clone_to(src, backup)?;
+    let flushed = std::fs::File::open(backup).and_then(|b| sync_file(&b));
+    if flushed.is_err() {
+        let _ = std::fs::remove_file(backup);
+    }
+    flushed
+}
+
+#[cfg(target_vendor = "apple")]
+fn clone_to(src: &std::fs::File, backup: &Path) -> io::Result<()> {
+    Ok(rustix::fs::fclonefileat(src, rustix::fs::CWD, backup, rustix::fs::CloneFlags::NOFOLLOW)?)
+}
+
+#[cfg(any(target_os = "linux", target_os = "android"))]
+fn clone_to(src: &std::fs::File, backup: &Path) -> io::Result<()> {
+    let dst = std::fs::OpenOptions::new().write(true).create_new(true).open(backup)?;
+    #[cfg(not(any(target_arch = "sparc", target_arch = "sparc64")))]
+    let cloned = rustix::fs::ioctl_ficlone(&dst, src).map_err(io::Error::from);
+    #[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
+    let cloned = Err(io::Error::new(io::ErrorKind::Unsupported, "FICLONE is not available here"));
+    if cloned.is_err() {
+        let _ = std::fs::remove_file(backup);
+    }
+    cloned
+}
+
+#[cfg(all(unix, not(any(target_vendor = "apple", target_os = "linux", target_os = "android"))))]
+fn clone_to(src: &std::fs::File, backup: &Path) -> io::Result<()> {
+    let _ = (src, backup);
+    Err(io::Error::new(io::ErrorKind::Unsupported, "this platform cannot clone files"))
 }
 
 /// Flush `file` to stable storage (`sync_all`). On Apple platforms that is a full flush
@@ -237,6 +342,34 @@ pub fn atomic_write_with_progress(fs: &dyn AtomicFs, retry: RenameRetry, path: &
         }
     }
     let tmp = tmp.ok_or_else(|| io::Error::new(io::ErrorKind::AlreadyExists, format!("{}: could not create a temporary file", dir.display())))?;
+
+    // A hard-linked file is rewritten in place so its other links see the save too (#6602). The
+    // complete new bytes are already flushed to `tmp`.
+    let backup = tmp.with_extension("bak");
+    match fs.write_in_place(&target, bytes, &backup) {
+        Ok(InPlace::Skipped) => {}
+        Ok(InPlace::Written) => {
+            // The document is saved, but no full copy of it, old or new, may be left beside it.
+            for leftover in [&tmp, &backup] {
+                if leftover == &backup && std::fs::symlink_metadata(&backup).is_err() {
+                    continue; // the file system couldn't clone: there is no backup
+                }
+                fs.remove(leftover).map_err(|e| {
+                    io::Error::new(
+                        e.kind(),
+                        format!("saved {}, but could not remove the temporary file {} ({e}); delete it by hand", path.display(), leftover.display()),
+                    )
+                })?;
+            }
+            // Best effort: this only makes the removals durable. The saved bytes are already
+            // flushed in place, so a failure here must not report the save as failed.
+            let _ = fs.sync_dir(&dir);
+            return Ok(());
+        }
+        // Renaming now would cut `path` off from links holding half-written bytes and call it
+        // a success, so the save fails and says where both versions are.
+        Err(e) => return Err(in_place_error(e, path, &tmp, std::fs::symlink_metadata(&backup).is_ok().then_some(backup.as_path()))),
+    }
 
     // Keep what the file being replaced carried: its mode (e.g. 0600) instead of the process
     // default, its extended attributes, and its ACL. Best effort, and before the swap, so the
@@ -417,6 +550,19 @@ fn write_error(e: io::Error, path: &Path, dir: &Path) -> io::Error {
         _ => format!("cannot save {}: {e}; {UNCHANGED}", path.display()),
     };
     io::Error::new(e.kind(), msg)
+}
+
+/// The error for an in-place save that failed partway (#6602).
+fn in_place_error(e: io::Error, path: &Path, tmp: &Path, backup: Option<&Path>) -> io::Error {
+    let previous = backup.map_or(String::new(), |b| format!(", and the previous version is in {}", b.display()));
+    io::Error::new(
+        e.kind(),
+        format!(
+            "cannot save {} in place ({e}): it and its other hard links may now be partly overwritten. The complete new document is in {}{previous}; free some space and save again, or use Save As",
+            path.display(),
+            tmp.display()
+        ),
+    )
 }
 
 fn rename_error(e: io::Error, path: &Path) -> io::Error {
