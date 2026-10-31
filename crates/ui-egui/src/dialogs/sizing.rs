@@ -3,7 +3,7 @@
 //! Field values are stored in pixels (plus a display unit), so automation can set `width`/`height`
 //! directly and the dialog maps them to `image.imageSize` / `image.canvasSize` unchanged.
 
-use egui::{Align2, Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
+use egui::{Color32, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -174,17 +174,8 @@ fn label(ui: &mut egui::Ui, text: &str, width: f32) {
     let (r, _) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
     // The caption hugs its control: right of it in a left-to-right row, left of it in a
     // right-to-left one.
-    let (pos, anchor) = caption_anchor(r);
+    let (pos, anchor) = crate::direction::end_text_anchor(r, 6.0);
     ui.painter().text(pos, anchor, text, egui::FontId::proportional(12.0), t.text_dim);
-}
-
-/// The caption's paint anchor: the box edge nearest the row's control.
-fn caption_anchor(r: Rect) -> (egui::Pos2, Align2) {
-    if crate::direction::is_rtl() {
-        (pos2(r.left() + 6.0, r.center().y), Align2::LEFT_CENTER)
-    } else {
-        (pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER)
-    }
 }
 
 fn info_row(ui: &mut egui::Ui, k: &str, v: String) {

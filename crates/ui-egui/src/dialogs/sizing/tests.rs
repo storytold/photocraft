@@ -1,3 +1,5 @@
+use egui::Align2;
+
 use super::*;
 
 #[test]
@@ -343,12 +345,12 @@ fn caption_anchor_follows_the_reading_direction() {
     use crate::text::direction::{Dir, direction_scope};
     let r = Rect::from_min_size(pos2(10.0, 20.0), vec2(90.0, 22.0));
     let _ltr = direction_scope(Dir::Ltr);
-    let (x, anchor) = caption_anchor(r);
+    let (x, anchor) = crate::direction::end_text_anchor(r, 6.0);
     assert_eq!(anchor, Align2::RIGHT_CENTER);
     assert_eq!(x, pos2(r.right() - 6.0, r.center().y));
     {
         let _rtl = direction_scope(Dir::Rtl);
-        let (x, anchor) = caption_anchor(r);
+        let (x, anchor) = crate::direction::end_text_anchor(r, 6.0);
         assert_eq!(anchor, Align2::LEFT_CENTER);
         assert_eq!(x, pos2(r.left() + 6.0, r.center().y));
     }
