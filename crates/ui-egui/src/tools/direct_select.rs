@@ -254,7 +254,7 @@ fn owns(tool: Tool) -> bool {
 
 /// Does the canvas draw Direct Selection's overlay instead of the plain path outlines? The Add /
 /// Delete Anchor Point tools show it too: they edit the same paths. So does the idle Pen while an
-/// anchor its Auto Add put on a path is selected, so that anchor's handles show (#8653).
+/// anchor its Auto Add put on a path is selected.
 pub fn shows(app: &PhotocraftApp, mods: Modifiers) -> bool {
     let ds = &app.ui.direct_selection;
     direct(app.ui.tool, mods)
@@ -590,9 +590,8 @@ fn curvature_press(app: &mut PhotocraftApp, p: [f64; 2]) -> bool {
 }
 
 /// After Add Anchor Point (or the Pen's Auto Add) put anchor `k` on `target` at the press `p`:
-/// select it, so its direction handles show, and start dragging it, so a drag moves it as in
-/// Photoshop (#8653). `base` is the path with the anchor in it; `coalesce` joins the move to the
-/// add's history step. A click without a drag leaves just the selection.
+/// select it and start dragging it. `base` is the path with the anchor in it; `coalesce` joins the
+/// move to the add's history step. A click without a drag leaves just the selection.
 pub(crate) fn grab_added(app: &mut PhotocraftApp, target: PathRef, base: Path, k: [usize; 2], p: [f64; 2], coalesce: Option<String>) {
     app.ui.direct_selection = DirectSelection { target: Some(target), anchors: vec![k], coalesce, owner: Owner::current(app), ..Default::default() };
     app.ui.direct_selection.drag = Some(Drag::Edit { target, base, edit: Edit::Anchors(vec![k]), start: p, end: p, preview: None });

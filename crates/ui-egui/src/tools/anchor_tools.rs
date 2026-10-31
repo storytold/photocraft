@@ -115,7 +115,7 @@ fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
 
 /// Add or delete an anchor of the Pen path being drawn (`path`, from `pen_path`). It isn't in the
 /// document yet, so it takes the edit directly; drawing carries on from its last anchor. An added
-/// anchor is selected and follows a drag from the press at `p`, as in Photoshop (#8653).
+/// anchor is selected and follows a drag from the press at `p` ([`crate::direct_select::grab_added`]).
 fn edit_pen(app: &mut PhotocraftApp, mut path: Path, hit: Hit, p: [f64; 2]) {
     let added = match hit {
         Hit::Segment(k, t) => match edit::add_anchor(&mut path, k, t) {
@@ -138,8 +138,8 @@ fn edit_pen(app: &mut PhotocraftApp, mut path: Path, hit: Hit, p: [f64; 2]) {
 }
 
 /// Add an anchor where `hit` is on a segment of `r`, or delete the anchor it is on: one command.
-/// An added anchor is selected, so its direction handles show, and a drag from the press at `p`
-/// moves it; the add and the move are one history step (#8653).
+/// An added anchor is selected and follows a drag from the press at `p`; the add and the move are
+/// one history step.
 fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) {
     let (id, mut params, coalesce) = match hit {
         Hit::Segment([s, k], t) => {

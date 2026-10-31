@@ -233,8 +233,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
                 painter.add(egui::Shape::dashed_line(&[to_scr(last[0]), to_scr(h)], Stroke::new(1.0, accent), 4.0, 3.0));
             }
         }
-        // An anchor the Pen's Auto Add just put on this path is selected and shows its handles,
-        // as in Photoshop (#8653).
+        // The anchor Auto Add selected is drawn filled, with its handles.
         let ds = &app.ui.direct_selection;
         let selected = |i: usize| ds.target == Some(crate::direct_select::PathRef::Pen) && ds.anchors.contains(&[0, i]);
         for (i, k) in pen.knots.iter().enumerate() {

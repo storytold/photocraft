@@ -362,7 +362,7 @@ fn added_at(path: &Path, at: Point) -> (Path, [usize; 2]) {
 }
 
 /// #8653: a click on a curve with Add Anchor Point leaves the new smooth anchor selected, its
-/// direction handles showing (Photoshop's look), and the path's shape unchanged.
+/// direction handles showing, and the path's shape unchanged.
 #[test]
 fn an_added_anchor_on_a_curve_is_selected_smooth_and_shows_its_handles() {
     let mut app = app(Tool::AddAnchorPoint);
@@ -380,7 +380,7 @@ fn an_added_anchor_on_a_curve_is_selected_smooth_and_shows_its_handles() {
     assert_eq!(work(&app), before);
 }
 
-/// #8653: a drag from the click moves the anchor it adds, handles and all, as in Photoshop; the
+/// #8653: a drag from the click moves the anchor it adds, handles and all; the
 /// add and the move are one history step, for the Add Anchor Point tool and the Pen's Auto Add.
 #[test]
 fn dragging_from_an_add_moves_the_new_anchor_in_one_step() {
