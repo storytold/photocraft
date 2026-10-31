@@ -173,6 +173,9 @@ fn sprite_sheet_dimensions(count: usize, columns: usize, frame_w: u32, frame_h: 
 
 pub fn export_sprite_sheet(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path", SPRITE_SHEET_CMD)?;
+    if sprite_sheet_json_path(path) == path {
+        return Err(EngineError::BadParams { cmd: SPRITE_SHEET_CMD.into(), msg: "`path` must be a PNG file name; the metadata is written to a .json file beside it".into() });
+    }
     let source = sprite_source(p)?;
     let frame_w = positive_u32(p, "frameWidth", 32)?;
     let frame_h = positive_u32(p, "frameHeight", 32)?;
