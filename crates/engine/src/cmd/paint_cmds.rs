@@ -66,7 +66,7 @@ fn bucket(s: &mut Session, p: &Value) -> Result<Value> {
     // Other visible layers can define the region, but the fill still writes only to the target.
     let region = if all {
         let (area, img) = crate::selection_cmds::sample_rgba8(s, true)?;
-        let region = photocraft_algo::selection::wand_region(&img, area, (x, y), tol, contiguous, aa);
+        let region = photocraft_algo::paint::bucket_region(&img, area, (x, y), tol, contiguous, aa);
         drop(img);
         region
     } else {
