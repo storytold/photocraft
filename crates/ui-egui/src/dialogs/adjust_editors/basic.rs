@@ -460,33 +460,42 @@ mod tests {
         assert_row_mirrors(color_balance, (egui::accesskit::Role::RadioButton, "Shadows"), (egui::accesskit::Role::RadioButton, "Highlights"));
     }
 
-    /// The Black & White Tint row: the Tint checkbox first, the Default button last. Skipped
-    /// where the "medium" font family has no faces, as the other editor tests do.
+    /// The Black & White Tint row: the Tint checkbox first, the Default button last. The
+    /// Default button draws in the "medium" family; frames where that family has no usable
+    /// face skip the editor, and the test skips when no row rendered.
     #[test]
     fn black_white_tint_row_mirrors_under_rtl() {
-        fn harness(dir: Dir) -> Option<Harness<'static, Value>> {
+        fn harness(dir: Dir) -> Harness<'static, Value> {
             let _dir = direction_scope(dir);
             let mut h = Harness::builder().with_size(egui::vec2(420.0, 300.0)).build_ui_state(
                 move |ui, v: &mut Value| {
-                    black_white(ui, v, &test_cx());
+                    let faces = ui.ctx().fonts(|f| {
+                        let d = f.definitions();
+                        d.families.get(&egui::FontFamily::Name("medium".into())).is_some_and(|s| s.iter().any(|n| d.font_data.contains_key(n)))
+                    });
+                    if faces {
+                        black_white(ui, v, &test_cx());
+                    }
                 },
                 json!({}),
             );
             crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
-            if !h.ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
-                return None;
-            }
             h.run_steps(4);
-            Some(h)
+            h
         }
-        let (Some(ltr), Some(rtl)) = (harness(Dir::Ltr), harness(Dir::Rtl)) else {
-            return;
-        };
+        fn find(h: &Harness<'_, Value>, role: egui::accesskit::Role, label: &str) -> Option<egui::Rect> {
+            h.query_all(by().role(role).label(label)).next().map(|n| n.rect())
+        }
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
         let check = egui::accesskit::Role::CheckBox;
         let button = egui::accesskit::Role::Button;
-        let (fl, ll) = (rect_of(&ltr, check, "Tint"), rect_of(&ltr, button, "Default"));
+        let (Some(fl), Some(ll), Some(fr), Some(lr)) =
+            (find(&ltr, check, "Tint"), find(&ltr, button, "Default"), find(&rtl, check, "Tint"), find(&rtl, button, "Default"))
+        else {
+            return;
+        };
         assert!(fl.left() < ll.left(), "LTR reads left to right: {fl:?} {ll:?}");
-        let (fr, lr) = (rect_of(&rtl, check, "Tint"), rect_of(&rtl, button, "Default"));
         assert!(fr.left() > lr.left(), "RTL reads right to left: {fr:?} {lr:?}");
     }
 
