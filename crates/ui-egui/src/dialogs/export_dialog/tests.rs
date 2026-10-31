@@ -6,13 +6,38 @@ fn ico_export_is_available_and_rejects_oversize_output() {
     f.insert("format".into(), json!("ico"));
     f.insert("scale".into(), json!(100));
     assert!(FORMATS.iter().any(|(ext, _)| *ext == "ico"));
-    assert!(export_document(&app.session.active().unwrap().doc, &f, None).err().is_some_and(|e| e.contains("256")));
+    assert!(default_export_document(&app.session.active().unwrap().doc, &f, None).err().is_some_and(|e| e.contains("256")));
     f.insert("scale".into(), json!(50));
-    let resized = export_document(&app.session.active().unwrap().doc, &f, None).unwrap();
+    let resized = default_export_document(&app.session.active().unwrap().doc, &f, None).unwrap();
     assert_eq!((resized.size.width, resized.size.height), (150, 100));
 }
 
 use super::*;
+
+fn default_export_document(doc: &Document, f: &Map<String, Value>, max_side: Option<u32>) -> Result<Document, String> {
+    super::export_document(doc, f, max_side, &photocraft_engine::color_cmds::document_profile(doc))
+}
+
+fn default_preview_proxy(doc: &Document, f: &Map<String, Value>) -> Result<Document, String> {
+    super::preview_proxy(doc, f, &photocraft_engine::color_cmds::document_profile(doc))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_exact_estimate(doc: &Document, f: &Map<String, Value>) -> Option<u64> {
+    super::exact_estimate(doc, f, &photocraft_engine::color_cmds::document_profile(doc))
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn default_poll_or_start_preview(
+    ui: &mut egui::Ui,
+    key: egui::Id,
+    signature: &str,
+    doc: Arc<Document>,
+    fields: &Map<String, Value>,
+) -> Option<Result<PreviewPixels, String>> {
+    let profile = photocraft_engine::color_cmds::document_profile(&doc);
+    super::poll_or_start_preview(ui, key, signature, doc, fields, profile)
+}
 
 /// Export As reopens with the settings it was used with last (Preferences ▸ remembered
 /// dialog settings), and a value no control accepts keeps its default.
@@ -248,7 +273,7 @@ fn nearest_neighbor_doubles_each_pixel_into_an_exact_block() {
         f.insert("format".into(), json!("png"));
         f.insert("scale".into(), json!(200));
         f.insert("resample".into(), json!("nearest"));
-        let out = export_document(&doc, &f, None).unwrap();
+        let out = default_export_document(&doc, &f, None).unwrap();
         assert_eq!((out.size.width, out.size.height), (10, 6));
         assert_eq!(out.depth, depth);
         let surf = out.layers[0].surface().unwrap();
@@ -260,12 +285,12 @@ fn nearest_neighbor_doubles_each_pixel_into_an_exact_block() {
         assert_eq!(doc, before, "{depth:?}: export leaves the source document unchanged");
 
         // The preview proxy keeps Nearest Neighbor's hard edges too.
-        let proxy = export_document(&doc, &f, Some(512)).unwrap();
+        let proxy = default_export_document(&doc, &f, Some(512)).unwrap();
         assert_eq!(proxy.layers[0].surface().unwrap().rgba(1, 1), checker(0, 0), "{depth:?}: preview proxy is nearest as well");
         assert_eq!(preview_filter(&f), egui::TextureOptions::NEAREST);
 
         f.insert("resample".into(), json!(DEFAULT_RESAMPLE));
-        let smooth = export_document(&doc, &f, None).unwrap();
+        let smooth = default_export_document(&doc, &f, None).unwrap();
         let blended = (0..6).flat_map(|y| (0..10).map(move |x| (x, y))).any(|(x, y)| {
             let p = smooth.layers[0].surface().unwrap().rgba(x, y);
             p[0] > 0.01 && p[2] > 0.01
@@ -284,14 +309,14 @@ fn resample_choices_are_checked() {
     f.insert("scale".into(), json!(300));
     for (method, _) in RESAMPLE {
         f.insert("resample".into(), json!(method));
-        let out = export_document(&doc, &f, None).unwrap();
+        let out = default_export_document(&doc, &f, None).unwrap();
         assert_eq!((out.size.width, out.size.height), (15, 9), "{method}");
     }
     for bad in [json!("lanczos"), json!("NEAREST"), json!(""), json!(1), json!({"m": "nearest"})] {
         f.insert("resample".into(), bad.clone());
-        let err = export_document(&doc, &f, None).unwrap_err();
+        let err = default_export_document(&doc, &f, None).unwrap_err();
         assert!(err.contains("resample must be"), "{bad}: {err}");
-        assert!(export_document(&doc, &f, Some(512)).is_err(), "{bad}: the preview reports it too");
+        assert!(default_export_document(&doc, &f, Some(512)).is_err(), "{bad}: the preview reports it too");
     }
     f.remove("resample");
     assert_eq!(resample_method(&f, None).unwrap(), "bicubicAutomatic");
@@ -340,7 +365,7 @@ fn export_document_scales_height_when_rounded_width_is_unchanged() {
             let mut f = Map::new();
             f.insert("format".into(), json!("png"));
             f.insert("scale".into(), json!(scale));
-            let out = export_document(&doc, &f, None).unwrap();
+            let out = default_export_document(&doc, &f, None).unwrap();
             assert_eq!((out.size.width, out.size.height), expected, "{width} × {height} at {scale}%, {depth:?}");
             assert_eq!(out.depth, depth, "export preserves the document's depth");
             assert_eq!(doc, before, "export leaves the source document unchanged");
@@ -360,7 +385,7 @@ fn export_document_proxy_limits_both_dimensions_before_rounding() {
         let mut f = Map::new();
         f.insert("format".into(), json!("png"));
         f.insert("scale".into(), json!(scale));
-        let out = export_document(&doc, &f, Some(max_side)).unwrap();
+        let out = default_export_document(&doc, &f, Some(max_side)).unwrap();
         assert_eq!((out.size.width, out.size.height), expected, "{width} × {height} at {scale}%, proxy limit {max_side}");
         assert!(out.size.width.max(out.size.height) <= max_side, "proxy respects its longest-side limit");
         assert_eq!(doc, before, "preview leaves the source document unchanged");
@@ -390,9 +415,12 @@ fn the_estimate_is_the_exported_files_size() {
         }
     }
     let doc = Arc::new(doc);
-    let f = Map::from_iter([("format".into(), json!("jpg")), ("scale".into(), json!(100)), ("quality".into(), json!(32))]);
-    let actual = photocraft_io::export(&export_document(&doc, &f, None).unwrap(), "x.jpg", &settings(&f).io_options()).unwrap().bytes.len() as u64;
-    let proxy = preview_proxy(&doc, &f).unwrap();
+    // Without the embedded profile, whose fixed size the proxy would scale with the pixels
+    // (the untagged document is tagged sRGB on export, #9325).
+    let f =
+        Map::from_iter([("format".into(), json!("jpg")), ("scale".into(), json!(100)), ("quality".into(), json!(32)), ("embedProfile".into(), json!(false))]);
+    let actual = photocraft_io::export(&default_export_document(&doc, &f, None).unwrap(), "x.jpg", &settings(&f).io_options()).unwrap().bytes.len() as u64;
+    let proxy = default_preview_proxy(&doc, &f).unwrap();
     let old = estimate_native(&doc, &proxy, &f).unwrap();
     assert!((old as f64 / actual as f64 - 1.0).abs() > 0.1, "the proxy estimate was off: {old} vs {actual}");
 
@@ -402,7 +430,8 @@ fn the_estimate_is_the_exported_files_size() {
     let size = loop {
         let mut size = None;
         let mut output = ctx.run_ui(Default::default(), |ctx| {
-            egui::CentralPanel::default().show(ctx, |ui| size = poll_or_start_exact_estimate(ui, key, "jpg32", doc.clone(), &f));
+            egui::CentralPanel::default()
+                .show(ctx, |ui| size = poll_or_start_exact_estimate(ui, key, "jpg32", doc.clone(), &f, photocraft_engine::color_cmds::document_profile(&doc)));
         });
         output.textures_delta.clear();
         if let Some(size) = size {
@@ -419,7 +448,7 @@ fn the_estimate_is_the_exported_files_size() {
         ("width".into(), json!(10_000)),
         ("height".into(), json!(10_000)),
     ]);
-    assert_eq!(exact_estimate(&doc, &huge), None);
+    assert_eq!(default_exact_estimate(&doc, &huge), None);
     // In scale mode the size comes from the scale, as the export's does, not from stale pixels.
     let big = Arc::new(Document::with_background(
         "big",
@@ -435,7 +464,7 @@ fn the_estimate_is_the_exported_files_size() {
         ("width".into(), json!(100)),
         ("height".into(), json!(100)),
     ]);
-    assert_eq!(exact_estimate(&big, &stale), None, "10000 × 10000 at 1000 %, over the limit");
+    assert_eq!(default_exact_estimate(&big, &stale), None, "10000 × 10000 at 1000 %, over the limit");
     let small = Map::from_iter([
         ("format".into(), json!("png")),
         ("sizing".into(), json!("scale")),
@@ -443,8 +472,9 @@ fn the_estimate_is_the_exported_files_size() {
         ("width".into(), json!(9000)),
         ("height".into(), json!(9000)),
     ]);
-    let at_10 = photocraft_io::export(&export_document(&big, &small, None).unwrap(), "x.png", &settings(&small).io_options()).unwrap().bytes.len() as u64;
-    assert_eq!(exact_estimate(&big, &small), Some(at_10), "100 × 100 at 10 %, within it");
+    let at_10 =
+        photocraft_io::export(&default_export_document(&big, &small, None).unwrap(), "x.png", &settings(&small).io_options()).unwrap().bytes.len() as u64;
+    assert_eq!(default_exact_estimate(&big, &small), Some(at_10), "100 × 100 at 10 %, within it");
 }
 
 /// #8341: Export As and its reduced preview carry the stroke width with the path.
@@ -458,7 +488,7 @@ fn export_as_downscales_stroke_only_shapes_and_preview() {
         let doc = session.active().unwrap().doc.clone();
         let fields = Map::from_iter([("format".into(), json!("png")), ("scale".into(), json!(25))]);
         for limit in [None, Some(128)] {
-            let out = export_document(&doc, &fields, limit).unwrap();
+            let out = default_export_document(&doc, &fields, limit).unwrap();
             let side = if limit.is_some() { 128 } else { 256 };
             assert_eq!((out.size.width, out.size.height), (side, side));
             let shape = out.layer(photocraft_doc::LayerId(id)).unwrap();
@@ -488,10 +518,10 @@ fn export_document_scales_and_flattens() {
     let mut f = Map::new();
     f.insert("format".into(), json!("jpg"));
     f.insert("scale".into(), json!(50));
-    let out = export_document(&doc, &f, None).unwrap();
+    let out = default_export_document(&doc, &f, None).unwrap();
     assert_eq!((out.size.width, out.size.height), (100, 50));
     assert_eq!(out.layers.len(), 1);
-    let proxy = export_document(&doc, &f, Some(40)).unwrap();
+    let proxy = default_export_document(&doc, &f, Some(40)).unwrap();
     assert_eq!(proxy.size.width, 40);
     assert_eq!(settings(&f).jpeg_quality, Some(85));
 }
@@ -512,10 +542,10 @@ fn export_document_scales_when_only_the_height_changes() {
             photocraft_doc::SampleType::U8,
             photocraft_doc::Color::WHITE,
         );
-        let out = export_document(&doc, &f, None).unwrap();
+        let out = default_export_document(&doc, &f, None).unwrap();
         assert_eq!((out.size.width, out.size.height), (1, want_h), "1 × {src_h} at 50%");
         // The preview proxy takes the same path.
-        let proxy = export_document(&doc, &f, Some(40)).unwrap();
+        let proxy = default_export_document(&doc, &f, Some(40)).unwrap();
         assert_eq!((proxy.size.width, proxy.size.height), (1, 40), "proxy of 1 × {src_h}");
     }
     // The label and the export agree, and neither side drops below 1 px.
@@ -539,7 +569,7 @@ fn layered_preview_runs_outside_the_ui_frame() {
     let mut result = None;
     let mut output = ctx.run_ui(Default::default(), |ctx| {
         egui::CentralPanel::default().show(ctx, |ui| {
-            result = poll_or_start_preview(ui, key, "png100", doc.clone(), &fields);
+            result = default_poll_or_start_preview(ui, key, "png100", doc.clone(), &fields);
         });
     });
     output.textures_delta.clear();
@@ -549,7 +579,7 @@ fn layered_preview_runs_outside_the_ui_frame() {
     loop {
         let mut output = ctx.run_ui(Default::default(), |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
-                result = poll_or_start_preview(ui, key, "png100", doc.clone(), &fields);
+                result = default_poll_or_start_preview(ui, key, "png100", doc.clone(), &fields);
             });
         });
         output.textures_delta.clear();
@@ -565,7 +595,7 @@ fn layered_preview_runs_outside_the_ui_frame() {
     }
 
     let tiff_fields = Map::from_iter([("format".into(), json!("tif")), ("scale".into(), json!(100))]);
-    let proxy = preview_proxy(&doc, &tiff_fields).unwrap();
+    let proxy = default_preview_proxy(&doc, &tiff_fields).unwrap();
     let options = photocraft_io::ExportOptions { tiff_layers: true, xmp: photocraft_io::XmpEmbed::None, ..Default::default() };
     let actual_bytes = photocraft_io::export(&proxy, "estimate.tif", &options).unwrap().bytes.len();
     assert_eq!(estimate_native(&doc, &proxy, &tiff_fields), Some(scaled_estimate(actual_bytes, &doc, &proxy, &tiff_fields)));
@@ -654,11 +684,197 @@ fn exact_pixels_lock_aspect_and_leave_the_source() {
     f.insert("sizing".into(), json!("pixels"));
     f.insert("width".into(), json!(120));
     f.insert("height".into(), json!(40));
-    let out = export_document(&doc, &f, None).unwrap();
+    let out = default_export_document(&doc, &f, None).unwrap();
     assert_eq!((out.size.width, out.size.height), (120, 40), "explicit pixels win over the percent scale");
-    let proxy = export_document(&doc, &f, Some(20)).unwrap();
+    let proxy = default_export_document(&doc, &f, Some(20)).unwrap();
     assert_eq!((proxy.size.width, proxy.size.height), (20, 7));
     assert_eq!(doc, before, "export leaves the source document unchanged");
+}
+
+fn check_profile_only_export(width: u32, height: u32) -> std::time::Duration {
+    use photocraft_doc::{Color, ColorMode, SampleType, Size};
+    let mut doc = Document::with_background("untagged", Size::new(width, height), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    let mut pixels = vec![0u8; width as usize * height as usize * 4];
+    for (i, p) in pixels.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        p.copy_from_slice(&[(i % 251) as u8, ((i / 251) % 251) as u8, ((i / 63001) % 251) as u8, 255]);
+    }
+    doc.layers[0].surface_mut().unwrap().write_interleaved(photocraft_geom::Rect::from_xywh(0, 0, width, height), &pixels);
+    let before = doc.clone();
+    let fields = json!({"format": "png", "profile": "srgb", "transparency": true, "width": width, "height": height}).as_object().unwrap().clone();
+    let start = std::time::Instant::now();
+    let converted = default_export_document(&doc, &fields, None).unwrap();
+    let elapsed = start.elapsed();
+    let profile = photocraft_cms::Profile::parse(converted.icc_profile.as_deref().unwrap()).unwrap();
+    assert!(profile.same_bytes(photocraft_cms::Builtin::Srgb.profile()));
+    let source = doc.layers[0].surface().unwrap();
+    let output = converted.layers[0].surface().unwrap();
+    assert!(source.tile_count() > 0);
+    assert_eq!(source.tile_count(), output.tile_count());
+    assert_eq!(source.default_pixel(), output.default_pixel());
+    for (coord, tile) in source.tiles() {
+        assert!(Arc::ptr_eq(tile, output.tile(*coord).unwrap()), "tagging must reuse pixel tiles");
+    }
+    assert_eq!(doc, before);
+    elapsed
+}
+
+#[test]
+fn untagged_srgb_export_tags_without_rewriting_pixels() {
+    check_profile_only_export(8, 8);
+}
+
+#[test]
+#[ignore = "24 MP profile-preparation measurement"]
+fn untagged_srgb_export_24mp_keeps_pixel_tiles() {
+    let elapsed = check_profile_only_export(6000, 4000);
+    println!("24 MP sRGB profile preparation (optimized test build): {elapsed:?}; all pixel tiles shared");
+}
+
+#[test]
+fn untagged_jpeg_export_embeds_the_requested_srgb_profile() {
+    use photocraft_doc::{Color, ColorMode, SampleType, Size};
+    for (mode, depth) in [
+        (ColorMode::Rgb, SampleType::U8),
+        (ColorMode::Rgb, SampleType::U16),
+        (ColorMode::Rgb, SampleType::F32),
+        (ColorMode::Grayscale, SampleType::U8),
+        (ColorMode::Cmyk, SampleType::U8),
+    ] {
+        let doc = Document::with_background("untagged", Size::new(8, 8), mode, depth, Color::WHITE);
+        assert!(doc.icc_profile.is_none());
+        let before = doc.clone();
+        let mut fields =
+            json!({"format": "jpg", "profile": "srgb", "embedProfile": true, "metadata": "none", "width": 8, "height": 8}).as_object().unwrap().clone();
+        let converted = default_export_document(&doc, &fields, None).unwrap();
+        let bytes = photocraft_io::export(&converted, "out.jpg", &settings(&fields).io_options()).unwrap().bytes;
+        let reloaded = photocraft_io::import("out.jpg", &bytes).unwrap().document;
+        let profile = photocraft_cms::Profile::parse(reloaded.icc_profile.as_deref().expect("explicit sRGB export must embed its profile")).unwrap();
+        assert!(profile.same_colors(photocraft_cms::Builtin::Srgb.profile()), "{depth:?}");
+        fields.insert("embedProfile".into(), json!(false));
+        let bytes = photocraft_io::export(&converted, "out.jpg", &settings(&fields).io_options()).unwrap().bytes;
+        assert!(photocraft_io::import("out.jpg", &bytes).unwrap().document.icc_profile.is_none(), "embedding remains optional");
+        fields.insert("profile".into(), json!("document"));
+        fields.insert("embedProfile".into(), json!(true));
+        let unchanged = default_export_document(&doc, &fields, None).unwrap();
+        assert!(unchanged.icc_profile.is_none(), "Document Profile preserves an untagged source");
+        assert_eq!(doc, before, "export must not tag or convert the source document");
+    }
+}
+
+#[test]
+fn preview_cache_tracks_working_profiles_but_prefers_embedded_profiles() {
+    use photocraft_cms::Builtin;
+    use photocraft_doc::{Color, SampleType, Size};
+    for embedded in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.session.execute("edit.colorSettings", json!({"workingRgb": "display-p3", "policyRgb": "off"})).unwrap();
+        let mut doc = Document::with_background("colour", Size::new(8, 8), ColorMode::Rgb, SampleType::U8, Color::rgba(0.35, 0.65, 0.45, 1.0));
+        if embedded {
+            doc.icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+        }
+        app.session.open_document(doc, None);
+        let id = open(&mut app).unwrap();
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.insert("profile".into(), json!("srgb"));
+        let st = app.session.active().unwrap();
+        let revision = st.revision;
+        let key = egui::Id::unique(("export-preview", st.doc.id.0, revision, None::<u64>));
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::Pro);
+        let draw = |app: &mut PhotocraftApp, fields: &mut Map<String, Value>| {
+            let mut output = ctx.run_ui(Default::default(), |ui| body(app, ui, fields));
+            output.textures_delta.clear();
+            ctx.data(|d| d.get_temp::<CachedPreview>(key)).unwrap()
+        };
+        let before = draw(&mut app, &mut fields);
+        let settings = settings_of(&fields);
+        app.session.execute("edit.colorSettings", json!({"workingRgb": "adobe-rgb-compat"})).unwrap();
+        assert_eq!(app.session.active().unwrap().revision, revision);
+        let after = draw(&mut app, &mut fields);
+        assert_eq!(settings_of(&fields), settings);
+        assert_eq!(before.signature != after.signature, !embedded);
+        assert_eq!(before.texture.unwrap().id() != after.texture.unwrap().id(), !embedded);
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn preview_workers_keep_the_captured_source_profile() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.session.execute("edit.colorSettings", json!({"workingRgb": "display-p3", "policyRgb": "off"})).unwrap();
+    let doc = Document::with_background(
+        "colour",
+        photocraft_doc::Size::new(8, 8),
+        ColorMode::Rgb,
+        photocraft_doc::SampleType::U8,
+        photocraft_doc::Color::rgba(0.35, 0.65, 0.45, 1.0),
+    );
+    app.session.open_document(doc, None);
+    let doc = app.session.active().unwrap().doc.clone();
+    let profile = effective_source_profile(&app, &doc);
+    let fields = json!({"format": "png", "profile": "srgb", "transparency": true}).as_object().unwrap().clone();
+    let expected = preview_sync(&app, &doc, &fields, &profile).unwrap();
+    let expected_size = super::exact_estimate(&doc, &fields, &profile).unwrap();
+    let ctx = egui::Context::default();
+    let key = egui::Id::unique("captured-profile-worker");
+    let mut preview = None;
+    let mut size = None;
+    let mut poll = || {
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            if preview.is_none() {
+                preview = super::poll_or_start_preview(ui, key, "p3", doc.clone(), &fields, profile.clone());
+            }
+            if size.is_none() {
+                size = poll_or_start_exact_estimate(ui, key, "p3", doc.clone(), &fields, profile.clone());
+            }
+        });
+        output.textures_delta.clear();
+        preview.is_some() && size.is_some()
+    };
+    poll();
+    app.session.execute("edit.colorSettings", json!({"workingRgb": "srgb"})).unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !poll() {
+        assert!(std::time::Instant::now() < deadline, "profile-aware preview workers must finish");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(preview.unwrap().unwrap().rgba, expected.rgba);
+    assert_eq!(size.unwrap(), Some(expected_size));
+}
+
+#[test]
+fn replay_converts_untagged_pixels_from_the_original_working_profile() {
+    use photocraft_cms::{Builtin, Intent};
+    use photocraft_doc::{Color, ColorMode, SampleType, Size};
+    for working in [Builtin::DisplayP3, Builtin::AdobeRgbCompat] {
+        for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            app.session.execute("edit.colorSettings", json!({"workingRgb": working.id(), "policyRgb": "off"})).unwrap();
+            let doc = Document::with_background("untagged", Size::new(8, 8), ColorMode::Rgb, depth, Color::rgba(0.35, 0.65, 0.45, 1.0));
+            app.session.open_document(doc, None);
+            let source = app.session.active().unwrap().doc.clone();
+            assert!(source.icc_profile.is_none());
+            let mut expected = (*source).clone();
+            expected.icc_profile = Some(working.profile().to_bytes());
+            photocraft_engine::color_cmds::convert_document(&mut expected, Builtin::Srgb.profile(), Intent::Perceptual, true).unwrap();
+            let original_pixel = source.layers[0].surface().unwrap().pixel(0, 0);
+            let expected_pixel = expected.layers[0].surface().unwrap().pixel(0, 0);
+            assert_ne!(original_pixel, expected_pixel, "the control must require a pixel conversion");
+            let captured = Arc::new(std::sync::Mutex::new(None));
+            let output = captured.clone();
+            app.services.export = Some(Box::new(move |doc, _, _| {
+                *output.lock().unwrap() = Some(doc.clone());
+                Ok((Vec::new(), Vec::new()))
+            }));
+            app.services.write = Some(Box::new(|_, _| Ok(())));
+            replay(&mut app, &json!({"path": "out.png", "format": "png", "profile": "srgb", "transparency": true})).unwrap();
+            let actual = captured.lock().unwrap().take().unwrap();
+            assert_eq!(actual.layers[0].surface().unwrap().pixel(0, 0), expected_pixel, "{working:?} {depth:?}");
+            let profile = photocraft_cms::Profile::parse(actual.icc_profile.as_deref().unwrap()).unwrap();
+            assert!(profile.same_bytes(Builtin::Srgb.profile()));
+            assert_eq!(app.session.active().unwrap().doc, source);
+        }
+    }
 }
 
 #[test]
@@ -696,7 +912,7 @@ fn profile_and_metadata_follow_the_existing_exporter() {
     f.insert("height".into(), json!(8));
     f.insert("metadata".into(), json!("none"));
     f.insert("embedProfile".into(), json!(false));
-    let converted = export_document(&doc, &f, None).unwrap();
+    let converted = default_export_document(&doc, &f, None).unwrap();
     let parsed = photocraft_cms::Profile::parse(converted.icc_profile.as_deref().unwrap()).unwrap();
     assert!(parsed.same_colors(Builtin::Srgb.profile()), "Convert to sRGB replaces the document profile");
     let stripped = photocraft_io::export(&converted, "out.jpg", &settings(&f).io_options()).unwrap().bytes;

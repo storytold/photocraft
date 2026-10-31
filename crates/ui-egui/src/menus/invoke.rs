@@ -187,6 +187,12 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
         // ⌘↩ / Ctrl+Enter (#306): load the path selected in the Paths panel (or the one being
         // drawn) as a selection.
         "path.toSelection" if params.get("name").is_none() => crate::vector_ui::path_to_selection(app, params.clone()),
+        // ⌘⇧↩ / ⌘⌥↩ load the same path, adding it to or subtracting it from the selection.
+        "path.addToSelection" | "path.subtractFromSelection" if params.get("name").is_none() => {
+            let mut p = params.as_object().cloned().unwrap_or_default();
+            p.insert("mode".into(), json!(if id == "path.addToSelection" { "add" } else { "subtract" }));
+            crate::vector_ui::path_to_selection(app, Value::Object(p))
+        }
         // Layer › Rename Layer from a menu starts in-place renaming in the Layers panel.
         "layer.renameLayer" if params.get("name").is_none() => {
             let st = app.session.active().ok_or("no document")?;
@@ -296,6 +302,12 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
 }
 
 pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Value) -> Result<Value, String> {
+    if let Some(result) = crate::smart_svg_ui::intercept(app, id, &params) {
+        return result;
+    }
+    if id == "layer.selectUnderCursor" {
+        return select_layer_under_cursor(app, ctx);
+    }
     if let Some(result) = invoke_early_commands(app, ctx, id, &params) {
         return result;
     }
@@ -650,7 +662,7 @@ fn invoke_window_command(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str)
             let doc = app.session.active_index().ok_or("no document")?;
             let wid = app.ui.alloc_id();
             let view = app.ui.views[doc].clone();
-            app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, position: None });
+            app.ui.windows.push(crate::state::DocWindow { id: wid, document: doc, view, open: true, floating: false, focused: false, position: None });
             Ok(json!({"window": wid}))
         })()),
         "window.theme.toggle" => {
@@ -799,4 +811,26 @@ pub fn apply_workspace(app: &mut PhotocraftApp) {
     if !app.ui.timeline.open {
         app.ui.timeline.playing = false;
     }
+}
+
+/// Pointer-dependent shell command; pixel picking and selection remain engine commands.
+fn select_layer_under_cursor(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<Value, String> {
+    if app.drag.is_some() || app.brush_resize.is_some() {
+        return Ok(json!({"layer": null}));
+    }
+    let Some(xf) = crate::canvas::ViewXform::active(app) else { return Ok(json!({"layer": null})) };
+    let Some(pointer) = ctx.pointer_hover_pos().filter(|p| xf.rect.contains(*p)) else { return Ok(json!({"layer": null})) };
+    let [x, y] = xf.to_doc(pointer);
+    let inside = app
+        .session
+        .active()
+        .is_some_and(|st| x.is_finite() && y.is_finite() && x >= 0.0 && y >= 0.0 && x < f64::from(st.doc.size.width) && y < f64::from(st.doc.size.height));
+    if !inside {
+        return Ok(json!({"layer": null}));
+    }
+    let picked = app.run("layer.pickAt", json!({"x": x, "y": y, "target": "layer", "select": false}))?;
+    if let Some(layer) = picked.get("layer").and_then(Value::as_u64) {
+        app.run("layer.select", json!({"layer": layer, "mode": "replace"}))?;
+    }
+    Ok(picked)
 }

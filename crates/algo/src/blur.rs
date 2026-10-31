@@ -144,13 +144,12 @@ fn conv_row<const N: usize>(src: &[f32], dst: &mut [f32], kernel: &[f32]) {
 
 pub(crate) fn gaussian(src: &Image, out: Rect, ctx: &Ctx, radius: f32) -> Vec<f32> {
     // Exact kernel for small radii; beyond that three box passes approximate the Gaussian with
-    // cost independent of the radius (Kovesi, "Fast almost-Gaussian filtering", 2010).
-    match box_widths(&FilterParams::GaussianBlur { radius }) {
-        Some(boxes) => box_passes(src, out, ctx.alpha, &boxes),
-        None => {
-            let k = gaussian_blur_kernel(radius);
-            conv_sep(src, out, &k, &k, ctx.alpha)
-        }
+    // cost independent of the radius (Kovesi, "Fast almost-Gaussian filtering", 2010). Built
+    // from the description other devices run (`separable`), so they blur the same (#5772).
+    match crate::separable::Separable::of(&FilterParams::GaussianBlur { radius }) {
+        Some(crate::separable::Separable::Boxes(boxes)) => box_passes(src, out, ctx.alpha, &boxes),
+        Some(crate::separable::Separable::Kernel(k)) => conv_sep(src, out, &k, &k, ctx.alpha),
+        None => src.crop(out),
     }
 }
 
