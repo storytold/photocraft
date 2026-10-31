@@ -892,3 +892,21 @@ bench = "interactive_bench"
 row = "Gaussian Blur dialog preview r 250 (GPU resident)"
 budget_ms = 16
 enforce = false  # 26 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
+
+[[scenario]]
+id = "P91"
+title = "Gaussian Blur dialog slider step r 40, GPU resident, zoomed out (proxy), 36 MP"
+issue = 5772
+bench = "interactive_bench"
+row = "Gaussian Blur dialog preview r 40 (GPU resident, zoomed out)"
+budget_ms = 16
+enforce = false  # 74 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
+
+[[scenario]]
+id = "P92"
+title = "Gaussian Blur dialog slider step r 250, GPU resident, zoomed out (proxy), 36 MP"
+issue = 5772
+bench = "interactive_bench"
+row = "Gaussian Blur dialog preview r 250 (GPU resident, zoomed out)"
+budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 4.6 ms, 2026-10-24); enforced once the nightly's machine class has a baseline

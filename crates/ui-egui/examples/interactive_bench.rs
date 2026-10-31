@@ -322,7 +322,9 @@ fn main() {
     }
     // The same preview resident on the GPU (#5772, Phase 1): a layer operator blurs the layer's
     // pages and the compositor draws a 1920×1080 view of it. Per slider change, waited on.
-    if b.gpu.is_some() {
+    // Only where the adapter runs layer operators: else the render falls back to a CPU composite
+    // without the blur, and the rows would time that.
+    if b.gpu.as_mut().is_some_and(|g| g.comp.operators_supported(&g.device)) {
         let st = s.active().expect("doc");
         let (doc, target) = (st.doc.clone(), st.active_layer.expect("layer"));
         let view = Rect::from_xywh(w as i32 / 2 - 960, h as i32 / 2 - 540, 1920, 1080);
@@ -348,15 +350,53 @@ fn main() {
             let mut step = 0;
             b.time(&format!("Gaussian Blur dialog preview r {radius} (GPU resident)"), |b| {
                 step += 1;
-                // A slider step: a slightly different radius each time.
+                // A slider step: a radius 4 px off each time (enough to change the box widths, so the
+                // output is computed, not reused).
                 if let Some(g) = &mut b.gpu {
-                    g.comp.set_operators(doc.id, vec![operator(radius + (step % 2) as f32 * 0.5)]);
+                    g.comp.set_operators(doc.id, vec![operator(radius + (step % 2) as f32 * 4.0)]);
                 }
                 b.render(&doc, view)
             });
         }
         if let Some(g) = &mut b.gpu {
             g.comp.clear_operators(doc.id);
+        }
+        // Zoomed out (Phase 2): the same blur on the CPU preview's proxy, its radius scaled by k
+        // as the CPU preview scales it, composited whole (it is small) per slider step.
+        let k = photocraft_ui_egui::proxy::factor(&doc);
+        if k > 1 {
+            let proxy = photocraft_ui_egui::adjust_preview::proxy_base(&doc, k);
+            let ptarget = photocraft_ui_egui::adjust_preview::proxy_layer(target);
+            let proxy_operator = |radius: f32| {
+                let fp = photocraft_algo::FilterParams::GaussianBlur { radius: (radius / k as f32).max(0.1) };
+                let content = proxy.layer(ptarget).and_then(|l| l.surface()).map(|s| s.content_bounds()).unwrap_or(Rect::EMPTY);
+                let area = photocraft_algo::output_area(&fp, content, proxy.bounds(), None);
+                let extent = photocraft_algo::separable::edge_extent(proxy.bounds(), content);
+                let blur = match photocraft_algo::separable::Separable::of(&fp).expect("a blur") {
+                    photocraft_algo::separable::Separable::Kernel(k) => photocraft_gpu::SeparableBlur::Kernel(k),
+                    photocraft_algo::separable::Separable::Boxes(b) => photocraft_gpu::SeparableBlur::Boxes(b),
+                };
+                let program = photocraft_gpu::GaussianBlur::new(blur, extent, area, None, false, proxy.depth).expect("a runnable blur");
+                photocraft_gpu::LayerOperator { layer: ptarget, program: std::sync::Arc::new(program) }
+            };
+            for radius in [40.0f32, 250.0] {
+                if let Some(g) = &mut b.gpu {
+                    g.comp.set_operators(proxy.id, vec![proxy_operator(radius)]);
+                }
+                let first = b.render(&proxy, proxy.bounds());
+                println!("  (GPU-resident proxy preview k {k} r {radius}: first frame with the window upload {first:.1} ms)");
+                let mut step = 0;
+                b.time(&format!("Gaussian Blur dialog preview r {radius} (GPU resident, zoomed out)"), |b| {
+                    step += 1;
+                    if let Some(g) = &mut b.gpu {
+                        g.comp.set_operators(proxy.id, vec![proxy_operator(radius + (step % 2) as f32 * 4.0)]);
+                    }
+                    b.render(&proxy, proxy.bounds())
+                });
+            }
+            if let Some(g) = &mut b.gpu {
+                g.comp.clear_operators(proxy.id);
+            }
         }
     }
     // Image › Adjustments dialog preview, per settings change (#77). Before: the command re-run
