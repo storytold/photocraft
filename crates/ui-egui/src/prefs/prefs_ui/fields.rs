@@ -463,6 +463,14 @@ pub(super) fn section_fields(
     keys.retain(|k| field_visible(section, obj, k, &query));
     let ctx = ui.ctx().clone();
     let label_w = max_label_width(ui, obj, &keys);
+    if std::env::var("DEBUG_W22").is_ok() {
+        let font = egui::TextStyle::Body.resolve(ui.style());
+        eprintln!("section {section} label_w={label_w} interact_x={}", ui.spacing().interact_size.x);
+        for k in &keys {
+            let w = ui.painter().layout_no_wrap(tl!(&humanize(k)).to_string(), font.clone(), egui::Color32::PLACEHOLDER).size().x;
+            eprintln!("  {k}: nowrap={w}");
+        }
+    }
     crate::text::direction::settings_grid(ui, ("prefs-grid", section), [14.0, 7.0], label_w, None, |row| field_rows(&ctx, section, obj, keys, lang, row));
 }
 
@@ -752,6 +760,40 @@ mod rtl_direction_tests {
         let label = h.query_all_by_role_and_label(Role::Label, needle).next().expect(needle).rect();
         let editor = h.query_all_by_role_and_label(Role::ComboBox, needle).next().expect(needle).rect();
         if dir == Dir::Rtl { label.left() - editor.right() } else { editor.left() - label.right() }
+    }
+
+    /// TEMP debug: dump label/editor rects + computed label_w per direction.
+    #[test]
+    fn debug_prefs_gap_rects() {
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let _scope = crate::text::direction::direction_scope(dir);
+            let rtl = dir == Dir::Rtl;
+            let mut h = Harness::builder()
+                .with_size(egui::vec2(1000.0, 700.0))
+                .with_context_setup(move |ctx| {
+                    crate::PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::Studio);
+                    ctx.all_styles_mut(|s| s.right_to_left = rtl);
+                })
+                .build_ui_state(
+                    |ui, f: &mut Map<String, Value>| {
+                        ui.with_layout(crate::text::direction::body_layout(), |ui| super::prefs_body(ui, f, None));
+                    },
+                    prefs_fields("general"),
+                );
+            h.run_steps(6);
+            let label = h.query_all_by_role_and_label(Role::Label, "Image interpolation").next().expect("label").rect();
+            let editor = h.query_all_by_role_and_label(Role::ComboBox, "Image interpolation").next().expect("editor").rect();
+            eprintln!("{dir:?}: label={label:?} editor={editor:?} gap={}", if rtl { label.left() - editor.right() } else { editor.left() - label.right() });
+            for n in h.query_all_by_role_and_label(Role::Label, "Image interpolation") {
+                eprintln!("  label-img rect={:?}", n.rect());
+            }
+            for n in h.query_all_by_role(Role::Label) {
+                eprintln!("  label rect={:?}", n.rect());
+            }
+            for n in h.query_all_by_role(Role::ComboBox) {
+                eprintln!("  combo rect={:?}", n.rect());
+            }
+        }
     }
 
     /// The per-row label<->editor gap of a settings row equals the LTR value in RTL too: the
