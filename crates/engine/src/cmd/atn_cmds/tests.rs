@@ -382,6 +382,58 @@ fn save_round_trips_through_photoshop_events() {
     assert_eq!(r["set"], "Ours");
 }
 
+/// A name-only selection can round-trip through ATN and select that layer when replayed.
+#[test]
+fn atn_layer_select_round_trips_name_and_mode() {
+    let action = Action::new("Select photo", vec![("layer.select".into(), json!({"layer": "Photo", "mode": "add"}))]);
+    let (bytes, skipped) = export("Recorded", &[&action], &[], false).unwrap();
+    assert!(skipped.is_empty());
+    let imported = import(&bytes).unwrap();
+    assert_eq!(imported.actions[0].steps[0], ("layer.select".into(), json!({"layer": "Photo", "mode": "add"})));
+
+    let mut session = Session::new();
+    session.execute("file.new", json!({"width": 8, "height": 8})).unwrap();
+    session.execute("layer.new.layer", json!({"name": "Photo"})).unwrap();
+    let photo = session.active().unwrap().active_layer.unwrap();
+    session.execute("layer.new.layer", json!({"name": "Other"})).unwrap();
+    session.actions.list.extend(imported.actions);
+    let played = session.execute("actions.play", json!({"action": "Select photo"})).unwrap();
+    assert_eq!(played["ran"], 1, "{played}");
+    assert!(session.active().unwrap().selected_layers().contains(&photo));
+}
+
+/// Recorded duplicate-name occurrences cannot be expressed by ATN's name-only layer reference.
+#[test]
+fn recorded_layer_select_occurrences_are_not_exported_lossily() {
+    for occurrence in [0, 1] {
+        let action = Action::new("Select photo", vec![("layer.select".into(), json!({"name": "Photo", "occurrence": occurrence}))]);
+        let err = export("Recorded", &[&action], &[], false).unwrap_err();
+        assert!(err.contains("layer.select"), "{err}");
+
+        let (bytes, skipped) = export("Recorded", &[&action], &[], true).unwrap();
+        assert_eq!(skipped, [Skipped { action: "Select photo".into(), step: 0, id: "layer.select".into() }]);
+        let imported = import(&bytes).unwrap();
+        assert!(imported.actions[0].steps.is_empty(), "an explicitly skipped target must not become a different selection");
+    }
+}
+
+#[test]
+fn layer_select_export_keeps_other_selection_forms_unsupported() {
+    for params in [
+        // These selection modes have no Photoshop mapping in select_to.
+        json!({"layer": "Photo", "mode": "toggle"}),
+        // These command parameter forms are either recorded occurrence selections or invalid.
+        json!({"name": "Photo", "occurrence": -1}),
+        json!({"name": "Photo", "occurrence": 1.5}),
+        json!({"name": "Photo", "occurrence": 1, "layer": "Photo"}),
+        json!({"layer": "Photo", "occurrence": 1}),
+    ] {
+        let action = Action::new("Select photo", vec![("layer.select".into(), params)]);
+        let err = export("Recorded", &[&action], &[], false).unwrap_err();
+        assert!(err.contains("layer.select"), "{err}");
+    }
+}
+
 /// `image.adjustments.selectiveColor` takes a range as an array (`"reds": [c, m, y, k]`) or as
 /// the scalar form that names one range (`"colors": "reds", "cyan": 35`). Only the arrays were
 /// written, so a step recorded the other way exported as an adjustment that changes nothing, with

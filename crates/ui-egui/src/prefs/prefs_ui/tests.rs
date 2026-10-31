@@ -803,6 +803,21 @@ fn saving_keeps_preferences_another_instance_changed() {
 }
 
 #[test]
+fn saving_a_partial_file_keeps_a_concurrently_added_preference() {
+    let (mut app, store) = app_with_saved(Some(json!({"version": 1, "tools": {"useShiftKeyForToolSwitch": false}}).to_string()));
+    let ctx = egui::Context::default();
+    tick(&mut app, &ctx);
+    // Another instance adds a formerly absent preference after this one loaded defaults.
+    *store.lock().unwrap() = Some(json!({"version": 1, "performance": {"historyStates": 12}, "futureSection": {"kept": true}}).to_string());
+    app.run("prefs.set", json!({"values": {"interface.theme": "studio"}})).unwrap();
+    tick(&mut app, &ctx);
+    let v = stored(&store);
+    assert_eq!(v["performance"]["historyStates"], 12, "an unchanged local default must not replace the concurrent value");
+    assert_eq!(v["interface"]["theme"], "studio");
+    assert_eq!(v["futureSection"]["kept"], true);
+}
+
+#[test]
 fn failed_preference_saves_are_retried() {
     use std::sync::atomic::{AtomicBool, Ordering};
     let store = Arc::new(Mutex::new(None));
