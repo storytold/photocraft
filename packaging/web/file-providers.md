@@ -128,6 +128,16 @@ for the capture's outcome. Pending provider work participates in the editor's cl
 guard. An acknowledgement that leaves later edits dirty cannot release a close prompt. A delayed
 device-download result also cannot close a document edited after its capture.
 
+`download` is accepted only for a capture whose chosen destination was `device`; it cannot
+complete a `provider` upload or release its unsaved-changes prompt. A failed upload must be
+retried or explicitly cancelled, rather than relabeled as a local download.
+
+Provider-mediated Save and Save As operations (including a host's device choice and format
+options) are omitted from the Actions recording journal. Their provider/account capability
+cannot be serialized as an ordinary local `file.save` or `file.saveAs` path. Existing local
+save recordings, Save a Copy and exports keep their normal recording behavior. Provider-aware
+action playback is not implemented by this bridge.
+
 ## Read requests and decoder completion
 
 Clicking an external Recent entry or calling `requestOpen(resourceId)` creates an `openRequest`
@@ -142,6 +152,9 @@ document, including `requestId`, `resourceId` and the actual `documentId`. It is
 the host to consider a deep link consumed. Failed decoding emits `openFailed`; cancellation
 emits `openCancelled`. Failed fetches use `cancelOpen` so an absent file cannot leave the
 provider permanently busy.
+
+Pending reads remain busy for account/disconnection and leave guards, but are not active
+saves: they do not hide an unrelated unsaved-changes prompt or prevent its answer.
 
 ## Trust boundary and limits
 

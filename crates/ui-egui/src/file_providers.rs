@@ -87,6 +87,13 @@ struct State {
 }
 
 impl State {
+    fn saving(&self) -> bool {
+        !self.pending.is_empty()
+            || !self.dialogs.is_empty()
+            || !self.destinations.is_empty()
+            || self.commands.iter().any(|command| matches!(command, Command::Result(..)))
+    }
+
     fn busy(&self) -> bool {
         !self.pending.is_empty()
             || !self.dialogs.is_empty()
@@ -202,6 +209,11 @@ impl Host {
 
     pub fn busy(&self) -> bool {
         self.state().busy()
+    }
+
+    /// Save side effects must settle before closing. Reads do not lock unrelated discard UI.
+    pub fn saving(&self) -> bool {
+        self.state().saving()
     }
 
     pub fn pending_for(&self, doc: DocId) -> bool {
@@ -380,6 +392,9 @@ impl Host {
         }
         if status == "saved" && !s.pending.get(&request).is_some_and(|p| p.destination == "provider") {
             return Err("a device download cannot acknowledge provider persistence".into());
+        }
+        if status == "download" && !s.pending.get(&request).is_some_and(|p| p.destination == "device") {
+            return Err("a provider save cannot be reported as a device download".into());
         }
         s.commands.push(Command::Result(request, status, resource));
         Ok(())
@@ -563,7 +578,7 @@ fn apply_result(app: &mut PhotocraftApp, ctx: &egui::Context, host: &Host, reque
                 crate::discard_ui::saved_document(app, ctx, save.doc);
             }
         }
-    } else if status == "download" {
+    } else if status == "download" && save.destination == "device" {
         app.ui.status_error = false;
         app.ui.status = crate::i18n::t("Download requested; the browser does not confirm that it was saved.").into();
         if !save.copy && app.session.documents().iter().any(|doc| doc.doc.id == save.doc && doc.revision == save.revision) {

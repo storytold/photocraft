@@ -311,7 +311,11 @@ impl PhotocraftApp {
                 return self.save_dialog_flow(Some(path), choices, true);
             }
         }
+        let provider_mediated = self.provider_save_prepared();
         let r = self.write_save(path, None, choices)?;
+        if provider_mediated {
+            return Ok(r);
+        }
         // JPEG Options are recorded only where they change something
         // ([`jpeg_options_ui::plain_save_step`]); the Targa and DDS answers as given.
         let mut step = jpeg_options_ui::plain_save_step(choices.jpeg);
@@ -323,7 +327,13 @@ impl PhotocraftApp {
     /// Writes the Save As and journals it as a `file.saveAs` step with its path (and TIFF,
     /// Targa, DDS or JPEG answer), so an action being recorded keeps it (#2032).
     fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
+        let provider_mediated = self.provider_save_prepared();
         let r = self.write_save(path.clone(), tiff_layers, choices)?;
+        // A captured provider/account destination cannot be replayed as a device path.
+        // Until Actions has a provider-aware step, omit this side effect from its journal.
+        if provider_mediated {
+            return Ok(r);
+        }
         let mut step = serde_json::json!({"path": path});
         if let Some(layers) = tiff_layers {
             step["tiffLayers"] = layers.into();
@@ -338,6 +348,13 @@ impl PhotocraftApp {
     /// parked behind Targa, DDS or JPEG Options hasn't been journaled yet: it is recorded as
     /// File › Save once answered.
     pub(crate) fn journal_as_plain_save(&mut self, path: &str) {
+        if let (Some(provider), Some(doc)) = (&self.services.file_provider, self.session.active())
+            && (provider.enabled() || provider.pending_for(doc.doc.id))
+        {
+            // There was no new local Save As entry to relabel. In particular, leave a
+            // previous local entry with this same display filename intact.
+            return;
+        }
         let parked = [
             self.targa_options.as_mut().map(|p| (&p.path, &mut p.record)),
             self.dds_options.as_mut().map(|p| (&p.path, &mut p.record)),
@@ -656,8 +673,9 @@ impl PhotocraftApp {
     /// (#2032, #4373), reports a failure in the status bar, and releases a close prompt waiting on
     /// the save.
     pub(crate) fn write_answered_save(&mut self, ctx: &egui::Context, doc: DocId, path: String, settings: &ExportSettings, copy: bool, step: (&str, Value)) {
+        let provider_mediated = self.services.file_provider.as_ref().is_some_and(|provider| provider.prepared_for(doc));
         let written = self.with_document(doc, |app| app.write_document(path, settings, copy));
-        if written.is_ok() {
+        if written.is_ok() && !provider_mediated {
             self.session.journal.push((step.0.into(), step.1));
         }
         match written {
@@ -678,7 +696,14 @@ impl PhotocraftApp {
 
     /// A save is running in the background.
     pub(crate) fn saving(&self) -> bool {
-        !self.jobs.saves.is_empty() || self.services.file_provider.as_ref().is_some_and(|provider| provider.busy())
+        !self.jobs.saves.is_empty() || self.services.file_provider.as_ref().is_some_and(|provider| provider.saving())
+    }
+
+    fn provider_save_prepared(&self) -> bool {
+        match (&self.services.file_provider, self.session.active()) {
+            (Some(provider), Some(doc)) => provider.prepared_for(doc.doc.id),
+            _ => false,
+        }
     }
 
     /// Save through the control session's capability-scoped writer. No file

@@ -245,6 +245,9 @@ fn failed_saves_remain_pending_and_retry_uses_the_same_capture() {
 fn copies_and_unconfirmed_results_do_not_advance_saved_state() {
     for (status, copy) in [("failed", false), ("download", false), ("cancel", false), ("saved", true)] {
         let (mut app, host, doc) = app();
+        if status == "download" {
+            host.state().destinations.insert(doc, "device".into());
+        }
         let request = begin(&host, doc, copy);
         host.result(request, status.into(), if status == "saved" { "copy-resource".into() } else { String::new() }).unwrap();
         tick_once(&mut app);
@@ -264,6 +267,39 @@ fn a_device_download_cannot_acknowledge_provider_persistence() {
     tick_once(&mut app);
     assert_eq!(app.session.active().unwrap().saved_revision, 2);
     assert!(!host.bound(doc));
+}
+
+#[test]
+fn a_provider_upload_cannot_close_a_dirty_document_as_an_unconfirmed_download() {
+    let (mut app, host, doc) = app();
+    app.services.write_unconfirmed = true;
+    assert!(crate::discard_ui::intercept(&mut app, "file.close", &json!({})));
+    let request = begin(&host, doc, false);
+    assert!(host.result(request.clone(), "download".into(), String::new()).is_err());
+    assert!(host.pending_for(doc));
+    // Also defend the application boundary if an invalid result bypasses API admission.
+    host.state().commands.push(Command::Result(request, "download".into(), String::new()));
+    tick_once(&mut app);
+    assert_eq!(app.session.active().unwrap().doc.id, doc);
+    assert_eq!(app.session.active().unwrap().saved_revision, 2);
+    assert!(app.session.active().unwrap().is_dirty());
+    assert!(crate::discard_ui::inspect(&app).is_some());
+}
+
+#[test]
+fn requested_and_queued_provider_opens_are_busy_but_not_saving() {
+    let (mut app, host, _) = app();
+    host.set_resources(&connection(&host), vec![Resource { id: "one".into(), name: "one.psd".into(), updated_at: String::new() }]).unwrap();
+    let request = host.request_open("one").unwrap();
+    assert!(host.busy());
+    assert!(!host.saving());
+    assert!(!app.saving());
+    host.open(request, "one.psd".into(), vec![1, 2, 3]).unwrap();
+    assert!(host.busy());
+    assert!(!host.saving());
+    assert!(!app.saving());
+    tick_once(&mut app);
+    assert!(!host.busy());
 }
 
 #[test]

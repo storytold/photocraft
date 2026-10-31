@@ -151,6 +151,86 @@ fn save_before_close_waits_for_ack_and_for_any_newer_edits() {
 }
 
 #[test]
+fn provider_save_is_not_recorded_as_a_local_action_or_relabels_an_earlier_local_save() {
+    for command in ["file.save", "file.saveAs"] {
+        let ctx = egui::Context::default();
+        let (mut app, provider, written) = app(true);
+        let previous = ("file.saveAs".into(), json!({"path":"drawing.psd"}));
+        app.session.journal.push(previous.clone());
+        let before = app.session.journal.clone();
+        let request = start_save(&mut app, &provider, &ctx, command);
+        assert_eq!(app.session.journal, before, "a provider capture cannot become an ordinary local replay step");
+        assert!(written.borrow().is_empty());
+        provider.result(request, "saved".into(), "one".into()).unwrap();
+        file_providers::tick(&mut app, &ctx);
+        assert_eq!(app.session.journal.last(), Some(&previous));
+    }
+}
+
+#[test]
+fn provider_saves_with_format_options_are_not_recorded_as_local_actions() {
+    for extension in ["tga", "dds", "jpg", "tif"] {
+        let ctx = egui::Context::default();
+        let (mut app, provider, written) = app(true);
+        if extension == "tif" {
+            app.session.edit_prefs(|prefs| prefs.file_handling.ask_before_saving_layered_tiff = true);
+            app.run("layer.new.layer", json!({"name":"Second layer"})).unwrap();
+        }
+        let before = app.session.journal.clone();
+        menus::invoke(&mut app, &ctx, "file.saveAs", json!({})).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        let dialog = event(&provider, "saveDialog");
+        let name = format!("drawing.{extension}");
+        provider.resolve_dialog(dialog["requestId"].as_str().unwrap(), "provider", &name).unwrap();
+        app.poll_file_dialog(&ctx, None);
+        assert!(app.save_options_open(), "{extension} needs its format answer before serialization");
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(800.0, 600.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(
+                move |ui, app| {
+                    match extension {
+                        "tga" => crate::targa_options_ui::show(app, ui.ctx()),
+                        "dds" => crate::dds_options_ui::show(app, ui.ctx()),
+                        "jpg" => crate::jpeg_options_ui::show(app, ui.ctx()),
+                        _ => crate::tiff_options_ui::show(app, ui.ctx()),
+                    }
+                    file_providers::capture(app);
+                },
+                app,
+            );
+        h.run_steps(2);
+        h.key_press(egui::Key::Enter);
+        h.run_steps(3);
+        assert!(!h.state().save_options_open());
+        assert_eq!(h.state().session.journal, before, "{extension} cannot become a local action step");
+        assert!(written.borrow().is_empty());
+        assert_eq!(event(&provider, "save")["destination"], "provider");
+    }
+}
+
+#[test]
+fn a_pending_provider_read_does_not_block_an_unrelated_discard_answer() {
+    let ctx = egui::Context::default();
+    let (mut app, provider, _) = app(true);
+    provider
+        .set_resources(
+            provider.snapshot()["connectionId"].as_str().unwrap(),
+            vec![file_providers::Resource { id: "one".into(), name: "one.psd".into(), updated_at: String::new() }],
+        )
+        .unwrap();
+    let read = provider.request_open("one").unwrap();
+    menus::invoke(&mut app, &ctx, "file.close", json!({})).unwrap();
+    assert!(crate::discard_ui::inspect(&app).is_some());
+    assert!(provider.busy());
+    assert!(!app.saving());
+    crate::discard_ui::answer_control(&mut app, &ctx, "dontSave").unwrap();
+    assert!(app.session.documents().is_empty());
+    provider.cancel_open(read, String::new()).unwrap();
+    assert!(!provider.busy());
+}
+
+#[test]
 fn pending_save_as_arms_leave_guard_even_when_the_old_revision_is_clean() {
     let ctx = egui::Context::default();
     let (mut app, provider, _) = app(true);
