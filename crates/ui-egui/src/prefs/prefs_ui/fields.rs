@@ -16,6 +16,8 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             f.insert("__gpuAdapters".into(), json!(app.perf.gpu_info.adapters));
             let system = system_theme(app, ui.ctx());
             prefs_body(ui, f, system);
+            #[cfg(not(target_arch = "wasm32"))]
+            crate::actions_folder::preferences(app, ui, f);
         }
         "shortcuts" => shortcuts_body(app, ui, f),
         "presets" => presets_body(app, ui, f),
@@ -366,6 +368,7 @@ pub(super) fn field_visible(section: &str, obj: &Map<String, Value>, k: &str, qu
         || (section == "performance" && matches!(k, "useGpu" | "gpuBackend" | "gpuAdapter" | "renderingMode" | "memoryUsageMb"))
         // The browser presents frames itself: Low-Latency Drawing does nothing there.
         || (cfg!(target_arch = "wasm32") && path == "performance.lowLatencyDrawing")
+        || (cfg!(target_arch = "wasm32") && path == "fileHandling.actionsFolder")
         || (section == "export" && !export_field_visible(obj, k))
         || (section == "tools" && !tools_field_visible(obj, k));
     (query.is_empty() || preference_matches(section, k, query))
@@ -454,6 +457,10 @@ fn field_rows(ui: &mut egui::Ui, section: &str, obj: &mut Map<String, Value>, ke
                 });
                 obj.insert(k, json!(format!("#{:02x}{:02x}{:02x}", rgb[0], rgb[1], rgb[2])));
                 let _ = color_of(s);
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            Value::String(s) if path == "fileHandling.actionsFolder" => {
+                crate::actions_folder::field(ui, obj, s);
             }
             Value::String(s) => {
                 ui.label(RichText::new(tl!(&label)).color(t.text_dim));

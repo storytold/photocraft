@@ -407,8 +407,21 @@ pub fn load_bytes(app: &mut PhotocraftApp, name: &str, bytes: &[u8]) -> Result<V
     Ok(r)
 }
 
+fn actions_directory(app: &PhotocraftApp) -> Option<String> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        crate::actions_folder::directory(app)
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = app;
+        None
+    }
+}
+
 fn load_dialog(app: &mut PhotocraftApp) -> Result<Value, String> {
-    app.pick_file_bytes_filtered(&["atn"], |app, name, bytes| load_bytes(app, &name, &bytes))
+    let folder = actions_directory(app);
+    app.pick_file_bytes_in(&["atn"], folder, |app, name, bytes| load_bytes(app, &name, &bytes))
 }
 
 /// Save Actions…: the selected action's set (every action of it), or every action when none
@@ -424,6 +437,7 @@ fn save_dialog(app: &mut PhotocraftApp, set: Option<String>) -> Result<Value, St
     let n = r["actions"].as_array().map_or(0, Vec::len) as u64;
     let skipped = r["skipped"].as_array().map_or(0, Vec::len);
     let file = format!("{}.atn", r["set"].as_str().unwrap_or("Actions"));
+    let file = actions_directory(app).map(|dir| std::path::Path::new(&dir).join(&file).to_string_lossy().into_owned()).unwrap_or(file);
     app.pick_save(&file, move |app, path| {
         let write = app.services.write.as_mut().ok_or("no writer configured")?;
         write(&path, &bytes)?;
@@ -663,6 +677,39 @@ pub fn panel_menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     }
     if ui.add_enabled(any, egui::Button::new(tl!("Save Actions…"))).clicked() {
         act = Some("save");
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let files = crate::actions_folder::files(app).to_vec();
+        if !files.is_empty() {
+            let mut picked = None;
+            ui.menu_button(tl!("Actions Folder"), |ui| {
+                egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                    for path in &files {
+                        if ui.button(crate::file_open::display_name(path)).clicked() {
+                            picked = Some(path.clone());
+                            ui.close();
+                        }
+                    }
+                });
+            });
+            if let Some(path) = picked {
+                ui.close();
+                match std::fs::read(&path) {
+                    Ok(bytes) => {
+                        if let Err(error) = load_bytes(app, &path, &bytes) {
+                            app.ui.status = error;
+                            app.ui.status_error = true;
+                        }
+                    }
+                    Err(error) => {
+                        app.ui.status = error.to_string();
+                        app.ui.status_error = true;
+                    }
+                }
+                return;
+            }
+        }
     }
     let Some(a) = act else { return };
     ui.close();

@@ -43,6 +43,8 @@ pub mod monitor_status;
 pub mod notices;
 pub mod os_window;
 pub mod panels;
+#[cfg(not(target_arch = "wasm32"))]
+mod actions_folder;
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
