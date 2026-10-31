@@ -9,6 +9,25 @@ use crate::menus::MenuItem;
 /// Menu ids of installed plug-ins: `plugin.filter.<plug-in id>`.
 const PREFIX: &str = "plugin.filter.";
 
+/// The plug-in registry is process-wide, and a plug-in installed between two builds of the menus
+/// adds Filter › Plug-ins rows, which changes the menus' structure. Tests that install plug-ins
+/// hold this for writing ([`changing_plugins`]), and tests that compare the menus of two builds
+/// hold it for reading ([`steady_plugins`]).
+#[cfg(test)]
+static PLUGINS: std::sync::RwLock<()> = std::sync::RwLock::new(());
+
+/// Held by a test while it installs plug-ins.
+#[cfg(test)]
+pub(crate) fn changing_plugins() -> std::sync::RwLockWriteGuard<'static, ()> {
+    PLUGINS.write().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// Held by a test while it compares the menus of two builds: no plug-in is installed meanwhile.
+#[cfg(test)]
+pub(crate) fn steady_plugins() -> std::sync::RwLockReadGuard<'static, ()> {
+    PLUGINS.read().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 /// Inserts the installed plug-ins into Filter › Plug-ins, above "Install Plug-in…".
 pub fn insert_menu_items(app: &PhotocraftApp, items: &mut Vec<MenuItem>) {
     let plugins = photocraft_plugins::registry::list();
@@ -79,7 +98,10 @@ mod tests {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let ctx = egui::Context::default();
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm");
-        app.run("plugin.install", json!({"path": path})).unwrap();
+        {
+            let _plugins = changing_plugins();
+            app.run("plugin.install", json!({"path": path})).unwrap();
+        }
         let items = crate::menus::menu_items(&app);
         let pi: Vec<&MenuItem> = items.iter().filter(|i| i.path == ["Filter", "Plug-ins"]).collect();
         let me = pi.iter().find(|i| i.id == "plugin.filter.org.photocraft.example.invert").expect("plug-in listed");
@@ -106,7 +128,10 @@ mod tests {
         let _lang = crate::i18n::language_scope(ja);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm");
-        app.run("plugin.install", json!({"path": path})).unwrap();
+        {
+            let _plugins = changing_plugins();
+            app.run("plugin.install", json!({"path": path})).unwrap();
+        }
         let items = crate::menus::menu_items(&app);
         let me = items.iter().find(|i| i.id == "plugin.filter.org.photocraft.example.invert").expect("plug-in listed");
         assert_eq!(me.path, ["Filter", "Plug-ins"], "plug-in row sits where the menu renderer looks for it");
