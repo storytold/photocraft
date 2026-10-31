@@ -473,3 +473,32 @@ mod tests {
         }
     }
 }
+
+    /// The preset picker's gear SubMenu (Import .GRD) mirrors only under a right-to-left UI:
+    /// the row label moves from the submenu's left edge (LTR) to its right edge (RTL).
+    #[test]
+    fn gradient_map_gear_submenu_mirrors_only_under_rtl() {
+        let lib = || vec![Group::new("Mine", vec![GradientPreset::new("My Teal", &["#008080", "#ffee00"])])];
+        let import_rect = |dir: Dir| -> egui::Rect {
+            let mut h = harness_with(dir, lib());
+            h.ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            h.run_steps(2);
+            open_preset_popup(&mut h);
+            let gear = h.get_by_label("Gradient Preset Options").rect().center();
+            h.hover_at(gear);
+            h.run_steps(4);
+            h.output()
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) if ts.galley.text().contains("Import .GRD") => Some(ts.visual_bounding_rect()),
+                    _ => None,
+                })
+                .next()
+                .unwrap_or_else(|| panic!("the Import .GRD row is open in {dir:?}"))
+        };
+        let ltr = import_rect(Dir::Ltr);
+        let rtl = import_rect(Dir::Rtl);
+        assert!(rtl.left() - ltr.left() > 30.0 && rtl.right() - ltr.right() > 30.0, "RTL reads from the right edge: {ltr:?} -> {rtl:?}");
+    }
+
