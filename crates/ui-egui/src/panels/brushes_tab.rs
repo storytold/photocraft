@@ -420,7 +420,7 @@ fn list_row(ui: &mut egui::Ui, p: &BrushPreset, current: bool, presets: &[BrushP
     };
     ui.painter().image(stroke.id(), sr, full_uv(), Color32::WHITE);
     let (name_x, name_right) = list_row_name_span(rtl, r, sr);
-    crate::layer_row_ui::label(ui.painter(), name_x, r.center().y, name_right, &p.name, egui::FontId::proportional(12.0), t.text_dim);
+    crate::direction::paint_label_span(ui.painter(), name_x, r.center().y, name_right, &p.name, egui::FontId::proportional(12.0), t.text_dim);
     preset_interactions(ui, &resp, r, p, presets, false, acts);
 }
 
@@ -669,14 +669,14 @@ fn preset_card(
             ui.painter().image(stroke.id(), sr, full_uv(), Color32::WHITE);
         } else {
             let (nx, nright) = card_stroke_name_span(rtl, cell, scale);
-            crate::layer_row_ui::label(ui.painter(), nx, cell.center().y, nright, &p.name, egui::FontId::proportional(CARD_NAME_FONT), t.text_dim);
+            crate::direction::paint_label_span(ui.painter(), nx, cell.center().y, nright, &p.name, egui::FontId::proportional(CARD_NAME_FONT), t.text_dim);
         }
     }
     if name_h > 0.0 {
         // The merged bottom row: the name across the whole card.
         let cell = egui::Rect::from_min_size(pos2(inner.left(), top.bottom()), vec2(inner.width(), name_h));
         let (x, right) = card_bottom_name_span(rtl, cell, scale);
-        crate::layer_row_ui::label(ui.painter(), x, cell.center().y, right, &p.name, egui::FontId::proportional(CARD_NAME_FONT), t.text_dim);
+        crate::direction::paint_label_span(ui.painter(), x, cell.center().y, right, &p.name, egui::FontId::proportional(CARD_NAME_FONT), t.text_dim);
     }
     let resp = resp.on_hover_text(&p.name);
     // A tip-only card's grid drops between columns, like the Brushes tab's: the rest drop between
@@ -727,28 +727,9 @@ fn group_label(name: &str) -> String {
 }
 
 /// A group header's painted anchors: the reading-start edge and the x of the chevron, the
-/// folder icon, the name and the count. The name is anchored at its right end and the count at
-/// its left end in a right-to-left UI, the other way round otherwise.
-#[derive(Debug)]
-pub(crate) struct GroupAnchors {
-    pub chevron_x: f32,
-    pub folder_x: f32,
-    pub name_x: f32,
-    pub count_x: f32,
-}
-
-/// A group header's painted anchors at the given folder depth.
-pub(crate) fn group_header_anchors(rtl: bool, r: egui::Rect, depth: usize) -> GroupAnchors {
-    let sx = if rtl {
-        r.right() - 4.0 - FOLDER_INDENT * depth.min(MAX_VIEW_DEPTH) as f32
-    } else {
-        r.left() + 4.0 + FOLDER_INDENT * depth.min(MAX_VIEW_DEPTH) as f32
-    };
-    let chevron_x = if rtl { sx - 14.0 } else { sx };
-    let folder_x = if rtl { sx - 34.0 } else { sx + 18.0 };
-    let name_x = if rtl { sx - 40.0 } else { sx + 40.0 };
-    let count_x = if rtl { r.left() + 8.0 } else { r.right() - 8.0 };
-    GroupAnchors { chevron_x, folder_x, name_x, count_x }
+/// folder icon, the name and the count, at the given folder depth.
+pub(crate) fn group_header_anchors(r: egui::Rect, depth: usize) -> crate::widgets::HeaderAnchors {
+    crate::widgets::header_anchors(r, 4.0 + FOLDER_INDENT * depth.min(MAX_VIEW_DEPTH) as f32)
 }
 
 /// A group's or nested folder's header: chevron, folder, name, count. Click toggles; a group or
@@ -764,9 +745,8 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], op
     // The displayed name is translated (built-in groups and UNGROUPED have catalog rows; user and
     // imported names fall back to the source unchanged); `key` and the commands keep the raw label.
     let shown = if folder.is_empty() { group_label(label) } else { folder.last().map_or(label, String::as_str).to_string() };
-    let rtl = crate::direction::is_rtl();
     // The reading-start edge at this folder depth; the glyphs walk toward the reading end.
-    let a = group_header_anchors(rtl, r, folder.len());
+    let a = group_header_anchors(r, folder.len());
     let chevron_x = a.chevron_x;
     icons::paint(
         ui,
@@ -784,16 +764,8 @@ fn group_header(ui: &mut egui::Ui, label: &str, key: &str, folder: &[String], op
         t.icon,
     );
     let font = if folder.is_empty() { theme::semibold(12.0) } else { theme::medium(12.0) };
-    if rtl {
-        ui.painter().text(pos2(a.name_x, r.center().y), egui::Align2::RIGHT_CENTER, shown.as_str(), font, t.text);
-    } else {
-        ui.painter().text(pos2(a.name_x, r.center().y), egui::Align2::LEFT_CENTER, shown.as_str(), font, t.text);
-    }
-    if rtl {
-        ui.painter().text(pos2(a.count_x, r.center().y), egui::Align2::LEFT_CENTER, count.to_string(), theme::medium(11.0), t.text_faint);
-    } else {
-        ui.painter().text(pos2(a.count_x, r.center().y), egui::Align2::RIGHT_CENTER, count.to_string(), theme::medium(11.0), t.text_faint);
-    }
+    ui.painter().text(pos2(a.name_x, r.center().y), a.halign, shown.as_str(), font, t.text);
+    ui.painter().text(pos2(a.count_x, r.center().y), crate::direction::end_align(), count.to_string(), theme::medium(11.0), t.text_faint);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::DisclosureTriangle, true, shown.clone()));
     let me = match folder {
         [] => BrushDrag::Group(key.to_string()),

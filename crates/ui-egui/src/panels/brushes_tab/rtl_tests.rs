@@ -178,7 +178,7 @@ fn rtl_grid_drop_on_the_left_half_lands_after() {
 fn painted_label(x: f32, right: f32) -> Option<(Rect, usize)> {
     let out = std::cell::Cell::new(None);
     let mut h = egui_kittest::Harness::new_ui(|ui| {
-        out.set(crate::layer_row_ui::label(ui.painter(), x, 10.0, right, "Soft Round", egui::FontId::proportional(12.0), egui::Color32::WHITE));
+        out.set(crate::direction::paint_label_span(ui.painter(), x, 10.0, right, "Soft Round", egui::FontId::proportional(12.0), egui::Color32::WHITE));
     });
     h.run_steps(2);
     let rect = out.get()?;
@@ -214,12 +214,15 @@ fn rtl_list_row_tip_side_and_name() {
 fn rtl_group_header_mirror() {
     let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
     let row = Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(300.0, 24.0));
-    let a = group_header_anchors(true, row, 0);
+    let a = group_header_anchors(row, 0);
     assert!(a.name_x > row.center().x, "the name leads from the right: {a:?}");
     assert!((a.count_x - (row.left() + 8.0)).abs() < 0.5, "the count sits at the row's left end: {a:?}");
     assert!(a.chevron_x > a.name_x, "the chevron leads the name: {a:?}");
     assert_eq!(crate::icons::icon_name("chevron-right"), "chevron-left", "the closed disclosure points left");
-    let ltr = group_header_anchors(false, row, 0);
+    let ltr = {
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        group_header_anchors(row, 0)
+    };
     assert!(ltr.name_x < row.center().x, "the name leads from the left in LTR: {ltr:?}");
 }
 
