@@ -651,23 +651,26 @@ fn cmd_drag_with_the_brush_inside_the_selection_floats_the_selected_pixels() {
     assert_eq!(bounds(&h, id), Rect::new(100, 100, 160, 160), "the layer itself stayed");
 }
 
-/// ⌘-click with the Brush picks the layer under the pointer, as a ⌘-click with the Move tool does
-/// (Auto-Select off).
+/// ⌘-click with the Brush is the Move tool's click with its Auto-Select as set, as in Photoshop
+/// (#9619): on, it picks the layer under the pointer; off, the selected layer stays. Never paints.
 #[test]
 fn cmd_click_with_the_brush_picks_the_layer_under_the_pointer() {
-    let mut h = harness(Tool::Brush);
-    let red = with_layer(&mut h);
-    let bg = h.state().session.active().unwrap().doc.layers.first().unwrap().id;
-    h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
-    h.run_steps(1);
-    h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
-    h.run_steps(1);
-    click(&mut h, 130.0, 130.0, Modifiers::COMMAND);
-    h.event(Event::ModifiersChanged(Modifiers::NONE));
-    h.run_steps(2);
-    let st = h.state().session.active().unwrap();
-    assert_eq!(st.active_layer, Some(red));
-    assert_eq!(rgba(&h, 130, 130), [1.0, 0.0, 0.0, 1.0], "nothing painted");
+    for auto_select in [false, true] {
+        let mut h = harness(Tool::Brush);
+        let red = with_layer(&mut h);
+        h.state_mut().ui.tool_options.move_auto_select = auto_select;
+        let bg = h.state().session.active().unwrap().doc.layers.first().unwrap().id;
+        h.state_mut().run("layer.select", json!({"layer": bg.0})).unwrap();
+        h.run_steps(1);
+        h.event(Event::ModifiersChanged(platform(Modifiers::COMMAND)));
+        h.run_steps(1);
+        click(&mut h, 130.0, 130.0, Modifiers::COMMAND);
+        h.event(Event::ModifiersChanged(Modifiers::NONE));
+        h.run_steps(2);
+        let st = h.state().session.active().unwrap();
+        assert_eq!(st.active_layer, Some(if auto_select { red } else { bg }), "Auto-Select {auto_select}");
+        assert_eq!(rgba(&h, 130, 130), [1.0, 0.0, 0.0, 1.0], "nothing painted");
+    }
 }
 
 /// Tools that keep ⌘ for themselves, and the selection tools (their ⌘ is handled per press in
