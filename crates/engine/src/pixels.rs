@@ -115,6 +115,7 @@ pub fn adjust_surface(s: &mut Surface, adj: &Adjustment, selection: Option<&Surf
             let tr = tc.rect().intersect(&r);
             let out = adjusted(&one, tr, adj, selection, mode);
             one.write_region(tr, &out);
+            photocraft_raster::scratch::give(out);
             one.take_tiles(tc.rect())
         })
         .collect();
@@ -152,6 +153,7 @@ pub fn adjust_mask(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface
         for t in &tiles {
             let out = adjusted(s, *t, adj, Some(sel), mode);
             s.write_region(*t, &out);
+            photocraft_raster::scratch::give(out);
         }
         if !tiles.is_empty() {
             s.prune();
@@ -165,7 +167,9 @@ pub fn adjust_mask(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface
     // So only the stored tiles are adjusted, not the (possibly huge) rectangle around them.
     let stored: Vec<Rect> = s.tiles().map(|(c, _)| c.rect()).collect();
     for r in stored {
-        out.write_region(r, &adjusted(s, r, adj, None, mode));
+        let data = adjusted(s, r, adj, None, mode);
+        out.write_region(r, &data);
+        photocraft_raster::scratch::give(data);
     }
     out.prune();
     *s = out;
@@ -190,7 +194,10 @@ fn adjusted(s: &Surface, r: Rect, adj: &Adjustment, selection: Option<&Surface>,
     }
     let n = fmt.channels();
     let raw = s.read_region(r);
-    let mut buf = Buffer { rect: r, px: raw.chunks_exact(n).map(|p| to_rgba(&fmt, p)).collect() };
+    let mut px = photocraft_raster::scratch::take_cap(raw.len() / n.max(1));
+    px.extend(raw.chunks_exact(n).map(|p| to_rgba(&fmt, p)));
+    photocraft_raster::scratch::give(raw);
+    let mut buf = Buffer { rect: r, px };
     let orig = buf.clone();
     // 32-bit documents get the float behaviour of an adjustment layer there (Levels doesn't clip);
     // integer depths keep the unrounded, clipped curves, except that 16-bit Posterize and
@@ -268,7 +275,7 @@ pub(crate) fn mix_through_selection(
     selection: Option<&Surface>,
 ) -> Vec<f32> {
     let w = (r.width() as usize).max(1);
-    let mut out = Vec::with_capacity(orig.len() * fmt.channels());
+    let mut out = photocraft_raster::scratch::take_cap(orig.len() * fmt.channels());
     // The selection's coverage (channel 0) one row at a time, each of its tiles looked up once
     // per row rather than once per pixel.
     let mut coverage = vec![1.0f32; w];

@@ -50,7 +50,8 @@ pub fn interleave(planes: &[Option<&[u8]>], fill: &[Vec<u8>], n: usize, s: Sampl
     let bps = s.bytes();
     let ch = planes.len();
     let row = ch * bps;
-    let mut out = vec![0u8; n * row];
+    // Large results come from (and callers may return them to) the scratch pool.
+    let mut out = photocraft_raster::scratch::take(n * row, 0u8);
     if out.is_empty() {
         return out;
     }

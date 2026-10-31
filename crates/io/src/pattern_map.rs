@@ -74,6 +74,7 @@ pub fn from_psd(p: &PsdPattern) -> Option<Pattern> {
         crate::pixels::lab16_chroma(&mut bytes, refs.len(), true);
     }
     let surface = Surface::from_interleaved(fmt, Rect::new(0, 0, w as i32, h as i32), &bytes);
+    photocraft_raster::scratch::give(bytes);
     Some(Pattern { id: p.id.clone(), name: p.name.clone(), width: p.width, height: p.height, surface })
 }
 

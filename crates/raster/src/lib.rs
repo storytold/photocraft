@@ -9,6 +9,7 @@
 
 mod interrupt;
 pub use interrupt::{Cancelled, Interrupt};
+pub mod scratch;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -54,18 +55,30 @@ impl TileInterner {
 }
 
 /// Pixel storage for one tile: `TILE_SIZE² × bytes_per_pixel`, row-major, interleaved channels.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Tile {
     data: Box<[u8]>,
+}
+
+impl Clone for Tile {
+    fn clone(&self) -> Self {
+        let mut data = scratch::take_exact(self.data.len(), 0u8);
+        data.copy_from_slice(&self.data);
+        Tile { data: data.into_boxed_slice() }
+    }
+}
+
+impl Drop for Tile {
+    fn drop(&mut self) {
+        scratch::give(std::mem::take(&mut self.data).into_vec());
+    }
 }
 
 impl Tile {
     fn try_filled(format: &PixelFormat, pixel: &[u8]) -> Result<Self, AllocationError> {
         let n = (TILE_SIZE * TILE_SIZE) as usize;
         let bytes = n.checked_mul(format.bytes_per_pixel()).ok_or(AllocationError::SizeOverflow)?;
-        let mut data = Vec::new();
-        data.try_reserve_exact(bytes).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
-        data.resize(bytes, 0);
+        let mut data = scratch::try_take_exact(bytes, 0u8).ok_or(AllocationError::NotEnoughMemory { bytes })?;
         if pixel.iter().any(|&b| b != 0) {
             for px in data.chunks_exact_mut(pixel.len()) {
                 px.copy_from_slice(pixel);
@@ -77,15 +90,14 @@ impl Tile {
     /// Clone this tile's pixel buffer with a fallible reservation.
     pub fn try_clone(&self) -> Result<Self, AllocationError> {
         let bytes = self.data.len();
-        let mut data = Vec::new();
-        data.try_reserve_exact(bytes).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
-        data.extend_from_slice(&self.data);
+        let mut data = scratch::try_take_exact(bytes, 0u8).ok_or(AllocationError::NotEnoughMemory { bytes })?;
+        data.copy_from_slice(&self.data);
         Ok(Tile { data: data.into_boxed_slice() })
     }
 
     fn filled(format: &PixelFormat, pixel: &[u8]) -> Self {
         let row_len = TILE_SIZE as usize * format.bytes_per_pixel();
-        let mut data = vec![0u8; row_len * TILE_SIZE as usize];
+        let mut data = scratch::take_exact(row_len * TILE_SIZE as usize, 0u8);
         if pixel.iter().any(|&b| b != 0) {
             // One prebuilt row copied per tile row: 256 bulk copies instead of one
             // copy_from_slice per pixel.
@@ -722,7 +734,7 @@ impl Surface {
     pub fn read_region(&self, r: Rect) -> Vec<f32> {
         let n = self.channels();
         let w = r.width() as usize;
-        let mut out = vec![0.0f32; w * r.height() as usize * n];
+        let mut out = scratch::take(w * r.height() as usize * n, 0.0f32);
         self.read_samples_into(r, &mut out);
         out
     }
@@ -877,7 +889,7 @@ impl Surface {
     pub fn to_interleaved(&self, r: Rect) -> Vec<u8> {
         let bpp = self.format.bytes_per_pixel();
         let w = r.width() as usize;
-        let mut out = vec![0u8; w * r.height() as usize * bpp];
+        let mut out = scratch::take(w * r.height() as usize * bpp, 0u8);
         for tc in r.tiles() {
             let tr = tc.rect().intersect(&r);
             let span = tr.width() as usize * bpp;
@@ -964,7 +976,7 @@ impl Surface {
                 return hit.clone().map(|t| (dc, t));
             }
 
-            let mut tile = Tile { data: vec![0u8; (TILE_SIZE * TILE_SIZE) as usize * bpp].into_boxed_slice() };
+            let mut tile = Tile { data: scratch::take_exact((TILE_SIZE * TILE_SIZE) as usize * bpp, 0u8).into_boxed_slice() };
             let (tx0, ty0) = (i64::from(dc.tx) * i64::from(TILE_SIZE), i64::from(dc.ty) * i64::from(TILE_SIZE));
             let row_len = TILE_SIZE as usize * bpp;
             // Per stored row: copy the source span that falls inside the content in as few
