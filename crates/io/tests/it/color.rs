@@ -144,7 +144,7 @@ fn uncached_cmyk_gradient_corpus_roundtrip() {
     let bytes = std::fs::read(path).expect("run cargo xtask corpus --all");
     let doc = import("x.psd", &bytes).unwrap().document;
     assert!(doc.layers.iter().any(|l| matches!(l.content, photocraft_doc::LayerContent::Fill(_)) && l.fill_cache.is_none()));
-    let expected = photocraft_compose::flatten(&doc).px;
+    let expected = photocraft_compose::flatten(&doc).into_px();
     let saved = export(&doc, "x.psd", &ExportOptions::default()).unwrap().bytes;
     let back = import("x.psd", &saved).unwrap().document;
     let diff = max_diff(&expected, &photocraft_compose::flatten(&back).px);
