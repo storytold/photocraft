@@ -44,7 +44,9 @@ pub(crate) fn initialize(app: &mut PhotocraftApp) -> Result<(), String> {
         return Err("invalid migrated panel launcher".into());
     }
     let returns = app.ui.docking_returns.clone();
+    let dock_visible = app.ui.panels.dock;
     commit(app, workspace, returns);
+    app.ui.panels.dock = dock_visible;
     app.ui.panel_presentation.migrated = true;
     Ok(())
 }

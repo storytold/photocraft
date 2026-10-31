@@ -21,8 +21,9 @@ sources keep host sizing even when force-floating.
 The optional `group_collapsed` hook suppresses an active-editor visual and skips
 floating-size recording for a host's closed header. Its default is false. The
 optional `split_separator` hook paints a divider in its owning layer; its default
-does nothing. `owns_floating_width` lets a host replace horizontal split and outer
-frame handles while keeping vertical stock handles. It defaults to false;
+does nothing. `owns_floating_width` lets a host replace horizontal outer frame handles.
+`owns_floating_split_width` separately delegates horizontal internal split input;
+PhotoCraft supplies independent part handles for both. Both default to false;
 `FloatingFrame::resize_axes` defaults to both axes. PhotoCraft uses these hooks to
 resize one column of a compound floating window without changing its neighbours'
 widths. No additional persistent layout tree is stored.
@@ -45,3 +46,12 @@ cargo test --manifest-path vendor/craft-ui/Cargo.toml --config vendor/craft-ui/t
 Keep the test configuration's egui/winit revisions aligned with the workspace when
 reviewing a dependency update. Normal PhotoCraft builds do not require these optional
 upstream unit-test inputs. The ignored test inputs and fonts are never part of the PR.
+
+Review follow-up (2026-11-01): shared API extraction is under review at
+https://github.com/storytold/craft-libs/pull/470 (commit 235fffb). Geometry is
+recorded before exclusive column/group delegation; presentation collapse also
+hides stripless bodies. Split handles use the host resize style. Frame-width
+ownership alone no longer suppresses internal split handles; the explicit
+internal-width hook is forwarded through Overrides and enabled by PhotoCraft
+only where its own independent part input replaces those handles. The upstream
+PR is not merged; this remains the explicit local patch at the source pin above.

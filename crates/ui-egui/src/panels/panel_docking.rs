@@ -166,9 +166,9 @@ pub(crate) fn load(saved: &Value) -> Option<(Workspace, Returns)> {
     valid_workspace(&workspace).then_some((workspace, returns))
 }
 
-/// Keep any unreadable payload, including an unrecognized layout with an old version tag.
+/// Keep unreadable Workspace payloads; obsolete bare layouts fall back to the native default.
 pub(crate) fn retained_payload(saved: &Value) -> Option<Map<String, Value>> {
-    saved.get("docking").filter(|v| !v.is_null())?;
+    saved.get("docking").filter(|v| v.get("layout").is_some())?;
     Some(
         ["docking", "dockingReturns", "dockingCollapsed", "panelPresentation", "toolbarFloating"]
             .into_iter()
@@ -1288,6 +1288,10 @@ impl craft_ui::docking::DockContent<String> for PanelContent<'_> {
     }
     fn owns_floating_width(&self, panel: &String) -> bool {
         self.app.ui.docking.as_ref().is_some_and(|w| w.layout.floating.iter().any(|w| w.native.is_none() && w.contains(panel) && compat::independent_window(w)))
+    }
+    fn owns_floating_split_width(&self, panel: &String) -> bool {
+        // Presentation registers independent part edges instead of shared ratio handles.
+        self.owns_floating_width(panel)
     }
     fn column_rect(&mut self, ctx: &egui::Context, column: &Column<String>, rect: egui::Rect, side: Side) {
         presentation::observe_column(ctx, column, rect, side);

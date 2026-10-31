@@ -20,7 +20,12 @@ renderer must not also register its controls. `custom_group` similarly replaces 
 compact part inside a horizontal floating tree; the normal shared split constraints
 fit its width and the host supplies its size limits. The default hook returns false.
 The host owns the final resize seam and
-outline through `resize_handle_style`. Dock gaps are separate from actual row/split
+outline through `resize_handle_style`. `owns_floating_width` transfers external
+horizontal frame input only; internal split input stays stock by default.
+PhotoCraft also opts into `owns_floating_split_width` for independent compound
+parts, where presentation supplies the replacement handles. Fitted float sizes
+are recorded before exclusive host delegation; collapsed groups do not overwrite
+normal editor sizes. Dock gaps are separate from actual row/split
 gaps. Keep upstream's default behavior for other consumers of these optional hooks.
 
 The local `vendor/craft-ui` snapshot is explicit and pinned in `PATCH.md`. Do not edit

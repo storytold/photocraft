@@ -11,7 +11,9 @@ use super::{PhotocraftApp, Stroke, Tokens, icons, pos2};
 /// docking layout, with the icon rail at the window's end edge in the Studio themes.
 pub fn dock_area(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     if let Err(error) = crate::panel_docking::compat::initialize(app) {
+        app.ui.panel_presentation.migrated = true;
         app.ui.status = error;
+        app.ui.status_error = true;
     }
     let t = Tokens::get(ui.ctx());
     if app.ui.panels.rail && !app.ui.panel_presentation.migrated && !t.pro {

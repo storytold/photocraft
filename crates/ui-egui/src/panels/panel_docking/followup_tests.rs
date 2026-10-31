@@ -490,3 +490,29 @@ fn open_windows_keep_identity_and_preferences_across_host_ui_changes() {
     assert_eq!(restored.ui.panel_presentation, view);
     assert_eq!(restored.ui.toolbar_floating, tools);
 }
+
+#[test]
+fn bare_pre_workspace_layout_falls_back_without_blocking_launcher_migration() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    let mut saved = crate::dock::snapshot(&app);
+    saved["docking"] = json!({"root": {"Tabs": {"panels": ["layers"], "active": 0}}, "floating": []});
+    saved["panelPresentation"] = json!({"migrated": false});
+    crate::dock::apply(&mut app, &saved);
+    assert!(app.ui.docking.is_none());
+    assert!(app.ui.docking_kept.is_none());
+    app.ui.panels.rail = true;
+    compat::initialize(&mut app).unwrap();
+    assert!(app.ui.panel_presentation.migrated);
+    assert!(app.ui.docking.is_some());
+}
+
+#[test]
+fn launcher_migration_preserves_hidden_dock_visibility() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    app.ui.panels.rail = true;
+    app.ui.panels.dock = false;
+    compat::initialize(&mut app).unwrap();
+    assert!(app.ui.panel_presentation.migrated);
+    assert!(app.ui.docking.is_some());
+    assert!(!app.ui.panels.dock);
+}
