@@ -60,6 +60,7 @@ pub struct Tile {
 }
 
 impl Tile {
+    /// Fill a new tile with one encoded pixel, reporting size or allocation failures.
     fn try_filled(format: &PixelFormat, pixel: &[u8]) -> Result<Self, AllocationError> {
         let n = (TILE_SIZE * TILE_SIZE) as usize;
         let bytes = n.checked_mul(format.bytes_per_pixel()).ok_or(AllocationError::SizeOverflow)?;
@@ -67,8 +68,14 @@ impl Tile {
         data.try_reserve_exact(bytes).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
         data.resize(bytes, 0);
         if pixel.iter().any(|&b| b != 0) {
-            for px in data.chunks_exact_mut(pixel.len()) {
+            // Fill the first row, then copy it to the other rows without another allocation.
+            let row_len = TILE_SIZE as usize * format.bytes_per_pixel();
+            let (row, rest) = data.split_at_mut(row_len);
+            for px in row.chunks_exact_mut(pixel.len()) {
                 px.copy_from_slice(pixel);
+            }
+            for dst in rest.chunks_exact_mut(row_len) {
+                dst.copy_from_slice(row);
             }
         }
         Ok(Tile { data: data.into_boxed_slice() })
