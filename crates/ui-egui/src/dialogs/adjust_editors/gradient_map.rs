@@ -472,12 +472,12 @@ mod tests {
             assert_eq!(hexes, vec![&json!("#008080"), &json!("#ffee00")], "picking the swatch writes its stops");
         }
     }
-}
 
     /// The preset picker's gear SubMenu (Import .GRD) mirrors only under a right-to-left UI:
     /// the row label moves from the submenu's left edge (LTR) to its right edge (RTL).
     #[test]
     fn gradient_map_gear_submenu_mirrors_only_under_rtl() {
+        use crate::direction::Dir;
         let lib = || vec![Group::new("Mine", vec![GradientPreset::new("My Teal", &["#008080", "#ffee00"])])];
         let import_rect = |dir: Dir| -> egui::Rect {
             let mut h = harness_with(dir, lib());
@@ -501,4 +501,5 @@ mod tests {
         let rtl = import_rect(Dir::Rtl);
         assert!(rtl.left() - ltr.left() > 30.0 && rtl.right() - ltr.right() > 30.0, "RTL reads from the right edge: {ltr:?} -> {rtl:?}");
     }
+}
 
