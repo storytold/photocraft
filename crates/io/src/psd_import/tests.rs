@@ -401,10 +401,11 @@ fn banded_mask_file(depth: u16, compression: Compression, version: Version, real
             8 => plane.push((i % 251) as u8),
             16 => plane.extend(((i * 73) as u16).to_be_bytes()),
             32 => plane.extend(((i % 251) as f32 / 125.0 - 0.5).to_be_bytes()),
-            _ => unreachable!(),
+            _ => panic!("unexpected test case"),
         }
     }
     let mut mask = PsdMask::new(rect, 0, 3 | 16);
+    mask.flags |= PsdMask::FLAG_PARAMETERS;
     mask.parameters = Some(MaskParameters { flags: 3, user_density: Some(123), user_feather: Some(2.5), ..Default::default() });
     let record = &mut file.layers_mut()[0];
     record.channels.retain(|c| c.id != CHANNEL_USER_MASK && c.id != CHANNEL_REAL_USER_MASK);
@@ -492,7 +493,7 @@ fn raw_and_rle_mask_sources_are_read_in_bands() {
                         assert_eq!(reads.len(), 5, "one index read and four payload bands: {reads:?}");
                         assert_eq!(reads[0], 600 * 4, "PSB row index");
                     }
-                    _ => unreachable!(),
+                    _ => panic!("unexpected test case"),
                 }
                 assert!(reads.iter().all(|&n| n < len), "read whole {len}-byte mask: {reads:?}");
             }
@@ -504,7 +505,7 @@ fn raw_and_rle_mask_sources_are_read_in_bands() {
 fn a_damaged_later_mask_band_discards_earlier_bands() {
     let (mut file, _, rect) = banded_mask_file(8, Compression::Rle, Version::Psd, false);
     let channel = file.layers_mut()[0].channels.iter_mut().find(|c| c.id == CHANNEL_USER_MASK).unwrap();
-    channel.data = vec![0, 2].repeat(600);
+    channel.data = [0, 2].repeat(600);
     for y in 0..600 {
         // Each valid row repeats five bytes; row 400 promises two literal bytes but has one.
         channel.data.extend(if y == 400 { [1, 9] } else { [0xFC, 7] });
