@@ -105,9 +105,11 @@ pub(super) fn row(
     // One interaction band tall, as `ui.horizontal` allocates, so LTR keeps its top placement.
     // In a right-to-left fork the available-width read balloons; the column's max_rect carries
     // the same width the left-to-right read sees at the start of a row.
-    let avail_x = if crate::direction::is_rtl() { ui.max_rect().width() } else { ui.available_size_before_wrap().x };
+    let avail_x = crate::direction::row_width(ui);
     let size = vec2(avail_x, ui.spacing().interact_size.y);
-    ui.allocate_ui_with_layout(size, crate::direction::row(), |ui| {
+    // The capped size keeps the row one band tall in both directions; `row()`'s centreing
+    // then places the label at the same offset from the band top left-to-right and right-to-left.
+    let _r = ui.allocate_ui_with_layout(size, crate::direction::row(), |ui| {
         if label.is_empty() {
             ui.add_space(16.0);
         } else {
