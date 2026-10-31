@@ -301,39 +301,14 @@ fn small_label(ui: &mut egui::Ui, s: &str) {
 /// and the menus' do, so Arabic names align to the field's right edge. A left-to-right UI
 /// keeps egui's default left-aligned single-line edit, pixel-identical.
 fn name_edit(ui: &mut egui::Ui, name: &mut String) -> egui::Response {
-    let edit = egui::TextEdit::singleline(name).desired_width(250.0).font(egui::FontId::proportional(15.0));
-    if !crate::direction::is_rtl() {
-        return ui.add(edit);
-    }
     let font = egui::FontId::proportional(15.0);
-    let mut layouter = move |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap_width: f32| {
-        let mut job = egui::text::LayoutJob::simple_singleline(text.as_str().to_owned(), font.clone(), ui.visuals().text_color());
-        job.direction = egui::epaint::text::TextDirection::RightToLeft;
-        job.halign = egui::Align::Max;
-        job.keep_trailing_whitespace = true;
-        ui.fonts_mut(|f| f.layout_job(job))
-    };
-    ui.add(edit.align(Align2::RIGHT_CENTER).layouter(&mut layouter))
+    let mut layouter = crate::widgets::rtl_singleline_layouter(font.clone());
+    let edit = crate::widgets::rtl_singleline(name, &mut layouter).desired_width(250.0).font(font);
+    ui.add(edit)
 }
 
 /// A single-line edit whose text reads right-to-left in a right-to-left UI (Arabic preset names
 /// align to the field's right edge); a left-to-right UI keeps egui's default edit, unchanged.
-fn add_rtl_singleline(ui: &mut egui::Ui, text: &mut String, configure: impl FnOnce(egui::TextEdit<'_>) -> egui::TextEdit<'_>) -> egui::Response {
-    let edit = configure(egui::TextEdit::singleline(text));
-    if !crate::direction::is_rtl() {
-        return ui.add(edit);
-    }
-    let mut layouter = |ui: &egui::Ui, buf: &dyn egui::TextBuffer, _wrap: f32| {
-        let font = egui::TextStyle::Body.resolve(ui.style());
-        let mut job = egui::text::LayoutJob::simple_singleline(buf.as_str().to_owned(), font, ui.visuals().text_color());
-        job.direction = egui::epaint::text::TextDirection::RightToLeft;
-        job.halign = egui::Align::Max;
-        job.keep_trailing_whitespace = true;
-        ui.fonts_mut(|f| f.layout_job(job))
-    };
-    ui.add(edit.align(Align2::RIGHT_CENTER).layouter(&mut layouter))
-}
-
 /// Lay out a preset card's title centred in `width`: wrapped onto at most two lines, the rest
 /// elided, so long translations stay inside the card.
 fn card_title(painter: &egui::Painter, title: &str, width: f32, color: egui::Color32) -> std::sync::Arc<egui::Galley> {
@@ -529,7 +504,7 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
         let enter = ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Enter));
         let label = ui.label(tl!("Preset Name"));
         let mut name = get_s(f, "__presetName", "");
-        add_rtl_singleline(ui, &mut name, |e| e.id_salt("document-preset-name").desired_width(240.0).char_limit(255)).labelled_by(label.id);
+        crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.id_salt("document-preset-name").desired_width(240.0).char_limit(255)).labelled_by(label.id);
         f.insert("__presetName".into(), json!(name));
         ui.horizontal(|ui| {
             if widgets::secondary_button(ui, tl!("Save"), 110.0).clicked() || enter {
