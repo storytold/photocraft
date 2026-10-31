@@ -5,7 +5,7 @@
 //! `type.setStyle`. The Type tool calls the same word, line and hit-test helpers.
 
 use photocraft_doc::{Affine, Document, LayerContent, LayerId};
-use photocraft_geom::{Point, Rect};
+use photocraft_geom::Point;
 use photocraft_text::TextLayout;
 use serde_json::{Value, json};
 
@@ -61,11 +61,12 @@ struct Frame {
     id: LayerId,
     text: String,
     transform: Affine,
-    /// Rendered ink in document pixels (empty text has none).
-    ink: Option<Rect>,
     layout: TextLayout,
 }
 
+/// Lay out the named type layer at the document's resolution for a read-only caret query.
+/// Missing layers and non-type content return errors; `cmd` identifies the query in parameter
+/// errors. The frame retains model geometry, while ink checks read the document's current cache.
 fn frame(doc: &Document, id: LayerId, cmd: &str) -> Result<Frame> {
     let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
     let LayerContent::Text(t) = &layer.content else {
@@ -73,13 +74,12 @@ fn frame(doc: &Document, id: LayerId, cmd: &str) -> Result<Frame> {
     };
     let text = t.text.clone();
     let transform = t.transform;
-    let ink = t.cache.as_ref().map(|c| c.content_bounds()).filter(|r| !r.is_empty());
     let dpi = doc.resolution_dpi;
     let layout = {
         let mut eng = photocraft_text::shared().lock().unwrap_or_else(|e| e.into_inner());
         eng.layout(t, dpi)
     };
-    Ok(Frame { id, text, transform, ink, layout })
+    Ok(Frame { id, text, transform, layout })
 }
 
 fn to_text(aff: Affine, x: f64, y: f64) -> (f32, f32) {
@@ -92,12 +92,24 @@ fn doc_point(aff: Affine, x: f32, y: f32, cmd: &str) -> Result<[f64; 2]> {
     if p.x.is_finite() && p.y.is_finite() { Ok([p.x, p.y]) } else { Err(bad(cmd, "the caret is not a finite point")) }
 }
 
+/// Whether a type layer has cached ink at a document point. The cache is already in document
+/// space, including transforms and group moves; applying the text transform again is incorrect.
+/// Its bounding rectangle is not a hit: rotated text and Photoshop caches can enclose large
+/// transparent areas, including nonzero colour channels with zero alpha (#10266).
+pub fn cached_ink_contains(doc: &Document, id: LayerId, x: f64, y: f64) -> bool {
+    let in_range = |v: f64| v.is_finite() && v >= f64::from(i32::MIN) && v < f64::from(i32::MAX) + 1.0;
+    if !in_range(x) || !in_range(y) {
+        return false;
+    }
+    let Some(LayerContent::Text(t)) = doc.layer(id).map(|l| &l.content) else { return false };
+    t.cache.as_ref().is_some_and(|c| c.rgba(x.floor() as i32, y.floor() as i32)[3] > 0.0)
+}
+
 impl Frame {
     /// Same hit as the Type tool, without its zoom slop: the laid-out line boxes or the rendered ink.
-    fn contains(&self, x: f64, y: f64) -> bool {
+    fn contains(&self, doc: &Document, x: f64, y: f64) -> bool {
         let (tx, ty) = to_text(self.transform, x, y);
-        photocraft_text::text_point_inside(&self.layout, tx, ty, 0.0)
-            || self.ink.is_some_and(|r| x >= f64::from(r.x0) && x <= f64::from(r.x1) && y >= f64::from(r.y0) && y <= f64::from(r.y1))
+        photocraft_text::text_point_inside(&self.layout, tx, ty, 0.0) || cached_ink_contains(doc, self.id, x, y)
     }
 }
 
@@ -112,7 +124,7 @@ fn topmost(doc: &Document, x: f64, y: f64) -> Option<Frame> {
     ids.reverse();
     ids.into_iter().find_map(|id| {
         let f = frame(doc, id, "type.hitTest").ok()?;
-        f.contains(x, y).then_some(f)
+        f.contains(doc, x, y).then_some(f)
     })
 }
 
@@ -133,6 +145,9 @@ fn column(layout: &TextLayout, aff: Affine, text: &str, index: usize, doc_x: Opt
     if solved.is_finite() { solved as f32 } else { x }
 }
 
+/// Query the nearest caret at a finite document point without changing selection or history.
+/// An explicit layer may be hidden or outside the point; otherwise pick the topmost shown hit.
+/// `inside` distinguishes actual layout/cached-ink containment from a nearest caret outside it.
 fn hit_test(s: &Session, p: &Value) -> Result<Value> {
     const CMD: &str = "type.hitTest";
     let x = req_f64(p, "x", CMD)?;
@@ -147,7 +162,7 @@ fn hit_test(s: &Session, p: &Value) -> Result<Value> {
     };
     let (tx, ty) = to_text(frame.transform, x, y);
     let (index, line) = photocraft_text::hit_char(&frame.layout, &frame.text, tx, ty);
-    Ok(json!({ "layer": frame.id.0, "index": index, "line": line, "inside": frame.contains(x, y) }))
+    Ok(json!({ "layer": frame.id.0, "index": index, "line": line, "inside": frame.contains(&doc, x, y) }))
 }
 
 fn caret(s: &Session, p: &Value) -> Result<Value> {
@@ -445,6 +460,41 @@ mod tests {
         assert_eq!(u(&hit, "index"), 0);
         for mov in ["wordNext", "wordPrev", "lineNext", "linePrev", "lineStart", "lineEnd", "start", "end"] {
             assert_eq!(go(&mut s, empty, 0, mov, None), 0, "{mov}");
+        }
+    }
+
+    /// #10266: Photoshop caches can retain colour in transparent padding. Their overall bounds
+    /// must not hide lower text; real cached ink still counts even away from our font layout.
+    #[test]
+    fn hit_test_ignores_transparent_cache_padding_but_keeps_imported_ink() {
+        use photocraft_color::PixelFormat;
+        use photocraft_raster::Surface;
+        use std::sync::Arc;
+
+        for format in [PixelFormat::RGBA8, PixelFormat::RGBA16, PixelFormat::RGBA32F] {
+            let mut s = session();
+            let lower = create(&mut s, json!({"x": 50, "y": 80, "text": "Lower", "size": 36}));
+            let upper = create(&mut s, json!({"x": 200, "y": 180, "text": "Upper", "size": 24}));
+            let caret = s.execute("type.caret", json!({"layer": lower, "index": 1})).unwrap();
+            let x = caret["segment"][0][0].as_f64().unwrap();
+            let y = (caret["segment"][0][1].as_f64().unwrap() + caret["segment"][1][1].as_f64().unwrap()) / 2.0;
+            let mut cache = Surface::new(format);
+            cache.write_pixel(0, 0, &[1.0, 0.5, 0.25, 0.0]);
+            cache.write_pixel(399, 299, &[1.0, 0.5, 0.25, 0.0]);
+            cache.write_pixel(320, 250, &[0.2, 0.4, 0.8, 1.0]);
+            assert!(cache.content_bounds().contains(x.floor() as i32, y.floor() as i32));
+            let doc = Arc::make_mut(&mut s.active_mut().unwrap().doc);
+            let LayerContent::Text(t) = &mut doc.layer_mut(LayerId(upper)).unwrap().content else { panic!("text") };
+            t.cache = Some(cache);
+            let steps = s.active().unwrap().history.entries().len();
+            assert_eq!(u(&s.execute("type.hitTest", json!({"x": x, "y": y})).unwrap(), "layer"), lower);
+            assert_eq!(s.execute("type.hitTest", json!({"layer": upper, "x": x, "y": y})).unwrap()["inside"], false);
+            assert_eq!(u(&s.execute("type.hitTest", json!({"x": 320.5, "y": 250.5})).unwrap(), "layer"), upper);
+            assert_eq!(s.active().unwrap().history.entries().len(), steps, "picking remains read-only");
+            let doc = &s.active().unwrap().doc;
+            for (x, y) in [(f64::NAN, 250.0), (320.0, f64::INFINITY), (f64::MAX, 250.0), (320.0, f64::MIN)] {
+                assert!(!cached_ink_contains(doc, LayerId(upper), x, y));
+            }
         }
     }
 

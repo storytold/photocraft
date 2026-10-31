@@ -547,6 +547,54 @@ fn text(app: &PhotocraftApp, id: LayerId) -> TextLayer {
     text_layer(&app.session.active().unwrap().doc, id).unwrap().clone()
 }
 
+/// #10266: a rotated top layer's axis-aligned cache bounds enclose the fourth layer, but its
+/// ink and transformed layout do not. Real canvas clicks must edit the visible lower text.
+#[test]
+fn type_click_picks_lower_text_outside_rotated_top_ink() {
+    for (ppp, grouped) in [(1.0, false), (2.0, true)] {
+        let mut app = new_app();
+        let lower = LayerId(app.run("type.create", json!({"text": "LOWER TEXT", "size": 40, "x": 400, "y": 500})).unwrap()["layer"].as_u64().unwrap());
+        app.run("type.edit", json!({"layer": lower.0, "transform": [1.0, 0.1, -0.1, 1.0, 400.0, 500.0]})).unwrap();
+        for (label, y) in [("Second layer", 180), ("Third layer", 700)] {
+            app.run("type.create", json!({"text": label, "size": 32, "x": 150, "y": y})).unwrap();
+        }
+        let upper = LayerId(app.run("type.create", json!({"text": "TOPMOST ROTATED TEXT", "size": 48})).unwrap()["layer"].as_u64().unwrap());
+        let a = std::f64::consts::FRAC_1_SQRT_2;
+        app.run("type.edit", json!({"layer": upper.0, "transform": [a, a, -a, a, 300.0, 280.0]})).unwrap();
+        if grouped {
+            app.run("layer.new.groupFromLayers", json!({"name": "Inner"})).unwrap();
+            app.run("layer.new.groupFromLayers", json!({"name": "Outer"})).unwrap();
+            app.run("layer.translate", json!({"dx": 35, "dy": 20})).unwrap();
+        }
+        let steps = app.session.active().unwrap().history.entries().len();
+        let mut h = harness(ppp, app);
+        let p = glyph(&mut h, lower, 1, 0.2);
+        let q = xf(h.state()).to_doc(p);
+        let (layout, aff, _) = layout(h.state_mut(), upper).unwrap();
+        let (tx, ty) = super::layout::to_text(&aff, q[0], q[1]);
+        assert!(!photocraft_text::text_point_inside(&layout, tx, ty, 6.0 / h.state().point_zoom()));
+        let cache = text(h.state(), upper).cache.unwrap();
+        assert!(cache.content_bounds().contains(q[0].floor() as i32, q[1].floor() as i32), "regression point lies inside the broad top bounds");
+        assert_eq!(cache.rgba(q[0].floor() as i32, q[1].floor() as i32)[3], 0.0);
+        click(&mut h, p);
+        assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(lower.0));
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(lower));
+        assert_eq!(selection(&h), (1, 1));
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps, "entering native text does not edit it");
+        h.event(egui::Event::Text("X".into()));
+        h.run_steps(2);
+        assert_eq!(text(h.state(), lower).text, "LXOWER TEXT");
+        assert_eq!(text(h.state(), upper).text, "TOPMOST ROTATED TEXT");
+        let p = glyph(&mut h, upper, 1, 0.2);
+        click(&mut h, p);
+        assert!(h.state().ui.text_edit.is_none(), "the first outside click only commits");
+        assert_eq!(h.state().session.active().unwrap().active_layer, Some(lower));
+        click(&mut h, p);
+        assert_eq!(h.state().ui.text_edit.as_ref().map(|ed| ed.layer), Some(upper.0));
+        assert_eq!(h.state().session.active().unwrap().history.entries().len(), steps + 1, "one history step for typing");
+    }
+}
+
 /// A PSD type layer keeps Photoshop's pixels until it is edited. Clicking into it re-renders it
 /// with our engine first (so the caret sits on what is shown), inside the edit session's single
 /// history step; Cancel brings Photoshop's pixels back.
