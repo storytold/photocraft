@@ -9,6 +9,11 @@ use crate::{CmsError, Intent};
 /// Default ΔE76 threshold above which a colour counts as out of gamut.
 pub const DEFAULT_THRESHOLD: f32 = 4.0;
 
+#[cfg(not(target_arch = "wasm32"))]
+const PAR_MIN_PIXELS: usize = 16 * 1024;
+#[cfg(not(target_arch = "wasm32"))]
+const PAR_CHUNK_PIXELS: usize = 16 * 1024;
+
 /// Precomputed out-of-gamut test for colours of `src` against `proof`.
 ///
 /// A colour is out of gamut when sending it to the proof device (relative colorimetric,
@@ -74,5 +79,84 @@ impl GamutCheck {
 
     pub fn out_of_gamut(&self, px: &[f32]) -> bool {
         self.delta_e(px) > self.threshold
+    }
+
+    /// Out-of-gamut mask for RGBA pixels: `255` where the pixel has alpha > 0 and its RGB
+    /// channels are out of gamut, `0` elsewhere. Returns the number of flagged pixels. Only
+    /// `min(px.len(), mask.len())` pixels are processed. Runs on the rayon pool (not on wasm);
+    /// the result is identical to calling [`Self::out_of_gamut`] per pixel.
+    ///
+    /// # Errors
+    /// [`CmsError::Invalid`] when the check was not built from a three-channel (RGB) source
+    /// profile: an RGBA pixel carries only three colour channels, so it cannot be tested
+    /// against a CMYK or gray source. Nothing is written to `mask` in that case.
+    pub fn mask_rgba(&self, px: &[[f32; 4]], mask: &mut [u8]) -> Result<usize, CmsError> {
+        if self.inputs != 3 {
+            return Err(CmsError::Invalid(format!("gamut mask needs a 3-channel (RGB) source profile, got {} channels", self.inputs)));
+        }
+        let n = px.len().min(mask.len());
+        let (px, mask) = (&px[..n], &mut mask[..n]);
+        let run = |p: &[[f32; 4]], m: &mut [u8]| {
+            let mut count = 0;
+            for (p, m) in p.iter().zip(m.iter_mut()) {
+                let hit = p[3] > 0.0 && self.out_of_gamut(&p[..3]);
+                *m = if hit { 255 } else { 0 };
+                count += usize::from(hit);
+            }
+            count
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if n >= PAR_MIN_PIXELS {
+            use rayon::prelude::*;
+            return Ok(px.par_chunks(PAR_CHUNK_PIXELS).zip(mask.par_chunks_mut(PAR_CHUNK_PIXELS)).map(|(p, m)| run(p, m)).sum());
+        }
+        Ok(run(px, mask))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::Builtin;
+
+    fn image(n: usize) -> Vec<[f32; 4]> {
+        let mut s = 0x9E37_79B9u32;
+        let mut rnd = move || {
+            s ^= s << 13;
+            s ^= s >> 17;
+            s ^= s << 5;
+            (s >> 8) as f32 / (1u32 << 24) as f32
+        };
+        // Includes out-of-range values and zero alpha.
+        (0..n).map(|i| [rnd() * 1.2 - 0.1, rnd(), rnd(), if i % 7 == 0 { 0.0 } else { rnd() }]).collect()
+    }
+
+    #[test]
+    fn mask_rgba_matches_per_pixel_check() {
+        let src = Builtin::Srgb.profile();
+        // Sizes straddle the parallel threshold and the chunk size, odd ones included.
+        for (proof, threshold) in [(Builtin::CoatedCmyk, 4.0), (Builtin::CoatedCmyk, 1.5), (Builtin::GrayGamma22, 4.0), (Builtin::DisplayP3, 0.5)] {
+            let check = GamutCheck::new(src, proof.profile(), threshold).unwrap();
+            for n in [0, 1, 1023, 16 * 1024 - 1, 16 * 1024, 16 * 1024 + 1, 50_001] {
+                let px = image(n);
+                let want: Vec<u8> = px.iter().map(|p| if p[3] > 0.0 && check.out_of_gamut(&p[..3]) { 255 } else { 0 }).collect();
+                let mut got = vec![7u8; n];
+                let count = check.mask_rgba(&px, &mut got).unwrap();
+                assert_eq!(got, want, "{proof:?} threshold {threshold} n {n}");
+                assert_eq!(count, want.iter().filter(|&&m| m == 255).count());
+            }
+        }
+    }
+
+    #[test]
+    fn mask_rgba_rejects_non_rgb_source() {
+        // A CMYK (4-channel) and a gray (1-channel) source cannot be tested from RGBA pixels.
+        for src in [Builtin::CoatedCmyk, Builtin::GrayGamma22] {
+            let check = GamutCheck::new(src.profile(), Builtin::Srgb.profile(), 4.0).unwrap();
+            let px = image(64);
+            let mut mask = vec![9u8; 64];
+            assert!(matches!(check.mask_rgba(&px, &mut mask), Err(CmsError::Invalid(_))), "{src:?}");
+            assert!(mask.iter().all(|&m| m == 9), "mask must stay untouched");
+        }
     }
 }
