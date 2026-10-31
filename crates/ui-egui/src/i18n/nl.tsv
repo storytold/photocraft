@@ -1624,6 +1624,7 @@
 	Untitled-1	Naamloos-1
 	Update layer comp (visibility, position and appearance)	Laagcompositie bijwerken (zichtbaarheid, positie en weergave)
 	Use Default	Standaard gebruiken
+	Use In-Window Bar on Linux	Menubalk in het venster gebruiken op Linux
 	Use Legacy	Verouderde versie gebruiken
 	Use Measurement Scale	Meetschaal gebruiken
 	Variables bind a layer's visibility, text or pixels to a named data slot.	Variabelen koppelen de zichtbaarheid, tekst of pixels van een laag aan een benoemd gegevensveld.

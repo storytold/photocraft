@@ -1657,6 +1657,7 @@
 	Untitled-1	Sans titre-1
 	Update layer comp (visibility, position and appearance)	Mettre à jour la composition de calques (visibilité, position et apparence)
 	Use Default	Utiliser la valeur par défaut
+	Use In-Window Bar on Linux	Utiliser la barre de menus dans la fenêtre sous Linux
 	Use Legacy	Utiliser l'ancienne version
 	Use Measurement Scale	Utiliser l'échelle de mesure
 	Variables bind a layer's visibility, text or pixels to a named data slot.	Les variables lient la visibilité, le texte ou les pixels d'un calque à un emplacement de données nommé.

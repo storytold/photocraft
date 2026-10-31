@@ -1664,6 +1664,7 @@
 	Untitled-1	Bez naslova-1
 	Update layer comp (visibility, position and appearance)	Ažuriraj kompoziciju slojeva (vidljivost, položaj i izgled)
 	Use Default	Koristi podrazumevano
+	Use In-Window Bar on Linux	Koristi traku menija u prozoru na Linuxu
 	Use Legacy	Koristi staro
 	Use Measurement Scale	Koristi razmeru merenja
 	Variables bind a layer's visibility, text or pixels to a named data slot.	Promenljive vezuju vidljivost, tekst ili piksele sloja za imenovano polje podataka.

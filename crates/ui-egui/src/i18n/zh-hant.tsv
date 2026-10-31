@@ -1692,6 +1692,7 @@
 	Untitled-1	未命名-1
 	Update layer comp (visibility, position and appearance)	更新圖層構圖 (可見度、位置和外觀)
 	Use Default	使用預設值
+	Use In-Window Bar on Linux	在 Linux 上使用視窗內選單列
 	Use Legacy	使用舊版
 	Use Measurement Scale	使用測量比例
 	Variables bind a layer's visibility, text or pixels to a named data slot.	變數可將圖層的可見度、文字或像素繫結至具名的資料欄位。

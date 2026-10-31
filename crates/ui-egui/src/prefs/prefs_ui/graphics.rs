@@ -134,6 +134,8 @@ pub(super) fn read_at_launch(path: &str) -> bool {
     match path {
         // Only Windows and Linux draw their own title bar.
         "interface.systemTitleBar" => cfg!(all(not(target_arch = "wasm32"), not(target_os = "macos"))),
+        // The Linux app picks the global menu or the in-window bar when it starts.
+        "interface.useInWindowBarOnLinux" => cfg!(target_os = "linux"),
         // The desktop app decides on the control server before its window opens.
         "integrations.allowAgentControl" | "integrations.controlPort" => cfg!(not(target_arch = "wasm32")),
         _ => false,

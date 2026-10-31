@@ -1693,6 +1693,7 @@
 	Untitled-1	Senza titolo-1
 	Update layer comp (visibility, position and appearance)	Aggiorna composizione livelli (visibilità, posizione e aspetto)
 	Use Default	Usa predefinito
+	Use In-Window Bar on Linux	Usa la barra dei menu nella finestra su Linux
 	Use Legacy	Usa legacy
 	Use Measurement Scale	Usa scala misurazione
 	Variables bind a layer's visibility, text or pixels to a named data slot.	Le variabili collegano visibilità, testo o pixel di un livello a uno slot dati nominato.

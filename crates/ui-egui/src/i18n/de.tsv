@@ -1675,6 +1675,7 @@
 	Untitled-1	Unbenannt-1
 	Update layer comp (visibility, position and appearance)	Ebenenkomposition aktualisieren (Sichtbarkeit, Position und Erscheinungsbild)
 	Use Default	Standard verwenden
+	Use In-Window Bar on Linux	Menüleiste im Fenster unter Linux verwenden
 	Use Legacy	Legacy verwenden
 	Use Measurement Scale	Messskala verwenden
 	Variables bind a layer's visibility, text or pixels to a named data slot.	Variablen binden Sichtbarkeit, Text oder Pixel einer Ebene an einen benannten Datenslot.

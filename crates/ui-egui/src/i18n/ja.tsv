@@ -1700,6 +1700,7 @@
 	Untitled-1	名称未設定-1
 	Update layer comp (visibility, position and appearance)	レイヤーカンプを更新 (表示状態・位置・外観)
 	Use Default	既定を使用
+	Use In-Window Bar on Linux	Linux でウィンドウ内のメニューバーを使用
 	Use Legacy	従来方式を使用
 	Use Measurement Scale	測定スケールを使用
 	Variables bind a layer's visibility, text or pixels to a named data slot.	変数は、レイヤーの表示状態・テキスト・ピクセルを、名前付きのデータ枠に結び付けます。
