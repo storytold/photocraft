@@ -95,7 +95,8 @@ impl Session {
     /// may run.
     pub(crate) fn admit(&mut self, id: &str, spec: &commands::CommandSpec, params: &Value) -> Result<Value> {
         let run_params = channel_cmds::inject_target(self, id, commands::inject_kind(id, params.clone()));
-        if let Err(why) = self.explicit_layer_enabled(spec, params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
+        // Both judge the target the command runs with, as `is_enabled_with` does (#10469).
+        if let Err(why) = self.explicit_layer_enabled(spec, &run_params).unwrap_or_else(|| self.precondition(spec, &run_params)) {
             return Err(EngineError::Disabled(id.to_string(), why));
         }
         if let Some(why) = self.job_conflict(id, spec.journal) {

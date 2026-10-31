@@ -641,3 +641,22 @@ fn dialog_filters_take_a_channel_named_in_their_params_on_an_adjustment_layer() 
     s.execute("channel.target", json!({"channel": "composite"})).unwrap();
     assert!(!s.is_enabled_with(crate::lens_cmds::RAW, &json!({"target": {"channel": 0}})), "Camera Raw: not in CMYK, even on a channel");
 }
+
+/// #10457 (CodeRabbit on #10469): Liquify naming its layer (`"layer"`) runs wherever it reads as
+/// enabled: on an adjustment layer with its mask or an alpha channel targeted in the Channels
+/// panel, the command judges the target the panel fills in, as `is_enabled_with` does.
+#[test]
+fn liquify_naming_its_layer_runs_wherever_it_is_enabled() {
+    for target in [json!("mask"), json!(0)] {
+        let mut s = adjustment_with_mask("rgb");
+        s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+        s.execute("select.saveSelection", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("channel.target", json!({"channel": target})).unwrap();
+        let layer = s.active().unwrap().active_layer.unwrap();
+        let p = json!({"layer": layer.0, "strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+        assert!(s.is_enabled_with(LIQUIFY, &p), "{target}: enabled");
+        let r = s.execute(LIQUIFY, p);
+        assert!(r.is_ok(), "{target}: enabled, so it runs: {r:?}");
+    }
+}
