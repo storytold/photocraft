@@ -79,6 +79,11 @@ impl PhotocraftApp {
         if let Some(r) = crate::crop_ui::intercept(self, id) {
             return r;
         }
+        // Path Selection's component clipboard: Edit › Copy/Cut take the selected components,
+        // Edit › Paste lays the path clipboard down (before the OS-clipboard import below).
+        if let Some(r) = vector_ui::path_clip_intercept(self, id, &params) {
+            return r;
+        }
         let t0 = gpu_canvas::now_ms();
         // The OS clipboard is read only on an explicit paste, never in the background (privacy, CPU).
         if matches!(id, "edit.paste" | "edit.pasteSpecial.pasteInPlace" | "file.newFromClipboard") {

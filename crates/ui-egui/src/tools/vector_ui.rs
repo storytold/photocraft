@@ -21,6 +21,7 @@ use crate::theme::Tokens;
 mod curvature;
 mod options;
 mod overlay;
+mod path_clip;
 mod path_ops;
 mod paths_panel;
 mod pen;
@@ -39,6 +40,7 @@ use overlay::{MAX_CURVE_PIECES, bezier};
 #[cfg(test)]
 pub(crate) use overlay::{curve_points, path_lines, selected_saved_path, shows_anchors};
 pub(crate) use overlay::{draw_anchor, draw_handle, draw_outline};
+pub(crate) use path_clip::{intercept as path_clip_intercept, live_selection};
 #[cfg(test)]
 use path_ops::target_path;
 pub use path_ops::{active_path_name, path_selection_finish, path_to_selection, pick_shape_at, selected_document_path, takes_path_mask, with_active_path};

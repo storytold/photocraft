@@ -458,3 +458,52 @@ fn targeting_a_mask_swaps_to_its_own_colour_pair() {
     app.run("layer.layerMask.delete", json!({})).unwrap();
     assert_eq!(pair(&app), (GREEN, BLUE), "deleting the targeted mask goes back to the pixels");
 }
+
+/// One clipboard: importing OS pixels (an app image pasted in) replaces a path clip, like a
+/// path clip replaces the pixel clipboard — Paste must not resurrect the stale path.
+#[test]
+fn os_clipboard_import_replaces_the_path_clipboard() {
+    let os: OsClip = Arc::new(Mutex::new(Some((3, 2, [255u8, 0, 0, 255].repeat(6)))));
+    let (a, b) = (os.clone(), os.clone());
+    let services = Services { clipboard_get_image: Some(Box::new(move || Ok(b.lock().unwrap().clone()))), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
+    app.run("path.set", serde_json::json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[10, 10], [30, 10], [30, 30], [10, 30]]}]}}))
+        .unwrap();
+    app.run("path.copy", serde_json::json!({"name": "work", "subpaths": [0]})).unwrap();
+    assert!(app.session.path_clipboard.is_some());
+    assert!(app.import_os_clipboard().unwrap());
+    assert!(app.session.clipboard.is_some(), "the OS image is the pixel clipboard");
+    assert!(app.session.path_clipboard.is_none(), "one clipboard: the import replaced the path clip");
+    drop(a);
+}
+
+/// Clipboard freshness both ways: an unchanged OS image must not discard a newer path clip
+/// (it superseded the mirrored pixels), while genuinely new OS pixels replace it.
+#[test]
+fn os_clipboard_import_respects_a_newer_path_clip() {
+    let os: OsClip = Arc::new(Mutex::new(Some((3, 2, [255u8, 0, 0, 255].repeat(6)))));
+    let (a, b) = (os.clone(), os.clone());
+    let services = Services { clipboard_get_image: Some(Box::new(move || Ok(b.lock().unwrap().clone()))), ..Default::default() };
+    let mut app = PhotocraftApp::new(Session::new(), services);
+    app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
+    // Mirror pixels to the OS clipboard…
+    app.run("select.rect", serde_json::json!({"x": 0, "y": 0, "width": 4, "height": 4})).unwrap();
+    app.run("edit.copy", serde_json::json!({})).unwrap();
+    assert!(app.import_os_clipboard().unwrap());
+    assert!(app.session.clipboard.is_some() && app.session.path_clipboard.is_none());
+    // …then a path component takes the clipboard's place.
+    app.run("path.set", serde_json::json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[10, 10], [30, 10], [30, 30], [10, 30]]}]}}))
+        .unwrap();
+    app.run("path.copy", serde_json::json!({"name": "work", "subpaths": [0]})).unwrap();
+    assert!(app.session.path_clipboard.is_some() && app.session.clipboard.is_none());
+    // The OS clipboard still holds the old image: importing it must keep the newer path clip.
+    assert!(!app.import_os_clipboard().unwrap(), "the unchanged OS image is stale");
+    assert!(app.session.path_clipboard.is_some(), "the path clip survives the stale import");
+    assert!(app.session.clipboard.is_none());
+    // Genuinely new OS pixels win, as any newer clip does.
+    *os.lock().unwrap() = Some((2, 2, [0u8, 255u8, 0, 255].repeat(4)));
+    assert!(app.import_os_clipboard().unwrap());
+    assert!(app.session.clipboard.is_some() && app.session.path_clipboard.is_none(), "newer OS pixels replace the path clip");
+    drop(a);
+}
