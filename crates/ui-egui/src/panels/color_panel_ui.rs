@@ -569,7 +569,7 @@ fn wheel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ring_w = outer - inner;
     let (h, s, b) = (v[0] / 360.0, v[1] / 100.0, v[2] / 100.0);
     ui.painter().add(ring_mesh(center, inner, outer));
-    let tri = triangle(center, inner - 1.0, h);
+    let tri = triangle(center, inner - 1.0);
     ui.painter().add(triangle_mesh(tri, h));
     // Which part a drag began on: the ring sets the hue, the triangle saturation and brightness.
     // The ring or the triangle, from where the press began (kept for frames without a press
@@ -660,11 +660,12 @@ fn ring_mesh(center: Pos2, inner: f32, outer: f32) -> Mesh {
     m
 }
 
-/// The triangle's corners for hue `h` (0..1): the pure hue at the hue's angle, white 120° on and
-/// black 240° on, inside radius `r`.
-fn triangle(center: Pos2, r: f32, h: f32) -> [Pos2; 3] {
+/// The triangle's corners inside radius `r`: fixed in place whatever the hue (as Krita's), so the
+/// direction that adds saturation or brightness never changes (#10122). The pure hue is the top
+/// corner, white 120 degrees on (lower left) and black 240 degrees on (lower right).
+pub(crate) fn triangle(center: Pos2, r: f32) -> [Pos2; 3] {
     let at = |turns: f32| {
-        let a = (h + turns) * TAU;
+        let a = (0.25 + turns) * TAU;
         center + vec2(a.cos(), -a.sin()) * r
     };
     [at(0.0), at(1.0 / 3.0), at(2.0 / 3.0)]
