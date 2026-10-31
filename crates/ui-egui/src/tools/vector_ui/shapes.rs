@@ -101,8 +101,13 @@ pub fn finish_shape(app: &mut PhotocraftApp, tool: Tool, start: [f64; 2], end: [
         // Path mode: the outline joins the work path (one more subpath), and no layer is made.
         let Some(outline) = shape_outline(app, tool, start, end, mods) else { return };
         // Appended as it is rather than with `path.set`'s `op`, which would turn a custom
-        // shape's subtracted subpaths (holes) into combined ones.
-        let mut path = app.session.active().and_then(|st| st.doc.work_path.clone()).unwrap_or_default();
+        // shape's subtracted subpaths (holes) into combined ones. A new work path takes the
+        // outline's fill rule.
+        let mut path = app
+            .session
+            .active()
+            .and_then(|st| st.doc.work_path.clone())
+            .unwrap_or_else(|| photocraft_doc::vector::Path { fill_rule: outline.fill_rule, ..Default::default() });
         path.subpaths.extend(outline.subpaths);
         let r = app.run("path.set", json!({"name": "work", "path": photocraft_engine::vector_cmds::path_json(&path)}));
         match r {

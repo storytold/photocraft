@@ -541,6 +541,36 @@ fn path_mode_custom_shape_keeps_its_subtracted_subpaths() {
     assert_eq!(ops, [PathOp::Combine, PathOp::Combine, PathOp::Subtract], "the rectangle, the ring and its hole");
 }
 
+/// Coverage of the work path at pixel `(x, y)`.
+fn work_covered(app: &PhotocraftApp, x: i32, y: i32) -> f32 {
+    let path = app.session.active().unwrap().doc.work_path.clone().expect("a work path");
+    photocraft_vector::fill_rasterizer(&path, photocraft_vector::DEFAULT_TOLERANCE).render(photocraft_geom::Rect::from_xywh(x, y, 1, 1))[0]
+}
+
+/// CodeRabbit on #9456: a custom shape that starts the work path brings its fill rule, so an
+/// even-odd star keeps its empty centre.
+#[test]
+fn path_mode_custom_shape_starts_the_work_path_with_its_fill_rule() {
+    let mut app = app();
+    app.ui.tool_options.shape_mode = "path".into();
+    // A pentagram drawn in one stroke: even-odd leaves the pentagon in the middle empty.
+    let star: Vec<[f64; 2]> = (0..5)
+        .map(|k| {
+            let a = std::f64::consts::TAU * (k * 2) as f64 / 5.0 - std::f64::consts::FRAC_PI_2;
+            [50.0 + 50.0 * a.cos(), 50.0 + 50.0 * a.sin()]
+        })
+        .collect();
+    let r = app.run("shape.presets.new", json!({"name": "Even-Odd Star", "path": {"fillRule": "evenodd", "subpaths": [{"knots": star}]}}));
+    assert!(r.is_ok(), "{r:?}");
+    app.ui.presets_ui.custom_shape = "Even-Odd Star".into();
+    finish_shape(&mut app, Tool::CustomShape, [20.0, 20.0], [120.0, 120.0], egui::Modifiers::NONE);
+    let work = app.session.active().unwrap().doc.work_path.clone().expect("a work path");
+    assert_eq!(work.fill_rule, photocraft_doc::vector::FillRule::EvenOdd);
+    let b = work.control_bounds().unwrap();
+    let (cx, cy) = (((b.0 + b.2) / 2.0) as i32, ((b.1 + b.3) / 2.0) as i32);
+    assert_eq!(work_covered(&app, cx, cy), 0.0, "the star's centre stays empty");
+}
+
 #[test]
 fn shift_pressed_during_a_shape_drag_constrains_it() {
     // #668: ⇧ only counted when held at the press; Photoshop constrains when it is pressed
