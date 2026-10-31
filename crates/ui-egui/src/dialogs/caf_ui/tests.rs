@@ -472,3 +472,15 @@ fn strokes_past_the_engines_limits_are_refused_at_the_brush() {
     assert_eq!(d["fillEdits"], json!(0));
     assert!(d["error"].as_str().is_some_and(|e| e.contains("at most")), "{d}");
 }
+
+/// #9514: in every language both Sampling Brush tips name the Alt key and differ.
+#[test]
+fn brush_mode_tips_name_the_alt_key_in_every_language() {
+    for lang in crate::i18n::Lang::all() {
+        let (add, subtract) = crate::i18n::with_language(lang, view::brush_mode_tips);
+        let alt = crate::shortcuts::pretty("Alt");
+        assert!(add.contains(alt.as_str()), "{lang:?}: {add:?}");
+        assert!(subtract.contains(alt.as_str()), "{lang:?}: {subtract:?}");
+        assert_ne!(add, subtract, "{lang:?}");
+    }
+}

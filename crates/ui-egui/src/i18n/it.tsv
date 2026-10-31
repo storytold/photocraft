@@ -4616,4 +4616,6 @@ shape	Appearance	Aspetto
 	Refine Hair needs hair detection, which isn't available yet	Migliora capelli richiede il rilevamento dei capelli, non ancora disponibile
 	Select and Mask was closed: its document is no longer the active one	Seleziona e maschera è stato chiuso: il suo documento non è più quello attivo
 	Select and Mask was closed: another layer was selected	Seleziona e maschera è stato chiuso: è stato selezionato un altro livello
+	Add  (hold {key} to subtract)	Aggiungi  (tieni premuto {key} per sottrarre)
+	Subtract  (hold {key} to add)	Sottrai  (tieni premuto {key} per aggiungere)
 	Edit Brush…	Modifica pennello…
