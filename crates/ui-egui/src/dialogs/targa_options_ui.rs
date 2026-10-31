@@ -70,7 +70,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ui.radio_value(&mut bits, TgaBits::Bits24, tl!("24 bits/pixel"));
             ui.radio_value(&mut bits, TgaBits::Bits32, tl!("32 bits/pixel"));
             ui.add_space(12.0);
-            ui.with_layout(crate::text::direction::trailing(), |ui| {
+            // Top-aligned: a `Center` cross align in a right-to-left row balloons the row to
+            // the body's full remaining height in the fork and stretches the modal.
+            ui.with_layout(crate::text::direction::trailing_min(), |ui| {
                 ui.spacing_mut().item_spacing.x = 10.0;
                 ok = crate::widgets::primary_button(ui, tl!("OK"), 84.0).clicked();
                 cancel = crate::widgets::secondary_button(ui, tl!("Cancel"), 84.0).clicked();
