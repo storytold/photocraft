@@ -61,6 +61,12 @@ fn view_center(app: &PhotocraftApp) -> Option<[f64; 2]> {
 
 /// Edit › Copy/Cut/Paste for path components; `None` = not this context, dispatch as usual.
 pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
+    // A newer OS clipboard image supersedes a path clip, like any newer clip: refresh the import
+    // first — its signature guard leaves an unchanged OS image (and the path clip) alone — and
+    // route only what is still the freshest clip. A read error keeps the usable internal clip.
+    if id == "edit.paste" && app.session.path_clipboard.is_some() && app.services.clipboard_get_image.is_some() {
+        let _ = app.import_os_clipboard();
+    }
     match id {
         "edit.copy" | "edit.cut" => {
             let params = live_selection(app)?;
@@ -107,6 +113,7 @@ mod tests {
     use crate::state::Tool;
     use crate::vector_ui::{pen_down, pen_up};
 
+    /// A fresh app with a 200×200 document, drawing shapes with the Pen.
     fn app() -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 200, "height": 200})).unwrap();
@@ -115,6 +122,7 @@ mod tests {
         app
     }
 
+    /// One Pen click at `(x, y)`.
     fn click(app: &mut PhotocraftApp, x: f64, y: f64) {
         pen_down(app, x, y, false);
         pen_up(app);
@@ -127,6 +135,7 @@ mod tests {
         }
     }
 
+    /// The active layer as its `(id, shape layer)`; panics on any other layer.
     fn shape(app: &PhotocraftApp) -> (LayerId, photocraft_doc::ShapeLayer) {
         let st = app.session.active().unwrap();
         let id = st.active_layer.unwrap();
@@ -136,6 +145,7 @@ mod tests {
         }
     }
 
+    /// The saved path named `name`, cloned.
     fn saved(app: &PhotocraftApp, name: &str) -> Option<photocraft_doc::Path> {
         app.session.active().unwrap().doc.paths.iter().find(|p| p.name == name).map(|p| p.path.clone())
     }
@@ -206,5 +216,32 @@ mod tests {
         assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1, "one history step");
         assert!(app.session.undo());
         assert_eq!(shape(&app).1.path.subpaths.len(), 2, "undo restores the cut component");
+    }
+
+    /// Paste precedence, one clipboard: an unchanged OS clipboard leaves the path paste alone;
+    /// a newer OS image supersedes the path clip and ⌘V pastes the pixels.
+    #[test]
+    fn paste_prefers_a_newer_os_image() {
+        let os = std::sync::Arc::new(std::sync::Mutex::new(None::<(u32, u32, Vec<u8>)>));
+        let (a, b) = (os.clone(), os.clone());
+        let services = crate::Services { clipboard_get_image: Some(Box::new(move || Ok(b.lock().unwrap().clone()))), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 40, "height": 40})).unwrap();
+        app.run("path.set", json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[5, 5], [15, 5], [15, 15], [5, 15]]}]}})).unwrap();
+
+        // Nothing on the OS clipboard: the path clip pastes as "Pasted Path".
+        app.run("path.copy", json!({"name": "work", "subpaths": [0]})).unwrap();
+        app.run("edit.paste", json!({})).unwrap();
+        assert!(saved(&app, "Pasted Path").is_some(), "the path clip pasted");
+        // A newer OS image supersedes the path clip: ⌘V pastes the pixels, no second Pasted Path.
+        app.run("path.copy", json!({"name": "work", "subpaths": [0]})).unwrap();
+        *os.lock().unwrap() = Some((2, 2, [255u8, 0, 0, 255].repeat(4)));
+        app.run("edit.paste", json!({})).unwrap();
+        assert!(app.session.path_clipboard.is_none(), "the newer OS image replaced the path clip");
+        assert_eq!(saved(&app, "Pasted Path").unwrap().subpaths.len(), 1, "no second Pasted Path");
+        let st = app.session.active().unwrap();
+        let l = st.doc.layer(st.active_layer.unwrap()).unwrap();
+        assert_eq!(l.surface().map(|s| s.content_bounds().width()), Some(2), "the OS image pasted as a new layer");
+        drop(a);
     }
 }
