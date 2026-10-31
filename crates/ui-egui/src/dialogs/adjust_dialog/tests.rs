@@ -405,6 +405,52 @@ fn curves_pencil_drag_draws_the_map_and_confirm_applies_it() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 }
 
+/// #9247: Image › Adjustments › Hue/Saturation's colour range eyedroppers, off on Master;
+/// on Reds they reproduce Photoshop 2025's measured sequence (sample a 210° blue, add a 38°
+/// orange, subtract the blue), each pick building on the last; OK applies the result.
+#[test]
+fn hue_saturation_dialog_eyedroppers_follow_photoshop() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
+    s.execute("select.rect", json!({"x": 0, "y": 0, "width": 20, "height": 20})).unwrap();
+    s.execute("edit.fill", json!({"color": "#0080ff"})).unwrap();
+    s.execute("select.inverse", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ffa000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    let app = PhotocraftApp::new(s, crate::Services::default());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), "image.adjustments.hueSaturation").unwrap();
+    h.run_steps(4);
+    assert!(h.get_by_label("Sample a color range").accesskit_node().is_disabled(), "off on Master");
+    h.ctx.data_mut(|d| d.insert_temp(dialog_mem("hueSaturation").with("hs-range"), 1usize));
+    h.run_steps(3);
+    let range = |h: &Harness<'_, PhotocraftApp>| h.state().ui.dialogs[0].fields["reds"]["range"].clone();
+    for (label, x, want) in [
+        ("Sample a color range", 5.0, json!([165.0, 195.0, 225.0, 255.0])),
+        ("Add to sample", 30.0, json!([8.0, 38.0, 225.0, 255.0])),
+        ("Subtract from sample", 5.0, json!([8.0, 38.0, 195.0, 225.0])),
+    ] {
+        h.get_by_label(label).click();
+        h.run_steps(2);
+        assert!(picker_armed(h.state()), "{label} armed");
+        assert!(sample_at(h.state_mut(), x, 10.0), "{label}: the click is the picker's");
+        h.run_steps(2);
+        assert_eq!(range(&h), want, "{label}");
+    }
+    // CodeRabbit on #9267: Colorize turned on before the dialog draws again leaves no armed
+    // picker, so a canvas press isn't taken (and doesn't end in the engine's refusal).
+    h.get_by_label("Sample a color range").click();
+    h.run_steps(2);
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("colorize".into(), json!(true));
+    assert!(!picker_armed(h.state()), "not with Colorize on");
+    assert!(!sample_at(h.state_mut(), 5.0, 10.0), "the press isn't the picker's");
+    assert!(!h.state().ui.status.contains("Colorize"), "and shows no refusal: {}", h.state().ui.status);
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("colorize".into(), json!(false));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
