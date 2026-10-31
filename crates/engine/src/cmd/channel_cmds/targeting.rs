@@ -133,8 +133,9 @@ fn refuses_masks(id: &str) -> bool {
 /// Channels panel), when the target decides it: Lens Correction, Adaptive Wide Angle and Vanishing
 /// Point refuse any mask or channel; what edits a smart object's filter mask needs one; and what
 /// edits a targeted layer mask (`"target":"mask"`) needs the layer to have a mask, whatever its
-/// content, plus an RGB or Grayscale document for the Camera Raw Filter. None when the command's
-/// own precondition applies.
+/// content, plus an RGB or Grayscale document for the Camera Raw Filter; and Liquify and Camera
+/// Raw on an alpha channel or the Quick Mask need that channel, not a pixel layer. None when the
+/// command's own precondition applies.
 pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<std::result::Result<(), String>> {
     match target_of(p) {
         // Photoshop greys these out on a targeted mask or channel, so a target named in the params
@@ -149,6 +150,19 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
         // The Camera Raw Filter filters a targeted mask too (#10457), in the document modes it
         // takes on a layer.
         Target::Mask if id == crate::lens_cmds::RAW => Some(has_mask(s).and_then(|()| crate::lens_cmds::raw_mode(s))),
+        // An alpha channel or the Quick Mask named in the params takes Liquify and the Camera Raw
+        // Filter on any layer, as one targeted in the Channels panel does (#10457).
+        t @ (Target::Alpha(_) | Target::QuickMask) if id == crate::distort_cmds::LIQUIFY || id == crate::lens_cmds::RAW => {
+            let st = s.active()?;
+            let exists = match t {
+                Target::Alpha(i) => i < st.doc.channels.len(),
+                _ => st.doc.quick_mask.is_some(),
+            };
+            if !exists {
+                return Some(Err("the targeted channel doesn't exist".into()));
+            }
+            Some(if id == crate::lens_cmds::RAW { crate::lens_cmds::raw_mode(s) } else { Ok(()) })
+        }
         _ => None,
     }
 }

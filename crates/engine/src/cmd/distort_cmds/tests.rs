@@ -610,3 +610,34 @@ fn camera_raw_filters_an_adjustment_layers_targeted_mask() {
     s.execute("channel.target", json!({"channel": "mask"})).unwrap();
     assert!(!s.is_enabled(raw), "Camera Raw: not in CMYK, even on a targeted mask");
 }
+
+/// #10457 (CodeRabbit on #10469): an alpha channel or the Quick Mask named in the params takes Liquify
+/// and the Camera Raw Filter on an adjustment layer with the composite targeted, as it does when
+/// targeted in the Channels panel; a pixel target there still needs pixels.
+#[test]
+fn dialog_filters_take_a_channel_named_in_their_params_on_an_adjustment_layer() {
+    let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+    for (id, params) in [(LIQUIFY, stroke), (crate::lens_cmds::RAW, json!({"exposure": -1.5}))] {
+        let mut s = adjustment_with_mask("rgb");
+        s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+        s.execute("select.saveSelection", json!({})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+        assert!(!s.is_enabled(id), "{id}: no pixels to filter on the layer itself");
+        let mut explicit = params.clone();
+        explicit["target"] = json!({"channel": 0});
+        assert!(s.is_enabled_with(id, &explicit), "{id}: enabled on an alpha channel named in its params");
+        let alpha = |s: &Session| s.active().unwrap().doc.channels[0].surface.read_region(s.active().unwrap().doc.bounds());
+        let before = alpha(&s);
+        s.execute(id, explicit).unwrap();
+        assert_ne!(alpha(&s), before, "{id}: the alpha channel is filtered");
+        let mut missing = params.clone();
+        missing["target"] = json!({"channel": 5});
+        assert!(!s.is_enabled_with(id, &missing), "{id}: no such alpha channel");
+    }
+    let mut s = adjustment_with_mask("cmyk");
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("select.saveSelection", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    assert!(!s.is_enabled_with(crate::lens_cmds::RAW, &json!({"target": {"channel": 0}})), "Camera Raw: not in CMYK, even on a channel");
+}
