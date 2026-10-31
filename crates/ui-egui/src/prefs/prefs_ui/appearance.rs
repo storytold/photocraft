@@ -368,19 +368,18 @@ mod tests {
         let fields = Map::new();
         // The app sets the direction flag with the style before its first frame; the widgets
         // mirror on it, and a Grid's first sizing pass would otherwise cache LTR column widths.
-        Harness::builder()
-            .with_size(vec2(520.0, 480.0))
-            .with_context_setup(|ctx| crate::theme::set_direction(ctx, crate::direction::is_rtl()))
-            .build_ui_state(
-                |ui: &mut egui::Ui, f: &mut Map<String, Value>| {
-                    ui.with_layout(body_layout(), |ui| {
+        Harness::builder().with_size(vec2(520.0, 480.0)).with_context_setup(|ctx| crate::theme::set_direction(ctx, crate::direction::is_rtl())).build_ui_state(
+            |ui: &mut egui::Ui, f: &mut Map<String, Value>| {
+                ui.with_layout(body_layout(), |ui| {
+                    super::super::fields::grid_scope(ui, |ui| {
                         egui::Grid::new("appearance-grid").num_columns(2).show(ui, |ui| {
                             appearance_rows(ui, f, Some(egui::Theme::Dark), AppearanceRows::matching(""));
                         });
                     });
-                },
-                fields,
-            )
+                });
+            },
+            fields,
+        )
     }
 
     /// The rect of one light-theme swatch, by its theme name.
