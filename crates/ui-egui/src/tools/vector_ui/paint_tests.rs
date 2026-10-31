@@ -242,6 +242,60 @@ fn shape_paint_hex_input_keeps_partial_text_and_preserves_alpha() {
     }
 }
 
+/// The swatch popups' paste button replaces half-typed digits with the clipboard colour and keeps
+/// the paint's alpha; their copy button copies the hex code.
+#[test]
+fn shape_paint_hex_copy_and_paste_buttons() {
+    for label in ["Fill color", "Stroke color"] {
+        let mut app = app("rgb", 32);
+        let original = [0.2, 0.4, 0.6, 0.372819];
+        app.run("tools.setColors", json!({"foreground": original, "background": original})).unwrap();
+        let mut h = harness(app, false);
+        h.get_by_label(label).click();
+        h.run_steps(3);
+        h.get_by_label("Copy hex code").click();
+        h.run_steps(1);
+        let copied = h.output().platform_output.commands.iter().any(|c| matches!(c, egui::OutputCommand::CopyText(s) if s == "336699"));
+        assert!(copied, "{label}: {:?}", h.output().platform_output.commands);
+        h.get_by_label("#").click();
+        h.run_steps(1);
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run_steps(1);
+        h.event(Event::Text("12".into()));
+        h.run_steps(1);
+        h.get_by_label("Paste hex code").click();
+        h.run_steps(1);
+        assert!(h.get_by_label("#").is_focused(), "{label}: the hex field keeps the paste from reaching the document");
+        h.event(Event::Paste("#12ABEF".into()));
+        h.run_steps(2);
+        let want = [18.0 / 255.0, 171.0 / 255.0, 239.0 / 255.0, original[3]];
+        let tools = &h.state().session.tools;
+        assert_eq!(if label == "Fill color" { tools.foreground } else { tools.background }, want, "{label}");
+        assert_eq!(if label == "Fill color" { tools.background } else { tools.foreground }, original, "{label}");
+        assert_eq!(h.get_by_label("#").value().as_deref(), Some("12ABEF"), "{label}");
+        // Pasting the colour already set still replaces half-typed digits.
+        h.key_press_modifiers(Modifiers::COMMAND, Key::A);
+        h.run_steps(1);
+        h.event(Event::Text("9".into()));
+        h.run_steps(1);
+        h.get_by_label("Paste hex code").click();
+        h.run_steps(1);
+        h.event(Event::Paste("#12ABEF".into()));
+        h.run_steps(2);
+        assert_eq!(h.get_by_label("#").value().as_deref(), Some("12ABEF"), "{label}: same-colour paste");
+        // Clipboard text that isn't a colour changes nothing, the field included.
+        h.get_by_label("Paste hex code").click();
+        h.run_steps(1);
+        h.event(Event::Paste("hello".into()));
+        h.run_steps(2);
+        assert_eq!(h.get_by_label("#").value().as_deref(), Some("12ABEF"), "{label}: non-colour paste");
+        let tools = &h.state().session.tools;
+        assert_eq!(if label == "Fill color" { tools.foreground } else { tools.background }, want, "{label}");
+        h.key_press(Key::Escape);
+        h.run_steps(2);
+    }
+}
+
 #[test]
 fn a_pasted_hex_colour_updates_the_selected_shape_and_undoes_once() {
     for label in ["Fill color", "Stroke color"] {

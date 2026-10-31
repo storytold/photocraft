@@ -282,3 +282,7 @@ sync_github_name = true
 
 [people.dylanmtaylor]
 sync_github_name = true
+
+[people.CGnomazoid]
+real_name = "Colin Ulmer"
+sync_github_name = false

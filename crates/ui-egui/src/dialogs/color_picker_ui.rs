@@ -677,7 +677,9 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                     ui.memory_mut(|m| m.request_focus(id));
                 }
                 let focused = ui.memory(|m| m.has_focus(id));
-                let pasted = if focused { take_hex_paste(ui) } else { None };
+                // The paste button's request first: its non-colour text changes nothing, where
+                // ⌘V's goes into the field as typing.
+                let pasted = if focused { take_requested_hex_paste(ui, id).or_else(|| take_hex_paste(ui)) } else { None };
                 let typing = if focused { ui.data(|d| d.get_temp::<String>(id)) } else { None };
                 // Drop stale typing when another path (web snap, field drag, Current) changed `color`.
                 let shown = hex(rgb);
@@ -689,6 +691,7 @@ fn fields(ui: &mut egui::Ui, f: &mut Map<String, Value>, mode: &str, now: &Compo
                     },
                 };
                 let r = crate::widgets::text_field_ex(ui, id, &mut h, "", 64.0, true, Some(6)).accessible_name(tl!("Color"));
+                hex_clipboard_buttons(ui, id, rgb);
                 if let Some(c) = pasted {
                     edit = Some((c, Keep::Nothing));
                 }
@@ -758,6 +761,62 @@ fn take_hex_paste(ui: &egui::Ui) -> Option<[f32; 3]> {
                 }
                 None => true,
             },
+            _ => true,
+        });
+        found
+    })
+}
+
+/// How long the paste button waits for the clipboard text: a native window answers a paste
+/// request on the next pass, a browser once its clipboard read (which may ask the person) is done.
+const PASTE_ANSWER_SECS: f64 = 5.0;
+
+/// Copy and paste buttons for the hex colour field `field`, which shows `rgb`. Copy puts its
+/// `rrggbb` on the clipboard, as the Color panel's Copy Color's Hex Code does. Paste gives the
+/// field its focus back and asks for the clipboard, as ⌘V in the field does: the text arrives as a
+/// Paste event next pass, which the field takes whole with [`take_requested_hex_paste`]. The focus
+/// matters: with no text field focused, the app pastes that event into the document instead.
+pub(crate) fn hex_clipboard_buttons(ui: &mut egui::Ui, field: egui::Id, rgb: [f32; 3]) {
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        if crate::icons::button_with_icon_size(ui, "copy", 20.0, 13.0, false, "Copy hex code").clicked() {
+            ui.ctx().copy_text(crate::color_panel_ui::hex_code(rgb));
+        }
+        if crate::icons::button_with_icon_size(ui, "clipboard-paste", 20.0, 13.0, false, "Paste hex code").clicked() {
+            ui.memory_mut(|m| m.request_focus(field));
+            let now = ui.input(|i| i.time);
+            ui.data_mut(|d| d.insert_temp(field.with("paste-wanted"), now));
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+        }
+    });
+}
+
+/// The colour [`hex_clipboard_buttons`]' paste button asked for, once the clipboard text has
+/// arrived and is one: it replaces the field's text whole rather than going in at the cursor.
+/// Clipboard text that isn't a colour is dropped, so the button changes nothing; ⌘V's paste is
+/// left to the field. Call before drawing the field, so the field never sees the Paste event.
+///
+/// An empty clipboard (or an image) sends no Paste event at all, so a request the platform hasn't
+/// answered within [`PASTE_ANSWER_SECS`] lapses: a later ⌘V is the field's again.
+pub(crate) fn take_requested_hex_paste(ui: &egui::Ui, field: egui::Id) -> Option<[f32; 3]> {
+    let wanted = field.with("paste-wanted");
+    let asked = ui.data(|d| d.get_temp::<f64>(wanted))?;
+    let focused = ui.memory(|m| m.has_focus(field));
+    let lapsed = ui.input(|i| i.time) - asked > PASTE_ANSWER_SECS;
+    let arrived = !lapsed && ui.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Paste(_))));
+    if !focused || lapsed || arrived {
+        ui.data_mut(|d| d.remove::<f64>(wanted));
+    }
+    if !(focused && arrived) {
+        return None;
+    }
+    ui.input_mut(|i| {
+        let mut found = None;
+        i.events.retain(|e| match e {
+            egui::Event::Paste(s) => {
+                found = found.or_else(|| parse_hex(s));
+                false
+            }
             _ => true,
         });
         found
