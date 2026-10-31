@@ -6,7 +6,7 @@
 //! drive it like any dialog. OK remembers the choices in the preferences (`dialogs["edit.fill"]`),
 //! which are saved to disk, so the dialog opens with them again after a restart.
 
-use egui::{Align2, Sense, pos2, vec2};
+use egui::{Sense, vec2};
 use serde_json::{Map, Value, json};
 
 use crate::PhotocraftApp;
@@ -133,17 +133,11 @@ pub fn confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value,
     app.run(COMMAND, params(f))
 }
 
-/// A caption in a fixed column that hugs the field it names: the box's right edge in a
-/// left-to-right UI, its left edge in a right-to-left one.
-fn caption_anchor(r: egui::Rect, rtl: bool) -> (egui::Pos2, Align2) {
-    if rtl { (pos2(r.left() + 6.0, r.center().y), Align2::LEFT_CENTER) } else { (pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER) }
-}
-
 /// Paints the caption; returns its box so tests can assert where it landed.
 fn label(ui: &mut egui::Ui, text: &str) -> egui::Rect {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(112.0, 22.0), Sense::hover());
-    let (pos, align) = caption_anchor(r, crate::text::direction::is_rtl());
+    let (pos, align) = crate::direction::end_text_anchor(r, 6.0);
     ui.painter().text(pos, align, text, egui::FontId::proportional(12.0), t.text_dim);
     r
 }

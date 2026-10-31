@@ -1,6 +1,7 @@
 //! The Fill dialog's right-to-left twins: the fields read from the right while the data and the
 //! behaviour stay the ones the left-to-right tests pin — only the direction is forced.
 
+use egui::Align2;
 use egui_kittest::kittest::Queryable;
 
 use super::*;
@@ -51,10 +52,13 @@ fn rtl_the_rows_read_from_the_right() {
 #[test]
 fn rtl_the_caption_hugs_its_field() {
     let r = egui::Rect::from_min_size(egui::pos2(10.0, 0.0), egui::vec2(112.0, 22.0));
-    let (ltr_pos, ltr_align) = caption_anchor(r, false);
+    let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+    let (ltr_pos, ltr_align) = crate::direction::end_text_anchor(r, 6.0);
     assert!(matches!(ltr_align, Align2::RIGHT_CENTER), "the caption is right-aligned: {ltr_align:?}");
     assert!((ltr_pos.x - (r.right() - 6.0)).abs() < 0.01, "the caption sits at the right of its box: {ltr_pos:?}");
-    let (rtl_pos, rtl_align) = caption_anchor(r, true);
+    drop(_ltr);
+    let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+    let (rtl_pos, rtl_align) = crate::direction::end_text_anchor(r, 6.0);
     assert!(matches!(rtl_align, Align2::LEFT_CENTER), "the caption is left-aligned: {rtl_align:?}");
     assert!((rtl_pos.x - (r.left() + 6.0)).abs() < 0.01, "the caption sits at the left of its box: {rtl_pos:?}");
 }
