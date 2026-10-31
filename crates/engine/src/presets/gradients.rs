@@ -5,7 +5,7 @@
 //! Photoshop's "Foreground to Background") and transparency stops, both at `0..=1`. Midpoints are
 //! always 50 %. Built-in colours are our own.
 
-use photocraft_doc::{Color, Fill, Layer, LayerContent};
+use photocraft_doc::{Color, Effect, Fill, FxCommon, Gradient, Layer, LayerContent};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -447,15 +447,48 @@ fn active_shape(s: &Session) -> Option<photocraft_doc::LayerId> {
     matches!(d.doc.layer(id)?.content, LayerContent::Shape(_)).then_some(id)
 }
 
+/// Text layers receive a preset through an overlay, keeping the type editable.
+fn active_text(s: &Session) -> Option<photocraft_doc::LayerId> {
+    let d = s.active()?;
+    let id = d.active_layer?;
+    matches!(d.doc.layer(id)?.content, LayerContent::Text(_)).then_some(id)
+}
+
+/// Change the text's Gradient Overlay without resetting its geometry or other effects.
+fn text_gradient(s: &mut Session, id: photocraft_doc::LayerId, g: &GradientPreset) -> Result<()> {
+    let (stops, opacity_stops) = g.fill_stops(s.tools.foreground, s.tools.background);
+    s.edit("Change Text Gradient", |doc, _| {
+        let stops = stops.into_iter().map(|(t, c)| (t, c.in_mode(doc.mode))).collect();
+        let layer = doc.layer_mut(id).ok_or(crate::EngineError::NoLayer(id))?;
+        if let Some(Effect::GradientOverlay { gradient, interpolation, .. }) =
+            layer.effects.items.iter_mut().find(|e| matches!(e, Effect::GradientOverlay { .. }))
+        {
+            gradient.stops = stops;
+            gradient.opacity_stops = opacity_stops;
+            *interpolation = None;
+        } else {
+            layer.effects.items.push(Effect::GradientOverlay {
+                common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+                gradient: Gradient { stops, opacity_stops, ..Default::default() },
+                dither: false,
+                interpolation: None,
+            });
+        }
+        Ok(())
+    })
+}
+
+/// Select the tool gradient and optionally apply it to the selected editable layer.
 fn select(s: &mut Session, p: &Value) -> Result<Value> {
     let g = preset_param(s, p, CMD_SELECT)?;
     let apply = p.get("applyToLayer").and_then(Value::as_bool).unwrap_or(true);
     let shape = active_shape(s).filter(|_| apply);
-    // A locked shape refuses before anything changes, the Gradient tool's gradient included.
-    if let (Some(id), Some(d)) = (shape, s.active()) {
+    let text = active_text(s).filter(|_| apply);
+    // Refuse locked targets before changing the Gradient tool's gradient too.
+    if let (Some(id), Some(d)) = (shape.or(text), s.active()) {
         let locks = d.doc.effective_locks(id);
         if locks.all || locks.pixels {
-            return Err(bad(CMD_SELECT, "the selected shape layer is locked"));
+            return Err(bad(CMD_SELECT, "the selected layer is locked"));
         }
     }
     s.presets.gradient = g.clone();
@@ -477,6 +510,11 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
             sh.fill = Some(fill);
             Ok(())
         })?;
+        out["layer"] = json!(id.0);
+        return Ok(out);
+    }
+    if let Some(id) = text {
+        text_gradient(s, id, &g)?;
         out["layer"] = json!(id.0);
         return Ok(out);
     }
@@ -707,7 +745,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: leak(format!(
-                r##"{{"preset":name|{stops},"group":name?,"applyToLayer":bool=true (also recolours a selected Gradient Fill layer, or fills a selected shape layer with it)}} → {{current,layer?}}. The Gradient tool paints with it."##
+                r##"{{"preset":name|{stops},"group":name?,"applyToLayer":bool=true (also recolours a selected Gradient Fill layer, fills a shape, or updates a text layer's Gradient Overlay)}} → {{current,layer?}}. The Gradient tool paints with it."##
             )),
             enabled: always,
             run: select,
