@@ -289,11 +289,7 @@ struct RowCtx<'a> {
 /// The eye column: at the row's reading-start edge — the left, or the right in a right-to-left
 /// UI.
 fn eye_cell(rect: Rect) -> Rect {
-    if crate::direction::is_rtl() {
-        Rect::from_min_max(pos2((rect.right() - 30.0).max(rect.left()), rect.top()), rect.right_bottom())
-    } else {
-        Rect::from_min_max(rect.left_top(), pos2((rect.left() + 30.0).min(rect.right()), rect.bottom()))
-    }
+    crate::direction::start_cell(rect, 30.0)
 }
 
 /// The row's fill (selection / hover), the label colour behind the eye column and the pro dividers.
@@ -389,7 +385,7 @@ fn paint_row_name(painter: &egui::Painter, t: &Tokens, rc: &RowCtx<'_>, x: f32, 
     // Photoshop rows show only the name; the kind sub-label is a Studio-theme addition.
     let is_pixel = t.pro || ts == 0.0 || matches!(l.content, LayerContent::Raster(_));
     let budget = if rtl { x - name_limit } else { name_limit - x };
-    let name_rect = crate::layer_row_ui::truncated(painter, &l.name, font, name_color, italic, budget).map(|galley| {
+    let name_rect = crate::direction::elided_galley(painter, &l.name, font, name_color, italic, budget).map(|galley| {
         // In a right-to-left UI the name hangs from its reading start, growing leftwards.
         let tx = if rtl { x - galley.size().x } else { x };
         let text_pos = pos2(tx, rect.center().y - galley.size().y / 2.0 - if is_pixel { 0.0 } else { 7.0 });
@@ -403,7 +399,7 @@ fn paint_row_name(painter: &egui::Painter, t: &Tokens, rc: &RowCtx<'_>, x: f32, 
             LayerContent::Group(g) => crate::i18n::trn(crate::i18n::current(), g.children.len() as u64, "Group · {n} layer", "Group · {n} layers"),
             other => tl!(other.kind_name()).to_string(),
         };
-        crate::layer_row_ui::label(painter, x, rect.center().y + 8.0, name_limit, &sub, egui::FontId::proportional(11.0), t.text_faint);
+        crate::direction::paint_label_span(painter, x, rect.center().y + 8.0, name_limit, &sub, egui::FontId::proportional(11.0), t.text_faint);
     }
     name_rect
 }

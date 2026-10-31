@@ -8,11 +8,10 @@
 //! before the name gets too narrow. The rects drawn each frame are recorded ([`recorded`]) for
 //! tests and automation.
 
-use egui::{Align2, FontId, Galley, Painter, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
+use egui::{FontId, Painter, Pos2, Rect, Sense, Shape, Stroke, pos2, vec2};
 use photocraft_color::BlendMode;
 use photocraft_doc::{Adjustment, Layer, LayerContent};
 use serde_json::{Value, json};
-use std::sync::Arc;
 
 use crate::icons;
 use crate::theme::{self, Tokens};
@@ -21,21 +20,14 @@ use crate::theme::{self, Tokens};
 /// left-to-right UI, left in a right-to-left one).
 pub const RIGHT_PAD: f32 = 10.0;
 
-/// The x where a row's indicators start packing: `row.right() - RIGHT_PAD`, or
-/// `row.left() + RIGHT_PAD` in a right-to-left UI, where the scrollbar moves to the left.
+/// The x where a row's indicators start packing: the reading-end pad edge, where the overlay
+/// scrollbar sits (`row.right() - RIGHT_PAD`, or `row.left() + RIGHT_PAD` in a right-to-left UI).
 pub fn pad_edge(row: Rect) -> f32 {
-    if crate::direction::is_rtl() { row.left() + RIGHT_PAD } else { row.right() - RIGHT_PAD }
+    crate::direction::end_x(row, RIGHT_PAD)
 }
 
-/// +1 left-to-right, −1 right-to-left: the signed x-step for hand-painted row geometry.
-pub fn step() -> f32 {
-    if crate::direction::is_rtl() { -1.0 } else { 1.0 }
-}
-
-/// The reading-start x for content offset `off` from the row's start edge.
-pub fn start_x(row: Rect, off: f32) -> f32 {
-    if crate::direction::is_rtl() { row.right() - off } else { row.left() + off }
-}
+// The signed x-step and reading-start x for hand-painted row geometry live at the core.
+pub use crate::direction::{start_x, step};
 
 /// Gap between indicators, and between the name and the first indicator.
 const GAP: f32 = 4.0;
@@ -140,29 +132,7 @@ pub fn indent(depth: usize, row_width: f32, fixed: f32) -> f32 {
     (depth as f32 * 14.0).min((row_width - fixed - MIN_NAME_W).max(0.0))
 }
 
-/// A single-line galley cut with "…" to `max_width` (nothing when there's no room).
-pub fn truncated(painter: &Painter, text: &str, font: FontId, color: egui::Color32, italics: bool, max_width: f32) -> Option<Arc<Galley>> {
-    if max_width < 8.0 {
-        return None;
-    }
-    let format = egui::text::TextFormat { font_id: font, color, italics, ..Default::default() };
-    let layout = |s: &str, wrap: bool| {
-        let mut job = egui::text::LayoutJob::default();
-        job.append(s, 0.0, format.clone());
-        if wrap {
-            job.wrap = egui::text::TextWrapping { max_width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
-        }
-        painter.layout_job(job)
-    };
-    // A right-to-left name (Arabic, Hebrew) too long for the row is cut at its logical end, so its
-    // start stays and "…" is at the left (`bidi_text::elide`).
-    if let Some(shown) = crate::bidi_text::elide(text, |s| layout(s, false).size().x <= max_width) {
-        return Some(layout(&shown, false));
-    }
-    // egui puts a right-to-left name into display order itself; left-to-right names are cut at
-    // their right end by egui.
-    Some(layout(text, true))
-}
+
 
 /// Paint `l`'s indicators in `row` (packed from the reading-start edge) and handle the effects
 /// triangle. `name_anchor` is where the name starts in reading order. Returns the name's far
@@ -277,31 +247,16 @@ pub fn paint_triangle(painter: &Painter, c: Pos2, open: bool, color: egui::Color
     painter.add(Shape::convex_polygon(pts, color, Stroke::NONE));
 }
 
-/// Paint `text` at the reading start of the span from `x` to `right`, vertically centred on
-/// `cy`, cut to fit the span: left-aligned at `x` in a left-to-right UI, right-aligned at the
-/// span's right end in a right-to-left one. Returns the painted rect.
-pub fn label(painter: &Painter, x: f32, cy: f32, right: f32, text: &str, font: FontId, color: egui::Color32) -> Option<Rect> {
-    // A mirrored span runs from the reading start (x) to the far limit (right); a span from a
-    // caller that has not been converted yet keeps the left-to-right contract.
-    if crate::direction::is_rtl() && x > right {
-        let g = truncated(painter, text, font, color, false, x - right)?;
-        let r = Align2::RIGHT_CENTER.anchor_size(pos2(x, cy), g.size());
-        painter.galley(r.min, g, color);
-        Some(r)
-    } else {
-        let g = truncated(painter, text, font, color, false, right - x)?;
-        let r = Align2::LEFT_CENTER.anchor_size(pos2(x, cy), g.size());
-        painter.galley(r.min, g, color);
-        Some(r)
-    }
-}
+
 
 /// Photoshop-style Layers flyout commands. The dock owns tab-group controls, not this menu.
+/// Callers wrap in `direction::popup_body`, which owns the sizing pass; the paint pass re-scopes
+/// justified at `Max` so the full-width item rows mirror and their labels hug the reading-start
+/// edge (a `Min` cross align hugs the left even under the direction flag).
 pub fn panel_menu(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
-    if crate::direction::is_rtl() {
-        // Mirror the menu body; a left-to-right UI keeps egui's own layout.
+    if crate::direction::is_rtl() && !ui.is_sizing_pass() {
         let max_rect = ui.max_rect();
-        ui.scope_builder(egui::UiBuilder::new().max_rect(max_rect).layout(crate::direction::body_layout()), |ui| panel_menu_body(app, ui));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(max_rect).layout(egui::Layout::top_down_justified(egui::Align::Max)), |ui| panel_menu_body(app, ui));
     } else {
         panel_menu_body(app, ui);
     }
@@ -494,7 +449,14 @@ pub fn rename_field(ui: &mut egui::Ui, layer: u64, rect: Rect) -> Option<(String
     let ctx = ui.ctx().clone();
     let mut r = rename(&ctx).filter(|r| r.layer == layer)?;
     let id = egui::Id::unique(("layer-rename-field", layer));
-    let te = ui.put(rect, egui::TextEdit::singleline(&mut r.text).id(id).font(FontId::proportional(12.5))).accessible_name(tl!("Name"));
+    let font = FontId::proportional(12.5);
+    // In a right-to-left UI the name runs right-to-left, aligned to the field's right edge, so
+    // an Arabic name reads from the right; a left-to-right UI keeps egui's default single-line
+    // edit, pixel-identical.
+    let mut layouter = crate::widgets::rtl_singleline_layouter(font.clone());
+    let te = ui
+        .put(rect, crate::widgets::rtl_singleline(&mut r.text, &mut layouter).id(id).font(font))
+        .accessible_name(tl!("Name"));
     r.pass = ctx.cumulative_pass_nr();
     if !r.focused {
         te.request_focus();
@@ -527,6 +489,9 @@ pub fn rename_field(ui: &mut egui::Ui, layer: u64, rect: Rect) -> Option<(String
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod rtl_tests;
 
 #[cfg(test)]
 mod rename_tests;
