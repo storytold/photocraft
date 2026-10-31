@@ -78,6 +78,8 @@ pub fn navigator_texture(app: &mut PhotocraftApp, ctx: &egui::Context, idx: usiz
     let (snapshot, id, revision, last_damage) =
         app.session.documents().get(idx).map(|st| (std::sync::Arc::downgrade(&st.doc), st.doc.id, st.revision, st.last_damage))?;
     let (doc, preview_key) = display_doc(app, idx);
+    // A GPU filter preview filters only on the canvas: the Navigator shows its own small run.
+    let (doc, preview_key) = crate::filter_gpu_preview::navigator_doc(app, idx).unwrap_or((doc, preview_key));
     let (display, display_key) = canvas_display(app, &doc, None);
     let preview_key = preview_key ^ display_key;
     let cached = app.navigator_textures.get(&id).cloned();
