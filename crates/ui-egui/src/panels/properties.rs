@@ -107,6 +107,7 @@ fn adjustment_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, id: LayerId, 
         let _ = app.run("layer.setAdjustment", params);
         app.live_adjust = None;
     }
+    crate::adjust_editors::record_panel_slack(ui, crate::adjust_editors::layer_mem(id));
 }
 
 fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {

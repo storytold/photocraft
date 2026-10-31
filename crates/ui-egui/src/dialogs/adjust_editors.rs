@@ -40,7 +40,7 @@ use curves::curves;
 #[cfg(test)]
 use curves::{CURVE_HANDLE_SIZE, curve_graph};
 pub use curves::{ToneChannel, tone_channels};
-pub(crate) use curves::{curve_side_max, read_curve};
+pub(crate) use curves::{curve_side_max, read_curve, record_panel_slack};
 use gradient_map::gradient_map;
 pub use gradient_map::{gradient_presets, is_gray, swatches};
 use hue_saturation::hue_saturation;
@@ -272,7 +272,7 @@ mod tests {
     fn curve_endpoint_handles_fit_inside_the_allocated_area() {
         for side in [120.0, 200.0, 300.0] {
             let full = Rect::from_min_size(pos2(100.0, 50.0), vec2(side, side + 14.0));
-            let graph = curve_graph(full, side);
+            let graph = curve_graph(full, vec2(side, side));
             let to_scr = |q: [f32; 2]| pos2(graph.left() + q[0] / 255.0 * graph.width(), graph.bottom() - q[1] / 255.0 * graph.height());
             for q in [[0.0, 0.0], [255.0, 255.0]] {
                 let r = Rect::from_center_size(to_scr(q), vec2(CURVE_HANDLE_SIZE, CURVE_HANDLE_SIZE)).expand(1.0);

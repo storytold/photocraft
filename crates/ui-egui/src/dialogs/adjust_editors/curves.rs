@@ -169,8 +169,25 @@ pub(crate) fn curve_side_max(ctx: &egui::Context) -> f32 {
     (ctx.content_rect().height() - CURVES_CHROME).max(CURVE_SIDE.1)
 }
 
-pub(super) fn curve_graph(full: Rect, side: f32) -> Rect {
-    let base = Rect::from_min_size(full.min + vec2(14.0, 0.0), vec2(side - 14.0, side - 14.0));
+/// The Curves graph's height in the Properties panel (#10110): the height it had last frame plus
+/// the room the panel had left below its last row then (less when it ran past the bottom), so the
+/// graph fills the panel's height as well as its width. Never shorter than it is wide: a short
+/// panel scrolls, as before.
+fn panel_graph_height(ui: &egui::Ui, mem: egui::Id, side: f32) -> f32 {
+    let fill: Option<(f32, f32)> = ui.data(|d| d.get_temp(mem.with("curves-fill")));
+    fill.map_or(side, |(height, slack)| (height + slack).max(side))
+}
+
+/// Records, after the Properties panel's last row, the room left below it for the Curves graph
+/// drawn above to take next frame (#10110).
+pub(crate) fn record_panel_slack(ui: &egui::Ui, mem: egui::Id) {
+    let Some(height) = ui.data(|d| d.get_temp::<f32>(mem.with("curves-height"))) else { return };
+    let slack = ui.clip_rect().bottom() - ui.cursor().top();
+    ui.data_mut(|d| d.insert_temp(mem.with("curves-fill"), (height, slack)));
+}
+
+pub(super) fn curve_graph(full: Rect, size: egui::Vec2) -> Rect {
+    let base = Rect::from_min_size(full.min + vec2(14.0, 0.0), size - vec2(14.0, 14.0));
     Rect::from_min_max(base.min + vec2(CURVE_GRAPH_PADDING, CURVE_GRAPH_PADDING), base.max - vec2(CURVE_GRAPH_PADDING, CURVE_GRAPH_PADDING))
 }
 
@@ -274,9 +291,12 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let mut pts = read_curve(v, key);
     let mut map = read_map(v, key);
     let side = curve_side(ui);
+    // The dialog keeps a square graph and sizes itself around it; the panel's fills its height.
+    let height = if cx.dialog { side } else { panel_graph_height(ui, cx.mem, side) };
+    ui.data_mut(|d| d.insert_temp(cx.mem.with("curves-height"), height));
     ui.add_space(4.0);
-    let (full, resp) = ui.allocate_exact_size(vec2(side, side + 14.0), Sense::click_and_drag());
-    let graph = curve_graph(full, side);
+    let (full, resp) = ui.allocate_exact_size(vec2(side, height + 14.0), Sense::click_and_drag());
+    let graph = curve_graph(full, vec2(side, height));
     ui.data_mut(|d| d.insert_temp(cx.mem.with("curves-graph"), graph));
     let to_scr = |q: [f32; 2]| pos2(graph.left() + q[0] / 255.0 * graph.width(), graph.bottom() - q[1] / 255.0 * graph.height());
     let mut changed = false;

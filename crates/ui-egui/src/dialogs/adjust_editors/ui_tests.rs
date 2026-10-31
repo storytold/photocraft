@@ -912,3 +912,25 @@ fn row_values_round_to_their_own_decimals() {
     assert!((row_value(1.234, 0.01, 9.99, None) - 1.23).abs() < 1e-6, "small ranges keep two decimals");
     assert!(row_value(f32::NAN, -20.0, 20.0, Some(u32::MAX)).is_nan(), "no panic on odd input");
 }
+
+/// #10110: in a tall Properties panel the Curves graph fills the panel's height as well as its
+/// width, and the rows below it stay in view; a short panel keeps the square graph.
+#[test]
+fn curves_graph_fills_the_panel_height() {
+    let mut h = app_harness("curves", "rgb", 8);
+    if !h.ctx.fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+        return;
+    }
+    let (id, _) = layer(&h);
+    let short = curves_graph(&h, id);
+    assert!((short.width() - short.height()).abs() < 1.0, "square in a short panel: {short:?}");
+    h.set_size(vec2(1440.0, 1600.0));
+    h.state_mut().ui.dock.heights.insert(crate::dock::Group::Properties, 1300.0);
+    h.run_steps(12);
+    let tall = curves_graph(&h, id);
+    // The short panel scrolls, so its graph is a scrollbar narrower.
+    assert!((tall.width() - short.width()).abs() < 10.0, "same width: {short:?} {tall:?}");
+    assert!(tall.height() > tall.width() + 100.0, "taller than wide in a tall panel: {short:?} → {tall:?}");
+    let reset = h.get_by_label("Reset to defaults").rect();
+    assert!(reset.bottom() <= 1600.0, "Reset stays in view: {reset:?}");
+}
