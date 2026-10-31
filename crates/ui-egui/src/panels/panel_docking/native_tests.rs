@@ -169,6 +169,8 @@ fn lay(app: &PhotocraftApp) -> &Layout<String> {
 
 fn app_with_document() -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    // Native host behavior is independent of the optional compact launcher migration.
+    app.ui.panels.rail = false;
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     app
 }
@@ -201,6 +203,7 @@ fn undocking_a_panel_opens_its_own_window_and_the_studio_card_stays_in_the_main_
     assert!(desktop.window_of("history").is_some(), "History has its own window");
 
     let mut studio = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+    studio.ui.panels.rail = false;
     studio.ui.theme = crate::theme::ThemeKind::Studio;
     studio.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     let mut desktop = Desktop::new(studio);
@@ -381,6 +384,7 @@ fn a_file_dropped_on_a_panel_window_opens_as_a_document() {
         Ok((photocraft_doc::Document::new(name, size, photocraft_color::ColorMode::Rgb, photocraft_color::SampleType::U8), Vec::new()))
     };
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services { import: Some(Box::new(import)), ..Default::default() });
+    app.ui.panels.rail = false;
     app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
     let mut desktop = Desktop::new(app);
     desktop.h.state_mut().run("window.panel.float", json!({"panel": "info"})).unwrap();

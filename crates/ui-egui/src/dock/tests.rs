@@ -28,6 +28,9 @@ fn bad_stored_values_are_sanitised() {
 
 fn app_with_layers() -> (PhotocraftApp, photocraft_doc::LayerId, photocraft_doc::LayerId) {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    // Retain coverage of the existing expanded native groups independently of the
+    // replacement compact launcher's migration and gestures (presentation::tests).
+    app.ui.panels.rail = false;
     app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
     app.run("layer.new.layer", json!({})).unwrap();
     let pixel = app.session.active().unwrap().active_layer.unwrap();
@@ -202,7 +205,7 @@ fn dragging_a_reordered_tab_onto_another_group_moves_that_panel() {
     let mut h = harness(app, vec2(1200.0, 800.0), ThemeKind::ProMedium);
     let tab = |h: &Harness<'static, PhotocraftApp>, panel: &str| probe::tab_rect(&h.ctx, panel).unwrap_or_else(|| panic!("{panel} tab drawn"));
     assert!(tab(&h, "gradients").left() < tab(&h, "color").left());
-    let (source, destination) = (tab(&h, "gradients").center(), tab(&h, "layers").center());
+    let (source, destination) = (tab(&h, "gradients").center(), tab(&h, "layers").right_center());
 
     drag(&mut h, source, destination);
 
@@ -489,6 +492,7 @@ fn app_harness_rows(size: egui::Vec2, theme: ThemeKind, n: usize) -> Harness<'st
         PhotocraftApp::setup_context(&cc.egui_ctx, theme);
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.ui.theme = theme;
+        app.ui.panels.rail = false;
         app.run("file.new", json!({"width": 200, "height": 150})).unwrap();
         for i in 0..n {
             app.run("layer.new.layer", json!({"name": format!("Row {i:02}")})).unwrap();
@@ -682,6 +686,8 @@ fn navigator_preview_fills_its_group_and_keeps_aspect() {
                 PhotocraftApp::setup_context(&cc.egui_ctx, theme);
                 let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
                 app.ui.theme = theme;
+                // This preview sizing test uses the expanded native Navigator group.
+                app.ui.panels.rail = false;
                 app.ui.panels.navigator = true;
                 app.ui.dock.heights.insert(Group::Navigator, tall);
                 app.run("file.new", json!({"width": 200, "height": 300})).unwrap();
@@ -759,7 +765,7 @@ fn dragging_a_tab_reorders_the_group_and_the_order_persists() {
         let others = |h: &Harness<'static, PhotocraftApp>| probe::group_of(h.state(), "color");
         let color = others(&h);
         let (paths, layers) = (tab(&h, "paths"), tab(&h, "layers"));
-        drag(&mut h, paths.center(), layers.left_center() + vec2(layers.width() / 4.0, 0.0));
+        drag(&mut h, paths.center(), layers.left_center() + vec2(2.0, 0.0));
         assert_eq!(probe::group_of(h.state(), "layers"), ["paths", "layers", "channels"], "{theme:?}: Paths moved before Layers");
         assert_eq!(others(&h), color, "{theme:?}: a tab drag along the strip leaves the other groups put");
         assert_eq!(h.state().ui.dock_tabs.layers, 2, "{theme:?}: the dragged tab is selected");

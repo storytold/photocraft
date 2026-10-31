@@ -43,6 +43,7 @@ pub mod monitor_status;
 pub mod notices;
 pub mod os_window;
 pub mod panels;
+pub(crate) use panels::{panel_visibility, toolbar_docking};
 pub mod preset_files_ui;
 pub mod proxy;
 pub mod render_path;
@@ -870,6 +871,10 @@ mod browse_field_tests;
 mod options_hit_area_tests;
 #[cfg(test)]
 mod select_and_mask_button_tests;
+
+#[cfg(test)]
+#[path = "../build/panel_contract_tests.rs"]
+mod panel_dependency_contract;
 
 #[cfg(test)]
 mod saved_path_edit_tests;

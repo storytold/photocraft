@@ -272,20 +272,24 @@ impl PhotocraftApp {
         }
         // In Full Screen Mode, Tab shows the menu bar, options bar, toolbar and dock (#6760).
         let tabbed_in = !chrome && self.ui.panels.full_screen_chrome;
+        let hover = crate::panel_visibility::reveal(self, &ctx);
         if (chrome || tabbed_in) && self.ui.panels.menu_bar {
             panels::title_bar(self, ui);
         }
-        if (chrome && self.ui.panels.options_bar) || tabbed_in {
+        if (chrome && (self.ui.panels.options_bar || hover.options)) || tabbed_in {
+            let before = ui.available_rect_before_wrap();
             panels::options_bar(self, ui);
+            let rect = egui::Rect::from_min_max(before.min, egui::pos2(before.right(), ui.available_rect_before_wrap().top()));
+            crate::panel_visibility::chrome(&ctx, "options", rect);
         }
         if chrome && self.ui.panels.status_bar {
             panels::status_bar(self, ui);
         }
-        if (chrome && self.ui.panels.toolbar) || tabbed_in {
+        if (chrome && (self.ui.panels.toolbar || hover.toolbar)) || tabbed_in {
             panels::toolbar(self, ui);
         }
         // craft-ui's layout holds the canvas as its protected `canvas` panel.
-        let docking = (chrome && self.ui.panels.dock) || tabbed_in;
+        let docking = (chrome && (self.ui.panels.dock || hover.dock)) || tabbed_in;
         if docking {
             panels::dock_area(self, ui);
         } else {
