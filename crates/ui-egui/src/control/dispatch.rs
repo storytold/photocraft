@@ -286,6 +286,7 @@ fn theme_param(p: &Value) -> std::result::Result<Option<crate::theme::ThemeKind>
 struct ToolSet {
     gradient_blend: Option<photocraft_color::BlendMode>,
     shape_stroke: Option<Option<photocraft_doc::ShapeStroke>>,
+    selection_brush: Option<crate::state::SelectionBrushOptions>,
     tool: Option<Tool>,
     gradient_classic: Option<bool>,
     stroke_trace: Option<&'static str>,
@@ -304,6 +305,7 @@ impl ToolSet {
         Ok(Self {
             gradient_blend: gradient_blend_param(p)?,
             shape_stroke: shape_stroke_param(app, p)?,
+            selection_brush: selection_brush_param(app, p)?,
             tool: tool_param(p)?,
             gradient_classic: bool_field(p, "gradientClassic")?,
             stroke_trace: stroke_trace_param(p)?,
@@ -322,6 +324,9 @@ impl ToolSet {
     }
 
     fn apply(self, app: &mut PhotocraftApp) {
+        if let Some(settings) = self.selection_brush.clone() {
+            app.ui.tool_options.selection_brush = settings;
+        }
         if let Some(stroke) = &self.shape_stroke {
             if let Some(stroke) = stroke {
                 app.ui.tool_options.stroke_width = stroke.width;
@@ -1426,4 +1431,25 @@ fn open_pcraft_directory(app: &mut PhotocraftApp, path: &str) -> Option<Outcome>
         Ok(None) => None, // a regular file: the bytes path reads the zip form
         Err(e) => Some(err(e)),
     }
+}
+
+/// Validate a strict automation patch before merging forward-compatible saved settings.
+fn selection_brush_param(app: &PhotocraftApp, p: &Value) -> std::result::Result<Option<crate::state::SelectionBrushOptions>, String> {
+    let Some(value) = p.get("selectionBrush").filter(|v| !v.is_null()) else { return Ok(None) };
+    let patch = value.as_object().ok_or("selectionBrush must be an object")?;
+    const KEYS: [&str; 4] = ["subtract", "overlayColor", "overlayOpacity", "fillClosed"];
+    if let Some(key) = patch.keys().find(|key| !KEYS.contains(&key.as_str())) {
+        return Err(format!("unknown selectionBrush field `{key}`"));
+    }
+    let mut merged = serde_json::to_value(&app.ui.tool_options.selection_brush).map_err(|e| e.to_string())?;
+    if let Some(object) = merged.as_object_mut() {
+        for (key, value) in patch {
+            object.insert(key.clone(), value.clone());
+        }
+    }
+    let options: crate::state::SelectionBrushOptions = serde_json::from_value(merged).map_err(|e| e.to_string())?;
+    if !options.valid() {
+        return Err("selectionBrush colour and display opacity are out of range".into());
+    }
+    Ok(Some(options))
 }

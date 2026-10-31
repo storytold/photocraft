@@ -40,7 +40,7 @@ pub struct Resize {
 
 /// Tools the gesture resizes: every painting tool, and Quick Selection (it has a brush too).
 pub fn applies(tool: Tool) -> bool {
-    tool.is_brushlike() || tool == Tool::QuickSelection
+    tool.is_brushlike() || matches!(tool, Tool::QuickSelection | Tool::SelectionBrush)
 }
 
 /// Control+Alt (Control+Option on a Mac): `ctrl` is the Control key on every platform.

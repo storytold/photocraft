@@ -15,7 +15,7 @@ pub use panel_state::{
     PointCurveDrag, PointCurveState,
 };
 pub use tool::Tool;
-pub use tool_options::{SampleAllLayers, ToolOptions};
+pub use tool_options::{SampleAllLayers, SelectionBrushOptions, ToolOptions};
 use tool_options::{default_brush_tool, default_layer_filter_mode, yes};
 pub use transform::{
     BoxResize, CamTransform, ContentAwareOptions, Extras, MadeLayer, TextEdit, TransformMode, TransformSession, TypeInsertionStyle, TypeTransform,
@@ -710,7 +710,8 @@ mod tests {
         assert!(!Tool::RedEye.is_brushlike());
         assert_eq!(Tool::from_name("patternStamp"), Some(Tool::PatternStamp));
         assert_eq!(Tool::from_name("Pattern Stamp Tool"), Some(Tool::PatternStamp));
-        assert_eq!(Tool::ALL.len(), 68);
+        assert_eq!(Tool::from_name("Selection Brush Tool"), Some(Tool::SelectionBrush));
+        assert_eq!(Tool::ALL.len(), 69);
     }
 
     fn vector_tool_names_parse() {

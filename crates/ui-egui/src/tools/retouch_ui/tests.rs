@@ -8,6 +8,125 @@ fn app() -> PhotocraftApp {
     app
 }
 
+#[test]
+/// Verify selection addition and Alt subtraction leave layer pixels untouched.
+fn selection_brush_paints_and_alt_erases_without_painting_pixels() {
+    let mut app = app();
+    let before = active(&app).surface().unwrap().rgba(30, 30);
+    drag(&mut app, Tool::SelectionBrush);
+    assert!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(30, 30, 0) > 0.9);
+    assert_eq!(active(&app).surface().unwrap().rgba(30, 30), before);
+    let alt = egui::Modifiers { alt: true, ..egui::Modifiers::NONE };
+    tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 }, alt);
+    tool_event(&mut app, ToolEvent::Up { x: 30.0, y: 30.0 }, alt);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    assert_eq!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(30, 30, 0), 0.0);
+}
+
+#[test]
+/// Ensure Escape and explicit tool changes discard uncommitted selection strokes.
+fn selection_brush_escape_and_tool_switch_cancel_without_history() {
+    let mut app = app();
+    app.ui.tool = Tool::SelectionBrush;
+    let revision = app.session.active().unwrap().revision;
+    let none = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 }, none);
+    let ctx = egui::Context::default();
+    let input = egui::RawInput {
+        events: vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: none }],
+        ..Default::default()
+    };
+    let mut output = ctx.run_ui(input, |ui| crate::shortcuts::handle(&mut app, ui.ctx()));
+    output.textures_delta.clear();
+    assert!(app.drag.is_none());
+    tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 30.0 }, none);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 }, none);
+    app.ui.tool = Tool::Move;
+    tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 30.0 }, none);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+}
+
+#[test]
+/// Switching or closing the source document must not apply its stroke to a new document.
+fn selection_brush_document_switch_or_close_cancels_without_history() {
+    for close in [false, true] {
+        for move_before_release in [false, true] {
+            let mut app = app();
+            app.ui.tool = Tool::SelectionBrush;
+            tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            let source = app.session.active().unwrap().doc.id;
+            let revision = app.session.active().unwrap().revision;
+            if close {
+                app.run("file.close", json!({"discard":true})).unwrap();
+            }
+            app.run("file.new", json!({"width":100,"height":60})).unwrap();
+            let target_revision = app.session.active().unwrap().revision;
+            if move_before_release {
+                tool_event(&mut app, ToolEvent::Move { x: 40.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+            }
+            tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, egui::Modifiers::NONE);
+            assert!(app.drag.is_none());
+            assert_eq!(app.session.active().unwrap().revision, target_revision);
+            assert!(app.session.active().unwrap().doc.selection.is_none());
+            if let Some(st) = app.session.documents().iter().find(|st| st.doc.id == source) {
+                assert_eq!(st.revision, revision);
+                assert!(st.doc.selection.is_none());
+            }
+        }
+    }
+}
+
+#[test]
+/// Verify soft selection strength and persistent subtraction with Alt.
+fn selection_brush_soft_strength_and_persistent_subtract() {
+    let mut app = app();
+    app.ui.tool = Tool::SelectionBrush;
+    crate::canvas::paint_mouse::sync_tool_brush(&mut app);
+    app.run("tools.setBrush", json!({"brush":{"size":30,"hardness":0.0,"opacity":0.5}})).unwrap();
+    let none = egui::Modifiers::NONE;
+    tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 30.0 }, none);
+    let a = app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(40, 30, 0);
+    assert!((a - 0.5).abs() < 0.03);
+    app.ui.tool_options.selection_brush.subtract = true;
+    tool_event(&mut app, ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 }, none);
+    tool_event(&mut app, ToolEvent::Up { x: 40.0, y: 30.0 }, none);
+    assert!(app.session.active().unwrap().doc.selection.as_ref().is_none_or(|s| s.sample_channel(40, 30, 0) == 0.0));
+    assert!(app.ui.tool_options.selection_brush.subtracts(true));
+}
+
+/// A reused document id and revision cannot impersonate the original document allocation.
+#[test]
+fn selection_brush_reused_document_identity_cancels() {
+    let mut app = app();
+    app.ui.tool = Tool::SelectionBrush;
+    tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    let original = app.session.active().unwrap();
+    let (id, revision) = (original.doc.id, original.revision);
+    app.run("file.new", json!({"width":100,"height":60})).unwrap();
+    let target = app.session.active_mut().unwrap();
+    std::sync::Arc::make_mut(&mut target.doc).id = id;
+    target.revision = revision;
+    tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, egui::Modifiers::NONE);
+    assert!(app.session.active().unwrap().doc.selection.is_none());
+    assert_eq!(app.session.active().unwrap().revision, revision);
+}
+
+/// An intervening edit invalidates the stroke instead of combining with a newer selection.
+#[test]
+fn selection_brush_intervening_revision_cancels() {
+    let mut app = app();
+    app.ui.tool = Tool::SelectionBrush;
+    tool_event(&mut app, ToolEvent::Down { x: 30.0, y: 30.0, pressure: 1.0 }, egui::Modifiers::NONE);
+    app.run("select.rect", json!({"x":1,"y":1,"width":5,"height":5})).unwrap();
+    let revision = app.session.active().unwrap().revision;
+    tool_event(&mut app, ToolEvent::Up { x: 50.0, y: 30.0 }, egui::Modifiers::NONE);
+    assert_eq!(app.session.active().unwrap().revision, revision);
+    assert_eq!(app.session.active().unwrap().doc.selection.as_ref().unwrap().sample_channel(30, 30, 0), 0.0);
+}
+
 fn drag(app: &mut PhotocraftApp, tool: Tool) {
     app.ui.tool = tool;
     let m = egui::Modifiers::NONE;

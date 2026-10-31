@@ -28,6 +28,12 @@ baseline_min_runs = 5
 enforce_margin = 0.6
 
 [[bench]]
+name = "selection_brush_bench"
+package = "photocraft-algo"
+quick_args = ["--quick"]
+note = "Selection Brush incremental rasterisation, prefix replay reference and closed fill; full run uses a 24 MP canvas. Does not measure presentation FPS."
+
+[[bench]]
 name = "perf_scenarios"
 package = "photocraft-ui-egui"
 quick_args = ["--quick"]

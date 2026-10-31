@@ -92,7 +92,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         crate::paint_mouse::sync_tool_brush(app);
                         // Brush edits here go through `tools.setBrush`, one journal entry per gesture (Rule 1).
                         if (tool.is_brushlike() && !matches!(tool, Tool::Brush | Tool::Pencil | Tool::MixerBrush | Tool::Eraser))
-                            || tool == Tool::QuickSelection
+                            || matches!(tool, Tool::QuickSelection | Tool::SelectionBrush)
                         {
                             brush_preset_chip(ui, &app.session.tools.brush, &mut app.ui);
                             crate::brush_picker::settings_toggle(app, ui);

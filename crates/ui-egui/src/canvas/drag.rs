@@ -34,6 +34,8 @@ pub struct Drag {
     /// Freeform Pen and Path Selection gestures belong to their source document and target.
     pub(super) vector_owner: Option<VectorGestureOwner>,
     pub(super) pen_owner: Option<crate::vector_ui::PenOwner>,
+    /// Selection coverage belongs to the document and revision at pointer-down.
+    pub(super) selection_owner: Option<(photocraft_doc::DocId, u64, std::sync::Weak<Document>)>,
 }
 
 impl Drag {
@@ -54,7 +56,23 @@ impl Drag {
             lasso: None,
             vector_owner: None,
             pen_owner: None,
+            selection_owner: None,
         }
+    }
+
+    /// Capture document identity without keeping a closed document alive through its drag.
+    pub(super) fn capture_selection_brush_owner(&mut self, app: &PhotocraftApp) {
+        if self.tool == Tool::SelectionBrush {
+            self.selection_owner = app.session.active().map(|st| (st.doc.id, st.revision, std::sync::Arc::downgrade(&st.doc)));
+        }
+    }
+
+    /// Reject selection coverage whose original document or revision is no longer active.
+    pub(super) fn selection_brush_valid(&self, app: &PhotocraftApp) -> bool {
+        self.tool != Tool::SelectionBrush
+            || self.selection_owner.as_ref().is_some_and(|(doc, revision, document)| {
+                app.session.active().is_some_and(|st| (st.doc.id, st.revision) == (*doc, *revision) && document.ptr_eq(&std::sync::Arc::downgrade(&st.doc)))
+            })
     }
 
     /// Vector drags capture their owner at the press, the Freeform Pen also its destination, before

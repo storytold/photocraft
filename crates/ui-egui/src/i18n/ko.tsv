@@ -3723,4 +3723,8 @@ curves	Smooth	매끄럽게
 	Select and Mask was closed: another layer was selected	선택 및 마스크가 닫혔습니다: 다른 레이어가 선택되었습니다
 	Select Layer Under Cursor	커서 아래 레이어 선택
 	Drag to move the selected path	드래그하여 선택한 패스 이동
+	Selection Brush Tool	선택 브러시 도구
+	Alt: subtract  |  [ ]: size  |  Close a stroke to fill	Alt: 선택 빼기  |  [ ]: 크기 조절  |  획을 닫으면 내부 채우기
+	Display Opacity	표시 불투명도
+	Fill Closed Strokes	닫힌 획 내부 채우기
 	Edit Brush…	브러시 편집…
