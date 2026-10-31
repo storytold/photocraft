@@ -263,11 +263,18 @@ fn show_file_dialog(request: FileDialogRequest, parent: Option<&eframe::Frame>, 
                 Box::pin(async move {
                     let portal = zbus::blocking::connection::Builder::session()
                         .and_then(|b| b.build())
-                        .map_err(|e| e.to_string())
-                        .and_then(|conn| crate::portal_save::save_as(&conn, req));
+                        .map_err(|e| crate::portal_save::SaveError::Portal(e.to_string()))
+                        .and_then(|conn| crate::portal_save::save_as(&conn, req, std::env::var_os("FLATPAK_ID").is_some()));
                     match portal {
                         Ok(path) => path.map(|p| answer_one(&p, true, FileDialogAnswer::SaveTo)),
-                        Err(e) => {
+                        Err(crate::portal_save::SaveError::NameNeedsExtension) => Some(FileDialogAnswer::Unavailable(
+                            "The selected name needs a different extension. Save again and enter the full filename with the extension for the selected format."
+                                .into(),
+                        )),
+                        Err(crate::portal_save::SaveError::Portal(e)) if std::env::var_os("FLATPAK_ID").is_some() => {
+                            Some(FileDialogAnswer::Unavailable(format!("The save portal is unavailable: {e}")))
+                        }
+                        Err(crate::portal_save::SaveError::Portal(e)) => {
                             log::info!("portal save dialog unavailable ({e}), using rfd");
                             dialog.save_file().await.map(|file| answer_one(file.path(), true, FileDialogAnswer::SaveTo))
                         }

@@ -512,6 +512,18 @@ fn save_paths_get_a_lowercase_extension_when_the_preference_is_on() {
     assert_eq!(*written.borrow(), ["/pics/CAT.PSD"], "off keeps the user's spelling");
 }
 
+/// Never normalize a sandbox grant into an ungranted filename, which may silently disappear.
+#[test]
+fn sandbox_save_rejects_normalized_names() {
+    let (mut app, _, _) = app();
+    assert!(checked_saved_path(&app, "/run/user/1000/doc/id/CAT.PSD", Some("psd"), true).is_err());
+    assert!(checked_saved_path(&app, "/run/user/1000/doc/id/cat", Some("psd"), true).is_err());
+    assert_eq!(checked_saved_path(&app, "/run/user/1000/doc/id/cat.psd", Some("psd"), true).unwrap(), "/run/user/1000/doc/id/cat.psd");
+    assert_eq!(checked_saved_path(&app, "/pics/CAT.PSD", Some("psd"), false).unwrap(), "/pics/CAT.psd");
+    app.run("prefs.set", json!({"path": "fileHandling.lowercaseExtension", "value": false})).unwrap();
+    assert_eq!(checked_saved_path(&app, "/run/user/1000/doc/id/CAT.PSD", Some("psd"), true).unwrap(), "/run/user/1000/doc/id/CAT.PSD");
+}
+
 /// #5039: a name typed without an extension (where file extensions are hidden) gets the
 /// suggested file's extension, so the save picks its format instead of failing.
 #[test]

@@ -117,12 +117,12 @@ fn save_as_follows_the_file_type_picked_in_the_portal_dialog() {
         return;
     };
     // PNG picked with `Untitled-1.psd` still in the name: written as Untitled-1.png.
-    assert_eq!(save_as(&conn, request("Untitled-1.psd")).unwrap(), Some(dir.join("Untitled-1.png")));
+    assert_eq!(save_as(&conn, request("Untitled-1.psd"), false).unwrap(), Some(dir.join("Untitled-1.png")));
     assert_eq!(seen.lock().unwrap()[0], (Some("Untitled-1.psd".into()), Some("PSD Document".into())), "the request carried the name and type");
     // Cancel.
-    assert_eq!(save_as(&conn, request("Untitled-1.psd")).unwrap(), None);
+    assert_eq!(save_as(&conn, request("Untitled-1.psd"), false).unwrap(), None);
     // The type the name already has: unchanged.
-    assert_eq!(save_as(&conn, request("Untitled-1.psd")).unwrap(), Some(dir.join("Untitled-1.psd")));
+    assert_eq!(save_as(&conn, request("Untitled-1.psd"), false).unwrap(), Some(dir.join("Untitled-1.psd")));
     daemon.kill().ok();
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -148,13 +148,13 @@ fn a_bare_name_takes_the_picked_type_and_an_existing_target_is_asked_about() {
     // As File › Save As opens it: `test` shown, `test.psd` suggested.
     let opened = || SaveRequest { suggested: Some("test.psd".into()), ..request("test") };
     // PNG picked: test.png, and nothing was asked about test.psd.
-    assert_eq!(save_as(&conn, opened()).unwrap(), Some(dir.join("test.png")));
+    assert_eq!(save_as(&conn, opened(), false).unwrap(), Some(dir.join("test.png")));
     // The suggested extension back in the name (typed again, or GTK's completion) with PNG
     // picked: test.png too, not a PSD written over test.psd.
-    assert_eq!(save_as(&conn, opened()).unwrap(), Some(dir.join("test.png")));
+    assert_eq!(save_as(&conn, opened(), false).unwrap(), Some(dir.join("test.png")));
     // The type untouched: test.psd, which exists, so the dialog asks again as test.psd (the
     // portal's replace prompt is then about the file that is written).
-    assert_eq!(save_as(&conn, opened()).unwrap(), Some(dir.join("test.psd")));
+    assert_eq!(save_as(&conn, opened(), false).unwrap(), Some(dir.join("test.psd")));
     let seen = seen.lock().unwrap().clone();
     let names: Vec<_> = seen.iter().map(|(name, _)| name.as_deref()).collect();
     assert_eq!(names, [Some("test"), Some("test"), Some("test"), Some("test.psd")], "{seen:?}");
@@ -171,7 +171,7 @@ fn a_dialog_closed_some_other_way_is_a_cancel() {
         eprintln!("no dbus-daemon: skipped");
         return;
     };
-    assert_eq!(save_as(&conn, request("test")), Ok(None));
+    assert_eq!(save_as(&conn, request("test"), false), Ok(None));
     daemon.kill().ok();
 }
 
@@ -184,7 +184,7 @@ fn a_typed_extension_wins_over_an_untouched_file_type() {
         eprintln!("no dbus-daemon: skipped");
         return;
     };
-    assert_eq!(save_as(&conn, request("Untitled-1.psd")).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/art.png")));
+    assert_eq!(save_as(&conn, request("Untitled-1.psd"), false).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/art.png")));
     daemon.kill().ok();
 }
 
@@ -197,7 +197,7 @@ fn the_answer_is_awaited_on_the_handle_the_portal_returns() {
         eprintln!("no dbus-daemon: skipped");
         return;
     };
-    assert_eq!(save_as(&conn, request("Untitled-1.psd")).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/Untitled-1.png")));
+    assert_eq!(save_as(&conn, request("Untitled-1.psd"), false).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/Untitled-1.png")));
     daemon.kill().ok();
 }
 
@@ -214,7 +214,7 @@ fn a_renamed_file_that_exists_is_confirmed_in_the_dialog() {
         eprintln!("no dbus-daemon: skipped");
         return;
     };
-    assert_eq!(save_as(&conn, request("art.psd")).unwrap(), Some(dir.join("art.png")));
+    assert_eq!(save_as(&conn, request("art.psd"), false).unwrap(), Some(dir.join("art.png")));
     let seen = seen.lock().unwrap().clone();
     assert_eq!(seen.len(), 2, "asked again: {seen:?}");
     assert_eq!(seen[1], (Some("art.png".into()), Some("PNG".into())), "under the new name, on the picked type");
@@ -232,7 +232,7 @@ fn a_single_file_type_keeps_the_typed_extension() {
         return;
     };
     let req = SaveRequest { filters: vec![("Color Swatches".into(), vec!["aco".into()])], ..request("Swatches.aco") };
-    assert_eq!(save_as(&conn, req).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/Swatches.ase")));
+    assert_eq!(save_as(&conn, req, false).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/Swatches.ase")));
     daemon.kill().ok();
 }
 
@@ -246,7 +246,7 @@ fn a_single_file_type_gives_the_bare_name_its_extension() {
         return;
     };
     let req = SaveRequest { filters: vec![("Color Swatches".into(), vec!["aco".into()])], ..request("Swatches.aco") };
-    assert_eq!(save_as(&conn, req).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/Swatches.aco")));
+    assert_eq!(save_as(&conn, req, false).unwrap(), Some(PathBuf::from("/tmp/photocraft-none/Swatches.aco")));
     daemon.kill().ok();
 }
 
@@ -264,4 +264,19 @@ fn the_type_that_gives_the_extension_is_the_one_picked() {
     assert_eq!(chosen_type(&many, None), None);
     // An answer naming a type this dialog never offered is not a pick either.
     assert_eq!(chosen_type(&many, Some(99)), None);
+}
+
+/// A sandboxed chooser grants the returned filename; changing its extension must not
+/// yield a sibling that the document portal can discard after reporting a successful write.
+#[test]
+fn sandbox_refuses_to_rewrite_the_portal_grant() {
+    let Some((conn, _seen, mut daemon)) =
+        mock_portal(vec![(0, Some(("file:///run/user/1000/doc/id/art", "PNG"))), (0, Some(("file:///run/user/1000/doc/id/art.png", "PNG")))])
+    else {
+        eprintln!("no dbus-daemon: skipped");
+        return;
+    };
+    assert_eq!(save_as(&conn, request("art.psd"), true), Err(SaveError::NameNeedsExtension));
+    assert_eq!(save_as(&conn, request("art.psd"), true), Ok(Some(PathBuf::from("/run/user/1000/doc/id/art.png"))));
+    daemon.kill().ok();
 }
