@@ -893,3 +893,116 @@ fn liquify_that_cannot_be_applied_reports_the_error() {
     assert_eq!(app.session.active().unwrap().history.past_len(), steps);
     assert_eq!(r, Err(app.ui.status.clone()));
 }
+
+/// #9541: with a selection, the dialog's preview changed the whole image, though OK applies
+/// Liquify only inside the selection. The preview now shows what OK applies: unselected pixels
+/// stay as they were, in the proxy and in the zoomed source-resolution crop.
+#[test]
+fn the_preview_shows_liquify_only_inside_the_selection() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 60, "height": 80})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    {
+        let d = app.distort.liquify.as_mut().unwrap();
+        d.zoom = 2.0;
+        d.center = [60.0, 40.0];
+        d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(120.0, 80.0)));
+    }
+    let view_before = app.distort.liquify.as_ref().unwrap().view_out.clone();
+    control(&mut app, &json!({"tool": "forwardWarp", "size": 50})).unwrap();
+    for ev in [
+        ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 },
+        ToolEvent::Move { x: 60.0, y: 42.0, pressure: 1.0 },
+        ToolEvent::Move { x: 80.0, y: 40.0, pressure: 1.0 },
+        ToolEvent::Up { x: 80.0, y: 40.0 },
+    ] {
+        pointer(&mut app, ev, egui::Modifiers::NONE);
+    }
+    let d = app.distort.liquify.as_mut().unwrap();
+    assert!(d.field.max_displacement() > 3.0);
+    // The proxy: unselected pixels as the untouched image renders them, selected ones warped.
+    let mut original = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
+    d.proxy.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut original);
+    let doc_x = |i: usize| d.proxy.bounds.x0 as f64 + ((i % d.proxy.w) as f64 + 0.5) * d.proxy.scale;
+    let (mut outside, mut inside_changed) = (0, 0);
+    for (i, (a, b)) in d.out.iter().zip(&original).enumerate() {
+        if doc_x(i) >= 60.0 {
+            outside += 1;
+            assert_eq!(a, b, "proxy pixel {i} (x {}) is outside the selection", doc_x(i));
+        } else if a != b {
+            inside_changed += 1;
+        }
+    }
+    assert!(outside > 0 && inside_changed > 0, "outside {outside}, changed inside {inside_changed}");
+    // The zoomed crop (document x 30..90): the same.
+    d.view_dirty = d.view_bounds;
+    d.update_view_preview(&ctx, ERect::from_min_size(pos2(0.0, 0.0), vec2(120.0, 80.0)));
+    let b = d.view_bounds.unwrap();
+    let w = b.width() as usize;
+    let (mut outside, mut inside_changed) = (0, 0);
+    for (i, (a, before)) in d.view_out.iter().zip(&view_before).enumerate() {
+        let x = b.x0 + (i % w) as i32;
+        if x >= 60 {
+            outside += 1;
+            assert_eq!(a, before, "view pixel at x {x} is outside the selection");
+        } else if a != before {
+            inside_changed += 1;
+        }
+    }
+    assert!(outside > 0 && inside_changed > 0, "view: outside {outside}, changed inside {inside_changed}");
+}
+
+/// On a smart object with a filter mask, Liquify is shown through that mask, as the engine applies
+/// it (`add_smart_filter` keeps the mask), not through a different selection. Where the mask hides
+/// it the placed pixels show, not the filters below the Liquify being edited.
+#[test]
+fn the_preview_on_a_smart_object_follows_its_filter_mask() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    app.session.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    // The first smart filter, run on the right half, makes that half the filter mask.
+    app.session.execute("select.rect", json!({"x": 60, "y": 0, "width": 60, "height": 80})).unwrap();
+    app.session.execute("filter.blur.gaussianBlur", json!({"radius": 0.5})).unwrap();
+    app.session.execute("select.rect", json!({"x": 0, "y": 0, "width": 60, "height": 80})).unwrap();
+    open(&mut app, &ctx).unwrap();
+    control(&mut app, &json!({"tool": "forwardWarp", "size": 50})).unwrap();
+    for ev in [
+        ToolEvent::Down { x: 40.0, y: 40.0, pressure: 1.0 },
+        ToolEvent::Move { x: 60.0, y: 42.0, pressure: 1.0 },
+        ToolEvent::Move { x: 80.0, y: 40.0, pressure: 1.0 },
+        ToolEvent::Up { x: 80.0, y: 40.0 },
+    ] {
+        pointer(&mut app, ev, egui::Modifiers::NONE);
+    }
+    // Reopened as a smart filter above the blur, it edits the blurred pixels.
+    commit(&mut app).unwrap();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    open_smart_filter(&mut app, &ctx, layer, 1).unwrap();
+    for ev in [
+        ToolEvent::Down { x: 40.0, y: 30.0, pressure: 1.0 },
+        ToolEvent::Move { x: 60.0, y: 32.0, pressure: 1.0 },
+        ToolEvent::Move { x: 80.0, y: 30.0, pressure: 1.0 },
+        ToolEvent::Up { x: 80.0, y: 30.0 },
+    ] {
+        pointer(&mut app, ev, egui::Modifiers::NONE);
+    }
+    let st = app.session.active().unwrap();
+    let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(st.active_layer.unwrap()).map(|l| &l.content) else { panic!("not a smart object") };
+    let placed = photocraft_engine::smart_cmds::render_below_filter(&st.doc, sm, 0).unwrap().unwrap();
+    let d = app.distort.liquify.as_mut().unwrap();
+    let placed = ProxyImage::new(&placed, d.canvas, PROXY_SIDE);
+    let mut original = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
+    placed.render(&LiquifyField::new(d.canvas, d.cell), [0, 0, d.proxy.w, d.proxy.h], &mut original);
+    let doc_x = |i: usize| d.proxy.bounds.x0 as f64 + ((i % d.proxy.w) as f64 + 0.5) * d.proxy.scale;
+    let (mut masked, mut shown_changed) = (0, 0);
+    for (i, (a, b)) in d.out.iter().zip(&original).enumerate() {
+        if doc_x(i) < 60.0 {
+            masked += 1;
+            assert_eq!(a, b, "proxy pixel {i} (x {}) is outside the filter mask", doc_x(i));
+        } else if a != b {
+            shown_changed += 1;
+        }
+    }
+    assert!(masked > 0 && shown_changed > 0, "masked {masked}, changed inside the mask {shown_changed}");
+}
