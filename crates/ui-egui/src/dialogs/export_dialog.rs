@@ -510,6 +510,18 @@ fn preview_pixels(proxy: &Document, estimate: Option<u64>) -> PreviewPixels {
     PreviewPixels { estimate, width: img.width as usize, height: img.height as usize, rgba: img.pixels }
 }
 
+/// Where the preview draws the exported image inside the preview panel: the export's aspect ratio,
+/// fitted inside the panel with an inset so its edges show against the canvas around it.
+fn preview_image_rect(panel: egui::Rect, image: egui::Vec2) -> egui::Rect {
+    let inset = 8.0;
+    if !(image.x.is_finite() && image.y.is_finite() && image.x > 0.0 && image.y > 0.0) {
+        return egui::Rect::from_center_size(panel.center(), egui::Vec2::ZERO);
+    }
+    let room = (panel.size() - egui::Vec2::splat(2.0 * inset)).max(egui::Vec2::ZERO);
+    let k = (room.x / image.x).min(room.y / image.y).min(1.0e3);
+    egui::Rect::from_center_size(panel.center(), image * k)
+}
+
 fn preview_sync(app: &PhotocraftApp, doc: &Document, f: &Map<String, Value>, source_profile: &Profile) -> Result<PreviewPixels, String> {
     let proxy = preview_proxy(doc, f, source_profile)?;
     Ok(preview_pixels(&proxy, estimate(app, doc, &proxy, f)))
@@ -1010,12 +1022,18 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             };
             let side = 300.0;
             let (r, _) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::hover());
-            crate::widgets::checker(ui.painter(), r, 8.0);
+            // The panel around the image is canvas, not transparency: the checkerboard and the
+            // outline cover only the exported image, so its proportions read at a glance.
+            ui.painter().rect_filled(r, 0.0, t.canvas);
+            // The output size, not the thumbnail's: a very thin export's thumbnail is rounded up
+            // to whole pixels and would draw wider than the file.
+            let (bw, bh) = (n(f, "__w", f64::from(doc.size.width)), n(f, "__h", f64::from(doc.size.height)));
+            let (w, h) = (n(f, "width", bw), n(f, "height", bh));
             if let Some(tex) = preview.as_ref().and_then(|preview| preview.texture.as_ref()) {
-                let ts = tex.size_vec2();
-                let k = (side / ts.x.max(ts.y)).min(1.0e3);
-                let ir = egui::Rect::from_center_size(r.center(), ts * k);
+                let ir = preview_image_rect(r, egui::vec2(w as f32, h as f32));
+                crate::widgets::checker(ui.painter(), ir, 8.0);
                 ui.painter().image(tex.id(), ir, egui::Rect::from_min_max(egui::Pos2::ZERO, egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                ui.painter().rect_stroke(ir, 0.0, egui::Stroke::new(1.0, t.card_border), egui::StrokeKind::Outside);
             } else if preview.is_none() {
                 ui.put(egui::Rect::from_center_size(r.center(), egui::vec2(24.0, 24.0)), egui::Spinner::new());
             } else {
@@ -1028,7 +1046,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
             let exact: Option<u64> = None;
             let est =
                 exact.or_else(|| preview.as_ref().and_then(|preview| preview.estimate)).map_or("—".to_string(), |b| crate::sizing::human_bytes(b as f64));
-            ui.label(egui::RichText::new(format!("{}  ≈ {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
+            ui.label(egui::RichText::new(format!("{w} × {h} px  ·  {}  ≈ {est}", s_fmt(f).to_uppercase())).color(t.text_dim).size(11.5));
         });
     });
 }
