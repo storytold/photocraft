@@ -58,6 +58,15 @@ pub(crate) fn layer_identity(layer: &Layer, h: &mut std::collections::hash_map::
             }
         }
         LayerContent::Adjustment(a) => format!("{a:?}").hash(h),
+        LayerContent::Deep(d) => {
+            d.width.hash(h);
+            d.height.hash(h);
+            d.counts.hash(h);
+            for c in &d.channels {
+                c.name.hash(h);
+                c.samples.iter().for_each(|v| v.to_bits().hash(h));
+            }
+        }
         _ => layer.surface().map_or(0, |s| surface_fp(s, pin)).hash(h),
     }
     if let Some(m) = &layer.mask {

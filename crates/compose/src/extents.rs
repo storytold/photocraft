@@ -22,6 +22,7 @@ pub fn layer_bounds(layer: &Layer, canvas: Rect) -> Rect {
             }
         }),
         LayerContent::Fill(_) => canvas,
+        LayerContent::Deep(d) => Rect::from_xywh(d.x, d.y, d.width, d.height),
         _ => {
             let b = layer.surface().map_or(Rect::EMPTY, bounds::content_bounds);
             let b = match &layer.content {

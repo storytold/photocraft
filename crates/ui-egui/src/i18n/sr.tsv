@@ -4523,6 +4523,23 @@ shape	Appearance	Izgled
 	Right-to-left paragraph direction	Smer pasusa zdesna nalevo
 	Not rendered: this adjustment ({key}) is kept as imported.	Није приказано: ово прилагођавање ({key}) је задржано онако како је увезено.
 	Print preview image	Print preview image
+	Open as Deep…	Otvori kao Deep…
+	Filter for deep layers	Filter za Deep slojeve
+	Color Aware	Prema boji
+	Decontaminate Colors	Dekontaminiraj boje
+	Edge Detection	Detekcija ivice
+	Global Refinements	Globalna doterivanja
+	High Quality Preview	Pregled visokog kvaliteta
+	Object Aware	Prema objektu
+	Real-Time Refinement	Doterivanje u realnom vremenu
+	Refine Edge Brush Tool	Alatka četkica za doterivanje ivice
+	Refine Hair	Doteraj kosu
+	Refine Mode	Režim doterivanja
+	Remember Settings	Zapamti podešavanja
+	View Mode	Režim prikaza
+	Object Aware needs a segmentation model, which isn't available yet	Režim Prema objektu zahteva model segmentacije, koji još nije dostupan
+	Refine Hair needs hair detection, which isn't available yet	Doterivanje kose zahteva detekciju kose, koja još nije dostupna
+# PhotoCraft release checks.
 	Check for Updates…	Proveri ažuriranja…
 	Open the release page to choose an installer for your system.	Otvorite stranicu izdanja da biste izabrali instalacioni program za svoj sistem.
 	Automatically Check for Updates	Automatski proveravaj ažuriranja
@@ -4556,20 +4573,6 @@ shape	Appearance	Izgled
 	Font size presets	Unapred podešene veličine fonta
 	Leading presets	Unapred podešeni proredi
 	Tracking presets	Unapred podešeni razmaci slova
-	Color Aware	Prema boji
-	Decontaminate Colors	Dekontaminiraj boje
-	Edge Detection	Detekcija ivice
-	Global Refinements	Globalna doterivanja
-	High Quality Preview	Pregled visokog kvaliteta
-	Object Aware	Prema objektu
-	Real-Time Refinement	Doterivanje u realnom vremenu
-	Refine Edge Brush Tool	Alatka četkica za doterivanje ivice
-	Refine Hair	Doteraj kosu
-	Refine Mode	Režim doterivanja
-	Remember Settings	Zapamti podešavanja
-	View Mode	Režim prikaza
-	Object Aware needs a segmentation model, which isn't available yet	Režim Prema objektu zahteva model segmentacije, koji još nije dostupan
-	Refine Hair needs hair detection, which isn't available yet	Doterivanje kose zahteva detekciju kose, koja još nije dostupna
 	Select and Mask was closed: its document is no longer the active one	Izaberi i maskiraj je zatvoren: njegov dokument više nije aktivan
 	Select and Mask was closed: another layer was selected	Izaberi i maskiraj je zatvoren: izabran je drugi sloj
 	Select Layer Under Cursor	Izaberi sloj ispod kursora

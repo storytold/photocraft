@@ -211,6 +211,15 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
                 app.open_dialog_file()
             }
         }
+        "file.openDeep" => {
+            if let Some(path) = params.get("path").and_then(Value::as_str) {
+                app.open_path_deep(path)?;
+                Ok(Value::Null)
+            } else {
+                // The multi-file picker of File › Open, with the depth kept.
+                app.open_dialog_file_deep()
+            }
+        }
         "file.import.videoFramesToLayers" if params.get("path").and_then(Value::as_str).is_none() => {
             app.ask_folder(|app, path| app.run("file.import.videoFramesToLayers", json!({"path": path})).map_err(|e| e.to_string()))
         }

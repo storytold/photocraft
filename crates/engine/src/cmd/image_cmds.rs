@@ -196,6 +196,9 @@ const MAX_RESAMPLE_BYTES: u64 = if cfg!(target_pointer_width = "64") { 8 << 30 }
 /// Image → Image Size.
 fn image_size(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
+    if photocraft_compose::deep::any_deep(&d.doc.layers) {
+        return Err(EngineError::Other("deep layers cannot be resampled yet; their samples keep their depth".into()));
+    }
     let (ow, oh) = (d.doc.size.width, d.doc.size.height);
     let resample = parse_resample(p.get("resample").and_then(Value::as_str).unwrap_or("bicubic"));
     // An Indexed Color document holds only its colour table's colours, and a save quantises to
@@ -355,6 +358,27 @@ fn flatten_whole(doc: &Document, cmd: &str) -> Result<photocraft_compose::Buffer
     Ok(buf)
 }
 
+pub(crate) fn layer_shift_fits(l: &Layer, dx: i32, dy: i32) -> bool {
+    let rect = |r: Rect| {
+        r.is_empty() || (r.x0.checked_add(dx).is_some() && r.x1.checked_add(dx).is_some() && r.y0.checked_add(dy).is_some() && r.y1.checked_add(dy).is_some())
+    };
+    let surface = |s: &photocraft_raster::Surface| rect(s.content_bounds());
+    l.mask.as_ref().is_none_or(|m| surface(&m.surface))
+        && l.fill_cache.as_ref().is_none_or(|fc| surface(&fc.surface))
+        && match &l.content {
+            LayerContent::Raster(s) => surface(s),
+            LayerContent::Text(t) => t.cache.as_ref().is_none_or(surface),
+            LayerContent::Deep(d) => d.x.checked_add(dx).is_some() && d.y.checked_add(dy).is_some(),
+            LayerContent::Group(g) => g.children.iter().all(|c| layer_shift_fits(c, dx, dy)),
+            _ => true,
+        }
+}
+
+/// [`layer_shift_fits`] over a whole layer list.
+pub(crate) fn layer_shift_fits_all(layers: &[Layer], dx: i32, dy: i32) -> bool {
+    layers.iter().all(|l| layer_shift_fits(l, dx, dy))
+}
+
 /// Moves every surface, channel, selection and guide by `(dx, dy)`.
 ///
 /// Fails, before moving anything, when some pixels would land outside the i32 coordinate
@@ -367,7 +391,7 @@ pub(crate) fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> 
     let fits = |r: Rect| {
         r.is_empty() || (r.x0.checked_add(dx).is_some() && r.x1.checked_add(dx).is_some() && r.y0.checked_add(dy).is_some() && r.y1.checked_add(dy).is_some())
     };
-    let mut ok = true;
+    let mut ok = layer_shift_fits_all(&doc.layers, dx, dy);
     for_each_surface(&mut doc.layers, true, &mut |surf, _| ok = ok && fits(surf.content_bounds()));
     ok = ok
         && doc.channels.iter().chain(doc.quick_mask.as_ref()).all(|ch| fits(ch.surface.content_bounds()))
@@ -376,6 +400,13 @@ pub(crate) fn translate_doc(doc: &mut Document, cmd: &str, dx: i32, dy: i32) -> 
         return Err(bad(cmd, format!("moving the document by ({dx}, {dy}) would push its pixels outside the 32-bit coordinate range")));
     }
     for_each_surface(&mut doc.layers, true, &mut |surf, _| *surf = translate_surface(surf, dx, dy));
+    // Deep data has no surface; its canvas origin moves instead.
+    for_each_layer(&mut doc.layers, &mut |l| {
+        if let LayerContent::Deep(d) = &mut l.content {
+            d.x += dx;
+            d.y += dy;
+        }
+    });
     for ch in doc.channels.iter_mut().chain(doc.quick_mask.as_mut()) {
         ch.surface = translate_surface(&ch.surface, dx, dy);
     }
@@ -412,6 +443,9 @@ fn delete_cropped_pixels(layers: &mut [Layer], r: Rect) {
 /// A frame that extends past the canvas fills the Background's new area with `extension` (the
 /// background colour, as Photoshop's Crop tool does); other layers get transparent pixels there.
 pub(crate) fn crop_doc(doc: &mut Document, cmd: &str, r: Rect, delete_pixels: bool, extension: [f32; 4]) -> Result<()> {
+    if delete_pixels && photocraft_compose::deep::any_deep(&doc.layers) {
+        return Err(bad(cmd, "deep layers cannot be cropped yet; their samples keep their extent"));
+    }
     // The origin moves to (0, 0); `-i32::MIN` has no i32 value (#959).
     let (Some(dx), Some(dy)) = (r.x0.checked_neg(), r.y0.checked_neg()) else {
         return Err(bad(cmd, format!("the crop origin ({}, {}) can't be moved to (0, 0) within the 32-bit coordinate range", r.x0, r.y0)));
@@ -523,6 +557,12 @@ fn extension_color(s: &Session, p: &Value) -> [f32; 4] {
 
 /// Image → Canvas Size.
 fn canvas_size(s: &mut Session, p: &Value) -> Result<Value> {
+    {
+        let d = s.active().ok_or(EngineError::NoDocument)?;
+        if photocraft_compose::deep::any_deep(&d.doc.layers) {
+            return Err(bad("image.canvasSize", "deep layers cannot be re-canvased yet; their samples keep their extent"));
+        }
+    }
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let (ow, oh) = (d.doc.size.width as f64, d.doc.size.height as f64);
     let relative = p.get("relative").and_then(Value::as_bool).unwrap_or(false);

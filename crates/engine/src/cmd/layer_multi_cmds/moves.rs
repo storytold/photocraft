@@ -212,6 +212,9 @@ pub fn moved_target(doc: &Document, ids: &[LayerId], dx: i32, dy: i32, mask_targ
             }
             continue;
         }
+        if !crate::image_cmds::layer_shift_fits(l, dx, dy) {
+            return Err(EngineError::Other(format!("moving the layers by ({dx}, {dy}) would push pixels outside the 32-bit coordinate range")));
+        }
         shift_shown(doc, l, dx, dy);
     }
     Ok(out)
@@ -246,6 +249,10 @@ fn shift_shown(doc: &Document, l: &mut Layer, dx: i32, dy: i32) {
         }
         LayerContent::Shape(sh) => crate::vector_cmds::shift_shape(doc, sh, f64::from(dx), f64::from(dy)),
         LayerContent::Smart(sm) => crate::smart_cmds::shift_smart(sm, dx, dy),
+        LayerContent::Deep(d) => {
+            d.x += dx;
+            d.y += dy;
+        }
         LayerContent::Group(g) => {
             if let Some(ab) = &mut g.artboard {
                 ab.rect = ab.rect.translate(dx, dy);

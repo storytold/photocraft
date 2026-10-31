@@ -194,6 +194,7 @@ fn layer_pixels_cmp(a: &Layer, b: &Layer, surf: SurfaceCmp) -> bool {
             (LayerContent::Text(x), LayerContent::Text(y)) => texts_cmp(x, y, &mut |_, _, _| true),
             (LayerContent::Shape(x), LayerContent::Shape(y)) => x == y,
             (LayerContent::Smart(x), LayerContent::Smart(y)) => smarts_cmp(x, y, &mut |_, _, _| true),
+            (LayerContent::Deep(x), LayerContent::Deep(y)) => x == y,
             _ => false,
         }
         // Every scalar is equal: now the surfaces.
