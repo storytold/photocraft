@@ -56,16 +56,10 @@ fn single_layer_native_export_strips_opaque_alpha() {
         d.layers.truncate(1);
         let r = export(&d, "x.tiff", &ExportOptions::default()).unwrap();
         let back = import("x.tiff", &r.bytes).unwrap().document;
+        let (a, b) = (d.layers[0].surface().unwrap(), back.layers[0].surface().unwrap());
+        assert_eq!(a.read_region(d.bounds()), b.read_region(d.bounds()), "alpha {alpha}");
         let img = photocraft_codecs::decode(&r.bytes).unwrap();
         assert_eq!(img.layout().has_alpha(), alpha < 1.0);
-        if alpha < 1.0 {
-            // ExtraSamples unassociated alpha opens as Alpha 1 on an opaque Background (#5301).
-            assert_eq!(back.channels.len(), 1, "alpha {alpha}");
-            assert!(back.layers[0].surface().unwrap().read_region(d.bounds()).chunks(4).all(|p| p[3] >= 1.0 - 1e-4), "alpha {alpha}");
-        } else {
-            let (a, b) = (d.layers[0].surface().unwrap(), back.layers[0].surface().unwrap());
-            assert_eq!(a.read_region(d.bounds()), b.read_region(d.bounds()), "alpha {alpha}");
-        }
     }
 
     let mut d = layered(8, 4, SampleType::U16, 1.0);

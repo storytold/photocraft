@@ -45,8 +45,10 @@ codec_rt!(png_gray8, "png", ColorMode::Grayscale, SampleType::U8, false, 0.0);
 codec_rt!(png_graya16, "png", ColorMode::Grayscale, SampleType::U16, true, 0.0);
 codec_rt!(tga_rgb8_opaque, "tga", ColorMode::Rgb, SampleType::U8, false, 0.0);
 codec_rt!(tga_gray8, "tga", ColorMode::Grayscale, SampleType::U8, false, 0.0);
+codec_rt!(tiff_rgba8, "tiff", ColorMode::Rgb, SampleType::U8, true, 0.0);
 codec_rt!(tiff_rgb16, "tif", ColorMode::Rgb, SampleType::U16, false, 0.0);
 codec_rt!(tiff_cmyk8, "tiff", ColorMode::Cmyk, SampleType::U8, false, 0.0);
+codec_rt!(tiff_cmyka16, "tiff", ColorMode::Cmyk, SampleType::U16, true, 0.0);
 codec_rt!(tiff_gray8, "tiff", ColorMode::Grayscale, SampleType::U8, false, 0.0);
 codec_rt!(fits_rgb8, "fits", ColorMode::Rgb, SampleType::U8, false, 0.0);
 codec_rt!(fits_gray16, "fit", ColorMode::Grayscale, SampleType::U16, false, 0.0);
@@ -450,8 +452,8 @@ fn transparent_flat_images_open_as_layer_0() {
         ("a.png", enc(ChannelLayout::Rgba, CS::U8, Format::Png), true),
         ("a16.png", enc(ChannelLayout::Rgba, CS::U16, Format::Png), true),
         ("ga.png", enc(ChannelLayout::GrayA, CS::U8, Format::Png), true),
-        ("a.tif", enc(ChannelLayout::Rgba, CS::U8, Format::Tiff), false),
-        ("ga.tif", enc(ChannelLayout::GrayA, CS::U16, Format::Tiff), false),
+        ("a.tif", enc(ChannelLayout::Rgba, CS::U8, Format::Tiff), true),
+        ("ga.tif", enc(ChannelLayout::GrayA, CS::U16, Format::Tiff), true),
         ("pal.png", photocraft_codecs::encode_png_indexed(w, h, &[0, 1].repeat(n / 2), &[[255, 0, 0], [0, 0, 255]], Some(0), None, None).unwrap(), true),
         ("pal_opaque.png", photocraft_codecs::encode_png_indexed(w, h, &[0, 1].repeat(n / 2), &[[255, 0, 0], [0, 0, 255]], None, None, None).unwrap(), false),
         ("rgb.png", enc(ChannelLayout::Rgb, CS::U8, Format::Png), false),
@@ -462,11 +464,6 @@ fn transparent_flat_images_open_as_layer_0() {
     for (name, bytes, transparent) in cases {
         let d = import(name, &bytes).unwrap_or_else(|e| panic!("{name}: {e}")).document;
         assert_opens_as(name, &d, transparent);
-        if name.ends_with(".tif") && name != "rgb.tif" {
-            // ExtraSamples unassociated alpha opens as Alpha 1 on the Background (#5301).
-            assert_eq!(d.channels.len(), 1, "{name}");
-            assert_eq!(d.channels[0].name, "Alpha 1", "{name}");
-        }
         // Photoshop numbers the next new layer after "Layer 0" as "Layer 1".
         assert_eq!(d.next_layer_name("Layer"), "Layer 1", "{name}");
     }
@@ -825,67 +822,6 @@ fn with_alpha_channel(mut d: photocraft_doc::Document, name: &str) -> photocraft
 /// Header and decoded pixels of a TGA file.
 fn tga(bytes: &[u8]) -> (u8, u8, photocraft_codecs::Image) {
     (bytes[16], bytes[17] & 0x0f, photocraft_codecs::decode(bytes).expect("decode tga"))
-}
-
-/// #5301: ExtraSamples unassociated alpha is an alpha channel (RGB stays opaque); saving it
-/// writes ExtraSamples again. Associated extra samples stay layer transparency.
-#[test]
-fn tiff_unassociated_alpha_is_a_channel_at_every_depth() {
-    use photocraft_codecs::{ChannelLayout, EncodeOptions, Format, Image, SampleType as CS};
-    for (layout, sample, mode, depth) in [
-        (ChannelLayout::Rgba, CS::U8, ColorMode::Rgb, SampleType::U8),
-        (ChannelLayout::Rgba, CS::U16, ColorMode::Rgb, SampleType::U16),
-        (ChannelLayout::Rgba, CS::F32, ColorMode::Rgb, SampleType::F32),
-        (ChannelLayout::GrayA, CS::U8, ColorMode::Grayscale, SampleType::U8),
-        (ChannelLayout::CmykA, CS::U16, ColorMode::Cmyk, SampleType::U16),
-    ] {
-        let (w, h) = (5u32, 3u32);
-        let n = (w * h) as usize;
-        let ch = layout.channels();
-        let mut img = match sample {
-            CS::U8 => Image::from_u8(w, h, layout, (0..n * ch).map(|i| if (i + 1) % ch == 0 { 40 } else { 200 }).collect()).unwrap(),
-            CS::U16 => Image::from_u16(w, h, layout, &(0..n * ch).map(|i| if (i + 1) % ch == 0 { 10_000 } else { 50_000 }).collect::<Vec<_>>()).unwrap(),
-            _ => Image::from_f32(w, h, layout, &(0..n * ch).map(|i| if (i + 1) % ch == 0 { 0.25 } else { 0.8 }).collect::<Vec<_>>()).unwrap(),
-        };
-        img.meta.unassociated_alpha = true;
-        let bytes = photocraft_codecs::encode(&img, Format::Tiff, &EncodeOptions::default()).unwrap();
-        assert!(photocraft_codecs::decode(&bytes).unwrap().meta.unassociated_alpha, "{layout:?} {sample:?}");
-        let d = import("a.tif", &bytes).unwrap_or_else(|e| panic!("{layout:?} {sample:?}: {e}")).document;
-        assert_eq!(d.mode, mode, "{layout:?}");
-        assert_eq!(d.depth, depth, "{layout:?}");
-        assert_opens_as(&format!("{layout:?} {sample:?}"), &d, false);
-        assert_eq!(d.channels.len(), 1, "{layout:?}");
-        assert_eq!(d.channels[0].name, "Alpha 1", "{layout:?}");
-        let r = d.bounds();
-        let color = d.layers[0].surface().unwrap().read_region(r);
-        let cc = d.pixel_format().channels();
-        assert!(color.chunks(cc).all(|p| p.last().is_some_and(|&a| a >= 1.0)), "{layout:?}: colours stay opaque");
-        let a = d.channels[0].surface.read_region(r);
-        assert!(a.iter().any(|&v| v < 0.9), "{layout:?}: alpha is not empty");
-        let saved = export(&d, "b.tiff", &ExportOptions::default()).unwrap();
-        let back = import("b.tiff", &saved.bytes).unwrap().document;
-        assert_eq!(back.channels.len(), 1, "{layout:?} reopened");
-        assert_opens_as(&format!("{layout:?} saved"), &back, false);
-        let a2 = back.channels[0].surface.read_region(r);
-        let m = a.iter().zip(&a2).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
-        assert!(m <= 1.0 / 255.0 + 1e-4, "{layout:?} {sample:?} alpha round-trip {m}");
-    }
-}
-
-#[test]
-fn tiff_alpha_channel_on_a_new_document_is_saved() {
-    for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
-        let d = with_alpha_channel(single(ColorMode::Rgb, depth, false), "Alpha 1");
-        let r = export(&d, "a.tiff", &ExportOptions::default()).unwrap();
-        let back = import("a.tiff", &r.bytes).unwrap().document;
-        assert_eq!(back.channels.len(), 1, "{depth:?}");
-        assert_eq!(back.channels[0].name, "Alpha 1", "{depth:?}");
-        assert_opens_as(&format!("{depth:?}"), &back, false);
-        let canvas = d.bounds();
-        let (want, got) = (d.channels[0].surface.read_region(canvas), back.channels[0].surface.read_region(canvas));
-        let m = want.iter().zip(&got).map(|(x, y)| (x - y).abs()).fold(0.0f32, f32::max);
-        assert!(m <= 1.0 / 255.0 + 1e-4, "{depth:?} {m}");
-    }
 }
 
 /// #2124: Photoshop writes the document's alpha channel as a 32-bit Targa's alpha (8 alpha bits
@@ -1254,4 +1190,40 @@ fn a_stereo_png_keeps_its_stereo_mark_on_save() {
     // An ordinary PNG gains no mark.
     let plain = export(&single(ColorMode::Rgb, SampleType::U8, false), "png", &ExportOptions::default()).unwrap();
     assert_eq!(photocraft_codecs::png_stereo(&plain.bytes), None);
+}
+
+/// #8563: a DDS export writes the document's alpha channel as the texture's alpha, as a 32-bit
+/// Targa does: exactly in an uncompressed texture, to 4 bits in BC2, interpolated in BC3, and on
+/// or off in BC1. With several alpha channels none is written, with a warning.
+#[test]
+fn dds_writes_the_alpha_channel_as_the_texture_alpha() {
+    use photocraft_codecs::DdsCompression;
+    let d = with_alpha_channel(single(ColorMode::Rgb, SampleType::U8, false), "Alpha 1");
+    for compression in DdsCompression::ALL {
+        let mut opts = ExportOptions::default();
+        opts.encode.dds.compression = compression;
+        let r = export(&d, "a.dds", &opts).unwrap();
+        let img = photocraft_codecs::decode(&r.bytes).expect("decode dds");
+        assert_eq!(img.layout(), photocraft_codecs::ChannelLayout::Rgba, "{compression:?}");
+        let (w, _) = img.dimensions();
+        let tolerance = match compression {
+            DdsCompression::None => 1.0,
+            DdsCompression::Bc2 => 9.0,
+            _ => 18.0,
+        };
+        for (i, px) in img.data().as_chunks::<4>().0.iter().enumerate() {
+            let x = i as u32 % w;
+            let want = alpha_value(x) * 255.0;
+            if compression == DdsCompression::Bc1 && x == 4 {
+                continue; // half opacity sits on BC1's on/off threshold
+            }
+            assert!((f32::from(px[3]) - want).abs() <= tolerance, "{compression:?} pixel {i}: alpha {} want {want}", px[3]);
+        }
+    }
+    // Two alpha channels: Photoshop's rule for Targa, none of them is written.
+    let two = with_alpha_channel(d.clone(), "Alpha 2");
+    let r = export(&two, "a.dds", &ExportOptions::default()).unwrap();
+    assert!(r.warnings.iter().any(|w| w.contains("several")), "{:?}", r.warnings);
+    let img = photocraft_codecs::decode(&r.bytes).expect("decode dds");
+    assert!(!img.layout().has_alpha() || img.data().as_chunks::<4>().0.iter().all(|p| p[3] == 255));
 }

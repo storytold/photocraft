@@ -49,6 +49,7 @@ resvg = { version = "0.45", default-features = false, features = ["text", "syste
 resvg = { version = "0.45", default-features = false, features = ["text", "raster-images"] }
 
 [dev-dependencies]
+miniz_oxide = "0.9"
 crc32fast = "1.5"
 photocraft-affinity = { workspace = true, features = ["synth"] }
 flate2 = { workspace = true }
@@ -56,3 +57,7 @@ photocraft-psd = { workspace = true, features = ["testgen"] }
 photocraft-raw = { workspace = true, features = ["testgen"] }
 photocraft-testkit = { workspace = true }
 proptest = { workspace = true }
+# Lossless JPEG XL encoder for the JPEG XL DNG preview test (tests only), as in photocraft-raw.
+zune-jpegxl = { version = "=0.5.2", default-features = false, features = ["std"] }
+zune-core = { workspace = true }
+tiff = { version = "0.11", default-features = false, features = ["deflate", "lzw"] }
