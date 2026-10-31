@@ -535,6 +535,45 @@ fn main() {
             std::hint::black_box(photocraft_algo::apply(surf, &params(0.0), doc.bounds(), doc.bounds(), None));
             println!("  (the CPU's {name} over the whole layer: {:.0} ms)", ms(t));
         }
+        // Lens Blur: a hexagonal iris, Specular Highlights, per slider step of the radius.
+        let lens = |radius: f32| photocraft_algo::FilterParams::LensBlur {
+            radius,
+            blades: 6,
+            curvature: 0.0,
+            rotation: 0.0,
+            depth: photocraft_algo::DepthSource::None,
+            focal_distance: 0.0,
+            invert_depth: false,
+            brightness: 30.0,
+            threshold: 200.0,
+            noise: 0.0,
+            distribution: photocraft_algo::Distribution::Uniform,
+            monochromatic: false,
+            seed: 0,
+            depth_map: None,
+        };
+        let lens_operator = |radius: f32| {
+            let l = photocraft_algo::separable::Lens::of(&lens(radius)).expect("lens blur");
+            let blur = photocraft_gpu::SeparableBlur::Lens(std::sync::Arc::new(photocraft_ui_egui::filter_gpu_preview::gpu_lens(l, None)));
+            let area = photocraft_algo::output_area(&lens(radius), content, doc.bounds(), None);
+            let program = photocraft_gpu::GaussianBlur::new(blur, extent, area, None, false, doc.depth).expect("a runnable lens blur");
+            photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
+        };
+        let mut step = 0;
+        b.time("Lens Blur r 30 (hexagon) dialog preview (GPU resident)", |b| {
+            step += 1;
+            if let Some(g) = &mut b.gpu {
+                g.comp.set_operators(doc.id, vec![lens_operator(30.0 + (step % 2) as f32)]);
+            }
+            b.render(&doc, view)
+        });
+        {
+            let surf = doc.layer(target).and_then(|l| l.surface()).expect("surface");
+            let fp = lens(30.0);
+            let t = Instant::now();
+            std::hint::black_box(photocraft_algo::apply(surf, &fp, photocraft_algo::output_area(&fp, content, doc.bounds(), None), doc.bounds(), None));
+            println!("  (the CPU's Lens Blur r 30 over the whole layer: {:.0} ms)", ms(t));
+        }
         if let Some(g) = &mut b.gpu {
             g.comp.clear_operators(doc.id);
         }

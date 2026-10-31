@@ -1000,3 +1000,12 @@ bench = "interactive_bench"
 row = "Wave (5 generators) dialog preview (GPU resident)"
 budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 4.9 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
+
+[[scenario]]
+id = "P103"
+title = "Lens Blur r 30 (hexagon, Specular Highlights) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Lens Blur r 30 (hexagon) dialog preview (GPU resident)"
+budget_ms = 16
+enforce = false  # 28 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
