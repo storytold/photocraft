@@ -48,6 +48,8 @@ fn all_filters() -> Vec<FilterParams> {
         FilterParams::SmartSharpen { amount: 100.0, radius: 1.0, reduce_noise: 20.0 },
         FilterParams::HighPass { radius: 3.0 },
         FilterParams::AddNoise { amount: 25.0, distribution: Distribution::Gaussian, monochromatic: false, seed: 3 },
+        FilterParams::AddNoise { amount: 25.0, distribution: Distribution::Uniform, monochromatic: true, seed: 3 },
+        FilterParams::AddNoise { amount: 25.0, distribution: Distribution::Gaussian, monochromatic: true, seed: 3 },
         FilterParams::Median { radius: 2.0 },
         FilterParams::DustAndScratches { radius: 2.0, threshold: 10.0 },
         FilterParams::Minimum { radius: 1.0, preserve: Preserve::Squareness },
@@ -229,24 +231,30 @@ fn high_pass_of_flat_is_mid_gray() {
     assert!((p[0] - 0.5).abs() < 1e-5 && (p[1] - 0.5).abs() < 1e-5);
 }
 
+/// Both noise distributions preserve alpha and share a seeded value across color channels.
 #[test]
 fn noise_is_deterministic_monochrome_and_centred() {
-    let s = flat(SampleType::F32, R, [0.5, 0.5, 0.5, 1.0]);
-    let p = FilterParams::AddNoise { amount: 50.0, distribution: Distribution::Uniform, monochromatic: true, seed: 1 };
-    let a = run(&s, &p);
-    assert_eq!(a, run(&s, &p));
-    let v = a.read_region(R);
-    let mut mean = 0.0;
-    for px in v.as_chunks::<4>().0 {
-        assert_eq!(px[0], px[1]);
-        assert_eq!(px[1], px[2]);
-        assert!((px[0] - 0.5).abs() <= 0.25 + 1e-6);
-        mean += px[0];
+    for distribution in [Distribution::Uniform, Distribution::Gaussian] {
+        let s = flat(SampleType::F32, R, [0.5, 0.5, 0.5, 1.0]);
+        let p = FilterParams::AddNoise { amount: 50.0, distribution, monochromatic: true, seed: 1 };
+        let a = run(&s, &p);
+        assert_eq!(a, run(&s, &p));
+        let v = a.read_region(R);
+        let mut mean = 0.0;
+        for px in v.as_chunks::<4>().0 {
+            assert_eq!(px[0], px[1]);
+            assert_eq!(px[1], px[2]);
+            if matches!(distribution, Distribution::Uniform) {
+                assert!((px[0] - 0.5).abs() <= 0.25 + 1e-6);
+            }
+            assert_eq!(px[3], 1.0);
+            mean += px[0];
+        }
+        mean /= (v.len() / 4) as f32;
+        assert!((mean - 0.5).abs() < 0.03, "{mean}");
+        let other_seed = run(&s, &FilterParams::AddNoise { amount: 50.0, distribution, monochromatic: true, seed: 2 });
+        assert_ne!(a, other_seed);
     }
-    mean /= (v.len() / 4) as f32;
-    assert!((mean - 0.5).abs() < 0.03, "{mean}");
-    let other_seed = run(&s, &FilterParams::AddNoise { amount: 50.0, distribution: Distribution::Uniform, monochromatic: true, seed: 2 });
-    assert_ne!(a, other_seed);
 }
 
 #[test]
