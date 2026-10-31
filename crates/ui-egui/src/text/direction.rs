@@ -241,9 +241,15 @@ where
     L: FnOnce(&mut egui::Ui),
     E: FnOnce(&mut egui::Ui),
 {
-    let width = ui.available_width();
+    let width = row_width(ui);
     ui.allocate_ui_with_layout(egui::vec2(width, 0.0), row(), |ui| {
-        ui.allocate_ui_with_layout(egui::vec2(label_w, 0.0), row(), |ui| label(ui));
+        ui.allocate_ui_with_layout(egui::vec2(label_w, 0.0), row(), |ui| {
+            label(ui);
+            // A scope only advances the parent cursor past the child's used min_rect; claim the
+            // whole label column so the editor keeps the gap `label_w - label_width + spacing.x`.
+            let cell = ui.max_rect();
+            ui.expand_to_include_rect(cell);
+        });
         editor(ui);
         ui.add_space(7.0);
     });
