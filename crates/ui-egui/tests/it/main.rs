@@ -28,6 +28,7 @@ mod paint_bucket_all_layers;
 mod pattern_preview_canvas;
 mod radial_blur_center;
 mod remove_channel_target;
+mod select_mask_preview;
 mod system_locale;
 mod transform_readout_units;
 mod ui_scale_canvas;
