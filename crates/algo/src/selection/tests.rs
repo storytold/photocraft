@@ -632,6 +632,27 @@ fn wand_region_matches_reference_magic_wand() {
 }
 
 #[test]
+fn wand_region_anti_aliases_its_box_as_the_whole_area_would() {
+    let (w, h) = (37, 29);
+    let area = Rect::new(3, -2, 3 + w, -2 + h);
+    let img = blobs(w, h);
+    // Seeds whose regions stay inside, touch an edge or a corner of the area, and a global match.
+    for (seed, tol, contiguous) in [((10, 5), 10.0, true), ((4, -2), 0.0, true), ((30, 10), 255.0, true), ((20, 20), 40.0, false), ((39, 26), 20.0, true)] {
+        let hard = wand_region(&img, area, seed, tol, contiguous, false).unwrap();
+        let mut full: Vec<u8> =
+            (area.y0..area.y1).flat_map(|y| (area.x0..area.x1).map(move |x| (x, y))).map(|(x, y)| (hard.at(x, y) * 255.0).round() as u8).collect();
+        crate::segment::antialias_u8(&mut full, w as usize, h as usize);
+        let soft = wand_region(&img, area, seed, tol, contiguous, true).unwrap();
+        for y in area.y0..area.y1 {
+            for x in area.x0..area.x1 {
+                let want = full[((y - area.y0) * w + x - area.x0) as usize];
+                assert_eq!((soft.at(x, y) * 255.0).round() as u8, want, "{seed:?} {tol} {contiguous} at {x},{y}");
+            }
+        }
+    }
+}
+
+#[test]
 fn combine_region_matches_combine() {
     let area = Rect::new(0, 0, 40, 30);
     let mut old = Surface::new(PixelFormat::GRAY8);
