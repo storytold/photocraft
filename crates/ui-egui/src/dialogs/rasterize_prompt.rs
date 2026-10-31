@@ -148,8 +148,10 @@ pub fn filter_needs(app: &PhotocraftApp, id: &str) -> Option<(photocraft_doc::La
     // The engine's reason for a type layer: "filters need a pixel layer (active layer is a Type
     // layer)" from filters::has_filterable_layer, which also takes Smart Objects, or a filter's own
     // wording ("Vanishing Point needs a pixel layer (…)", "active layer is a Type layer, not a pixel
-    // layer"). Any other reason (a job running) keeps the item grey.
-    let reason = app.session.disabled_reason(id)?;
+    // layer"). Any other reason (a job running) keeps the item grey. The target the menu sends
+    // counts: with the layer's mask targeted in the Layers panel the filter edits the mask, and
+    // rasterizing the text would be for nothing (#10469).
+    let reason = app.session.disabled_reason_with(id, &app.with_mask_target(id, Value::Null))?;
     (reason.contains("active layer is a Type layer") && reason.contains("pixel layer")).then(|| (layer, reason.starts_with("filters need a pixel layer")))
 }
 
