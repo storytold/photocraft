@@ -203,7 +203,7 @@
 	Create Clipping Mask	Creează o mască de decupare
 	Release Clipping Mask	Eliberați masca de tăiere
 	New Shape Layer	Strat de formă nou
-	New Type Layer	Strat de tip nou
+	New Type Layer	Strat de text nou
 	New Video Layer from File…	Strat video nou din fișier…
 	New Blank Video Layer	Strat video gol nou
 	Smart Filters	Filtre inteligente
@@ -1390,19 +1390,19 @@
 	Breeze dark	Briză întunecată
 	Breeze Dark Theme	Breeze Dark Theme
 	Breeze light	Briză lumină
-	Breeze Light Theme	Tema Brizei Lumină
+	Breeze Light Theme	Temă deschisă Breeze
 	Soft dark	Întuneric moale
 	Soft light	Lumină moale
 	Soft Dark Theme	Tema Soft Dark
-	Soft Light Theme	Tema Lumină moale
+	Soft Light Theme	Temă deschisă Soft
 	Studio Theme	Tema Studio
-	Studio Light Theme	Studio Light Theme
-	Adwaita Light Theme	Tema luminii Adwaita
+	Studio Light Theme	Temă deschisă Studio
+	Adwaita Light Theme	Temă deschisă Adwaita
 	Adwaita Dark Theme	Tema întunecată Adwaita
 	Pro Theme	Tema Pro
 	Pro Medium Gray Theme	Tema Pro Medium Gri
 	Pro Light Gray Theme	Temă Pro Gri deschis
-	Pro Light Theme	Tema Pro Light
+	Pro Light Theme	Temă deschisă Pro
 	Workspace…	Spațiu de lucru…
 	Essentials	Esențiale
 	New Workspace…	Nou spațiu de lucru…
@@ -1513,7 +1513,7 @@
 	No matching commands	Nu există comenzi care se potrivesc
 	No document	Niciun document
 	Pixel Layer	Strat de pixeli
-	Type Layer	Tip strat
+	Type Layer	Strat de text
 	Shape Layer	Strat de formă
 	Group Layer	Strat de grup
 	Fill Layer	Strat de umplere
@@ -2211,7 +2211,7 @@
 	CPU (no GPU acceleration)	CPU (fără accelerare GPU)
 	Cache levels	Niveluri cache
 	Cache tile size	Dimensiunea piesei cache
-	Camera Raw Defaults	Camera Raw implicite
+	Camera Raw Defaults	Setări implicite Camera Raw
 	Canvas border	Chenar pânză
 	Show canvas dots	Afișați puncte de pânză
 	Clip thumbnails to layer bounds	Decupați miniaturile la limitele stratului
@@ -2228,7 +2228,7 @@
 	Cursors	Cursore
 	Custom dark	Întuneric personalizat
 	Custom light	Lumină personalizată
-	Dark	Întuneric
+	Dark	Întunecat
 	Dark gray	Gri închis
 	Dashed lines	linii întrerupte
 	Detailed	Detaliat
@@ -2238,7 +2238,7 @@
 	Dots	puncte
 	Double click layer mask launches select and mask	Faceți dublu clic pe masca de strat lansează selectarea și masca
 	Drop shadow	Umbră
-	Dynamic color sliders	glisoare de culoare dinamice
+	Dynamic color sliders	Glisoare dinamice de culoare
 	East asian	Asia de Est
 	Effect cache mb	Cache efect mb
 	Enable flick panning	Activați flick panning
@@ -2270,9 +2270,9 @@
 	Gridline every	Gridline fiecare
 	Guide color	Culoare ghid
 	Guide style	Stilul ghid
-	Guides, Grid & Slices	Ghiduri, grilă și felii
+	Guides, Grid & Slices	Ghidaje, grilă și secțiuni
 	Gutter	Jgheab
-	History Log	Jurnal istoric
+	History Log	Jurnalul istoricului
 	History states	Istoria afirmă
 	Ignore exif profile tag	Ignorați eticheta de profil exif
 	Image interpolation	Interpolare imagine
@@ -2341,7 +2341,7 @@
 	Show menu colors	Afișați culorile meniului
 	Show only crosshair while painting	Afișați numai încrucișarea în timp ce pictați
 	Show slice numbers	Afișați numerele secțiunilor
-	Show tooltips	Afișați sfaturi cu instrumente
+	Show tooltips	Afișați indicii
 	Enable animations	Activați animațiile
 	Show highlight on rollover	Afișați evidențierea la trecere
 	Show bounding box when dragging layer	Afișează caseta de delimitare când trageți stratul
@@ -2366,8 +2366,8 @@
 	Traditional (72.27 points/inch)	Tradițional (72,27 puncte/inch)
 	Transparency & Gamut	Transparență și gamă
 	Type units	Tip unități
-	UI font size	dimensiunea fontului UI
-	UI scale	scară UI
+	UI font size	Dimensiunea fontului UI
+	UI scale	Scalare UI
 	Units & Rulers	Unități și rigle
 	Use additional plugins folder	Folosiți folderul de pluginuri suplimentare
 	Use esc to commit	Folosiți esc pentru a comite
@@ -2666,9 +2666,9 @@ fontWeight	Italic	Cursiv
 	Notification Duration (seconds)	Durata notificării (secunde)
 	Bundle Arrow-Key Nudges	Grupează deplasările cu săgețile
 	Nudge Bundle Pause (ms)	Pauză de grupare a deplasărilor (ms)
-	Appearance Mode	Modul aspect
-	Dark Theme	Tema întunecată
-	Light Theme	Tema ușoară
+	Appearance Mode	Mod de afișare
+	Dark Theme	Temă întunecată
+	Light Theme	Temă deschisă
 	Pro Medium	Mediu Pro
 	Studio Light	Studio Light
 	Next Appearance Mode	Următorul mod de apariție
@@ -2786,7 +2786,7 @@ fontWeight	Italic	Cursiv
 	How often fastening points are placed by themselves	Cât de des punctele de fixare sunt amplasate singure
 	Hue/Saturation	Nuanță/Saturație
 	Intersect with selection  ({key})	Se intersectează cu selecția ( {key} )
-	Kind	Amabil
+	Kind	Tip
 	Linear Gradient	Gradient liniar
 	Link layers	Straturi de legătură
 	Lock	Blocare
@@ -2996,7 +2996,7 @@ curves	Smooth	Netezire
 	Delete Contour	Șterge contur
 	Loaded contours from {file}	Contururi încărcate de la {file}
 	Saved contours to {file}	Contururi salvate în {file}
-	Show home recent files	Afișați fișierele recente de acasă
+	Show home recent files	Afișați fișierele recente pe pagina principală
 	Clear Brush Controls	Ștergeți comenzile pensulei
 	Reset All Locked Settings	Resetați toate setările blocate
 	Copy Texture to Other Tools	Copiați textura în alte instrumente

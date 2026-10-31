@@ -203,7 +203,7 @@
 	Create Clipping Mask	Kəsici maska yarat
 	Release Clipping Mask	Kəsmə maskasını buraxın
 	New Shape Layer	Yeni Forma Layeri
-	New Type Layer	Yeni tip qat
+	New Type Layer	Yeni mətn qatı
 	New Video Layer from File…	Fayldan yeni video qatı…
 	New Blank Video Layer	Yeni boş video qatı
 	Smart Filters	Ağıllı filtrlər
@@ -1390,19 +1390,19 @@
 	Breeze dark	Qaranlıq meh
 	Breeze Dark Theme	Breeze Qaranlıq Mövzu
 	Breeze light	Külək işığı
-	Breeze Light Theme	Breeze Light Theme
+	Breeze Light Theme	Breeze açıq mövzusu
 	Soft dark	Yumşaq qaranlıq
 	Soft light	Yumşaq işıq
 	Soft Dark Theme	Soft Dark Theme
-	Soft Light Theme	Yumşaq İşıq Mövzu
+	Soft Light Theme	Soft açıq mövzusu
 	Studio Theme	Studiya mövzusu
-	Studio Light Theme	Studio Yüngül Mövzu
-	Adwaita Light Theme	Adwaita Yüngül Mövzu
+	Studio Light Theme	Studio açıq mövzusu
+	Adwaita Light Theme	Adwaita açıq mövzusu
 	Adwaita Dark Theme	Adwaita Qaranlıq Mövzu
 	Pro Theme	Pro Mövzu
 	Pro Medium Gray Theme	Pro Orta Boz Mövzu
 	Pro Light Gray Theme	Pro Açıq Boz Mövzu
-	Pro Light Theme	Pro Yüngül Mövzu
+	Pro Light Theme	Pro açıq mövzusu
 	Workspace…	İş sahəsi…
 	Essentials	Əsaslar
 	New Workspace…	Yeni İş Sahəsi…
@@ -1513,7 +1513,7 @@
 	No matching commands	Uyğun əmrlər yoxdur
 	No document	Sənəd yoxdur
 	Pixel Layer	Piksel qatı
-	Type Layer	Layer yazın
+	Type Layer	Mətn qatı
 	Shape Layer	Forma qatı
 	Group Layer	Qrup qatı
 	Fill Layer	Doldurma Layeri
@@ -2211,7 +2211,7 @@
 	CPU (no GPU acceleration)	CPU (GPU sürətləndirilməsi yoxdur)
 	Cache levels	Keş səviyyələri
 	Cache tile size	Keş kafel ölçüsü
-	Camera Raw Defaults	Kamera Raw Defoltları
+	Camera Raw Defaults	Camera Raw ilkin ayarları
 	Canvas border	Kətan haşiyəsi
 	Show canvas dots	Kətan nöqtələrini göstərin
 	Clip thumbnails to layer bounds	Miniatürləri qat sərhədlərinə kəsin
@@ -2228,7 +2228,7 @@
 	Cursors	Kursorlar
 	Custom dark	Fərdi qaranlıq
 	Custom light	Fərdi işıq
-	Dark	Qaranlıq
+	Dark	Tünd
 	Dark gray	Tünd boz
 	Dashed lines	kəsik xətlər
 	Detailed	Ətraflı
@@ -2237,7 +2237,7 @@
 	Display p3	Ekran p3
 	Dots	Nöqtələr
 	Double click layer mask launches select and mask	İki dəfə kliklənən qat maskası seçin və maskanı işə salır
-	Drop shadow	Açılan kölgə
+	Drop shadow	Düşən kölgə
 	Dynamic color sliders	Dinamik rəng sürgüləri
 	East asian	Şərqi Asiya
 	Effect cache mb	Effekt önbelleği mb
@@ -2270,9 +2270,9 @@
 	Gridline every	Gridline hər
 	Guide color	Bələdçi rəngi
 	Guide style	Bələdçi üslubu
-	Guides, Grid & Slices	Bələdçilər, Torlar və Dilimlər
+	Guides, Grid & Slices	Bələdçilər, tor və dilimlər
 	Gutter	Oluk
-	History Log	Tarix jurnalı
+	History Log	Tarixçə jurnalı
 	History states	Tarix dövlətləri
 	Ignore exif profile tag	Exif profil etiketinə məhəl qoymayın
 	Image interpolation	Şəkil interpolasiyası
@@ -2341,7 +2341,7 @@
 	Show menu colors	Menyu rənglərini göstərin
 	Show only crosshair while painting	Rəsm edərkən yalnız çarpaz işarəni göstərin
 	Show slice numbers	Dilim nömrələrini göstərin
-	Show tooltips	Alət göstərişlərini göstərin
+	Show tooltips	Alət ipuclarını göstər
 	Enable animations	Animasiyaları aktivləşdirin
 	Show highlight on rollover	Köçürmə zamanı vurğunu göstərin
 	Show bounding box when dragging layer	Qatı sürükləyərkən məhdudlaşdırıcı qutunu göstərin
@@ -2366,7 +2366,7 @@
 	Traditional (72.27 points/inch)	Ənənəvi (72,27 bal/düym)
 	Transparency & Gamut	Şəffaflıq və rəng əhatəsi
 	Type units	Növ vahidləri
-	UI font size	UI şrift ölçüsü
+	UI font size	UI şriftinin ölçüsü
 	UI scale	UI miqyası
 	Units & Rulers	Vahidlər və xətkeşlər
 	Use additional plugins folder	Əlavə plaginlər qovluğundan istifadə edin
@@ -2667,8 +2667,8 @@ fontWeight	Italic	Kursiv
 	Bundle Arrow-Key Nudges	Ox düyməsi köçürmələrini qruplaşdır
 	Nudge Bundle Pause (ms)	Köçürmə qruplaşdırma fasiləsi (ms)
 	Appearance Mode	Görünüş rejimi
-	Dark Theme	Qaranlıq Mövzu
-	Light Theme	Yüngül Mövzu
+	Dark Theme	Tünd mövzu
+	Light Theme	Açıq mövzu
 	Pro Medium	Pro Orta
 	Studio Light	Studiya işığı
 	Next Appearance Mode	Növbəti Görünüş Rejimi
@@ -2786,7 +2786,7 @@ fontWeight	Italic	Kursiv
 	How often fastening points are placed by themselves	Bərkitmə nöqtələri özləri tərəfindən nə qədər tez-tez yerləşdirilir
 	Hue/Saturation	Rəng/Doyma
 	Intersect with selection  ({key})	Seçimlə kəsişir ( {key} )
-	Kind	Xeyirxah
+	Kind	Növ
 	Linear Gradient	Xətti Gradient
 	Link layers	Bağlantı qatları
 	Lock	Kilid
@@ -2996,7 +2996,7 @@ curves	Smooth	Hamarlama
 	Delete Contour	Konturu silin
 	Loaded contours from {file}	{file} -dən yüklənmiş konturlar
 	Saved contours to {file}	Saxlanılan konturlar {file}
-	Show home recent files	Evdəki son faylları göstərin
+	Show home recent files	Ana səhifədə son faylları göstər
 	Clear Brush Controls	Fırça nəzarətlərini təmizləyin
 	Reset All Locked Settings	Bütün Kilidli Parametrləri Sıfırlayın
 	Copy Texture to Other Tools	Teksturanı Digər Alətlərə Kopyalayın

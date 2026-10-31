@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-31 · **Change:** minor (Azerbaijani and Romanian UI catalogs; native review and Rust/offscreen verification pending; Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-31 · **Change:** minor (Azerbaijani and Romanian UI catalogs; native review pending; local build and focused checks verified; Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
@@ -24,7 +24,7 @@ Vietnamese UI; Arabic and Hebrew users get English "Middle East" builds with the
 composer, and its text engine handles RTL, Devanagari and Indic scripts.
 
 **Summary.** 7 of the 12 key languages at 100% of measured keys (status `partial` because of the
-engine messages), 2 absent (Hindi, Vietnamese), plus 8 other languages. Weighted by
+engine messages), 2 absent (Hindi, Vietnamese), plus 17 other registered languages. Weighted by
 speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorded only for Italian,
 2026-10-12).
 
@@ -47,11 +47,13 @@ speakers, ~55% ready. Remaining: 80–140 h, plus native-speaker review (recorde
 
 ## Other shipped languages
 
-8 more, each at 1,608 / 1,608 measured keys, status `partial` for the same reason: Traditional
+17 registered languages are outside the twelve-language table. The following eight have
+1,608 / 1,608 measured keys, status `partial` for the same reason: Traditional
 Chinese `zh-hant` (2,329 rows), Russian `ru` (4,227 keys; also every dynamic label the
 other catalogs translate, [notes](localization-ru.md)), Ukrainian `uk` (3,375), Czech `cs` (3,522),
 Polish `pl` (3,366), Greek `el` (3,481), Dutch `nl` (3,568), Italian `it` (4,164; also every dynamic label the
-other catalogs translate; reviewed by a native speaker, [notes](localization-it.md)). Turkish `tr`
+other catalogs translate; reviewed by a native speaker, [notes](localization-it.md)). Hungarian
+`hu` (4,347 rows) is also registered. Turkish `tr`
 (3,731 rows) also covers every measured key. Serbian `sr` (4,022 rows, Latin script, Ekavian, added 2026-10-12) covers every
 measured key and the union of the other catalogs' dynamic labels; its one/few/many plurals reuse
 the Russian rule. Swedish `sv` (4,552 rows, added 2026-10-28) covers every measured key and the
@@ -66,9 +68,10 @@ Azerbaijani `az` (Latin script) and Romanian `ro` were added 2026-10-31, bringin
 registry to 29 languages including English. Each catalog has 4,566 entries, including the
 existing dynamic-label key union and 32 plural messages. Romanian uses one/few/other integer
 forms, including `20 de straturi`; Azerbaijani uses one/other. Both have complete menu keys,
-regional locale matching and English fallback. Native-speaker review and Rust/offscreen
-verification remain pending; this does not raise the estimated readiness percentage or close
-G13. [Terminology, provenance and validation limits](localization-az-ro.md).
+regional locale matching and English fallback. Native-speaker review remains pending. Local
+build, six language tests, Clippy, wasm and CPU offscreen checks passed; broader-test limits
+are documented in the language notes. This does not raise the estimated readiness percentage
+or close G13. [Terminology, provenance and validation limits](localization-az-ro.md).
 
 Czech UI follow-up (2026-10-11): status and notice wrappers, hardware labels, brush and
 transform accessibility names, rasterization prompts, profile mismatch messages and preset
@@ -94,7 +97,7 @@ engine localization or native review is complete.
 
 | Date | Change | Summary |
 |---|---|---|
-| 2026-10-31 | minor | Azerbaijani and Romanian UI catalogs, 4,566 entries each; regional tags and plural rules; native review and Rust/offscreen verification pending; readiness estimates unchanged |
+| 2026-10-31 | minor | Azerbaijani and Romanian UI catalogs, 4,566 entries each; regional tags and plural rules; registry summary corrected to 17 languages outside the table, including Hungarian; native review pending; local build and focused checks verified; readiness estimates unchanged |
 | 2026-10-10 | major | First version, measured from the catalogs with the `i18n-coverage` rules |
 | 2026-10-10 | minor | Right-to-left shell layout (menu bar, title, options and status bars, toolbox and dock sides) |
 | 2026-10-11 | minor | Czech dynamic status/notice and hardware text, render labels and Navigator zoom context; engine messages remain English |

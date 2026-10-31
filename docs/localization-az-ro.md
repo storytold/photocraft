@@ -59,11 +59,28 @@ fallback behavior, contextual terms, placeholders, menu coverage and plural coun
 19/20, 100/101, 119/120 and `u64::MAX`. Shell tests cover language switching, English restoration,
 persisted preferences, restart and first-launch Auto detection for the new languages.
 
-Static catalog checks inspect duplicate keys, TSV structure, placeholders in every plural form,
-trailing ellipses, the complete menu tree and source-derived localization keys. Rust tests,
-Clippy, wasm checks and offscreen app rendering require a Rust-equipped environment; the
-implementation environment had neither `cargo` nor `rustc`, so those checks were not run here.
+Local verification on 2026-10-31 used Rust 1.99.1 and MSVC on Windows x64:
 
-Before merging, run `cargo test -p photocraft-ui-egui`,
-`cargo clippy -p photocraft-ui-egui --all-targets -- -D warnings`, `cargo xtask layers`,
-`cargo xtask wasm`, `cargo xtask i18n-coverage` and the offscreen snapshot example.
+- The native `photocraft` binary and `snapshot` example built successfully with the locked
+  dependencies. These were unoptimized debug builds, not performance measurements.
+- All six Azerbaijani/Romanian unit and shell tests passed, including saving through
+  `Services.save_prefs`, loading after restart, preference labels and UI glyph coverage.
+- `cargo fmt --all -- --check`, `cargo clippy -p photocraft-ui-egui --all-targets -- -D warnings`,
+  `cargo xtask layers` and `cargo xtask wasm` passed. The wasm check covered 24 crates and
+  the optional HEIF feature.
+- `cargo xtask i18n-coverage` reported 2,204 / 2,204 source keys for each new language.
+  Static TSV, duplicate, placeholder and ellipsis checks passed; the Rust test comparing
+  packed catalogs with their source files also passed.
+- Editor and Interface Preferences screenshots for both languages were rendered offscreen
+  at 1440 × 900 logical pixels and 1.5× scale, using `--safe-gpu`, and visually inspected.
+  This caught incorrect translations of Kind, Type Layer, Light Theme and preference labels,
+  which were corrected and covered by regressions. These captures verify the CPU canvas
+  path, not hardware-GPU rendering or native window/input behavior.
+
+**The full test gate is not green.** The i18n subset finished with 59 passed and eight failed:
+the existing Chinese/Japanese/Korean/Arabic shell checks reported missing glyphs in this
+build without the optional `CRAFT_FONTS_DIR` input. All six new-language tests passed.
+The full `cargo test -p photocraft-ui-egui --no-fail-fast` run terminated both its unit and
+integration test processes with `0xc0000005` (`STATUS_ACCESS_VIOLATION`) during graphics tests;
+it did not complete. These broader checks need a successful rerun before claiming full
+validation. Native-speaker review also remains pending.

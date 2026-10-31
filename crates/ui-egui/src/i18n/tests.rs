@@ -292,6 +292,7 @@ fn serbian_plural_rule_handles_teens_and_compound_counts() {
     assert_eq!(forms, [2, 0, 1, 1, 2, 2, 2, 2, 0, 1, 2, 0, 2, 2, 1]);
 }
 
+/// Both catalogs resolve regional tags, expose their native names and fall back to English.
 #[test]
 fn azerbaijani_and_romanian_resolve_locales_and_preferences() {
     for (code, name, tags) in [
@@ -310,6 +311,7 @@ fn azerbaijani_and_romanian_resolve_locales_and_preferences() {
     }
 }
 
+/// Integer plural boundaries select the correct catalog form, including at `u64::MAX`.
 #[test]
 fn azerbaijani_and_romanian_plural_counts_include_hundreds_and_large_values() {
     let az = Lang::from_code("az").expect("az registered");
@@ -324,12 +326,16 @@ fn azerbaijani_and_romanian_plural_counts_include_hundreds_and_large_values() {
     assert_eq!(trn(az, 20, "{n} layer", "{n} layers"), "20 qat");
 }
 
+/// Context and command lookups retain distinct meanings while preserving product placeholders.
 #[test]
 fn azerbaijani_and_romanian_keep_context_placeholders_and_command_names() {
     for (code, file, layer, light, font_light) in [("az", "Fayl", "Qat", "İşıq", "İncə"), ("ro", "Fișier", "Strat", "Lumină", "Subțire")] {
         let lang = Lang::from_code(code).expect("registered language");
         assert_eq!(tr(lang, "File"), file);
         assert_eq!(tr(lang, "Layer"), layer);
+        assert_eq!(tr(lang, "Kind"), if code == "az" { "Növ" } else { "Tip" });
+        assert_eq!(tr(lang, "Type Layer"), if code == "az" { "Mətn qatı" } else { "Strat de text" });
+        assert_eq!(tr(lang, "Light Theme"), if code == "az" { "Açıq mövzu" } else { "Temă deschisă" });
         assert_eq!(tr_ctx(lang, "cameraRaw", "Light"), light);
         assert_eq!(tr_ctx(lang, "fontWeight", "Light"), font_light);
         assert_ne!(tr_id(lang, "edit.clear", "Clear"), "Clear");
@@ -337,6 +343,7 @@ fn azerbaijani_and_romanian_keep_context_placeholders_and_command_names() {
     }
 }
 
+/// Every menu label and submenu segment has a lookup entry in both new catalogs.
 #[test]
 fn azerbaijani_and_romanian_cover_every_menu_label_and_path() {
     for code in ["az", "ro"] {
