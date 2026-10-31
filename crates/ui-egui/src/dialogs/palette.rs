@@ -122,27 +122,20 @@ fn menu_hits(menus: Vec<crate::menus::MenuItem>, q: &str, lang: crate::i18n::Lan
 /// left-aligned, auto-direction edit, unchanged.
 fn search_edit(ui: &mut egui::Ui, q: &mut String, width: f32) -> egui::Response {
     let font = egui::FontId::proportional(15.0);
-    let mut edit = egui::TextEdit::singleline(q)
+    let mut layouter = crate::widgets::rtl_singleline_layouter(font.clone());
+    let mut edit = crate::widgets::rtl_singleline(q, &mut layouter)
         .hint_text(tl!("Search commands, tools and panels…"))
         .frame(egui::Frame::NONE)
         .font(font.clone())
         .desired_width(width - 40.0);
-    if !crate::direction::is_rtl() {
-        return ui.add(edit);
+    if crate::direction::is_rtl() {
+        // The hint is laid out from its own job, not the shared layouter, so pin its paragraph
+        // base direction too; the hint color is the style's weak text color, as for a plain hint.
+        let mut hint_job = egui::text::LayoutJob::simple_singleline(tl!("Search commands, tools and panels…").to_owned(), font, ui.visuals().weak_text_color());
+        hint_job.direction = egui::epaint::text::TextDirection::RightToLeft;
+        edit = edit.hint_text(egui::WidgetText::from(hint_job));
     }
-    // The hint is laid out from its own job, not the layouter below, so pin its paragraph base
-    // direction too; the hint color is the style's weak text color, as for a plain-string hint.
-    let mut hint_job = egui::text::LayoutJob::simple_singleline(tl!("Search commands, tools and panels…").to_owned(), font.clone(), ui.visuals().weak_text_color());
-    hint_job.direction = egui::epaint::text::TextDirection::RightToLeft;
-    edit = edit.hint_text(egui::WidgetText::from(hint_job));
-    let mut layouter = move |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap_width: f32| {
-        let mut job = egui::text::LayoutJob::simple_singleline(text.as_str().to_owned(), font.clone(), ui.visuals().text_color());
-        job.direction = egui::epaint::text::TextDirection::RightToLeft;
-        job.halign = egui::Align::Max;
-        job.keep_trailing_whitespace = true;
-        ui.fonts_mut(|f| f.layout_job(job))
-    };
-    ui.add(edit.align(Align2::RIGHT_CENTER).layouter(&mut layouter))
+    ui.add(edit)
 }
 
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -238,14 +231,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             ui.label(RichText::new(tl!("No matching commands")).color(t.text_faint));
                         });
                     }
-                    let rtl = crate::direction::is_rtl();
                     for (i, (_, id, label, detail, enabled)) in hits.iter().enumerate() {
                         let (rect, resp) = ui.allocate_exact_size(vec2(width, 32.0), Sense::click());
                         if i == sel || resp.hovered() {
                             ui.painter().rect_filled(rect, t.radius_sm, if i == sel { t.accent_soft } else { t.hover });
                         }
                         let color = if *enabled { t.text } else { t.text_faint };
-                        let (l_pos, l_align, d_pos, d_align) = hit_row_anchors(rect, rtl);
+                        let (l_pos, l_align, d_pos, d_align) = hit_row_anchors(rect);
                         ui.painter().text(l_pos, l_align, label, theme::medium(13.0), color);
                         if let Some(d) = detail {
                             ui.painter().text(d_pos, d_align, d, egui::FontId::proportional(11.5), t.text_faint);
@@ -292,12 +284,10 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
 
 /// The anchors of a hit row's label and detail: the label sits at the reading-start edge and the
 /// detail at the reading-end edge, each inset 12 px from the row's edge.
-fn hit_row_anchors(rect: egui::Rect, rtl: bool) -> (egui::Pos2, Align2, egui::Pos2, Align2) {
-    if rtl {
-        (rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER, rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER)
-    } else {
-        (rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, rect.right_center() - vec2(12.0, 0.0), Align2::RIGHT_CENTER)
-    }
+fn hit_row_anchors(rect: egui::Rect) -> (egui::Pos2, Align2, egui::Pos2, Align2) {
+    let (l_pos, l_align) = crate::direction::start_text_anchor(rect, 12.0);
+    let (d_pos, d_align) = crate::direction::end_text_anchor(rect, 12.0);
+    (l_pos, l_align, d_pos, d_align)
 }
 
 #[cfg(test)]
@@ -455,12 +445,15 @@ mod tests {
     #[test]
     fn hit_row_anchors_mirror_under_rtl() {
         let rect = egui::Rect::from_min_size(egui::pos2(100.0, 200.0), egui::vec2(560.0, 32.0));
-        let (label, label_align, detail, detail_align) = super::hit_row_anchors(rect, false);
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let (label, label_align, detail, detail_align) = super::hit_row_anchors(rect);
         assert_eq!(label, egui::pos2(rect.left() + 12.0, rect.center().y));
         assert_eq!(label_align, egui::Align2::LEFT_CENTER);
         assert_eq!(detail, egui::pos2(rect.right() - 12.0, rect.center().y));
         assert_eq!(detail_align, egui::Align2::RIGHT_CENTER);
-        let (label, label_align, detail, detail_align) = super::hit_row_anchors(rect, true);
+        drop(_ltr);
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let (label, label_align, detail, detail_align) = super::hit_row_anchors(rect);
         assert_eq!(label, egui::pos2(rect.right() - 12.0, rect.center().y));
         assert_eq!(label_align, egui::Align2::RIGHT_CENTER);
         assert_eq!(detail, egui::pos2(rect.left() + 12.0, rect.center().y));
@@ -504,7 +497,9 @@ mod tests {
             // other 13-pt text in the card (the hint, the warning icon) has no detail beside it.
             let mut rows = Vec::new();
             for (rect, size) in &texts {
-                if *size == 11.5 && let Some((label, _)) = texts.iter().find(|(r, s)| *s == 13.0 && (r.center().y - rect.center().y).abs() < 1.0) {
+                if let Some((label, _)) = texts.iter().find(|(r, s)| *s == 13.0 && (r.center().y - rect.center().y).abs() < 1.0)
+                    && *size == 11.5
+                {
                     rows.push((*label, *rect));
                 }
             }
@@ -582,7 +577,7 @@ mod tests {
             }
             let (g, pos) = shapes
                 .iter()
-                .find_map(|s| hint_galley(&s.shape, &hint))
+                .find_map(|s| hint_galley(&s.shape, hint))
                 .expect("the empty field paints its hint");
             let want_dir = if rtl { egui::epaint::text::TextDirection::RightToLeft } else { egui::epaint::text::TextDirection::Auto };
             assert_eq!(g.job.direction, want_dir, "{dir:?}: paragraph base direction");
