@@ -92,6 +92,7 @@ const SAVE_FILTERS: &[(&str, &[&str])] = &[
     ("OpenRaster", &["ora"]),
     ("PNG", &["png"]),
     ("JPEG", &["jpg", "jpeg"]),
+    ("JPEG XL", &["jxl"]),
     ("WebP", &["webp"]),
     ("TIFF", &["tif", "tiff"]),
     ("Targa", &["tga"]),
@@ -710,6 +711,7 @@ pub fn native(automation: Option<photocraft_automation::AuthorizedWorkspace>) ->
                 cb.set_image(arboard::ImageData { width: w as usize, height: h as usize, bytes: std::borrow::Cow::Borrowed(px) }).map_err(|e| e.to_string())
             })
         }),
+        open_external_svg: Some(Box::new(crate::external_svg::open)),
         clipboard_get_image: Some({
             let clip = clip.clone();
             let unreadable = clip_unreadable.clone();

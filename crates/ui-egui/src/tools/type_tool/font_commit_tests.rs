@@ -168,51 +168,68 @@ fn commit(h: &mut Harness<'_, Probe>, method: &str) {
 }
 
 #[test]
-fn selected_fonts_apply_and_survive_commit_across_controls_and_acceptance_methods() {
+fn selected_fonts_commit_pattern_0() {
+    selected_fonts_commit_cases(0);
+}
+
+#[test]
+fn selected_fonts_commit_pattern_1() {
+    selected_fonts_commit_cases(1);
+}
+
+#[test]
+fn selected_fonts_commit_pattern_2() {
+    selected_fonts_commit_cases(2);
+}
+
+#[test]
+fn selected_fonts_commit_pattern_3() {
+    selected_fonts_commit_cases(3);
+}
+
+fn selected_fonts_commit_cases(pattern: usize) {
     let mut cases = 0;
     for new in [false, true] {
-        for pattern in 0..4 {
-            for character in [false, true] {
-                for range in [[0, 2], [2, 4], [4, 6], [0, 6], [4, 2], [1, 5]] {
-                    for target in FONTS {
-                        for accept in ["enter", "click", "arrow-enter"] {
-                            for method in ["checkmark", "outside"] {
-                                let label = (new, pattern, character, range, target, accept, method);
-                                let (mut h, id) = fixture(new, pattern, character, "abcdef");
-                                select(&mut h, range);
-                                h.run();
-                                let mut expected = families(&saved(&h, id));
-                                for font in &mut expected[range[0].min(range[1])..range[0].max(range[1])] {
-                                    *font = target.into();
-                                }
-                                choose(&mut h, target, accept);
-                                let applied = saved(&h, id);
-                                assert_eq!(families(&applied), expected, "{label:?}");
-                                assert_eq!(fields(&h)[0].as_deref(), Some(target), "selected font caption: {label:?}");
-                                let pixels = layer(&h.state().app.session.active().unwrap().doc, id).cache.clone();
-                                commit(&mut h, method);
-                                assert!(h.state().app.ui.text_edit.is_none(), "{label:?}");
-                                assert_eq!(saved(&h, id), applied, "{label:?}");
-                                assert_eq!(layer(&h.state().app.session.active().unwrap().doc, id).cache, pixels, "{label:?}");
-                                let uniform = expected.iter().all(|f| f == &expected[0]);
-                                assert_eq!(
-                                    fields(&h)[0].clone().unwrap_or_default(),
-                                    if uniform { expected[0].clone() } else { String::new() },
-                                    "mixed caption after commit: {label:?}"
-                                );
-                                super::edit_active(&mut h.state_mut().app).unwrap();
-                                select(&mut h, range);
-                                h.run();
-                                assert_eq!(fields(&h)[0].as_deref(), Some(target), "reselected caption: {label:?}");
-                                cases += 1;
+        for character in [false, true] {
+            for range in [[0, 2], [2, 4], [4, 6], [0, 6], [4, 2], [1, 5]] {
+                for target in FONTS {
+                    for accept in ["enter", "click", "arrow-enter"] {
+                        for method in ["checkmark", "outside"] {
+                            let label = (new, pattern, character, range, target, accept, method);
+                            let (mut h, id) = fixture(new, pattern, character, "abcdef");
+                            select(&mut h, range);
+                            h.run();
+                            let mut expected = families(&saved(&h, id));
+                            for font in &mut expected[range[0].min(range[1])..range[0].max(range[1])] {
+                                *font = target.into();
                             }
+                            choose(&mut h, target, accept);
+                            let applied = saved(&h, id);
+                            assert_eq!(families(&applied), expected, "{label:?}");
+                            assert_eq!(fields(&h)[0].as_deref(), Some(target), "selected font caption: {label:?}");
+                            let pixels = layer(&h.state().app.session.active().unwrap().doc, id).cache.clone();
+                            commit(&mut h, method);
+                            assert!(h.state().app.ui.text_edit.is_none(), "{label:?}");
+                            assert_eq!(saved(&h, id), applied, "{label:?}");
+                            assert_eq!(layer(&h.state().app.session.active().unwrap().doc, id).cache, pixels, "{label:?}");
+                            let uniform = expected.iter().all(|f| f == &expected[0]);
+                            assert_eq!(
+                                fields(&h)[0].clone().unwrap_or_default(),
+                                if uniform { expected[0].clone() } else { String::new() },
+                                "mixed caption after commit: {label:?}"
+                            );
+                            super::edit_active(&mut h.state_mut().app).unwrap();
+                            select(&mut h, range);
+                            h.run();
+                            assert_eq!(fields(&h)[0].as_deref(), Some(target), "reselected caption: {label:?}");
+                            cases += 1;
                         }
                     }
                 }
             }
         }
     }
-    assert_eq!(cases, 1152);
+    assert_eq!(cases, 288);
 }
 
 #[test]
