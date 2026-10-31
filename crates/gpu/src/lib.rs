@@ -44,6 +44,7 @@ pub mod bounds;
 mod camera_raw;
 mod fx;
 pub mod health;
+pub mod operator;
 pub mod plan;
 mod prefix;
 pub mod timing;
@@ -60,6 +61,7 @@ use photocraft_raster::{Surface, Tile};
 
 pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use health::{DeviceHealth, Fault};
+pub use operator::{GaussianBlur, LayerOperator, OperatorInput, OperatorProgram, SeparableBlur};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 
@@ -125,6 +127,25 @@ pub struct Compositor {
     /// Timestamp queries measuring how long the GPU spends on a refresh (see
     /// [`Compositor::measure_gpu_time`]); `None` = not measured.
     timer: Option<timing::GpuTimer>,
+    /// Layer operators per document ([`Compositor::set_operators`]).
+    operators: HashMap<DocId, Vec<LayerOperator>>,
+    /// The operators' compute pipelines: `None` until first needed, `Some(None)` when the device
+    /// can't run them.
+    op_kit: Option<Option<operator::OpKit>>,
+    /// What each operator page (`Role::Operator*`) was made from: a fingerprint of the program,
+    /// its window and the source tiles it read. A page with another fingerprint is redrawn.
+    op_made: HashMap<ResKey, u64>,
+    /// The selection each operator mask page was made from: held while the page is, so no other
+    /// selection can take its address (which the page's fingerprint hashes).
+    op_pins: HashMap<ResKey, Arc<Surface>>,
+    /// The operators of the document the current refresh draws.
+    frame_ops: Vec<LayerOperator>,
+    /// The blur passes' two scratch textures, reused from cell to cell and step to step (made
+    /// anew each time, they cost their allocation and clearing on every slider step).
+    op_scratch: Option<([u32; 2], [wgpu::Texture; 2])>,
+    /// The part of the canvas the current refresh draws (tile aligned): operators compute only
+    /// their output there.
+    frame_region: Rect,
 }
 use W::{F, I, U};
 
