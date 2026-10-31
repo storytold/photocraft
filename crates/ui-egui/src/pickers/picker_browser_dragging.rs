@@ -15,7 +15,7 @@ pub(crate) enum PointerRegion {
     LeadingEdge,
     /// Trailing edge of a node: insert after it.
     TrailingEdge,
-    /// Interior of a group body: append as its last child.
+    /// Interior of a group header: insert as its first child.
     GroupBody,
     /// Explicit end-of-container area, including the empty-container drop area.
     ContainerEnd,
@@ -45,7 +45,7 @@ pub(crate) struct DropHitRegion {
 pub(crate) enum DropIndicator {
     /// A horizontal or vertical insertion marker immediately before/after a node.
     InsertionLine { rect: Rect },
-    /// Highlight the receiving group when the operation appends inside it.
+    /// Highlight the receiving group when the operation inserts inside it.
     ContainerHighlight { rect: Rect },
     /// Marker for appending at the end of the root sequence.
     RootAppendLine { rect: Rect },
@@ -220,12 +220,9 @@ pub(crate) fn resolve_drop_candidate(source: &NodeId, hit: &DropHitRegion, hiera
             (DropPosition::After { target }, DropIndicator::InsertionLine { rect: hit.indicator_rect })
         }
         PointerRegion::GroupBody => {
-            let container = hit.container.clone()?;
-            if container == ContainerId::Root {
-                return None;
-            }
+            let ContainerId::Group(group) = hit.container.clone()? else { return None };
             let rect = hit.indicator_rect;
-            (DropPosition::AppendTo { container }, DropIndicator::ContainerHighlight { rect })
+            (DropPosition::PrependTo { group }, DropIndicator::ContainerHighlight { rect })
         }
         PointerRegion::ContainerEnd => {
             let container = hit.container.clone()?;
@@ -294,15 +291,31 @@ mod tests {
     }
 
     #[test]
-    fn group_body_and_container_end_are_explicit_append_operations() {
+    fn group_body_prepends_while_container_end_appends() {
         let body = resolve_drop_candidate(&NodeId::from("card"), &hit(PointerRegion::GroupBody, None, Some(ContainerId::Group("other".into()))), &hierarchy())
             .unwrap();
-        assert_eq!(body.position, DropPosition::AppendTo { container: ContainerId::Group("other".into()) });
+        assert_eq!(body.position, DropPosition::PrependTo { group: NodeId::from("other") });
         assert!(matches!(body.indicator, DropIndicator::ContainerHighlight { .. }));
+
+        let group = resolve_drop_candidate(
+            &NodeId::from("other"),
+            &hit(PointerRegion::GroupBody, None, Some(ContainerId::Group("folder".into()))),
+            &hierarchy(),
+        ).unwrap();
+        assert_eq!(group.position, DropPosition::PrependTo { group: NodeId::from("folder") });
+        assert!(group.is_valid());
 
         let root_end = resolve_drop_candidate(&NodeId::from("card"), &hit(PointerRegion::ContainerEnd, None, Some(ContainerId::Root)), &hierarchy()).unwrap();
         assert_eq!(root_end.position, DropPosition::AppendTo { container: ContainerId::Root });
         assert!(matches!(root_end.indicator, DropIndicator::RootAppendLine { .. }));
+
+        let group_end = resolve_drop_candidate(
+            &NodeId::from("card"),
+            &hit(PointerRegion::ContainerEnd, None, Some(ContainerId::Group("other".into()))),
+            &hierarchy(),
+        ).unwrap();
+        assert_eq!(group_end.position, DropPosition::AppendTo { container: ContainerId::Group("other".into()) });
+        assert!(matches!(group_end.indicator, DropIndicator::InsertionLine { .. }));
     }
 
     #[test]

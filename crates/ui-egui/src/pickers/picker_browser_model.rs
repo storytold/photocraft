@@ -142,15 +142,16 @@ pub(crate) enum ContainerId {
 
 /// Exact structural destination for a drag operation.
 ///
-/// Before and after are always sibling insertions: the target node determines the destination
-/// container. Append is the only operation that names a container directly, and covers both
-/// appending to a non-empty group and inserting into an empty group or at the end of root.
+/// Before and after are sibling insertions. Prepend and append name a container directly and
+/// distinguish the first-child drop target from an explicit end-of-container drop target.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum DropPosition {
     /// Insert immediately before the target in its current parent's ordered children.
     Before { target: NodeId },
     /// Insert immediately after the target in its current parent's ordered children.
     After { target: NodeId },
+    /// Insert as the first child of a group.
+    PrependTo { group: NodeId },
     /// Insert as the final child of a container.
     AppendTo { container: ContainerId },
 }
@@ -271,17 +272,17 @@ impl PickerBrowserHierarchy {
         let destination = match position {
             DropPosition::Before { target } | DropPosition::After { target } => {
                 let parent = self.parent_of(target).ok_or_else(|| HierarchyError::MissingTarget(target.clone()))?;
-                (parent, Some((target.clone(), matches!(position, DropPosition::After { .. }))))
+                (parent, Some((target.clone(), matches!(position, DropPosition::After { .. }))), false)
             }
-            DropPosition::AppendTo { container } => (container.clone(), None),
+            DropPosition::PrependTo { group } => (ContainerId::Group(group.clone()), None, true),
+            DropPosition::AppendTo { container } => (container.clone(), None, false),
         };
 
         // Resolve the target's sibling index before removal. Adjust it when source and destination
         // are the same sequence so the result remains immediately adjacent to the target.
-        let target_index = destination
-            .1
-            .as_ref()
-            .and_then(|(target, after)| self.children(&destination.0)?.iter().position(|node| node.id() == target).map(|index| (index, *after)));
+        let target_index = if destination.2 { Some((0, false)) } else { destination.1.as_ref().and_then(|(target, after)| {
+            self.children(&destination.0)?.iter().position(|node| node.id() == target).map(|index| (index, *after))
+        }) };
         if let Some((target, _)) = &destination.1
             && target_index.is_none()
         {
@@ -378,6 +379,7 @@ impl PickerBrowserHierarchy {
                 }
                 self.parent_of(target).ok_or_else(|| HierarchyError::MissingTarget(target.clone()))?
             }
+            DropPosition::PrependTo { group } => ContainerId::Group(group.clone()),
             DropPosition::AppendTo { container } => container.clone(),
         };
         if let ContainerId::Group(group) = &destination {
@@ -519,7 +521,7 @@ mod tests {
         let left = NodeId::group_path(["left"], "shared");
         let right = NodeId::group_path(["right"], "shared");
         assert_ne!(left, right);
-        assert_ne!(NodeId::group_path([], "shared"), left);
+        assert_ne!(NodeId::group_path(std::iter::empty::<String>(), "shared"), left);
         assert_ne!(NodeId::item_in_path(["left", "shared"], "same"), NodeId::item_in_path(["right", "shared"], "same"));
         assert_ne!(NodeId::group_path(["a:b"], "c"), NodeId::group_path(["a"], "b:c"));
         assert_ne!(NodeId::group_path(["left"], "shared").to_string(), NodeId::group_path(["right"], "shared").to_string());
@@ -573,6 +575,14 @@ mod tests {
         hierarchy.move_node(&NodeId::from("two"), &DropPosition::AppendTo { container: ContainerId::Root }).unwrap();
         assert_eq!(ids(hierarchy.node(&NodeId::from("C")).unwrap().children()), ["one"]);
         assert_eq!(ids(hierarchy.roots()), ["A", "C", "two"]);
+    }
+
+    #[test]
+    fn prepend_places_cards_and_groups_at_the_first_mixed_child_position() {
+        let mut hierarchy = tree();
+        hierarchy.move_node(&NodeId::from("three"), &DropPosition::PrependTo { group: NodeId::from("A") }).unwrap();
+        hierarchy.move_node(&NodeId::from("C"), &DropPosition::PrependTo { group: NodeId::from("A") }).unwrap();
+        assert_eq!(ids(hierarchy.node(&NodeId::from("A")).unwrap().children()), ["C", "three", "one", "B"]);
     }
 
     #[test]

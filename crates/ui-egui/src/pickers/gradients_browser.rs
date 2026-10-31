@@ -177,6 +177,7 @@ mod tests {
         assert!(headers.len() >= 2, "gradient group headers are visible");
         let (target_group, target_header) = &headers[0];
         let (moving_group, moving_header) = headers.last().unwrap();
+        let target_item = h.state().session.presets.gradients.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
         let size = *h.state().ui.presets_ui.sizes.get("gradients").unwrap_or(&40.0);
         let origin = h.ctx.input(|input| input.viewport_rect().min);
         let target = egui::pos2(origin.x + 8.0 + 20.0 + size * 0.5 - 5.0, target_header.bottom() + 2.0 + size * 0.5);

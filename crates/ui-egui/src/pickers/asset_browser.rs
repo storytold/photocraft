@@ -13,21 +13,38 @@ use crate::pickers::asset_browser_interaction::{
     AssetDrag, ContextMenuAction, HeaderDropCapabilities, HierarchyDrop, asset_browser_header_drag_source_with_id,
     asset_browser_header_target_with_capabilities,
     asset_browser_take_release,
-    asset_browser_item_drag_source_with_id, asset_browser_item_gesture, asset_browser_item_hierarchy_target, asset_browser_item_target, card_drop_hit,
+    asset_browser_item_drag_source_with_id, asset_browser_item_gesture, asset_browser_item_hierarchy_target, asset_browser_item_target,
     context_menu_target, draw_group_context_menu, draw_item_context_menu, group_append_hit, group_header_drop_hit, header_drop_before, hierarchy_group_drop,
-    item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
+    card_drop_hit, card_drop_hits, group_gap_drop_hits, group_gap_upper_anchor, item_drop_after, item_row_edge_targets, paint_group_insertion_line, root_append_hit,
 };
 use crate::pickers::asset_browser_items::{item_info as asset_browser_item_info, list_row as asset_browser_list_row};
 use crate::pickers::picker_state::escape_hierarchy_key_part;
 use crate::pickers::picker_state::{HierarchyOrderEntry, ItemRenameState, PresetUi};
 use crate::pickers::picker_browser_hierarchy::{HierarchyIdentity, commit_hierarchy_move};
 use crate::pickers::picker_browser_model::{ContainerId, HierarchyNode, NodeId, PickerBrowserHierarchy};
-use crate::pickers::picker_browser_dragging::{DragSession, DropCommitResult, DropHitRegion, DropMoveIntent, arbitrate_hit_index, paint_candidate};
+use crate::pickers::picker_browser_dragging::{DragSession, DropCommitResult, DropHitRegion, DropMoveIntent, PointerRegion, arbitrate_hit_index, paint_candidate};
 use crate::theme::Tokens;
 
 pub(crate) const MIN_THUMB: f32 = 20.0;
 const GROUP_HEADER_HEIGHT: f32 = 30.0;
 const GROUP_DRAG_GHOST_OPACITY: f32 = 0.4;
+const HIT_DEBUG_KEY: &str = "preset-browser-hit-debug";
+const HIT_DEBUG_LABEL_HEIGHT: f32 = 9.0;
+
+fn hit_debug_label_position(hit: &DropHitRegion) -> Pos2 {
+    let label_y = if hit.hit_rect.height() <= 6.1 {
+        match hit.region {
+            // The upper label must not be placed above the gap: that part can be clipped by
+            // the preceding group's row. Stack both labels below the gap instead.
+            PointerRegion::TrailingEdge => hit.hit_rect.bottom() + 3.0,
+            PointerRegion::LeadingEdge => hit.hit_rect.bottom() + HIT_DEBUG_LABEL_HEIGHT,
+            _ => hit.hit_rect.top() + 2.0,
+        }
+    } else {
+        hit.hit_rect.top() + 2.0
+    };
+    pos2(hit.hit_rect.left() + 3.0, label_y)
+}
 
 /// Asset-neutral item identity and label consumed by the shared picker browser.
 pub(crate) struct ItemView {
@@ -807,6 +824,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
     let mut indent_drop_targets: Vec<(String, egui::Response)> = Vec::new();
     let mut indent_release: Option<(String, String)> = None;
     let mut group_content_areas: Vec<(String, Rect)> = Vec::new();
+    let mut gap_headers: Vec<(NodeId, Rect, usize, bool)> = Vec::new();
     let mut expanded_groups = BTreeSet::new();
     let mut dropped: Option<(String, Pos2)> = None;
     let mut browser_item_drop = false;
@@ -906,6 +924,11 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     expanded_groups.insert(g.name.clone());
                 }
                 if segment.show_header {
+                // Reserve six real pixels between group rows: two from normal row spacing and
+                // four explicit pixels for reliable insertion hit targets.
+                if !gap_headers.is_empty() {
+                    ui.add_space(4.0);
+                }
                 let (hr, hresp) = if let Some(paint) = paint_group.as_deref_mut() {
                     let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), GROUP_HEADER_HEIGHT), Sense::hover());
                     let r = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
@@ -923,16 +946,13 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                     ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
                 }
                 let header_rect = inset_row_rect(hr, depth);
+                gap_headers.push((NodeId::group(&g.name), header_rect, depth, open));
                 let header_released = if canonical_hierarchy_drag {
                     if capabilities.group_drag {
                         asset_browser_header_drag_source_with_id(&hresp, panel, NodeId::group(&g.name));
                     }
-                    if let Some(pointer) = ui.ctx().pointer_interact_pos()
-                        && header_rect.contains(pointer)
-                    {
-                        let hit_index = canonical_drop_hits.borrow().len();
-                        canonical_drop_hits.borrow_mut().push((group_header_drop_hit(header_rect, pointer, NodeId::group(&g.name), depth, hit_index), hresp.clone()));
-                    }
+                    let hit_index = canonical_drop_hits.borrow().len();
+                    canonical_drop_hits.borrow_mut().push((group_header_drop_hit(header_rect, Pos2::ZERO, NodeId::group(&g.name), depth, hit_index), hresp.clone()));
                     None
                 } else {
                     asset_browser_header_target_with_capabilities(
@@ -967,13 +987,13 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 if let Some(dragged) = header_released {
                     match dragged {
                         AssetDrag::Preset { scope, key, .. } if scope.as_str() == panel => {
-                            ev.push(BrowserAction::MoveItem(key.clone(), g.name.clone(), None));
+                            ev.push(BrowserAction::MoveItem(key.clone(), g.name.clone(), Some(0)));
                             browser_item_drop = true;
                             if !domain_hierarchy_actions
                                 && let Some((source_index, _)) = item_occurrence_position(groups, &key)
                                 && let Some(source_group) = groups.get(source_index)
                             {
-                                move_item_sibling_order(st, panel, &hierarchy_orders, &source_group.name, &g.name, &key, None);
+                                move_item_sibling_order(st, panel, &hierarchy_orders, &source_group.name, &g.name, &key, hierarchy_orders.get(&g.name).and_then(|entries| entries.first()));
                             }
                         }
                         // Top-level group source headers are handled once by the final release
@@ -1038,6 +1058,9 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                         let st_cell = std::cell::RefCell::new(&mut *st);
                         let ev_cell = std::cell::RefCell::new(&mut ev);
                         let mut draw_group = |ui: &mut egui::Ui, group: &HierarchyGroup<'_, ItemView>, group_open: bool, group_depth: usize| {
+                            if !gap_headers.is_empty() {
+                                ui.add_space(4.0);
+                            }
                             let (allocated_rect, allocated) = ui.allocate_exact_size(vec2(ui.available_width(), 20.0), Sense::hover());
                             let fr = Rect::from_min_max(pos2(ui.clip_rect().left(), allocated_rect.top()), pos2(allocated_rect.right(), allocated_rect.bottom()));
                             let row_depth = group_depth + 1 + depth;
@@ -1059,21 +1082,21 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 fresp.hovered(),
                                 Some(group.count),
                             );
+                            let name = group.path.last().map(String::as_str).unwrap_or("");
+                            let node_id = NodeId::group_path(
+                                std::iter::once(g.name.clone()).chain(group.path.iter().take(group.path.len().saturating_sub(1)).cloned()),
+                                name.to_owned(),
+                            );
+                            gap_headers.push((node_id.clone(), inset_row_rect(fr, row_depth), row_depth, group_open));
                             if canonical_hierarchy_drag {
-                                let name = group.path.last().map(String::as_str).unwrap_or("");
-                                let node_id = NodeId::group_path(std::iter::once(g.name.clone()).chain(group.path.iter().take(group.path.len().saturating_sub(1)).cloned()), name.to_owned());
                                 if capabilities.group_drag {
                                     asset_browser_header_drag_source_with_id(&fresp, panel, node_id.clone());
                                 }
-                                if let Some(pointer) = ui.ctx().pointer_interact_pos()
-                                    && inset_row_rect(fr, row_depth).contains(pointer)
-                                {
-                                    let hit_index = canonical_drop_hits.borrow().len();
-                                    canonical_drop_hits.borrow_mut().push((
-                                        group_header_drop_hit(inset_row_rect(fr, row_depth), pointer, node_id, row_depth, hit_index),
-                                        fresp.clone(),
-                                    ));
-                                }
+                                let hit_index = canonical_drop_hits.borrow().len();
+                                canonical_drop_hits.borrow_mut().push((
+                                    group_header_drop_hit(inset_row_rect(fr, row_depth), Pos2::ZERO, node_id, row_depth, hit_index),
+                                    fresp.clone(),
+                                ));
                             } else if !canonical_hierarchy_drag
                                 && let Some(dragged) = asset_browser_header_target_with_capabilities(
                                 ui,
@@ -1112,7 +1135,8 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 }
                             }
                         };
-                        let mut draw_items = |ui: &mut egui::Ui, items: &[&ItemView], group_depth: usize| {
+                        let mut draw_items = |ui: &mut egui::Ui, items: &[&ItemView], group_path: &[String]| {
+                            let group_depth = group_path.len();
                             let w = ui.available_width();
                             // Cards and hierarchy rows share the same 20px-per-level visual
                             // coordinate. Grid-only padding is accounted for inside that amount,
@@ -1213,12 +1237,10 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                             asset_browser_item_drag_source_with_id(&resp, panel, &it.key, source_id);
                                         }
                                     }
-                                    if let Some(pointer) = ui.ctx().pointer_interact_pos()
-                                        && r.contains(pointer)
-                                    {
-                                        if let Some(target_id) = item_node_for_identity(&g.name, &it.group_path, &it.key, &hierarchy_identities) {
-                                            let hit_index = canonical_drop_hits.borrow().len();
-                                            canonical_drop_hits.borrow_mut().push((card_drop_hit(r, pointer, !list, target_id, depth + it.group_path.len() + 1, hit_index), resp.clone()));
+                                    if let Some(target_id) = item_node_for_identity(&g.name, &it.group_path, &it.key, &hierarchy_identities) {
+                                        let hit_index = canonical_drop_hits.borrow().len();
+                                        for hit in card_drop_hits(r, !list, target_id, depth + it.group_path.len() + 1, hit_index) {
+                                            canonical_drop_hits.borrow_mut().push((hit, resp.clone()));
                                         }
                                     }
                                 }
@@ -1227,30 +1249,26 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 } else {
                                     None
                                 };
-                                // On grid rows, the unused space before the first card and after
-                                // the last card is also a drop target. In particular, this lets an
-                                // incomplete row accept a drop at the panel's right edge.
+                                // On grid rows, only the unused space after the last card is an
+                                // additional drop target. Prepend stays within the card bounds.
                                 if capabilities.item_drag && !list && (canonical_hierarchy_drag || released_drag.is_none()) {
-                                    let first_in_row = run_i % cols == 0;
                                     let last_in_row = run_i + 1 == items.len() || (run_i + 1) % cols == 0;
-                                    let (left_edge, right_edge) = item_row_edge_targets(area, r, first_in_row, last_in_row);
+                                    let right_edge = item_row_edge_targets(area, r, last_in_row);
                                     let pointer = ui.ctx().pointer_interact_pos();
-                                    let edge_target =
-                                        left_edge.filter(|rect| pointer.is_some_and(|pointer| rect.contains(pointer))).map(|rect| ("left", rect)).or_else(
-                                            || right_edge.filter(|rect| pointer.is_some_and(|pointer| rect.contains(pointer))).map(|rect| ("right", rect)),
-                                        );
-                                    if let Some((side, edge_rect)) = edge_target {
-                                        let edge_response = ui.interact(edge_rect, ui.id().with((panel, gi, ii, side)), Sense::hover());
-                                        if canonical_hierarchy_drag
-                                            && let Some(pointer) = pointer
-                                        {
+                                    if canonical_hierarchy_drag {
+                                        if let Some(edge_rect) = right_edge {
+                                            let edge_response = ui.interact(edge_rect, ui.id().with((panel, gi, ii, "right")), Sense::hover());
                                             if let Some(target_id) = item_node_for_identity(&g.name, &it.group_path, &it.key, &hierarchy_identities) {
                                                 let hit_index = canonical_drop_hits.borrow().len();
-                                                let mut hit = card_drop_hit(r, pointer, true, target_id, depth + it.group_path.len() + 1, hit_index);
+                                                let mut hit = card_drop_hit(r, Pos2::new(r.right(), r.center().y), true, target_id, depth + it.group_path.len() + 1, hit_index);
                                                 hit.hit_rect = edge_rect;
-                                                canonical_drop_hits.borrow_mut().push((hit, edge_response.clone()));
+                                                canonical_drop_hits.borrow_mut().push((hit, edge_response));
                                             }
                                         }
+                                    }
+                                    let edge_target = right_edge.filter(|rect| pointer.is_some_and(|pointer| rect.contains(pointer))).map(|rect| ("right", rect));
+                                    if let Some((side, edge_rect)) = edge_target {
+                                        let edge_response = ui.interact(edge_rect, ui.id().with((panel, gi, ii, side)), Sense::hover());
                                         let edge_hierarchy_accepts = edge_response.dnd_hover_payload::<AssetDrag>().is_some_and(|payload| match payload.as_ref() {
                                             AssetDrag::Group { scope, name, path } if scope == panel => {
                                                 if path.is_empty() {
@@ -1380,13 +1398,18 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                             }
                         }
                         if folder_open {
-                            draw_items(ui, &segment_items, segment.folder_path.len());
+                            draw_items(ui, &segment_items, &segment.folder_path);
                         }
                     }
                     for (dragged, target_group, target_group_path, edge) in group_releases.drain(..) {
                         match dragged {
                             AssetDrag::Preset { scope, key, .. } if scope == panel => {
-                                ev.push(BrowserAction::MoveItemToGroup { key, group: target_group, group_path: target_group_path, before: None });
+                                let before = groups
+                                    .iter()
+                                    .find(|group| group.name == target_group)
+                                    .and_then(|group| group.items.iter().find(|item| item.group_path == target_group_path))
+                                    .map(|item| item.key.clone());
+                                ev.push(BrowserAction::MoveItemToGroup { key, group: target_group, group_path: target_group_path, before });
                                 browser_item_drop = true;
                             }
                             AssetDrag::Group { scope, name, path } if scope == panel && domain_hierarchy_actions => {
@@ -1490,7 +1513,69 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                                 ui.id().with(("group-indent-column", panel, group_name)),
                                 Sense::hover(),
                             );
+                            if canonical_hierarchy_drag {
+                                let append_indicator = Rect::from_min_max(
+                                    pos2(header.left(), bottom - 2.0),
+                                    pos2(header.right(), bottom + 2.0),
+                                );
+                                let depth = display.iter().find_map(|(index, depth)| {
+                                    groups.get(*index).is_some_and(|group| group.name == *group_name).then_some(*depth)
+                                }).unwrap_or(0);
+                                let hit_index = canonical_drop_hits.borrow().len();
+                                let hit = group_append_hit(column, append_indicator, NodeId::group(group_name), depth, hit_index);
+                                canonical_drop_hits.borrow_mut().push((hit, response.clone()));
+                            }
                             indent_drop_targets.push((group_name.clone(), response));
+                        }
+                    }
+                }
+            }
+            // Each adjacent visible group pair has an actual six-pixel gap. The upper half inserts
+            // after the last card in the upper group's own sibling sequence; when that sequence has
+            // no cards, it falls back to placing after the group header itself.
+            if canonical_hierarchy_drag {
+                for pair in gap_headers.windows(2) {
+                    let (upper_id, _upper_rect, upper_depth, upper_open) = &pair[0];
+                    let (lower_id, lower_rect, lower_depth, _) = &pair[1];
+                    let gap_rect = Rect::from_min_max(
+                        pos2(lower_rect.left(), lower_rect.top() - 6.0),
+                        pos2(lower_rect.right(), lower_rect.top()),
+                    );
+                    // The layout inserts exactly six pixels before every visible header after
+                    // the first. Do not infer the gap from the upper group's content bounds: a
+                    // mixed sibling sequence can render cards from that group after a child
+                    // header, and nested descendants can extend beyond the upper group's own
+                    // card area. The six pixels immediately preceding the lower header are the
+                    // authoritative gap regardless of that content ordering.
+                    if gap_rect.is_positive() {
+                        let response = ui.interact(
+                            gap_rect,
+                            ui.id().with(("group-gap", panel, upper_id, lower_id)),
+                            Sense::hover(),
+                        );
+                        let (upper_anchor, upper_anchor_depth) = if *upper_open {
+                            group_gap_upper_anchor(&hierarchy, upper_id)
+                        } else {
+                            (upper_id.clone(), *upper_depth)
+                        };
+                        let mut hits = group_gap_drop_hits(
+                            gap_rect,
+                            upper_anchor,
+                            lower_id.clone(),
+                            upper_anchor_depth.max(*upper_depth),
+                            *lower_depth,
+                            canonical_drop_hits.borrow().len(),
+                        );
+                        // The gap immediately before a visible child group is also the parent's
+                        // append target. This remains valid when the dragged group is already a
+                        // child of that parent: AppendTo reorders it to the end of the same list.
+                        if hierarchy.parent_of(lower_id) == Some(ContainerId::Group(upper_id.clone())) {
+                            hits[0].target = None;
+                            hits[0].container = Some(ContainerId::Group(upper_id.clone()));
+                            hits[0].region = PointerRegion::ContainerEnd;
+                        }
+                        for hit in hits {
+                            canonical_drop_hits.borrow_mut().push((hit, response.clone()));
                         }
                     }
                 }
@@ -1524,7 +1609,9 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
             {
                 indent_release = Some((name, parent.clone()));
             }
-            // Paint the append-into-parent marker below the parent's complete visible subtree.
+            // Keep the legacy append marker below the parent's complete visible subtree. The
+            // canonical path instead highlights the full receiving group because group-body
+            // drops now insert at its first child position.
             let indent_target_hovered = indent_target.is_some();
             if indent_target_hovered {
                 if let Some((parent, _)) = indent_target {
@@ -1549,23 +1636,7 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                             pos2(header.left(), anchor.bottom() - header.height()),
                             pos2(header.right(), anchor.bottom()),
                         );
-                        if canonical_hierarchy_drag {
-                            if let Some((_, response)) = indent_target {
-                                let hit_index = canonical_drop_hits.borrow().len();
-                                let hit = group_append_hit(
-                                    response.rect,
-                                    marker_anchor,
-                                    NodeId::group(parent),
-                                    headers
-                                        .iter()
-                                        .find(|(_, _, name)| name == parent)
-                                        .and_then(|(index, _, _)| display.iter().find_map(|(display_index, depth)| (*display_index == *index).then_some(*depth)))
-                                        .unwrap_or(0),
-                                    hit_index,
-                                );
-                                canonical_drop_hits.borrow_mut().push((hit, response.clone()));
-                            }
-                        } else {
+                        if !canonical_hierarchy_drag {
                             paint_group_insertion_line(ui, marker_anchor, false, t.accent);
                         }
                     }
@@ -1607,6 +1678,29 @@ pub(crate) fn browser(ui: &mut egui::Ui, st: &mut PresetUi, adapter: &mut Browse
                 canonical_drop_hits.borrow_mut().push((root_append_hit(root_end_rect, indicator, hit_index), root_end_response));
             }
         });
+    let hit_debug_id = egui::Id::new((HIT_DEBUG_KEY, panel));
+    {
+        let painter = ui.painter().clone().with_layer_id(egui::LayerId::new(egui::Order::Foreground, hit_debug_id));
+        for (hit, _) in canonical_drop_hits.borrow().iter() {
+            let gap_hit = hit.hit_rect.height() <= 6.1 && hit.hit_rect.width() > 10.0;
+            let (color, label) = match hit.region {
+                PointerRegion::GroupBody => (egui::Color32::from_rgb(35, 145, 255), "HEADER → PREPEND"),
+                PointerRegion::ContainerEnd if gap_hit => (egui::Color32::from_rgb(190, 90, 245), "GAP → APPEND UPPER LEVEL"),
+                PointerRegion::ContainerEnd if hit.container == Some(ContainerId::Root) => (egui::Color32::from_rgb(245, 80, 80), "ROOT → APPEND"),
+                PointerRegion::ContainerEnd => (egui::Color32::from_rgb(255, 175, 35), "INDENT → APPEND"),
+                PointerRegion::LeadingEdge if gap_hit => (egui::Color32::from_rgb(60, 220, 130), "GAP → LOWER LEVEL"),
+                PointerRegion::TrailingEdge if gap_hit => (egui::Color32::from_rgb(190, 90, 245), "GAP → AFTER UPPER SIBLING"),
+                PointerRegion::LeadingEdge => (egui::Color32::from_rgb(60, 220, 130), "CARD → BEFORE"),
+                PointerRegion::TrailingEdge => (egui::Color32::from_rgb(190, 90, 245), "CARD → AFTER"),
+            };
+            painter.rect_filled(hit.hit_rect, 0.0, color.gamma_multiply(0.11));
+            painter.rect_stroke(hit.hit_rect, 0.0, Stroke::new(1.5, color.gamma_multiply(0.5)), egui::StrokeKind::Inside);
+            painter.text(hit_debug_label_position(hit), Align2::LEFT_TOP, label, FontId::proportional(HIT_DEBUG_LABEL_HEIGHT), color.gamma_multiply(0.5));
+        }
+        let legend = Rect::from_min_size(ui.clip_rect().left_top() + vec2(6.0, 6.0), vec2(190.0, 22.0));
+        painter.rect_filled(legend, 2.0, egui::Color32::from_black_alpha(105));
+        painter.text(legend.center(), Align2::CENTER_CENTER, "HIT AREAS  •  DEBUG OVERLAY ON", FontId::proportional(11.0), egui::Color32::WHITE.gamma_multiply(0.5));
+    }
     let mut hierarchy_drop_feedback = None;
     if canonical_hierarchy_drag {
         if let Some(pointer) = ui.ctx().pointer_interact_pos() {
@@ -1799,7 +1893,8 @@ pub(crate) fn last_browser_rect(ctx: &egui::Context, panel: &str) -> Option<Rect
 mod filter_tests {
     use super::{
         BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, HierarchyOrderEntry, ItemPaintState, ItemView, best_drop_target_index,
-        best_indent_drop_target_index, browser, filter_groups, group_render_segments, item_hierarchy_insertion_anchor, item_occurrence_position,
+        best_indent_drop_target_index, browser, filter_groups, group_render_segments, hit_debug_label_position, item_hierarchy_insertion_anchor, item_occurrence_position,
+        HIT_DEBUG_LABEL_HEIGHT,
     };
     use crate::pickers::picker_state::PresetUi;
     use egui_kittest::kittest::Queryable;
@@ -1882,6 +1977,29 @@ mod filter_tests {
         let items = vec![item("f", "F", &["F"]), item("a", "A", &[]), item("b", "B", &[])];
 
         assert_eq!(item_hierarchy_insertion_anchor(&items, 1, &[], true, Some(&["F".into()])), (None, Some("b".into())));
+    }
+
+    #[test]
+    fn upper_and_lower_gap_debug_labels_do_not_overwrite_each_other() {
+        let gap = egui::Rect::from_min_max(egui::pos2(10.0, 100.0), egui::pos2(210.0, 106.0));
+        let hits = crate::pickers::asset_browser_interaction::group_gap_drop_hits(
+            gap,
+            crate::pickers::picker_browser_model::NodeId::from("upper"),
+            crate::pickers::picker_browser_model::NodeId::from("lower"),
+            0,
+            1,
+            0,
+        );
+        let upper_label = hit_debug_label_position(&hits[0]);
+        let lower_label = hit_debug_label_position(&hits[1]);
+
+        assert!(upper_label.y >= gap.bottom(), "upper label starts above the visible gap: y={}", upper_label.y);
+        assert!(
+            upper_label.y + HIT_DEBUG_LABEL_HEIGHT <= lower_label.y,
+            "upper label at y={} overlaps lower label at y={}",
+            upper_label.y,
+            lower_label.y,
+        );
     }
 
     #[test]

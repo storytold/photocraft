@@ -856,10 +856,10 @@ mod tests {
     }
 
     #[test]
-    fn shared_header_drop_edge_is_the_upper_third() {
+    fn every_point_on_a_shared_header_is_a_drop_onto_target() {
         let header = Rect::from_min_size(pos2(10.0, 20.0), vec2(120.0, 24.0));
-        assert!(header_drop_before(header, pos2(30.0, 25.0)));
         assert!(!header_drop_before(header, pos2(30.0, 29.0)));
+        assert!(!header_drop_before(header, pos2(30.0, 25.0)));
         assert!(!header_drop_before(header, pos2(30.0, 40.0)));
     }
 

@@ -6,6 +6,7 @@ use egui_kittest::Harness;
 use egui_kittest::kittest::{NodeT, Queryable};
 
 use crate::brush_panel::grouped_presets;
+use crate::brush_panel::BrushesPanelState;
 use crate::pickers::brush_browser::BrushDrag;
 
 use super::*;

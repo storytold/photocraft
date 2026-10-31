@@ -331,6 +331,44 @@ fn brush_drop_intent_to_action(
     };
 
     match &intent.position {
+        DropPosition::PrependTo { group: container } => {
+            let (group, path) = match identities.get(container) {
+                Some(HierarchyIdentity::Group(group)) => (group.clone(), Vec::new()),
+                Some(HierarchyIdentity::Folder { group, path }) => (group.clone(), path.clone()),
+                _ => return Err("The Brush drop target is not a folder.".to_owned()),
+            };
+            let group_name = group_key(presets, &group);
+            if let Some(name) = source_name {
+                let first = presets.iter().enumerate().find(|(_, preset)| {
+                    preset.group == group
+                        && preset.folder.starts_with(&path)
+                        && !(source_item.is_none() && source_group == &group && !source_folder.is_empty() && preset.folder.starts_with(&source_folder))
+                        && !(source_group == &group && source_item == Some(preview_identity(preset).as_str()))
+                });
+                let index = first
+                    .map(|(index, _)| brush_item_index(presets, &group, index, source_item.unwrap_or_default()))
+                    .or_else(|| {
+                        presets.iter().position(|preset| preview_identity(preset) == source_item.unwrap_or_default())
+                            .map(|index| brush_item_index(presets, &group, index, source_item.unwrap_or_default()))
+                    })
+                    .unwrap_or_else(|| presets.iter().filter(|preset| preset.group == group).count());
+                Ok(Action::Move { name, group: group_name, folder: Some(path), index: Some(index) })
+            } else {
+                let first = presets.iter().find(|preset| {
+                    preset.group == group
+                        && preset.folder.starts_with(&path)
+                        && !((source_group == &group && !source_folder.is_empty()) && preset.folder.starts_with(&source_folder))
+                });
+                let (before, before_item) = first.map_or((None, None), |preset| {
+                    if preset.folder == path {
+                        (None, Some(preset.name.clone()))
+                    } else {
+                        (preset.folder.get(path.len()).cloned(), None)
+                    }
+                });
+                Ok(Action::MoveInto { group: source_group_name, folder: source_folder, into: Some((group_name, path)), before, before_item })
+            }
+        }
         DropPosition::AppendTo { container: ContainerId::Root } => {
             if source_item.is_some() {
                 return Err("A Brush preset cannot be moved outside its group.".to_owned());
@@ -1570,6 +1608,69 @@ mod hierarchy_anchor_identity_tests {
         let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent { source, position: DropPosition::After { target } }).unwrap();
         assert!(matches!(action, Action::MoveInto { group, folder, into: Some((target, path)), before: None, before_item: Some(anchor) }
             if group == "Kit" && folder == vec!["Source".to_string()] && target == "Kit" && path.is_empty() && anchor == "Direct sibling"));
+    }
+
+    #[test]
+    fn dropping_a_brush_onto_a_group_places_it_before_the_first_child() {
+        let presets = [preset("First", "Kit"), preset("Second", "Kit"), preset("Moving", "Other")];
+        let source_key = preview_identity(&presets[2]);
+        let source = NodeId::item("Other", source_key.clone());
+        let target = NodeId::group("Kit");
+        let identities = [
+            (source.clone(), HierarchyIdentity::Item { group: "Other".into(), key: source_key }),
+            (target.clone(), HierarchyIdentity::Group("Kit".into())),
+        ].into_iter().collect();
+
+        let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent {
+            source,
+            position: DropPosition::PrependTo { group: target },
+        }).unwrap();
+        assert!(matches!(action, Action::Move { name, group, folder: Some(path), index: Some(0) }
+            if name == "Moving" && group == "Kit" && path.is_empty()));
+    }
+
+    #[test]
+    fn dropping_a_brush_onto_its_own_folder_moves_it_to_the_first_child_slot() {
+        let presets = [
+            BrushPreset { folder: vec!["Folder".into()], ..preset("First", "Kit") },
+            BrushPreset { folder: vec!["Folder".into()], ..preset("Moving", "Kit") },
+        ];
+        let source_key = preview_identity(&presets[1]);
+        let source = NodeId::item_in_path(["Kit", "Folder"], source_key.clone());
+        let target = NodeId::group_path(["Kit"], "Folder");
+        let identities = [
+            (source.clone(), HierarchyIdentity::FolderItem { group: "Kit".into(), path: vec!["Folder".into()], key: source_key }),
+            (target.clone(), HierarchyIdentity::Folder { group: "Kit".into(), path: vec!["Folder".into()] }),
+        ].into_iter().collect();
+
+        let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent {
+            source,
+            position: DropPosition::PrependTo { group: target },
+        }).unwrap();
+        assert!(matches!(action, Action::Move { name, group, folder: Some(path), index: Some(0) }
+            if name == "Moving" && group == "Kit" && path == vec!["Folder".to_string()]));
+    }
+
+    #[test]
+    fn dropping_a_folder_onto_a_group_anchors_before_its_first_child_folder() {
+        let presets = [
+            BrushPreset { folder: vec!["First folder".into()], ..preset("First child", "Kit") },
+            preset("Direct child", "Kit"),
+            BrushPreset { folder: vec!["Source".into()], ..preset("Source child", "Other") },
+        ];
+        let source = NodeId::group_path(["Other"], "Source");
+        let target = NodeId::group("Kit");
+        let identities = [
+            (source.clone(), HierarchyIdentity::Folder { group: "Other".into(), path: vec!["Source".into()] }),
+            (target.clone(), HierarchyIdentity::Group("Kit".into())),
+        ].into_iter().collect();
+
+        let action = brush_drop_intent_to_action(&presets, &identities, &DropMoveIntent {
+            source,
+            position: DropPosition::PrependTo { group: target },
+        }).unwrap();
+        assert!(matches!(action, Action::MoveInto { group, folder, into: Some((target, path)), before: Some(before), before_item: None }
+            if group == "Other" && folder == vec!["Source".to_string()] && target == "Kit" && path.is_empty() && before == "First folder"));
     }
 
     #[test]

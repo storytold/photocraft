@@ -7,7 +7,7 @@ use egui::{Pos2, Rect};
 
 use crate::PhotocraftApp;
 use crate::pickers::picker_browser_dragging::{DropHitRegion, PointerRegion};
-use crate::pickers::picker_browser_model::{ContainerId, NodeId};
+use crate::pickers::picker_browser_model::{ContainerId, HierarchyNode, NodeId, PickerBrowserHierarchy};
 use crate::theme::Tokens;
 
 /// Canvas drop bounds used by preset-browser adapters, excluding the ruler strips.
@@ -46,9 +46,10 @@ impl AssetDrag {
     }
 }
 
-/// Shared header hit convention: the upper third inserts before; the rest nests inside.
-pub(crate) fn header_drop_before(rect: Rect, pointer: Pos2) -> bool {
-    pointer.y < rect.top() + rect.height() / 3.0
+/// Shared header hit convention for legacy hierarchy adapters: dropping on a group header means
+/// dropping into that group. Sibling reordering is handled by the gaps between headers.
+pub(crate) fn header_drop_before(_rect: Rect, _pointer: Pos2) -> bool {
+    false
 }
 
 /// Whether an item drop resolves after the hovered card in its row.
@@ -57,16 +58,13 @@ pub(crate) fn item_drop_after(rect: Rect, pointer: Pos2, grid: bool) -> bool {
     if grid { pointer.x > rect.center().x } else { pointer.y > rect.center().y }
 }
 
-/// Empty space at the sides of a grid row remains a valid insertion target. This makes the
-/// beginning/end of a row reachable without aiming at the one-pixel gap beside a card.
-pub(crate) fn item_row_edge_targets(area: Rect, item_rect: Rect, first: bool, last: bool) -> (Option<Rect>, Option<Rect>) {
-    let left = first
-        .then(|| Rect::from_min_max(Pos2::new(area.left(), item_rect.top()), Pos2::new(item_rect.left(), item_rect.bottom())))
-        .filter(|rect| rect.is_positive());
+/// Empty space after the last card in a grid row remains a valid append target.
+/// Prepend is deliberately limited to the leading half of the card itself.
+pub(crate) fn item_row_edge_targets(area: Rect, item_rect: Rect, last: bool) -> Option<Rect> {
     let right = last
         .then(|| Rect::from_min_max(Pos2::new(item_rect.right(), item_rect.top()), Pos2::new(area.right(), item_rect.bottom())))
         .filter(|rect| rect.is_positive());
-    (left, right)
+    right
 }
 
 /// Capture a card's leading/trailing half as a semantic sibling insertion target. The returned
@@ -91,42 +89,123 @@ pub(crate) fn card_drop_hit(rect: Rect, pointer: Pos2, grid: bool, target: NodeI
     }
 }
 
-/// Capture a group header: its leading third inserts before the group and its body appends inside.
+/// Register both halves of a card so the debug view and hit arbitration use the same full-time
+/// geometry even when the pointer is not currently over the card.
+pub(crate) fn card_drop_hits(rect: Rect, grid: bool, target: NodeId, depth: usize, order: usize) -> [DropHitRegion; 2] {
+    let (leading, trailing) = if grid {
+        let middle = rect.center().x;
+        (
+            Rect::from_min_max(rect.min, Pos2::new(middle, rect.bottom())),
+            Rect::from_min_max(Pos2::new(middle, rect.top()), rect.max),
+        )
+    } else {
+        let middle = rect.center().y;
+        (
+            Rect::from_min_max(rect.min, Pos2::new(rect.right(), middle)),
+            Rect::from_min_max(Pos2::new(rect.left(), middle), rect.max),
+        )
+    };
+    let leading_hit = card_drop_hit(rect, if grid { Pos2::new(rect.left(), rect.center().y) } else { Pos2::new(rect.center().x, rect.top()) }, grid, target.clone(), depth, order);
+    let trailing_hit = card_drop_hit(
+        rect,
+        if grid { Pos2::new(rect.right(), rect.center().y) } else { Pos2::new(rect.center().x, rect.bottom()) },
+        grid,
+        target,
+        depth,
+        order.saturating_add(1),
+    );
+    [DropHitRegion { hit_rect: leading, ..leading_hit }, DropHitRegion { hit_rect: trailing, ..trailing_hit }]
+}
+
+/// Capture a group header as a drop-onto target. Every point on the header prepends inside it.
 pub(crate) fn group_header_drop_hit(
     rect: Rect,
-    pointer: Pos2,
+    _pointer: Pos2,
     target: NodeId,
     depth: usize,
     order: usize,
 ) -> DropHitRegion {
-    let before = header_drop_before(rect, pointer);
-    let indicator_rect = if before {
-        group_insertion_marker_rect(rect, true)
-    } else {
-        rect
-    };
     DropHitRegion {
-        target: before.then_some(target.clone()),
-        container: (!before).then_some(ContainerId::Group(target)),
-        region: if before { PointerRegion::LeadingEdge } else { PointerRegion::GroupBody },
+        target: None,
+        container: Some(ContainerId::Group(target)),
+        region: PointerRegion::GroupBody,
         hit_rect: rect,
+        indicator_rect: rect,
+        depth,
+        order,
+    }
+}
+
+/// Capture a drop-at-end target spanning a group's visible subtree (e.g. the indent column).
+pub(crate) fn group_append_hit(hit_rect: Rect, indicator_rect: Rect, group: NodeId, depth: usize, order: usize) -> DropHitRegion {
+    DropHitRegion {
+        target: None,
+        container: Some(ContainerId::Group(group)),
+        region: PointerRegion::ContainerEnd,
+        hit_rect,
         indicator_rect,
         depth,
         order,
     }
 }
 
-/// Capture an append target spanning a group's visible subtree (e.g. the indent column).
-pub(crate) fn group_append_hit(hit_rect: Rect, indicator_rect: Rect, group: NodeId, depth: usize, order: usize) -> DropHitRegion {
-    DropHitRegion {
-        target: None,
-        container: Some(ContainerId::Group(group)),
-        region: PointerRegion::GroupBody,
-        hit_rect,
-        indicator_rect,
-        depth,
-        order,
-    }
+/// Split the six-pixel gap before every group into upper- and lower-level drop targets.
+/// The upper half inserts after the deepest visible group above the gap (as its sibling),
+/// falling back naturally to the outer group when no nested level precedes the gap.
+pub(crate) fn group_gap_drop_hits(
+    rect: Rect,
+    upper: NodeId,
+    lower: NodeId,
+    upper_depth: usize,
+    lower_depth: usize,
+    order: usize,
+) -> Vec<DropHitRegion> {
+    let line = |y: f32| Rect::from_min_max(Pos2::new(rect.left(), y - 2.0), Pos2::new(rect.right(), y + 2.0));
+    let middle = rect.center().y;
+    vec![
+            DropHitRegion {
+                target: Some(upper),
+                container: None,
+                region: PointerRegion::TrailingEdge,
+                hit_rect: Rect::from_min_max(rect.min, Pos2::new(rect.right(), middle)),
+                indicator_rect: line(rect.top() + 1.5),
+                depth: upper_depth,
+                order,
+            },
+            DropHitRegion {
+                target: Some(lower),
+                container: None,
+                region: PointerRegion::LeadingEdge,
+                hit_rect: Rect::from_min_max(Pos2::new(rect.left(), middle), rect.max),
+                indicator_rect: line(rect.bottom() - 1.5),
+                depth: lower_depth,
+                order: order.saturating_add(1),
+            },
+    ]
+}
+
+/// Prefer the last card in the upper group's own sibling sequence. Group headers and cards can
+/// coexist in that sequence, so anchoring to the group header alone can insert before its cards.
+/// If that level has no cards, the group itself is the outer-sibling fallback.
+pub(crate) fn group_gap_upper_anchor(hierarchy: &PickerBrowserHierarchy, upper_group: &NodeId) -> (NodeId, usize) {
+    let Some(group) = hierarchy.node(upper_group).filter(|node| node.is_group()) else {
+        return (upper_group.clone(), 0);
+    };
+    let depth = hierarchy
+        .parent_of(upper_group)
+        .map(|mut parent| {
+            let mut depth = 0;
+            while let ContainerId::Group(id) = parent {
+                depth += 1;
+                parent = hierarchy.parent_of(&id).unwrap_or(ContainerId::Root);
+            }
+            depth
+        })
+        .unwrap_or(0);
+    group.children().iter().rev().find_map(|node| match node {
+        HierarchyNode::Item(id) => Some((id.clone(), depth + 1)),
+        HierarchyNode::Group { .. } => None,
+    }).unwrap_or((upper_group.clone(), depth))
 }
 
 /// Capture the explicit end of the root sibling sequence, including an empty browser's drop area.
@@ -189,7 +268,7 @@ fn group_insertion_marker_rect(rect: Rect, before: bool) -> Rect {
 
 #[cfg(test)]
 mod insertion_marker_tests {
-    use super::{card_drop_hit, group_append_hit, group_drop_outline_rects, group_header_drop_hit, group_insertion_marker_rect, root_append_hit};
+    use super::{card_drop_hit, card_drop_hits, group_append_hit, group_drop_outline_rects, group_gap_drop_hits, group_gap_upper_anchor, group_header_drop_hit, group_insertion_marker_rect, root_append_hit};
     use crate::pickers::picker_browser_model::{ContainerId, NodeId};
     use crate::pickers::picker_browser_dragging::PointerRegion;
     use egui::{Pos2, Rect};
@@ -226,22 +305,92 @@ mod insertion_marker_tests {
         assert_eq!(hit.region, PointerRegion::TrailingEdge);
         assert_eq!(hit.indicator_rect.width(), 4.0);
 
-        let header = Rect::from_min_max(Pos2::new(10.0, 80.0), Pos2::new(210.0, 110.0));
-        let before = group_header_drop_hit(header, Pos2::new(20.0, 85.0), NodeId::from("group"), 0, 0);
-        assert_eq!(before.region, PointerRegion::LeadingEdge);
-        assert_eq!(before.indicator_rect.width(), header.width());
-        assert_eq!(before.indicator_rect.height(), 4.0);
+        let halves = card_drop_hits(card, true, NodeId::from("card"), 1, 2);
+        assert_eq!(halves[0].region, PointerRegion::LeadingEdge);
+        assert_eq!(halves[0].hit_rect.width(), 50.0);
+        assert_eq!(halves[1].region, PointerRegion::TrailingEdge);
+        assert_eq!(halves[1].hit_rect.width(), 50.0);
 
-        let body = group_header_drop_hit(header, Pos2::new(100.0, 100.0), NodeId::from("group"), 0, 0);
-        assert_eq!(body.region, PointerRegion::GroupBody);
-        assert_eq!(body.container, Some(ContainerId::Group(NodeId::from("group"))));
+        let header = Rect::from_min_max(Pos2::new(10.0, 80.0), Pos2::new(210.0, 110.0));
+        for pointer in [Pos2::new(20.0, 85.0), Pos2::new(100.0, 100.0), Pos2::new(200.0, 109.0)] {
+            let hit = group_header_drop_hit(header, pointer, NodeId::from("group"), 0, 0);
+            assert_eq!(hit.region, PointerRegion::GroupBody);
+            assert_eq!(hit.container, Some(ContainerId::Group(NodeId::from("group"))));
+            assert_eq!(hit.indicator_rect, header);
+        }
     }
 
     #[test]
-    fn append_hit_regions_name_their_destination_container() {
+    fn group_gap_upper_half_inserts_after_upper_sibling_and_lower_half_precedes_lower_group() {
+        let gap = Rect::from_min_max(Pos2::new(10.0, 100.0), Pos2::new(210.0, 106.0));
+        let split = group_gap_drop_hits(
+            gap,
+            NodeId::from("upper"),
+            NodeId::from("lower"),
+            0,
+            1,
+            4,
+        );
+        assert_eq!(split.len(), 2);
+        assert_eq!(split[0].region, PointerRegion::TrailingEdge);
+        assert_eq!(split[0].target, Some(NodeId::from("upper")));
+        assert_eq!(split[0].container, None);
+        assert!(split[0].hit_rect.is_positive());
+        assert_eq!(split[0].hit_rect.min, gap.min);
+        assert_eq!(split[0].hit_rect.max, Pos2::new(gap.right(), gap.center().y));
+        assert_eq!(split[0].hit_rect.height(), 3.0);
+        assert_eq!(split[1].region, PointerRegion::LeadingEdge);
+        assert_eq!(split[1].target, Some(NodeId::from("lower")));
+        assert_eq!(split[1].hit_rect.height(), 3.0);
+
+        for (upper_depth, lower_depth) in [(0, 1), (0, 0), (1, 0)] {
+            let split = group_gap_drop_hits(
+                gap,
+                NodeId::from("upper"),
+                NodeId::from("lower"),
+                upper_depth,
+                lower_depth,
+                4,
+            );
+            assert_eq!(split.len(), 2);
+            assert_eq!(split[0].region, PointerRegion::TrailingEdge);
+            assert_eq!(split[0].target, Some(NodeId::from("upper")));
+            assert_eq!(split[0].container, None);
+            assert_eq!(split[1].region, PointerRegion::LeadingEdge);
+            assert_eq!(split[1].target, Some(NodeId::from("lower")));
+        }
+
+        // When the nearest visible row above the gap is nested, place after that nested row
+        // at its own sibling level. A depth-zero upper row is already the outer-sibling fallback.
+        let nested = group_gap_drop_hits(
+            gap,
+            NodeId::from("upper-folder"),
+            NodeId::from("child-folder"),
+            1,
+            2,
+            4,
+        );
+        assert_eq!(nested[0].region, PointerRegion::TrailingEdge);
+        assert_eq!(nested[0].target, Some(NodeId::from("upper-folder")));
+        assert_eq!(nested[0].container, None);
+    }
+
+    #[test]
+    fn group_gap_anchor_prefers_last_card_in_upper_group_and_falls_back_to_group() {
+        use crate::pickers::picker_browser_model::{HierarchyNode as Node, PickerBrowserHierarchy};
+        let hierarchy = PickerBrowserHierarchy::new(vec![
+            Node::group("outer", vec![Node::group("inner", vec![Node::group("child", vec![]), Node::item("first"), Node::item("last")])]),
+        ]).unwrap();
+        assert_eq!(group_gap_upper_anchor(&hierarchy, &NodeId::from("inner")), (NodeId::from("last"), 2));
+        let empty = PickerBrowserHierarchy::new(vec![Node::group("outer", vec![Node::group("empty", vec![])])]).unwrap();
+        assert_eq!(group_gap_upper_anchor(&empty, &NodeId::from("empty")), (NodeId::from("empty"), 1));
+    }
+
+    #[test]
+    fn group_body_and_root_end_hits_name_their_destination_container() {
         let rect = Rect::from_min_max(Pos2::new(10.0, 10.0), Pos2::new(30.0, 80.0));
         let group = group_append_hit(rect, rect, NodeId::from("group"), 2, 4);
-        assert_eq!(group.region, PointerRegion::GroupBody);
+        assert_eq!(group.region, PointerRegion::ContainerEnd);
         assert_eq!(group.container, Some(ContainerId::Group(NodeId::from("group"))));
         let root = root_append_hit(rect, rect, 5);
         assert_eq!(root.region, PointerRegion::ContainerEnd);
@@ -427,20 +576,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn grid_row_edge_targets_cover_only_the_empty_sides_of_first_and_last_cards() {
+    fn grid_row_edge_targets_cover_only_the_empty_space_after_the_last_card() {
         let area = Rect::from_min_max(Pos2::new(10.0, 20.0), Pos2::new(310.0, 70.0));
         let first = Rect::from_min_max(Pos2::new(30.0, 25.0), Pos2::new(80.0, 65.0));
         let last = Rect::from_min_max(Pos2::new(210.0, 25.0), Pos2::new(260.0, 65.0));
 
-        let (left, _) = item_row_edge_targets(area, first, true, false);
-        let (no_left, _) = item_row_edge_targets(area, first, false, false);
-        let (_, right) = item_row_edge_targets(area, last, false, true);
-        let (_, no_right) = item_row_edge_targets(area, last, false, false);
+        let no_right = item_row_edge_targets(area, first, false);
+        let right = item_row_edge_targets(area, last, true);
 
-        assert_eq!(left, Some(Rect::from_min_max(Pos2::new(10.0, 25.0), Pos2::new(30.0, 65.0))));
-        assert_eq!(no_left, None);
-        assert_eq!(right, Some(Rect::from_min_max(Pos2::new(260.0, 25.0), Pos2::new(310.0, 65.0))));
         assert_eq!(no_right, None);
+        assert_eq!(right, Some(Rect::from_min_max(Pos2::new(260.0, 25.0), Pos2::new(310.0, 65.0))));
     }
 }
 

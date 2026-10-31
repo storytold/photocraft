@@ -393,6 +393,7 @@ mod tests {
     use crate::state::Tool;
     use egui::{Modifiers, vec2};
     use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
 
     fn click(h: &mut Harness<'_, PhotocraftApp>, p: egui::Pos2, modifiers: Modifiers) {
         h.hover_at(p);
@@ -589,15 +590,60 @@ mod tests {
         assert!(headers.len() >= 2, "the default library has groups: {headers:?}");
         let names: Vec<String> = headers.iter().map(|(n, _)| n.clone()).collect();
         let (first, first_r) = &headers[0];
-        let (last, last_r) = headers.last().unwrap();
-        // Drag the last group's header above the first; the insertion lands before it.
-        drag(&mut h, last_r.center(), egui::pos2(first_r.center().x, first_r.top() + 1.0));
+        let (last, _) = headers.last().unwrap();
+        let last_card = h.state().session.presets.swatches.iter().find(|group| &group.name == last).and_then(|group| group.items.last()).unwrap().name.clone();
+        let last_card_rect = h.get_by_label(&last_card).rect();
+        // Dropping in the explicit root-end area still reorders groups without targeting a group.
+        drag(&mut h, first_r.center(), egui::pos2(first_r.center().x, last_card_rect.bottom() + 8.0));
         let order = h.state().ui.presets_ui.display_order(PANEL, &names);
         assert_eq!(order.len(), names.len());
-        assert_eq!(names.get(order[0]).map(String::as_str), Some(last.as_str()), "the dragged group moved to the front: {order:?}");
-        assert_eq!(names.get(order[1]).map(String::as_str), Some(first.as_str()));
-        assert_eq!(h.state().ui.presets_ui.hierarchy_order[PANEL][""][0], crate::pickers::picker_state::HierarchyOrderEntry::Group(last.clone()));
+        assert_eq!(names.get(*order.last().unwrap()).map(String::as_str), Some(first.as_str()), "the dragged group moved to the end: {order:?}");
+        assert_eq!(h.state().ui.presets_ui.hierarchy_order[PANEL][""].last(), Some(&crate::pickers::picker_state::HierarchyOrderEntry::Group(first.clone())));
         assert!(serde_json::to_value(&h.state().ui.presets_ui).unwrap().get("groupOrder").is_none());
+    }
+
+    #[test]
+    fn dropping_a_group_on_another_group_header_nests_it_at_the_front() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let mut h = Harness::builder().with_size(vec2(300.0, 4000.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_after_font_setup(ui, app), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(2);
+        let headers = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL);
+        let (target_group, target_rect) = &headers[0];
+        let (moving_group, moving_rect) = headers.last().unwrap();
+
+        // A group header is always a drop-onto target; sibling ordering belongs to the six-pixel gap.
+        drag(&mut h, moving_rect.center(), egui::pos2(target_rect.center().x, target_rect.top() + 1.0));
+
+        assert_eq!(h.state().ui.presets_ui.parent_of(PANEL, moving_group), Some(target_group.as_str()));
+        assert_eq!(
+            h.state().ui.presets_ui.hierarchy_order[PANEL][target_group].first(),
+            Some(&crate::pickers::picker_state::HierarchyOrderEntry::Group(moving_group.clone()))
+        );
+    }
+
+    #[test]
+    fn dropping_a_card_on_the_top_of_a_group_moves_it_into_that_group() {
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        let source_group = app.session.presets.swatches[0].name.clone();
+        let card = app.session.presets.swatches[0].items[0].name.clone();
+        let target_group = app.session.presets.swatches.last().unwrap().name.clone();
+        let mut h = Harness::builder().with_size(vec2(300.0, 4000.0)).build_ui_state(|ui, app: &mut PhotocraftApp| panel_after_font_setup(ui, app), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ProMedium);
+        h.run_steps(2);
+        let target_rect = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL)
+            .into_iter()
+            .find(|(name, _)| name == &target_group)
+            .map(|(_, rect)| rect)
+            .unwrap();
+        let source_rect = h.get_by_label(&card).rect();
+
+        // A card and a group use the same drop-onto-group target semantics.
+        drag(&mut h, source_rect.center(), egui::pos2(target_rect.center().x, target_rect.top() + 1.0));
+
+        let presets = &h.state().session.presets.swatches;
+        assert!(!presets.iter().find(|group| group.name == source_group).unwrap().items.iter().any(|item| item.name == card));
+        assert_eq!(presets.iter().find(|group| group.name == target_group).unwrap().items.first().map(|item| item.name.as_str()), Some(card.as_str()));
     }
 
     #[test]
@@ -608,7 +654,7 @@ mod tests {
         h.run_steps(2);
         let headers = crate::pickers::asset_browser::last_group_headers(&h.ctx, PANEL);
         assert!(headers.len() >= 2);
-        let (target_group, target_rect) = &headers[0];
+        let (target_group, _) = &headers[0];
         let (moving_group, moving_rect) = headers.last().unwrap();
         let target_item = h.state().session.presets.swatches.iter().find(|group| &group.name == target_group).and_then(|group| group.items.first()).unwrap().name.clone();
         let root_order_before = h.state().ui.presets_ui.display_order(PANEL, &headers.iter().map(|(name, _)| name.clone()).collect::<Vec<_>>());
