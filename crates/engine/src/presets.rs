@@ -203,10 +203,26 @@ impl Session {
         if let Some(g) = p.gradients {
             st.gradients = g;
             // Older imports could contain duplicate names, which alias panel selections.
-            let mut taken = crate::cmd::preset_import_cmds::UniqueNames::new(std::iter::empty());
+            // Reserve all original names so a duplicate cannot steal a later preset's name.
+            // Lookup is case-sensitive: Foo and FOO are already independently addressable.
+            let mut reserved: std::collections::HashSet<String> =
+                st.gradients.iter().flat_map(|group| group.items.iter().map(|item| item.name.clone())).collect();
+            let mut seen = std::collections::HashSet::new();
+            let mut next = std::collections::HashMap::<String, usize>::new();
             for group in &mut st.gradients {
                 for item in &mut group.items {
-                    item.name = taken.unique(&item.name);
+                    if seen.insert(item.name.clone()) {
+                        continue;
+                    }
+                    let suffix = next.entry(item.name.clone()).or_insert(2);
+                    loop {
+                        let candidate = format!("{} {}", item.name, suffix);
+                        *suffix = suffix.saturating_add(1);
+                        if reserved.insert(candidate.clone()) {
+                            item.name = candidate;
+                            break;
+                        }
+                    }
                 }
             }
         }
