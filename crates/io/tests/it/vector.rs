@@ -94,6 +94,8 @@ fn shape_layer_typed_roundtrip() {
             miter_limit: 100.0,
             dashes: vec![2.0, 1.0],
             dash_offset: 0.0,
+            arrow_start: None,
+            arrow_end: None,
         }),
         live: None,
         ..Default::default()
@@ -183,6 +185,8 @@ fn custom_stroke_styles_roundtrip_through_psd_vstk() {
                     miter_limit: 2.0,
                     dashes: vec![0.0, 2.0, 4.0, 1.0],
                     dash_offset: -0.5,
+                    arrow_start: None,
+                    arrow_end: None,
                 };
                 let sh = ShapeLayer {
                     path: Path::new(vec![Subpath::polygon(&[(32.0, 32.0), (160.0, 32.0), (96.0, 160.0)])]),

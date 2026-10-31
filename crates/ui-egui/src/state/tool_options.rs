@@ -109,6 +109,15 @@ pub struct ToolOptions {
     pub corner_radius: f32,
     pub polygon_sides: u32,
     pub line_weight: f32,
+    /// Arrow tool: the next arrow's colour, width, line and heads.
+    #[serde(default)]
+    pub arrow: crate::arrow_ui::ArrowOptions,
+    /// Cut Out tool: band direction and seam style.
+    #[serde(default)]
+    pub cut_out: crate::cutout_ui::CutOutOptions,
+    /// Marker tool: shape, size, colour and outline of the next marker.
+    #[serde(default)]
+    pub marker: crate::marker_ui::MarkerOptions,
     /// Freeform Pen › Curve Fit: how far (px) the fitted path may stray from the pointer trace.
     #[serde(default = "default_curve_fit")]
     pub curve_fit: f32,
@@ -423,6 +432,9 @@ impl Default for ToolOptions {
             corner_radius: 0.0,
             polygon_sides: 5,
             line_weight: 3.0,
+            arrow: Default::default(),
+            cut_out: Default::default(),
+            marker: Default::default(),
             curve_fit: default_curve_fit(),
             pen_auto_add_delete: true,
             marquee_style: default_marquee_style(),

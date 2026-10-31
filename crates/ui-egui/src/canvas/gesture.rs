@@ -91,6 +91,7 @@ pub(crate) fn finish_gesture(app: &mut PhotocraftApp, d: Drag) {
             && crate::shape_dialog::is_click(d.start, &d.points, app.point_zoom())
             && crate::shape_dialog::open(app, t, d.start).is_some() => {}
         t if crate::vector_ui::is_shape_tool(t) => crate::vector_ui::finish_shape(app, t, d.start, [end[0], end[1]], d.live),
+        Tool::CutOut => crate::cutout_ui::finish(app, d.start, [end[0], end[1]]),
         Tool::PathSelection => crate::vector_ui::path_selection_finish(app, d.start, [end[0], end[1]]),
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => crate::type_tool::pointer_up(app, d.start, [end[0], end[1]]),
         Tool::Brush | Tool::Pencil | Tool::Eraser => commit_brush_stroke(app, &d),
