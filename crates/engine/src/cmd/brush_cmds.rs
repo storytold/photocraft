@@ -843,7 +843,10 @@ fn color_replacement_setup(s: &Session, p: &Value) -> Result<(Stroke, ReplaceSet
         background: s.tools.background,
     };
     let id = layer_id(s, p)?;
-    Ok((Stroke { brush, points: pts }, rs, id))
+    let stroke = Stroke { brush, points: pts };
+    // The working copy is dense over the stroke's bounds (#8666).
+    crate::retouch_cmds::reject_huge_stroke(cmd, &stroke)?;
+    Ok((stroke, rs, id))
 }
 
 fn color_replacement(s: &mut Session, p: &Value) -> Result<Value> {

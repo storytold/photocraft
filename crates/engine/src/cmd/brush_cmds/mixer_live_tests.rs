@@ -437,3 +437,16 @@ fn mixer_command_paints_strokes_beyond_the_preview_sample_and_dab_budgets() {
         assert!(target(&s).rgba(100, 48)[0] > 0.9);
     }
 }
+
+/// #8666: a live Mixer stroke that starts small and is pushed far away is refused, unchanged.
+#[test]
+fn mixer_live_push_refuses_a_stroke_that_grows_too_large() {
+    let s = fixture(PixelFormat::RGBA8);
+    let mut live = LiveMixer::begin(&s, &json!({"points":[[40,48]],"size":8,"seed":3})).unwrap();
+    let (shown, bounds) = (live.doc.clone(), live.bounds());
+    let err = live.push(&[StrokePoint::new(900_000.0, 900_000.0, 1.0)]).unwrap_err().to_string();
+    assert!(err.contains("stroke too large"), "{err}");
+    assert!(Arc::ptr_eq(&live.doc, &shown), "a refused push leaves the preview alone");
+    assert_eq!(live.bounds(), bounds);
+    live.push(&[StrokePoint::new(60.0, 48.0, 1.0)]).unwrap();
+}

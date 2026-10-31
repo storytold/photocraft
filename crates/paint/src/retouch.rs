@@ -236,6 +236,20 @@ pub fn apply_coverage(
     rect
 }
 
+/// Pixels [`apply_dab_stroke`] copies for `stroke` with `halo`: the rendered union of its dabs
+/// (after tips, dynamics and scattering place them) grown by the halo. Callers refuse an oversized
+/// stroke with this before the dense working copy is read (#8666).
+pub fn dab_stroke_area(stroke: &Stroke, halo: i32) -> u64 {
+    let ds = dabs(stroke);
+    let ctx = crate::BrushContext::new(&stroke.brush);
+    let b = ds.iter().fold(Rect::EMPTY, |r, d| r.union(&ctx.dab_rect(d, false)));
+    if b.is_empty() {
+        return 0;
+    }
+    let grow = u64::from(halo.unsigned_abs()).saturating_mul(2);
+    (u64::from(b.width()).saturating_add(grow)).saturating_mul(u64::from(b.height()).saturating_add(grow))
+}
+
 /// Run a sequential-dab stroke: `effect(work, footprint)` edits the working copy for each dab in
 /// order; the result is mixed back at `stroke.brush.opacity × selection`.
 ///
