@@ -543,6 +543,61 @@ fn save_for_web_matte_takes_only_whole_colours() {
     }
 }
 
+/// #8830, the review follow-up: alt-tabbing away from the window and back must not throw away a
+/// partial Matte that is still being typed. egui keeps keyboard focus on the field while the OS
+/// window is unfocused (`Memory::has_focus` ignores the window, `Response::has_focus` does not),
+/// so the side that caches the typed text has to ask the same question the read side asks.
+#[test]
+fn save_for_web_matte_keeps_typed_text_across_window_focus_loss() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    let (app, _) = app();
+    let (mut h, id) = web_size_dialog(app);
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("format".into(), json!("png8"));
+    h.run_steps(3);
+    let shown = |h: &egui_kittest::Harness<'static, PhotocraftApp>, want: &str| {
+        h.query_all_by_role(egui::accesskit::Role::TextInput).any(|n| n.accesskit_node().value().unwrap_or_default() == want)
+    };
+    let matte = |h: &egui_kittest::Harness<'static, PhotocraftApp>| h.state().ui.dialogs.iter().find(|d| d.id == id).unwrap().fields["matte"].clone();
+    let field = h
+        .query_all_by_role(egui::accesskit::Role::TextInput)
+        .find(|n| n.accesskit_node().value().as_deref() == Some("#ffffff"))
+        .map(|n| n.rect())
+        .expect("the Matte field");
+    h.hover_at(field.center());
+    h.run_steps(1);
+    h.drag_at(field.center());
+    h.run_steps(1);
+    h.drop_at(field.center());
+    h.run_steps(2);
+    h.key_press_modifiers(egui::Modifiers::COMMAND, egui::Key::A);
+    h.key_press(egui::Key::Backspace);
+    h.event(egui::Event::Text("#1111".into()));
+    h.run_steps(2);
+    assert!(shown(&h, "#1111"), "the field shows the partial value as typed");
+    assert_eq!(matte(&h), json!("#ffffff"), "a partial value must not reach the settings");
+    let focused = h.ctx.memory(|m| m.focused());
+    assert!(focused.is_some(), "the Matte field holds egui focus");
+    // The OS window loses focus (alt-tab away): only `RawInput::focused` goes false, egui itself
+    // keeps focus on the field.
+    h.input_mut().focused = false;
+    h.run_steps(1);
+    assert!(!h.ctx.input(|i| i.focused), "the frame ran with the window unfocused");
+    assert_eq!(h.ctx.memory(|m| m.focused()), focused, "egui keeps focus on the field while the window is unfocused");
+    // …and comes back to the same window.
+    h.input_mut().focused = true;
+    h.run_steps(2);
+    assert!(
+        shown(&h, "#1111"),
+        "the partial Matte is still in the field after the window came back: {:?}",
+        h.query_all_by_role(egui::accesskit::Role::TextInput).map(|n| n.accesskit_node().value().unwrap_or_default()).collect::<Vec<_>>()
+    );
+    assert_eq!(matte(&h), json!("#ffffff"), "the settings still hold the last whole colour");
+    // Finishing the colour takes it, so the field was live, not frozen.
+    h.event(egui::Event::Text("11".into()));
+    h.run_steps(2);
+    assert_eq!(matte(&h), json!("#111111"), "typing on completes as usual");
+}
+
 #[test]
 fn web_preview_grows_with_resize_and_accepts_zoom_and_pan() {
     let (mut app, _) = app();
