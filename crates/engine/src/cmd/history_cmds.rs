@@ -182,10 +182,11 @@ fn select_snapshot(s: &mut Session, p: &Value) -> Result<Value> {
     let snap = s.active().and_then(|st| st.snapshots.get(i).cloned()).ok_or(EngineError::NoDocument)?;
     s.edit(&snap.name, |doc, active| {
         // Keep the identity (colour state, views and caches are keyed by it) and the tab name.
-        let (id, name) = (doc.id, doc.name.clone());
+        let (id, name, samplers) = (doc.id, doc.name.clone(), std::mem::take(&mut doc.color_samplers));
         *doc = (*snap.doc).clone();
         doc.id = id;
         doc.name = name;
+        doc.color_samplers = samplers;
         *active = snap.layers.active.filter(|l| doc.layer(*l).is_some()).or_else(|| doc.top_layer());
         Ok(())
     })?;

@@ -5,7 +5,7 @@
 //! Every change goes through engine commands (`image.analysis.*`, `count.*`, `notes.*`,
 //! `view.colorSamplers.*`, `measurementLog.*`); this module only holds view state ([`AnalysisUi`],
 //! part of the serialisable UI state so the control channel can read and drive it). The Color
-//! Sampler points themselves live in the engine (`DocState.color_samplers`) so every front end
+//! Sampler points themselves live in the engine (`Document::color_samplers`, saved with the file) so every front end
 //! shares them; this module only maps pointer input and draws the numbered markers.
 
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, RichText, Stroke, pos2, vec2};
@@ -245,7 +245,7 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) ->
         return true;
     };
     let tol = tolerance(app);
-    let samplers: Vec<[f64; 2]> = app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default();
+    let samplers: Vec<[f64; 2]> = app.session.active().map(|d| d.doc.color_samplers.clone()).unwrap_or_default();
     match (tool, ev) {
         (Tool::Ruler, ToolEvent::Down { x, y, .. }) => {
             let p = [x, y];
@@ -466,7 +466,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         }
     }
     // Color Sampler points (#1046): persistent numbered markers, drawn whatever the active tool is.
-    for (i, p) in app.session.active().map(|d| d.color_samplers.clone()).unwrap_or_default().iter().enumerate() {
+    for (i, p) in app.session.active().map(|d| d.doc.color_samplers.clone()).unwrap_or_default().iter().enumerate() {
         let at = xf.to_screen(p[0] as f32, p[1] as f32);
         // A small target reticle, double-stroked so it reads on any pixel.
         for (w, c) in [(3.0, Color32::from_black_alpha(170)), (1.0, Color32::WHITE)] {
@@ -592,7 +592,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
         }
         Tool::ColorSampler => {
             let t = Tokens::get(ui.ctx());
-            let n = app.session.active().map_or(0, |d| d.color_samplers.len());
+            let n = app.session.active().map_or(0, |d| d.doc.color_samplers.len());
             ui.label(
                 RichText::new(crate::i18n::fmt(
                     tl!("{n} of {max} sample points"),

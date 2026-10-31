@@ -875,6 +875,9 @@ pub struct Metadata {
     pub psd_global_blocks: Vec<PsdGlobalBlock>,
 }
 
+/// Photoshop's Color Sampler limit: at most 10 points per document.
+pub const MAX_COLOR_SAMPLERS: usize = 10;
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Document {
     pub id: DocId,
@@ -896,6 +899,10 @@ pub struct Document {
     /// square. Only the display stretches by it (with Pixel Aspect Ratio Correction on); the
     /// pixels never change.
     pub pixel_aspect: f64,
+    /// Color Sampler points, numbered from 1 in this order: sample positions in document pixels,
+    /// at most [`MAX_COLOR_SAMPLERS`] (PSD resource 1073). Saved with the file but not history:
+    /// stepping through history keeps the current points.
+    pub color_samplers: Vec<[f64; 2]>,
     /// Active selection as a grayscale coverage surface (None = no selection).
     pub selection: Option<Surface>,
     pub metadata: Metadata,
@@ -990,6 +997,7 @@ impl Document {
             guides: Guides::default(),
             ruler_origin: [0.0, 0.0],
             pixel_aspect: 1.0,
+            color_samplers: Vec::new(),
             selection: None,
             metadata: Metadata::default(),
             global_light: GlobalLight::default(),

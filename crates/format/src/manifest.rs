@@ -41,6 +41,9 @@ pub struct DocM {
     /// View › Pixel Aspect Ratio, pixel width / height (absent in older files: square).
     #[serde(default = "square_pixels")]
     pub pixel_aspect: f64,
+    /// Color Sampler points in document pixels (absent in older files: none).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub color_samplers: Vec<[f64; 2]>,
     pub selection: Option<SurfaceM>,
     pub metadata: MetadataM,
     pub global_light: GlobalLight,

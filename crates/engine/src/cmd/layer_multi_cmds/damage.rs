@@ -229,6 +229,8 @@ fn doc_pixels_equal(a: &Document, b: &Document) -> bool {
         ruler_origin: _,
         // Only the view stretches by it: the composite is the same.
         pixel_aspect: _,
+        // Read on top of the composite, never part of it.
+        color_samplers: _,
         selection: _,
         metadata: _,
         global_light,
@@ -332,6 +334,8 @@ pub fn selection_only_change(a: &Document, b: &Document) -> bool {
         guides,
         ruler_origin,
         pixel_aspect,
+        // Never moved by a selection step (and never a step of their own).
+        color_samplers: _,
         selection: _,
         metadata,
         global_light: _,
