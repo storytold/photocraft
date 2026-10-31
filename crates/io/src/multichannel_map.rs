@@ -25,26 +25,44 @@ const ALPHA_IDENTIFIERS: u16 = 1053;
 /// selection ids (1069) and layer groups enabled (1072). A Multichannel document has no layers.
 const LAYER_ONLY_RESOURCES: [u16; 4] = [ids::LAYER_STATE, ids::LAYER_GROUP_INFO, 1069, 1072];
 
-/// Value of sample `i` of a big-endian plane.
+/// Value of sample `i` of a big-endian plane; 0 for a sample past its end.
 fn decode(plane: &[u8], i: usize, s: SampleType) -> f32 {
     match s {
-        SampleType::U8 => f32::from(plane[i]) / 255.0,
-        SampleType::U16 => f32::from(u16::from_be_bytes([plane[2 * i], plane[2 * i + 1]])) / 65535.0,
-        SampleType::F32 => f32::from_be_bytes([plane[4 * i], plane[4 * i + 1], plane[4 * i + 2], plane[4 * i + 3]]),
+        SampleType::U8 => plane.get(i).map_or(0.0, |&b| f32::from(b) / 255.0),
+        SampleType::U16 => sample::<2>(plane, i).map_or(0.0, |b| f32::from(u16::from_be_bytes(b)) / 65535.0),
+        SampleType::F32 => sample::<4>(plane, i).map_or(0.0, f32::from_be_bytes),
     }
 }
 
+/// The `N` bytes of sample `i`, if the plane holds them.
+fn sample<const N: usize>(plane: &[u8], i: usize) -> Option<[u8; N]> {
+    let start = i.checked_mul(N)?;
+    plane.get(start..start.checked_add(N)?)?.try_into().ok()
+}
+
 /// Fills `doc` (already in Multichannel mode at the file depth) from the merged planes `all`.
-pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[String], warnings: &mut Vec<String>) {
+/// `Err` when the planes are too large to read here: the caller reports the document as
+/// damaged, since its channels are missing.
+pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[String], warnings: &mut Vec<String>) -> Result<(), String> {
     let h = &file.header;
     let depth = doc.depth;
     let (w, hh) = (h.width as usize, h.height as usize);
-    let n = w * hh;
-    let plane = h.row_bytes() * hh;
+    // Checked, as the flattened import's sizes are: on wasm32 `w * hh` need not fit a `usize`
+    // (#8615).
+    // The decoded values of one plane keep to the decoder's byte budget too: an 8-bit plane within
+    // it can still need four times as many bytes as `f32`s.
+    let fits = |n: usize| {
+        n.checked_mul(std::mem::size_of::<f32>())
+            .is_some_and(|bytes| u64::try_from(bytes).is_ok_and(|b| b <= photocraft_psd::compression::MAX_DECODED_BYTES) && isize::try_from(bytes).is_ok())
+    };
+    let (Some(n), Some(plane)) = (w.checked_mul(hh).filter(|n| fits(*n)), h.row_bytes().checked_mul(hh)) else {
+        return Err("multichannel: the image is too large to read here".into());
+    };
     let canvas = Rect::new(0, 0, h.width as i32, h.height as i32);
     let fmt = PixelFormat::new(ColorMode::Grayscale, depth, false);
     for k in 0..usize::from(h.channels) {
-        let Some(p) = all.get(k * plane..(k + 1) * plane) else {
+        let range = k.checked_mul(plane).and_then(|start| Some(start..start.checked_add(plane)?));
+        let Some(p) = range.and_then(|r| all.get(r)) else {
             warnings.push(format!("multichannel: channel {} is missing", k + 1));
             break;
         };
@@ -70,6 +88,7 @@ pub(crate) fn import(file: &PsdFile, all: &[u8], doc: &mut Document, names: &[St
         s.prune();
         ch.surface = s;
     }
+    Ok(())
 }
 
 /// Writes a Multichannel document as a mode-7 PSD (no layer section; every channel a plane).
@@ -203,4 +222,19 @@ pub(crate) fn layerless_file(
     }
     crate::psd_export::sign_global_blocks(&mut file);
     file
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// #8615: a sample past the end of its plane reads as 0 instead of indexing past it.
+    #[test]
+    fn a_sample_past_the_plane_reads_as_zero() {
+        assert_eq!(decode(&[255], 0, SampleType::U8), 1.0);
+        assert_eq!(decode(&[255, 255, 0], 1, SampleType::U16), 0.0);
+        assert_eq!(decode(&[0, 0, 128], 0, SampleType::F32), 0.0);
+        assert_eq!(decode(&[], usize::MAX, SampleType::F32), 0.0);
+        assert_eq!(decode(&[0xff, 0xff], 0, SampleType::U16), 1.0);
+    }
 }

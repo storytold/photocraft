@@ -181,6 +181,16 @@ pub(crate) fn masked_black(data: &[u16], width: usize, area: Rect) -> Option<[f3
     Some([0, 1, 2, 3].map(|k| sum[k] as f32 / n[k] as f32))
 }
 
+/// The image width and slice widths of a `CR2_SLICE` tag (`n` slices `w` wide, then one `last`
+/// wide), or `None` when the width doesn't fit a `usize`: on wasm32 it could wrap to a small
+/// width that passes the size limits and leaves the slices wider than the image (#8615).
+fn slice_layout(n: usize, w: usize, last: usize) -> Option<(usize, Vec<usize>)> {
+    let width = n.checked_mul(w)?.checked_add(last)?;
+    let mut ws = vec![w; n];
+    ws.push(last);
+    Some((width, ws))
+}
+
 pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
     let ifds = t.all_ifds();
     let ifd0 = t.ifd_at(t.first_ifd, 0).ok_or_else(|| RawError::malformed("CR2 has no IFD0"))?;
@@ -198,10 +208,7 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
     let slices = t.tag_uints(&raw, tag::CR2_SLICE);
     let (width, widths) = match slices.as_slice() {
         [n, w, last] if *n < 64 && *w > 0 && *last > 0 => {
-            let (n, w, last) = (*n as usize, *w as usize, *last as usize);
-            let mut ws = vec![w; n];
-            ws.push(last);
-            (n * w + last, ws)
+            slice_layout(*n as usize, *w as usize, *last as usize).ok_or_else(|| RawError::malformed("CR2 slices are too wide"))?
         }
         _ => {
             let w = frame.width * frame.components;
@@ -219,13 +226,18 @@ pub(crate) fn decode(t: &Tiff, limits: &Limits) -> Result<Sensor> {
     let mut data = vec![0u16; width * height];
     let mut pos = 0usize;
     let mut x0 = 0usize;
+    // Checked: a slice table that doesn't add up is an error, never an out-of-range copy.
+    let short = || RawError::malformed("CR2 slice data is short");
     for sw in widths {
         for y in 0..height {
-            let src = samples.get(pos..pos + sw).ok_or_else(|| RawError::malformed("CR2 slice data is short"))?;
-            data[y * width + x0..y * width + x0 + sw].copy_from_slice(src);
-            pos += sw;
+            let end = pos.checked_add(sw).ok_or_else(short)?;
+            let src = samples.get(pos..end).ok_or_else(short)?;
+            let start = y.checked_mul(width).and_then(|r| r.checked_add(x0)).ok_or_else(short)?;
+            let dst = start.checked_add(sw).and_then(|stop| data.get_mut(start..stop)).ok_or_else(short)?;
+            dst.copy_from_slice(src);
+            pos = end;
         }
-        x0 += sw;
+        x0 = x0.checked_add(sw).ok_or_else(short)?;
     }
 
     let mut warnings = Vec::new();
@@ -318,6 +330,67 @@ pub(crate) fn realign_black(b: BlackLevels, active: Rect) -> BlackLevels {
 mod tests {
     use super::*;
 
+    /// #8615: a slice table whose width doesn't fit a `usize` (on wasm32 it can: the tag holds
+    /// u32s) is refused, not wrapped to a small width that passes the size limits.
+    #[test]
+    fn a_slice_table_wider_than_usize_is_refused() {
+        assert_eq!(slice_layout(2, 3, 4), Some((10, vec![3, 3, 4])));
+        assert_eq!(slice_layout(2, usize::MAX / 2 + 1, 1), None, "n × w overflows");
+        assert_eq!(slice_layout(1, usize::MAX, 1), None, "n × w + last overflows");
+    }
+
+    /// #8615 (review): the same through the decoder, with the tag as the LONGs a real file holds
+    /// (`Cr2Spec` writes SHORTs, which can't reach these widths). Two slices of 2^31 are refused
+    /// — on wasm32 `n * w` would wrap to a small width that passes the size limits, here it is
+    /// the width that no 8-pixel frame can match. Either way: an error, never a wrapped read.
+    #[test]
+    fn a_slice_table_too_wide_for_the_frame_is_refused_by_the_decoder() {
+        use crate::testgen::Cr2Spec;
+
+        let spec = Cr2Spec {
+            width: 8,
+            height: 8,
+            data: vec![2048u16; 64],
+            precision: 12,
+            components: 1,
+            slices: Vec::new(),
+            slices_long: Some([2, 0x8000_0000, 1]),
+            borders: None,
+            wb_rggb: None,
+            orientation: 1,
+            model_id: None,
+        };
+        let bytes = spec.build();
+        let err = crate::decode(&bytes, &crate::Limits::default()).expect_err("the slice table is refused");
+        let text = err.to_string();
+        assert!(text.contains("slices") || text.contains("too large"), "{text}");
+    }
+
+    /// Review on #10257: a LONG table the decoder does accept lays the fixture's samples out as
+    /// its slices say, so the picture comes back as written (the same table as SHORTs would).
+    #[test]
+    fn a_long_slice_table_the_decoder_accepts_round_trips() {
+        use crate::testgen::Cr2Spec;
+
+        let data: Vec<u16> = (0..64u16).map(|i| i * 32).collect();
+        let spec = Cr2Spec {
+            width: 8,
+            height: 8,
+            data: data.clone(),
+            precision: 12,
+            components: 1,
+            slices: Vec::new(),
+            slices_long: Some([3, 2, 2]),
+            borders: None,
+            wb_rggb: None,
+            orientation: 1,
+            model_id: None,
+        };
+        let s = crate::decode(&spec.build(), &crate::Limits::default()).expect("decode");
+        assert_eq!((s.width, s.height), (8, 8));
+        assert_eq!(s.data, data, "the slices are put back where they came from");
+    }
+
     #[test]
     fn red_row_measurement_never_panics_on_odd_geometry() {
         let data = vec![1000u16; 64 * 32];
@@ -390,6 +463,7 @@ mod wb_words {
             precision: 12,
             components: 1,
             slices: Vec::new(),
+            slices_long: None,
             borders: None,
             wb_rggb: Some([1613, 951, 951, 1605]),
             orientation: 1,
@@ -418,6 +492,7 @@ mod wb_words {
             precision: 12,
             components: 1,
             slices: Vec::new(),
+            slices_long: None,
             borders: None,
             wb_rggb: None,
             orientation: 1,

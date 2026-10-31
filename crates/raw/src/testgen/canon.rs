@@ -15,6 +15,10 @@ pub struct Cr2Spec {
     pub components: usize,
     /// Slice widths (all but the last equal); empty = no slice tag.
     pub slices: Vec<usize>,
+    /// `CR2_SLICE` written as LONGs (n, width, last) instead of SHORTs, for the widths a real
+    /// file can hold but a `u16` cannot. Replaces what `slices` would write. A table the decoder
+    /// accepts also lays the samples out, so the fixture matches what it reads back.
+    pub slices_long: Option<[u32; 3]>,
     /// Image borders: left, top, right, bottom (inclusive), as in SensorInfo.
     pub borders: Option<[u16; 4]>,
     /// As-shot RGGB levels written to ColorData at word offset 0x47 (the PowerShot version).
@@ -27,8 +31,20 @@ pub struct Cr2Spec {
 impl Cr2Spec {
     pub fn build(&self) -> Vec<u8> {
         let (w, h) = (self.width, self.height);
-        // Slice the sensor data into the JPEG sample order.
-        let widths: Vec<usize> = if self.slices.is_empty() { vec![w] } else { self.slices.clone() };
+        // Slice the sensor data into the JPEG sample order. A LONG tag the decoder accepts lays
+        // the samples out as its slices say, like `slices` does; one it refuses (too many slices,
+        // or a width that doesn't add up to the frame) leaves them row-major, as the decoder
+        // reads such a file.
+        let widths: Vec<usize> = match self.slices_long.map(|t| t.map(usize::try_from)) {
+            Some([Ok(n), Ok(sw), Ok(last)]) if n < 64 && sw > 0 && last > 0 && n.checked_mul(sw).and_then(|t| t.checked_add(last)) == Some(w) => {
+                let mut ws = vec![sw; n];
+                ws.push(last);
+                ws
+            }
+            Some(_) => vec![w],
+            None if self.slices.is_empty() => vec![w],
+            None => self.slices.clone(),
+        };
         assert_eq!(widths.iter().sum::<usize>(), w);
         let mut seq = Vec::with_capacity(w * h);
         let mut x0 = 0;
@@ -44,7 +60,9 @@ impl Cr2Spec {
         let mut t = TiffBuilder::default();
         let jb = t.blob(jpeg.clone());
         let mut raw = vec![(259, Val::Short(vec![6])), (273, Val::Blobs(vec![jb])), (279, Val::Long(vec![jpeg.len() as u32]))];
-        if !self.slices.is_empty() {
+        if let Some([n, w, last]) = self.slices_long {
+            raw.push((50752, Val::Long(vec![n, w, last])));
+        } else if !self.slices.is_empty() {
             let n = widths.len() - 1;
             raw.push((50752, Val::Short(vec![n as u16, widths[0] as u16, widths[n] as u16])));
         }

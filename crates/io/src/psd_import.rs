@@ -337,10 +337,16 @@ impl Ctx<'_> {
         let mut surface = Surface::with_default(self.mask_fmt, &[f32::from(default) / 255.0]);
         if !rect.is_empty()
             && let Ok((w, h)) = rect.size()
+            // Checked: a mask rect's pixel count need not fit a 32-bit `usize` (#8615); such a
+            // mask is reported as unreadable, as an undecodable mask channel is.
+            && let Some(n) = w.checked_mul(h).or_else(|| {
+                self.warn_unreadable_data(format!("layer \"{name}\": the mask is too large to decode; it was ignored"));
+                None
+            })
             && let Some(plane) = self.channel_plane(rec, id, name)
         {
             let s = self.mask_fmt.sample;
-            let bytes = interleave(&[Some(&plane)], &[zero_sample(s)], w * h, s, &[false]);
+            let bytes = interleave(&[Some(&plane)], &[zero_sample(s)], n, s, &[false]);
             surface.write_interleaved(Rect::new(rect.left, rect.top, rect.right, rect.bottom), &bytes);
             surface.prune();
             surface.share_uniform_tiles(&mut self.uniform);
@@ -1275,7 +1281,10 @@ fn import_decoded_content(import: DecodedImport<'_>, doc: &mut Document, cx: &mu
 fn import_multichannel(file: &PsdFile, merged: &Option<photocraft_psd::Result<Vec<u8>>>, doc: &mut Document, cx: &mut Ctx<'_>) {
     if let Some(Ok(all)) = merged {
         let names = file.resource(1045).map(|r| unicode_names(&r.data)).unwrap_or_default();
-        crate::multichannel_map::import(file, all, doc, &names, &mut cx.warnings);
+        // Channels too large to read are missing data: the document opens marked damaged.
+        if let Err(e) = crate::multichannel_map::import(file, all, doc, &names, &mut cx.warnings) {
+            cx.warn_unreadable_data(e);
+        }
     }
     if !file.layers().is_empty() {
         cx.warn(format!("Multichannel documents have no layers: {} layer records were not imported", file.layers().len()));

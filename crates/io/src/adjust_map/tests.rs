@@ -715,3 +715,14 @@ fn legacy_brit_without_cged() {
     let a = parse(b"brit", &[0, 10, 0xff, 0xf6, 0, 127, 0], None, Channels::Rgb);
     assert_eq!(a, Adjustment::BrightnessContrast { brightness: 10.0, contrast: -10.0, legacy: true });
 }
+
+/// #8615: an offset at the very end of `usize` reads nothing instead of overflowing `at + 4`
+/// (or `at + 2`).
+#[test]
+fn be32_at_the_end_of_usize_reads_nothing() {
+    assert_eq!(be32(&[0, 0, 1, 0], 0), Some(256));
+    assert_eq!(be32(&[0; 8], usize::MAX), None);
+    assert_eq!(be32(&[0; 8], usize::MAX - 2), None);
+    assert_eq!(be16(&[1, 2], 0), Some(258));
+    assert_eq!(be16(&[0; 4], usize::MAX), None);
+}
