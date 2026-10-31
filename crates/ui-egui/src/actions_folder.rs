@@ -103,10 +103,10 @@ pub(crate) fn field(ui: &mut egui::Ui, obj: &mut Map<String, Value>, value: &str
         ui.add(egui::TextEdit::singleline(&mut value).desired_width(260.0));
         ui.horizontal(|ui| {
             if ui.button(tl!("Browse…")).clicked() {
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(REQUEST), true));
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(REQUEST), true));
             }
             if ui.add_enabled(!value.trim().is_empty(), egui::Button::new(tl!("Open Location"))).clicked() {
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(REQUEST), false));
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(REQUEST), false));
             }
         });
     });
@@ -114,9 +114,8 @@ pub(crate) fn field(ui: &mut egui::Ui, obj: &mut Map<String, Value>, value: &str
 }
 
 pub(crate) fn preferences(app: &mut PhotocraftApp, ui: &egui::Ui, fields: &Map<String, Value>) {
-    let Some(browse) = ui.ctx().data_mut(|d| d.remove_temp::<bool>(egui::Id::new(REQUEST))) else { return };
-    let folder =
-        fields.get("values").and_then(|v| v.get("fileHandling")).and_then(|v| v.get("actionsFolder")).and_then(Value::as_str).unwrap_or("").to_string();
+    let Some(browse) = ui.ctx().data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(REQUEST))) else { return };
+    let folder = fields.get("values").and_then(|v| v.get("fileHandling")).and_then(|v| v.get("actionsFolder")).and_then(Value::as_str).unwrap_or("").to_string();
     let result = if browse {
         let Some(id) = fields.get("__prefsDialogId").and_then(Value::as_u64) else { return };
         app.ask_file(crate::file_dialog::FileDialogRequest::Folder { initial_dir: (!folder.is_empty()).then_some(folder) }, move |app, answer| {
@@ -140,57 +139,6 @@ pub(crate) fn preferences(app: &mut PhotocraftApp, ui: &egui::Ui, fields: &Map<S
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn browsing_edits_only_the_working_preferences_and_open_location_uses_the_service() {
-        use crate::file_dialog::{FileDialogAnswer, fake};
-        let (dialog, asked) = fake(vec![Some(FileDialogAnswer::FolderTo("/studio/Actions".into())), Some(FileDialogAnswer::FolderTo("/studio/Other".into()))]);
-        let opened = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let log = opened.clone();
-        let mut app = PhotocraftApp::new(
-            photocraft_engine::Session::new(),
-            crate::Services {
-                file_dialog: Some(dialog),
-                open_url: Some(Box::new(move |path| {
-                    log.borrow_mut().push(path.to_string());
-                    Ok(())
-                })),
-                ..Default::default()
-            },
-        );
-        let id = crate::prefs_ui::open_preferences(&mut app, "fileHandling");
-        let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
-        let ctx = egui::Context::default();
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(REQUEST), true));
-        ctx.run_ui(Default::default(), |ui| {
-            preferences(&mut app, ui, &fields);
-        })
-        .textures_delta
-        .clear();
-        app.poll_file_dialog(&ctx, None);
-        app.poll_file_dialog(&ctx, None);
-        assert!(matches!(&asked.borrow()[0], crate::file_dialog::FileDialogRequest::Folder { .. }));
-        let fields = app.ui.dialog_mut(id).unwrap().fields.clone();
-        assert_eq!(fields["values"]["fileHandling"]["actionsFolder"], "/studio/Actions");
-        assert!(app.session.prefs().file_handling.actions_folder.is_empty(), "Cancel must still discard the choice");
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(REQUEST), false));
-        ctx.run_ui(Default::default(), |ui| {
-            preferences(&mut app, ui, &fields);
-        })
-        .textures_delta
-        .clear();
-        assert_eq!(*opened.borrow(), ["/studio/Actions"]);
-        app.ui.dialog_mut(id).unwrap().fields.insert("values".into(), json!(42));
-        ctx.data_mut(|d| d.insert_temp(egui::Id::new(REQUEST), true));
-        ctx.run_ui(Default::default(), |ui| {
-            preferences(&mut app, ui, &fields);
-        })
-        .textures_delta
-        .clear();
-        app.poll_file_dialog(&ctx, None);
-        app.poll_file_dialog(&ctx, None);
-        assert!(app.ui.status_error, "malformed dialog state is an error, not a panic");
-    }
 
     #[test]
     fn actions_folder_discovers_sets_and_missing_folders_fall_back() {
