@@ -1496,3 +1496,30 @@ fn batch_skips_deselect_with_nothing_selected() {
     assert_eq!((info["width"].as_u64(), info["height"].as_u64()), (Some(6), Some(8)), "the step after Deselect ran: {info}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn info_detail_adds_text_runs_and_antialiasing() {
+    fn type_layer(doc: &Value) -> Option<&Value> {
+        let mut stack: Vec<&Value> = doc["layers"].as_array()?.iter().collect();
+        while let Some(l) = stack.pop() {
+            if l["kind"] == "Type" {
+                return Some(l);
+            }
+            stack.extend(l["children"].as_array().into_iter().flatten());
+        }
+        None
+    }
+    let dir = tmp("info-detail");
+    let file = dir.join("t.psd");
+    ok(bin()
+        .args(["run", "--new", r#"{"width":64,"height":64}"#, "--cmd", "type.create", "--params", r#"{"text":"Hi","x":4,"y":30,"name":"T"}"#, "--out"])
+        .arg(&file));
+    let plain: Value = serde_json::from_str(&ok(bin().arg("info").arg(&file).arg("--compact")).stdout).unwrap();
+    let text = &type_layer(&plain).expect("type layer")["text"];
+    assert!(text.get("runs").is_none() && text.get("antialias").is_none(), "{text}");
+    let detail: Value = serde_json::from_str(&ok(bin().arg("info").arg(&file).args(["--compact", "--detail"])).stdout).unwrap();
+    let text = &type_layer(&detail).expect("type layer")["text"];
+    assert!(text.get("antialias").is_some(), "{text}");
+    assert!(text["runs"].as_array().is_some_and(|r| !r.is_empty()), "{text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

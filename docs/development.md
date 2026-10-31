@@ -227,6 +227,7 @@ See `docs/control-protocol.md` for every method. Tips:
 ```sh
 cargo run -p photocraft-cli -- convert in.psd out.pcraft               # any supported format -> any
 cargo run -p photocraft-cli -- info out.pcraft                          # JSON: size, mode, depth, layer tree
+cargo run -p photocraft-cli -- info out.psd --detail                    # also text runs, anti-aliasing, full layer-effect settings
 cargo run -p photocraft-cli -- run in.png --cmd layer.new.layer --params '{"name":"Ink"}' \
                                           --cmd filter.blur.gaussianBlur --params '{"radius":3}' --out out.psd
 cargo run -p photocraft-cli -- run --new '{"width":800,"height":600}' --cmd document.inspect
@@ -692,7 +693,8 @@ scripts/fetch-corpus.sh            # the same as cargo xtask corpus --all
 
 The PSD write oracle exercises actual edits before export. The recipe runner opens each
 base with `photocraft-cli`, applies its commands to a uniquely selected layer, exports
-and reopens the PSD, and checks the specified properties. It records the generated
+and reopens the PSD, and checks the specified properties (it reads layers with
+`photocraft-cli info --detail`). It records the generated
 files and results for a later independent Photoshop verification (#6130).
 
 ```sh
@@ -705,7 +707,8 @@ The output directory must not exist. It contains `report.json`, `manifest.json`,
 candidate PSD per successful export, and CLI stdout/stderr for diagnosis. A failed
 case does not prevent the other cases from running, but the command exits nonzero.
 The manifest records the checkout revision, whether tracked files were modified, the
-CLI binary hash, recipe hash, corpus revision and candidate hashes. The checkout
+CLI binary hash, recipe hash, corpus revision and candidate hashes (revision and
+dirty state are `unknown` outside a git checkout). The checkout
 revision does not establish where a supplied binary was built; use a binary built from
 that revision and preserve the CI run's provenance. Missing fonts and other warnings
 are recorded. The runner never overwrites its input PSDs.

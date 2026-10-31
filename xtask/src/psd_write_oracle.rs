@@ -209,7 +209,7 @@ fn invoke(cli: &Path, args: &[String], dir: &Path, tag: &str) -> Result<(String,
 
 fn inspect(cli: &Path, file: &Path, dir: &Path, tag: &str) -> Result<Value, String> {
     let path = file.to_str().ok_or("non-UTF-8 path")?;
-    let (out, _) = invoke(cli, &["info".into(), path.into(), "--compact".into()], dir, tag)?;
+    let (out, _) = invoke(cli, &["info".into(), path.into(), "--compact".into(), "--detail".into()], dir, tag)?;
     serde_json::from_str(&out).map_err(|e| format!("invalid CLI inspection: {e}"))
 }
 
@@ -250,6 +250,15 @@ fn write_json(path: &Path, value: &Value) -> Result<(), String> {
     writeln!(f).map_err(|e| e.to_string())
 }
 
+/// Trimmed stdout of `git args` in `root`; `None` outside a checkout or without git.
+fn git(root: &Path, args: &[&str]) -> Option<String> {
+    let out = Command::new("git").current_dir(root).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    String::from_utf8(out.stdout).ok().map(|s| s.trim().to_string())
+}
+
 pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     let [recipe_path, corpus, cli, output] = args else {
         return Err("usage: cargo xtask psd-write-oracle <recipes.json> <corpus-dir> <photocraft-cli> <new-output-dir>".into());
@@ -262,17 +271,11 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     let cli_sha = crate::sha256::hex(&read_limited_to(&cli, 512 * 1024 * 1024)?);
     let output = Path::new(output);
     fs::create_dir(output).map_err(|e| format!("output directory must be new: {e}"))?;
-    let git = Command::new("git").current_dir(root).args(["rev-parse", "HEAD"]).output().map_err(|e| format!("git: {e}"))?;
-    if !git.status.success() {
-        return Err("cannot determine source revision".into());
-    }
-    let revision = String::from_utf8(git.stdout).map_err(|e| e.to_string())?.trim().to_string();
-    let dirty =
-        Command::new("git").current_dir(root).args(["status", "--porcelain", "--untracked-files=no"]).output().map_err(|e| format!("git status: {e}"))?;
-    if !dirty.status.success() {
-        return Err("cannot determine source status".into());
-    }
-    let dirty = !dirty.stdout.is_empty();
+    let revision = git(root, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    let dirty = match git(root, &["status", "--porcelain", "--untracked-files=no"]) {
+        Some(s) => json!(!s.is_empty()),
+        None => json!("unknown"),
+    };
     let mut cases = Vec::new();
     for case in &recipes.cases {
         let result = execute(case, &corpus, &cli, output).unwrap_or_else(|e| {
@@ -297,6 +300,11 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn git_is_optional() {
+        assert!(git(&std::env::temp_dir().join("psd-write-oracle-no-such-dir"), &["rev-parse", "HEAD"]).is_none());
+    }
 
     #[test]
     fn detects_wrong_or_unchanged_edits_and_missing_fields() {

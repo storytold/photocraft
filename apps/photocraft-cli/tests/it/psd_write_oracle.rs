@@ -18,7 +18,7 @@ fn edited_psd_roundtrip_is_checked_and_bad_expectations_fail() {
         .output()
         .unwrap();
     assert!(made.status.success(), "{}", String::from_utf8_lossy(&made.stderr));
-    let hash = crate::sha256::hex(&fs::read(&base).unwrap());
+    let hash = xtask::sha256::hex(&fs::read(&base).unwrap());
     let mut recipe = json!({"version":1,"corpus_revision":"synthetic","cases":[{
         "id":"style", "base":"base.psd", "base_sha256":hash, "target":{"kind":"Type","name":"Oracle"},
         "commands":[{"command":"type.antiAlias.crisp","params":{}}],
@@ -32,14 +32,14 @@ fn edited_psd_roundtrip_is_checked_and_bad_expectations_fail() {
     let recipe_name = recipe_path.to_str().unwrap();
     let output = root.join("success");
     let args = [recipe_name, corpus, cli_path, output.to_str().unwrap()];
-    crate::oracle_runner::run(&src, &args).unwrap();
+    xtask::psd_write_oracle::run(&src, &args).unwrap();
     let report: Value = serde_json::from_slice(&fs::read(output.join("report.json")).unwrap()).unwrap();
     assert_eq!(report["cases"][0]["status"], "pass");
     assert_eq!(report["cases"][0]["photoshop"]["opens"], "not_run");
     recipe["cases"][0]["checks"][0]["value"] = json!("Sharp");
     fs::write(&recipe_path, serde_json::to_vec(&recipe).unwrap()).unwrap();
     let bad_output = root.join("failure");
-    assert!(crate::oracle_runner::run(&src, &[recipe_name, corpus, cli_path, bad_output.to_str().unwrap()]).is_err());
+    assert!(xtask::psd_write_oracle::run(&src, &[recipe_name, corpus, cli_path, bad_output.to_str().unwrap()]).is_err());
     let bad: Value = serde_json::from_slice(&fs::read(bad_output.join("report.json")).unwrap()).unwrap();
     assert_eq!(bad["cases"][0]["status"], "fail");
 }
