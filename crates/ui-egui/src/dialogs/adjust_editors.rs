@@ -26,6 +26,7 @@ use crate::widgets::{self, hue_color};
 mod basic;
 mod curves;
 mod gradient_map;
+mod hue_sat_presets;
 mod hue_saturation;
 mod levels;
 mod session;
