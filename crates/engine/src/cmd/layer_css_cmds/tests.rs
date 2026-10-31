@@ -70,6 +70,38 @@ fn fill_and_type_layers_describe_their_colour_and_font() {
     assert!(rule(&doc, 5, &group).is_none());
 }
 
+/// Photoshop 2025, paragraph text in a 200 × 120 box at (60, 40) that wraps to two lines whose
+/// pixels span 156 × 51: `left: 59.937px; top: 36.948px; width: 156px; height: 51px;`. Unlike point
+/// text it has a size, that of its text (not the box), and it's placed at its box, not where its
+/// first pixel is; an explicit leading moves it down by that much (36 px: `top: 72.948px`).
+#[test]
+fn paragraph_text_is_placed_at_its_box_and_sized_by_its_text() {
+    let doc = session("Box").active().unwrap().doc.clone();
+    let mut cache = photocraft_raster::Surface::new(photocraft_color::PixelFormat::RGBA8);
+    cache.fill_rect(Rect::new(62, 44, 218, 95), &[0.0, 0.0, 0.0, 1.0]);
+    let mut text = photocraft_doc::TextLayer {
+        text: "Hello world this wraps around".into(),
+        font_family: "Inter".into(),
+        size_pt: 24.0,
+        cache: Some(cache),
+        shape: photocraft_doc::text::TextShape::Box { x: 0.0, y: 0.0, width: 200.0, height: 120.0 },
+        transform: photocraft_geom::Affine::translate(60.0, 40.0),
+        ..Default::default()
+    };
+    let css = rule(&doc, 3, &Layer::new("Para", LayerContent::Text(text.clone()))).unwrap_or_default();
+    assert_eq!(
+        css,
+        ".Para {\n  font-size: 24px;\n  font-family: \"Inter\";\n  color: rgb(0, 0, 0);\n  line-height: 1.2;\n  text-align: left;\n  position: absolute;\n  left: 60px;\n  top: 40px;\n  width: 156px;\n  height: 51px;\n  z-index: 3;\n}\n"
+    );
+    let style = photocraft_doc::text::CharStyle { font_family: "Inter".into(), size_pt: 24.0, leading_pt: Some(36.0), ..Default::default() };
+    text.runs = vec![photocraft_doc::text::TextRun { len: text.text.len(), style }];
+    let css = rule(&doc, 3, &Layer::new("Para", LayerContent::Text(text))).unwrap_or_default();
+    assert!(
+        css.contains("  line-height: 1.5;\n  text-align: left;\n  position: absolute;\n  left: 60px;\n  top: 76px;\n  width: 156px;\n  height: 51px;\n"),
+        "{css}"
+    );
+}
+
 #[test]
 fn numbers_and_names_are_written_as_photoshop_does() {
     assert_eq!(number(48.9374), "48.937");

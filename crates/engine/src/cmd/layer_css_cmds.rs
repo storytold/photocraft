@@ -4,10 +4,12 @@
 //! Each layer is a class named after it (punctuation and spaces become `_`, and a leading digit
 //! gets a `_` in front): a type layer gives its font, colour, line height and alignment, a solid
 //! shape or fill layer its colour, any other layer an image named after it; then the opacity when
-//! it isn't 100 %, the absolute position (and size, except for type), and its place in the stack
-//! as `z-index`, counted from the bottom layer as 1.
+//! it isn't 100 %, the absolute position (and size, except for point type), and its place in the
+//! stack as `z-index`, counted from the bottom layer as 1.
 
-use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId, text::TextAlign};
+use photocraft_doc::text::{TextAlign, TextShape};
+use photocraft_doc::{Document, Fill, Layer, LayerContent, LayerId};
+use photocraft_geom::Point;
 use serde_json::{Value, json};
 
 use crate::commands::CommandSpec;
@@ -83,6 +85,8 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
     let mut props: Vec<(&str, String)> = Vec::new();
     let mut sized = true;
     let mut bounds = photocraft_doc::comps::position_bounds(l);
+    // Where the rule starts when it isn't where the layer's pixels start.
+    let mut origin: Option<Point> = None;
     match &l.content {
         LayerContent::Group(_) | LayerContent::Adjustment(_) => return None,
         LayerContent::Text(t) => {
@@ -107,8 +111,17 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
             props.push(("color", rgb(&color)));
             props.push(("line-height", number(line_height)));
             props.push(("text-align", align.into()));
-            // Point text has no box of its own: only its position.
-            sized = false;
+            match t.shape {
+                // Photoshop places paragraph text at its box, moved down by an explicit leading,
+                // and sizes it by its text, not the box.
+                TextShape::Box { x, y, .. } => {
+                    let at = t.transform.apply(Point::new(f64::from(x), f64::from(y)));
+                    let leading = style.and_then(|s| s.leading_pt).map_or(0.0, |v| f64::from(v) * px_per_pt);
+                    origin = Some(Point::new(at.x, at.y + leading));
+                }
+                // Point text has no box of its own: only its position.
+                _ => sized = false,
+            }
         }
         LayerContent::Shape(sh) => match &sh.fill {
             Some(Fill::Solid(c)) => props.push(("background-color", rgb(c))),
@@ -133,8 +146,9 @@ pub fn rule(doc: &Document, z: usize, l: &Layer) -> Option<String> {
         props.push(("opacity", number(f64::from(l.opacity.max(0.0)))));
     }
     props.push(("position", "absolute".into()));
-    props.push(("left", format!("{}px", number(f64::from(bounds.x0)))));
-    props.push(("top", format!("{}px", number(f64::from(bounds.y0)))));
+    let at = origin.unwrap_or(Point::new(f64::from(bounds.x0), f64::from(bounds.y0)));
+    props.push(("left", format!("{}px", number(at.x))));
+    props.push(("top", format!("{}px", number(at.y))));
     if sized {
         props.push(("width", format!("{}px", number(f64::from(bounds.width())))));
         props.push(("height", format!("{}px", number(f64::from(bounds.height())))));
