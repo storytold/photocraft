@@ -11,8 +11,9 @@
 //! marks) are skipped by playback, Batch and droplets.
 //!
 //! An untrusted session installs [`Session::authorize`]. `actions.play` calls it for every nested
-//! step, because the outer `actions.play` id would otherwise hide a recorded `file.*` command from
-//! the top-level check.
+//! step it executes, because the outer `actions.play` id would otherwise hide a recorded `file.*`
+//! command from the top-level check. Inside a Batch run, a step `batch_handles_step` takes is not
+//! executed, so it is not checked: the step only marks the result or is skipped.
 
 use std::collections::BTreeSet;
 
@@ -434,6 +435,22 @@ fn run_recorded(s: &mut Session, action: &Action, from: usize) -> (u64, Option<V
         if !consume_playback_step(s) {
             failed = Some(json!({"step": i, "id": id, "error": format!("action playback exceeded the {}-step limit", MAX_PLAYBACK_STEPS)}));
             break;
+        }
+        // Inside a Batch run a recorded save marks the result, and the steps Batch drops are
+        // skipped, as at the top of the batched action. This is before the authorize hook: the
+        // hook refuses `file.saveACopy`, and running it first failed the nested action instead
+        // of letting Batch handle a step it never executes. A step Batch does not handle, and
+        // every step outside a Batch run, still goes through the hook.
+        match crate::file_cmds::batch_handles_step(s, id) {
+            Ok(true) => {
+                ran += 1;
+                continue;
+            }
+            Ok(false) => {}
+            Err(e) => {
+                failed = Some(json!({"step": i, "id": id, "error": e.to_string()}));
+                break;
+            }
         }
         if let Some(auth) = s.authorize
             && let Err(e) = auth(id, params)

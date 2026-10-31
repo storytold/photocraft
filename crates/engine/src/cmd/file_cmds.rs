@@ -29,7 +29,7 @@ mod processing;
 mod save;
 
 pub use batch_run::OutputClaims;
-pub(crate) use batch_run::{BatchInput, batch_inputs, batch_keeps_step, batch_save_point, process_files};
+pub(crate) use batch_run::{BatchInput, BatchRun, batch_handles_step, batch_inputs, batch_keeps_step, batch_save_point, process_files};
 #[cfg(test)]
 pub(crate) use batch_run::{MAX_SUBFOLDER_DEPTH, list_images_tree};
 use batch_run::{batch, same_format};
