@@ -2202,6 +2202,55 @@ fn stroke_effects_on_filled_and_stroked_shapes() {
     }
 }
 
+/// Whole-level gray rounds half down at Blend If cutoffs; fractional gray retains its precision.
+#[test]
+fn blend_if_gray_rounding_at_whole_levels() {
+    use photocraft_doc::BlendRange;
+    let Some(mut g) = gpu() else { return };
+    // Exact .51, half-down ties, and nearby values from the CPU gray-rounding oracle.
+    for (rgb, gray) in [
+        ([29u8, 141, 42], 97u8),
+        ([65, 0, 0], 19),
+        ([66, 0, 0], 20),
+        ([0, 0, 250], 27),
+        ([0, 0, 251], 28),
+        ([123, 126, 151], 128),
+        ([120, 129, 149], 128),
+        ([121, 129, 149], 129),
+    ] {
+        let c = rgb.map(|v| f32::from(v) / 255.0);
+        for side in 0..2 {
+            for cut in [gray, gray + 1] {
+                let color = [c[0], c[1], c[2], 1.0];
+                let other = [1.0, 0.0, 1.0, 1.0];
+                let pixels = if side == 0 { [other, color] } else { [color, other] };
+                let mut d = Document::new("gray rounding", Size::new(1, 1), ColorMode::Rgb, SampleType::U8);
+                for px in pixels {
+                    let mut l = Layer::raster("pixel", PixelFormat::RGBA8);
+                    l.surface_mut().unwrap().write_region(d.bounds(), &px);
+                    d.layers.push(l);
+                }
+                let mut ranges = [BlendRange::FULL; 2];
+                ranges[side] = BlendRange { black: [cut, cut], white: [255, 255] };
+                d.layers[1].blend_if.set(0, ranges);
+                let expected = pixels[usize::from(cut == gray)];
+                assert_eq!(photocraft_compose::render(&d, d.bounds()).px[0], expected);
+                check(&mut g, &d, &format!("gray {rgb:?}, side {side}, black {cut}"));
+            }
+        }
+    }
+
+    // Deeper colors between whole levels retain fractional gray: 115.3875, not 115.
+    let mut d = Document::new("fractional gray", Size::new(1, 1), ColorMode::Rgb, SampleType::F32);
+    for px in [[0.25, 0.5, 0.75, 1.0], [1.0; 4]] {
+        let mut l = Layer::raster("pixel", PixelFormat::RGBA32F);
+        l.surface_mut().unwrap().write_region(d.bounds(), &px);
+        d.layers.push(l);
+    }
+    d.layers[1].blend_if.set(0, [BlendRange::FULL, BlendRange { black: [115, 116], white: [255, 255] }]);
+    check(&mut g, &d, "fractional gray");
+}
+
 /// Blend If on the GPU matches `compose::apply_blend_if` (#4395): this-layer and underlying
 /// ranges, hard and split points, per channel, on raster, masked, adjustment and clipped layers,
 /// with channel restrictions, and in grayscale. Hard points are compared on 8-bit documents only:
