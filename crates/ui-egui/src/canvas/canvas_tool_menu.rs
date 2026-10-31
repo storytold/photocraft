@@ -1137,7 +1137,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             v.widgets.hovered.corner_radius = egui::CornerRadius::same(3);
             ui.spacing_mut().item_spacing.y = 0.0;
             ui.set_width(200.0);
-            crate::widgets::menu_scroll(ui, |ui| {
+            // The Area body has no direction of its own; scope it like a window body so the
+            // rows hug the reading-start edge in a right-to-left UI (LTR unchanged).
+            ui.with_layout(crate::direction::body_layout(), |ui| crate::widgets::menu_scroll(ui, |ui| {
                 let spelling = spelling_rows(&menu);
                 for (label, command) in &spelling {
                     let text = if spelling_label_is_ui(command) { tl!(label).to_string() } else { label.clone() };
@@ -1170,7 +1172,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         selected = Some((*command).to_string());
                     }
                 }
-            });
+            }));
         });
     });
     if let Some(command) = selected {
