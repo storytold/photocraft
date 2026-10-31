@@ -4026,17 +4026,8 @@ curves	Smooth	Εξομάλυνση
 	Kept {name}: written by another application	Το {name} διατηρήθηκε: γράφτηκε από άλλη εφαρμογή
 	Shadow Tint	Χροιά σκιών
 	Check for Updates…	Έλεγχος ενημερώσεων…
-	PhotoCraft Updates	Ενημερώσεις PhotoCraft
-	Checking for updates…	Έλεγχος για ενημερώσεις…
 	Open the release page to choose an installer for your system.	Ανοίξτε τη σελίδα της έκδοσης για να επιλέξετε πρόγραμμα εγκατάστασης για το σύστημά σας.
-	Open Download Page	Άνοιγμα σελίδας λήψης
-	PhotoCraft is up to date.	Το PhotoCraft είναι ενημερωμένο.
-	Could not check for updates.	Δεν ήταν δυνατός ο έλεγχος ενημερώσεων.
-	Updates have not been checked yet.	Δεν έχει γίνει ακόμη έλεγχος ενημερώσεων.
-	Check Again	Νέος έλεγχος
 	Automatically Check for Updates	Αυτόματος έλεγχος ενημερώσεων
-	Installed version: {version}	Εγκατεστημένη έκδοση: {version}
-	PhotoCraft {version} is available.	Το PhotoCraft {version} είναι διαθέσιμο.
 	Paints from the History panel's source state	Βάφει από την κατάσταση πηγής του πίνακα Ιστορικό
 	Sets the source for the history brush	Ορίζει την πηγή για το πινέλο ιστορικού
 	Highlight Mode	Λειτουργία φωτεινών τόνων

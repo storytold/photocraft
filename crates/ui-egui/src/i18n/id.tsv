@@ -38,7 +38,7 @@
 
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -3338,17 +3338,8 @@ curves	Smooth	Haluskan
 	Kept {name}: written by another application	{name} dipertahankan: ditulis oleh aplikasi lain
 	Shadow Tint	Rona bayangan
 	Check for Updates…	Periksa Pembaruan…
-	PhotoCraft Updates	Pembaruan PhotoCraft
-	Checking for updates…	Memeriksa pembaruan…
 	Open the release page to choose an installer for your system.	Buka halaman rilis untuk memilih penginstal bagi sistem Anda.
-	Open Download Page	Buka Halaman Unduhan
-	PhotoCraft is up to date.	PhotoCraft sudah versi terbaru.
-	Could not check for updates.	Tidak dapat memeriksa pembaruan.
-	Updates have not been checked yet.	Pembaruan belum diperiksa.
-	Check Again	Periksa Lagi
 	Automatically Check for Updates	Periksa Pembaruan Secara Otomatis
-	Installed version: {version}	Versi terpasang: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} tersedia.
 	Paints from the History panel's source state	Melukis dari status sumber panel Riwayat
 	Sets the source for the history brush	Menetapkan sumber untuk kuas riwayat
 	Highlight Mode	Mode Sorotan
