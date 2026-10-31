@@ -14,6 +14,7 @@ fn harness() -> Option<Harness> {
             PhotocraftApp::setup_context(&cc.egui_ctx, Default::default());
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
             if let Some(rs) = cc.wgpu_render_state.as_ref() {
+                eprintln!("pattern preview adapter {:?}", rs.adapter.get_info());
                 app.set_wgpu(rs.clone());
             }
             app

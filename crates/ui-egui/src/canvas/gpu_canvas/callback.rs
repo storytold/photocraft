@@ -176,7 +176,7 @@ impl CallbackTrait for CanvasCallback {
         // Work in whole-screen pixel coordinates; the scissor does the clipping.
         pass.set_viewport(0.0, 0.0, sw as f32, sh as f32, 0.0, 1.0);
         pass.set_scissor_rect(clip.left_px.max(0) as u32, clip.top_px.max(0) as u32, clip.width_px as u32, clip.height_px as u32);
-        pass.set_bind_group(0, &view.bind_group, &[]);
+        pass.set_bind_group(0, &view.bind_group, &[0]);
         if self.params.shadow {
             pass.set_pipeline(&res.shadow_pipeline);
             pass.draw(0..6, 0..1);
