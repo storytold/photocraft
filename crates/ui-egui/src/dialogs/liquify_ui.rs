@@ -573,6 +573,7 @@ impl LiquifyDialog {
 
 /// Opens the dialog on the active layer.
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
+    crate::distort_ui::dialog_can_open(app, photocraft_engine::distort_cmds::LIQUIFY)?;
     let (layer, surf, _) = crate::distort_ui::active_filter_target(app)?;
     let canvas = app.session.active().ok_or("no document")?.doc.bounds();
     open_on(app, ctx, layer, surf, Vec::new(), auto_cell(canvas), None)

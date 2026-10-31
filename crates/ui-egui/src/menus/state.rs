@@ -28,6 +28,11 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> bool {
     if crate::rasterize_prompt::filter_needs(app, id).is_some() {
         return true;
     }
+    // Liquify and Camera Raw take an adjustment layer's mask in the engine, but their dialogs
+    // preview the layer's pixels and can't open there yet (#10457).
+    if matches!(id, photocraft_engine::distort_cmds::LIQUIFY | photocraft_engine::lens_cmds::RAW) && crate::distort_ui::dialog_can_open(app, id).is_err() {
+        return false;
+    }
     if let Some(e) = crate::workspace_ui::is_enabled(app, id) {
         return e;
     }
