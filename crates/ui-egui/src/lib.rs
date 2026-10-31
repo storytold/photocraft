@@ -740,6 +740,8 @@ mod pen_variants_tests;
 #[cfg(test)]
 mod color_replacement_tests;
 #[cfg(test)]
+mod home_recent_gate_tests;
+#[cfg(test)]
 mod layer_shortcut_tests;
 #[cfg(test)]
 mod live_retouch_tests;
