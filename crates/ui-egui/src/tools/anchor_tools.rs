@@ -3,7 +3,9 @@
 //! Paths panel, the targeted vector mask or the active shape layer's path, then the work path.
 //!
 //! * Add Anchor Point: hovering a segment highlights it and shows where the anchor would go; a
-//!   click inserts it there (`path.addAnchor`). A curve is split without changing its shape.
+//!   click inserts it there (`path.addAnchor`). A curve is split without changing its shape, into
+//!   a smooth anchor; a straight segment gets a corner. The new anchor is selected with its
+//!   direction handles showing, and a drag from the click moves it, as in Photoshop (#8653).
 //! * Delete Anchor Point: hovering an anchor highlights it; a click removes it
 //!   (`path.deleteAnchor`), joining its neighbours.
 //! * ⌥ swaps the two tools and ⌘/Ctrl is Direct Selection (`direct_select`) while held.
@@ -12,7 +14,7 @@
 //!   off while held. It edits the active path, or while a path is being drawn that path (#6140),
 //!   and drawing carries on from its last anchor.
 //!
-//! Each click is one command and one history step; a click on nothing it can edit does nothing.
+//! Each click (or add and drag) is one history step; a click on nothing it can edit does nothing.
 
 use egui::{Color32, Modifiers, Pos2, Stroke};
 use photocraft_doc::vector::Path;
@@ -89,9 +91,9 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
     {
         // The release finds no Pen drag to finish, so the Pen draws nothing.
         if r == PathRef::Pen {
-            edit_pen(app, path, hit);
+            edit_pen(app, path, hit, [x, y]);
         } else {
-            apply(app, r, hit);
+            apply(app, r, hit, [x, y]);
         }
         return true;
     }
@@ -105,31 +107,46 @@ pub fn pointer(app: &mut PhotocraftApp, ev: ToolEvent, mods: Modifiers) -> bool 
 fn click(app: &mut PhotocraftApp, tool: Tool, p: [f64; 2]) {
     let Some((r, path, hit)) = target(app, tool, p) else { return };
     if r == PathRef::Pen {
-        edit_pen(app, path, hit);
+        edit_pen(app, path, hit, p);
         return;
     }
-    apply(app, r, hit);
+    apply(app, r, hit, p);
 }
 
 /// Add or delete an anchor of the Pen path being drawn (`path`, from `pen_path`). It isn't in the
-/// document yet, so it takes the edit directly; drawing carries on from its last anchor.
-fn edit_pen(app: &mut PhotocraftApp, mut path: Path, hit: Hit) {
-    let edited = match hit {
-        Hit::Segment(k, t) => edit::add_anchor(&mut path, k, t).is_ok(),
-        Hit::Anchor(k) => edit::delete_anchor(&mut path, k).is_ok(),
-        Hit::Handle(..) => false,
+/// document yet, so it takes the edit directly; drawing carries on from its last anchor. An added
+/// anchor is selected and follows a drag from the press at `p` ([`crate::direct_select::grab_added`]).
+fn edit_pen(app: &mut PhotocraftApp, mut path: Path, hit: Hit, p: [f64; 2]) {
+    let added = match hit {
+        Hit::Segment(k, t) => match edit::add_anchor(&mut path, k, t) {
+            Ok(added) => Some(added),
+            Err(_) => return,
+        },
+        Hit::Anchor(k) => {
+            if edit::delete_anchor(&mut path, k).is_err() {
+                return;
+            }
+            None
+        }
+        Hit::Handle(..) => return,
     };
-    if edited {
-        app.ui.direct_selection = DirectSelection { target: Some(PathRef::Pen), ..Default::default() };
-        crate::vector_ui::pen_replace(app, &path);
+    app.ui.direct_selection = DirectSelection { target: Some(PathRef::Pen), ..Default::default() };
+    crate::vector_ui::pen_replace(app, &path);
+    if let Some(k) = added {
+        crate::direct_select::grab_added(app, PathRef::Pen, path, k, p, None);
     }
 }
 
 /// Add an anchor where `hit` is on a segment of `r`, or delete the anchor it is on: one command.
-fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit) {
-    let (id, mut params) = match hit {
-        Hit::Segment([s, k], t) => ("path.addAnchor", serde_json::json!({"subpath": s, "knot": k, "t": t})),
-        Hit::Anchor([s, k]) => ("path.deleteAnchor", serde_json::json!({"subpath": s, "knot": k})),
+/// An added anchor is selected and follows a drag from the press at `p`; the add and the move are
+/// one history step.
+fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit, p: [f64; 2]) {
+    let (id, mut params, coalesce) = match hit {
+        Hit::Segment([s, k], t) => {
+            let key = format!("add-anchor-{}", app.ui.alloc_id());
+            ("path.addAnchor", serde_json::json!({"subpath": s, "knot": k, "t": t, "coalesce": key}), Some(key))
+        }
+        Hit::Anchor([s, k]) => ("path.deleteAnchor", serde_json::json!({"subpath": s, "knot": k}), None),
         Hit::Handle(..) => return,
     };
     // A hit right at a segment's end is an anchor (anchors win the hit test), so `t` is inside.
@@ -137,6 +154,14 @@ fn apply(app: &mut PhotocraftApp, r: PathRef, hit: Hit) {
         o.extend(t.clone());
     }
     match app.run(id, params) {
+        Ok(v) if coalesce.is_some() => {
+            let n = |f: &str| v["anchor"][f].as_u64().and_then(|v| usize::try_from(v).ok());
+            let base = crate::direct_select::candidates(app).into_iter().find(|(c, _)| *c == r).map(|(_, path)| path);
+            match (n("subpath"), n("knot"), base) {
+                (Some(s), Some(k), Some(base)) => crate::direct_select::grab_added(app, r, base, [s, k], p, coalesce),
+                _ => app.ui.direct_selection = DirectSelection { target: Some(r), ..Default::default() },
+            }
+        }
         // The anchors shift: a Direct Selection on this path would point at the wrong ones.
         Ok(_) if app.ui.direct_selection.target.as_ref() == Some(&r) => app.ui.direct_selection = DirectSelection { target: Some(r), ..Default::default() },
         Ok(_) => {}
