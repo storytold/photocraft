@@ -65,10 +65,26 @@ pub(crate) struct Source {
 type Loaded = (Vec<Source>, PixelFormat, Option<std::sync::Arc<Vec<u8>>>);
 
 fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
-    let mut docs: Vec<(String, Document)> = Vec::new();
+    let mut out = Vec::new();
+    let (mut fmt, mut icc) = (None, None);
+    let mut add = |name: String, d: Document| {
+        let source_fmt = d.pixel_format();
+        let output_fmt = *fmt.get_or_insert_with(|| {
+            if matches!(source_fmt.mode, ColorMode::Cmyk | ColorMode::Lab | ColorMode::Multichannel) {
+                PixelFormat::new(ColorMode::Rgb, source_fmt.sample, true)
+            } else {
+                source_fmt
+            }
+        });
+        if out.is_empty() && source_fmt.mode == output_fmt.mode {
+            icc = d.icc_profile.clone();
+        }
+        let info = d.metadata.exif.as_ref().map(|e| exif::read(e)).unwrap_or_default();
+        out.push(Source { name, surf: flattened(&d, output_fmt), w: d.size.width as usize, h: d.size.height as usize, exif: info });
+    };
     if p.get("useOpenDocuments").and_then(Value::as_bool).unwrap_or(false) {
         for d in s.documents() {
-            docs.push((d.doc.name.clone(), (*d.doc).clone()));
+            add(d.doc.name.clone(), (*d.doc).clone());
         }
     }
     let paths: Vec<String> = match p.get("paths").or_else(|| p.get("input")) {
@@ -78,25 +94,13 @@ fn load_sources(s: &Session, p: &Value, cmd: &str) -> Result<Loaded> {
     };
     for path in &paths {
         let bytes = read_file(path)?;
-        docs.push((file_name(path), import(&file_name(path), &bytes)?));
+        let name = file_name(path);
+        add(name.clone(), import(&name, &bytes)?);
     }
-    if docs.is_empty() {
+    if out.is_empty() {
         return Err(bad(cmd, "pass \"paths\" (files or a folder) or \"useOpenDocuments\": true"));
     }
-    let first = &docs[0].1;
-    let mut fmt = first.pixel_format();
-    if matches!(fmt.mode, ColorMode::Cmyk | ColorMode::Lab | ColorMode::Multichannel) {
-        // Registration and blending work in RGB; like Photoshop, the result is RGB.
-        fmt = PixelFormat::new(ColorMode::Rgb, fmt.sample, true);
-    }
-    let icc = (first.pixel_format().mode == fmt.mode).then(|| first.icc_profile.clone()).flatten();
-    let out = docs
-        .into_iter()
-        .map(|(name, d)| {
-            let info = d.metadata.exif.as_ref().map(|e| exif::read(e)).unwrap_or_default();
-            Source { name, surf: flattened(&d, fmt), w: d.size.width as usize, h: d.size.height as usize, exif: info }
-        })
-        .collect();
+    let Some(fmt) = fmt else { return Err(bad(cmd, "no readable image sources")) };
     Ok((out, fmt, icc))
 }
 
@@ -529,7 +533,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 y1 = y1.max(b[3]);
             }
             let (cw, ch) = ((x1 - x0).ceil(), (y1 - y0).ceil());
-            if !(cw.is_finite() && ch.is_finite()) || cw > 30_000.0 || ch > 30_000.0 || cw * ch > 6.0e8 {
+            if !(cw.is_finite() && ch.is_finite()) || cw <= 0.0 || ch <= 0.0 || cw > 30_000.0 || ch > 30_000.0 || cw * ch > 6.0e8 {
                 return Err(EngineError::Other(format!("the panorama would be {cw}×{ch} px; try another layout")));
             }
             let canvas = Rect::new(0, 0, cw as i32, ch as i32);
@@ -617,16 +621,16 @@ fn content_aware_fill(comp: &Surface, canvas: Rect) -> Surface {
     let (w, h) = (canvas.width() as usize, canvas.height() as usize);
     let k = ((w * h) as f64 / 1.5e6).sqrt().ceil().max(1.0) as usize;
     let (sw, sh) = (w.div_ceil(k), h.div_ceil(k));
-    let full = comp.read_region(canvas);
     let cc = n - 1;
     let mut small = vec![0.0f32; sw * sh * cc];
     let mut hole = vec![false; sw * sh];
     let mut acc_a = vec![0.0f32; sw * sh];
     let mut cnt = vec![0.0f32; sw * sh];
     for y in 0..h {
+        let row = comp.read_region(Rect::new(canvas.x0, canvas.y0 + y as i32, canvas.x1, canvas.y0 + y as i32 + 1));
         for x in 0..w {
             let i = (y / k) * sw + x / k;
-            let px = &full[(y * w + x) * n..(y * w + x + 1) * n];
+            let px = &row[x * n..(x + 1) * n];
             let a = px[cc];
             for c in 0..cc {
                 small[i * cc + c] += px[c] * a;
@@ -644,10 +648,13 @@ fn content_aware_fill(comp: &Surface, canvas: Rect) -> Surface {
     }
     let source: Vec<bool> = hole.iter().map(|h| !h).collect();
     let filled = fill(sw, sh, cc, &small, &hole, &source, &FillOptions::default());
-    let mut out = vec![0.0f32; w * h * n];
+    let mut s = Surface::new(fmt);
     for y in 0..h {
+        let area = Rect::new(canvas.x0, canvas.y0 + y as i32, canvas.x1, canvas.y0 + y as i32 + 1);
+        let full = comp.read_region(area);
+        let mut out = vec![0.0f32; w * n];
         for x in 0..w {
-            let o = (y * w + x) * n;
+            let o = x * n;
             let a = full[o + cc];
             let i = (y / k) * sw + x / k;
             for c in 0..cc {
@@ -664,9 +671,8 @@ fn content_aware_fill(comp: &Surface, canvas: Rect) -> Surface {
             }
             out[o + cc] = 1.0;
         }
+        s.write_region(area, &out);
     }
-    let mut s = Surface::new(fmt);
-    s.write_region(canvas, &out);
     s.prune();
     s
 }
