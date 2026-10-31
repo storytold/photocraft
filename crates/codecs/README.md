@@ -294,7 +294,8 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
 `DecodeOptions { limits: Limits { max_width, max_height, max_pixels, max_alloc }, .. }` guards
 decoding. Header dimensions are checked before the pixel buffer is allocated, and the budget is
 also passed to the underlying decoders. A violation returns `CodecError::LimitExceeded`. The
-defaults are 262144 px per side, 2^30 pixels and 8 GiB (2 GiB on 32-bit targets such as wasm).
+defaults are 300000 px per side (Photoshop's largest document) and 8 GiB (1 GiB on 32-bit targets
+such as wasm); the pixel count has no cap of its own.
 PNG also bounds the aggregate decoded text and XMP (UTF-8 keywords and values) by `max_alloc`,
 including chunks after IDAT. This budget is separate from pixels, not a total process-memory cap.
 

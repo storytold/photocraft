@@ -17,6 +17,19 @@ fn encoded(f: Format) -> Vec<u8> {
     encode(&img, f, &EncodeOptions::default()).unwrap()
 }
 
+/// Large print files past 2^30 pixels open (a 2.6-gigapixel banner TIFF, #9336): the default
+/// limits cap the sides at Photoshop's 300,000 px and the decoded buffer's bytes, not the count.
+#[cfg(target_pointer_width = "64")]
+#[test]
+fn default_limits_take_gigapixel_prints() {
+    let l = Limits::default();
+    assert!(l.check(64_000, 41_244, ChannelLayout::Rgb, SampleType::U8).is_ok(), "2.64 GP RGB 8-bit, 7.9 GB");
+    assert!(l.check(300_000, 1_000, ChannelLayout::Gray, SampleType::U8).is_ok());
+    assert!(matches!(l.check(300_001, 1_000, ChannelLayout::Gray, SampleType::U8), Err(CodecError::LimitExceeded(_))));
+    // The byte budget still refuses what it can't hold.
+    assert!(matches!(l.check(64_000, 41_244, ChannelLayout::Rgba, SampleType::U16), Err(CodecError::LimitExceeded(_))));
+}
+
 #[test]
 fn max_pixels_enforced_for_every_format() {
     for f in rw_formats() {
