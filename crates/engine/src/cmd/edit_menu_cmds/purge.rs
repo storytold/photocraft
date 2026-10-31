@@ -39,6 +39,10 @@ pub(super) fn purge(s: &mut Session, what: &str) -> Result<Value> {
         if s.documents().iter().any(|d| d.history.can_undo() || d.history.can_redo()) {
             for st in &mut s.docs {
                 st.history.clear();
+                if st.is_dirty() {
+                    // No remaining state can match the last save (#6867).
+                    st.saved_history_id = u64::MAX;
+                }
                 st.coalesce = None;
             }
             freed += b;

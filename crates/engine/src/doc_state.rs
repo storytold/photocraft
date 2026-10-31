@@ -20,6 +20,9 @@ pub struct DocState {
     /// Increments on every change; UIs re-render when it moves.
     pub revision: u64,
     pub saved_revision: u64,
+    /// [`photocraft_ops::History::current_id`] at the last save. Undo or redo that lands on this
+    /// id is clean again (#6867).
+    pub saved_history_id: u64,
     /// Native save cache shared with this document's workers, released with the editing state.
     pub pcraft_cache: photocraft_io::PcraftExportCache,
     /// How much of `revision` came from view-only changes (channel eyes, targeting): pixel caches can ignore those.
@@ -92,6 +95,7 @@ impl DocState {
             source_read_only: false,
             revision: 1,
             saved_revision: 1,
+            saved_history_id: 0,
             pcraft_cache: Default::default(),
             view_revision: 0,
             last_damage: None,
@@ -136,6 +140,16 @@ impl DocState {
         if keep_clean {
             self.saved_revision = self.revision;
         }
+    }
+    /// Mark the current history step as the saved one. Sites that only assigned `saved_revision`
+    /// left `saved_history_id` on an older step, so a later undo could look clean.
+    pub fn mark_saved(&mut self) {
+        self.saved_revision = self.revision;
+        self.saved_history_id = self.history.current_id();
+    }
+    /// True when undo or redo has landed on the step last marked saved (#6867).
+    pub(crate) fn landed_on_save(&self) -> bool {
+        self.history.current_id() == self.saved_history_id
     }
     /// The targeted layers, as history stores them with each state.
     pub(crate) fn layer_target(&self) -> LayerTarget {

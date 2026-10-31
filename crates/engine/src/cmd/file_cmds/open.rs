@@ -76,7 +76,7 @@ pub(super) fn revert(s: &mut Session) -> Result<Value> {
         Ok(())
     })?;
     let st = s.active_mut().ok_or(EngineError::NoDocument)?;
-    st.saved_revision = st.revision;
+    st.mark_saved();
     Ok(json!({"path": path, "layers": st.doc.layers.len()}))
 }
 
