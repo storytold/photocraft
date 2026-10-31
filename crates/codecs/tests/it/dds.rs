@@ -272,6 +272,13 @@ fn rejects_huge_pitch_without_allocating() {
 }
 
 #[test]
+fn zero_dx10_array_size_is_rejected() {
+    let mut b = dx10(1, 1, 28, 3, 0, 0); // R8G8B8A8_UNORM with an invalid zero array size.
+    b.extend([1, 2, 3, 4]);
+    assert!(decode(&b).is_err());
+}
+
+#[test]
 fn decodes_dx10_headers() {
     let mut b = dx10(1, 1, 28, 3, 0, 1); // R8G8B8A8_UNORM
     b.extend([1, 2, 3, 4]);

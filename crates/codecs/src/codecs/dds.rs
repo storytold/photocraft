@@ -174,6 +174,9 @@ fn dx10_encoding(b: &[u8]) -> Result<Encoding, CodecError> {
     if dimension != DIMENSION_TEXTURE2D {
         return Err(unsupported(format!("only 2D textures are supported (resource dimension {dimension})")));
     }
+    if array == 0 {
+        return Err(bad("DX10 array size must be positive"));
+    }
     if array > 1 {
         return Err(unsupported(format!("texture arrays are not supported ({array} textures)")));
     }
