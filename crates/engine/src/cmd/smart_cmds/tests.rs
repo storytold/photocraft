@@ -937,6 +937,38 @@ fn convert_to_layers_keeps_a_smart_layer_mask_on_a_group() {
     assert_eq!(max_diff(&flat(&s), &before), 0.0);
 }
 
+/// #9753: a smart object isolates its contents, so a knockout inside it stops at its bottom.
+/// Folded into the parent stack, it would punch through the layers beneath to the Background; a
+/// Normal group keeps the look, as Photoshop's Convert to Layers does.
+#[test]
+fn convert_to_layers_keeps_a_knockout_inside_a_group() {
+    let fill = |s: &mut Session, r: Rect, rgba: [f32; 4]| {
+        s.edit("paint", |doc, active| {
+            doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(r, &rgba);
+            Ok(())
+        })
+        .unwrap();
+    };
+    for knockout in ["shallow", "deep"] {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": W, "height": H})).unwrap();
+        fill(&mut s, Rect::new(0, 0, W, H), [0.0, 0.0, 1.0, 1.0]);
+        s.execute("layer.new.layer", json!({})).unwrap();
+        fill(&mut s, Rect::new(0, 0, W, H), [1.0, 1.0, 0.0, 1.0]);
+        s.execute("layer.new.layer", json!({})).unwrap();
+        fill(&mut s, Rect::new(10, 10, 30, 30), [1.0, 0.0, 0.0, 1.0]);
+        s.execute("layer.layerStyle.blendingOptions", json!({"knockout": knockout, "fillOpacity": 50})).unwrap();
+        convert(&mut s);
+        let before = flat(&s);
+        let r = convert_to_layers(&mut s);
+        assert_eq!(r["group"], true, "{knockout}: the contents stay isolated");
+        let g = active_layer(&s);
+        assert_eq!(g.blend, BlendMode::Normal, "{knockout}");
+        assert!(max_diff(&flat(&s), &before) <= 1.0 / 255.0 + 1e-6, "{knockout}: the look is kept");
+        assert_eq!(g.children().unwrap()[0].advanced.knockout.name(), knockout, "the knockout setting survives");
+    }
+}
+
 #[test]
 fn convert_to_layers_applies_the_placement() {
     let mut s = session(8);
