@@ -216,6 +216,7 @@ fn compositor_chunks_keep_their_columns() {
     let gpu = photocraft_ui_egui::gpu_canvas::GpuCanvas::new(&rs);
     let doc = columns_document();
     let refresh = gpu.refresh(doc.id.0, &doc, None, None);
+    assert!(gpu.fault().is_none(), "GPU fault after canvas refresh: {:?}", gpu.fault());
     if refresh.kind == "full" {
         eprintln!("skipping: GPU compositor unavailable: {:?}", refresh.fallback);
         return;
