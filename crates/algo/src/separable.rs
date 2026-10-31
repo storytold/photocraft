@@ -82,6 +82,91 @@ impl Separable {
     }
 }
 
+/// A distort filter's mapping as data (`distort::remap`): each output pixel samples the source at
+/// the point the mapping gives, so another device runs exactly the CPU's mapping. Whatever the
+/// CPU works out once per filter (Wave's seeded generators, Shear's row offsets, Twirl's angle in
+/// radians) comes ready-made, from the same helpers the CPU filters use.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Warp {
+    /// `distort::twirl`: the angle in radians.
+    Twirl { angle: f32 },
+    /// `distort::pinch`: Amount / 100, clamped to -1..=1.
+    Pinch { amount: f32 },
+    /// `distort::spherize`: Amount / 100 (clamped), and the mode (0 Normal, 1 Horizontal Only,
+    /// 2 Vertical Only).
+    Spherize { amount: f32, mode: u32 },
+    /// `distort::wave`: the generators `[wavelength, amplitude, phase x, phase y]` and the type
+    /// (0 Sine, 1 Triangle, 2 Square).
+    Wave { generators: Vec<[f32; 4]>, wave_type: u32 },
+    /// `distort::ripple`: the amplitude and wavelength in pixels.
+    Ripple { amplitude: f32, wavelength: f32 },
+    /// `distort::polar`: Rectangular to Polar, else Polar to Rectangular.
+    Polar { to_polar: bool },
+    /// `distort2::zigzag`: Amount / 100 (clamped), the ridges (clamped), and the style (0 Around
+    /// Center, 1 Out From Center, 2 Pond Ripples).
+    ZigZag { amount: f32, ridges: f32, style: u32 },
+    /// `distort2::shear`: the horizontal offset of each row of the bounds, top to bottom.
+    Shear { rows: Vec<f32> },
+}
+
+impl Warp {
+    /// The mapping `params` runs over `bounds` on the CPU, and the edge its samples use past the
+    /// bounds; `None` for a filter that isn't a mapping (or Displace, whose map the caller has).
+    pub fn of(params: &FilterParams, bounds: Rect) -> Option<(Self, crate::Edge)> {
+        use crate::Edge;
+        Some(match params {
+            FilterParams::Twirl { angle } => (Warp::Twirl { angle: angle.to_radians() }, Edge::Repeat),
+            FilterParams::Pinch { amount } => (Warp::Pinch { amount: (amount / 100.0).clamp(-1.0, 1.0) }, Edge::Repeat),
+            FilterParams::Spherize { amount, mode } => {
+                let mode = match mode {
+                    crate::SpherizeMode::Normal => 0,
+                    crate::SpherizeMode::HorizontalOnly => 1,
+                    crate::SpherizeMode::VerticalOnly => 2,
+                };
+                (Warp::Spherize { amount: (amount / 100.0).clamp(-1.0, 1.0), mode }, Edge::Repeat)
+            }
+            FilterParams::Wave { generators, wavelength_min, wavelength_max, amplitude_min, amplitude_max, wave_type, undefined, seed } => {
+                let spec = crate::distort::WaveSpec {
+                    generators: *generators,
+                    wavelength: (*wavelength_min, *wavelength_max),
+                    amplitude: (*amplitude_min, *amplitude_max),
+                    wave_type: *wave_type,
+                    undefined: *undefined,
+                    seed: *seed,
+                };
+                let generators = crate::distort::wave_generators(&spec).into_iter().map(|(l, a, p1, p2)| [l, a, p1, p2]).collect();
+                let wave_type = match wave_type {
+                    crate::WaveType::Sine => 0,
+                    crate::WaveType::Triangle => 1,
+                    crate::WaveType::Square => 2,
+                };
+                (Warp::Wave { generators, wave_type }, crate::other::edge_of(*undefined))
+            }
+            FilterParams::Ripple { amount, size } => {
+                let wavelength = match size {
+                    crate::RippleSize::Small => 8.0,
+                    crate::RippleSize::Medium => 16.0,
+                    crate::RippleSize::Large => 32.0,
+                };
+                (Warp::Ripple { amplitude: amount / 100.0 * wavelength / 8.0, wavelength }, Edge::Repeat)
+            }
+            FilterParams::PolarCoordinates { mode } => (Warp::Polar { to_polar: matches!(mode, crate::PolarMode::RectangularToPolar) }, Edge::Repeat),
+            FilterParams::ZigZag { amount, ridges, style } => {
+                let style = match style {
+                    crate::ZigZagStyle::AroundCenter => 0,
+                    crate::ZigZagStyle::OutFromCenter => 1,
+                    crate::ZigZagStyle::PondRipples => 2,
+                };
+                (Warp::ZigZag { amount: (amount / 100.0).clamp(-1.0, 1.0), ridges: ridges.clamp(0.0, 20.0).max(0.5), style }, Edge::Repeat)
+            }
+            FilterParams::Shear { points, undefined } => {
+                (Warp::Shear { rows: crate::distort2::shear_rows(points, bounds, bounds.y0, bounds.y1) }, crate::other::edge_of(*undefined))
+            }
+            _ => return None,
+        })
+    }
+}
+
 /// The area a neighbourhood filter on a layer repeats its edge pixels at: the canvas, or past it
 /// where the layer has pixels off the canvas, as Photoshop does.
 pub fn edge_extent(canvas: Rect, content: Rect) -> Rect {
