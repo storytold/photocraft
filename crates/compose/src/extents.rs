@@ -134,6 +134,7 @@ pub(crate) fn effect_shape(layer: &Layer, rect: Rect, cx: &Ctx) -> Vec<f32> {
             out[i] = v * mask_k(&mv, i);
         }
     }
+    recycle_mask(mv);
     out
 }
 

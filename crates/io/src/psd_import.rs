@@ -349,6 +349,7 @@ impl Ctx<'_> {
             let s = self.mask_fmt.sample;
             let bytes = interleave(&[Some(&plane)], &[zero_sample(s)], w * h, s, &[false]);
             surface.write_interleaved(Rect::new(rect.left, rect.top, rect.right, rect.bottom), &bytes);
+            photocraft_raster::scratch::give(bytes);
             surface.prune();
             surface.share_uniform_tiles(&mut self.uniform);
         }
@@ -1318,6 +1319,7 @@ fn import_layered(import: DecodedImport<'_>, doc: &mut Document, cx: &mut Ctx<'_
         crate::pixels::lab16_chroma(&mut bytes, cc + 1, true);
     }
     let mut surface = Surface::from_interleaved(fmt, canvas, &bytes);
+    photocraft_raster::scratch::give(bytes);
     if alpha_idx.is_some() {
         let white = photocraft_raster::from_rgba(&fmt, [1.0, 1.0, 1.0, 1.0]);
         let mut vals = Vec::new();
@@ -1439,6 +1441,7 @@ fn import_extra_channels(import: DecodedImport<'_>, doc: &mut Document, cx: &mut
         }
         let mut s = Surface::new(cx.mask_fmt);
         s.write_interleaved(canvas, &raw);
+        photocraft_raster::scratch::give(raw);
         s.prune();
         let name = names.get(k).cloned().unwrap_or_else(|| format!("Alpha {}", k + 1));
         doc.channels.push(AlphaChannel::new(name, s));
