@@ -360,17 +360,23 @@ struct OutlineKey {
     k: u32,
 }
 
+/// What the Marching Ants view outlines: the refined selection of one preview.
+struct Ants {
+    /// The refined selection on the reduced copy.
+    selection: Surface,
+    /// Where its outline can be (reduced-copy px): its content within the copy.
+    bounds: Rect,
+    /// Document px per reduced-copy px of the preview.
+    k: u32,
+    /// The outline for a view (reduced-copy px), traced again when the view moves past its key.
+    outline: Option<(OutlineKey, Vec<Segment>)>,
+}
+
 /// A computed preview, ready to upload.
 struct Shown {
     image: egui::ColorImage,
-    /// The refined selection on the reduced copy, for the Marching Ants view.
-    selection: Option<Surface>,
-    /// Where its outline can be (reduced-copy px): its content within the copy.
-    trace_bounds: Rect,
-    /// Document px per reduced-copy px of this preview.
-    k: u32,
-    /// The outline traced for the view the preview was asked for (reduced-copy px).
-    outline: Option<(OutlineKey, Vec<Segment>)>,
+    /// In the Marching Ants view, with the outline traced for the view the preview was asked for.
+    ants: Option<Ants>,
     /// Reduced-copy pixels at least half selected.
     selected: usize,
     /// How many points of the stroke being drawn it includes ([`usize::MAX`]: every stroke is in).
@@ -392,12 +398,8 @@ struct Preview {
     shown: u64,
     pending: Option<Shown>,
     tex: Option<TextureHandle>,
-    /// [`Shown::selection`], [`Shown::trace_bounds`] and [`Shown::k`] of the preview shown.
-    selection: Option<Surface>,
-    trace_bounds: Rect,
-    k: u32,
-    /// The outline of `selection` for the view, traced again when the view moves past its key.
-    outline: Option<(OutlineKey, Vec<Segment>)>,
+    /// [`Shown::ants`] of the preview shown.
+    ants: Option<Ants>,
     covers: [f32; 2],
     selected: usize,
     /// [`Shown::trail`] of the preview shown.
@@ -1154,14 +1156,21 @@ fn trace(selection: &Surface, key: OutlineKey, parallel: bool) -> Vec<Segment> {
     }
 }
 
-/// The outline of the preview shown for a view, traced again only when the view's key changes.
-fn ant_outline(pv: &mut Preview, view: (f32, [f64; 4]), parallel: bool) -> Option<&[Segment]> {
-    let selection = pv.selection.as_ref()?;
-    let key = outline_key(pv.k, pv.trace_bounds, view);
-    if pv.outline.as_ref().is_none_or(|(k, _)| *k != key) {
-        pv.outline = Some((key, trace(selection, key, parallel)));
+/// The outline for a view, traced again only when the view's key changes.
+fn ant_outline(ants: &mut Ants, view: (f32, [f64; 4]), parallel: bool) -> &[Segment] {
+    let key = outline_key(ants.k, ants.bounds, view);
+    if ants.outline.as_ref().is_none_or(|(k, _)| *k != key) {
+        ants.outline = Some((key, trace(&ants.selection, key, parallel)));
     }
-    pv.outline.as_ref().map(|(_, segs)| segs.as_slice())
+    ants.outline.as_ref().map_or(&[], |(_, segs)| segs.as_slice())
+}
+
+/// Document point of outline point `p` (reduced by `k`), within `canvas`: the reduced copy's
+/// last row and column may reach past it.
+fn ant_point(p: [i32; 2], k: u32, canvas: Rect) -> [f64; 2] {
+    let k = f64::from(k.max(1));
+    let at = |v: i32, lo: i32, hi: i32| (f64::from(v) * k).clamp(f64::from(lo), f64::from(hi.max(lo)));
+    [at(p[0], canvas.x0, canvas.x1), at(p[1], canvas.y0, canvas.y1)]
 }
 
 /// The preview of `job`: the edits applied (from where the cache left off), the edge refined and
@@ -1212,15 +1221,21 @@ fn compute(job: Job, cancel: Option<&photocraft_engine::jobs::JobCtx>) -> Result
     let buf = photocraft_compose::render_reduced(&shown, u32::try_from(tw).unwrap_or(1), u32::try_from(th).unwrap_or(1));
     let image = crate::canvas::display_image(job.display.as_deref(), &buf);
     let selected = selected_pixels(shown.selection.as_ref(), shown.bounds());
-    let bounds = trace_bounds(shown.selection.as_ref(), shown.bounds());
-    // Traced here, off the UI thread, for the view as it was: the UI traces again only after a
-    // pan or zoom.
-    let outline = shown.selection.as_ref().zip(job.ants).map(|(sel, view)| {
-        let key = outline_key(k, bounds, view);
-        (key, trace(sel, key, true))
+    // Only the Marching Ants view keeps the refined selection; switching to it runs a new preview.
+    let mode = params.get("__view").and_then(|v| v.get("mode")).and_then(Value::as_str);
+    let area = shown.bounds();
+    let ants = shown.selection.filter(|_| mode == Some(Mode::MarchingAnts.id())).map(|selection| {
+        let bounds = trace_bounds(Some(&selection), area);
+        // Traced here, off the UI thread, for the view as it was: the UI traces again only after
+        // a pan or zoom. On the web this runs on the UI thread, where Rayon has no workers.
+        let outline = job.ants.map(|view| {
+            let key = outline_key(k, bounds, view);
+            (key, trace(&selection, key, true))
+        });
+        Ants { selection, bounds, k, outline }
     });
     let covers = [(pw as f32) * k as f32, (ph as f32) * k as f32];
-    Ok((Shown { image, selection: shown.selection, trace_bounds: bounds, k, outline, selected, trail: job.trail, covers }, cache, proxy))
+    Ok((Shown { image, ants, selected, trail: job.trail, covers }, cache, proxy))
 }
 
 /// Takes the preview of state `generation` (made from document `revision`): the image when it is
@@ -1464,10 +1479,7 @@ fn upload(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Some(t) => t.set(s.image, egui::TextureOptions::LINEAR),
             None => w.preview.tex = Some(ctx.load_texture("select-mask-preview", s.image, egui::TextureOptions::LINEAR)),
         }
-        w.preview.selection = s.selection;
-        w.preview.trace_bounds = s.trace_bounds;
-        w.preview.k = s.k;
-        w.preview.outline = s.outline;
+        w.preview.ants = s.ants;
         w.preview.covers = s.covers;
     }
 }
@@ -1634,24 +1646,14 @@ fn follow_revision(app: &mut PhotocraftApp) {
         w.preview.tex = None;
         w.preview.pending = None;
         w.preview.cache = None;
-        w.preview.selection = None;
-        w.preview.outline = None;
+        w.preview.ants = None;
         w.stale();
     }
 }
 
 /// Draws the document, the refined edge, the stroke being drawn and the polygon in progress.
-#[allow(clippy::too_many_arguments)]
-fn paint_canvas(
-    ui: &mut egui::Ui,
-    ctx: &egui::Context,
-    w: &mut SelectMaskWorkspace,
-    t: &Tokens,
-    painter: &egui::Painter,
-    resp: &egui::Response,
-    area: ERect,
-    parallel: bool,
-) {
+fn paint_canvas(ui: &mut egui::Ui, w: &mut SelectMaskWorkspace, t: &Tokens, painter: &egui::Painter, resp: &egui::Response, area: ERect, parallel: bool) {
+    let ctx = &ui.ctx().clone();
     let v = View { area, zoom: w.zoom, center: w.center };
     let ppp = ctx.pixels_per_point();
     w.view_area = Some((area, ppp));
@@ -1673,10 +1675,14 @@ fn paint_canvas(
     }
     // Marching Ants: the refined selection's edge, drawn as the canvas draws its ants.
     if !w.hide_view && w.opts.view == Mode::MarchingAnts {
-        let k = f64::from(w.preview.k.max(1));
-        if let Some(segs) = ant_outline(&mut w.preview, ant_view(v, ppp), parallel).filter(|s| !s.is_empty()) {
+        let canvas = w.canvas;
+        if let Some(ants) = w.preview.ants.as_mut()
+            && let k = ants.k
+            && let segs = ant_outline(ants, ant_view(v, ppp), parallel)
+            && !segs.is_empty()
+        {
             let time = ui.input(|i| i.time);
-            crate::canvas::marching_ants_mapped(&clip, segs, time, |p| v.to_screen([f64::from(p[0]) * k, f64::from(p[1]) * k]));
+            crate::canvas::marching_ants_mapped(&clip, segs, time, |p| v.to_screen(ant_point(p, k, canvas)));
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
@@ -1824,7 +1830,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     let parallel = !app.session.has_jobs() && app.distort.select_mask.as_ref().is_some_and(|w| w.preview.running.is_none());
     #[cfg(target_arch = "wasm32")]
-    let parallel = false;
+    let parallel = !app.session.has_jobs();
     egui::Area::new(egui::Id::unique("select-mask-workspace")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(w) = app.distort.select_mask.as_mut() else { return };
         let before = (w.opts.clone(), w.sample_all);
@@ -1935,7 +1941,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
         }
         let v = View { area, zoom: w.zoom, center: w.center };
-        paint_canvas(ui, ctx, w, &t, &painter, &resp, area, parallel);
+        paint_canvas(ui, w, &t, &painter, &resp, area, parallel);
         // Space, the middle button or the Hand pan. The Polygonal Lasso takes clicks: each adds a
         // vertex, a double-click closes.
         let pan = ui.input(|i| i.key_down(egui::Key::Space) || i.pointer.middle_down()) || w.tool == SmTool::Hand;

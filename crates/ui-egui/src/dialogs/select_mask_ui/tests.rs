@@ -770,10 +770,14 @@ fn the_reason_a_stale_workspace_closed_is_reported() {
     }
 }
 
-/// A preview of `selection` over the reduced copy `area`, `k` document px per copy px.
-fn shown_preview(selection: Surface, area: Rect, k: u32) -> Preview {
-    let trace_bounds = trace_bounds(Some(&selection), area);
-    Preview { selection: Some(selection), trace_bounds, k, ..Default::default() }
+/// The ants of `selection` over the reduced copy `area`, `k` document px per copy px.
+fn shown_ants(selection: Surface, area: Rect, k: u32) -> Ants {
+    let bounds = trace_bounds(Some(&selection), area);
+    Ants { selection, bounds, k, outline: None }
+}
+
+fn ants_mut(app: &mut PhotocraftApp) -> &mut Ants {
+    ws_mut(app).preview.ants.as_mut().unwrap()
 }
 
 #[test]
@@ -788,8 +792,8 @@ fn sparse_large_preview_keeps_its_ants() {
     assert_eq!(selected_pixels(Some(&selection), small), 1);
     // At 100 % around the far corner: the one pixel there, outlined by four lines. The old ants
     // were unit edges of a canvas-sized mask, dropped past 4 MP.
-    let mut pv = shown_preview(selection, area, 1);
-    let segs = ant_outline(&mut pv, (1.0, [99_500.0, 99_500.0, 100_500.0, 100_500.0]), false).unwrap();
+    let mut ants = shown_ants(selection, area, 1);
+    let segs = ant_outline(&mut ants, (1.0, [99_500.0, 99_500.0, 100_500.0, 100_500.0]), false);
     assert_eq!(segs.len(), 4, "{segs:?}");
     assert!(segs.iter().all(|(a, b)| [a, b].iter().all(|p| (99_999..=100_000).contains(&p[0]) && (99_999..=100_000).contains(&p[1]))));
 
@@ -814,8 +818,8 @@ fn marching_ants_trace_merged_runs_like_the_canvas() {
     let area = Rect::new(0, 0, 100, 60);
     let sel = rect_selection(Rect::new(5, 5, 25, 15));
     let whole = crate::outline::outline(&sel, sel.content_bounds());
-    let mut pv = shown_preview(sel, area, 2);
-    let segs = ant_outline(&mut pv, (1.0, [0.0, 0.0, 200.0, 120.0]), false).unwrap().to_vec();
+    let mut ants = shown_ants(sel, area, 2);
+    let segs = ant_outline(&mut ants, (1.0, [0.0, 0.0, 200.0, 120.0]), false).to_vec();
     assert_eq!(segs, whole);
     assert_eq!(segs.len(), 4, "{segs:?}");
     for (a, b) in segs {
@@ -830,14 +834,14 @@ fn marching_ants_trace_merged_runs_like_the_canvas() {
 /// Frames reuse the trace while the view stays within its quantised region; a zoom traces again.
 #[test]
 fn ant_outline_is_cached_per_view() {
-    let mut pv = shown_preview(rect_selection(Rect::new(10, 10, 90, 50)), Rect::new(0, 0, 100, 60), 1);
-    let first = ant_outline(&mut pv, (1.0, [0.0, 0.0, 100.0, 60.0]), false).unwrap().as_ptr();
-    let key = pv.outline.as_ref().unwrap().0;
-    let panned = ant_outline(&mut pv, (1.0, [3.0, 2.0, 103.0, 62.0]), false).unwrap().as_ptr();
+    let mut ants = shown_ants(rect_selection(Rect::new(10, 10, 90, 50)), Rect::new(0, 0, 100, 60), 1);
+    let first = ant_outline(&mut ants, (1.0, [0.0, 0.0, 100.0, 60.0]), false).as_ptr();
+    let key = ants.outline.as_ref().unwrap().0;
+    let panned = ant_outline(&mut ants, (1.0, [3.0, 2.0, 103.0, 62.0]), false).as_ptr();
     assert_eq!(first, panned, "a small pan keeps the trace");
-    assert_eq!(pv.outline.as_ref().unwrap().0, key);
-    let zoomed = ant_outline(&mut pv, (0.25, [0.0, 0.0, 400.0, 240.0]), false).unwrap().len();
-    assert_eq!(pv.outline.as_ref().unwrap().0.step, 4, "zoomed out to 25 %: one sample per 4 px");
+    assert_eq!(ants.outline.as_ref().unwrap().0, key);
+    let zoomed = ant_outline(&mut ants, (0.25, [0.0, 0.0, 400.0, 240.0]), false).len();
+    assert_eq!(ants.outline.as_ref().unwrap().0.step, 4, "zoomed out to 25 %: one sample per 4 px");
     assert_eq!(zoomed, 4);
 }
 
@@ -850,14 +854,19 @@ fn the_preview_job_traces_the_outline_for_the_view() {
     let area = ERect::from_min_size(pos2(50.0, 60.0), vec2(800.0, 500.0));
     let w = ws_mut(&mut app);
     (w.view_area, w.zoom, w.center) = (Some((area, 1.5)), 2.0, [80.0, 50.0]);
+    // The other views keep no refined selection.
+    ui(&mut app, json!({"waitPreview": true}));
+    upload(&mut app, &egui::Context::default());
+    assert!(ws(&app).preview.ants.is_none(), "Onion Skin");
     ui(&mut app, json!({"view": "marchingAnts", "waitPreview": true}));
     upload(&mut app, &egui::Context::default());
     let w = ws_mut(&mut app);
     let view = ant_view(View { area, zoom: w.zoom, center: w.center }, 1.5);
-    let traced = w.preview.outline.as_ref().map(|(key, segs)| (*key, segs.as_ptr())).expect("traced in the job");
-    assert_eq!(traced.0, outline_key(w.preview.k, w.preview.trace_bounds, view));
-    assert_eq!(ant_outline(&mut w.preview, view, false).unwrap().as_ptr(), traced.1, "drawn without tracing again");
-    assert_eq!(w.preview.outline.as_ref().unwrap().1.len(), 4, "the 20 × 20 selection");
+    let ants = w.preview.ants.as_mut().unwrap();
+    let traced = ants.outline.as_ref().map(|(key, segs)| (*key, segs.as_ptr())).expect("traced in the job");
+    assert_eq!(traced.0, outline_key(ants.k, ants.bounds, view));
+    assert_eq!(ant_outline(ants, view, false).as_ptr(), traced.1, "drawn without tracing again");
+    assert_eq!(ants.outline.as_ref().unwrap().1.len(), 4, "the 20 × 20 selection");
 }
 
 /// Until the preview at the new scale arrives, the ants keep the scale of the preview they outline.
@@ -869,10 +878,11 @@ fn the_outline_keeps_its_previews_scale_while_high_quality_is_toggled() {
     ui(&mut app, json!({"view": "marchingAnts", "waitPreview": true}));
     upload(&mut app, &egui::Context::default());
     ui(&mut app, json!({"highQualityPreview": true}));
-    let w = ws_mut(&mut app);
-    assert_eq!((w.proxy_k(), w.preview.k), (1, 3));
-    let k = w.preview.k as i32;
-    let segs = ant_outline(&mut w.preview, (1.0, [0.0, 0.0, 3300.0, 60.0]), false).unwrap();
+    assert_eq!(ws(&app).proxy_k(), 1);
+    let ants = ants_mut(&mut app);
+    assert_eq!(ants.k, 3);
+    let k = ants.k as i32;
+    let segs = ant_outline(ants, (1.0, [0.0, 0.0, 3300.0, 60.0]), false);
     let mut doc: Vec<_> = segs.iter().map(|(a, b)| ([a[0] * k, a[1] * k], [b[0] * k, b[1] * k])).collect();
     doc.sort();
     assert_eq!(doc, vec![([30, 15], [30, 45]), ([30, 15], [60, 15]), ([30, 45], [60, 45]), ([60, 15], [60, 45])]);
@@ -885,13 +895,31 @@ fn an_inverted_selection_outlines_the_canvas_border() {
     let area = Rect::new(0, 0, 3000, 2000);
     let mut inverted = Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[1.0]);
     inverted.fill_rect(Rect::new(1000, 800, 1400, 1200), &[0.0]);
-    let mut pv = shown_preview(inverted, area, 1);
-    assert_eq!(pv.trace_bounds, area);
-    let segs = ant_outline(&mut pv, (0.25, [0.0, 0.0, 3000.0, 2000.0]), false).unwrap();
+    let mut ants = shown_ants(inverted, area, 1);
+    assert_eq!(ants.bounds, area);
+    let segs = ant_outline(&mut ants, (0.25, [0.0, 0.0, 3000.0, 2000.0]), false);
     assert_eq!(segs.len(), 8, "{segs:?}");
     for border in [([0, 0], [3000, 0]), ([0, 2000], [3000, 2000]), ([0, 0], [0, 2000]), ([3000, 0], [3000, 2000])] {
         assert!(segs.contains(&border), "{border:?} in {segs:?}");
     }
+}
+
+/// The reduced copy covers whole blocks of `k` px, past the canvas when its size isn't a multiple
+/// of `k`; the ants stay on the canvas border, not on the pasteboard beyond it.
+#[test]
+fn the_border_ants_stay_on_the_canvas_of_a_reduced_copy() {
+    let mut app = app_sized(3301, 60);
+    open(&mut app).unwrap();
+    ui(&mut app, json!({"invert": true, "view": "marchingAnts", "waitPreview": true}));
+    upload(&mut app, &egui::Context::default());
+    let canvas = ws(&app).canvas;
+    let ants = ants_mut(&mut app);
+    assert_eq!(ants.k, 3);
+    let k = ants.k;
+    let segs = ant_outline(ants, (0.5, [0.0, 0.0, 3301.0, 60.0]), false);
+    let points: Vec<[f64; 2]> = segs.iter().flat_map(|(a, b)| [*a, *b]).map(|p| ant_point(p, k, canvas)).collect();
+    assert!(points.iter().all(|p| (0.0..=3301.0).contains(&p[0]) && (0.0..=60.0).contains(&p[1])), "{points:?}");
+    assert!(points.iter().any(|p| p[0] == 3301.0) && points.iter().any(|p| p[1] == 60.0), "the right and bottom border: {points:?}");
 }
 
 /// A document edit while the workspace is open drops the old preview's ants with its image.
@@ -901,7 +929,7 @@ fn a_document_edit_clears_the_old_ants() {
     open(&mut app).unwrap();
     ui(&mut app, json!({"view": "marchingAnts", "waitPreview": true}));
     upload(&mut app, &egui::Context::default());
-    assert!(ant_outline(&mut ws_mut(&mut app).preview, (1.0, [0.0, 0.0, 160.0, 100.0]), false).is_some_and(|s| !s.is_empty()));
+    assert!(!ant_outline(ants_mut(&mut app), (1.0, [0.0, 0.0, 160.0, 100.0]), false).is_empty());
     app.session
         .edit("paint", |doc, _| {
             doc.layers[0].surface_mut().unwrap().fill_rect(Rect::new(0, 0, 4, 4), &[0.0, 0.0, 0.0, 1.0]);
@@ -909,15 +937,14 @@ fn a_document_edit_clears_the_old_ants() {
         })
         .unwrap();
     follow_revision(&mut app);
-    let pv = &mut ws_mut(&mut app).preview;
-    assert!(pv.selection.is_none() && pv.outline.is_none());
-    assert!(ant_outline(pv, (1.0, [0.0, 0.0, 160.0, 100.0]), false).is_none());
+    assert!(ws(&app).preview.ants.is_none());
 }
 
 /// With nothing selected the Marching Ants view draws no ants, and drawing it doesn't panic.
 #[test]
 fn marching_ants_without_a_selection_draw_nothing() {
-    assert!(ant_outline(&mut Preview::default(), (1.0, [0.0, 0.0, 100.0, 100.0]), true).is_none());
+    let empty = Surface::new(photocraft_color::PixelFormat::GRAY8);
+    assert!(ant_outline(&mut shown_ants(empty, Rect::new(0, 0, 100, 100), 1), (1.0, [0.0, 0.0, 100.0, 100.0]), true).is_empty());
     let mut app = app_with_selection();
     open(&mut app).unwrap();
     ui(&mut app, json!({"clearSelection": true, "view": "marchingAnts", "waitPreview": true}));
@@ -934,7 +961,8 @@ fn marching_ants_without_a_selection_draw_nothing() {
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
     h.run_steps(4);
     let w = h.state().distort.select_mask.as_ref().unwrap();
-    assert!(w.preview.outline.as_ref().is_some_and(|(_, segs)| segs.is_empty()), "traced, and nothing to outline");
+    let outline = w.preview.ants.as_ref().and_then(|a| a.outline.as_ref());
+    assert!(outline.is_some_and(|(_, segs)| segs.is_empty()), "traced, and nothing to outline");
 }
 
 type GpuHarness = egui_kittest::Harness<'static, PhotocraftApp>;
@@ -1078,8 +1106,9 @@ fn select_and_mask_ants_march_rather_than_blink() {
     h.step();
     let (b, tb) = row(&mut h);
     assert!((tb - ta - 0.125).abs() < 1e-6, "frames {ta} and {tb}");
-    let phase = |t: f64| ((t * 10.0) % 8.0) as usize;
-    let shift = (phase(tb) + 8 - phase(ta)) % 8;
+    // How far the canvas's ants march between the two frames.
+    let ((pa, period), (pb, _)) = (crate::ants::Style::new(1.0, ta).march(), crate::ants::Style::new(1.0, tb).march());
+    let shift = (pb - pa).rem_euclid(period) as usize;
     assert!(shift > 0, "the pattern moves");
     let dark = a.iter().filter(|d| **d).count();
     assert!((a.len() * 2..=a.len() * 8).contains(&(dark * 10)), "the edge has dashes: {dark} of {} px dark", a.len());

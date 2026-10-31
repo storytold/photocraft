@@ -236,7 +236,7 @@ mod tests {
     }
 
     #[test]
-    fn view_step_and_region_follow_the_canvas_and_survive_hostile_views() {
+    fn view_step_and_region_quantise_and_survive_hostile_views() {
         assert_eq!(view_step(1.0, 1), 1);
         assert_eq!(view_step(0.25, 1), 4);
         assert_eq!(view_step(0.5, 2), 1, "a copy reduced by 2 seen at 50 % is at its own size");
