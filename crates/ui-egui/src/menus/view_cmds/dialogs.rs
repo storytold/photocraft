@@ -138,19 +138,6 @@ pub fn form_body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     // Data-driven labels (a per-part checkbox shows the part's name, not a catalogue entry)
     // come from `__labels` verbatim; everything else goes through the catalogue.
     let labels = f.get("__labels").cloned().unwrap_or(Value::Null);
-    let file_info = f.get("__command").and_then(Value::as_str) == Some("file.fileInfo");
-    let label = |k: &str| {
-        if file_info {
-            match k {
-                "title" => return tl!("Document Title").to_owned(),
-                "copyright" => return tl!("Copyright Notice").to_owned(),
-                "copyrightUrl" => return tl!("Copyright Info URL").to_owned(),
-                _ => {}
-            }
-        }
-        labels.get(k).and_then(Value::as_str).map_or_else(|| label_of(k), str::to_string)
-    };
-
     if f.get("__responsivePreflight").and_then(Value::as_bool) == Some(true) {
         let findings = f.get("__responsiveFindingCount").and_then(Value::as_u64).unwrap_or(0);
         let boards = f.get("__responsiveBoardCount").and_then(Value::as_u64).unwrap_or(0);
