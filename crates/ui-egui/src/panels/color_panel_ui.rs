@@ -467,7 +467,7 @@ fn ramp_mesh(r: Rect, colors: &[Color32], web_safe: bool) -> Mesh {
 
 /// The colour ramp with the white and black boxes at its right end. A click or drag picks; with
 /// Alt it picks the colour the panel isn't editing; Shift-click cycles the ramps; a right-click
-/// opens the ramp menu.
+/// opens the ramp menu. The last pick stays marked while its ramp and target colour still match.
 fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
@@ -498,6 +498,7 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, ui.is_enabled(), "Color Ramp"));
     let mods = ui.input(|i| i.modifiers);
     let target = cp.background != mods.alt;
+    let pick_id = ramp_id.with(("pick", cp.ramp as u8, cp.web_safe_ramp));
     if resp.clicked() && mods.shift {
         app.ui.color_panel.ramp = cp.ramp.next();
     } else if (resp.dragged() || resp.clicked())
@@ -514,6 +515,9 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
         }
         let c = ramp_color(cp.ramp, cp.web_safe_ramp, fg, bg, x, y);
         set_color(app, ui.ctx(), target, c);
+        // A colour can occur at several points, so remember the pick rather than guessing its position.
+        let color = rgb3(if target { app.session.tools.background } else { app.session.tools.foreground });
+        ui.data_mut(|d| d.insert_temp(pick_id, (vec2(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)), color, target)));
     }
     resp.context_menu(|ui| {
         widgets::style_spectrum_popup_menu(ui);
@@ -525,6 +529,18 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
         if b.clicked() {
             set_color(app, ui.ctx(), target, c);
         }
+    }
+    if let Some((mut p, color, background)) = ui.data(|d| d.get_temp::<(egui::Vec2, [f32; 3], bool)>(pick_id))
+        && color == rgb3(if background { app.session.tools.background } else { app.session.tools.foreground })
+    {
+        // After a Current Colors pick, the chosen color becomes the ramp's new endpoint.
+        if cp.ramp == ColorRamp::CurrentColors && ramp_color(cp.ramp, cp.web_safe_ramp, fg, bg, p.x, p.y) != color {
+            p.x = if background { 1.0 } else { 0.0 };
+        }
+        let p = bar.min + bar.size() * p;
+        let painter = ui.painter().with_clip_rect(bar);
+        painter.circle_stroke(p, 5.0, Stroke::new(1.5, Color32::WHITE));
+        painter.circle_stroke(p, 6.5, Stroke::new(1.0, Color32::from_black_alpha(160)));
     }
 }
 
