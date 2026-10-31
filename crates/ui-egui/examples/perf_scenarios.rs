@@ -390,7 +390,7 @@ fn main() {
     // A panic in one group (a crash the scenario found) is reported against the row that was
     // running, and the other groups still run.
     type Group = fn(&mut Bench, &Sizes);
-    let groups: [(&str, Group); 8] = [
+    let groups: [(&str, Group); 9] = [
         ("layered", layered_scenarios),
         ("many layers", many_layer_scenarios),
         ("full-canvas layers", full_canvas_layer_scenarios),
@@ -399,6 +399,7 @@ fn main() {
         ("algorithms", algorithm_scenarios),
         ("huge document", huge_document_scenarios),
         ("redraw area", redraw_area_scenarios),
+        ("big brush", brush_scenarios),
     ];
     let use_gpu = b.gpu.is_some();
     if let Some(wanted) = arg(&args, "--group")
@@ -445,6 +446,37 @@ fn main() {
             eprintln!("{e}");
             std::process::exit(1);
         }
+    }
+}
+
+/// Big brushes (#2619, #1994): a dab's area grows with its size squared and, for a soft tip, with
+/// the falloff's reach — `hardness 0` reaches 1.73 × the radius, so it touches 3× the pixels of a
+/// hard tip of the same nominal size. Both rows do the same work, so the pair shows what hardness
+/// costs.
+fn brush_scenarios(b: &mut Bench, sz: &Sizes) {
+    let rows = ["brush dab 1000 px, hardness 0, on 24 MP + refresh", "brush dab 1000 px, hardness 100%, on 24 MP + refresh"];
+    if !rows.iter().any(|r| b.wanted(r)) {
+        return;
+    }
+    let (w, h) = sz.big_photo;
+    let mut s = Session::new();
+    let setup = exec(&mut s, "file.new", json!({"width": w, "height": h, "background": "white"}))
+        .and_then(|_| exec(&mut s, "layer.new.layer", json!({"name": "paint"})));
+    if let Err(e) = setup {
+        b.errors.push((rows[0].into(), e));
+        return;
+    }
+    let _ = b.refresh(&s, true);
+    let reps = b.reps;
+    for (row, hardness) in rows.iter().zip([0.0f32, 1.0]) {
+        b.time(row, &mut s, reps, true, |b, s, i| {
+            // Keep the dab fully on the canvas: a 1000 px tip needs 500 px of margin each way.
+            let span = |n: u32| n.saturating_sub(1000).max(1);
+            let (x, y) = (500 + (i as u32 * 97) % span(w), 500 + (i as u32 * 61) % span(h));
+            let t = Instant::now();
+            exec(s, "paint.stroke", json!({"points": [[x, y]], "size": 1000, "hardness": hardness, "color": "#c03020"}))?;
+            Ok(ms(t) + b.refresh(s, false)?)
+        });
     }
 }
 

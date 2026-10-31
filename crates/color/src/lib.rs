@@ -143,19 +143,46 @@ pub fn read_samples(bytes: &[u8], sample: SampleType, start: usize, out: &mut [f
     }
 }
 
-/// Write a normalised f32 sample; integer types are clamped and rounded.
+/// Write a normalised f32 sample; integer types are rounded, out-of-range values saturate.
+///
+/// The saturating cast does what an explicit `clamp` did and compiles to one instruction: NaN
+/// becomes 0, `-1.0` and `-inf` become 0, `2.0` and `+inf` become the maximum. The clamp was
+/// scalar and NaN-preserving, so it kept the conversion from vectorising (see `write_samples`).
 #[inline]
 pub fn write_sample(bytes: &mut [u8], sample: SampleType, index: usize, v: f32) {
     match sample {
-        SampleType::U8 => bytes[index] = (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8,
+        SampleType::U8 => bytes[index] = (v * 255.0 + 0.5) as u8,
         SampleType::U16 => {
             let o = index * 2;
-            let q = (v.clamp(0.0, 1.0) * 65535.0 + 0.5) as u16;
+            let q = (v * 65535.0 + 0.5) as u16;
             bytes[o..o + 2].copy_from_slice(&q.to_ne_bytes());
         }
         SampleType::F32 => {
             let o = index * 4;
             bytes[o..o + 4].copy_from_slice(&v.to_ne_bytes());
+        }
+    }
+}
+
+/// [`write_sample`] for the `src.len()` samples from sample index `start` on, matching the sample
+/// type once instead of per sample (the counterpart of [`read_samples`]).
+pub fn write_samples(bytes: &mut [u8], sample: SampleType, start: usize, src: &[f32]) {
+    let end = start + src.len();
+    match sample {
+        SampleType::U8 => {
+            for (b, v) in bytes[start..end].iter_mut().zip(src) {
+                *b = (*v * 255.0 + 0.5) as u8;
+            }
+        }
+        SampleType::U16 => {
+            for (b, v) in bytes[start * 2..end * 2].as_chunks_mut::<2>().0.iter_mut().zip(src) {
+                b.copy_from_slice(&((*v * 65535.0 + 0.5) as u16).to_ne_bytes());
+            }
+        }
+        SampleType::F32 => {
+            for (b, v) in bytes[start * 4..end * 4].as_chunks_mut::<4>().0.iter_mut().zip(src) {
+                b.copy_from_slice(&v.to_ne_bytes());
+            }
         }
     }
 }
@@ -275,6 +302,44 @@ mod tests {
         write_sample(&mut b, SampleType::U8, 0, 1.7);
         write_sample(&mut b, SampleType::U8, 1, -0.3);
         assert_eq!(b, [255, 0]);
+    }
+
+    #[test]
+    fn integer_samples_match_the_clamped_formula_they_replaced() {
+        // The encode is a saturating cast, not a clamp; every value every caller can pass must
+        // land on the same byte as the clamp did (out of range and non-finite included).
+        let values = [
+            f32::NEG_INFINITY,
+            f32::MIN,
+            -2.0,
+            -0.5,
+            -0.002,
+            -0.0,
+            0.0,
+            1.0 / 510.0,
+            1.0 / 255.0,
+            0.5,
+            0.998,
+            1.0,
+            1.002,
+            2.0,
+            f32::MAX,
+            f32::INFINITY,
+            f32::NAN,
+        ];
+        for sample in [SampleType::U8, SampleType::U16] {
+            let max = if sample == SampleType::U8 { 255.0f32 } else { 65535.0 };
+            for v in values {
+                let mut got = [0u8; 2];
+                write_sample(&mut got, sample, 0, v);
+                let encoded = match sample {
+                    SampleType::U8 => u32::from(got[0]),
+                    _ => u32::from(u16::from_ne_bytes(got)),
+                };
+                let expect = (v.clamp(0.0, 1.0) * max + 0.5) as u32;
+                assert_eq!(encoded, expect, "{sample:?} {v}");
+            }
+        }
     }
 
     #[test]

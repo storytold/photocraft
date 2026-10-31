@@ -810,3 +810,100 @@ fn content_bounds_with_tile_skipping() {
     s.fill_rect(Rect::new(-700, 4000, -699, 4001), &[0.5]);
     assert_eq!(s.content_bounds(), Rect::new(-700, 0, 2000, 4001));
 }
+
+#[test]
+fn edit_tiles_from_keeps_the_destination_stride_with_fewer_source_channels() {
+    // Documented contract: with different channel counts the shorter one wins. A source with fewer
+    // channels must not shift the destination's pixel layout, and a channel it has no value for
+    // keeps what it had.
+    let dst_fmt = PixelFormat::RGBA8;
+    let src_fmt = PixelFormat::new(ColorMode::Rgb, SampleType::U8, false);
+    let r = Rect::new(0, 0, 6, 3);
+    let mut dst = Surface::new(dst_fmt);
+    dst.fill_rect(r, &[0.1, 0.2, 0.3, 0.9]);
+    let mut src = Surface::new(src_fmt);
+    src.fill_rect(r, &[0.4, 0.5, 0.6]);
+    dst.edit_tiles_from(&src, &[r], |_, _, _, _, row| row.fill(0.75));
+    for y in 0..3 {
+        for x in 0..6 {
+            let px = dst.pixel(x, y);
+            // 8-bit quantisation, so compare within a step.
+            assert!(px[..3].iter().all(|&v| (v - 0.75).abs() <= 1.0 / 255.0), "({x},{y}): RGB written, got {:?}", &px[..3]);
+            assert!((px[3] - 0.9).abs() < 1.0 / 255.0, "({x},{y}): alpha untouched, got {}", px[3]);
+        }
+    }
+}
+
+#[test]
+fn write_samples_matches_writing_one_at_a_time() {
+    // Including out-of-range values and NaN, which the saturating cast clamps exactly as the
+    // explicit `clamp` did.
+    let values = [-1.0f32, 0.0, 0.25, 0.5, 0.7501, 1.0, 1.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+    for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+        let bytes = sample.bytes();
+        let mut bulk = vec![0u8; values.len() * bytes];
+        let mut one = vec![0u8; values.len() * bytes];
+        write_samples(&mut bulk, sample, 0, &values);
+        for (i, v) in values.iter().enumerate() {
+            write_sample(&mut one, sample, i, *v);
+        }
+        assert_eq!(bulk, one, "{sample:?}");
+    }
+}
+
+#[test]
+fn edit_tiles_from_leaves_pixels_outside_its_rects_alone() {
+    let fmt = PixelFormat::RGBA8;
+    let mut s = Surface::new(fmt);
+    s.fill_rect(Rect::new(0, 0, 300, 300), &[0.2, 0.4, 0.6, 1.0]);
+    let before = s.read_region(Rect::new(0, 0, 300, 300));
+    let mut source = Surface::new(fmt);
+    source.fill_rect(Rect::new(0, 0, 300, 300), &[0.9, 0.9, 0.9, 0.9]);
+    // One rect well inside a single tile: the rest of that tile must keep its own pixels, which
+    // is what lets a large stroke's dab write only what it covers.
+    let rect = Rect::new(10, 10, 50, 50);
+    s.edit_tiles_from(&source, &[rect], |_, _, _, _, samples| samples.fill(1.0));
+    let after = s.read_region(Rect::new(0, 0, 300, 300));
+    let n = fmt.channels();
+    for y in 0..300usize {
+        for x in 0..300usize {
+            let i = (y * 300 + x) * n;
+            let inside = (10..50).contains(&x) && (10..50).contains(&y);
+            if inside {
+                assert_eq!(&after[i..i + n], &[1.0; 4][..n], "({x},{y})");
+            } else {
+                assert_eq!(&after[i..i + n], &before[i..i + n], "({x},{y})");
+            }
+        }
+    }
+}
+
+#[test]
+fn edit_tiles_from_matches_a_read_modify_write() {
+    let fun = |v: f32| (v + 0.1).min(1.0);
+    for mode in [ColorMode::Rgb, ColorMode::Grayscale, ColorMode::Cmyk] {
+        for sample in [SampleType::U8, SampleType::U16, SampleType::F32] {
+            let fmt = PixelFormat::new(mode, sample, true);
+            let mut a = Surface::new(fmt);
+            a.fill_rect(Rect::new(-100, -100, 400, 300), &from_rgba(&fmt, [0.4, 0.6, 0.2, 0.75]));
+            let mut b = a.clone();
+            let mut source = Surface::new(fmt);
+            source.fill_rect(Rect::new(-120, -120, 420, 320), &from_rgba(&fmt, [0.9, 0.1, 0.5, 0.6]));
+            // Rects at negative coordinates, across tile boundaries, and across the content edge.
+            let rects = [Rect::new(-70, -70, 30, 30), Rect::new(100, 40, 260, 130), Rect::new(-100, 200, 400, 460)];
+            a.edit_tiles_from(&source, &rects, |_, _, _, _, samples| {
+                for v in samples.iter_mut() {
+                    *v = fun(*v);
+                }
+            });
+            for r in rects {
+                let mut v = source.read_region(r);
+                for v in v.iter_mut() {
+                    *v = fun(*v);
+                }
+                b.write_region(r, &v);
+            }
+            assert_eq!(a, b, "{fmt:?}");
+        }
+    }
+}

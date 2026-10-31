@@ -476,6 +476,23 @@ title = "Brush dab 60 px on 36 MP"
 bench = "interactive_bench"
 row = "brush dab 60 px (command + refresh)"
 
+# Big brushes (#2619, #1994): tracked before budgeted. A 1000 px tip at hardness 0 touches 3x the
+# pixels of a hard one (its falloff reaches 1.73 x the radius), so the pair is what shows the cost of
+# a soft edge; neither has a budget until a budgeted-class run measures them.
+[[scenario]]
+id = "P83"
+title = "Brush dab 1000 px, hardness 0, on 24 MP"
+issue = 2619
+bench = "perf_scenarios"
+row = "brush dab 1000 px, hardness 0, on 24 MP + refresh"
+
+[[scenario]]
+id = "P84"
+title = "Brush dab 1000 px, hardness 100%, on 24 MP"
+issue = 2619
+bench = "perf_scenarios"
+row = "brush dab 1000 px, hardness 100%, on 24 MP + refresh"
+
 [[scenario]]
 id = "P41"
 title = "Gaussian Blur r 40 on 36 MP"

@@ -6,7 +6,7 @@ use photocraft_raster::Surface;
 
 use crate::brush::*;
 use crate::dynamics::{Smoother, smooth_points};
-use crate::render::{BrushContext, StrokeRenderer, mask_combine, render_stroke, texture_combine};
+use crate::render::{BrushContext, StrokeRenderer, mask_combine, render_stroke, set_staged_coverage, texture_combine};
 use crate::tile::GrayTile;
 use crate::{Dab, Stroke, StrokePoint, dabs};
 
@@ -1994,4 +1994,39 @@ fn touches_covers_every_pixel_with_coverage() {
     assert!(!r.touches(Rect::new(400, 400, 400, 400)), "empty");
     assert!(r.touches(Rect::new(i32::MIN, i32::MIN, i32::MAX, i32::MAX)), "huge, without a huge scan");
     assert!(!r.touches(Rect::new(1_000_000, 1_000_000, i32::MAX, i32::MAX)));
+}
+
+#[test]
+fn dab_coverage_is_the_same_staged_or_fused() {
+    // A plain round dab rasterizes straight into its coverage tiles; a dab that needs the general
+    // rasterizer is staged through a whole-dab buffer. Both must leave exactly the same coverage.
+    let pts = line(60.0, 460.0, 80.0);
+    let cases = [(20.0f32, 0.0f32, false), (61.0, 0.35, false), (200.0, 0.0, false), (1000.0, 0.0, false), (300.0, 1.0, true)];
+    // Every other brush feature takes the same coverage path, so they must agree too: per-dab
+    // colour (allocates the tile's colour buffer), a Dual Brush pass (its own coverage map), and
+    // the Eraser's mode.
+    let fancy = [
+        BrushSettings { size: 200.0, hardness: 0.0, color_dynamics: ColorDynamics { enabled: true, brightness_jitter: 0.4, ..Default::default() }, ..brush() },
+        BrushSettings { size: 200.0, hardness: 0.0, dual_brush: DualBrush { enabled: true, size: 60.0, hardness: 0.5, ..Default::default() }, ..brush() },
+        BrushSettings { size: 200.0, hardness: 0.0, erase: true, ..brush() },
+        BrushSettings { size: 200.0, hardness: 0.0, wet_edges: true, ..brush() },
+    ];
+    for b in cases
+        .iter()
+        .map(|(size, hardness, aliased)| BrushSettings { size: *size, hardness: *hardness, aliased: *aliased, spacing: 0.25, ..brush() })
+        .chain(fancy)
+    {
+        let mut fused = StrokeRenderer::new(&b, Some(PixelFormat::RGBA8), 1.0);
+        let mut staged = fused.clone();
+        // The switch is process-wide (like the parallel threshold): another test's stroke running
+        // meanwhile only takes the staged path, whose pixels are the same.
+        set_staged_coverage(false);
+        fused.push(&pts);
+        fused.finish();
+        set_staged_coverage(true);
+        staged.push(&pts);
+        staged.finish();
+        set_staged_coverage(false);
+        assert_eq!(fused.dense_coverage(), staged.dense_coverage(), "size {} hardness {} aliased {}", b.size, b.hardness, b.aliased);
+    }
 }

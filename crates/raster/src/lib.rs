@@ -14,8 +14,26 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use photocraft_color::{ColorMode, PixelFormat, SampleType, read_sample, read_samples, write_sample};
+use photocraft_color::{ColorMode, PixelFormat, SampleType, read_sample, read_samples, write_sample, write_samples};
 use photocraft_geom::{Rect, TILE_SIZE, TileCoord};
+
+/// A region edited tile by tile only pays for the thread pool from this many pixels on.
+#[cfg(not(target_arch = "wasm32"))]
+const PARALLEL_MIN_PIXELS: usize = 1 << 16;
+
+#[cfg(not(target_arch = "wasm32"))]
+thread_local! {
+    /// One tile buffer per worker, kept from one edit to the next: a 64x64 chunk of a soft brush's
+    /// dab is 64 KB of f32, and allocating one per tile per dab costs a 250 px dab a third of its
+    /// frame (which is why the pooled whole-dab path this replaces existed).
+    static ROW_SCRATCH: std::cell::RefCell<Vec<f32>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether `pixels` of tile work are worth spreading over the pool (the web has none).
+#[cfg(not(target_arch = "wasm32"))]
+fn parallel(pixels: usize) -> bool {
+    pixels >= PARALLEL_MIN_PIXELS
+}
 
 /// A checked surface allocation could not be represented or reserved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -760,13 +778,135 @@ impl Surface {
         self.put_tiles(tiles);
     }
 
+    /// Edit the given rectangles from another surface's pixels, a tile at a time.
+    ///
+    /// `rects` are the pixels to write. `f(x0, y0, w, h, samples)` gets the same cells of
+    /// `source` as normalised f32 (`channels()` samples per pixel, row-major, `w × h`) and writes
+    /// the values `self` takes; the rectangle is encoded straight back into its tile. That is one
+    /// decode and one encode per pixel, with only that rectangle's buffer in cache. Reading the
+    /// region into a staging buffer and writing it back does the same conversions twice on data
+    /// too big for cache: for a 12 MP brush dab that buffer is 192 MB each way, which is most of
+    /// the dab's frame time.
+    ///
+    /// Only those rectangles are written, so pixels of the same tile outside them keep their
+    /// values — a large stroke's dab must not revert what it did not paint. Channels are matched by
+    /// position, so `source` may hold a different sample type; with a different channel count the
+    /// shorter one wins. A rectangle that lies inside one tile of both surfaces costs no lookup;
+    /// rectangles are independent, so tiles are edited on all cores when there is enough work
+    /// (serially on the web).
+    pub fn edit_tiles_from(&mut self, source: &Surface, rects: &[Rect], f: impl Fn(i32, i32, usize, usize, &mut [f32]) + Sync) {
+        let (dst_n, src_n) = (self.channels(), source.channels());
+        let n = dst_n.min(src_n);
+        if n == 0 || rects.is_empty() {
+            return;
+        }
+        let (sample, s_sample) = (self.format.sample, source.format.sample);
+        let mut stack = [0.0; 8];
+        let mut heap = Vec::new();
+        let dp = source.default_samples(&mut stack, &mut heap)[..src_n].to_vec();
+        // The rectangles grouped by the tile that holds them, clipped to it.
+        let mut groups: Vec<(TileCoord, Vec<Rect>)> = Vec::new();
+        for r in rects.iter().filter(|r| !r.is_empty()) {
+            for tc in r.tiles() {
+                let tr = tc.rect().intersect(r);
+                if tr.is_empty() {
+                    continue;
+                }
+                match groups.iter_mut().find(|(c, _)| *c == tc) {
+                    Some((_, v)) => v.push(tr),
+                    None => groups.push((tc, vec![tr])),
+                }
+            }
+        }
+        if groups.is_empty() {
+            return;
+        }
+        let pixels =
+            groups.iter().flat_map(|(_, rs)| rs.iter()).fold(0usize, |acc, tr| acc.saturating_add((tr.width() as usize).saturating_mul(tr.height() as usize)));
+        let mut work = self.take_tiles_list(groups.iter().map(|(tc, _)| *tc));
+        let scribe = |(tc, tile): &mut (TileCoord, Arc<Tile>), buf: &mut Vec<f32>| {
+            let tc = *tc;
+            let Some((_, rs)) = groups.iter().find(|(c, _)| *c == tc) else { return };
+            let src = source.tiles.get(&tc);
+            let dst = Arc::make_mut(tile);
+            for tr in rs {
+                let (w, h) = (tr.width() as usize, tr.height() as usize);
+                let len = w * h * n;
+                buf.clear();
+                buf.resize(len, 0.0);
+                for yy in 0..h {
+                    let y = tr.y0 + yy as i32;
+                    let cell = (y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize;
+                    let row = &mut buf[yy * w * n..(yy + 1) * w * n];
+                    match (src, src_n == n) {
+                        (Some(st), true) => read_samples(&st.data, s_sample, cell * src_n, row),
+                        (Some(st), false) => {
+                            // Another channel count (never within one document): decode a full
+                            // row of the source's own first. Rare, so it may allocate.
+                            let mut wide = vec![0.0f32; w * src_n];
+                            read_samples(&st.data, s_sample, cell * src_n, &mut wide);
+                            for (px, spx) in row.chunks_exact_mut(n).zip(wide.chunks_exact(src_n)) {
+                                px.copy_from_slice(&spx[..n]);
+                            }
+                        }
+                        (None, _) => {
+                            for px in row.chunks_exact_mut(n) {
+                                px.copy_from_slice(&dp[..n]);
+                            }
+                        }
+                    }
+                }
+                f(tr.x0, tr.y0, w, h, &mut buf[..len]);
+                for yy in 0..h {
+                    let y = tr.y0 + yy as i32;
+                    let cell = (y - tc.ty * TILE_SIZE) as usize * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize;
+                    let row = &buf[yy * w * n..(yy + 1) * w * n];
+                    if dst_n == n {
+                        write_samples(&mut dst.data, sample, cell * dst_n, row);
+                    } else {
+                        // Keep the destination's own stride: channels past `n` stay as they were.
+                        for (xx, px) in row.chunks_exact(n).enumerate() {
+                            write_samples(&mut dst.data, sample, (cell + xx) * dst_n, px);
+                        }
+                    }
+                }
+            }
+        };
+        #[cfg(not(target_arch = "wasm32"))]
+        if parallel(pixels) {
+            use rayon::prelude::*;
+            // The buffer is taken out for the item and put back after: a closure that edits
+            // another region (a re-entrant call) then finds an empty one instead of a borrow panic.
+            work.par_iter_mut().for_each(|item| {
+                let mut buf = ROW_SCRATCH.try_with(|b| std::mem::take(&mut *b.borrow_mut())).unwrap_or_default();
+                scribe(item, &mut buf);
+                let _ = ROW_SCRATCH.try_with(|b| *b.borrow_mut() = buf);
+            });
+            self.put_tiles(work);
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = pixels;
+        let mut buf = Vec::<f32>::new();
+        for item in work.iter_mut() {
+            scribe(item, &mut buf);
+        }
+        self.put_tiles(work);
+    }
+
     /// Take the tiles covering `r` out of the surface (missing ones filled with the default
     /// pixel), so they can be edited elsewhere, e.g. in parallel: `Arc::unwrap_or_clone` copies a
     /// tile only if an undo snapshot still shares it. Give them back with [`Surface::put_tiles`].
     pub fn take_tiles(&mut self, r: Rect) -> Vec<(TileCoord, Arc<Tile>)> {
+        self.take_tiles_list(r.tiles())
+    }
+
+    /// [`Surface::take_tiles`] for an explicit list of tiles: a sparse region costs its own tiles,
+    /// not every tile of their bounding rectangle.
+    fn take_tiles_list(&mut self, coords: impl Iterator<Item = TileCoord>) -> Vec<(TileCoord, Arc<Tile>)> {
         let fmt = self.format;
         let mut blank: Option<Arc<Tile>> = None;
-        r.tiles()
+        coords
             .map(|c| {
                 let t = self.tiles.remove(&c).unwrap_or_else(|| blank.get_or_insert_with(|| Arc::new(Tile::filled(&fmt, &self.default_pixel))).clone());
                 (c, t)
