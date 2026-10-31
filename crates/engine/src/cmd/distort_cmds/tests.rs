@@ -522,3 +522,31 @@ fn dialog_filters_follow_a_targeted_mask_as_photoshops_do() {
     assert_eq!(active_surface(&s), pixels, "Quick Mask: the layer's pixels are untouched");
     assert_ne!(quick(&s), before, "Quick Mask: deformed");
 }
+
+/// #10457 (CodeRabbit on #10469): Lens Correction, Adaptive Wide Angle and Vanishing Point refuse
+/// a mask named in their params as they do a mask targeted in the Channels panel, so a caller's
+/// `"target":"mask"` neither filters the mask nor slips past to the layer.
+#[test]
+fn lens_filters_and_vanishing_point_refuse_an_explicit_mask_target() {
+    let mut s = session(8);
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    let mask_of = |s: &Session| {
+        let st = s.active().unwrap();
+        st.doc.layer(st.active_layer.unwrap()).unwrap().mask.as_ref().unwrap().surface.read_region(st.doc.bounds())
+    };
+    let (pixels, mask) = (active_surface(&s), mask_of(&s));
+    let calls = [
+        (crate::lens_cmds::LENS, json!({"target": "mask", "distortion": 10})),
+        (crate::lens_cmds::WIDE, json!({"target": "mask", "model": "perspective", "scale": 90})),
+        (crate::vp_cmds::VP, json!({"target": "mask"})),
+    ];
+    for (id, params) in calls {
+        assert!(s.is_enabled(id), "{id} is enabled on the layer");
+        assert!(!s.is_enabled_with(id, &params), "{id} is disabled on a mask named in its params");
+        let err = s.execute(id, params).unwrap_err();
+        assert!(matches!(err, EngineError::Disabled(..)), "{id}: {err}");
+        assert_eq!(active_surface(&s), pixels, "{id}: the layer's pixels are untouched");
+        assert_eq!(mask_of(&s), mask, "{id}: the mask is untouched");
+    }
+}
