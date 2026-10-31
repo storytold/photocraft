@@ -242,6 +242,9 @@ pub struct LayerM {
     pub advanced: photocraft_doc::AdvancedBlending,
     #[serde(default)]
     pub video: Option<VideoDataM>,
+    /// The layer's own XMP packet (missing in older files = none).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xmp: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -256,6 +259,9 @@ pub enum ContentM {
         /// Artboard (Layer › New › Artboard).
         #[serde(default)]
         artboard: Option<photocraft_doc::Artboard>,
+        /// A Photoshop Frame's stroke, drawn along the group's vector mask.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        frame_stroke: Option<ShapeStroke>,
     },
     Adjustment {
         adjustment: Adjustment,

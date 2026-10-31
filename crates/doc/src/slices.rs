@@ -241,12 +241,22 @@ pub fn auto_slices(canvas: Rect, taken: &[Rect]) -> Vec<Rect> {
         }
     }
     // Merge vertically adjacent runs with the same columns.
+    // `open` finds the slice a run continues by its columns and bottom edge: searching the output
+    // for each run is quadratic in the runs, and bars crossing in a grid leave a million of them.
     let mut out: Vec<Rect> = Vec::new();
+    let mut open: std::collections::HashMap<(i32, i32, i32), usize> = std::collections::HashMap::new();
     for r in runs {
-        if let Some(prev) = out.iter_mut().find(|p| p.x0 == r.x0 && p.x1 == r.x1 && p.y1 == r.y0) {
-            prev.y1 = r.y1;
-        } else {
-            out.push(r);
+        match open.remove(&(r.x0, r.x1, r.y0)) {
+            Some(i) => {
+                if let Some(prev) = out.get_mut(i) {
+                    prev.y1 = r.y1;
+                }
+                open.insert((r.x0, r.x1, r.y1), i);
+            }
+            None => {
+                open.insert((r.x0, r.x1, r.y1), out.len());
+                out.push(r);
+            }
         }
     }
     out
