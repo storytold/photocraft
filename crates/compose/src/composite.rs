@@ -481,6 +481,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
             p[3] *= mask_k(&mask, i);
         }
         blend_layer_into(backdrop, &content, layer, cx, 1.0);
+        recycle_mask(mask);
         return;
     }
     if !matches!(layer.content, LayerContent::Group(_) | LayerContent::Fill(_) | LayerContent::Adjustment(_))
@@ -610,6 +611,7 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
                 p[c] += (bl[c] - p[c]) * k;
             }
         }
+        recycle_mask(mv);
         return;
     }
     if effects::has_effects(layer) {
