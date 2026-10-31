@@ -807,8 +807,10 @@ fn a_resizable_dialog_shrinks_as_well_as_grows_in_both_directions() {
         let mut out = ctx.run_ui(egui::RawInput::default(), |ui| flag = ui.style().right_to_left);
         out.textures_delta.clear();
         assert_eq!(flag, dir == crate::text::direction::Dir::Rtl, "{dir:?}: the real flag path is exercised");
-        // The callsite: the dialog's intended minimum, capped by the largest size it may take.
-        let min_size = resizable_min_size(min, max);
+        // The callsite (dialogs.rs): the intended minimum clamped against the available rect,
+        // capped by the largest size the window may take.
+        let available = egui::Rect::from_min_size(egui::Pos2::ZERO, avail);
+        let min_size = crate::text::direction::clamp_window_min_size(available, min).size().min(max);
         // The fork: the dragged size is clamped to `at_least(min_size)`, `at_most(max_size)`.
         (avail + delta).at_least(min_size).at_most(max)
     };
