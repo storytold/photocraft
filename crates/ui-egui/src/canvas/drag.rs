@@ -264,6 +264,15 @@ pub(crate) fn marquee_drag_ants(d: &Drag, xf: &ViewXform, marquee: Option<[f64; 
     marquee_ants(xf, d.tool, a, b)
 }
 
+/// The corners on screen of the document-axis box dragged from `a` to `b`, clockwise from its
+/// top-left: a turned parallelogram in a rotated view, as the box the release creates (the Type
+/// tools' text box, the Move tool's layer marquee).
+pub(crate) fn doc_box_corners(xf: &ViewXform, a: [f64; 2], b: [f64; 2]) -> [Pos2; 4] {
+    let (x0, x1) = (a[0].min(b[0]) as f32, a[0].max(b[0]) as f32);
+    let (y0, y1) = (a[1].min(b[1]) as f32, a[1].max(b[1]) as f32);
+    [xf.to_screen(x0, y0), xf.to_screen(x1, y0), xf.to_screen(x1, y1), xf.to_screen(x0, y1)]
+}
+
 /// The size readout shown beside the cursor while dragging a marquee: the width and height values.
 pub fn marquee_readout(r: [f64; 4]) -> [String; 2] {
     [format!("{} px", r[2] - r[0]), format!("{} px", r[3] - r[1])]

@@ -1,6 +1,7 @@
 use super::display::{canvas_display, checker, display_doc, display_image};
 use super::drag::{
-    angle_readout, draw_marquee_readout, draw_value_readout, marquee_ants, marquee_drag_ants, marquee_preview_px, single_line_drag_px, size_readout,
+    angle_readout, doc_box_corners, draw_marquee_readout, draw_value_readout, marquee_ants, marquee_drag_ants, marquee_preview_px, single_line_drag_px,
+    size_readout,
 };
 use super::gesture::constrained_polygon_point;
 use super::strokes::{EngineStroke, SPOT_HEALING_TRAIL, draw_smoothing_string, strokes_live};
@@ -599,8 +600,8 @@ pub(super) fn draw_drag_preview(app: &mut PhotocraftApp, painter: &egui::Painter
             painter.circle_filled(b, 3.0, Color32::WHITE);
         }
         Tool::Type | Tool::VerticalType | Tool::HorizontalTypeMask | Tool::VerticalTypeMask => {
-            let r = Rect::from_two_pos(xf.to_screen(d.start[0] as f32, d.start[1] as f32), xf.to_screen(last[0] as f32, last[1] as f32));
-            let pts = [r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom(), r.left_top()];
+            let [p0, p1, p2, p3] = doc_box_corners(xf, d.start, last);
+            let pts = [p0, p1, p2, p3, p0];
             painter.add(egui::Shape::line(pts.to_vec(), Stroke::new(1.0, Color32::WHITE)));
             painter.add(egui::Shape::dashed_line(&pts, Stroke::new(1.0, Color32::BLACK), 3.0, 3.0));
         }
