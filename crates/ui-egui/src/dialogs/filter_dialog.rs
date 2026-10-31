@@ -710,6 +710,22 @@ fn installed_choices(cmd: &str, key: &str, installed: &[InstalledProfile]) -> Ve
     installed.iter().filter(|i| i.is_destination() && fits(i)).map(|i| (i.path.clone(), i.description.clone())).collect()
 }
 
+/// Appends `installed` choices (and an unlisted `current` path, by its file `stem`) after `opts`,
+/// separated from the built-in choices by [`crate::widgets::DROPDOWN_SEPARATOR`] (#9851).
+fn append_installed_options<'a>(opts: &mut Vec<(String, &'a str)>, installed: &'a [(String, String)], allowed: Option<&[Value]>, current: &str, stem: &'a str) {
+    let is_allowed = |v: &str| allowed.is_none_or(|a| a.iter().any(|x| x.as_str() == Some(v)));
+    opts.retain(|(v, _)| is_allowed(v));
+    let mut extra: Vec<(String, &'a str)> =
+        installed.iter().filter(|(path, _)| is_allowed(path)).map(|(path, description)| (path.clone(), description.as_str())).collect();
+    if !opts.iter().chain(extra.iter()).any(|(v, _)| *v == current) {
+        extra.push((current.to_string(), stem));
+    }
+    if !opts.is_empty() && !extra.is_empty() {
+        opts.push((String::new(), crate::widgets::DROPDOWN_SEPARATOR));
+    }
+    opts.extend(extra);
+}
+
 /// Commands whose `angle` is a direction in document angles (counter-clockwise from three
 /// o'clock): a light or a blur direction, edited on a dial as in Photoshop's Motion Blur, Emboss
 /// and Global Light (#3152). Rotation amounts (Twirl, Rotate Arbitrary, Crop, Lens Correction,
@@ -905,22 +921,16 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
                         }
                     }
                     // Like Photoshop, the profile menus also list the profiles installed in the
-                    // system (printer and paper profiles, press conditions), by description.
+                    // system (printer and paper profiles, press conditions), by description,
+                    // after a separator (#9851).
                     let lists_installed = installed_filter(&cmd, &p.key).is_some();
                     let installed =
                         if lists_installed { installed_choices(&cmd, &p.key, &photocraft_engine::installed_profiles::installed()) } else { Vec::new() };
-                    opts.extend(installed.iter().map(|(path, description)| (path.clone(), description.as_str())));
-                    // Assign Profile: only what the document's colour mode can take (#4951).
-                    if p.key == "profile"
-                        && let Some(allowed) = f.get("__profiles").and_then(Value::as_array)
-                    {
-                        opts.retain(|(v, _)| allowed.iter().any(|a| a.as_str() == Some(v.as_str())));
-                    }
-                    // A profile given by path that isn't listed (typed by an agent, or spelled with
-                    // different case) still shows, by its file name, instead of a blank menu.
                     let stem = std::path::Path::new(&cur).file_stem().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    if lists_installed && !opts.iter().any(|(v, _)| *v == cur) {
-                        opts.push((cur.clone(), stem.as_str()));
+                    if lists_installed {
+                        // Assign Profile: only what the document's colour mode can take (#4951).
+                        let allowed = (p.key == "profile").then(|| f.get("__profiles").and_then(Value::as_array)).flatten().map(Vec::as_slice);
+                        append_installed_options(&mut opts, &installed, allowed, &cur, &stem);
                     }
                     crate::widgets::dropdown(ui, &format!("flt-{cmd}-{}", p.key), &label(&p.key), &mut cur, &opts, 170.0);
                     if let Some(i) = cur.strip_prefix("channel:").filter(|_| depth).and_then(|i| i.parse::<usize>().ok()) {

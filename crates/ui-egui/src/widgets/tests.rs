@@ -906,6 +906,35 @@ fn dropdown_opens_with_focus_and_arrow_keys_change_the_value() {
     assert_eq!(*h.state(), 0);
 }
 
+/// #9851: a separator row between dropdown groups is skipped by arrow keys and wheel steps.
+#[test]
+fn dropdown_separators_are_skipped_by_arrow_keys_and_wheel() {
+    use egui::accesskit::Role;
+    use egui_kittest::{Harness, kittest::Queryable};
+
+    const PROFILES: [(usize, &str); 4] = [(0, "sRGB"), (1, "Display P3"), (99, super::DROPDOWN_SEPARATOR), (2, "Installed Paper")];
+    let mut h = Harness::builder().with_size(egui::vec2(300.0, 200.0)).build_ui_state(
+        |ui, selected: &mut usize| {
+            super::dropdown_wheel_hovered(ui, "profile", tl!("Profile"), selected, &PROFILES, 160.0);
+        },
+        1,
+    );
+    h.get_by_role(Role::ComboBox).click();
+    h.run();
+    h.key_press(egui::Key::ArrowDown);
+    h.run();
+    assert_eq!(*h.state(), 2, "ArrowDown skips the separator");
+    h.key_press(egui::Key::ArrowUp);
+    h.run();
+    assert_eq!(*h.state(), 1, "ArrowUp skips the separator");
+    egui::Popup::close_all(&h.ctx);
+    h.run();
+    wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0), Modifiers::NONE);
+    assert_eq!(*h.state(), 2, "wheel down skips the separator");
+    wheel(&mut h, egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0), Modifiers::NONE);
+    assert_eq!(*h.state(), 1, "wheel up skips the separator");
+}
+
 /// Scrolling rows under the pointer doesn't widen the list: it is as wide as the widest
 /// option hovered from the start (#2607).
 #[test]

@@ -254,7 +254,12 @@ fn profile_options(
     let mut v = vec![("working".to_string(), crate::i18n::fmt(tl!("Working: {working}"), &[("working", working)]))];
     let Some(space) = space else { return v };
     v.extend(photocraft_cms::Builtin::ALL.iter().filter(|b| b.profile().color_space == space).map(|b| (b.id().to_string(), b.description().to_string())));
-    v.extend(installed.iter().filter(|i| i.is_destination() && i.color_space == space).map(|i| (i.path.clone(), i.description.clone())));
+    let installed: Vec<_> =
+        installed.iter().filter(|i| i.is_destination() && i.color_space == space).map(|i| (i.path.clone(), i.description.clone())).collect();
+    if !installed.is_empty() {
+        v.push((String::new(), crate::widgets::DROPDOWN_SEPARATOR.into()));
+        v.extend(installed);
+    }
     v
 }
 
@@ -767,7 +772,7 @@ pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<Strin
                 let installed = photocraft_engine::installed_profiles::installed();
                 let opts = profile_options(space, &working, &installed);
                 let mut profile = get_s(f, "profile", "working");
-                if !opts.iter().any(|(v, _)| *v == profile) {
+                if !opts.iter().any(|(v, l)| l != crate::widgets::DROPDOWN_SEPARATOR && *v == profile) {
                     // Not a profile of this mode (or no longer installed): Create must not send it.
                     profile = "working".into();
                     f.remove("profile");
