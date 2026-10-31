@@ -72,9 +72,14 @@ fn tmp(name: &str) -> String {
     d.to_string_lossy().replace('\\', "/")
 }
 
+/// Untagged sources exercise DeviceRGB/DeviceGray; profile-handling tests opt in separately.
 fn session(mode: &str, depth: u32) -> Session {
     let mut s = Session::new();
-    s.execute("file.new", json!({"width": 300, "height": 150, "mode": mode, "depth": depth, "name": "Print Me.psd", "background": "#3366cc"})).unwrap();
+    s.execute(
+        "file.new",
+        json!({"width": 300, "height": 150, "mode": mode, "depth": depth, "name": "Print Me.psd", "background": "#3366cc", "profile": "none"}),
+    )
+    .unwrap();
     s
 }
 

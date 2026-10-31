@@ -246,7 +246,7 @@ fn build() -> Vec<CommandSpec> {
             "New…",
             ["File"],
             Some("Cmd+N"),
-            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str,"artboard":bool=false (one artboard over the canvas, its background the chosen one, holding an empty Layer 1; no Background layer),"profile":"working"|built-in id|path to an .icc file="working" (the colour profile it is tagged with; it must suit the mode)}"##,
+            r##"{"width":1..300000=1920,"height":1..300000=1080 (pixel counts are rounded),"mode":"rgb|gray|grayscale|cmyk|lab"="rgb","depth":8|16|32=8,"background":"white|black|backgroundColor|transparent|#rrggbb"="white","backgroundColor":[r,g,b]? (0..1; defaults to toolbox colour),"resolution":1..30000=72 (ppi),"name":str,"artboard":bool=false (one artboard over the canvas, its background the chosen one, holding an empty Layer 1; no Background layer),"profile":"working"|"none"|built-in id|path to an .icc file="working" (the colour profile it is tagged with; working captures the mode's current Color Settings, none leaves it untagged; it must suit the mode)}"##,
             always,
             |s, p| {
                 use crate::document_preset_cmds::{MAX_DIMENSION, MAX_RESOLUTION, background_color, color_mode, sample_type};
@@ -288,9 +288,10 @@ fn build() -> Vec<CommandSpec> {
                     d
                 };
                 doc.resolution_dpi = res;
-                // Photoshop's New Document › Color Profile: tag the document with another profile
-                // than the working space (#321). Checked before the document opens.
-                if let Some(spec) = p.get("profile").and_then(Value::as_str).filter(|spec| !matches!(*spec, "working" | "none")) {
+                // Capture the working space shown by New Document, so later Color Settings
+                // changes cannot reinterpret this document (#8832). Explicit profiles still win.
+                let spec = p.get("profile").and_then(Value::as_str).unwrap_or("working");
+                if spec != "none" {
                     let prof = s.color.resolve(spec, Some(&doc), None)?;
                     if prof.color_space != crate::color_cmds::mode_space(doc.mode) {
                         return Err(EngineError::BadParams {

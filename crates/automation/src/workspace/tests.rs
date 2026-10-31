@@ -878,3 +878,61 @@ fn absolute_paths_are_checked_against_the_authority_s_own_root() {
     let none = AuthorizedWorkspace::default();
     assert!(none.read(&target.to_string_lossy()).is_err());
 }
+
+/// A desktop's configured ICC path is outside the caller's directory capabilities.
+#[test]
+fn new_document_implicit_profile_is_refused_by_desktop_automation() {
+    use photocraft_engine::{Session, actions_cmds::Action, doc::ColorMode};
+    use serde_json::json;
+
+    let (_, outside, workspace) = roots("new-document-profile");
+    let mut session = Session::new();
+    let mut profile = (*session.color.working(ColorMode::Rgb)).clone();
+    profile.description = "Synthetic profile outside automation roots".into();
+    let bytes = profile.with_encoded_bytes().to_bytes();
+    let path = outside.join("working.icc");
+    std::fs::write(&path, &*bytes).unwrap();
+    assert!(workspace.read(path.to_str().unwrap()).is_err());
+    session.color.settings.working_rgb = path.to_str().unwrap().into();
+    // The unrestricted UI really reads this profile, rather than falling back to sRGB.
+    session.execute("file.new", json!({"width": 2, "height": 2})).unwrap();
+    assert_eq!(session.active().unwrap().doc.icc_profile.as_deref(), Some(&*bytes));
+    let before = session.active().unwrap().doc.id;
+    session.authorize = Some(authorize_desktop_engine_step);
+
+    for profile in [None, Some(json!("working")), Some(Value::Null), Some(json!(42))] {
+        let mut params = json!({"width": 2, "height": 2});
+        if let Some(profile) = profile {
+            params["profile"] = profile;
+        }
+        let denied = session.execute("file.new", params.clone()).unwrap_err();
+        assert!(denied.to_string().contains("ambient filesystem paths"), "{denied}");
+        assert_eq!(session.active().unwrap().doc.id, before);
+        session.actions.list = vec![Action::new("Create", vec![("file.new".into(), params)])];
+        let playback = session.execute("actions.play", json!({"action": "Create"})).unwrap();
+        assert_eq!(playback["ran"], 0);
+        assert_eq!(playback["failed"]["id"], "file.new");
+        assert!(playback["failed"]["error"].as_str().unwrap().contains("ambient filesystem paths"));
+        assert_eq!(session.active().unwrap().doc.id, before);
+    }
+    // Explicit built-ins and the opt-out don't read the configured path.
+    for profile in ["srgb", "none"] {
+        session.execute("file.new", json!({"width": 2, "height": 2, "profile": profile})).unwrap();
+        assert_eq!(session.active().unwrap().doc.icc_profile.is_some(), profile != "none");
+    }
+}
+
+/// Fresh headless sessions cannot acquire external working profiles and retain their defaults.
+#[test]
+fn new_document_implicit_profile_remains_available_headlessly() {
+    use serde_json::json;
+    let mut headless = crate::Headless::new();
+    for profile in [None, Some("working")] {
+        let mut params = json!({"width": 2, "height": 2});
+        if let Some(profile) = profile {
+            params["profile"] = json!(profile);
+        }
+        headless.command_run("file.new", params).unwrap();
+        assert!(headless.session.active().unwrap().doc.icc_profile.is_some());
+    }
+}

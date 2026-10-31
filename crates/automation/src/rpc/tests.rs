@@ -268,8 +268,8 @@ fn doc_save_rejects_a_bad_quality_instead_of_ignoring_or_clamping_it() {
     }
     h.handle("doc.save", json!({"path": path.to_string_lossy(), "quality": 85})).unwrap();
     let bytes = std::fs::read(&path).unwrap();
-    // The lossy chunk; an extended WebP (one carrying a colour profile) puts `VP8X` first.
-    assert!(bytes.windows(4).any(|c| c == b"VP8 ") && !bytes.windows(4).any(|c| c == b"VP8L"), "a WebP saved with a quality is lossy");
+    // An embedded ICC profile adds a VP8X container header before the actual image chunk.
+    assert!(matches!(photocraft_codecs::webp_encoding(&bytes), Some(photocraft_codecs::WebpEncoding::Lossy { .. })), "a WebP saved with a quality is lossy");
     std::fs::remove_dir_all(dir).unwrap();
 }
 
