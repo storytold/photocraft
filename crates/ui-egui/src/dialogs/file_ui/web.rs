@@ -434,13 +434,7 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                     ui.add(egui::Label::new(egui::RichText::new(tl!("Click slices in the preview. Shift-click selects more.")).weak()).wrap());
                     if s(f, "slices", "all") == "selected" {
                         ui.label(tl!("Select slices:"));
-                        let mut selected: Vec<usize> = f
-                            .get("__selectedSlices")
-                            .and_then(Value::as_array)
-                            .into_iter()
-                            .flatten()
-                            .filter_map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()))
-                            .collect();
+                        let mut selected = web_preview::selected_numbers(f);
                         egui::ScrollArea::vertical().id_salt("web-slice-selection").max_height(120.0).show(ui, |ui| {
                             for slice in slices.iter() {
                                 let mut picked = selected.contains(&slice.number);

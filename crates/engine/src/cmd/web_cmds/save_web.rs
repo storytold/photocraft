@@ -193,14 +193,11 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let all = slices::resolve(&doc);
     let pick = p.get("slices").and_then(Value::as_str).unwrap_or("all");
     let numbers: Option<Vec<u64>> = p.get("numbers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect());
-    let chosen: Vec<&ResolvedSlice> = all
-        .iter()
-        .filter(|r| match (&numbers, pick) {
-            (Some(n), _) => n.contains(&(r.number as u64)),
-            (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
-            _ => true,
-        })
-        .collect();
+    let chosen = |r: &ResolvedSlice| match (&numbers, pick) {
+        (Some(n), _) => n.contains(&(r.number as u64)),
+        (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
+        _ => true,
+    };
     let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
     let mut last_web = p.clone();
@@ -253,9 +250,18 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // `slices::resolve`), each its own image and cell, as Photoshop's subslices. A no-image cell's
     // text goes into its first piece only.
     let mut texted = std::collections::HashSet::new();
-    for r in &chosen {
+    let mut chosen_count = 0;
+    for r in &all {
+        let selected = chosen(r);
+        chosen_count += usize::from(selected);
         let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
         if piece.is_empty() {
+            continue;
+        }
+        if !selected {
+            if html {
+                cells.push((piece, String::new(), String::new()));
+            }
             continue;
         }
         let stored = r.id.and_then(|id| doc.slices.get(id));
@@ -303,6 +309,6 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     s.file_menu.last_web = Some(last_web);
     crate::automate_cmds::fire_event(s, "export");
     Ok(
-        json!({"files": files, "html": html_path, "bytes": total, "slices": chosen.len(), "width": wdoc.size.width, "height": wdoc.size.height, "warnings": warnings}),
+        json!({"files": files, "html": html_path, "bytes": total, "slices": chosen_count, "width": wdoc.size.width, "height": wdoc.size.height, "warnings": warnings}),
     )
 }

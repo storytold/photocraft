@@ -273,13 +273,18 @@ mod web_playback_tests {
         h
     }
 
-    /// Save for Web offers the slices selected in its preview as an export choice.
-    #[test]
-    fn save_for_web_offers_selected_slices() {
+    fn sliced_app() -> PhotocraftApp {
         let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
         app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
         app.run("slice.new", json!({"rect": [0, 0, 16, 16], "name": "left"})).unwrap();
         app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "right"})).unwrap();
+        app
+    }
+
+    /// Save for Web offers the slices selected in its preview as an export choice.
+    #[test]
+    fn save_for_web_offers_selected_slices() {
+        let mut app = sliced_app();
         let id = open_web(&mut app);
         let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
         fields.insert("format".into(), json!("png24"));
@@ -315,10 +320,7 @@ mod web_playback_tests {
     /// Preview selection reaches the real encoder, while All Slices ignores the selection.
     #[test]
     fn save_for_web_exports_the_slices_clicked_in_the_preview() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
-        app.run("slice.new", json!({"rect": [0, 0, 16, 16], "name": "left"})).unwrap();
-        app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "right"})).unwrap();
+        let mut app = sliced_app();
         let id = open_web(&mut app);
         let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
         fields.extend(serde_json::from_value::<Map<String, Value>>(json!({"format": "png24", "__view": "original", "html": false})).unwrap());
@@ -333,20 +335,34 @@ mod web_playback_tests {
             captured.borrow_mut().push((path.to_string(), bytes.to_vec()));
             Ok(())
         }));
-        for (mode, count) in [("selected", 1), ("all", 2)] {
-            h.state_mut().1.insert("slices".into(), json!(mode));
-            let mut p = web::web_params(&h.state().1, &h.state().0.session.active().unwrap().doc).unwrap();
-            p["dir"] = json!(".");
-            download_for_web(&mut h.state_mut().0, p).unwrap();
-            let files = downloads.borrow();
-            assert_eq!(files.len(), count, "{mode}");
-            if mode == "selected" {
-                assert!(files[0].0.ends_with("right.png"));
-                let image = photocraft_codecs::decode(&files[0].1).unwrap();
-                assert_eq!((image.width(), image.height()), (16, 16));
+        for html in [false, true] {
+            for (mode, count) in [("selected", 1), ("all", 2)] {
+                h.state_mut().1.insert("slices".into(), json!(mode));
+                h.state_mut().1.insert("html".into(), json!(html));
+                let mut p = web::web_params(&h.state().1, &h.state().0.session.active().unwrap().doc).unwrap();
+                p["dir"] = json!(".");
+                download_for_web(&mut h.state_mut().0, p).unwrap();
+                let files = downloads.borrow();
+                let images: Vec<_> = files.iter().filter(|(path, _)| path.ends_with(".png")).collect();
+                assert_eq!(images.len(), count, "{mode} html={html}");
+                if mode == "selected" {
+                    assert!(images[0].0.ends_with("right.png"));
+                    let image = photocraft_codecs::decode(&images[0].1).unwrap();
+                    assert_eq!((image.width(), image.height()), (16, 16));
+                }
+                if html {
+                    let page = std::str::from_utf8(&files.iter().find(|(path, _)| path.ends_with(".html")).unwrap().1).unwrap();
+                    if mode == "selected" {
+                        assert!(page.contains("<tr>\n\t\t<td></td>\n\t\t<td>\n\t\t\t<img src=\"right.png\""), "the unselected left half must keep its column");
+                        assert!(!page.contains("left.png"));
+                    } else {
+                        assert!(page.contains("left.png") && page.contains("right.png"));
+                    }
+                    assert!(page.contains("width=\"16\" height=\"1\""), "spacers preserve the column widths");
+                }
+                drop(files);
+                downloads.borrow_mut().clear();
             }
-            drop(files);
-            downloads.borrow_mut().clear();
         }
         // A previous export's numbers must not silently filter the next document.
         h.state_mut().0.session.file_menu.last_web = Some(json!({"format": "png24", "numbers": [2]}));
@@ -354,13 +370,48 @@ mod web_playback_tests {
         assert!(!h.state().0.ui.dialogs.iter().find(|d| d.id == next).unwrap().fields.contains_key("numbers"));
     }
 
+    /// Partial HTML keeps empty rows/columns at export size and omits unselected text.
+    #[test]
+    fn save_for_web_selected_html_preserves_scaled_layout() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        for (name, x, y, kind) in [("one", 0, 0, "noImage"), ("two", 16, 0, "image"), ("three", 0, 16, "image"), ("four", 16, 16, "image")] {
+            app.run("slice.new", json!({"rect": [x, y, 16, 16], "name": name, "kind": kind, "cellText": "Unselected text"})).unwrap();
+        }
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.extend(
+            serde_json::from_value::<Map<String, Value>>(json!({"format": "png24", "slices": "selected", "__selectedSlices": [4], "html": true})).unwrap(),
+        );
+        let downloads = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = downloads.clone();
+        app.services.write = Some(Box::new(move |path, bytes| {
+            captured.borrow_mut().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        for (percent, side) in [(50, 8), (100, 16)] {
+            let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
+            p["percent"] = json!(percent);
+            p["dir"] = json!(".");
+            download_for_web(&mut app, p).unwrap();
+            let files = downloads.borrow();
+            assert_eq!(files.iter().filter(|(path, _)| path.ends_with(".png")).count(), 1);
+            let page = std::str::from_utf8(&files.iter().find(|(path, _)| path.ends_with(".html")).unwrap().1).unwrap();
+            assert!(page.contains("<tr>\n\t\t<td></td>\n\t\t<td></td>\n"), "empty top row");
+            assert!(page.contains("<tr>\n\t\t<td></td>\n\t\t<td>\n\t\t\t<img src=\"four.png\""), "empty left column");
+            assert!(page.contains(&format!("src=\"four.png\" width=\"{side}\" height=\"{side}\"")));
+            assert!(page.contains(&format!("width=\"1\" height=\"{side}\"")), "spacer fixes the empty row height");
+            assert!(page.contains(&format!("width=\"{side}\" height=\"1\"")), "spacer fixes the empty column width");
+            assert!(!page.contains("Unselected text"));
+            drop(files);
+            downloads.borrow_mut().clear();
+        }
+    }
+
     /// Resizing, zoom and pan keep selection aligned; dragging still pans instead of selecting.
     #[test]
     fn save_for_web_slice_selection_follows_zoom_and_pan() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
-        app.run("slice.new", json!({"rect": [0, 0, 16, 16]})).unwrap();
-        app.run("slice.new", json!({"rect": [16, 0, 16, 16]})).unwrap();
+        let mut app = sliced_app();
         let id = open_web(&mut app);
         let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
         fields.extend(
@@ -418,10 +469,7 @@ mod web_playback_tests {
     /// Selected mode refuses an empty or malformed selection before opening a picker or saving.
     #[test]
     fn save_for_web_selected_slices_need_a_selection() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
-        app.run("slice.new", json!({"rect": [0, 0, 16, 16], "name": "left"})).unwrap();
-        app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "right"})).unwrap();
+        let mut app = sliced_app();
         app.services.file_dialog = Some(Box::new(|_, _, _| panic!("invalid selection must not open the picker")));
         app.services.write = Some(Box::new(|_, _| panic!("invalid selection must not write files")));
         for selected in [json!([]), json!([0]), json!([-1]), json!(["2"]), json!([1.5]), json!([999]), json!([1, 999])] {
@@ -434,10 +482,7 @@ mod web_playback_tests {
     /// Keyboard selection shares the preview's state and exports the chosen file.
     #[test]
     fn save_for_web_selects_slices_with_tab_and_space() {
-        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
-        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
-        app.run("slice.new", json!({"rect": [0, 0, 16, 16], "name": "left"})).unwrap();
-        app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "right"})).unwrap();
+        let mut app = sliced_app();
         let id = open_web(&mut app);
         let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
         fields.extend(

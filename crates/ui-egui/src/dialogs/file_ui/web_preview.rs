@@ -291,6 +291,11 @@ pub fn slice_layout(ui: &egui::Ui, doc: &photocraft_doc::Document, revision: u64
     slices
 }
 
+/// Read the dialog's selected slice numbers for the preview and checkbox list.
+pub(super) fn selected_numbers(fields: &Map<String, Value>) -> Vec<usize> {
+    fields.get("__selectedSlices").and_then(Value::as_array).into_iter().flatten().filter_map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok())).collect()
+}
+
 /// Draw numbered slices in image coordinates; click to select, Shift-click to toggle.
 pub fn slice_overlay(
     ui: &egui::Ui,
@@ -301,13 +306,7 @@ pub fn slice_overlay(
     fields: &mut Map<String, Value>,
 ) {
     let source = egui::vec2(doc.size.width.max(1) as f32, doc.size.height.max(1) as f32);
-    let mut selected: Vec<usize> = fields
-        .get("__selectedSlices")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok()))
-        .collect();
+    let mut selected = selected_numbers(fields);
     if response.clicked()
         && let Some(at) = response.interact_pointer_pos().filter(|at| image.contains(*at))
     {
