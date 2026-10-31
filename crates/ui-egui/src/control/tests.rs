@@ -877,6 +877,31 @@ fn ui_set_gradient_blend_mode_validates_and_updates_options() {
     assert!(app.ui.tool_options.gradient_classic, "invalid mode must not change options");
 }
 
+/// The Layers panel's Smart Object filter takes a list of its toggles.
+#[test]
+fn ui_set_drives_the_layers_panel_smart_object_filter() {
+    use crate::layer_filter_ui::FilterBy;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"by": "smartObject", "smart": ["missing", "embedded", "missing"]}}));
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert_eq!(app.ui.layer_filter_by, FilterBy::SmartObject);
+    assert_eq!(app.ui.layer_filter_smart, ["missing", "embedded"], "toggles are kept once each");
+    let ok = call(&mut app, &ctx, "ui.set", json!({"layerFilter": {"smart": []}}));
+    assert_eq!(ok["ok"], true, "{ok}");
+    assert!(app.ui.layer_filter_smart.is_empty());
+    for bad in [
+        json!({"layerFilter": {"smart": ["library"]}}),
+        json!({"layerFilter": {"smart": "linked"}}),
+        json!({"layerFilter": {"by": "kind", "smart": [1]}}),
+        json!({"layerFilter": {"by": "smart"}}),
+    ] {
+        let r = call(&mut app, &ctx, "ui.set", bad.clone());
+        assert_eq!(r["ok"], false, "{bad} → {r}");
+        assert_eq!((app.ui.layer_filter_by, app.ui.layer_filter_smart.len()), (FilterBy::SmartObject, 0), "{bad} changed nothing");
+    }
+}
+
 /// #5048: the Layers panel filter is drivable; a bad field changes nothing.
 #[test]
 fn ui_set_drives_the_layers_panel_filter() {
