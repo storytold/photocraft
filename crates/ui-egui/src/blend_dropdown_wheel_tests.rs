@@ -242,8 +242,8 @@ fn the_open_blend_list_shows_every_mode() {
         let (rect, clip) = painted(&h, mode).unwrap_or_else(|| panic!("{mode}: painted in the open list"));
         assert!(clip.contains_rect(rect), "{mode}: {rect:?} visible, not clipped by the list ({clip:?})");
     }
-    // Under the box, moved up to fit the window: not beside it, where it jumped to the box's
-    // other side when a longer mode widened the box.
+    // Under or over the box, in its column: not beside it, where egui's ComboBox jumped to the
+    // box's other side when a longer mode widened the box.
     let (button, list) = (dropdown(&h), entry(&h, "Normal"));
     assert!(button.x_range().contains(list.left()), "{list:?} in the column of {button:?}");
     let darken = entry(&h, "Darken").center();
