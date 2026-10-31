@@ -260,10 +260,9 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
     let Some(sets) = state.get_mut("dataSets").and_then(Value::as_array_mut) else { return };
     let mut cur = data_set_index(fields, sets.len());
 
-    // The pager mirrors with its row: the arrows swap so each still points backwards through the sets.
-    let (prev, next) = if crate::direction::is_rtl() { ("▶", "◀") } else { ("◀", "▶") };
     ui.horizontal(|ui| {
-        if ui.button(prev).clicked() && cur > 0 {
+        // The pager mirrors with its row: icon_name swaps the chevrons under RTL, so each still points backwards through the sets.
+        if crate::icons::button(ui, "chevron-left", 22.0, false, tl!("Previous data set")).clicked() && cur > 0 {
             cur -= 1;
         }
         let name = sets
@@ -282,7 +281,7 @@ fn data_sets_page(ui: &mut egui::Ui, _t: &Tokens, state: &mut Value, fields: &mu
                 &[("name", &name), ("index", &(if sets.is_empty() { 0 } else { cur + 1 }).to_string()), ("total", &sets.len().to_string())],
             )
         });
-        if ui.button(next).clicked() && cur + 1 < sets.len() {
+        if crate::icons::button(ui, "chevron-right", 22.0, false, tl!("Next data set")).clicked() && cur + 1 < sets.len() {
             cur += 1;
         }
         if ui.button(tl!("New")).clicked() {
@@ -486,8 +485,8 @@ mod tests {
         assert!((intro.right() - define.right()).abs() < 30.0, "RTL: the intro hugs the reading start: {intro:?} {define:?}");
     }
 
-    /// The data-set pager keeps prev/next at the row's reading ends: under RTL the arrows swap
-    /// with the mirrored row so each still points backwards through the sets.
+    /// The data-set pager keeps prev/next at the row's reading ends: under RTL the chevron icons
+    /// swap with the mirrored row so each still points backwards through the sets.
     #[test]
     fn the_data_set_pager_mirrors_in_a_right_to_left_ui() {
         let state = json!({
@@ -496,11 +495,11 @@ mod tests {
         });
         let pager = |dir: crate::direction::Dir| {
             let h = harness(dir, "dataSets", state.clone());
-            (h.get_by_label("◀").rect(), h.get_by_label("▶").rect())
+            (h.get_by_label("Previous data set").rect(), h.get_by_label("Next data set").rect())
         };
-        let (larr, rarr) = pager(crate::direction::Dir::Ltr);
-        assert!(larr.right() <= rarr.left(), "LTR: prev ◀ sits left of next ▶: {larr:?} {rarr:?}");
-        let (larr, rarr) = pager(crate::direction::Dir::Rtl);
-        assert!(rarr.right() >= larr.right(), "RTL: prev ▶ (swapped) sits at the reading start: {larr:?} {rarr:?}");
+        let (prev, next) = pager(crate::direction::Dir::Ltr);
+        assert!(prev.right() <= next.left(), "LTR: prev sits left of next: {prev:?} {next:?}");
+        let (prev, next) = pager(crate::direction::Dir::Rtl);
+        assert!(prev.right() >= next.right(), "RTL: prev (swapped icon) sits at the reading start: {prev:?} {next:?}");
     }
 }
