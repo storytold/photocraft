@@ -368,3 +368,21 @@ fn a_path_mode_click_opens_no_create_dialog() {
         assert_eq!(layers(&app), before, "{tool:?}: and no layer");
     }
 }
+
+/// CodeRabbit on #9456: a Path-mode click that moved a little, still within the click slop, adds
+/// nothing to the work path either. Its box would round to a 1 × 1 or 2 × 2 px outline.
+#[test]
+fn a_path_mode_click_that_moved_a_little_adds_no_subpath() {
+    let work = |app: &PhotocraftApp| app.session.active().unwrap().doc.work_path.as_ref().map_or(0, |p| p.subpaths.len());
+    for tool in [Tool::Rectangle, Tool::EllipseShape, Tool::Triangle, Tool::Polygon, Tool::Line] {
+        for end in [[20.8, 30.8], [21.8, 31.9]] {
+            let mut app = app();
+            app.ui.tool_options.shape_mode = "path".into();
+            let before = layers(&app);
+            press(&mut app, tool, [20.2, 30.2], end);
+            assert_eq!(work(&app), 0, "{tool:?} to {end:?}: no subpath");
+            assert!(app.ui.dialogs.is_empty(), "{tool:?} to {end:?}: no Create dialog");
+            assert_eq!(layers(&app), before, "{tool:?} to {end:?}: and no layer");
+        }
+    }
+}
