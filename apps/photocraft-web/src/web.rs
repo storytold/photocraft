@@ -45,7 +45,9 @@ struct ServedFonts {
 type Served = Arc<Mutex<ServedFonts>>;
 
 pub fn start() {
-    eframe::WebLogger::init(log::LevelFilter::Info).ok();
+    // `?debug` logs at debug level: which previews run on the GPU, and why not.
+    let level = if query().contains("debug") { log::LevelFilter::Debug } else { log::LevelFilter::Info };
+    eframe::WebLogger::init(level).ok();
     wasm_bindgen_futures::spawn_local(async {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");

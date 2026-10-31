@@ -74,16 +74,21 @@ fn curve_at(pts: &[[f32; 2]], t: f32) -> f32 {
     }
 }
 
-/// Shear: each row shifts horizontally by the curve through `points`
-/// (`[t, offset]`, t top→bottom, offset in half-widths).
-pub(crate) fn shear(src: &Image, out: Rect, ctx: &Ctx, points: &[[f32; 2]], undefined: UndefinedAreas) -> Vec<f32> {
-    let b = ctx.bounds;
+/// Shear's horizontal offset of each row `y0..y1` for the curve through `points` over bounds `b`.
+/// Shared with the GPU's layer operators (`separable::Warp`).
+pub(crate) fn shear_rows(points: &[[f32; 2]], b: Rect, y0: i32, y1: i32) -> Vec<f32> {
     let mut pts: Vec<[f32; 2]> = points.iter().map(|p| [p[0].clamp(0.0, 1.0), p[1].clamp(-1.0, 1.0)]).collect();
     pts.sort_by(|a, b| a[0].total_cmp(&b[0]));
     pts.dedup_by(|a, b| (a[0] - b[0]).abs() < 1e-6);
     let (bw, bh) = (b.width().max(1) as f32, b.height().max(1) as f32);
+    (y0..y1).map(|y| curve_at(&pts, (y as f32 + 0.5 - b.y0 as f32) / bh) * bw / 2.0).collect()
+}
+
+/// Shear: each row shifts horizontally by the curve through `points`
+/// (`[t, offset]`, t top→bottom, offset in half-widths).
+pub(crate) fn shear(src: &Image, out: Rect, ctx: &Ctx, points: &[[f32; 2]], undefined: UndefinedAreas) -> Vec<f32> {
     // Per-row offsets are shared by every pixel of the row.
-    let rows: Vec<f32> = (out.y0..out.y1).map(|y| curve_at(&pts, (y as f32 + 0.5 - b.y0 as f32) / bh) * bw / 2.0).collect();
+    let rows = shear_rows(points, ctx.bounds, out.y0, out.y1);
     remap(src, out, ctx, edge_of(undefined), |x, y| {
         let i = ((y - 0.5) as i32 - out.y0).clamp(0, rows.len() as i32 - 1) as usize;
         (x - rows[i], y)

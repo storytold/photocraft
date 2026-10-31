@@ -298,7 +298,7 @@ mod find_replace;
 mod presets;
 mod purge;
 
-pub(crate) use content_aware::channel_mask;
+pub use content_aware::channel_mask;
 pub use content_aware::{CafPlan, FillEdit, MAX_CAF_EDITS, MAX_CAF_POINTS, SelOp, content_aware_plan, content_aware_plan_with};
 use content_aware::{can_caf, content_aware_fill, delete_and_fill};
 pub use content_aware_scale::ContentAwareScalePreview;
