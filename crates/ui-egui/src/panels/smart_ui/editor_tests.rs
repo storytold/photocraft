@@ -103,7 +103,7 @@ fn adjustment_editor_reopens_stored_parameters_and_updates_instead_of_appending(
     super::open_editor(&mut app, &ctx, layer.0, &sm, 2);
     let id = app.ui.dialogs.last().unwrap().id;
     let fields = &mut app.ui.dialog_mut(id).unwrap().fields;
-    assert_eq!(fields["hue"], json!(35));
+    assert_eq!(fields["hue"].as_f64(), Some(35.0), "read as the engine renders it, so a float");
     assert!(crate::adjust_dialog::owns(fields));
     fields.insert("hue".into(), json!(75));
     let idx = app.session.active_index().unwrap();
@@ -184,4 +184,42 @@ fn filter_editor_starts_missing_parameters_from_defaults_not_remembered_values()
     // A plain Filter menu dialog still starts from the remembered values.
     let id = crate::filter_dialog::open(&mut app, command).unwrap();
     assert_eq!(app.ui.dialog_mut(id).unwrap().fields["reduceNoise"].as_f64(), Some(60.0));
+}
+
+/// #5689 follow-up: an adjustment re-opens with the settings it renders with, and OK sets them
+/// whole. A monochrome Channel Mixer recorded without its gray row renders Photoshop's grey mix:
+/// copying only the recorded keys showed the identity rows instead, and OK on the untouched dialog
+/// swapped the mix for the red channel. Turning Monochrome off drops the gray row, and OK must drop
+/// it from the filter too, not merge the rest over it (the old row kept overriding the red channel).
+#[test]
+fn an_adjustment_smart_filter_reopens_with_the_settings_it_renders() {
+    let (mut app, layer) = app(8, "rgb");
+    let flat = |app: &PhotocraftApp| photocraft_compose::flatten(&app.session.active().unwrap().doc).px;
+    app.run("image.adjustments.channelMixer", json!({"monochrome": true})).unwrap();
+    let index = smart(&app, layer).smart_filters.len() - 1;
+    let (before, steps) = (flat(&app), app.session.active().unwrap().history.past_len());
+    let ctx = egui::Context::default();
+
+    let sm = smart(&app, layer).clone();
+    super::open_editor(&mut app, &ctx, layer.0, &sm, index);
+    let d = app.ui.dialogs.last().expect("the adjustment dialog opened");
+    assert_eq!(d.fields["__adjust"], "channelMixer");
+    assert_eq!(d.fields["__replace"], true);
+    assert_eq!(d.fields["monochrome"], true);
+    assert_eq!(d.fields["gray"], json!([40.0, 40.0, 20.0, 0.0]), "the grey mix the filter renders");
+    let id = d.id;
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert_eq!(smart(&app, layer).smart_filters.len(), index + 1, "edited in place, not added");
+    assert_eq!(app.session.active().unwrap().history.past_len(), steps + 1);
+    assert_eq!(flat(&app), before, "OK on the untouched dialog keeps the image");
+
+    // Monochrome off, as the editor leaves it: no gray row.
+    let sm = smart(&app, layer).clone();
+    super::open_editor(&mut app, &ctx, layer.0, &sm, index);
+    let d = app.ui.dialogs.last_mut().expect("the adjustment dialog opened");
+    d.fields.insert("monochrome".into(), json!(false));
+    d.fields.remove("gray");
+    let id = d.id;
+    crate::dialogs::confirm(&mut app, id).unwrap();
+    assert!(smart(&app, layer).smart_filters[index].params.get("gray").is_none(), "the gray row went with Monochrome");
 }
