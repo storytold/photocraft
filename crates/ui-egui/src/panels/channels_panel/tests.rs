@@ -459,10 +459,10 @@ fn channel_options_popup_rows_mirror_only_under_rtl() {
     let (rtl_popup, rtl) = render(Dir::Rtl);
     let (masked, selected) = (at(&rtl, "Masked Areas").unwrap().1, at(&rtl, "Selected Areas").unwrap().1);
     assert!(rtl_popup.right() - masked.right() < slack && rtl_popup.right() - selected.right() < slack, "rtl: the labels hug the right edge: {masked:?} {selected:?} in {rtl_popup:?}");
-    assert!(glyph(&rtl, "Masked Areas", '✓') > glyph(&rtl, "Masked Areas", 'C'), "rtl: the checkmark is at the reading start of the checked row");
+    assert!(glyph(&rtl, "Masked Areas", '✔') > glyph(&rtl, "Masked Areas", 'C'), "rtl: the checkmark is at the reading start of the checked row");
     let (ltr_popup, ltr) = render(Dir::Ltr);
     let (masked, selected) = (at(&ltr, "Masked Areas").unwrap().1, at(&ltr, "Selected Areas").unwrap().1);
     assert!(selected.left() - ltr_popup.left() < slack, "ltr: the unchecked label hugs the left edge: {selected:?} in {ltr_popup:?}");
     assert!(masked.left() > selected.left(), "ltr: the checked row starts after its gutter: {masked:?} {selected:?}");
-    assert!(glyph(&ltr, "Masked Areas", '✓') < glyph(&ltr, "Masked Areas", 'C'), "ltr: the checkmark is left of the label");
+    assert!(glyph(&ltr, "Masked Areas", '✔') < glyph(&ltr, "Masked Areas", 'C'), "ltr: the checkmark is left of the label");
 }
