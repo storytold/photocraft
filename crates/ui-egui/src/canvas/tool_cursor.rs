@@ -82,6 +82,17 @@ pub(crate) fn outline(painter: &Painter, at: Pos2, rings: Vec<Vec<Vec2>>, centre
     show(painter, at, Shape::Outline { rings: rings.into(), centre })
 }
 
+/// Paints [`circle`]'s ring around `at` instead of showing it as an OS cursor bitmap, which can
+/// only sit on the pointer.
+pub(crate) fn paint_circle(painter: &Painter, at: Pos2, radius: f32) {
+    paint(painter, at, &Shape::Circle { radius, centre: false });
+}
+
+/// Paints [`outline`]'s rings around `at`, as [`paint_circle`] paints a ring.
+pub(crate) fn paint_outline(painter: &Painter, at: Pos2, rings: Vec<Vec<Vec2>>) {
+    paint(painter, at, &Shape::Outline { rings: rings.into(), centre: false });
+}
+
 /// The Pen's pointer over the anchor a click would close the path on (#4596): the centre cross
 /// with a small ring below right, as Photoshop's pen shows a small circle there.
 pub(crate) fn close_path(painter: &Painter, at: Pos2) -> CursorIcon {
