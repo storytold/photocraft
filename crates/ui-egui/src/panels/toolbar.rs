@@ -787,6 +787,7 @@ mod rtl_direction_tests {
             assert!(menu.right() - r.right() < 12.0, "row hugs the reading start (right): {r:?} in {menu:?}");
         }
         let label_x = texts.iter().find(|(_, s)| s == tl!("Standard Screen Mode")).map(|(x, _)| *x).expect("the Standard row label");
+        eprintln!("DEBUG menu={menu:?} rows={rows:?} texts={texts:?}");
         assert!(label_x > menu.center().x, "the label leads from the right: {label_x} in {menu:?}");
     }
 
