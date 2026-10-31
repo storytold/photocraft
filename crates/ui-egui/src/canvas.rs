@@ -716,7 +716,9 @@ fn handle_dialog_canvas_input(app: &mut PhotocraftApp, input: DialogCanvasInput<
             }
         }
     } else if picking && let Some(p) = crate::dialogs::free_pointer_over(input.ctx, input.rect) {
-        if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+        // The dialogs' eyedroppers (Levels, Curves, a colour picker's) swap the pipette for the
+        // precise crosshair with caps lock too, as the Eyedropper tool does (#9836).
+        if precise_other_cursor(app) {
             input.ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         } else {
             input.ctx.set_cursor_icon(pipette_cursor(input.ctx, p));
@@ -1315,6 +1317,15 @@ fn paint_primary_overlays(app: &mut PhotocraftApp, ui: &mut egui::Ui, view: &mut
     draw_canvas_tool_cursor(app, ui, input, resizing);
 }
 
+/// An eyedropper owns the image: a dialog's (Levels, Curves, Replace Color, a colour picker's)
+/// or a Properties Levels/Curves one. It sets the cursor itself.
+fn eyedropper_owns_image(app: &PhotocraftApp) -> bool {
+    crate::adjust_dialog::picker_armed(app)
+        || crate::filter_dialog::color_eyedropper_armed(app)
+        || crate::color_picker_ui::top(app).is_some()
+        || crate::layer_picker::armed(app).is_some()
+}
+
 fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &CanvasOverlayInput<'_>, resizing: bool) {
     let ctx = input.ctx;
     let xf = input.xf;
@@ -1331,6 +1342,9 @@ fn draw_canvas_tool_cursor(app: &mut PhotocraftApp, ui: &mut egui::Ui, input: &C
     });
     if panning {
         // The fist set with the pan above stays (#2196).
+    } else if tool == app.ui.tool && eyedropper_owns_image(app) {
+        // The eyedropper set its own cursor; the tool's isn't drawn over it (#9836). A held
+        // Space or zoom key (another `tool`) still shows its own.
     } else if crate::tool_cursor::pointer_elsewhere(ctx, &crate::panel_docking::native_viewports(app, ctx)) {
         // The pointer is over a floating panel's own window; this window's last position of
         // it is stale, so no tool cursor or brush outline is painted at it.
@@ -1700,7 +1714,8 @@ fn layer_picker_eyedropper(app: &mut PhotocraftApp, ui: &egui::Ui, ctx: &egui::C
     if response.hovered()
         && let Some(p) = ui.input(|i| i.pointer.hover_pos())
     {
-        if app.session.prefs().cursors.other == photocraft_engine::prefs::OtherCursor::Precise {
+        // Caps lock swaps the pipette and the precise crosshair, as everywhere (#9836).
+        if precise_other_cursor(app) {
             ctx.set_cursor_icon(egui::CursorIcon::Crosshair);
         } else {
             ctx.set_cursor_icon(pipette_cursor(ctx, p));

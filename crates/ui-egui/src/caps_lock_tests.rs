@@ -154,3 +154,57 @@ fn caps_lock_swaps_the_other_cursors_between_their_icon_and_the_crosshair() {
         assert_eq!(fp(&h), standard, "{tool:?}: releasing caps lock restores the icon");
     }
 }
+
+/// #9836: an armed Levels or Curves eyedropper (and the dialogs' other pickers) shows its own
+/// cursor alone, not with the tool's drawn over it, and takes caps lock's precise crosshair as
+/// well, as in Photoshop, instead of only following the preference.
+#[test]
+fn caps_lock_gives_the_curves_eyedroppers_the_precise_crosshair() {
+    let mut h = capslock_harness();
+    // A tool whose own cursor ignores caps lock, so only the eyedropper can answer it.
+    h.state_mut().ui.tool = Tool::Move;
+    let id = crate::adjust_dialog::open(h.state_mut(), "image.adjustments.curves").unwrap();
+    let base = h.state_mut().ui.dialog_mut(id).map(|d| crate::filter_dialog::params_of(&d.fields)).unwrap();
+    let dialog = h.state_mut().ui.dialog_mut(id).unwrap();
+    dialog.fields.insert("__curvePicker".into(), json!("black"));
+    dialog.fields.insert("__curvePickerBase".into(), base);
+    assert!(crate::adjust_dialog::picker_armed(h.state()), "the black-point eyedropper is armed");
+    h.run_steps(3);
+    other(&mut h, "standard");
+    let standard = fp(&h);
+    assert_eq!(standard.icon, CursorIcon::None, "the drawn pipette, not the Move tool's arrow over it");
+    other(&mut h, "precise");
+    let precise = fp(&h);
+    assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
+    assert_ne!(standard, precise, "Standard: the pipette");
+    other(&mut h, "standard");
+    caps(&mut h, true);
+    assert_eq!(fp(&h), precise, "caps lock turns the pipette into the precise crosshair");
+    other(&mut h, "precise");
+    assert_eq!(fp(&h), standard, "and the precise crosshair back into the pipette");
+    caps(&mut h, false);
+    assert_eq!(fp(&h), precise, "releasing caps lock restores the preference");
+}
+
+/// #9836: the same for a Properties Levels or Curves eyedropper (layer_picker.rs).
+#[test]
+fn caps_lock_gives_the_properties_eyedroppers_the_precise_crosshair() {
+    let mut h = capslock_harness();
+    h.state_mut().ui.tool = Tool::Move;
+    h.state_mut().run("layer.newAdjustmentLayer.curves", json!({})).unwrap();
+    let layer = h.state().session.active().unwrap().active_layer.unwrap();
+    h.state_mut().ui.layer_picker = Some(crate::layer_picker::LayerPicker { layer: layer.0, point: "black".into(), tool: Tool::Move });
+    assert!(crate::layer_picker::armed(h.state()).is_some(), "the Properties black-point eyedropper is armed");
+    h.run_steps(3);
+    other(&mut h, "standard");
+    let standard = fp(&h);
+    assert_eq!(standard.icon, CursorIcon::None, "the drawn pipette, not the Move tool's arrow over it");
+    other(&mut h, "precise");
+    let precise = fp(&h);
+    assert_eq!(precise.icon, CursorIcon::Crosshair, "Precise: the crosshair");
+    other(&mut h, "standard");
+    caps(&mut h, true);
+    assert_eq!(fp(&h), precise, "caps lock turns the pipette into the precise crosshair");
+    caps(&mut h, false);
+    assert_eq!(fp(&h), standard, "releasing caps lock restores the pipette");
+}
