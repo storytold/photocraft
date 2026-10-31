@@ -273,6 +273,179 @@ mod web_playback_tests {
         h
     }
 
+    fn sliced_app() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 16})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 16, 16], "name": "left"})).unwrap();
+        app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "right"})).unwrap();
+        app
+    }
+
+    type Downloads = std::rc::Rc<std::cell::RefCell<Vec<(String, Vec<u8>)>>>;
+
+    fn capture_downloads(app: &mut PhotocraftApp) -> Downloads {
+        let files = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let captured = files.clone();
+        app.services.write = Some(Box::new(move |path, bytes| {
+            captured.borrow_mut().push((path.to_string(), bytes.to_vec()));
+            Ok(())
+        }));
+        files
+    }
+
+    fn click_preview(h: &mut Harness<'static, (PhotocraftApp, Map<String, Value>)>, at: egui::Pos2, modifiers: egui::Modifiers) {
+        // Queue these in one frame; Harness::event would give each event its own frame.
+        h.input_mut().events.extend([
+            egui::Event::ModifiersChanged(modifiers),
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers },
+        ]);
+        h.step();
+        h.input_mut().events.push(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers });
+        h.step();
+    }
+
+    /// Pointer and keyboard selection reach the encoder; partial HTML keeps its layout.
+    #[test]
+    fn save_for_web_exports_the_selected_slices() {
+        let mut app = sliced_app();
+        let id = open_web(&mut app);
+        let mut fields = app.ui.dialog_mut(id).unwrap().fields.clone();
+        fields.extend(serde_json::from_value::<Map<String, Value>>(json!({"format": "png24", "__view": "original", "html": false})).unwrap());
+        let mut h = harness(app, fields);
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Slices").click();
+        h.run_steps(2);
+        h.get_by_label("Selected Slices").click();
+        h.run_steps(2);
+        let r = h.state().1["__previewRects"][0].as_array().unwrap();
+        let pane = egui::Rect::from_min_max(
+            egui::pos2(r[0].as_f64().unwrap() as f32, r[1].as_f64().unwrap() as f32),
+            egui::pos2(r[2].as_f64().unwrap() as f32, r[3].as_f64().unwrap() as f32),
+        );
+        let scale = (pane.width() / 32.0).min(pane.height() / 16.0);
+        click_preview(&mut h, pane.center() - egui::vec2(8.0 * scale, 0.0), egui::Modifiers::NONE);
+        assert_eq!(h.state().1["__selectedSlices"], json!([1]));
+        click_preview(&mut h, pane.center() + egui::vec2(8.0 * scale, 0.0), egui::Modifiers::SHIFT);
+        assert_eq!(h.state().1["__selectedSlices"], json!([1, 2]));
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Slices").focus();
+        h.run_steps(2);
+        h.key_press(egui::Key::Tab);
+        h.run_steps(2);
+        assert!(h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "01: left").is_focused());
+        h.key_press(egui::Key::Space);
+        h.run_steps(2);
+        assert_eq!(h.state().1["__selectedSlices"], json!([2]));
+        let downloads = capture_downloads(&mut h.state_mut().0);
+        for html in [false, true] {
+            for (mode, count) in [("selected", 1), ("all", 2)] {
+                h.state_mut().1.insert("slices".into(), json!(mode));
+                h.state_mut().1.insert("html".into(), json!(html));
+                let mut p = web::web_params(&h.state().1, &h.state().0.session.active().unwrap().doc).unwrap();
+                p["dir"] = json!(".");
+                download_for_web(&mut h.state_mut().0, p).unwrap();
+                let files = downloads.borrow();
+                assert_eq!(files.iter().filter(|(path, _)| path.ends_with(".png")).count(), count);
+                if mode == "selected" {
+                    assert!(files.iter().any(|(path, _)| path.ends_with("right.png")));
+                    assert!(!files.iter().any(|(path, _)| path.ends_with("left.png")));
+                    if html {
+                        let page = std::str::from_utf8(&files.iter().find(|(path, _)| path.ends_with(".html")).unwrap().1).unwrap();
+                        assert!(page.contains("<tr>\n\t\t<td></td>\n\t\t<td>\n\t\t\t<img src=\"right.png\""), "keep the empty left column");
+                    }
+                }
+                drop(files);
+                downloads.borrow_mut().clear();
+            }
+        }
+    }
+
+    /// Reject collapsed selected images before writing any part of the export.
+    #[test]
+    fn save_for_web_rejects_selected_images_that_shrink_to_zero() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 100, "height": 10})).unwrap();
+        app.run("slice.new", json!({"rect": [0, 0, 99, 10], "name": "wide"})).unwrap();
+        app.run("slice.new", json!({"rect": [99, 0, 1, 10], "name": "thin"})).unwrap();
+        let downloads = capture_downloads(&mut app);
+        let mut fields: Map<String, Value> =
+            serde_json::from_value(json!({"format": "png24", "slices": "selected", "__selectedSlices": [1, 2], "percent": 10})).unwrap();
+        for html in [false, true] {
+            fields.insert("html".into(), json!(html));
+            let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
+            p["dir"] = json!(".");
+            assert!(download_for_web(&mut app, p).is_err(), "a selected image becomes zero pixels wide");
+            assert!(downloads.borrow().is_empty(), "validate before writing the wide slice");
+            assert!(app.session.file_menu.last_web.is_none());
+        }
+        fields.insert("html".into(), json!(false));
+        for (mode, percent, count) in [("selected", 100, 2), ("all", 10, 1)] {
+            fields.insert("slices".into(), json!(mode));
+            fields.insert("percent".into(), json!(percent));
+            let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
+            p["dir"] = json!(".");
+            download_for_web(&mut app, p).unwrap();
+            assert_eq!(downloads.borrow().len(), count, "{mode}: {percent}%");
+            downloads.borrow_mut().clear();
+        }
+    }
+
+    /// Text-only selections need HTML, including when the checkbox has not rendered.
+    #[test]
+    fn save_for_web_no_image_selection_needs_html() {
+        fn deny(_: &str, p: &Value) -> photocraft_engine::Result<()> {
+            assert_eq!(p["html"], true, "authorize the same default used by the exporter");
+            Err(photocraft_engine::EngineError::Other("export denied".into()))
+        }
+        let mut app = sliced_app();
+        app.run("slice.new", json!({"rect": [0, 0, 32, 16], "kind": "noImage", "cellText": "Text"})).unwrap();
+        app.services.file_dialog = Some(Box::new(|_, _, _| panic!("invalid selection must not open a picker")));
+        let mut fields: Map<String, Value> =
+            serde_json::from_value(json!({"format": "png24", "slices": "selected", "__selectedSlices": [1], "html": false})).unwrap();
+        assert!(web_confirm(&mut app, &fields).is_err());
+        assert!(!app.file_dialog_open());
+        fields.remove("html");
+        app.session.authorize = Some(deny);
+        assert_eq!(web_confirm(&mut app, &fields).unwrap_err(), "export denied");
+        app.session.authorize = None;
+        let downloads = capture_downloads(&mut app);
+        for html in [None, Some(Value::Null), Some(json!(true)), Some(json!("true"))] {
+            fields.remove("html");
+            if let Some(html) = html {
+                fields.insert("html".into(), html);
+            }
+            let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
+            p["dir"] = json!(".");
+            download_for_web(&mut app, p).unwrap();
+            let files = downloads.borrow();
+            assert_eq!(files.len(), 1, "the dialog's default must produce HTML even before a frame renders");
+            assert!(files[0].0.ends_with(".html"));
+            assert!(std::str::from_utf8(&files[0].1).unwrap().contains("Text"));
+            drop(files);
+            downloads.borrow_mut().clear();
+        }
+        app.run("slice.new", json!({"rect": [16, 0, 16, 16], "name": "image"})).unwrap();
+        fields.insert("html".into(), json!(false));
+        fields.insert("__selectedSlices".into(), json!([1, 2]));
+        let mut p = web::web_params(&fields, &app.session.active().unwrap().doc).unwrap();
+        p["dir"] = json!(".");
+        download_for_web(&mut app, p).unwrap();
+        assert_eq!(downloads.borrow().len(), 1);
+        assert!(downloads.borrow()[0].0.ends_with("image.png"));
+    }
+
+    /// Empty, malformed and stale selections must not reach the picker or writer.
+    #[test]
+    fn save_for_web_selected_slices_need_a_selection() {
+        let mut app = sliced_app();
+        app.services.file_dialog = Some(Box::new(|_, _, _| panic!("invalid selection must not open the picker")));
+        app.services.write = Some(Box::new(|_, _| panic!("invalid selection must not write files")));
+        for selected in [json!([]), json!([0]), json!([-1]), json!(["2"]), json!([1.5]), json!([999]), json!([1, 999])] {
+            let fields = serde_json::from_value(json!({"slices": "selected", "__selectedSlices": selected})).unwrap();
+            assert!(web_confirm(&mut app, &fields).is_err());
+            assert!(!app.file_dialog_open());
+        }
+    }
+
     /// WebP (#6391): Quality until Lossless is ticked; 4-Up halves a lossy quality like JPEG's.
     #[test]
     fn webp_settings_show_quality_until_lossless() {
