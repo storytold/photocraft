@@ -1,6 +1,6 @@
 # Localization parity
 
-> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-29 · **Change:** minor (Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-12 · **Last updated:** 2026-10-31 · **Change:** minor (Brazilian Portuguese: 245 rows for the strings the sibling catalogs translate — Camera Raw panels, smart-SVG editor, layer-colour labels, themes and colour spaces, canvas messages and plurals; previously minor: Swedish, Finnish, Danish and Norwegian Bokmål UI catalogs; previously minor: Arabic UI catalog) · **Target:** Adobe Photoshop 2026
 
 Per-language status of PhotoCraft's UI. How catalogs work and how to add one:
 [`localization.md`](localization.md). Language notes: [Korean](localization-ko.md), [Spanish](localization-es.md),
