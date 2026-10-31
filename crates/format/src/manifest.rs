@@ -31,6 +31,9 @@ pub struct Manifest {
     pub thumbnail: Option<String>,
     #[serde(default)]
     pub composite: Option<String>,
+    /// The flattened document at its canvas size (absent in older files and in saves without it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub full_composite: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
