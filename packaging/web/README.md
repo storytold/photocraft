@@ -30,7 +30,36 @@ docker run -d --name photocraft-web --restart unless-stopped \
 ```
 
 Open **http://localhost:8080/**. The multi-stage `Dockerfile` builds the existing Rust/Wasm
-app with Trunk, including HEIF support, then copies only the static site into NGINX. The
+app with Trunk, including HEIF support, then copies only the static site into NGINX.
+
+### Docker Compose
+
+If you prefer Compose, run these commands from the repository root. Docker Compose builds the
+image from the local source tree, publishes port `8080`, and restarts the container unless it
+has been explicitly stopped:
+
+```sh
+docker compose up --build -d
+```
+
+Open **http://localhost:8080/** to use PhotoCraft. To check the service status and health check:
+
+```sh
+docker compose ps
+docker compose logs -f photocraft-web
+```
+
+Stop and remove the container with:
+
+```sh
+docker compose down
+```
+
+The included `compose.yaml` uses the local image name `photocraft-web:local` and maps host port
+`8080` to container port `8080`. If port 8080 is already in use, change the host side of the
+mapping (the value before the colon) in `compose.yaml`, for example `"8081:8080"`, and then
+open **http://localhost:8081/**. The first build downloads the Rust and WebAssembly toolchain
+and dependencies, so it can take several minutes. The
 runtime runs as the `nginx` user on port **8080**, with a `/healthz` endpoint and Docker
 health check. It serves precompressed gzip assets, the Wasm MIME type, immutable hashed
 assets, and an HTML page that revalidates after deployments. No Rust installation, Node.js,
