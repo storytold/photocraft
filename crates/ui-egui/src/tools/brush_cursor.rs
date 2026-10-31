@@ -312,7 +312,6 @@ mod tests {
         }
     }
 
-
     /// A stored tip (#1843) paints its preview until the preset store loads the full bitmap,
     /// which can be after the cursor first traced it: the outline is traced again then.
     #[test]
