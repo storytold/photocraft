@@ -1635,3 +1635,35 @@ fn the_source_board_of_merged_board_and_mixed_copies() {
     s.execute("edit.copy", json!({})).unwrap();
     assert_eq!(s.clipboard.as_ref().unwrap().board, None, "layers on two boards");
 }
+
+/// With a pixel selection, Copy takes the active layer only, even with several layers selected,
+/// so its source board is the active layer's (#10538 review): other selected layers on another
+/// board don't cancel it.
+#[test]
+fn a_selection_copy_takes_the_active_layers_board_whatever_else_is_selected() {
+    let (mut s, red, a, b) = two_boards();
+    let on_b = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    s.execute("layer.moveTo", json!({"layer": on_b.0, "target": b.0, "position": "into"})).unwrap();
+    s.execute("layer.select", json!({"layer": on_b.0})).unwrap();
+    s.execute("layer.select", json!({"layer": red.0, "mode": "add"})).unwrap();
+    assert_eq!(s.active().unwrap().active_layer, Some(red));
+    s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 20})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    assert_eq!(s.clipboard.as_ref().unwrap().board.map(|x| x.0), Some(a), "the active layer's board");
+}
+
+/// Copy Merged finds the board under the true middle of the copied area: two boards meeting at
+/// x = 10, and an area 9..11 wide whose middle (10) is on the right one (#10538 review).
+#[test]
+fn copy_merged_uses_the_true_middle_of_the_area() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
+    let left = s.execute("layer.new.artboard", json!({"rect": [0, 0, 10, 20], "name": "L"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    let right = s.execute("layer.new.artboard", json!({"rect": [10, 0, 10, 20], "name": "R"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    assert_ne!(left, right);
+    s.execute("select.rect", json!({"x": 9, "y": 5, "width": 2, "height": 2})).unwrap();
+    s.execute("edit.copyMerged", json!({})).unwrap();
+    let clip = s.clipboard.as_ref().unwrap();
+    assert_eq!((clip.bounds.x0, clip.bounds.x1), (9, 11));
+    assert_eq!(clip.board.map(|x| x.0), Some(right), "the middle, x = 10, is on R");
+}

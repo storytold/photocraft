@@ -314,20 +314,20 @@ fn copy(s: &mut Session, merged: bool) -> Result<Value> {
     Ok(json!({"bounds": [b.x0, b.y0, b.width(), b.height()]}))
 }
 
-/// The artboard a Copy took its pixels from (#8788): the board the copied layer sits in (every
-/// copied layer's, when several are selected), or for Copy Merged the board under the middle of
-/// the copied area. None outside boards, when the copied layers span several, or when a board
-/// itself was copied (a pasted board is placed as a board, not on another one).
+/// The artboard a Copy took its pixels from (#8788): the board the copied layers sit in (the
+/// layers Copy actually takes: every selected layer only when it copies them whole,
+/// [`multi_copy_ids`], else the active one), or for Copy Merged the board under the middle of the
+/// copied area. None outside boards, when the copied layers span several, or when a board itself
+/// was copied (a pasted board is placed as a board, not on another one).
 fn source_board(d: &crate::DocState, merged: bool, bounds: Rect) -> Option<(LayerId, Rect)> {
     let board = if merged {
-        let (cx, cy) = (bounds.x0 / 2 + bounds.x1 / 2, bounds.y0 / 2 + bounds.y1 / 2);
+        // The true middle, edges added before halving: halving each first rounds 9..11 to 9.
+        let mid = |a: i32, b: i32| i32::try_from((i64::from(a) + i64::from(b)) / 2).ok();
+        let (cx, cy) = (mid(bounds.x0, bounds.x1)?, mid(bounds.y0, bounds.y1)?);
         d.doc.artboards().into_iter().rev().find(|(_, _, b)| b.rect.contains(cx, cy)).map(|(id, _, _)| id)?
     } else {
-        let active = d.active_layer?;
-        let ids = match d.selected_layers() {
-            several if several.len() > 1 => several,
-            _ => vec![active],
-        };
+        let several = multi_copy_ids(d);
+        let ids = if several.is_empty() { vec![d.active_layer?] } else { several };
         let mut boards = ids.iter().map(|id| d.doc.layer(*id).filter(|l| l.artboard().is_none()).and_then(|_| d.doc.artboard_of(*id)));
         let first = boards.next()??;
         if !boards.all(|b| b == Some(first)) {
