@@ -4101,6 +4101,84 @@ curves	Smooth	Wygładź
 	Loose Curl	Luźny lok
 	Stylized dabs from a history state	Stylizowane plamy ze stanu historii
 	Target	Cel
+
+	Generated palette	Paleta wygenerowana
+	Palette library	Biblioteka palet
+	Search palettes…	Szukaj palet…
+	Import GPL…	Importuj GPL…
+	Import ACT…	Importuj ACT…
+	No bundled palette matches this search.	Żadna wbudowana paleta nie pasuje do tego wyszukiwania.
+	{name}  ·  {n} entries	{name}  ·  {n} wpisów
+	Use generated palette	Użyj wygenerowanej palety
+	Fixed snapshot	Stała migawka
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Wybrano wygenerowaną paletę. Wybierz wbudowaną paletę lub zaimportuj plik GPL/ACT, aby zachować kolejność w stałej migawce.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Nie wybrano stałej palety; zostanie użyta paleta domyślna silnika. Wybierz wbudowaną paletę lub zaimportuj GPL/ACT, aby przypiąć migawkę.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Zaimportowana migawka · zachowano kolejność źródłową i duplikaty
+	Algorithm	Algorytm
+	Ingredient {n}	Składnik {n}
+	Phase	Faza
+	Custom threshold matrix (0–1)	Niestandardowa macierz progowa (0–1)
+	Mapping settings are invalid: {error}	Ustawienia mapowania są nieprawidłowe: {error}
+	Mapping	Mapowanie
+	Threshold ingredients	Składniki progowe
+	Add ingredient	Dodaj składnik
+	Import matrix…	Importuj macierz…
+	Generated palette options	Opcje wygenerowanej palety
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Stała paleta jest używana tylko dla GIF/PNG-8; JPEG/PNG-24 ją ignorują.
+	Clear snapshot and choose generated palette	Wyczyść migawkę i wybierz wygenerowaną paletę
+	Palette invalid: {error}	Paleta jest nieprawidłowa: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} ma {entries} wpisów, ale ten format pozwala na {limit}, rezerwując jedno miejsce na przezroczystość.
+	{name} has {entries} entries, but this format allows {limit}.	{name} ma {entries} wpisów, ale ten format pozwala na {limit}.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Włączono zamierzoną redukcję; silnik skwantyzuje tę migawkę dla formatu bez zmiany zapisanej migawki.
+	Do not reduce (reject oversized palette)	Nie redukuj (odrzuć zbyt dużą paletę)
+	Reduce to {limit} for this conversion/export	Zredukuj do {limit} na potrzeby tej konwersji/eksportu
+	Palette reduction is enabled for this adapter.	Redukcja palety jest włączona dla tego formatu.
+	threshold matrix must be UTF-8 text	macierz progowa musi być tekstem UTF-8
+	invalid threshold value `{token}`	nieprawidłowa wartość progu `{token}`
+	threshold values must be finite and between 0 and 1	wartości progów muszą być skończone i mieścić się między 0 a 1
+	threshold matrices are limited to 256 entries	macierze progowe są ograniczone do 256 wpisów
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	macierz progowa musi być kwadratem z 2, 4, 8 lub 16 wpisami na bok
+	palette dialog was closed	okno palety zostało zamknięte
+	threshold ingredient no longer exists	składnik progowy już nie istnieje
+	Bayer	Bayer
+	Clustered Dot	Punkt skupiony
+	Floyd–Steinberg	Floyd–Steinberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Niebieski szum
+	White Noise	Biały szum
+	Riemersma	Riemersma
+	Serpentine traversal	Przebieg zygzakowaty
+	Decay	Zanikanie
+	Binary	Binarny
+	Matrix	Macierz
+	Palette source	Źródło palety
+	Generate from image	Generuj z obrazu
+	Choose a palette	Wybierz paletę
+	Find a palette for this image.	Znajdź paletę dla tego obrazu.
+	Use a built-in or imported palette.	Użyj wbudowanej lub zaimportowanej palety.
+	Generation method	Metoda generowania
+	Required colors	Wymagane kolory
+	Dithering	Rozpraszanie
+	Combine dither patterns	Połącz wzory rozpraszania
+	Preserve transparency	Zachowaj przezroczystość
+	Transparency dithering	Rozpraszanie przezroczystości
+	Resulting palette	Paleta wynikowa
+	Before	Przed
+	After	Po
+	Updating preview…	Aktualizowanie podglądu…
+	Preview is off	Podgląd jest wyłączony.
+	Move up	Przenieś w górę
+	Move down	Przenieś w dół
+	Disable	Wyłącz
+@id	filter.paletteMap	Mapowanie palety…
+	Palette Map…	Mapowanie palety…
+	Approximate preview	Przybliżony podgląd
 	Font size presets	Ustawienia wstępne rozmiaru czcionki
 	Leading presets	Ustawienia wstępne interlinii
 	Tracking presets	Ustawienia wstępne światła

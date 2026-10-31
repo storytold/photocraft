@@ -4194,6 +4194,84 @@ curves	Smooth	Згладити
 	Loose Curl	Вільний завиток
 	Stylized dabs from a history state	Стилізовані мазки зі стану історії
 	Target	Ціль
+
+	Generated palette	Створена палітра
+	Palette library	Бібліотека палітр
+	Search palettes…	Пошук палітр…
+	Import GPL…	Імпортувати GPL…
+	Import ACT…	Імпортувати ACT…
+	No bundled palette matches this search.	Вбудованих палітр за цим запитом немає.
+	{name}  ·  {n} entries	{name}  ·  записів: {n}
+	Use generated palette	Використовувати створену палітру
+	Fixed snapshot	Фіксований знімок
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Вибрано створену палітру. Виберіть вбудовану палітру або імпортуйте файл GPL/ACT, щоб закріпити знімок зі збереженням порядку.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	Фіксовану палітру не вибрано; буде використано стандартну палітру рушія. Виберіть вбудовану палітру або імпортуйте GPL/ACT, щоб закріпити знімок.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Імпортований знімок · збережено порядок джерела та дублікати
+	Algorithm	Алгоритм
+	Ingredient {n}	Компонент {n}
+	Phase	Фаза
+	Custom threshold matrix (0–1)	Власна матриця порогу (0–1)
+	Mapping settings are invalid: {error}	Параметри відображення недійсні: {error}
+	Mapping	Відображення
+	Threshold ingredients	Компоненти порогу
+	Add ingredient	Додати компонент
+	Import matrix…	Імпортувати матрицю…
+	Generated palette options	Параметри створеної палітри
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	Фіксована палітра використовується лише для GIF/PNG-8; JPEG/PNG-24 її ігнорують.
+	Clear snapshot and choose generated palette	Очистити знімок і вибрати створену палітру
+	Palette invalid: {error}	Недійсна палітра: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	У {name} {entries} записів, але цей формат допускає {limit}, залишаючи один слот для прозорості.
+	{name} has {entries} entries, but this format allows {limit}.	У {name} {entries} записів, але цей формат допускає {limit}.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	Увімкнено навмисне скорочення; рушій квантує цей знімок для формату, не змінюючи збережений знімок.
+	Do not reduce (reject oversized palette)	Не скорочувати (відхилити завелику палітру)
+	Reduce to {limit} for this conversion/export	Скоротити до {limit} для цього перетворення/експорту
+	Palette reduction is enabled for this adapter.	Для цього формату ввімкнено скорочення палітри.
+	threshold matrix must be UTF-8 text	матриця порогу має бути текстом UTF-8
+	invalid threshold value `{token}`	недійсне значення порогу `{token}`
+	threshold values must be finite and between 0 and 1	значення порогу мають бути скінченними та від 0 до 1
+	threshold matrices are limited to 256 entries	матриці порогів обмежені 256 записами
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	матриця порогу має бути квадратною, по 2, 4, 8 або 16 записів на бік
+	palette dialog was closed	діалог палітри закрито
+	threshold ingredient no longer exists	компонент порогу більше не існує
+	Bayer	Баєр
+	Clustered Dot	Кластерна крапка
+	Floyd–Steinberg	Флойд–Стейнберг
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Синій шум
+	White Noise	Білий шум
+	Riemersma	Рімерсма
+	Serpentine traversal	Змієподібний обхід
+	Decay	Згасання
+	Binary	Двійковий
+	Matrix	Матриця
+	Palette source	Джерело палітри
+	Generate from image	Створити із зображення
+	Choose a palette	Виберіть палітру
+	Find a palette for this image.	Знайти палітру для цього зображення.
+	Use a built-in or imported palette.	Використовуйте вбудовану або імпортовану палітру.
+	Generation method	Метод створення
+	Required colors	Потрібні кольори
+	Dithering	Дизеринг
+	Combine dither patterns	Поєднати шаблони дизерингу
+	Preserve transparency	Зберегти прозорість
+	Transparency dithering	Дизеринг прозорості
+	Resulting palette	Отримана палітра
+	Before	До
+	After	Після
+	Updating preview…	Оновлення попереднього перегляду…
+	Preview is off	Попередній перегляд вимкнено.
+	Move up	Перемістити вгору
+	Move down	Перемістити вниз
+	Disable	Вимкнути
+@id	filter.paletteMap	Мапа палітри…
+	Palette Map…	Мапа палітри…
+	Approximate preview	Наближений перегляд
 	Font size presets	Набори розмірів шрифту
 	Leading presets	Набори інтерліньяжу
 	Tracking presets	Набори трекінгу

@@ -244,13 +244,16 @@ const FULL_RESOLUTION_PREVIEW: &[&str] = &[
     "edit.contentAwareFill",
 ];
 
-/// Whether `command` with `params` previews at full resolution: [`FULL_RESOLUTION_PREVIEW`], every
-/// Filter Gallery filter (its strokes, grain and textures are sized in pixels; the settings are
-/// abstract levels, not lengths) and the dithered colour-mode conversions (Indexed Color, Bitmap).
+/// Whether `command` with `params` normally needs a full-resolution renderer: [`FULL_RESOLUTION_PREVIEW`],
+/// every Filter Gallery filter (its strokes, grain and textures are sized in pixels; the settings
+/// are abstract levels, not lengths), palette mapping, and dithered colour-mode conversions.
+/// Direct Palette Map live previews deliberately override this in [`preview_factor`]; Smart Filter
+/// replay keeps the full-resolution stage.
 fn full_resolution_preview(command: &str, params: &Value) -> bool {
     let choice = |key: &str| params.get(key).and_then(Value::as_str);
     FULL_RESOLUTION_PREVIEW.contains(&command)
         || command.starts_with("filter.gallery.")
+        || command == "filter.paletteMap"
         || (command == "image.mode.indexedColor" && choice("dither") != Some("none"))
         || (command == "image.mode.bitmap" && !matches!(choice("method"), Some("threshold" | "threshold50")))
 }
@@ -259,8 +262,12 @@ fn full_resolution_preview(command: &str, params: &Value) -> bool {
 /// `k`: 1 for [`full_resolution_preview`] commands, otherwise the largest factor up to `k` at which
 /// no pixel-sized parameter, divided by it, drops below the command's minimum. A clamped value
 /// would change the feature size: Pointillize's 5 px cells at k = 4 became the 3 px minimum, i.e.
-/// 12 px cells in the preview (#2063).
+/// 12 px cells in the preview (#2063). Palette Map is the exception: its mapping is pixel-bounded
+/// by the canvas request and can use the document's reduced factor at every view zoom.
 pub fn preview_factor(command: &str, params: &Value, k: u32) -> u32 {
+    if command == "filter.paletteMap" {
+        return k.max(1);
+    }
     if k <= 1 || full_resolution_preview(command, params) {
         return 1;
     }
@@ -342,6 +349,33 @@ fn rememberable(kind: &Kind, value: &Value) -> bool {
     }
 }
 
+fn palette_widget_command(command: &str) -> bool {
+    command == "filter.paletteMap"
+}
+
+fn palette_widget_field(command: &str, key: &str) -> bool {
+    palette_widget_command(command) && matches!(key, "paletteId" | "paletteSnapshot" | "mapping")
+}
+/// Schema fields owned by automation adapters rather than the stock Indexed/Save-for-Web UI.
+///
+/// The engine accepts these values so scripts can replay fixed palettes and shared mapping
+/// settings, but the generic dialog must neither manufacture nor render them.
+fn hidden_automation_field(command: &str, key: &str) -> bool {
+    matches!(command, "image.mode.indexedColor" | "file.export.saveForWebLegacy")
+        && matches!(key, "paletteId" | "paletteSnapshot" | "reducePalette" | "mapping" | "transparentIndex")
+}
+
+fn valid_palette_widget_value(key: &str, value: &Value) -> bool {
+    match key {
+        "paletteId" => value
+            .as_str()
+            .is_some_and(|id| !id.is_empty() && (id == crate::dialogs::palette_map_ui::CUSTOM_ID || photocraft_algo::palettes::builtin(id).is_some())),
+        "paletteSnapshot" => serde_json::from_value::<photocraft_algo::palette_map::Palette>(value.clone()).is_ok_and(|palette| palette.validate().is_ok()),
+        "mapping" => serde_json::from_value::<photocraft_algo::palette_map::Settings>(value.clone()).is_ok_and(|settings| settings.validate().is_ok()),
+        _ => false,
+    }
+}
+
 fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &mut Map<String, Value>) {
     let Some(Value::Object(saved)) = app.session.prefs().dialogs.get(command) else { return };
     // Select and Mask starts from its defaults unless Remember Settings was on, as in Photoshop
@@ -354,8 +388,21 @@ fn restore_remembered(app: &PhotocraftApp, command: &str, spec: &str, fields: &m
         }
     }
     for p in parse_spec(spec) {
-        if let Some(v) = saved.get(&p.key).filter(|v| rememberable(&p.kind, v)) {
-            fields.insert(p.key, v.clone());
+        if hidden_automation_field(command, &p.key) {
+            continue;
+        }
+        let valid = if palette_widget_field(command, &p.key) {
+            saved.get(&p.key).is_some_and(|value| {
+                valid_palette_widget_value(&p.key, value)
+                    && (p.key != "paletteId"
+                        || value.as_str() != Some(crate::dialogs::palette_map_ui::CUSTOM_ID)
+                        || saved.get("paletteSnapshot").is_some_and(|snapshot| valid_palette_widget_value("paletteSnapshot", snapshot)))
+            })
+        } else {
+            saved.get(&p.key).is_some_and(|value| rememberable(&p.kind, value))
+        };
+        if valid && let Some(value) = saved.get(&p.key) {
+            fields.insert(p.key, value.clone());
         }
     }
 }
@@ -366,8 +413,18 @@ pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<Stri
         return;
     }
     let Some(spec) = photocraft_engine::commands::find(command) else { return };
-    let mut saved: Map<String, Value> =
-        parse_spec(spec.params).into_iter().filter_map(|p| fields.get(&p.key).filter(|v| rememberable(&p.kind, v)).map(|v| (p.key, v.clone()))).collect();
+    let mut saved: Map<String, Value> = parse_spec(spec.params)
+        .into_iter()
+        .filter(|p| !hidden_automation_field(command, &p.key))
+        .filter_map(|p| fields.get(&p.key).filter(|v| rememberable(&p.kind, v)).map(|v| (p.key, v.clone())))
+        .collect();
+    if palette_widget_command(command) {
+        for key in ["paletteId", "paletteSnapshot", "mapping"] {
+            if let Some(value) = fields.get(key).filter(|value| valid_palette_widget_value(key, value)) {
+                saved.insert(key.into(), value.clone());
+            }
+        }
+    }
     // Select and Mask with Remember Settings off keeps only that choice, so the next one starts
     // from the defaults (#9423).
     if command == crate::select_mask_view::COMMAND {
@@ -384,6 +441,9 @@ pub(crate) fn remember(app: &mut PhotocraftApp, command: &str, fields: &Map<Stri
 
 /// Schema-default values for one param of `command` (open and Alt+Reset share this).
 fn default_value(app: &PhotocraftApp, command: &str, p: &Param) -> Option<Value> {
+    if palette_widget_field(command, &p.key) || hidden_automation_field(command, &p.key) {
+        return None;
+    }
     Some(match &p.kind {
         Kind::Range { default, .. } if command == "image.mode.indexedColor" && p.key == "colors" => json!(default.round().clamp(2.0, 256.0) as u32),
         Kind::Range { default, .. } => json!(default),
@@ -497,6 +557,9 @@ pub fn reset_fields(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
             fields.insert(p.key, v);
         }
     }
+    if command == "filter.paletteMap" {
+        crate::dialogs::palette_map_ui::ensure_filter_default(fields);
+    }
     apply_command_defaults(app, &command, fields);
     // The schema has no default for the Blur Gallery's pins: start again from the opening one.
     if crate::blur_pins::handles(&command) {
@@ -520,6 +583,9 @@ pub fn open(app: &mut PhotocraftApp, command: &str) -> Option<u64> {
         }
     }
     restore_remembered(app, command, spec.params, &mut fields);
+    if command == "filter.paletteMap" {
+        crate::dialogs::palette_map_ui::ensure_filter_default(&mut fields);
+    }
     apply_command_defaults(app, command, &mut fields);
     if crate::blur_pins::handles(command) {
         crate::blur_pins::init(app, &mut fields);
@@ -597,6 +663,9 @@ pub fn open_with_spec(app: &mut PhotocraftApp, command: &str, label: &str, spec:
     fields.insert("__preview".into(), json!(true));
     fields.insert("__spec".into(), json!(spec));
     for p in parse_spec(spec) {
+        if hidden_automation_field(command, &p.key) {
+            continue;
+        }
         let v = match &p.kind {
             Kind::Range { default, .. } => json!(default),
             Kind::Choice { options, default } => {
@@ -810,6 +879,11 @@ fn replace_color_result(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let cmd = f.get("__command").and_then(Value::as_str).unwrap_or_default().to_string();
+    if crate::dialogs::palette_map_ui::owns_command(&cmd) {
+        crate::dialogs::palette_map_ui::ensure_filter_default(f);
+        crate::dialogs::palette_map_ui::body(ui, f);
+        return;
+    }
     // Plug-in dialogs carry their own spec (from the plug-in's manifest).
     let spec = match f.get("__spec").and_then(Value::as_str) {
         Some(s) => s.to_string(),
@@ -822,6 +896,9 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         crate::select_mask_view::controls(ui, f);
     }
     for p in parse_spec(&spec) {
+        if hidden_automation_field(&cmd, &p.key) {
+            continue;
+        }
         if zoom_center::owns(&cmd, f) && matches!(p.key.as_str(), "centerX" | "centerY") {
             if p.key == "centerX" {
                 zoom_center::row(ui, f);
@@ -1177,6 +1254,21 @@ pub(crate) fn preview_document_for_target(
             }
         }
     } else {
+        // Palette Map adds a filter to a Smart Object, so its preview replays the existing stack
+        // on the proxy before adding the new stage. Keep that replay in proxy units too. A mask
+        // or channel target edits that surface directly and must not rescale the smart stack.
+        let pixel_target = params.get("target").is_none_or(|target| match target {
+            Value::String(target) => !matches!(target.as_str(), "mask" | "quickMask"),
+            _ => false,
+        });
+        if command == "filter.paletteMap"
+            && pixel_target
+            && run_k > 1
+            && let Some(layer) = params.get("layer").and_then(Value::as_u64).map(photocraft_doc::LayerId).or(active)
+            && let Some(photocraft_doc::LayerContent::Smart(sm)) = proxy.layer_mut(layer).map(|l| &mut l.content)
+        {
+            scale_smart_filter_params(sm, run_k);
+        }
         scale_preview_params(command, &mut p, run_k);
     }
     let mut s = photocraft_engine::Session::new();
@@ -1205,6 +1297,16 @@ fn is_smart_edit(command: &str) -> bool {
     matches!(command, "layer.smartFilter.setParams" | "layer.smartFilter.blendingOptions")
 }
 
+/// Scale the existing Smart Filter stack when a direct filter is previewed on its object proxy.
+fn scale_smart_filter_params(sm: &mut photocraft_doc::SmartObject, k: u32) {
+    if let Some(mask) = &mut sm.filter_mask {
+        mask.feather /= k as f32;
+    }
+    for f in &mut sm.smart_filters {
+        scale_preview_params(&f.command, &mut f.params, k);
+    }
+}
+
 /// Each stage constrains the proxy factor; an unscalable filter keeps full-resolution preview.
 pub(crate) fn smart_preview_factor(doc: &Document, command: &str, params: &Value, k: u32) -> u32 {
     if !is_smart_edit(command) {
@@ -1212,13 +1314,18 @@ pub(crate) fn smart_preview_factor(doc: &Document, command: &str, params: &Value
     }
     let Some(layer) = params.get("layer").and_then(Value::as_u64).and_then(|id| doc.layer(photocraft_doc::LayerId(id))) else { return 1 };
     let photocraft_doc::LayerContent::Smart(sm) = &layer.content else { return 1 };
-    let mut factor = sm.smart_filters.iter().fold(k, |k, f| preview_factor(&f.command, &f.params, k));
+    // A direct Palette Map preview is safely reduced, but Smart Filter replay still needs the
+    // historical full-resolution stage so editing a stack does not change its established view.
+    let stage_factor = |factor: u32, command: &str, params: &Value| {
+        if command == "filter.paletteMap" { 1 } else { preview_factor(command, params, factor) }
+    };
+    let mut factor = sm.smart_filters.iter().fold(k, |factor, f| stage_factor(factor, &f.command, &f.params));
     if command == "layer.smartFilter.setParams"
         && let Some(index) = params.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok())
         && let Some(f) = sm.smart_filters.get(index)
         && let Some(p) = params.get("params")
     {
-        factor = preview_factor(&f.command, p, factor);
+        factor = stage_factor(factor, &f.command, p);
     }
     factor
 }

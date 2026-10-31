@@ -3701,6 +3701,84 @@ curves	Smooth	매끄럽게
 	Category	카테고리
 	Target	대상
 	Units	단위
+
+	Generated palette	생성된 팔레트
+	Palette library	팔레트 라이브러리
+	Search palettes…	팔레트 검색…
+	Import GPL…	GPL 가져오기…
+	Import ACT…	ACT 가져오기…
+	No bundled palette matches this search.	이 검색과 일치하는 내장 팔레트가 없습니다.
+	{name}  ·  {n} entries	{name}  ·  {n}개 항목
+	Use generated palette	생성된 팔레트 사용
+	Fixed snapshot	고정 스냅샷
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	생성된 팔레트를 선택했습니다. 내장 팔레트를 선택하거나 GPL/ACT 파일을 가져와 순서를 보존하는 고정 스냅샷을 만드세요.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	고정 팔레트를 선택하지 않았습니다. 엔진의 기본 팔레트를 사용합니다. 내장 팔레트를 선택하거나 GPL/ACT를 가져와 스냅샷을 고정하세요.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	가져온 스냅샷 · 원본 순서와 중복 항목 유지
+	Algorithm	알고리즘
+	Ingredient {n}	성분 {n}
+	Phase	위상
+	Custom threshold matrix (0–1)	사용자 지정 임계값 행렬 (0–1)
+	Mapping settings are invalid: {error}	매핑 설정이 잘못되었습니다: {error}
+	Mapping	매핑
+	Threshold ingredients	임계값 성분
+	Add ingredient	성분 추가
+	Import matrix…	행렬 가져오기…
+	Generated palette options	생성된 팔레트 옵션
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	GIF/PNG-8에만 고정 팔레트를 사용하며 JPEG/PNG-24에서는 무시합니다.
+	Clear snapshot and choose generated palette	스냅샷을 지우고 생성된 팔레트 선택
+	Palette invalid: {error}	팔레트가 잘못되었습니다: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name}에 {entries}개 항목이 있지만 이 형식은 투명 슬롯 하나를 예약하여 {limit}개를 허용합니다.
+	{name} has {entries} entries, but this format allows {limit}.	{name}에 {entries}개 항목이 있지만 이 형식은 {limit}개를 허용합니다.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	의도적 축소가 활성화되었습니다. 엔진이 저장된 스냅샷을 변경하지 않고 이 형식에 맞게 양자화합니다.
+	Do not reduce (reject oversized palette)	축소하지 않음 (너무 큰 팔레트 거부)
+	Reduce to {limit} for this conversion/export	이 변환/내보내기를 위해 {limit}개로 축소
+	Palette reduction is enabled for this adapter.	이 형식에 대해 팔레트 축소가 활성화되었습니다.
+	threshold matrix must be UTF-8 text	임계값 행렬은 UTF-8 텍스트여야 합니다
+	invalid threshold value `{token}`	잘못된 임계값 `{token}`
+	threshold values must be finite and between 0 and 1	임계값은 유한하며 0과 1 사이여야 합니다
+	threshold matrices are limited to 256 entries	임계값 행렬은 256개 항목으로 제한됩니다
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	임계값 행렬은 한 변이 2, 4, 8 또는 16개인 정사각형이어야 합니다
+	palette dialog was closed	팔레트 대화 상자가 닫혔습니다
+	threshold ingredient no longer exists	임계값 성분이 더 이상 없습니다
+	Bayer	바이어
+	Clustered Dot	클러스터 도트
+	Floyd–Steinberg	플로이드–스타인버그
+	Sierra Lite	시에라 라이트
+	Atkinson	앳킨슨
+	Jarvis	자비스
+	Stucki	스투키
+	Sierra	시에라
+	Burkes	버크스
+	Blue Noise	청색 노이즈
+	White Noise	백색 노이즈
+	Riemersma	리머스마
+	Serpentine traversal	지그재그 순회
+	Decay	감쇠
+	Binary	이진
+	Matrix	행렬
+	Palette source	팔레트 소스
+	Generate from image	이미지에서 생성
+	Choose a palette	팔레트 선택
+	Find a palette for this image.	이 이미지에 맞는 팔레트를 찾습니다.
+	Use a built-in or imported palette.	내장 또는 가져온 팔레트를 사용합니다.
+	Generation method	생성 방법
+	Required colors	필요한 색상
+	Dithering	디더링
+	Combine dither patterns	디더 패턴 결합
+	Preserve transparency	투명도 유지
+	Transparency dithering	투명도 디더링
+	Resulting palette	결과 팔레트
+	Before	이전
+	After	이후
+	Updating preview…	미리 보기 업데이트 중…
+	Preview is off	미리 보기가 꺼져 있습니다.
+	Move up	위로 이동
+	Move down	아래로 이동
+	Disable	비활성화
+@id	filter.paletteMap	팔레트 매핑…
+	Palette Map…	팔레트 매핑…
+	Approximate preview	근사 미리 보기
 	Font size presets	글꼴 크기 사전 설정
 	Leading presets	행간 사전 설정
 	Tracking presets	자간 사전 설정

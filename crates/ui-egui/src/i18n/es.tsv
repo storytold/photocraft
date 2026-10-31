@@ -4395,6 +4395,81 @@ navigator	Zoom	Zoom
 	Tight Curl	Rizo apretado
 	Loose Curl	Rizo suelto
 	Stylized dabs from a history state	Toques estilizados desde un estado del historial
+
+	Generated palette	Paleta generada
+	Palette library	Biblioteca de paletas
+	Search palettes…	Buscar paletas…
+	Import GPL…	Importar GPL…
+	Import ACT…	Importar ACT…
+	No bundled palette matches this search.	Ninguna paleta incluida coincide con esta búsqueda.
+	{name}  ·  {n} entries	{name}  ·  {n} entradas
+	Use generated palette	Usar paleta generada
+	Fixed snapshot	Instantánea fija
+	Generated palette selected. Choose a bundled palette or import a GPL/ACT file for a fixed, order-preserving snapshot.	Paleta generada seleccionada. Elige una paleta incluida o importa un archivo GPL/ACT para fijar una instantánea que conserve el orden.
+	No fixed palette selected; the engine's default palette will be used. Choose a bundled palette or import GPL/ACT to pin a snapshot.	No se ha seleccionado una paleta fija; se usará la paleta predeterminada del motor. Elige una paleta incluida o importa GPL/ACT para fijar una instantánea.
+	#{index}: {r}, {g}, {b}	#{index}: {r}, {g}, {b}
+	Imported snapshot · source order and duplicate entries are retained	Instantánea importada · se conservan el orden original y las entradas duplicadas
+	Algorithm	Algoritmo
+	Ingredient {n}	Ingrediente {n}
+	Phase	Fase
+	Custom threshold matrix (0–1)	Matriz de umbral personalizada (0–1)
+	Mapping settings are invalid: {error}	La configuración de mapeo no es válida: {error}
+	Mapping	Mapeo
+	Threshold ingredients	Ingredientes de umbral
+	Add ingredient	Añadir ingrediente
+	Import matrix…	Importar matriz…
+	Generated palette options	Opciones de paleta generada
+	A fixed palette is used for GIF/PNG-8 only; JPEG/PNG-24 ignore it.	La paleta fija solo se usa para GIF/PNG-8; JPEG/PNG-24 la ignoran.
+	Clear snapshot and choose generated palette	Borrar instantánea y elegir paleta generada
+	Palette invalid: {error}	Paleta no válida: {error}
+	{name} has {entries} entries, but this format allows {limit} with one transparency slot reserved.	{name} tiene {entries} entradas, pero este formato permite {limit} con una ranura reservada para transparencia.
+	{name} has {entries} entries, but this format allows {limit}.	{name} tiene {entries} entradas, pero este formato permite {limit}.
+	Intentional reduction enabled; the engine will quantize this snapshot for the adapter without changing the saved snapshot.	La reducción intencionada está activada; el motor cuantizará esta instantánea para el formato sin cambiar la instantánea guardada.
+	Do not reduce (reject oversized palette)	No reducir (rechazar paleta demasiado grande)
+	Reduce to {limit} for this conversion/export	Reducir a {limit} para esta conversión/exportación
+	Palette reduction is enabled for this adapter.	La reducción de paleta está activada para este formato.
+	threshold matrix must be UTF-8 text	la matriz de umbral debe ser texto UTF-8
+	invalid threshold value `{token}`	valor de umbral no válido `{token}`
+	threshold values must be finite and between 0 and 1	los valores de umbral deben ser finitos y estar entre 0 y 1
+	threshold matrices are limited to 256 entries	las matrices de umbral están limitadas a 256 entradas
+	threshold matrix must be a square of 2, 4, 8, or 16 entries per side	la matriz de umbral debe ser cuadrada, con 2, 4, 8 o 16 entradas por lado
+	palette dialog was closed	el diálogo de paleta se cerró
+	threshold ingredient no longer exists	el ingrediente de umbral ya no existe
+	Bayer	Bayer
+	Clustered Dot	Punto agrupado
+	Floyd–Steinberg	Floyd–Steinberg
+	Sierra Lite	Sierra Lite
+	Atkinson	Atkinson
+	Jarvis	Jarvis
+	Stucki	Stucki
+	Sierra	Sierra
+	Burkes	Burkes
+	Blue Noise	Ruido azul
+	White Noise	Ruido blanco
+	Riemersma	Riemersma
+	Serpentine traversal	Recorrido serpenteante
+	Decay	Decaimiento
+	Binary	Binario
+	Matrix	Matriz
+	Palette source	Fuente de paleta
+	Generate from image	Generar a partir de la imagen
+	Choose a palette	Elegir una paleta
+	Find a palette for this image.	Buscar una paleta para esta imagen.
+	Use a built-in or imported palette.	Usar una paleta incluida o importada.
+	Generation method	Método de generación
+	Required colors	Colores necesarios
+	Dithering	Tramado
+	Combine dither patterns	Combinar patrones de tramado
+	Preserve transparency	Conservar la transparencia
+	Transparency dithering	Tramado de transparencia
+	Resulting palette	Paleta resultante
+	Updating preview…	Actualizando la vista previa…
+	Preview is off	La vista previa está desactivada.
+	Move up	Mover arriba
+	Move down	Mover abajo
+@id	filter.paletteMap	Mapa de paleta…
+	Palette Map…	Mapa de paleta…
+	Approximate preview	Vista previa aproximada
 	Font size presets	Valores predefinidos de tamaño de fuente
 	Leading presets	Valores predefinidos de interlineado
 	Tracking presets	Valores predefinidos de tracking

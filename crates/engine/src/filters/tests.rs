@@ -513,3 +513,113 @@ fn displace_on_a_smart_object_embeds_its_map() {
     let LayerContent::Smart(sm) = &d.doc.layer(d.active_layer.unwrap()).unwrap().content else { panic!("not a smart object") };
     assert_eq!(first_value(&sm.smart_filters[1].params), 0.0, "the black map, not the passed-back white one");
 }
+
+#[test]
+fn palette_map_filter_uses_one_undo_step_and_last_filter_replay() {
+    let mut s = session();
+    paint_pattern(&mut s);
+    let before = active_pixels(&s);
+    let past = s.active().unwrap().history.past_len();
+    let params = json!({
+        "paletteSnapshot": {"name": "binary", "colors": [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]},
+        "mapping": {"method": "none"},
+    });
+    s.execute(crate::palette_cmds::FILTER_ID, params).unwrap();
+    let first = active_pixels(&s);
+    assert_ne!(first, before);
+    assert_eq!(s.active().unwrap().history.past_len(), past + 1);
+    s.execute("filter.lastFilter", json!({})).unwrap();
+    assert_eq!(active_pixels(&s), first);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(active_pixels(&s), first);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(active_pixels(&s), before);
+}
+
+#[test]
+fn palette_map_invalid_snapshot_has_no_mutation() {
+    let mut s = session();
+    paint_pattern(&mut s);
+    let before = active_pixels(&s);
+    let past = s.active().unwrap().history.past_len();
+    let error = s.execute(crate::palette_cmds::FILTER_ID, json!({"paletteSnapshot": {"name": "bad", "colors": [[2.0, 0.0, 0.0]]}})).unwrap_err();
+    assert!(error.to_string().contains("paletteSnapshot"));
+    assert_eq!(active_pixels(&s), before);
+    assert_eq!(s.active().unwrap().history.past_len(), past);
+}
+
+#[test]
+fn palette_map_smart_filter_snapshot_roundtrips_through_pcraft() {
+    let mut s = session();
+    paint_pattern(&mut s);
+    let base = {
+        let active = s.active().unwrap();
+        active.doc.layer(active.active_layer.unwrap()).unwrap().surface().unwrap().clone()
+    };
+    s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+    s.execute(
+        crate::palette_cmds::FILTER_ID,
+        json!({
+            "paletteId": "gimp:does-not-exist",
+            "paletteSnapshot": {"name": "binary", "colors": [[0.0, 0.0, 0.0], [1.0, 1.0, 1.0]]},
+            "mapping": {"method": "none"},
+        }),
+    )
+    .unwrap();
+    let layer = s.active().unwrap().active_layer.unwrap();
+    let original = s.active().unwrap().doc.clone();
+    let expected = original.layer(layer).unwrap().surface().unwrap().read_region(original.bounds());
+    let bytes = photocraft_format::save_to_bytes(&original, &Default::default()).unwrap();
+    let reopened = photocraft_format::load_from_bytes(&bytes).unwrap();
+    let LayerContent::Smart(sm) = &reopened.layer(layer).unwrap().content else {
+        panic!("reopened palette map document is not a smart object");
+    };
+    // Re-render from the unfiltered source, not the saved cache. The catalog ID is absent,
+    // so only the persisted palette snapshot can reproduce these pixels.
+    let replayed = crate::smart_cmds::apply_smart_filters(&base, sm, reopened.bounds()).unwrap();
+    assert_eq!(replayed.read_region(reopened.bounds()), expected);
+
+    let mut stack = sm.clone();
+    stack.smart_filters.push(photocraft_doc::SmartFilter {
+        command: crate::palette_cmds::FILTER_ID.into(),
+        params: json!({"paletteSnapshot": {"name": "Red", "colors": [[1.0, 0.0, 0.0]]}, "mapping": {"method": "none"}}),
+        blend: photocraft_color::BlendMode::Normal,
+        opacity: 0.5,
+        visible: true,
+    });
+    let stacked = crate::smart_cmds::apply_smart_filters(&base, &stack, reopened.bounds()).unwrap();
+    for (before, after) in replayed.read_region(reopened.bounds()).chunks_exact(4).zip(stacked.read_region(reopened.bounds()).chunks_exact(4)) {
+        for channel in 0..3 {
+            let red = if channel == 0 { 1.0 } else { 0.0 };
+            assert!((after[channel] - (before[channel] + red) * 0.5).abs() <= 1.0 / 255.0);
+        }
+        assert_eq!(after[3], before[3]);
+    }
+}
+
+#[test]
+fn palette_map_rgb_profile_roundtrips_through_srgb_kernel() {
+    use photocraft_cms::{Builtin, Intent, Transform};
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 1, "height": 1})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let source = [0.6, 0.4, 0.3];
+    s.edit("profile", |doc, active| {
+        doc.icc_profile = Some(Builtin::DisplayP3.profile().to_bytes());
+        doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().write_pixel(0, 0, &[source[0], source[1], source[2], 1.0]);
+        Ok(())
+    })
+    .unwrap();
+    let mut srgb = [0.0; 16];
+    Transform::new(Builtin::DisplayP3.profile(), Builtin::Srgb.profile(), Intent::RelativeColorimetric, true).unwrap().eval(&source, &mut srgb);
+    s.execute(
+        crate::palette_cmds::FILTER_ID,
+        json!({"paletteSnapshot": {"name": "exact", "colors": [srgb[..3].to_vec(), [0.0, 0.0, 0.0]]}, "mapping": {"method": "none"}}),
+    )
+    .unwrap();
+    let d = s.active().unwrap();
+    let got = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().read_region(d.doc.bounds());
+    for (actual, expected) in got[..3].iter().zip(source) {
+        assert!((actual - expected).abs() < 0.025, "CMS roundtrip changed {actual} vs {expected}");
+    }
+}
