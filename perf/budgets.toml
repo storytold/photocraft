@@ -781,3 +781,21 @@ issue = 9329
 bench = "perf_scenarios"
 row = "fill a 2 % selection on a full-canvas 24 MP layer + refresh"
 enforce = false  # new; no baseline yet
+
+[[scenario]]
+id = "P83"
+title = "Filter dialog preview publish at k 1, 36 MP (display + texels)"
+issue = 5772
+bench = "interactive_bench"
+row = "filter preview publish, k 1 (display + texels)"
+budget_ms = 16
+enforce = false  # 64 ms measured 2026-10-24 (worst step, RTX 4090 Laptop): the whole result is converted
+
+[[scenario]]
+id = "P84"
+title = "Filter dialog preview window texture at k 1, 36 MP"
+issue = 5772
+bench = "interactive_bench"
+row = "filter preview window texture, k 1"
+budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 3.2 ms, 2026-10-24); enforced once the nightly's machine class has a baseline

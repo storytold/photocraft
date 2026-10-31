@@ -397,3 +397,15 @@ fn shaders_validate() {
             .unwrap_or_else(|e| panic!("{name}: {e:?}"));
     }
 }
+
+/// The public `texels` serves the canvas's two formats only: another format's texels would
+/// have the wrong layout and length (#8848).
+#[test]
+fn texels_refuse_formats_the_canvas_does_not_use() {
+    let px = [[1.0, 0.5, 0.0, 0.5]];
+    assert_eq!(texels(FORMAT, &px), Some(vec![128, 64, 0, 128]));
+    assert_eq!(texels(FORMAT_HIGH, &px).map(|t| t.len()), Some(8));
+    for other in [wgpu::TextureFormat::Bgra8Unorm, wgpu::TextureFormat::Rgba32Float, wgpu::TextureFormat::Rgba8UnormSrgb] {
+        assert_eq!(texels(other, &px), None, "{other:?}");
+    }
+}
