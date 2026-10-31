@@ -175,8 +175,8 @@ pub(super) fn row(
                         if resp.clicked() {
                             chosen_user = Some(contour_param(u));
                         }
-                        resp.context_menu(|ui| {
-                            if ui.button(tl!("Delete Contour")).clicked() {
+                        crate::menus::context_menu(&resp, |ui| {
+                            if crate::menu_keys::menu_row(ui, tl!("Delete Contour"), None, false, true).clicked() {
                                 delete = Some(name.clone());
                                 ui.close();
                             }
@@ -190,13 +190,13 @@ pub(super) fn row(
             ui.separator();
             // The actions read from the reading start: right-aligned in a right-to-left UI.
             ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
-                if ui.button(tl!("Load Contours…")).clicked() {
+                if crate::menu_keys::menu_row(ui, tl!("Load Contours…"), None, false, true).clicked() {
                     act = Some(Act::Load);
                 }
-                if ui.button(tl!("Replace Contours…")).clicked() {
+                if crate::menu_keys::menu_row(ui, tl!("Replace Contours…"), None, false, true).clicked() {
                     act = Some(Act::Replace);
                 }
-                if ui.add_enabled(!user.is_empty(), egui::Button::new(tl!("Save Contours…"))).clicked() {
+                if crate::menu_keys::menu_row(ui, tl!("Save Contours…"), None, false, !user.is_empty()).clicked() {
                     act = Some(Act::Save);
                 }
             });
