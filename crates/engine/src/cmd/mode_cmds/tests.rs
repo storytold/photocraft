@@ -850,6 +850,32 @@ fn color_table_rejects_an_invalid_transparent_index_without_editing() {
     assert_eq!(doc(&s).color_table.as_ref().unwrap().transparent, Some(0));
 }
 
+/// #7278 review: rotating the canvas turns a type layer whose font is missing as the pixels it
+/// shows, as Free Transform does, instead of setting it again in a substitute font.
+#[test]
+fn rotate_arbitrary_turns_a_missing_font_type_layer_as_its_pixels() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 40, "height": 20})).unwrap();
+    let r = s.execute("type.create", json!({"x": 2, "y": 10, "text": "Hi", "size": 8, "font": "NoSuchFamily7278"})).unwrap();
+    let id = LayerId(r["layer"].as_u64().unwrap());
+    // The pixels a PSD brings, set in the real font: a block the fallback face would never draw.
+    s.edit("psd pixels", |doc, _| {
+        let LayerContent::Text(t) = &mut doc.layer_mut(id).unwrap().content else { panic!() };
+        let mut c = Surface::new(t.cache.as_ref().unwrap().format());
+        c.fill_rect(Rect::new(20, 4, 30, 10), &[1.0, 0.0, 0.0, 1.0]);
+        t.cache = Some(c);
+        Ok(())
+    })
+    .unwrap();
+    s.execute("image.rotation.arbitrary", json!({"angle": 90, "direction": "cw"})).unwrap();
+    let d = doc(&s);
+    let LayerContent::Text(t) = &d.layer(id).unwrap().content else { panic!("still a type layer") };
+    // 40 x 20 turns to 20 x 40: (x, y) lands on (20 - y, x).
+    let c = t.cache.as_ref().unwrap();
+    assert!(c.pixel(13, 25)[0] > 0.99, "the block turned with the canvas: {:?}", c.pixel(13, 25));
+    assert!(Rect::new(9, 19, 17, 31).contains_rect(&c.content_bounds()), "nothing else is drawn: {:?}", c.content_bounds());
+}
+
 /// A white 16×16 document in Indexed Color with the two-entry black/white table (#8669's repro).
 fn black_white_indexed(transparency: bool) -> Session {
     let mut s = Session::new();

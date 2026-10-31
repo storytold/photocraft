@@ -136,8 +136,10 @@ pub(crate) fn rotate_arbitrary(s: &mut Session, p: &Value) -> Result<Value> {
         if let Some(sel) = &doc.selection {
             doc.selection = Some(crate::transform_cmds::warp_gray(sel, &h, Interp::Bilinear)?).filter(|s| !s.content_bounds().is_empty());
         }
-        // Type, shapes and smart objects re-render from their new geometry.
-        crate::canvas_geom::refresh(doc, crate::canvas_geom::Refresh::All);
+        // Type, shapes and smart objects re-render from their new geometry, as after Free
+        // Transform: type whose font is missing keeps the pixels just turned (#7278).
+        let snapshot = doc.clone();
+        doc.layers.iter_mut().for_each(|l| crate::transform_cmds::refresh_text(&snapshot, l));
         doc.guides = Default::default();
         Ok(new)
     })?;

@@ -84,6 +84,19 @@ pub fn parse_tysh(data: &[u8]) -> Option<TySh> {
 /// `tysh` moved by (`dx`, `dy`): only the transform's translation changes. The text, its styles,
 /// the warp and the trailing bounds (which are in text space) stay byte for byte, so a moved
 /// Photoshop type layer keeps everything Photoshop wrote. `None` when the block is too short.
+/// `tysh` with its transform set to `m`: the text, its styles, the warp and the trailing bounds
+/// (all in text space) stay byte for byte, so a type layer transformed as pixels (its font
+/// missing) keeps the boxes the file measured with the real font. `None` when the block is too
+/// short.
+pub fn retransform_tysh(tysh: &[u8], m: &Affine) -> Option<Vec<u8>> {
+    let mut out = tysh.to_vec();
+    // Version (2 bytes), then xx, xy, yx, yy, tx, ty as big-endian f64.
+    for (i, v) in m.m.iter().enumerate() {
+        out.get_mut(2 + i * 8..10 + i * 8)?.copy_from_slice(&v.to_be_bytes());
+    }
+    Some(out)
+}
+
 pub fn translate_tysh(tysh: &[u8], dx: f64, dy: f64) -> Option<Vec<u8>> {
     let mut out = tysh.to_vec();
     // Version (2 bytes), then xx, xy, yx, yy, tx, ty as big-endian f64: tx at 34, ty at 42.
