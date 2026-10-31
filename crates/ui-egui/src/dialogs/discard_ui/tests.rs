@@ -183,7 +183,7 @@ fn exit_is_held_back_until_confirmed() {
 
 #[test]
 fn mnemonic_labels_bracket_the_key() {
-    assert_eq!(button_label(false, "Don't Save", Some(Key::D)), "(D)on't Save");
+    assert_eq!(button_label(false, "Don't Save", Some(Key::D)), "Don't Save");
     assert_eq!(button_label(false, "Guardar", Some(Key::S)), "Guardar (S)");
     assert_eq!(button_label(false, "保存", Some(Key::S)), "保存 (S)");
 }
@@ -252,15 +252,15 @@ fn focused<'a>(h: &Prompted, labels: &[&'a str]) -> Option<&'a str> {
 #[test]
 fn each_question_comes_up_with_the_default_answer_focused() {
     let mut h = prompt_on(egui::os::OperatingSystem::Windows);
-    let labels = ["(Y)es", "(N)o", "(C)ancel"];
-    assert_eq!(focused(&h, &labels), Some("(Y)es"));
+    let labels = ["Yes", "No", "Cancel"];
+    assert_eq!(focused(&h, &labels), Some("Yes"));
     h.key_press(Key::ArrowRight);
     h.run_steps(2);
-    assert_eq!(focused(&h, &labels), Some("(N)o"));
+    assert_eq!(focused(&h, &labels), Some("No"));
     h.key_press(Key::Enter);
     h.run_steps(2);
     assert_eq!(docs_left(&h), Some(1), "Enter pressed No");
-    assert_eq!(focused(&h, &labels), Some("(Y)es"), "the next question starts on the default again");
+    assert_eq!(focused(&h, &labels), Some("Yes"), "the next question starts on the default again");
 
     let mut h = prompt_on(egui::os::OperatingSystem::Mac);
     let labels = ["Don't Save", "Cancel", "Save"];
@@ -274,7 +274,7 @@ fn each_question_comes_up_with_the_default_answer_focused() {
 fn windows_and_linux_ask_yes_no_cancel_with_the_default_first() {
     for os in [egui::os::OperatingSystem::Windows, egui::os::OperatingSystem::Nix] {
         let mut h = prompt_on(os);
-        let labels = ["(Y)es", "(N)o", "(C)ancel"];
+        let labels = ["Yes", "No", "Cancel"];
         assert_eq!(drawn_order(&h, labels), labels, "{os:?}");
         tab_walks(&mut h, labels, 0);
         h.key_press(Key::N);
@@ -347,8 +347,8 @@ fn cancel_after_no_keeps_the_unanswered_documents_and_the_app_open() {
 fn macos_hides_mnemonics_but_other_platforms_keep_them() {
     assert_eq!(button_label(true, "Don't Save", Some(Key::D)), tl!("Don't Save"));
     assert_eq!(button_label(true, "Cancel", Some(Key::C)), tl!("Cancel"));
-    assert_eq!(button_label(false, "Don't Save", Some(Key::D)), "(D)on't Save");
-    assert_eq!(button_label(false, "Cancel", Some(Key::C)), "(C)ancel");
+    assert_eq!(button_label(false, "Don't Save", Some(Key::D)), "Don't Save");
+    assert_eq!(button_label(false, "Cancel", Some(Key::C)), "Cancel");
 }
 
 /// German "Ja" doesn't start with Y, so every button appends its key rather than mixing
@@ -356,14 +356,11 @@ fn macos_hides_mnemonics_but_other_platforms_keep_them() {
 #[test]
 fn one_dialog_shows_every_key_in_the_same_style() {
     let buttons = [("Yes", Some(Key::Y)), ("No", Some(Key::N)), ("Cancel", Some(Key::C))];
-    assert_eq!(button_labels(false, &buttons), ["(Y)es", "(N)o", "(C)ancel"]);
+    assert_eq!(button_labels(false, &buttons), [("Yes".into(), Some('Y')), ("No".into(), Some('N')), ("Cancel".into(), Some('C'))]);
     let german = crate::i18n::Lang::from_code("de").unwrap();
     crate::i18n::with_language(german, || {
-        let shown: Vec<&str> = buttons.iter().map(|(label, _)| crate::i18n::tr(german, label)).collect();
-        assert_eq!(button_labels(true, &buttons), shown);
-        let labels = button_labels(false, &buttons);
-        let appended: Vec<String> = shown.iter().zip(&buttons).map(|(text, (_, key))| format!("{text} ({})", key.map_or("", |k| k.name()))).collect();
-        assert!(labels.iter().all(|label| label.starts_with('(')) || labels == appended, "{labels:?}");
+        assert_eq!(button_labels(false, &buttons), [("Ja (Y)".into(), None), ("Nein (N)".into(), None), ("Abbrechen (C)".into(), None)]);
+        assert_eq!(button_labels(true, &buttons), [("Ja".into(), None), ("Nein".into(), None), ("Abbrechen".into(), None)]);
     });
 }
 
@@ -444,10 +441,10 @@ fn saving_from_the_prompt_waits_for_the_save_dialog_then_closes() {
     h.key_press(Key::Y);
     h.run_steps(3);
     assert!(h.state().file_dialog_open());
-    assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits behind the dialog");
+    assert!(h.query_by_label("Yes").is_none(), "the prompt waits behind the dialog");
     answer(&mut h, None);
     assert_eq!(docs_left(&h), Some(1));
-    assert_eq!(focused(&h, &["(Y)es", "(N)o", "(C)ancel"]), Some("(Y)es"), "the prompt comes back with Yes focused");
+    assert_eq!(focused(&h, &["Yes", "No", "Cancel"]), Some("Yes"), "the prompt comes back with Yes focused");
     // Saving closes the document.
     h.key_press(Key::Y);
     h.run_steps(3);
@@ -488,14 +485,14 @@ fn saving_from_the_prompt_waits_for_the_question_whether_to_replace() {
     };
     let id = save(&mut h);
     assert!(h.state().file_dialog_open());
-    assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits behind the question");
+    assert!(h.query_by_label("Yes").is_none(), "the prompt waits behind the question");
     assert!(written.borrow().is_empty());
 
     crate::dialogs::cancel(h.state_mut(), id).unwrap();
     h.run_steps(2);
     assert!(written.borrow().is_empty(), "Cancel writes nothing");
     assert_eq!(docs_left(&h), Some(1));
-    assert_eq!(focused(&h, &["(Y)es", "(N)o", "(C)ancel"]), Some("(Y)es"), "the prompt comes back");
+    assert_eq!(focused(&h, &["Yes", "No", "Cancel"]), Some("Yes"), "the prompt comes back");
 
     let id = save(&mut h);
     crate::dialogs::confirm(h.state_mut(), id).unwrap();
@@ -538,7 +535,7 @@ fn saving_from_the_prompt_waits_for_a_background_save_then_closes() {
     h.key_press(Key::Y);
     h.run_steps(3);
     assert!(h.state().saving());
-    assert!(h.query_by_label("(Y)es").is_none(), "the prompt waits for the save");
+    assert!(h.query_by_label("Yes").is_none(), "the prompt waits for the save");
     assert_eq!(h.state().session.documents().len(), 1, "still open while saving");
     gate.store(true, Ordering::Relaxed);
     let t = std::time::Instant::now();

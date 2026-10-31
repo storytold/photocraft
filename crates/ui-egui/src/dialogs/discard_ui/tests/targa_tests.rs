@@ -194,7 +194,7 @@ fn closing_after_a_targa_save_waits_for_targa_options() {
     h.run_steps(3);
     assert!(h.state().targa_options.is_some());
     assert_eq!(h.state().session.documents().len(), 1, "nothing closes before Targa Options saves");
-    assert!(h.query_by_label("(Y)es").is_none(), "the close prompt waits behind Targa Options");
+    assert!(h.query_by_label("Yes").is_none(), "the close prompt waits behind Targa Options");
     h.key_press(Key::Enter);
     h.run_steps(3);
     assert_eq!(writes.borrow().as_slice(), &[("kept.tga".to_string(), asked(Some(24)))]);
