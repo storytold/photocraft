@@ -167,6 +167,78 @@ impl Warp {
     }
 }
 
+/// An iris's rows: `(dy, dx0, dx1)`, inclusive.
+pub type IrisRows = Vec<(i32, i32, i32)>;
+
+/// Lens Blur as data (`blur2::lens_blur`): the iris kernels and the settings, clamped as the CPU
+/// clamps them, so another device runs exactly the CPU's Lens Blur.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Lens {
+    /// The iris at each depth level (no blur at 0, the full radius at the last): its rows
+    /// `(dy, dx0, dx1)` (inclusive) and how many pixels it covers.
+    pub levels: Vec<(IrisRows, f64)>,
+    /// Specular Highlights: the boost (Brightness / 100 × 4) above the threshold (a fraction).
+    pub boost: f32,
+    pub threshold: f32,
+    /// Where depth comes from: `None`, the layer's transparency, or a map the caller supplies
+    /// (the layer mask or an alpha channel).
+    pub depth: crate::DepthSource,
+    pub invert: bool,
+    /// Blur Focal Distance as a fraction.
+    pub focal: f32,
+    /// The noise amount (Amount / 100 × 0.25), Gaussian or uniform, monochromatic, its seed.
+    pub noise: f32,
+    pub gaussian: bool,
+    pub mono: bool,
+    pub seed: u32,
+}
+
+impl Lens {
+    /// Lens Blur's description, or `None` for another filter.
+    pub fn of(params: &FilterParams) -> Option<Self> {
+        let FilterParams::LensBlur {
+            radius,
+            blades,
+            curvature,
+            rotation,
+            depth,
+            focal_distance,
+            invert_depth,
+            brightness,
+            threshold,
+            noise,
+            distribution,
+            monochromatic,
+            seed,
+            ..
+        } = params
+        else {
+            return None;
+        };
+        if ![*radius, *curvature, *rotation, *focal_distance, *brightness, *threshold, *noise].iter().all(|v| v.is_finite()) {
+            return None;
+        }
+        let levels = crate::blur2::lens_levels(*radius, *blades, *curvature, *rotation).into_iter().map(|s| (s.rows, s.count)).collect();
+        Some(Lens {
+            levels,
+            boost: brightness.clamp(0.0, 100.0) / 100.0 * 4.0,
+            threshold: threshold.clamp(0.0, 255.0) / 255.0,
+            depth: *depth,
+            invert: *invert_depth,
+            focal: focal_distance.clamp(0.0, 255.0) / 255.0,
+            noise: noise.clamp(0.0, 100.0) / 100.0 * 0.25,
+            gaussian: matches!(distribution, crate::Distribution::Gaussian),
+            mono: *monochromatic,
+            seed: *seed,
+        })
+    }
+
+    /// How far the largest iris reaches.
+    pub fn reach(&self) -> i32 {
+        self.levels.iter().flat_map(|(rows, _)| rows.iter().map(|&(dy, a, b)| dy.abs().max(a.abs()).max(b.abs()))).max().unwrap_or(0)
+    }
+}
+
 /// The area a neighbourhood filter on a layer repeats its edge pixels at: the canvas, or past it
 /// where the layer has pixels off the canvas, as Photoshop does.
 pub fn edge_extent(canvas: Rect, content: Rect) -> Rect {
