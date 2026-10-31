@@ -1117,4 +1117,27 @@ mod rtl_tests {
         );
         assert!(rok.right() < rcur.left(), "the stack reads after the swatches: {rok:?} vs {rcur:?}");
     }
+
+    /// The component grids (HSB/RGB, Lab/CMYK) are value fields in fixed columns: they stay
+    /// physical left-to-right under RTL, so the H radio sits left of its "°" unit cell in both
+    /// directions with the same column gap.
+    #[test]
+    fn rtl_component_grids_stay_physical_ltr() {
+        use egui::accesskit::Role;
+        let geom = |dir: crate::direction::Dir| {
+            let _dir = crate::direction::direction_scope(dir);
+            let app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+            let mut h = Harness::builder().with_size(vec2(760.0, 480.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+            PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+            let _id = open(h.state_mut(), "foreground");
+            h.run_steps(4);
+            let radio = h.query_all_by_role_and_label(Role::RadioButton, "H:").next().expect("the H radio").rect();
+            let unit = h.get_by_label("°").rect();
+            (radio, unit)
+        };
+        let (lr, lu) = geom(crate::direction::Dir::Ltr);
+        let (rr, ru) = geom(crate::direction::Dir::Rtl);
+        assert!(lr.right() < lu.left() && rr.right() < ru.left(), "the radio stays left of the unit cell in both directions: {lr:?} {lu:?} vs {rr:?} {ru:?}");
+        assert!(((lu.left() - lr.right()) - (ru.left() - rr.right())).abs() < 2.0, "the same column gap in both directions: {lr:?} {lu:?} vs {rr:?} {ru:?}");
+    }
 }
