@@ -10,6 +10,7 @@
 //! result through the selection like the other Image › Adjustments commands.
 
 use photocraft_algo::tone::{self, HdrToning, MatchColor, ShadowsHighlights};
+use photocraft_doc::adjust::{LutFormat, LutSource};
 use photocraft_doc::{Adjustment, Document, Layer, LayerContent, Rect};
 use photocraft_raster::{Surface, to_rgba};
 use serde_json::{Value, json};
@@ -104,34 +105,38 @@ pub fn selective_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adj
 /// error.
 pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjustment> {
     const CMD: &str = "colorLookup";
-    let (mut name, mut lut, mut size, mut tetrahedral, mut dither) = match base {
-        Some(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither }) => (name.clone(), lut.clone(), *size, *tetrahedral, *dither),
-        _ => (String::new(), None, 0, false, false),
+    let (mut name, mut lut, mut size, mut tetrahedral, mut dither, mut source) = match base {
+        Some(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source }) => {
+            (name.clone(), lut.clone(), *size, *tetrahedral, *dither, source.clone())
+        }
+        _ => (String::new(), None, 0, false, false, None),
     };
-    let mut loaded: Option<(photocraft_cms::lutfile::LutFile, String)> = None;
+    // The parsed table, its label and (for a file) the file as loaded, which a PSD save embeds.
+    let mut loaded: Option<(photocraft_cms::lutfile::LutFile, String, Option<LutSource>)> = None;
     if let Some(id) = opt_str(CMD, p, "lut")? {
         if id == "none" || id.is_empty() {
             name.clear();
             lut = None;
             size = 0;
+            source = None;
         } else {
             let f = photocraft_cms::lutfile::builtin(id).ok_or_else(|| bad(CMD, format!("unknown look `{id}` (built-ins: {})", builtin_ids())))?;
             let label = f.title.clone();
-            loaded = Some((f, label));
+            loaded = Some((f, label, None));
         }
     }
     let file_name = opt_str(CMD, p, "fileName")?;
     if let Some(text) = opt_str(CMD, p, "data")? {
         let file_name = file_name.unwrap_or("lut.cube");
         let f = photocraft_cms::lutfile::parse(file_name, text.as_bytes()).map_err(|e| bad(CMD, e.0))?;
-        loaded = Some((f, base_name(file_name)));
+        loaded = Some((f, base_name(file_name), Some(lut_source(file_name, text.as_bytes().to_vec()))));
     }
     if let Some(path) = opt_str(CMD, p, "file")?.filter(|s| !s.is_empty()) {
         let bytes = read_file(path).ok_or_else(|| bad(CMD, format!("can't read {path}")))?;
         let f = photocraft_cms::lutfile::parse(path, &bytes).map_err(|e| bad(CMD, format!("{path}: {}", e.0)))?;
-        loaded = Some((f, base_name(path)));
+        loaded = Some((f, base_name(path), Some(lut_source(path, bytes))));
     }
-    if let Some((f, label)) = loaded {
+    if let Some((f, label, src)) = loaded {
         if !f.domain_is_default() {
             return Err(bad(
                 CMD,
@@ -144,6 +149,7 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
         name = label;
         size = f.size as u32;
         lut = Some(std::sync::Arc::new(f.data));
+        source = src;
     }
     match opt_str(CMD, p, "interpolation")? {
         None => {}
@@ -157,7 +163,17 @@ pub fn lookup_from_params(p: &Value, base: Option<&Adjustment>) -> Result<Adjust
     if let Some(b) = opt_bool(CMD, p, "dither")? {
         dither = b;
     }
-    Ok(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither })
+    Ok(Adjustment::ColorLookup { name, lut, size, tetrahedral, dither, source })
+}
+
+/// A loaded LUT file, tagged with the format [`photocraft_cms::lutfile::parse`] read it as.
+fn lut_source(file_name: &str, bytes: Vec<u8>) -> LutSource {
+    let format = match photocraft_cms::lutfile::Format::detect(file_name, &bytes) {
+        photocraft_cms::lutfile::Format::Cube => LutFormat::Cube,
+        photocraft_cms::lutfile::Format::ThreeDl => LutFormat::ThreeDl,
+        photocraft_cms::lutfile::Format::Look => LutFormat::Look,
+    };
+    LutSource { format, bytes: std::sync::Arc::new(bytes) }
 }
 
 fn builtin_ids() -> String {
@@ -246,7 +262,7 @@ fn process_surface(surf: &mut Surface, selection: Option<&Surface>, f: &mut dyn 
 
 /// One history step running `f` on the active pixel layer (or targeted channel or layer mask).
 fn rgba_edit(s: &mut Session, label: &str, p: &Value, mut f: impl FnMut(&mut Vec<[f32; 4]>, Rect)) -> Result<Value> {
-    let id = crate::commands::layer_param(s, &Value::Null).ok();
+    let id = if p.get("layer").is_some() { Some(crate::commands::layer_param(s, p)?) } else { crate::commands::layer_param(s, p).ok() };
     if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
         return s.edit(label, |doc, _| {
             let sel = doc.selection.clone();
@@ -300,10 +316,10 @@ pub(crate) fn has_adjustable(s: &Session) -> std::result::Result<(), String> {
 /// the filter mask); `Ok(false)` when the command should edit pixels instead (a mask or channel
 /// target, or the active layer is not a smart object).
 pub(crate) fn adjust_as_smart_filter(s: &mut Session, kind: &str, label: &str, p: &Value) -> Result<bool> {
-    if crate::commands::is_mask_target(p) || crate::channel_cmds::is_channel_target(p) {
+    if crate::commands::is_mask_target(p) || crate::channel_cmds::is_channel_target(p) || crate::color_channels::target(s, p)?.is_some() {
         return Ok(false);
     }
-    let Some(id) = s.active().and_then(|d| d.active_layer) else { return Ok(false) };
+    let Ok(id) = crate::commands::layer_param(s, p) else { return Ok(false) };
     let smart = s.active().is_some_and(|d| matches!(d.doc.layer(id).map(|l| &l.content), Some(LayerContent::Smart(_))));
     if !smart {
         return Ok(false);

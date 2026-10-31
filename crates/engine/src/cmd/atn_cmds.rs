@@ -15,7 +15,8 @@
 //! Layer references by name (`select` of layer "Shadow") become `{"layer": "Shadow"}`, which
 //! `commands::layer_param` resolves in whatever document the action plays on (#219). A switch
 //! to another open document (`select` of `Dcmn` by offset) becomes `document.activate
-//! {"offset"}`, the tab that many places from the active one (#7103).
+//! {"offset"}`, the document that many places from the active one in opening order, not dragged
+//! tab order (#7103).
 
 use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use photocraft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
@@ -38,7 +39,7 @@ mod steps_make;
 mod tables;
 
 #[cfg(test)]
-use adjustments::selective_from;
+use adjustments::{levels_from, selective_from};
 pub use convert::{Imported, Skipped, Unsupported, export, function_key_name, import, parse_function_key};
 #[cfg(test)]
 use convert::{MAX_NAME_CHARS, export_item, normalise};
@@ -56,7 +57,7 @@ use files::{load, save};
 #[cfg(test)]
 use steps_doc::crop_from;
 #[cfg(test)]
-use steps_image::transform_to;
+use steps_image::{apply_image_from, transform_to};
 #[cfg(test)]
 use steps_layer::quick_mask_ref;
 #[cfg(test)]

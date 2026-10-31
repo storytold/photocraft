@@ -64,6 +64,34 @@ fn png(img: &Rgba8Image) -> Result<Vec<u8>> {
     photocraft_codecs::encode(&image, photocraft_codecs::Format::Png, &Default::default()).map_err(|e| FormatError::Unsupported(format!("preview: {e}")))
 }
 
+fn previews(opts: &SaveOptions) -> Result<Vec<(&'static str, Vec<u8>)>> {
+    let (composite, thumbnail) = beside(
+        opts.thumbnail.is_some() && opts.composite.is_some(),
+        || opts.composite.as_ref().map(png).transpose(),
+        || opts.thumbnail.as_ref().map(png).transpose(),
+    );
+    let mut out = Vec::new();
+    if let Some(t) = thumbnail? {
+        out.push((THUMB, t));
+    }
+    if let Some(t) = composite? {
+        out.push((COMPOSITE, t));
+    }
+    Ok(out)
+}
+
+fn beside<A: Send, B>(parallel: bool, a: impl FnOnce() -> Result<A> + Send, b: impl FnOnce() -> B) -> (Result<A>, B) {
+    if !parallel || cfg!(target_arch = "wasm32") {
+        let a = a();
+        return (a, b());
+    }
+    std::thread::scope(|sc| {
+        let h = sc.spawn(a);
+        let b = b();
+        (h.join().unwrap_or_else(|_| Err(FormatError::Io(std::io::Error::other("preview worker panicked")))), b)
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Sources
 // ---------------------------------------------------------------------------
@@ -249,17 +277,27 @@ impl Fetch for LoadFetch<'_> {
     }
 
     fn blob(&mut self, hash: &str) -> Result<Arc<Vec<u8>>> {
+        self.blob_bounded(hash, self.opts.max_blob_bytes)
+    }
+
+    /// A content-addressed blob of at most `limit` bytes (never more than `max_blob_bytes`):
+    /// read once, decompressed within the limit, counted against the load's memory budget and
+    /// checked against its hash, then shared. Optional vector previews pass a 16 MiB limit.
+    fn blob_bounded(&mut self, hash: &str, limit: usize) -> Result<Arc<Vec<u8>>> {
+        let limit = limit.min(self.opts.max_blob_bytes);
         if let Some(b) = self.blobs.get(hash) {
-            return Ok(b.clone());
+            return if b.len() <= limit { Ok(b.clone()) } else { Err(FormatError::LimitExceeded("optional preview blob exceeds its limit".into())) };
         }
         if !is_valid_hash(hash) {
             return Err(FormatError::corrupt(format!("invalid blob hash `{hash}`")));
         }
         let path = blob_path(hash);
-        let z = self.src.get(&path, self.opts.max_blob_bytes)?;
+        // The stored zstd frame of incompressible data is a little larger than the data, so a
+        // blob right at `limit` must still be read; `decompress_bounded` enforces `limit`.
+        let z = self.src.get(&path, limit.saturating_add(limit / 8).saturating_add(4096))?;
         // Blob length is not in the manifest; the frame header bounds it and
         // we cap at max_blob_bytes.
-        let data = decompress_bounded(&z, self.opts.max_blob_bytes, None, &path)?;
+        let data = decompress_bounded(&z, limit, None, &path)?;
         self.account(data.len())?;
         if hash_bytes(&data) != hash {
             return Err(FormatError::corrupt(format!("{path}: content does not match its hash")));
@@ -481,7 +519,6 @@ struct FileSignature {
 struct Prepared {
     manifest: Vec<u8>,
     objects: BTreeMap<String, Object>,
-    previews: Vec<(&'static str, Vec<u8>)>,
     stats: SaveStats,
 }
 
@@ -882,13 +919,6 @@ impl PcraftWriter {
         convert::check_nesting(&doc.layers)?;
         let mut c = Collect { hash_cache: Some(&mut self.hash_cache), blob_hash_cache: Some(&mut self.blob_hash_cache), ..Default::default() };
         let document = convert::doc_m(doc, &mut c);
-        let mut previews = Vec::new();
-        if let Some(t) = &opts.thumbnail {
-            previews.push((THUMB, png(t)?));
-        }
-        if let Some(t) = &opts.composite {
-            previews.push((COMPOSITE, png(t)?));
-        }
         let manifest = Manifest {
             format_version: FORMAT_VERSION,
             generator: format!("photocraft-format {}", env!("CARGO_PKG_VERSION")),
@@ -912,23 +942,40 @@ impl PcraftWriter {
         for (h, b) in c.blobs {
             objects.insert(blob_path(&h), Object::Blob(b));
         }
-        Ok(Prepared { manifest, objects, previews, stats })
+        Ok(Prepared { manifest, objects, stats })
     }
 
     /// Save as a ZIP bundle in memory.
     pub fn save_zip(&mut self, doc: &Document, opts: &SaveOptions) -> Result<(Vec<u8>, SaveStats)> {
-        let p = self.prepare(doc, opts)?;
+        // Another thread encodes the previews while the document is collected and its new
+        // objects are compressed on all cores (zstd dominates a full save).
+        let (previews, prepared) = beside(
+            opts.thumbnail.is_some() || opts.composite.is_some(),
+            || previews(opts),
+            || -> Result<_> {
+                let p = self.prepare(doc, opts)?;
+                let todo: Vec<(&String, &Object)> = p.objects.iter().filter(|(path, _)| !self.compressed.contains_key(*path)).collect();
+                let fresh: HashMap<String, Arc<Vec<u8>>> = par_compress(&todo)?.into_iter().map(|(path, data)| (path.clone(), data)).collect();
+                Ok((p, fresh))
+            },
+        );
+        let (p, mut fresh) = prepared?;
+        let previews = previews?;
         let mut stats = p.stats;
-        let mut z = ZipWriter::new();
-        z.add(MANIFEST, &p.manifest)?;
-        for (name, data) in &p.previews {
-            z.add(name, data)?;
-        }
         let mut next = HashMap::with_capacity(p.objects.len());
         let mut cached_bytes = 0usize;
-        // New objects are compressed on all cores first (zstd dominates a full save).
-        let todo: Vec<(&String, &Object)> = p.objects.iter().filter(|(path, _)| !self.compressed.contains_key(*path)).collect();
-        let mut fresh: HashMap<&String, Arc<Vec<u8>>> = par_compress(&todo)?.into_iter().collect();
+        // The archive is sized for every entry up front (#7689): previews, then reused and fresh
+        // objects at their compressed sizes.
+        let entries =
+            std::iter::once((MANIFEST, p.manifest.len())).chain(previews.iter().map(|(name, data)| (*name, data.len()))).chain(p.objects.keys().map(|path| {
+                let size = self.compressed.get(path).or_else(|| fresh.get(path)).map_or(0, |data| data.len());
+                (path.as_str(), size)
+            }));
+        let mut z = ZipWriter::with_entries(entries)?;
+        z.add(MANIFEST, &p.manifest)?;
+        for (name, data) in &previews {
+            z.add(name, data)?;
+        }
         for (path, obj) in &p.objects {
             let (key, data) = match self.compressed.remove_entry(path) {
                 Some((key, data)) => {
@@ -976,6 +1023,7 @@ impl PcraftWriter {
             validate_bundle_file(dir, &dir.join(path))?;
         }
         let p = self.prepare(doc, opts)?;
+        let previews = previews(opts)?;
         let mut stats = p.stats;
         if self.verified_directory.as_ref().is_none_or(|cache| cache.directory != canonical_dir) {
             self.verified_directory = Some(DirectoryVerificationCache { directory: canonical_dir.clone(), ..Default::default() });
@@ -1035,7 +1083,7 @@ impl PcraftWriter {
                 }
             }
         }
-        for (name, data) in &p.previews {
+        for (name, data) in &previews {
             write_bundle_file(dir, &dir.join(name), data, fs)?;
         }
         // Pin all GC directories before removing stale previews or objects.
@@ -1062,7 +1110,7 @@ impl PcraftWriter {
         // Omitted previews belong to the previous manifest until the new one commits.
         // After commit, a locked leftover is only housekeeping, just like unused objects.
         for stale in [THUMB, COMPOSITE] {
-            if !p.previews.iter().any(|(n, _)| *n == stale) {
+            if !previews.iter().any(|(n, _)| *n == stale) {
                 let _ = remove_bundle_file(dir, &dir.join(stale), &gc);
             }
         }
@@ -1188,6 +1236,53 @@ fn compressed_cache_budget_limits_retained_capacity_without_changing_bytes() {
     assert_eq!(bytes, expected);
     assert_eq!(stats.tiles_reused, 0);
     assert!(writer.compressed.is_empty());
+}
+
+#[cfg(test)]
+#[test]
+fn previews_follow_the_manifest_with_the_bytes_of_a_serial_encode() {
+    use photocraft_doc::{Layer, LayerContent};
+    use photocraft_geom::Size;
+    use photocraft_raster::Surface;
+
+    let mut doc = Document::new("previews", Size::new(600, 3), photocraft_color::ColorMode::Rgb, SampleType::U8);
+    let mut surface = Surface::new(doc.pixel_format());
+    for x in 0..600 {
+        surface.write_pixel(x, 1, &[x as f32 / 600.0, 0.5, 0.25, 1.0]);
+    }
+    doc.layers.push(Layer::new("pixels", LayerContent::Raster(surface)));
+    let image = |w: u32, h: u32, k: u8| {
+        let mut i = Rgba8Image::new(w, h);
+        i.pixels.iter_mut().enumerate().for_each(|(j, p)| *p = (j as u8).wrapping_mul(k));
+        i
+    };
+    let (thumb, composite) = (image(4, 3, 7), image(9, 5, 13));
+    for (t, c) in [(true, true), (true, false), (false, true), (false, false)] {
+        let opts = SaveOptions { thumbnail: t.then(|| thumb.clone()), composite: c.then(|| composite.clone()) };
+        let (bytes, _) = PcraftWriter::new().save_zip(&doc, &opts).unwrap();
+        let zip = ZipReader::new(&bytes).unwrap();
+        let names: Vec<&str> = zip.entries.iter().map(|e| e.name.as_str()).collect();
+        let mut want = vec![MANIFEST];
+        want.extend(t.then_some(THUMB));
+        want.extend(c.then_some(COMPOSITE));
+        assert_eq!(names[..want.len()], want[..]);
+        assert!(names[want.len()..].iter().all(|n| n.starts_with("tiles/") || n.starts_with("blobs/")), "{names:?}");
+        for (name, img) in [(THUMB, opts.thumbnail.as_ref()), (COMPOSITE, opts.composite.as_ref())] {
+            assert_eq!(zip.read_by_name(name, usize::MAX).ok(), img.map(|i| png(i).unwrap()), "{name}");
+        }
+    }
+    let bad = SaveOptions { thumbnail: Some(Rgba8Image { width: 4, height: 3, pixels: vec![0; 5] }), composite: Some(composite.clone()) };
+    assert!(matches!(PcraftWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
+    let bad = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(Rgba8Image { width: 9, height: 5, pixels: vec![0; 5] }) };
+    assert!(matches!(PcraftWriter::new().save_zip(&doc, &bad), Err(FormatError::Unsupported(m)) if m.starts_with("preview")));
+
+    let dir = std::env::temp_dir().join(format!("pcraft-previews-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let opts = SaveOptions { thumbnail: Some(thumb.clone()), composite: Some(composite.clone()) };
+    PcraftWriter::new().save_dir(&doc, &dir, &opts).unwrap();
+    assert_eq!(std::fs::read(dir.join(THUMB)).unwrap(), png(&thumb).unwrap());
+    assert_eq!(std::fs::read(dir.join(COMPOSITE)).unwrap(), png(&composite).unwrap());
+    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 #[cfg(all(test, unix))]
@@ -1325,3 +1420,33 @@ pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> Result<()> {
 
 #[cfg(all(test, windows))]
 mod durability_tests;
+
+#[cfg(test)]
+#[test]
+fn an_incompressible_blob_at_its_limit_still_loads() {
+    struct One(String, Vec<u8>);
+    impl ByteSource for One {
+        fn get(&self, path: &str, max: usize) -> Result<Vec<u8>> {
+            if path != self.0 || self.1.len() > max {
+                return Err(FormatError::LimitExceeded(format!("{path} over {max}")));
+            }
+            Ok(self.1.clone())
+        }
+    }
+    let mut x = 0x9e37_79b9_u32;
+    let data: Vec<u8> = (0..64 * 1024)
+        .map(|_| {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x as u8
+        })
+        .collect();
+    let z = compress(&data);
+    assert!(z.len() > data.len(), "the fixture must not compress");
+    let hash = hash_bytes(&data);
+    let src = One(blob_path(&hash), z);
+    let mut fetch = LoadFetch { src: &src, opts: crate::LoadOptions::default(), total: 0, blobs: HashMap::new() };
+    assert_eq!(fetch.blob_bounded(&hash, data.len()).unwrap().as_slice(), data.as_slice());
+    assert!(LoadFetch { src: &src, opts: crate::LoadOptions::default(), total: 0, blobs: HashMap::new() }.blob_bounded(&hash, data.len() - 1).is_err());
+}

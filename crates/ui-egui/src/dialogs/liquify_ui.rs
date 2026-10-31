@@ -27,6 +27,81 @@ const LEFT_W: f32 = 48.0;
 const RIGHT_W: f32 = 292.0;
 const REDO_STACK_LIMIT: usize = 100;
 
+/// Native component sampling keeps the other components and opacity at the destination. Work
+/// stays bounded by the dirty proxy/viewport rectangle; a dab never scans the full source.
+#[allow(clippy::too_many_arguments)]
+fn render_components(
+    source: &Surface,
+    source_bounds: Rect,
+    field: &LiquifyField,
+    scale: f64,
+    target: &Value,
+    blend: &[PreviewBlend],
+    bounds: Rect,
+    dirty: Rect,
+    out: &mut [[u8; 4]],
+) -> bool {
+    let Ok(Some(colors)) = photocraft_engine::color_channels::explicit(&json!({"target":target}), source.format().mode.color_channels()) else { return false };
+    let width = bounds.width() as usize;
+    if source_bounds.is_empty() || bounds.is_empty() || !scale.is_finite() || scale <= 0.0 || width.checked_mul(bounds.height() as usize) != Some(out.len()) {
+        return false;
+    }
+    if !blend.is_empty() && blend.len() != out.len() {
+        return false;
+    }
+    let fmt = source.format();
+    let mut native = vec![0.0; fmt.channels()];
+    let dirty = dirty.intersect(&bounds);
+    for y in dirty.y0..dirty.y1 {
+        for x in dirty.x0..dirty.x1 {
+            let px = f64::from(field.bounds.x0) + (f64::from(x.saturating_sub(source_bounds.x0)) + 0.5) * scale;
+            let py = f64::from(field.bounds.y0) + (f64::from(y.saturating_sub(source_bounds.y0)) + 0.5) * scale;
+            let displacement = field.sample(px, py);
+            let sx = (f64::from(x) + displacement[0] / scale).clamp(f64::from(source_bounds.x0), f64::from(source_bounds.x1 - 1));
+            let sy = (f64::from(y) + displacement[1] / scale).clamp(f64::from(source_bounds.y0), f64::from(source_bounds.y1 - 1));
+            let (x0, y0) = (sx.floor() as i32, sy.floor() as i32);
+            let (fx, fy) = ((sx - f64::from(x0)) as f32, (sy - f64::from(y0)) as f32);
+            let taps = [
+                (x0, y0, (1.0 - fx) * (1.0 - fy)),
+                (x0.saturating_add(1).min(source_bounds.x1 - 1), y0, fx * (1.0 - fy)),
+                (x0, y0.saturating_add(1).min(source_bounds.y1 - 1), (1.0 - fx) * fy),
+                (x0.saturating_add(1).min(source_bounds.x1 - 1), y0.saturating_add(1).min(source_bounds.y1 - 1), fx * fy),
+            ];
+            let alpha_index = fmt.mode.color_channels();
+            let alpha = |tx, ty| if fmt.alpha { source.sample_channel(tx, ty, alpha_index) } else { 1.0 };
+            let warped_alpha: f32 = taps.iter().map(|(tx, ty, w)| alpha(*tx, *ty) * w).sum();
+            let index = (y - bounds.y0) as usize * width + (x - bounds.x0) as usize;
+            let coverage = blend.get(index).map_or(1.0, |sample| sample.coverage.clamp(0.0, 1.0));
+            let original_alpha = alpha(x, y);
+            let mixed_alpha = original_alpha + (warped_alpha - original_alpha) * coverage;
+            for (channel, value) in native.iter_mut().enumerate() {
+                *value = if colors.contains(channel) && coverage > 0.0 {
+                    let warped = taps.iter().map(|(tx, ty, w)| source.sample_channel(*tx, *ty, channel) * alpha(*tx, *ty) * w).sum::<f32>();
+                    if coverage == 1.0 {
+                        if warped_alpha > 0.0 { warped / warped_alpha } else { 0.0 }
+                    } else if mixed_alpha > 0.0 {
+                        // The engine mixes the native premultiplied result through selection,
+                        // then restores untargeted components and the destination opacity.
+                        let original = source.sample_channel(x, y, channel) * original_alpha;
+                        ((original + (warped - original) * coverage) / mixed_alpha).clamp(0.0, 1.0)
+                    } else {
+                        0.0
+                    }
+                } else {
+                    source.sample_channel(x, y, channel)
+                };
+            }
+            let rgba = photocraft_raster::to_rgba(&fmt, &native);
+            let a = rgba[3].clamp(0.0, 1.0);
+            let encoded = [rgba[0] * a, rgba[1] * a, rgba[2] * a, a].map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
+            if let Some(pixel) = out.get_mut(index) {
+                *pixel = encoded;
+            }
+        }
+    }
+    true
+}
+
 /// Options shown in the properties panel (and settable over the control channel).
 #[derive(Clone, Debug)]
 pub struct LiquifyOpts {
@@ -127,7 +202,12 @@ impl LiquifyOpts {
             };
         }
         if let Some(t) = v.get("tool") {
-            self.tool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
+            let tool: LiquifyTool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
+            // Strokes can twirl counterclockwise, but no tool does: hold Alt with Twirl Clockwise.
+            if !LiquifyTool::ALL.contains(&tool) {
+                return Err(format!("{t} is not a Liquify tool: choose twirlCw and hold Alt (Option) to twirl counterclockwise"));
+            }
+            self.tool = tool;
         }
         Ok(())
     }
@@ -173,6 +253,8 @@ pub struct LiquifyDialog {
     /// Filter-mask samples mixed in CMYK or Lab before the preview becomes RGBA.
     native_mask: Option<NativeMaskSamples>,
     view_blend: Vec<PreviewBlend>,
+    target: Value,
+    native_proxy: Option<Surface>,
     out: Vec<[u8; 4]>,
     tex: Option<TextureHandle>,
     /// Proxy pixels to re-render and upload (x0, y0, x1, y1).
@@ -374,7 +456,13 @@ impl LiquifyDialog {
     /// Re-renders the dirty proxy pixels into `out` (the texture upload happens in `show`).
     fn render_dirty(&mut self) {
         if let Some(r) = self.dirty {
-            self.proxy.render_blended_native(&self.field, r, &mut self.out, &self.proxy_blend, self.native_mask.as_ref());
+            if let Some(source) = &self.native_proxy {
+                let bounds = Rect::new(0, 0, self.proxy.w as i32, self.proxy.h as i32);
+                let dirty = Rect::new(r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
+                render_components(source, bounds, &self.field, self.proxy.scale, &self.target, &self.proxy_blend, bounds, dirty, &mut self.out);
+            } else {
+                self.proxy.render_blended_native(&self.field, r, &mut self.out, &self.proxy_blend, self.native_mask.as_ref());
+            }
         }
     }
 
@@ -431,16 +519,20 @@ impl LiquifyDialog {
         }
         let started = crate::gpu_canvas::now_ms();
         let unfiltered = self.native_mask.as_ref().and_then(|_| self.selection.as_ref().map(|(surface, _)| surface));
-        let rendered = ProxyImage::render_full_resolution_blended(
-            &self.source,
-            &self.field,
-            bounds,
-            dirty,
-            &mut self.view_out,
-            &mut self.view_source_scratch,
-            &self.view_blend,
-            unfiltered,
-        );
+        let rendered = if self.native_proxy.is_some() {
+            render_components(&self.source, self.canvas, &self.field, 1.0, &self.target, &self.view_blend, bounds, dirty, &mut self.view_out)
+        } else {
+            ProxyImage::render_full_resolution_blended(
+                &self.source,
+                &self.field,
+                bounds,
+                dirty,
+                &mut self.view_out,
+                &mut self.view_source_scratch,
+                &self.view_blend,
+                unfiltered,
+            )
+        };
         if !rendered {
             self.view_bounds = None;
             self.view_tex = None;
@@ -477,9 +569,12 @@ impl LiquifyDialog {
 
     fn upload(&mut self, ctx: &egui::Context) {
         let (w, h) = (self.proxy.w, self.proxy.h);
+        if self.tex.is_none() {
+            self.dirty = Some([0, 0, w, h]);
+            self.render_dirty();
+        }
         match (&mut self.tex, self.dirty.take()) {
             (None, _) => {
-                self.proxy.render_blended_native(&self.field, [0, 0, w, h], &mut self.out, &self.proxy_blend, self.native_mask.as_ref());
                 let img = egui::ColorImage::new([w, h], self.out.iter().map(|p| Color32::from_rgba_premultiplied(p[0], p[1], p[2], p[3])).collect());
                 self.tex = Some(ctx.load_texture("liquify-proxy", img, egui::TextureOptions::LINEAR));
             }
@@ -574,7 +669,7 @@ fn preview_blend(selection: Option<&(Surface, LayerMask)>, bounds: Rect, max_sid
 
 /// Opens the dialog on the active layer.
 pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> {
-    let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
+    let (layer, surf, _) = crate::distort_ui::active_filter_target(app)?;
     let canvas = app.session.active().ok_or("no document")?.doc.bounds();
     open_on(app, ctx, layer, surf, Vec::new(), auto_cell(canvas), None)
 }
@@ -641,7 +736,11 @@ fn open_on(
     let name = st.doc.layer(layer).map(|l| l.name.clone()).unwrap_or_default();
     let proxy = ProxyImage::new(&surf, canvas, PROXY_SIDE);
     let proxy_blend = preview_blend(selection.as_ref(), canvas, PROXY_SIDE);
-    let native_mask = selection.as_ref().and_then(|(original, _)| NativeMaskSamples::from_proxy(&surf, original, &proxy));
+    let target = if smart_filter.is_some() { json!("pixels") } else { crate::distort_ui::colour_set_target(app) };
+    let colors = photocraft_engine::color_channels::explicit(&json!({"target":target}), surf.format().mode.color_channels()).map_err(|e| e.to_string())?;
+    // Component-targeted previews already keep native samples in their own proxy.
+    let native_mask = if colors.is_none() { selection.as_ref().and_then(|(original, _)| NativeMaskSamples::from_proxy(&surf, original, &proxy)) } else { None };
+    let native_proxy = colors.map(|_| crate::gallery_ui::reduce(&surf, canvas, proxy.scale as u32));
     let out = vec![[0u8; 4]; proxy.w * proxy.h];
     let center = [f64::from(canvas.x0 + canvas.x1) / 2.0, f64::from(canvas.y0 + canvas.y1) / 2.0];
     let mut d = LiquifyDialog {
@@ -661,6 +760,8 @@ fn open_on(
         proxy_blend,
         native_mask,
         view_blend: Vec::new(),
+        target,
+        native_proxy,
         out,
         tex: None,
         dirty: None,
@@ -724,7 +825,7 @@ pub fn commit(app: &mut PhotocraftApp) -> Result<(), String> {
     if d.strokes.is_empty() {
         return Ok(());
     }
-    let p = json!({"strokes": d.strokes, "meshSize": d.cell, "layer": d.layer.0});
+    let p = crate::distort_ui::with_filter_target(json!({"strokes": d.strokes, "meshSize": d.cell, "layer": d.layer.0}), &d.target);
     app.run("filter.liquify", p).map(|_| ())
 }
 
@@ -770,8 +871,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     Ok(d.describe())
 }
 
-/// Photoshop's Alt (Option) variant of a Liquify brush: the twirls reverse direction and Pucker
-/// and Bloat swap. Other tools are unchanged.
+/// The Alt (Option) variant of a Liquify brush: Twirl Clockwise twirls counterclockwise (the
+/// reference application has no separate counterclockwise tool) and Pucker and Bloat swap.
+/// Other tools are unchanged.
 fn alt_tool(t: LiquifyTool) -> LiquifyTool {
     match t {
         LiquifyTool::TwirlCw => LiquifyTool::TwirlCcw,
@@ -791,17 +893,17 @@ fn brush_circle_at(resize: Option<(Pos2, f32, f32)>, hover: Option<Pos2>) -> Opt
 
 /// Alt+right-drag, and Control+Alt-drag, change the Liquify brush instead of painting (#4702).
 fn brush_resize_gesture(mods: egui::Modifiers, secondary: bool) -> bool {
-    mods.alt && (secondary || mods.ctrl)
+    if secondary { crate::brush_resize::is_right_gesture(mods) } else { crate::brush_resize::is_gesture(mods) }
 }
 
 /// Horizontal motion sets the diameter (the circle's edge follows the pointer). Vertical motion
 /// sets density, Liquify's edge falloff, over the same 200 px travel the canvas uses for hardness.
-fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32) -> (f32, f32) {
-    let dx = if dx.is_finite() { dx } else { 0.0 };
-    let dy = if dy.is_finite() { dy } else { 0.0 };
-    let size = (start_size + dx).round().clamp(1.0, 15000.0);
-    let density = (start_density + dy * 100.0 / crate::brush_resize::HARDNESS_TRAVEL).clamp(0.0, 100.0);
-    (size, (density * 10.0).round() / 10.0)
+fn resized_brush(start_size: f32, start_density: f32, dx: f32, dy: f32, zoom: f32) -> (f32, f32) {
+    // Liquify stores density as 0–100; the shared brush gesture works on normalized hardness.
+    // Use the same zoom-corrected screen movement and size limits as the main canvas.
+    let zoom = if zoom.is_finite() && zoom > 0.0 { zoom } else { 1.0 };
+    let (size, density) = crate::brush_resize::resized((start_size, start_density / 100.0), f64::from(dx / zoom), f64::from(dy / zoom), zoom);
+    (size, (density * 100.0).round())
 }
 
 /// Pointer in document coordinates (from the preview or the control channel). Alt at
@@ -911,7 +1013,6 @@ fn tool_icon(t: LiquifyTool) -> &'static str {
         LiquifyTool::Reconstruct => "brush-cleaning",
         LiquifyTool::Smooth => "droplet",
         LiquifyTool::TwirlCw => "rotate-cw",
-        LiquifyTool::TwirlCcw => "undo-2",
         LiquifyTool::Pucker => "scan",
         LiquifyTool::Bloat => "maximize-2",
         LiquifyTool::PushLeft => "chevrons-left",
@@ -1002,6 +1103,68 @@ fn backdrop_layering<T: Copy>(backdrop: Option<T>, mode: BackdropMode, opacity: 
 }
 
 /// Draws the dialog (a full-window layer over the app).
+fn draw_tool_strip(ui: &mut egui::Ui, painter: &egui::Painter, t: &Tokens, d: &mut LiquifyDialog, body: ERect) -> ERect {
+    // Left tool strip.
+    let left = ERect::from_min_size(body.min, vec2(LEFT_W, body.height()));
+    painter.rect_filled(left, 0.0, t.dock);
+    painter.line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.separator));
+    let mut strip = ui.new_child(egui::UiBuilder::new().max_rect(left.shrink2(vec2(6.0, 8.0))));
+    strip.spacing_mut().item_spacing.y = 4.0;
+    for tool in LiquifyTool::ALL {
+        let tip = match tool {
+            // The lasso works on the same freeze mask as Freeze/Thaw.
+            LiquifyTool::LassoMask => tl!("Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)").to_string(),
+            _ => format!("{} ({})", tl!(tool.label()), shortcut(tool)),
+        };
+        if crate::icons::button(&mut strip, tool_icon(tool), 34.0, d.opts.tool == tool, &tip).clicked() {
+            d.opts.tool = tool;
+        }
+        if matches!(tool, LiquifyTool::Smooth | LiquifyTool::PushLeft | LiquifyTool::Thaw) {
+            strip.add_space(6.0);
+        }
+    }
+    left
+}
+
+/// The preview's wheel and trackpad input: zoom about the pointer, or pan.
+fn apply_preview_wheel(
+    ctx: &egui::Context,
+    d: &mut LiquifyDialog,
+    area: ERect,
+    resp: &egui::Response,
+    wheel_id: egui::Id,
+    pinch_zooms: bool,
+    animated_zoom: bool,
+) {
+    let wheel = crate::wheel_nav::read(ctx, true, pinch_zooms, animated_zoom, wheel_id, resp.hovered());
+    if let Some(hp) = resp.hover_pos() {
+        let zoom = match wheel {
+            Some(crate::wheel_nav::Wheel::Zoom(f)) => {
+                let z = d.zoom * f;
+                // At a limit, drop the rest of an eased notch, or it would swallow the first notch back.
+                if z != z.clamp(ZOOM_MIN, ZOOM_MAX) {
+                    crate::wheel_nav::settle(ctx, wheel_id);
+                }
+                Some(z.clamp(ZOOM_MIN, ZOOM_MAX))
+            }
+            Some(crate::wheel_nav::Wheel::SnapZoom(n)) => {
+                Some((0..n.unsigned_abs()).fold(d.zoom, |z, _| crate::zoom_levels::step_in_range(z, n.signum(), ZOOM_MIN, ZOOM_MAX)))
+            }
+            Some(crate::wheel_nav::Wheel::Pan(v)) => {
+                d.center = [d.center[0] - f64::from(v.x / d.zoom), d.center[1] - f64::from(v.y / d.zoom)];
+                None
+            }
+            None => None,
+        };
+        if let Some(z) = zoom {
+            let before = to_doc(d, area, hp);
+            d.zoom = z;
+            let after = to_doc(d, area, hp);
+            d.center = [d.center[0] + before[0] - after[0], d.center[1] + before[1] - after[1]];
+        }
+    }
+}
+
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let screen = ctx.content_rect();
@@ -1041,25 +1204,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             t.text,
         );
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), full.max);
-        // Left tool strip.
-        let left = ERect::from_min_size(body.min, vec2(LEFT_W, body.height()));
-        painter.rect_filled(left, 0.0, t.dock);
-        painter.line_segment([left.right_top(), left.right_bottom()], Stroke::new(1.0, t.separator));
-        let mut strip = ui.new_child(egui::UiBuilder::new().max_rect(left.shrink2(vec2(6.0, 8.0))));
-        strip.spacing_mut().item_spacing.y = 4.0;
-        for tool in LiquifyTool::ALL {
-            let tip = match tool {
-                // The lasso works on the same freeze mask as Freeze/Thaw.
-                LiquifyTool::LassoMask => tl!("Freeze Lasso: drag to freeze an area, Alt-drag to thaw it (L)").to_string(),
-                _ => format!("{} ({})", tl!(tool.label()), shortcut(tool)),
-            };
-            if crate::icons::button(&mut strip, tool_icon(tool), 34.0, d.opts.tool == tool, &tip).clicked() {
-                d.opts.tool = tool;
-            }
-            if matches!(tool, LiquifyTool::Smooth | LiquifyTool::PushLeft | LiquifyTool::Thaw) {
-                strip.add_space(6.0);
-            }
-        }
+        let left = draw_tool_strip(ui, &painter, &t, d, body);
         // Right properties panel.
         let right = ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()));
         painter.rect_filled(right, 0.0, t.dock);
@@ -1164,33 +1309,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // Preferences › Enhanced Controls › Zoom with Trackpad Pinch is off); a sideways scroll
         // pans (#7210). Read every frame, as `wheel_nav` asks, so its modifier state follows.
         let wheel_id = egui::Id::unique("liquify-preview-wheel");
-        let wheel = crate::wheel_nav::read(ctx, true, pinch_zooms, animated_zoom, wheel_id, resp.hovered());
-        if let Some(hp) = resp.hover_pos() {
-            let zoom = match wheel {
-                Some(crate::wheel_nav::Wheel::Zoom(f)) => {
-                    let z = d.zoom * f;
-                    // At a limit, drop the rest of an eased notch, or it would swallow the first notch back.
-                    if z != z.clamp(ZOOM_MIN, ZOOM_MAX) {
-                        crate::wheel_nav::settle(ctx, wheel_id);
-                    }
-                    Some(z.clamp(ZOOM_MIN, ZOOM_MAX))
-                }
-                Some(crate::wheel_nav::Wheel::SnapZoom(n)) => {
-                    Some((0..n.unsigned_abs()).fold(d.zoom, |z, _| crate::zoom_levels::step_in_range(z, n.signum(), ZOOM_MIN, ZOOM_MAX)))
-                }
-                Some(crate::wheel_nav::Wheel::Pan(v)) => {
-                    d.center = [d.center[0] - f64::from(v.x / d.zoom), d.center[1] - f64::from(v.y / d.zoom)];
-                    None
-                }
-                None => None,
-            };
-            if let Some(z) = zoom {
-                let before = to_doc(d, area, hp);
-                d.zoom = z;
-                let after = to_doc(d, area, hp);
-                d.center = [d.center[0] + before[0] - after[0], d.center[1] + before[1] - after[1]];
-            }
-        }
+        apply_preview_wheel(ctx, d, area, &resp, wheel_id, pinch_zooms, animated_zoom);
         d.update_view_preview(ctx, area);
         let img = ERect::from_min_max(
             to_screen(d, area, [f64::from(d.canvas.x0), f64::from(d.canvas.y0)]),
@@ -1251,9 +1370,27 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         // started, so only its size changes (#7884).
         if let Some(hp) = brush_circle_at(d.brush_resize, resp.hover_pos()) {
             if d.opts.tool != LiquifyTool::LassoMask {
+                let center = d.brush_resize.map_or(hp, |(anchor, _, _)| anchor);
                 let r = d.opts.size * 0.5 * d.zoom;
-                clip.circle_stroke(hp, r, Stroke::new(1.5, Color32::BLACK));
-                clip.circle_stroke(hp, r, Stroke::new(0.75, Color32::WHITE));
+                if d.brush_resize.is_some() {
+                    crate::brush_resize::liquify_tip_preview(
+                        &clip,
+                        center,
+                        r,
+                        d.opts.density / 100.0,
+                        Color32::from_rgba_unmultiplied(t.accent.r(), t.accent.g(), t.accent.b(), 110),
+                    );
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+                    crate::canvas::draw_readout(
+                        ui.ctx(),
+                        "liquify-brush-resize-readout",
+                        hp,
+                        [tl!("Diameter:"), tl!("Density:")],
+                        [format!("{} px", d.opts.size.round() as i64), format!("{}%", d.opts.density.round() as i64)],
+                    );
+                }
+                clip.circle_stroke(center, r, Stroke::new(1.5, Color32::BLACK));
+                clip.circle_stroke(center, r, Stroke::new(0.75, Color32::WHITE));
             }
             d.hover = Some(to_doc(d, area, hp));
         }
@@ -1274,13 +1411,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             if let (Some((anchor, size0, dens0)), Some(p)) = (d.brush_resize, resp.interact_pointer_pos()) {
                 let delta = p - anchor;
-                let (size, density) = resized_brush(size0, dens0, delta.x, delta.y);
+                let (size, density) = resized_brush(size0, dens0, delta.x, delta.y, d.zoom);
                 d.opts.size = size;
                 d.opts.density = density;
             }
             if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
                 d.brush_resize = None;
             }
+            ctx.request_repaint();
         } else if pan && resp.dragged() {
             let dl = resp.drag_delta();
             d.center = [d.center[0] - f64::from(dl.x / d.zoom), d.center[1] - f64::from(dl.y / d.zoom)];

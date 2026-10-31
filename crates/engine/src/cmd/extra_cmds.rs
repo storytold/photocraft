@@ -76,7 +76,7 @@ pub(crate) fn step_key(s: &Session, what: &str) -> String {
 /// Quick Mask or the layer mask (`Session::execute` fills that in from the Channels panel), that
 /// grayscale surface is rewritten instead, as the core filters do (#935).
 fn map_pixels(s: &mut Session, label: &str, p: &Value, f: impl FnOnce(Rect, &mut [[f32; 4]], &[f32])) -> Result<Value> {
-    let id = layer_param(s, &Value::Null)?;
+    let id = layer_param(s, p)?;
     let channel = crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels;
     s.edit(label, |doc, _| {
         let canvas = doc.bounds();
@@ -361,6 +361,15 @@ fn paste_into(s: &mut Session, p: &Value, outside: bool) -> Result<Value> {
     if let Some(c) = p.get("center") {
         params["center"] = c.clone();
     }
+    if let Some(colors) = crate::color_channels::target(s, p)?
+        .filter(|c| c.len() > 1 || p.get("target").is_some() || s.clipboard.as_ref().is_some_and(|clip| clip.components.is_some()))
+    {
+        params["target"] = colors.params();
+        if let Some(layer) = p.get("layer") {
+            params["layer"] = layer.clone();
+        }
+        return crate::channel_clip::paste_colors(s, &params, colors, false, Some(&limit), label);
+    }
     // A targeted colour channel (#2307): the paste goes into it, only where `limit` allows.
     if let Some(k) = crate::channel_clip::paste_color_target(s, p) {
         return crate::channel_clip::paste(s, &params, k, false, Some(&limit), label);
@@ -574,7 +583,7 @@ fn set_visible(s: &mut Session, p: &Value, visible: bool) -> Result<Value> {
         return crate::layer_multi_cmds::set_visible_selected(s, visible);
     }
     let id = layer_param(s, p)?;
-    s.edit(if visible { "Show Layer" } else { "Hide Layer" }, |doc, _| {
+    s.edit_visibility(if visible { "Show Layer" } else { "Hide Layer" }, |doc, _| {
         doc.layer_mut(id).ok_or(EngineError::NoLayer(id))?.visible = visible;
         Ok(())
     })?;
@@ -640,7 +649,7 @@ fn show_only(s: &mut Session, p: &Value) -> Result<Value> {
         let rows = walk.iter().map(|(p, _, l)| (p.clone(), before.as_ref().is_none_or(|b| b.get(&l.id).copied().unwrap_or(l.visible)))).collect();
         ("Show Layers", rows, None)
     };
-    s.edit(label, |doc, _| {
+    s.edit_visibility(label, |doc, _| {
         for (p, visible) in &rows {
             if let Some(l) = doc.layer_at_mut(p) {
                 l.visible = *visible;
