@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Check the macOS release artifacts exactly as users download them:
 #
-#   $DIST/photocraft-<version>-macos-<arch>.dmg       signed, notarized, ticket stapled
+#   $DIST/photocraft-<version>-macos-<arch>.dmg       signed, notarized, ticket stapled; the app
+#                                                    in it, and a copy installed from it, pass
+#                                                    `codesign --verify --strict --deep`
 #   $DIST/photocraft-cli-<version>-macos-<arch>.zip   unpacked here; the binary inside must be
 #                                                    Developer ID signed with the hardened runtime,
 #                                                    timestamped and notarized
@@ -21,12 +23,14 @@
 set -euo pipefail
 # shellcheck source=../env.sh
 . "$(dirname "${BASH_SOURCE[0]}")/../env.sh"
+# shellcheck source=dmg.sh
+. "$(dirname "${BASH_SOURCE[0]}")/dmg.sh"
 
 ARCH=universal
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --arch) ARCH="$2"; shift 2 ;;
-    -h | --help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,22p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 2 ;;
   esac
 done
@@ -136,6 +140,8 @@ fi
 # ---- DMG ---------------------------------------------------------------------------------------
 echo "==> $(basename "$DMG")"
 codesign --verify --strict --verbose=2 "$DMG"
+# Integrity of the app as users install it (#3034); like the signature, this holds even ad hoc.
+check_dmg_app "$DMG" PhotoCraft.app
 if [[ "$STRICT" = 1 ]]; then
   validate_staple "$DMG" || fail "no notarization ticket stapled to the DMG"
   assess --assess --type open --context context:primary-signature -vv "$DMG" \
