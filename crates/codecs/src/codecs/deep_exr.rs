@@ -219,16 +219,14 @@ fn decompress(compression: Compression, packed: &[u8], expected: usize, what: &s
 
 // --- the deep chunk stream ---------------------------------------------------------------------
 
-/// One parsed chunk: where its pixels go and its cumulative sample counts, plus where to
-/// find the compressed sample data in the second pass.
+/// One parsed chunk: the block it covers, plus where to find the compressed sample data in
+/// the second pass. Its pixels' sample counts live in the decode's global index, so a chunk
+/// holds no per-pixel data.
 struct DeepChunk {
-    /// Global pixel indices of the block's pixels, in block order (row-major within the block).
-    pixels: Vec<usize>,
-    /// Pixels per row of the block (the data window width for a scan line, the clipped tile
-    /// width for a tile).
-    row_w: usize,
-    /// Cumulative sample count table of the block: `len == pixels.len() + 1`.
-    prefix: Vec<u32>,
+    /// The block's rows within the data window.
+    rows: std::ops::Range<usize>,
+    /// The block's columns within the data window (clipped to it for an edge tile).
+    cols: std::ops::Range<usize>,
     /// File offset of the chunk start.
     pos: u64,
     /// Size of the compressed sample data in the file.
@@ -241,6 +239,15 @@ fn sample_bytes(t: ExrSample) -> usize {
     match t {
         ExrSample::U32 | ExrSample::F32 => 4,
         ExrSample::F16 => 2,
+    }
+}
+
+/// One stored sample as f32. `b` holds [`sample_bytes`] bytes; a short slice reads as zero.
+fn sample_value(t: ExrSample, b: &[u8]) -> f32 {
+    match t {
+        ExrSample::F16 => b.try_into().map(|a: [u8; 2]| f16::from_le_bytes(a).to_f32()).unwrap_or(0.0),
+        ExrSample::F32 => b.try_into().map(f32::from_le_bytes).unwrap_or(0.0),
+        ExrSample::U32 => b.try_into().map(|a: [u8; 4]| u32::from_le_bytes(a) as f32).unwrap_or(0.0),
     }
 }
 
@@ -272,6 +279,19 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
     let y0 = dw.position.1;
     let npixels = w.checked_mul(h).ok_or_else(|| err("the data window is too large"))?;
     limits.check_bytes(w as u32, h as u32, (header.channels.list.len().max(1) as u64) * 4)?;
+    // The per-pixel bookkeeping is the cumulative sample-count index the result returns
+    // (`DeepImage::counts`: one u64 per pixel, plus one), live from the first chunk to the end.
+    // Charge it before anything is allocated; the count tables and the samples are admitted
+    // against what it leaves. The data-window check above budgets only four bytes a pixel.
+    let index_len = npixels.checked_add(1).ok_or_else(|| err("the data window is too large"))?;
+    let index_bytes = (index_len as u64).checked_mul(8).ok_or_else(|| err("the data window is too large"))?;
+    if index_bytes > limits.max_alloc {
+        return Err(CodecError::LimitExceeded(format!(
+            "the sample-count index of {w}x{h} deep pixels needs {index_bytes} bytes, exceeding max_alloc {}",
+            limits.max_alloc
+        )));
+    }
+    let budget = limits.max_alloc - index_bytes;
 
     // The display window is the full stage the renderer composed onto (a render pass's data
     // window is often its crop). Open on the stage when it plausibly holds the data region:
@@ -326,7 +346,14 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         }
     };
 
-    let mut counts = vec![0u32; npixels];
+    // Each block has exactly one chunk (a duplicate or a missing one is malformed), so a table
+    // of any other length is refused here, before the per-block bookkeeping is sized by the
+    // header's geometry: `seen` and `chunks` stay proportional to the offset table in the file.
+    if offsets.len() != slots {
+        return Err(err(format!("the offset table lists {} chunks, the data window needs {slots}", offsets.len())));
+    }
+    // Per-pixel sample counts in `counts[p + 1]`, made cumulative after the first pass.
+    let mut counts = alloc_zeroed::<u64>(index_len)?;
     let mut seen = vec![false; slots];
     let mut chunks: Vec<DeepChunk> = Vec::with_capacity(offsets.len());
 
@@ -341,17 +368,15 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
                 return Err(err(format!("chunk declares part {part}, expected {header_index}")));
             }
         }
-        // Block coordinates → the block's pixel bounds and its slot. The per-pixel index is
-        // built only after the chunk's declared payload sizes are validated below, so a
-        // truncated or lying chunk cannot drive a large index allocation first.
-        let (block_rows, block_cols, slot, row_w, scanline_row): (std::ops::Range<usize>, std::ops::Range<usize>, usize, usize, bool) = match &header.blocks {
+        // Block coordinates → the block's pixel bounds and its slot.
+        let (block_rows, block_cols, slot): (std::ops::Range<usize>, std::ops::Range<usize>, usize) = match &header.blocks {
             BlockDescription::ScanLines => {
                 let y = i32(&mut cur)?;
                 let row = match y.checked_sub(y0) {
                     Some(d) if d >= 0 && (d as usize) < h => d as usize,
                     _ => return Err(err(format!("scan line block y={y} is outside the data window"))),
                 };
-                (row..row + 1, 0..w, row, w, true)
+                (row..row + 1, 0..w, row)
             }
             BlockDescription::Tiles(_) => {
                 let (tx, ty, lx, ly) = (i32(&mut cur)?, i32(&mut cur)?, i32(&mut cur)?, i32(&mut cur)?);
@@ -365,7 +390,7 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
                 let rows = (by + tile_h).min(h);
                 let cols = (bx + tile_w).min(w);
                 let slot = (ty as usize).saturating_mul(tiles_x) + tx as usize;
-                (by..rows, bx..cols, slot, cols - bx, false)
+                (by..rows, bx..cols, slot)
             }
         };
         let block_len = block_rows.len().saturating_mul(block_cols.len());
@@ -383,31 +408,18 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         if packed_table > remaining || packed_data > remaining.saturating_sub(packed_table) {
             return Err(err("deep chunk sizes point past the end of the file"));
         }
-        // The chunk's payload is present; now materialize the block's global pixel index. For
-        // scan lines this is one row; for tiles the clipped tile rectangle.
-        let block_pixels: Vec<usize> = if scanline_row {
-            let row = block_rows.start;
-            (0..w).map(|x| row * w + x).collect()
-        } else {
-            let mut px = Vec::with_capacity(block_len);
-            for yy in block_rows.clone() {
-                for xx in block_cols.clone() {
-                    px.push(yy.saturating_mul(w).saturating_add(xx));
-                }
-            }
-            px
-        };
         let what = "the sample-count table";
         let table_bytes = read_exact(&mut cur, packed_table as usize, what)?;
-        let expected_table = block_pixels.len().checked_mul(4).ok_or_else(|| err("count table overflows"))?;
+        let expected_table = block_len.checked_mul(4).ok_or_else(|| err("count table overflows"))?;
         // A compressed clipped table also needs its scratch copy. The data-window check only
         // budgets four bytes per channel per pixel, insufficient for a one-channel image.
         // An equal-sized payload takes decompress's raw path, which allocates no scratch.
+        // Both are admitted against what the sample-count index leaves of `max_alloc`.
         let buffers = if table_bytes.len() == expected_table { 1 } else { 2 };
         let clipped_need = (expected_table as u64).saturating_mul(buffers);
-        if clipped_need > limits.max_alloc {
+        if clipped_need > budget {
             return Err(CodecError::LimitExceeded(format!(
-                "{what} needs {clipped_need} bytes including decompression scratch, exceeding max_alloc {}",
+                "{what} needs {clipped_need} bytes including decompression scratch, on top of the {index_bytes} byte sample-count index, exceeding max_alloc {}",
                 limits.max_alloc
             )));
         }
@@ -420,75 +432,73 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         let raw = match full_table {
             // Scan lines and interior tiles: the full size is the clipped size.
             Some(full) if full <= expected_table => decompress(compression, table_bytes, expected_table, what)?,
-            Some(full) if (full as u64).saturating_mul(2) <= limits.max_alloc => {
+            Some(full) if (full as u64).saturating_mul(2) <= budget => {
                 decompress(compression, table_bytes, full, what).or_else(|_| decompress(compression, table_bytes, expected_table, what))?
             }
             _ => decompress(compression, table_bytes, expected_table, what).map_err(|_| {
                 // Four bytes per pixel of the tile, twice: the table and its scratch copy.
                 let need = (tile_w as u64).saturating_mul(tile_h as u64).saturating_mul(8);
                 CodecError::LimitExceeded(format!(
-                    "{what} of a {tile_w}x{tile_h} deep tile does not decode at the clipped size, and at the full tile size it needs {need} bytes with its scratch copy, exceeding max_alloc {}",
+                    "{what} of a {tile_w}x{tile_h} deep tile does not decode at the clipped size, and at the full tile size it needs {need} bytes with its scratch copy, on top of the {index_bytes} byte sample-count index, exceeding max_alloc {}",
                     limits.max_alloc
                 ))
             })?,
         };
 
         // The table is cumulative within each row of the block (a tile restarts at every row);
-        // `prefix` is cumulative over the whole block, and each pixel's own count is the difference.
-        let mut prefix = Vec::with_capacity(block_pixels.len() + 1);
-        prefix.push(0u32);
-        let (mut row_base, mut prev) = (0u32, 0u32);
-        for (i, p) in block_pixels.iter().enumerate() {
-            let b: [u8; 4] = raw.get(i * 4..i * 4 + 4).and_then(|s| s.try_into().ok()).ok_or_else(|| err("the count table is short"))?;
-            let v = u32::from_le_bytes(b);
-            if row_w > 0 && i % row_w == 0 {
-                row_base = row_base.checked_add(prev).ok_or_else(|| err("the block's sample count overflows"))?;
-                prev = 0;
+        // each pixel's own count is the difference to its left neighbour's entry.
+        let mut entries = raw.as_chunks::<4>().0.iter();
+        let mut total = 0u64;
+        for yy in block_rows.clone() {
+            let mut prev = 0u32;
+            for xx in block_cols.clone() {
+                let v = u32::from_le_bytes(*entries.next().ok_or_else(|| err("the count table is short"))?);
+                if v < prev {
+                    return Err(err("the sample-count table decreases (malformed cumulative counts)"));
+                }
+                let p = yy.saturating_mul(w).saturating_add(xx).saturating_add(1);
+                if let Some(c) = counts.get_mut(p) {
+                    *c = u64::from(v - prev);
+                }
+                prev = v;
             }
-            if v < prev {
-                return Err(err("the sample-count table decreases (malformed cumulative counts)"));
-            }
-            if let Some(c) = counts.get_mut(*p) {
-                *c = v - prev;
-            }
-            prev = v;
-            prefix.push(row_base.checked_add(v).ok_or_else(|| err("the block's sample count overflows"))?);
+            total = total.checked_add(u64::from(prev)).ok_or_else(|| err("the block's sample count overflows"))?;
         }
-        let total = prefix.last().copied().unwrap_or(0) as u64;
         let expected_data = total.checked_mul(bytes_per_sample as u64).ok_or_else(|| err("the sample data size overflows"))?;
         if expected_data != unpacked_data {
             return Err(err(format!("the chunk declares {unpacked_data} bytes of sample data, the count table implies {expected_data}")));
         }
-        chunks.push(DeepChunk { pixels: block_pixels, row_w, prefix, pos: off, packed_data, unpacked_data });
+        chunks.push(DeepChunk { rows: block_rows, cols: block_cols, pos: off, packed_data, unpacked_data });
     }
     if seen.iter().any(|s| !s) {
         let missing = seen.iter().filter(|s| !**s).count();
         return Err(err(format!("{missing} of {slots} chunks are missing from the offset table")));
     }
 
-    // Global cumulative counts in raster order.
-    let mut deep_counts = Vec::with_capacity(npixels + 1);
-    deep_counts.push(0u64);
+    // Global cumulative counts in raster order, in place: pixel `p` holds the samples
+    // `counts[p]..counts[p + 1]`.
     let mut acc = 0u64;
-    for &c in &counts {
-        acc = acc.checked_add(c as u64).ok_or_else(|| err("the total sample count overflows"))?;
-        deep_counts.push(acc);
+    for c in counts.iter_mut() {
+        acc = acc.checked_add(*c).ok_or_else(|| err("the total sample count overflows"))?;
+        *c = acc;
     }
     let total_samples = acc;
     let sample_bytes_total = total_samples.checked_mul(exr_types.len() as u64 * 4).ok_or_else(|| err("the sample buffer size overflows"))?;
-    if sample_bytes_total > limits.max_alloc {
-        return Err(CodecError::LimitExceeded(format!("deep samples need {sample_bytes_total} bytes, exceeding max_alloc {}", limits.max_alloc)));
+    if sample_bytes_total > budget {
+        return Err(CodecError::LimitExceeded(format!(
+            "deep samples need {sample_bytes_total} bytes on top of the {index_bytes} byte sample-count index, exceeding max_alloc {}",
+            limits.max_alloc
+        )));
+    }
+    let total_samples = usize::try_from(total_samples).map_err(|_| CodecError::LimitExceeded(format!("{total_samples} deep samples do not fit in memory")))?;
+
+    let mut channels: Vec<DeepChannel> = Vec::with_capacity(header.channels.list.len());
+    for c in &header.channels.list {
+        channels.push(DeepChannel { name: c.name.to_string(), sample: our_sample_type(c.sample_type), samples: alloc_zeroed::<f32>(total_samples)? });
     }
 
-    let mut channels: Vec<DeepChannel> = header
-        .channels
-        .list
-        .iter()
-        .map(|c| DeepChannel { name: c.name.to_string(), sample: our_sample_type(c.sample_type), samples: vec![0f32; total_samples as usize] })
-        .collect();
-
-    // Second pass: the compressed sample data, scattered per pixel (a block's channel data
-    // is contiguous in the file but the pixels' samples interleave with other blocks').
+    // Second pass: the compressed sample data, placed row by row (a block's channel data is
+    // contiguous in the file, but a tile's rows interleave with other tiles' in raster order).
     for chunk in &chunks {
         seek_to(&mut cur, chunk.pos)?;
         if multipart {
@@ -510,43 +520,32 @@ pub(crate) fn decode_deep(meta: &MetaData, bytes: &[u8], limits: &Limits) -> Res
         let data_bytes = read_exact(&mut cur, chunk.packed_data as usize, "the deep sample data")?;
         let raw = decompress(compression, data_bytes, chunk.unpacked_data as usize, "the deep sample data")?;
         // Row by row (a scan line block is one row), and within a row channel by channel, as
-        // flat tiles are laid out: each pixel's samples are contiguous within its channel.
+        // flat tiles are laid out: each pixel's samples are contiguous within its channel. A
+        // block row is a run of consecutive pixels in raster order, so its samples are the
+        // contiguous range `counts[first]..counts[last + 1]` of every output channel.
         let mut in_off = 0usize;
-        let row_w = chunk.row_w.max(1);
-        for (r, row) in chunk.pixels.chunks(row_w).enumerate() {
-            let i0 = r * row_w;
-            let row_from = chunk.prefix.get(i0).copied().unwrap_or(0) as usize;
-            let row_to = chunk.prefix.get(i0 + row.len()).copied().unwrap_or(0) as usize;
-            let row_total = row_to.saturating_sub(row_from);
+        for yy in chunk.rows.clone() {
+            let first = yy.saturating_mul(w).saturating_add(chunk.cols.start);
+            let end = yy.saturating_mul(w).saturating_add(chunk.cols.end);
+            let index = |p: usize| counts.get(p).copied().and_then(|c| usize::try_from(c).ok()).ok_or_else(|| err("pixel index out of range"));
+            let (row_from, row_to) = (index(first)?, index(end)?);
+            let row_total = row_to.checked_sub(row_from).ok_or_else(|| err("the sample-count index decreases"))?;
             for (ci, t) in exr_types.iter().enumerate() {
                 let sb = sample_bytes(*t);
                 let ch_bytes = row_total.checked_mul(sb).ok_or_else(|| err("channel size overflows"))?;
-                let end = in_off.checked_add(ch_bytes).ok_or_else(|| err("channel size overflows"))?;
-                let src = raw.get(in_off..end).ok_or_else(|| err("the sample data is short"))?;
-                in_off = end;
+                let stop = in_off.checked_add(ch_bytes).ok_or_else(|| err("channel size overflows"))?;
+                let src = raw.get(in_off..stop).ok_or_else(|| err("the sample data is short"))?;
+                in_off = stop;
                 let out = channels.get_mut(ci).ok_or_else(|| err("channel index out of range"))?;
-                for (j, p) in row.iter().enumerate() {
-                    let from = (chunk.prefix.get(i0 + j).copied().unwrap_or(0) as usize).saturating_sub(row_from);
-                    let n = (chunk.prefix.get(i0 + j + 1).copied().unwrap_or(0) as usize).saturating_sub(row_from).saturating_sub(from);
-                    let to = deep_counts.get(*p).copied().unwrap_or(0) as usize;
-                    for k in 0..n {
-                        let base = (from + k) * sb;
-                        let v = match t {
-                            ExrSample::F16 => src.get(base..base + 2).map(|b| f16::from_le_bytes([b[0], b[1]]).to_f32()),
-                            ExrSample::F32 => src.get(base..base + 4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
-                            ExrSample::U32 => src.get(base..base + 4).map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) as f32),
-                        };
-                        let (Some(v), Some(slot)) = (v, out.samples.get_mut(to + k)) else {
-                            return Err(err("the sample data is short"));
-                        };
-                        *slot = v;
-                    }
+                let dst = out.samples.get_mut(row_from..row_to).ok_or_else(|| err("the sample data is short"))?;
+                for (slot, b) in dst.iter_mut().zip(src.chunks_exact(sb)) {
+                    *slot = sample_value(*t, b);
                 }
             }
         }
     }
 
-    Ok(DeepImage { width: w as u32, height: h as u32, stage, origin, channels, counts: deep_counts })
+    Ok(DeepImage { width: w as u32, height: h as u32, stage, origin, channels, counts })
 }
 
 /// Where the headers end and the offset tables begin. [`MetaData::read_from_buffered`]
