@@ -197,6 +197,13 @@ fn split_trailing_ellipsis(label: &str) -> (&str, &str) {
     label.strip_suffix('…').map(|base| (base, "…")).or_else(|| label.strip_suffix("...").map(|base| (base, "..."))).unwrap_or((label, ""))
 }
 
+/// A label split into its base and the transient `" (M)"` mark that goes before a trailing
+/// ellipsis while the mnemonics show: `("فتح", " (M)…")`.
+fn transient_mark(label: &str, m: char) -> (String, String) {
+    let (base, tail) = split_trailing_ellipsis(label);
+    (base.to_owned(), format!(" ({m}){tail}"))
+}
+
 /// `prefix + label` as menu text with the mnemonic's first occurrence in `label` underlined
 /// (none when `mnemonic` is None). `color` is the text colour; None takes the widget's. While the
 /// mnemonics show (`visible`), a label without its letter gains a transient `" (M)"` before a
@@ -207,13 +214,13 @@ pub fn mnemonic_text(ui: &Ui, prefix: &str, label: &str, mnemonic: Option<char>,
     let plain = egui::TextFormat { font_id: font.clone(), color, ..Default::default() };
     let at = mnemonic.and_then(|m| label.char_indices().find(|(_, c)| c.to_ascii_uppercase() == m).map(|(i, c)| (i, c.len_utf8())));
     let Some((i, len)) = at.filter(|_| visible) else {
-        let marked = mnemonic.filter(|_| visible).map_or_else(
-            || format!("{prefix}{label}"),
-            |m| {
-                let (base, tail) = split_trailing_ellipsis(label);
-                format!("{prefix}{base} ({m}){tail}")
-            },
-        );
+        let marked = match mnemonic.filter(|_| visible) {
+            Some(m) => {
+                let (base, mark) = transient_mark(label, m);
+                format!("{prefix}{base}{mark}")
+            }
+            None => format!("{prefix}{label}"),
+        };
         return egui::RichText::new(marked).color(color).into();
     };
     let mut job = egui::text::LayoutJob::default();
@@ -277,10 +284,7 @@ pub fn menu_row_text(ui: &Ui, checked: bool, label: &str, mnemonic: Option<char>
             (label.get(i..i + len).unwrap_or_default().to_owned(), underlined),
             (label.get(i + len..).unwrap_or_default().to_owned(), plain.clone()),
         ],
-        None => match mnemonic.filter(|_| mnemonic_visible).map(|m| {
-            let (base, tail) = split_trailing_ellipsis(label);
-            (base.to_owned(), format!(" ({m}){tail}"))
-        }) {
+        None => match mnemonic.filter(|_| mnemonic_visible).map(|m| transient_mark(label, m)) {
             Some((base, mark)) => vec![(base, plain.clone()), (mark, plain.clone())],
             None => vec![(label.to_owned(), plain.clone())],
         },
@@ -315,17 +319,40 @@ pub fn menu_row_text(ui: &Ui, checked: bool, label: &str, mnemonic: Option<char>
     job.into()
 }
 
-/// A menu row's button: `text` with its `shortcut` at the row's reading end, weak-tinted as
-/// [`egui::Button::shortcut_text`] does. Plain `ui.add(Button)` lays its atoms out left-to-right
-/// whatever the direction, so in a right-to-left row the shortcut moves to the left side
-/// ([`egui::Button::left_text`]), where the row's far end now is.
-pub fn menu_row_button<'a>(text: egui::WidgetText, shortcut: Option<String>, rtl: bool) -> egui::Button<'a> {
-    let mut b = egui::Button::new(text);
-    if let Some(sc) = shortcut {
-        let pretty = crate::shortcuts::pretty(&sc);
-        b = if rtl { b.left_text(egui::RichText::new(pretty).weak()) } else { b.shortcut_text(pretty) };
+/// A menu row's button atoms in reading order, whatever the direction: plain `Button` lays its
+/// atoms out left-to-right whatever the direction flag, so `trailing` (a shortcut, a submenu
+/// arrow) moves to the physical left via [`egui::Button::left_text`] in a right-to-left row,
+/// and a row without one gets a leading grow so its label hugs the row's reading start.
+pub fn menu_row_button_atom<'a>(text: egui::WidgetText, trailing: Option<egui::Atom<'a>>, rtl: bool) -> egui::Button<'a> {
+    match (rtl, trailing) {
+        (true, Some(t)) => egui::Button::new(text).left_text(t),
+        (true, None) => egui::Button::new((egui::Atom::grow(), text)),
+        (false, Some(t)) => egui::Button::new(text).right_text(t),
+        (false, None) => egui::Button::new(text),
     }
-    b
+}
+
+/// A menu row's button: `text` with its `shortcut` at the row's reading end, weak-tinted as
+/// [`egui::Button::shortcut_text`] does. The tint is applied to the atom here, so the LTR pixels
+/// are unchanged and the RTL atom order comes from [`menu_row_button_atom`].
+pub fn menu_row_button<'a>(text: egui::WidgetText, shortcut: Option<String>, rtl: bool) -> egui::Button<'a> {
+    let trailing = shortcut.map(|sc| egui::Atom::from(egui::RichText::new(crate::shortcuts::pretty(&sc)).weak()));
+    menu_row_button_atom(text, trailing, rtl)
+}
+
+/// A submenu row's button: the arrow at the row's reading end, where the submenu opens (the
+/// glyph itself rotates with the direction flag in the fork's `arrow_atom`).
+pub fn submenu_row_button(title: egui::WidgetText, rtl: bool) -> egui::Button<'static> {
+    menu_row_button_atom(title, Some(egui::containers::menu::SubMenuButton::arrow_atom(None)), rtl)
+}
+
+/// A hand-built multi-atom row's atoms in reading order: as laid out left-to-right, reversed in
+/// a right-to-left one (grow included). Callers need `egui::IntoAtoms` for `.into_atoms()`.
+pub fn mirror_atoms<'a>(mut atoms: egui::Atoms<'a>, rtl: bool) -> egui::Atoms<'a> {
+    if rtl {
+        atoms.reverse();
+    }
+    atoms
 }
 
 /// One row of any popup menu (a context menu, a flyout, the ruler's unit menu):
@@ -337,14 +364,33 @@ pub fn menu_row_button<'a>(text: egui::WidgetText, shortcut: Option<String>, rtl
 pub fn menu_row(ui: &mut egui::Ui, label: &str, shortcut: Option<&str>, checked: bool, enabled: bool) -> egui::Response {
     let rtl = ui.style().right_to_left;
     let text = if checked || rtl { menu_row_text(ui, checked, label, None, false, GutterSide::ReadingStart) } else { egui::RichText::new(label).into() };
-    // A right-to-left row without a shortcut gets a leading grow, so its label hugs the row's
-    // right edge instead of packing at the left like the button's atoms do.
-    let button = if rtl && shortcut.is_none() {
-        egui::Button::new((egui::Atom::grow(), text))
-    } else {
-        menu_row_button(text, shortcut.map(str::to_string), rtl)
-    };
-    ui.add_enabled(enabled, button)
+    ui.add_enabled(enabled, menu_row_button(text, shortcut.map(str::to_string), rtl))
+}
+
+/// A submenu row, drawn as `ui.menu_button` draws it, except that a row scrolled out of view
+/// doesn't open its submenu. egui opens a submenu whenever the pointer is over its row, clipped
+/// or not: a menu reopened scrolled down (after Edit › Preferences or Window › Theme) has rows
+/// hidden above its view, over the menu bar, and the hidden one under the title opened on the
+/// press; the release on the title then counted as a click outside that submenu and closed the
+/// whole menu (#5896, #6225). An open submenu (e.g. opened from the keyboard) is drawn as usual.
+pub fn submenu_row<R>(ui: &mut egui::Ui, title: egui::WidgetText, content: impl FnOnce(&mut egui::Ui) -> R) -> (egui::Response, Option<R>) {
+    use egui::containers::menu::{MenuState, SubMenu};
+    let sub = SubMenu::id_from_widget_id(ui.next_auto_id());
+    let open = MenuState::from_ui(ui, |state, _| state.open_item == Some(sub));
+    let inactive = ui.style().visuals.widgets.inactive;
+    if open {
+        ui.style_mut().visuals.widgets.inactive = ui.style().visuals.widgets.open;
+    }
+    let response = ui.add(submenu_row_button(title, ui.style().right_to_left));
+    ui.style_mut().visuals.widgets.inactive = inactive;
+    // The rect egui tests the pointer against (`SubMenu::show`), against the part that can be seen.
+    let reach = response.rect.expand2(ui.spacing().item_spacing / 2.0);
+    let hidden = ui.ctx().pointer_hover_pos().is_some_and(|p| reach.contains(p) && !ui.clip_rect().contains(p));
+    if hidden && !open {
+        return (response, None);
+    }
+    let inner = SubMenu::new().show(ui, &response, |ui| crate::direction::popup_body(ui, content));
+    (response, inner.map(|r| r.inner))
 }
 
 impl Keys {
