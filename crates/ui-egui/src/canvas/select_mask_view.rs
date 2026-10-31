@@ -295,14 +295,27 @@ pub fn paint(fields: &mut Map<String, Value>, at: [f64; 2], start: bool, subtrac
     fields.insert("refineStrokes".into(), Value::Array(strokes));
 }
 
-/// The canvas under a Select and Mask dialog with the Refine Edge Brush on: shows the brush at
-/// `over` (zoom = screen points per document pixel) and paints at document point `press`. False
-/// when the brush isn't the top dialog's tool.
-pub fn canvas_brush(app: &mut PhotocraftApp, painter: &egui::Painter, over: egui::Pos2, press: Option<[f64; 2]>, zoom: f32) -> bool {
-    let ctx = painter.ctx().clone();
+/// The canvas under a Select and Mask dialog with the Refine Edge Brush on, the pointer over it:
+/// paints at document point `press`. The brush itself is drawn by [`draw_canvas_brush`], once
+/// the image is painted. False when the brush isn't the top dialog's tool.
+pub fn canvas_brush(app: &mut PhotocraftApp, ctx: &egui::Context, press: Option<[f64; 2]>) -> bool {
     let Some(d) = app.ui.dialogs.last_mut().filter(|d| owns(&d.fields) && brush_on(&d.fields)) else { return false };
     let (alt, start) = ctx.input(|i| (i.modifiers.alt, i.pointer.primary_pressed()));
     // Alt paints in the other mode, as in Photoshop.
+    let subtract = brush_subtract(&d.fields) != alt;
+    ctx.set_cursor_icon(egui::CursorIcon::None);
+    if let Some(at) = press {
+        paint(&mut d.fields, at, start, subtract);
+        ctx.request_repaint();
+    }
+    true
+}
+
+/// The Refine Edge Brush at `over` (zoom = screen points per document pixel): its size, and a
+/// + or a − for the mode Alt gives it.
+pub fn draw_canvas_brush(app: &PhotocraftApp, painter: &egui::Painter, over: egui::Pos2, zoom: f32) {
+    let Some(d) = app.ui.dialogs.last().filter(|d| owns(&d.fields) && brush_on(&d.fields)) else { return };
+    let alt = painter.ctx().input(|i| i.modifiers.alt);
     let subtract = brush_subtract(&d.fields) != alt;
     let r = (brush_size(&d.fields) / 2.0 * zoom).max(1.5);
     let (dark, light) = (egui::Stroke::new(1.0, egui::Color32::from_black_alpha(140)), egui::Stroke::new(1.0, egui::Color32::from_white_alpha(220)));
@@ -315,12 +328,6 @@ pub fn canvas_brush(app: &mut PhotocraftApp, painter: &egui::Painter, over: egui
             painter.line_segment([over - egui::vec2(0.0, arm), over + egui::vec2(0.0, arm)], stroke);
         }
     }
-    ctx.set_cursor_icon(egui::CursorIcon::None);
-    if let Some(at) = press {
-        paint(&mut d.fields, at, start, subtract);
-        ctx.request_repaint();
-    }
-    true
 }
 
 /// The preview request: the command's params plus the view (`__view`), so a view change
