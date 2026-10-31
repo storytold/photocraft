@@ -25,6 +25,13 @@ fn map_sample(map: &Image, u: f32, v: f32, c: usize) -> f32 {
     top + (bot - top) * ay
 }
 
+/// Displace's horizontal or vertical scale in %, bounded as the filter's own ±999 % (the engine
+/// clamps its parameters there too), so the reach of the read and the remap agree and stay small;
+/// a non-finite scale moves nothing.
+fn displace_scale(s: f32) -> f32 {
+    if s.is_finite() { s.clamp(-999.0, 999.0) } else { 0.0 }
+}
+
 /// A map value's shift as a fraction of the full one. On an 8-bit map Photoshop's zero is level
 /// 128, and each level is one 128th, so at 100 % a level moves one pixel (160 moves 32 px, 255
 /// moves 127, 0 moves -128). Mid-grey as 127.5 with 255ths moved 160 by 32.6 px (#10444). A deeper
@@ -44,7 +51,8 @@ fn shift(m: f32, levels: bool) -> f32 {
 /// and reading all of it allocated the gap to one far off-canvas pixel. Wrapping reads the
 /// frame's far side, so each axis reads its runs of source pixels separately.
 pub(crate) fn displace_source(surface: &Surface, area: Rect, bounds: Rect, scale: (f32, f32), undefined: UndefinedAreas) -> Image {
-    let reach = (scale.0.abs().max(scale.1.abs()) / 100.0 * DISPLACE_PX).ceil() as i32 + 2;
+    let (sx, sy) = (displace_scale(scale.0), displace_scale(scale.1));
+    let reach = (sx.abs().max(sy.abs()) / 100.0 * DISPLACE_PX).ceil() as i32 + 2;
     let rect = area.inflate(reach);
     let mut img = Image::new(rect, surface.channels());
     if bounds.is_empty() {
@@ -119,7 +127,7 @@ pub(crate) fn displace(src: &Image, out: Rect, ctx: &Ctx, scale: (f32, f32), str
     let (bw, bh) = (b.width().max(1) as f32, b.height().max(1) as f32);
     // Colour channels of the map (alpha excluded when present: 2 = gray+alpha, 4 = RGBA…).
     let vc = if map.ch >= 3 { 1 } else { 0 };
-    let (sx, sy) = (scale.0 / 100.0 * DISPLACE_PX, scale.1 / 100.0 * DISPLACE_PX);
+    let (sx, sy) = (displace_scale(scale.0) / 100.0 * DISPLACE_PX, displace_scale(scale.1) / 100.0 * DISPLACE_PX);
     remap(src, out, &Ctx { bounds: src.rect, ..*ctx }, Edge::Repeat, |x, y| {
         let (lx, ly) = (x - b.x0 as f32, y - b.y0 as f32);
         let (u, v) = if stretch { (lx / bw * mw, ly / bh * mh) } else { (lx.rem_euclid(mw), ly.rem_euclid(mh)) };

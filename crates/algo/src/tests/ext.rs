@@ -861,6 +861,25 @@ fn displace_reads_half_as_zero_on_deeper_maps() {
 /// A layer with a pixel far past the canvas frames Displace over the canvas and that pixel
 /// (#10444), but the map moves pixels by at most the full shift: only the canvas grown by it is
 /// read, not the gap to the pixel, and the canvas's pixels come out as with a near one.
+/// #10462 review: the algorithm API bounds Displace's scale itself (the engine's ±999 %), so a
+/// huge or non-finite scale can't overflow the read's reach or ask for a vast source.
+#[test]
+fn displace_bounds_its_scale_through_the_algorithm_api() {
+    let s = pattern(SampleType::F32, R);
+    for scale in [1e30, -1e30, f32::INFINITY, f32::NAN] {
+        let p = FilterParams::Displace {
+            horizontal: scale,
+            vertical: 0.0,
+            stretch: false,
+            undefined: UndefinedAreas::Repeat,
+            map: Some(map_image([1.0, 0.5, 0.5, 1.0])),
+            map_8bit: true,
+        };
+        let rect = crate::global_source(&s, &p, R, R).rect;
+        assert!(rect.contains_rect(&R) && rect.width() <= R.width() + 2 * (1279 + 3), "{scale}: {rect:?}");
+    }
+}
+
 #[test]
 fn displace_reads_only_the_pixels_its_map_reaches() {
     let displace = |undefined| FilterParams::Displace {
