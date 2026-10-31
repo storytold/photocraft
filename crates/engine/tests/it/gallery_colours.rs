@@ -51,11 +51,11 @@ fn stamp_uses_only_the_selected_colors() {
     }
 }
 
-/// Balance still selects dark or light, with the selection boundary and one-step Undo intact.
+/// Balance controls the chosen color, with the selection boundary and one-step Undo intact.
 #[test]
 fn stamp_balance_selection_and_undo() {
     for depth in [8, 16, 32] {
-        for (balance, expected) in [(0, 1.0), (50, 0.0)] {
+        for (balance, expected) in [(0, 1.0), (40, 0.0), (50, 0.0)] {
             let mut s = Session::new();
             s.execute("file.new", json!({"width": 16, "height": 16, "depth": depth, "background": "#808080"})).unwrap();
             s.execute("select.rect", json!({"x": 4, "y": 4, "width": 8, "height": 8, "antiAlias": false})).unwrap();
@@ -68,6 +68,28 @@ fn stamp_balance_selection_and_undo() {
             assert_eq!(s.active().unwrap().history.past_len(), history + 1);
             s.undo();
             assert_eq!(*s.active().unwrap().doc, *before);
+        }
+    }
+}
+
+/// Smoothness changes spatial detail without adding intermediate colors.
+#[test]
+fn stamp_smoothness_changes_spatial_detail() {
+    for depth in [8, 16, 32] {
+        let render = |smoothness| {
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width": 16, "height": 16, "depth": depth, "background": "#ffffff"})).unwrap();
+            s.execute("select.rect", json!({"x": 6, "y": 6, "width": 4, "height": 4, "antiAlias": false})).unwrap();
+            s.execute("edit.fill", json!({"contents": "color", "color": "#000000"})).unwrap();
+            s.execute("select.deselect", json!({})).unwrap();
+            s.execute("filter.gallery.stamp", json!({"lightDarkBalance": 25, "smoothness": smoothness})).unwrap();
+            image(&mut s)
+        };
+        let fine = render(1);
+        let smooth = render(50);
+        assert_ne!(fine, smooth, "{depth}-bit: Smoothness must change the spatial result");
+        for p in fine.chunks_exact(4).chain(smooth.chunks_exact(4)) {
+            assert!(p[..3] == [0.0; 3] || p[..3] == [1.0; 3]);
         }
     }
 }
