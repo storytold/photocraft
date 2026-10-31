@@ -7,6 +7,8 @@ use std::rc::Rc;
 
 type Appends = Rc<RefCell<Vec<(String, String)>>>;
 
+/// Build an enabled text-log fixture after consuming the setup command while logging is off.
+/// The captured append calls expose retries, filtering and exact serialized batches.
 fn app(destination: prefs::LogDestination) -> (PhotocraftApp, Appends) {
     let calls = Appends::default();
     let sink = calls.clone();
@@ -28,6 +30,8 @@ fn app(destination: prefs::LogDestination) -> (PhotocraftApp, Appends) {
     (app, calls)
 }
 
+/// An append failure can follow a partial write, so upkeep reports it once and preserves the edit.
+/// Later ticks must not replay that batch; a later command appends only its new entry.
 #[test]
 fn failed_append_reports_the_path_and_error_without_undoing_the_edit_or_replaying_it() {
     for destination in [prefs::LogDestination::TextFile, prefs::LogDestination::Both] {
@@ -86,6 +90,7 @@ fn failed_append_reports_the_path_and_error_without_undoing_the_edit_or_replayin
     }
 }
 
+/// Translate only the History Log label; braces in paths and I/O errors remain literal data.
 #[test]
 fn failed_append_uses_the_translated_history_log_label_and_keeps_literal_details() {
     let (mut app, _) = app(prefs::LogDestination::Both);
@@ -97,6 +102,7 @@ fn failed_append_uses_the_translated_history_log_label_and_keeps_literal_details
     assert!(app.ui.status_error);
 }
 
+/// Successful writes must preserve both ordinary and error status messages from other work.
 #[test]
 fn successful_append_preserves_unrelated_status() {
     for error in [false, true] {
@@ -111,6 +117,8 @@ fn successful_append_preserves_unrelated_status() {
     }
 }
 
+/// Every disabled, filtered or unavailable-sink path consumes its batch without changing status.
+/// Re-enabling logging must not retroactively append commands from the skipped interval.
 #[test]
 fn skipped_batches_preserve_status_and_are_not_appended_later() {
     for skip in ["disabled", "metadata", "empty path", "no service", "sessions only", "empty journal"] {
@@ -149,6 +157,8 @@ fn skipped_batches_preserve_status_and_are_not_appended_later() {
     }
 }
 
+/// Keep exact labels, unknown-command fallback and session filtering for both file destinations.
+/// Detailed output retains command identifiers and parameters rather than only display labels.
 #[test]
 fn detail_levels_keep_the_existing_labels_and_session_filter() {
     let entries = [
