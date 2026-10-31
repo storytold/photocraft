@@ -45,7 +45,6 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ipp", Class::Standalone),
     ("raw", Class::Standalone),
     ("affinity", Class::Standalone),
-    ("adobe-assets", Class::Standalone),
     // Pen tablet input (the one isolated `unsafe` helper: AppKit interop on macOS).
     ("tablet", Class::Standalone),
     ("doc", Class::Layer(1)),
@@ -58,14 +57,10 @@ pub const TABLE: &[(&str, Class)] = &[
     ("gpu", Class::Layer(3)),
     ("format", Class::Layer(3)),
     ("io", Class::Layer(4)),
-    ("tools", Class::Layer(4)),
-    ("viewport", Class::Layer(4)),
-    ("ml", Class::Layer(4)),
     ("plugins", Class::Layer(4)),
     ("engine", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
     ("automation", Class::Layer(6)),
-    ("platform", Class::Layer(6)),
     ("testkit", Class::Testkit),
     // L7 apps and tooling
     ("photocraft", Class::Exempt),
@@ -315,7 +310,7 @@ mod tests {
 
     #[test]
     fn standalone_crates_have_no_workspace_deps() {
-        for s in ["photocraft-psd", "photocraft-codecs", "photocraft-adobe-assets"] {
+        for s in ["photocraft-psd", "photocraft-codecs", "photocraft-raw"] {
             let v = check(&[c(s, &[("photocraft-geom", Normal, true)])]);
             assert!(matches!(v[..], [Violation::StandaloneHasWorkspaceDep { .. }]), "{s}");
             assert!(check(&[c(s, &[("image", Normal, false)])]).is_empty());
@@ -351,7 +346,7 @@ mod tests {
         }
         assert!(check(&[c("photocraft-engine", &[("egui_extras_not", Normal, false)])]).is_empty());
         assert!(check(&[c("photocraft-ui-egui", &[("craft-ui", Normal, false)])]).is_empty());
-        assert!(check(&[c("photocraft-platform", &[("winit", Normal, false)])]).is_empty());
+        assert!(check(&[c("photocraft-automation", &[("winit", Normal, false)])]).is_empty());
     }
 
     #[test]

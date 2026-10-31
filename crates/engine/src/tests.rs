@@ -71,7 +71,7 @@ fn command_ids_are_unique_and_documented() {
         assert!(!c.label.is_empty());
         assert!(c.id.contains('.'), "{} should be namespaced", c.id);
     }
-    assert!(command_specs().len() > 60, "{}", command_specs().len());
+    assert!(command_specs().len() > 900, "{}", command_specs().len());
 }
 
 #[test]
