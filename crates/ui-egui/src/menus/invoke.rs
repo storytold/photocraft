@@ -233,7 +233,7 @@ fn invoke_file_commands(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, 
             if app.services.file_provider.as_ref().is_some_and(|provider| provider.enabled()) {
                 // Provider saves choose a destination before any local disk-change checks.
                 // A binding's resource ID never reaches the filesystem writer or stamp API.
-                return app.save_dialog_flow(params.get("path").and_then(Value::as_str).map(str::to_owned), choices, true);
+                return app.save_dialog_flow(params.get("path").and_then(Value::as_str).map(str::to_owned), choices, true).map(Some);
             }
             match params.get("path").and_then(Value::as_str) {
                 Some(path) => app.save_as_with(Some(path.to_string()), choices),
