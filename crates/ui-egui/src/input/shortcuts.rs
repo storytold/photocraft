@@ -195,6 +195,35 @@ fn new_layer_without_dialog(app: &mut PhotocraftApp, ctx: &egui::Context) -> boo
     true
 }
 
+/// Make Selection from Path's shortcut (⌘↩ by default) with ⇧ adds the path to the selection, with
+/// ⌥ subtracts it and with both intersects, as in Photoshop (#7726). A combination bound to
+/// something else keeps its binding.
+fn path_selection_chords(app: &mut PhotocraftApp, ctx: &egui::Context, focus: crate::shortcut_dispatch::Focus) -> bool {
+    const TO_SELECTION: &str = "path.toSelection";
+    let Some(base) = effective_shortcut(app, TO_SELECTION, default_shortcut(TO_SELECTION).as_deref()).and_then(|s| parse(&s)) else {
+        return false;
+    };
+    if base.modifiers.shift || base.modifiers.alt {
+        return false;
+    }
+    for (shift, alt, mode) in [(true, true, "intersect"), (true, false, "add"), (false, true, "subtract")] {
+        let mut sc = base;
+        sc.modifiers.shift = shift;
+        sc.modifiers.alt = alt;
+        let pressed =
+            ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if key_matches(&sc, *key, *modifiers))));
+        if !pressed || !focus.allows(&sc) || crate::shortcut_dispatch::bindings(app).iter().any(|(_, b)| *b == sc) || !consume(ctx, &sc) {
+            continue;
+        }
+        if let Err(e) = crate::vector_ui::path_to_selection(app, json!({"mode": mode})) {
+            app.ui.status = e;
+            app.ui.status_error = true;
+        }
+        return true;
+    }
+    false
+}
+
 fn nav_keys(app: &mut PhotocraftApp, ctx: &egui::Context) -> bool {
     let Some(id) = nav_shortcut(app, ctx) else { return false };
     if crate::menus::is_enabled(app, id) {
@@ -759,6 +788,10 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
     let editing = crate::type_tool::handle_keys(app, ctx);
     // ⌥⇧⌘N: a new layer at once, without the New Layer dialog ⇧⌘N opens (#4794).
     if new_layer_without_dialog(app, ctx) {
+        return true;
+    }
+    // ⇧⌘↩ / ⌥⌘↩ / ⇧⌥⌘↩: the path added to, subtracted from or intersected with the selection.
+    if !editing && path_selection_chords(app, ctx, focus) {
         return true;
     }
     // Registry, UI and menu-catalogue shortcuts (see [`crate::shortcut_dispatch::bindings`]).
