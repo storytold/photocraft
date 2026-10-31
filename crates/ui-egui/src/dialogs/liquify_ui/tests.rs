@@ -155,8 +155,9 @@ fn brush_settings_are_remembered_between_uses() {
 }
 
 /// The reference application's Liquify has Twirl Clockwise only: no Twirl Counterclockwise
-/// tool on the strip or a shortcut, and a script or saved setting naming it is refused with a
-/// clear error instead of selecting it (Alt with Twirl Clockwise twirls counterclockwise).
+/// tool on the strip or a shortcut. A script naming it is refused with a clear error (Alt with
+/// Twirl Clockwise twirls counterclockwise); a setting saved by an older version opens on Twirl
+/// Clockwise.
 #[test]
 fn the_tool_strip_has_no_twirl_counterclockwise() {
     assert!(!LiquifyTool::ALL.contains(&LiquifyTool::TwirlCcw));
@@ -174,12 +175,18 @@ fn the_tool_strip_has_no_twirl_counterclockwise() {
     let err = control(&mut app, &json!({"tool": "twirlCcw"})).unwrap_err();
     assert!(err.contains("twirlCw") && err.contains("Alt"), "{err}");
     assert_eq!(app.distort.liquify.as_ref().unwrap().opts.tool, LiquifyTool::Pucker, "the tool stays");
-    // A preference saved by an older version that names it opens, and on another tool.
+    // Actions that are not tools are refused too, without the Alt hint that fits twirlCcw only.
+    for action in ["reconstructAll", "freezeAll", "thawAll", "invertFreeze"] {
+        let err = control(&mut app, &json!({ "tool": action })).unwrap_err();
+        assert!(err.contains("not a Liquify tool") && !err.contains("Alt"), "{action}: {err}");
+    }
+    assert_eq!(app.distort.liquify.as_ref().unwrap().opts.tool, LiquifyTool::Pucker, "the tool stays");
+    // A preference saved by an older version that names it opens on Twirl Clockwise.
     cancel(&mut app);
     app.session.prefs.edit(|p| p.dialogs.insert(REMEMBERED.into(), json!({"tool": "twirlCcw", "density": 70})));
     open(&mut app, &ctx).unwrap();
     let o = &app.distort.liquify.as_ref().unwrap().opts;
-    assert_ne!(o.tool, LiquifyTool::TwirlCcw);
+    assert_eq!(o.tool, LiquifyTool::TwirlCw, "the saved twirl keeps its tool");
     assert_eq!(o.density, 70.0, "the rest of the saved settings still apply");
 }
 

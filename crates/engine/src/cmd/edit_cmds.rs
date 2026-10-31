@@ -54,6 +54,7 @@ fn scratch_doc(doc: &Document) -> Document {
     copies.icc_profile = doc.icc_profile.clone();
     copies.resolution_dpi = doc.resolution_dpi;
     copies.patterns = doc.patterns.clone();
+    copies.text_styles = doc.text_styles.clone();
     copies
 }
 
@@ -442,8 +443,10 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32) -> Result<
             linked.push((*signature, *key, missing));
         }
     }
+    let styles = std::mem::take(&mut copies.text_styles);
     let id = s.edit("Paste", |doc, active| {
         doc.patterns.extend(patterns);
+        crate::layer_copy_cmds::land_text_styles(doc, styles);
         doc.metadata.psd_global_blocks.extend(linked);
         // The first pasted layer goes where a new layer would; the rest stack above it.
         let mut place = crate::layer_place::Place::AutoEditable;

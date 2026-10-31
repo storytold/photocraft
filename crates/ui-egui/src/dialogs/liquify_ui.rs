@@ -129,8 +129,11 @@ impl LiquifyOpts {
         if let Some(t) = v.get("tool") {
             let tool: LiquifyTool = serde_json::from_value(t.clone()).map_err(|e| format!("bad tool: {e}"))?;
             // Strokes can twirl counterclockwise, but no tool does: hold Alt with Twirl Clockwise.
-            if !LiquifyTool::ALL.contains(&tool) {
+            if tool == LiquifyTool::TwirlCcw {
                 return Err(format!("{t} is not a Liquify tool: choose twirlCw and hold Alt (Option) to twirl counterclockwise"));
+            }
+            if !LiquifyTool::ALL.contains(&tool) {
+                return Err(format!("{t} is not a Liquify tool"));
             }
             self.tool = tool;
         }
@@ -574,7 +577,12 @@ fn open_on(
     // Liquify opens as it was left (#418). Saved values are clamped; a bad one is skipped.
     d.opts.size = ((canvas.width().max(canvas.height()) as f32) / 10.0).round().clamp(10.0, 1500.0);
     if let Some(saved) = app.session.prefs().dialogs.get(REMEMBERED) {
-        let _ = d.opts.apply(saved);
+        // Older versions had a Twirl Counterclockwise tool; its saved choice is Twirl Clockwise now.
+        let mut saved = saved.clone();
+        if saved.get("tool").and_then(Value::as_str) == Some("twirlCcw") {
+            saved["tool"] = json!("twirlCw");
+        }
+        let _ = d.opts.apply(&saved);
     }
     // Layer ids belong to one document: a remembered backdrop Use starts at All Layers.
     d.opts.backdrop_layer = None;
