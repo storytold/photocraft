@@ -498,7 +498,7 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, ui.is_enabled(), "Color Ramp"));
     let mods = ui.input(|i| i.modifiers);
     let target = cp.background != mods.alt;
-    let pick_id = ramp_id.with(("pick", cp.ramp as u8, cp.web_safe_ramp, target));
+    let pick_id = ramp_id.with(("pick", cp.ramp as u8, cp.web_safe_ramp));
     if resp.clicked() && mods.shift {
         app.ui.color_panel.ramp = cp.ramp.next();
     } else if (resp.dragged() || resp.clicked())
@@ -517,7 +517,7 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
         set_color(app, ui.ctx(), target, c);
         // A colour can occur at several points, so remember the pick rather than guessing its position.
         let color = rgb3(if target { app.session.tools.background } else { app.session.tools.foreground });
-        ui.data_mut(|d| d.insert_temp(pick_id, (vec2(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)), color)));
+        ui.data_mut(|d| d.insert_temp(pick_id, (vec2(x.clamp(0.0, 1.0), y.clamp(0.0, 1.0)), color, target)));
     }
     resp.context_menu(|ui| {
         widgets::style_spectrum_popup_menu(ui);
@@ -530,8 +530,13 @@ fn ramp(app: &mut PhotocraftApp, ui: &mut egui::Ui, height: f32) {
             set_color(app, ui.ctx(), target, c);
         }
     }
-    let color = rgb3(if target { app.session.tools.background } else { app.session.tools.foreground });
-    if let Some((p, _)) = ui.data(|d| d.get_temp::<(egui::Vec2, [f32; 3])>(pick_id)).filter(|(_, c)| *c == color) {
+    if let Some((mut p, color, background)) = ui.data(|d| d.get_temp::<(egui::Vec2, [f32; 3], bool)>(pick_id))
+        && color == rgb3(if background { app.session.tools.background } else { app.session.tools.foreground })
+    {
+        // After a Current Colors pick, the chosen color becomes the ramp's new endpoint.
+        if cp.ramp == ColorRamp::CurrentColors && ramp_color(cp.ramp, cp.web_safe_ramp, fg, bg, p.x, p.y) != color {
+            p.x = if background { 1.0 } else { 0.0 };
+        }
         let p = bar.min + bar.size() * p;
         let painter = ui.painter().with_clip_rect(bar);
         painter.circle_stroke(p, 5.0, Stroke::new(1.5, Color32::WHITE));
