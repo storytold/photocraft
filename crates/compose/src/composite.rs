@@ -472,6 +472,7 @@ pub(crate) fn composite_layer_plain(layer: &Layer, clipped: &[Layer], backdrop: 
         if let (Some(m), Some(b)) = (&hide, &before) {
             advanced::apply_hiding_mask(backdrop, b, m);
         }
+        recycle_mask(hide);
         return;
     }
     if let Some((mut content, stroke, mask)) = shape_parts(layer, clipped, rect, cx) {
@@ -625,7 +626,10 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
         let (content, parts) = match split_parts(layer, rect, cx) {
             Some((fill, stroke, mask)) => (fill, Some((stroke, mask))),
             None => {
-                let Some(content) = render_content(layer, rect, cx) else { return };
+                let Some(content) = render_content(layer, rect, cx) else {
+                    recycle_mask(hide);
+                    return;
+                };
                 (content, None)
             }
         };
@@ -640,6 +644,7 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
             let plain = Buffer { rect, px: base.px.iter().map(|p| [p[0], p[1], p[2], 1.0]).collect() };
             advanced::apply_hiding_mask(&mut opaque, &plain, m);
         }
+        recycle_mask(hide);
         for (p, o) in base.px.iter_mut().zip(&opaque.px) {
             if p[3] > 0.0 {
                 *p = [o[0], o[1], o[2], p[3]];
