@@ -1,26 +1,6 @@
 use super::shortcuts::shortcut_items;
 use super::{BTreeMap, DialogKind, Map, PhotocraftApp, RichText, SECTIONS, Tokens, Value, json, prefs};
 
-/// A single-line text edit. In a right-to-left UI its text reads from the right — a
-/// right-aligned galley on a right-to-left base direction, like the other fields; a
-/// left-to-right UI keeps egui's default edit, pixel-identical.
-fn singleline_edit(ui: &mut egui::Ui, text: &mut String, width: f32, hint: &str) -> egui::Response {
-    let edit = egui::TextEdit::singleline(text).desired_width(width).hint_text(hint.to_owned());
-    if !crate::direction::is_rtl() {
-        return ui.add(edit);
-    }
-    let mut layouter = move |ui: &egui::Ui, text: &dyn egui::TextBuffer, _wrap_width: f32| {
-        let font = ui.style().text_styles.get(&egui::TextStyle::Body).cloned().unwrap_or_default();
-        let mut job = egui::text::LayoutJob::simple_singleline(text.as_str().to_owned(), font, ui.visuals().text_color());
-        job.direction = egui::epaint::text::TextDirection::RightToLeft;
-        job.halign = egui::Align::Max;
-        job.language = ui.language();
-        job.keep_trailing_whitespace = true;
-        ui.fonts_mut(|f| f.layout_job(job))
-    };
-    ui.add(edit.align(egui::Align2::RIGHT_CENTER).layouter(&mut layouter))
-}
-
 // ------------------------------------------------------------------ menu routing
 
 /// Shell front ends for Edit-menu commands invoked without parameters (dialogs, pickers).
@@ -276,7 +256,7 @@ pub(super) fn presets_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut M
     });
     let mut new_name = f.get("newName").and_then(Value::as_str).unwrap_or("").to_string();
     ui.horizontal(|ui| {
-        singleline_edit(ui, &mut new_name, 200.0, "").accessible_name(tl!("Name"));
+        crate::widgets::rtl_singleline_edit(ui, &mut new_name, 200.0, "").accessible_name(tl!("Name"));
         if ui.add_enabled(selected < list.len() && !new_name.trim().is_empty(), egui::Button::new(tl!("Rename"))).clicked() {
             let _ = app.run("edit.presets.presetManager", json!({"action": "rename", "kind": kind, "index": selected, "newName": new_name}));
         }
