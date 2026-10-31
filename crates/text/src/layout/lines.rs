@@ -320,12 +320,14 @@ impl Para<'_> {
     }
 
     /// Where the line starts along its extent: box and area lines at their box or span edge,
-    /// point lines around the anchor.
-    fn line_start(&self, f: &LineFrame, offset: f32, adv: f32, line_kern: f32) -> f32 {
+    /// point lines around the anchor. `line_growth` is the horizontal-scale growth of the line's
+    /// extent: point lines are placed by the width they are drawn at, not parley's unscaled one.
+    fn line_start(&self, f: &LineFrame, offset: f32, adv: f32, line_kern: f32, line_growth: f32) -> f32 {
         if !self.env.wraps {
+            let width = adv + line_kern + line_growth;
             let target = match self.ps.align {
-                TextAlign::Center | TextAlign::JustifyCenter => -(adv + line_kern) / 2.0,
-                TextAlign::Right | TextAlign::JustifyRight => -(adv + line_kern),
+                TextAlign::Center | TextAlign::JustifyCenter => -width / 2.0,
+                TextAlign::Right | TextAlign::JustifyRight => -width,
                 _ => self.indent_start,
             };
             return target - offset;
@@ -400,7 +402,8 @@ impl Para<'_> {
         let mut kern_px = self.kerning(optical, &slots);
         let (trailing_tabs, trailing_growth) = self.apply_tab_stops(&slots, &mut kern_px, f.index);
         let line_kern: f32 = kern_px.iter().sum::<f32>() - trailing_tabs;
-        let dx = self.line_start(f, m.offset, adv, line_kern);
+        let line_growth: f32 = slots.iter().map(|s| s.growth).sum::<f32>() - trailing_growth;
+        let dx = self.line_start(f, m.offset, adv, line_kern, line_growth);
         let lc = LineCtx { dx, baseline: f.baseline, slots: &slots, kern_px: &kern_px, line_index: out.lines.len() };
         let (g0, c0) = (out.glyphs.len(), out.clusters.len());
         let mut state = LineState { cursors: kern_cursors(line, &slots), seen_runs: Vec::new(), vinfo: Vec::new(), extra: 0.0 };
