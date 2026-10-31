@@ -230,13 +230,19 @@ fn render_with_source(
         }
     };
     let quick = doc.quick_mask.as_ref().filter(|_| !v.quick_mask_hidden && !solo_quick);
+    // Spot inks preview with Color Settings › Spot's dot gain, as Photoshop shows them.
+    let gain = photocraft_compose::multichannel::spot_dot_gain();
     for ch in overlays.into_iter().chain(quick) {
         let (color, opacity) = match ch.spot {
             // Spot inks show more solid as solidity rises.
             Some((ink, solidity)) => (ink, 0.5 + 0.5 * solidity),
             None => (ch.color, ch.opacity),
         };
-        tint(sample(&ch.surface, r, factor), color, opacity, &|x| ch.overlay_coverage(x));
+        if ch.spot.is_some() {
+            tint(sample(&ch.surface, r, factor), color, opacity, &|x| photocraft_compose::multichannel::dot_gain(ch.overlay_coverage(x), gain));
+        } else {
+            tint(sample(&ch.surface, r, factor), color, opacity, &|x| ch.overlay_coverage(x));
+        }
     }
     // ⇧⌥-click mask view (#196): the layer mask tinted over the hidden areas in the Layer Mask
     // Display Options colour and opacity (red at 50 % unless set).
@@ -281,7 +287,9 @@ fn q(x: f32) -> u8 {
 
 fn view_key(v: &ChannelView, look: Look) -> u64 {
     let s = serde_json::to_string(&(v, look.mask_rgb, look.mask_opacity)).unwrap_or_default();
-    s.bytes().fold(look.in_color as u64 + 1, |h, b| h.wrapping_mul(1_099_511_628_211).wrapping_add(b as u64))
+    // Spot overlays follow Color Settings › Spot: a new dot gain redraws them.
+    let seed = (look.in_color as u64 + 1) ^ u64::from(photocraft_compose::multichannel::spot_dot_gain().to_bits()) << 8;
+    s.bytes().fold(seed, |h, b| h.wrapping_mul(1_099_511_628_211).wrapping_add(b as u64))
 }
 
 /// Make the channel-view texture of document `idx` current; `None` = nothing to draw.

@@ -865,7 +865,21 @@ fn gpu_display_luts_are_per_display() {
     assert_eq!((gpu.display_lut_signature(key, 1), gpu.display_lut_signature(key, 4)), (Some(s1), Some(s4)));
     assert!(gpu.has_display_lut(key, 4));
     // The shared texture's key is the same for both displays.
-    assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref()), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref()));
+    assert_eq!(texture_key(canvas_display(&app, &doc, Some(1)).0.as_deref(), &doc), texture_key(canvas_display(&app, &doc, Some(4)).0.as_deref(), &doc));
+}
+
+/// The GPU canvas texture of a Multichannel document is filled by the CPU compositor, so its
+/// key carries the ink preview (Color Settings › Spot) like the CPU canvas key does.
+#[test]
+fn gpu_texture_key_follows_the_ink_preview() {
+    use super::display::ink_preview_key;
+    use photocraft_color::{ColorMode, SampleType};
+    let size = photocraft_doc::Size::new(2, 2);
+    let inks = Document::new("m", size, ColorMode::Multichannel, SampleType::U8);
+    let rgb = Document::new("r", size, ColorMode::Rgb, SampleType::U8);
+    assert_ne!(ink_preview_key(&inks), 0);
+    assert_eq!(texture_key(None, &inks), ink_preview_key(&inks));
+    assert_eq!(texture_key(None, &rgb), 0);
 }
 
 /// The navigator's update after an edit (its image with the edit's damage, grown by the
