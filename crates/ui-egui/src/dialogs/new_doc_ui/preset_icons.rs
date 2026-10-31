@@ -57,6 +57,7 @@ mod tests {
     use photocraft_engine::prefs::UnitsAndRulers;
     use serde_json::{Map, json};
 
+    /// Require distinct embedded category symbols and exact canonical overrides for named devices.
     #[test]
     fn categories_and_explicit_devices_use_embedded_distinct_icons() {
         let mut categories = std::collections::HashSet::new();
@@ -84,6 +85,7 @@ mod tests {
         }
     }
 
+    /// Protect source identity: a tablet-sized snapshot or device-like saved name is still a snapshot.
     #[test]
     fn snapshot_and_unknown_sources_never_guess_category_from_title_or_dimensions() {
         use photocraft_engine::document_preset_cmds::DocumentSettings;
@@ -101,6 +103,7 @@ mod tests {
         assert!(icons::exists("clipboard"));
     }
 
+    /// Keep the canonical icon stable when orientation or resolution preferences rewrite geometry.
     #[test]
     fn icon_identity_survives_orientation_and_resolution() {
         let units = UnitsAndRulers { print_resolution: 200.0, screen_resolution: 96.0, ..Default::default() };

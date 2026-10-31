@@ -492,6 +492,7 @@ mod dialog {
     /// The navy Classic selection must not hide the chosen preset's name or dimensions.
     #[test]
     fn classic_selected_preset_uses_selection_ink_and_other_cards_keep_normal_ink() {
+        /// Find painted text ink through grouped shapes so the assertion checks renderer output.
         fn color(shape: &egui::Shape, title: &str) -> Option<egui::Color32> {
             match shape {
                 egui::Shape::Text(text) if text.galley.job.text == title => text.galley.job.sections.first().map(|s| s.format.color),

@@ -441,6 +441,9 @@ fn recent_cards(f: &Map<String, Value>, recent: &[DocumentSettings], units: &Uni
     cards
 }
 
+/// Render each saved snapshot as one icon-and-name selection target. A selection restores
+/// its settings without creating a document; a second click requests creation via the caller.
+/// Delete errors remain in the dialog fields, and an empty catalog offers no creation action.
 fn saved_presets(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> bool {
     let presets = app.session.presets.documents.clone();
     if presets.is_empty() {
@@ -529,8 +532,10 @@ fn save_preset(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<St
     }
 }
 
-/// Returns whether a preset double-click requested creation, after applying its settings.
-/// A recent category click can make egui count the preset double-click as a triple-click.
+/// Render canonical category/source icons within the existing tabs, cards and saved controls.
+/// Icons follow preset provenance while selection and creation keep the same settings paths.
+/// Return a creation request only after applying the preset, using the shared touch-tolerant
+/// second-click recognizer rather than the toolkit's raw double/triple-click count.
 pub fn body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) -> bool {
     let t = Tokens::get(ui.ctx());
     // Headings and field labels are static, as in Photoshop: no text cursor over them, no
