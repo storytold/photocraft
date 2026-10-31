@@ -540,6 +540,8 @@ pub struct LiveStroke {
     params: Value,
     /// [`finish`](LiveStroke::finish) ran: the doc shows the whole stroke.
     finished: bool,
+    /// The lone first dab shown before the stroke has painted anything (see `composite`).
+    first_dab: Rect,
     /// The document's CMYK profile the commit enters (`stroke_with`), so the preview shows the
     /// pixels a `paint.stroke` with `seed` will write.
     cmyk: Option<std::sync::Arc<photocraft_color::convert::CmykSpace>>,
@@ -640,6 +642,7 @@ impl LiveStroke {
             layer,
             params: p.clone(),
             finished: false,
+            first_dab: Rect::EMPTY,
             cmyk: doc_cmyk_space(s),
             points: Vec::new(),
             base,
@@ -735,7 +738,21 @@ impl LiveStroke {
     fn composite(&mut self) -> Result<Rect> {
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
         if !self.mirror_distinct.iter().any(|d| *d) {
-            let dmg = self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
+            // The brush holds a stroke's first dab back until the next point gives it a
+            // direction. Until the stroke has painted anything, show that dab as finishing would,
+            // so a press paints at once; the next composite takes it back.
+            let mut dmg = std::mem::replace(&mut self.first_dab, Rect::EMPTY);
+            if !dmg.is_empty() {
+                surf.write_region(dmg, &self.pre.read_region(dmg));
+                self.renderer.mark_dirty(dmg);
+            }
+            dmg = dmg.union(&self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false));
+            if self.renderer.bounds().is_empty()
+                && let Some(mut first) = self.renderer.tail_preview()
+            {
+                self.first_dab = first.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
+                dmg = dmg.union(&self.first_dab);
+            }
             if let Some(colors) = self.colors {
                 crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
             }
