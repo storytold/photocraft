@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use photocraft_automation::budgets::write_reply;
 use photocraft_automation::security::{
-    AUTH_DEADLINE, AuthDeadlineStream, ConnectionLimiter, LineRead, MAX_CONNECTIONS, MAX_REQUEST_BYTES, authentication_reply, configure_stream,
+    AUTH_DEADLINE, AuthDeadlineStream, AuthStep, ConnectionLimiter, LineRead, MAX_CONNECTIONS, MAX_REQUEST_BYTES, ServerHandshake, configure_stream,
     read_bounded_line, repeat_auth_reply,
 };
 use photocraft_ui_egui::ControlRequest;
@@ -66,6 +66,7 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
     let mut reader = BufReader::new(AuthDeadlineStream::new(read, auth_deadline));
     let mut out = stream;
     let mut line = String::new();
+    let mut handshake = ServerHandshake::new();
     let mut authenticated = false;
     loop {
         match read_bounded_line(&mut reader, &mut line) {
@@ -84,12 +85,12 @@ fn serve_with_auth_deadline(stream: TcpStream, token: &str, tx: Sender<ControlRe
             Ok(LineRead::Line) => {}
         }
         if !authenticated {
-            let (reply, ok) = authentication_reply(&line, token);
-            authenticated = ok;
-            if ok && reader.get_mut().authenticated().is_err() {
+            let (reply, step) = handshake.reply(&line, token);
+            authenticated = step == AuthStep::Authenticated;
+            if authenticated && reader.get_mut().authenticated().is_err() {
                 break;
             }
-            if write_reply(&mut out, &reply).is_err() || out.flush().is_err() || !authenticated {
+            if write_reply(&mut out, &reply).is_err() || out.flush().is_err() || step == AuthStep::Rejected {
                 break;
             }
             continue;
@@ -321,6 +322,51 @@ mod tests {
         let after: Value = serde_json::from_str(&line).unwrap();
         assert_eq!(after["id"], 9);
         assert_eq!(after["result"], "still serving");
+        drop(reader);
+        drop(stream);
+        handler.join().unwrap();
+        server.join().unwrap();
+    }
+
+    /// NV-6: the desktop server answers challenge authentication, proving it holds the token
+    /// before the client sends its proof, and dispatches only after that proof.
+    #[test]
+    fn challenge_authentication_proves_the_server_then_serves() {
+        use photocraft_automation::security::{CHALLENGE_METHOD, ProofRole, generate_nonce, handshake_proof, proof_matches};
+        const TOKEN: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (tx, rx) = channel::<ControlRequest>();
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            serve(stream, TOKEN, tx, egui::Context::default());
+        });
+        let handler = std::thread::spawn(move || {
+            let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            assert_eq!(req.method, "test.after", "only the request after the proof is dispatched");
+            req.reply.send(json!({"ok": true, "result": "served"})).unwrap();
+        });
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        let client_nonce = generate_nonce().unwrap();
+        writeln!(stream, "{}", json!({"id": 1, "method": CHALLENGE_METHOD, "params": {"clientNonce": client_nonce}})).unwrap();
+        reader.read_line(&mut line).unwrap();
+        let challenge: Value = serde_json::from_str(&line).unwrap();
+        assert!(!line.contains(TOKEN), "{line}");
+        let server_nonce = challenge["result"]["serverNonce"].as_str().unwrap().to_owned();
+        let server_proof = challenge["result"]["serverProof"].as_str().unwrap();
+        assert!(proof_matches(TOKEN, ProofRole::Server, &client_nonce, &server_nonce, server_proof), "{line}");
+        let proof = handshake_proof(TOKEN, ProofRole::Client, &client_nonce, &server_nonce).unwrap();
+        writeln!(stream, "{}", json!({"id": 2, "method": "auth", "params": {"proof": proof}})).unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["result"]["authenticated"], true, "{line}");
+        writeln!(stream, "{}", json!({"id": 3, "method": "test.after"})).unwrap();
+        line.clear();
+        reader.read_line(&mut line).unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&line).unwrap()["result"], "served");
         drop(reader);
         drop(stream);
         handler.join().unwrap();
