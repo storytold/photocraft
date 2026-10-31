@@ -265,6 +265,13 @@ fn constraint_menu(ui: &mut egui::Ui, d: &mut WideAngleDialog) {
     }
 }
 
+/// The hand-painted chrome title band, based in the UI's direction like the app title bar.
+fn chrome_title_job(title: String, font: FontId, color: Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::simple_singleline(title, font, color);
+    job.direction = crate::direction::text_direction();
+    job
+}
+
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if app.wide_angle.is_none() {
         return;
@@ -284,7 +291,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         painter.rect_filled(full, 0.0, t.chrome);
         let title = ERect::from_min_size(full.min, vec2(full.width(), 30.0));
         painter.rect_filled(title, 0.0, t.dock);
-        painter.text(title.center(), Align2::CENTER_CENTER, format!("Adaptive Wide Angle ({})", d.layer_name), FontId::proportional(13.0), t.text);
+        let galley = painter.layout_job(chrome_title_job(format!("Adaptive Wide Angle ({})", d.layer_name), FontId::proportional(13.0), t.text));
+        painter.galley(Align2::CENTER_CENTER.anchor_size(title.center(), galley.size()).min, galley, t.text);
         let footer_h = 48.0;
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), pos2(full.right(), full.bottom() - footer_h));
         let rtl = crate::direction::is_rtl();
@@ -704,5 +712,17 @@ mod tests {
         assert!(rtl_popup.right() - row.right() < 32.0, "rtl: the row label hugs the popup's right edge: {row:?} in {rtl_popup:?}");
         let row = at(&ltr, "Horizontal");
         assert!(row.left() - ltr_popup.left() < 32.0, "ltr: the row label hugs the popup's left edge: {row:?} in {ltr_popup:?}");
+    }
+
+    #[test]
+    fn chrome_title_job_bases_its_direction_on_the_ui_direction() {
+        use crate::direction::{Dir, direction_scope};
+        let font = FontId::proportional(13.0);
+        let _ltr = direction_scope(Dir::Ltr);
+        let ltr = chrome_title_job("Adaptive Wide Angle".to_owned(), font.clone(), Color32::WHITE);
+        assert_eq!(ltr.direction, egui::epaint::text::TextDirection::LeftToRight);
+        let _rtl = direction_scope(Dir::Rtl);
+        let rtl = chrome_title_job("Adaptive Wide Angle".to_owned(), font, Color32::WHITE);
+        assert_eq!(rtl.direction, egui::epaint::text::TextDirection::RightToLeft);
     }
 }
