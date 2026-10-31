@@ -34,6 +34,7 @@ crates/
   io plugins                 L4 document <-> PSD / flat formats; sandboxed WebAssembly plug-ins
   engine                     L5 Session + command registry (every action is a command)
   ui-egui automation         L6 egui shell (thin: all actions go through the engine); MCP server
+  s3                         L6 .pcraft bundles on S3-compatible storage (native only)
   testkit                    test helpers
 apps/
   photocraft                 desktop app (eframe/wgpu), TCP control server
