@@ -117,8 +117,23 @@ impl Compositor {
             pipelines.extend(maps);
         }
         let dummy = Tex::new(device, "pc_compose_dummy", 1, 1, wgpu::TextureFormat::Rgba8Unorm, wgpu::TextureUsages::TEXTURE_BINDING).view;
-        let comp = Self {
-            kit: Kit { pipelines, bgl0, bgl1, dummy },
+        let kit = Kit { pipelines, bgl0, bgl1, dummy };
+        let comp = Self::from_kit(kit, device.limits().max_texture_dimension_2d, acc_format, map_error.is_none());
+        (comp, error)
+    }
+
+    /// Create an independent compositor on the same device, reusing compiled pipelines.
+    /// Texture caches, budgets, focus and timing start at their defaults; no document state is
+    /// shared. Render with the same device and queue as this compositor.
+    pub fn sibling(&self) -> Self {
+        let mut sibling = Self::from_kit(self.kit.clone(), self.device_max, self.acc_format, self.effect_maps);
+        sibling.health = self.health.clone();
+        sibling
+    }
+
+    fn from_kit(kit: Kit, device_max: u32, acc_format: wgpu::TextureFormat, effect_maps: bool) -> Self {
+        Self {
+            kit,
             pool: Vec::new(),
             residents: HashMap::new(),
             fx: HashMap::new(),
@@ -129,7 +144,7 @@ impl Compositor {
             pattern_doc: DocId(0),
             pattern_budget: PATTERN_BUDGET,
             max_dim: 0,
-            device_max: device.limits().max_texture_dimension_2d,
+            device_max,
             page: PAGE,
             chunk: CHUNK,
             resident_budget: RESIDENT_BUDGET,
@@ -146,13 +161,12 @@ impl Compositor {
             admit_freed: 0,
             fail_allocs: 0,
             acc_format,
-            effect_maps: map_error.is_none(),
+            effect_maps,
             cmyk: 0,
             health: None,
             timer: None,
         }
-        .with_texture_limit(device.limits().max_texture_dimension_2d);
-        (comp, error)
+        .with_texture_limit(device_max)
     }
 
     fn with_texture_limit(mut self, max: u32) -> Self {

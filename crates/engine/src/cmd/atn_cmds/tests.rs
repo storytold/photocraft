@@ -654,6 +654,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("edit.undo", json!({})),
         ("edit.redo", json!({})),
         ("layer.select", json!({"layer": "YELLOW", "mode": "remove"})),
+        ("layer.select", json!({"layer": "Or paste photocopy texture here", "mode": "range"})),
         ("layer.translate", json!({"dx": 0.36, "dy": -1.08, "units": "pt"})),
         ("select.loadSelection", json!({"channel": "targeted"})),
         ("layer.newFillLayer.pattern", json!({"pattern": "Debaser-Distressed-Dark", "scale": 50, "angle": 0, "link": true})),
@@ -661,6 +662,15 @@ fn every_mapped_command_exports_and_imports_back() {
         ("image.mode.bitmap", json!({"method": "threshold"})),
         ("image.imageSize", json!({"resolution": 1200, "resample": "preserveDetails", "keepPrintSize": true})),
         ("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false})),
+        // COPYCAT, AJ_Actions2023 and the Line and Color tutorial set.
+        ("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})),
+        ("layer.smartFilter.blendingOptions", json!({"index": 1, "opacity": 0.5, "blend": "Darken"})),
+        ("layer.layerStyle.blendingOptions", json!({"blendClippedLayersAsGroup": false, "transparencyShapesLayer": false})),
+        ("layer.createClippingMask", json!({})),
+        ("layer.lockLayers", json!({"transparency": true})),
+        ("filter.stylize.diffuse", json!({"mode": "normal", "seed": 321654})),
+        ("history.clear", json!({})),
+        ("history.newSnapshot", json!({"name": "CopyCat - action result", "from": "fullDocument", "replaceExisting": true})),
         ("layerComp.apply", json!({"comp": "Comp 1"})),
     ];
     for (id, params) in &cases {
@@ -1532,6 +1542,8 @@ fn select_document_by_offset_imports_plays_and_saves_back() {
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "source"})).unwrap();
     s.execute("edit.fill", json!({"contents": "color", "color": "#ff0000"})).unwrap();
     s.execute("file.new", json!({"width": 8, "height": 8, "name": "template", "background": "transparent"})).unwrap();
+    // Reorder tabs before playback: the source remains the previous *opened* document.
+    s.execute("document.move", json!({"document": 1, "to": 0})).unwrap();
     let r = s.execute("actions.load", json!({"data": data})).unwrap();
     assert_eq!(r["unsupported"], json!([]), "{r}");
     let steps = &s.actions.list[0].steps;
@@ -1545,7 +1557,7 @@ fn select_document_by_offset_imports_plays_and_saves_back() {
     assert_eq!(s.active().unwrap().doc.name, "template");
     assert_eq!(s.active().unwrap().doc.layers.len(), 2, "the source's pixels are pasted on a new layer");
     assert_eq!(pixel(&mut s), [1.0, 0.0, 0.0, 1.0]);
-    assert_eq!(s.documents()[0].doc.layers.len(), 1, "the source is only copied from");
+    assert_eq!(s.documents()[1].doc.layers.len(), 1, "the source is only copied from");
 
     let first = s.actions.list.clone();
     let r = s.execute("actions.save", json!({"set": "Template"})).unwrap();
