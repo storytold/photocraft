@@ -242,6 +242,18 @@ fn fltr_for(k: &Known, p: &J) -> Result<Option<Descriptor>, String> {
         "Clds" | "DfrC" => d.with("FlRs", seed_param(p)),
         "Lvls" => d.with("Adjs", adjustments(p, false)?),
         "Crvs" => d.with("Adjs", adjustments(p, true)?),
+        "Rplc" => {
+            let obj = p.as_object().ok_or("parameters are not an object")?;
+            const ALLOWED: &[&str] = &["color", "fuzziness", "hue", "saturation", "lightness"];
+            if let Some(key) = obj.keys().find(|k| !is_meta(k) && !ALLOWED.contains(&k.as_str())) {
+                return Err(format!("setting `{key}` has no PSD equivalent"));
+            }
+            d.with("Clr ", colour_rgbc(p.get("color"), 0.0)?)
+                .with("Fzns", pi(p, "fuzziness", 40.0))
+                .with("Hue ", pi(p, "hue", 0.0))
+                .with("Strt", pi(p, "saturation", 0.0))
+                .with("Lght", pi(p, "lightness", 0.0))
+        }
         "adaptCorrect" => {
             if p.as_object().is_some_and(|o| o.keys().any(|k| !is_meta(k))) {
                 return Err("only default Shadows/Highlights settings are written to PSD".into());

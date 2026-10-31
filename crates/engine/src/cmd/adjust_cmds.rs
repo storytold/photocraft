@@ -365,11 +365,29 @@ pub(crate) fn adjust_as_filter(kind: &str, p: &Value, surf: &Surface) -> Option<
         None => p,
     };
     let mut out = surf.clone();
+    let mode = surf.format().mode;
     if kind == "shadowsHighlights" {
         let sh = shadows_highlights_params(p);
         process_surface(&mut out, None, &mut |px, r| tone::shadows_highlights(px, r.width() as usize, r.height() as usize, &sh));
+    } else if kind == "desaturate" {
+        let adj = Adjustment::HueSaturation {
+            hue: 0.0,
+            saturation: -100.0,
+            lightness: 0.0,
+            colorize: false,
+            ranges: photocraft_doc::adjust::HueRange::defaults(),
+        };
+        crate::pixels::adjust_surface(&mut out, &adj, None, mode).ok()?;
+    } else if kind == "equalize" {
+        process_surface(&mut out, None, &mut |px, _| crate::extra_cmds::equalize_rgba(px));
+    } else if kind == "replaceColor" {
+        let c = crate::commands::color_param("image.adjustments.replaceColor", p, "color", [0.0, 0.0, 0.0, 1.0]).ok()?;
+        let fuzz = num(p, "fuzziness", 40.0).clamp(0.0, 200.0);
+        let (h, sat, l) = (num(p, "hue", 0.0).clamp(-180.0, 180.0), num(p, "saturation", 0.0).clamp(-100.0, 100.0), num(p, "lightness", 0.0).clamp(-100.0, 100.0));
+        process_surface(&mut out, None, &mut |px, _| {
+            tone::replace_color(px, [c[0], c[1], c[2]], fuzz, h, sat, l);
+        });
     } else {
-        let mode = surf.format().mode;
         let adj = crate::adjust_params::from_params(kind, p, None, mode).ok()?;
         crate::pixels::adjust_surface(&mut out, &adj, None, mode).ok()?;
     }
@@ -404,6 +422,13 @@ fn shadows_highlights_params(p: &Value) -> ShadowsHighlights {
 fn replace_color(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "image.adjustments.replaceColor";
     let c = crate::commands::color_param(CMD, p, "color", s.tools.foreground)?;
+    let mut recorded = p.clone();
+    if recorded.get("color").is_none() {
+        recorded["color"] = json!(c);
+    }
+    if adjust_as_smart_filter(s, "replaceColor", "Replace Color", &recorded)? {
+        return Ok(Value::Null);
+    }
     let fuzz = num(p, "fuzziness", 40.0).clamp(0.0, 200.0);
     let (h, sat, l) = (num(p, "hue", 0.0).clamp(-180.0, 180.0), num(p, "saturation", 0.0).clamp(-100.0, 100.0), num(p, "lightness", 0.0).clamp(-100.0, 100.0));
     // Localized Color Clusters, as in Select › Color Range: the colour only matches within Range
@@ -563,7 +588,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Replace Color…",
             ["Image", "Adjustments"],
             r##"{"localized":bool=false,"color":color,"fuzziness":0..200=40,"range":0..100=100,"hue":-180..180=0,"saturation":-100..100=0,"lightness":-100..100=0,"points":[[x,y],…]?} (color: "#rrggbb", default the foreground colour; Localized Color Clusters: "points" where the colour was picked, "range" % of the longer side)"##,
-            has_pixels,
+            has_adjustable,
             replace_color
         ),
         spec!(

@@ -21,7 +21,7 @@ pub(crate) const fn code(c: &[u8; 4]) -> i32 {
     i32::from_be_bytes(*c)
 }
 
-const KNOWN: [Known; 53] = [
+const KNOWN: [Known; 56] = [
     Known { class: "GsnB", filter_id: code(b"GsnB"), name: "Gaussian Blur...", command: "filter.blur.gaussianBlur" },
     Known { class: "boxblur", filter_id: 840, name: "Box Blur...", command: "filter.blur.boxBlur" },
     Known { class: "MtnB", filter_id: code(b"MtnB"), name: "Motion Blur...", command: "filter.blur.motionBlur" },
@@ -53,6 +53,10 @@ const KNOWN: [Known; 53] = [
     Known { class: "Crvs", filter_id: code(b"Crvs"), name: "Curves...", command: "image.adjustments.curves" },
     // Shadows/Highlights at its defaults stores no `Fltr` (`hasoptions` false).
     Known { class: "adaptCorrect", filter_id: 781, name: "Shado&ws/Highlights...", command: "image.adjustments.shadowsHighlights" },
+    // Desaturate and Equalize have no dialog; Photoshop writes them without `Fltr`.
+    Known { class: "Dstt", filter_id: code(b"Dstt"), name: "Desaturate", command: "image.adjustments.desaturate" },
+    Known { class: "Eqlz", filter_id: code(b"Eqlz"), name: "Equalize", command: "image.adjustments.equalize" },
+    Known { class: "Rplc", filter_id: code(b"Rplc"), name: "Replace Color...", command: "image.adjustments.replaceColor" },
     // Filters without options (measured in Photoshop): `hasoptions` false, no `Fltr`, only the
     // four-char `filterID`. The class is that code; see `NO_OPTIONS`.
     Known { class: "Blr ", filter_id: code(b"Blr "), name: "Blur", command: "filter.blur.blur" },
@@ -92,7 +96,7 @@ const KNOWN: [Known; 53] = [
 pub(super) const LENSES: [(&[u8; 4], &str); 4] = [(b"Zm  ", "zoom"), (b"Nkn ", "prime35"), (b"Nkn1", "prime105"), (b"PnVs", "moviePrime")];
 
 /// Classes of the filters that have no options: Photoshop stores them without a `Fltr`.
-pub(super) const NO_OPTIONS: [&str; 11] = ["Blr ", "BlrM", "Avrg", "Dspc", "FndE", "Fct ", "Frgm", "Shrp", "ShrM", "ShrE", "Slrz"];
+pub(super) const NO_OPTIONS: [&str; 13] = ["Blr ", "BlrM", "Avrg", "Dspc", "FndE", "Fct ", "Frgm", "Shrp", "ShrM", "ShrE", "Slrz", "Dstt", "Eqlz"];
 
 // ---------- Smart Sharpen and Dust & Scratches ----------
 //
@@ -597,6 +601,17 @@ fn stylize_filter_params(class: &str, f: &Descriptor, item: &Descriptor) -> Opti
     })
 }
 
+fn replace_color_params(f: &Descriptor) -> Option<J> {
+    let color = get_desc(f, "Clr ").and_then(rgbc_colour)?;
+    Some(json!({
+        "color": color,
+        "fuzziness": int(f, "Fzns").or_else(|| px(f, "Fzns").map(|v| v.round() as i32))?,
+        "hue": int(f, "Hue ").or_else(|| px(f, "Hue ").map(|v| v.round() as i32)).unwrap_or(0),
+        "saturation": int(f, "Strt").or_else(|| px(f, "Strt").map(|v| v.round() as i32)).unwrap_or(0),
+        "lightness": int(f, "Lght").or_else(|| px(f, "Lght").map(|v| v.round() as i32)).unwrap_or(0),
+    }))
+}
+
 fn other_filter_params(class: &str, f: &Descriptor) -> Option<J> {
     Some(match (class, Some(f)) {
         ("Ofst", Some(f)) if only_keys(f, &["Hrzn", "Vrtc", "Fl  "]) => {
@@ -612,6 +627,8 @@ fn other_filter_params(class: &str, f: &Descriptor) -> Option<J> {
         }
         ("Lvls", Some(f)) => levels_params(f)?,
         ("Crvs", Some(f)) => curves_params(f)?,
+        ("Dstt" | "Eqlz", Some(_)) => json!({}),
+        ("Rplc", Some(f)) => replace_color_params(f)?,
         _ => return None,
     })
 }

@@ -162,7 +162,7 @@ pub(crate) use adjust_params::inject_kind;
 use adjust_params::{adjust_mode, destructive_adjust, doc_mode, gray_tone_params, new_adjustment};
 pub use adjust_params::{adjustment_from_params, adjustment_kind};
 pub(crate) use enabled::{always, check_all_unlocked, check_pixels_unlocked, has_paintable, is_mask_target, paint_surface};
-use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_layer, has_pixel_or_channel, has_selection};
+use enabled::{can_redo, can_undo, has_doc, has_layer, has_pixel_or_channel, has_selection};
 pub use layer_params::blend_from_str;
 pub(crate) use layer_params::{NEW_LAYER_PATH, explicit_layer, layer_listing, layer_panel_option, layer_param, mask_at_depth, mask_new_layer, selection_mask};
 use ops::{arrange, merge_group, set_mask, set_mask_and_deselect};
@@ -914,7 +914,10 @@ fn build() -> Vec<CommandSpec> {
         cmd!("image.imageRotation.90ccw", "90° Counter Clockwise", ["Image", "Image Rotation"], None, "{}", has_doc, |s, _| {
             turn(s, "Rotate Canvas", crate::canvas_geom::Turn::Ccw90)
         }),
-        cmd!("image.adjustments.desaturate", "Desaturate", ["Image", "Adjustments"], Some("Cmd+Shift+U"), "{}", has_pixel_layer, |s, _| {
+        cmd!("image.adjustments.desaturate", "Desaturate", ["Image", "Adjustments"], Some("Cmd+Shift+U"), "{}", crate::adjust_cmds::has_adjustable, |s, p| {
+            if crate::adjust_cmds::adjust_as_smart_filter(s, "desaturate", "Desaturate", p)? {
+                return Ok(Value::Null);
+            }
             destructive_adjust(
                 s,
                 "Desaturate",
@@ -925,7 +928,7 @@ fn build() -> Vec<CommandSpec> {
                     colorize: false,
                     ranges: photocraft_doc::adjust::HueRange::defaults(),
                 },
-                &Value::Null,
+                p,
             )
         }),
         // Paint
