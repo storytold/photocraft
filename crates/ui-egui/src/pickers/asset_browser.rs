@@ -1890,6 +1890,10 @@ pub(crate) fn last_browser_rect(ctx: &egui::Context, panel: &str) -> Option<Rect
 }
 
 #[cfg(test)]
+#[path = "asset_browser_ui_tests.rs"]
+mod ui_tests;
+
+#[cfg(test)]
 mod filter_tests {
     use super::{
         BrowserAction, BrowserAdapter, BrowserCapabilities, BrowserOptions, GroupView, HierarchyOrderEntry, ItemPaintState, ItemView, best_drop_target_index,
