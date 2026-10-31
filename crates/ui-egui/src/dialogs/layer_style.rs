@@ -829,26 +829,24 @@ fn fx_label_color(enabled: bool, t: &Tokens) -> Color32 {
 
 /// The enable checkbox of an effect row, at the row's reading-start edge.
 fn fx_checkbox_rect(row: egui::Rect) -> egui::Rect {
-    let x = if crate::direction::is_rtl() { row.right() - 20.0 } else { row.left() + 6.0 };
+    let x = crate::direction::start_x_w(row, 6.0, 14.0);
     egui::Rect::from_min_size(egui::pos2(x, row.top() + 6.0), vec2(14.0, 14.0))
 }
 
 /// An effect row's label anchor: past the checkbox, aligned into the row's reading direction.
 fn fx_label_at(row: egui::Rect) -> (egui::Pos2, egui::Align2) {
-    if crate::direction::is_rtl() {
-        (row.right_center() - vec2(28.0, 0.0), egui::Align2::RIGHT_CENTER)
-    } else {
-        (row.left_center() + vec2(28.0, 0.0), egui::Align2::LEFT_CENTER)
-    }
+    crate::direction::start_text_anchor(row, 28.0)
 }
 
 /// The instance buttons of an effect row: at the row's reading-end edge.
 fn fx_buttons_at(row: egui::Rect) -> (egui::Pos2, egui::Pos2) {
-    if crate::direction::is_rtl() {
-        (row.left_center() + vec2(22.0, 0.0), row.left_center() + vec2(8.0, 0.0))
-    } else {
-        (row.right_center() - vec2(22.0, 0.0), row.right_center() - vec2(8.0, 0.0))
-    }
+    (crate::direction::end_text_anchor(row, 22.0).0, crate::direction::end_text_anchor(row, 8.0).0)
+}
+
+/// The accent bar marking a selected effect row, on the row's reading-start edge.
+fn selected_accent_rect(row: egui::Rect) -> egui::Rect {
+    let x = if crate::direction::is_rtl() { row.right() - 3.0 } else { row.left() };
+    egui::Rect::from_min_size(egui::pos2(x, row.top()), vec2(3.0, row.height()))
 }
 
 /// An effect row's checkbox: an accent box with a tick when on, an outline when off.
@@ -884,12 +882,21 @@ fn body_blocks(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     // One size on every page (`dialogs::sizing_of`): the list and the page fill its height and
     // scroll when they are taller.
     let height = ui.available_height().max(160.0);
+    let row_w = crate::direction::row_width(ui);
+    let side_w = SIDE_W;
     ui.horizontal_top(|ui| {
         boxed(ui, LIST_W, height, |ui, h| {
             egui::ScrollArea::vertical().id_salt("layer-style-effects").max_height(h - BAR_H).auto_shrink(false).show(ui, |ui| effect_list(ui, f, &selected));
             list_bar(ui, f, &selected);
         });
-        let page_w = ui.available_width() - SIDE_W - ui.spacing().item_spacing.x;
+        // In a right-to-left row the fork's mid-row available-width read comes back short, which
+        // clamps the page column; derive it from the row's full width there (same arithmetic as
+        // the left-to-right read: list box, two spacings, side column).
+        let page_w = if crate::direction::is_rtl() {
+            row_w - LIST_W - side_w - 2.0 * ui.spacing().item_spacing.x
+        } else {
+            ui.available_width() - SIDE_W - ui.spacing().item_spacing.x
+        };
         boxed(ui, page_w, height, |ui, h| {
             egui::ScrollArea::vertical()
                 .id_salt("layer-style-page")
@@ -898,8 +905,8 @@ fn body_blocks(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
                 .show(ui, |ui| page(app, ui, f, &selected, invalid.as_deref(), &mut style_click));
         });
         ui.vertical(|ui| {
-            ui.set_width(SIDE_W);
-            outcome = side_column(app, ui, f, &mut new_style);
+            ui.set_width(side_w);
+            outcome = side_column(app, ui, f, side_w, &mut new_style);
         });
     });
     // Style swatch clicks apply to the layer (Photoshop does this immediately);
@@ -993,7 +1000,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         // Photoshop's modes, plus the layer's own Paint.NET mode when it has one (an imported .pdn).
         let own = photocraft_color::BlendMode::PAINT_NET_MODES.into_iter().find(|m| m.label() == cur);
         let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.into_iter().chain(own).map(|m| (m.label().to_string(), m.label())).collect();
-        if widgets::dropdown(ui, "fx-blend-blendingOptions", tl!("Blend Mode"), &mut cur, &opts, 150.0) {
+        if widgets::dropdown(ui, "fx-blend-blendingOptions", tl!("Blend Mode"), &mut cur, &opts, control_w(ui, 150.0)) {
             p["blend"] = json!(cur);
         }
     });
@@ -1027,7 +1034,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         widgets::row_label(ui, "Knockout", LABEL_W);
         let mut cur = p.get("knockout").and_then(Value::as_str).unwrap_or("none").to_string();
         let opts: Vec<(String, &str)> = KNOCKOUT.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-        if widgets::dropdown(ui, "fx-blendingOptions-knockout", tl!("Knockout"), &mut cur, &opts, 150.0) {
+        if widgets::dropdown(ui, "fx-blendingOptions-knockout", tl!("Knockout"), &mut cur, &opts, control_w(ui, 150.0)) {
             p["knockout"] = json!(cur);
         }
     });
@@ -1060,20 +1067,19 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         let labels: Vec<String> = (0..entries).map(label).collect();
         let opts: Vec<(usize, &str)> = labels.iter().enumerate().map(|(i, l)| (i, l.as_str())).collect();
         let mut cur = sel;
-        if widgets::dropdown(ui, "fx-blendingOptions-blendIf", tl!("Blend If:"), &mut cur, &opts, 110.0) {
+        if widgets::dropdown(ui, "fx-blendingOptions-blendIf", tl!("Blend If:"), &mut cur, &opts, control_w(ui, 110.0)) {
             p["blendIfChannel"] = json!(cur);
         }
     });
     // Photoshop 2026 calls the first bar Current Layer (it was This Layer).
     for (key, label) in [("thisLayer", "Current Layer:"), ("underlying", "Underlying Layer:")] {
         let mut q = blend_quad(p.get("blendIf").and_then(|a| a.get(sel)).and_then(|e| e.get(key)));
-        // The label sits at the reading start, the readout at the reading end.
-        crate::direction::horizontal_centered(ui, |ui| {
+        // The label and its readout stay paired in one reading-order row, at the reading start.
+        ui.with_layout(crate::direction::row(), |ui| {
             ui.label(RichText::new(tl!(label)).color(t.text_dim));
-            ui.with_layout(crate::direction::trailing(), |ui| {
-                let side = |lo: u8, hi: u8| if lo == hi { lo.to_string() } else { format!("{lo} / {hi}") };
-                ui.label(RichText::new(format!("{}    {}", side(q[0], q[1]), side(q[2], q[3]))).color(t.text));
-            });
+            ui.add_space(8.0);
+            let side = |lo: u8, hi: u8| if lo == hi { lo.to_string() } else { format!("{lo} / {hi}") };
+            ui.label(RichText::new(format!("{}    {}", side(q[0], q[1]), side(q[2], q[3]))).color(t.text));
         });
         if blend_if_bar(ui, ui.scope_id().with(("blendIf", key)), &mut q)
             && let Some(e) = p.get_mut("blendIf").and_then(|a| a.get_mut(sel))
@@ -1309,6 +1315,17 @@ const SIDE_W: f32 = 112.0;
 
 const LABEL_W: f32 = 104.0;
 
+/// The width of a dropdown on a settings row: its fixed width left-to-right; in a
+/// right-to-left UI the row mirrors and the control fills the rest of the row, so no
+/// dead space is left at the reading end of the page.
+fn control_w(ui: &egui::Ui, fixed: f32) -> f32 {
+    if crate::direction::is_rtl() {
+        (ui.available_width() - ui.spacing().item_spacing.x).max(fixed)
+    } else {
+        fixed
+    }
+}
+
 /// The bar under the effect list (fx, move up, move down, delete).
 const BAR_H: f32 = 30.0;
 
@@ -1317,14 +1334,28 @@ const BAR_H: f32 = 30.0;
 fn boxed(ui: &mut egui::Ui, w: f32, h: f32, add: impl FnOnce(&mut egui::Ui, f32)) {
     const PAD: f32 = 4.0;
     let t = Tokens::get(ui.ctx());
-    egui::Frame::new().stroke(Stroke::new(1.0, t.separator)).corner_radius(t.radius_sm).inner_margin(PAD).show(ui, |ui| {
-        let inner = (vec2(w, h) - egui::Vec2::splat(2.0 * PAD + 2.0)).max(egui::Vec2::splat(40.0));
-        // Top-down inside, whatever the row it sits in lays out.
-        ui.vertical(|ui| {
-            ui.set_width(inner.x);
-            ui.set_height(inner.y);
-            add(ui, inner.y);
+    let frame = egui::Frame::new().stroke(Stroke::new(1.0, t.separator)).corner_radius(t.radius_sm).inner_margin(PAD);
+    // Inside a right-to-left row the fork's available-rect read balloons, so the frame would
+    // swallow the whole row; bound it to the column's exact size there.
+    if crate::direction::is_rtl() {
+        ui.allocate_ui_with_layout(vec2(w, h), egui::Layout::top_down(egui::Align::Min), |ui| {
+            frame.show(ui, |ui| boxed_inner(ui, w, h, add));
         });
+    } else {
+        frame.show(ui, |ui| boxed_inner(ui, w, h, add));
+    }
+}
+
+fn boxed_inner(ui: &mut egui::Ui, w: f32, h: f32, add: impl FnOnce(&mut egui::Ui, f32)) {
+    const PAD: f32 = 4.0;
+    let inner = (vec2(w, h) - egui::Vec2::splat(2.0 * PAD + 2.0)).max(egui::Vec2::splat(40.0));
+    // Top-down inside, whatever the row it sits in lays out; in a right-to-left UI the column's
+    // blocks hug its right edge (body_layout), in a left-to-right one its left (identical to
+    // `ui.vertical`).
+    ui.with_layout(crate::direction::body_layout(), |ui| {
+        ui.set_width(inner.x);
+        ui.set_height(inner.y);
+        add(ui, inner.y);
     });
 }
 
@@ -1339,6 +1370,7 @@ fn effect_list(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
         let (rect, resp) = ui.allocate_exact_size(vec2(w, 26.0), Sense::click());
         if is_sel {
             ui.painter().rect_filled(rect, t.radius_sm, t.row_selected.gamma_multiply(if t.pro { 1.0 } else { 0.0 }).max_alpha(t.hover));
+            ui.painter().rect_filled(selected_accent_rect(rect), 0.0, t.accent);
         } else if resp.hovered() {
             ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
         }
@@ -1385,6 +1417,7 @@ fn effect_list(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
             let (rect, resp) = ui.allocate_exact_size(vec2(w, 26.0), Sense::click());
             if is_sel {
                 ui.painter().rect_filled(rect, t.radius_sm, t.row_selected.gamma_multiply(if t.pro { 1.0 } else { 0.0 }).max_alpha(t.hover));
+                ui.painter().rect_filled(selected_accent_rect(rect), 0.0, t.accent);
             } else if resp.hovered() {
                 ui.painter().rect_filled(rect, t.radius_sm, t.hover.gamma_multiply(0.5));
             }
@@ -1612,7 +1645,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                     widgets::row_label(ui, label, LABEL_W);
                     let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or("Normal").to_string();
                     let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
-                    if widgets::dropdown(ui, &format!("fx-blend-{selected}-{key}"), tl!(&label), &mut cur, &opts, 150.0) {
+                    if widgets::dropdown(ui, &format!("fx-blend-{selected}-{key}"), tl!(&label), &mut cur, &opts, control_w(ui, 150.0)) {
                         let value = json!(cur);
                         disp[key] = value.clone();
                         set_param(f, selected, key, value);
@@ -1635,7 +1668,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                         current = "custom".into();
                         options.insert(0, ("custom".into(), "Custom"));
                     }
-                    if widgets::dropdown(ui, "fx-gradientOverlay-method", tl!("Method"), &mut current, &options, 150.0) {
+                    if widgets::dropdown(ui, "fx-gradientOverlay-method", tl!("Method"), &mut current, &options, control_w(ui, 150.0)) {
                         // The older dialog deliberately omits From/To for rich imported
                         // curves. Once a method is chosen, show the real source ends.
                         let snapshot = entry(f, selected).and_then(|e| e.get("fx")).cloned();
@@ -1660,7 +1693,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                     widgets::row_label(ui, label, LABEL_W);
                     let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or(options[0].0).to_string();
                     let opts: Vec<(String, &str)> = options.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-                    if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, 150.0) {
+                    if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, control_w(ui, 150.0)) {
                         let value = json!(cur);
                         disp[key] = value.clone();
                         set_param(f, selected, key, value);
@@ -1683,7 +1716,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                         .or_else(|| list.first().map(|l| l.0.clone()))
                         .unwrap_or_default();
                     let opts: Vec<(String, &str)> = list.iter().map(|(id, n)| (id.clone(), n.as_str())).collect();
-                    if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, 180.0)
+                    if widgets::dropdown(ui, &format!("fx-{sel_kind}-{key}"), tl!(&label), &mut cur, &opts, control_w(ui, 180.0))
                         || disp.get(key).and_then(Value::as_str).is_none_or(str::is_empty)
                     {
                         let value = json!(cur);
@@ -1728,17 +1761,17 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
 }
 
 /// Photoshop's right-hand column: OK, Cancel, New Style…, Preview and the preview swatch.
-fn side_column(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, new_style: &mut bool) -> Option<bool> {
+fn side_column(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, w: f32, new_style: &mut bool) -> Option<bool> {
     let mut outcome = None;
-    if widgets::primary_button(ui, tl!("OK"), SIDE_W).clicked() {
+    if widgets::primary_button(ui, tl!("OK"), w).clicked() {
         outcome = Some(true);
     }
     ui.add_space(2.0);
-    if widgets::secondary_button(ui, tl!("Cancel"), SIDE_W).clicked() {
+    if widgets::secondary_button(ui, tl!("Cancel"), w).clicked() {
         outcome = Some(false);
     }
     ui.add_space(2.0);
-    if widgets::secondary_button(ui, tl!("New Style…"), SIDE_W).clicked() {
+    if widgets::secondary_button(ui, tl!("New Style…"), w).clicked() {
         *new_style = true;
     }
     ui.add_space(6.0);
@@ -1747,7 +1780,7 @@ fn side_column(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
         f.insert("preview".into(), json!(preview));
     }
     ui.add_space(6.0);
-    preview_swatch(app, ui, f, SIDE_W);
+    preview_swatch(app, ui, f, w);
     outcome
 }
 
@@ -1807,7 +1840,6 @@ mod tests;
 #[cfg(test)]
 mod rtl_tests {
     use super::*;
-    use egui_kittest::kittest::Queryable;
     use crate::direction::{Dir, direction_scope};
 
     /// A 200-point-wide effect row, the width the dialog gives every row.
@@ -1912,14 +1944,6 @@ mod rtl_tests {
         let rtl = body_harness(Dir::Rtl, STYLES_PAGE);
         let rtl_title = labelled(&rtl, "Styles");
         let rtl_button = button(&rtl, "New Style…");
-        eprintln!("DBG LTR title={ltr_title:?} button={ltr_button:?}");
-        eprintln!("DBG RTL title={rtl_title:?} button={rtl_button:?}");
-        for n in ltr.query_all_by_label("Styles") { eprintln!("DBG LTR Styles node={:?}", n.rect()); }
-        for n in rtl.query_all_by_label("Styles") { eprintln!("DBG RTL Styles node={:?}", n.rect()); }
-        for role in [egui::accesskit::Role::Button, egui::accesskit::Role::Label] {
-            for n in ltr.query_all_by_role(role) { eprintln!("DBG LTR {role:?} {:?}", n.rect()); }
-            for n in rtl.query_all_by_role(role) { eprintln!("DBG RTL {role:?} {:?}", n.rect()); }
-        }
         assert!(ltr_button.left() > ltr_title.right(), "LTR: the button follows the title");
         assert!(rtl_button.right() < rtl_title.left(), "RTL: the button precedes the title");
         let ltr_gap = ltr_button.right() - ltr_title.left();
@@ -1938,14 +1962,31 @@ mod rtl_tests {
         let rtl = body_harness(Dir::Rtl, "dropShadow");
         let rtl_title = labelled(&rtl, "Drop Shadow");
         let rtl_group = button(&rtl, "Reset to Default").union(button(&rtl, "Make Default"));
-        eprintln!("DBG LTR title={ltr_title:?} group={ltr_group:?}");
-        eprintln!("DBG RTL title={rtl_title:?} group={rtl_group:?}");
-        for n in ltr.query_all_by_label("Drop Shadow") { eprintln!("DBG LTR DS node={:?}", n.rect()); }
-        for n in rtl.query_all_by_label("Drop Shadow") { eprintln!("DBG RTL DS node={:?}", n.rect()); }
         assert!(ltr_group.right() > ltr_title.left() + 200.0, "LTR: the group hugs the right end: {ltr_group:?}");
         assert!(rtl_group.left() < rtl_title.right() - 200.0, "RTL: the group hugs the left end: {rtl_group:?}");
         let ltr_gap = ltr_group.right() - ltr_title.left();
         let rtl_gap = rtl_title.right() - rtl_group.left();
         assert!((ltr_gap - rtl_gap).abs() < 1.0, "the same distance from the reading start: {ltr_gap} / {rtl_gap}");
+    }
+
+    /// The selected effect row's accent bar sits on the row's reading-start edge: the
+    /// left edge left-to-right, the right edge in a right-to-left UI.
+    #[test]
+    fn the_selected_row_accent_bar_sits_at_the_reading_start_edge() {
+        let row = effect_row();
+        {
+            let _ltr = direction_scope(Dir::Ltr);
+            let bar = super::selected_accent_rect(row);
+            assert_eq!(bar.left(), row.left());
+            assert_eq!(bar.right(), row.left() + 3.0);
+            assert_eq!(bar.height(), row.height());
+        }
+        {
+            let _rtl = direction_scope(Dir::Rtl);
+            let bar = super::selected_accent_rect(row);
+            assert_eq!(bar.right(), row.right());
+            assert_eq!(bar.left(), row.right() - 3.0);
+            assert_eq!(bar.height(), row.height());
+        }
     }
 }
