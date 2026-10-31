@@ -47,6 +47,7 @@ mod content;
 mod ctx;
 mod extents;
 mod fx_cache;
+mod prefix;
 mod reduced;
 mod render;
 
@@ -79,9 +80,10 @@ use render::in_blend_space;
 use render::render_tiled_with;
 pub(crate) use render::visible_layers;
 pub use render::{
-    BAND_PIXELS, MAX_RENDER_PIXELS, band_rows_for, cmyk_space, composite_to_surface, flatten, flatten_to_surface, render, render_bands, render_layer,
-    render_layer_in, render_tiled,
+    BAND_PIXELS, MAX_RENDER_PIXELS, band_rows_for, cmyk_space, composite_to_surface, flatten, flatten_to_surface, render, render_bands, render_bands_cached,
+    render_cached, render_layer, render_layer_in, render_tiled,
 };
+pub use prefix::{PREFIX_CACHE_BYTES, PrefixCache};
 
 /// Straight-alpha RGBA float buffer covering a rectangle.
 #[derive(Clone, Debug, PartialEq)]
@@ -140,6 +142,8 @@ impl Buffer {
 mod soft_shape_tests;
 #[cfg(test)]
 mod stroke_tests;
+#[cfg(test)]
+mod prefix_tests;
 #[cfg(test)]
 mod tests;
 

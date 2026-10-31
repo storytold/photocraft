@@ -288,6 +288,31 @@ fn showing_a_hidden_layer_again_reuses_the_redraw_from_before_it_was_hidden() {
     assert_matches_synchronous(&mut g, doc);
 }
 
+/// #6533: over the wgpu compositor, an edit at the top of the stack redraws from the CPU
+/// compositor's prefix cache, which the redraw before it filled, with the synchronous pixels.
+#[test]
+fn an_edit_at_the_top_of_the_stack_redraws_from_the_cached_composite_below_it() {
+    let _gpu = photocraft_testkit::gpu_lock();
+    let Some(mut g) = gpu_app() else { return };
+    let doc = cpu_only_document(g.harness.state_mut(), 2600, 1700);
+    g.harness.state_mut().run("layer.newAdjustmentLayer.levels", json!({"gamma": 1.2})).expect("levels");
+    let levels = g.harness.state().session.active().and_then(|st| st.active_layer).expect("layer");
+    settle(&mut g);
+    assert_matches_synchronous(&mut g, doc);
+    let hits = |g: &Gpu| g.harness.state().gpu.as_ref().expect("gpu canvas").cpu_prefix().hits();
+    let before = hits(&g);
+    for gamma in [0.8, 1.4] {
+        g.harness.state_mut().run("layer.setAdjustment", json!({"layer": levels.0, "gamma": gamma})).expect("settings");
+        g.harness.step();
+        assert!(g.harness.state().redraws.contains_key(&doc), "a redraw: {}", g.harness.state().perf.last_refresh);
+        settle(&mut g);
+        assert_matches_synchronous(&mut g, doc);
+    }
+    // 2600 x 1700 is 77 render tiles, each resumed from its composite below the levels layer.
+    let served = hits(&g) - before;
+    assert!(served >= 2 * 77, "{served} tiles came from the cache");
+}
+
 /// Memory Usage lowered while a redraw runs: the finished composite is kept within what it leaves
 /// now, not what it left when the redraw began.
 #[test]
