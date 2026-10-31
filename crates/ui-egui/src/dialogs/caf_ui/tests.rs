@@ -509,4 +509,5 @@ fn a_speckled_fill_area_falls_back_to_its_bounds() {
         *cell = (i % 1000).is_multiple_of(2) && (i / 1000).is_multiple_of(2);
     }
     assert!(outline(&b).is_none());
+    assert_eq!(lifecycle::bounds(&b), Rect::new(0, 0, 999, 999), "the box drawn instead");
 }

@@ -382,6 +382,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         }
         // The fill area's outline: marching ants, as the canvas draws them.
         match &w.outline {
+            Some(segs) if segs.is_empty() => {}
             Some(segs) => {
                 let time = ui.input(|i| i.time);
                 crate::canvas::marching_ants_mapped(&clip, segs, time, |p| v.to_screen([f64::from(p[0]), f64::from(p[1])]));
