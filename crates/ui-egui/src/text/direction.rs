@@ -158,7 +158,7 @@ pub fn popup_body<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)
 /// fills horizontal `Align::Center` frames), and a non-resizable window then sizes itself to
 /// the screen height. Taller content still grows the row's `min_rect` past the frame.
 pub fn dialog_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
-    let size = ui.available_size_before_wrap();
+    let size = egui::vec2(row_width(ui), ui.spacing().interact_size.y);
     ui.allocate_ui_with_layout(size, row_min(), add)
 }
 
