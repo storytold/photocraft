@@ -661,20 +661,19 @@ fn panes(body: ERect, rtl: bool) -> GalleryPanes {
 }
 
 /// The eye toggle and the filter name of an effect-stack row: the eye keeps the reading start.
-fn stack_row_parts(row: ERect, rtl: bool) -> (ERect, egui::Pos2, Align2) {
-    if rtl {
-        let eye = ERect::from_min_size(pos2(row.right() - 20.0, row.top() + 4.0), vec2(16.0, 16.0));
-        (eye, row.right_center() - vec2(28.0, 0.0), Align2::RIGHT_CENTER)
-    } else {
-        let eye = ERect::from_min_size(row.min + vec2(4.0, 4.0), vec2(16.0, 16.0));
-        (eye, row.left_center() + vec2(28.0, 0.0), Align2::LEFT_CENTER)
-    }
+fn stack_row_parts(row: ERect) -> (ERect, egui::Pos2, Align2) {
+    let eye = crate::direction::start_rect(row, vec2(4.0, 4.0), vec2(16.0, 16.0));
+    let (name_at, name_align) = crate::direction::start_text_anchor(row, 28.0);
+    (eye, name_at, name_align)
 }
 
 /// One category thumbnail: the picture, its frame and the filter's name under it. Returns the
 /// click response.
 fn gallery_cell(ui: &mut egui::Ui, d: &GalleryDialog, i: usize, f: GalleryFilter, selected: bool, rtl: bool, t: &Tokens) -> egui::Response {
-    ui.vertical(|ui| {
+    // Bounded to the thumb's full cell size: in a right-to-left row the fork's available-width
+    // read balloons, which would spread the cells past the pane's edge (the LTR grid column is
+    // already exactly this wide).
+    ui.allocate_ui_with_layout(vec2(THUMB[0] as f32, (THUMB[1] + 14) as f32), egui::Layout::top_down(egui::Align::Min), |ui| {
         let (r, resp) = ui.allocate_exact_size(vec2(THUMB[0] as f32, THUMB[1] as f32), Sense::click());
         match &d.thumbs[i] {
             Some(tex) => {
@@ -783,34 +782,21 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 }
                 let members: Vec<(usize, GalleryFilter)> = GalleryFilter::ALL.iter().copied().enumerate().filter(|(_, f)| f.category() == *cat).collect();
                 const COLS: usize = 3;
-                if rtl {
-                    // The fork's `egui::Grid` breaks under right-to-left layouts (its available
-                    // width goes NaN), so the rows are drawn by hand in reading order: the
-                    // right-to-left row puts the first-added cell at the right.
+                // The grid runs in an LTR scope (the fork's placer never sees an RTL cursor);
+                // in a right-to-left UI each row's cells are emitted in reverse, so the first
+                // filter of the category still leads from the reading start (the right).
+                crate::direction::ltr_grid(ui, format!("gallery-cat-{ci}"), COLS, vec2(6.0, 6.0), |ui| {
                     for chunk in members.chunks(COLS) {
-                        ui.with_layout(crate::text::direction::row(), |ui| {
-                            for &(i, f) in chunk {
-                                let selected = d.effects.get(d.selected).is_some_and(|e| e.filter == f);
-                                if gallery_cell(ui, d, i, f, selected, rtl, &t).clicked() {
-                                    d.set_filter(f);
-                                }
-                            }
-                        });
-                        ui.add_space(6.0);
-                    }
-                } else {
-                    egui::Grid::new(format!("gallery-cat-{ci}")).spacing([6.0, 6.0]).show(ui, |ui| {
-                        for (n, (i, f)) in members.iter().copied().enumerate() {
+                        let chunk: Vec<(usize, GalleryFilter)> = if rtl { chunk.iter().rev().copied().collect() } else { chunk.to_vec() };
+                        for (i, f) in chunk {
                             let selected = d.effects.get(d.selected).is_some_and(|e| e.filter == f);
                             if gallery_cell(ui, d, i, f, selected, rtl, &t).clicked() {
                                 d.set_filter(f);
                             }
-                            if n % COLS == COLS - 1 {
-                                ui.end_row();
-                            }
                         }
-                    });
-                }
+                        ui.end_row();
+                    }
+                });
                 ui.add_space(4.0);
             }
         });
@@ -906,7 +892,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 if sel {
                     ui.painter().rect_filled(row, 2.0, t.accent_soft);
                 }
-                let (eye, name_at, name_align) = stack_row_parts(row, rtl);
+                let (eye, name_at, name_align) = stack_row_parts(row);
                 crate::icons::paint(ui, eye, if d.effects[i].visible { "eye" } else { "eye-off" }, 14.0, t.icon);
                 ui.painter().text(
                     name_at,
@@ -1071,10 +1057,13 @@ mod rtl_tests {
     #[test]
     fn the_stack_row_keeps_the_eye_at_the_reading_start() {
         let row = ERect::from_min_size(pos2(10.0, 100.0), vec2(266.0, 24.0));
-        let (eye, name_at, _) = stack_row_parts(row, false);
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let (eye, name_at, _) = stack_row_parts(row);
         assert_eq!(eye.left(), row.left() + 4.0);
         assert!(name_at.x > eye.right(), "the name follows the eye");
-        let (eye, name_at, _) = stack_row_parts(row, true);
+        drop(_ltr);
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let (eye, name_at, _) = stack_row_parts(row);
         assert_eq!(eye.right(), row.right() - 4.0);
         assert!(name_at.x < eye.left(), "the name follows the eye");
     }
@@ -1112,7 +1101,8 @@ mod rtl_tests {
             app.distort.gallery.as_mut().unwrap().set_filter(GalleryFilter::Cutout);
             let mut h = gallery_harness(app);
             h.run_steps(4);
-            let cells = cell_rects(&h, harness_panes(rtl).folders);
+            let band = harness_panes(rtl).folders;
+            let cells = cell_rects(&h, band);
             assert!(cells.len() >= 3, "the open category paints its thumbnails ({label}): {}", cells.len());
             let top = cells.iter().map(|r| r.top()).fold(f32::INFINITY, f32::min);
             let row: Vec<ERect> = cells.into_iter().filter(|r| (r.top() - top).abs() <= 2.0).collect();
