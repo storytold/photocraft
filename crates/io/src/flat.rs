@@ -1139,8 +1139,8 @@ fn export_mode_specific(doc: &Document, format: Format, opts: &ExportOptions) ->
                 }
                 return Ok(Some(ExportResult { bytes, warnings }));
             }
-            // Same rule as the ordinary PNG encoder: the resolution goes into `pHYs` with the metadata.
-            let dpi = opts.encode.embed_metadata.then_some((doc.resolution_dpi, doc.resolution_dpi));
+            // Same rule as the ordinary PNG encoder: the resolution always goes into `pHYs`.
+            let dpi = Some((doc.resolution_dpi, doc.resolution_dpi));
             let bytes = codecs::encode_png_indexed(doc.size.width, doc.size.height, &idx, &table.colors, table.transparent, dpi, opts.encode.png_stereo)?;
             let mut warnings = vec![format!("written as an 8-bit palette PNG ({} colours)", table.colors.len())];
             if opts.encode.embed_metadata && opts.xmp == XmpEmbed::All && !doc.metadata.text.is_empty() {
@@ -1360,6 +1360,19 @@ mod streamed_png_tests {
             let r = same_as_whole(&doc, 256, &ExportOptions { xmp, ..Default::default() });
             assert_eq!(decoded(&r.bytes).layout(), ChannelLayout::Rgb);
         }
+    }
+
+    /// Export As with Metadata "None" keeps the resolution in a streamed PNG too (#10105).
+    #[test]
+    fn a_streamed_png_keeps_the_resolution_with_metadata_off() {
+        let mut doc = Document::new("print", Size::new(40, 300), ColorMode::Rgb, SampleType::U8);
+        doc.resolution_dpi = 300.0;
+        doc.metadata.xmp = Some("<x:xmpmeta xmlns:x='adobe:ns:meta/'/>".into());
+        doc.layers = vec![layer(&doc, &[(doc.bounds(), &[0.9, 0.5, 0.1, 1.0])])];
+        let opts = ExportOptions { encode: codecs::EncodeOptions { embed_metadata: false, ..Default::default() }, xmp: XmpEmbed::None, ..Default::default() };
+        let back = decoded(&same_as_whole(&doc, 64, &opts).bytes);
+        assert_eq!(back.meta.dpi, Some((300.0, 300.0)));
+        assert!(back.meta.xmp.is_none());
     }
 
     #[test]

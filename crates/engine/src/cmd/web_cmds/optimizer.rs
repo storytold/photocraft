@@ -149,13 +149,16 @@ pub fn optimize(
         }
     };
     let meta = || photocraft_codecs::Metadata { dpi: Some((dpi, dpi)), xmp: xmp.map(str::to_string), ..Default::default() };
+    // PNG writes `pHYs` whenever `dpi` is set; Save for Web keeps writing it only with metadata.
+    // Photoshop 25.4+ Quick Export PNG keeps the resolution; aligning this is its own change.
+    let png_meta = || photocraft_codecs::Metadata { dpi: xmp.is_some().then_some((dpi, dpi)), ..meta() };
     let (bytes, colors) = match st.format {
         WebFormat::Png24 => {
             let (data, layout) = true_color();
             if preview {
                 look = rgba(&data, layout);
             }
-            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?.with_icc(icc.map(<[u8]>::to_vec)).with_meta(meta());
+            let img = photocraft_codecs::Image::from_u8(ww, hh, layout, data).map_err(e)?.with_icc(icc.map(<[u8]>::to_vec)).with_meta(png_meta());
             let opts = photocraft_codecs::EncodeOptions {
                 png_interlaced: st.interlaced,
                 embed_icc: icc.is_some(),

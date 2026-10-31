@@ -299,6 +299,21 @@ fn jpeg_quality_progressive_and_metadata() {
     assert!(decode(&lo).meta.xmp.is_none());
 }
 
+/// Save for Web PNG-24 writes `pHYs` only with metadata, as before #10105 made the PNG encoder
+/// write it whenever the resolution is known.
+#[test]
+fn png24_writes_the_resolution_only_with_metadata() {
+    let dir = tmp("png24_resolution");
+    let mut s = session(8);
+    s.execute("file.fileInfo", json!({"copyright": "© Example"})).unwrap();
+    for (metadata, phys) in [("none", false), ("copyright", true)] {
+        let path = format!("{dir}/{metadata}.png");
+        s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": path, "metadata": metadata})).unwrap();
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.windows(4).any(|w| w == b"pHYs"), phys, "{metadata}");
+    }
+}
+
 /// WebP (#2415, #6391): lossy at the chosen quality or lossless, keeping translucency unless
 /// transparency is off, with the chosen metadata and an optional colour profile.
 #[test]

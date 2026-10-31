@@ -95,8 +95,8 @@ pub struct ExportSettings {
     /// Embed the document's ICC profile when the format supports it. On for Save As and, unless
     /// Export As turns it off, for export.
     pub embed_icc: bool,
-    /// Embed EXIF, resolution and other non-XMP metadata when the format supports it. Export As
-    /// turns this off for Metadata: None; Save As leaves it on.
+    /// Embed EXIF and other non-XMP metadata when the format supports it. Export As turns this off
+    /// for Metadata: None; Save As leaves it on. JPEG, PNG and TIFF keep the resolution either way.
     pub embed_metadata: bool,
     /// The path of the document's own file, which linked smart objects that PSD/PSB embed are
     /// resolved against ([`photocraft_io::ExportOptions::document_path`]).

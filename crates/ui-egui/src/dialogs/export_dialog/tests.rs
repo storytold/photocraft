@@ -883,7 +883,7 @@ fn profile_and_metadata_follow_the_existing_exporter() {
 
     let mut f = Map::new();
     f.insert("format".into(), json!("jpg"));
-    assert!(settings(&f).embed_metadata, "a missing metadata choice keeps EXIF and resolution");
+    assert!(settings(&f).embed_metadata, "a missing metadata choice keeps EXIF");
     assert!(settings(&f).embed_icc);
     f.insert("metadata".into(), json!("none"));
     f.insert("embedProfile".into(), json!(false));
@@ -959,4 +959,42 @@ fn applying_a_preset_restores_its_size_mode() {
     assert_eq!(f.get("width"), Some(&json!(100.0)));
     assert_eq!(f.get("height"), Some(&json!(50.0)));
     assert_eq!(f.get("sizing"), Some(&json!("scale")));
+}
+
+/// #10105: Export As with its default Metadata "None" writes the document resolution, at full
+/// size and scaled (resampling keeps the ppi, as Image Size does).
+#[test]
+fn export_as_with_metadata_none_keeps_the_document_resolution() {
+    use std::{cell::RefCell, rc::Rc};
+    for (format, scale, side) in [("jpg", 100, 40), ("png", 100, 40), ("tif", 100, 40), ("jpg", 50, 20), ("png", 50, 20)] {
+        let written = Rc::new(RefCell::new(Vec::new()));
+        let sink = written.clone();
+        let services = crate::Services {
+            // What the app wires up: the dialog's settings through `io_options`.
+            export: Some(Box::new(|doc, path, settings: &ExportSettings| {
+                photocraft_io::export(doc, path, &settings.io_options()).map(|r| (r.bytes, r.warnings)).map_err(|e| e.to_string())
+            })),
+            write: Some(Box::new(move |_, bytes| {
+                *sink.borrow_mut() = bytes.to_vec();
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.run("file.new", json!({"width": 40, "height": 40, "resolution": 300})).unwrap();
+        let path = format!("out.{format}");
+        let (dialog, _) = crate::file_dialog::fake(vec![Some(crate::file_dialog::FileDialogAnswer::SaveTo(path.clone()))]);
+        app.services.file_dialog = Some(dialog);
+        let id = open(&mut app).unwrap();
+        let mut f = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+        assert_eq!(f["metadata"], "none", "the dialog's default");
+        f.insert("format".into(), json!(format));
+        f.insert("scale".into(), json!(scale));
+        confirm(&mut app, &f).unwrap();
+        app.poll_file_dialog(&egui::Context::default(), None);
+        assert!(!written.borrow().is_empty(), "{}", app.ui.status);
+        let back = photocraft_codecs::decode(&written.borrow()).unwrap();
+        assert_eq!(back.width(), side, "{path} at {scale} %");
+        assert_eq!(back.meta.dpi, Some((300.0, 300.0)), "{path} at {scale} %");
+    }
 }
