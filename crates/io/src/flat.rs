@@ -37,7 +37,9 @@ pub fn import_flat(name: &str, bytes: &[u8]) -> Result<ImportResult, IoError> {
         r.document.mode = ColorMode::Indexed;
         r.document.color_table = Some(photocraft_doc::ColorTable { colors, transparent });
     }
-    r.document.file_encoding = file_encoding_as(format, bytes);
+    // The decoder's count of frames or pages left out (set above) stays alongside the encoding.
+    let encoding = file_encoding_as(format, bytes);
+    r.document.file_encoding = photocraft_doc::FileEncoding { source_images: r.document.file_encoding.source_images.or(encoding.source_images), ..encoding };
     if format == Some(Format::Tga) && img.layout() == ChannelLayout::Rgba {
         tga_alpha_to_channel(&mut r.document)?;
     }
@@ -132,6 +134,11 @@ fn file_encoding_as(format: Option<Format>, bytes: &[u8]) -> photocraft_doc::Fil
             }
             None => {}
         },
+        // An icon file's directory count (ICONDIR: reserved, type, count, little-endian); the
+        // decoder opens one of its sizes.
+        Some(Format::Ico) => {
+            e.source_images = bytes.get(4..6).and_then(|c| <[u8; 2]>::try_from(c).ok()).map(|c| u32::from(u16::from_le_bytes(c))).filter(|&n| n > 1);
+        }
         _ => {}
     }
     e
@@ -280,6 +287,15 @@ pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult,
         bg
     };
     doc.layers.push(layer);
+    // The file holds more frames, pages or parts than this one: recorded so Save doesn't write
+    // the document back over all of them (#5733).
+    doc.file_encoding.source_images = img.warnings.iter().find_map(|w| match *w {
+        codecs::DecodeWarning::MoreFrames { total } | codecs::DecodeWarning::MorePages { total } | codecs::DecodeWarning::MoreParts { total } => {
+            Some(total.unwrap_or(u32::MAX))
+        }
+        codecs::DecodeWarning::MoreElements { total } => Some(total),
+        _ => None,
+    });
     warnings.extend(crate::tiff_layers::channels_from_extras(&mut doc, img));
     doc.icc_profile = img.icc.clone().map(Arc::new);
     doc.metadata.exif = img.meta.exif.clone().map(Arc::new);
@@ -622,8 +638,9 @@ fn compact_alpha(data: &mut Vec<u8>, color: usize, alpha: usize) {
     data.truncate(n * color);
 }
 
-/// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy).
-pub(crate) fn opaque_surface(s: &Surface, r: Rect) -> bool {
+/// Whether every pixel of `s` over `r` is fully opaque (read from the tiles, no copy). `s` must
+/// have an alpha channel.
+pub fn opaque_surface(s: &Surface, r: Rect) -> bool {
     let fmt = s.format();
     let (ch, bps) = (fmt.channels(), fmt.sample.bytes());
     let a = ch - 1;

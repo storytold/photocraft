@@ -105,6 +105,10 @@ impl crate::DocState {
         if self.doc.name != name {
             Arc::make_mut(&mut self.doc).name = name;
         }
+        // The file now holds just this document, whatever the one it was opened from held.
+        if self.doc.file_encoding.source_images.is_some() {
+            Arc::make_mut(&mut self.doc).file_encoding.source_images = None;
+        }
         self.path = Some(path);
         self.saved_revision = self.revision;
     }

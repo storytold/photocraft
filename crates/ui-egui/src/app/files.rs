@@ -184,12 +184,17 @@ impl PhotocraftApp {
         let ext = st.path.as_deref().and_then(|p| std::path::Path::new(p).extension()).map(|e| e.to_string_lossy().to_ascii_lowercase());
         // An OpenRaster file only when it holds the whole document (#3806): else PSD is offered.
         let holds_ora = st.path.as_deref().is_some_and(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p));
+        // A JPEG whose lone layer has transparency it can't keep is offered as a PNG, as
+        // Photoshop's Save does once pixels are deleted (#2223).
+        let transparent_jpeg = ext.as_deref().and_then(photocraft_codecs::from_extension) == Some(photocraft_codecs::Format::Jpeg)
+            && plain_raster(&st.doc).is_some_and(|l| !crate::opaque_layer(&st.doc, l));
         let writable = ext.is_some_and(|e| {
             matches!(e.as_str(), photocraft_format::EXTENSION | "psd" | "psb" | "tif" | "tiff")
                 || (e == "ora" && holds_ora)
                 || (flat && photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
         });
         let suggested = match &st.path {
+            Some(p) if transparent_jpeg => std::path::Path::new(p).with_extension("png").to_string_lossy().into_owned(),
             Some(p) if writable => p.clone(),
             p => {
                 let source = p.as_deref().unwrap_or(&st.doc.name);
@@ -267,6 +272,33 @@ impl PhotocraftApp {
         Ok(r)
     }
 
+    /// File › Save over the flat file the document came from, which still holds it
+    /// ([`crate::saves_flat_in_place`]): a JPEG asks JPEG Options first, as Photoshop does
+    /// (#2223), and an RGB Targa or a DDS texture its Targa or DDS Options, unless `choices` answer
+    /// them; the answer writes the file and is recorded as a plain `file.save` (#3531). Anything
+    /// else is written straight back.
+    pub(crate) fn save_flat_in_place(&mut self, path: String, choices: FormatChoices) -> Result<Value, String> {
+        if self.save_options_open() {
+            return Err(SAVE_OPTIONS_OPEN.into());
+        }
+        if choices.tga_bits.is_none() && targa_options_ui::wants_prompt(self, &path) {
+            let copy = self.saves_copy(&path, None)?;
+            targa_options_ui::park(self, path.clone(), copy, "file.save")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        if choices.dds.is_none() && dds_options_ui::wants_prompt(&path) {
+            let copy = self.saves_copy(&path, None)?;
+            dds_options_ui::park(self, path.clone(), copy, "file.save")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        if choices.jpeg.is_none() && jpeg_options_ui::wants_prompt(self, &path) {
+            let copy = self.saves_copy(&path, None)?;
+            jpeg_options_ui::park(self, path.clone(), copy, "file.save")?;
+            return Ok(serde_json::json!({"path": path, "warnings": []}));
+        }
+        self.save_in_place(path, choices)
+    }
+
     /// Writes the Save As and journals it as a `file.saveAs` step with its path (and TIFF,
     /// Targa, DDS or JPEG answer), so an action being recorded keeps it (#2032).
     fn save_as_step(&mut self, path: String, tiff_layers: Option<bool>, choices: FormatChoices) -> Result<Value, String> {
@@ -318,17 +350,19 @@ impl PhotocraftApp {
         if id == "file.save" {
             // The file the action is played on: one that holds the whole document, or a flat
             // file a recorded Save confirmed in the dialog while the document is still a plain
-            // raster, so it is never flattened over (#3531, #3806). A flat file's recorded Targa,
-            // DDS or JPEG answer writes the same way, without asking.
+            // raster, so it is never flattened over (#3531, #3806), and only while that file held
+            // just this one image (#5733). A flat file's recorded Targa, DDS or JPEG answer writes
+            // the same way, without asking (#2223).
             let choices = FormatChoices::from_step(params, id)?;
             let st = self.session.active().ok_or("no document")?;
             let flat_own = |p: &str| {
                 !photocraft_engine::file_cmds::saves_in_place(p)
                     && plain_raster(&st.doc).is_some()
+                    && st.doc.file_encoding.source_images.is_none()
                     && photocraft_engine::file_cmds::extension(p).is_some_and(|e| photocraft_codecs::from_extension(&e).is_some_and(|f| f.caps().write))
             };
             let path = st.path.clone().filter(|p| photocraft_engine::file_cmds::holds_at(&st.doc, p) || flat_own(p)).ok_or(
-                "Save writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer",
+                "Save writes back only to the document's own PSD, PSB, .pcraft or OpenRaster file (OpenRaster only when it holds everything), or to its own flat file while the document is a single plain layer and the file held only that image",
             )?;
             return self.save_in_place(path, choices);
         }

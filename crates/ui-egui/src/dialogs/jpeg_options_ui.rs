@@ -14,7 +14,8 @@
 //! is written by [`confirm`] and journalled as the `record` command passed to `park`: with its
 //! path, `quality` (0–12, left out when the file's own quality was kept) and `jpegFormat`, or
 //! without the path for a plain `file.save`, which writes whichever file an action is played on
-//! ([`plain_save_step`]).
+//! ([`plain_save_step`]). File › Save over a flat JPEG that still holds the document asks too,
+//! as Photoshop does (#2223): `PhotocraftApp::save_flat_in_place`.
 
 use photocraft_codecs::JpegFormat;
 use serde_json::Value;

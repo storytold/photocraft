@@ -949,6 +949,11 @@ pub struct FileEncoding {
     /// side by side; saving a stereo PNG keeps this eye-order mark (#6063).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub png_stereo: Option<u8>,
+    /// How many images (frames, pages, parts, icon sizes) the file held when it held more than
+    /// the one the document was opened from; `u32::MAX` when the count is unknown. File › Save
+    /// then goes through Save As rather than writing one image over all of them (#5733).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_images: Option<u32>,
 }
 
 impl FileEncoding {
