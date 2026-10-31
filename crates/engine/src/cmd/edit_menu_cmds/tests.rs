@@ -12,6 +12,10 @@ fn px(s: &Session, x: i32, y: i32) -> Vec<f32> {
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(x, y)
 }
 
+fn px_rgba(s: &Session, x: i32, y: i32) -> [f32; 4] {
+    active(s).surface().unwrap().rgba(x, y)
+}
+
 fn active(s: &Session) -> &Layer {
     let st = s.active().unwrap();
     st.doc.layer(st.active_layer.unwrap()).unwrap()
@@ -475,6 +479,38 @@ fn content_aware_scale_keeps_subject() {
         assert_eq!(striped.count(), 6, "depth {depth}: the striped subject survives");
         s.undo();
         assert_eq!(active(&s).surface().unwrap().content_bounds().width(), 64);
+    }
+}
+
+/// On the Background, which can't hold transparency, the area a selection's Content-Aware Scale
+/// vacates takes the background colour, as Delete leaves it (Photoshop); the layer stays the
+/// Background. On a normal layer it is left transparent.
+#[test]
+fn content_aware_scale_on_the_background_vacates_to_the_background_colour() {
+    for depth in [8, 16] {
+        let mut s = session(depth);
+        s.tools.background = [0.0, 0.0, 1.0, 1.0];
+        let id = s.active().unwrap().active_layer.unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 10})).unwrap();
+        let r = s.execute("edit.contentAwareScale", json!({"width": 10})).unwrap();
+        assert_eq!(r["bounds"], json!([10, 10, 10, 10]), "{depth}-bit");
+        let st = s.active().unwrap();
+        assert!(st.doc.is_background(id), "{depth}-bit: still the Background");
+        let px = |x, y| st.doc.layer(id).unwrap().surface().unwrap().rgba(x, y);
+        for (x, y) in [(20, 10), (25, 15), (29, 19)] {
+            assert_eq!(px(x, y), [0.0, 0.0, 1.0, 1.0], "{depth}-bit: ({x}, {y}) is vacated");
+        }
+        assert_eq!(px(12, 15), [1.0, 1.0, 1.0, 1.0], "{depth}-bit: the scaled pixels");
+        assert_eq!(px(5, 5), [1.0, 1.0, 1.0, 1.0], "{depth}-bit: outside the selection");
+        // A normal layer's vacated area is transparent.
+        let mut s = session(depth);
+        s.tools.background = [0.0, 0.0, 1.0, 1.0];
+        s.execute("layer.new.layer", json!({})).unwrap();
+        s.execute("select.rect", json!({"x": 10, "y": 10, "width": 20, "height": 10})).unwrap();
+        s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+        s.execute("edit.contentAwareScale", json!({"width": 10})).unwrap();
+        assert_eq!(px_rgba(&s, 25, 15)[3], 0.0, "{depth}-bit: a layer's hole is transparent");
+        assert_eq!(px_rgba(&s, 12, 15), [1.0, 0.0, 0.0, 1.0], "{depth}-bit");
     }
 }
 
