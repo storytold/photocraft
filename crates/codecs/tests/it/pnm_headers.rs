@@ -64,6 +64,15 @@ fn pam_truncation_never_uses_header_whitespace_as_pixels() {
 }
 
 #[test]
+fn pfm_scale_magnitude_is_applied() {
+    let mut bytes = b"Pf\n1 1\n-2.0\n".to_vec();
+    bytes.extend_from_slice(&1.0f32.to_le_bytes());
+
+    let image = decode(&bytes).unwrap();
+    assert_eq!(image.to_f32_samples().unwrap(), vec![2.0]);
+}
+
+#[test]
 fn binary_pnm_keeps_its_single_whitespace_separator() {
     for separator in *b" \t\r\n" {
         for first in *b" \t\r\n#" {
