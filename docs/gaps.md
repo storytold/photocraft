@@ -1,6 +1,6 @@
 # Where PhotoCraft falls short of Photoshop
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** minor (Smooth and Feather command masks cropped to selection bounds plus blur reach; G1: Halftone Pattern Filter Gallery settings survive PSD/PSB saves (#8940); cropped selection morphology and command mask conversion performance evidence added; G9: 12 of 181 preferences do nothing, as the scorecard prefs audit counts them; G6: Art History Brush landed as partial, TOOL-213-20, #1610, so no toolbar tool is missing; G4: five hard-round built-in presets use 5% spacing to remove stacked-tip outlines and reduce pressure-opacity bands, #8842; G9: Crop tool canvas menu, #6561; G2: Content-Aware Scale seam carving 1.65–3.6× faster with unchanged output, P28 row 3.3 → 1.6 s on a 4-core VM, #5236; G9: UI scale presets done, 105–120% steps, #3222; G14: lossy DNG, raw sidecars, Camera Raw Defaults live, Calibration and Auto, CR3 assessed as not clean-room feasible; G8: PSD type on a path opens on its path and saves back into the file's `Txt2`, #7962; G11: a recorded Save As imports with its format and file (`file.saveAs`, `file.saveACopy` for As a Copy) instead of as a plain Save that wrote over the played file, #7102; folder destinations stop playback until #5430; adjustment clipping stays visible in compact Properties, #5231; G9: Color panel modes, ramp and copy commands, the same in every theme, UI-217-17, #6000; G17: Help › Check for Updates and an opt-out check once per launch, DIST-220-1 partial, #5485; G10: `.asl` style libraries landed, #1051; G8: area type (TYPE-218-10); G1: smart objects keep Photoshop's Cylinder warp, #4112; G8: paragraph direction buttons in the Paragraph panel and options bar, TYPE-218-2 partial; G1: 32-bit Hue/Saturation and Colorize as Photoshop does them, Photoshop-oracle floor 190/258, #5781; G11: compound layer properties export as separate Photoshop Set events, rename last, #8304; G11: Batch and droplets take the result at the action's Save step, so actions ending in Save As and Close work; G11: `.atn` steps that switch to another open document import, play and save back, #7103; G14: the Nikon D4 white level follows the sample depth, so 12-bit D4 NEFs no longer open 2.6 stops dark, #5978; G14: a Nikon NEF's Adobe RGB preview is read as Adobe RGB (maker-note ColorSpace 0x001E), #5987; Apply Layer Comp action mapping, #7101; G10: JPEG Options dialog landed, FILE-215-19 partial (no Matte, progressive Scans or size preview); G10: Cineon write; G10: DPX read and write, #1049, Cineon and Amiga IFF read; Classical Object Finder improvement; learned segmentation remains open; G4: named, stateful section locks and visible keyboard focus in Brush Settings; G4: independent Brush Pose tilt-axis overrides, #3825 partial; G4: Transfer Mixer-only controls, #3825 partial; G9: Preferences › File Handling › Save in Background takes effect, #6207, 24 of 169 preferences do nothing; G7: Content-Aware Move previews every selection the command takes, coarse then exact, TOOL-213-4 done, #6680; G4: Pattern Stamp and Background Eraser draw live, TOOL-213-7; G9: Animated Zoom pref read: holding the Zoom tool zooms continuously, #6210, prefs that do nothing 25 of 166; G2: a cancelled 24 MP Gaussian Blur job stops in at most 44 ms, P25 under its 200 ms budget in local runs, baseline not re-run, #6205; G1: generated large-file fixtures, a 4.38 GB PSB opens on Windows through io, FILE-216-2 done, #5107; G9: fill and adjustment layers copy and paste whole, #2344; G1: smart filter masks show on PSD open, Photoshop-oracle floor 188/258; G10: DPX read and write, #1049, Cineon read; G1: CMYK Hue/Saturation and Color Balance keep the black ink; G1: CMYK Posterize on the stored values, psd-tools oracle floor 242/309; G1: CMYK adjustment layers composite on the document's inks, Photoshop-oracle floor 165/258; G1: CMYK Brightness/Contrast on the inks, CMYK Threshold's luma; G1: modern Brightness/Contrast's brightness curve matches Photoshop, Photoshop-oracle floor 151/258; G1: Lab documents composite on their stored L, a, b, Photoshop-oracle floor 152/258; G1: Levels on whole levels at every step, Photoshop-oracle floor 146/258, psd-tools 238/309; G1: 32-bit Brightness/Contrast legacy, Channel Mixer, Photo Filter and Black & White tint unclipped as in Photoshop, Photoshop-oracle floor 149/258; G1: mask feathers blur with their exact variance, psd-tools oracle floor 240/309; G1: Threshold splits on Photoshop's luminosity, psd-tools oracle floor 241/309; G1: pass-through clipping base with an adjustment renders isolated, psd-tools oracle floor 240/309; G1: 16-bit Posterize as Photoshop bins it, psd-tools oracle floor 241/309; G1: Gradient Map driven by the W3C luminosity, Photoshop-oracle floor 147/258; G7: Field Blur's on-canvas pins, #3373; G4: Hue Jitter amount track, #3825 partial; G4: minimum field interaction, #3825 partial; G1: CMYK Invert, Posterize and Threshold on the inks, 16-bit Lab Invert; Photoshop-oracle floor 145/258; G11: `.atn` import maps 112 events: Select and Mask, Filter Gallery Spatter, Ripple, Crystallize, Pattern Fill layers, mask targeting, Step Backward, nudges in points, Bitmap mode; G5: Free Transform H/V skew fields; G9: toolbar tool shortcut editing; refreshed against main: G2, G5, G7, G9, G10, G13, G14, G17 items that landed; G10: DPX read and write, #1049; G4: checkbox-only Brush Settings rows; G11: Load/Save Actions `.atn` landed, AUTO-219-2 partial; G5: hold-a-key spring-loaded tools landed, #2672; G1: #2465 fixed; stale missing-tool rows corrected: Color Replacement, Red Eye and Add/Delete Anchor Point are live tools, so only Art History Brush is missing; no estimate changed; G10: Amiga IFF write; G10: PSD spot channels in Photoshop's polarity, earlier PhotoCraft PSDs keep their ink, #7415 split; G10: TIFF alpha and spot channels written and read as extra samples, FILE-215-7 done, FILE-215-17's TIFF part, #7415) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** major (every entry re-checked against `main` at 0.18.0, the regenerated scorecard, corpus runs and issue states: G2 on a new nightly baseline, G3 rescaled to 2,351 open issues, G6 is now tool depth, no toolbar tool is missing; earlier changes are in the revision history) · **Target:** Adobe Photoshop 2026
 
 Every known shortfall against Photoshop 2026 (27.11.0), one entry each, ranked by user impact
 on the way to beta. This is the work list agents pick from: take the highest-ranked entry that
@@ -20,18 +20,18 @@ what an agent can't finish alone.
 | # | Gap | Kind | Impact | Estimate | Parity doc |
 |---|---|---|---|---:|---|
 | G1 | PSD fidelity and Photoshop acceptance | file format | blocks beta | 150–250 h | [file-format-parity](file-format-parity.md) |
-| G2 | Interactive performance | performance | blocks beta | 200–350 h | [scorecard](scorecard.md#performance) |
-| G3 | User-reported bug backlog | stability, UI | blocks beta | 250–400 h | [target-app-parity](target-app-parity.md) |
+| G2 | Interactive performance | performance | blocks beta | 150–280 h | [scorecard](scorecard.md#performance) |
+| G3 | User-reported bug backlog | stability, UI | blocks beta | 750–1,200 h | [target-app-parity](target-app-parity.md) |
 | G4 | Brush feel | UI / painting | high | 100–180 h | [brush-parity](brush-parity.md) |
-| G5 | Transform, handles and modifiers | UI | high | 60–110 h | [ui-parity](ui-parity.md) |
-| G6 | Missing tools (12) | features | high | 60–100 h | [ui-parity](ui-parity.md#tools) |
-| G7 | Workspaces shown as parameter dialogs | features | high | 80–140 h | [target-app-parity](target-app-parity.md#feature-areas) |
+| G5 | Transform, handles and modifiers | UI | high | 50–90 h | [ui-parity](ui-parity.md) |
+| G6 | Tool depth (0 missing, 9 partial) | features | medium | 15–50 h | [ui-parity](ui-parity.md#tools) |
+| G7 | Workspaces shown as parameter dialogs | features | high | 60–110 h | [target-app-parity](target-app-parity.md#feature-areas) |
 | G8 | Type depth | features | high | 120–200 h | [target-app-parity](target-app-parity.md#feature-areas) |
-| G9 | Panels, preferences and workspace | UI | medium-high | 150–250 h | [ui-parity](ui-parity.md#panels-and-workspace) |
+| G9 | Panels, preferences and workspace | UI | medium-high | 120–200 h | [ui-parity](ui-parity.md#panels-and-workspace) |
 | G10 | Missing and partial file formats | file format | medium | 120–220 h | [file-format-parity](file-format-parity.md) |
 | G11 | Actions and scripting | ecosystem | medium | 120–200 h | [target-app-parity](target-app-parity.md) |
-| G12 | Pen tablets and display hardware | hardware | medium | 80–150 h | [hardware-parity](hardware-parity.md) |
-| G13 | Languages: Hindi, Arabic, Vietnamese, RTL, engine messages | localization | medium | 80–140 h + human | [localization-parity](localization-parity.md) |
+| G12 | Pen tablets and display hardware | hardware | medium | 70–130 h | [hardware-parity](hardware-parity.md) |
+| G13 | Languages: Hindi, RTL, engine messages | localization | medium | 60–110 h + human | [localization-parity](localization-parity.md) |
 | G14 | Camera Raw depth | features, formats | medium | 120–200 h | [file-format-parity](file-format-parity.md#camera-raw) |
 | G15 | AI and generative features | AI | medium (high for some users) | 300–600 h + human | [target-app-parity](target-app-parity.md) |
 | G16 | Plug-in compatibility (.8BF, UXP) | ecosystem | medium | 250–450 h + human | [target-app-parity](target-app-parity.md) |
@@ -43,16 +43,21 @@ what an agent can't finish alone.
 - **Done 2026-10-23 (#8940):** Filter Gallery Halftone Pattern preserves size, contrast and dot/circle/line through PSD/PSB import/export, with the reference application's descriptor keys (`HlSz`, `Cntr`, `ScrT`). Malformed descriptors stay verbatim. Other unsupported gallery effects remain opaque on import or produce an export warning.
 - **Missing:** PSDs we write are not always accepted by Photoshop, and Photoshop-authored files
   don't always render as Photoshop renders them.
+- **Measured 2026-10-31:** all three oracle corpora run exactly at their floors (148/170, 249/309,
+  190/258), with round trips 169, 308 and 258. By group, the 68 Photoshop-authored failures are
+  layer effects 34 (3 of 37 pass), CMYK adjustments 14, Lab adjustments 10, RGB adjustments 9 and
+  text 1; gray and smart filters pass in full. Effects are the largest single source of failures. Measured on Windows at `main` 422ca7bed; the counts match the floors CI enforces on Linux.
 - **Partial (2026-10-15, #5972 A1):** `GdFl` noise fills render when all three RGB ranges are
   constant and transparency is disabled. Variable-range synthesis, HSB/Lab modes and
   transparency remain unsupported and are preserved verbatim; the five visual examples do not
   establish Photoshop's exact noise algorithm or include this degenerate constant case.
 - **Evidence:** corpus floors (`crates/io/tests/it/corpus.rs`, scorecard): Photoshop-authored
   oracles 190/258 (74%; 32-bit Hue/Saturation 2026-10-22; smart filter masks 2026-10-14; CMYK and Lab adjustment layers, 32-bit unclipped adjustments, Levels, Threshold, Posterize and mask feathers 2026-10-13; Gradient Map luminosity 2026-10-13; CMYK Invert, Posterize and Threshold on the inks 2026-10-12), io corpus 148/170 (87%), psd-tools 249/309 (81%); round trips ~100%
-  within the corpus. Smart-filter re-render matches 5/30. User reports: a PSD with text layers
-  re-saved unmodified would not reopen (#2374, closed 2026-10-10), Photoshop 26.6 cannot reopen our files (#1281), "PSD not
-  opening in Photoshop" (#2469), a CS2-era smart object unavailable (#2465, fixed 2026-10-12), PSB smart object
-  blank (#1764), perspective placed layers flattened (#579, fixed by #426), PSB > 4 GB fails on Windows (#375; a generated 4.38 GB PSB opens, saves and re-opens
+  within the corpus. Smart-filter re-render matches 5/30 (measured 2026-10-31). User reports: Photoshop 26.6 cannot reopen
+  our files (#1281, open). Closed: a PSD with text layers re-saved unmodified would not reopen (#2374, 2026-10-10); "PSD not
+  opening in Photoshop" (#2469, a duplicate of the stub `Txt2` fixed by #3529, 2026-10-19); a CS2-era smart object
+  unavailable (#2465, 2026-10-12); perspective placed layers flattened (#579, fixed by #426). Still unresolved: PSB smart
+  object blank (#1764, closed as not planned); PSB > 4 GB fails on Windows (#375, open; a generated 4.38 GB PSB opens, saves and re-opens
   through io on Windows, io tests/it/large_files.rs, 2026-10-13).
   No test opens our exports in a third-party editor (FILE-216-4). Mockups whose smart object
   uses Transform Warp's Cylinder re-rendered flat after Replace Contents (#4112, fixed 2026-10-14;
@@ -61,33 +66,42 @@ what an agent can't finish alone.
 - **Estimate:** 150–250 h. **Human:** opening exports in Photoshop on the owner's Mac (or a
   scripted check there) is the only real oracle.
 
-### G6. Missing tools
-- **Missing (0 of 68):** Art History Brush landed as partial (TOOL-213-20: 8 of 10 styles, Area
-  scales spacing, no Mode/Opacity on the options bar). Convert Point landed (#3204). Freeform
+### G6. Tool depth
+- **Missing:** no toolbar tool: `Tool::ALL` holds all 68 of the denominator (Photoshop's 67 `.kys`
+  tools plus Remove, Triangle and Curvature Pen, minus legacy Rounded Rectangle and Targeted
+  Adjustment). Art History Brush landed as partial (TOOL-213-20: 8 of 10 styles, Area scales
+  spacing, no Mode/Opacity on the options bar). Convert Point landed (#3204). Freeform
   Pen and Curvature Pen landed (#1054); Color Sampler landed (#1046, `view.colorSamplers.*`); Horizontal and Vertical Type Mask landed (#1055,
   `type.createSelection`); Perspective Crop landed (#1043, `image.perspectiveCrop`); Frame landed
   (#2914).
-- **Evidence:** `Tool` enum (`crates/ui-egui/src/state.rs`) against the 67 `<tool>` entries of
-  Photoshop's `Default Keyboard Shortcuts.kys` plus Remove, Triangle and Curvature Pen.
-- **Impact:** users look for them by name and shortcut; several are daily tools for designers.
-- **Estimate:** 60–100 h (2–9 h each, per the calibration).
+- **Partial:** the scorecard's Tools list is 36 done, 9 partial, 0 missing. Six of the nine are this
+  gap: live previews (TOOL-213-7), Clone Source's Alt target cursor (TOOL-213-8), the OS arrow
+  cursor per platform (TOOL-213-14), double-click fit and dragging a selection's pixels to another
+  document (TOOL-214-4), Remove's non-generative fill (TOOL-213-19, see G15) and Art History Brush
+  (TOOL-213-20). The other three are the workspaces in G7.
+- **Evidence:** `Tool` enum (`crates/ui-egui/src/state/tool.rs`) against the 67 `<tool>` entries of
+  Photoshop's `Default Keyboard Shortcuts.kys`.
+- **Impact:** people find the tool; these are the places where it then behaves differently.
+- **Estimate:** 15–50 h (2–9 h per row, per the calibration).
 
 ### G7. Workspaces shown as parameter dialogs
 - **Missing:** Select and Mask's Refine Hair (#2671), Object Aware refine mode (#2788) and Presets
   (TOOL-214-1; the workspace landed 2026-10-23, #7069, #8148: Photoshop's layout with its own
   Quick Selection, Refine Edge Brush, Brush, Object Selection, Lasso and Polygonal Lasso, Hand and
   Zoom, the view modes since #1754, Real-Time Refinement and High Quality Preview); Content-Aware Fill workspace with a paintable sampling area
-  (TOOL-214-15); Vanishing Point plane editor (TOOL-214-14). Content-Aware Move's live preview
+  (TOOL-214-15); Vanishing Point's Marquee and Heal modes (TOOL-214-14). Content-Aware Move's live preview
   of the result is done (TOOL-213-4, 2026-10-16, #6680: every selection the command takes, coarse
   first for large ones, then the exact result), as are Transform On Drop and Content-Aware Scale
   through the transform box (TOOL-214-7).
   Blur Gallery: Field, Iris, Tilt-Shift and Spin Blur are edited on the image with Photoshop's pins
   and handles (2026-10-11, #3373); Tilt-Shift has one band (the engine takes one), and Path Blur
   (#1759) is still a parameter dialog.
-- **Evidence:** scorecard rows above, all partial or missing.
+  Vanishing Point has its window with planes, tear-off planes, paste and the Stamp in perspective;
+  its Marquee tool and the Stamp's Heal modes are what remains.
+- **Evidence:** scorecard rows above, all partial.
 - **Impact:** these are the tools retouchers and compositors use daily; a slider dialog is not a
   substitute.
-- **Estimate:** 80–140 h.
+- **Estimate:** 60–110 h.
 
 ### G8. Type depth
 - **Missing:** type on a path beyond rigid glyph placement (TYPE-218-1 partial, #4365; the Type tool's click on a shown path landed;
@@ -96,15 +110,15 @@ what an agent can't finish alone.
   the visual RTL caret and PSD storage of the paragraph direction (TYPE-218-2; the paragraph
   direction buttons landed 2026-10-22), complex-script fallback fonts and golden tests
   (TYPE-218-3), OpenType Numerals and Stylistic Sets submenus
-  (TYPE-218-5; the Character panel buttons landed 2026-10-11, #3752), text free transform
-  (#2630), area type in PSD (TYPE-218-10). Done since the re-measure: manual and optical kerning with PSD round trip
+  (TYPE-218-5; the Character panel buttons landed 2026-10-11, #3752), area type in PSD
+  (TYPE-218-10). Done since the re-measure: text free transform (#2630), manual and optical kerning with PSD round trip
   (TYPE-218-6, #206), variable-font axes (TYPE-218-4, #2985), Warp on live type without a
   rasterize prompt, as in Photoshop (TYPE-218-9, #3004), and the live Warp Text preview that opens
   with the layer's warp (TYPE-218-7, #2689).
 - **Evidence:** scorecard Type: 5 done, 5 partial, 0 missing. 2026-10-11: 2/3/4/5 clicks select
   word, line, paragraph and all text, with tests (TYPE-218-8, #3493). 2026-10-15: area type, type
-  inside a closed path or shape, with holes (TYPE-218-10). The Type tool froze the app for
-  60 s on one macOS machine (#2518).
+  inside a closed path or shape, with holes (TYPE-218-10). The Type tool's 60 s freeze on macOS
+  (#2518) closed as a duplicate when the system font scan moved off the UI thread (#3021).
 - **Estimate:** 120–200 h.
 
 ### G11. Actions and scripting
@@ -212,12 +226,24 @@ what an agent can't finish alone.
 ## UI / UX gaps
 
 ### G3. User-reported bug backlog
-- **Missing:** fixes for 579 open issues (2026-10-10), filed mostly by 0.5/0.6 users. By title:
-  ~150 UI/panels/menus/shortcuts, 94 file/format, 87 layers, 54 painting, 54 selection,
-  46 type, 41 performance, 34 transform/move, 25 Linux/Wayland, 24 Windows, 20 macOS.
+- **Missing:** fixes for 2,351 open issues (2026-10-31; 579 on 2026-10-10, 953 on 2026-10-13).
+  1,326 of them were filed since 2026-10-17, while 1,100 closed in the same two weeks, so the
+  backlog is growing faster than it is being cleared. Setting aside what the labels mark as
+  duplicate (227), needs info (339), spam (7) or already fixed (20) leaves **~1,760 actionable**:
+  50 critical, 182 high, 814 medium, 494 low, the rest unprioritized. By label: 562 UI, 214 file
+  compatibility, 132 performance, 37 install. By title (overlapping): 187 layers, 181 brush and pen,
+  144 selection, 139 PSD, 120 type, 113 filters and adjustments, 95 transform, 81 crash or freeze,
+  66 Windows, 45 Linux, 30 macOS.
+- **Evidence:** the 503 open issues labelled `multiple issues` hold several reports in one, and the
+  automated `ticket-craft` filer wrote 196 of the newest 1,200 open issues (574 distinct authors in
+  that sample), so the count is not comparable to 2026-10-10's, which was mostly direct user
+  reports. Both effects cut in opposite directions; the count is an order of magnitude, not a
+  measure of quality.
 - **Impact:** each is a place where a Photoshop user hits something different from what they
-  expect; together they are why ready-for-real-work is ~45% while breadth is ~76%.
-- **Estimate:** 250–400 h (many overlap with other gaps; count each fix once).
+  expect; together they are why ready-for-real-work is ~52% while breadth is ~79%.
+- **Estimate:** 750–1,200 h: the 2026-10-10 rate (~0.43–0.69 h per open issue) on ~1,760 actionable
+  issues. Beta asks for under 100 open, which at this inflow needs triage as well as fixes. Many
+  overlap with other gaps; count each fix once.
 
 ### G4. Brush feel
 - **Progress (2026-10-23, #8842):** the five hard-round built-in presets use 5% spacing.
@@ -248,20 +274,22 @@ what an agent can't finish alone.
 - **Progress (2026-10-12, #4283):** the five checkbox-only Brush Settings rows keep the open
   controls selected; Smoothing can be disabled without discarding its amount or mode. This
   closes that panel interaction gap, not the stroke-quality or performance gaps below.
-- **Missing:** lag with big brushes (#2619, #1994) and under the cursor (#2566, #1343); jumpy
-  pressure on Windows (#2046) and tap sensitivity (#1933); stair-stepped line weights (#1776),
-  interpolation and smoothing problems (#2138), edge falloff (#2149), pixelated cursor vs
-  Photoshop (#1433), brush rotation not driven by pen rotation (#1301); no live preview for the
-  Mixer Brush yet (TOOL-213-7, in PR #3627; the other brush tools draw live, Spot Healing and Remove
-  compute on release as in Photoshop); no image file as a brush tip (TOOL-213-12); per-control pressure
-  curves (TOOL-213-11); 4 of Photoshop's symmetry modes.
+- **Missing:** lag with big brushes (#2619, #1994) and under the cursor (#1343, which #2566
+  duplicates); jumpy pressure on Windows (#2046), interpolation and smoothing problems (#2138), edge
+  falloff (#2149), pixelated cursor vs Photoshop (#1433), brush rotation not driven by pen rotation
+  (#1301); Spot Healing and Remove compute on release as in Photoshop (TOOL-213-7); Photoshop's other
+  symmetry modes (Wavy, Circle, Spiral, Parallel Lines, Radial, Mandala: `SymmetryMode` has Vertical,
+  Horizontal, Dual and Diagonal; #2659 closed with the four available in every theme, not with new modes).
+- **Done since the re-measure:** an image file as a brush tip (TOOL-213-12), per-control pressure
+  curves (TOOL-213-11), the Mixer Brush's live stroke (#3627), pressure on every sample instead of
+  the frame's last (#1776), quick taps at their own pressure (#1798, #1933). Budgets P13, P16 and P32
+  are met on the nightly baseline; P33 (brush on A4 300 ppi CMYK) is not.
 - **Detail:** [`brush-parity.md`](brush-parity.md).
 - **Estimate:** 100–180 h. **Human:** checking feel on real tablets.
 
 ### G5. Transform, handles and modifiers
 - **Missing:** the full interpolation list; blend mode/opacity edits during
-  a transform (#1384); path-point nudge; autoscroll at the edge while selecting (#2231);
-  wheel and pinch behaviour (#2485, #2463, #1989);
+  a transform (#1384); pinch and smooth-scrolling behaviour (#2463, #1989);
   toolbar press-and-hold flyouts (#2301).
 - **Done since the re-measure (2026-10-10 to 12):** right-click menu during Free Transform
   (TOOL-214-5); commit/cancel buttons in the options bar (#2442); transform keeps the layer's
@@ -272,9 +300,10 @@ what an agent can't finish alone.
   to 100% (#2508, #2527); tool-key memory in a group (#2608, #2625); hold-a-key spring-loaded
   tools (#2672); H/V skew fields in the Free Transform options bar; Free Transform of several
   selected layers, ⌘T and the Move tool's shared frame (#6501, #3384, #6096; Warp stays one
-  layer).
+  layer); path-point nudge with Direct Selection (#4486); autoscroll at the window edge (#2231,
+  `canvas/canvas_autoscroll.rs`); mouse-wheel behaviour (#2485).
 - **Detail:** [`ui-parity.md`](ui-parity.md).
-- **Estimate:** 60–110 h.
+- **Estimate:** 50–90 h.
 
 ### G9. Panels, preferences and workspace
 - **Progress (2026-10-21):** adjustment clipping is reachable above the Properties editor in a compact dock (#5231), with all-theme layout coverage and 8/16/32-bit scope and undo/redo tests. The normal adjustment-layer scope and remaining estimate stay unchanged.
@@ -290,13 +319,17 @@ what an agent can't finish alone.
 - **Progress (2026-10-15):** the Color panel has Photoshop's panel-menu modes (Hue Cube, Brightness
   Cube, Color Wheel, Grayscale/RGB/HSB/CMYK/Lab/Web Color sliders), its colour ramp and copy
   commands, the same in every theme (UI-217-17, #2569, #6000; `ui-egui/src/color_panel_ui.rs`).
-- **Missing:** 12 of 181 preferences do nothing (scorecard prefs audit, 2026-10-27); panel groups can't
-  float or tear off into OS windows (UI-217-5, #1828, #1213, #2305); more themes (UI-217-11, #2661); a single pixel layer
+- **Missing:** 12 of 182 preferences do nothing (scorecard prefs audit, 2026-10-31); a single pixel layer
   copies without its mask and styles (UI-217-23; fill and adjustment layers copy whole, #2344); tool-specific context menus beyond brushes, selections, Pen and
   Crop
-  ([context-menu-parity.md](context-menu-parity.md)); Libraries, Comments, Contextual Task Bar
-  panels.
-- **Estimate:** 150–250 h.
+  ([context-menu-parity.md](context-menu-parity.md)); Libraries, Comments, Contextual Task Bar,
+  Discover and Generative variations panels; one Preset Manager for every kind (UI-217-21).
+- **Done since the re-measure:** panel groups float into windows of their own, group, split,
+  reorder and dock back, and the layout persists with the workspace (UI-217-5,
+  `panels/panel_docking.rs`; #1828 and #1213 closed as duplicates of #1379, which stays open for
+  follow-ups); fourteen themes including Soft Dark and Soft Light (UI-217-11, #2661). The scorecard's
+  Workspace list is 16 done, 7 partial, 0 missing.
+- **Estimate:** 120–200 h.
 
 ### G2. Interactive performance
 - **Progress (2026-10-27):** Smooth and Feather also crop command mask reads and
@@ -321,35 +354,44 @@ what an agent can't finish alone.
   pass that puts a Background's alpha back now runs per tile in parallel and checks for
   cancellation, and column-strip box passes check between passes. On a layer with locked
   transparency (a Background) the uncancelled job is ~40% faster (p50 642–735 → 395–409 ms);
-  other layers gain only the strip checks. Local runs, `perf/baseline.json` not re-measured yet
-  (the scorecard still shows P25 as not run); command, revision, machine and per-run numbers in
-  #6206. #6205.
+  other layers gain only the strip checks. Local runs; the 2026-10-31 baseline has P25 at 22.7 ms
+  p95. Command, revision, machine and per-run numbers in #6206. #6205.
 - **Measured progress (2026-10-13):** Content-Aware Scale (P28) keeps its seam search across
   seams and moves no pixels. On a 4-core cloud VM (CPU, interleaved runs), the carve of P28's
   24 MP photo to 90 % width takes 556 ms instead of 2013 ms (3.6×), and the whole P28 row takes
   1.64 s instead of 3.28 s, within its 3 s budget. Smaller images on the full-resolution search
   are 1.65–2.3× faster. Output is bit-identical wherever the energy stays a number (pinned
-  hashes); NaN and infinities are now deterministic. The scorecard keeps the 2026-10-05
-  baseline's 954 s, which predates the per-seam energy updates and the reduced-height search,
-  until the reference machine reruns it. Most of the row is now `read_region`/`write_region`
-  plumbing. [Method and ranges](seam-carving-performance.md).
-- **Missing:** 22 of 25 budgeted scenarios are over budget (baseline 2026-10-05, a heavily
-  loaded machine): layer move with styles 321 ms p50 against 25 ms, opacity change 276 ms
-  against 20 ms, paste 12 MP 1.2 s against 100 ms, layer move on 15000×10000 16-bit 2.7 s,
-  Content-Aware Scale 24 MP 954 s against 3 s (older code; now met, see above), Select Subject 559 ms against 100 ms; the
-  150-layer nudge crashes the GPU compositor (P12); menus slow with thousands of layers (#2460); old machines lag (#2687).
-- **Estimate:** 200–350 h. Serial in places (compositor architecture).
+  hashes); NaN and infinities are now deterministic. The 2026-10-31 baseline has the row at
+  1.2 s (was 954 s in 2026-10-05's), within budget. Most of the row is now
+  `read_region`/`write_region` plumbing. [Method and ranges](seam-carving-performance.md).
+- **Measured 2026-10-31:** `perf/baseline.json` is now the median of five nightly runs (2026-10-27
+  to 10-31) on the `macos-15` runner, a 3-core Apple M1 VM with a paravirtual GPU, under load.
+  **16 of the 40 measured budgets are met and 24 are not;** 14 rows are not in the baseline yet
+  (new CPU-compositor rows, in only three of the five runs), 4 aren't measurable, 21 are track-only.
+  It replaces 2026-10-05's single run on a heavily loaded M4 Pro (3 of 25), so the two aren't
+  directly comparable, and single nights swing between 12 and 18 budgets met. P12's 150-layer GPU
+  crash is gone (22 ms p95, budget 30). P29 and P32 now fail the nightly if they break. P16 stays
+  unenforced: it went over budget again on 2026-10-26. P29 is met because repeats answer from the
+  last mask (#2865): a first Select Subject is not what it measures.
+- **Missing:** the 24 over-budget scenarios. Worst first: layer opacity and hide among 150
+  full-canvas layers on the app's GPU budget ~6 s against 30 ms (P60, P61); Smart Blur 11 s, Oil
+  Paint 6.8 s, Relight 2.6 s and Reduce Noise 2.1 s on 24 MP against 1 s (P64–P67); 12 MP paste and
+  duplicate 130–410 ms against 20–100 ms (P8–P11); layer move on 15000×10000 16-bit 269 ms against
+  80 ms (P14); layer property edits 29–103 ms against 10–25 ms (P1–P7); Liquify 10 ms against 1 ms
+  (P30); Camera Raw 24 ms against 10 ms (P31, P36). Old machines lag (#2687). These are p95 on the
+  slow runner, not a user's machine.
+- **Estimate:** 150–280 h. Serial in places (compositor architecture).
 
 ## File-format gaps
 
 ### G10. Missing and partial file formats
 - **Missing:** JPEG Options' Matte, progressive Scans and size preview (FILE-215-19 partial), Photoshop PDF read and its vector/text/multi-page
-  write (FILE-215-10, #2541; a single flattened page now saves via Save As / Save a Copy / CLI,
-  2026-10-11, #3401), AVIF read (#463) and default-build AVIF write, JPEG XL, JPEG 2000 (#1047),
-  DICOM, EPS/DCS, Pixar, WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
+  write (FILE-215-10; a single flattened page saves via Save As / Save a Copy / CLI, #3401; #2541
+  closed without PDF import, which `crates/io/src/pdf.rs` still lists as open), AVIF read (#463) and default-build AVIF write, JPEG XL read
+  (lossless write landed), JPEG 2000 (#1047), DICOM and PCX write (both read),
+  EPS/DCS, Pixar, WBMP, MPO/JPS, PICT, Scitex CT, Photoshop
   Raw; spot plates beyond PSD and TIFF: spot ink preview in RGB/CMYK documents and PDF Separation
-  (FILE-215-17); .atn,
-  .shc, .csh presets (.asl landed 2026-10-20) (FILE-215-15); C2PA (#1050).
+  (FILE-215-17); C2PA (#1050).
 - **Detail:** [`file-format-parity.md`](file-format-parity.md).
 - **Progress (2026-10-23, #7415 split):** PSD stores and reads spot channels as Photoshop does (ink
   0 = solid) and writes their identifiers (1053); PSDs from PhotoCraft 0.1.0–0.16.0, which stored
@@ -367,22 +409,22 @@ what an agent can't finish alone.
 ## Hardware gaps
 
 ### G12. Pen tablets and display hardware
-- **Missing:** tilt and rotation on Windows (pressure only, via WM_POINTER; no WinTab); native
-  Wayland tablet-v2 (#79; the pen does not click on GNOME 50, #2622, KDE #2297); eraser end on
+- **Missing:** tilt and rotation on Windows (pressure and the barrel button only; no WinTab); native
+  Wayland tablet-v2 (#79; the pen does not click on GNOME 50, #2622); eraser end on
   flipped Wacom pens (#2285); HDR/EDR output (Photoshop has "Precise Color Management for HDR
-  Display"); monitor profile detection off macOS and live profile changes; Touch Bar (macOS
-  Intel only, low value); 3D mice.
+  Display"); monitor profile detection on Windows (macOS and Linux colord detect it) and live profile
+  changes; Touch Bar (macOS Intel only, low value); 3D mice.
 - **Detail:** [`hardware-parity.md`](hardware-parity.md).
-- **Estimate:** 80–150 h. **Human:** tablets and HDR displays to test on.
+- **Estimate:** 70–130 h. **Human:** tablets and HDR displays to test on.
 
 ## Localization gaps
 
-### G13. Hindi, Arabic, Vietnamese, RTL and engine messages
-- **Missing:** catalogs for Hindi, Arabic and Vietnamese (3 of the 12 key languages); right-to-
-  left UI layout; Devanagari fallback fonts (Thai #1909 and Khmer, Lao and Myanmar #3259 landed); engine error and status messages in
-  English in every language; browser-locale detection and CJK fonts on the web; Japanese IME on
-  Windows (#590); installed Japanese fonts missing from the font list (#2330); Arabic layer names
-  as tofu (#1408, #1693).
+### G13. Hindi, RTL and engine messages
+- **Missing:** the rest of the Hindi catalog (14.7% of 2,199 keys, measured 2026-10-31; the other 11
+  key languages are at 99%+, Arabic and Vietnamese landed since the re-measure); right-to-left
+  layout inside panels, dialogs, menus and tabs (the shell mirrors); engine error and status messages in
+  English in every language; browser-locale detection on the web; Japanese IME on
+  Windows (#590); Arabic layer names as tofu (#1408; #1693 closed 2026-10-29).
 - **Evidence (2026-10-11):** Czech dynamic UI wrappers, hardware labels and composed messages
   translate at display sites; engine errors remain English. This does not close G13.
 - **Evidence (2026-10-15):** Russian gained the 1,229 dynamic labels the other catalogs already
@@ -390,22 +432,24 @@ what an agent can't finish alone.
   metadata, System Info, status templates, dialogs), with a terminology note
   ([localization-ru](localization-ru.md)); engine errors remain English. This does not close G13.
 - **Detail:** [`localization-parity.md`](localization-parity.md).
-- **Estimate:** 80–140 h. **Human:** native-speaker review of every catalog (none is recorded).
+- **Estimate:** 60–110 h. **Human:** native-speaker review of every catalog (recorded only for Italian).
 
 ## Platform gaps
 
 ### G17. Platforms and distribution
 - **Missing:** Windows code signing (material not obtained), a periodic recheck for the in-app
   update check (DIST-220-1 partial: Help › Check for Updates and an opt-out check once per
-  launch, #5485), in-app bug report (DIST-220-3), Flathub (#173),
-  starting without a GPU adapter (#2519, #2412), Windows 7 (#2310, out of scope), Intel Macs with
-  OpenCore (#1859).
+  launch, #5485), in-app bug report (DIST-220-3; a failed launch does show the error and the log to
+  attach, #7643), Flathub submission (the manifest is ready, `docs/releasing.md`; #173 is closed),
+  starting without a usable GPU on some machines (#2412; #2519 fixed), Intel Macs with
+  OpenCore (#1859). Windows 7 is out of scope (#2310, closed).
 - **Estimate:** 30–60 h. **Human:** signing certificates.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | major | Re-checked against `main` at 0.18.0. G1: measured counts equal the floors; 34 of 68 Photoshop failures are layer effects; #2469 closed. G2: new nightly baseline, 16 of 40 budgets met, P12 crash gone, estimate 200–350 → 150–280 h. G3: 2,351 open, ~1,760 actionable, 250–400 → 750–1,200 h. G4: stale tip, pressure-curve and Mixer rows removed. G5: 60–110 → 50–90 h. G6 renamed Tool depth (0 missing), 60–100 → 15–50 h. G7: 80–140 → 60–110 h. G9: floating panels and themes landed, 150–250 → 120–200 h. G10: JPEG XL write, PCX and DICOM read, DPX, Cineon and IFF counted. G12: 80–150 → 70–130 h. G13: Arabic and Vietnamese landed, Hindi 14.7%, 80–140 → 60–110 h. G17: stale issues corrected |
 | 2026-10-27 | minor | Smooth/Feather command reads and replacement use selection bounds plus blur reach; full-canvas reference and release comparisons extended; percentages and scorecard budgets unchanged |
 | 2026-10-27 | minor | G9: 12 of 181 preferences do nothing, the scorecard's count with integration batch 9 (#9775) on main; no estimate changed |
 | 2026-10-26 | minor | Expand/Contract/Border distance work, mask reads and replacement cropped to nonzero bounds; bounded distances for radii ≤5; 36 MP exact-output comparisons improve 1.54–37.82× across eight cases; percentages, estimates and scorecard budgets unchanged |

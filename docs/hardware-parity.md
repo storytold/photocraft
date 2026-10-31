@@ -1,6 +1,6 @@
 # Hardware parity
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-17 · **Change:** minor (Camera Raw's preview develops its per-pixel stages on the GPU) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-31 · **Last updated:** 2026-10-31 · **Change:** major (re-checked at 0.18.0: GPU paging, panels in their own windows, Linux monitor profiles; earlier changes are in the revision history) · **Target:** Adobe Photoshop 2026
 
 Each hardware feature Photoshop 2026 (27.11.0) uses, per platform, against PhotoCraft. Photoshop
 side: its bundle (Metal and OpenCL paths, "Precise Color Management for HDR Display" and EDR
@@ -8,9 +8,9 @@ strings, Touch Bar resources, pen pressure/tilt strings) and Adobe's GPU FAQ. Ph
 `crates/tablet`, `crates/ui-egui/src/stylus.rs`, `apps/photocraft/src/gpu_startup.rs`,
 `engine/src/display_color.rs`, `apps/photocraft/src/monitor_profile.rs`.
 
-**Summary (estimated):** ~50% ready. GPU compositing and colour-managed display are solid; pen
+**Summary (estimated):** ~55% ready. GPU compositing and colour-managed display are solid; pen
 input is uneven by platform (Windows lacks tilt/rotation, Wayland is broken) and there is no HDR
-output. Remaining: 80–150 h (gap G12). Human: tablets (Wacom, XP-Pen, Huion) on each OS and an
+output. Remaining: 70–130 h (gap G12). Human: tablets (Wacom, XP-Pen, Huion) on each OS and an
 HDR display to verify.
 
 ## GPU
@@ -20,16 +20,17 @@ HDR display to verify.
 | GPU canvas, zoom/pan, rotate view | Metal (macOS), DirectX/OpenCL (Windows) | wgpu 30: Metal, Vulkan, DX12, GL; backend selectable | done |
 | GPU compositing of layers, blend modes, effects | partial (Photoshop composites mostly on CPU) | wgpu compositor, ≤ 1/255 vs CPU oracle; Multichannel and > texture-limit regions fall back to CPU | done (ahead in places) |
 | GPU filters (Blur Gallery, Liquify, Smart Sharpen, Camera Raw) | yes | CPU (rayon) for filters; GPU for compose and effects. Camera Raw's preview runs its per-pixel stages (white balance to grain) in one wgpu pass, about 2-3 ms vs 11-28 ms on the CPU for the 858×572 proxy, depending on the machine; spatial stages, Calibration and OK still develop on the CPU (#6916) | partial |
-| Documents larger than the GPU texture limit | yes (tiled) | CPU fallback; tiling in progress (#49) | partial |
-| CPU-only fallback when no GPU | yes, reduced | `cpu` canvas preference; fails to start without an adapter on some Linux systems (#2519, #2412) | partial |
+| Documents larger than the GPU texture limit | yes (tiled) | paged compositing past the limit (`crates/gpu/src/lib.rs`); Multichannel documents and patterns larger than the limit fall back to the CPU | done |
+| CPU-only fallback when no GPU | yes, reduced | `cpu` canvas preference; a failed start says why (#7643); fails to start without an adapter on some systems (#2412; #2519 fixed) | partial |
 | Choosing the GPU on a multi-GPU machine | Preferences › Performance › Use Graphics Processor | Linux only: Preferences › Performance › Advanced › GPU adapter and `PHOTOCRAFT_GPU_ADAPTER` (#1885); ignored on Windows and macOS | partial |
-| Old / integrated GPUs | yes | black line on Intel HD (#2426), OpenCore Macs fail (#1859), Rgba32Float panic (#2020) | partial |
+| Old / integrated GPUs | yes | black line on Intel HD (#2426), OpenCore Macs fail (#1859); Rgba32Float panic fixed (#2020) | partial |
 
 ## Pen tablets
 
 | Feature | Photoshop | macOS | Windows | Linux X11 | Linux Wayland | Web |
 |---|---|---|---|---|---|---|
-| Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2) | via Xwayland only; GNOME 50 pen doesn't click (#2622), KDE (#2297) | yes |
+| Pressure | yes | yes (AppKit monitor) | yes (WM_POINTER), jumpy (#2046) | yes (XInput2) | via Xwayland only; GNOME 50 pen doesn't click (#2622) | yes |
+| Barrel button | yes | yes | yes (pointer hook, #5905) | yes | no | yes |
 | Tilt | yes | yes | **no** | yes | no | yes |
 | Barrel rotation | yes | yes (not applied to tip angle, #1301) | no | partial | no | yes (twist) |
 | Eraser end | yes | yes | no (#2285) | partial | no | partial |
@@ -41,11 +42,11 @@ HDR display to verify.
 | Feature | Photoshop | PhotoCraft | Status |
 |---|---|---|---|
 | Colour-managed canvas (document → monitor profile) | yes | yes, folded into the GPU 3D LUT | done |
-| Monitor profile detection | per display, live | macOS per display at launch; others sRGB or a chosen .icc | partial |
+| Monitor profile detection | per display, live | macOS per display and Linux through colord, at launch; Windows sRGB or a chosen .icc | partial |
 | HDR / EDR output for 32-bit and HDR images | yes ("Precise Color Management for HDR Display") | no; 8-bit sRGB-encoded canvas texture | missing |
 | High-DPI, physical 100% | yes | yes (#1943) | done |
 | Multiple monitors: documents in separate OS windows | yes | yes (`extra_windows`) | done |
-| Panels in separate OS windows | yes | in-app floating only (UI-217-5) | missing |
+| Panels in separate OS windows | yes | yes (UI-217-5, `panels/panel_docking.rs`) | done |
 
 ## Input devices
 
@@ -62,6 +63,7 @@ HDR display to verify.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | major | Re-checked at 0.18.0: paged GPU compositing, panels in their own windows, Linux monitor profiles (colord), barrel button on Windows, #2519, #2020 and #2297 closed; ~50 → ~55%, 80–150 → 70–130 h |
 | 2026-10-10 | major | First version |
 | 2026-10-17 | minor | GPU filters: Camera Raw's preview, per-pixel stages (#6916 step 1) |
 | 2026-10-19 | minor | Graphics Adapter choice on Linux (#1885) |
