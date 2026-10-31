@@ -85,7 +85,10 @@ pub(crate) fn copy(s: &mut Session, p: &Value) -> Result<Option<Value>> {
     if bounds.is_empty() {
         return Err(EngineError::Other("Could not copy: the selected area is empty".into()));
     }
-    s.clipboard = Some(Clip { components: None, surface, bounds, layers: None, resolution: Some(doc.resolution_dpi), source: Some(doc.id) });
+    // One clipboard: a pixel clip replaces a path clip, as a path clip replaces it.
+    let (resolution, source) = (Some(doc.resolution_dpi), Some(doc.id));
+    s.path_clipboard = None;
+    s.clipboard = Some(Clip { components: None, surface, bounds, layers: None, resolution, source });
     Ok(Some(json!({"bounds": [bounds.x0, bounds.y0, bounds.width(), bounds.height()], "channel": k})))
 }
 
