@@ -64,7 +64,7 @@ use photocraft_raster::{Surface, Tile};
 pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use camera_raw_tone::{CAMERA_RAW_FILTERS_SHADER, CAMERA_RAW_TONE_SHADER};
 pub use health::{DeviceHealth, Fault};
-pub use operator::{Combine, GaussianBlur, LayerOperator, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur};
+pub use operator::{Combine, GaussianBlur, LayerOperator, MAX_AXIS_TAPS, MAX_DISC_RADIUS, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 
@@ -143,9 +143,10 @@ pub struct Compositor {
     op_pins: HashMap<ResKey, Arc<Surface>>,
     /// The operators of the document the current refresh draws.
     frame_ops: Vec<LayerOperator>,
-    /// The blur passes' two scratch textures, reused from cell to cell and step to step (made
-    /// anew each time, they cost their allocation and clearing on every slider step).
-    op_scratch: Option<([u32; 2], [wgpu::Texture; 2])>,
+    /// The operator passes' scratch textures (two, or four for a disc), reused from cell to cell
+    /// and step to step (made anew each time, they cost their allocation and clearing on every
+    /// slider step).
+    op_scratch: Option<([u32; 2], Vec<wgpu::Texture>)>,
     /// Bytes of a scratch set being made (the textures made so far): counted against the
     /// resident budget with `op_scratch` until the set is complete.
     scratch_making: u64,

@@ -97,6 +97,111 @@ fn box_pass(@builtin(global_invocation_id) g: vec3<u32>) {
     }
 }
 
+// The extreme (Minimum, or Maximum when `p.norm` is 1) of the straight values within
+// `p.radius` texels each side along the pass's axis, per channel, alpha included
+// (`other::min_max`).
+@compute @workgroup_size(8, 8)
+fn extreme_pass(@builtin(global_invocation_id) g: vec3<u32>) {
+    if g.x >= p.size.x || g.y >= p.size.y {
+        return;
+    }
+    let line = select(g.x, g.y, p.axis == 0u);
+    let i = i32(select(g.y, g.x, p.axis == 0u));
+    let r = i32(p.radius);
+    var acc = load(texel(line, i - r));
+    for (var k = 1; k <= 2 * r; k++) {
+        let v = load(texel(line, i + k - r));
+        acc = select(min(acc, v), max(acc, v), p.norm > 0.5);
+    }
+    store(vec2<i32>(g.xy), acc);
+}
+
+// The texel at offset `d` from `at`, clamped to the window.
+fn texel2(at: vec2<i32>, d: vec2<i32>) -> vec2<i32> {
+    return clamp(at + d, vec2<i32>(0), vec2<i32>(p.size) - vec2<i32>(1));
+}
+
+// ---- Minimum / Maximum over a disc (`other::min_max_round`), one step per half-width h ----
+// `h_in` is the horizontal extreme over 2h + 1 texels; the step folds the disc's rows of
+// half-width h (`rows[d.start ..]`) into the result and, unless it is the last, grows the
+// horizontal extreme to 2h + 3 texels.
+
+struct DiscStep {
+    size: vec2<u32>,
+    // Where the window starts in `h_in` (the first step reads part of a cell's source window).
+    origin: vec2<u32>,
+    start: u32,
+    count: u32,
+    // 1: the first step; 2: write the next horizontal extreme.
+    flags: u32,
+    // 1: Maximum, 0: Minimum.
+    maximum: u32,
+}
+
+@group(0) @binding(0) var h_in: texture_2d<f32>;
+@group(0) @binding(1) var acc_in: texture_2d<f32>;
+@group(0) @binding(2) var h_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(3) var acc_out: texture_storage_2d<rgba32float, write>;
+@group(0) @binding(4) var<uniform> d: DiscStep;
+@group(0) @binding(5) var<storage, read> rows: array<i32>;
+
+fn pick(a: vec4<f32>, b: vec4<f32>) -> vec4<f32> {
+    return select(min(a, b), max(a, b), d.maximum != 0u);
+}
+
+// The horizontal extreme so far at `at`, clamped to the window.
+fn hload(at: vec2<i32>) -> vec4<f32> {
+    let c = clamp(at, vec2<i32>(0), vec2<i32>(d.size) - vec2<i32>(1));
+    return textureLoad(h_in, c + vec2<i32>(d.origin), 0);
+}
+
+@compute @workgroup_size(8, 8)
+fn disc_step(@builtin(global_invocation_id) g: vec3<u32>) {
+    if g.x >= d.size.x || g.y >= d.size.y {
+        return;
+    }
+    let at = vec2<i32>(g.xy);
+    let first = (d.flags & 1u) != 0u;
+    // The extreme's identity: every straight value lies inside it.
+    var acc = select(vec4<f32>(3.0e38), vec4<f32>(-3.0e38), d.maximum != 0u);
+    if !first {
+        acc = textureLoad(acc_in, at, 0);
+    }
+    for (var k = 0u; k < d.count; k++) {
+        acc = pick(acc, hload(at + vec2<i32>(0, rows[d.start + k])));
+    }
+    textureStore(acc_out, at, acc);
+    if (d.flags & 2u) != 0u {
+        var grown = pick(hload(at - vec2<i32>(1, 0)), hload(at + vec2<i32>(1, 0)));
+        if first {
+            grown = pick(grown, hload(at));
+        }
+        textureStore(h_out, at, grown);
+    }
+}
+
+// Custom (`other2::custom`): the straight colour values convolved by the taps in
+// `weights[2 + 3k ..]` (dx, dy, weight) in order, then `/ scale + offset` (`weights[0]`,
+// `weights[1]`); alpha stays the texel's own.
+@compute @workgroup_size(8, 8)
+fn convolve_pass(@builtin(global_invocation_id) g: vec3<u32>) {
+    if g.x >= p.size.x || g.y >= p.size.y {
+        return;
+    }
+    let at = vec2<i32>(g.xy);
+    let here = load(texel2(at, vec2<i32>(0, 0)));
+    if p.radius == 0u {
+        store(at, here);
+        return;
+    }
+    var acc = vec3<f32>(0.0);
+    for (var k = 0u; k < p.radius; k++) {
+        let d = vec2<i32>(i32(weights[2u + 3u * k]), i32(weights[3u + 3u * k]));
+        acc += load(texel2(at, d)).xyz * weights[4u + 3u * k];
+    }
+    store(at, vec4<f32>(acc / weights[0] + vec3<f32>(weights[1]), here.w));
+}
+
 // ---- The final pass: the filter's output as the layer's new pixels ----
 
 struct Finish {

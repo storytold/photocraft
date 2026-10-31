@@ -41,6 +41,12 @@ impl Worker {
         self.running.is_some()
     }
 
+    /// The request the worker is computing.
+    #[cfg(test)]
+    pub fn running(&self) -> Option<&FilterPreviewKey> {
+        self.running.as_ref().map(|r| &r.key)
+    }
+
     /// Never wait for a previous computation and never spawn a second concurrent preview.
     /// `compute` gets the preview's cancellation context ([`Worker::supersede`]).
     pub fn start(&mut self, key: FilterPreviewKey, ctx: egui::Context, compute: impl FnOnce(&JobCtx) -> Computed + Send + 'static) -> Result<bool, String> {
