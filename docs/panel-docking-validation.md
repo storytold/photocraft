@@ -1,5 +1,88 @@
 # Panel docking repair validation
 
+## Review follow-up (2026-11-01)
+
+Runtime under test: `a4077cb15a240549715b16e2075ce6c3ec8e2420`, merging main
+`799e12962806dac2d8b1a319bd386042dcbd61e4`. All three documentation conflicts
+were reconciled; the scorecard was regenerated and reports 11 of 183 preferences
+that do nothing. No CI, unrelated feature fixes or contributor-credit changes
+were added relative to that main.
+
+The five shared-library findings are fixed in
+[craft-libs #470](https://github.com/storytold/craft-libs/pull/470), commit
+`235fffbdbe79f42028ec414e304f1a10b0b1b07f`. The same six patched implementation
+files in PhotoCraft match that extraction after formatting normalization. Fitted
+floating geometry is recorded before exclusive host delegation, collapsed
+stripless groups hide their bodies, split handles accept the host style, and
+frame-edge ownership is separate from internal split ownership. PhotoCraft
+explicitly supplies replacement input for its independent floating parts.
+The shared PR is still unmerged: no accepted upstream SHA or vendor removal is
+claimed.
+
+A follow-up shared-only finding was fixed at `4f263ed`: docked custom groups
+suppress stock top/bottom body bands while retaining column edges. A real pointer
+regression covers both ownership modes and all four sides. PhotoCraft's adapter
+returns exclusive group ownership only when `floating` is true, so that docked
+host-owned path is not used here. The tested consumer snapshot remains the
+`235fffbd` patch until an accepted upstream revision replaces the vendor bridge;
+the new shared-only behavior is not presented as a rerun of PhotoCraft's runtime.
+
+PhotoCraft migration now preserves hidden dock visibility, stops retrying a
+failed launcher migration every frame and marks the status as an error. Obsolete
+bare layouts fall back without retaining a payload that blocks migration;
+unreadable modern Workspace payloads remain preserved. Regression coverage
+includes both visibility and bare-layout migration, plus the existing unreadable
+Workspace test.
+
+Fresh results:
+
+| Check | Result |
+|---|---|
+| Panel-filter regressions | 167 passed, 2 explicit benchmarks ignored |
+| Workspace integration | 9 passed |
+| Shared UI at `4f263ed` (`serde,native-windows,screen-testing`) | 590 unit, 10 integration, 8 doctests passed; 2 doctests ignored |
+| Desktop all-targets compile check, fmt, layers, wasm | passed; 31 layered crates, 24 wasm crates plus codecs/heif |
+| Four WGPU capture tests | passed; 444 fresh PNGs, three Pro themes at 100/125/150/200% |
+| Complete UI library, sequential | **4640 passed, 97 failed, 23 ignored** |
+
+All historical 95 failure names reoccur. Two additional failures are tests added
+by the merged upstream: `gradient_map_stop_picker_closed_without_a_colour_changes_nothing`
+and `photo_filter_colour_picker_previews_live_cancel_restores_and_ok_is_one_step`
+in `dialogs::adjust_editors::ui_tests`. Both fail to find expected editor controls.
+No independent clean-main rerun establishes them as baseline failures. The full
+suite is **not green**. An earlier default-parallel attempt exited abnormally
+without a complete summary; the sequential run above completed. Its result does
+not explain the earlier process exit.
+
+Strict Clippy is **not green**: the standard command stops at unchanged main
+`io/src/psd_export/document.rs:106` and `io/src/smart_map/import.rs:784`.
+The UI `--no-deps` command reports six diagnostics at unchanged main
+`canvas/strokes.rs:495,500`, `menus/menu_keys.rs:376`, and `menus/menu_nav.rs:347`.
+Shared UI/workspace Clippy still stops at unchanged `render/preview.rs:120` and
+`keymap/src/profiles.rs:474`. Shared workspace tests still hit the Rust 1.95 MSVC
+compiler ICE in unchanged `craft-text` linebreak tests. No suppressions or
+workspace-wide pass are claimed.
+
+All 444 captures have pixel-identical central regions compared with the prior
+submission (scale-adjusted ROI x=43..1280, y=70..765). Full images differ in app
+chrome outside that ROI. This comparison is an aid, not a claim that every pixel
+of the complete UI is unchanged. Representative PNGs were inspected and all
+capture/seam assertions passed. Both after PNG assets were refreshed. The 13 GIFs
+retain their documented 2026-10-31 source at `7005992d2`; they are illustrations,
+not a rerun of the newest code.
+
+Performance follow-up is recorded below when complete. The earlier 600-sample
+panel timing ran concurrently with the final capture and is not a controlled
+before/after comparison or a native/GPU latency measurement.
+
+Manual acceptance still refers to the contributor's earlier Windows EXE. The
+agent did not build or launch the product EXE. Physical native focus/IME,
+mixed-DPI monitors and GPU/input latency remain outside automated acceptance.
+Raw results and hashes are preserved separately in the fork's handoff branch,
+under `plan/panel-repair/review-fixes-portable-2026-11-01`.
+
+All sections below are historical results for their stated source revisions.
+
 ## Gallery follow-up (2026-10-31)
 
 Only test-only replay helpers, documentation and GIF assets changed after the

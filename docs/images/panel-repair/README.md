@@ -5,10 +5,14 @@ PhotoCraft regression harness. Crops show panel UI, without documents or persona
 photos. The GIFs include only synthetic blank documents. The after images demonstrate the same transitions and are not intended as
 pixel-identical theme/localization comparisons with the contributor's build.
 
-After PNGs were refreshed on 2026-10-31 from
-`88da5a9142c9c55bbb9fb93abe8ddc5192f83929`, integrating upstream
-`422ca7beda90d927643bcd074646ebbd37706d75`. Before captures remain the original
+After PNGs were refreshed on 2026-11-01 from
+`a4077cb15a240549715b16e2075ce6c3ec8e2420`, integrating upstream
+`799e12962806dac2d8b1a319bd386042dcbd61e4`. Before captures remain the original
 contributor evidence. See [validation scope](../../panel-docking-validation.md).
+
+The 13 GIFs retain the 2026-10-31 replay source at `7005992d2` (runtime
+`88da5a914`); they are behavior illustrations, not a rerun of the latest merge.
+Fresh acceptance uses the 444 PNG matrix described in the validation notes.
 
 The 13 GIFs cover compact grouping/flyouts and tear-off, tab reordering, side
 attachment, document-row placement, attached-row collapse and insertion,

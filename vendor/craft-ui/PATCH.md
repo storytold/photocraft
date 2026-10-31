@@ -55,3 +55,10 @@ ownership alone no longer suppresses internal split handles; the explicit
 internal-width hook is forwarded through Overrides and enabled by PhotoCraft
 only where its own independent part input replaces those handles. The upstream
 PR is not merged; this remains the explicit local patch at the source pin above.
+
+The subsequent shared-only docked-custom-group fix in craft-libs#470 at
+`4f263ed` is outside this consumer snapshot. PhotoCraft returns exclusive
+`custom_group` ownership only for floating groups, so the affected docked path
+is unused by this adapter. This snapshot retains the tested `235fffbd` patch;
+replace the complete vendor bridge with the accepted upstream revision rather
+than treating later shared-only results as consumer verification.

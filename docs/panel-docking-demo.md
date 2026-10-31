@@ -34,8 +34,9 @@ cargo test -p photocraft-ui-egui --lib pr_followup_pointer_replay -- --test-thre
 ```
 
 Source provenance, playback/encoding limitations and licenses are adjacent to the
-images. Captures use synthetic blank documents only. Runtime code is unchanged
-from the reviewed integration; the later additions are test-only replay helpers.
+images. Captures use synthetic blank documents only. The GIFs retain their
+2026-10-31 source at `7005992d2`; latest-merge acceptance is recorded separately
+in `panel-docking-validation.md` and uses fresh PNGs.
 
 ## Join and attached-collapse regressions
 
