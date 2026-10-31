@@ -1200,8 +1200,7 @@ fn esc_hides_the_frame_until_a_press_or_re_picking_the_tool() {
 
 #[test]
 fn closing_a_dismissed_document_never_hides_the_next_tabs_frame() {
-    // #10370 review: the dismissal was keyed by tab index, so a same-size tab moving into the
-    // closed one's index kept its frame hidden.
+    // A same-size tab that takes the closed document's index must still show its frame.
     let mut app = app(SampleType::U8);
     let doc = Document::with_background("other", Size::new(200, 100), ColorMode::Rgb, SampleType::U8, Color::WHITE);
     app.session.add_document(doc, None);
@@ -1218,8 +1217,8 @@ fn closing_a_dismissed_document_never_hides_the_next_tabs_frame() {
 
 #[test]
 fn a_straighten_press_ends_the_dismissal() {
-    // #10370 review: a press taken by Straighten skipped `begin_drag`, which ends the dismissal,
-    // so a click too short to level anything left the frame hidden.
+    // Straighten takes the press before `begin_drag`; a click too short to level anything still
+    // ends the dismissal.
     let mut app = app(SampleType::U8);
     ensure_frame(&mut app);
     press_esc(&mut app);

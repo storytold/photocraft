@@ -51,10 +51,9 @@ pub struct CropState {
     pub default_frame: bool,
     /// The document (index and size) the default frame was made for.
     frame_for: Option<(usize, u32, u32)>,
-    /// The document (id and size) whose frame Esc (or the options bar's cancel) hid: with the
-    /// Crop tool still picked no default frame is made for it until a press on the canvas, or
-    /// leaving and re-picking the tool, as in Photoshop (#10370). Keyed by id, not tab index, so
-    /// closing it never hides the frame of the tab that takes its place.
+    /// The document (id and size) whose frame [`dismiss`] hid: no default frame is made for it while
+    /// this matches. Keyed by id, not tab index, so closing it never hides the frame of the tab that
+    /// takes its place.
     dismissed: Option<(photocraft_doc::DocId, u32, u32)>,
     /// The frame is being edited (pressed since it was made): the canvas shows what lies past it.
     pub editing: bool,
