@@ -38,6 +38,9 @@ Implemented only from public specifications, papers and observation of files:
   stored in the files; they were recovered by black-box analysis of CC0 raw.pixls.us samples (the
   same scenes shot compressed and uncompressed) for LightCraft (storytold/lightcraft#86) and
   verified there on ~45 files from ~35 bodies.
+  The "lossy after split" fixed-rate section (word size, prefix-to-category tables, bin-centre
+  dequantisation, end-of-strip rule) was likewise derived by black-box analysis of 11 CC0
+  raw.pixls.us files for LightCraft (storytold/lightcraft#633).
 * Sony cRAW (ARW 2): H. Dietz, "Sony ARW2 Compression: Artifacts And Credible Repair"
   (Electronic Imaging 2016) and the RawDigger / diglloyd write-ups of the 11 + 7-bit scheme;
   the exact bit layout and tone-curve scale were established by observation of sample files.
@@ -74,12 +77,12 @@ camera colour tables were copied.
 | CR2 | Lossless JPEG with slices, borders and as-shot white balance from the maker note, black measured on the masked border. CR2 has no CFA tag and the row phase varies by model, so it is measured from the data (the green diagonal), with a Canon model-ID table as the fallback (see `src/cr2.rs`) |
 | CR2 sRAW / mRAW | Unsupported |
 | NEF / NRW, ARW, PEF and other TIFF/EP raws | Uncompressed and lossless-JPEG (incl. Sony lossless ARW) CFA data |
-| Nikon compressed NEF (compression 34713): lossless and lossy type 1 / 2, 12 and 14 bit | Decoded: fixed Huffman tables + maker-note `0x0096` seeds and curve (see `src/nefc.rs`). BlackLevel `0x003d` is read in 14-bit units. "Lossy after split" files are unsupported (preview fallback) |
+| Nikon compressed NEF (compression 34713): lossless and lossy type 1 / 2, 12 and 14 bit | Decoded: fixed Huffman tables + maker-note `0x0096` seeds and curve (see `src/nefc.rs`). BlackLevel `0x003d` is read in 14-bit units. "Lossy after split" files (a split row in `0x0096`) are decoded: rows from the split on are fixed-rate words of `bits - 4` bits (storytold/lightcraft#633); a strip that does not end as that rule says falls back to the preview |
 | Sony compressed ARW ("cRAW", SonyRawFileType 2) | Decoded: 11-bit min/max + 7-bit delta blocks, SonyToneCurve to 14 bits; applied WB and black from plain tags or encrypted SR2SubIFD with the measured common key. If metadata is unreadable, black falls back to 512 and WB to grey-world. Measured ILCE-7 / ILCE-6000 image area; camera colour calibration remains incomplete |
 | Panasonic / Leica RW2, RawFormat 5 (12- and 14-bit packed) | Decoded, with PanasonicRaw black / white / WB / sensor borders |
 | Panasonic / Leica RW2, RawFormat 3 and 4 (vendor-compressed, 12-bit) | Decoded; the black level is read 15 counts above the recorded tag; PanasonicRaw white / WB / sensor borders |
 | Olympus ORF, uncompressed 16-bit (E-1, E-400…) | Decoded, with ImageProcessing black / WB / ValidBits / crop |
-| Nikon "lossy after split" NEF, Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 6 and newer, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
+| Sony "Compressed RAW 2", Pentax compressed PEF, RW2 RawFormat 6 and newer, Olympus compressed ORF | Unsupported: no public description of these codes was found apart from GPL decoder source, which this crate may not use (clean-room). `photocraft-io` opens the embedded JPEG preview instead |
 | Fujifilm RAF, uncompressed (X-Trans I–V, GFX and Bayer bodies since about 2010) | Decoded: 16-bit containers (either byte order), 12-bit LSB-first packing, 14-bit packing in 32-bit words; X-Trans 6×6 or Bayer 2×2 layout, black, as-shot WB, crop, RawExposureBias, orientation from the preview's EXIF |
 | Fujifilm compressed RAF, early FinePix / SuperCCD RAF (no CFA TIFF) | Unsupported (no public description of the compression); preview fallback |
 | CR3 | Native CRX unsupported; bounded JPEG-track/PRVW preview fallback with CMT1 orientation. I/O labels the result as an 8-bit camera preview |
@@ -88,8 +91,8 @@ camera colour tables were copied.
 Nikon maker-note compression modes 6/10 select checked little-endian packed 12/14-bit
 rows even when TIFF Compression is 34713. The modern lossy `0x44 0x40` curve uses
 its smaller encoded domain while preserving sensor ADUs. Valid Nikon CropArea
-coordinates take precedence over model fallbacks. HE/HE* and lossy-after-split
-remain unsupported. Four pinned CC0 Z6 files cover both bit depths and both paths.
+coordinates take precedence over model fallbacks. HE/HE* remain unsupported;
+lossy-after-split strips are decoded (see the NEF row above). Four pinned CC0 Z6 files cover both bit depths and both paths.
 
 ## Development pipeline
 
