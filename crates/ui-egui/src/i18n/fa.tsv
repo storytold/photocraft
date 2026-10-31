@@ -2437,3 +2437,509 @@ layerLabel	Violet	بنفش
 	Diagonal (Descending)	مورب (نزولی)
 	The path was kept as the Work Path	مسیر به‌عنوان مسیر کاری نگه داشته شد
 	The path was discarded	مسیر دور ریخته شد
+
+	(No neutral color exists for {mode} mode.)	(رنگ خنثای حالت {mode} وجود ندارد.)
+	24 bits/pixel	۲۴ بیت/پیکسل
+	32 bits/pixel	۳۲ بیت/پیکسل
+	A brush preset with this name already exists	پیش‌تنظیم قلم‌مویی با این نام از قبل وجود دارد
+	Accept and Go to Conflict	پذیرفتن و رفتن به تناقض
+	Action playback stopped	بازپخش کنش متوقف شد
+	Add Mask to Selection	افزودن ماسک به گزینش
+	Add New Artboard	افزودن بوم جدید
+	Add Open Files	افزودن فایل‌های باز
+	Add Shortcut	افزودن میان‌بر
+	Add to Favorites	افزودن به موردعلاقه‌ها
+	Add to favorites	افزودن به موردعلاقه‌ها
+	Add “copy” to Copied Layers and Groups	افزودن «copy» به لایه‌ها و گروه‌های رونوشت‌شده
+	Alignment	تراز
+	All Classes	همهٔ دسته‌ها
+	Allow Continue	اجازهٔ ادامه
+	Allow Non-Linear History	اجازهٔ تاریخچهٔ غیرخطی
+	Alt-click a plane to set the clone source	Alt+کلیک روی یک مستوی برای تعیین مبدأ شبیه‌سازی
+	Amount:	مقدار:
+	Animation Options	گزینه‌های پویانمایی
+	Anti-aliased	ضدلبه‌دندانه
+	Appearance Settings…	تنظیمات ظاهر…
+	Applies immediately when saved. Memory is not reserved in advance.	به‌محض ذخیره بی‌درنگ اعمال می‌شود. حافظه از پیش رزرو نمی‌شود.
+	Apply Vanishing Point ({key})	اعمال نقطهٔ ناپدیدی ({key})
+	Apply the removal ({key})	اعمال حذف ({key})
+	Area	ناحیه
+	Artboards	بوم‌ها
+	Attempt to Automatically Align Source Images	تلاش برای تراز کردن خودکار تصاویر مبدأ
+	Auto Add/Delete	افزودن/حذف خودکار
+	Automatic	خودکار
+	Automatic paragraph direction	جهت خودکار پاراگراف
+	Background (Default)	پس‌زمینه (پیش‌فرض)
+	Background From Layer	پس‌زمینه از لایه
+	Background from Layer	پس‌زمینه از لایه
+	Baseline ("Standard")	خط پایه ("استاندارد")
+	Baseline Optimized	خط پایهٔ بهینه‌شده
+	Behind	پشت
+	Bicubic Automatic	دوسوبیک خودکار
+	Bicubic Sharper	دوسوبیک تیزتر
+	Bicubic Sharper (reduction)	دوسوبیک تیزتر (کوچک‌سازی)
+	Bicubic Smoother	دوسوبیک نرم‌تر
+	Bicubic Smoother (enlargement)	دوسوبیک نرم‌تر (بزرگ‌سازی)
+	Blackletter	گوتیک
+	Blend	ترکیب
+	Blending Options ({filter})	گزینه‌های ترکیب ({filter})
+	Block	بلوک
+	Blur Angle	زاویهٔ تاری
+	Bottom:	پایین:
+	Button Mode	حالت دکمه
+	Button Mode On	حالت دکمه روشن
+	CPU Rendering	رندر با CPU
+	Calculating…	در حال محاسبه…
+	Camera Data	داده‌های دوربین
+	Caps	سرها
+	Capture Brush Size in Preset	ضبط اندازهٔ قلم‌مو در پیش‌تنظیم
+	Category	دسته
+	Center Columns	وسط‌چین کردن ستون‌ها
+	Changes undone.	تغییرات واگرد شد.
+	Channel Color	رنگ کانال
+	Check Again	بررسی دوباره
+	Check for Updates…	بررسی برای به‌روزرسانی…
+	Checking for updates…	در حال بررسی برای به‌روزرسانی…
+	Choose Stack Mode:	انتخاب حالت پشته:
+	Choose a format that keeps it, such as Photoshop (PSD), or save a copy.	قالبی را انتخاب کنید که آن را حفظ کند، مانند Photoshop (PSD)، یا یک رونوشت ذخیره کنید.
+	Choose a gradient file (.grd).	یک فایل گرادیان (.grd) انتخاب کنید.
+	Choose a new shortcut for this command, or leave it without one.	میان‌بر جدیدی برای این فرمان انتخاب کنید، یا آن را بدون میان‌بر بگذارید.
+	Clean Brush	پاک کردن قلم‌مو
+	Clean the brush after each stroke	پاک کردن قلم‌مو پس از هر ضربه
+	Clear Brush Controls	پاک کردن کنترل‌های قلم‌مو
+	Clear Brush Strokes	پاک کردن ضربه‌های قلم‌مو
+	Clear Existing Guides	پاک کردن راهنماهای موجود
+	Clear Selection	پاک کردن گزینش
+	Click a segment to add an anchor point · {alt}-click an anchor to delete it	برای افزودن یک تکیه‌گاه روی یک پاره‌خط کلیک کنید · {alt}-کلیک روی یک تکیه‌گاه برای حذف آن
+	Click an anchor point to delete it · {alt}-click a segment to add one	برای حذف یک تکیه‌گاه روی آن کلیک کنید · {alt}-کلیک روی یک پاره‌خط برای افزودن یکی
+	Click the first point or press {key} to close · {del} removes a point · Esc cancels	روی نقطهٔ اول کلیک کنید یا {key} را برای بستن بزنید · {del} یک نقطه را حذف می‌کند · Esc لغو می‌کند
+	Click the image to add a pin; drag a pin to move it, or its ring to change its blur. Delete removes the selected pin.	روی تصویر کلیک کنید تا پینی افزوده شود؛ پین را بکشید تا جابه‌جا شود، یا حلقهٔ آن را بکشید تا تاری آن تغییر کند. Delete پین گزینش‌شده را حذف می‌کند.
+	Click to place · Alt-click or drag off-canvas to remove	برای جای‌گذاری کلیک کنید · Alt+کلیک یا کشیدن به بیرون از بوم برای حذف
+	Click to refresh histogram with uncached data	برای به‌روزرسانی هیستوگرام با داده‌های بدون حافظهٔ پنهان کلیک کنید
+	Click: corner · Drag: smooth · {alt}-drag: break handle · Click or drag first point: close · {key} finish · Esc cancel	کلیک: گوشه · کشیدن: نرم · {alt}-کشیدن: شکستن دستک · کلیک یا کشیدن نقطهٔ اول: بستن · {key}: پایان · Esc: لغو
+	Click: smooth point · Double-click: corner · Drag a point: move · Click first point: close · {key} finish	کلیک: نقطهٔ نرم · دوبار کلیک: گوشه · کشیدن یک نقطه: جابه‌جایی · کلیک روی نقطهٔ اول: بستن · {key}: پایان
+	Clip Thumbnails to Layer Bounds	برش تصویرهای مصغر به مرزهای لایه
+	Color Aware	آگاه از رنگ
+	Color Indicates:	رنگ نشان می‌دهد:
+	Color Profile	نمایهٔ رنگ
+	Color Table	جدول رنگ
+	Columns	ستون‌ها
+	Compression	فشرده‌سازی
+	Confirm or cancel the open action step dialog first	نخست کادر گفتگوی باز مرحلهٔ کنش را تأیید یا لغو کنید
+	Content-Aware Fill	پرکردن آگاه از محتوا
+	Continue	ادامه
+	Contour Editor	ویرایشگر کانتور
+	Contract	انقباض
+	Convert to the working space ({profile})	تبدیل به فضای کاری ({profile})
+	Copy Color as HTML	رونوشت از رنگ به‌صورت HTML
+	Copy Color's Hex Code	رونوشت از کد هگز رنگ
+	Copy Texture to Other Tools	رونوشت بافت به ابزارهای دیگر
+	Copyright Info URL	نشانی اینترنتی اطلاعات کپی‌رایت
+	Copyright Notice	اعلامیهٔ کپی‌رایت
+	Corner	گوشه
+	Corners	گوشه‌ها
+	Could not check for updates.	بررسی برای به‌روزرسانی ممکن نشد.
+	Could not write {name}: {error}	نوشتن {name} ممکن نشد: {error}
+	Count:	شمارش:
+	Create Plane	ایجاد مستوی
+	Create Smart Object after Loading Layers	ایجاد یک شیء هوشمند پس از بارگذاری لایه‌ها
+	Create a new elliptical frame	ایجاد یک قاب بیضوی جدید
+	Create a new rectangular frame	ایجاد یک قاب مستطیلی جدید
+	Create warped text	ایجاد متن تاب‌داده‌شده
+	Current Brush Load	بار فعلی قلم‌مو
+	Curve Fit:	تطبیق منحنی:
+	Custom background color	رنگ پس‌زمینهٔ دلخواه
+	DDS Options	گزینه‌های DDS
+	Dab	لمسه
+	Dash offset	جابه‌جایی خط‌چین
+	Decontaminate Colors	پاک‌سازی رنگ‌ها
+	Decorative	تزئینی
+	Delete Contour	حذف کانتور
+	Delete Crop Preset…	حذف پیش‌تنظیم برش…
+	Delete effect	حذف جلوه
+	Delete this set	حذف این مجموعه
+	Demosaic	دیموزاییک
+	Dissolve is approximated: it blends without Photoshop's dither.	«انحلال» به‌صورت تقریبی است: بدون دیزرینگ Photoshop ترکیب می‌کند.
+	Dock Panel	پهلوگیری پنل
+	Document Title	عنوان سند
+	Don't also tick Mirror Image in Print Settings…: the two flips cancel out.	در «تنظیمات چاپ…» گزینهٔ «تصویر آینه‌ای» را هم تیک نزنید: این دو وارونگی یکدیگر را خنثی می‌کنند.
+	Drag around the centre to rotate the view  ·  Shift constrains to 15°	برای چرخاندن نما دور مرکز بکشید  ·  Shift آن را به ۱۵ درجه محدود می‌کند
+	Drag the handles on the outline to resize and turn it, the square to round its corners, and the dots inside to set where the blur starts.	دستک‌های روی طرح کلی را بکشید تا اندازه و چرخش آن تغییر کند، مربع را بکشید تا گوشه‌هایش گرد شود، و نقاط داخل آن را بکشید تا محل شروع تاری تعیین شود.
+	Drag the handles on the outline to resize and turn it; the ring sets the blur angle.	دستک‌های روی طرح کلی را بکشید تا اندازه و چرخش آن تغییر کند؛ حلقه زاویهٔ تاری را تعیین می‌کند.
+	Drag to draw the curve · {key}-click draws a straight line	برای رسم منحنی بکشید · {key}-کلیک یک خط مستقیم رسم می‌کند
+	Drag to move the selected path	برای جابه‌جایی مسیر گزینش‌شده بکشید
+	Drag to pan · Scroll to zoom · Double-click to fit	بکشید تا جابه‌جا شود · برای بزرگ‌نمایی بچرخانید · دوبار کلیک کنید تا جا بگیرد
+	Drag: draw freehand · {alt}-click: straight segment · Release on the start point: close	کشیدن: رسم آزاد · {alt}-کلیک: پاره‌خط مستقیم · رها کردن روی نقطهٔ ابتدا: بستن
+	Draw to modify the curve	برای تغییر منحنی رسم کنید
+	Drawn on the CPU: {reason}. Click for System Info.	ترسیم‌شده با CPU: {reason}. برای اطلاعات سیستم کلیک کنید.
+	Duplicate Layer	تکثیر لایه
+	EXIF	EXIF
+	Edge Detection	تشخیص لبه
+	Edit Plane	ویرایش مستوی
+	Edit points to modify the curve	نقاط را ویرایش کنید تا منحنی تغییر کند
+	Emulsion Down	امولسیون رو به پایین
+	Enter a name for the brush preset	نامی برای پیش‌تنظیم قلم‌مو وارد کنید
+	Enter a name for the crop preset	نامی برای پیش‌تنظیم برش وارد کنید
+	Entire Document	کل سند
+	Excluded Area	ناحیهٔ مستثنا
+	Expand Detection Area	گسترش ناحیهٔ تشخیص
+	Expand New Effects	گسترش جلوه‌های جدید
+	Export Selected Styles…	صدور سبک‌های گزینش‌شده…
+	Export Styles…	صدور سبک‌ها…
+	F cycles the views; hold X to see the image	F بین نماها می‌چرخد؛ X را نگه دارید تا تصویر را ببینید
+	File Naming	نام‌گذاری فایل
+	Files	فایل‌ها
+	Fill Screen	پر کردن صفحه
+	Fill Settings	تنظیمات پرکردگی
+	Fill with {mode}-neutral color (50% gray)	پر کردن با رنگ خنثای حالت {mode} (خاکستری ۵۰٪)
+	Fill with {mode}-neutral color (black)	پر کردن با رنگ خنثای حالت {mode} (سیاه)
+	Fill with {mode}-neutral color (white)	پر کردن با رنگ خنثای حالت {mode} (سفید)
+	Filter Options	گزینه‌های فیلتر
+	Fix the red plane first: its corners must form a convex quad	نخست مستوی قرمز را اصلاح کنید: گوشه‌های آن باید یک چهارضلعی محدب بسازند
+	Float Panel	شناور کردن پنل
+	Folder	پوشه
+	Follows only edges this close to the pointer ([ and ] change it)	تنها لبه‌هایی را دنبال می‌کند که به این اندازه به نشانگر نزدیک باشند ([ و ] آن را تغییر می‌دهند)
+	Font preview:	پیش‌نمایش قلم:
+	Format Options	گزینه‌های قالب
+	Free Transform is still being applied; try again when it has finished.	تبدیل آزاد هنوز اعمال می‌شود؛ وقتی تمام شد دوباره تلاش کنید.
+	Frequency	بسامد
+	Frequency:	بسامد:
+	From:	از:
+	Full	کامل
+	Full Document	کل سند
+	Functions	توابع
+	GPU Memory Full	حافظهٔ GPU پر
+	GPU acceleration resumed.	شتاب‌دهی GPU از سر گرفته شد.
+	GPU adapter	آداپتور GPU
+	GPU memory budget: {budget}	بودجهٔ حافظهٔ GPU: {budget}
+	Gamma	گاما
+	Generate Mipmaps	ایجاد Mipmapها
+	Global Refinements	بهبودهای سراسری
+	Gradient Preset Options	گزینه‌های پیش‌تنظیم گرادیان
+	Grid Size:	اندازهٔ شبکه:
+	Halftone Screen	صفحهٔ نیم‌رنگ
+	Handwritten	دست‌نویس
+	Hide Font Classes	نهفتن دسته‌های قلم
+	Hide Styles	نهفتن سبک‌ها
+	Hide the layer's effects and Smart Filters  ({key}-click: all layers)	نهفتن جلوه‌های لایه و فیلترهای هوشمند  ({key}-کلیک: همهٔ لایه‌ها)
+	High	بالا
+	High Quality Preview	پیش‌نمایش با کیفیت بالا
+	Higher values follow only edges that contrast sharply with their surroundings	مقادیر بالاتر تنها لبه‌هایی را دنبال می‌کنند که با محیط اطرافشان تضاد شدیدی دارند
+	Hold Alt while drawing for straight segments	هنگام رسم، Alt را نگه دارید تا پاره‌خط‌های مستقیم ایجاد شوند
+	How often fastening points are placed by themselves	این‌که نقاط تثبیت هر چند وقت یک‌بار به‌خودی‌خود قرار می‌گیرند
+	ICO is limited to 256 × 256 pixels	ICO به ۲۵۶ × ۲۵۶ پیکسل محدود است
+	If you continue, saving over the original may permanently discard unreadable data. Save a copy to keep the original.	اگر ادامه دهید، ذخیره روی نسخهٔ اصلی ممکن است داده‌های ناخوانا را برای همیشه نادیده بگیرد. برای نگه داشتن نسخهٔ اصلی یک رونوشت ذخیره کنید.
+	Image Options	گزینه‌های تصویر
+	Import .GRD	درون‌ریزی .GRD
+	Import Styles…	درون‌ریزی سبک‌ها…
+	In Front	جلو
+	Include All Subfolders	شامل کردن همهٔ زیرپوشه‌ها
+	Include Color	شامل کردن رنگ
+	Include Tool Settings	شامل کردن تنظیمات ابزار
+	Include in playback	شامل کردن در بازپخش
+	Indicates	نشان می‌دهد
+	Ink Characteristics	ویژگی‌های جوهر
+	Insert Stop…	درج نقطهٔ توقف…
+	Installed RAM: {ram} MB; this limit: {percent}%	رم نصب‌شده: {ram} مگابایت؛ این حد: {percent}٪
+	Interpolation	درون‌یابی
+	Intersect Mask with Selection	اشتراک ماسک با گزینش
+	Invalid guide layout	چیدمان راهنما نامعتبر
+	Its layers need {needed} of GPU memory; the budget leaves them {budget}.	لایه‌های آن به {needed} از حافظهٔ GPU نیاز دارند؛ بودجه برای آن‌ها {budget} باقی می‌گذارد.
+	JPEG Options	گزینه‌های JPEG
+	Kept {name}: written by another application	{name} نگه داشته شد: توسط برنامه‌ای دیگر نوشته شده است
+	Layer Bounds	مرزهای لایه
+	Layers Panel Options	گزینه‌های پنل لایه‌ها
+	Leave empty for automatic size	برای اندازهٔ خودکار، خالی بگذارید
+	Left-to-right paragraph direction	جهت پاراگراف از چپ به راست
+	Left:	چپ:
+	Level:	سطح:
+	Light Blue	آبی روشن
+	Light Gray	خاکستری روشن
+	Light Red	قرمز روشن
+	Limits each open document's pixels plus History. Oldest undo states are discarded when the limit is exceeded.	پیکسل‌های هر سند باز را به‌همراه تاریخچه محدود می‌کند. وقتی حد فراتر رود، قدیمی‌ترین حالت‌های واگرد کنار گذاشته می‌شوند.
+	Lines/Centimeter	خط/سانتی‌متر
+	Lines/Inch	خط/اینچ
+	Load Actions…	بارگذاری کنش‌ها…
+	Load Brush	بارگذاری قلم‌مو
+	Load Contours…	بارگذاری کانتورها…
+	Load Settings…	بارگذاری تنظیمات…
+	Load settings from a Camera Raw .xmp file	بارگذاری تنظیمات از یک فایل .xmp در Camera Raw
+	Load the brush after each stroke	بارگذاری قلم‌مو پس از هر ضربه
+	Loaded Camera Raw settings from {file}	تنظیمات Camera Raw از {file} بارگذاری شد
+	Loading fonts…	در حال بارگذاری قلم‌ها…
+	Lock Layers	قفل کردن لایه‌ها
+	Locked	قفل‌شده
+	Loose Curl	فر شل
+	Loose Long	بلند شل
+	Loose Medium	متوسط شل
+	Low	کم
+	Make Landscape	افقی کردن
+	Make Layer Visibility Changes Undoable	قابل واگرد کردن تغییرات پدیدار بودن لایه
+	Make Portrait	عمودی کردن
+	Manage submitted jobs in the system print queue	مدیریت کارهای ارسال‌شده در صف چاپ سیستم
+	Marching Ants	مورچه‌های رژه‌رونده
+	Margin	حاشیه
+	Mask Options…	گزینه‌های ماسک…
+	Masked Areas	نواحی ماسک‌شده
+	Medium Blue	آبی متوسط
+	Memory Usage	مصرف حافظه
+	Merge Group	ادغام گروه
+	Merged Layers	لایه‌های ادغام‌شده
+	Message:	پیام:
+	Mirror	آینه‌ای
+	Miter limit	حد میتر
+	Monospace	تک‌فاصله
+	Move Down	پایین بردن
+	Move Up	بالا بردن
+	Move effect down	پایین بردن جلوه
+	Move effect up	بالا بردن جلوه
+	New Action…	کنش جدید…
+	New Artboard…	بوم جدید…
+	New Crop Preset…	پیش‌تنظیم برش جدید…
+	New Document With Mask	سند جدید با ماسک
+	New Group from Layers…	گروه جدید از لایه‌ها…
+	New Group…	گروه جدید…
+	New Layer	لایهٔ جدید
+	New Layer With Mask	لایهٔ جدید با ماسک
+	New Layer…	لایهٔ جدید…
+	New Set…	مجموعهٔ جدید…
+	No document open	هیچ سندی باز نیست
+	No favorite fonts yet: click the star beside a font to add it.	هنوز هیچ قلم موردعلاقه‌ای نیست: برای افزودن یک قلم، ستارهٔ کنار آن را کلیک کنید.
+	No fonts match these filters.	هیچ قلمی با این فیلترها مطابقت ندارد.
+	No matching fonts	هیچ قلم منطبقی نیست
+	No matching settings	هیچ تنظیم منطبقی نیست
+	No object found there — drag a rectangle around it	هیچ شیئی در آنجا پیدا نشد — مستطیلی دور آن بکشید
+	No pin selected	هیچ پینی گزینش نشده
+	No similar fonts: the current font doesn't say what it looks like.	هیچ قلم مشابهی نیست: قلم فعلی نمی‌گوید که چه شکلی دارد.
+	Not rendered: this adjustment ({key}) is kept as imported.	رندر نشده: این تنظیم ({key}) همان‌طور که درون‌ریزی شده نگه داشته می‌شود.
+	Nothing to paste: PhotoCraft can't read the system clipboard here	چیزی برای جای‌گذاری نیست: PhotoCraft نمی‌تواند کلیپ‌بورد سیستم را اینجا بخواند
+	Number	عدد
+	Object Aware	آگاه از شیء
+	Object Aware needs a segmentation model, which isn't available yet	«آگاه از شیء» به مدل بخش‌بندی نیاز دارد که هنوز موجود نیست
+	Object Finder	یابندهٔ شیء
+	On Black	روی سیاه
+	On Layers	روی لایه‌ها
+	On White	روی سفید
+	Onion Skin	پوست پیاز
+	Opacity must be between 0% and 100%.	تیرگی باید بین ۰٪ و ۱۰۰٪ باشد.
+	Open Download Page	باز کردن صفحهٔ بارگیری
+	OpenType font	قلم OpenType
+	Opened {name}	{name} باز شد
+	Output Settings	تنظیمات خروجی
+	Output To	خروجی به
+	Override Tilt X	نادیده گرفتن کجی X
+	Override Tilt Y	نادیده گرفتن کجی Y
+	Paint over hair or fur on the image; Alt paints the other mode	روی مو یا پشم تصویر نقاشی کنید؛ Alt حالت دیگر را نقاشی می‌کند
+	Paints from the History panel's source state	از وضعیت مبدأ در پنل تاریخچه نقاشی می‌کند
+	Panel Options…	گزینه‌های پنل…
+	Panel menu	منوی پنل
+	Paper Height	ارتفاع کاغذ
+	Paper Width	عرض کاغذ
+	Path operations	عملیات مسیر
+	Per-document RAM limit (MB)	حد رم به‌ازای هر سند (مگابایت)
+	Percentile:	صدک:
+	PhotoCraft Defaults	پیش‌فرض‌های PhotoCraft
+	PhotoCraft Updates	به‌روزرسانی‌های PhotoCraft
+	PhotoCraft is up to date.	PhotoCraft به‌روز است.
+	PhotoCraft — Screen Color Picker	PhotoCraft — انتخابگر رنگ صفحه
+	Pick a screen pixel or press Esc to cancel	یک پیکسل از صفحه انتخاب کنید یا Esc را برای لغو بزنید
+	Prevent Auto-Nesting	پیشگیری از تودرتو شدن خودکار
+	Preview on canvas when reordering layers	پیش‌نمایش روی بوم هنگام تغییر ترتیب لایه‌ها
+	Preview size	اندازهٔ پیش‌نمایش
+	Print Resolution:	وضوح چاپ:
+	Print Settings…	تنظیمات چاپ…
+	Print preview image	تصویر پیش‌نمایش چاپ
+	Profile	نمایه
+	Protect skin tones	محافظت از رنگ‌های پوست
+	Protect:	محافظت:
+	Put this command's shortcuts back as they were	میان‌برهای این فرمان را به حالت قبلی بازگردانید
+	Random	تصادفی
+	Real-Time Refinement	بهبود بی‌درنگ
+	Rectangular	مستطیلی
+	Redrawing	در حال بازرسم
+	Reference point location	محل نقطهٔ مرجع
+	Refine Edge Brush (R)	قلم‌موی بهبود لبه (R)
+	Refine Edge Brush Tool	ابزار قلم‌موی بهبود لبه
+	Refine Hair	بهبود مو
+	Refine Hair needs hair detection, which isn't available yet	«بهبود مو» به تشخیص مو نیاز دارد که هنوز موجود نیست
+	Refine Mode	حالت بهبود
+	Release Notes	یادداشت‌های انتشار
+	Remember Settings	به‌یادسپاری تنظیمات
+	Remember this choice for future images	این انتخاب برای تصاویر بعدی به‌خاطر سپرده شود
+	Remember to turn off the printer's own colour management in Print Settings…	فراموش نکنید مدیریت رنگ چاپگر را در تنظیمات چاپ خاموش کنید…
+	Remove after each stroke	حذف پس از هر ضربه
+	Remove from Favorites	حذف از موردعلاقه‌ها
+	Remove from favorites	حذف از موردعلاقه‌ها
+	Replace	جایگزینی
+	Replace Contours…	جایگزینی کانتورها…
+	Replace it with this document, or cancel and use File › Save As to keep both.	آن را با این سند جایگزین کنید، یا لغو کنید و از «فایل › ذخیره به‌نام…» برای نگه داشتن هر دو استفاده کنید.
+	Reset All Locked Settings	بازنشانی همهٔ تنظیمات قفل‌شده
+	Reset All Tools	بازنشانی همهٔ ابزارها
+	Reset Tool	بازنشانی ابزار
+	Reset all tools to their default settings?	همهٔ ابزارها به تنظیمات پیش‌فرضشان بازنشانی شوند؟
+	Resize Windows to Fit	تغییر اندازهٔ پنجره‌ها برای جا دادن
+	Response curve	منحنی پاسخ
+	Restore Original Edge	بازگرداندن لبهٔ اصلی
+	Result	نتیجه
+	Retry GPU tries the graphics processor again now.	«تلاش دوباره با GPU» اکنون پردازندهٔ گرافیکی را دوباره می‌آزماید.
+	Right-to-left paragraph direction	جهت پاراگراف از راست به چپ
+	Right:	راست:
+	Rotation Adaptation	تطبیق چرخش
+	Rows	ردیف‌ها
+	Sampling Area	ناحیهٔ نمونه‌برداری
+	Sampling Area Options	گزینه‌های ناحیهٔ نمونه‌برداری
+	Sampling Area Overlay	پوشش ناحیهٔ نمونه‌برداری
+	Sampling Brush Tool	ابزار قلم‌موی نمونه‌برداری
+	Sans Serif	بدون سریف
+	Save Actions…	ذخیرهٔ کنش‌ها…
+	Save Contours…	ذخیرهٔ کانتورها…
+	Save Settings…	ذخیرهٔ تنظیمات…
+	Save Set…	ذخیرهٔ مجموعه…
+	Save a list of these shortcuts as a web page	فهرستی از این میان‌برها را به‌صورت یک صفحهٔ وب ذخیره کنید
+	Save the changes to this set	تغییرات این مجموعه را ذخیره کنید
+	Save these settings as a Camera Raw .xmp file	این تنظیمات را به‌صورت یک فایل .xmp در Camera Raw ذخیره کنید
+	Save these shortcuts as a .kys file	این میان‌برها را به‌صورت یک فایل .kys ذخیره کنید
+	Save these shortcuts as a new set	این میان‌برها را به‌صورت یک مجموعهٔ جدید ذخیره کنید
+	Saved {name}	{name} ذخیره شد
+	Saving {percent}	در حال ذخیره {percent}
+	Scale or rotate the moved area, then press {key}	ناحیهٔ جابه‌جا‌شده را مقیاس‌دهی یا بچرخانید، سپس {key} را بزنید
+	Scale:	مقیاس:
+	Script	اسکریپت
+	Search settings…	جستجوی تنظیمات…
+	Select an action first	نخست یک کنش را گزینش کنید
+	Select and Mask was closed: another layer was selected	«گزینش و ماسک» بسته شد: لایهٔ دیگری گزینش شد
+	Select and Mask was closed: its document is no longer the active one	«گزینش و ماسک» بسته شد: سند آن دیگر سند فعال نیست
+	Select the crop presets to delete	پیش‌تنظیم‌های برشی را که می‌خواهید حذف کنید گزینش کنید
+	Select the crop presets to delete:	پیش‌تنظیم‌های برشی را که می‌خواهید حذف کنید گزینش کنید:
+	Selected Areas	نواحی گزینش‌شده
+	Sent to {printer}	به {printer} ارسال شد
+	Serif	سریف
+	Set GPU Memory in Preferences › Performance to what your graphics card can hold, at most 3/8 of its memory. Automatic follows Memory Usage, within a quarter of this computer's memory and 3/8 of the card's, and doesn't count the document against a card whose memory is known. The status bar shows GPU Memory Full while they don't fit.	«حافظهٔ GPU» را در «ترجیحات › عملکرد» روی چیزی تنظیم کنید که کارت گرافیک شما می‌تواند نگه دارد، حداکثر ۳/۸ حافظهٔ آن. حالت خودکار از «مصرف حافظه» پیروی می‌کند، در محدودهٔ یک‌چهارم حافظهٔ این رایانه و ۳/۸ حافظهٔ کارت، و سند را در برابر کارتی که حافظهٔ آن معلوم است به‌حساب نمی‌آورد. نوار وضعیت تا زمانی که جا نشوند «حافظهٔ GPU پر» را نشان می‌دهد.
+	Set deleted.	مجموعه حذف شد.
+	Set horizontal skew	تنظیم کجی افقی
+	Set saved.	مجموعه ذخیره شد.
+	Set the tone sliders from the image	لغزنده‌های تن را از روی تصویر تنظیم کنید
+	Set vertical skew	تنظیم کجی عمودی
+	Set:	مجموعه:
+	Sets the source for the history brush	مبدأ قلم‌موی تاریخچه را تعیین می‌کند
+	Settings from {name}	تنظیمات از {name}
+	Settings from {name}; {count} not supported: {names}	تنظیمات از {name}؛ {count} پشتیبانی نمی‌شوند: {names}
+	Shift Edge	انتقال لبه
+	Show All Fonts	نمایش همهٔ قلم‌ها
+	Show Channels in Color	نمایش کانال‌ها به رنگ
+	Show Edge	نمایش لبه
+	Show Favorite Fonts	نمایش قلم‌های موردعلاقه
+	Show Font Classes	نمایش دسته‌های قلم
+	Show Grid	نمایش شبکه
+	Show Layers	نمایش لایه‌ها
+	Show Original	نمایش نسخهٔ اصلی
+	Show Sampling Area	نمایش ناحیهٔ نمونه‌برداری
+	Show Similar Fonts	نمایش قلم‌های مشابه
+	Show Statistics	نمایش آماره‌ها
+	Show Styles	نمایش سبک‌ها
+	Show Variable Fonts	نمایش قلم‌های متغیر
+	Show dialog during playback	نمایش کادر گفتگو هنگام بازپخش
+	Show layer mask badges	نمایش نشان‌های ماسک لایه
+	Show the layer's effects and Smart Filters  ({key}-click: all layers)	نمایش جلوه‌های لایه و فیلترهای هوشمند  ({key}-کلیک: همهٔ لایه‌ها)
+	Slab Serif	سریف ضخیم
+	Slant	میل
+	Smart Radius	شعاع هوشمند
+	Smooth the curve values	مقادیر منحنی را نرم کنید
+	Snap to Origin	چفت شدن به مبدأ
+	Solid	یکدست
+	Solidity:	یکدستی:
+	Some layers, pixels or masks could not be read. Do you want to continue opening it?	برخی لایه‌ها، پیکسل‌ها یا ماسک‌ها خوانده نشدند. می‌خواهید به باز کردن آن ادامه دهید؟
+	Sort By Name	مرتب‌سازی بر اساس نام
+	Source Files	فایل‌های مبدأ
+	Source:	مبدأ:
+	Start Recording	شروع ضبط
+	Stop	توقف
+	Stop Recording	توقف ضبط
+	Strokes to remove: {n} (Enter applies, Esc cancels)	ضربه‌های حذف‌شونده: {n} (Enter اعمال می‌کند، Esc لغو می‌کند)
+	Stylized dabs from a history state	لمسه‌های سبک‌دار از یک وضعیت تاریخچه
+	Subtract Mask from Selection	کم کردن ماسک از گزینش
+	Summarize…	خلاصه‌سازی…
+	Take the shortcut from the other command and select it	میان‌بر را از فرمان دیگر بگیرید و آن را گزینش کنید
+	Targa Options	گزینه‌های Targa
+	Target	هدف
+	Target:	هدف:
+	The active layer has no pixels here — turn on Sample All Layers or select a layer with pixels	لایهٔ فعال اینجا پیکسلی ندارد — «نمونه‌برداری از همهٔ لایه‌ها» را روشن کنید یا لایه‌ای با پیکسل گزینش کنید
+	The document or Smart Filter changed. Reopen its dialog.	سند یا فیلتر هوشمند تغییر کرد. کادر گفتگوی آن را دوباره باز کنید.
+	The document “{name}” does not have an embedded {mode} profile.	سند «{name}» نمایهٔ {mode} تعبیه‌شده‌ای ندارد.
+	The document “{name}” has an embedded color profile that does not match the current {mode} working space.	سند «{name}» یک نمایهٔ رنگ تعبیه‌شده دارد که با فضای کاری {mode} کنونی مطابقت ندارد.
+	The document “{name}” may be damaged.	ممکن است سند «{name}» آسیب دیده باشد.
+	The layer or its mask changed. Drag the mask onto the Trash again.	لایه یا ماسک آن تغییر کرد. ماسک را دوباره روی سطل زباله بکشید.
+	The name in the save dialog was “{name}”.	نام در کادر گفتگوی ذخیره «{name}» بود.
+	The transform couldn't be applied.	تبدیل اعمال نشد.
+	There are too many sets: delete one first.	مجموعه‌های بسیار زیادی وجود دارد: نخست یکی را حذف کنید.
+	There is no color table to save.	جدول رنگی برای ذخیره وجود ندارد.
+	There is no crop size or ratio to save	اندازه یا نسبت برشی برای ذخیره وجود ندارد
+	This document's layers need {needed} but may hold {budget}: whole-document redraws use the CPU	لایه‌های این سند به {needed} نیاز دارند اما ممکن است {budget} در اختیار داشته باشند: بازرسم کل سند از CPU استفاده می‌کند
+	This document's layers: {needed} of {budget} for layers	لایه‌های این سند: {needed} از {budget} برای لایه‌ها
+	Thumbnail Contents	محتوای تصویر مصغر
+	Thumbnail Size	اندازهٔ تصویر مصغر
+	Tight Curl	فر فشرده
+	Tight Long	بلند فشرده
+	Tight Medium	متوسط فشرده
+	Tight Short	کوتاه فشرده
+	Too many clone strokes: apply Vanishing Point first	ضربه‌های شبیه‌سازی بسیار زیادند: نخست نقطهٔ ناپدیدی را اعمال کنید
+	Top:	بالا:
+	Transform On Drop	تبدیل هنگام رها کردن
+	TrueType font	قلم TrueType
+	Turn the prompt back on with Ask On Mismatch in Edit › Color Settings.	با «پرسش هنگام عدم تطابق» در «ویرایش › تنظیمات رنگ» این درخواست را دوباره روشن کنید.
+	Uncached Refresh	به‌روزرسانی بدون حافظهٔ پنهان
+	Undo Changes	واگرد تغییرات
+	Units	واحدها
+	Update and Restart	به‌روزرسانی و راه‌اندازی دوباره
+	Updates have not been checked yet.	هنوز برای به‌روزرسانی بررسی نشده است.
+	Use	استفاده
+	Use Default Masks on Fill Layers	استفاده از ماسک‌های پیش‌فرض روی لایه‌های پرکردگی
+	Use Previous Layer to Create Clipping Mask	استفاده از لایهٔ قبلی برای ایجاد ماسک برش
+	Use tablet pressure to change pen width	استفاده از فشار قلم‌واره برای تغییر عرض قلم
+	Use the embedded profile ({profile})	استفاده از نمایهٔ تعبیه‌شده ({profile})
+	Use:	استفاده:
+	Vanishing Point is not active	نقطهٔ ناپدیدی فعال نیست
+	Vanishing Point: click four corners to create a plane	نقطهٔ ناپدیدی: برای ایجاد یک مستوی، چهار گوشه را کلیک کنید
+	Variable font	قلم متغیر
+	Very High	بسیار بالا
+	View Mode	حالت نما
+	Violet	بنفش
+	Wait for the current job to finish.	منتظر بمانید تا کار جاری پایان یابد.
+	With GPU Memory set to Automatic, this also limits the GPU layer budget. That budget is capped at one quarter of installed RAM and, when known, three eighths of the graphics card's memory, with a 512 MB minimum. Raising this limit beyond those caps does not increase the GPU budget.	وقتی «حافظهٔ GPU» روی خودکار تنظیم شده باشد، این موضوع بودجهٔ لایهٔ GPU را نیز محدود می‌کند. آن بودجه به یک‌چهارم رم نصب‌شده و، در صورت معلوم بودن، سه‌هشتم حافظهٔ کارت گرافیک محدود می‌شود، با حداقل ۵۱۲ مگابایت. افزایش این حد فراتر از آن سقف‌ها بودجهٔ GPU را افزایش نمی‌دهد.
+	Working: {working}	در حال کار: {working}
+	X	X
+	Y	Y
+	set in Print Settings…	در تنظیمات چاپ تنظیم می‌شود…
+	set name	نام مجموعه
+	{file} is not a style library (.asl)	{file} یک کتابخانهٔ سبک (.asl) نیست
+	{name} (Photoshop)	{name} (Photoshop)
+	{name} can't keep everything in this document	{name} نمی‌تواند همه‌چیز این سند را نگه دارد
+	{name} was changed by another app after it was opened or saved here.	{name} پس از باز یا ذخیره شدن در اینجا، توسط برنامه‌ای دیگر تغییر یافته است.
+	{n} of {max} sample points	{n} از {max} نقطهٔ نمونه
+	{path}: the path is not valid Unicode; rename the file and open it again.	{path}: مسیر یونیکد معتبری نیست؛ نام فایل را تغییر دهید و دوباره آن را باز کنید.
+	{path}: the path is not valid Unicode; save under another name.	{path}: مسیر یونیکد معتبری نیست؛ با نامی دیگر ذخیره کنید.
+	{set} (modified)	{set} (تغییریافته)
+	{shortcut} is reserved by the system and can't be assigned.	{shortcut} توسط سیستم رزرو شده است و نمی‌توان آن را اختصاص داد.
+	{w} {unit} x {h} {unit} ({ppi} ppi)	{w} {unit} x {h} {unit} ({ppi} ppi)
+	“{name}” already exists. Replace it?	«{name}» از قبل وجود دارد. جایگزین شود؟
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	{n} سبک به {file} صادر شد|{n} سبک به {file} صادر شد
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	{n} نمونه‌رنگ به {file} صادر شد|{n} نمونه‌رنگ به {file} صادر شد
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	{n} قلم‌مو از {group} درون‌ریزی شد|{n} قلم‌مو از {group} درون‌ریزی شد
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	{n} نمونه‌رنگ از {file} درون‌ریزی شد|{n} نمونه‌رنگ از {file} درون‌ریزی شد
+@plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	{n} کنش از {file} بارگذاری شد|{n} کنش از {file} بارگذاری شد
+@plural	Played {n} step|Played {n} steps	{n} گام بازپخش شد|{n} گام بازپخش شد
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	ذخیره برای وب: {n} فایل|ذخیره برای وب: {n} فایل
+@plural	Saved {n} action to {file}|Saved {n} actions to {file}	{n} کنش در {file} ذخیره شد|{n} کنش در {file} ذخیره شد
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} رنگ در {file} ذخیره شد|{n} رنگ در {file} ذخیره شد
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	{n} شیء هوشمند پیوندی که روی دیسک تغییر کرده بود به‌روزرسانی شد|{n} شیء هوشمند پیوندی که روی دیسک تغییر کرده بودند به‌روزرسانی شدند
+@plural	{n} action|{n} actions	{n} کنش|{n} کنش
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	{n} لایهٔ ثبت‌شده توسط این ترکیب‌بندی حذف شد. ترکیب‌بندی را به‌روزرسانی کنید یا هشدار را پاک کنید.|{n} لایهٔ ثبت‌شده توسط این ترکیب‌بندی حذف شدند. ترکیب‌بندی را به‌روزرسانی کنید یا هشدار را پاک کنید.
+@plural	{n} plane|{n} planes	{n} مستوی|{n} مستوی
+@plural	{n} preset|{n} presets	{n} پیش‌تنظیم|{n} پیش‌تنظیم
+@plural	{n} sample point removed|{n} sample points removed	{n} نقطهٔ نمونه حذف شد|{n} نقطهٔ نمونه حذف شد
+@plural	{n} slice|{n} slices	{n} برش|{n} برش
+@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} گام هنوز معادلی در PhotoCraft ندارد|{n} گام هنوز معادلی در PhotoCraft ندارند
+@plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	{n} گام بدون معادل در Photoshop کنار گذاشته شد|{n} گام بدون معادل در Photoshop کنار گذاشته شدند
+@plural	{n} step|{n} steps	{n} گام|{n} گام
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (+{n} هشدار دیگر برای پیش‌تنظیم قلم‌مو)|{warning} (+{n} هشدار دیگر برای پیش‌تنظیم قلم‌مو)
+@plural	{what} with {n} warning|{what} with {n} warnings	{what} با {n} هشدار|{what} با {n} هشدار
