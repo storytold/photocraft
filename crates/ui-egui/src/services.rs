@@ -1,6 +1,6 @@
 use super::{
-    CaptionStyle, Document, FileDialogFn, OsEvent, Value, dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, native_menu, screen_picker,
-    targa_options_ui,
+    dds_options_ui, jobs_ui, jpeg_options_ui, monitor_status, native_menu, screen_picker, targa_options_ui, CaptionStyle, Document, FileDialogFn, OsEvent,
+    Value,
 };
 
 /// The error a save gets while another save waits on its format prompt.
@@ -209,7 +209,11 @@ pub type SaveFileFn = std::sync::Arc<dyn Fn(&Document, &str, &ExportSettings, &j
 /// the writer confirms the bytes were stored, else still `previous`, so the document stays
 /// unsaved. A browser download is only a request the user can cancel (#4962).
 pub(crate) fn saved_revision_after_write(confirmed: bool, written: u64, previous: u64) -> u64 {
-    if confirmed { written } else { previous }
+    if confirmed {
+        written
+    } else {
+        previous
+    }
 }
 
 /// Who a finished save serves.
@@ -237,6 +241,9 @@ pub type AutomationCommandFn = Box<dyn Fn(&str, &Value) -> Result<(), String>>;
 
 /// Open a URL in the system browser (native) — reliable cross-platform, unlike `ctx.open_url`.
 pub type OpenUrlFn = Box<dyn Fn(&str) -> Result<(), String>>;
+
+/// Hand an update to the host's signed installer. Discovery stays with `updates_ui`.
+pub type InstallUpdateFn = Box<dyn FnMut() -> Result<(), String>>;
 
 pub type EncodePngFn = Box<dyn Fn(u32, u32, &[u8]) -> Result<Vec<u8>, String>>;
 
@@ -370,6 +377,9 @@ pub struct Services {
     pub beep: Option<fn()>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
+    /// Signed in-app installer (macOS Sparkle), when the release bundle supplies one.
+    /// Update discovery stays with `check_updates`; this only installs.
+    pub install_update: Option<InstallUpdateFn>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,

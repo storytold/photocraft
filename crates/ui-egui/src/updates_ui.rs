@@ -11,6 +11,9 @@ pub(crate) struct Runtime {
     /// The startup prompt and the self-update behind it (desktop).
     #[cfg(not(target_arch = "wasm32"))]
     updater: craft_update::updater::Updater,
+    /// Shown instead of `updater` when a signed host installer owns Update and Restart.
+    #[cfg(not(target_arch = "wasm32"))]
+    signed_prompt: Option<craft_update::StartupPrompt>,
 }
 
 impl Default for Runtime {
@@ -20,6 +23,8 @@ impl Default for Runtime {
             notified_version: None,
             #[cfg(not(target_arch = "wasm32"))]
             updater: craft_update::updater::Updater::new(&crate::UPDATE_APP, photocraft_engine::build_info::VERSION),
+            #[cfg(not(target_arch = "wasm32"))]
+            signed_prompt: None,
         }
     }
 }
@@ -34,6 +39,23 @@ fn release_of(found: &photocraft_engine::updates_cmds::Release) -> craft_update:
         html_url: found.url.clone(),
         ..Default::default()
     }
+}
+
+/// Install through the signed host hook when the bundle has one. Otherwise the shared
+/// self-update prompt installs. A failed handoff leaves the window open and reports the error.
+#[cfg(not(target_arch = "wasm32"))]
+fn install_available(app: &mut PhotocraftApp, release: &photocraft_engine::updates_cmds::Release) {
+    if let Some(install) = app.services.install_update.as_mut() {
+        match install() {
+            Ok(()) => app.ui.updates_open = false,
+            Err(error) => {
+                app.ui.status = error;
+                app.ui.status_error = true;
+            }
+        }
+        return;
+    }
+    app.updates_rt.updater.offer(release_of(release));
 }
 
 pub(crate) fn check(app: &mut PhotocraftApp, _ctx: &egui::Context, params: Value) -> Result<Value, String> {
@@ -58,13 +80,21 @@ pub(crate) fn check(app: &mut PhotocraftApp, _ctx: &egui::Context, params: Value
 pub(crate) fn tick(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // `updates.status` also polls (automation may consume the result before this frame).
     app.session.updates.poll();
-    if let Status::Available { release } = &app.session.updates.status
+    let found = if let Status::Available { release } = &app.session.updates.status
         && app.updates_rt.notified_version.as_ref() != Some(&release.version)
     {
+        Some(release.clone())
+    } else {
+        None
+    };
+    if let Some(release) = found {
         app.updates_rt.notified_version = Some(release.version.clone());
         app.ui.updates_open = true;
+        // A signed installer is the only install path. The shared prompt would be a second one.
         #[cfg(not(target_arch = "wasm32"))]
-        app.updates_rt.updater.offer(release_of(release));
+        if app.services.install_update.is_none() {
+            app.updates_rt.updater.offer(release_of(&release));
+        }
     }
     if app.session.updates.check.is_none() {
         return;
@@ -86,6 +116,27 @@ pub(crate) fn show(_app: &mut PhotocraftApp, _ctx: &egui::Context) {}
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut download: Option<String> = None;
+    if app.services.install_update.is_some()
+        && app.ui.updates_open
+        && let Status::Available { release } = app.session.updates.status.clone()
+    {
+        let mut prompt = app.updates_rt.signed_prompt.take().unwrap_or_else(|| {
+            craft_update::StartupPrompt::new(&crate::UPDATE_APP, release_of(&release), photocraft_engine::build_info::VERSION)
+        });
+        match prompt.show(ctx) {
+            craft_update::StartupPromptResponse::Pending => app.updates_rt.signed_prompt = Some(prompt),
+            craft_update::StartupPromptResponse::UpdateAndRestart => {
+                install_available(app, &release);
+                if app.ui.status_error {
+                    prompt.status_message = Some(app.ui.status.clone());
+                    prompt.is_installing = false;
+                    app.updates_rt.signed_prompt = Some(prompt);
+                }
+            }
+            craft_update::StartupPromptResponse::Download => download = Some(release.url.clone()),
+            craft_update::StartupPromptResponse::Later => app.ui.updates_open = false,
+        }
+    }
     {
         let was_open = app.updates_rt.updater.prompt_open();
         app.updates_rt.updater.tick(ctx);
@@ -268,6 +319,43 @@ mod tests {
         });
         output.textures_delta.clear();
         assert!(app.updates_rt.updater.prompt_open());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn signed_install_uses_the_native_hook_and_does_not_open_a_browser() {
+        let installs = Arc::new(Mutex::new(0u32));
+        let counted = installs.clone();
+        let opened = Arc::new(Mutex::new(Vec::new()));
+        let urls = opened.clone();
+        let (mut app, _, sender) = app();
+        app.services.install_update = Some(Box::new(move || {
+            *counted.lock().unwrap() += 1;
+            Ok(())
+        }));
+        app.services.open_url = Some(Box::new(move |url| {
+            urls.lock().unwrap().push(url.to_string());
+            Ok(())
+        }));
+        let ctx = egui::Context::default();
+        let release = Release { version: "99.0.0".into(), url: "https://github.com/storytold/photocraft/releases/tag/v99.0.0".into() };
+        at(&mut app, &ctx, 0.0);
+        sender.lock().unwrap().as_ref().unwrap().send(Ok(Some(release.clone()))).unwrap();
+        at(&mut app, &ctx, 1.0);
+        assert!(app.ui.updates_open);
+        assert!(!app.updates_rt.updater.prompt_open(), "the signed installer does not open a second prompt");
+        install_available(&mut app, &release);
+        assert_eq!(*installs.lock().unwrap(), 1);
+        assert!(opened.lock().unwrap().is_empty());
+        assert!(!app.ui.updates_open);
+
+        app.ui.updates_open = true;
+        app.services.install_update = Some(Box::new(|| Err("Sparkle could not start".into())));
+        install_available(&mut app, &release);
+        assert!(app.ui.updates_open, "a failed handoff leaves the window open");
+        assert!(app.ui.status_error);
+        assert_eq!(app.ui.status, "Sparkle could not start");
+        assert!(opened.lock().unwrap().is_empty());
     }
 
     #[test]
