@@ -587,13 +587,15 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
 pub(super) fn web_params(fields: &Map<String, Value>, doc: &photocraft_doc::Document) -> Result<Value, String> {
     let mut p = params(fields);
     if p["slices"] == "selected" {
+        let html = b(fields, "html", true);
+        p["html"] = json!(html);
         let numbers = fields.get("__selectedSlices").and_then(Value::as_array).filter(|numbers| !numbers.is_empty());
         let numbers = numbers.ok_or("Select one or more slices")?;
         let slices = photocraft_doc::slices::resolve(doc);
         if numbers.iter().any(|n| n.as_u64().is_none_or(|n| !slices.iter().any(|slice| u64::try_from(slice.number).ok() == Some(n)))) {
             return Err("Invalid selected slice number".into());
         }
-        if !b(fields, "html", true)
+        if !html
             && !slices
                 .iter()
                 .any(|slice| slice.kind != photocraft_doc::SliceKind::NoImage && numbers.iter().any(|n| n.as_u64() == u64::try_from(slice.number).ok()))
