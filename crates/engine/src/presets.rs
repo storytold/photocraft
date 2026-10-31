@@ -202,6 +202,13 @@ impl Session {
         let st = &mut self.presets;
         if let Some(g) = p.gradients {
             st.gradients = g;
+            // Older imports could contain duplicate names, which alias panel selections.
+            let mut taken = crate::cmd::preset_import_cmds::UniqueNames::new(std::iter::empty());
+            for group in &mut st.gradients {
+                for item in &mut group.items {
+                    item.name = taken.unique(&item.name);
+                }
+            }
         }
         if let Some(g) = p.gradient {
             st.gradient = g;
