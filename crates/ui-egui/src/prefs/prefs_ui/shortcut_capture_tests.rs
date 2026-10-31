@@ -487,3 +487,76 @@ fn tools_sharing_a_changed_key_cycle_with_shift() {
     tap(&mut app, &ctx, Key::F6, crate::shortcuts::parse("Ctrl+Alt+F6").unwrap().modifiers);
     assert_eq!(app.ui.tool, Tool::Hand);
 }
+
+/// A plain alternate (#3665) is no group key: F6 added to the Pencil, whose main key stays B,
+/// still selects it, as it did before tools could share assigned keys.
+#[test]
+fn a_tools_plain_alternate_still_selects_it() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.session.edit_prefs(|p| {
+        p.alternate_shortcuts.insert("tools.select.pencil".into(), vec!["F6".into()]);
+    });
+    app.ui.tool = Tool::Zoom;
+    tap(&mut app, &ctx, Key::F6, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Pencil);
+    assert_eq!(crate::tool_shortcuts::shortcut(&app, Tool::Pencil).as_deref(), Some("B"), "its main key is unchanged");
+}
+
+/// A focused text field lets F-keys through to the shortcuts, and a tool's plain F-key is one of
+/// them: there the tool keys don't run, so the key must stay in the dispatch table.
+#[test]
+fn a_tools_plain_f_key_works_from_a_focused_text_field() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "F6"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    let key = |pressed| Event::Key { key: Key::F6, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    ctx.begin_pass(egui::RawInput { events: vec![key(true), key(false)], ..Default::default() });
+    assert!(crate::shortcut_dispatch::dispatch_pressed(&mut app, &ctx, crate::shortcut_dispatch::Focus::Text, false));
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(app.ui.tool, Tool::Hand);
+}
+
+/// A focused widget keeps its own keys: a tool assigned Enter (or Tab, Space…) doesn't take it
+/// from the widget. (Enter, since egui moves focus on a Tab in the same pass.)
+#[test]
+fn a_focused_widget_keeps_a_key_a_tool_was_given() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "Enter"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    let button = |ctx: &egui::Context| egui::Area::new(egui::Id::unique("focus-test")).show(ctx, |ui| ui.button("Focused")).inner;
+    ctx.begin_pass(egui::RawInput::default());
+    button(&ctx).request_focus();
+    ctx.end_pass().textures_delta.clear();
+    let enter = |pressed| Event::Key { key: Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    ctx.begin_pass(egui::RawInput { events: vec![enter(true), enter(false)], ..Default::default() });
+    button(&ctx);
+    assert_eq!(crate::shortcut_dispatch::Focus::of(&ctx), crate::shortcut_dispatch::Focus::Widget);
+    crate::shortcuts::handle(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(app.ui.tool, Tool::Zoom, "Enter stayed with the focused button");
+    // With nothing focused, Enter is the tool's.
+    tap(&mut app, &egui::Context::default(), Key::Enter, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Hand);
+}
+
+/// The group a held key springs from is the tools sharing the current tool's key in effect: with
+/// the Move Tool given B, pressing B on it cycles its own group (no spring-loaded switch, which
+/// would give the Move Tool back on release).
+#[test]
+fn a_tools_assigned_key_cycles_its_group_without_springing() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": "B"}, "allowUnknown": true})).unwrap();
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    app.ui.tool = Tool::Move;
+    tap(&mut app, &ctx, Key::B, Modifiers::NONE);
+    assert_ne!(app.ui.tool, Tool::Move, "B cycled the group");
+    assert!(app.ui.spring.is_none(), "a cycle in the tool's own group is no temporary switch: {:?}", app.ui.spring);
+}

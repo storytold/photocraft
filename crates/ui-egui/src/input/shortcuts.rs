@@ -887,7 +887,10 @@ fn select_tool_by_key(app: &mut PhotocraftApp, ctx: &egui::Context, pressed: &im
     let shift_switch = app.session.prefs().tools.use_shift_key_for_tool_switch;
     // Each tool's plain key, default or assigned: tools with the same key are one group.
     let keys: Vec<(Tool, Key)> = Tool::ALL.iter().filter_map(|t| Some((*t, crate::tool_shortcuts::plain_key(app, *t)?))).collect();
-    for &(_, k) in &keys {
+    // A focused widget keeps its own keys (a tool assigned Tab or Space doesn't take them), as
+    // for any shortcut.
+    let focus = crate::shortcut_dispatch::Focus::of(ctx);
+    for &(_, k) in keys.iter().filter(|(_, k)| focus.allows(&KeyboardShortcut::new(Modifiers::NONE, *k))) {
         let cycle_shift = shift_switch && ctx.input_mut(|i| i.consume_key(Modifiers::SHIFT, k));
         if cycle_shift || pressed(k) {
             let before = app.ui.tool;
