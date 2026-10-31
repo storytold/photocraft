@@ -439,9 +439,12 @@ mod tests {
     #[test]
     fn cols_timing() {
         for (w, h, n, r) in [(324, 324, 2, 9), (1122, 1122, 2, 79), (1122, 786, 2, 79)] {
-            let mut buf = ramp(w, h, n);
+            // Each pass gets its own copy of the same input: a pass run after the other would
+            // otherwise measure a buffer the other one already rewrote.
+            let input = ramp(w, h, n);
             let mut out = [0.0f64; 2];
             for (k, f) in [(0usize, box_cols_strided as fn(&mut [f32], usize, usize, usize, usize)), (1, box_cols_n)] {
+                let mut buf = input.clone();
                 let t = std::time::Instant::now();
                 for _ in 0..5 {
                     f(&mut buf, w, h, n, r);

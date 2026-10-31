@@ -42,26 +42,27 @@ including the 0×0, 5×0, `r = 0` and `r > h` edges).
 
 Bit-identical. Every row of `bench_filters2` (a 6000x4000 RGBA8 layer, one `apply` per row) was
 rendered from the base tree and from the changed tree and hashed with FNV-1a 64 over the raw `f32`
-bits, in row order. All 16 hashes matched; the example prints them, so the claim is reproducible.
+bytes (little-endian), in row order, read in 64-row bands so the harness holds a few MB instead of
+the layer's 384 MB. All 16 hashes matched; the example prints them, so the claim is reproducible.
 
 | Row | FNV-1a 64 |
 |---|---|
-| Oil Paint | `4b2adad4c8a90ea4` |
-| Reduce Noise | `7b79edeff5ab5d25` |
-| Lens Blur | `b952edffb486869a` |
-| Smart Blur r3 | `eac956b10d0ef23d` |
-| Smart Blur r12 | `8b94d255d4737ef7` |
-| Smart Blur r100 | `4e79145e84e4915b` |
-| Shape Blur | `3c45bda77adca4dc` |
-| Tilt-Shift | `1af0eacdba3a589e` |
-| Iris Blur | `1515d736386261df` |
-| Field Blur | `ea47864fa62ca4fa` |
-| Spin Blur | `86496970841b97b0` |
-| Path Blur | `67459ce473056c2f` |
-| Crystallize | `a4a8c4f4c3061f16` |
-| Color Halftone | `8f7c120ff8225ba8` |
-| Lighting Effects | `ba515bedf402c08b` |
-| Relight | `b1b4ab7db49115d1` |
+| Oil Paint | `a24418295e253bed` |
+| Reduce Noise | `cf615fc6e9753e31` |
+| Lens Blur | `d37f714557820600` |
+| Smart Blur r3 | `79a70345f731cc2f` |
+| Smart Blur r12 | `fcb259263b91c1f3` |
+| Smart Blur r100 | `fbf9288699e9bb52` |
+| Shape Blur | `eb8a751d0eecba89` |
+| Tilt-Shift | `6403ffccc9793893` |
+| Iris Blur | `4eddeb227a11e508` |
+| Field Blur | `2c73617cc35aeea8` |
+| Spin Blur | `ab59231b1bcd0a8e` |
+| Path Blur | `32cf5e5b6ad9a0fc` |
+| Crystallize | `c4ef27a261a0d3ff` |
+| Color Halftone | `b6b887f16c432c08` |
+| Lighting Effects | `8534e2fec9cf4dd6` |
+| Relight | `1d91fa30504342cb` |
 
 The box blur is reached by Reduce Noise (guided filter), Relight, Oil Paint's pre-smoothing, the
 Blur Gallery, Tilt-Shift, Shadows/Highlights and HDR ghosting, so this table covers the callers that
@@ -92,9 +93,12 @@ AVX2: the shipped profile does not set `target-cpu`):
 | 388x388x2, r 5 | row | 1.126 ms | 0.602 ms | 1.87x |
 | 786x1122x2, r 79 (Relight window) | row | 5.087 ms | 3.587 ms | 1.42x |
 | 6000x4000x4, r 4 (single-shot paths) | row | 268.1 ms | 166.5 ms | 1.61x |
-| 324x324x2, r 9 | column | 1.740 ms | 0.920 ms | 1.89x |
-| 1122x1122x2, r 79 | column | 14.038 ms | 8.095 ms | 1.73x |
-| 1122x786x2, r 79 | column | 9.632 ms | 5.453 ms | 1.77x |
+| 324x324x2, r 9 | column | 0.807 ms | 0.557 ms | 1.45x |
+| 1122x1122x2, r 79 | column | 14.183 ms | 7.439 ms | 1.91x |
+| 1122x786x2, r 79 | column | 9.253 ms | 5.203 ms | 1.78x |
+
+Each pass above is timed on its own copy of the same input; timing both on one buffer measures the
+second one on data the first already rewrote.
 
 ## What this does not fix
 
