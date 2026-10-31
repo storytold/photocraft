@@ -350,3 +350,119 @@ fn crop_and_straighten_makes_documents() {
     let (c, e) = (l.rgba(d.size.width as i32 / 2, 6)[0], l.rgba(d.size.width as i32 / 2, d.size.height as i32 - 6)[0]);
     assert!((c - e).abs() < 0.05);
 }
+
+#[test]
+fn photomerge_rejects_insufficient_memory_budget() {
+    let (sw, sh) = (520, 220);
+    let sc = scene(sw, sh, 5);
+    let mut s = Session::new();
+    for (k, x0) in [0usize, 180].into_iter().enumerate() {
+        s.add_document(doc_from(&format!("img{k}"), &crop(&sc, sw, x0, 10, 260, 200, 1.0), 260, 200, SampleType::U8), None);
+    }
+    assert_eq!(s.documents().len(), 2);
+    // Budget of 1024 bytes is insufficient for the panorama.
+    let err = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "reposition", "memoryBudget": 1024})).unwrap_err();
+    assert!(err.to_string().contains("not enough memory for Photomerge"), "{err}");
+    assert!(err.to_string().contains("exceeds budget"), "{err}");
+    // Session state and documents must remain intact.
+    assert_eq!(s.documents().len(), 2);
+    assert_eq!(s.active().unwrap().doc.name, "img1");
+}
+
+#[test]
+fn photomerge_estimate_is_the_largest_phase_not_the_sum() {
+    // Two 100×100 RGB8 images (4 bytes per pixel in the canvas) on a 150×100 canvas.
+    let sizes = [(100, 100), (100, 100)];
+    let (cw, ch, cc, bpp) = (150, 100, 3, 4);
+    let band = panorama::band_bytes_bound(100, 100, cc, panorama::blend_levels(cw, ch).min(7), cw, ch);
+    assert_eq!(band, 150 * 100 * 4 * 12);
+    let (rois, accumulators) = (20_000 * 20, 15_000 * 21);
+    let (peak, fixed) = estimate_photomerge_memory(&sizes, &sizes, cw, ch, cc, bpp, true, false);
+    assert_eq!(fixed, rois + accumulators);
+    // The bands phase (ROIs, accumulators and one band) is the largest here.
+    let bands = rois + accumulators + band;
+    let collapse = rois + accumulators + 15_000 * 12;
+    let output = rois + 15_000 * 16 + 15_000 * 4 + 20_000 * 5;
+    assert!(bands > collapse && bands > output);
+    assert_eq!(peak, bands);
+    // A sum of every buffer would be far more.
+    assert!(peak < rois + accumulators + 15_000 * 16 + 20_000 * 5 + band);
+    // Filling adds its own phase, which does not exceed the bands here.
+    let (with_fill, _) = estimate_photomerge_memory(&sizes, &sizes, cw, ch, cc, bpp, true, true);
+    assert_eq!(with_fill, (20_000 * 5 + 15_000 * 4 + 15_000 * 4 + (24 << 20)).max(peak));
+    // Without blending only the sources and warped layers are held.
+    assert_eq!(estimate_photomerge_memory(&sizes, &sizes, cw, ch, cc, bpp, false, false), (80_000 + 80_000, 0));
+}
+
+#[test]
+fn photomerge_estimate_fits_six_large_photos_in_eight_gib() {
+    let photos = [(6000, 4000); 6];
+    let (peak, fixed) = estimate_photomerge_memory(&photos, &photos, 27_000, 4_112, 3, 4, true, false);
+    assert!(peak < 8 << 30, "{} MiB", peak >> 20);
+    assert!(fixed < peak);
+}
+
+/// A flat opaque RGBA8 surface covering `area`.
+fn flat_surface(area: Rect, v: f32) -> Surface {
+    let fmt = PixelFormat::RGBA8;
+    let n = (area.width() * area.height()) as usize;
+    let data: Vec<f32> = (0..n).flat_map(|_| [v, v, v, 1.0]).collect();
+    let mut s = Surface::new(fmt);
+    s.write_region(area, &data);
+    s
+}
+
+#[test]
+fn seam_blend_rejects_a_band_larger_than_its_budget() {
+    let (a, b) = (Rect::new(0, 0, 64, 64), Rect::new(32, 0, 96, 64));
+    let warped = vec![flat_surface(a, 0.3), flat_surface(b, 0.6)];
+    let opt = BlendOptions { seamless: true, gains: true, geometry: None, budget: Some(1000) };
+    let err = seam_blend(warped, Rect::new(0, 0, 96, 64), &[0, 1], opt, None).err().expect("a 1000 byte budget can't hold a band");
+    assert!(err.to_string().contains("not enough memory to allocate"), "{err}");
+    // Without a budget the same blend succeeds.
+    let warped = vec![flat_surface(a, 0.3), flat_surface(b, 0.6)];
+    let opt = BlendOptions { seamless: true, gains: true, geometry: None, budget: None };
+    assert!(seam_blend(warped, Rect::new(0, 0, 96, 64), &[0, 1], opt, None).is_ok());
+}
+
+#[test]
+fn photomerge_succeeds_with_a_large_enough_memory_budget() {
+    let (sw, sh) = (520, 220);
+    let sc = scene(sw, sh, 5);
+    let mut s = Session::new();
+    for (k, x0) in [0usize, 180].into_iter().enumerate() {
+        s.add_document(doc_from(&format!("img{k}"), &crop(&sc, sw, x0, 10, 260, 200, 1.0), 260, 200, SampleType::U8), None);
+    }
+    let r = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "reposition", "memoryBudget": 1u64 << 30})).unwrap();
+    assert_eq!(r["layers"], 2, "{r}");
+    assert_eq!(s.documents().len(), 3);
+}
+
+#[test]
+fn photomerge_memory_budget_precedence_and_defaults() {
+    // The param wins over the environment and the machine.
+    assert_eq!(budget_from(Some(123), Some("64"), Some(64 << 30)), 123);
+    // Then the environment variable (MiB).
+    assert_eq!(budget_from(None, Some(" 64 "), Some(64 << 30)), 64 << 20);
+    // An unparsable variable falls through to the machine.
+    assert_eq!(budget_from(None, Some("lots"), Some(8 << 30)), 4 << 30);
+    // Half of RAM with no upper ceiling.
+    assert_eq!(budget_from(None, None, Some(64 << 30)), 32 << 30);
+    // At least 1 GiB, and 4 GiB of RAM assumed when unknown.
+    assert_eq!(budget_from(None, None, Some(1 << 30)), 1 << 30);
+    assert_eq!(budget_from(None, None, None), 2 << 30);
+    // Huge values saturate instead of panicking or truncating.
+    assert_eq!(budget_from(Some(u64::MAX), None, None), usize::try_from(u64::MAX).unwrap_or(usize::MAX));
+    let _ = budget_from(None, Some("18446744073709551615"), None);
+    let _ = budget_from(None, None, Some(u64::MAX));
+}
+
+#[test]
+fn photomerge_rejects_oversized_sparse_source_before_flattening() {
+    let mut s = Session::new();
+    s.add_document(Document::new("sparse", Size::new(100_000, 100_000), ColorMode::Rgb, SampleType::U8), None);
+    let err = load_sources(&s, &json!({"useOpenDocuments": true}), "file.automate.photomerge").err().expect("oversized canvas must be refused");
+    assert!(err.to_string().contains("too large to flatten"), "{err}");
+    assert_eq!(s.documents().len(), 1);
+    assert_eq!(s.active().unwrap().doc.name, "sparse");
+}
