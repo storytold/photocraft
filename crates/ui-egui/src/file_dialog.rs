@@ -151,11 +151,9 @@ impl PhotocraftApp {
         self.pick_save_in(suggested, false, then)
     }
 
-    /// [`Self::pick_save`] for the export flows (Export As, Quick Export, Save for Web, ...): a
-    /// bare file name starts in the folder of the last successful export (a preference, kept
-    /// across restarts), as in Photoshop, and beside the document where that folder is unset or
-    /// gone (#10192, [`export_start_dir`]). Once `then` has exported, the chosen file's folder is
-    /// remembered; a failed or cancelled export leaves the remembered folder alone.
+    /// [`Self::pick_save`] for the export flows (Export As, Quick Export, Save for Web, ...): starts in
+    /// the folder [`export_start_dir`] picks (#10192), and once `then` has exported, remembers the
+    /// chosen file's folder in `export.lastFolder`; a failed or cancelled export leaves it alone.
     pub(crate) fn pick_export(&mut self, suggested: &str, then: impl FnOnce(&mut Self, String) -> Result<Value, String> + 'static) -> Result<Value, String> {
         self.pick_save_in(suggested, true, then)
     }
