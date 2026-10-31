@@ -109,39 +109,70 @@ pub(crate) fn unpremul_px(px: &mut [f32], alpha: bool) {
     }
 }
 
-/// In-place running-sum box blur of every row of a `w × h × n` interleaved
-/// buffer with radius `r` (edges clamped). `scratch` must hold `w × n`.
-fn box_rows_n(buf: &mut [f32], w: usize, n: usize, r: usize, scratch: &mut Vec<f32>) {
-    if r == 0 || w == 0 {
-        return;
-    }
+/// One line of `w` interleaved `n`-channel samples, blurred in place by a running sum (edges
+/// clamped). `scratch` holds the untouched line so an in-place sweep can still read behind it.
+fn box_line_n(line: &mut [f32], w: usize, n: usize, r: usize, scratch: &mut Vec<f32>) {
+    debug_assert!(n <= MAXC, "one accumulator per channel");
+    scratch.clear();
+    scratch.extend_from_slice(&line[..w * n]);
+    let src = &scratch[..];
     let norm = 1.0 / (2 * r + 1) as f64;
-    for row in buf.chunks_exact_mut(w * n) {
-        scratch.clear();
-        scratch.extend_from_slice(row);
-        // f64 sums: rounding must not depend on where a window starts (tile independence).
-        let at = |x: isize, c: usize| scratch[(x.clamp(0, w as isize - 1) as usize) * n + c] as f64;
+    // A tap clamps only within `r` (or `r + 1`) of an end. Between those the index is plain, so
+    // the bulk of the line skips the clamp and the bounds check; the arithmetic is unchanged.
+    let first = r.min(w);
+    let last = w.saturating_sub(r + 1).max(first);
+    // f64 sums: rounding must not depend on where a window starts (tile independence).
+    let mut acc = [0.0f64; MAXC];
+    for c in 0..n {
+        let at = |x: isize| src[(x.clamp(0, w as isize - 1) as usize) * n + c] as f64;
+        acc[c] = (-(r as isize)..=r as isize).map(at).sum();
+    }
+    for x in 0..w {
         for c in 0..n {
-            let mut acc: f64 = (-(r as isize)..=r as isize).map(|x| at(x, c)).sum();
-            for x in 0..w {
-                row[x * n + c] = (acc * norm) as f32;
-                acc += at(x as isize + r as isize + 1, c) - at(x as isize - r as isize, c);
+            line[x * n + c] = (acc[c] * norm) as f32;
+        }
+        if x >= first && x < last {
+            let (out, inp) = ((x + r + 1) * n, (x - r) * n);
+            for c in 0..n {
+                acc[c] += src[out + c] as f64 - src[inp + c] as f64;
+            }
+        } else {
+            for c in 0..n {
+                let at = |i: isize| src[(i.clamp(0, w as isize - 1) as usize) * n + c] as f64;
+                acc[c] += at(x as isize + r as isize + 1) - at(x as isize - r as isize);
             }
         }
     }
 }
 
+/// In-place box blur of every row of a `w × h × n` interleaved buffer with radius `r` (edges
+/// clamped).
+fn box_rows_n(buf: &mut [f32], w: usize, n: usize, r: usize) {
+    let band = w * n;
+    if r == 0 || band == 0 {
+        return;
+    }
+    // Trailing samples that do not fill a row are left alone, as `chunks_exact_mut` did.
+    let full = buf.len() - buf.len() % band;
+    let mut scratch = Vec::with_capacity(band);
+    for row in buf[..full].chunks_exact_mut(band) {
+        box_line_n(row, w, n, r, &mut scratch);
+    }
+}
+
 /// Same as [`box_rows_n`] over columns (no transpose; walks with a stride).
-fn box_cols_n(buf: &mut [f32], w: usize, h: usize, n: usize, r: usize, scratch: &mut Vec<f32>) {
-    if r == 0 || h == 0 {
+fn box_cols_n(buf: &mut [f32], w: usize, h: usize, n: usize, r: usize) {
+    if r == 0 || h == 0 || buf.len() < w.saturating_mul(h).saturating_mul(n) {
         return;
     }
     let norm = 1.0 / (2 * r + 1) as f64;
+    let mut scratch = Vec::with_capacity(h * n);
     for x in 0..w {
         scratch.clear();
         for y in 0..h {
             scratch.extend_from_slice(&buf[(y * w + x) * n..(y * w + x + 1) * n]);
         }
+        // f64 sums, as in `box_line_n`: the result must not depend on the walk's direction.
         let at = |y: isize, c: usize| scratch[(y.clamp(0, h as isize - 1) as usize) * n + c] as f64;
         for c in 0..n {
             let mut acc: f64 = (-(r as isize)..=r as isize).map(|y| at(y, c)).sum();
@@ -155,9 +186,8 @@ fn box_cols_n(buf: &mut [f32], w: usize, h: usize, n: usize, r: usize, scratch: 
 
 /// Box blur of an interleaved buffer (radius `r` in both directions).
 pub(crate) fn box_blur_n(buf: &mut [f32], w: usize, h: usize, n: usize, r: usize) {
-    let mut scratch = Vec::with_capacity(w.max(h) * n);
-    box_rows_n(buf, w, n, r, &mut scratch);
-    box_cols_n(buf, w, h, n, r, &mut scratch);
+    box_rows_n(buf, w, n, r);
+    box_cols_n(buf, w, h, n, r);
 }
 
 /// Odd box widths whose 3-fold convolution approximates a Gaussian of `sigma`
@@ -192,12 +222,12 @@ pub(crate) fn gauss_blur_n(buf: &mut [f32], w: usize, h: usize, n: usize, sigma:
     if sigma < 0.3 {
         return;
     }
-    let mut scratch = Vec::with_capacity(w.max(h) * n);
-    for r in gauss_box_radii(sigma) {
-        box_rows_n(buf, w, n, r, &mut scratch);
+    let radii = gauss_box_radii(sigma);
+    for r in radii {
+        box_rows_n(buf, w, n, r);
     }
-    for r in gauss_box_radii(sigma) {
-        box_cols_n(buf, w, h, n, r, &mut scratch);
+    for r in radii {
+        box_cols_n(buf, w, h, n, r);
     }
 }
 
