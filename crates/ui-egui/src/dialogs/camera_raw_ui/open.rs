@@ -472,7 +472,7 @@ pub fn open(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String> 
     if photocraft_engine::color_channels::selected(&app.session).is_some_and(|c| c.len() > 1) {
         return Err("Camera Raw requires the composite or one colour channel".into());
     }
-    photocraft_engine::commands::find("filter.cameraRaw").map(|c| (c.enabled)(&app.session)).unwrap_or(Err("unknown command".into()))?;
+    crate::distort_ui::dialog_can_open(app, photocraft_engine::lens_cmds::RAW)?;
     let (layer, surf, _) = crate::distort_ui::active_pixels(app)?;
     open_pixels(app, ctx, layer, surf, CameraRaw::default(), Coverage::Selection, Target::NewFilter)
 }
