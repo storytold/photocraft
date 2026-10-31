@@ -129,6 +129,21 @@ fn color_to_alpha_sits_in_filter_other_after_offset() {
     assert!(!others.iter().any(|p| p.as_str() == "Other"), "no duplicate Other submenu: {others:?}");
 }
 
+/// Pixel Art Upscale has no Photoshop counterpart: it sits in Image right after Image Size.
+#[test]
+fn pixel_art_upscale_sits_in_image_after_image_size() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+    let items = menu_items(&app);
+    let at = |id: &str| items.iter().position(|i| i.id == id).unwrap_or_else(|| panic!("{id} missing"));
+    let (size, up) = (at("image.imageSize"), at("image.pixelArtUpscale"));
+    assert_eq!(up, size + 1);
+    assert_eq!(items[up].path, items[size].path);
+    assert_eq!(items[up].label, "Pixel Art Upscale…");
+    assert!(items[up].enabled);
+    assert!(crate::filter_dialog::has_dialog("image.pixelArtUpscale"));
+}
+
 #[test]
 fn menu_bar_labels_have_horizontal_padding_and_open_menus() {
     use egui_kittest::{Harness, kittest::Queryable};

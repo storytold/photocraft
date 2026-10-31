@@ -56,6 +56,7 @@ pub mod panorama;
 mod par;
 pub mod perspective;
 mod photo_util;
+pub mod pixel_art;
 mod pixelate;
 pub mod poisson;
 pub mod puppet;

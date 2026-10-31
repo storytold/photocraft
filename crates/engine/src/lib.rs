@@ -125,6 +125,7 @@ pub use cmd::pattern_fill_cmds;
 pub use cmd::perspective_crop_cmds;
 pub use cmd::photo_cmds;
 pub use cmd::pick_cmds;
+pub use cmd::pixel_art_cmds;
 pub use cmd::plugin_cmds;
 pub use cmd::preset_import_cmds;
 pub use cmd::print_cmds;
