@@ -3064,6 +3064,9 @@ curves	Smooth	平滑
 	There is no color table to save.	沒有可儲存的色表。
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	已將 {n} 種顏色儲存至 {file}
 	GPU adapter	GPU 介面卡
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	AI/PDF/EPS 內容將以 SVG 格式編輯。儲存會取代嵌入的來源檔案；格式特有的功能可能會改變。
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	匯入樣式…
 	Export Selected Styles…	匯出所選樣式…
 	Export Styles…	匯出樣式…
@@ -3124,6 +3127,7 @@ curves	Smooth	平滑
 	Font size presets	字體大小預設
 	Leading presets	行距預設
 	Tracking presets	字距調整預設
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	數值輸入無效。需要介於 {min}% 和 {max}% 之間的整數。已插入先前的值。
 	Clear Selection	清除選取範圍
 	Color Aware	顏色感知
 	Decontaminate Colors	淨化顏色
@@ -3142,4 +3146,12 @@ curves	Smooth	平滑
 	Select and Mask was closed: its document is no longer the active one	已關閉「選取並遮住」：其文件已不是使用中的文件
 	Select and Mask was closed: another layer was selected	已關閉「選取並遮住」：已選取另一個圖層
 	Drag to move the selected path	拖曳以移動選取的路徑
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	檢色器
+	Recently Used Colors	最近使用的顏色
+	Stop Color	色標顏色
+	Shapes can't use patterns yet	形狀尚不支援圖樣
+	Solid Color	純色
+	Tint Color	色調顏色
 	Edit Brush…	編輯筆刷…
