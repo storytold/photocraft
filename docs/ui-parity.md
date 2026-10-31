@@ -159,7 +159,7 @@ Triangle and Curvature Pen (minus legacy Rounded Rectangle and Targeted Adjustme
 
 | Behaviour | Status | Evidence |
 |---|---|---|
-| Snap to guides, grid, layers, document bounds and centre, selection, slices; Ctrl disables other gestures, while Distort corners snap to guides and intersections | done | `engine/src/snap.rs`, `snap_ui.rs` (actual-corner grab-offset regressions, #3632) |
+| Snap to guides, grid, layers, document bounds and centre, selection, slices; Ctrl held to start a layer move keeps snapping, a fresh Ctrl press during a drag disables it, and Distort corners snap to guides and intersections | done | `engine/src/snap.rs`, `snap_ui.rs` (actual-corner grab-offset regressions, #3632) |
 | Snap vector tools and transforms to the pixel grid | done | `snap_ui.rs:196` |
 | Smart guides (magenta alignment lines) | done | |
 | Smart guide distance and spacing labels | missing | |
@@ -255,6 +255,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | minor | Ctrl-initiated layer moves keep snapping and Smart Guides on Windows, matching Command moves on macOS; release and re-press Ctrl during a drag to temporarily disable snapping. No percentage changed |
 | 2026-10-27 | minor | Every preference takes effect: 12 of 181 do nothing, the scorecard's count with integration batch 9 (#9775) on main; new layers go above a group whose lock would refuse them (#4329) |
 | 2026-10-25 | minor | Path Operations fixes (#7648 review): the first component keeps combining, the Pen leaves a component selection it doesn't show alone, a live shape dragged with Path Selection stays live, and a refused Pen draft becomes the Work Path on Esc or a tool switch instead of being retried every frame; no percentage changed |
 | 2026-10-24 | minor | Path Selection selects path components and has the Path Operations menu; the menu and `+` / `-` change the selected components' operation (`path.setOperation`); the Pen carries on an open shape layer or vector mask path from its endpoint (#1397 feedback); row stays partial until the Shape tools have the menu; no percentage changed |
