@@ -138,31 +138,13 @@ fn float_frame(t: &Tokens) -> egui::Frame {
         .inner_margin(egui::Margin::same(8))
 }
 
-/// A row in reading order: `ui.horizontal` in a left-to-right UI, its mirror in a right-to-left
-/// one. The row keeps `ui.horizontal`'s height and alignment.
-fn row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
-    let size = vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
-    ui.allocate_ui_with_layout(size, crate::direction::row(), add)
-}
-
-/// A cluster at the reading end of a row: `Layout::right_to_left` in a left-to-right UI, its
-/// mirror in a right-to-left one.
-fn trailing_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
-    let size = vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
-    ui.allocate_ui_with_layout(size, crate::direction::trailing(), add)
-}
-
 /// Draws the open type panels and the spelling dialog.
 pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let canvas = app.last_canvas_rect;
     if app.ui.type_panels.styles {
         let mut close = false;
-        let x = if crate::text::direction::is_rtl() {
-            (canvas.left() + 24.0).min(canvas.right() - 8.0 - 290.0).max(canvas.left() + 8.0)
-        } else {
-            (canvas.right() - 314.0).max(canvas.left() + 8.0)
-        };
+        let x = crate::text::direction::float_window_x(canvas, 290.0, 24.0, 0.0);
         egui::Window::new(tl!("Type Styles"))
             .id(egui::Id::unique("type-styles-window"))
             .title_bar(false)
@@ -172,7 +154,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             .show(ctx, |ui| {
                 crate::text::direction::window_body(ui, |ui| {
                     ui.set_width(290.0);
-                    row(ui, |ui| {
+                    crate::direction::full_row(ui, |ui| {
                         let mut tab = app.ui.type_panels.styles_tab;
                         for (i, name) in [tl!("Character Styles"), tl!("Paragraph Styles")].iter().enumerate() {
                             if crate::widgets::pill_tab(ui, name, tab == i).clicked() {
@@ -183,7 +165,7 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                             app.ui.type_panels.styles_tab = tab;
                             app.ui.type_panels.options = None;
                         }
-                        trailing_row(ui, |ui| {
+                        crate::direction::full_trailing(ui, |ui| {
                             if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                                 close = true;
                             }
@@ -200,12 +182,8 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     if app.ui.type_panels.glyphs {
         let mut close = false;
-        let x = if crate::text::direction::is_rtl() {
-            // Mirror of the LTR cascade: 314 + 372 - 340 keeps the 32 px gap to Type Styles.
-            (canvas.left() + 346.0).min(canvas.right() - 8.0 - 340.0).max(canvas.left() + 8.0)
-        } else {
-            (canvas.right() - 314.0 - 372.0).max(canvas.left() + 8.0)
-        };
+        // The LTR cascade keeps a 32 px gap to Type Styles: 314 + 372 - 340.
+        let x = crate::text::direction::float_window_x(canvas, 340.0, 346.0, 0.0);
         egui::Window::new(tl!("Glyphs"))
             .id(egui::Id::unique("glyphs-window"))
             .title_bar(false)
@@ -215,9 +193,9 @@ pub fn windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             .show(ctx, |ui| {
                 crate::text::direction::window_body(ui, |ui| {
                     ui.set_width(340.0);
-                    row(ui, |ui| {
+                    crate::direction::full_row(ui, |ui| {
                         ui.label(RichText::new(tl!("Glyphs")).color(t.text).size(12.0).strong());
-                        trailing_row(ui, |ui| {
+                        crate::direction::full_trailing(ui, |ui| {
                             if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                                 close = true;
                             }
@@ -315,7 +293,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool)
     crate::widgets::hairline(ui);
     ui.add_space(2.0);
     let sel = selected.filter(|i| *i != 0 || paragraph);
-    row(ui, |ui| {
+    crate::direction::full_row(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         if crate::icons::button(ui, "ban", 22.0, false, tl!("Clear Override")).clicked() && has_target && over {
             action = Some((format!("{prefix}.clearOverride"), tgt.clone()));
@@ -326,7 +304,7 @@ pub fn styles_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool)
         {
             action = Some((format!("{prefix}.redefine"), tgt.clone()));
         }
-        trailing_row(ui, |ui| {
+        crate::direction::full_trailing(ui, |ui| {
             if crate::icons::button(ui, "trash", 22.0, false, tl!("Delete style")).clicked()
                 && let Some(id) = sel.filter(|i| *i != 0)
             {
@@ -383,9 +361,9 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     let mut clear: Vec<&str> = Vec::new();
     let mut open_color = false;
     ui.add_space(4.0);
-    row(ui, |ui| {
+    crate::direction::full_row(ui, |ui| {
         ui.label(RichText::new(tl!("Style Options")).color(t.text).size(11.5).strong());
-        trailing_row(ui, |ui| {
+        crate::direction::full_trailing(ui, |ui| {
             if crate::icons::button(ui, "x", 18.0, false, tl!("Close Style Options")).clicked() {
                 app.ui.type_panels.options = None;
             }
@@ -394,7 +372,7 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     // Name.
     let key = egui::Id::unique(("style-name", paragraph, id));
     let mut name: String = ui.data(|d| d.get_temp(key)).unwrap_or_else(|| s["name"].as_str().unwrap_or("").to_string());
-    row(ui, |ui| {
+    crate::direction::full_row(ui, |ui| {
         let name_label = ui.label(RichText::new(tl!("Name")).color(t.text_dim).size(11.5));
         let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
         let r = ui.add_enabled(id != 0, crate::widgets::rtl_singleline(&mut name, &mut layouter).desired_width(170.0)).labelled_by(name_label.id);
@@ -418,8 +396,7 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
     // row's content is a mirrored hand row (see the loops below).
     // The fork's `Grid` cannot start under a right-to-left cursor, so it runs in an LTR scope;
     // in RTL each row is one cell holding a mirrored hand row (the loops below).
-    crate::direction::ltr_vertical(ui, |ui| {
-        egui::Grid::new(("style-opts", paragraph, id)).num_columns(if rtl { 1 } else { 3 }).spacing([6.0, 3.0]).show(ui, |ui| {
+    crate::direction::ltr_grid(ui, ("style-opts", paragraph, id), 3, vec2(6.0, 3.0), |ui| {
             // (label, model key, panel key, kind)
             let rows: &[(&str, &str, &str, &str)] = &[
                 (tl!("Font"), "font_family", "font", "font"),
@@ -475,13 +452,13 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
                     });
                 };
                 if rtl {
-                    row(ui, |ui| {
-                        let on_box = ui.checkbox(&mut on, "");
-                        let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
-                        on_box.labelled_by(row_label.id);
-                        let v = if on { char_attrs[key].clone() } else { resolved_c[key].clone() };
-                        editor_cell(ui, on, &v);
-                    });
+                    // The row's triple in reading order: the checkbox leads from the reading
+                    // start (the grid's rightmost cell), then the label, then the editor.
+                    let v = if on { char_attrs[key].clone() } else { resolved_c[key].clone() };
+                    editor_cell(ui, on, &v);
+                    let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
+                    let on_box = ui.checkbox(&mut on, "");
+                    on_box.labelled_by(row_label.id);
                 } else {
                     let on_box = ui.checkbox(&mut on, "");
                     let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
@@ -552,13 +529,11 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
                         });
                     };
                     if rtl {
-                        row(ui, |ui| {
-                            let on_box = ui.checkbox(&mut on, "");
-                            let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
-                            on_box.labelled_by(row_label.id);
-                            let v = if on { para_attrs[key].clone() } else { resolved_p[key].clone() };
-                            editor_cell(ui, on, &v);
-                        });
+                        let v = if on { para_attrs[key].clone() } else { resolved_p[key].clone() };
+                        editor_cell(ui, on, &v);
+                        let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
+                        let on_box = ui.checkbox(&mut on, "");
+                        on_box.labelled_by(row_label.id);
                     } else {
                         let on_box = ui.checkbox(&mut on, "");
                         let row_label = ui.label(RichText::new(tl!(&label)).color(if on { t.text } else { t.text_faint }).size(11.5));
@@ -576,7 +551,6 @@ fn options_editor(app: &mut PhotocraftApp, ui: &mut egui::Ui, paragraph: bool, s
                     }
                 }
             }
-        });
     });
     library.finish(app);
     if let Some(attrs) = set {
@@ -705,7 +679,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let (family, style) = glyph_font(app);
     // Font family + style.
-    row(ui, |ui| {
+    crate::direction::full_row(ui, |ui| {
         let mut f = family.clone();
         let mut library = crate::type_tool::FontLibrary::of(app);
         let picked = family_picker(ui, "glyph-family", &mut f, app.session.prefs().type_.font_preview, &mut library);
@@ -726,7 +700,7 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     // Show: category.
     let mut cat = if app.ui.type_panels.glyph_category.is_empty() { tl!("Entire Font").to_string() } else { app.ui.type_panels.glyph_category.clone() };
-    row(ui, |ui| {
+    crate::direction::full_row(ui, |ui| {
         ui.label(RichText::new(tl!("Show:")).color(t.text_dim).size(11.5));
         let opts: Vec<(String, &str)> = photocraft_text::glyphs::CATEGORIES.iter().map(|c| (c.to_string(), *c)).collect();
         if crate::widgets::dropdown(ui, "glyph-category", tl!("Category"), &mut cat, &opts, 160.0) {
@@ -798,14 +772,14 @@ pub fn glyphs_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     // Footer: family name, size slider.
     ui.add_space(4.0);
-    row(ui, |ui| {
+    crate::direction::full_row(ui, |ui| {
         let info = selected
             .as_deref()
             .and_then(|s| s.chars().next())
             .map(|c| format!("U+{:04X}  ·  {} glyphs", c as u32, chars.len()))
             .unwrap_or_else(|| format!("{} glyphs", chars.len()));
         ui.label(RichText::new(info).color(t.text_faint).size(10.5));
-        trailing_row(ui, |ui| {
+        crate::direction::full_trailing(ui, |ui| {
             let mut s = size;
             ui.add_sized([90.0, 16.0], egui::Slider::new(&mut s, 24.0..=64.0).show_value(false)).accessible_name(tl!("Size"));
             if (s - size).abs() > 0.1 {
@@ -864,11 +838,11 @@ fn spelling_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             crate::text::direction::window_body(ui, |ui| {
                 ui.set_width(380.0);
-                row(ui, |ui| {
+                crate::direction::full_row(ui, |ui| {
                     ui.label(RichText::new(tl!("Check Spelling")).color(t.text).size(13.0).strong());
                     // The close box (#5496) is Done, as in Photoshop: every change is already made.
                     if crate::dialogs::CLOSE_BOX {
-                        trailing_row(ui, |ui| {
+                        crate::direction::full_trailing(ui, |ui| {
                             if crate::icons::button(ui, "x", 20.0, false, tl!("Close")).clicked() {
                                 act = Some("done");
                             }
