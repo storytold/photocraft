@@ -82,7 +82,7 @@ pub(crate) fn operator_fingerprints(doc: &Document, ops: &[LayerOperator]) -> Ve
             let mut h = std::collections::hash_map::DefaultHasher::new();
             let mut any = false;
             for o in ops.iter().filter(|o| holds(root, o.layer, 0)) {
-                std::hash::Hash::hash(&(o.layer.0, o.program.key()), &mut h);
+                std::hash::Hash::hash(&(o.layer.0, o.target, o.program.key()), &mut h);
                 any = true;
             }
             if any { std::hash::Hasher::finish(&h) | 1 } else { 0 }

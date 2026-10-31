@@ -338,7 +338,7 @@ fn main() {
                 photocraft_algo::separable::Separable::Boxes(b) => photocraft_gpu::SeparableBlur::Boxes(b),
             };
             let program = photocraft_gpu::GaussianBlur::new(blur, extent, area, None, false, doc.depth).expect("a runnable blur");
-            photocraft_gpu::LayerOperator { layer: target, program: std::sync::Arc::new(program) }
+            photocraft_gpu::LayerOperator { layer: target, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
         };
         for radius in [40.0f32, 250.0] {
             // The session's first frame uploads the windows the blur reads.
@@ -377,7 +377,7 @@ fn main() {
                     photocraft_algo::separable::Separable::Boxes(b) => photocraft_gpu::SeparableBlur::Boxes(b),
                 };
                 let program = photocraft_gpu::GaussianBlur::new(blur, extent, area, None, false, proxy.depth).expect("a runnable blur");
-                photocraft_gpu::LayerOperator { layer: ptarget, program: std::sync::Arc::new(program) }
+                photocraft_gpu::LayerOperator { layer: ptarget, target: photocraft_gpu::OperatorTarget::Content, program: std::sync::Arc::new(program) }
             };
             for radius in [40.0f32, 250.0] {
                 if let Some(g) = &mut b.gpu {

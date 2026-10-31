@@ -350,7 +350,7 @@ fn gated_blur_preview(app: &mut PhotocraftApp, ctx: &egui::Context) -> (std::syn
             )
             .map(|d| {
                 let buffer = photocraft_compose::flatten(&d);
-                (std::sync::Arc::new(d), buffer)
+                (std::sync::Arc::new(d), Some(buffer))
             });
             crate::dialogs::filter_preview_worker::Computed { result, ms: 0.0 }
         })

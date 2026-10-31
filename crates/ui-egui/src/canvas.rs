@@ -328,6 +328,14 @@ fn paint_selection_outline(app: &mut PhotocraftApp, input: SelectionPaintInput<'
     ants
 }
 
+/// The main canvas's GPU view of `doc` (not an Arrange tile's or a floating window's), which the
+/// filter dialog's preview window draws its zoomed-out GPU preview from.
+fn remember_canvas_view(app: &mut PhotocraftApp, primary: bool, doc: photocraft_doc::DocId, params: crate::gpu_canvas::ViewParams) {
+    if primary {
+        app.canvas_gpu.insert(doc, params);
+    }
+}
+
 /// Paints the document, and returns whether the pixels past the canvas show, the Layer Edges slot,
 /// the canvas edge on screen, and the selection's ants still to be painted ([`paint_selection_outline`]).
 fn paint_canvas(
@@ -391,6 +399,7 @@ fn paint_canvas(
         && let Some((k, key, preview_size)) = ensure_adjust_proxy(app, idx, render_zoom)
             .or_else(|| crate::filter_gpu_preview::gpu_proxy(app, idx))
             .or_else(|| ensure_filter_preview(app, idx, ctx))
+            .or_else(|| crate::filter_gpu_preview::held_proxy(app, idx))
             .or_else(|| ensure_proxy_preview(app, idx, render_zoom))
     {
         on_gpu = true;
@@ -436,8 +445,9 @@ fn paint_canvas(
             hdr: hdr_preview(app, doc),
             offset: [0.0, 0.0],
         };
-        // The filter dialog's preview window draws a zoomed-out GPU preview from here too.
-        app.canvas_gpu.insert(doc.id, params);
+        // The filter dialog's preview window draws a zoomed-out GPU preview from here too
+        // (the main canvas's: an Arrange tile or a floating window may be on another display).
+        remember_canvas_view(app, primary, doc.id, params);
         paint_gpu_view(painter, rect, params, &pattern);
     } else if gpu_ok && viewport_pages::show(app, ctx, idx, &xf, view.zoom) {
         // Too large for the document's texture set: the pages in view, rendered in the background.
@@ -483,7 +493,7 @@ fn paint_canvas(
             hdr: hdr_preview(app, doc),
             offset: [0.0, 0.0],
         };
-        app.canvas_gpu.insert(doc.id, params);
+        remember_canvas_view(app, primary, doc.id, params);
         if app.navigator_plain.contains(&doc.id) {
             app.navigator_gpu.insert(doc.id, params);
         } else {

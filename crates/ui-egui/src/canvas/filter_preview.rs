@@ -121,6 +121,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             let documents: Vec<_> = app.session.documents().iter().map(|d| d.doc.clone()).collect();
             let color = app.session.color.settings.clone();
             let task = request.clone();
+            let whole = flattens_whole(app, &request);
             if let Err(error) = app.filter_preview_worker.start(request.clone(), ctx.clone(), move |cancel| {
                 let t0 = crate::gpu_canvas::now_ms();
                 let result = crate::filter_dialog::preview_document_for_target(
@@ -135,7 +136,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
                     &color,
                 )
                 .map(|doc| {
-                    let buffer = photocraft_compose::flatten(&doc);
+                    let buffer = whole.then(|| photocraft_compose::flatten(&doc));
                     (std::sync::Arc::new(doc), buffer)
                 });
                 crate::dialogs::filter_preview_worker::Computed { result, ms: crate::gpu_canvas::now_ms() - t0 }
@@ -182,7 +183,7 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
             &app.session.color.settings,
         )
         .map(|doc| {
-            let buffer = photocraft_compose::flatten(&doc);
+            let buffer = flattens_whole(app, &request).then(|| photocraft_compose::flatten(&doc));
             (std::sync::Arc::new(doc), buffer)
         });
         publish_filter_preview(app, idx, request, computed, crate::gpu_canvas::now_ms() - t0);
@@ -208,11 +209,11 @@ fn publish_filter_preview(
     app: &mut PhotocraftApp,
     idx: usize,
     request: crate::filter_dialog::FilterPreviewKey,
-    computed: Option<(std::sync::Arc<photocraft_doc::Document>, photocraft_compose::Buffer)>,
+    computed: Option<(std::sync::Arc<photocraft_doc::Document>, Option<photocraft_compose::Buffer>)>,
     ms: f64,
 ) {
     let mut uploaded = photocraft_geom::Rect::EMPTY;
-    let computed = computed.and_then(|(result, buffer)| {
+    let computed = computed.and_then(|(result, mut buffer)| {
         let t0 = crate::gpu_canvas::now_ms();
         let doc = app.session.documents().get(idx)?.doc.clone();
         // A GPU texture is an optimisation: headless/CPU tests must still see the preview.
@@ -225,15 +226,24 @@ fn publish_filter_preview(
                 // Shown through the preview's own colour management, as the result will be: Assign
                 // and Convert to Profile change the profile (and Convert the mode), not the pixels.
                 let (display, _) = canvas_display(app, &result, None);
-                gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), &buffer), doc.depth);
+                let whole = buffer.get_or_insert_with(|| photocraft_compose::flatten(&result));
+                gpu.upload_buffer_full(key, &texture_buffer(display.as_deref(), whole), doc.depth);
                 uploaded = result.bounds();
             }
         }
         app.perf.record("filter-preview", result.size.area(), ms, crate::gpu_canvas::now_ms() - t0);
-        Some((result, std::sync::Arc::new(buffer)))
+        Some((result, buffer.map(std::sync::Arc::new)))
     });
     let (result, flat) = computed.unzip();
-    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request, result, flat, uploaded, committing: false });
+    app.filter_preview = Some(crate::filter_dialog::FilterPreview { key: request, result, flat: flat.flatten(), uploaded, committing: false });
+}
+
+/// Whether a filter preview's worker composites the whole result for the canvas and the dialog's
+/// window to crop from. Select and Mask at 100 % on the GPU canvas doesn't: every view change is
+/// a new result, and the canvas renders just the part it shows (`upload_filter_preview_view`),
+/// a few milliseconds where the whole composite of a large image took about a hundred.
+pub(crate) fn flattens_whole(app: &PhotocraftApp, request: &crate::filter_dialog::FilterPreviewKey) -> bool {
+    !(app.gpu.is_some() && request.k == 1 && request.command == crate::select_mask_view::COMMAND)
 }
 
 /// How far past the view a 100 % filter preview is uploaded, so a small pan needs nothing new.

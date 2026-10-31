@@ -61,7 +61,7 @@ use photocraft_raster::{Surface, Tile};
 
 pub use camera_raw::{CAMERA_RAW_SHADER, CameraRawDevelop};
 pub use health::{DeviceHealth, Fault};
-pub use operator::{GaussianBlur, LayerOperator, OperatorInput, OperatorProgram, SeparableBlur};
+pub use operator::{GaussianBlur, LayerOperator, OperatorInput, OperatorProgram, OperatorTarget, SeparableBlur};
 pub use plan::{Kernel, Plan, Role, Unsupported, plan};
 pub use timing::{GpuTimer, GpuTiming};
 
@@ -143,6 +143,9 @@ pub struct Compositor {
     /// The blur passes' two scratch textures, reused from cell to cell and step to step (made
     /// anew each time, they cost their allocation and clearing on every slider step).
     op_scratch: Option<([u32; 2], [wgpu::Texture; 2])>,
+    /// Bytes of a scratch set being made (the textures made so far): counted against the
+    /// resident budget with `op_scratch` until the set is complete.
+    scratch_making: u64,
     /// The part of the canvas the current refresh draws (tile aligned): operators compute only
     /// their output there.
     frame_region: Rect,

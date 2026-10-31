@@ -4,7 +4,9 @@ use super::convert::{convert_tile, convert_tiles, keep_overlap, put_tiles, words
 use super::kit::{Bound, FrameRes, texture_group, uniform_group};
 use super::paging::{OVER_BUDGET, cell_rect};
 use super::textures::{CachedPattern, Cell, ChunkOut, ResKey, Resident, ResidentRef, Stats, Tex, TexKind};
-use super::{Arc, Compositor, DocId, HashMap, I, Kernel, LayerOperator, Pattern, Plan, Rect, Role, Surface, TILE_SIZE, Tile, TileCoord, operator, plan};
+use super::{
+    Arc, Compositor, DocId, HashMap, I, Kernel, LayerOperator, OperatorTarget, Pattern, Plan, Rect, Role, Surface, TILE_SIZE, Tile, TileCoord, operator, plan,
+};
 
 impl Compositor {
     /// Bring the pages of `cell` that `plan` samples up to date and resolve its effect maps.
@@ -35,7 +37,8 @@ impl Compositor {
                 continue;
             }
             let (ta, ma) = fr.areas.get(i).copied().unwrap_or((Rect::EMPTY, Rect::EMPTY));
-            let op = p.tex.as_ref().filter(|t| t.role == Role::Content).and_then(|t| ops.iter().find(|o| o.layer == t.layer));
+            let op =
+                p.tex.as_ref().filter(|t| t.role == Role::Content).and_then(|t| ops.iter().find(|o| o.layer == t.layer && o.target == OperatorTarget::Content));
             let tex = p
                 .tex
                 .as_ref()
@@ -50,7 +53,10 @@ impl Compositor {
             let mask = p
                 .mask
                 .as_ref()
-                .and_then(|m| self.sync(device, queue, encoder, doc, (m.layer, Role::Mask, cell), m.surface.get(), ma.intersect(&cr), stats))
+                .and_then(|m| match ops.iter().find(|o| o.layer == m.layer && o.target == OperatorTarget::Mask) {
+                    Some(o) => self.sync_operator(device, queue, encoder, doc, o, m.surface.get(), cell, ma.intersect(&cr), stats),
+                    None => self.sync(device, queue, encoder, doc, (m.layer, Role::Mask, cell), m.surface.get(), ma.intersect(&cr), stats),
+                })
                 .map(|(k, r)| {
                     keys.push(k);
                     (keys.len() - 1, r)
@@ -451,8 +457,26 @@ impl Compositor {
             let size = [sub.width(), sub.height()];
             if self.op_scratch.as_ref().is_none_or(|(s, _)| s[0] < size[0] || s[1] < size[1]) {
                 let grown = self.op_scratch.as_ref().map_or(size, |(s, _)| [s[0].max(size[0]), s[1].max(size[1])]);
-                let make = |label| operator::float_texture(device, label, grown[0], grown[1]);
-                self.op_scratch = Some((grown, [make("pc_operator_a"), make("pc_operator_b")]));
+                // Within the budget and its fallback, as layer pages are: the old pair goes first,
+                // room is made for the whole new pair, and each texture counts once made.
+                self.op_scratch = None;
+                let each = bytes(Rect::from_xywh(0, 0, grown[0], grown[1]));
+                let (n, dropped) = self.evict_residents(self.resident_budget, each.saturating_mul(2), Some(ok));
+                stats.evicted += n;
+                self.admit_freed = self.admit_freed.saturating_add(dropped);
+                let mut made = Vec::with_capacity(2);
+                for label in ["pc_operator_a", "pc_operator_b"] {
+                    let texture = self.create_budgeted(device, &operator::float_desc(label, grown[0], grown[1]), each, Some(ok), stats);
+                    let Some(texture) = texture else {
+                        self.scratch_making = 0;
+                        return None;
+                    };
+                    self.scratch_making = self.scratch_making.saturating_add(each);
+                    made.push(texture);
+                }
+                self.scratch_making = 0;
+                let [a, b]: [wgpu::Texture; 2] = made.try_into().ok()?;
+                self.op_scratch = Some((grown, [a, b]));
             }
             let Some(source) = self.residents.get(&wk).map(|r| r.texture.clone()) else {
                 // Evicted making room for the output: the refresh goes to the CPU.

@@ -100,10 +100,23 @@ pub trait OperatorProgram: Send + Sync + std::fmt::Debug {
     fn program(&self) -> Program<'_>;
 }
 
+/// What of its layer an operator's output replaces.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum OperatorTarget {
+    /// The layer's pixels.
+    #[default]
+    Content,
+    /// The layer's pixel mask (a filter run with the mask targeted). The program reads the mask
+    /// as grey and the compositor samples the output's first channel in place of the mask; a
+    /// layer whose mask is combined with vector masks is refused.
+    Mask,
+}
+
 /// An operator on one layer of a document.
 #[derive(Clone, Debug)]
 pub struct LayerOperator {
     pub layer: LayerId,
+    pub target: OperatorTarget,
     pub program: Arc<dyn OperatorProgram>,
 }
 
@@ -349,7 +362,12 @@ impl OpKit {
 
 /// A storage-capable float texture for an operator's window or output.
 pub(crate) fn float_texture(device: &wgpu::Device, label: &str, w: u32, h: u32) -> wgpu::Texture {
-    device.create_texture(&wgpu::TextureDescriptor {
+    device.create_texture(&float_desc(label, w, h))
+}
+
+/// The descriptor of a [`float_texture`].
+pub(crate) fn float_desc(label: &str, w: u32, h: u32) -> wgpu::TextureDescriptor<'_> {
+    wgpu::TextureDescriptor {
         label: Some(label),
         size: wgpu::Extent3d { width: w.max(1), height: h.max(1), depth_or_array_layers: 1 },
         mip_level_count: 1,
@@ -358,7 +376,7 @@ pub(crate) fn float_texture(device: &wgpu::Device, label: &str, w: u32, h: u32) 
         format: wgpu::TextureFormat::Rgba32Float,
         usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_DST,
         view_formats: &[],
-    })
+    }
 }
 
 /// Upload straight RGBA `texels` (`w` wide) to `texture` at (0, 0).

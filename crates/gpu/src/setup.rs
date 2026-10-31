@@ -261,6 +261,7 @@ impl Compositor {
             op_pins: HashMap::new(),
             frame_ops: Vec::new(),
             op_scratch: None,
+            scratch_making: 0,
             frame_region: Rect::EMPTY,
         }
         .with_texture_limit(device_max)
@@ -423,6 +424,11 @@ impl Compositor {
         self.residents.values().map(Resident::bytes).sum()
     }
 
+    /// GPU memory held by the layer operators' scratch textures (bytes).
+    pub fn operator_scratch_bytes(&self) -> u64 {
+        self.op_scratch.as_ref().map_or(0, |(s, t)| u64::from(s[0]) * u64::from(s[1]) * 16 * t.len() as u64)
+    }
+
     /// GPU memory held by cached pattern textures (bytes).
     pub fn pattern_cache_bytes(&self) -> u64 {
         self.patterns.values().map(|p| p.bytes).sum()
@@ -511,15 +517,19 @@ impl Compositor {
     /// layer unfiltered) when the device can't run them or their pages don't fit.
     pub fn set_operators(&mut self, doc: DocId, operators: Vec<LayerOperator>) {
         if operators.is_empty() {
-            self.operators.remove(&doc);
+            self.clear_operators(doc);
         } else {
             self.operators.insert(doc, operators);
         }
     }
 
-    /// [`Self::set_operators`] with none: the layers show their own pixels again.
+    /// [`Self::set_operators`] with none: the layers show their own pixels again. With no
+    /// operator left anywhere, their scratch textures go too.
     pub fn clear_operators(&mut self, doc: DocId) {
         self.operators.remove(&doc);
+        if self.operators.is_empty() {
+            self.op_scratch = None;
+        }
     }
 
     /// Whether `device` can run layer operators (compute passes into float storage textures).
@@ -543,6 +553,10 @@ impl Compositor {
     /// Drop GPU textures of a closed document.
     pub fn forget_doc(&mut self, doc: DocId) {
         self.operators.remove(&doc);
+        // The last document with operators: their scratch textures go too.
+        if self.operators.is_empty() {
+            self.op_scratch = None;
+        }
         self.residents.retain(|_, r| r.doc != doc);
         let residents = &self.residents;
         self.op_made.retain(|k, _| residents.contains_key(k));
