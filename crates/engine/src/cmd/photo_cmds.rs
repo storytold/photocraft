@@ -285,29 +285,59 @@ fn budget_from(param: Option<u64>, env_mb: Option<&str>, ram: Option<u64>) -> us
     usize::try_from((ram / 2).max(1 << 30)).unwrap_or(usize::MAX)
 }
 
-/// Estimated peak working memory of a Photomerge and the part of it that is one image's band
-/// build ([`panorama::band_bytes_bound`]). `placed_sizes` are the warped sizes of the placed
-/// images, `cw` × `ch` the canvas, `cc` its colour channels and `bpp` its bytes per pixel.
-fn estimate_photomerge_memory(placed_sizes: &[(usize, usize)], cw: usize, ch: usize, cc: usize, bpp: usize, blend: bool, fill: bool) -> (usize, usize) {
+/// Estimated peak working memory of a Photomerge and the part of it that stays allocated while
+/// bands are built (the ROIs, weights and accumulators; what is left of the budget goes to the
+/// bands, see [`panorama::band_bytes_bound`]). `source_sizes` and `placed_sizes` are the source
+/// and warped sizes of the placed images, `cw` × `ch` the canvas, `cc` its colour channels and
+/// `bpp` its bytes per pixel.
+///
+/// The peak is the largest of the phases, since each frees what the next no longer needs: warping
+/// (sources and warped images), ROI conversion (ROIs, weights, warped images), the bands (ROIs,
+/// accumulators and the largest band), the collapse (ROIs, accumulators and the running result),
+/// the output (ROIs, blended colour, composite and output layers) and the fill (layers, composite
+/// and the fill's own planes).
+#[allow(clippy::too_many_arguments)]
+fn estimate_photomerge_memory(
+    source_sizes: &[(usize, usize)],
+    placed_sizes: &[(usize, usize)],
+    cw: usize,
+    ch: usize,
+    cc: usize,
+    bpp: usize,
+    blend: bool,
+    fill: bool,
+) -> (usize, usize) {
+    let px_sum = |sizes: &[(usize, usize)]| sizes.iter().map(|&(w, h)| w.saturating_mul(h)).fold(0usize, usize::saturating_add);
+    let sources = px_sum(source_sizes).saturating_mul(bpp);
+    let roi_px = px_sum(placed_sizes);
+    let warped = roi_px.saturating_mul(bpp);
     if !blend {
-        let layers_bytes = placed_sizes.iter().map(|&(w, h)| w.saturating_mul(h).saturating_mul(bpp)).sum::<usize>();
-        return (layers_bytes, 0);
+        return (sources.saturating_add(warped).max(warped), 0);
     }
-    let rois_weights = placed_sizes.iter().map(|&(w, h)| w.saturating_mul(h).saturating_mul((cc + 2) * 4)).sum::<usize>();
+    // ROI colours, alpha and the seam weights (f32 each).
+    let rois_weights = roi_px.saturating_mul((cc + 2) * 4);
     let canvas_px = cw.saturating_mul(ch);
+    // The accumulator and weight-sum pyramids (4/3 of a plane each).
     let accumulators = canvas_px.saturating_mul((cc + 1) * 4 * 4 / 3);
     let blend_out = canvas_px.saturating_mul((cc + 1) * 4);
-    let output_layers = placed_sizes.iter().map(|&(w, h)| w.saturating_mul(h).saturating_mul(bpp + 1)).sum::<usize>();
-    let fill_bytes = if fill { canvas_px.saturating_mul(bpp).saturating_add(24 << 20) } else { 0 };
+    let output_layers = roi_px.saturating_mul(bpp + 1);
+    let composite = canvas_px.saturating_mul(bpp);
+    let fill_bytes = if fill { composite.saturating_add(24 << 20) } else { 0 };
 
     // The levels `seam_blend` blends with.
     let levels = panorama::blend_levels(cw, ch).min(7);
     let max_band_cost = placed_sizes.iter().map(|&(w, h)| panorama::band_bytes_bound(w, h, cc, levels, cw, ch)).max().unwrap_or(0);
 
-    let base_working = rois_weights.saturating_add(accumulators).saturating_add(blend_out).saturating_add(output_layers).saturating_add(fill_bytes);
-
-    let total_min = base_working.saturating_add(max_band_cost);
-    (total_min, max_band_cost)
+    let fixed_during_bands = rois_weights.saturating_add(accumulators);
+    let phases = [
+        sources.saturating_add(warped),
+        rois_weights.saturating_add(warped),
+        fixed_during_bands.saturating_add(max_band_cost),
+        fixed_during_bands.saturating_add(canvas_px.saturating_mul(cc * 4)),
+        rois_weights.saturating_add(blend_out).saturating_add(composite).saturating_add(output_layers),
+        output_layers.saturating_add(composite).saturating_add(fill_bytes),
+    ];
+    (phases.into_iter().max().unwrap_or(0), fixed_during_bands)
 }
 
 /// Splits a surface region into colour channels and coverage.
@@ -675,7 +705,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
             // The estimate follows the warped images (one pixel of slack for sub-pixel bounds), clipped to the canvas.
             let warped_sizes: Vec<(usize, usize)> =
                 extents.iter().map(|&(w, h)| ((w.ceil() + 1.0).max(0.0).min(cw) as usize, (h.ceil() + 1.0).max(0.0).min(ch) as usize)).collect();
-            let (est_needed, max_band) = estimate_photomerge_memory(&warped_sizes, cw as usize, ch as usize, cc, bpp, blend, fill);
+            let (est_needed, fixed_during_bands) = estimate_photomerge_memory(&sizes, &warped_sizes, cw as usize, ch as usize, cc, bpp, blend, fill);
             if est_needed > budget {
                 let mb_est = est_needed / (1 << 20);
                 let mb_budget = budget / (1 << 20);
@@ -706,7 +736,7 @@ fn photomerge(s: &mut Session, p: &Value) -> Result<Value> {
                 let pls: Vec<Placement> = placements.iter().map(|p| (*p).clone()).collect();
                 let order = seam_order(&warped, ref_pos);
                 let geo = vignette.then_some((pls.as_slice(), sizes.as_slice(), offset));
-                let remaining_band_budget = budget.saturating_sub(est_needed.saturating_sub(max_band));
+                let remaining_band_budget = budget.saturating_sub(fixed_during_bands);
                 let check_cancel = || ctx.check();
                 let opt = BlendOptions { seamless: true, gains: true, geometry: geo, budget: Some(remaining_band_budget) };
                 let b = seam_blend(warped, canvas, &order, opt, Some(&check_cancel))?;

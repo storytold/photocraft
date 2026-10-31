@@ -320,29 +320,22 @@ pub fn blend_levels(w: usize, h: usize) -> usize {
     n
 }
 
-/// `a[i] ⊕ b[i]` for every `i` (the shorter length wins, like `zip`), in parallel on native
-/// targets. Purely elementwise, so the result is the serial result bit for bit.
-fn par_zip(a: &[f32], b: &[f32], f: impl Fn(f32, f32) -> f32 + Sync + Send) -> Vec<f32> {
+/// `a[i] = f(a[i], b[i])` for every `i` (the shorter length wins), in place and in parallel on
+/// native targets. Purely elementwise, so the result is the serial result bit for bit.
+fn par_zip_assign(a: &mut [f32], b: &[f32], f: impl Fn(f32, f32) -> f32 + Sync + Send) {
     const CHUNK: usize = 1 << 14;
-    let mut out = vec![0.0f32; a.len().min(b.len())];
-    let fill = |o: &mut [f32], a: &[f32], b: &[f32]| {
-        for ((o, &a), &b) in o.iter_mut().zip(a).zip(b) {
-            *o = f(a, b);
+    let fill = |a: &mut [f32], b: &[f32]| {
+        for (a, &b) in a.iter_mut().zip(b) {
+            *a = f(*a, b);
         }
     };
     #[cfg(not(target_arch = "wasm32"))]
     {
         use rayon::prelude::*;
-        out.par_chunks_mut(CHUNK).zip(a.par_chunks(CHUNK)).zip(b.par_chunks(CHUNK)).for_each(|((o, a), b)| fill(o, a, b));
+        a.par_chunks_mut(CHUNK).zip(b.par_chunks(CHUNK)).for_each(|(a, b)| fill(a, b));
     }
     #[cfg(target_arch = "wasm32")]
-    out.chunks_mut(CHUNK).zip(a.chunks(CHUNK)).zip(b.chunks(CHUNK)).for_each(|((o, a), b)| fill(o, a, b));
-    out
-}
-
-/// `f(a[i])` for every `i`, in parallel on native targets (elementwise, so bit for bit serial).
-fn par_map1(a: &[f32], f: impl Fn(f32) -> f32 + Sync + Send) -> Vec<f32> {
-    par_zip(a, a, |x, _| f(x))
+    a.chunks_mut(CHUNK).zip(b.chunks(CHUNK)).for_each(|(a, b)| fill(a, b));
 }
 
 // `reduce`, `expand` and `push_pull` run one pyramid level for one image at a time, and the
@@ -527,8 +520,8 @@ fn band_grid(im: &RoiImage, w: usize, h: usize, levels: usize) -> (i32, i32, usi
 }
 
 /// Estimated bytes of building one band: its grid's colour and weight planes about three times
-/// over (the pyramids are 4/3 of a plane, and the grid copy, coverage and `expand` scratch come
-/// on top).
+/// over (the pyramids are 4/3 of a plane, and the grid copy and `expand`/`reduce` scratch come
+/// on top). A safe upper bound: the build itself peaks lower.
 pub(super) fn band_cost(im: &RoiImage, w: usize, h: usize, ch: usize, levels: usize) -> usize {
     let (_, _, gw, gh) = band_grid(im, w, h, levels);
     gw.saturating_mul(gh).saturating_mul(ch + 1).saturating_mul(4 * 3)
@@ -591,14 +584,6 @@ pub fn try_multiband_batched(
                 }
             }
         });
-        let mut cov = vec![0.0f32; gw * gh];
-        par_rows(&mut cov, gw, 1, |gy, row| {
-            for (gx, o) in row.iter_mut().enumerate() {
-                if let Some(i) = src_of(gx, gy) {
-                    *o = im.alpha[i];
-                }
-            }
-        });
         let mut wt = vec![0.0f32; gw * gh];
         par_rows(&mut wt, gw, 1, |gy, row| {
             for (gx, o) in row.iter_mut().enumerate() {
@@ -607,8 +592,15 @@ pub fn try_multiband_batched(
                 }
             }
         });
-        let bin: Vec<f32> = par_map1(&cov, |a| if a > 0.5 { 1.0 } else { 0.0 });
-        drop(cov);
+        // Binary coverage straight from the alpha (0 outside the image), without a coverage plane.
+        let mut bin = vec![0.0f32; gw * gh];
+        par_rows(&mut bin, gw, 1, |gy, row| {
+            for (gx, o) in row.iter_mut().enumerate() {
+                if let Some(i) = src_of(gx, gy) {
+                    *o = if im.alpha[i] > 0.5 { 1.0 } else { 0.0 };
+                }
+            }
+        });
         push_pull(gw, gh, ch, &mut px, &bin);
         drop(bin);
         // Laplacian of the colours, Gaussian of the weights. Planes move into the pyramids rather
@@ -624,7 +616,10 @@ pub fn try_multiband_batched(
             }
             let (nw, nh, down) = reduce(cw, chh, ch, &cur);
             let up = expand(nw, nh, ch, &down, cw, chh);
-            lap.push((cw, chh, par_zip(&cur, &up, |a, b| a - b)));
+            // The Laplacian replaces the level's colours in place (`cur - up`, elementwise).
+            par_zip_assign(&mut cur, &up, |a, b| a - b);
+            drop(up);
+            lap.push((cw, chh, cur));
             let (_, _, wdown) = reduce(cw, chh, 1, &cwt);
             gau.push(cwt);
             cw = nw;
@@ -707,6 +702,7 @@ pub fn try_multiband_batched(
             }
         });
     }
+    drop(wsum);
     // Collapse.
     // `levels ≥ 1`, so there is always a coarsest level.
     let Some(mut cur) = acc.pop() else {
@@ -718,7 +714,11 @@ pub fn try_multiband_batched(
         let (pw, ph) = sizes[l];
         let (sw, sh) = sizes[l + 1];
         let up = expand(sw, sh, ch, &cur, pw, ph);
-        cur = par_zip(&acc[l], &up, |a, b| a + b);
+        // Add the upsampled coarser levels into this level's accumulator (`acc + up`, in place).
+        let mut level = std::mem::take(&mut acc[l]);
+        par_zip_assign(&mut level, &up, |a, b| a + b);
+        drop(up);
+        cur = level;
     }
     // Coverage: union of the images. Rows are independent; each walks the images in order, so a
     // pixel sees the same sequence of `max` calls as in the serial loop.

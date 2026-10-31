@@ -369,6 +369,39 @@ fn photomerge_rejects_insufficient_memory_budget() {
     assert_eq!(s.active().unwrap().doc.name, "img1");
 }
 
+#[test]
+fn photomerge_estimate_is_the_largest_phase_not_the_sum() {
+    // Two 100×100 RGB8 images (4 bytes per pixel in the canvas) on a 150×100 canvas.
+    let sizes = [(100, 100), (100, 100)];
+    let (cw, ch, cc, bpp) = (150, 100, 3, 4);
+    let band = panorama::band_bytes_bound(100, 100, cc, panorama::blend_levels(cw, ch).min(7), cw, ch);
+    assert_eq!(band, 150 * 100 * 4 * 12);
+    let (rois, accumulators) = (20_000 * 20, 15_000 * 21);
+    let (peak, fixed) = estimate_photomerge_memory(&sizes, &sizes, cw, ch, cc, bpp, true, false);
+    assert_eq!(fixed, rois + accumulators);
+    // The bands phase (ROIs, accumulators and one band) is the largest here.
+    let bands = rois + accumulators + band;
+    let collapse = rois + accumulators + 15_000 * 12;
+    let output = rois + 15_000 * 16 + 15_000 * 4 + 20_000 * 5;
+    assert!(bands > collapse && bands > output);
+    assert_eq!(peak, bands);
+    // A sum of every buffer would be far more.
+    assert!(peak < rois + accumulators + 15_000 * 16 + 20_000 * 5 + band);
+    // Filling adds its own phase, which does not exceed the bands here.
+    let (with_fill, _) = estimate_photomerge_memory(&sizes, &sizes, cw, ch, cc, bpp, true, true);
+    assert_eq!(with_fill, (20_000 * 5 + 15_000 * 4 + 15_000 * 4 + (24 << 20)).max(peak));
+    // Without blending only the sources and warped layers are held.
+    assert_eq!(estimate_photomerge_memory(&sizes, &sizes, cw, ch, cc, bpp, false, false), (80_000 + 80_000, 0));
+}
+
+#[test]
+fn photomerge_estimate_fits_six_large_photos_in_eight_gib() {
+    let photos = [(6000, 4000); 6];
+    let (peak, fixed) = estimate_photomerge_memory(&photos, &photos, 27_000, 4_112, 3, 4, true, false);
+    assert!(peak < 8 << 30, "{} MiB", peak >> 20);
+    assert!(fixed < peak);
+}
+
 /// A flat opaque RGBA8 surface covering `area`.
 fn flat_surface(area: Rect, v: f32) -> Surface {
     let fmt = PixelFormat::RGBA8;
