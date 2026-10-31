@@ -1,0 +1,4 @@
+// Repository defaults. Personal signing settings belong in the ignored local file.
+DEVELOPMENT_TEAM =
+PRODUCT_BUNDLE_IDENTIFIER = ai.storyteller.photocraft
+#include? "Signing.local.xcconfig"

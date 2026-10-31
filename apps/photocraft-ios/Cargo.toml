@@ -1,0 +1,36 @@
+[package]
+name = "photocraft-ios"
+description = "Native iPadOS shell for PhotoCraft"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+# UIKit interop is confined to src/scene.rs (approved platform exception).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[[bin]]
+name = "photocraft-ios"
+path = "src/main.rs"
+
+[target.'cfg(target_os = "ios")'.dependencies]
+photocraft-engine = { workspace = true }
+photocraft-io = { workspace = true }
+photocraft-ui-egui = { workspace = true }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit"] }
+log = { workspace = true }
+objc2 = "=0.6.5"
+objc2-foundation = { version = "=0.3.2", default-features = false, features = ["std", "NSObject", "NSArray", "NSSet", "NSGeometry", "NSValue", "NSString", "NSURL", "NSError", "NSData", "NSItemProvider", "NSProgress", "block2"] }
+objc2-ui-kit = { version = "=0.3.2", default-features = false, features = ["std", "UIApplication", "UIResponder", "UIScene", "UISceneOptions", "UISceneSession", "UIWindowScene", "UIWindow", "UIView", "UIViewController", "UIAlertController", "UIDocumentPickerViewController", "UIGeometry", "UIGestureRecognizer", "UIHoverGestureRecognizer", "UITouch", "block2", "objc2-core-foundation", "objc2-uniform-type-identifiers"] }
+objc2-photos-ui = { version = "=0.3.2", default-features = false, features = ["std", "PHPicker"] }
+objc2-uniform-type-identifiers = { version = "=0.3.2", default-features = false, features = ["std", "UTType", "UTCoreTypes"] }
+block2 = "=0.6.2"
+raw-window-handle = "=0.6.2"
+
+[dev-dependencies]
+egui = { workspace = true }

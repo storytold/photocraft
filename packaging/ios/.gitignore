@@ -1,0 +1,12 @@
+Signing.local.xcconfig
+xcuserdata/
+**/xcuserdata/
+*.ipa
+*.xcarchive/
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.p8
+*.cer
+*.key
+ExportOptions.local.plist

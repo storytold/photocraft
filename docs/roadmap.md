@@ -1,6 +1,8 @@
 # Roadmap
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-11 · **Change:** minor (adaptive Unsharp Mask performance evidence linked; Photomerge status correction retained; alpha gate, focus and estimates unchanged) · **Target:** Adobe Photoshop 2026
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-31 · **Change:** minor (adaptive Unsharp Mask performance evidence linked; Photomerge status correction retained; alpha gate, focus and estimates unchanged) · **Target:** Adobe Photoshop 2026
+
+Experimental iPadOS preview synchronized with main on 2026-10-31; native photo opening and touch-navigation work remain under review.
 
 - UI.5: Panels can detach, join other tab groups, split, resize and redock through shared docking transactions. Custom layouts persist with workspaces, respect workspace locking, and retain collapse flags for intact native groups.
 
@@ -82,6 +84,16 @@ Ranked; each item links to its gap entry. Pick from the top unless an issue is a
    or missing. 150–250 h.
 5. **Missing tools** ([G6](gaps.md#g6-missing-tools)): 14 of Photoshop's 68. 60–100 h.
 
+Experimental platform work: a native Rust/egui iPadOS shell and Xcode bundle live under
+`apps/photocraft-ios` and `packaging/ios`. A single-window UIKit scene bridge fixes SDK 27 startup;
+a physical iPad launch and user-reported touch/Pencil pressure are verified. Photos/Files opening
+and two-finger navigation have been added; save/export,
+Pencil hover/tilt validation, lifecycle coverage and a touch-adapted workspace remain before iPadOS can be
+listed as a supported platform (G17).
+Safe-area menu placement is user-confirmed. Pencil hover now has a native recognizer feeding
+egui pointer movement, confirmed on-device. The brush outline is still missing. Public beta
+distribution requires maintainer review, publisher signing and Apple review; no installer is shipped.
+
 ## What's next, with estimates
 
 | Next milestone | Scope | Estimate |
@@ -116,7 +128,10 @@ Each milestone has a **definition of done (DoD)** and must leave `main` green on
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-31 | minor | iPad preview updated to main 0.17.0; import options and native dependency pins adapted; no public release claimed |
 | 2026-10-11 | minor | Linked adaptive Unsharp Mask performance and quality evidence; milestones, alpha gate and estimates unchanged |
+| 2026-10-22 | minor | Native iPad preview and portable packaging; hover movement confirmed, brush outline missing; public distribution requires review/signing |
+| 2026-10-12 | minor | Experimental native iPadOS target recorded; platform integrations remain open |
 | 2026-10-10 | minor | Photomerge is implemented; real-world quality validation remains open |
 | 2026-10-10 | minor | Alpha gate table (core-workflow gate from the progress-docs standard): passes, stage stays alpha |
 | 2026-10-10 | major | Progress-docs standard: honest assessment and dated measurements moved to `target-app-parity.md`, Affinity notes to `file-format-parity.md`; new Current focus and estimates; `parity.md` renamed `parity-checklist.md` |
