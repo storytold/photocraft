@@ -400,3 +400,11 @@ fn multiband_hashes_recorded_from_the_serial_code() {
     let (nw, nh, r) = reduce(65, 41, 3, &px);
     assert_eq!(fnv(&[&r, &expand(nw, nh, 3, &r, 65, 41)]), 0x51823acfb4206dd8, "reduce + expand 65x41 rgb");
 }
+
+#[test]
+fn multiband_rejects_single_band_larger_than_budget() {
+    let (w, h, ch) = (97, 61, 3);
+    let (imgs, wts) = rois(w, h, ch, 42);
+    let err = try_multiband_batched(w, h, &imgs, &wts, 3, 100, Some(100)).unwrap_err();
+    assert!(matches!(err, photocraft_raster::AllocationError::NotEnoughMemory { bytes } if bytes > 100));
+}

@@ -40,7 +40,7 @@ use crate::transform::Homography;
 
 mod blend;
 
-pub use blend::{Geometry, Photometric, RoiImage, blend_levels, multiband, photometric, seam_labels};
+pub use blend::{Geometry, Photometric, RoiImage, blend_levels, multiband, photometric, seam_labels, try_multiband, try_multiband_batched};
 #[cfg(test)]
 use blend::{expand, multiband_batched, push_pull, reduce};
 

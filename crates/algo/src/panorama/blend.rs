@@ -1,4 +1,13 @@
 use super::{Normal, Placement, par_map, par_rows};
+use photocraft_raster::AllocationError;
+
+fn alloc_plane(len: usize) -> Result<Vec<f32>, AllocationError> {
+    let bytes = len.checked_mul(std::mem::size_of::<f32>()).ok_or(AllocationError::SizeOverflow)?;
+    let mut v = Vec::new();
+    v.try_reserve_exact(len).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
+    v.resize(len, 0.0);
+    Ok(v)
+}
 
 // ---------- photometric ----------
 
@@ -505,9 +514,28 @@ pub fn multiband(w: usize, h: usize, imgs: &[RoiImage], weights: &[Vec<f32>], le
     multiband_batched(w, h, imgs, weights, levels, BAND_BUDGET)
 }
 
+/// Fallible [`multiband`], checking allocations and size limits.
+pub fn try_multiband(w: usize, h: usize, imgs: &[RoiImage], weights: &[Vec<f32>], levels: usize) -> Result<(Vec<f32>, Vec<f32>), AllocationError> {
+    try_multiband_batched(w, h, imgs, weights, levels, BAND_BUDGET, None)
+}
+
 /// [`multiband`], building at most `budget` estimated bytes of bands at a time (at least one
 /// image). Each pixel still adds the bands in image order, so the result doesn't depend on it.
 pub(super) fn multiband_batched(w: usize, h: usize, imgs: &[RoiImage], weights: &[Vec<f32>], levels: usize, budget: usize) -> (Vec<f32>, Vec<f32>) {
+    let ch = imgs.first().map_or(1, |i| i.ch);
+    try_multiband_batched(w, h, imgs, weights, levels, budget, None).unwrap_or_else(|_| (vec![0.0; w * h * ch], vec![0.0; w * h]))
+}
+
+/// Fallible [`multiband_batched`] with an optional single-band budget cap.
+pub fn try_multiband_batched(
+    w: usize,
+    h: usize,
+    imgs: &[RoiImage],
+    weights: &[Vec<f32>],
+    levels: usize,
+    budget: usize,
+    max_band_budget: Option<usize>,
+) -> Result<(Vec<f32>, Vec<f32>), AllocationError> {
     let ch = imgs.first().map_or(1, |i| i.ch);
     let levels = levels.max(1);
     let align = 1i32 << (levels - 1);
@@ -517,8 +545,14 @@ pub(super) fn multiband_batched(w: usize, h: usize, imgs: &[RoiImage], weights: 
         let Some(&(pw, ph)) = sizes.last() else { break };
         sizes.push((pw.div_ceil(2), ph.div_ceil(2)));
     }
-    let mut acc: Vec<Vec<f32>> = sizes.iter().map(|&(lw, lh)| vec![0.0; lw * lh * ch]).collect();
-    let mut wsum: Vec<Vec<f32>> = sizes.iter().map(|&(lw, lh)| vec![0.0; lw * lh]).collect();
+    let mut acc: Vec<Vec<f32>> = Vec::with_capacity(sizes.len());
+    let mut wsum: Vec<Vec<f32>> = Vec::with_capacity(sizes.len());
+    for &(lw, lh) in &sizes {
+        let acc_len = lw.checked_mul(lh).and_then(|n| n.checked_mul(ch)).ok_or(AllocationError::SizeOverflow)?;
+        acc.push(alloc_plane(acc_len)?);
+        let wsum_len = lw.checked_mul(lh).ok_or(AllocationError::SizeOverflow)?;
+        wsum.push(alloc_plane(wsum_len)?);
+    }
     let margin = align * 4;
     // Each image on its ROI grown by a margin and aligned to the coarsest level's grid.
     let grid = |im: &RoiImage| {
@@ -601,7 +635,14 @@ pub(super) fn multiband_batched(w: usize, h: usize, imgs: &[RoiImage], weights: 
     let mut start = 0;
     while start < imgs.len() {
         let mut end = start + 1;
-        let mut bytes = cost(&imgs[start]);
+        let c = cost(&imgs[start]);
+        if let Some(limit) = max_band_budget
+            && limit > 0
+            && c > limit
+        {
+            return Err(AllocationError::NotEnoughMemory { bytes: c });
+        }
+        let mut bytes = c;
         while let Some(im) = imgs.get(end)
             && bytes.saturating_add(cost(im)) <= budget
         {
@@ -662,7 +703,11 @@ pub(super) fn multiband_batched(w: usize, h: usize, imgs: &[RoiImage], weights: 
     }
     // Collapse.
     // `levels ≥ 1`, so there is always a coarsest level.
-    let Some(mut cur) = acc.pop() else { return (vec![0.0; w * h * ch], vec![0.0; w * h]) };
+    let Some(mut cur) = acc.pop() else {
+        let total = w.checked_mul(h).and_then(|n| n.checked_mul(ch)).ok_or(AllocationError::SizeOverflow)?;
+        let cov_total = w.checked_mul(h).ok_or(AllocationError::SizeOverflow)?;
+        return Ok((alloc_plane(total)?, alloc_plane(cov_total)?));
+    };
     for l in (0..levels - 1).rev() {
         let (pw, ph) = sizes[l];
         let (sw, sh) = sizes[l + 1];
@@ -671,7 +716,8 @@ pub(super) fn multiband_batched(w: usize, h: usize, imgs: &[RoiImage], weights: 
     }
     // Coverage: union of the images. Rows are independent; each walks the images in order, so a
     // pixel sees the same sequence of `max` calls as in the serial loop.
-    let mut cov = vec![0.0f32; w * h];
+    let cov_len = w.checked_mul(h).ok_or(AllocationError::SizeOverflow)?;
+    let mut cov = alloc_plane(cov_len)?;
     par_rows(&mut cov, w, 1, |py, row| {
         for im in imgs {
             let y = py as i64 - im.y0 as i64;
@@ -688,5 +734,5 @@ pub(super) fn multiband_batched(w: usize, h: usize, imgs: &[RoiImage], weights: 
             }
         }
     });
-    (cur, cov)
+    Ok((cur, cov))
 }

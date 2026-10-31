@@ -350,3 +350,34 @@ fn crop_and_straighten_makes_documents() {
     let (c, e) = (l.rgba(d.size.width as i32 / 2, 6)[0], l.rgba(d.size.width as i32 / 2, d.size.height as i32 - 6)[0]);
     assert!((c - e).abs() < 0.05);
 }
+
+#[test]
+fn photomerge_rejects_insufficient_memory_budget() {
+    let (sw, sh) = (520, 220);
+    let sc = scene(sw, sh, 5);
+    let mut s = Session::new();
+    for (k, x0) in [0usize, 180].into_iter().enumerate() {
+        s.add_document(doc_from(&format!("img{k}"), &crop(&sc, sw, x0, 10, 260, 200, 1.0), 260, 200, SampleType::U8), None);
+    }
+    assert_eq!(s.documents().len(), 2);
+    // Budget of 1024 bytes is insufficient for the panorama.
+    let err = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "reposition", "memoryBudget": 1024})).unwrap_err();
+    assert!(err.to_string().contains("not enough memory for Photomerge"), "{err}");
+    assert!(err.to_string().contains("exceeds budget"), "{err}");
+    // Session state and documents must remain intact.
+    assert_eq!(s.documents().len(), 2);
+    assert_eq!(s.active().unwrap().doc.name, "img1");
+}
+
+#[test]
+fn photomerge_single_band_larger_than_budget_fails_safely() {
+    let (sw, sh) = (520, 220);
+    let sc = scene(sw, sh, 5);
+    let mut s = Session::new();
+    for (k, (x0, g)) in [(0usize, 1.0f32), (130, 1.15)].into_iter().enumerate() {
+        s.add_document(doc_from(&format!("b{k}"), &crop(&sc, sw, x0, 10, 220, 200, g), 220, 200, SampleType::U8), None);
+    }
+    let err = s.execute("file.automate.photomerge", json!({"useOpenDocuments": true, "layout": "reposition", "memoryBudget": 100_000})).unwrap_err();
+    assert!(err.to_string().contains("not enough memory for Photomerge"), "{err}");
+    assert_eq!(s.documents().len(), 2);
+}
