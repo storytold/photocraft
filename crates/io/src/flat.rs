@@ -246,7 +246,7 @@ pub fn import_tiff_page(name: &str, bytes: &[u8], page: Option<usize>) -> Result
 
 /// A decoded flat image as a single-layer document: a locked "Background" when it is opaque, a
 /// normal "Layer 0" when it has transparency.
-pub(crate) fn image_to_document(name: &str, img: &Image) -> Result<ImportResult, IoError> {
+pub fn image_to_document(name: &str, img: &Image) -> Result<ImportResult, IoError> {
     // What the decoder noticed (frames or pages left out, data ending early) comes first.
     let mut warnings: Vec<String> = img.warnings.iter().map(ToString::to_string).collect();
     let (mode, target_layout) = match img.layout() {
