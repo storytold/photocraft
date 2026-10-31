@@ -253,22 +253,38 @@ pub fn draw_guides(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform,
 /// Photoshop's "X: 103.2 px".
 pub fn guide_drag_readout(app: &PhotocraftApp, d: GuideDrag) -> Option<(&'static str, String)> {
     let doc = &app.session.active()?.doc;
-    let ur = &app.session.prefs().units_and_rulers;
     let axis = usize::from(!d.shows_vertical());
     let px = d.pos - doc.ruler_origin.get(axis).copied().unwrap_or(0.0);
-    let extent = if d.shows_vertical() { doc.size.width } else { doc.size.height } as f64;
+    Some((if d.shows_vertical() { "X:" } else { "Y:" }, ruler_length(app, doc, d.shows_vertical(), px)))
+}
+
+/// The second row of a dragged guide's readout: how far it is from the canvas's right edge (a
+/// vertical guide) or bottom edge (a horizontal one), in the ruler unit, so a margin from that
+/// side needs no subtraction (#9990). Negative past the edge.
+pub fn guide_edge_readout(app: &PhotocraftApp, d: GuideDrag) -> Option<(&'static str, String)> {
+    let doc = &app.session.active()?.doc;
+    let extent = f64::from(if d.shows_vertical() { doc.size.width } else { doc.size.height });
+    Some((if d.shows_vertical() { "Right:" } else { "Bottom:" }, ruler_length(app, doc, d.shows_vertical(), extent - d.pos)))
+}
+
+/// `px` document pixels along the guide's axis in the ruler unit, with its suffix. Pixels keep
+/// one decimal, as Photoshop's "X: 103.2 px".
+fn ruler_length(app: &PhotocraftApp, doc: &photocraft_doc::Document, vertical: bool, px: f64) -> String {
+    let ur = &app.session.prefs().units_and_rulers;
+    let extent = f64::from(if vertical { doc.size.width } else { doc.size.height });
     let value = match ur.rulers {
         Unit::Pixels => photocraft_engine::prefs::fmt_decimals(px, 1),
         _ => ur.format(px, f64::from(doc.resolution_dpi), extent),
     };
-    Some((if d.shows_vertical() { "X:" } else { "Y:" }, format!("{value} {}", ur.rulers.suffix())))
+    format!("{value} {}", ur.rulers.suffix())
 }
 
-/// Draw [`guide_drag_readout`] beside the pointer while a guide is dragged.
+/// Draw [`guide_drag_readout`] and [`guide_edge_readout`] beside the pointer while a guide is
+/// dragged.
 pub fn draw_guide_drag_readout(app: &PhotocraftApp, ctx: &egui::Context) {
     let (Some(d), Some(at)) = (app.guide_drag, ctx.pointer_latest_pos()) else { return };
-    if let Some((label, value)) = guide_drag_readout(app, d) {
-        crate::canvas::draw_value_readout(app, ctx, "guide-drag-readout", at, [label], [value]);
+    if let (Some((label, value)), Some((edge_label, edge))) = (guide_drag_readout(app, d), guide_edge_readout(app, d)) {
+        crate::canvas::draw_value_readout(app, ctx, "guide-drag-readout", at, [label, edge_label], [value, edge]);
     }
 }
 

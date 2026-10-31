@@ -224,8 +224,14 @@ fn guide_drag_shows_its_position_beside_the_pointer() {
     assert_eq!(guide_drag_readout(&app, v), Some(("X:", "103.2 px".to_owned())));
     let h = GuideDrag { vertical: false, index: None, pos: 40.0, press: 40.0, over_ruler: false, flipped: false };
     assert_eq!(guide_drag_readout(&app, h), Some(("Y:", "40 px".to_owned())));
+    // #9990: and how far it is from the far edge, so a margin from there needs no subtraction.
+    assert_eq!(guide_edge_readout(&app, v), Some(("Right:", "96.8 px".to_owned())));
+    assert_eq!(guide_edge_readout(&app, h), Some(("Bottom:", "60 px".to_owned())));
+    let past = GuideDrag { vertical: true, index: None, pos: 210.0, press: 0.0, over_ruler: false, flipped: false };
+    assert_eq!(guide_edge_readout(&app, past), Some(("Right:", "-10 px".to_owned())), "past the edge: negative");
     app.run("view.setRulerOrigin", json!({"x": 3.0, "y": 10.0})).unwrap();
     assert_eq!(guide_drag_readout(&app, h), Some(("Y:", "30 px".to_owned())), "from the zero point");
+    assert_eq!(guide_edge_readout(&app, h), Some(("Bottom:", "60 px".to_owned())), "the edge distance ignores the zero point");
     app.run("view.resetRulerOrigin", json!({})).unwrap();
     app.run("prefs.set", json!({"path": "unitsAndRulers.rulers", "value": "percent"})).unwrap();
     assert_eq!(
@@ -239,6 +245,7 @@ fn guide_drag_shows_its_position_beside_the_pointer() {
     h.event(egui::Event::PointerMoved(pos2(50.0, 50.0)));
     h.run_steps(2);
     assert!(h.query_by_label("X:").is_some() && h.query_by_label("103.2 px").is_some());
+    assert!(h.query_by_label("Right:").is_some() && h.query_by_label("96.8 px").is_some(), "the edge row beside it");
     h.state_mut().guide_drag = None;
     h.run_steps(2);
     assert!(h.query_by_label("X:").is_none(), "no readout once the drag ends");
