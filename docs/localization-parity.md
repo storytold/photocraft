@@ -101,3 +101,4 @@ engine localization or native review is complete.
 | 2026-10-28 | minor | Arabic (`ar`) UI catalog: every measured key, six plural forms; layer names and the title bar no longer reversed on egui 0.37 |
 | 2026-10-29 | minor | Swedish (`sv`) UI catalog: every measured key plus the dynamic labels, combined from #5985 and #9536 |
 | 2026-10-29 | minor | Finnish (`fi`), Danish (`da`) and Norwegian Bokmål (`nb`) UI catalogs: every measured key plus the dynamic labels, combined from #5666, #6961, #7267, #8072 and #9025 |
+| 2026-10-31 | minor | Brazilian Portuguese: 245 rows for the dynamic labels the German, French, Spanish and Italian catalogs already translate (Camera Raw panel and messages, smart-SVG editor, layer-colour labels, theme and colour-space names, canvas and status messages, brush/gradient/pattern plurals) |
