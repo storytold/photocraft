@@ -194,6 +194,9 @@ pub struct FxMaps {
     vdout: Option<Vec<f32>>,
     /// Shape layers: exact Euclidean distance outside the vector outline (from local coverage).
     vdout_exact: Option<Vec<f32>>,
+    /// Shape layers: the vector outline's coverage of each edge pixel, estimated from its
+    /// neighbours (the share of an edge pixel an outside stroke fills beneath the line).
+    vcov: Option<Vec<f32>>,
     /// `shape` joins the alpha with a filled shape's outline (`crate::effect_outline`).
     outline: bool,
     /// Frames of gradient strokes by outside width (bits): see [`stroke_frame`].
@@ -217,7 +220,8 @@ impl FxMaps {
             + usize::from(self.dout.is_some())
             + usize::from(self.dout_exact.is_some())
             + usize::from(self.vdout.is_some())
-            + usize::from(self.vdout_exact.is_some()))
+            + usize::from(self.vdout_exact.is_some())
+            + usize::from(self.vcov.is_some()))
             * n
             * 4
     }

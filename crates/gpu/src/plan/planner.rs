@@ -63,7 +63,8 @@ pub const F_NO_LAYER: u32 = 32;
 /// carries the layer's alpha in `.g`).
 pub const F_OUTLINE: u32 = 131072;
 
-/// Shape layer (outside strokes never show inside it).
+/// Shape layer (outside strokes never show inside it, but for the part of an edge pixel the
+/// outline's estimated coverage leaves).
 pub const F_VECTOR: u32 = 64;
 
 /// Merge onto an opaque clipping base, keeping its alpha.
@@ -1153,13 +1154,13 @@ impl<'a> Planner<'a> {
             .filter(|(_, st)| stroke_widths(st).1 > 0.0)
             .collect();
         if !outs.is_empty() {
-            let (mut acc, mut cover): (Option<Slot>, Option<Slot>) = (None, None);
-            if outline || !vector_shape {
-                // The layer's alpha rides along the coverage: `effects::outline_share`, and for
-                // pixel layers the stroke's share beneath a partly covering layer (fill < 100 %).
-                let ll = self.retain(l);
-                cover = Some(self.fx_init(clip, ll, None, INIT_COVER, 1.0));
-            }
+            // The layer's alpha rides along the coverage: `effects::outline_share`, the stroke's
+            // share beneath a partly covering layer (fill < 100 %) and under the edge pixels of
+            // a shape's estimated outline. The stroke pass reads it unconditionally, so a shape
+            // layer whose only effect is an outside stroke now pays this one init pass too.
+            let mut acc: Option<Slot> = None;
+            let ll = self.retain(l);
+            let mut cover: Option<Slot> = Some(self.fx_init(clip, ll, None, INIT_COVER, 1.0));
             for (n, &(i, st)) in outs.iter().enumerate() {
                 let paint = self.fx_paint(&st.paint, anchor);
                 let flags = F_STROKE_OUT | if vector_shape { F_VECTOR } else { 0 } | if outline { F_OUTLINE } else { 0 } | if n == 0 { F_FIRST } else { 0 };
