@@ -20,8 +20,8 @@ pub fn properties_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let canvas = app.last_canvas_rect;
     let width = 320.0;
     // Anchored to the canvas' reading-end corner: top-right in LTR, top-left in RTL.
-    let pos =
-        if crate::direction::is_rtl() { pos2(canvas.left() + 12.0, canvas.top() + 44.0) } else { pos2(canvas.right() - width - 12.0, canvas.top() + 44.0) };
+    let x = crate::direction::float_window_x(canvas, width, 12.0, 0.0);
+    let pos = pos2(x, canvas.top() + 44.0);
     let frame = egui::Frame::NONE
         .fill(t.card)
         .stroke(Stroke::new(1.0, t.card_border))
@@ -125,32 +125,22 @@ fn layer_controls(app: &mut PhotocraftApp, ui: &mut egui::Ui, layer: &Layer) {
     if let Some(s) = layer.surface() {
         let b = app.layer_frame_bounds(layer, s);
         let rows = [("X", b.x0.to_string()), ("Y", b.y0.to_string()), ("W", b.width().to_string()), ("H", b.height().to_string())];
-        if crate::direction::is_rtl() {
-            // The fork's `Grid` is not ready for right-to-left layouts (its available width
-            // goes NaN), so the rows are drawn by hand with the Grid's geometry: an
-            // `interact_size`-wide label column at the reading end, the value beside it, the
-            // Grid's 12-point column gap and 24-point row height; the body's 6-point item
-            // spacing separates the rows, as the Grid's row spacing does.
-            let label_w = ui.spacing().interact_size.x;
-            let row_h = ui.spacing().interact_size.y;
+        // The fork's `Grid` cannot run under a right-to-left cursor, so it always runs in an
+        // LTR scope; `grid_cells` emits the label/value pair in reading order.
+        crate::direction::ltr_grid(ui, "props-grid", 2, vec2(12.0, 6.0), |ui| {
             for (k, v) in rows {
-                ui.allocate_ui_with_layout(vec2(ui.available_width(), row_h), crate::direction::row(), |ui| {
-                    ui.spacing_mut().item_spacing.x = 12.0;
-                    ui.allocate_ui_with_layout(vec2(label_w, row_h), crate::direction::row(), |ui| {
+                crate::direction::grid_cells(
+                    ui,
+                    |ui| {
                         ui.label(RichText::new(k).color(t.text_dim));
-                    });
-                    ui.label(RichText::new(format!("{v} px")).font(theme::mono(12.0)).color(t.text));
-                });
+                    },
+                    |ui| {
+                        ui.label(RichText::new(format!("{v} px")).font(theme::mono(12.0)).color(t.text));
+                    },
+                );
+                ui.end_row();
             }
-        } else {
-            egui::Grid::new("props-grid").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                for (k, v) in rows {
-                    ui.label(RichText::new(k).color(t.text_dim));
-                    ui.label(RichText::new(format!("{v} px")).font(theme::mono(12.0)).color(t.text));
-                    ui.end_row();
-                }
-            });
-        }
+        });
         ui.add_space(6.0);
     }
     let mut o = layer.opacity * 100.0;
