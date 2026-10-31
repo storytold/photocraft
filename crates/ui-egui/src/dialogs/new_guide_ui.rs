@@ -83,15 +83,31 @@ fn with_unit(value: &str, unit: Unit) -> String {
 }
 
 /// `typed` with `unit` after its first number when that number has none ("300 / 2" with pixel
-/// rulers → "300 px / 2"); anything else as typed.
+/// rulers → "300 px / 2"); anything else as typed. Nor when a length later in its term makes it
+/// a plain factor ("2 / 2 * 50 px": the term is in px already).
 fn unit_on_first_number(typed: &str, unit: Unit) -> String {
     let end = typed
         .char_indices()
         .find(|&(i, c)| !(c.is_ascii_digit() || matches!(c, '.' | ',') || (i == 0 && matches!(c, '-' | '+'))))
         .map_or(typed.len(), |(i, _)| i);
     let (number, rest) = typed.split_at(end);
-    let bare = !number.is_empty() && rest.trim_start().starts_with(['+', '-', '*', '/']);
+    let bare = !number.is_empty() && rest.trim_start().starts_with(['+', '-', '*', '/']) && !factor_has_unit(rest);
     if bare { format!("{} {}{rest}", number, unit.suffix()) } else { typed.to_string() }
+}
+
+/// Whether an operand multiplied or divided in at the start of `rest` (up to the first `+` or `-`
+/// between operands) carries a unit, as the engine splits operands.
+fn factor_has_unit(mut rest: &str) -> bool {
+    while let Some(operand) = rest.trim_start().strip_prefix(['*', '/']).map(str::trim_start) {
+        // The operand runs to the next operator; a sign at its start is its own.
+        let end = operand.char_indices().find(|&(i, c)| i > 0 && matches!(c, '+' | '-' | '*' | '/')).map_or(operand.len(), |(i, _)| i);
+        let (operand, after) = operand.split_at(end);
+        if Unit::parse_length(operand).is_some_and(|(_, u)| u.is_some()) {
+            return true;
+        }
+        rest = after;
+    }
+    false
 }
 
 /// `px` (document pixels) in the ruler unit, as the field shows it: "14.11 cm". Percent is of the
@@ -319,5 +335,17 @@ mod arithmetic_tests {
         assert_eq!(unit_on_first_number("3+1in", Unit::Centimeters), "3 cm+1in");
         assert_eq!(unit_on_first_number("100% / 3", Unit::Pixels), "100% / 3");
         assert_eq!(unit_on_first_number("abc", Unit::Pixels), "abc");
+    }
+
+    /// A bare number multiplied or divided within a term that has a length is a plain factor:
+    /// the length is the term's unit, so the ruler unit isn't added (it would make a length
+    /// times a length). A term of bare numbers still gets it.
+    #[test]
+    fn a_leading_factor_of_a_length_gets_no_ruler_unit() {
+        for typed in ["2 * 50 px", "2 / 2 * 50 px", "2*50px+10", "4 / 2 * 1in - 3", "2 * -1cm"] {
+            assert_eq!(unit_on_first_number(typed, Unit::Centimeters), typed);
+        }
+        assert_eq!(unit_on_first_number("2 * 3 + 1in", Unit::Centimeters), "2 cm * 3 + 1in");
+        assert_eq!(unit_on_first_number("6 / 2 / 3 - 1", Unit::Centimeters), "6 cm / 2 / 3 - 1");
     }
 }
