@@ -152,6 +152,11 @@ pub fn popup_body<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui)
 /// A full-width row in reading order for bodies that stay `top_down(Align::Min)`:
 /// [`horizontal_centered`] without the vertical centring. Rows inside a [`body_layout`] parent
 /// already mirror; opt in here only where that scope does not reach.
+///
+/// The row allocates one interact height, like `ui.horizontal`: a full-remaining-height frame
+/// would let a nested center-aligned scope fill the window's whole remaining height (the fork
+/// fills horizontal `Align::Center` frames), and a non-resizable window then sizes itself to
+/// the screen height. Taller content still grows the row's `min_rect` past the frame.
 pub fn dialog_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
     let size = ui.available_size_before_wrap();
     ui.allocate_ui_with_layout(size, row_min(), add)
