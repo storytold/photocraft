@@ -4602,3 +4602,42 @@ fn adjustment_blend_if_judges_the_result_before_opacity() {
         assert!(got.iter().zip(want).all(|(g, w)| (g - w).abs() <= 1), "black {black} white {white}: {got:?} vs Photoshop {want:?}");
     }
 }
+
+/// The reference application, measured: a 240 × 40 black document, an opaque white layer over
+/// its left 100 px (full height), Outer Glow Softer, white, Normal, 100 %, Spread 0, Noise 0,
+/// Size 60, Range 50 % and 100 % alike. Sampled at row 20, `d` px right of the edge, the glow
+/// reads 4 at 50 px, 1 at 54 and 0 from 56 to 70: it fades out just before Size, with no tail
+/// beyond it (#8039 added one; reverted). On black, the red value × 255 is the glow alpha × 255,
+/// compared as 8-bit levels. The tent gives 4, 1, 0, 0, 0 at Range 50 % and 2, 1, 0, 0, 0 at 100 %.
+#[test]
+fn softer_outer_glow_fades_out_before_its_size() {
+    let mut d = Document::with_background("t", Size::new(240, 40), ColorMode::Rgb, SampleType::U8, Color::BLACK);
+    for range in [0.5, 1.0] {
+        let mut l = solid_layer("shape", Rect::new(0, 0, 100, 40), [1.0; 4]);
+        l.effects.items = vec![Effect::OuterGlow(Glow {
+            common: FxCommon::new(photocraft_color::BlendMode::Normal, 1.0),
+            paint: FxPaint::Color(Color::WHITE),
+            technique: GlowTechnique::Softer,
+            spread: 0.0,
+            size: 60.0,
+            contour: photocraft_doc::Contour::Linear,
+            anti_alias: false,
+            range,
+            jitter: 0.0,
+            noise: 0.0,
+            source: GlowSource::Edge,
+        })];
+        d.layers.truncate(1);
+        d.layers.push(l);
+        let got: Vec<(i32, f32)> = [50, 54, 56, 60, 70].iter().map(|&dist| (dist, (255.0 * px(&d, 100 + dist, 20)[0]).round())).collect();
+        for &(dist, v) in &got {
+            let want = match dist {
+                50 => 4.0,
+                54 => 1.0,
+                _ => 0.0,
+            };
+            let tolerance = if dist >= 56 { 0.0 } else { 2.0 };
+            assert!((v - want).abs() <= tolerance, "range {range}, {dist} px: {v} vs the reference application's {want} ({got:?})");
+        }
+    }
+}
