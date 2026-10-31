@@ -3941,6 +3941,13 @@ curves	Smooth	Wygładź
 	Could not write {name}: {error}	Nie można zapisać {name}: {error}
 	Kept {name}: written by another application	Zachowano {name}: zapisany przez inną aplikację
 	Shadow Tint	Tinta cieni
+
+# Custom shape set import
+	Import Shapes…	Importuj kształty…
+	Choose a custom shape file (.csh).	Wybierz plik kształtów własnych (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Liczba kształtów zaimportowanych z {file}: {n}|Liczba kształtów zaimportowanych z {file}: {n}|Liczba kształtów zaimportowanych z {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Liczba kształtów zaimportowanych z {group}: {n}|Liczba kształtów zaimportowanych z {group}: {n}|Liczba kształtów zaimportowanych z {group}: {n}
+
 	Check for Updates…	Sprawdź aktualizacje…
 	Open the release page to choose an installer for your system.	Otwórz stronę wydania, aby wybrać instalator dla swojego systemu.
 	Automatically Check for Updates	Automatycznie sprawdzaj aktualizacje

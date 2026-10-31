@@ -3332,6 +3332,13 @@ curves	Smooth	Lisser
 	Could not write {name}: {error}	Impossible d’écrire {name} : {error}
 	Kept {name}: written by another application	{name} conservé : écrit par une autre application
 	Shadow Tint	Teinte des ombres
+
+# Custom shape set import
+	Import Shapes…	Importer des formes…
+	Choose a custom shape file (.csh).	Choisissez un fichier de formes personnalisées (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Nombre de formes importées depuis {file} : {n}|Nombre de formes importées depuis {file} : {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Nombre de formes importées depuis {group} : {n}|Nombre de formes importées depuis {group} : {n}
+
 	Check for Updates…	Rechercher des mises à jour…
 	Open the release page to choose an installer for your system.	Ouvrez la page de la version pour choisir un programme d’installation pour votre système.
 	Automatically Check for Updates	Rechercher automatiquement des mises à jour

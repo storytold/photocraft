@@ -4027,6 +4027,13 @@ curves	Smooth	Згладити
 	Could not write {name}: {error}	Не вдалося записати {name}: {error}
 	Kept {name}: written by another application	{name} залишено без змін: записаний іншою програмою
 	Shadow Tint	Відтінок тіней
+
+# Custom shape set import
+	Import Shapes…	Імпортувати фігури…
+	Choose a custom shape file (.csh).	Виберіть файл довільних фігур (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Кількість фігур, імпортованих із {file}: {n}|Кількість фігур, імпортованих із {file}: {n}|Кількість фігур, імпортованих із {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Кількість фігур, імпортованих із {group}: {n}|Кількість фігур, імпортованих із {group}: {n}|Кількість фігур, імпортованих із {group}: {n}
+
 	Check for Updates…	Перевірити оновлення…
 	Open the release page to choose an installer for your system.	Відкрийте сторінку випуску й виберіть інсталятор для своєї системи.
 	Automatically Check for Updates	Автоматично перевіряти оновлення

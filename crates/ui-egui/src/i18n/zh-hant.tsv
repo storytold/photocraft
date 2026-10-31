@@ -2943,6 +2943,13 @@ curves	Smooth	平滑
 	Could not write {name}: {error}	無法寫入 {name}：{error}
 	Kept {name}: written by another application	已保留 {name}：由其他應用程式寫入
 	Shadow Tint	陰影色調
+
+# Custom shape set import
+	Import Shapes…	匯入形狀…
+	Choose a custom shape file (.csh).	請選擇自訂形狀檔案 (.csh)。
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	從 {file} 匯入的形狀數量：{n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	從 {group} 匯入的形狀數量：{n}
+
 	Check for Updates…	檢查更新…
 	Open the release page to choose an installer for your system.	開啟發佈頁，選擇適合您系統的安裝程式。
 	Automatically Check for Updates	自動檢查更新

@@ -4238,6 +4238,13 @@ navigator	Zoom	Zoom
 	Could not write {name}: {error}	No se pudo escribir {name}: {error}
 	Kept {name}: written by another application	Se conservó {name}: lo escribió otra aplicación
 	Shadow Tint	Tinte de sombras
+
+# Custom shape set import
+	Import Shapes…	Importar formas…
+	Choose a custom shape file (.csh).	Selecciona un archivo de formas personalizadas (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Cantidad de formas importadas de {file}: {n}|Cantidad de formas importadas de {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Cantidad de formas importadas de {group}: {n}|Cantidad de formas importadas de {group}: {n}
+
 	Check for Updates…	Buscar actualizaciones…
 	Open the release page to choose an installer for your system.	Abra la página de la versión para elegir un instalador para su sistema.
 	Automatically Check for Updates	Buscar actualizaciones automáticamente

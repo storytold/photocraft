@@ -3793,6 +3793,13 @@ curves	Smooth	Làm mượt
 	Could not write {name}: {error}	Không thể ghi {name}: {error}
 	Kept {name}: written by another application	Đã giữ {name}: do ứng dụng khác ghi
 	Shadow Tint	Sắc độ bóng tối
+
+# Custom shape set import
+	Import Shapes…	Nhập hình dạng…
+	Choose a custom shape file (.csh).	Chọn tệp hình dạng tùy chỉnh (.csh).
+@plural	Imported {n} shape from {file}|Imported {n} shapes from {file}	Số hình dạng đã nhập từ {file}: {n}
+@plural	Imported {n} shape from {group}|Imported {n} shapes from {group}	Số hình dạng đã nhập từ {group}: {n}
+
 	Check for Updates…	Kiểm tra bản cập nhật…
 	Open the release page to choose an installer for your system.	Mở trang phát hành để chọn bộ cài đặt cho hệ thống của bạn.
 	Automatically Check for Updates	Tự động kiểm tra bản cập nhật
