@@ -151,6 +151,7 @@ pub fn options_bar(app: &mut PhotocraftApp, ui: &mut egui::Ui, tool: Tool) -> bo
 pub(crate) fn color_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui, color: [f32; 4], tip: &str) -> Option<[f32; 4]> {
     let paint = photocraft_doc::Fill::Solid(photocraft_doc::Color::rgba(color[0], color[1], color[2], color[3]));
     let (fg, bg) = (app.session.tools.foreground, app.session.tools.background);
+    let lib = crate::paint_picker::library(&app.session, ui.ctx());
     let mut gradients = crate::shape_gradient_ui::GradientChoices {
         presets: &app.session.presets.gradients,
         current: &app.session.presets.gradient,
@@ -158,7 +159,7 @@ pub(crate) fn color_swatch(app: &mut PhotocraftApp, ui: &mut egui::Ui, color: [f
         fg,
         bg,
     };
-    match crate::shape_paint_ui::swatch(ui, Some(&paint), color, tip, &mut gradients) {
+    match crate::shape_paint_ui::swatch(ui, &lib, Some(&paint), color, tip, &mut gradients) {
         Some(crate::shape_paint_ui::PaintChange::Color(c)) => Some(c),
         _ => None,
     }
