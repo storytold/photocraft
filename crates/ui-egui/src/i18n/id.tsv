@@ -38,7 +38,7 @@
 
 
 
-# About ▸ Contributors / Models (credits, craftrules standards/contributors.md)
+# About ▸ Contributors / Models (credits)
 
 # Swatches panel
 # Layer Style > Blending Options (Advanced Blending)
@@ -3338,17 +3338,8 @@ curves	Smooth	Haluskan
 	Kept {name}: written by another application	{name} dipertahankan: ditulis oleh aplikasi lain
 	Shadow Tint	Rona bayangan
 	Check for Updates…	Periksa Pembaruan…
-	PhotoCraft Updates	Pembaruan PhotoCraft
-	Checking for updates…	Memeriksa pembaruan…
 	Open the release page to choose an installer for your system.	Buka halaman rilis untuk memilih penginstal bagi sistem Anda.
-	Open Download Page	Buka Halaman Unduhan
-	PhotoCraft is up to date.	PhotoCraft sudah versi terbaru.
-	Could not check for updates.	Tidak dapat memeriksa pembaruan.
-	Updates have not been checked yet.	Pembaruan belum diperiksa.
-	Check Again	Periksa Lagi
 	Automatically Check for Updates	Periksa Pembaruan Secara Otomatis
-	Installed version: {version}	Versi terpasang: {version}
-	PhotoCraft {version} is available.	PhotoCraft {version} tersedia.
 	Paints from the History panel's source state	Melukis dari status sumber panel Riwayat
 	Sets the source for the history brush	Menetapkan sumber untuk kuas riwayat
 	Highlight Mode	Mode Sorotan
@@ -3461,6 +3452,9 @@ curves	Smooth	Haluskan
 	There is no color table to save.	Tidak ada tabel warna untuk disimpan.
 @plural	Saved {n} color to {file}|Saved {n} colors to {file}	{n} warna disimpan ke {file}
 	GPU adapter	Adaptor GPU
+smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded source; format-specific features may change.	Konten AI/PDF/EPS akan diedit sebagai SVG. Menyimpan akan mengganti sumber tersemat; fitur khusus format mungkin berubah.
+
+# Styles panel: Import / Export Styles (.asl)
 	Import Styles…	Impor Gaya…
 	Export Selected Styles…	Ekspor Gaya Terpilih…
 	Export Styles…	Ekspor Gaya…
@@ -3515,6 +3509,7 @@ curves	Smooth	Haluskan
 	Font size presets	Preset ukuran font
 	Leading presets	Preset leading
 	Tracking presets	Preset tracking
+	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	Entri numerik tidak valid. Diperlukan bilangan bulat antara {min}% dan {max}%. Nilai sebelumnya telah disisipkan.
 	Clear Selection	Hapus Seleksi
 	Color Aware	Berbasis Warna
 	Decontaminate Colors	Dekontaminasi Warna
@@ -3533,4 +3528,12 @@ curves	Smooth	Haluskan
 	Select and Mask was closed: its document is no longer the active one	Seleksi dan Mask ditutup: dokumennya tidak lagi aktif
 	Select and Mask was closed: another layer was selected	Seleksi dan Mask ditutup: layer lain dipilih
 	Select Layer Under Cursor	Pilih Lapisan di Bawah Kursor
+
+# Shape Fill/Stroke popover and colour swatches opening the Color Picker
+	Color Picker	Pemilih Warna
+	Recently Used Colors	Warna yang Baru Digunakan
+	Stop Color	Warna Titik
+	Shapes can't use patterns yet	Bentuk belum dapat memakai pola
+	Solid Color	Warna Solid
+	Tint Color	Warna Tint
 	Edit Brush…	Edit Kuas…
