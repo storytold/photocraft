@@ -23,6 +23,8 @@ const DASH: i64 = 4;
 const SPEED: f64 = 10.0;
 /// Longer than any line that fits the view: only its part in view is dashed.
 const LONG: f32 = 8192.0;
+/// How often the ants step while they march.
+const MARCH: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// The ants on a display of `ppp` device pixels per point, at one moment of the march.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -164,10 +166,20 @@ pub(crate) fn polyline(points: &[Pos2], closed: bool) -> impl Iterator<Item = (P
     points.windows(2).filter_map(|w| Some((*w.first()?, *w.get(1)?))).chain(back)
 }
 
+/// Ask for the frame that moves the ants on, while PhotoCraft is in front
+/// ([`crate::os_window::in_front`]). Behind another app they stand still: marching there redrew
+/// the whole interface ten times a second for as long as a selection was on screen, and kept an
+/// idle computer awake. Coming back to the front draws a frame, and they march on from there.
+pub(crate) fn keep_marching(ctx: &egui::Context) {
+    if crate::os_window::in_front(ctx) {
+        ctx.request_repaint_after(MARCH);
+    }
+}
+
 /// Draw animated ants along the polyline `points` (screen points), and keep them marching.
 pub(crate) fn draw_polyline(painter: &egui::Painter, points: &[Pos2], closed: bool) {
     let time = painter.ctx().input(|i| i.time);
-    painter.ctx().request_repaint_after(std::time::Duration::from_millis(100));
+    keep_marching(painter.ctx());
     draw(painter, polyline(points, closed), time, false);
 }
 

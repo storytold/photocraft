@@ -187,9 +187,11 @@ pub(crate) fn save_preferences(app: &mut PhotocraftApp) -> Result<(), String> {
 }
 
 /// Linked smart objects follow their files while the document is open, as in Photoshop: every two
-/// seconds, and as soon as the window comes back to the front (after saving in another app), stamp
-/// the active document's linked files on a worker thread and re-render the layers of the ones that
-/// changed ([`photocraft_engine::link_watch`]).
+/// seconds while PhotoCraft is in front, and as soon as it comes back to the front (after saving in
+/// another app), stamp the active document's linked files on a worker thread and re-render the
+/// layers of the ones that changed ([`photocraft_engine::link_watch`]). Behind another app nothing
+/// is stamped and no frame is asked for: a look every two seconds there redrew the interface and
+/// started a thread for files that are looked at anyway the moment PhotoCraft is back.
 #[cfg(not(target_arch = "wasm32"))]
 fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     match app.session.poll_link_scan() {
@@ -208,7 +210,7 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let (last_key, focus_key) = (egui::Id::unique("linkWatch.lastScan"), egui::Id::unique("linkWatch.focused"));
     let now = crate::gpu_canvas::now_ms() / 1000.0;
-    let focused = ctx.input(|i| i.focused);
+    let focused = crate::os_window::in_front(ctx);
     let was_focused: bool = ctx.data(|d| d.get_temp(focus_key)).unwrap_or(focused);
     ctx.data_mut(|d| d.insert_temp(focus_key, focused));
     let has_links = app.session.active().is_some_and(|d| !photocraft_engine::link_watch::linked_files(&d.doc).is_empty());
@@ -216,12 +218,16 @@ fn link_updates(app: &mut PhotocraftApp, ctx: &egui::Context) {
         return;
     }
     let last: f64 = ctx.data(|d| d.get_temp(last_key)).unwrap_or(f64::NEG_INFINITY);
-    if now - last >= 2.0 || (focused && !was_focused) {
+    if focused && (now - last >= 2.0 || !was_focused) {
         ctx.data_mut(|d| d.insert_temp(last_key, now));
         app.session.start_link_scan();
     }
-    let wait = if app.session.link_scan.is_some() { 100 } else { 2000 };
-    ctx.request_repaint_after(std::time::Duration::from_millis(wait));
+    if app.session.link_scan.is_some() {
+        // The look doesn't wake the interface: a frame collects it.
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
+    } else if focused {
+        ctx.request_repaint_after(std::time::Duration::from_millis(2000));
+    }
 }
 
 /// Background autosave of documents with unsaved changes every N minutes (File Handling).
@@ -338,5 +344,100 @@ fn history_log(app: &mut PhotocraftApp) {
     }
     if !text.is_empty() {
         let _ = append(&hl.file_path, &text);
+    }
+}
+
+#[cfg(test)]
+#[cfg(not(target_arch = "wasm32"))]
+mod link_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Save a solid-colour 10 × 10 PNG as `path`: written beside it, then moved over it, as an app
+    /// saving the file does.
+    fn write_png(path: &std::path::Path, color: &str) {
+        let copy = path.with_extension("tmp.png");
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 10, "height": 10, "background": color})).unwrap();
+        s.execute("file.saveACopy", json!({"path": copy.to_string_lossy(), "layers": false})).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::rename(&copy, path).unwrap();
+    }
+
+    /// Linked smart objects follow their files every two seconds while PhotoCraft is in front, not
+    /// at all behind another app (no look, no frame asked for), and a file saved meanwhile is looked
+    /// at the moment PhotoCraft is back in front. The look times itself on the app's monotonic
+    /// clock, so "two seconds later" moves the time of the last look back instead.
+    #[test]
+    fn linked_files_are_looked_at_in_front_and_at_once_on_coming_back() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("art.png");
+        write_png(&path, "#ff0000");
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 40, "height": 40})).unwrap();
+        app.run("file.placeLinked", json!({"path": path.to_string_lossy()})).unwrap();
+        let ctx = egui::Context::default();
+        let last_key = egui::Id::unique("linkWatch.lastScan");
+        // One frame with PhotoCraft in front or not; returns when the next one is asked for.
+        let frame = |app: &mut PhotocraftApp, in_front: bool| {
+            let mut input = egui::RawInput { focused: in_front, ..Default::default() };
+            input.viewports.entry(egui::ViewportId::ROOT).or_default().focused = Some(in_front);
+            let mut out = ctx.run_ui(input, |ui| link_updates(app, ui.ctx()));
+            out.textures_delta.clear();
+            out.viewport_output.get(&egui::ViewportId::ROOT).map_or(std::time::Duration::MAX, |v| v.repaint_delay)
+        };
+        // Until the look in progress is in (its frames come every 100 ms).
+        let finish = |app: &mut PhotocraftApp| {
+            let end = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while app.session.link_scan.is_some() {
+                assert!(std::time::Instant::now() < end, "the look never finished");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+                frame(app, true);
+            }
+        };
+        let two_seconds_pass = || ctx.data_mut(|d| d.insert_temp(last_key, f64::NEG_INFINITY));
+        let pixel = |app: &mut PhotocraftApp| app.run("document.pixel", json!({"x": 20, "y": 20})).unwrap();
+
+        // In front: looked at at once, and every two seconds.
+        assert!(frame(&mut app, true) <= std::time::Duration::from_millis(100));
+        assert!(app.session.link_scan.is_some(), "the first frame in front looks");
+        finish(&mut app);
+        let next = frame(&mut app, true);
+        assert!(app.session.link_scan.is_none(), "no second look within two seconds");
+        assert!(next > std::time::Duration::from_secs(1) && next <= std::time::Duration::from_secs(2), "the next look is two seconds away: {next:?}");
+        two_seconds_pass();
+        frame(&mut app, true);
+        assert!(app.session.link_scan.is_some(), "two seconds later it looks again");
+        finish(&mut app);
+        let red = pixel(&mut app);
+
+        // Behind another app: no look and no frame, however long; the file is saved meanwhile.
+        for _ in 0..3 {
+            two_seconds_pass();
+            assert_eq!(frame(&mut app, false), std::time::Duration::MAX, "no frame asked for behind another app");
+            assert!(app.session.link_scan.is_none(), "nothing looked at behind another app");
+        }
+        write_png(&path, "#0000ff");
+        assert_eq!(frame(&mut app, false), std::time::Duration::MAX);
+        assert!(app.session.link_scan.is_none());
+        assert_eq!(pixel(&mut app), red, "not updated while in the back");
+
+        // Back in front: looked at in that same frame, and the layer follows its file.
+        assert!(frame(&mut app, true) <= std::time::Duration::from_millis(100));
+        assert!(app.session.link_scan.is_some(), "coming back to the front looks at once");
+        finish(&mut app);
+        assert_ne!(pixel(&mut app), red, "the layer follows the file saved while PhotoCraft was in the back");
+        assert!(app.ui.status.contains("Updated 1 linked smart object"), "{}", app.ui.status);
+
+        // In front through another of its windows (a document window has the focus): still in
+        // front.
+        two_seconds_pass();
+        let mut input = egui::RawInput { focused: false, ..Default::default() };
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().focused = Some(false);
+        input.viewports.entry(egui::ViewportId::from_hash_of(("docwin", 1u64))).or_default().focused = Some(true);
+        let mut out = ctx.run_ui(input, |ui| link_updates(&mut app, ui.ctx()));
+        out.textures_delta.clear();
+        assert!(app.session.link_scan.is_some(), "a document window in front counts as PhotoCraft in front");
+        finish(&mut app);
     }
 }
