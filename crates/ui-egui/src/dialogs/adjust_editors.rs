@@ -138,9 +138,13 @@ pub fn curves_space(v: &Value, gray: bool) -> ToneSpace {
 pub fn gray_curves(v: &mut Value) {
     const STALE: [&str; 7] = ["cyan", "magenta", "yellow", "black", "lightness", "a", "b"];
     let rgb = adjust_params::channel_keys(ToneSpace::Rgb);
+    // A channel holds `[in, out]` points or a pencil-drawn 256-level map; the engine renders either.
     let straight = |key: &str| {
         let c = curves::read_curve(v, key);
-        c.first() == Some(&[0.0, 0.0]) && c.last() == Some(&[255.0, 255.0]) && c.iter().all(|p| (p[0] - p[1]).abs() < 0.01)
+        c.first() == Some(&[0.0, 0.0])
+            && c.last() == Some(&[255.0, 255.0])
+            && c.iter().all(|p| (p[0] - p[1]).abs() < 0.01)
+            && curves::read_map(v, key).iter().enumerate().all(|(k, o)| (o - k as f32).abs() < 0.5)
     };
     let bent = rgb.iter().any(|key| !straight(key));
     let Some(o) = v.as_object_mut().filter(|o| bent || STALE.iter().any(|k| o.contains_key(*k))) else { return };
