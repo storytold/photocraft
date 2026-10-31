@@ -446,3 +446,155 @@ fn accept_takes_the_key_from_every_command_holding_it() {
     let o = field(&h, id, "overrides");
     assert_eq!((o["edit.cut"].clone(), o["edit.copy"].clone(), o["edit.paste"].clone()), (json!(""), json!(""), json!("Cmd+X")), "{o}");
 }
+
+/// One tap of `key` with `modifiers` through the shell's shortcut handling.
+fn tap(app: &mut PhotocraftApp, ctx: &egui::Context, key: Key, modifiers: Modifiers) {
+    ctx.begin_pass(egui::RawInput {
+        events: vec![
+            Event::ModifiersChanged(modifiers),
+            Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers },
+            Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers },
+        ],
+        ..Default::default()
+    });
+    crate::shortcuts::handle(app, ctx);
+    ctx.end_pass().textures_delta.clear();
+}
+
+#[test]
+fn a_tool_given_another_tools_key_shares_it_on_ok() {
+    // Photoshop lets tools share a key and cycles them with Shift: B given to the Move Tool
+    // joins the Brush group instead of being taken from it.
+    let (mut h, id) = dialog(1.0, "tools.select.move", "Move Tool");
+    capture_key(&mut h, id, Key::B, Modifiers::NONE);
+    assert_eq!(field(&h, id, "overrides")["tools.select.move"], json!("B"));
+    assert_ne!(field(&h, id, "messageWarning"), json!(true), "{}", field(&h, id, "message"));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    let app = h.state();
+    for tool in ["brush", "pencil", "colorReplacement", "mixerBrush"] {
+        assert_eq!(app.session.prefs().shortcuts.get(&format!("tools.select.{tool}")).map(String::as_str), None, "{tool} keeps B");
+    }
+    assert_eq!(crate::tool_shortcuts::shortcut(app, crate::state::Tool::Move).as_deref(), Some("B"));
+}
+
+#[test]
+fn tools_sharing_a_changed_key_cycle_with_shift() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": "B"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    let mut seen = vec![];
+    for _ in 0..6 {
+        tap(&mut app, &ctx, Key::B, Modifiers::SHIFT);
+        seen.push(app.ui.tool);
+    }
+    assert!(seen.contains(&Tool::Move), "Shift+B reaches the Move Tool: {seen:?}");
+    assert!(seen.contains(&Tool::Brush) && seen.contains(&Tool::Pencil), "and still the Brush group: {seen:?}");
+
+    // Two tools moved onto one new key share it too. (⇧F6 is Feather, so the plain key cycles here.)
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": "F6", "tools.select.hand": "F6"}, "allowUnknown": true})).unwrap();
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    app.ui.tool = Tool::Zoom;
+    let mut seen = vec![];
+    for _ in 0..3 {
+        tap(&mut app, &ctx, Key::F6, Modifiers::NONE);
+        seen.push(app.ui.tool);
+    }
+    assert!(seen.contains(&Tool::Move) && seen.contains(&Tool::Hand), "F6 cycles both: {seen:?}");
+    // A key with modifiers still selects its one tool.
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "Ctrl+Alt+F6"}, "allowUnknown": true})).unwrap();
+    tap(&mut app, &ctx, Key::F6, crate::shortcuts::parse("Ctrl+Alt+F6").unwrap().modifiers);
+    assert_eq!(app.ui.tool, Tool::Hand);
+}
+
+/// A plain alternate (#3665) is no group key: F6 added to the Pencil, whose main key stays B,
+/// still selects it, as it did before tools could share assigned keys.
+#[test]
+fn a_tools_plain_alternate_still_selects_it() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.session.edit_prefs(|p| {
+        p.alternate_shortcuts.insert("tools.select.pencil".into(), vec!["F6".into()]);
+    });
+    app.ui.tool = Tool::Zoom;
+    tap(&mut app, &ctx, Key::F6, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Pencil);
+    assert_eq!(crate::tool_shortcuts::shortcut(&app, Tool::Pencil).as_deref(), Some("B"), "its main key is unchanged");
+}
+
+/// A focused text field lets F-keys through to the shortcuts, and a tool's plain F-key is one of
+/// them: there the tool keys don't run, so the key must stay in the dispatch table.
+#[test]
+fn a_tools_plain_f_key_works_from_a_focused_text_field() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "F6"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    let key = |pressed| Event::Key { key: Key::F6, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    ctx.begin_pass(egui::RawInput { events: vec![key(true), key(false)], ..Default::default() });
+    assert!(crate::shortcut_dispatch::dispatch_pressed(&mut app, &ctx, crate::shortcut_dispatch::Focus::Text, false));
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(app.ui.tool, Tool::Hand);
+}
+
+/// A focused widget keeps its own keys: a tool assigned Enter (or Tab, Space…) doesn't take it
+/// from the widget. (Enter, since egui moves focus on a Tab in the same pass.)
+#[test]
+fn a_focused_widget_keeps_a_key_a_tool_was_given() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.hand": "Enter"}, "allowUnknown": true})).unwrap();
+    app.ui.tool = Tool::Zoom;
+    let button = |ctx: &egui::Context| egui::Area::new(egui::Id::unique("focus-test")).show(ctx, |ui| ui.button("Focused")).inner;
+    ctx.begin_pass(egui::RawInput::default());
+    button(&ctx).request_focus();
+    ctx.end_pass().textures_delta.clear();
+    let enter = |pressed| Event::Key { key: Key::Enter, physical_key: None, pressed, repeat: false, modifiers: Modifiers::NONE };
+    ctx.begin_pass(egui::RawInput { events: vec![enter(true), enter(false)], ..Default::default() });
+    button(&ctx);
+    assert_eq!(crate::shortcut_dispatch::Focus::of(&ctx), crate::shortcut_dispatch::Focus::Widget);
+    crate::shortcuts::handle(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    assert_eq!(app.ui.tool, Tool::Zoom, "Enter stayed with the focused button");
+    // With nothing focused, Enter is the tool's.
+    tap(&mut app, &egui::Context::default(), Key::Enter, Modifiers::NONE);
+    assert_eq!(app.ui.tool, Tool::Hand);
+}
+
+/// The group a held key springs from is the tools sharing the current tool's key in effect: with
+/// the Move Tool given B, pressing B on it cycles its own group (no spring-loaded switch, which
+/// would give the Move Tool back on release).
+#[test]
+fn a_tools_assigned_key_cycles_its_group_without_springing() {
+    use crate::state::Tool;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    let ctx = egui::Context::default();
+    app.run("edit.keyboardShortcuts", json!({"set": {"tools.select.move": "B"}, "allowUnknown": true})).unwrap();
+    app.session.edit_prefs(|p| p.tools.use_shift_key_for_tool_switch = false);
+    app.ui.tool = Tool::Move;
+    tap(&mut app, &ctx, Key::B, Modifiers::NONE);
+    assert_ne!(app.ui.tool, Tool::Move, "B cycled the group");
+    assert!(app.ui.spring.is_none(), "a cycle in the tool's own group is no temporary switch: {:?}", app.ui.spring);
+}
+
+/// Only main keys are shared: B added to the Move Tool as an alternate (Add Shortcut) is no group
+/// key, so it clashes with the Brush group's B as any shortcut does, and OK takes it from them
+/// (dispatch keeps one command per key, so two tools can't both have it as an alternate).
+#[test]
+fn a_tools_plain_alternate_is_no_shared_key() {
+    let (mut h, id) = dialog(1.0, "tools.select.move", "Move Tool");
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("captureAlt".into(), json!(true));
+    capture_key(&mut h, id, Key::B, Modifiers::NONE);
+    assert_eq!(field(&h, id, "messageWarning"), json!(true), "{}", field(&h, id, "message"));
+    assert_eq!(field(&h, id, "alternates")["tools.select.move"], json!(["B"]));
+    crate::dialogs::confirm(h.state_mut(), id).unwrap();
+    h.run_steps(2);
+    let app = h.state();
+    assert_eq!(crate::shortcuts::effective_alternates(app, "tools.select.move"), ["B"]);
+    assert_eq!(crate::tool_shortcuts::shortcut(app, crate::state::Tool::Brush), None, "the Brush lost B to the alternate");
+}
