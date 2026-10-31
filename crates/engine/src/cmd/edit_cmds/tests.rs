@@ -843,6 +843,40 @@ fn paste_several_layers_into_another_document() {
     }
 }
 
+/// #9736: a clipped layer copied without its base pastes released, as Photoshop's Copy/Paste does,
+/// so it can't clip to an unrelated layer it lands on. Copied with its base, it stays clipped to it.
+#[test]
+fn a_clipped_layer_copied_without_its_base_pastes_released() {
+    let mut s = session();
+    let base = s.active().unwrap().active_layer.unwrap();
+    let mid = LayerId(s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("type.create", json!({"text": "H", "size": 30, "x": 20, "y": 60})).unwrap();
+    let text = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.setProps", json!({"layer": text.0, "clipped": true})).unwrap();
+    s.execute("file.new", json!({"width": 100, "height": 100})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let pasted = |s: &mut Session, ids: &[LayerId]| {
+        s.set_active(0);
+        s.execute("layer.select", json!({"layer": ids[0].0})).unwrap();
+        for id in &ids[1..] {
+            s.execute("layer.select", json!({"layer": id.0, "mode": "toggle"})).unwrap();
+        }
+        s.execute("edit.copy", json!({})).unwrap();
+        s.set_active(1);
+        s.execute("edit.paste", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let top = &st.doc.layers[st.doc.layers.len() - ids.len()..];
+        let clipped: Vec<bool> = top.iter().map(|l| l.clipped).collect();
+        assert!(s.undo());
+        clipped
+    };
+    assert_eq!(pasted(&mut s, &[text]), [false], "alone: released, not clipped to the destination layer");
+    assert_eq!(pasted(&mut s, &[mid, text]), [false, true], "with its base: still clipped to it");
+    assert_eq!(pasted(&mut s, &[base, text]), [false, false], "its base left behind: not clipped to another copied layer");
+    s.set_active(0);
+    assert!(s.active().unwrap().doc.layer(text).unwrap().clipped, "the source is untouched");
+}
+
 /// #2478: the Background in a multi-layer copy pastes as an ordinary, unlocked layer.
 #[test]
 fn copying_the_background_with_another_layer_pastes_an_ordinary_layer() {
