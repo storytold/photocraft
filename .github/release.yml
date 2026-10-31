@@ -1,0 +1,16 @@
+changelog:
+  categories:
+    - title: Features and workflow improvements
+      labels: [enhancement]
+    - title: Fixes and reliability
+      labels: [bug, regression, reliability]
+    - title: Performance
+      labels: [performance]
+    - title: File compatibility
+      labels: [file-compat]
+    - title: Documentation
+      labels: [documentation]
+    - title: Dependencies
+      labels: [dependencies]
+    - title: Other changes
+      labels: ['*']
