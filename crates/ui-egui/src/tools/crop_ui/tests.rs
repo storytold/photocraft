@@ -163,6 +163,54 @@ fn the_frame_is_edited_from_a_press_until_commit_cancel_or_another_tool() {
 }
 
 #[test]
+fn escape_hides_the_frame_until_the_next_draw() {
+    let mut app = app(SampleType::U8);
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some());
+    // Photoshop hides the border on Esc while the tool stays picked (#10370).
+    cancel(&mut app);
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_none());
+    // An edit re-arms it: a new selection gets its own default frame.
+    app.run("select.rect", json!({"x": 20, "y": 10, "width": 80, "height": 40})).unwrap();
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some());
+    cancel(&mut app);
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_none());
+    // A draw re-arms it too.
+    drag(&mut app, &[[10.0, 10.0], [60.0, 40.0]], NONE);
+    assert!(app.ui.crop_rect.is_some());
+    // And picking another tool, then Crop again, shows the default frame once more (the
+    // selection is still live, so it frames its bounds).
+    cancel(&mut app);
+    app.ui.tool = Tool::Brush;
+    ensure_frame(&mut app);
+    app.ui.tool = Tool::Crop;
+    ensure_frame(&mut app);
+    assert_eq!(app.ui.crop_rect, Some([20.0, 10.0, 100.0, 50.0]));
+}
+
+/// The dismissal is bound to the document's identity, not its tab slot: closing the cancelled
+/// document slides the next same-sized, unedited document into the same index, and it must
+/// still get its own frame.
+#[test]
+fn a_dismissed_frame_does_not_hide_the_next_documents() {
+    let mut app = app(SampleType::U8);
+    let doc = Document::with_background("other", Size::new(200, 100), ColorMode::Rgb, SampleType::U8, Color::WHITE);
+    app.session.add_document(doc, None);
+    assert!(app.session.set_active(0));
+    ensure_frame(&mut app);
+    cancel(&mut app);
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_none());
+    app.session.close(0);
+    app.sync_views();
+    ensure_frame(&mut app);
+    assert!(app.ui.crop_rect.is_some(), "the document slid into the slot gets its own frame");
+}
+
+#[test]
 fn hit_test_finds_handles_inside_and_outside() {
     let r = [10.0, 10.0, 110.0, 60.0];
     assert_eq!(hit(r, [10.0, 10.0], 4.0), Hit::Handle(-1, -1));
