@@ -370,6 +370,10 @@ pub struct Services {
     pub beep: Option<fn()>,
     /// Starts a background check for published releases (desktop, outside Flatpak).
     pub check_updates: Option<photocraft_engine::updates_cmds::CheckFn>,
+    /// Downloads plug-ins for Plugins › Browse Plugins… in the background (desktop).
+    pub fetch_plugin: Option<photocraft_engine::plugin_store_cmds::FetchFn>,
+    /// Where plug-ins installed from the catalog are kept between runs (desktop).
+    pub plugin_dir: Option<std::path::PathBuf>,
     /// Files delivered asynchronously (web drag-and-drop): drained every frame and opened as
     /// documents.
     pub inbox: Option<Inbox>,

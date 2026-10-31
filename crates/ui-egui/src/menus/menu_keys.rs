@@ -19,7 +19,7 @@ use egui::{Color32, Event, Id, Key, Modifiers, Stroke, Ui};
 use crate::menu_nav::Nav;
 
 /// Photoshop's mnemonics for the top menus (Windows), used where the shown label has the letter.
-pub const TOP_PREFERRED: [(&str, char); 10] = [
+pub const TOP_PREFERRED: [(&str, char); 11] = [
     ("File", 'F'),
     ("Edit", 'E'),
     ("Image", 'I'),
@@ -28,6 +28,7 @@ pub const TOP_PREFERRED: [(&str, char); 10] = [
     ("Select", 'S'),
     ("Filter", 'T'),
     ("View", 'V'),
+    ("Plugins", 'P'),
     ("Window", 'W'),
     ("Help", 'H'),
 ];
@@ -436,9 +437,9 @@ mod tests {
 
     #[test]
     fn letters_are_unique_and_prefer_photoshop_s() {
-        let labels = ["File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"];
+        let labels = ["File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Plugins", "Window", "Help"];
         let preferred: Vec<Option<char>> = TOP_PREFERRED.iter().map(|(_, c)| Some(*c)).collect();
-        assert_eq!(assign(&labels, &preferred), "FEILYSTVWH".chars().map(Some).collect::<Vec<_>>());
+        assert_eq!(assign(&labels, &preferred), "FEILYSTVPWH".chars().map(Some).collect::<Vec<_>>());
         // Items: first letters first, then the next free letter of the word starts, then any.
         assert_eq!(
             assign(&["New…", "Open…", "Open Recent", "Close", "Close All", "Save", "Save As…"], &[]),

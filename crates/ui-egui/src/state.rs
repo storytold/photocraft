@@ -493,6 +493,9 @@ pub struct UiState {
     /// Non-modal release-check window; readable and controllable through `ui.inspect`/`ui.set`.
     #[serde(default)]
     pub updates_open: bool,
+    /// Plugins › Browse Plugins… / Manage Plugins… (`plugin_store_ui`).
+    #[serde(default)]
+    pub plugin_store: crate::plugin_store_ui::StoreView,
     /// Pending GPU fallback warning, visible to automation.
     #[serde(default)]
     pub gpu_fallback_notice: Option<String>,
@@ -611,6 +614,7 @@ impl Default for UiState {
             status_error: false,
             notices: Vec::new(),
             updates_open: false,
+            plugin_store: Default::default(),
             gpu_fallback_notice: None,
             kys_offer: None,
             slow_refresh_noticed: Vec::new(),
