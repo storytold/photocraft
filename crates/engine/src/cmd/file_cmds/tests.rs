@@ -1989,3 +1989,19 @@ fn sanitize_keeps_windows_device_names_off_the_disk() {
         assert_eq!(sanitize(name), name);
     }
 }
+
+#[test]
+fn layers_to_files_shortens_long_layer_names() {
+    let dir = tmp("long-layer-name");
+    let mut s = session(4, 4, 8);
+    let name = format!("{}{}", "a".repeat(199), "é".repeat(60));
+    s.execute("layer.new.layer", json!({"name": name})).unwrap();
+    let result = s.execute("file.export.layersToFiles", json!({"dir": dir, "prefix": "doc"})).unwrap();
+    let files = result["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    for f in files {
+        let f = f.as_str().unwrap();
+        assert!(std::path::Path::new(f).file_name().unwrap().len() <= 255, "{f}");
+        assert!(std::path::Path::new(f).exists(), "{f}");
+    }
+}
