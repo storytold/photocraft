@@ -527,10 +527,11 @@ fn path_mode_shape_drags_add_to_the_work_path() {
     assert_eq!(app.session.active().unwrap().doc.layers.len(), layers + 1);
 }
 
-/// CodeRabbit on #9456: a Custom Shape's own subtracted subpaths (the Ring's hole) keep their
-/// operation when Path mode adds the shape to the work path, as in Photoshop.
+/// CodeRabbit on #9456: Path mode adds a Custom Shape to the work path as one shape component,
+/// its hole joined to it, as Photoshop does (the Ring's hole no longer turns into a combined
+/// subpath, nor stays a subtracted one that would cut the work path under it).
 #[test]
-fn path_mode_custom_shape_keeps_its_subtracted_subpaths() {
+fn path_mode_custom_shape_joins_its_hole_to_it() {
     use photocraft_doc::PathOp;
     let mut app = app();
     app.ui.tool_options.shape_mode = "path".into();
@@ -538,7 +539,46 @@ fn path_mode_custom_shape_keeps_its_subtracted_subpaths() {
     app.ui.presets_ui.custom_shape = "Ring".into();
     finish_shape(&mut app, Tool::CustomShape, [20.0, 20.0], [70.0, 70.0], egui::Modifiers::NONE);
     let ops: Vec<PathOp> = app.session.active().unwrap().doc.work_path.as_ref().unwrap().subpaths.iter().map(|s| s.op).collect();
-    assert_eq!(ops, [PathOp::Combine, PathOp::Combine, PathOp::Subtract], "the rectangle, the ring and its hole");
+    assert_eq!(ops, [PathOp::Combine, PathOp::Combine, PathOp::Join], "the rectangle, the ring and its hole");
+    assert_eq!(work_covered(&app, 45, 45), 0.0, "the ring's hole");
+    assert_eq!(work_covered(&app, 22, 45), 1.0, "the ring");
+}
+
+/// CodeRabbit on #9456, checked in Photoshop 2025: a Ring drawn in Path mode over a rectangle
+/// cuts its hole in the ring only; the rectangle stays whole where the hole overlaps it.
+#[test]
+fn path_mode_custom_shape_hole_leaves_the_work_path_under_it() {
+    let mut app = app();
+    app.ui.tool_options.shape_mode = "path".into();
+    finish_shape(&mut app, Tool::Rectangle, [20.0, 20.0], [120.0, 120.0], egui::Modifiers::NONE);
+    app.ui.presets_ui.custom_shape = "Ring".into();
+    finish_shape(&mut app, Tool::CustomShape, [80.0, 80.0], [180.0, 180.0], egui::Modifiers::NONE);
+    assert_eq!(work_covered(&app, 50, 50), 1.0, "the rectangle");
+    assert_eq!(work_covered(&app, 110, 110), 1.0, "the rectangle under the ring's hole");
+    assert_eq!(work_covered(&app, 130, 130), 0.0, "the ring's hole");
+    assert_eq!(work_covered(&app, 170, 130), 1.0, "the ring");
+}
+
+/// Every built-in custom shape drawn alone in Path mode covers what the shape does, joined into
+/// one component or, where that would change its area (the Crescent Moon's cut reaches past
+/// the disc), kept as it is.
+#[test]
+fn path_mode_custom_shapes_keep_their_area() {
+    let mut app = app();
+    app.ui.tool_options.shape_mode = "path".into();
+    let rect = photocraft_geom::Rect::from_xywh(0, 0, 200, 200);
+    for g in photocraft_engine::presets::shapes::builtin() {
+        for shape in g.items {
+            app.run("path.delete", json!({"name": "work"})).ok();
+            app.ui.presets_ui.custom_shape = shape.name.clone();
+            finish_shape(&mut app, Tool::CustomShape, [10.0, 10.0], [190.0, 190.0], egui::Modifiers::NONE);
+            let work = app.session.active().unwrap().doc.work_path.clone().expect("a work path");
+            let want = photocraft_engine::presets::shapes::fit(&shape.path, [10.0, 10.0, 180.0, 180.0], false);
+            let (a, b) = (photocraft_vector::path_coverage(&work, rect), photocraft_vector::path_coverage(&want, rect));
+            let off = a.iter().zip(&b).filter(|(a, b)| (*a - *b).abs() > 0.5).count();
+            assert_eq!(off, 0, "{}: {off} pixels differ", shape.name);
+        }
+    }
 }
 
 /// Coverage of the work path at pixel `(x, y)`.
