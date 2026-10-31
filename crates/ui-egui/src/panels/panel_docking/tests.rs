@@ -820,6 +820,55 @@ fn floating_group_grip_redocks_all_tabs_as_one_atomic_move() {
     assert_eq!(h.state().ui.docking, before);
 }
 
+/// #4503: in a window too narrow for its tabs, each panel name is cut with "…" inside its own
+/// tab instead of running under its neighbours, and hovering the tab shows the full name.
+#[test]
+fn panel_names_that_do_not_fit_a_window_group_are_truncated_inside_their_tabs() {
+    fn texts<'a>(shape: &'a egui::Shape, out: &mut Vec<&'a egui::epaint::TextShape>) {
+        match shape {
+            egui::Shape::Text(t) => out.push(t),
+            egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| texts(s, out)),
+            _ => {}
+        }
+    }
+    fn painted(h: &Harness<'static, PhotocraftApp>, name: &str) -> Vec<(String, egui::Rect)> {
+        let mut shapes = Vec::new();
+        h.output().shapes.iter().for_each(|s| texts(&s.shape, &mut shapes));
+        shapes
+            .into_iter()
+            .filter(|t| t.galley.job.text == name)
+            .map(|t| (t.galley.rows.iter().map(|row| row.text()).collect(), t.galley.rect.translate(t.pos.to_vec2())))
+            .collect()
+    }
+
+    let panels = [("adjustments", "Adjustments"), ("layerComps", "Layer Comps"), ("properties", "Properties")];
+    let mut app = app();
+    app.run("window.panel.float", json!({"panel":"adjustments","x":40,"y":60,"width":265,"height":300})).unwrap();
+    for (panel, _) in &panels[1..] {
+        app.run("window.panel.move", json!({"panel":panel,"anchor":"adjustments"})).unwrap();
+    }
+    let mut h = harness(app, vec2(1280.0, 800.0));
+    assert_eq!(group_members(lay(h.state()), "adjustments"), panels.map(|(id, _)| id));
+
+    for (panel, name) in panels {
+        let tab = tab_rect(&h, panel);
+        let drawn: Vec<_> = painted(&h, name).into_iter().filter(|(_, at)| tab.contains(at.center())).collect();
+        let [(visible, at)] = drawn.as_slice() else { panic!("{name}: one label in its tab {tab:?}, drawn {drawn:?}") };
+        let kept = visible.strip_suffix('…').filter(|kept| kept.len() < name.len() && name.starts_with(kept));
+        assert!(kept.is_some(), "{name}: drawn as {visible:?} in a {:.0} pt tab", tab.width());
+        assert!(at.left() >= tab.left() && at.right() <= tab.right(), "{name}: label {at:?} runs out of its tab {tab:?}");
+    }
+
+    // The full name is a hover away, outside the strip.
+    let tab = tab_rect(&h, "layerComps");
+    let tooltip =
+        |h: &Harness<'static, PhotocraftApp>| painted(h, "Layer Comps").into_iter().any(|(visible, at)| visible == "Layer Comps" && !at.intersects(tab));
+    assert!(!tooltip(&h), "no full name before hovering");
+    h.hover_at(tab.center());
+    h.run_steps(60);
+    assert!(tooltip(&h), "hovering the cut tab shows Layer Comps in full");
+}
+
 #[test]
 fn mixed_theme_and_legacy_selection_projects_the_selected_panel_in_the_new_theme() {
     let mut app = app();
