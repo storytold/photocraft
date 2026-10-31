@@ -291,3 +291,359 @@ fn popup_body_ltr_matches_a_direct_call() {
     out.textures_delta.clear();
     assert_eq!(widths[0], widths[1], "LTR: popup_body changed the body's measured width");
 }
+
+#[test]
+fn float_window_x_pins_to_the_reading_end_edge() {
+    let canvas = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1000.0, 700.0));
+    {
+        let _ltr = direction_scope(Dir::Ltr);
+        assert_eq!(float_window_x(canvas, 250.0, 16.0, 0.0), 734.0);
+        assert_eq!(float_window_x(canvas, 250.0, 16.0, -280.0), 454.0);
+    }
+    let _rtl = direction_scope(Dir::Rtl);
+    assert_eq!(float_window_x(canvas, 250.0, 16.0, 0.0), 16.0);
+    assert_eq!(float_window_x(canvas, 250.0, 16.0, -280.0), 296.0);
+    // A canvas narrower than the window keeps 8 px of it on the canvas.
+    let narrow = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(200.0, 700.0));
+    assert_eq!(float_window_x(narrow, 250.0, 16.0, 0.0), 8.0);
+    {
+        let _ltr = direction_scope(Dir::Ltr);
+        assert_eq!(float_window_x(narrow, 250.0, 16.0, 0.0), 8.0);
+    }
+}
+
+#[test]
+fn start_rect_family_mirrors_around_the_reading_start() {
+    let rect = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(300.0, 22.0));
+    {
+        let _ltr = direction_scope(Dir::Ltr);
+        assert_eq!(start_rect(rect, egui::vec2(10.0, 2.0), egui::vec2(30.0, 10.0)).min, egui::pos2(110.0, 42.0));
+        assert_eq!(start_cell(rect, 30.0).min, egui::pos2(100.0, 40.0));
+        assert_eq!(start_cell(rect, 999.0).width(), 300.0, "clamped to the rect's width");
+        assert_eq!(advance(100.0, 30.0), 130.0);
+        assert_eq!(start_span(200.0, 40.0, 40.0, 62.0), egui::Rect::from_min_max(egui::pos2(200.0, 40.0), egui::pos2(240.0, 62.0)));
+        let prev = egui::Rect::from_min_size(egui::pos2(110.0, 42.0), egui::vec2(30.0, 10.0));
+        assert_eq!(name_span(prev, rect, 12.0, 4.0), (152.0, 396.0));
+        assert_eq!(start_edge(rect), 100.0);
+        let r1 = egui::Rect::from_min_size(egui::pos2(150.0, 0.0), egui::vec2(20.0, 10.0));
+        let r2 = egui::Rect::from_min_size(egui::pos2(300.0, 0.0), egui::vec2(20.0, 10.0));
+        assert_eq!(row_end_edge([r1, r2], 100.0), 320.0);
+    }
+    let _rtl = direction_scope(Dir::Rtl);
+    assert_eq!(start_rect(rect, egui::vec2(10.0, 2.0), egui::vec2(30.0, 10.0)).min, egui::pos2(360.0, 42.0));
+    assert_eq!(start_cell(rect, 30.0).min, egui::pos2(370.0, 40.0));
+    assert_eq!(start_cell(rect, 999.0).min, egui::pos2(100.0, 40.0), "clamped to the rect's width");
+    assert_eq!(advance(400.0, 30.0), 370.0);
+    assert_eq!(start_span(200.0, 40.0, 40.0, 62.0), egui::Rect::from_min_max(egui::pos2(160.0, 40.0), egui::pos2(200.0, 62.0)));
+    let prev = egui::Rect::from_min_size(egui::pos2(110.0, 42.0), egui::vec2(30.0, 10.0));
+    assert_eq!(name_span(prev, rect, 12.0, 4.0), (98.0, 104.0));
+    assert_eq!(start_edge(rect), 400.0);
+    let r1 = egui::Rect::from_min_size(egui::pos2(150.0, 0.0), egui::vec2(20.0, 10.0));
+    let r2 = egui::Rect::from_min_size(egui::pos2(300.0, 0.0), egui::vec2(20.0, 10.0));
+    assert_eq!(row_end_edge([r1, r2], 400.0), 150.0);
+}
+
+#[test]
+fn text_anchors_hug_the_mirrored_edges() {
+    let rect = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(300.0, 22.0));
+    {
+        let _ltr = direction_scope(Dir::Ltr);
+        assert_eq!(start_text_anchor(rect, 6.0), (egui::pos2(106.0, 51.0), egui::Align2::LEFT_CENTER));
+        assert_eq!(end_text_anchor(rect, 6.0), (egui::pos2(394.0, 51.0), egui::Align2::RIGHT_CENTER));
+    }
+    let _rtl = direction_scope(Dir::Rtl);
+    assert_eq!(start_text_anchor(rect, 6.0), (egui::pos2(394.0, 51.0), egui::Align2::RIGHT_CENTER));
+    assert_eq!(end_text_anchor(rect, 6.0), (egui::pos2(106.0, 51.0), egui::Align2::LEFT_CENTER));
+}
+
+/// Left x of the text `text` in a raw context's painted shapes.
+fn raw_text_x(out: &egui::FullOutput, text: &str) -> f32 {
+    fn find(shape: &egui::Shape, text: &str) -> Option<f32> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.job.text == text => Some(t.pos.x),
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, text)),
+            _ => None,
+        }
+    }
+    out.shapes.iter().find_map(|s| find(&s.shape, text)).unwrap_or_else(|| panic!("`{text}` painted"))
+}
+
+#[test]
+fn paint_label_span_elides_and_aligns_into_the_reading_direction() {
+    let font = egui::FontId::default();
+    let color = egui::Color32::WHITE;
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let p = ui.painter().clone();
+            if dir == Dir::Rtl {
+                let rtl_span = paint_label_span(&p, 400.0, 50.0, 100.0, "a long layer name", font.clone(), color).expect("painted");
+                assert!((rtl_span.right() - 400.0).abs() < 0.5, "{dir:?}: anchored at the reading start: {rtl_span:?}");
+                assert!(rtl_span.width() <= 300.5, "{dir:?}: elided to the span");
+                // An unconverted caller (anchor before the limit) keeps the left-to-right contract.
+                let ltr_span = paint_label_span(&p, 100.0, 80.0, 400.0, "a long layer name", font.clone(), color).expect("painted");
+                assert!((ltr_span.left() - 100.0).abs() < 0.5, "{dir:?}: unconverted span keeps the LTR contract: {ltr_span:?}");
+            } else {
+                let ltr_span = paint_label_span(&p, 100.0, 80.0, 400.0, "a long layer name", font.clone(), color).expect("painted");
+                assert!((ltr_span.left() - 100.0).abs() < 0.5, "{dir:?}: anchored at the reading start: {ltr_span:?}");
+                assert!(ltr_span.width() <= 300.5, "{dir:?}: elided to the span");
+                assert!(paint_label_span(&p, 400.0, 50.0, 100.0, "x", font.clone(), color).is_none(), "{dir:?}: a negative-width span paints nothing");
+            }
+            // No room at all: nothing painted.
+            assert!(paint_label_span(&p, 100.0, 110.0, 104.0, "x", font.clone(), color).is_none());
+        });
+        out.textures_delta.clear();
+    }
+}
+
+#[test]
+fn paint_elided_centres_on_cy_and_reports_elision() {
+    let font = egui::FontId::default();
+    let color = egui::Color32::WHITE;
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let p = ui.painter().clone();
+            let short = paint_elided(&p, 400.0, 50.0, 300.0, "ok", font.clone(), color).expect("painted");
+            assert!(!short.1, "{dir:?}: short text is not elided");
+            assert!((short.0.center().y - 50.0).abs() < 0.5, "{dir:?}: vertically centred on cy");
+            let long = paint_elided(&p, 400.0, 80.0, 60.0, "a much longer title than fits", font.clone(), color).expect("painted");
+            assert!(long.1, "{dir:?}: long text is elided");
+            assert!(long.0.width() <= 60.5, "{dir:?}: painted inside max_w: {:?}", long.0);
+            if dir == Dir::Rtl {
+                assert!((short.0.right() - 400.0).abs() < 0.5, "{dir:?}: anchored at the reading-start edge");
+                assert!((long.0.right() - 400.0).abs() < 0.5, "{dir:?}: anchored at the reading-start edge");
+            } else {
+                assert!((short.0.left() - 400.0).abs() < 0.5, "{dir:?}: anchored at x");
+            }
+            assert!(elided_galley(&p, "x", font.clone(), color, false, 4.0).is_none(), "no room, no galley");
+        });
+        out.textures_delta.clear();
+    }
+}
+
+#[test]
+fn popup_anchor_reading_end_moves_past_the_reading_end() {
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let resp = ui.button("gear");
+            let anchor = popup_anchor_reading_end(&resp, 30.0);
+            let egui::PopupAnchor::ParentRect(r) = anchor else { panic!("ParentRect") };
+            let want = if dir == Dir::Rtl { -30.0 } else { 30.0 };
+            assert!((r.min.x - (resp.interact_rect.min.x + want)).abs() < 0.5, "{dir:?}: {r:?} vs {:?}", resp.interact_rect);
+            assert!((r.min.y - resp.interact_rect.min.y).abs() < 0.5, "{dir:?}: y unchanged");
+        });
+        out.textures_delta.clear();
+    }
+}
+
+#[test]
+fn popup_area_near_hangs_off_the_reading_end_edge() {
+    let anchor = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(24.0, 24.0));
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            let area = popup_area_near(ui, "flyout", anchor, 6.0);
+            let dbg = format!("{area:?}");
+            if dir == Dir::Rtl {
+                assert!(dbg.contains("pivot: Align2(Max, Min)"), "{dir:?}: RIGHT_TOP: {dbg}");
+                assert!(dbg.contains("new_pos: Some([94.0 40.0])"), "{dir:?}: {dbg}");
+            } else {
+                assert!(dbg.contains("pivot: Align2(Min, Min)"), "{dir:?}: LEFT_TOP: {dbg}");
+                assert!(dbg.contains("new_pos: Some([130.0 40.0])"), "{dir:?}: {dbg}");
+            }
+        });
+        out.textures_delta.clear();
+    }
+}
+
+#[test]
+fn form_grid_lays_caption_then_editor_in_reading_order() {
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            ui.set_max_width(400.0);
+            form_grid(ui, "test-form", [12.0, 6.0], 120.0, |row| {
+                row("Alpha", &mut |ui, cap| {
+                    assert_ne!(cap, egui::Id::NULL, "the editor gets the caption's Id");
+                    ui.button("a-edit");
+                });
+                row("", &mut |ui, cap| {
+                    if dir == Dir::Rtl {
+                        assert_eq!(cap, egui::Id::NULL, "{dir:?}: a bare editor gets no caption Id");
+                    }
+                    ui.button("b-edit");
+                });
+            });
+        });
+        let caption_x = raw_text_x(&out, "Alpha");
+        let edit_x = raw_text_x(&out, "a-edit");
+        if dir == Dir::Rtl {
+            assert!(caption_x > edit_x, "{dir:?}: caption leads from the right: {caption_x} vs {edit_x}");
+        } else {
+            assert!(caption_x < edit_x, "{dir:?}: caption leads from the left: {caption_x} vs {edit_x}");
+        }
+        out.textures_delta.clear();
+    }
+}
+
+#[test]
+fn ltr_grid_keeps_ltr_cell_order_under_rtl() {
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            ui.set_max_width(400.0);
+            let ir = ltr_grid(ui, "test-grid", 2, egui::vec2(6.0, 3.0), |ui| {
+                ui.button("one");
+                ui.button("two");
+                ui.end_row();
+            });
+            let r = ir.response.rect;
+            assert!(r.width() <= 400.5, "{dir:?}: grid inside the max width");
+        });
+        let one = raw_text_x(&out, "one");
+        let two = raw_text_x(&out, "two");
+        assert!(one < two, "{dir:?}: the grid scope stays left-to-right: {one} vs {two}");
+        out.textures_delta.clear();
+    }
+}
+
+#[test]
+fn row_width_reads_max_rect_under_rtl() {
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            ui.allocate_ui_with_layout(egui::vec2(300.0, 100.0), Layout::top_down(Align::Min), |ui| {
+                let w = row_width(ui);
+                if dir == Dir::Rtl {
+                    assert_eq!(w, ui.max_rect().width(), "{dir:?}: max_rect width");
+                } else {
+                    assert_eq!(w, 300.0, "{dir:?}: available width");
+                }
+            });
+        });
+        out.textures_delta.clear();
+    }
+}
+
+#[test]
+fn end_side_helpers_mirror_the_end_edge() {
+    let bar = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(300.0, 22.0));
+    {
+        let _ltr = direction_scope(Dir::Ltr);
+        assert_eq!(text_direction(), egui::epaint::text::TextDirection::LeftToRight);
+        assert_eq!(end_corner_anchor(true, 16.0, -36.0), (egui::Align2::RIGHT_BOTTOM, egui::vec2(-16.0, -36.0)));
+        assert_eq!(end_corner_anchor(false, 16.0, 8.0), (egui::Align2::RIGHT_TOP, egui::vec2(-16.0, 8.0)));
+        let (rest, strip) = split_end(bar, 60.0);
+        assert_eq!(rest, egui::Rect::from_min_max(egui::pos2(100.0, 40.0), egui::pos2(340.0, 62.0)));
+        assert_eq!(strip, egui::Rect::from_min_max(egui::pos2(340.0, 40.0), egui::pos2(400.0, 62.0)));
+        let (rest, strip) = split_end(bar, 999.0);
+        assert_eq!(strip, bar, "the strip is clamped into the bar");
+        assert_eq!(rest.width(), 0.0);
+        assert_eq!(end_span(340.0, 60.0, 40.0, 62.0), egui::Rect::from_min_max(egui::pos2(340.0, 40.0), egui::pos2(400.0, 62.0)));
+    }
+    let _rtl = direction_scope(Dir::Rtl);
+    assert_eq!(text_direction(), egui::epaint::text::TextDirection::RightToLeft);
+    assert_eq!(end_corner_anchor(true, 16.0, -36.0), (egui::Align2::LEFT_BOTTOM, egui::vec2(16.0, -36.0)));
+    assert_eq!(end_corner_anchor(false, 16.0, 8.0), (egui::Align2::LEFT_TOP, egui::vec2(16.0, 8.0)));
+    let (rest, strip) = split_end(bar, 60.0);
+    assert_eq!(rest, egui::Rect::from_min_max(egui::pos2(160.0, 40.0), egui::pos2(400.0, 62.0)));
+    assert_eq!(strip, egui::Rect::from_min_max(egui::pos2(100.0, 40.0), egui::pos2(160.0, 62.0)));
+    let (rest, strip) = split_end(bar, 999.0);
+    assert_eq!(strip, bar, "the strip is clamped into the bar");
+    assert_eq!(rest.width(), 0.0);
+    assert_eq!(end_span(160.0, 60.0, 40.0, 62.0), egui::Rect::from_min_max(egui::pos2(100.0, 40.0), egui::pos2(160.0, 62.0)));
+}
+
+#[test]
+fn full_rows_and_trailing_row_pin_the_reading_order() {
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            ui.allocate_ui_with_layout(egui::vec2(300.0, 200.0), Layout::top_down(Align::Min), |ui| {
+                let want_row = if dir == Dir::Rtl { egui::Direction::RightToLeft } else { egui::Direction::LeftToRight };
+                let want_trailing = if dir == Dir::Rtl { egui::Direction::LeftToRight } else { egui::Direction::RightToLeft };
+                let mut seen = Vec::new();
+                full_row(ui, |ui| {
+                    seen.push((ui.layout().main_dir(), ui.max_rect().width(), ui.max_rect().height()));
+                    ui.button("a");
+                });
+                full_trailing(ui, |ui| {
+                    seen.push((ui.layout().main_dir(), ui.max_rect().width(), ui.max_rect().height()));
+                    ui.button("b");
+                });
+                let ambient = ui.layout().main_dir();
+                trailing_row(ui, |ui| {
+                    seen.push((ui.layout().main_dir(), 0.0, 0.0));
+                    ui.button("c");
+                });
+                assert_eq!(seen[0].0, want_row, "{dir:?}: full_row runs in reading order");
+                assert_eq!(seen[1].0, want_trailing, "{dir:?}: full_trailing starts from the reading end");
+                assert_eq!(seen[2].0, if dir == Dir::Rtl { want_trailing } else { ambient }, "{dir:?}: trailing_row pins only under RTL");
+                for (d, w, h) in &seen[..2] {
+                    assert!((*w - 300.0).abs() < 0.5 && *h > 0.0, "{dir:?}: pinned full-width interact-height row: {d:?} {w} {h}");
+                }
+            });
+        });
+        out.textures_delta.clear();
+    }
+}
+
+#[test]
+fn hscroll_row_centres_in_ltr_and_mirrors_the_region_in_rtl() {
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        let _dir = direction_scope(dir);
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(Default::default(), |ui| {
+            ui.set_max_width(400.0);
+            let rects = std::cell::RefCell::new(Vec::new());
+            hscroll_row(ui, |ui| {
+                rects.borrow_mut().push(ui.button("first").rect);
+                rects.borrow_mut().push(ui.button("second").rect);
+            });
+            let rects = rects.borrow();
+            if dir == Dir::Rtl {
+                assert!(rects[0].right() > rects[1].right(), "{dir:?}: the row anchors at the reading-start (right) edge: {:?}", *rects);
+            } else {
+                assert!(rects[0].right() < rects[1].right(), "{dir:?}: plain left-to-right row: {:?}", *rects);
+            }
+        });
+        out.textures_delta.clear();
+    }
+}
+
+#[test]
+fn clamp_window_min_size_keeps_the_anchored_edge_fixed() {
+    let rect = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(300.0, 22.0));
+    let min = egui::vec2(400.0, 50.0);
+    {
+        let _ltr = direction_scope(Dir::Ltr);
+        // LTR anchors the window at the left edge: the rect grows rightward and downward.
+        let c = clamp_window_min_size(rect, min);
+        assert_eq!(c.min, egui::pos2(100.0, 40.0));
+        assert_eq!(c.size(), egui::vec2(400.0, 50.0));
+        assert!(c.width() >= min.x && c.height() >= min.y);
+        // A rect already at least min wide is unchanged.
+        let wide = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(500.0, 60.0));
+        assert_eq!(clamp_window_min_size(wide, min), wide);
+    }
+    let _rtl = direction_scope(Dir::Rtl);
+    // RTL anchors the window at the right edge: the rect grows leftward, right edge fixed.
+    let c = clamp_window_min_size(rect, min);
+    assert_eq!(c.right(), rect.right(), "the anchored right edge stays put");
+    assert_eq!(c.top(), rect.top());
+    assert_eq!(c.size(), egui::vec2(400.0, 50.0));
+    assert_eq!(c.min, egui::pos2(0.0, 40.0));
+    assert!(c.width() >= min.x && c.height() >= min.y, "min width enforced in RTL too");
+    let wide = egui::Rect::from_min_size(egui::pos2(100.0, 40.0), egui::vec2(500.0, 60.0));
+    assert_eq!(clamp_window_min_size(wide, min), wide);
+}

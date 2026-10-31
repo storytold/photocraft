@@ -28,7 +28,7 @@
 use std::cell::Cell;
 use std::sync::OnceLock;
 
-use egui::{Align, Align2, Layout};
+use egui::{Align, Align2, Layout, NumExt};
 
 pub use crate::i18n::Dir;
 
@@ -132,11 +132,18 @@ pub fn trailing_min() -> Layout {
 /// flag), so in a right-to-left UI every popup body scopes itself through this helper.
 /// The cross align stays `Min`: rows fill the width (justified), and a `Max` align would seed
 /// the scope's `min_rect` at the far edge of the pinned `max_rect`, so the sizing pass would
-/// measure the popup at the full default area width instead of the rows' width. Left-to-right
-/// the popup's own layout is used unchanged.
+/// measure the popup at the full default area width instead of the rows' width. The sizing
+/// pass itself runs in an LTR scope: it measures against the wide default area, and rows
+/// anchored to the reading end would measure — and lock in — that full width. Left-to-right
+/// the popup's own layout is used unchanged, sizing pass included.
 pub fn popup_body<R>(ui: &mut egui::Ui, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
     if is_rtl() {
-        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(Layout::top_down_justified(Align::Min)), add_contents).inner
+        if ui.is_sizing_pass() {
+            let _ltr = direction_scope(Dir::Ltr);
+            add_contents(ui)
+        } else {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(Layout::top_down_justified(Align::Min)), add_contents).inner
+        }
     } else {
         add_contents(ui)
     }
@@ -184,7 +191,7 @@ pub fn body_label(ui: &mut egui::Ui, text: impl Into<egui::WidgetText>) -> egui:
         return ui.label(text);
     }
     let mut job = std::sync::Arc::unwrap_or_clone(text.into_layout_job(ui.style(), egui::FontSelection::Default, ui.text_valign()));
-    job.direction = egui::epaint::text::TextDirection::RightToLeft;
+    job.direction = text_direction();
     job.halign = Align::Max;
     ui.label(egui::WidgetText::LayoutJob(std::sync::Arc::new(job)))
 }
@@ -269,6 +276,61 @@ pub fn after_x(rect: egui::Rect, off: f32, w: f32) -> f32 {
     if is_rtl() { rect.left() - off - w } else { rect.right() + off }
 }
 
+/// A `size` rect whose reading-start-top corner sits `off` from `rect`'s reading-start-top
+/// corner: LTR min = rect.left_top() + off; RTL min = (rect.right() - off.x - size.x, rect.top() + off.y).
+pub fn start_rect(rect: egui::Rect, off: egui::Vec2, size: egui::Vec2) -> egui::Rect {
+    if is_rtl() {
+        egui::Rect::from_min_size(egui::pos2(rect.right() - off.x - size.x, rect.top() + off.y), size)
+    } else {
+        egui::Rect::from_min_size(rect.left_top() + off, size)
+    }
+}
+
+/// A full-height, `w`-wide cell at `rect`'s reading-start edge, clamped to `rect`'s width.
+pub fn start_cell(rect: egui::Rect, w: f32) -> egui::Rect {
+    let w = w.min(rect.width());
+    egui::Rect::from_min_size(egui::pos2(start_x_w(rect, 0.0, w), rect.top()), egui::vec2(w, rect.height()))
+}
+
+/// The walking-cursor step of a hand-painted row: `x + step() * w`.
+pub fn advance(x: f32, w: f32) -> f32 {
+    x + step() * w
+}
+
+/// A rect of width `w` whose reading-start edge sits at `x` (it grows against `step()`).
+pub fn start_span(x: f32, w: f32, top: f32, bottom: f32) -> egui::Rect {
+    if is_rtl() {
+        egui::Rect::from_min_max(egui::pos2(x - w, top), egui::pos2(x, bottom))
+    } else {
+        egui::Rect::from_min_max(egui::pos2(x, top), egui::pos2(x + w, bottom))
+    }
+}
+
+/// The (anchor, limit) span a name is painted in, after `prev` inside `container`:
+/// LTR (prev.right() + pad, container.right() - edge_pad); RTL (prev.left() - pad, container.left() + edge_pad).
+pub fn name_span(prev: egui::Rect, container: egui::Rect, pad: f32, edge_pad: f32) -> (f32, f32) {
+    if is_rtl() {
+        (prev.left() - pad, container.left() + edge_pad)
+    } else {
+        (prev.right() + pad, container.right() - edge_pad)
+    }
+}
+
+/// The reading-start edge of `rect` (its right edge in a right-to-left UI, else its left).
+pub fn start_edge(rect: egui::Rect) -> f32 {
+    if is_rtl() { rect.right() } else { rect.left() }
+}
+
+/// Fold `rects` into the running reading-end edge of a row: rtl folds the min of the lefts,
+/// ltr the max of the rights, starting from `start`.
+pub fn row_end_edge(rects: impl IntoIterator<Item = egui::Rect>, start: f32) -> f32 {
+    if is_rtl() {
+        rects.into_iter().map(|r| r.left()).fold(start, f32::min)
+    } else {
+        rects.into_iter().map(|r| r.right()).fold(start, f32::max)
+    }
+}
+
 /// `Align2` for `Painter::text` hugging the reading-start edge of a row: `LEFT_CENTER`
 /// left-to-right, `RIGHT_CENTER` right-to-left.
 pub fn start_align() -> Align2 {
@@ -290,6 +352,253 @@ pub fn start_side(p: f32, edge: f32) -> bool {
 /// unchanged left-to-right.
 pub fn glyph_x(x: f32, cx: f32) -> f32 {
     if is_rtl() { 2.0 * cx - x } else { x }
+}
+
+/// Single-line galley elided with "…" to `max_width` (nothing when there's no room).
+pub fn elided_galley(painter: &egui::Painter, text: &str, font: egui::FontId, color: egui::Color32, italics: bool, max_width: f32) -> Option<std::sync::Arc<egui::Galley>> {
+    if max_width < 8.0 {
+        return None;
+    }
+    let format = egui::text::TextFormat { font_id: font, color, italics, ..Default::default() };
+    let layout = |s: &str, wrap: bool| {
+        let mut job = egui::text::LayoutJob::default();
+        job.append(s, 0.0, format.clone());
+        if wrap {
+            job.wrap = egui::text::TextWrapping { max_width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
+        }
+        painter.layout_job(job)
+    };
+    // A right-to-left name (Arabic, Hebrew) too long for the row is cut at its logical end, so its
+    // start stays and "…" is at the left (`bidi_text::elide`).
+    if let Some(shown) = crate::bidi_text::elide(text, |s| layout(s, false).size().x <= max_width) {
+        return Some(layout(&shown, false));
+    }
+    // egui puts a right-to-left name into display order itself; left-to-right names are cut at
+    // their right end by egui.
+    Some(layout(text, true))
+}
+
+/// Paint `text` in the span anchor→limit at height `cy`, elided to fit, aligned into the
+/// reading direction (RIGHT_CENTER at the anchor in RTL, LEFT_CENTER in LTR). A span whose
+/// anchor sits past its limit in LTR (an unconverted caller) keeps the left-to-right contract.
+/// Returns the painted rect.
+pub fn paint_label_span(painter: &egui::Painter, anchor: f32, cy: f32, limit: f32, text: &str, font: egui::FontId, color: egui::Color32) -> Option<egui::Rect> {
+    if is_rtl() && anchor > limit {
+        let g = elided_galley(painter, text, font, color, false, anchor - limit)?;
+        let r = Align2::RIGHT_CENTER.anchor_size(egui::pos2(anchor, cy), g.size());
+        painter.galley(r.min, g, color);
+        Some(r)
+    } else {
+        let g = elided_galley(painter, text, font, color, false, limit - anchor)?;
+        let r = Align2::LEFT_CENTER.anchor_size(egui::pos2(anchor, cy), g.size());
+        painter.galley(r.min, g, color);
+        Some(r)
+    }
+}
+
+/// Paint a single-line elided label at the x-anchor `x` (a [`start_x`] reading-start edge),
+/// vertically centred on `cy`; returns (painted rect, elided). RTL paints right-aligned from
+/// the reading-start edge.
+pub fn paint_elided(painter: &egui::Painter, x: f32, cy: f32, max_w: f32, text: &str, font: egui::FontId, color: egui::Color32) -> Option<(egui::Rect, bool)> {
+    let mut job = egui::text::LayoutJob::default();
+    job.append(text, 0.0, egui::text::TextFormat { font_id: font.clone(), color, ..Default::default() });
+    let elided = painter.layout_job(job).size().x > max_w;
+    let g = elided_galley(painter, text, font, color, false, max_w)?;
+    let align = if is_rtl() { Align2::RIGHT_CENTER } else { Align2::LEFT_CENTER };
+    let r = align.anchor_size(egui::pos2(x, cy), g.size());
+    painter.galley(r.min, g, color);
+    Some((r, elided))
+}
+
+/// (pos, align) for `Painter::text` hugging `rect`'s reading-start vertical centre, inset `off`.
+pub fn start_text_anchor(rect: egui::Rect, off: f32) -> (egui::Pos2, egui::Align2) {
+    if is_rtl() {
+        (egui::pos2(rect.right() - off, rect.center().y), Align2::RIGHT_CENTER)
+    } else {
+        (egui::pos2(rect.left() + off, rect.center().y), Align2::LEFT_CENTER)
+    }
+}
+
+/// Same at the reading-end edge.
+pub fn end_text_anchor(rect: egui::Rect, off: f32) -> (egui::Pos2, egui::Align2) {
+    if is_rtl() {
+        (egui::pos2(rect.left() + off, rect.center().y), Align2::LEFT_CENTER)
+    } else {
+        (egui::pos2(rect.right() - off, rect.center().y), Align2::RIGHT_CENTER)
+    }
+}
+
+/// First-show x of a floating panel window `width` wide, `inset` px inside the canvas's
+/// reading-end edge, shifted `cascade` px further toward the reading end (cascading panels;
+/// negative cascades run back toward the canvas centre). Clamped to keep 8 px of the window
+/// on the canvas.
+pub fn float_window_x(canvas: egui::Rect, width: f32, inset: f32, cascade: f32) -> f32 {
+    if is_rtl() {
+        (canvas.left() + inset - cascade).min(canvas.right() - 8.0 - width).max(canvas.left() + 8.0)
+    } else {
+        (canvas.right() - width - inset + cascade).max(canvas.left() + 8.0)
+    }
+}
+
+/// Clamp `rect` to at least `min` in both dimensions, keeping the edge a resizable window is
+/// anchored on fixed: under RTL the fork anchors the window rect at its right edge (resize grip
+/// on the left), so a too-narrow rect grows leftward; in LTR it grows rightward from the fixed
+/// left edge. The top edge is fixed in both directions. A min-size clamp computed against the
+/// wrong edge moves the anchored edge and the min width is lost in that direction.
+pub fn clamp_window_min_size(rect: egui::Rect, min: egui::Vec2) -> egui::Rect {
+    let size = rect.size().at_least(min);
+    if is_rtl() {
+        egui::Rect::from_min_size(egui::pos2(rect.right() - size.x, rect.top()), size)
+    } else {
+        egui::Rect::from_min_size(rect.min, size)
+    }
+}
+
+/// An Area hanging off `anchor`'s reading-end edge, `side_offset` px toward the canvas:
+/// rtl pivot RIGHT_TOP at anchor.left_top() - (side_offset, 0); ltr LEFT_TOP at
+/// anchor.right_top() + (side_offset, 0).
+pub fn popup_area_near(ui: &egui::Ui, id: impl egui::AsIdSalt, anchor: egui::Rect, side_offset: f32) -> egui::Area {
+    let id = ui.scope_id().with(id);
+    if is_rtl() {
+        egui::Area::new(id).pivot(Align2::RIGHT_TOP).fixed_pos(anchor.left_top() - egui::vec2(side_offset, 0.0))
+    } else {
+        egui::Area::new(id).pivot(Align2::LEFT_TOP).fixed_pos(anchor.right_top() + egui::vec2(side_offset, 0.0))
+    }
+}
+
+/// The [`egui::PopupAnchor`] of `resp` translated `offset` px past its reading-end edge
+/// (`ParentRect` moved by (step() * offset, 0); the other variants unchanged).
+pub fn popup_anchor_reading_end(resp: &egui::Response, offset: f32) -> egui::PopupAnchor {
+    match egui::PopupAnchor::from(resp) {
+        egui::PopupAnchor::ParentRect(rect) => egui::PopupAnchor::ParentRect(rect.translate(egui::vec2(step() * offset, 0.0))),
+        other => other,
+    }
+}
+
+/// A two-column caption/editor form. LTR: `egui::Grid::new(id).num_columns(2).spacing(spacing)`.
+/// RTL: hand rows via [`settings_row`] under [`body_layout`] (the fork's `Grid` cannot run
+/// under a mirrored body). `rows` calls `row(caption, editor)` once per row; the editor
+/// closure receives the caption label's Id for accessibility labeling. An empty caption
+/// draws a bare editor hugging the reading start.
+pub fn form_grid(
+    ui: &mut egui::Ui,
+    id: impl egui::AsIdSalt,
+    spacing: [f32; 2],
+    caption_w: f32,
+    rows: impl FnOnce(&mut dyn FnMut(&str, &mut dyn FnMut(&mut egui::Ui, egui::Id))),
+) {
+    if is_rtl() {
+        ui.with_layout(body_layout(), |ui| {
+            ui.spacing_mut().item_spacing = egui::vec2(spacing[0], spacing[1]);
+            let mut row = |caption: &str, editor: &mut dyn FnMut(&mut egui::Ui, egui::Id)| {
+                if caption.is_empty() {
+                    dialog_row(ui, |ui| editor(ui, egui::Id::NULL));
+                } else {
+                    let caption_id = std::cell::Cell::new(egui::Id::NULL);
+                    settings_row(ui, caption_w, |ui| caption_id.set(ui.label(caption).id), |ui| editor(ui, caption_id.get()));
+                }
+            };
+            rows(&mut row);
+        });
+    } else {
+        egui::Grid::new(id).num_columns(2).spacing(spacing).show(ui, |ui| {
+            let mut row = |caption: &str, editor: &mut dyn FnMut(&mut egui::Ui, egui::Id)| {
+                let caption_id = ui.label(caption).id;
+                editor(ui, caption_id);
+                ui.end_row();
+            };
+            rows(&mut row);
+        });
+    }
+}
+
+/// An `egui::Grid` in an LTR scope ([`ltr_vertical`]) so the fork's placer never sees an RTL
+/// cursor; cell order inside a row stays the caller's (mirror with [`grid_cells`] or an
+/// explicit reversal).
+pub fn ltr_grid<R>(ui: &mut egui::Ui, id: impl egui::AsIdSalt, cols: usize, spacing: egui::Vec2, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    ltr_vertical(ui, |ui| egui::Grid::new(id).num_columns(cols).spacing(spacing).show(ui, add)).inner
+}
+
+/// The usable row width: in RTL the fork's available-width read balloons, so read
+/// `ui.max_rect().width()`; LTR keeps `ui.available_size_before_wrap().x`.
+pub fn row_width(ui: &egui::Ui) -> f32 {
+    if is_rtl() { ui.max_rect().width() } else { ui.available_size_before_wrap().x }
+}
+
+/// A full-width centred row inside a horizontal ScrollArea. RTL: the fork anchors content at
+/// the viewport's left edge and clamps offset >= 0, which would leave a mirrored row's
+/// trailing end cropped off-screen and unreachable, so the row's region is mirrored about the
+/// viewport's left edge (offset = (clip.min.x - max.min.x).max(0), region translated by
+/// 2*offset) and the strip then anchors at the reading-start (right) edge; LTR: plain
+/// [`horizontal_centered`].
+pub fn hscroll_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    if is_rtl() {
+        let offset = (ui.clip_rect().min.x - ui.max_rect().min.x).max(0.0);
+        let rect = ui.max_rect().translate(egui::vec2(2.0 * offset, 0.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| horizontal_centered(ui, add)).inner
+    } else {
+        horizontal_centered(ui, add)
+    }
+}
+
+/// The base direction of a text line in the UI's direction: right-to-left in a right-to-left
+/// language, left-to-right otherwise.
+pub fn text_direction() -> egui::epaint::text::TextDirection {
+    if is_rtl() { egui::epaint::text::TextDirection::RightToLeft } else { egui::epaint::text::TextDirection::LeftToRight }
+}
+
+/// The (anchor, offset) pair for an `egui::Area` pinned to the screen's reading-end corner:
+/// bottom-right left-to-right, bottom-left right-to-left (`bottom = false` picks the top pair);
+/// a positive `x_off` moves inward from that edge.
+pub fn end_corner_anchor(bottom: bool, x_off: f32, y_off: f32) -> (Align2, egui::Vec2) {
+    if is_rtl() {
+        let anchor = if bottom { Align2::LEFT_BOTTOM } else { Align2::LEFT_TOP };
+        (anchor, egui::vec2(x_off, y_off))
+    } else {
+        let anchor = if bottom { Align2::RIGHT_BOTTOM } else { Align2::RIGHT_TOP };
+        (anchor, egui::vec2(-x_off, y_off))
+    }
+}
+
+/// Split `bar` into `(rest, end_strip)`: a `w`-wide strip at its reading-end edge (right
+/// left-to-right, left right-to-left), clamped into `bar`.
+pub fn split_end(bar: egui::Rect, w: f32) -> (egui::Rect, egui::Rect) {
+    if is_rtl() {
+        let split = (bar.left() + w).min(bar.right());
+        (egui::Rect::from_min_max(egui::pos2(split, bar.top()), bar.max), egui::Rect::from_min_max(bar.min, egui::pos2(split, bar.bottom())))
+    } else {
+        let split = (bar.right() - w).max(bar.left());
+        (egui::Rect::from_min_max(bar.min, egui::pos2(split, bar.bottom())), egui::Rect::from_min_max(egui::pos2(split, bar.top()), bar.max))
+    }
+}
+
+/// A rect of width `w` whose reading-end edge sits at `x` (it grows against `step()`):
+/// `[x, x + w]` left-to-right, `[x - w, x]` right-to-left.
+pub fn end_span(x: f32, w: f32, top: f32, bottom: f32) -> egui::Rect {
+    if is_rtl() {
+        egui::Rect::from_min_max(egui::pos2(x - w, top), egui::pos2(x, bottom))
+    } else {
+        egui::Rect::from_min_max(egui::pos2(x, top), egui::pos2(x + w, bottom))
+    }
+}
+
+/// A full-width, interact-height row in reading order ([`row`]): the pinned-height reading-row
+/// shape.
+pub fn full_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    let size = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, row(), add)
+}
+
+/// [`full_row`] starting from the reading end ([`trailing`]).
+pub fn full_trailing<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<R> {
+    let size = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(size, trailing(), add)
+}
+
+/// A row pinned to the reading end only in a right-to-left UI; left-to-right the caller's own
+/// layout runs unchanged.
+pub fn trailing_row<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    if is_rtl() { ui.with_layout(trailing(), add).inner } else { add(ui) }
 }
 
 #[cfg(test)]
