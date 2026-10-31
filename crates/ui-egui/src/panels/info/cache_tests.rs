@@ -28,6 +28,7 @@ fn document(mode: ColorMode, depth: SampleType) -> Document {
     doc
 }
 
+/// Attach one synthetic document to a fresh session so the cache tests start without stored preferences.
 fn app(doc: Document) -> PhotocraftApp {
     let mut session = photocraft_engine::Session::new();
     session.add_document(doc, None);
@@ -48,6 +49,7 @@ fn changed(doc: &Document) -> Document {
     doc
 }
 
+/// Close and reopen with the saved ID and initial revision, exposing caches keyed only by those two values.
 fn reopen(app: &mut PhotocraftApp, doc: Document) {
     let old = app.session.active().unwrap();
     let (id, revision) = (old.doc.id, old.revision);
@@ -57,6 +59,7 @@ fn reopen(app: &mut PhotocraftApp, doc: Document) {
     assert_eq!(app.session.active().unwrap().revision, revision, "the session starts at the same revision");
 }
 
+/// Extract visible extra-channel percentages through the same cached path as the Info panel.
 fn channel_percent(app: &mut PhotocraftApp, at: (i32, i32)) -> Vec<i32> {
     pointer_channels(app, at).iter().map(|c| c.percent).collect()
 }

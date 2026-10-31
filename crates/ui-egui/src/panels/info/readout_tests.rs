@@ -22,6 +22,7 @@ fn app() -> PhotocraftApp {
     app
 }
 
+/// Render the Info panel at its normal dock width with the shared Pro theme and settled layout.
 fn harness(app: PhotocraftApp) -> Harness<'static, PhotocraftApp> {
     let mut h = Harness::builder().with_size(vec2(340.0, 600.0)).build_ui_state(|ui, app: &mut PhotocraftApp| info_panel(app, ui), app);
     PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Pro);
@@ -88,6 +89,30 @@ fn actual_color_follows_the_document_mode() {
     let h = harness(app);
     assert!(h.query_by_label("K:").is_some() && h.query_by_label("R:").is_none(), "gray reads K");
     assert!(h.query_by_label("0%").is_some(), "white = K 0 %");
+}
+
+/// A Multichannel document's Actual Color is a channel list, so a Color Sampler point gives each
+/// channel its own line, as the channel readouts do, instead of one long line.
+#[test]
+fn multichannel_actual_color_samplers_list_one_channel_per_line() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 20, "height": 20, "background": "white"})).unwrap();
+    app.run("select.all", json!({})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("image.mode.multichannel", json!({})).unwrap();
+    app.run("view.colorSamplers.add", json!({"x": 5, "y": 5})).unwrap();
+    app.ui.info_panel = InfoPanelState { readouts: vec![Readout::ActualColor] };
+    app.hover_doc = Some([5.0, 5.0]);
+    let h = harness(app);
+    for key in ["Cyan:", "Magenta:", "Yellow:"] {
+        assert_eq!(count(&h, key), 1, "{key} pointer row");
+    }
+    // Red read as CMY inks: no cyan, solid magenta and yellow; one label per channel.
+    assert_eq!(count(&h, "Cyan:0%"), 1, "point 1 cyan on its own line");
+    assert_eq!(count(&h, "Magenta:100%"), 1, "point 1 magenta on its own line");
+    assert_eq!(count(&h, "Yellow:100%"), 1, "point 1 yellow on its own line");
+    assert_eq!(h.query_all_by_label_contains("Cyan:0% Magenta").count(), 0, "not joined on one line");
 }
 
 /// Every readout mode renders rows for an RGB sample, and the Color Sampler points list the same

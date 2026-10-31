@@ -29,7 +29,8 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         dialogs.push(json!({"id": SHELL_DIALOG, "kind": kind, "title": crate::workspace_ui::title(kind), "fields": fields}));
     }
     dialogs.extend(crate::discard_ui::inspect(app));
-    json!({
+    // One `json!` this size is at the macro recursion limit; further keys are added below it.
+    let mut snapshot = json!({
         "window": {"width": screen.width(), "height": screen.height(), "pixelsPerPoint": ctx.pixels_per_point()},
         "tool": app.ui.tool,
         "toolOptions": app.ui.tool_options,
@@ -37,10 +38,31 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "strokeEditor": app.ui.stroke_editor,
         "magnetic": app.ui.magnetic,
         "textEdit": app.ui.text_edit,
+        // The paragraph box's overflow flag (set by the overlay each frame): agents
+        // learn the overflow without a screen; never persisted (serde skip). Gated on the
+        // session: the flag is a per-frame snapshot, and an `ui.inspect` running between the
+        // frame that ended the edit and the one that resets the flag would otherwise report
+        // overflow beside `"textEdit": null`.
+        "typeBoxOverflow": app.ui.text_edit.is_some() && app.ui.type_box_overflow,
         "typeTransform": app.ui.type_transform,
         "camTransform": app.ui.cam_transform,
         "layerMenu": app.ui.layer_menu,
         "layerPicker": app.ui.layer_picker,
+        "brushModeMenu": app.ui.brush_mode_menu.map(|pos| {
+            use crate::brush_mode_menu as m;
+            let tool = app.ui.tool;
+            let current = m::current(app, tool);
+            json!({
+                "pos": pos,
+                "tool": tool,
+                "mode": current.and_then(m::Item::label),
+                "choices": m::labels(tool),
+                "items": m::items(tool).into_iter().map(|i| match i.label() {
+                    Some(label) => json!({"label": label, "enabled": m::enabled(app, i), "checked": Some(i) == current}),
+                    None => json!({"separator": true}),
+                }).collect::<Vec<_>>(),
+            })
+        }),
         "brushPicker": app.ui.brush_picker.map(|pos| json!({
             "pos": pos,
             // The picker's content size once its corner grip was dragged (null: the default).
@@ -69,7 +91,6 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         }),
         "panels": app.ui.panels,
         "dockTabs": app.ui.dock_tabs,
-        "infoPanel": app.ui.info_panel,
         "dock": app.ui.dock,
         "docking": app.ui.docking,
         "dockingReturns": app.ui.docking_returns,
@@ -101,7 +122,9 @@ pub fn inspect(app: &PhotocraftApp, ctx: &egui::Context) -> Value {
         "jobs": crate::jobs_ui::inspect(app),
         "histogram": crate::histogram_panel::inspect(app),
         "cameraRaw": app.camera_raw.as_ref().map(|d| d.describe(&app.ui.camera_raw_scope, &app.ui.camera_raw_preview)),
-    })
+    });
+    snapshot["infoPanel"] = json!(app.ui.info_panel);
+    snapshot
 }
 
 pub fn save_screenshot(app: &mut PhotocraftApp, image: &egui::ColorImage, path: Option<&str>) -> Value {

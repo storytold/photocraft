@@ -164,6 +164,7 @@ pub fn point_json(doc: &Document, index: usize, pos: [f64; 2]) -> Value {
     v
 }
 
+/// Validate finite document-pixel coordinates before reading every extra channel; no document is an error.
 fn sample_channels(s: &mut Session, p: &Value) -> Result<Value> {
     const CMD: &str = "document.sampleChannels";
     let c = |k: &str| -> Result<i32> {
@@ -275,6 +276,7 @@ fn list(s: &mut Session, _p: &Value) -> Result<Value> {
     Ok(list_json(&st.doc, &st.color_samplers))
 }
 
+/// Register non-destructive sampler-point operations and document channel sampling with their parameter contracts.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {

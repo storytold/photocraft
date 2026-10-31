@@ -4,7 +4,7 @@ use super::{Outcome, PhotocraftApp, Value, json};
 /// field's value is validated before the first one is applied, so a typo, an unknown field, a
 /// bad value or a bad nested key can't reply with success while nothing — or only half of it —
 /// changed (#412).
-pub const UI_SET_FIELDS: [&str; 44] = [
+pub const UI_SET_FIELDS: [&str; 46] = [
     "updatesOpen",
     "tool",
     "strokeTrace",
@@ -42,6 +42,8 @@ pub const UI_SET_FIELDS: [&str; 44] = [
     "cropOverlayOrientation",
     "cropShield",
     "cropFill",
+    "penMode",
+    "penPathOp",
     "shapeStroke",
     "camTransformOnDrop",
     "tileGrid",

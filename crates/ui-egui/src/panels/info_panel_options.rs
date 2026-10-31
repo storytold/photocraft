@@ -99,6 +99,7 @@ impl Default for InfoPanelState {
 }
 
 impl InfoPanelState {
+    /// Report whether a readout is selected, independent of duplicate or unsorted persisted entries.
     pub fn shows(&self, r: Readout) -> bool {
         self.readouts.contains(&r)
     }
@@ -108,6 +109,7 @@ impl InfoPanelState {
         Readout::ALL.iter().copied().filter(|r| self.shows(*r)).collect()
     }
 
+    /// Remove every occurrence when disabling, or enable once in the canonical menu order.
     pub fn toggle(&mut self, r: Readout) {
         if self.shows(r) {
             self.readouts.retain(|x| *x != r);

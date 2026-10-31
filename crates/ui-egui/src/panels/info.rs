@@ -104,7 +104,7 @@ fn wide_readout(mode: ColorMode, r: Readout) -> bool {
 /// readouts, one channel per line.
 fn sampler_lines(mode: ColorMode, r: Readout, v: Option<&Readouts>, channels: &[(String, bool)], read: Option<&[ChannelReadout]>) -> Vec<String> {
     let rows = readout_rows(mode, r, v, channels, read);
-    if matches!(r, Readout::SpotChannels | Readout::AlphaChannels) {
+    if wide_readout(mode, r) {
         rows.into_iter().map(|(k, v)| format!("{k}{v}")).collect()
     } else if rows.is_empty() {
         Vec::new()
