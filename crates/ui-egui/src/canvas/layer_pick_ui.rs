@@ -86,15 +86,20 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             let w = (widest + 2.0 * ui.spacing().button_padding.x + 8.0).clamp(140.0, 360.0);
             ui.set_width(w);
             ui.spacing_mut().item_spacing.y = 0.0;
-            // A long list scrolls instead of running off the screen.
-            egui::ScrollArea::vertical().max_height((screen.height() - 24.0).max(48.0)).show(ui, |ui| {
-                ui.set_width(w);
-                for (layer, name) in &menu.layers {
-                    let b = egui::Button::selectable(Some(*layer) == active, name.as_str()).truncate().min_size(egui::vec2(w, 22.0));
-                    if ui.add(b).clicked() {
-                        chosen = Some(*layer);
+            // The Area body has no direction of its own; scope it like a window body so the
+            // rows hug the reading-start edge in a right-to-left UI (LTR unchanged).
+            ui.with_layout(crate::direction::body_layout(), |ui| {
+                // A long list scrolls instead of running off the screen.
+                egui::ScrollArea::vertical().max_height((screen.height() - 24.0).max(48.0)).show(ui, |ui| {
+                    ui.set_width(w);
+                    let rtl = ui.style().right_to_left;
+                    for (layer, name) in &menu.layers {
+                        let b = crate::menu_keys::menu_row_button_atom(name.as_str().into(), None, rtl).selected(Some(*layer) == active).truncate().min_size(egui::vec2(w, 22.0));
+                        if ui.add(b).clicked() {
+                            chosen = Some(*layer);
+                        }
                     }
-                }
+                });
             });
         });
     });
@@ -292,5 +297,45 @@ mod tests {
         assert!(opened[0].distance(opened[1]) > 50.0, "{opened:?}");
         let at = pointer(&mut h, "brush", 20.0, 170.0);
         assert!(near(h.state().ui.brush_picker, at), "picker at {:?}, point on screen {at:?}", h.state().ui.brush_picker);
+    }
+
+    /// Twin: under RTL the layer menu's rows anchor at the popup's right (reading-start) edge,
+    /// under LTR at its left. The real style flag is set, as the theme does in production.
+    #[test]
+    fn layer_menu_rows_anchor_at_the_reading_start_edge() {
+        use crate::direction::{Dir, direction_scope};
+        let run = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let ctx = Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let (mut a, bg, red, _) = app();
+            a.ui.layer_menu = Some(LayerMenu { pos: [100.0, 100.0], layers: vec![(red, "Red".to_string()), (bg, "Background".to_string())] });
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            // Two frames: the Area's first frame measures, the second paints the rows.
+            let mut out = ctx.run_ui(raw.clone(), |ui| show(&mut a, ui.ctx()));
+            out.textures_delta.clear();
+            let mut out = ctx.run_ui(raw, |ui| show(&mut a, ui.ctx()));
+            let area = ctx.memory(|m| m.area_rect(menu_id())).expect("the popup is shown");
+            let rect = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                    _ => None,
+                })
+                .find(|(t, _)| t == "Red")
+                .map(|(_, r)| r);
+            out.textures_delta.clear();
+            (area, rect.expect("the layer name is painted"))
+        };
+        // Frame margin plus button padding: the label may sit this far from the popup edge.
+        let slack = 24.0;
+        let (area, rect) = run(Dir::Rtl);
+        assert!(area.right() - rect.right() < slack, "rtl: the label hugs the popup's right edge: {rect:?} in {area:?}");
+        let (area, rect) = run(Dir::Ltr);
+        assert!(rect.left() - area.left() < slack, "ltr: the label hugs the popup's left edge: {rect:?} in {area:?}");
     }
 }

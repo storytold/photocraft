@@ -1140,10 +1140,11 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
             // The Area body has no direction of its own; scope it like a window body so the
             // rows hug the reading-start edge in a right-to-left UI (LTR unchanged).
             ui.with_layout(crate::direction::body_layout(), |ui| crate::widgets::menu_scroll(ui, |ui| {
+                let rtl = ui.style().right_to_left;
                 let spelling = spelling_rows(&menu);
                 for (label, command) in &spelling {
                     let text = if spelling_label_is_ui(command) { tl!(label).to_string() } else { label.clone() };
-                    let item = egui::Button::new(text).min_size(egui::vec2(200.0, 20.0));
+                    let item = crate::menu_keys::menu_row_button_atom(text.into(), None, rtl).min_size(egui::vec2(200.0, 20.0));
                     if ui.add_enabled(entry_enabled(app, &menu, command), item).clicked() {
                         selected = Some(command.clone());
                     }
@@ -1157,7 +1158,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         continue;
                     };
                     let text = if crop_label_is_ui(&command) { tl!(&label).to_string() } else { label };
-                    let item = egui::Button::selectable(mode_checked(app, &menu, &command), text).min_size(egui::vec2(200.0, 20.0));
+                    let item = crate::menu_keys::menu_row_button_atom(text.into(), None, rtl).selected(mode_checked(app, &menu, &command)).min_size(egui::vec2(200.0, 20.0));
                     if ui.add_enabled(entry_enabled(app, &menu, &command), item).clicked() {
                         selected = Some(command);
                     }
@@ -1167,7 +1168,7 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
                         ui.separator();
                         continue;
                     };
-                    let item = egui::Button::selectable(mode_checked(app, &menu, command), tl!(label)).min_size(egui::vec2(200.0, 20.0));
+                    let item = crate::menu_keys::menu_row_button_atom(tl!(label).into(), None, rtl).selected(mode_checked(app, &menu, command)).min_size(egui::vec2(200.0, 20.0));
                     if ui.add_enabled(entry_enabled(app, &menu, command), item).clicked() {
                         selected = Some((*command).to_string());
                     }
