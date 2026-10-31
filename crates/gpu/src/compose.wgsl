@@ -223,8 +223,11 @@ fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
             if (cs >= 1.0) { return 1.0; }
             return min(cb / (1.0 - cs), 1.0);
         }
-        default: { return cs; }                                 // Normal, Dissolve, PassThrough
+        default: { }                                            // Normal, Dissolve, PassThrough: the source colour
     }
+    // The cases above return; the trailing return also keeps FXC (D3D12) from rejecting the
+    // function with X3507 ("not all control paths return a value").
+    return cs;
 }
 
 fn lum(c: vec3<f32>) -> f32 { return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b; }
