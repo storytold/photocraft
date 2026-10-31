@@ -54,8 +54,8 @@ use budget::detect_video_memory;
 #[cfg(all(test, target_os = "linux"))]
 use budget::nvidia_video_memory;
 pub use budget::{
-    COMPOSITOR_BUILDING, DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OVER_BUDGET, canvas_budget, canvas_texture_bytes,
-    memory_budget, physical_memory, video_memory, vram_share,
+    COMPOSITOR_BUILDING, DEFER_PX, MIN_GPU_BUDGET, OVER_BUDGET, OVER_CANVAS_BUDGET, REFRESH_DEFERRED, REFRESH_OPERATOR_FAILED, REFRESH_OVER_BUDGET,
+    canvas_budget, canvas_texture_bytes, memory_budget, physical_memory, video_memory, vram_share,
 };
 #[cfg(test)]
 use budget::{NVIDIA_VENDOR, bounded_output, drm_video_memory, parse_nvidia_smi};
@@ -742,6 +742,10 @@ impl GpuCanvas {
         if let Some(e) = &res.compositor_failed {
             return Err(e.clone());
         }
+        #[cfg(test)]
+        if res.fail_operators && res.operators.contains_key(&doc.id) {
+            return Err(photocraft_gpu::Unsupported("injected operator failure".into()));
+        }
         {
             let mut state = self.compositor_build.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             match std::mem::replace(&mut *state, compositor_build::BuildState::Adopted) {
@@ -779,6 +783,7 @@ impl GpuCanvas {
             comp.set_composite_cache_budget(b);
         }
         comp.set_focus(res.compositor_focus);
+        comp.set_operators(doc.id, res.operators.get(&doc.id).cloned().unwrap_or_default());
         let key = doc.id.0;
         let format = self.format_for(doc.depth, size);
         let fresh = res.docs.get(&key).is_none_or(|d| d.size != size || d.format != format);
@@ -949,6 +954,10 @@ impl GpuCanvas {
                 out.fallback = Some(self.reason(doc, e));
             }
         }
+        if self.has_operators(doc.id) {
+            out.kind = REFRESH_OPERATOR_FAILED;
+            return out;
+        }
         let t0 = now_ms();
         let px = region.width() as u64 * region.height() as u64;
         if defer && px >= DEFER_PX && self.prepare_texture(key, doc).is_some() {
@@ -1044,6 +1053,8 @@ impl GpuCanvas {
         if let Some(c) = res.compositor.as_mut() {
             c.retain_docs(|d| live.contains(&d.0));
         }
+        // A closed document's layer operators (a filter preview open when it closed) go too.
+        res.operators.retain(|d, _| live.contains(&d.0));
         // LUTs and identity-transform signatures can outlive document textures. Prune both,
         // or a preserved-ID reopen can skip rebuilding a missing LUT.
         res.luts.retain(|k, _| live.contains(&k.0));
@@ -1157,6 +1168,57 @@ impl GpuCanvas {
             }
         }
         Some((d.format, d.size, out))
+    }
+
+    /// Layer operators for document `doc` (`photocraft_gpu::LayerOperator`): its composites show
+    /// them from the next refresh on; an empty list clears them. While a document has operators,
+    /// a refresh the wgpu compositor can't draw draws nothing ([`REFRESH_OPERATOR_FAILED`]).
+    pub fn set_operators(&self, doc: photocraft_doc::DocId, operators: Vec<photocraft_gpu::LayerOperator>) {
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return };
+        if operators.is_empty() {
+            res.operators.remove(&doc);
+        } else {
+            res.operators.insert(doc, operators);
+        }
+    }
+
+    /// Tests: make composites of documents with operators fail.
+    #[cfg(test)]
+    pub(crate) fn fail_operators(&self, on: bool) {
+        if let Some(res) = self.rs.renderer.write().callback_resources.get_mut::<Resources>() {
+            res.fail_operators = on;
+        }
+    }
+
+    /// Whether document `doc` has layer operators.
+    pub fn has_operators(&self, doc: photocraft_doc::DocId) -> bool {
+        let renderer = self.rs.renderer.read();
+        renderer.callback_resources.get::<Resources>().is_some_and(|res| res.operators.contains_key(&doc))
+    }
+
+    /// Whether the wgpu compositor can run layer operators on this device (it builds their
+    /// pipelines the first time, so a dialog can warm them as it opens).
+    pub fn operators_supported(&self) -> bool {
+        if std::env::var_os("PHOTOCRAFT_CPU_COMPOSE").is_some() || self.fault().is_some() {
+            return false;
+        }
+        let device = &self.rs.device;
+        let mut renderer = self.rs.renderer.write();
+        let Some(res) = renderer.callback_resources.get_mut::<Resources>() else { return false };
+        if res.compositor_failed.is_some() {
+            return false;
+        }
+        if res.compositor.is_none() {
+            match photocraft_gpu::Compositor::try_new_with_format(device, photocraft_gpu::Compositor::preferred_acc_format(&self.rs.adapter)) {
+                Ok(c) => res.compositor = Some(c),
+                Err(e) => {
+                    res.compositor_failed = Some(e);
+                    return false;
+                }
+            }
+        }
+        res.compositor.as_mut().is_some_and(|c| c.operators_supported(device))
     }
 
     /// Add the paint callback drawing `params` into `rect` (clipped by the painter's clip rect).

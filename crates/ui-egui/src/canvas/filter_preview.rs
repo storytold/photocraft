@@ -40,6 +40,10 @@ pub(crate) fn ensure_filter_preview(app: &mut PhotocraftApp, idx: usize, ctx: &e
     if crate::adjust_preview::on_layer(app, idx) {
         return None;
     }
+    // Previewing on the GPU (a layer operator): no CPU preview.
+    if crate::filter_gpu_preview::on_gpu(app, idx) {
+        return None;
+    }
     let d = app.ui.dialogs.iter().find(|d| d.fields.contains_key("__filter"))?;
     if d.fields.get("__preview").and_then(serde_json::Value::as_bool) != Some(true) {
         return None;

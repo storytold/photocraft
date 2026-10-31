@@ -225,6 +225,8 @@ fn retry_now(app: &mut PhotocraftApp) -> bool {
     // The CPU canvas's egui textures: rebuild every view on the GPU.
     app.canvases.clear();
     app.proxy_uploaded = None;
+    // A filter dialog's GPU preview: its operator was in the old canvas's resources.
+    crate::filter_gpu_preview::rebind(app);
     // The 100 % filter preview's texels were on the old canvas.
     if let Some(p) = app.filter_preview.as_mut() {
         p.uploaded = photocraft_geom::Rect::EMPTY;
@@ -494,5 +496,72 @@ mod tests {
         choose_recovery(&mut app, true).unwrap();
         assert!(!app.gpu_active());
         assert_eq!(app.ui.notices.len(), 1, "the restart notice");
+    }
+
+    /// Retry GPU during a filter dialog's GPU preview: the new canvas gets the preview's operator
+    /// again (it lived in the old canvas's resources), so the preview doesn't drop to the
+    /// unfiltered layer while the settings stay the same.
+    #[test]
+    fn retry_gpu_keeps_a_filter_dialogs_gpu_preview() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+            assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "no GPU adapter");
+            return;
+        };
+        let services = crate::Services { save_prefs: Some(Box::new(|_| Ok(()))), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.set_wgpu(rs);
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
+        if !crate::filter_gpu_preview::on_gpu(&mut app, 0) {
+            assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "the preview runs on the GPU");
+            return;
+        }
+        let doc = app.session.active().unwrap().doc.id;
+        assert!(app.gpu.as_ref().unwrap().has_operators(doc));
+        let ctx = egui::Context::default();
+        app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
+        check(&mut app, &ctx);
+        choose_recovery(&mut app, true).unwrap();
+        assert!(app.gpu_active());
+        assert!(app.gpu.as_ref().unwrap().has_operators(doc), "the rebuilt canvas has the operator");
+        assert!(crate::filter_gpu_preview::on_gpu(&mut app, 0), "and the preview stays on the GPU");
+    }
+
+    /// A frame drawn on the CPU before Retry GPU (the session fell back: no canvas could draw it)
+    /// is back on the GPU after the retry; one whose operator failed stays on the CPU, its operator
+    /// not registered again.
+    #[test]
+    fn retry_gpu_after_a_cpu_frame_restores_a_filter_dialogs_gpu_preview() {
+        let _gpu = photocraft_testkit::gpu_lock();
+        let Ok(rs) = std::panic::catch_unwind(|| egui_kittest::wgpu::create_render_state(crate::gpu_canvas::wgpu_setup(), Default::default())) else {
+            assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "no GPU adapter");
+            return;
+        };
+        let services = crate::Services { save_prefs: Some(Box::new(|_| Ok(()))), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        app.set_wgpu(rs);
+        app.run("file.new", json!({"width": 64, "height": 48})).unwrap();
+        crate::filter_dialog::open(&mut app, "filter.blur.gaussianBlur").unwrap();
+        if !crate::filter_gpu_preview::on_gpu(&mut app, 0) {
+            assert!(std::env::var_os("PHOTOCRAFT_REQUIRE_GPU_TESTS").is_none(), "the preview runs on the GPU");
+            return;
+        }
+        let doc = app.session.active().unwrap().doc.id;
+        let ctx = egui::Context::default();
+        app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
+        check(&mut app, &ctx);
+        assert!(!crate::filter_gpu_preview::on_gpu(&mut app, 0), "a CPU frame meanwhile");
+        choose_recovery(&mut app, true).unwrap();
+        assert!(crate::filter_gpu_preview::on_gpu(&mut app, 0), "back on the GPU after the retry");
+        assert!(app.gpu.as_ref().unwrap().has_operators(doc));
+
+        // An operator the GPU couldn't draw: the retry leaves the dialog on the CPU.
+        crate::filter_gpu_preview::failed(&mut app, doc, None);
+        app.gpu_health().unwrap().mark(photocraft_gpu::Fault::Error("Validation Error".into()));
+        check(&mut app, &ctx);
+        choose_recovery(&mut app, true).unwrap();
+        assert!(!app.gpu.as_ref().unwrap().has_operators(doc), "no operator registered again");
+        assert!(!crate::filter_gpu_preview::on_gpu(&mut app, 0), "and the preview stays on the CPU");
     }
 }

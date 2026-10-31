@@ -133,7 +133,26 @@ pub(crate) fn window(app: &PhotocraftApp, dialog: u64, ui: &mut egui::Ui, f: &mu
     let shown = if holding { orig.as_ref() } else { filt.as_ref().or(orig.as_ref()) };
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, t.radius_sm, t.canvas);
-    if let Some((tex, crop, size)) = shown {
+    // Previewing on the GPU (#5772): the filtered image is the canvas's texture, which composites
+    // this window's part of the document too; drawn here as the Navigator draws it.
+    let (vx0, vy0) = (x0.max(0.0), y0.max(0.0));
+    let (vx1, vy1) = ((x0 + sw).min(doc.x), (y0 + sh).min(doc.y));
+    let source = photocraft_geom::Rect::new(vx0.floor() as i32, vy0.floor() as i32, vx1.ceil() as i32, vy1.ceil() as i32);
+    let gpu_view = crate::filter_gpu_preview::window_view(app, dialog, source).filter(|_| !holding);
+    if let Some(params) = gpu_view {
+        crate::widgets::checker(&painter, dest, 8.0);
+        let view = crate::gpu_canvas::ViewParams {
+            zoom,
+            center: [(vx0 + vx1) / 2.0, (vy0 + vy1) / 2.0],
+            rotation: 0.0,
+            shadow: false,
+            pixel_grid: false,
+            view_key: egui::Id::unique(("filter-preview-window", dialog)).value(),
+            offset: [0.0, 0.0],
+            ..params
+        };
+        crate::gpu_canvas::GpuCanvas::paint(&painter, dest, view);
+    } else if let Some((tex, crop, size)) = shown {
         crate::widgets::checker(&painter, dest, 8.0);
         painter.image(tex.id(), dest, crop_uv(uv, *size, *crop), Color32::WHITE);
     }

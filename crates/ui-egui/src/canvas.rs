@@ -471,6 +471,7 @@ fn paint_canvas(
             hdr: hdr_preview(app, doc),
             offset: [0.0, 0.0],
         };
+        app.canvas_gpu.insert(doc.id, params);
         if app.navigator_plain.contains(&doc.id) {
             app.navigator_gpu.insert(doc.id, params);
         } else {

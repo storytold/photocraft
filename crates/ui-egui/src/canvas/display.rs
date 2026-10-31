@@ -142,6 +142,10 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     if let Some(shown) = crate::adjust_preview::display_doc(app, idx) {
         return shown;
     }
+    // Filter dialog previewing on the GPU: the target's content is a layer operator (#5772).
+    if let Some(shown) = crate::filter_gpu_preview::display_doc(app, idx) {
+        return shown;
+    }
     // Gradient tool (live) drag, or a stop dragged in the Properties panel.
     if let Some(shown) = crate::gradient_ui::display_doc(app, idx) {
         return shown;
