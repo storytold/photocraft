@@ -268,15 +268,78 @@ fn in_memory(id: usvg::fontdb::ID, db: &mut Arc<usvg::fontdb::Database>) -> usvg
     loaded.into_iter().find(|&n| db.face_source(n).is_some_and(|(_, i)| i == index)).unwrap_or(id)
 }
 
+/// Most `cmap` table bytes [`has_char`] keeps; past it a face is asked on disk (slow, still right).
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_CACHED_CMAP_BYTES: usize = 64 << 20;
+
+/// Whether face `face` maps `c` to a glyph, as usvg's own check decides it. usvg reads a font
+/// file's whole font for every face it asks, so one character no font has re-read every
+/// installed font once per text element (430 ms each with 273 faces). A file face's `cmap` table
+/// is kept instead, read once per process; a file that doesn't load isn't remembered.
+#[cfg(not(target_arch = "wasm32"))]
+fn has_char(db: &usvg::fontdb::Database, face: &usvg::fontdb::FaceInfo, c: char) -> bool {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Mutex, PoisonError};
+    use ttf_parser::{Face, Tag, cmap};
+    type Cmaps = (HashMap<(PathBuf, u32), Arc<Vec<u8>>>, usize);
+    static CMAPS: OnceLock<Mutex<Cmaps>> = OnceLock::new();
+    let maps = || CMAPS.get_or_init(Mutex::default).lock().unwrap_or_else(PoisonError::into_inner);
+    let in_cmap =
+        |table: &[u8]| cmap::Table::parse(table).is_some_and(|t| t.subtables.into_iter().any(|s| s.is_unicode() && s.glyph_index(u32::from(c)).is_some()));
+    let usvg_check = |data: &[u8], index| Face::parse(data, index).is_ok_and(|f| f.glyph_index(c).is_some());
+    let usvg::fontdb::Source::File(path) = &face.source else {
+        return db.with_face_data(face.id, usvg_check).unwrap_or(false);
+    };
+    let key = (path.clone(), face.index);
+    if let Some(table) = maps().0.get(&key).cloned() {
+        return in_cmap(&table);
+    }
+    // usvg's check parses the whole face first: one that doesn't parse has no characters. Its
+    // `cmap` is the last such table record (a linear walk, unsorted directories included).
+    let cmap_of = |data: &[u8], index| {
+        let face = Face::parse(data, index).ok()?;
+        let raw = face.raw_face();
+        let record = raw.table_records.into_iter().filter(|r| r.tag == Tag::from_bytes(b"cmap")).last();
+        let table = record.and_then(|r| {
+            let start = usize::try_from(r.offset).ok()?;
+            raw.data.get(start..start.checked_add(usize::try_from(r.length).ok()?)?)
+        });
+        Some(table.unwrap_or_default().to_vec())
+    };
+    let Some(table) = db.with_face_data(face.id, cmap_of).flatten() else {
+        return false;
+    };
+    let found = in_cmap(&table);
+    let mut maps = maps();
+    // An import that missed at the same time may have kept it already.
+    if !maps.0.contains_key(&key) && maps.1.saturating_add(table.len()) <= MAX_CACHED_CMAP_BYTES {
+        maps.1 = maps.1.saturating_add(table.len());
+        maps.0.insert(key, Arc::new(table));
+    }
+    found
+}
+
+/// usvg's fallback choice (the first face, in database order, not used yet, sharing the base
+/// face's style, weight or stretch and having `c`), asked through [`has_char`].
+#[cfg(not(target_arch = "wasm32"))]
+fn fallback_face(c: char, used: &[usvg::fontdb::ID], db: &usvg::fontdb::Database) -> Option<usvg::fontdb::ID> {
+    let base = db.face(*used.first()?)?;
+    db.faces()
+        .filter(|f| !used.contains(&f.id))
+        .filter(|f| base.style == f.style || base.weight == f.weight || base.stretch == f.stretch)
+        .find(|f| has_char(db, f, c))
+        .map(|f| f.id)
+}
+
 /// usvg's font choice, with the chosen faces read from memory ([`in_memory`]).
 fn font_resolver() -> usvg::FontResolver<'static> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let select = usvg::FontResolver::default_font_selector();
-        let fallback = usvg::FontResolver::default_fallback_selector();
         usvg::FontResolver {
             select_font: Box::new(move |font, db| select(font, db).map(|id| in_memory(id, db))),
-            select_fallback: Box::new(move |c, used, db| fallback(c, used, db).map(|id| in_memory(id, db))),
+            select_fallback: Box::new(|c, used, db| fallback_face(c, used, db).map(|id| in_memory(id, db))),
         }
     }
     #[cfg(target_arch = "wasm32")]

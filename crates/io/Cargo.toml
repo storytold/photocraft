@@ -44,6 +44,8 @@ roxmltree = "0.21"
 # already in the tree through the UI's icon loader; text shaping needs the fonts feature set.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+# The SVG fallback font search keeps each font file's character map (already in the tree through usvg).
+ttf-parser = { version = "0.25", default-features = false }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 resvg = { version = "0.45", default-features = false, features = ["text", "raster-images"] }
