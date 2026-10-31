@@ -710,6 +710,13 @@ fn gallery_cell(ui: &mut egui::Ui, d: &GalleryDialog, i: usize, f: GalleryFilter
     .inner
 }
 
+/// The hand-painted chrome title band, based in the UI's direction like the app title bar.
+fn chrome_title_job(title: String, font: FontId, color: Color32) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::simple_singleline(title, font, color);
+    job.direction = crate::text::direction::text_direction();
+    job
+}
+
 /// Draws the dialog (a full-window layer over the app).
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
@@ -727,7 +734,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         painter.line_segment([title.left_bottom(), title.right_bottom()], Stroke::new(1.0, t.separator));
         let pct = if d.zoom > 0.0 { format!("{:.0}%", d.zoom * 100.0) } else { tl!("Fit").into() };
         let name = d.effects.get(d.selected).map_or("", |e| tl!(e.filter.name()));
-        painter.text(title.center(), Align2::CENTER_CENTER, format!("{name} ({}, {pct})", d.layer_name), FontId::proportional(13.0), t.text);
+        let galley = painter.layout_job(chrome_title_job(format!("{name} ({}, {pct})", d.layer_name), FontId::proportional(13.0), t.text));
+        painter.galley(Align2::CENTER_CENTER.anchor_size(title.center(), galley.size()).min, galley, t.text);
         let body = ERect::from_min_max(pos2(full.left(), title.bottom()), full.max);
         let rtl = crate::text::direction::is_rtl();
         let GalleryPanes { settings, folders: mid, preview: area, zoom_bar } = panes(body, rtl);
@@ -1186,5 +1194,17 @@ mod rtl_tests {
             };
             assert!(pos("OK") < pos("Cancel"), "OK is created before Cancel in both directions ({label})");
         }
+    }
+
+    #[test]
+    fn chrome_title_job_bases_its_direction_on_the_ui_direction() {
+        use crate::text::direction::{Dir, direction_scope};
+        let font = FontId::proportional(13.0);
+        let _ltr = direction_scope(Dir::Ltr);
+        let ltr = chrome_title_job("Gallery".to_owned(), font.clone(), Color32::WHITE);
+        assert_eq!(ltr.direction, egui::epaint::text::TextDirection::LeftToRight);
+        let _rtl = direction_scope(Dir::Rtl);
+        let rtl = chrome_title_job("Gallery".to_owned(), font, Color32::WHITE);
+        assert_eq!(rtl.direction, egui::epaint::text::TextDirection::RightToLeft);
     }
 }
