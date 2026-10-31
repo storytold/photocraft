@@ -66,6 +66,16 @@ fn levels_entry(chan: Option<&str>, p: &Value) -> Descriptor {
     e
 }
 
+/// Whether the Levels settings in `p` (the master curve and every channel object) name both ends
+/// of each range they touch, or neither. `levels_entry` writes a whole `Inpt` or `Otpt` pair and
+/// fills the end a partial edit left out with 0 or 255, so replaying `inBlack: 31` alone would
+/// also reset a retained Input White (#8530).
+pub(super) fn levels_complete(p: &Value) -> bool {
+    let pairs_whole =
+        |v: &Value| [("inBlack", "inWhite"), ("outBlack", "outWhite")].iter().all(|(low, high)| jnum(v, low).is_some() == jnum(v, high).is_some());
+    pairs_whole(p) && CHANNELS.iter().filter_map(|(_, k)| p.get(*k).filter(|v| v.is_object())).all(pairs_whole)
+}
+
 pub(super) fn levels_to(p: &Value) -> Option<Descriptor> {
     let mut entries = vec![D::Descriptor(levels_entry(None, p))];
     for (_, k) in CHANNELS {

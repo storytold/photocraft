@@ -2278,6 +2278,47 @@ fn partial_color_balance_and_hue_saturation_edits_refuse_strict_export() {
     }
 }
 
+/// Levels, like Color Balance and Hue/Saturation: the descriptor writes both ends of the Input and
+/// of the Output range, filling the end an edit did not name with 0 or 255, so replaying
+/// `inBlack: 31` alone would also reset a retained Input White (#8530). Strict export refuses it;
+/// a pair given whole, or none of it, still exports and round-trips.
+#[test]
+fn partial_levels_edits_refuse_strict_export() {
+    let one = |p: Value| Action { name: "Probe".into(), steps: vec![("layer.setAdjustment".into(), p)], ..Default::default() };
+    for p in [
+        json!({"kind": "levels", "inBlack": 31}),
+        json!({"kind": "levels", "inWhite": 239}),
+        json!({"kind": "levels", "outBlack": 10}),
+        json!({"kind": "levels", "outWhite": 240}),
+        json!({"kind": "levels", "inBlack": 31, "inWhite": 239, "outWhite": 240}),
+        json!({"kind": "levels", "red": {"inBlack": 2}}),
+        json!({"kind": "levels", "inBlack": 1, "inWhite": 250, "blue": {"outBlack": 3}}),
+        // A value of the wrong shape is no value: the other end is then alone.
+        json!({"kind": "levels", "inBlack": 31, "inWhite": "239"}),
+    ] {
+        let err = export("Audit8", &[&one(p.clone())], &[], false).unwrap_err();
+        assert!(err.contains("`layer.setAdjustment`"), "{p}: {err}");
+        let (_, skipped) = export("Audit8", &[&one(p.clone())], &[], true).unwrap();
+        assert_eq!(skipped, vec![Skipped { action: "Probe".into(), step: 0, id: "layer.setAdjustment".into() }], "{p}");
+    }
+    for p in [
+        json!({"kind": "levels", "inBlack": 31, "inWhite": 239}),
+        json!({"kind": "levels", "outBlack": 10, "outWhite": 240}),
+        json!({"kind": "levels", "inBlack": 31, "inWhite": 239, "outBlack": 10, "outWhite": 240, "gamma": 1.2}),
+        json!({"kind": "levels", "gamma": 0.8}),
+        json!({"kind": "levels", "inBlack": 1, "inWhite": 250, "red": {"inBlack": 2, "inWhite": 200}}),
+    ] {
+        let (bytes, skipped) = export("Audit8", &[&one(p.clone())], &[], false).unwrap_or_else(|e| panic!("{p}: {e}"));
+        assert!(skipped.is_empty(), "{p}");
+        let steps = import(&bytes).unwrap().actions[0].steps.clone();
+        let (id, back) = steps.first().unwrap();
+        assert_eq!(id, "layer.setAdjustment");
+        for k in ["inBlack", "inWhite", "outBlack", "outWhite"] {
+            assert_eq!(back.get(k), p.get(k), "{p}: {k} in {back}");
+        }
+    }
+}
+
 /// Photoshop's Close has no document target: a Close of a specific document must not be
 /// exported as a plain Close, which would close the active document on playback.
 #[test]

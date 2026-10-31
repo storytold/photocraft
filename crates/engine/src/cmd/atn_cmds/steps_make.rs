@@ -1,4 +1,4 @@
-use super::adjustments::{HUE_RANGES, adjustment_by_class, adjustment_by_suffix, adjustment_steps};
+use super::adjustments::{HUE_RANGES, adjustment_by_class, adjustment_by_suffix, adjustment_steps, levels_complete};
 use super::descriptors::{
     PX, Target, ang, class, class_ref, code, color_desc, color_hex, desc, enm, get_bool, get_enum, get_list, get_num, get_obj, get_ref, get_text, jbool, jnum,
     jstr, layer_ref, layer_target, long, name_ref, pct, px, ref_class, target, target_ref, text, trimmed,
@@ -762,7 +762,8 @@ pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
             let kind = jstr(p, "kind")?;
             // `layer.setAdjustment` changes only the settings it names. Color Balance and
             // Hue/Saturation descriptors carry every setting, filling absent ones with defaults,
-            // so a partial edit would replay as one that also resets the rest (#8531).
+            // so a partial edit would replay as one that also resets the rest (#8531). Levels writes
+            // each range whole, so one end alone resets the other (#8530).
             // Present and of the shape the writer reads: anything else it would write as 0.
             let number = |p: &Value, k: &str| p.get(k).and_then(Value::as_f64).is_some_and(f64::is_finite);
             let numbers = |p: &Value, keys: &[&str]| keys.iter().all(|k| number(p, k));
@@ -784,6 +785,8 @@ pub(super) fn set_to(id: &str, p: &Value) -> Option<Descriptor> {
                             r.is_object() && numbers(r, &["hue", "saturation", "lightness"]) && bounds
                         })
                 }
+                // Both ends of each range it names (#8530).
+                "levels" => levels_complete(p),
                 _ => true,
             };
             if !complete {
