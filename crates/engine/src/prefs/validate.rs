@@ -159,8 +159,9 @@ pub fn is_color(path: &str) -> bool {
 }
 
 pub fn parse_hex(s: &str) -> Option<[u8; 3]> {
-    let s = s.trim().trim_start_matches('#');
-    if s.len() != 6 {
+    let s = s.trim();
+    let s = s.strip_prefix('#').unwrap_or(s);
+    if s.len() != 6 || !s.bytes().all(|c| c.is_ascii_hexdigit()) {
         return None;
     }
     let b = |i: usize| s.get(i..i + 2).and_then(|s| u8::from_str_radix(s, 16).ok());
@@ -274,4 +275,16 @@ pub(super) fn check_value(path: &str, v: &Value) -> std::result::Result<(), Stri
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_hex;
+
+    #[test]
+    fn plus_sign_is_not_hex() {
+        assert_eq!(parse_hex("#+f+f+f"), None);
+        assert_eq!(parse_hex("##ffffff"), None);
+        assert_eq!(parse_hex("#ffffff"), Some([255, 255, 255]));
+    }
 }
