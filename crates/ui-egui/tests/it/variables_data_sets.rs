@@ -56,6 +56,41 @@ fn out_of_range_data_set_index_is_clamped_before_delete() {
     h.run_steps(2);
 }
 
+#[test]
+fn apply_replaces_pixels_before_ok_and_keeps_the_dialog_open() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("blue.png");
+    let mut source = photocraft_engine::Session::new();
+    source.execute("file.new", json!({"width": 8, "height": 8, "background": "#0000ff"})).unwrap();
+    let png = photocraft_io::export(&source.active().unwrap().doc, "png", &photocraft_io::ExportOptions::default()).unwrap().bytes;
+    std::fs::write(&path, png).unwrap();
+
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
+    app.run("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+    let layer = app.session.active().unwrap().active_layer.unwrap();
+    photocraft_ui_egui::menus::invoke(&mut app, &egui::Context::default(), "image.variables.dataSets", json!({})).unwrap();
+    let dialog = app.ui.dialogs.last_mut().unwrap();
+    let id = dialog.id;
+    dialog.fields.insert(
+        "__variables".into(),
+        json!({
+            "defs": [{"name": "photo", "layer": layer.0, "type": "pixelReplacement", "method": "conform"}],
+            "dataSets": [{"name": "Blue", "values": [{"variable": "photo", "kind": "pixels", "value": path}]}]
+        }),
+    );
+    let mut h = harness(app);
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+
+    assert_eq!(h.state().ui.dialogs.last().unwrap().id, id, "Apply leaves the editor open");
+    let pixel = h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap();
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    let confirmed = h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap();
+    assert_eq!(confirmed, json!([0.0, 0.0, 1.0, 1.0]), "the same replacement works through OK");
+    assert_eq!(pixel, confirmed, "Apply uses the edited definitions and image path immediately");
+}
+
 /// `ui.dialog.set` can store any JSON in `__variables`; the editors write into its entries.
 fn app_with_malformed_variables(page: &str) -> PhotocraftApp {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), photocraft_ui_egui::Services::default());
