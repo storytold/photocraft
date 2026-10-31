@@ -928,3 +928,48 @@ bench = "interactive_bench"
 row = "Unsharp Mask dialog preview r 40 (GPU resident)"
 budget_ms = 16
 enforce = false  # met on an RTX 4090 Laptop (worst step 9.3 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
+
+[[scenario]]
+id = "P95"
+title = "Minimum r 10 (square) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Minimum r 10 (square) dialog preview (GPU resident)"
+budget_ms = 16
+enforce = false  # met on an RTX 4090 Laptop (worst step 5.7 ms, 2026-10-24); enforced once the nightly's machine class has a baseline
+
+[[scenario]]
+id = "P96"
+title = "Maximum r 10 (round) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Maximum r 10 (round) dialog preview (GPU resident)"
+budget_ms = 16
+enforce = false  # 18 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
+
+[[scenario]]
+id = "P97"
+title = "Custom (Blur More's kernel) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Custom (Blur More's kernel) dialog preview (GPU resident)"
+budget_ms = 16
+enforce = false  # 19 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
+
+[[scenario]]
+id = "P98"
+title = "Maximum r 40 (round) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Maximum r 40 (round) dialog preview (GPU resident)"
+budget_ms = 16
+enforce = false  # 44 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
+
+[[scenario]]
+id = "P99"
+title = "Maximum r 100 (round) dialog slider step, GPU resident, 36 MP, 1920x1080 view"
+issue = 5772
+bench = "interactive_bench"
+row = "Maximum r 100 (round) dialog preview (GPU resident)"
+budget_ms = 16
+enforce = false  # 93 ms measured 2026-10-24 (worst step, RTX 4090 Laptop)
