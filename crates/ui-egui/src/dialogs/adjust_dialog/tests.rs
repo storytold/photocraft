@@ -439,6 +439,34 @@ fn curves_auto_stretches_a_low_contrast_image() {
     }
 }
 
+/// Clicks `kind`'s Auto on a fully transparent layer, with `key` set to `value` first, and
+/// returns the settings before and after.
+fn auto_on_a_transparent_layer(kind: &str, key: &str, value: Value) -> (Value, Value) {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let app = PhotocraftApp::new(s, crate::Services::default());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), &format!("image.adjustments.{kind}")).unwrap();
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(key.into(), value);
+    h.run_steps(4);
+    let before = crate::filter_dialog::params_of(&h.state_mut().ui.dialog_mut(id).unwrap().fields);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Auto").click();
+    h.run_steps(3);
+    (before, crate::filter_dialog::params_of(&h.state_mut().ui.dialog_mut(id).unwrap().fields))
+}
+
+/// CodeRabbit on #9237: a fully transparent layer has an empty histogram, so Curves' Auto leaves
+/// the curve alone instead of clipping it to the levels 253..255.
+#[test]
+fn curves_auto_on_a_fully_transparent_layer_changes_nothing() {
+    let points = json!([[0.0, 0.0], [128.0, 160.0], [255.0, 255.0]]);
+    let (before, after) = auto_on_a_transparent_layer("curves", "points", points.clone());
+    assert_eq!(after, before);
+    assert_eq!(after["points"], points);
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {

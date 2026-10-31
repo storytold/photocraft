@@ -323,8 +323,9 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let key = curve_key(&chan);
     let mut e = curves_mode_row(ui, v, key, cx);
     // Auto: the shown channel's curve runs from its histogram's black point to its white point,
-    // the same automatic points as Levels' Auto (a drawn curve becomes a point curve first).
-    let auto_points = auto.then(|| cx.hist.as_ref().map(|h| auto_levels(&h[hist_i]))).flatten();
+    // the same automatic points as Levels' Auto (a drawn curve becomes a point curve first). An
+    // empty histogram (a fully transparent layer) has no such points: Auto changes nothing.
+    let auto_points = auto.then(|| cx.hist.as_ref().filter(|h| h[hist_i].iter().any(|&n| n != 0)).map(|h| auto_levels(&h[hist_i]))).flatten();
     if auto_points.is_some() && v.get("pencil").and_then(Value::as_bool).unwrap_or(false) {
         e.add(Edit::discrete(set_editor_pencil(v, false, cx)));
     }
