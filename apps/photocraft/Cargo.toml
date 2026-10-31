@@ -74,15 +74,15 @@ dispatch2 = { version = "=0.3.1", default-features = false, features = ["std"] }
 photocraft-cms = { workspace = true }
 # The print portal's PDF: a private (0600) temporary file, removed when the dialog is done.
 tempfile = "3"
-x11rb = { version = "=0.13.2", default-features = false, features = ["image", "randr", "xkb"] }
+x11rb = { version = "=0.14.0", default-features = false, features = ["image", "randr", "xkb"] }
 # Clipboard images in types other than PNG on Wayland (`services.rs`, #2546): arboard asks for
 # image/png only. Already in Cargo.lock (arboard's wayland-data-control); pinned exactly.
-wl-clipboard-rs = { version = "=0.9.4", default-features = false }
+wl-clipboard-rs = { version = "=0.9.5", default-features = false }
 # Wayland desktop color selection through the existing XDG portal transport.
-zbus = "=5.19.0"
+zbus = "=6.1.0"
 # Caption button glyphs from the desktop's icon theme (`caption_style.rs`): SVG paths only, no
 # text or images. Already in Cargo.lock (photocraft-io); pinned exactly.
-resvg = { version = "=0.45.1", default-features = false }
+resvg = { version = "=0.49.0", default-features = false }
 # Already used by the portal stack; bounded waits let cancelling close the OS request.
 futures-lite = "=2.6.1"
 async-io = "=2.6.0"
