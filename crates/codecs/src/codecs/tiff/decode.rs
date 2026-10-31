@@ -1,4 +1,4 @@
-use super::bands::{convert_ab, decode_bands, extra_sample_indices, split_extra_samples, zeroed};
+use super::bands::{DECODER_BYTES_PER_CHUNK, budget_workers, convert_ab, decode_bands, extra_sample_indices, split_extra_samples, worker_threads, zeroed};
 use super::tags::{F, TAG_IMAGE_SOURCE_DATA, TAG_PHOTOSHOP, TAG_XMP, TEXT_TAGS, photoshop_tags};
 use super::{
     ChannelLayout, ChunkType, CodecError, DecodeWarning, Decoder, ExifDirs, File, Ifd, Image, Limits, Metadata, Read, SampleType, Seek, SeekFrom, Tag,
@@ -462,7 +462,8 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
     // its declared size is refused before the image is allocated. Uncompressed data may be up
     // to three quarters missing (that decodes with a `Truncated` warning).
     let stored = u64::from(w).saturating_mul(u64::from(h)).saturating_mul(spp).saturating_mul(bits).div_ceil(8);
-    let ratio: u64 = match f.tag_uint(dir, ifd::TAG_COMPRESSION).unwrap_or(1) {
+    let compression = f.tag_uint(dir, ifd::TAG_COMPRESSION).unwrap_or(1);
+    let ratio: u64 = match compression {
         1 => 4,
         32773 => 130,
         _ => 4096,
@@ -510,29 +511,57 @@ fn decode_ifd(f: &File<'_>, dir: &Ifd, limits: &Limits) -> Result<Image, CodecEr
         scratch_cap,
         extra_at,
     };
+    // The decode's working memory shares `max_alloc` with the output: each band worker holds an
+    // open decoder (its chunk tables) and, unless strips decode in place, one chunk's scratch
+    // buffer (for JPEG the `tiff` crate also holds a decoded copy of the chunk). The first chunk
+    // of a plane is the largest in it (the others are the same size or clipped at the image's
+    // edge; the `tiff` crate clips the tiles of later planes only at the right edge), and no
+    // chunk may ask for more than that. As many workers run at once as fit beside the output;
+    // when not even one does, the image is refused before anything is allocated.
+    let out_row = lay.out_row();
+    let band_bytes = out_row.checked_mul(ch.min(hu)).ok_or_else(|| CodecError::LimitExceeded("band size".into()))?;
+    let first = dec.image_chunk_buffer_layout(0).map_err(map_err)?;
+    let mut largest = first.len;
+    if planes_in_file > 1 {
+        let plane1 = u32::try_from(chunks_per_plane).map_err(|_| err("too many tiles"))?;
+        largest = largest.max(dec.image_chunk_buffer_layout(plane1).map_err(map_err)?.len);
+    }
+    let in_place = lay.direct() && first.len == band_bytes && first.row_stride.map(|s| s.get()) == Some(out_row);
+    let scratch = if in_place { 0 } else { largest };
+    if scratch > lay.scratch_cap {
+        return Err(CodecError::LimitExceeded(format!("a {scratch} byte strip or tile")));
+    }
+    lay.scratch_cap = scratch;
+    let tables = u64::from(total).saturating_mul(DECODER_BYTES_PER_CHUNK);
+    let jpeg_copy = if matches!(compression, 6 | 7) { largest as u64 } else { 0 };
+    let per_worker = (scratch as u64).saturating_add(jpeg_copy).saturating_add(tables);
+    let len = out_row.checked_mul(hu).ok_or_else(|| CodecError::LimitExceeded("image size".into()))?;
+
     // Extra samples share the allocation budget with the image: their interleaved buffer and the
-    // planes split from it are held next to the image, so both count against `max_alloc`. When
-    // they don't fit, the image still opens (it passed its own check above) without them.
+    // planes split from it are held next to the image, and the interleaved buffer next to the
+    // decode's working memory, so all of it counts against `max_alloc`. When they don't fit, the
+    // image still opens (if it fits on its own) without them.
     let mut extras_dropped = 0;
     if !lay.extra_at.is_empty() {
         let per_pixel = out_layout.channels().saturating_add(lay.extra_at.len().saturating_mul(2)).saturating_mul(out.bytes());
-        if limits.check_bytes(w, h, per_pixel as u64).is_err() {
+        let interleaved = (lay.extra_row() as u64).saturating_mul(hu as u64);
+        let decoding = (len as u64).saturating_add(interleaved).saturating_add(tables).saturating_add(per_worker);
+        if limits.check_bytes(w, h, per_pixel as u64).is_err() || decoding > limits.max_alloc {
             extras_dropped = u32::try_from(lay.extra_at.len()).unwrap_or(u32::MAX);
             lay.extra_at.clear();
         }
     }
-
-    // The output, allocated once and fallibly.
-    let out_row = lay.out_row();
-    let len = out_row.checked_mul(hu).ok_or_else(|| CodecError::LimitExceeded("image size".into()))?;
-    let mut data = zeroed(len)?;
-    let band_bytes = out_row.checked_mul(ch.min(hu)).ok_or_else(|| CodecError::LimitExceeded("band size".into()))?;
-
     let extra_row = lay.extra_row();
     let extra_len = extra_row.checked_mul(hu).ok_or_else(|| CodecError::LimitExceeded("extra samples".into()))?;
-    let mut extra_data = if lay.extra_at.is_empty() { Vec::new() } else { zeroed(extra_len)? };
     let extra_band = extra_row.saturating_mul(ch.min(hu));
-    let tally = decode_bands(&lay, &mut data, band_bytes, extra_data.as_mut_slice(), extra_band, &mut dec, &open)?;
+    // The output, the extra samples and the first decoder (kept open next to the workers).
+    let held = (len as u64).saturating_add(extra_len as u64).saturating_add(tables);
+    let workers = budget_workers(held, per_worker, limits.max_alloc, worker_threads())?;
+
+    // The output, allocated once and fallibly.
+    let mut data = zeroed(len)?;
+    let mut extra_data = if lay.extra_at.is_empty() { Vec::new() } else { zeroed(extra_len)? };
+    let tally = decode_bands(&lay, &mut data, band_bytes, extra_data.as_mut_slice(), extra_band, workers, &mut dec, &open)?;
     if tally.decoded == 0 && tally.missing > 0 {
         return Err(err("the image data is missing (cut off or past the end of the file)"));
     }

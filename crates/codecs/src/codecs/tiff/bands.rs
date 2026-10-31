@@ -110,16 +110,50 @@ impl std::ops::Add for Tally {
     }
 }
 
+/// Bytes an open `tiff` decoder keeps per chunk: its offset and its byte count, as `u64`s.
+pub(super) const DECODER_BYTES_PER_CHUNK: u64 = 16;
+
+/// Threads the band decode may run on.
+pub(super) fn worker_threads() -> usize {
+    #[cfg(not(target_arch = "wasm32"))]
+    return rayon::current_num_threads().max(1);
+    #[cfg(target_arch = "wasm32")]
+    return 1;
+}
+
+/// How many band workers, each holding `per_worker` bytes, fit in `max_alloc` beside the `held`
+/// bytes already allocated (at most `threads`, at least one), or a limit error when none does.
+pub(super) fn budget_workers(held: u64, per_worker: u64, max_alloc: u64, threads: usize) -> Result<usize, CodecError> {
+    let threads = threads.max(1);
+    let room = max_alloc.saturating_sub(held);
+    let fit = room.checked_div(per_worker).map_or(threads, |n| usize::try_from(n).unwrap_or(usize::MAX));
+    if fit == 0 {
+        return Err(CodecError::LimitExceeded(format!(
+            "decoding needs {per_worker} bytes of strip or tile scratch beside {held} bytes of image, exceeding max_alloc {max_alloc}"
+        )));
+    }
+    Ok(fit.min(threads))
+}
+
+/// Bands each parallel task decodes, one after the other: one band per task when every thread
+/// may hold a worker, else the bands split into `workers` runs so that no more than `workers`
+/// decoders and scratch buffers are ever alive at once.
+fn bands_per_task(bands: usize, workers: usize, threads: usize) -> usize {
+    if workers >= threads { 1 } else { bands.div_ceil(workers.max(1)).max(1) }
+}
+
 /// Decodes every band into `data`, in parallel on native targets (one decoder and scratch
-/// buffer per worker). `extra` receives samples that are not part of the colour image, one
-/// band of rows at a time, when it is non-empty.
+/// buffer per worker, at most `workers` of them at once). `extra` receives samples that are not
+/// part of the colour image, one band of rows at a time, when it is non-empty.
 #[cfg(not(target_arch = "wasm32"))]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn decode_bands<'a, O>(
     lay: &Layout,
     data: &mut [u8],
     band_bytes: usize,
     extra: &mut [u8],
     extra_band: usize,
+    workers: usize,
     _first: &mut Decoder<Patched<'a>>,
     open: &O,
 ) -> Result<Tally, CodecError>
@@ -127,40 +161,40 @@ where
     O: Fn() -> Result<Decoder<Patched<'a>>, CodecError> + Sync,
 {
     use rayon::prelude::*;
+    let band_bytes = band_bytes.max(1);
+    let per_task = bands_per_task(data.len().div_ceil(band_bytes), workers, worker_threads());
+    let task_bytes = band_bytes.saturating_mul(per_task);
+    let init = || open().map(|d| (d, Vec::new())).map_err(|e| e.to_string());
     if extra.is_empty() {
         return data
-            .par_chunks_mut(band_bytes.max(1))
+            .par_chunks_mut(task_bytes)
             .enumerate()
-            .map_init(
-                || open().map(|d| (d, Vec::new())).map_err(|e| e.to_string()),
-                |worker, (b, band)| {
-                    let (dec, scratch) = worker.as_mut().map_err(|e| err(e.clone()))?;
-                    decode_band(lay, dec, scratch, b, band, None)
-                },
-            )
+            .map_init(init, |worker, (t, task)| {
+                let (dec, scratch) = worker.as_mut().map_err(|e| err(e.clone()))?;
+                decode_task(lay, dec, scratch, t.saturating_mul(per_task), task, band_bytes, None, extra_band)
+            })
             .try_reduce(Tally::default, |a, b| Ok(a + b));
     }
-    data.par_chunks_mut(band_bytes.max(1))
-        .zip(extra.par_chunks_mut(extra_band.max(1)))
+    data.par_chunks_mut(task_bytes)
+        .zip(extra.par_chunks_mut(extra_band.max(1).saturating_mul(per_task)))
         .enumerate()
-        .map_init(
-            || open().map(|d| (d, Vec::new())).map_err(|e| e.to_string()),
-            |worker, (b, (band, extra_band))| {
-                let (dec, scratch) = worker.as_mut().map_err(|e| err(e.clone()))?;
-                decode_band(lay, dec, scratch, b, band, Some(extra_band))
-            },
-        )
+        .map_init(init, |worker, (t, (task, extra_task))| {
+            let (dec, scratch) = worker.as_mut().map_err(|e| err(e.clone()))?;
+            decode_task(lay, dec, scratch, t.saturating_mul(per_task), task, band_bytes, Some(extra_task), extra_band)
+        })
         .try_reduce(Tally::default, |a, b| Ok(a + b))
 }
 
 /// Decodes every band into `data`, one after the other.
 #[cfg(target_arch = "wasm32")]
+#[allow(clippy::too_many_arguments)]
 pub(super) fn decode_bands<'a, O>(
     lay: &Layout,
     data: &mut [u8],
     band_bytes: usize,
     extra: &mut [u8],
     extra_band: usize,
+    _workers: usize,
     first: &mut Decoder<Patched<'a>>,
     _open: &O,
 ) -> Result<Tally, CodecError>
@@ -168,15 +202,30 @@ where
     O: Fn() -> Result<Decoder<Patched<'a>>, CodecError> + Sync,
 {
     let mut scratch = Vec::new();
+    let extra = if extra.is_empty() { None } else { Some(extra) };
+    decode_task(lay, first, &mut scratch, 0, data, band_bytes.max(1), extra, extra_band)
+}
+
+/// Decodes the consecutive bands in `task` (the first is band `b0`), one after the other.
+#[allow(clippy::too_many_arguments)]
+fn decode_task(
+    lay: &Layout,
+    dec: &mut Decoder<Patched<'_>>,
+    scratch: &mut Vec<u8>,
+    b0: usize,
+    task: &mut [u8],
+    band_bytes: usize,
+    extra: Option<&mut [u8]>,
+    extra_band: usize,
+) -> Result<Tally, CodecError> {
     let mut tally = Tally::default();
-    if extra.is_empty() {
-        for (b, band) in data.chunks_mut(band_bytes.max(1)).enumerate() {
-            tally = tally + decode_band(lay, first, &mut scratch, b, band, None)?;
-        }
-        return Ok(tally);
-    }
-    for (b, (band, extra_band)) in data.chunks_mut(band_bytes.max(1)).zip(extra.chunks_mut(extra_band.max(1))).enumerate() {
-        tally = tally + decode_band(lay, first, &mut scratch, b, band, Some(extra_band))?;
+    let mut extra = extra.map(|e| e.chunks_mut(extra_band.max(1)));
+    for (i, band) in task.chunks_mut(band_bytes.max(1)).enumerate() {
+        let extra_band = match extra.as_mut() {
+            Some(bands) => Some(bands.next().ok_or_else(|| err("extra-sample band out of range"))?),
+            None => None,
+        };
+        tally = tally + decode_band(lay, dec, scratch, b0.saturating_add(i), band, extra_band)?;
     }
     Ok(tally)
 }
@@ -482,6 +531,39 @@ fn finish_band(lay: &Layout, band: &mut [u8]) {
                     }
                 }
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod scratch_budget {
+    use super::{CodecError, bands_per_task, budget_workers};
+
+    #[test]
+    fn workers_are_capped_by_the_room_beside_the_image() {
+        // NV-9: four threads, a 128 MiB strip scratch each, 8 MiB of image, 160 MiB of budget:
+        // one worker fits, not four.
+        let mib = 1u64 << 20;
+        assert_eq!(budget_workers(8 * mib, 128 * mib, 160 * mib, 4).unwrap(), 1);
+        assert_eq!(budget_workers(8 * mib, 32 * mib, 160 * mib, 4).unwrap(), 4);
+        assert_eq!(budget_workers(8 * mib, 32 * mib, 104 * mib, 16).unwrap(), 3);
+        assert!(matches!(budget_workers(8 * mib, 160 * mib, 160 * mib, 4), Err(CodecError::LimitExceeded(_))));
+        assert!(matches!(budget_workers(200 * mib, 1, 160 * mib, 4), Err(CodecError::LimitExceeded(_))));
+        // No scratch: every thread; no threads reported: still one worker.
+        assert_eq!(budget_workers(8 * mib, 0, 160 * mib, 4).unwrap(), 4);
+        assert_eq!(budget_workers(0, 1, u64::MAX, 0).unwrap(), 1);
+    }
+
+    #[test]
+    fn a_short_budget_groups_bands_into_as_many_tasks_as_workers() {
+        assert_eq!(bands_per_task(16, 4, 4), 1);
+        assert_eq!(bands_per_task(16, 8, 4), 1);
+        assert_eq!(bands_per_task(16, 1, 4), 16);
+        assert_eq!(bands_per_task(17, 3, 4), 6);
+        assert_eq!(bands_per_task(0, 0, 4), 1);
+        // Never more tasks than workers.
+        for (bands, workers) in [(1usize, 1usize), (7, 2), (100, 3), (5, 5)] {
+            assert!(bands.div_ceil(bands_per_task(bands, workers, 8)) <= workers);
         }
     }
 }

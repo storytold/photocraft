@@ -16,7 +16,10 @@ pub struct Limits {
     /// PNG also applies this to the aggregate decoded text/XMP UTF-8 bytes,
     /// including keywords, separately from pixels. Animated WebP charges
     /// every retained frame's full pixel copy plus its own copy of the
-    /// file's ICC profile against this budget. This is not a total RSS cap.
+    /// file's ICC profile against this budget. TIFF charges its decode working memory (each
+    /// band worker's strip or tile scratch buffer and decoder state) next to the output, runs
+    /// only as many workers at once as fit, and refuses the image when not even one does.
+    /// This is not a total RSS cap.
     pub max_alloc: u64,
 }
 

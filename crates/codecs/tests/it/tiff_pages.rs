@@ -659,3 +659,41 @@ fn zoo_long_random_mutations() {
         poke(&g);
     }
 }
+
+/// A 64-bit gray page whose strips decode through a scratch buffer four times the size of their
+/// output rows: every sample of row `y` is `y << 48` (it reads back as the 16-bit value `y`).
+fn wide_gray(w: u32, h: u32, rows: u32) -> Vec<u8> {
+    let px: Vec<u8> = (0..h).flat_map(|y| (0..w).flat_map(move |_| (u64::from(y) << 48).to_le_bytes())).collect();
+    build(true, false, &[strips(w, h, 64, 1, 1, rows, &px)], &[0]).bytes
+}
+
+fn with_max_alloc(max_alloc: u64) -> DecodeOptions {
+    DecodeOptions { limits: Limits { max_alloc, ..Limits::default() }, ..Default::default() }
+}
+
+#[test]
+fn strip_scratch_counts_against_max_alloc() {
+    // 64×64: an 8 KiB 16-bit output, but its one strip is 32 KiB of 64-bit samples, decoded
+    // into a scratch buffer held next to the output. The two together are over 36 KiB.
+    let file = wide_gray(64, 64, 64);
+    let r = decode_with(&file, &with_max_alloc(36 << 10));
+    assert!(matches!(r, Err(CodecError::LimitExceeded(_))), "output plus strip scratch over max_alloc: {:?}", r.map(|i| i.data().len()));
+    // With room for both it decodes.
+    let img = decode_with(&file, &with_max_alloc(48 << 10)).unwrap();
+    assert_eq!(img.to_u16_samples().unwrap()[64 * 63], 63);
+}
+
+#[test]
+fn a_tight_budget_decodes_its_strips_one_after_another() {
+    // 64×512 in eight 32 KiB strips: a 64 KiB output with room for only one strip's scratch
+    // beside it, so the bands are decoded by one worker, in order, and still land in place.
+    let file = wide_gray(64, 512, 64);
+    let img = decode_with(&file, &with_max_alloc((64 + 40) << 10)).unwrap();
+    let v = img.to_u16_samples().unwrap();
+    for y in 0..512 {
+        assert_eq!(v[y * 64], y as u16, "row {y}");
+        assert_eq!(v[y * 64 + 63], y as u16, "row {y}");
+    }
+    // Unlimited, the same file decodes the same in parallel.
+    assert_eq!(decode(&file).unwrap().to_u16_samples().unwrap(), v);
+}
