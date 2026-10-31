@@ -660,3 +660,26 @@ fn liquify_naming_its_layer_runs_wherever_it_is_enabled() {
         assert!(r.is_ok(), "{target}: enabled, so it runs: {r:?}");
     }
 }
+
+/// #10457 (CodeRabbit on #10469): Camera Raw naming its layer (`"layer"`) with a mask targeted is
+/// admitted by that layer, as it runs on that layer's mask: it runs exactly when the named layer
+/// has a mask, whatever the active layer has, and is otherwise refused up front.
+#[test]
+fn camera_raw_naming_its_layer_is_admitted_by_that_layers_mask() {
+    let raw = crate::lens_cmds::RAW;
+    let mut s = session(8);
+    let plain = s.active().unwrap().active_layer.unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    s.execute("edit.fill", json!({"color": "#808080"})).unwrap();
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+    let masked = s.active().unwrap().active_layer.unwrap();
+    for (active, named) in [(masked, plain), (plain, masked)] {
+        s.execute("layer.select", json!({"layer": active.0})).unwrap();
+        let ran = s.execute(raw, json!({"layer": named.0, "target": "mask", "exposure": -1.5}));
+        assert_eq!(ran.is_ok(), named == masked, "active {active:?}, named {named:?}: runs iff the named layer has a mask: {ran:?}");
+        if let Err(e) = ran {
+            assert!(matches!(e, EngineError::Disabled(..)), "refused at admission: {e}");
+        }
+    }
+}
