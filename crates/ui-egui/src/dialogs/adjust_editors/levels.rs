@@ -83,9 +83,11 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         changed = true;
         e.commit = true;
     }
-    let w = ui.available_width().min(300.0);
+    // As wide as the panel, whatever its width (#10108).
+    let w = ui.available_width();
     // Histogram.
     let (hr, _) = ui.allocate_exact_size(vec2(w, 110.0), Sense::hover());
+    ui.data_mut(|d| d.insert_temp(cx.mem.with("levels-hist"), hr));
     let hr = hr.shrink2(vec2(6.0, 0.0));
     let p = ui.painter_at(hr.expand(1.0));
     p.rect_filled(hr, 0.0, t.field);
