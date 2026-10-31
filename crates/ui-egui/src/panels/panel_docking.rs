@@ -572,10 +572,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     style.right_to_left = crate::direction::is_rtl();
     style.new_dock_zones = true;
     let style = style.localized(|key| DOCK_LABELS.iter().find(|(k, _)| *k == key).map(|(_, english)| tl!(english).to_string()));
+    let input_blocked = modal_open(app, ui.ctx());
     let mut dock = craft_ui::docking::DockArea::new(area)
         .locked(locked)
         .auto_collapse_iconic(app.session.prefs().workspace.auto_collapse_icon_panels)
-        .input_blocked(modal_open(app, ui.ctx()));
+        .input_blocked(input_blocked);
     if let Some(panel) = &reveal {
         dock = dock.raise_panel(panel.clone());
     }
@@ -610,6 +611,17 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         },
         &mut PanelContent { app, collapsed: &collapsed, fillers: &fillers, card: &card, strip, commands: &mut commands },
     );
+    let opening_modal = ui.ctx().data_mut(|data| {
+        let previous = data.get_temp_mut_or_default::<bool>(area_id().with("modal-open"));
+        let opening = input_blocked && !*previous;
+        *previous = input_blocked;
+        opening
+    });
+    // Lower the native palettes first, then bring the modal's main window above them once.
+    // Leave focus with another application when PhotoCraft is in the background.
+    if opening_modal && !native_viewports(app, ui.ctx()).is_empty() && ui.input(|i| i.focused || i.raw.viewports.values().any(|v| v.focused == Some(true))) {
+        ui.ctx().send_viewport_cmd_to(egui::ViewportId::ROOT, egui::ViewportCommand::Focus);
+    }
     if let Some(error) = output.error.take() {
         app.ui.status = error.to_string();
     }
@@ -642,10 +654,11 @@ pub(crate) fn show(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 
 /// A modal dialog or workspace is open. egui's `Modal` blocks input only in the window it shows
 /// in, so the floating panels' own OS windows are blocked meanwhile (`DockArea::input_blocked`).
-/// The app's dialogs count from the frame they open; any other egui modal (a format's options,
-/// a job's progress) from the frame after it first shows.
+/// The app's dialogs and save-format options count from the frame they open; any other egui
+/// modal (a job's progress) from the frame after it first shows.
 pub(crate) fn modal_open(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
     !app.ui.dialogs.is_empty()
+        || app.save_options_open()
         || app.ui.layers_panel_dialog.is_some()
         || app.discard.is_some()
         || app.camera_raw.is_some()

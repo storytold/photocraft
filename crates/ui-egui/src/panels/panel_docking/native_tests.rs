@@ -16,6 +16,7 @@ struct Window {
     /// The window asked for the clipboard text.
     paste_requested: bool,
     hidden: bool,
+    level: egui::WindowLevel,
 }
 
 #[derive(Default)]
@@ -25,6 +26,7 @@ struct Host {
     focus: Option<ViewportId>,
     time: f64,
     size: egui::Vec2,
+    focus_requests: Vec<ViewportId>,
 }
 
 impl Host {
@@ -41,13 +43,17 @@ impl Host {
             .collect()
     }
 
+    /// Run a panel's viewport pass with the host's geometry, focus and queued input.
     fn render(host: &RefCell<Self>, ctx: &egui::Context, mut viewport: egui::ImmediateViewport<'_>) {
         let id = viewport.ids.this;
         let input = {
             let mut host = host.borrow_mut();
             let builder = &viewport.builder;
             let rect = Rect::from_min_size(builder.position.unwrap_or_default(), builder.inner_size.unwrap_or(vec2(300.0, 200.0)));
-            host.windows.entry(id).or_insert(Window { rect, events: Vec::new(), dropped: Vec::new(), paste_requested: false, hidden: false });
+            let level = builder.window_level.unwrap_or(egui::WindowLevel::Normal);
+            let window =
+                host.windows.entry(id).or_insert(Window { rect, events: Vec::new(), dropped: Vec::new(), paste_requested: false, hidden: false, level });
+            window.level = level;
             let (viewports, focused, time) = (host.infos(), host.focus == Some(id), host.time);
             let window = host.windows.get_mut(&id).expect("just added");
             egui::RawInput {
@@ -106,6 +112,7 @@ impl Desktop {
         desktop
     }
 
+    /// Advance the main window and apply its commands to the simulated panel windows.
     fn steps(&mut self, n: usize) {
         for _ in 0..n {
             let (infos, main_focused) = {
@@ -121,6 +128,9 @@ impl Desktop {
             // one sent from the window's own pass is in that pass's output (`Host::render`).
             let mut host = self.host.borrow_mut();
             for (id, output) in &self.h.output().viewport_output {
+                if output.commands.contains(&egui::ViewportCommand::Focus) {
+                    host.focus_requests.push(*id);
+                }
                 if let Some(window) = host.windows.get_mut(id) {
                     window.paste_requested |= output.commands.contains(&egui::ViewportCommand::RequestPaste);
                     for command in &output.commands {
@@ -359,6 +369,58 @@ fn a_dialog_blocks_the_panel_windows() {
         desktop.click(viewport, close);
         assert!(!lay(desktop.h.state()).contains(&"info".to_owned()), "{name}: the × closes the panel once the dialog is gone");
     }
+}
+
+/// Format prompts block and lower native panels before their first modal frame is painted.
+#[test]
+fn save_options_block_floating_windows_immediately() {
+    type OpenPrompt = fn(&mut PhotocraftApp) -> Result<(), String>;
+    let prompts: [(&str, OpenPrompt); 4] = [
+        ("jpeg", |app| crate::jpeg_options_ui::park(app, "test.jpg".into(), false, "file.saveAs")),
+        ("tiff", |app| crate::tiff_options_ui::park(app, "test.tif".into())),
+        ("targa", |app| crate::targa_options_ui::park(app, "test.tga".into(), false, "file.saveAs")),
+        ("dds", |app| crate::dds_options_ui::park(app, "test.dds".into(), false, "file.saveAs")),
+    ];
+    for (format, open) in prompts {
+        let mut desktop = Desktop::new(app_with_document());
+        desktop.h.state_mut().run("window.panel.float", json!({"panel": "info"})).unwrap();
+        desktop.steps(3);
+        let viewport = desktop.window_of("info").unwrap();
+        assert_eq!(desktop.host.borrow().windows[&viewport].level, egui::WindowLevel::AlwaysOnTop);
+        desktop.host.borrow_mut().focus = Some(viewport);
+        desktop.host.borrow_mut().focus_requests.clear();
+        let app = desktop.h.state_mut();
+        open(app).unwrap();
+        assert!(modal_open(desktop.h.state(), &desktop.h.ctx), "{format}: blocked before the first frame");
+        desktop.steps(1);
+        assert_eq!(desktop.host.borrow().windows[&viewport].level, egui::WindowLevel::Normal, "{format}");
+        assert_eq!(desktop.host.borrow().focus_requests, [ViewportId::ROOT], "{format}: raise the main window once");
+        desktop.steps(3);
+        assert_eq!(desktop.host.borrow().focus_requests, [ViewportId::ROOT], "{format}: keep the user's focus on later frames");
+        let app = desktop.h.state_mut();
+        app.jpeg_options = None;
+        app.tiff_options = None;
+        app.targa_options = None;
+        app.dds_options = None;
+        desktop.steps(1);
+        assert_eq!(desktop.host.borrow().windows[&viewport].level, egui::WindowLevel::AlwaysOnTop, "{format}: restore the panel level");
+    }
+}
+
+/// A save prompt must not activate PhotoCraft when none of its windows has focus.
+#[test]
+fn a_background_save_prompt_does_not_take_focus() {
+    let mut desktop = Desktop::new(app_with_document());
+    desktop.h.state_mut().run("window.panel.float", json!({"panel": "info"})).unwrap();
+    desktop.steps(3);
+    let viewport = desktop.window_of("info").unwrap();
+    // An unknown window leaves the root and every panel unfocused.
+    desktop.host.borrow_mut().focus = Some(ViewportId::from_hash_of("another application"));
+    desktop.host.borrow_mut().focus_requests.clear();
+    crate::jpeg_options_ui::park(desktop.h.state_mut(), "test.jpg".into(), false, "file.saveAs").unwrap();
+    desktop.steps(4);
+    assert_eq!(desktop.host.borrow().windows[&viewport].level, egui::WindowLevel::Normal);
+    assert!(desktop.host.borrow().focus_requests.is_empty());
 }
 
 #[derive(Debug)]
