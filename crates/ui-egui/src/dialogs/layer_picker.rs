@@ -1,5 +1,5 @@
-//! The Set Black / Neutral Gray / White Point eyedroppers of a Levels or Curves adjustment
-//! layer's Properties panel (UI-217-15, #3116), as Photoshop has them next to the histogram or
+//! The Set Black / Neutral Gray / White Point eyedroppers of a Levels, Curves or Exposure
+//! (#9266) adjustment layer's Properties panel (UI-217-15, #3116), as Photoshop has them next to the histogram or
 //! curve.
 //!
 //! Arming one turns a click on the image into one `layer.setAdjustment` with the `eyedropper`
@@ -37,7 +37,10 @@ pub fn armed(app: &PhotocraftApp) -> Option<(LayerId, &str)> {
     let picker = app.ui.layer_picker.as_ref()?;
     let st = app.session.active()?;
     let layer = LayerId(picker.layer);
-    let tonal = st.doc.layer(layer).is_some_and(|l| matches!(l.content, LayerContent::Adjustment(Adjustment::Levels { .. } | Adjustment::Curves { .. })));
+    let tonal = st
+        .doc
+        .layer(layer)
+        .is_some_and(|l| matches!(l.content, LayerContent::Adjustment(Adjustment::Levels { .. } | Adjustment::Curves { .. } | Adjustment::Exposure { .. })));
     let supported = eyedropper(&picker.point).is_some_and(|e| crate::adjust_dialog::picker_supported(st.doc.mode, e));
     (picker.tool == app.ui.tool && st.active_layer == Some(layer) && tonal && supported).then_some((layer, picker.point.as_str()))
 }

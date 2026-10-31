@@ -912,3 +912,33 @@ fn row_values_round_to_their_own_decimals() {
     assert!((row_value(1.234, 0.01, 9.99, None) - 1.23).abs() < 1e-6, "small ranges keep two decimals");
     assert!(row_value(f32::NAN, -20.0, 20.0, Some(u32::MAX)).is_nan(), "no panic on odd input");
 }
+
+/// #9266: an Exposure layer's Properties has the Set Black/Gray/White Point eyedroppers. Set White
+/// Point on the #6a3020 half sets the exposure that takes its luma to white, as one step; Set
+/// Black Point sets the offset that takes it to black.
+#[test]
+fn exposure_properties_eyedroppers_set_exposure_and_offset() {
+    let mut h = app_harness("exposure", "rgb", 8);
+    let steps = h.state().session.active().unwrap().history.past_len();
+    let luma: f32 = 0.2126 * 106.0 / 255.0 + 0.7152 * 48.0 / 255.0 + 0.0722 * 32.0 / 255.0;
+    let get = |h: &Harness<'_, PhotocraftApp>| match layer(h).1 {
+        Adjustment::Exposure { exposure, offset, .. } => (exposure, offset),
+        other => panic!("{other:?}"),
+    };
+    h.get_by_label("Set White Point").click();
+    h.run_steps(2);
+    assert!(crate::layer_picker::armed(h.state()).is_some(), "armed from the Properties panel");
+    let at = doc_on_screen(&h, 10.0, 10.0);
+    click(&mut h, at);
+    let (e, _) = get(&h);
+    assert!((e - (1.0 / luma).log2()).abs() < 0.01, "exposure {e}");
+    assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1, "one history step");
+    h.get_by_label("Set Black Point").click();
+    h.run_steps(2);
+    click(&mut h, at);
+    let (e2, o) = get(&h);
+    assert!(e2 == e && (o + (luma * e.exp2()).min(0.5)).abs() < 0.01, "offset {o}");
+    h.key_press(egui::Key::Escape);
+    h.run_steps(2);
+    assert!(h.state().ui.layer_picker.is_none(), "Esc disarms");
+}
