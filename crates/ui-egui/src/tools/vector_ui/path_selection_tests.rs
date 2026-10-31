@@ -523,3 +523,24 @@ fn shift_and_option_with_cmd_enter_combine_the_path_with_the_selection() {
         assert!((selected_area(&h) - area).abs() < 0.5, "{mods:?}: {} px, wanted {area}: {}", selected_area(&h), h.state().ui.status);
     }
 }
+
+/// A press another command's binding takes by the dispatcher's rules stays that command's, even
+/// when the binding isn't written as the chord: Ctrl+Shift+Enter off the Mac (and ⌃⇧⌘↩ on it) is
+/// also ⇧⌘↩ to egui, whose ⌘ is Ctrl there.
+#[test]
+fn a_binding_matching_the_same_press_keeps_it_from_the_chord() {
+    let mut h = harness();
+    let binding = if cfg!(target_os = "macos") { "Ctrl+Cmd+Shift+Enter" } else { "Ctrl+Shift+Enter" };
+    h.state_mut().session.edit_prefs(|p| {
+        p.shortcuts.insert("select.inverse".into(), binding.into());
+    });
+    h.state_mut().run("path.set", json!({"name": "work", "path": rect_path(80.0, 40.0, 100.0, 20.0)})).unwrap();
+    h.state_mut().run("select.rect", json!({"x": 20, "y": 20, "width": 100, "height": 60, "antiAlias": false})).unwrap();
+    h.state_mut().ui.tool = Tool::Brush;
+    h.run_steps(2);
+    crate::shortcut_dispatch::take_log(&h.ctx);
+    press(&mut h, Key::Enter, Modifiers { ctrl: true, shift: true, ..command() });
+    let log: Vec<String> = crate::shortcut_dispatch::take_log(&h.ctx).into_iter().map(|(id, _)| id).collect();
+    assert_eq!(log, ["select.inverse"]);
+    assert!((selected_area(&h) - 14000.0).abs() < 0.5, "inverted, not added to: {} px", selected_area(&h));
+}

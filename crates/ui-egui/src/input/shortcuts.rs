@@ -206,13 +206,26 @@ fn path_selection_chords(app: &mut PhotocraftApp, ctx: &egui::Context, focus: cr
     if base.modifiers.shift || base.modifiers.alt {
         return false;
     }
+    let mut bound: Option<Vec<(String, KeyboardShortcut)>> = None;
     for (shift, alt, mode) in [(true, true, "intersect"), (true, false, "add"), (false, true, "subtract")] {
         let mut sc = base;
         sc.modifiers.shift = shift;
         sc.modifiers.alt = alt;
         let pressed =
             ctx.input(|i| i.events.iter().any(|e| matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if key_matches(&sc, *key, *modifiers))));
-        if !pressed || !focus.allows(&sc) || crate::shortcut_dispatch::bindings(app).iter().any(|(_, b)| *b == sc) || !consume(ctx, &sc) {
+        if !pressed || !focus.allows(&sc) {
+            continue;
+        }
+        // A press a binding matches by the dispatcher's rules stays the binding's, even one not
+        // written as `sc`: off the Mac, Ctrl+Shift+Enter is also ⇧⌘↩.
+        let bound = bound.get_or_insert_with(|| crate::shortcut_dispatch::bindings(app));
+        let free = |key: Key, mods: Modifiers| key_matches(&sc, key, mods) && !bound.iter().any(|(_, b)| key_matches(b, key, mods));
+        let consumed = ctx.input_mut(|i| {
+            let before = i.events.len();
+            i.events.retain(|e| !matches!(e, egui::Event::Key { key, pressed: true, modifiers, .. } if free(*key, *modifiers)));
+            i.events.len() != before
+        });
+        if !consumed {
             continue;
         }
         if let Err(e) = crate::vector_ui::path_to_selection(app, json!({"mode": mode})) {
