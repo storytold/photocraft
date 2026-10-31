@@ -251,10 +251,15 @@ mod tests {
         // ⌥: a copy.
         s.execute("layer.layerMask.moveTo", json!({"layer": a, "to": group, "copy": true})).unwrap();
         assert!(mask_of(&s, a).is_some() && mask_of(&s, group).is_some());
-        // The group has one now: refused unless replacing.
+        assert_eq!(mask_of(&s, group).unwrap().surface, original.surface, "the copy on the group");
+        // The group gets a mask of its own: refused unless replacing, which leaves a's on it.
+        s.execute("layer.layerMask.delete", json!({"layer": group})).unwrap();
+        s.execute("layer.layerMask.hideAll", json!({"layer": group})).unwrap();
+        assert_ne!(mask_of(&s, group).unwrap().surface, original.surface, "the group's own mask differs");
         assert!(s.execute("layer.layerMask.moveTo", json!({"layer": a, "to": group})).is_err());
         s.execute("layer.layerMask.moveTo", json!({"layer": a, "to": group, "replace": true})).unwrap();
         assert!(mask_of(&s, a).is_none());
+        assert_eq!(mask_of(&s, group).unwrap().surface, original.surface, "a's mask replaced the group's");
         // Bad input.
         assert!(s.execute("layer.layerMask.moveTo", json!({"layer": a, "to": group})).is_err(), "no mask to move");
         assert!(s.execute("layer.layerMask.moveTo", json!({"layer": group, "to": group})).is_err(), "onto itself");
