@@ -200,6 +200,10 @@ impl Session {
             contours: take(&mut m, "contours"),
         };
         let st = &mut self.presets;
+        if let Some(g) = p.gradient {
+            st.gradient = g;
+        }
+        let saved_current = st.gradient.clone();
         if let Some(g) = p.gradients {
             st.gradients = g;
             // Older imports could contain duplicate names, which alias panel selections.
@@ -219,15 +223,15 @@ impl Session {
                         let candidate = format!("{} {}", item.name, suffix);
                         *suffix = suffix.saturating_add(1);
                         if reserved.insert(candidate.clone()) {
+                            if *item == saved_current {
+                                st.gradient.name = candidate.clone();
+                            }
                             item.name = candidate;
                             break;
                         }
                     }
                 }
             }
-        }
-        if let Some(g) = p.gradient {
-            st.gradient = g;
         }
         if let Some(g) = p.styles {
             st.styles = g;

@@ -889,12 +889,14 @@ fn restoring_duplicate_gradient_names_preserves_addressable_presets() {
         Group::new("First", vec![GradientPreset::new("Foo", &["#ff0000", "#000000"]), GradientPreset::new("Foo", &["#00ff00", "#000000"])]),
         Group::new("Second", vec![GradientPreset::new("Foo 2", &["#0000ff", "#000000"]), GradientPreset::new("FOO", &["#ffff00", "#000000"])]),
     ];
+    s.presets.gradient = presets[0].items[1].clone();
     s.presets.gradients = presets;
     let saved = s.presets.to_json(&s);
     let mut restored = Session::new();
     restored.load_presets_json(saved.clone());
     let names: Vec<String> = restored.presets.gradients.iter().flat_map(|g| g.items.iter().map(|p| p.name.clone())).collect();
     assert_eq!(names, ["Foo", "Foo 3", "Foo 2", "FOO"]);
+    assert_eq!(restored.presets.gradient.name, "Foo 3");
     for (name, color) in [("Foo 2", "#0000ff"), ("FOO", "#ffff00")] {
         restored.execute("gradient.presets.select", json!({"preset": name})).unwrap();
         assert_eq!(restored.presets.gradient.stops, GradientPreset::new("", &[color, "#000000"]).stops);
