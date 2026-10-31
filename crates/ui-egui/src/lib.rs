@@ -61,6 +61,7 @@ use std::sync::mpsc::{Receiver, Sender};
 
 use photocraft_doc::{DocId, Document};
 use photocraft_engine::Session;
+use photocraft_raster::Surface;
 use serde_json::{Value, json};
 
 pub use control::{ControlRequest, ControlResponse};
@@ -321,6 +322,18 @@ pub use widgets::tone;
 /// The Info panel's cached sample: pixel x, y, document revision and Eyedropper Sample Size.
 type InfoSampleKey = (i32, i32, u64, u32);
 
+#[derive(Clone, Debug)]
+pub(crate) struct LastMagicWand {
+    pub(crate) doc_id: DocId,
+    pub(crate) revision: u64,
+    pub(crate) view_revision: u64,
+    pub(crate) active_layer: Option<photocraft_doc::LayerId>,
+    pub(crate) point: [f64; 2],
+    pub(crate) mode: String,
+    pub(crate) tolerance: f32,
+    pub(crate) selection_baseline: Option<Surface>,
+}
+
 pub struct PhotocraftApp {
     pub session: Session,
     pub ui: UiState,
@@ -361,6 +374,9 @@ pub struct PhotocraftApp {
     /// Whether the last retouching stroke's commit took the pixels its live stroke drew
     /// (`"fromLive"`) instead of rendering the stroke again (`retouch_ui::finish_stroke`).
     pub(crate) retouch_from_live: bool,
+    pending_magic_wand_baseline: Option<Option<Surface>>,
+    /// Last successful Magic Wand click, so its options-bar tolerance can be adjusted in place.
+    pub(crate) last_magic_wand: Option<LastMagicWand>,
     /// Footprint trail of a retouching drag (see `stroke_trail`).
     trail: Option<stroke_trail::Trail>,
     /// Remove tool strokes waiting to be applied together (Remove after each stroke off), the

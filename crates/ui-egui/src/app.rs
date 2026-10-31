@@ -53,6 +53,8 @@ impl PhotocraftApp {
             live_stroke: None,
             committed_stroke: None,
             retouch_from_live: false,
+            pending_magic_wand_baseline: None,
+            last_magic_wand: None,
             trail: None,
             remove_pending: Vec::new(),
             remove_pending_target: None,

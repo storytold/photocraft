@@ -5,6 +5,34 @@ use super::{
 };
 
 impl Session {
+    /// Re-run Magic Wand against the selection that existed before its original click.
+    pub fn execute_magic_wand_with_selection_baseline(&mut self, params: Value, baseline: Option<photocraft_raster::Surface>) -> Result<Value> {
+        let journal_before = self.journal.len();
+        let previous = self.magic_wand_selection_baseline.replace(baseline);
+        let result = self.execute("select.magicWand", params);
+        self.magic_wand_selection_baseline = previous;
+        // In a recorded action, keep a tolerance refresh as the final version of the original
+        // click. Replaying both Add/Subtract steps would combine the refreshed region with the
+        // already-combined first result instead of the pre-click selection.
+        if result.is_ok()
+            && self.actions.recording.is_some_and(|(from, _)| journal_before > from)
+            && self.journal.len() == journal_before + 1
+            && let (Some(prior_index), Some(refreshed)) = (journal_before.checked_sub(1), self.journal.get(journal_before).cloned())
+            && self.journal.get(prior_index).is_some_and(|(id, prior)| {
+                id == "select.magicWand"
+                    && prior.get("x") == refreshed.1.get("x")
+                    && prior.get("y") == refreshed.1.get("y")
+                    && prior.get("mode") == refreshed.1.get("mode")
+            })
+        {
+            if let Some(previous) = self.journal.get_mut(prior_index) {
+                *previous = refreshed;
+            }
+            self.journal.truncate(journal_before);
+        }
+        result
+    }
+
     /// Run a command by id with JSON params. Returns a JSON result.
     ///
     /// Any command accepts an optional `"coalesce": "<key>"` param: consecutive edits with the same

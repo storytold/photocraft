@@ -17,6 +17,8 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = gate;
         }
+        let magic_wand_refresh = id == "select.magicWand" && self.pending_magic_wand_baseline.is_some();
+        let context_before = self.session.active().map(|doc| (doc.doc.id, doc.revision, doc.view_revision, doc.active_layer));
         let result = self.run_command(id, params);
         if gate.is_some() {
             self.session.authorize = None;
@@ -31,6 +33,17 @@ impl PhotocraftApp {
             }
             self.sync_mask_targets();
         }
+        let context_after = self.session.active().map(|doc| (doc.doc.id, doc.revision, doc.view_revision, doc.active_layer));
+        if result.is_ok() && !magic_wand_refresh && context_before != context_after {
+            self.last_magic_wand = None;
+        }
+        result
+    }
+
+    pub(crate) fn run_magic_wand_with_baseline(&mut self, params: Value, baseline: Option<photocraft_raster::Surface>) -> Result<Value, String> {
+        let previous = self.pending_magic_wand_baseline.replace(baseline);
+        let result = self.run("select.magicWand", params);
+        self.pending_magic_wand_baseline = previous;
         result
     }
 
@@ -121,6 +134,10 @@ impl PhotocraftApp {
             actions::play(self, &params)
         } else if photocraft_engine::actions_cmds::shell_view_command(id) {
             actions::run_view(self, id, params)
+        } else if id == "select.magicWand"
+            && let Some(baseline) = self.pending_magic_wand_baseline.take()
+        {
+            self.session.execute_magic_wand_with_selection_baseline(params, baseline).map_err(|e| e.to_string())
         } else {
             jobs_ui::run(self, id, params)
         };

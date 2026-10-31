@@ -196,6 +196,8 @@ pub struct Session {
     pub journal: Vec<(String, Value)>,
     /// Coalescing key of the command being executed.
     coalesce_request: Option<String>,
+    /// Temporary selection input used by the UI when recomputing a Magic Wand drag.
+    magic_wand_selection_baseline: Option<Option<photocraft_raster::Surface>>,
     /// Pixels copied with Edit › Copy / Cut (shared by all documents, like Photoshop).
     pub clipboard: Option<edit_cmds::Clip>,
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
