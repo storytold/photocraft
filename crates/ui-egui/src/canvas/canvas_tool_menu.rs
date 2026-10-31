@@ -1177,7 +1177,23 @@ pub fn show(app: &mut PhotocraftApp, ctx: &Context) {
         choose(app, ctx, &command);
     } else if crate::canvas_popup::outside_pressed(ctx, id, area.response.rect) {
         app.ui.canvas_tool_menu = None;
+        // A fast click can press and release in one frame: the canvas input above already
+        // suppressed its action through the open-menu hit test, and the deferred release clear
+        // (in `canvas_view`, below the click handling) would never fire after this frame. Don't
+        // arm the flag then, or it would eat the next ordinary click (CodeRabbit, #9841).
+        app.ui.canvas_tool_menu_dismissed = !ctx.input(|i| i.pointer.any_released());
     }
+}
+
+/// Returns the menu rect if the canvas tool menu is currently open, for hit-testing
+/// outside-click dismissal in the click handler.
+pub fn menu_rect_if_open(app: &PhotocraftApp, ctx: &Context) -> Option<egui::Rect> {
+    let menu = app.ui.canvas_tool_menu.as_ref()?;
+    let id = menu_id();
+    let screen = ctx.content_rect();
+    let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(210.0, 140.0), |r| r.size());
+    let pos = egui::pos2(menu.pos[0].min(screen.right() - size.x).max(screen.left()), menu.pos[1].min(screen.bottom() - size.y).max(screen.top()));
+    Some(egui::Rect::from_min_size(pos, size))
 }
 
 #[cfg(test)]

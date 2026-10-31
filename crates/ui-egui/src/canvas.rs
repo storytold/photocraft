@@ -773,6 +773,7 @@ struct CanvasToolInput<'a> {
     hand_pan: bool,
     ppp: f32,
     under_dialog: bool,
+    menu_dismiss_press: bool,
     zoom_out: &'a dyn Fn(bool) -> bool,
     display_zoom: f32,
 }
@@ -792,9 +793,22 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     // (Preferences › Tools, `paint_mouse`).
     crate::paint_mouse::sync_tool_brush(app);
     let mut buttons = crate::paint_mouse::canvas_buttons(app, response, tool);
+    if input.menu_dismiss_press {
+        // Navigation and drags read `buttons` directly (zoom holds and drags, Rotate View):
+        // starve them. The release click stays armed, so the click handling below consumes
+        // it through the flag.
+        buttons.started = false;
+        buttons.dragged = false;
+        buttons.stopped = false;
+    }
     // The Crop tool's frame is edited from the press (before egui's drag threshold), so the
     // pixels past the canvas show at once, as in Photoshop.
-    if tool == Tool::Crop && response.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_down()) && crate::crop_ui::press(app) {
+    if tool == Tool::Crop
+        && !input.menu_dismiss_press
+        && response.is_pointer_button_down_on()
+        && ui.input(|i| i.pointer.primary_down())
+        && crate::crop_ui::press(app)
+    {
         ctx.request_repaint();
     }
     // Capture intent at the press, before egui's drag threshold or click replay on release:
@@ -803,6 +817,7 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
         tool.is_type() || matches!(tool, Tool::RectMarquee | Tool::EllipseMarquee | Tool::SingleRowMarquee | Tool::SingleColumnMarquee | Tool::ObjectSelection);
     let tool_press = egui::Id::unique(("tool-pointer-press-modifiers", idx));
     if capture_press
+        && !input.menu_dismiss_press
         && let Some((p, press_mods)) = ui.input(|i| {
             i.events.iter().find_map(|e| match e {
                 egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed: true, modifiers } if rect.contains(*pos) => Some((*pos, *modifiers)),
@@ -822,6 +837,17 @@ fn handle_primary_canvas_input(app: &mut PhotocraftApp, ui: &mut egui::Ui, view:
     handle_canvas_tool_navigation(app, ui, view, input, &mut buttons);
     handle_canvas_tool_stroke(app, ui, input, mods, capture_press, tool_press, &mut buttons);
     handle_canvas_tool_clicks(app, ui, view, input, mods, tool_press, &buttons);
+    // Clear the menu-dismissal flag on the gesture's pointer release, even when the release
+    // occurs outside the canvas and produces no `buttons.clicked` event. It sits below (not
+    // above) the click handling, so a release over the canvas in a later frame is first
+    // consumed by the flag check there: clearing before it would let that release zoom
+    // (CodeRabbit, #9841). The all-buttons-up check also covers a release that landed in a
+    // frame this canvas didn't render.
+    if app.ui.canvas_tool_menu_dismissed
+        && (ui.input(|i| i.pointer.primary_released()) || ui.input(|i| i.pointer.secondary_released()) || !ui.input(|i| i.pointer.any_down()))
+    {
+        app.ui.canvas_tool_menu_dismissed = false;
+    }
 }
 
 fn handle_canvas_tool_menus(app: &mut PhotocraftApp, input: &CanvasToolInput<'_>, mods: egui::Modifiers, buttons: &mut crate::paint_mouse::Buttons) {
@@ -932,10 +958,11 @@ fn handle_canvas_tool_navigation(
         (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
     }
     // Animated Zoom: a Zoom press held still zooms continuously (zoom_hold.rs); while it does,
-    // it owns the press: no scrub, and its release is no click step.
+    // it owns the press: no scrub, and its release is no click step. A menu-dismissal press
+    // must not arm it: holding the dismissal click would zoom (CodeRabbit, #9841).
     if tool == Tool::Zoom && !transform_owns_pointer {
         let out = zoom_out(ui.input(|i| i.modifiers.alt));
-        let on_canvas = !input.under_dialog && !over_compass && response.is_pointer_button_down_on();
+        let on_canvas = !input.menu_dismiss_press && !input.under_dialog && !over_compass && response.is_pointer_button_down_on();
         let hold = crate::zoom_hold::hold_id(idx, primary, ctx.viewport_id());
         if crate::zoom_hold::update(ctx, view, xf, app.session.prefs().general.animated_zoom, out, ppp, on_canvas, hold) {
             (buttons.started, buttons.dragged, buttons.stopped, buttons.clicked) = (false, false, false, false);
@@ -977,6 +1004,7 @@ fn handle_canvas_tool_stroke(
     let right_down = ui.input(|i| i.pointer.secondary_down()) || physical_right;
     if strokes_live(tool)
         && !right_down
+        && !input.menu_dismiss_press
         && app.drag.is_none()
         && response.is_pointer_button_down_on()
         && ui.input(|i| i.pointer.primary_pressed())
@@ -996,6 +1024,7 @@ fn handle_canvas_tool_stroke(
         buttons.started = false;
     }
     if buttons.started
+        && !input.menu_dismiss_press
         && let Some(p) = ui.input(|i| i.pointer.press_origin()).filter(|p| rect.contains(*p)).or(response.interact_pointer_pos())
     {
         if tool == Tool::Move && app.ui.transform.is_none() {
@@ -1009,7 +1038,7 @@ fn handle_canvas_tool_stroke(
     // recognises a drag (past its click distance): otherwise the first few points are lost
     // and the stroke starts with a straight segment and no pressure ramp.
     let press_stroke_moving = press_stroke && app.drag.is_some();
-    if buttons.dragged || buttons.stopped || press_stroke_moving {
+    if !input.menu_dismiss_press && (buttons.dragged || buttons.stopped || press_stroke_moving) {
         // Feed every pointer move the OS delivered this frame, not just the latest position, so
         // a fast stroke is sampled densely and renders as a smooth curve instead of a coarse
         // polyline. egui-winit pushes one `PointerMoved` per `CursorMoved`, and they accumulate
@@ -1067,7 +1096,7 @@ fn handle_canvas_tool_stroke(
         feed_live_stroke(app);
         crate::magnetic_lasso_ui::flush(app);
     }
-    if buttons.stopped {
+    if buttons.stopped && !input.menu_dismiss_press {
         // The live painting press already created the stroke and this release commits it.
         // egui may also report clicked on the same release; replaying that click paints a
         // second full-pressure dab over the real (possibly light-pressure) pen dab.
@@ -1092,7 +1121,7 @@ fn handle_canvas_tool_stroke(
     }
     // A stroke started on the press ends with the release, whether egui saw a drag, a click,
     // or neither (a long press that never moved).
-    if press_stroke && !buttons.stopped && ui.input(|i| i.pointer.primary_released()) {
+    if press_stroke && !buttons.stopped && !input.menu_dismiss_press && ui.input(|i| i.pointer.primary_released()) {
         buttons.clicked = false;
         let p = response.interact_pointer_pos().map(|p| xf.to_doc(p)).or_else(|| app.drag.as_ref().and_then(|d| d.points.last().map(|q| [q[0], q[1]])));
         if let Some(d) = p
@@ -1128,102 +1157,113 @@ fn handle_canvas_tool_clicks(
     if buttons.clicked
         && let Some(p) = response.interact_pointer_pos()
     {
-        let click_button = if app.secondary_erase { PointerButton::Secondary } else { PointerButton::Primary };
-        let click_mods = ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods);
-        let click_mods = if tool == Tool::ObjectSelection && click_button == PointerButton::Primary {
-            ctx.data(|d| d.get_temp(tool_press)).unwrap_or(click_mods)
+        // If an outside press dismissed the canvas tool menu, consume this release click
+        // so it doesn't also trigger a tool action (Photoshop behavior). A click outside a
+        // still-open menu dismisses it and is consumed the same way (CodeRabbit, #9841).
+        if app.ui.canvas_tool_menu_dismissed {
+            app.ui.canvas_tool_menu_dismissed = false;
+        } else if let Some(menu_rect) = crate::canvas_tool_menu::menu_rect_if_open(app, ctx)
+            && !menu_rect.contains(p)
+        {
+            // The click is outside the open menu: it dismisses the menu, no tool action.
         } else {
-            click_mods
-        };
-        let d = xf.to_doc(p);
-        match tool {
-            Tool::Zoom if !transform_owns_pointer => {
-                let nz = crate::zoom_levels::step(view.zoom, if zoom_out(click_mods.alt) { -1 } else { 1 }, view.doc_size);
-                let center = app.session.prefs().tools.zoom_clicked_point_to_center;
-                let doc_anchor = xf.to_doc(p);
-                let screen_anchor = p;
-                zoom_about(view, xf, p, nz, center, ppp);
-                view.request_zoom_animation(app.session.prefs().general.animated_zoom && nz != display_zoom);
-                view.zoom_anchor = (view.zoom_animating && !center).then_some((doc_anchor, [screen_anchor.x, screen_anchor.y]));
-            }
-            // A click with the (temporary) Hand does nothing, never the tool underneath.
-            Tool::Hand | Tool::RotateView => {}
-            // Double-clicking closes the polygonal lasso: the first click placed the last
-            // vertex (or already closed it), so the second never starts a new polygon. egui
-            // reports it as a triple click when a vertex went down shortly before.
-            Tool::PolygonLasso if response.double_clicked() || response.triple_clicked() => commit_polygon(app),
-            // The same for the Magnetic Lasso: along the edges, or straight with ⌥.
-            Tool::MagneticLasso if response.double_clicked() || response.triple_clicked() => crate::magnetic_lasso_ui::close(app, mods.alt),
-            // The first click placed (or grabbed) the point; the second toggles it.
-            Tool::CurvaturePen if response.double_clicked() => crate::vector_ui::curvature_toggle(app, d[0], d[1]),
-            // Double-clicking a guide opens Preferences › Guides, Grid & Slices, as in Photoshop.
-            Tool::Move if response.double_clicked() && crate::rulers::guide_at(app, d[0], d[1]).is_some() => {
-                if let Err(e) = crate::menus::invoke(app, ctx, "edit.preferences.guidesGridAndSlices", json!({})) {
-                    app.ui.status = e;
-                }
-            }
-            _ => {
-                if tool == Tool::Move && app.ui.transform.is_none() {
-                    begin_transform_controls_at(app, ctx, xf, p);
-                }
-                // If this tool was not handled on pointer-down, fall back to a
-                // click-sized gesture while preserving pen pressure (mouse stays at 1).
-                tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods);
-                tap_at_peak_pressure(app);
-                tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
-            }
-        }
-    }
-    // Magnetic Lasso: between clicks the border follows the pointer with the button up.
-    if tool == Tool::MagneticLasso && app.ui.magnetic.active() && !(buttons.started || buttons.dragged || buttons.stopped) && response.hovered() {
-        let moves: Vec<Pos2> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
-        app.defer_live_stroke = true;
-        for p in moves.into_iter().filter(|p| rect.contains(*p)) {
-            let d = xf.to_doc(p);
-            tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
-        }
-        app.defer_live_stroke = false;
-        crate::magnetic_lasso_ui::flush(app);
-    }
-    // Move tool: a double-click on type edits it, as in Photoshop (#1132). Only the selected
-    // Move tool, not ⌘ held over another tool; an open transform box keeps its double-click
-    // (commit, below).
-    if tool == Tool::Move
-        && app.ui.tool == Tool::Move
-        && app.ui.transform.is_none()
-        && response.double_clicked()
-        && let Some(p) = response.interact_pointer_pos()
-    {
-        let d = xf.to_doc(p);
-        crate::type_tool::edit_at(app, d[0], d[1]);
-    }
-    if app.ui.transform.is_some() && response.double_clicked() {
-        crate::transform_tool::commit(app);
-    }
-    if crate::cam_transform::active(app) && response.double_clicked() {
-        crate::cam_transform::commit(app);
-    }
-    // Crop: a double-click inside the frame commits it, as ↵ does (#1792).
-    if tool == Tool::Crop && response.double_clicked() && response.interact_pointer_pos().is_some_and(|p| crate::crop_ui::commits_at(app, xf.to_doc(p))) {
-        commit_crop(app);
-    }
-    // Type: 2 clicks select a word, 3 the line, 4 the paragraph, 5 all text (Photoshop).
-    if tool.is_type()
-        && response.clicked()
-        && let Some(p) = response.interact_pointer_pos()
-    {
-        if crate::type_transform::visible(app, crate::workspace_ui::sticky_mods(app, mods)) {
-            app.type_clicks = None;
-        } else {
-            let n = if response.triple_clicked() {
-                3
-            } else if response.double_clicked() {
-                2
+            let click_button = if app.secondary_erase { PointerButton::Secondary } else { PointerButton::Primary };
+            let click_mods = ui.input(|i| pointer_button_modifiers(&i.events, click_button)).unwrap_or(mods);
+            let click_mods = if tool == Tool::ObjectSelection && click_button == PointerButton::Primary {
+                ctx.data(|d| d.get_temp(tool_press)).unwrap_or(click_mods)
             } else {
-                1
+                click_mods
             };
             let d = xf.to_doc(p);
-            crate::type_tool::multi_click(app, n, d[0], d[1]);
+            match tool {
+                Tool::Zoom if !transform_owns_pointer => {
+                    let nz = crate::zoom_levels::step(view.zoom, if zoom_out(click_mods.alt) { -1 } else { 1 }, view.doc_size);
+                    let center = app.session.prefs().tools.zoom_clicked_point_to_center;
+                    let doc_anchor = xf.to_doc(p);
+                    let screen_anchor = p;
+                    zoom_about(view, xf, p, nz, center, ppp);
+                    view.request_zoom_animation(app.session.prefs().general.animated_zoom && nz != display_zoom);
+                    view.zoom_anchor = (view.zoom_animating && !center).then_some((doc_anchor, [screen_anchor.x, screen_anchor.y]));
+                }
+                // A click with the (temporary) Hand does nothing, never the tool underneath.
+                Tool::Hand | Tool::RotateView => {}
+                // Double-clicking closes the polygonal lasso: the first click placed the last
+                // vertex (or already closed it), so the second never starts a new polygon. egui
+                // reports it as a triple click when a vertex went down shortly before.
+                Tool::PolygonLasso if response.double_clicked() || response.triple_clicked() => commit_polygon(app),
+                // The same for the Magnetic Lasso: along the edges, or straight with ⌥.
+                Tool::MagneticLasso if response.double_clicked() || response.triple_clicked() => crate::magnetic_lasso_ui::close(app, mods.alt),
+                // The first click placed (or grabbed) the point; the second toggles it.
+                Tool::CurvaturePen if response.double_clicked() => crate::vector_ui::curvature_toggle(app, d[0], d[1]),
+                // Double-clicking a guide opens Preferences › Guides, Grid & Slices, as in Photoshop.
+                Tool::Move if response.double_clicked() && crate::rulers::guide_at(app, d[0], d[1]).is_some() => {
+                    if let Err(e) = crate::menus::invoke(app, ctx, "edit.preferences.guidesGridAndSlices", json!({})) {
+                        app.ui.status = e;
+                    }
+                }
+                _ => {
+                    if tool == Tool::Move && app.ui.transform.is_none() {
+                        begin_transform_controls_at(app, ctx, xf, p);
+                    }
+                    // If this tool was not handled on pointer-down, fall back to a
+                    // click-sized gesture while preserving pen pressure (mouse stays at 1).
+                    tool_event(app, ToolEvent::Down { x: d[0], y: d[1], pressure: app.stylus.pressure() }, click_mods);
+                    tap_at_peak_pressure(app);
+                    tool_event(app, ToolEvent::Up { x: d[0], y: d[1] }, click_mods);
+                }
+            }
+        }
+        // Magnetic Lasso: between clicks the border follows the pointer with the button up.
+        if tool == Tool::MagneticLasso && app.ui.magnetic.active() && !(buttons.started || buttons.dragged || buttons.stopped) && response.hovered() {
+            let moves: Vec<Pos2> = ui.input(|i| i.events.iter().filter_map(|e| if let egui::Event::PointerMoved(p) = e { Some(*p) } else { None }).collect());
+            app.defer_live_stroke = true;
+            for p in moves.into_iter().filter(|p| rect.contains(*p)) {
+                let d = xf.to_doc(p);
+                tool_event(app, ToolEvent::Move { x: d[0], y: d[1], pressure: app.stylus.pressure() }, mods);
+            }
+            app.defer_live_stroke = false;
+            crate::magnetic_lasso_ui::flush(app);
+        }
+        // Move tool: a double-click on type edits it, as in Photoshop (#1132). Only the selected
+        // Move tool, not ⌘ held over another tool; an open transform box keeps its double-click
+        // (commit, below).
+        if tool == Tool::Move
+            && app.ui.tool == Tool::Move
+            && app.ui.transform.is_none()
+            && response.double_clicked()
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            let d = xf.to_doc(p);
+            crate::type_tool::edit_at(app, d[0], d[1]);
+        }
+        if app.ui.transform.is_some() && response.double_clicked() {
+            crate::transform_tool::commit(app);
+        }
+        if crate::cam_transform::active(app) && response.double_clicked() {
+            crate::cam_transform::commit(app);
+        }
+        // Crop: a double-click inside the frame commits it, as ↵ does (#1792).
+        if tool == Tool::Crop && response.double_clicked() && response.interact_pointer_pos().is_some_and(|p| crate::crop_ui::commits_at(app, xf.to_doc(p))) {
+            commit_crop(app);
+        }
+        // Type: 2 clicks select a word, 3 the line, 4 the paragraph, 5 all text (Photoshop).
+        if tool.is_type()
+            && response.clicked()
+            && let Some(p) = response.interact_pointer_pos()
+        {
+            if crate::type_transform::visible(app, crate::workspace_ui::sticky_mods(app, mods)) {
+                app.type_clicks = None;
+            } else {
+                let n = if response.triple_clicked() {
+                    3
+                } else if response.double_clicked() {
+                    2
+                } else {
+                    1
+                };
+                let d = xf.to_doc(p);
+                crate::type_tool::multi_click(app, n, d[0], d[1]);
+            }
         }
     }
 }
@@ -1951,10 +1991,21 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // box is only drawn and driven on the primary canvas.
     let transform_owns_pointer = primary && app.ui.transform.is_some() && temporary.is_none() && !middle;
     let hand_pan = tool == Tool::Hand && !transform_owns_pointer;
+    // A press outside an open canvas tool menu dismisses it (`canvas_tool_menu::show`, after this
+    // input pass) and the whole gesture is consumed until its release, as in Photoshop: no tool
+    // press, stroke, drag, pan or zoom step. The menu closes mid-frame (after this input pass), so
+    // the open-menu hit test covers the dismissal frame, and the flag persists the block for the
+    // frames after it, until the release clear below the click handling. It gates the Hand and
+    // flick pans below too: they read `response.dragged()` directly and never see `buttons`
+    // (CodeRabbit, #9841).
+    let menu_dismiss_press = app.ui.canvas_tool_menu_dismissed
+        || crate::canvas_tool_menu::menu_rect_if_open(app, &ctx).is_some_and(|r| ui.input(|i| i.pointer.press_origin()).is_some_and(|p| !r.contains(p)));
     // Preferences › Tools › Enable Flick Panning: a Hand drag let go while moving glides on.
     let flick_id = egui::Id::unique(("pc-flick-pan", idx, primary, ctx.viewport_id()));
     let flick_on = app.session.prefs().tools.enable_flick_panning;
-    if let Some(d) = crate::flick_pan::frame(&ctx, flick_id, hand_pan && response.dragged() && !stroke_dismissal, response.drag_delta(), flick_on) {
+    if let Some(d) =
+        crate::flick_pan::frame(&ctx, flick_id, hand_pan && response.dragged() && !stroke_dismissal && !menu_dismiss_press, response.drag_delta(), flick_on)
+    {
         let d = xf.unmap_vec(d) / (view.zoom / ppp);
         if d.is_finite() {
             view.zoom_animating = false;
@@ -1967,7 +2018,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             ctx.data_mut(|m| m.get_temp_mut_or_default::<crate::flick_pan::Flick>(flick_id).stop());
         }
     }
-    if hand_pan && response.dragged() && !stroke_dismissal {
+    if hand_pan && response.dragged() && !stroke_dismissal && !menu_dismiss_press {
         let d = xf.unmap_vec(response.drag_delta()) / (view.zoom / ppp);
         view.center[0] -= d.x;
         view.center[1] -= d.y;
@@ -1989,6 +2040,7 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
             hand_pan,
             ppp,
             under_dialog,
+            menu_dismiss_press,
             zoom_out: &zoom_out,
             display_zoom: display_view.zoom,
         };
