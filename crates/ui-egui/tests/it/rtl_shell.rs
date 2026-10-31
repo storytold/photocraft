@@ -70,13 +70,7 @@ fn title_x_of(out: &egui::FullOutput, c: char) -> Option<f32> {
         match s {
             egui::Shape::Text(t) => {
                 if t.galley.text().starts_with(NAME_START) && found.is_none() {
-                    *found = t
-                        .galley
-                        .rows
-                        .iter()
-                        .flat_map(|r| r.glyphs.iter())
-                        .find(|g| g.chr == c)
-                        .map(|g| g.pos.x);
+                    *found = t.galley.rows.iter().flat_map(|r| r.glyphs.iter()).find(|g| g.chr == c).map(|g| g.pos.x);
                 }
             }
             egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, c, found)),
