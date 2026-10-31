@@ -645,8 +645,13 @@ impl BezierMesh {
     }
 
     /// Splits the patch column containing `s` at `s` (a vertical split line). Exact: the surface
-    /// is unchanged. Returns false when `s` is on or too close to an existing boundary.
+    /// is unchanged. Returns false when `s` is on or too close to an existing boundary, or the
+    /// mesh already has the maximum 64 patch columns.
     pub fn split_u(&mut self, s: f64) -> bool {
+        // A successful split must remain valid for the next edit and for serialization.
+        if self.us.len() >= 65 {
+            return false;
+        }
         let (pi, a) = Self::locate(&self.us, s);
         if !(0.01..=0.99).contains(&a) {
             return false;
@@ -666,7 +671,11 @@ impl BezierMesh {
     }
 
     /// Splits the patch row containing `t` at `t` (a horizontal split line). Exact.
+    /// Returns false at the maximum 64 patch rows or too close to an existing boundary.
     pub fn split_v(&mut self, t: f64) -> bool {
+        if self.vs.len() >= 65 {
+            return false;
+        }
         self.transpose();
         let ok = self.split_u(t);
         self.transpose();
