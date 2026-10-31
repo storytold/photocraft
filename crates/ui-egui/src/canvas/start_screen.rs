@@ -180,12 +180,12 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
         if resp.clicked() && remove.is_none() {
             open = Some(path.clone());
         }
-        resp.context_menu(|ui| {
-            if ui.button(tl!("Remove from Recent")).clicked() {
+        crate::menus::context_menu(&resp, |ui| {
+            if crate::menu_keys::menu_row(ui, tl!("Remove from Recent"), None, false, true).clicked() {
                 remove = Some(path.clone());
                 ui.close();
             }
-            if ui.button(tl!("Clear Recent Files")).clicked() {
+            if crate::menu_keys::menu_row(ui, tl!("Clear Recent Files"), None, false, true).clicked() {
                 clear = true;
                 ui.close();
             }
