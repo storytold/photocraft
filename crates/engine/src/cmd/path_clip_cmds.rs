@@ -166,7 +166,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "path.copy",
             "Copy Path Components",
             crate::vector_cmds::leak(format!("{{{TARGET}}} → {{copied}} (the addressed subpaths become the path clipboard, replacing a pixel clipboard)")),
-            false,
+            // Journalled like edit.copy: an action recording replays the copy that a later
+            // path.paste in the same recording relies on.
+            true,
             path_copy,
         ),
         spec(
@@ -378,6 +380,14 @@ mod tests {
         s.execute("path.copy", json!({"name": "layer", "layer": id, "subpaths": [0]})).unwrap();
         assert!(s.execute("path.paste", json!({"center": [1e300, 0.0]})).is_err(), "centre out of range");
         assert!(s.execute("path.paste", json!({"center": "here"})).is_err());
+    }
+
+    #[test]
+    fn copy_is_journaled_for_action_recordings() {
+        let mut s = session();
+        let id = two_rects(&mut s);
+        s.execute("path.copy", json!({"name": "layer", "layer": id, "subpaths": [0]})).unwrap();
+        assert_eq!(s.journal.last().map(|(id, _)| id.as_str()), Some("path.copy"), "an action recording replays the copy a later paste relies on");
     }
 
     #[test]

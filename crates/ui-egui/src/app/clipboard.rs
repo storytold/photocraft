@@ -1,9 +1,12 @@
 use super::PhotocraftApp;
 
-fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
+pub(crate) fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
+    // Every byte counts: the old step_by(997) sampling could miss a change entirely in a small
+    // image (a 3×2 clip samples one byte), and the freshness guard would then call a genuinely
+    // newer OS clipboard image unchanged.
     let mut sig = (w as u64) << 32 | h as u64;
-    for b in px.iter().step_by(997) {
-        sig = sig.rotate_left(5) ^ *b as u64;
+    for &b in px {
+        sig = (sig ^ u64::from(b)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
     }
     sig
 }
