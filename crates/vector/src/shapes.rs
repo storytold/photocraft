@@ -219,6 +219,8 @@ pub fn line(a: (f64, f64), b: (f64, f64), weight: f64) -> Path {
 /// `width` and `length` measure the head in document pixels, independently of the shaft weight.
 /// `concavity` is 0..100 percent: 0 has a flat rear edge, 100 a deep V-shaped notch.
 /// The shaft stops at the notch, so a concave head remains concave after filling.
+// The arguments correspond to the stored LiveShape::ArrowLine parameters.
+#[allow(clippy::too_many_arguments)]
 pub fn arrow_line(a: (f64, f64), b: (f64, f64), weight: f64, start: bool, end: bool, width: f64, length: f64, concavity: f64) -> Path {
     let (dx, dy) = (b.0 - a.0, b.1 - a.1);
     let distance = dx.hypot(dy);
@@ -311,11 +313,10 @@ mod tests {
             LiveShape::ArrowLine { from: [10.0, 10.0], to: [200.0, 10.0], weight: 4.0, start: false, end: true, width: 31.0, length: 31.0, concavity: 50.0 };
         let before = live_path(&shape);
         assert_eq!(before.subpaths.len(), 2);
-        let edited = if let LiveShape::ArrowLine { from, to, weight, start, end, length, concavity, .. } = shape {
-            LiveShape::ArrowLine { from, to, weight, start, end, width: 60.0, length, concavity }
-        } else {
-            unreachable!()
-        };
+        let mut edited = shape;
+        if let LiveShape::ArrowLine { width, .. } = &mut edited {
+            *width = 60.0;
+        }
         let after = live_path(&edited);
         assert_ne!(before, after);
     }
