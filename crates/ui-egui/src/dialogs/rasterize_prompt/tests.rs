@@ -402,3 +402,38 @@ fn vanishing_point_offers_only_rasterize() {
     assert_eq!(active_content(h.state()), "Pixel");
     assert!(h.state().distort.vanishing.is_some(), "Vanishing Point opens");
 }
+
+/// CodeRabbit on #10469: with a type layer's mask targeted in the Layers panel, filters edit the
+/// mask, so none asks to rasterize the text. Gaussian Blur opens on the mask; Liquify and Camera
+/// Raw, whose dialogs preview the layer's pixels, stay greyed. Targeting the type layer itself
+/// brings the prompt back.
+#[test]
+fn a_type_layers_targeted_mask_never_asks_to_rasterize() {
+    use photocraft_engine::{distort_cmds::LIQUIFY, lens_cmds::RAW};
+    let mut app = app_with(Kind::Type);
+    app.run("select.rect", json!({"x": 10, "y": 10, "width": 40, "height": 40})).unwrap();
+    app.run("layer.layerMask.revealSelection", json!({})).unwrap();
+    app.ui.mask_target = true;
+    app.sync_mask_targets();
+    assert!(app.layer_mask_targeted());
+    for id in [LIQUIFY, RAW, BLUR] {
+        assert!(filter_needs(&app, id).is_none(), "{id}: no rasterize prompt on the mask");
+    }
+    for id in [LIQUIFY, RAW] {
+        assert!(!crate::menus::is_enabled(&app, id), "{id}: greyed on a type layer's mask");
+        let _ = menu(&mut app, id);
+        assert!(prompt(&app).is_none(), "{id}: no prompt from the menu either");
+    }
+    assert!(crate::menus::is_enabled(&app, BLUR));
+    menu(&mut app, BLUR).unwrap();
+    assert!(prompt(&app).is_none() && filter_dialog(&app).is_some(), "Gaussian Blur opens on the mask");
+    assert_eq!(active_content(&app), "Type");
+    // The type layer's own pixels: the prompt is offered again.
+    app.ui.dialogs.clear();
+    app.ui.mask_target = false;
+    app.sync_mask_targets();
+    for id in [LIQUIFY, RAW, BLUR] {
+        assert!(filter_needs(&app, id).is_some(), "{id}: the type layer asks to rasterize");
+        assert!(crate::menus::is_enabled(&app, id), "{id}: live on the type layer");
+    }
+}

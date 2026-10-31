@@ -239,6 +239,13 @@ fn run_on_layer(s: &mut Session, cmd: &str, label: &str, p: &Value, moves: bool,
     s.edit(label, |doc: &mut Document, _| {
         let canvas = doc.bounds();
         let selection = doc.selection.clone();
+        // A targeted layer mask, alpha channel or Quick Mask is deformed instead of the layer, as
+        // Photoshop's Liquify does (#10457).
+        if crate::channel_cmds::target_of(p) != crate::channel_cmds::Target::Pixels {
+            let Some(surf) = crate::channel_cmds::channel_surface_for_filter(doc, Some(id), p)? else { return Ok(()) };
+            *surf = f(surf, selection.as_ref(), canvas)?;
+            return Ok(());
+        }
         let group = crate::transform_cmds::group_locks(doc, id);
         // A Background gains transparency when the distortion moves pixels (as in Photoshop).
         if moves {
