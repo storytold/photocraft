@@ -323,6 +323,7 @@ fn command_body_more(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fie
         _ if crate::color_range_ui::owns(fields) => crate::color_range_ui::body(app, ui, fields),
         _ if crate::prefs_ui::owns(fields) => crate::prefs_ui::body(app, ui, fields),
         _ if fields.contains_key("__export") => crate::export_dialog::body(app, ui, fields),
+        _ if crate::sprite_sheet::owns(fields) => crate::sprite_sheet::body(app, ui, fields, d.id),
         // Image Size and Canvas Size open on Width, selected (#2329).
         _ if fields.contains_key("__sizing") => first_field_focused(ui, id, |ui| crate::sizing::body(ui, fields)),
         _ if crate::smart_filter_dialog::owns(fields) => crate::smart_filter_dialog::body(app, ui, fields),
@@ -851,6 +852,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::replace_prompt::owns,
     crate::layer_style::color_picker::owns,
     |f| f.contains_key("__export"),
+    crate::sprite_sheet::owns,
     |f| f.contains_key("__smartFilter"),
     |f| f.contains_key(crate::actions::RESUME),
 ];
@@ -871,6 +873,8 @@ fn file_command(fields: &Fields) -> Option<&'static str> {
         Some("file.save")
     } else if fields.contains_key("__export") {
         Some("file.export.exportAs")
+    } else if crate::sprite_sheet::owns(fields) {
+        Some("file.export.spriteSheet")
     } else if fields.contains_key("__web") {
         Some("file.export.saveForWebLegacy")
     } else if fields.contains_key("__print") {
@@ -1010,6 +1014,7 @@ fn confirm_command_more(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, Str
         _ if crate::color_range_ui::owns(&d.fields) => crate::color_range_ui::confirm(app, &d.fields),
         _ if crate::prefs_ui::owns(&d.fields) => crate::prefs_ui::confirm(app, &d.fields),
         _ if d.fields.contains_key("__export") => crate::export_dialog::confirm(app, &d.fields),
+        _ if crate::sprite_sheet::owns(&d.fields) => crate::sprite_sheet::confirm(app, &d.fields),
         _ => confirm_generic_command(app, d),
     }
 }

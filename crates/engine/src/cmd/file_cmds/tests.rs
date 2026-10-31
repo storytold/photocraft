@@ -32,6 +32,37 @@ fn composite(s: &Session, x: i32, y: i32) -> [f32; 4] {
 }
 
 #[test]
+fn sprite_sheet_grid_exports_padded_png() {
+    let dir = tmp("sprite-sheet");
+    let path = join(&dir, "sheet.png");
+    let mut s = session(8, 4, 8);
+    let result = s
+        .execute(
+            "file.export.spriteSheet",
+            json!({
+                "path": path,
+                "source": "grid",
+                "frameWidth": 4,
+                "frameHeight": 2,
+                "columns": 2,
+                "padding": 1,
+                "fps": 8,
+                "selectedFrames": [{"frame": 1, "durationTicks": 2}, {"frame": 0, "durationTicks": 1}]
+            }),
+        )
+        .unwrap();
+    assert_eq!(result["width"], 11);
+    assert_eq!(result["height"], 7);
+    let bytes = std::fs::read(&path).unwrap();
+    let image = photocraft_codecs::decode(&bytes).unwrap();
+    assert_eq!((image.width(), image.height()), (11, 7));
+    let metadata: serde_json::Value = serde_json::from_slice(&std::fs::read(join(&dir, "sheet.json")).unwrap()).unwrap();
+    assert_eq!(metadata["frames"]["frame_0"]["frame"], json!({"x": 6, "y": 1, "w": 4, "h": 2}));
+    assert_eq!(metadata["frames"]["frame_0"]["duration"], 250);
+    assert_eq!(metadata["frames"]["frame_1"]["duration"], 125);
+}
+
+#[test]
 fn close_all_and_close_others() {
     let mut s = session(8, 8, 8);
     s.execute("file.new", json!({"width": 9, "height": 9})).unwrap();
