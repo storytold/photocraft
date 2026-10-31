@@ -175,7 +175,8 @@ pub fn adjust_mask(s: &mut Surface, adj: &Adjustment, selection: Option<&Surface
 /// `s`'s pixels over `r` (untouched ones included) with `adj` applied through the selection, encoded.
 fn adjusted(s: &Surface, r: Rect, adj: &Adjustment, selection: Option<&Surface>, mode: photocraft_color::ColorMode) -> Vec<f32> {
     let fmt = s.format();
-    if fmt.mode == mode && matches!(mode, photocraft_color::ColorMode::Lab | photocraft_color::ColorMode::Cmyk) && adjust::stored_channel_adjustment(adj) {
+    let own_channels = adjust::stored_channel_adjustment(adj) || (mode == photocraft_color::ColorMode::Cmyk && adjust::cmyk_mixer(adj));
+    if fmt.mode == mode && matches!(mode, photocraft_color::ColorMode::Lab | photocraft_color::ColorMode::Cmyk) && own_channels {
         return adjusted_channels(s, r, selection, |ch| adjust::stored_channels(adj, fmt.mode, Some(fmt.sample), ch));
     }
     if fmt.mode == mode && mode == photocraft_color::ColorMode::Cmyk && adjust::cmy_adjustment(adj) {

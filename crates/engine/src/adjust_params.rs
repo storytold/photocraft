@@ -172,26 +172,7 @@ pub fn from_params(kind: &str, p: &Value, base: Option<&Adjustment>, mode: Color
                 preserve_luminosity: r.boolean("preserveLuminosity", p0)?,
             }
         }
-        "channelMixer" => {
-            let (mut matrix, mono0) = match base {
-                Some(Adjustment::ChannelMixer { matrix, monochrome }) => (*matrix, *monochrome),
-                _ => ([[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]], false),
-            };
-            let monochrome = r.boolean("monochrome", mono0)?;
-            if monochrome && !mono0 && p.get("gray").is_none() {
-                // Turning Monochrome on starts from Photoshop's grey mix.
-                matrix[0] = [0.4, 0.4, 0.2, 0.0];
-            }
-            for (i, key) in ["red", "green", "blue"].iter().enumerate() {
-                if let Some(v) = r.numbers(key, 4)? {
-                    matrix[i] = mixer_row(&v);
-                }
-            }
-            if let Some(v) = r.numbers("gray", 4)? {
-                matrix[0] = mixer_row(&v);
-            }
-            Adjustment::ChannelMixer { matrix, monochrome }
-        }
+        "channelMixer" => channel_mixer(&r, p, base, mode)?,
         "gradientMap" => {
             let (stops0, rev0, dither0) = match base {
                 Some(Adjustment::GradientMap { stops, reverse, dither }) => (stops.clone(), *reverse, *dither),
@@ -265,7 +246,18 @@ pub fn to_params(adj: &Adjustment) -> Value {
         Adjustment::PhotoFilter { color, density, preserve_luminosity } => {
             json!({"color": hex(*color), "density": (density * 1000.0).round() / 10.0, "preserveLuminosity": preserve_luminosity})
         }
-        Adjustment::ChannelMixer { matrix, monochrome } => {
+        Adjustment::ChannelMixer { cmyk: Some(rows), monochrome, .. } => {
+            let row = |r: &[f32; 5]| json!(r.map(|x| (x * 1000.0).round() / 10.0));
+            let mut v = json!({"monochrome": monochrome});
+            for (key, r) in MIXER_INKS.iter().zip(rows) {
+                v[*key] = row(r);
+            }
+            if *monochrome {
+                v["gray"] = row(&rows[0]);
+            }
+            v
+        }
+        Adjustment::ChannelMixer { matrix, monochrome, cmyk: None } => {
             let row = |r: &[f32; 4]| json!(r.map(|x| (x * 1000.0).round() / 10.0));
             let mut v = json!({"red": row(&matrix[0]), "green": row(&matrix[1]), "blue": row(&matrix[2]), "monochrome": monochrome});
             if *monochrome {
@@ -383,8 +375,58 @@ fn merge(mut a: Value, b: Value) -> Value {
     a
 }
 
-fn mixer_row(v: &[f32]) -> [f32; 4] {
+fn mixer_row<const N: usize>(v: &[f32]) -> [f32; N] {
     std::array::from_fn(|i| v.get(i).copied().unwrap_or(0.0).clamp(-200.0, 200.0) / 100.0)
+}
+
+/// Channel Mixer outputs of a CMYK mixer (each `[cyan, magenta, yellow, black, constant]` %).
+pub const MIXER_INKS: [&str; 4] = ["cyan", "magenta", "yellow", "black"];
+
+/// Channel Mixer: RGB outputs (`red`, `green`, `blue`, each `[red, green, blue, constant]` %) or,
+/// in CMYK documents or with CMYK keys, Photoshop's four ink outputs ([`MIXER_INKS`]); `gray` is
+/// the monochrome mix in either.
+fn channel_mixer(r: &Reader<'_>, p: &Value, base: Option<&Adjustment>, mode: ColorMode) -> Result<Adjustment> {
+    let rgb_identity = [[1.0, 0.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0], [0.0, 0.0, 1.0, 0.0]];
+    let (mut matrix, mono0, cmyk0) = match base {
+        Some(Adjustment::ChannelMixer { matrix, monochrome, cmyk }) => (*matrix, *monochrome, *cmyk),
+        _ => (rgb_identity, false, None),
+    };
+    // Only CMYK keys, a CMYK base or (with neither colour's keys) a CMYK document make CMYK outputs.
+    let base_space = base.filter(|b| matches!(b, Adjustment::ChannelMixer { .. })).map(|_| if cmyk0.is_some() { ToneSpace::Cmyk } else { ToneSpace::Rgb });
+    let cmyk = space_of(r, base_space, mode) == ToneSpace::Cmyk;
+    let monochrome = r.boolean("monochrome", mono0)?;
+    if cmyk {
+        let mut rows = cmyk0.unwrap_or(photocraft_doc::adjust::CMYK_MIXER_IDENTITY);
+        if monochrome && !mono0 && p.get("gray").is_none() {
+            // Turning Monochrome on starts from the Black output's mix.
+            rows[0] = rows[3];
+        }
+        for (i, key) in MIXER_INKS.iter().enumerate() {
+            if let Some(v) = r.numbers(key, 5)? {
+                rows[i] = mixer_row(&v);
+            }
+        }
+        if let Some(v) = r.numbers("gray", 5)? {
+            rows[0] = mixer_row(&v);
+        }
+        return Ok(Adjustment::ChannelMixer { matrix: if cmyk0.is_some() { matrix } else { rgb_identity }, monochrome, cmyk: Some(rows) });
+    }
+    if cmyk0.is_some() {
+        matrix = rgb_identity;
+    }
+    if monochrome && !mono0 && p.get("gray").is_none() {
+        // Turning Monochrome on starts from Photoshop's grey mix.
+        matrix[0] = [0.4, 0.4, 0.2, 0.0];
+    }
+    for (i, key) in ["red", "green", "blue"].iter().enumerate() {
+        if let Some(v) = r.numbers(key, 4)? {
+            matrix[i] = mixer_row(&v);
+        }
+    }
+    if let Some(v) = r.numbers("gray", 4)? {
+        matrix[0] = mixer_row(&v);
+    }
+    Ok(Adjustment::ChannelMixer { matrix, monochrome, cmyk: None })
 }
 
 fn hue_saturation(r: &Reader<'_>, base: Option<&Adjustment>) -> Result<Adjustment> {

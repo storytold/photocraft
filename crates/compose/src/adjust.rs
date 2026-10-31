@@ -17,8 +17,8 @@ mod tone;
 #[cfg(test)]
 use channels::lab_denorm;
 pub use channels::{
-    LAB_NEUTRAL, LabOp, apply_cmy, cmy_adjustment, cmyk_channel_adjustment, ink_brightness_contrast_lut, ink_luma, ink_through, lab_channel_adjustment,
-    lab_stored_op, stored_channel_adjustment, stored_channels, threshold_white,
+    LAB_NEUTRAL, LabOp, apply_cmy, cmy_adjustment, cmyk_channel_adjustment, cmyk_mixer, ink_brightness_contrast_lut, ink_luma, ink_through,
+    lab_channel_adjustment, lab_stored_op, mix_inks, stored_channel_adjustment, stored_channels, threshold_white,
 };
 use channels::{apply_lab, legacy_brightness_contrast, legacy_brightness_contrast_hdr};
 use color::gradient;
@@ -200,7 +200,16 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
             let hi = if depth == Some(SampleType::F32) { f32::INFINITY } else { 1.0 };
             map_rgb(buf, |c| vibrance_px(c, v, s, transfer, hi))
         }
-        Adjustment::ChannelMixer { matrix, monochrome } if depth == Some(SampleType::F32) => {
+        Adjustment::ChannelMixer { cmyk: Some(rows), monochrome, .. } => {
+            // A CMYK mixer outside a CMYK document: on the screen colour's separation.
+            use photocraft_color::convert::{cmyk_to_rgb, rgb_to_cmyk};
+            map_rgb(buf, |c| {
+                let mut ink = rgb_to_cmyk(c);
+                mix_inks(rows, *monochrome, &mut ink);
+                cmyk_to_rgb(ink)
+            })
+        }
+        Adjustment::ChannelMixer { matrix, monochrome, .. } if depth == Some(SampleType::F32) => {
             // 32-bit: each source percentage is cut to 1/1024 (toward zero), the constant counts
             // 255/512 of its value, and nothing clips (photoshop corpus rgb32 channel-mixer.psd:
             // pure red, green, blue, black and white all exact).
@@ -211,7 +220,7 @@ fn apply_depth_mode(adj: &Adjustment, buf: &mut Buffer, transfer: Transfer, dept
                 if *monochrome { [mix(&m[0]); 3] } else { [mix(&m[0]), mix(&m[1]), mix(&m[2])] }
             })
         }
-        Adjustment::ChannelMixer { matrix, monochrome } => map_rgb(buf, |c| {
+        Adjustment::ChannelMixer { matrix, monochrome, .. } => map_rgb(buf, |c| {
             let mix = |row: &[f32; 4]| (row[0] * c[0] + row[1] * c[1] + row[2] * c[2] + row[3]).clamp(0.0, 1.0);
             if *monochrome { [mix(&matrix[0]); 3] } else { [mix(&matrix[0]), mix(&matrix[1]), mix(&matrix[2])] }
         }),

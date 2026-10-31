@@ -1133,7 +1133,7 @@ fn build() -> Vec<CommandSpec> {
         (
             "channelMixer",
             "Channel Mixer…",
-            r##"{"red":json,"green":json,"blue":json,"gray":json,"monochrome":bool=false} (per output channel [red %, green %, blue %, constant %] in -200..200; gray = the monochrome mix)"##,
+            r##"{"red":json,"green":json,"blue":json,"cyan":json,"magenta":json,"yellow":json,"black":json,"gray":json,"monochrome":bool=false} (per output channel [red %, green %, blue %, constant %] in -200..200; CMYK documents (or cyan/magenta/yellow/black keys): per ink output [cyan %, magenta %, yellow %, black %, constant %]; gray = the monochrome mix, which CMYK puts in the black ink alone)"##,
         ),
         ("invert", "Invert", "{}"),
         ("posterize", "Posterize…", r##"{"levels":2..255=4}"##),
