@@ -596,6 +596,10 @@ fn save_a_copy(app: &mut PhotocraftApp) -> Result<Value, String> {
                 crate::targa_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
                 return Ok(true);
             }
+            if crate::bmp_options_ui::wants_prompt(app, &path) {
+                crate::bmp_options_ui::park(app, path.clone(), true, "file.saveACopy", Some(doc.clone()))?;
+                return Ok(true);
+            }
             if crate::dds_options_ui::wants_prompt(&path) {
                 crate::dds_options_ui::park(app, path.clone(), true, "file.saveACopy")?;
                 return Ok(true);
