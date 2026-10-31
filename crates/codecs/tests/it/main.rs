@@ -9,6 +9,7 @@ mod deep_exr;
 mod detect_caps;
 mod dpx;
 mod exr_cryptomatte;
+mod exr_display_window;
 mod exr_multipart;
 mod fidelity;
 mod gif_frames;
