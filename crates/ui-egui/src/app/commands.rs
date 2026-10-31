@@ -1,6 +1,6 @@
 use super::{
-    DocId, PhotocraftApp, Tool, Value, actions, canvas, delete_layer_prompt, dock, gpu_canvas, jobs_ui, json, mask_trash_prompt, notices, panel_docking, state,
-    transform_tool, type_transform, vector_ui,
+    DocId, PhotocraftApp, Tool, Value, actions, canvas, delete_layer_prompt, dock, gpu_canvas, jobs_ui, json, mask_trash_prompt, notices, panel_docking,
+    smart_svg_ui, state, transform_tool, type_transform, vector_ui,
 };
 
 impl PhotocraftApp {
@@ -71,6 +71,9 @@ impl PhotocraftApp {
         }
         actions::suspended_guard(self, id)?;
         if let Some(result) = panel_docking::command(self, id, &params) {
+            return result;
+        }
+        if let Some(result) = smart_svg_ui::intercept(self, id, &params) {
             return result;
         }
         if let Some(r) = transform_tool::intercept(self, id) {
@@ -218,6 +221,8 @@ impl PhotocraftApp {
                     | "select.loadSelection"
                     | "select.loadLuminosity"
                     | "path.toSelection"
+                    | "path.addToSelection"
+                    | "path.subtractFromSelection"
             )
             && self.session.active().is_some_and(|st| st.doc.selection.is_some())
         {
@@ -236,6 +241,7 @@ impl PhotocraftApp {
             // Adding a mask selects its thumbnail: the next brush or footer Delete targets it.
             self.ui.mask_target = true;
             self.ui.vector_mask_target = false;
+            self.target_mask_over_colour_rows();
         }
         if result.is_ok() && creates_active_vector_mask {
             // Likewise a new vector mask (#4728): Properties shows its Density and Feather, and a
