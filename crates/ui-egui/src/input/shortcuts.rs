@@ -813,8 +813,12 @@ fn handle_registry_and_tool_keys(app: &mut PhotocraftApp, ctx: &egui::Context, f
             return true;
         }
         // In a full screen mode, the Crop tool's untouched default frame (Straighten off) has nothing to cancel: cancelling only
-        // makes the next one, so Esc goes on to leave full screen (#7315).
-        let untouched = app.ui.view.screen_mode != "standard" && app.ui.polygon.is_empty() && app.crop.default_frame && !crate::crop_straighten::mode(app);
+        // makes the next one, so Esc goes on to leave full screen (#7315). A gesture on it is still cancelled (#9275).
+        let untouched = app.ui.view.screen_mode != "standard"
+            && app.ui.polygon.is_empty()
+            && app.crop.default_frame
+            && app.crop.drag.is_none()
+            && !crate::crop_straighten::mode(app);
         if !untouched && pressed(Key::Escape) {
             app.ui.polygon.clear();
             app.ui.polygon_mode.clear();
