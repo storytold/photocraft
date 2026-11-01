@@ -994,7 +994,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
     let t = Tokens::get(ui.ctx());
     let num = |p: &Value, k: &str, d: f64| p.get(k).and_then(Value::as_f64).unwrap_or(d) as f32;
     widgets::section_label(ui, "General Blending");
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         widgets::row_label(ui, "Blend Mode", LABEL_W);
         let mut cur = p.get("blend").and_then(Value::as_str).unwrap_or("Normal").to_string();
         // Photoshop's modes, plus the layer's own Paint.NET mode when it has one (an imported .pdn).
@@ -1015,7 +1015,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         p["fillOpacity"] = json!(v.round());
     }
     // Channels: one check box per colour channel (checked = blends).
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         widgets::row_label(ui, "Channels:", LABEL_W);
         let mut ch: Vec<bool> =
             p.get("channels").and_then(Value::as_array).map(|a| a.iter().map(|v| v.as_bool().unwrap_or(true)).collect()).unwrap_or_default();
@@ -1030,7 +1030,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
             p["channels"] = json!(ch);
         }
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         widgets::row_label(ui, "Knockout", LABEL_W);
         let mut cur = p.get("knockout").and_then(Value::as_str).unwrap_or("none").to_string();
         let opts: Vec<(String, &str)> = KNOCKOUT.iter().map(|(v, l)| (v.to_string(), *l)).collect();
@@ -1052,7 +1052,7 @@ fn blending_page(ui: &mut egui::Ui, p: &mut Value, names: &[String]) {
         return;
     }
     let sel = p.get("blendIfChannel").and_then(Value::as_u64).map_or(0, |v| v as usize).min(entries - 1);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         widgets::row_label(ui, "Blend If:", LABEL_W);
         // A colour document lists Gray first; a one-channel document only its channel (Gray).
         let label = |i: usize| -> String {
@@ -1489,7 +1489,7 @@ fn list_bar(ui: &mut egui::Ui, f: &mut Map<String, Value>, selected: &str) {
     let kind = entry(f, selected).and_then(|e| e.get("kind").and_then(Value::as_str)).map(str::to_string);
     let siblings = kind.as_deref().map(|k| ids_of(f, k)).unwrap_or_default();
     let at = siblings.iter().position(|id| id == selected);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         let fx = crate::panels::fx_button(ui, 24.0, tl!("Add a layer style"));
         crate::press_menu::show(&fx, |ui, menu| {
             ui.set_min_width(160.0);
@@ -1552,7 +1552,10 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
             for group in &app.session.presets.styles {
                 ui.label(RichText::new(&group.name).size(12.0).color(t.text_dim));
                 ui.add_space(3.0);
-                ui.horizontal_wrapped(|ui| {
+                // The style gallery is a physical swatch strip: it stays left-to-right in both
+                // directions, so the wrapped row runs in an explicit LTR scope.
+                crate::direction::ltr(ui, |ui| {
+                    ui.horizontal_wrapped(|ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
                     for st in &group.items {
                         let tex = crate::preset_panels::style_texture(app, &ctx, st);
@@ -1568,6 +1571,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                             *style_click = Some(st.name.clone());
                         }
                     }
+                    });
                 });
                 ui.add_space(10.0);
             }
@@ -1631,7 +1635,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                 }
             }
             P::Color => {
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     widgets::row_label(ui, label, LABEL_W);
                     let color = disp.get(key).and_then(Value::as_str).unwrap_or("#000000");
                     let response = widgets::color_swatch(ui, parse_hex(color)).on_hover_text(tl!("Color Picker (Layer Style Color)"));
@@ -1641,7 +1645,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                 });
             }
             P::Blend => {
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     widgets::row_label(ui, label, LABEL_W);
                     let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or("Normal").to_string();
                     let opts: Vec<(String, &str)> = photocraft_color::BlendMode::LAYER_MODES.iter().map(|m| (m.label().to_string(), m.label())).collect();
@@ -1653,7 +1657,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                 });
             }
             P::GradientMethod => {
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     widgets::row_label(ui, label, LABEL_W);
                     let mut current = disp.get(key).and_then(Value::as_str).unwrap_or("custom").to_string();
                     let mut options = vec![
@@ -1689,7 +1693,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                 });
             }
             P::Choice(options) => {
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     widgets::row_label(ui, label, LABEL_W);
                     let mut cur = disp.get(key).and_then(Value::as_str).unwrap_or(options[0].0).to_string();
                     let opts: Vec<(String, &str)> = options.iter().map(|(v, l)| (v.to_string(), *l)).collect();
@@ -1706,7 +1710,7 @@ fn page(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, 
                     .and_then(Value::as_array)
                     .map(|a| a.iter().filter_map(|e| Some((e.get(0)?.as_str()?.to_string(), e.get(1)?.as_str()?.to_string()))).collect())
                     .unwrap_or_default();
-                ui.horizontal(|ui| {
+                crate::direction::dialog_row(ui, |ui| {
                     widgets::row_label(ui, label, LABEL_W);
                     let mut cur = disp
                         .get(key)
@@ -1988,5 +1992,26 @@ mod rtl_tests {
             assert_eq!(bar.left(), row.right() - 3.0);
             assert_eq!(bar.height(), row.height());
         }
+    }
+
+    /// The Blending Options "Channels:" row (a `direction::dialog_row`) mirrors: the R/G/B boxes
+    /// follow the label left-to-right in LTR and lead it in RTL, with the same gap in both.
+    #[test]
+    fn the_channels_row_mirrors_in_rtl_and_keeps_the_ltr_gap() {
+        use egui_kittest::kittest::Queryable;
+        let mut gaps = Vec::new();
+        for (dir, rtl) in [(Dir::Ltr, false), (Dir::Rtl, true)] {
+            let h = body_harness(dir, BLENDING);
+            let label = labelled(&h, "Channels:");
+            let r = h.query_all_by_label("R").next().expect("the R channel box").rect();
+            if rtl {
+                assert!(r.right() < label.left(), "{dir:?}: RTL the boxes lead the label: {label:?} {r:?}");
+                gaps.push(label.left() - r.right());
+            } else {
+                assert!(label.right() < r.left(), "{dir:?}: LTR the label leads the boxes: {label:?} {r:?}");
+                gaps.push(r.left() - label.right());
+            }
+        }
+        assert!((gaps[0] - gaps[1]).abs() < 1.0, "the same label→box gap in both directions: {gaps:?}");
     }
 }

@@ -163,7 +163,7 @@ pub(super) fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
     let sel_key = egui::Id::unique(("fx-gradient-selection", effect.to_string()));
     let drag_key = egui::Id::unique(("fx-gradient-drag", effect.to_string()));
     // Presets to start from.
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(RichText::new(tl!(label)).color(t.text_dim));
         let names: Vec<(String, String)> =
             app.session.presets.gradients.iter().flat_map(|g| g.items.iter()).map(|p| (p.name.clone(), p.name.clone())).collect();
@@ -267,7 +267,7 @@ pub(super) fn row(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String
     let Fill::Gradient { stops, .. } = &fill else { return };
     let selected = selected.min(stops.len().saturating_sub(1));
     let Some((loc, color)) = stops.get(selected).copied() else { return };
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(RichText::new(tl!("Color")).color(t.text_dim));
         let [r, g, b] = color.to_rgb().map(|v| (v.clamp(0.0, 1.0) * 255.0 + 0.5) as u8);
         let swatch = widgets::color_swatch(ui, Color32::from_rgb(r, g, b)).on_hover_text(tl!("Color Picker (Layer Style Color)"));
@@ -458,5 +458,28 @@ mod tests {
             assert_eq!(stops.len(), 2, "{v}: the default black-to-white");
             assert!(opacity_stops.is_empty() || opacity_stops.len() >= 2, "{v}");
         }
+    }
+
+    /// The selected stop's row (a `direction::dialog_row`: Color, Location, Delete) mirrors with
+    /// the direction; LTR keeps today's order and the same label-to-label gap.
+    #[test]
+    fn the_stop_row_mirrors_in_rtl_and_keeps_the_ltr_gap() {
+        use crate::direction::{Dir, direction_scope};
+        let mut gaps = Vec::new();
+        for (dir, rtl) in [(Dir::Ltr, false), (Dir::Rtl, true)] {
+            let _scope = direction_scope(dir);
+            let (app, parent) = dialog_app();
+            let h = harness(app, parent);
+            let color = h.get_by_label("Color").rect();
+            let loc = h.get_by_label("Location").rect();
+            if rtl {
+                assert!(loc.right() < color.left(), "{dir:?}: RTL Location trails Color: {color:?} {loc:?}");
+                gaps.push(color.left() - loc.right());
+            } else {
+                assert!(color.right() < loc.left(), "{dir:?}: LTR Color leads Location: {color:?} {loc:?}");
+                gaps.push(loc.left() - color.right());
+            }
+        }
+        assert!((gaps[0] - gaps[1]).abs() < 1.0, "the same gap in both directions: {gaps:?}");
     }
 }
