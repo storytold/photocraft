@@ -66,7 +66,7 @@ fn color_image(img: &photocraft_raster::Rgba8Image) -> egui::ColorImage {
 
 /// A composite as monitor pixels: document profile → monitor profile (nothing to do in the
 /// common sRGB-on-sRGB case).
-pub(crate) fn display_image(display: Option<&photocraft_engine::display_color::CanvasDisplay>, buf: &photocraft_compose::Buffer) -> egui::ColorImage {
+pub fn display_image(display: Option<&photocraft_engine::display_color::CanvasDisplay>, buf: &photocraft_compose::Buffer) -> egui::ColorImage {
     match display {
         Some(d) if !d.is_identity() => color_image(&d.to_rgba8(buf)),
         _ => buffer_to_image(buf),
@@ -137,6 +137,10 @@ pub(crate) fn display_doc(app: &mut PhotocraftApp, idx: usize) -> (std::sync::Ar
     }
     // Image › Adjustments dialog: a temporary adjustment layer clipped to the target.
     if let Some(shown) = crate::adjust_preview::display_doc(app, idx) {
+        return shown;
+    }
+    // Filter dialog previewing on the GPU: the target's content is a layer operator (#5772).
+    if let Some(shown) = crate::filter_gpu_preview::display_doc(app, idx) {
         return shown;
     }
     // Gradient tool (live) drag, or a stop dragged in the Properties panel.
