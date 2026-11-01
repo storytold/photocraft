@@ -182,9 +182,8 @@ fn open_filters_keep_literal_extensions_on_windows_and_macos() {
 }
 
 #[test]
-fn flatpak_builds_have_no_update_transport() {
-    assert!(update_transport(Some(std::ffi::OsStr::new("ai.storyteller.photocraft"))).is_none());
-    assert!(update_transport(None).is_some());
+fn native_services_provide_update_transport() {
+    assert!(native(None).check_updates.is_some());
 }
 
 #[test]
@@ -253,7 +252,7 @@ fn every_save_dialog_leads_with_its_own_extension() {
         app.run("prefs.set", json!({"path": "export.quickExportFormat", "value": format})).unwrap();
         let _ = invoke(&mut app, "file.export.quickExportAsPng");
     }
-    for format in ["gif", "png8", "png24", "jpeg", "wbmp"] {
+    for format in ["gif", "png8", "png24", "jpeg", "webp", "wbmp"] {
         dialog(&mut app, "file.export.saveForWebLegacy", json!({"format": format}));
     }
     app.run("slice.new", json!({"x": 0, "y": 0, "width": 2, "height": 2})).unwrap();
@@ -266,13 +265,13 @@ fn every_save_dialog_leads_with_its_own_extension() {
     let exts: Vec<&str> = asked.iter().filter_map(|s| s.rsplit_once('.').map(|(_, e)| e)).collect();
     // The extension each save above should suggest, in order.
     let want = [
-        "psd",                       // Save As untitled
-        "pcraft jpeg gif bmp psd",   // Save As opened .pcraft .jpeg .gif .bmp .dng
-        "psd",                       // Save a Copy
-        "png jpg webp tif tga",      // Export As
-        "png jpg gif webp",          // Quick Export
-        "gif png png jpg wbmp html", // Save for Web: gif png8 png24 jpeg wbmp, then with slices
-        "csv pcpresets",             // Measurement Log, Export Presets
+        "psd",                            // Save As untitled
+        "pcraft jpeg gif bmp psd",        // Save As opened .pcraft .jpeg .gif .bmp .dng
+        "psd",                            // Save a Copy
+        "png jpg webp tif tga",           // Export As
+        "png jpg gif webp",               // Quick Export
+        "gif png png jpg webp wbmp html", // Save for Web: gif png8 png24 jpeg webp wbmp, then with slices
+        "csv pcpresets",                  // Measurement Log, Export Presets
     ]
     .join(" ");
     assert_eq!(exts, want.split(' ').collect::<Vec<_>>());
@@ -294,8 +293,37 @@ fn save_as_offers_only_writable_formats_including_ico() {
             assert!(format.caps().write, "{name}: .{ext} can't be written");
         }
     }
-    for ext in ["ico", "gif", "bmp", "dds"] {
+    for ext in ["ico", "gif", "bmp", "dds", "pnm", "hdr", "dib", "jpeg", "tiff"] {
         assert!(save_filters("Untitled-1.psd").iter().any(|(_, exts)| exts.iter().any(|e| e == ext)), ".{ext} is offered");
+    }
+    // The codec writes P5/P6/P7/PF from the image, never from the name, so Netpbm offers only the
+    // neutral .pnm (#3609; CodeRabbit on #9775): a .pbm, .pgm or .pfm name would hold other data.
+    let netpbm = save_filters("Untitled").into_iter().find(|(name, _)| name == "Netpbm").map(|(_, exts)| exts);
+    assert_eq!(netpbm, Some(vec!["pnm".to_string()]));
+    // The suggested name itself becomes .pnm, as macOS and rfd keep it (CodeRabbit on #9775).
+    assert_eq!(netpbm_as_pnm("scans/image.pgm"), Path::new("scans/image.pnm").to_string_lossy());
+    assert_eq!(netpbm_as_pnm("image.PFM"), "image.pnm");
+    assert_eq!(netpbm_as_pnm("image.png"), "image.png");
+    assert_eq!(netpbm_as_pnm("Untitled-1"), "Untitled-1");
+    // Also when Save As starts from a subtype's name: no filter offers that subtype again.
+    for name in ["image.pbm", "image.pgm", "image.ppm", "image.pam", "image.pfm"] {
+        let filters = save_filters(name);
+        assert_eq!(filters[0], ("Netpbm".to_string(), vec!["pnm".to_string()]), "{name}");
+        let subtype = name.rsplit('.').next().unwrap_or_default();
+        assert!(!filters.iter().any(|(_, exts)| exts.iter().any(|e| e == subtype)), "{name}: .{subtype} is offered");
+    }
+    // File Open lists readable Save As formats in their own type. Export-only formats must
+    // stay absent from both Open filters rather than advertising an unavailable decoder.
+    for (name, exts) in SAVE_FILTERS {
+        for ext in exts.iter().filter(|e| **e != "pdf") {
+            if photocraft_codecs::from_extension(ext).is_some_and(|format| !format.caps().read) {
+                assert!(!OPEN_EXTS.contains(ext), "{name}: export-only .{ext} must not appear in All Formats");
+                assert!(!OPEN_FILTERS.iter().any(|(_, open)| open.contains(ext)), "{name}: export-only .{ext} must not appear in an Open type");
+                continue;
+            }
+            assert!(OPEN_EXTS.contains(ext), "{name}: Open's All Formats lacks .{ext}");
+            assert!(OPEN_FILTERS.iter().any(|(_, open)| open.contains(ext)), "{name}: no Open type lists .{ext}");
+        }
     }
     assert_eq!(save_filters("icon.ico")[0].0, "ICO", "an .ico name leads with its own type");
     // What Save As writes there: an icon up to 256×256, and a clear error past that.
@@ -307,6 +335,11 @@ fn save_as_offers_only_writable_formats_including_ico() {
     let opts = export_options(&photocraft_ui_egui::ExportSettings::default());
     let icon = photocraft_io::export(&doc(256), "icon.ico", &opts).unwrap();
     assert_eq!(icon.bytes[..4], [0, 0, 1, 0], "an ICO header");
+    // And what the Netpbm and Radiance rows write.
+    let pnm = photocraft_io::export(&doc(4), "x.pnm", &opts).unwrap();
+    assert_eq!(pnm.bytes[..2], *b"P6", "an RGB document saves as a binary pixmap");
+    let hdr = photocraft_io::export(&doc(4), "x.hdr", &opts).unwrap();
+    assert!(hdr.bytes.starts_with(b"#?RADIANCE"), "a Radiance header");
     let err = photocraft_io::export(&doc(300), "icon.ico", &opts).map(|_| ()).unwrap_err().to_string();
     assert!(err.contains("256"), "{err}");
 }
