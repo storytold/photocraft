@@ -123,6 +123,8 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 | Path | Title | Author | Source | License |
 |---|---|---|---|---|
 | `crates/codecs/tests/it/fixtures/vp8-mixed.webp` | Mixed-macroblock VP8 reference | PhotoCraft contributors | Original procedural RGB mosaic from `mixed_macroblocks_and_padded_edges_keep_their_encoded_bytes` in `crates/codecs/tests/it/webp_lossy.rs`, encoded by PhotoCraft | MIT OR Apache-2.0, adjacent [`LICENSE.txt`](crates/codecs/tests/it/fixtures/LICENSE.txt) |
+| `crates/codecs/tests/it/fixtures/vp8-flat.webp` | Flat-color VP8 reference | PhotoCraft contributors | Original procedural RGB image in `crates/codecs/tests/it/webp_lossy.rs`, encoded by PhotoCraft | MIT OR Apache-2.0, adjacent [`LICENSE.txt`](crates/codecs/tests/it/fixtures/LICENSE.txt) |
+| `crates/codecs/tests/it/fixtures/vp8-gradient.webp` | Gradient VP8 reference | PhotoCraft contributors | Original procedural RGB image in `crates/codecs/tests/it/webp_lossy.rs`, encoded by PhotoCraft | MIT OR Apache-2.0, adjacent [`LICENSE.txt`](crates/codecs/tests/it/fixtures/LICENSE.txt) |
 
 ## External test corpora (not committed, not shipped)
 

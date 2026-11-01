@@ -489,7 +489,8 @@ impl<'a> Encoder<'a> {
         let (y_mode, y2, y_blocks) = if b_cost < whole_cost {
             (B_PRED, None, b_blocks)
         } else {
-            // Whole-block mode overwrites the trial reconstruction using the saved prediction.
+            // The luma trial writes only this padded 16x16 macroblock. This path overwrites all
+            // 256 samples from src and best_pred, without reading trial values, before the next block.
             let mut dcs = [0i32; 16];
             let mut ac_blocks: Vec<[i32; 16]> = Vec::with_capacity(16);
             let mut deq_blocks: Vec<[i32; 16]> = Vec::with_capacity(16);
