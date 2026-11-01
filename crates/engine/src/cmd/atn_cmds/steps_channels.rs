@@ -54,14 +54,15 @@ pub(super) fn trap_from(d: &Descriptor) -> Mapped {
     }
 }
 
-/// `Wdth` is always written: the command traps 1 px when the step leaves the width out.
+/// `Wdth` is always written: the command traps 1 px when the step leaves the width out. A
+/// width above `MAX_TRAP` refuses the step rather than being clamped to another value.
 pub(super) fn trap_to(_: &str, p: &Value) -> Option<Descriptor> {
     if !sets_only(p, &["width"]) {
         return None;
     }
     let width = match p.get("width") {
         None | Some(Value::Null) => 1.0,
-        Some(v) => v.as_f64().filter(|n| n.is_finite())?,
+        Some(v) => v.as_f64().filter(|n| n.is_finite() && *n <= MAX_TRAP)?,
     };
     Some(desc("null").with("Wdth", px(width)))
 }

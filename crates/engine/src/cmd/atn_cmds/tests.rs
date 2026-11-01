@@ -3266,3 +3266,12 @@ fn channel_and_color_steps_that_cannot_be_written_are_refused() {
     }
     assert!(export_item("image.adjustments.matchColor", &json!({"neutralize": false}), "S").is_some());
 }
+
+/// A Trap width above the 32767 px the import clamps to refuses the step instead of writing a
+/// `Wdth` Photoshop doesn't take (#10609).
+#[test]
+fn trap_wider_than_photoshop_takes_is_refused() {
+    assert!(export_item("image.trap", &json!({"width": 32768}), "S").is_none());
+    let d = export_item("image.trap", &json!({"width": 32767}), "S").unwrap().descriptor.unwrap();
+    assert_eq!(d.items, desc("null").with("Wdth", px(32767.0)).items);
+}
