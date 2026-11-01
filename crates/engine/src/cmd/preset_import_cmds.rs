@@ -126,16 +126,33 @@ fn import_abr(s: &mut Session, p: &Value) -> Result<Value> {
     )
 }
 
-/// Add imported `presets` as `group` under names not in use: a group of the same name is
-/// replaced unless `replace` is false, and `select` makes the first one current. Their names.
-fn add_presets(s: &mut Session, p: &Value, cmd: &str, group: &str, mut presets: Vec<photocraft_paint::BrushPreset>) -> Result<Vec<String>> {
-    // Re-importing a file replaces its group instead of duplicating it.
-    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(true);
+/// `name`, or `name (2)`, `name (3)`… when `taken` says it is in use.
+fn free_group(name: &str, taken: impl Fn(&str) -> bool) -> String {
+    if !taken(name) {
+        return name.to_string();
+    }
+    (2..=u32::MAX).map(|i| format!("{name} ({i})")).find(|g| !taken(g)).unwrap_or_else(|| name.to_string())
+}
+
+/// Add imported `presets` under names not in use. A file whose name matches a group already in
+/// the library becomes a new group beside it, as in Photoshop, unless `replace` asks to drop that
+/// group's own presets: the group name is only the file name, and the library is outside document
+/// history (#10640). `select` makes the first one current. The group they joined, and their names.
+fn add_presets(s: &mut Session, p: &Value, cmd: &str, group: String, mut presets: Vec<photocraft_paint::BrushPreset>) -> Result<(String, Vec<String>)> {
+    let replace = p.get("replace").and_then(Value::as_bool).unwrap_or(false);
+    let group = if replace {
+        group
+    } else {
+        // One pass over the library, not one per numbered candidate.
+        let groups: std::collections::HashSet<&str> = s.tools.presets.iter().map(|x| x.group.as_str()).collect();
+        free_group(&group, |g| groups.contains(g))
+    };
     let replaced = |x: &photocraft_paint::BrushPreset| replace && !x.builtin && x.group == group;
     let mut taken = UniqueNames::new(s.tools.presets.iter().filter(|x| !replaced(x)).map(|x| x.name.as_str()));
     let names: Vec<String> = presets
         .iter_mut()
         .map(|preset| {
+            preset.group.clone_from(&group);
             preset.name = taken.unique(&preset.name);
             preset.name.clone()
         })
@@ -158,11 +175,11 @@ fn add_presets(s: &mut Session, p: &Value, cmd: &str, group: &str, mut presets: 
         s.tools.current_preset = Some(name);
         s.tools.brush_changed();
     }
-    Ok(names)
+    Ok((group, names))
 }
 
 fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io::abr_map::AbrImport) -> Result<Value> {
-    let names = add_presets(s, p, "brush.presets.importAbr", &group, imp.presets)?;
+    let (group, names) = add_presets(s, p, "brush.presets.importAbr", group, imp.presets)?;
     // Distinct folder paths the file brought (its Photoshop folders, nested inside `group`).
     let folders: std::collections::BTreeSet<&[String]> =
         s.tools.presets.iter().filter(|x| !x.builtin && x.group == group).flat_map(|x| (1..=x.folder.len()).filter_map(|d| x.folder.get(..d))).collect();
@@ -188,18 +205,15 @@ fn import_procreate(s: &mut Session, p: &Value) -> Result<Value> {
                 None => Some(stem).filter(|s| !s.is_empty()),
             };
             ctx.check()?;
-            let mut imp = ctx
+            let imp = ctx
                 .stage(0.05, 1.0, "Importing brushes", |ctl| photocraft_io::procreate::read_procreate_with(&bytes, "", ctl))
                 .map_err(|e| if ctx.cancelled() { EngineError::Cancelled } else { bad(cmd, e) })?;
             // Data without a file name: the set's own name, if it has one.
             let group = group.or_else(|| imp.set_name.clone().filter(|n| !n.trim().is_empty())).unwrap_or_else(|| "Procreate Brushes".to_string());
-            for preset in &mut imp.presets {
-                preset.group.clone_from(&group);
-            }
             Ok((group, imp))
         },
         move |s, (group, imp)| {
-            let names = add_presets(s, &params_apply, cmd, &group, imp.presets)?;
+            let (group, names) = add_presets(s, &params_apply, cmd, group, imp.presets)?;
             Ok(json!({ "group": group, "imported": names, "count": names.len(), "warnings": imp.warnings }))
         },
     )
@@ -302,7 +316,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Brushes…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".abr file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=true (replace a group of the same name),"select":bool=false (make the first imported preset current)} → {group, imported, count, folders (nested folders kept from the file), version, warnings}"##,
+            params: r##"{"path":".abr file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=false (first delete the non-built-in presets of a group of the same name; false imports beside it as <group> (2)),"select":bool=false (make the first imported preset current)} → {group, imported, count, folders (nested folders kept from the file), version, warnings}"##,
             enabled: always,
             run: import_abr,
             journal: true,
@@ -312,7 +326,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Procreate Brushes…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".brush or .brushset file"?,"data":base64 bytes?,"group":string?=file name (with data: the set's name),"replace":bool=true (replace a group of the same name),"select":bool=false (make the first imported preset current)} → {group, imported, count, warnings (missing parts and Procreate settings left out)}"##,
+            params: r##"{"path":".brush or .brushset file"?,"data":base64 bytes?,"group":string?=file name (with data: the set's name),"replace":bool=false (first delete the non-built-in presets of a group of the same name; false imports beside it as <group> (2)),"select":bool=false (make the first imported preset current)} → {group, imported, count, warnings (missing parts and Procreate settings left out)}"##,
             enabled: always,
             run: import_procreate,
             journal: true,
@@ -332,7 +346,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Gradients…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".grd file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=true (replace a group of the same name)}"##,
+            params: r##"{"path":".grd file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=false (first delete a group of the same name; false imports beside it as <group> (2))} → {group, imported, count, warnings}"##,
             enabled: always,
             run: import_grd,
             journal: true,
@@ -431,9 +445,13 @@ fn import_grd(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let names: Vec<String> = items.iter().map(|g| g.name.clone()).collect();
     let st = &mut s.presets;
-    if p.get("replace").and_then(Value::as_bool).unwrap_or(true) {
+    // As with brushes: a new group beside one of the same name unless `replace` (#10640).
+    let group = if p.get("replace").and_then(Value::as_bool).unwrap_or(false) {
         st.gradients.retain(|g| g.name != group);
-    }
+        group
+    } else {
+        free_group(&group, |g| st.gradients.iter().any(|x| x.name == g))
+    };
     st.gradients.push(Group::new(&group, items));
     s.presets_changed();
     Ok(json!({"group": group, "imported": names, "count": names.len(), "warnings": warnings}))
@@ -475,8 +493,8 @@ mod tests {
         assert_eq!(s.tools.presets.len(), before + 2);
         assert!(s.tools.presets.iter().filter(|p| p.group == "Legacy").all(|p| !p.builtin));
         assert!(matches!(s.tools.brush.tip, photocraft_paint::TipShape::Sampled(_)));
-        // Re-import replaces the group.
-        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy"})).unwrap();
+        // Re-import with `replace` replaces the group.
+        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "replace": true})).unwrap();
         assert_eq!(s.tools.presets.len(), before + 2);
         // Imported presets paint.
         s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
@@ -493,6 +511,40 @@ mod tests {
         let r = s.execute("brush.presets.importAbr", json!({"path": path.to_string_lossy()})).unwrap();
         assert_eq!((r["group"].as_str(), r["imported"][0].as_str(), r["version"].as_u64()), (Some("My Set"), Some("Speckle"), Some(6)));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Importing a file named like an existing group keeps that group's brushes, edited or moved
+    /// in ones included: the new brushes become "Kit (2)", "Kit (3)"… Only `replace` drops them (#10640).
+    #[test]
+    fn reimport_keeps_the_groups_brushes_unless_replace() {
+        let mut s = Session::new();
+        let data = photocraft_paint::tile::b64_encode(&abr_v2());
+        let builtin = s.tools.presets.iter().filter(|p| p.builtin).count();
+        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Kit"})).unwrap();
+        // The user's own brush moved into the group.
+        let mut own = s.tools.presets.iter().find(|p| p.group == "Kit").unwrap().clone();
+        own.name = "My Ink".into();
+        s.tools.presets.push(own);
+        let r = s.execute("brush.presets.importAbr", json!({"data": data, "group": "Kit"})).unwrap();
+        assert_eq!(r["group"], "Kit (2)");
+        let in_group = |s: &Session, g: &str| s.tools.presets.iter().filter(|p| p.group == g).count();
+        assert_eq!((in_group(&s, "Kit"), in_group(&s, "Kit (2)")), (3, 2));
+        let r = s.execute("brush.presets.importAbr", json!({"data": data, "group": "Kit", "replace": false})).unwrap();
+        assert_eq!(r["group"], "Kit (3)");
+        assert!(s.tools.presets.iter().any(|p| p.name == "My Ink" && p.group == "Kit"));
+        // `replace` drops only that group's non-built-in presets.
+        let r = s.execute("brush.presets.importAbr", json!({"data": data, "group": "Kit", "replace": true})).unwrap();
+        assert_eq!(r["group"], "Kit");
+        assert_eq!((in_group(&s, "Kit"), in_group(&s, "Kit (2)"), in_group(&s, "Kit (3)")), (2, 2, 2));
+        assert!(!s.tools.presets.iter().any(|p| p.name == "My Ink"));
+        assert_eq!(s.tools.presets.iter().filter(|p| p.builtin).count(), builtin);
+    }
+
+    #[test]
+    fn free_group_numbers_past_taken_names() {
+        let taken = ["Kit", "Kit (2)"];
+        assert_eq!(free_group("Set", |g| taken.contains(&g)), "Set");
+        assert_eq!(free_group("Kit", |g| taken.contains(&g)), "Kit (3)");
     }
 
     #[test]
@@ -539,8 +591,8 @@ mod tests {
         assert_eq!(s.tools.presets.len(), before + 2);
         assert!(matches!(s.tools.brush.tip, photocraft_paint::TipShape::Sampled(_)), "the first brush is current");
         assert!((s.tools.brush.size - 20.0).abs() < 1e-3);
-        // Re-import replaces the group.
-        s.execute("brush.presets.importProcreate", json!({"data": data})).unwrap();
+        // Asked to, a re-import replaces the group.
+        s.execute("brush.presets.importProcreate", json!({"data": data, "replace": true})).unwrap();
         assert_eq!(s.tools.presets.len(), before + 2);
         s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
         s.execute("paint.stroke", json!({"points": [[5, 30], [60, 30]], "preset": "Soft Ink"})).unwrap();
@@ -550,6 +602,43 @@ mod tests {
         let r = s.execute("brush.presets.importProcreate", json!({"path": path.to_string_lossy()}));
         let _ = std::fs::remove_file(&path);
         assert_eq!(r.unwrap()["group"], format!("pc-procreate-{}", std::process::id()));
+    }
+
+    /// #10640: a second import of a file never drops the group's brushes on its own.
+    #[test]
+    fn procreate_reimport_keeps_the_groups_brushes_unless_replace() {
+        const CMD: &str = "brush.presets.importProcreate";
+        let mut s = Session::new();
+        let data = photocraft_paint::tile::b64_encode(&procreate_set());
+        let in_group = |s: &Session, g: &str| s.tools.presets.iter().filter(|p| p.group == g).count();
+        let r = s.execute(CMD, json!({"data": data, "group": "Kit"})).unwrap();
+        assert_eq!(r["group"], "Kit");
+        let edited = s.tools.presets.iter_mut().find(|p| p.group == "Kit").unwrap();
+        edited.brush.size = 77.0;
+        let edited = edited.name.clone();
+        let size = |s: &Session| photocraft_paint::presets::find(&s.tools.presets, &edited).map(|p| p.brush.size);
+
+        let r = s.execute(CMD, json!({"data": data, "group": "Kit"})).unwrap();
+        assert_eq!(r["group"], "Kit (2)");
+        assert_eq!((in_group(&s, "Kit"), in_group(&s, "Kit (2)")), (2, 2));
+        assert_eq!(size(&s), Some(77.0), "the first import is untouched");
+        let names = r["imported"].as_array().unwrap();
+        assert!(names.iter().all(|n| n.as_str() != Some(edited.as_str())), "{names:?}");
+        // The name it landed under, for `select` as for the rest.
+        let r = s.execute(CMD, json!({"data": data, "group": "Kit", "select": true})).unwrap();
+        assert_eq!(r["group"], "Kit (3)");
+        let current = s.tools.current_preset.clone().unwrap();
+        assert_eq!(photocraft_paint::presets::find(&s.tools.presets, &current).unwrap().group, "Kit (3)");
+
+        let r = s.execute(CMD, json!({"data": data, "group": "Kit", "replace": true})).unwrap();
+        assert_eq!(r["group"], "Kit");
+        assert_eq!((in_group(&s, "Kit"), in_group(&s, "Kit (2)"), in_group(&s, "Kit (3)")), (2, 2, 2));
+        assert_ne!(s.tools.presets.iter().find(|p| p.group == "Kit").map(|p| p.brush.size), Some(77.0), "replace dropped the edit");
+        // A built-in group's brushes survive `replace`.
+        let builtin = s.tools.presets.iter().find(|p| p.builtin).map(|p| p.group.clone()).unwrap();
+        let before = in_group(&s, &builtin);
+        s.execute(CMD, json!({"data": data, "group": builtin, "replace": true})).unwrap();
+        assert_eq!(in_group(&s, &builtin), before + 2);
     }
 
     #[test]
@@ -625,10 +714,14 @@ mod tests {
         let g = s.presets.gradients.iter().find(|g| g.name == "Fire").unwrap();
         assert_eq!(g.items[0].stops, vec![(0.0, StopColor::Foreground), (1.0, StopColor::Rgb([1.0, 0.0, 0.0]))]);
         assert_eq!(g.items[0].opacity, vec![(0.0, 1.0), (1.0, 0.0)]);
-        // Re-import replaces the group.
+        // Re-import adds a group beside it (#10640); with `replace` it replaces the group.
         let n = s.presets.gradients.len();
-        s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire"})).unwrap();
-        assert_eq!(s.presets.gradients.len(), n);
+        let r = s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire"})).unwrap();
+        assert_eq!(r["group"], "Fire (2)");
+        assert_eq!(s.presets.gradients.len(), n + 1);
+        s.execute("gradient.presets.importGrd", json!({"data": data, "group": "Fire", "replace": true})).unwrap();
+        assert_eq!(s.presets.gradients.len(), n + 1);
+        assert_eq!(s.presets.gradients.iter().filter(|g| g.name == "Fire").count(), 1);
         for p in [json!({}), json!({"data": "@@"}), json!({"data": photocraft_paint::tile::b64_encode(b"8BGR\0\x03")}), json!({"path": "/nope.grd"})] {
             assert!(s.execute("gradient.presets.importGrd", p.clone()).is_err(), "{p}");
         }
