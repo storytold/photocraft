@@ -12,6 +12,7 @@
 //! `--hardware-filtering` respects texture samplers; the default predictable renderer forces bilinear filtering.
 //! `--wayland-notice` previews the native file drag-and-drop guidance shown in Wayland sessions.
 //! `--update-notice` previews a newer release without contacting the network.
+//! `--update-problem` previews the window that says why the last self-update failed.
 //! `--custom-titlebar` draws the Windows/Linux title bar (caption buttons in the top bar).
 //!
 //! `--monitor 1366x768 --window-top 31` simulates the display the window is on (in points) and
@@ -42,6 +43,7 @@ fn main() {
     let scale: f32 = arg(&args, "--scale").and_then(|s| s.parse().ok()).unwrap_or(2.0);
     let wayland_notice = args.iter().any(|a| a == "--wayland-notice");
     let update_notice = args.iter().any(|a| a == "--update-notice");
+    let update_problem = args.iter().any(|a| a == "--update-problem");
     let script: Vec<(String, Value)> =
         arg(&args, "--script").map(|s| serde_json::from_str::<Vec<(String, Value)>>(&s).expect("--script must be [[method, params], …]")).unwrap_or_default();
 
@@ -86,6 +88,7 @@ fn main() {
             let mut services = services;
             services.is_wayland = wayland_notice;
             services.xwayland_command = wayland_notice.then(|| "WAYLAND_DISPLAY= photocraft".into());
+            services.update_failure = update_problem.then(|| r"Access is denied. (os error 5): C:\Program Files\ArtCraft\PhotoCraft".into());
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
             if update_notice {
                 app.session.updates.status = photocraft_engine::updates_cmds::Status::Available {
