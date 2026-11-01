@@ -751,3 +751,22 @@ fn perspective_warp_warps_the_layer_whatever_the_target() {
     assert_ne!(plain, pixels, "the layer is warped");
     assert!(run(&targeted) == (plain, mask), "a mask target changes nothing");
 }
+
+/// FredApps on #10469: with an alpha channel targeted in the Channels panel over a pixel layer, the
+/// Camera Raw Filter filters the channel and leaves the layer's pixels.
+#[test]
+fn camera_raw_filters_an_alpha_channel_targeted_in_the_channels_panel() {
+    let raw = crate::lens_cmds::RAW;
+    let mut s = session(8);
+    s.execute("select.rect", json!({"x": 20, "y": 15, "width": 30, "height": 20})).unwrap();
+    s.execute("select.saveSelection", json!({})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("channel.target", json!({"channel": 0})).unwrap();
+    let alpha = |s: &Session| s.active().unwrap().doc.channels[0].surface.read_region(s.active().unwrap().doc.bounds());
+    let (pixels, before) = (active_surface(&s), alpha(&s));
+    assert!(s.is_enabled(raw), "enabled on the targeted channel: {:?}", s.disabled_reason(raw));
+    s.execute(raw, json!({"exposure": -1.5})).unwrap();
+    assert_eq!(active_surface(&s), pixels, "the layer's pixels are untouched");
+    assert_ne!(alpha(&s), before, "the alpha channel is filtered");
+}
+
