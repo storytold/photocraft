@@ -3551,3 +3551,14 @@ curves	Smooth	تنعيم
 	Top Right Radius:	أعلى اليمين نصف القطر:
 	Bottom Left Radius:	أسفل اليسار نصف القطر:
 	Bottom Right Radius:	أسفل اليمين نصف القطر:
+	PhotoCraft Updates	تحديثات PhotoCraft
+	Installed version: {version}	الإصدار المثبت: {version}
+	Checking for updates…	جارٍ البحث عن تحديثات…
+	PhotoCraft {version} is available.	PhotoCraft {version} متوفر.
+	Update and Restart	تحديث وإعادة التشغيل
+	Release Notes	ملاحظات الإصدار
+	Open Download Page	فتح صفحة التنزيل
+	PhotoCraft is up to date.	PhotoCraft محدّث إلى أحدث إصدار.
+	Could not check for updates.	تعذّر البحث عن تحديثات.
+	Updates have not been checked yet.	لم يتم التحقق من التحديثات بعد.
+	Check Again	التحقق مرة أخرى
