@@ -195,17 +195,24 @@ fn gradient_map_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
                     for g in &cx.gradients {
                         ui.label(RichText::new(&g.name).color(t.text_faint));
                         for p in &g.items {
-                            ui.horizontal(|ui| {
-                                // A map has no transparency: colour stops only, shown opaque.
-                                let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
-                                let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
-                                crate::preset_panels::paint_gradient(ui, r, &rgba);
-                                // Both, not short-circuited: the name is drawn either way.
-                                let name = ui.selectable_label(false, &p.name);
-                                if press.chosen(ui, &swatch) | press.chosen(ui, &name) {
-                                    picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
-                                }
-                            });
+                            // The row mirrors with the direction: the swatch at the reading
+                            // start, the name after it (a plain `ui.horizontal` would keep the
+                            // swatch at the popup's left edge in a right-to-left UI).
+                            ui.allocate_ui_with_layout(
+                                egui::vec2(ui.available_size_before_wrap().x, 20.0),
+                                crate::direction::row(),
+                                |ui| {
+                                    // A map has no transparency: colour stops only, shown opaque.
+                                    let rgba: Vec<(f32, [f32; 4])> = p.resolve(fg, bg).into_iter().map(|(at, c)| (at, [c[0], c[1], c[2], 1.0])).collect();
+                                    let (r, swatch) = ui.allocate_exact_size(vec2(48.0, 16.0), Sense::click());
+                                    crate::preset_panels::paint_gradient(ui, r, &rgba);
+                                    // Both, not short-circuited: the name is drawn either way.
+                                    let name = ui.selectable_label(false, &p.name);
+                                    if press.chosen(ui, &swatch) | press.chosen(ui, &name) {
+                                        picked = Some(rgba.iter().map(|(at, c)| (*at, [c[0], c[1], c[2]])).collect::<Vec<Stop>>());
+                                    }
+                                },
+                            );
                         }
                     }
                 });
