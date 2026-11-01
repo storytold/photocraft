@@ -124,7 +124,7 @@ pub fn body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Valu
 fn body_blocks(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>, id: u64) {
     let t = Tokens::get(ui.ctx());
     if statistics(f) {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.label(tl!("Choose Stack Mode:"));
             let mut mode = f.get("mode").and_then(Value::as_str).unwrap_or("median").to_string();
             let options: Vec<_> = photocraft_doc::StackMode::ALL.iter().map(|m| (m.id().to_string(), m.label())).collect();
@@ -136,7 +136,7 @@ fn body_blocks(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, V
     }
     ui.label(RichText::new(tl!("Source Files")).font(crate::theme::semibold(13.0)));
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(tl!("Use:"));
         let mut mode = usize::from(folder_mode(f));
         let options = [(0, tl!("Files")), (1, tl!("Folder"))];
