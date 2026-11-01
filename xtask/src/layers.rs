@@ -66,6 +66,9 @@ pub const TABLE: &[(&str, Class)] = &[
     ("ui-egui", Class::Layer(6)),
     ("automation", Class::Layer(6)),
     ("platform", Class::Layer(6)),
+    // .pcraft bundles on S3-compatible storage (#3163): a network client, so above the core and
+    // wasm crates (empty on wasm32).
+    ("s3", Class::Layer(6)),
     ("testkit", Class::Testkit),
     // L7 apps and tooling
     ("photocraft", Class::Exempt),

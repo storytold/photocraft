@@ -2,6 +2,7 @@
 
 mod analysis;
 mod autosave;
+mod bundle_store;
 mod common;
 mod corruption;
 mod directory_symlinks;

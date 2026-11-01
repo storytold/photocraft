@@ -5366,6 +5366,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "photocraft-s3"
+version = "0.17.0"
+dependencies = [
+ "chrono",
+ "log",
+ "photocraft-color",
+ "photocraft-doc",
+ "photocraft-format",
+ "photocraft-raster",
+ "sha2",
+ "ureq",
+]
+
+[[package]]
 name = "photocraft-tablet"
 version = "0.19.0"
 dependencies = [
