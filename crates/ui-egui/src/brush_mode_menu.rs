@@ -352,14 +352,23 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &Context) {
     let height = content.min((screen.height() - margin.y).max(0.0));
     let width = (screen.width() - margin.x).clamp(0.0, 190.0);
     let size = ctx.memory(|m| m.area_rect(id)).map_or(egui::vec2(width + margin.x, height + margin.y), |r| r.size());
-    let pos = egui::pos2(x.min(screen.right() - size.x).max(screen.left()), y.min(screen.bottom() - size.y).max(screen.top()));
+    // Under RTL the popup grows leftward from the anchor (its right edge sits at the anchor, the
+    // Area's pivot), like every other context menu; LTR keeps the default rightward growth.
+    let (pivot, pos) = if crate::direction::is_rtl() {
+        (egui::Align2::RIGHT_TOP, egui::pos2(x.min(screen.right()).max(screen.left() + size.x), y.min(screen.bottom() - size.y).max(screen.top())))
+    } else {
+        (egui::Align2::LEFT_TOP, egui::pos2(x.min(screen.right() - size.x).max(screen.left()), y.min(screen.bottom() - size.y).max(screen.top())))
+    };
     let mut picked = None;
-    let area = egui::Area::new(id).order(egui::Order::Foreground).fixed_pos(pos).constrain_to(screen).show(ctx, |ui| {
+    let area = egui::Area::new(id).order(egui::Order::Foreground).pivot(pivot).fixed_pos(pos).constrain_to(screen).show(ctx, |ui| {
         let t = Tokens::get(ctx);
         egui::Frame::menu(ui.style()).fill(t.card).stroke(egui::Stroke::new(1.0, t.card_border)).show(ui, |ui| {
             ui.set_width(width);
             ui.spacing_mut().item_spacing.y = 0.0;
-            crate::widgets::menu_scroll(ui, |ui| {
+            // The Area body has no direction of its own; scope it like a window body so the
+            // rows hug the reading-start edge in a right-to-left UI (LTR unchanged).
+            ui.with_layout(crate::direction::body_layout(), |ui| crate::widgets::menu_scroll(ui, |ui| {
+                let rtl = ui.style().right_to_left;
                 for (item, on) in rows {
                     let Some(label) = item.label() else {
                         ui.separator();
@@ -368,17 +377,106 @@ pub(crate) fn show(app: &mut PhotocraftApp, ctx: &Context) {
                     let selected = Some(item) == current;
                     let color = if selected && t.bevel { t.accent_text } else { t.text };
                     let text = if on { egui::RichText::new(tl!(label)).color(color) } else { egui::RichText::new(tl!(label)) };
-                    let row = egui::Button::selectable(selected, text).min_size(egui::vec2(width, 22.0));
+                    let row = crate::menu_keys::menu_row_button_atom(text.into(), None, rtl).selected(selected).min_size(egui::vec2(width, 22.0));
                     if ui.add_enabled(on, row).clicked() {
                         picked = Some(item);
                     }
                 }
-            });
+            }));
         });
     });
     if let Some(item) = picked {
         choose(app, ctx, item);
     } else if crate::canvas_popup::outside_pressed(ctx, id, area.response.rect) {
         close(app);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+
+    fn app() -> PhotocraftApp {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app
+    }
+
+    /// Twin: under RTL the brush mode menu's rows anchor at the popup's right (reading-start)
+    /// edge, under LTR at its left. The real style flag is set, as the theme does in production.
+    #[test]
+    fn brush_mode_menu_rows_anchor_at_the_reading_start_edge() {
+        let run = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let ctx = Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut app = app();
+            app.ui.tool = Tool::Brush;
+            app.ui.brush_mode_menu = Some([100.0, 100.0]);
+            app.ui.brush_mode_menu_tool = Some(Tool::Brush);
+            let want = tl!(Item::EditBrush.label().unwrap()).to_string();
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            // Two frames: the Area's first frame measures, the second paints the rows.
+            let mut out = ctx.run_ui(raw.clone(), |ui| show(&mut app, ui.ctx()));
+            out.textures_delta.clear();
+            let mut out = ctx.run_ui(raw, |ui| show(&mut app, ui.ctx()));
+            let area = ctx.memory(|m| m.area_rect(menu_id())).expect("the popup is shown");
+            let rect = out
+                .shapes
+                .iter()
+                .filter_map(|cs| match &cs.shape {
+                    egui::Shape::Text(ts) => Some((ts.galley.text().to_string(), cs.shape.visual_bounding_rect())),
+                    _ => None,
+                })
+                .find(|(t, _)| *t == want)
+                .map(|(_, r)| r);
+            out.textures_delta.clear();
+            (area, rect.expect("the Edit Brush row is painted"))
+        };
+        // Frame margin plus button padding: the label may sit this far from the popup edge.
+        let slack = 24.0;
+        let (area, rect) = run(Dir::Rtl);
+        assert!(area.right() - rect.right() < slack, "rtl: the label hugs the popup's right edge: {rect:?} in {area:?}");
+        let (area, rect) = run(Dir::Ltr);
+        assert!(rect.left() - area.left() < slack, "ltr: the label hugs the popup's left edge: {rect:?} in {area:?}");
+    }
+
+    /// Twin of the menu Area's placement: the anchor sits at the menu's left edge in LTR
+    /// (LEFT_TOP pivot) and at its right edge in RTL (RIGHT_TOP pivot), with the same size both
+    /// ways (a pointer past the screen edge clamps through the anchor, not the corner).
+    #[test]
+    fn brush_mode_menu_area_pivots_at_the_anchor_under_rtl() {
+        let place = |dir: Dir, at: [f32; 2]| {
+            let _scope = direction_scope(dir);
+            let ctx = Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut app = app();
+            app.ui.tool = Tool::Brush;
+            app.ui.brush_mode_menu = Some(at);
+            app.ui.brush_mode_menu_tool = Some(Tool::Brush);
+            let raw = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            // Two frames: the Area's first frame measures, the second places it.
+            let mut out = ctx.run_ui(raw.clone(), |ui| show(&mut app, ui.ctx()));
+            out.textures_delta.clear();
+            let mut out = ctx.run_ui(raw, |ui| show(&mut app, ui.ctx()));
+            out.textures_delta.clear();
+            ctx.memory(|m| m.area_rect(menu_id())).expect("the popup is placed")
+        };
+        let at = [700.0, 100.0];
+        let ltr = place(Dir::Ltr, at);
+        let rtl = place(Dir::Rtl, at);
+        assert!((ltr.width() - rtl.width()).abs() < 1.0 && (ltr.height() - rtl.height()).abs() < 1.0, "the menu keeps its size both ways: {ltr:?} {rtl:?}");
+        assert!((ltr.left() - at[0].min(800.0 - ltr.width()).max(0.0)).abs() < 1.0, "ltr: the left edge hangs from the anchor: {ltr:?}");
+        assert!((rtl.right() - at[0].min(800.0).max(rtl.width())).abs() < 1.0, "rtl: the right edge hangs from the anchor: {rtl:?}");
+        let at = [799.5, 100.0];
+        let rtl = place(Dir::Rtl, at);
+        assert!(rtl.right() <= 800.01 && rtl.left() >= -0.01, "rtl: clamped to the screen: {rtl:?}");
     }
 }
