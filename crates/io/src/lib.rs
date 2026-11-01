@@ -573,7 +573,9 @@ fn import_stages(name: &str, bytes: &[u8], ctl: &photocraft_raster::Interrupt, o
             let document = photocraft_format::load_from_bytes(bytes)?;
             Ok(ImportResult { warnings: open_warnings(&document), document, source_read_only: false, preview_only: false })
         }
-        Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES), |want, recover| PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)),
+        Route::Psd | Route::NamedPsd => import_psd(name, ctl, damaged, opts.psd_max_pixel_bytes.min(DEFAULT_PSD_IMPORT_PIXEL_BYTES), |want, recover| {
+            PsdFile::from_bytes_and_merged_preflight(bytes, want, recover)
+        }),
         Route::Affinity => affinity::import(name, bytes),
         Route::Ora => ora::import(name, bytes, ctl),
         Route::Kra => kra::import(name, bytes, ctl),
