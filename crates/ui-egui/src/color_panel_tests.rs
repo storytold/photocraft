@@ -210,6 +210,25 @@ fn cmyk_sliders_keep_typed_values() {
     assert_eq!(shown.get(3).map(String::as_str), Some("20"), "K stays as typed: {shown:?}");
 }
 
+/// #9037: CMYK typed in the Color panel is the ink the foreground was picked as, so filling a
+/// CMYK document writes those inks instead of converting the sRGB stand-in back through the
+/// document profile (100 % K came out as a rich black, its exact inks set by the profile).
+#[test]
+fn cmyk_sliders_fill_a_cmyk_document_with_the_typed_inks() {
+    let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::CmykSliders, [1.0, 1.0, 1.0, 1.0]);
+    h.state_mut().run("file.new", json!({"width": 16, "height": 16, "mode": "cmyk", "background": "transparent"})).unwrap();
+    for (i, v) in ["0", "0", "0", "100"].iter().enumerate() {
+        type_into(&mut h, egui::accesskit::Role::SpinButton, i, v);
+    }
+    h.state_mut().run("edit.fill", json!({"contents": "foreground"})).unwrap();
+    let st = h.state().session.active().unwrap();
+    let inks = st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().pixel(5, 5);
+    assert!(
+        inks[..3].iter().all(|v| *v < 0.01) && (inks[3] - 1.0).abs() < 0.01,
+        "the typed 0/0/0/100 inks must fill as such: {inks:?}"
+    );
+}
+
 #[test]
 fn web_sliders_snap_and_take_hex() {
     let mut h = color_tab(ThemeKind::Classic, ColorPanelMode::WebColorSliders, [0.0, 0.0, 0.0, 1.0]);
