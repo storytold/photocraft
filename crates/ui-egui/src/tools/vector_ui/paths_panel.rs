@@ -30,6 +30,21 @@ pub enum PathRow {
     Work,
     /// The selected layer's shape path or vector mask (temporary, italic).
     Layer,
+    /// The selected type layer's Type Path, when it is type on a path (temporary, italic): its
+    /// own path, apart from the work or saved path it was made on (#10099).
+    TypePath,
+}
+
+impl PathRow {
+    /// The name path commands and `ui.selected_path` know the row by.
+    pub(crate) fn key(self, name: &str) -> String {
+        match self {
+            PathRow::Work => "work".to_string(),
+            PathRow::Layer => "layer".to_string(),
+            PathRow::TypePath => photocraft_engine::vector_cmds::TYPE_PATH.to_string(),
+            PathRow::Saved => name.to_string(),
+        }
+    }
 }
 
 /// A Paths panel row.
@@ -41,13 +56,19 @@ pub struct PathEntry {
 }
 
 /// The Paths panel's rows, top to bottom: saved paths, the work path, then the selected layer's
-/// shape path ("<Layer> Shape Path") or vector mask ("<Layer> Vector Mask"), like Photoshop.
+/// shape path ("<Layer> Shape Path"), Type Path ("<Layer> Type Path", type on a path) and vector
+/// mask ("<Layer> Vector Mask"), like Photoshop.
 pub fn path_rows(doc: &Document, active: Option<photocraft_doc::LayerId>) -> Vec<PathEntry> {
     let mut rows: Vec<_> = doc.paths.iter().map(|p| PathEntry { name: p.name.clone(), path: p.path.clone(), kind: PathRow::Saved }).collect();
     if let Some(wp) = &doc.work_path {
         rows.push(PathEntry { name: "Work Path".into(), path: wp.clone(), kind: PathRow::Work });
     }
     if let Some(l) = active.and_then(|id| doc.layer(id)) {
+        if let LayerContent::Text(t) = &l.content
+            && let Some(path) = photocraft_engine::type_extra_cmds::type_path(t)
+        {
+            rows.push(PathEntry { name: format!("{} Type Path", l.name), path, kind: PathRow::TypePath });
+        }
         let layer_path = match &l.content {
             LayerContent::Shape(sh) => Some((format!("{} Shape Path", l.name), sh.path.clone())),
             _ => l.vector_mask.as_ref().map(|v| (format!("{} Vector Mask", l.name), v.path.clone())),
@@ -115,11 +136,7 @@ fn rename_id(doc: &Document) -> egui::Id {
 /// right-click acts on that row even when another path is selected in the panel. `layer` is the
 /// layer a `PathRow::Layer` row belongs to (the active layer).
 pub(super) fn path_context_actions(entry: &PathEntry, doc: &Document, layer: Option<photocraft_doc::LayerId>) -> Vec<(&'static str, &'static str, Value)> {
-    let key = match entry.kind {
-        PathRow::Work => "work".to_string(),
-        PathRow::Layer => "layer".to_string(),
-        PathRow::Saved => entry.name.clone(),
-    };
+    let key = entry.kind.key(&entry.name);
     let mut actions = vec![
         ("Make Selection", "path.toSelection", json!({"name": key})),
         ("Fill Path", "path.fill", json!({"name": key})),
@@ -142,7 +159,9 @@ pub(super) fn path_context_actions(entry: &PathEntry, doc: &Document, layer: Opt
         // No `to`: the panel asks for the new name in place.
         actions.push(("Rename Path…", "path.rename", json!({"name": key})));
     }
-    if entry.kind != PathRow::Layer {
+    if entry.kind == PathRow::TypePath {
+        // The type's own path goes with the type, as in Photoshop: it is not deleted here.
+    } else if entry.kind != PathRow::Layer {
         actions.push(("Delete Path", "path.delete", json!({"name": key})));
     } else if entry.name.ends_with(" Vector Mask") {
         actions.push(("Delete Vector Mask", "layer.vectorMask.delete", json!({})));
@@ -163,6 +182,8 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let st_layer = st.active_layer;
     let rows = path_rows(&doc, st_layer);
     let has_layer_path = rows.iter().any(|r| r.kind == PathRow::Layer);
+    let type_path_key = photocraft_engine::vector_cmds::TYPE_PATH;
+    let has_type_path = rows.iter().any(|r| r.kind == PathRow::TypePath);
     let mut action: Option<(&str, Value)> = None;
     let mut stroke_dialog: Option<String> = None;
     // A row dragged onto the trash is deleted (#6553); a drag that never saw its release must not
@@ -189,15 +210,11 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     PathRow::Work => Some(("path.delete", json!({"name": "work"}))),
                     PathRow::Saved => Some(("path.delete", json!({"name": name}))),
                     PathRow::Layer if name.ends_with(" Vector Mask") => Some(("layer.vectorMask.delete", json!({}))),
-                    PathRow::Layer => None,
+                    PathRow::Layer | PathRow::TypePath => None,
                 };
                 let sense = if delete.is_some() { Sense::click_and_drag() } else { Sense::click() };
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 36.0), sense);
-                let key = match kind {
-                    PathRow::Work => "work".to_string(),
-                    PathRow::Layer => "layer".to_string(),
-                    PathRow::Saved => name.clone(),
-                };
+                let key = kind.key(name);
                 if resp.drag_started()
                     && let Some((cmd, params)) = delete
                 {
@@ -277,7 +294,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                 let proposed = match kind {
                     PathRow::Work => Some(free_path_name(&doc)),
                     PathRow::Saved => Some(name.clone()),
-                    PathRow::Layer => None,
+                    PathRow::Layer | PathRow::TypePath => None,
                 };
                 if !load
                     && resp.double_clicked()
@@ -324,7 +341,8 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     {
         crate::layer_transfer::ghost(&ctx, p, &drag.name);
     }
-    let sel = app.ui.selected_path.clone().filter(|s| s != "layer" || has_layer_path).unwrap_or_else(|| "work".into());
+    let sel =
+        app.ui.selected_path.clone().filter(|s| (s != "layer" || has_layer_path) && (s != type_path_key || has_type_path)).unwrap_or_else(|| "work".into());
     let buttons = crate::widgets::panel_footer(ui, |ui| {
         let fg = hex(app.session.tools.foreground);
         let mut n = doc.paths.len() + 1;
@@ -351,7 +369,9 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         for (icon, tip, cmd, p) in items.into_iter().rev() {
             let icon = if crate::icons::exists(icon) { icon } else { "square" };
             let b = crate::icons::button(ui, icon, 26.0, false, tip);
-            if b.clicked() {
+            // The Type Path goes with its type layer: the trash leaves it (#10099).
+            let kept = cmd == "path.delete" && sel == type_path_key;
+            if b.clicked() && !kept {
                 if cmd == "path.stroke" && ui.input(|i| i.modifiers.alt) {
                     // Alt-click opens the Stroke Path dialog, as in Photoshop (#2978).
                     stroke_dialog = Some(sel.clone());

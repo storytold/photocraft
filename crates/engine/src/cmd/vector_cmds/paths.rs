@@ -13,9 +13,12 @@ pub(crate) fn is_work(name: Option<&str>) -> bool {
     name.is_none_or(|n| n.is_empty() || n.eq_ignore_ascii_case("work") || n == "Work Path")
 }
 
+/// The name that targets the active type layer's Type Path (type on a path) in path commands.
+pub const TYPE_PATH: &str = "typePath";
+
 /// The path a command targets: `"work"`/absent → the work path (falling back to the active
 /// layer's shape path or vector mask when there is none), `"layer"` → the active layer's,
-/// otherwise a saved path by name.
+/// `"typePath"` → the active type layer's Type Path, otherwise a saved path by name.
 pub(super) fn resolve_path(s: &Session, name: Option<&str>) -> Result<Path> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     let layer_path = || -> Option<Path> {
@@ -27,6 +30,15 @@ pub(super) fn resolve_path(s: &Session, name: Option<&str>) -> Result<Path> {
     };
     if name == Some("layer") {
         return layer_path().ok_or_else(|| EngineError::Other("active layer has no shape path or vector mask".into()));
+    }
+    // Type on a path's own path, the Paths panel's "<Layer> Type Path" row (#10099).
+    if name == Some(TYPE_PATH) {
+        let l = d.active_layer.and_then(|id| d.doc.layer(id));
+        let path = l.and_then(|l| match &l.content {
+            LayerContent::Text(t) => crate::type_extra_cmds::type_path(t),
+            _ => None,
+        });
+        return path.ok_or_else(|| EngineError::Other("active layer is not type on a path".into()));
     }
     if is_work(name) {
         return d.doc.work_path.clone().or_else(layer_path).ok_or_else(|| EngineError::Other("no work path".into()));

@@ -304,11 +304,17 @@ pub(crate) fn candidates(app: &PhotocraftApp) -> Vec<(PathRef, Path)> {
                 out.push((PathRef::Layer(l.id.0), sh.path.clone()));
             }
         }
-        if !out.iter().any(|(r, _)| *r == PathRef::Work) {
+        if !out.iter().any(|(r, _)| *r == PathRef::Work) && !behind_type_path(app) {
             out.extend(st.doc.work_path.clone().map(|p| (PathRef::Work, p)));
         }
     }
     out
+}
+
+/// Is the work path behind the active type layer's Type Path, so neither drawn nor edited
+/// (#10099)? Then it is not even a fallback target.
+fn behind_type_path(app: &PhotocraftApp) -> bool {
+    crate::vector_ui::active_type_path(app).is_some() && !crate::vector_ui::work_path_shown(app)
 }
 
 /// Can `target` be edited: a layer's path only while the layer is not locked.

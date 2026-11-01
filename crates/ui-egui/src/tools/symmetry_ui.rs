@@ -202,6 +202,8 @@ pub fn menu(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                         PathRow::Saved => (row.name.clone(), row.name),
                         PathRow::Work => ("work".into(), tl!("Work Path").into()),
                         PathRow::Layer => ("layer".into(), row.name),
+                        // Symmetry follows document and shape paths, not a Type Path.
+                        PathRow::TypePath => continue,
                     };
                     let checked = current.as_ref().and_then(PaintingSymmetry::path_source) == Some(name.as_str());
                     if ui.add_enabled(crate::menus::is_enabled(app, "paint.symmetryFromPath"), egui::Button::selectable(checked, text)).clicked() {

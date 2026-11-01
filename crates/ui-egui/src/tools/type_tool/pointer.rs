@@ -331,7 +331,13 @@ pub fn pointer_up(app: &mut PhotocraftApp, start: [f64; 2], end: [f64; 2]) {
         let follow_up = match &target {
             Some(PathClick::Area { shape }) => app.run("type.fillPath", json!({"layer": id, "shape": shape, "coalesce": key})),
             Some(PathClick::OnPath { shape, subpath, start }) => {
-                app.run("type.attachToPath", json!({"layer": id, "shape": shape, "subpath": subpath, "start": start, "coalesce": key}))
+                let r = app.run("type.attachToPath", json!({"layer": id, "shape": shape, "subpath": subpath, "start": start, "coalesce": key}));
+                // The type has its own path now, the Paths panel's "<Layer> Type Path": it is the
+                // target path, and the path it was made on is left alone, as in Photoshop (#10099).
+                if r.is_ok() {
+                    app.ui.selected_path = Some(photocraft_engine::vector_cmds::TYPE_PATH.to_string());
+                }
+                r
             }
             None => Ok(serde_json::Value::Null),
         };

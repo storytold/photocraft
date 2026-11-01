@@ -9,14 +9,10 @@ use super::{Affine, Document, LayerContent, Path, PhotocraftApp, Tool, Value, js
 pub fn active_path_name(app: &PhotocraftApp) -> Option<String> {
     let st = app.session.active()?;
     let rows = path_rows(&st.doc, st.active_layer);
-    let key = |r: &PathEntry| match r.kind {
-        PathRow::Work => "work".to_string(),
-        PathRow::Layer => "layer".to_string(),
-        PathRow::Saved => r.name.clone(),
-    };
+    let key = |r: &PathEntry| r.kind.key(&r.name);
     let selected = app.ui.selected_path.as_deref().filter(|s| rows.iter().any(|r| key(r) == *s)).map(str::to_string);
     let work = rows.iter().find(|r| r.kind == PathRow::Work).filter(|_| work_path_shown(app)).map(key);
-    selected.or(work).or_else(|| rows.iter().find(|r| r.kind == PathRow::Layer).map(key))
+    selected.or(work).or_else(|| rows.iter().find(|r| matches!(r.kind, PathRow::Layer | PathRow::TypePath)).map(key))
 }
 
 /// The commands that create a fill or adjustment layer and take a `"path"` as its vector mask.
@@ -31,7 +27,7 @@ pub fn selected_document_path(app: &PhotocraftApp) -> Option<String> {
     let listed = path_rows(&st.doc, st.active_layer).iter().any(|r| match r.kind {
         PathRow::Work => sel == "work",
         PathRow::Saved => r.name == sel,
-        PathRow::Layer => false,
+        PathRow::Layer | PathRow::TypePath => false,
     });
     listed.then(|| sel.to_string())
 }
@@ -103,6 +99,12 @@ pub(crate) fn work_path_shown_in(app: &PhotocraftApp, doc: &Document) -> bool {
     let active = app.session.active().is_some_and(|st| st.doc.id == doc.id);
     if active && app.ui.selected_path.as_deref() == Some("work") {
         return true;
+    }
+    // Type on a path has its own Type Path, the target path while its layer is selected: the Work
+    // Path it was made from is not drawn beside it, as in Photoshop, until it is selected in the
+    // Paths panel (#10099).
+    if active && active_type_path(app).is_some() {
+        return false;
     }
     let Some((id, hidden)) = &app.ui.hidden_work_path else { return true };
     doc.id.0 != *id || doc.work_path.as_ref() != Some(hidden)
