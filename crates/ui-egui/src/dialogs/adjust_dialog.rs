@@ -208,7 +208,7 @@ fn picker_controls(ui: &mut egui::Ui, fields: &mut Map<String, Value>, mode: pho
     use photocraft_engine::adjust_params::CurvesEyedropper;
     let current = picker(fields.get(CURVE_PICKER));
     let mut chosen = None;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         let tokens = crate::theme::Tokens::get(ui.ctx());
         ui.label(egui::RichText::new(tl!("Eyedroppers:")).color(tokens.text_dim).size(12.0));
         // The swatch is the tone the picker maps the sample to (image data, like the Curves
@@ -571,5 +571,46 @@ mod rtl_tests {
         let rtl_label = rtl.get_by_label("Eyedroppers:").rect();
         assert!(ltr_label.left() - ltr_frame.left() < 40.0, "LTR: the label leads at the left: {ltr_label:?} {ltr_frame:?}");
         assert!(rtl_frame.right() - rtl_label.right() < 40.0, "RTL: the label leads at the right: {rtl_label:?} {rtl_frame:?}");
+    }
+}
+
+#[cfg(test)]
+mod rtl_row_twin {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::Queryable;
+
+    /// A Levels dialog drawn in `dir`, with its eyedropper row on screen.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, PhotocraftApp> {
+        let _dir = crate::direction::direction_scope(dir);
+        let mut session = photocraft_engine::Session::new();
+        session.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        let app = PhotocraftApp::new(session, crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        open(h.state_mut(), "image.adjustments.levels").unwrap();
+        h.run_steps(3);
+        h
+    }
+
+    /// The migrated eyedropper row keeps its LTR order and equal gaps, and mirrors both under RTL.
+    #[test]
+    fn the_eyedropper_row_keeps_ltr_gaps_and_mirrors_under_rtl() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let ltr_label = ltr.get_by_label("Eyedroppers:").rect();
+        let ltr_black = ltr.get_by_label("Set Black Point").rect();
+        let ltr_white = ltr.get_by_label("Set White Point").rect();
+        assert!(ltr_label.right() <= ltr_black.left() && ltr_black.left() < ltr_white.left(), "LTR order: {ltr_label:?} {ltr_black:?} {ltr_white:?}");
+        let ltr_gap = (ltr_black.left() - ltr_label.right()).min(ltr_white.left() - ltr_black.right());
+        let ltr_gap2 = (ltr_black.left() - ltr_label.right()).max(ltr_white.left() - ltr_black.right());
+        assert!((ltr_gap - ltr_gap2).abs() < 1.0, "LTR gaps equal: {ltr_gap} vs {ltr_gap2}");
+        let rtl_label = rtl.get_by_label("Eyedroppers:").rect();
+        let rtl_black = rtl.get_by_label("Set Black Point").rect();
+        let rtl_white = rtl.get_by_label("Set White Point").rect();
+        assert!(rtl_label.left() >= rtl_black.right() && rtl_black.left() > rtl_white.left(), "RTL mirrors: {rtl_label:?} {rtl_black:?} {rtl_white:?}");
+        let rtl_gap = (rtl_label.left() - rtl_black.right()).min(rtl_black.left() - rtl_white.right());
+        let rtl_gap2 = (rtl_label.left() - rtl_black.right()).max(rtl_black.left() - rtl_white.right());
+        assert!((rtl_gap - rtl_gap2).abs() < 1.0 && (ltr_gap - rtl_gap).abs() < 1.0, "gaps equal and mirrored: LTR {ltr_gap} RTL {rtl_gap}");
     }
 }
