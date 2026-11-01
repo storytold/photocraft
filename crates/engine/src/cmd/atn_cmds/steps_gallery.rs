@@ -35,6 +35,16 @@ impl G {
     }
 }
 
+/// The type Photoshop records an enumeration key with. Its terminology gives stroke direction
+/// its own type (`strokeDirectionType`); every other gallery enumeration's type is its key (Glass
+/// records `TxtT` / `TxtT`).
+fn enum_type(key: &'static str) -> &'static str {
+    match key {
+        "SDir" => "StrD",
+        k => k,
+    }
+}
+
 /// Photoshop's effect id (`GEfk`), the command, and the effect's keys in recorded order.
 /// Generated from the event reference's Group A tables; Glass maps only the textures whose
 /// codes the reference gives (Frosted, Canvas).
@@ -561,7 +571,7 @@ pub(super) fn gallery_to(id: &str, p: &Value) -> Option<Descriptor> {
                 }
                 D::Integer(n as i32)
             }
-            G::Enum(key, _, table, default) => enm(key, v.map_or(Some(*default), |v| v.as_str().and_then(|s| lookup_back(table, s)))?),
+            G::Enum(key, _, table, default) => enm(enum_type(key), v.map_or(Some(*default), |v| v.as_str().and_then(|s| lookup_back(table, s)))?),
             G::Bool(_, _, default) => D::Boolean(v.map_or(Some(*default), Value::as_bool)?),
             // The colour the effect replays with when the step names none is the session's, which
             // the event cannot record.

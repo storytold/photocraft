@@ -3316,3 +3316,24 @@ fn gallery_effect_steps_that_cannot_be_written_are_refused() {
     }
     assert!(export_item("filter.gallery.glass", &json!({"texture": "frosted"}), "S").is_some());
 }
+
+/// Each enumeration saves with the type Photoshop's terminology gives it: stroke direction's is
+/// `StrD`, not its key, and texture's is `TxtT`, as Photoshop records Glass (#10592).
+#[test]
+fn gallery_effect_enumerations_save_with_photoshops_type_ids() {
+    let enum_type = |id: &str, params: Value, key: &str| match export_item(id, &params, "S").unwrap().descriptor.unwrap().get(key) {
+        Some(D::Enumerated { type_id, .. }) => trimmed(type_id),
+        other => panic!("{id} {key}: {other:?}"),
+    };
+    assert_eq!(enum_type("filter.gallery.graphicPen", json!({}), "SDir"), "StrD");
+    assert_eq!(enum_type("filter.gallery.sprayedStrokes", json!({}), "SDir"), "StrD");
+    for id in ["filter.gallery.conteCrayon", "filter.gallery.glass", "filter.gallery.roughPastels", "filter.gallery.texturizer", "filter.gallery.underpainting"]
+    {
+        assert_eq!(enum_type(id, json!({}), "TxtT"), "TxtT", "{id}");
+    }
+    assert_eq!(enum_type("filter.gallery.basRelief", json!({}), "LghD"), "LghD");
+    assert_eq!(enum_type("filter.gallery.plaster", json!({}), "LghP"), "LghP");
+    assert_eq!(enum_type("filter.gallery.halftonePattern", json!({}), "ScrT"), "ScrT");
+    assert_eq!(enum_type("filter.gallery.paintDaubs", json!({}), "BrsT"), "BrsT");
+    assert_eq!(enum_type("filter.gallery.grain", json!({}), "Grnt"), "Grnt");
+}
