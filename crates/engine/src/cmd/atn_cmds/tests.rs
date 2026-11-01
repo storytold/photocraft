@@ -3402,3 +3402,35 @@ fn smart_sharpen_outside_the_commands_limits_is_kept_and_refused() {
         assert!(export_item("filter.sharpen.smartSharpen", &params, "S").is_none(), "{params} exported");
     }
 }
+
+/// Focus Area, Select Sky and Remove Background, mapped from the empty steps Photoshop records,
+/// play: each step runs its command on a red disc on a blue ground (#10610).
+#[test]
+fn newer_feature_selection_steps_play() {
+    let (w, h) = (96u32, 80u32);
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": w, "height": h})).unwrap();
+    s.edit("paint", |doc, _| {
+        let bg = doc.layers[0].surface_mut().unwrap();
+        let n = bg.channels();
+        let mut data = Vec::with_capacity((w * h) as usize * n);
+        for y in 0..h {
+            for x in 0..w {
+                let (dx, dy) = (x as f32 - 48.0, y as f32 - 40.0);
+                let c = if dx * dx + dy * dy <= 22.0 * 22.0 { [0.85, 0.2, 0.15] } else { [0.25, 0.45, 0.7] };
+                data.extend_from_slice(&c[..n.min(3)]);
+                if n == 4 {
+                    data.push(1.0);
+                }
+            }
+        }
+        bg.write_region(photocraft_geom::Rect::new(0, 0, w as i32, h as i32), &data);
+        Ok(())
+    })
+    .unwrap();
+    let steps = ["focusMask", "selectSky", "removeBackground"].map(|name| mapped(newer(name, desc("null"))));
+    s.actions.list.push(Action::new("Select", steps.to_vec()));
+    let played = s.execute("actions.play", json!({"action": "Select"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert_eq!(played["ran"], 3, "{played}");
+}
