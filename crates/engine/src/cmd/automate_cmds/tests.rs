@@ -450,6 +450,7 @@ fn droplets_preserve_batch_action_namespaces() {
             batch["action"] = json!("Source");
         }
         if kind == "caller-null" {
+            maker.actions.list[1].steps.push(("image.imageRotation.90cw".into(), json!({})));
             batch["calledActions"] = Value::Null;
         }
         let mut steps = Vec::new();
@@ -483,7 +484,7 @@ fn droplets_preserve_batch_action_namespaces() {
         let r = Session::new().execute("file.automate.runDroplet", json!({"droplet": path, "input": [input]})).unwrap();
         assert_eq!(r["errors"], json!([]), "{kind}: {r}");
         let out = photocraft_codecs::decode(&std::fs::read(format!("{inner}/img0.png")).unwrap()).unwrap();
-        assert_eq!(out.dimensions(), if kind == "caller-null" { (40, 20) } else { (20, 40) }, "{kind}");
+        assert_eq!(out.dimensions(), (20, 40), "{kind}");
         if kind == "mixed-two" {
             assert_eq!(photocraft_codecs::decode(&std::fs::read(format!("{other}/img0.png")).unwrap()).unwrap().dimensions(), (40, 20));
         }
