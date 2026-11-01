@@ -57,7 +57,7 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
 
 /// The New Snapshot dialog's fields.
 fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Name:"));
         let mut name = f.get("name").and_then(Value::as_str).unwrap_or_default().to_string();
         let mut r = crate::widgets::rtl_singleline_add(ui, &mut name, |e| e.desired_width(260.0));
@@ -74,7 +74,7 @@ fn body_fields(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
         f.insert("name".into(), json!(name));
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("From:"));
         let mut from = f.get("from").and_then(Value::as_str).unwrap_or("fullDocument").to_string();
         let opts = [
