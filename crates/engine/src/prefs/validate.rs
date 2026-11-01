@@ -45,7 +45,6 @@ pub const HIDDEN_UNTIL_IMPLEMENTED: &[&str] = &[
     "unitsAndRulers.gutter",
     "plugIns.showExtensionPanels",
     "plugIns.allowScriptsToConnect",
-    "type.textEngine",
     "enhancedControls.scrubbySliderAcceleration",
 ];
 
