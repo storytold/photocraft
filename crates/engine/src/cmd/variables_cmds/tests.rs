@@ -83,6 +83,33 @@ fn define_apply_visibility_and_text() {
     assert_eq!(text_of(&s, title), "Old");
 }
 
+/// #10128: as in Photoshop, one variable can drive several layers; applying a data set sets every
+/// one. A layer can't take the same variable twice, and the variable can't change type.
+#[test]
+fn one_variable_drives_every_layer_linked_to_it() {
+    let (mut s, photo, badge, _title) = session();
+    s.execute(
+        "image.variables.define",
+        json!({"defs": [
+            {"name": "show", "layer": badge.0, "type": "visibility"},
+            {"name": "show", "layer": photo.0, "type": "visibility"},
+        ]}),
+    )
+    .unwrap();
+    s.execute("image.variables.dataSets", json!({"dataSets": [{"name": "A", "values": [{"variable": "show", "kind": "visibility", "value": false}]}]}))
+        .unwrap();
+    s.execute("image.applyDataSet", json!({"name": "A"})).unwrap();
+    assert!(!doc(&s).layer(badge).unwrap().visible && !doc(&s).layer(photo).unwrap().visible, "both linked layers hidden");
+    // The list round-trips through define, as the Variables dialog does.
+    let listed = s.execute("variables.list", json!({})).unwrap();
+    s.execute("image.variables.define", json!({"defs": listed["defs"]})).unwrap();
+    assert_eq!(doc(&s).variables.defs.len(), 2);
+    let twice = json!({"defs": [{"name": "show", "layer": badge.0, "type": "visibility"}, {"name": "show", "layer": badge.0, "type": "visibility"}]});
+    assert!(s.execute("image.variables.define", twice).is_err(), "the same layer twice");
+    let retyped = json!({"defs": [{"name": "v", "layer": badge.0, "type": "visibility"}, {"name": "v", "layer": photo.0, "type": "pixelReplacement"}]});
+    assert!(s.execute("image.variables.define", retyped).is_err(), "one name, two types");
+}
+
 #[test]
 fn listed_pixel_methods_can_be_used_to_redefine_variables() {
     for method in ["fit", "fill", "asIs", "conform"] {

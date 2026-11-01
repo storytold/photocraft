@@ -148,8 +148,11 @@ fn decode_defs(xml: &str, by_psd_id: &HashMap<u32, LayerId>, warnings: &mut Vec<
         }
     };
     let mut defs: Vec<VariableDef> = Vec::new();
-    // Names already taken: the resource comes from the file, so lookups stay O(1) (#10128).
-    let mut seen: HashSet<&str> = HashSet::new();
+    // Bindings already taken, and each name's kind: the resource comes from the file, so lookups
+    // stay O(1) (#10128). Photoshop links several layers to one variable, so a name may repeat on
+    // other layers; it can't change type, since a data set's value is typed by the name.
+    let mut seen: HashSet<(&str, LayerId)> = HashSet::new();
+    let mut kinds: HashMap<&str, std::mem::Discriminant<VarKind>> = HashMap::new();
     let mut skipped = 0usize;
     for n in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "variable") {
         let Some(name) = n.attribute("varName").filter(|s| !s.is_empty()) else {
@@ -161,7 +164,8 @@ fn decode_defs(xml: &str, by_psd_id: &HashMap<u32, LayerId>, warnings: &mut Vec<
             skipped += 1;
             continue;
         };
-        if !seen.insert(name) {
+        let ty = std::mem::discriminant(&kind);
+        if *kinds.entry(name).or_insert(ty) != ty || !seen.insert((name, layer)) {
             skipped += 1;
             continue;
         }
@@ -308,11 +312,11 @@ fn defs_xml(defs: &[(&VariableDef, u32)]) -> String {
     x
 }
 
-fn sets_xml(sets: &[DataSet], written: &[&str]) -> String {
+fn sets_xml(sets: &[DataSet], written: &HashSet<&str>) -> String {
     let mut x = format!("<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<v:sampleDataSets xmlns:v=\"{NS_VARS}\" xmlns=\"{NS_CUSTOM}\">\n");
     for s in sets {
         x.push_str(&format!("<v:sampleDataSet dataSetName=\"{}\">\n", escape(&s.name)));
-        for dv in s.values.iter().filter(|v| written.contains(&v.variable.as_str())) {
+        for dv in s.values.iter().filter(|v| written.contains(v.variable.as_str())) {
             let body = match &dv.value {
                 Value::Visibility(b) => b.to_string(),
                 Value::Text(t) => t.split('\n').map(|line| format!("<p>{}</p>", escape(line))).collect(),
@@ -352,7 +356,7 @@ pub fn export_resources(doc: &Document, layer_ids: &HashMap<LayerId, u32>) -> (O
     if defs.is_empty() {
         return (Some(Vec::new()), warning);
     }
-    let written: Vec<&str> = defs.iter().map(|(d, _)| d.name.as_str()).collect();
+    let written: HashSet<&str> = defs.iter().map(|(d, _)| d.name.as_str()).collect();
     let mut out = vec![(VARIABLES, defs_xml(&defs).into_bytes())];
     if !doc.variables.data_sets.is_empty() {
         out.push((DATA_SETS, sets_xml(&doc.variables.data_sets, &written).into_bytes()));
@@ -436,6 +440,37 @@ mod tests {
         assert!(w.is_empty(), "{w:?}");
         assert_eq!(back.variables.defs, vec![VariableDef { name: "title".into(), layer: a, kind: VarKind::TextReplacement }]);
         assert_eq!(back.variables.data_sets[0].get("title"), Some(&Value::Text("Hello\nWorld".into())));
+    }
+
+    /// Photoshop links several layers to one variable: every binding survives import and a
+    /// re-save, so editing the variables doesn't drop the later layers from the file.
+    #[test]
+    fn a_variable_shared_by_two_layers_keeps_both_bindings() {
+        let (mut d, a, b, ids) = doc_with_layers();
+        d.variables = Variables {
+            defs: vec![
+                VariableDef { name: "show".into(), layer: a, kind: VarKind::Visibility },
+                VariableDef { name: "show".into(), layer: b, kind: VarKind::Visibility },
+            ],
+            data_sets: vec![DataSet { name: "Row".into(), values: vec![DataValue { variable: "show".into(), value: Value::Visibility(false) }] }],
+            active: None,
+        };
+        let (res, warning) = export_resources(&d, &ids);
+        assert!(warning.is_none());
+        let mut back = with_resources(&d, res.unwrap());
+        let w = import(&mut back);
+        assert!(w.is_empty(), "{w:?}");
+        assert_eq!(back.variables, d.variables);
+        // A repeated binding of one layer, or a second type for the name, is still refused.
+        let defs = "<variableSets xmlns=\"http://ns.adobe.com/Variables/1.0/\"><variableSet><variables>\
+            <variable varName=\"show\" trait=\"visibility\" docRef=\"id('12')\"/>\
+            <variable varName=\"show\" trait=\"visibility\" docRef=\"id('12')\"/>\
+            <variable varName=\"show\" trait=\"textcontent\" docRef=\"id('7')\"/>\
+            </variables></variableSet></variableSets>";
+        let mut back = with_resources(&d, vec![(VARIABLES, defs.as_bytes().to_vec())]);
+        let w = import(&mut back);
+        assert_eq!(back.variables.defs, vec![VariableDef { name: "show".into(), layer: a, kind: VarKind::Visibility }]);
+        assert_eq!(w.len(), 1, "{w:?}");
     }
 
     /// A file with many variables imports in linear time and keeps the first of each duplicate:

@@ -1773,7 +1773,9 @@ fn showing_the_classes_again_sizes_the_preview_header_at_once() {
     assert!(hidden[2..].iter().all(|w| (w - narrow).abs() < 1.0), "header widths after hiding the classes: {hidden:?}");
     for _ in 0..2 {
         let shown = widths_after(&mut h, "Show Font Classes");
-        assert!(shown[2..].iter().all(|w| (w - wide).abs() < 1.0), "header widths after showing the classes: {shown:?}, full {wide}");
+        // Shown again, the header is full width from the first frame the classes are drawn in
+        // (frame 1), not a step of a growth.
+        assert!(shown[1..].iter().all(|w| (w - wide).abs() < 1.0), "header widths after showing the classes: {shown:?}, full {wide}");
         let hidden = widths_after(&mut h, "Hide Font Classes");
         assert!(hidden[2..].iter().all(|w| (w - narrow).abs() < 1.0), "header widths after hiding the classes: {hidden:?}, narrow {narrow}");
     }
