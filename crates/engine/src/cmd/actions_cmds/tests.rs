@@ -1176,3 +1176,48 @@ fn arrange_that_cannot_move_is_a_noop_in_playback() {
     assert_eq!(played["ran"], 0, "{played}");
     assert!(played["failed"].is_object(), "{played}");
 }
+
+/// A deep route cannot consume the only visit to a dependency reachable near the root.
+#[test]
+fn called_actions_keeps_dependencies_reachable_by_a_shallow_route() {
+    let mut list = vec![Action::new("Leaf", Vec::new()), Action::new("Shared", vec![("actions.play".into(), json!({"action": "Leaf"}))])];
+    for i in 0..15 {
+        let next = if i == 14 { "Shared".to_string() } else { format!("D{}", i + 1) };
+        list.push(Action::new(format!("D{i}"), vec![("actions.play".into(), json!({"action": next}))]));
+    }
+    let mut steps = vec![("file.automate.batch".into(), json!({"action": "Shared"})), ("actions.play".into(), json!({"action": "D0"}))];
+    let called = called_actions(&list, &mut steps);
+    assert!(called.iter().any(|a| a.name == "Leaf"));
+    assert_eq!(called.len(), list.len());
+}
+
+/// Extra source copies cannot turn deferred missing indices into valid action calls.
+#[test]
+fn scoped_source_slots_do_not_bind_previously_missing_references() {
+    let list = vec![
+        Action::new("Leaf", Vec::new()),
+        Action::new("Shared", vec![("actions.play".into(), json!({"action": 0}))]),
+        Action::new("Bad", vec![("actions.play".into(), json!({"action": 3}))]),
+    ];
+    let mut steps = vec![
+        ("actions.play".into(), json!({"action": "Shared"})),
+        ("file.automate.batch".into(), json!({"action": "Shared", "calledActions": []})),
+        ("actions.play".into(), json!({"action": "Bad"})),
+    ];
+    for id in ["actions.play", "file.automate.batch"] {
+        for action in [json!(3), json!(3.25), json!(-1), json!("Missing"), json!(null)] {
+            steps.push((id.into(), json!({"action": action})));
+            if id == "file.automate.batch" {
+                steps.push((id.into(), json!({"action": action, "calledActions": []})));
+            }
+        }
+    }
+    let called = called_actions(&list, &mut steps);
+    assert_eq!(called.len(), 4);
+    assert_eq!(called.last(), list.get(1), "the raw source keeps its own indices");
+    for (id, params) in &steps[3..] {
+        assert!(resolve(&called, params, id).is_err(), "{id}: {params}");
+    }
+    let bad = called.iter().find(|a| a.name == "Bad").unwrap();
+    assert!(resolve(&called, &bad.steps[0].1, "actions.play").is_err());
+}
