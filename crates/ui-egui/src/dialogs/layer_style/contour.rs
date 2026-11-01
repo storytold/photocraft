@@ -701,6 +701,7 @@ mod grid_tests {
             let _dir = direction_scope(dir);
             let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 200.0)).build_ui_state(
                 |ui, rects: &mut Vec<egui::Rect>| {
+                    rects.clear();
                     crate::direction::ltr_grid(ui, "contour-presets-test", 4, vec2(4.0, 4.0), |ui| {
                         for _ in 0..4 {
                             let (r, _) = ui.allocate_exact_size(vec2(40.0, 40.0), Sense::click());
