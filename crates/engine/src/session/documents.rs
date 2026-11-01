@@ -108,7 +108,7 @@ impl Session {
         let active = self.open_document_order.iter().position(|&open| open == id).ok_or(EngineError::NoDocument)?;
         // Widen before addition so even extreme signed offsets wrap without overflow.
         let target = (active as i128 + i128::from(offset)).rem_euclid(self.open_document_order.len() as i128) as usize;
-        let id = &self.open_document_order[target];
+        let id = self.open_document_order.get(target).ok_or(EngineError::NoDocument)?;
         self.docs.iter().position(|st| st.doc.id == *id).ok_or(EngineError::NoDocument)
     }
 

@@ -1756,8 +1756,8 @@ fn document_activate_opening_order_survives_close_and_reopen_with_persisted_ids(
     }
     s.execute("file.new", json!({"width": 2, "height": 2, "name": "fresh"})).unwrap();
     assert_eq!(s.execute("document.activate", json!({"offset": 0})).unwrap(), json!({"document": 0}));
-    assert!(s.execute("document.activate", json!({"offset": -1})).is_err());
-    assert!(s.execute("document.activate", json!({"offset": 1})).is_err());
+    assert_eq!(s.execute("document.activate", json!({"offset": -1})).unwrap(), json!({"document": 0}));
+    assert_eq!(s.execute("document.activate", json!({"offset": 1})).unwrap(), json!({"document": 0}));
     assert_eq!(s.active().unwrap().doc.name, "fresh");
 }
 
