@@ -3048,51 +3048,64 @@ fn free_transform_moves_the_selected_path_not_pixels() {
     assert!(crate::vector_ui::free_transform_path(&app).is_none());
 }
 
-/// Edit › Transform › Warp on editable type (#3004), as in Photoshop: no rasterize prompt, no
-/// mesh to drag, only the warp styles; the commit is the type's own Warp Text, one step, and
-/// the layer stays type.
+/// Edit › Transform › Warp on editable type: no prompt (#3004). The style is its Warp Text as
+/// in Photoshop; beyond Photoshop a free mesh drag also commits on the live type, one step,
+/// and the layer stays type.
 #[test]
-fn warp_on_type_takes_a_style_and_keeps_the_type_editable() {
+fn warp_on_type_takes_a_style_or_a_free_drag_and_keeps_the_type_editable() {
     let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
     app.session.execute("file.new", json!({"width": 200, "height": 100})).unwrap();
     app.sync_views();
-    app.run("type.create", json!({"x": 10, "y": 60, "text": "Hello"})).unwrap();
+    app.run("type.create", json!({"x": 10, "y": 60, "text": "Hello", "size": 30})).unwrap();
     let ctx = egui::Context::default();
     let past = |app: &PhotocraftApp| app.session.active().unwrap().history.past_len();
+    let text = |app: &PhotocraftApp| {
+        let st = app.session.active().unwrap();
+        match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+            LayerContent::Text(t) => t.clone(),
+            _ => panic!("still type"),
+        }
+    };
+    // Default, as in Photoshop: only the styles; a drag on the grid changes nothing.
+    crate::menus::invoke(&mut app, &ctx, "edit.transform.warp", json!({})).unwrap();
+    let w = app.ui.transform.as_ref().and_then(|t| t.warp.clone()).expect("Warp mode");
+    warp_pointer(&mut app, ToolEvent::Down { x: w.bounds[2], y: w.bounds[3], pressure: 1.0 }, 4.0, egui::Modifiers::NONE);
+    warp_pointer(&mut app, ToolEvent::Up { x: w.bounds[2] + 20.0, y: w.bounds[3] + 15.0 }, 4.0, egui::Modifiers::NONE);
+    assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref(), Some(&w));
+    assert!(split(&mut app, "edit.transform.splitWarpCrosswise", None).is_err());
+    cancel(&mut app);
+    // Opted in (Preferences › Type › Free Transforms on Type).
+    app.run("prefs.set", json!({"path": "type.freeTransformsOnType", "value": true})).unwrap();
     let before = past(&app);
     crate::menus::invoke(&mut app, &ctx, "edit.transform.warp", json!({})).unwrap();
     assert!(app.ui.dialogs.is_empty(), "no prompt");
     let w0 = app.ui.transform.as_ref().and_then(|t| t.warp.clone()).expect("Warp mode");
     assert_eq!(w0.style, WarpStyle::None);
-    // A drag on the grid changes nothing: type takes only the styles.
-    let c = [(w0.bounds[0] + w0.bounds[2]) / 2.0, (w0.bounds[1] + w0.bounds[3]) / 2.0];
-    warp_pointer(&mut app, ToolEvent::Down { x: w0.bounds[2], y: w0.bounds[3], pressure: 1.0 }, 4.0, egui::Modifiers::NONE);
-    warp_pointer(&mut app, ToolEvent::Up { x: w0.bounds[2] + 20.0, y: w0.bounds[3] + 15.0 }, 4.0, egui::Modifiers::NONE);
-    warp_pointer(&mut app, ToolEvent::Down { x: c[0], y: c[1], pressure: 1.0 }, 4.0, egui::Modifiers::NONE);
-    warp_pointer(&mut app, ToolEvent::Up { x: c[0], y: c[1] + 20.0 }, 4.0, egui::Modifiers::NONE);
-    assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref(), Some(&w0));
-    assert!(split(&mut app, "edit.transform.splitWarpCrosswise", None).is_err());
-    // Pick Flag in the options bar, then Enter.
+    // Pick Flag in the options bar, then Enter: the Warp Text.
     if let Some(w) = app.ui.transform.as_mut().and_then(|t| t.warp.as_mut()) {
         *w = Warp { style: WarpStyle::Flag, bend: 40.0, ..Warp::none(w.bounds) };
     }
     commit(&mut app);
     assert!(!app.ui.status_error, "{}", app.ui.status);
-    let st = app.session.active().unwrap();
-    let LayerContent::Text(t) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("still type") };
-    let tw = t.warp.as_ref().expect("Warp Text set");
-    assert_eq!((tw.style.as_str(), tw.value, tw.horizontal), ("warpFlag", 40.0, true));
+    let tw = text(&app).warp.expect("Warp Text set");
+    assert_eq!((tw.style.as_str(), tw.value), ("warpFlag", 40.0));
     assert_eq!(past(&app), before + 1, "one history step");
-    // Warp again shows Flag; None takes it off in one more step.
+    // Warp again: a drag on the bottom-right corner, then Enter, keeps the type live.
     begin_warp(&mut app, &ctx).unwrap();
-    assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().style, WarpStyle::Flag);
-    if let Some(t) = app.ui.transform.as_mut() {
-        t.warp = Some(Warp::none(t.rect));
-    }
+    let w1 = app.ui.transform.as_ref().unwrap().warp.clone().unwrap();
+    assert_eq!(w1.style, WarpStyle::Flag);
+    let b = w1.bounds;
+    warp_pointer(&mut app, ToolEvent::Down { x: b[2], y: b[3], pressure: 1.0 }, 4.0, egui::Modifiers::NONE);
+    warp_pointer(&mut app, ToolEvent::Up { x: b[2] + 20.0, y: b[3] + 25.0 }, 4.0, egui::Modifiers::NONE);
+    assert_eq!(app.ui.transform.as_ref().unwrap().warp.as_ref().unwrap().style, WarpStyle::Custom);
+    let h0 = text(&app).cache.unwrap().content_bounds();
     commit(&mut app);
-    let st = app.session.active().unwrap();
-    assert!(matches!(&st.doc.layer(st.active_layer.unwrap()).unwrap().content, LayerContent::Text(t) if t.warp.is_none()));
-    assert_eq!(past(&app), before + 2);
+    assert!(!app.ui.status_error, "{}", app.ui.status);
+    let t = text(&app);
+    assert_eq!(t.distortions.len(), 1, "a free warp on the live type");
+    assert!(t.warp.is_none(), "it replaces the Warp Text it started from");
+    assert!(t.cache.unwrap().content_bounds().y1 > h0.y1 + 10);
+    assert_eq!(past(&app), before + 2, "one more step");
 }
 
 #[test]

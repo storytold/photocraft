@@ -54,8 +54,7 @@ fn active_surface(s: &Session) -> Surface {
     st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().clone()
 }
 
-/// Warp on type sets its Warp Text (#3004): the layer stays type, one step; a custom mesh is
-/// refused rather than rasterizing.
+/// Warp on type sets its Warp Text (#3004): the layer stays type, one step.
 #[test]
 fn warp_style_on_type_is_warp_text() {
     let mut s = Session::new();
@@ -67,8 +66,108 @@ fn warp_style_on_type_is_warp_text() {
     let LayerContent::Text(t) = &st.doc.layer(st.active_layer.unwrap()).unwrap().content else { panic!("type") };
     assert_eq!(t.warp.as_ref().map(|w| (w.style.as_str(), w.value)), Some(("warpArc", 30.0)));
     assert_eq!(st.history.past_len(), n + 1);
-    let mesh = BezierMesh::identity([0.0, 0.0, 10.0, 10.0], 1, 1).map_points(|p| [p[0] * 2.0, p[1]]);
-    assert!(s.execute("edit.transform.warp", json!({"warp": Warp::custom(mesh, [0.0, 0.0, 10.0, 10.0])})).is_err());
+}
+
+fn text_of(s: &Session) -> photocraft_doc::TextLayer {
+    let st = s.active().unwrap();
+    match &st.doc.layer(st.active_layer.unwrap()).unwrap().content {
+        LayerContent::Text(t) => t.clone(),
+        other => panic!("not type: {}", other.kind_name()),
+    }
+}
+
+/// Equal up to float noise (numbers can pass through JSON on the way).
+fn same(a: &[photocraft_doc::text::TypeDistortion], b: &[photocraft_doc::text::TypeDistortion]) -> bool {
+    let flat = |d: &[photocraft_doc::text::TypeDistortion]| -> Vec<f64> {
+        let mut v = Vec::new();
+        fn walk(x: &serde_json::Value, v: &mut Vec<f64>) {
+            match x {
+                Value::Number(n) => v.push(n.as_f64().unwrap()),
+                Value::Array(a) => a.iter().for_each(|x| walk(x, v)),
+                Value::Object(o) => o.values().for_each(|x| walk(x, v)),
+                _ => {}
+            }
+        }
+        walk(&serde_json::to_value(d).unwrap(), &mut v);
+        v
+    };
+    let (x, y) = (flat(a), flat(b));
+    a.len() == b.len() && x.len() == y.len() && x.iter().zip(&y).all(|(p, q)| (p - q).abs() < 1e-6)
+}
+
+/// "Better Than PS": a free mesh warp and a Distort stay on the live type (one step each),
+/// survive a .pcraft round trip, and editing the text re-renders under them.
+#[test]
+fn free_warp_and_distort_keep_type_editable() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 300, "height": 160})).unwrap();
+    s.execute("type.create", json!({"x": 20, "y": 90, "text": "Warp", "size": 48})).unwrap();
+    let plain = text_of(&s).cache.unwrap().content_bounds();
+    // Default (as in Photoshop): a custom mesh is refused on live type, and nothing changes.
+    let r0 = [f64::from(plain.x0), f64::from(plain.y0), f64::from(plain.x1), f64::from(plain.y1)];
+    let mut m0 = BezierMesh::identity(r0, 1, 1);
+    m0.points[3][1] += 30.0;
+    let n0 = s.active().unwrap().history.past_len();
+    assert!(s.execute("edit.transform.warp", json!({"warp": Warp::custom(m0, r0)})).is_err());
+    assert!(text_of(&s).distortions.is_empty());
+    assert_eq!(s.active().unwrap().history.past_len(), n0);
+    // Opted in: Preferences › Type › Free Transforms on Type.
+    s.execute("prefs.set", json!({"path": "type.freeTransformsOnType", "value": true})).unwrap();
+    let r = [f64::from(plain.x0), f64::from(plain.y0), f64::from(plain.x1), f64::from(plain.y1)];
+    // Drag the bottom-right corner 30 px down.
+    let mut mesh = BezierMesh::identity(r, 1, 1);
+    if let Some(p) = mesh.points.last_mut() {
+        p[1] += 30.0;
+    }
+    let n = s.active().unwrap().history.past_len();
+    s.execute("edit.transform.warp", json!({"warp": Warp::custom(mesh, r)})).unwrap();
+    let t = text_of(&s);
+    assert_eq!(t.distortions.len(), 1);
+    let warped = t.cache.as_ref().unwrap().content_bounds();
+    assert!(warped.y1 > plain.y1 + 15, "{warped:?} vs {plain:?}");
+    assert_eq!(s.active().unwrap().history.past_len(), n + 1);
+    // Distort: the top-right corner pulled up.
+    s.execute("edit.transform", json!({"rect": r, "quad": [[r[0], r[1]], [r[2], r[1] - 20.0], [r[2], r[3]], [r[0], r[3]]]})).unwrap();
+    let t = text_of(&s);
+    assert_eq!(t.distortions.len(), 2);
+    assert_eq!(s.active().unwrap().history.past_len(), n + 2);
+    // Editing the text keeps both, and the longer text re-renders under them.
+    s.execute("type.edit", json!({"text": "Warped"})).unwrap();
+    let edited = text_of(&s);
+    assert_eq!(edited.text, "Warped");
+    assert!(same(&edited.distortions, &t.distortions));
+    assert!(edited.cache.as_ref().unwrap().content_bounds().x1 > t.cache.as_ref().unwrap().content_bounds().x1);
+    // .pcraft round trip.
+    let bytes = photocraft_format::save_to_bytes(&s.active().unwrap().doc, &Default::default()).unwrap();
+    let back = photocraft_format::load_from_bytes(&bytes).unwrap();
+    let LayerContent::Text(bt) = &back.layers.iter().find(|l| matches!(l.content, LayerContent::Text(_))).unwrap().content else { panic!("type") };
+    assert!(same(&bt.distortions, &edited.distortions));
+    // Bad meshes are errors, not panics.
+    let mut bad = BezierMesh::identity(r, 1, 1);
+    bad.points.truncate(3);
+    assert!(s.execute("edit.transform.warp", json!({"warp": Warp::custom(bad, r)})).is_err());
+}
+
+/// With Free Transforms on Type off, an unchanged (identity) Warp commit keeps the free warp the
+/// layer already has (no silent data loss) and is not a history step.
+#[test]
+fn an_identity_warp_with_free_transforms_off_keeps_the_free_warp() {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 300, "height": 160})).unwrap();
+    s.execute("type.create", json!({"x": 20, "y": 90, "text": "Warp", "size": 48})).unwrap();
+    let b = text_of(&s).cache.unwrap().content_bounds();
+    let r = [f64::from(b.x0), f64::from(b.y0), f64::from(b.x1), f64::from(b.y1)];
+    s.execute("prefs.set", json!({"path": "type.freeTransformsOnType", "value": true})).unwrap();
+    let mut mesh = BezierMesh::identity(r, 1, 1);
+    mesh.points[3][1] += 30.0;
+    s.execute("edit.transform.warp", json!({"warp": Warp::custom(mesh, r)})).unwrap();
+    let before = text_of(&s).distortions;
+    assert_eq!(before.len(), 1);
+    s.execute("prefs.set", json!({"path": "type.freeTransformsOnType", "value": false})).unwrap();
+    let n = s.active().unwrap().history.past_len();
+    s.execute("edit.transform.warp", json!({"style": "none"})).unwrap();
+    assert!(same(&text_of(&s).distortions, &before), "the free warp survives an unchanged commit");
+    assert_eq!(s.active().unwrap().history.past_len(), n);
 }
 
 /// The seven values of a cylinder over the session's painted box (x 10..60, y 10..40).

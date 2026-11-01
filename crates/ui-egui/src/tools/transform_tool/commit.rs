@@ -1,4 +1,4 @@
-use super::begin::{fold_made, moves_kind, moving_layers, rect_to_quad_affine, take_back_made, warps_type};
+use super::begin::{fold_made, free_type, moves_kind, moving_layers, rect_to_quad_affine, take_back_made, warps_type};
 use super::options_bar::{rotate_about_pivot, scale_about_pivot};
 use super::{
     Arc, DocId, JobEvent, JobId, JobOutcome, LayerContent, LayerId, MadeLayer, PhotocraftApp, Several, Step, Steps, TransformPreview, TransformSession,
@@ -318,8 +318,9 @@ pub fn is_enabled(app: &PhotocraftApp, id: &str) -> Option<bool> {
         {
             Some(false)
         }
-        // Editable type can't be distorted (#2630, as #2701 rules for the menus outside a box).
-        "edit.transform.distort" | "edit.transform.perspective" if moves_type(app, t) => Some(false),
+        // Editable type can't be distorted (#2630, as #2701 rules for the menus outside a box),
+        // unless Preferences › Type › Free Transforms on Type is on.
+        "edit.transform.distort" | "edit.transform.perspective" if moves_type(app, t) && !free_type(app) => Some(false),
         _ => None,
     }
 }

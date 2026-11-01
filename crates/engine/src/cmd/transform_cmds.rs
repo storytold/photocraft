@@ -429,11 +429,12 @@ fn check_layer_budget(doc_sel: Option<&Surface>, l: &Layer, h: &Homography) -> R
 /// is turned into a normal layer by the caller first ([`crate::extra_cmds::background_to_layer`]).
 /// Refused, with `l` untouched, when a result would take more than [`budget`].
 pub(crate) fn transform_layer(doc_sel: Option<&Surface>, group: Locks, l: &mut Layer, h: &Homography, affine: Option<Affine>, interp: Interp) -> Result<()> {
-    transform_layer_with(doc_sel, group, l, h, affine, interp, &Interrupt::NONE)
+    transform_layer_with(doc_sel, group, l, h, affine, interp, false, &Interrupt::NONE)
 }
 
 /// [`transform_layer`] with progress and cancellation for the pixel warp (the slow part on a
 /// large layer, #1015).
+#[allow(clippy::too_many_arguments)]
 fn transform_layer_with(
     doc_sel: Option<&Surface>,
     group: Locks,
@@ -441,12 +442,14 @@ fn transform_layer_with(
     h: &Homography,
     affine: Option<Affine>,
     interp: Interp,
+    free_type: bool,
     ctl: &Interrupt,
 ) -> Result<()> {
     check_layer_budget(doc_sel, l, h)?;
-    apply_transform(doc_sel, group, l, h, affine, interp, ctl)
+    apply_transform(doc_sel, group, l, h, affine, interp, free_type, ctl)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_transform(
     doc_sel: Option<&Surface>,
     group: Locks,
@@ -454,6 +457,7 @@ fn apply_transform(
     h: &Homography,
     affine: Option<Affine>,
     interp: Interp,
+    free_type: bool,
     ctl: &Interrupt,
 ) -> Result<()> {
     crate::allocation::checkpoint("transforming pixels")?;
@@ -464,7 +468,7 @@ fn apply_transform(
     if h.is_identity() {
         if let LayerContent::Group(g) = &mut l.content {
             for c in g.children.iter_mut() {
-                apply_transform(None, locks, c, h, affine, interp, ctl)?;
+                apply_transform(None, locks, c, h, affine, interp, free_type, ctl)?;
             }
         }
         return Ok(());
@@ -478,15 +482,16 @@ fn apply_transform(
     match &mut l.content {
         LayerContent::Group(g) => {
             for c in g.children.iter_mut() {
-                apply_transform(None, locks, c, h, affine, interp, ctl)?;
+                apply_transform(None, locks, c, h, affine, interp, free_type, ctl)?;
             }
         }
-        LayerContent::Text(t) => {
-            let Some(a) = affine else {
-                return Err(EngineError::Other("Distort and Perspective need rasterized type (Type › Rasterize Type Layer)".into()));
-            };
-            t.transform = a.mul(&t.transform);
-        }
+        LayerContent::Text(t) => match affine {
+            Some(a) => t.transform = a.mul(&t.transform),
+            // As in Photoshop, Distort / Perspective need rasterized type, unless Preferences ›
+            // Type › Free Transforms on Type is on (beyond Photoshop, type_distort.rs).
+            None if free_type => crate::type_distort::push_projective(t, h)?,
+            None => return Err(EngineError::Other("Distort and Perspective need rasterized type (Type › Rasterize Type Layer)".into())),
+        },
         LayerContent::Shape(sh) => match affine {
             Some(a) => crate::vector_cmds::transform_shape(sh, &a),
             // Distort and Perspective map the path and keep the shape (#3009).
@@ -858,6 +863,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
         (m[6].abs() < 1e-12 && m[7].abs() < 1e-12).then(|| Affine { m: [m[0] / m[8], m[3] / m[8], m[1] / m[8], m[4] / m[8], m[2] / m[8], m[5] / m[8]] });
     let interp = Interp::parse(p.get("interpolation").and_then(Value::as_str).unwrap_or("bicubic"));
     let lone = lone.is_some();
+    let free_type = s.prefs().type_.free_transforms_on_type;
     let layers: Vec<u64> = ids.iter().map(|id| id.0).collect();
     let p = p.clone();
     // A background job when started with `Session::start` (#1015): the warp of a large layer runs
@@ -865,7 +871,7 @@ fn transform(s: &mut Session, p: &Value) -> Result<Value> {
     crate::jobs::edit_job(
         s,
         "Free Transform",
-        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &ids, &p, lone, &h, affine, interp, ctl)),
+        move |doc, _, ctx| ctx.stage(0.0, 1.0, "Transforming", |ctl| transform_doc(doc, id, &ids, &p, lone, &h, affine, interp, free_type, ctl)),
         move |()| json!({"rect": rect, "layers": layers}),
     )
 }
@@ -882,6 +888,7 @@ fn transform_doc(
     h: &Homography,
     affine: Option<Affine>,
     interp: Interp,
+    free_type: bool,
     ctl: &Interrupt,
 ) -> Result<()> {
     let sel = doc.selection.clone();
@@ -925,7 +932,7 @@ fn transform_doc(
         if !h.is_identity() {
             taken.extend(crate::smart_cmds::take_caches(std::slice::from_mut(l)));
         }
-        apply_transform(doc_sel, group, l, h, affine, interp, ctl)?;
+        apply_transform(doc_sel, group, l, h, affine, interp, free_type, ctl)?;
     }
     if !h.is_identity() {
         // Type layers re-render from their new transform.

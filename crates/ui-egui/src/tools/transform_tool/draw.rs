@@ -1,4 +1,4 @@
-use super::begin::warps_type;
+use super::begin::{type_styles_only, warps_type};
 use super::drag_modes::{HandleIndicator, handle_indicator};
 use super::options_bar::{quad_scale, readout};
 use super::pointer::{Hit, handle_at, rotate_dir, rotation_degrees};
@@ -170,7 +170,7 @@ pub fn draw_overlay(app: &PhotocraftApp, painter: &egui::Painter, xf: &ViewXform
         // The same keys as `cursor`, sticky ones included, so the guide matches the pointer.
         let mods = crate::workspace_ui::sticky_mods(app, painter.ctx().input(|i| i.modifiers));
         let alt = mods.alt || mods.command;
-        let guide = at.filter(|_| !warps_type(app)).and_then(|p| {
+        let guide = at.filter(|_| !type_styles_only(app)).and_then(|p| {
             let tool = pv.split_tool.or_else(|| {
                 (alt || pv.split_quick).then(|| {
                     let m = w.to_mesh(1, 1);

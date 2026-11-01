@@ -1,4 +1,4 @@
-use super::begin::warps_type;
+use super::begin::type_styles_only;
 use super::{BezierMesh, CursorIcon, PhotocraftApp, SplitTool, ToolEvent, ViewXform, Warp, WarpDrag, WarpStyle, json};
 
 /// An anchor or a handle on a section line. The inner control points of a patch are not shown.
@@ -117,8 +117,8 @@ fn split_gesture(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) 
 /// Preset warps turn into a custom mesh when the press grabs something. An armed split tool, or
 /// Ctrl / Option held, places a split where the pointer is released instead.
 pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mods: egui::Modifiers) {
-    // Type takes only the warp styles: nothing on the canvas to drag or split (#3004).
-    if warps_type(app) {
+    // Type takes only the warp styles unless free transforms are on: nothing to drag or split (#3004).
+    if type_styles_only(app) {
         return;
     }
     if split_gesture(app, ev, mods) {
@@ -155,7 +155,7 @@ pub(super) fn warp_pointer(app: &mut PhotocraftApp, ev: ToolEvent, tol: f64, mod
 /// Runs a warp-edit command against the mesh in the open Warp session and writes the mesh back.
 pub fn edit_session_warp(app: &mut PhotocraftApp, id: &str, params: &serde_json::Value) -> Result<(), String> {
     let Some(w) = app.ui.transform.as_ref().and_then(|t| t.warp.clone()) else { return Err("not warping".into()) };
-    if warps_type(app) {
+    if type_styles_only(app) {
         return Err("Warp on type takes only the warp styles".into());
     }
     let mut p = if params.is_object() { params.clone() } else { json!({}) };

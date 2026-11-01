@@ -152,6 +152,7 @@ fn layer_m(l: &Layer, sink: &mut dyn Sink) -> LayerM {
             orientation: t.orientation,
             antialias: t.antialias,
             warp: t.warp.clone(),
+            distortions: t.distortions.clone(),
         },
         LayerContent::Shape(s) => ContentM::Shape {
             fill: s.fill.clone(),
@@ -463,7 +464,22 @@ impl Loader<'_> {
             }
             ContentM::Adjustment { adjustment } => LayerContent::Adjustment(adjustment.clone()),
             ContentM::Fill { fill } => LayerContent::Fill(fill.clone()),
-            ContentM::Text { text, font_family, size_pt, color, transform, cache, psd_raw, runs, paragraphs, shape, orientation, antialias, warp } => {
+            ContentM::Text {
+                text,
+                font_family,
+                size_pt,
+                color,
+                transform,
+                cache,
+                psd_raw,
+                runs,
+                paragraphs,
+                shape,
+                orientation,
+                antialias,
+                warp,
+                distortions,
+            } => {
                 LayerContent::Text(TextLayer {
                     text: text.clone(),
                     font_family: font_family.clone(),
@@ -478,6 +494,8 @@ impl Loader<'_> {
                     orientation: *orientation,
                     antialias: *antialias,
                     warp: warp.clone(),
+                    // Malformed entries (a hand-edited or damaged file) are dropped, never rendered.
+                    distortions: distortions.iter().filter(|d| d.is_valid()).take(photocraft_doc::text::MAX_TYPE_DISTORTIONS).cloned().collect(),
                 })
             }
             ContentM::Shape { fill, cache, psd_raw, path, stroke, live, density, feather } => LayerContent::Shape(ShapeLayer {

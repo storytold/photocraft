@@ -380,6 +380,11 @@ fn transform_menu_follows_photoshop_order() {
     for (id, on) in [("edit.transform.skew", true), ("edit.transform.distort", false), ("edit.transform.perspective", false)] {
         assert_eq!(entry_enabled(&app, &menu, id), on, "{id}");
     }
+    // Opted in (Preferences › Type › Free Transforms on Type, beyond Photoshop), they stay on.
+    app.run("prefs.set", json!({"path": "type.freeTransformsOnType", "value": true})).unwrap();
+    for id in ["edit.transform.distort", "edit.transform.perspective"] {
+        assert!(entry_enabled(&app, &menu, id), "{id}");
+    }
 }
 
 fn labels(rows: &[Row]) -> Vec<Option<&str>> {
