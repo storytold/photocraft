@@ -1170,12 +1170,13 @@ mod rtl_row_twin {
                 ..Default::default()
             };
             let mut out = Vec::new();
-            ctx.run_ui(input, |ui| {
+            let mut full = ctx.run_ui(input, |ui| {
                 crate::direction::dialog_row(ui, |ui| {
                     out.push(ui.label("aaa").rect);
                     out.push(ui.label("b").rect);
                 });
             });
+            full.textures_delta.clear();
             out
         };
         let ltr = rects(Dir::Ltr);
@@ -1183,7 +1184,7 @@ mod rtl_row_twin {
         assert!(ltr[0].left() < ltr[1].left(), "LTR keeps the item order: {ltr:?}");
         assert!(rtl[0].right() > rtl[1].right(), "RTL mirrors the item order: {rtl:?}");
         let ltr_gap = ltr[1].left() - ltr[0].right();
-        let rtl_gap = rtl[1].right() - rtl[0].left();
+        let rtl_gap = rtl[0].left() - rtl[1].right();
         assert!((ltr_gap - rtl_gap).abs() < 0.5, "equal item gaps: ltr {ltr_gap} rtl {rtl_gap}");
     }
 }
