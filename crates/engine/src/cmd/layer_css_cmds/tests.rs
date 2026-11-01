@@ -169,6 +169,11 @@ fn a_rounded_rectangle_writes_its_border_radius() {
     s.execute("shape.edit", json!({"layer": id, "radii": [0, 0, 0, 0]})).unwrap();
     let css = s.execute(ID, json!({"layer": id})).unwrap()["css"].as_str().unwrap().to_string();
     assert!(!css.contains("border-radius") && css.contains("  background-color: rgb(255, 0, 0);\n"), "{css}");
+    // Scaled 2× on both axes, its corners are twice as round.
+    s.execute("shape.edit", json!({"layer": id, "radii": [12, 12, 12, 12]})).unwrap();
+    s.execute("shape.edit", json!({"layer": id, "transform": [2, 0, 0, 2, 0, 0]})).unwrap();
+    let css = s.execute(ID, json!({"layer": id})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.contains("  border-radius: 24px;\n  background-color: rgb(255, 0, 0);\n"), "{css}");
 }
 
 /// A live ellipse writes `border-radius: 50%;` where a rounded rectangle writes its radii, so the
