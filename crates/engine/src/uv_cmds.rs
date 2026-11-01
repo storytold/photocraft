@@ -19,6 +19,10 @@ type PaddingCacheKey = (usize, u32, u32, i32, i32, usize, u64);
 pub struct UvState {
     /// Restored external destinations require explicit rebinding before texture writeback.
     pub(crate) blocked_exports: std::collections::HashSet<DocId>,
+    /// In-project texture destinations restored from a project must keep resolving inside that
+    /// project before writeback. The original path distinguishes an explicit rebind from a
+    /// symlink that was redirected after the project was loaded.
+    pub(crate) project_export_guards: std::collections::HashMap<DocId, (std::path::PathBuf, std::path::PathBuf)>,
     /// Opaque, bounded view metadata; camera/UI types stay above the engine layer.
     pub project_view: Value,
     pub project_path: String,
@@ -1184,7 +1188,9 @@ fn project_save(s: &mut Session, p: &Value) -> Result<Value> {
 }
 fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
     let previous: Vec<_> = s.documents().iter().filter(|_| s.uv_workspace.active && s.uv.scene.is_some()).map(|st| st.doc.id).collect();
-    let bytes = read_limited(path(p)?, MAX_PROJECT_BYTES)?;
+    let project_path = path(p)?;
+    let project_export_root = model_directory(project_path).canonicalize().ok();
+    let bytes = read_limited(project_path, MAX_PROJECT_BYTES)?;
     let zip = photocraft_format::zip::ZipReader::new(&bytes).map_err(|e| err(e.to_string()))?;
     let json = zip.read_by_name("project.json", 128 * 1024 * 1024).map_err(|e| err(e.to_string()))?;
     let mut project: Project = serde_json::from_slice(&json).map_err(|e| err(e.to_string()))?;
@@ -1286,6 +1292,7 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let mut blocked_exports = std::collections::HashSet::new();
+    let mut project_export_guards = std::collections::HashMap::new();
     let mut restored = std::collections::BTreeMap::new();
     let mut exported_revisions = std::collections::HashMap::new();
     let mut saved_revisions = std::collections::HashMap::new();
@@ -1303,18 +1310,25 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
                 let writeback = project.dirty_documents.as_ref().map_or(source.is_some(), |dirty| name.as_ref().is_some_and(|name| dirty.contains(name)));
                 // Preserve in-project destinations, but external paths are untrusted provenance
                 // and must be explicitly rebound before export or ordinary Save can target them.
-                let external = source.as_ref().is_some_and(|source| {
-                    !Path::new(source)
-                        .canonicalize()
-                        .ok()
-                        .zip(model_directory(path(p).unwrap_or("")).canonicalize().ok())
-                        .is_some_and(|(file, base)| file.starts_with(base) && file.is_file())
+                let in_project = source.as_ref().is_some_and(|source| {
+                    project_export_root.as_ref().is_some_and(|base| {
+                        Path::new(source).canonicalize().is_ok_and(|file| file.starts_with(base) && file.is_file())
+                    })
                 });
+                let external = source.is_some() && !in_project;
+                let project_export_path = if in_project {
+                    source.as_ref().map(|source| Path::new(source).to_path_buf())
+                } else {
+                    None
+                };
                 let index = s.add_document(doc, if external { None } else { source });
                 if external && let Some(st) = s.uv_documents().get(index) {
                     blocked_exports.insert(st.doc.id);
                 }
                 if let Some(st) = s.uv_documents().get(index) {
+                    if let (Some(root), Some(original_path)) = (project_export_root.as_ref(), project_export_path) {
+                        project_export_guards.insert(st.doc.id, (root.clone(), original_path));
+                    }
                     exported_revisions.insert(st.doc.id, if writeback { 0 } else { st.revision });
                     saved_revisions.insert(st.doc.id, st.revision);
                 }
@@ -1339,6 +1353,7 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
     let wrap_mesh = photocraft_uv::wrap::Mesh::new(&scene).ok().map(Arc::new);
     s.uv = UvState {
         blocked_exports,
+        project_export_guards,
         project_view: project.view,
         project_path: path(p)?.to_owned(),
         assets,
