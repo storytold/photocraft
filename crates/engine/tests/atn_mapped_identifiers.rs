@@ -183,12 +183,18 @@ fn review_layer_transform_uses_the_recorded_anchor() {
             );
             s.execute("edit.undo", json!({})).unwrap();
             if code == "Qcs0" {
+                s.edit("Mark rotation", |doc, active| {
+                    doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().write_pixel(22, 30, &[0.0, 1.0, 0.0, 1.0]);
+                    Ok(())
+                })
+                .unwrap();
                 s.execute("edit.transform", json!({"rotate":90,"reference":"topLeft","interpolation":"nearest"})).unwrap();
                 let state = s.active().unwrap();
                 assert_eq!(
                     state.doc.layer(state.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds(),
                     photocraft_geom::Rect::new(0, 20, 20, 40)
                 );
+                assert_eq!(state.doc.layer(state.active_layer.unwrap()).unwrap().surface().unwrap().rgba(9, 22), [0.0, 1.0, 0.0, 1.0]);
                 s.execute("edit.undo", json!({})).unwrap();
             }
             let before = s.active().unwrap().doc.clone();
