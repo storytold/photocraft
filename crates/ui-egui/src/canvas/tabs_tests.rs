@@ -258,9 +258,11 @@ fn crowded_tabs_keep_their_whole_names_and_the_menu_lists_every_document() {
             h.run_steps(2);
             // A shown tab carries the same title as its menu row, so the rows are queried inside
             // the open menu only.
+            let first = labels[0].clone();
+            let checked_first = format!("✔ {first}");
             let menu = h
                 .query_all_by_role(egui::accesskit::Role::Menu)
-                .max_by(|a, b| a.rect().top().total_cmp(&b.rect().top()))
+                .find(|m| m.query_all_by_label(&first).count() > 0 || m.query_all_by_label(&checked_first).count() > 0)
                 .unwrap_or_else(|| panic!("{theme:?}: the document menu is open"));
             for (i, label) in labels.iter().enumerate() {
                 // The checked row's name leads with the check mark; an unchecked row's name is the
