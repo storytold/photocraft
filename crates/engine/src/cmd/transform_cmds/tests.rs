@@ -949,3 +949,22 @@ fn transforming_a_layers_own_transparency_leaves_no_ghost() {
     let rest = surf.read_region(Rect::new(15, 15, 16, 16));
     assert!((rest[3] - 0.5).abs() < 0.01, "half the opaque pixel stays: {rest:?}");
 }
+
+#[test]
+fn split_selected_lifts_up_to_the_selection_and_leaves_the_rest() {
+    // One half-covered pixel under a partial selection: the lift takes min(a, k), the rest keeps
+    // max(a − k, 0), and the two add back up to the pixel's coverage.
+    let gray_f32 = PixelFormat::new(ColorMode::Grayscale, SampleType::F32, false);
+    let a = 0.5_f32;
+    for k in [0.25_f32, 0.5, 0.75] {
+        let mut surf = Surface::new(PixelFormat::RGBA32F);
+        surf.fill_rect(Rect::new(3, 4, 4, 5), &[1.0, 0.0, 0.0, a]);
+        let mut sel = Surface::new(gray_f32);
+        sel.fill_rect(Rect::new(3, 4, 4, 5), &[k]);
+        let (lifted, rest) = split_selected(&surf, &sel).unwrap();
+        let (l, r) = (lifted.sample_channel(3, 4, 3), rest.sample_channel(3, 4, 3));
+        assert!((l - a.min(k)).abs() < 1e-6, "k = {k}: lifted {l}, want {}", a.min(k));
+        assert!((r - (a - k).max(0.0)).abs() < 1e-6, "k = {k}: left {r}, want {}", (a - k).max(0.0));
+        assert!((l + r - a).abs() < 1e-6, "k = {k}: lifted {l} + left {r} != {a}");
+    }
+}
