@@ -162,7 +162,7 @@ pub fn body(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) 
 fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     ui.spacing_mut().item_spacing.y = 6.0;
     let mut contents = get_str(f, "contents", "foreground");
-    ui.horizontal(|ui| {
+    crate::text::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Contents:"));
         let opts: Vec<(String, &str)> = CONTENTS.iter().map(|(k, l)| (k.to_string(), *l)).collect();
         if crate::widgets::dropdown(ui, "fill-contents", tl!("Contents:"), &mut contents, &opts, 170.0) {
@@ -175,7 +175,7 @@ fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
     });
     match contents.as_str() {
         "color" => {
-            ui.horizontal(|ui| {
+            crate::text::direction::dialog_row(ui, |ui| {
                 label(ui, tl!("Color:"));
                 // Photoshop shows no swatch; this one reopens the Color Picker on the colour.
                 let rgb = parse_hex(&get_str(f, "color", "#000000"));
@@ -185,7 +185,7 @@ fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
             });
         }
         "pattern" => {
-            ui.horizontal(|ui| {
+            crate::text::direction::dialog_row(ui, |ui| {
                 label(ui, tl!("Custom Pattern:"));
                 let pat = get_str(f, "pattern", "");
                 if app.session.patterns.items.is_empty() {
@@ -201,7 +201,7 @@ fn body_fields(app: &PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value
             });
         }
         "contentAware" => {
-            ui.horizontal(|ui| {
+            crate::text::direction::dialog_row(ui, |ui| {
                 label(ui, "");
                 let mut on = f.get("colorAdaptation").and_then(Value::as_bool).unwrap_or(true);
                 if crate::widgets::checkbox(ui, &mut on, "Color Adaptation").changed() {
@@ -219,3 +219,46 @@ mod tests;
 
 #[cfg(test)]
 mod rtl_tests;
+
+#[cfg(test)]
+mod rtl_row_twin {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::Queryable;
+
+    /// The Fill body drawn in `dir`, with the column it draws in.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, (PhotocraftApp, Map<String, Value>, egui::Rect)> {
+        let _dir = crate::direction::direction_scope(dir);
+        let app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(440.0, 360.0))
+            .with_context_setup(|ctx| PhotocraftApp::setup_context(ctx, crate::theme::ThemeKind::ALL[0]))
+            .build_ui_state(
+                |ui, s: &mut (PhotocraftApp, Map<String, Value>, egui::Rect)| {
+                    s.2 = ui.max_rect();
+                    body(&s.0, ui, &mut s.1);
+                },
+                (app, Map::new(), egui::Rect::ZERO),
+            );
+        h.run_steps(3);
+        h
+    }
+
+    /// The migrated Contents row mirrors to the reading start: the dropdown's gap from the
+    /// column's reading-start edge (past the painted 112 px caption) is the same in both
+    /// directions. The caption is painted, so the row's order is pinned by the dropdown's edge.
+    #[test]
+    fn the_contents_row_mirrors_to_the_reading_start() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let ltr_col = ltr.state().2;
+        let rtl_col = rtl.state().2;
+        let ltr_drop = ltr.get_by_value("Foreground Color").rect();
+        let rtl_drop = rtl.get_by_value("Foreground Color").rect();
+        let ltr_gap = ltr_drop.left() - ltr_col.left();
+        let rtl_gap = rtl_col.right() - rtl_drop.right();
+        assert!(ltr_gap > 100.0, "the painted caption leads the dropdown in LTR: {ltr_drop:?} {ltr_col:?}");
+        assert!(rtl_gap > 100.0, "the painted caption leads the dropdown in RTL: {rtl_drop:?} {rtl_col:?}");
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "the gap is mirrored, not resized: LTR {ltr_gap} RTL {rtl_gap}");
+    }
+}
