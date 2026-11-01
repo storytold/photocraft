@@ -567,6 +567,45 @@ fn several_raws_share_the_dialog_and_keep_their_own_settings() {
     assert_eq!(app.session.documents().len(), 3);
 }
 
+/// A raw whose Open fails stays in the filmstrip with its settings, and the dialog comes back
+/// for it; the raws that opened leave it.
+#[test]
+fn a_raw_that_fails_to_open_stays_in_the_filmstrip_with_its_settings() {
+    let (mut app, dng) = raw_app();
+    let ctx = egui::Context::default();
+    app.open_bytes("one.dng", &dng).unwrap();
+    app.open_bytes("two.dng", &dng).unwrap();
+    app.open_bytes("three.dng", &dng).unwrap();
+    let ids: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
+    // Two's file can no longer be developed, and it was left with its own settings.
+    let mut kept = CameraRaw { exposure: 0.5, ..Default::default() };
+    kept.contrast = 20.0;
+    app.raw_shelf[1].raw.bytes = Some(std::sync::Arc::new(b"not a raw file".to_vec()));
+    app.raw_shelf[1].kept = Some((kept.clone(), CameraRaw::default()));
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"set": {"exposure": 1.0}}})).unwrap().unwrap();
+    let r = menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().unwrap();
+    assert_eq!(r["opened"].as_array().map(Vec::len), Some(2), "one and three open: {r}");
+    let left: Vec<_> = app.raw_shelf.iter().map(|h| h.raw.document).collect();
+    assert_eq!(left, vec![ids[1]], "only the failed raw stays in the filmstrip");
+    assert_eq!(app.raw_shelf[0].kept.as_ref().map(|(p, _)| p), Some(&kept), "with its settings");
+    // The dialog comes back for it with them; when every raw fails, the dialog and its
+    // filmstrip stay.
+    filmstrip::open_held(&mut app, &ctx, 0).unwrap();
+    let shown = &app.camera_raw.as_ref().unwrap().params;
+    assert_eq!((shown.exposure, shown.contrast), (0.5, 20.0));
+    app.open_bytes("four.dng", &dng).unwrap();
+    app.raw_shelf[1].raw.bytes = Some(std::sync::Arc::new(b"not a raw file either".to_vec()));
+    app.raw_shelf[1].kept = Some((kept.clone(), CameraRaw::default()));
+    assert!(menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"commit": true}})).unwrap().is_err());
+    assert_eq!(app.raw_shelf.len(), 2, "both raws stay in the filmstrip");
+    assert!(app.camera_raw.is_some(), "and the dialog stays open");
+    // Cancel still closes every raw in it.
+    menu(&mut app, &ctx, "filter.cameraRaw", &json!({"ui": {"cancel": true}})).unwrap().unwrap();
+    assert!(app.raw_shelf.is_empty());
+    assert_eq!(app.session.documents().len(), 2, "one and three stay open");
+}
+
 #[test]
 fn cancel_closes_the_raw_and_the_preference_skips_the_dialog() {
     let (mut app, dng) = raw_app();
