@@ -1,6 +1,6 @@
 use super::assets::{asset_output_path, asset_path_components};
 use super::optimizer::{optimize, web_document, web_exif, web_warnings, web_xmp};
-use super::settings::{WebSettings, rgb_hex};
+use super::settings::{WebFormat, WebSettings, rgb_hex};
 use super::{EngineError, Rect, ResolvedSlice, Result, Session, SliceKind, Value, bad, join, json, other, portable_device_name, slices, stem, write_file};
 
 /// A file-name-safe slice name.
@@ -145,8 +145,9 @@ pub(super) fn save_for_web(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 /// Save for Web through a platform writer (native files or browser downloads).
-/// The writer receives every image, spacer and HTML file. A write error stops the export;
-/// only a complete export remembers its settings and fires the export event. A custom writer
+/// The writer receives every image, spacer and HTML file. A write error stops the export.
+/// Multi-file write errors identify the failed path and warn when earlier outputs may remain.
+/// Only a complete export remembers its settings and fires the export event. A custom writer
 /// that targets the local filesystem must enforce its own path confinement.
 pub fn save_for_web_with_writer(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>) -> Result<Value> {
     save_for_web_impl(s, p, write, false)
@@ -167,6 +168,7 @@ fn remember_web_settings(s: &mut Session, cmd: &str, settings: &Value) {
     });
 }
 
+/// Estimate or save a web export, checking selected image sizes before any write.
 fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u8]) -> Result<()>, native_paths: bool) -> Result<Value> {
     let cmd = "file.export.saveForWebLegacy";
     if let Some(authorize) = s.authorize {
@@ -193,14 +195,11 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let all = slices::resolve(&doc);
     let pick = p.get("slices").and_then(Value::as_str).unwrap_or("all");
     let numbers: Option<Vec<u64>> = p.get("numbers").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_u64).collect());
-    let chosen: Vec<&ResolvedSlice> = all
-        .iter()
-        .filter(|r| match (&numbers, pick) {
-            (Some(n), _) => n.contains(&(r.number as u64)),
-            (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
-            _ => true,
-        })
-        .collect();
+    let chosen = |r: &ResolvedSlice| match (&numbers, pick) {
+        (Some(n), _) => n.contains(&(r.number as u64)),
+        (None, "user") => r.origin != photocraft_doc::SliceOrigin::Auto,
+        _ => true,
+    };
     let single = p.get("path").and_then(Value::as_str).filter(|v| !v.is_empty());
     let dir = p.get("dir").and_then(Value::as_str).filter(|v| !v.is_empty());
     let mut last_web = p.clone();
@@ -230,6 +229,34 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     let images = web_images_folder(p.get("imagesFolder").and_then(Value::as_str).unwrap_or("images"), cmd)?;
     let trusted_slice_html = p.get("trustedSliceHtml").and_then(Value::as_bool).unwrap_or(false);
     let base = portable_generated_stem(single.map(stem).unwrap_or_else(|| slices::base_name(&doc)));
+    let limit = match st.format {
+        WebFormat::Gif => photocraft_codecs::Format::Gif.max_dimensions(),
+        WebFormat::Jpeg => photocraft_codecs::Format::Jpeg.max_dimensions(),
+        WebFormat::Webp if st.lossless => photocraft_codecs::Format::WebP.max_dimensions(),
+        // VP8 stores each dimension in 14 bits; lossless WebP permits one more pixel.
+        WebFormat::Webp => Some((16_383, 16_383)),
+        _ => None,
+    };
+    for r in all.iter().filter(|r| chosen(r) && r.kind != SliceKind::NoImage) {
+        let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
+        if piece.is_empty() {
+            if numbers.is_some() {
+                return Err(other("A selected image slice is empty at this export size"));
+            }
+            continue;
+        }
+        if let Some((w, h)) = limit
+            && (i64::from(piece.width()) > i64::from(w) || i64::from(piece.height()) > i64::from(h))
+        {
+            return Err(other(format!("Selected image slice {} exceeds the {w}x{h} limit for {}", r.number, st.format.ext())));
+        }
+    }
+    let mut written = 0usize;
+    let mut write = |path: &str, bytes: &[u8]| -> Result<()> {
+        write(path, bytes).map_err(|error| other(format!("Could not write `{path}`: {error}; {written} earlier output(s) may remain")))?;
+        written += 1;
+        Ok(())
+    };
     let mut files = Vec::new();
     let mut cells: Vec<(Rect, String, String)> = Vec::new();
     let mut total = 0usize;
@@ -253,9 +280,18 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     // `slices::resolve`), each its own image and cell, as Photoshop's subslices. A no-image cell's
     // text goes into its first piece only.
     let mut texted = std::collections::HashSet::new();
-    for r in &chosen {
+    let mut chosen_count = 0;
+    for r in &all {
+        let selected = chosen(r);
+        chosen_count += usize::from(selected);
         let piece = scale_rect(r.rect, sx, sy).intersect(&wdoc.bounds());
         if piece.is_empty() {
+            continue;
+        }
+        if !selected {
+            if html {
+                cells.push((piece, String::new(), String::new()));
+            }
             continue;
         }
         let stored = r.id.and_then(|id| doc.slices.get(id));
@@ -303,6 +339,6 @@ fn save_for_web_impl(s: &mut Session, p: &Value, write: &mut dyn FnMut(&str, &[u
     s.file_menu.last_web = Some(last_web);
     crate::automate_cmds::fire_event(s, "export");
     Ok(
-        json!({"files": files, "html": html_path, "bytes": total, "slices": chosen.len(), "width": wdoc.size.width, "height": wdoc.size.height, "warnings": warnings}),
+        json!({"files": files, "html": html_path, "bytes": total, "slices": chosen_count, "width": wdoc.size.width, "height": wdoc.size.height, "warnings": warnings}),
     )
 }

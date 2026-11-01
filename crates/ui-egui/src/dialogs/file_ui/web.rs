@@ -7,6 +7,7 @@ pub(super) const WEB_COMMAND: &str = "file.export.saveForWebLegacy";
 /// Save for Web's preview tabs: the `__view` field's values and their labels.
 const WEB_VIEWS: [(&str, &str); 4] = [("original", "Original"), ("optimized", "Optimized"), ("2up", "2-Up"), ("4up", "4-Up")];
 
+/// Open Save for Web with remembered encoding choices and fresh document-specific selection.
 pub fn open_web(app: &mut PhotocraftApp) -> u64 {
     let mut f = Map::new();
     f.insert("__web".into(), json!(true));
@@ -27,7 +28,7 @@ pub fn open_web(app: &mut PhotocraftApp) -> u64 {
         .unwrap_or_else(|| json!({"format": "jpeg", "quality": 60}));
     if let Value::Object(m) = last {
         for (k, v) in m {
-            if !matches!(k.as_str(), "path" | "dir" | "width" | "height" | "percent" | "colorTable" | "colorTableEdits") {
+            if !matches!(k.as_str(), "path" | "dir" | "width" | "height" | "percent" | "colorTable" | "colorTableEdits" | "numbers") {
                 f.insert(k, v);
             }
         }
@@ -152,13 +153,17 @@ fn web_pane(app: &PhotocraftApp, ui: &mut egui::Ui, size: egui::Vec2, p: Option<
     };
     ui.vertical(|ui| {
         ui.set_width(size.x);
-        let (r, response) = ui.allocate_exact_size((size - egui::vec2(0.0, 42.0)).max(egui::vec2(1.0, 1.0)), egui::Sense::drag());
+        let (r, response) = ui.allocate_exact_size((size - egui::vec2(0.0, 42.0)).max(egui::vec2(1.0, 1.0)), egui::Sense::click_and_drag());
         let response = response.on_hover_cursor(egui::CursorIcon::Grab);
         if let Some(rects) = f.get_mut("__previewRects").and_then(Value::as_array_mut) {
             rects.push(json!([r.left(), r.top(), r.right(), r.bottom()]));
         }
         crate::widgets::checker(ui.painter(), r, 8.0);
-        web_preview::paint(ui, r, &response, &tex, source_size, f);
+        let image = web_preview::paint(ui, r, &response, &tex, source_size, f);
+        if !doc.slices.is_empty() {
+            let slices = web_preview::slice_layout(ui, &doc, rev);
+            web_preview::slice_overlay(ui, &doc, &slices, image, &response, f);
+        }
         ui.painter().rect_stroke(r, 0.0, egui::Stroke::new(1.0, t.separator), egui::StrokeKind::Inside);
         let (l1, l2) = match (p, info) {
             (None, _) => ("Original".to_string(), format!("{}  ·  {} × {} px", doc.name, doc.size.width, doc.size.height)),
@@ -243,9 +248,11 @@ pub(super) fn web_frame_document(doc: &photocraft_doc::Document, frame: Option<u
     Ok((*preview.active().ok_or(photocraft_engine::EngineError::NoDocument)?.doc).clone())
 }
 
+/// Show the preview panes and the encoding, image-size and slice-export controls.
 pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let t = Tokens::get(ui.ctx());
     let Some(doc) = app.session.active().map(|d| d.doc.clone()) else { return };
+    f.insert("__hasSlices".into(), json!(!doc.slices.is_empty()));
     ui.horizontal(|ui| {
         let mut view = s(f, "__view", "2up");
         for (k, l) in WEB_VIEWS {
@@ -413,12 +420,39 @@ pub(super) fn web_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, f: &mut Map<S
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new(tl!("Image Size")).font(crate::theme::semibold(12.0)).color(t.text));
                 web_size(ui, f, &doc);
-                let nslices = photocraft_doc::slices::resolve(&doc).len();
                 if !doc.slices.is_empty() {
+                    let revision = app.session.active().map_or(0, |st| st.revision);
+                    let slices = web_preview::slice_layout(ui, &doc, revision);
+                    let nslices = slices.len();
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new(crate::i18n::trn(crate::i18n::current(), nslices as u64, "{n} slice", "{n} slices")).color(t.text_dim));
                     check(ui, f, "html", tl!("Save HTML and Images"), true);
-                    dropdown_str(ui, "web-slices", tl!("Slices"), f, "slices", &[("all", tl!("All Slices")), ("user", tl!("All User Slices"))], 150.0);
+                    dropdown_str(
+                        ui,
+                        "web-slices",
+                        tl!("Slices"),
+                        f,
+                        "slices",
+                        &[("all", tl!("All Slices")), ("user", tl!("All User Slices")), ("selected", tl!("Selected Slices"))],
+                        150.0,
+                    );
+                    ui.add(egui::Label::new(egui::RichText::new(tl!("Click slices in the preview. Shift-click selects more.")).weak()).wrap());
+                    if s(f, "slices", "all") == "selected" {
+                        ui.label(tl!("Select slices:"));
+                        let mut selected = web_preview::selected_numbers(f);
+                        egui::ScrollArea::vertical().id_salt("web-slice-selection").max_height(120.0).show(ui, |ui| {
+                            for slice in slices.iter() {
+                                let mut picked = selected.contains(&slice.number);
+                                if crate::widgets::checkbox(ui, &mut picked, &format!("{:02}: {}", slice.number, slice.name)).changed() {
+                                    selected.retain(|n| *n != slice.number);
+                                    if picked {
+                                        selected.push(slice.number);
+                                    }
+                                    f.insert("__selectedSlices".into(), json!(selected));
+                                }
+                            }
+                        });
+                    }
                 }
             });
         });
@@ -506,6 +540,7 @@ fn web_size(ui: &mut egui::Ui, f: &mut Map<String, Value>, doc: &photocraft_doc:
     });
 }
 
+/// Prepare and authorize the selected export, then save or ask for its destination.
 pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Result<Value, String> {
     // Check while the control/input policy is still installed, before an asynchronous picker
     // can outlive the request. A browser download uses the interactive platform writer.
@@ -520,12 +555,13 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
         }
         Ok(())
     };
-    let mut p = params(f);
+    let doc = app.session.active().ok_or("no document")?.doc.clone();
+    let mut p = web_params(f, &doc)?;
     authorize(&p)?;
     // Confirmation may follow a field edit without an intervening frame (Enter or automation).
     let mut fields = f.clone();
     web_preview::prepare_table(app, &mut fields)?;
-    let prepared = params(&fields);
+    let prepared = web_params(&fields, &doc)?;
     if prepared != p {
         // The policy must also approve the actual palette-bearing export parameters.
         authorize(&prepared)?;
@@ -534,7 +570,6 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
     if p.get("path").is_some() || p.get("dir").is_some() {
         return save_for_web(app, p);
     }
-    let doc = app.session.active().ok_or("no document")?.doc.clone();
     let has_slices = !doc.slices.is_empty();
     let html = b(f, "html", true);
     let st = WebSettings::from_params(&p, "file.export.saveForWebLegacy").map_err(|e| e.to_string())?;
@@ -551,6 +586,31 @@ pub(super) fn web_confirm(app: &mut PhotocraftApp, f: &Map<String, Value>) -> Re
         }
         save_for_web(app, p)
     })
+}
+
+/// Validate the selection and output options, then build the command's numbered filter.
+pub(super) fn web_params(fields: &Map<String, Value>, doc: &photocraft_doc::Document) -> Result<Value, String> {
+    let mut p = params(fields);
+    if p["slices"] == "selected" {
+        let html = b(fields, "html", true);
+        p["html"] = json!(html);
+        let numbers = fields.get("__selectedSlices").and_then(Value::as_array).filter(|numbers| !numbers.is_empty());
+        let numbers = numbers.ok_or("Select one or more slices")?;
+        let slices = photocraft_doc::slices::resolve(doc);
+        if numbers.iter().any(|n| n.as_u64().is_none_or(|n| !slices.iter().any(|slice| u64::try_from(slice.number).ok() == Some(n)))) {
+            return Err("Invalid selected slice number".into());
+        }
+        if !html
+            && !slices
+                .iter()
+                .any(|slice| slice.kind != photocraft_doc::SliceKind::NoImage && numbers.iter().any(|n| n.as_u64() == u64::try_from(slice.number).ok()))
+        {
+            return Err("Selected slices contain no images; enable HTML output".into());
+        }
+        p["slices"] = json!("all");
+        p["numbers"] = json!(numbers);
+    }
+    Ok(p)
 }
 
 /// Runs Save for Web with `p`, which says where to write.
