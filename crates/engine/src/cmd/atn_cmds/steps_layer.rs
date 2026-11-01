@@ -57,7 +57,7 @@ pub(super) fn select_from(d: &Descriptor) -> Mapped {
         },
         // Switching to another open document: its offset from the active one, -1 for the previous
         // opened document and 1 for the next, independently of dragged tabs (#7103).
-        (Some("Dcmn"), Target::Offset(o)) => step("document.activate", json!({"offset": o})),
+        (Some("Dcmn"), Target::Offset(o)) if o != 0 => step("document.activate", json!({"offset": o})),
         _ => Mapped::Unsupported { harmless: false },
     }
 }
@@ -105,6 +105,10 @@ pub(super) fn select_to(id: &str, p: &Value) -> Option<Descriptor> {
         // An absolute tab index has no Photoshop equivalent; an offset is what Photoshop records.
         "document.activate" if p.get("document").is_none_or(Value::is_null) => {
             let offset = i32::try_from(p.get("offset")?.as_i64()?).ok()?;
+            // Photoshop rejects zero, though the native command permits that no-op.
+            if offset == 0 {
+                return None;
+            }
             desc("null").with("null", D::Reference(vec![ReferenceItem::Offset { class: class("Dcmn"), offset }]))
         }
         _ => {

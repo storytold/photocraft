@@ -267,6 +267,7 @@ pub(super) fn convert_mode_to(id: &str, p: &Value) -> Option<Descriptor> {
     })
 }
 
+/// Import canvas dimensions, anchors and explicit extension-colour choices.
 pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
     let mut p = Map::new();
     for (k, param) in [("Wdth", "width"), ("Hght", "height")] {
@@ -296,22 +297,25 @@ pub(super) fn canvas_size_from(d: &Descriptor) -> Mapped {
         _ => return Mapped::Unsupported { harmless: false },
     };
     p.insert("anchor".into(), anchor.into());
-    if let Some(c) = get_enum(d, "canvasExtensionColorType") {
+    if d.get("canvasExtensionColorType").is_some() {
+        let Some(c) = get_enum(d, "canvasExtensionColorType") else { return Mapped::Unsupported { harmless: false } };
         match lookup(EXTENSION, &c) {
             Some(c) => {
                 p.insert("extensionColor".into(), c.into());
             }
-            None => match get_obj(d, "canvasExtensionColor").and_then(color_hex) {
+            None if c == "Clr" || c == "Othr" => match get_obj(d, "canvasExtensionColor").and_then(color_hex) {
                 Some(hex) => {
                     p.insert("extensionColor".into(), hex.into());
                 }
                 None => return Mapped::Unsupported { harmless: false },
             },
+            None => return Mapped::Unsupported { harmless: false },
         }
     }
     step("image.canvasSize", Value::Object(p))
 }
 
+/// Write canvas geometry and canonical extension-colour identifiers.
 pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     let anchor = jstr(p, "anchor").unwrap_or("center");
     let v = if anchor.starts_with("top") {
@@ -342,7 +346,7 @@ pub(super) fn canvas_size_to(_: &str, p: &Value) -> Option<Descriptor> {
     if let Some(c) = jstr(p, "extensionColor") {
         d = match lookup_back(EXTENSION, c) {
             Some(e) => d.with("canvasExtensionColorType", enm("canvasExtensionColorType", e)),
-            None => d.with("canvasExtensionColorType", enm("canvasExtensionColorType", "Othr")).with("canvasExtensionColor", D::Descriptor(color_desc(c)?)),
+            None => d.with("canvasExtensionColorType", enm("canvasExtensionColorType", "Clr ")).with("canvasExtensionColor", D::Descriptor(color_desc(c)?)),
         };
     }
     Some(d)
@@ -537,12 +541,14 @@ pub(super) fn reset_to(_: &str, _: &Value) -> Option<Descriptor> {
     Some(desc("null").with("null", D::Reference(vec![ReferenceItem::Property { class: class("Clr "), key: Id::new("Clrs") }])))
 }
 
+/// Resolve an assigned or converted profile, preserving a supported rendering intent.
 pub(super) fn profile_from(d: &Descriptor, id: &str) -> Mapped {
     let name = get_text(d, "T   ").or_else(|| get_text(d, "profile"));
     let Some(profile) = name.as_deref().and_then(|n| lookup(PROFILES, n)) else { return Mapped::Unsupported { harmless: false } };
     let mut p = json!({"profile": profile});
     if id == "edit.convertToProfile" {
-        if let Some(i) = get_enum(d, "Inte").and_then(|i| lookup(INTENT, &i)) {
+        if d.get("Inte").is_some() {
+            let Some(i) = get_enum(d, "Inte").and_then(|i| lookup(INTENT, &i)) else { return Mapped::Unsupported { harmless: false } };
             p["intent"] = json!(i);
         }
         if let Some(b) = get_bool(d, "MpBl") {
@@ -552,6 +558,7 @@ pub(super) fn profile_from(d: &Descriptor, id: &str) -> Mapped {
     step(id, p)
 }
 
+/// Export the supported profile and canonical rendering-intent identifier.
 pub(super) fn profile_to(id: &str, p: &Value) -> Option<Descriptor> {
     let name = lookup_back(PROFILES, jstr(p, "profile")?)?;
     let mut d = desc("null").with("null", target_ref("Dcmn"));

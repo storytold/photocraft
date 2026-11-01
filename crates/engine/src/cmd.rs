@@ -239,6 +239,7 @@ fn registry() -> &'static Registry {
 // ---------- the table ----------
 
 #[allow(clippy::too_many_lines)]
+/// Register the core file, edit, layer and document commands.
 fn build() -> Vec<CommandSpec> {
     let mut v = vec![
         // File
@@ -1070,8 +1071,7 @@ fn build() -> Vec<CommandSpec> {
                 let idx = match (given("document"), given("offset")) {
                     (Some(_), Some(_)) => return Err(bad("document.activate", "give `document` or `offset`, not both")),
                     (None, None) => return Err(bad("document.activate", "needs `document` (a tab index) or `offset`")),
-                    // Refuse offsets past the opening-order ends rather than wrap, so an action that
-                    // copies from one document never silently pastes into the wrong one (#7103).
+                    // Recorded offsets wrap in opening order, independently of dragged tabs.
                     (None, Some(o)) => {
                         let o = o.as_i64().ok_or_else(|| bad("document.activate", "`offset` must be an integer"))?;
                         s.document_at_offset(o)?

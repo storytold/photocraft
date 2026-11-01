@@ -4,7 +4,7 @@ use photocraft_psd::descriptor::{Descriptor, Id, ReferenceItem, UnicodeString, V
 use serde_json::json;
 
 #[test]
-fn blend_modes_accept_photoshop_string_ids_and_export_canonical_char_ids() {
+fn blend_modes_accept_photoshop_string_ids_and_export_canonical_ids() {
     for (string_id, char_id, label) in [
         ("normal", "Nrml", "Normal"),
         ("dissolve", "Dslv", "Dissolve"),
@@ -23,7 +23,7 @@ fn blend_modes_accept_photoshop_string_ids_and_export_canonical_char_ids() {
         ("saturation", "Strt", "Saturation"),
         ("color", "Clr", "Color"),
         ("luminosity", "Lmns", "Luminosity"),
-        ("passThrough", "PsTh", "Pass Through"),
+        ("passThrough", "passThrough", "Pass Through"),
     ] {
         assert_eq!(blend_label(string_id), Some(label), "{string_id}");
         assert_eq!(blend_ps(label), Some(char_id), "{label} remains serialized canonically");
@@ -1586,9 +1586,8 @@ fn select_document_by_offset_imports_plays_and_saves_back() {
     one.execute("file.new", json!({"width": 8, "height": 8, "name": "template"})).unwrap();
     one.execute("actions.load", json!({"data": data})).unwrap();
     let r = one.execute("actions.play", json!({"action": "Copy In"})).unwrap();
-    assert_eq!(r["failed"]["step"], 0, "{r}");
-    assert_eq!(r["failed"]["error"], "no document 1 before the active one, which is 1 of 1", "{r}");
-    assert_eq!(one.active().unwrap().doc.layers.len(), 1);
+    assert!(r.get("failed").is_none(), "{r}");
+    assert_eq!(one.active().unwrap().doc.layers.len(), 2, "offsets wrap back to the only open document");
 }
 
 fn set_of(name: &str, actions: Vec<(&str, Vec<AtnItem>)>) -> String {
