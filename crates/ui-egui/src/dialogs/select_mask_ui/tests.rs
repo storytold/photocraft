@@ -998,3 +998,57 @@ fn a_resize_released_while_the_middle_button_pans_ends_with_its_button() {
     assert_eq!((w.brush_size, w.hardness), (want, 100.0), "the later drag doesn't resize the brush");
     assert!(w.resize.is_none(), "the gesture ended with its button");
 }
+
+/// Esc mid-resize puts the brush back and ends only the resize, as in Photoshop (FredApps on
+/// #10559): the workspace stays open, the rest of that drag neither resizes nor selects, and the
+/// next drag selects as usual.
+#[test]
+fn escape_mid_resize_restores_the_brush_and_keeps_the_workspace() {
+    use egui::PointerButton;
+    let (mut h, over) = resize_harness("brush");
+    pointer_down(&mut h, over, PointerButton::Secondary, Modifiers::ALT);
+    pointer_move(&mut h, over, vec2(40.0, -60.0));
+    let w = h.state().distort.select_mask.as_ref().unwrap();
+    assert!(w.resize.is_some() && w.brush_size > 30.0 && w.hardness < 100.0, "the drag resizes");
+    // Esc with Alt and the right button still held.
+    h.event(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    h.event(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: false, repeat: false, modifiers: Modifiers::ALT });
+    h.run_steps(1);
+    let w = h.state().distort.select_mask.as_ref().expect("Esc ends the resize, not the workspace");
+    assert_eq!((w.brush_size, w.hardness), (30.0, 100.0), "the brush is as it was");
+    assert!(w.resize.is_none());
+    // The drag goes on with Alt and the right button held: it does nothing.
+    pointer_move(&mut h, over + vec2(40.0, -60.0), vec2(40.0, 40.0));
+    h.event(egui::Event::PointerButton { pos: over + vec2(80.0, -20.0), button: PointerButton::Secondary, pressed: false, modifiers: Modifiers::ALT });
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    let w = h.state().distort.select_mask.as_ref().unwrap();
+    assert_eq!((w.brush_size, w.hardness), (30.0, 100.0), "the rest of the drag doesn't resize");
+    assert!(w.strokes.is_empty() && w.edits.is_empty() && w.undo.is_empty(), "nor select");
+    assert!(w.resize.is_none());
+    // The next drag selects with the brush as it was.
+    pointer_drag(&mut h, over, PointerButton::Primary, Modifiers::NONE, vec2(30.0, 0.0));
+    let w = h.state().distort.select_mask.as_ref().unwrap();
+    assert_eq!((w.brush_size, w.hardness), (30.0, 100.0), "the next drag doesn't resize");
+    assert_eq!(w.edits.len(), 1, "it selects");
+    assert_eq!(w.edits[0]["mode"], json!("add"));
+    // Control+Alt-drag (the macOS gesture) on Quick Selection, Esc with both still held.
+    let ctrl_alt = Modifiers::CTRL | Modifiers::ALT;
+    h.state_mut().distort.select_mask.as_mut().unwrap().pick(SmTool::Quick);
+    pointer_down(&mut h, over, PointerButton::Primary, ctrl_alt);
+    pointer_move(&mut h, over, vec2(30.0, 0.0));
+    assert!(h.state().distort.select_mask.as_ref().unwrap().quick_size > 30.0, "the drag resizes");
+    h.event(egui::Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: ctrl_alt });
+    h.run_steps(1);
+    let w = h.state().distort.select_mask.as_ref().expect("the workspace stays open");
+    assert_eq!(w.quick_size, 30.0, "Quick Selection's size is as it was");
+    assert!(w.resize.is_none());
+    pointer_move(&mut h, over + vec2(30.0, 0.0), vec2(30.0, 0.0));
+    h.event(egui::Event::PointerButton { pos: over + vec2(60.0, 0.0), button: PointerButton::Primary, pressed: false, modifiers: ctrl_alt });
+    h.event(egui::Event::ModifiersChanged(Modifiers::NONE));
+    h.run_steps(2);
+    let w = h.state().distort.select_mask.as_ref().unwrap();
+    assert_eq!(w.quick_size, 30.0, "the rest of the drag doesn't resize");
+    assert!(w.strokes.is_empty() && w.edits.len() == 1, "nor select");
+}

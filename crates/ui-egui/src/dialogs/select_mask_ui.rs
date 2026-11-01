@@ -485,6 +485,18 @@ impl SelectMaskWorkspace {
         }
     }
 
+    /// Esc mid-resize: the brush goes back to its size and hardness when the drag began, as in
+    /// Photoshop. egui drops the drag on Esc, so the rest of it does nothing.
+    fn escape_resize(&mut self) {
+        let Some((tool, _, size, hardness, _)) = self.resize.take() else { return };
+        match tool {
+            SmTool::Quick => self.quick_size = size,
+            SmTool::RefineEdge => self.refine_size = size,
+            _ => self.brush_size = size,
+        }
+        self.hardness = hardness;
+    }
+
     fn pick(&mut self, t: SmTool) {
         self.tool = t;
         match t {
@@ -881,9 +893,16 @@ pub fn enter(app: &mut PhotocraftApp) -> bool {
     false
 }
 
-/// Esc: drops a Polygonal Lasso polygon being drawn, else Cancel.
+/// A brush resize is in progress (Esc then ends it, with Control+Alt still held too).
+pub fn resizing(app: &PhotocraftApp) -> bool {
+    app.distort.select_mask.as_ref().is_some_and(|w| w.resize.is_some())
+}
+
+/// Esc: ends a brush resize as it began, else drops a Polygonal Lasso polygon being drawn, else
+/// Cancel.
 pub fn escape(app: &mut PhotocraftApp) {
     match app.distort.select_mask.as_mut() {
+        Some(w) if w.resize.is_some() => w.escape_resize(),
         Some(w) if w.poly.is_some() => w.poly = None,
         _ => cancel(app),
     }
