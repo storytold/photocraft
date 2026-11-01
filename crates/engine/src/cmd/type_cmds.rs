@@ -910,6 +910,49 @@ pub(crate) fn new_text_layer(s: &Session, p: &Value, cmd: &str) -> Result<TextLa
 
 const CHAR_PARAMS: &str = r##""font":str,"fontStyle":str,"weight":100..900,"italic":bool,"size":0.1..=1296 pt,"color":"#rrggbb"|[r,g,b,a],"tracking":-1000..=10000 (1/1000 em),"leading":pt|"auto","baselineShift":pt,"horizontalScale":%,"verticalScale":%,"underline":bool,"strikethrough":bool,"fauxBold":bool,"fauxItalic":bool,"kerning":1/1000em (manual, after each character)|"metrics"|"optical"|"off","caps":"normal|small|all","baseline":"normal|superscript|subscript","ligatures":bool,"discretionaryLigatures":bool,"features":{"ss01":1},"variations":{"wght":650},"language":str"##;
 
+/// The keys a typing edit carries: its text and the session that groups its keystrokes.
+const TYPING_KEYS: [&str; 4] = ["layer", "coalesce", "replace", "text"];
+
+/// While an action records, one typing session is one step, as Photoshop records "Make text
+/// layer" or "Set current text layer" once (#10113). Its keystrokes (`type.edit` with the
+/// session's `coalesce` key, changing the text) fold into the `type.create` that made the layer,
+/// whose `text` becomes the layer's text, or into one `type.edit` that sets the whole text. Neither
+/// names the layer, so the step plays on the new or the current type layer of any document, as
+/// Batch needs. Other edits are journaled as before (`recorded_step` drops the id of a sole
+/// selected layer). Returns true when it journaled the step itself.
+pub fn coalesce_journal(s: &mut Session, id: &str, params: &Value) -> bool {
+    let Some((from, _)) = s.actions.recording else { return false };
+    if id != "type.edit" {
+        return false;
+    }
+    let Some(st) = s.active() else { return false };
+    let Some(layer) = params.get("layer").and_then(Value::as_u64) else { return false };
+    if st.active_layer != Some(LayerId(layer)) {
+        return false;
+    }
+    let typing =
+        params.as_object().is_some_and(|o| o.keys().all(|k| TYPING_KEYS.contains(&k.as_str())) && (o.contains_key("replace") || o.contains_key("text")));
+    let key = params.get("coalesce").filter(|k| !k.is_null()).cloned();
+    let (Some(key), true) = (key, typing) else { return false };
+    let Some(text) = st.doc.layer(LayerId(layer)).and_then(|l| match &l.content {
+        LayerContent::Text(t) => Some(t.text.clone()),
+        _ => None,
+    }) else {
+        return false;
+    };
+    // The newest layer was made by the step before: the type tool makes a layer, then types in it.
+    let newest = st.doc.walk().into_iter().map(|(_, _, l)| l.id.0).max() == Some(layer);
+    let last = s.journal.len().checked_sub(1).filter(|&i| i >= from);
+    match last.and_then(|i| s.journal.get_mut(i)) {
+        Some((last_id, p)) if last_id == "type.create" && newest => p["text"] = json!(text),
+        Some((last_id, p)) if last_id == "type.edit" && p.get("coalesce") == Some(&key) && p.get("layer").is_none() => {
+            *p = json!({"text": text, "coalesce": key});
+        }
+        _ => s.journal.push((id.to_string(), json!({"text": text, "coalesce": key}))),
+    }
+    true
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec {

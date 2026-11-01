@@ -895,6 +895,24 @@ fn file_command(fields: &Fields) -> Option<&'static str> {
 
 /// Confirm a command dialog no specific handler owns: run its `__command` with the dialog's
 /// parameters, then settle the filter preview and the playing action.
+/// Batch and the other folder runs (Image Processor, …) go on past a file that fails and list it
+/// in their result's `errors`; the status bar and a notice say which files failed and why, so a run
+/// that fails on every file isn't silent (#10682).
+fn report_file_errors(app: &mut PhotocraftApp, d: &Dialog, r: &Value) {
+    let Some(errors) = r.get("errors").and_then(Value::as_array).filter(|e| !e.is_empty()) else { return };
+    let lines: Vec<String> = errors
+        .iter()
+        .map(|e| {
+            let file = e.get("file").and_then(Value::as_str).unwrap_or_default();
+            let name = std::path::Path::new(file).file_name().map_or_else(|| file.to_string(), |n| n.to_string_lossy().into_owned());
+            format!("{name}: {}", e.get("error").and_then(Value::as_str).unwrap_or_default())
+        })
+        .collect();
+    let label = d.fields.get("__label").and_then(Value::as_str).unwrap_or("Command");
+    let what = crate::i18n::t(label).trim_end_matches('…').to_string();
+    crate::notices::io_warnings(app, &what, &lines);
+}
+
 fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
     let Some(cmd) = d.fields.get("__command").and_then(Value::as_str).map(str::to_string) else {
         app.filter_preview = None;
@@ -926,6 +944,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
         }
     };
     let result = app.run(&cmd, params.clone());
+    if let Ok(r) = &result {
+        report_file_errors(app, &d, r);
+    }
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
     let running =

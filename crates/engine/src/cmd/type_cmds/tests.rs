@@ -793,3 +793,70 @@ fn relative_steps_move_each_character_from_its_own_value() {
     s.execute("type.setStyle", json!({"layer": empty, "range": [0, 0], "leadingBy": -2})).unwrap();
     assert_eq!(text_layer(&s, empty).char_runs()[0].style.leading_pt, Some(10.0));
 }
+
+/// Keystrokes as the Type tool sends them: one `replace` per character, in one session.
+fn type_in(s: &mut Session, layer: u64, at: usize, text: &str, session: &str) {
+    for (i, c) in text.chars().enumerate() {
+        let p = json!({"layer": layer, "replace": {"start": at + i, "end": at + i, "text": c.to_string()}, "coalesce": session});
+        s.execute("type.edit", p).unwrap();
+    }
+}
+
+fn the_active_text(s: &Session) -> String {
+    let d = s.active().unwrap();
+    match &d.doc.layer(d.active_layer.unwrap()).unwrap().content {
+        LayerContent::Text(t) => t.text.clone(),
+        other => panic!("{}", other.kind_name()),
+    }
+}
+
+/// #10113: recording a new type layer records one "make a text layer" step with the typed text,
+/// not one step per keystroke, and it names no layer id, so Batch plays it in other documents.
+#[test]
+fn recording_typed_text_records_one_step_that_plays_in_another_document() {
+    let mut s = session();
+    s.execute("actions.record", json!({"name": "Caption"})).unwrap();
+    let id = s.execute("type.create", json!({"x": 20, "y": 50, "text": "", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    type_in(&mut s, id, 0, "Hello", "s1");
+    s.execute("actions.stop", json!({})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps.len(), 1, "one step, not one per keystroke: {steps:?}");
+    assert_eq!(steps[0].0, "type.create");
+    assert_eq!(steps[0].1["text"], "Hello");
+    assert!(steps[0].1.get("layer").is_none());
+    // Another document, as Batch opens one per file.
+    s.execute("file.new", json!({"width": 120, "height": 80})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "Caption"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert_eq!(the_active_text(&s), "Hello");
+}
+
+/// Typing into an existing type layer records one "set the current text layer's text" step with
+/// no layer id; it plays on the current type layer of another document.
+#[test]
+fn recording_an_edit_of_existing_text_records_the_whole_text_once() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 20, "y": 50, "text": "Hi", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("actions.record", json!({"name": "Greet"})).unwrap();
+    type_in(&mut s, id, 2, " there", "s2");
+    s.execute("actions.stop", json!({})).unwrap();
+    let steps = &s.actions.list[0].steps;
+    assert_eq!(steps.len(), 1, "{steps:?}");
+    assert_eq!((steps[0].0.as_str(), steps[0].1.get("layer"), steps[0].1["text"].as_str()), ("type.edit", None, Some("Hi there")));
+    s.execute("file.new", json!({"width": 120, "height": 80, "background": "transparent"})).unwrap();
+    s.execute("type.create", json!({"x": 10, "y": 40, "text": "Hey", "size": 24})).unwrap();
+    let played = s.execute("actions.play", json!({"action": "Greet"})).unwrap();
+    assert!(played.get("failed").is_none(), "{played}");
+    assert_eq!(the_active_text(&s), "Hi there");
+}
+
+/// Outside a recording the journal keeps every edit as it ran.
+#[test]
+fn typing_without_recording_keeps_the_journal_as_it_ran() {
+    let mut s = session();
+    let id = s.execute("type.create", json!({"x": 20, "y": 50, "text": "", "size": 24})).unwrap()["layer"].as_u64().unwrap();
+    let before = s.journal.len();
+    type_in(&mut s, id, 0, "abc", "s3");
+    assert_eq!(s.journal.len(), before + 3);
+    assert!(s.journal.iter().rev().take(3).all(|(id, p)| id == "type.edit" && p.get("replace").is_some()));
+}

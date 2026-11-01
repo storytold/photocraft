@@ -959,7 +959,7 @@ impl Session {
         if let Some(from) = nested_from.filter(|_| crate::actions_cmds::replayable(id)) {
             self.journal.truncate(from);
         }
-        if !crate::brush_cmds::coalesce_journal(self, id, &params) {
+        if !crate::brush_cmds::coalesce_journal(self, id, &params) && !crate::type_cmds::coalesce_journal(self, id, &params) {
             let params = match id {
                 _ if self.actions.recording.is_none() => params,
                 "layer.duplicate" => crate::artboard_cmds::recorded_duplicate(self, crate::layer_multi_cmds::recorded_step(self, id, params, pre_selected)),
