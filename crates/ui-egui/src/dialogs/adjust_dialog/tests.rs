@@ -430,6 +430,23 @@ fn curves_smooth_is_an_icon_beside_the_pencil_and_smooths_the_map() {
     assert!(steepest(&map) < steepest(&jagged) / 2.0, "Smooth turned the 180-level jumps into slopes: {}", steepest(&map));
 }
 
+/// #9226 review: Smooth is a named button, as the point, pencil and eyedropper icons are,
+/// disabled (as the eyedroppers are when they don't apply) until the pencil draws the curve.
+#[test]
+fn curves_smooth_is_named_and_disabled_until_the_pencil_draws() {
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app_with_image());
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+    h.run_steps(4);
+    let disabled =
+        |h: &Harness<'_, PhotocraftApp>| h.get_by_role_and_label(egui::accesskit::Role::Button, "Smooth the curve values").accesskit_node().is_disabled();
+    assert!(disabled(&h), "point mode: nothing drawn to smooth");
+    assert!(!h.get_by_role_and_label(egui::accesskit::Role::Button, "Draw to modify the curve").accesskit_node().is_disabled());
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert("pencil".into(), json!(true));
+    h.run_steps(3);
+    assert!(!disabled(&h), "pencil mode: Smooth applies");
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
