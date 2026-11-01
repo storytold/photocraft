@@ -335,6 +335,28 @@ fn a_run_of_arrow_nudges_is_one_history_step() {
     assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(20, 18, 36, 34), "and one Redo does it again");
 }
 
+/// #9511: zoomed out, where each press moves several document pixels, a run of nudges is still
+/// one History state.
+#[test]
+fn a_run_of_arrow_nudges_is_one_history_step_zoomed_out() {
+    let mut app = app_with_layer();
+    let id = app.session.active().unwrap().active_layer.unwrap();
+    app.ui.views[0].zoom = 0.5;
+    let h0 = history(&app);
+    // Twelve taps of 2 px each at 50 %, then ⇧ for ten more px: still the same run.
+    for i in 0..12 {
+        assert!(press_at(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE, 5.0 + 0.2 * f64::from(i)));
+    }
+    assert!(press_at(&mut app, egui::Key::ArrowDown, egui::Modifiers::SHIFT, 7.6));
+    assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(32, 18, 48, 34));
+    assert_eq!(history(&app), h0 + 1, "thirteen presses, one state");
+    assert_eq!(app.session.active().unwrap().history.undo_label(), Some("Move"));
+    assert!(app.session.undo());
+    assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(8, 8, 24, 24), "one Undo takes back the run");
+    assert!(app.session.redo());
+    assert_eq!(bounds(&app, id), photocraft_geom::Rect::new(32, 18, 48, 34), "and one Redo does it again");
+}
+
 /// A pause longer than Nudge Bundle Pause starts a new run; a longer pause setting keeps it.
 #[test]
 fn a_pause_ends_the_run() {
@@ -500,6 +522,19 @@ fn free_transform_nudges_bundle_into_one_undo_step() {
     assert_eq!(quad(&app), moved(2.0, 0.0));
 }
 
+/// #9511: Free Transform keeps Photoshop's 1 document pixel per arrow press at any zoom; only
+/// the Move tool's nudge is one screen pixel.
+#[test]
+fn free_transform_nudges_one_document_pixel_zoomed_out() {
+    let mut app = app_with_layer();
+    app.ui.views[0].zoom = 0.5;
+    let ctx = egui::Context::default();
+    crate::transform_tool::begin(&mut app, &ctx).unwrap();
+    let q0 = app.ui.transform.as_ref().unwrap().quad;
+    assert!(press(&mut app, egui::Key::ArrowRight, egui::Modifiers::NONE));
+    assert_eq!(app.ui.transform.as_ref().unwrap().quad, q0.map(|q| [q[0] + 1.0, q[1]]), "→ at 50 % moves the box 1 px");
+}
+
 /// Arrow keys while editing text must not nudge layers, leaving the keys to the type tool (#5355).
 #[test]
 fn arrow_keys_ignored_during_text_edit() {
@@ -526,10 +561,10 @@ fn arrow_keys_ignored_during_text_edit() {
 
 /// #9511: as in Photoshop, a plain arrow nudge is one screen pixel, so zoomed out it moves the
 /// layer several document pixels (floor of 1 / zoom: 4 at 25 %, 2 at 50 %, 1 at 66.7 %, 1 at
-/// 100 % and above); ⇧ is 10 document pixels at any zoom.
+/// 100 % and above, up to 1600 %); ⇧ is 10 document pixels at any zoom.
 #[test]
 fn a_nudge_is_one_screen_pixel() {
-    for (zoom, step) in [(0.25, 4), (0.5, 2), (2.0 / 3.0, 1), (1.0, 1), (2.0, 1)] {
+    for (zoom, step) in [(0.25, 4), (0.5, 2), (2.0 / 3.0, 1), (1.0, 1), (2.0, 1), (16.0, 1)] {
         let mut app = app_with_layer();
         let id = app.session.active().unwrap().active_layer.unwrap();
         app.ui.views[0].zoom = zoom;
