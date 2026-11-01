@@ -71,9 +71,10 @@ impl Temporary {
 /// Tools on which holding ⌘ (Ctrl off the Mac) is the Move tool. Photoshop excepts the Hand,
 /// Rotate View, Zoom, Slice, Path and Direct Selection, shape and Pen tools (⌘ means something
 /// else to each) and the Crop tool's frame; a Free Transform in progress keeps ⌘ for its distort
-/// handles, and type being edited for its box (every caller also checks `text_edit`). So with a
-/// Type tool, ⌘↵ commits and ⌘ still held then moves the text layer: ⌘-drag, ⌘-arrows, ⌘⌥ to
-/// duplicate it. The selection tools are left out too: for them ⌘ is handled per press in
+/// handles, and type being edited for its box (every caller also checks `text_edit`). As in
+/// Photoshop, an open type box is being edited whatever is in it: a new, empty box, or one
+/// clicked into with nothing typed yet. So with a Type tool, ⌘↵ commits and ⌘ still held then
+/// moves the text layer: ⌘-drag, ⌘-arrows, ⌘⌥ to duplicate it. The selection tools are left out too: for them ⌘ is handled per press in
 /// `canvas::tool_event` (`selection_drag_kind`, `command_moves_layer`), which needs the selection
 /// tool to stay in effect.
 pub fn cmd_moves(t: Tool) -> bool {
