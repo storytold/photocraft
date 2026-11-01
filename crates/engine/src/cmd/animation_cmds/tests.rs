@@ -299,7 +299,8 @@ fn a_group_hidden_child_stays_hidden_in_the_frames_of_the_other_groups() {
     use photocraft_doc::{Group, Layer, LayerContent};
     let mut s = session(&[]);
     let group = |name: &str| {
-        let mut hidden = Layer::new(format!("{name} hidden"), LayerContent::Group(Group { children: Vec::new(), expanded: true, artboard: None, frame_stroke: None }));
+        let mut hidden =
+            Layer::new(format!("{name} hidden"), LayerContent::Group(Group { children: Vec::new(), expanded: true, artboard: None, frame_stroke: None }));
         hidden.visible = false;
         let id = hidden.id;
         (Layer::new(name, LayerContent::Group(Group { children: vec![hidden], expanded: true, artboard: None, frame_stroke: None })), id)

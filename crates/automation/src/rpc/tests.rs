@@ -1017,10 +1017,8 @@ fn invalid_document_index_is_rejected_not_the_active_document() {
 #[test]
 fn doc_open_takes_an_animations_first_frame_unless_asked() {
     use photocraft_codecs::web::{GifFrame, encode_gif_animated};
-    let frames: Vec<GifFrame> = [[255, 0, 0], [0, 0, 255], [0, 255, 0]]
-        .iter()
-        .map(|&c| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: 5 })
-        .collect();
+    let frames: Vec<GifFrame> =
+        [[255, 0, 0], [0, 0, 255], [0, 255, 0]].iter().map(|&c| GifFrame { indices: vec![0; 6], palette: vec![c], transparent: None, delay_cs: 5 }).collect();
     let base = std::env::temp_dir().join(format!("pc-rpc-animated-open-{}", std::process::id()));
     std::fs::create_dir_all(&base).unwrap();
     std::fs::write(base.join("a.gif"), encode_gif_animated(3, 2, &frames, true).unwrap()).unwrap();

@@ -89,7 +89,8 @@ pub use navigator::{NAVIGATOR_SIDE, navigator_gpu_view, navigator_texture, navig
 use paint::draw_tool_state;
 pub(crate) use paint::{clip_line, marching_ants_lines, marching_ants_mapped};
 use paint::{
-    draw_beyond_canvas, draw_drag_preview, marching_ants_segments, paint_cpu_detail, paint_cpu_document, paint_gpu_view, paint_mapped_image_at, paint_overlay, pattern_xf,
+    draw_beyond_canvas, draw_drag_preview, marching_ants_segments, paint_cpu_detail, paint_cpu_document, paint_gpu_view, paint_mapped_image_at, paint_overlay,
+    pattern_xf,
 };
 use selection::selection_shown_offset;
 pub use selection::{SelCursor, selection_cursor};
