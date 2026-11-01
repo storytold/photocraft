@@ -3338,3 +3338,20 @@ fn distort_filter_steps_outside_photoshops_range_are_refused() {
         assert!(export_item(id, &params, "S").is_some(), "{id} {params} refused");
     }
 }
+
+/// Wave's `RndS` is the seed's 32 bits, signed or not: it loads exactly or keeps the step,
+/// never saturated or truncated to another seed (#10605).
+#[test]
+fn wave_seed_loads_its_exact_32_bits_or_keeps_the_step() {
+    let seed = |v: D| match distort("Wave", desc("null").with("RndS", v)) {
+        Mapped::Steps(s) => Some(s[0].1["seed"].clone()),
+        Mapped::Unsupported { .. } => None,
+    };
+    assert_eq!(seed(D::LargeInteger(4_000_000_000)), Some(json!(4_000_000_000_u32)));
+    assert_eq!(seed(D::LargeInteger(-1)), Some(json!(u32::MAX)));
+    assert_eq!(seed(D::Integer(-7)), Some(json!(4_294_967_289_u32)));
+    assert_eq!(seed(D::Double(12.0)), Some(json!(12)));
+    for v in [D::Double(7.5), D::LargeInteger(4_294_967_296), D::LargeInteger(i64::from(i32::MIN) - 1)] {
+        assert_eq!(seed(v.clone()), None, "RndS {v:?} was mapped");
+    }
+}

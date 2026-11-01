@@ -151,14 +151,21 @@ pub(super) fn wave_from(d: &Descriptor) -> Mapped {
     }
     let Some(undefined) = setting(d, "UndA", enumerated, "RptE".into()).and_then(|e| lookup(WAVE_UNDEFINED, &e)) else { return unsupported };
     m.insert("undefinedAreas".into(), undefined.into());
-    match setting(d, "RndS", |v| num(v).map(Some), None) {
+    match setting(d, "RndS", |v| seed_bits(v).map(Some), None) {
         Some(Some(seed)) => {
-            m.insert("seed".into(), Value::from(seed as i32 as u32));
+            m.insert("seed".into(), Value::from(seed));
         }
         Some(None) => {}
         None => return unsupported,
     }
     step("filter.distort.wave", Value::Object(m))
+}
+
+/// `RndS` as the seed's 32 bits: a negative value is a signed seed's bit pattern. A fraction
+/// or a value past 32 bits is no seed, rather than one truncated or saturated to another.
+fn seed_bits(v: &D) -> Option<u32> {
+    let n = num(v).filter(|n| n.fract() == 0.0 && (f64::from(i32::MIN)..=f64::from(u32::MAX)).contains(n))?;
+    Some(if n < 0.0 { n as i32 as u32 } else { n as u32 })
 }
 
 pub(super) fn wave_to(_: &str, p: &Value) -> Option<Descriptor> {
