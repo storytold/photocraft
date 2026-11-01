@@ -3018,7 +3018,7 @@ fn the_layer_menu_stays_anchored_in_a_right_to_left_ui() {
     let ctx = egui::Context::default();
     // The egui fork mirrors the widgets it owns in a right-to-left style.
     ctx.all_styles_mut(|s| s.set_right_to_left(true));
-    let at = [60.0f32, 70.0];
+    let at = [500.0f32, 70.0];
     assert!(super::layer_pick_ui::open(&mut app, &ctx, at, 100.0, 100.0), "the menu opens over the layer");
     let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0))), ..Default::default() };
     let area = |ctx: &egui::Context, app: &mut PhotocraftApp| {
@@ -3036,6 +3036,7 @@ fn the_layer_menu_stays_anchored_in_a_right_to_left_ui() {
     };
     let ltr = ltr.expect("the menu area is shown");
     let rtl = rtl.expect("the menu area is shown");
-    assert_eq!(rtl.min, ltr.min, "the menu does not move");
-    assert!((ltr.min - Pos2::new(at[0], at[1])).length() < 0.5, "the menu opens at the click point: {:?}", ltr.min);
+    assert!((ltr.min - Pos2::new(at[0], at[1])).length() < 0.5, "ltr: the menu opens at the click point: {:?}", ltr.min);
+    assert!((rtl.max.x - at[0]).abs() < 0.5, "rtl: the menu's right edge sits at the click point and it grows left: {rtl:?}");
+    assert!((rtl.min.y - at[1]).abs() < 0.5, "the menu does not move vertically: {rtl:?} vs {ltr:?}");
 }
