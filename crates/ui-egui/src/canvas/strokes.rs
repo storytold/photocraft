@@ -606,6 +606,30 @@ pub(super) fn pointer_button_modifiers(events: &[egui::Event], button: egui::Poi
     })
 }
 
+/// Where a canvas view keeps the Alt its current press started with.
+pub(super) fn press_alt_id(idx: usize) -> egui::Id {
+    egui::Id::unique(("tool-pointer-press-alt", idx))
+}
+
+/// The Alt on the primary press of this frame inside `rect`, if there is one (the first press
+/// wins, as for `tool_press`).
+pub(super) fn press_alt_in(events: &[egui::Event], rect: egui::Rect) -> Option<bool> {
+    events.iter().find_map(|e| match e {
+        egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers } if rect.contains(*pos) => Some(modifiers.alt),
+        _ => None,
+    })
+}
+
+/// The modifiers a click replays its tool events with. They are the release's, except that for
+/// the tools whose ⌥-click matters (the Eyedropper of the painting tools, the clone source, the
+/// Mixer Brush's paint load) Alt is what it was at the press: a click is decided by the Alt held
+/// when the button went down, so letting Alt go together with the button (or a platform that
+/// stamps the release without it) neither paints a dab nor drops the sample (#10544).
+pub(super) fn click_modifiers(tool: Tool, release: egui::Modifiers, press_alt: bool) -> egui::Modifiers {
+    let alt_click = super::cursors::alt_samples(tool, egui::Modifiers::ALT) || matches!(tool, Tool::CloneStamp | Tool::Healing | Tool::MixerBrush);
+    egui::Modifiers { alt: release.alt || (alt_click && press_alt), ..release }
+}
+
 /// The line from the brush to the pointer while stroke smoothing lags (Pulled String Mode and
 /// Stroke Catch-up, #3479): a dark underlay and a light line stay visible on any pixels, and a dot
 /// marks the brush end.

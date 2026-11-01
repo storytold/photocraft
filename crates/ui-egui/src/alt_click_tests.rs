@@ -342,3 +342,153 @@ fn alt_click_with_the_mixer_brush_loads_the_reservoir_not_the_foreground() {
     assert_eq!(h.state().session.tools.mixer.reservoir, Some([0.0, 1.0, 0.0, 1.0]), "⌥-click loaded green");
     assert_eq!(h.state().session.tools.foreground, [0.0, 0.0, 1.0, 1.0]);
 }
+
+// ---------------------------------------------------------------------------------------------
+// #10544: ⌥-click with a Windows touchpad. The Alt key's press arrives, but the modifier state the
+// pointer events carry misses it, and a tap delivers its press and release in one frame.
+
+/// The Alt key press alone: the modifier state stays without Alt (what the platform reported).
+fn alt_key(pressed: bool) -> egui::Event {
+    egui::Event::Key { key: egui::Key::AltLeft, physical_key: Some(egui::Key::AltLeft), pressed, repeat: false, modifiers: Modifiers::NONE }
+}
+
+fn pointer(p: Pos2, pressed: bool, m: Modifiers) -> egui::Event {
+    egui::Event::PointerButton { pos: p, button: PointerButton::Primary, pressed, modifiers: m }
+}
+
+/// One frame of raw input holding `events`. `fold` runs the app's raw-input step that folds the
+/// Alt key into them (`PhotocraftApp::raw_input_hook`); without it the frame is what the platform
+/// sent.
+fn frame(h: &mut Harness<'static, PhotocraftApp>, events: Vec<egui::Event>, fold: bool) {
+    h.input_mut().events.extend(events);
+    if fold {
+        let ctx = h.ctx.clone();
+        crate::alt_keys::fold_alt(&ctx, h.input_mut());
+    }
+    h.step();
+}
+
+/// How a touchpad tap with the Alt key down can reach the app: the groupings of the Alt press,
+/// the hover, the press and the release into frames.
+#[derive(Clone, Copy, Debug)]
+enum Touch {
+    /// Alt, then the hover, then press and release in one frame (a quick tap).
+    QuickTap,
+    /// Alt, the press and the release all in one frame.
+    AltAndQuickTap,
+    /// Alt and the hover, then the press in one frame and the release in the next (a click).
+    PressThenRelease,
+    /// Alt let go with the button: its key release arrives in the release's frame.
+    AltReleasedWithTheButton,
+}
+
+const TAPS: [Touch; 4] = [Touch::QuickTap, Touch::AltAndQuickTap, Touch::PressThenRelease, Touch::AltReleasedWithTheButton];
+
+/// Play `tap` at document point (x, y) with the modifier state stale (always `NONE`).
+fn stale_tap(h: &mut Harness<'static, PhotocraftApp>, tap: Touch, x: f32, y: f32, fold: bool) {
+    let p = screen(h, x, y);
+    let (down, up) = (pointer(p, true, Modifiers::NONE), pointer(p, false, Modifiers::NONE));
+    match tap {
+        Touch::QuickTap => {
+            frame(h, vec![alt_key(true)], fold);
+            frame(h, vec![egui::Event::PointerMoved(p)], fold);
+            frame(h, vec![down, up], fold);
+        }
+        Touch::AltAndQuickTap => {
+            frame(h, vec![egui::Event::PointerMoved(p)], fold);
+            frame(h, vec![alt_key(true), down, up], fold);
+        }
+        Touch::PressThenRelease => {
+            frame(h, vec![alt_key(true), egui::Event::PointerMoved(p)], fold);
+            frame(h, vec![down], fold);
+            frame(h, vec![up], fold);
+        }
+        Touch::AltReleasedWithTheButton => {
+            frame(h, vec![alt_key(true), egui::Event::PointerMoved(p)], fold);
+            frame(h, vec![down], fold);
+            frame(h, vec![alt_key(false), up], fold);
+        }
+    }
+    frame(h, vec![alt_key(false)], fold);
+    h.run_steps(2);
+}
+
+/// The cause: with the modifier state that misses Alt, the same tap samples nothing. With the Alt
+/// key folded into the events (the raw-input step), every grouping samples.
+#[test]
+fn a_touchpad_tap_with_a_stale_modifier_state_samples_with_the_brush() {
+    for tool in [Tool::Brush, Tool::Pencil] {
+        for tap in TAPS {
+            for fold in [false, true] {
+                let mut h = harness(two_colours());
+                h.state_mut().ui.tool = tool;
+                h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
+                let rev = h.state().session.active().unwrap().revision;
+                stale_tap(&mut h, tap, 50.0, 50.0, fold);
+                let what = format!("{tool:?} {tap:?} fold={fold}");
+                if fold {
+                    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "sampled red: {what}");
+                    assert_eq!(h.state().session.active().unwrap().revision, rev, "nothing was painted: {what}");
+                } else {
+                    assert_ne!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "the cause, without the fold: {what}");
+                }
+                assert!(!h.state().alt_sampling, "the press ended: {what}");
+            }
+        }
+    }
+}
+
+#[test]
+fn a_touchpad_tap_with_a_stale_modifier_state_sets_the_clone_source() {
+    for tap in TAPS {
+        let mut h = harness(two_colours());
+        h.state_mut().ui.tool = Tool::CloneStamp;
+        h.state_mut().ui.tool_options.clone_sample = "all".into();
+        h.state_mut().run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0}})).unwrap();
+        let rev = h.state().session.active().unwrap().revision;
+        stale_tap(&mut h, tap, 150.0, 50.0, true);
+        assert!(h.state().session.presets.clone.active().source.is_some(), "⌥-click set the source: {tap:?}");
+        assert_eq!(h.state().session.active().unwrap().revision, rev, "the tap only set the source, it painted nothing: {tap:?}");
+    }
+}
+
+/// Alt is let go together with the button: the click decided at the press stays a sample.
+#[test]
+fn letting_go_of_alt_with_the_button_does_not_paint_a_click() {
+    for tool in [Tool::Brush, Tool::Pencil, Tool::CloneStamp] {
+        let mut h = harness(two_colours());
+        h.state_mut().ui.tool = tool;
+        h.state_mut().ui.tool_options.clone_sample = "all".into();
+        h.state_mut().run("tools.setBrush", json!({"brush": {"size": 10, "hardness": 1.0}})).unwrap();
+        let rev = h.state().session.active().unwrap().revision;
+        let p = screen(&h, 150.0, 50.0);
+        frame(&mut h, vec![egui::Event::ModifiersChanged(Modifiers::ALT), egui::Event::PointerMoved(p)], false);
+        frame(&mut h, vec![pointer(p, true, Modifiers::ALT)], false);
+        // The release is stamped without Alt, in the frame after the press.
+        frame(&mut h, vec![egui::Event::ModifiersChanged(Modifiers::NONE), pointer(p, false, Modifiers::NONE)], false);
+        h.run_steps(2);
+        assert_eq!(h.state().session.active().unwrap().revision, rev, "{tool:?}: the click only sampled");
+        assert!(!h.state().alt_sampling && h.state().drag.is_none(), "{tool:?}");
+        if tool == Tool::CloneStamp {
+            assert!(h.state().session.presets.clone.active().source.is_some(), "the source was set");
+        }
+    }
+}
+
+/// The next click starts from its own Alt: a plain click after an ⌥-click paints.
+#[test]
+fn a_plain_click_after_an_alt_click_paints() {
+    let mut h = harness(two_colours());
+    h.state_mut().ui.tool = Tool::Brush;
+    h.state_mut().run("tools.setColors", json!({"foreground": [0.0, 0.0, 1.0, 1.0]})).unwrap();
+    stale_tap(&mut h, Touch::PressThenRelease, 50.0, 50.0, true);
+    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0]);
+    let rev = h.state().session.active().unwrap().revision;
+    let p = screen(&h, 150.0, 50.0);
+    frame(&mut h, vec![egui::Event::PointerMoved(p)], true);
+    frame(&mut h, vec![pointer(p, true, Modifiers::NONE)], true);
+    frame(&mut h, vec![pointer(p, false, Modifiers::NONE)], true);
+    h.run_steps(2);
+    assert!(h.state().session.active().unwrap().revision > rev, "a click without Alt paints");
+    assert_eq!(h.state().session.tools.foreground, [1.0, 0.0, 0.0, 1.0], "and samples nothing");
+}
