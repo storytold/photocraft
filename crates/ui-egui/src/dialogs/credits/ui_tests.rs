@@ -75,6 +75,27 @@ fn view(h: &Harness<'_>) -> View {
 }
 
 #[test]
+fn debug_dump_table_geometry() {
+    let h = harness(people(8), true);
+    let all: Vec<(String, String, Rect)> = h
+        .query_all(egui_kittest::kittest::by().predicate(|n| n.bounding_box().is_some()))
+        .map(|n| {
+            (
+                format!("{:?}", n.accesskit_node().role()),
+                n.accesskit_node().label().unwrap_or_default(),
+                n.rect(),
+            )
+        })
+        .collect();
+    for (role, label, rect) in &all {
+        eprintln!("NODE {role} {label:?} {rect:?}");
+    }
+    eprintln!("by_label 107: {}", h.query_all_by_label("107").count());
+    eprintln!("by_label @user01: {}", h.query_all_by_label("@user01").count());
+    panic!("debug");
+}
+
+#[test]
 fn the_table_header_stays_put_while_the_rows_scroll() {
     let mut h = harness(people(60), true);
     let before = headers(&h);
