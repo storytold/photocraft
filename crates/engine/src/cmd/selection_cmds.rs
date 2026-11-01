@@ -138,8 +138,9 @@ fn magic_wand(s: &mut Session, p: &Value) -> Result<Value> {
     let region = sel::wand_region(&img, area, (x, y), f(p, "tolerance", 32.0), b(p, "contiguous", true), b(p, "antiAlias", true));
     drop(img);
     let m = mode(p);
+    let baseline = s.magic_wand_selection_baseline.clone().unwrap_or_else(|| s.active().and_then(|st| st.doc.selection.clone()));
     let selected = s.edit("Magic Wand", |doc, _| {
-        doc.selection = sel::combine_region(doc.selection.as_ref(), region.as_ref(), m);
+        doc.selection = sel::combine_region(baseline.as_ref(), region.as_ref(), m);
         Ok(doc.selection.is_some())
     })?;
     Ok(json!({ "selected": selected }))
