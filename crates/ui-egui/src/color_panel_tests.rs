@@ -369,6 +369,30 @@ fn color_wheel_triangle_does_not_rotate_with_the_hue() {
     assert_eq!(crate::color_panel_ui::triangle_sv(nan, pos2(1.0, 1.0)), None);
 }
 
+/// With the hue away from the triangle's fixed top corner (#10122), a click on either marker picks
+/// the colour it shows: the triangle's knob is drawn by `triangle_point` on the same triangle the
+/// click is read from, and the ring's knob at the hue's angle.
+#[test]
+fn color_wheel_markers_pick_their_own_colour_when_the_hue_is_off_the_triangle_corner() {
+    for hsb in [[200.0, 0.6, 0.7], [20.0, 0.3, 0.9], [300.0, 0.9, 0.4]] {
+        let [r, g, b] = photocraft_color::convert::hsb_to_rgb(hsb);
+        let mut h = color_tab(ThemeKind::Pro, ColorPanelMode::ColorWheel, [r, g, b, 1.0]);
+        let area = h.get_by_label("Color Wheel").rect();
+        let (center, inner, outer) = crate::color_panel_ui::wheel_geometry(area);
+        let tri = crate::color_panel_ui::triangle(center, inner - 1.0);
+        let before = bytes(h.state().session.tools.foreground);
+        let knob = crate::color_panel_ui::triangle_point(tri, hsb[1], hsb[2]);
+        press(&mut h, knob, Modifiers::NONE);
+        let got = photocraft_color::convert::rgb_to_hsb(bytes(h.state().session.tools.foreground).map(|v| f32::from(v) / 255.0));
+        assert!((got[0] - hsb[0]).abs() < 2.0 && (got[1] - hsb[1]).abs() < 0.02 && (got[2] - hsb[2]).abs() < 0.02, "triangle knob of {hsb:?} picked {got:?}");
+        let a = hsb[0].to_radians();
+        press(&mut h, center + vec2(a.cos(), -a.sin()) * ((inner + outer) / 2.0), Modifiers::NONE);
+        let after = bytes(h.state().session.tools.foreground);
+        let diff = before.iter().zip(after).map(|(x, y)| x.abs_diff(y)).max().unwrap_or(0);
+        assert!(diff <= 4, "ring knob of {hsb:?}: {before:?} -> {after:?}");
+    }
+}
+
 /// Picking a mode from the panel menu changes the panel; the theme never does.
 #[test]
 fn panel_menu_picks_the_mode_and_ramp() {

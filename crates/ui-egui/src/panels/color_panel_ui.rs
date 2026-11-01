@@ -673,7 +673,7 @@ pub(crate) fn triangle(center: Pos2, r: f32) -> [Pos2; 3] {
 
 /// The point of saturation `s` and brightness `b` in the triangle: black + b·(white − black) +
 /// b·s·(hue − white).
-fn triangle_point([hue, white, black]: [Pos2; 3], s: f32, b: f32) -> Pos2 {
+pub(crate) fn triangle_point([hue, white, black]: [Pos2; 3], s: f32, b: f32) -> Pos2 {
     black + (white - black) * b + (hue - white) * (b * s)
 }
 
