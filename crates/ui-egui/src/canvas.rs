@@ -2054,7 +2054,8 @@ pub fn canvas_view(app: &mut PhotocraftApp, ui: &mut egui::Ui, idx: usize, rect:
     // the GPU nor drawn while one is open, so the workspace's frames don't pay for a hidden image.
     let painted = if paint_after_input {
         None
-    } else if canvas_covered(app) {
+    } else if canvas_covered(app) && ctx.viewport_id() == egui::ViewportId::ROOT {
+        // Only the main window is covered: a floating document window keeps its image.
         Some((false, painter.add(egui::Shape::Noop), img_rect))
     } else {
         Some(paint_canvas(app, ui, &display_view, xf, &paint_input))
@@ -2340,6 +2341,8 @@ mod tests;
 #[cfg(test)]
 mod transform_controls_tests;
 
+#[cfg(test)]
+mod covered_tests;
 #[cfg(test)]
 mod layer_edges_tests;
 

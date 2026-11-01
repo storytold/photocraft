@@ -463,7 +463,9 @@ impl LiquifyField {
     /// nothing is pending or the tool doesn't dab.
     fn pending_dab(&self, s: &LiquifyStroke) -> Option<([f64; 2], [f64; 2], f64, f64)> {
         let cur = self.cursor?;
-        if s.tool == LiquifyTool::LassoMask || s.tool.is_global() || cur.carry <= 0.0 || !cur.carry.is_finite() {
+        // Nothing pending, a tool that doesn't dab, or a dab that would write nothing (no
+        // pressure): no snapshot to take and put back.
+        if s.tool == LiquifyTool::LassoMask || s.tool.is_global() || cur.carry <= 0.0 || !cur.carry.is_finite() || s.pressure <= 0.0 || cur.pressure <= 0.0 {
             return None;
         }
         let delta = [cur.end[0] - cur.last_dab[0], cur.end[1] - cur.last_dab[1]];
