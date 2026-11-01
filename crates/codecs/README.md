@@ -49,6 +49,7 @@ let out = encode(&img, Format::Tiff, &EncodeOptions::default())?;
 | JPEG XL (.jxl) | **no** (see #2868) | yes | U8, U16 | Gray, RGB, RGBA (GrayA expands to RGBA) | yes | no (bare codestream) | no | no | no | no | no | `zune-jpegxl` |
 | DPX | yes | yes | U8, U16 (10/12-bit code values read and written exactly through U16) | Gray, RGB, RGBA | yes | no | no | no | no | DPX header fields only (creator, project, copyright, creation time, transfer, colorimetric, frame position, frame rate, time code) | no | built in |
 | Cineon | yes | yes | U16 (10-bit code values read and written exactly through U16) | Gray, RGB | no | no | no | no | no | no | no | built in |
+| Pixar | yes | **no** | U8 | Gray, GrayA, RGB, RGBA | yes | no | no | no | no | no | n/a | built in |
 | DICOM | yes | **no** | U8, U16 | Gray, RGB | no | no | no | no | no | no | n/a | built in |
 | Amiga IFF (ILBM/PBM) | yes | yes (24-bit ILBM) | U8 | RGB, RGBA | yes (1-bit mask plane on write) | no | no | no | no | no | no | built in |
 | AVIF | **no** | only with feature `avif` | U8 | RGB, RGBA | yes | no | no | no | no | no | yes | `image` + `ravif` |
@@ -136,6 +137,13 @@ embedded table (and a PNG's transparent entry) so `photocraft-io` can open them 
   big-endian 32-bit word, left justified (packing 5), lines on a word boundary. Samples are written
   as `round(v × 1023 / 65535)`, so a frame opened from Cineon keeps its code values; any other
   image takes the encode plan (alpha dropped, CMYK and Lab to RGB) and is quantized to 10 bits.
+
+* **Pixar (read-only).** The 1986 Pixar Image Computer format: the 512-byte little-endian header
+  (magic `80 E8 00 00`), the tile pointer table, and uncompressed 8-bit tiles, read from the
+  published layout. One to four channels (a R/G/B bitmask with optional A, or a single grey
+  channel), one tile or a grid. A bad magic, a tile that runs past the file or is shorter than its
+  pixels, or a partial channel bitmask returns `CodecError::Unsupported`/`Malformed` rather than
+  panicking. There is no Pixar writer; save as PNG.
 
 * **DICOM (read-only).** Single-frame medical images over the uncompressed transfer syntaxes
   (implicit VR little-endian, explicit VR little/big-endian): MONOCHROME1/2 gray (with the
