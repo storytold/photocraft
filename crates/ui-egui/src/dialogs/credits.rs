@@ -277,13 +277,17 @@ fn contributors_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &
         ui.label(tl!("Sort"));
         let (press, close) = crate::press_menu::PressCombo::before(ui, "credits_sort");
         let sort = craft_ui::ComboBox::from_id_salt("credits_sort").selected_text(v.key.label().0).close_behavior(close).show_ui(ui, |ui| {
-            for k in SortKey::ALL {
-                let item = ui.selectable_label(v.key == k, k.label().0);
-                if press.chosen(ui, &item) {
-                    v.key = k;
-                    v.ascending = k.default_ascending();
+            // The combo's popup body is pinned left-to-right by the fork; the shared body scope
+            // and menu rows mirror it under a right-to-left direction.
+            crate::direction::popup_body(ui, |ui| {
+                for k in SortKey::ALL {
+                    let item = crate::menu_keys::menu_row(ui, k.label().0, None, v.key == k, true);
+                    if press.chosen(ui, &item) {
+                        v.key = k;
+                        v.ascending = k.default_ascending();
+                    }
                 }
-            }
+            })
         });
         press.after(&sort.response);
         let _ = sort.response.accessible_name(tl!("Sort"));
