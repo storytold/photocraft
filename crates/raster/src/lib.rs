@@ -373,12 +373,18 @@ impl Surface {
         out.try_reserve_exact(len).map_err(|_| AllocationError::NotEnoughMemory { bytes: len })?;
         out.resize(len, 0);
         let w = r.width() as usize;
+        let zero_default = self.default_pixel.iter().all(|&b| b == 0);
         for tc in r.tiles() {
+            let tile = self.tiles.get(&tc);
+            // Missing tiles already match the zero-filled output.
+            if tile.is_none() && zero_default {
+                continue;
+            }
             let tr = tc.rect().intersect(&r);
             let span = tr.width() as usize * bpp;
             for y in tr.y0..tr.y1 {
                 let dst = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * bpp;
-                match self.tiles.get(&tc) {
+                match tile {
                     Some(t) => {
                         let src = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * bpp;
                         out[dst..dst + span].copy_from_slice(&t.data[src..src + span]);
@@ -936,12 +942,18 @@ impl Surface {
         let bpp = self.format.bytes_per_pixel();
         let w = r.width() as usize;
         let mut out = vec![0u8; w * r.height() as usize * bpp];
+        let zero_default = self.default_pixel.iter().all(|&b| b == 0);
         for tc in r.tiles() {
+            let tile = self.tiles.get(&tc);
+            // Missing tiles already match the zero-filled output.
+            if tile.is_none() && zero_default {
+                continue;
+            }
             let tr = tc.rect().intersect(&r);
             let span = tr.width() as usize * bpp;
             for y in tr.y0..tr.y1 {
                 let dst = (((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize) * bpp;
-                match self.tiles.get(&tc) {
+                match tile {
                     Some(t) => {
                         let src = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * bpp;
                         out[dst..dst + span].copy_from_slice(&t.data[src..src + span]);
