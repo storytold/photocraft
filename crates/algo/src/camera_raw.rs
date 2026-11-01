@@ -375,6 +375,8 @@ fn box_mean(v: &[f32], w: usize, h: usize, r: usize) -> Vec<f32> {
         }
         out
     });
+    // The bands own the vertical results; release the horizontal plane before assembly.
+    drop(tmp);
     let mut out = vec![0.0f32; w * h];
     for (b, band) in bands.iter().enumerate() {
         let (x0, x1) = (b * BAND, ((b + 1) * BAND).min(w));
