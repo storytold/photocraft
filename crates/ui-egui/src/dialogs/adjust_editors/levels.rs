@@ -83,7 +83,7 @@ fn levels_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let channels = editor_channels(cx, space_of(v));
     let mut ch = 0;
     let mut auto = false;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ch = editor_channel_picker(ui, cx.mem.with("levels-ch"), &channels);
         // The Auto button hugs the row's reading end: the right in LTR, the left in RTL.
         ui.with_layout(crate::direction::trailing(), |ui| {
@@ -342,5 +342,58 @@ mod tests {
             (rtl_black.left() - rtl_track.left() - (ltr_black.left() - ltr_track.left())).abs() < 1.0,
             "the fields stay under their handles: {ltr_black:?} {ltr_track:?} {rtl_black:?} {rtl_track:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod rtl_row_twin {
+    use super::*;
+    use crate::direction::Dir;
+    use egui_kittest::kittest::{Queryable, by};
+
+    /// The Levels panel over a fresh adjustment, drawn in `dir`.
+    fn harness(dir: Dir) -> egui_kittest::Harness<'static, Value> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(380.0, 420.0)).build_ui_state(
+            move |ui, v: &mut Value| {
+                let _dir = crate::direction::direction_scope(dir);
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                let cx = EditorCx {
+                    mem: egui::Id::unique("levels-twin"),
+                    hist: None,
+                    gray: false,
+                    swatches: [[0.0; 3], [1.0; 3]],
+                    gradients: Vec::new(),
+                    dialog: true,
+                    dynamic_color_sliders: true,
+                    isolated_curve: None,
+                };
+                levels(ui, v, &cx);
+            },
+            json!({}),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    }
+
+    /// The migrated channel/Auto row keeps its LTR order and gap, and mirrors both under RTL.
+    #[test]
+    fn the_channel_auto_row_keeps_ltr_gap_and_mirrors_under_rtl() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let combo = |h: &egui_kittest::Harness<'_, Value>| {
+            h.query_all(by().role(egui::accesskit::Role::ComboBox)).next().expect("the channel dropdown").rect()
+        };
+        let ltr_combo = combo(&ltr);
+        let ltr_auto = ltr.get_by_label("Auto").rect();
+        assert!(ltr_combo.right() <= ltr_auto.left(), "LTR reads channel then Auto: {ltr_combo:?} {ltr_auto:?}");
+        let ltr_gap = ltr_auto.left() - ltr_combo.right();
+        let rtl_combo = combo(&rtl);
+        let rtl_auto = rtl.get_by_label("Auto").rect();
+        assert!(rtl_auto.right() <= rtl_combo.left(), "RTL reads channel then Auto from the right: {rtl_combo:?} {rtl_auto:?}");
+        let rtl_gap = rtl_combo.left() - rtl_auto.right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "the gap is mirrored, not resized: LTR {ltr_gap} RTL {rtl_gap}");
     }
 }
