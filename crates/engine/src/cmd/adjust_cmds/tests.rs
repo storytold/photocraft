@@ -765,19 +765,22 @@ fn replace_color_localized_clusters_only_change_the_colour_near_the_sample() {
 /// the same samples.
 #[test]
 fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
-    // Red on the left (x < 16), blue in the middle, green on the right (x ≥ 32).
-    let (red, blue, green) = ([0.85, 0.1, 0.1, 1.0], [0.1, 0.15, 0.85, 1.0], [0.1, 0.8, 0.15, 1.0]);
+    // Red on the left (x < 16), blue in the middle, green on the right (32 ≤ x < 44), and a
+    // lighter red at the edge that the samples only partly cover.
+    let (red, blue, green, pink) = ([0.85, 0.1, 0.1, 1.0], [0.1, 0.15, 0.85, 1.0], [0.1, 0.8, 0.15, 1.0], [0.95, 0.25, 0.25, 1.0]);
     let mut s = session(8, "rgb");
     paint(&mut s, |x, _| {
         if x < 16 {
             red
         } else if x < 32 {
             blue
-        } else {
+        } else if x < 44 {
             green
+        } else {
+            pink
         }
     });
-    let before = (rgba(&s, 4, 16), rgba(&s, 24, 16), rgba(&s, 40, 16));
+    let before = (rgba(&s, 4, 16), rgba(&s, 24, 16), rgba(&s, 40, 16), rgba(&s, 46, 16));
     let original = pixels(&s);
     let shift = |extra: Value| {
         let mut p = json!({"fuzziness": 40, "hue": 120, "saturation": 20});
@@ -789,6 +792,7 @@ fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
     assert!(changed(rgba(&s, 4, 16), before.0) > 0.1, "red is replaced");
     assert!(changed(rgba(&s, 24, 16), before.1) > 0.1, "the added blue is replaced");
     assert_eq!(rgba(&s, 40, 16), before.2, "green wasn't sampled");
+    let partial = rgba(&s, 46, 16);
     // One undo step brings every pixel back exactly.
     s.execute("edit.undo", json!({})).unwrap();
     assert!(pixels(&s) == original, "undo restores the pixels");
@@ -799,6 +803,15 @@ fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
         let want = sel.read_region(Rect::from_xywh(x, 16, 1, 1))[0];
         assert!((want > 0.5) == (x < 32), "Color Range at {x}: {want}");
     }
+    // The lighter red is partly covered, and replaced in proportion: the blend of its colour and
+    // its fully replaced colour at that coverage, not either one (as a 0.5 threshold would give).
+    let k = sel.read_region(Rect::from_xywh(46, 16, 1, 1))[0];
+    assert!(k > 0.1 && k < 0.9, "partial coverage: {k}");
+    let mut full = [before.3];
+    tone::replace_color_masked(&mut full, &[1.0], 120.0, 20.0, 0.0);
+    let blend: [f32; 4] = std::array::from_fn(|c| before.3[c] + (full[0][c] - before.3[c]) * k);
+    assert!(changed(partial, blend) < 1.5 / 255.0, "{partial:?} vs the blend {blend:?} at coverage {k}");
+    assert!(changed(blend, before.3).min(changed(blend, full[0])) > 0.1, "the blend is far from both ends a threshold gives");
     s.execute("select.deselect", json!({})).unwrap();
     // A subtraction undoes exactly too. (Blue is far from the red sample here, so subtracting
     // it changes nothing; `replace_color_subtracting_inside_the_added_range_takes_a_colour_out`
