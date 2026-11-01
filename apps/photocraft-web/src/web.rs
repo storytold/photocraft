@@ -464,12 +464,29 @@ fn services(inbox: Inbox, place_inbox: Inbox, cursor_pos: photocraft_ui_egui::Cu
         cursor_pos: Some(cursor_pos),
         // Preferences live in the browser's localStorage.
         load_prefs: Some(Box::new(|| local_storage()?.get_item(PREFS_KEY).ok().flatten())),
-        save_prefs: Some(Box::new(|text: &str| local_storage().ok_or("no localStorage")?.set_item(PREFS_KEY, text).map_err(|e| format!("{e:?}")))),
+        save_prefs: Some(Box::new(|text: &str| {
+            local_storage()
+                .ok_or("Browser preferences are unavailable. Allow site data for PhotoCraft.")?
+                .set_item(PREFS_KEY, text)
+                .map_err(preference_write_error)
+        })),
         ..Default::default()
     }
 }
 
 const PREFS_KEY: &str = "photocraft.preferences";
+
+/// Keep browser exception stacks in diagnostics, never in the editor's user-facing notice.
+fn preference_write_error(error: wasm_bindgen::JsValue) -> String {
+    log::warn!("PhotoCraft preferences update failed: {error:?}");
+    let name = error.dyn_ref::<web_sys::DomException>().map(|e| e.name());
+    match name.as_deref() {
+        Some("QuotaExceededError") => "Browser site data is full. Free space in this site's data settings.",
+        Some("SecurityError") => "Browser preferences are blocked. Allow site data for PhotoCraft.",
+        _ => "Browser preferences could not be updated. Check this site's data permissions.",
+    }
+    .into()
+}
 
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok().flatten()
