@@ -895,11 +895,18 @@ fn replace_color_follows_the_click_order_as_color_range_does() {
     s.execute("image.adjustments.replaceColor", p).unwrap();
     let replaced: Vec<bool> = at.iter().enumerate().map(|(i, &(x, y))| changed(rgba(&s, x, y), before[i]) > 0.1).collect();
     s.execute("edit.undo", json!({})).unwrap();
+    // Darkening leaves black black whether or not it's matched: lighten to see whether it is.
+    p = clicks.clone();
+    p["lightness"] = json!(50);
+    s.execute("image.adjustments.replaceColor", p).unwrap();
+    let lifted = changed(rgba(&s, 40, 16), before[3]) > 0.1;
+    s.execute("edit.undo", json!({})).unwrap();
     s.execute("select.colorRange", clicks).unwrap();
     let sel = doc(&s).selection.clone().unwrap();
     let covered: Vec<bool> = at.iter().map(|&(x, y)| sel.read_region(Rect::from_xywh(x, y, 1, 1))[0] > 0.5).collect();
     assert_eq!(covered, [true, true, true, false], "Color Range: the light grey is added back after the subtraction");
     assert_eq!(replaced, covered, "Replace Color matches what Color Range covers for the same clicks");
+    assert_eq!(lifted, covered[3], "Replace Color matches black as Color Range does");
 }
 
 /// FredApps review on #10443: Localized Color Clusters with several samples. A matching colour
