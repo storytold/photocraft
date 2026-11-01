@@ -801,6 +801,69 @@ fn rasterizing_a_vector_mask_keeps_what_the_masks_show() {
     }
 }
 
+/// Hard rasterization preserves raw mask samples, settings and off-canvas pixels through undo.
+#[test]
+fn hard_vector_mask_rasterization_preserves_the_pixel_mask() {
+    use photocraft_color::{ColorMode, PixelFormat};
+    use photocraft_doc::LayerMask;
+    use photocraft_raster::Surface;
+
+    for depth in [8, 16, 32] {
+        for existing in [false, true] {
+            for (empty, inverted, enabled) in [(false, false, true), (false, true, true), (true, false, true), (true, true, true), (false, false, false)] {
+                let mut s = session(17, 13, depth);
+                s.execute("layer.new.layer", json!({})).unwrap();
+                let id = s.active().unwrap().active_layer.unwrap();
+                s.execute("path.set", json!({"path": {"subpaths": [{"knots": [[2, 1], [15, 2], [12, 11], [1, 9]]}]}})).unwrap();
+                s.execute("layer.vectorMask.currentPath", json!({})).unwrap();
+                let format = PixelFormat::new(ColorMode::Grayscale, doc(&s).depth, false);
+                s.edit("mask setup", |doc, _| {
+                    let l = doc.layer_mut(id).unwrap();
+                    let vm = l.vector_mask.as_mut().unwrap();
+                    if empty {
+                        vm.path = Path::default();
+                    }
+                    (vm.path.inverted, vm.enabled, vm.density) = (inverted, enabled, 0.6);
+                    if existing {
+                        let mut surface = Surface::with_default(format, &[0.75]);
+                        surface.write_region(Rect::new(2, 3, 3, 4), &[0.25]);
+                        surface.write_region(Rect::new(-300, 3, -299, 4), &[0.4]);
+                        surface.write_region(Rect::new(20, 3, 21, 4), &[0.2]);
+                        // Disabled masks retain their unapplied density/feather in the hard path.
+                        l.mask = Some(LayerMask {
+                            surface,
+                            enabled: !inverted,
+                            linked: false,
+                            density: if inverted { 0.4 } else { 1.0 },
+                            feather: if inverted { 3.0 } else { 0.0 },
+                        });
+                    }
+                    Ok(())
+                })
+                .unwrap();
+                let before = doc(&s).clone();
+                let mut expected = before.clone();
+                let area = expected.bounds();
+                let l = expected.layer_mut(id).unwrap();
+                let vals = vector::vector_mask_values(&l.vector_mask.take().unwrap(), area);
+                let mask = l.mask.get_or_insert_with(|| LayerMask { surface: Surface::with_default(format, &[1.0]), ..LayerMask::reveal_all() });
+                // Keep the original allocating expression as the output oracle.
+                let merged: Vec<f32> = mask.surface.read_region(area).iter().zip(&vals).map(|(a, b)| a * b).collect();
+                mask.surface.write_region(area, &merged);
+                mask.surface.prune();
+                let steps = s.active().unwrap().history.past_len();
+                s.execute("layer.rasterize.vectorMask", json!({})).unwrap();
+                assert_eq!(doc(&s), &expected, "{depth}/{existing}/{empty}/{inverted}/{enabled}");
+                assert_eq!(s.active().unwrap().history.past_len(), steps + 1);
+                s.undo();
+                assert_eq!(doc(&s), &before);
+                s.redo();
+                assert_eq!(doc(&s), &expected);
+            }
+        }
+    }
+}
+
 #[test]
 fn vector_mask_commands_and_compositing() {
     let mut s = session(100, 100, 8);
