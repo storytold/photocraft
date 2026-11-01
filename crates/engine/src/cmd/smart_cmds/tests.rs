@@ -229,6 +229,23 @@ fn converting_a_smart_object_wraps_it_in_another_smart_object() {
     paint(&mut s);
     convert(&mut s);
     let inner_id = s.active().unwrap().active_layer.unwrap();
+    // A non-identity transform and a smart filter on the wrapped object: both must survive
+    // inside the nested contents, and the inner contents id keeps its own identity — the new
+    // object gets a fresh one, so a nest can't alias the document it lives in.
+    s.edit("edit", |doc, active| {
+        let sm = smart_mut(doc, active.unwrap())?;
+        sm.transform = Affine { m: [1.5, 0.0, 0.0, 0.75, 3.0, -2.0] };
+        sm.smart_filters.push(photocraft_doc::SmartFilter {
+            command: "filter.blur.gaussianBlur".into(),
+            params: json!({"radius": 2.0}),
+            blend: BlendMode::Normal,
+            opacity: 1.0,
+            visible: true,
+        });
+        refresh_or_fail(doc, active.unwrap())
+    })
+    .unwrap();
+    let inner_contents = active_smart(&s).contents_id;
     let before = flat(&s);
 
     // Photoshop keeps Convert to Smart Object enabled on a smart object and nests it (#10378).
@@ -238,7 +255,21 @@ fn converting_a_smart_object_wraps_it_in_another_smart_object() {
     let sm = active_smart(&s);
     let SmartSource::Embedded { file_name, bytes } = &sm.source else { panic!("not embedded") };
     let inner = decode_source(file_name, bytes).unwrap();
-    assert!(inner.layers.iter().any(|l| matches!(l.content, LayerContent::Smart(_))), "the wrapped contents keep the smart object");
+    let inner_sm = inner
+        .layers
+        .iter()
+        .find_map(|l| match &l.content {
+            LayerContent::Smart(s) => Some(s),
+            _ => None,
+        })
+        .expect("the wrapped contents keep the smart object");
+    // The transform survives (its offsets re-frame with the contents' crop; the render is
+    // asserted identical below).
+    assert_ne!(inner_sm.transform, Affine::IDENTITY, "the nested transform survives");
+    assert_eq!([inner_sm.transform.m[0], inner_sm.transform.m[3]], [1.5, 0.75], "the nested scale survives");
+    assert_eq!(inner_sm.smart_filters.len(), 1, "the nested smart filters survive");
+    assert_eq!(inner_sm.contents_id, inner_contents, "the inner contents keeps its own id");
+    assert_ne!(inner_sm.contents_id, sm.contents_id, "the outer contents is a fresh identity — the nest can't alias itself");
     assert!(max_diff(&flat(&s), &before) < 1e-6, "wrapping does not change the render");
     s.undo();
     assert!(max_diff(&flat(&s), &before) < 1e-6);
