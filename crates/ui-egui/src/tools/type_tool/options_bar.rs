@@ -251,7 +251,7 @@ pub(super) fn kerning_field(ui: &mut egui::Ui, shown: &str, width: f32) -> Optio
     let id = ui.make_persistent_id("props-kern-text");
     let mut buf: String = ui.data_mut(|d| d.get_temp::<String>(id)).unwrap_or_else(|| shown.to_string());
     let mut out = None;
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         // Numeric-by-content: the value stays LTR, but under RTL the field right-aligns via the helper.
         let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
@@ -312,7 +312,7 @@ pub(super) fn num_field(ui: &mut egui::Ui, label: &str, tip: &str, v: f32, range
     let t = crate::theme::Tokens::get(ui.ctx());
     let mut v = v;
     let mut out = None;
-    ui.horizontal(|ui| {
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y), crate::direction::row(), |ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
         let (r, resp) = ui.allocate_exact_size(egui::vec2(22.0, 22.0), egui::Sense::hover());
         ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, label, crate::theme::semibold(10.0), t.text_dim);
@@ -476,5 +476,27 @@ mod tests {
         let (rtl_commit, rtl_cancel) = commit_group(crate::direction::Dir::Rtl);
         assert!(rtl_commit.center().x < rtl_cancel.center().x, "RTL order: {rtl_commit:?} vs {rtl_cancel:?}");
         assert!(rtl_commit.center().x < 1400.0 * 0.25, "RTL group hugs the left end: {rtl_commit:?}");
+    }
+
+    /// The kerning field's row follows reading order: the typed value leads the preset chevron
+    /// at the left in LTR and at the right in RTL.
+    #[test]
+    fn kerning_row_follows_reading_order() {
+        use egui::accesskit::Role;
+        let row = |dir: crate::direction::Dir| {
+            let _scope = crate::direction::direction_scope(dir);
+            let mut h = Harness::builder().with_size(egui::vec2(400.0, 60.0)).build_ui_state(
+                |ui, _: &mut ()| {
+                    kerning_field(ui, "0", 120.0);
+                },
+                (),
+            );
+            h.run_steps(2);
+            (h.get_by_role_and_label(Role::TextEdit, "Kerning").rect(), h.get_by_role_and_label(Role::ComboBox, "Kerning").rect())
+        };
+        let (ltr_edit, ltr_combo) = row(crate::direction::Dir::Ltr);
+        assert!(ltr_edit.left() < ltr_combo.left(), "LTR: the field leads the chevron: {ltr_edit:?} {ltr_combo:?}");
+        let (rtl_edit, rtl_combo) = row(crate::direction::Dir::Rtl);
+        assert!(rtl_edit.left() > rtl_combo.left(), "RTL: the field leads at the right: {rtl_edit:?} {rtl_combo:?}");
     }
 }
