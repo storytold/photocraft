@@ -589,3 +589,15 @@ cameraRaw	Yellow	पीला
 # Egui 0.37 migration controls (Aspect Ratio, Category, Color Table, Gamma, Interpolation, Profile, Target, Units, Demosaic)
 	Invalid numeric entry. An integer between {min}% and {max}% is required. Previous value was inserted.	अमान्य संख्यात्मक प्रविष्टि। {min}% और {max}% के बीच एक पूर्णांक आवश्यक है। पिछला मान डाला गया।
 	Edit Brush…	ब्रश संपादित करें…
+	Actual Color	वास्तविक रंग
+	Web Color	वेब रंग
+	HSB Color	HSB रंग
+	HSL Color	HSL रंग
+	Total Ink	कुल स्याही
+	Opacity	अपारदर्शिता
+	Spot Channels	स्पॉट चैनल
+	Alpha Channels	अल्फ़ा चैनल
+	Info Panel Options	जानकारी पैनल विकल्प
+	Readouts	रीडआउट
+	Panel Options…	पैनल विकल्प…
+	Total Spot Ink	कुल स्पॉट स्याही
