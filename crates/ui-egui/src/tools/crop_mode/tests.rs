@@ -458,6 +458,33 @@ fn commit_is_the_same_in_both_modes_and_the_view_stays_upright() {
     assert!(out[0].1 == out[1].1, "same pixels");
 }
 
+/// #9202: switching documents drops a turned pending crop and turns its own document's view
+/// upright, as Esc would, not only the view of the document switched to.
+#[test]
+fn switching_documents_turns_the_dropped_crops_view_upright() {
+    // The crop on the first document, then on the second.
+    for (on, other) in [(0, 1), (1, 0)] {
+        let mut app = app();
+        app.run("file.new", json!({"width": 300, "height": 150})).unwrap();
+        app.sync_views();
+        assert!(app.session.set_active(on));
+        app.sync_views();
+        let v = &mut app.ui.views[on];
+        (v.zoom, v.center, v.fit_pending, v.rotation) = (1.0, [100.0, 50.0], false, 0.0);
+        with_frame(&mut app);
+        screen_drag(&mut app, &[pos2(450.0, 300.0), pos2(440.0, 320.0), pos2(370.0, 380.0)], NONE);
+        assert!((view_rotation(&app) - 90.0).abs() < 0.01, "crop on {on}: the view turned with the frame");
+        assert!(app.session.set_active(other));
+        app.sync_views();
+        assert_eq!(app.ui.crop_rect, None, "crop on {on}: the turned crop is dropped");
+        app.ui.tool = Tool::Brush;
+        crate::crop_ui::ensure_frame(&mut app);
+        assert!(app.session.set_active(on));
+        app.sync_views();
+        assert_eq!(view_rotation(&app), 0.0, "crop on {on}: its document isn't left turned");
+    }
+}
+
 #[test]
 fn picking_the_crop_tool_turns_a_rotated_view_upright() {
     let mut app = app();
