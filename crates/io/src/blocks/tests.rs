@@ -2,6 +2,10 @@ use super::*;
 
 fn noise_gradient_fill(space: &str, min: [f32; 4], max: [f32; 4], add_transparency: bool) -> Descriptor {
     let values = |v: [f32; 4]| Value::List(v.into_iter().map(|v| Value::Double(f64::from(v))).collect());
+    noise_gradient_fill_with(space, values(min), values(max), add_transparency)
+}
+
+fn noise_gradient_fill_with(space: &str, min: Value, max: Value, add_transparency: bool) -> Descriptor {
     let gradient = Descriptor::new("Grdn")
         .with("GrdF", Value::Enumerated { type_id: Id::new("GrdF"), value: Id::new("ClNs") })
         .with("ClrS", Value::Enumerated { type_id: Id::new("ClrS"), value: Id::new(space) })
@@ -9,8 +13,8 @@ fn noise_gradient_fill(space: &str, min: [f32; 4], max: [f32; 4], add_transparen
         .with("VctC", Value::Boolean(true))
         .with("RndS", Value::Integer(9052369))
         .with("Smth", Value::Integer(2048))
-        .with("Mnm ", values(min))
-        .with("Mxm ", values(max));
+        .with("Mnm ", min)
+        .with("Mxm ", max);
     Descriptor::new("null").with("Grad", Value::Descriptor(gradient))
 }
 
@@ -31,6 +35,16 @@ fn constant_rgb_noise_fill_uses_its_exact_colour() {
     use photocraft_doc::Fill;
     let fill = fill_from_desc(b"GdFl", &noise_gradient_fill("RGBC", [50.0, 25.0, 0.0, 0.0], [50.0, 25.0, 0.0, 100.0], false));
     let Some(Fill::Gradient { stops, .. }) = fill else { panic!("constant noise gradient") };
+    assert_eq!(stops, vec![(0.0, Color::rgb(0.5, 0.25, 0.0)), (1.0, Color::rgb(0.5, 0.25, 0.0))]);
+}
+
+/// Older files store `Mnm `/`Mxm ` as integers rather than doubles; constant bounds read the same.
+#[test]
+fn constant_noise_fill_reads_integer_bounds() {
+    use photocraft_doc::Fill;
+    let ints = |v: [i32; 4]| Value::List(v.into_iter().map(Value::Integer).collect());
+    let d = noise_gradient_fill_with("RGBC", ints([50, 25, 0, 0]), ints([50, 25, 0, 100]), false);
+    let Some(Fill::Gradient { stops, .. }) = fill_from_desc(b"GdFl", &d) else { panic!("constant noise gradient") };
     assert_eq!(stops, vec![(0.0, Color::rgb(0.5, 0.25, 0.0)), (1.0, Color::rgb(0.5, 0.25, 0.0))]);
 }
 
