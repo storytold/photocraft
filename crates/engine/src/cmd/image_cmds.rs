@@ -150,6 +150,9 @@ pub fn scale_effects(fx: &mut Effects, k: f32) {
             Effect::BevelEmboss(b) => {
                 b.size *= k;
                 b.soften *= k;
+                if let Some(t) = &mut b.texture {
+                    t.scale *= k;
+                }
             }
             Effect::PatternOverlay { scale, .. } => *scale *= k,
             Effect::GradientOverlay { .. } | Effect::ColorOverlay { .. } => {}
