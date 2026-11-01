@@ -47,10 +47,34 @@ pub fn invoke(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, params: Va
     {
         authorize(id, &params)?;
     }
+    if matches!(
+        id,
+        "image.imageSize"
+            | "image.canvasSize"
+            | "image.crop"
+            | "image.trim"
+            | "image.rotation.arbitrary"
+            | "image.imageRotation.flipCanvasHorizontal"
+            | "image.imageRotation.flipCanvasVertical"
+            | "image.imageRotation.180"
+            | "image.imageRotation.90cw"
+            | "image.imageRotation.90ccw"
+    ) {
+        crate::sizing::geometry_preflight(app, id)?;
+    }
     if crate::discard_ui::intercept(app, id, &params) {
         return Ok(Value::Null);
     }
-    let r = invoke_unguarded(app, ctx, id, params)?;
+    #[cfg(feature = "uv-workbench")]
+    if crate::uv_project::intercept(app, id, &params) {
+        return Ok(Value::Null);
+    }
+    let r = invoke_unguarded(app, ctx, id, params);
+    #[cfg(feature = "uv-workbench")]
+    if r.is_err() && matches!(id, "file.uv.import" | "file.uv.openProject") {
+        crate::uv_project::cancel_pending_replace(app);
+    }
+    let r = r?;
     // The palette's empty-query list (UI-217-7); opening the palette isn't a command to recall.
     if id != "edit.search" {
         crate::palette::note_recent(ctx, id);

@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashSet};
 fn save(s: &mut Session, _: &Value) -> Result<Value> {
     let bound: HashSet<_> = s.uv.all_bindings().flatten().copied().collect();
     let mut paths = BTreeMap::<String, usize>::new();
-    for st in s.documents().iter().filter(|st| bound.contains(&st.doc.id)) {
+    for st in s.uv_documents().iter().filter(|st| bound.contains(&st.doc.id)) {
         if let Some(path) = &st.path {
             *paths.entry(path.replace('\\', "/").to_lowercase()).or_default() += 1;
         }
@@ -14,8 +14,8 @@ fn save(s: &mut Session, _: &Value) -> Result<Value> {
     let (mut saved, mut unsaved) = (0, 0);
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
-    for index in 0..s.documents().len() {
-        let Some(st) = s.documents().get(index).filter(|st| bound.contains(&st.doc.id) && s.uv.needs_export(st)) else { continue };
+    for index in 0..s.uv_documents().len() {
+        let Some(st) = s.uv_documents().get(index).filter(|st| bound.contains(&st.doc.id) && s.uv.needs_export(st)) else { continue };
         if s.uv.blocked_exports.contains(&st.doc.id) {
             errors.push("External texture destination restored from project: explicitly rebind the texture before exporting".into());
             continue;
@@ -34,9 +34,8 @@ fn save(s: &mut Session, _: &Value) -> Result<Value> {
         match crate::file_cmds::save_doc(&st.doc, &path, crate::file_cmds::SaveOpts::default()) {
             Ok(w) => {
                 warnings.extend(w);
-                if let Some(st) = s.docs.get_mut(index) {
-                    s.uv.exported_revisions.insert(st.doc.id, st.revision.saturating_sub(st.view_revision));
-                }
+                let saved_revision = s.uv_documents_mut().get_mut(index).map(|st| (st.doc.id, st.revision.saturating_sub(st.view_revision)));
+                if let Some((id, revision)) = saved_revision { s.uv.exported_revisions.insert(id, revision); }
                 saved += 1;
             }
             Err(e) => errors.push(e.to_string()),

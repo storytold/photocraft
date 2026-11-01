@@ -194,8 +194,15 @@ pub(crate) fn mask_stack_geometry_enabled(s: &Session, id: &str, p: &Value) -> O
                 .is_some_and(|mask| mask.paint.is_some() && ((mask_moves_with_layer && mask.linked) || (moves_mask && roots.contains(&layer.id))))
         })
     });
-    has_editable_mask_stack
-        .then(|| Err("This geometry change is disabled while the affected editable mask Paint stack exists; preserve or remove the stack first".into()))
+    has_editable_mask_stack.then(|| {
+        Err("Cannot change geometry while editable mask Paint effects exist. Save a project copy to preserve them, then remove the affected effects and retry.".into())
+    })
+}
+
+/// Shared UI preflight for geometry workflows that open a dialog or begin a canvas gesture before
+/// the engine command is committed. The command admission guard remains in place as a final check.
+pub fn mask_stack_geometry_refusal(s: &Session, id: &str) -> Option<String> {
+    mask_stack_geometry_enabled(s, id, &Value::Null).and_then(|result| result.err())
 }
 
 /// Whether command `id` edits the targeted channel or mask when its params name no `"target"`

@@ -63,6 +63,7 @@ fn import_dialog_answer(app: &mut PhotocraftApp, answer: crate::file_dialog::Fil
                 }
             }
         }
+        FileDialogAnswer::Unavailable(message) => return Err(message),
         _ => return Err("The file dialog returned an unexpected answer".into()),
     }
     if errors.is_empty() { Ok(serde_json::Value::Null) } else { Err(errors.join("\n")) }

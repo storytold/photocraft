@@ -44,6 +44,12 @@ fn file() -> std::path::PathBuf {
 fn obj(first: &str, second: &str, x: f32) -> String {
     format!("v 0 0 0\nv {x} 0 0\nv 0 1 0\nv 1 1 0\nvt 0 0\nvt 1 0\nvt 0 1\nvt 1 1\nusemtl {first}\nf 1/1 2/2 3/3\nusemtl {second}\nf 2/2 4/4 3/3\n")
 }
+fn rewrite_with_different_size(path: &std::path::Path, content: String) {
+    let before = std::fs::metadata(path).unwrap().len();
+    std::fs::write(path, content).unwrap();
+    let after = std::fs::metadata(path).unwrap().len();
+    assert_ne!(before, after, "fixture rewrite must change the source size independent of timestamp granularity");
+}
 #[test]
 fn reimport_retains_documents_layers_history_and_maps_reordered_materials_by_name() {
     let path = file();
@@ -59,7 +65,7 @@ fn reimport_retains_documents_layers_history_and_maps_reordered_materials_by_nam
     let docs = s.documents().len();
     let before = s.active().unwrap().doc.clone();
     assert_eq!(s.execute("uv.model.checkSource", json!({})).unwrap()["changed"], false);
-    std::fs::write(&path, obj("B", "A", 2.25)).unwrap();
+    rewrite_with_different_size(&path, obj("B", "A", 2.25));
     assert_eq!(s.execute("uv.model.checkSource", json!({})).unwrap()["changed"], true);
     s.execute("uv.model.reimport", json!({})).unwrap();
     let new_a = s.uv.scene.as_ref().unwrap().materials.iter().position(|m| m.name == "A").unwrap();
@@ -137,13 +143,13 @@ fn project_retains_source_stamp_and_legacy_projects_can_establish_a_baseline() {
     let mut s = Session::new();
     s.execute("uv.model.import", json!({"path":path})).unwrap();
     s.execute("uv.project.save", json!({"path":project})).unwrap();
-    std::fs::write(&path, obj("A", "B", 3.125)).unwrap();
+    rewrite_with_different_size(&path, obj("A", "B", 123.456789));
     let mut loaded = Session::new();
     loaded.execute("uv.project.load", json!({"path":project})).unwrap();
     assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["changed"], true);
     loaded.uv.source_stamp = None;
     assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["changed"], false);
-    std::fs::write(&path, obj("A", "B", 4.625)).unwrap();
+    rewrite_with_different_size(&path, obj("A", "B", 1234.56789));
     assert_eq!(loaded.execute("uv.model.checkSource", json!({})).unwrap()["changed"], true);
     std::fs::remove_file(path).unwrap();
     std::fs::remove_file(project).unwrap();

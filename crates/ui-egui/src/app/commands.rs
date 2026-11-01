@@ -7,6 +7,17 @@ impl PhotocraftApp {
     /// Run an engine command, reporting errors in the status bar.
     pub fn run(&mut self, id: &str, params: Value) -> Result<Value, String> {
         #[cfg(feature = "uv-workbench")]
+        if matches!(id, "uv.model.import" | "uv.project.load") {
+            if std::mem::take(&mut self.uv_cache.project.approved_replace) {
+                // A preceding Save/Discard prompt approved the file-picker operation.
+            } else if crate::uv_project::intercept(self, id, &params) {
+                return Ok(Value::Null);
+            } else {
+                // Direct command replay consumed its own prompt approval in this call.
+                self.uv_cache.project.approved_replace = false;
+            }
+        }
+        #[cfg(feature = "uv-workbench")]
         if id == "select.deselect" && !self.ui.uv_workbench.selected_polygons.is_empty() {
             let can_deselect = self.session.is_enabled("select.deselect");
             crate::uv_ui::clear_polygon_selection(self);

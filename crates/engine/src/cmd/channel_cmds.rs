@@ -130,6 +130,7 @@ pub(crate) use targeting::{
     targeted_channel,
 };
 pub use targeting::{follows_filter_mask, follows_target, read_target_surface};
+pub use targeting::mask_stack_geometry_refusal;
 pub(crate) use view::fix_view;
 pub use view::{ChannelTarget, ChannelView, QuickMaskOptions, color_names, composite_name};
 

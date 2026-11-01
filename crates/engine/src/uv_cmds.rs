@@ -1301,6 +1301,8 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
                 // Legacy projects did not track external writeback. A linked embedded
                 // texture needs one writeback; saving .pcuv alone never wrote its map file.
                 let writeback = project.dirty_documents.as_ref().map_or(source.is_some(), |dirty| name.as_ref().is_some_and(|name| dirty.contains(name)));
+                // Preserve in-project destinations, but external paths are untrusted provenance
+                // and must be explicitly rebound before export or ordinary Save can target them.
                 let external = source.as_ref().is_some_and(|source| {
                     !Path::new(source)
                         .canonicalize()
@@ -1308,15 +1310,15 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
                         .zip(model_directory(path(p).unwrap_or("")).canonicalize().ok())
                         .is_some_and(|(file, base)| file.starts_with(base) && file.is_file())
                 });
-                let index = s.add_document(doc, source);
-                if external && let Some(st) = s.docs.get(index) {
+                let index = s.add_document(doc, if external { None } else { source });
+                if external && let Some(st) = s.uv_documents().get(index) {
                     blocked_exports.insert(st.doc.id);
                 }
-                if let Some(st) = s.docs.get(index) {
+                if let Some(st) = s.uv_documents().get(index) {
                     exported_revisions.insert(st.doc.id, if writeback { 0 } else { st.revision });
                     saved_revisions.insert(st.doc.id, st.revision);
                 }
-                let id = s.documents().get(index).map(|d| d.doc.id);
+                let id = s.uv_documents().get(index).map(|d| d.doc.id);
                 if let (Some(name), Some(id)) = (name, id) {
                     restored.insert(name.clone(), id);
                 }

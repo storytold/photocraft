@@ -106,6 +106,7 @@ pub(crate) fn save_to(app: &mut PhotocraftApp, path: String) -> Result<Value, St
 pub(crate) struct Ui {
     prompt: Option<(String, Value)>,
     skip_once: bool,
+    approved_replace: bool,
     exit_approved: bool,
     cancel_workspace: Option<String>,
     pub(crate) parked_view: Option<Value>,
@@ -167,11 +168,16 @@ pub(crate) fn close(app: &mut PhotocraftApp) {
 /// One project question replaces a sequence of texture-file questions.
 pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bool {
     let native_close = app.ui.workspace == "3D" && matches!(id, "file.close" | "file.closeAll");
-    let destructive = id == "file.exit" || native_close || matches!(id, "file.uv.closeProject" | "file.uv.import" | "file.uv.openProject");
+    let destructive = id == "file.exit"
+        || native_close
+        || matches!(id, "file.uv.closeProject" | "file.uv.import" | "file.uv.openProject" | "uv.model.import" | "uv.project.load");
     if !destructive {
         return false;
     }
     let skip = std::mem::take(&mut app.uv_cache.project.skip_once);
+    if skip && matches!(id, "file.uv.import" | "file.uv.openProject" | "uv.model.import" | "uv.project.load") {
+        app.uv_cache.project.approved_replace = true;
+    }
     uv_ui::finish_paint(app);
     if !skip && dirty(app) {
         if app.uv_cache.project.prompt.is_none() {
@@ -202,6 +208,9 @@ pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> bo
         crate::menus::apply_workspace(app);
     }
     false
+}
+pub(crate) fn cancel_pending_replace(app: &mut PhotocraftApp) {
+    app.uv_cache.project.approved_replace = false;
 }
 fn resume(app: &mut PhotocraftApp, ctx: &egui::Context, action: (String, Value)) {
     app.uv_cache.project.skip_once = true;

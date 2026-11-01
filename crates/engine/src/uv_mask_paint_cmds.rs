@@ -277,10 +277,11 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
         stack.active = index;
     }
     st.active_layer = Some(id);
+    // Active effect selection changes the rendered/evaluated view and saved .pcuv UI state,
+    // but does not alter mask pixels or texture export state.
     st.revision = st.revision.saturating_add(1);
-    if was_clean {
-        st.saved_revision = st.revision;
-    }
+    st.view_revision = st.view_revision.saturating_add(1);
+    if was_clean { st.saved_revision = st.revision; }
     st.last_damage = Some(photocraft_geom::Rect::EMPTY);
     Ok(Value::Null)
 }
