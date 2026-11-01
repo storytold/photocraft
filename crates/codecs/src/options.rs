@@ -20,14 +20,19 @@ pub struct Limits {
     pub max_alloc: u64,
 }
 
+/// The longest side [`Limits::default`] opens: Photoshop's largest document (PSB).
+const MAX_SIDE: u32 = 300_000;
+
 impl Default for Limits {
     fn default() -> Self {
-        // 2^30 pixels (e.g. 32768²) and, on 64-bit targets, 8 GiB: enough for the large
-        // documents Photoshop users open (a 20000² RGBA 16-bit image is 3.2 GB). On 32-bit
-        // targets (wasm32 has a 4 GiB address space shared with the document, history and
-        // the decoder's own buffers) 1 GiB is the most one buffer can safely ask for.
+        // Sides up to Photoshop's largest document (300,000 px, PSB), with no pixel count of
+        // their own: the decoded buffer's bytes are the guard, as large print files run past
+        // 2^30 pixels (a 2.6-gigapixel banner TIFF, #9336). On 64-bit targets 8 GiB is enough
+        // for those (a 20000² RGBA 16-bit image is 3.2 GB). On 32-bit targets (wasm32 has a
+        // 4 GiB address space shared with the document, history and the decoder's own buffers)
+        // 1 GiB is the most one buffer can safely ask for.
         let max_alloc = if cfg!(target_pointer_width = "64") { 8 << 30 } else { 1 << 30 };
-        Limits { max_width: 1 << 18, max_height: 1 << 18, max_pixels: 1 << 30, max_alloc }
+        Limits { max_width: MAX_SIDE, max_height: MAX_SIDE, max_pixels: MAX_SIDE as u64 * MAX_SIDE as u64, max_alloc }
     }
 }
 
