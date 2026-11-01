@@ -892,6 +892,27 @@ fn convert_to_layers_round_trips_a_layer_at_every_depth() {
 }
 
 #[test]
+fn convert_to_layers_brings_the_contents_patterns_into_the_document() {
+    let mut s = session(8);
+    s.execute("layer.newFillLayer.pattern", json!({"pattern": "Bricks"})).unwrap();
+    let before = flat(&s);
+    let pattern_id = s.active().unwrap().doc.patterns[0].id.clone();
+    convert(&mut s);
+    // As if the smart object had been placed from another file: only its contents own the pattern.
+    s.edit("drop patterns", |doc, _| {
+        doc.patterns.clear();
+        Ok(())
+    })
+    .unwrap();
+    assert!(max_diff(&flat(&s), &before) < 1e-6, "the smart object renders from its own contents");
+    convert_to_layers(&mut s);
+    assert!(s.active().unwrap().doc.patterns.iter().any(|p| p.id == pattern_id), "the pattern resource reaches the document");
+    assert!(max_diff(&flat(&s), &before) < 1e-6, "the unpacked fill keeps its pattern");
+    s.undo();
+    assert!(s.active().unwrap().doc.patterns.is_empty(), "undo removes the imported pattern");
+}
+
+#[test]
 fn convert_to_layers_unpacks_several_layers_into_a_group_with_the_smart_layers_properties() {
     let mut s = session(8);
     paint(&mut s);
