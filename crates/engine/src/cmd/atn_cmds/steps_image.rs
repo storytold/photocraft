@@ -1,6 +1,6 @@
 use super::descriptors::{
-    PX, Target, ang, boolean, class, code, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, pct, px,
-    ref_class, target, trimmed,
+    PX, Target, ang, boolean, class, code, desc, enm, get_bool, get_enum, get_num, get_obj, get_ref, jbool, jnum, jstr, layer_ref, layer_target, long, num,
+    pct, px, ref_class, target, trimmed,
 };
 use super::events::pixel_target;
 use super::fields::{F, Kind, Mapped, fields_from, fields_to, step};
@@ -524,18 +524,25 @@ const OIL_PAINT: &[(&str, &str, f64, f64)] = &[
 /// Oil Paint (`oilPaint`). Missing keys take Photoshop's defaults, which differ from the
 /// command's for cleanliness, scale, bristle detail and shine, so they are written out.
 pub(super) fn oil_paint_from(d: &Descriptor) -> Mapped {
+    match oil_paint_params(d) {
+        Some(p) => step("filter.stylize.oilPaint", Value::Object(p)),
+        None => Mapped::Unsupported { harmless: false },
+    }
+}
+
+fn oil_paint_params(d: &Descriptor) -> Option<Map<String, Value>> {
     let keys = ["lightingOn", "stylization", "cleanliness", "brushScale", "microBrush", "LghD", "specularity"];
     if !only_keys(d, &keys) {
-        return Mapped::Unsupported { harmless: false };
+        return None;
     }
     let mut p = Map::new();
-    p.insert("lighting".into(), get_bool(d, "lightingOn").unwrap_or(true).into());
+    p.insert("lighting".into(), setting(d, "lightingOn", boolean, true)?.into());
     for (key, param, ps, _) in OIL_PAINT {
-        p.insert((*param).into(), get_num(d, key).unwrap_or(*ps).into());
+        p.insert((*param).into(), setting(d, key, num, *ps)?.into());
     }
-    p.insert("angle".into(), get_num(d, "LghD").unwrap_or(-60.0).into());
-    p.insert("shine".into(), get_num(d, "specularity").unwrap_or(1.299_999_952_316_28).into());
-    step("filter.stylize.oilPaint", Value::Object(p))
+    p.insert("angle".into(), setting(d, "LghD", num, -60.0)?.into());
+    p.insert("shine".into(), setting(d, "specularity", num, 1.299_999_952_316_28)?.into());
+    Some(p)
 }
 
 /// Every key in recorded order, the command's defaults for what the step leaves out. The light

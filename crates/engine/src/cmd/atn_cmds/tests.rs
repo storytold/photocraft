@@ -3292,3 +3292,19 @@ fn kept_when_wrong_typed(name: &str, settings: &[(&str, D)]) {
 fn select_sky_with_a_wrong_typed_setting_is_kept() {
     kept_when_wrong_typed("selectSky", &[("sampleAllLayers", D::Integer(1)), ("sampleAllLayers", text("true"))]);
 }
+
+#[test]
+fn oil_paint_with_a_wrong_typed_setting_is_kept() {
+    kept_when_wrong_typed(
+        "oilPaint",
+        &[
+            ("lightingOn", D::Integer(0)),
+            ("stylization", D::Boolean(true)),
+            ("cleanliness", text("5")),
+            ("brushScale", enm("Ordn", "Trgt")),
+            ("microBrush", D::Double(f64::NAN)),
+            ("LghD", text("45")),
+            ("specularity", D::Boolean(false)),
+        ],
+    );
+}
