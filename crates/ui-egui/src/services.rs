@@ -349,6 +349,21 @@ pub type OsEventsFn = Box<dyn FnMut() -> Vec<OsEvent>>;
 /// Ends the app the platform's own way (see [`Services::quit`]).
 pub type QuitFn = Box<dyn FnMut()>;
 
+/// What a new PhotoCraft needs to carry on where one stopped when the window's graphics device
+/// was lost (see [`Services::restart_after_window_loss`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WindowRestart {
+    /// Why the device was lost: one line of the driver's or wgpu's message.
+    pub reason: String,
+    /// Files of the documents without unsaved changes, to open again. The unsaved ones come back
+    /// from crash recovery instead.
+    pub reopen: Vec<String>,
+}
+
+/// Asks the host to start PhotoCraft again once this process has ended (see
+/// [`Services::restart_after_window_loss`]).
+pub type RestartFn = Box<dyn FnMut(WindowRestart)>;
+
 /// Where the OS pointer is now, in egui points within the window; `None` when unknown.
 pub type CursorPosFn = Box<dyn FnMut(&egui::Context) -> Option<egui::Pos2>>;
 
@@ -494,4 +509,12 @@ pub struct Services {
     /// while AppKit's run loop is still going crashes or hangs Touch Bar Macs (#1575, #1458).
     /// Without one, eframe closes the window and the app ends with it.
     pub quit: Option<QuitFn>,
+    /// Called once, just before the app closes itself because the window's graphics device was
+    /// lost and every unsaved document is saved for recovery (`gpu_status::check_window`, #10464).
+    /// egui-wgpu can't draw with a lost device and eframe can't build a new one in the same
+    /// process, so the host starts PhotoCraft again after this process has ended: a new window
+    /// with a new device, and the documents back from recovery. Only called when they come back
+    /// (Preferences › File Handling › recover on launch, or nothing was unsaved). Without one the
+    /// app just closes.
+    pub restart_after_window_loss: Option<RestartFn>,
 }

@@ -74,6 +74,9 @@ mod tablet;
 mod ui_state;
 mod updates;
 mod window_frame;
+// macOS never restarts this way (`quit` ends the process), so some of it goes unused there.
+#[cfg_attr(target_os = "macos", allow(dead_code))]
+mod window_loss;
 
 use photocraft_engine::Session;
 use photocraft_ui_egui::PhotocraftApp;
@@ -381,6 +384,10 @@ fn main() -> eframe::Result {
     if gpu_startup::adapter_override_is_process_specific(std::env::var("PHOTOCRAFT_GPU_ADAPTER").ok().as_deref(), rendering_mode, gpu_startup::ADAPTER_CHOICE) {
         launch_options.push(launch_args::PerProcess::GpuAdapterEnv);
     }
+    // A new process can only take over after a lost window device if it would start the same way
+    // (`window_loss`): no per-process options, no control port, no separate instance.
+    #[cfg(not(target_os = "macos"))]
+    let plain_launch = launch_options.is_empty() && control_port.is_none() && !new_instance;
     // One PhotoCraft per user (#3708): files opened from Explorer or a file manager while it runs
     // become tabs in its window. Lives until the event loop returns, then `shutdown` lets the next
     // launch become the primary.
@@ -490,6 +497,10 @@ fn main() -> eframe::Result {
     let started_note = plan.reason.clone();
     let app_created = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
     let created_in_callback = app_created.clone();
+    #[cfg(not(target_os = "macos"))]
+    let window_restart = window_loss::Pending::default();
+    #[cfg(not(target_os = "macos"))]
+    let restart_service = window_restart.clone();
     let started_sentinel = sentinel.clone();
     let result = eframe::run_native(
         "PhotoCraft",
@@ -681,6 +692,21 @@ fn main() -> eframe::Result {
             if let Some(w) = &app_dirs::current().warning {
                 photocraft_ui_egui::notices::post(&mut app, "Portable mode is off", vec![w.clone()], false, None);
             }
+            // The previous process lost its window's graphics device and started this one
+            // (`window_loss`): its unsaved documents come back from crash recovery.
+            let lost_reason = std::env::var(window_loss::REASON).ok();
+            if let Some((title, line, reason)) = window_loss::notice(lost_reason.as_deref()) {
+                let id = photocraft_ui_egui::notices::post(&mut app, title, vec![line.into()], false, None);
+                if let Some(notice) = app.ui.notices.iter_mut().find(|n| n.id == id) {
+                    notice.args.push(("reason".into(), reason));
+                }
+            }
+            // The next device loss starts a new process instead of just closing. Not on macOS,
+            // where AppKit ends the process itself (`quit`) before this function can run again.
+            #[cfg(not(target_os = "macos"))]
+            if plain_launch {
+                app.services.restart_after_window_loss = Some(restart_service.service());
+            }
             Ok(Box::new(app))
         }),
     );
@@ -709,6 +735,17 @@ fn main() -> eframe::Result {
             }
         } else {
             s.finish();
+        }
+    }
+    // The window's graphics device was lost and every unsaved document is in crash recovery
+    // (`gpu_status::check_window`): start PhotoCraft again, with a new device.
+    #[cfg(not(target_os = "macos"))]
+    if result.is_ok()
+        && let Some(request) = window_restart.take()
+    {
+        match window_loss::relaunch(&request) {
+            Ok(()) => return Ok(()),
+            Err(why) => log::warn!("PhotoCraft is not restarting after the lost graphics device: {why}"),
         }
     }
     // Retry in a fresh process: winit event loops cannot be recreated reliably in-process.
