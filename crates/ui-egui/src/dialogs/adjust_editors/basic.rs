@@ -136,7 +136,7 @@ pub(super) fn color_balance(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> 
 fn color_balance_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let tone_id = color_balance_tone_id(cx.mem);
     let mut tone_ix: usize = ui.data(|d| d.get_temp(tone_id)).unwrap_or(1);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Tone:"));
         for (i, l) in [tl!("Shadows"), tl!("Midtones"), tl!("Highlights")].iter().enumerate() {
             if ui.radio(tone_ix == i, *l).clicked() {
@@ -194,7 +194,7 @@ fn black_white_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         e.add(r);
     }
     ui.add_space(2.0);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         let mut on = flag(v, "tint", false);
         if widgets::checkbox(ui, &mut on, tl!("Tint")).changed() {
             v["tint"] = json!(on);
@@ -230,7 +230,7 @@ fn photo_filter_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let preset = PHOTO_FILTERS.iter().find(|f| adjust_params::hex(f.2.map(|x| f32::from(x) / 255.0)) == hex).map(|f| f.0);
     let mode_id = cx.mem.with("pf-mode");
     let mut use_color: bool = ui.data(|d| d.get_temp(mode_id)).unwrap_or(preset.is_none());
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         if ui.radio(!use_color, tl!("Filter:")).clicked() {
             use_color = false;
         }
@@ -246,7 +246,7 @@ fn photo_filter_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
             e.add(Edit::discrete(true));
         }
     });
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         if ui.radio(use_color, tl!("Color:")).clicked() {
             use_color = true;
         }
@@ -282,7 +282,7 @@ fn channel_mixer_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     if out >= outs.len() {
         out = 0;
     }
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Output Channel:"));
         widgets::dropdown(ui, &format!("{out_id:?}"), tl!("Output Channel:"), &mut out, outs, 110.0);
     });
@@ -298,7 +298,7 @@ fn channel_mixer_body(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         e.add(r);
     }
     let total = row[0] + row[1] + row[2];
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         label(ui, tl!("Total:"));
         let warn = total > 100.0;
         ui.label(RichText::new(format!("{total:+.0}%")).font(crate::theme::mono(12.0)).color(if warn { t.warning } else { t.text }));
@@ -521,5 +521,57 @@ mod tests {
         assert!(fl.left() < cl.left(), "LTR reads left to right: {fl:?} {cl:?}");
         let (fr, cr) = (rect_of(&rtl, caption, "Output Channel:"), combo_rect(&rtl));
         assert!(fr.left() > cr.left(), "RTL reads right to left: {fr:?} {cr:?}");
+    }
+}
+
+#[cfg(test)]
+mod rtl_row_twin {
+    use super::*;
+    use crate::direction::{Dir, direction_scope};
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    /// The Color Balance editor drawn in `dir`.
+    fn harness(dir: Dir) -> Harness<'static, Value> {
+        let _dir = direction_scope(dir);
+        let mut h = Harness::builder().with_size(egui::vec2(380.0, 420.0)).build_ui_state(
+            move |ui, v: &mut Value| {
+                if !ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("medium".into()))) {
+                    return;
+                }
+                let cx = EditorCx {
+                    mem: egui::Id::unique("cb-twin"),
+                    hist: None,
+                    gray: false,
+                    swatches: [[0.0; 3]; 2],
+                    gradients: Vec::new(),
+                    dialog: true,
+                    dynamic_color_sliders: true,
+                    isolated_curve: None,
+                };
+                color_balance(ui, v, &cx);
+            },
+            json!({}),
+        );
+        crate::PhotocraftApp::setup_context(&h.ctx, Default::default());
+        h.run_steps(4);
+        h
+    }
+
+    /// The migrated Tone row keeps its LTR order and gap, and mirrors both under RTL.
+    #[test]
+    fn the_tone_row_keeps_ltr_gap_and_mirrors_under_rtl() {
+        let ltr = harness(Dir::Ltr);
+        let rtl = harness(Dir::Rtl);
+        let radio = egui::accesskit::Role::RadioButton;
+        let ltr_sh = ltr.get_by_role_and_label(radio, "Shadows").rect();
+        let ltr_hi = ltr.get_by_role_and_label(radio, "Highlights").rect();
+        assert!(ltr_sh.left() < ltr_hi.left(), "LTR reads Shadows then Highlights: {ltr_sh:?} {ltr_hi:?}");
+        let ltr_gap = ltr_hi.left() - ltr_sh.right();
+        let rtl_sh = rtl.get_by_role_and_label(radio, "Shadows").rect();
+        let rtl_hi = rtl.get_by_role_and_label(radio, "Highlights").rect();
+        assert!(rtl_sh.left() > rtl_hi.left(), "RTL mirrors the row: {rtl_sh:?} {rtl_hi:?}");
+        let rtl_gap = rtl_sh.left() - rtl_hi.right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.0, "the gap is mirrored, not resized: LTR {ltr_gap} RTL {rtl_gap}");
     }
 }
