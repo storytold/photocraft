@@ -286,6 +286,8 @@ const REFINE_OUTPUT: &[(&str, &str)] = &[
     ("refineEdgeOutputNewLayerWithMask", "newLayerWithMask"),
     ("refineEdgeOutputNewDocument", "newDocument"),
     ("refineEdgeOutputNewDocumentWithMask", "newDocumentWithMask"),
+    // Newer Photoshop's name for Output To: Selection.
+    ("selectionOutputToSelection", "selection"),
 ];
 
 /// Filter Gallery effects (`GEfc` with the effect in `GEfk`): Photoshop's effect code, the
