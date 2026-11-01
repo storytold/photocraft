@@ -344,9 +344,10 @@ struct Gesture {
     points: Vec<[f64; 2]>,
 }
 
-/// The selection after the first `edits` (document coordinates) on the copy reduced by `k`.
+/// The full-size selection after the first `edits`, reusable across preview qualities.
 #[derive(Clone)]
 struct BaseCache {
+    /// The reduction factor of the associated preview document.
     k: u32,
     /// The document revision the base was computed from.
     revision: u64,
@@ -983,33 +984,6 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     Ok(app.distort.select_mask.as_ref().map(SelectMaskWorkspace::describe).unwrap_or(Value::Null))
 }
 
-/// `e` (document coordinates) on the copy reduced by `k`: points, sizes and rectangles scale by
-/// `1 / k`.
-fn scale_edit(e: &Value, k: u32) -> Value {
-    let k = f64::from(k.max(1));
-    let mut e = e.clone();
-    let Some(o) = e.as_object_mut() else { return e };
-    let scale = |v: &mut Value| {
-        if let Some(n) = v.as_f64() {
-            *v = json!(n / k);
-        }
-    };
-    if let Some(pts) = o.get_mut("points").and_then(Value::as_array_mut) {
-        for p in pts.iter_mut().filter_map(Value::as_array_mut) {
-            p.iter_mut().for_each(scale);
-        }
-    }
-    for key in ["point", "rect"] {
-        if let Some(a) = o.get_mut(key).and_then(Value::as_array_mut) {
-            a.iter_mut().for_each(scale);
-        }
-    }
-    if let Some(size) = o.get("size").and_then(Value::as_f64) {
-        o.insert("size".into(), json!((size / k).max(1.0)));
-    }
-    e
-}
-
 /// What a preview computation needs (moved to a worker thread).
 struct Job {
     doc: Arc<Document>,
@@ -1188,8 +1162,57 @@ fn sparse_preview_ants(surface: &Surface, area: Rect, k: f32) -> Option<Vec<[[f3
     Some(edges)
 }
 
-/// The preview of `job`: the edits applied (from where the cache left off), the edge refined and
-/// the result shown in the view, as an image no wider than the device allows.
+/// Reduce a selection by maximum coverage, so thin edits survive between proxy sample points.
+/// Visit stored tiles rather than a full-size buffer; only the bounded preview is dense.
+fn reduced_selection(surface: &Surface, canvas: Rect, k: u32) -> Result<Surface, String> {
+    if k <= 1 {
+        return Ok(surface.clone());
+    }
+    let (w, h) = (canvas.width().div_ceil(k) as usize, canvas.height().div_ceil(k) as usize);
+    let len = w.checked_mul(h).filter(|n| *n <= PROXY_SIDE * PROXY_SIDE).ok_or("selection preview is too large")?;
+    let outside = surface.default_pixel().first().copied().unwrap_or(0.0).clamp(0.0, 1.0);
+    let mut coverage = vec![0.0_f32; len];
+    // A nonzero default contributes wherever a block includes pixels outside stored tiles.
+    let mut stored = if outside > 0.0 { vec![0_u64; len] } else { Vec::new() };
+    for (coord, _) in surface.tiles() {
+        let area = coord.rect().intersect(&canvas);
+        if area.is_empty() {
+            continue;
+        }
+        let values = photocraft_algo::selection::mask_from_surface(Some(surface), area);
+        for (y, row) in values.chunks_exact(area.width() as usize).enumerate() {
+            let oy = ((area.y0 - canvas.y0) as u32 + y as u32) / k;
+            for (x, value) in row.iter().enumerate() {
+                let ox = ((area.x0 - canvas.x0) as u32 + x as u32) / k;
+                let i = oy as usize * w + ox as usize;
+                if let Some(v) = coverage.get_mut(i) {
+                    *v = v.max(*value);
+                }
+                if let Some(n) = stored.get_mut(i) {
+                    *n += 1;
+                }
+            }
+        }
+    }
+    for (i, count) in stored.into_iter().enumerate() {
+        let (x, y) = ((i % w) as u64, (i / w) as u64);
+        let k = u64::from(k);
+        let width = u64::from(canvas.width()).saturating_sub(x * k).min(k);
+        let height = u64::from(canvas.height()).saturating_sub(y * k).min(k);
+        if count < width * height
+            && let Some(v) = coverage.get_mut(i)
+        {
+            *v = v.max(outside);
+        }
+    }
+    let mut out = Surface::with_default(surface.format(), &surface.default_pixel());
+    out.write_region(Rect::new(0, 0, w as i32, h as i32), &coverage);
+    out.prune();
+    Ok(out)
+}
+
+/// Apply tool edits at full resolution so preview quality cannot change their selection, then
+/// reduce the mask for edge refinement and display. Completed edits reuse the cached selection.
 fn compute(job: Job, cancel: Option<&photocraft_engine::jobs::JobCtx>) -> Result<(Shown, BaseCache, Arc<Document>), String> {
     let k = job.k.max(1);
     let proxy = job.proxy.unwrap_or_else(|| Arc::new(crate::proxy::proxy_document(&job.doc, k)));
@@ -1197,30 +1220,34 @@ fn compute(job: Job, cancel: Option<&photocraft_engine::jobs::JobCtx>) -> Result
     let layer = job.layer.filter(|id| doc.layer(*id).is_some());
     let mut params = job.params;
     let start = || {
-        let mask = layer.and_then(|id| doc.layer(id)).and_then(|l| l.mask.as_ref()).map(|m| m.surface.clone());
-        if job.target_mask { mask.or_else(|| doc.selection.clone()) } else { doc.selection.clone().or(mask) }
+        let mask = layer.and_then(|id| job.doc.layer(id)).and_then(|l| l.mask.as_ref()).map(|m| m.surface.clone());
+        if job.target_mask { mask.or_else(|| job.doc.selection.clone()) } else { job.doc.selection.clone().or(mask) }
     };
-    let scaled = |list: &[Value]| -> Result<Vec<select_mask_edits::SelectionEdit>, String> {
-        let list: Vec<Value> = list.iter().map(|e| scale_edit(e, k)).collect();
+    let parse = |list: &[Value]| -> Result<Vec<select_mask_edits::SelectionEdit>, String> {
         select_mask_edits::parse(&json!({ "edits": list })).map_err(|e| e.to_string())
     };
     // With no edits yet, the selection Select and Mask starts from is where the first one starts.
     let mut cache = BaseCache { k, revision: job.revision, edits: Vec::new(), base: start() };
     if !job.edits.is_empty() || job.extra.is_some() {
+        let mut edits = parse(&job.edits)?;
+        if let Some(e) = &job.extra {
+            edits.extend(parse(std::slice::from_ref(e))?);
+        }
+        select_mask_edits::check_size(&edits, job.doc.bounds()).map_err(|e| e.to_string())?;
         // The selection after the edits already applied, when they still lead the list.
-        let (from, done) = match job.cache.filter(|c| c.k == k && c.revision == job.revision && job.edits.starts_with(&c.edits)) {
+        let (from, done) = match job.cache.filter(|c| c.revision == job.revision && job.edits.starts_with(&c.edits)) {
             Some(c) => (c.base, c.edits.len()),
             None => (start(), 0),
         };
-        let rest = scaled(job.edits.get(done..).unwrap_or_default())?;
-        let base = select_mask_edits::apply(&doc, layer, from, &rest);
+        let rest = edits.get(done..job.edits.len()).unwrap_or_default();
+        let base = select_mask_edits::apply(&job.doc, layer, from, rest);
         cache = BaseCache { k, revision: job.revision, edits: job.edits.clone(), base: base.clone() };
-        let base = match &job.extra {
-            Some(e) => select_mask_edits::apply(&doc, layer, base, &scaled(std::slice::from_ref(e))?),
-            None => base,
-        };
+        let base = select_mask_edits::apply(&job.doc, layer, base, edits.get(job.edits.len()..).unwrap_or_default());
         // Nothing selected is an empty selection, not "use the layer mask".
-        doc.selection = Some(base.unwrap_or_else(|| Surface::new(photocraft_color::PixelFormat::GRAY8)));
+        doc.selection = Some(match base {
+            Some(s) => reduced_selection(&s, job.doc.bounds(), k)?,
+            None => Surface::new(photocraft_color::PixelFormat::GRAY8),
+        });
         if let Some(o) = params.as_object_mut() {
             o.remove("target");
         }
