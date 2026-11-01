@@ -303,18 +303,24 @@ fn is_latin1_keyword(k: &str) -> bool {
     !k.is_empty() && k.len() <= 79 && k.chars().all(|c| (' '..='~').contains(&c) || ('\u{a1}'..='\u{ff}').contains(&c))
 }
 
+/// Encodes the planned PNG, reusing owned converted pixels when 16-bit samples
+/// need big-endian byte order.
 pub(crate) fn encode(src: &Image, plan: Plan, opts: &EncodeOptions) -> Result<Vec<u8>, CodecError> {
     let img = src.converted(plan.layout, plan.sample);
     let (w, h) = img.dimensions();
     let bpp = img.layout().channels() * img.sample_type().bytes();
-    // Big-endian sample bytes.
-    let mut data = std::borrow::Cow::Borrowed(img.data());
-    if img.sample_type() == SampleType::U16 {
-        to_big_endian(data.to_mut());
-    }
+    let sample = img.sample_type();
     let mut out = Vec::new();
     {
-        let mut writer = start(&mut out, (w, h), (img.layout(), img.sample_type()), img.icc.as_ref(), &img.meta, opts)?;
+        let mut writer = start(&mut out, (w, h), (img.layout(), sample), img.icc.as_ref(), &img.meta, opts)?;
+        // Reuse converted pixels when endian swapping needs an owned buffer.
+        let mut data = match img {
+            std::borrow::Cow::Borrowed(image) => std::borrow::Cow::Borrowed(image.data()),
+            std::borrow::Cow::Owned(image) => std::borrow::Cow::Owned(image.into_data()),
+        };
+        if sample == SampleType::U16 {
+            to_big_endian(data.to_mut());
+        }
         if opts.png_interlaced {
             let idat = adam7_idat(&data, w as usize, h as usize, bpp, opts.png_compression)?;
             write_idat(&mut writer, &idat, MAX_IDAT)?;
@@ -1149,6 +1155,43 @@ mod parallel_tests {
                 // The oracle decoder agrees.
                 let o = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png).unwrap();
                 assert_eq!((o.width(), o.height()), (w, h));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    use super::*;
+
+    /// Converting for export must give the same file as borrowed U16 pixels, without
+    /// changing the caller's native samples or losing the converted image's metadata.
+    #[test]
+    fn converted_u16_matches_borrowed_pixels_and_metadata() {
+        for layout in [ChannelLayout::Gray, ChannelLayout::GrayA, ChannelLayout::Rgb, ChannelLayout::Rgba] {
+            for sample in [SampleType::F16, SampleType::F32] {
+                let raw = (0..3 * 2 * layout.channels())
+                    .flat_map(|i| match sample {
+                        SampleType::F16 => [0u16, 0x8000, 0x3800, 0x3c00, 0xbc00, 0x7c00, 0x7e01][i % 7].to_ne_bytes().to_vec(),
+                        _ => [0.0f32, -0.0, 0.5, 1.0, -1.0, f32::INFINITY, f32::NAN][i % 7].to_ne_bytes().to_vec(),
+                    })
+                    .collect();
+                let mut img = Image::from_raw(3, 2, layout, sample, raw).unwrap();
+                img.icc = Some((0..600u32).map(|i| (i % 251) as u8).collect());
+                img.meta.dpi = Some((300.0, 144.0));
+                img.meta.text.push(("Title".into(), "Converted PNG".into()));
+                img.meta.xmp = Some("<x:xmpmeta>PNG metadata</x:xmpmeta>".into());
+                let before = img.clone();
+                let converted = img.convert(layout, SampleType::U16);
+                for png_interlaced in [false, true] {
+                    for png_compression in [PngCompression::None, PngCompression::Default] {
+                        let opts = EncodeOptions { png_interlaced, png_compression, ..Default::default() };
+                        let bytes = crate::encode(&img, F, &opts).unwrap();
+                        assert_eq!(bytes, crate::encode(&converted, F, &opts).unwrap());
+                        assert_eq!(decode(&bytes, &Limits::default()).unwrap().data(), converted.data());
+                        assert_eq!(img, before);
+                    }
+                }
             }
         }
     }
