@@ -2,7 +2,7 @@
 title: Save As says "File not found" in Documents or Pictures
 description: On Windows, saving or exporting into Documents, Pictures or Desktop can fail with "File not found" when Windows Security's Controlled folder access blocks PhotoCraft. Allow PhotoCraft through it, or save to another folder.
 order: 25
-verified: 0.14.0
+verified: 0.18.0
 ---
 
 The most likely cause is Windows Security's **Controlled folder access**, which stops apps it doesn't know from writing to Documents, Pictures and Desktop. Allow PhotoCraft through it, or save to a folder outside those.
@@ -11,6 +11,7 @@ The most likely cause is Windows Security's **Controlled folder access**, which 
 
 - On Windows 10 or 11, you choose **File › Save As…** or export, pick a folder such as Documents or Pictures, and click **Save**.
 - The Windows save dialog shows "File not found. Check the file name and try again." and nothing is saved ([issue 5750](https://github.com/storytold/photocraft/issues/5750), [issue 7600](https://github.com/storytold/photocraft/issues/7600), [issue 7999](https://github.com/storytold/photocraft/issues/7999)).
+- **File › Save** on a file that is already in one of those folders fails with an error that the folder is not writable (Access is denied).
 - Saving the same file to another folder, such as `C:\Temp`, works.
 
 ## Fix
@@ -33,7 +34,7 @@ If your PC is managed by work or school, you may not be allowed to change this. 
 
 ## Why this happens
 
-Controlled folder access is part of Windows ransomware protection. It blocks writes to protected folders from apps that Windows doesn't recognize, and a new app like PhotoCraft isn't recognized yet. Before the save dialog returns your choice, Windows test-creates the file. When that test is blocked, the dialog reports "File not found" rather than saying access was denied, so PhotoCraft never gets to save. Other image editors show the same message when they are blocked.
+Controlled folder access is part of Windows ransomware protection. It blocks writes to protected folders from apps that Windows doesn't recognize, and a new app like PhotoCraft isn't recognized yet. Before the save dialog returns your choice, Windows test-creates the file there. When that test is blocked, the dialog reports "File not found" rather than saying access was denied, and closes without passing the file to PhotoCraft. When PhotoCraft saves without the dialog, as **File › Save** does for a file it already has a place for, Windows blocks PhotoCraft's own write, and PhotoCraft reports that the folder is not writable. Other image editors get the same "File not found" in the save dialog when they are blocked.
 
 ## Still stuck?
 

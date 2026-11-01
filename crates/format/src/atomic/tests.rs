@@ -311,6 +311,13 @@ fn access_denied_names_controlled_folder_access_on_windows() {
     assert!(msg.contains("not writable") && msg.contains(UNCHANGED), "{msg}");
     assert_eq!(msg.contains("Controlled folder access"), cfg!(windows), "{msg}");
 
+    // Only an access-denied write gets the hint: a full disk or any other failure is not
+    // Controlled folder access, on any platform.
+    for kind in [io::ErrorKind::StorageFull, io::ErrorKind::NotFound, io::ErrorKind::Other] {
+        let other = write_error(io::Error::new(kind, "failed"), Path::new("C:/Users/a/Pictures/art.png"), Path::new("C:/Users/a/Pictures"));
+        assert!(!other.to_string().contains("Controlled folder access"), "{kind:?}: {other}");
+    }
+
     // A read-only volume is not Controlled folder access: no hint, on any platform.
     let ro = write_error(io::Error::new(io::ErrorKind::ReadOnlyFilesystem, "read-only"), Path::new("/mnt/a.png"), Path::new("/mnt"));
     assert!(!ro.to_string().contains("Controlled folder access"), "{ro}");
