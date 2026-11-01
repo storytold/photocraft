@@ -212,6 +212,13 @@ fn expire(app: &mut PhotocraftApp, now: f64, hovered: bool, just_left: bool, aut
     next.is_finite().then_some(next)
 }
 
+/// The (pivot, offset) anchoring the stack to the screen's lower reading-end corner:
+/// lower-right left-to-right, lower-left right-to-left. The cards stack top-down inside the
+/// area, so the newest card is the one nearest the corner in both directions.
+fn stack_anchor() -> (egui::Align2, egui::Vec2) {
+    crate::direction::end_corner_anchor(true, 16.0, -36.0)
+}
+
 /// Draw the notices; each has a close button. When Interface › Notification › Auto Hide Notices
 /// is on, a notice disappears once its delay is up unless the pointer rests on the stack.
 pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
@@ -221,9 +228,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     let t = crate::theme::Tokens::get(ctx);
     let mut dismiss_id = None;
-    // Clear the status bar (~24 px) and leave the dock's edge some air. The stack hugs the
-    // reading-end corner: lower-right, lower-left in a right-to-left UI.
-    let (anchor, off) = crate::direction::end_corner_anchor(true, 16.0, -36.0);
+    // Clear the status bar (~24 px) and leave the dock's edge some air.
+    let (anchor, off) = stack_anchor();
     let area = egui::Area::new(egui::Id::unique("photocraft-notices"))
         .order(egui::Order::Foreground)
         .anchor(anchor, off)
@@ -528,5 +534,26 @@ mod tests {
         out.textures_delta.clear();
         assert!(app.ui.notices.is_empty());
         assert!(ctx.has_requested_repaint(), "the frame that drops a notice asks for another");
+    }
+
+    /// The stack hugs the lower reading-end screen corner in both directions: the pivot and
+    /// offset mirror, and the anchored area stays whole on screen.
+    #[test]
+    fn stack_anchor_mirrors_and_stays_on_screen() {
+        let screen = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1200.0, 800.0));
+        let card = egui::vec2(360.0, 120.0);
+        let _ltr = crate::direction::direction_scope(crate::direction::Dir::Ltr);
+        let (pivot, off) = stack_anchor();
+        assert_eq!(pivot, egui::Align2::RIGHT_BOTTOM);
+        let area = pivot.align_size_within_rect(card, screen).translate(off);
+        assert!(screen.contains_rect(area), "LTR: {area:?} in {screen:?}");
+        assert!((area.right() - (screen.right() - 16.0)).abs() < 1e-3 && (area.bottom() - (screen.bottom() - 36.0)).abs() < 1e-3);
+        drop(_ltr);
+        let _rtl = crate::direction::direction_scope(crate::direction::Dir::Rtl);
+        let (pivot, off) = stack_anchor();
+        assert_eq!(pivot, egui::Align2::LEFT_BOTTOM);
+        let area = pivot.align_size_within_rect(card, screen).translate(off);
+        assert!(screen.contains_rect(area), "RTL: {area:?} in {screen:?}");
+        assert!((area.left() - (screen.left() + 16.0)).abs() < 1e-3 && (area.bottom() - (screen.bottom() - 36.0)).abs() < 1e-3);
     }
 }
