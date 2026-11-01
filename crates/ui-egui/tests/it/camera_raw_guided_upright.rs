@@ -2,7 +2,7 @@
 //! takes the tool up, guides drawn on the preview correct the picture, and each guide is one
 //! undo step.
 use egui::{Event, Key, Modifiers, PointerButton, Pos2, Rect, pos2, vec2};
-use egui_kittest::Harness;
+use egui_kittest::{Harness, kittest::Queryable};
 use photocraft_ui_egui::{PhotocraftApp, camera_raw_ui, control, theme::ThemeKind};
 use serde_json::{Value, json};
 
@@ -122,4 +122,29 @@ fn shift_t_again_puts_the_tool_down_and_clicks_zoom_again() {
     key(&mut h, Key::Escape, Modifiers::NONE);
     assert_eq!(inspect(&h)["guidedUprightTool"]["active"], false);
     assert!(inspect(&h).is_object(), "the dialog is still open");
+}
+
+/// With the Color Sampler chosen, Shift+T or the Guided button takes the guide tool up and puts
+/// the sampler down (the newest tool wins), so the next drag draws a guide.
+#[test]
+fn shift_t_or_the_guided_button_puts_the_color_sampler_down() {
+    let mut h = fixture();
+    key(&mut h, Key::S, Modifiers::NONE);
+    assert_eq!(inspect(&h)["scope"]["samplerTool"], true);
+    key(&mut h, Key::T, Modifiers::SHIFT);
+    assert_eq!(params(&h)["upright"], "guided");
+    assert_eq!(inspect(&h)["guidedUprightTool"]["active"], true, "Shift+T takes the guide tool up");
+    assert_eq!(inspect(&h)["scope"]["samplerTool"], false, "and puts the sampler down");
+    assert!(h.query_by_label("Guided").is_some(), "Shift+T opens Geometry");
+    let r = preview_rect(&h);
+    drag(&mut h, at(r, 0.3, 0.2), at(r, 0.3, 0.8));
+    assert_eq!(params(&h)["uprightGuides"].as_array().unwrap().len(), 1, "the drag draws a guide");
+    // S takes the sampler back up and puts the guide tool down.
+    key(&mut h, Key::S, Modifiers::NONE);
+    assert_eq!((inspect(&h)["scope"]["samplerTool"].clone(), inspect(&h)["guidedUprightTool"]["active"].clone()), (json!(true), json!(false)));
+    // The Guided button does what Shift+T does.
+    h.get_by_label("Guided").click();
+    h.run_steps(2);
+    assert_eq!(inspect(&h)["guidedUprightTool"]["active"], true, "the Guided button takes the guide tool up");
+    assert_eq!(inspect(&h)["scope"]["samplerTool"], false, "and puts the sampler down");
 }

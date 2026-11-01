@@ -146,18 +146,16 @@ fn section(ui: &mut egui::Ui, title: &str, open: bool, body: impl FnOnce(&mut eg
 }
 
 /// Geometry: Upright (Off, Auto, Level, Vertical, Full, Guided) and the Manual Transformations.
-fn geometry(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, guides: &mut crate::camera_raw_guides_ui::GuideTool) {
+/// `sampler`: the Color Sampler tool, which the Guided button puts down (the newest tool wins).
+fn geometry(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, guides: &mut crate::camera_raw_guides_ui::GuideTool, sampler: &mut bool) {
+    // Shift+T opens the section. Through the header itself: its id is not
+    // `make_persistent_id` of the same salt, so a state stored under that never reached it.
     let reveal = std::mem::take(&mut guides.reveal);
-    let id = ui.make_persistent_id(("camera-raw-section", "Geometry"));
-    if reveal {
-        let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(), id, false);
-        state.set_open(true);
-        state.store(ui.ctx());
-    }
     let response =
         egui::CollapsingHeader::new(egui::RichText::new(crate::i18n::tr_ctx(crate::i18n::current(), "cameraRaw", "Geometry")).font(FontId::proportional(13.0)))
             .id_salt(("camera-raw-section", "Geometry"))
             .default_open(false)
+            .open(reveal.then_some(true))
             .show(ui, |ui| {
                 widgets::section_label(ui, tl!("Upright"));
                 const MODES: [(&str, &str, &str); 6] = [
@@ -182,6 +180,9 @@ fn geometry(ui: &mut egui::Ui, p: &mut CameraRaw, dirty: &mut bool, guides: &mut
                                 *dirty = true;
                             }
                             guides.active = mode == "guided";
+                            if guides.active {
+                                *sampler = false;
+                            }
                         }
                     }
                 });
@@ -349,7 +350,13 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
     egui::Area::new(egui::Id::unique("camera-raw-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.camera_raw.as_mut() else { return };
         history_keys(d, ctx);
+        let guides_were_active = d.guides.active;
         guide_keys(d, ctx);
+        // Shift+T took the Guided Upright tool up: it puts the Color Sampler down (the newest
+        // tool wins), rather than the sampler putting the new tool straight down again.
+        if d.guides.active && !guides_were_active {
+            app.ui.camera_raw_scope.sampler_tool = false;
+        }
         let pointer = ctx.input(|i| i.pointer.primary_down());
         if pointer && d.edit_origin.is_none() {
             d.edit_origin = Some(d.params.clone());
@@ -397,7 +404,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
         preview.set_clip_rect(view.intersect(ui.clip_rect()));
         preview.painter().rect_filled(view, 0.0, t.canvas);
         // The Guided Upright tool takes the preview's clicks as the sampler does (the Hand and
-        // Zoom tools put it down).
+        // Zoom tools put it down, and so does choosing the sampler with S).
         if d.params.upright != "guided" || scope.sampler_tool {
             d.guides.active = false;
         }
@@ -551,7 +558,7 @@ fn draw(app: &mut PhotocraftApp, ctx: &egui::Context, own_window: bool) {
                 row(ui, &mut dirty, "Blending", &mut p.grade_blending, 0.0..=100.0, None);
                 row(ui, &mut dirty, "Balance", &mut p.grade_balance, -100.0..=100.0, None);
             });
-            geometry(ui, p, &mut dirty, &mut d.guides);
+            geometry(ui, p, &mut dirty, &mut d.guides, &mut scope.sampler_tool);
             section(ui, "Detail", false, |ui| {
                 if let Some(raw) = d.raw_open.as_mut() {
                     demosaic_row(ui, &mut raw.demosaic);
