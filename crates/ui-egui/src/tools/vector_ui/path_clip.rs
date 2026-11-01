@@ -277,10 +277,12 @@ mod tests {
         app.ui.selected_path = None;
         crate::path_components::press(&mut app, [10.0, 10.0], false);
         app.run("edit.copy", json!({})).unwrap();
-        paste(&mut app);
+        app.run("edit.paste", json!({"center": [40.0, 40.0]})).unwrap();
         assert!(app.session.clipboard.is_none(), "the unchanged image did not install a pixel clip");
         assert!(app.session.path_clipboard.is_some(), "and the fresh path clip survived");
-        // The paste inserted: paste at another centre and the replaced "Pasted Path" follows.
+        let first: Vec<_> = saved(&app, "Pasted Path").unwrap().subpaths[0].knots.iter().map(|k| k.anchor).collect();
+        assert_eq!(first[0], photocraft_geom::Point::new(35.0, 35.0), "the paste centred the component on (40, 40)");
+        // The next paste inserted too: paste at another centre and the replaced "Pasted Path" follows.
         app.ui.selected_path = None;
         app.run("edit.paste", json!({"center": [30.0, 30.0]})).unwrap();
         let anchors: Vec<_> = saved(&app, "Pasted Path").unwrap().subpaths[0].knots.iter().map(|k| k.anchor).collect();
