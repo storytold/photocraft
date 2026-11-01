@@ -37,6 +37,7 @@ photocraft-ui-egui = { path = "crates/ui-egui" }
 photocraft-testkit = { path = "crates/testkit" }
 photocraft-tablet = { path = "crates/tablet" }
 photocraft-ipp = { path = "crates/ipp" }
+photocraft-matting = { path = "crates/matting" }
 
 # external
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "c5a1cbfb5f9049f9270955caffb5bee5997aebf7" }
@@ -67,6 +68,9 @@ rfd = "0.17"
 log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# ONNX Runtime for neural matting: loaded dynamically at runtime (never linked),
+# DirectML execution provider enabled so one API covers NVIDIA/AMD/Intel GPUs.
+ort = { version = "2.0.0-rc.10", default-features = false, features = ["load-dynamic", "directml", "openvino", "api-22"] }
 rayon = "1"
 rustc-hash = "2.1.3"
 criterion = { version = "0.8", default-features = false }

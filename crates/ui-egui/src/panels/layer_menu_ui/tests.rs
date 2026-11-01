@@ -463,6 +463,7 @@ fn entries_follow_layer_state() {
     let l = st.doc.layer(st.active_layer.unwrap()).unwrap().clone();
     let ids: Vec<&str> = entries(&l, false, false).into_iter().flatten().map(|e| e.1).collect();
     assert_eq!(ids.first(), Some(&"layer.layerStyle.blendingOptions"));
+    assert!(ids.contains(&"layer.removeBackgroundAIHd"), "the entries offer HD; the renderer hides it when its weights are absent");
     assert!(ids.contains(&"layer.mergeDown") && !ids.contains(&"layer.mergeLayers"));
     assert!(ids.contains(&"layer.layerMask.revealAll"));
     let ids: Vec<&str> = entries(&l, false, true).into_iter().flatten().map(|e| e.1).collect();
