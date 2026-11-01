@@ -115,7 +115,8 @@ impl<'a> Shown<'a> {
         let fx = photocraft_compose::effects::has_effects(l);
         let (bounds, ink) = match &l.content {
             LayerContent::Group(g) if !fx => {
-                let kids: Vec<_> = g.children.iter().filter_map(Shown::new).collect();
+                // Hidden children show nothing: the compositor skips them.
+                let kids: Vec<_> = g.children.iter().filter(|c| c.visible).filter_map(Shown::new).collect();
                 (kids.iter().fold(Rect::EMPTY, |a, k| a.union(&k.bounds)), Ink::Children(kids))
             }
             _ => (crate::layer_multi_cmds::layer_bounds(l)?, l.surface().filter(|s| s.format().alpha && !fx).map_or(Ink::All, Ink::Alpha)),

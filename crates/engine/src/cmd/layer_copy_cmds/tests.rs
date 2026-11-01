@@ -264,6 +264,24 @@ fn a_group_masks_shown_part_is_where_its_children_show_ink() {
     assert_eq!(super::shown_bounds(doc(&s, 0).layer(LayerId(group)).unwrap()), Some(Rect::new(4, 6, 14, 16)));
 }
 
+/// #10422 review: a hidden child shows nothing through its group's mask, as the compositor skips
+/// it. Children at x 4..14 and, hidden, x 30..34 (y 6..16) under a group mask that reveals all:
+/// only the visible child's square is shown.
+#[test]
+fn a_group_masks_shown_part_skips_hidden_children() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    let other = LayerId(s.execute("layer.new.layer", json!({"name": "other"})).unwrap()["layer"].as_u64().unwrap());
+    s.execute("select.rect", json!({"x": 30, "y": 6, "width": 4, "height": 10})).unwrap();
+    s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.select", json!({"layer": paint.0, "mode": "add"})).unwrap();
+    let group = s.execute("layer.groupLayers", json!({})).unwrap()["layer"].as_u64().unwrap();
+    s.execute("layer.layerMask.revealAll", json!({"layer": group})).unwrap();
+    s.execute("layer.hideLayers", json!({"layer": other.0})).unwrap();
+    assert!(!doc(&s, 0).layer(other).unwrap().visible);
+    assert_eq!(super::shown_bounds(doc(&s, 0).layer(LayerId(group)).unwrap()), Some(Rect::new(4, 6, 14, 16)));
+}
+
 /// #10422 review: separate feathered openings show only as far as each one's blur reaches, not
 /// over the rectangle spanning both. Openings at x 0..20, y 0..20 and x 75..95, y 75..95 (3 px
 /// feather) show the square (x 4..14, y 6..16) and a patch at x 78..85, y 78..85; a patch at
