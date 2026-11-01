@@ -34,7 +34,7 @@ pub fn open(app: &mut PhotocraftApp) -> Result<(), String> {
         redo: Vec::new(),
         cur: None,
         lasso: None,
-        base: Base { window: Rect::EMPTY, rect: Rect::EMPTY, hole: Vec::new(), base: Vec::new() },
+        base: Base::new(Rect::EMPTY, Rect::EMPTY, Vec::new(), Vec::new()),
         outline: None,
         k,
         pw,

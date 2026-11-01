@@ -655,7 +655,7 @@ fn custom_hint_paints_nothing_for_a_stroke_inside_the_fill_area() {
 fn outside_fill_bounds_follow_the_fill_area_pixel_by_pixel() {
     let rect = Rect::new(10, 10, 20, 20);
     let mut hole = vec![true; 100];
-    let b = |hole: &Vec<bool>| preview::Base { window: rect, rect, hole: hole.clone(), base: vec![false; 100] };
+    let b = |hole: &Vec<bool>| preview::Base::new(rect, rect, hole.clone(), vec![false; 100]);
     assert_eq!(b(&hole).outside_fill_bounds(Rect::new(12, 12, 18, 18)), Rect::EMPTY);
     assert_eq!(b(&hole).outside_fill_bounds(rect), Rect::EMPTY);
     hole[3 * 10 + 6] = false; // (16, 13)
@@ -665,4 +665,25 @@ fn outside_fill_bounds_follow_the_fill_area_pixel_by_pixel() {
     assert_eq!(b(&hole).outside_fill_bounds(Rect::new(15, 5, 18, 12)), Rect::new(15, 5, 18, 10));
     assert_eq!(b(&hole).outside_fill_bounds(Rect::new(0, 0, 5, 5)), Rect::new(0, 0, 5, 5));
     assert_eq!(b(&hole).outside_fill_bounds(Rect::new(18, 16, 25, 18)), Rect::new(20, 16, 25, 18));
+}
+
+/// The pixels outside the fill area are looked up row by row in an index built with the base,
+/// not scanned under each Sampling Brush segment: a big brush over a fill area in the middle of
+/// the window (rows with pixels outside it on both sides) would otherwise check every pixel it
+/// covers, again and again while Custom's area stays empty. With the pixels dropped once the
+/// index is built (a missing pixel counts as outside), the answers stay the same.
+#[test]
+fn outside_fill_bounds_look_rows_up_instead_of_scanning_pixels() {
+    let rect = Rect::new(0, 0, 1000, 1000);
+    let mut hole = vec![false; 1000 * 1000];
+    for y in 100..900 {
+        hole[y * 1000 + 100..y * 1000 + 900].fill(true);
+    }
+    hole[300 * 1000 + 500] = false; // (500, 300)
+    let mut b = preview::Base::new(rect, rect, hole, vec![false; 1000 * 1000]);
+    b.hole = Vec::new();
+    assert_eq!(b.outside_fill_bounds(Rect::new(200, 400, 800, 800)), Rect::EMPTY, "all inside");
+    assert_eq!(b.outside_fill_bounds(Rect::new(200, 200, 800, 800)), Rect::new(500, 300, 501, 301), "the gap");
+    assert_eq!(b.outside_fill_bounds(Rect::new(50, 400, 150, 450)), Rect::new(50, 400, 100, 450), "left of it");
+    assert_eq!(b.outside_fill_bounds(Rect::new(850, 880, 1100, 900)), Rect::new(900, 880, 1100, 900), "right of it and past the window");
 }

@@ -7,9 +7,42 @@ pub(super) struct Base {
     pub(super) rect: Rect,
     pub(super) hole: Vec<bool>,
     pub(super) base: Vec<bool>,
+    /// The runs `[x0, x1)` of pixels outside the fill area, row by row of `rect` left to right,
+    /// row `i`'s at `outside[rows[i]..rows[i + 1]]`: `outside_fill_bounds` looks a row up in
+    /// them instead of scanning its pixels.
+    outside: Vec<(i32, i32)>,
+    rows: Vec<usize>,
 }
 
 impl Base {
+    pub(super) fn new(window: Rect, rect: Rect, hole: Vec<bool>, base: Vec<bool>) -> Self {
+        let (w, h) = (rect.width() as usize, rect.height() as usize);
+        let mut outside = Vec::new();
+        let mut rows = Vec::with_capacity(h + 1);
+        rows.push(0);
+        for y in 0..h {
+            let mut run: Option<i32> = None;
+            for x in 0..w {
+                // A pixel `hole` doesn't cover is outside the fill area.
+                let out = !hole.get(y * w + x).copied().unwrap_or(false);
+                let dx = rect.x0 + x as i32;
+                match (out, run) {
+                    (true, None) => run = Some(dx),
+                    (false, Some(a)) => {
+                        outside.push((a, dx));
+                        run = None;
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(a) = run {
+                outside.push((a, rect.x1));
+            }
+            rows.push(outside.len());
+        }
+        Self { window, rect, hole, base, outside, rows }
+    }
+
     /// The index into `hole` and `base` of document point `(x, y)`, when it is inside `rect`.
     pub(super) fn index(&self, x: f64, y: f64) -> Option<usize> {
         let (xi, yi) = (x.floor() as i32, y.floor() as i32);
@@ -17,8 +50,8 @@ impl Base {
     }
 
     /// Bounds of the pixels of `r` outside the fill area, pixel by pixel (everything beyond
-    /// `rect` is outside it); empty when the fill area covers all of `r`. Only the rows of `r`
-    /// within `rect` are scanned, from each end to the first pixel outside.
+    /// `rect` is outside it); empty when the fill area covers all of `r`. Each row of `r` within
+    /// `rect` is looked up in its runs outside the fill area, not scanned pixel by pixel.
     pub(super) fn outside_fill_bounds(&self, r: Rect) -> Rect {
         let inner = r.intersect(&self.rect);
         if inner.is_empty() {
@@ -31,13 +64,14 @@ impl Base {
             Rect::new(inner.x1, inner.y0, r.x1, inner.y1),
         ];
         let mut out = beyond.iter().filter(|b| !b.is_empty()).fold(Rect::EMPTY, |o, b| o.union(b));
-        let w = self.rect.width() as usize;
         for y in inner.y0..inner.y1 {
-            let row = (y - self.rect.y0) as usize * w;
-            let outside = |x: &i32| !self.hole.get(row + (x - self.rect.x0) as usize).copied().unwrap_or(false);
-            if let Some(a) = (inner.x0..inner.x1).find(outside) {
-                let b = (inner.x0..inner.x1).rev().find(outside).unwrap_or(a);
-                out = out.union(&Rect::new(a, y, b + 1, y + 1));
+            let i = (y - self.rect.y0) as usize;
+            let runs = &self.outside[self.rows[i]..self.rows[i + 1]];
+            // The first run ending past `inner.x0` and the last starting before `inner.x1`.
+            let first = runs.partition_point(|&(_, e)| e <= inner.x0);
+            let last = runs.partition_point(|&(s, _)| s < inner.x1);
+            if first < last {
+                out = out.union(&Rect::new(runs[first].0.max(inner.x0), y, runs[last - 1].1.min(inner.x1), y + 1));
             }
         }
         out
@@ -132,7 +166,7 @@ pub(super) fn compute_base(app: &PhotocraftApp, w: &CafWorkspace) -> Result<Base
     }
     let plan = photocraft_engine::edit_menu_cmds::content_aware_plan(&st.doc, w.layer, &p, CMD).map_err(|e| e.to_string())?;
     let base = if custom { vec![false; plan.base.len()] } else { plan.base };
-    Ok(Base { window: plan.window, rect: plan.rect, hole: plan.hole, base })
+    Ok(Base::new(plan.window, plan.rect, plan.hole, base))
 }
 
 /// Unit edges between the fill area and the rest, in document px.
