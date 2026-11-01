@@ -1294,6 +1294,51 @@ fn arrowhead_flags_reject_wrong_types_without_mutation() {
 }
 
 #[test]
+fn arrowhead_dimensions_reject_invalid_values_without_mutation() {
+    let mut s = session(160, 120, 8);
+    let id = s
+        .execute(
+            "shape.create",
+            json!({
+                "kind": "line",
+                "from": [10, 20],
+                "to": [120, 20],
+                "arrowEnd": true
+            }),
+        )
+        .unwrap()["layer"]
+        .as_u64()
+        .unwrap();
+
+    let original_doc = s.active().unwrap().doc.clone();
+    let original_history = s.active().unwrap().history.past_len();
+
+    for (key, invalids) in [
+        ("arrowWidth", [json!("52"), json!(null), json!([]), json!(0), json!(4097)]),
+        ("arrowLength", [json!("50"), json!(null), json!([]), json!(0), json!(4097)]),
+        ("arrowConcavity", [json!("0"), json!(null), json!([]), json!(-1), json!(101)]),
+    ] {
+        for invalid in invalids {
+            let mut create = json!({
+                "kind": "line",
+                "from": [10, 40],
+                "to": [120, 40]
+            });
+            create[key] = invalid.clone();
+            assert!(s.execute("shape.create", create).is_err(), "{key} create must reject {invalid}");
+            assert_eq!(s.active().unwrap().doc, original_doc, "{key} create changed document");
+            assert_eq!(s.active().unwrap().history.past_len(), original_history, "{key} create changed history");
+
+            let mut edit = json!({"layer": id});
+            edit[key] = invalid.clone();
+            assert!(s.execute("shape.edit", edit).is_err(), "{key} edit must reject {invalid}");
+            assert_eq!(s.active().unwrap().doc, original_doc, "{key} edit changed document");
+            assert_eq!(s.active().unwrap().history.past_len(), original_history, "{key} edit changed history");
+        }
+    }
+}
+
+#[test]
 fn headless_diagonal_arrow_preserves_geometry_after_nonuniform_scale() {
     let mut s = session(400, 400, 8);
 
