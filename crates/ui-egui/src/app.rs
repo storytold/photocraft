@@ -164,6 +164,7 @@ impl PhotocraftApp {
             wide_angle: None,
             dialog_edits: Default::default(),
             pending_after_prompt: None,
+            after_transform_commit: None,
             tone_hist: None,
             doc_hist: None,
             doc_hist_preview: None,
