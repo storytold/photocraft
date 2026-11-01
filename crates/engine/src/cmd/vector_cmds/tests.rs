@@ -38,8 +38,9 @@ fn stroke_validation_rejects_hostile_values_without_editing_history() {
         json!({"color": {"gradient": {"opacityStops": {}}}}),
         json!({"color": {"gradient": {"midpoints": 1}}}),
     ];
+    // The valid move occurs before stroke validation, so failures must undo a partial edit.
     for stroke in invalid {
-        assert!(s.execute("shape.edit", json!({"layer": id, "stroke": stroke})).is_err(), "{stroke}");
+        assert!(s.execute("shape.edit", json!({"layer": id, "move": [2, 1], "stroke": stroke})).is_err(), "{stroke}");
         assert_eq!(s.active().unwrap().doc, before);
         assert_eq!(s.active().unwrap().history.past_len(), history);
         assert!(s.execute("shape.create", json!({"rect": [20, 20, 50, 30], "stroke": stroke})).is_err(), "{stroke}");
