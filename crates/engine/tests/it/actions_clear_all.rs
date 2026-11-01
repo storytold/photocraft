@@ -2,6 +2,7 @@
 use photocraft_engine::{Session, actions_cmds::Action};
 use serde_json::json;
 
+/// Clearing requires consent and idle playback/recording, and preserves document history.
 #[test]
 fn confirmed_clear_is_atomic_for_definitions_shortcuts_and_recording() {
     let mut s = Session::new();

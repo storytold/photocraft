@@ -39,6 +39,7 @@ fn open(h: &mut Harness<'static, PhotocraftApp>) -> u64 {
     h.state().ui.dialogs.last().unwrap().id
 }
 
+/// Cancel preserves the library and selection; OK clears only the intended state.
 #[test]
 fn cancel_preserves_the_library_and_ok_clears_it_and_panel_selection() {
     let mut h = harness();
@@ -67,10 +68,12 @@ fn cancel_preserves_the_library_and_ok_clears_it_and_panel_selection() {
     assert_eq!(h.state().session.active().unwrap().revision, revision);
 }
 
+/// Deny the concrete destructive command at either authorization boundary.
 fn deny_clear(id: &str, _: &Value) -> photocraft_engine::Result<()> {
     if id == "actions.clearAll" { Err(EngineError::Other("clear denied".into())) } else { Ok(()) }
 }
 
+/// Stale state, denied authority and a changed command cannot redirect confirmation.
 #[test]
 fn stale_denied_or_retargeted_confirmations_never_clear_the_library() {
     for mode in ["stale", "denied", "retargeted"] {

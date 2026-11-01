@@ -6,6 +6,7 @@ use photocraft_psd::{
 };
 use serde_json::json;
 
+/// Build a single-step ATN input independently of the engine's exporter.
 fn file(item: AtnItem) -> Vec<u8> {
     atn::write(&AtnFile {
         name: UnicodeString::new_nul("Menu"),
@@ -16,6 +17,7 @@ fn file(item: AtnItem) -> Vec<u8> {
     .unwrap()
 }
 
+/// Absent settings retain menu intent and event kind, and refuse headless edits.
 #[test]
 fn absent_image_size_settings_round_trip_and_require_interaction_without_edits() {
     for (event, kind) in [(AtnEvent::Code(*b"ImgS"), "code"), (AtnEvent::name("imageSize"), "name")] {
@@ -44,6 +46,7 @@ fn absent_image_size_settings_round_trip_and_require_interaction_without_edits()
     }
 }
 
+/// Empty and target descriptors, other events and recorded settings keep their meaning.
 #[test]
 fn empty_target_and_other_event_forms_keep_their_existing_meaning() {
     let empty = Descriptor::new("null");

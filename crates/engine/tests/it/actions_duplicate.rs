@@ -9,6 +9,7 @@ fn session() -> Session {
     s
 }
 
+/// Copies retain metadata and call targets without taking the original function key.
 #[test]
 fn action_copies_follow_the_source_without_retargeting_calls_or_function_keys() {
     let mut s = session();
@@ -62,6 +63,7 @@ fn action_copies_follow_the_source_without_retargeting_calls_or_function_keys() 
     assert_eq!(s.actions.list[1].steps[0].1["action"], 3);
 }
 
+/// Step copies own their settings and retain both flag columns after insertion.
 #[test]
 fn step_copies_preserve_payloads_and_shift_both_flag_columns() {
     let mut s = session();
@@ -87,6 +89,7 @@ fn step_copies_preserve_payloads_and_shift_both_flag_columns() {
     assert_eq!(s.active().unwrap().revision, revision);
 }
 
+/// Refusals preserve pending recording; valid step copies keep recording usable.
 #[test]
 fn invalid_copies_do_not_flush_recording_and_valid_step_copies_keep_recording() {
     let mut s = session();

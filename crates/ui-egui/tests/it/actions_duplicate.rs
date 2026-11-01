@@ -4,6 +4,7 @@ use photocraft_engine::{Session, actions_cmds::Action, atn_cmds};
 use photocraft_ui_egui::{PhotocraftApp, actions, dialogs};
 use serde_json::json;
 
+/// Real panel clicks select each new action or step and preserve its flag columns.
 #[test]
 fn duplicate_menu_selects_the_new_action_and_then_the_new_step() {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
@@ -34,6 +35,7 @@ fn duplicate_menu_selects_the_new_action_and_then_the_new_step() {
     assert_eq!(copied.dialogs.iter().copied().collect::<Vec<_>>(), [0, 1]);
 }
 
+/// Duplication cannot shift a recording owner held by a paused action dialog.
 #[test]
 fn duplicate_cannot_shift_the_owner_of_a_suspended_recording() {
     let mut app = PhotocraftApp::new(Session::new(), Default::default());
