@@ -527,7 +527,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("tools.setColors", json!({"background": "#ffffff"})),
         ("image.adjustments.desaturate", json!({})),
         ("image.autoTone", json!({})),
-        ("image.imageSize", json!({"width": 800, "height": 600, "resolution": 72, "resample": "bicubicSharper"})),
+        ("image.imageSize", json!({"width": 800, "height": 600, "resolution": 72, "resample": "bicubicSharper", "scaleStyles": true})),
         ("image.canvasSize", json!({"width": 100, "height": 50, "relative": true, "anchor": "topLeft", "extensionColor": "white"})),
         ("image.imageRotation.90cw", json!({})),
         ("image.rotation.arbitrary", json!({"angle": 12.5, "direction": "ccw"})),
@@ -621,7 +621,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.smartObjects.editContents", json!({})),
         ("layer.smartObjects.updateModifiedContent", json!({})),
         ("paint.bucket", json!({"x": 10, "y": 20, "tolerance": 32, "antiAlias": true, "contiguous": false, "opacity": 100})),
-        ("image.imageSize", json!({"percent": 200, "resample": "bicubicAutomatic"})),
+        ("image.imageSize", json!({"percent": 200, "resample": "bicubicAutomatic", "scaleStyles": true})),
         ("file.placeEmbedded", json!({"path": "/tmp/logo.png", "scale": 50})),
         ("file.placeLinked", json!({"path": "/tmp/logo.png"})),
         ("file.openAs", json!({"path": "/tmp/a.psd"})),
@@ -661,7 +661,7 @@ fn every_mapped_command_exports_and_imports_back() {
         ("layer.newFillLayer.pattern", json!({"pattern": "Debaser-Distressed-Dark", "scale": 50, "angle": 0, "link": true})),
         ("layer.fill.pattern.set", json!({"pattern": "1 -R2.jpg"})),
         ("image.mode.bitmap", json!({"method": "threshold"})),
-        ("image.imageSize", json!({"resolution": 1200, "resample": "preserveDetails", "keepPrintSize": true})),
+        ("image.imageSize", json!({"resolution": 1200, "resample": "preserveDetails", "keepPrintSize": true, "scaleStyles": true})),
         ("layer.new.layerFromBackground", json!({"ifPresent": true, "select": false})),
         // COPYCAT, AJ_Actions2023 and the Line and Color tutorial set.
         ("layer.smartFilter.deleteFilterMask", json!({"ifPresent": true})),
@@ -2851,8 +2851,8 @@ fn image_size_resolution_only_does_not_gain_keep_print_size() {
 #[test]
 fn image_size_intentional_controls_still_round_trip() {
     for params in [
-        json!({"resolution": 144.0, "resample": "nearest", "keepPrintSize": true}),
-        json!({"width": 12.0, "height": 10.0, "resolution": 144.0, "resample": "nearest"}),
+        json!({"resolution": 144.0, "resample": "nearest", "keepPrintSize": true, "scaleStyles": true}),
+        json!({"width": 12.0, "height": 10.0, "resolution": 144.0, "resample": "nearest", "scaleStyles": true}),
     ] {
         assert_eq!(image_size_round_trip(&params), Some(params.clone()));
     }
@@ -3009,12 +3009,15 @@ fn image_size_resample_none_keeps_ignoring_its_size_through_atn_export() {
         let mut p = sized.clone();
         p["resolution"] = json!(144);
         p["resample"] = json!("none");
-        assert_eq!(back(p.clone()), Some(json!({"resolution": 144, "resample": "none"})), "{p}");
+        assert_eq!(back(p.clone()), Some(json!({"resolution": 144, "resample": "none", "scaleStyles": true})), "{p}");
     }
     // A step with nothing left to record is refused rather than exported as an empty (unsupported) event.
     assert_eq!(back(json!({"width": 12, "height": 10, "resample": "none"})), None);
     // Real resizes are untouched.
-    assert_eq!(back(json!({"width": 12, "height": 10, "resample": "bicubic"})), Some(json!({"width": 12, "height": 10, "resample": "bicubic"})));
+    assert_eq!(
+        back(json!({"width": 12, "height": 10, "resample": "bicubic"})),
+        Some(json!({"width": 12, "height": 10, "resample": "bicubic", "scaleStyles": true}))
+    );
 }
 
 /// #8302, #8308: Hue/Saturation's hue is `H   ` in Photoshop's `Hst2`, both ways. It was written
