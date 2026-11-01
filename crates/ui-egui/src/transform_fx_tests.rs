@@ -302,3 +302,96 @@ fn the_canvas_draws_the_styled_preview_and_reuses_it_between_frames() {
     let st = app.session.active().unwrap();
     assert!(photocraft_compose::effects::has_effects(st.doc.layer(st.active_layer.unwrap()).unwrap()));
 }
+
+/// A 400 × 300 document with a 200 × 100 red block at (100, 100) on layer "red", inside group
+/// "G" whose mask reveals only the left half of the canvas (x < 200). "red" is active.
+fn masked_group_app(depth: u32) -> PhotocraftApp {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 400, "height": 300, "depth": depth})).unwrap();
+    app.run("layer.new.layer", json!({"name": "red"})).unwrap();
+    let red = active(&app).0;
+    app.run("select.rect", json!({"x": 100, "y": 100, "width": 200, "height": 100})).unwrap();
+    app.run("edit.fill", json!({"color": "#ff0000"})).unwrap();
+    app.run("select.deselect", json!({})).unwrap();
+    app.run("layer.new.groupFromLayers", json!({"name": "G"})).unwrap();
+    app.run("select.rect", json!({"x": 0, "y": 0, "width": 200, "height": 300})).unwrap();
+    app.run("layer.layerMask.revealSelection", json!({})).unwrap();
+    app.run("layer.select", json!({"layer": red})).unwrap();
+    app.sync_views();
+    app
+}
+
+/// Free Transform moving a layer inside a masked group (#9941): the group mask stays where it is
+/// and hides the part of the moving layer that leaves it, as the commit does, instead of the
+/// moving pixels showing through it.
+#[test]
+fn a_group_mask_cuts_the_moving_layer_while_the_box_is_open() {
+    for depth in [8, 16, 32] {
+        let mut app = masked_group_app(depth);
+        begin(&mut app);
+        // Moved 50 px right: the block is 150..350 × 100..200; the mask shows x < 200 only.
+        set_quad(&mut app, [[150.0, 100.0], [350.0, 100.0], [350.0, 200.0], [150.0, 200.0]]);
+        let c = composite(&app, 1.0).unwrap_or_else(|| panic!("{depth}: the box composites the layer through the group mask"));
+        assert!(at(&c, 175.0, 150.0)[3] > 0.99, "{depth}: inside the mask: {:?}", at(&c, 175.0, 150.0));
+        for x in [205.0, 250.0, 340.0] {
+            assert_eq!(at(&c, x, 150.0)[3], 0.0, "{depth}: hidden by the group mask at x {x}");
+        }
+        // The same as the commit leaves it.
+        crate::transform_tool::commit(&mut app);
+        let doc = &app.session.active().unwrap().doc;
+        let shown = photocraft_compose::render(doc, photocraft_geom::Rect::new(0, 0, 400, 300));
+        assert!(shown.get(175, 150)[1] < 0.05 && shown.get(250, 150)[1] > 0.95, "{depth}: committed");
+    }
+}
+
+/// A styled layer in a masked group: the style and the pixels are both cut by the mask.
+#[test]
+fn a_group_mask_cuts_a_styled_moving_layer_too() {
+    let mut app = masked_group_app(8);
+    app.run("layer.layerStyle.stroke", json!({"size": 4, "color": "#0000ff", "position": "outside"})).unwrap();
+    begin(&mut app);
+    set_quad(&mut app, [[150.0, 100.0], [350.0, 100.0], [350.0, 200.0], [150.0, 200.0]]);
+    let c = composite(&app, 1.0).unwrap();
+    assert!(at(&c, 147.0, 150.0)[3] > 0.99 && at(&c, 175.0, 150.0)[3] > 0.99, "stroke and pixels inside the mask");
+    assert_eq!(at(&c, 250.0, 150.0)[3], 0.0, "pixels outside it");
+    assert_eq!(at(&c, 352.0, 150.0)[3], 0.0, "stroke outside it");
+}
+
+/// Without a masked group nor a style the box keeps drawing the bare texels (no composite).
+#[test]
+fn an_unmasked_unstyled_layer_keeps_the_texel_mesh() {
+    let mut app = masked_group_app(8);
+    app.session
+        .edit("unmask", |doc, _| {
+            doc.layers.iter_mut().for_each(|l| l.mask = None);
+            Ok(())
+        })
+        .unwrap();
+    begin(&mut app);
+    assert!(crate::transform_tool::styled_frame(&app, 1.0, false).is_none());
+}
+
+#[test]
+fn clipping_follows_the_work_scale_and_refuses_hostile_scales() {
+    use photocraft_compose::Buffer;
+    use photocraft_geom::Rect;
+    let mut surface = photocraft_raster::Surface::with_default(photocraft_color::PixelFormat::GRAY8, &[0.0]);
+    surface.fill_rect(Rect::new(0, 0, 100, 100), &[1.0]);
+    let masks = [crate::transform_tex::PreviewMask { surface, density: 1.0 }];
+    // Half scale: work pixel 40 is document pixel 80 (shown), work pixel 60 is 120 (hidden).
+    let mut b = Buffer::transparent(Rect::new(0, 0, 100, 10));
+    b.px.iter_mut().for_each(|p| *p = [1.0; 4]);
+    crate::transform_fx::clip(&mut b, 0.5, &masks);
+    assert_eq!(b.get(40, 5)[3], 1.0);
+    assert_eq!(b.get(60, 5)[3], 0.0);
+    // Density 50 %: hidden pixels keep half their alpha.
+    let half = [crate::transform_tex::PreviewMask { surface: masks[0].surface.clone(), density: 0.5 }];
+    let mut b = Buffer::transparent(Rect::new(0, 0, 200, 1));
+    b.px.iter_mut().for_each(|p| *p = [1.0; 4]);
+    crate::transform_fx::clip(&mut b, 1.0, &half);
+    assert!((b.get(150, 0)[3] - 0.5).abs() < 1e-6 && b.get(50, 0)[3] == 1.0);
+    for scale in [0.0, -1.0, f64::NAN, f64::INFINITY, 1e-300] {
+        let mut b = Buffer::transparent(Rect::new(-5, -5, 5, 5));
+        crate::transform_fx::clip(&mut b, scale, &masks);
+    }
+}

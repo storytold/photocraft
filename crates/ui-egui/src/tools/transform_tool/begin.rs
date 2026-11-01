@@ -70,7 +70,10 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
     // A style is drawn again from the pixels as the box moves them, so they are read without it.
     // Not for the selected part of a layer: its style belongs to that part and the rest together.
     let styled = lifted.is_none() && photocraft_compose::effects::has_effects(layer);
-    let (image, uv) = preview_image(&doc, id, lifted.as_ref(), b, max_side, styled);
+    // A group mask over the layer stays where it is while the box moves the layer (#9941): the
+    // pixels are composited through the box and cut by it, as a styled layer's are.
+    let clipped = crate::transform_fx::holders(&doc.layers, id).into_iter().any(crate::transform_fx::masked);
+    let (image, uv) = preview_image(&doc, id, lifted.as_ref(), b, max_side, styled || clipped);
     let texture = crate::transform_tex::PreviewTextures::new(ctx, format!("transform-{session}"), image, uv);
     app.transform_preview = Some(TransformPreview {
         session,
@@ -78,7 +81,7 @@ pub fn begin(app: &mut PhotocraftApp, ctx: &egui::Context) -> Result<(), String>
         texture,
         opacity: layer.opacity * layer.fill_opacity,
         above: Some(above),
-        styled: styled.then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"))),
+        styled: (styled || clipped).then(|| crate::transform_fx::StyledPreview::new(format!("transform-{session}-styled"), styled)),
         follow: Some(Follow { revision, hidden: if lifted.is_none() { vec![id] } else { Vec::new() } }),
         committing: None,
         gesture: None,

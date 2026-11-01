@@ -242,6 +242,15 @@ pub fn compose(doc: &Document, work: &Layer, plan: &Plan, source: &Source) -> Op
     let to_quad = Homography::rect_to_quad([0.0, 0.0, 1.0, 1.0], source.quad.map(|q| [q[0] * s, q[1] * s]))?;
     let to_unit = to_quad.inverse()?;
     let inside = source.quad.iter().fold([0.0; 2], |c, q| [c[0] + q[0] * s / 4.0, c[1] + q[1] * s / 4.0]);
+    // No style to lay on (a layer in a masked group, #9941): the pixels at opacity × fill.
+    if !effects::has_effects(work) {
+        let mut out = resample(source.image, source.uv, &to_unit, inside, plan.shown, source.nearest);
+        let k = (work.opacity * work.fill_opacity).clamp(0.0, 1.0);
+        if k < 1.0 {
+            out.px.iter_mut().for_each(|p| p[3] *= k);
+        }
+        return Some(out);
+    }
     let content = resample(source.image, source.uv, &to_unit, inside, plan.content, source.nearest);
     let shape: Vec<f32> = content.px.iter().map(|p| p[3]).collect();
     let anchor = work.effects.reference.unwrap_or((f64::from(plan.bounds.x0), f64::from(plan.bounds.y0)));
@@ -328,21 +337,117 @@ pub struct Frame<'a> {
     pub zoom: f32,
     /// The pointer is down: composite within the smaller [`budget`].
     pub dragging: bool,
+    /// Draw the layer's style. Off for the selected part of a layer, which is composited here
+    /// only for the masks of the groups holding it.
+    pub style: bool,
 }
 
 impl Frame<'_> {
     /// The plan for this frame, the layer it composites and the texel level it reads.
     pub fn plan(&self) -> Option<(Plan, Layer, u32)> {
-        let (plan, work) = plan(self.layer, [self.doc.size.width, self.doc.size.height], self.quad, self.zoom, budget(self.layer, self.dragging))?;
+        let plain;
+        let layer = if self.style {
+            self.layer
+        } else {
+            plain = unstyled(self.layer);
+            &plain
+        };
+        let (plan, work) = plan(layer, [self.doc.size.width, self.doc.size.height], self.quad, self.zoom, budget(layer, self.dragging))?;
         let level = PreviewTextures::choose(plan.scale as f32, self.quad_scale, self.nearest).0;
         Some((plan, work, level))
     }
 
-    /// The composite a [`Frame::plan`] describes.
+    /// The composite a [`Frame::plan`] describes, cut by the masks of the groups holding the
+    /// layer (#9941): they stay where they are while the box moves the layer under them.
     pub fn compose(&self, plan: &Plan, work: &Layer, level: u32) -> Option<Buffer> {
         let (texels, uv): (Arc<ColorImage>, [f32; 2]) = self.texels.level_image(level)?;
-        compose(self.doc, work, plan, &Source { image: &texels, uv, quad: self.quad, nearest: self.nearest })
+        let mut out = compose(self.doc, work, plan, &Source { image: &texels, uv, quad: self.quad, nearest: self.nearest })?;
+        clip(&mut out, plan.scale, &enclosing_masks(self.doc, self.layer.id));
+        Some(out)
     }
+}
+
+/// `layer` without its style.
+fn unstyled(layer: &Layer) -> Layer {
+    let mut l = layer.clone();
+    l.content = LayerContent::Raster(Surface::new(PixelFormat::RGBA8));
+    l.effects.enabled = false;
+    l
+}
+
+/// Groups nest at most this deep for the search of the ones holding a layer.
+const MAX_DEPTH: usize = 256;
+
+/// The groups holding `id` in `layers`, innermost first (empty when `id` is at the top level or
+/// isn't there).
+pub fn holders(layers: &[Layer], id: photocraft_doc::LayerId) -> Vec<&Layer> {
+    fn find<'a>(layers: &'a [Layer], id: photocraft_doc::LayerId, depth: usize, out: &mut Vec<&'a Layer>) -> bool {
+        if depth > MAX_DEPTH {
+            return false;
+        }
+        for l in layers {
+            if l.id == id {
+                return true;
+            }
+            if let LayerContent::Group(g) = &l.content
+                && find(&g.children, id, depth + 1, out)
+            {
+                out.push(l);
+                return true;
+            }
+        }
+        false
+    }
+    let mut out = Vec::new();
+    find(layers, id, 0, &mut out);
+    out
+}
+
+/// Whether `l` has a pixel or vector mask switched on.
+pub fn masked(l: &Layer) -> bool {
+    l.mask.as_ref().is_some_and(|m| m.enabled) || l.vector_mask.as_ref().is_some_and(|v| v.enabled)
+}
+
+/// The masks of the groups holding layer `id` of `doc`, as the compositor applies them: the
+/// vector mask and feathering folded in, else the pixel mask at its density.
+pub fn enclosing_masks(doc: &Document, id: photocraft_doc::LayerId) -> Vec<crate::transform_tex::PreviewMask> {
+    use crate::transform_tex::PreviewMask;
+    let canvas = doc.bounds();
+    holders(&doc.layers, id)
+        .into_iter()
+        .filter(|g| masked(g))
+        .filter_map(|g| match photocraft_compose::masks::combined_mask(g, canvas) {
+            Some(surface) => Some(PreviewMask { surface, density: 1.0 }),
+            None => g.mask.as_ref().filter(|m| m.enabled).map(|m| PreviewMask { surface: m.surface.clone(), density: m.density }),
+        })
+        .collect()
+}
+
+/// Scale the alpha of `out` (work pixels, `scale` per document pixel) by `masks` (document
+/// pixels): each work pixel takes the value of the document pixel under its centre.
+pub fn clip(out: &mut Buffer, scale: f64, masks: &[crate::transform_tex::PreviewMask]) {
+    let r = out.rect;
+    if masks.is_empty() || r.is_empty() || !(scale.is_finite() && scale > 0.0) {
+        return;
+    }
+    let doc = |v: i32| (((f64::from(v) + 0.5) / scale).floor().clamp(-COORD_LIMIT, COORD_LIMIT)) as i32;
+    // The document columns under the work columns, the same for every row.
+    let (dx0, dx1) = (doc(r.x0), doc(r.x1 - 1).saturating_add(1));
+    let columns: Vec<usize> = (r.x0..r.x1).map(|x| usize::try_from(doc(x).saturating_sub(dx0)).unwrap_or(0)).collect();
+    rows(&mut out.px, r.width() as usize, r.y0, |y, row| {
+        let dy = doc(y);
+        let mut k = vec![1.0f32; usize::try_from(dx1.saturating_sub(dx0)).unwrap_or(0)];
+        for m in masks {
+            let ch = m.surface.channels().max(1);
+            let v = m.surface.read_region(Rect::new(dx0, dy, dx1, dy.saturating_add(1)));
+            for (k, v) in k.iter_mut().zip(v.chunks_exact(ch)) {
+                *k *= (1.0 - m.density * (1.0 - v.first().copied().unwrap_or(1.0))).clamp(0.0, 1.0);
+            }
+        }
+        for (p, c) in row.iter_mut().zip(&columns) {
+            p[3] *= k.get(*c).copied().unwrap_or(1.0);
+        }
+    });
 }
 
 #[derive(Clone, PartialEq)]
@@ -374,12 +479,20 @@ struct State {
 pub struct StyledPreview {
     name: String,
     state: Mutex<State>,
+    /// The layer's style is drawn ([`Frame::style`]).
+    style: bool,
 }
 
 impl StyledPreview {
-    /// `name` keys the texture in egui.
-    pub fn new(name: String) -> Self {
-        Self { name, state: Mutex::new(State::default()) }
+    /// `name` keys the texture in egui. `style`: draw the layer's style (else the preview is
+    /// composited only for the masks of the groups holding the layer).
+    pub fn new(name: String, style: bool) -> Self {
+        Self { name, state: Mutex::new(State::default()), style }
+    }
+
+    /// Whether the layer's style is drawn.
+    pub fn style(&self) -> bool {
+        self.style
     }
 
     /// How many times the composite was made: once per change of the box, the zoom or the layer.
