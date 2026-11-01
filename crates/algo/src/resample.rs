@@ -366,14 +366,48 @@ fn resize_with_budget(s: &Surface, sx: f64, sy: f64, filter: Resample, canvas: O
     out
 }
 
+/// `s.content_bounds()`, tightened to the pixels that have alpha when the default pixel is clear.
+/// A clear pixel carries no colour once premultiplied, so it is the default pixel whatever its
+/// stored colour: otherwise white and black copies of one shape reached different distances past
+/// it (the result only exists inside the scaled content), and the white one kept ringing alpha the
+/// black one lost (#10639).
+fn covered_bounds(s: &Surface) -> Rect {
+    let content = s.content_bounds();
+    let fmt = s.format();
+    if content.is_empty() || !fmt.alpha || s.default_pixel().last().is_none_or(|&a| a != 0.0) {
+        return content;
+    }
+    let n = fmt.channels();
+    let mut out = Rect::EMPTY;
+    let mut buf = Vec::new();
+    for (c, _) in s.tiles() {
+        let r = c.rect().intersect(&content);
+        if r.is_empty() {
+            continue;
+        }
+        s.read_region_into(r, &mut buf);
+        let w = r.width() as usize;
+        for (y, row) in (r.y0..r.y1).zip(buf.chunks_exact((w * n).max(1))) {
+            let mut xs = row.chunks_exact(n).enumerate().filter(|(_, px)| px.last().is_some_and(|&a| a != 0.0)).map(|(i, _)| i);
+            if let Some(first) = xs.next() {
+                let last = xs.next_back().unwrap_or(first);
+                let b = Rect::new(r.x0 + first as i32, y, r.x0 + last as i32 + 1, y + 1);
+                out = if out.is_empty() { b } else { out.union(&b) };
+            }
+        }
+    }
+    out
+}
+
 /// One pass. With `canvas`, the content and the canvas repeat their edge outwards (see
 /// [`resize_surface_in_canvas`]).
 fn resize_pass(s: &Surface, pass: Pass, canvas: Option<Rect>, budget: usize) -> Surface {
     let Pass { sx, sy, kx, ky } = pass;
-    let edge = canvas.map(|c| s.content_bounds().union(&c)).filter(|a| !a.is_empty());
+    let content = covered_bounds(s);
+    let edge = canvas.map(|c| content.union(&c)).filter(|a| !a.is_empty());
     let fmt = s.format();
     let mut out = Surface::with_default(fmt, &s.default_pixel());
-    let src = s.content_bounds();
+    let src = content;
     let dst = scaled_rect(src, sx, sy);
     if dst.is_empty() {
         return out;

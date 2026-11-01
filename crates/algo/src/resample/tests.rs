@@ -433,8 +433,8 @@ fn white_on_transparent_shrinks_like_black() {
         for y in 0..56 {
             for x in 0..56 {
                 let (w, b) = (white.pixel(x, y), black.pixel(x, y));
-                // Beyond the black shape's bounds the result is cut off, so compare coverage within it.
-                assert!(b[3] <= 1e-3 || (w[3] - b[3]).abs() < 1e-3, "{filter:?} {fmt:?} alpha at {x},{y}: {w:?} vs {b:?}");
+                // Same coverage everywhere, outside the shape too: alpha never depends on colour.
+                assert!((w[3] - b[3]).abs() < 1e-4, "{filter:?} {fmt:?} alpha at {x},{y}: {w:?} vs {b:?}");
                 if w[3] > 1e-3 {
                     assert!(w[0] > 0.9 && w[1] > 0.9 && w[2] > 0.9, "{filter:?} {fmt:?} dark fringe at {x},{y}: {w:?}");
                     assert!(w[0] < 1.0 + 1e-3 && w[1] < 1.0 + 1e-3 && w[2] < 1.0 + 1e-3, "{filter:?} {fmt:?} over-bright at {x},{y}: {w:?}");
@@ -448,5 +448,49 @@ fn white_on_transparent_shrinks_like_black() {
             }
         }
         assert!(opaque > 100, "{filter:?} {fmt:?} no opaque white coverage: {opaque}");
+    }
+}
+
+/// The colour of fully transparent pixels must not change the coverage (#10639): white-on-clear and
+/// black-on-clear sources with the same alpha are the same image once premultiplied, so the
+/// resized alpha is the same, ringing beyond the shape included. White transparent pixels used to
+/// count as content (they differ from the default), so only the white result reached past the
+/// shape.
+#[test]
+fn transparent_pixel_colour_does_not_change_alpha() {
+    fn blob(v: f32, fmt: PixelFormat) -> Surface {
+        let mut s = Surface::new(fmt);
+        let mut px = Vec::new();
+        for y in 0..96 {
+            for x in 0..96 {
+                let inside = (32..64).contains(&x) && (32..64).contains(&y);
+                px.extend_from_slice(&[v, v, v, if inside { 1.0 } else { 0.0 }]);
+            }
+        }
+        s.write_region(Rect::new(0, 0, 96, 96), &px);
+        s
+    }
+    for (filter, fmt) in [
+        Resample::Nearest,
+        Resample::Bilinear,
+        Resample::Bicubic,
+        Resample::BicubicSharper,
+        Resample::BicubicAutomatic,
+        Resample::Lanczos,
+        Resample::PreserveDetails,
+    ]
+    .into_iter()
+    .flat_map(|f| [PixelFormat::RGBA32F, PixelFormat::RGBA8].map(|p| (f, p)))
+    {
+        for (sx, sy) in [(0.25, 0.25), (0.6, 0.6), (0.4, 1.5)] {
+            let white = resize_surface(&blob(1.0, fmt), sx, sy, filter);
+            let black = resize_surface(&blob(0.0, fmt), sx, sy, filter);
+            for y in -4..50 {
+                for x in -4..50 {
+                    let (w, b) = (white.pixel(x, y), black.pixel(x, y));
+                    assert!((w[3] - b[3]).abs() < 1e-4, "{filter:?} {fmt:?} {sx}x{sy} alpha at {x},{y}: {w:?} vs {b:?}");
+                }
+            }
+        }
     }
 }
