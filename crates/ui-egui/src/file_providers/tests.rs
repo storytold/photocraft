@@ -571,6 +571,69 @@ fn provider_open_uses_the_decoder_then_acknowledges_the_admitted_document() {
 }
 
 #[test]
+fn provider_open_accepts_idle_pointer_motion_and_leave_in_a_real_input_frame() {
+    for events in [
+        vec![egui::Event::PointerMoved(egui::pos2(20.0, 20.0))],
+        vec![egui::Event::MouseMoved(egui::vec2(4.0, 2.0))],
+        vec![egui::Event::PointerMoved(egui::pos2(20.0, 20.0)), egui::Event::PointerGone],
+    ] {
+        let ctx = egui::Context::default();
+        PhotocraftApp::setup_context(&ctx, Default::default());
+        let (mut app, host, original) = app();
+        let source = app.session.active().unwrap().doc.clone();
+        let (request, imports) = request_deferred_open(&mut app, &host);
+        host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
+        let mut output = ctx.run_ui(egui::RawInput { focused: true, events, ..Default::default() }, |ui| {
+            assert!(!ui.input(|input| input.pointer.any_down()));
+            assert!(!ui.ctx().text_edit_focused());
+            tick(&mut app, ui.ctx());
+        });
+        output.textures_delta.clear(); // This input/protocol fixture does not paint.
+        assert_eq!(imports.load(Ordering::Relaxed), 1, "idle hover must not require a second open request");
+        assert_eq!(app.session.documents().len(), 2);
+        let original_state = app.session.documents().iter().find(|state| state.doc.id == original).unwrap();
+        assert!(Arc::ptr_eq(&original_state.doc, &source));
+        let active = app.session.active().unwrap().doc.id;
+        assert_ne!(active, original);
+        assert!(host.bound(active));
+        let events = host.take_events();
+        let opened = events.iter().find(|event| event.metadata["type"] == "opened").unwrap();
+        assert_eq!(opened.metadata["requestId"], request);
+        assert_eq!(opened.metadata["resourceId"], "resource-one");
+        assert_eq!(opened.metadata["documentId"], active.0.to_string());
+        assert!(!events.iter().any(|event| event.metadata["type"] == "openFailed"));
+        assert!(!host.busy());
+    }
+}
+
+#[test]
+fn provider_open_still_rejects_pointer_motion_while_a_button_is_held() {
+    let ctx = egui::Context::default();
+    PhotocraftApp::setup_context(&ctx, Default::default());
+    let (mut app, host, doc) = app();
+    let source = app.session.active().unwrap().doc.clone();
+    let (request, imports) = request_deferred_open(&mut app, &host);
+    let down = egui::Event::PointerButton {
+        pos: egui::pos2(10.0, 10.0),
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    };
+    let mut output = ctx.run_ui(egui::RawInput { focused: true, events: vec![down], ..Default::default() }, |_| {});
+    output.textures_delta.clear();
+    host.open(request.clone(), "loaded.png".into(), vec![1]).unwrap();
+    let raw = egui::RawInput { focused: true, events: vec![egui::Event::PointerMoved(egui::pos2(20.0, 20.0))], ..Default::default() };
+    let mut output = ctx.run_ui(raw, |ui| {
+        assert!(ui.input(|input| input.pointer.any_down()));
+        tick(&mut app, ui.ctx());
+        assert_deferred_open_rejected(&app, &host, doc, &request);
+    });
+    output.textures_delta.clear();
+    assert_eq!(imports.load(Ordering::Relaxed), 0);
+    assert!(Arc::ptr_eq(&app.session.active().unwrap().doc, &source));
+}
+
+#[test]
 fn deferred_provider_open_does_not_retarget_a_live_filter_dialog() {
     for confirm in [false, true] {
         let (mut app, host, doc) = app();

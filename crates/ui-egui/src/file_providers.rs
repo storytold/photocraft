@@ -652,7 +652,14 @@ fn open_would_retarget_ui(app: &PhotocraftApp, ctx: &egui::Context) -> bool {
         || !app.ui.dialogs.is_empty()
         || app.filter_preview.is_some()
         || ctx.text_edit_focused()
-        || ctx.input(|input| !input.events.is_empty() || !input.raw.dropped_files.is_empty() || input.pointer.any_down() || !input.keys_down.is_empty())
+        || ctx.input(|input| {
+            // Motion/leave alone only changes hover. A held button or document-owned gesture
+            // is still protected here and by provider_ui_work, even without another press.
+            input.events.iter().any(|event| !matches!(event, egui::Event::PointerMoved(_) | egui::Event::MouseMoved(_) | egui::Event::PointerGone))
+                || !input.raw.dropped_files.is_empty()
+                || input.pointer.any_down()
+                || !input.keys_down.is_empty()
+        })
         || app.synthetic_batch.is_some()
         || !app.synthetic.is_empty()
         || app.session.documents().iter().any(|state| crate::discard_ui::provider_ui_work(app, ctx, state.doc.id))

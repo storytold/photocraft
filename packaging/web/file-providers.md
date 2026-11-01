@@ -170,6 +170,8 @@ unprocessed input could be retargeted fails with its correlated `openFailed` bef
 or admitting a document. The current document, dialog and draft remain in place. Settle or
 cancel that interaction, then start a new `requestOpen` to retry; a failed delivery is terminal
 and does not keep the provider busy. An idle document may remain dirty while another file opens.
+Pointer motion or leaving the editor alone does not block an otherwise idle read; held buttons
+and existing drafts or tool interactions remain protected.
 
 ## Trust boundary and limits
 
