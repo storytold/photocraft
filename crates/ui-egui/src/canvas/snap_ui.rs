@@ -489,6 +489,18 @@ fn follow_reposition(app: &mut PhotocraftApp) {
     }
 }
 
+/// A click on a crop frame or one of its handles (released where it was pressed, the frame not
+/// moved) changes nothing, as a Move-tool click doesn't move the layer (`canvas::tool_event`):
+/// snapping the release would pull an edge within reach onto a nearby one.
+fn crop_click(app: &PhotocraftApp, p: [f64; 2]) -> bool {
+    use crate::crop_ui::CropDrag;
+    let Some(snap) = app.prefs_rt.snap.as_ref() else { return false };
+    let Some(CropDrag::Move { rect, .. } | CropDrag::Resize { rect, .. } | CropDrag::MoveImage { rect, .. }) = app.crop.drag else {
+        return false;
+    };
+    app.ui.tool == Tool::Crop && p == snap.start && app.ui.crop_rect == Some(rect)
+}
+
 /// Snap a tool event's coordinates (called by `canvas::tool_event` before the tools see it).
 pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifiers) -> ToolEvent {
     match ev {
@@ -527,6 +539,11 @@ pub fn filter_event(app: &mut PhotocraftApp, ev: ToolEvent, mods: egui::Modifier
         }
         ToolEvent::Up { x, y } => {
             if app.prefs_rt.snap.is_none() {
+                return ev;
+            }
+            if crop_click(app, [x, y]) {
+                app.prefs_rt.snap = None;
+                app.prefs_rt.snap_lines.clear();
                 return ev;
             }
             follow_reposition(app);

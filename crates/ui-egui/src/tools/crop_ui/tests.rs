@@ -341,6 +341,27 @@ fn moving_the_frame_snaps_its_edges() {
     assert_eq!(app.ui.crop_rect, Some([0.0, 10.0, 40.0, 40.0]), "left edge snaps to the document edge");
 }
 
+/// A click on the frame (released where it was pressed) changes nothing, as a Move-tool click
+/// doesn't move the layer: snapping the release would pull an edge within reach onto the
+/// document's, so a double-click to commit cropped another rect.
+#[test]
+fn a_click_on_the_frame_or_a_handle_never_snaps_it() {
+    let frame = [5.0, 10.0, 105.0, 60.0];
+    for classic in [true, false] {
+        // Inside (Classic: moves the frame; default: moves the image), the left edge's handle, the top-left corner's.
+        for p in [[50.0, 30.0], [5.0, 35.0], [5.0, 10.0]] {
+            let mut app = app(SampleType::U8);
+            app.ui.tool_options.crop_shield.classic_mode = classic;
+            app.ui.extras.snap = true;
+            app.ui.crop_rect = Some(frame);
+            app.crop.default_frame = false;
+            drag(&mut app, &[p], NONE);
+            assert_eq!(app.ui.crop_rect, Some(frame), "classic {classic}, click at {p:?}");
+            assert!(!crate::menus::is_enabled(&app, "edit.undo"), "classic {classic}, click at {p:?}: no box step");
+        }
+    }
+}
+
 /// #3145: Edit › Undo while a crop is pending steps the *box*, not the document (Photoshop keeps
 /// Undo live during a crop), so a moved frame comes back.
 #[test]
