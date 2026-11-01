@@ -121,6 +121,57 @@ pub fn blend_rgb(mode: BlendMode, cb: [f32; 3], cs: [f32; 3]) -> [f32; 3] {
     }
 }
 
+/// Maps `mode` to [`craft_blitter::BlendMode`] when its published formula in `craft-blitter`
+/// matches PhotoCraft's CPU compositor (`psblend` + `photocraft_color::blend`) bit-for-bit.
+///
+/// Modes with PhotoCraft-specific rules return `None` and stay on the local scalar paths:
+/// - `PassThrough` (group scoping) and `Dissolve` (coordinate-seeded spatial noise)
+/// - `ColorBurn`, `ColorDodge`, and `HardMix` (`EDGE = 1e-4` backdrop tolerance)
+/// - `VividLight` (`vivid_light_ps` takes the burn branch at `cs == 0.5`, which rounds small `cb`
+///   through `1.0 - (1.0 - cb)`, whereas `craft-blitter` returns `cb`)
+/// - `DarkerColor` and `LighterColor` (Rec. 601 `lum()` comparison matching `compose.wgsl`)
+/// - `PinLight` in 32-bit HDR mode (`hdr = true`).
+#[inline]
+pub const fn to_blitter_mode(mode: BlendMode, hdr: bool) -> Option<craft_blitter::BlendMode> {
+    match mode {
+        BlendMode::PassThrough
+        | BlendMode::Dissolve
+        | BlendMode::ColorBurn
+        | BlendMode::ColorDodge
+        | BlendMode::VividLight
+        | BlendMode::HardMix
+        | BlendMode::DarkerColor
+        | BlendMode::LighterColor => None,
+        BlendMode::PinLight if !hdr => Some(craft_blitter::BlendMode::PinLight),
+        BlendMode::PinLight => None,
+        BlendMode::Normal => Some(craft_blitter::BlendMode::Normal),
+        BlendMode::Darken => Some(craft_blitter::BlendMode::Darken),
+        BlendMode::Multiply => Some(craft_blitter::BlendMode::Multiply),
+        BlendMode::LinearBurn => Some(craft_blitter::BlendMode::LinearBurn),
+        BlendMode::Lighten => Some(craft_blitter::BlendMode::Lighten),
+        BlendMode::Screen => Some(craft_blitter::BlendMode::Screen),
+        BlendMode::LinearDodge => Some(craft_blitter::BlendMode::LinearDodge),
+        BlendMode::Overlay => Some(craft_blitter::BlendMode::Overlay),
+        BlendMode::SoftLight => Some(craft_blitter::BlendMode::SoftLight),
+        BlendMode::HardLight => Some(craft_blitter::BlendMode::HardLight),
+        BlendMode::LinearLight => Some(craft_blitter::BlendMode::LinearLight),
+        BlendMode::Difference => Some(craft_blitter::BlendMode::Difference),
+        BlendMode::Exclusion => Some(craft_blitter::BlendMode::Exclusion),
+        BlendMode::Subtract => Some(craft_blitter::BlendMode::Subtract),
+        BlendMode::Divide => Some(craft_blitter::BlendMode::Divide),
+        BlendMode::Hue => Some(craft_blitter::BlendMode::Hue),
+        BlendMode::Saturation => Some(craft_blitter::BlendMode::Saturation),
+        BlendMode::Color => Some(craft_blitter::BlendMode::Color),
+        BlendMode::Luminosity => Some(craft_blitter::BlendMode::Luminosity),
+        BlendMode::Reflect => Some(craft_blitter::BlendMode::Reflect),
+        BlendMode::Glow => Some(craft_blitter::BlendMode::Glow),
+        BlendMode::Negation => Some(craft_blitter::BlendMode::Negation),
+        BlendMode::Xor => Some(craft_blitter::BlendMode::Xor),
+        BlendMode::PaintNetColorBurn => Some(craft_blitter::BlendMode::ClassicColorBurn),
+        BlendMode::PaintNetColorDodge => Some(craft_blitter::BlendMode::ClassicColorDodge),
+    }
+}
+
 /// Photoshop's "special eight": the modes for which a layer's Fill isn't just less coverage.
 /// Below 100% Fill, Photoshop blends at full strength a source pulled toward the mode's neutral
 /// colour, the one that leaves the backdrop unchanged (Hard Mix has its own formula); Opacity

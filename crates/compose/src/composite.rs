@@ -640,6 +640,9 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
     let Some(content) = render_content(layer, rect, cx) else { return };
     let opacity = layer.opacity * layer.fill_opacity;
     let gamma = text_gamma(layer);
+    if try_blit_rgba32f(&mut base.px, &content.px, layer.blend, opacity, gamma, craft_blitter::CompositeOp::SourceAtop) {
+        return;
+    }
     for (i, p) in base.px.iter_mut().enumerate() {
         let alpha = p[3];
         if alpha <= 0.0 {
@@ -660,6 +663,53 @@ fn composite_atop_any(layer: &Layer, base: &mut Buffer, cx: &Ctx) {
         let r = blend::composite_gamma(layer.blend, [p[0], p[1], p[2], 1.0], s, opacity, gamma);
         *p = [r[0], r[1], r[2], alpha];
     }
+}
+
+/// Dispatches straight-alpha `RGBA32F` blits to `craft-blitter` (8-pixel SoA vectorization and
+/// Rayon parallelization at >= 4,096 pixels) when coverage mixes in encoded space (`gamma == 1.0`),
+/// outside CIELAB (`!LAB_MIX`), with an in-range opacity (`0.0..=1.0`), for modes and alpha
+/// configurations where `craft-blitter` produces bit-identical IEEE-754 output to
+/// [`psblend::composite`] and [`composite_atop_any`].
+#[inline]
+fn try_blit_rgba32f(dst: &mut [[f32; 4]], src: &[[f32; 4]], mode: BlendMode, opacity: f32, gamma: f32, op: craft_blitter::CompositeOp) -> bool {
+    if gamma != 1.0 || !(0.0..=1.0).contains(&opacity) || psblend::LAB_MIX.with(|l| l.get()) {
+        return false;
+    }
+    let hdr = psblend::HDR.with(|h| h.get());
+    let Some(bm) = psblend::to_blitter_mode(mode, hdr) else {
+        return false;
+    };
+    let n = dst.len().min(src.len());
+    let (d_slice, s_slice) = (&dst[..n], &src[..n]);
+    // Guarantee bit-identical IEEE-754 output (`f32::to_bits`) with the local scalar reference:
+    // - `Normal` already multiplies by `1.0 / ao` in `psblend::normal_rgb` / `normal_lanes`,
+    //   matching `craft-blitter` bit-for-bit for all finite alphas.
+    // - Non-`Normal` `SourceOver` in `psblend::composite` divides by `ao`, whereas `craft-blitter`
+    //   multiplies by `1.0 / ao`; those produce identical bits whenever every active pixel has
+    //   `ao == 1.0` (an opaque backdrop with finite `s[3] <= 1.0`, or `opacity == 1.0` with finite
+    //   `s[3]` in `{<= 0.0, 1.0}` over non-negative finite `d[3]`).
+    // - `SourceAtop` matches `composite_atop_any` bit-for-bit when channels are finite non-negative
+    //   (no `-0.0` sign flip from `0.0 * cs`) and `s[3] <= 1.0`.
+    let exact = match op {
+        craft_blitter::CompositeOp::SourceOver if mode == BlendMode::Normal => {
+            s_slice.iter().all(|s| s[3].is_finite()) && d_slice.iter().all(|d| d[3].is_finite())
+        }
+        craft_blitter::CompositeOp::SourceOver => {
+            (d_slice.iter().all(|d| d[3] == 1.0) && s_slice.iter().all(|s| s[3].is_finite() && s[3] <= 1.0))
+                || (opacity == 1.0
+                    && d_slice.iter().all(|d| d[3] >= 0.0 && d[3].is_finite())
+                    && s_slice.iter().all(|s| s[3].is_finite() && (s[3] <= 0.0 || s[3] == 1.0)))
+        }
+        craft_blitter::CompositeOp::SourceAtop => {
+            d_slice.iter().all(|d| d.iter().all(|&v| v >= 0.0 && v.is_finite() && v.to_bits() != (-0.0f32).to_bits()))
+                && s_slice.iter().all(|s| s.iter().all(|&v| v >= 0.0 && v.is_finite()) && s[3] <= 1.0)
+        }
+    };
+    if !exact {
+        return false;
+    }
+    craft_blitter::blit_rgba32f_opts(dst, src, bm, opacity, hdr, craft_blitter::AlphaMode::Straight, op);
+    true
 }
 
 /// Blend an isolated layer buffer into the backdrop.
@@ -694,11 +744,19 @@ fn blend_layer_into(backdrop: &mut Buffer, src: &Buffer, layer: &Layer, cx: &Ctx
 /// [`blend_into_g`] for a layer's own `opacity` and `fill`: Fill is part of the blend for
 /// Photoshop's special eight ([`psblend::composite_fill`]), plain coverage otherwise.
 pub(crate) fn blend_into_fill(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, opacity: f32, fill: f32, gamma: f32) {
+    if (fill >= 1.0 || !psblend::fill_is_special(mode))
+        && try_blit_rgba32f(&mut backdrop.px, &src.px, mode, opacity * fill.clamp(0.0, 1.0), gamma, craft_blitter::CompositeOp::SourceOver)
+    {
+        return;
+    }
     for_rows(backdrop, src, |dst, s, x0, y| blend_span_fill(dst, s, x0, y, mode, opacity, fill, gamma));
 }
 
 /// [`blend_into`] mixing coverage in a `gamma` space (type layers).
 pub(crate) fn blend_into_g(backdrop: &mut Buffer, src: &Buffer, mode: BlendMode, opacity: f32, gamma: f32) {
+    if try_blit_rgba32f(&mut backdrop.px, &src.px, mode, opacity, gamma, craft_blitter::CompositeOp::SourceOver) {
+        return;
+    }
     for_rows(backdrop, src, |dst, s, x0, y| blend_span_g(dst, s, x0, y, mode, opacity, gamma));
 }
 
@@ -730,6 +788,9 @@ fn blend_span_g(dst: &mut [[f32; 4]], src: &[[f32; 4]], x0: i32, y: i32, mode: B
     // boolean read, so select the common Normal kernel once instead of once per pixel.
     if mode == BlendMode::Normal && gamma == 1.0 && !psblend::LAB_MIX.with(|l| l.get()) {
         return psblend::composite_normal_rgb_span(dst, src, opacity);
+    }
+    if try_blit_rgba32f(dst, src, mode, opacity, gamma, craft_blitter::CompositeOp::SourceOver) {
+        return;
     }
     for (x, (b, s)) in (x0..).zip(dst.iter_mut().zip(src)) {
         let mut s = *s;

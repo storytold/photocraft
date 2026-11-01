@@ -834,3 +834,108 @@ fn content_bounds_with_tile_skipping() {
     s.fill_rect(Rect::new(-700, 4000, -699, 4001), &[0.5]);
     assert_eq!(s.content_bounds(), Rect::new(-700, 0, 2000, 4001));
 }
+
+/// Pre-fast-path `decode_tile_row_rgba` fallback (`read_samples` + `to_rgba`), retained as the
+/// bitwise reference oracle across the full 16-bit (`0..=65535`) sample range.
+fn legacy_read_rgba_into(surface: &Surface, r: Rect, out: &mut [[f32; 4]]) {
+    let w = r.width() as usize;
+    let h = r.height() as usize;
+    assert_eq!(out.len(), w * h);
+    if w == 0 || h == 0 {
+        return;
+    }
+    let fmt = &surface.format;
+    let n = fmt.channels();
+    let dp_rgba = to_rgba(fmt, &surface.default_pixel());
+    let mut row = Vec::new();
+    for tc in r.tiles() {
+        let tr = tc.rect().intersect(&r);
+        let span = tr.width() as usize;
+        match surface.tiles.get(&tc) {
+            Some(t) => {
+                for y in tr.y0..tr.y1 {
+                    let o = ((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize;
+                    let base = (((y - tc.ty * TILE_SIZE) as usize) * TILE_SIZE as usize + (tr.x0 - tc.tx * TILE_SIZE) as usize) * n;
+                    let dst = &mut out[o..o + span];
+                    row.resize(dst.len() * n, 0.0);
+                    read_samples(&t.data, fmt.sample, base, &mut row);
+                    let a = |s: &[f32], i: usize| if fmt.alpha { s[i] } else { 1.0 };
+                    let pixels = dst.iter_mut().zip(row.chunks_exact(n));
+                    match fmt.mode {
+                        ColorMode::Rgb => pixels.for_each(|(d, s)| *d = [s[0], s[1], s[2], a(s, 3)]),
+                        ColorMode::Grayscale | ColorMode::Bitmap | ColorMode::Duotone => pixels.for_each(|(d, s)| *d = [s[0], s[0], s[0], a(s, 1)]),
+                        _ => pixels.for_each(|(d, s)| *d = to_rgba(fmt, s)),
+                    }
+                }
+            }
+            None => {
+                for y in tr.y0..tr.y1 {
+                    let o = ((y - r.y0) as usize) * w + (tr.x0 - r.x0) as usize;
+                    out[o..o + span].fill(dp_rgba);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn u16_rgba_and_graya_row_decode_is_bit_identical_over_full_range() {
+    // 256 x 256 = 65,536 pixels: exercises every 16-bit integer value `0u16..=65535u16` on every
+    // channel via odd-multiplier bijections modulo 2^16.
+    let tile_rect = Rect::new(0, 0, TILE_SIZE, TILE_SIZE);
+    let cross_rect = Rect::new(13, 7, TILE_SIZE + 14, TILE_SIZE + 4);
+
+    // 1. RGBA16 fast path: all 4 channels independently cover all 65,536 `u16` values.
+    let mut rgba16_bytes = Vec::with_capacity(65_536 * 8);
+    for i in 0u32..=65_535 {
+        let r = i as u16;
+        let g = (65_535 - i) as u16;
+        let b = (i.wrapping_mul(40_503)) as u16;
+        let a = (i.wrapping_mul(257).wrapping_add(17)) as u16;
+        for ch in [r, g, b, a] {
+            rgba16_bytes.extend_from_slice(&ch.to_ne_bytes());
+        }
+    }
+    let mut s_rgba16 = Surface::with_default(PixelFormat::RGBA16, &[0.125, 0.375, 0.625, 0.875]);
+    s_rgba16.try_write_interleaved(tile_rect, &rgba16_bytes).unwrap();
+
+    for rect in [tile_rect, cross_rect] {
+        let len = (rect.width() * rect.height()) as usize;
+        let mut got = vec![[0.0f32; 4]; len];
+        let mut want = vec![[0.0f32; 4]; len];
+        s_rgba16.read_rgba_into(rect, &mut got);
+        legacy_read_rgba_into(&s_rgba16, rect, &mut want);
+        for (idx, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(g.map(f32::to_bits), w.map(f32::to_bits), "RGBA16 {rect:?} idx {idx}: {g:?} vs {w:?}");
+            let x = rect.x0 + (idx as u32 % rect.width()) as i32;
+            let y = rect.y0 + (idx as u32 / rect.width()) as i32;
+            assert_eq!(g.map(f32::to_bits), s_rgba16.rgba(x, y).map(f32::to_bits), "RGBA16 scalar ({x},{y})");
+        }
+    }
+
+    // 2. GRAYA16 fast path: gray and alpha channels both cover all 65,536 `u16` values.
+    let graya16 = PixelFormat::new(ColorMode::Grayscale, SampleType::U16, true);
+    let mut graya16_bytes = Vec::with_capacity(65_536 * 4);
+    for i in 0u32..=65_535 {
+        let g = i as u16;
+        let a = (65_535 - i) as u16;
+        graya16_bytes.extend_from_slice(&g.to_ne_bytes());
+        graya16_bytes.extend_from_slice(&a.to_ne_bytes());
+    }
+    let mut s_graya16 = Surface::with_default(graya16, &[0.25, 0.75]);
+    s_graya16.try_write_interleaved(tile_rect, &graya16_bytes).unwrap();
+
+    for rect in [tile_rect, cross_rect] {
+        let len = (rect.width() * rect.height()) as usize;
+        let mut got = vec![[0.0f32; 4]; len];
+        let mut want = vec![[0.0f32; 4]; len];
+        s_graya16.read_rgba_into(rect, &mut got);
+        legacy_read_rgba_into(&s_graya16, rect, &mut want);
+        for (idx, (g, w)) in got.iter().zip(&want).enumerate() {
+            assert_eq!(g.map(f32::to_bits), w.map(f32::to_bits), "GRAYA16 {rect:?} idx {idx}: {g:?} vs {w:?}");
+            let x = rect.x0 + (idx as u32 % rect.width()) as i32;
+            let y = rect.y0 + (idx as u32 / rect.width()) as i32;
+            assert_eq!(g.map(f32::to_bits), s_graya16.rgba(x, y).map(f32::to_bits), "GRAYA16 scalar ({x},{y})");
+        }
+    }
+}

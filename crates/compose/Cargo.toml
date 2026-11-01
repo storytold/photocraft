@@ -8,6 +8,7 @@ license.workspace = true
 workspace = true
 
 [dependencies]
+craft-blitter = { workspace = true }
 photocraft-geom = { workspace = true }
 photocraft-color = { workspace = true }
 photocraft-raster = { workspace = true }

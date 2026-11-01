@@ -318,6 +318,26 @@ fn decode_tile_row_rgba(fmt: &PixelFormat, t: &Tile, base: usize, dst: &mut [[f3
                 *d = [g, g, g, s[1] as f32 / 255.0];
             }
         }
+        (ColorMode::Rgb, SampleType::U16, true) => {
+            let byte_base = base * 2;
+            let src = &t.data[byte_base..byte_base + dst.len() * 8];
+            for (d, s) in dst.iter_mut().zip(src.as_chunks::<8>().0) {
+                *d = [
+                    u16::from_ne_bytes([s[0], s[1]]) as f32 / 65535.0,
+                    u16::from_ne_bytes([s[2], s[3]]) as f32 / 65535.0,
+                    u16::from_ne_bytes([s[4], s[5]]) as f32 / 65535.0,
+                    u16::from_ne_bytes([s[6], s[7]]) as f32 / 65535.0,
+                ];
+            }
+        }
+        (ColorMode::Grayscale, SampleType::U16, true) => {
+            let byte_base = base * 2;
+            let src = &t.data[byte_base..byte_base + dst.len() * 4];
+            for (d, s) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
+                let g = u16::from_ne_bytes([s[0], s[1]]) as f32 / 65535.0;
+                *d = [g, g, g, u16::from_ne_bytes([s[2], s[3]]) as f32 / 65535.0];
+            }
+        }
         (ColorMode::Cmyk, SampleType::U8, _) => {
             // Identical ink bytes share the exact ICC result; alpha is independent.
             let mut previous: Option<([u8; 4], [f32; 3])> = None;
