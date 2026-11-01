@@ -381,9 +381,11 @@ the recorded steps back from the saved Actions panel. Ranges come from the dialo
 
 **Not recordable:** Edit > Purge (no step is recorded; this version's Purge menu has Clipboard,
 Histories, All and Video Cache, no Undo); File > Export > Export As and Quick Export as PNG (the file
-is written, no step is recorded). `vectorStrokeToFill` (Convert Stroke to Fill) is not a user command: the reference application has
-no menu entry or context-menu item for it, refuses the event even with a stroked path component selected,
-and so never records it. No action can contain it; nothing to map.
+is written, no step is recorded). `vectorStrokeToFill` (Convert Stroke to Fill) exists only internally: the reference application knows
+it by a localised command name ("command … is not currently available"), but it is in no menu, panel
+menu, context menu, the stroke options (incl. their gear menu), the Properties panel or the Keyboard
+Shortcuts summary of all commands and tools, and the event is refused even with a stroked path component
+selected. It can't be triggered, so it is never recorded: no action contains it, nothing to map.
 
 ### Batch
 
