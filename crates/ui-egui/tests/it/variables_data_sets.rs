@@ -56,8 +56,8 @@ fn out_of_range_data_set_index_is_clamped_before_delete() {
     h.run_steps(2);
 }
 
-#[test]
-fn apply_replaces_pixels_before_ok_and_keeps_the_dialog_open() {
+/// A real image file and unsaved dialog edits exercise the same path as manual entry.
+fn pixel_replacement_harness() -> (tempfile::TempDir, Harness<'static, PhotocraftApp>) {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("blue.png");
     let mut source = photocraft_engine::Session::new();
@@ -70,7 +70,6 @@ fn apply_replaces_pixels_before_ok_and_keeps_the_dialog_open() {
     let layer = app.session.active().unwrap().active_layer.unwrap();
     photocraft_ui_egui::menus::invoke(&mut app, &egui::Context::default(), "image.variables.dataSets", json!({})).unwrap();
     let dialog = app.ui.dialogs.last_mut().unwrap();
-    let id = dialog.id;
     dialog.fields.insert(
         "__variables".into(),
         json!({
@@ -78,17 +77,57 @@ fn apply_replaces_pixels_before_ok_and_keeps_the_dialog_open() {
             "dataSets": [{"name": "Blue", "values": [{"variable": "photo", "kind": "pixels", "value": path}]}]
         }),
     );
-    let mut h = harness(app);
+    (dir, harness(app))
+}
+
+/// Apply updates the canvas immediately; OK must not apply the same request again.
+#[test]
+fn apply_replaces_pixels_before_ok_and_keeps_the_dialog_open() {
+    let (_dir, mut h) = pixel_replacement_harness();
+    let id = h.state().ui.dialogs.last().unwrap().id;
+    h.state_mut().ui.dialogs.last_mut().unwrap().fields.insert("__apply".into(), json!("Blue"));
+    h.run_steps(3);
+    assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]), "editing fields alone is not Apply");
     h.get_by_label("Apply").click();
     h.run_steps(3);
 
     assert_eq!(h.state().ui.dialogs.last().unwrap().id, id, "Apply leaves the editor open");
+    assert!(!h.state().ui.dialogs.last().unwrap().fields.contains_key("__apply"));
     let pixel = h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap();
     h.get_by_label("OK").click();
     h.run_steps(3);
     let confirmed = h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap();
     assert_eq!(confirmed, json!([0.0, 0.0, 1.0, 1.0]), "the same replacement works through OK");
     assert_eq!(pixel, confirmed, "Apply uses the edited definitions and image path immediately");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]));
+}
+
+/// A failed request reports once; correcting it can be applied and kept when Cancel closes.
+#[test]
+fn failed_apply_can_be_corrected_without_retries_or_cancel_rollback() {
+    let (dir, mut h) = pixel_replacement_harness();
+    let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
+    fields["__variables"]["dataSets"][0]["values"][0]["value"] = json!(dir.path().join("missing.png"));
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    assert!(h.state().ui.status.contains("missing.png"), "{}", h.state().ui.status);
+    assert!(!h.state().ui.dialogs.last().unwrap().fields.contains_key("__apply"));
+    assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]));
+    h.state_mut().ui.status.clear();
+    h.run_steps(3);
+    assert!(h.state().ui.status.is_empty(), "a failed Apply must not retry each frame");
+
+    let fields = &mut h.state_mut().ui.dialogs.last_mut().unwrap().fields;
+    fields["__variables"]["dataSets"][0]["values"][0]["value"] = json!(dir.path().join("blue.png"));
+    h.get_by_label("Apply").click();
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(h.state().ui.dialogs.is_empty());
+    assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([0.0, 0.0, 1.0, 1.0]));
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert_eq!(h.state_mut().run("document.pixel", json!({"x": 4, "y": 4})).unwrap(), json!([1.0, 1.0, 1.0, 1.0]));
 }
 
 /// `ui.dialog.set` can store any JSON in `__variables`; the editors write into its entries.
