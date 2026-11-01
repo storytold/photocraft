@@ -222,9 +222,10 @@ fn mask_all_objects(s: &mut Session, p: &Value) -> Result<Value> {
     let doc = d.doc.clone();
     crate::commands::check_all_unlocked(&doc, id)?;
     let layer = doc.layer(id).ok_or(EngineError::NoLayer(id))?;
+    let area = crate::smartselect_cmds::subject_area(&doc, Some(id), false);
     let region: Option<Region> = match layer.surface() {
         Some(surf) if matches!(layer.content, LayerContent::Raster(_)) => {
-            photocraft_algo::segment::subject::select_subject(&photocraft_algo::segment::SurfaceSampler(surf), doc.bounds())
+            photocraft_algo::segment::subject::select_subject(&photocraft_algo::segment::SurfaceSampler(surf), area)
         }
         _ => {
             struct Composite<'a>(&'a Document);
@@ -233,7 +234,7 @@ fn mask_all_objects(s: &mut Session, p: &Value) -> Result<Value> {
                     photocraft_compose::render(self.0, r).px
                 }
             }
-            photocraft_algo::segment::subject::select_subject(&Composite(&doc), doc.bounds())
+            photocraft_algo::segment::subject::select_subject(&Composite(&doc), area)
         }
     };
     let region = region.ok_or_else(|| other("no objects were found"))?;
