@@ -265,6 +265,12 @@ pub struct LiquifyDialog {
     pub preview_ms: f64,
     /// The smart filter being edited: OK updates it instead of adding a new Liquify filter.
     smart_filter: Option<usize>,
+    /// Preview (P): off, the image is drawn unwarped while strokes still change the field, as
+    /// Photoshop's Preview checkbox does (#7905). Every opening starts with it on.
+    pub preview: bool,
+    /// The undisplaced field drawn while Preview is off. It is as large as `field`, so it exists
+    /// only while Preview is off: made when Preview is turned off, freed when it's turned back on.
+    identity: Option<LiquifyField>,
 }
 
 fn union(a: Option<[usize; 4]>, b: [usize; 4]) -> Option<[usize; 4]> {
@@ -297,6 +303,7 @@ impl LiquifyDialog {
             "strokes": self.strokes.len() + usize::from(self.cur.is_some()),
             "redo": self.redo.len(),
             "meshSize": self.cell,
+            "preview": self.preview,
             "maxDisplacement": self.field.max_displacement(),
             "proxy": [self.proxy.w, self.proxy.h],
             "dabMs": self.dab_ms,
@@ -438,14 +445,27 @@ impl LiquifyDialog {
     /// Re-renders the dirty proxy pixels into `out` (the texture upload happens in `show`).
     fn render_dirty(&mut self) {
         if let Some(r) = self.dirty {
+            let field = self.identity.as_ref().filter(|_| !self.preview).unwrap_or(&self.field);
             if let Some(source) = &self.native_proxy {
                 let bounds = Rect::new(0, 0, self.proxy.w as i32, self.proxy.h as i32);
                 let dirty = Rect::new(r[0] as i32, r[1] as i32, r[2] as i32, r[3] as i32);
-                render_components(source, bounds, &self.field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out);
+                render_components(source, bounds, field, self.proxy.scale, &self.target, bounds, dirty, &mut self.out);
             } else {
-                self.proxy.render(&self.field, r, &mut self.out);
+                self.proxy.render(field, r, &mut self.out);
             }
         }
+    }
+
+    /// Turns Preview on or off: the whole preview is redrawn with, or without, the warp.
+    pub fn set_preview(&mut self, on: bool) {
+        if on == self.preview {
+            return;
+        }
+        self.identity = (!on).then(|| LiquifyField::new(self.canvas, self.cell));
+        self.preview = on;
+        self.dirty = Some([0, 0, self.proxy.w, self.proxy.h]);
+        self.render_dirty();
+        self.view_dirty = self.view_bounds;
     }
 
     /// Builds or updates the visible source-resolution viewport. At ordinary zoom the whole-layer
@@ -494,10 +514,11 @@ impl LiquifyDialog {
             return;
         }
         let started = crate::gpu_canvas::now_ms();
+        let field = self.identity.as_ref().filter(|_| !self.preview).unwrap_or(&self.field);
         let rendered = if self.native_proxy.is_some() {
-            render_components(&self.source, self.canvas, &self.field, 1.0, &self.target, bounds, dirty, &mut self.view_out)
+            render_components(&self.source, self.canvas, field, 1.0, &self.target, bounds, dirty, &mut self.view_out)
         } else {
-            ProxyImage::render_full_resolution(&self.source, &self.field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch)
+            ProxyImage::render_full_resolution(&self.source, field, bounds, dirty, &mut self.view_out, &mut self.view_source_scratch)
         };
         if !rendered {
             self.view_bounds = None;
@@ -651,6 +672,8 @@ fn open_on(
         dab_ms: 0.0,
         preview_ms: 0.0,
         smart_filter,
+        preview: true,
+        identity: None,
     };
     // A sensible starting brush (about a tenth of the image), then the settings last used, so
     // Liquify opens as it was left (#418). Saved values are clamped; a bad one is skipped.
@@ -720,6 +743,9 @@ pub fn control(app: &mut PhotocraftApp, ui: &Value) -> Result<Value, String> {
     applied?;
     let num = |k: &str| ui.get(k).and_then(Value::as_f64).map(|v| v as f32);
     let flag = |k: &str| ui.get(k).and_then(Value::as_bool);
+    if let Some(on) = flag("preview") {
+        d.set_preview(on);
+    }
     if flag("undo") == Some(true) {
         d.undo();
     }
@@ -838,6 +864,11 @@ pub fn keys(app: &mut PhotocraftApp, ctx: &egui::Context) {
             "view.fitOnScreen" => 0.0,
             _ => 1.0,
         };
+    }
+    // P toggles Preview, as in Photoshop (#7905).
+    if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::P)) {
+        let on = !d.preview;
+        d.set_preview(on);
     }
     // Ctrl+H (Hide Extras) toggles the red freeze-mask overlay; the mask itself stays active.
     if ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::H)) {
@@ -1078,7 +1109,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let right = ERect::from_min_size(pos2(body.right() - RIGHT_W, body.top()), vec2(RIGHT_W, body.height()));
         painter.rect_filled(right, 0.0, t.dock);
         painter.line_segment([right.left_top(), right.left_bottom()], Stroke::new(1.0, t.separator));
-        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(right.shrink2(vec2(14.0, 12.0))));
+        // The properties scroll above the Preview row and the buttons.
+        let props_rect = ERect::from_min_max(right.min + vec2(14.0, 12.0), pos2(right.right() - 14.0, (right.bottom() - 84.0).max(right.top() + 12.0)));
+        let mut props = ui.new_child(egui::UiBuilder::new().max_rect(props_rect));
         egui::ScrollArea::vertical().id_salt("liquify-props").show(&mut props, |ui| {
             ui.spacing_mut().item_spacing.y = 6.0;
             widgets::section_label(ui, tl!("Brush Tool Options"));
@@ -1153,6 +1186,15 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 .size(11.0),
             );
         });
+        // Preview, centred above OK and Cancel as in Photoshop (#7905).
+        let label_w = ui.fonts_mut(|f| f.layout_no_wrap(tl!("Preview").to_owned(), egui::TextStyle::Body.resolve(ui.style()), t.text).size().x);
+        let row_w = (label_w + 30.0).min(RIGHT_W - 28.0);
+        let preview_row = ERect::from_center_size(pos2(right.center().x, right.bottom() - 64.0), vec2(row_w, 24.0));
+        let mut pr = ui.new_child(egui::UiBuilder::new().max_rect(preview_row).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        let mut preview = d.preview;
+        if widgets::checkbox(&mut pr, &mut preview, tl!("Preview")).changed() {
+            d.set_preview(preview);
+        }
         // Footer buttons.
         let foot = ERect::from_min_size(pos2(right.left() + 14.0, right.bottom() - 48.0), vec2(RIGHT_W - 28.0, 32.0));
         let mut fb = ui.new_child(egui::UiBuilder::new().max_rect(foot).layout(egui::Layout::right_to_left(egui::Align::Center)));

@@ -1017,3 +1017,131 @@ fn workspaces_open_on_a_smart_object_with_its_filter_mask_targeted() {
     let Some(photocraft_doc::LayerContent::Smart(sm)) = st.doc.layer(layer).map(|l| &l.content) else { panic!("not a smart object") };
     assert_eq!(sm.smart_filters.iter().map(|f| f.command.as_str()).collect::<Vec<_>>(), ["filter.blur.gaussianBlur", photocraft_engine::distort_cmds::LIQUIFY]);
 }
+
+/// Preview off shows the image unwarped while strokes still change the field, and P turns it back
+/// on, as Photoshop's Liquify Preview checkbox does (#7905). Each opening starts with it on.
+#[test]
+fn preview_off_shows_the_original_and_p_toggles_it() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    let render = |d: &LiquifyDialog, field: &LiquifyField| {
+        let mut out = vec![[0u8; 4]; d.proxy.w * d.proxy.h];
+        d.proxy.render(field, [0, 0, d.proxy.w, d.proxy.h], &mut out);
+        out
+    };
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.preview && d.describe()["preview"] == json!(true), "Liquify opens with Preview on");
+    let original = render(d, &LiquifyField::new(d.canvas, d.cell));
+    let stroke = |app: &mut PhotocraftApp, y: f64| {
+        for ev in [ToolEvent::Down { x: 35.0, y, pressure: 1.0 }, ToolEvent::Move { x: 60.0, y, pressure: 1.0 }, ToolEvent::Up { x: 60.0, y }] {
+            pointer(app, ev, egui::Modifiers::NONE);
+        }
+    };
+    control(&mut app, &json!({"tool": "forwardWarp", "size": 40})).unwrap();
+    stroke(&mut app, 40.0);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_ne!(d.out, original, "the warp shows");
+
+    let r = control(&mut app, &json!({"preview": false})).unwrap();
+    assert_eq!(r["preview"], json!(false));
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_eq!(d.out, original, "Preview off: the image as it was");
+    // A stroke with Preview off still warps the field, unseen.
+    stroke(&mut app, 30.0);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_eq!(d.strokes.len(), 2);
+    assert_eq!(d.out, original, "still unwarped while Preview is off");
+    {
+        let d = app.distort.liquify.as_mut().unwrap();
+        d.zoom = 2.0;
+        d.view_bounds = Some(Rect::new(0, 0, 20, 20));
+        d.view_dirty = None;
+    }
+
+    // P turns it back on, with both strokes.
+    let mut input = egui::RawInput::default();
+    input.events.push(egui::Event::Key { key: egui::Key::P, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
+    ctx.begin_pass(input);
+    keys(&mut app, &ctx);
+    ctx.end_pass().textures_delta.clear();
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.preview);
+    assert_eq!(d.out, render(d, &d.field), "Preview on: the warp of both strokes");
+    assert_eq!(d.view_dirty, d.view_bounds, "the zoomed preview is redrawn too");
+}
+
+/// A forward-warp stroke across the test layer, at row `y`.
+fn warp_stroke(app: &mut PhotocraftApp, y: f64) {
+    for ev in [ToolEvent::Down { x: 35.0, y, pressure: 1.0 }, ToolEvent::Move { x: 60.0, y, pressure: 1.0 }, ToolEvent::Up { x: 60.0, y }] {
+        pointer(app, ev, egui::Modifiers::NONE);
+    }
+}
+
+/// The active layer's pixels over the whole document.
+fn layer_pixels(app: &PhotocraftApp) -> Vec<f32> {
+    let st = app.session.active().unwrap();
+    st.doc.layer(st.active_layer.unwrap()).unwrap().surface().unwrap().read_region(Rect::new(0, 0, 120, 80))
+}
+
+/// With Preview off, a stroke changes the displacement field but the display stays the original
+/// image (#7905).
+#[test]
+fn a_stroke_with_preview_off_changes_the_field_but_not_the_display() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    control(&mut app, &json!({"tool": "forwardWarp", "size": 40, "preview": false})).unwrap();
+    let d = app.distort.liquify.as_ref().unwrap();
+    let (field_before, shown_before) = (d.field.clone(), d.out.clone());
+    assert_eq!(d.field.max_displacement(), 0.0);
+    warp_stroke(&mut app, 40.0);
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert_ne!(d.field, field_before, "the stroke changes the field");
+    assert!(d.field.max_displacement() > 3.0);
+    assert_eq!(d.out, shown_before, "the display does not change");
+}
+
+/// OK with Preview off applies the warp: the layer ends up exactly as it does when the same stroke
+/// is committed with Preview on.
+#[test]
+fn ok_with_preview_off_applies_the_warp() {
+    let ctx = egui::Context::default();
+    let commit_with = |preview: bool| {
+        let mut app = app_with_layer();
+        let before = layer_pixels(&app);
+        open(&mut app, &ctx).unwrap();
+        control(&mut app, &json!({"tool": "forwardWarp", "size": 40, "preview": preview})).unwrap();
+        warp_stroke(&mut app, 40.0);
+        let past = app.session.active().unwrap().history.past_len();
+        control(&mut app, &json!({"commit": true})).unwrap();
+        assert!(app.distort.liquify.is_none());
+        assert_eq!(app.session.active().unwrap().history.past_len(), past + 1, "one Liquify step");
+        (before, layer_pixels(&app))
+    };
+    let (before, unpreviewed) = commit_with(false);
+    assert_ne!(unpreviewed, before, "OK with Preview off warps the layer");
+    assert_eq!(unpreviewed, commit_with(true).1, "the same warp as with Preview on");
+}
+
+/// The identity field (as large as the image's field) exists only while Preview is off: turning
+/// Preview back on frees it, and closing the dialog drops it.
+#[test]
+fn the_identity_field_exists_only_while_preview_is_off() {
+    let ctx = egui::Context::default();
+    let mut app = app_with_layer();
+    open(&mut app, &ctx).unwrap();
+    let identity = |app: &PhotocraftApp| app.distort.liquify.as_ref().unwrap().identity.is_some();
+    assert!(!identity(&app), "not made while Preview is on");
+    control(&mut app, &json!({"preview": false})).unwrap();
+    assert!(identity(&app));
+    control(&mut app, &json!({"preview": true})).unwrap();
+    assert!(!identity(&app), "freed when Preview is turned back on");
+    control(&mut app, &json!({"preview": false})).unwrap();
+    assert!(identity(&app), "made again when Preview is turned off again");
+    control(&mut app, &json!({"cancel": true})).unwrap();
+    assert!(app.distort.liquify.is_none(), "closing drops the dialog and its identity field");
+    open(&mut app, &ctx).unwrap();
+    let d = app.distort.liquify.as_ref().unwrap();
+    assert!(d.preview && d.identity.is_none(), "a new opening starts with Preview on and no identity field");
+}
