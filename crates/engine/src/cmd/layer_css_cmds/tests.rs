@@ -170,3 +170,45 @@ fn a_rounded_rectangle_writes_its_border_radius() {
     let css = s.execute(ID, json!({"layer": id})).unwrap()["css"].as_str().unwrap().to_string();
     assert!(!css.contains("border-radius") && css.contains("  background-color: rgb(255, 0, 0);\n"), "{css}");
 }
+
+/// `css` without its double-quoted strings (escapes inside them skipped).
+fn outside_strings(css: &str) -> String {
+    let (mut out, mut quoted, mut escaped) = (String::new(), false, false);
+    for c in css.chars() {
+        match (quoted, escaped, c) {
+            (true, true, _) => escaped = false,
+            (true, false, '\\') => escaped = true,
+            (_, false, '"') => quoted = !quoted,
+            (false, _, _) => out.push(c),
+            _ => {}
+        }
+    }
+    out
+}
+
+/// A name with a comment closer can't end a comment or break the rule: outside the quoted image
+/// name there is no `*/`, and the class is sanitised.
+#[test]
+fn a_comment_closer_in_a_name_stays_inside_the_string() {
+    let css = session("a */ b").execute(ID, json!({})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(!outside_strings(&css).contains("*/"), "{css}");
+    assert!(css.starts_with(".a____b {\n  background-image: url(\"a */ b.png\");\n"), "{css}");
+}
+
+/// Layer effects aren't written: a layer with a drop shadow gives the same rule as without it,
+/// placed and sized by its pixels, not the shadow.
+#[test]
+fn a_layer_with_a_drop_shadow_writes_its_rule_without_the_effect() {
+    let mut s = session("Box");
+    let plain = s.execute(ID, json!({})).unwrap()["css"].as_str().unwrap().to_string();
+    s.edit("fx", |doc, active| {
+        let l = doc.layer_mut(active.unwrap()).unwrap();
+        l.effects.enabled = true;
+        l.effects.items.push(photocraft_doc::effects::Effect::default_drop_shadow());
+        Ok(())
+    })
+    .unwrap();
+    let css = s.execute(ID, json!({})).unwrap()["css"].as_str().unwrap().to_string();
+    assert_eq!(css, plain);
+    assert!(!css.contains("shadow"), "{css}");
+}
