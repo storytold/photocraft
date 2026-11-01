@@ -139,6 +139,23 @@ pub(crate) fn translate_copies(copies: &mut Document, destination: &Document, dx
         for l in &mut copies.layers {
             crate::commands::translate_layer(&snapshot, l, dx, dy);
             crate::vector_cmds::translate_vectors(&snapshot, l, f64::from(dx), f64::from(dy));
+            translate_unlinked_masks(l, dx, dy);
+        }
+    }
+}
+
+/// Moves the masks the Move tool leaves in place: a copy carries all of a layer, so an unlinked
+/// mask keeps its place relative to the content, as Photoshop's Copy/Paste keeps it (#9684).
+fn translate_unlinked_masks(l: &mut Layer, dx: i32, dy: i32) {
+    if let Some(m) = l.mask.as_mut().filter(|m| !m.linked) {
+        m.surface = crate::layer_multi_cmds::shift_surface(&m.surface, dx, dy);
+    }
+    if let Some(vm) = l.vector_mask.as_mut().filter(|vm| !vm.linked) {
+        vm.path = vm.path.transform(&photocraft_geom::Affine::translate(f64::from(dx), f64::from(dy)));
+    }
+    if let LayerContent::Group(g) = &mut l.content {
+        for c in &mut g.children {
+            translate_unlinked_masks(c, dx, dy);
         }
     }
 }
