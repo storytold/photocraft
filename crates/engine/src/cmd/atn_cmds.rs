@@ -32,6 +32,7 @@ mod descriptors;
 mod events;
 mod fields;
 mod files;
+mod menu_item;
 mod steps_doc;
 mod steps_image;
 mod steps_layer;
@@ -40,6 +41,7 @@ mod tables;
 
 #[cfg(test)]
 use adjustments::{levels_from, selective_from};
+pub(crate) use convert::UniqueNames;
 pub use convert::{Imported, Skipped, Unsupported, export, function_key_name, import, parse_function_key};
 #[cfg(test)]
 use convert::{MAX_NAME_CHARS, export_item, normalise};
@@ -54,6 +56,7 @@ use events::{EVENTS, event_and_descriptor, event_for};
 #[cfg(test)]
 use fields::Mapped;
 use files::{load, save};
+pub use menu_item::{MENU_ITEM, menu_item_command};
 #[cfg(test)]
 use steps_doc::crop_from;
 #[cfg(test)]
@@ -125,6 +128,16 @@ pub fn specs() -> Vec<CommandSpec> {
             params: r##"{"message":str,"allowContinue":bool=false} (Photoshop's Insert Stop: a step that shows the message; headless playback continues when allowContinue is set and otherwise stops the action with the message)"##,
             enabled: always,
             run: stop_message,
+            journal: true,
+        },
+        CommandSpec {
+            id: MENU_ITEM,
+            label: "Menu Item",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"id":"image.imageSize","eventKind":"name"|"code"="name"} (a descriptor-free Insert Menu Item step; opens Image Size during desktop playback, fails with interactive-required during headless playback)"##,
+            enabled: always,
+            run: menu_item::run,
             journal: true,
         },
         CommandSpec {

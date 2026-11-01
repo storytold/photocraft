@@ -1,14 +1,15 @@
 //! Editing an action's steps and its set, as the Actions panel does beyond recording:
 //! `actions.insert` (Photoshop's Insert Stop… and Insert Menu Item…), `actions.dialog` (the
 //! panel's dialog toggle column) and `actions.assignSet` (which set folder an action sits in).
+//! `actions.duplicate` copies an action or step below its source, retaining settings and flags.
 //!
-//! All three refuse to run during playback, commit pending recorded steps first, and keep the
+//! Definition edits refuse to run during playback, commit pending recorded steps first, and keep the
 //! per-step flag sets (`disabled`, `dialogs`) in step with the moved indices, like
 //! `actions.move` and `actions.delete`.
 
 use serde_json::{Value, json};
 
-use crate::actions_cmds::{flush_recording, not_playing, pending_steps, resolve};
+use crate::actions_cmds::{Action, flush_recording, not_playing, pending_steps, resolve};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
@@ -65,12 +66,100 @@ fn insert(s: &mut Session, p: &Value) -> Result<Value> {
     if s.actions.recording.is_some_and(|(_, i)| i == idx) {
         flush_recording(s)?;
     }
+    Ok(insert_step(s, idx, at, (id, params)))
+}
+
+/// Insert an already validated step without normalizing a copied step's payload.
+fn insert_step(s: &mut Session, idx: usize, at: usize, step: (String, Value)) -> Value {
     let action = &mut s.actions.list[idx];
-    action.steps.insert(at, (id.clone(), params));
+    let id = step.0.clone();
+    action.steps.insert(at, step);
     action.remap_steps(|i| Some(if i >= at { i + 1 } else { i }));
     let result = json!({"action": action.name, "step": at, "id": id, "steps": action.steps.len()});
     s.actions.touch();
+    result
+}
+
+/// Keep session-list Play Action targets stable when a copied action inserts a row.
+/// Other commands' nested JSON may own a separate action library and is not traversed.
+fn shift_action_calls(actions: &mut [Action], at: usize) {
+    for (id, params) in actions.iter_mut().flat_map(|a| &mut a.steps) {
+        if id != "actions.play" {
+            continue;
+        }
+        let Some(Value::Number(n)) = params.get("action") else { continue };
+        let shifted = if let Some(n) = n.as_u64() {
+            if n >= at as u64 { n.checked_add(1).map(Value::from) } else { None }
+        } else {
+            // `actions.play` also accepts floating indices, rounding them before lookup.
+            n.as_f64().filter(|n| n.round() >= at as f64).map(|n| Value::from(n + 1.0))
+        };
+        if let Some(value) = shifted {
+            params["action"] = value;
+        }
+    }
+}
+
+/// Duplicate a step or action below its source, preserving settings and per-step flags.
+fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.duplicate";
+    not_playing(s, cmd)?;
+    let idx = resolve(&s.actions.list, p, cmd)?;
+    if let Some(step) = index(p, "step", cmd)? {
+        let len = s.actions.list[idx].steps.len().saturating_add(pending_steps(s, idx).count());
+        if step >= len {
+            return Err(bad(cmd, "step is out of range"));
+        }
+        if s.actions.recording.is_some_and(|(_, i)| i == idx) {
+            flush_recording(s)?;
+        }
+        let action = &s.actions.list[idx];
+        let copied = action.steps.get(step).cloned().ok_or_else(|| bad(cmd, "step is out of range"))?;
+        let (disabled, dialog) = (action.disabled.contains(&step), action.dialogs.contains(&step));
+        let at = step + 1;
+        let mut result = insert_step(s, idx, at, copied);
+        let action = &mut s.actions.list[idx];
+        if disabled {
+            action.disabled.insert(at);
+        }
+        if dialog {
+            action.dialogs.insert(at);
+        }
+        result["index"] = json!(idx);
+        return Ok(result);
+    }
+    if s.actions.recording.is_some() {
+        return Err(bad(cmd, "stop recording before duplicating an action"));
+    }
+    let mut copied = s.actions.list[idx].clone();
+    let mut names = crate::atn_cmds::UniqueNames::new(s.actions.list.iter().map(|a| a.name.clone()));
+    copied.name = names.claim(&format!("{} copy", copied.name));
+    let at = idx + 1;
+    let result = json!({"action": copied.name, "index": at, "steps": copied.steps.len()});
+    s.actions.list.insert(at, copied);
+    shift_action_calls(&mut s.actions.list, at);
+    s.actions.touch();
     Ok(result)
+}
+
+/// Clear confirmed definitions and their own shortcut bindings, preserving the document.
+fn clear_all(s: &mut Session, p: &Value) -> Result<Value> {
+    let cmd = "actions.clearAll";
+    not_playing(s, cmd)?;
+    if s.actions.recording.is_some() {
+        return Err(bad(cmd, "stop recording before clearing actions"));
+    }
+    if p.get("confirm").and_then(Value::as_bool) != Some(true) {
+        return Err(bad(cmd, "clearing all actions requires `confirm`: true"));
+    }
+    let count = s.actions.list.len();
+    if count != 0 {
+        let keys: std::collections::HashSet<_> = s.actions.list.iter().map(|a| format!("{}{}", crate::actions_cmds::PLAY_SHORTCUT_PREFIX, a.name)).collect();
+        s.edit_prefs(|prefs| prefs.shortcuts.retain(|key, _| !keys.contains(key)));
+        s.actions.list.clear();
+        s.actions.touch();
+    }
+    Ok(json!({"cleared": count}))
 }
 
 /// The panel's dialog toggle column. With `step`, switch one step's dialog on or off; without
@@ -245,6 +334,26 @@ fn conditional(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
+        CommandSpec {
+            id: "actions.clearAll",
+            label: "Clear All Actions",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"confirm":true} → {cleared:count}. Removes every action and its function-key binding after explicit confirmation. Stop recording or playback first. Other shortcuts and the document are unchanged."##,
+            enabled: always,
+            run: clear_all,
+            journal: false,
+        },
+        CommandSpec {
+            id: "actions.duplicate",
+            label: "Duplicate",
+            menu: &[],
+            shortcut: None,
+            params: r##"{"action":name|index,"step":index?} → {action,index,step?,steps}. Duplicate the action, or one step, directly below its source. Action names gain " copy" and a unique numeric suffix if needed; settings, flags, set and color are retained. Function-key bindings stay with their original action. Stop recording before duplicating a whole action. Set duplication is not supported."##,
+            enabled: always,
+            run: duplicate,
+            journal: false,
+        },
         CommandSpec {
             id: "actions.insert",
             label: "Insert Step",

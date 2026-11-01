@@ -66,10 +66,12 @@ fn convert_action(a: &AtnAction, set: &str, unsupported: &mut Vec<Unsupported>) 
     let mut action = Action::new(name.clone(), Vec::new());
     action.set = Some(clip_name(set));
     for (i, item) in a.items.iter().enumerate() {
-        let mapped = match (event_for(&item.event), &item.descriptor) {
-            (Some(e), Some(d)) => (e.from)(d),
-            (Some(e), None) => (e.from)(&Descriptor::default()),
-            (None, _) => Mapped::Unsupported { harmless: false },
+        let menu = item.descriptor.is_none().then(|| super::menu_item::from_event(&item.event)).flatten();
+        let mapped = match (menu, event_for(&item.event), &item.descriptor) {
+            (Some(p), _, _) => Mapped::Steps(vec![(super::MENU_ITEM.into(), p)]),
+            (_, Some(e), Some(d)) => (e.from)(d),
+            (_, Some(e), None) => (e.from)(&Descriptor::default()),
+            (_, None, _) => Mapped::Unsupported { harmless: false },
         };
         let (new_steps, enabled) = match mapped {
             Mapped::Steps(s) => (s, item.enabled),
@@ -121,6 +123,9 @@ pub struct Skipped {
 }
 
 pub(super) fn export_item(id: &str, params: &Value, set: &str) -> Option<AtnItem> {
+    if id == super::MENU_ITEM {
+        return super::menu_item::export(params);
+    }
     if id == PHOTOSHOP_STEP {
         let event = jstr(params, "event")?;
         let event = match params.get("eventKind") {
@@ -245,18 +250,18 @@ pub fn export(
 /// Assigns names not already used, as `name`, `name 2`, `name 3`… A plain linear scan of the
 /// taken list per candidate is cubic when an action file repeats one base name many times, so
 /// membership uses a set and the next suffix to try is cached per base name.
-pub(super) struct UniqueNames {
+pub(crate) struct UniqueNames {
     taken: std::collections::HashSet<String>,
     next_suffix: std::collections::HashMap<String, u32>,
 }
 
 impl UniqueNames {
-    pub(super) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
+    pub(crate) fn new<I: IntoIterator<Item = String>>(existing: I) -> Self {
         UniqueNames { taken: existing.into_iter().collect(), next_suffix: std::collections::HashMap::new() }
     }
 
     /// Reserves and returns a unique name derived from `name`, recording it as taken.
-    pub(super) fn claim(&mut self, name: &str) -> String {
+    pub(crate) fn claim(&mut self, name: &str) -> String {
         if self.taken.insert(name.to_string()) {
             return name.to_string();
         }

@@ -296,6 +296,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::replace_prompt::owns(fields) => crate::replace_prompt::body(ui, fields),
         _ if crate::preset_group_prompt::owns(fields) => crate::preset_group_prompt::body(ui, fields),
         _ if crate::actions::owns_insert_stop(fields) => crate::actions::insert_stop_body(ui, fields),
+        _ if crate::actions::clear_all::owns(fields) => crate::actions::clear_all::body(ui),
         _ if crate::new_layer_ui::owns(fields) => crate::new_layer_ui::body(ui, fields),
         _ if crate::mask_trash_prompt::owns(fields) => crate::mask_trash_prompt::body(ui, fields),
         _ if crate::rasterize_prompt::owns(fields) => crate::rasterize_prompt::body(ui, fields),
@@ -845,6 +846,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::delete_layer_prompt::owns,
     crate::disk_change_prompt::owns,
     crate::actions::owns_insert_stop,
+    crate::actions::clear_all::owns,
     crate::new_layer_ui::owns,
     crate::new_group_ui::owns,
     crate::mask_trash_prompt::owns,
@@ -925,7 +927,7 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
             return Err(e);
         }
     };
-    let result = app.run(&cmd, params.clone());
+    let result = crate::actions::authorize_dialog(app, &d.fields, &cmd, &params).and_then(|()| app.run(&cmd, params.clone()));
     // A filter that runs as a background job keeps its preview on screen until the job
     // lands (`canvas::committed_filter_preview`) instead of flashing the unfiltered image.
     let running =
@@ -1003,6 +1005,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::replace_prompt::owns(&d.fields) => crate::replace_prompt::confirm(app),
         _ if crate::preset_group_prompt::owns(&d.fields) => crate::preset_group_prompt::confirm(app, &d.fields),
         _ if crate::actions::owns_insert_stop(&d.fields) => crate::actions::insert_stop_confirm(app, &d.fields),
+        _ if crate::actions::clear_all::owns(&d.fields) => crate::actions::clear_all::confirm(app, &d.fields),
         _ if crate::new_layer_ui::owns(&d.fields) => crate::new_layer_ui::confirm(app, &d.fields),
         _ if crate::mask_trash_prompt::owns(&d.fields) => crate::mask_trash_prompt::confirm(app, &d.fields),
         _ if crate::rasterize_prompt::owns(&d.fields) => crate::rasterize_prompt::confirm(app, &d.fields),
