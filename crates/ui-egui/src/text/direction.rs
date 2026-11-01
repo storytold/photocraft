@@ -421,6 +421,9 @@ pub fn elided_galley(painter: &egui::Painter, text: &str, font: egui::FontId, co
     let layout = |s: &str, wrap: bool| {
         let mut job = egui::text::LayoutJob::default();
         job.append(s, 0.0, format.clone());
+        // Base the paragraph on the UI's direction, like the title's own job: an RTL name in an
+        // LTR UI then elides with "…" at the visual right, not at its own reading end.
+        job.direction = text_direction();
         if wrap {
             job.wrap = egui::text::TextWrapping { max_width, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
         }
