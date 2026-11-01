@@ -8,9 +8,14 @@ use crate::{FormatError, Result};
 
 pub(crate) type Step = fn(&mut Value) -> Result<()>;
 
-/// `STEPS[i]` upgrades version `i + 1` to `i + 2`. Empty while version 1 is
-/// the only version.
-pub(crate) const STEPS: &[Step] = &[];
+/// `STEPS[i]` upgrades version `i + 1` to `i + 2`.
+pub(crate) const STEPS: &[Step] = &[migrate_v1_to_v2];
+
+fn migrate_v1_to_v2(v: &mut Value) -> Result<()> {
+    let document = v.get_mut("document").and_then(Value::as_object_mut).ok_or_else(|| FormatError::corrupt("manifest has no document object"))?;
+    document.entry("responsive").or_insert_with(|| serde_json::json!({}));
+    Ok(())
+}
 
 /// Upgrade `v` in place to `target` using `steps`.
 pub(crate) fn migrate_with(v: &mut Value, steps: &[Step], target: u32) -> Result<u32> {
@@ -80,5 +85,13 @@ mod tests {
     fn current_version_is_noop() {
         let mut v = json!({"format_version": FORMAT_VERSION});
         assert_eq!(migrate(&mut v).unwrap(), FORMAT_VERSION);
+    }
+
+    #[test]
+    fn v1_adds_default_responsive_layout() {
+        let mut v = json!({"format_version": 1, "document": {"name": "legacy"}});
+        assert_eq!(migrate(&mut v).unwrap(), 1);
+        assert_eq!(v["format_version"], 2);
+        assert_eq!(v["document"]["responsive"], json!({}));
     }
 }
