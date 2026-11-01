@@ -820,7 +820,9 @@ fn only_missing_content_reads_as_nothing_to_paste() {
     use arboard::Error;
     let failures = || [Error::ClipboardOccupied, Error::ClipboardNotSupported, Error::Unknown { description: "broken pipe".to_string() }];
     assert_eq!(clipboard_read(Ok::<_, Error>(vec![PathBuf::from("a.png")])), Ok(Some(vec![PathBuf::from("a.png")])));
-    assert_eq!(clipboard_read::<Vec<PathBuf>>(Err(Error::ContentNotAvailable)), Ok(None));
+    for missing in [Error::ContentNotAvailable, Error::Unknown { description: "incorrect type received from clipboard".to_string() }] {
+        assert_eq!(clipboard_read::<Vec<PathBuf>>(Err(missing)), Ok(None));
+    }
     for error in failures().into_iter().chain([Error::ConversionFailure]) {
         let message = error.to_string();
         assert_eq!(clipboard_read::<Vec<PathBuf>>(Err(error)), Err(message.clone()), "{message}");
@@ -832,6 +834,48 @@ fn only_missing_content_reads_as_nothing_to_paste() {
         let message = error.to_string();
         assert_eq!(clipboard_text(Err(error)), Err(message.clone()), "{message}");
     }
+}
+
+/// #10231: a large xclip image can answer a file-list request with an INCR transfer arboard
+/// abandons, so the image read never gets a turn. When the target list says there is no
+/// `text/uri-list`, the paste must not ask for one at all.
+#[test]
+fn an_image_only_target_list_never_asks_for_files() {
+    assert!(should_read_file_list(None), "an unknown target list keeps the old read");
+    assert!(should_read_file_list(Some(true)));
+    assert!(!should_read_file_list(Some(false)));
+    let got = read_file_list(Some(false), || panic!("must not request text/uri-list"));
+    assert_eq!(got, Ok(None));
+    let paths = read_file_list(Some(true), || Ok(vec![PathBuf::from("a.png")]));
+    assert_eq!(paths, Ok(Some(vec![PathBuf::from("a.png")])));
+}
+
+/// #10231: xclip answers a request for a format it doesn't offer (the copied-file list) with
+/// the image's own type, which arboard reports as an unknown error. The paste still reads the
+/// image instead of stopping at the missing file list.
+#[test]
+fn an_xclip_image_is_read_after_the_missing_file_list() {
+    use arboard::Error;
+    let mismatch = || Error::Unknown { description: "incorrect type received from clipboard".to_string() };
+    let red = (2u32, 2u32, [255u8, 0, 0, 255].repeat(4));
+    let mut text_read = false;
+    let svg_text = |read: &mut bool| -> Result<Option<String>, String> {
+        *read = true;
+        Ok(None)
+    };
+    let got = clipboard_image(&mut text_read, |_| clipboard_read::<Vec<PathBuf>>(Err(mismatch())), |_| clipboard_read(Ok::<_, Error>(red.clone())), svg_text);
+    assert_eq!(got, Ok(Some(red)));
+    assert!(!text_read, "the image is pasted without reading the text");
+}
+
+/// The same X11 wrong-type reply to the image request means the clipboard holds no image in
+/// the format asked for, so a drawing copied as SVG markup is still read.
+#[test]
+fn an_x11_wrong_type_image_read_falls_through_to_svg_text() {
+    use arboard::Error;
+    let mismatch = || Error::Unknown { description: "incorrect type received from clipboard".to_string() };
+    let got = clipboard_image(&mut (), |_| Ok(None), |_| clipboard_read::<(u32, u32, Vec<u8>)>(Err(mismatch())), |_| Ok(Some(COPIED_RECTANGLE.to_string())));
+    assert_eq!(got.expect("no read fails").map(|(w, h, _)| (w, h)), Some((121, 81)));
 }
 
 /// Edit › Paste with SVG markup as the clipboard's only content adds a new layer that holds the
