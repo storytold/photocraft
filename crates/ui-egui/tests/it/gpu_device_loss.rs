@@ -230,6 +230,10 @@ fn a_lost_window_device_saves_unsaved_work_for_recovery_and_closes() {
     let _gpu = gpu_lock();
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
     let (autosaves, flushes) = (log.clone(), log.clone());
+    let restarts = std::sync::Arc::new(std::sync::Mutex::new(Vec::<photocraft_ui_egui::WindowRestart>::new()));
+    let restart_sink = restarts.clone();
+    let pending = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(u64, u64)>::new()));
+    let queued = pending.clone();
     let render_state = std::sync::Arc::new(std::sync::Mutex::new(None::<RenderState>));
     let window = render_state.clone();
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
@@ -238,12 +242,15 @@ fn a_lost_window_device_saves_unsaved_work_for_recovery_and_closes() {
             let services = photocraft_ui_egui::Services {
                 autosave: Some(Box::new(move |doc: &std::sync::Arc<Document>, revision: u64, _: Option<&str>| {
                     autosaves.lock().unwrap().push(format!("autosave {} {revision}", doc.id.0));
+                    queued.lock().unwrap().push((doc.id.0, revision));
                     Ok(())
                 })),
                 flush_autosaves: Some(Box::new(move || {
                     flushes.lock().unwrap().push("flush".into());
-                    Vec::new()
+                    // Every queued write finished, so the app may close (and ask for a restart).
+                    pending.lock().unwrap().drain(..).map(|(id, revision)| (id, revision, Ok(()))).collect()
                 })),
+                restart_after_window_loss: Some(Box::new(move |request| restart_sink.lock().unwrap().push(request))),
                 ..Default::default()
             };
             let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
@@ -289,6 +296,11 @@ fn a_lost_window_device_saves_unsaved_work_for_recovery_and_closes() {
     h.run_steps(2);
     assert!(h.state().window_lost(), "the loss was noticed");
     assert_eq!(*log.lock().unwrap(), vec![format!("autosave {doc} {revision}"), "flush".to_string()], "saved for recovery once");
+    // The host is asked to start PhotoCraft again, once, after the work is saved (#10464): the
+    // unsaved document comes back from recovery, so no file is named.
+    let restarts = restarts.lock().unwrap().clone();
+    assert_eq!(restarts.len(), 1, "one restart request: {restarts:?}");
+    assert!(!restarts[0].reason.is_empty() && restarts[0].reopen.is_empty(), "{restarts:?}");
     // The frame on the lost device has nothing to draw, so egui-wgpu has nothing to upload.
     assert_eq!(upload(&h), (0, true), "a frame with shapes panics inside egui-wgpu on a lost device");
     assert_eq!(h.state().session.documents().len(), 1, "the document stays until the app closes");

@@ -31,7 +31,7 @@ pub const OOM_AUTO_RETRIES: u32 = 3;
 pub fn check(app: &mut PhotocraftApp, ctx: &egui::Context) {
     if let Some(fault) = app.gpu.as_ref().and_then(|g| g.fault()) {
         fall_back(app, &fault);
-        if fault.is_out_of_memory() && app.gpu_oom_retries < OOM_AUTO_RETRIES && can_retry_now(app) {
+        if fault.recovery(app.gpu_oom_retries, OOM_AUTO_RETRIES) == photocraft_gpu::Recovery::RebuildCanvas && can_retry_now(app) {
             app.gpu_oom_retries += 1;
             if retry_now(app) {
                 log::warn!("{fault}; rebuilt the GPU canvas (automatic retry {} of {OOM_AUTO_RETRIES})", app.gpu_oom_retries);
@@ -60,8 +60,10 @@ pub fn check(app: &mut PhotocraftApp, ctx: &egui::Context) {
 /// whose close button opens an unsaved-changes prompt nobody can see. So this frame and every later
 /// one draw nothing; the first writes every unsaved document to crash recovery, waits for the
 /// writes, and closes the app without asking once all of them are saved. The next launch reopens
-/// the documents. If a write fails (a full disk, say) the app stays open with the documents in
-/// memory and tries again every [`RECOVERY_RETRY_SECS`]: closing would lose them.
+/// the documents; when the host can restart ([`crate::Services::restart_after_window_loss`]) it
+/// does that itself, so the user gets a new window instead of a closed app (#10464). If a write
+/// fails (a full disk, say) the app stays open with the documents in memory and tries again every
+/// [`RECOVERY_RETRY_SECS`]: closing would lose them.
 pub fn check_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let Some((device, health)) = app.window_device.as_ref() else { return };
     // A loss while the app sat idle or the PC slept is noticed here, before the next frame.
@@ -71,10 +73,12 @@ pub fn check_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
     }
     ctx.graphics_mut(|g| *g = Default::default());
     let now = ctx.input(|i| i.time);
+    let fault = health.fault();
     if !app.window_lost {
         app.window_lost = true;
-        let reason = health.fault().map_or_else(|| "GPU device lost".to_string(), |f| f.to_string());
-        log::error!("{reason}: the window can't be drawn any more; saving unsaved documents for recovery and closing");
+        let reason = fault.as_ref().map_or_else(|| "GPU device lost".to_string(), ToString::to_string);
+        let cause = fault.as_ref().and_then(photocraft_gpu::Fault::loss_cause).map_or("cause unknown", photocraft_gpu::LossCause::describe);
+        log::error!("{reason} ({cause}; {}): the window can't be drawn any more; saving unsaved documents for recovery and closing", adapter_summary(app));
     } else {
         match app.window_recovery_retry {
             // Saved, and the close is on its way.
@@ -86,10 +90,12 @@ pub fn check_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             Some(_) => {}
         }
     }
+    let unsaved = app.session.documents().iter().filter(|d| d.is_dirty()).count();
     match save_for_recovery(app) {
         Ok(()) => {
             app.window_recovery_retry = None;
             app.allow_close = true;
+            request_restart(app, fault.as_ref().map_or("GPU device lost", photocraft_gpu::Fault::detail), unsaved);
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         Err(e) => {
@@ -98,6 +104,39 @@ pub fn check_window(app: &mut PhotocraftApp, ctx: &egui::Context) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(RECOVERY_RETRY_SECS));
         }
     }
+}
+
+/// Whether the host should start PhotoCraft again after the window's device was lost: only when
+/// what was open comes back with it. Unsaved documents return from crash recovery at launch
+/// (Preferences › File Handling), so with that off a restart would show an empty window while
+/// the work sits in the recovery folder; closing is the honest outcome then. With nothing unsaved
+/// there is nothing to lose either way, and a window beats none.
+fn restart_wanted(recover_on_launch: bool, unsaved: usize) -> bool {
+    recover_on_launch || unsaved == 0
+}
+
+/// Most files named for the restart (a command line is not unbounded).
+const MAX_REOPEN: usize = 32;
+
+/// Ask the host (see [`crate::Services::restart_after_window_loss`]) to start PhotoCraft again
+/// once this process ends (#10464). `unsaved` is how many documents were saved for recovery.
+fn request_restart(app: &mut PhotocraftApp, reason: &str, unsaved: usize) {
+    if !restart_wanted(app.session.prefs().file_handling.recover_on_launch, unsaved) {
+        return;
+    }
+    let reopen: Vec<String> =
+        app.session.documents().iter().filter(|d| !d.is_dirty()).filter_map(|d| d.path.clone()).filter(|p| !p.is_empty()).take(MAX_REOPEN).collect();
+    let Some(restart) = app.services.restart_after_window_loss.as_mut() else { return };
+    log::warn!("the window's graphics device is gone; PhotoCraft restarts to get a new one ({unsaved} unsaved document(s) come back from recovery)");
+    restart(crate::WindowRestart { reason: reason.to_string(), reopen });
+}
+
+/// The adapter the window draws with, for the lines that report a fault: the failing call and
+/// its Vulkan result aren't available (wgpu-hal drops them), so name what ran it.
+fn adapter_summary(app: &PhotocraftApp) -> String {
+    let info = &app.perf.gpu_info;
+    let part = |s: &str| if s.is_empty() { "unknown".to_string() } else { s.to_string() };
+    format!("adapter {}, backend {}, driver {}", part(&info.adapter), part(&info.backend), part(&info.driver))
 }
 
 /// Seconds between attempts to save unsaved work for recovery after the window's device was lost.
@@ -149,7 +188,7 @@ fn save_for_recovery(app: &mut PhotocraftApp) -> Result<(), String> {
 pub fn fall_back(app: &mut PhotocraftApp, fault: &photocraft_gpu::Fault) {
     let Some(gpu) = app.gpu.take() else { return };
     // The GPU canvas is gone (that's this error); the switch to the CPU is `render_path`'s line.
-    log::error!("{fault}; GPU canvas dropped");
+    log::error!("{fault} ({}); GPU canvas dropped", adapter_summary(app));
     gpu.release();
     app.gpu_fault = Some(fault.clone());
     // Canvas caches pointed at GPU textures: rebuild them as egui textures.
@@ -340,6 +379,63 @@ mod tests {
             assert_eq!(app.perf.gpu_info.preference, "auto");
             assert_eq!(app.perf.gpu_info.selected, "auto");
         });
+    }
+
+    /// #10464: the app restarts after a window device loss only when its documents come back.
+    #[test]
+    fn a_restart_needs_the_documents_to_come_back() {
+        assert!(restart_wanted(true, 0));
+        assert!(restart_wanted(true, 3), "unsaved work returns from recovery");
+        assert!(restart_wanted(false, 0), "nothing to lose either way");
+        assert!(!restart_wanted(false, 1), "recovery is off: the work would sit in the recovery folder");
+    }
+
+    /// #10464: the restart request names the loss and the files without unsaved changes (the
+    /// unsaved ones return from recovery, so listing them would open them twice), and is only made
+    /// when the host offered a way to restart.
+    #[test]
+    fn the_restart_request_names_the_clean_files_only() {
+        let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::<crate::WindowRestart>::new()));
+        let sink = requests.clone();
+        let services = crate::Services { restart_after_window_loss: Some(Box::new(move |r| sink.borrow_mut().push(r))), ..Default::default() };
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), services);
+        // A saved document with a file, and a second one with unsaved changes.
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        {
+            let st = app.session.active_mut().unwrap();
+            st.path = Some("C:/work/clean.psd".into());
+            st.saved_revision = st.revision;
+        }
+        app.run("file.new", json!({"width": 32, "height": 32})).unwrap();
+        app.run("layer.new.layer", json!({})).unwrap();
+        let dirty: Vec<bool> = app.session.documents().iter().map(|d| d.is_dirty()).collect();
+        assert_eq!(dirty, vec![false, true]);
+
+        let reason = "Unexpected error variant (driver implementation is at fault)";
+        request_restart(&mut app, reason, 1);
+        assert_eq!(*requests.borrow(), vec![crate::WindowRestart { reason: reason.into(), reopen: vec!["C:/work/clean.psd".into()] }]);
+
+        // Recovery off with unsaved work: the work wouldn't come back, so no restart is asked for.
+        app.session.prefs.edit(|p| p.file_handling.recover_on_launch = false);
+        request_restart(&mut app, reason, 1);
+        assert_eq!(requests.borrow().len(), 1);
+        // Nothing unsaved: a restart is fine even then.
+        request_restart(&mut app, reason, 0);
+        assert_eq!(requests.borrow().len(), 2);
+
+        // A host without the service: nothing happens.
+        let mut bare = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        request_restart(&mut bare, reason, 0);
+    }
+
+    #[test]
+    fn the_adapter_is_named_in_loss_reports() {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert_eq!(adapter_summary(&app), "adapter unknown, backend unknown, driver unknown");
+        app.perf.gpu_info.adapter = "NVIDIA GeForce RTX 5070".into();
+        app.perf.gpu_info.backend = "vulkan".into();
+        app.perf.gpu_info.driver = "NVIDIA 616.56".into();
+        assert_eq!(adapter_summary(&app), "adapter NVIDIA GeForce RTX 5070, backend vulkan, driver NVIDIA 616.56");
     }
 
     #[test]
