@@ -481,7 +481,8 @@ fn command_uses_ambient_path(id: &str, params: &Value) -> bool {
         "edit.keyboardShortcuts" => {
             params.get("path").is_some() || ["importKys", "exportKys", "summarize"].iter().any(|k| params.get(*k).and_then(|v| v.get("path")).is_some())
         }
-        "plugin.reload" => true,
+        // The store downloads into, and deletes from, the settings directory's Plug-ins folder.
+        "plugin.reload" | "plugin.store.install" | "plugin.store.uninstall" => true,
         _ => false,
     }
 }

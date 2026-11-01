@@ -204,6 +204,7 @@ pub use menus::menu_keys;
 pub use menus::menu_nav;
 pub use menus::native_menu;
 pub use menus::parity;
+pub use menus::plugin_store_ui;
 pub use menus::plugin_ui;
 pub use menus::view_cmds;
 pub use menus::workspace_ui;

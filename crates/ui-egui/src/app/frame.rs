@@ -66,6 +66,7 @@ impl PhotocraftApp {
         shape_stroke_ui::sync_editor(self, ctx);
         prefs_ui::tick(self, ctx);
         updates_ui::tick(self, ctx);
+        crate::plugin_store_ui::tick(self, ctx);
         monitor_status::poll_frame(self, ctx, frame);
         // Control requests and persisted preferences can change the language in this frame.
         i18n::sync_context(ctx, &self.session.prefs().interface.language);
@@ -325,6 +326,7 @@ impl PhotocraftApp {
         canvas::extra_windows(self, &ctx);
         notices::show(self, &ctx);
         updates_ui::show(self, &ctx);
+        crate::plugin_store_ui::show(self, &ctx);
         gpu_status::show_fallback(self, &ctx);
         kys_import::show_offer(self, &ctx);
         if self.titlebar_modal_drag(chrome) {

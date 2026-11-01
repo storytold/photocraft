@@ -60,7 +60,7 @@ fn alt_focuses_the_bar_arrows_move_and_down_opens_the_lit_menu() {
     assert_eq!(Keys::current(&h.ctx).focus, Some(1), "→ moves to Edit");
     key(&mut h, egui::Key::ArrowLeft);
     key(&mut h, egui::Key::ArrowLeft);
-    assert_eq!(Keys::current(&h.ctx).focus, Some(9), "← wraps round to Help");
+    assert_eq!(Keys::current(&h.ctx).focus, Some(10), "← wraps round to Help");
     key(&mut h, egui::Key::ArrowRight);
     key(&mut h, egui::Key::ArrowRight);
     assert_eq!(Keys::current(&h.ctx).focus, Some(1));

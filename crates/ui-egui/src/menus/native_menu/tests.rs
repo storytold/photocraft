@@ -40,6 +40,16 @@ fn photocraft_gets_a_mac_app_menu() {
     assert_eq!(l.bar.find("help.about").unwrap().label, "About PhotoCraft");
 }
 
+/// A plug-in installed in the background (Browse Plugins) rebuilds the menus' Filter › Plug-ins.
+#[test]
+fn installing_a_plug_in_changes_the_menu_state() {
+    let app = app(false);
+    let before = state_hash(&app, None);
+    let bytes = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../plugins/tests/fixtures/invert.wasm")).unwrap();
+    photocraft_plugins::registry::install_bytes(&bytes).unwrap();
+    assert_ne!(state_hash(&app, None), before);
+}
+
 #[test]
 fn moved_items_leave_their_old_menus() {
     let l = layout(true);
@@ -48,7 +58,7 @@ fn moved_items_leave_their_old_menus() {
     assert!(!ids(&by("Help").children).contains(&"help.about".to_string()));
     assert!(!ids(&by("Edit").children).contains(&"[Preferences]".to_string()));
     let titles: Vec<&str> = l.bar.menus.iter().map(|m| m.title.as_str()).collect();
-    assert_eq!(titles, ["PhotoCraft", "File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Window", "Help"]);
+    assert_eq!(titles, ["PhotoCraft", "File", "Edit", "Image", "Layer", "Type", "Select", "Filter", "View", "Plugins", "Window", "Help"]);
 }
 
 /// PhotoCraft keeps Photoshop's ⌘H, ⌘M, ⌘W and ⌘, (Hide Layers): the system items give way.

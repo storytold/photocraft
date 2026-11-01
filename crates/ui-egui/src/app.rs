@@ -34,6 +34,12 @@ pub use thumbs::surface_fingerprint;
 impl PhotocraftApp {
     pub fn new(mut session: Session, mut services: Services) -> Self {
         session.updates.check = services.check_updates.take();
+        session.plugin_store.fetch = services.fetch_plugin.take();
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = services.plugin_dir.take() {
+            let report = session.plugin_store.set_dir(dir);
+            log::info!("catalog plug-ins: {report}");
+        }
         let mut app = Self {
             session,
             ui: UiState::default(),

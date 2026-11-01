@@ -335,6 +335,8 @@ pub(crate) fn invoke_unguarded(app: &mut PhotocraftApp, ctx: &egui::Context, id:
             Ok(Value::Null)
         }
         "help.about" => Ok(json!({"dialog": app.ui.open_dialog(DialogKind::About, Default::default())})),
+        "plugins.browse" => Ok(crate::plugin_store_ui::open(app, false)),
+        "plugins.manage" => Ok(crate::plugin_store_ui::open(app, true)),
         "help.systemInfo" => {
             let mut fields = serde_json::Map::new();
             fields.insert("systemInfo".into(), json!(true));
