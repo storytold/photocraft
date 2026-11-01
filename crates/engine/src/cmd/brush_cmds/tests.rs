@@ -839,7 +839,7 @@ fn pencil_latency_24mp() {
 
 #[test]
 fn live_stroke_equals_the_commit_at_every_zoom_with_smoothing() {
-    // #189: the preview while dragging must be the committed stroke (within 1/255), with a soft
+    // #189: the preview at release must be the committed stroke (within 1/255), with a soft
     // brush on an opaque Background with content, at any zoom (the smoothing string scales with
     // it), with smoothing on, pressure, 8 and 16 bits, and points fed one pointer move at a time.
     let pts: Vec<[f64; 3]> = (0..40)
@@ -862,6 +862,7 @@ fn live_stroke_equals_the_commit_at_every_zoom_with_smoothing() {
                 for q in &pts[1..] {
                     live.push(&[StrokePoint::new(q[0], q[1], q[2] as f32)]).unwrap();
                 }
+                live.finish().unwrap();
                 let mut commit = p.clone();
                 commit["points"] = json!(pts);
                 commit["seed"] = json!(live.seed);

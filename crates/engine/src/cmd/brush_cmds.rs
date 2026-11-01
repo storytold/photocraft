@@ -538,8 +538,10 @@ pub struct LiveStroke {
     lock: bool,
     layer: Option<photocraft_doc::LayerId>,
     params: Value,
-    /// Where the doc shows the stroke's end as finishing it would draw it (see `push`).
-    tail: Rect,
+    /// [`finish`](LiveStroke::finish) ran: the doc shows the whole stroke.
+    finished: bool,
+    /// The lone first dab shown before the stroke has painted anything (see `composite`).
+    first_dab: Rect,
     /// The document's CMYK profile the commit enters (`stroke_with`), so the preview shows the
     /// pixels a `paint.stroke` with `seed` will write.
     cmyk: Option<std::sync::Arc<photocraft_color::convert::CmykSpace>>,
@@ -639,7 +641,8 @@ impl LiveStroke {
             lock,
             layer,
             params: p.clone(),
-            tail: Rect::EMPTY,
+            finished: false,
+            first_dab: Rect::EMPTY,
             cmyk: doc_cmyk_space(s),
             points: Vec::new(),
             base,
@@ -650,6 +653,7 @@ impl LiveStroke {
 
     /// The stroke as its commit would take it over (see [`LiveCommit`]).
     pub fn into_commit(mut self) -> Result<LiveCommit> {
+        self.finish()?;
         let bounds = self.bounds();
         let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
         Ok(LiveCommit {
@@ -666,7 +670,7 @@ impl LiveStroke {
 
     /// Everything the stroke has touched so far.
     pub fn bounds(&self) -> Rect {
-        let bounds = self.renderer.bounds().union(&self.tail);
+        let bounds = self.renderer.bounds();
         self.mirrors.iter().zip(&self.mirror_distinct).filter(|(_, distinct)| **distinct).fold(bounds, |b, (r, _)| b.union(&r.bounds()))
     }
 
@@ -682,10 +686,11 @@ impl LiveStroke {
         self.renderer.wants_time()
     }
 
-    /// Render more points; returns the rectangle that changed. The doc shows the stroke as
-    /// committing it now would: with smoothing, the brush lags behind the pointer and catches up
-    /// when the stroke ends, so that catch-up tail is drawn too (and redrawn on every step), and
-    /// nothing new appears on release.
+    /// Render more points; returns the rectangle that changed. With smoothing the brush lags
+    /// behind the pointer and the doc shows the stroke only as far as the brush got (Photoshop):
+    /// the canvas draws the smoothing string over the gap, and [`finish`](Self::finish) adds the
+    /// catch-up to the last point. (Redrawing that tail on every step cost big brushes half
+    /// their frame.)
     /// Invalid coordinates reject the whole batch without changing the preview.
     pub fn push(&mut self, pts: &[StrokePoint]) -> Result<Rect> {
         check_coords(pts, &self.cmd)?;
@@ -699,55 +704,73 @@ impl LiveStroke {
                     mirror.push(&reflected);
                 }
             }
+            self.composite()
+        })?;
+        self.keep_in_color_table(dmg)
+    }
+
+    /// End the stroke (pen up): draws what finishing adds, the smoothing catch-up, so the doc
+    /// shows exactly what the commit writes. Returns the rectangle that changed. Later calls do
+    /// nothing.
+    pub fn finish(&mut self) -> Result<Rect> {
+        if std::mem::replace(&mut self.finished, true) {
+            return Ok(Rect::EMPTY);
+        }
+        let cmyk = self.cmyk.clone();
+        let dmg = photocraft_color::convert::with_cmyk_space(cmyk.as_ref(), || {
+            self.renderer.finish();
+            self.mirrors.iter_mut().for_each(StrokeRenderer::finish);
+            self.composite()
+        })?;
+        self.keep_in_color_table(dmg)
+    }
+
+    /// The preview shows the pixels the commit keeps (see `stroke_with`).
+    fn keep_in_color_table(&mut self, dmg: Rect) -> Result<Rect> {
+        if let Some(table) = crate::mode_cmds::paint_color_table(&self.doc, &self.params) {
             let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
-            if self.mirror_distinct.iter().any(|d| *d) {
-                // The stroke and its distinct mirrors composite as one stroke, as the commit
-                // merges them; only the tiles that changed are redrawn.
-                let old = self.tail;
-                let passes = 1 + self.mirror_distinct.iter().filter(|d| **d).count();
-                let (mut live, full, mut dmg) = match self.union_live.take() {
-                    Some((live, merged)) => (live, merged != passes, Rect::EMPTY),
-                    None => {
-                        // Leaving the single-pass preview: take its smoothing tail back first.
-                        if !old.is_empty() {
-                            surf.write_region(old, &self.pre.read_region(old));
-                        }
-                        (photocraft_paint::UnionLive::default(), true, old)
-                    }
-                };
-                let mut renderers: Vec<&mut StrokeRenderer> = std::iter::once(&mut self.renderer)
-                    .chain(self.mirrors.iter_mut().zip(&self.mirror_distinct).filter(|(_, d)| **d).map(|(r, _)| r))
-                    .collect();
-                dmg = dmg.union(&StrokeRenderer::composite_union_live(&mut renderers, &mut live, full, &self.pre, surf, self.sel.as_ref(), self.lock));
-                self.tail = old.union(&live.bounds());
-                self.union_live = Some((live, passes));
-                if let Some(colors) = self.colors {
-                    crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
-                }
-                return Ok(dmg);
-            }
-            let mut dmg = Rect::EMPTY;
-            let old = std::mem::replace(&mut self.tail, Rect::EMPTY);
-            if !old.is_empty() {
-                // Back to the stroke without the previous tail.
-                surf.write_region(old, &self.pre.read_region(old));
-                self.renderer.mark_dirty(old);
-                dmg = old;
+            crate::mode_cmds::keep_in_color_table(&table, &self.pre, surf, dmg);
+        }
+        Ok(dmg)
+    }
+
+    /// Draw the coverage tiles that changed since the last call into the doc.
+    fn composite(&mut self) -> Result<Rect> {
+        let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
+        if !self.mirror_distinct.iter().any(|d| *d) {
+            // The brush holds a stroke's first dab back until the next point gives it a
+            // direction. Until the stroke has painted anything, show that dab as finishing would,
+            // so a press paints at once; the next composite takes it back.
+            let mut dmg = std::mem::replace(&mut self.first_dab, Rect::EMPTY);
+            if !dmg.is_empty() {
+                surf.write_region(dmg, &self.pre.read_region(dmg));
+                self.renderer.mark_dirty(dmg);
             }
             dmg = dmg.union(&self.renderer.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false));
-            if let Some(mut tail) = self.renderer.tail_preview() {
-                self.tail = tail.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
-                dmg = dmg.union(&self.tail);
+            if self.renderer.bounds().is_empty()
+                && let Some(mut first) = self.renderer.tail_preview()
+            {
+                self.first_dab = first.composite(&self.pre, surf, self.sel.as_ref(), self.lock, false);
+                dmg = dmg.union(&self.first_dab);
             }
             if let Some(colors) = self.colors {
                 crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
             }
-            Ok(dmg)
-        })?;
-        // The preview shows the pixels the commit keeps (see `stroke_with`).
-        if let Some(table) = crate::mode_cmds::paint_color_table(&self.doc, &self.params) {
-            let (surf, _) = crate::channel_cmds::target_surface(std::sync::Arc::make_mut(&mut self.doc), self.layer, &self.params)?;
-            crate::mode_cmds::keep_in_color_table(&table, &self.pre, surf, dmg);
+            return Ok(dmg);
+        }
+        // The stroke and its distinct mirrors composite as one stroke, as the commit merges
+        // them; only the tiles that changed are redrawn.
+        let passes = 1 + self.mirror_distinct.iter().filter(|d| **d).count();
+        let (mut live, full) = match self.union_live.take() {
+            Some((live, merged)) => (live, merged != passes),
+            None => (photocraft_paint::UnionLive::default(), true),
+        };
+        let mut renderers: Vec<&mut StrokeRenderer> =
+            std::iter::once(&mut self.renderer).chain(self.mirrors.iter_mut().zip(&self.mirror_distinct).filter(|(_, d)| **d).map(|(r, _)| r)).collect();
+        let dmg = StrokeRenderer::composite_union_live(&mut renderers, &mut live, full, &self.pre, surf, self.sel.as_ref(), self.lock);
+        self.union_live = Some((live, passes));
+        if let Some(colors) = self.colors {
+            crate::color_channels::restrict_region(&self.pre, surf, colors, dmg)?;
         }
         Ok(dmg)
     }
