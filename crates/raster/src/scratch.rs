@@ -54,7 +54,8 @@ fn start_idle_release() {
                         // while a release it should have stopped is about to start.
                         let old = {
                             let mut pool = lock();
-                            (retained_bytes() > 0 && IDLE_RELEASE.load(Ordering::Relaxed)).then(|| empty(&mut pool))
+                            // A `give` or `take` since `now` was read means the pool is in use.
+                            (uses() == now && retained_bytes() > 0 && IDLE_RELEASE.load(Ordering::Relaxed)).then(|| empty(&mut pool))
                         };
                         drop(old);
                     }
@@ -262,7 +263,12 @@ pub fn try_take_exact<T: Pooled>(len: usize, fill: T) -> Option<Vec<T>> {
         Some(v) => v,
         None => {
             let mut v = Vec::new();
-            v.try_reserve_exact(len).ok()?;
+            if v.try_reserve_exact(len).is_err() {
+                // The pool may hold up to the miss floor of buffers this request couldn't use:
+                // give them back, then try once more before failing the caller.
+                release();
+                v.try_reserve_exact(len).ok()?;
+            }
             v
         }
     };
