@@ -654,7 +654,7 @@ command: `cargo run --release -p photocraft-engine --example remove_bench`.
 
 ## PSD import pixel memory limits
 
-PSD/PSB imports preflight layer, user-mask, merged-image and extra-channel pixel storage
+PSD/PSB imports preflight layer, user-mask, merged-image, extra-channel and pattern pixel storage
 before merged-image validation or decoding. The conservative estimate sums retained tile
 storage (including padding and negative offsets) and the largest decode/conversion workspace.
 It does not credit uniform-tile sharing or pruning, so some files that could fit after decoding
@@ -674,8 +674,14 @@ in place. Raw and RLE source-backed masks read only the current band (plus the R
 ZIP still inflates one whole plane before handing out bands. No full-mask interleave copy is
 needed. A damaged later band discards all previously written bands of that mask.
 
-The #8593 allowance covers the main pixel paths, not total process
-RSS: encoded input, parser metadata, patterns, smart-filter caches, embedded smart-object
+Pattern block headers are inspected without decoding pixels. The same allowance includes
+all decoded pattern planes, padded tiles, bitmap/indexed expansion and conversion copies,
+including earlier records in a block that later proves malformed. Pattern conversion reserves
+pixel buffers fallibly. Multichannel conversion uses one tile-row buffer and applies alpha/ink
+polarity before writing tiles, without a full-plane float buffer or alpha readback.
+
+The #8593 allowance covers these pixel paths, not total process
+RSS: encoded input, parser metadata, smart-filter caches, embedded smart-object
 contents, generated vector caches, and text preparation are outside it and retain their
 existing limits. Joining these paths to a shared budget and streaming ZIP inflation are follow-up work. An accepted
 estimate does not guarantee allocation success on a memory-constrained host.

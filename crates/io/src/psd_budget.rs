@@ -1,5 +1,5 @@
 //! Conservative preflight for the main PSD pixel paths. This bounds decoded layer/mask/
-//! merged pixels, not parser metadata, patterns or smart-filter caches (separate limits).
+//! merged and pattern pixels, not parser metadata or smart-filter caches (separate limits).
 //!
 //! Reserve the sum of all possible retained tiles and the largest workspace, without credit
 //! for pruning or tile sharing. Reserving before any worker starts makes scheduling irrelevant.
@@ -125,6 +125,25 @@ pub(crate) fn check(file: &PsdFile, limit: u64) -> Result<(), IoError> {
         // Include float expansion/readback and RGBA fallback, even for packed bitmap input.
         let converted = mul(pixels, mul(channels.max(cc + 1), sample * 3 + 12)?)?;
         budget.scratch(converted.checked_add(inflate_scratch(merged, 1)?).ok_or_else(overflow)?);
+    }
+    let mut patterns = photocraft_psd::patterns::PatternBudget::default();
+    for block in file.global_blocks.iter().filter(|b| crate::pattern_map::PATTERN_KEYS.contains(&b.key)) {
+        // Earlier records can decode before a malformed later record discards the block.
+        let items = photocraft_psd::patterns::pattern_block_memory(&block.data, &mut patterns);
+        for p in items {
+            let pixels = mul(u64::from(p.width), u64::from(p.height))?;
+            let sample = u64::from(p.depth.div_ceil(8));
+            let color = if p.mode == 2 { 3 } else { photocraft_psd::patterns::mode_channels(p.mode) as u64 };
+            let alpha = u64::from(p.planes > photocraft_psd::patterns::mode_channels(p.mode));
+            budget.surface(Rect::from_xywh(0, 0, p.width, p.height), color + alpha, sample)?;
+            // The block parser returns all planes together. Count them as retained so
+            // previous converted patterns and later blocks cannot reuse this allowance.
+            budget.retain(p.decoded_bytes)?;
+            // Channel clones/bitmap expansion, indexed RGB expansion and interleave.
+            // Include a source plane during padded channel placement as well.
+            let converted = mul(pixels, mul((p.planes as u64).max(color + alpha) + color + alpha + 3, sample)?)?;
+            budget.scratch(converted.checked_add(p.decoded_bytes).ok_or_else(overflow)?);
+        }
     }
     budget.check(limit)
 }
