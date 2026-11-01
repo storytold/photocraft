@@ -898,6 +898,50 @@ fn dragging_the_mask_thumbnail_onto_a_group_moves_or_copies_it() {
     }
 }
 
+/// #10485: a layer mask's thumbnail dropped on a row that has a layer mask already (with or
+/// without ⌥), or back on its own row, does nothing: no command runs, so no error, no history step,
+/// and both masks stay as they were. Photoshop asks before replacing a mask; the panel doesn't offer
+/// the drop at all.
+#[test]
+fn dropping_a_mask_thumbnail_on_a_masked_row_or_its_own_row_does_nothing() {
+    for (target, copy) in [("Badge", false), ("Badge", true), ("Masked", false), ("Masked", true)] {
+        let (mut s, masked, shape) = session();
+        s.execute("layer.layerMask.hideAll", json!({"layer": shape})).unwrap();
+        s.execute("layer.select", json!({"layer": masked})).unwrap();
+        let mut h = harness(s, 0, 1.0, 290.0);
+        let doc = h.state().session.active().unwrap().doc.clone();
+        let history = h.state().session.active().unwrap().history.entries();
+        let (mask_masked, mask_shape) = (layer(&h, masked).mask, layer(&h, shape).mask);
+        let from = mask_rect(&h, masked, MaskKind::Pixel).center();
+        let to = h.get_by_label(target).rect().center();
+        let modifiers = if copy { Modifiers::ALT } else { Modifiers::NONE };
+        h.hover_at(from);
+        h.event(egui::Event::ModifiersChanged(modifiers));
+        h.run_steps(1);
+        h.event(egui::Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers });
+        h.run_steps(1);
+        // Out of the thumbnail and back onto the target, so the drop on its own row is a drag.
+        let away = from + vec2(0.0, 40.0);
+        for k in 1..=4 {
+            h.event(egui::Event::PointerMoved(from + (away - from) * (k as f32 / 4.0)));
+            h.run_steps(1);
+        }
+        for k in 1..=8 {
+            h.event(egui::Event::PointerMoved(away + (to - away) * (k as f32 / 8.0)));
+            h.run_steps(1);
+        }
+        h.event(egui::Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers });
+        h.run_steps(3);
+        let case = format!("onto {target}, copy: {copy}");
+        assert!(!h.state().ui.status_error, "{case}: no refused command: {}", h.state().ui.status);
+        assert_eq!(layer(&h, masked).mask, mask_masked, "{case}: the dragged mask stays");
+        assert_eq!(layer(&h, shape).mask, mask_shape, "{case}: the target keeps its own mask");
+        let st = h.state().session.active().unwrap();
+        assert!(st.doc == doc, "{case}: the document is unchanged");
+        assert_eq!(st.history.entries(), history, "{case}: no history step");
+    }
+}
+
 /// #10485: a layer mask dragged to the Layers list's bottom edge scrolls the list, as a layer
 /// drag does, so it can be dropped on a layer scrolled out of view. The list stayed put.
 #[test]
