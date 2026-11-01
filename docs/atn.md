@@ -16,10 +16,21 @@ so playback skips them.
 This page has two parts: the events PhotoCraft maps today, and a measured reference for the events it
 does not map yet, with everything needed to implement them without the reference application.
 
-## Supported events (117)
+## Supported events (128)
 
 | Code | String ID | Label | PhotoCraft command(s) |
 |---|---|---|---|
+| `AddT` | addTo | Add to Selection | `select.rect` (add rectangle or ellipse) |
+| `SbtF` | subtractFrom | Subtract from Selection | `select.rect` (subtract rectangle) |
+| `IntW` | interfaceWhite | Intersect with Selection | `select.rect` (intersect rectangle) |
+| `PstI` | pasteInto | Paste Into | `edit.pasteSpecial.pasteInto` |
+| `PstO` | pasteOutside | Paste Outside | `edit.pasteSpecial.pasteOutside` |
+| `Fade` | fade | Fade | `edit.fade` |
+| (string ID only) | linkSelectedLayers | Link Layers | `layer.linkLayers` |
+| `Dstr` | distort | Distribute | `layer.distribute.leftEdges`, `layer.distribute.horizontalCenters`, `layer.distribute.rightEdges`, `layer.distribute.topEdges`, `layer.distribute.verticalCenters`, `layer.distribute.bottomEdges` |
+| `RmvL` | removeLayerMask | Remove Layer Mask (older files) | `layer.layerMask.delete` |
+| `DfnP` | definePattern | Define Pattern | `edit.definePattern` |
+| `MrgL` | (code only) | Merge Layers (older files) | `layer.mergeLayers` |
 | `AdNs` | addNoise | Add Noise | `filter.noise.addNoise` |
 | `Algn` | align | Align | `layer.align.leftEdges`, `layer.align.horizontalCenters`, `layer.align.rightEdges`, `layer.align.topEdges`, `layer.align.verticalCenters`, `layer.align.bottomEdges` |
 | `AppI` | applyImageEvent | Apply Image | `image.applyImage` |
@@ -27,19 +38,19 @@ does not map yet, with everything needed to implement them without the reference
 | (string ID only) | applyLocking | Apply Locking | `layer.lockLayers` |
 | (string ID only) | assignProfile | Assign Profile | `edit.assignProfile` |
 | (string ID only) | autoColor | Auto Color | `image.autoColor` |
-| (string ID only) | BanW | blackAndWhite | `Black & White` |
+| (string ID only) | blackAndWhite | Black & White | `image.adjustments.blackWhite` |
 | `Blr ` | blur | Blur | `filter.blur.blur` |
 | `BlrM` | blurMore | Blur More | `filter.blur.blurMore` |
 | `Brdr` | border | Border | `select.modify.border` |
 | (string ID only) | boxblur | Box Blur | `filter.blur.boxBlur` |
-| `BrgC` | BrgC | brightnessEvent | `Brightness/Contrast` |
+| `BrgC` | brightnessEvent | Brightness/Contrast | `image.adjustments.brightnessContrast` |
 | `CnvS` | canvasSize | Canvas Size | `image.canvasSize` |
-| `ChnM` | ChnM | channelMixer | `Channel Mixer` |
+| `ChnM` | channelMixer | Channel Mixer | `image.adjustments.channelMixer` |
 | (string ID only) | clearEvent | Clear | `select.editInQuickMaskMode`, `history.clear` |
 | `Cls ` | close | Close | `file.close` |
 | (string ID only) | collapseAllGroupsEvent | Collapse All Groups | `layer.setExpanded` |
 | `ClrR` | colorRange | Color Range | `select.colorRange` |
-| `ClrB` | ClrB | colorBalance | `Color Balance` |
+| `ClrB` | colorBalance | Color Balance | `image.adjustments.colorBalance` |
 | `Cntc` | contract | Contract | `select.modify.contract` |
 | `CnvM` | convertMode | Convert Mode | `image.mode.rgb`, `image.mode.grayscale`, `image.mode.cmyk`, `image.mode.lab`, `image.mode.multichannel`, `image.mode.bits8`, `image.mode.bits16`, `image.mode.bits32`, `image.mode.bitmap` |
 | (string ID only) | convertToProfile | Convert to Profile | `edit.convertToProfile` |
@@ -50,7 +61,7 @@ does not map yet, with everything needed to implement them without the reference
 | `GrpL` | groupEvent | Create Clipping Mask | `layer.createClippingMask` |
 | `Crop` | crop | Crop | `image.crop` |
 | `Crst` | crystallize | Crystallize | `filter.pixelate.crystallize` |
-| `Crvs` | Crvs | curves | `Curves` |
+| `Crvs` | curves | Curves | `image.adjustments.curves` |
 | `cut ` | cut | Cut | `edit.cut` |
 | `Dfrg` | defringe | Defringe | `layer.matting.defringe` |
 | `Dlt ` | delete | Delete | `layer.delete`, `edit.clear`, `layer.layerMask.delete`, `layer.smartFilter.deleteFilterMask` |
@@ -66,27 +77,27 @@ does not map yet, with everything needed to implement them without the reference
 | `Exch` | exchange | Exchange | `tools.swapColors` |
 | `Expn` | expand | Expand | `select.modify.expand` |
 | `Expr` | export | Export | `file.export.saveForWebLegacy` |
-| `Exps` | Exps | exposure | `Exposure` |
+| `Exps` | exposure | Exposure | `image.adjustments.exposure` |
 | `Fthr` | feather | Feather | `select.modify.feather` |
 | `Fl  ` | fill | Fill | `edit.fill`, `paint.bucket` |
 | `GEfc` | filterGallery | Filter Gallery | `filter.gallery.spatter` |
 | `FltI` | flattenImage | Flatten Image | `layer.flattenImage` |
 | `Flip` | flip | Flip | `image.imageRotation.flipCanvasHorizontal`, `image.imageRotation.flipCanvasVertical`, `edit.transform.flipHorizontal`, `edit.transform.flipVertical` |
 | `GsnB` | gaussianBlur | Gaussian Blur | `filter.blur.gaussianBlur` |
-| `GdMp` | GdMp | gradientMapEvent | `Gradient Map` |
+| `GdMp` | gradientMapEvent | Gradient Map | `image.adjustments.gradientMap` |
 | `Grow` | grow | Grow | `select.grow` |
 | `Hd  ` | hide | Hide | `layer.hideLayers` |
 | `HghP` | highPass | High Pass | `filter.other.highPass` |
-| `HStr` | HStr | hueSaturation | `Hue/Saturation` |
+| `HStr` | hueSaturation | Hue/Saturation | `image.adjustments.hueSaturation` |
 | (string ID only) | conditional | If | `actions.conditional` |
 | `ImgS` | imageSize | Image Size | `image.imageSize` |
 | `Invs` | inverse | Inverse | `select.inverse` |
-| `Invr` | Invr | invert | `Invert` |
+| `Invr` | invert | Invert | `image.adjustments.invert` |
 | `CpTL` | copyToLayer | Layer Via Copy | `layer.new.layerViaCopy` |
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
 | `Mk  ` | make | Make | `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot` |
-| (string ID only) | animationFramesFromLayers | Make Frames from Layers |  |
+| (string ID only) | animationFramesFromLayers | Make Frames from Layers | Kept, disabled (no frame-animation command) |
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
 | `Mdn ` | median | Median | `filter.noise.median` |
 | `Mrg2` | mergeLayersNew | Merge Layers | `layer.mergeLayers` |
@@ -98,10 +109,10 @@ does not map yet, with everything needed to implement them without the reference
 | `Opn ` | open | Open | `file.openAs` |
 | `past` | paste | Paste | `edit.paste`, `edit.pasteSpecial.pasteInPlace` |
 | (string ID only) | pasteEffects | Paste Layer Style | `layer.layerStyle.pasteLayerStyle` |
-| (string ID only) | PhtF | photoFilter | `Photo Filter` |
+| (string ID only) | photoFilter | Photo Filter | `image.adjustments.photoFilter` |
 | `Plc ` | placeEvent | Place | `file.placeEmbedded`, `file.placeLinked` |
 | `Ply ` | play | Play | `actions.play` |
-| `Pstr` | Pstr | posterize | `Posterize` |
+| `Pstr` | posterize | Posterize | `image.adjustments.posterize` |
 | `Prge` | purge | Purge | `edit.purge.all`, `edit.purge.clipboard`, `edit.purge.histories`, `edit.purge.undo` |
 | `RdlB` | radialBlur | Radial Blur | `filter.blur.radialBlur` |
 | (string ID only) | rasterizeLayer | Rasterize | `layer.rasterize.layer` |
@@ -117,7 +128,7 @@ does not map yet, with everything needed to implement them without the reference
 | (string ID only) | refineSelectionEdge | Select and Mask | `select.refineEdge` |
 | (string ID only) | smartBrushWorkspace | Select and Mask | `select.refineEdge` |
 | (string ID only) | autoCutout | Select Subject | `select.subject` |
-| `SlcC` | SlcC | selectiveColor | `Selective Color` |
+| `SlcC` | selectiveColor | Selective Color | `image.adjustments.selectiveColor` |
 | `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions` |
 | (string ID only) | adaptCorrect | Shadows/Highlights | `image.adjustments.shadowsHighlights` |
 | `Shrp` | sharpen | Sharpen | `filter.sharpen.sharpen` |
@@ -127,16 +138,181 @@ does not map yet, with everything needed to implement them without the reference
 | `Smlr` | similar | Similar | `select.similar` |
 | `SmrB` | smartBlur | Smart Blur | `filter.blur.smartBlur` |
 | `Smth` | smoothness | Smooth | `select.modify.smooth` |
-| `Stop` | stop | Stop | `STOP_MESSAGE` |
+| `Stop` | stop | Stop | `actions.stopMessage` |
 | `Strk` | stroke | Stroke | `edit.stroke` |
 | (string ID only) | surfaceBlur | Surface Blur | `filter.blur.surfaceBlur` |
-| `Thrs` | Thrs | threshold | `Threshold` |
+| `Thrs` | threshold | Threshold | `image.adjustments.threshold` |
 | `Trnf` | transform | Transform | `edit.transform`, `select.transformSelection` |
 | (string ID only) | trim | Trim | `image.trim` |
 | (string ID only) | ungroupLayersEvent | Ungroup Layers | `layer.ungroupLayers` |
 | `UnsM` | unsharpMask | Unsharp Mask | `filter.sharpen.unsharpMask` |
 | (string ID only) | updatePlacedLayer | Update Smart Objects | `layer.smartObjects.updateModifiedContent` |
-| `Vbrn` | Vbrn | vibrance | `Vibrance` |
+| `Vbrn` | vibrance | Vibrance | `image.adjustments.vibrance` |
+
+### Group F: Selection combinations, Paste Into/Outside, Fade, Link, Distribute, Define Pattern and older merge/mask events
+
+Steps recorded in an ordinary editing session. The values below were measured in a document set up for each step (a selection, the clipboard, linked or several selected layers). Align, Copy/Paste Layer Style and Rename are already mapped under their current events and are not repeated here.
+
+#### Add to Selection (rectangle)
+
+- Event: `AddT` / `addTo`
+- PhotoCraft command: `select.rect {"mode":"add"}`
+- Shift-drag with the Rectangular Marquee.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+| Key | String ID | Type | Unit | Example value | Allowed |
+|---|---|---|---|---|---|
+| `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
+| `T   ` | to | object |  | obj 'Rctn' rectangle |  |
+
+Nested values as recorded (example values):
+```
+    'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
+    'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
+    'Btom' bottom : UNITDOUBLE = 90 '#Pxl' pixelsUnit
+    'Rght' right : UNITDOUBLE = 90 '#Pxl' pixelsUnit
+```
+
+#### Add to Selection (ellipse)
+
+- Event: `AddT` / `addTo`
+- PhotoCraft command: `select.rect {"mode":"add","ellipse":true}`
+- Same event with an `Elps` target and anti-aliasing.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+| Key | String ID | Type | Unit | Example value | Allowed |
+|---|---|---|---|---|---|
+| `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
+| `T   ` | to | object |  | obj 'Elps' ellipse |  |
+| `AntA` | antiAlias | boolean |  | true |  |
+
+Nested values as recorded (example values):
+```
+    'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
+    'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
+    'Btom' bottom : UNITDOUBLE = 90 '#Pxl' pixelsUnit
+    'Rght' right : UNITDOUBLE = 90 '#Pxl' pixelsUnit
+```
+
+#### Subtract from Selection
+
+- Event: `SbtF` / `subtractFrom`
+- PhotoCraft command: `select.rect {"mode":"subtract"}`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+| Key | String ID | Type | Unit | Example value | Allowed |
+|---|---|---|---|---|---|
+| `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
+| `T   ` | to | object |  | obj 'Rctn' rectangle |  |
+
+Nested values as recorded (example values):
+```
+    'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
+    'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
+    'Btom' bottom : UNITDOUBLE = 60 '#Pxl' pixelsUnit
+    'Rght' right : UNITDOUBLE = 60 '#Pxl' pixelsUnit
+```
+
+#### Intersect with Selection
+
+- Event: `IntW` / `interfaceWhite`
+- PhotoCraft command: `select.rect {"mode":"intersect"}`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+| Key | String ID | Type | Unit | Example value | Allowed |
+|---|---|---|---|---|---|
+| `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
+| `T   ` | to | object |  | obj 'Rctn' rectangle |  |
+
+Nested values as recorded (example values):
+```
+    'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
+    'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
+    'Btom' bottom : UNITDOUBLE = 120 '#Pxl' pixelsUnit
+    'Rght' right : UNITDOUBLE = 120 '#Pxl' pixelsUnit
+```
+
+#### Paste Into
+
+- Event: `PstI` / `pasteInto`
+- PhotoCraft command: `edit.pasteSpecial.pasteInto`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+| Key | String ID | Type | Unit | Example value | Allowed |
+|---|---|---|---|---|---|
+| `AntA` | antiAlias | enumerated |  | `Anno` antiAliasNone | not measured yet |
+| `As  ` | as | class |  | class 'Pxel' pixel |  |
+
+#### Paste Outside
+
+- Event: `PstO` / `pasteOutside`
+- PhotoCraft command: `edit.pasteSpecial.pasteOutside`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+| Key | String ID | Type | Unit | Example value | Allowed |
+|---|---|---|---|---|---|
+| `AntA` | antiAlias | enumerated |  | `Anno` antiAliasNone | not measured yet |
+| `As  ` | as | class |  | class 'Pxel' pixel |  |
+
+#### Fade
+
+- Event: `Fade` / `fade`
+- PhotoCraft command: `edit.fade`
+- Recorded right after the step it fades.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+| Key | String ID | Type | Unit | Example value | Allowed |
+|---|---|---|---|---|---|
+| `Opct` | opacity | unitdouble | `#Prc` | 50 | 0 .. 100 (out-of-range values are clamped) |
+| `Md  ` | mode | enumerated |  | `Mltp` multiply | not measured yet |
+
+#### Link Layers
+
+- Event: `` / `linkSelectedLayers`
+- PhotoCraft command: `layer.linkLayers`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+| Key | String ID | Type | Unit | Example value | Allowed |
+|---|---|---|---|---|---|
+| `null` | null | reference |  | ref 'Lyr ' layer enum 'Ordn' ordinal.'Trgt' targetEnum |  |
+
+#### Distribute
+
+- Event: `Dstr` / `distort`
+- PhotoCraft command: `layer.distribute.leftEdges (one command per edge)`
+- `Usng` selects the edge or centre; one enum value per Distribute menu item.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+| Key | String ID | Type | Unit | Example value | Allowed |
+|---|---|---|---|---|---|
+| `null` | null | reference |  | ref 'Lyr ' layer enum 'Ordn' ordinal.'Trgt' targetEnum |  |
+| `Usng` | using | enumerated |  | `AdLf` ADSLefts | not measured yet |
+
+#### Remove Layer Mask (older files)
+
+- Event: `RmvL` / `removeLayerMask`
+- PhotoCraft command: `layer.layerMask.delete`
+- The reference application asks "Apply mask before deleting?" when this step plays without the apply choice; see the table for the key it records.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
+
+No parameters: the step carries an empty descriptor.
+
+#### Define Pattern
+
+- Event: `DfnP` / `definePattern`
+- PhotoCraft command: `edit.definePattern`
+
+No parameters: the step carries an empty descriptor.
+
+#### Merge Layers (older files)
+
+- Event: `MrgL` (no string ID)
+- PhotoCraft command: `layer.mergeLayers`
+
+No parameters: the step carries an empty descriptor.
+
+The prepared-document values in this group are required inputs, rather than factory defaults. Unknown settings stay kept steps. Paste uses the current clipboard and selection; Fade uses the preceding edit. Link Layers uses the existing selected-layer toggle. Native exports retain their current Delete Mask and Merge Layers events; imported older events retain their original IDs.
+
 
 ## Event reference: events not mapped yet
 
@@ -1114,168 +1290,6 @@ Nested values as recorded (example values):
     'A   ' a : DOUBLETYPE = 30
     'B   ' b : DOUBLETYPE = 40
 ```
-
-### Group F: Selection combinations, Paste Into/Outside, Fade, Link, Distribute, Define Pattern and older merge/mask events
-
-Steps recorded in an ordinary editing session. The values below were measured in a document set up for each step (a selection, the clipboard, linked or several selected layers). Align, Copy/Paste Layer Style and Rename are already mapped under their current events and are not repeated here.
-
-#### Add to Selection (rectangle)
-
-- Event: `AddT` / `addTo`
-- PhotoCraft command: `select.rect {"mode":"add"}`
-- Shift-drag with the Rectangular Marquee.
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-| Key | String ID | Type | Unit | Example value | Allowed |
-|---|---|---|---|---|---|
-| `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
-| `T   ` | to | object |  | obj 'Rctn' rectangle |  |
-
-Nested values as recorded (example values):
-```
-    'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
-    'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
-    'Btom' bottom : UNITDOUBLE = 90 '#Pxl' pixelsUnit
-    'Rght' right : UNITDOUBLE = 90 '#Pxl' pixelsUnit
-```
-
-#### Add to Selection (ellipse)
-
-- Event: `AddT` / `addTo`
-- PhotoCraft command: `select.rect {"mode":"add","ellipse":true}`
-- Same event with an `Elps` target and anti-aliasing.
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-| Key | String ID | Type | Unit | Example value | Allowed |
-|---|---|---|---|---|---|
-| `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
-| `T   ` | to | object |  | obj 'Elps' ellipse |  |
-| `AntA` | antiAlias | boolean |  | true |  |
-
-Nested values as recorded (example values):
-```
-    'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
-    'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
-    'Btom' bottom : UNITDOUBLE = 90 '#Pxl' pixelsUnit
-    'Rght' right : UNITDOUBLE = 90 '#Pxl' pixelsUnit
-```
-
-#### Subtract from Selection
-
-- Event: `SbtF` / `subtractFrom`
-- PhotoCraft command: `select.rect {"mode":"subtract"}`
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-| Key | String ID | Type | Unit | Example value | Allowed |
-|---|---|---|---|---|---|
-| `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
-| `T   ` | to | object |  | obj 'Rctn' rectangle |  |
-
-Nested values as recorded (example values):
-```
-    'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
-    'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
-    'Btom' bottom : UNITDOUBLE = 60 '#Pxl' pixelsUnit
-    'Rght' right : UNITDOUBLE = 60 '#Pxl' pixelsUnit
-```
-
-#### Intersect with Selection
-
-- Event: `IntW` / `interfaceWhite`
-- PhotoCraft command: `select.rect {"mode":"intersect"}`
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-| Key | String ID | Type | Unit | Example value | Allowed |
-|---|---|---|---|---|---|
-| `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
-| `T   ` | to | object |  | obj 'Rctn' rectangle |  |
-
-Nested values as recorded (example values):
-```
-    'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
-    'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
-    'Btom' bottom : UNITDOUBLE = 120 '#Pxl' pixelsUnit
-    'Rght' right : UNITDOUBLE = 120 '#Pxl' pixelsUnit
-```
-
-#### Paste Into
-
-- Event: `PstI` / `pasteInto`
-- PhotoCraft command: `edit.pasteSpecial.pasteInto`
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-| Key | String ID | Type | Unit | Example value | Allowed |
-|---|---|---|---|---|---|
-| `AntA` | antiAlias | enumerated |  | `Anno` antiAliasNone | not measured yet |
-| `As  ` | as | class |  | class 'Pxel' pixel |  |
-
-#### Paste Outside
-
-- Event: `PstO` / `pasteOutside`
-- PhotoCraft command: `edit.pasteSpecial.pasteOutside`
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-| Key | String ID | Type | Unit | Example value | Allowed |
-|---|---|---|---|---|---|
-| `AntA` | antiAlias | enumerated |  | `Anno` antiAliasNone | not measured yet |
-| `As  ` | as | class |  | class 'Pxel' pixel |  |
-
-#### Fade
-
-- Event: `Fade` / `fade`
-- PhotoCraft command: `edit.fade`
-- Recorded right after the step it fades.
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-| Key | String ID | Type | Unit | Example value | Allowed |
-|---|---|---|---|---|---|
-| `Opct` | opacity | unitdouble | `#Prc` | 50 | 0 .. 100 (out-of-range values are clamped) |
-| `Md  ` | mode | enumerated |  | `Mltp` multiply | not measured yet |
-
-#### Link Layers
-
-- Event: `` / `linkSelectedLayers`
-- PhotoCraft command: `layer.linkLayers`
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-| Key | String ID | Type | Unit | Example value | Allowed |
-|---|---|---|---|---|---|
-| `null` | null | reference |  | ref 'Lyr ' layer enum 'Ordn' ordinal.'Trgt' targetEnum |  |
-
-#### Distribute
-
-- Event: `Dstr` / `distort`
-- PhotoCraft command: `layer.distribute.leftEdges (one command per edge)`
-- `Usng` selects the edge or centre; one enum value per Distribute menu item.
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-| Key | String ID | Type | Unit | Example value | Allowed |
-|---|---|---|---|---|---|
-| `null` | null | reference |  | ref 'Lyr ' layer enum 'Ordn' ordinal.'Trgt' targetEnum |  |
-| `Usng` | using | enumerated |  | `AdLf` ADSLefts | not measured yet |
-
-#### Remove Layer Mask (older files)
-
-- Event: `RmvL` / `removeLayerMask`
-- PhotoCraft command: `layer.layerMask.delete`
-- The reference application asks "Apply mask before deleting?" when this step plays without the apply choice; see the table for the key it records.
-- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
-
-No parameters: the step carries an empty descriptor.
-
-#### Define Pattern
-
-- Event: `DfnP` / `definePattern`
-- PhotoCraft command: `edit.definePattern`
-
-No parameters: the step carries an empty descriptor.
-
-#### Merge Layers (older files)
-
-- Event: `MrgL` (no string ID)
-- PhotoCraft command: `layer.mergeLayers`
-
-No parameters: the step carries an empty descriptor.
 
 ### Group G: Split Channels, Merge Spot Channel, Trap and Match Color
 

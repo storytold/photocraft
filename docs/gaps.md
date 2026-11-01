@@ -111,6 +111,7 @@ what an agent can't finish alone.
 - **Estimate:** 120–200 h.
 
 ### G11. Actions and scripting
+- **2026-10-31 evidence (#10608):** Group F selection, paste, Fade, Link, Distribute, pattern and older mask/merge events load, play and save through existing commands. Unsupported settings remain kept; AUTO-219-2 remains partial.
 - **2026-10-21 evidence (#8304):** Save Actions expands compound layer-property edits into
   separate Photoshop Set events, with rename last so named layer references remain valid.
   Exported descriptors and native playback at RGB 8/16/32-bit have [regression coverage](../crates/engine/src/atn_cmds/layer_props_tests.rs);
@@ -423,6 +424,7 @@ what an agent can't finish alone.
 ## Revision history
 
 | Date | Change | Summary |
+| 2026-10-31 | minor | G11: Group F action steps map to existing commands; 128 supported event IDs; action-file support remains partial; estimates unchanged |
 |---|---|---|
 | 2026-10-27 | minor | Smooth/Feather command reads and replacement use selection bounds plus blur reach; full-canvas reference and release comparisons extended; percentages and scorecard budgets unchanged |
 | 2026-10-27 | minor | G9: 12 of 181 preferences do nothing, the scorecard's count with integration batch 9 (#9775) on main; no estimate changed |
