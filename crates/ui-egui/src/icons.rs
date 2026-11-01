@@ -114,11 +114,23 @@ pub fn paint_ltr(ui: &egui::Ui, rect: Rect, name: &str, size: f32, tint: Color32
     image_raw(name, size, tint).paint_at(ui, r);
 }
 
+/// The cursor icon's box: `hot` (a fraction of the box) sits on the pointer `p`. A cursor
+/// follower is physical, so the box is the same in both directions.
+fn cursor_rect(p: egui::Pos2, hot: Vec2, size: f32) -> Rect {
+    Rect::from_min_size(p - hot * size, Vec2::splat(size))
+}
+
+/// The badge's box: a `size`-sized icon centred below-right of the pointer `p` (physical:
+/// identical in both directions).
+fn badge_rect(p: egui::Pos2, size: f32) -> Rect {
+    Rect::from_center_size(p + egui::vec2(20.0, 19.0), Vec2::splat(size))
+}
+
 /// An icon as the pointer, above every window: `name` with its hotspot `hot` (a fraction of the
 /// icon box) on `p`, white with a dark outline so it reads on any image. The caller hides the OS
 /// cursor (`CursorIcon::None`).
 pub fn cursor(ctx: &egui::Context, name: &str, p: egui::Pos2, hot: Vec2, size: f32) {
-    let rect = Rect::from_min_size(p - hot * size, Vec2::splat(size));
+    let rect = cursor_rect(p, hot, size);
     let area = egui::Area::new(egui::Id::unique("pc-icon-cursor")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
     area.show(ctx, |ui| {
         let outline = image_raw(name, size, Color32::from_black_alpha(200));
@@ -143,7 +155,7 @@ pub fn cursor_copy_badge(ctx: &egui::Context, p: egui::Pos2) {
 
 fn badge(ctx: &egui::Context, name: &str, p: egui::Pos2, doubled: bool) {
     const SIZE: f32 = 12.0;
-    let rect = Rect::from_center_size(p + egui::vec2(20.0, 19.0), Vec2::splat(SIZE));
+    let rect = badge_rect(p, SIZE);
     let area = egui::Area::new(egui::Id::unique("pc-cursor-badge")).order(egui::Order::Tooltip).fixed_pos(rect.min).constrain(false).interactable(false);
     area.show(ctx, |ui| {
         let outline = image_raw(name, SIZE, Color32::from_black_alpha(220));
@@ -598,6 +610,26 @@ mod tests {
             // the strict inequality also fails for a symmetric glyph, keeping the mirror proof above non-vacuous.
             assert!(half(&left, 0..s / 2) < half(&left, s / 2..s), "chevron-left must hold more ink on its open side at {size}px");
             assert!(half(&right, s / 2..s) < half(&right, 0..s / 2), "chevron-right must hold more ink on its open side at {size}px");
+        }
+    }
+
+    /// The cursor and badge Areas are physical pointer followers: their fixed_pos rect is the
+    /// same under a right-to-left UI as under a left-to-right one.
+    #[test]
+    fn cursor_areas_are_physical_in_both_directions() {
+        let p = egui::pos2(500.0, 300.0);
+        let hot = Vec2::new(0.1, 0.9);
+        let mut ltr: Option<(Rect, Rect)> = None;
+        for dir in [crate::direction::Dir::Ltr, crate::direction::Dir::Rtl] {
+            let _g = crate::direction::direction_scope(dir);
+            let cursor = cursor_rect(p, hot, 24.0);
+            assert_eq!(cursor.min, p - hot * 24.0, "{dir:?}: hotspot stays on the pointer");
+            let badge = badge_rect(p, 12.0);
+            assert_eq!(badge.center(), p + egui::vec2(20.0, 19.0), "{dir:?}: badge stays below-right of the pointer");
+            match ltr {
+                None => ltr = Some((cursor, badge)),
+                Some(prev) => assert_eq!(prev, (cursor, badge), "{dir:?}: followers do not mirror"),
+            }
         }
     }
 }
