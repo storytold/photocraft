@@ -133,6 +133,7 @@ fn example_invert_matches_builtin_invert_and_round_trips_the_registry() {
     std::fs::remove_dir_all(&dir).ok();
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[test]
 fn installing_a_file_that_is_not_wasm_names_what_it_is() {
     // #10362: the Plug-ins > Install Plug-in dialog pointed at an old Photoshop plug-in (.8bt, a
