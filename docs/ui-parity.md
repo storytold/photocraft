@@ -229,7 +229,10 @@ for partial sets; [scope, tests and visual evidence](multi-channel-editing.md).
 30 of 35 Window-menu panels exist (measured). Missing: Libraries, Comments, Contextual Task Bar,
 Discover, Generative variations. Dock tabs: Layers, Channels, Paths, History, Actions, Layer
 Comps, Properties, Adjustments, Navigator, Histogram, Info, Color, Swatches, Character,
-Paragraph; the rest open as in-app floating windows.
+Paragraph, Brushes. Brush Settings, Styles, Shapes, Tool Presets, Clone Source, Character Styles,
+Paragraph Styles, Glyphs, Notes and Modifier Keys float when first opened and then dock, group,
+split and resize like the dock tabs (#4818); Timeline and Measurement Log open as in-app floating
+windows.
 
 | Behaviour | Status | Evidence |
 |---|---|---|
@@ -266,6 +269,7 @@ Paragraph; the rest open as in-app floating windows.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | minor | Brush Settings (split from Brushes), Styles, Shapes, Tool Presets, Clone Source, Character Styles, Paragraph Styles (split apart), Glyphs, Notes and Modifier Keys are dock panels: they float when first opened, then dock, group, split, resize and reopen where they were closed (#4818) |
 | 2026-10-29 | minor | Paragraph box overflow: text a box can't hold enlarges the box's lower-right handle and shows a black + in it, as the reference application does (#8311); agents read `typeBoxOverflow` in `ui.inspect`. Not a new command, so no percentage changed |
 | 2026-10-28 | minor | The text and gradient stop Color Pickers preview the picked colour on the canvas before OK, as Photoshop's do (#5530); no percentage changed |
 | 2026-10-27 | minor | Shape Fill/Stroke popover as Photoshop's (paint types, Color Picker button, Recently Used Colors, swatch folders, with the Gradient tab) and every colour swatch opens the full Color Picker; rows added (partial, done); Recently Used Colors is a new preference, so 12 of 183 do nothing; no percentage changed; 2026-10-30: the swatches preview live while their Color Picker is open |

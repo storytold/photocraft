@@ -756,6 +756,10 @@ impl BrushSet {
     fn parse(app: &PhotocraftApp, p: &Value) -> std::result::Result<Self, String> {
         let section = uint_field(p, "brushSection")?;
         let tab = uint_field(p, "brushTab")?;
+        // The old Brushes tab opens the Brushes panel (`apply`), which an invalid saved layout refuses.
+        if tab.is_some_and(|i| i >= 1) && app.ui.docking.as_ref().is_some_and(|w| !crate::panel_docking::valid_workspace(w)) {
+            return Err("invalid panel layout; reset the workspace first".into());
+        }
         let brushes_view = brushes_view_param(p)?;
         // The three parts of the picker's cards. At least one stays on (a rejected call
         // leaves them all alone).
@@ -780,8 +784,9 @@ impl BrushSet {
         if let Some(i) = self.section {
             app.ui.brush_section = (i as usize).min(crate::brush_panel::SECTIONS.len() - 1);
         }
-        if let Some(i) = self.tab {
-            app.ui.brush_tab = (i as usize).min(1);
+        // Brush Settings no longer has a Brushes tab; older scripts' tab 1 shows the panel.
+        if self.tab.is_some_and(|i| i >= 1) {
+            app.run("window.panel.activate", json!({"panel": "brushes"})).map_err(|e| e.to_string())?;
         }
         if let Some(v) = self.brushes_view {
             app.ui.brushes_panel.view = v;

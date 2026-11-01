@@ -445,11 +445,9 @@ pub struct UiState {
     /// The tonal range dragged across the Histogram panel's graph (its statistics), `[from, to]`.
     #[serde(default, skip_deserializing)]
     pub histogram_range: Option<[u8; 2]>,
-    /// Brush Settings: selected section (0 = Brush Tip Shape) and tab (0 settings, 1 Brushes).
+    /// Brush Settings: selected section (0 = Brush Tip Shape).
     #[serde(default)]
     pub brush_section: usize,
-    #[serde(default)]
-    pub brush_tab: usize,
     /// Brushes panel: collapsed groups and the search filter.
     #[serde(default)]
     pub brushes_panel: crate::brush_panel::BrushesPanelState,
@@ -600,7 +598,6 @@ impl Default for UiState {
             color_panel: Default::default(),
             color_panel_synced: None,
             brush_section: 0,
-            brush_tab: 0,
             brushes_panel: Default::default(),
             selection_mode: 0,
             tool_options: ToolOptions::default(),

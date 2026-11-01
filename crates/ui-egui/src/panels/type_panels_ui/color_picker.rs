@@ -63,7 +63,8 @@ fn validate(app: &PhotocraftApp, t: &Target) -> Result<(), String> {
         return Err("text style color document changed while the picker was open".into());
     }
     let panels = &app.ui.type_panels;
-    if !panels.styles || panels.styles_tab != usize::from(t.kind.paragraph()) || panels.options != Some((t.kind.paragraph(), t.id)) {
+    let open = if t.kind.paragraph() { panels.paragraph_styles } else { panels.character_styles };
+    if !open || panels.options != Some((t.kind.paragraph(), t.id)) {
         return Err("text Style Options closed or changed".into());
     }
     color(&st.doc, t.kind, t.id)?;
@@ -85,8 +86,7 @@ pub(crate) fn open(app: &mut PhotocraftApp, kind: Kind, id: u32) -> Result<u64, 
     let mut fields = color_picker_ui::fields_with_web(app, "dialog", "Color Picker (Text Color)", rgb);
     fields.insert(TARGET.into(), serde_json::to_value(t).map_err(|e| e.to_string())?);
     let panels = &mut app.ui.type_panels;
-    panels.styles = true;
-    panels.styles_tab = usize::from(kind.paragraph());
+    *if kind.paragraph() { &mut panels.paragraph_styles } else { &mut panels.character_styles } = true;
     panels.options = Some((kind.paragraph(), id));
     Ok(app.ui.open_dialog(DialogKind::Command, fields))
 }

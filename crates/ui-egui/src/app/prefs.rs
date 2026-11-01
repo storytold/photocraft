@@ -39,6 +39,7 @@ impl PhotocraftApp {
             self.ui.dock_tabs.color = tab;
         }
         self.ui.theme = kind;
+        panel_docking::reconcile(self);
         panel_docking::sync_visibility(self);
         theme::apply(ctx, kind);
         self.checker = None;
