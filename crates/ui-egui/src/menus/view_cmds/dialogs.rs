@@ -198,7 +198,7 @@ fn form_editor(ui: &mut egui::Ui, f: &mut Map<String, Value>, k: &str, choices: 
     if k == "quality" && f.get("__command").and_then(Value::as_str) == Some("file.automate.batch") {
         let mut custom = v.as_f64().is_some();
         let mut quality = v.as_f64().or_else(|| f.get("__batchQuality").and_then(Value::as_f64)).unwrap_or(8.0).clamp(0.0, 12.0) as f32;
-        ui.horizontal(|ui| {
+        ui.with_layout(crate::direction::row(), |ui| {
             crate::widgets::checkbox(ui, &mut custom, tl!("Custom"));
             ui.add_enabled_ui(custom, |ui| crate::widgets::value_field(ui, &mut quality, 0.0..=12.0, "", 74.0).accessible_name(tl!("Quality")));
         });
@@ -224,7 +224,7 @@ fn form_editor(ui: &mut egui::Ui, f: &mut Map<String, Value>, k: &str, choices: 
                     crate::widgets::dropdown(ui, &format!("form-{k}"), &label(k), &mut s, &refs, 200.0);
                 }
                 None => {
-                    ui.horizontal(|ui| {
+                    ui.with_layout(crate::direction::row(), |ui| {
                         let mut layouter = crate::widgets::rtl_singleline_layouter(egui::FontId::default());
                         ui.add(crate::widgets::rtl_singleline(&mut s, &mut layouter).desired_width(260.0)).accessible_name(label(k));
                         // A folder field gets the system folder picker (#7942, #9357).
@@ -743,6 +743,32 @@ mod rtl_tests {
         crate::menus::invoke(h.state_mut(), &ctx, "file.automate.batch", json!({})).unwrap();
         h.run_steps(3);
         h
+    }
+
+    /// The form editor's inner rows (the Batch `Custom` quality row, the text-field row) read in
+    /// reading order: the first item hugs the row's reading-start edge, left in LTR, right in RTL.
+    #[test]
+    fn editor_inner_rows_mirror_item_order_in_rtl() {
+        fn items(dir: crate::direction::Dir) -> (egui::Rect, egui::Rect) {
+            let _scope = crate::direction::direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.allocate_ui_with_layout(egui::vec2(400.0, 200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.with_layout(crate::direction::row(), |ui| {
+                        let a = ui.label("A");
+                        let b = ui.label("B");
+                        (a.rect, b.rect)
+                    })
+                    .inner
+                })
+                .inner
+            })
+            .inner
+        }
+        let (ltr_a, ltr_b) = items(crate::direction::Dir::Ltr);
+        let (rtl_a, rtl_b) = items(crate::direction::Dir::Rtl);
+        assert!(ltr_a.left() < ltr_b.left(), "LTR: A leads on the left: {ltr_a:?} then {ltr_b:?}");
+        assert!(rtl_b.left() < rtl_a.left(), "RTL: A leads on the right: {rtl_a:?} then {rtl_b:?}");
     }
 
     /// The Batch dialog's `quality` row — the `Custom` checkbox — draws even though `quality`
