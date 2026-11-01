@@ -770,3 +770,19 @@ fn camera_raw_filters_an_alpha_channel_targeted_in_the_channels_panel() {
     assert_ne!(alpha(&s), before, "the alpha channel is filtered");
 }
 
+/// FredApps on #10469: once the composite is targeted again after Liquifying the layer mask,
+/// Liquify deforms the layer's pixels and leaves the mask as it was.
+#[test]
+fn liquify_deforms_the_pixels_again_once_the_composite_is_targeted() {
+    let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+    let mut s = session_with_mask();
+    s.execute("channel.target", json!({"channel": "mask"})).unwrap();
+    let mask = active_mask(&s);
+    s.execute(LIQUIFY, stroke.clone()).unwrap();
+    assert_ne!(active_mask(&s), mask, "the targeted mask is deformed");
+    s.execute("channel.target", json!({"channel": "composite"})).unwrap();
+    let (pixels, mask) = (active_surface(&s), active_mask(&s));
+    s.execute(LIQUIFY, stroke).unwrap();
+    assert_ne!(active_surface(&s), pixels, "the layer's pixels are deformed");
+    assert_eq!(active_mask(&s), mask, "the mask is untouched");
+}
