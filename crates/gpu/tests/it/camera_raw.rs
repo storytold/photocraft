@@ -57,10 +57,12 @@ fn gpu() -> Option<Gpu> {
 }
 
 /// The Camera Raw shaders parse and validate (naga, as wgpu does before any driver sees them),
-/// with no adapter: the GPU tests below skip on runners without one.
+/// with no adapter: the GPU tests below skip on runners without one. The filters are compiled
+/// appended to the tone shader, as the pass builds them.
 #[test]
 fn the_shaders_validate_without_a_gpu() {
-    for src in [photocraft_gpu::CAMERA_RAW_SHADER, photocraft_gpu::CAMERA_RAW_TONE_SHADER] {
+    let tone = format!("{}\n{}", photocraft_gpu::CAMERA_RAW_TONE_SHADER, photocraft_gpu::CAMERA_RAW_FILTERS_SHADER);
+    for src in [photocraft_gpu::CAMERA_RAW_SHADER, tone.as_str()] {
         let module = wgpu::naga::front::wgsl::parse_str(src).unwrap_or_else(|e| panic!("{}", e.emit_to_string(src)));
         wgpu::naga::valid::Validator::new(wgpu::naga::valid::ValidationFlags::all(), wgpu::naga::valid::Capabilities::empty())
             .validate(&module)
