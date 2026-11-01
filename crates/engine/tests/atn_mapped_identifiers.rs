@@ -420,6 +420,12 @@ fn group_transparency_sources_fail_without_changing_selection() {
         assert_eq!(s.active().unwrap().revision, revision);
         assert_eq!(s.active().unwrap().history.past_len(), history);
         assert_eq!(saved(&action).descriptor, Some(descriptor));
+
+        // The group's explicit mask remains a valid source.
+        s.execute("layer.layerMask.revealSelection", json!({"layer":group.0})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        s.execute("select.loadSelection", json!({"channel":"mask","layer":params["layer"]})).unwrap();
+        assert_eq!(s.active().unwrap().doc.selection.as_ref().unwrap().read_region(Rect::from_xywh(0, 0, 2, 1)), vec![1.0, 0.0]);
     }
 }
 
