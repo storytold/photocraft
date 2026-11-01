@@ -219,35 +219,62 @@ fn malformed_and_oversized_modules_are_refused() {
     assert!(matches!(e, Error::Abi(_)), "{e}");
 }
 
+/// The message `Plugin::load` gives a file that is not WebAssembly and not recognised (#10362).
+const NOT_WASM: &str = "not a valid plug-in module: not a WebAssembly binary (missing \\0asm header)";
+
+/// Loads `bytes`, which must be refused as a module, and returns the message.
+fn refusal(bytes: &[u8]) -> String {
+    let Err(e) = Plugin::load(bytes, Limits::default()) else { panic!("{bytes:?} was accepted") };
+    assert!(matches!(e, Error::Module(_)), "{e}");
+    e.to_string()
+}
+
+/// The message names the format (`format`), says plug-ins are WebAssembly, and stays on one line
+/// (`Plugin::load` has only bytes, so the hint cannot carry a path).
+fn assert_names(bytes: &[u8], format: &str) {
+    let m = refusal(bytes);
+    assert!(m.starts_with(NOT_WASM), "{m}");
+    assert!(m.contains(format), "{m}");
+    assert!(m.contains("PhotoCraft plug-ins are WebAssembly modules"), "{m}");
+    assert!(!m.contains('\n'), "{m}");
+}
+
 #[test]
-fn a_file_that_is_not_wasm_is_named_by_what_it_actually_is() {
-    // #10362: Plug-ins > Install Plug-in with a Photoshop plug-in (.8bt) said only "not a
-    // WebAssembly binary", which tells the person holding that file nothing. The magic number adds
-    // what the file looks like; an unrecognised header keeps the old message byte for byte.
-    const OLD: &str = "not a valid plug-in module: not a WebAssembly binary (missing \\0asm header)";
-    for (name, bytes, format) in [
-        ("windows dll or .8bt", &b"MZ\x90\x00\x03\0"[..], "Windows"),
-        ("linux .so", &[0x7f, b'E', b'L', b'F', 2, 1, 1][..], "Linux"),
-        ("macos mach-o 32", &[0xce, 0xfa, 0xed, 0xfe, 7, 1][..], "macOS"),
-        ("macos mach-o 64", &[0xcf, 0xfa, 0xed, 0xfe, 7, 1][..], "macOS"),
-        ("macos fat mach-o", &[0xca, 0xfe, 0xba, 0xbe, 0, 0][..], "macOS"),
-        ("macos fat reversed", &[0xbe, 0xba, 0xfe, 0xca, 0, 0][..], "macOS"),
-        ("zip archive", &b"PK\x03\x04\x14\0"[..], "zip"),
-        ("empty zip archive", &b"PK\x05\x06\0\0"[..], "zip"),
-    ] {
-        let Err(e) = Plugin::load(bytes, Limits::default()) else { panic!("{name} was accepted") };
-        assert!(matches!(e, Error::Module(_)), "{name}: {e}");
-        let m = e.to_string();
-        assert!(m.contains("WebAssembly"), "{name}: {m}");
-        assert!(m.contains(format), "{name}: {m}");
-        assert!(!m.contains('\n'), "{name}: {m}");
-        eprintln!("{name}: {m}");
+fn a_pe_coff_file_is_named_as_a_windows_binary() {
+    // #10362: an old Photoshop plug-in (.8bt) is a native Windows module.
+    assert_names(b"MZ\x90\x00\x03\0", "Windows");
+    assert!(refusal(b"MZ").contains("8bf"));
+}
+
+#[test]
+fn an_elf_file_is_named_as_a_linux_library() {
+    assert_names(&[0x7f, b'E', b'L', b'F', 2, 1, 1], "Linux");
+}
+
+#[test]
+fn a_mach_o_file_is_named_as_a_macos_binary() {
+    for head in [[0xce, 0xfa, 0xed, 0xfe], [0xcf, 0xfa, 0xed, 0xfe], [0xca, 0xfe, 0xba, 0xbe], [0xbe, 0xba, 0xfe, 0xca]] {
+        assert_names(&[&head[..], &[7, 1][..]].concat(), "macOS");
     }
-    // Nothing recognised: today's message, exactly, so anything keyed on it keeps working.
-    for bytes in [&b"junkjunk"[..], &b"x"[..], &b""[..]] {
-        let Err(e) = Plugin::load(bytes, Limits::default()) else { panic!("{bytes:?} was accepted") };
-        assert_eq!(e.to_string(), OLD);
+}
+
+#[test]
+fn a_zip_file_is_named_as_a_zip_archive() {
+    assert_names(b"PK\x03\x04\x14\0", "zip");
+    assert_names(b"PK\x05\x06\0\0", "zip");
+}
+
+#[test]
+fn an_empty_or_unrecognised_file_keeps_the_plain_message() {
+    // Nothing recognised (including a signature cut short): today's message, exactly.
+    for bytes in [&b""[..], &b"x"[..], &b"junkjunk"[..], &[0x7f, b'E'][..], &b"PK"[..]] {
+        assert_eq!(refusal(bytes), NOT_WASM, "{bytes:?}");
     }
+}
+
+#[test]
+fn a_valid_wasm_module_still_loads_unchanged() {
+    assert!(Plugin::load(INVERT, Limits::default()).is_ok());
 }
 
 #[test]

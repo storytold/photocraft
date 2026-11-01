@@ -138,15 +138,15 @@ fn installing_a_file_that_is_not_wasm_names_what_it_is() {
     // #10362: the Plug-ins > Install Plug-in dialog pointed at an old Photoshop plug-in (.8bt, a
     // native Windows module) failed with a message that said nothing about that file. `path` goes
     // through `registry::load_file`, so this is the exact user path.
-    let dir = std::env::temp_dir().join(format!("pc-plugin-10362-{}", std::process::id()));
-    std::fs::create_dir_all(&dir).unwrap();
-    let path = dir.join("Old Plug-in.8bt");
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("Old Plug-in.8bt");
     std::fs::write(&path, b"MZ\x90\x00\x03\0").unwrap();
     let e = Session::new().execute("plugin.install", json!({"path": path.to_str().unwrap()})).unwrap_err();
     let msg = e.to_string();
     assert!(msg.contains("Windows") && msg.contains("8bf"), "{msg}");
     assert!(msg.contains("WebAssembly"), "{msg}");
-    std::fs::remove_dir_all(&dir).ok();
+    // The hint is static text: no path the person did not choose is added to the message.
+    assert!(!msg.contains(dir.path().to_str().unwrap()), "{msg}");
 }
 
 #[test]
