@@ -10,9 +10,10 @@ use super::{D, Descriptor, Value, json};
 const CENTER: f64 = 0.40000000596046;
 const LENSES: &[(&str, &str)] = &[("Zm", "zoom"), ("Nkn", "prime35"), ("Nkn1", "prime105"), ("PnVs", "moviePrime")];
 
-/// Only measured descriptor keys are translated; other settings remain a kept step.
+/// Translate only unique measured keys so later values cannot be lost on save.
 fn keys(d: &Descriptor, allowed: &[&str]) -> bool {
     d.items.iter().all(|(key, _)| allowed.iter().any(|name| key.is(name)))
+        && allowed.iter().all(|name| d.items.iter().filter(|(key, _)| key.is(name)).count() <= 1)
 }
 
 /// Read a recorded integer without accepting another descriptor type as its default.

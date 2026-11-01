@@ -142,6 +142,43 @@ fn unsupported_render_descriptors_keep_their_bytes_and_flags() {
     assert!(export_item("filter.render.lensFlare", &json!({"lens": "unknown"}), "S").is_none());
 }
 
+/// Duplicate keys must remain a kept step, rather than losing later values on save.
+#[test]
+fn duplicate_render_keys_keep_their_bytes_and_flags() {
+    let mut cases = Vec::new();
+    for key in ["Vrnc", "Strg", "RndS"] {
+        cases.push(("Fbrs", key, fibers(16, 4, 123).with(key, D::Integer(99))));
+    }
+    for key in ["Brgh", "FlrC", "Lns "] {
+        let descriptor = flare(100, [0.4; 2], "Zm");
+        let duplicate = descriptor.get(key).unwrap().clone();
+        cases.push(("LnsF", key, descriptor.with(key, duplicate)));
+    }
+    for key in ["Hrzn", "Vrtc"] {
+        let point = desc("Pnt ").with("Hrzn", D::Double(0.4)).with("Vrtc", D::Double(0.4)).with(key, D::Double(0.8));
+        cases.push(("LnsF", key, desc("null").with("FlrC", D::Descriptor(point))));
+    }
+    for (event, key, descriptor) in cases {
+        let mut original = atn::parse(&file(AtnEvent::Code(event.as_bytes().try_into().unwrap()), descriptor)).unwrap();
+        original.actions[0].items[0].enabled = false;
+        original.actions[0].items[0].with_dialog = true;
+        original.actions[0].items[0].dialog_options = 2;
+        let bytes = atn::write(&original).unwrap();
+        let mut s = Session::new();
+        let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
+        assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{event}/{key}");
+        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
+        let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
+        assert_eq!(saved["skipped"], json!([]));
+        let back = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
+        assert_eq!(back.actions[0].items, original.actions[0].items, "{event}/{key}");
+        // Keep the original set/action metadata to compare the encoded step bytes.
+        let mut compared = original.clone();
+        compared.actions[0].items = back.actions[0].items.clone();
+        assert_eq!(atn::write(&compared).unwrap(), bytes, "{event}/{key}");
+    }
+}
+
 /// Imported playback uses current tool colors and the same filter path as direct commands.
 #[test]
 fn render_actions_match_direct_filters_and_undo() {

@@ -27,19 +27,19 @@ does not map yet, with everything needed to implement them without the reference
 | (string ID only) | applyLocking | Apply Locking | `layer.lockLayers` |
 | (string ID only) | assignProfile | Assign Profile | `edit.assignProfile` |
 | (string ID only) | autoColor | Auto Color | `image.autoColor` |
-| (string ID only) | BanW | blackAndWhite | `Black & White` |
+| (string ID only) | blackAndWhite | Black & White | `image.adjustments.blackWhite` |
 | `Blr ` | blur | Blur | `filter.blur.blur` |
 | `BlrM` | blurMore | Blur More | `filter.blur.blurMore` |
 | `Brdr` | border | Border | `select.modify.border` |
 | (string ID only) | boxblur | Box Blur | `filter.blur.boxBlur` |
-| `BrgC` | BrgC | brightnessEvent | `Brightness/Contrast` |
+| `BrgC` | brightnessEvent | Brightness/Contrast | `image.adjustments.brightnessContrast` |
 | `CnvS` | canvasSize | Canvas Size | `image.canvasSize` |
-| `ChnM` | ChnM | channelMixer | `Channel Mixer` |
+| `ChnM` | channelMixer | Channel Mixer | `image.adjustments.channelMixer` |
 | (string ID only) | clearEvent | Clear | `select.editInQuickMaskMode`, `history.clear` |
 | `Cls ` | close | Close | `file.close` |
 | (string ID only) | collapseAllGroupsEvent | Collapse All Groups | `layer.setExpanded` |
 | `ClrR` | colorRange | Color Range | `select.colorRange` |
-| `ClrB` | ClrB | colorBalance | `Color Balance` |
+| `ClrB` | colorBalance | Color Balance | `image.adjustments.colorBalance` |
 | `Cntc` | contract | Contract | `select.modify.contract` |
 | `CnvM` | convertMode | Convert Mode | `image.mode.rgb`, `image.mode.grayscale`, `image.mode.cmyk`, `image.mode.lab`, `image.mode.multichannel`, `image.mode.bits8`, `image.mode.bits16`, `image.mode.bits32`, `image.mode.bitmap` |
 | (string ID only) | convertToProfile | Convert to Profile | `edit.convertToProfile` |
@@ -50,7 +50,7 @@ does not map yet, with everything needed to implement them without the reference
 | `GrpL` | groupEvent | Create Clipping Mask | `layer.createClippingMask` |
 | `Crop` | crop | Crop | `image.crop` |
 | `Crst` | crystallize | Crystallize | `filter.pixelate.crystallize` |
-| `Crvs` | Crvs | curves | `Curves` |
+| `Crvs` | curves | Curves | `image.adjustments.curves` |
 | `cut ` | cut | Cut | `edit.cut` |
 | `Dfrg` | defringe | Defringe | `layer.matting.defringe` |
 | `Dlt ` | delete | Delete | `layer.delete`, `edit.clear`, `layer.layerMask.delete`, `layer.smartFilter.deleteFilterMask` |
@@ -66,7 +66,7 @@ does not map yet, with everything needed to implement them without the reference
 | `Exch` | exchange | Exchange | `tools.swapColors` |
 | `Expn` | expand | Expand | `select.modify.expand` |
 | `Expr` | export | Export | `file.export.saveForWebLegacy` |
-| `Exps` | Exps | exposure | `Exposure` |
+| `Exps` | exposure | Exposure | `image.adjustments.exposure` |
 | `Fthr` | feather | Feather | `select.modify.feather` |
 | `Fl  ` | fill | Fill | `edit.fill`, `paint.bucket` |
 | `GEfc` | filterGallery | Filter Gallery | `filter.gallery.spatter` |
@@ -77,20 +77,20 @@ does not map yet, with everything needed to implement them without the reference
 | `Fbrs` | (code only) | Fibers | `filter.render.fibers` |
 | `LnsF` | lensFlare | Lens Flare | `filter.render.lensFlare` |
 | `GsnB` | gaussianBlur | Gaussian Blur | `filter.blur.gaussianBlur` |
-| `GdMp` | GdMp | gradientMapEvent | `Gradient Map` |
+| `GdMp` | gradientMapEvent | Gradient Map | `image.adjustments.gradientMap` |
 | `Grow` | grow | Grow | `select.grow` |
 | `Hd  ` | hide | Hide | `layer.hideLayers` |
 | `HghP` | highPass | High Pass | `filter.other.highPass` |
-| `HStr` | HStr | hueSaturation | `Hue/Saturation` |
+| `HStr` | hueSaturation | Hue/Saturation | `image.adjustments.hueSaturation` |
 | (string ID only) | conditional | If | `actions.conditional` |
 | `ImgS` | imageSize | Image Size | `image.imageSize` |
 | `Invs` | inverse | Inverse | `select.inverse` |
-| `Invr` | Invr | invert | `Invert` |
+| `Invr` | invert | Invert | `image.adjustments.invert` |
 | `CpTL` | copyToLayer | Layer Via Copy | `layer.new.layerViaCopy` |
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
 | `Mk  ` | make | Make | `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot` |
-| (string ID only) | animationFramesFromLayers | Make Frames from Layers |  |
+| (string ID only) | animationFramesFromLayers | Make Frames from Layers | Kept step (disabled) |
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
 | `Mdn ` | median | Median | `filter.noise.median` |
 | `Mrg2` | mergeLayersNew | Merge Layers | `layer.mergeLayers` |
@@ -102,10 +102,10 @@ does not map yet, with everything needed to implement them without the reference
 | `Opn ` | open | Open | `file.openAs` |
 | `past` | paste | Paste | `edit.paste`, `edit.pasteSpecial.pasteInPlace` |
 | (string ID only) | pasteEffects | Paste Layer Style | `layer.layerStyle.pasteLayerStyle` |
-| (string ID only) | PhtF | photoFilter | `Photo Filter` |
+| (string ID only) | photoFilter | Photo Filter | `image.adjustments.photoFilter` |
 | `Plc ` | placeEvent | Place | `file.placeEmbedded`, `file.placeLinked` |
 | `Ply ` | play | Play | `actions.play` |
-| `Pstr` | Pstr | posterize | `Posterize` |
+| `Pstr` | posterize | Posterize | `image.adjustments.posterize` |
 | `Prge` | purge | Purge | `edit.purge.all`, `edit.purge.clipboard`, `edit.purge.histories`, `edit.purge.undo` |
 | `RdlB` | radialBlur | Radial Blur | `filter.blur.radialBlur` |
 | (string ID only) | rasterizeLayer | Rasterize | `layer.rasterize.layer` |
@@ -121,7 +121,7 @@ does not map yet, with everything needed to implement them without the reference
 | (string ID only) | refineSelectionEdge | Select and Mask | `select.refineEdge` |
 | (string ID only) | smartBrushWorkspace | Select and Mask | `select.refineEdge` |
 | (string ID only) | autoCutout | Select Subject | `select.subject` |
-| `SlcC` | SlcC | selectiveColor | `Selective Color` |
+| `SlcC` | selectiveColor | Selective Color | `image.adjustments.selectiveColor` |
 | `setd` | set | Set | `select.all`, `select.deselect`, `select.reselect`, `select.loadSelection`, `select.rect`, `select.lasso`, `select.editInQuickMaskMode`, `tools.setColors`, `layer.setProps`, `layer.renameLayer`, `layer.setLabelColor`, `layer.setAdjustment`, `layer.fill.pattern.set`, `layer.new.layerFromBackground`, `layer.layerStyle.blendingOptions`, `layer.smartFilter.blendingOptions` |
 | (string ID only) | adaptCorrect | Shadows/Highlights | `image.adjustments.shadowsHighlights` |
 | `Shrp` | sharpen | Sharpen | `filter.sharpen.sharpen` |
@@ -131,16 +131,16 @@ does not map yet, with everything needed to implement them without the reference
 | `Smlr` | similar | Similar | `select.similar` |
 | `SmrB` | smartBlur | Smart Blur | `filter.blur.smartBlur` |
 | `Smth` | smoothness | Smooth | `select.modify.smooth` |
-| `Stop` | stop | Stop | `STOP_MESSAGE` |
+| `Stop` | stop | Stop | `actions.stopMessage` |
 | `Strk` | stroke | Stroke | `edit.stroke` |
 | (string ID only) | surfaceBlur | Surface Blur | `filter.blur.surfaceBlur` |
-| `Thrs` | Thrs | threshold | `Threshold` |
+| `Thrs` | threshold | Threshold | `image.adjustments.threshold` |
 | `Trnf` | transform | Transform | `edit.transform`, `select.transformSelection` |
 | (string ID only) | trim | Trim | `image.trim` |
 | (string ID only) | ungroupLayersEvent | Ungroup Layers | `layer.ungroupLayers` |
 | `UnsM` | unsharpMask | Unsharp Mask | `filter.sharpen.unsharpMask` |
 | (string ID only) | updatePlacedLayer | Update Smart Objects | `layer.smartObjects.updateModifiedContent` |
-| `Vbrn` | Vbrn | vibrance | `Vibrance` |
+| `Vbrn` | vibrance | Vibrance | `image.adjustments.vibrance` |
 
 ### Group B: The Render filters Clouds, Difference Clouds, Fibers and Lens Flare
 
