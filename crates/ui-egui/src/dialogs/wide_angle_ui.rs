@@ -12,7 +12,6 @@
 use egui::{Align2, Color32, FontId, Pos2, Rect as ERect, Sense, Stroke, TextureHandle, pos2, vec2};
 use photocraft_algo::transform::Interp;
 use photocraft_algo::wideangle::{self, Camera, Constraint, Orientation, WideAngle, WideMesh, WideModel};
-use photocraft_color::PixelFormat;
 use photocraft_doc::LayerId;
 use photocraft_geom::Rect;
 use photocraft_raster::Surface;
