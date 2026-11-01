@@ -201,7 +201,7 @@ fn options_body(ui: &mut Ui, draft: &mut LayersPanelOptions) {
         ui.add_space(7.0);
         // The original Photoshop dialog has None with a label, then progressively
         // larger previews, with the radio controls aligned vertically.
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             let r = ui.radio_value(&mut draft.thumbnail_size, LayerThumbnailSize::None, tl!("None"));
             r.on_hover_text(tl!("None"));
         });
@@ -211,7 +211,7 @@ fn options_body(ui: &mut Ui, draft: &mut LayersPanelOptions) {
             (LayerThumbnailSize::Medium, 68.0, tl!("Medium")),
             (LayerThumbnailSize::Large, 96.0, tl!("Large")),
         ] {
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 // Empty radio captions are intentional: the sample itself conveys
                 // size. The accessible/hover label still names the setting.
                 let radio = ui.radio_value(&mut draft.thumbnail_size, size, "");
@@ -292,7 +292,7 @@ pub fn show_dialog(app: &mut PhotocraftApp, ctx: &Context) {
 
 /// The modal's content: the heading with × at the reading end, then the dialog's body and footer.
 fn dialog_body(ui: &mut Ui, dialog: &mut LayersPanelDialog, title: &str, confirmed: &mut bool, cancelled: &mut bool) {
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.heading(title);
         ui.with_layout(crate::direction::trailing(), |ui| {
             if ui.small_button("×").on_hover_text(tl!("Cancel")).clicked() {
@@ -337,7 +337,7 @@ fn dialog_body(ui: &mut Ui, dialog: &mut LayersPanelDialog, title: &str, confirm
     }
     if !matches!(dialog, LayersPanelDialog::PanelOptions(_)) {
         ui.add_space(10.0);
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             if ui.button(tl!("OK")).clicked() {
                 *confirmed = true;
             }
@@ -549,5 +549,36 @@ mod tests {
             (label_r.right() - title_r.right()).abs() < 24.0 && (radio_r.right() - label_r.right()).abs() < 24.0,
             "RTL: the column starts at the right: {label_r:?} {radio_r:?} {title_r:?}"
         );
+    }
+
+    /// Twin of the migrated `dialog_row` rows: item order mirrors only under RTL, and the
+    /// item gap is identical in both directions (LTR keeps its order and gaps).
+    #[test]
+    fn migrated_dialog_row_mirrors_item_order_only_under_rtl() {
+        use crate::direction::{Dir, direction_scope};
+        let rects = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                ..Default::default()
+            };
+            let mut out = Vec::new();
+            ctx.run_ui(input, |ui| {
+                crate::direction::dialog_row(ui, |ui| {
+                    out.push(ui.label("aaa").rect);
+                    out.push(ui.label("b").rect);
+                });
+            });
+            out
+        };
+        let ltr = rects(Dir::Ltr);
+        let rtl = rects(Dir::Rtl);
+        assert!(ltr[0].left() < ltr[1].left(), "LTR keeps the item order: {ltr:?}");
+        assert!(rtl[0].right() > rtl[1].right(), "RTL mirrors the item order: {rtl:?}");
+        let ltr_gap = ltr[1].left() - ltr[0].right();
+        let rtl_gap = rtl[1].right() - rtl[0].left();
+        assert!((ltr_gap - rtl_gap).abs() < 0.5, "equal item gaps: ltr {ltr_gap} rtl {rtl_gap}");
     }
 }
