@@ -3275,3 +3275,19 @@ fn trap_wider_than_photoshop_takes_is_refused() {
     let d = export_item("image.trap", &json!({"width": 32767}), "S").unwrap().descriptor.unwrap();
     assert_eq!(d.items, desc("null").with("Wdth", px(32767.0)).items);
 }
+
+/// The channel or colour step `d` of the Photoshop event `name`, as PhotoCraft loads it.
+fn channel_step(name: &str, d: Descriptor) -> Mapped {
+    let event = if name.len() == 4 { AtnEvent::Code(name.as_bytes().try_into().unwrap()) } else { AtnEvent::name(name) };
+    (events::event_for(&event).unwrap_or_else(|| panic!("{name} is unknown")).from)(&d)
+}
+
+/// A `noReference` that isn't a Boolean doesn't say the step has no source, so the step stays
+/// a Photoshop step instead of playing as a source-less Match Color (#10609).
+#[test]
+fn match_color_with_a_non_boolean_no_reference_is_kept() {
+    for v in [D::Integer(1), text("true"), enm("Ordn", "Trgt")] {
+        let m = channel_step("matchColor", desc("null").with("noReference", v.clone()));
+        assert!(matches!(m, Mapped::Unsupported { harmless: false }), "noReference {v:?} was mapped");
+    }
+}

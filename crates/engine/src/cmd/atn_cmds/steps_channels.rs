@@ -1,7 +1,7 @@
 //! Photoshop's channel and colour steps (#10609): Split Channels, Merge Spot Channel, Trap and
 //! Match Color, with the keys Photoshop records.
 
-use super::descriptors::{desc, get_bool, get_num, px, trimmed};
+use super::descriptors::{boolean, desc, get_num, px, trimmed};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::{D, Descriptor, Value, json};
@@ -9,6 +9,16 @@ use super::{D, Descriptor, Value, json};
 /// Whether every key of `d` is one of `keys` (codes compare without their space padding).
 fn only_keys(d: &Descriptor, keys: &[&str]) -> bool {
     d.items.iter().all(|(k, _)| keys.contains(&trimmed(k).as_str()))
+}
+
+/// The step's `key` read by `read` (its space padding ignored, as `only_keys` admits it),
+/// `default` when the step leaves it out, `None` when it holds a value `read` can't take: that
+/// is still the step's setting, so the step is kept rather than played with the default.
+fn setting<T>(d: &Descriptor, key: &str, read: impl Fn(&D) -> Option<T>, default: T) -> Option<T> {
+    match d.items.iter().find(|(k, _)| trimmed(k) == key.trim_end()) {
+        Some((_, v)) => read(v),
+        None => Some(default),
+    }
 }
 
 /// Whether `p` sets nothing but `allowed` (a `null` counts as unset).
@@ -71,10 +81,10 @@ pub(super) fn trap_to(_: &str, p: &Value) -> Option<Descriptor> {
 const MATCH_COLOR: &[(&str, &str, i32)] = &[("Lght", "luminance", 100), ("ClrR", "intensity", 100), ("Fade", "fade", 0)];
 
 /// Match Color (`matchColor`) without a source, as Photoshop records it (`noReference`). A
-/// step that matches another image (`noReference` false) names no source here, so it keeps
-/// the Photoshop step.
+/// step that matches another image (`noReference` false, or not a Boolean) names no source
+/// here, so it keeps the Photoshop step.
 pub(super) fn match_color_from(d: &Descriptor) -> Mapped {
-    if !only_keys(d, &["Lght", "ClrR", "Fade", "noReference"]) || get_bool(d, "noReference") == Some(false) {
+    if !only_keys(d, &["Lght", "ClrR", "Fade", "noReference"]) || setting(d, "noReference", boolean, true) != Some(true) {
         return Mapped::Unsupported { harmless: false };
     }
     let mut p = serde_json::Map::new();
