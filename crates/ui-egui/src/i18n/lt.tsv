@@ -796,7 +796,7 @@
 	Statistics…	Statistika…
 	Refine Strokes	Patikslinti potėpius
 	Edits	Redagavimai
-@plural	{n} item|{n} items	{n} elementas|{n} elementų
+@plural	{n} item|{n} items	{n} elementas|{n} elementai|{n} elementų
 	Auto	Automatiškai
 	(print to the printer)	(spausdinti spausdintuvu)
 	+ Add variable	+ Pridėti kintamąjį
@@ -1593,7 +1593,7 @@
 	{name} options	{name} parinktys
 	↑↓ navigate   {key} run   esc close	↑↓ – naršyti   {key} – vykdyti   Esc – užverti
 	Version {version}	Versija {version}
-	New Document	Naujas dokumentas…
+	New Document	Naujas dokumentas
 	New Document With Mask	Naujas dokumentas su kauke
 	New Layer With Mask	Naujas sluoksnis su kauke
 	New Layer	Naujas sluoksnis
@@ -1850,9 +1850,9 @@
 	BLANK DOCUMENT PRESETS ({n})	TUŠČIO DOKUMENTO IŠANKSTINĖS NUOSTATOS ({n})
 	Constraints ({n})	Apribojimai ({n})
 	Align {what}	Lygiuoti {what}
-@plural	{n} Layer|{n} Layers	{n} sluoksnis|{n} sluoksnių
-@plural	{n} layer|{n} layers	{n} sluoksnis|{n} sluoksnių
-@plural	Group · {n} layer|Group · {n} layers	Grupė · {n} sluoksnis|Grupė · {n} sluoksnių
+@plural	{n} Layer|{n} Layers	{n} sluoksnis|{n} sluoksniai|{n} sluoksnių
+@plural	{n} layer|{n} layers	{n} sluoksnis|{n} sluoksniai|{n} sluoksnių
+@plural	Group · {n} layer|Group · {n} layers	Grupė · {n} sluoksnis|Grupė · {n} sluoksniai|Grupė · {n} sluoksnių
 	Additional plugins folder	Papildinių aplankas
 	Adobe	Adobe
 	Adobe rgb	Adobe RGB
@@ -2050,7 +2050,7 @@
 	Exclusion	Išskyrimas
 	Divide	Dalinti
 	Luminosity	Šviesis
-@plural	{n} sample|{n} samples	{n} mėginys|{n} mėginių
+@plural	{n} sample|{n} samples	{n} mėginys|{n} mėginiai|{n} mėginių
 	{added}, {removed} subtracted	Pridėta {added}, atimta {removed}
 	Adjustment Preview	Koregavimo peržiūra
 	Airbrush: keeps depositing paint while the pointer rests.	Aerografas: purškia dažus net tada, kai žymeklis nejuda.
@@ -2296,7 +2296,7 @@
 	New Channel	Naujas kanalas
 	Save Selection	Išsaugoti žymėjimą
 	Load Selection	Įkelti žymėjimą
-@id	edit.purge.undo	
+@id	edit.purge.undo	Atšaukimo istorija
 	Rendering Mode	Atvaizdavimo režimas
 	Automatic (recommended)	Automatinis (rekomenduojama)
 	CPU / Compatibility	CPU / suderinamumas
@@ -2762,27 +2762,27 @@ curves	Smooth	Glotnus
 	Apply mask to layer before removing?	Prieš pašalinant pritaikyti kaukę sluoksniui?
 	The layer or its mask changed. Drag the mask onto the Trash again.	Sluoksnis arba jo kaukė pasikeitė. Dar kartą nuvilkite kaukę į šiukšlinę.
 	Delete the vector mask?	Ištrinti vektorinę kaukę?
-@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	Į {file} eksportuotas {n} spalvos pavyzdys|Į {file} eksportuoti {n} spalvų pavyzdžiai
-@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	Importuotas {n} teptukas iš grupės {group}|Importuoti {n} teptukai iš grupės {group}
-@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	Iš {file} importuotas {n} spalvos pavyzdys|Iš {file} importuoti {n} spalvų pavyzdžiai
-@plural	Played {n} step|Played {n} steps	Atliktas {n} veiksmas|Atlikta {n} veiksmų
-@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	Atnaujintas {n} susietas išmanusis objektas, pakeistas diske|Atnaujinti {n} susieti išmanieji objektai, pakeisti diske
-@plural	Saved for Web: {n} file|Saved for Web: {n} files	Žiniatinkliui išsaugotas {n} failas|Žiniatinkliui išsaugoti {n} failai
-@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	Šioje kompozicijoje įrašytas {n} sluoksnis buvo ištrintas. Atnaujinkite kompoziciją arba panaikinkite įspėjimą.|Šioje kompozicijoje įrašyti {n} sluoksniai buvo ištrinti. Atnaujinkite kompoziciją arba panaikinkite įspėjimą.
-@plural	{n} plane|{n} planes	{n} plokštuma|{n} plokštumos
-@plural	{n} preset|{n} presets	{n} išankstinė nuostata|{n} išankstinės nuostatos
-@plural	{n} sample point removed|{n} sample points removed	Pašalintas {n} mėginio taškas|Pašalinti {n} mėginio taškai
-@plural	{n} slice|{n} slices	{n} pjūvis|{n} pjūviai
-@plural	{n} step|{n} steps	{n} žingsnis|{n} žingsniai
-@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (dar {n} teptukų išankstinių nuostatų įspėjimų)|{warning} (dar {n} teptukų išankstinių nuostatų įspėjimų)
-@plural	{what} with {n} warning|{what} with {n} warnings	{what} – {n} įspėjimas|{what} – {n} įspėjimų
+@plural	Exported {n} swatch to {file}|Exported {n} swatches to {file}	Į {file} eksportuotas {n} spalvos pavyzdys|Į {file} eksportuoti {n} spalvos pavyzdžiai|Į {file} eksportuota {n} spalvos pavyzdžių
+@plural	Imported {n} brush from {group}|Imported {n} brushes from {group}	Importuotas {n} teptukas iš grupės {group}|Importuoti {n} teptukai iš grupės {group}|Importuota {n} teptukų iš grupės {group}
+@plural	Imported {n} swatch from {file}|Imported {n} swatches from {file}	Iš {file} importuotas {n} spalvos pavyzdys|Iš {file} importuoti {n} spalvos pavyzdžiai|Iš {file} importuota {n} spalvos pavyzdžių
+@plural	Played {n} step|Played {n} steps	Atliktas {n} veiksmas|Atlikti {n} veiksmai|Atlikta {n} veiksmų
+@plural	Updated {n} linked smart object changed on disk|Updated {n} linked smart objects changed on disk	Atnaujintas {n} susietas išmanusis objektas, pakeistas diske|Atnaujinti {n} susieti išmanieji objektai, pakeisti diske|Atnaujinta {n} susietų išmaniųjų objektų, pakeistų diske
+@plural	Saved for Web: {n} file|Saved for Web: {n} files	Žiniatinkliui išsaugotas {n} failas|Žiniatinkliui išsaugoti {n} failai|Žiniatinkliui išsaugota {n} failų
+@plural	{n} layer recorded by this comp was deleted. Update the comp, or clear the warning.|{n} layers recorded by this comp were deleted. Update the comp, or clear the warning.	Šioje kompozicijoje įrašytas {n} sluoksnis buvo ištrintas. Atnaujinkite kompoziciją arba panaikinkite įspėjimą.|Šioje kompozicijoje įrašyti {n} sluoksniai buvo ištrinti. Atnaujinkite kompoziciją arba panaikinkite įspėjimą.|Šioje kompozicijoje įrašyta {n} sluoksnių, kurie buvo ištrinti. Atnaujinkite kompoziciją arba panaikinkite įspėjimą.
+@plural	{n} plane|{n} planes	{n} plokštuma|{n} plokštumos|{n} plokštumų
+@plural	{n} preset|{n} presets	{n} išankstinė nuostata|{n} išankstinės nuostatos|{n} išankstinių nuostatų
+@plural	{n} sample point removed|{n} sample points removed	Pašalintas {n} mėginio taškas|Pašalinti {n} mėginio taškai|Pašalinta {n} mėginio taškų
+@plural	{n} slice|{n} slices	{n} pjūvis|{n} pjūviai|{n} pjūvių
+@plural	{n} step|{n} steps	{n} žingsnis|{n} žingsniai|{n} žingsnių
+@plural	{warning} (+{n} more brush preset warning)|{warning} (+{n} more brush preset warnings)	{warning} (dar {n} teptukų išankstinės nuostatos įspėjimas)|{warning} (dar {n} teptukų išankstinės nuostatos įspėjimai)|{warning} (dar {n} teptukų išankstinių nuostatų įspėjimų)
+@plural	{what} with {n} warning|{what} with {n} warnings	{what} – {n} įspėjimas|{what} – {n} įspėjimai|{what} – {n} įspėjimų
 	Light Blue	Šviesiai mėlyna
 	Light Red	Šviesiai raudona
 	Medium Blue	Vidutiniškai mėlyna
 	Light Gray	Šviesiai pilka
 	No	Ne
 	Yes	Taip
-@id	select.all	
+@id	select.all	Pažymėti viską
 	Delete Smart Filters	Pašalinti išmaniuosius filtrus
 	Enable Smart Filters	Įjungti išmaniuosius filtrus
 	New Layer…	Naujas sluoksnis…
@@ -3141,8 +3141,8 @@ curves	Smooth	Glotnus
 	Show the layer's effects  (⌥-click: all layers)	Rodyti sluoksnio efektus (⌥-spustelėjimas – visų sluoksnių efektus)
 cameraRaw	Blacks	Juodi tonai
 cameraRaw	Masking	Maskavimas
-@id	edit.stroke	
-@id	edit.transform.scale	
+@id	edit.stroke	Kontūras…
+@id	edit.transform.scale	Keisti mastelį
 cameraRaw	Luminance	Šviesis
 cameraRaw	Color	Spalva
 cameraRaw	Vibrance	Selektyvus sodrumas
@@ -3909,7 +3909,7 @@ layerLabel	No Color	Be spalvos
 	Warming L B A	Warming L B A
 	Warming81	Warming81
 	Warming85	Warming85
-@id	filter.sharpen.sharpen	
+@id	filter.sharpen.sharpen	Ryškinti
 	Good	Geras
 	Best	Geriausias
 	Adjustment Properties	Koregavimo savybės
@@ -4054,9 +4054,9 @@ layerLabel	No Color	Be spalvos
 	Importing {what} from {file}…	Importuojama {what} iš {file}…
 	brushes	teptukai
 	gradients	perėjimai
-@plural	Imported {n} brush from {file}|Imported {n} brushes from {file}	Importuotas {n} teptukas iš {file}|Importuoti {n} teptukai iš {file}
-@plural	Imported {n} gradient from {file}|Imported {n} gradients from {file}	Importuotas {n} perėjimas iš {file}|Importuoti {n} perėjimai iš {file}
-@plural	Imported {n} pattern from {file}|Imported {n} patterns from {file}	Importuotas {n} raštas iš {file}|Importuoti {n} raštai iš {file}
+@plural	Imported {n} brush from {file}|Imported {n} brushes from {file}	Importuotas {n} teptukas iš {file}|Importuoti {n} teptukai iš {file}|Importuota {n} teptukų iš {file}
+@plural	Imported {n} gradient from {file}|Imported {n} gradients from {file}	Importuotas {n} perėjimas iš {file}|Importuoti {n} perėjimai iš {file}|Importuota {n} perėjimų iš {file}
+@plural	Imported {n} pattern from {file}|Imported {n} patterns from {file}	Importuotas {n} raštas iš {file}|Importuoti {n} raštai iš {file}|Importuota {n} raštų iš {file}
 	Data Set: {name}  ({index}/{total})	Duomenų rinkinys: {name} ({index}/{total})
 	(none)	(nėra)
 navigator	Zoom	Mastelis
@@ -4091,10 +4091,10 @@ navigator	Zoom	Mastelis
 	Stop Recording	Stabdyti įrašymą
 	{name} (Photoshop)	{name} („Photoshop“)
 	{message} ({note})	{message} ({note})
-@plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	Iš {file} įkeltas {n} veiksmas|Iš {file} įkelti {n} veiksmai
-@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} veiksmas dar neturi atitikmens „PhotoCraft“|{n} veiksmai dar neturi atitikmens „PhotoCraft“
-@plural	Saved {n} action to {file}|Saved {n} actions to {file}	Į {file} išsaugotas {n} veiksmas|Į {file} išsaugoti {n} veiksmai
-@plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Praleistas {n} veiksmas, neturintis atitikmens „Photoshop“|Praleisti {n} veiksmai, neturintys atitikmens „Photoshop“
+@plural	Loaded {n} action from {file}|Loaded {n} actions from {file}	Iš {file} įkeltas {n} veiksmas|Iš {file} įkelti {n} veiksmai|Iš {file} įkelta {n} veiksmų
+@plural	{n} step has no PhotoCraft equivalent yet|{n} steps have no PhotoCraft equivalent yet	{n} veiksmas dar neturi atitikmens „PhotoCraft“|{n} veiksmai dar neturi atitikmens „PhotoCraft“|{n} veiksmų dar neturi atitikmens „PhotoCraft“
+@plural	Saved {n} action to {file}|Saved {n} actions to {file}	Į {file} išsaugotas {n} veiksmas|Į {file} išsaugoti {n} veiksmai|Į {file} išsaugota {n} veiksmų
+@plural	{n} step with no Photoshop equivalent left out|{n} steps with no Photoshop equivalent left out	Praleistas {n} veiksmas, neturintis atitikmens „Photoshop“|Praleisti {n} veiksmai, neturintys atitikmens „Photoshop“|Praleista {n} veiksmų, neturinčių atitikmens „Photoshop“
 	File Naming	Failų pavadinimai
 	Starting serial	Pradinis numeris
 	Insert Stop…	Įterpti sustabdymą…
@@ -4105,7 +4105,7 @@ navigator	Zoom	Mastelis
 	Select an action first	Pirmiausia pasirinkite veiksmą
 	Action playback stopped	Veiksmo atkūrimas sustabdytas
 	Step {step} is waiting for its dialog	Veiksmas {step} laukia savo dialogo
-@plural	{n} action|{n} actions	{n} veiksmas|{n} veiksmai
+@plural	{n} action|{n} actions	{n} veiksmas|{n} veiksmai|{n} veiksmų
 	Background (Default)	Fonas (numatytasis)
 	Include All Subfolders	Įtraukti visus poaplankius
 	Auto Add/Delete	Automatiškai pridėti / ištrinti
@@ -4318,9 +4318,9 @@ navigator	Zoom	Mastelis
 	Checkerboard	Šachmatų lenta
 	The document does not have an embedded colour profile. Working space: {working}.	Dokumente nėra įterpto spalvų profilio. Darbinė spalvų erdvė: {working}.
 	The document has an embedded colour profile that does not match the working space.\nEmbedded: {embedded}\nWorking: {working}	Dokumento įterptas spalvų profilis nesutampa su darbine spalvų erdve.\nĮterptas: {embedded}\nDarbinė: {working}
-@id	edit.clear	
-@id	file.close	
-@id	layer.layerMask.apply	
+@id	edit.clear	Išvalyti
+@id	file.close	Uždaryti
+@id	layer.layerMask.apply	Pritaikyti
 cameraRaw	Balance	Balansas
 cameraRaw	Clarity	Skaidrumas
 cameraRaw	Color Mixer	Spalvų maišytuvas
@@ -4423,14 +4423,14 @@ shape	Appearance	Išvaizda
 	DDS Options	DDS parinktys
 	Generate Mipmaps	Generuoti miplygius
 	There is no color table to save.	Nėra išsaugotinos spalvų lentelės.
-@plural	Saved {n} color to {file}|Saved {n} colors to {file}	Išsaugota {n} spalva į {file}|Išsaugotos {n} spalvos į {file}
+@plural	Saved {n} color to {file}|Saved {n} colors to {file}	Į {file} išsaugota {n} spalva|Į {file} išsaugotos {n} spalvos|Į {file} išsaugota {n} spalvų
 	GPU adapter	GPU adapteris
 	Import Styles…	Importuoti stilius…
 	Export Selected Styles…	Eksportuoti pasirinktus stilius…
 	Export Styles…	Eksportuoti stilius…
 	{file} is not a style library (.asl)	{file} nėra stilių biblioteka (.asl)
-@plural	Imported {n} style from {file}|Imported {n} styles from {file}	Importuotas {n} stilius iš {file}|Importuoti {n} stiliai iš {file}
-@plural	Exported {n} style to {file}|Exported {n} styles to {file}	Eksportuotas {n} stilius į {file}|Eksportuoti {n} stiliai į {file}
+@plural	Imported {n} style from {file}|Imported {n} styles from {file}	Importuotas {n} stilius iš {file}|Importuoti {n} stiliai iš {file}|Importuota {n} stilių iš {file}
+@plural	Exported {n} style to {file}|Exported {n} styles to {file}	Eksportuotas {n} stilius į {file}|Eksportuoti {n} stiliai į {file}|Eksportuota {n} stilių į {file}
 	Confirm or cancel the open action step dialog first	Pirmiausia patvirtinkite arba atšaukite veiksmo atidarymo žingsnio dialogą
 	Pro Medium Gray	Pro Medium Gray
 	Solarized	Solarized
