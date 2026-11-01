@@ -22,7 +22,7 @@ pub struct UvState {
     /// In-project texture destinations restored from a project must keep resolving inside that
     /// project before writeback. The original path distinguishes an explicit rebind from a
     /// symlink that was redirected after the project was loaded.
-    pub(crate) project_export_guards: std::collections::HashMap<DocId, (std::path::PathBuf, std::path::PathBuf)>,
+    pub(crate) project_export_guards: std::collections::HashMap<DocId, (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)>,
     /// Opaque, bounded view metadata; camera/UI types stay above the engine layer.
     pub project_view: Value,
     pub project_path: String,
@@ -525,13 +525,17 @@ fn import(s: &mut Session, p: &Value) -> Result<Value> {
         generation,
         ..Default::default()
     };
+    close_clean_previous_documents(s, &previous);
+    let _ = activate(s, active_material);
+    inspect(s, &Value::Null)
+}
+
+fn close_clean_previous_documents(s: &mut Session, previous: &[DocId]) {
     for id in previous {
-        if let Some(index) = s.documents().iter().position(|st| st.doc.id == id) {
+        if let Some(index) = s.documents().iter().position(|st| st.doc.id == *id && !st.is_dirty()) {
             s.close(index);
         }
     }
-    let _ = activate(s, active_material);
-    inspect(s, &Value::Null)
 }
 
 fn channel(p: &Value, default: Channel) -> Result<Channel> {
@@ -1310,14 +1314,12 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
                 let writeback = project.dirty_documents.as_ref().map_or(source.is_some(), |dirty| name.as_ref().is_some_and(|name| dirty.contains(name)));
                 // Preserve in-project destinations, but external paths are untrusted provenance
                 // and must be explicitly rebound before export or ordinary Save can target them.
-                let in_project = source.as_ref().is_some_and(|source| {
-                    project_export_root.as_ref().is_some_and(|base| {
-                        Path::new(source).canonicalize().is_ok_and(|file| file.starts_with(base) && file.is_file())
-                    })
-                });
+                let canonical_source = source.as_ref().and_then(|source| Path::new(source).canonicalize().ok());
+                let in_project =
+                    canonical_source.as_ref().is_some_and(|file| project_export_root.as_ref().is_some_and(|base| file.starts_with(base) && file.is_file()));
                 let external = source.is_some() && !in_project;
                 let project_export_path = if in_project {
-                    source.as_ref().map(|source| Path::new(source).to_path_buf())
+                    source.as_ref().zip(canonical_source.as_ref()).map(|(source, canonical)| (Path::new(source).to_path_buf(), canonical.clone()))
                 } else {
                     None
                 };
@@ -1326,8 +1328,8 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
                     blocked_exports.insert(st.doc.id);
                 }
                 if let Some(st) = s.uv_documents().get(index) {
-                    if let (Some(root), Some(original_path)) = (project_export_root.as_ref(), project_export_path) {
-                        project_export_guards.insert(st.doc.id, (root.clone(), original_path));
+                    if let (Some(root), Some((original_path, original_identity))) = (project_export_root.as_ref(), project_export_path) {
+                        project_export_guards.insert(st.doc.id, (root.clone(), original_path, original_identity));
                     }
                     exported_revisions.insert(st.doc.id, if writeback { 0 } else { st.revision });
                     saved_revisions.insert(st.doc.id, st.revision);
@@ -1401,11 +1403,7 @@ fn project_load(s: &mut Session, p: &Value) -> Result<Value> {
             s.uv.selection_masks.insert(id.0, mask);
         }
     }
-    for id in previous {
-        if let Some(index) = s.documents().iter().position(|st| st.doc.id == id) {
-            s.close(index);
-        }
-    }
+    close_clean_previous_documents(s, &previous);
     let _ = activate(s, s.uv.material);
     let mut result = inspect(s, &Value::Null)?;
     result["view"] = s.uv.project_view.clone();
@@ -1475,6 +1473,8 @@ pub fn specs() -> Vec<CommandSpec> {
 
 #[cfg(test)]
 mod asset_path_tests {
+    use serde_json::json;
+
     #[test]
     fn bare_project_filename_resolves_to_the_current_directory() {
         assert_eq!(super::model_directory("scene.pcuv"), std::path::Path::new("."));
@@ -1494,5 +1494,19 @@ mod asset_path_tests {
         assert!(super::resolved(source, "../outside.png").is_empty());
         assert!(super::resolved(source, root.path().join("outside.png").to_str().unwrap()).is_empty());
         assert!(super::resolved(source, ".").is_empty());
+    }
+
+    #[test]
+    fn project_replacement_retains_dirty_documents_and_closes_clean_ones() {
+        let mut session = crate::Session::new();
+        session.add_document(super::Document::new("UV test", super::Size::new(8, 8), super::ColorMode::Rgb, photocraft_color::SampleType::U8), None);
+        let document_id = session.active().expect("document was added").doc.id;
+        session.execute("layer.new.layer", json!({"name":"Unsaved UV edit"})).unwrap();
+        session.add_document(super::Document::new("Clean UV test", super::Size::new(8, 8), super::ColorMode::Rgb, photocraft_color::SampleType::U8), None);
+        let clean_id = session.active().expect("clean document was added").doc.id;
+        super::close_clean_previous_documents(&mut session, &[document_id, clean_id]);
+        assert_eq!(session.documents().len(), 1);
+        assert_eq!(session.documents()[0].doc.id, document_id);
+        assert!(session.documents()[0].is_dirty());
     }
 }

@@ -8,7 +8,12 @@ fn save(s: &mut Session, _: &Value) -> Result<Value> {
     let (mut saved, mut unsaved) = (0, 0);
     let mut errors = Vec::new();
     let mut warnings = Vec::new();
-    let mut written_destinations = Vec::<PathBuf>::new();
+    let bound_destinations: Vec<_> = s
+        .uv_documents()
+        .iter()
+        .filter(|document| bound.contains(&document.doc.id))
+        .filter_map(|document| document.path.as_ref().filter(|path| !path.is_empty()).map(|path| (document.doc.id, PathBuf::from(path))))
+        .collect();
     for index in 0..s.uv_documents().len() {
         let Some(st) = s.uv_documents().get(index).filter(|st| bound.contains(&st.doc.id) && s.uv.needs_export(st)) else { continue };
         if s.uv.blocked_exports.contains(&st.doc.id) {
@@ -20,14 +25,16 @@ fn save(s: &mut Session, _: &Value) -> Result<Value> {
             continue;
         };
         let destination = PathBuf::from(&path);
-        if let Some((root, original_path)) = s.uv.project_export_guards.get(&st.doc.id)
+        if let Some((root, original_path, original_identity)) = s.uv.project_export_guards.get(&st.doc.id)
             && destination.as_path() == original_path.as_path()
-            && !destination.canonicalize().is_ok_and(|resolved| resolved.starts_with(root) && resolved.is_file())
+            && !destination
+                .canonicalize()
+                .is_ok_and(|resolved| resolved.as_path() == original_identity.as_path() && resolved.starts_with(root) && resolved.is_file())
         {
             errors.push(format!("{path}: texture destination no longer resolves inside the project; rebind it before exporting"));
             continue;
         }
-        if written_destinations.iter().any(|written| crate::file_cmds::same_file(written, &destination)) {
+        if bound_destinations.iter().any(|(id, bound_path)| *id != st.doc.id && crate::file_cmds::same_file(bound_path, &destination)) {
             errors.push(format!("{path}: several bound documents target the same file"));
             continue;
         }
@@ -38,8 +45,9 @@ fn save(s: &mut Session, _: &Value) -> Result<Value> {
             Ok(w) => {
                 warnings.extend(w);
                 let saved_revision = s.uv_documents_mut().get_mut(index).map(|st| (st.doc.id, st.revision.saturating_sub(st.view_revision)));
-                if let Some((id, revision)) = saved_revision { s.uv.exported_revisions.insert(id, revision); }
-                written_destinations.push(destination);
+                if let Some((id, revision)) = saved_revision {
+                    s.uv.exported_revisions.insert(id, revision);
+                }
                 saved += 1;
             }
             Err(e) => errors.push(e.to_string()),

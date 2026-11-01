@@ -127,7 +127,10 @@ pub(crate) fn mask_target_enabled(s: &Session, id: &str, p: &Value) -> Option<st
         Target::FilterMask if follows_filter_mask(id) && !PASTE_IDS.contains(&id) => {
             Some(crate::active_layer_of(s).and_then(crate::smart_cmds::filter_mask_paintable))
         }
-        Target::Mask if edits_mask(id) || follows_target(id) => {
+        Target::Mask
+            if edits_mask(id)
+                || (follows_target(id) && crate::active_layer_of(s).is_ok_and(|layer| layer.mask.as_ref().is_some_and(|mask| mask.paint.is_some()))) =>
+        {
             Some(crate::active_layer_of(s).and_then(|l| {
                 let mask = l.mask.as_ref().ok_or_else(|| "the active layer has no layer mask".to_string())?;
                 // Brush, Pencil and tangent-wrap write to the selected Paint layer's RGBA
