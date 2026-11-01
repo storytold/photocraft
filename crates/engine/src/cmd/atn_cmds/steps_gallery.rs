@@ -601,3 +601,57 @@ pub(super) fn gallery_to(id: &str, p: &Value) -> Option<Descriptor> {
     }
     Some(d)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use photocraft_algo::GalleryParamKind;
+
+    fn params(m: Mapped) -> (String, Value) {
+        match m {
+            Mapped::Steps(mut s) if s.len() == 1 => s.remove(0),
+            _ => panic!("not one step"),
+        }
+    }
+
+    /// Every effect recorded with nothing but `GEfk` loads with Photoshop's defaults, saves
+    /// back, and loads again as the same step (#10592).
+    #[test]
+    fn every_gallery_effect_with_its_defaults_round_trips() {
+        assert_eq!(GALLERY.len(), GALLERY_IDS.len());
+        for (code, id, _) in GALLERY {
+            assert!(GALLERY_IDS.contains(id), "{id} is not in GALLERY_IDS");
+            let (got, first) = params(gallery_from(&desc("null").with("GEfk", enm("GEft", code))));
+            assert_eq!(got, *id, "{code}");
+            let back = gallery_to(id, &first).unwrap_or_else(|| panic!("{id} {first} does not export"));
+            assert_eq!(params(gallery_from(&back)), (id.to_string(), first.clone()), "{id}");
+        }
+    }
+
+    /// Each effect's integer limits and defaults, enumeration default and Boolean default are
+    /// the command's own (`GalleryFilter`'s schema), and every setting of the schema has a key.
+    #[test]
+    fn every_gallery_effect_matches_the_commands_schema() {
+        for (code, id, keys) in GALLERY {
+            let schema = GalleryFilter::from_key(id).unwrap_or_else(|| panic!("{id} has no schema")).params();
+            for p in &schema {
+                assert!(keys.iter().any(|k| k.param() == p.key), "{id}: {} has no key", p.key);
+            }
+            for k in keys.iter() {
+                let kind = schema.iter().find(|p| p.key == k.param()).map(|p| &p.kind);
+                match (k, kind) {
+                    (G::Int(_, param, min, max, default), Some(GalleryParamKind::Range { min: lo, max: hi, default: d })) => {
+                        assert_eq!((*min as f32, *max as f32, *default as f32), (*lo, *hi, *d), "{id} {param}");
+                    }
+                    (G::Enum(_, param, table, default), Some(GalleryParamKind::Choice(choices))) => {
+                        assert_eq!(lookup(table, default), choices.first().copied(), "{id} {param}");
+                        assert!(table.iter().all(|(_, ours)| choices.contains(ours)), "{id} {param}");
+                    }
+                    (G::Bool(_, param, default), Some(GalleryParamKind::Bool(d))) => assert_eq!(default, d, "{id} {param}"),
+                    (G::Color(..), None) => {}
+                    (k, kind) => panic!("{code} {id} {}: {kind:?}", k.param()),
+                }
+            }
+        }
+    }
+}
