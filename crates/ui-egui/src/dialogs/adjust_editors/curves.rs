@@ -843,6 +843,30 @@ mod channel_key_tests {
         assert_eq!(ch, 0);
     }
 
+    /// Lab lists Lightness, a and b (no composite); Gray lists one channel. Keys past the list
+    /// select nothing but are still consumed.
+    #[test]
+    fn alt_digits_cover_lab_and_gray() {
+        let rgb = cx(true, false);
+        let lab = || json!({"a": {}});
+        for (key, want) in [(Key::Num2, 0), (Key::Num3, 1), (Key::Num4, 2), (Key::Num5, 0), (Key::Num6, 0)] {
+            let ctx = egui::Context::default();
+            let (ch, left) = frame(&ctx, &mut lab(), &rgb, vec![press(key, Modifiers::ALT)]);
+            assert_eq!((ch, left), (want, 0), "Lab {key:?}");
+        }
+        let gray = cx(true, true);
+        for (key, want) in [(Key::Num2, 0), (Key::Num3, 0), (Key::Num6, 0)] {
+            let ctx = egui::Context::default();
+            let (ch, left) = frame(&ctx, &mut json!({}), &gray, vec![press(key, Modifiers::ALT)]);
+            assert_eq!((ch, left), (want, 0), "Gray {key:?}");
+        }
+        // Past the list after a valid pick: the earlier channel stays.
+        let ctx = egui::Context::default();
+        let mut v = lab();
+        frame(&ctx, &mut v, &rgb, vec![press(Key::Num4, Modifiers::ALT)]);
+        assert_eq!(frame(&ctx, &mut v, &rgb, vec![press(Key::Num5, Modifiers::ALT)]), (2, 0));
+    }
+
     #[test]
     fn other_modifiers_and_the_properties_panel_leave_the_keys_alone() {
         let ctx = egui::Context::default();
