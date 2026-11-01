@@ -15,7 +15,8 @@
 //! Layer references by name (`select` of layer "Shadow") become `{"layer": "Shadow"}`, which
 //! `commands::layer_param` resolves in whatever document the action plays on (#219). A switch
 //! to another open document (`select` of `Dcmn` by offset) becomes `document.activate
-//! {"offset"}`, the tab that many places from the active one (#7103).
+//! {"offset"}`, the document that many places from the active one in opening order, not dragged
+//! tab order (#7103).
 
 use photocraft_psd::atn::{self, AtnAction, AtnEvent, AtnFile, AtnItem};
 use photocraft_psd::descriptor::{Class, Descriptor, Id, ReferenceItem, UnicodeString, Value as D};
