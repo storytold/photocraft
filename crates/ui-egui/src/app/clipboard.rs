@@ -11,11 +11,6 @@ pub(crate) fn clip_signature(w: u32, h: u32, px: &[u8]) -> u64 {
     sig
 }
 
-/// Freshness-baseline sentinel for an observed-empty OS clipboard: remembering it lets a later
-/// Paste tell an image copied *after* that observation from the empty state. A real image
-/// signature collides with it with probability 2^-64.
-const OS_EMPTY: u64 = u64::MAX;
-
 impl PhotocraftApp {
     /// Mirror the session clipboard onto the OS clipboard (RGBA8).
     pub(super) fn export_os_clipboard(&mut self) {
@@ -37,33 +32,24 @@ impl PhotocraftApp {
         }
     }
 
-    /// Record the OS clipboard's current signature without importing it: the freshness baseline
-    /// a later Paste compares against, so an unchanged or older OS image never displaces a
-    /// known-fresh internal clip while a genuinely newer one still wins. An empty OS clipboard
-    /// is remembered as a sentinel too. Runs on explicit clipboard actions only (Copy, Cut,
-    /// Paste), never in the background.
-    pub(crate) fn calibrate_os_clipboard(&mut self) {
-        let Some(get) = self.services.clipboard_get_image.as_mut() else { return };
-        // The RGBA length from the OS-provided dimensions is computed with checked arithmetic:
-        // malformed metadata must be rejected, never overflow.
-        match get() {
-            Ok(Some((w, h, bytes))) => {
-                let rgba = u64::from(w).checked_mul(u64::from(h)).and_then(|n| n.checked_mul(4));
-                self.os_clip_sig = Some(if rgba == Some(bytes.len() as u64) { clip_signature(w, h, &bytes) } else { OS_EMPTY });
-            }
-            Ok(None) => self.os_clip_sig = Some(OS_EMPTY),
-            Err(_) => {}
-        }
-    }
-
     /// If the OS clipboard holds an image that isn't the one we put there, make it the session
     /// clipboard (so ⌘V pastes screenshots and images copied in other apps, like Photoshop).
     /// Returns `Ok(true)` when a new external image was imported. Once the OS clipboard no longer holds
     /// the image we mirrored or imported (text or a file was copied since), that image is stale:
     /// it is dropped rather than pasted. Unexported internal copies survive unavailable or empty
     /// system clipboards.
+    ///
+    /// Freshness rule (one clipboard): an OS image displaces a path clip only when the app
+    /// observed the OS clipboard before (a signature baseline exists) and the image changed
+    /// since. On the first observation with a path clip, the baseline is learned but the image
+    /// is not installed — known-fresh path content never loses to an image of unknown age (the
+    /// OS clipboard may have held it since before the app started). The accepted tradeoff: an
+    /// image copied in another app before that first observation waits for a later change;
+    /// ordering the two without an OS change token is impossible, and known-fresh beats
+    /// unknown. Pixel clips keep the older rule: a different OS image supersedes them.
     pub(crate) fn import_os_clipboard(&mut self) -> Result<bool, String> {
         let Some(get) = self.services.clipboard_get_image.as_mut() else { return Ok(false) };
+        let baseline_existed = self.os_clip_sig.is_some();
         // A read failure says nothing about the clipboard contents. Keep our editable copy and
         // its signature rather than treating the failure as an empty image.
         let image = match get() {
@@ -96,17 +82,20 @@ impl PhotocraftApp {
                 self.clip_external = false;
                 self.clip_unmirrored = true;
             }
-            // While a path clip holds, keep the freshness baseline: an empty OS clipboard
-            // observed once is the baseline, so an image copied later still reads as newer.
-            if self.session.path_clipboard.is_some() {
-                self.os_clip_sig = Some(OS_EMPTY);
-            }
             return Ok(false);
         };
         let sig = clip_signature(w, h, &bytes);
+        let internal = self.session.clipboard.is_some() || self.session.path_clipboard.is_some();
         // The unchanged OS image is stale when an internal clip has replaced it since (our
         // unexported pixel copy or a path component): importing would paste superseded content.
-        if self.os_clip_sig == Some(sig) && (self.session.clipboard.is_some() || self.session.path_clipboard.is_some()) {
+        if self.os_clip_sig == Some(sig) && internal {
+            return Ok(false);
+        }
+        // First observation with a path clip: learn the baseline, but never displace known-fresh
+        // path content with an image of unknown age. (Pixel clips keep the long-standing rule:
+        // a different OS image supersedes them.)
+        if !baseline_existed && self.session.path_clipboard.is_some() {
+            self.os_clip_sig = Some(sig);
             return Ok(false);
         }
         let r = photocraft_geom::Rect::new(0, 0, w as i32, h as i32);

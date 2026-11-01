@@ -460,7 +460,8 @@ fn targeting_a_mask_swaps_to_its_own_colour_pair() {
 }
 
 /// One clipboard: importing OS pixels (an app image pasted in) replaces a path clip, like a
-/// path clip replaces the pixel clipboard — Paste must not resurrect the stale path.
+/// path clip replaces the pixel clipboard — Paste must not resurrect the stale path. Once the
+/// app has a baseline, a changed OS image wins.
 #[test]
 fn os_clipboard_import_replaces_the_path_clipboard() {
     let os: OsClip = Arc::new(Mutex::new(Some((3, 2, [255u8, 0, 0, 255].repeat(6)))));
@@ -470,9 +471,11 @@ fn os_clipboard_import_replaces_the_path_clipboard() {
     app.run("file.new", serde_json::json!({"width": 80, "height": 60})).unwrap();
     app.run("path.set", serde_json::json!({"name": "work", "path": {"subpaths": [{"closed": true, "knots": [[10, 10], [30, 10], [30, 30], [10, 30]]}]}}))
         .unwrap();
+    // The first import establishes the baseline (no internal clip competes yet).
+    assert!(app.import_os_clipboard().unwrap());
     app.run("path.copy", serde_json::json!({"name": "work", "subpaths": [0]})).unwrap();
     assert!(app.session.path_clipboard.is_some());
-    // Another app copies a new image: the import replaces the path clip.
+    // Another app copies a new image: with the baseline, the import replaces the path clip.
     *os.lock().unwrap() = Some((2, 2, [255u8, 0, 0, 255].repeat(4)));
     assert!(app.import_os_clipboard().unwrap());
     assert!(app.session.clipboard.is_some(), "the OS image is the pixel clipboard");
@@ -532,7 +535,6 @@ fn clipboard_rejects_overflowing_dimensions_without_panicking() {
     let services = Services { clipboard_get_image: Some(Box::new(|| Ok(Some((u32::MAX, u32::MAX, vec![0u8; 4]))))), ..Default::default() };
     let mut app = PhotocraftApp::new(Session::new(), services);
     app.run("file.new", json!({"width": 8, "height": 8})).unwrap();
-    app.calibrate_os_clipboard();
     assert!(!app.import_os_clipboard().unwrap(), "the malformed image is rejected");
     assert!(app.session.clipboard.is_none());
 }

@@ -62,10 +62,9 @@ fn view_center(app: &PhotocraftApp) -> Option<[f64; 2]> {
 /// Edit › Copy/Cut/Paste for path components; `None` = not this context, dispatch as usual.
 pub(crate) fn intercept(app: &mut PhotocraftApp, id: &str, params: &Value) -> Option<Result<Value, String>> {
     // A newer OS clipboard image supersedes a path clip, like any newer clip: refresh the import
-    // first — its signature guard leaves an unchanged OS image (and the path clip) alone — and
-    // route only what is still the freshest clip. The copy/cut below calibrates the baseline,
-    // so both orderings hold: an older OS image never displaces a newly copied path, and an OS
-    // image copied afterwards still wins on Paste.
+    // first — its freshness guard leaves an unchanged OS image (and known-fresh internal
+    // content) alone, and learns the baseline it needs to order the two clips. Routing then
+    // dispatches whatever is still the freshest clip.
     if id == "edit.paste" && app.session.path_clipboard.is_some() && app.services.clipboard_get_image.is_some() {
         let _ = app.import_os_clipboard();
     }
@@ -235,10 +234,10 @@ mod tests {
         assert_eq!(shape(&app).1.path.subpaths.len(), 2, "the shape is untouched");
     }
 
-    /// Paste precedence, one clipboard, both orderings: the Edit Copy calibrates the OS baseline
-    /// (in `run`, for menu copies and direct engine calls alike), so an unchanged or older OS
-    /// image never displaces a known-fresh path clip, while a genuinely newer OS image still
-    /// wins. An empty OS clipboard at copy time is a baseline too.
+    /// Paste precedence, one clipboard: an OS image displaces a path clip only after the app has
+    /// a baseline. The first observation (here: the first paste's read) only learns the
+    /// baseline — the older OS image cannot displace the fresh copy; once the baseline exists,
+    /// a changed OS image wins and an unchanged one never displaces.
     #[test]
     fn paste_prefers_a_newer_os_image() {
         let os = std::sync::Arc::new(std::sync::Mutex::new(None::<(u32, u32, Vec<u8>)>));
@@ -253,7 +252,8 @@ mod tests {
         app.ui.tool = Tool::PathSelection;
         let paste = |app: &mut PhotocraftApp| app.run("edit.paste", json!({"center": [20.0, 20.0]})).unwrap();
 
-        // Ordering 1 — the OS image predates the Edit Copy: it cannot displace the clip.
+        // No baseline yet — the OS image (older than the copy) cannot displace the fresh clip;
+        // the paste's read only learns the baseline.
         *os.lock().unwrap() = Some((2, 2, [0u8, 255u8, 0, 255].repeat(4)));
         crate::path_components::press(&mut app, [10.0, 10.0], false);
         app.run("edit.copy", json!({})).unwrap();
@@ -261,7 +261,7 @@ mod tests {
         paste(&mut app);
         assert!(saved(&app, "Pasted Path").is_some(), "the older OS image did not displace the path clip");
         assert!(app.session.clipboard.is_none(), "and it was not installed as a pixel clip");
-        // Ordering 2 — a newer OS image supersedes the clip: ⌘V pastes the pixels.
+        // With the baseline, a changed OS image supersedes the clip: ⌘V pastes the pixels.
         *os.lock().unwrap() = Some((2, 2, [255u8, 0, 0, 255].repeat(4)));
         paste(&mut app);
         assert!(app.session.path_clipboard.is_none(), "the newer OS image replaced the path clip");
@@ -270,24 +270,16 @@ mod tests {
             Some(2),
             "the OS image pasted as a new layer"
         );
-        // Ordering 3 — empty OS clipboard at copy time: the sentinel baseline lets an image
-        // copied afterwards still win. (The pixel paste above left its layer active; select the
-        // shape again.)
+        // An unchanged OS image never displaces a fresh copy. (The pixel paste left its layer
+        // active and the panel holds "Pasted Path"; the black arrow targets the panel-selected
+        // path, so select the shape and clear the panel for the press to reach it again.)
         app.run("layer.select", json!({"layer": shape_id.0})).unwrap();
-        // The first paste left "Pasted Path" selected in the panel; the black arrow targets the
-        // panel-selected path, so clear it for the press to reach the shape again.
         app.ui.selected_path = None;
         crate::path_components::press(&mut app, [10.0, 10.0], false);
-        *os.lock().unwrap() = None;
         app.run("edit.copy", json!({})).unwrap();
         paste(&mut app);
-        assert!(app.session.clipboard.is_none(), "no pixel clip was installed");
-        assert!(app.session.path_clipboard.is_some(), "the empty baseline kept the path paste");
-        *os.lock().unwrap() = Some((2, 2, [0u8, 0, 255, 255].repeat(4)));
-        let layers_before = app.session.active().unwrap().doc.walk().len();
-        paste(&mut app);
-        assert!(app.session.path_clipboard.is_none(), "the image copied after the empty baseline won");
-        assert_eq!(app.session.active().unwrap().doc.walk().len(), layers_before + 1, "the third paste added a layer");
+        assert!(app.session.clipboard.is_none(), "the unchanged image did not install a pixel clip");
+        assert!(app.session.path_clipboard.is_some(), "and the fresh path clip survived");
         drop(a);
     }
 

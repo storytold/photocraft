@@ -21,12 +21,6 @@ impl PhotocraftApp {
         if gate.is_some() {
             self.session.authorize = None;
         }
-        if result.is_ok() && matches!(id, "path.copy" | "path.cut") {
-            // A new path clip is known-fresh: baseline the OS clipboard against it (one read)
-            // so a later Paste orders the two clips — for Edit menu copies and direct calls
-            // (agents, MCP) alike.
-            self.calibrate_os_clipboard();
-        }
         // An explicit channel target (⌘2, ⌘\, ⌘3…) decides what the Layers panel targets too:
         // ⌘2 after the mask was targeted goes back to the layer's pixels.
         if result.is_ok() && id.starts_with("channel.target") {
