@@ -176,6 +176,23 @@ fn a_rounded_rectangle_writes_its_border_radius() {
     assert!(css.contains("  border-radius: 24px;\n  background-color: rgb(255, 0, 0);\n"), "{css}");
 }
 
+/// Scaled 200 % across and 100 % down, a rounded rectangle's corners are 24 × 12 px ellipses, but
+/// it keeps one radius per corner (12): no `border-radius` rather than a circular one. A flipped
+/// one, whose outline runs the other way, keeps its circular corners and writes them.
+#[test]
+fn an_unequally_scaled_rounded_rectangle_writes_no_border_radius() {
+    let mut s = session("Box");
+    let create = json!({"kind": "roundedRect", "rect": [40, 30, 120, 80], "radius": 12, "fill": "#ff0000"});
+    let id = s.execute("shape.create", create.clone()).unwrap()["layer"].as_u64().unwrap();
+    s.execute("shape.edit", json!({"layer": id, "transform": [2, 0, 0, 1, 0, 0]})).unwrap();
+    let css = s.execute(ID, json!({"layer": id})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(!css.contains("border-radius") && css.contains(" {\n  background-color: rgb(255, 0, 0);\n"), "{css}");
+    let flipped = s.execute("shape.create", create).unwrap()["layer"].as_u64().unwrap();
+    s.execute("shape.edit", json!({"layer": flipped, "transform": [-1, 0, 0, 1, 400, 0]})).unwrap();
+    let css = s.execute(ID, json!({"layer": flipped})).unwrap()["css"].as_str().unwrap().to_string();
+    assert!(css.contains(" {\n  border-radius: 12px;\n  background-color: rgb(255, 0, 0);\n"), "{css}");
+}
+
 /// A live ellipse writes `border-radius: 50%;` where a rounded rectangle writes its radii, so the
 /// rule draws an ellipse, not a rectangle; other live shapes (a star here) write no geometry.
 #[test]
