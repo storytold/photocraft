@@ -363,6 +363,12 @@ Recording; Clear All Actions, Reset Actions, Load Actions, Replace Actions, Save
 Textures, Video Actions); Close, Close Tab Group. Playback Options: Accelerated, Step by Step, Pause For
 1..60 seconds.
 
+How two menu entries record: **Insert Menu Item** records the chosen menu command's own event with no
+descriptor (Image > Image Size gives an `imageSize` step without settings; playback opens its dialog).
+**Insert Path** records a `set` of the work path: `null` = reference `Path` property `WrPt`, `T   ` = list
+of path components (`shapeOperation`, `SbpL` list of subpaths, each with `Clsp` closed and `Pts ` list of
+points with `Anch` in pixels).
+
 ## Older files: version 12
 
 Action sets saved by the reference application's version 5 era use file version 12. PhotoCraft rejects
