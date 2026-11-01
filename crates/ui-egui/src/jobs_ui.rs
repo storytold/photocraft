@@ -747,9 +747,10 @@ pub fn dialog(app: &mut PhotocraftApp, ctx: &egui::Context) {
     // Photoshop doesn't dim the window behind its progress dialog either.
     let modal = egui::Modal::new(egui::Id::unique("job-progress")).backdrop_color(Color32::from_black_alpha(36)).show(ctx, |ui| {
         ui.set_width(360.0);
-        // One direction-aware body: in LTR `body_layout()` is the Modal's own layout, so nothing
-        // moves; in RTL the blocks hug the reading end and every nested row mirrors.
-        ui.scope_builder(egui::UiBuilder::new().max_rect(ui.max_rect()).layout(crate::direction::body_layout()), |ui| {
+        // One direction-aware body: `dialog_content` bounds it to the modal's content rect in
+        // both directions — LTR runs the Modal's own layout unchanged; RTL re-scopes with
+        // `body_layout()` sized from the cursor, so title and content never share a baseline.
+        crate::direction::dialog_content(ui, |ui| {
             ui.label(RichText::new(tl!(&j.label)).font(crate::theme::semibold(15.0)));
             ui.add_space(4.0);
             crate::widgets::hairline(ui);
@@ -889,3 +890,68 @@ pub fn bytes(b: &[u8]) -> OpenSource {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod dialog_content_rtl_tests {
+    use crate::text::direction::Dir;
+
+    fn raw_text_rect(out: &egui::FullOutput, text: &str) -> egui::Rect {
+        fn find(shape: &egui::Shape, text: &str) -> Option<egui::Rect> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.job.text == text => Some(egui::Rect::from_min_size(t.pos + t.galley.rect.min.to_vec2(), t.galley.size())),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, text)),
+                _ => None,
+            }
+        }
+        out.shapes.iter().find_map(|s| find(&s.shape, text)).unwrap_or_else(|| panic!("`{text}` painted"))
+    }
+
+    /// The migrated job-progress modal body: `dialog_content` around a title and one
+    /// reading-order row. Returns the (title, row-label, row-button) rects under `dir`.
+    fn body_probe(dir: Dir) -> (egui::Rect, egui::Rect, egui::Rect) {
+        let _scope = crate::direction::direction_scope(dir);
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+        let out = ctx.run_ui(
+            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 300.0))), ..Default::default() },
+            |ui| {
+                ui.set_width(360.0);
+                crate::direction::dialog_content(ui, |ui| {
+                    ui.label("job-title");
+                    crate::direction::dialog_row(ui, |ui| {
+                        ui.label("job-row-label");
+                        ui.button("job-row-button");
+                    });
+                });
+            },
+        );
+        (raw_text_rect(&out, "job-title"), raw_text_rect(&out, "job-row-label"), raw_text_rect(&out, "job-row-button"))
+    }
+
+    /// Both directions: the title and the first body row never share a baseline.
+    #[test]
+    fn dialog_content_keeps_title_and_row_apart_in_both_directions() {
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let (title, row, _) = body_probe(dir);
+            assert!(title.bottom() <= row.top() + 0.5, "{dir:?}: title and body row share a baseline: {title:?} vs {row:?}");
+        }
+    }
+
+    /// RTL: the row mirrors — the label leads from the right, the button follows to its left.
+    #[test]
+    fn rtl_dialog_content_row_mirrors() {
+        let (_, row, button) = body_probe(Dir::Rtl);
+        assert!(row.left() > button.right(), "RTL: the label leads from the right: {row:?} vs {button:?}");
+    }
+
+    /// LTR twin: the button follows the label on the left-to-right row; the gap matches RTL.
+    #[test]
+    fn ltr_dialog_content_row_keeps_order_and_gap() {
+        let (_, ltr_row, ltr_button) = body_probe(Dir::Ltr);
+        let (_, rtl_row, rtl_button) = body_probe(Dir::Rtl);
+        assert!(ltr_button.left() > ltr_row.right(), "LTR: the label leads from the left: {ltr_row:?} vs {ltr_button:?}");
+        let ltr_gap = ltr_button.left() - ltr_row.right();
+        let rtl_gap = rtl_row.left() - rtl_button.right();
+        assert!((ltr_gap - rtl_gap).abs() < 1.5, "gap differs: LTR {ltr_gap} vs RTL {rtl_gap}");
+    }
+}
