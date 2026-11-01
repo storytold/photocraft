@@ -75,7 +75,11 @@ pub(super) fn levels(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let mut l = read_levels(v, chan.key);
     let mut e = Edit::default();
     let mut changed = false;
-    if auto && let Some(h) = &cx.hist {
+    // An empty histogram (a fully transparent layer) has no black or white point to find.
+    if auto
+        && let Some(h) = &cx.hist
+        && h[hist_i].iter().any(|&n| n != 0)
+    {
         let (lo, hi) = auto_levels(&h[hist_i]);
         l[0] = lo;
         l[2] = hi;

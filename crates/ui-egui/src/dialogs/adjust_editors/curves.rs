@@ -1,6 +1,6 @@
 use super::{
-    Color32, CurveUi, Edit, EditorCx, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, ToneSpace, Value, adjust_params, curve_edit, json, label, pos2,
-    space_of, tone, vec2, widgets,
+    Color32, CurveUi, Edit, EditorCx, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Tokens, ToneSpace, Value, adjust_params, auto_levels, curve_edit, json,
+    label, pos2, space_of, tone, vec2, widgets,
 };
 
 // ---------------------------------------------------------------------------------------------
@@ -303,7 +303,17 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let state_id = cx.mem.with("curves");
     let mut st: CurveUi = ui.data(|d| d.get_temp(state_id)).unwrap_or_default();
     let isolated = cx.isolated_curve.as_ref();
-    let ch = editor_channel_picker(ui, cx.mem.with("curves-ch"), &channels);
+    // Channel menu, with Auto at the right of its row as in Photoshop's Curves (#9229).
+    let mut auto = false;
+    let ch = ui
+        .horizontal(|ui| {
+            let ch = editor_channel_picker(ui, cx.mem.with("curves-ch"), &channels);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                auto = widgets::secondary_button(ui, tl!("Auto"), 0.0).on_hover_text(tl!("Automatically correct curves")).clicked();
+            });
+            ch
+        })
+        .inner;
     if ch != st.channel {
         st = CurveUi { channel: ch, ..Default::default() };
     }
@@ -312,6 +322,13 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
     let tinted = isolated.is_some_and(|c| c.tint) || (isolated.is_none_or(|c| c.components.is_some()) && ch != 0);
     let key = curve_key(&chan);
     let mut e = curves_mode_row(ui, v, key, cx);
+    // Auto: the shown channel's curve runs from its histogram's black point to its white point,
+    // the same automatic points as Levels' Auto (a drawn curve becomes a point curve first). An
+    // empty histogram (a fully transparent layer) has no such points: Auto changes nothing.
+    let auto_points = auto.then(|| cx.hist.as_ref().filter(|h| h[hist_i].iter().any(|&n| n != 0)).map(|h| auto_levels(&h[hist_i]))).flatten();
+    if auto_points.is_some() && v.get("pencil").and_then(Value::as_bool).unwrap_or(false) {
+        e.add(Edit::discrete(set_editor_pencil(v, false, cx)));
+    }
     let pencil = v.get("pencil").and_then(Value::as_bool).unwrap_or(false);
     let mut pts = read_curve(v, key);
     let mut map = read_map(v, key);
@@ -348,6 +365,11 @@ pub(super) fn curves(ui: &mut egui::Ui, v: &mut Value, cx: &EditorCx) -> Edit {
         let interaction = crate::point_curve::interact(ui, &resp, graph, &mut pts, &mut st.gesture);
         changed = interaction.changed;
         e.commit |= interaction.commit;
+    }
+    if let Some((lo, hi)) = auto_points {
+        pts = vec![[lo, 0.0], [hi, 255.0]];
+        changed = true;
+        e.commit = true;
     }
 
     // Draw: histogram, quarter grid, baseline, gradient bars, other channels, the curve, points.

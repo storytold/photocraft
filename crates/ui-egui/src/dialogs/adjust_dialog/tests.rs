@@ -405,6 +405,107 @@ fn curves_pencil_drag_draws_the_map_and_confirm_applies_it() {
     assert_eq!(h.state().session.active().unwrap().history.past_len(), steps + 1);
 }
 
+/// #9229: Curves has an Auto button beside the channel menu, as Photoshop's does: on a
+/// low-contrast image it stretches the curve from the image's darkest to its lightest level
+/// (the same automatic points as Levels' Auto), as one edit, a drawn curve included.
+#[test]
+fn curves_auto_stretches_a_low_contrast_image() {
+    let two_tone = || {
+        let mut s = photocraft_engine::Session::new();
+        s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 32, "height": 48})).unwrap();
+        s.execute("edit.fill", json!({"color": "#3c3c3c"})).unwrap();
+        s.execute("select.inverse", json!({})).unwrap();
+        s.execute("edit.fill", json!({"color": "#bebebe"})).unwrap();
+        s.execute("select.deselect", json!({})).unwrap();
+        PhotocraftApp::new(s, crate::Services::default())
+    };
+    for pencil in [false, true] {
+        let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), two_tone());
+        PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+        let id = open(h.state_mut(), "image.adjustments.curves").unwrap();
+        if pencil {
+            // A drawn (inverted) curve: Auto replaces it with its point curve.
+            let fields = &mut h.state_mut().ui.dialog_mut(id).unwrap().fields;
+            fields.insert("pencil".into(), json!(true));
+            fields.insert("points".into(), json!((0..256).map(|i| 255 - i).collect::<Vec<_>>()));
+        }
+        h.run_steps(4);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Auto").click();
+        h.run_steps(3);
+        let f = &h.state().ui.dialogs[0].fields;
+        assert_eq!(f["points"], json!([[60.0, 0.0], [190.0, 255.0]]), "pencil {pencil}: {f:?}");
+        assert_ne!(f.get("pencil"), Some(&json!(true)), "Auto leaves a point curve");
+    }
+}
+
+/// Clicks `kind`'s Auto on a fully transparent layer, with `key` set to `value` first, and
+/// returns the settings before and after.
+fn auto_on_a_transparent_layer(kind: &str, key: &str, value: Value) -> (Value, Value) {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("layer.new.layer", json!({})).unwrap();
+    let app = PhotocraftApp::new(s, crate::Services::default());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), &format!("image.adjustments.{kind}")).unwrap();
+    h.state_mut().ui.dialog_mut(id).unwrap().fields.insert(key.into(), value);
+    h.run_steps(4);
+    let before = crate::filter_dialog::params_of(&h.state_mut().ui.dialog_mut(id).unwrap().fields);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Auto").click();
+    h.run_steps(3);
+    (before, crate::filter_dialog::params_of(&h.state_mut().ui.dialog_mut(id).unwrap().fields))
+}
+
+/// CodeRabbit on #9237: a fully transparent layer has an empty histogram, so Curves' Auto leaves
+/// the curve alone instead of clipping it to the levels 253..255.
+#[test]
+fn curves_auto_on_a_fully_transparent_layer_changes_nothing() {
+    let points = json!([[0.0, 0.0], [128.0, 160.0], [255.0, 255.0]]);
+    let (before, after) = auto_on_a_transparent_layer("curves", "points", points.clone());
+    assert_eq!(after, before);
+    assert_eq!(after["points"], points);
+}
+
+/// CodeRabbit on #9237: the same for Levels' Auto, whose points Curves' Auto shares.
+#[test]
+fn levels_auto_on_a_fully_transparent_layer_changes_nothing() {
+    let (before, after) = auto_on_a_transparent_layer("levels", "inBlack", json!(20.0));
+    assert_eq!(after, before);
+    assert_eq!(after["inBlack"], json!(20.0));
+}
+
+/// Clicks `kind`'s Auto on a flat image (every pixel `hex`) and returns the settings after.
+fn auto_on_a_flat_image(kind: &str, hex: &str) -> Value {
+    let mut s = photocraft_engine::Session::new();
+    s.execute("file.new", json!({"width": 64, "height": 48})).unwrap();
+    s.execute("edit.fill", json!({"color": hex})).unwrap();
+    let app = PhotocraftApp::new(s, crate::Services::default());
+    let mut h = Harness::builder().with_size(egui::vec2(1200.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), app);
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::ALL[0]);
+    let id = open(h.state_mut(), &format!("image.adjustments.{kind}")).unwrap();
+    h.run_steps(4);
+    h.get_by_role_and_label(egui::accesskit::Role::Button, "Auto").click();
+    h.run_steps(3);
+    crate::filter_dialog::params_of(&h.state_mut().ui.dialog_mut(id).unwrap().fields)
+}
+
+/// #9237 review: on a flat image (all one level) Curves' Auto gives finite points with distinct
+/// inputs, so the curve never collapses to a vertical line, and the same black and white points
+/// as Levels' Auto, which keeps them at least 2 levels apart.
+#[test]
+fn curves_auto_on_a_flat_image_keeps_a_finite_non_vertical_curve_like_levels() {
+    for (hex, lo, hi) in [("#000000", 0.0, 2.0), ("#808080", 128.0, 130.0), ("#ffffff", 253.0, 255.0)] {
+        let curves = auto_on_a_flat_image("curves", hex);
+        let pts: Vec<[f64; 2]> = serde_json::from_value(curves["points"].clone()).unwrap();
+        assert!(pts.iter().flatten().all(|x| x.is_finite()), "{hex}: {pts:?}");
+        assert!(pts.windows(2).all(|w| w[1][0] > w[0][0]), "{hex}: the inputs increase, no vertical segment: {pts:?}");
+        assert_eq!(pts, vec![[lo, 0.0], [hi, 255.0]], "{hex}");
+        let levels = auto_on_a_flat_image("levels", hex);
+        assert_eq!((levels["inBlack"].as_f64(), levels["inWhite"].as_f64()), (Some(lo), Some(hi)), "{hex}: Levels' Auto, the same points");
+    }
+}
+
 #[test]
 fn curves_pointer_drag_previews_until_confirm_and_cancel_preserves_document() {
     for confirm in [false, true] {
