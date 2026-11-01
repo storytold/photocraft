@@ -400,3 +400,45 @@ fn nearest_neighbor_reduction_does_not_average() {
         }
     }
 }
+
+/// Image Size of a white glyph on a transparent background (#10639): shrinking rings, so the
+/// premultiplied colour and alpha overshoot differently; where alpha is clamped to a few
+/// percent the colour was divided out wrongly and left dark speckles round a white shape that a
+/// black one never shows. Both colours must keep the same coverage, white staying white.
+#[test]
+fn white_on_transparent_shrinks_like_black() {
+    fn disc(v: f32, fmt: PixelFormat) -> Surface {
+        let mut s = Surface::new(fmt);
+        let mut px = Vec::new();
+        for y in 0..512 {
+            for x in 0..512 {
+                let d = (((x as f32 - 255.5).powi(2) + (y as f32 - 255.5).powi(2)).sqrt() - 180.0).clamp(-0.5, 0.5);
+                let a = 0.5 - d;
+                // A ring inside too, so there are sharp inner edges.
+                let hole = ((((x as f32 - 255.5).powi(2) + (y as f32 - 255.5).powi(2)).sqrt() - 80.0).clamp(-0.5, 0.5) + 0.5).clamp(0.0, 1.0);
+                px.extend_from_slice(&[v, v, v, a * hole]);
+            }
+        }
+        s.write_region(Rect::new(0, 0, 512, 512), &px);
+        s
+    }
+    let k = 56.0 / 512.0;
+    for (filter, fmt) in [Resample::Bicubic, Resample::BicubicSharper, Resample::Lanczos, Resample::PreserveDetails]
+        .into_iter()
+        .flat_map(|f| [PixelFormat::RGBA32F, PixelFormat::RGBA8].map(|p| (f, p)))
+    {
+        let white = resize_surface(&disc(1.0, fmt), k, k, filter);
+        let black = resize_surface(&disc(0.0, fmt), k, k, filter);
+        for y in 0..56 {
+            for x in 0..56 {
+                let (w, b) = (white.pixel(x, y), black.pixel(x, y));
+                // Beyond the black shape's bounds the result is cut off, so compare coverage within it.
+                assert!(b[3] <= 1e-3 || (w[3] - b[3]).abs() < 1e-3, "{filter:?} {fmt:?} alpha at {x},{y}: {w:?} vs {b:?}");
+                if w[3] > 1e-3 {
+                    assert!(w[0] > 0.9 && w[1] > 0.9 && w[2] > 0.9, "{filter:?} {fmt:?} dark fringe at {x},{y}: {w:?}");
+                    assert!(b[0] < 0.1, "{filter:?} {fmt:?} black fringe at {x},{y}: {b:?}");
+                }
+            }
+        }
+    }
+}

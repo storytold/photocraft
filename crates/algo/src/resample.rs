@@ -469,12 +469,15 @@ fn resize_pass(s: &Surface, pass: Pass, canvas: Option<Rect>, budget: usize) -> 
                 *dv += sv * t.outside;
             }
         }
+        // The colour is divided by the alpha the filter produced, then the alpha is clipped: clipping
+        // an overshoot first left the colour at its overshoot, which the next pass weighed against a
+        // smaller alpha and darkened the edge of a white shape on transparency (#10639).
+        unpremultiply(&mut res, n, alpha);
         if alpha {
             for px in res.chunks_exact_mut(n) {
                 px[n - 1] = px[n - 1].clamp(0.0, 1.0);
             }
         }
-        unpremultiply(&mut res, n, alpha);
         (Rect::new(dst.x0, dst.y0 + b0 as i32, dst.x1, dst.y0 + b1 as i32), res)
     };
     // Bands go into the output a group at a time, so the `f32` rows held at once are bounded by
