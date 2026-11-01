@@ -76,7 +76,7 @@ fn selected_pixels_become_one_editable_smart_object_in_every_mode_and_depth() {
             let sm = active_smart(&s);
             for source in &original.layers {
                 let mut shifted = source.clone();
-                shift_layer(&mut shifted, -(sm.transform.m[4] as i32), -(sm.transform.m[5] as i32));
+                shift_layer(&mut shifted, -(sm.transform.m[4] as i32), -(sm.transform.m[5] as i32)).unwrap();
                 assert_eq!(inner.layer(source.id).unwrap(), &shifted, "editable source preserved");
             }
             assert!(s.undo());

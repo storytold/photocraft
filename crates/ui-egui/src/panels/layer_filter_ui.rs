@@ -185,7 +185,7 @@ pub fn board_rows(doc: &Document, selection: &[LayerId]) -> HashSet<LayerId> {
 }
 
 /// The kinds the Kind filter toggles.
-pub const KINDS: [&str; 5] = ["pixel", "adjustment", "type", "shape", "smart"];
+pub const KINDS: [&str; 6] = ["pixel", "adjustment", "type", "shape", "smart", "deep"];
 
 /// The Smart Object filter's toggles: smart objects linked to a file, linked to a file that is
 /// not there, and embedded in the document.
@@ -283,6 +283,7 @@ fn kind(l: &Layer) -> &'static str {
         LayerContent::Text(_) => "type",
         LayerContent::Shape(_) => "shape",
         LayerContent::Smart(_) => "smart",
+        LayerContent::Deep(_) => "deep",
         LayerContent::Group(_) => "",
     }
 }
@@ -312,6 +313,7 @@ pub fn bar(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     ("type", "type", tl!("Filter for type layers")),
                     ("shape", "square", tl!("Filter for shape layers")),
                     ("smart", "app-window", tl!("Filter for smart objects")),
+                    ("deep", "layers", tl!("Filter for deep layers")),
                 ] {
                     let on = app.ui.layer_filter.iter().any(|k| k == kind);
                     if icons::button(ui, icon, 22.0, on, tip).clicked() {
