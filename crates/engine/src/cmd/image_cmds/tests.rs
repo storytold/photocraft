@@ -960,6 +960,87 @@ fn duplicate_document() {
     assert_eq!(s.documents().len(), 2);
     assert_eq!(doc(&s).layers.len(), 1);
     assert!(doc(&s).name.ends_with("copy"));
+
+    #[test]
+    fn moving_the_canvas_refuses_a_deep_origin_overflow() {
+        let mut s = session();
+        let deep = LayerContent::Deep(photocraft_doc::DeepData {
+            x: i32::MAX - 5,
+            y: 0,
+            width: 40,
+            height: 20,
+            channels: vec![photocraft_doc::DeepChannel { name: "A".into(), samples: vec![1.0] }],
+            counts: vec![0, 1],
+        });
+        s.edit("deep", |doc, _| {
+            doc.layers.push(Layer::new("deep", deep));
+            Ok(())
+        })
+        .unwrap();
+        let err = s.edit("move", |doc, _| translate_doc(doc, "move", 10, 0)).unwrap_err();
+        assert!(err.to_string().contains("32-bit coordinate range"), "{err}");
+    }
+    #[test]
+    fn deep_layers_move_with_the_canvas_and_refuse_resampling() {
+        let mut s = session();
+        // A 1-pixel deep layer with one opaque sample.
+        let deep = LayerContent::Deep(photocraft_doc::DeepData {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+            channels: vec![photocraft_doc::DeepChannel { name: "A".into(), samples: vec![1.0] }],
+            counts: vec![0, 1],
+        });
+        let id = s
+            .edit("deep", |doc, _| {
+                doc.layers.push(Layer::new("deep", deep));
+                let id = doc.layers.last().unwrap().id;
+                Ok(id)
+            })
+            .unwrap();
+        // Whole-canvas translation moves the data's origin, like every other content.
+        s.edit("move", |doc, _| {
+            translate_doc(doc, "move", 5, 7)?;
+            Ok(())
+        })
+        .unwrap();
+        assert!(matches!(&doc(&s).layer(id).unwrap().content, LayerContent::Deep(d) if d.x == 5 && d.y == 7));
+        // Resampling deep samples is refused instead of silently desyncing them.
+        let err = s.execute("image.imageSize", json!({"width": 20, "height": 10})).unwrap_err();
+        assert!(err.to_string().contains("deep layers"), "{err}");
+    }
+    #[test]
+    fn canvas_ops_refuse_deep_documents() {
+        let mut s = session();
+        let deep = LayerContent::Deep(photocraft_doc::DeepData {
+            x: 0,
+            y: 0,
+            width: 40,
+            height: 20,
+            channels: vec![photocraft_doc::DeepChannel { name: "A".into(), samples: vec![1.0] }],
+            counts: vec![0, 1],
+        });
+        s.edit("deep", |doc, _| {
+            doc.layers.push(Layer::new("deep", deep));
+            Ok(())
+        })
+        .unwrap();
+        for cmd in [
+            "image.imageRotation.90cw",
+            "image.imageRotation.90ccw",
+            "image.imageRotation.180",
+            "image.imageRotation.flipCanvasHorizontal",
+            "image.imageRotation.flipCanvasVertical",
+            "image.canvasSize",
+        ] {
+            let params = if cmd == "image.canvasSize" { json!({"width": 30, "height": 20}) } else { json!({}) };
+            let err = s.execute(cmd, params).unwrap_err().to_string();
+            assert!(err.contains("deep layers"), "{cmd}: {err}");
+        }
+        // A non-deleting crop (just moving the canvas) is fine.
+        s.execute("image.crop", json!({"x": 0, "y": 0, "width": 30, "height": 20, "deleteCroppedPixels": false})).unwrap();
+    }
 }
 
 #[test]

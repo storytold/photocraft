@@ -1,5 +1,6 @@
 use super::composite::{adjustment_quantum, blend_into, composite_stack};
 use super::ctx::Ctx;
+use super::deep;
 use super::extents::{effect_shape, effect_source_bounds, mask_vals, shapeless_stroke_bounds, transparent_outside};
 use super::fx_cache::effect_maps;
 use super::{BlendMode, Buffer, Document, Fill, Layer, LayerContent, Pattern, Rect, Surface, bounds, effects, gradient_fill, pattern, shape_split};
@@ -84,6 +85,7 @@ pub(crate) fn render_content(layer: &Layer, rect: Rect, cx: &Ctx) -> Option<Buff
             _ => render_fill(f, rect, fill_frame(layer, cx.canvas), cx.patterns, adjustment_quantum(cx.depth)),
         },
         LayerContent::Adjustment(_) => return None,
+        LayerContent::Deep(d) => return Some(deep::render(d, rect)),
         _ => match layer.surface() {
             Some(s) => surface_to_scratch(s, rect),
             None => Buffer::transparent(rect),

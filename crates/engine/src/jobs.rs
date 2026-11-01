@@ -517,6 +517,17 @@ pub fn import_options(prefs: &crate::prefs::Preferences) -> photocraft_io::Impor
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn read_path(path: &str) -> Result<Vec<u8>> {
+    // Bounded reads, and a clear error for a file larger than memory (#375).
+    photocraft_format::read_file(std::path::Path::new(path)).map_err(|e| EngineError::Other(format!("{path}: {e}")))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn read_path(path: &str) -> Result<Vec<u8>> {
+    Err(EngineError::Other(format!("cannot open paths on the web: {path}")))
+}
+
 impl Session {
     /// Run the heavy part of inline (not background) job commands under `ctx`, so another thread
     /// can cancel them: a live preview whose parameters changed stops its stale computation
@@ -612,6 +623,37 @@ impl Session {
                     st.source_read_only = r.source_read_only;
                 }
                 Ok(json!({"document": index, "docId": id.0, "name": name_a, "warnings": r.warnings, "color": color}))
+            },
+        )
+    }
+
+    /// [`Session::start_open`] for deep EXRs: the document keeps its depth data as a deep
+    /// layer (`io::import_deep_exr`) instead of opening flattened.
+    pub fn start_open_deep(&mut self, name: &str, source: OpenSource) -> Result<Started> {
+        let label = format!("Opening {name}");
+        let name_w = name.to_string();
+        let name_a = name.to_string();
+        self.start_job(
+            OPEN_JOB,
+            json!({"name": name, "deep": true}),
+            &label,
+            false,
+            move |ctx| {
+                ctx.progress(0.0, "Reading");
+                let bytes = match source {
+                    OpenSource::Bytes(b) => b,
+                    OpenSource::Path(p) => Arc::new(read_path(&p)?),
+                };
+                ctx.check()?;
+                ctx.progress(0.02, "Decoding");
+                photocraft_io::import_deep_exr(&name_w, &bytes, &photocraft_codecs::Limits::default()).map_err(|e| match e {
+                    photocraft_io::IoError::Cancelled => EngineError::Cancelled,
+                    e => EngineError::Other(e.to_string()),
+                })
+            },
+            move |s, r: photocraft_io::ImportResult| {
+                let (index, color) = s.open_document(r.document, None);
+                Ok(json!({"document": index, "name": name_a, "warnings": r.warnings, "color": color}))
             },
         )
     }
