@@ -139,6 +139,28 @@ fn pro_light_gray_and_light_themes() {
 }
 
 #[test]
+fn cs4_theme_is_a_light_pro_frame() {
+    let kind = ThemeKind::Cs4;
+    let t = Tokens::for_kind(kind);
+    assert!(t.pro && !t.dark() && !t.bevel && kind.is_pro() && kind.is_light());
+    assert!((t.radius_sm, t.radius, t.radius_lg) == (1.0, 1.0, 2.0));
+    assert_eq!((kind.id(), kind.label()), ("cs4", "CS4"));
+    assert_eq!(ThemeKind::from_name("cs4"), Some(kind));
+    assert_eq!(ThemeKind::from_name("Photoshop CS4"), Some(kind));
+    assert!(ThemeKind::ALL.contains(&kind));
+    for bg in [t.card, t.chrome, t.dock, t.field, t.hover, t.pressed, t.row_selected, t.tab_strip] {
+        assert!(contrast(t.text, bg) >= 4.5, "text on {bg:?}: {}", contrast(t.text, bg));
+        assert!(contrast(t.icon, bg) >= 3.0, "icon on {bg:?}: {}", contrast(t.icon, bg));
+        assert!(contrast(t.text_dim, bg) >= 3.0, "dim text on {bg:?}: {}", contrast(t.text_dim, bg));
+    }
+    assert!(contrast(t.text_faint, t.card) >= 2.0, "faint text");
+    assert!(contrast(t.accent_text, t.card) >= 3.0, "accent text");
+    assert!(contrast(t.primary_text, t.primary_bg) >= 4.5, "primary button");
+    assert!(contrast(t.warning, t.chrome) >= 4.5, "warning on chrome: {}", contrast(t.warning, t.chrome));
+    assert_eq!(t.danger, Tokens::for_kind(ThemeKind::Pro).danger);
+}
+
+#[test]
 fn field_selection_is_grey_only_for_the_monochrome_pro_themes() {
     // #3789: a text field's selection is a subtle grey in the monochrome Pro themes, not a
     // second blue accent; coloured themes keep their accent.

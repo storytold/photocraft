@@ -650,7 +650,7 @@ dependencies = [
  "bitflags 2.13.2",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -3347,15 +3347,6 @@ checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
 
 [[package]]
 name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -4543,6 +4534,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-image-capture-core"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6b153f2757b48c47daa739a4c8f27ec2912ddbfe5cb6fd28738ec5d6e1a0e83a"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-image-io"
 version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4995,6 +4996,7 @@ dependencies = [
  "photocraft-geom",
  "photocraft-io",
  "photocraft-raster",
+ "photocraft-scan",
  "photocraft-tablet",
  "photocraft-ui-egui",
  "plist",
@@ -5363,6 +5365,16 @@ dependencies = [
  "zune-core 0.5.3",
  "zune-jpeg 0.5.15",
  "zune-jpegxl",
+]
+
+[[package]]
+name = "photocraft-scan"
+version = "0.18.0"
+dependencies = [
+ "image",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+ "objc2-image-capture-core",
 ]
 
 [[package]]

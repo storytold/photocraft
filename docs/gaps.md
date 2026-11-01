@@ -391,6 +391,9 @@ what an agent can't finish alone.
   Display"); monitor profile detection off macOS and live profile changes; Touch Bar (macOS
   Intel only, low value); 3D mice.
 - **Detail:** [`hardware-parity.md`](hardware-parity.md).
+- **Progress (2026-10-31):** macOS File › Import › Scan… acquires one page through Image Capture
+  (USB and network, 75–600 dpi, colour, gray or black and white). Windows WIA is still a menu stub.
+  This does not close G12.
 - **Estimate:** 80–150 h. **Human:** tablets and HDR displays to test on.
 
 ## Localization gaps

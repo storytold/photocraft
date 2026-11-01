@@ -74,6 +74,9 @@
   <false/>
   <key>NSHumanReadableCopyright</key>
   <string>Copyright © the PhotoCraft authors. MIT OR Apache-2.0.</string>
+  <!-- File › Import › Scan… browses Bonjour scanners. USB scanners do not need this. -->
+  <key>NSLocalNetworkUsageDescription</key>
+  <string>PhotoCraft looks for scanners on your local network.</string>
 
   <!-- PhotoCraft's own format. -->
   <key>UTExportedTypeDeclarations</key>
