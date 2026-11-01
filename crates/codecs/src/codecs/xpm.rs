@@ -127,6 +127,7 @@ fn color(name: &str) -> Option<[u8; 4]> {
         let digits = match hex.len() {
             3 => 1,
             6 => 2,
+            9 => 3,
             12 => 4,
             _ => return None,
         };
