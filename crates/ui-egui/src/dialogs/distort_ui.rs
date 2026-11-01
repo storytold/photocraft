@@ -583,6 +583,26 @@ mod tests {
         assert_eq!(app.session.active().unwrap().doc.layers.len(), layers - 1);
     }
 
+    /// A full-window workspace covers the canvas, which then skips its document paint; a
+    /// workspace that draws on the canvas (Puppet Warp) does not count.
+    #[test]
+    fn a_full_window_workspace_covers_the_canvas() {
+        let ctx = egui::Context::default();
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), Default::default());
+        assert!(!crate::canvas::canvas_covered(&app));
+        app.session.execute("file.new", json!({"width": 100, "height": 80, "depth": 8})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        paint_bar(&mut app);
+        crate::liquify_ui::open(&mut app, &ctx).unwrap();
+        assert!(crate::canvas::canvas_covered(&app), "Liquify is a full-window workspace");
+        crate::liquify_ui::cancel(&mut app);
+        assert!(!crate::canvas::canvas_covered(&app));
+        app.sync_views();
+        menu(&mut app, &ctx, "edit.puppetWarp", &json!({})).unwrap().unwrap();
+        assert!(app.distort.puppet.is_some());
+        assert!(!crate::canvas::canvas_covered(&app), "Puppet Warp draws on the canvas");
+    }
+
     #[test]
     fn switching_documents_drops_liquify() {
         let ctx = egui::Context::default();

@@ -263,6 +263,16 @@ pub struct LiquifyDialog {
     pub dab_ms: f64,
     /// CPU time spent refreshing the zoomed-in source-resolution preview.
     pub preview_ms: f64,
+    /// When the dialog last drew a frame (`now_ms`), for [`Self::frame_ms`].
+    last_show: f64,
+    /// Time between the last two frames while a stroke was being drawn (ms), and the longest
+    /// such gap of the stroke: the feedback lag a brush move sees, whatever caused it. Shown in
+    /// the footer so a slow machine can say where its time goes.
+    pub frame_ms: f64,
+    pub frame_max_ms: f64,
+    /// Pointer events the last frame fed to the stroke (0 or 1: the preview samples the pointer
+    /// once a frame).
+    pub frame_events: usize,
     /// The smart filter being edited: OK updates it instead of adding a new Liquify filter.
     smart_filter: Option<usize>,
 }
@@ -300,6 +310,8 @@ impl LiquifyDialog {
             "maxDisplacement": self.field.max_displacement(),
             "proxy": [self.proxy.w, self.proxy.h],
             "dabMs": self.dab_ms,
+            "frameMs": self.frame_ms,
+            "frameMaxMs": self.frame_max_ms,
             "fullResolutionPreview": self.view_bounds.is_some(),
             "previewMs": self.preview_ms,
             "smartFilter": self.smart_filter,
@@ -343,6 +355,7 @@ impl LiquifyDialog {
         self.dab_ms = crate::gpu_canvas::now_ms() - t0;
         self.cur = Some((s, p));
         self.last_dab = now;
+        self.frame_max_ms = 0.0;
     }
 
     fn extend(&mut self, p: [f64; 3], now: f64) {
@@ -650,6 +663,10 @@ fn open_on(
         last_dab: 0.0,
         dab_ms: 0.0,
         preview_ms: 0.0,
+        last_show: 0.0,
+        frame_ms: 0.0,
+        frame_max_ms: 0.0,
+        frame_events: 0,
         smart_filter,
     };
     // A sensible starting brush (about a tenth of the image), then the settings last used, so
@@ -1056,6 +1073,13 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let animated_zoom = app.session.prefs().general.animated_zoom;
     egui::Area::new(egui::Id::unique("liquify-dialog")).order(egui::Order::Foreground).fixed_pos(screen.min).show(ctx, |ui| {
         let Some(d) = app.distort.liquify.as_mut() else { return };
+        // The gap since the last frame, while a stroke is on: what a brush move waits for.
+        let now = crate::gpu_canvas::now_ms();
+        if d.cur.is_some() && d.last_show > 0.0 {
+            d.frame_ms = now - d.last_show;
+            d.frame_max_ms = d.frame_max_ms.max(d.frame_ms);
+        }
+        d.last_show = now;
         d.upload(ctx);
         let (full, _) = ui.allocate_exact_size(screen.size(), Sense::hover());
         let painter = ui.painter().clone();
@@ -1143,11 +1167,14 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             widgets::hairline(ui);
             ui.label(
                 egui::RichText::new(format!(
-                    "{} stroke(s) · field {} px/node · dab {:.2} ms · preview {:.2} ms",
+                    "{} stroke(s) · field {} px/node · dab {:.2} ms · preview {:.2} ms · frame {:.0} ms (max {:.0}) · {} event(s)",
                     d.strokes.len(),
                     d.cell,
                     d.dab_ms,
-                    d.preview_ms
+                    d.preview_ms,
+                    d.frame_ms,
+                    d.frame_max_ms,
+                    d.frame_events
                 ))
                 .color(t.text_faint)
                 .size(11.0),
@@ -1185,7 +1212,8 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             to_screen(d, area, [f64::from(d.canvas.x1), f64::from(d.canvas.y1)]),
         );
         let clip = painter.with_clip_rect(area);
-        widgets::checker(&clip, img.intersect(area), 8.0);
+        // One textured rect: the per-cell checker was thousands of shapes a frame on a big preview.
+        widgets::checker_rounded(&clip, img.intersect(area), 8.0, 0.0);
         let uv = ERect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
         let backdrop = d.backdrop.as_ref().filter(|_| d.opts.show_backdrop).map(|(_, t)| t.id());
         let Layering { image: image_tint, behind, front } = backdrop_layering(backdrop, d.opts.backdrop_mode, d.opts.backdrop_opacity / 100.0);
@@ -1321,6 +1349,9 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
             events.push(ToolEvent::Up { x: q[0], y: q[1] });
         }
     });
+    if let Some(d) = app.distort.liquify.as_mut() {
+        d.frame_events = events.len();
+    }
     for ev in events {
         pointer(app, ev, mods);
     }
