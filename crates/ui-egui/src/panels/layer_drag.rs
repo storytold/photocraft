@@ -329,7 +329,7 @@ pub(super) fn effect_rows(app: &mut PhotocraftApp, ui: &mut egui::Ui, l: &Layer,
         let eye = Rect::from_min_size(pos2(rect.left() + 36.0, rect.center().y - 9.0), vec2(18.0, 18.0));
         // A hidden effect's eye box is left empty (still clickable), like a hidden layer's.
         if on {
-            icons::paint(ui, eye, "eye", 12.0, t.icon);
+            icons::paint(ui, eye, "eye", 15.0, t.icon);
         }
         // The whole eye column of the row takes the click, so it never opens the Layer Style dialog.
         let eye_cell = Rect::from_min_max(pos2(rect.left() + 30.0, rect.top()), pos2((rect.left() + 58.0).min(rect.right()), rect.bottom()));
