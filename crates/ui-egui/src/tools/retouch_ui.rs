@@ -50,7 +50,19 @@ pub(crate) fn clone_params(app: &PhotocraftApp) -> Option<Value> {
 /// History Brush params for the live preview and the commit (without `points` and `target`): the
 /// options bar's Mode, which is the tool's own brush's.
 pub(crate) fn history_brush_params(app: &PhotocraftApp) -> Value {
-    json!({"mode": app.session.tools.brush.mode.label()})
+    let mut p = json!({"mode": app.session.tools.brush.mode.label()});
+    if app.ui.tool == Tool::Eraser && app.ui.tool_options.erase_to_history {
+        p["eraseToHistory"] = json!(true);
+        // The Eraser's Pencil and Block tips (as `strokes::stroke_params`).
+        if crate::eraser_ui::pencil_mode(app, Tool::Eraser) {
+            p["pencil"] = json!(true);
+        }
+        if crate::eraser_ui::block_mode(app, Tool::Eraser) {
+            p["block"] = json!(true);
+            p["zoom"] = json!(app.point_zoom());
+        }
+    }
+    p
 }
 
 /// The command and options-bar params (without `points` and `target`) of a sequential-dab tool:

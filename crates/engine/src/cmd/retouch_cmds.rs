@@ -164,7 +164,11 @@ fn parse_brush(s: &Session, p: &Value, cmd: &str) -> Result<(Stroke, Option<Laye
         return Err(bad(cmd, "`points` is empty"));
     }
     crate::brush_cmds::check_coords(&pts, cmd)?;
-    let brush = stroke_brush(&s.tools.brush, p);
+    let mut brush = stroke_brush(&s.tools.brush, p);
+    // The Eraser's Erase to History in Pencil or Block mode paints back through that hard tip.
+    if flag(p, "eraseToHistory", false) && (flag(p, "pencil", false) || flag(p, "block", false)) {
+        brush = crate::brush_cmds::pencil_shape(brush, p)?;
+    }
     crate::brush_cmds::validate_brush(&brush, cmd)?;
     if crate::channel_cmds::is_channel_target(p) {
         return Ok((Stroke { brush, points: pts }, None));
@@ -374,7 +378,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             params: brush_params!(
-                r#","state":row (a History panel row, as history.setSource: 0 = oldest state, then the current one, then the greyed redo states),"snapshot":id (a history.newSnapshot id; default: the History panel's source, else the oldest held state; a source of another canvas size is an error)"#
+                r#","state":row (a History panel row, as history.setSource: 0 = oldest state, then the current one, then the greyed redo states),"snapshot":id (a history.newSnapshot id; default: the History panel's source, else the oldest held state; a source of another canvas size is an error),"eraseToHistory":bool=false (a layer missing from the source state paints that state's visible image, as the Eraser's Erase to History does, instead of an error),"pencil":bool=false and "block":bool=false with "zoom" (with eraseToHistory: the hard aliased tip or the square, as paint.pencil's)"#
             ),
             enabled: has_pixel_layer,
             run: history_brush,
