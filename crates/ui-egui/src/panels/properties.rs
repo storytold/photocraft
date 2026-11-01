@@ -266,11 +266,15 @@ fn adjustments_grid_inner(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     let width = crate::direction::row_width(ui).min(ui.clip_rect().width());
     let cols = ((width + 2.0) / 32.0).floor().max(1.0) as usize;
     if !crate::direction::is_rtl() {
+        // The fork's Grid never auto-wraps at num_columns; each row ends explicitly.
         crate::direction::ltr_grid(ui, "adjustments-grid", cols, vec2(2.0, 2.0), |ui| {
-            for (kind, icon, tip) in items {
-                if icons::button(ui, icon, 30.0, false, tip).clicked() {
-                    run = Some(format!("layer.newAdjustmentLayer.{kind}"));
+            for chunk in items.chunks(cols) {
+                for (kind, icon, tip) in chunk {
+                    if icons::button(ui, icon, 30.0, false, tip).clicked() {
+                        run = Some(format!("layer.newAdjustmentLayer.{kind}"));
+                    }
                 }
+                ui.end_row();
             }
         });
     } else {
