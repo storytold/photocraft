@@ -76,7 +76,8 @@ fn statistics_browse_and_mode_selection_compute_the_chosen_statistic() {
     h.get_by_value("Median").click();
     h.run_steps(2);
     for mode in photocraft_doc::StackMode::ALL {
-        assert!(h.query_by_label(mode.label()).is_some(), "missing {}", mode.label());
+        // The checked row's label leads with the check mark, so match by substring.
+        assert!(h.query_all_by_label_contains(mode.label()).count() > 0, "missing {}", mode.label());
     }
     h.get_by_label("Mean").click();
     h.run_steps(2);
