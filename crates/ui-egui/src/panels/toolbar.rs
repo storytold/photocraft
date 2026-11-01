@@ -613,11 +613,11 @@ fn chip_command(app: &mut PhotocraftApp, id: &str) {
 mod rtl_direction_tests {
     use super::*;
 
-    /// One toolbar frame; returns the painted texts as (anchor x, text).
-    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) -> Vec<(f32, String)> {
-        fn collect(shape: &egui::Shape, out: &mut Vec<(f32, String)>) {
+    /// One toolbar frame; returns the painted texts as (anchor x, galley width, text).
+    fn frame(app: &mut PhotocraftApp, ctx: &egui::Context, time: f64, events: Vec<egui::Event>) -> Vec<(f32, f32, String)> {
+        fn collect(shape: &egui::Shape, out: &mut Vec<(f32, f32, String)>) {
             match shape {
-                egui::Shape::Text(t) => out.push((t.pos.x, t.galley.text().to_string())),
+                egui::Shape::Text(t) => out.push((t.pos.x, t.galley.size().x, t.galley.text().to_string())),
                 egui::Shape::Vec(v) => v.iter().for_each(|s| collect(s, out)),
                 _ => {}
             }
@@ -633,7 +633,7 @@ mod rtl_direction_tests {
     }
 
     /// Open the Brush slot's flyout with a long press; returns its area rect and the last pass's texts.
-    fn open_brush_flyout(app: &mut PhotocraftApp, ctx: &egui::Context) -> (Rect, Vec<(f32, String)>) {
+    fn open_brush_flyout(app: &mut PhotocraftApp, ctx: &egui::Context) -> (Rect, Vec<(f32, f32, String)>) {
         frame(app, ctx, 0.0, vec![]);
         frame(app, ctx, 0.1, vec![]);
         let index = TOOL_SECTIONS.iter().flat_map(|s| s.iter()).position(|slot| slot.contains(&Tool::Brush)).unwrap();
@@ -671,6 +671,20 @@ mod rtl_direction_tests {
         })
     }
 
+    /// The screen-mode popup's clickable rows from the last pass: one interact height tall,
+    /// centred inside the popup's area.
+    fn screen_mode_rows(ctx: &egui::Context, menu: Rect) -> Vec<Rect> {
+        ctx.viewport(|v| {
+            v.prev_pass
+                .widgets
+                .layers()
+                .flat_map(|(_, w)| w.iter())
+                .filter(|w| w.sense.senses_click() && w.rect.height() < 40.0 && w.rect.width() < menu.width() && menu.contains(w.rect.center()))
+                .map(|w| w.rect)
+                .collect()
+        })
+    }
+
     /// In a right-to-left UI the flyout's rows and labels start from the right (the reading
     /// start), not the end; the shortcut stays at the row's left (reading end).
     #[test]
@@ -685,7 +699,7 @@ mod rtl_direction_tests {
         for r in &rows {
             assert!(r.right() > menu.center().x && menu.right() - r.right() < 12.0, "row hugs the reading start (right): {r:?} in {menu:?}");
         }
-        let label_x = texts.iter().find(|(_, s)| s == tl!(Tool::Brush.label())).map(|(x, _)| *x).expect("the Brush label");
+        let label_x = texts.iter().find(|(_, _, s)| s == tl!(Tool::Brush.label())).map(|(x, _, _)| *x).expect("the Brush label");
         assert!(label_x > menu.center().x, "the label leads from the right: {label_x} in {menu:?}");
     }
 
@@ -701,7 +715,7 @@ mod rtl_direction_tests {
         for r in &rows {
             assert!(r.left() < menu.center().x && r.left() - menu.left() < 12.0, "row hugs the left: {r:?} in {menu:?}");
         }
-        let label_x = texts.iter().find(|(_, s)| s == tl!(Tool::Brush.label())).map(|(x, _)| *x).expect("the Brush label");
+        let label_x = texts.iter().find(|(_, _, s)| s == tl!(Tool::Brush.label())).map(|(x, _, _)| *x).expect("the Brush label");
         assert!(label_x < menu.center().x, "the label leads from the left: {label_x} in {menu:?}");
     }
 
@@ -737,7 +751,7 @@ mod rtl_direction_tests {
     /// Secondary-click the last toolbar button (the screen-mode control, enabled once a
     /// document is open, #9349) to open its mode list; returns the popup's area rect and the
     /// last pass's painted texts as (anchor x, text).
-    fn open_screen_mode_popup(app: &mut PhotocraftApp, ctx: &egui::Context) -> (Rect, Vec<(f32, String)>) {
+    fn open_screen_mode_popup(app: &mut PhotocraftApp, ctx: &egui::Context) -> (Rect, Vec<(f32, f32, String)>) {
         frame(app, ctx, 0.0, vec![]);
         frame(app, ctx, 0.1, vec![]);
         let bx = if Tokens::get(ctx).pro { 30.0 } else { 36.0 };
@@ -785,19 +799,15 @@ mod rtl_direction_tests {
         crate::theme::set_direction(&ctx, true);
         let mut app = screen_mode_app();
         let (menu, texts) = open_screen_mode_popup(&mut app, &ctx);
-        let rows: Vec<Rect> = ctx.viewport(|v| {
-            v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.sense.senses_click() && w.rect.height() < 40.0 && w.rect.width() > menu.width() - 20.0).map(|w| w.rect).collect()
-        });
-        for w in ctx.viewport(|v| v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.sense.senses_click() && w.rect.height() < 40.0).map(|w| (w.rect, w.id)).collect::<Vec<_>>()) {
-            eprintln!("PROBE h<40 rect={:?} id={:?}", w.0, w.1);
-        }
-        eprintln!("PROBE menu={menu:?}");
+        let rows = screen_mode_rows(&ctx, menu);
         assert_eq!(rows.len(), 3, "the screen-mode list's three rows in {menu:?}");
         for r in &rows {
             assert!(menu.right() - r.right() < 12.0, "row hugs the reading start (right): {r:?} in {menu:?}");
         }
-        let label_x = texts.iter().find(|(_, s)| s == tl!("Standard Screen Mode")).map(|(x, _)| *x).expect("the Standard row label");
-        assert!(label_x > menu.center().x, "the label leads from the right: {label_x} in {menu:?}");
+        // A right-aligned label's anchor is its right edge (pos.x + galley width), not pos.x.
+        let (label_x, label_w) = texts.iter().find(|(_, _, s)| s == tl!("Standard Screen Mode")).map(|(x, w, _)| (*x, *w)).expect("the Standard row label");
+        assert!(menu.right() - (label_x + label_w) < 12.0, "the label ends at the reading start (right): {label_x}+{label_w} in {menu:?}");
+        assert!(label_x + label_w > menu.center().x, "the label leads from the right: {label_x}+{label_w} in {menu:?}");
     }
 
     /// LTR guard: the same list keeps its labels at the left edge, pixel-identical to before.
@@ -807,14 +817,13 @@ mod rtl_direction_tests {
         PhotocraftApp::setup_context(&ctx, crate::theme::ThemeKind::ALL[0]);
         let mut app = screen_mode_app();
         let (menu, texts) = open_screen_mode_popup(&mut app, &ctx);
-        let rows: Vec<Rect> = ctx.viewport(|v| {
-            v.prev_pass.widgets.layers().flat_map(|(_, w)| w.iter()).filter(|w| w.sense.senses_click() && w.rect.height() < 40.0 && w.rect.width() > menu.width() - 20.0).map(|w| w.rect).collect()
-        });
+        let rows = screen_mode_rows(&ctx, menu);
         assert_eq!(rows.len(), 3, "the screen-mode list's three rows in {menu:?}");
         for r in &rows {
             assert!(r.left() - menu.left() < 12.0, "row hugs the left: {r:?} in {menu:?}");
         }
-        let label_x = texts.iter().find(|(_, s)| s == tl!("Standard Screen Mode")).map(|(x, _)| *x).expect("the Standard row label");
+        let label_x = texts.iter().find(|(_, _, s)| s == tl!("Standard Screen Mode")).map(|(x, _, _)| *x).expect("the Standard row label");
+        assert!(label_x - menu.left() < 24.0, "the label starts at the left edge: {label_x} in {menu:?}");
         assert!(label_x < menu.center().x, "the label leads from the left: {label_x} in {menu:?}");
     }
 }
