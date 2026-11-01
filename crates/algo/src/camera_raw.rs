@@ -447,17 +447,23 @@ fn guided_fast(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> 
 }
 
 /// Guided filter of `p` guided by `i` (He et al. 2010).
+/// Release intermediate planes after use so later phases do not retain their storage.
 fn guided(i: &[f32], p: &[f32], w: usize, h: usize, r: usize, eps: f32) -> Vec<f32> {
     let mi = box_mean(i, w, h, r);
     let mp = box_mean(p, w, h, r);
     let ip: Vec<f32> = i.iter().zip(p).map(|(a, b)| a * b).collect();
     let ii: Vec<f32> = i.iter().map(|a| a * a).collect();
     let mip = box_mean(&ip, w, h, r);
+    drop(ip);
     let mii = box_mean(&ii, w, h, r);
+    drop(ii);
     let a: Vec<f32> = (0..w * h).map(|k| (mip[k] - mi[k] * mp[k]) / (mii[k] - mi[k] * mi[k] + eps)).collect();
     let b: Vec<f32> = (0..w * h).map(|k| mp[k] - a[k] * mi[k]).collect();
+    drop((mi, mp, mip, mii));
     let ma = box_mean(&a, w, h, r);
+    drop(a);
     let mb = box_mean(&b, w, h, r);
+    drop(b);
     (0..w * h).map(|k| ma[k] * i[k] + mb[k]).collect()
 }
 
