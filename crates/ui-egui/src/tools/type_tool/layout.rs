@@ -28,6 +28,7 @@ pub(super) fn to_text(aff: &Affine, x: f64, y: f64) -> (f32, f32) {
 /// the pointer never promises a path click that the press would turn into editing this layer.
 pub(crate) fn hit_layer(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<LayerId> {
     let slop = 6.0 / app.point_zoom().max(0.01);
+    let footprint = crate::gpu_canvas::sampled_doc_rect(x, y, app.current_zoom());
     // A Type Mask session's text is a hidden layer; it is still the text being edited.
     let editing = app.ui.text_edit.as_ref().filter(|ed| ed.mask).map(|ed| LayerId(ed.layer));
     let mut ids: Vec<LayerId> = {
@@ -42,11 +43,7 @@ pub(crate) fn hit_layer(app: &mut PhotocraftApp, x: f64, y: f64) -> Option<Layer
     ids.into_iter().find(|id| {
         // The pixels shown count too: a PSD's type keeps Photoshop's rendering until edited,
         // which can sit off our layout when fonts are substituted (#123).
-        let shown = app.session.active().and_then(|st| text_layer(&st.doc, *id)).and_then(|t| t.cache.as_ref()).map(|c| c.content_bounds()).is_some_and(|r| {
-            let s = f64::from(slop);
-            !r.is_empty() && x >= f64::from(r.x0) - s && x <= f64::from(r.x1) + s && y >= f64::from(r.y0) - s && y <= f64::from(r.y1) + s
-        });
-        // The hover calls this every frame: skip the layout when the pixels already answer.
+        let shown = app.session.active().is_some_and(|st| photocraft_engine::type_caret_cmds::cached_ink_in_rect(&st.doc, *id, footprint));
         if shown {
             return true;
         }

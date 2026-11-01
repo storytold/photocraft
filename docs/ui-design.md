@@ -64,6 +64,17 @@ curl -sfL -o assets/icons/<name>.svg https://raw.githubusercontent.com/lucide-ic
 | Radial Blur: Zoom | `filter_dialog/zoom_center.rs` | A ray diagram to the left of Center X/Y sets the centre by click or drag. Diagram, sliders and numeric fields share the same coordinates; arrow keys on the diagram step by 0.01. Ray lengths follow Amount, and the existing image preview follows every edit. OK applies the filter; Cancel discards the edits. |
 | Shape Stroke Options | `shape_stroke_ui.rs`, `vector_ui.rs` | Direct editing: valid changes apply immediately, with one numeric drag per undo step in Properties. Escape/outside click closes the popup and retains changes; a child dropdown keeps the parent open. The options bar sets new-shape defaults; Properties edits the selected shape. |
 
+Type-tool picking (updated 2026-11-01, #10266) tests the transformed text layout or nontransparent
+cached ink in the canvas filter's conservative source-pixel footprint, not the cache's overall
+bounding rectangle. At reduced zoom this includes neighboring pixels contributing through the
+bilinear/trilinear mip filter, using device-pixel zoom rather than HiDPI point zoom. Transparent
+corners of rotated text and padding outside that footprint do not intercept a lower text layer. At a real
+overlap the topmost shown type layer wins; hidden groups are skipped. While editing, an
+outside click still commits without opening another layer on that same click.
+Transparent leading between soft-wrapped lines remains part of the paragraph's layout hit
+area: clicking there places the caret on the nearest line rather than requiring an ink pixel.
+Headless `type.hitTest` remains an exact document-coordinate query without viewport sampling.
+
 Shape Stroke Options (updated 2026-10-11) sizes to its content and scrolls only when necessary.
 It has no Apply/Cancel footer. Solid, Dashed and Dotted are full clickable rows with line
 samples and visible selection; opening the editor alone never changes a shape. Invalid pending
