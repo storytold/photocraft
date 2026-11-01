@@ -404,4 +404,23 @@ mod ink_thumbnail_tests {
         assert_eq!(inks.len(), (w * h) as usize);
         assert!(inks.iter().all(|p| p.iter().zip([1.0, 1.0, 1.0, 0.0]).all(|(a, b)| (a - b).abs() < 0.01)), "{:?}", inks[0]);
     }
+
+    /// Above `PROXY_THUMBNAIL_PIXELS` the inks come from the thumbnail's proxy and still land on
+    /// the right side: rich black on the left half, paper on the right.
+    #[test]
+    fn large_cmyk_channel_thumbnails_read_the_proxy() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 4200, "height": 4200, "mode": "cmyk"})).unwrap();
+        s.execute("select.rect", json!({"x": 0, "y": 0, "width": 2100, "height": 4200})).unwrap();
+        s.execute("tools.setColors", json!({"foregroundCmyk": [1.0, 1.0, 1.0, 0.0]})).unwrap();
+        s.execute("edit.fillForeground", json!({})).unwrap();
+        let doc = &s.active().unwrap().doc;
+        assert!(photocraft_compose::thumbnail_proxy(doc, 56).is_some());
+        let (w, h) = photocraft_compose::thumbnail_size(doc, 56);
+        let inks = ink_thumbnail(doc, 56, w as usize, h as usize);
+        let at = |x: u32, y: u32| inks[(y * w + x) as usize];
+        let near = |p: [f32; 4], q: [f32; 4]| p.iter().zip(q).all(|(a, b)| (a - b).abs() < 0.01);
+        assert!(near(at(5, h / 2), [1.0, 1.0, 1.0, 0.0]), "{:?}", at(5, h / 2));
+        assert!(near(at(w - 5, h / 2), [0.0; 4]), "{:?}", at(w - 5, h / 2));
+    }
 }
