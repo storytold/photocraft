@@ -72,10 +72,10 @@ pub use setup::{Refresh, device_descriptor, device_limits, display_texels, timin
 use shaders::{CANVAS_WGSL, ENCODE_WGSL, MIP_WGSL};
 #[cfg(not(target_arch = "wasm32"))]
 use texels::texel_to_f32;
-pub use texels::{LayerFit, premultiply_rgba8, premultiply_rgba16f};
+pub use texels::{LayerFit, premultiply_rgba8, premultiply_rgba16f, texels};
+use texels::{canvas_texels, texel_bytes, texels_into};
 #[cfg(test)]
 use texels::{f16_to_f32, f32_to_f16};
-use texels::{texel_bytes, texels, texels_into};
 
 /// Default tile side; documents up to this size (and the device limit) use a single texture.
 pub const DEFAULT_TILE: u32 = 8192;
@@ -558,7 +558,7 @@ impl GpuCanvas {
     pub fn upload_buffer_full(&self, doc: u64, buf: &photocraft_compose::Buffer, depth: photocraft_doc::SampleType) {
         let size = [buf.rect.width(), buf.rect.height()];
         let format = self.format_for(depth, size);
-        self.upload_full_as(doc, size, format, &texels(format, &buf.px));
+        self.upload_full_as(doc, size, format, &canvas_texels(format, &buf.px));
     }
 
     /// Upload a CPU composite of a sub-rectangle (in document pixels, `buf.rect`).
@@ -568,7 +568,7 @@ impl GpuCanvas {
         if r.x0 < 0 || r.y0 < 0 {
             return false;
         }
-        self.upload_rect(doc, [r.x0 as u32, r.y0 as u32], [r.width(), r.height()], &texels(format, &buf.px))
+        self.upload_rect(doc, [r.x0 as u32, r.y0 as u32], [r.width(), r.height()], &canvas_texels(format, &buf.px))
     }
 
     /// Composite `region` of `doc` with the wgpu compositor straight into its display texture

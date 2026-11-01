@@ -65,9 +65,10 @@ pub(crate) use cursors::{alt_picks, alt_samples, composite_color, paint_bucket_c
 use cursors::{brush_tip_centre, eyedropper_ring, precise_other_cursor, visible_crosshair};
 #[cfg(test)]
 pub(crate) use display::GPU_OUTPUT;
+pub use display::display_image;
 #[cfg(test)]
 use display::texture_key;
-pub(crate) use display::{cache_key, canvas_display, display_doc, display_image};
+pub(crate) use display::{cache_key, canvas_display, display_doc};
 use display::{checker, hdr_preview, sync_display_lut};
 pub use drag::{Drag, fixed_size_px, marquee_corners, marquee_px, marquee_readout, readout_in, size_readout, square_px};
 pub(crate) use drag::{angle_readout, draw_readout, draw_value_readout};
