@@ -102,10 +102,18 @@ fn copy_linked_sources(source: &Document, copies: &mut Document) -> Result<()> {
 /// The layer Copy takes whole ([`takes_whole`]): a scratch document in the source's colour
 /// holding it.
 fn whole_layer(d: &crate::DocState, id: LayerId) -> Option<Box<Document>> {
-    let l = d.doc.layer(id).filter(|_| takes_whole(d, id))?;
+    let l = copied_layer(&d.doc, id, &[id]).filter(|_| takes_whole(d, id))?;
     let mut copies = scratch_doc(&d.doc);
-    copies.layers.push(l.clone());
+    copies.layers.push(l);
     Some(Box::new(copies))
+}
+
+/// Layer `id` as Copy takes it with `ids`. It keeps its clipping mask only when its base is copied
+/// too: pasted without it, it would clip to whatever it lands on, so Photoshop releases it (#9736).
+fn copied_layer(doc: &Document, id: LayerId, ids: &[LayerId]) -> Option<Layer> {
+    let mut l = doc.layer(id)?.clone();
+    l.clipped &= crate::clip_group::base_of(doc, id).is_some_and(|base| ids.contains(&base));
+    Some(l)
 }
 
 /// The layers Copy takes when several are selected and nothing is selected in the pixels
@@ -128,7 +136,7 @@ fn multi_copy_ids(d: &crate::DocState) -> Vec<LayerId> {
 fn whole_layers(d: &crate::DocState, ids: &[LayerId]) -> Option<Box<Document>> {
     let mut copies = scratch_doc(&d.doc);
     for id in ids {
-        let mut l = d.doc.layer(*id)?.clone();
+        let mut l = copied_layer(&d.doc, *id, ids)?;
         if d.doc.is_background(*id) {
             l.name = "Layer 0".into();
             l.locks = Default::default();
