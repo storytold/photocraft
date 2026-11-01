@@ -820,3 +820,55 @@ fn a_resizable_dialog_shrinks_as_well_as_grows_in_both_directions() {
         assert_eq!(dragged(dir, egui::vec2(-600.0, -400.0)), egui::vec2(560.0, 400.0), "{dir:?}: the intended minimum still holds");
     }
 }
+
+/// w38: an over-shrink grip drag clamps the Preferences window to the SAME minimum size in LTR
+/// and RTL (user report 2026-11-01: under RTL it could be shrunk smaller than under LTR).
+/// Opens Preferences in a live harness under each direction, drags the resize grip past the
+/// configured min, and compares the clamped outer (area) rects across a sweep of drag deltas.
+#[test]
+fn w38_over_shrink_clamps_preferences_to_the_same_min_in_both_directions() {
+    use egui::NumExt;
+    type Dir = crate::text::direction::Dir;
+    let clamped = |dir: Dir, by: egui::Vec2| {
+        let _scope = crate::text::direction::direction_scope(dir);
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        crate::prefs_ui::open_preferences(&mut app, "interface");
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1600.0, 1000.0)).build_ui_state(
+            |ui, app| {
+                if ui.ctx().fonts(|f| f.families().contains(&egui::FontFamily::Name("semibold".into()))) {
+                    show(app, ui.ctx());
+                }
+            },
+            app,
+        );
+        PhotocraftApp::setup_context(&h.ctx, Default::default());
+        let rtl = dir == Dir::Rtl;
+        h.ctx.all_styles_mut(|s| s.right_to_left = rtl);
+        h.run_steps(5);
+        let dialog = h.state().ui.dialogs[0].id;
+        let area = |h: &egui_kittest::Harness<'_, PhotocraftApp>| h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", dialog)))).unwrap();
+        let opened = area(&h);
+        let grip_id = egui::Id::unique(("dialog", dialog)).with("resize").with("__resize_corner");
+        let corner = h.ctx.read_response(grip_id).expect("the resize grip is there").rect.center();
+        let by = if rtl { egui::vec2(-by.x, by.y) } else { by };
+        h.event(egui::Event::PointerMoved(corner));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: corner, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE });
+        h.step();
+        h.event(egui::Event::PointerMoved(corner + by));
+        h.step();
+        h.event(egui::Event::PointerButton { pos: corner + by, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE });
+        h.run_steps(6);
+        (opened, area(&h))
+    };
+    for dir in [Dir::Ltr, Dir::Rtl] {
+        for by in [egui::vec2(-150.0, -80.0), egui::vec2(-400.0, -200.0), egui::vec2(-800.0, -400.0), egui::vec2(-3000.0, -3000.0)] {
+            let (opened, now) = clamped(dir, by);
+            eprintln!("w38 {dir:?} drag {by:?}: opened {:?} -> clamped {:?}", opened.size(), now.size());
+        }
+    }
+    let ltr = clamped(Dir::Ltr, egui::vec2(-3000.0, -3000.0)).1.size();
+    let rtl = clamped(Dir::Rtl, egui::vec2(-3000.0, -3000.0)).1.size();
+    let diff = (ltr - rtl).abs();
+    assert!(diff.max_elem() <= 1.0, "w38: the min clamp must be direction-independent: outer LTR {ltr:?} vs RTL {rtl:?}");
+}
