@@ -3312,3 +3312,29 @@ fn distort_filter_steps_with_a_wrong_typed_setting_are_kept() {
         assert!(kept(distort(code, desc("null").with(key, v.clone()))), "{code} with {key} = {v:?} was mapped");
     }
 }
+
+/// An integer outside the range Photoshop clamps the key to refuses the step: written as is, it
+/// would load back clamped, as another value (#10605).
+#[test]
+fn distort_filter_steps_outside_photoshops_range_are_refused() {
+    for (id, params) in [
+        ("filter.distort.pinch", json!({"amount": 500})),
+        ("filter.distort.spherize", json!({"amount": -101})),
+        ("filter.distort.twirl", json!({"angle": 1000})),
+        ("filter.distort.zigZag", json!({"ridges": 21})),
+        ("filter.distort.zigZag", json!({"ridges": -1})),
+        ("filter.distort.wave", json!({"generators": 0})),
+        ("filter.distort.wave", json!({"amplitudeMax": 1000})),
+    ] {
+        assert!(export_item(id, &params, "S").is_none(), "{id} {params} exported");
+    }
+    // The limits themselves are written.
+    for (id, params) in [
+        ("filter.distort.pinch", json!({"amount": -100})),
+        ("filter.distort.twirl", json!({"angle": 999})),
+        ("filter.distort.zigZag", json!({"ridges": 0})),
+        ("filter.distort.wave", json!({"generators": 999, "wavelengthMin": 1})),
+    ] {
+        assert!(export_item(id, &params, "S").is_some(), "{id} {params} refused");
+    }
+}

@@ -76,7 +76,8 @@ fn keys_map(d: &Descriptor, keys: &[Key], extra: &[&'static str]) -> Option<Map<
 }
 
 /// Every key in recorded order, the command's default for what the step leaves out
-/// (`ours`, by param). An integer key refuses a fractional value, which would replay rounded.
+/// (`ours`, by param). An integer key refuses a fractional value, which would replay rounded,
+/// and one outside its `min..=max`, which would load back clamped.
 pub(super) fn keys_to(p: &Value, keys: &[Key], ours: &[(&str, Value)], extra: &[&'static str]) -> Option<Descriptor> {
     let params: Vec<&str> = keys.iter().map(Key::param).chain(extra.iter().copied()).chain(["target"]).collect();
     if !pixel_target(p) || !sets_only(p, &params) {
@@ -90,9 +91,9 @@ pub(super) fn keys_to(p: &Value, keys: &[Key], ours: &[(&str, Value)], extra: &[
     for k in keys {
         let v = value(k.param())?;
         d = match k {
-            Key::Int { key, .. } => {
+            Key::Int { key, min, max, .. } => {
                 let n = v.as_f64()?;
-                if n.fract() != 0.0 || !(f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&n) {
+                if n.fract() != 0.0 || !(f64::from(*min)..=f64::from(*max)).contains(&n) {
                     return None;
                 }
                 d.with(key, D::Integer(n as i32))
