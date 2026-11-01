@@ -10,6 +10,12 @@
 //! transparent black ink, like the reference editor shows it. Its value is stored as-is
 //! (1 = selected, white in the Channels panel), so its ink is `1 − value`.
 
+//! This is a screen approximation, not a press proof: stored RGB alternate colours are used
+//! directly; CMYK alternates use the document CMYK profile, and Lab/gray alternates use
+//! the colour conversion path below. No spectral ink or paper interaction is modelled.
+//! At full coverage, solidity 0 multiplies the underlying colour and solidity 1 replaces it.
+//! Previewing borrows the document and only changes the supplied display buffer.
+
 use std::sync::Arc;
 
 use photocraft_cms::{Builtin, ColorSpace, Profile, Transform, TransformOptions};
@@ -330,6 +336,24 @@ mod tests {
         let mut buf = Buffer::filled(doc.bounds(), [0.2, 0.9, 0.1, 1.0]);
         overprint(&mut buf, &doc, |_| true);
         assert!(close(buf.px[0], teal, 1e-6), "{:?}", buf.px[0]);
+    }
+
+    #[test]
+    fn hidden_spot_leaves_the_process_composite_unchanged() {
+        for mode in [ColorMode::Rgb, ColorMode::Cmyk] {
+            for depth in [SampleType::U8, SampleType::U16] {
+                let mut doc = Document::with_background("hidden", Size::new(1, 1), mode, depth, Color::rgb(0.8, 0.4, 0.2));
+                doc.channels.push(spot(depth, "opaque", [0.0, 0.6, 0.65], 1.0, &[1.0]));
+                let before = crate::flatten(&doc);
+                let mut preview = before.clone();
+                overprint(&mut preview, &doc, |_| false);
+                assert_eq!(preview.px, before.px);
+                overprint(&mut preview, &doc, |_| true);
+                assert!(close(preview.px[0], [0.0, 0.6, 0.65], 1e-6));
+                assert_eq!(crate::flatten(&doc).px, before.px);
+                assert_eq!(doc.channels[0].spot, Some((Color::rgb(0.0, 0.6, 0.65), 1.0)));
+            }
+        }
     }
 
     /// A CMYK spot colour displays through the document's CMYK profile, as the CMYK composite does.
