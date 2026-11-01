@@ -3436,7 +3436,8 @@ fn smart_sharpen_outside_the_commands_limits_is_kept_and_refused() {
 /// Focus Area, Select Sky and Remove Background, mapped from the empty steps Photoshop records,
 /// play and do their work: on a textured red disc against a smooth blue sky over textured ground,
 /// Focus Area selects the textured ground, Select Sky the sky, and Remove Background masks the
-/// layer. Each step plays on its own so a step that runs without finding anything fails (#10610).
+/// layer to the disc. Each step plays on its own so a step that runs without finding anything fails
+/// (#10610).
 #[test]
 fn newer_feature_selection_steps_play() {
     let (w, h) = (160u32, 100u32);
@@ -3486,7 +3487,9 @@ fn newer_feature_selection_steps_play() {
     assert!(selected(&s, 20, 85).is_some_and(|v| v < 0.1), "Select Sky took the ground");
 
     play(&mut s, "removeBackground");
-    assert!(s.active().unwrap().doc.layers[0].mask.is_some(), "Remove Background set no mask");
+    let mask = s.active().unwrap().doc.layers[0].mask.as_ref().expect("Remove Background set no mask");
+    assert!(mask.value(80, 40) > 0.8, "Remove Background hid the red disc");
+    assert!(mask.value(20, 15) < 0.2, "Remove Background revealed the sky");
 }
 
 /// `filter.stylize.oilPaint` takes a stylization and scale of 0.1..10 and a cleanliness, bristle
