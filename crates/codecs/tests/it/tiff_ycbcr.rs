@@ -110,10 +110,11 @@ fn ycbcr_tags_with_the_wrong_count_use_the_defaults() {
     // apply (the weights alone would give 224, 128, 32).
     let weights = [rational(1, 4), rational(1, 2), rational(1, 4), rational(1, 4)];
     let rbw = [rational(16, 1), rational(235, 1), rational(128, 1), rational(240, 1), rational(128, 1), rational(240, 1), rational(0, 1)];
-    let dir = strips(1, 1, 8, 3, 6, 1, &[128, 64, 192])
-        .tag(SUBSAMPLING, SHORT, &[1, 1])
-        .tag(YCBCR_COEFFICIENTS, RATIONAL, &weights)
-        .tag(REFERENCE_BLACK_WHITE, RATIONAL, &rbw);
+    let dir = strips(1, 1, 8, 3, 6, 1, &[128, 64, 192]).tag(SUBSAMPLING, SHORT, &[1, 1]).tag(YCBCR_COEFFICIENTS, RATIONAL, &weights).tag(
+        REFERENCE_BLACK_WHITE,
+        RATIONAL,
+        &rbw,
+    );
     let img = decode(&build(true, false, &[dir], &[0]).bytes).unwrap();
     assert_eq!(rgb(&img), [218, 104, 15]);
 }
@@ -155,26 +156,26 @@ fn tiled_jpeg_ycbcr_keeps_its_icc_profile() {
     let (w, h, t) = (32u32, 16u32, 16u32);
     let px = card(w, h);
     let tile = |tx: u32| -> Vec<u8> {
-        (0..t).flat_map(|y| {
-            let at = ((y * w + tx * t) * 3) as usize;
-            px[at..at + (t * 3) as usize].to_vec()
-        })
-        .collect()
+        (0..t)
+            .flat_map(|y| {
+                let at = ((y * w + tx * t) * 3) as usize;
+                px[at..at + (t * 3) as usize].to_vec()
+            })
+            .collect()
     };
     let streams = [jpeg(&tile(0), t, t), jpeg(&tile(1), t, t)];
     let icc = sample_icc(512);
     let dir = Dir { entries: base(w, h, 8, 3, 6), chunks: streams.to_vec(), tiled: true };
-    let dir = compressed(dir, 7)
-        .tag(322, SHORT, &[u64::from(t)])
-        .tag(323, SHORT, &[u64::from(t)])
-        .tag(SUBSAMPLING, SHORT, &[2, 2])
-        .bytes(ICC_PROFILE, UNDEFINED, &icc);
+    let dir = compressed(dir, 7).tag(322, SHORT, &[u64::from(t)]).tag(323, SHORT, &[u64::from(t)]).tag(SUBSAMPLING, SHORT, &[2, 2]).bytes(
+        ICC_PROFILE,
+        UNDEFINED,
+        &icc,
+    );
     let img = decode(&build(true, false, &[dir], &[0]).bytes).unwrap();
     assert_eq!((img.width(), img.height(), img.layout()), (w, h, ChannelLayout::Rgb));
     assert_eq!(img.icc.as_deref(), Some(icc.as_slice()), "the embedded profile is kept");
     // The oracle: each tile's stream decoded by an independent decoder, placed side by side.
-    let tiles: Vec<Vec<u8>> =
-        streams.iter().map(|s| image::load_from_memory_with_format(s, image::ImageFormat::Jpeg).unwrap().to_rgb8().into_raw()).collect();
+    let tiles: Vec<Vec<u8>> = streams.iter().map(|s| image::load_from_memory_with_format(s, image::ImageFormat::Jpeg).unwrap().to_rgb8().into_raw()).collect();
     let row = (t * 3) as usize;
     let want: Vec<u8> = (0..t as usize).flat_map(|y| [&tiles[0][y * row..(y + 1) * row], &tiles[1][y * row..(y + 1) * row]].concat()).collect();
     let worst = rgb(&img).iter().zip(&want).map(|(g, o)| g.abs_diff(*o)).max().unwrap();
@@ -200,10 +201,11 @@ fn planar_ycbcr_reads_as_rgb_in_both_byte_orders() {
     // The pixels of the default-conversion test, one plane per component.
     let px = [0u8, 128, 128, 255, 128, 128, 128, 128, 128, 76, 85, 255];
     for little in [true, false] {
-        let dir = Dir { entries: base(4, 1, 8, 3, 6), chunks: planar_strips(&px, 4, 1, 3, 1, 1), tiled: false }
-            .tag(278, LONG, &[1])
-            .tag(284, SHORT, &[2])
-            .tag(SUBSAMPLING, SHORT, &[1, 1]);
+        let dir = Dir { entries: base(4, 1, 8, 3, 6), chunks: planar_strips(&px, 4, 1, 3, 1, 1), tiled: false }.tag(278, LONG, &[1]).tag(284, SHORT, &[2]).tag(
+            SUBSAMPLING,
+            SHORT,
+            &[1, 1],
+        );
         let img = decode(&build(little, false, &[dir], &[0]).bytes).unwrap();
         assert_eq!(rgb(&img), [0, 0, 0, 255, 255, 255, 128, 128, 128, 254, 0, 0], "little endian: {little}");
     }
