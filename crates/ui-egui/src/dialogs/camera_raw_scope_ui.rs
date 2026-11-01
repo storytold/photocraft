@@ -389,7 +389,7 @@ fn sample_badge_job(text: String, font: FontId, color: Color32) -> egui::text::L
 
 fn graph(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeState, height: f32) {
     let t = Tokens::get(ui.ctx());
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width().max(1.0), height), Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(vec2(crate::direction::row_width(ui).max(1.0), height), Sense::click_and_drag());
     d.scope.rect = Some(rect);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Unknown, ui.is_enabled(), tl!("Tone Histogram")));
     ui.painter().rect_filled(rect, t.radius_sm, t.histogram_background());
@@ -460,7 +460,7 @@ fn scope_point(rect: Rect, red_right: bool, hue: f32, saturation: f32) -> Pos2 {
 fn vectorscope(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut CameraRawScopeState, height: f32) {
     d.ensure_scope(view.selected_region);
     let t = Tokens::get(ui.ctx());
-    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(crate::direction::row_width(ui), height), Sense::click());
     context_menu(&response, d.selection.is_some(), view);
     ui.painter().rect_filled(rect, t.radius_sm, t.histogram_background());
     d.scope.vectorscope_rect = Some(rect);
@@ -512,7 +512,7 @@ pub(crate) fn header(ui: &mut egui::Ui, d: &mut CameraRawDialog, view: &mut Came
         view.floating_rect = None;
     }
     if view.floating {
-        let (_, response) = ui.allocate_exact_size(vec2(ui.available_width(), 48.0), Sense::click());
+        let (_, response) = ui.allocate_exact_size(vec2(crate::direction::row_width(ui), 48.0), Sense::click());
         context_menu(&response, d.selection.is_some(), view);
     } else {
         let height = (ui.available_height() * 0.18).clamp(48.0, 110.0);
@@ -725,5 +725,33 @@ mod rtl_tests {
         let _rtl = direction_scope(Dir::Rtl);
         let rtl = sample_badge_job("R 1   G 2   B 3".to_owned(), font, Color32::WHITE);
         assert_eq!(rtl.direction, egui::epaint::text::TextDirection::RightToLeft);
+    }
+
+    /// The scope window's full-width rows (graph, vectorscope, floating header) read
+    /// `direction::row_width` inside `window_body`: left-to-right exactly `ui.available_width()`
+    /// (pixel-identical LTR), right-to-left the body's max_rect width, so the computed content
+    /// width equals the LTR formula in both directions and never balloons under RTL.
+    #[test]
+    fn scope_rows_read_row_width_in_both_directions() {
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut row_w = 0.0;
+            let mut avail = 0.0;
+            ctx.run_ui(
+                egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 300.0))), ..Default::default() },
+                |ui| {
+                    crate::direction::window_body(ui, |ui| {
+                        row_w = crate::direction::row_width(ui);
+                        avail = ui.available_width();
+                    });
+                },
+            );
+            assert!((row_w - 400.0).abs() < 1e-4, "{dir:?}: row_width is the full body width, got {row_w}");
+            if dir == Dir::Ltr {
+                assert!((row_w - avail).abs() < 1e-4, "ltr: row_width == available_width ({row_w} vs {avail})");
+            }
+        }
     }
 }

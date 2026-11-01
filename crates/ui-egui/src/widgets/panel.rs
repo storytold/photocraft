@@ -73,7 +73,7 @@ pub fn footer_height(ui: &Ui) -> f32 {
 pub fn panel_footer<R>(ui: &mut Ui, add: impl FnOnce(&mut Ui) -> R) -> R {
     let t = Tokens::get(ui.ctx());
     let m = body_margin(t.pro);
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), footer_height(ui)), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(crate::direction::row_width(ui), footer_height(ui)), Sense::hover());
     let y = r.top() + 0.5;
     ui.painter().line_segment([pos2(r.left() - m.left as f32, y), pos2(r.right() + m.right as f32, y)], Stroke::new(1.0, t.separator));
     let bar = Rect::from_min_size(pos2(r.left(), r.top() + 1.0), vec2(r.width(), FOOTER_BAR));
@@ -159,7 +159,7 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, height: f32, hairline:
         ui.add_space(theme::ROW_GAP);
         self::hairline(ui);
     }
-    let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::click());
+    let (r, resp) = ui.allocate_exact_size(vec2(crate::direction::row_width(ui), height), Sense::click());
     if resp.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
@@ -216,7 +216,7 @@ pub fn header_anchors(r: Rect, indent: f32) -> HeaderAnchors {
 /// Hairline separator.
 pub fn hairline(ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 1.0), Sense::hover());
+    let (r, _) = ui.allocate_exact_size(vec2(crate::direction::row_width(ui), 1.0), Sense::hover());
     ui.painter().line_segment([r.left_center(), r.right_center()], Stroke::new(1.0, t.separator));
 }
 
@@ -418,6 +418,35 @@ mod tests {
             let want = if dir == Dir::Rtl { egui::epaint::text::TextDirection::RightToLeft } else { egui::epaint::text::TextDirection::Auto };
             assert_eq!(found, Some(want), "{dir:?}: the pill label's galley direction");
             out.textures_delta.clear();
+        }
+    }
+
+    /// Full-width body rows (footer bar, section header, hairline) read `direction::row_width`:
+    /// left-to-right that is exactly `ui.available_width()` (pixel-identical LTR), right-to-left
+    /// the body's max_rect width, so the computed row width equals the LTR formula in both
+    /// directions and never balloons under RTL.
+    #[test]
+    fn body_rows_read_row_width_in_both_directions() {
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut row_w = 0.0;
+            let mut avail = 0.0;
+            ctx.run_ui(
+                egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 100.0))), ..Default::default() },
+                |ui| {
+                    ui.with_layout(crate::direction::body_layout(), |ui| {
+                        row_w = crate::direction::row_width(ui);
+                        avail = ui.available_width();
+                        hairline(ui);
+                    });
+                },
+            );
+            assert!((row_w - 400.0).abs() < 1e-4, "{dir:?}: row_width is the full body width, got {row_w}");
+            if dir == Dir::Ltr {
+                assert!((row_w - avail).abs() < 1e-4, "ltr: row_width == available_width ({row_w} vs {avail})");
+            }
         }
     }
 }

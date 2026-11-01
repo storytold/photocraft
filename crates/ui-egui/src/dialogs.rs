@@ -255,7 +255,10 @@ fn show_modal<T>(
             // Under RTL the fork anchors the resize rect at the available rect's right edge,
             // so the min is clamped against that edge, not the left one.
             let min = crate::text::direction::clamp_window_min_size(ui.available_rect_before_wrap(), min).size().min(max);
-            egui::Resize::default().id(id.with("resize")).with_stroke(false).default_size(size.min(max)).min_size(min).max_size(max).show(ui, contents)
+            // Measure the drag sizing pass LTR under RTL so the fork's content floor matches LTR's clamped min.
+            egui::Resize::default().id(id.with("resize")).with_stroke(false).default_size(size.min(max)).min_size(min).max_size(max).show(ui, |ui| {
+                crate::text::direction::sizing_pass_ltr(ui, contents)
+            })
         } else {
             contents(ui)
         }
