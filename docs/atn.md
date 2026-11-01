@@ -8,8 +8,10 @@ application's events and PhotoCraft commands lives in `photocraft-engine`
 (`crates/engine/src/cmd/atn_cmds/`, table `EVENTS` in `events.rs`).
 
 A step whose event is in the table below loads as the PhotoCraft command it names, plays, and saves back
-as the same event. Any other step loads as a kept step (`actions.photoshopStep`): Save Actions writes it
-back unchanged, and playback stops at it with its name, so an action never silently skips work.
+as the same event. Any other step loads as a kept step (`actions.photoshopStep`), and Save Actions writes
+it back unchanged. Playback stops at an enabled kept step with its name, so an action never silently skips
+work. Kept steps with no effect on the document (tool selections and the like) are imported switched off,
+so playback skips them.
 
 This page has two parts: the events PhotoCraft maps today, and a measured reference for the events it
 does not map yet, with everything needed to implement them without the reference application.
@@ -67,7 +69,7 @@ does not map yet, with everything needed to implement them without the reference
 | `Exps` | Exps | exposure | `Exposure` |
 | `Fthr` | feather | Feather | `select.modify.feather` |
 | `Fl  ` | fill | Fill | `edit.fill`, `paint.bucket` |
-| `GEfc` | filterGallery | Filter Gallery | `image.adjustments.shadowsHighlights` |
+| `GEfc` | filterGallery | Filter Gallery | `filter.gallery.spatter` |
 | `FltI` | flattenImage | Flatten Image | `layer.flattenImage` |
 | `Flip` | flip | Flip | `image.imageRotation.flipCanvasHorizontal`, `image.imageRotation.flipCanvasVertical`, `edit.transform.flipHorizontal`, `edit.transform.flipVertical` |
 | `GsnB` | gaussianBlur | Gaussian Blur | `filter.blur.gaussianBlur` |
@@ -83,7 +85,7 @@ does not map yet, with everything needed to implement them without the reference
 | `CpTL` | copyToLayer | Layer Via Copy | `layer.new.layerViaCopy` |
 | `CtTL` | cutToLayer | Layer Via Cut | `layer.new.layerViaCut` |
 | `Lvls` | levels | Levels | `image.adjustments.levels`, `image.autoTone`, `image.autoContrast` |
-| `Mk  ` | make | Make |  |
+| `Mk  ` | make | Make | `layer.new.layer`, `layer.new.group`, `layer.groupLayers`, `layer.duplicate`, `layer.new.layerViaCopy`, `layer.new.layerViaCut`, `layer.newFillLayer.solidColor`, `layer.newFillLayer.pattern`, `layer.newAdjustmentLayer.levels`, `layer.newAdjustmentLayer.curves`, `layer.newAdjustmentLayer.hueSaturation`, `layer.newAdjustmentLayer.brightnessContrast`, `layer.newAdjustmentLayer.threshold`, `layer.newAdjustmentLayer.posterize`, `layer.newAdjustmentLayer.invert`, `layer.newAdjustmentLayer.colorBalance`, `layer.newAdjustmentLayer.vibrance`, `layer.newAdjustmentLayer.exposure`, `layer.newAdjustmentLayer.photoFilter`, `layer.newAdjustmentLayer.blackWhite`, `layer.newAdjustmentLayer.channelMixer`, `layer.newAdjustmentLayer.selectiveColor`, `layer.newAdjustmentLayer.gradientMap`, `layer.layerMask.revealAll`, `layer.layerMask.hideAll`, `layer.layerMask.revealSelection`, `layer.layerMask.hideSelection`, `file.new`, `file.newFromClipboard`, `history.newSnapshot` |
 | (string ID only) | animationFramesFromLayers | Make Frames from Layers |  |
 | `Mxm ` | maximum | Maximum | `filter.other.maximum` |
 | `Mdn ` | median | Median | `filter.noise.median` |
@@ -148,7 +150,9 @@ implemented, move it to the table above in the same change.
 - **Keys, order, types, units, defaults:** each event was run in the reference application without a
   dialog on an RGB 8-bit document (with a selection, the clipboard or several layers where the step
   needs them), and the descriptor it returned was read back. That descriptor is what an action records.
-  Settings were reset first, so the defaults are factory defaults.
+  Settings were reset first, so the defaults are factory defaults. Steps that need a prepared document
+  (a selection, the clipboard, several layers) were run with example values; their tables say so and show
+  those values instead of defaults.
 - **Ranges:** every number was set far above and below its range. The application clamps instead of
   refusing, so the values it returned are the exact limits. "Out-of-range values are clamped" in a table
   means exactly that; implement the same clamping on import.
@@ -965,7 +969,7 @@ No parameters: the step carries an empty descriptor.
 
 | Key | String ID | Type | Unit | Default | Allowed |
 |---|---|---|---|---|---|
-| `ClSz` | cellSize | unitdouble |  | 2 (unit `#Pxl`) | 2 .. 200 (out-of-range values are clamped); the unit is `#Pxl`. The application returns the default without a unit, but accepts and returns `#Pxl`. |
+| `ClSz` | cellSize | unitdouble |  | 2 | 2 .. 200 pixels (out-of-range values are clamped). Write it as a unit double in `#Pxl`: the application accepts that and returns it unchanged. Read a value without a unit as pixels (the application returns its own default that way). |
 
 #### Pointillize
 
@@ -1069,6 +1073,7 @@ Nested values as recorded (defaults):
 
 - Event: `Avrg` (no string ID)
 - PhotoCraft command: `filter.blur.average`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
 No parameters: the step carries an empty descriptor.
 
@@ -1076,29 +1081,21 @@ No parameters: the step carries an empty descriptor.
 
 - Event: `Cstm` / `custom`
 - PhotoCraft command: `filter.other.custom`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `Scl ` | scale | integer |  | 1 | ignored without the dialog; see "Events that need a step recorded through their dialog" |
 | `Ofst` | offset | integer |  | 0 | ignored without the dialog; see "Events that need a step recorded through their dialog" |
-| `Mtrx` | matrix | list |  | list[25] | exactly 25 integers (5 x 5, row by row); a 3 x 3 list makes the application fail |
-
-Nested values as recorded (defaults):
-```
-    [0] 0
-    [1] 0
-    [2] 0
-    [3] 0
-    [4] 0
-    [5] 0
-```
+| `Mtrx` | matrix | list |  | none: the 25 cells as set in the dialog | exactly 25 integers (5 x 5, row by row); a 3 x 3 list makes the application fail |
 
 #### Replace Color
 
 - Event: `RplC` / `replaceColor`
 - PhotoCraft command: `image.adjustments.replaceColor`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `Fzns` | fuzziness | integer |  | 40 | 0 .. 200 (out-of-range values are clamped) |
 | `Mnm ` | minimum | object |  | obj 'LbCl' labColor |  |
@@ -1108,7 +1105,7 @@ Nested values as recorded (defaults):
 | `Lght` | lightness | integer |  | 0 | -100 .. 100 (out-of-range values are clamped) |
 | `` | colorModel | integer |  | 0 |  |
 
-Nested values as recorded (defaults):
+Nested values as recorded (example values):
 ```
     'Lmnc' luminance : DOUBLETYPE = 40
     'A   ' a : DOUBLETYPE = 30
@@ -1127,13 +1124,14 @@ Steps recorded in an ordinary editing session. The values below were measured in
 - Event: `AddT` / `addTo`
 - PhotoCraft command: `select.rect {"mode":"add"}`
 - Shift-drag with the Rectangular Marquee.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
 | `T   ` | to | object |  | obj 'Rctn' rectangle |  |
 
-Nested values as recorded (defaults):
+Nested values as recorded (example values):
 ```
     'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
     'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
@@ -1146,14 +1144,15 @@ Nested values as recorded (defaults):
 - Event: `AddT` / `addTo`
 - PhotoCraft command: `select.rect {"mode":"add","ellipse":true}`
 - Same event with an `Elps` target and anti-aliasing.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
 | `T   ` | to | object |  | obj 'Elps' ellipse |  |
 | `AntA` | antiAlias | boolean |  | true |  |
 
-Nested values as recorded (defaults):
+Nested values as recorded (example values):
 ```
     'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
     'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
@@ -1165,13 +1164,14 @@ Nested values as recorded (defaults):
 
 - Event: `SbtF` / `subtractFrom`
 - PhotoCraft command: `select.rect {"mode":"subtract"}`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
 | `T   ` | to | object |  | obj 'Rctn' rectangle |  |
 
-Nested values as recorded (defaults):
+Nested values as recorded (example values):
 ```
     'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
     'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
@@ -1183,13 +1183,14 @@ Nested values as recorded (defaults):
 
 - Event: `IntW` / `interfaceWhite`
 - PhotoCraft command: `select.rect {"mode":"intersect"}`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `null` | null | reference |  | ref 'Chnl' channel prop 'fsel' selection |  |
 | `T   ` | to | object |  | obj 'Rctn' rectangle |  |
 
-Nested values as recorded (defaults):
+Nested values as recorded (example values):
 ```
     'Top ' top : UNITDOUBLE = 30 '#Pxl' pixelsUnit
     'Left' left : UNITDOUBLE = 30 '#Pxl' pixelsUnit
@@ -1201,8 +1202,9 @@ Nested values as recorded (defaults):
 
 - Event: `PstI` / `pasteInto`
 - PhotoCraft command: `edit.pasteSpecial.pasteInto`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `AntA` | antiAlias | enumerated |  | `Anno` antiAliasNone | not measured yet |
 | `As  ` | as | class |  | class 'Pxel' pixel |  |
@@ -1211,8 +1213,9 @@ Nested values as recorded (defaults):
 
 - Event: `PstO` / `pasteOutside`
 - PhotoCraft command: `edit.pasteSpecial.pasteOutside`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `AntA` | antiAlias | enumerated |  | `Anno` antiAliasNone | not measured yet |
 | `As  ` | as | class |  | class 'Pxel' pixel |  |
@@ -1222,8 +1225,9 @@ Nested values as recorded (defaults):
 - Event: `Fade` / `fade`
 - PhotoCraft command: `edit.fade`
 - Recorded right after the step it fades.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `Opct` | opacity | unitdouble | `#Prc` | 50 | 0 .. 100 (out-of-range values are clamped) |
 | `Md  ` | mode | enumerated |  | `Mltp` multiply | not measured yet |
@@ -1232,8 +1236,9 @@ Nested values as recorded (defaults):
 
 - Event: `` / `linkSelectedLayers`
 - PhotoCraft command: `layer.linkLayers`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `null` | null | reference |  | ref 'Lyr ' layer enum 'Ordn' ordinal.'Trgt' targetEnum |  |
 
@@ -1242,8 +1247,9 @@ Nested values as recorded (defaults):
 - Event: `Dstr` / `distort`
 - PhotoCraft command: `layer.distribute.leftEdges (one command per edge)`
 - `Usng` selects the edge or centre; one enum value per Distribute menu item.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `null` | null | reference |  | ref 'Lyr ' layer enum 'Ordn' ordinal.'Trgt' targetEnum |  |
 | `Usng` | using | enumerated |  | `AdLf` ADSLefts | not measured yet |
@@ -1253,6 +1259,7 @@ Nested values as recorded (defaults):
 - Event: `RmvL` / `removeLayerMask`
 - PhotoCraft command: `layer.layerMask.delete`
 - The reference application asks "Apply mask before deleting?" when this step plays without the apply choice; see the table for the key it records.
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
 No parameters: the step carries an empty descriptor.
 
@@ -1278,12 +1285,13 @@ Channel and colour steps. Trap was measured in a CMYK document (it only exists t
 
 - Event: `SplC` / `splitChannels`
 - PhotoCraft command: `channel.split`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `` | documentIDs | list |  | list[3] |  |
 
-Nested values as recorded (defaults):
+Nested values as recorded (example values):
 ```
     [0] 182
     [1] 185
@@ -1294,6 +1302,7 @@ Nested values as recorded (defaults):
 
 - Event: `MSpt` / `mergeSpotChannel`
 - PhotoCraft command: `channel.mergeSpot`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
 No parameters: the step carries an empty descriptor.
 
@@ -1301,8 +1310,9 @@ No parameters: the step carries an empty descriptor.
 
 - Event: `Trap` / `trap`
 - PhotoCraft command: `image.trap`
+- Measured with example values in a prepared document: the Value column shows what was sent and recorded, not a factory default (a step always carries the values the user set).
 
-| Key | String ID | Type | Unit | Default | Allowed |
+| Key | String ID | Type | Unit | Example value | Allowed |
 |---|---|---|---|---|---|
 | `Wdth` | width | unitdouble | `#Pxl` | 2 | up to 32767 (clamped); the minimum was not measured (a huge negative value ran out of memory) |
 
