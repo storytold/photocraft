@@ -112,6 +112,19 @@ fn a_centred_copy_centres_the_part_its_mask_shows() {
     assert_eq!(shown(right, Some(json!({"enabled": false}))), Rect::new(25, 20, 35, 30));
 }
 
+/// #10422 review: a copy dropped on a point centres what the mask shows there too. The mask keeps
+/// x ≥ 9 of the square (x 4..14, y 6..16), so the shown part's centre (11.5, 11) lands on
+/// (30.5, 25): dx 19, dy 14. Centred on the whole square (9, 11), it would land at dx 22.
+#[test]
+fn a_copy_dropped_on_a_point_centres_the_part_its_mask_shows() {
+    let (mut s, paint) = two_docs(40, 30, 8);
+    s.execute("select.rect", json!({"x": 9, "y": 0, "width": 31, "height": 30, "antiAlias": false})).unwrap();
+    s.execute("layer.layerMask.revealSelection", json!({"layer": paint.0})).unwrap();
+    let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "at": [30.5, 25.0]})).unwrap();
+    assert_eq!(r["offset"], json!([19, 14]));
+    assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(23, 20, 33, 30));
+}
+
 /// #10422 review: the centre is that of the pixels the mask shows, not of the mask's opening.
 /// A second square at x 30..34 sits outside the mask; the opening (x 0..20) also covers empty
 /// pixels right of the first square, which mustn't pull the centre right.
