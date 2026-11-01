@@ -1,6 +1,8 @@
 use super::start_screen::start_screen;
 use super::textures::retain_gpu_documents;
-use super::{Color32, PhotocraftApp, Pos2, Rect, Sense, Stroke, TextureOptions, canvas_view, fmt_zoom, json, mode_label, pos2};
+use super::{
+    CanvasRole, Color32, PhotocraftApp, Pos2, Rect, Sense, Stroke, TextureOptions, View, canvas_view, canvas_view_as, fmt_zoom, json, mode_label, pos2,
+};
 
 /// Tabs + canvas for the active document, or the start screen; then drops layers dragged onto
 /// another document (`layer_transfer`).
@@ -723,6 +725,77 @@ pub(super) fn open_on_double_click(app: &mut PhotocraftApp, ui: &egui::Ui, area:
     }
 }
 
+/// Where window `id`'s canvas was laid out in its own viewport's points, rulers included, as of
+/// the last frame (what the tests aim their pointer at).
+#[cfg(test)]
+pub(crate) fn window_canvas_rect(ctx: &egui::Context, id: u64) -> Option<Rect> {
+    ctx.data(|d| d.get_temp(window_canvas_id(id)))
+}
+
+/// The temporary-data key [`extra_windows`] stores window `id`'s canvas rectangle under.
+fn window_canvas_id(id: u64) -> egui::Id {
+    egui::Id::unique(("docwin-canvas", id))
+}
+
+/// Can a window bring its document forward now? Not while a dialog is open or a drag is in
+/// flight: the dialog stays with the document it was opened on, and the drag with the one it
+/// started on.
+fn window_may_activate(app: &PhotocraftApp) -> bool {
+    app.drag.is_none() && app.ui.dialogs.is_empty()
+}
+
+/// One document window's canvas (#6022). In a window of the active document the tools work, in
+/// the window's own view. A press in a window of another document brings that document forward
+/// first, as a click on a tile does in a tiled layout, and goes on to use the tool there
+/// ([`window_may_activate`] says when it changes nothing).
+fn window_canvas(app: &mut PhotocraftApp, ui: &mut egui::Ui, doc: usize, rect: Rect, view: View) -> View {
+    let pressed = ui.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| rect.contains(p)));
+    if pressed && window_may_activate(app) && app.session.active_index() != Some(doc) {
+        app.session.set_active(doc);
+    }
+    if app.session.active_index() != Some(doc) {
+        return canvas_view_as(app, ui, doc, rect, view, CanvasRole::View);
+    }
+    let Some(main) = MainCanvas::lend(app, doc, &view, rect) else {
+        return canvas_view_as(app, ui, doc, rect, view, CanvasRole::View);
+    };
+    let view = canvas_view_as(app, ui, doc, rect, view, CanvasRole::Window);
+    main.restore(app, doc);
+    view
+}
+
+/// The app slots the tools read "the canvas" from: the active document's view, the display scale,
+/// the canvas rectangle (`ViewXform::active`, `point_zoom`, drag and drop) and where the pointer
+/// is in the document. They hold the main window's. While a window's tools run they hold the
+/// window's instead, and the main window's come back afterwards. View › Rulers stays as it is:
+/// the window has rulers too (#6017), so its canvas is inset by them like the main one.
+struct MainCanvas {
+    view: View,
+    ppp: f32,
+    rect: Rect,
+    hover: Option<[f64; 2]>,
+}
+
+impl MainCanvas {
+    /// Put `view` (a window's, drawn in `rect`) in the main canvas's slots; `None` when the
+    /// document has no view (nothing is changed).
+    fn lend(app: &mut PhotocraftApp, doc: usize, view: &View, rect: Rect) -> Option<Self> {
+        let main_view = std::mem::replace(app.ui.views.get_mut(doc)?, view.clone());
+        Some(Self { view: main_view, ppp: app.ppp, rect: std::mem::replace(&mut app.last_canvas_rect, rect), hover: app.hover_doc })
+    }
+
+    /// Give the main window its slots back once the window's tools have run.
+    fn restore(self, app: &mut PhotocraftApp, doc: usize) {
+        if let Some(slot) = app.ui.views.get_mut(doc) {
+            *slot = self.view;
+        }
+        app.ppp = self.ppp;
+        app.last_canvas_rect = self.rect;
+        // One pointer: the window's position when it is over the window, else the main canvas's.
+        app.hover_doc = app.hover_doc.or(self.hover);
+    }
+}
+
 /// Extra OS windows showing documents (multi-window / multi-monitor).
 pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let wins = app.ui.windows.clone();
@@ -742,12 +815,13 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
                 close = true;
             }
             focused = ui.ctx().input(|i| i.viewport().focused == Some(true));
-            if focused && !w.focused && app.session.active_index() != Some(w.document) {
+            if focused && !w.focused && window_may_activate(app) && app.session.active_index() != Some(w.document) {
                 app.session.set_active(w.document);
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
-                view = canvas_view(app, ui, w.document, rect, view.clone(), focused);
+                ui.ctx().data_mut(|d| d.insert_temp(window_canvas_id(w.id), rect));
+                view = window_canvas(app, ui, w.document, rect, view.clone());
                 // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
                 crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
             });
