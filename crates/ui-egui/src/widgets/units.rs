@@ -128,6 +128,18 @@ pub(super) fn plain(text: &str) -> Option<f64> {
     clean(text).parse().ok()
 }
 
+/// The typed text without spaces (`1 234`), with a Unicode minus as `-`, and a decimal comma as a
+/// point (`0,3`, as typed where the comma is the decimal separator, #10729) when the text has no
+/// point; beside a point (`1.234,5`) a comma is left as it is, so the text stays invalid rather
+/// than guessed.
 fn clean(text: &str) -> String {
-    text.chars().filter(|c| !c.is_whitespace()).map(|c| if c == '−' { '-' } else { c }).collect()
+    let comma_is_decimal = !text.contains('.');
+    text.chars()
+        .filter(|c| !c.is_whitespace())
+        .map(|c| match c {
+            '−' => '-',
+            ',' if comma_is_decimal => '.',
+            c => c,
+        })
+        .collect()
 }
