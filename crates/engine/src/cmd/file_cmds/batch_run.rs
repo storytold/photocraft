@@ -247,9 +247,12 @@ pub(crate) fn batch_keeps_step(id: &str) -> bool {
 /// Run explicit steps or a saved action on each input using the requested output settings.
 pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     let cmd = "file.automate.batch";
-    let mut steps = match p.get("steps").or_else(|| p.get("action").filter(|v| v.is_array())) {
-        Some(steps) => parse_steps(steps)?,
-        None => crate::automate_cmds::named_action_steps(s, p, cmd)?,
+    let (mut steps, action) = match p.get("steps").or_else(|| p.get("action").filter(|v| v.is_array())) {
+        Some(steps) => (parse_steps(steps)?, None),
+        None => {
+            let (action, _) = crate::actions_cmds::playback_plan(s, &json!({"action": p.get("action")}))?;
+            (action.enabled_steps().map(|(_, step)| step.clone()).collect(), Some(action.name))
+        }
     };
     // Each result goes to the destination folder, which overrides the action's recorded Save /
     // Save As steps: they only mark the result.
@@ -276,23 +279,32 @@ pub(super) fn batch(s: &mut Session, p: &Value) -> Result<Value> {
     };
     // A batch inside a played action charges its inputs × steps (at least one each: an input is read,
     // decoded and saved even with no steps) to the playback tree it is in and
-    // hands the count on, so a batch of batches can't multiply past the limit. A top-level batch
-    // is not limited by it.
+    // hands the count on, so a batch of batches can't multiply past the limit. A named action
+    // starts a playback tree too; top-level explicit steps retain their existing behavior.
     let mut playback_steps = 0;
-    if s.actions.playing > 0 {
-        playback_steps = s.actions.playback_steps.saturating_add((steps.len().max(1) as u64).saturating_mul(inputs.len() as u64));
+    if s.actions.playing > 0 || action.is_some() {
+        let spent = if s.actions.playing > 0 { s.actions.playback_steps } else { 0 };
+        playback_steps = spent.saturating_add((steps.len().max(1) as u64).saturating_mul(inputs.len() as u64));
         if playback_steps > crate::actions_cmds::MAX_PLAYBACK_STEPS {
-            return Err(EngineError::BadParams { cmd: cmd.into(), msg: "this batch would exceed the playback step limit of the action that runs it".into() });
+            return Err(EngineError::BadParams { cmd: cmd.into(), msg: "this batch would exceed the action playback step limit".into() });
         }
-        s.actions.playback_steps = playback_steps;
+        if s.actions.playing > 0 {
+            s.actions.playback_steps = playback_steps;
+        }
     }
-    let actions = crate::actions_cmds::ActionState {
+    let mut actions = crate::actions_cmds::ActionState {
         list,
         playing: s.actions.playing,
         playback_stack: s.actions.playback_stack.clone(),
         playback_steps,
         ..Default::default()
     };
+    // Keep the selected identity in scratch sessions, so nested Batch and Play calls use
+    // the same cycle/depth guards without changing how the caller records this Batch command.
+    if let Some(name) = action {
+        actions.playing = actions.playing.saturating_add(1);
+        actions.playback_stack.push(name);
+    }
     let names = batch_naming::plan(&inputs, &output, &format, p)?;
     let save = SaveOpts::from_params(s, p, cmd)?;
     let authorize = s.authorize;
