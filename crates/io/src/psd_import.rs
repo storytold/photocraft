@@ -1237,6 +1237,7 @@ fn finish_import(mut doc: Document, mut cx: Ctx<'_>, ctl: &photocraft_raster::In
     (doc.layer_comps, doc.last_applied_comp, doc.last_document_state) = (comps, applied, state);
     cx.warnings.extend(warnings);
     crate::slices_map::import(&mut doc);
+    cx.warnings.extend(crate::variables_map::import(&mut doc));
     cx.warnings.extend(crate::text_styles_map::import(&mut doc));
     if ctl.cancelled() {
         return None;
