@@ -27,6 +27,57 @@ fn flare(brightness: i32, center: [f64; 2], lens: &str) -> Descriptor {
         .with("Lns ", enm("Lns ", lens))
 }
 
+/// Codes and TEXT names have separate identities, including the old Code-only aliases.
+#[test]
+fn event_lookup_keeps_codes_separate_from_names() {
+    for (code, id) in [
+        (*b"Clds", "filter.render.clouds"),
+        (*b"DfrC", "filter.render.differenceClouds"),
+        (*b"Fbrs", "filter.render.fibers"),
+        (*b"LnsF", "filter.render.lensFlare"),
+        (*b"BoxB", "filter.blur.boxBlur"),
+        (*b"SrfB", "filter.blur.surfaceBlur"),
+        (*b"Fltn", "layer.flattenImage"),
+        (*b"BlnW", "image.adjustments.blackWhite"),
+        (*b"PhtF", "image.adjustments.photoFilter"),
+    ] {
+        assert!(event_for(&AtnEvent::Code(code)).unwrap().ids.contains(&id));
+        assert!(event_for(&AtnEvent::Name(code.to_vec())).is_none(), "{code:?} is not a TEXT name");
+    }
+    assert!(event_for(&AtnEvent::name("play")).unwrap().ids.contains(&"actions.play"));
+    assert!(event_for(&AtnEvent::Code(*b"Ply ")).unwrap().ids.contains(&"actions.play"));
+    assert!(event_for(&AtnEvent::Code(*b"play")).is_none(), "a TEXT name is not a code");
+    for event in [AtnEvent::Code(*b"save"), AtnEvent::name("save")] {
+        assert!(event_for(&event).unwrap().ids.contains(&"file.save"), "save is registered in both forms");
+    }
+    assert!(event_for(&AtnEvent::name("")).is_none(), "empty registry names are not event identifiers");
+}
+
+/// Unknown event forms stay kept rather than becoming commands, and save verbatim.
+#[test]
+fn code_spellings_in_text_steps_keep_their_bytes_and_flags() {
+    let mut events: Vec<_> = ["Clds", "DfrC", "Fbrs", "LnsF", "BoxB", "SrfB", "Fltn", "BlnW", "PhtF"].into_iter().map(AtnEvent::name).collect();
+    events.push(AtnEvent::Code(*b"play"));
+    for event in events {
+        let mut original = atn::parse(&file(event, desc("null"))).unwrap();
+        original.actions[0].items[0].enabled = false;
+        original.actions[0].items[0].with_dialog = true;
+        original.actions[0].items[0].dialog_options = 2;
+        let bytes = atn::write(&original).unwrap();
+        let mut s = Session::new();
+        let loaded = s.execute("actions.load", json!({"data": photocraft_paint::tile::b64_encode(&bytes)})).unwrap();
+        assert_eq!(loaded["unsupported"].as_array().unwrap().len(), 1, "{:?}", original.actions[0].items[0].event);
+        assert_eq!(s.actions.list[0].steps[0].0, PHOTOSHOP_STEP);
+        let saved = s.execute("actions.save", json!({"action": "Render"})).unwrap();
+        assert_eq!(saved["skipped"], json!([]));
+        let back = atn::parse(&photocraft_paint::tile::b64_decode(saved["data"].as_str().unwrap()).unwrap()).unwrap();
+        assert_eq!(back.actions[0].items, original.actions[0].items);
+        let mut compared = original;
+        compared.actions[0].items = back.actions[0].items.clone();
+        assert_eq!(atn::write(&compared).unwrap(), bytes);
+    }
+}
+
 /// Both recorded event IDs map empty Clouds descriptors without inventing frozen colors.
 #[test]
 fn clouds_events_map_and_refuse_unrepresentable_native_settings() {

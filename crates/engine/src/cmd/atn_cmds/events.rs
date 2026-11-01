@@ -649,11 +649,14 @@ const LEGACY_CODES: &[(&str, &str)] =
 
 pub(super) fn event_for(item: &AtnEvent) -> Option<&'static Event> {
     let id = item.id();
-    let find = |id: &str| EVENTS.iter().find(|e| (!e.code.is_empty() && e.code.trim_end() == id.trim_end()) || (!e.name.is_empty() && e.name == id));
-    find(&id).or_else(|| match item {
-        AtnEvent::Code(_) => LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| find(name)),
-        AtnEvent::Name(_) => None,
-    })
+    let by_name = |name: &str| EVENTS.iter().find(|e| !e.name.is_empty() && e.name == name);
+    match item {
+        AtnEvent::Code(_) => EVENTS
+            .iter()
+            .find(|e| !e.code.is_empty() && e.code.trim_end() == id.trim_end())
+            .or_else(|| LEGACY_CODES.iter().find(|(code, _)| *code == id).and_then(|(_, name)| by_name(name))),
+        AtnEvent::Name(_) => by_name(&id),
+    }
 }
 
 /// The event `id` exports as: the first event listing it whose converter accepts the params

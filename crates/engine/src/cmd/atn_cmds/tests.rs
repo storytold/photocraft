@@ -102,13 +102,13 @@ fn sample() -> AtnFile {
                 function_key: 3,
                 items: vec![
                     blur,
-                    item("make", "Make", Some(make_levels)),
+                    item("Mk  ", "Make", Some(make_levels)),
                     item("setd", "Set", Some(select_all)),
                     item("select", "Select", Some(select_layer)),
                     item("slct", "Select", Some(tool)),
-                    item("stop", "Stop", Some(stop)),
+                    item("Stop", "Stop", Some(stop)),
                     item("syntheticFill", "Generative Fill", Some(fancy)),
-                    item("play", "Play", Some(play)),
+                    item("Ply ", "Play", Some(play)),
                     off,
                 ],
                 ..Default::default()
@@ -1051,7 +1051,7 @@ fn retouching_set_events_map_to_their_commands() {
         item("colorRange", "Color Range", Some(desc("null").with("Clrs", enm("Clrs", "skinTone")).with("Fzns", long(40.0)))),
         item("colorRange", "Color Range", Some(sampled)),
         item("colorRange", "Color Range", Some(desc("null").with("Clrs", enm("Clrs", "Rds ")).with("UsFc", D::Boolean(true)))),
-        item("make", "Make", Some(mask)),
+        item("Mk  ", "Make", Some(mask)),
         item("set", "Set", Some(fg)),
         item("set", "Set", Some(lab_fg)),
         item("groupEvent", "Create Clipping Mask", Some(desc("null").with("null", target_ref("Lyr ")))),
@@ -1434,8 +1434,8 @@ fn remaining_events_import_in_their_photoshop_shapes() {
     let items = vec![
         item("conditional", "If", Some(cond)),
         item("imageSize", "Image Size", Some(size)),
-        item("fill", "Fill", Some(bucket_px)),
-        item("fill", "Fill", Some(bucket_pct)),
+        item("Fl  ", "Fill", Some(bucket_px)),
+        item("Fl  ", "Fill", Some(bucket_pct)),
         item("placeEvent", "Place", Some(place)),
         item("Opn ", "Open", Some(desc("null").with("null", path_value("/Users/me/in.psd")))),
     ];
