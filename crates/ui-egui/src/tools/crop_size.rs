@@ -232,7 +232,8 @@ pub fn clear_ratio(o: &mut ToolOptions) {
         clear(o);
     } else {
         o.crop_ratio.clear();
-        select_custom_ratio(o);
+        o.crop_custom_ratio_width = 0.0;
+        o.crop_custom_ratio_height = 0.0;
     }
 }
 
