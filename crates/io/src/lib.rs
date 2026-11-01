@@ -189,9 +189,7 @@ pub fn open_warnings(doc: &Document) -> Vec<String> {
                 }
             }
         }
-        if matches!(l.content, LayerContent::Adjustment(Adjustment::Vibrance { .. }))
-            && l.psd_blocks.iter().find(|(k, _)| k == b"vibA").is_some_and(|(_, d)| adjust_map::is_newer_vibrance(d))
-        {
+        if adjust_map::layer_has_newer_vibrance(l) {
             out.push(adjust_map::newer_vibrance_warning(&l.name));
         }
         if let Some(children) = l.children() {

@@ -108,6 +108,7 @@ fn export_supported_document(
 
     let merged = prepare_merged_planes(doc, &mut ex, opts, ctl, fmt, duotone_inks.is_some(), layers_share);
     let MergedExport { header, image_data, extra, has_alpha, quick_mask_id, real_merged } = merged;
+    ex.warnings.extend(newer_vibrance_composite_warnings(doc, real_merged));
 
     // Resources.
     let mut resources = vec![
@@ -369,6 +370,28 @@ fn append_extra_channels<'a>(
         planes.extend(deinterleave(&bytes, 1, sample, &[false]).remove(0));
     }
     (extra, quick_mask_id)
+}
+
+/// Save notes for the visible Vibrance layers in Photoshop's newer method when the file carries a
+/// composite image (`real_merged`): PhotoCraft renders that image with the legacy method, so it
+/// doesn't match how Photoshop shows those layers (#8838). Hidden layers, and the layers of hidden
+/// groups, don't reach the composite.
+fn newer_vibrance_composite_warnings(doc: &Document, real_merged: bool) -> Vec<String> {
+    let mut out = Vec::new();
+    if !real_merged {
+        return out;
+    }
+    // Iterative, so no document's nesting can make this recurse.
+    let mut stack: Vec<_> = doc.layers.iter().filter(|l| l.visible).collect();
+    while let Some(l) = stack.pop() {
+        if crate::adjust_map::layer_has_newer_vibrance(l) {
+            out.push(crate::adjust_map::newer_vibrance_composite_warning(&l.name));
+        }
+        if let Some(children) = l.children() {
+            stack.extend(children.iter().filter(|c| c.visible));
+        }
+    }
+    out
 }
 
 fn merged_image(doc: &Document, opts: &PsdExportOptions, ctl: &Interrupt, fmt: &PixelFormat, real_merged: bool, layers_share: f32) -> (Vec<u8>, bool) {

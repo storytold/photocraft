@@ -206,3 +206,23 @@ fn open_note_follows_the_first_vibrance_block() {
         assert_eq!(warnings.iter().filter(|w| w.contains("newer method")).count(), notes, "{warnings:?}");
     }
 }
+
+/// A saved PSD carries a composite image PhotoCraft renders, with the legacy method: a visible
+/// Vibrance kept in Photoshop's newer method gets a note that the two differ. Without a composite
+/// (Maximize compatibility off), with the layer hidden, or for a legacy layer, there's nothing to note.
+#[test]
+fn saving_notes_the_composite_for_a_newer_method_vibrance() {
+    let modern = photoshop_vib(&[("useLegacy", Value::Boolean(false)), ("vibrance", Value::Integer(28)), ("Strt", Value::Integer(-7))]);
+    let opened = reopen(&doc_with(SampleType::U8, modern), "x.psd").document;
+    let composite_notes = |doc: &Document, opts: &ExportOptions| {
+        export(doc, "x.psd", opts).unwrap().warnings.into_iter().filter(|w| w.contains("\"Vibrance 1\"") && w.contains("composite")).count()
+    };
+    assert_eq!(composite_notes(&opened, &ExportOptions::default()), 1);
+    let no_composite = ExportOptions { psd_maximize_compatibility: false, ..Default::default() };
+    assert_eq!(composite_notes(&opened, &no_composite), 0);
+    let mut hidden = opened.clone();
+    hidden.layers[1].visible = false;
+    assert_eq!(composite_notes(&hidden, &ExportOptions::default()), 0);
+    let legacy = reopen(&doc_with(SampleType::U8, photoshop_vib(&[("vibrance", Value::Integer(28))])), "x.psd").document;
+    assert_eq!(composite_notes(&legacy, &ExportOptions::default()), 0);
+}

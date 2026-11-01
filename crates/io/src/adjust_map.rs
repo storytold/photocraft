@@ -409,6 +409,20 @@ pub(crate) fn newer_vibrance_warning(layer: &str) -> String {
     format!("layer \"{layer}\": its Vibrance uses Photoshop's newer method, which PhotoCraft previews with the legacy method; the method is kept when saved")
 }
 
+/// `true` for a Vibrance layer whose own `vibA` block (the first, the one it was read from) is in
+/// Photoshop's newer method ([`is_newer_vibrance`]).
+pub(crate) fn layer_has_newer_vibrance(l: &photocraft_doc::Layer) -> bool {
+    matches!(l.content, photocraft_doc::LayerContent::Adjustment(Adjustment::Vibrance { .. }))
+        && l.psd_blocks.iter().find(|(k, _)| k == b"vibA").is_some_and(|(_, d)| is_newer_vibrance(d))
+}
+
+/// The save note for a visible layer [`layer_has_newer_vibrance`] holds when the file carries a
+/// composite image: PhotoCraft renders that image, so it shows the layer with the legacy method
+/// while Photoshop renders the layer itself with the newer one.
+pub(crate) fn newer_vibrance_composite_warning(layer: &str) -> String {
+    format!("layer \"{layer}\": the composite image saved with the file shows its Vibrance with the legacy method; the layer keeps Photoshop's newer method")
+}
+
 /// `true` for a `grdm` block exactly as older PhotoCraft builds wrote it: [`write_gradient_map`]'s
 /// output without the two padding bytes, which makes Photoshop refuse the file (#8070). Blocks
 /// from other writers, whatever their length, are not matched.
