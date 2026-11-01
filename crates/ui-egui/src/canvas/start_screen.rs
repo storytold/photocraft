@@ -116,7 +116,7 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
     let mut open = None;
     let mut remove = None;
     let mut clear = false;
-    for path in recent {
+    for (i, path) in recent.iter().enumerate() {
         let name = crate::file_open::display_name(path);
         let folder = std::path::Path::new(path).parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_default();
         let (row, resp) = ui.allocate_exact_size(egui::vec2(width, HOME_RECENT_ROW), Sense::click());
@@ -151,7 +151,7 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
             }
         }
         if resp.clicked() && remove.is_none() {
-            open = Some(path.clone());
+            open = Some((i, path.clone()));
         }
         resp.context_menu(|ui| {
             if ui.button(tl!("Remove from Recent")).clicked() {
@@ -169,9 +169,16 @@ fn home_recent(app: &mut PhotocraftApp, ui: &mut egui::Ui, recent: &[String]) {
     } else if let Some(path) = remove {
         app.remove_recent(&path);
     }
-    if let Some(path) = open
-        && let Err(e) = app.open_path(&path)
-    {
-        app.open_failed(&crate::file_open::display_name(&path), &e);
+    if let Some((i, path)) = open {
+        // The row is File › Open Recent's item `i` (the list is its first entries), so synthetic
+        // input is judged as that command, as the menu does: a client confined to its automation
+        // roots can't plant a recent file outside them and click it open.
+        let gate = match app.services.automation_command.as_ref() {
+            Some(authorize) if app.automation_input => authorize(&format!("file.openRecent.{i}"), &json!({})),
+            _ => Ok(()),
+        };
+        if let Err(e) = gate.and_then(|()| app.open_path(&path)) {
+            app.open_failed(&crate::file_open::display_name(&path), &e);
+        }
     }
 }
