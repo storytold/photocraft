@@ -311,15 +311,23 @@ pub fn show(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let mut answer = ctx.input_mut(|i| buttons.iter().find(|b| b.2.is_some_and(|k| i.consume_key(egui::Modifiers::NONE, k))).map(|b| b.4));
     let labels = button_labels(mac, &buttons.iter().map(|b| (b.1, b.2)).collect::<Vec<_>>());
     let row: Vec<DialogButton> =
-        buttons.iter().zip(&labels).map(|(b, label)| DialogButton::new(b.0, label, b.3).focus(focus && b.0 == ButtonRole::Default)).collect();
-    let modal = egui::Modal::new(egui::Id::unique("discard-prompt")).show(ctx, |ui| {
+        buttons.iter().zip(&labels).map(|(b, (label, m))| DialogButton::new(b.0, label, b.3).mnemonic(*m).focus(focus && b.0 == ButtonRole::Default)).collect();
+    let modal = egui::Modal::new(egui::Id::unique("discard-prompt")).frame(egui::Frame::popup(&ctx.global_style()).inner_margin(12)).show(ctx, |ui| {
         ui.set_max_width(420.0);
-        ui.label(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0)));
+        let title_label = egui::Label::new(egui::RichText::new(tl!(&title)).font(crate::theme::semibold(15.0))).selectable(false);
+        let title_rect = ui.add(title_label).rect;
+        if !mac && crate::dialogs::CLOSE_BOX {
+            let close_r = crate::dialogs::close_box_rect(ui.max_rect().right(), title_rect.center().y);
+            if crate::dialogs::close_box(ui, close_r) {
+                answer = Some(Answer::Cancel);
+            }
+        }
         ui.add_space(4.0);
         crate::widgets::hairline(ui);
         ui.add_space(8.0);
         ui.label(message);
         ui.add_space(12.0);
+        ui.spacing_mut().item_spacing.y = 0.0;
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             if let Some(role) = crate::widgets::dialog_buttons(ui, &row) {
@@ -408,25 +416,36 @@ enum Answer {
 /// macOS keeps the plain button wording even though the keyboard shortcuts still work.
 #[cfg(test)]
 fn button_label(mac: bool, label: &str, key: Option<Key>) -> String {
-    button_labels(mac, &[(label, key)]).into_iter().next().unwrap_or_default()
+    button_labels(mac, &[(label, key)]).into_iter().next().map(|(l, _)| l).unwrap_or_default()
 }
 
-/// The labels of one dialog's buttons, each with its key in the same style: "(Y)es" when every
-/// translation starts with its key, otherwise appended to all ("Ja (Y)", "Nein (N)") (#5564).
-fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<String> {
-    let starts_with_key = |label: &str, k: Key| label.split_at_checked(1).is_some_and(|(first, _)| first.eq_ignore_ascii_case(k.name()));
-    let inline = buttons.iter().all(|&(label, key)| key.is_none_or(|k| starts_with_key(tl!(label), k)));
+/// The labels of one dialog's buttons: (text, mnemonic).
+/// If all keyed buttons contain their key in the translation, each button shows its clean text
+/// and underlines the mnemonic character.
+/// If any keyed button doesn't contain its key (e.g. German "Ja" with 'Y' or Japanese "保存" with 'S'),
+/// every button appends its key (e.g. "Ja (Y)", "Nein (N)", "Abbrechen (C)") rather than mixing styles (#5564).
+/// On macOS, mnemonics are hidden.
+fn button_labels(mac: bool, buttons: &[(&str, Option<Key>)]) -> Vec<(String, Option<char>)> {
+    let contains_key = |text: &str, k: Key| {
+        let key_char = k.name().chars().next()?;
+        text.chars().any(|c| c.eq_ignore_ascii_case(&key_char)).then_some(key_char)
+    };
+    let inline = !mac && buttons.iter().all(|&(label, key)| key.is_none_or(|k| contains_key(tl!(label), k).is_some()));
     buttons
         .iter()
         .map(|&(label, key)| {
             let text = tl!(label);
-            match key {
-                None => text.to_string(),
-                Some(_) if mac => text.to_string(),
-                Some(k) => match text.split_at_checked(1) {
-                    Some((first, rest)) if inline => format!("({first}){rest}"),
-                    _ => format!("{text} ({})", k.name()),
-                },
+            let Some(k) = key else {
+                return (text.to_string(), None);
+            };
+            if mac {
+                return (text.to_string(), None);
+            }
+            if inline {
+                let key_char = contains_key(text, k);
+                (text.to_string(), key_char)
+            } else {
+                (format!("{text} ({})", k.name()), None)
             }
         })
         .collect()
