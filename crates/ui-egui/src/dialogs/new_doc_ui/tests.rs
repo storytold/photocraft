@@ -957,4 +957,26 @@ mod dialog {
             }
         }
     }
+
+    /// The Background Contents row (a `direction::dialog_row`) mirrors: the menu leads at the
+    /// reading start and the swatch follows it; LTR keeps today's order and the same gap.
+    #[test]
+    fn the_background_row_mirrors_in_rtl_and_keeps_the_ltr_gap() {
+        let _lang = crate::i18n::language_scope(crate::i18n::Lang::EN);
+        let mut gaps = Vec::new();
+        for (dir, rtl) in [(crate::i18n::Dir::Ltr, false), (crate::i18n::Dir::Rtl, true)] {
+            let _dir = crate::text::direction::direction_scope(dir);
+            let h = harness();
+            let menu = h.get_by_label("Background").rect();
+            let swatch = h.get_by_label("Custom background color").rect();
+            if rtl {
+                assert!(swatch.right() < menu.left(), "{dir:?}: RTL the swatch trails the menu: {menu:?} {swatch:?}");
+                gaps.push(menu.left() - swatch.right());
+            } else {
+                assert!(menu.right() < swatch.left(), "{dir:?}: LTR the menu leads the swatch: {menu:?} {swatch:?}");
+                gaps.push(swatch.left() - menu.right());
+            }
+        }
+        assert!((gaps[0] - gaps[1]).abs() < 1.0, "the same menu→swatch gap in both directions: {gaps:?}");
+    }
 }
