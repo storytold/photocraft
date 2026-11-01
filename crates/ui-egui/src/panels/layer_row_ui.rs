@@ -294,7 +294,17 @@ fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     ui.separator();
     run_menu_command(app, ui, tl!("New Artboard…"), "layer.new.artboard");
     ui.separator();
-    crate::menus::menu_button(ui, tl!("Filter Options"), |ui| {
+    // Submenu rows go through the shared `submenu_row`: the row's label and arrow mirror
+    // under a right-to-left direction (a stock `menu_button` title stays left-anchored) and
+    // its body is scoped through `popup_body` like every other menu popup.
+    let submenu_title = |ui: &Ui, label: &str| {
+        if ui.style().right_to_left {
+            crate::menu_keys::menu_row_text(ui, false, label, None, false, crate::menu_keys::GutterSide::ReadingStart)
+        } else {
+            egui::RichText::new(label).into()
+        }
+    };
+    crate::menu_keys::submenu_row(ui, submenu_title(ui, tl!("Filter Options")), |ui| {
         let show = app.ui.layers_panel_options.show_filters;
         if crate::menu_keys::menu_row(ui, tl!("Show"), None, show, true).clicked() {
             app.ui.layers_panel_options.show_filters = !show;
@@ -305,7 +315,7 @@ fn panel_menu_body(app: &mut crate::PhotocraftApp, ui: &mut egui::Ui) {
     // Animation Options control Photoshop's frame-unification buttons. PhotoCraft's Layers
     // panel does not expose those buttons; do not offer nonfunctional toggles.
     ui.add_enabled_ui(false, |ui| {
-        crate::menus::menu_button(ui, tl!("Animation Options"), |_ui| {});
+        crate::menu_keys::submenu_row(ui, submenu_title(ui, tl!("Animation Options")), |_ui| {});
     });
     if crate::menu_keys::menu_row(ui, tl!("Panel Options…"), None, false, true).clicked() {
         let mut options = app.ui.layers_panel_options.clone();
