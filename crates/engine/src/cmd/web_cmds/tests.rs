@@ -1396,3 +1396,54 @@ fn slice_numbers_that_do_not_exist_are_refused() {
     files.sort_unstable();
     assert_eq!(files, ["left.png", "right.png"]);
 }
+
+#[test]
+fn slice_modes_are_validated() {
+    // FredApps review on PR #10557: any `slices` value but "user" exported every slice,
+    // including the dialog's "selected" without `numbers`.
+    let dir = tmp("slice-modes");
+    let (mut s, left, right) = two_slices();
+    for (p, expect) in [
+        (json!({"slices": "selcted"}), "unknown slices `selcted` (all|user|selected)"),
+        (json!({"slices": 2}), "unknown slices `2` (all|user|selected)"),
+        (json!({"slices": "selected"}), "no slices are selected"),
+        (json!({"slices": "selected", "numbers": []}), "numbers must be a list of slice numbers"),
+        (json!({"numbers": ["1"]}), "numbers must be a list of slice numbers"),
+        (json!({"numbers": 1}), "numbers must be a list of slice numbers"),
+    ] {
+        let mut p = p;
+        p["format"] = json!("png24");
+        p["dir"] = json!(dir);
+        assert_refused(&mut s, &dir, p, expect);
+    }
+    // Every valid call still works.
+    let count = photocraft_doc::slices::resolve(&s.active().unwrap().doc).len();
+    let names = |r: &Value| r["files"].as_array().unwrap().iter().map(|v| v.as_str().unwrap().rsplit('/').next().unwrap().to_string()).collect::<Vec<_>>();
+    for (mode, expect) in [(json!(null), count), (json!("all"), count), (json!("user"), 2)] {
+        let out = tmp("slice-modes-ok");
+        let mut p = json!({"format": "png24", "dir": out});
+        if !mode.is_null() {
+            p["slices"] = mode.clone();
+        }
+        assert_eq!(names(&s.execute("file.export.saveForWebLegacy", p).unwrap()).len(), expect, "{mode}");
+    }
+    let out = tmp("slice-modes-selected");
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": out, "slices": "selected", "numbers": [right]})).unwrap();
+    assert_eq!(names(&r), ["right.png"]);
+    let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": out, "slices": "user", "numbers": [left]})).unwrap();
+    assert_eq!(names(&r), ["left.png"], "numbers choose the slices whatever the mode");
+    // A document without slices exports the whole image as one, whatever the dialog's Slices
+    // choice: the dialog sends "selected" without numbers then (`web_params`).
+    let mut s = session(8);
+    for mode in ["all", "user", "selected"] {
+        let out = tmp("slice-modes-none");
+        if mode != "user" {
+            let r = s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "dir": out, "slices": mode})).unwrap();
+            assert_eq!(names(&r), ["web.png"], "{mode}");
+            assert_eq!(decode(r["files"][0].as_str().unwrap()).dimensions(), (64, 48), "{mode}");
+        }
+        let path = format!("{out}/whole.png");
+        s.execute("file.export.saveForWebLegacy", json!({"format": "png24", "path": path, "slices": mode})).unwrap();
+        assert_eq!(decode(&path).dimensions(), (64, 48), "{mode}");
+    }
+}
