@@ -223,8 +223,13 @@ fn blend_channel(mode: i32, cb: f32, cs: f32) -> f32 {
             if (cs >= 1.0) { return 1.0; }
             return min(cb / (1.0 - cs), 1.0);
         }
-        default: { return cs; }                                 // Normal, Dissolve, PassThrough
+        default: { break; }                                     // Normal, Dissolve, PassThrough
     }
+    // After the switch, not a `default` arm: FXC (D3D12) doesn't prove that a switch with a
+    // returning default covers every path, and reports X3507 ("Not all control paths return a
+    // value") for this function when it doesn't inline it; older d3dcompiler_47.dll builds did
+    // that for `fs_fxinit` in the GPU compositor.
+    return cs;
 }
 
 fn lum(c: vec3<f32>) -> f32 { return 0.3 * c.r + 0.59 * c.g + 0.11 * c.b; }
@@ -265,10 +270,10 @@ fn blend_rgb(mode: i32, cb: vec3<f32>, cs: vec3<f32>) -> vec3<f32> {
         case 27: { return set_lum(cb, lum(cs), top); }                  // Luminosity
         case 7: { return select(cb, cs, lum(cs) < lum(cb)); }      // DarkerColor
         case 12: { return select(cb, cs, lum(cs) > lum(cb)); }     // LighterColor
-        default: {
-            return vec3(blend_channel(mode, cb.r, cs.r), blend_channel(mode, cb.g, cs.g), blend_channel(mode, cb.b, cs.b));
-        }
+        default: { break; }
     }
+    // The separable modes, after the switch for FXC's return analysis (see `blend_channel`).
+    return vec3(blend_channel(mode, cb.r, cs.r), blend_channel(mode, cb.g, cs.g), blend_channel(mode, cb.b, cs.b));
 }
 
 fn composite(mode: i32, b: vec4<f32>, s: vec4<f32>, opacity: f32) -> vec4<f32> {
@@ -786,8 +791,10 @@ fn adjust(c: vec3<f32>) -> vec3<f32> {
             if (p0.z > 0.5) { o = clamp(o + bayer4(adj_px) / 255.0, vec3(0.0), vec3(1.0)); }
             return o;
         }
-        default: { return c; }
+        default: { break; }
     }
+    // Not an adjustment kind (after the switch for FXC's return analysis; see `blend_channel`).
+    return c;
 }
 
 // ---- fills ----------------------------------------------------------------------------------
