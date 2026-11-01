@@ -53,6 +53,8 @@ pub struct Runtime {
     /// Tool options as last remembered in the preferences (see `tool_memory`).
     pub(crate) tool_options: Option<crate::state::ToolOptions>,
     pub(crate) selected_tool: Option<crate::state::Tool>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recent_files: crate::recent_files::Runtime,
     /// The tool owning the session brush and the other tools' brushes, as last remembered.
     pub(crate) tool_brushes: Option<crate::tool_memory::ToolBrushes>,
 }
