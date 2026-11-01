@@ -1662,32 +1662,51 @@ mod streamed_png_tests {
 mod bilevel_tiff_tests {
     use super::*;
 
-    /// A 16×8 uncompressed TIFF with one `bits`-bit sample per pixel, BlackIsZero, rows of
-    /// alternating stripes.
-    fn tiff(bits: u16) -> Vec<u8> {
+    /// A 16×8 uncompressed TIFF with one `bits`-bit sample per pixel, PhotometricInterpretation
+    /// `photometric` (0 WhiteIsZero, 1 BlackIsZero), rows of alternating stripes.
+    fn tiff(bits: u16, photometric: u16) -> Vec<u8> {
+        tiff_pages(&[(bits, photometric)])
+    }
+
+    /// A TIFF with one 16×8 page per `(bits, photometric)`, chained through the IFDs' next
+    /// offsets: each page's IFD is followed by its strip.
+    fn tiff_pages(pages: &[(u16, u16)]) -> Vec<u8> {
         let (w, h) = (16u32, 8u32);
-        let row: Vec<u8> = if bits == 1 { vec![0b1010_1010, 0b1111_0000] } else { (0..w).map(|x| if x % 2 == 0 { 255 } else { 0 }).collect() };
-        let data: Vec<u8> = (0..h).flat_map(|_| row.clone()).collect();
-        let entries: [(u16, u16, u32); 9] =
-            [(256, 3, w), (257, 3, h), (258, 3, u32::from(bits)), (259, 3, 1), (262, 3, 1), (273, 4, 0), (277, 3, 1), (278, 3, h), (279, 4, data.len() as u32)];
-        let data_at = 8 + 2 + entries.len() as u32 * 12 + 4;
         let mut out = b"II*\0".to_vec();
         out.extend(8u32.to_le_bytes());
-        out.extend((entries.len() as u16).to_le_bytes());
-        for (tag, ty, value) in entries {
-            let value = if tag == 273 { data_at } else { value };
-            out.extend(tag.to_le_bytes());
-            out.extend(ty.to_le_bytes());
-            out.extend(1u32.to_le_bytes());
-            if ty == 3 {
-                out.extend((value as u16).to_le_bytes());
-                out.extend([0, 0]);
-            } else {
-                out.extend(value.to_le_bytes());
+        for (i, &(bits, photometric)) in pages.iter().enumerate() {
+            let row: Vec<u8> = if bits == 1 { vec![0b1010_1010, 0b1111_0000] } else { (0..w).map(|x| if x % 2 == 0 { 255 } else { 0 }).collect() };
+            let data: Vec<u8> = (0..h).flat_map(|_| row.clone()).collect();
+            let entries: [(u16, u16, u32); 9] = [
+                (256, 3, w),
+                (257, 3, h),
+                (258, 3, u32::from(bits)),
+                (259, 3, 1),
+                (262, 3, u32::from(photometric)),
+                (273, 4, 0),
+                (277, 3, 1),
+                (278, 3, h),
+                (279, 4, data.len() as u32),
+            ];
+            let ifd_at = out.len() as u32;
+            let data_at = ifd_at + 2 + entries.len() as u32 * 12 + 4;
+            let next_ifd = if i + 1 < pages.len() { data_at + data.len() as u32 } else { 0 };
+            out.extend((entries.len() as u16).to_le_bytes());
+            for (tag, ty, value) in entries {
+                let value = if tag == 273 { data_at } else { value };
+                out.extend(tag.to_le_bytes());
+                out.extend(ty.to_le_bytes());
+                out.extend(1u32.to_le_bytes());
+                if ty == 3 {
+                    out.extend((value as u16).to_le_bytes());
+                    out.extend([0, 0]);
+                } else {
+                    out.extend(value.to_le_bytes());
+                }
             }
+            out.extend(next_ifd.to_le_bytes());
+            out.extend(data);
         }
-        out.extend(0u32.to_le_bytes());
-        out.extend(data);
         out
     }
 
@@ -1695,14 +1714,42 @@ mod bilevel_tiff_tests {
     /// it opened as Grayscale. An 8-bit gray TIFF stays Grayscale.
     #[test]
     fn a_one_bit_tiff_opens_in_bitmap_mode() {
-        let r = import_flat("bilevel.tif", &tiff(1)).unwrap();
+        let r = import_flat("bilevel.tif", &tiff(1, 1)).unwrap();
         assert_eq!(r.document.mode, ColorMode::Bitmap);
-        let gray = import_flat("gray.tif", &tiff(8)).unwrap();
+        let gray = import_flat("gray.tif", &tiff(8, 1)).unwrap();
         assert_eq!(gray.document.mode, ColorMode::Grayscale);
         // The same black and white pixels either way.
         let px = |r: &ImportResult, x: i32| r.document.layers[0].surface().unwrap().pixel(x, 3)[0];
         for x in 0..8 {
             assert_eq!(px(&r, x), px(&gray, x), "x={x}");
         }
+    }
+
+    /// A WhiteIsZero (min-is-white) 1-bit TIFF also opens in Bitmap mode, with a 0 bit white and
+    /// a 1 bit black: the same bits as the BlackIsZero file, inverted.
+    #[test]
+    fn a_min_is_white_one_bit_tiff_opens_in_bitmap_mode_inverted() {
+        let miw = import_flat("min-is-white.tif", &tiff(1, 0)).unwrap();
+        assert_eq!(miw.document.mode, ColorMode::Bitmap);
+        let mib = import_flat("min-is-black.tif", &tiff(1, 1)).unwrap();
+        let px = |r: &ImportResult, x: i32| r.document.layers[0].surface().unwrap().pixel(x, 3)[0];
+        // Row bits 1010_1010 1111_0000: a 1 bit at even x in the first byte, then four 1s, four 0s.
+        for x in 0..16 {
+            let bit = if x < 8 { x % 2 == 0 } else { x < 12 };
+            let white = if bit { 0.0 } else { 1.0 };
+            assert_eq!(px(&miw, x), white, "x={x}: bit {}", u8::from(bit));
+            assert_eq!(px(&miw, x), 1.0 - px(&mib, x), "x={x}");
+        }
+    }
+
+    /// The Bitmap check reads the page that opens: a second page that is bilevel opens in Bitmap
+    /// mode, while the 8-bit gray first page stays Grayscale.
+    #[test]
+    fn a_bilevel_second_page_opens_in_bitmap_mode() {
+        let bytes = tiff_pages(&[(8, 1), (1, 1)]);
+        let second = import_tiff_page("pages.tif", &bytes, Some(1)).unwrap();
+        assert_eq!(second.document.mode, ColorMode::Bitmap);
+        let first = import_tiff_page("pages.tif", &bytes, Some(0)).unwrap();
+        assert_eq!(first.document.mode, ColorMode::Grayscale);
     }
 }
