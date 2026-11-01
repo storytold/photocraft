@@ -219,6 +219,14 @@ impl Session {
         let mut doc = (*before).clone();
         let mut active = st.active_layer;
         let r = f(&mut doc, &mut active)?;
+        // Variable bindings go with their layer, whichever command removed it (delete, merge,
+        // flatten…); undo restores both.
+        if !doc.variables.defs.is_empty() {
+            let gone: Vec<LayerId> = doc.variables.defs.iter().map(|d| d.layer).filter(|&id| doc.layer(id).is_none()).collect();
+            if !gone.is_empty() {
+                doc.variables.retain_layers(|id| !gone.contains(&id));
+            }
+        }
         if let Some(restrict) = restrict {
             channel_cmds::restrict_to_color(&before, &mut doc, restrict.layer, restrict.colors)?;
         }

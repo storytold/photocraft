@@ -869,10 +869,12 @@ fn variables_follow_layer_id_remapping() {
     let mut doc = rich_doc(ColorMode::Rgb, SampleType::U8);
     let id_of = |d: &Document, name: &str| d.walk().into_iter().find(|(_, _, l)| l.name == name).unwrap().2.id;
     doc.variables.defs = vec![
-        VariableDef { name: "head".into(), layer: id_of(&doc, "Paint"), kind: VarKind::TextReplacement },
-        VariableDef { name: "badge".into(), layer: id_of(&doc, "Inner"), kind: VarKind::Visibility },
-        VariableDef { name: "gone".into(), layer: LayerId(u64::MAX), kind: VarKind::Visibility },
+        VariableDef::direct("head", id_of(&doc, "Paint"), VarKind::TextReplacement),
+        VariableDef::direct("badge", id_of(&doc, "Inner"), VarKind::Visibility),
+        VariableDef::direct("gone", LayerId(u64::MAX), VarKind::Visibility),
+        VariableDef::ruled("Type == \"gear\"", id_of(&doc, "Paint"), VarKind::Visibility),
     ];
+    doc.variables.names = vec!["Type".into()];
     let bytes = save_to_bytes(&doc, &SaveOptions::default()).unwrap();
     // Preserved ids keep every definition exactly as saved, dangling ones included.
     assert_eq!(load_from_bytes(&bytes).unwrap(), doc);
@@ -882,6 +884,9 @@ fn variables_follow_layer_id_remapping() {
     let defs = &back.variables.defs;
     assert_eq!(defs.iter().find(|d| d.name == "head").unwrap().layer, id_of(&back, "Paint"));
     assert_eq!(defs.iter().find(|d| d.name == "badge").unwrap().layer, id_of(&back, "Inner"));
+    let ruled = defs.iter().find(|d| d.rule.is_some()).unwrap();
+    assert_eq!((ruled.layer, ruled.rule.as_deref()), (id_of(&back, "Paint"), Some("Type == \"gear\"")), "rule bindings follow their layer too");
+    assert_eq!(back.variables.names, vec!["Type".to_string()]);
     let gone = defs.iter().find(|d| d.name == "gone").unwrap().layer;
     assert!(back.walk().into_iter().all(|(_, _, l)| l.id != gone), "dangling target must not address a live layer");
 }

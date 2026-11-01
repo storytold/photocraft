@@ -652,3 +652,189 @@ fn exported_data_sets_keep_the_character_style() {
     assert_eq!((got.weight, got.italic, got.underline), (style.weight, style.italic, style.underline));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A document with two text layers ("title", "caption") and two raster layers ("gear", "other").
+fn rules_session() -> (Session, [LayerId; 4]) {
+    let mut s = Session::new();
+    s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+    let ids = s
+        .edit("setup", |doc, _| {
+            let fmt = doc.pixel_format();
+            let layers = [
+                Layer::new("title", LayerContent::Text(TextLayer { text: "Old".into(), ..Default::default() })),
+                Layer::new("caption", LayerContent::Text(TextLayer { text: "Old".into(), ..Default::default() })),
+                Layer::raster("gear", fmt),
+                Layer::raster("other", fmt),
+            ];
+            let ids = [layers[0].id, layers[1].id, layers[2].id, layers[3].id];
+            doc.layers.extend(layers);
+            Ok(ids)
+        })
+        .unwrap();
+    (s, ids)
+}
+
+#[test]
+fn one_csv_column_drives_several_layers() {
+    let (mut s, [title, caption, ..]) = rules_session();
+    s.execute(
+        "image.variables.define",
+        json!({"defs": [
+            {"name": "Name", "layer": title.0, "type": "textReplacement"},
+            {"name": "Name", "layer": caption.0, "type": "textReplacement"},
+        ]}),
+    )
+    .unwrap();
+    let csv = format!("{}/one-to-many.csv", tmp("many"));
+    std::fs::write(&csv, "Name\nSword\n").unwrap();
+    s.execute("file.import.variableDataSets", json!({"path": csv})).unwrap();
+    s.execute("image.applyDataSet", json!({"index": 0})).unwrap();
+    assert_eq!(text_of(&s, title), "Sword");
+    assert_eq!(text_of(&s, caption), "Sword");
+}
+
+#[test]
+fn rules_drive_visibility_text_and_lookups_from_a_csv() {
+    let (mut s, [title, caption, gear, other]) = rules_session();
+    let listed = s
+        .execute(
+            "image.variables.define",
+            json!({"defs": [
+                {"rule": "Type == \"gear\"", "layer": gear.0, "type": "visibility"},
+                {"rule": "Type != \"gear\"", "layer": other.0, "type": "visibility"},
+                {"rule": "if(Rarity == \"epic\", \"★ {Name}\", Name)", "layer": title.0, "type": "textReplacement"},
+                {"rule": "\"{Name} - Lv {Level}\" & switch(Type, \"gear\", \" (equip)\", \"\")", "layer": caption.0, "type": "textReplacement"},
+            ]}),
+        )
+        .unwrap();
+    // Every variable a rule reads is declared, so the Data Sets page offers it.
+    assert_eq!(listed["names"], json!(["Type", "Rarity", "Name", "Level"]));
+    assert_eq!(listed["defs"][0]["rule"], "Type == \"gear\"");
+    // Columns no binding reads directly are kept for the rules; values compare ignoring case.
+    let csv = format!("{}/rules.csv", tmp("rules"));
+    std::fs::write(&csv, "DataSet,Name,Type,Rarity,Level\nsword, Sword ,Gear,EPIC,12\npotion,Potion,potion,common,3\n").unwrap();
+    s.execute("file.import.variableDataSets", json!({"path": csv})).unwrap();
+
+    s.execute("image.applyDataSet", json!({"name": "sword"})).unwrap();
+    let visible = |s: &Session, id: LayerId| doc(s).layer(id).unwrap().visible;
+    assert!(visible(&s, gear) && !visible(&s, other));
+    assert_eq!(text_of(&s, title), "★  Sword ");
+    assert_eq!(text_of(&s, caption), " Sword  - Lv 12 (equip)");
+
+    s.execute("image.applyDataSet", json!({"name": "potion"})).unwrap();
+    assert!(!visible(&s, gear) && visible(&s, other));
+    assert_eq!(text_of(&s, title), "Potion");
+    assert_eq!(text_of(&s, caption), "Potion - Lv 3");
+
+    // A rule binding survives a list → define round trip, as the dialog does.
+    let before = doc(&s).variables.clone();
+    let listed = s.execute("variables.list", json!({})).unwrap();
+    s.execute("image.variables.define", json!({"defs": listed["defs"], "names": listed["names"]})).unwrap();
+    assert_eq!(doc(&s).variables.defs, before.defs);
+    assert_eq!(doc(&s).variables.variable_names(), before.variable_names());
+}
+
+#[test]
+fn rule_bindings_are_validated() {
+    let (mut s, [title, _, gear, _]) = rules_session();
+    let define = |s: &mut Session, defs: Value| s.execute("image.variables.define", json!({ "defs": defs }));
+    let err = define(&mut s, json!([{"rule": "Type ==", "layer": gear.0, "type": "visibility"}])).unwrap_err().to_string();
+    assert!(err.contains("gear"), "names the layer: {err}");
+    // Neither a variable nor a rule.
+    assert!(define(&mut s, json!([{"layer": gear.0, "type": "visibility"}])).is_err());
+    assert!(define(&mut s, json!([{"name": " ", "rule": "", "layer": gear.0, "type": "visibility"}])).is_err());
+    // A layer property has a single source; the same variable on two layers is fine.
+    let err = define(
+        &mut s,
+        json!([
+            {"name": "a", "layer": gear.0, "type": "visibility"},
+            {"rule": "true", "layer": gear.0, "type": "visibility"},
+        ]),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("two visibility"), "{err}");
+    define(
+        &mut s,
+        json!([
+            {"name": "a", "layer": gear.0, "type": "visibility"},
+            {"name": "a", "layer": title.0, "type": "visibility"},
+            {"name": "t", "layer": title.0, "type": "textReplacement"},
+        ]),
+    )
+    .unwrap();
+    // Wrong-typed fields are rejected or ignored, never a panic.
+    for bad in [json!([{"rule": 5, "layer": gear.0, "type": "visibility"}]), json!([{"rule": ["x"], "name": 1, "layer": gear.0, "type": "visibility"}])] {
+        assert!(define(&mut s, bad).is_err());
+    }
+}
+
+#[test]
+fn rule_errors_at_apply_time_leave_the_document_unchanged() {
+    let (mut s, [title, ..]) = rules_session();
+    s.execute("image.variables.define", json!({"defs": [{"rule": "Count / Zero", "layer": title.0, "type": "textReplacement"}]})).unwrap();
+    s.execute("image.variables.dataSets", json!({"dataSets": [{"name": "A", "values": [{"variable": "Count", "kind": "text", "value": "3"}, {"variable": "Zero", "kind": "text", "value": "0"}]}]})).unwrap();
+    let err = s.execute("image.applyDataSet", json!({"name": "A"})).unwrap_err().to_string();
+    assert!(err.contains("division by zero") && err.contains("title"), "{err}");
+    assert_eq!(text_of(&s, title), "Old");
+    assert!(s.execute("file.export.dataSetsAsFiles", json!({"dir": tmp("never")})).is_err());
+}
+
+#[test]
+fn rule_computed_image_paths_are_authorized_and_empty_ones_change_nothing() {
+    fn deny_forbidden(_cmd: &str, p: &Value) -> crate::Result<()> {
+        if p["path"].as_str().is_some_and(|path| path.contains("forbidden")) { Err(crate::EngineError::Other("denied".into())) } else { Ok(()) }
+    }
+    let (mut s, [_, _, gear, _]) = rules_session();
+    s.execute(
+        "image.variables.define",
+        json!({"defs": [{"rule": "switch(Type, \"gear\", \"/forbidden/gear.png\", \"\")", "layer": gear.0, "type": "pixelReplacement"}]}),
+    )
+    .unwrap();
+    s.execute(
+        "image.variables.dataSets",
+        json!({"dataSets": [
+            {"name": "gear", "values": [{"variable": "Type", "kind": "text", "value": "gear"}]},
+            {"name": "rock", "values": [{"variable": "Type", "kind": "text", "value": "rock"}]},
+        ]}),
+    )
+    .unwrap();
+    s.authorize = Some(deny_forbidden);
+    let err = s.execute("image.applyDataSet", json!({"name": "gear"})).unwrap_err().to_string();
+    assert!(err.contains("denied"), "the gate judged the computed path: {err}");
+    // An empty computed path keeps the layer's pixels.
+    s.execute("image.applyDataSet", json!({"name": "rock"})).unwrap();
+}
+
+#[test]
+fn removing_a_layer_drops_its_bindings_and_undo_restores_them() {
+    let (mut s, photo, badge, title) = session();
+    s.execute(
+        "image.variables.define",
+        json!({"defs": [
+            {"name": "showBadge", "layer": badge.0, "type": "visibility"},
+            {"rule": "Type == \"gear\"", "layer": photo.0, "type": "visibility"},
+            {"name": "headline", "layer": title.0, "type": "textReplacement"},
+        ]}),
+    )
+    .unwrap();
+    let layers = |s: &Session| doc(s).variables.defs.iter().map(|d| d.layer).collect::<Vec<_>>();
+
+    s.execute("layer.delete", json!({"layer": badge.0})).unwrap();
+    assert_eq!(layers(&s), vec![photo, title]);
+    assert!(doc(&s).variables.names.contains(&"showBadge".to_string()), "its data-set column survives");
+    s.execute("edit.undo", json!({})).unwrap();
+    assert_eq!(layers(&s), vec![badge, photo, title]);
+
+    // Merge Down removes the upper layer (badge into photo): the badge's binding goes, the photo's stays.
+    s.execute("layer.mergeDown", json!({"layer": badge.0})).unwrap();
+    assert_eq!(layers(&s), vec![photo, title]);
+
+    // Deleting several selected layers.
+    // (the new document's own layer stays, so this isn't the last one)
+    s.execute("layer.select", json!({"layer": photo.0})).unwrap();
+    s.execute("layer.select", json!({"layer": title.0, "mode": "toggle"})).unwrap();
+    s.execute("layer.delete", json!({})).unwrap();
+    assert!(doc(&s).variables.defs.is_empty());
+    s.execute("variables.list", json!({})).unwrap();
+}

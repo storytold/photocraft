@@ -35,6 +35,24 @@ fn artboards_to_files_folder_is_chosen_with_browse() {
     assert!(field(&h, crate::dialogs::BROWSE_FIELD).is_none(), "the request is consumed");
 }
 
+/// File > Export > Data Sets as Files… opens a dialog whose folder is chosen with Browse…,
+/// instead of failing with "need `dir`".
+#[test]
+fn data_sets_as_files_folder_is_chosen_with_browse() {
+    let (mut h, asked) = harness(vec![Some(FileDialogAnswer::FolderTo("/tmp/sets".into()))]);
+    h.state_mut().run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    h.state_mut().sync_views();
+    let ctx = h.ctx.clone();
+    let r = crate::menus::invoke(h.state_mut(), &ctx, "file.export.dataSetsAsFiles", json!({})).unwrap();
+    assert!(r.get("dialog").is_some(), "{r}");
+    h.run_steps(4);
+    assert_eq!(field(&h, "naming"), Some(json!("{document}_{name}")));
+    h.get_by_label("Browse…").click();
+    h.run_steps(4);
+    assert!(matches!(asked.borrow().as_slice(), [FileDialogRequest::Folder { .. }]));
+    assert_eq!(field(&h, "dir"), Some(json!("/tmp/sets")));
+}
+
 #[test]
 fn cancelling_browse_keeps_the_typed_folder() {
     let (mut h, _) = harness(vec![None]);

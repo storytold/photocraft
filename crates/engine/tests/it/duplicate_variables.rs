@@ -110,13 +110,11 @@ fn duplicated_documents_keep_variables_targeting_the_copied_layers() {
 fn dangling_variable_targets_stay_dangling_after_duplication() {
     let (mut s, photo, badge, title) = scene();
     define_all(&mut s, photo, badge, title, "unused.png");
-    // A def may already refer to a deleted layer before duplication.
+    // A def may already refer to a missing layer before duplication (from an older or
+    // hand-edited file). Edits prune such defs, so plant it on the document directly.
     let missing = LayerId(u64::MAX);
-    s.edit("Break one def", |doc, _| {
-        doc.variables.defs.iter_mut().find(|d| d.name == "showBadge").unwrap().layer = missing;
-        Ok(())
-    })
-    .unwrap();
+    let doc = std::sync::Arc::make_mut(&mut s.active_mut().unwrap().doc);
+    doc.variables.defs.iter_mut().find(|d| d.name == "showBadge").unwrap().layer = missing;
     s.execute("image.duplicate", json!({})).unwrap();
 
     let doc = &s.active().unwrap().doc;

@@ -88,6 +88,7 @@ actions with their marker already set.
 | `__form` | Generic `view_cmds::form_body` |
 | `__formOrig` | Snapshot of non-`__` params at open; Alt+Reset restores it for `__form` dialogs |
 | `__variablesOrig` | Snapshot of `__variables` at open; Alt+Reset restores it |
+| `__layer` | Variables › Define: the layer id whose bindings the page shows (defaults to the active layer) |
 | `__altReset` | Set to `false` to opt a dialog out of Alt+Cancel → Reset |
 | `__export` | Export As |
 | `__sizing` | Image Size / Canvas Size |

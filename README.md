@@ -29,6 +29,21 @@
   <a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/storytold/photocraft?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 </p>
 
+> **About this fork (photocraft-custom).** This is a personal fork of
+> [storytold/photocraft](https://github.com/storytold/photocraft) that tracks upstream `main`. It adds
+> data-driven **Variables** improvements (Image › Variables › Define…):
+>
+> - **Shared variables:** one variable (CSV column) can drive any number of layers.
+> - **Rules:** compute a layer's visibility, text or image path from the data set, e.g.
+>   `Type == "gear" and (Rarity == "epic" or Level >= 50)`, `"{Name} - Lv {Level}"`,
+>   `if(Rarity == "epic", "★ {Name}", Name)` or `switch(Type, "gear", "icons/gear.png", "icons/other.png")`.
+>   Text compares ignore case and spaces; numbers compare as numbers.
+> - **CSV import keeps every column**, so rules can read columns no layer binds directly.
+> - **Bindings follow their layer:** deleting, merging or flattening a layer drops its bindings (undo restores them).
+> - **Bindings overview:** every binding, grouped by layer, in a scrolling list with a filter once it grows long.
+>
+> Everything else below is the upstream README.
+
 <p align="center">
   <a href="https://discord.gg/artcraft"><img alt="Join the ArtCraft community on Discord" src="https://img.shields.io/badge/Join%20us%20on%20Discord-5865F2?style=for-the-badge&logo=discord&logoColor=white" height="40"></a>
 </p>

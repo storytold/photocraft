@@ -1,8 +1,11 @@
 //! Image › Variables and Data Sets, and the File menu's data-set import/export — Photoshop's
 //! data-driven graphics. Define variables that bind a layer's visibility, text or pixels to named
-//! data slots, then apply a data set (a row of values) to render a variation. Everything is
-//! headless and scriptable, so an agent can bind a template once and batch-render many files over
-//! the CLI/MCP (`file.export.dataSetsAsFiles`).
+//! data slots — one variable may drive many layers, and a binding may compute its value with a
+//! rule ([`rule`]) such as `Type == "gear"` — then apply a data set (a row of values) to render a
+//! variation. Everything is headless and scriptable, so an agent can bind a template once and
+//! batch-render many files over the CLI/MCP (`file.export.dataSetsAsFiles`).
+
+pub mod rule;
 
 use std::sync::Arc;
 
@@ -12,6 +15,7 @@ use photocraft_doc::variables::Value as VarValue;
 use photocraft_doc::{DataSet, DataValue, Document, LayerContent, LayerId, PixelAlign, PixelMethod, VarKind, VariableDef, Variables};
 use serde_json::{Value, json};
 
+use self::rule::{Rule, Val};
 use crate::commands::CommandSpec;
 use crate::{EngineError, Result, Session};
 
@@ -114,20 +118,48 @@ fn define(s: &mut Session, p: &Value) -> Result<Value> {
     let defs_in = p.get("defs").and_then(Value::as_array).ok_or_else(|| bad("image.variables.define", "need `defs`"))?;
     let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
     let mut defs = Vec::with_capacity(defs_in.len());
+    // Declared variables: those passed, else the ones already declared (CSV headers…), plus every
+    // name a rule reads, so the Data Sets page offers a column for each.
+    let mut names: Vec<String> = match p.get("names").and_then(Value::as_array) {
+        Some(a) => a.iter().filter_map(Value::as_str).map(str::to_string).collect(),
+        None => doc.variables.names.clone(),
+    };
     for d in defs_in {
-        let name = d.get("name").and_then(Value::as_str).ok_or_else(|| bad("image.variables.define", "a def needs `name`"))?;
         let layer = LayerId(d.get("layer").and_then(Value::as_u64).ok_or_else(|| bad("image.variables.define", "a def needs `layer`"))?);
-        if doc.layer(layer).is_none() {
-            return Err(EngineError::NoLayer(layer));
-        }
+        let Some(target) = doc.layer(layer) else { return Err(EngineError::NoLayer(layer)) };
         let kind = parse_kind(d).ok_or_else(|| bad("image.variables.define", "a def needs a valid `type`"))?;
-        if defs.iter().any(|e: &VariableDef| e.name == name) {
-            return Err(bad("image.variables.define", format!("duplicate variable `{name}`")));
+        let rule = d.get("rule").and_then(Value::as_str).filter(|r| !r.trim().is_empty());
+        let name = d.get("name").and_then(Value::as_str).unwrap_or("");
+        if let Some(src) = rule {
+            let parsed = Rule::parse(src).map_err(|why| bad("image.variables.define", format!("rule on layer `{}`: {why}", target.name)))?;
+            names.extend(parsed.variables());
+        } else if name.trim().is_empty() {
+            return Err(bad("image.variables.define", "a def needs `name` (the variable it reads) or `rule`"));
         }
-        defs.push(VariableDef { name: name.to_string(), layer, kind });
+        // One variable may drive any number of layers, but a layer property has one source.
+        if defs.iter().any(|e: &VariableDef| e.layer == layer && std::mem::discriminant(&e.kind) == std::mem::discriminant(&kind)) {
+            return Err(bad("image.variables.define", format!("layer `{}` has two {} bindings", target.name, kind_label(&kind))));
+        }
+        defs.push(VariableDef { name: if rule.is_some() { String::new() } else { name.to_string() }, layer, kind, rule: rule.map(str::to_string) });
     }
-    set_vars(s, |v| v.defs = defs)?;
+    let mut seen = Vec::new();
+    names.retain(|n| !n.is_empty() && !seen.contains(n) && {
+        seen.push(n.clone());
+        true
+    });
+    set_vars(s, |v| {
+        v.defs = defs;
+        v.names = names;
+    })?;
     list(s)
+}
+
+fn kind_label(k: &VarKind) -> &'static str {
+    match k {
+        VarKind::Visibility => "visibility",
+        VarKind::TextReplacement => "text replacement",
+        VarKind::PixelReplacement { .. } => "pixel replacement",
+    }
 }
 
 fn data_sets(s: &mut Session, p: &Value) -> Result<Value> {
@@ -154,19 +186,69 @@ fn data_sets(s: &mut Session, p: &Value) -> Result<Value> {
     list(s)
 }
 
-/// Apply one data set's values to the document (visibility, text, pixels). A history step.
-fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<()> {
-    for dv in &set.values {
-        let Some(def) = vars.def(&dv.variable) else { continue };
-        match (&def.kind, &dv.value) {
-            (VarKind::Visibility, VarValue::Visibility(show)) => {
-                if let Some(l) = doc.layer_mut(def.layer) {
+/// A data-set value as a rule value.
+fn val_of(v: &VarValue) -> Val {
+    match v {
+        VarValue::Visibility(b) => Val::Bool(*b),
+        VarValue::Text(t) | VarValue::Pixels(t) => Val::Text(t.clone()),
+    }
+}
+
+/// A variable's value in `set`: exact name first, then ignoring case.
+fn lookup(set: &DataSet, name: &str) -> Option<Val> {
+    set.get(name).or_else(|| set.values.iter().find(|v| v.variable.to_lowercase() == name.to_lowercase()).map(|v| &v.value)).map(val_of)
+}
+
+/// What one binding sets when a data set is applied.
+enum Change {
+    Visible(LayerId, bool),
+    Text(LayerId, String),
+    Pixels(LayerId, String, PixelMethod, PixelAlign, bool),
+}
+
+/// Resolve every binding against `set`: read its variable or evaluate its rule. A binding whose
+/// variable has no value in the set, or whose image path comes out empty, changes nothing.
+fn plan(vars: &Variables, set: &DataSet, doc: &Document) -> Result<Vec<Change>> {
+    let mut out = Vec::new();
+    for def in &vars.defs {
+        let value = match &def.rule {
+            Some(src) => {
+                let layer = doc.layer(def.layer).map_or_else(|| format!("#{}", def.layer.0), |l| l.name.clone());
+                let why = |e: String| EngineError::Other(format!("data set `{}`, rule on layer `{layer}`: {e}", set.name));
+                Rule::parse(src).map_err(why)?.eval(&|n| lookup(set, n)).map_err(why)?
+            }
+            None => match set.get(&def.name) {
+                Some(v) => val_of(v),
+                None => continue,
+            },
+        };
+        out.push(match &def.kind {
+            VarKind::Visibility => Change::Visible(def.layer, value.truthy()),
+            VarKind::TextReplacement => Change::Text(def.layer, value.text()),
+            VarKind::PixelReplacement { method, align, clip } => {
+                let path = value.text();
+                if path.trim().is_empty() {
+                    continue;
+                }
+                Change::Pixels(def.layer, path, *method, *align, *clip)
+            }
+        });
+    }
+    Ok(out)
+}
+
+/// Apply one data set's resolved values to the document (visibility, text, pixels).
+fn apply_to_doc(doc: &mut Document, changes: &[Change]) -> Result<()> {
+    for change in changes {
+        match change {
+            Change::Visible(layer, show) => {
+                if let Some(l) = doc.layer_mut(*layer) {
                     l.visible = *show;
                 }
             }
-            (VarKind::TextReplacement, VarValue::Text(text)) => {
+            Change::Text(layer, text) => {
                 let (dpi, format) = (doc.resolution_dpi, doc.pixel_format());
-                if let Some(l) = doc.layer_mut(def.layer)
+                if let Some(l) = doc.layer_mut(*layer)
                     && let LayerContent::Text(t) = &mut l.content
                 {
                     // As in Photoshop, the new text takes the style of the first character it
@@ -183,10 +265,9 @@ fn apply_to_doc(doc: &mut Document, vars: &Variables, set: &DataSet) -> Result<(
                     crate::type_cmds::refresh_at(dpi, format, t);
                 }
             }
-            (VarKind::PixelReplacement { method, align, clip }, VarValue::Pixels(path)) => {
-                replace_pixels(doc, def.layer, path, *method, *align, *clip)?;
+            Change::Pixels(layer, path, method, align, clip) => {
+                replace_pixels(doc, *layer, path, *method, *align, *clip)?;
             }
-            _ => {} // value type doesn't match the variable kind: skip
         }
     }
     Ok(())
@@ -244,11 +325,12 @@ fn replace_pixels(doc: &mut Document, layer: LayerId, path: &str, method: PixelM
 }
 
 /// Pixel Replacement reads image files, so an untrusted session's gate judges each path a data
-/// set would read: whether it is applied or exported, the path is document data.
-fn authorize_pixel_paths(s: &Session, set: &DataSet) -> Result<()> {
+/// set would read: whether it is applied or exported, and whether a rule computed it, the path is
+/// document data.
+fn authorize_pixel_paths(s: &Session, changes: &[Change]) -> Result<()> {
     if let Some(auth) = s.authorize {
-        for dv in &set.values {
-            if let VarValue::Pixels(path) = &dv.value {
+        for c in changes {
+            if let Change::Pixels(_, path, ..) = c {
                 auth("image.applyDataSet", &json!({"path": path}))?;
             }
         }
@@ -258,9 +340,10 @@ fn authorize_pixel_paths(s: &Session, set: &DataSet) -> Result<()> {
 
 fn apply_data_set(s: &mut Session, p: &Value) -> Result<Value> {
     let (set, idx) = resolve_set(s, p, "image.applyDataSet")?;
-    let vars = s.active().ok_or(EngineError::NoDocument)?.doc.variables.clone();
-    authorize_pixel_paths(s, &set)?;
-    s.edit(&format!("Apply Data Set \"{}\"", set.name), |doc, _| apply_to_doc(doc, &vars, &set))?;
+    let doc = s.active().ok_or(EngineError::NoDocument)?.doc.clone();
+    let changes = plan(&doc.variables, &set, &doc)?;
+    authorize_pixel_paths(s, &changes)?;
+    s.edit(&format!("Apply Data Set \"{}\"", set.name), |doc, _| apply_to_doc(doc, &changes))?;
     set_vars(s, |v| v.active = Some(idx))?;
     Ok(json!({"applied": set.name, "index": idx}))
 }
@@ -280,8 +363,10 @@ fn resolve_set(s: &Session, p: &Value, cmd: &str) -> Result<(DataSet, usize)> {
 }
 
 /// Import data sets from a CSV: the header row holds variable names, each later row is a data set.
-/// A value is a boolean (true/false) for a Visibility variable, a path for a Pixel Replacement
-/// variable, else text. The first column may be a data-set name (header empty or `DataSet`).
+/// Every column is kept (rules may read columns no layer reads directly) and declared. A value is
+/// a boolean (true/false) for a variable only Visibility bindings read, a path for one a Pixel
+/// Replacement binding reads, else text. The first column may be a data-set name (header empty or
+/// `DataSet`).
 fn import_data_sets(s: &mut Session, p: &Value) -> Result<Value> {
     let path = p.get("path").and_then(Value::as_str).ok_or_else(|| bad("file.import.variableDataSets", "need `path`"))?;
     let text = std::fs::read_to_string(path).map_err(|e| EngineError::Other(format!("read `{path}`: {e}")))?;
@@ -301,6 +386,7 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
         return Err(bad("file.import.variableDataSets", "empty CSV"));
     }
     let named = header[0].trim().is_empty() || header[0].eq_ignore_ascii_case("dataset");
+    let start = usize::from(named);
     let mut sets = Vec::new();
     for (row, record) in records.enumerate() {
         let cells = split_csv(record, delim);
@@ -309,26 +395,52 @@ pub fn import_data_sets_text(s: &mut Session, text: &str, p: &Value) -> Result<V
         } else {
             format!("Data Set {}", row + 1)
         };
-        let start = if named { 1 } else { 0 };
         let mut values = Vec::new();
         for (ci, var) in header.iter().enumerate().skip(start) {
             let Some(cell) = cells.get(ci) else { continue };
-            let Some(def) = vars.def(var) else { continue };
-            let value = match def.kind {
-                VarKind::Visibility => VarValue::Visibility(matches!(cell.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "visible" | "on")),
-                VarKind::PixelReplacement { .. } => VarValue::Pixels(cell.clone()),
-                VarKind::TextReplacement => VarValue::Text(cell.clone()),
+            if var.is_empty() {
+                continue;
+            }
+            let value = match column_kind(&vars, var) {
+                Some(VarKind::Visibility) => {
+                    VarValue::Visibility(matches!(cell.trim().to_ascii_lowercase().as_str(), "true" | "1" | "yes" | "visible" | "on"))
+                }
+                Some(VarKind::PixelReplacement { .. }) => VarValue::Pixels(cell.clone()),
+                _ => VarValue::Text(cell.clone()),
             };
             values.push(DataValue { variable: var.clone(), value });
         }
         sets.push(DataSet { name, values });
     }
     let n = sets.len();
-    set_vars(s, |v| v.data_sets = sets)?;
+    let columns: Vec<String> = header.into_iter().skip(start).filter(|h| !h.is_empty()).collect();
+    set_vars(s, |v| {
+        v.data_sets = sets;
+        for c in columns {
+            if !v.names.contains(&c) {
+                v.names.push(c);
+            }
+        }
+    })?;
     Ok(json!({"imported": n}))
 }
 
 /// Split logical CSV records without changing line endings inside quoted fields.
+/// How a column's cells are stored: Visibility when only Visibility bindings read it directly,
+/// Pixel Replacement when any Pixel Replacement binding does (and no text one), else text.
+fn column_kind(vars: &Variables, name: &str) -> Option<VarKind> {
+    let kinds: Vec<&VarKind> = vars.defs_reading(name).map(|d| &d.kind).collect();
+    if kinds.is_empty() {
+        None
+    } else if kinds.iter().all(|k| matches!(k, VarKind::Visibility)) {
+        Some(VarKind::Visibility)
+    } else if kinds.iter().any(|k| matches!(k, VarKind::TextReplacement)) {
+        Some(VarKind::TextReplacement)
+    } else {
+        kinds.into_iter().find(|k| matches!(k, VarKind::PixelReplacement { .. })).cloned()
+    }
+}
+
 fn csv_records(text: &str) -> impl Iterator<Item = &str> {
     let mut chars = text.char_indices();
     let mut start = 0;
@@ -415,9 +527,13 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
     if sets.is_empty() {
         return Err(bad("file.export.dataSetsAsFiles", "no data sets to export"));
     }
-    // Judge every image path before anything is written, as Apply Data Set does.
+    // Resolve every binding and judge every image path before anything is written, as Apply
+    // Data Set does.
+    let mut plans = Vec::with_capacity(sets.len());
     for set in &sets {
-        authorize_pixel_paths(s, set)?;
+        let changes = plan(&vars, set, &original)?;
+        authorize_pixel_paths(s, &changes)?;
+        plans.push(changes);
     }
     // Filename template: `{name}` (sanitised data-set name), `{index}` (1-based). Default `{name}`.
     let template = p.get("naming").and_then(Value::as_str).unwrap_or("{name}");
@@ -456,9 +572,9 @@ pub fn export_data_sets_with(s: &Session, p: &Value, mut write: impl FnMut(&str,
         names.push(name);
     }
     let mut written = Vec::new();
-    for (set, name) in sets.iter().zip(&names) {
+    for ((set, name), changes) in sets.iter().zip(&names).zip(&plans) {
         let mut doc = (*original).clone();
-        apply_to_doc(&mut doc, &vars, set)?;
+        apply_to_doc(&mut doc, changes)?;
         // An untrusted session's PSD export embeds no file a linked smart object names.
         let opts = photocraft_io::ExportOptions { read_linked_files: s.authorize.is_none(), ..Default::default() };
         let bytes = photocraft_io::export(&doc, format, &opts).map(|r| r.bytes).map_err(|e| EngineError::Other(format!("export `{}`: {e}", set.name)))?;
@@ -472,8 +588,13 @@ fn list(s: &mut Session) -> Result<Value> {
     let v = &s.active().ok_or(EngineError::NoDocument)?.doc.variables;
     Ok(json!({
         "defs": v.defs.iter().map(|d| {
-            merged(json!({"name": d.name, "layer": d.layer.0}), kind_json(&d.kind))
+            let head = match &d.rule {
+                Some(rule) => json!({"name": d.name, "layer": d.layer.0, "rule": rule}),
+                None => json!({"name": d.name, "layer": d.layer.0}),
+            };
+            merged(head, kind_json(&d.kind))
         }).collect::<Vec<_>>(),
+        "names": v.variable_names(),
         "dataSets": v.data_sets.iter().map(|ds| json!({
             "name": ds.name,
             "values": ds.values.iter().map(|dv| {
@@ -496,7 +617,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "image.variables.define",
             "Define…",
             &["Image", "Variables"],
-            "{defs:[{name, layer:id, type:visibility|textReplacement|pixelReplacement, method?:fit|fill|asIs|conform, align?, clip?}]} → {defs,dataSets,active}",
+            "{defs:[{name|rule, layer:id, type:visibility|textReplacement|pixelReplacement, method?:fit|fill|asIs|conform, align?, clip?}], names?:[variable]} → {defs,names,dataSets,active}: replaces every binding. `name` reads a variable; several layers may read the same one. `rule` computes the value from any variables instead, e.g. `Type == \"gear\"`, `\"{Name} - Lv {Level}\"`, `if(c, a, b)`, `switch(x, k1, v1, …, default)` (text compares ignore case). A layer has at most one binding per type",
             |s, p| define(s, p)
         ),
         spec!(
@@ -533,7 +654,7 @@ pub fn specs() -> Vec<CommandSpec> {
             menu: &[],
             shortcut: None,
             journal: false,
-            params: "{} → {defs,dataSets,active}",
+            params: "{} → {defs,names,dataSets,active}",
             enabled: has_doc,
             run: |s, _| list(s),
         },

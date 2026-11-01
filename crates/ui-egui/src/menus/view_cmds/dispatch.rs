@@ -227,6 +227,7 @@ fn wraps(id: &str) -> bool {
             | "file.automate.lensCorrection"
             | "file.export.layersToFiles"
             | "file.export.layerCompsToFiles"
+            | "file.export.dataSetsAsFiles"
             | "file.export.artboardsToFiles"
             | "file.export.artboardsToPdf"
             | "layer.new.artboard"

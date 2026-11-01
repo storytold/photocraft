@@ -420,6 +420,15 @@ pub(super) fn front(app: &mut PhotocraftApp, ctx: &egui::Context, id: &str, para
                 json!({"format": ["png", "jpg", "psd", "tiff", "webp", "bmp"]}),
             )
         }
+        // Photoshop writes one PSD per data set, named document + data set, into a chosen folder.
+        "file.export.dataSetsAsFiles" => {
+            doc?;
+            dialog(
+                app,
+                json!({"dir": dir, "naming": "{document}_{name}", "format": "psd"}),
+                json!({"format": ["psd", "png", "jpg", "tiff", "webp", "bmp"]}),
+            )
+        }
         "file.export.layerCompsToFiles" | "file.export.artboardsToFiles" => {
             let (_, _, name) = doc?;
             let prefix = name.rsplit_once('.').map_or(name.as_str(), |(a, _)| a).to_string();
