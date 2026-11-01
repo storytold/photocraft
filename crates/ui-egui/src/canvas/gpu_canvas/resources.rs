@@ -36,6 +36,12 @@ pub(super) struct Resources {
     pub(super) layer_fit: Option<LayerFit>,
     pub(super) compositor_cache_budget: Option<u64>,
     pub(super) compositor_focus: Option<photocraft_geom::Rect>,
+    /// Layer operators per document, handed to the compositor before each composite
+    /// ([`GpuCanvas::set_operators`]).
+    pub(super) operators: HashMap<photocraft_doc::DocId, Vec<photocraft_gpu::LayerOperator>>,
+    /// Tests: composites of documents with operators fail, as a fault or full memory would.
+    #[cfg(test)]
+    pub(super) fail_operators: bool,
     /// GPU bytes one document's display texture set may take (see [`canvas_budget`]).
     pub(super) canvas_budget: std::sync::Arc<std::sync::atomic::AtomicU64>,
     pub(super) encode_bgl: wgpu::BindGroupLayout,
@@ -365,6 +371,9 @@ impl Resources {
             layer_fit: None,
             compositor_cache_budget: None,
             compositor_focus: None,
+            operators: HashMap::new(),
+            #[cfg(test)]
+            fail_operators: false,
             canvas_budget: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(canvas_budget(physical_memory(), None))),
             encode_bgl,
             encode_pipeline,
