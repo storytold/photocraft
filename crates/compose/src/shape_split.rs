@@ -34,6 +34,7 @@ fn entry_bytes(parts: &(Surface, Surface), source: Option<&Surface>) -> usize {
     [&parts.0, &parts.1].into_iter().chain(source).flat_map(|s| s.tiles().map(|(_, t)| t.bytes().len())).fold(0, usize::saturating_add)
 }
 
+/// Look up a split, refreshing recency on a hit.
 fn get(c: &Mutex<Cache>, key: u64) -> Option<(Surface, Surface)> {
     let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
     c.1 += 1;
@@ -43,6 +44,7 @@ fn get(c: &Mutex<Cache>, key: u64) -> Option<(Surface, Surface)> {
     Some(entry.0.clone())
 }
 
+/// Cache a split only when its retained pixel bytes fit the budget and are nonzero.
 fn insert(c: &Mutex<Cache>, key: u64, parts: &(Surface, Surface), source: Option<&Surface>) {
     let new_bytes = entry_bytes(parts, source);
     // Don't cache entries that hold no pixels or exceed the byte budget.
@@ -52,14 +54,16 @@ fn insert(c: &Mutex<Cache>, key: u64, parts: &(Surface, Surface), source: Option
     let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
     // Another caller may have filled this key while we rendered. Charge its replacement once.
     c.0.remove(&key);
+    // Count the retained pixels once, then subtract each eviction's charge.
+    let mut held: usize = c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum();
     // Least recently used first, until the new entry fits the byte budget.
     loop {
-        let held: usize = c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum();
         if held.saturating_add(new_bytes) <= BUDGET {
             break;
         }
         let Some(old) = c.0.iter().min_by_key(|e| (e.1).1).map(|e| *e.0) else { break };
-        c.0.remove(&old);
+        let Some(removed) = c.0.remove(&old) else { break };
+        held = held.saturating_sub(entry_bytes(&removed.0, removed.2.as_ref()));
     }
     let tick = c.1;
     c.0.insert(key, (parts.clone(), tick, source.cloned()));
@@ -232,29 +236,34 @@ mod tests {
         surface
     }
 
-    /// A hit protects that exact entry while the oldest untouched entry is evicted.
+    /// A hit protects that entry while one or several older entries make room for the new split.
     #[test]
     fn split_cache_evicts_the_exact_least_recently_used_entry() {
-        let c = Mutex::new(Cache::default());
-        let parts = (tile(SampleType::F32, 0.25), tile(SampleType::F32, 0.5));
-        let source = tile(SampleType::U8, 0.75);
-        let bytes = entry_bytes(&parts, Some(&source));
-        let slots = (BUDGET / bytes) as u64;
-        assert!(slots >= 2);
-        for key in 0..slots {
-            assert!(get(&c, key).is_none());
-            insert(&c, key, &parts, Some(&source));
+        for sample in [SampleType::F32, SampleType::U8] {
+            let c = Mutex::new(Cache::default());
+            let parts = (tile(sample, 0.25), tile(sample, 0.5));
+            let source = tile(SampleType::U8, 0.75);
+            let bytes = entry_bytes(&parts, Some(&source));
+            let slots = (BUDGET / bytes) as u64;
+            let incoming = (tile(SampleType::F32, 0.5), tile(SampleType::F32, 0.75));
+            let incoming_bytes = entry_bytes(&incoming, Some(&source));
+            let victims = (incoming_bytes / bytes) as u64;
+            assert_eq!(incoming_bytes % bytes, 0);
+            assert!(slots > victims);
+            for key in 0..slots {
+                assert!(get(&c, key).is_none());
+                insert(&c, key, &parts, Some(&source));
+            }
+            assert!(get(&c, 0).is_some());
+            assert!(get(&c, slots).is_none());
+            insert(&c, slots, &incoming, Some(&source));
+            let c = c.lock().unwrap();
+            assert_eq!(c.0.len(), (slots - victims + 1) as usize);
+            for key in 0..=slots {
+                assert_eq!(c.0.contains_key(&key), key == 0 || key > victims, "{sample:?}: entry {key}");
+            }
+            assert_eq!(c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum::<usize>(), bytes * (slots - victims) as usize + incoming_bytes);
         }
-        assert!(get(&c, 0).is_some());
-        assert!(get(&c, slots).is_none());
-        insert(&c, slots, &parts, Some(&source));
-        let c = c.lock().unwrap();
-        assert_eq!(c.0.len(), slots as usize);
-        assert!(!c.0.contains_key(&1));
-        for key in (0..=slots).filter(|key| *key != 1) {
-            assert!(c.0.contains_key(&key), "entry {key} must survive");
-        }
-        assert_eq!(c.0.values().map(|e| entry_bytes(&e.0, e.2.as_ref())).sum::<usize>(), bytes * slots as usize);
     }
 
     /// Replacement accounts only the new parts/source and releases the previous tile owners.
