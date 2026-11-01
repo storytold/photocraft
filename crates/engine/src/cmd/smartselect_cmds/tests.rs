@@ -401,6 +401,92 @@ fn subject_on_a_smart_object_smaller_than_the_canvas_is_the_subject_not_the_laye
     assert!(v > 0.9, "Mask All Objects IoU {v}");
 }
 
+/// A photo hanging past the canvas keeps its subject at canvas coordinates; only the part on the
+/// canvas is searched.
+#[test]
+fn subject_on_a_layer_larger_than_the_canvas_stays_in_canvas_coordinates() {
+    // The canvas cuts into the photo on all four sides.
+    let (mut s, inside) = disc(8);
+    s.execute("layer.new.layerFromBackground", json!({})).unwrap();
+    s.execute("image.canvasSize", json!({"width": 170, "height": 130, "anchor": "center"})).unwrap();
+    let on_canvas = move |x, y| inside(x + 15, y + 15);
+    assert_eq!(area_of(&s), Rect::new(0, 0, 170, 130));
+    s.execute("select.subject", json!({})).unwrap();
+    let v = sel_iou(&s, 170, 130, on_canvas);
+    assert!(v > 0.9, "Select Subject IoU {v}");
+    // On one side only, with empty canvas on the other.
+    let (mut s, inside) = disc_on_a_bigger_canvas(8);
+    s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, -60, 0]})).unwrap();
+    let moved = move |x, y| inside(x + 60, y);
+    assert_eq!(area_of(&s), Rect::new(0, 30, 170, 190));
+    s.execute("select.subject", json!({})).unwrap();
+    let v = sel_iou(&s, 260, 220, &moved);
+    assert!(v > 0.9, "Select Subject IoU {v}");
+    s.execute("select.refineEdge", json!({"edits": [{"tool": "subject", "sampleAllLayers": false}]})).unwrap();
+    let v = sel_iou(&s, 260, 220, &moved);
+    assert!(v > 0.9, "Select and Mask IoU {v}");
+    s.execute("select.deselect", json!({})).unwrap();
+    s.execute("layer.maskAllObjects", json!({})).unwrap();
+    let v = mask_iou(&s, 260, 220, &moved);
+    assert!(v > 0.9, "Mask All Objects IoU {v}");
+}
+
+/// Quarter turns keep a photo's rectangle, so its subject is found. Any other angle doesn't: the
+/// layer's corners sit in the box's rim, the canvas is searched and the whole photo comes back,
+/// the limit the PR states. That result still lands on the rotated pixels.
+#[test]
+fn subject_on_a_rotated_layer_lands_on_the_rotated_pixels() {
+    for smart in [false, true] {
+        let (mut s, inside) = disc_on_a_bigger_canvas(8);
+        if smart {
+            s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        }
+        s.execute("edit.transform.rotate90Cw", json!({})).unwrap();
+        let area = area_of(&s);
+        assert_ne!(area, Rect::new(0, 0, 260, 220), "smart {smart}");
+        assert!((area.width(), area.height()) == (160, 200), "smart {smart}: {area:?}");
+        s.execute("select.subject", json!({})).unwrap();
+        let v = sel_iou(&s, 260, 220, &inside);
+        assert!(v > 0.9, "smart {smart}: quarter turn IoU {v}");
+
+        let (mut s, _) = disc_on_a_bigger_canvas(8);
+        if smart {
+            s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        }
+        // 30 degrees round the middle of the canvas.
+        let (c, n) = (30f64.to_radians().cos(), 30f64.to_radians().sin());
+        let m = [c, n, -n, c, 130.0 - c * 130.0 + n * 110.0, 110.0 - n * 130.0 - c * 110.0];
+        s.execute("edit.transform", json!({"matrix": m})).unwrap();
+        assert_eq!(area_of(&s), Rect::new(0, 0, 260, 220), "smart {smart}");
+        let d = s.active().unwrap();
+        let surf = d.doc.layer(d.active_layer.unwrap()).unwrap().surface().unwrap().clone();
+        let alpha = surf.channels() - 1;
+        s.execute("select.subject", json!({})).unwrap();
+        let v = sel_iou(&s, 260, 220, |x, y| surf.sample_channel(x, y, alpha) >= 0.5);
+        assert!(v > 0.9, "smart {smart}: 30 degrees IoU {v}");
+    }
+}
+
+/// An empty layer is an error on every route, and the selection stays.
+#[test]
+fn subject_on_a_layer_with_no_pixels_says_so() {
+    let mut s = layer_doc(120, 100, 8, "rgb", |_, _| [0.0; 4]);
+    s.execute("select.rect", json!({"x": 1, "y": 2, "width": 30, "height": 40})).unwrap();
+    let before = s.active().unwrap().doc.selection.clone();
+    let e = s.execute("select.subject", json!({})).unwrap_err().to_string();
+    assert!(e.contains("the active layer is empty"), "{e}");
+    assert_eq!(s.active().unwrap().doc.selection, before);
+    let e = s.execute("layer.maskAllObjects", json!({})).unwrap_err().to_string();
+    assert!(e.contains("no objects"), "{e}");
+    // With Sample All Layers the question is the composite's, as on any canvas.
+    assert!(s.execute("select.subject", json!({"sampleAllLayers": true})).is_ok());
+    // Pixels, but none on the canvas.
+    let (mut s, _) = disc_on_a_bigger_canvas(8);
+    s.execute("edit.transform", json!({"matrix": [1, 0, 0, 1, 1000, 0]})).unwrap();
+    let e = s.execute("select.subject", json!({})).unwrap_err().to_string();
+    assert!(e.contains("no pixels in that area"), "{e}");
+}
+
 /// Inside its box a cut-out runs out of the frame, which reads as background, so a cut-out is
 /// looked for on the canvas.
 #[test]

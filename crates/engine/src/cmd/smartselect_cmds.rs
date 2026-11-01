@@ -250,12 +250,12 @@ impl ObjectFinderCache {
     }
 }
 
-/// Object Selection samples only the active layer by default: when that layer has no pixels in
+/// Object Selection and Select Subject sample only the active layer by default: when it has no pixels in
 /// `area`, say so instead of quietly finding nothing (#5246; scripts often add an empty layer
 /// above the photo first).
-fn check_sampled_pixels(doc: &Document, layer: Option<LayerId>, all_layers: bool, area: Rect) -> Result<()> {
+fn check_sampled_pixels(cmd: &str, doc: &Document, layer: Option<LayerId>, all_layers: bool, area: Rect) -> Result<()> {
     match empty_sampled_area(doc, layer, all_layers, area) {
-        Some(msg) => Err(bad("select.object", &format!("{msg}; set \"sampleAllLayers\": true or select a layer with pixels"))),
+        Some(msg) => Err(bad(cmd, &format!("{msg}; set \"sampleAllLayers\": true or select a layer with pixels"))),
         None => Ok(()),
     }
 }
@@ -274,7 +274,7 @@ pub fn empty_sampled_area(doc: &Document, layer: Option<LayerId>, all_layers: bo
 fn object_at_point(s: &mut Session, p: &Value, (x, y): (f32, f32)) -> Result<Value> {
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    check_sampled_pixels(&d.doc, d.active_layer, all_layers, Rect::from_xywh(x.floor() as i32, y.floor() as i32, 1, 1))?;
+    check_sampled_pixels("select.object", &d.doc, d.active_layer, all_layers, Rect::from_xywh(x.floor() as i32, y.floor() as i32, 1, 1))?;
     let target = sampled_target(&d.doc, d.active_layer, all_layers);
     let region = match s.object_finder.lookup(&d.doc, target, x, y) {
         Some(r) => Some(r),
@@ -304,7 +304,7 @@ fn object_selection(s: &mut Session, p: &Value) -> Result<Value> {
     let rect = rect_param(p).ok_or_else(|| bad("select.object", "needs \"rect\": [x, y, w, h] or \"point\": [x, y]"))?;
     let all_layers = b(p, "sampleAllLayers", false);
     let d = s.active().ok_or(EngineError::NoDocument)?;
-    check_sampled_pixels(&d.doc, d.active_layer, all_layers, rect)?;
+    check_sampled_pixels("select.object", &d.doc, d.active_layer, all_layers, rect)?;
     let region = with_sampler(s, all_layers, |smp, doc| grabcut::object_select(smp, doc.bounds(), rect, 160_000))?;
     apply(s, "Object Selection", region.as_ref(), mode(p, "replace"))
 }
@@ -340,6 +340,7 @@ fn select_subject(s: &mut Session, p: &Value) -> Result<Value> {
     let d = s.active().ok_or(EngineError::NoDocument)?;
     // What `with_doc_sampler` samples: the active layer's pixels, else the composite.
     let target = d.active_layer.filter(|id| !all_layers && d.doc.layer(*id).and_then(Layer::surface).is_some());
+    check_sampled_pixels("select.subject", &d.doc, d.active_layer, all_layers, d.doc.bounds())?;
     let c = &s.subject_cache;
     let hit = c.target == target && c.doc.upgrade().is_some_and(|old| crate::layer_multi_cmds::same_pixels(&old, &d.doc));
     let region = if hit {
