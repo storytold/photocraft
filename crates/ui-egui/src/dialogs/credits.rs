@@ -265,7 +265,8 @@ fn contributors_in(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[C
 fn contributors_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &[Contributor], total_commits: u64) {
     let id = egui::Id::unique("credits_view");
     let mut v = ui.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
-    ui.with_layout(crate::direction::row().with_main_wrap(true), |ui| {
+    let toolbar = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+    ui.allocate_ui_with_layout(toolbar, crate::direction::row().with_main_wrap(true), |ui| {
         ui.label(tl!("Show"));
         for m in NameMode::ALL {
             if ui.selectable_label(v.names == m, m.label()).clicked() {
@@ -316,10 +317,11 @@ fn contributors_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, contributors: &
             // Each name is one unit: otherwise egui flows a link that doesn't fit onto the next
             // line as wrapped text, at the font's line height instead of the row spacing.
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
-            // horizontal_wrapped gives its first row the interact height; text rows are shorter,
-            // so the first gap came out wider than the rest.
+            // A row ui seeded with the interact height gives its first row that height; text rows
+            // are shorter, so the first gap came out wider than the rest.
             ui.spacing_mut().interact_size.y = 0.0;
-            ui.with_layout(crate::direction::row().with_main_wrap(true), |ui| {
+            let bag = egui::vec2(ui.available_size_before_wrap().x, ui.spacing().interact_size.y);
+            ui.allocate_ui_with_layout(bag, crate::direction::row().with_main_wrap(true), |ui| {
                 for c in &list {
                     link(app, ui, c, v.names);
                 }
