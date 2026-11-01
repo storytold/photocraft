@@ -726,6 +726,11 @@ pub(super) fn open_on_double_click(app: &mut PhotocraftApp, ui: &egui::Ui, area:
 /// Extra OS windows showing documents (multi-window / multi-monitor).
 pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
     let wins = app.ui.windows.clone();
+    // The main window's tab strip, in its own coordinates and on screen: a floating window
+    // dragged back onto it docks as a tab again, as in Photoshop (#10552).
+    let strip = app.tab_strip.as_ref().map(|s| s.rect);
+    let origin = ctx.input(|i| i.viewport().inner_rect.map(|r| r.min.to_vec2()));
+    let screen_strip = strip.zip(origin).map(|(r, o)| r.translate(o));
     for w in wins.into_iter().filter(|w| w.open) {
         let Some(st) = app.session.documents().get(w.document) else { continue };
         let title = format!("{} — window {}", st.doc.name, w.id);
@@ -737,10 +742,12 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         let mut view = w.view.clone();
         let mut close = false;
         let mut focused = false;
+        let mut dock = false;
         ctx.show_viewport_immediate(vid, builder, |ui, class| {
             if ui.ctx().input(|i| i.viewport().close_requested()) {
                 close = true;
             }
+            dock = dropped_on_strip(ui, vid, class, strip, screen_strip);
             focused = ui.ctx().input(|i| i.viewport().focused == Some(true));
             if focused && !w.focused && app.session.active_index() != Some(w.document) {
                 app.session.set_active(w.document);
@@ -755,12 +762,78 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
         if let Some(win) = app.ui.windows.iter_mut().find(|x| x.id == w.id) {
             win.view = view;
             win.focused = focused;
-            if close {
+            if close || dock {
                 win.open = false;
             }
         }
+        if dock {
+            app.session.set_active(w.document);
+        }
     }
     app.ui.windows.retain(|w| w.open);
+}
+
+/// How long a native window must stay put after being moved before its drop counts. The OS
+/// moves it, so the app never sees the button being released.
+const WINDOW_SETTLE_SECS: f64 = 0.3;
+
+/// Where a floating window was last frame, and whether it has been moved since the button
+/// was pressed (embedded) or since it last came to rest (native).
+#[derive(Clone, Copy, Default)]
+struct WindowMove {
+    last: Option<Rect>,
+    moved: bool,
+    since: f64,
+}
+
+/// Whether the floating window drawn in `ui` was just dropped on the main tab strip: an embedded
+/// window when the button is released over `strip`; a native one when it comes to rest with its
+/// title bar over `screen_strip`. Only a move counts, never a resize or the window's first frame.
+fn dropped_on_strip(ui: &egui::Ui, vid: egui::ViewportId, class: egui::ViewportClass, strip: Option<Rect>, screen_strip: Option<Rect>) -> bool {
+    let key = egui::Id::unique(("docwin-move", vid));
+    let mut m = ui.ctx().data(|d| d.get_temp::<WindowMove>(key)).unwrap_or_default();
+    let embedded = class == egui::ViewportClass::EmbeddedWindow;
+    let (now, inner, time, pressed, released, pointer) = ui.ctx().input(|i| {
+        let now = if embedded { Some(ui.max_rect()) } else { i.viewport().outer_rect };
+        (now, i.viewport().inner_rect, i.time, i.pointer.primary_pressed(), i.pointer.primary_released(), i.pointer.interact_pos())
+    });
+    if embedded && pressed {
+        m.moved = false;
+    }
+    let moved = matches!((m.last, now), (Some(a), Some(b)) if a.min != b.min && (a.size() - b.size()).length() < 0.5);
+    if moved {
+        m.moved = true;
+        m.since = time;
+        if !embedded {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(WINDOW_SETTLE_SECS));
+        }
+    }
+    m.last = now;
+    let mut dock = false;
+    if embedded {
+        if released {
+            dock = m.moved && pointer.zip(strip).is_some_and(|(p, s)| s.contains(p));
+            m.moved = false;
+        }
+    } else if m.moved && !moved && time - m.since >= WINDOW_SETTLE_SECS {
+        dock = now.zip(screen_strip).is_some_and(|(outer, s)| title_bar_over_strip(outer, inner, s));
+        m.moved = false;
+    } else if m.moved {
+        ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(WINDOW_SETTLE_SECS));
+    }
+    ui.ctx().data_mut(|d| d.insert_temp(key, m));
+    dock
+}
+
+/// Whether a native window's title bar (the band of `outer` above `inner`, or its top 30 pt
+/// when the OS reports no decorations) overlaps the main tab strip, all in screen points.
+pub(super) fn title_bar_over_strip(outer: Rect, inner: Option<Rect>, strip: Rect) -> bool {
+    let bottom = match inner {
+        Some(r) if r.top() > outer.top() => r.top(),
+        _ => outer.top() + 30.0,
+    };
+    let bottom = bottom.min(outer.bottom());
+    Rect::from_min_max(outer.min, pos2(outer.right(), bottom)).intersects(strip)
 }
 
 /// Window › Arrange tiles: each document shown with its tile in `rect`, or `None` when the

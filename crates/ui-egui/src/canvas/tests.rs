@@ -3006,3 +3006,80 @@ fn torn_off_document_is_not_drawn_again_in_the_main_window() {
         assert_eq!(tabs, Some(vec![1]), "{kind:?}: only the docked document stays on the main tab strip");
     }
 }
+
+/// #10552: dragging a floating document window back onto the main tab strip docks it as a tab
+/// again, as in Photoshop; dropping it anywhere else leaves it floating. Without a multi-window
+/// backend egui embeds the window in the main one, so the drag moves it by its title bar.
+#[test]
+fn dragging_a_floating_window_onto_the_tab_strip_docks_it_again() {
+    use egui::{Event, PointerButton};
+    use egui_kittest::kittest::Queryable;
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    for name in ["a", "b"] {
+        app.run("file.new", json!({"width": 80, "height": 60, "name": name})).unwrap();
+    }
+    app.sync_views();
+    crate::menus::invoke(&mut app, &egui::Context::default(), "window.arrange.floatInWindow", json!({"document": 1})).unwrap();
+    assert!(crate::view_cmds::document_is_floating(&app, 1));
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1200.0, 900.0)).build_ui_state(
+        |ui, (app, ready): &mut (PhotocraftApp, bool)| {
+            if *ready {
+                egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| document_area(app, ui));
+                extra_windows(app, ui.ctx());
+            }
+        },
+        (app, false),
+    );
+    PhotocraftApp::setup_context(&h.ctx, crate::theme::ThemeKind::Studio);
+    h.state_mut().1 = true;
+    h.run_steps(4);
+    let title = h.state().0.ui.windows[0].id;
+    // The window's node spans its frame; its title bar is the top of it.
+    let frame = h.get_by_label_contains(&format!("b — window {title}")).rect();
+    let title = pos2(frame.center().x, frame.top() + 10.0);
+    let drag = |h: &mut egui_kittest::Harness<'_, (PhotocraftApp, bool)>, from: Pos2, to: Pos2| {
+        let button = |pos, pressed| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.event(Event::PointerMoved(from));
+        h.run();
+        h.event(button(from, true));
+        h.run();
+        for k in 1..=8 {
+            h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 8.0)));
+            h.run();
+        }
+        h.event(button(to, false));
+        h.run_steps(3);
+    };
+    // Dropped on the canvas: the window only moves.
+    let lower = title + vec2(0.0, 200.0);
+    drag(&mut h, title, lower);
+    assert!(crate::view_cmds::document_is_floating(&h.state().0, 1), "a window dropped on the canvas stays floating");
+    // Dropped on the tab strip, right of tab "a": it docks again.
+    let strip = h.state().0.tab_strip.clone().expect("the tab strip is drawn");
+    let (_, tab) = strip.tabs[0];
+    let target = pos2(tab.right() + 60.0, strip.rect.center().y);
+    drag(&mut h, lower, target);
+    let app = &h.state().0;
+    assert!(!crate::view_cmds::document_is_floating(app, 1), "a window dropped on the tab strip is docked");
+    assert!(app.ui.windows.iter().all(|w| w.document != 1), "its window is gone");
+    assert_eq!(app.session.active_index(), Some(1), "the docked document is the active tab");
+    let tabs: Vec<usize> = app.tab_strip.as_ref().map(|s| s.tabs.iter().map(|(d, _)| *d).collect()).unwrap_or_default();
+    assert_eq!(tabs, vec![0, 1]);
+}
+
+/// #10552: a native floating window docks when its title bar, in screen points, overlaps the
+/// main window's tab strip; its body passing over the strip does not count.
+#[test]
+fn native_window_title_bar_over_the_tab_strip_docks() {
+    use super::tabs::title_bar_over_strip;
+    let strip = Rect::from_min_max(pos2(100.0, 130.0), pos2(1100.0, 156.0));
+    let at = |x: f32, y: f32| Rect::from_min_size(pos2(x, y), vec2(800.0, 600.0));
+    let inner = |r: Rect| Some(Rect::from_min_max(r.min + vec2(0.0, 28.0), r.max));
+    let on = at(300.0, 120.0);
+    assert!(title_bar_over_strip(on, inner(on), strip));
+    let below = at(300.0, 400.0);
+    assert!(!title_bar_over_strip(below, inner(below), strip));
+    let above = at(300.0, 0.0);
+    assert!(!title_bar_over_strip(above, inner(above), strip), "only the body covers the strip");
+    assert!(title_bar_over_strip(on, None, strip), "no decorations reported: top band counts");
+}
