@@ -364,6 +364,9 @@ pub(crate) fn board_shift(clip: &Clip, doc: &Document, active: Option<LayerId>, 
         return None;
     }
     let dst = board.artboard()?.rect;
+    // Boards more than the 32-bit coordinate range apart (#10538 review): the pixels can't be
+    // moved that far, so the paste keeps its usual placement (in place for Paste in Place)
+    // rather than wrapping around to an unrelated spot.
     Some((dst.x0.checked_sub(src.x0)?, dst.y0.checked_sub(src.y0)?, to))
 }
 
@@ -376,16 +379,20 @@ fn takes_pastes(board: &Layer) -> bool {
 
 /// Puts pasted layer `id` on `board`, on top of its stack, when placement left it outside. A paste
 /// moved onto a board belongs to it even when its middle falls past a smaller board's edge; the
-/// board clips what lies beyond, as it clips anything on it (#10538 review).
-fn join_board(doc: &mut Document, id: LayerId, board: LayerId) {
+/// board clips what lies beyond, as it clips anything on it (#10538 review). `clipped` is the
+/// copy's own clipping flag (the one it had before placement, which set it for the slot it left):
+/// on top of the board's stack it keeps it while a layer below can be its base, as a new layer
+/// does ([`crate::layer_place::insert_new`]), and drops it on an empty board.
+fn join_board(doc: &mut Document, id: LayerId, board: LayerId, clipped: bool) {
     if doc.artboard_of(id) == Some(board) || !doc.layer(board).is_some_and(takes_pastes) {
         return;
     }
     let Some(mut layer) = doc.remove(id) else { return };
-    // On top of the board's stack nothing is above it to clip to.
-    layer.clipped = false;
     match doc.layer_mut(board).and_then(Layer::children_mut) {
-        Some(children) => children.push(layer),
+        Some(children) => {
+            layer.clipped = clipped && !children.is_empty();
+            children.push(layer);
+        }
         None => doc.layers.push(layer),
     }
 }
@@ -502,7 +509,8 @@ fn paste(s: &mut Session, p: &Value, in_place: bool) -> Result<Value> {
         *crate::pixels_mut(&mut l)? = surf;
         let id = crate::layer_place::insert_new(doc, *active, l, crate::layer_place::Place::AutoEditable);
         if let Some(b) = board {
-            join_board(doc, id, b);
+            // Pixels pasted as a new layer start unclipped.
+            join_board(doc, id, b, false);
         }
         *active = Some(id);
         doc.selection = None;
@@ -550,15 +558,16 @@ fn paste_layers(s: &mut Session, layers: &Document, dx: i32, dy: i32, board: Opt
         let mut place = crate::layer_place::Place::AutoEditable;
         let mut pasted = Vec::with_capacity(copies.layers.len());
         for l in copies.layers {
+            let clipped = l.clipped;
             let id = crate::layer_place::insert_new(doc, *active, l, place);
-            pasted.push(id);
+            pasted.push((id, clipped));
             *active = Some(id);
             place = crate::layer_place::Place::Above;
         }
         // Bottom to top, so they keep their order on the board.
         if let Some(b) = board {
-            for id in pasted {
-                join_board(doc, id, b);
+            for (id, clipped) in pasted {
+                join_board(doc, id, b, clipped);
             }
         }
         crate::cmd::layer_multi_cmds::check_group_depth(doc, "Paste")?;

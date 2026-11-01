@@ -1757,3 +1757,39 @@ fn paste_onto_a_smaller_artboard_keeps_the_offset_and_the_board_clips_the_rest()
     assert!(px(305, 25)[0] > 0.99 && px(305, 25)[1] < 0.01, "shown inside S");
     assert!(!(px(315, 35)[0] > 0.99 && px(315, 35)[1] < 0.01), "clipped past S's edge");
 }
+
+/// A pasted layer that joins a board keeps its own clipping while the board already holds a layer
+/// it can clip to, and drops it on an empty board (#10538 review): a clipped group copied whole
+/// from board A and pasted onto smaller boards S (holding a layer) and E (empty).
+#[test]
+fn a_clipped_paste_joining_a_board_stays_clipped_only_over_a_layer() {
+    let (mut s, red, a, _b) = two_boards();
+    s.execute("layer.select", json!({"layer": red.0})).unwrap();
+    let g = s.execute("layer.groupLayers", json!({"name": "G"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    let base = s.execute("layer.new.layer", json!({"name": "Base"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    s.execute("layer.moveTo", json!({"layer": base.0, "target": g.0, "position": "below"})).unwrap();
+    s.edit("clip", |doc, _| {
+        doc.layer_mut(g).unwrap().clipped = true;
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(s.active().unwrap().doc.artboard_of(g), Some(a));
+    let small = |s: &mut Session, x: i32, name: &str| {
+        s.execute("layer.new.artboard", json!({"rect": [x, 20, 10, 10], "name": name})).unwrap()["layer"].as_u64().map(LayerId).unwrap()
+    };
+    let (sb, eb) = (small(&mut s, 300, "S"), small(&mut s, 400, "E"));
+    let held = s.execute("layer.new.layer", json!({"name": "Held"})).unwrap()["layer"].as_u64().map(LayerId).unwrap();
+    s.execute("layer.moveTo", json!({"layer": held.0, "target": sb.0, "position": "into"})).unwrap();
+    s.execute("layer.select", json!({"layer": g.0})).unwrap();
+    s.execute("edit.copy", json!({})).unwrap();
+    assert!(s.clipboard.as_ref().unwrap().layers.is_some(), "the group is copied whole");
+    let paste_on = |s: &mut Session, board: LayerId| {
+        s.execute("layer.select", json!({"layer": board.0})).unwrap();
+        s.execute("edit.paste", json!({})).unwrap();
+        let st = s.active().unwrap();
+        let id = st.active_layer.unwrap();
+        (st.doc.artboard_of(id), st.doc.layer(id).unwrap().clipped)
+    };
+    assert_eq!(paste_on(&mut s, sb), (Some(sb), true), "S holds a layer to clip to");
+    assert_eq!(paste_on(&mut s, eb), (Some(eb), false), "E is empty");
+}
