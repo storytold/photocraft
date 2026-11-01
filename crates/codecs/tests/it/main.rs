@@ -21,6 +21,7 @@ mod pcx;
 mod png_jpeg;
 mod pnm_headers;
 mod resolution;
+mod resolution_cleanup;
 mod roundtrip;
 mod source_settings;
 mod tga;

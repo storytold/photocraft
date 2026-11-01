@@ -349,6 +349,10 @@ fn put_u64(order: Order, v: u64) -> [u8; 8] {
 }
 
 /// Removes the IFD0 entries at offsets `removed` (see [`exif_with_resolution`]).
+///
+/// `removed` is strictly increasing: `Ifd0::parse` visits entries in physical order and the
+/// caller records each malformed field at most once. Walk those offsets once alongside the
+/// table, keeping compaction linear even when many duplicate resolution entries are malformed.
 fn remove_entries(b: &mut [u8], ifd: &Ifd0, removed: &[usize]) {
     let eb = ifd.entry_bytes;
     let next_bytes = if ifd.big { 8 } else { 4 };
@@ -357,8 +361,11 @@ fn remove_entries(b: &mut [u8], ifd: &Ifd0, removed: &[usize]) {
     let Some(old) = b.get(ifd.first..table_end.saturating_add(next_bytes)).map(<[u8]>::to_vec) else { return };
     let mut table = Vec::with_capacity(old.len());
     let mut kept = 0usize;
+    let mut removed = removed.iter().copied().peekable();
     for (i, entry) in old.chunks_exact(eb).take(ifd.count).enumerate() {
-        if !removed.contains(&(ifd.first + i * eb)) {
+        if removed.peek() == Some(&(ifd.first + i * eb)) {
+            removed.next();
+        } else {
             table.extend_from_slice(entry);
             kept += 1;
         }
