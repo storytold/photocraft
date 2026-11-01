@@ -865,7 +865,9 @@ fn ink_surface(s: &Surface, d: &Duotone) -> Surface {
 }
 
 /// Image › Mode › RGB/Grayscale/CMYK/Lab through the CMS. Params: `profile` (destination,
-/// default the mode's working profile), `intent` (default relative), `bpc` (default true).
+/// default the mode's working profile, except Indexed→RGB with no explicit profile, which
+/// expands the already-RGB storage without changing its encoded samples or ICC bytes), `intent`
+/// (default relative), `bpc` (default true).
 pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value> {
     let doc = &s.active().ok_or(EngineError::NoDocument)?.doc;
     if doc.mode == ColorMode::Multichannel && mode != ColorMode::Multichannel {
@@ -874,8 +876,13 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     if doc.mode == mode && p.get("profile").is_none() {
         return Ok(Value::Null);
     }
+    let preserve_indexed_rgb = p.get("profile").and_then(Value::as_str).is_none()
+        && doc.mode == ColorMode::Indexed
+        && mode == ColorMode::Rgb
+        && doc.icc_profile.as_ref().is_none_or(|bytes| profile_from_bytes(bytes).ok().is_some_and(|p| p.color_space == ColorSpace::Rgb));
     let dst = match p.get("profile").and_then(Value::as_str) {
         Some(spec) => s.color.resolve(spec, Some(doc), Some(mode))?,
+        None if preserve_indexed_rgb => document_profile(doc),
         None => s.color.working(mode),
     };
     if space_mode(dst.color_space)
@@ -889,7 +896,16 @@ pub fn convert_mode(s: &mut Session, mode: ColorMode, p: &Value) -> Result<Value
     }
     let intent = intent_or(p, s.color.settings.intent())?;
     let bpc = bool_param(p, "bpc", s.color.settings.bpc);
-    s.edit("Mode Change", |doc, _| convert_document(doc, &dst, intent, bpc))?;
+    if preserve_indexed_rgb {
+        s.edit("Mode Change", |doc, _| {
+            doc.mode = ColorMode::Rgb;
+            doc.color_table = None;
+            doc.duotone = None;
+            Ok(())
+        })?;
+    } else {
+        s.edit("Mode Change", |doc, _| convert_document(doc, &dst, intent, bpc))?;
+    }
     Ok(json!({ "profile": dst.description, "intent": intent.id(), "bpc": bpc }))
 }
 

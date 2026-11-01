@@ -1609,3 +1609,40 @@ fn replace_color_localized_color_clusters() {
     assert!(px(2)[1] > 0.5, "near the point: shifted to green {:?}", px(2));
     assert!(px(38)[0] > 0.9 && px(38)[1] < 0.1, "far away: still red {:?}", px(38));
 }
+
+#[test]
+fn stock_indexed_dialog_can_disable_transparency_with_stale_automation_settings() {
+    use egui_kittest::Harness;
+    use egui_kittest::kittest::Queryable;
+
+    const COMMAND: &str = "image.mode.indexedColor";
+    for stale_settings in [false, true] {
+        let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+        app.run("file.new", json!({"width": 2, "height": 1, "depth": 16, "background": "#214bc9"})).unwrap();
+        let before = app.session.active().unwrap().doc.layers[0].surface().unwrap().rgba(0, 0);
+        if stale_settings {
+            app.session.prefs.edit(|prefs| {
+                prefs.dialogs.insert(
+                    COMMAND.into(),
+                    json!({"transparentIndex": 0, "reducePalette": true, "paletteId": "removed-palette", "mapping": {"method": "riemersma"}}),
+                );
+            });
+        }
+        let mut harness = Harness::builder().with_size(egui::vec2(900.0, 900.0)).build_ui_state(|ui, app| crate::dialogs::show(app, ui.ctx()), &mut app);
+        PhotocraftApp::setup_context(&harness.ctx, crate::theme::ThemeKind::ALL[0]);
+        open(harness.state_mut(), COMMAND).unwrap();
+        harness.run_steps(3);
+        harness.get_by_label("Transparency").click();
+        harness.run_steps(2);
+        harness.get_by_label("OK").click();
+        harness.run_steps(3);
+        let doc = &harness.state().session.active().unwrap().doc;
+        assert_eq!(doc.mode, photocraft_color::ColorMode::Indexed, "stale settings: {stale_settings}");
+        assert_eq!(doc.color_table.as_ref().unwrap().transparent, None);
+        let after = doc.layers[0].surface().unwrap().rgba(0, 0);
+        assert_eq!(after[3], 1.0);
+        for (after, before) in after[..3].iter().zip(&before[..3]) {
+            assert!((after - before).abs() <= 1.0 / 255.0, "opaque RGB changed");
+        }
+    }
+}

@@ -3,9 +3,9 @@
 //!
 //! Save for Web optimises the flattened (optionally resized, sRGB-converted) image as GIF,
 //! PNG-8, PNG-24, JPEG or WBMP, per slice, into a folder with an optional HTML table; without an
-//! output it only reports the optimised size (the dialog's 2-Up/4-Up annotations). Colour
-//! reduction and dithering reuse `algo::quantize`; GIF/WBMP/progressive JPEG writers live in
-//! `codecs::web`.
+//! output it only reports the optimised size (the dialog's 2-Up/4-Up annotations). Stock colour
+//! reduction and dithering reuse `algo::quantize`; explicitly supplied palette/map settings use
+//! `algo::palette_map`; GIF/WBMP/progressive JPEG writers live in `codecs::web`.
 //!
 //! Image Assets implements the naming grammar of Adobe's public Generator documentation: a
 //! layer or group named `foo.png`, `200% foo@2x.png, 48x48 icons/foo.png8`, `photo.jpg80%`,
