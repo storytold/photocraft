@@ -747,7 +747,11 @@ pub fn extra_windows(app: &mut PhotocraftApp, ctx: &egui::Context) {
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(crate::theme::Tokens::get(ui.ctx()).canvas)).show(ui, |ui| {
                 let rect = ui.available_rect_before_wrap();
+                // Embedded document windows share ROOT; retain their actual view identity.
+                let window_id = egui::Id::unique("canvas-doc-window");
+                ui.data_mut(|d| d.insert_temp(window_id, vid));
                 view = canvas_view(app, ui, w.document, rect, view.clone(), focused);
+                ui.data_mut(|d| d.remove::<egui::ViewportId>(window_id));
                 // Preferences › Zoom Resizes Windows: a zoom wraps the window around the image.
                 crate::zoom_window_fit::follow(app, ui.ctx(), class, vid, &w, &mut view, rect);
             });

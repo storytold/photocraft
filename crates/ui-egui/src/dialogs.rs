@@ -303,6 +303,7 @@ fn command_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: 
         _ if crate::stack_dialog::owns(fields) => crate::stack_dialog::body(app, ui, fields, d.id),
         _ if crate::tool_reset::owns(fields) => crate::tool_reset::body(ui),
         _ if crate::crop_presets::owns(fields) => crate::crop_presets::body(app, ui, fields),
+        _ if plugin_presets::owns(fields) => plugin_presets::new_body(app, ui, fields),
         _ if crate::variables_ui::owns(fields) => crate::variables_ui::body(app, ui, fields),
         _ => return command_body_more(app, ui, d, fields, id),
     }
@@ -391,6 +392,8 @@ fn dialog_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
 
 /// A filter-style dialog: scrolling parameters with the in-dialog preview window under them.
 fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &mut Fields, id: egui::Id) {
+    let plugin = fields.get("__command").and_then(Value::as_str) == Some("plugin.run");
+    let editing = ui.ctx().text_edit_focused();
     // Color Settings: the monitor profile in use can change while it is open.
     if fields.get("__command").and_then(Value::as_str) == Some("edit.colorSettings") {
         fields.insert("__note".into(), Value::String(crate::monitor_status::note(app)));
@@ -399,14 +402,38 @@ fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
     // OK / Cancel buttons stay inside a small window. The preview window below the
     // parameters reserves its own space (#3769).
     let room = (ui.ctx().content_rect().height() - DIALOG_CHROME - crate::filter_preview_ui::reserved_height(fields)).max(120.0);
-    let body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
+    let mut body = |ui: &mut egui::Ui, fields: &mut serde_json::Map<String, Value>| {
+        let top = ui.cursor().top();
+        if plugin {
+            plugin_presets::body(app, ui, fields, d.id);
+        }
+        let room = if plugin { (room - (ui.cursor().top() - top) - 32.0).max(120.0) } else { room };
         egui::ScrollArea::vertical().id_salt(id.with("body")).max_height(room).show(ui, |ui| {
             if crate::bitmap_dialog::owns(fields) {
                 crate::bitmap_dialog::body(app, ui, fields);
+            } else if skin_smooth_ui::owns(fields) {
+                skin_smooth_ui::body(app, ui, fields);
+                plugin_presets::sync_values(fields);
             } else {
                 crate::filter_dialog::body(ui, fields);
+                if plugin {
+                    plugin_presets::sync_values(fields);
+                }
             }
         });
+        if plugin {
+            if let Some(mut preview) = fields.get("__preview").and_then(Value::as_bool) {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    crate::widgets::checkbox(ui, &mut preview, tl!("Preview"));
+                    if skin_smooth_ui::owns(fields) {
+                        skin_smooth_ui::mask_switch(app, ui, fields);
+                    }
+                });
+                fields.insert("__preview".into(), json!(preview));
+            }
+            plugin_presets::remember_choices(app, fields);
+        }
         // The in-dialog preview window sits under the scrolling parameters (#3769),
         // so it never shifts them.
         crate::filter_preview_ui::window(app, d.id, ui, fields);
@@ -416,6 +443,14 @@ fn filter_body(app: &mut PhotocraftApp, ui: &mut egui::Ui, d: &Dialog, fields: &
         body(ui, fields);
     } else {
         first_field_focused(ui, id, |ui| body(ui, fields));
+    }
+    if plugin {
+        // DragValue must see Enter first to commit its text. The dialog must not see it too.
+        if editing && app.ui.dialogs.last().is_some_and(|top| top.id == d.id) {
+            ui.input_mut(|i| {
+                i.consume_key(egui::Modifiers::NONE, egui::Key::Enter);
+            });
+        }
     }
 }
 
@@ -447,7 +482,9 @@ fn button_row(
     } else {
         let ok_label = ok_label(d);
         // Dialogs that need an input first (a preset name, a selection) grey OK out.
-        let can_ok = crate::crop_presets::can_confirm(app, fields) && crate::stack_dialog::can_confirm(fields);
+        let can_ok = crate::crop_presets::can_confirm(app, fields)
+            && crate::stack_dialog::can_confirm(fields)
+            && (!plugin_presets::owns(fields) || plugin_presets::validate_new(app, fields).is_ok());
         let ok = DialogButton::new(ButtonRole::Default, ok_label, 84.0).enabled(can_ok);
         // Photoshop: holding Alt turns Cancel into Reset (the dialog stays open).
         // Dialogs opt in via `dialog_alt_reset::supported` (per marker).
@@ -508,9 +545,28 @@ fn button_row(
             Some(ButtonRole::Cancel) => outcome = Some(false),
             Some(ButtonRole::Apply) => apply_requested = true,
             Some(_) => outcome = Some(true),
-            None if interactive && can_ok && !popup_blocks_enter && ui.input(|i| i.key_pressed(egui::Key::Enter)) => outcome = Some(true),
+            None if interactive
+                && can_ok
+                && !popup_blocks_enter
+                && fields.get("__command").and_then(Value::as_str) != Some("plugin.run")
+                && ui.input(|i| i.focused && i.key_pressed(egui::Key::Enter)) =>
+            {
+                outcome = Some(true)
+            }
             None => {}
         }
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if fields.get("__command").and_then(Value::as_str) == Some("plugin.run") {
+        let size = egui::vec2(ui.available_width().max(0.0), crate::widgets::button_height(ui.ctx()));
+        ui.allocate_ui_with_layout(size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.set_min_size(size);
+            let mask_busy = skin_smooth_ui::busy_for(app, d.id);
+            if mask_busy || app.filter_preview_worker.busy_for(d.id) {
+                ui.add(egui::Spinner::new().size(16.0));
+                ui.add(egui::Label::new(if mask_busy { tl!("Updating Mask…") } else { tl!("Updating preview…") }).truncate());
+            }
+        });
     }
     (outcome, apply_requested)
 }
@@ -527,6 +583,8 @@ fn ok_label(d: &Dialog) -> &'static str {
         tl!("Replace")
     } else if d.fields.contains_key("__export") {
         tl!("Export")
+    } else if plugin_presets::owns(&d.fields) {
+        tl!("Save")
     } else {
         crate::file_ui::ok_label(&d.fields).unwrap_or(tl!("OK"))
     }
@@ -853,6 +911,7 @@ const ROUTES: &[fn(&Fields) -> bool] = &[
     crate::stack_dialog::owns,
     crate::tool_reset::owns,
     crate::crop_presets::owns,
+    plugin_presets::owns,
     crate::variables_ui::owns,
     crate::file_ui::owns,
     crate::new_guide_ui::owns,
@@ -896,6 +955,9 @@ fn file_command(fields: &Fields) -> Option<&'static str> {
 /// Confirm a command dialog no specific handler owns: run its `__command` with the dialog's
 /// parameters, then settle the filter preview and the playing action.
 fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> {
+    if skin_smooth_ui::owns(&d.fields) {
+        app.skin_smooth_mask = None;
+    }
     let Some(cmd) = d.fields.get("__command").and_then(Value::as_str).map(str::to_string) else {
         app.filter_preview = None;
         crate::actions::abandoned(app, &d.fields);
@@ -961,6 +1023,9 @@ fn confirm_generic_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, 
 /// The checks before a dialog is confirmed: no open child picker, the automation gate for a handler
 /// that touches files itself, and a valid guide layout.
 fn confirm_preflight(app: &mut PhotocraftApp, id: u64) -> Result<(), String> {
+    if let Some(d) = app.ui.dialogs.iter().find(|d| d.id == id).filter(|d| plugin_presets::owns(&d.fields)) {
+        plugin_presets::validate_new(app, &d.fields)?;
+    }
     if crate::layer_style::color_picker::has_child(app, id) {
         return Err("confirm or cancel the Layer Style color picker first".into());
     }
@@ -1010,6 +1075,7 @@ fn confirm_command(app: &mut PhotocraftApp, d: Dialog) -> Result<Value, String> 
         _ if crate::stack_dialog::owns(&d.fields) => crate::stack_dialog::confirm(app, &d.fields),
         _ if crate::tool_reset::owns(&d.fields) => crate::tool_reset::confirm(app),
         _ if crate::crop_presets::owns(&d.fields) => crate::crop_presets::confirm(app, &d.fields),
+        _ if plugin_presets::owns(&d.fields) => plugin_presets::confirm_new(app, &d.fields),
         _ if crate::variables_ui::owns(&d.fields) => crate::variables_ui::confirm(app, &d.fields),
         _ => confirm_command_more(app, d),
     }
@@ -1074,6 +1140,7 @@ pub fn cancel(app: &mut PhotocraftApp, id: u64) -> Result<Value, String> {
     app.ui.dialogs.retain(|d| !crate::layer_style::color_picker::child_of(&d.fields, id));
     app.filter_preview = None;
     app.color_range = None;
+    app.skin_smooth_mask = None;
     crate::type_panels_ui::color_picker::prune(app);
     Ok(Value::Null)
 }
@@ -1157,6 +1224,7 @@ pub mod new_layer_ui;
 pub mod open_prompt;
 pub mod palette;
 pub(crate) mod pattern_fill_ui;
+mod plugin_presets;
 pub mod preset_group_prompt;
 pub mod rasterize_prompt;
 pub mod replace_prompt;
@@ -1166,6 +1234,7 @@ pub mod select_mask_ui;
 pub mod shape_dialog;
 pub(crate) mod shape_fill_ui;
 pub(super) mod sizing;
+pub(crate) mod skin_smooth_ui;
 pub mod smart_filter_dialog;
 pub mod snapshot_dialog;
 pub(crate) mod solid_fill_ui;

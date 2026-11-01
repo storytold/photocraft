@@ -118,9 +118,15 @@ Artwork shown in the screenshots (all public domain, via Wikimedia Commons; deta
 | `photocraft-type.jpg` | *Among the Sierra Nevada, California*, Albert Bierstadt, 1868 | [Commons](https://commons.wikimedia.org/wiki/File:Albert_Bierstadt_-_Among_the_Sierra_Nevada,_California_-_Google_Art_Project.jpg) |
 | `photocraft-export-light.jpg` | *The Kiss*, Gustav Klimt, 1907–1908 | [Commons](https://commons.wikimedia.org/wiki/File:Gustav_Klimt_016.jpg) |
 
-## Test data (not committed, not shipped)
+## Committed test fixtures (not shipped)
 
-`corpus/` is gitignored and no test fixtures are committed to the repository.
+| Path | Title | Author | Source | License |
+|---|---|---|---|---|
+| `crates/plugins/tests/fixtures/skin-smooth.wasm` | Skin Smooth 0.6.0 filter fixture | Skin Smooth contributors (Codex-assisted) | [Rust source archive](https://github.com/user-attachments/files/34211548/skin-smooth-source.tar.gz); [rebuild instructions](crates/plugins/tests/fixtures/skin-smooth.md) | Original source: [MIT](crates/plugins/tests/fixtures/skin-smooth-LICENSE-MIT) OR [Apache-2.0](crates/plugins/tests/fixtures/skin-smooth-LICENSE-APACHE); [dependency and Rust notices](crates/plugins/tests/fixtures/skin-smooth-LICENSES/) |
+
+## External test corpora (not committed, not shipped)
+
+`corpus/` is gitignored; the external corpora below are not committed to the repository.
 `cargo xtask corpus --all` fetches every corpus at the pinned commits in `xtask/src/corpus_pins.rs`
 and verifies each file against the sha256 lists in `xtask/*.sha256`, with the upstream licence
 next to the files:

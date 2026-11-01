@@ -1213,6 +1213,18 @@ fn parse_pointer_event(i: usize, e: &Value) -> std::result::Result<PointerSample
 
 /// Whether a modal tool, picker or context menu took the event instead of the canvas.
 fn pointer_event_intercepted(app: &mut PhotocraftApp, ctx: &egui::Context, g: &PointerGesture, s: &PointerSample) -> bool {
+    if app.ui.dialogs.last().is_some_and(|d| crate::dialogs::skin_smooth_ui::owns(&d.fields)) {
+        let down = matches!(s.ev, ToolEvent::Down { .. });
+        let up = matches!(s.ev, ToolEvent::Up { .. });
+        let held = app.ui.dialogs.last().and_then(|d| d.fields.get("__pointerDown")).and_then(Value::as_bool).unwrap_or(false);
+        if let Some(d) = app.ui.dialogs.last_mut() {
+            d.fields.insert("__pointerDown".into(), json!(!up && (down || held)));
+        }
+        if !up && (down || held) && !g.space && !g.secondary && !g.middle {
+            crate::dialogs::skin_smooth_ui::pick(app, [s.x, s.y], g.mods);
+        }
+        return true;
+    }
     pointer_eyedropper_took(app, ctx, g, s) || color_range_took(app, g, s) || (g.secondary && secondary_menu_took(app, ctx, g, s))
 }
 
