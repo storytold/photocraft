@@ -84,18 +84,25 @@ pub fn confirm(app: &mut PhotocraftApp, fields: &Map<String, Value>) -> Result<V
 
 /// Open the HDR Toning dialog for the active document, bound to it.
 pub fn open_dialog(app: &mut PhotocraftApp) -> Option<u64> {
-    let document = app.session.active().map(|st| st.doc.id.0)?;
-    let id = crate::filter_dialog::open(app, COMMAND)?;
-    if let Some(d) = app.ui.dialog_mut(id) {
-        d.fields.insert(DIALOG_DOCUMENT.into(), json!(document));
+    app.session.active()?;
+    crate::filter_dialog::open(app, COMMAND)
+}
+
+/// Bind an HDR Toning dialog's `fields` to the active document ([`check_dialog`]).
+pub(crate) fn bind(app: &PhotocraftApp, fields: &mut Map<String, Value>) {
+    if let Some(st) = app.session.active() {
+        fields.insert(DIALOG_DOCUMENT.into(), json!(st.doc.id.0));
     }
-    Some(id)
 }
 
 /// Before an HDR Toning dialog's OK runs the command: refused when it was opened for another
 /// document than the active one (HDR Toning flattens the image it runs on).
 pub fn check_dialog(app: &PhotocraftApp, fields: &Map<String, Value>) -> Result<(), String> {
-    let Some(document) = fields.get(DIALOG_DOCUMENT) else { return Ok(()) };
+    if fields.get("__command").and_then(Value::as_str) != Some(COMMAND) {
+        return Ok(());
+    }
+    // An HDR Toning dialog with no document (never bound) can't tell which image it may flatten.
+    let Some(document) = fields.get(DIALOG_DOCUMENT) else { return Err(tl!("The document changed. Choose HDR Toning again.").into()) };
     if app.session.active().map(|st| json!(st.doc.id.0)).as_ref() == Some(document) {
         Ok(())
     } else {
@@ -219,6 +226,24 @@ mod tests {
         assert_eq!(app.session.active_index(), Some(1));
         assert!(crate::canvas::ensure_filter_preview(&mut app, 1, &ctx).is_none(), "another document never previews HDR Toning");
         assert!(app.filter_preview.is_none());
+    }
+
+    /// However HDR Toning's dialog opens (here the generic dialog path the control channel and
+    /// action playback use), it is bound to its document; one with no binding never runs.
+    #[test]
+    fn every_hdr_dialog_is_bound_to_its_document() {
+        let mut app = app_with(1);
+        let id = crate::filter_dialog::open(&mut app, COMMAND).unwrap();
+        let mut fields = app.ui.dialogs.iter().find(|d| d.id == id).unwrap().fields.clone();
+        assert_eq!(fields.get(DIALOG_DOCUMENT), Some(&json!(app.session.active().unwrap().doc.id.0)), "bound on open");
+        app.session.execute("file.new", json!({"width": 8, "height": 8, "background": "white"})).unwrap();
+        app.session.execute("layer.new.layer", json!({})).unwrap();
+        assert!(crate::dialogs::confirm(&mut app, id).is_err(), "opened for the first document");
+        assert_eq!(layers(&app), 2, "the other document keeps its layers");
+        fields.remove(DIALOG_DOCUMENT);
+        assert!(check_dialog(&app, &fields).is_err(), "an unbound HDR dialog is refused");
+        fields.insert("__command".into(), json!("filter.blur.gaussian"));
+        assert!(check_dialog(&app, &fields).is_ok(), "other dialogs are not affected");
     }
 
     #[test]
