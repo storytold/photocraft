@@ -118,13 +118,29 @@ fn import_abr(s: &mut Session, p: &Value) -> Result<Value> {
 }
 
 fn add_abr_presets(s: &mut Session, p: &Value, group: String, imp: photocraft_io::abr_map::AbrImport) -> Result<Value> {
-    // Re-importing a file replaces its group instead of duplicating it.
-    if p.get("replace").and_then(Value::as_bool).unwrap_or(true) {
+    // A file name alone cannot identify a brush library: re-importing a matching
+    // name must not erase brushes the user edited or moved into that group.
+    // Only an explicit replace=true may remove existing non-built-in presets.
+    let replace = p.get("replace").and_then(Value::as_bool);
+    let group = if replace.is_none() {
+        let taken: std::collections::HashSet<String> = s.tools.presets.iter().map(|x| x.group.to_ascii_lowercase()).collect();
+        if taken.contains(&group.to_ascii_lowercase()) {
+            (2..).map(|n| format!("{group} ({n})")).find(|name| !taken.contains(&name.to_ascii_lowercase())).unwrap_or_else(|| format!("{group} (copy)"))
+        } else {
+            group
+        }
+    } else {
+        group
+    };
+    if replace == Some(true) {
         s.tools.presets.retain(|x| x.builtin || x.group != group);
     }
     let mut taken = UniqueNames::new(s.tools.presets.iter().map(|x| x.name.as_str()));
     let mut names = Vec::with_capacity(imp.presets.len());
     for mut preset in imp.presets {
+        // The decoder ran on a worker with the originally requested group.
+        // Choose the final group at apply time against the live library.
+        preset.group = group.clone();
         preset.name = taken.unique(&preset.name);
         names.push(preset.name.clone());
         s.tools.presets.push(preset);
@@ -243,7 +259,7 @@ pub fn specs() -> Vec<CommandSpec> {
             label: "Import Brushes…",
             menu: &[],
             shortcut: None,
-            params: r##"{"path":".abr file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool=true (replace a group of the same name),"select":bool=false (make the first imported preset current)} → {group, imported, count, folders (nested folders kept from the file), version, warnings}"##,
+            params: r##"{"path":".abr file"?,"data":base64 bytes?,"group":string?=file name,"replace":bool? (omitted: import into a new numbered group on collision; false: append; true: replace the group's non-built-in brushes),"select":bool=false (make the first imported preset current)} → {group, imported, count, folders (nested folders kept from the file), version, warnings}"##,
             enabled: always,
             run: import_abr,
             journal: true,
@@ -406,8 +422,8 @@ mod tests {
         assert_eq!(s.tools.presets.len(), before + 2);
         assert!(s.tools.presets.iter().filter(|p| p.group == "Legacy").all(|p| !p.builtin));
         assert!(matches!(s.tools.brush.tip, photocraft_paint::TipShape::Sampled(_)));
-        // Re-import replaces the group.
-        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy"})).unwrap();
+        // Callers can still explicitly replace an existing group.
+        s.execute("brush.presets.importAbr", json!({"data": data, "group": "Legacy", "replace": true})).unwrap();
         assert_eq!(s.tools.presets.len(), before + 2);
         // Imported presets paint.
         s.execute("file.new", json!({"width": 64, "height": 64})).unwrap();
@@ -424,6 +440,41 @@ mod tests {
         let r = s.execute("brush.presets.importAbr", json!({"path": path.to_string_lossy()})).unwrap();
         assert_eq!((r["group"].as_str(), r["imported"][0].as_str(), r["version"].as_u64()), (Some("My Set"), Some("Speckle"), Some(6)));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reimport_preserves_customized_groups_unless_replacement_is_explicit() {
+        let mut s = Session::new();
+        let data = photocraft_paint::tile::b64_encode(&abr_v2());
+        let first = s.execute("brush.presets.importAbr", json!({"data": data, "group": "Kit"})).unwrap();
+        assert_eq!(first["group"], "Kit");
+        let edited_name = first["imported"][0].as_str().unwrap().to_string();
+        let edited = s.tools.presets.iter_mut().find(|p| p.name == edited_name).unwrap();
+        edited.brush.size = 317.0;
+
+        // A second file with the same stem must not destroy the edited original.
+        let second = s.execute("brush.presets.importAbr", json!({"data": data, "group": "Kit"})).unwrap();
+        assert_eq!(second["group"], "Kit (2)");
+        assert_eq!(s.tools.presets.iter().find(|p| p.name == edited_name).unwrap().brush.size, 317.0);
+        assert_eq!(s.tools.presets.iter().filter(|p| p.group == "Kit").count(), 2);
+        assert_eq!(s.tools.presets.iter().filter(|p| p.group == "Kit (2)").count(), 2);
+
+        // Group collisions are case-insensitive, and the next available suffix is used.
+        let third = s.execute("brush.presets.importAbr", json!({"data": data, "group": "kit"})).unwrap();
+        assert_eq!(third["group"], "kit (3)");
+        assert_eq!(s.tools.presets.iter().filter(|p| p.group == "kit (3)").count(), 2);
+
+        // Opt-in replacement still works, without affecting the numbered copies.
+        let replaced = s.execute("brush.presets.importAbr", json!({"data": data, "group": "Kit", "replace": true})).unwrap();
+        assert_eq!(replaced["group"], "Kit");
+        assert_eq!(s.tools.presets.iter().filter(|p| p.group == "Kit").count(), 2);
+        assert!(s.tools.presets.iter().filter(|p| p.group == "Kit").all(|p| p.brush.size != 317.0));
+        assert_eq!(s.tools.presets.iter().filter(|p| p.group == "Kit (2)").count(), 2);
+
+        // Existing automation that explicitly opts into appending stays supported.
+        let appended = s.execute("brush.presets.importAbr", json!({"data": data, "group": "Kit", "replace": false})).unwrap();
+        assert_eq!(appended["group"], "Kit");
+        assert_eq!(s.tools.presets.iter().filter(|p| p.group == "Kit").count(), 4);
     }
 
     #[test]
