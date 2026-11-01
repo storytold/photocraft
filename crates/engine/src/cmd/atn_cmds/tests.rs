@@ -3374,3 +3374,17 @@ fn match_color_setting_outside_its_range_is_kept() {
     }
     assert!(export_item("image.adjustments.matchColor", &json!({"luminance": 1, "intensity": 200, "fade": 100}), "S").is_some());
 }
+
+/// A Match Color step that names its source (`Srce`, a document by name, or the name as text)
+/// matches another image the command isn't given, so it stays a Photoshop step even when it
+/// also says `noReference` (#10609).
+#[test]
+fn match_color_with_a_source_is_kept() {
+    let from = |d: Descriptor| (events::event_for(&AtnEvent::name("matchColor")).unwrap().from)(&d);
+    let document = D::Reference(vec![ReferenceItem::Name { class: class("Dcmn"), name: UnicodeString::new_nul("Reference.psd") }]);
+    for source in [document, text("Reference.psd")] {
+        for d in [desc("null").with("Srce", source.clone()), desc("null").with("Srce", source.clone()).with("noReference", D::Boolean(true))] {
+            assert!(matches!(from(d.clone()), Mapped::Unsupported { harmless: false }), "{:?} was mapped", d.items);
+        }
+    }
+}
