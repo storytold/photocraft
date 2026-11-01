@@ -182,9 +182,17 @@ Behaviour shared by the task tools:
   target unless `overwrite: true`. Even then, the write root's rule still applies: only image and
   document files are ever replaced. Missing folders below the write root are created.
 - **Bounded work.** `resize_image` and `crop_image` refuse results over 256 megapixels.
-  `batch_process` looks at no more than 500 files (default 100) and skips inputs over 512 MiB. It
-  applies at most 32 operations and handles one file at a time, closing each document before
-  opening the next.
+  `open_image`, `inspect_image` and `batch_process` read a file's header first. A PNG, JPEG,
+  PSD/PSB, WebP, OpenEXR, GIF, BMP, TGA, ICO, QOI or HDR that declares more than 256 megapixels
+  is refused before it is read in full or decoded. Other formats rely on the decoder's own
+  limits. `batch_process` looks at no more than 500 files (default 100) and skips inputs over
+  512 MiB. It applies at most 32 operations and handles one file at a time, closing each document
+  before opening the next.
+- **Batches never replace an unread input.** Before writing anything, `batch_process` checks
+  every planned output. The whole batch is refused when an output would replace another file of
+  the input folder, for example `photo.jpg` becoming `photo.png` next to the original
+  `photo.png`. It is also refused when two inputs would write the same output. A file may still
+  be written back over its own source with `overwrite: true`.
 - **Headless only.** In bridge mode the task tools reply with an error that points to
   `command_run`. The live app takes the same command ids.
 
@@ -209,7 +217,9 @@ Set `PHOTOCRAFT_LOG` (`error`, `warn`, `info`, `debug` or `trace`) in the server
 to log to **stderr**. Stdout carries only the protocol. Unset, the server logs nothing. Each level
 includes the ones above it:
 
-- `warn`: batch files that failed.
+- `warn`: every batch file that failed, whatever the stage (name, path, decoding, an operation,
+  saving). The reply's `failed` counter and per-file `status` are the authoritative record:
+  check them rather than relying on the log.
 - `info`: also every task tool call with its duration and outcome (and the MCP session's own
   start-up events).
 - `debug`: also each engine command a task tool runs, with its parameters.

@@ -545,6 +545,32 @@ impl AuthorizedWorkspace {
         root.dir.create_dir_all(&relative).map_err(|e| file_error("mkdir", path, e))
     }
 
+    /// At most the first `max` bytes of one regular file below the read root: enough to read an
+    /// image header (its pixel size) without loading or decoding the file.
+    pub(crate) fn read_head(&self, path: &str, max: usize) -> Result<Vec<u8>, AutomationError> {
+        let relative = request_path(path, self.read.as_ref())?;
+        let root = self.read.as_ref().ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: read authority is absent")))?;
+        let file = root.dir.open(&relative).map_err(|e| file_error("read", path, e))?;
+        if !file.metadata().map_err(|e| file_error("read", path, e))?.is_file() {
+            return Err(AutomationError::BadRequest(format!("automation read path is not a regular file: `{path}`")));
+        }
+        let mut head = Vec::new();
+        file.into_std().take(u64::try_from(max).unwrap_or(u64::MAX)).read_to_end(&mut head).map_err(|e| file_error("read", path, e))?;
+        Ok(head)
+    }
+
+    /// Where `path` lands, as one comparable spelling: the canonical root joined with the
+    /// validated relative path (`write` picks the root). Two requests that name the same file
+    /// through different spellings (relative, absolute, the read or the write root when they
+    /// overlap) get the same value. Case-insensitive file systems compare case-insensitively.
+    pub(crate) fn comparable_path(&self, path: &str, write: bool) -> Result<String, AutomationError> {
+        let (root, authority) = if write { (self.write.as_ref(), "write") } else { (self.read.as_ref(), "read") };
+        let root = root.ok_or_else(|| AutomationError::BadRequest(format!("{DENIED}: {authority} authority is absent")))?;
+        let full = if names_root(path, root) { root.path.clone() } else { root.path.join(request_path(path, Some(root))?) };
+        let text = full.to_string_lossy().into_owned();
+        Ok(if cfg!(any(windows, target_os = "macos")) { text.to_lowercase() } else { text })
+    }
+
     /// The regular files directly inside `dir` below the read root, as `(name, bytes)` sorted by
     /// name. Subdirectories, links that leave the root and non-UTF-8 names are skipped; at most
     /// `limit` names are returned, and `truncated` says whether more were left out.

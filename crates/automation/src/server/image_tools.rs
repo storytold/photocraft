@@ -785,6 +785,67 @@ pub mod plan {
         }
     }
 
+    fn be16(b: &[u8], at: usize) -> Option<u32> {
+        let s = b.get(at..at.checked_add(2)?)?;
+        Some(u32::from(u16::from_be_bytes([s[0], s[1]])))
+    }
+
+    fn be32(b: &[u8], at: usize) -> Option<u32> {
+        let s = b.get(at..at.checked_add(4)?)?;
+        Some(u32::from_be_bytes([s[0], s[1], s[2], s[3]]))
+    }
+
+    /// The pixel size an image file declares in its header, read from its first bytes without
+    /// decoding: PNG, JPEG and PSD/PSB here, other formats through
+    /// [`photocraft_codecs::probe_size`]. `None` when the header does not say (or the format has
+    /// no cheap probe); the decoder's own limits still apply to those.
+    pub fn header_size(head: &[u8]) -> Option<(u32, u32)> {
+        if head.starts_with(b"\x89PNG\r\n\x1a\n") && head.get(12..16) == Some(b"IHDR".as_slice()) {
+            return Some((be32(head, 16)?, be32(head, 20)?));
+        }
+        if head.starts_with(b"8BPS") {
+            // Version 1 (PSD) or 2 (PSB): height then width, 32-bit big-endian.
+            return Some((be32(head, 18)?, be32(head, 14)?));
+        }
+        if head.starts_with(&[0xFF, 0xD8]) {
+            return jpeg_size(head);
+        }
+        photocraft_codecs::probe_size(head).ok()
+    }
+
+    /// Walk JPEG markers to the first start-of-frame segment.
+    fn jpeg_size(b: &[u8]) -> Option<(u32, u32)> {
+        let mut at = 2usize;
+        // A JPEG has a few dozen segments before its frame header; bound the walk anyway.
+        for _ in 0..4096 {
+            if *b.get(at)? != 0xFF {
+                return None;
+            }
+            let marker = *b.get(at + 1)?;
+            match marker {
+                0xFF => at += 1, // fill byte
+                0x01 | 0xD0..=0xD7 => at += 2,
+                0xC0..=0xCF if !matches!(marker, 0xC4 | 0xC8 | 0xCC) => {
+                    let (h, w) = (be16(b, at + 5)?, be16(b, at + 7)?);
+                    return (h > 0 && w > 0).then_some((w, h));
+                }
+                0xD9 | 0xDA => return None, // end of image / start of scan before any frame
+                _ => at = at.checked_add(2)?.checked_add(usize::try_from(be16(b, at + 2)?).ok()?)?,
+            }
+        }
+        None
+    }
+
+    /// Refuse a declared size over the task tools' pixel budget.
+    pub fn check_declared_size(name: &str, size: Option<(u32, u32)>) -> Result<(), String> {
+        match size {
+            Some((w, h)) if u64::from(w) * u64::from(h) > MAX_TASK_PIXELS => {
+                Err(format!("`{name}` declares {w} x {h} pixels, over the {} megapixel limit of the task tools; it was not decoded", MAX_TASK_PIXELS >> 20))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// Join a request directory and a file name with a forward slash.
     pub fn join(dir: &str, name: &str) -> String {
         let dir = dir.trim_end_matches(['/', '\\']);
@@ -803,6 +864,17 @@ fn bad(msg: impl Into<String>) -> AutomationError {
 fn active_size(h: &Headless) -> Result<(u32, u32), AutomationError> {
     let d = h.session.active().ok_or_else(|| bad("no document open: open one with open_image or doc_new"))?;
     Ok((d.doc.size.width, d.doc.size.height))
+}
+
+/// How much of a file is read to find its declared pixel size.
+const HEADER_BYTES: usize = 1 << 20;
+
+/// Refuse a file whose header declares more pixels than the task tools allow, before the file is
+/// read in full or decoded. Files whose header gives no size are left to the decoder's limits.
+fn check_image_header(h: &Headless, path: &str) -> Result<(), AutomationError> {
+    let Some(ws) = h.workspace() else { return Ok(()) };
+    let head = ws.read_head(path, HEADER_BYTES)?;
+    plan::check_declared_size(path, plan::header_size(&head)).map_err(bad)
 }
 
 fn run(h: &mut Headless, s: plan::Step) -> Result<Value, AutomationError> {
@@ -1071,6 +1143,7 @@ fn save(h: &mut Headless, index: Option<usize>, path: &str, format: Option<&str>
 
 fn inspect_file(h: &mut Headless, path: &str) -> Result<Value, AutomationError> {
     let previous = h.session.active_index();
+    check_image_header(h, path)?;
     let opened = h.open(Path::new(path))?;
     let index = opened.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad("open returned no index"))?;
     let result = summary(h, Some(index), true);
@@ -1110,48 +1183,40 @@ fn batch(h: &mut Headless, p: &BatchProcessParams) -> Result<Value, AutomationEr
     // Listing more than `max_files` tells us whether some were left out.
     let (entries, listing_truncated) = ws.list_read_dir(&p.input_dir, MAX_BATCH_FILES.saturating_mul(4))?;
     ws.create_write_dir(&p.output_dir)?;
-    let wanted: Vec<(String, u64)> = entries.into_iter().filter(|(name, _)| plan::batch_wants(name, p.extensions.as_deref())).collect();
+    let wanted: Vec<(String, u64)> = entries.iter().filter(|(name, _)| plan::batch_wants(name, p.extensions.as_deref())).cloned().collect();
     let truncated = listing_truncated || wanted.len() > max_files;
+
+    // Plan every file first: nothing is written until all outputs are known, so an output can be
+    // checked against every input before the first save.
+    let mut items: Vec<BatchItem> = Vec::new();
+    for (name, bytes) in wanted.into_iter().take(max_files) {
+        let input = plan::join(&p.input_dir, &name);
+        let item = plan_one(h, &input, &name, bytes, suffix, p);
+        let stop = p.stop_on_error && matches!(item, BatchItem::Failed(_));
+        items.push(item);
+        if stop {
+            break;
+        }
+    }
+    check_batch_collisions(h, &entries, p, &items)?;
 
     let previous = h.session.active_index();
     let mut files = Vec::new();
     let (mut processed, mut failed, mut skipped) = (0usize, 0usize, 0usize);
-    for (name, bytes) in wanted.into_iter().take(max_files) {
-        let input = plan::join(&p.input_dir, &name);
-        if bytes > MAX_BATCH_FILE_BYTES {
-            skipped += 1;
-            files.push(json!({"input": input, "status": "skipped", "reason": format!("larger than {} MiB", MAX_BATCH_FILE_BYTES >> 20)}));
-            continue;
-        }
-        let out_name = match plan::batch_output_name(&name, suffix, p.format.as_deref()) {
-            Ok(n) => n,
-            Err(e) => {
-                failed += 1;
-                files.push(json!({"input": input, "status": "failed", "error": e}));
-                if p.stop_on_error {
-                    break;
-                }
+    for item in items {
+        let (input, output) = match item {
+            BatchItem::Skipped(row) => {
+                skipped += 1;
+                files.push(row);
                 continue;
             }
-        };
-        let output = plan::join(&p.output_dir, &out_name);
-        // A name the path rules refuse (`12:30.png`, `con.png`) fails this file, not the batch.
-        let exists = match h.workspace().map(|ws| ws.write_target_exists(&output)).transpose() {
-            Ok(exists) => exists.unwrap_or(false),
-            Err(e) => {
+            BatchItem::Failed(row) => {
                 failed += 1;
-                files.push(json!({"input": input, "output": output, "status": "failed", "error": e.to_string()}));
-                if p.stop_on_error {
-                    break;
-                }
+                files.push(row);
                 continue;
             }
+            BatchItem::Run { input, output } => (input, output),
         };
-        if exists && !p.overwrite {
-            skipped += 1;
-            files.push(json!({"input": input, "output": output, "status": "skipped", "reason": "output exists (pass overwrite: true to replace it)"}));
-            continue;
-        }
         let started = Instant::now();
         let outcome = process_one(h, &input, &output, p, &opts);
         let ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -1176,9 +1241,99 @@ fn batch(h: &mut Headless, p: &BatchProcessParams) -> Result<Value, AutomationEr
     Ok(json!({"processed": processed, "failed": failed, "skipped": skipped, "truncated": truncated, "files": files}))
 }
 
+/// One file of a batch after planning.
+enum BatchItem {
+    /// Process `input` into `output`.
+    Run { input: String, output: String },
+    /// Left alone; the reply row says why.
+    Skipped(Value),
+    /// Cannot be processed; the reply row says why.
+    Failed(Value),
+}
+
+fn batch_failed(input: &str, output: Option<&str>, error: &str) -> BatchItem {
+    // Every failed file is logged, whatever stage refused it.
+    tracing::warn!(input = %input, error = %error, "batch_process file failed");
+    let mut row = json!({"input": input, "status": "failed", "error": error});
+    if let Some(o) = output {
+        row["output"] = json!(o);
+    }
+    BatchItem::Failed(row)
+}
+
+/// Decide what happens to one batch file, without writing anything.
+fn plan_one(h: &Headless, input: &str, name: &str, bytes: u64, suffix: &str, p: &BatchProcessParams) -> BatchItem {
+    if bytes > MAX_BATCH_FILE_BYTES {
+        return BatchItem::Skipped(json!({"input": input, "status": "skipped", "reason": format!("larger than {} MiB", MAX_BATCH_FILE_BYTES >> 20)}));
+    }
+    let out_name = match plan::batch_output_name(name, suffix, p.format.as_deref()) {
+        Ok(n) => n,
+        Err(e) => return batch_failed(input, None, &e),
+    };
+    let output = plan::join(&p.output_dir, &out_name);
+    // A name the path rules refuse (`12:30.png`, `con.png`) fails this file, not the batch.
+    let exists = match h.workspace().map(|ws| ws.write_target_exists(&output)).transpose() {
+        Ok(exists) => exists.unwrap_or(false),
+        Err(e) => return batch_failed(input, Some(&output), &e.to_string()),
+    };
+    if exists && !p.overwrite {
+        return BatchItem::Skipped(
+            json!({"input": input, "output": output, "status": "skipped", "reason": "output exists (pass overwrite: true to replace it)"}),
+        );
+    }
+    BatchItem::Run { input: input.to_owned(), output }
+}
+
+/// Refuse the whole batch, before anything is written, when an output would replace a file of
+/// the input folder other than its own source (which may not have been read yet), or when two
+/// inputs would write the same output (`photo.jpg` and `photo.png` with `format: "webp"`).
+/// Writing a file back over its own source stays possible (with `overwrite`).
+fn check_batch_collisions(h: &Headless, entries: &[(String, u64)], p: &BatchProcessParams, items: &[BatchItem]) -> Result<(), AutomationError> {
+    let Some(ws) = h.workspace() else { return Ok(()) };
+    let input_dir = p.input_dir.as_str();
+    // The listing is bounded, so in a very large folder not every input is in `entries`: when the
+    // output folder is the input folder, any existing output other than its own source counts too.
+    let same_dir = ws.comparable_path(input_dir, false)? == ws.comparable_path(&p.output_dir, true)?;
+    let mut inputs = std::collections::HashMap::new();
+    for (name, _) in entries {
+        let input = plan::join(input_dir, name);
+        // A name the read root refuses cannot be an input of this batch either.
+        if let Ok(key) = ws.comparable_path(&input, false) {
+            inputs.insert(key, input);
+        }
+    }
+    let mut outputs: std::collections::HashMap<String, &str> = std::collections::HashMap::new();
+    let mut problems = Vec::new();
+    for item in items {
+        let BatchItem::Run { input, output } = item else { continue };
+        let own = ws.comparable_path(input, false)?;
+        let key = ws.comparable_path(output, true)?;
+        if key != own {
+            if let Some(other) = inputs.get(&key) {
+                problems.push(format!("`{input}` would write `{output}`, replacing the input `{other}`"));
+            } else if same_dir && ws.write_target_exists(output)? {
+                problems.push(format!("`{input}` would write `{output}`, replacing a file of the input folder"));
+            }
+        }
+        if let Some(first) = outputs.insert(key, input.as_str()) {
+            problems.push(format!("`{first}` and `{input}` would both write `{output}`"));
+        }
+    }
+    if problems.is_empty() {
+        return Ok(());
+    }
+    let shown: Vec<String> = problems.iter().take(5).cloned().collect();
+    let more = if problems.len() > 5 { format!(" (and {} more)", problems.len() - 5) } else { String::new() };
+    Err(bad(format!(
+        "batch_process refused before writing anything: {}{more}. Use another output_dir, a suffix or a format that keeps the names apart",
+        shown.join("; ")
+    )))
+}
+
 /// Open, edit, save and close one batch file. The document is always closed, so memory holds at
 /// most one batch document at a time.
 fn process_one(h: &mut Headless, input: &str, output: &str, p: &BatchProcessParams, opts: &photocraft_io::ExportOptions) -> Result<Value, AutomationError> {
+    check_image_header(h, input)?;
     let opened = h.open(Path::new(input))?;
     let index = opened.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok()).ok_or_else(|| bad("open returned no index"))?;
     let result = edit_and_save(h, index, output, p, opts);
@@ -1270,6 +1425,7 @@ impl PhotocraftMcp {
                           Returns {document: {index, name, width, height, layerCount, …}, warnings}.")]
     async fn open_image(&self, Parameters(p): Parameters<OpenImageParams>) -> Result<CallToolResult, McpError> {
         self.task("open_image", move |h| {
+            check_image_header(h, &p.path)?;
             let opened = h.open(Path::new(&p.path))?;
             let index = opened.get("index").and_then(Value::as_u64).and_then(|i| usize::try_from(i).ok());
             Ok(json!({"document": summary(h, index, false)?, "warnings": opened.get("warnings")}))

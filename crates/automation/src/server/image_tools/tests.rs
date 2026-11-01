@@ -193,3 +193,41 @@ fn replies_are_measured_with_their_duplicated_text() {
     let msg = r.structured_content.unwrap()["error"].as_str().unwrap().to_owned();
     assert!(msg.ends_with("(error text truncated)") && msg.chars().count() < MAX_ERROR_CHARS + 64);
 }
+
+fn png_header(w: u32, h: u32) -> Vec<u8> {
+    let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    b.extend_from_slice(&w.to_be_bytes());
+    b.extend_from_slice(&h.to_be_bytes());
+    b.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    b
+}
+
+#[test]
+fn header_sizes_are_read_without_decoding() {
+    assert_eq!(plan::header_size(&png_header(640, 480)), Some((640, 480)));
+    // PSD: signature, version, 6 reserved, channels, height, width.
+    let mut psd = b"8BPS\0\x01\0\0\0\0\0\0\0\x03".to_vec();
+    psd.extend_from_slice(&300u32.to_be_bytes());
+    psd.extend_from_slice(&500u32.to_be_bytes());
+    assert_eq!(plan::header_size(&psd), Some((500, 300)));
+    // JPEG: SOI, an APP0 segment to skip, then SOF0 with height 1080 and width 1920.
+    let mut jpg = vec![0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x04, 0xAA, 0xBB];
+    jpg.extend_from_slice(&[0xFF, 0xC0, 0x00, 0x11, 0x08, 0x04, 0x38, 0x07, 0x80, 0x03]);
+    assert_eq!(plan::header_size(&jpg), Some((1920, 1080)));
+    // A DHT (0xC4) is not a frame header.
+    let dht_only = vec![0xFF, 0xD8, 0xFF, 0xC4, 0x00, 0x02, 0xFF, 0xD9];
+    assert_eq!(plan::header_size(&dht_only), None);
+    // Truncated or unknown headers say nothing (and never panic).
+    for junk in [&b""[..], b"\x89PNG", b"8BPS\0\x01", &[0xFF, 0xD8, 0xFF, 0xE0, 0xFF, 0xFF], b"hello world"] {
+        assert_eq!(plan::header_size(junk), None, "{junk:?}");
+    }
+}
+
+#[test]
+fn declared_sizes_over_the_budget_are_refused() {
+    assert!(plan::check_declared_size("a.png", Some((16_000, 16_000))).is_ok(), "256 million pixels pass");
+    let e = plan::check_declared_size("big.png", Some((20_000, 20_000))).unwrap_err();
+    assert!(e.contains("20000 x 20000") && e.contains("not decoded"), "{e}");
+    assert!(plan::check_declared_size("x", Some((u32::MAX, u32::MAX))).is_err(), "no overflow");
+    assert!(plan::check_declared_size("unknown.tif", None).is_ok(), "unknown sizes are left to the decoder");
+}

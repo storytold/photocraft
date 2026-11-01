@@ -509,3 +509,71 @@ async fn batch_process_reports_unwritable_names_per_file() {
     assert_eq!((v["processed"].as_u64(), v["failed"].as_u64()), (Some(0), Some(1)), "sorted first, then stops: {v}");
     c.cancel().await.unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn batch_process_never_replaces_an_unread_input() {
+    let root = Root::new("batch-collide");
+    std::fs::create_dir_all(root.path("in")).unwrap();
+    let c = connect(root.server()).await;
+    two_tone(&c, 8, 8, 4, "#ff0000").await;
+    ok(&call(&c, "export_image", json!({"path": "in/photo.jpg"})).await);
+    ok(&call(&c, "export_image", json!({"path": "in/photo.png"})).await);
+    let original = std::fs::read(root.path("in/photo.png")).unwrap();
+
+    // photo.jpg -> photo.png would replace the input photo.png before it is read.
+    let msg = failed(&call(&c, "batch_process", json!({"input_dir": "in", "output_dir": "in", "format": "png", "overwrite": true})).await);
+    assert!(msg.contains("before writing anything") && msg.contains("replacing the input"), "{msg}");
+    assert_eq!(std::fs::read(root.path("in/photo.png")).unwrap(), original, "the input is untouched");
+    // The same request spelled through the root's absolute path is caught too.
+    let abs_in = root.path("in").to_str().unwrap().to_owned();
+    let msg = failed(&call(&c, "batch_process", json!({"input_dir": "in", "output_dir": abs_in, "format": "png", "overwrite": true})).await);
+    assert!(msg.contains("replacing the input"), "{msg}");
+
+    // Two inputs that would write one output.
+    let msg = failed(&call(&c, "batch_process", json!({"input_dir": "in", "output_dir": "out", "format": "webp"})).await);
+    assert!(msg.contains("would both write"), "{msg}");
+    assert!(!root.path("out/photo.webp").exists(), "nothing was written");
+
+    // Writing a file back over its own source is still allowed with overwrite.
+    std::fs::remove_file(root.path("in/photo.jpg")).unwrap();
+    let v = ok(&call(
+        &c,
+        "batch_process",
+        json!({"input_dir": "in", "output_dir": "in", "overwrite": true, "operations": [{"tool": "flip_image", "direction": "vertical"}]}),
+    )
+    .await);
+    assert_eq!(v["processed"], 1, "{v}");
+    c.cancel().await.unwrap();
+}
+
+/// A PNG whose header claims `w` x `h` pixels but holds no image data.
+fn fake_png(w: u32, h: u32) -> Vec<u8> {
+    let mut b = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+    b.extend_from_slice(&w.to_be_bytes());
+    b.extend_from_slice(&h.to_be_bytes());
+    b.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    b
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn huge_declared_images_are_refused_before_decoding() {
+    let root = Root::new("huge");
+    std::fs::create_dir_all(root.path("in")).unwrap();
+    // 20000 x 20000 = 400 megapixels: under the decoder's own limit, over the task tools' budget.
+    std::fs::write(root.path("in/huge.png"), fake_png(20_000, 20_000)).unwrap();
+    let c = connect(root.server()).await;
+
+    for tool in ["open_image", "inspect_image"] {
+        let msg = failed(&call(&c, tool, json!({"path": "in/huge.png"})).await);
+        assert!(msg.contains("20000 x 20000") && msg.contains("not decoded"), "{tool}: {msg}");
+    }
+    assert_eq!(generic(&call(&c, "session_list", json!({})).await)["documents"].as_array().expect("documents").len(), 0, "nothing was opened");
+
+    two_tone(&c, 8, 8, 4, "#00ff00").await;
+    ok(&call(&c, "export_image", json!({"path": "in/small.png"})).await);
+    let v = ok(&call(&c, "batch_process", json!({"input_dir": "in", "output_dir": "out"})).await);
+    assert_eq!((v["processed"].as_u64(), v["failed"].as_u64()), (Some(1), Some(1)), "{v}");
+    let huge = v["files"].as_array().unwrap().iter().find(|f| f["input"] == "in/huge.png").unwrap();
+    assert!(huge["error"].as_str().unwrap().contains("megapixel"), "{huge}");
+    c.cancel().await.unwrap();
+}
