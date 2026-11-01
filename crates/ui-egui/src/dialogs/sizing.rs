@@ -159,16 +159,40 @@ pub fn body(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     }
 }
 
-fn label(ui: &mut egui::Ui, text: &str, width: f32) {
-    let t = Tokens::get(ui.ctx());
-    let (r, _) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
-    ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, text, egui::FontId::proportional(12.0), t.text_dim);
+/// Narrowest and widest label column: English fits the narrowest; a longer translation widens
+/// the column (the dialog grows with it) up to the widest, and past that elides, as
+/// `docs/ui-design.md` asks of a label beside a fixed-width control.
+const LABEL_MIN_W: f32 = 90.0;
+const LABEL_MAX_W: f32 = 240.0;
+/// Gap between a label and its field.
+const LABEL_GAP: f32 = 6.0;
+
+fn label_font() -> egui::FontId {
+    egui::FontId::proportional(12.0)
 }
 
-fn info_row(ui: &mut egui::Ui, k: &str, v: String) {
+/// Width of a label column that holds every one of `labels` in the current language.
+fn label_col(ui: &egui::Ui, labels: &[&str]) -> f32 {
+    let widest = labels.iter().map(|s| ui.painter().layout_no_wrap((*s).to_owned(), label_font(), Color32::PLACEHOLDER).size().x).fold(0.0, f32::max);
+    (widest + LABEL_GAP).ceil().clamp(LABEL_MIN_W, LABEL_MAX_W)
+}
+
+fn label(ui: &mut egui::Ui, text: &str, width: f32) {
+    let t = Tokens::get(ui.ctx());
+    let (r, resp) = ui.allocate_exact_size(vec2(width, 22.0), Sense::hover());
+    let galley = crate::tab_strip::elided(ui, text, label_font(), t.text_dim, width - LABEL_GAP);
+    let elided = galley.elided;
+    let rect = Align2::RIGHT_CENTER.anchor_size(pos2(r.right() - LABEL_GAP, r.center().y), galley.size());
+    ui.painter().galley(rect.min, galley, t.text_dim);
+    if elided {
+        resp.on_hover_text(text);
+    }
+}
+
+fn info_row(ui: &mut egui::Ui, k: &str, v: String, label_w: f32) {
     let t = Tokens::get(ui.ctx());
     ui.horizontal(|ui| {
-        label(ui, tl!(k), 90.0);
+        label(ui, tl!(k), label_w);
         ui.label(egui::RichText::new(v).color(t.text).size(12.0));
     });
 }
@@ -221,8 +245,14 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         f.insert("height".into(), json!(oh));
     }
     let (w, h) = (num(f, "width").round(), num(f, "height").round());
-    info_row(ui, tl!("Image Size:"), crate::i18n::fmt(tl!("{size} (was {old})"), &[("size", &human_bytes(w * h * bpp)), ("old", &human_bytes(ow * oh * bpp))]));
-    info_row(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64));
+    let label_w = label_col(ui, &[tl!("Image Size:"), tl!("Dimensions:"), tl!("Width:"), tl!("Height:"), tl!("Resolution:")]);
+    info_row(
+        ui,
+        tl!("Image Size:"),
+        crate::i18n::fmt(tl!("{size} (was {old})"), &[("size", &human_bytes(w * h * bpp)), ("old", &human_bytes(ow * oh * bpp))]),
+        label_w,
+    );
+    info_row(ui, tl!("Dimensions:"), format!("{} px × {} px", w as i64, h as i64), label_w);
     ui.add_space(6.0);
     // Photoshop keeps width and height linked while Resample is off.
     let mut constrain = !resampling || f.get("__constrain").and_then(Value::as_bool).unwrap_or(true);
@@ -231,13 +261,13 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let unit = f.get("__unit").and_then(Value::as_str).unwrap_or("px").to_string();
     let editable = resampling || !matches!(unit.as_str(), "px" | "percent");
     let w_row = ui.horizontal(|ui| {
-        label(ui, tl!("Width:"), 90.0);
+        label(ui, tl!("Width:"), label_w);
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "width", "__origW", "is-w")).inner;
         unit_dropdown(ui, f, "is-unit-w");
         c
     });
     let h_row = ui.horizontal(|ui| {
-        label(ui, tl!("Height:"), 90.0);
+        label(ui, tl!("Height:"), label_w);
         let c = ui.add_enabled_ui(editable, |ui| dim_field(ui, f, "height", "__origH", "is-h")).inner;
         unit_dropdown(ui, f, "is-unit-h");
         c
@@ -290,7 +320,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
     }
     ui.horizontal(|ui| {
-        label(ui, tl!("Resolution:"), 90.0);
+        label(ui, tl!("Resolution:"), label_w);
         let mut r = f.get("resolution").and_then(Value::as_f64).unwrap_or(72.0) as f32;
         if crate::widgets::value_field(ui, &mut r, 1.0..=30000.0, "", 90.0).accessible_name(tl!("Resolution")).changed() {
             let r = r.max(1.0) as f64;
@@ -314,7 +344,7 @@ fn image_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        label(ui, "", 90.0);
+        label(ui, "", label_w);
         let mut on = resampling;
         if crate::widgets::checkbox(ui, &mut on, tl!("Resample")).changed() {
             // Back on, it takes the method it had when the dialog opened.
@@ -354,10 +384,11 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     let (ow, oh) = (num(f, "__origW"), num(f, "__origH"));
     let bpp = num(f, "__bytesPerPixel").max(1.0);
     let relative = f.get("relative").and_then(Value::as_bool).unwrap_or(false);
+    let label_w = label_col(ui, &[tl!("Size:"), tl!("Width:"), tl!("Height:"), tl!("Anchor:")]);
     ui.label(egui::RichText::new(tl!("Current Size")).font(crate::theme::semibold(12.0)).color(t.text));
-    info_row(ui, tl!("Size:"), human_bytes(ow * oh * bpp));
-    info_row(ui, tl!("Width:"), format!("{} px", ow as i64));
-    info_row(ui, tl!("Height:"), format!("{} px", oh as i64));
+    info_row(ui, tl!("Size:"), human_bytes(ow * oh * bpp), label_w);
+    info_row(ui, tl!("Width:"), format!("{} px", ow as i64), label_w);
+    info_row(ui, tl!("Height:"), format!("{} px", oh as i64), label_w);
     ui.add_space(6.0);
     crate::widgets::hairline(ui);
     ui.add_space(6.0);
@@ -367,17 +398,17 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         ui.label(egui::RichText::new(human_bytes(nw.max(0.0) * nh.max(0.0) * bpp)).color(t.text_dim).size(12.0));
     });
     ui.horizontal(|ui| {
-        label(ui, tl!("Width:"), 90.0);
+        label(ui, tl!("Width:"), label_w);
         dim_field(ui, f, "width", "__origW", "cs-w");
         unit_dropdown(ui, f, "cs-unit-w");
     });
     ui.horizontal(|ui| {
-        label(ui, tl!("Height:"), 90.0);
+        label(ui, tl!("Height:"), label_w);
         dim_field(ui, f, "height", "__origH", "cs-h");
         unit_dropdown(ui, f, "cs-unit-h");
     });
     ui.horizontal(|ui| {
-        label(ui, "", 90.0);
+        label(ui, "", label_w);
         let mut rel = relative;
         if crate::widgets::checkbox(ui, &mut rel, tl!("Relative")).changed() {
             // Convert between absolute and delta so the resulting canvas is unchanged.
@@ -389,7 +420,7 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
         }
     });
     ui.horizontal(|ui| {
-        label(ui, tl!("Anchor:"), 90.0);
+        label(ui, tl!("Anchor:"), label_w);
         let cur = f.get("anchor").and_then(Value::as_str).unwrap_or("center").to_string();
         if let Some(a) = anchor_grid(ui, &cur, nw - ow, nh - oh) {
             f.insert("anchor".into(), json!(a));
@@ -397,7 +428,8 @@ fn canvas_size(ui: &mut egui::Ui, f: &mut Map<String, Value>) {
     });
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        label(ui, tl!("Canvas extension color:"), 150.0);
+        let ext = tl!("Canvas extension color:");
+        label(ui, ext, label_col(ui, &[ext]).max(150.0));
         let mut cur = f.get("extensionColor").and_then(Value::as_str).unwrap_or("background").to_string();
         let opts = [
             ("foreground".to_string(), tl!("Foreground")),
