@@ -1,8 +1,12 @@
 //! Develop's per-pixel stages resolved for one image: every constant and table they use, so
 //! another implementation of them (the GPU preview, `photocraft_gpu::CameraRawDevelop`) runs the
 //! same maths. [`develop`](super::develop) builds its own constants with the same functions.
+//! Shadows and Highlights, the one spatial stage resolved here, come as a [`LocalTone`].
 
+use super::local_tone::{LocalTone, WORK_SIDE};
 use super::{CameraRaw, Encoding, Wheel, curve_lut, hsv_to_rgb, is_linear, luma, parametric_lut, white_balance_gains, whites_blacks};
+
+pub use whites_blacks::Model as WhitesBlacksModel;
 
 /// Entries of the tone curve tables (parametric and point curves).
 pub const CURVE_LUT: usize = 1024;
@@ -22,6 +26,11 @@ pub(crate) fn gains(p: &CameraRaw) -> Option<[f32; 3]> {
 /// Contrast's strength, when Contrast is set.
 fn contrast(p: &CameraRaw) -> Option<f32> {
     (p.contrast != 0.0).then_some(p.contrast / 100.0 * 0.6)
+}
+
+/// Whites and Blacks' tables, for an implementation that measures the image's points itself.
+pub fn whites_blacks_model() -> WhitesBlacksModel {
+    whites_blacks::model()
 }
 
 /// Whites and Blacks as two curve rows for the image's amounts.
@@ -149,10 +158,18 @@ impl Grain {
 pub struct PerPixel {
     /// 1. White balance and exposure gains in linear light (sRGB-decoded values).
     pub gains: Option<[f32; 3]>,
+    /// 3. Shadows and Highlights: a local Laplacian filter of the whole frame, then each pixel's
+    ///    light scaled by the change of its log luminance.
+    pub local_tone: Option<LocalTone>,
     /// 3. Contrast's strength (Contrast without Texture or Clarity is per pixel).
     pub contrast: Option<f32>,
     /// 3b. Whites and Blacks, in the document's encoding.
     pub whites_blacks: Option<WhitesBlacks>,
+    /// 3b. Whites and Blacks to measure the image's points for (the sliders, −100 … 100), when
+    ///     `local_tone` is set: the points then depend on the filter's output, so whatever runs
+    ///     it measures them and picks the curves from [`whites_blacks_model`]. `whites_blacks` is
+    ///     then `None`.
+    pub measure_whites_blacks: Option<[f32; 2]>,
     /// The document's transfer curve: 0 for sRGB's, else a power-law gamma.
     pub encoding: f32,
     /// 4. Vibrance and Saturation (slider / 100).
@@ -183,6 +200,15 @@ impl CameraRaw {
             || self.noise_luminance > 0.0
             || self.noise_color > 0.0
     }
+
+    /// Whether developing needs a spatial stage other than Shadows and Highlights.
+    fn spatial_beyond_local_tone(&self) -> bool {
+        self.dehaze != 0.0
+            || [self.texture, self.clarity].iter().any(|v| *v != 0.0)
+            || self.sharpen_amount > 0.0
+            || self.noise_luminance > 0.0
+            || self.noise_color > 0.0
+    }
 }
 
 /// The image's black and white points that Whites and Blacks adapt to, for `px` (`w × h`,
@@ -201,16 +227,27 @@ pub fn white_black_points(px: &[[f32; 4]], w: usize, h: usize, p: &CameraRaw) ->
     }))
 }
 
-/// Develop's stages for settings without spatial stages, on a `w × h` image; `points` are the
-/// image's [`white_black_points`]. `None` when `p` needs a spatial stage or Calibration (these
-/// stages don't run it), or Whites or Blacks is set without `points`. The points themselves
-/// leave Calibration out, so a caller may cache them across Calibration changes.
+/// Develop's stages for settings whose only spatial stage is Shadows and Highlights, on a
+/// `w × h` image; `points` are the image's [`white_black_points`]. `None` when `p` needs another
+/// spatial stage or Calibration (these stages don't run it), Shadows or Highlights on a frame
+/// wider than the filter's working copy (the develop then filters a reduced copy) or only 2
+/// pixels on its short side, or Whites or Blacks without Shadows and Highlights and without
+/// `points`. The points themselves leave Calibration out, so a caller may cache them across
+/// Calibration changes.
 pub fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<(f32, f32)>) -> Option<PerPixel> {
-    if p.spatial() || !p.calibration_neutral() {
+    if p.spatial_beyond_local_tone() || !p.calibration_neutral() {
+        return None;
+    }
+    // The develop leaves frames under 2 pixels on a side alone.
+    let local_tone = if w >= 2 && h >= 2 { LocalTone::new(p.shadows, p.highlights) } else { None };
+    // At 2 pixels on the short side the GPU pass's pyramid has one level, so the CPU develops it.
+    if local_tone.is_some() && (w.max(h) > WORK_SIDE || w.min(h) <= 2) {
         return None;
     }
     let identity = p.is_identity();
-    let whites_blacks = if p.whites != 0.0 || p.blacks != 0.0 {
+    let wb_on = p.whites != 0.0 || p.blacks != 0.0;
+    let measure_whites_blacks = (wb_on && local_tone.is_some()).then(|| [p.whites.clamp(-100.0, 100.0), p.blacks.clamp(-100.0, 100.0)]);
+    let whites_blacks = if wb_on && measure_whites_blacks.is_none() {
         let (bp, wp) = points?;
         let (xw, xb) = whites_blacks::amounts(p.whites.clamp(-100.0, 100.0), p.blacks.clamp(-100.0, 100.0), bp, wp);
         (xw != 0.0 || xb != 0.0).then(|| WhitesBlacks {
@@ -225,8 +262,10 @@ pub fn per_pixel(p: &CameraRaw, w: usize, h: usize, float: bool, points: Option<
     let pts = |c: &Vec<[f32; 2]>| (!is_linear(c)).then(|| curve_lut(c, CURVE_LUT));
     Some(PerPixel {
         gains: gains(p),
+        local_tone,
         contrast: contrast(p),
         whites_blacks,
+        measure_whites_blacks,
         encoding: Encoding::of(p.encoding_gamma).0,
         presence: (p.vibrance != 0.0 || p.saturation != 0.0).then_some([p.vibrance / 100.0, p.saturation / 100.0]),
         parametric: parametric_on.then(|| parametric_lut(p, CURVE_LUT)),
