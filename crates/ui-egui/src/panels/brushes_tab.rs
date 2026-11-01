@@ -862,7 +862,7 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
                         left = indent;
                     }
                     for row in run.chunks(cols) {
-                        ui.horizontal(|ui| {
+                        crate::direction::dialog_row(ui, |ui| {
                             ui.add_space(left);
                             for p in row {
                                 preset_card(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, d.show, cell, scale, acts);
@@ -872,7 +872,7 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
                 } else {
                     let (card_w, cols) = card_columns(ui.available_width(), indent, scale);
                     for row in run.chunks(cols) {
-                        ui.horizontal(|ui| {
+                        crate::direction::dialog_row(ui, |ui| {
                             ui.add_space(indent);
                             for p in row {
                                 preset_card(ui, p, d.current.is_some_and(|n| p.name.eq_ignore_ascii_case(n)), d.presets, d.show, card_w, scale, acts);
@@ -888,7 +888,7 @@ fn draw_nodes(ui: &mut egui::Ui, d: &Draw, nodes: &[Node], depth: usize, acts: &
             ui.scope_builder(egui::UiBuilder::new().layout(crate::direction::body_layout()), |ui| {
                 ui.spacing_mut().item_spacing = vec2(GRID_GAP, GRID_GAP);
                 for row in run.chunks(cols) {
-                    ui.horizontal(|ui| {
+                    crate::direction::dialog_row(ui, |ui| {
                         ui.add_space(left);
                         for p in row {
                             grid_cell(
@@ -935,7 +935,7 @@ fn rename_bar(ui: &mut egui::Ui, st: &mut BrushesPanelState, acts: &mut Vec<Acti
         r.text = r.folder.last().unwrap_or(&r.name).clone();
     }
     let mut done = false;
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         let name_label = ui.label(RichText::new(if r.group { tl!("Group name") } else { tl!("Brush name") }).color(t.text_dim));
         let mut layouter = widgets::rtl_singleline_layouter(egui::FontId::default());
         let resp = ui
@@ -1065,7 +1065,7 @@ fn show_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     // Size of the current brush (Photoshop's Brushes panel slider).
     let before = app.session.tools.brush.clone();
     let mut b = before.clone();
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(RichText::new(tl!("Size")).color(t.text_dim));
         let slider_w = (ui.available_width() - 90.0).clamp(100.0, 260.0);
         let mut lv = b.size.max(1.0).ln();
@@ -1083,7 +1083,7 @@ fn show_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     commit_gesture(app, ui.ctx(), &before, &b);
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "search", 14.0, t.text_faint);
         ui.add_space(20.0);
         let search_w = (inner_w - 112.0).clamp(90.0, inner_w - 40.0);
@@ -1102,7 +1102,7 @@ fn show_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     });
     // The size of the previews in the list below (Photoshop's Brushes panel slider), apart from the
     // Size of the current brush above.
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         icons::paint(ui, egui::Rect::from_min_size(ui.cursor().min + vec2(0.0, 3.0), vec2(16.0, 16.0)), "image", 14.0, t.text_faint);
         ui.add_space(20.0);
         let w = (inner_w - 112.0).clamp(90.0, inner_w - 40.0);
@@ -1120,7 +1120,7 @@ fn show_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
     ui.add_space(4.0);
     widgets::hairline(ui);
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    crate::direction::dialog_row(ui, |ui| {
         ui.label(
             RichText::new(crate::i18n::trn(crate::i18n::current(), app.session.tools.presets.len() as u64, "{n} preset", "{n} presets")).color(t.text_faint),
         );
@@ -1152,3 +1152,38 @@ fn show_body(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
 mod rtl_tests;
 #[cfg(test)]
 mod tests;
+
+/// Twin of the migrated `dialog_row` rows (size, search, preview-size, rename, footer):
+/// item order mirrors only under RTL, and the item gap is identical in both directions.
+#[cfg(test)]
+mod rtl_row_twin {
+    use crate::direction::{Dir, direction_scope};
+
+    #[test]
+    fn migrated_dialog_row_mirrors_item_order_only_under_rtl() {
+        let rects = |dir: Dir| {
+            let _scope = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                ..Default::default()
+            };
+            let mut out = Vec::new();
+            ctx.run_ui(input, |ui| {
+                crate::direction::dialog_row(ui, |ui| {
+                    out.push(ui.label("aaa").rect);
+                    out.push(ui.label("b").rect);
+                });
+            });
+            out
+        };
+        let ltr = rects(Dir::Ltr);
+        let rtl = rects(Dir::Rtl);
+        assert!(ltr[0].left() < ltr[1].left(), "LTR keeps the item order: {ltr:?}");
+        assert!(rtl[0].right() > rtl[1].right(), "RTL mirrors the item order: {rtl:?}");
+        let ltr_gap = ltr[1].left() - ltr[0].right();
+        let rtl_gap = rtl[1].right() - rtl[0].left();
+        assert!((ltr_gap - rtl_gap).abs() < 0.5, "equal item gaps: ltr {ltr_gap} rtl {rtl_gap}");
+    }
+}
