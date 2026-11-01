@@ -265,4 +265,66 @@ mod tests {
         assert!(s.execute("layer.layerMask.moveTo", json!({"layer": group, "to": group})).is_err(), "onto itself");
         assert!(s.execute("layer.layerMask.moveTo", json!({"layer": group})).is_err(), "no target");
     }
+
+    /// #10485: dropping a mask back on its own layer's row is a no-op: the mask keeps its pixels,
+    /// enabled state and density, nothing else in the document changes, and no history step is added.
+    #[test]
+    fn dropping_a_layer_mask_on_its_own_layer_changes_nothing() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+        let a = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("select.rect", json!({"x": 4, "y": 4, "width": 10, "height": 10})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+        s.execute("layer.layerMask.edit", json!({"layer": a, "density": 40})).unwrap();
+        s.execute("layer.layerMask.enabled", json!({"layer": a, "enabled": false})).unwrap();
+        let doc = s.active().unwrap().doc.clone();
+        let mask = doc.layer(photocraft_doc::LayerId(a)).unwrap().mask.clone().expect("a has a mask");
+        assert!(!mask.enabled && (mask.density - 0.4).abs() < 1e-6, "set up: disabled, 40% density");
+        let history = s.active().unwrap().history.entries();
+        for (copy, replace) in [(false, false), (true, false), (false, true), (true, true)] {
+            let r = s.execute("layer.layerMask.moveTo", json!({"layer": a, "to": a, "copy": copy, "replace": replace}));
+            assert!(r.is_err(), "copy: {copy}, replace: {replace}: refused");
+            let st = s.active().unwrap();
+            assert_eq!(st.doc.layer(photocraft_doc::LayerId(a)).unwrap().mask.as_ref(), Some(&mask), "copy: {copy}, replace: {replace}: the mask is untouched");
+            assert!(st.doc == doc, "copy: {copy}, replace: {replace}: the document is unchanged");
+            assert_eq!(st.history.entries(), history, "copy: {copy}, replace: {replace}: no history step");
+        }
+    }
+
+    /// #10485: one undo after an ⌥-copy, or after a move or copy that replaces the target's own
+    /// mask, puts both layers' masks back exactly (pixels, enabled, density, feather).
+    #[test]
+    fn undo_restores_both_masks_after_a_copy_or_a_replace() {
+        let mut s = Session::new();
+        s.execute("file.new", json!({"width": 32, "height": 32})).unwrap();
+        let a = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("select.rect", json!({"x": 4, "y": 4, "width": 10, "height": 10})).unwrap();
+        s.execute("layer.layerMask.revealSelection", json!({})).unwrap();
+        s.execute("layer.layerMask.edit", json!({"layer": a, "density": 60, "feather": 3})).unwrap();
+        let b = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+        s.execute("select.rect", json!({"x": 18, "y": 2, "width": 6, "height": 20})).unwrap();
+        s.execute("layer.layerMask.hideSelection", json!({"layer": b})).unwrap();
+        s.execute("layer.layerMask.enabled", json!({"layer": b, "enabled": false})).unwrap();
+        let c = s.execute("layer.new.layer", json!({})).unwrap()["layer"].as_u64().unwrap();
+        let mask_of = |s: &Session, id: u64| s.active().unwrap().doc.layer(photocraft_doc::LayerId(id)).unwrap().mask.clone();
+        let (mask_a, mask_b) = (mask_of(&s, a).expect("a has a mask"), mask_of(&s, b).expect("b has a mask"));
+        assert_ne!(mask_a, mask_b, "set up: two different masks");
+        let doc = s.active().unwrap().doc.clone();
+        let history = s.active().unwrap().history.entries().len();
+        let cases = [
+            ("⌥-copy onto a layer without a mask", json!({"layer": a, "to": c, "copy": true}), c),
+            ("⌥-copy replacing a mask", json!({"layer": a, "to": b, "copy": true, "replace": true}), b),
+            ("move replacing a mask", json!({"layer": a, "to": b, "replace": true}), b),
+        ];
+        for (case, params, to) in cases {
+            s.execute("layer.layerMask.moveTo", params).unwrap();
+            assert_eq!(mask_of(&s, to).as_ref(), Some(&mask_a), "{case}: the target has a's mask");
+            assert_eq!(s.active().unwrap().history.entries().len(), history + 1, "{case}: one history step");
+            s.execute("edit.undo", json!({})).unwrap();
+            assert_eq!(mask_of(&s, a).as_ref(), Some(&mask_a), "{case}: a's mask is back");
+            assert_eq!(mask_of(&s, b).as_ref(), Some(&mask_b), "{case}: b's mask is back");
+            assert!(mask_of(&s, c).is_none(), "{case}: c has no mask again");
+            assert!(s.active().unwrap().doc == doc, "{case}: the document is as before");
+        }
+    }
 }
