@@ -1608,7 +1608,7 @@ fn properties(ui: &mut egui::Ui, w: &mut SelectMaskWorkspace, t: &Tokens) -> Opt
             }
         }
         if w.opts.view == Mode::Overlay {
-            ui.horizontal(|ui| {
+            crate::direction::dialog_row(ui, |ui| {
                 ui.label(tl!("Color"));
                 widgets::color_edit_button_srgb(ui, &mut w.opts.overlay_color, &crate::color_picker_ui::title_for(tl!("Overlay Color")));
                 ui.add_space(8.0);
@@ -1625,7 +1625,7 @@ fn properties(ui: &mut egui::Ui, w: &mut SelectMaskWorkspace, t: &Tokens) -> Opt
         }
     });
     section(ui, "sm-refine-mode", tl!("Refine Mode"), |ui| {
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             let _ = ui.selectable_label(true, tl!("Color Aware"));
             // Object Aware needs a learned segmentation model (#2788).
             ui.add_enabled_ui(false, |ui| ui.selectable_label(false, tl!("Object Aware")))
@@ -1642,7 +1642,7 @@ fn properties(ui: &mut egui::Ui, w: &mut SelectMaskWorkspace, t: &Tokens) -> Opt
         widgets::slider_row(ui, tl!("Feather"), &mut w.opts.feather, 0.0..=1000.0, " px", None);
         widgets::slider_row(ui, tl!("Contrast"), &mut w.opts.contrast, 0.0..=100.0, "%", None);
         widgets::slider_row(ui, tl!("Shift Edge"), &mut w.opts.shift_edge, -100.0..=100.0, "%", None);
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             if widgets::secondary_button(ui, tl!("Clear Selection"), 0.0).clicked() {
                 edit = Some(json!({"tool": "clear"}));
             }
@@ -1655,7 +1655,7 @@ fn properties(ui: &mut egui::Ui, w: &mut SelectMaskWorkspace, t: &Tokens) -> Opt
         widgets::checkbox(ui, &mut w.opts.decontaminate, tl!("Decontaminate Colors"));
         ui.add_enabled_ui(w.opts.decontaminate, |ui| widgets::slider_row(ui, tl!("Amount"), &mut w.opts.amount, 0.0..=100.0, "%", None));
         w.opts.follow_decontaminate();
-        ui.horizontal(|ui| {
+        crate::direction::dialog_row(ui, |ui| {
             ui.label(tl!("Output To"));
             let labels =
                 [tl!("Selection"), tl!("Layer Mask"), tl!("New Layer"), tl!("New Layer With Mask"), tl!("New Document"), tl!("New Document With Mask")];
