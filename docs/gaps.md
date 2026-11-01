@@ -76,7 +76,7 @@ what an agent can't finish alone.
 - **Estimate:** 60–100 h (2–9 h each, per the calibration).
 
 ### G7. Workspaces shown as parameter dialogs
-- **Done 2026-11-01 (#8822):** Select and Mask stores refinement and all six outputs as sparse tiles, shares solid interiors, and reads Refine Edge Brush preview coverage per tile. Thin diagonal selections and Select All on a 100,000 × 100,000 canvas no longer require a dense bounding-box result. Actual candidate work and per-block scratch remain bounded; maximum-feather work can still return a memory error before document mutation. Refine Hair, Object Aware and Presets remain open.
+- **Done 2026-11-01 (#8822):** Select and Mask stores refinement and all six outputs as sparse tiles, shares solid interiors, and reads Refine Edge Brush preview coverage per tile. Thin diagonal selections and Select All on a 100,000 × 100,000 canvas no longer require a dense bounding-box result. [Release measurements and preview checks](select-mask-sparse-refine.md): bounded queues improve diagonal throughput; actual candidate work and aggregate scratch remain bounded; maximum-feather work can still return a memory error before document mutation. Refine Hair, Object Aware and Presets remain open.
 - **Missing:** Select and Mask's Refine Hair (#2671), Object Aware refine mode (#2788) and Presets
   (TOOL-214-1; the workspace landed 2026-10-23, #7069, #8148: Photoshop's layout with its own
   Quick Selection, Refine Edge Brush, Brush, Object Selection, Lasso and Polygonal Lasso, Hand and

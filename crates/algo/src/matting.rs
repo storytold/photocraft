@@ -605,7 +605,9 @@ pub fn refine_surface(
     let mut pending = Vec::new();
     let mut pending_bytes = 0usize;
     const MAX_SCRATCH_BYTES: usize = 512 * 1024 * 1024;
-    const MAX_FILTER_WORKERS: usize = 4;
+    // A larger queue lets Rayon balance cheap and expensive diagonal blocks.
+    // The scratch budget still limits how many blocks can enter a batch.
+    const MAX_FILTER_BATCH: usize = 24;
     for (by, bx) in blocks {
         let x = (i64::from(bbox.x0) + bx * i64::from(TILE)) as i32;
         let y = (i64::from(bbox.y0) + by * i64::from(TILE)) as i32;
@@ -662,7 +664,7 @@ pub fn refine_surface(
             if scratch_bytes > MAX_SCRATCH_BYTES {
                 return Err(photocraft_raster::AllocationError::NotEnoughMemory { bytes: scratch_bytes });
             }
-            if !pending.is_empty() && (pending.len() >= MAX_FILTER_WORKERS || pending_bytes.saturating_add(scratch_bytes) > MAX_SCRATCH_BYTES) {
+            if !pending.is_empty() && (pending.len() >= MAX_FILTER_BATCH || pending_bytes.saturating_add(scratch_bytes) > MAX_SCRATCH_BYTES) {
                 flush(&mut pending, &mut output)?;
                 pending_bytes = 0;
             }
