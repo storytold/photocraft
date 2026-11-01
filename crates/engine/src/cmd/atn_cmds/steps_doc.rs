@@ -441,6 +441,7 @@ pub(super) fn image_size_from(d: &Descriptor) -> Mapped {
     if physical {
         // A simultaneous dpi change or an ambiguous aspect choice needs its own reference form.
         if d.get("Rslt").is_some()
+            || !matches!(d.get("Intr"), Some(D::Enumerated { type_id, .. }) if type_id.is("Intp"))
             || !matches!(d.get("CnsP"), None | Some(D::Boolean(_)))
             || (get_bool(d, "CnsP") == Some(false) && (p.contains_key("width") != p.contains_key("height")))
             || (get_bool(d, "CnsP") == Some(true) && p.contains_key("width") && p.contains_key("height"))
@@ -515,7 +516,7 @@ pub(super) fn image_size_to(_: &str, p: &Value) -> Option<Descriptor> {
             return None;
         }
     }
-    if unit == PT && !resolution_only && (p.get("resolution").is_some() || p.get("percent").is_some()) {
+    if unit == PT && !resolution_only && ["resolution", "percent"].iter().any(|key| p.get(*key).is_some_and(|value| !value.is_null())) {
         return None;
     }
     if resolution_only && jnum(p, "resolution").is_none() {

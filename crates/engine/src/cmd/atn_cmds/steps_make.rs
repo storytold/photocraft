@@ -102,7 +102,13 @@ fn new_document_from_descriptor(d: &Descriptor) -> Option<Mapped> {
         if let Some(n) = get_text(nw, "Nm  ") {
             props.insert("name".into(), n.into());
         }
-        if let Some(o) = get_num(nw, "Opct") {
+        if nw.get("Opct").is_some() {
+            if matches!(nw.get("Opct"), Some(D::UnitFloat { unit, .. }) if *unit != PCT) {
+                return Some(Mapped::Unsupported { harmless: false });
+            }
+            let Some(o) = get_num(nw, "Opct").filter(|o| (0.0..=100.0).contains(o)) else {
+                return Some(Mapped::Unsupported { harmless: false });
+            };
             props.insert("opacity".into(), (o / 100.0).into());
         }
         if let Some(m) = get_enum(nw, "Md  ") {

@@ -59,6 +59,121 @@ fn recorded_canvas_percent_resolves_at_playback_and_keeps_an_omitted_side() {
     }
 }
 
+/// A missing resampler means print-size editing, which the native point-size resize cannot express.
+#[test]
+fn review_point_resize_without_interpolation_stays_kept() {
+    for key in ["Wdth", "Hght"] {
+        for interpolation in [None, Some(D::Boolean(false)), Some(enm("wrong", "Nrst"))] {
+            let mut d = Descriptor::new("null").with(key, D::UnitFloat { unit: *b"#Rlt", value: 72.0 });
+            if let Some(value) = interpolation {
+                d = d.with("Intr", value);
+            }
+            let action = recorded(AtnEvent::Code(*b"ImgS"), d.clone());
+            assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "point sizes without a valid Intr must stay unsupported");
+            assert_eq!(saved(&action).descriptor, Some(d));
+        }
+    }
+}
+
+/// Null optional values have the same export semantics as omitted values.
+#[test]
+fn review_point_resize_exports_with_null_optional_values() {
+    for extras in [json!({"resolution":null}), json!({"percent":null}), json!({"resolution":null,"percent":null})] {
+        let mut params = json!({"width":72,"units":"pt","resample":"nearest","scaleStyles":false});
+        params.as_object_mut().unwrap().extend(extras.as_object().unwrap().clone());
+        let action = Action::new("Recorded", vec![("image.imageSize".into(), params)]);
+        let (bytes, skipped) = atn_cmds::export("Points", &[&action], &[], false).expect("null values must not prevent point-size export");
+        assert!(skipped.is_empty());
+        let imported = atn_cmds::import(&bytes).unwrap();
+        assert!(imported.unsupported.is_empty());
+        assert_eq!(imported.actions[0].steps[0].1, json!({"width":72,"units":"pt","resample":"nearest","scaleStyles":false}));
+    }
+}
+
+/// Invalid metadata must keep the whole Copy/Cut event, before a layer or source pixels can change.
+#[test]
+fn review_copy_cut_opacity_is_validated_before_any_step_runs() {
+    for copy in [true, false] {
+        for opacity in [D::Double(-1.0), D::Double(101.0), D::Double(f64::NAN), D::Boolean(true), D::UnitFloat { unit: *b"#Pxl", value: 50.0 }] {
+            let d = Descriptor::new("null")
+                .with("Nw  ", D::Descriptor(Descriptor::new("Lyr ").with("Opct", opacity)))
+                .with("Usng", enm("UsrM", "Slct"))
+                .with("Cpy ", D::Boolean(copy));
+            let action = recorded(AtnEvent::Code(*b"Mk  "), d);
+            assert_eq!(action.steps[0].0, atn_cmds::PHOTOSHOP_STEP, "invalid opacity must keep Copy/Cut before mutation");
+            let mut s = sized_document(8, 6, 72);
+            s.execute("select.rect", json!({"x":0,"y":0,"width":2,"height":2})).unwrap();
+            let before = s.active().unwrap().doc.clone();
+            s.actions.list = vec![action];
+            let result = s.execute("actions.play", json!({"action":"Recorded"})).unwrap();
+            assert!(result.get("failed").is_some());
+            assert_eq!(s.active().unwrap().doc, before);
+        }
+        for opacity in [0.0, 50.0, 100.0] {
+            let d = Descriptor::new("null")
+                .with("Nw  ", D::Descriptor(Descriptor::new("Lyr ").with("Opct", D::Double(opacity))))
+                .with("Usng", enm("UsrM", "Slct"))
+                .with("Cpy ", D::Boolean(copy));
+            let action = recorded(AtnEvent::Code(*b"Mk  "), d);
+            assert!(action.steps.iter().all(|(id, _)| id != atn_cmds::PHOTOSHOP_STEP));
+            assert_eq!(action.steps.iter().find(|(id, _)| id == "layer.setProps").unwrap().1["opacity"], opacity / 100.0);
+        }
+    }
+}
+
+/// Every named layer anchor must affect actual playback geometry, not just the saved parameters.
+#[test]
+fn review_layer_transform_uses_the_recorded_anchor() {
+    for depth in [8, 16, 32] {
+        for (code, fx, fy) in
+            [("Qcs0", 0, 0), ("Qcs1", 1, 0), ("Qcs2", 2, 0), ("Qcs3", 0, 1), ("Qcs4", 1, 1), ("Qcs5", 2, 1), ("Qcs6", 0, 2), ("Qcs7", 1, 2), ("Qcs8", 2, 2)]
+        {
+            let d = Descriptor::new("null")
+                .with("FTcs", enm("QCSt", code))
+                .with(
+                    "Ofst",
+                    D::Descriptor(
+                        Descriptor::new("Ofst")
+                            .with("Hrzn", D::UnitFloat { unit: *b"#Pxl", value: 0.0 })
+                            .with("Vrtc", D::UnitFloat { unit: *b"#Pxl", value: 0.0 }),
+                    ),
+                )
+                .with("Wdth", D::UnitFloat { unit: *b"#Prc", value: 50.0 })
+                .with("Hght", D::UnitFloat { unit: *b"#Prc", value: 50.0 })
+                .with("Intr", enm("Intp", "Nrst"));
+            let action = recorded(AtnEvent::Code(*b"Trnf"), d);
+            let mut s = Session::new();
+            s.execute("file.new", json!({"width":64,"height":64,"depth":depth})).unwrap();
+            s.execute("layer.new.layer", json!({})).unwrap();
+            s.edit("Mark", |doc, active| {
+                doc.layer_mut(active.unwrap()).unwrap().surface_mut().unwrap().fill_rect(photocraft_geom::Rect::new(20, 20, 40, 40), &[1.0, 0.0, 0.0, 1.0]);
+                Ok(())
+            })
+            .unwrap();
+            replay_saved(&mut s, &action);
+            let state = s.active().unwrap();
+            assert_eq!(
+                state.doc.layer(state.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds(),
+                photocraft_geom::Rect::new(20 + 5 * fx, 20 + 5 * fy, 30 + 5 * fx, 30 + 5 * fy),
+                "{code}, depth {depth}"
+            );
+            s.execute("edit.undo", json!({})).unwrap();
+            if code == "Qcs0" {
+                s.execute("edit.transform", json!({"rotate":90,"reference":"topLeft","interpolation":"nearest"})).unwrap();
+                let state = s.active().unwrap();
+                assert_eq!(
+                    state.doc.layer(state.active_layer.unwrap()).unwrap().surface().unwrap().content_bounds(),
+                    photocraft_geom::Rect::new(0, 20, 20, 40)
+                );
+                s.execute("edit.undo", json!({})).unwrap();
+            }
+            let before = s.active().unwrap().doc.clone();
+            assert!(s.execute("edit.transform", json!({"scaleX":50,"reference":"unknown"})).is_err());
+            assert_eq!(s.active().unwrap().doc, before);
+        }
+    }
+}
+
 /// Physical dimensions retain points and resolve current dpi before rounding or style scaling.
 #[test]
 fn recorded_image_points_use_current_resolution_and_keep_style_scaling() {
