@@ -229,11 +229,13 @@ type LayerFn<'a> = &'a dyn Fn(&Surface, Option<&Surface>, Rect) -> Result<Surfac
 
 /// Whether `cmd` deforms the mask or channel `p` targets instead of the layer, as in Photoshop:
 /// Liquify a layer mask, alpha channel or the Quick Mask (#10457), Puppet Warp a layer mask (Adobe
-/// documents it on layer masks). Perspective Warp and the smart-object warps ignore a target.
+/// documents it on layer masks). Perspective Warp and the smart-object warps ignore a target, and
+/// a smart object's filter mask takes none of them: Liquify adds a smart filter there, as from the
+/// menu (`follows_filter_mask`).
 fn follows_target(cmd: &str, p: &Value) -> bool {
     use crate::channel_cmds::Target;
     match crate::channel_cmds::target_of(p) {
-        Target::Pixels => false,
+        Target::Pixels | Target::FilterMask => false,
         Target::Mask => cmd == LIQUIFY || cmd == PUPPET,
         _ => cmd == LIQUIFY,
     }

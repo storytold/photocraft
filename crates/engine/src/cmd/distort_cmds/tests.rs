@@ -786,3 +786,28 @@ fn liquify_deforms_the_pixels_again_once_the_composite_is_targeted() {
     assert_ne!(active_surface(&s), pixels, "the layer's pixels are deformed");
     assert_eq!(active_mask(&s), mask, "the mask is untouched");
 }
+
+/// CodeRabbit on #10469: with a smart object's filter mask named in the params, Liquify and the
+/// Camera Raw Filter act on the smart object as the menu does (they're left out of
+/// `follows_filter_mask`: in Photoshop they add a smart filter, they don't filter the filter mask),
+/// so the filter mask stays as it was and a new smart filter records the edit.
+#[test]
+fn liquify_and_camera_raw_add_a_smart_filter_when_the_filter_mask_is_named() {
+    let stroke = json!({"strokes": [{"tool": "forwardWarp", "size": 30, "points": [[22, 25], [34, 25]]}]});
+    for (id, params) in [(LIQUIFY, stroke), (crate::lens_cmds::RAW, json!({"exposure": -1.5}))] {
+        let mut s = session(8);
+        s.execute("layer.smartObjects.convertToSmartObject", json!({})).unwrap();
+        s.execute("filter.blur.gaussianBlur", json!({"radius": 3})).unwrap();
+        // A black stroke down x = 30 gives the smart object a filter mask that isn't plain white.
+        s.execute("paint.stroke", json!({"points": [[30, 5], [30, 55]], "size": 8, "hardness": 1, "color": "#000000", "target": "filterMask"})).unwrap();
+        let canvas = s.active().unwrap().doc.bounds();
+        let filter_mask = |s: &Session| smart(s).filter_mask.expect("a filter mask").surface.read_region(canvas);
+        let before = filter_mask(&s);
+        let mut named = params.clone();
+        named["target"] = json!("filterMask");
+        s.execute(id, named).unwrap();
+        assert!(filter_mask(&s) == before, "{id}: the filter mask is untouched");
+        let commands: Vec<String> = smart(&s).smart_filters.iter().map(|f| f.command.clone()).collect();
+        assert_eq!(commands, ["filter.blur.gaussianBlur", id], "{id}: added as a smart filter, as from the menu");
+    }
+}
