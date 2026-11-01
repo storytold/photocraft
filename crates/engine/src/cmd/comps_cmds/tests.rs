@@ -137,6 +137,58 @@ fn partial_updates_preserve_saved_properties_and_live_layer_order() {
     }
 }
 
+/// Application flags do not change what an explicit update captures or preserves.
+#[test]
+fn updates_match_full_capture_for_every_comp_flag_combination() {
+    for flags in 0..8 {
+        for what in ["all", "visibility", "position", "appearance"] {
+            let (mut s, a, b) = session(8);
+            let id = s
+                .execute(
+                    "layerComp.new",
+                    json!({
+                        "visibility": flags & 1 != 0,
+                        "position": flags & 2 != 0,
+                        "appearance": flags & 4 != 0,
+                    }),
+                )
+                .unwrap()["comp"]
+                .as_u64()
+                .unwrap() as u32;
+            let mut expected = doc(&s).comp(id).unwrap().clone();
+            s.execute("layer.translate", json!({"layer": a.0, "dx": 6, "dy": -3})).unwrap();
+            s.edit("change properties", |d, _| {
+                let layer = d.layer_mut(b).unwrap();
+                layer.visible = false;
+                layer.blend = BlendMode::Multiply;
+                layer.opacity = 0.25;
+                layer.fill_opacity = 0.5;
+                Ok(())
+            })
+            .unwrap();
+            // The previous implementation always captured every property, then merged only
+            // the requested field. Full capture itself is unchanged by the optimization.
+            expected.states = capture_states(doc(&s))
+                .into_iter()
+                .map(|live| {
+                    if what == "all" {
+                        return live;
+                    }
+                    let mut saved = expected.state(live.layer).unwrap().clone();
+                    match what {
+                        "visibility" => saved.visible = live.visible,
+                        "position" => saved.position = live.position,
+                        _ => saved.appearance = live.appearance,
+                    }
+                    saved
+                })
+                .collect();
+            s.execute("layerComp.update", json!({"comp": id, "what": what})).unwrap();
+            assert_eq!(doc(&s).comp(id).unwrap(), &expected, "flags={flags}, what={what}");
+        }
+    }
+}
+
 #[test]
 fn undo_redo_and_last_document_state() {
     let (mut s, a, _) = session(8);
