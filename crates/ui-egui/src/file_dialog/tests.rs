@@ -1321,6 +1321,65 @@ fn render_video_menu_asks_for_directory_and_writes_frames_only_after_confirmatio
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+#[test]
+fn delivery_guard_lives_through_continuation_and_releases_on_discard() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    struct Guard(Arc<AtomicBool>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    for discard in [false, true] {
+        let (mut app, open, _) = app();
+        let released = Arc::new(AtomicBool::new(false));
+        let observed = released.clone();
+        let ctx = egui::Context::default();
+        app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: None }, move |_, answer| {
+            assert!(!observed.load(Ordering::SeqCst), "reservation must cover consumption");
+            assert_eq!(answer, FileDialogAnswer::Contents("tiny".into(), vec![1]));
+            Ok(json!(null))
+        })
+        .unwrap();
+        app.poll_file_dialog(&ctx, None);
+        let (_, reply) = open.borrow_mut().pop().unwrap();
+        reply.send_with_guard(Some(FileDialogAnswer::Contents("tiny".into(), vec![1])), Guard(released.clone()));
+        assert!(!released.load(Ordering::SeqCst), "queued bytes must retain the reservation");
+        if discard {
+            app.file_dialog = None;
+        } else {
+            app.poll_file_dialog(&ctx, None);
+        }
+        assert!(released.load(Ordering::SeqCst));
+    }
+}
+
+#[test]
+fn delivery_guard_releases_when_receiver_has_gone() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+    struct Guard(Arc<AtomicBool>);
+    impl Drop for Guard {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+    let (mut app, open, _) = app();
+    let ctx = egui::Context::default();
+    app.ask_file(FileDialogRequest::Open { multiple: false, initial_dir: None, extensions: None }, |_, _| Ok(json!(null))).unwrap();
+    app.poll_file_dialog(&ctx, None);
+    let (_, reply) = open.borrow_mut().pop().unwrap();
+    app.file_dialog = None;
+    let released = Arc::new(AtomicBool::new(false));
+    reply.send_with_guard(None, Guard(released.clone()));
+    assert!(released.load(Ordering::SeqCst));
+}
+
 /// How many times each path was written, standing in for its size and modification time.
 type Disk = Rc<RefCell<std::collections::HashMap<String, u64>>>;
 

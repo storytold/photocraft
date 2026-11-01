@@ -19,6 +19,9 @@
 #[cfg(any(target_arch = "wasm32", test))]
 mod preset_bridge;
 
+#[cfg(any(target_arch = "wasm32", test))]
+mod file_ingest;
+
 #[cfg(target_arch = "wasm32")]
 mod indexed_presets;
 
