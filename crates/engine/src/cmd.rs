@@ -98,6 +98,7 @@ pub mod image_cmds;
 pub mod layer_copy_cmds;
 pub mod layer_label_cmds;
 pub mod layer_list_cmds;
+pub mod layer_mask_copy_cmds;
 pub mod layer_mask_props_cmds;
 pub mod layer_menu_cmds;
 pub mod layer_multi_cmds;
@@ -1366,6 +1367,7 @@ fn build() -> Vec<CommandSpec> {
     v.extend(crate::fx_visibility_cmds::specs());
     v.extend(crate::mask_view_cmds::specs());
     v.extend(crate::layer_mask_props_cmds::specs());
+    v.extend(crate::layer_mask_copy_cmds::specs());
     v.extend(crate::actions_cmds::specs());
     // The dispatch guard's unit test needs a command that panics on purpose (REL-3).
     #[cfg(test)]

@@ -46,7 +46,8 @@ pub fn mask_button_command(layer: Option<&Layer>, has_selection: bool, alt: bool
 /// Export As (one file per layer, #3629) run on every selected layer instead.
 pub fn single_layer_only(id: &str) -> bool {
     let adds_mask = matches!(id, "layer.layerMask.revealAll" | "layer.layerMask.hideAll" | "layer.layerMask.revealSelection" | "layer.layerMask.hideSelection");
-    matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle") || (id.starts_with("layer.layerMask.") && !adds_mask)
+    matches!(id, "layer.layerStyle.blendingOptions" | "layer.layerStyle.copyLayerStyle")
+        || (id.starts_with("layer.layerMask.") && !adds_mask && id != "layer.layerMask.paste")
 }
 
 /// The context menu entries for a layer (Photoshop 2026 order, trimmed to the layer kind).
@@ -96,9 +97,11 @@ pub fn entries(l: &Layer, multi: bool, has_selection: bool) -> Vec<Entry> {
         v.push(Some((tl!(mask_toggle_label(mask.enabled)), "layer.layerMask.enabled")));
         v.push(Some((tl!("Apply Layer Mask"), "layer.layerMask.apply")));
         v.push(Some((tl!("Delete Layer Mask"), "layer.layerMask.delete")));
+        v.push(Some((tl!("Copy Layer Mask"), "layer.layerMask.copy")));
     } else {
         v.push(Some((tl!("Add Layer Mask"), add_mask_command(has_selection, false))));
     }
+    v.push(Some((tl!("Paste Layer Mask"), "layer.layerMask.paste")));
     v.push(Some((
         if l.clipped { tl!("Release Clipping Mask") } else { tl!("Create Clipping Mask") },
         if l.clipped { "layer.releaseClippingMask" } else { "layer.createClippingMask" },
@@ -169,6 +172,8 @@ pub fn show_mask(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, actio
             Some((tl!(mask_toggle_label(mask.enabled)), "layer.layerMask.enabled")),
             Some((tl!("Delete Layer Mask"), "layer.layerMask.delete")),
             Some((tl!("Apply Layer Mask"), "layer.layerMask.apply")),
+            Some((tl!("Copy Layer Mask"), "layer.layerMask.copy")),
+            Some((tl!("Paste Layer Mask"), "layer.layerMask.paste")),
         ];
         items(app, ui, l, false, edits, actions);
         ui.separator();
@@ -209,6 +214,26 @@ pub fn show_effects(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, ac
     });
 }
 
+/// Copy follows the clicked layer (it is selected first). Paste follows the clipboard, and a
+/// multi-selection pastes onto every layer in it that is not fully locked.
+fn layer_mask_item_enabled(app: &crate::PhotocraftApp, l: &Layer, on_set: bool, id: &str) -> Option<bool> {
+    match id {
+        "layer.layerMask.copy" => Some(!on_set && l.mask.is_some()),
+        "layer.layerMask.paste" => Some(layer_mask_paste_enabled(app, l, on_set)),
+        _ => None,
+    }
+}
+
+fn layer_mask_paste_enabled(app: &crate::PhotocraftApp, l: &Layer, on_set: bool) -> bool {
+    if app.session.layer_mask_clipboard.is_none() {
+        return false;
+    }
+    if on_set {
+        return crate::menus::is_enabled(app, "layer.layerMask.paste");
+    }
+    !app.session.active().is_some_and(|st| st.doc.effective_locks(l.id).all)
+}
+
 /// The command items of a layer menu, separators collapsed.
 fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool, entries: Vec<Entry>, actions: &mut Vec<(String, Value)>) {
     let mut last_sep = true;
@@ -229,7 +254,8 @@ fn items(app: &crate::PhotocraftApp, ui: &mut egui::Ui, l: &Layer, on_set: bool,
                 // Enablement is exact for the active layer (or the selection); another row is
                 // selected first when clicked, so its items stay available.
                 let is_active = app.session.active().is_some_and(|s| s.active_layer == Some(l.id));
-                let enabled = !(on_set && single_layer_only(id)) && if on_set || is_active { crate::menus::is_enabled(app, id) } else { true };
+                let enabled = layer_mask_item_enabled(app, l, on_set, id)
+                    .unwrap_or_else(|| !(on_set && single_layer_only(id)) && if on_set || is_active { crate::menus::is_enabled(app, id) } else { true });
                 if ui.add_enabled(enabled, egui::Button::new(tl!(&label))).clicked() {
                     if !on_set {
                         actions.push(("layer.select".into(), json!({"layer": l.id.0})));

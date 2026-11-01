@@ -107,6 +107,7 @@ pub use cmd::image_cmds;
 pub use cmd::layer_copy_cmds;
 pub use cmd::layer_label_cmds;
 pub use cmd::layer_list_cmds;
+pub use cmd::layer_mask_copy_cmds;
 pub use cmd::layer_mask_props_cmds;
 pub use cmd::layer_menu_cmds;
 pub use cmd::layer_multi_cmds;
@@ -205,6 +206,9 @@ pub struct Session {
     /// Layer › Layer Style › Copy Layer Style: the effects and the Blending Options
     /// ([`CopiedStyle`]: blend mode, fill opacity, Advanced Blending, Blend If, channels).
     pub style_clipboard: Option<CopiedStyle>,
+    /// The layer-mask thumbnail menu's Copy Layer Mask: pixels, density, feather, link and
+    /// enablement. Shared by every open document, like [`Self::style_clipboard`].
+    pub layer_mask_clipboard: Option<photocraft_doc::LayerMask>,
     /// Shape path context menu: copied vector fill and stroke styles.
     pub path_fill_clipboard: Option<photocraft_doc::Fill>,
     pub path_stroke_clipboard: Option<photocraft_doc::ShapeStroke>,
