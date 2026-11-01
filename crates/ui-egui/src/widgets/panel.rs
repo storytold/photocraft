@@ -117,7 +117,15 @@ pub fn pill_tab(ui: &mut Ui, label: &str, selected: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let translated = tl!(label);
     let font = theme::medium(12.5);
-    let galley = ui.painter().layout_no_wrap(translated.to_string(), font, t.text);
+    // Pin the paragraph base direction like `direction::body_label`, so an RTL label keeps its
+    // phrase order instead of shaping with an auto-detected direction. LTR keeps `layout_no_wrap`.
+    let galley = if crate::text::direction::is_rtl() {
+        let mut job = egui::text::LayoutJob::simple(translated.to_string(), font, t.text, f32::INFINITY);
+        job.direction = crate::text::direction::text_direction();
+        ui.painter().layout_job(job)
+    } else {
+        ui.painter().layout_no_wrap(translated.to_string(), font, t.text)
+    };
     let size = vec2(galley.size().x + 20.0, 24.0);
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click());
     if selected {
@@ -382,5 +390,34 @@ mod tests {
         assert!(ltitle.is_positive() && (ltitle.left() - (lrow.left() + 18.0)).abs() < 2.0, "ltr: {ltitle:?} in {lrow:?}");
         let (rrow, rtitle) = section_header_rects(Dir::Rtl);
         assert!(rtitle.is_positive() && (rrow.right() - 18.0 - rtitle.right()).abs() < 2.0, "rtl: {rtitle:?} in {rrow:?}");
+    }
+
+    /// A pill tab's galley pins its paragraph base direction in a right-to-left UI (like
+    /// `direction::body_label`, so an Arabic label keeps its phrase order); left-to-right keeps
+    /// egui's auto-detected direction, unchanged.
+    #[test]
+    fn pill_tab_pins_the_galley_direction() {
+        for dir in [Dir::Ltr, Dir::Rtl] {
+            let _dir = direction_scope(dir);
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|s| s.right_to_left = dir == Dir::Rtl);
+            let mut out = ctx.run_ui(
+                egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(400.0, 100.0))), ..Default::default() },
+                |ui| {
+                    pill_tab(ui, "Toolbar", true);
+                },
+            );
+            let mut found = None;
+            for shape in &out.shapes {
+                if let egui::Shape::Text(ts) = &shape.shape
+                    && ts.galley.job.text.contains("Toolbar")
+                {
+                    found = Some(ts.galley.job.direction);
+                }
+            }
+            let want = if dir == Dir::Rtl { egui::epaint::text::TextDirection::RightToLeft } else { egui::epaint::text::TextDirection::Auto };
+            assert_eq!(found, Some(want), "{dir:?}: the pill label's galley direction");
+            out.textures_delta.clear();
+        }
     }
 }
