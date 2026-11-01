@@ -191,7 +191,18 @@ impl Recovery {
                     .filter_map(|(name, bytes)| {
                         let key = name.strip_suffix(".json")?;
                         let info = serde_json::from_slice::<RecoveryInfo>(bytes).ok().filter(|i| valid_key(key) && i.key == key)?;
-                        (Self::owns(s, key) && s.loaded.contains_key(&bundle_name(key))).then_some(info)
+                        if !Self::owns(s, key) {
+                            return None;
+                        }
+                        // Browsers evict storage under pressure: a half-evicted entry is reported, not an error.
+                        if !s.loaded.contains_key(&bundle_name(key)) {
+                            log::warn!(
+                                "Recovery data for \"{}\" is incomplete (the browser may have cleared part of it), so it is not offered",
+                                info.document_name
+                            );
+                            return None;
+                        }
+                        Some(info)
                     })
                     .collect();
                 infos
@@ -353,5 +364,66 @@ mod tests {
         let mut found = r.recoverable();
         assert_eq!(found.len(), 1);
         assert!((found.remove(0).load)().is_err());
+    }
+
+    /// A quota error aborts the write transaction, so the previous snapshot stays whole; the failure
+    /// is reported and a snapshot that is refused up front produces no batch to write at all.
+    #[test]
+    fn a_failed_write_leaves_the_previous_recovery_intact() {
+        let r = Recovery::new("q".into());
+        let d = doc("Keep");
+        let stored = r.snapshot(&d, 1, None, 1).unwrap();
+        let _next = r.snapshot(&d, 2, None, 2).unwrap(); // its write fails with a quota error below
+        r.finish(d.id.0, 2, Err("QuotaExceededError".into()));
+        assert_eq!(r.take_completed(), vec![(d.id.0, 2, Err("QuotaExceededError".into()))]);
+        let mut found = reload(&stored).recoverable();
+        assert_eq!(found.len(), 1, "revision 1 is still recoverable");
+        assert_eq!((found.remove(0).load)().unwrap(), *d);
+        let tight = Recovery::with_max_snapshot("q".into(), 16);
+        assert!(tight.snapshot(&d, 3, None, 3).is_err(), "refused before anything is written");
+    }
+
+    /// Two tabs with the same document id (ids restart every page load) write to different entries,
+    /// and closing the document in one tab never deletes the other tab's.
+    #[test]
+    fn two_tabs_on_the_same_document_keep_separate_entries() {
+        let (a, b) = (Recovery::new("tabA".into()), Recovery::new("tabB".into()));
+        let d = doc("Shared");
+        let (ba, bb) = (a.snapshot(&d, 1, None, 1).unwrap(), b.snapshot(&d, 1, None, 1).unwrap());
+        assert!(ba.keys().all(|k| !bb.contains_key(k)), "no key is shared");
+        let gone = a.discard(d.id.0).unwrap();
+        assert!(gone.keys().all(|k| ba.contains_key(k) && !bb.contains_key(k)), "only tabA's own entry is deleted");
+        assert!(b.discard(d.id.0).unwrap().keys().all(|k| bb.contains_key(k)));
+    }
+
+    /// A snapshot this version cannot open (cut short, or from a build that wrote something else)
+    /// fails to load with an error, not a panic, and stays offered so a later version can read it.
+    #[test]
+    fn a_snapshot_that_cannot_be_opened_reports_an_error() {
+        let batch = Recovery::new("old".into()).snapshot(&doc("Odd"), 1, None, 5).unwrap();
+        let key = batch.keys().find(|k| k.ends_with(".pcraft")).unwrap().clone();
+        let full = batch[&key].as_ref().unwrap().to_vec();
+        let now = reload(&batch);
+        now.load(&key, full[..full.len() / 2].to_vec()); // cut short
+        let mut found = now.recoverable();
+        assert_eq!(found.len(), 1);
+        assert!((found.remove(0).load)().is_err());
+        let again = reload(&batch);
+        again.load(&key, b"PK not a PhotoCraft bundle".to_vec()); // some other zip
+        assert!((again.recoverable().remove(0).load)().is_err());
+    }
+
+    /// The browser may have evicted half of an entry: it is not offered, and nothing fails.
+    #[test]
+    fn a_half_evicted_entry_is_skipped() {
+        let batch = Recovery::new("old".into()).snapshot(&doc("Evicted"), 1, None, 5).unwrap();
+        for keep in [".json", ".pcraft"] {
+            let now = Recovery::new("next".into());
+            for (name, bytes) in batch.iter().filter(|(n, _)| n.ends_with(keep)) {
+                now.claim(session_of(name.rsplit_once('.').map_or(name, |(k, _)| k)).unwrap_or_default());
+                now.load(name, bytes.as_ref().unwrap().to_vec());
+            }
+            assert!(now.recoverable().is_empty(), "only the {keep} record is left");
+        }
     }
 }

@@ -253,10 +253,11 @@ fn autosave(app: &mut PhotocraftApp) {
         }
     }
     let now = crate::gpu_canvas::now_ms();
-    // Saved or closed documents drop their recovery data.
+    // Saved or closed documents drop their recovery data, and so does turning Autosave off: the
+    // copies already kept (on the web, in the browser's storage) are removed, not left behind.
     let live: HashMap<DocId, bool> = app.session.documents().iter().map(|d| (d.doc.id, d.is_dirty())).collect();
-    let mut stale: Vec<DocId> = app.prefs_rt.autosaved.keys().filter(|id| live.get(id) != Some(&true)).copied().collect();
-    stale.extend(app.prefs_rt.autosave_pending.keys().filter(|id| live.get(*id) != Some(&true) && !app.prefs_rt.autosaved.contains_key(*id)).copied());
+    let mut stale: Vec<DocId> = app.prefs_rt.autosaved.keys().filter(|id| !on || live.get(id) != Some(&true)).copied().collect();
+    stale.extend(app.prefs_rt.autosave_pending.keys().filter(|id| (!on || live.get(*id) != Some(&true)) && !app.prefs_rt.autosaved.contains_key(*id)).copied());
     for id in stale {
         app.prefs_rt.autosaved.remove(&id);
         app.prefs_rt.autosave_pending.remove(&id);
