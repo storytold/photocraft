@@ -351,7 +351,8 @@ fn a_successful_miss_keeps_unmatched_pooled_buffers() {
     let _g = serial();
     release();
     give(vec![0u8; 4 * MIN_POOLED_BYTES]);
-    assert!(try_take_exact(2 * MIN_POOLED_BYTES, 0u8).is_some());
+    let v = try_take_exact(2 * MIN_POOLED_BYTES, 0u8);
+    assert!(v.as_ref().is_some_and(|v| v.len() == 2 * MIN_POOLED_BYTES && v.iter().all(|&b| b == 0)));
     assert_eq!(retained_bytes(), 4 * MIN_POOLED_BYTES, "within the miss floor, nothing is dropped");
     release();
 }

@@ -370,9 +370,7 @@ impl Surface {
     pub fn try_read_region(&self, r: Rect) -> Result<Vec<f32>, AllocationError> {
         let len = (r.width() as usize).checked_mul(r.height() as usize).and_then(|n| n.checked_mul(self.channels())).ok_or(AllocationError::SizeOverflow)?;
         let bytes = len.checked_mul(std::mem::size_of::<f32>()).ok_or(AllocationError::SizeOverflow)?;
-        let mut out = Vec::new();
-        out.try_reserve_exact(len).map_err(|_| AllocationError::NotEnoughMemory { bytes })?;
-        out.resize(len, 0.0);
+        let mut out = scratch::try_take_exact(len, 0.0f32).ok_or(AllocationError::NotEnoughMemory { bytes })?;
         self.read_region_into(r, &mut out);
         Ok(out)
     }
