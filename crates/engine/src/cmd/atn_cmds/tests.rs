@@ -3355,3 +3355,22 @@ fn wave_seed_loads_its_exact_32_bits_or_keeps_the_step() {
         assert_eq!(seed(v.clone()), None, "RndS {v:?} was mapped");
     }
 }
+
+/// A step recording one of its keys twice can't be saved back with both values, so it stays a
+/// Photoshop step instead of playing the first and dropping the second (#10605).
+#[test]
+fn distort_filter_steps_with_a_repeated_key_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    for (code, key, a, b) in [
+        ("Pnch", "Amnt", D::Integer(10), D::Integer(20)),
+        ("Sphr", "SphM", enm("SphM", "Nrml"), enm("SphM", "HrzO")),
+        ("Plr ", "Cnvr", enm("Cnvr", "RctP"), enm("Cnvr", "RctP")),
+        ("Wave", "NmbG", D::Integer(5), D::Integer(7)),
+        ("Wave", "SclH", D::Integer(100), D::Integer(50)),
+        ("Wave", "UndA", enm("UndA", "WrpA"), enm("UndA", "RptE")),
+        ("Wave", "RndS", D::Integer(1), D::Integer(2)),
+        ("ZgZg", "NmbR", D::Integer(5), D::Integer(6)),
+    ] {
+        assert!(kept(distort(code, desc("null").with(key, a.clone()).with(key, b.clone()))), "{code} with {key} twice was mapped");
+    }
+}
