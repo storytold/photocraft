@@ -285,7 +285,7 @@ pub(crate) fn targets_of(doc: &Document, selected: &[LayerId], active: Option<La
 
 /// The `layers` param: the layers one box transforms together (at most 10000, each in the
 /// document), without those a listed group carries. `None` when it isn't given.
-fn layers_param(doc: &Document, p: &Value) -> Result<Option<Vec<LayerId>>> {
+pub(crate) fn layers_param(doc: &Document, p: &Value) -> Result<Option<Vec<LayerId>>> {
     let a = match p.get("layers") {
         None | Some(Value::Null) => return Ok(None),
         Some(Value::Array(a)) if !a.is_empty() && a.len() <= 10_000 => a,
@@ -302,6 +302,16 @@ fn layers_param(doc: &Document, p: &Value) -> Result<Option<Vec<LayerId>>> {
         }
     }
     Ok(Some(crate::layer_multi_cmds::top_level(doc, &ids)))
+}
+
+/// Non-empty top-level targets, retaining explicit Background targets and filtering duplicates.
+pub fn multi_targets(doc: &Document, ids: &[LayerId]) -> Vec<LayerId> {
+    crate::layer_multi_cmds::top_level(doc, ids).into_iter().filter(|id| doc.layer(*id).is_some_and(|layer| !transform_bounds(doc, layer).is_empty())).collect()
+}
+
+/// Content bounds of the explicitly selected transform targets.
+pub fn multi_bounds(doc: &Document, ids: &[LayerId]) -> Rect {
+    transform_bounds_of(doc, ids)
 }
 
 /// The box Free Transform opens on the layers `ids` together: their frames ([`transform_frame`])
@@ -962,3 +972,6 @@ mod tests;
 
 #[cfg(test)]
 mod multi_tests;
+
+#[cfg(test)]
+mod reconciliation_tests;

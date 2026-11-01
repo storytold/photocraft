@@ -292,6 +292,7 @@ pub use tools::magnetic_lasso_ui;
 pub use tools::move_box;
 pub use tools::move_distance;
 pub use tools::move_hover;
+pub mod layer_hover;
 pub use tools::move_lock;
 pub use tools::move_mods;
 pub use tools::object_finder;
@@ -388,6 +389,8 @@ pub struct PhotocraftApp {
     pub(crate) move_preview: Option<move_ui::MovePreview>,
     /// Move tool › Show Highlight on Rollover: the last hover answer (`move_hover`).
     pub(crate) move_hover: Option<move_hover::Hover>,
+    /// Hovered Layers panel row, scoped to the document and rendering pass.
+    pub(crate) panel_hover: Option<layer_hover::PanelHover>,
     /// Smart Guides distances shown with ⌘ held over the canvas: the last answer (`move_distance`).
     pub(crate) move_distance: Option<move_distance::Cache>,
     /// Object Selection › Object Finder: the hover preview (`object_finder`).

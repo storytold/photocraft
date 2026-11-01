@@ -4225,3 +4225,5 @@ smartSvg	AI/PDF/EPS contents will be edited as SVG. Saving replaces the embedded
 	Stop Color	Колір контрольної точки
 	Shapes can't use patterns yet	Фігури поки не можуть використовувати візерунки
 	Edit Brush…	Редагувати пензель…
+	Show Bounding Box	Показати обмежувальну рамку
+	Active Layers	Активні шари
