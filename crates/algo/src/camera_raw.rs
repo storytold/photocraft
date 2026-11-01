@@ -1015,12 +1015,15 @@ fn dehaze(px: &mut [[f32; 4]], w: usize, h: usize, amount: f32) {
 fn detail(px: &mut [[f32; 4]], w: usize, h: usize, p: &CameraRaw, ps: f32) {
     // Work in Y + chroma (BT.709 luma, B−Y, R−Y).
     let mut y: Vec<f32> = px.iter().map(|q| luma([q[0], q[1], q[2]])).collect();
-    let mut cb: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[2] - l).collect();
-    let mut cr: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[0] - l).collect();
-    if p.noise_luminance > 0.0 {
+    // Smooth before allocating chroma; both chroma planes still use the original luminance.
+    let smooth = (p.noise_luminance > 0.0).then(|| {
         let n = p.noise_luminance / 100.0;
         let r = ((1.0 + 3.0 * n) * ps).round().max(1.0) as usize;
-        let smooth = guided(&y, &y, w, h, r, (n * 0.06).powi(2) + 1e-6);
+        guided(&y, &y, w, h, r, (n * 0.06).powi(2) + 1e-6)
+    });
+    let mut cb: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[2] - l).collect();
+    let mut cr: Vec<f32> = px.iter().zip(&y).map(|(q, l)| q[0] - l).collect();
+    if let Some(smooth) = smooth {
         let keep = p.noise_luminance_detail / 100.0 * 0.5;
         for i in 0..w * h {
             y[i] = smooth[i] + (y[i] - smooth[i]) * keep;
