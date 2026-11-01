@@ -201,6 +201,40 @@ fn a_centred_copy_whose_mask_hides_everything_centres_the_source_canvas() {
     assert_eq!(bounds(&s, 1, copied(&r)), Rect::new(14, 16, 24, 26));
 }
 
+/// #10422 review: an enabled vector mask crops like a pixel mask. Its path keeps x ≥ 9 of the
+/// square (x 4..14), so the visible x 9..14 is centred; below 100 % density or feathered it hides
+/// nothing completely and crops nothing, as for a pixel mask. An opening that also covers a
+/// second square's empty surroundings still centres on the ink it shows.
+#[test]
+fn a_centred_copy_centres_the_part_its_vector_mask_shows() {
+    let centred = |path: Value, extra: Option<(u32, u32, u32, u32)>, edit: fn(&mut photocraft_doc::VectorMask)| {
+        let (mut s, paint) = two_docs(40, 30, 8);
+        if let Some((x, y, w, h)) = extra {
+            s.execute("select.rect", json!({"x": x, "y": y, "width": w, "height": h})).unwrap();
+            s.execute("edit.fill", json!({"color": "#ff0000"})).unwrap();
+            s.execute("select.deselect", json!({})).unwrap();
+        }
+        s.execute("layer.vectorMask.add", json!({"layer": paint.0, "path": path})).unwrap();
+        s.edit("vector mask", |d, _| {
+            edit(d.layer_mut(paint).and_then(|l| l.vector_mask.as_mut()).expect("vector mask"));
+            Ok(())
+        })
+        .unwrap();
+        let r = s.execute("layer.copyToDocument", json!({"document": 1, "layers": [paint.0], "center": true})).unwrap();
+        bounds(&s, 1, copied(&r))
+    };
+    let right = json!({"subpaths": [{"knots": [[9, 0], [40, 0], [40, 30], [9, 30]]}]});
+    // Visible x 9..14 (5 px) centred on the 60-wide canvas: 27.5..32.5, rounded to 28..33.
+    assert_eq!(centred(right.clone(), None, |_| {}), Rect::new(23, 20, 33, 30), "the unmasked square sits 5 px left of its visible part");
+    assert_eq!(centred(right.clone(), None, |m| m.density = 0.5), Rect::new(25, 20, 35, 30), "50 % density crops nothing");
+    assert_eq!(centred(right.clone(), None, |m| m.feather = 3.0), Rect::new(25, 20, 35, 30), "a feather crops nothing");
+    assert_eq!(centred(right, None, |m| m.enabled = false), Rect::new(25, 20, 35, 30), "a disabled vector mask crops nothing");
+    // A second square at x 30..34 outside an opening at x 0..20: the shown square (x 4..14, y 6..16)
+    // is centred (dx 21, dy 14), not the opening's empty pixels right of it.
+    let left = json!({"subpaths": [{"knots": [[0, 0], [20, 0], [20, 30], [0, 30]]}]});
+    assert_eq!(centred(left, Some((30, 6, 4, 10)), |_| {}), Rect::new(25, 20, 55, 30));
+}
+
 #[test]
 fn a_copied_background_is_an_ordinary_layer_and_several_layers_keep_their_order() {
     let (mut s, paint) = two_docs(40, 30, 8);

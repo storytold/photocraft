@@ -62,14 +62,26 @@ fn center(r: Rect) -> [f64; 2] {
 /// The part of `l`'s pixels its layer masks show: what Photoshop centres a pasted layer on (#9681).
 /// An enabled, fully dense mask crops the layer's (or group's) bounds to the pixels it reveals
 /// that hold ink (a group's, or a layer with effects, to everywhere it reveals); a disabled
-/// one, or one below 100 % density, hides nothing completely and crops nothing.
+/// one, or one below 100 % density, hides nothing completely and crops nothing. An enabled vector
+/// mask at full density, unfeathered, crops to its path's bounds the same way; feathered or
+/// inverted (it shows what lies outside the path), it crops nothing.
 fn shown_bounds(l: &Layer) -> Option<Rect> {
     let r = match &l.content {
         LayerContent::Group(g) => g.children.iter().filter_map(shown_bounds).fold(Rect::EMPTY, |a, b| a.union(&b)),
         _ => crate::layer_multi_cmds::layer_bounds(l)?,
     };
-    let r = match l.mask.as_ref().filter(|m| m.enabled && m.density >= 1.0) {
-        Some(m) => {
+    // The vector mask hides everything outside its path's control bounds (a superset of the path).
+    let path = l
+        .vector_mask
+        .as_ref()
+        .filter(|v| v.enabled && v.density >= 1.0 && v.feather <= 0.0 && !v.path.inverted)
+        .and_then(|v| v.path.control_bounds())
+        .map(|(x0, y0, x1, y1)| Rect::new(x0.floor() as i32, y0.floor() as i32, x1.ceil() as i32, y1.ceil() as i32));
+    let r = path.map_or(r, |p| r.intersect(&p));
+    let pixel = l.mask.as_ref().filter(|m| m.enabled && m.density >= 1.0);
+    let r = match pixel {
+        None if path.is_none() => r,
+        _ => {
             // Ink: the layer's own alpha. Effects reach past it, so a layer with them uses the mask alone.
             let ink = l.surface().filter(|s| s.format().alpha && !photocraft_compose::effects::has_effects(l));
             let n = ink.map_or(0, |s| s.channels());
@@ -83,7 +95,7 @@ fn shown_bounds(l: &Layer) -> Option<Rect> {
             };
             // Rows one at a time, so a large sparse layer never needs its whole rectangle in memory.
             let row = |y: i32, area: Rect| Rect::new(area.x0, y, area.x1, y.saturating_add(1));
-            if m.feather.is_finite() && m.feather > 0.0 {
+            if let Some(m) = pixel.filter(|m| m.feather.is_finite() && m.feather > 0.0) {
                 // A feathered mask shows pixels as far as the compositor carries its blur, from
                 // mask samples inside the layer's bounds or within that reach of them.
                 let sigma = photocraft_vector::feather::feather_sigma(m.feather);
@@ -110,21 +122,23 @@ fn shown_bounds(l: &Layer) -> Option<Rect> {
                     _ => lit,
                 }
             } else {
-                // A hard mask: the pixels it reveals that hold ink.
+                // A hard mask (or the vector mask's path alone): the pixels it reveals that hold ink.
                 let mut shown = Rect::EMPTY;
                 for y in r.y0..r.y1 {
-                    m.surface.read_region_into(row(y, r), &mut mask_row);
+                    if let Some(m) = pixel {
+                        m.surface.read_region_into(row(y, r), &mut mask_row);
+                    }
                     if let Some(s) = ink {
                         s.read_region_into(row(y, r), &mut ink_row);
                     }
-                    if let Some(sp) = span(r, y, &|i| mask_row[i] > 0.0 && ink.is_none_or(|_| ink_row[i * n + n - 1] > 0.0)) {
+                    let hit = |i: usize| pixel.is_none_or(|_| mask_row[i] > 0.0) && ink.is_none_or(|_| ink_row[i * n + n - 1] > 0.0);
+                    if let Some(sp) = span(r, y, &hit) {
                         shown = shown.union(&sp);
                     }
                 }
                 shown
             }
         }
-        None => r,
     };
     (!r.is_empty()).then_some(r)
 }
