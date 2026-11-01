@@ -902,3 +902,37 @@ fn a_tools_preset_follows_renames_and_deletes_while_it_is_away() {
     switch(&mut app, Tool::Brush);
     assert_eq!(app.session.tools.current_preset, None, "the Brush's preset is gone, not the new one of the same name");
 }
+
+/// #9014: deleting the active tool's preset forgets only that tool's: the Brush keeps its brush
+/// but marks no preset, and the Eraser still has the preset it was picked from.
+#[test]
+fn deleting_one_tools_preset_leaves_the_other_tools_preset() {
+    let mut app = PhotocraftApp::new(photocraft_engine::Session::new(), crate::Services::default());
+    app.run("file.new", json!({"width": 64, "height": 64})).unwrap();
+    let names: Vec<String> = app.session.tools.presets.iter().take(2).map(|p| p.name.clone()).collect();
+    let [x, y] = [names[0].clone(), names[1].clone()];
+    let switch = |app: &mut PhotocraftApp, tool: Tool| {
+        app.ui.tool = tool;
+        sync_tool_brush(app);
+    };
+    switch(&mut app, Tool::Brush);
+    app.run("tools.setBrush", json!({"preset": x})).unwrap();
+    switch(&mut app, Tool::Eraser);
+    app.run("tools.setBrush", json!({"preset": y})).unwrap();
+    switch(&mut app, Tool::Brush);
+    assert_eq!(app.session.tools.current_preset.as_deref(), Some(x.as_str()));
+    let brush = app.session.tools.brush.clone();
+    app.run("brush.presets.delete", json!({"name": x})).unwrap();
+    assert_eq!(app.session.tools.current_preset, None, "the Brush's preset is gone");
+    assert!(app.session.tools.brush == brush, "the Brush keeps its settings");
+    let eraser = format!("{:?}", Tool::Eraser);
+    assert!(
+        app.session.tools.tool_presets.iter().any(|(t, n)| *t == eraser && *n == y),
+        "the Eraser still has its preset: {:?}",
+        app.session.tools.tool_presets
+    );
+    switch(&mut app, Tool::Eraser);
+    assert_eq!(app.session.tools.current_preset.as_deref(), Some(y.as_str()), "switching back to the Eraser marks its preset");
+    switch(&mut app, Tool::Brush);
+    assert_eq!(app.session.tools.current_preset, None, "and the Brush still marks none");
+}
