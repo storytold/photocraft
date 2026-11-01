@@ -1,7 +1,7 @@
 //! Photoshop's Video, Other, Average and matting steps (#10607): De-Interlace, NTSC Colors,
 //! HSB/HSL, Custom, Average and Remove Black / White Matte, with the keys Photoshop records.
 
-use super::descriptors::{desc, enm, get_enum, get_list, get_num, num, trimmed};
+use super::descriptors::{desc, enm, enumerated, get_list, num, trimmed};
 use super::events::pixel_target;
 use super::fields::{Mapped, step};
 use super::tables::{lookup, lookup_back};
@@ -10,6 +10,16 @@ use super::{D, Descriptor, Map, Value, json};
 /// Whether every key of `d` is one of `keys` (codes compare without their space padding).
 fn only_keys(d: &Descriptor, keys: &[&str]) -> bool {
     d.items.iter().all(|(k, _)| keys.contains(&trimmed(k).as_str()))
+}
+
+/// The step's `key` read by `read` (its space padding ignored, as `only_keys` admits it),
+/// `default` when the step leaves it out, `None` when it holds a value `read` can't take: that
+/// is still the step's setting, so the step is kept rather than played with the default.
+fn setting<T>(d: &Descriptor, key: &str, read: impl Fn(&D) -> Option<T>, default: T) -> Option<T> {
+    match d.items.iter().find(|(k, _)| trimmed(k) == key.trim_end()) {
+        Some((_, v)) => read(v),
+        None => Some(default),
+    }
 }
 
 /// Whether `p` sets nothing but `allowed` (a `null` counts as unset).
@@ -41,7 +51,7 @@ const HSB_MODELS: &[(&str, &str)] = &[("RGBC", "rgb"), ("HSBl", "hsb"), ("HSLC",
 pub(super) const HSB_HSL: &[EnumKey] = &[("Inpt", "inputMode", "ClrS", HSB_MODELS, "RGBC"), ("Otpt", "rowOrder", "ClrS", HSB_MODELS, "HSBl")];
 
 /// A step of enumerations only: each value looked up, Photoshop's default for a missing one.
-/// An unknown value or key keeps the Photoshop step.
+/// An unknown value or key, or a value that is not an enumeration, keeps the Photoshop step.
 pub(super) fn enums_from(d: &Descriptor, id: &str, keys: &[EnumKey]) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     let names: Vec<&str> = keys.iter().map(|k| k.0).collect();
@@ -50,7 +60,7 @@ pub(super) fn enums_from(d: &Descriptor, id: &str, keys: &[EnumKey]) -> Mapped {
     }
     let mut p = Map::new();
     for (key, param, _, table, default) in keys {
-        let Some(v) = lookup(table, &get_enum(d, key).unwrap_or_else(|| (*default).to_string())) else { return unsupported };
+        let Some(v) = setting(d, key, enumerated, (*default).to_string()).and_then(|e| lookup(table, &e)) else { return unsupported };
         p.insert((*param).into(), v.into());
     }
     step(id, Value::Object(p))
@@ -75,7 +85,8 @@ pub(super) fn enums_to(p: &Value, keys: &[EnumKey]) -> Option<Descriptor> {
 }
 
 /// Custom (`Cstm`): `Mtrx` is the 5 × 5 kernel, row by row. Photoshop takes exactly 25 cells (a
-/// 3 × 3 list makes it fail), so any other matrix keeps the Photoshop step.
+/// 3 × 3 list makes it fail), so any other matrix keeps the Photoshop step, as does a `Scl ` or
+/// `Ofst` that is not a number.
 pub(super) fn custom_from(d: &Descriptor) -> Mapped {
     let unsupported = Mapped::Unsupported { harmless: false };
     if !only_keys(d, &["Scl", "Ofst", "Mtrx"]) {
@@ -84,10 +95,11 @@ pub(super) fn custom_from(d: &Descriptor) -> Mapped {
     let Some(cells) = get_list(d, "Mtrx") else { return unsupported };
     let kernel: Option<Vec<f64>> = cells.iter().map(num).collect();
     let Some(kernel) = kernel.filter(|k| k.len() == 25) else { return unsupported };
+    let (Some(scale), Some(offset)) = (setting(d, "Scl ", num, 1.0), setting(d, "Ofst", num, 0.0)) else { return unsupported };
     let mut p = Map::new();
     p.insert("kernel".into(), json!(kernel));
-    p.insert("scale".into(), get_num(d, "Scl ").unwrap_or(1.0).into());
-    p.insert("offset".into(), get_num(d, "Ofst").unwrap_or(0.0).into());
+    p.insert("scale".into(), scale.into());
+    p.insert("offset".into(), offset.into());
     step("filter.other.custom", Value::Object(p))
 }
 

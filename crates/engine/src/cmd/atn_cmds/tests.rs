@@ -3305,3 +3305,31 @@ fn video_other_and_matting_steps_that_cannot_be_written_are_refused() {
     let cells = get_list(&d, "Mtrx").unwrap();
     assert_eq!((cells.len(), cells.get(12)), (25, Some(&D::Integer(1))));
 }
+
+/// A recorded setting of the wrong type is the step's own setting, not a missing one: the
+/// mapper keeps the Photoshop step instead of playing it with Photoshop's default (#10607).
+#[test]
+fn video_other_steps_with_a_wrong_typed_setting_are_kept() {
+    let kept = |m: Mapped| matches!(m, Mapped::Unsupported { harmless: false });
+    let identity = D::List((0..25).map(|i| D::Integer(i32::from(i == 12))).collect());
+    for (code, d) in [
+        ("Dntr", desc("null").with("IntE", D::Integer(1))),
+        ("Dntr", desc("null").with("IntC", text("CrtD"))),
+        ("HsbP", desc("null").with("Inpt", D::Boolean(true))),
+        ("HsbP", desc("null").with("Otpt", text("HSLC"))),
+        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl ", text("2"))),
+        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Ofst", D::Boolean(true))),
+        ("Cstm", desc("null").with("Mtrx", identity.clone()).with("Scl", enm("Ordn", "Trgt"))),
+    ] {
+        assert!(kept(other_step(code, d.clone())), "{code} {d:?} was mapped");
+    }
+}
+
+/// The key gate admits `Scl` without its padding, so the mapper reads it too: an unpadded
+/// scale is the step's scale, not the default 1.
+#[test]
+fn custom_reads_an_unpadded_scale() {
+    let identity = D::List((0..25).map(|i| D::Integer(i32::from(i == 12))).collect());
+    let Mapped::Steps(steps) = other_step("Cstm", desc("null").with("Scl", D::Integer(3)).with("Mtrx", identity)) else { panic!("kept") };
+    assert_eq!(steps[0].1["scale"], json!(3.0));
+}
