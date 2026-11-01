@@ -68,7 +68,8 @@ fn set_vibrance(doc: &mut Document, vibrance: f32, saturation: f32) {
 #[test]
 fn editing_a_modern_vibrance_keeps_its_method() {
     let tint = Value::Integer(12);
-    let modern = photoshop_vib(&[("vibrance", Value::Integer(28)), ("Strt", Value::Integer(-7)), ("useLegacy", Value::Boolean(false)), ("tint", tint.clone())]);
+    // Laid out as Photoshop 27.11 writes the newer method (#8838's fixture), plus a `tint` key.
+    let modern = photoshop_vib(&[("useLegacy", Value::Boolean(false)), ("vibrance", Value::Integer(28)), ("Strt", Value::Integer(-7)), ("tint", tint.clone())]);
     for depth in [SampleType::U8, SampleType::U16, SampleType::F32] {
         let opened = reopen(&doc_with(depth, modern.clone()), "x.psd");
         let notes = vibrance_notes(&opened);
@@ -126,4 +127,33 @@ fn editing_a_legacy_vibrance_stays_legacy() {
     assert_eq!(d.get("useLegacy"), None);
     assert_eq!((d.get("vibrance"), d.get("Strt")), (Some(&Value::Integer(10)), Some(&Value::Integer(5))));
     assert_eq!(vibrance_notes(&import("x.psd", &saved).unwrap()), Vec::<&String>::new());
+}
+
+/// A slider stored as something other than a finite number is not read as 0, which an edit would
+/// then write into the file's own descriptor: the block stays unsupported, is saved back byte for
+/// byte, and opening says so. A NaN slider used to reach the model, where it made Save as
+/// `.pcraft` fail (a manifest cannot hold NaN).
+#[test]
+fn malformed_vibrance_sliders_stay_unsupported() {
+    let legacy_off = ("useLegacy", Value::Boolean(false));
+    for bad in [Value::Double(f64::NAN), Value::Double(f64::INFINITY), Value::Text(UnicodeString::new_nul("28")), Value::Boolean(true)] {
+        for key in ["vibrance", "Strt"] {
+            let block = photoshop_vib(&[(key, bad.clone()), legacy_off.clone()]);
+            let opened = reopen(&doc_with(SampleType::U16, block.clone()), "x.psd");
+            let what = format!("{key} = {bad:?}");
+            let LayerContent::Adjustment(Adjustment::Unsupported { psd_key, raw }) = &opened.document.layers[1].content else {
+                panic!("{what}: {:?}", opened.document.layers[1].content)
+            };
+            assert_eq!((psd_key.as_str(), &raw[..]), ("vibA", &block[..]), "{what}");
+            let notes = vibrance_notes(&opened);
+            assert_eq!(notes.len(), 1, "{what}: {:?}", opened.warnings);
+            assert!(notes[0].contains("Vibrance settings could not be read"), "{what}: {}", notes[0]);
+            // Saved back as it was, directly and through the native format.
+            let saved = export(&opened.document, "x.psd", &ExportOptions::default()).unwrap().bytes;
+            let f = PsdFile::from_bytes(&saved).unwrap();
+            assert_eq!(f.layers().iter().find_map(|l| l.block(b"vibA")).map(|b| b.data.clone()), Some(block.clone()), "{what}");
+            let native = reopen(&opened.document, "x.pcraft");
+            assert_eq!(native.document.layers[1].content, opened.document.layers[1].content, "{what}: .pcraft");
+        }
+    }
 }

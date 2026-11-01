@@ -352,14 +352,14 @@ pub(crate) fn retarget_gradient_map(data: &mut [u8], target: &Adjustment, channe
 /// every other key is kept. Photoshop (27.11 in #8838) marks its newer Vibrance method with
 /// `useLegacy` false and keeps temperature and tint in the same descriptor; a regenerated block
 /// has no method key, which Photoshop reads as the legacy method, so an edited layer changed its
-/// look on reopening. The
-/// result is padded to 4 bytes inside the block, as Photoshop pads it (anything after the
-/// descriptor is that padding: [`parse_vibrance`] reads nothing there). `false` leaves `data`
-/// untouched.
+/// look on reopening. The result is padded to 4 bytes inside the block, as Photoshop pads it
+/// (anything after the descriptor is that padding: [`parse_vibrance`] reads nothing there).
+/// `false` leaves `data` untouched.
 pub(crate) fn retarget_vibrance(data: &mut Vec<u8>, target: &Adjustment) -> bool {
     let Adjustment::Vibrance { vibrance, saturation } = target else { return false };
     let Some(mut desc) = versioned(data) else { return false };
-    // Photoshop's key order: a key absent from the file goes after the ones listed before it.
+    // Photoshop's key order is `useLegacy`, `vibrance`, `Strt` (27.11, #8838): a slider absent from
+    // the file goes after whichever of the keys before it in that order the file has.
     let sliders = [("vibrance", *vibrance), ("Strt", *saturation)];
     for (i, (key, value)) in sliders.iter().enumerate() {
         let value = i32::from(clamp_i16(value.clamp(-100.0, 100.0)));
@@ -375,7 +375,8 @@ pub(crate) fn retarget_vibrance(data: &mut Vec<u8>, target: &Adjustment) -> bool
             }
             (None, 0) => {}
             (None, v) => {
-                let at = desc.items.iter().rposition(|(k, _)| sliders.iter().take(i).any(|(p, _)| k.is(p))).map_or(0, |p| p + 1);
+                let before = |k: &photocraft_psd::descriptor::Id| k.is("useLegacy") || sliders.iter().take(i).any(|(p, _)| k.is(p));
+                let at = desc.items.iter().rposition(|(k, _)| before(k)).map_or(0, |p| p + 1);
                 desc.items.insert(at, (photocraft_psd::descriptor::Id::new(key), Value::Integer(v)));
             }
         }
@@ -579,11 +580,17 @@ fn versioned(d: &[u8]) -> Option<Descriptor> {
 }
 
 /// `vibA` (Adobe spec, "Vibrance"): a versioned descriptor with `vibrance` and `Strt`
-/// (saturation), both integers in -100..=100. Photoshop omits a key whose value is 0.
+/// (saturation), both integers in -100..=100. Photoshop omits a key whose value is 0. A key that is
+/// present but not a finite number keeps the block unsupported (saved back verbatim) instead of
+/// reading as 0, which an edit would then write into the file's own descriptor
+/// ([`retarget_vibrance`]).
 fn parse_vibrance(d: &[u8]) -> Option<Adjustment> {
     let desc = versioned(d)?;
-    let get = |k: &str| desc_num(&desc, k).unwrap_or(0.0).clamp(-100.0, 100.0);
-    Some(Adjustment::Vibrance { vibrance: get("vibrance"), saturation: get("Strt") })
+    let get = |k: &str| match desc.get(k) {
+        None => Some(0.0),
+        Some(_) => desc_num(&desc, k).filter(|v| v.is_finite()).map(|v| v.clamp(-100.0, 100.0)),
+    };
+    Some(Adjustment::Vibrance { vibrance: get("vibrance")?, saturation: get("Strt")? })
 }
 
 /// `blnc` (Adobe spec, "Color Balance"): shadows, midtones and highlights as three i16 each
