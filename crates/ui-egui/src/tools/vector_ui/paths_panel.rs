@@ -47,6 +47,13 @@ impl PathRow {
     }
 }
 
+/// Can Fill Path and Stroke Path paint the active layer? Only a pixel layer takes paint: with a
+/// type layer selected (its Type Path, #10099), a shape or a smart object they are dimmed, as in
+/// Photoshop, rather than failing.
+pub(crate) fn can_paint(app: &PhotocraftApp) -> bool {
+    app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).is_some_and(|l| matches!(l.content, LayerContent::Raster(_)))
+}
+
 /// A Paths panel row.
 #[derive(Clone, Debug)]
 pub struct PathEntry {
@@ -306,7 +313,7 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
                     crate::widgets::menu_scroll(ui, |ui| {
                         ui.set_min_width(190.0);
                         let entry = PathEntry { name: name.clone(), path: path.clone(), kind: *kind };
-                        let can_paint = app.session.active().and_then(|s| s.active_layer.and_then(|id| s.doc.layer(id))).is_some_and(|l| l.surface().is_some());
+                        let can_paint = can_paint(app);
                         for (label, cmd, params) in path_context_actions(&entry, &doc, st_layer) {
                             let enabled = !matches!(cmd, "path.fill" | "path.stroke") || can_paint;
                             if ui.add_enabled(enabled, egui::Button::new(tl!(label))).clicked() {
@@ -366,9 +373,11 @@ pub fn paths_panel(app: &mut PhotocraftApp, ui: &mut egui::Ui) {
         });
         // Laid out from the right, so the last button goes first.
         let mut buttons = Rect::NOTHING;
+        let paints = can_paint(app);
         for (icon, tip, cmd, p) in items.into_iter().rev() {
             let icon = if crate::icons::exists(icon) { icon } else { "square" };
-            let b = crate::icons::button(ui, icon, 26.0, false, tip);
+            let enabled = paints || !matches!(cmd, "path.fill" | "path.stroke");
+            let b = ui.add_enabled_ui(enabled, |ui| crate::icons::button(ui, icon, 26.0, false, tip)).inner;
             // The Type Path goes with its type layer: the trash leaves it (#10099).
             let kept = cmd == "path.delete" && sel == type_path_key;
             if b.clicked() && !kept {

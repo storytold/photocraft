@@ -25,7 +25,7 @@
 //! byte for byte while they still decode to the document's variables, else writes fresh ones
 //! (or none when the document has no variables).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use photocraft_doc::variables::Value;
 use photocraft_doc::{DataSet, DataValue, Document, LayerId, PixelAlign, PixelMethod, VarKind, VariableDef, Variables};
@@ -148,6 +148,8 @@ fn decode_defs(xml: &str, by_psd_id: &HashMap<u32, LayerId>, warnings: &mut Vec<
         }
     };
     let mut defs: Vec<VariableDef> = Vec::new();
+    // Names already taken: the resource comes from the file, so lookups stay O(1) (#10128).
+    let mut seen: HashSet<&str> = HashSet::new();
     let mut skipped = 0usize;
     for n in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "variable") {
         let Some(name) = n.attribute("varName").filter(|s| !s.is_empty()) else {
@@ -159,7 +161,7 @@ fn decode_defs(xml: &str, by_psd_id: &HashMap<u32, LayerId>, warnings: &mut Vec<
             skipped += 1;
             continue;
         };
-        if defs.iter().any(|d| d.name == name) {
+        if !seen.insert(name) {
             skipped += 1;
             continue;
         }
@@ -190,9 +192,15 @@ fn decode_sets(xml: &str, defs: &[VariableDef], warnings: &mut Vec<String>) -> V
         }
     };
     let mut sets = Vec::new();
+    // The first definition of a name types its values, as a linear search would find it.
+    let mut by_name: HashMap<&str, &VariableDef> = HashMap::new();
+    for d in defs {
+        by_name.entry(d.name.as_str()).or_insert(d);
+    }
     for row in doc.descendants().filter(|n| n.is_element() && n.tag_name().name() == "sampleDataSet") {
         let name = row.attribute("dataSetName").unwrap_or_default().to_string();
         let mut values: Vec<DataValue> = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
         for cell in row.children().filter(Node::is_element) {
             let tag = cell.tag_name();
             let variable = if tag.namespace() == Some(NS_VARS) && tag.name() == "value" {
@@ -201,13 +209,13 @@ fn decode_sets(xml: &str, defs: &[VariableDef], warnings: &mut Vec<String>) -> V
                 tag.name()
             };
             // A value is typed by its variable; one with no definition can't be typed.
-            let Some(def) = defs.iter().find(|d| d.name == variable) else { continue };
+            let Some(def) = by_name.get(variable).copied() else { continue };
             let value = match def.kind {
                 VarKind::Visibility => Value::Visibility(element_text(cell) != "false"),
                 VarKind::TextReplacement => Value::Text(element_text(cell)),
                 VarKind::PixelReplacement { .. } => Value::Pixels(element_text(cell)),
             };
-            if !values.iter().any(|v| v.variable == variable) {
+            if seen.insert(variable) {
                 values.push(DataValue { variable: variable.to_string(), value });
             }
         }
@@ -428,6 +436,34 @@ mod tests {
         assert!(w.is_empty(), "{w:?}");
         assert_eq!(back.variables.defs, vec![VariableDef { name: "title".into(), layer: a, kind: VarKind::TextReplacement }]);
         assert_eq!(back.variables.data_sets[0].get("title"), Some(&Value::Text("Hello\nWorld".into())));
+    }
+
+    /// A file with many variables imports in linear time and keeps the first of each duplicate:
+    /// the first definition of a name, and the first value a data set gives it.
+    #[test]
+    fn many_variables_import_and_duplicates_keep_the_first() {
+        let (d, a, b, _) = doc_with_layers();
+        const N: usize = 20_000;
+        let mut defs = String::from("<variableSets xmlns=\"http://ns.adobe.com/Variables/1.0/\"><variableSet><variables>");
+        for i in 0..N {
+            defs.push_str(&format!("<variable varName=\"v{i}\" trait=\"textcontent\" docRef=\"id('12')\"/>"));
+        }
+        defs.push_str("<variable varName=\"v0\" trait=\"visibility\" docRef=\"id('7')\"/></variables></variableSet></variableSets>");
+        let mut sets = String::from("<v:sampleDataSets xmlns:v=\"http://ns.adobe.com/Variables/1.0/\"><v:sampleDataSet dataSetName=\"Row\">");
+        for i in 0..N {
+            sets.push_str(&format!("<v{i}>t{i}</v{i}>"));
+        }
+        sets.push_str("<v0>again</v0><undefined>x</undefined></v:sampleDataSet></v:sampleDataSets>");
+        let mut back = with_resources(&d, vec![(VARIABLES, defs.into_bytes()), (DATA_SETS, sets.into_bytes())]);
+        let w = import(&mut back);
+        assert_eq!(w.len(), 1, "the duplicate is reported: {w:?}");
+        assert_eq!(back.variables.defs.len(), N);
+        assert_eq!(back.variables.defs[0], VariableDef { name: "v0".into(), layer: a, kind: VarKind::TextReplacement });
+        assert!(back.variables.defs.iter().all(|v| v.layer != b));
+        let row = &back.variables.data_sets[0];
+        assert_eq!(row.values.len(), N, "the undefined cell and the repeat are dropped");
+        assert_eq!(row.get("v0"), Some(&Value::Text("t0".into())));
+        assert_eq!(row.get(&format!("v{}", N - 1)), Some(&Value::Text(format!("t{}", N - 1))));
     }
 
     #[test]

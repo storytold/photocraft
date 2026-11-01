@@ -390,8 +390,19 @@ fn clipping_follows_the_work_scale_and_refuses_hostile_scales() {
     b.px.iter_mut().for_each(|p| *p = [1.0; 4]);
     crate::transform_fx::clip(&mut b, 1.0, &half);
     assert!((b.get(150, 0)[3] - 0.5).abs() < 1e-6 && b.get(50, 0)[3] == 1.0);
+    // Zoomed out, each work pixel still takes the document pixel under its centre: work pixel 10
+    // at 1/20 is document pixel 210 (hidden), work pixel 4 is 90 (shown).
+    let mut b = Buffer::transparent(Rect::new(0, 0, 20, 1));
+    b.px.iter_mut().for_each(|p| *p = [1.0; 4]);
+    crate::transform_fx::clip(&mut b, 0.05, &masks);
+    assert_eq!((b.get(4, 0)[3], b.get(10, 0)[3]), (1.0, 0.0));
+    // A hostile scale spans billions of document columns per row; only the output's are read.
     for scale in [0.0, -1.0, f64::NAN, f64::INFINITY, 1e-300] {
         let mut b = Buffer::transparent(Rect::new(-5, -5, 5, 5));
+        b.px.iter_mut().for_each(|p| *p = [1.0; 4]);
+        let start = std::time::Instant::now();
         crate::transform_fx::clip(&mut b, scale, &masks);
+        assert!(start.elapsed() < std::time::Duration::from_secs(2), "scale {scale}");
+        assert!(b.px.iter().all(|p| (0.0..=1.0).contains(&p[3])), "scale {scale}");
     }
 }

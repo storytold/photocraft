@@ -372,6 +372,27 @@ fn path_commands_take_the_type_path_by_name() {
     s.execute("path.toSelection", json!({"name": "typePath"})).unwrap();
 }
 
+/// #10099: `typePath` is reserved for the Type Path, so no saved path can take the name and then
+/// be shadowed by it. A path already called that (from an older file) can still be renamed.
+#[test]
+fn no_saved_path_takes_the_type_path_name() {
+    let mut s = session(8);
+    let line = json!({"subpaths": [{"knots": [[10, 10], [60, 60]]}]});
+    assert!(s.execute("path.set", json!({"name": "typePath", "path": line})).is_err());
+    assert!(s.active().unwrap().doc.paths.is_empty(), "nothing saved");
+    s.execute("path.set", json!({"name": "Path 1", "path": line})).unwrap();
+    assert!(s.execute("path.rename", json!({"name": "Path 1", "to": "typePath"})).is_err());
+    s.execute("path.set", json!({"path": line})).unwrap();
+    assert!(s.execute("path.rename", json!({"to": "typePath"})).is_err(), "nor saving the work path as it");
+    s.edit("old file", |doc, _| {
+        doc.paths[0].name = "typePath".into();
+        Ok(())
+    })
+    .unwrap();
+    s.execute("path.rename", json!({"name": "typePath", "to": "Path 2"})).unwrap();
+    assert_eq!(s.active().unwrap().doc.paths[0].name, "Path 2");
+}
+
 /// #9114: a type-on-a-path layer's vector mask is still what `"name": "layer"` edits, as on main
 /// and as `path.info` reads it; `"typePath": true` edits the Type Path; `path.list` reports both.
 #[test]

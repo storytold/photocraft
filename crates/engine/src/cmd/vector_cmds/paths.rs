@@ -90,6 +90,10 @@ pub(super) fn path_set(s: &mut Session, p: &Value) -> Result<Value> {
     let path = parse_path(p.get("path").ok_or_else(|| bad(CMD, "missing `path`"))?).map_err(|e| bad(CMD, e))?;
     let name = p.get("name").and_then(Value::as_str).map(str::to_string);
     let append = p.get("op").and_then(Value::as_str).map(|o| op_from(o).ok_or_else(|| bad(CMD, format!("unknown op `{o}`")))).transpose()?;
+    // `typePath` names the active type layer's Type Path, so no saved path may take it.
+    if name.as_deref() == Some(TYPE_PATH) {
+        return Err(bad(CMD, "`typePath` is the Type Path's name, not a saved path's"));
+    }
     s.edit(if is_work(name.as_deref()) { "Work Path" } else { "Save Path" }, |doc, _| {
         let merge = |old: Option<&Path>, new: Path| -> Result<Path> {
             let merged = match (old, append) {
@@ -321,6 +325,9 @@ pub(super) fn path_rename(s: &mut Session, p: &Value) -> Result<Value> {
     let to = p.get("to").and_then(Value::as_str).filter(|t| !t.is_empty()).ok_or_else(|| bad(CMD, "missing `to`"))?.to_string();
     if is_work(Some(&to)) {
         return Err(bad(CMD, "`to` cannot name the work path"));
+    }
+    if to == TYPE_PATH {
+        return Err(bad(CMD, "`to` cannot be `typePath`, the name of the Type Path"));
     }
     s.edit(if is_work(name.as_deref()) { "Save Path" } else { "Rename Path" }, |doc, _| {
         if doc.paths.iter().any(|q| q.name == to) {

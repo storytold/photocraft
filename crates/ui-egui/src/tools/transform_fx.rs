@@ -433,10 +433,26 @@ pub fn clip(out: &mut Buffer, scale: f64, masks: &[crate::transform_tex::Preview
     let doc = |v: i32| (((f64::from(v) + 0.5) / scale).floor().clamp(-COORD_LIMIT, COORD_LIMIT)) as i32;
     // The document columns under the work columns, the same for every row.
     let (dx0, dx1) = (doc(r.x0), doc(r.x1 - 1).saturating_add(1));
+    let width = r.width() as usize;
+    let span = usize::try_from(dx1.saturating_sub(dx0)).unwrap_or(0);
+    // Zoomed out, a row spans more document columns than it has pixels (at a hostile scale,
+    // billions): read only the document pixel under each work pixel, so the work is bounded by
+    // the output.
+    if span > width {
+        let under: Vec<i32> = (r.x0..r.x1).map(doc).collect();
+        rows(&mut out.px, width, r.y0, |y, row| {
+            let dy = doc(y);
+            for (p, x) in row.iter_mut().zip(&under) {
+                let k = masks.iter().fold(1.0f32, |k, m| k * (1.0 - m.density * (1.0 - m.surface.sample_channel(*x, dy, 0))).clamp(0.0, 1.0));
+                p[3] *= k;
+            }
+        });
+        return;
+    }
     let columns: Vec<usize> = (r.x0..r.x1).map(|x| usize::try_from(doc(x).saturating_sub(dx0)).unwrap_or(0)).collect();
-    rows(&mut out.px, r.width() as usize, r.y0, |y, row| {
+    rows(&mut out.px, width, r.y0, |y, row| {
         let dy = doc(y);
-        let mut k = vec![1.0f32; usize::try_from(dx1.saturating_sub(dx0)).unwrap_or(0)];
+        let mut k = vec![1.0f32; span];
         for m in masks {
             let ch = m.surface.channels().max(1);
             let v = m.surface.read_region(Rect::new(dx0, dy, dx1, dy.saturating_add(1)));
