@@ -359,25 +359,23 @@ fn interface_groups(ui: &mut egui::Ui, obj: &mut Map<String, Value>, keys: &[Str
     // Checkboxes line up at the left edge, as in Photoshop; the other options keep a label column.
     let (checks, other): (Vec<String>, Vec<String>) = rest.cloned().partition(|k| obj.get(k).is_some_and(Value::is_boolean));
     let rows = AppearanceRows::matching(query);
-    let grid = |id: &str| egui::Grid::new(("prefs-grid", id.to_string())).num_columns(2).spacing([14.0, 7.0]).min_col_width(150.0);
     if rows.any() || !appearance.is_empty() {
         pref_group(ui, "Appearance", |ui| {
-            grid_scope(ui, |ui| {
-                grid("interface-appearance").show(ui, |ui| {
-                    appearance_rows(ui, obj, system, rows);
-                    if !appearance.is_empty() {
-                        // The theme rows above are owned by appearance.rs; the canvas rows go
-                        // through the same live grid via a row adapter, unchanged in both directions.
-                        let ctx = ui.ctx().clone();
-                        let mut row = |caption: egui::WidgetText, editor: &mut dyn FnMut(&mut egui::Ui, egui::Id)| {
-                            let cap = std::cell::Cell::new(egui::Id::NULL);
-                            crate::text::direction::grid_cells(ui, |ui| cap.set(ui.label(caption).id), |ui| editor(ui, cap.get()));
-                            ui.end_row();
-                        };
-                        field_rows(&ctx, "interface", obj, appearance, lang, &mut row);
-                    }
+            if rows.any() {
+                // The theme rows are owned by appearance.rs and draw into a Grid themselves.
+                grid_scope(ui, |ui| {
+                    egui::Grid::new(("prefs-grid", "interface-appearance")).num_columns(2).spacing([14.0, 7.0]).min_col_width(150.0).show(ui, |ui| {
+                        appearance_rows(ui, obj, system, rows);
+                    });
                 });
-            });
+            }
+            if !appearance.is_empty() {
+                let ctx = ui.ctx().clone();
+                let label_w = max_label_width(ui, obj, &appearance);
+                crate::text::direction::settings_grid(ui, ("prefs-grid", "interface-appearance-fields"), [14.0, 7.0], label_w, Some(150.0), |row| {
+                    field_rows(&ctx, "interface", obj, appearance, lang, row)
+                });
+            }
         });
     }
     if !presentation.is_empty() {
