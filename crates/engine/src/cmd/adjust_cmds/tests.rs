@@ -36,6 +36,12 @@ fn changed(a: [f32; 4], b: [f32; 4]) -> f32 {
     (0..3).map(|c| (a[c] - b[c]).abs()).fold(0.0, f32::max)
 }
 
+/// Every pixel of the active layer, row by row.
+fn pixels(s: &Session) -> Vec<[f32; 4]> {
+    let b = doc(s).bounds();
+    (b.y0..b.y1).flat_map(|y| (b.x0..b.x1).map(move |x| (x, y))).map(|(x, y)| rgba(s, x, y)).collect()
+}
+
 fn doc(s: &Session) -> &Document {
     &s.active().unwrap().doc
 }
@@ -772,6 +778,7 @@ fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
         }
     });
     let before = (rgba(&s, 4, 16), rgba(&s, 24, 16), rgba(&s, 40, 16));
+    let original = pixels(&s);
     let shift = |extra: Value| {
         let mut p = json!({"fuzziness": 40, "hue": 120, "saturation": 20});
         p.as_object_mut().unwrap().extend(extra.as_object().unwrap().clone());
@@ -782,8 +789,10 @@ fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
     assert!(changed(rgba(&s, 4, 16), before.0) > 0.1, "red is replaced");
     assert!(changed(rgba(&s, 24, 16), before.1) > 0.1, "the added blue is replaced");
     assert_eq!(rgba(&s, 40, 16), before.2, "green wasn't sampled");
-    // The same coverage as Select › Color Range for the same clicks.
+    // One undo step brings every pixel back exactly.
     s.execute("edit.undo", json!({})).unwrap();
+    assert!(pixels(&s) == original, "undo restores the pixels");
+    // The same coverage as Select › Color Range for the same clicks.
     s.execute("select.colorRange", json!({"points": [[4, 16], [24, 16]], "fuzziness": 40})).unwrap();
     let sel = doc(&s).selection.clone().unwrap();
     for x in [4, 24, 40] {
@@ -791,12 +800,15 @@ fn replace_color_adds_and_subtracts_samples_as_color_range_does() {
         assert!((want > 0.5) == (x < 32), "Color Range at {x}: {want}");
     }
     s.execute("select.deselect", json!({})).unwrap();
-    // Red sampled, blue then subtracted. Blue is far from the red sample here, so subtracting it
-    // changes nothing; `replace_color_subtracting_inside_the_added_range_takes_a_colour_out` has
-    // a subtraction that does.
+    // A subtraction undoes exactly too. (Blue is far from the red sample here, so subtracting
+    // it changes nothing; `replace_color_subtracting_inside_the_added_range_takes_a_colour_out`
+    // has a subtraction that does.)
+    let selected = pixels(&s);
     s.execute("image.adjustments.replaceColor", shift(json!({"points": [[4, 16]], "subtractPoints": [[24, 16]], "order": ["+", "-"]}))).unwrap();
     assert!(changed(rgba(&s, 4, 16), before.0) > 0.1);
     assert_eq!(rgba(&s, 40, 16), before.2);
+    s.execute("edit.undo", json!({})).unwrap();
+    assert!(pixels(&s) == selected, "undo restores the pixels");
     // Bad samples are refused, naming this command.
     let err = s.execute("image.adjustments.replaceColor", shift(json!({"points": [[4, 16]], "subtractPoints": [[999, 16]]}))).unwrap_err();
     assert!(err.to_string().contains("replaceColor") && err.to_string().contains("outside"), "{err}");
