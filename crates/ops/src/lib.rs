@@ -69,7 +69,7 @@ pub struct History {
     /// The states History panel › Clear History took off the list, kept so the next undo puts
     /// them back (Clear History is itself undoable). Any new step drops them.
     cleared: Option<Box<Cleared>>,
-    /// [`HistoryState::id`] of the current state.
+    /// [`HistoryState::id`] of the current state. Never reused, including across Purge Histories (#6867).
     current_id: u64,
     /// The id the next state gets: never reused, so a discarded state's id names no other.
     next_id: u64,
@@ -188,6 +188,12 @@ impl History {
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
     }
+    /// Stable identity of the current document in the undo graph. Saved documents compare this
+    /// after undo and redo so a return to the saved step is clean again (#6867).
+    pub fn current_id(&self) -> u64 {
+        self.current_id
+    }
+
     pub fn undo_label(&self) -> Option<&str> {
         if self.cleared.is_some() {
             return Some(CLEAR_HISTORY_LABEL);
@@ -481,6 +487,7 @@ impl History {
         self.undo.clear();
         self.redo.clear();
         self.tiles = None;
+        // Keep `current_id` / `next_id` so a later undo cannot collide with a saved id (#6867).
         self.cleared = None;
         self.reset_brush_source();
     }

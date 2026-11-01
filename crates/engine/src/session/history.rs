@@ -17,11 +17,8 @@ impl Session {
             // edit: keep a clean document clean (the revision still moves for the panels).
             Some((d, layers)) if Arc::ptr_eq(&d, &st.doc) => {
                 restore_target(st, layers);
-                let clean = !st.is_dirty();
-                st.revision += 1;
-                if clean {
-                    st.saved_revision = st.revision;
-                }
+                let landed_on_save = st.landed_on_save();
+                st.bump_revision(!st.is_dirty() || landed_on_save);
                 st.last_damage = Some(photocraft_geom::Rect::EMPTY);
                 true
             }
@@ -39,7 +36,8 @@ impl Session {
                 let before = std::mem::replace(&mut st.doc, d);
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
-                st.bump_revision(keep_clean);
+                let landed_on_save = st.landed_on_save();
+                st.bump_revision(keep_clean || landed_on_save);
                 st.last_damage = damage;
                 true
             }
@@ -68,7 +66,8 @@ impl Session {
                 let before = std::mem::replace(&mut st.doc, d);
                 let keep_clean = st.keeps_clean(&before);
                 restore_target(st, layers);
-                st.bump_revision(keep_clean);
+                let landed_on_save = st.landed_on_save();
+                st.bump_revision(keep_clean || landed_on_save);
                 st.last_damage = damage;
                 true
             }

@@ -32,6 +32,24 @@ fn undo_redo_cycle() {
 }
 
 #[test]
+fn current_id_returns_to_the_saved_step_and_is_unique_after_a_branch() {
+    let mut h = History::default();
+    let mut cur = Arc::new(base());
+    let open = h.current_id();
+    edit(&mut h, &mut cur, "A", |d| d.name = "a".into());
+    let after_a = h.current_id();
+    assert_ne!(after_a, open);
+    cur = h.undo(cur).unwrap().0;
+    assert_eq!(h.current_id(), open);
+    cur = h.redo(cur).unwrap().0;
+    assert_eq!(h.current_id(), after_a);
+    cur = h.undo(cur).unwrap().0;
+    edit(&mut h, &mut cur, "B", |d| d.name = "b".into());
+    assert_ne!(h.current_id(), after_a);
+    assert_ne!(h.current_id(), open);
+}
+
+#[test]
 fn undo_and_redo_return_the_layers_each_state_targeted_when_created() {
     let mut h = History::default();
     let open = Arc::new(base());
